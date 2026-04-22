@@ -1,4 +1,4 @@
-import { buildRosterView, customEventsToEvents, doctorOptions, exportIcs, parseUploadForm } from "../_lib/roster.js";
+import { applyEventOverrides, buildRosterView, customEventsToEvents, doctorOptions, exportIcs, parseUploadForm } from "../_lib/roster.js";
 
 export async function onRequestPost(context) {
   try {
@@ -11,7 +11,10 @@ export async function onRequestPost(context) {
     if (!selectedDoctor) {
       throw new Error("The selected doctor was not found in the uploaded roster files.");
     }
-    const rosterEvents = buildRosterView(sources.mmc?.workbook, sources.ddh?.workbook, doctorKey, settings, overrides).events;
+    const rosterEvents = applyEventOverrides(
+      buildRosterView(sources.mmc?.workbook, sources.ddh?.workbook, doctorKey, settings, overrides).events,
+      overrides,
+    );
     const events = [...rosterEvents, ...customEventsToEvents(customEvents, settings)].sort((left, right) => {
       const leftDate = left.start.slice(0, 10);
       const rightDate = right.start.slice(0, 10);

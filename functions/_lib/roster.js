@@ -318,6 +318,10 @@ function sanitizeOverrides(raw) {
     overrides[key] = {
       title: typeof value.title === "string" ? value.title.trim() : "",
       include: typeof value.include === "boolean" ? value.include : undefined,
+      start: typeof value.start === "string" ? value.start.trim() : "",
+      end: typeof value.end === "string" ? value.end.trim() : "",
+      location: typeof value.location === "string" ? value.location.trim() : "",
+      allDay: typeof value.allDay === "boolean" ? value.allDay : undefined,
     };
   }
   return overrides;
@@ -863,6 +867,22 @@ export function customEventsToEvents(customEvents, settings = DEFAULT_SETTINGS) 
         monthKey: item.startDate.slice(0, 7),
       };
     });
+}
+
+export function applyEventOverrides(events, overrides) {
+  const clean = sanitizeOverrides(overrides);
+  return events.map((event) => {
+    const override = clean[event.id];
+    if (!override) return event;
+    return {
+      ...event,
+      title: override.title || event.title,
+      start: override.start || event.start,
+      end: override.end || event.end,
+      allDay: typeof override.allDay === "boolean" ? override.allDay : event.allDay,
+      location: override.location || event.location,
+    };
+  });
 }
 
 function isKindEnabled(kind, settings) {

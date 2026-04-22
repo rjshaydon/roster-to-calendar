@@ -535,6 +535,11 @@ input[type="text"] {
   cursor: pointer;
 }
 
+.preview-cell.is-drop-target {
+  border-color: rgba(217, 95, 52, 0.42);
+  background: linear-gradient(180deg, rgba(217, 95, 52, 0.12), rgba(255, 255, 255, 0.9));
+}
+
 .preview-date {
   font-size: 0.9rem;
   font-weight: 700;
@@ -580,13 +585,25 @@ input[type="text"] {
 }
 
 .preview-chip strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   font-size: 0.84rem;
+}
+
+.preview-chip-marker {
+  color: var(--accent-strong);
+  font-size: 0.9rem;
 }
 
 .preview-chip-raw,
 .preview-chip-meta {
   font-size: 0.76rem;
   color: var(--muted);
+}
+
+.preview-chip.is-dragging {
+  opacity: 0.55;
 }
 
 .preview-chip-empty {
@@ -665,6 +682,35 @@ input[type="text"] {
   position: fixed;
   inset: 0;
   z-index: 30;
+}
+
+.context-menu {
+  position: fixed;
+  z-index: 40;
+  min-width: 180px;
+  padding: 8px;
+  display: grid;
+  gap: 4px;
+  border-radius: 16px;
+  border: 1px solid rgba(20, 34, 42, 0.1);
+  background: rgba(254, 251, 244, 0.98);
+  box-shadow: 0 18px 44px rgba(20, 34, 42, 0.22);
+}
+
+.context-menu-item {
+  width: 100%;
+  border: 0;
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.context-menu-item:hover {
+  background: rgba(20, 34, 42, 0.06);
 }
 
 .modal-backdrop {
