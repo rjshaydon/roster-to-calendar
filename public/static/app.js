@@ -523,6 +523,8 @@ async function analyzeFiles() {
   clearPreviewData();
   doctorOptions = [];
   detectedSources = {};
+  controlBar.classList.remove("hidden");
+  mobileActionBar.classList.remove("hidden");
   setStatus("Detecting roster sources and consultants...");
   try {
     const data = await postForm("/api/analyze");
@@ -542,6 +544,7 @@ async function analyzeFiles() {
     detectedSources = {};
     clearPreviewData();
     renderFilesList();
+    syncActionState();
     setStatus(error.message, true);
   }
 }
@@ -2080,7 +2083,7 @@ async function loadStoredImports() {
   });
   const deduped = new Map();
   for (const record of records) {
-    const key = record.id || `${record.name}:${record.size}:${record.lastModified}`;
+    const key = `${record.name}:${record.size}:${record.lastModified}`;
     const existing = deduped.get(key);
     if (!existing || (record.addedAt || "") > (existing.addedAt || "")) {
       deduped.set(key, { ...record, id: key });
@@ -2112,10 +2115,25 @@ async function removeStoredImport(id) {
   selectedFiles = selectedFiles.filter((entry) => entry.id !== id);
   try {
     const db = await openImportsDb();
+    const records = await new Promise((resolve, reject) => {
+      const tx = db.transaction(IMPORT_STORE, "readonly");
+      const request = tx.objectStore(IMPORT_STORE).getAll();
+      request.onsuccess = () => resolve(request.result || []);
+      request.onerror = () => reject(request.error || new Error("Could not load imports for removal."));
+    });
+    const targetKeys = new Set([id]);
+    for (const record of records) {
+      const key = `${record.name}:${record.size}:${record.lastModified}`;
+      if (key === id) {
+        targetKeys.add(record.id);
+      }
+    }
     await new Promise((resolve, reject) => {
       const tx = db.transaction(IMPORT_STORE, "readwrite");
       const store = tx.objectStore(IMPORT_STORE);
-      store.delete(id);
+      for (const key of targetKeys) {
+        store.delete(key);
+      }
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error || new Error("Could not remove import."));
     });
