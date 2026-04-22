@@ -91,6 +91,7 @@ const settingsInputs = Object.fromEntries(
 );
 
 chooseFilesButton.addEventListener("click", (event) => {
+  event.preventDefault();
   event.stopPropagation();
   fileInput.click();
 });
@@ -478,6 +479,7 @@ function defaultSettings() {
 
 async function mergeFiles(files) {
   const existing = new Set(selectedFiles.map((entry) => fileFingerprint(entry.file)));
+  let persistenceFailed = false;
   for (const file of files) {
     const fingerprint = fileFingerprint(file);
     if (existing.has(fingerprint)) continue;
@@ -491,10 +493,17 @@ async function mergeFiles(files) {
       sourceType: "pending",
     };
     selectedFiles.push(entry);
-    await saveStoredImport(entry);
+    try {
+      await saveStoredImport(entry);
+    } catch {
+      persistenceFailed = true;
+    }
   }
   selectedFiles.sort((left, right) => (left.addedAt || "").localeCompare(right.addedAt || "") || left.name.localeCompare(right.name));
   renderFilesList();
+  if (persistenceFailed) {
+    setStatus("Import added, but browser storage was unavailable so it will not persist after reload.", true);
+  }
 }
 
 function validateIncomingFiles(files) {
@@ -2027,6 +2036,9 @@ const IMPORT_STORE = "imports";
 const CONFLICT_SELECTIONS_KEY = "roster-conflict-selections";
 
 async function openImportsDb() {
+  if (!("indexedDB" in window)) {
+    throw new Error("Browser storage is unavailable.");
+  }
   return await new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onupgradeneeded = () => {
@@ -2082,14 +2094,18 @@ async function loadStoredImports() {
 
 async function removeStoredImport(id) {
   selectedFiles = selectedFiles.filter((entry) => entry.id !== id);
-  const db = await openImportsDb();
-  await new Promise((resolve, reject) => {
-    const tx = db.transaction(IMPORT_STORE, "readwrite");
-    tx.objectStore(IMPORT_STORE).delete(id);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error || new Error("Could not remove import."));
-  });
-  db.close();
+  try {
+    const db = await openImportsDb();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(IMPORT_STORE, "readwrite");
+      tx.objectStore(IMPORT_STORE).delete(id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error || new Error("Could not remove import."));
+    });
+    db.close();
+  } catch {
+    // Keep in-memory removal even if persistent storage is unavailable.
+  }
   renderFilesList();
   if (!selectedFiles.length) {
     resetDerivedState();
@@ -2122,7 +2138,9 @@ async function bootstrapImports() {
       setStatus("Add a roster file to begin.");
     }
   } catch (error) {
-    setStatus(error.message || "Could not load saved imports.", true);
+    selectedFiles = [];
+    renderFilesList();
+    setStatus("Browser storage is unavailable. You can still import files for this session.", true);
   }
 }
 
