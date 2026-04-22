@@ -74,6 +74,9 @@ let customEvents = [];
 let currentPreviewEvents = new Map();
 let dragEventId = null;
 let copiedEvent = null;
+let previewGesture = null;
+let suppressPreviewClickUntil = 0;
+let openReviewId = "";
 
 const settingsInputs = Object.fromEntries(
   SETTINGS_FIELDS.map((id) => [id, document.querySelector(`#${id}`)]),
@@ -213,10 +216,17 @@ reviewModalBody.addEventListener("change", (event) => {
   setStatus("Event details updated.");
 });
 
+reviewModalBody.addEventListener("click", (event) => {
+  const resetButton = event.target.closest("[data-override-reset]");
+  if (!resetButton) return;
+  resetImportedEvent(resetButton.dataset.overrideReset);
+});
+
 previewButton.addEventListener("click", () => updatePreview());
 mobilePreviewButton.addEventListener("click", () => updatePreview());
 mobileExportButton.addEventListener("click", () => form.requestSubmit());
 preview.addEventListener("click", (event) => {
+  if (Date.now() < suppressPreviewClickUntil) return;
   closeContextMenu();
   const chip = event.target.closest("[data-review-id]");
   if (chip) {
@@ -226,6 +236,11 @@ preview.addEventListener("click", (event) => {
   const cell = event.target.closest("[data-add-date]");
   if (!cell) return;
   openCustomEventModal(null, cell.dataset.addDate);
+});
+preview.addEventListener("pointerdown", (event) => {
+  const chip = event.target.closest("[data-review-id]");
+  if (!chip || event.button !== 0) return;
+  startPreviewGesture(event, chip);
 });
 issuesList.addEventListener("click", (event) => {
   const card = event.target.closest("[data-review-id]");
@@ -239,7 +254,12 @@ preview.addEventListener("contextmenu", (event) => {
   event.preventDefault();
   const items = [];
   if (chip) {
+    const previewEvent = currentPreviewEvents.get(chip.dataset.reviewId);
     items.push({ label: "Copy Event", action: () => copyPreviewEvent(chip.dataset.reviewId) });
+    items.push({ label: "Delete Event", action: () => deletePreviewEvent(chip.dataset.reviewId) });
+    if (previewEvent?.source !== "Custom" && hasImportedOverride(chip.dataset.reviewId)) {
+      items.push({ label: "Reset Event", action: () => resetImportedEvent(chip.dataset.reviewId) });
+    }
   } else if (cell) {
     items.push({ label: "Add Event", action: () => openCustomEventModal(null, cell.dataset.addDate) });
     if (copiedEvent) {
@@ -303,6 +323,18 @@ document.addEventListener("click", (event) => {
   if (!event.target.closest("#contextMenu")) {
     closeContextMenu();
   }
+});
+document.addEventListener("pointermove", (event) => {
+  if (!previewGesture || event.pointerId !== previewGesture.pointerId) return;
+  updatePreviewGesture(event);
+});
+document.addEventListener("pointerup", (event) => {
+  if (!previewGesture || event.pointerId !== previewGesture.pointerId) return;
+  finishPreviewGesture(event);
+});
+document.addEventListener("pointercancel", (event) => {
+  if (!previewGesture || event.pointerId !== previewGesture.pointerId) return;
+  cancelPreviewGesture();
 });
 customEventAllDay.addEventListener("change", () => {
   customEventTimeFields.classList.toggle("hidden", customEventAllDay.checked);
@@ -574,13 +606,21 @@ function buildClientPreviewData(baseData) {
   const baseEvents = new Map((baseData.events || []).map((event) => [event.id, { ...event }]));
   const range = deriveRangeBounds(baseData.events || []);
   const events = [];
+  const deletedItems = [];
 
   for (const item of reviewIndex.values()) {
     const event = baseEvents.get(item.id);
     if (!event) continue;
     const override = overrides[item.id] || {};
     const include = typeof override.include === "boolean" ? override.include : item.include;
-    if (!include) continue;
+    if (!include) {
+      deletedItems.push({
+        ...item,
+        status: "deleted",
+        message: "Deleted from preview/export. Open to restore or edit.",
+      });
+      continue;
+    }
     events.push(buildEventOverridePatch(event, item, override));
   }
 
@@ -598,12 +638,15 @@ function buildClientPreviewData(baseData) {
     date_range: formatPreviewRange(previewStart, previewEnd) || (events.length ? summarizeEvents(events) : "No events found"),
     previewStart,
     previewEnd,
-    issues: (baseData.issues || []).filter((issue) => {
+    issues: [
+      ...(baseData.issues || []).filter((issue) => {
       const override = overrides[issue.id] || {};
       const reviewItem = reviewIndex.get(issue.id);
       const include = typeof override.include === "boolean" ? override.include : reviewItem?.include ?? true;
       return include;
-    }),
+      }),
+      ...deletedItems,
+    ],
   };
 }
 
@@ -742,7 +785,7 @@ function renderPreviewChip(event, dayKey) {
   if (!event.allDay && settings.showTimes && startKey === dayKey && event.timeLabel) meta.push(event.timeLabel);
   if (settings.showLocations && event.location) meta.push(event.location);
   const metaMarkup = meta.length ? `<span class="preview-chip-meta">${escapeHtml(meta.join(" · "))}</span>` : "";
-  return `<button type="button" class="preview-chip" data-review-id="${event.id}" draggable="true">${lines.join("")}${metaMarkup}</button>`;
+  return `<button type="button" class="preview-chip" data-review-id="${event.id}">${lines.join("")}${metaMarkup}</button>`;
 }
 
 function buildTermSections(weeks) {
@@ -980,6 +1023,234 @@ function pasteCopiedEvent(targetDate) {
   closeContextMenu();
   rebuildClientPreview();
   setStatus("Event pasted.");
+}
+
+function deletePreviewEvent(id) {
+  const event = currentPreviewEvents.get(id);
+  if (!event) return;
+  if (event.source === "Custom") {
+    customEvents = customEvents.filter((item) => item.id !== id);
+    if (openReviewId === id) closeReviewModal();
+  } else {
+    syncImportedOverride(id, { include: false });
+    if (openReviewId === id) closeReviewModal();
+  }
+  closeContextMenu();
+  rebuildClientPreview();
+  setStatus("Event deleted.");
+}
+
+function resetImportedEvent(id) {
+  if (!hasImportedOverride(id)) return;
+  delete overrides[id];
+  closeContextMenu();
+  rebuildClientPreview();
+  if (openReviewId === id) {
+    openReviewModal(id);
+  }
+  setStatus("Imported event reset.");
+}
+
+function hasImportedOverride(id) {
+  return Boolean(overrides[id] && Object.keys(overrides[id]).length);
+}
+
+function startPreviewGesture(event, chip) {
+  const previewEvent = currentPreviewEvents.get(chip.dataset.reviewId);
+  if (!previewEvent) return;
+  previewGesture = {
+    pointerId: event.pointerId,
+    id: previewEvent.id,
+    chip,
+    sourceEvent: { ...previewEvent },
+    startX: event.clientX,
+    startY: event.clientY,
+    originDay: previewEvent.start.slice(0, 10),
+    hoverDay: previewEvent.start.slice(0, 10),
+    slotOffset: 0,
+    moved: false,
+    originalMetaText: chip.querySelector(".preview-chip-meta")?.textContent || "",
+    originalMetaPresent: Boolean(chip.querySelector(".preview-chip-meta")),
+  };
+  chip.style.pointerEvents = "none";
+  chip.setPointerCapture?.(event.pointerId);
+}
+
+function updatePreviewGesture(event) {
+  const gesture = previewGesture;
+  if (!gesture) return;
+  const dx = event.clientX - gesture.startX;
+  const dy = event.clientY - gesture.startY;
+  gesture.moved = gesture.moved || Math.abs(dx) > 4 || Math.abs(dy) > 4;
+  gesture.chip.classList.add("is-dragging");
+  gesture.chip.style.transform = `translate(${dx}px, ${dy}px)`;
+
+  const hoverDay = dayKeyAtPoint(event.clientX, event.clientY);
+  gesture.hoverDay = hoverDay || "";
+  const canTimeShift = !gesture.sourceEvent.allDay && hoverDay === gesture.originDay && Math.abs(dy) >= Math.abs(dx);
+
+  if (canTimeShift) {
+    const slotOffset = calculateTimeShiftSlots(dy);
+    gesture.slotOffset = slotOffset;
+    clearDropTargets();
+    applyPreviewGestureTime(gesture);
+    return;
+  }
+
+  if (gesture.slotOffset !== 0) {
+    gesture.slotOffset = 0;
+    restorePreviewGestureMeta(gesture);
+  }
+
+  if (hoverDay && hoverDay !== gesture.originDay) {
+    setDropTarget(hoverDay);
+  } else {
+    clearDropTargets();
+  }
+}
+
+function finishPreviewGesture(event) {
+  const gesture = previewGesture;
+  if (!gesture) return;
+  const hoverDay = dayKeyAtPoint(event.clientX, event.clientY) || gesture.hoverDay;
+  const shouldSuppressClick = gesture.moved;
+  if (gesture.slotOffset !== 0 && hoverDay === gesture.originDay) {
+    commitPreviewGestureTime(gesture);
+    suppressPreviewClickUntil = Date.now() + 200;
+  } else if (hoverDay && hoverDay !== gesture.originDay) {
+    movePreviewEvent(gesture.id, hoverDay);
+    suppressPreviewClickUntil = Date.now() + 200;
+  } else {
+    restorePreviewGestureMeta(gesture);
+    if (shouldSuppressClick) suppressPreviewClickUntil = Date.now() + 200;
+  }
+  teardownPreviewGesture();
+}
+
+function cancelPreviewGesture() {
+  if (!previewGesture) return;
+  restorePreviewGestureMeta(previewGesture);
+  teardownPreviewGesture();
+}
+
+function teardownPreviewGesture() {
+  const gesture = previewGesture;
+  if (!gesture) return;
+  gesture.chip.classList.remove("is-dragging");
+  gesture.chip.style.transform = "";
+  gesture.chip.style.pointerEvents = "";
+  clearDropTargets();
+  previewGesture = null;
+}
+
+function dayKeyAtPoint(x, y) {
+  const element = document.elementFromPoint(x, y);
+  return element?.closest("[data-add-date]")?.dataset.addDate || "";
+}
+
+function setDropTarget(dayKey) {
+  preview.querySelectorAll(".preview-cell.is-drop-target").forEach((node) => {
+    if (node.dataset.addDate !== dayKey) node.classList.remove("is-drop-target");
+  });
+  const target = preview.querySelector(`[data-add-date="${dayKey}"]`);
+  if (target) target.classList.add("is-drop-target");
+}
+
+function clearDropTargets() {
+  preview.querySelectorAll(".preview-cell.is-drop-target").forEach((cell) => cell.classList.remove("is-drop-target"));
+}
+
+function calculateTimeShiftSlots(deltaY) {
+  const direction = deltaY < 0 ? -1 : 1;
+  const distance = Math.abs(deltaY);
+  const slots = Math.floor(distance / 18 + (distance / 90) ** 2 * 4);
+  return direction * slots;
+}
+
+function applyPreviewGestureTime(gesture) {
+  const shifted = shiftTimedEventByMinutes(gesture.sourceEvent, gesture.slotOffset * 15);
+  setPreviewChipMeta(gesture.chip, shifted, true);
+}
+
+function restorePreviewGestureMeta(gesture) {
+  const meta = gesture.chip.querySelector(".preview-chip-meta");
+  if (gesture.originalMetaPresent) {
+    if (meta) {
+      meta.textContent = gesture.originalMetaText;
+    } else {
+      gesture.chip.insertAdjacentHTML("beforeend", `<span class="preview-chip-meta">${escapeHtml(gesture.originalMetaText)}</span>`);
+    }
+  } else if (meta) {
+    meta.remove();
+  }
+}
+
+function commitPreviewGestureTime(gesture) {
+  const shifted = shiftTimedEventByMinutes(gesture.sourceEvent, gesture.slotOffset * 15);
+  if (shifted.source === "Custom") {
+    customEvents = customEvents.map((item) => item.id === shifted.id ? previewEventToCustomEvent(shifted, item) : item);
+  } else {
+    syncImportedOverride(shifted.id, {
+      start: shifted.start,
+      end: shifted.end,
+      allDay: shifted.allDay,
+    });
+  }
+  rebuildClientPreview();
+  setStatus("Event time updated.");
+}
+
+function setPreviewChipMeta(chip, event, forceTime = false) {
+  const metaParts = [];
+  if ((!event.allDay && settings.showTimes) || forceTime) metaParts.push(event.timeLabel);
+  if (settings.showLocations && event.location) metaParts.push(event.location);
+  const text = metaParts.join(" · ");
+  let meta = chip.querySelector(".preview-chip-meta");
+  if (!text) {
+    meta?.remove();
+    return;
+  }
+  if (!meta) {
+    meta = document.createElement("span");
+    meta.className = "preview-chip-meta";
+    chip.append(meta);
+  }
+  meta.textContent = text;
+}
+
+function shiftTimedEventByMinutes(event, minutes) {
+  const start = addMinutesToDateTimeString(event.start, minutes);
+  const end = addMinutesToDateTimeString(event.end, minutes);
+  return {
+    ...event,
+    start,
+    end,
+    timeLabel: summarizeEventTimes(start, end, false),
+  };
+}
+
+function addMinutesToDateTimeString(value, minutes) {
+  const date = parseDateTimeString(value);
+  date.setMinutes(date.getMinutes() + minutes);
+  return formatDateTimeString(date);
+}
+
+function parseDateTimeString(value) {
+  const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  if (!match) return new Date(value);
+  return new Date(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+    Number(match[4]),
+    Number(match[5]),
+    0,
+    0,
+  );
+}
+
+function formatDateTimeString(date) {
+  return `${formatDateKey(date)}T${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}:00`;
 }
 
 function openContextMenu(x, y, items) {
@@ -1270,7 +1541,11 @@ function formatTimestamp(value) {
 }
 
 function formatIssueHeading(item) {
-  const status = item.status === "unknown" ? "Unknown" : "Review";
+  const status = item.status === "unknown"
+    ? "Unknown"
+    : item.status === "deleted"
+      ? "Deleted"
+      : "Review";
   return `${status} · ${item.source} · ${formatDate(item.startDay)}`;
 }
 
@@ -1303,6 +1578,7 @@ function openReviewModal(id) {
     }
     return;
   }
+  openReviewId = id;
   const event = currentPreviewEvents.get(id) || buildEventOverridePatch(getBaseImportedEvent(id), item, overrides[id] || {});
   const overrideValue = escapeHtml((overrides[id]?.title ?? item.overrideTitle ?? ""));
   const includeValue = typeof overrides[id]?.include === "boolean" ? overrides[id].include : item.include;
@@ -1318,6 +1594,9 @@ function openReviewModal(id) {
     ? `<ul class="review-warnings">${item.warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}</ul>`
     : "";
   const badge = item.status === "ok" ? "" : `<span class="review-badge review-badge-${item.status}">${item.status}</span>`;
+  const resetButton = hasImportedOverride(id)
+    ? `<div class="modal-actions"><button type="button" class="button button-secondary" data-override-reset="${id}">Reset Imported Event</button></div>`
+    : "";
 
   reviewModalBody.innerHTML = `
     <article class="review-card">
@@ -1384,6 +1663,7 @@ function openReviewModal(id) {
         ${item.timeLabel ? `<span>Times: ${escapeHtml(item.timeLabel)}</span>` : ""}
         ${item.location ? `<span>Location: ${escapeHtml(item.location)}</span>` : ""}
       </div>
+      ${resetButton}
       ${warnings}
     </article>
   `;
@@ -1392,6 +1672,7 @@ function openReviewModal(id) {
 }
 
 function closeReviewModal() {
+  openReviewId = "";
   reviewModal.classList.add("hidden");
   reviewModal.setAttribute("aria-hidden", "true");
   reviewModalBody.innerHTML = "";
