@@ -54,6 +54,7 @@ const contextMenu = document.querySelector("#contextMenu");
 const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const OWNER_EMAIL = "rhaydon@gmail.com";
 const ACCOUNT_STATE_KEY = "roster-account-state";
+const SESSION_STATE_KEY = "roster-session-state-v1";
 const SETTINGS_FIELDS = [
   "showSourcePrefix",
   "showAmPm",
@@ -87,6 +88,7 @@ let suppressPreviewClickUntil = 0;
 let openReviewId = "";
 let conflictSelections = {};
 let accountState = loadAccountState();
+let restoredSessionState = null;
 
 const settingsInputs = Object.fromEntries(
   SETTINGS_FIELDS.map((id) => [id, document.querySelector(`#${id}`)]),
@@ -183,6 +185,7 @@ accountsBody.addEventListener("click", (event) => {
 
 doctorSelect.addEventListener("change", () => {
   clearPreviewData();
+  saveCurrentSessionState();
   syncActionState();
 });
 
@@ -200,6 +203,7 @@ for (const [key, input] of Object.entries(settingsInputs)) {
       settings.showNormalizedTitles = true;
       settingsInputs.showNormalizedTitles.checked = true;
     }
+    saveCurrentSessionState();
     if (latestPreview && (key === "dateFrom" || key === "dateTo")) {
       rebuildClientPreview();
       setStatus("Preview range updated.");
@@ -304,6 +308,7 @@ conflictsList.addEventListener("change", async (event) => {
   if (!select) return;
   conflictSelections[select.dataset.conflictKey] = select.value;
   saveConflictSelections();
+  saveCurrentSessionState();
   await updatePreview();
 });
 preview.addEventListener("contextmenu", (event) => {
@@ -415,6 +420,7 @@ customEventDeleteButton.addEventListener("click", () => {
   customEvents = customEvents.filter((item) => item.id !== id);
   closeCustomEventModal();
   rebuildClientPreview();
+  saveCurrentSessionState();
   setStatus("Manual event removed.");
 });
 customEventForm.addEventListener("submit", (event) => {
@@ -431,6 +437,7 @@ customEventForm.addEventListener("submit", (event) => {
   }
   closeCustomEventModal();
   rebuildClientPreview();
+  saveCurrentSessionState();
 });
 
 form.addEventListener("submit", async (event) => {
@@ -544,11 +551,26 @@ async function analyzeFiles() {
       const serverEntry = (data.imports || []).find((item) => item.id === entry.id);
       return serverEntry ? { ...entry, sourceType: serverEntry.sourceType } : entry;
     });
-    settings = { ...defaultSettings(), ...settings, ...(data.settings || {}) };
-    conflictSelections = loadConflictSelections();
+    restoredSessionState = loadCurrentSessionState();
+    settings = {
+      ...defaultSettings(),
+      ...settings,
+      ...(data.settings || {}),
+      ...(restoredSessionState?.settings || {}),
+    };
+    overrides = sanitizeOverrideState(restoredSessionState?.overrides);
+    customEvents = sanitizeCustomEvents(restoredSessionState?.customEvents);
+    conflictSelections = {
+      ...loadConflictSelections(),
+      ...(restoredSessionState?.conflictSelections || {}),
+    };
     renderSettings();
     renderFilesList();
     renderDoctorState();
+    if (restoredSessionState?.hadPreview && selectedDoctor()) {
+      await updatePreview();
+      return;
+    }
   } catch (error) {
     doctorOptions = [];
     detectedSources = {};
@@ -617,6 +639,9 @@ function renderDoctorState() {
       option.textContent = doctor.displayName;
       doctorSelect.append(option);
     }
+    if (restoredSessionState?.doctorKey && doctorOptions.some((doctor) => doctor.key === restoredSessionState.doctorKey)) {
+      doctorSelect.value = restoredSessionState.doctorKey;
+    }
     doctorSelect.classList.remove("hidden");
     setStatus("Choose a doctor, then preview or export.");
   }
@@ -642,6 +667,7 @@ async function updatePreview() {
     }
     indexReviewItems(data.review || []);
     rebuildClientPreview();
+    saveCurrentSessionState();
     setStatus("Preview loaded.");
   } catch (error) {
     clearPreviewData();
@@ -657,6 +683,7 @@ function rebuildClientPreview() {
   renderConflicts(view.conflicts || []);
   renderPreviewGrid(doctor, view);
   renderIssues(view.issues || []);
+  saveCurrentSessionState();
 }
 
 function buildClientPreviewData(baseData) {
@@ -1054,6 +1081,7 @@ function movePreviewEvent(id, targetDate) {
     });
   }
   rebuildClientPreview();
+  saveCurrentSessionState();
   setStatus("Event moved.");
 }
 
@@ -1120,6 +1148,7 @@ function pasteCopiedEvent(targetDate) {
   customEvents.push(previewEventToCustomEvent(shifted));
   closeContextMenu();
   rebuildClientPreview();
+  saveCurrentSessionState();
   setStatus("Event pasted.");
 }
 
@@ -1135,6 +1164,7 @@ function deletePreviewEvent(id) {
   }
   closeContextMenu();
   rebuildClientPreview();
+  saveCurrentSessionState();
   setStatus("Event deleted.");
 }
 
@@ -1143,6 +1173,7 @@ function resetImportedEvent(id) {
   delete overrides[id];
   closeContextMenu();
   rebuildClientPreview();
+  saveCurrentSessionState();
   if (openReviewId === id) {
     openReviewModal(id);
   }
@@ -1166,7 +1197,14 @@ function startPreviewGesture(event, chip) {
     originDay: previewEvent.start.slice(0, 10),
     hoverDay: previewEvent.start.slice(0, 10),
     slotOffset: 0,
+    minuteOffset: 0,
     moved: false,
+    timeShiftDisabled: false,
+    autoShiftHandle: null,
+    autoShiftAccumulator: 0,
+    autoShiftLastTs: 0,
+    autoShiftDirection: 0,
+    autoShiftRate: 0,
     originalMetaText: chip.querySelector(".preview-chip-meta")?.textContent || "",
     originalMetaPresent: Boolean(chip.querySelector(".preview-chip-meta")),
   };
@@ -1185,19 +1223,29 @@ function updatePreviewGesture(event) {
 
   const hoverDay = dayKeyAtPoint(event.clientX, event.clientY);
   gesture.hoverDay = hoverDay || "";
-  const canTimeShift = !gesture.sourceEvent.allDay && hoverDay === gesture.originDay && Math.abs(dy) >= Math.abs(dx);
+  if (hoverDay && hoverDay !== gesture.originDay && !gesture.timeShiftDisabled) {
+    disableGestureTimeShift(gesture);
+  }
+  const slotOffset = calculateTimeShiftSlots(dy);
+  const canTimeShift = (
+    !gesture.sourceEvent.allDay &&
+    !gesture.timeShiftDisabled &&
+    hoverDay === gesture.originDay &&
+    Math.abs(dy) >= Math.abs(dx) &&
+    slotOffset !== 0 &&
+    Math.abs(slotOffset) <= 6
+  );
 
   if (canTimeShift) {
-    const slotOffset = calculateTimeShiftSlots(dy);
-    gesture.slotOffset = slotOffset;
     clearDropTargets();
-    applyPreviewGestureTime(gesture);
+    applyPreviewGestureSlot(gesture, slotOffset);
     return;
   }
 
-  if (gesture.slotOffset !== 0) {
-    gesture.slotOffset = 0;
-    restorePreviewGestureMeta(gesture);
+  if (Math.abs(slotOffset) > 6 && !gesture.timeShiftDisabled) {
+    disableGestureTimeShift(gesture);
+  } else if (gesture.slotOffset !== 0 || gesture.minuteOffset !== 0) {
+    resetGestureTimeShift(gesture);
   }
 
   if (hoverDay && hoverDay !== gesture.originDay) {
@@ -1212,7 +1260,8 @@ function finishPreviewGesture(event) {
   if (!gesture) return;
   const hoverDay = dayKeyAtPoint(event.clientX, event.clientY) || gesture.hoverDay;
   const shouldSuppressClick = gesture.moved;
-  if (gesture.slotOffset !== 0 && hoverDay === gesture.originDay) {
+  stopGestureAutoShift(gesture);
+  if (gesture.minuteOffset !== 0 && hoverDay === gesture.originDay) {
     commitPreviewGestureTime(gesture);
     suppressPreviewClickUntil = Date.now() + 200;
   } else if (hoverDay && hoverDay !== gesture.originDay) {
@@ -1227,6 +1276,7 @@ function finishPreviewGesture(event) {
 
 function cancelPreviewGesture() {
   if (!previewGesture) return;
+  stopGestureAutoShift(previewGesture);
   restorePreviewGestureMeta(previewGesture);
   teardownPreviewGesture();
 }
@@ -1264,17 +1314,78 @@ function calculateTimeShiftSlots(deltaY) {
   return direction * Math.floor(distance / 18);
 }
 
-function minutesForTimeShiftSlots(slotOffset) {
+function applyPreviewGestureSlot(gesture, slotOffset) {
+  const previousAbsolute = Math.abs(gesture.slotOffset);
+  const nextAbsolute = Math.abs(slotOffset);
   const direction = slotOffset < 0 ? -1 : 1;
-  const steps = Math.abs(slotOffset);
-  if (!steps) return 0;
-  if (steps <= 3) return direction * steps * 15;
-  return direction * (45 + (steps - 3) * 60);
+  gesture.slotOffset = slotOffset;
+
+  if (nextAbsolute <= 3) {
+    stopGestureAutoShift(gesture);
+    gesture.minuteOffset = slotOffset * 15;
+    const shifted = shiftTimedEventByMinutes(gesture.sourceEvent, gesture.minuteOffset);
+    setPreviewChipMeta(gesture.chip, shifted, true);
+    return;
+  }
+
+  if (previousAbsolute <= 3 || gesture.autoShiftDirection !== direction) {
+    gesture.minuteOffset = direction * 60;
+  }
+  const rate = nextAbsolute === 4 ? 1 : nextAbsolute === 5 ? 2 : 4;
+  startGestureAutoShift(gesture, direction, rate);
+  const shifted = shiftTimedEventByMinutes(gesture.sourceEvent, gesture.minuteOffset);
+  setPreviewChipMeta(gesture.chip, shifted, true);
 }
 
-function applyPreviewGestureTime(gesture) {
-  const shifted = shiftTimedEventByMinutes(gesture.sourceEvent, minutesForTimeShiftSlots(gesture.slotOffset));
-  setPreviewChipMeta(gesture.chip, shifted, true);
+function startGestureAutoShift(gesture, direction, rate) {
+  gesture.autoShiftDirection = direction;
+  gesture.autoShiftRate = rate;
+  if (gesture.autoShiftHandle) return;
+  gesture.autoShiftAccumulator = 0;
+  gesture.autoShiftLastTs = 0;
+  const tick = (timestamp) => {
+    if (!previewGesture || previewGesture !== gesture) return;
+    if (gesture.timeShiftDisabled || Math.abs(gesture.slotOffset) < 4) {
+      gesture.autoShiftHandle = null;
+      gesture.autoShiftLastTs = 0;
+      gesture.autoShiftAccumulator = 0;
+      return;
+    }
+    if (!gesture.autoShiftLastTs) gesture.autoShiftLastTs = timestamp;
+    const elapsed = timestamp - gesture.autoShiftLastTs;
+    gesture.autoShiftLastTs = timestamp;
+    gesture.autoShiftAccumulator += elapsed;
+    const stepMs = 360 / gesture.autoShiftRate;
+    while (gesture.autoShiftAccumulator >= stepMs) {
+      gesture.autoShiftAccumulator -= stepMs;
+      gesture.minuteOffset += gesture.autoShiftDirection * 15;
+    }
+    const shifted = shiftTimedEventByMinutes(gesture.sourceEvent, gesture.minuteOffset);
+    setPreviewChipMeta(gesture.chip, shifted, true);
+    gesture.autoShiftHandle = requestAnimationFrame(tick);
+  };
+  gesture.autoShiftHandle = requestAnimationFrame(tick);
+}
+
+function stopGestureAutoShift(gesture) {
+  if (gesture.autoShiftHandle) cancelAnimationFrame(gesture.autoShiftHandle);
+  gesture.autoShiftHandle = null;
+  gesture.autoShiftAccumulator = 0;
+  gesture.autoShiftLastTs = 0;
+  gesture.autoShiftDirection = 0;
+  gesture.autoShiftRate = 0;
+}
+
+function resetGestureTimeShift(gesture) {
+  stopGestureAutoShift(gesture);
+  gesture.slotOffset = 0;
+  gesture.minuteOffset = 0;
+  restorePreviewGestureMeta(gesture);
+}
+
+function disableGestureTimeShift(gesture) {
+  gesture.timeShiftDisabled = true;
+  resetGestureTimeShift(gesture);
 }
 
 function restorePreviewGestureMeta(gesture) {
@@ -1291,7 +1402,7 @@ function restorePreviewGestureMeta(gesture) {
 }
 
 function commitPreviewGestureTime(gesture) {
-  const shifted = shiftTimedEventByMinutes(gesture.sourceEvent, minutesForTimeShiftSlots(gesture.slotOffset));
+  const shifted = shiftTimedEventByMinutes(gesture.sourceEvent, gesture.minuteOffset);
   if (shifted.source === "Custom") {
     customEvents = customEvents.map((item) => item.id === shifted.id ? previewEventToCustomEvent(shifted, item) : item);
   } else {
@@ -1302,6 +1413,7 @@ function commitPreviewGestureTime(gesture) {
     });
   }
   rebuildClientPreview();
+  saveCurrentSessionState();
   setStatus("Event time updated.");
 }
 
@@ -1415,6 +1527,7 @@ function resetDerivedState() {
   detectedSources = {};
   overrides = {};
   customEvents = [];
+  restoredSessionState = null;
   settings = defaultSettings();
   renderSettings();
   doctorSelect.innerHTML = "";
@@ -1601,6 +1714,7 @@ function applyPreviewRangeChange(which, value) {
   if (settingsInputs.dateFrom) settingsInputs.dateFrom.value = settings.dateFrom;
   if (settingsInputs.dateTo) settingsInputs.dateTo.value = settings.dateTo;
   rebuildClientPreview();
+  saveCurrentSessionState();
   setStatus("Preview range updated.");
 }
 
@@ -2092,6 +2206,72 @@ function removeLocalAccount(email) {
   }
   saveAccountState();
   setStatus("User removed from local account list.");
+}
+
+function currentImportStateKey() {
+  if (!selectedFiles.length) return "";
+  return selectedFiles.map((entry) => entry.id).sort().join("|");
+}
+
+function loadSessionStore() {
+  try {
+    return JSON.parse(localStorage.getItem(SESSION_STATE_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function saveSessionStore(store) {
+  localStorage.setItem(SESSION_STATE_KEY, JSON.stringify(store));
+}
+
+function loadCurrentSessionState() {
+  const key = currentImportStateKey();
+  if (!key) return null;
+  const store = loadSessionStore();
+  return store[key] || null;
+}
+
+function saveCurrentSessionState() {
+  const key = currentImportStateKey();
+  if (!key) return;
+  try {
+    const store = loadSessionStore();
+    store[key] = {
+      doctorKey: doctorOptions.length > 1 ? doctorSelect.value : doctorOptions[0]?.key || "",
+      settings: { ...settings },
+      overrides: cleanOverrides(),
+      customEvents: sanitizeCustomEvents(customEvents),
+      conflictSelections: { ...conflictSelections },
+      hadPreview: Boolean(latestPreview),
+      savedAt: new Date().toISOString(),
+    };
+    saveSessionStore(store);
+  } catch {
+    // Ignore persistence failures for session-only state.
+  }
+}
+
+function sanitizeOverrideState(value) {
+  if (!value || typeof value !== "object") return {};
+  return JSON.parse(JSON.stringify(value));
+}
+
+function sanitizeCustomEvents(items) {
+  if (!Array.isArray(items)) return [];
+  return items
+    .filter((item) => item && item.id && item.title && item.startDate && item.endDate)
+    .map((item) => ({
+      id: String(item.id),
+      title: String(item.title),
+      startDate: String(item.startDate),
+      endDate: String(item.endDate),
+      allDay: Boolean(item.allDay),
+      startTime: item.allDay ? "" : String(item.startTime || ""),
+      endTime: item.allDay ? "" : String(item.endTime || ""),
+      location: String(item.location || ""),
+      include: item.include !== false,
+    }));
 }
 
 const DB_NAME = "roster-converter";
