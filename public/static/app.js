@@ -166,20 +166,51 @@ for (const [key, input] of Object.entries(settingsInputs)) {
 
 reviewModalBody.addEventListener("input", (event) => {
   const titleInput = event.target.closest("[data-override-title]");
-  if (!titleInput) return;
-  const id = titleInput.dataset.overrideTitle;
-  ensureOverride(id).title = titleInput.value;
+  if (titleInput) {
+    const id = titleInput.dataset.overrideTitle;
+    syncImportedOverride(id, { title: titleInput.value });
+    rebuildClientPreview();
+    setStatus("Mapping override updated.");
+    return;
+  }
+
+  const customLocationInput = event.target.closest("[data-override-custom-location]");
+  if (!customLocationInput) return;
+  const id = customLocationInput.dataset.overrideCustomLocation;
+  syncImportedOverride(id, { location: customLocationInput.value.trim() });
   rebuildClientPreview();
-  setStatus("Mapping override updated.");
+  setStatus("Event details updated.");
 });
 
 reviewModalBody.addEventListener("change", (event) => {
   const includeInput = event.target.closest("[data-override-include]");
-  if (!includeInput) return;
-  const id = includeInput.dataset.overrideInclude;
-  ensureOverride(id).include = includeInput.checked;
+  if (includeInput) {
+    const id = includeInput.dataset.overrideInclude;
+    syncImportedOverride(id, { include: includeInput.checked });
+    rebuildClientPreview();
+    setStatus("Inclusion override updated.");
+    return;
+  }
+
+  const startDateInput = event.target.closest("[data-override-start-date]");
+  const endDateInput = event.target.closest("[data-override-end-date]");
+  const allDayInput = event.target.closest("[data-override-all-day]");
+  const startTimeInput = event.target.closest("[data-override-start-time]");
+  const endTimeInput = event.target.closest("[data-override-end-time]");
+  const locationModeInput = event.target.closest("[data-override-location-mode]");
+  const target = startDateInput || endDateInput || allDayInput || startTimeInput || endTimeInput || locationModeInput;
+  if (!target) return;
+  const id = (
+    startDateInput?.dataset.overrideStartDate ||
+    endDateInput?.dataset.overrideEndDate ||
+    allDayInput?.dataset.overrideAllDay ||
+    startTimeInput?.dataset.overrideStartTime ||
+    endTimeInput?.dataset.overrideEndTime ||
+    locationModeInput?.dataset.overrideLocationMode
+  );
+  applyImportedEventFormState(id);
   rebuildClientPreview();
-  setStatus("Inclusion override updated.");
+  setStatus("Event details updated.");
 });
 
 previewButton.addEventListener("click", () => updatePreview());
@@ -512,8 +543,14 @@ async function updatePreview() {
   }
   setStatus("Building preview...");
   try {
-    const data = await postForm("/api/preview", doctor);
+    const data = await postPreviewForm("/api/preview", doctor);
     latestPreview = data;
+    if (!settings.dateFrom || !settings.dateTo) {
+      const range = deriveRangeBounds(data.events || []);
+      if (!settings.dateFrom) settings.dateFrom = range.start;
+      if (!settings.dateTo) settings.dateTo = range.end;
+      renderSettings();
+    }
     indexReviewItems(data.review || []);
     rebuildClientPreview();
     setStatus("Preview loaded.");
@@ -535,6 +572,7 @@ function rebuildClientPreview() {
 
 function buildClientPreviewData(baseData) {
   const baseEvents = new Map((baseData.events || []).map((event) => [event.id, { ...event }]));
+  const range = deriveRangeBounds(baseData.events || []);
   const events = [];
 
   for (const item of reviewIndex.values()) {
@@ -543,16 +581,7 @@ function buildClientPreviewData(baseData) {
     const override = overrides[item.id] || {};
     const include = typeof override.include === "boolean" ? override.include : item.include;
     if (!include) continue;
-    events.push({
-      ...event,
-      title: (override.title || "").trim() || item.suggestedTitle || event.title,
-      start: override.start || event.start,
-      end: override.end || event.end,
-      allDay: typeof override.allDay === "boolean" ? override.allDay : event.allDay,
-      location: override.location || event.location,
-      timeLabel: override.start && override.end ? summarizeEventTimes(override.start, override.end, typeof override.allDay === "boolean" ? override.allDay : event.allDay) : event.timeLabel,
-      isEditedImport: Boolean(override.start || override.end || override.location),
-    });
+    events.push(buildEventOverridePatch(event, item, override));
   }
 
   for (const event of customEvents) {
@@ -560,11 +589,15 @@ function buildClientPreviewData(baseData) {
   }
 
   events.sort(comparePreviewEvents);
+  const previewStart = settings.dateFrom || range.start;
+  const previewEnd = settings.dateTo || range.end;
   return {
     ...baseData,
     events,
     count: events.length,
-    date_range: events.length ? summarizeEvents(events) : "No events found",
+    date_range: formatPreviewRange(previewStart, previewEnd) || (events.length ? summarizeEvents(events) : "No events found"),
+    previewStart,
+    previewEnd,
     issues: (baseData.issues || []).filter((issue) => {
       const override = overrides[issue.id] || {};
       const reviewItem = reviewIndex.get(issue.id);
@@ -611,11 +644,12 @@ function indexReviewItems(items) {
 function renderPreviewGrid(doctor, data) {
   const events = data.events || [];
   currentPreviewEvents = new Map(events.map((event) => [event.id, event]));
-  if (!events.length) {
+  const days = buildPreviewDays(events, data.previewStart, data.previewEnd);
+  if (!days.length) {
     preview.innerHTML = `
       <div class="preview-head">
         <strong>${escapeHtml(doctor.displayName)}</strong>
-        <span>0 events</span>
+        <span>${data.count} events</span>
         <span>${escapeHtml(data.date_range)}</span>
       </div>
       <div class="preview-empty">No events match the current settings.</div>
@@ -624,7 +658,6 @@ function renderPreviewGrid(doctor, data) {
     previewSection.classList.remove("hidden");
     return;
   }
-  const days = buildPreviewDays(events);
   const weeks = chunkWeeks(days);
   const termSections = buildTermSections(weeks);
 
@@ -640,11 +673,10 @@ function renderPreviewGrid(doctor, data) {
   previewSection.classList.remove("hidden");
 }
 
-function buildPreviewDays(events) {
-  if (!events.length) return [];
+function buildPreviewDays(events, explicitStart = "", explicitEnd = "") {
   const eventMap = new Map();
-  let firstDay = null;
-  let lastDay = null;
+  let firstDay = explicitStart ? parseDateOnly(explicitStart) : null;
+  let lastDay = explicitEnd ? parseDateOnly(explicitEnd) : null;
 
   for (const event of events) {
     const startDate = parseDateOnly(event.start);
@@ -662,6 +694,7 @@ function buildPreviewDays(events) {
     }
   }
 
+  if (!firstDay || !lastDay) return [];
   const startMonday = mondayFor(firstDay);
   const endSunday = addDays(mondayFor(lastDay), 6);
   const days = [];
@@ -790,6 +823,19 @@ function createFormData(doctor = null) {
   return body;
 }
 
+function createPreviewFormData(doctor = null) {
+  const body = new FormData();
+  for (const file of selectedFiles) {
+    body.append("rosterFiles", file);
+  }
+  if (doctor) {
+    body.append("doctorKey", doctor.key);
+    body.append("doctorDisplay", doctor.displayName);
+  }
+  body.append("settings", JSON.stringify(settings));
+  return body;
+}
+
 function cleanOverrides() {
   const next = {};
   for (const [id, value] of Object.entries(overrides)) {
@@ -797,15 +843,16 @@ function cleanOverrides() {
     const include = value.include;
     const start = value.start || "";
     const end = value.end || "";
-    const location = value.location || "";
+    const hasLocation = Object.prototype.hasOwnProperty.call(value, "location");
+    const location = hasLocation ? value.location || "" : "";
     const allDay = value.allDay;
-    if (!title && typeof include !== "boolean" && !start && !end && !location && typeof allDay !== "boolean") continue;
+    if (!title && typeof include !== "boolean" && !start && !end && !hasLocation && typeof allDay !== "boolean") continue;
     next[id] = {};
     if (title) next[id].title = title;
     if (typeof include === "boolean") next[id].include = include;
     if (start) next[id].start = start;
     if (end) next[id].end = end;
-    if (location) next[id].location = location;
+    if (hasLocation) next[id].location = location;
     if (typeof allDay === "boolean") next[id].allDay = allDay;
   }
   return next;
@@ -858,13 +905,12 @@ function movePreviewEvent(id, targetDate) {
     customEvents = customEvents.map((item) => item.id === id ? previewEventToCustomEvent(updated, item) : item);
   } else {
     const updated = shiftPreviewEventToDay(event, targetDate);
-    const override = ensureOverride(id);
-    override.start = updated.start;
-    override.end = updated.end;
-    override.allDay = updated.allDay;
-    if (updated.location) {
-      override.location = updated.location;
-    }
+    syncImportedOverride(id, {
+      start: updated.start,
+      end: updated.end,
+      allDay: updated.allDay,
+      location: updated.location || "",
+    });
   }
   rebuildClientPreview();
   setStatus("Event moved.");
@@ -970,6 +1016,18 @@ async function postForm(url, doctor = null) {
   return JSON.parse(text);
 }
 
+async function postPreviewForm(url, doctor = null) {
+  const response = await fetch(url, {
+    method: "POST",
+    body: createPreviewFormData(doctor),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(parseError(text));
+  }
+  return JSON.parse(text);
+}
+
 function selectedDoctor() {
   if (!doctorOptions.length) return null;
   if (doctorOptions.length === 1) return doctorOptions[0];
@@ -1012,6 +1070,53 @@ function clearPreviewData() {
 function ensureOverride(id) {
   if (!overrides[id]) overrides[id] = {};
   return overrides[id];
+}
+
+function removeEmptyOverride(id) {
+  const value = overrides[id];
+  if (!value) return;
+  const hasLocation = Object.prototype.hasOwnProperty.call(value, "location");
+  if (!value.title && typeof value.include !== "boolean" && !value.start && !value.end && !hasLocation && typeof value.allDay !== "boolean") {
+    delete overrides[id];
+  }
+}
+
+function getBaseImportedEvent(id) {
+  return latestPreview?.events?.find((event) => event.id === id) || null;
+}
+
+function syncImportedOverride(id, patch) {
+  const baseEvent = getBaseImportedEvent(id);
+  const reviewItem = reviewIndex.get(id);
+  const next = ensureOverride(id);
+
+  const nextTitle = patch.title ?? next.title ?? "";
+  const baseTitle = reviewItem?.suggestedTitle || baseEvent?.title || "";
+  next.title = nextTitle && nextTitle !== baseTitle ? nextTitle : "";
+
+  if (typeof patch.include === "boolean") {
+    next.include = patch.include !== (reviewItem?.include ?? true) ? patch.include : undefined;
+  }
+
+  const nextStart = patch.start ?? next.start ?? "";
+  next.start = nextStart && nextStart !== baseEvent?.start ? nextStart : "";
+
+  const nextEnd = patch.end ?? next.end ?? "";
+  next.end = nextEnd && nextEnd !== baseEvent?.end ? nextEnd : "";
+
+  const nextAllDay = typeof patch.allDay === "boolean" ? patch.allDay : next.allDay;
+  next.allDay = typeof nextAllDay === "boolean" && nextAllDay !== baseEvent?.allDay ? nextAllDay : undefined;
+
+  if (Object.prototype.hasOwnProperty.call(patch, "location") || Object.prototype.hasOwnProperty.call(next, "location")) {
+    const nextLocation = Object.prototype.hasOwnProperty.call(patch, "location") ? patch.location : next.location;
+    if ((nextLocation || "") !== (baseEvent?.location || "")) {
+      next.location = nextLocation || "";
+    } else {
+      delete next.location;
+    }
+  }
+
+  removeEmptyOverride(id);
 }
 
 function fileFingerprint(file) {
@@ -1076,6 +1181,50 @@ function formatMonth(date) {
     month: "long",
     year: "numeric",
   });
+}
+
+function deriveRangeBounds(events) {
+  if (!events.length) return { start: "", end: "" };
+  let start = events[0].start.slice(0, 10);
+  let end = formatDateKey(previewInclusiveEndDate(events[0], parseDateOnly(events[0].start), parseDateOnly(events[0].end)));
+  for (const event of events.slice(1)) {
+    const eventStart = event.start.slice(0, 10);
+    const eventEnd = formatDateKey(previewInclusiveEndDate(event, parseDateOnly(event.start), parseDateOnly(event.end)));
+    if (eventStart < start) start = eventStart;
+    if (eventEnd > end) end = eventEnd;
+  }
+  return { start, end };
+}
+
+function formatPreviewRange(start, end) {
+  if (!start || !end) return "";
+  return `${start} to ${end}`;
+}
+
+function buildEventOverridePatch(event, item, override = {}) {
+  if (!event) return null;
+  const allDay = typeof override.allDay === "boolean" ? override.allDay : event.allDay;
+  const start = override.start || event.start;
+  const end = override.end || event.end;
+  const title = (override.title || "").trim() || item?.suggestedTitle || event.title;
+  const location = Object.prototype.hasOwnProperty.call(override, "location") ? override.location || "" : event.location;
+  const sourceTitle = item?.suggestedTitle || event.title;
+  return {
+    ...event,
+    title,
+    start,
+    end,
+    allDay,
+    location: location || "",
+    timeLabel: summarizeEventTimes(start, end, allDay),
+    isEditedImport: (
+      title !== sourceTitle ||
+      start !== event.start ||
+      end !== event.end ||
+      allDay !== event.allDay ||
+      (location || "") !== (event.location || "")
+    ),
+  };
 }
 
 function detectAustralianTerm(date) {
@@ -1154,8 +1303,17 @@ function openReviewModal(id) {
     }
     return;
   }
+  const event = currentPreviewEvents.get(id) || buildEventOverridePatch(getBaseImportedEvent(id), item, overrides[id] || {});
   const overrideValue = escapeHtml((overrides[id]?.title ?? item.overrideTitle ?? ""));
   const includeValue = typeof overrides[id]?.include === "boolean" ? overrides[id].include : item.include;
+  const startDate = event?.start?.slice(0, 10) || item.startDay;
+  const endDate = event?.allDay
+    ? formatDateKey(addDays(parseDateOnly(event.end), -1))
+    : event?.end?.slice(0, 10) || item.endDay;
+  const allDay = event?.allDay ?? item.allDay;
+  const startTime = event?.allDay ? "" : extractTimePortion(event?.start || "");
+  const endTime = event?.allDay ? "" : extractTimePortion(event?.end || "");
+  const preset = detectLocationPreset(event?.location || item.location || "");
   const warnings = item.warnings.length
     ? `<ul class="review-warnings">${item.warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}</ul>`
     : "";
@@ -1184,6 +1342,42 @@ function openReviewModal(id) {
           <input type="checkbox" ${includeValue ? "checked" : ""} ${item.exportable ? "" : "disabled"} data-override-include="${item.id}">
           Include in export
         </label>
+        <div class="custom-event-grid">
+          <label class="field">
+            <span>Start date</span>
+            <input type="date" value="${startDate}" data-override-start-date="${item.id}">
+          </label>
+          <label class="field">
+            <span>End date</span>
+            <input type="date" value="${endDate}" data-override-end-date="${item.id}">
+          </label>
+        </div>
+        <label class="toggle review-toggle">
+          <input type="checkbox" ${allDay ? "checked" : ""} data-override-all-day="${item.id}">
+          All day
+        </label>
+        <div class="custom-event-grid ${allDay ? "hidden" : ""}" data-override-time-fields="${item.id}">
+          <label class="field">
+            <span>Start time</span>
+            <input type="time" value="${startTime || "09:00"}" data-override-start-time="${item.id}">
+          </label>
+          <label class="field">
+            <span>End time</span>
+            <input type="time" value="${endTime || "17:00"}" data-override-end-time="${item.id}">
+          </label>
+        </div>
+        <div class="custom-event-grid">
+          <label class="field">
+            <span>Location</span>
+            <select data-override-location-mode="${item.id}">
+              ${buildLocationOptionMarkup(preset.mode)}
+            </select>
+          </label>
+          <label class="field ${preset.mode === "custom" ? "" : "hidden"}" data-override-custom-location-field="${item.id}">
+            <span>Custom location</span>
+            <input type="text" value="${escapeHtml(preset.customValue)}" data-override-custom-location="${item.id}">
+          </label>
+        </div>
       </div>
       <div class="review-meta">
         <span>Suggested title: ${escapeHtml(item.suggestedTitle || "No normalized result")}</span>
@@ -1233,12 +1427,16 @@ function closeCustomEventModal() {
 }
 
 function populateLocationOptions() {
+  customEventLocationMode.innerHTML = buildLocationOptionMarkup();
+}
+
+function buildLocationOptionMarkup(selectedMode = "") {
   const options = [];
   if (detectedSources.mmc) options.push({ value: "mmc", label: "MMC Car Park" });
   if (detectedSources.ddh) options.push({ value: "ddh", label: "DDH Car Park" });
   options.push({ value: "offsite", label: "Off-site" });
   options.push({ value: "custom", label: "Custom location" });
-  customEventLocationMode.innerHTML = options.map((option) => `<option value="${option.value}">${option.label}</option>`).join("");
+  return options.map((option) => `<option value="${option.value}" ${option.value === selectedMode ? "selected" : ""}>${option.label}</option>`).join("");
 }
 
 function detectLocationPreset(location) {
@@ -1287,6 +1485,45 @@ function resolveCustomEventLocation() {
   if (customEventLocationMode.value === "mmc") return "MMC Car Park, Tarella Road, Clayton VIC 3168, Australia";
   if (customEventLocationMode.value === "ddh") return "DDH Car Park, 135 David St, Dandenong VIC 3175, Australia";
   if (customEventLocationMode.value === "custom") return customEventCustomLocation.value.trim();
+  return "";
+}
+
+function applyImportedEventFormState(id) {
+  const baseEvent = getBaseImportedEvent(id);
+  const startDate = reviewModalBody.querySelector(`[data-override-start-date="${id}"]`)?.value || baseEvent?.start?.slice(0, 10) || "";
+  const rawEndDate = reviewModalBody.querySelector(`[data-override-end-date="${id}"]`)?.value || startDate;
+  const endDateInput = rawEndDate < startDate ? startDate : rawEndDate;
+  const allDay = reviewModalBody.querySelector(`[data-override-all-day="${id}"]`)?.checked ?? baseEvent?.allDay ?? false;
+  const startTime = reviewModalBody.querySelector(`[data-override-start-time="${id}"]`)?.value || extractTimePortion(baseEvent?.start || "") || "09:00";
+  const endTime = reviewModalBody.querySelector(`[data-override-end-time="${id}"]`)?.value || extractTimePortion(baseEvent?.end || "") || "17:00";
+  const timeFields = reviewModalBody.querySelector(`[data-override-time-fields="${id}"]`);
+  if (timeFields) timeFields.classList.toggle("hidden", allDay);
+
+  const endDate = !allDay && compareClockStrings(endTime, startTime) <= 0 && endDateInput === startDate
+    ? formatDateKey(addDays(parseDateOnly(startDate), 1))
+    : endDateInput;
+
+  syncImportedOverride(id, {
+    start: allDay ? startDate : `${startDate}T${startTime}:00`,
+    end: allDay ? formatDateKey(addDays(parseDateOnly(endDateInput), 1)) : `${endDate}T${endTime}:00`,
+    allDay,
+    location: resolveImportedLocation(id),
+  });
+
+  const customLocationField = reviewModalBody.querySelector(`[data-override-custom-location-field="${id}"]`);
+  if (customLocationField) {
+    const mode = reviewModalBody.querySelector(`[data-override-location-mode="${id}"]`)?.value || "offsite";
+    customLocationField.classList.toggle("hidden", mode !== "custom");
+  }
+}
+
+function resolveImportedLocation(id) {
+  const mode = reviewModalBody.querySelector(`[data-override-location-mode="${id}"]`)?.value || "offsite";
+  if (mode === "mmc") return "MMC Car Park, Tarella Road, Clayton VIC 3168, Australia";
+  if (mode === "ddh") return "DDH Car Park, 135 David St, Dandenong VIC 3175, Australia";
+  if (mode === "custom") {
+    return reviewModalBody.querySelector(`[data-override-custom-location="${id}"]`)?.value.trim() || "";
+  }
   return "";
 }
 

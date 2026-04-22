@@ -315,14 +315,17 @@ function sanitizeOverrides(raw) {
   if (!raw || typeof raw !== "object") return overrides;
   for (const [key, value] of Object.entries(raw)) {
     if (!value || typeof value !== "object") continue;
-    overrides[key] = {
+    const next = {
       title: typeof value.title === "string" ? value.title.trim() : "",
       include: typeof value.include === "boolean" ? value.include : undefined,
       start: typeof value.start === "string" ? value.start.trim() : "",
       end: typeof value.end === "string" ? value.end.trim() : "",
-      location: typeof value.location === "string" ? value.location.trim() : "",
       allDay: typeof value.allDay === "boolean" ? value.allDay : undefined,
     };
+    if (Object.prototype.hasOwnProperty.call(value, "location")) {
+      next.location = typeof value.location === "string" ? value.location.trim() : "";
+    }
+    overrides[key] = next;
   }
   return overrides;
 }
@@ -880,7 +883,7 @@ export function applyEventOverrides(events, overrides) {
       start: override.start || event.start,
       end: override.end || event.end,
       allDay: typeof override.allDay === "boolean" ? override.allDay : event.allDay,
-      location: override.location || event.location,
+      location: Object.prototype.hasOwnProperty.call(override, "location") ? override.location : event.location,
     };
   });
 }
