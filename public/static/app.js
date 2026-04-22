@@ -5,10 +5,8 @@ const chooseFilesButton = document.querySelector("#chooseFilesButton");
 const fileSummary = document.querySelector("#fileSummary");
 const previewButton = document.querySelector("#previewButton");
 const exportButton = document.querySelector("#exportButton");
-const addEventButton = document.querySelector("#addEventButton");
 const mobilePreviewButton = document.querySelector("#mobilePreviewButton");
 const mobileExportButton = document.querySelector("#mobileExportButton");
-const mobileAddEventButton = document.querySelector("#mobileAddEventButton");
 const mobileSettingsButton = document.querySelector("#mobileSettingsButton");
 const doctorSection = document.querySelector("#doctorSection");
 const doctorSelect = document.querySelector("#doctorSelect");
@@ -181,14 +179,17 @@ reviewModalBody.addEventListener("change", (event) => {
 });
 
 previewButton.addEventListener("click", () => updatePreview());
-addEventButton.addEventListener("click", () => openCustomEventModal());
 mobilePreviewButton.addEventListener("click", () => updatePreview());
 mobileExportButton.addEventListener("click", () => form.requestSubmit());
-mobileAddEventButton.addEventListener("click", () => openCustomEventModal());
 preview.addEventListener("click", (event) => {
   const chip = event.target.closest("[data-review-id]");
-  if (!chip) return;
-  openReviewModal(chip.dataset.reviewId);
+  if (chip) {
+    openReviewModal(chip.dataset.reviewId);
+    return;
+  }
+  const cell = event.target.closest("[data-add-date]");
+  if (!cell) return;
+  openCustomEventModal(null, cell.dataset.addDate);
 });
 issuesList.addEventListener("click", (event) => {
   const card = event.target.closest("[data-review-id]");
@@ -553,26 +554,7 @@ function renderPreviewGrid(doctor, data) {
   }
   const days = buildPreviewDays(events);
   const weeks = chunkWeeks(days);
-  const headerCells = DAY_NAMES.map((day) => `<div class="preview-day-name">${day}</div>`).join("");
-  const bodyRows = [];
-  let lastMonthKey = "";
-
-  weeks.forEach((week, index) => {
-    const monday = week[0]?.date;
-    const monthKey = monday ? `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, "0")}` : "";
-    if (monthKey && monthKey !== lastMonthKey) {
-      bodyRows.push(`<div class="preview-month-row">${formatMonth(monday)}</div>`);
-      lastMonthKey = monthKey;
-    }
-    bodyRows.push(`
-      <div class="preview-week-label">
-        <strong>Week ${index + 1}</strong>
-        <span>starting</span>
-        <time datetime="${formatDateKey(monday)}">${formatLongDate(monday)}</time>
-      </div>
-      ${week.map((day) => renderDayCell(day)).join("")}
-    `);
-  });
+  const termSections = buildTermSections(weeks);
 
   preview.innerHTML = `
     <div class="preview-head">
@@ -580,11 +562,7 @@ function renderPreviewGrid(doctor, data) {
       <span>${data.count} events</span>
       <span>${escapeHtml(data.date_range)}</span>
     </div>
-    <div class="preview-grid">
-      <div class="preview-week-label preview-week-label-head">Week</div>
-      ${headerCells}
-      ${bodyRows.join("")}
-    </div>
+    ${termSections}
   `;
   preview.classList.remove("hidden");
   previewSection.classList.remove("hidden");
@@ -599,7 +577,7 @@ function buildPreviewDays(events) {
   for (const event of events) {
     const startDate = parseDateOnly(event.start);
     const endDate = parseDateOnly(event.end);
-    const inclusiveEnd = event.allDay ? addDays(endDate, -1) : startDate;
+    const inclusiveEnd = previewInclusiveEndDate(event, startDate, endDate);
     if (!firstDay || startDate < firstDay) firstDay = startDate;
     if (!lastDay || inclusiveEnd > lastDay) lastDay = inclusiveEnd;
 
@@ -638,7 +616,7 @@ function renderDayCell(day) {
     ? day.events.map((event) => renderPreviewChip(event, formatDateKey(day.date))).join("")
     : `<div class="preview-chip preview-chip-empty"></div>`;
   return `
-    <div class="preview-cell">
+    <div class="preview-cell" data-add-date="${formatDateKey(day.date)}">
       <div class="preview-date">${day.date.getDate()}</div>
       <div class="preview-stack">${cards}</div>
     </div>
@@ -661,14 +639,67 @@ function renderPreviewChip(event, dayKey) {
   return `<button type="button" class="preview-chip" data-review-id="${event.id}">${lines.join("")}${metaMarkup}</button>`;
 }
 
+function buildTermSections(weeks) {
+  if (!weeks.length) return "";
+  const sections = [];
+  let current = null;
+
+  weeks.forEach((week, index) => {
+    const monday = week[0]?.date;
+    const term = detectAustralianTerm(monday);
+    if (!current || current.label !== term.label) {
+      current = {
+        label: term.label,
+        weeks: [],
+      };
+      sections.push(current);
+    }
+    current.weeks.push({ week, index });
+  });
+
+  return sections.map((section) => renderTermSection(section)).join("");
+}
+
+function renderTermSection(section) {
+  const headerCells = DAY_NAMES.map((day) => `<div class="preview-day-name">${day}</div>`).join("");
+  const bodyRows = [];
+  let lastMonthKey = "";
+
+  section.weeks.forEach(({ week, index }) => {
+    const monday = week[0]?.date;
+    const monthKey = monday ? `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, "0")}` : "";
+    if (monthKey && monthKey !== lastMonthKey) {
+      bodyRows.push(`<div class="preview-month-row">${formatMonth(monday)}</div>`);
+      lastMonthKey = monthKey;
+    }
+    bodyRows.push(`
+      <div class="preview-week-label">
+        <strong>Week ${index + 1}</strong>
+        <span>starting</span>
+        <time datetime="${formatDateKey(monday)}">${formatLongDate(monday)}</time>
+      </div>
+      ${week.map((day) => renderDayCell(day)).join("")}
+    `);
+  });
+
+  return `
+    <section class="preview-term">
+      <div class="preview-term-title">${escapeHtml(section.label)}</div>
+      <div class="preview-grid">
+        <div class="preview-week-label preview-week-label-head">Week</div>
+        ${headerCells}
+        ${bodyRows.join("")}
+      </div>
+    </section>
+  `;
+}
+
 function syncActionState() {
   const ready = Boolean(selectedDoctor());
   previewButton.disabled = !ready;
   exportButton.disabled = !ready;
-  addEventButton.disabled = !ready;
   mobilePreviewButton.disabled = !ready;
   mobileExportButton.disabled = !ready;
-  mobileAddEventButton.disabled = !ready;
 }
 
 function createFormData(doctor = null) {
@@ -715,7 +746,11 @@ function customEventToPreviewEvent(event) {
     };
   }
 
-  const endDate = event.endDate || event.startDate;
+  const endDate = event.endDate && event.endDate !== event.startDate
+    ? event.endDate
+    : compareClockStrings(event.endTime, event.startTime) <= 0
+      ? formatDateKey(addDays(parseDateOnly(event.startDate), 1))
+      : event.startDate;
   const start = `${event.startDate}T${event.startTime}:00`;
   const end = `${endDate}T${event.endTime}:00`;
   return {
@@ -790,6 +825,20 @@ function fileFingerprint(file) {
   return `${file.name}:${file.size}:${file.lastModified}`;
 }
 
+function previewInclusiveEndDate(event, startDate, endDate) {
+  if (event.allDay) {
+    return addDays(endDate, -1);
+  }
+  if (endDate <= startDate) {
+    return startDate;
+  }
+  const endClock = extractTimePortion(event.end);
+  if (endClock === "00:00") {
+    return addDays(endDate, -1);
+  }
+  return endDate;
+}
+
 function parseDateOnly(value) {
   const [year, month, day] = value.slice(0, 10).split("-").map(Number);
   return new Date(year, month - 1, day);
@@ -834,6 +883,37 @@ function formatMonth(date) {
     month: "long",
     year: "numeric",
   });
+}
+
+function detectAustralianTerm(date) {
+  const year = date.getFullYear();
+  const candidates = [
+    buildAustralianTerm(year, 1, 1),
+    buildAustralianTerm(year, 2, 4),
+    buildAustralianTerm(year, 3, 7),
+    buildAustralianTerm(year, 4, 10),
+    buildAustralianTerm(year - 1, 4, 10),
+  ];
+  const match = candidates.find((term) => date >= term.start && date < term.end);
+  return match || { label: "Schedule" };
+}
+
+function buildAustralianTerm(year, termNumber, startMonthIndex) {
+  const start = firstMondayOfMonth(year, startMonthIndex);
+  const end = addDays(start, 91);
+  return {
+    label: `Term ${termNumber}`,
+    start,
+    end,
+  };
+}
+
+function firstMondayOfMonth(year, monthIndex) {
+  const date = new Date(year, monthIndex, 1);
+  const day = date.getDay();
+  const delta = day === 0 ? 1 : day === 1 ? 0 : 8 - day;
+  date.setDate(date.getDate() + delta);
+  return date;
 }
 
 function formatTimestamp(value) {
@@ -925,9 +1005,9 @@ function closeReviewModal() {
   reviewModalBody.innerHTML = "";
 }
 
-function openCustomEventModal(event = null) {
+function openCustomEventModal(event = null, presetDate = null) {
   populateLocationOptions();
-  const now = latestPreview?.events?.[0]?.start?.slice(0, 10) || formatDateKey(new Date());
+  const now = presetDate || latestPreview?.events?.[0]?.start?.slice(0, 10) || formatDateKey(new Date());
   customEventId.value = event?.id || "";
   customEventTitle.value = event?.title || "";
   customEventStartDate.value = event?.startDate || now;
@@ -1010,6 +1090,15 @@ function resolveCustomEventLocation() {
   if (customEventLocationMode.value === "ddh") return "DDH Car Park, 135 David St, Dandenong VIC 3175, Australia";
   if (customEventLocationMode.value === "custom") return customEventCustomLocation.value.trim();
   return "";
+}
+
+function extractTimePortion(value) {
+  const match = String(value).match(/T(\d{2}:\d{2})/);
+  return match ? match[1] : "";
+}
+
+function compareClockStrings(left, right) {
+  return left.localeCompare(right);
 }
 
 function setStatus(message, isError = false) {

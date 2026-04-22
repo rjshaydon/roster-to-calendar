@@ -450,11 +450,22 @@ input[type="text"] {
   color: var(--muted);
 }
 
+.preview-term {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.preview-term-title {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--accent-strong);
+}
+
 .preview-grid {
   display: grid;
-  grid-template-columns: 92px repeat(7, minmax(132px, 1fr));
+  grid-template-columns: 84px repeat(7, minmax(0, 1fr));
   gap: 10px;
-  overflow-x: auto;
 }
 
 .preview-empty {
@@ -521,6 +532,7 @@ input[type="text"] {
   border-radius: 18px;
   border: 1px solid rgba(20, 34, 42, 0.08);
   background: rgba(255, 255, 255, 0.82);
+  cursor: pointer;
 }
 
 .preview-date {
@@ -804,7 +816,8 @@ input[type="text"] {
   }
 
   .preview-grid {
-    grid-template-columns: 78px repeat(7, minmax(126px, 1fr));
+    grid-template-columns: 78px repeat(7, minmax(112px, 1fr));
+    overflow-x: auto;
   }
 
   .preview-cell {
