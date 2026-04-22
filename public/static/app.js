@@ -270,6 +270,11 @@ mobileExportButton.addEventListener("click", () => form.requestSubmit());
 preview.addEventListener("click", (event) => {
   if (Date.now() < suppressPreviewClickUntil) return;
   closeContextMenu();
+  const rangeTrigger = event.target.closest("[data-range-trigger]");
+  if (rangeTrigger) {
+    openPreviewRangePicker(rangeTrigger.dataset.rangeTrigger);
+    return;
+  }
   const chip = event.target.closest("[data-review-id]");
   if (chip) {
     openReviewModal(chip.dataset.reviewId);
@@ -283,6 +288,11 @@ preview.addEventListener("pointerdown", (event) => {
   const chip = event.target.closest("[data-review-id]");
   if (!chip || event.button !== 0) return;
   startPreviewGesture(event, chip);
+});
+preview.addEventListener("change", (event) => {
+  const rangeInput = event.target.closest("[data-range-input]");
+  if (!rangeInput) return;
+  applyPreviewRangeChange(rangeInput.dataset.rangeInput, rangeInput.value);
 });
 issuesList.addEventListener("click", (event) => {
   const card = event.target.closest("[data-review-id]");
@@ -750,12 +760,7 @@ function renderPreviewGrid(doctor, data) {
   const days = buildPreviewDays(events, data.previewStart, data.previewEnd);
   if (!days.length) {
     preview.innerHTML = `
-      <div class="preview-head">
-        <strong>${escapeHtml(doctor.displayName)}</strong>
-        <span>${data.count} events</span>
-        <span>${escapeHtml(data.date_range)}</span>
-        <span>Last import: ${escapeHtml(formatTimestamp(data.lastImport))}</span>
-      </div>
+      ${renderPreviewHeader(doctor, data)}
       <div class="preview-empty">No events match the current settings.</div>
     `;
     preview.classList.remove("hidden");
@@ -766,16 +771,41 @@ function renderPreviewGrid(doctor, data) {
   const termSections = buildTermSections(weeks);
 
   preview.innerHTML = `
-    <div class="preview-head">
-      <strong>${escapeHtml(doctor.displayName)}</strong>
-      <span>${data.count} events</span>
-      <span>${escapeHtml(data.date_range)}</span>
-      <span>Last import: ${escapeHtml(formatTimestamp(data.lastImport))}</span>
-    </div>
+    ${renderPreviewHeader(doctor, data)}
     ${termSections}
   `;
   preview.classList.remove("hidden");
   previewSection.classList.remove("hidden");
+}
+
+function renderPreviewHeader(doctor, data) {
+  return `
+    <div class="preview-head">
+      <strong>${escapeHtml(doctor.displayName)}</strong>
+      <span>${data.count} events</span>
+      ${renderPreviewRangeControls(data.previewStart, data.previewEnd)}
+      <span>Last import: ${escapeHtml(formatTimestamp(data.lastImport))}</span>
+    </div>
+  `;
+}
+
+function renderPreviewRangeControls(start, end) {
+  const fromValue = start || "";
+  const toValue = end || "";
+  return `
+    <div class="preview-range-controls">
+      <span class="preview-range-label">From</span>
+      <button type="button" class="preview-range-button" data-range-trigger="from">
+        ${escapeHtml(fromValue ? formatDate(fromValue) : "Set date")}
+      </button>
+      <input class="preview-range-input" type="date" value="${escapeHtml(fromValue)}" data-range-input="from" tabindex="-1" aria-hidden="true">
+      <span class="preview-range-label">To</span>
+      <button type="button" class="preview-range-button" data-range-trigger="to">
+        ${escapeHtml(toValue ? formatDate(toValue) : "Set date")}
+      </button>
+      <input class="preview-range-input" type="date" value="${escapeHtml(toValue)}" data-range-input="to" tabindex="-1" aria-hidden="true">
+    </div>
+  `;
 }
 
 function buildPreviewDays(events, explicitStart = "", explicitEnd = "") {
@@ -1231,12 +1261,19 @@ function clearDropTargets() {
 function calculateTimeShiftSlots(deltaY) {
   const direction = deltaY < 0 ? -1 : 1;
   const distance = Math.abs(deltaY);
-  const slots = Math.floor(distance / 18 + (distance / 90) ** 2 * 4);
-  return direction * slots;
+  return direction * Math.floor(distance / 18);
+}
+
+function minutesForTimeShiftSlots(slotOffset) {
+  const direction = slotOffset < 0 ? -1 : 1;
+  const steps = Math.abs(slotOffset);
+  if (!steps) return 0;
+  if (steps <= 3) return direction * steps * 15;
+  return direction * (45 + (steps - 3) * 60);
 }
 
 function applyPreviewGestureTime(gesture) {
-  const shifted = shiftTimedEventByMinutes(gesture.sourceEvent, gesture.slotOffset * 15);
+  const shifted = shiftTimedEventByMinutes(gesture.sourceEvent, minutesForTimeShiftSlots(gesture.slotOffset));
   setPreviewChipMeta(gesture.chip, shifted, true);
 }
 
@@ -1254,7 +1291,7 @@ function restorePreviewGestureMeta(gesture) {
 }
 
 function commitPreviewGestureTime(gesture) {
-  const shifted = shiftTimedEventByMinutes(gesture.sourceEvent, gesture.slotOffset * 15);
+  const shifted = shiftTimedEventByMinutes(gesture.sourceEvent, minutesForTimeShiftSlots(gesture.slotOffset));
   if (shifted.source === "Custom") {
     customEvents = customEvents.map((item) => item.id === shifted.id ? previewEventToCustomEvent(shifted, item) : item);
   } else {
@@ -1539,6 +1576,32 @@ function deriveRangeBounds(events) {
 function formatPreviewRange(start, end) {
   if (!start || !end) return "";
   return `${start} to ${end}`;
+}
+
+function openPreviewRangePicker(which) {
+  const input = preview.querySelector(`[data-range-input="${which}"]`);
+  if (!input) return;
+  if (typeof input.showPicker === "function") {
+    input.showPicker();
+    return;
+  }
+  input.focus({ preventScroll: true });
+  input.click();
+}
+
+function applyPreviewRangeChange(which, value) {
+  if (!value) return;
+  if (which === "from") {
+    settings.dateFrom = value;
+    if (settings.dateTo && settings.dateTo < value) settings.dateTo = value;
+  } else {
+    settings.dateTo = value;
+    if (settings.dateFrom && settings.dateFrom > value) settings.dateFrom = value;
+  }
+  if (settingsInputs.dateFrom) settingsInputs.dateFrom.value = settings.dateFrom;
+  if (settingsInputs.dateTo) settingsInputs.dateTo.value = settings.dateTo;
+  rebuildClientPreview();
+  setStatus("Preview range updated.");
 }
 
 function buildEventOverridePatch(event, item, override = {}) {

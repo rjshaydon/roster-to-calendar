@@ -455,6 +455,49 @@ input[type="text"] {
   color: var(--muted);
 }
 
+.preview-range-controls {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+}
+
+.preview-range-label {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.preview-range-button {
+  appearance: none;
+  border: 1px solid rgba(20, 34, 42, 0.12);
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 600;
+  padding: 7px 11px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease, transform 120ms ease;
+}
+
+.preview-range-button:hover,
+.preview-range-button:focus-visible {
+  border-color: rgba(217, 95, 52, 0.42);
+  background: rgba(217, 95, 52, 0.1);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.preview-range-input {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .preview-term {
   display: grid;
   gap: 12px;
@@ -572,7 +615,14 @@ input[type="text"] {
   position: relative;
   touch-action: none;
   user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
   transition: transform 120ms ease, opacity 120ms ease, box-shadow 120ms ease;
+}
+
+.preview-chip * {
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .preview-chip:hover,
