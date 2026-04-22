@@ -103,21 +103,23 @@ export async function parseUploadForm(request) {
   if (!uploads.length) {
     throw new Error("Upload at least one roster file.");
   }
-  if (uploads.length > 2) {
-    throw new Error("Upload no more than two roster files at a time.");
-  }
 
-  const sources = { mmc: null, ddh: null };
-  for (const file of uploads) {
+  const importIds = formData.getAll("rosterFileId");
+  const importAddedAt = formData.getAll("rosterFileAddedAt");
+  const sources = { mmc: [], ddh: [] };
+  for (let index = 0; index < uploads.length; index += 1) {
+    const file = uploads[index];
     const workbook = await readWorkbook(file);
     const sourceType = detectSourceType(workbook, file.name);
-    if (sources[sourceType]) {
-      throw new Error(`Upload at most one ${sourceType.toUpperCase()} roster at a time.`);
-    }
-    sources[sourceType] = { file, workbook };
+    sources[sourceType].push({
+      id: String(importIds[index] || hashString(`${file.name}|${file.size}|${file.lastModified}|${index}`)),
+      addedAt: String(importAddedAt[index] || ""),
+      file,
+      workbook,
+    });
   }
 
-  if (!sources.mmc && !sources.ddh) {
+  if (!sources.mmc.length && !sources.ddh.length) {
     throw new Error("Upload at least one MMC or DDH roster.");
   }
 
@@ -128,18 +130,31 @@ export async function parseUploadForm(request) {
     settings: sanitizeSettings(parseJsonField(formData, "settings", DEFAULT_SETTINGS)),
     overrides: sanitizeOverrides(parseJsonField(formData, "overrides", {})),
     customEvents: sanitizeCustomEvents(parseJsonField(formData, "customEvents", [])),
+    conflictSelections: parseJsonField(formData, "conflictSelections", {}),
   };
 }
 
-export function doctorOptions(mmcWorkbook, ddhWorkbook) {
-  if (!mmcWorkbook && !ddhWorkbook) {
+export function doctorOptions(mmcSources, ddhSources) {
+  const mmcEntries = normalizeSourceEntries(mmcSources);
+  const ddhEntries = normalizeSourceEntries(ddhSources);
+  if (!mmcEntries.length && !ddhEntries.length) {
     throw new Error("Upload at least one MMC or DDH roster.");
   }
-  const mmcNames = mmcWorkbook ? extractMmcNames(mmcWorkbook) : new Map();
-  const ddhNames = ddhWorkbook ? extractDdhNames(ddhWorkbook) : new Map();
-  const keys = mmcWorkbook && ddhWorkbook
+  const mmcNames = new Map();
+  const ddhNames = new Map();
+  for (const entry of mmcEntries) {
+    for (const [key, value] of extractMmcNames(entry.workbook)) {
+      if (!mmcNames.has(key)) mmcNames.set(key, value);
+    }
+  }
+  for (const entry of ddhEntries) {
+    for (const [key, value] of extractDdhNames(entry.workbook)) {
+      if (!ddhNames.has(key)) ddhNames.set(key, value);
+    }
+  }
+  const keys = mmcEntries.length && ddhEntries.length
     ? [...mmcNames.keys()].filter((key) => ddhNames.has(key)).sort()
-    : [...(mmcWorkbook ? mmcNames.keys() : ddhNames.keys())].sort();
+    : [...(mmcEntries.length ? mmcNames.keys() : ddhNames.keys())].sort();
 
   return keys.map((key) => ({
     key,
@@ -147,10 +162,14 @@ export function doctorOptions(mmcWorkbook, ddhWorkbook) {
   }));
 }
 
-export function buildRosterView(mmcWorkbook, ddhWorkbook, doctorKey, settings = DEFAULT_SETTINGS, overrides = {}) {
+export function buildRosterView(mmcSources, ddhSources, doctorKey, settings = DEFAULT_SETTINGS, overrides = {}, conflictSelections = {}) {
   const records = [];
-  if (mmcWorkbook) records.push(...parseMmcRecords(mmcWorkbook, doctorKey));
-  if (ddhWorkbook) records.push(...parseDdhRecords(ddhWorkbook, doctorKey));
+  for (const entry of normalizeSourceEntries(mmcSources)) {
+    records.push(...attachImportMeta(parseMmcRecords(entry.workbook, doctorKey), entry));
+  }
+  for (const entry of normalizeSourceEntries(ddhSources)) {
+    records.push(...attachImportMeta(parseDdhRecords(entry.workbook, doctorKey), entry));
+  }
 
   records.sort((left, right) => {
     if (left.startDay !== right.startDay) return left.startDay.localeCompare(right.startDay);
@@ -158,11 +177,17 @@ export function buildRosterView(mmcWorkbook, ddhWorkbook, doctorKey, settings = 
     return left.rawValue.localeCompare(right.rawValue);
   });
 
-  return applySettings(records, sanitizeSettings(settings), sanitizeOverrides(overrides));
+  const merge = mergeRecordsAcrossImports(records, conflictSelections);
+  const view = applySettings(merge.records, sanitizeSettings(settings), sanitizeOverrides(overrides));
+  return {
+    ...view,
+    conflicts: merge.conflicts,
+    imports: summarizeImports([...normalizeSourceEntries(mmcSources), ...normalizeSourceEntries(ddhSources)]),
+  };
 }
 
-export function generateEvents(mmcWorkbook, ddhWorkbook, doctorKey, settings = DEFAULT_SETTINGS, overrides = {}) {
-  return buildRosterView(mmcWorkbook, ddhWorkbook, doctorKey, settings, overrides).events;
+export function generateEvents(mmcSources, ddhSources, doctorKey, settings = DEFAULT_SETTINGS, overrides = {}, conflictSelections = {}) {
+  return buildRosterView(mmcSources, ddhSources, doctorKey, settings, overrides, conflictSelections).events;
 }
 
 export function previewSummary(events) {
@@ -231,6 +256,10 @@ export function serializeEvent(event) {
   };
 }
 
+export function serializeConflict(conflict) {
+  return conflict;
+}
+
 export function serializeReviewItem(item) {
   return {
     id: item.id,
@@ -253,9 +282,137 @@ export function serializeReviewItem(item) {
 
 export function sourceNames(sources) {
   return {
-    mmc: sources.mmc?.file.name || "",
-    ddh: sources.ddh?.file.name || "",
+    mmc: normalizeSourceEntries(sources.mmc).map((entry) => entry.file.name),
+    ddh: normalizeSourceEntries(sources.ddh).map((entry) => entry.file.name),
   };
+}
+
+function normalizeSourceEntries(value) {
+  if (!value) return [];
+  const items = Array.isArray(value) ? value : [value];
+  return items.map((entry, index) => {
+    if (entry?.workbook) return entry;
+    return {
+      id: `legacy-${index}`,
+      addedAt: "",
+      file: { name: `import-${index + 1}.xlsx`, size: 0, lastModified: 0 },
+      workbook: entry,
+    };
+  });
+}
+
+function attachImportMeta(records, entry) {
+  return records.map((record) => ({
+    ...record,
+    importId: entry.id,
+    importName: entry.file.name,
+    importAddedAt: entry.addedAt || "",
+    weekKey: mondayOfDay(record.startDay),
+    dedupKey: hashString(`${record.source}|${record.kind}|${record.rawValue}|${record.start}|${record.end}|${record.location}|${record.normalizedTitle}`),
+  }));
+}
+
+function summarizeImports(entries) {
+  return entries
+    .map((entry) => ({
+      id: entry.id,
+      name: entry.file.name,
+      sourceType: detectSourceType(entry.workbook, entry.file.name),
+      addedAt: entry.addedAt || "",
+      size: entry.file.size,
+      lastModified: entry.file.lastModified,
+    }))
+    .sort((left, right) => (left.addedAt || "").localeCompare(right.addedAt || "") || left.name.localeCompare(right.name));
+}
+
+function mergeRecordsAcrossImports(records, rawSelections = {}) {
+  const recordsByGroup = new Map();
+  for (const record of records) {
+    const key = `${record.source}|${record.weekKey}`;
+    if (!recordsByGroup.has(key)) recordsByGroup.set(key, []);
+    recordsByGroup.get(key).push(record);
+  }
+
+  const mergedRecords = [];
+  const conflicts = [];
+  for (const [groupKey, groupRecords] of recordsByGroup.entries()) {
+    const imports = new Map();
+    for (const record of groupRecords) {
+      if (!imports.has(record.importId)) imports.set(record.importId, []);
+      imports.get(record.importId).push(record);
+    }
+
+    if (imports.size === 1) {
+      mergedRecords.push(...dedupeRecords(groupRecords));
+      continue;
+    }
+
+    const importEntries = [...imports.entries()].map(([importId, importRecords]) => {
+      const sample = importRecords[0];
+      const signature = importRecords.map((record) => record.dedupKey).sort().join("|");
+      return {
+        importId,
+        importName: sample.importName,
+        importAddedAt: sample.importAddedAt,
+        source: sample.source,
+        weekKey: sample.weekKey,
+        records: importRecords,
+        signature,
+      };
+    }).sort(compareImportEntries);
+
+    const uniqueSignatures = new Set(importEntries.map((entry) => entry.signature));
+    if (uniqueSignatures.size === 1) {
+      mergedRecords.push(...dedupeRecords(groupRecords));
+      continue;
+    }
+
+    const winner = chooseWinningImport(importEntries, rawSelections[groupKey]);
+    mergedRecords.push(...winner.records);
+    conflicts.push({
+      key: groupKey,
+      source: winner.source,
+      weekKey: winner.weekKey,
+      selectedImportId: winner.importId,
+      options: importEntries.map((entry) => ({
+        importId: entry.importId,
+        importName: entry.importName,
+        addedAt: entry.importAddedAt,
+        eventCount: entry.records.length,
+      })),
+    });
+  }
+
+  return {
+    records: dedupeRecords(mergedRecords),
+    conflicts: conflicts.sort((left, right) => left.weekKey.localeCompare(right.weekKey) || left.source.localeCompare(right.source)),
+  };
+}
+
+function dedupeRecords(records) {
+  const seen = new Set();
+  const deduped = [];
+  for (const record of records) {
+    if (seen.has(record.dedupKey)) continue;
+    seen.add(record.dedupKey);
+    deduped.push(record);
+  }
+  return deduped;
+}
+
+function compareImportEntries(left, right) {
+  const leftDate = left.importAddedAt || "";
+  const rightDate = right.importAddedAt || "";
+  if (leftDate !== rightDate) return rightDate.localeCompare(leftDate);
+  return right.importName.localeCompare(left.importName);
+}
+
+function chooseWinningImport(importEntries, selectedImportId) {
+  if (selectedImportId) {
+    const explicit = importEntries.find((entry) => entry.importId === selectedImportId);
+    if (explicit) return explicit;
+  }
+  return importEntries[0];
 }
 
 async function readWorkbook(file) {
@@ -1032,6 +1189,14 @@ function offsetSuffixForDay(day) {
 function addDays(day, amount) {
   const date = typeof day === "string" ? new Date(`${day}T00:00:00`) : new Date(day);
   date.setDate(date.getDate() + amount);
+  return formatDateOnly(date);
+}
+
+function mondayOfDay(day) {
+  const date = new Date(`${day}T00:00:00`);
+  const weekday = date.getDay();
+  const delta = weekday === 0 ? -6 : 1 - weekday;
+  date.setDate(date.getDate() + delta);
   return formatDateOnly(date);
 }
 

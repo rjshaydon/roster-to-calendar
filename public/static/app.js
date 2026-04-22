@@ -2,7 +2,13 @@ const form = document.querySelector("#roster-form");
 const fileInput = document.querySelector("#rosterFiles");
 const dropZone = document.querySelector("#dropZone");
 const chooseFilesButton = document.querySelector("#chooseFilesButton");
-const fileSummary = document.querySelector("#fileSummary");
+const filesButton = document.querySelector("#filesButton");
+const accountsButton = document.querySelector("#accountsButton");
+const filesModal = document.querySelector("#filesModal");
+const filesList = document.querySelector("#filesList");
+const filesCloseButton = document.querySelector("#filesCloseButton");
+const accountsModal = document.querySelector("#accountsModal");
+const accountsCloseButton = document.querySelector("#accountsCloseButton");
 const previewButton = document.querySelector("#previewButton");
 const exportButton = document.querySelector("#exportButton");
 const mobilePreviewButton = document.querySelector("#mobilePreviewButton");
@@ -18,11 +24,8 @@ const previewSection = document.querySelector("#previewSection");
 const preview = document.querySelector("#preview");
 const issuesPanel = document.querySelector("#issuesPanel");
 const issuesList = document.querySelector("#issuesList");
-const overview = document.querySelector("#overview");
-const overviewSources = document.querySelector("#overviewSources");
-const overviewCount = document.querySelector("#overviewCount");
-const overviewRange = document.querySelector("#overviewRange");
-const overviewParsed = document.querySelector("#overviewParsed");
+const conflictsPanel = document.querySelector("#conflictsPanel");
+const conflictsList = document.querySelector("#conflictsList");
 const status = document.querySelector("#status");
 const mobileActionBar = document.querySelector("#mobileActionBar");
 const reviewModal = document.querySelector("#reviewModal");
@@ -77,6 +80,7 @@ let copiedEvent = null;
 let previewGesture = null;
 let suppressPreviewClickUntil = 0;
 let openReviewId = "";
+let conflictSelections = {};
 
 const settingsInputs = Object.fromEntries(
   SETTINGS_FIELDS.map((id) => [id, document.querySelector(`#${id}`)]),
@@ -101,7 +105,7 @@ fileInput.addEventListener("change", async () => {
     fileInput.value = "";
     return;
   }
-  mergeFiles(accepted);
+  await mergeFiles(accepted);
   fileInput.value = "";
   await analyzeFiles();
 });
@@ -126,22 +130,27 @@ for (const eventName of ["dragleave", "dragend", "drop"]) {
 dropZone.addEventListener("drop", async (event) => {
   const accepted = validateIncomingFiles([...event.dataTransfer.files]);
   if (!accepted.length) return;
-  mergeFiles(accepted);
+  await mergeFiles(accepted);
   await analyzeFiles();
 });
 
-fileSummary.addEventListener("click", async (event) => {
-  const removeButton = event.target.closest("[data-remove-file]");
+filesButton.addEventListener("click", openFilesModal);
+filesCloseButton.addEventListener("click", closeFilesModal);
+filesModal.addEventListener("click", (event) => {
+  if (event.target.matches("[data-close-files]")) closeFilesModal();
+});
+filesList.addEventListener("click", async (event) => {
+  const removeButton = event.target.closest("[data-remove-import]");
   if (!removeButton) return;
-  const fingerprint = removeButton.dataset.removeFile;
-  selectedFiles = selectedFiles.filter((file) => fileFingerprint(file) !== fingerprint);
-  resetDerivedState();
-  renderFileSummary();
-  if (!selectedFiles.length) {
-    setStatus("Add one or two roster files to begin.");
-    return;
-  }
-  await analyzeFiles();
+  await removeStoredImport(removeButton.dataset.removeImport);
+});
+accountsButton.addEventListener("click", () => {
+  accountsModal.classList.remove("hidden");
+  accountsModal.setAttribute("aria-hidden", "false");
+});
+accountsCloseButton.addEventListener("click", closeAccountsModal);
+accountsModal.addEventListener("click", (event) => {
+  if (event.target.matches("[data-close-accounts]")) closeAccountsModal();
 });
 
 doctorSelect.addEventListener("change", () => {
@@ -247,6 +256,13 @@ issuesList.addEventListener("click", (event) => {
   if (!card) return;
   openReviewModal(card.dataset.reviewId);
 });
+conflictsList.addEventListener("change", async (event) => {
+  const select = event.target.closest("[data-conflict-key]");
+  if (!select) return;
+  conflictSelections[select.dataset.conflictKey] = select.value;
+  saveConflictSelections();
+  await updatePreview();
+});
 preview.addEventListener("contextmenu", (event) => {
   const chip = event.target.closest("[data-review-id]");
   const cell = event.target.closest("[data-add-date]");
@@ -317,6 +333,8 @@ document.addEventListener("keydown", (event) => {
     closeReviewModal();
     closeCustomEventModal();
     closeContextMenu();
+    closeFilesModal();
+    closeAccountsModal();
   }
 });
 document.addEventListener("click", (event) => {
@@ -428,13 +446,25 @@ function defaultSettings() {
   };
 }
 
-function mergeFiles(files) {
-  const map = new Map(selectedFiles.map((file) => [fileFingerprint(file), file]));
+async function mergeFiles(files) {
+  const existing = new Set(selectedFiles.map((entry) => fileFingerprint(entry.file)));
   for (const file of files) {
-    map.set(fileFingerprint(file), file);
+    const fingerprint = fileFingerprint(file);
+    if (existing.has(fingerprint)) continue;
+    const entry = {
+      id: `import-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      file,
+      name: file.name,
+      size: file.size,
+      lastModified: file.lastModified,
+      addedAt: new Date().toISOString(),
+      sourceType: "pending",
+    };
+    selectedFiles.push(entry);
+    await saveStoredImport(entry);
   }
-  selectedFiles = [...map.values()];
-  renderFileSummary();
+  selectedFiles.sort((left, right) => (left.addedAt || "").localeCompare(right.addedAt || "") || left.name.localeCompare(right.name));
+  renderFilesList();
 }
 
 function validateIncomingFiles(files) {
@@ -442,36 +472,36 @@ function validateIncomingFiles(files) {
     setStatus("Only Excel roster files in .xlsx, .xlsm, .xltx, or .xltm format are supported.", true);
     return [];
   }
-  const map = new Map(selectedFiles.map((file) => [fileFingerprint(file), file]));
-  for (const file of files) {
-    map.set(fileFingerprint(file), file);
-  }
-  if (map.size > 2) {
-    setStatus("You can add up to two roster files. Remove one before adding another.", true);
-    return [];
-  }
   return files;
 }
 
 async function analyzeFiles() {
   if (!selectedFiles.length) {
-    setStatus("Add one or two roster files to begin.");
+    setStatus("Add a roster file to begin.");
     return;
   }
-  resetDerivedState();
+  clearPreviewData();
+  doctorOptions = [];
+  detectedSources = {};
   setStatus("Detecting roster sources and consultants...");
   try {
     const data = await postForm("/api/analyze");
     doctorOptions = data.doctors || [];
-    detectedSources = data.sources || {};
-    settings = { ...defaultSettings(), ...(data.settings || {}) };
-    overrides = {};
+    detectedSources = summarizeDetectedSources(data.imports || []);
+    selectedFiles = selectedFiles.map((entry) => {
+      const serverEntry = (data.imports || []).find((item) => item.id === entry.id);
+      return serverEntry ? { ...entry, sourceType: serverEntry.sourceType } : entry;
+    });
+    settings = { ...defaultSettings(), ...settings, ...(data.settings || {}) };
+    conflictSelections = loadConflictSelections();
     renderSettings();
-    renderFileSummary();
+    renderFilesList();
     renderDoctorState();
   } catch (error) {
-    resetDerivedState();
-    renderFileSummary();
+    doctorOptions = [];
+    detectedSources = {};
+    clearPreviewData();
+    renderFilesList();
     setStatus(error.message, true);
   }
 }
@@ -487,47 +517,22 @@ function renderSettings() {
   }
 }
 
-function renderFileSummary() {
+function renderFilesList() {
+  if (!filesList) return;
   if (!selectedFiles.length) {
-    fileSummary.classList.add("hidden");
-    fileSummary.innerHTML = "";
+    filesList.innerHTML = `<article class="issue-card"><strong>No files imported yet.</strong><p>Add rosters and they will stay here until removed.</p></article>`;
     return;
   }
 
-  const sourceCards = [];
-  if (detectedSources.mmc) sourceCards.push({ label: "MMC", name: detectedSources.mmc });
-  if (detectedSources.ddh) sourceCards.push({ label: "DDH", name: detectedSources.ddh });
-
-  const pendingFiles = selectedFiles.filter((file) => file.name !== detectedSources.mmc && file.name !== detectedSources.ddh);
-
-  fileSummary.innerHTML = [
-    ...sourceCards.map((item) => renderBadge(item.label, item.name, selectedFiles.find((file) => file.name === item.name))),
-    ...pendingFiles.map((file) => renderBadge("Uploaded", file.name, file)),
-  ].join("");
-  fileSummary.classList.remove("hidden");
-}
-
-function renderBadge(label, value, file) {
-  const removeMarkup = file
-    ? `
-      <button
-        type="button"
-        class="file-remove"
-        data-remove-file="${fileFingerprint(file)}"
-        aria-label="Remove ${value}"
-        title="Remove ${value}"
-      >
-        ×
-      </button>
-    `
-    : "";
-  return `
-    <article class="file-pill">
-      ${removeMarkup}
-      <span>${label}</span>
-      <strong>${value}</strong>
+  filesList.innerHTML = selectedFiles.map((entry) => `
+    <article class="issue-card">
+      <div>
+        <strong>${escapeHtml(entry.name)}</strong>
+        <p>${escapeHtml(String(entry.sourceType || "").toUpperCase())} · Imported ${escapeHtml(formatTimestamp(entry.addedAt))}</p>
+      </div>
+      <button type="button" class="button button-secondary" data-remove-import="${entry.id}">Remove</button>
     </article>
-  `;
+  `).join("");
 }
 
 function renderDoctorState() {
@@ -597,7 +602,7 @@ function rebuildClientPreview() {
   const doctor = selectedDoctor();
   if (!doctor) return;
   const view = buildClientPreviewData(latestPreview);
-  renderOverview(view);
+  renderConflicts(view.conflicts || []);
   renderPreviewGrid(doctor, view);
   renderIssues(view.issues || []);
 }
@@ -638,6 +643,7 @@ function buildClientPreviewData(baseData) {
     date_range: formatPreviewRange(previewStart, previewEnd) || (events.length ? summarizeEvents(events) : "No events found"),
     previewStart,
     previewEnd,
+    lastImport: latestImportTimestamp(),
     issues: [
       ...(baseData.issues || []).filter((issue) => {
       const override = overrides[issue.id] || {};
@@ -650,15 +656,27 @@ function buildClientPreviewData(baseData) {
   };
 }
 
-function renderOverview(data) {
-  const files = [data.sources?.mmc, data.sources?.ddh].filter(Boolean);
-  overviewSources.innerHTML = files.length
-    ? files.map((file) => `<span>${escapeHtml(file)}</span>`).join("")
-    : "<span>Single source</span>";
-  overviewCount.textContent = `${data.count}`;
-  overviewRange.textContent = data.date_range;
-  overviewParsed.textContent = formatTimestamp(data.lastParsed);
-  overview.classList.remove("hidden");
+function renderConflicts(items) {
+  if (!items.length) {
+    conflictsPanel.classList.add("hidden");
+    conflictsList.innerHTML = "";
+    return;
+  }
+  conflictsList.innerHTML = items.map((item) => `
+    <article class="issue-card issue-ambiguous">
+      <div>
+        <strong>${escapeHtml(item.source)} · Week Starting ${escapeHtml(item.weekKey)}</strong>
+        <p>Choose which import should overwrite this overlapping week.</p>
+      </div>
+      <label class="field">
+        <span>Preferred import</span>
+        <select data-conflict-key="${item.key}">
+          ${item.options.map((option) => `<option value="${option.importId}" ${option.importId === item.selectedImportId ? "selected" : ""}>${escapeHtml(option.importName)}${option.addedAt ? ` · ${escapeHtml(formatTimestamp(option.addedAt))}` : ""}</option>`).join("")}
+        </select>
+      </label>
+    </article>
+  `).join("");
+  conflictsPanel.classList.remove("hidden");
 }
 
 function renderIssues(items) {
@@ -694,6 +712,7 @@ function renderPreviewGrid(doctor, data) {
         <strong>${escapeHtml(doctor.displayName)}</strong>
         <span>${data.count} events</span>
         <span>${escapeHtml(data.date_range)}</span>
+        <span>Last import: ${escapeHtml(formatTimestamp(data.lastImport))}</span>
       </div>
       <div class="preview-empty">No events match the current settings.</div>
     `;
@@ -709,6 +728,7 @@ function renderPreviewGrid(doctor, data) {
       <strong>${escapeHtml(doctor.displayName)}</strong>
       <span>${data.count} events</span>
       <span>${escapeHtml(data.date_range)}</span>
+      <span>Last import: ${escapeHtml(formatTimestamp(data.lastImport))}</span>
     </div>
     ${termSections}
   `;
@@ -853,8 +873,10 @@ function syncActionState() {
 
 function createFormData(doctor = null) {
   const body = new FormData();
-  for (const file of selectedFiles) {
-    body.append("rosterFiles", file);
+  for (const entry of selectedFiles) {
+    body.append("rosterFiles", entry.file);
+    body.append("rosterFileId", entry.id);
+    body.append("rosterFileAddedAt", entry.addedAt || "");
   }
   if (doctor) {
     body.append("doctorKey", doctor.key);
@@ -863,19 +885,23 @@ function createFormData(doctor = null) {
   body.append("settings", JSON.stringify(settings));
   body.append("overrides", JSON.stringify(cleanOverrides()));
   body.append("customEvents", JSON.stringify(customEvents));
+  body.append("conflictSelections", JSON.stringify(conflictSelections));
   return body;
 }
 
 function createPreviewFormData(doctor = null) {
   const body = new FormData();
-  for (const file of selectedFiles) {
-    body.append("rosterFiles", file);
+  for (const entry of selectedFiles) {
+    body.append("rosterFiles", entry.file);
+    body.append("rosterFileId", entry.id);
+    body.append("rosterFileAddedAt", entry.addedAt || "");
   }
   if (doctor) {
     body.append("doctorKey", doctor.key);
     body.append("doctorDisplay", doctor.displayName);
   }
   body.append("settings", JSON.stringify(settings));
+  body.append("conflictSelections", JSON.stringify(conflictSelections));
   return body;
 }
 
@@ -1327,12 +1353,13 @@ function clearPreviewData() {
   latestPreview = null;
   reviewIndex = new Map();
   currentPreviewEvents = new Map();
-  overview.classList.add("hidden");
   issuesPanel.classList.add("hidden");
+  conflictsPanel.classList.add("hidden");
   previewSection.classList.add("hidden");
   preview.innerHTML = "";
   preview.classList.add("hidden");
   issuesList.innerHTML = "";
+  conflictsList.innerHTML = "";
   closeReviewModal();
   closeCustomEventModal();
   closeContextMenu();
@@ -1713,8 +1740,8 @@ function populateLocationOptions() {
 
 function buildLocationOptionMarkup(selectedMode = "") {
   const options = [];
-  if (detectedSources.mmc) options.push({ value: "mmc", label: "MMC Car Park" });
-  if (detectedSources.ddh) options.push({ value: "ddh", label: "DDH Car Park" });
+  if (detectedSources.mmc?.length) options.push({ value: "mmc", label: "MMC Car Park" });
+  if (detectedSources.ddh?.length) options.push({ value: "ddh", label: "DDH Car Park" });
   options.push({ value: "offsite", label: "Off-site" });
   options.push({ value: "custom", label: "Custom location" });
   return options.map((option) => `<option value="${option.value}" ${option.value === selectedMode ? "selected" : ""}>${option.label}</option>`).join("");
@@ -1821,6 +1848,138 @@ function diffDays(start, end) {
   return Math.round((end.getTime() - start.getTime()) / 86400000);
 }
 
+function summarizeDetectedSources(imports) {
+  return {
+    mmc: imports.filter((item) => item.sourceType === "mmc").map((item) => item.name),
+    ddh: imports.filter((item) => item.sourceType === "ddh").map((item) => item.name),
+  };
+}
+
+function latestImportTimestamp() {
+  if (!selectedFiles.length) return "";
+  return selectedFiles.reduce((latest, entry) => !latest || (entry.addedAt || "") > latest ? entry.addedAt || "" : latest, "");
+}
+
+function openFilesModal() {
+  renderFilesList();
+  filesModal.classList.remove("hidden");
+  filesModal.setAttribute("aria-hidden", "false");
+}
+
+function closeFilesModal() {
+  filesModal.classList.add("hidden");
+  filesModal.setAttribute("aria-hidden", "true");
+}
+
+function closeAccountsModal() {
+  accountsModal.classList.add("hidden");
+  accountsModal.setAttribute("aria-hidden", "true");
+}
+
+const DB_NAME = "roster-converter";
+const DB_VERSION = 1;
+const IMPORT_STORE = "imports";
+const CONFLICT_SELECTIONS_KEY = "roster-conflict-selections";
+
+async function openImportsDb() {
+  return await new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(IMPORT_STORE)) {
+        db.createObjectStore(IMPORT_STORE, { keyPath: "id" });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("Could not open import storage."));
+  });
+}
+
+async function saveStoredImport(entry) {
+  const db = await openImportsDb();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(IMPORT_STORE, "readwrite");
+    tx.objectStore(IMPORT_STORE).put({
+      id: entry.id,
+      name: entry.name,
+      size: entry.size,
+      lastModified: entry.lastModified,
+      addedAt: entry.addedAt,
+      sourceType: entry.sourceType,
+      blob: entry.file,
+    });
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error || new Error("Could not save import."));
+  });
+  db.close();
+}
+
+async function loadStoredImports() {
+  if (!("indexedDB" in window)) return [];
+  const db = await openImportsDb();
+  const records = await new Promise((resolve, reject) => {
+    const tx = db.transaction(IMPORT_STORE, "readonly");
+    const request = tx.objectStore(IMPORT_STORE).getAll();
+    request.onsuccess = () => resolve(request.result || []);
+    request.onerror = () => reject(request.error || new Error("Could not load imports."));
+  });
+  db.close();
+  return records.map((record) => ({
+    id: record.id,
+    name: record.name,
+    size: record.size,
+    lastModified: record.lastModified,
+    addedAt: record.addedAt,
+    sourceType: record.sourceType || "pending",
+    file: new File([record.blob], record.name, { type: record.blob?.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", lastModified: record.lastModified }),
+  })).sort((left, right) => (left.addedAt || "").localeCompare(right.addedAt || "") || left.name.localeCompare(right.name));
+}
+
+async function removeStoredImport(id) {
+  selectedFiles = selectedFiles.filter((entry) => entry.id !== id);
+  const db = await openImportsDb();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(IMPORT_STORE, "readwrite");
+    tx.objectStore(IMPORT_STORE).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error || new Error("Could not remove import."));
+  });
+  db.close();
+  renderFilesList();
+  if (!selectedFiles.length) {
+    resetDerivedState();
+    setStatus("Add a roster file to begin.");
+    return;
+  }
+  await analyzeFiles();
+}
+
+function loadConflictSelections() {
+  try {
+    return JSON.parse(localStorage.getItem(CONFLICT_SELECTIONS_KEY) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function saveConflictSelections() {
+  localStorage.setItem(CONFLICT_SELECTIONS_KEY, JSON.stringify(conflictSelections));
+}
+
+async function bootstrapImports() {
+  try {
+    selectedFiles = await loadStoredImports();
+    renderFilesList();
+    if (selectedFiles.length) {
+      await analyzeFiles();
+    } else {
+      setStatus("Add a roster file to begin.");
+    }
+  } catch (error) {
+    setStatus(error.message || "Could not load saved imports.", true);
+  }
+}
+
 function setStatus(message, isError = false) {
   status.textContent = message;
   status.dataset.error = isError ? "true" : "false";
@@ -1842,3 +2001,5 @@ function escapeHtml(value) {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }
+
+bootstrapImports();

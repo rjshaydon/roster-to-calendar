@@ -301,6 +301,13 @@ input[type="text"] {
   gap: 10px;
 }
 
+.panel-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
 .control-bar-main {
   display: flex;
   flex-wrap: wrap;

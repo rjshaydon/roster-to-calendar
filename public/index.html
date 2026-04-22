@@ -18,18 +18,20 @@
 
       <section class="panel">
         <form id="roster-form">
+          <div class="panel-tabs">
+            <button id="filesButton" type="button" class="button button-secondary">Files</button>
+            <button id="accountsButton" type="button" class="button button-secondary">Accounts</button>
+          </div>
           <div id="dropZone" class="drop-zone" tabindex="0" role="button" aria-label="Choose roster files">
             <input id="rosterFiles" name="rosterFiles" type="file" accept=".xlsx,.xlsm,.xltx,.xltm" multiple hidden>
             <p class="drop-kicker">Choose Files</p>
             <h2>Drop roster exports here.</h2>
             <p class="upload-help">
-              Add one or two Excel files. The app detects roster type automatically, builds the
-              consultant list, and keeps the export ready once you choose a doctor.
+              Add one or more Excel files. The app detects roster type automatically, builds the
+              consultant list, stores your imports, and keeps the export ready once you choose a doctor.
             </p>
             <span class="button button-secondary" id="chooseFilesButton">Choose Files</span>
           </div>
-
-          <div id="fileSummary" class="file-summary hidden"></div>
 
           <div id="doctorSection" class="doctor-section hidden">
             <label for="doctorSelect" class="select-label">Doctor</label>
@@ -39,8 +41,8 @@
 
           <div id="controlBar" class="control-bar hidden">
             <div class="control-bar-main">
-              <button id="exportButton" type="submit" class="button button-primary" disabled>Export .ics</button>
               <button id="previewButton" type="button" class="button button-secondary" disabled>Preview</button>
+              <button id="exportButton" type="submit" class="button button-primary" disabled>Export .ics</button>
               <button id="settingsToggle" type="button" class="button button-secondary">Settings</button>
             </div>
             <p id="status" class="status" aria-live="polite"></p>
@@ -98,30 +100,15 @@
             </div>
           </section>
 
-          <section id="overview" class="overview hidden" aria-label="Parse overview">
-            <div class="overview-card">
-              <span>Events ready</span>
-              <strong id="overviewCount">-</strong>
+          <section id="conflictsPanel" class="issues-panel hidden" aria-label="Import conflicts">
+            <div class="section-head">
+              <h3>Import conflicts</h3>
+              <p>Overlapping weeks with different roster contents need a preferred import.</p>
             </div>
-            <div class="overview-card">
-              <span>Date range</span>
-              <strong id="overviewRange">-</strong>
-            </div>
-            <div class="overview-card">
-              <span>Last parsed</span>
-              <strong id="overviewParsed">-</strong>
-            </div>
-            <div class="overview-card overview-card-sources">
-              <span>Source files</span>
-              <strong id="overviewSources">-</strong>
-            </div>
+            <div id="conflictsList" class="issues-list"></div>
           </section>
 
           <section id="previewSection" class="preview-section hidden">
-            <div class="section-head">
-              <h3>Preview</h3>
-              <p>Calendar layout starts on Monday and reflects the current settings.</p>
-            </div>
             <div id="preview" class="preview hidden"></div>
           </section>
 
@@ -137,9 +124,41 @@
     </main>
 
     <div id="mobileActionBar" class="mobile-action-bar hidden">
-      <button id="mobileExportButton" type="button" class="button button-primary" disabled>Export .ics</button>
       <button id="mobilePreviewButton" type="button" class="button button-secondary" disabled>Preview</button>
+      <button id="mobileExportButton" type="button" class="button button-primary" disabled>Export .ics</button>
       <button id="mobileSettingsButton" type="button" class="button button-secondary">Settings</button>
+    </div>
+
+    <div id="filesModal" class="modal hidden" aria-hidden="true">
+      <div class="modal-backdrop" data-close-files></div>
+      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="filesModalTitle">
+        <button type="button" class="modal-close" id="filesCloseButton" aria-label="Close files">×</button>
+        <div class="section-head">
+          <h3 id="filesModalTitle">Files</h3>
+          <p>Imported rosters stay here until you remove them.</p>
+        </div>
+        <div id="filesList" class="issues-list"></div>
+      </section>
+    </div>
+
+    <div id="accountsModal" class="modal hidden" aria-hidden="true">
+      <div class="modal-backdrop" data-close-accounts></div>
+      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="accountsModalTitle">
+        <button type="button" class="modal-close" id="accountsCloseButton" aria-label="Close accounts">×</button>
+        <div class="section-head">
+          <h3 id="accountsModalTitle">Accounts Plan</h3>
+          <p>Authentication is planned rather than active in this version.</p>
+        </div>
+        <div class="modal-body">
+          <article class="review-card">
+            <div class="review-body">
+              <p>Planned next step: add login and an account area so multiple clinicians can use the tool.</p>
+              <p>Storage rule planned for rollout: standard users keep up to 2 terms of roster data; your account can remain unlimited.</p>
+              <p>Implementation path: sign-in, per-user import storage quota, and account-level import management in the Files view.</p>
+            </div>
+          </article>
+        </div>
+      </section>
     </div>
 
     <div id="reviewModal" class="modal hidden" aria-hidden="true">
