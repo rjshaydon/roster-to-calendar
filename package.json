@@ -1,0 +1,14 @@
+{
+  "name": "roster-converter",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler pages dev public",
+    "deploy": "wrangler pages deploy public",
+    "check": "node --check public/static/app.js"
+  },
+  "devDependencies": {
+    "wrangler": "^4.84.1",
+    "xlsx": "^0.18.5"
+  }
+}

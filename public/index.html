@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Roster Converter</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <main class="page">
+      <section class="hero">
+        <p class="eyebrow">Roster Utility</p>
+        <h1>Roster Converter</h1>
+        <p class="lede hero-copy">
+          Upload up to two rosters (currently accepts MMC and Dandenong Hospital FindMyShift
+          rosters). Choose a doctor if required and save a `.ics` file for use with Calendar
+          apps.
+        </p>
+      </section>
+
+      <section class="panel">
+        <form id="roster-form">
+          <div id="dropZone" class="drop-zone" tabindex="0" role="button" aria-label="Choose roster files">
+            <input id="rosterFiles" name="rosterFiles" type="file" accept=".xlsx,.xlsm,.xltx,.xltm" multiple hidden>
+            <p class="drop-kicker">Choose Files</p>
+            <h2>Drop roster exports here.</h2>
+            <p class="upload-help">
+              Add one or two Excel files. The app detects roster type automatically, builds the
+              consultant list, and keeps the export ready once you choose a doctor.
+            </p>
+            <span class="button button-secondary" id="chooseFilesButton">Choose Files</span>
+          </div>
+
+          <div id="fileSummary" class="file-summary hidden"></div>
+
+          <div id="doctorSection" class="doctor-section hidden">
+            <label for="doctorSelect" class="select-label">Doctor</label>
+            <p id="doctorName" class="doctor-name hidden"></p>
+            <select id="doctorSelect" name="doctorKey"></select>
+          </div>
+
+          <div id="preview" class="preview hidden"></div>
+
+          <div class="actions">
+            <button id="previewButton" type="button" class="button button-secondary" disabled>Preview</button>
+            <button id="exportButton" type="submit" class="button button-primary" disabled>Export .ics</button>
+          </div>
+
+          <p id="status" class="status" aria-live="polite"></p>
+        </form>
+      </section>
+    </main>
+
+    <script type="module" src="/static/app.js"></script>
+  </body>
+</html>
