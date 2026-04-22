@@ -21,7 +21,7 @@ const summary = previewSummary(view.events);
 assert.equal(view.events.length, 37);
 assert.equal(summary.date_range, "2026-02-09 to 2026-05-02");
 assert.ok(view.reviewItems.length >= view.events.length);
-assert.ok(view.events.some((event) => event.title === "MMC: Annual Leave"));
+assert.ok(view.events.some((event) => event.title === "Annual Leave"));
 assert.ok(view.events.some((event) => event.title === "DDH: Orange PM"));
 assert.ok(view.events.some((event) => event.title === "DDH: Sick Leave"));
 

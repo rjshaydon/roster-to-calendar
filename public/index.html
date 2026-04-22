@@ -41,6 +41,7 @@
             <div class="control-bar-main">
               <button id="exportButton" type="submit" class="button button-primary" disabled>Export .ics</button>
               <button id="previewButton" type="button" class="button button-secondary" disabled>Preview</button>
+              <button id="addEventButton" type="button" class="button button-secondary" disabled>Add Event</button>
               <button id="settingsToggle" type="button" class="button button-secondary">Settings</button>
             </div>
             <p id="status" class="status" aria-live="polite"></p>
@@ -139,6 +140,7 @@
     <div id="mobileActionBar" class="mobile-action-bar hidden">
       <button id="mobileExportButton" type="button" class="button button-primary" disabled>Export .ics</button>
       <button id="mobilePreviewButton" type="button" class="button button-secondary" disabled>Preview</button>
+      <button id="mobileAddEventButton" type="button" class="button button-secondary" disabled>Add Event</button>
       <button id="mobileSettingsButton" type="button" class="button button-secondary">Settings</button>
     </div>
 
@@ -151,6 +153,60 @@
           <p>Adjust the normalized result for this roster item before export.</p>
         </div>
         <div id="reviewModalBody" class="modal-body"></div>
+      </section>
+    </div>
+
+    <div id="customEventModal" class="modal hidden" aria-hidden="true">
+      <div class="modal-backdrop" data-close-custom-event></div>
+      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="customEventModalTitle">
+        <button type="button" class="modal-close" id="customEventCloseButton" aria-label="Close custom event editor">×</button>
+        <div class="section-head">
+          <h3 id="customEventModalTitle">Add Event</h3>
+          <p>Add a manual event to the preview and export.</p>
+        </div>
+        <form id="customEventForm" class="custom-event-form">
+          <input id="customEventId" type="hidden">
+          <label class="field">
+            <span>Title</span>
+            <input id="customEventTitle" type="text" placeholder="Annual Leave">
+          </label>
+          <div class="custom-event-grid">
+            <label class="field">
+              <span>Start date</span>
+              <input id="customEventStartDate" type="date">
+            </label>
+            <label class="field">
+              <span>End date</span>
+              <input id="customEventEndDate" type="date">
+            </label>
+          </div>
+          <label class="toggle">
+            <input id="customEventAllDay" type="checkbox">
+            All day
+          </label>
+          <div id="customEventTimeFields" class="custom-event-grid">
+            <label class="field">
+              <span>Start time</span>
+              <input id="customEventStartTime" type="time">
+            </label>
+            <label class="field">
+              <span>End time</span>
+              <input id="customEventEndTime" type="time">
+            </label>
+          </div>
+          <label class="field">
+            <span>Location</span>
+            <select id="customEventLocationMode"></select>
+          </label>
+          <label id="customEventCustomLocationField" class="field hidden">
+            <span>Custom location</span>
+            <input id="customEventCustomLocation" type="text" placeholder="Meeting room or address">
+          </label>
+          <div class="modal-actions">
+            <button id="customEventDeleteButton" type="button" class="button button-secondary hidden">Delete</button>
+            <button type="submit" class="button button-primary">Save Event</button>
+          </div>
+        </form>
       </section>
     </div>
 

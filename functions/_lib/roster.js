@@ -127,6 +127,7 @@ export async function parseUploadForm(request) {
     doctorDisplay: String(formData.get("doctorDisplay") || ""),
     settings: sanitizeSettings(parseJsonField(formData, "settings", DEFAULT_SETTINGS)),
     overrides: sanitizeOverrides(parseJsonField(formData, "overrides", {})),
+    customEvents: sanitizeCustomEvents(parseJsonField(formData, "customEvents", [])),
   };
 }
 
@@ -320,6 +321,34 @@ function sanitizeOverrides(raw) {
     };
   }
   return overrides;
+}
+
+function sanitizeCustomEvents(raw) {
+  if (!Array.isArray(raw)) return [];
+  const events = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const title = typeof item.title === "string" ? item.title.trim() : "";
+    const startDate = isDateString(item.startDate) ? item.startDate : "";
+    const endDate = isDateString(item.endDate) ? item.endDate : startDate;
+    const allDay = item.allDay === true;
+    const startTime = isClockString(item.startTime) ? item.startTime : "";
+    const endTime = isClockString(item.endTime) ? item.endTime : "";
+    if (!title || !startDate || !endDate) continue;
+    if (!allDay && (!startTime || !endTime)) continue;
+    events.push({
+      id: typeof item.id === "string" && item.id ? item.id : hashString(`custom|${title}|${startDate}|${endDate}|${startTime}|${endTime}`),
+      title,
+      startDate,
+      endDate,
+      allDay,
+      startTime,
+      endTime,
+      location: typeof item.location === "string" ? item.location.trim() : "",
+      include: item.include !== false,
+    });
+  }
+  return events;
 }
 
 function extractMmcNames(workbook) {
@@ -619,7 +648,7 @@ function createTimedRecord(source, day, rawValue, details) {
   const start = buildDateTime(day, details.startHm);
   const plusDay = compareTimes(details.endHm, details.startHm) <= 0;
   const end = buildDateTime(day, details.endHm, plusDay);
-  const normalizedTitle = formatTitle(source, details.titleParts, { ...DEFAULT_SETTINGS, showTimes: false, showRawValues: false, showLocations: false });
+  const normalizedTitle = formatTitle(source, details.titleParts, { ...DEFAULT_SETTINGS, showTimes: false, showRawValues: false, showLocations: false }, details.kind);
   return {
     id: hashString(`${source}|${day}|${rawValue}|${normalizedTitle}|${start}|${end}`),
     source,
@@ -641,7 +670,7 @@ function createTimedRecord(source, day, rawValue, details) {
 }
 
 function createAllDayRecord(source, day, rawValue, details) {
-  const normalizedTitle = formatTitle(source, details.titleParts, { ...DEFAULT_SETTINGS, showTimes: false, showRawValues: false, showLocations: false });
+  const normalizedTitle = formatTitle(source, details.titleParts, { ...DEFAULT_SETTINGS, showTimes: false, showRawValues: false, showLocations: false }, details.kind);
   return {
     id: hashString(`${source}|${day}|${rawValue}|${normalizedTitle}|all-day`),
     source,
@@ -665,7 +694,7 @@ function createAllDayRecord(source, day, rawValue, details) {
 function createWeeklyLeaveRecord(source, monday, rawValue) {
   const label = toTitleCase(rawValue);
   const kind = rawValue.toUpperCase() === "CONFERENCE LEAVE" ? "conference_leave" : "annual_leave";
-  const normalizedTitle = `${source}: ${label}`;
+  const normalizedTitle = label;
   return {
     id: hashString(`${source}|${monday}|${rawValue}|week-leave`),
     source,
@@ -717,7 +746,7 @@ function applySettings(records, settings, overrides) {
     const override = overrides[record.id] || {};
     const defaultInclude = record.includeByDefault && isKindEnabled(record.kind, settings);
     const include = typeof override.include === "boolean" ? override.include : defaultInclude;
-    const suggestedTitle = formatTitle(record.source, record.titleParts, settings);
+    const suggestedTitle = formatTitle(record.source, record.titleParts, settings, record.kind);
     const overrideTitle = override.title || "";
     const finalTitle = overrideTitle || suggestedTitle;
     const timeLabel = record.allDay ? "All day" : formatTimeLabel(record.start, record.end);
@@ -785,14 +814,55 @@ function applySettings(records, settings, overrides) {
   return { events, reviewItems, issues };
 }
 
-function formatTitle(source, titleParts, settings) {
+function formatTitle(source, titleParts, settings, kind = "shift") {
   const titleBits = [];
   if (titleParts.base) titleBits.push(titleParts.base);
   if (settings.showAmPm && titleParts.period) titleBits.push(titleParts.period);
   if (titleParts.suffix) titleBits.push(titleParts.suffix);
   const core = titleBits.join(" ").trim();
   if (!core) return "";
+  if (kind === "annual_leave" || kind === "conference_leave") {
+    return core;
+  }
   return settings.showSourcePrefix ? `${source}: ${core}` : core;
+}
+
+export function customEventsToEvents(customEvents, settings = DEFAULT_SETTINGS) {
+  return customEvents
+    .filter((item) => item.include !== false)
+    .map((item) => {
+      if (item.allDay) {
+        return {
+          id: item.id,
+          source: "Custom",
+          title: item.title,
+          allDay: true,
+          start: item.startDate,
+          end: addDays(item.endDate, 1),
+          location: settings.includeLocations ? item.location : "",
+          rawValue: "Custom event",
+          timeLabel: "All day",
+          monthKey: item.startDate.slice(0, 7),
+        };
+      }
+
+      const startHm = item.startTime.split(":").map(Number);
+      const endHm = item.endTime.split(":").map(Number);
+      const explicitEndDay = item.endDate !== item.startDate ? item.endDate : null;
+      const endDate = explicitEndDay || (compareTimes(endHm, startHm) <= 0 ? addDays(item.startDate, 1) : item.startDate);
+      return {
+        id: item.id,
+        source: "Custom",
+        title: item.title,
+        allDay: false,
+        start: buildDateTime(item.startDate, startHm),
+        end: buildDateTime(endDate, endHm),
+        location: settings.includeLocations ? item.location : "",
+        rawValue: "Custom event",
+        timeLabel: `${item.startTime}-${item.endTime}`,
+        monthKey: item.startDate.slice(0, 7),
+      };
+    });
 }
 
 function isKindEnabled(kind, settings) {
@@ -985,4 +1055,8 @@ function hashString(value) {
 
 function isDateString(value) {
   return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+function isClockString(value) {
+  return typeof value === "string" && /^\d{2}:\d{2}$/.test(value);
 }

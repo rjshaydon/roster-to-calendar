@@ -311,7 +311,6 @@ input[type="text"] {
 .settings-panel,
 .issues-panel,
 .preview,
-.review-panel,
 .overview {
   padding: 18px 20px;
   border-radius: 18px;
@@ -557,6 +556,17 @@ input[type="text"] {
   outline: none;
 }
 
+.custom-event-form {
+  display: grid;
+  gap: 14px;
+}
+
+.custom-event-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
 .preview-chip strong {
   font-size: 0.84rem;
 }
@@ -684,6 +694,13 @@ input[type="text"] {
   margin-top: 12px;
 }
 
+.modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: space-between;
+}
+
 .button {
   border: 0;
   border-radius: 999px;
@@ -730,6 +747,7 @@ input[type="text"] {
   padding: 12px;
   display: none;
   gap: 10px;
+  flex-wrap: wrap;
   border-radius: 22px;
   background: rgba(254, 251, 244, 0.92);
   border: 1px solid rgba(20, 34, 42, 0.1);
@@ -752,6 +770,10 @@ input[type="text"] {
   }
 
   .review-body {
+    grid-template-columns: 1fr;
+  }
+
+  .custom-event-grid {
     grid-template-columns: 1fr;
   }
 }
@@ -794,8 +816,7 @@ input[type="text"] {
     padding: 8px 9px;
   }
 
-  #previewButton,
-  #exportButton {
+  .control-bar-main {
     display: none;
   }
 

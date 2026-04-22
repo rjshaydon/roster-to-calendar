@@ -5,8 +5,10 @@ const chooseFilesButton = document.querySelector("#chooseFilesButton");
 const fileSummary = document.querySelector("#fileSummary");
 const previewButton = document.querySelector("#previewButton");
 const exportButton = document.querySelector("#exportButton");
+const addEventButton = document.querySelector("#addEventButton");
 const mobilePreviewButton = document.querySelector("#mobilePreviewButton");
 const mobileExportButton = document.querySelector("#mobileExportButton");
+const mobileAddEventButton = document.querySelector("#mobileAddEventButton");
 const mobileSettingsButton = document.querySelector("#mobileSettingsButton");
 const doctorSection = document.querySelector("#doctorSection");
 const doctorSelect = document.querySelector("#doctorSelect");
@@ -28,6 +30,21 @@ const mobileActionBar = document.querySelector("#mobileActionBar");
 const reviewModal = document.querySelector("#reviewModal");
 const reviewModalBody = document.querySelector("#reviewModalBody");
 const reviewCloseButton = document.querySelector("#reviewCloseButton");
+const customEventModal = document.querySelector("#customEventModal");
+const customEventForm = document.querySelector("#customEventForm");
+const customEventCloseButton = document.querySelector("#customEventCloseButton");
+const customEventId = document.querySelector("#customEventId");
+const customEventTitle = document.querySelector("#customEventTitle");
+const customEventStartDate = document.querySelector("#customEventStartDate");
+const customEventEndDate = document.querySelector("#customEventEndDate");
+const customEventAllDay = document.querySelector("#customEventAllDay");
+const customEventTimeFields = document.querySelector("#customEventTimeFields");
+const customEventStartTime = document.querySelector("#customEventStartTime");
+const customEventEndTime = document.querySelector("#customEventEndTime");
+const customEventLocationMode = document.querySelector("#customEventLocationMode");
+const customEventCustomLocationField = document.querySelector("#customEventCustomLocationField");
+const customEventCustomLocation = document.querySelector("#customEventCustomLocation");
+const customEventDeleteButton = document.querySelector("#customEventDeleteButton");
 
 const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const SETTINGS_FIELDS = [
@@ -54,6 +71,7 @@ let settings = defaultSettings();
 let overrides = {};
 let latestPreview = null;
 let reviewIndex = new Map();
+let customEvents = [];
 
 const settingsInputs = Object.fromEntries(
   SETTINGS_FIELDS.map((id) => [id, document.querySelector(`#${id}`)]),
@@ -149,7 +167,8 @@ reviewModalBody.addEventListener("input", (event) => {
   if (!titleInput) return;
   const id = titleInput.dataset.overrideTitle;
   ensureOverride(id).title = titleInput.value;
-  setStatus("Mapping override updated. Use Preview to refresh the grid.");
+  rebuildClientPreview();
+  setStatus("Mapping override updated.");
 });
 
 reviewModalBody.addEventListener("change", (event) => {
@@ -157,12 +176,15 @@ reviewModalBody.addEventListener("change", (event) => {
   if (!includeInput) return;
   const id = includeInput.dataset.overrideInclude;
   ensureOverride(id).include = includeInput.checked;
-  setStatus("Inclusion override updated. Use Preview to refresh the grid.");
+  rebuildClientPreview();
+  setStatus("Inclusion override updated.");
 });
 
 previewButton.addEventListener("click", () => updatePreview());
+addEventButton.addEventListener("click", () => openCustomEventModal());
 mobilePreviewButton.addEventListener("click", () => updatePreview());
 mobileExportButton.addEventListener("click", () => form.requestSubmit());
+mobileAddEventButton.addEventListener("click", () => openCustomEventModal());
 preview.addEventListener("click", (event) => {
   const chip = event.target.closest("[data-review-id]");
   if (!chip) return;
@@ -182,7 +204,43 @@ reviewModal.addEventListener("click", (event) => {
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     closeReviewModal();
+    closeCustomEventModal();
   }
+});
+customEventAllDay.addEventListener("change", () => {
+  customEventTimeFields.classList.toggle("hidden", customEventAllDay.checked);
+});
+customEventLocationMode.addEventListener("change", () => {
+  customEventCustomLocationField.classList.toggle("hidden", customEventLocationMode.value !== "custom");
+});
+customEventCloseButton.addEventListener("click", closeCustomEventModal);
+customEventModal.addEventListener("click", (event) => {
+  if (event.target.matches("[data-close-custom-event]")) {
+    closeCustomEventModal();
+  }
+});
+customEventDeleteButton.addEventListener("click", () => {
+  const id = customEventId.value;
+  if (!id) return;
+  customEvents = customEvents.filter((item) => item.id !== id);
+  closeCustomEventModal();
+  rebuildClientPreview();
+  setStatus("Manual event removed.");
+});
+customEventForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const entry = readCustomEventForm();
+  if (!entry) return;
+  const index = customEvents.findIndex((item) => item.id === entry.id);
+  if (index >= 0) {
+    customEvents[index] = entry;
+    setStatus("Manual event updated.");
+  } else {
+    customEvents.push(entry);
+    setStatus("Manual event added.");
+  }
+  closeCustomEventModal();
+  rebuildClientPreview();
 });
 
 form.addEventListener("submit", async (event) => {
@@ -391,14 +449,57 @@ async function updatePreview() {
     const data = await postForm("/api/preview", doctor);
     latestPreview = data;
     indexReviewItems(data.review || []);
-    renderOverview(data);
-    renderPreviewGrid(doctor, data);
-    renderIssues(data.issues || []);
+    rebuildClientPreview();
     setStatus("Preview loaded.");
   } catch (error) {
     clearPreviewData();
     setStatus(error.message, true);
   }
+}
+
+function rebuildClientPreview() {
+  if (!latestPreview) return;
+  const doctor = selectedDoctor();
+  if (!doctor) return;
+  const view = buildClientPreviewData(latestPreview);
+  renderOverview(view);
+  renderPreviewGrid(doctor, view);
+  renderIssues(view.issues || []);
+}
+
+function buildClientPreviewData(baseData) {
+  const baseEvents = new Map((baseData.events || []).map((event) => [event.id, { ...event }]));
+  const events = [];
+
+  for (const item of reviewIndex.values()) {
+    const event = baseEvents.get(item.id);
+    if (!event) continue;
+    const override = overrides[item.id] || {};
+    const include = typeof override.include === "boolean" ? override.include : item.include;
+    if (!include) continue;
+    events.push({
+      ...event,
+      title: (override.title || "").trim() || item.suggestedTitle || event.title,
+    });
+  }
+
+  for (const event of customEvents) {
+    events.push(customEventToPreviewEvent(event));
+  }
+
+  events.sort(comparePreviewEvents);
+  return {
+    ...baseData,
+    events,
+    count: events.length,
+    date_range: events.length ? summarizeEvents(events) : "No events found",
+    issues: (baseData.issues || []).filter((issue) => {
+      const override = overrides[issue.id] || {};
+      const reviewItem = reviewIndex.get(issue.id);
+      const include = typeof override.include === "boolean" ? override.include : reviewItem?.include ?? true;
+      return include;
+    }),
+  };
 }
 
 function renderOverview(data) {
@@ -564,8 +665,10 @@ function syncActionState() {
   const ready = Boolean(selectedDoctor());
   previewButton.disabled = !ready;
   exportButton.disabled = !ready;
+  addEventButton.disabled = !ready;
   mobilePreviewButton.disabled = !ready;
   mobileExportButton.disabled = !ready;
+  mobileAddEventButton.disabled = !ready;
 }
 
 function createFormData(doctor = null) {
@@ -579,6 +682,7 @@ function createFormData(doctor = null) {
   }
   body.append("settings", JSON.stringify(settings));
   body.append("overrides", JSON.stringify(cleanOverrides()));
+  body.append("customEvents", JSON.stringify(customEvents));
   return body;
 }
 
@@ -593,6 +697,39 @@ function cleanOverrides() {
     if (typeof include === "boolean") next[id].include = include;
   }
   return next;
+}
+
+function customEventToPreviewEvent(event) {
+  if (event.allDay) {
+    return {
+      id: event.id,
+      source: "Custom",
+      title: event.title,
+      allDay: true,
+      start: event.startDate,
+      end: formatDateKey(addDays(parseDateOnly(event.endDate), 1)),
+      location: event.location || "",
+      rawValue: "Custom event",
+      timeLabel: "All day",
+      monthKey: event.startDate.slice(0, 7),
+    };
+  }
+
+  const endDate = event.endDate || event.startDate;
+  const start = `${event.startDate}T${event.startTime}:00`;
+  const end = `${endDate}T${event.endTime}:00`;
+  return {
+    id: event.id,
+    source: "Custom",
+    title: event.title,
+    allDay: false,
+    start,
+    end,
+    location: event.location || "",
+    rawValue: "Custom event",
+    timeLabel: `${event.startTime}-${event.endTime}`,
+    monthKey: event.startDate.slice(0, 7),
+  };
 }
 
 async function postForm(url, doctor = null) {
@@ -617,6 +754,7 @@ function resetDerivedState() {
   doctorOptions = [];
   detectedSources = {};
   overrides = {};
+  customEvents = [];
   settings = defaultSettings();
   renderSettings();
   doctorSelect.innerHTML = "";
@@ -640,6 +778,7 @@ function clearPreviewData() {
   preview.classList.add("hidden");
   issuesList.innerHTML = "";
   closeReviewModal();
+  closeCustomEventModal();
 }
 
 function ensureOverride(id) {
@@ -713,9 +852,30 @@ function formatIssueHeading(item) {
   return `${status} · ${item.source} · ${formatDate(item.startDay)}`;
 }
 
+function comparePreviewEvents(left, right) {
+  const leftDate = left.start.slice(0, 10);
+  const rightDate = right.start.slice(0, 10);
+  if (leftDate !== rightDate) return leftDate.localeCompare(rightDate);
+  if (left.allDay !== right.allDay) return left.allDay ? -1 : 1;
+  return left.title.localeCompare(right.title);
+}
+
+function summarizeEvents(events) {
+  const first = events[0].start.slice(0, 10);
+  const lastEvent = events[events.length - 1];
+  const last = lastEvent.allDay ? addDays(parseDateOnly(lastEvent.end), -1) : parseDateOnly(lastEvent.end);
+  return `${first} to ${formatDateKey(last)}`;
+}
+
 function openReviewModal(id) {
   const item = reviewIndex.get(id);
-  if (!item) return;
+  if (!item) {
+    const customEvent = customEvents.find((entry) => entry.id === id);
+    if (customEvent) {
+      openCustomEventModal(customEvent);
+    }
+    return;
+  }
   const overrideValue = escapeHtml((overrides[id]?.title ?? item.overrideTitle ?? ""));
   const includeValue = typeof overrides[id]?.include === "boolean" ? overrides[id].include : item.include;
   const warnings = item.warnings.length
@@ -763,6 +923,93 @@ function closeReviewModal() {
   reviewModal.classList.add("hidden");
   reviewModal.setAttribute("aria-hidden", "true");
   reviewModalBody.innerHTML = "";
+}
+
+function openCustomEventModal(event = null) {
+  populateLocationOptions();
+  const now = latestPreview?.events?.[0]?.start?.slice(0, 10) || formatDateKey(new Date());
+  customEventId.value = event?.id || "";
+  customEventTitle.value = event?.title || "";
+  customEventStartDate.value = event?.startDate || now;
+  customEventEndDate.value = event?.endDate || event?.startDate || now;
+  customEventAllDay.checked = event?.allDay ?? false;
+  customEventStartTime.value = event?.startTime || "09:00";
+  customEventEndTime.value = event?.endTime || "10:00";
+  const preset = detectLocationPreset(event?.location || "");
+  customEventLocationMode.value = preset.mode;
+  customEventCustomLocation.value = preset.customValue;
+  customEventCustomLocationField.classList.toggle("hidden", preset.mode !== "custom");
+  customEventTimeFields.classList.toggle("hidden", customEventAllDay.checked);
+  customEventDeleteButton.classList.toggle("hidden", !event);
+  customEventModal.classList.remove("hidden");
+  customEventModal.setAttribute("aria-hidden", "false");
+}
+
+function closeCustomEventModal() {
+  customEventModal.classList.add("hidden");
+  customEventModal.setAttribute("aria-hidden", "true");
+  customEventForm.reset();
+  customEventDeleteButton.classList.add("hidden");
+  customEventCustomLocationField.classList.add("hidden");
+  customEventTimeFields.classList.remove("hidden");
+}
+
+function populateLocationOptions() {
+  const options = [];
+  if (detectedSources.mmc) options.push({ value: "mmc", label: "MMC Car Park" });
+  if (detectedSources.ddh) options.push({ value: "ddh", label: "DDH Car Park" });
+  options.push({ value: "offsite", label: "Off-site" });
+  options.push({ value: "custom", label: "Custom location" });
+  customEventLocationMode.innerHTML = options.map((option) => `<option value="${option.value}">${option.label}</option>`).join("");
+}
+
+function detectLocationPreset(location) {
+  if (!location) return { mode: "offsite", customValue: "" };
+  if (location === "MMC Car Park, Tarella Road, Clayton VIC 3168, Australia") return { mode: "mmc", customValue: "" };
+  if (location === "DDH Car Park, 135 David St, Dandenong VIC 3175, Australia") return { mode: "ddh", customValue: "" };
+  return { mode: "custom", customValue: location };
+}
+
+function readCustomEventForm() {
+  const title = customEventTitle.value.trim();
+  const startDate = customEventStartDate.value;
+  const endDate = customEventEndDate.value || startDate;
+  const allDay = customEventAllDay.checked;
+  const startTime = customEventStartTime.value;
+  const endTime = customEventEndTime.value;
+  const location = resolveCustomEventLocation();
+
+  if (!title) {
+    setStatus("Manual events need a title.", true);
+    return null;
+  }
+  if (!startDate || !endDate) {
+    setStatus("Manual events need a start and end date.", true);
+    return null;
+  }
+  if (!allDay && (!startTime || !endTime)) {
+    setStatus("Timed manual events need both a start and end time.", true);
+    return null;
+  }
+
+  return {
+    id: customEventId.value || `custom-${Date.now().toString(36)}`,
+    title,
+    startDate,
+    endDate,
+    allDay,
+    startTime,
+    endTime,
+    location,
+    include: true,
+  };
+}
+
+function resolveCustomEventLocation() {
+  if (customEventLocationMode.value === "mmc") return "MMC Car Park, Tarella Road, Clayton VIC 3168, Australia";
+  if (customEventLocationMode.value === "ddh") return "DDH Car Park, 135 David St, Dandenong VIC 3175, Australia";
+  if (customEventLocationMode.value === "custom") return customEventCustomLocation.value.trim();
+  return "";
 }
 
 function setStatus(message, isError = false) {
