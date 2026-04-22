@@ -11,17 +11,13 @@
       <section class="hero">
         <h1>Roster Converter</h1>
         <p class="lede hero-copy">
-          Upload up to two rosters (currently accepts MMC and Dandenong Hospital FindMyShift
+          Upload rosters (currently accepts MMC and Dandenong Hospital FindMyShift
           rosters). Choose a doctor if required and save a .ics file for use with Calendar apps.
         </p>
       </section>
 
       <section class="panel">
         <form id="roster-form">
-          <div class="panel-tabs">
-            <button id="filesButton" type="button" class="button button-secondary">Files</button>
-            <button id="accountsButton" type="button" class="button button-secondary">Accounts</button>
-          </div>
           <div id="dropZone" class="drop-zone" tabindex="0" role="button" aria-label="Choose roster files">
             <input id="rosterFiles" name="rosterFiles" type="file" accept=".xlsx,.xlsm,.xltx,.xltm" multiple hidden>
             <p class="drop-kicker">Choose Files</p>
@@ -43,6 +39,9 @@
             <div class="control-bar-main">
               <button id="previewButton" type="button" class="button button-secondary" disabled>Preview</button>
               <button id="exportButton" type="submit" class="button button-primary" disabled>Export .ics</button>
+              <button id="filesButton" type="button" class="button button-secondary">Files</button>
+              <span class="control-bar-spacer" aria-hidden="true"></span>
+              <button id="accountsButton" type="button" class="button button-secondary">Accounts</button>
               <button id="settingsToggle" type="button" class="button button-secondary">Settings</button>
             </div>
             <p id="status" class="status" aria-live="polite"></p>
@@ -146,18 +145,10 @@
       <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="accountsModalTitle">
         <button type="button" class="modal-close" id="accountsCloseButton" aria-label="Close accounts">×</button>
         <div class="section-head">
-          <h3 id="accountsModalTitle">Accounts Plan</h3>
-          <p>Authentication is planned rather than active in this version.</p>
+          <h3 id="accountsModalTitle">Accounts</h3>
+          <p id="accountsModalSubtitle">Manage account details.</p>
         </div>
-        <div class="modal-body">
-          <article class="review-card">
-            <div class="review-body">
-              <p>Planned next step: add login and an account area so multiple clinicians can use the tool.</p>
-              <p>Storage rule planned for rollout: standard users keep up to 2 terms of roster data; your account can remain unlimited.</p>
-              <p>Implementation path: sign-in, per-user import storage quota, and account-level import management in the Files view.</p>
-            </div>
-          </article>
-        </div>
+        <div id="accountsBody" class="modal-body"></div>
       </section>
     </div>
 

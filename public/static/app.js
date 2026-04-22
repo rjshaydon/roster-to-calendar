@@ -9,6 +9,9 @@ const filesList = document.querySelector("#filesList");
 const filesCloseButton = document.querySelector("#filesCloseButton");
 const accountsModal = document.querySelector("#accountsModal");
 const accountsCloseButton = document.querySelector("#accountsCloseButton");
+const accountsBody = document.querySelector("#accountsBody");
+const accountsModalTitle = document.querySelector("#accountsModalTitle");
+const accountsModalSubtitle = document.querySelector("#accountsModalSubtitle");
 const previewButton = document.querySelector("#previewButton");
 const exportButton = document.querySelector("#exportButton");
 const mobilePreviewButton = document.querySelector("#mobilePreviewButton");
@@ -81,6 +84,7 @@ let previewGesture = null;
 let suppressPreviewClickUntil = 0;
 let openReviewId = "";
 let conflictSelections = {};
+let accountState = loadAccountState();
 
 const settingsInputs = Object.fromEntries(
   SETTINGS_FIELDS.map((id) => [id, document.querySelector(`#${id}`)]),
@@ -145,12 +149,33 @@ filesList.addEventListener("click", async (event) => {
   await removeStoredImport(removeButton.dataset.removeImport);
 });
 accountsButton.addEventListener("click", () => {
+  renderAccountsModal();
   accountsModal.classList.remove("hidden");
   accountsModal.setAttribute("aria-hidden", "false");
 });
 accountsCloseButton.addEventListener("click", closeAccountsModal);
 accountsModal.addEventListener("click", (event) => {
   if (event.target.matches("[data-close-accounts]")) closeAccountsModal();
+});
+accountsBody.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const formElement = event.target.closest("[data-account-form]");
+  if (!formElement) return;
+  const email = formElement.querySelector("[data-account-email]")?.value.trim() || "";
+  const password = formElement.querySelector("[data-account-password]")?.value || "";
+  if (!email) return;
+  updateAccountPassword(email, password);
+});
+accountsBody.addEventListener("click", (event) => {
+  const addButton = event.target.closest("[data-add-account]");
+  if (addButton) {
+    addLocalAccount();
+    return;
+  }
+  const removeButton = event.target.closest("[data-remove-account]");
+  if (removeButton) {
+    removeLocalAccount(removeButton.dataset.removeAccount);
+  }
 });
 
 doctorSelect.addEventListener("change", () => {
@@ -171,6 +196,11 @@ for (const [key, input] of Object.entries(settingsInputs)) {
     if (!settings.showNormalizedTitles && !settings.showRawValues) {
       settings.showNormalizedTitles = true;
       settingsInputs.showNormalizedTitles.checked = true;
+    }
+    if (latestPreview && (key === "dateFrom" || key === "dateTo")) {
+      rebuildClientPreview();
+      setStatus("Preview range updated.");
+      return;
     }
     setStatus("Settings updated. Use Preview to refresh the grid.");
   });
@@ -541,18 +571,17 @@ function renderDoctorState() {
   doctorName.classList.add("hidden");
   doctorSelect.classList.add("hidden");
   doctorSection.classList.add("hidden");
-  controlBar.classList.add("hidden");
-  mobileActionBar.classList.add("hidden");
+  controlBar.classList.toggle("hidden", !selectedFiles.length);
+  mobileActionBar.classList.toggle("hidden", !selectedFiles.length);
+  settingsPanel.classList.add("hidden");
 
   if (!doctorOptions.length) {
     setStatus("No consultant names could be matched from the uploaded roster files.", true);
+    syncActionState();
     return;
   }
 
   doctorSection.classList.remove("hidden");
-  controlBar.classList.remove("hidden");
-  mobileActionBar.classList.remove("hidden");
-  settingsPanel.classList.add("hidden");
 
   if (doctorOptions.length === 1) {
     doctorName.textContent = doctorOptions[0].displayName;
@@ -1876,6 +1905,122 @@ function closeAccountsModal() {
   accountsModal.setAttribute("aria-hidden", "true");
 }
 
+const OWNER_EMAIL = "rhaydon@gmail.com";
+const ACCOUNT_STATE_KEY = "roster-account-state";
+
+function loadAccountState() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(ACCOUNT_STATE_KEY) || "null");
+    if (stored && Array.isArray(stored.users) && stored.currentEmail) {
+      return stored;
+    }
+  } catch {
+    // Ignore invalid local state.
+  }
+  return {
+    currentEmail: OWNER_EMAIL,
+    users: [
+      { email: OWNER_EMAIL, password: "", role: "owner" },
+    ],
+  };
+}
+
+function saveAccountState() {
+  localStorage.setItem(ACCOUNT_STATE_KEY, JSON.stringify(accountState));
+  syncAccountsButton();
+  renderAccountsModal();
+}
+
+function currentAccount() {
+  return accountState.users.find((user) => user.email === accountState.currentEmail) || accountState.users[0];
+}
+
+function isOwnerAccount() {
+  return currentAccount()?.role === "owner";
+}
+
+function syncAccountsButton() {
+  accountsButton.textContent = isOwnerAccount() ? "Accounts" : "Account";
+}
+
+function renderAccountsModal() {
+  const me = currentAccount();
+  const ownerView = isOwnerAccount();
+  accountsModalTitle.textContent = ownerView ? "Accounts" : "Account";
+  accountsModalSubtitle.textContent = ownerView
+    ? "Manage your account and review other users."
+    : "Manage your account details.";
+
+  const otherUsers = accountState.users.filter((user) => user.email !== me.email);
+  accountsBody.innerHTML = `
+    <article class="review-card">
+      <div class="review-top">
+        <div>
+          <strong>${ownerView ? "Owner account" : "Your account"}</strong>
+          <span>${escapeHtml(me.email)}</span>
+        </div>
+      </div>
+      <form class="review-body" data-account-form>
+        <label class="field">
+          <span>Email address</span>
+          <input type="email" value="${escapeHtml(me.email)}" data-account-email ${ownerView ? "readonly" : "readonly"}>
+        </label>
+        <label class="field">
+          <span>Password</span>
+          <input type="password" value="${escapeHtml(me.password || "")}" data-account-password placeholder="Update password">
+        </label>
+        <div class="modal-actions">
+          <button type="submit" class="button button-primary">Save password</button>
+        </div>
+      </form>
+    </article>
+    ${ownerView ? `
+      <article class="review-card">
+        <div class="review-top">
+          <div>
+            <strong>Other users</strong>
+            <span>${otherUsers.length ? `${otherUsers.length} stored users` : "No other users added yet."}</span>
+          </div>
+          <button type="button" class="button button-secondary" data-add-account>Add user</button>
+        </div>
+        <div class="issues-list">
+          ${otherUsers.length ? otherUsers.map((user) => `
+            <article class="issue-card">
+              <div>
+                <strong>${escapeHtml(user.email)}</strong>
+                <p>Standard user · planned storage limit: 2 terms</p>
+              </div>
+              <button type="button" class="button button-secondary" data-remove-account="${escapeHtml(user.email)}">Remove</button>
+            </article>
+          `).join("") : `<article class="issue-card"><p>No additional users yet.</p></article>`}
+        </div>
+      </article>
+    ` : ""}
+  `;
+}
+
+function updateAccountPassword(email, password) {
+  accountState.users = accountState.users.map((user) => user.email === email ? { ...user, password } : user);
+  saveAccountState();
+  setStatus("Account password updated.");
+}
+
+function addLocalAccount() {
+  const nextEmail = `user${accountState.users.length}@example.com`;
+  accountState.users.push({ email: nextEmail, password: "", role: "user" });
+  saveAccountState();
+  setStatus("User added to local account list.");
+}
+
+function removeLocalAccount(email) {
+  accountState.users = accountState.users.filter((user) => user.email !== email);
+  if (!accountState.users.some((user) => user.email === accountState.currentEmail)) {
+    accountState.currentEmail = OWNER_EMAIL;
+  }
+  saveAccountState();
+  setStatus("User removed from local account list.");
+}
+
 const DB_NAME = "roster-converter";
 const DB_VERSION = 1;
 const IMPORT_STORE = "imports";
@@ -1968,6 +2113,7 @@ function saveConflictSelections() {
 
 async function bootstrapImports() {
   try {
+    syncAccountsButton();
     selectedFiles = await loadStoredImports();
     renderFilesList();
     if (selectedFiles.length) {
