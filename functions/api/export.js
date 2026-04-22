@@ -1,8 +1,8 @@
-import { doctorOptions, exportIcs, generateEvents, parseUploadForm } from "../_lib/roster.js";
+import { buildRosterView, doctorOptions, exportIcs, parseUploadForm } from "../_lib/roster.js";
 
 export async function onRequestPost(context) {
   try {
-    const { sources, doctorKey, doctorDisplay } = await parseUploadForm(context.request);
+    const { sources, doctorKey, doctorDisplay, settings, overrides } = await parseUploadForm(context.request);
     if (!doctorKey) {
       throw new Error("A doctor selection is required.");
     }
@@ -11,7 +11,7 @@ export async function onRequestPost(context) {
     if (!selectedDoctor) {
       throw new Error("The selected doctor was not found in the uploaded roster files.");
     }
-    const events = generateEvents(sources.mmc?.workbook, sources.ddh?.workbook, doctorKey);
+    const events = buildRosterView(sources.mmc?.workbook, sources.ddh?.workbook, doctorKey, settings, overrides).events;
     if (!events.length) {
       throw new Error("No calendar events were found for the selected doctor.");
     }

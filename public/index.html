@@ -9,12 +9,10 @@
   <body>
     <main class="page">
       <section class="hero">
-        <p class="eyebrow">Roster Utility</p>
         <h1>Roster Converter</h1>
         <p class="lede hero-copy">
           Upload up to two rosters (currently accepts MMC and Dandenong Hospital FindMyShift
-          rosters). Choose a doctor if required and save a `.ics` file for use with Calendar
-          apps.
+          rosters). Choose a doctor if required and save a .ics file for use with Calendar apps.
         </p>
       </section>
 
@@ -39,17 +37,117 @@
             <select id="doctorSelect" name="doctorKey"></select>
           </div>
 
-          <div id="preview" class="preview hidden"></div>
-
-          <div class="actions">
-            <button id="previewButton" type="button" class="button button-secondary" disabled>Preview</button>
-            <button id="exportButton" type="submit" class="button button-primary" disabled>Export .ics</button>
+          <div id="controlBar" class="control-bar hidden">
+            <div class="control-bar-main">
+              <button id="settingsToggle" type="button" class="button button-secondary">Settings</button>
+              <button id="previewButton" type="button" class="button button-secondary" disabled>Preview</button>
+              <button id="exportButton" type="submit" class="button button-primary" disabled>Export .ics</button>
+            </div>
+            <p id="status" class="status" aria-live="polite"></p>
           </div>
 
-          <p id="status" class="status" aria-live="polite"></p>
+          <section id="settingsPanel" class="settings-panel hidden" aria-label="Roster settings">
+            <div class="settings-head">
+              <h3>Settings</h3>
+              <p>These preferences apply to this upload only.</p>
+            </div>
+
+            <div class="settings-grid">
+              <fieldset class="settings-group">
+                <legend>Title</legend>
+                <label class="toggle"><input id="showSourcePrefix" type="checkbox" checked> Include MMC/DDH prefix</label>
+                <label class="toggle"><input id="showAmPm" type="checkbox" checked> Include AM/PM labels</label>
+              </fieldset>
+
+              <fieldset class="settings-group">
+                <legend>Preview</legend>
+                <label class="toggle"><input id="showTimes" type="checkbox" checked> Show times on preview cards</label>
+                <label class="toggle"><input id="showLocations" type="checkbox"> Show locations on preview cards</label>
+                <label class="toggle"><input id="showNormalizedTitles" type="checkbox" checked> Show normalized titles</label>
+                <label class="toggle"><input id="showRawValues" type="checkbox"> Show raw roster values</label>
+              </fieldset>
+
+              <fieldset class="settings-group">
+                <legend>Export</legend>
+                <label class="toggle"><input id="includeLocations" type="checkbox" checked> Include locations in .ics</label>
+                <label class="toggle"><input id="includeAnnualLeave" type="checkbox" checked> Include annual leave</label>
+                <label class="toggle"><input id="includeConferenceLeave" type="checkbox" checked> Include conference leave</label>
+                <label class="toggle"><input id="includePublicHoliday" type="checkbox" checked> Include PHNW</label>
+                <label class="toggle"><input id="includeSickLeave" type="checkbox" checked> Include sick leave</label>
+              </fieldset>
+
+              <fieldset class="settings-group">
+                <legend>Scope</legend>
+                <label class="field">
+                  <span>Hospital</span>
+                  <select id="hospitalFilter">
+                    <option value="all">All hospitals</option>
+                    <option value="mmc">MMC only</option>
+                    <option value="ddh">DDH only</option>
+                  </select>
+                </label>
+                <label class="field">
+                  <span>From</span>
+                  <input id="dateFrom" type="date">
+                </label>
+                <label class="field">
+                  <span>To</span>
+                  <input id="dateTo" type="date">
+                </label>
+              </fieldset>
+            </div>
+          </section>
+
+          <section id="overview" class="overview hidden" aria-label="Parse overview">
+            <div class="overview-card">
+              <span>Source files</span>
+              <strong id="overviewSources">-</strong>
+            </div>
+            <div class="overview-card">
+              <span>Events ready</span>
+              <strong id="overviewCount">-</strong>
+            </div>
+            <div class="overview-card">
+              <span>Date range</span>
+              <strong id="overviewRange">-</strong>
+            </div>
+            <div class="overview-card">
+              <span>Last parsed</span>
+              <strong id="overviewParsed">-</strong>
+            </div>
+          </section>
+
+          <section id="issuesPanel" class="issues-panel hidden" aria-label="Warnings">
+            <div class="section-head">
+              <h3>Warnings</h3>
+              <p>Unknown or ambiguous roster entries should be reviewed before export.</p>
+            </div>
+            <div id="issuesList" class="issues-list"></div>
+          </section>
+
+          <section id="previewSection" class="preview-section hidden">
+            <div class="section-head">
+              <h3>Preview</h3>
+              <p>Calendar layout starts on Monday and reflects the current settings.</p>
+            </div>
+            <div id="preview" class="preview hidden"></div>
+          </section>
+
+          <section id="reviewPanel" class="review-panel hidden" aria-label="Review mappings">
+            <div class="section-head">
+              <h3>Review Mappings</h3>
+              <p>Override normalized titles or exclude individual entries before export.</p>
+            </div>
+            <div id="reviewList" class="review-list"></div>
+          </section>
         </form>
       </section>
     </main>
+
+    <div id="mobileActionBar" class="mobile-action-bar hidden">
+      <button id="mobilePreviewButton" type="button" class="button button-secondary" disabled>Preview</button>
+      <button id="mobileExportButton" type="button" class="button button-primary" disabled>Export .ics</button>
+    </div>
 
     <script type="module" src="/static/app.js"></script>
   </body>

@@ -1,2 +1,0 @@
-"""Roster parsing package."""
-

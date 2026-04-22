@@ -7,9 +7,9 @@ Cloudflare Pages application for converting MMC and DDH roster exports into an A
 - `public/`: static frontend served by Cloudflare Pages
 - `functions/api/`: Cloudflare Pages Functions for analyze, preview, and export
 - `functions/_lib/roster.js`: shared roster parsing and `.ics` generation logic
+- `fixtures/`: sample MMC and DDH spreadsheets for parser regression checks
+- `scripts/test-fixtures.mjs`: fixture smoke test
 - `docs/PRD.md`: consolidated product rules
-
-The older Python prototype remains in the repo as a reference, but the long-term deployment target is Cloudflare Pages.
 
 ## Local Development
 
@@ -17,6 +17,12 @@ Install dependencies:
 
 ```bash
 npm install
+```
+
+Run the parser smoke test:
+
+```bash
+npm run test:fixtures
 ```
 
 Run the Pages app locally:
@@ -35,7 +41,7 @@ Wrangler will print the local URL, usually `http://127.0.0.1:8788`.
 
 ```text
 Framework preset: None
-Build command: npm install
+Build command: exit 0
 Build output directory: public
 Root directory: /
 ```
@@ -57,3 +63,4 @@ npm run deploy
 - The backend auto-detects MMC vs DDH uploads.
 - If only one consultant is detected, the UI shows the doctor name directly.
 - Preview renders a Monday-start weekly grid before export.
+- Settings and review overrides are per upload and are not persisted.

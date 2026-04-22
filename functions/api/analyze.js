@@ -1,4 +1,4 @@
-import { doctorOptions, parseUploadForm, sourceNames } from "../_lib/roster.js";
+import { defaultSettings, doctorOptions, parseUploadForm, sourceNames } from "../_lib/roster.js";
 
 export async function onRequestPost(context) {
   try {
@@ -7,6 +7,7 @@ export async function onRequestPost(context) {
     return Response.json({
       sources: sourceNames(sources),
       doctors,
+      settings: defaultSettings(),
     });
   } catch (error) {
     return Response.json({ error: error.message || "Unexpected server error." }, { status: 400 });

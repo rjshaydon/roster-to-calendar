@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "wrangler pages dev public",
     "deploy": "wrangler pages deploy public",
-    "check": "node --check public/static/app.js"
+    "check": "node --check public/static/app.js",
+    "test:fixtures": "node scripts/test-fixtures.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.84.1",

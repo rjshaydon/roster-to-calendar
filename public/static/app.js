@@ -3,19 +3,58 @@ const fileInput = document.querySelector("#rosterFiles");
 const dropZone = document.querySelector("#dropZone");
 const chooseFilesButton = document.querySelector("#chooseFilesButton");
 const fileSummary = document.querySelector("#fileSummary");
-const exportButton = document.querySelector("#exportButton");
 const previewButton = document.querySelector("#previewButton");
+const exportButton = document.querySelector("#exportButton");
+const mobilePreviewButton = document.querySelector("#mobilePreviewButton");
+const mobileExportButton = document.querySelector("#mobileExportButton");
 const doctorSection = document.querySelector("#doctorSection");
 const doctorSelect = document.querySelector("#doctorSelect");
 const doctorName = document.querySelector("#doctorName");
+const controlBar = document.querySelector("#controlBar");
+const settingsToggle = document.querySelector("#settingsToggle");
+const settingsPanel = document.querySelector("#settingsPanel");
+const previewSection = document.querySelector("#previewSection");
 const preview = document.querySelector("#preview");
+const reviewPanel = document.querySelector("#reviewPanel");
+const reviewList = document.querySelector("#reviewList");
+const issuesPanel = document.querySelector("#issuesPanel");
+const issuesList = document.querySelector("#issuesList");
+const overview = document.querySelector("#overview");
+const overviewSources = document.querySelector("#overviewSources");
+const overviewCount = document.querySelector("#overviewCount");
+const overviewRange = document.querySelector("#overviewRange");
+const overviewParsed = document.querySelector("#overviewParsed");
 const status = document.querySelector("#status");
+const mobileActionBar = document.querySelector("#mobileActionBar");
 
 const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const SETTINGS_FIELDS = [
+  "showSourcePrefix",
+  "showAmPm",
+  "showTimes",
+  "showLocations",
+  "showRawValues",
+  "showNormalizedTitles",
+  "includeLocations",
+  "includeAnnualLeave",
+  "includeConferenceLeave",
+  "includePublicHoliday",
+  "includeSickLeave",
+  "hospitalFilter",
+  "dateFrom",
+  "dateTo",
+];
 
 let doctorOptions = [];
 let detectedSources = {};
 let selectedFiles = [];
+let settings = defaultSettings();
+let overrides = {};
+let latestPreview = null;
+
+const settingsInputs = Object.fromEntries(
+  SETTINGS_FIELDS.map((id) => [id, document.querySelector(`#${id}`)]),
+);
 
 chooseFilesButton.addEventListener("click", (event) => {
   event.stopPropagation();
@@ -80,19 +119,44 @@ fileSummary.addEventListener("click", async (event) => {
 });
 
 doctorSelect.addEventListener("change", () => {
-  clearPreview();
-  previewButton.disabled = !selectedDoctor();
-  exportButton.disabled = !selectedDoctor();
+  clearPreviewData();
+  syncActionState();
 });
 
-previewButton.addEventListener("click", async () => {
-  const doctor = selectedDoctor();
-  if (!doctor) {
-    setStatus("Choose a doctor before previewing.", true);
-    return;
-  }
-  await updatePreview();
+settingsToggle.addEventListener("click", () => {
+  settingsPanel.classList.toggle("hidden");
 });
+
+for (const [key, input] of Object.entries(settingsInputs)) {
+  input.addEventListener("change", () => {
+    settings[key] = input.type === "checkbox" ? input.checked : input.value;
+    if (!settings.showNormalizedTitles && !settings.showRawValues) {
+      settings.showNormalizedTitles = true;
+      settingsInputs.showNormalizedTitles.checked = true;
+    }
+    setStatus("Settings updated. Use Preview to refresh the grid.");
+  });
+}
+
+reviewList.addEventListener("input", (event) => {
+  const titleInput = event.target.closest("[data-override-title]");
+  if (!titleInput) return;
+  const id = titleInput.dataset.overrideTitle;
+  ensureOverride(id).title = titleInput.value;
+  setStatus("Mapping override updated. Use Preview to refresh the grid.");
+});
+
+reviewList.addEventListener("change", (event) => {
+  const includeInput = event.target.closest("[data-override-include]");
+  if (!includeInput) return;
+  const id = includeInput.dataset.overrideInclude;
+  ensureOverride(id).include = includeInput.checked;
+  setStatus("Inclusion override updated. Use Preview to refresh the grid.");
+});
+
+previewButton.addEventListener("click", () => updatePreview());
+mobilePreviewButton.addEventListener("click", () => updatePreview());
+mobileExportButton.addEventListener("click", () => form.requestSubmit());
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -131,6 +195,25 @@ form.addEventListener("submit", async (event) => {
   }
 });
 
+function defaultSettings() {
+  return {
+    showSourcePrefix: true,
+    showAmPm: true,
+    showTimes: true,
+    showLocations: false,
+    showRawValues: false,
+    showNormalizedTitles: true,
+    includeLocations: true,
+    includeAnnualLeave: true,
+    includeConferenceLeave: true,
+    includePublicHoliday: true,
+    includeSickLeave: true,
+    hospitalFilter: "all",
+    dateFrom: "",
+    dateTo: "",
+  };
+}
+
 function mergeFiles(files) {
   const map = new Map(selectedFiles.map((file) => [fileFingerprint(file), file]));
   for (const file of files) {
@@ -145,16 +228,15 @@ function validateIncomingFiles(files) {
     setStatus("Only Excel roster files in .xlsx, .xlsm, .xltx, or .xltm format are supported.", true);
     return [];
   }
-  const workbookFiles = files;
   const map = new Map(selectedFiles.map((file) => [fileFingerprint(file), file]));
-  for (const file of workbookFiles) {
+  for (const file of files) {
     map.set(fileFingerprint(file), file);
   }
   if (map.size > 2) {
     setStatus("You can add up to two roster files. Remove one before adding another.", true);
     return [];
   }
-  return workbookFiles;
+  return files;
 }
 
 async function analyzeFiles() {
@@ -168,12 +250,26 @@ async function analyzeFiles() {
     const data = await postForm("/api/analyze");
     doctorOptions = data.doctors || [];
     detectedSources = data.sources || {};
+    settings = { ...defaultSettings(), ...(data.settings || {}) };
+    overrides = {};
+    renderSettings();
     renderFileSummary();
     renderDoctorState();
   } catch (error) {
     resetDerivedState();
     renderFileSummary();
     setStatus(error.message, true);
+  }
+}
+
+function renderSettings() {
+  for (const [key, input] of Object.entries(settingsInputs)) {
+    if (!input) continue;
+    if (input.type === "checkbox") {
+      input.checked = Boolean(settings[key]);
+    } else {
+      input.value = settings[key] || "";
+    }
   }
 }
 
@@ -225,81 +321,188 @@ function renderDoctorState() {
   doctorName.textContent = "";
   doctorName.classList.add("hidden");
   doctorSelect.classList.add("hidden");
-  doctorSelect.disabled = false;
+  doctorSection.classList.add("hidden");
+  controlBar.classList.add("hidden");
+  mobileActionBar.classList.add("hidden");
 
   if (!doctorOptions.length) {
-    doctorSection.classList.add("hidden");
     setStatus("No consultant names could be matched from the uploaded roster files.", true);
     return;
   }
 
   doctorSection.classList.remove("hidden");
+  controlBar.classList.remove("hidden");
+  mobileActionBar.classList.remove("hidden");
+  settingsPanel.classList.remove("hidden");
+
   if (doctorOptions.length === 1) {
     doctorName.textContent = doctorOptions[0].displayName;
     doctorName.classList.remove("hidden");
-    previewButton.disabled = false;
-    exportButton.disabled = false;
-    setStatus("Consultant detected.");
-    return;
+    setStatus("Preview when ready.");
+  } else {
+    for (const doctor of doctorOptions) {
+      const option = document.createElement("option");
+      option.value = doctor.key;
+      option.textContent = doctor.displayName;
+      doctorSelect.append(option);
+    }
+    doctorSelect.classList.remove("hidden");
+    setStatus("Choose a doctor, then preview or export.");
   }
 
-  for (const doctor of doctorOptions) {
-    const option = document.createElement("option");
-    option.value = doctor.key;
-    option.textContent = doctor.displayName;
-    doctorSelect.append(option);
-  }
-  doctorSelect.classList.remove("hidden");
-  previewButton.disabled = false;
-  exportButton.disabled = false;
-  setStatus("Choose a doctor, then preview or export.");
+  syncActionState();
 }
 
 async function updatePreview() {
   const doctor = selectedDoctor();
-  if (!doctor) return;
+  if (!doctor) {
+    setStatus("Choose a doctor before previewing.", true);
+    return;
+  }
   setStatus("Building preview...");
   try {
     const data = await postForm("/api/preview", doctor);
+    latestPreview = data;
+    renderOverview(data);
+    renderIssues(data.issues || []);
+    renderReview(data.review || []);
     renderPreviewGrid(doctor, data);
     setStatus("Preview loaded.");
   } catch (error) {
-    clearPreview();
+    clearPreviewData();
     setStatus(error.message, true);
   }
 }
 
+function renderOverview(data) {
+  overviewSources.textContent = [data.sources?.mmc, data.sources?.ddh].filter(Boolean).join(" + ") || "Single source";
+  overviewCount.textContent = `${data.count}`;
+  overviewRange.textContent = data.date_range;
+  overviewParsed.textContent = formatTimestamp(data.lastParsed);
+  overview.classList.remove("hidden");
+}
+
+function renderIssues(items) {
+  if (!items.length) {
+    issuesPanel.classList.add("hidden");
+    issuesList.innerHTML = "";
+    return;
+  }
+
+  issuesList.innerHTML = items.map((item) => `
+    <article class="issue-card issue-${item.status}">
+      <div>
+        <strong>${formatIssueHeading(item)}</strong>
+        <p>${escapeHtml(item.message)}</p>
+      </div>
+      <span>${escapeHtml(item.rawValue)}</span>
+    </article>
+  `).join("");
+  issuesPanel.classList.remove("hidden");
+}
+
+function renderReview(items) {
+  if (!items.length) {
+    reviewPanel.classList.add("hidden");
+    reviewList.innerHTML = "";
+    return;
+  }
+
+  reviewList.innerHTML = items.map((item) => {
+    const overrideValue = escapeHtml(item.overrideTitle || "");
+    const warnings = item.warnings.length
+      ? `<ul class="review-warnings">${item.warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}</ul>`
+      : "";
+    const badge = item.status === "ok" ? "" : `<span class="review-badge review-badge-${item.status}">${item.status}</span>`;
+    const includeDisabled = item.exportable ? "" : "disabled";
+    return `
+      <article class="review-card">
+        <div class="review-top">
+          <div>
+            <strong>${escapeHtml(item.source)} · ${formatDate(item.startDay)}</strong>
+            <span>${escapeHtml(item.rawValue)}</span>
+          </div>
+          ${badge}
+        </div>
+        <div class="review-body">
+          <label class="field">
+            <span>Normalized result</span>
+            <input
+              type="text"
+              value="${overrideValue}"
+              placeholder="${escapeHtml(item.suggestedTitle)}"
+              data-override-title="${item.id}"
+            >
+          </label>
+          <label class="toggle review-toggle">
+            <input type="checkbox" ${item.include ? "checked" : ""} ${includeDisabled} data-override-include="${item.id}">
+            Include in export
+          </label>
+        </div>
+        <div class="review-meta">
+          <span>Suggested: ${escapeHtml(item.suggestedTitle || "No normalized result")}</span>
+          ${item.timeLabel ? `<span>${escapeHtml(item.timeLabel)}</span>` : ""}
+          ${item.location ? `<span>${escapeHtml(item.location)}</span>` : ""}
+        </div>
+        ${warnings}
+      </article>
+    `;
+  }).join("");
+  reviewPanel.classList.remove("hidden");
+}
+
 function renderPreviewGrid(doctor, data) {
   const events = data.events || [];
+  if (!events.length) {
+    preview.innerHTML = `
+      <div class="preview-head">
+        <strong>${escapeHtml(doctor.displayName)}</strong>
+        <span>0 events</span>
+        <span>${escapeHtml(data.date_range)}</span>
+      </div>
+      <div class="preview-empty">No events match the current settings.</div>
+    `;
+    preview.classList.remove("hidden");
+    previewSection.classList.remove("hidden");
+    return;
+  }
   const days = buildPreviewDays(events);
   const weeks = chunkWeeks(days);
   const headerCells = DAY_NAMES.map((day) => `<div class="preview-day-name">${day}</div>`).join("");
-  const weekRows = weeks.map((week, index) => {
-    const cells = week.map((day) => renderDayCell(day)).join("");
+  const bodyRows = [];
+  let lastMonthKey = "";
+
+  weeks.forEach((week, index) => {
     const monday = week[0]?.date;
-    return `
+    const monthKey = monday ? `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, "0")}` : "";
+    if (monthKey && monthKey !== lastMonthKey) {
+      bodyRows.push(`<div class="preview-month-row">${formatMonth(monday)}</div>`);
+      lastMonthKey = monthKey;
+    }
+    bodyRows.push(`
       <div class="preview-week-label">
         <strong>Week ${index + 1}</strong>
         <span>starting</span>
         <time datetime="${formatDateKey(monday)}">${formatLongDate(monday)}</time>
       </div>
-      ${cells}
-    `;
-  }).join("");
+      ${week.map((day) => renderDayCell(day)).join("")}
+    `);
+  });
 
   preview.innerHTML = `
     <div class="preview-head">
-      <strong>${doctor.displayName}</strong>
+      <strong>${escapeHtml(doctor.displayName)}</strong>
       <span>${data.count} events</span>
-      <span>${data.date_range}</span>
+      <span>${escapeHtml(data.date_range)}</span>
     </div>
     <div class="preview-grid">
       <div class="preview-week-label preview-week-label-head">Week</div>
       ${headerCells}
-      ${weekRows}
+      ${bodyRows.join("")}
     </div>
   `;
   preview.classList.remove("hidden");
+  previewSection.classList.remove("hidden");
 }
 
 function buildPreviewDays(events) {
@@ -319,10 +522,7 @@ function buildPreviewDays(events) {
     while (cursor <= inclusiveEnd) {
       const key = formatDateKey(cursor);
       if (!eventMap.has(key)) eventMap.set(key, []);
-      const label = renderEventLabel(event, cursor, startDate);
-      if (label) {
-        eventMap.get(key).push(label);
-      }
+      eventMap.get(key).push(event);
       cursor = addDays(cursor, 1);
     }
   }
@@ -334,7 +534,7 @@ function buildPreviewDays(events) {
     const key = formatDateKey(cursor);
     days.push({
       date: new Date(cursor),
-      entries: eventMap.get(key) || [],
+      events: eventMap.get(key) || [],
     });
   }
   return days;
@@ -349,27 +549,39 @@ function chunkWeeks(days) {
 }
 
 function renderDayCell(day) {
-  const items = day.entries.length
-    ? day.entries.map((entry) => `<li class="preview-item">${entry}</li>`).join("")
-    : `<li class="preview-item preview-item-empty"> </li>`;
+  const cards = day.events.length
+    ? day.events.map((event) => renderPreviewChip(event, formatDateKey(day.date))).join("")
+    : `<div class="preview-chip preview-chip-empty"></div>`;
   return `
     <div class="preview-cell">
       <div class="preview-date">${day.date.getDate()}</div>
-      <ul class="preview-list">${items}</ul>
+      <div class="preview-stack">${cards}</div>
     </div>
   `;
 }
 
-function renderEventLabel(event, cursor, startDate) {
-  if (event.allDay) {
-    return event.title;
+function renderPreviewChip(event, dayKey) {
+  const lines = [];
+  const startKey = event.start.slice(0, 10);
+  if (settings.showNormalizedTitles || !settings.showRawValues) {
+    lines.push(`<strong>${escapeHtml(event.title)}</strong>`);
   }
-  if (formatDateKey(cursor) !== formatDateKey(startDate)) {
-    return "";
+  if (settings.showRawValues) {
+    lines.push(`<span class="preview-chip-raw">${escapeHtml(event.rawValue)}</span>`);
   }
-  const start = new Date(event.start);
-  const end = new Date(event.end);
-  return `${formatTime(start)}-${formatTime(end)} ${event.title}`;
+  const meta = [];
+  if (!event.allDay && settings.showTimes && startKey === dayKey && event.timeLabel) meta.push(event.timeLabel);
+  if (settings.showLocations && event.location) meta.push(event.location);
+  const metaMarkup = meta.length ? `<span class="preview-chip-meta">${escapeHtml(meta.join(" · "))}</span>` : "";
+  return `<article class="preview-chip">${lines.join("")}${metaMarkup}</article>`;
+}
+
+function syncActionState() {
+  const ready = Boolean(selectedDoctor());
+  previewButton.disabled = !ready;
+  exportButton.disabled = !ready;
+  mobilePreviewButton.disabled = !ready;
+  mobileExportButton.disabled = !ready;
 }
 
 function createFormData(doctor = null) {
@@ -381,7 +593,22 @@ function createFormData(doctor = null) {
     body.append("doctorKey", doctor.key);
     body.append("doctorDisplay", doctor.displayName);
   }
+  body.append("settings", JSON.stringify(settings));
+  body.append("overrides", JSON.stringify(cleanOverrides()));
   return body;
+}
+
+function cleanOverrides() {
+  const next = {};
+  for (const [id, value] of Object.entries(overrides)) {
+    const title = (value.title || "").trim();
+    const include = value.include;
+    if (!title && typeof include !== "boolean") continue;
+    next[id] = {};
+    if (title) next[id].title = title;
+    if (typeof include === "boolean") next[id].include = include;
+  }
+  return next;
 }
 
 async function postForm(url, doctor = null) {
@@ -405,19 +632,35 @@ function selectedDoctor() {
 function resetDerivedState() {
   doctorOptions = [];
   detectedSources = {};
+  overrides = {};
+  settings = defaultSettings();
+  renderSettings();
   doctorSelect.innerHTML = "";
   doctorName.textContent = "";
   doctorName.classList.add("hidden");
   doctorSelect.classList.add("hidden");
   doctorSection.classList.add("hidden");
-  previewButton.disabled = true;
-  exportButton.disabled = true;
-  clearPreview();
+  controlBar.classList.add("hidden");
+  mobileActionBar.classList.add("hidden");
+  settingsPanel.classList.add("hidden");
+  clearPreviewData();
 }
 
-function clearPreview() {
+function clearPreviewData() {
+  latestPreview = null;
+  overview.classList.add("hidden");
+  issuesPanel.classList.add("hidden");
+  reviewPanel.classList.add("hidden");
+  previewSection.classList.add("hidden");
   preview.innerHTML = "";
   preview.classList.add("hidden");
+  reviewList.innerHTML = "";
+  issuesList.innerHTML = "";
+}
+
+function ensureOverride(id) {
+  if (!overrides[id]) overrides[id] = {};
+  return overrides[id];
 }
 
 function fileFingerprint(file) {
@@ -447,16 +690,43 @@ function formatDateKey(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
-function formatTime(date) {
-  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-}
-
 function formatLongDate(date) {
   return date.toLocaleDateString("en-AU", {
     day: "numeric",
     month: "short",
     year: "numeric",
   });
+}
+
+function formatDate(value) {
+  return parseDateOnly(value).toLocaleDateString("en-AU", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function formatMonth(date) {
+  return date.toLocaleDateString("en-AU", {
+    month: "long",
+    year: "numeric",
+  });
+}
+
+function formatTimestamp(value) {
+  if (!value) return "-";
+  return new Date(value).toLocaleString("en-AU", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function formatIssueHeading(item) {
+  const status = item.status === "unknown" ? "Unknown" : "Review";
+  return `${status} · ${item.source} · ${formatDate(item.startDay)}`;
 }
 
 function setStatus(message, isError = false) {
@@ -470,4 +740,13 @@ function parseError(text) {
   } catch {
     return "Request failed.";
   }
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
