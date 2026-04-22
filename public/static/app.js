@@ -7,6 +7,7 @@ const previewButton = document.querySelector("#previewButton");
 const exportButton = document.querySelector("#exportButton");
 const mobilePreviewButton = document.querySelector("#mobilePreviewButton");
 const mobileExportButton = document.querySelector("#mobileExportButton");
+const mobileSettingsButton = document.querySelector("#mobileSettingsButton");
 const doctorSection = document.querySelector("#doctorSection");
 const doctorSelect = document.querySelector("#doctorSelect");
 const doctorName = document.querySelector("#doctorName");
@@ -15,8 +16,6 @@ const settingsToggle = document.querySelector("#settingsToggle");
 const settingsPanel = document.querySelector("#settingsPanel");
 const previewSection = document.querySelector("#previewSection");
 const preview = document.querySelector("#preview");
-const reviewPanel = document.querySelector("#reviewPanel");
-const reviewList = document.querySelector("#reviewList");
 const issuesPanel = document.querySelector("#issuesPanel");
 const issuesList = document.querySelector("#issuesList");
 const overview = document.querySelector("#overview");
@@ -26,6 +25,9 @@ const overviewRange = document.querySelector("#overviewRange");
 const overviewParsed = document.querySelector("#overviewParsed");
 const status = document.querySelector("#status");
 const mobileActionBar = document.querySelector("#mobileActionBar");
+const reviewModal = document.querySelector("#reviewModal");
+const reviewModalBody = document.querySelector("#reviewModalBody");
+const reviewCloseButton = document.querySelector("#reviewCloseButton");
 
 const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const SETTINGS_FIELDS = [
@@ -51,6 +53,7 @@ let selectedFiles = [];
 let settings = defaultSettings();
 let overrides = {};
 let latestPreview = null;
+let reviewIndex = new Map();
 
 const settingsInputs = Object.fromEntries(
   SETTINGS_FIELDS.map((id) => [id, document.querySelector(`#${id}`)]),
@@ -126,6 +129,9 @@ doctorSelect.addEventListener("change", () => {
 settingsToggle.addEventListener("click", () => {
   settingsPanel.classList.toggle("hidden");
 });
+mobileSettingsButton.addEventListener("click", () => {
+  settingsPanel.classList.toggle("hidden");
+});
 
 for (const [key, input] of Object.entries(settingsInputs)) {
   input.addEventListener("change", () => {
@@ -138,7 +144,7 @@ for (const [key, input] of Object.entries(settingsInputs)) {
   });
 }
 
-reviewList.addEventListener("input", (event) => {
+reviewModalBody.addEventListener("input", (event) => {
   const titleInput = event.target.closest("[data-override-title]");
   if (!titleInput) return;
   const id = titleInput.dataset.overrideTitle;
@@ -146,7 +152,7 @@ reviewList.addEventListener("input", (event) => {
   setStatus("Mapping override updated. Use Preview to refresh the grid.");
 });
 
-reviewList.addEventListener("change", (event) => {
+reviewModalBody.addEventListener("change", (event) => {
   const includeInput = event.target.closest("[data-override-include]");
   if (!includeInput) return;
   const id = includeInput.dataset.overrideInclude;
@@ -157,6 +163,27 @@ reviewList.addEventListener("change", (event) => {
 previewButton.addEventListener("click", () => updatePreview());
 mobilePreviewButton.addEventListener("click", () => updatePreview());
 mobileExportButton.addEventListener("click", () => form.requestSubmit());
+preview.addEventListener("click", (event) => {
+  const chip = event.target.closest("[data-review-id]");
+  if (!chip) return;
+  openReviewModal(chip.dataset.reviewId);
+});
+issuesList.addEventListener("click", (event) => {
+  const card = event.target.closest("[data-review-id]");
+  if (!card) return;
+  openReviewModal(card.dataset.reviewId);
+});
+reviewCloseButton.addEventListener("click", closeReviewModal);
+reviewModal.addEventListener("click", (event) => {
+  if (event.target.matches("[data-close-review]")) {
+    closeReviewModal();
+  }
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    closeReviewModal();
+  }
+});
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -333,7 +360,7 @@ function renderDoctorState() {
   doctorSection.classList.remove("hidden");
   controlBar.classList.remove("hidden");
   mobileActionBar.classList.remove("hidden");
-  settingsPanel.classList.remove("hidden");
+  settingsPanel.classList.add("hidden");
 
   if (doctorOptions.length === 1) {
     doctorName.textContent = doctorOptions[0].displayName;
@@ -363,10 +390,10 @@ async function updatePreview() {
   try {
     const data = await postForm("/api/preview", doctor);
     latestPreview = data;
+    indexReviewItems(data.review || []);
     renderOverview(data);
-    renderIssues(data.issues || []);
-    renderReview(data.review || []);
     renderPreviewGrid(doctor, data);
+    renderIssues(data.issues || []);
     setStatus("Preview loaded.");
   } catch (error) {
     clearPreviewData();
@@ -375,7 +402,10 @@ async function updatePreview() {
 }
 
 function renderOverview(data) {
-  overviewSources.textContent = [data.sources?.mmc, data.sources?.ddh].filter(Boolean).join(" + ") || "Single source";
+  const files = [data.sources?.mmc, data.sources?.ddh].filter(Boolean);
+  overviewSources.innerHTML = files.length
+    ? files.map((file) => `<span>${escapeHtml(file)}</span>`).join("")
+    : "<span>Single source</span>";
   overviewCount.textContent = `${data.count}`;
   overviewRange.textContent = data.date_range;
   overviewParsed.textContent = formatTimestamp(data.lastParsed);
@@ -390,7 +420,7 @@ function renderIssues(items) {
   }
 
   issuesList.innerHTML = items.map((item) => `
-    <article class="issue-card issue-${item.status}">
+    <article class="issue-card issue-${item.status}" data-review-id="${item.id}" tabindex="0" role="button">
       <div>
         <strong>${formatIssueHeading(item)}</strong>
         <p>${escapeHtml(item.message)}</p>
@@ -401,54 +431,8 @@ function renderIssues(items) {
   issuesPanel.classList.remove("hidden");
 }
 
-function renderReview(items) {
-  if (!items.length) {
-    reviewPanel.classList.add("hidden");
-    reviewList.innerHTML = "";
-    return;
-  }
-
-  reviewList.innerHTML = items.map((item) => {
-    const overrideValue = escapeHtml(item.overrideTitle || "");
-    const warnings = item.warnings.length
-      ? `<ul class="review-warnings">${item.warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}</ul>`
-      : "";
-    const badge = item.status === "ok" ? "" : `<span class="review-badge review-badge-${item.status}">${item.status}</span>`;
-    const includeDisabled = item.exportable ? "" : "disabled";
-    return `
-      <article class="review-card">
-        <div class="review-top">
-          <div>
-            <strong>${escapeHtml(item.source)} · ${formatDate(item.startDay)}</strong>
-            <span>${escapeHtml(item.rawValue)}</span>
-          </div>
-          ${badge}
-        </div>
-        <div class="review-body">
-          <label class="field">
-            <span>Normalized result</span>
-            <input
-              type="text"
-              value="${overrideValue}"
-              placeholder="${escapeHtml(item.suggestedTitle)}"
-              data-override-title="${item.id}"
-            >
-          </label>
-          <label class="toggle review-toggle">
-            <input type="checkbox" ${item.include ? "checked" : ""} ${includeDisabled} data-override-include="${item.id}">
-            Include in export
-          </label>
-        </div>
-        <div class="review-meta">
-          <span>Suggested: ${escapeHtml(item.suggestedTitle || "No normalized result")}</span>
-          ${item.timeLabel ? `<span>${escapeHtml(item.timeLabel)}</span>` : ""}
-          ${item.location ? `<span>${escapeHtml(item.location)}</span>` : ""}
-        </div>
-        ${warnings}
-      </article>
-    `;
-  }).join("");
-  reviewPanel.classList.remove("hidden");
+function indexReviewItems(items) {
+  reviewIndex = new Map(items.map((item) => [item.id, item]));
 }
 
 function renderPreviewGrid(doctor, data) {
@@ -573,7 +557,7 @@ function renderPreviewChip(event, dayKey) {
   if (!event.allDay && settings.showTimes && startKey === dayKey && event.timeLabel) meta.push(event.timeLabel);
   if (settings.showLocations && event.location) meta.push(event.location);
   const metaMarkup = meta.length ? `<span class="preview-chip-meta">${escapeHtml(meta.join(" · "))}</span>` : "";
-  return `<article class="preview-chip">${lines.join("")}${metaMarkup}</article>`;
+  return `<button type="button" class="preview-chip" data-review-id="${event.id}">${lines.join("")}${metaMarkup}</button>`;
 }
 
 function syncActionState() {
@@ -648,14 +632,14 @@ function resetDerivedState() {
 
 function clearPreviewData() {
   latestPreview = null;
+  reviewIndex = new Map();
   overview.classList.add("hidden");
   issuesPanel.classList.add("hidden");
-  reviewPanel.classList.add("hidden");
   previewSection.classList.add("hidden");
   preview.innerHTML = "";
   preview.classList.add("hidden");
-  reviewList.innerHTML = "";
   issuesList.innerHTML = "";
+  closeReviewModal();
 }
 
 function ensureOverride(id) {
@@ -727,6 +711,58 @@ function formatTimestamp(value) {
 function formatIssueHeading(item) {
   const status = item.status === "unknown" ? "Unknown" : "Review";
   return `${status} · ${item.source} · ${formatDate(item.startDay)}`;
+}
+
+function openReviewModal(id) {
+  const item = reviewIndex.get(id);
+  if (!item) return;
+  const overrideValue = escapeHtml((overrides[id]?.title ?? item.overrideTitle ?? ""));
+  const includeValue = typeof overrides[id]?.include === "boolean" ? overrides[id].include : item.include;
+  const warnings = item.warnings.length
+    ? `<ul class="review-warnings">${item.warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}</ul>`
+    : "";
+  const badge = item.status === "ok" ? "" : `<span class="review-badge review-badge-${item.status}">${item.status}</span>`;
+
+  reviewModalBody.innerHTML = `
+    <article class="review-card">
+      <div class="review-top">
+        <div>
+          <strong>${escapeHtml(item.source)} · ${formatDate(item.startDay)}</strong>
+          <span>${escapeHtml(item.rawValue)}</span>
+        </div>
+        ${badge}
+      </div>
+      <div class="review-body">
+        <label class="field">
+          <span>Normalized result</span>
+          <input
+            type="text"
+            value="${overrideValue}"
+            placeholder="${escapeHtml(item.suggestedTitle)}"
+            data-override-title="${item.id}"
+          >
+        </label>
+        <label class="toggle review-toggle">
+          <input type="checkbox" ${includeValue ? "checked" : ""} ${item.exportable ? "" : "disabled"} data-override-include="${item.id}">
+          Include in export
+        </label>
+      </div>
+      <div class="review-meta">
+        <span>Suggested title: ${escapeHtml(item.suggestedTitle || "No normalized result")}</span>
+        ${item.timeLabel ? `<span>Times: ${escapeHtml(item.timeLabel)}</span>` : ""}
+        ${item.location ? `<span>Location: ${escapeHtml(item.location)}</span>` : ""}
+      </div>
+      ${warnings}
+    </article>
+  `;
+  reviewModal.classList.remove("hidden");
+  reviewModal.setAttribute("aria-hidden", "false");
+}
+
+function closeReviewModal() {
+  reviewModal.classList.add("hidden");
+  reviewModal.setAttribute("aria-hidden", "true");
+  reviewModalBody.innerHTML = "";
 }
 
 function setStatus(message, isError = false) {

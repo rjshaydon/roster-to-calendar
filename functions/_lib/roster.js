@@ -528,13 +528,10 @@ function parseDdhEntry(day, label, timeText) {
     });
   }
 
-  const warning = normalized.kind === "shift" ? "No time row found; exported as an all-day event." : "";
   return createAllDayRecord("DDH", day, label, {
     kind: normalized.kind,
     titleParts: normalized.titleParts,
     location,
-    warning,
-    ambiguous: Boolean(warning),
   });
 }
 
@@ -954,13 +951,12 @@ function asDateString(value) {
 }
 
 function formatTimeLabel(start, end) {
-  const startDate = new Date(start);
-  const endDate = new Date(end);
-  return `${formatClock(startDate)}-${formatClock(endDate)}`;
+  return `${extractClock(start)}-${extractClock(end)}`;
 }
 
-function formatClock(date) {
-  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+function extractClock(value) {
+  const match = String(value).match(/T(\d{2}:\d{2})/);
+  return match ? match[1] : "";
 }
 
 function toTitleCase(value) {
