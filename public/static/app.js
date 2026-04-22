@@ -52,6 +52,8 @@ const customEventDeleteButton = document.querySelector("#customEventDeleteButton
 const contextMenu = document.querySelector("#contextMenu");
 
 const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const OWNER_EMAIL = "rhaydon@gmail.com";
+const ACCOUNT_STATE_KEY = "roster-account-state";
 const SETTINGS_FIELDS = [
   "showSourcePrefix",
   "showAmPm",
@@ -1913,9 +1915,6 @@ function closeAccountsModal() {
   accountsModal.classList.add("hidden");
   accountsModal.setAttribute("aria-hidden", "true");
 }
-
-const OWNER_EMAIL = "rhaydon@gmail.com";
-const ACCOUNT_STATE_KEY = "roster-account-state";
 
 function loadAccountState() {
   try {
