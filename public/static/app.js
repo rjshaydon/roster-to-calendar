@@ -482,8 +482,10 @@ function defaultSettings() {
 async function mergeFiles(files) {
   let persistenceFailed = false;
   for (const file of files) {
+    const id = fileFingerprint(file);
+    selectedFiles = selectedFiles.filter((entry) => entry.id !== id);
     const entry = {
-      id: `import-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+      id,
       file,
       name: file.name,
       size: file.size,
@@ -2076,8 +2078,26 @@ async function loadStoredImports() {
     request.onsuccess = () => resolve(request.result || []);
     request.onerror = () => reject(request.error || new Error("Could not load imports."));
   });
+  const deduped = new Map();
+  for (const record of records) {
+    const key = record.id || `${record.name}:${record.size}:${record.lastModified}`;
+    const existing = deduped.get(key);
+    if (!existing || (record.addedAt || "") > (existing.addedAt || "")) {
+      deduped.set(key, { ...record, id: key });
+    }
+  }
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(IMPORT_STORE, "readwrite");
+    const store = tx.objectStore(IMPORT_STORE);
+    store.clear();
+    for (const record of deduped.values()) {
+      store.put(record);
+    }
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error || new Error("Could not normalize imports."));
+  });
   db.close();
-  return records.map((record) => ({
+  return [...deduped.values()].map((record) => ({
     id: record.id,
     name: record.name,
     size: record.size,
@@ -2094,7 +2114,8 @@ async function removeStoredImport(id) {
     const db = await openImportsDb();
     await new Promise((resolve, reject) => {
       const tx = db.transaction(IMPORT_STORE, "readwrite");
-      tx.objectStore(IMPORT_STORE).delete(id);
+      const store = tx.objectStore(IMPORT_STORE);
+      store.delete(id);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error || new Error("Could not remove import."));
     });
