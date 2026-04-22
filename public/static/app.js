@@ -480,11 +480,8 @@ function defaultSettings() {
 }
 
 async function mergeFiles(files) {
-  const existing = new Set(selectedFiles.map((entry) => fileFingerprint(entry.file)));
   let persistenceFailed = false;
   for (const file of files) {
-    const fingerprint = fileFingerprint(file);
-    if (existing.has(fingerprint)) continue;
     const entry = {
       id: `import-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
       file,
