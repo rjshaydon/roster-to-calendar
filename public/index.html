@@ -17,6 +17,10 @@
       </section>
 
       <section class="panel">
+        <div id="loginBar" class="login-bar hidden">
+          <span id="loginIdentity"></span>
+          <button id="logoutButton" type="button" class="button button-secondary">Log out</button>
+        </div>
         <form id="roster-form">
           <div id="dropZone" class="drop-zone" tabindex="0" role="button" aria-label="Choose roster files">
             <input id="rosterFiles" name="rosterFiles" type="file" accept=".xlsx,.xlsm,.xltx,.xltm" multiple hidden>
@@ -137,6 +141,25 @@
           <p>Imported rosters stay here until you remove them.</p>
         </div>
         <div id="filesList" class="issues-list"></div>
+      </section>
+    </div>
+
+    <div id="loginModal" class="modal hidden" aria-hidden="true">
+      <div class="modal-backdrop"></div>
+      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="loginModalTitle">
+        <div class="section-head">
+          <h3 id="loginModalTitle">Log in</h3>
+          <p>Enter your email address to load and save your roster workspace.</p>
+        </div>
+        <form id="loginForm" class="custom-event-form">
+          <label class="field">
+            <span>Email address</span>
+            <input id="loginEmail" type="email" autocomplete="email" required placeholder="you@example.com">
+          </label>
+          <div class="modal-actions">
+            <button type="submit" class="button button-primary">Continue</button>
+          </div>
+        </form>
       </section>
     </div>
 

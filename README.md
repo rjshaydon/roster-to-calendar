@@ -47,7 +47,16 @@ Root directory: /
 ```
 
 4. Cloudflare Pages will pick up the `/functions` directory automatically.
-5. Add your custom domain in Cloudflare Pages once the first deploy succeeds.
+5. Create a Workers KV namespace, for example `roster-converter-state`.
+6. In the Pages project, add a KV namespace binding:
+
+```text
+Variable name: ROSTER_STORE
+KV namespace: roster-converter-state
+```
+
+7. Redeploy the Pages project after adding the binding.
+8. Add your custom domain in Cloudflare Pages once the deploy succeeds.
 
 ## CLI Deploy
 
@@ -59,8 +68,11 @@ npm run deploy
 
 ## Notes
 
-- The frontend accepts up to two roster files.
 - The backend auto-detects MMC vs DDH uploads.
 - If only one consultant is detected, the UI shows the doctor name directly.
 - Preview renders a Monday-start weekly grid before export.
-- Settings and review overrides are per upload and are not persisted.
+- Users log in with an email address.
+- `rhaydon@gmail.com` is the Creator account.
+- Creator storage is unrestricted.
+- Standard accounts are prompted to keep only the latest 6 months active.
+- Cross-device persistence requires the `ROSTER_STORE` KV binding above.

@@ -12,6 +12,12 @@ const accountsCloseButton = document.querySelector("#accountsCloseButton");
 const accountsBody = document.querySelector("#accountsBody");
 const accountsModalTitle = document.querySelector("#accountsModalTitle");
 const accountsModalSubtitle = document.querySelector("#accountsModalSubtitle");
+const loginBar = document.querySelector("#loginBar");
+const loginIdentity = document.querySelector("#loginIdentity");
+const logoutButton = document.querySelector("#logoutButton");
+const loginModal = document.querySelector("#loginModal");
+const loginForm = document.querySelector("#loginForm");
+const loginEmail = document.querySelector("#loginEmail");
 const previewButton = document.querySelector("#previewButton");
 const exportButton = document.querySelector("#exportButton");
 const mobilePreviewButton = document.querySelector("#mobilePreviewButton");
@@ -55,6 +61,8 @@ const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Satu
 const OWNER_EMAIL = "rhaydon@gmail.com";
 const ACCOUNT_STATE_KEY = "roster-account-state";
 const SESSION_STATE_KEY = "roster-session-state-v1";
+const CURRENT_EMAIL_KEY = "roster-current-email";
+const SIX_MONTH_LIMIT_DAYS = 183;
 const SETTINGS_FIELDS = [
   "showSourcePrefix",
   "showAmPm",
@@ -89,6 +97,11 @@ let openReviewId = "";
 let conflictSelections = {};
 let accountState = loadAccountState();
 let restoredSessionState = null;
+let currentUserEmail = loadCurrentUserEmail();
+let currentUserRole = currentUserEmail === OWNER_EMAIL ? "creator" : "user";
+let cloudAvailable = false;
+let cloudSaveTimer = 0;
+let enforcingRosterLimit = false;
 
 const settingsInputs = Object.fromEntries(
   SETTINGS_FIELDS.map((id) => [id, document.querySelector(`#${id}`)]),
@@ -181,6 +194,23 @@ accountsBody.addEventListener("click", (event) => {
   if (removeButton) {
     removeLocalAccount(removeButton.dataset.removeAccount);
   }
+});
+loginForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const email = normalizeEmail(loginEmail.value);
+  if (!email) return;
+  await loginWithEmail(email);
+});
+logoutButton.addEventListener("click", () => {
+  localStorage.removeItem(CURRENT_EMAIL_KEY);
+  currentUserEmail = "";
+  currentUserRole = "user";
+  cloudAvailable = false;
+  selectedFiles = [];
+  resetDerivedState();
+  renderLoginState();
+  openLoginModal();
+  setStatus("Log in to load a roster workspace.");
 });
 
 doctorSelect.addEventListener("change", () => {
@@ -519,6 +549,7 @@ async function mergeFiles(files) {
   }
   selectedFiles.sort((left, right) => (left.addedAt || "").localeCompare(right.addedAt || "") || left.name.localeCompare(right.name));
   renderFilesList();
+  scheduleCloudStateSave();
   if (persistenceFailed) {
     setStatus("Import added, but browser storage was unavailable so it will not persist after reload.", true);
   }
@@ -680,6 +711,7 @@ function rebuildClientPreview() {
   const doctor = selectedDoctor();
   if (!doctor) return;
   const view = buildClientPreviewData(latestPreview);
+  if (enforceSixMonthLimit(view)) return;
   renderConflicts(view.conflicts || []);
   renderPreviewGrid(doctor, view);
   renderIssues(view.issues || []);
@@ -733,6 +765,35 @@ function buildClientPreviewData(baseData) {
       ...deletedItems,
     ],
   };
+}
+
+function enforceSixMonthLimit(view) {
+  if (currentUserRole === "creator" || enforcingRosterLimit || !view.events?.length) return false;
+  const range = deriveRangeBounds(view.events);
+  if (!range.start || !range.end) return false;
+  const latest = parseDateOnly(range.end);
+  const cutoff = addDays(latest, -SIX_MONTH_LIMIT_DAYS);
+  const cutoffKey = formatDateKey(cutoff);
+  if (range.start >= cutoffKey || settings.dateFrom >= cutoffKey) return false;
+
+  const ok = window.confirm(
+    `Standard accounts can keep the latest 6 months of roster active. This upload extends before ${formatDate(cutoffKey)}. Delete/hide events before that date and keep the latest roster period?`,
+  );
+  if (!ok) {
+    exportButton.disabled = true;
+    mobileExportButton.disabled = true;
+    setStatus("Export disabled until the roster is limited to 6 months.", true);
+    return false;
+  }
+
+  enforcingRosterLimit = true;
+  settings.dateFrom = cutoffKey;
+  renderSettings();
+  saveCurrentSessionState();
+  rebuildClientPreview();
+  enforcingRosterLimit = false;
+  setStatus("Roster limited to the latest 6 months for this account.");
+  return true;
 }
 
 function renderConflicts(items) {
@@ -2119,11 +2180,16 @@ function saveAccountState() {
 }
 
 function currentAccount() {
-  return accountState.users.find((user) => user.email === accountState.currentEmail) || accountState.users[0];
+  const email = currentUserEmail || accountState.currentEmail;
+  return accountState.users.find((user) => user.email === email) || {
+    email,
+    password: "",
+    role: currentUserRole === "creator" ? "owner" : "user",
+  };
 }
 
 function isOwnerAccount() {
-  return currentAccount()?.role === "owner";
+  return currentUserRole === "creator" || currentAccount()?.role === "owner";
 }
 
 function syncAccountsButton() {
@@ -2208,6 +2274,165 @@ function removeLocalAccount(email) {
   setStatus("User removed from local account list.");
 }
 
+function loadCurrentUserEmail() {
+  return normalizeEmail(localStorage.getItem(CURRENT_EMAIL_KEY));
+}
+
+function normalizeEmail(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function openLoginModal() {
+  loginEmail.value = currentUserEmail || "";
+  loginModal.classList.remove("hidden");
+  loginModal.setAttribute("aria-hidden", "false");
+  setTimeout(() => loginEmail.focus(), 0);
+}
+
+function closeLoginModal() {
+  loginModal.classList.add("hidden");
+  loginModal.setAttribute("aria-hidden", "true");
+}
+
+function renderLoginState() {
+  const loggedIn = Boolean(currentUserEmail);
+  loginBar.classList.toggle("hidden", !loggedIn);
+  loginIdentity.textContent = loggedIn
+    ? `${currentUserEmail} · ${currentUserRole === "creator" ? "Creator" : "Standard account"}${cloudAvailable ? " · Cloud sync on" : " · Local fallback"}`
+    : "";
+  syncAccountsButton();
+}
+
+async function loginWithEmail(email) {
+  currentUserEmail = normalizeEmail(email);
+  currentUserRole = currentUserEmail === OWNER_EMAIL ? "creator" : "user";
+  localStorage.setItem(CURRENT_EMAIL_KEY, currentUserEmail);
+  setStatus("Loading account workspace...");
+  closeLoginModal();
+  await restoreCloudState();
+  await bootstrapImports();
+  renderLoginState();
+}
+
+async function restoreCloudState() {
+  if (!currentUserEmail) return;
+  try {
+    const response = await fetch(`/api/state?email=${encodeURIComponent(currentUserEmail)}`);
+    const data = await response.json();
+    cloudAvailable = data.cloudAvailable === true;
+    currentUserRole = data.role || currentUserRole;
+    if (!cloudAvailable) return;
+    if (!data.state) {
+      selectedFiles = [];
+      await replaceStoredImports([]);
+      return;
+    }
+    const imports = await deserializeCloudImports(data.state.imports || []);
+    if (imports.length) {
+      selectedFiles = imports;
+      await replaceStoredImports(imports);
+    }
+    if (data.state.session) {
+      const key = currentImportStateKey();
+      if (key) {
+        const store = loadSessionStore();
+        store[key] = data.state.session;
+        saveSessionStore(store);
+      }
+    }
+  } catch {
+    cloudAvailable = false;
+  }
+}
+
+function scheduleCloudStateSave() {
+  if (!currentUserEmail) return;
+  clearTimeout(cloudSaveTimer);
+  cloudSaveTimer = setTimeout(() => {
+    saveCloudState().catch(() => {
+      cloudAvailable = false;
+      renderLoginState();
+    });
+  }, 700);
+}
+
+async function saveCloudState() {
+  if (!currentUserEmail || !cloudAvailable) return;
+  const state = await buildCloudState();
+  const response = await fetch("/api/state", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email: currentUserEmail, state }),
+  });
+  if (!response.ok) throw new Error("Cloud save failed.");
+  renderLoginState();
+}
+
+async function buildCloudState() {
+  return {
+    version: 1,
+    imports: await serializeCloudImports(selectedFiles),
+    session: buildActiveSessionState(),
+  };
+}
+
+function buildActiveSessionState() {
+  return {
+    doctorKey: doctorOptions.length > 1 ? doctorSelect.value : doctorOptions[0]?.key || "",
+    settings: { ...settings },
+    overrides: cleanOverrides(),
+    customEvents: sanitizeCustomEvents(customEvents),
+    conflictSelections: { ...conflictSelections },
+    hadPreview: Boolean(latestPreview),
+    savedAt: new Date().toISOString(),
+  };
+}
+
+async function serializeCloudImports(imports) {
+  return await Promise.all(imports.map(async (entry) => ({
+    id: entry.id,
+    name: entry.name,
+    size: entry.size,
+    lastModified: entry.lastModified,
+    addedAt: entry.addedAt,
+    sourceType: entry.sourceType,
+    type: entry.file?.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    dataUrl: await fileToDataUrl(entry.file),
+  })));
+}
+
+async function deserializeCloudImports(imports) {
+  const entries = [];
+  for (const item of imports) {
+    if (!item?.dataUrl || !item?.name) continue;
+    const blob = await dataUrlToBlob(item.dataUrl);
+    entries.push({
+      id: item.id || `${item.name}:${item.size || blob.size}:${item.lastModified || Date.now()}`,
+      name: item.name,
+      size: item.size || blob.size,
+      lastModified: item.lastModified || Date.now(),
+      addedAt: item.addedAt || new Date().toISOString(),
+      sourceType: item.sourceType || "pending",
+      file: new File([blob], item.name, { type: item.type || blob.type, lastModified: item.lastModified || Date.now() }),
+    });
+  }
+  return entries;
+}
+
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error("Could not read file."));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function dataUrlToBlob(dataUrl) {
+  const response = await fetch(dataUrl);
+  return await response.blob();
+}
+
 function currentImportStateKey() {
   if (!selectedFiles.length) return "";
   return selectedFiles.map((entry) => entry.id).sort().join("|");
@@ -2247,6 +2472,7 @@ function saveCurrentSessionState() {
       savedAt: new Date().toISOString(),
     };
     saveSessionStore(store);
+    scheduleCloudStateSave();
   } catch {
     // Ignore persistence failures for session-only state.
   }
@@ -2313,6 +2539,33 @@ async function saveStoredImport(entry) {
     tx.onerror = () => reject(tx.error || new Error("Could not save import."));
   });
   db.close();
+}
+
+async function replaceStoredImports(imports) {
+  try {
+    const db = await openImportsDb();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(IMPORT_STORE, "readwrite");
+      const store = tx.objectStore(IMPORT_STORE);
+      store.clear();
+      for (const entry of imports) {
+        store.put({
+          id: entry.id,
+          name: entry.name,
+          size: entry.size,
+          lastModified: entry.lastModified,
+          addedAt: entry.addedAt,
+          sourceType: entry.sourceType,
+          blob: entry.file,
+        });
+      }
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error || new Error("Could not replace imports."));
+    });
+    db.close();
+  } catch {
+    // Browser storage is optional once cloud state has been restored.
+  }
 }
 
 async function loadStoredImports() {
@@ -2385,6 +2638,7 @@ async function removeStoredImport(id) {
     // Keep in-memory removal even if persistent storage is unavailable.
   }
   renderFilesList();
+  scheduleCloudStateSave();
   if (!selectedFiles.length) {
     resetDerivedState();
     setStatus("Add a roster file to begin.");
@@ -2422,6 +2676,18 @@ async function bootstrapImports() {
   }
 }
 
+async function bootstrapApp() {
+  renderLoginState();
+  if (!currentUserEmail) {
+    openLoginModal();
+    setStatus("Log in with an email address to load your roster workspace.");
+    return;
+  }
+  await restoreCloudState();
+  renderLoginState();
+  await bootstrapImports();
+}
+
 function setStatus(message, isError = false) {
   status.textContent = message;
   status.dataset.error = isError ? "true" : "false";
@@ -2444,4 +2710,4 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
-bootstrapImports();
+bootstrapApp();
