@@ -18,6 +18,7 @@ const logoutButton = document.querySelector("#logoutButton");
 const loginModal = document.querySelector("#loginModal");
 const loginForm = document.querySelector("#loginForm");
 const loginEmail = document.querySelector("#loginEmail");
+const loginPassword = document.querySelector("#loginPassword");
 const previewButton = document.querySelector("#previewButton");
 const exportButton = document.querySelector("#exportButton");
 const mobilePreviewButton = document.querySelector("#mobilePreviewButton");
@@ -62,6 +63,7 @@ const OWNER_EMAIL = "rhaydon@gmail.com";
 const ACCOUNT_STATE_KEY = "roster-account-state";
 const SESSION_STATE_KEY = "roster-session-state-v1";
 const CURRENT_EMAIL_KEY = "roster-current-email";
+const CURRENT_PASSWORD_KEY = "roster-current-password";
 const SIX_MONTH_LIMIT_DAYS = 183;
 const SETTINGS_FIELDS = [
   "showSourcePrefix",
@@ -98,10 +100,12 @@ let conflictSelections = {};
 let accountState = loadAccountState();
 let restoredSessionState = null;
 let currentUserEmail = loadCurrentUserEmail();
+let currentUserPassword = sessionStorage.getItem(CURRENT_PASSWORD_KEY) || "";
 let currentUserRole = currentUserEmail === OWNER_EMAIL ? "creator" : "user";
 let cloudAvailable = false;
 let cloudSaveTimer = 0;
 let enforcingRosterLimit = false;
+let serverUsers = [];
 
 const settingsInputs = Object.fromEntries(
   SETTINGS_FIELDS.map((id) => [id, document.querySelector(`#${id}`)]),
@@ -166,7 +170,10 @@ filesList.addEventListener("click", async (event) => {
   if (!removeButton) return;
   await removeStoredImport(removeButton.dataset.removeImport);
 });
-accountsButton.addEventListener("click", () => {
+accountsButton.addEventListener("click", async () => {
+  if (isOwnerAccount()) {
+    await loadServerUsers();
+  }
   renderAccountsModal();
   accountsModal.classList.remove("hidden");
   accountsModal.setAttribute("aria-hidden", "false");
@@ -198,12 +205,15 @@ accountsBody.addEventListener("click", (event) => {
 loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const email = normalizeEmail(loginEmail.value);
-  if (!email) return;
-  await loginWithEmail(email);
+  const password = loginPassword.value;
+  if (!email || !password) return;
+  await loginWithEmail(email, password);
 });
 logoutButton.addEventListener("click", () => {
   localStorage.removeItem(CURRENT_EMAIL_KEY);
+  sessionStorage.removeItem(CURRENT_PASSWORD_KEY);
   currentUserEmail = "";
+  currentUserPassword = "";
   currentUserRole = "user";
   cloudAvailable = false;
   selectedFiles = [];
@@ -2204,7 +2214,11 @@ function renderAccountsModal() {
     ? "Manage your account and review other users."
     : "Manage your account details.";
 
-  const otherUsers = accountState.users.filter((user) => user.email !== me.email);
+  const serverOtherUsers = serverUsers
+    .filter((email) => email !== me.email)
+    .map((email) => ({ email, role: email === OWNER_EMAIL ? "owner" : "user" }));
+  const localOtherUsers = accountState.users.filter((user) => user.email !== me.email);
+  const otherUsers = serverOtherUsers.length ? serverOtherUsers : localOtherUsers;
   accountsBody.innerHTML = `
     <article class="review-card">
       <div class="review-top">
@@ -2232,18 +2246,16 @@ function renderAccountsModal() {
         <div class="review-top">
           <div>
             <strong>Other users</strong>
-            <span>${otherUsers.length ? `${otherUsers.length} stored users` : "No other users added yet."}</span>
+            <span>${otherUsers.length ? `${otherUsers.length} account${otherUsers.length === 1 ? "" : "s"}` : "No other users have logged in yet."}</span>
           </div>
-          <button type="button" class="button button-secondary" data-add-account>Add user</button>
         </div>
         <div class="issues-list">
           ${otherUsers.length ? otherUsers.map((user) => `
             <article class="issue-card">
               <div>
                 <strong>${escapeHtml(user.email)}</strong>
-                <p>Standard user · planned storage limit: 2 terms</p>
+                <p>${user.role === "owner" ? "Creator" : "Standard user"} · storage limit: latest 6 months active</p>
               </div>
-              <button type="button" class="button button-secondary" data-remove-account="${escapeHtml(user.email)}">Remove</button>
             </article>
           `).join("") : `<article class="issue-card"><p>No additional users yet.</p></article>`}
         </div>
@@ -2274,6 +2286,14 @@ function removeLocalAccount(email) {
   setStatus("User removed from local account list.");
 }
 
+async function clearLocalWorkspace() {
+  selectedFiles = [];
+  resetDerivedState();
+  localStorage.removeItem(SESSION_STATE_KEY);
+  localStorage.removeItem(CONFLICT_SELECTIONS_KEY);
+  await replaceStoredImports([]);
+}
+
 function loadCurrentUserEmail() {
   return normalizeEmail(localStorage.getItem(CURRENT_EMAIL_KEY));
 }
@@ -2284,6 +2304,7 @@ function normalizeEmail(value) {
 
 function openLoginModal() {
   loginEmail.value = currentUserEmail || "";
+  loginPassword.value = "";
   loginModal.classList.remove("hidden");
   loginModal.setAttribute("aria-hidden", "false");
   setTimeout(() => loginEmail.focus(), 0);
@@ -2303,13 +2324,20 @@ function renderLoginState() {
   syncAccountsButton();
 }
 
-async function loginWithEmail(email) {
+async function loginWithEmail(email, password) {
+  const previousEmail = currentUserEmail;
   currentUserEmail = normalizeEmail(email);
+  currentUserPassword = password;
   currentUserRole = currentUserEmail === OWNER_EMAIL ? "creator" : "user";
   localStorage.setItem(CURRENT_EMAIL_KEY, currentUserEmail);
+  sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
   setStatus("Loading account workspace...");
   closeLoginModal();
+  if (previousEmail !== currentUserEmail) {
+    await clearLocalWorkspace();
+  }
   await restoreCloudState();
+  if (!currentUserEmail) return;
   await bootstrapImports();
   renderLoginState();
 }
@@ -2317,8 +2345,17 @@ async function loginWithEmail(email) {
 async function restoreCloudState() {
   if (!currentUserEmail) return;
   try {
-    const response = await fetch(`/api/state?email=${encodeURIComponent(currentUserEmail)}`);
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "login",
+        email: currentUserEmail,
+        password: currentUserPassword,
+      }),
+    });
     const data = await response.json();
+    if (!response.ok) throw new Error(data.error || "Login failed.");
     cloudAvailable = data.cloudAvailable === true;
     currentUserRole = data.role || currentUserRole;
     if (!cloudAvailable) return;
@@ -2340,8 +2377,15 @@ async function restoreCloudState() {
         saveSessionStore(store);
       }
     }
-  } catch {
+  } catch (error) {
     cloudAvailable = false;
+    localStorage.removeItem(CURRENT_EMAIL_KEY);
+    sessionStorage.removeItem(CURRENT_PASSWORD_KEY);
+    currentUserEmail = "";
+    currentUserPassword = "";
+    renderLoginState();
+    openLoginModal();
+    setStatus(error.message || "Login failed.", true);
   }
 }
 
@@ -2357,15 +2401,39 @@ function scheduleCloudStateSave() {
 }
 
 async function saveCloudState() {
-  if (!currentUserEmail || !cloudAvailable) return;
+  if (!currentUserEmail || !currentUserPassword || !cloudAvailable) return;
   const state = await buildCloudState();
   const response = await fetch("/api/state", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ email: currentUserEmail, state }),
+    body: JSON.stringify({
+      action: "save",
+      email: currentUserEmail,
+      password: currentUserPassword,
+      state,
+    }),
   });
   if (!response.ok) throw new Error("Cloud save failed.");
   renderLoginState();
+}
+
+async function loadServerUsers() {
+  if (!currentUserEmail || !currentUserPassword || currentUserRole !== "creator" || !cloudAvailable) return;
+  try {
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "listUsers",
+        email: currentUserEmail,
+        password: currentUserPassword,
+      }),
+    });
+    const data = await response.json();
+    if (response.ok) serverUsers = data.users || [];
+  } catch {
+    // Keep the last available local list.
+  }
 }
 
 async function buildCloudState() {
@@ -2678,7 +2746,7 @@ async function bootstrapImports() {
 
 async function bootstrapApp() {
   renderLoginState();
-  if (!currentUserEmail) {
+  if (!currentUserEmail || !currentUserPassword) {
     openLoginModal();
     setStatus("Log in with an email address to load your roster workspace.");
     return;

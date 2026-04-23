@@ -149,12 +149,16 @@
       <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="loginModalTitle">
         <div class="section-head">
           <h3 id="loginModalTitle">Log in</h3>
-          <p>Enter your email address to load and save your roster workspace.</p>
+          <p>Enter your email address and password. New emails create an empty account.</p>
         </div>
         <form id="loginForm" class="custom-event-form">
           <label class="field">
             <span>Email address</span>
             <input id="loginEmail" type="email" autocomplete="email" required placeholder="you@example.com">
+          </label>
+          <label class="field">
+            <span>Password</span>
+            <input id="loginPassword" type="password" autocomplete="current-password" required placeholder="Choose or enter password">
           </label>
           <div class="modal-actions">
             <button type="submit" class="button button-primary">Continue</button>
