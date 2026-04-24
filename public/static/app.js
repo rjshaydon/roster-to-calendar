@@ -2189,6 +2189,23 @@ function saveAccountState() {
   renderAccountsModal();
 }
 
+function ensureLocalAccountLogin(email, password) {
+  const existing = accountState.users.find((user) => user.email === email);
+  if (!existing) {
+    accountState.users.push({
+      email,
+      password,
+      role: email === OWNER_EMAIL ? "owner" : "user",
+    });
+  } else if (existing.password && existing.password !== password) {
+    throw new Error("Incorrect password.");
+  } else if (!existing.password) {
+    existing.password = password;
+  }
+  accountState.currentEmail = email;
+  saveAccountState();
+}
+
 function currentAccount() {
   const email = currentUserEmail || accountState.currentEmail;
   return accountState.users.find((user) => user.email === email) || {
@@ -2326,6 +2343,7 @@ function renderLoginState() {
 
 async function loginWithEmail(email, password) {
   const previousEmail = currentUserEmail;
+  ensureLocalAccountLogin(email, password);
   currentUserEmail = normalizeEmail(email);
   currentUserPassword = password;
   currentUserRole = currentUserEmail === OWNER_EMAIL ? "creator" : "user";
@@ -2378,6 +2396,12 @@ async function restoreCloudState() {
       }
     }
   } catch (error) {
+    if (error.message === "Cloud storage is not configured.") {
+      cloudAvailable = false;
+      renderLoginState();
+      setStatus("Logged in with local-only storage. Cloud sync is not configured yet.", true);
+      return;
+    }
     cloudAvailable = false;
     localStorage.removeItem(CURRENT_EMAIL_KEY);
     sessionStorage.removeItem(CURRENT_PASSWORD_KEY);
