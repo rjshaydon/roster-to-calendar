@@ -2402,6 +2402,12 @@ async function restoreCloudState() {
       setStatus("Logged in with local-only storage. Cloud sync is not configured yet.", true);
       return;
     }
+    if (error.message !== "Incorrect password." && error.message !== "Account not found.") {
+      cloudAvailable = false;
+      renderLoginState();
+      setStatus("Logged in with local-only storage. Cloud sync is currently unavailable.", true);
+      return;
+    }
     cloudAvailable = false;
     localStorage.removeItem(CURRENT_EMAIL_KEY);
     sessionStorage.removeItem(CURRENT_PASSWORD_KEY);
