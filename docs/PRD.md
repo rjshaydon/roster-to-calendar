@@ -2,7 +2,58 @@
 
 ## Goal
 
-Build a local tool that ingests two roster formats for a selected doctor and exports a single `.ics` calendar file for Apple Calendar.
+Build a multi-account roster conversion tool that ingests supported hospital roster formats for a selected doctor, preserves each user's workspace between sessions, and exports a single `.ics` calendar file for Apple Calendar.
+
+## Accounts And Persistence
+
+### Account Model
+
+- Every user must create or log into an account using:
+  - email address
+  - password
+- `rhaydon@gmail.com` is the Creator / Admin account.
+- All other accounts are standard user accounts.
+
+### Account Behaviour
+
+- Logging into a new email address creates a new empty account.
+- Logging into an existing account requires the correct password.
+- Logging out must not destroy the account workspace.
+- Logging back in must restore the same workspace for that account.
+- Switching accounts must load only that account's workspace and must not show another user's imports, edits, or custom events.
+
+### Persisted Workspace
+
+Each account workspace persists:
+
+- imported roster references
+- doctor selection
+- settings
+- conflict selections
+- imported-event overrides
+- custom events
+- preview/export working state
+
+### Storage Model
+
+- Uploaded source files are deduplicated by file identity/content fingerprint and stored once.
+- Account workspaces store references to shared source files rather than duplicating the same file for each account.
+- If multiple users import the same MMC workbook, the physical source file should exist only once in storage, with multiple account references pointing to it.
+- DDH uploads are expected to be per-doctor / my-shifts-only exports to reduce storage.
+
+### Cloud Persistence
+
+- Cross-device persistence requires server-side account storage.
+- Account metadata and workspace state should be stored server-side.
+- Deduplicated shared source files should be stored in a shared object/blob store, with account workspace records referencing them.
+- If cloud bindings are unavailable, the app may fall back to browser-local persistence, but this is not sufficient for the full product goal.
+
+### Retention Limits
+
+- Creator/Admin account: unlimited retained roster history.
+- Standard user accounts: maximum active retained roster window of 6 months.
+- When a standard user upload pushes the account beyond 6 months from the latest date in the current upload, the app must ask whether to remove events older than that threshold.
+- The newer data is the default to keep.
 
 ## Supported Sources
 
@@ -11,13 +62,15 @@ Build a local tool that ingests two roster formats for a selected doctor and exp
 
 ## Core Workflow
 
-1. Upload the MMC workbook
-2. Upload the DDH workbook
-3. Detect names present in both sources
-4. Auto-select the doctor when there is only one common name
-5. Show a dropdown when multiple common names are found
-6. Preview the normalized event count and date span
-7. Export a single `.ics` file
+1. Create an account or log in
+2. Upload one or more supported roster files
+3. Detect source type automatically
+4. Detect names present in the relevant sources
+5. Auto-select the doctor when there is only one valid doctor
+6. Show a dropdown when multiple valid doctors are available
+7. Restore previous account workspace state where available
+8. Preview and edit the normalized roster
+9. Export a single `.ics` file
 
 ## Name Matching
 
@@ -147,15 +200,26 @@ Any shift ending at `00:00` ends at midnight on the following calendar date.
 
 ## UX Requirements
 
+- Require login before workspace use
 - If one common doctor exists, auto-select and hide the dropdown
 - If multiple common doctors exist, show a dropdown
 - If no common doctors exist, show a validation error
 - Show a preview count before export
 - Keep event descriptions minimal
+- Creator account can view a list of other user accounts
+- Standard accounts see only their own account details
+- Files list should show only the current account's imported roster references
+- Reloading the page after login must restore the correct account workspace
+
+## Storage Requirements
+
+- Deduplicate identical uploaded files across all accounts
+- Separate file/blob storage from account workspace state
+- Never duplicate the same roster file unnecessarily when a shared source-of-truth file already exists
+- Removing a file from one account should only delete the physical file if no other account references it
 
 ## Non-Goals For V1
 
 - Direct CalDAV sync
-- Multi-tenant cloud hosting
 - Arbitrary hospital parser configuration
 - Editing roster files

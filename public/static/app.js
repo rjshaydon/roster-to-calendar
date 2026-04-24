@@ -62,6 +62,7 @@ const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Satu
 const OWNER_EMAIL = "rhaydon@gmail.com";
 const ACCOUNT_STATE_KEY = "roster-account-state";
 const SESSION_STATE_KEY = "roster-session-state-v1";
+const ACCOUNT_WORKSPACES_KEY = "roster-account-workspaces-v1";
 const CURRENT_EMAIL_KEY = "roster-current-email";
 const CURRENT_PASSWORD_KEY = "roster-current-password";
 const SIX_MONTH_LIMIT_DAYS = 183;
@@ -559,6 +560,7 @@ async function mergeFiles(files) {
   }
   selectedFiles.sort((left, right) => (left.addedAt || "").localeCompare(right.addedAt || "") || left.name.localeCompare(right.name));
   renderFilesList();
+  saveCurrentSessionState();
   scheduleCloudStateSave();
   if (persistenceFailed) {
     setStatus("Import added, but browser storage was unavailable so it will not persist after reload.", true);
@@ -2306,9 +2308,7 @@ function removeLocalAccount(email) {
 async function clearLocalWorkspace() {
   selectedFiles = [];
   resetDerivedState();
-  localStorage.removeItem(SESSION_STATE_KEY);
-  localStorage.removeItem(CONFLICT_SELECTIONS_KEY);
-  await replaceStoredImports([]);
+  renderFilesList();
 }
 
 function loadCurrentUserEmail() {
@@ -2388,12 +2388,20 @@ async function restoreCloudState() {
       await replaceStoredImports(imports);
     }
     if (data.state.session) {
-      const key = currentImportStateKey();
-      if (key) {
-        const store = loadSessionStore();
-        store[key] = data.state.session;
-        saveSessionStore(store);
-      }
+      restoredSessionState = data.state.session;
+      const store = loadWorkspaceStore();
+      store[currentUserEmail] = {
+        fileRefs: imports.map((entry) => ({
+          id: entry.id,
+          name: entry.name,
+          size: entry.size,
+          lastModified: entry.lastModified,
+          addedAt: entry.addedAt,
+          sourceType: entry.sourceType,
+        })),
+        session: data.state.session,
+      };
+      saveWorkspaceStore(store);
     }
   } catch (error) {
     if (error.message === "Cloud storage is not configured.") {
@@ -2548,19 +2556,29 @@ function saveSessionStore(store) {
   localStorage.setItem(SESSION_STATE_KEY, JSON.stringify(store));
 }
 
-function loadCurrentSessionState() {
-  const key = currentImportStateKey();
-  if (!key) return null;
-  const store = loadSessionStore();
-  return store[key] || null;
+function loadWorkspaceStore() {
+  try {
+    return JSON.parse(localStorage.getItem(ACCOUNT_WORKSPACES_KEY) || "{}");
+  } catch {
+    return {};
+  }
 }
 
-function saveCurrentSessionState() {
-  const key = currentImportStateKey();
-  if (!key) return;
-  try {
-    const store = loadSessionStore();
-    store[key] = {
+function saveWorkspaceStore(store) {
+  localStorage.setItem(ACCOUNT_WORKSPACES_KEY, JSON.stringify(store));
+}
+
+function currentWorkspaceSnapshot() {
+  return {
+    fileRefs: selectedFiles.map((entry) => ({
+      id: entry.id,
+      name: entry.name,
+      size: entry.size,
+      lastModified: entry.lastModified,
+      addedAt: entry.addedAt,
+      sourceType: entry.sourceType,
+    })),
+    session: {
       doctorKey: doctorOptions.length > 1 ? doctorSelect.value : doctorOptions[0]?.key || "",
       settings: { ...settings },
       overrides: cleanOverrides(),
@@ -2568,8 +2586,31 @@ function saveCurrentSessionState() {
       conflictSelections: { ...conflictSelections },
       hadPreview: Boolean(latestPreview),
       savedAt: new Date().toISOString(),
-    };
-    saveSessionStore(store);
+    },
+  };
+}
+
+function loadCurrentWorkspace() {
+  if (!currentUserEmail) return null;
+  const store = loadWorkspaceStore();
+  return store[currentUserEmail] || null;
+}
+
+function saveCurrentWorkspace() {
+  if (!currentUserEmail) return;
+  const store = loadWorkspaceStore();
+  store[currentUserEmail] = currentWorkspaceSnapshot();
+  saveWorkspaceStore(store);
+}
+
+function loadCurrentSessionState() {
+  const workspace = loadCurrentWorkspace();
+  return workspace?.session || null;
+}
+
+function saveCurrentSessionState() {
+  try {
+    saveCurrentWorkspace();
     scheduleCloudStateSave();
   } catch {
     // Ignore persistence failures for session-only state.
@@ -2645,7 +2686,6 @@ async function replaceStoredImports(imports) {
     await new Promise((resolve, reject) => {
       const tx = db.transaction(IMPORT_STORE, "readwrite");
       const store = tx.objectStore(IMPORT_STORE);
-      store.clear();
       for (const entry of imports) {
         store.put({
           id: entry.id,
@@ -2666,7 +2706,7 @@ async function replaceStoredImports(imports) {
   }
 }
 
-async function loadStoredImports() {
+async function listStoredImportRecords() {
   if (!("indexedDB" in window)) return [];
   const db = await openImportsDb();
   const records = await new Promise((resolve, reject) => {
@@ -2675,26 +2715,12 @@ async function loadStoredImports() {
     request.onsuccess = () => resolve(request.result || []);
     request.onerror = () => reject(request.error || new Error("Could not load imports."));
   });
-  const deduped = new Map();
-  for (const record of records) {
-    const key = `${record.name}:${record.size}:${record.lastModified}`;
-    const existing = deduped.get(key);
-    if (!existing || (record.addedAt || "") > (existing.addedAt || "")) {
-      deduped.set(key, { ...record, id: key });
-    }
-  }
-  await new Promise((resolve, reject) => {
-    const tx = db.transaction(IMPORT_STORE, "readwrite");
-    const store = tx.objectStore(IMPORT_STORE);
-    store.clear();
-    for (const record of deduped.values()) {
-      store.put(record);
-    }
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error || new Error("Could not normalize imports."));
-  });
   db.close();
-  return [...deduped.values()].map((record) => ({
+  return records;
+}
+
+function recordsToFiles(records) {
+  return records.map((record) => ({
     id: record.id,
     name: record.name,
     size: record.size,
@@ -2705,33 +2731,50 @@ async function loadStoredImports() {
   })).sort((left, right) => (left.addedAt || "").localeCompare(right.addedAt || "") || left.name.localeCompare(right.name));
 }
 
+async function loadStoredImportsByRefs(refs = []) {
+  if (!refs.length) return [];
+  const records = await listStoredImportRecords();
+  const recordMap = new Map(records.map((record) => [record.id, record]));
+  return recordsToFiles(
+    refs
+      .map((ref) => {
+        const record = recordMap.get(ref.id);
+        return record ? { ...record, addedAt: ref.addedAt || record.addedAt, sourceType: ref.sourceType || record.sourceType } : null;
+      })
+      .filter(Boolean),
+  );
+}
+
+function allWorkspaceRefs() {
+  const store = loadWorkspaceStore();
+  return Object.values(store)
+    .flatMap((workspace) => Array.isArray(workspace?.fileRefs) ? workspace.fileRefs : [])
+    .map((ref) => ref.id);
+}
+
+async function garbageCollectStoredImports() {
+  const referenced = new Set(allWorkspaceRefs());
+  const records = await listStoredImportRecords();
+  const unreferenced = records.filter((record) => !referenced.has(record.id)).map((record) => record.id);
+  if (!unreferenced.length) return;
+  const db = await openImportsDb();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction(IMPORT_STORE, "readwrite");
+    const store = tx.objectStore(IMPORT_STORE);
+    for (const id of unreferenced) {
+      store.delete(id);
+    }
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error || new Error("Could not clean stored imports."));
+  });
+  db.close();
+}
+
 async function removeStoredImport(id) {
   selectedFiles = selectedFiles.filter((entry) => entry.id !== id);
+  saveCurrentSessionState();
   try {
-    const db = await openImportsDb();
-    const records = await new Promise((resolve, reject) => {
-      const tx = db.transaction(IMPORT_STORE, "readonly");
-      const request = tx.objectStore(IMPORT_STORE).getAll();
-      request.onsuccess = () => resolve(request.result || []);
-      request.onerror = () => reject(request.error || new Error("Could not load imports for removal."));
-    });
-    const targetKeys = new Set([id]);
-    for (const record of records) {
-      const key = `${record.name}:${record.size}:${record.lastModified}`;
-      if (key === id) {
-        targetKeys.add(record.id);
-      }
-    }
-    await new Promise((resolve, reject) => {
-      const tx = db.transaction(IMPORT_STORE, "readwrite");
-      const store = tx.objectStore(IMPORT_STORE);
-      for (const key of targetKeys) {
-        store.delete(key);
-      }
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error || new Error("Could not remove import."));
-    });
-    db.close();
+    await garbageCollectStoredImports();
   } catch {
     // Keep in-memory removal even if persistent storage is unavailable.
   }
@@ -2760,7 +2803,11 @@ function saveConflictSelections() {
 async function bootstrapImports() {
   try {
     syncAccountsButton();
-    selectedFiles = await loadStoredImports();
+    if (!selectedFiles.length) {
+      const workspace = loadCurrentWorkspace();
+      selectedFiles = await loadStoredImportsByRefs(workspace?.fileRefs || []);
+      restoredSessionState = workspace?.session || restoredSessionState;
+    }
     renderFilesList();
     if (selectedFiles.length) {
       await analyzeFiles();
