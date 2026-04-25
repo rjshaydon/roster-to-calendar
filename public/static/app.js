@@ -1758,11 +1758,7 @@ async function postForm(url, doctor = null) {
     method: "POST",
     body: createFormData(doctor),
   });
-  const text = await response.text();
-  if (!response.ok) {
-    throw new Error(parseError(text));
-  }
-  return JSON.parse(text);
+  return await readJsonResponse(response, "Roster analysis failed.");
 }
 
 async function postPreviewForm(url, doctor = null) {
@@ -1770,11 +1766,7 @@ async function postPreviewForm(url, doctor = null) {
     method: "POST",
     body: createPreviewFormData(doctor),
   });
-  const text = await response.text();
-  if (!response.ok) {
-    throw new Error(parseError(text));
-  }
-  return JSON.parse(text);
+  return await readJsonResponse(response, "Calendar load failed.");
 }
 
 function selectedDoctor() {
@@ -2980,8 +2972,7 @@ async function restoreCloudState(options = {}) {
         realName: options.realName || "",
       }),
     });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "Login failed.");
+    const data = await readJsonResponse(response, "Login failed.");
     cloudAvailable = data.cloudAvailable === true;
     currentUserRole = data.role || currentUserRole;
     currentRosterClaims = sanitizeRosterClaims(data.claims || []);
@@ -3087,8 +3078,7 @@ async function saveCloudState() {
       state,
     }),
   });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || "Cloud save failed.");
+  const data = await readJsonResponse(response, "Cloud save failed.");
   if (data.claims) currentRosterClaims = sanitizeRosterClaims(data.claims);
   renderLoginState();
 }
@@ -3107,8 +3097,8 @@ async function loadServerUsers() {
         password: requestPassword,
       }),
     });
-    const data = await response.json();
-    if (response.ok) serverUsers = data.users || [];
+    const data = await readJsonResponse(response, "Could not load users.");
+    serverUsers = data.users || [];
   } catch {
     // Keep the last available local list.
   }
@@ -3478,11 +3468,29 @@ function setStatus(message, isError = false) {
   status.dataset.error = isError ? "true" : "false";
 }
 
-function parseError(text) {
+async function readJsonResponse(response, fallbackMessage = "Request failed.") {
+  const text = await response.text().catch(() => "");
+  if (!response.ok) {
+    throw new Error(parseError(text, `${fallbackMessage} Server returned ${response.status}.`));
+  }
   try {
-    return JSON.parse(text).error || "Request failed.";
+    return JSON.parse(text);
   } catch {
-    return "Request failed.";
+    throw new Error(`${fallbackMessage} The server returned an invalid response.`);
+  }
+}
+
+function parseError(text, fallbackMessage = "Request failed.") {
+  try {
+    return JSON.parse(text).error || fallbackMessage;
+  } catch {
+    const cleaned = String(text || "")
+      .replace(/<script[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style[\s\S]*?<\/style>/gi, " ")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return cleaned ? `${fallbackMessage} ${cleaned.slice(0, 220)}` : fallbackMessage;
   }
 }
 

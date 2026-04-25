@@ -268,13 +268,16 @@ async function prepareAccountResponse(store, record) {
     }
   } else {
     const imported = await upsertStateImports(store, state.imports, record.email);
-    if (imported.changed) {
-      state = { ...state, imports: imported.refs };
+    const stateWithRefs = { ...state, imports: imported.refs };
+    if (imported.changed || importsChanged(state.imports, imported.refs)) {
+      state = stateWithRefs;
       await store.put(storageKey(record.email), JSON.stringify({
         ...record,
         state,
         updatedAt: new Date().toISOString(),
       }));
+    } else {
+      state = stateWithRefs;
     }
     state = {
       ...state,
@@ -292,15 +295,29 @@ async function prepareAccountResponse(store, record) {
 }
 
 async function hydrateRepositoryFromExistingAccounts(store) {
-  const result = await store.list({ prefix: "account:" });
   let index = await loadRepositoryIndex(store);
+  const result = await store.list({ prefix: "account:" });
   let changed = false;
   for (const item of result.keys || []) {
     const record = await store.get(item.name, "json").catch(() => null);
-    if (!record?.state?.imports?.length) continue;
+    if (!record?.state?.imports?.some((importItem) => importItem?.dataUrl)) continue;
     const upserted = await upsertImportsIntoRepository(store, index, record.state.imports, record.email || item.name.replace(/^account:/, ""));
     index = upserted.index;
     changed = changed || upserted.changed;
+    const refs = record.state.imports.map((importItem) => {
+      const repoId = importItem.repoId || importItem.repositoryId || upserted.idByOriginalId.get(importItem.id) || upserted.idByDataUrl.get(importItem.dataUrl);
+      return repoId ? repositoryImportRef(index.files.find((file) => file.id === repoId) || { ...importItem, id: repoId }) : repositoryImportRef(importItem);
+    });
+    if (importsChanged(record.state.imports, refs)) {
+      await store.put(item.name, JSON.stringify({
+        ...record,
+        state: {
+          ...sanitizeState(record.state),
+          imports: refs,
+        },
+        updatedAt: new Date().toISOString(),
+      }));
+    }
   }
   if (changed) await saveRepositoryIndex(store, index);
 }
@@ -430,6 +447,10 @@ function repositoryImportRef(item) {
     addedAt: item.addedAt || "",
     sourceType: item.sourceType || "pending",
   };
+}
+
+function importsChanged(current = [], next = []) {
+  return JSON.stringify((current || []).map(repositoryImportRef)) !== JSON.stringify((next || []).map(repositoryImportRef));
 }
 
 async function resolveStateImports(store, imports = []) {
