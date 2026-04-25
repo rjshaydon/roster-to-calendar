@@ -18,11 +18,16 @@ const accountsModalSubtitle = document.querySelector("#accountsModalSubtitle");
 const loginBar = document.querySelector("#loginBar");
 const loginIdentity = document.querySelector("#loginIdentity");
 const logoutButton = document.querySelector("#logoutButton");
+const backToCreatorButton = document.querySelector("#backToCreatorButton");
 const skinControl = document.querySelector("#skinControl");
 const skinSelect = document.querySelector("#skinSelect");
 const loginForm = document.querySelector("#loginForm");
 const loginEmail = document.querySelector("#loginEmail");
 const loginPassword = document.querySelector("#loginPassword");
+const createAccountForm = document.querySelector("#createAccountForm");
+const createRealName = document.querySelector("#createRealName");
+const createEmail = document.querySelector("#createEmail");
+const createPassword = document.querySelector("#createPassword");
 const previewButton = document.querySelector("#previewButton");
 const exportButton = document.querySelector("#exportButton");
 const mobilePreviewButton = document.querySelector("#mobilePreviewButton");
@@ -71,10 +76,10 @@ const SHIFT_COLOUR_DEFAULTS = {
   day: "#0b8f6a",
   evening: "#c96d14",
   night: "#6152d9",
-  urgent: "#d13b3b",
+  cs: "#0f8297",
   leave: "#2d79d6",
   custom: "#c48a12",
-  neutral: "#5d6c73",
+  phnw: "#5d6c73",
 };
 const ACCOUNT_STATE_KEY = "roster-account-state";
 const SESSION_STATE_KEY = "roster-session-state-v1";
@@ -92,10 +97,10 @@ const SETTINGS_FIELDS = [
   "shiftColorDay",
   "shiftColorEvening",
   "shiftColorNight",
-  "shiftColorUrgent",
+  "shiftColorCs",
   "shiftColorLeave",
   "shiftColorCustom",
-  "shiftColorNeutral",
+  "shiftColorPhnw",
   "includeLocations",
   "includeAnnualLeave",
   "includeConferenceLeave",
@@ -129,6 +134,9 @@ let restoredSessionState = null;
 let currentUserEmail = loadCurrentUserEmail();
 let currentUserPassword = sessionStorage.getItem(CURRENT_PASSWORD_KEY) || "";
 let currentUserRole = currentUserEmail === OWNER_EMAIL ? "creator" : "user";
+let authUserEmail = currentUserEmail;
+let authUserPassword = currentUserPassword;
+let adminViewingEmail = "";
 let currentSkin = loadSkin();
 let cloudAvailable = false;
 let cloudSaveTimer = 0;
@@ -224,6 +232,11 @@ accountsBody.addEventListener("submit", (event) => {
   updateAccountDetails(email, { password, realName });
 });
 accountsBody.addEventListener("click", (event) => {
+  const enterButton = event.target.closest("[data-enter-account]");
+  if (enterButton) {
+    enterUserAccount(enterButton.dataset.enterAccount);
+    return;
+  }
   const addButton = event.target.closest("[data-add-account]");
   if (addButton) {
     addLocalAccount();
@@ -239,17 +252,27 @@ loginForm.addEventListener("submit", async (event) => {
   const email = normalizeEmail(loginEmail.value);
   const password = loginPassword.value;
   if (!email || !password) return;
-  if (!isLaunchAccountEmail(email)) {
-    setEntranceStatus("Launch mode currently supports only the creator account.", true);
+  await loginWithEmail(email, password, { mode: "login" });
+});
+createAccountForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const realName = createRealName.value.trim();
+  const email = normalizeEmail(createEmail.value);
+  const password = createPassword.value;
+  if (!realName || !email || !password) {
+    setEntranceStatus("Real name, email address, and password are required.", true);
     return;
   }
-  await loginWithEmail(email, password, { mode: "login" });
+  await loginWithEmail(email, password, { mode: "create", realName });
 });
 logoutButton.addEventListener("click", () => {
   localStorage.removeItem(CURRENT_EMAIL_KEY);
   sessionStorage.removeItem(CURRENT_PASSWORD_KEY);
   currentUserEmail = "";
   currentUserPassword = "";
+  authUserEmail = "";
+  authUserPassword = "";
+  adminViewingEmail = "";
   currentUserRole = "user";
   cloudAvailable = false;
   selectedFiles = [];
@@ -257,6 +280,9 @@ logoutButton.addEventListener("click", () => {
   renderLoginState();
   openLoginModal();
   setStatus("Log in to load a roster workspace.");
+});
+backToCreatorButton.addEventListener("click", () => {
+  returnToCreatorAccount();
 });
 skinSelect.addEventListener("change", () => {
   if (!isOwnerAccount()) return;
@@ -593,10 +619,10 @@ function defaultSettings() {
     shiftColorDay: SHIFT_COLOUR_DEFAULTS.day,
     shiftColorEvening: SHIFT_COLOUR_DEFAULTS.evening,
     shiftColorNight: SHIFT_COLOUR_DEFAULTS.night,
-    shiftColorUrgent: SHIFT_COLOUR_DEFAULTS.urgent,
+    shiftColorCs: SHIFT_COLOUR_DEFAULTS.cs,
     shiftColorLeave: SHIFT_COLOUR_DEFAULTS.leave,
     shiftColorCustom: SHIFT_COLOUR_DEFAULTS.custom,
-    shiftColorNeutral: SHIFT_COLOUR_DEFAULTS.neutral,
+    shiftColorPhnw: SHIFT_COLOUR_DEFAULTS.phnw,
     includeLocations: true,
     includeAnnualLeave: true,
     includeConferenceLeave: true,
@@ -1091,10 +1117,10 @@ function renderPreviewChip(event, dayKey) {
 function eventTone(event) {
   const text = `${event.title || ""} ${event.rawValue || ""}`.toLowerCase();
   if (text.includes("annual") || text.includes("conference") || text.includes("leave")) return "leave";
-  if (text.includes("phnw")) return "neutral";
+  if (text.includes("phnw")) return "phnw";
+  if (text.includes("clinical support") || /\bcs\b/.test(text) || /\bcso\b/.test(text)) return "cs";
   if (text.includes("night")) return "night";
   if (text.includes("pm") || text.includes("orange")) return "evening";
-  if (text.includes("resus") || text.includes("on call")) return "urgent";
   if (text.includes("custom") || event.isCustom) return "custom";
   return "day";
 }
@@ -2322,6 +2348,9 @@ function ensureLocalAccountLogin(email, password, options = {}) {
   const mode = options.mode || "login";
   const existing = accountState.users.find((user) => user.email === email);
   if (!existing) {
+    if (mode === "create" && !realName) {
+      throw new Error("Real name is required to create an account.");
+    }
     accountState.users.push({
       email,
       realName,
@@ -2356,8 +2385,8 @@ function isOwnerAccount() {
   return currentUserRole === "creator" || currentAccount()?.role === "owner";
 }
 
-function isLaunchAccountEmail(email) {
-  return normalizeEmail(email) === OWNER_EMAIL;
+function isCreatorAuthenticated() {
+  return normalizeEmail(authUserEmail || currentUserEmail) === OWNER_EMAIL && Boolean(authUserPassword || currentUserPassword);
 }
 
 function syncAccountsButton() {
@@ -2418,6 +2447,7 @@ function renderAccountsModal() {
                 <strong>${escapeHtml(user.realName || "Name not set")}</strong>
                 <p>${escapeHtml(user.email)} · ${user.role === "owner" ? "Creator" : "Standard user"} · storage limit: latest 6 months active</p>
               </div>
+              <button type="button" class="button button-secondary" data-enter-account="${escapeHtml(user.email)}">Enter account</button>
             </article>
           `).join("") : `<article class="issue-card"><p>No additional users yet.</p></article>`}
         </div>
@@ -2454,6 +2484,52 @@ function removeLocalAccount(email) {
   setStatus("User removed from local account list.");
 }
 
+async function enterUserAccount(email) {
+  const targetEmail = normalizeEmail(email);
+  if (!targetEmail || !isOwnerAccount()) return;
+  const creatorEmail = authUserEmail || currentUserEmail;
+  const creatorPassword = authUserPassword || currentUserPassword;
+  if (normalizeEmail(creatorEmail) !== OWNER_EMAIL || !creatorPassword) {
+    setStatus("Creator authentication is required to enter another account.", true);
+    return;
+  }
+
+  try {
+    await saveCloudState();
+  } catch {
+    // Cloud save failures are surfaced elsewhere; local state is still saved.
+  }
+
+  closeAccountsModal();
+  authUserEmail = creatorEmail;
+  authUserPassword = creatorPassword;
+  adminViewingEmail = targetEmail;
+  currentUserEmail = targetEmail;
+  currentUserPassword = creatorPassword;
+  currentUserRole = targetEmail === OWNER_EMAIL ? "creator" : "user";
+  setStatus(`Entering ${targetEmail}...`);
+  await clearLocalWorkspace();
+  await restoreCloudState({ adminTargetEmail: targetEmail });
+  await bootstrapImports();
+  renderLoginState();
+}
+
+async function returnToCreatorAccount() {
+  const creatorEmail = authUserEmail || OWNER_EMAIL;
+  const creatorPassword = authUserPassword || currentUserPassword;
+  adminViewingEmail = "";
+  currentUserEmail = creatorEmail;
+  currentUserPassword = creatorPassword;
+  currentUserRole = "creator";
+  localStorage.setItem(CURRENT_EMAIL_KEY, currentUserEmail);
+  sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
+  setStatus("Returning to creator account...");
+  await clearLocalWorkspace();
+  await restoreCloudState();
+  await bootstrapImports();
+  renderLoginState();
+}
+
 async function clearLocalWorkspace() {
   selectedFiles = [];
   resetDerivedState();
@@ -2465,10 +2541,10 @@ function applyShiftColours(sourceSettings = settings) {
     day: "shiftColorDay",
     evening: "shiftColorEvening",
     night: "shiftColorNight",
-    urgent: "shiftColorUrgent",
+    cs: "shiftColorCs",
     leave: "shiftColorLeave",
     custom: "shiftColorCustom",
-    neutral: "shiftColorNeutral",
+    phnw: "shiftColorPhnw",
   };
   for (const [tone, field] of Object.entries(mappings)) {
     const colour = isHexColour(sourceSettings[field]) ? sourceSettings[field] : defaultShiftColourForField(field);
@@ -2510,7 +2586,7 @@ function applySkin(skin) {
 
 function syncSkinControl() {
   const authenticated = Boolean(currentUserEmail && currentUserPassword);
-  const canChooseSkins = isOwnerAccount() && authenticated;
+  const canChooseSkins = isOwnerAccount() && authenticated && !adminViewingEmail;
   if (authenticated && !canChooseSkins && currentSkin !== "original") {
     applySkin("original");
   }
@@ -2570,9 +2646,11 @@ function renderLoginState() {
   if (!loggedIn) mobileActionBar.classList.add("hidden");
   const me = currentAccount();
   const displayName = me.realName ? `${me.realName} · ` : "";
+  const viewingText = adminViewingEmail ? `Viewing as ${displayName}${currentUserEmail}` : `${displayName}${currentUserEmail}`;
   loginIdentity.textContent = loggedIn
-    ? `${displayName}${currentUserEmail} · ${currentUserRole === "creator" ? "Creator" : "Standard account"}${cloudAvailable ? " · Cloud sync on" : " · Local fallback"}`
+    ? `${viewingText} · ${currentUserRole === "creator" ? "Creator" : "Standard account"}${cloudAvailable ? " · Cloud sync on" : " · Local fallback"}`
     : "";
+  backToCreatorButton.classList.toggle("hidden", !adminViewingEmail || !isCreatorAuthenticated());
   syncAccountsButton();
   syncSkinControl();
 }
@@ -2583,6 +2661,9 @@ async function loginWithEmail(email, password, options = {}) {
     ensureLocalAccountLogin(email, password, options);
     currentUserEmail = normalizeEmail(email);
     currentUserPassword = password;
+    authUserEmail = currentUserEmail;
+    authUserPassword = currentUserPassword;
+    adminViewingEmail = "";
     currentUserRole = currentUserEmail === OWNER_EMAIL ? "creator" : "user";
     localStorage.setItem(CURRENT_EMAIL_KEY, currentUserEmail);
     sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
@@ -2606,13 +2687,17 @@ async function loginWithEmail(email, password, options = {}) {
 async function restoreCloudState(options = {}) {
   if (!currentUserEmail) return;
   try {
+    const adminTargetEmail = normalizeEmail(options.adminTargetEmail);
+    const requestEmail = adminTargetEmail ? authUserEmail : currentUserEmail;
+    const requestPassword = adminTargetEmail ? authUserPassword : currentUserPassword;
     const response = await fetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        action: "login",
-        email: currentUserEmail,
-        password: currentUserPassword,
+        action: adminTargetEmail ? "adminLoadUser" : "login",
+        email: requestEmail,
+        password: requestPassword,
+        targetEmail: adminTargetEmail,
         mode: options.mode || "login",
         realName: options.realName || "",
       }),
@@ -2623,10 +2708,17 @@ async function restoreCloudState(options = {}) {
     currentUserRole = data.role || currentUserRole;
     if (data.realName) {
       const localAccount = accountState.users.find((user) => user.email === currentUserEmail);
-      if (localAccount && !localAccount.realName) {
+      if (localAccount) {
         localAccount.realName = data.realName;
-        saveAccountState();
+      } else {
+        accountState.users.push({
+          email: currentUserEmail,
+          realName: data.realName,
+          password: "",
+          role: currentUserEmail === OWNER_EMAIL ? "owner" : "user",
+        });
       }
+        saveAccountState();
     }
     if (!cloudAvailable) return;
     if (!data.state) {
@@ -2700,15 +2792,18 @@ function scheduleCloudStateSave() {
 }
 
 async function saveCloudState() {
-  if (!currentUserEmail || !currentUserPassword || !cloudAvailable) return;
+  const requestEmail = adminViewingEmail ? authUserEmail : currentUserEmail;
+  const requestPassword = adminViewingEmail ? authUserPassword : currentUserPassword;
+  if (!currentUserEmail || !requestEmail || !requestPassword || !cloudAvailable) return;
   const state = await buildCloudState();
   const response = await fetch("/api/state", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       action: "save",
-      email: currentUserEmail,
-      password: currentUserPassword,
+      email: requestEmail,
+      password: requestPassword,
+      targetEmail: adminViewingEmail ? currentUserEmail : "",
       state,
     }),
   });
@@ -2717,15 +2812,17 @@ async function saveCloudState() {
 }
 
 async function loadServerUsers() {
-  if (!currentUserEmail || !currentUserPassword || currentUserRole !== "creator" || !cloudAvailable) return;
+  const requestEmail = adminViewingEmail ? authUserEmail : currentUserEmail;
+  const requestPassword = adminViewingEmail ? authUserPassword : currentUserPassword;
+  if (!requestEmail || !requestPassword || normalizeEmail(requestEmail) !== OWNER_EMAIL || !cloudAvailable) return;
   try {
     const response = await fetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         action: "listUsers",
-        email: currentUserEmail,
-        password: currentUserPassword,
+        email: requestEmail,
+        password: requestPassword,
       }),
     });
     const data = await response.json();

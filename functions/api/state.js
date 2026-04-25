@@ -12,6 +12,7 @@ export async function onRequestPost(context) {
     const action = String(body?.action || "login");
     const mode = String(body?.mode || "login");
     const realName = String(body?.realName || "").trim();
+    const targetEmail = normalizeEmail(body?.targetEmail);
     if (!email) {
       return Response.json({ error: "Email address is required." }, { status: 400 });
     }
@@ -21,10 +22,6 @@ export async function onRequestPost(context) {
     if (!password) {
       return Response.json({ error: "Password is required." }, { status: 400 });
     }
-    if (email !== CREATOR_EMAIL) {
-      return Response.json({ error: "Launch mode currently supports only the creator account." }, { status: 403 });
-    }
-
     if (action === "login") {
       const account = await loadOrCreateAccount(context.env.ROSTER_STORE, email, password, { mode, realName });
       return Response.json({
@@ -38,6 +35,20 @@ export async function onRequestPost(context) {
     }
 
     const account = await verifyAccount(context.env.ROSTER_STORE, email, password);
+    if (action === "adminLoadUser") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      const target = await loadAccountRecord(context.env.ROSTER_STORE, targetEmail);
+      return Response.json({
+        ok: true,
+        cloudAvailable: true,
+        role: target.role || roleForEmail(targetEmail),
+        realName: target.realName || "",
+        state: sanitizeState(target.state),
+      });
+    }
+
     if (action === "listUsers") {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
@@ -46,16 +57,19 @@ export async function onRequestPost(context) {
     }
 
     if (action === "save") {
+      const saveEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
+      const targetRecord = saveEmail === email ? account.record : await loadAccountRecord(context.env.ROSTER_STORE, saveEmail);
+      const targetRole = targetRecord.role || roleForEmail(saveEmail);
       const state = sanitizeState(body?.state);
-      await context.env.ROSTER_STORE.put(storageKey(email), JSON.stringify({
-        ...account.record,
-        email,
-        role: account.role,
-        realName: account.record.realName || "",
+      await context.env.ROSTER_STORE.put(storageKey(saveEmail), JSON.stringify({
+        ...targetRecord,
+        email: saveEmail,
+        role: targetRole,
+        realName: targetRecord.realName || "",
         state,
         updatedAt: new Date().toISOString(),
       }));
-      return Response.json({ ok: true, role: account.role });
+      return Response.json({ ok: true, role: targetRole });
     }
 
     return Response.json({ error: "Unsupported account action." }, { status: 400 });
@@ -64,6 +78,17 @@ export async function onRequestPost(context) {
     const status = message === "Incorrect password." || message.startsWith("Account not found") ? 401 : 400;
     return Response.json({ error: message }, { status });
   }
+}
+
+async function loadAccountRecord(store, email) {
+  if (!email) {
+    throw new Error("Target account is required.");
+  }
+  const record = await store.get(storageKey(email), "json");
+  if (!record) {
+    throw new Error("Account not found.");
+  }
+  return record;
 }
 
 function normalizeEmail(value) {

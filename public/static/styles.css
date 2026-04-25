@@ -21,18 +21,18 @@
   --chip-night-text: #6152d9;
   --chip-night-bg-strong: rgba(97, 82, 217, 0.24);
   --chip-night-bg-soft: rgba(97, 82, 217, 0.12);
-  --chip-urgent-text: #d13b3b;
-  --chip-urgent-bg-strong: rgba(209, 59, 59, 0.24);
-  --chip-urgent-bg-soft: rgba(209, 59, 59, 0.12);
+  --chip-cs-text: #0f8297;
+  --chip-cs-bg-strong: rgba(15, 130, 151, 0.24);
+  --chip-cs-bg-soft: rgba(15, 130, 151, 0.12);
   --chip-leave-text: #2d79d6;
   --chip-leave-bg-strong: rgba(45, 121, 214, 0.24);
   --chip-leave-bg-soft: rgba(45, 121, 214, 0.12);
   --chip-custom-text: #c48a12;
   --chip-custom-bg-strong: rgba(196, 138, 18, 0.24);
   --chip-custom-bg-soft: rgba(196, 138, 18, 0.12);
-  --chip-neutral-text: #5d6c73;
-  --chip-neutral-bg-strong: rgba(93, 108, 115, 0.24);
-  --chip-neutral-bg-soft: rgba(93, 108, 115, 0.12);
+  --chip-phnw-text: #5d6c73;
+  --chip-phnw-bg-strong: rgba(93, 108, 115, 0.24);
+  --chip-phnw-bg-soft: rgba(93, 108, 115, 0.12);
 }
 
 * {
@@ -912,9 +912,9 @@ input[type="color"] {
   background: linear-gradient(180deg, var(--chip-night-bg-strong), var(--chip-night-bg-soft));
 }
 
-.preview-chip-urgent {
-  color: var(--chip-urgent-text);
-  background: linear-gradient(180deg, var(--chip-urgent-bg-strong), var(--chip-urgent-bg-soft));
+.preview-chip-cs {
+  color: var(--chip-cs-text);
+  background: linear-gradient(180deg, var(--chip-cs-bg-strong), var(--chip-cs-bg-soft));
 }
 
 .preview-chip-leave {
@@ -927,9 +927,9 @@ input[type="color"] {
   background: linear-gradient(180deg, var(--chip-custom-bg-strong), var(--chip-custom-bg-soft));
 }
 
-.preview-chip-neutral {
-  color: var(--chip-neutral-text);
-  background: linear-gradient(180deg, var(--chip-neutral-bg-strong), var(--chip-neutral-bg-soft));
+.preview-chip-phnw {
+  color: var(--chip-phnw-text);
+  background: linear-gradient(180deg, var(--chip-phnw-bg-strong), var(--chip-phnw-bg-soft));
 }
 
 .custom-event-form {

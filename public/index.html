@@ -41,6 +41,26 @@
             </label>
             <button type="submit" class="button button-primary">Log in</button>
           </form>
+
+          <form id="createAccountForm" class="entrance-form">
+            <div class="section-head">
+              <h2>Create account</h2>
+              <p>Use your roster name so the app can match your shifts across hospitals.</p>
+            </div>
+            <label class="field">
+              <span>Real name</span>
+              <input id="createRealName" type="text" autocomplete="name" required placeholder="Jane Smith">
+            </label>
+            <label class="field">
+              <span>Email address</span>
+              <input id="createEmail" type="email" autocomplete="email" required placeholder="you@example.com">
+            </label>
+            <label class="field">
+              <span>Password</span>
+              <input id="createPassword" type="password" autocomplete="new-password" required placeholder="Choose password">
+            </label>
+            <button type="submit" class="button button-secondary">Create account</button>
+          </form>
         </div>
         <p id="entranceStatus" class="status" aria-live="polite"></p>
       </div>
@@ -66,6 +86,7 @@
                 <option value="console">Calendar console</option>
               </select>
             </label>
+            <button id="backToCreatorButton" type="button" class="button button-secondary hidden">Back to creator</button>
             <button id="logoutButton" type="button" class="button button-secondary">Log out</button>
           </div>
         </div>
@@ -129,10 +150,10 @@
                   <label class="colour-field"><span>Day / AM</span><input id="shiftColorDay" type="color"></label>
                   <label class="colour-field"><span>Evening / PM</span><input id="shiftColorEvening" type="color"></label>
                   <label class="colour-field"><span>Night</span><input id="shiftColorNight" type="color"></label>
-                  <label class="colour-field"><span>Urgent / Resus</span><input id="shiftColorUrgent" type="color"></label>
+                  <label class="colour-field"><span>Clinical Support</span><input id="shiftColorCs" type="color"></label>
                   <label class="colour-field"><span>Leave</span><input id="shiftColorLeave" type="color"></label>
                   <label class="colour-field"><span>Custom</span><input id="shiftColorCustom" type="color"></label>
-                  <label class="colour-field"><span>Neutral / PHNW</span><input id="shiftColorNeutral" type="color"></label>
+                  <label class="colour-field"><span>PHNW</span><input id="shiftColorPhnw" type="color"></label>
                 </div>
               </fieldset>
 
