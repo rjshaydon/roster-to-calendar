@@ -12,10 +12,12 @@ const ddhWorkbook = XLSX.readFile(fileURLToPath(new URL("../fixtures/Dandenong_E
 });
 
 const doctors = doctorOptions(mmcWorkbook, ddhWorkbook);
-assert.equal(doctors.length, 1);
-assert.equal(doctors[0].displayName, "Richard HAYDON");
+assert.ok(doctors.length > 1);
+const richard = doctors.find((doctor) => doctor.displayName === "Richard HAYDON");
+assert.ok(richard);
+assert.deepEqual(richard.sourceTypes, ["mmc", "ddh"]);
 
-const view = buildRosterView(mmcWorkbook, ddhWorkbook, doctors[0].key);
+const view = buildRosterView(mmcWorkbook, ddhWorkbook, richard.key);
 const summary = previewSummary(view.events);
 
 assert.equal(view.events.length, 37);

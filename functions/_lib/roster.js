@@ -128,6 +128,7 @@ export async function parseUploadForm(request) {
     sources,
     doctorKey: String(formData.get("doctorKey") || ""),
     doctorDisplay: String(formData.get("doctorDisplay") || ""),
+    doctorAliases: sanitizeDoctorAliases(parseJsonField(formData, "doctorAliases", [])),
     settings: sanitizeSettings(parseJsonField(formData, "settings", DEFAULT_SETTINGS)),
     overrides: sanitizeOverrides(parseJsonField(formData, "overrides", {})),
     customEvents: sanitizeCustomEvents(parseJsonField(formData, "customEvents", [])),
@@ -153,23 +154,32 @@ export function doctorOptions(mmcSources, ddhSources) {
       if (!ddhNames.has(key)) ddhNames.set(key, value);
     }
   }
-  const keys = mmcEntries.length && ddhEntries.length
-    ? [...mmcNames.keys()].filter((key) => ddhNames.has(key)).sort()
-    : [...(mmcEntries.length ? mmcNames.keys() : ddhNames.keys())].sort();
+  const keys = [...new Set([...mmcNames.keys(), ...ddhNames.keys()])].sort();
 
-  return keys.map((key) => ({
-    key,
-    displayName: mmcNames.get(key) || ddhNames.get(key),
-  }));
+  return keys.map((key) => {
+    const sourceTypes = [];
+    if (mmcNames.has(key)) sourceTypes.push("mmc");
+    if (ddhNames.has(key)) sourceTypes.push("ddh");
+    return {
+      key,
+      displayName: mmcNames.get(key) || ddhNames.get(key),
+      sourceTypes,
+    };
+  });
 }
 
-export function buildRosterView(mmcSources, ddhSources, doctorKey, settings = DEFAULT_SETTINGS, overrides = {}, conflictSelections = {}) {
+export function buildRosterView(mmcSources, ddhSources, doctorKey, settings = DEFAULT_SETTINGS, overrides = {}, conflictSelections = {}, doctorAliases = []) {
   const records = [];
+  const keysBySource = doctorKeysBySource(doctorKey, doctorAliases);
   for (const entry of normalizeSourceEntries(mmcSources)) {
-    records.push(...attachImportMeta(parseMmcRecords(entry.workbook, doctorKey), entry));
+    for (const key of keysBySource.mmc) {
+      records.push(...attachImportMeta(parseMmcRecords(entry.workbook, key), entry));
+    }
   }
   for (const entry of normalizeSourceEntries(ddhSources)) {
-    records.push(...attachImportMeta(parseDdhRecords(entry.workbook, doctorKey), entry));
+    for (const key of keysBySource.ddh) {
+      records.push(...attachImportMeta(parseDdhRecords(entry.workbook, key), entry));
+    }
   }
 
   records.sort((left, right) => {
@@ -189,6 +199,35 @@ export function buildRosterView(mmcSources, ddhSources, doctorKey, settings = DE
 
 export function generateEvents(mmcSources, ddhSources, doctorKey, settings = DEFAULT_SETTINGS, overrides = {}, conflictSelections = {}) {
   return buildRosterView(mmcSources, ddhSources, doctorKey, settings, overrides, conflictSelections).events;
+}
+
+export async function inspectImportRecord(record) {
+  if (!record?.dataUrl) {
+    throw new Error("Import data is required for repository inspection.");
+  }
+  const workbook = await readWorkbookDataUrl(record.dataUrl, record.name || "roster.xlsx");
+  const sourceType = detectSourceType(workbook, record.name || "roster.xlsx");
+  const entry = {
+    id: String(record.id || ""),
+    addedAt: String(record.addedAt || ""),
+    file: {
+      name: String(record.name || "roster.xlsx"),
+      size: Number(record.size || 0),
+      lastModified: Number(record.lastModified || 0),
+    },
+    workbook,
+  };
+  const doctors = doctorOptions(sourceType === "mmc" ? [entry] : [], sourceType === "ddh" ? [entry] : [])
+    .map((doctor) => ({
+      key: doctor.key,
+      displayName: doctor.displayName,
+      sourceType,
+    }));
+  return { sourceType, doctors };
+}
+
+export function normalizeRosterName(value) {
+  return normalizeName(value);
 }
 
 export function previewSummary(events) {
@@ -425,6 +464,26 @@ async function readWorkbook(file) {
   }
 }
 
+async function readWorkbookDataUrl(dataUrl, filename) {
+  try {
+    const bytes = bytesFromDataUrl(dataUrl);
+    return XLSX.read(bytes, { type: "array", cellDates: true });
+  } catch {
+    throw new Error(`${filename} is not a supported MMC workbook or Dandenong Hospital FindMyShift export.`);
+  }
+}
+
+function bytesFromDataUrl(dataUrl) {
+  const value = String(dataUrl || "");
+  const [, payload = ""] = value.split(",", 2);
+  const binary = atob(payload);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
 function detectSourceType(workbook, filename) {
   const sheetNames = workbook.SheetNames || [];
   if (sheetNames.includes("Whole thing") && sheetNames.some((name) => name.startsWith("Week "))) {
@@ -436,6 +495,33 @@ function detectSourceType(workbook, filename) {
     return "ddh";
   }
   throw new Error(`${filename} is not a supported MMC workbook or Dandenong Hospital FindMyShift export.`);
+}
+
+function sanitizeDoctorAliases(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => ({
+      sourceType: String(item?.sourceType || "").toLowerCase(),
+      key: normalizeName(item?.key || ""),
+      displayName: String(item?.displayName || "").trim(),
+    }))
+    .filter((item) => (item.sourceType === "mmc" || item.sourceType === "ddh") && item.key);
+}
+
+function doctorKeysBySource(doctorKey, rawAliases = []) {
+  const fallback = normalizeName(doctorKey || "");
+  const aliases = sanitizeDoctorAliases(rawAliases);
+  const mmc = new Set();
+  const ddh = new Set();
+  for (const alias of aliases) {
+    if (alias.sourceType === "mmc") mmc.add(alias.key);
+    if (alias.sourceType === "ddh") ddh.add(alias.key);
+  }
+  if (fallback) {
+    if (!mmc.size) mmc.add(fallback);
+    if (!ddh.size) ddh.add(fallback);
+  }
+  return { mmc: [...mmc], ddh: [...ddh] };
 }
 
 function parseJsonField(formData, fieldName, fallback) {

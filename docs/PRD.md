@@ -11,8 +11,8 @@ The app must move beyond per-browser local storage. Accounts, roster files, pars
 ### Creator / Admin
 
 - Email: `rhaydon@gmail.com`
-- Initial launch is creator-account-first: the Creator account is the first supported production account and gets the skin/theme controls while the broader account system is hardened.
-- Public multi-user account creation is deferred until server-side D1/R2 repository storage is implemented; launch login/setup should reject non-Creator accounts.
+- Initial launch keeps the Creator account as the only admin account and keeps skin/theme controls restricted to the Creator.
+- Public multi-user account creation is supported, backed by Cloudflare server-side state and a shared roster repository.
 - Has unrestricted retained roster history.
 - Can view users, uploaded files, repository files, roster name claims, sites, roles, disputes, and unresolved roster-version conflicts.
 - Can inspect another user's generated calendar for debugging.
@@ -45,8 +45,8 @@ The entrance page must:
 After login or account creation:
 
 - The app checks the repository for roster names likely matching the user's real name.
-- The app shows detected candidate names grouped by site.
-- The user confirms which names belong to them.
+- The app links high-confidence detected names grouped by site.
+- A later dispute/confirmation flow will handle lower-confidence matches and incorrect claims.
 - If confirmed names produce roster events, the user is shown their calendar preview.
 
 ## Skins / Interface Themes
@@ -71,7 +71,7 @@ Skin controls:
 
 - Users may create an account before uploading any roster.
 - If repository data already contains likely matches for the user's name, the system should present those matches during onboarding.
-- New users start with no claimed names until they confirm detected names or upload a roster that contains their name.
+- New users start with any high-confidence detected roster-name claims from the repository. If no match is found, they start with an empty calendar until a roster containing their name is uploaded.
 
 ### Login
 

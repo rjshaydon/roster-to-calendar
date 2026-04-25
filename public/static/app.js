@@ -140,6 +140,8 @@ let cloudAvailable = false;
 let cloudSaveTimer = 0;
 let enforcingRosterLimit = false;
 let serverUsers = [];
+let currentRosterClaims = [];
+let latestNameMatches = [];
 
 const settingsInputs = Object.fromEntries(
   SETTINGS_FIELDS.map((id) => [id, document.querySelector(`#${id}`)]),
@@ -694,7 +696,7 @@ async function analyzeFiles() {
   setStatus("Detecting roster sources and consultants...");
   try {
     const data = await postForm("/api/analyze");
-    doctorOptions = data.doctors || [];
+    doctorOptions = doctorOptionsForCurrentAccount(data.doctors || []);
     detectedSources = summarizeDetectedSources(data.imports || []);
     selectedFiles = selectedFiles.map((entry) => {
       const serverEntry = (data.imports || []).find((item) => item.id === entry.id);
@@ -773,7 +775,10 @@ function renderDoctorState() {
   settingsPanel.classList.add("hidden");
 
   if (!doctorOptions.length) {
-    setStatus("No consultant names could be matched from the uploaded roster files.", true);
+    const message = canUseDoctorPicker()
+      ? "No consultant names could be matched from the uploaded roster files."
+      : "No roster entries are currently linked to your account name.";
+    setStatus(message, true);
     syncActionState();
     return;
   }
@@ -1024,7 +1029,7 @@ function renderPreviewHeader(doctor, data) {
 }
 
 function renderPreviewDoctorControl(doctor) {
-  if (doctorOptions.length > 1) {
+  if (canUseDoctorPicker() && doctorOptions.length > 1) {
     return `
       <label class="preview-doctor-control">
         <span>Doctor</span>
@@ -1235,6 +1240,7 @@ function createFormData(doctor = null) {
   if (doctor) {
     body.append("doctorKey", doctor.key);
     body.append("doctorDisplay", doctor.displayName);
+    body.append("doctorAliases", JSON.stringify(doctor.aliases || []));
   }
   body.append("settings", JSON.stringify(settings));
   body.append("overrides", JSON.stringify(cleanOverrides()));
@@ -1253,6 +1259,7 @@ function createPreviewFormData(doctor = null) {
   if (doctor) {
     body.append("doctorKey", doctor.key);
     body.append("doctorDisplay", doctor.displayName);
+    body.append("doctorAliases", JSON.stringify(doctor.aliases || []));
   }
   body.append("settings", JSON.stringify(settings));
   body.append("conflictSelections", JSON.stringify(conflictSelections));
@@ -1774,6 +1781,73 @@ function selectedDoctor() {
   if (!doctorOptions.length) return null;
   if (doctorOptions.length === 1) return doctorOptions[0];
   return doctorOptions.find((doctor) => doctor.key === doctorSelect.value) || doctorOptions[0];
+}
+
+function canUseDoctorPicker() {
+  return isOwnerAccount() && !adminViewingEmail;
+}
+
+function doctorOptionsForCurrentAccount(doctors) {
+  const options = (doctors || []).map((doctor) => ({
+    ...doctor,
+    sourceTypes: Array.isArray(doctor.sourceTypes) ? doctor.sourceTypes : [],
+  }));
+  if (canUseDoctorPicker()) return options;
+  const matches = options.filter((doctor) => doctorMatchesCurrentAccount(doctor));
+  if (!matches.length) return [];
+  const aliases = matches.flatMap((doctor) => {
+    const sourceTypes = doctor.sourceTypes.length ? doctor.sourceTypes : sourceTypesForClaimedDoctor(doctor.key);
+    return sourceTypes.map((sourceType) => ({
+      sourceType,
+      key: doctor.key,
+      displayName: doctor.displayName,
+    }));
+  });
+  const displayName = currentAccount().realName || matches[0].displayName;
+  return [{
+    key: matches[0].key,
+    displayName,
+    aliases: dedupeDoctorAliases(aliases),
+    sourceTypes: [...new Set(aliases.map((alias) => alias.sourceType))],
+  }];
+}
+
+function doctorMatchesCurrentAccount(doctor) {
+  const claimKeys = new Set(currentRosterClaims.map((claim) => claim.key));
+  if (claimKeys.has(doctor.key)) return true;
+  return nameTokenMatch(currentAccount().realName, doctor.displayName);
+}
+
+function sourceTypesForClaimedDoctor(key) {
+  return currentRosterClaims.filter((claim) => claim.key === key).map((claim) => claim.sourceType);
+}
+
+function dedupeDoctorAliases(aliases) {
+  const seen = new Set();
+  return aliases.filter((alias) => {
+    if (!alias.sourceType || !alias.key) return false;
+    const marker = `${alias.sourceType}:${alias.key}`;
+    if (seen.has(marker)) return false;
+    seen.add(marker);
+    return true;
+  });
+}
+
+function nameTokenMatch(left, right) {
+  const leftTokens = rosterNameTokens(left);
+  const rightTokens = rosterNameTokens(right);
+  if (leftTokens.length < 2 || rightTokens.length < 2) return false;
+  const rightSet = new Set(rightTokens);
+  return leftTokens.every((token) => rightSet.has(token));
+}
+
+function rosterNameTokens(value) {
+  return String(value || "")
+    .replace(/[^A-Za-z0-9]+/g, " ")
+    .trim()
+    .toUpperCase()
+    .split(/\s+/)
+    .filter(Boolean);
 }
 
 function resetDerivedState() {
@@ -2409,6 +2483,26 @@ function ensureLocalAccountLogin(email, password, options = {}) {
   saveAccountState();
 }
 
+function sanitizeRosterClaims(claims) {
+  if (!Array.isArray(claims)) return [];
+  return claims
+    .map((claim) => ({
+      key: normalizeRosterName(claim?.key || ""),
+      displayName: String(claim?.displayName || "").trim(),
+      sourceType: String(claim?.sourceType || "").toLowerCase(),
+      matchedAt: String(claim?.matchedAt || ""),
+    }))
+    .filter((claim) => claim.key && claim.displayName && claim.sourceType);
+}
+
+function normalizeRosterName(value) {
+  return String(value || "")
+    .replace(/[^A-Za-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toUpperCase();
+}
+
 function currentAccount() {
   const email = currentUserEmail || accountState.currentEmail;
   return accountState.users.find((user) => user.email === email) || {
@@ -2444,6 +2538,7 @@ function renderAccountsModal() {
     .filter((user) => user.email !== me.email);
   const localOtherUsers = accountState.users.filter((user) => user.email !== me.email);
   const otherUsers = serverOtherUsers.length ? serverOtherUsers : localOtherUsers;
+  const linkedNames = renderLinkedRosterNames(currentRosterClaims);
   accountsBody.innerHTML = `
     <article class="review-card">
       <div class="review-top">
@@ -2470,6 +2565,7 @@ function renderAccountsModal() {
           ${me.email !== OWNER_EMAIL ? `<button type="button" class="button button-danger" data-delete-account="${escapeHtml(me.email)}">Delete account</button>` : ""}
         </div>
       </form>
+      ${linkedNames}
     </article>
     ${ownerView ? `
       <article class="review-card">
@@ -2484,7 +2580,7 @@ function renderAccountsModal() {
             <article class="issue-card">
               <div>
                 <strong>${escapeHtml(user.realName || "Name not set")}</strong>
-                <p>${escapeHtml(user.email)} · ${user.role === "owner" ? "Creator" : "Standard user"} · storage limit: latest 6 months active</p>
+                <p>${escapeHtml(user.email)} · ${user.role === "owner" ? "Creator" : "Standard user"} · ${formatUserSites(user)} · storage limit: latest 6 months active</p>
               </div>
               <div class="account-actions">
                 <button type="button" class="button button-secondary" data-enter-account="${escapeHtml(user.email)}">Enter account</button>
@@ -2496,6 +2592,30 @@ function renderAccountsModal() {
       </article>
     ` : ""}
   `;
+}
+
+function renderLinkedRosterNames(claims) {
+  const items = sanitizeRosterClaims(claims);
+  if (!items.length) {
+    return `<p class="status">No roster names are linked to this account yet.</p>`;
+  }
+  return `
+    <div class="issues-list account-claim-list">
+      ${items.map((claim) => `
+        <article class="issue-card">
+          <div>
+            <strong>${escapeHtml(claim.sourceType.toUpperCase())}</strong>
+            <p>${escapeHtml(claim.displayName)}</p>
+          </div>
+        </article>
+      `).join("")}
+    </div>
+  `;
+}
+
+function formatUserSites(user) {
+  const sites = Array.isArray(user.sites) ? user.sites.filter(Boolean) : [];
+  return sites.length ? `sites: ${sites.join(", ")}` : "no linked sites";
 }
 
 function updateAccountDetails(email, patch) {
@@ -2742,6 +2862,8 @@ function normalizeServerUser(value) {
       email: value,
       realName: "",
       role: value === OWNER_EMAIL ? "owner" : "user",
+      sites: [],
+      claims: [],
     };
   }
   const email = normalizeEmail(value?.email);
@@ -2750,6 +2872,8 @@ function normalizeServerUser(value) {
     email,
     realName: String(value?.realName || "").trim(),
     role: role === "creator" ? "owner" : role,
+    sites: Array.isArray(value?.sites) ? value.sites : [],
+    claims: sanitizeRosterClaims(value?.claims || []),
   };
 }
 
@@ -2778,6 +2902,8 @@ function logoutCurrentUser() {
   adminViewingEmail = "";
   currentUserRole = "user";
   cloudAvailable = false;
+  currentRosterClaims = [];
+  latestNameMatches = [];
   selectedFiles = [];
   resetDerivedState();
   renderLoginState();
@@ -2824,6 +2950,10 @@ async function loginWithEmail(email, password, options = {}) {
     await restoreCloudState(options);
     if (!currentUserEmail) return;
     await bootstrapImports();
+    if (latestNameMatches.length) {
+      const sites = [...new Set(latestNameMatches.map((claim) => claim.sourceType.toUpperCase()))].join(", ");
+      setStatus(`Matched roster name${latestNameMatches.length === 1 ? "" : "s"} for ${sites || "uploaded rosters"}.`);
+    }
     renderLoginState();
     setEntranceStatus("");
   } catch (error) {
@@ -2854,6 +2984,8 @@ async function restoreCloudState(options = {}) {
     if (!response.ok) throw new Error(data.error || "Login failed.");
     cloudAvailable = data.cloudAvailable === true;
     currentUserRole = data.role || currentUserRole;
+    currentRosterClaims = sanitizeRosterClaims(data.claims || []);
+    latestNameMatches = sanitizeRosterClaims(data.nameMatches || []);
     if (data.realName) {
       const localAccount = accountState.users.find((user) => user.email === currentUserEmail);
       if (localAccount) {
@@ -2955,7 +3087,9 @@ async function saveCloudState() {
       state,
     }),
   });
-  if (!response.ok) throw new Error("Cloud save failed.");
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Cloud save failed.");
+  if (data.claims) currentRosterClaims = sanitizeRosterClaims(data.claims);
   renderLoginState();
 }
 
