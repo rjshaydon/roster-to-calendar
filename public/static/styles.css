@@ -12,6 +12,27 @@
   --warning: #8e1f10;
   --warning-soft: rgba(142, 31, 16, 0.12);
   --shadow: 0 28px 90px rgba(28, 33, 35, 0.16);
+  --chip-day-text: #0b8f6a;
+  --chip-day-bg-strong: rgba(11, 143, 106, 0.24);
+  --chip-day-bg-soft: rgba(11, 143, 106, 0.12);
+  --chip-evening-text: #c96d14;
+  --chip-evening-bg-strong: rgba(201, 109, 20, 0.24);
+  --chip-evening-bg-soft: rgba(201, 109, 20, 0.12);
+  --chip-night-text: #6152d9;
+  --chip-night-bg-strong: rgba(97, 82, 217, 0.24);
+  --chip-night-bg-soft: rgba(97, 82, 217, 0.12);
+  --chip-urgent-text: #d13b3b;
+  --chip-urgent-bg-strong: rgba(209, 59, 59, 0.24);
+  --chip-urgent-bg-soft: rgba(209, 59, 59, 0.12);
+  --chip-leave-text: #2d79d6;
+  --chip-leave-bg-strong: rgba(45, 121, 214, 0.24);
+  --chip-leave-bg-soft: rgba(45, 121, 214, 0.12);
+  --chip-custom-text: #c48a12;
+  --chip-custom-bg-strong: rgba(196, 138, 18, 0.24);
+  --chip-custom-bg-soft: rgba(196, 138, 18, 0.12);
+  --chip-neutral-text: #5d6c73;
+  --chip-neutral-bg-strong: rgba(93, 108, 115, 0.24);
+  --chip-neutral-bg-soft: rgba(93, 108, 115, 0.12);
 }
 
 * {
@@ -145,7 +166,7 @@ body.is-dragging #dropZone {
 
 .entrance-form-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 18px;
 }
 
@@ -388,6 +409,16 @@ input[type="time"] {
   font: inherit;
 }
 
+input[type="color"] {
+  width: 44px;
+  height: 34px;
+  padding: 2px;
+  border: 1px solid rgba(24, 35, 28, 0.15);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.9);
+  cursor: pointer;
+}
+
 .doctor-name {
   margin: 0;
   font-weight: 700;
@@ -544,6 +575,27 @@ input[type="time"] {
 .settings-group legend {
   padding: 0 8px;
   font-weight: 700;
+}
+
+.colour-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.colour-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(20, 34, 42, 0.04);
+}
+
+.colour-field span {
+  color: var(--muted);
+  font-size: 0.9rem;
 }
 
 .toggle,
@@ -846,38 +898,38 @@ input[type="time"] {
 }
 
 .preview-chip-day {
-  color: #0b4f3d;
-  background: linear-gradient(180deg, rgba(111, 207, 151, 0.22), rgba(111, 207, 151, 0.12));
+  color: var(--chip-day-text);
+  background: linear-gradient(180deg, var(--chip-day-bg-strong), var(--chip-day-bg-soft));
 }
 
 .preview-chip-evening {
-  color: #8a3d00;
-  background: linear-gradient(180deg, rgba(251, 191, 112, 0.28), rgba(251, 191, 112, 0.14));
+  color: var(--chip-evening-text);
+  background: linear-gradient(180deg, var(--chip-evening-bg-strong), var(--chip-evening-bg-soft));
 }
 
 .preview-chip-night {
-  color: #3c2a86;
-  background: linear-gradient(180deg, rgba(139, 119, 246, 0.22), rgba(139, 119, 246, 0.12));
+  color: var(--chip-night-text);
+  background: linear-gradient(180deg, var(--chip-night-bg-strong), var(--chip-night-bg-soft));
 }
 
 .preview-chip-urgent {
-  color: #9b1c1c;
-  background: linear-gradient(180deg, rgba(252, 121, 121, 0.22), rgba(252, 121, 121, 0.12));
+  color: var(--chip-urgent-text);
+  background: linear-gradient(180deg, var(--chip-urgent-bg-strong), var(--chip-urgent-bg-soft));
 }
 
 .preview-chip-leave {
-  color: #0b4a85;
-  background: linear-gradient(180deg, rgba(93, 158, 238, 0.24), rgba(93, 158, 238, 0.12));
+  color: var(--chip-leave-text);
+  background: linear-gradient(180deg, var(--chip-leave-bg-strong), var(--chip-leave-bg-soft));
 }
 
 .preview-chip-custom {
-  color: #63440b;
-  background: linear-gradient(180deg, rgba(250, 209, 91, 0.28), rgba(250, 209, 91, 0.12));
+  color: var(--chip-custom-text);
+  background: linear-gradient(180deg, var(--chip-custom-bg-strong), var(--chip-custom-bg-soft));
 }
 
 .preview-chip-neutral {
-  color: var(--muted);
-  background: linear-gradient(180deg, rgba(20, 34, 42, 0.07), rgba(20, 34, 42, 0.04));
+  color: var(--chip-neutral-text);
+  background: linear-gradient(180deg, var(--chip-neutral-bg-strong), var(--chip-neutral-bg-soft));
 }
 
 .custom-event-form {

@@ -23,10 +23,6 @@ const skinSelect = document.querySelector("#skinSelect");
 const loginForm = document.querySelector("#loginForm");
 const loginEmail = document.querySelector("#loginEmail");
 const loginPassword = document.querySelector("#loginPassword");
-const createAccountForm = document.querySelector("#createAccountForm");
-const createRealName = document.querySelector("#createRealName");
-const createEmail = document.querySelector("#createEmail");
-const createPassword = document.querySelector("#createPassword");
 const previewButton = document.querySelector("#previewButton");
 const exportButton = document.querySelector("#exportButton");
 const mobilePreviewButton = document.querySelector("#mobilePreviewButton");
@@ -71,6 +67,15 @@ const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Satu
 const OWNER_EMAIL = "rhaydon@gmail.com";
 const DEFAULT_MMC_LOCATION = "MMC Car Park, Tarella Road, Clayton VIC 3168, Australia";
 const DEFAULT_DDH_LOCATION = "DDH Car Park, 135 David St, Dandenong VIC 3175, Australia";
+const SHIFT_COLOUR_DEFAULTS = {
+  day: "#0b8f6a",
+  evening: "#c96d14",
+  night: "#6152d9",
+  urgent: "#d13b3b",
+  leave: "#2d79d6",
+  custom: "#c48a12",
+  neutral: "#5d6c73",
+};
 const ACCOUNT_STATE_KEY = "roster-account-state";
 const SESSION_STATE_KEY = "roster-session-state-v1";
 const ACCOUNT_WORKSPACES_KEY = "roster-account-workspaces-v1";
@@ -84,6 +89,13 @@ const SETTINGS_FIELDS = [
   "showTimes",
   "showRawValues",
   "showNormalizedTitles",
+  "shiftColorDay",
+  "shiftColorEvening",
+  "shiftColorNight",
+  "shiftColorUrgent",
+  "shiftColorLeave",
+  "shiftColorCustom",
+  "shiftColorNeutral",
   "includeLocations",
   "includeAnnualLeave",
   "includeConferenceLeave",
@@ -128,6 +140,7 @@ const settingsInputs = Object.fromEntries(
 );
 
 applySkin(currentSkin);
+applyShiftColours(settings);
 
 chooseFilesButton.addEventListener("click", (event) => {
   event.preventDefault();
@@ -232,21 +245,6 @@ loginForm.addEventListener("submit", async (event) => {
   }
   await loginWithEmail(email, password, { mode: "login" });
 });
-createAccountForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const realName = createRealName.value.trim();
-  const email = normalizeEmail(createEmail.value);
-  const password = createPassword.value;
-  if (!realName || !email || !password) {
-    setEntranceStatus("Real name, email address, and password are required.", true);
-    return;
-  }
-  if (!isLaunchAccountEmail(email)) {
-    setEntranceStatus("Launch mode currently supports only the creator account.", true);
-    return;
-  }
-  await loginWithEmail(email, password, { mode: "create", realName });
-});
 logoutButton.addEventListener("click", () => {
   localStorage.removeItem(CURRENT_EMAIL_KEY);
   sessionStorage.removeItem(CURRENT_PASSWORD_KEY);
@@ -301,6 +299,12 @@ for (const [key, input] of Object.entries(settingsInputs)) {
     }
     if (latestPreview && (key === "defaultLocationMmc" || key === "defaultLocationDdh")) {
       updatePreview();
+      return;
+    }
+    if (key.startsWith("shiftColor")) {
+      applyShiftColours(settings);
+      if (latestPreview) rebuildClientPreview();
+      setStatus("Shift colours updated.");
       return;
     }
     setStatus("Settings updated. Use Calendar preview to refresh the grid.");
@@ -586,6 +590,13 @@ function defaultSettings() {
     showTimes: true,
     showRawValues: false,
     showNormalizedTitles: true,
+    shiftColorDay: SHIFT_COLOUR_DEFAULTS.day,
+    shiftColorEvening: SHIFT_COLOUR_DEFAULTS.evening,
+    shiftColorNight: SHIFT_COLOUR_DEFAULTS.night,
+    shiftColorUrgent: SHIFT_COLOUR_DEFAULTS.urgent,
+    shiftColorLeave: SHIFT_COLOUR_DEFAULTS.leave,
+    shiftColorCustom: SHIFT_COLOUR_DEFAULTS.custom,
+    shiftColorNeutral: SHIFT_COLOUR_DEFAULTS.neutral,
     includeLocations: true,
     includeAnnualLeave: true,
     includeConferenceLeave: true,
@@ -691,10 +702,13 @@ function renderSettings() {
     if (!input) continue;
     if (input.type === "checkbox") {
       input.checked = Boolean(settings[key]);
+    } else if (input.type === "color") {
+      input.value = isHexColour(settings[key]) ? settings[key] : defaultShiftColourForField(key);
     } else {
       input.value = settings[key] || "";
     }
   }
+  applyShiftColours(settings);
 }
 
 function renderFilesList() {
@@ -958,11 +972,9 @@ function renderPreviewGrid(doctor, data) {
 }
 
 function renderPreviewHeader(doctor, data) {
-  const displayName = currentAccount()?.realName || doctor.displayName;
   const hospitalSelector = renderPreviewHospitalSelector(data.hospitals || []);
   return `
     <div class="preview-head">
-      <strong>${escapeHtml(displayName)}</strong>
       ${renderPreviewRangeControls(data.previewStart, data.previewEnd)}
       ${hospitalSelector}
       <span class="preview-event-count">${data.count} events</span>
@@ -2448,6 +2460,43 @@ async function clearLocalWorkspace() {
   renderFilesList();
 }
 
+function applyShiftColours(sourceSettings = settings) {
+  const mappings = {
+    day: "shiftColorDay",
+    evening: "shiftColorEvening",
+    night: "shiftColorNight",
+    urgent: "shiftColorUrgent",
+    leave: "shiftColorLeave",
+    custom: "shiftColorCustom",
+    neutral: "shiftColorNeutral",
+  };
+  for (const [tone, field] of Object.entries(mappings)) {
+    const colour = isHexColour(sourceSettings[field]) ? sourceSettings[field] : defaultShiftColourForField(field);
+    const rgb = hexToRgb(colour);
+    document.documentElement.style.setProperty(`--chip-${tone}-text`, colour);
+    document.documentElement.style.setProperty(`--chip-${tone}-bg-strong`, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.24)`);
+    document.documentElement.style.setProperty(`--chip-${tone}-bg-soft`, `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.12)`);
+  }
+}
+
+function defaultShiftColourForField(field) {
+  const key = field.replace(/^shiftColor/, "").toLowerCase();
+  return SHIFT_COLOUR_DEFAULTS[key] || SHIFT_COLOUR_DEFAULTS.day;
+}
+
+function isHexColour(value) {
+  return /^#[0-9a-f]{6}$/i.test(String(value || ""));
+}
+
+function hexToRgb(hex) {
+  const clean = String(hex || "#000000").replace("#", "");
+  return {
+    r: Number.parseInt(clean.slice(0, 2), 16),
+    g: Number.parseInt(clean.slice(2, 4), 16),
+    b: Number.parseInt(clean.slice(4, 6), 16),
+  };
+}
+
 function loadSkin() {
   const stored = localStorage.getItem(SKIN_KEY);
   return stored === "console" ? "console" : "original";
@@ -2502,9 +2551,6 @@ function normalizeServerUser(value) {
 function openLoginModal() {
   loginEmail.value = currentUserEmail || "";
   loginPassword.value = "";
-  createRealName.value = "";
-  createEmail.value = "";
-  createPassword.value = "";
   entrancePage.classList.remove("hidden");
   appShell.classList.add("hidden");
   mobileActionBar.classList.add("hidden");

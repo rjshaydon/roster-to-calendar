@@ -12,13 +12,15 @@
         <p class="drop-kicker">Roster Converter</p>
         <h1>Turn rosters into calendars.</h1>
         <p class="lede">
-          Upload MMC and Dandenong roster exports, confirm your name, preview your shifts,
-          and export an Apple Calendar-compatible .ics file.
+          Upload roster exports and FindMyShift exports or subscription URLs, confirm your name,
+          preview your shifts, and export an Apple and Google Calendar-compatible .ics file.
         </p>
         <div class="entrance-notes">
-          <span>Personal roster extraction</span>
-          <span>Calendar preview before export</span>
-          <span>Creator account launch mode</span>
+          <span>Monash Medical Centre</span>
+          <span>Monash Children’s Hospital</span>
+          <span>Dandenong Hospital</span>
+          <span>Casey Hospital</span>
+          <span>Victorian Heart Hospital</span>
         </div>
       </div>
 
@@ -39,26 +41,6 @@
             </label>
             <button type="submit" class="button button-primary">Log in</button>
           </form>
-
-          <form id="createAccountForm" class="entrance-form">
-            <div class="section-head">
-              <h2>First-time setup</h2>
-              <p>Launch mode is limited to the creator account while multi-user storage is built.</p>
-            </div>
-            <label class="field">
-              <span>Real name</span>
-              <input id="createRealName" type="text" autocomplete="name" required placeholder="Richard Haydon">
-            </label>
-            <label class="field">
-              <span>Email address</span>
-              <input id="createEmail" type="email" autocomplete="email" required placeholder="you@example.com">
-            </label>
-            <label class="field">
-              <span>Password</span>
-              <input id="createPassword" type="password" autocomplete="new-password" required placeholder="Choose password">
-            </label>
-            <button type="submit" class="button button-secondary">Create creator account</button>
-          </form>
         </div>
         <p id="entranceStatus" class="status" aria-live="polite"></p>
       </div>
@@ -68,8 +50,8 @@
       <section class="hero">
         <h1>Roster Converter</h1>
         <p class="lede hero-copy">
-          Upload rosters (currently accepts MMC and Dandenong Hospital FindMyShift
-          rosters). Choose a doctor if required and save a .ics file for use with Calendar apps.
+          Upload roster exports and FindMyShift exports or subscription URLs, confirm your name,
+          preview your shifts, and export an Apple and Google Calendar-compatible .ics file.
         </p>
       </section>
 
@@ -139,6 +121,19 @@
                 <label class="toggle"><input id="showTimes" type="checkbox" checked> Show times on preview cards</label>
                 <label class="toggle"><input id="showNormalizedTitles" type="checkbox" checked> Show normalized titles</label>
                 <label class="toggle"><input id="showRawValues" type="checkbox"> Show raw roster values</label>
+              </fieldset>
+
+              <fieldset class="settings-group">
+                <legend>Shift Colours</legend>
+                <div class="colour-grid">
+                  <label class="colour-field"><span>Day / AM</span><input id="shiftColorDay" type="color"></label>
+                  <label class="colour-field"><span>Evening / PM</span><input id="shiftColorEvening" type="color"></label>
+                  <label class="colour-field"><span>Night</span><input id="shiftColorNight" type="color"></label>
+                  <label class="colour-field"><span>Urgent / Resus</span><input id="shiftColorUrgent" type="color"></label>
+                  <label class="colour-field"><span>Leave</span><input id="shiftColorLeave" type="color"></label>
+                  <label class="colour-field"><span>Custom</span><input id="shiftColorCustom" type="color"></label>
+                  <label class="colour-field"><span>Neutral / PHNW</span><input id="shiftColorNeutral" type="color"></label>
+                </div>
               </fieldset>
 
               <fieldset class="settings-group">
