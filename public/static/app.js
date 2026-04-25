@@ -5,6 +5,8 @@ const entranceStatus = document.querySelector("#entranceStatus");
 const fileInput = document.querySelector("#rosterFiles");
 const dropZone = document.querySelector("#dropZone");
 const chooseFilesButton = document.querySelector("#chooseFilesButton");
+const fmsUrlInput = document.querySelector("#fmsUrlInput");
+const fmsUrlButton = document.querySelector("#fmsUrlButton");
 const filesButton = document.querySelector("#filesButton");
 const accountsButton = document.querySelector("#accountsButton");
 const filesModal = document.querySelector("#filesModal");
@@ -35,6 +37,9 @@ const doctorSection = document.querySelector("#doctorSection");
 const doctorSelect = document.querySelector("#doctorSelect");
 const doctorName = document.querySelector("#doctorName");
 const controlBar = document.querySelector("#controlBar");
+const claimSection = document.querySelector("#claimSection");
+const claimDoctorSelect = document.querySelector("#claimDoctorSelect");
+const claimDoctorButton = document.querySelector("#claimDoctorButton");
 const settingsToggle = document.querySelector("#settingsToggle");
 const settingsPanel = document.querySelector("#settingsPanel");
 const settingsCloseButton = document.querySelector("#settingsCloseButton");
@@ -142,6 +147,7 @@ let enforcingRosterLimit = false;
 let serverUsers = [];
 let currentRosterClaims = [];
 let latestNameMatches = [];
+let availableRosterDoctors = [];
 
 const settingsInputs = Object.fromEntries(
   SETTINGS_FIELDS.map((id) => [id, document.querySelector(`#${id}`)]),
@@ -156,9 +162,24 @@ chooseFilesButton.addEventListener("click", (event) => {
   fileInput.click();
 });
 
-dropZone.addEventListener("click", () => fileInput.click());
+fmsUrlButton.addEventListener("click", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  const value = fmsUrlInput.value.trim();
+  if (!value) {
+    setStatus("Paste a FindMyShift webcal:// or https:// iCalendar URL first.", true);
+    return;
+  }
+  setStatus("FindMyShift URL subscriptions are not active yet. Please upload a FindMyShift export for now.", true);
+});
+
+dropZone.addEventListener("click", (event) => {
+  if (event.target.closest("button, input, label, select, textarea, a")) return;
+  fileInput.click();
+});
 dropZone.addEventListener("keydown", (event) => {
   if (event.key === "Enter" || event.key === " ") {
+    if (event.target.closest("button, input, label, select, textarea, a")) return;
     event.preventDefault();
     fileInput.click();
   }
@@ -285,6 +306,14 @@ doctorSelect.addEventListener("change", async () => {
   saveCurrentSessionState();
   syncActionState();
   if (selectedDoctor()) await updatePreview();
+});
+
+claimDoctorSelect.addEventListener("change", () => {
+  claimDoctorButton.disabled = !claimDoctorSelect.value;
+});
+
+claimDoctorButton.addEventListener("click", () => {
+  claimSelectedRosterName();
 });
 
 settingsToggle.addEventListener("click", () => {
@@ -779,10 +808,12 @@ function renderDoctorState() {
       ? "No consultant names could be matched from the uploaded roster files."
       : "No roster entries are currently linked to your account name.";
     setStatus(message, true);
+    renderClaimSection();
     syncActionState();
     return;
   }
 
+  claimSection.classList.add("hidden");
   doctorSection.classList.remove("hidden");
 
   if (doctorOptions.length === 1) {
@@ -804,6 +835,58 @@ function renderDoctorState() {
   }
 
   syncActionState();
+}
+
+function renderClaimSection() {
+  if (!claimSection) return;
+  const shouldShow = !canUseDoctorPicker() && !selectedFiles.length && !currentRosterClaims.length && availableRosterDoctors.length;
+  claimSection.classList.toggle("hidden", !shouldShow);
+  if (!shouldShow) return;
+
+  const options = availableRosterDoctors
+    .map((doctor, index) => ({
+      index,
+      label: `${doctor.displayName} (${doctor.sourceType.toUpperCase()})`,
+    }))
+    .sort((left, right) => left.label.localeCompare(right.label));
+  claimDoctorSelect.innerHTML = `
+    <option value="">My name is not listed</option>
+    ${options.map((item) => `<option value="${item.index}">${escapeHtml(item.label)}</option>`).join("")}
+  `;
+  claimDoctorButton.disabled = true;
+}
+
+async function claimSelectedRosterName() {
+  const index = Number(claimDoctorSelect.value);
+  const candidate = Number.isInteger(index) ? availableRosterDoctors[index] : null;
+  if (!candidate) {
+    setStatus("If your name is not listed, upload the first roster file for your hospital.", true);
+    return;
+  }
+
+  setStatus("Linking roster name...");
+  try {
+    const requestEmail = adminViewingEmail ? authUserEmail : currentUserEmail;
+    const requestPassword = adminViewingEmail ? authUserPassword : currentUserPassword;
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "claimRosterName",
+        email: requestEmail,
+        password: requestPassword,
+        targetEmail: adminViewingEmail ? currentUserEmail : "",
+        claim: candidate,
+      }),
+    });
+    const data = await readJsonResponse(response, "Could not link roster name.");
+    await applyCloudStateData(data);
+    await bootstrapImports();
+    renderLoginState();
+    setStatus(`Linked ${candidate.displayName} (${candidate.sourceType.toUpperCase()}).`);
+  } catch (error) {
+    setStatus(error.message || "Could not link roster name.", true);
+  }
 }
 
 async function updatePreview() {
@@ -1845,6 +1928,7 @@ function rosterNameTokens(value) {
 function resetDerivedState() {
   doctorOptions = [];
   detectedSources = {};
+  availableRosterDoctors = [];
   overrides = {};
   customEvents = [];
   restoredSessionState = null;
@@ -1858,6 +1942,7 @@ function resetDerivedState() {
   controlBar.classList.add("hidden");
   mobileActionBar.classList.add("hidden");
   settingsPanel.classList.add("hidden");
+  claimSection.classList.add("hidden");
   clearPreviewData();
 }
 
@@ -2487,6 +2572,17 @@ function sanitizeRosterClaims(claims) {
     .filter((claim) => claim.key && claim.displayName && claim.sourceType);
 }
 
+function sanitizeAvailableRosterDoctors(doctors) {
+  if (!Array.isArray(doctors)) return [];
+  return doctors
+    .map((doctor) => ({
+      key: normalizeRosterName(doctor?.key || ""),
+      displayName: String(doctor?.displayName || "").trim(),
+      sourceType: String(doctor?.sourceType || "").toLowerCase(),
+    }))
+    .filter((doctor) => doctor.key && doctor.displayName && doctor.sourceType);
+}
+
 function normalizeRosterName(value) {
   return String(value || "")
     .replace(/[^A-Za-z0-9]+/g, " ")
@@ -2896,6 +2992,7 @@ function logoutCurrentUser() {
   cloudAvailable = false;
   currentRosterClaims = [];
   latestNameMatches = [];
+  availableRosterDoctors = [];
   selectedFiles = [];
   resetDerivedState();
   renderLoginState();
@@ -2973,51 +3070,7 @@ async function restoreCloudState(options = {}) {
       }),
     });
     const data = await readJsonResponse(response, "Login failed.");
-    cloudAvailable = data.cloudAvailable === true;
-    currentUserRole = data.role || currentUserRole;
-    currentRosterClaims = sanitizeRosterClaims(data.claims || []);
-    latestNameMatches = sanitizeRosterClaims(data.nameMatches || []);
-    if (data.realName) {
-      const localAccount = accountState.users.find((user) => user.email === currentUserEmail);
-      if (localAccount) {
-        localAccount.realName = data.realName;
-      } else {
-        accountState.users.push({
-          email: currentUserEmail,
-          realName: data.realName,
-          password: "",
-          role: currentUserEmail === OWNER_EMAIL ? "owner" : "user",
-        });
-      }
-        saveAccountState();
-    }
-    if (!cloudAvailable) return;
-    if (!data.state) {
-      selectedFiles = [];
-      await replaceStoredImports([]);
-      return;
-    }
-    const imports = await deserializeCloudImports(data.state.imports || []);
-    if (imports.length) {
-      selectedFiles = imports;
-      await replaceStoredImports(imports);
-    }
-    if (data.state.session) {
-      restoredSessionState = data.state.session;
-      const store = loadWorkspaceStore();
-      store[currentUserEmail] = {
-        fileRefs: imports.map((entry) => ({
-          id: entry.id,
-          name: entry.name,
-          size: entry.size,
-          lastModified: entry.lastModified,
-          addedAt: entry.addedAt,
-          sourceType: entry.sourceType,
-        })),
-        session: data.state.session,
-      };
-      saveWorkspaceStore(store);
-    }
+    await applyCloudStateData(data);
   } catch (error) {
     if (error.message === "Cloud storage is not configured.") {
       cloudAvailable = false;
@@ -3048,6 +3101,53 @@ async function restoreCloudState(options = {}) {
     openLoginModal();
     setStatus(error.message || "Login failed.", true);
     setEntranceStatus(error.message || "Login failed.", true);
+  }
+}
+
+async function applyCloudStateData(data) {
+  cloudAvailable = data.cloudAvailable === true;
+  currentUserRole = data.role || currentUserRole;
+  currentRosterClaims = sanitizeRosterClaims(data.claims || []);
+  latestNameMatches = sanitizeRosterClaims(data.nameMatches || []);
+  availableRosterDoctors = sanitizeAvailableRosterDoctors(data.availableDoctors || []);
+  if (data.realName) {
+    const localAccount = accountState.users.find((user) => user.email === currentUserEmail);
+    if (localAccount) {
+      localAccount.realName = data.realName;
+    } else {
+      accountState.users.push({
+        email: currentUserEmail,
+        realName: data.realName,
+        password: "",
+        role: currentUserEmail === OWNER_EMAIL ? "owner" : "user",
+      });
+    }
+    saveAccountState();
+  }
+  if (!cloudAvailable) return;
+  if (!data.state) {
+    selectedFiles = [];
+    await replaceStoredImports([]);
+    return;
+  }
+  const imports = await deserializeCloudImports(data.state.imports || []);
+  selectedFiles = imports;
+  await replaceStoredImports(imports);
+  if (data.state.session) {
+    restoredSessionState = data.state.session;
+    const store = loadWorkspaceStore();
+    store[currentUserEmail] = {
+      fileRefs: imports.map((entry) => ({
+        id: entry.id,
+        name: entry.name,
+        size: entry.size,
+        lastModified: entry.lastModified,
+        addedAt: entry.addedAt,
+        sourceType: entry.sourceType,
+      })),
+      session: data.state.session,
+    };
+    saveWorkspaceStore(store);
   }
 }
 
@@ -3442,7 +3542,10 @@ async function bootstrapImports() {
     if (selectedFiles.length) {
       await analyzeFiles();
     } else {
-      setStatus("Add a roster file to begin.");
+      renderClaimSection();
+      setStatus(availableRosterDoctors.length && !currentRosterClaims.length
+        ? "Choose your roster name, or upload a roster if your name is not listed."
+        : "Add a roster file to begin.");
     }
   } catch (error) {
     selectedFiles = [];

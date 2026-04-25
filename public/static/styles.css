@@ -298,6 +298,37 @@ h1 {
   letter-spacing: 0.08em;
 }
 
+.fms-url-entry {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 10px;
+  width: min(100%, 260px);
+}
+
+.fms-url-entry label {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.fms-url-entry input {
+  width: 100%;
+}
+
+.claim-section {
+  padding: 22px;
+  border: 1px solid rgba(20, 34, 42, 0.1);
+  border-radius: 26px;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.claim-section .button {
+  width: 100%;
+}
+
 .upload-help,
 .status,
 .section-head p,
@@ -1309,6 +1340,7 @@ body[data-skin="console"] #roster-form {
 body[data-skin="console"] #dropZone,
 body[data-skin="console"] #doctorSection,
 body[data-skin="console"] #controlBar,
+body[data-skin="console"] #claimSection,
 body[data-skin="console"] #settingsPanel,
 body[data-skin="console"] #conflictsPanel,
 body[data-skin="console"] #issuesPanel {
@@ -1348,6 +1380,7 @@ body[data-skin="console"] #doctorSection {
 }
 
 body[data-skin="console"] #settingsPanel,
+body[data-skin="console"] #claimSection,
 body[data-skin="console"] #conflictsPanel,
 body[data-skin="console"] #issuesPanel {
   padding: 18px 20px;
@@ -1456,6 +1489,7 @@ body[data-skin="console"] .preview-toolbar {
   grid-auto-columns: max-content;
   gap: clamp(12px, 2vw, 30px);
   align-items: center;
+  align-self: end;
   justify-content: stretch;
   min-width: 0;
   padding: 0 24px 0 28px;
@@ -1526,7 +1560,8 @@ body[data-skin="console"] .preview-grid {
 body[data-skin="console"] .preview-month-row {
   padding: 22px 20px 12px;
   color: var(--ink);
-  font-size: 1.5rem;
+  font-size: 1.18rem;
+  font-weight: 800;
   background: #ffffff;
   border-top: 1px solid var(--line);
 }
@@ -1693,6 +1728,7 @@ body[data-skin="console"] .panel {
   body[data-skin="console"] #dropZone,
   body[data-skin="console"] #doctorSection,
   body[data-skin="console"] #controlBar,
+  body[data-skin="console"] #claimSection,
   body[data-skin="console"] #settingsPanel,
   body[data-skin="console"] #conflictsPanel,
   body[data-skin="console"] #issuesPanel,

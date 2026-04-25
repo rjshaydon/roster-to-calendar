@@ -39,6 +39,7 @@ export async function onRequestPost(context) {
         state: prepared.state,
         claims: prepared.claims,
         nameMatches: prepared.nameMatches,
+        availableDoctors: prepared.availableDoctors,
       });
     }
 
@@ -58,6 +59,41 @@ export async function onRequestPost(context) {
         state: prepared.state,
         claims: prepared.claims,
         nameMatches: prepared.nameMatches,
+        availableDoctors: prepared.availableDoctors,
+      });
+    }
+
+    if (action === "claimRosterName") {
+      const claimEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
+      const targetRecord = claimEmail === email ? account.record : await loadAccountRecord(context.env.ROSTER_STORE, claimEmail);
+      const index = await loadRepositoryIndex(context.env.ROSTER_STORE);
+      const claim = findRepositoryDoctor(index, body?.claim);
+      if (!claim) {
+        return Response.json({ error: "Roster name was not found in the repository." }, { status: 400 });
+      }
+      const claims = mergeClaims(targetRecord.claims, [{ ...claim, matchedAt: new Date().toISOString() }]);
+      const state = {
+        ...sanitizeState(targetRecord.state),
+        imports: (await repositoryImportsForClaims(context.env.ROSTER_STORE, index, claims)).map(repositoryImportRef),
+      };
+      const updated = {
+        ...targetRecord,
+        email: claimEmail,
+        claims,
+        state,
+        updatedAt: new Date().toISOString(),
+      };
+      await context.env.ROSTER_STORE.put(storageKey(claimEmail), JSON.stringify(updated));
+      const prepared = await prepareAccountResponse(context.env.ROSTER_STORE, updated);
+      return Response.json({
+        ok: true,
+        cloudAvailable: true,
+        role: prepared.role,
+        realName: prepared.realName,
+        state: prepared.state,
+        claims: prepared.claims,
+        nameMatches: prepared.nameMatches,
+        availableDoctors: prepared.availableDoctors,
       });
     }
 
@@ -291,6 +327,7 @@ async function prepareAccountResponse(store, record) {
     state,
     claims,
     nameMatches,
+    availableDoctors: repositoryDoctorCandidates(index),
   };
 }
 
@@ -503,6 +540,34 @@ function matchRepositoryClaims(index, realName) {
     }
   }
   return mergeClaims([], claims);
+}
+
+function repositoryDoctorCandidates(index) {
+  const seen = new Set();
+  const candidates = [];
+  for (const file of index.files || []) {
+    if (file.active === false) continue;
+    for (const doctor of sanitizeRepositoryDoctors(file.doctors)) {
+      const marker = `${doctor.sourceType}:${doctor.key}`;
+      if (seen.has(marker)) continue;
+      seen.add(marker);
+      candidates.push({
+        key: doctor.key,
+        displayName: doctor.displayName,
+        sourceType: doctor.sourceType,
+      });
+    }
+  }
+  return candidates.sort((left, right) => left.displayName.localeCompare(right.displayName) || left.sourceType.localeCompare(right.sourceType));
+}
+
+function findRepositoryDoctor(index, rawClaim) {
+  const claim = {
+    key: normalizeRosterName(rawClaim?.key || ""),
+    sourceType: String(rawClaim?.sourceType || "").toLowerCase(),
+  };
+  if (!claim.key || !claim.sourceType) return null;
+  return repositoryDoctorCandidates(index).find((doctor) => doctor.key === claim.key && doctor.sourceType === claim.sourceType) || null;
 }
 
 function sanitizeClaims(claims) {

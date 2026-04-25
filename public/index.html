@@ -108,6 +108,20 @@
             <p id="status" class="status" aria-live="polite"></p>
           </div>
 
+          <section id="claimSection" class="claim-section hidden" aria-label="Find roster name">
+            <div class="section-head">
+              <h3>Find Your Roster</h3>
+              <p>If your calendar is empty, choose how your name appears on an uploaded roster.</p>
+            </div>
+            <label class="field">
+              <span>Roster name</span>
+              <select id="claimDoctorSelect">
+                <option value="">My name is not listed</option>
+              </select>
+            </label>
+            <button id="claimDoctorButton" type="button" class="button button-secondary">Use Selected Name</button>
+          </section>
+
           <div id="dropZone" class="drop-zone" tabindex="0" role="button" aria-label="Choose roster files">
             <input id="rosterFiles" name="rosterFiles" type="file" accept=".xlsx,.xlsm,.xltx,.xltm" multiple hidden>
             <p class="drop-kicker">Import Rosters</p>
@@ -119,6 +133,12 @@
             </p>
             <div class="drop-or">OR</div>
             <button type="button" class="button button-secondary" id="chooseFilesButton">Choose Files</button>
+            <div class="drop-or">OR</div>
+            <div class="fms-url-entry">
+              <label for="fmsUrlInput">FindMyShift.com URL</label>
+              <input id="fmsUrlInput" type="text" inputmode="url" placeholder="webcal://...">
+              <button type="button" class="button button-secondary" id="fmsUrlButton">Add URL</button>
+            </div>
           </div>
 
           <section id="settingsPanel" class="settings-panel hidden" aria-label="Roster settings">
