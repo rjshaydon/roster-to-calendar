@@ -1,4 +1,7 @@
 const form = document.querySelector("#roster-form");
+const appShell = document.querySelector("#appShell");
+const entrancePage = document.querySelector("#entrancePage");
+const entranceStatus = document.querySelector("#entranceStatus");
 const fileInput = document.querySelector("#rosterFiles");
 const dropZone = document.querySelector("#dropZone");
 const chooseFilesButton = document.querySelector("#chooseFilesButton");
@@ -15,10 +18,15 @@ const accountsModalSubtitle = document.querySelector("#accountsModalSubtitle");
 const loginBar = document.querySelector("#loginBar");
 const loginIdentity = document.querySelector("#loginIdentity");
 const logoutButton = document.querySelector("#logoutButton");
-const loginModal = document.querySelector("#loginModal");
+const skinControl = document.querySelector("#skinControl");
+const skinSelect = document.querySelector("#skinSelect");
 const loginForm = document.querySelector("#loginForm");
 const loginEmail = document.querySelector("#loginEmail");
 const loginPassword = document.querySelector("#loginPassword");
+const createAccountForm = document.querySelector("#createAccountForm");
+const createRealName = document.querySelector("#createRealName");
+const createEmail = document.querySelector("#createEmail");
+const createPassword = document.querySelector("#createPassword");
 const previewButton = document.querySelector("#previewButton");
 const exportButton = document.querySelector("#exportButton");
 const mobilePreviewButton = document.querySelector("#mobilePreviewButton");
@@ -65,6 +73,7 @@ const SESSION_STATE_KEY = "roster-session-state-v1";
 const ACCOUNT_WORKSPACES_KEY = "roster-account-workspaces-v1";
 const CURRENT_EMAIL_KEY = "roster-current-email";
 const CURRENT_PASSWORD_KEY = "roster-current-password";
+const SKIN_KEY = "roster-active-skin";
 const SIX_MONTH_LIMIT_DAYS = 183;
 const SETTINGS_FIELDS = [
   "showSourcePrefix",
@@ -103,6 +112,7 @@ let restoredSessionState = null;
 let currentUserEmail = loadCurrentUserEmail();
 let currentUserPassword = sessionStorage.getItem(CURRENT_PASSWORD_KEY) || "";
 let currentUserRole = currentUserEmail === OWNER_EMAIL ? "creator" : "user";
+let currentSkin = loadSkin();
 let cloudAvailable = false;
 let cloudSaveTimer = 0;
 let enforcingRosterLimit = false;
@@ -111,6 +121,8 @@ let serverUsers = [];
 const settingsInputs = Object.fromEntries(
   SETTINGS_FIELDS.map((id) => [id, document.querySelector(`#${id}`)]),
 );
+
+applySkin(currentSkin);
 
 chooseFilesButton.addEventListener("click", (event) => {
   event.preventDefault();
@@ -208,7 +220,26 @@ loginForm.addEventListener("submit", async (event) => {
   const email = normalizeEmail(loginEmail.value);
   const password = loginPassword.value;
   if (!email || !password) return;
-  await loginWithEmail(email, password);
+  if (!isLaunchAccountEmail(email)) {
+    setEntranceStatus("Launch mode currently supports only the creator account.", true);
+    return;
+  }
+  await loginWithEmail(email, password, { mode: "login" });
+});
+createAccountForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const realName = createRealName.value.trim();
+  const email = normalizeEmail(createEmail.value);
+  const password = createPassword.value;
+  if (!realName || !email || !password) {
+    setEntranceStatus("Real name, email address, and password are required.", true);
+    return;
+  }
+  if (!isLaunchAccountEmail(email)) {
+    setEntranceStatus("Launch mode currently supports only the creator account.", true);
+    return;
+  }
+  await loginWithEmail(email, password, { mode: "create", realName });
 });
 logoutButton.addEventListener("click", () => {
   localStorage.removeItem(CURRENT_EMAIL_KEY);
@@ -222,6 +253,11 @@ logoutButton.addEventListener("click", () => {
   renderLoginState();
   openLoginModal();
   setStatus("Log in to load a roster workspace.");
+});
+skinSelect.addEventListener("change", () => {
+  if (!isOwnerAccount()) return;
+  applySkin(skinSelect.value);
+  syncSkinControl();
 });
 
 doctorSelect.addEventListener("change", () => {
@@ -977,7 +1013,18 @@ function renderPreviewChip(event, dayKey) {
   if (!event.allDay && settings.showTimes && startKey === dayKey && event.timeLabel) meta.push(event.timeLabel);
   if (settings.showLocations && event.location) meta.push(event.location);
   const metaMarkup = meta.length ? `<span class="preview-chip-meta">${escapeHtml(meta.join(" · "))}</span>` : "";
-  return `<button type="button" class="preview-chip" data-review-id="${event.id}">${lines.join("")}${metaMarkup}</button>`;
+  return `<button type="button" class="preview-chip preview-chip-${eventTone(event)}" data-review-id="${event.id}">${lines.join("")}${metaMarkup}</button>`;
+}
+
+function eventTone(event) {
+  const text = `${event.title || ""} ${event.rawValue || ""}`.toLowerCase();
+  if (text.includes("annual") || text.includes("conference") || text.includes("leave")) return "leave";
+  if (text.includes("phnw")) return "neutral";
+  if (text.includes("night")) return "night";
+  if (text.includes("pm") || text.includes("orange")) return "evening";
+  if (text.includes("resus") || text.includes("on call")) return "urgent";
+  if (text.includes("custom") || event.isCustom) return "custom";
+  return "day";
 }
 
 function buildTermSections(weeks) {
@@ -2172,7 +2219,14 @@ function loadAccountState() {
   try {
     const stored = JSON.parse(localStorage.getItem(ACCOUNT_STATE_KEY) || "null");
     if (stored && Array.isArray(stored.users) && stored.currentEmail) {
-      return stored;
+      return {
+        ...stored,
+        users: stored.users.map((user) => ({
+          realName: "",
+          ...user,
+          role: user.role || (user.email === OWNER_EMAIL ? "owner" : "user"),
+        })),
+      };
     }
   } catch {
     // Ignore invalid local state.
@@ -2180,7 +2234,7 @@ function loadAccountState() {
   return {
     currentEmail: OWNER_EMAIL,
     users: [
-      { email: OWNER_EMAIL, password: "", role: "owner" },
+      { email: OWNER_EMAIL, realName: "Richard Haydon", password: "", role: "owner" },
     ],
   };
 }
@@ -2191,18 +2245,26 @@ function saveAccountState() {
   renderAccountsModal();
 }
 
-function ensureLocalAccountLogin(email, password) {
+function ensureLocalAccountLogin(email, password, options = {}) {
+  const realName = String(options.realName || "").trim();
+  const mode = options.mode || "login";
   const existing = accountState.users.find((user) => user.email === email);
   if (!existing) {
     accountState.users.push({
       email,
+      realName,
       password,
       role: email === OWNER_EMAIL ? "owner" : "user",
     });
+  } else if (mode === "create") {
+    throw new Error("An account already exists for that email. Use log in.");
   } else if (existing.password && existing.password !== password) {
     throw new Error("Incorrect password.");
   } else if (!existing.password) {
     existing.password = password;
+  }
+  if (existing && realName && !existing.realName) {
+    existing.realName = realName;
   }
   accountState.currentEmail = email;
   saveAccountState();
@@ -2212,6 +2274,7 @@ function currentAccount() {
   const email = currentUserEmail || accountState.currentEmail;
   return accountState.users.find((user) => user.email === email) || {
     email,
+    realName: "",
     password: "",
     role: currentUserRole === "creator" ? "owner" : "user",
   };
@@ -2219,6 +2282,10 @@ function currentAccount() {
 
 function isOwnerAccount() {
   return currentUserRole === "creator" || currentAccount()?.role === "owner";
+}
+
+function isLaunchAccountEmail(email) {
+  return normalizeEmail(email) === OWNER_EMAIL;
 }
 
 function syncAccountsButton() {
@@ -2234,8 +2301,8 @@ function renderAccountsModal() {
     : "Manage your account details.";
 
   const serverOtherUsers = serverUsers
-    .filter((email) => email !== me.email)
-    .map((email) => ({ email, role: email === OWNER_EMAIL ? "owner" : "user" }));
+    .map(normalizeServerUser)
+    .filter((user) => user.email !== me.email);
   const localOtherUsers = accountState.users.filter((user) => user.email !== me.email);
   const otherUsers = serverOtherUsers.length ? serverOtherUsers : localOtherUsers;
   accountsBody.innerHTML = `
@@ -2243,7 +2310,7 @@ function renderAccountsModal() {
       <div class="review-top">
         <div>
           <strong>${ownerView ? "Owner account" : "Your account"}</strong>
-          <span>${escapeHtml(me.email)}</span>
+          <span>${escapeHtml(me.realName || "Name not set")} · ${escapeHtml(me.email)}</span>
         </div>
       </div>
       <form class="review-body" data-account-form>
@@ -2272,8 +2339,8 @@ function renderAccountsModal() {
           ${otherUsers.length ? otherUsers.map((user) => `
             <article class="issue-card">
               <div>
-                <strong>${escapeHtml(user.email)}</strong>
-                <p>${user.role === "owner" ? "Creator" : "Standard user"} · storage limit: latest 6 months active</p>
+                <strong>${escapeHtml(user.realName || "Name not set")}</strong>
+                <p>${escapeHtml(user.email)} · ${user.role === "owner" ? "Creator" : "Standard user"} · storage limit: latest 6 months active</p>
               </div>
             </article>
           `).join("") : `<article class="issue-card"><p>No additional users yet.</p></article>`}
@@ -2291,7 +2358,7 @@ function updateAccountPassword(email, password) {
 
 function addLocalAccount() {
   const nextEmail = `user${accountState.users.length}@example.com`;
-  accountState.users.push({ email: nextEmail, password: "", role: "user" });
+  accountState.users.push({ email: nextEmail, realName: "", password: "", role: "user" });
   saveAccountState();
   setStatus("User added to local account list.");
 }
@@ -2311,6 +2378,32 @@ async function clearLocalWorkspace() {
   renderFilesList();
 }
 
+function loadSkin() {
+  const stored = localStorage.getItem(SKIN_KEY);
+  return stored === "console" ? "console" : "original";
+}
+
+function applySkin(skin) {
+  currentSkin = skin === "console" ? "console" : "original";
+  document.body.dataset.skin = currentSkin;
+  localStorage.setItem(SKIN_KEY, currentSkin);
+}
+
+function syncSkinControl() {
+  const authenticated = Boolean(currentUserEmail && currentUserPassword);
+  const canChooseSkins = isOwnerAccount() && authenticated;
+  if (authenticated && !canChooseSkins && currentSkin !== "original") {
+    applySkin("original");
+  }
+  skinControl.classList.toggle("hidden", !canChooseSkins);
+  skinSelect.value = currentSkin;
+}
+
+function setEntranceStatus(message, isError = false) {
+  entranceStatus.textContent = message;
+  entranceStatus.dataset.error = isError ? "true" : "false";
+}
+
 function loadCurrentUserEmail() {
   return normalizeEmail(localStorage.getItem(CURRENT_EMAIL_KEY));
 }
@@ -2319,48 +2412,82 @@ function normalizeEmail(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+function normalizeServerUser(value) {
+  if (typeof value === "string") {
+    return {
+      email: value,
+      realName: "",
+      role: value === OWNER_EMAIL ? "owner" : "user",
+    };
+  }
+  const email = normalizeEmail(value?.email);
+  const role = value?.role || (email === OWNER_EMAIL ? "owner" : "user");
+  return {
+    email,
+    realName: String(value?.realName || "").trim(),
+    role: role === "creator" ? "owner" : role,
+  };
+}
+
 function openLoginModal() {
   loginEmail.value = currentUserEmail || "";
   loginPassword.value = "";
-  loginModal.classList.remove("hidden");
-  loginModal.setAttribute("aria-hidden", "false");
+  createRealName.value = "";
+  createEmail.value = "";
+  createPassword.value = "";
+  entrancePage.classList.remove("hidden");
+  appShell.classList.add("hidden");
+  mobileActionBar.classList.add("hidden");
   setTimeout(() => loginEmail.focus(), 0);
 }
 
 function closeLoginModal() {
-  loginModal.classList.add("hidden");
-  loginModal.setAttribute("aria-hidden", "true");
+  entrancePage.classList.add("hidden");
+  appShell.classList.remove("hidden");
 }
 
 function renderLoginState() {
-  const loggedIn = Boolean(currentUserEmail);
+  const loggedIn = Boolean(currentUserEmail && currentUserPassword);
   loginBar.classList.toggle("hidden", !loggedIn);
+  appShell.classList.toggle("hidden", !loggedIn);
+  entrancePage.classList.toggle("hidden", loggedIn);
+  if (!loggedIn) mobileActionBar.classList.add("hidden");
+  const me = currentAccount();
+  const displayName = me.realName ? `${me.realName} · ` : "";
   loginIdentity.textContent = loggedIn
-    ? `${currentUserEmail} · ${currentUserRole === "creator" ? "Creator" : "Standard account"}${cloudAvailable ? " · Cloud sync on" : " · Local fallback"}`
+    ? `${displayName}${currentUserEmail} · ${currentUserRole === "creator" ? "Creator" : "Standard account"}${cloudAvailable ? " · Cloud sync on" : " · Local fallback"}`
     : "";
   syncAccountsButton();
+  syncSkinControl();
 }
 
-async function loginWithEmail(email, password) {
+async function loginWithEmail(email, password, options = {}) {
   const previousEmail = currentUserEmail;
-  ensureLocalAccountLogin(email, password);
-  currentUserEmail = normalizeEmail(email);
-  currentUserPassword = password;
-  currentUserRole = currentUserEmail === OWNER_EMAIL ? "creator" : "user";
-  localStorage.setItem(CURRENT_EMAIL_KEY, currentUserEmail);
-  sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
-  setStatus("Loading account workspace...");
-  closeLoginModal();
-  if (previousEmail !== currentUserEmail) {
-    await clearLocalWorkspace();
+  try {
+    ensureLocalAccountLogin(email, password, options);
+    currentUserEmail = normalizeEmail(email);
+    currentUserPassword = password;
+    currentUserRole = currentUserEmail === OWNER_EMAIL ? "creator" : "user";
+    localStorage.setItem(CURRENT_EMAIL_KEY, currentUserEmail);
+    sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
+    setStatus("Loading account workspace...");
+    setEntranceStatus("Loading account workspace...");
+    closeLoginModal();
+    if (previousEmail !== currentUserEmail) {
+      await clearLocalWorkspace();
+    }
+    await restoreCloudState(options);
+    if (!currentUserEmail) return;
+    await bootstrapImports();
+    renderLoginState();
+    setEntranceStatus("");
+  } catch (error) {
+    setEntranceStatus(error.message || "Login failed.", true);
+    setStatus(error.message || "Login failed.", true);
   }
-  await restoreCloudState();
-  if (!currentUserEmail) return;
-  await bootstrapImports();
-  renderLoginState();
 }
 
-async function restoreCloudState() {
+async function restoreCloudState(options = {}) {
   if (!currentUserEmail) return;
   try {
     const response = await fetch("/api/state", {
@@ -2370,12 +2497,21 @@ async function restoreCloudState() {
         action: "login",
         email: currentUserEmail,
         password: currentUserPassword,
+        mode: options.mode || "login",
+        realName: options.realName || "",
       }),
     });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Login failed.");
     cloudAvailable = data.cloudAvailable === true;
     currentUserRole = data.role || currentUserRole;
+    if (data.realName) {
+      const localAccount = accountState.users.find((user) => user.email === currentUserEmail);
+      if (localAccount && !localAccount.realName) {
+        localAccount.realName = data.realName;
+        saveAccountState();
+      }
+    }
     if (!cloudAvailable) return;
     if (!data.state) {
       selectedFiles = [];
@@ -2410,7 +2546,11 @@ async function restoreCloudState() {
       setStatus("Logged in with local-only storage. Cloud sync is not configured yet.", true);
       return;
     }
-    if (error.message !== "Incorrect password." && error.message !== "Account not found.") {
+    if (
+      error.message !== "Incorrect password." &&
+      !error.message.startsWith("Account not found") &&
+      !error.message.includes("already exists")
+    ) {
       cloudAvailable = false;
       renderLoginState();
       setStatus("Logged in with local-only storage. Cloud sync is currently unavailable.", true);
@@ -2419,11 +2559,16 @@ async function restoreCloudState() {
     cloudAvailable = false;
     localStorage.removeItem(CURRENT_EMAIL_KEY);
     sessionStorage.removeItem(CURRENT_PASSWORD_KEY);
+    if (options.mode === "create") {
+      accountState.users = accountState.users.filter((user) => user.email !== currentUserEmail);
+      saveAccountState();
+    }
     currentUserEmail = "";
     currentUserPassword = "";
     renderLoginState();
     openLoginModal();
     setStatus(error.message || "Login failed.", true);
+    setEntranceStatus(error.message || "Login failed.", true);
   }
 }
 

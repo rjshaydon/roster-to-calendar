@@ -10,6 +10,8 @@ export async function onRequestPost(context) {
     const email = normalizeEmail(body?.email);
     const password = String(body?.password || "");
     const action = String(body?.action || "login");
+    const mode = String(body?.mode || "login");
+    const realName = String(body?.realName || "").trim();
     if (!email) {
       return Response.json({ error: "Email address is required." }, { status: 400 });
     }
@@ -19,21 +21,25 @@ export async function onRequestPost(context) {
     if (!password) {
       return Response.json({ error: "Password is required." }, { status: 400 });
     }
+    if (email !== CREATOR_EMAIL) {
+      return Response.json({ error: "Launch mode currently supports only the creator account." }, { status: 403 });
+    }
 
     if (action === "login") {
-      const account = await loadOrCreateAccount(context.env.ROSTER_STORE, email, password);
+      const account = await loadOrCreateAccount(context.env.ROSTER_STORE, email, password, { mode, realName });
       return Response.json({
         ok: true,
         cloudAvailable: true,
         created: account.created,
         role: account.role,
+        realName: account.realName,
         state: account.state,
       });
     }
 
     const account = await verifyAccount(context.env.ROSTER_STORE, email, password);
     if (action === "listUsers") {
-      if (account.role !== "creator") {
+      if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
       return Response.json({ ok: true, users: await listUsers(context.env.ROSTER_STORE) });
@@ -45,6 +51,7 @@ export async function onRequestPost(context) {
         ...account.record,
         email,
         role: account.role,
+        realName: account.record.realName || "",
         state,
         updatedAt: new Date().toISOString(),
       }));
@@ -54,7 +61,7 @@ export async function onRequestPost(context) {
     return Response.json({ error: "Unsupported account action." }, { status: 400 });
   } catch (error) {
     const message = error.message || "Account request failed.";
-    const status = message === "Incorrect password." || message === "Account not found." ? 401 : 400;
+    const status = message === "Incorrect password." || message.startsWith("Account not found") ? 401 : 400;
     return Response.json({ error: message }, { status });
   }
 }
@@ -71,12 +78,18 @@ function storageKey(email) {
   return `account:${email}`;
 }
 
-async function loadOrCreateAccount(store, email, password) {
+async function loadOrCreateAccount(store, email, password, options = {}) {
+  const mode = options.mode || "login";
+  const realName = String(options.realName || "").trim();
   const existing = await store.get(storageKey(email), "json");
   if (!existing) {
+    if (mode !== "create" || !realName) {
+      throw new Error("Account not found. Create an account first.");
+    }
     const passwordRecord = await hashPassword(password);
     const record = {
       email,
+      realName,
       role: roleForEmail(email),
       ...passwordRecord,
       state: sanitizeState(null),
@@ -87,8 +100,12 @@ async function loadOrCreateAccount(store, email, password) {
     return {
       created: true,
       role: record.role,
+      realName: record.realName,
       state: record.state,
     };
+  }
+  if (mode === "create") {
+    throw new Error("An account already exists for that email. Use log in.");
   }
   if (!existing.passwordHash || !existing.passwordSalt) {
     const passwordRecord = await hashPassword(password);
@@ -96,6 +113,7 @@ async function loadOrCreateAccount(store, email, password) {
     const state = role === "creator" ? sanitizeState(existing.state) : sanitizeState(null);
     const upgraded = {
       ...existing,
+      realName: existing.realName || realName || "",
       state,
       ...passwordRecord,
       updatedAt: new Date().toISOString(),
@@ -104,6 +122,7 @@ async function loadOrCreateAccount(store, email, password) {
     return {
       created: false,
       role,
+      realName: upgraded.realName || "",
       state,
     };
   }
@@ -111,10 +130,20 @@ async function loadOrCreateAccount(store, email, password) {
   if (!ok) {
     throw new Error("Incorrect password.");
   }
+  let updated = existing;
+  if (realName && !existing.realName) {
+    updated = {
+      ...existing,
+      realName,
+      updatedAt: new Date().toISOString(),
+    };
+    await store.put(storageKey(email), JSON.stringify(updated));
+  }
   return {
     created: false,
-    role: existing.role || roleForEmail(email),
-    state: sanitizeState(existing.state),
+    role: updated.role || roleForEmail(email),
+    realName: updated.realName || "",
+    state: sanitizeState(updated.state),
   };
 }
 
@@ -135,9 +164,18 @@ async function verifyAccount(store, email, password) {
 
 async function listUsers(store) {
   const result = await store.list({ prefix: "account:" });
-  return (result.keys || [])
-    .map((item) => item.name.replace(/^account:/, ""))
-    .sort();
+  const users = await Promise.all((result.keys || []).map(async (item) => {
+    const email = item.name.replace(/^account:/, "");
+    const record = await store.get(item.name, "json").catch(() => null);
+    return {
+      email,
+      realName: String(record?.realName || "").trim(),
+      role: record?.role || roleForEmail(email),
+      createdAt: record?.createdAt || "",
+      updatedAt: record?.updatedAt || "",
+    };
+  }));
+  return users.sort((a, b) => a.email.localeCompare(b.email));
 }
 
 async function hashPassword(password, salt = randomSalt()) {

@@ -11,6 +11,8 @@ The app must move beyond per-browser local storage. Accounts, roster files, pars
 ### Creator / Admin
 
 - Email: `rhaydon@gmail.com`
+- Initial launch is creator-account-first: the Creator account is the first supported production account and gets the skin/theme controls while the broader account system is hardened.
+- Public multi-user account creation is deferred until server-side D1/R2 repository storage is implemented; launch login/setup should reject non-Creator accounts.
 - Has unrestricted retained roster history.
 - Can view users, uploaded files, repository files, roster name claims, sites, roles, disputes, and unresolved roster-version conflicts.
 - Can inspect another user's generated calendar for debugging.
@@ -46,6 +48,22 @@ After login or account creation:
 - The app shows detected candidate names grouped by site.
 - The user confirms which names belong to them.
 - If confirmed names produce roster events, the user is shown their calendar preview.
+
+## Skins / Interface Themes
+
+The app may support multiple skins so alternative layouts can be tested without discarding the working interface.
+
+Launch skins:
+
+- `Original`: the existing warm card-based upload and preview interface.
+- `Calendar console`: an admin-only experimental skin with a left control/sidebar area and a larger right-side calendar workspace inspired by clinical rostering apps.
+
+Skin controls:
+
+- Visible only to the Creator/Admin account initially.
+- Persist as a user preference.
+- Should not change parsing, storage, export, or account behavior.
+- May be removed later if one visual direction is selected.
 
 ## Accounts
 

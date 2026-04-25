@@ -6,8 +6,65 @@
     <title>Roster Converter</title>
     <link rel="stylesheet" href="/static/styles.css">
   </head>
-  <body>
-    <main class="page">
+  <body data-skin="original">
+    <section id="entrancePage" class="entrance-page hidden" aria-label="Roster Converter entrance">
+      <div class="entrance-copy">
+        <p class="drop-kicker">Roster Converter</p>
+        <h1>Turn rosters into calendars.</h1>
+        <p class="lede">
+          Upload MMC and Dandenong roster exports, confirm your name, preview your shifts,
+          and export an Apple Calendar-compatible .ics file.
+        </p>
+        <div class="entrance-notes">
+          <span>Personal roster extraction</span>
+          <span>Calendar preview before export</span>
+          <span>Creator account launch mode</span>
+        </div>
+      </div>
+
+      <div class="entrance-card">
+        <div class="entrance-form-grid">
+          <form id="loginForm" class="entrance-form">
+            <div class="section-head">
+              <h2>Log in</h2>
+              <p>Use your existing account to restore your roster workspace.</p>
+            </div>
+            <label class="field">
+              <span>Email address</span>
+              <input id="loginEmail" type="email" autocomplete="email" required placeholder="you@example.com">
+            </label>
+            <label class="field">
+              <span>Password</span>
+              <input id="loginPassword" type="password" autocomplete="current-password" required placeholder="Enter password">
+            </label>
+            <button type="submit" class="button button-primary">Log in</button>
+          </form>
+
+          <form id="createAccountForm" class="entrance-form">
+            <div class="section-head">
+              <h2>First-time setup</h2>
+              <p>Launch mode is limited to the creator account while multi-user storage is built.</p>
+            </div>
+            <label class="field">
+              <span>Real name</span>
+              <input id="createRealName" type="text" autocomplete="name" required placeholder="Richard Haydon">
+            </label>
+            <label class="field">
+              <span>Email address</span>
+              <input id="createEmail" type="email" autocomplete="email" required placeholder="you@example.com">
+            </label>
+            <label class="field">
+              <span>Password</span>
+              <input id="createPassword" type="password" autocomplete="new-password" required placeholder="Choose password">
+            </label>
+            <button type="submit" class="button button-secondary">Create creator account</button>
+          </form>
+        </div>
+        <p id="entranceStatus" class="status" aria-live="polite"></p>
+      </div>
+    </section>
+
+    <main id="appShell" class="page app-shell hidden">
       <section class="hero">
         <h1>Roster Converter</h1>
         <p class="lede hero-copy">
@@ -19,7 +76,16 @@
       <section class="panel">
         <div id="loginBar" class="login-bar hidden">
           <span id="loginIdentity"></span>
-          <button id="logoutButton" type="button" class="button button-secondary">Log out</button>
+          <div class="login-actions">
+            <label id="skinControl" class="skin-control hidden">
+              <span>Skin</span>
+              <select id="skinSelect">
+                <option value="original">Original</option>
+                <option value="console">Calendar console</option>
+              </select>
+            </label>
+            <button id="logoutButton" type="button" class="button button-secondary">Log out</button>
+          </div>
         </div>
         <form id="roster-form">
           <div id="dropZone" class="drop-zone" tabindex="0" role="button" aria-label="Choose roster files">
@@ -141,29 +207,6 @@
           <p>Imported rosters stay here until you remove them.</p>
         </div>
         <div id="filesList" class="issues-list"></div>
-      </section>
-    </div>
-
-    <div id="loginModal" class="modal hidden" aria-hidden="true">
-      <div class="modal-backdrop"></div>
-      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="loginModalTitle">
-        <div class="section-head">
-          <h3 id="loginModalTitle">Log in</h3>
-          <p>Enter your email address and password. New emails create an empty account.</p>
-        </div>
-        <form id="loginForm" class="custom-event-form">
-          <label class="field">
-            <span>Email address</span>
-            <input id="loginEmail" type="email" autocomplete="email" required placeholder="you@example.com">
-          </label>
-          <label class="field">
-            <span>Password</span>
-            <input id="loginPassword" type="password" autocomplete="current-password" required placeholder="Choose or enter password">
-          </label>
-          <div class="modal-actions">
-            <button type="submit" class="button button-primary">Continue</button>
-          </div>
-        </form>
       </section>
     </div>
 
