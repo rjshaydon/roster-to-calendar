@@ -28,9 +28,7 @@ const createAccountForm = document.querySelector("#createAccountForm");
 const createRealName = document.querySelector("#createRealName");
 const createEmail = document.querySelector("#createEmail");
 const createPassword = document.querySelector("#createPassword");
-const previewButton = document.querySelector("#previewButton");
 const exportButton = document.querySelector("#exportButton");
-const mobilePreviewButton = document.querySelector("#mobilePreviewButton");
 const mobileExportButton = document.querySelector("#mobileExportButton");
 const mobileSettingsButton = document.querySelector("#mobileSettingsButton");
 const doctorSection = document.querySelector("#doctorSection");
@@ -270,22 +268,7 @@ createAccountForm.addEventListener("submit", async (event) => {
   }
   await loginWithEmail(email, password, { mode: "create", realName });
 });
-logoutButton.addEventListener("click", () => {
-  localStorage.removeItem(CURRENT_EMAIL_KEY);
-  sessionStorage.removeItem(CURRENT_PASSWORD_KEY);
-  currentUserEmail = "";
-  currentUserPassword = "";
-  authUserEmail = "";
-  authUserPassword = "";
-  adminViewingEmail = "";
-  currentUserRole = "user";
-  cloudAvailable = false;
-  selectedFiles = [];
-  resetDerivedState();
-  renderLoginState();
-  openLoginModal();
-  setStatus("Log in to load a roster workspace.");
-});
+logoutButton.addEventListener("click", logoutCurrentUser);
 backToCreatorButton.addEventListener("click", () => {
   returnToCreatorAccount();
 });
@@ -295,10 +278,11 @@ skinSelect.addEventListener("change", () => {
   syncSkinControl();
 });
 
-doctorSelect.addEventListener("change", () => {
+doctorSelect.addEventListener("change", async () => {
   clearPreviewData();
   saveCurrentSessionState();
   syncActionState();
+  if (selectedDoctor()) await updatePreview();
 });
 
 settingsToggle.addEventListener("click", () => {
@@ -338,7 +322,7 @@ for (const [key, input] of Object.entries(settingsInputs)) {
       setStatus("Shift colours updated.");
       return;
     }
-    setStatus("Settings updated. Use Calendar preview to refresh the grid.");
+    setStatus("Settings updated.");
   });
 }
 
@@ -397,12 +381,20 @@ reviewModalBody.addEventListener("click", (event) => {
   resetImportedEvent(resetButton.dataset.overrideReset);
 });
 
-previewButton.addEventListener("click", () => updatePreview());
-mobilePreviewButton.addEventListener("click", () => updatePreview());
 mobileExportButton.addEventListener("click", () => form.requestSubmit());
 preview.addEventListener("click", (event) => {
   if (Date.now() < suppressPreviewClickUntil) return;
   closeContextMenu();
+  const logoutTrigger = event.target.closest("[data-preview-logout]");
+  if (logoutTrigger) {
+    logoutCurrentUser();
+    return;
+  }
+  const backTrigger = event.target.closest("[data-preview-back-to-creator]");
+  if (backTrigger) {
+    returnToCreatorAccount();
+    return;
+  }
   const rangeTrigger = event.target.closest("[data-range-trigger]");
   if (rangeTrigger) {
     openPreviewRangePicker(rangeTrigger.dataset.rangeTrigger);
@@ -423,6 +415,16 @@ preview.addEventListener("pointerdown", (event) => {
   startPreviewGesture(event, chip);
 });
 preview.addEventListener("change", (event) => {
+  const doctorPicker = event.target.closest("[data-preview-doctor-select]");
+  if (doctorPicker) {
+    doctorSelect.value = doctorPicker.value;
+    clearPreviewData();
+    saveCurrentSessionState();
+    syncActionState();
+    updatePreview();
+    return;
+  }
+
   const rangeInput = event.target.closest("[data-range-input]");
   if (!rangeInput) return;
   applyPreviewRangeChange(rangeInput.dataset.rangeInput, rangeInput.value);
@@ -714,7 +716,7 @@ async function analyzeFiles() {
     renderSettings();
     renderFilesList();
     renderDoctorState();
-    if (restoredSessionState?.hadPreview && selectedDoctor()) {
+    if (selectedDoctor()) {
       await updatePreview();
       return;
     }
@@ -781,7 +783,7 @@ function renderDoctorState() {
   if (doctorOptions.length === 1) {
     doctorName.textContent = doctorOptions[0].displayName;
     doctorName.classList.remove("hidden");
-    setStatus("Calendar preview when ready.");
+    setStatus("Loading calendar...");
   } else {
     for (const doctor of doctorOptions) {
       const option = document.createElement("option");
@@ -793,7 +795,7 @@ function renderDoctorState() {
       doctorSelect.value = restoredSessionState.doctorKey;
     }
     doctorSelect.classList.remove("hidden");
-    setStatus("Choose a doctor, then calendar preview or export.");
+    setStatus("Choose a doctor to load the calendar.");
   }
 
   syncActionState();
@@ -802,10 +804,10 @@ function renderDoctorState() {
 async function updatePreview() {
   const doctor = selectedDoctor();
   if (!doctor) {
-    setStatus("Choose a doctor before previewing.", true);
+    setStatus("Choose a doctor before loading the calendar.", true);
     return;
   }
-  setStatus("Building preview...");
+  setStatus("Loading calendar...");
   try {
     const data = await postPreviewForm("/api/preview", doctor);
     latestPreview = data;
@@ -818,7 +820,7 @@ async function updatePreview() {
     indexReviewItems(data.review || []);
     rebuildClientPreview();
     saveCurrentSessionState();
-    setStatus("Preview loaded.");
+    setStatus("Calendar loaded.");
   } catch (error) {
     clearPreviewData();
     setStatus(error.message, true);
@@ -982,6 +984,7 @@ function renderPreviewGrid(doctor, data) {
   const events = data.events || [];
   currentPreviewEvents = new Map(events.map((event) => [event.id, event]));
   const days = buildPreviewDays(events, data.previewStart, data.previewEnd);
+  document.body.classList.add("has-calendar-preview");
   if (!days.length) {
     preview.innerHTML = `
       ${renderPreviewHeader(doctor, data)}
@@ -1006,9 +1009,40 @@ function renderPreviewHeader(doctor, data) {
   const hospitalSelector = renderPreviewHospitalSelector(data.hospitals || []);
   return `
     <div class="preview-head">
-      ${renderPreviewRangeControls(data.previewStart, data.previewEnd)}
-      ${hospitalSelector}
-      <span class="preview-event-count">${data.count} events</span>
+      ${renderPreviewDoctorControl(doctor)}
+      <div class="preview-toolbar">
+        ${renderPreviewRangeControls(data.previewStart, data.previewEnd)}
+        ${hospitalSelector || `<span class="preview-toolbar-spacer" aria-hidden="true"></span>`}
+        <span class="preview-event-count">${data.count} events</span>
+        ${adminViewingEmail && isCreatorAuthenticated()
+          ? `<button type="button" class="button button-secondary preview-back-button" data-preview-back-to-creator>Back to creator</button>`
+          : ""}
+        <button type="button" class="button button-secondary preview-logout-button" data-preview-logout>Log out</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderPreviewDoctorControl(doctor) {
+  if (doctorOptions.length > 1) {
+    return `
+      <label class="preview-doctor-control">
+        <span>Doctor</span>
+        <select data-preview-doctor-select>
+          ${doctorOptions.map((option) => `
+            <option value="${escapeHtml(option.key)}" ${option.key === doctor.key ? "selected" : ""}>
+              ${escapeHtml(option.displayName)}
+            </option>
+          `).join("")}
+        </select>
+      </label>
+    `;
+  }
+
+  return `
+    <div class="preview-doctor-control">
+      <span>Doctor</span>
+      <strong>${escapeHtml(doctor?.displayName || currentAccount().realName || "Selected doctor")}</strong>
     </div>
   `;
 }
@@ -1187,9 +1221,7 @@ function renderTermSection(section) {
 
 function syncActionState() {
   const ready = Boolean(selectedDoctor());
-  previewButton.disabled = !ready;
   exportButton.disabled = !ready;
-  mobilePreviewButton.disabled = !ready;
   mobileExportButton.disabled = !ready;
 }
 
@@ -1768,6 +1800,7 @@ function clearPreviewData() {
   reviewIndex = new Map();
   currentPreviewEvents = new Map();
   availablePreviewHospitals = [];
+  document.body.classList.remove("has-calendar-preview");
   issuesPanel.classList.add("hidden");
   conflictsPanel.classList.add("hidden");
   previewSection.classList.add("hidden");
@@ -2733,6 +2766,23 @@ function openLoginModal() {
 function closeLoginModal() {
   entrancePage.classList.add("hidden");
   appShell.classList.remove("hidden");
+}
+
+function logoutCurrentUser() {
+  localStorage.removeItem(CURRENT_EMAIL_KEY);
+  sessionStorage.removeItem(CURRENT_PASSWORD_KEY);
+  currentUserEmail = "";
+  currentUserPassword = "";
+  authUserEmail = "";
+  authUserPassword = "";
+  adminViewingEmail = "";
+  currentUserRole = "user";
+  cloudAvailable = false;
+  selectedFiles = [];
+  resetDerivedState();
+  renderLoginState();
+  openLoginModal();
+  setStatus("Log in to load a roster workspace.");
 }
 
 function renderLoginState() {
