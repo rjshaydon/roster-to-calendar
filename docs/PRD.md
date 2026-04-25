@@ -242,6 +242,34 @@ If the system cannot determine the latest version:
 - Admin selects the active version.
 - Admin may record a future rule to help resolve similar conflicts.
 
+### Admin Version Rules
+
+Initial implementation should use structured deterministic rules rather than machine learning.
+
+When Admin resolves a version conflict, the system should save:
+
+- selected active file
+- rejected/superseded files
+- site
+- source type
+- date range
+- filename patterns
+- detected version markers
+- spreadsheet modification dates
+- upload dates
+- Admin note
+
+The system should then apply simple future rules in priority order:
+
+- exact repository duplicate/content fingerprint match
+- filename finality markers such as `FINAL`
+- filename version markers such as `V2`, `V3`, or later
+- spreadsheet modification date
+- upload date
+- roster completeness for the relevant date range
+
+If rules disagree or confidence is low, the system should continue to flag Admin rather than guessing.
+
 ## DDH / FindMyShift
 
 DDH currently uses FindMyShift.
@@ -251,6 +279,7 @@ Accepted DDH sources:
 - individual "my shifts" exports
 - full DDH roster exports if available
 - subscription URL input if available
+- `webcal://` iCalendar subscription URLs
 
 Source-of-truth rule:
 
@@ -258,6 +287,16 @@ Source-of-truth rule:
 - Once a full roster exists for the same period, it becomes the preferred source of truth.
 
 The app should allow DDH users to provide a subscription URL as an alternative to file upload where supported.
+
+FindMyShift subscription URLs:
+
+- are currently provided as `webcal://.../ical.ics?...` links
+- should be normalized internally to fetchable HTTPS where required
+- should be treated as private secrets because the URL token grants roster access
+- must not be displayed back to users in full after saving
+- must not be written into logs, PRDs, fixtures, screenshots, or admin inline lists
+- should be stored encrypted or in a protected secret field where the platform allows it
+- should be refreshable on login and on scheduled background refresh
 
 ## Personal Roster Generation
 
@@ -431,8 +470,32 @@ Recommended implementation:
 - Cloudflare D1 for relational entities and claims.
 - Cloudflare R2 for uploaded source files.
 - Optional KV for small session/cache data only.
+- Gmail API for low-volume launch email notifications if the Admin Gmail/Workspace account is authorized.
+- Keep the email service behind an adapter so Gmail can be replaced later by a transactional provider if volume or deliverability requires it.
 
 Browser local storage may be used only as a temporary cache, not as the source of truth.
+
+## Email Notifications
+
+Email notifications are useful for:
+
+- name-claim disputes
+- admin decisions
+- user messages from dispute workflows
+- future password reset or verification flows
+
+Launch decision:
+
+- Use Gmail API as the initial outbound provider if the required Google OAuth setup is acceptable.
+- Email verification is not required at launch.
+- In-app messages remain the required notification channel.
+- Email is an additional notification channel and should not be the only place a user sees a dispute or admin message.
+
+Constraints:
+
+- Gmail sends through the authorized Gmail/Google Workspace account.
+- Gmail has daily and per-message sending limits.
+- If the product grows beyond low-volume notifications, switch to a transactional email provider.
 
 ## Implementation Direction
 
@@ -456,16 +519,20 @@ The v2 rebuild should introduce these entities:
 - CustomEvent
 - GeneratedRoster
 
+## Decisions Recorded
+
+- Initial outbound email provider: Gmail API.
+- Email verification: not required at launch.
+- Admin version-resolution rules: structured deterministic rules with Admin notes, not machine learning initially.
+- DDH subscription URL format: `webcal://` iCalendar feed.
+
 ## Open Questions
 
-1. Email delivery provider:
-   Which service should send dispute/login/admin emails later? Cloudflare Email Workers can receive email, but outbound transactional email usually needs a provider such as Resend, Postmark, Mailgun, or SendGrid.
+1. Gmail account:
+   Which Gmail or Google Workspace account should send outbound app notifications?
 
-2. Initial account verification:
-   Should users verify email addresses before uploading rosters, or can verification wait until later?
+2. Gmail OAuth:
+   Should the app send only as the Creator account, or should a dedicated app mailbox be created later?
 
-3. Admin rule training:
-   When Admin resolves a roster-version ambiguity, should the resulting rule be a simple pattern rule, or just saved as a note for now?
-
-4. Subscription URLs:
-   For DDH/FindMyShift subscription URLs, what exact feed formats are available: `.ics`, CSV, Excel, or authenticated web links?
+3. FindMyShift subscriptions:
+   Are full-roster FindMyShift subscription URLs available to the Creator/Admin, or only individual user feeds?
