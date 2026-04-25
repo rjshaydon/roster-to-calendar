@@ -88,17 +88,6 @@
           </div>
         </div>
         <form id="roster-form">
-          <div id="dropZone" class="drop-zone" tabindex="0" role="button" aria-label="Choose roster files">
-            <input id="rosterFiles" name="rosterFiles" type="file" accept=".xlsx,.xlsm,.xltx,.xltm" multiple hidden>
-            <p class="drop-kicker">Choose Files</p>
-            <h2>Drop roster exports here.</h2>
-            <p class="upload-help">
-              Add one or more Excel files. The app detects roster type automatically, builds the
-              consultant list, stores your imports, and keeps the export ready once you choose a doctor.
-            </p>
-            <button type="button" class="button button-secondary" id="chooseFilesButton">Choose Files</button>
-          </div>
-
           <div id="doctorSection" class="doctor-section hidden">
             <label for="doctorSelect" class="select-label">Doctor</label>
             <p id="doctorName" class="doctor-name hidden"></p>
@@ -107,7 +96,7 @@
 
           <div id="controlBar" class="control-bar hidden">
             <div class="control-bar-main">
-              <button id="previewButton" type="button" class="button button-secondary" disabled>Preview</button>
+              <button id="previewButton" type="button" class="button button-secondary" disabled>Calendar preview</button>
               <button id="exportButton" type="submit" class="button button-primary" disabled>Export .ics</button>
               <button id="filesButton" type="button" class="button button-secondary">Files</button>
               <span class="control-bar-spacer" aria-hidden="true"></span>
@@ -117,23 +106,37 @@
             <p id="status" class="status" aria-live="polite"></p>
           </div>
 
+          <div id="dropZone" class="drop-zone" tabindex="0" role="button" aria-label="Choose roster files">
+            <input id="rosterFiles" name="rosterFiles" type="file" accept=".xlsx,.xlsm,.xltx,.xltm" multiple hidden>
+            <p class="drop-kicker">Import Rosters</p>
+            <h2>Drop roster exports here.</h2>
+            <p class="upload-help">
+              Add one or more Excel files. The app detects roster type automatically, builds the
+              consultant list, stores your imports, and keeps the export ready once you choose a doctor.
+            </p>
+            <div class="drop-or">OR</div>
+            <button type="button" class="button button-secondary" id="chooseFilesButton">Choose Files</button>
+          </div>
+
           <section id="settingsPanel" class="settings-panel hidden" aria-label="Roster settings">
             <div class="settings-head">
-              <h3>Settings</h3>
-              <p>These preferences apply to this upload only.</p>
+              <div>
+                <h3>Settings</h3>
+                <p>These preferences apply to this upload only.</p>
+              </div>
+              <button id="settingsCloseButton" type="button" class="modal-close" aria-label="Close settings">×</button>
             </div>
 
             <div class="settings-grid">
               <fieldset class="settings-group">
                 <legend>Title</legend>
-                <label class="toggle"><input id="showSourcePrefix" type="checkbox" checked> Include MMC/DDH prefix</label>
+                <label class="toggle"><input id="showSourcePrefix" type="checkbox" checked> Include hospital prefix</label>
                 <label class="toggle"><input id="showAmPm" type="checkbox" checked> Include AM/PM labels</label>
               </fieldset>
 
               <fieldset class="settings-group">
                 <legend>Preview</legend>
                 <label class="toggle"><input id="showTimes" type="checkbox" checked> Show times on preview cards</label>
-                <label class="toggle"><input id="showLocations" type="checkbox"> Show locations on preview cards</label>
                 <label class="toggle"><input id="showNormalizedTitles" type="checkbox" checked> Show normalized titles</label>
                 <label class="toggle"><input id="showRawValues" type="checkbox"> Show raw roster values</label>
               </fieldset>
@@ -148,24 +151,25 @@
               </fieldset>
 
               <fieldset class="settings-group">
-                <legend>Scope</legend>
+                <legend>Default Locations</legend>
                 <label class="field">
-                  <span>Hospital</span>
-                  <select id="hospitalFilter">
-                    <option value="all">All hospitals</option>
-                    <option value="mmc">MMC only</option>
-                    <option value="ddh">DDH only</option>
-                  </select>
+                  <span>MMC</span>
+                  <input id="defaultLocationMmc" type="text">
                 </label>
                 <label class="field">
-                  <span>From</span>
-                  <input id="dateFrom" type="date">
-                </label>
-                <label class="field">
-                  <span>To</span>
-                  <input id="dateTo" type="date">
+                  <span>DDH</span>
+                  <input id="defaultLocationDdh" type="text">
                 </label>
               </fieldset>
+            </div>
+            <div class="hidden" aria-hidden="true">
+              <select id="hospitalFilter">
+                <option value="all">All hospitals</option>
+                <option value="mmc">MMC only</option>
+                <option value="ddh">DDH only</option>
+              </select>
+              <input id="dateFrom" type="hidden">
+              <input id="dateTo" type="hidden">
             </div>
           </section>
 
@@ -193,7 +197,7 @@
     </main>
 
     <div id="mobileActionBar" class="mobile-action-bar hidden">
-      <button id="mobilePreviewButton" type="button" class="button button-secondary" disabled>Preview</button>
+      <button id="mobilePreviewButton" type="button" class="button button-secondary" disabled>Calendar preview</button>
       <button id="mobileExportButton" type="button" class="button button-primary" disabled>Export .ics</button>
       <button id="mobileSettingsButton" type="button" class="button button-secondary">Settings</button>
     </div>

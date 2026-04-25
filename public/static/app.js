@@ -38,6 +38,7 @@ const doctorName = document.querySelector("#doctorName");
 const controlBar = document.querySelector("#controlBar");
 const settingsToggle = document.querySelector("#settingsToggle");
 const settingsPanel = document.querySelector("#settingsPanel");
+const settingsCloseButton = document.querySelector("#settingsCloseButton");
 const previewSection = document.querySelector("#previewSection");
 const preview = document.querySelector("#preview");
 const issuesPanel = document.querySelector("#issuesPanel");
@@ -68,6 +69,8 @@ const contextMenu = document.querySelector("#contextMenu");
 
 const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const OWNER_EMAIL = "rhaydon@gmail.com";
+const DEFAULT_MMC_LOCATION = "MMC Car Park, Tarella Road, Clayton VIC 3168, Australia";
+const DEFAULT_DDH_LOCATION = "DDH Car Park, 135 David St, Dandenong VIC 3175, Australia";
 const ACCOUNT_STATE_KEY = "roster-account-state";
 const SESSION_STATE_KEY = "roster-session-state-v1";
 const ACCOUNT_WORKSPACES_KEY = "roster-account-workspaces-v1";
@@ -79,7 +82,6 @@ const SETTINGS_FIELDS = [
   "showSourcePrefix",
   "showAmPm",
   "showTimes",
-  "showLocations",
   "showRawValues",
   "showNormalizedTitles",
   "includeLocations",
@@ -87,6 +89,8 @@ const SETTINGS_FIELDS = [
   "includeConferenceLeave",
   "includePublicHoliday",
   "includeSickLeave",
+  "defaultLocationMmc",
+  "defaultLocationDdh",
   "hospitalFilter",
   "dateFrom",
   "dateTo",
@@ -101,6 +105,7 @@ let latestPreview = null;
 let reviewIndex = new Map();
 let customEvents = [];
 let currentPreviewEvents = new Map();
+let availablePreviewHospitals = [];
 let dragEventId = null;
 let copiedEvent = null;
 let previewGesture = null;
@@ -200,9 +205,10 @@ accountsBody.addEventListener("submit", (event) => {
   const formElement = event.target.closest("[data-account-form]");
   if (!formElement) return;
   const email = formElement.querySelector("[data-account-email]")?.value.trim() || "";
+  const realName = formElement.querySelector("[data-account-real-name]")?.value.trim() || "";
   const password = formElement.querySelector("[data-account-password]")?.value || "";
   if (!email) return;
-  updateAccountPassword(email, password);
+  updateAccountDetails(email, { password, realName });
 });
 accountsBody.addEventListener("click", (event) => {
   const addButton = event.target.closest("[data-add-account]");
@@ -269,6 +275,9 @@ doctorSelect.addEventListener("change", () => {
 settingsToggle.addEventListener("click", () => {
   settingsPanel.classList.toggle("hidden");
 });
+settingsCloseButton.addEventListener("click", () => {
+  settingsPanel.classList.add("hidden");
+});
 mobileSettingsButton.addEventListener("click", () => {
   settingsPanel.classList.toggle("hidden");
 });
@@ -286,7 +295,15 @@ for (const [key, input] of Object.entries(settingsInputs)) {
       setStatus("Preview range updated.");
       return;
     }
-    setStatus("Settings updated. Use Preview to refresh the grid.");
+    if (latestPreview && key === "hospitalFilter") {
+      updatePreview();
+      return;
+    }
+    if (latestPreview && (key === "defaultLocationMmc" || key === "defaultLocationDdh")) {
+      updatePreview();
+      return;
+    }
+    setStatus("Settings updated. Use Calendar preview to refresh the grid.");
   });
 }
 
@@ -374,6 +391,14 @@ preview.addEventListener("change", (event) => {
   const rangeInput = event.target.closest("[data-range-input]");
   if (!rangeInput) return;
   applyPreviewRangeChange(rangeInput.dataset.rangeInput, rangeInput.value);
+});
+preview.addEventListener("change", (event) => {
+  const hospitalSelect = event.target.closest("[data-preview-hospital-filter]");
+  if (!hospitalSelect) return;
+  settings.hospitalFilter = hospitalSelect.value;
+  if (settingsInputs.hospitalFilter) settingsInputs.hospitalFilter.value = settings.hospitalFilter;
+  saveCurrentSessionState();
+  updatePreview();
 });
 issuesList.addEventListener("click", (event) => {
   const card = event.target.closest("[data-review-id]");
@@ -559,7 +584,6 @@ function defaultSettings() {
     showSourcePrefix: true,
     showAmPm: true,
     showTimes: true,
-    showLocations: false,
     showRawValues: false,
     showNormalizedTitles: true,
     includeLocations: true,
@@ -567,6 +591,8 @@ function defaultSettings() {
     includeConferenceLeave: true,
     includePublicHoliday: true,
     includeSickLeave: true,
+    defaultLocationMmc: DEFAULT_MMC_LOCATION,
+    defaultLocationDdh: DEFAULT_DDH_LOCATION,
     hospitalFilter: "all",
     dateFrom: "",
     dateTo: "",
@@ -710,7 +736,7 @@ function renderDoctorState() {
   if (doctorOptions.length === 1) {
     doctorName.textContent = doctorOptions[0].displayName;
     doctorName.classList.remove("hidden");
-    setStatus("Preview when ready.");
+    setStatus("Calendar preview when ready.");
   } else {
     for (const doctor of doctorOptions) {
       const option = document.createElement("option");
@@ -722,7 +748,7 @@ function renderDoctorState() {
       doctorSelect.value = restoredSessionState.doctorKey;
     }
     doctorSelect.classList.remove("hidden");
-    setStatus("Choose a doctor, then preview or export.");
+    setStatus("Choose a doctor, then calendar preview or export.");
   }
 
   syncActionState();
@@ -771,6 +797,10 @@ function buildClientPreviewData(baseData) {
   const range = deriveRangeBounds(baseData.events || []);
   const events = [];
   const deletedItems = [];
+  const hospitals = availableHospitalsForPreview(baseData.events || []);
+  if (settings.hospitalFilter === "all" || hospitals.length > availablePreviewHospitals.length) {
+    availablePreviewHospitals = hospitals;
+  }
 
   for (const item of reviewIndex.values()) {
     const event = baseEvents.get(item.id);
@@ -802,6 +832,7 @@ function buildClientPreviewData(baseData) {
     date_range: formatPreviewRange(previewStart, previewEnd) || (events.length ? summarizeEvents(events) : "No events found"),
     previewStart,
     previewEnd,
+    hospitals: availablePreviewHospitals,
     lastImport: latestImportTimestamp(),
     issues: [
       ...(baseData.issues || []).filter((issue) => {
@@ -813,6 +844,18 @@ function buildClientPreviewData(baseData) {
       ...deletedItems,
     ],
   };
+}
+
+function availableHospitalsForPreview(events) {
+  const codes = new Set();
+  for (const event of events || []) {
+    if (event.source) codes.add(String(event.source).toUpperCase());
+    const titlePrefix = String(event.title || "").match(/^(MMC|DDH):/i)?.[1];
+    if (titlePrefix) codes.add(titlePrefix.toUpperCase());
+  }
+  return [...codes]
+    .filter((code) => code === "MMC" || code === "DDH")
+    .sort();
 }
 
 function enforceSixMonthLimit(view) {
@@ -915,13 +958,31 @@ function renderPreviewGrid(doctor, data) {
 }
 
 function renderPreviewHeader(doctor, data) {
+  const displayName = currentAccount()?.realName || doctor.displayName;
+  const hospitalSelector = renderPreviewHospitalSelector(data.hospitals || []);
   return `
     <div class="preview-head">
-      <strong>${escapeHtml(doctor.displayName)}</strong>
-      <span>${data.count} events</span>
+      <strong>${escapeHtml(displayName)}</strong>
       ${renderPreviewRangeControls(data.previewStart, data.previewEnd)}
-      <span>Last import: ${escapeHtml(formatTimestamp(data.lastImport))}</span>
+      ${hospitalSelector}
+      <span class="preview-event-count">${data.count} events</span>
     </div>
+  `;
+}
+
+function renderPreviewHospitalSelector(hospitals) {
+  if (!hospitals || hospitals.length < 2) return "";
+  return `
+    <label class="preview-hospital-filter">
+      <span>Hospital</span>
+      <select data-preview-hospital-filter>
+        <option value="all" ${settings.hospitalFilter === "all" ? "selected" : ""}>All hospitals</option>
+        ${hospitals.map((code) => {
+          const value = code.toLowerCase();
+          return `<option value="${value}" ${settings.hospitalFilter === value ? "selected" : ""}>${escapeHtml(code)}</option>`;
+        }).join("")}
+      </select>
+    </label>
   `;
 }
 
@@ -1011,7 +1072,6 @@ function renderPreviewChip(event, dayKey) {
   }
   const meta = [];
   if (!event.allDay && settings.showTimes && startKey === dayKey && event.timeLabel) meta.push(event.timeLabel);
-  if (settings.showLocations && event.location) meta.push(event.location);
   const metaMarkup = meta.length ? `<span class="preview-chip-meta">${escapeHtml(meta.join(" · "))}</span>` : "";
   return `<button type="button" class="preview-chip preview-chip-${eventTone(event)}" data-review-id="${event.id}">${lines.join("")}${metaMarkup}</button>`;
 }
@@ -1540,7 +1600,6 @@ function commitPreviewGestureTime(gesture) {
 function setPreviewChipMeta(chip, event, forceTime = false) {
   const metaParts = [];
   if ((!event.allDay && settings.showTimes) || forceTime) metaParts.push(event.timeLabel);
-  if (settings.showLocations && event.location) metaParts.push(event.location);
   const text = metaParts.join(" · ");
   let meta = chip.querySelector(".preview-chip-meta");
   if (!text) {
@@ -1665,6 +1724,7 @@ function clearPreviewData() {
   latestPreview = null;
   reviewIndex = new Map();
   currentPreviewEvents = new Map();
+  availablePreviewHospitals = [];
   issuesPanel.classList.add("hidden");
   conflictsPanel.classList.add("hidden");
   previewSection.classList.add("hidden");
@@ -2088,8 +2148,8 @@ function buildLocationOptionMarkup(selectedMode = "") {
 
 function detectLocationPreset(location) {
   if (!location) return { mode: "offsite", customValue: "" };
-  if (location === "MMC Car Park, Tarella Road, Clayton VIC 3168, Australia") return { mode: "mmc", customValue: "" };
-  if (location === "DDH Car Park, 135 David St, Dandenong VIC 3175, Australia") return { mode: "ddh", customValue: "" };
+  if (location === settings.defaultLocationMmc || location === DEFAULT_MMC_LOCATION) return { mode: "mmc", customValue: "" };
+  if (location === settings.defaultLocationDdh || location === DEFAULT_DDH_LOCATION) return { mode: "ddh", customValue: "" };
   return { mode: "custom", customValue: location };
 }
 
@@ -2129,8 +2189,8 @@ function readCustomEventForm() {
 }
 
 function resolveCustomEventLocation() {
-  if (customEventLocationMode.value === "mmc") return "MMC Car Park, Tarella Road, Clayton VIC 3168, Australia";
-  if (customEventLocationMode.value === "ddh") return "DDH Car Park, 135 David St, Dandenong VIC 3175, Australia";
+  if (customEventLocationMode.value === "mmc") return settings.defaultLocationMmc || DEFAULT_MMC_LOCATION;
+  if (customEventLocationMode.value === "ddh") return settings.defaultLocationDdh || DEFAULT_DDH_LOCATION;
   if (customEventLocationMode.value === "custom") return customEventCustomLocation.value.trim();
   return "";
 }
@@ -2166,8 +2226,8 @@ function applyImportedEventFormState(id) {
 
 function resolveImportedLocation(id) {
   const mode = reviewModalBody.querySelector(`[data-override-location-mode="${id}"]`)?.value || "offsite";
-  if (mode === "mmc") return "MMC Car Park, Tarella Road, Clayton VIC 3168, Australia";
-  if (mode === "ddh") return "DDH Car Park, 135 David St, Dandenong VIC 3175, Australia";
+  if (mode === "mmc") return settings.defaultLocationMmc || DEFAULT_MMC_LOCATION;
+  if (mode === "ddh") return settings.defaultLocationDdh || DEFAULT_DDH_LOCATION;
   if (mode === "custom") {
     return reviewModalBody.querySelector(`[data-override-custom-location="${id}"]`)?.value.trim() || "";
   }
@@ -2315,6 +2375,10 @@ function renderAccountsModal() {
       </div>
       <form class="review-body" data-account-form>
         <label class="field">
+          <span>Preferred display name</span>
+          <input type="text" value="${escapeHtml(me.realName || "")}" data-account-real-name placeholder="Name shown on calendar banner">
+        </label>
+        <label class="field">
           <span>Email address</span>
           <input type="email" value="${escapeHtml(me.email)}" data-account-email ${ownerView ? "readonly" : "readonly"}>
         </label>
@@ -2350,10 +2414,16 @@ function renderAccountsModal() {
   `;
 }
 
-function updateAccountPassword(email, password) {
-  accountState.users = accountState.users.map((user) => user.email === email ? { ...user, password } : user);
+function updateAccountDetails(email, patch) {
+  accountState.users = accountState.users.map((user) => user.email === email ? {
+    ...user,
+    password: patch.password || user.password || "",
+    realName: patch.realName || user.realName || "",
+  } : user);
   saveAccountState();
-  setStatus("Account password updated.");
+  renderLoginState();
+  if (latestPreview) rebuildClientPreview();
+  setStatus("Account details updated.");
 }
 
 function addLocalAccount() {

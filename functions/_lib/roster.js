@@ -80,7 +80,6 @@ const DEFAULT_SETTINGS = {
   showSourcePrefix: true,
   showAmPm: true,
   showTimes: true,
-  showLocations: false,
   showRawValues: false,
   showNormalizedTitles: true,
   includeLocations: true,
@@ -88,6 +87,8 @@ const DEFAULT_SETTINGS = {
   includeConferenceLeave: true,
   includePublicHoliday: true,
   includeSickLeave: true,
+  defaultLocationMmc: "MMC Car Park, Tarella Road, Clayton VIC 3168, Australia",
+  defaultLocationDdh: "DDH Car Park, 135 David St, Dandenong VIC 3175, Australia",
   hospitalFilter: "all",
   dateFrom: "",
   dateTo: "",
@@ -453,7 +454,6 @@ function sanitizeSettings(raw) {
     showSourcePrefix: input.showSourcePrefix !== false,
     showAmPm: input.showAmPm !== false,
     showTimes: input.showTimes !== false,
-    showLocations: input.showLocations === true,
     showRawValues: input.showRawValues === true,
     showNormalizedTitles: input.showNormalizedTitles !== false,
     includeLocations: input.includeLocations !== false,
@@ -461,10 +461,17 @@ function sanitizeSettings(raw) {
     includeConferenceLeave: input.includeConferenceLeave !== false,
     includePublicHoliday: input.includePublicHoliday !== false,
     includeSickLeave: input.includeSickLeave !== false,
+    defaultLocationMmc: sanitizeLocationSetting(input.defaultLocationMmc, DEFAULT_SETTINGS.defaultLocationMmc),
+    defaultLocationDdh: sanitizeLocationSetting(input.defaultLocationDdh, DEFAULT_SETTINGS.defaultLocationDdh),
     hospitalFilter: input.hospitalFilter === "mmc" || input.hospitalFilter === "ddh" ? input.hospitalFilter : "all",
     dateFrom: isDateString(input.dateFrom) ? input.dateFrom : "",
     dateTo: isDateString(input.dateTo) ? input.dateTo : "",
   };
+}
+
+function sanitizeLocationSetting(value, fallback) {
+  const next = String(value || "").trim();
+  return next || fallback;
 }
 
 function sanitizeOverrides(raw) {
@@ -812,7 +819,7 @@ function createTimedRecord(source, day, rawValue, details) {
   const start = buildDateTime(day, details.startHm);
   const plusDay = compareTimes(details.endHm, details.startHm) <= 0;
   const end = buildDateTime(day, details.endHm, plusDay);
-  const normalizedTitle = formatTitle(source, details.titleParts, { ...DEFAULT_SETTINGS, showTimes: false, showRawValues: false, showLocations: false }, details.kind);
+  const normalizedTitle = formatTitle(source, details.titleParts, { ...DEFAULT_SETTINGS, showTimes: false, showRawValues: false }, details.kind);
   return {
     id: hashString(`${source}|${day}|${rawValue}|${normalizedTitle}|${start}|${end}`),
     source,
@@ -834,7 +841,7 @@ function createTimedRecord(source, day, rawValue, details) {
 }
 
 function createAllDayRecord(source, day, rawValue, details) {
-  const normalizedTitle = formatTitle(source, details.titleParts, { ...DEFAULT_SETTINGS, showTimes: false, showRawValues: false, showLocations: false }, details.kind);
+  const normalizedTitle = formatTitle(source, details.titleParts, { ...DEFAULT_SETTINGS, showTimes: false, showRawValues: false }, details.kind);
   return {
     id: hashString(`${source}|${day}|${rawValue}|${normalizedTitle}|all-day`),
     source,
@@ -914,7 +921,7 @@ function applySettings(records, settings, overrides) {
     const overrideTitle = override.title || "";
     const finalTitle = overrideTitle || suggestedTitle;
     const timeLabel = record.allDay ? "All day" : formatTimeLabel(record.start, record.end);
-    const location = settings.includeLocations ? record.location : "";
+    const location = settings.includeLocations ? resolveDefaultLocation(record.source, record.location, settings) : "";
 
     reviewItems.push({
       id: record.id,
@@ -976,6 +983,13 @@ function applySettings(records, settings, overrides) {
   });
 
   return { events, reviewItems, issues };
+}
+
+function resolveDefaultLocation(source, location, settings) {
+  if (!location) return "";
+  if (source === "MMC" && location.startsWith("MMC Car Park")) return settings.defaultLocationMmc;
+  if (source === "DDH" && location.startsWith("DDH Car Park")) return settings.defaultLocationDdh;
+  return location;
 }
 
 function formatTitle(source, titleParts, settings, kind = "shift") {
