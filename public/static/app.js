@@ -232,6 +232,11 @@ accountsBody.addEventListener("submit", (event) => {
   updateAccountDetails(email, { password, realName });
 });
 accountsBody.addEventListener("click", (event) => {
+  const deleteButton = event.target.closest("[data-delete-account]");
+  if (deleteButton) {
+    deleteAccount(deleteButton.dataset.deleteAccount);
+    return;
+  }
   const enterButton = event.target.closest("[data-enter-account]");
   if (enterButton) {
     enterUserAccount(enterButton.dataset.enterAccount);
@@ -2429,6 +2434,7 @@ function renderAccountsModal() {
         </label>
         <div class="modal-actions">
           <button type="submit" class="button button-primary">Save password</button>
+          ${me.email !== OWNER_EMAIL ? `<button type="button" class="button button-danger" data-delete-account="${escapeHtml(me.email)}">Delete account</button>` : ""}
         </div>
       </form>
     </article>
@@ -2447,7 +2453,10 @@ function renderAccountsModal() {
                 <strong>${escapeHtml(user.realName || "Name not set")}</strong>
                 <p>${escapeHtml(user.email)} · ${user.role === "owner" ? "Creator" : "Standard user"} · storage limit: latest 6 months active</p>
               </div>
-              <button type="button" class="button button-secondary" data-enter-account="${escapeHtml(user.email)}">Enter account</button>
+              <div class="account-actions">
+                <button type="button" class="button button-secondary" data-enter-account="${escapeHtml(user.email)}">Enter account</button>
+                ${user.email !== OWNER_EMAIL ? `<button type="button" class="button button-danger" data-delete-account="${escapeHtml(user.email)}">Delete</button>` : ""}
+              </div>
             </article>
           `).join("") : `<article class="issue-card"><p>No additional users yet.</p></article>`}
         </div>
@@ -2484,6 +2493,84 @@ function removeLocalAccount(email) {
   setStatus("User removed from local account list.");
 }
 
+async function deleteAccount(email) {
+  const targetEmail = normalizeEmail(email);
+  if (!targetEmail) return;
+  if (targetEmail === OWNER_EMAIL) {
+    setStatus("The creator account cannot be deleted from the app.", true);
+    return;
+  }
+
+  const deletingCurrentAccount = targetEmail === currentUserEmail;
+  const confirmed = window.confirm(`Delete account ${targetEmail}? This removes the account login and saved workspace. This cannot be undone.`);
+  if (!confirmed) return;
+
+  const creatorCanDelete = isCreatorAuthenticated();
+  const requestEmail = creatorCanDelete ? authUserEmail || currentUserEmail : currentUserEmail;
+  const requestPassword = creatorCanDelete ? authUserPassword || currentUserPassword : currentUserPassword;
+
+  try {
+    if (cloudAvailable) {
+      const response = await fetch("/api/state", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "deleteAccount",
+          email: requestEmail,
+          password: requestPassword,
+          targetEmail: creatorCanDelete ? targetEmail : "",
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Account deletion failed.");
+    }
+
+    deleteLocalAccountData(targetEmail);
+    serverUsers = serverUsers.filter((user) => normalizeServerUser(user).email !== targetEmail);
+    closeAccountsModal();
+
+    if (deletingCurrentAccount && adminViewingEmail && creatorCanDelete) {
+      await returnToCreatorAccount();
+      setStatus(`Deleted ${targetEmail}.`);
+      return;
+    }
+
+    if (deletingCurrentAccount) {
+      localStorage.removeItem(CURRENT_EMAIL_KEY);
+      sessionStorage.removeItem(CURRENT_PASSWORD_KEY);
+      currentUserEmail = "";
+      currentUserPassword = "";
+      authUserEmail = "";
+      authUserPassword = "";
+      adminViewingEmail = "";
+      currentUserRole = "user";
+      cloudAvailable = false;
+      await clearLocalWorkspace();
+      renderLoginState();
+      openLoginModal();
+      setEntranceStatus("Account deleted.");
+      setStatus("Account deleted.");
+      return;
+    }
+
+    renderAccountsModal();
+    setStatus(`Deleted ${targetEmail}.`);
+  } catch (error) {
+    setStatus(error.message || "Account deletion failed.", true);
+  }
+}
+
+function deleteLocalAccountData(email) {
+  accountState.users = accountState.users.filter((user) => user.email !== email);
+  if (!accountState.users.some((user) => user.email === accountState.currentEmail)) {
+    accountState.currentEmail = OWNER_EMAIL;
+  }
+  saveAccountState();
+  const store = loadWorkspaceStore();
+  delete store[email];
+  saveWorkspaceStore(store);
+}
+
 async function enterUserAccount(email) {
   const targetEmail = normalizeEmail(email);
   if (!targetEmail || !isOwnerAccount()) return;
@@ -2507,6 +2594,7 @@ async function enterUserAccount(email) {
   currentUserEmail = targetEmail;
   currentUserPassword = creatorPassword;
   currentUserRole = targetEmail === OWNER_EMAIL ? "creator" : "user";
+  applyTemporarySkin("console");
   setStatus(`Entering ${targetEmail}...`);
   await clearLocalWorkspace();
   await restoreCloudState({ adminTargetEmail: targetEmail });
@@ -2523,6 +2611,7 @@ async function returnToCreatorAccount() {
   currentUserRole = "creator";
   localStorage.setItem(CURRENT_EMAIL_KEY, currentUserEmail);
   sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
+  applySkin(loadSkin());
   setStatus("Returning to creator account...");
   await clearLocalWorkspace();
   await restoreCloudState();
@@ -2575,7 +2664,11 @@ function hexToRgb(hex) {
 
 function loadSkin() {
   const stored = localStorage.getItem(SKIN_KEY);
-  return stored === "console" ? "console" : "original";
+  const email = loadCurrentUserEmail();
+  if (!email) return "console";
+  if (stored === "original" && email !== OWNER_EMAIL) return "console";
+  if (stored === "original" || stored === "console") return stored;
+  return "console";
 }
 
 function applySkin(skin) {
@@ -2584,12 +2677,15 @@ function applySkin(skin) {
   localStorage.setItem(SKIN_KEY, currentSkin);
 }
 
+function applyTemporarySkin(skin) {
+  currentSkin = skin === "original" ? "original" : "console";
+  document.body.dataset.skin = currentSkin;
+  skinSelect.value = currentSkin;
+}
+
 function syncSkinControl() {
   const authenticated = Boolean(currentUserEmail && currentUserPassword);
   const canChooseSkins = isOwnerAccount() && authenticated && !adminViewingEmail;
-  if (authenticated && !canChooseSkins && currentSkin !== "original") {
-    applySkin("original");
-  }
   skinControl.classList.toggle("hidden", !canChooseSkins);
   skinSelect.value = currentSkin;
 }
@@ -2625,6 +2721,7 @@ function normalizeServerUser(value) {
 }
 
 function openLoginModal() {
+  applyTemporarySkin("console");
   loginEmail.value = currentUserEmail || "";
   loginPassword.value = "";
   entrancePage.classList.remove("hidden");
@@ -2667,6 +2764,7 @@ async function loginWithEmail(email, password, options = {}) {
     currentUserRole = currentUserEmail === OWNER_EMAIL ? "creator" : "user";
     localStorage.setItem(CURRENT_EMAIL_KEY, currentUserEmail);
     sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
+    applySkin(loadSkin());
     setStatus("Loading account workspace...");
     setEntranceStatus("Loading account workspace...");
     closeLoginModal();

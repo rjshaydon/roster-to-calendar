@@ -56,6 +56,18 @@ export async function onRequestPost(context) {
       return Response.json({ ok: true, users: await listUsers(context.env.ROSTER_STORE) });
     }
 
+    if (action === "deleteAccount") {
+      const deleteEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
+      if (deleteEmail === CREATOR_EMAIL) {
+        return Response.json({ error: "The creator account cannot be deleted." }, { status: 400 });
+      }
+      if (deleteEmail !== email && account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      await context.env.ROSTER_STORE.delete(storageKey(deleteEmail));
+      return Response.json({ ok: true, deletedEmail: deleteEmail });
+    }
+
     if (action === "save") {
       const saveEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
       const targetRecord = saveEmail === email ? account.record : await loadAccountRecord(context.env.ROSTER_STORE, saveEmail);

@@ -1150,6 +1150,17 @@ input[type="color"] {
   background: rgba(20, 34, 42, 0.08);
 }
 
+.button-danger {
+  color: #fff;
+  background: linear-gradient(135deg, #8e1f10, #d95f34);
+}
+
+.account-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .status {
   margin: 0;
   min-height: 1.5em;
