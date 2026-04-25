@@ -297,6 +297,11 @@ FindMyShift subscription URLs:
 - must not be written into logs, PRDs, fixtures, screenshots, or admin inline lists
 - should be stored encrypted or in a protected secret field where the platform allows it
 - should be refreshable on login and on scheduled background refresh
+- are expected initially to be individual-user feeds rather than full-roster feeds
+- may span multiple terms as the roster is progressively written
+- should refresh whenever the user logs in or enters the app
+- should track last successful refresh time and feed expiry/failure state
+- should prompt the user to update the URL when the feed expires or repeatedly fails
 
 ## Personal Roster Generation
 
@@ -496,6 +501,9 @@ Constraints:
 - Gmail sends through the authorized Gmail/Google Workspace account.
 - Gmail has daily and per-message sending limits.
 - If the product grows beyond low-volume notifications, switch to a transactional email provider.
+- Gmail restrictions are acceptable for launch.
+- A dedicated app mailbox may be used later.
+- If a dedicated mailbox is used, it is still a real Gmail/Workspace mailbox, but the app should expose relevant sent-message status and inbound/admin notifications in the Creator admin page so routine monitoring can happen inside the app.
 
 ## Implementation Direction
 
@@ -522,9 +530,11 @@ The v2 rebuild should introduce these entities:
 ## Decisions Recorded
 
 - Initial outbound email provider: Gmail API.
+- Gmail launch restrictions are acceptable.
 - Email verification: not required at launch.
 - Admin version-resolution rules: structured deterministic rules with Admin notes, not machine learning initially.
 - DDH subscription URL format: `webcal://` iCalendar feed.
+- Initial DDH subscription assumption: individual-user feeds, not full-roster feeds.
 
 ## Open Questions
 
@@ -534,5 +544,5 @@ The v2 rebuild should introduce these entities:
 2. Gmail OAuth:
    Should the app send only as the Creator account, or should a dedicated app mailbox be created later?
 
-3. FindMyShift subscriptions:
-   Are full-roster FindMyShift subscription URLs available to the Creator/Admin, or only individual user feeds?
+3. Dedicated app mailbox:
+   If used later, should inbound replies be monitored directly through Gmail, or only surfaced as admin notifications inside the app?
