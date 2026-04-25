@@ -1239,6 +1239,9 @@ input[type="color"] {
 }
 
 body[data-skin="console"] {
+  --console-sidebar-width: 300px;
+  --console-header-height: 132px;
+  --console-min-width: 1180px;
   --ink: #172342;
   --muted: #647084;
   --paper: #f8fafc;
@@ -1254,6 +1257,7 @@ body[data-skin="console"] {
   background:
     radial-gradient(circle at top right, rgba(111, 97, 246, 0.1), transparent 28%),
     linear-gradient(180deg, #ffffff 0%, #f6f8fb 100%);
+  min-width: var(--console-min-width);
 }
 
 body[data-skin="console"]::before,
@@ -1271,13 +1275,14 @@ body[data-skin="console"] .hero {
 }
 
 body[data-skin="console"] .panel {
-  min-height: 100vh;
+  height: 100vh;
   padding: 0;
   border: 0;
   border-radius: 0;
   box-shadow: none;
   background: #ffffff;
   backdrop-filter: none;
+  overflow: hidden;
 }
 
 body[data-skin="console"] .login-bar {
@@ -1294,9 +1299,11 @@ body[data-skin="console"] .login-bar {
 
 body[data-skin="console"] #roster-form {
   display: grid;
-  grid-template-columns: 300px minmax(0, 1fr);
+  grid-template-columns: var(--console-sidebar-width) minmax(0, 1fr);
   gap: 0;
   align-items: start;
+  height: 100vh;
+  overflow: hidden;
 }
 
 body[data-skin="console"] #dropZone,
@@ -1389,8 +1396,11 @@ body[data-skin="console"] #previewSection {
   grid-column: 2;
   grid-row: 1 / span 8;
   min-width: 0;
+  height: 100vh;
   margin: 0;
-  padding: 24px;
+  padding: calc(var(--console-header-height) + 24px) 24px 24px;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 body[data-skin="console"] .preview {
@@ -1401,16 +1411,26 @@ body[data-skin="console"] .preview {
 }
 
 body[data-skin="console"] .preview-head {
-  position: sticky;
-  top: 73px;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
   z-index: 9;
-  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
-  gap: 28px;
-  margin: -24px -24px 18px;
-  padding: 18px 24px;
+  min-height: var(--console-header-height);
+  grid-template-columns: var(--console-sidebar-width) minmax(0, 1fr);
+  gap: 0;
+  margin: 0;
+  padding: 18px 0;
   border-bottom: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.94);
   backdrop-filter: blur(14px);
+  box-sizing: border-box;
+}
+
+body[data-skin="console"] .preview-doctor-control {
+  min-width: 0;
+  padding: 0 24px;
+  align-self: center;
 }
 
 body[data-skin="console"] .preview-doctor-control strong {
@@ -1431,10 +1451,18 @@ body[data-skin="console"] .preview-doctor-control select {
 }
 
 body[data-skin="console"] .preview-toolbar {
-  grid-template-columns: minmax(320px, max-content) minmax(230px, max-content);
+  grid-template-columns: minmax(280px, 1fr) minmax(210px, 0.75fr) max-content max-content;
   grid-auto-flow: column;
   grid-auto-columns: max-content;
-  gap: clamp(14px, 2.6vw, 42px);
+  gap: clamp(12px, 2vw, 30px);
+  align-items: center;
+  justify-content: stretch;
+  min-width: 0;
+  padding: 0 24px 0 28px;
+}
+
+body[data-skin="console"] .preview-toolbar > * {
+  min-width: 0;
 }
 
 body[data-skin="console"] .preview-range-controls {
@@ -1465,8 +1493,8 @@ body[data-skin="console"].has-calendar-preview .login-bar {
   display: none;
 }
 
-body[data-skin="console"].has-calendar-preview .preview-head {
-  top: 0;
+body[data-skin="console"].has-calendar-preview #controlBar {
+  padding-top: calc(var(--console-header-height) + 20px);
 }
 
 body[data-skin="console"] .preview-range-button {
@@ -1648,6 +1676,16 @@ body[data-skin="console"] .panel {
     width: 100%;
   }
 
+  body[data-skin="console"] {
+    min-width: 0;
+  }
+
+  body[data-skin="console"] .panel,
+  body[data-skin="console"] #roster-form {
+    height: auto;
+    overflow: visible;
+  }
+
   body[data-skin="console"] #roster-form {
     grid-template-columns: 1fr;
   }
@@ -1666,6 +1704,8 @@ body[data-skin="console"] .panel {
 
   body[data-skin="console"] #previewSection {
     padding: 16px;
+    height: auto;
+    overflow: visible;
   }
 
   body[data-skin="console"] .preview-head {
