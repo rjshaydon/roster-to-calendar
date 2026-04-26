@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import XLSX from "xlsx";
 
-import { buildRosterView, doctorOptions, previewSummary } from "../functions/_lib/roster.js";
+import { buildRosterView, doctorOptions, parseUploadForm, previewSummary } from "../functions/_lib/roster.js";
 
 const mmcWorkbook = XLSX.readFile(fileURLToPath(new URL("../fixtures/AdultTerm1.2026.xlsx", import.meta.url)), {
   cellDates: true,
@@ -26,5 +27,17 @@ assert.ok(view.reviewItems.length >= view.events.length);
 assert.ok(view.events.some((event) => event.title === "Annual Leave"));
 assert.ok(view.events.some((event) => event.title === "DDH: Orange PM"));
 assert.ok(view.events.some((event) => event.title === "DDH: Sick Leave"));
+
+const mmcPdfBytes = await readFile(fileURLToPath(new URL("../fixtures/AdultMMCTerm2.2026.Ver1.pdf", import.meta.url)));
+const formData = new FormData();
+formData.append("rosterFiles", new File([mmcPdfBytes], "AdultMMCTerm2.2026.Ver1.pdf", { type: "application/pdf" }));
+const parsedPdf = await parseUploadForm(new Request("http://fixture.test/api/analyze", { method: "POST", body: formData }));
+const pdfDoctors = doctorOptions(parsedPdf.sources.mmc, parsedPdf.sources.ddh);
+assert.ok(pdfDoctors.find((doctor) => doctor.displayName === "Richard HAYDON"));
+assert.ok(pdfDoctors.find((doctor) => doctor.displayName === "Abi THANIKASALAM"));
+const pdfRichard = pdfDoctors.find((doctor) => doctor.displayName === "Richard HAYDON");
+const pdfView = buildRosterView(parsedPdf.sources.mmc, parsedPdf.sources.ddh, pdfRichard.key);
+assert.ok(pdfView.events.some((event) => event.title === "MMC: SSU PM"));
+assert.ok(pdfView.issues.some((issue) => issue.rawValue === "0800-1730"));
 
 console.log("Fixture smoke test passed.");

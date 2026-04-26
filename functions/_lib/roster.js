@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import { decompressSync } from "fflate";
 
 const TIMEZONE = "Australia/Melbourne";
 
@@ -456,20 +457,28 @@ function chooseWinningImport(importEntries, selectedImportId) {
 }
 
 async function readWorkbook(file) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  if (isPdfFile(file.name, bytes)) {
+    return readPdfWorkbook(bytes, file.name);
+  }
+
   try {
-    const bytes = await file.arrayBuffer();
     return XLSX.read(bytes, { type: "array", cellDates: true });
   } catch {
-    throw new Error(`${file.name} is not a supported MMC workbook or Dandenong Hospital FindMyShift export.`);
+    throw new Error(`${file.name} is not a supported MMC workbook, MMC PDF, or Dandenong Hospital FindMyShift export.`);
   }
 }
 
 async function readWorkbookDataUrl(dataUrl, filename) {
+  const bytes = bytesFromDataUrl(dataUrl);
+  if (isPdfFile(filename, bytes)) {
+    return readPdfWorkbook(bytes, filename);
+  }
+
   try {
-    const bytes = bytesFromDataUrl(dataUrl);
     return XLSX.read(bytes, { type: "array", cellDates: true });
   } catch {
-    throw new Error(`${filename} is not a supported MMC workbook or Dandenong Hospital FindMyShift export.`);
+    throw new Error(`${filename} is not a supported MMC workbook, MMC PDF, or Dandenong Hospital FindMyShift export.`);
   }
 }
 
@@ -494,7 +503,302 @@ function detectSourceType(workbook, filename) {
   if (range.e.c + 1 >= 8 && [1, 2, 3, 4].some((row) => isDdhDateRow(sheet, row))) {
     return "ddh";
   }
-  throw new Error(`${filename} is not a supported MMC workbook or Dandenong Hospital FindMyShift export.`);
+  throw new Error(`${filename} is not a supported MMC workbook, MMC PDF, or Dandenong Hospital FindMyShift export.`);
+}
+
+function isPdfFile(filename, bytes) {
+  if (String(filename || "").toLowerCase().endsWith(".pdf")) return true;
+  return bytes?.[0] === 0x25 && bytes?.[1] === 0x50 && bytes?.[2] === 0x44 && bytes?.[3] === 0x46;
+}
+
+function readPdfWorkbook(bytes, filename) {
+  const text = latin1FromBytes(bytes);
+  if (!text.startsWith("%PDF")) {
+    throw new Error(`${filename} is not a valid PDF roster.`);
+  }
+
+  const objects = parsePdfObjects(text);
+  const fontMaps = parsePdfFontMaps(objects);
+  const pages = parsePdfPages(objects, fontMaps);
+  const workbook = mmcWorkbookFromPdfPages(pages);
+  if (!workbook.SheetNames.length) {
+    throw new Error(`${filename} does not look like an MMC roster PDF.`);
+  }
+  return workbook;
+}
+
+function parsePdfObjects(pdfText) {
+  const objects = new Map();
+  const pattern = /^(\d+)\s+0\s+obj\r?\n([\s\S]*?)\r?\nendobj/gm;
+  let match;
+  while ((match = pattern.exec(pdfText))) {
+    objects.set(Number(match[1]), match[2]);
+  }
+  return objects;
+}
+
+function parsePdfFontMaps(objects) {
+  const fontObjectByAlias = new Map();
+  for (const body of objects.values()) {
+    const fontBlock = body.match(/\/Font\s*<<([\s\S]*?)>>/);
+    if (!fontBlock) continue;
+    const fontPattern = /\/(TT\d+)\s+(\d+)\s+0\s+R/g;
+    let match;
+    while ((match = fontPattern.exec(fontBlock[1]))) {
+      fontObjectByAlias.set(match[1], Number(match[2]));
+    }
+  }
+
+  const maps = new Map();
+  for (const [alias, objectId] of fontObjectByAlias.entries()) {
+    const fontBody = objects.get(objectId) || "";
+    const unicodeMatch = fontBody.match(/\/ToUnicode\s+(\d+)\s+0\s+R/);
+    if (!unicodeMatch) continue;
+    const cmapText = inflatePdfStream(objects.get(Number(unicodeMatch[1])) || "");
+    maps.set(alias, parseToUnicodeCMap(cmapText));
+  }
+  return maps;
+}
+
+function parseToUnicodeCMap(cmapText) {
+  const map = new Map();
+  const charPattern = /^\s*<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*$/gm;
+  let charMatch;
+  while ((charMatch = charPattern.exec(cmapText))) {
+    map.set(Number.parseInt(charMatch[1], 16), String.fromCodePoint(Number.parseInt(charMatch[2], 16)));
+  }
+
+  const rangePattern = /<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>/g;
+  let match;
+  while ((match = rangePattern.exec(cmapText))) {
+    const start = Number.parseInt(match[1], 16);
+    const end = Number.parseInt(match[2], 16);
+    const base = Number.parseInt(match[3], 16);
+    for (let code = start; code <= end; code += 1) {
+      map.set(code, String.fromCodePoint(base + code - start));
+    }
+  }
+  return map;
+}
+
+function parsePdfPages(objects, fontMaps) {
+  const pages = [];
+  for (const [objectId, body] of objects.entries()) {
+    if (!/\/Type\s*\/Page\b/.test(body)) continue;
+    const contentMatch = body.match(/\/Contents\s+(\d+)\s+0\s+R/);
+    if (!contentMatch) continue;
+    const content = inflatePdfStream(objects.get(Number(contentMatch[1])) || "");
+    const items = extractPdfTextItems(content, fontMaps);
+    if (items.some((item) => item.text.includes("MMC ED ADULT ROSTER"))) {
+      pages.push({ objectId, items });
+    }
+  }
+  return pages.sort((left, right) => left.objectId - right.objectId);
+}
+
+function extractPdfTextItems(content, fontMaps) {
+  const items = [];
+  const blockPattern = /BT\s+([\s\S]*?)\s+ET/g;
+  let match;
+  while ((match = blockPattern.exec(content))) {
+    const block = match[1];
+    const transform = lastMatch(block, /([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+Tm/g);
+    const font = lastMatch(block, /\/(TT\d+)\s+[\d.]+\s+Tf/g);
+    if (!transform || !font) continue;
+    const fontMap = fontMaps.get(font[1]);
+    if (!fontMap) continue;
+    const text = decodePdfTextBlock(block, fontMap);
+    if (!text) continue;
+    items.push({
+      x: Number(transform[5]),
+      y: Number(transform[6]),
+      font: font[1],
+      text,
+    });
+  }
+  return items;
+}
+
+function lastMatch(value, pattern) {
+  let result = null;
+  let match;
+  while ((match = pattern.exec(value))) {
+    result = match;
+  }
+  return result;
+}
+
+function decodePdfTextBlock(block, fontMap) {
+  const fragments = [];
+  for (const bytes of pdfStringFragments(block)) {
+    fragments.push([...bytes].map((byte) => fontMap.get(byte) || "").join(""));
+  }
+  return fragments.join("").replace(/\s+/g, " ").trim();
+}
+
+function pdfStringFragments(value) {
+  const fragments = [];
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] !== "(") continue;
+    const bytes = [];
+    index += 1;
+    while (index < value.length) {
+      const char = value.charCodeAt(index);
+      if (char === 0x5c) {
+        const parsed = parsePdfEscape(value, index);
+        if (parsed.byte !== null) bytes.push(parsed.byte);
+        index = parsed.nextIndex;
+        continue;
+      }
+      if (char === 0x29) break;
+      bytes.push(char & 0xff);
+      index += 1;
+    }
+    fragments.push(bytes);
+  }
+  return fragments;
+}
+
+function parsePdfEscape(value, index) {
+  const nextIndex = index + 1;
+  if (nextIndex >= value.length) return { byte: null, nextIndex };
+  const next = value[nextIndex];
+  const simple = { n: 0x0a, r: 0x0d, t: 0x09, b: 0x08, f: 0x0c, "(": 0x28, ")": 0x29, "\\": 0x5c };
+  if (Object.prototype.hasOwnProperty.call(simple, next)) {
+    return { byte: simple[next], nextIndex: nextIndex + 1 };
+  }
+  if (/[0-7]/.test(next)) {
+    let digits = next;
+    let cursor = nextIndex + 1;
+    while (cursor < value.length && digits.length < 3 && /[0-7]/.test(value[cursor])) {
+      digits += value[cursor];
+      cursor += 1;
+    }
+    return { byte: Number.parseInt(digits, 8) & 0xff, nextIndex: cursor };
+  }
+  return { byte: next.charCodeAt(0) & 0xff, nextIndex: nextIndex + 1 };
+}
+
+function mmcWorkbookFromPdfPages(pages) {
+  const workbook = { SheetNames: [], Sheets: {} };
+  pages.forEach((page) => {
+    const sheet = mmcSheetFromPdfPage(page.items);
+    if (!sheet) return;
+    const sheetName = `Week ${workbook.SheetNames.length + 1}`;
+    workbook.SheetNames.push(sheetName);
+    workbook.Sheets[sheetName] = sheet;
+  });
+  if (workbook.SheetNames.length) {
+    workbook.SheetNames.unshift("Whole thing");
+    workbook.Sheets["Whole thing"] = {};
+  }
+  return workbook;
+}
+
+function mmcSheetFromPdfPage(items) {
+  const dateItems = items
+    .filter((item) => /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(item.text))
+    .sort((left, right) => left.x - right.x)
+    .slice(0, 7);
+  if (dateItems.length !== 7) return null;
+
+  const rowAnchors = extractMmcPdfRowAnchors(items, Math.min(...dateItems.map((item) => item.y)));
+  if (!rowAnchors.length) return null;
+
+  const rows = Array.from({ length: rowAnchors.length + 6 }, () => []);
+  dateItems.forEach((item, index) => {
+    rows[3][5 + index] = parseAustralianDate(item.text);
+  });
+
+  rowAnchors.forEach((anchor, index) => {
+    const rowIndex = 6 + index;
+    if (anchor.type === "section") {
+      rows[rowIndex][2] = anchor.text.toUpperCase();
+    } else {
+      rows[rowIndex][3] = anchor.text;
+    }
+  });
+
+  const dayCenters = dateItems.map((item) => item.x);
+  for (const item of items) {
+    if (item.font !== "TT4") continue;
+    const colIndex = nearestIndex(dayCenters, item.x, 38);
+    if (colIndex < 0) continue;
+    const rowIndex = nearestIndex(rowAnchors.map((row) => row.y), item.y, 5);
+    if (rowIndex < 0) continue;
+    const targetRow = 6 + rowIndex;
+    const targetCol = 5 + colIndex;
+    rows[targetRow][targetCol] = [rows[targetRow][targetCol], item.text].filter(Boolean).join(" ").trim();
+  }
+
+  return XLSX.utils.aoa_to_sheet(rows, { cellDates: true });
+}
+
+function extractMmcPdfRowAnchors(items, dateHeaderY) {
+  const rowItems = items
+    .filter((item) => item.font === "TT6" && item.x < 160 && item.y < dateHeaderY - 5)
+    .filter((item) => looksLikePersonName(item.text) || MMC_SECTION_BREAKS.has(item.text.toUpperCase()))
+    .sort((left, right) => right.y - left.y);
+  const seen = new Set();
+  const anchors = [];
+  for (const item of rowItems) {
+    const yKey = Math.round(item.y);
+    if (seen.has(yKey)) continue;
+    seen.add(yKey);
+    anchors.push({
+      y: item.y,
+      text: item.text,
+      type: MMC_SECTION_BREAKS.has(item.text.toUpperCase()) ? "section" : "name",
+    });
+  }
+  return anchors;
+}
+
+function parseAustralianDate(value) {
+  const match = String(value).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (!match) return null;
+  return new Date(Number(match[3]), Number(match[2]) - 1, Number(match[1]));
+}
+
+function nearestIndex(values, target, tolerance) {
+  let bestIndex = -1;
+  let bestDistance = Infinity;
+  values.forEach((value, index) => {
+    const distance = Math.abs(value - target);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestIndex = index;
+    }
+  });
+  return bestDistance <= tolerance ? bestIndex : -1;
+}
+
+function inflatePdfStream(objectBody) {
+  const match = objectBody.match(/stream\r?\n([\s\S]*?)\r?\nendstream/);
+  if (!match) return "";
+  const bytes = bytesFromLatin1(match[1]);
+  try {
+    return latin1FromBytes(decompressSync(bytes));
+  } catch {
+    return "";
+  }
+}
+
+function latin1FromBytes(bytes) {
+  let result = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    result += String.fromCharCode(...bytes.slice(index, index + chunkSize));
+  }
+  return result;
+}
+
+function bytesFromLatin1(value) {
+  const bytes = new Uint8Array(value.length);
+  for (let index = 0; index < value.length; index += 1) {
+    bytes[index] = value.charCodeAt(index) & 0xff;
+  }
+  return bytes;
 }
 
 function sanitizeDoctorAliases(raw) {

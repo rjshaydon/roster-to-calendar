@@ -199,6 +199,7 @@ Users do not own roster files. Users gain access to their own shifts wherever th
 When any user uploads a roster:
 
 - Detect roster type and site.
+- Accept supported spreadsheet exports and supported roster PDF exports.
 - Compute an exact file hash.
 - Compute a content fingerprint independent of cosmetic spreadsheet changes where possible.
 - Check whether the file already exists in the repository.
@@ -219,6 +220,17 @@ Duplicate detection should use:
 - roster version metadata when available
 
 The goal is to avoid storing dozens of identical or cosmetically changed roster files.
+
+### PDF Roster Sources
+
+Some hospitals may release a PDF export before, or instead of, the Excel workbook.
+
+PDF parser rules:
+
+- Convert supported roster PDFs into the same internal week grid used by spreadsheet parsers.
+- Prefer visible text in the PDF; do not infer clinical areas from colours unless a hospital-specific rule has been validated.
+- If a PDF cell contains only a time and no shift code, flag it for review rather than silently guessing the shift type.
+- Keep PDF files in the repository using the same duplicate and version-resolution rules as spreadsheets.
 
 ### Source Of Truth
 

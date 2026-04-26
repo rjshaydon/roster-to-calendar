@@ -705,8 +705,8 @@ async function mergeFiles(files) {
 }
 
 function validateIncomingFiles(files) {
-  if (files.some((file) => !file.name.match(/\.(xlsx|xlsm|xltx|xltm)$/i))) {
-    setStatus("Only Excel roster files in .xlsx, .xlsm, .xltx, or .xltm format are supported.", true);
+  if (files.some((file) => !file.name.match(/\.(xlsx|xlsm|xltx|xltm|pdf)$/i))) {
+    setStatus("Only Excel or PDF roster files in .xlsx, .xlsm, .xltx, .xltm, or .pdf format are supported.", true);
     return [];
   }
   return files;
