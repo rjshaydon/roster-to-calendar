@@ -167,7 +167,7 @@ fmsUrlButton.addEventListener("click", (event) => {
   event.stopPropagation();
   const value = fmsUrlInput.value.trim();
   if (!value) {
-    setStatus("Paste a FindMyShift webcal:// or https:// iCalendar URL first.", true);
+    setStatus("Paste a FindMyShift webcal:// first.", true);
     return;
   }
   setStatus("FindMyShift URL subscriptions are not active yet. Please upload a FindMyShift export for now.", true);
@@ -2771,6 +2771,10 @@ function addLocalAccount() {
 async function createAccountFromOwner(formElement) {
   if (!isCreatorAuthenticated()) {
     setStatus("Creator authentication is required to create accounts.", true);
+    return;
+  }
+  if (!cloudAvailable) {
+    setStatus("Account creation requires Cloudflare KV storage. Configure the ROSTER_STORE binding and redeploy before creating shared accounts.", true);
     return;
   }
   const realName = formElement.querySelector("[data-create-real-name]")?.value.trim() || "";
