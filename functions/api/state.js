@@ -211,13 +211,14 @@ async function loadOrCreateAccount(store, email, password, options = {}) {
   const realName = String(options.realName || "").trim();
   const existing = await store.get(storageKey(email), "json");
   if (!existing) {
-    if (mode !== "create" || !realName) {
+    const canBootstrapCreator = email === CREATOR_EMAIL && mode === "login";
+    if (!canBootstrapCreator && (mode !== "create" || !realName)) {
       throw new Error("Account not found. Create an account first.");
     }
     const passwordRecord = await hashPassword(password);
     const record = {
       email,
-      realName,
+      realName: realName || (email === CREATOR_EMAIL ? "Richard Haydon" : ""),
       role: roleForEmail(email),
       ...passwordRecord,
       state: sanitizeState(null),

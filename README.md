@@ -74,7 +74,7 @@ npm run deploy
 - If only one consultant is detected, the UI shows the doctor name directly.
 - Preview renders a Monday-start weekly grid before export.
 - Users log in with an email address.
-- `rhaydon@gmail.com` is the Creator account.
+- `rhaydon@gmail.com` is the Creator account and is bootstrapped on first server-backed login if the KV store is empty.
 - Creator storage is unrestricted.
 - Standard accounts are prompted to keep only the latest 6 months active.
 - Cross-device persistence requires the `ROSTER_STORE` KV binding above.
