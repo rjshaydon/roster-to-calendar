@@ -2773,10 +2773,6 @@ async function createAccountFromOwner(formElement) {
     setStatus("Creator authentication is required to create accounts.", true);
     return;
   }
-  if (!cloudAvailable) {
-    setStatus("Account creation requires Cloudflare KV storage. Configure the ROSTER_STORE binding and redeploy before creating shared accounts.", true);
-    return;
-  }
   const realName = formElement.querySelector("[data-create-real-name]")?.value.trim() || "";
   const email = normalizeEmail(formElement.querySelector("[data-create-email]")?.value || "");
   const password = formElement.querySelector("[data-create-password]")?.value || "";
