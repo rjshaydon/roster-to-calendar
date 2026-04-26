@@ -673,14 +673,30 @@ function doctorMatchesRealName(doctor, realName) {
   const realKey = normalizeRosterName(realName);
   if (!realKey) return false;
   if (doctor.key === realKey) return true;
-  const realTokens = tokenSet(realName);
-  const doctorTokens = tokenSet(doctor.displayName);
-  if (realTokens.size < 2 || doctorTokens.size < 2) return false;
-  return [...realTokens].every((token) => doctorTokens.has(token));
+  if (nameTokenMatch(realName, doctor.displayName)) return true;
+  return likelySameRosterName(realName, doctor.displayName);
 }
 
-function tokenSet(value) {
-  return new Set(normalizeRosterName(value).split(" ").filter(Boolean));
+function nameTokenMatch(left, right) {
+  const leftTokens = rosterNameTokens(left);
+  const rightTokens = rosterNameTokens(right);
+  if (leftTokens.length < 2 || rightTokens.length < 2) return false;
+  const rightSet = new Set(rightTokens);
+  return leftTokens.every((token) => rightSet.has(token));
+}
+
+function likelySameRosterName(left, right) {
+  const leftTokens = rosterNameTokens(left);
+  const rightTokens = rosterNameTokens(right);
+  if (leftTokens.length < 2 || rightTokens.length < 2) return false;
+  if (leftTokens[leftTokens.length - 1] !== rightTokens[rightTokens.length - 1]) return false;
+  const leftFirst = leftTokens[0] || "";
+  const rightFirst = rightTokens[0] || "";
+  return leftFirst.length >= 3 && rightFirst.length >= 3 && (leftFirst.startsWith(rightFirst) || rightFirst.startsWith(leftFirst));
+}
+
+function rosterNameTokens(value) {
+  return normalizeRosterName(value).split(" ").filter(Boolean);
 }
 
 async function hashPassword(password, salt = randomSalt()) {

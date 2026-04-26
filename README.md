@@ -58,6 +58,8 @@ KV namespace: roster-converter-state
 7. Redeploy the Pages project after adding the binding.
 8. Add your custom domain in Cloudflare Pages once the deploy succeeds.
 
+Without `ROSTER_STORE`, the app can still run a local browser-only fallback for development, but it is not a shared account system: roster repository data, user accounts, and persistence will not be available across browsers, devices, or other users.
+
 ## CLI Deploy
 
 After authenticating Wrangler:
