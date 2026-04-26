@@ -329,6 +329,10 @@ h1 {
   width: 100%;
 }
 
+.claimed-option {
+  color: #8792a6;
+}
+
 .upload-help,
 .status,
 .section-head p,

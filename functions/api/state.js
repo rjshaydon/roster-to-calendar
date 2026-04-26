@@ -44,6 +44,43 @@ export async function onRequestPost(context) {
     }
 
     const account = await verifyAccount(context.env.ROSTER_STORE, email, password);
+    if (action === "adminCreateUser") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      const targetPassword = String(body?.targetPassword || "");
+      const targetRealName = String(body?.targetRealName || body?.realName || "").trim();
+      if (!targetEmail) {
+        return Response.json({ error: "New account email is required." }, { status: 400 });
+      }
+      if (!targetRealName) {
+        return Response.json({ error: "New account real name is required." }, { status: 400 });
+      }
+      if (!targetPassword) {
+        return Response.json({ error: "New account password is required." }, { status: 400 });
+      }
+      await hydrateRepositoryFromExistingAccounts(context.env.ROSTER_STORE);
+      const created = await loadOrCreateAccount(context.env.ROSTER_STORE, targetEmail, targetPassword, {
+        mode: "create",
+        realName: targetRealName,
+      });
+      const prepared = await prepareAccountResponse(context.env.ROSTER_STORE, created.record);
+      return Response.json({
+        ok: true,
+        cloudAvailable: true,
+        created: true,
+        user: {
+          email: targetEmail,
+          realName: prepared.realName,
+          role: prepared.role,
+          sites: [...new Set(sanitizeClaims(prepared.claims).map((claim) => claim.sourceType.toUpperCase()))].sort(),
+          claims: prepared.claims,
+          createdAt: created.record.createdAt || "",
+          updatedAt: created.record.updatedAt || "",
+        },
+      });
+    }
+
     if (action === "adminLoadUser") {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
@@ -327,7 +364,7 @@ async function prepareAccountResponse(store, record) {
     state,
     claims,
     nameMatches,
-    availableDoctors: repositoryDoctorCandidates(index),
+    availableDoctors: await repositoryDoctorCandidates(store, index),
   };
 }
 
@@ -542,7 +579,8 @@ function matchRepositoryClaims(index, realName) {
   return mergeClaims([], claims);
 }
 
-function repositoryDoctorCandidates(index) {
+async function repositoryDoctorCandidates(store, index) {
+  const claimed = await claimedRosterNames(store);
   const seen = new Set();
   const candidates = [];
   for (const file of index.files || []) {
@@ -555,10 +593,36 @@ function repositoryDoctorCandidates(index) {
         key: doctor.key,
         displayName: doctor.displayName,
         sourceType: doctor.sourceType,
+        claimedBy: claimed.get(marker)?.email || "",
+        claimedByName: claimed.get(marker)?.realName || "",
       });
     }
   }
-  return candidates.sort((left, right) => left.displayName.localeCompare(right.displayName) || left.sourceType.localeCompare(right.sourceType));
+  return candidates.sort((left, right) => {
+    const leftClaimed = left.claimedBy ? 1 : 0;
+    const rightClaimed = right.claimedBy ? 1 : 0;
+    if (leftClaimed !== rightClaimed) return leftClaimed - rightClaimed;
+    return left.displayName.localeCompare(right.displayName) || left.sourceType.localeCompare(right.sourceType);
+  });
+}
+
+async function claimedRosterNames(store) {
+  const claimed = new Map();
+  const result = await store.list({ prefix: "account:" });
+  for (const item of result.keys || []) {
+    const record = await store.get(item.name, "json").catch(() => null);
+    const email = normalizeEmail(record?.email || item.name.replace(/^account:/, ""));
+    for (const claim of sanitizeClaims(record?.claims)) {
+      const marker = `${claim.sourceType}:${claim.key}`;
+      if (!claimed.has(marker)) {
+        claimed.set(marker, {
+          email,
+          realName: String(record?.realName || "").trim(),
+        });
+      }
+    }
+  }
+  return claimed;
 }
 
 function findRepositoryDoctor(index, rawClaim) {
@@ -567,7 +631,17 @@ function findRepositoryDoctor(index, rawClaim) {
     sourceType: String(rawClaim?.sourceType || "").toLowerCase(),
   };
   if (!claim.key || !claim.sourceType) return null;
-  return repositoryDoctorCandidates(index).find((doctor) => doctor.key === claim.key && doctor.sourceType === claim.sourceType) || null;
+  const seen = new Set();
+  for (const file of index.files || []) {
+    if (file.active === false) continue;
+    for (const doctor of sanitizeRepositoryDoctors(file.doctors)) {
+      const marker = `${doctor.sourceType}:${doctor.key}`;
+      if (seen.has(marker)) continue;
+      seen.add(marker);
+      if (doctor.key === claim.key && doctor.sourceType === claim.sourceType) return doctor;
+    }
+  }
+  return null;
 }
 
 function sanitizeClaims(claims) {

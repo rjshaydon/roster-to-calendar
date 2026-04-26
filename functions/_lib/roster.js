@@ -68,13 +68,21 @@ const IGNORED_CONTAINS = [
   "JENNY",
   "ARRHCHIE",
 ];
-const MMC_SECTION_BREAKS = new Set([
+const MMC_SECTION_MARKERS = new Set([
   "GERIATRICIAN",
   "CMO",
   "SENIOR REG",
   "INTERMEDIATE REG",
   "JUNIOR REG",
   "HMO",
+  "HMO MUST BE 111",
+  "HMO - MUST BE 111",
+  "INTERN",
+  "LOCUM",
+]);
+const MMC_STOP_SECTIONS = new Set([
+  "INTERN",
+  "LOCUM",
 ]);
 
 const DEFAULT_SETTINGS = {
@@ -737,7 +745,7 @@ function mmcSheetFromPdfPage(items) {
 function extractMmcPdfRowAnchors(items, dateHeaderY) {
   const rowItems = items
     .filter((item) => item.font === "TT6" && item.x < 160 && item.y < dateHeaderY - 5)
-    .filter((item) => looksLikePersonName(item.text) || MMC_SECTION_BREAKS.has(item.text.toUpperCase()))
+    .filter((item) => looksLikePersonName(item.text) || isMmcSectionMarker(item.text))
     .sort((left, right) => right.y - left.y);
   const seen = new Set();
   const anchors = [];
@@ -748,7 +756,7 @@ function extractMmcPdfRowAnchors(items, dateHeaderY) {
     anchors.push({
       y: item.y,
       text: item.text,
-      type: MMC_SECTION_BREAKS.has(item.text.toUpperCase()) ? "section" : "name",
+      type: isMmcSectionMarker(item.text) ? "section" : "name",
     });
   }
   return anchors;
@@ -917,7 +925,7 @@ function extractMmcNames(workbook) {
   for (const sheetName of workbook.SheetNames) {
     if (!sheetName.startsWith("Week ")) continue;
     const sheet = workbook.Sheets[sheetName];
-    for (const { name } of iterateMmcConsultantNames(sheet)) {
+    for (const { name } of iterateMmcRosterPeople(sheet)) {
       if (!looksLikePersonName(name)) continue;
       const key = normalizeName(name);
       if (!names.has(key)) names.set(key, String(name).trim());
@@ -955,7 +963,7 @@ function parseMmcRecords(workbook, doctorKey) {
     }
     if (!weekDates.length) continue;
 
-    for (const { row, name } of iterateMmcConsultantNames(sheet)) {
+    for (const { row, name } of iterateMmcRosterPeople(sheet)) {
       if (normalizeName(name) !== doctorKey) continue;
       const weekValues = [];
       for (let col = 6; col <= 12; col += 1) {
@@ -1471,18 +1479,36 @@ function matchesDateFilter(record, settings) {
   return true;
 }
 
-function iterateMmcConsultantNames(sheet) {
+function iterateMmcRosterPeople(sheet) {
   const range = XLSX.utils.decode_range(sheet["!ref"] || "A1:A1");
   const entries = [];
   for (let row = 7; row <= range.e.r + 1; row += 1) {
-    const marker = cleanText(getCellValue(sheet, row, 3)).toUpperCase();
-    if (MMC_SECTION_BREAKS.has(marker)) break;
-    const name = getCellValue(sheet, row, 4);
-    if (name !== undefined && name !== null && String(name).trim()) {
-      entries.push({ row, name: String(name).trim() });
+    const marker = cleanText(getCellValue(sheet, row, 3));
+    if (isMmcStopSection(marker)) break;
+    const name = cleanMmcRosterName(getCellValue(sheet, row, 4));
+    if (name && looksLikePersonName(name) && !isMmcSectionMarker(name)) {
+      entries.push({ row, name });
     }
   }
   return entries;
+}
+
+function isMmcSectionMarker(value) {
+  const upper = cleanText(value).replace(/\s+/g, " ").trim().toUpperCase();
+  return MMC_SECTION_MARKERS.has(upper);
+}
+
+function isMmcStopSection(value) {
+  const upper = cleanText(value).replace(/\s+/g, " ").trim().toUpperCase();
+  return MMC_STOP_SECTIONS.has(upper);
+}
+
+function cleanMmcRosterName(value) {
+  return cleanText(value)
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/\s+\(?\d+(?:\.\d+)?\s*(?:EFT)?\)?\s*$/i, "")
+    .trim();
 }
 
 function getCellValue(sheet, row, col) {

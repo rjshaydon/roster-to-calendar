@@ -232,6 +232,8 @@ PDF parser rules:
 - If a PDF cell contains only a time and no shift code, flag it for review rather than silently guessing the shift type.
 - Keep PDF files in the repository using the same duplicate and version-resolution rules as spreadsheets.
 
+MMC roster-name detection should include consultant, CMO, registrar, and HMO rows from supported roster exports. Intern rows are not exposed for self-service calendars at this stage.
+
 ### Source Of Truth
 
 Each repository file has status:

@@ -244,6 +244,11 @@ accountsModal.addEventListener("click", (event) => {
 });
 accountsBody.addEventListener("submit", (event) => {
   event.preventDefault();
+  const createForm = event.target.closest("[data-create-account-form]");
+  if (createForm) {
+    createAccountFromOwner(createForm);
+    return;
+  }
   const formElement = event.target.closest("[data-account-form]");
   if (!formElement) return;
   const email = formElement.querySelector("[data-account-email]")?.value.trim() || "";
@@ -839,19 +844,26 @@ function renderDoctorState() {
 
 function renderClaimSection() {
   if (!claimSection) return;
-  const shouldShow = !canUseDoctorPicker() && !selectedFiles.length && !currentRosterClaims.length && availableRosterDoctors.length;
+  const shouldShow = !canUseDoctorPicker() && !selectedFiles.length && !doctorOptions.length && availableRosterDoctors.length;
   claimSection.classList.toggle("hidden", !shouldShow);
   if (!shouldShow) return;
 
-  const options = availableRosterDoctors
-    .map((doctor, index) => ({
+  const unclaimed = [];
+  const claimed = [];
+  availableRosterDoctors.forEach((doctor, index) => {
+    const item = {
       index,
-      label: `${doctor.displayName} (${doctor.sourceType.toUpperCase()})`,
-    }))
-    .sort((left, right) => left.label.localeCompare(right.label));
+      claimed: Boolean(doctor.claimedBy),
+      label: `${doctor.displayName} (${doctor.sourceType.toUpperCase()})${doctor.claimedBy ? " - already claimed" : ""}`,
+    };
+    (item.claimed ? claimed : unclaimed).push(item);
+  });
+  unclaimed.sort((left, right) => left.label.localeCompare(right.label));
+  claimed.sort((left, right) => left.label.localeCompare(right.label));
   claimDoctorSelect.innerHTML = `
     <option value="">My name is not listed</option>
-    ${options.map((item) => `<option value="${item.index}">${escapeHtml(item.label)}</option>`).join("")}
+    ${unclaimed.length ? `<optgroup label="Unclaimed names">${unclaimed.map((item) => `<option value="${item.index}">${escapeHtml(item.label)}</option>`).join("")}</optgroup>` : ""}
+    ${claimed.length ? `<optgroup label="Already claimed">${claimed.map((item) => `<option value="${item.index}" class="claimed-option">${escapeHtml(item.label)}</option>`).join("")}</optgroup>` : ""}
   `;
   claimDoctorButton.disabled = true;
 }
@@ -861,6 +873,10 @@ async function claimSelectedRosterName() {
   const candidate = Number.isInteger(index) ? availableRosterDoctors[index] : null;
   if (!candidate) {
     setStatus("If your name is not listed, upload the first roster file for your hospital.", true);
+    return;
+  }
+  if (candidate.claimedBy && normalizeEmail(candidate.claimedBy) !== currentUserEmail) {
+    setStatus(`${candidate.displayName} is already claimed. Conflict notification is still to be added.`, true);
     return;
   }
 
@@ -2579,6 +2595,8 @@ function sanitizeAvailableRosterDoctors(doctors) {
       key: normalizeRosterName(doctor?.key || ""),
       displayName: String(doctor?.displayName || "").trim(),
       sourceType: String(doctor?.sourceType || "").toLowerCase(),
+      claimedBy: normalizeEmail(doctor?.claimedBy || ""),
+      claimedByName: String(doctor?.claimedByName || "").trim(),
     }))
     .filter((doctor) => doctor.key && doctor.displayName && doctor.sourceType);
 }
@@ -2659,6 +2677,31 @@ function renderAccountsModal() {
       <article class="review-card">
         <div class="review-top">
           <div>
+            <strong>Create user account</strong>
+            <span>Create an account and enter it immediately for setup or testing.</span>
+          </div>
+        </div>
+        <form class="review-body" data-create-account-form>
+          <label class="field">
+            <span>Real name</span>
+            <input type="text" data-create-real-name placeholder="Name shown to the user" autocomplete="name">
+          </label>
+          <label class="field">
+            <span>Email address</span>
+            <input type="email" data-create-email placeholder="doctor@example.com" autocomplete="email">
+          </label>
+          <label class="field">
+            <span>Temporary password</span>
+            <input type="password" data-create-password placeholder="Temporary password" autocomplete="new-password">
+          </label>
+          <div class="modal-actions">
+            <button type="submit" class="button button-primary">Create and enter account</button>
+          </div>
+        </form>
+      </article>
+      <article class="review-card">
+        <div class="review-top">
+          <div>
             <strong>Other users</strong>
             <span>${otherUsers.length ? `${otherUsers.length} account${otherUsers.length === 1 ? "" : "s"}` : "No other users have logged in yet."}</span>
           </div>
@@ -2723,6 +2766,47 @@ function addLocalAccount() {
   accountState.users.push({ email: nextEmail, realName: "", password: "", role: "user" });
   saveAccountState();
   setStatus("User added to local account list.");
+}
+
+async function createAccountFromOwner(formElement) {
+  if (!isCreatorAuthenticated()) {
+    setStatus("Creator authentication is required to create accounts.", true);
+    return;
+  }
+  const realName = formElement.querySelector("[data-create-real-name]")?.value.trim() || "";
+  const email = normalizeEmail(formElement.querySelector("[data-create-email]")?.value || "");
+  const password = formElement.querySelector("[data-create-password]")?.value || "";
+  if (!realName || !email || !password) {
+    setStatus("Enter a real name, email address, and temporary password.", true);
+    return;
+  }
+
+  setStatus(`Creating ${email}...`);
+  try {
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "adminCreateUser",
+        email: authUserEmail || currentUserEmail,
+        password: authUserPassword || currentUserPassword,
+        targetEmail: email,
+        targetRealName: realName,
+        targetPassword: password,
+      }),
+    });
+    const data = await readJsonResponse(response, "Could not create account.");
+    if (data.user) {
+      serverUsers = [
+        ...serverUsers.filter((user) => normalizeServerUser(user).email !== email),
+        data.user,
+      ].sort((left, right) => normalizeServerUser(left).email.localeCompare(normalizeServerUser(right).email));
+    }
+    formElement.reset();
+    await enterUserAccount(email);
+  } catch (error) {
+    setStatus(error.message || "Could not create account.", true);
+  }
 }
 
 function removeLocalAccount(email) {
