@@ -474,11 +474,7 @@ async function readWorkbook(file) {
     return readPdfWorkbook(bytes, file.name);
   }
 
-  try {
-    return XLSX.read(bytes, { type: "array", cellDates: true });
-  } catch {
-    throw new Error(`${file.name} is not a supported MMC workbook, MMC PDF, or Dandenong Hospital FindMyShift export.`);
-  }
+  return readSpreadsheetWorkbook(bytes, file.name);
 }
 
 async function readWorkbookDataUrl(dataUrl, filename) {
@@ -487,8 +483,29 @@ async function readWorkbookDataUrl(dataUrl, filename) {
     return readPdfWorkbook(bytes, filename);
   }
 
+  return readSpreadsheetWorkbook(bytes, filename);
+}
+
+function readSpreadsheetWorkbook(bytes, filename) {
+  const baseOptions = {
+    type: "array",
+    cellDates: true,
+    cellNF: false,
+    cellHTML: false,
+    cellStyles: false,
+  };
+
   try {
-    return XLSX.read(bytes, { type: "array", cellDates: true });
+    const metadata = XLSX.read(bytes, { type: "array", bookSheets: true });
+    const sheetNames = metadata.SheetNames || [];
+    const weekSheets = sheetNames.filter((name) => name.startsWith("Week "));
+    if (sheetNames.includes("Whole thing") && weekSheets.length) {
+      const workbook = XLSX.read(bytes, { ...baseOptions, sheets: weekSheets });
+      workbook.SheetNames = sheetNames;
+      workbook.Sheets["Whole thing"] = workbook.Sheets["Whole thing"] || {};
+      return workbook;
+    }
+    return XLSX.read(bytes, baseOptions);
   } catch {
     throw new Error(`${filename} is not a supported MMC workbook, MMC PDF, or Dandenong Hospital FindMyShift export.`);
   }

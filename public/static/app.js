@@ -702,8 +702,7 @@ async function mergeFiles(files) {
   }
   selectedFiles.sort((left, right) => (left.addedAt || "").localeCompare(right.addedAt || "") || left.name.localeCompare(right.name));
   renderFilesList();
-  saveCurrentSessionState();
-  scheduleCloudStateSave();
+  saveCurrentWorkspace();
   if (persistenceFailed) {
     setStatus("Import added, but browser storage was unavailable so it will not persist after reload.", true);
   }
@@ -736,6 +735,8 @@ async function analyzeFiles() {
       const serverEntry = (data.imports || []).find((item) => item.id === entry.id);
       return serverEntry ? { ...entry, sourceType: serverEntry.sourceType } : entry;
     });
+    saveCurrentWorkspace();
+    scheduleCloudStateSave();
     restoredSessionState = loadCurrentSessionState();
     settings = {
       ...defaultSettings(),
@@ -3717,6 +3718,9 @@ function parseError(text, fallbackMessage = "Request failed.") {
   try {
     return JSON.parse(text).error || fallbackMessage;
   } catch {
+    if (/Worker exceeded resource limits|Error 1102/i.test(String(text || ""))) {
+      return `${fallbackMessage} Cloudflare exceeded its CPU or memory limit while parsing the roster. Try again after the latest deploy; if it persists, the app needs a higher Workers CPU limit or client-side parsing.`;
+    }
     const cleaned = String(text || "")
       .replace(/<script[\s\S]*?<\/script>/gi, " ")
       .replace(/<style[\s\S]*?<\/style>/gi, " ")

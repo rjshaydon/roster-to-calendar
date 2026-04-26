@@ -2,6 +2,9 @@ name = "roster-converter"
 compatibility_date = "2026-04-22"
 pages_build_output_dir = "public"
 
+[limits]
+cpu_ms = 30_000
+
 [[kv_namespaces]]
 binding = "ROSTER_STORE"
 id = "b9f91999b69b43b298c15580b619dee4"
