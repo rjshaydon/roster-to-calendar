@@ -242,6 +242,7 @@ h1 {
 .drop-zone::before {
   content: "";
   position: absolute;
+  pointer-events: none;
   inset: -30% auto auto -10%;
   width: 48%;
   height: 180%;
@@ -1344,6 +1345,8 @@ body[data-skin="console"] #dropZone h2 {
 body[data-skin="console"] #doctorSection,
 body[data-skin="console"] #controlBar {
   padding: 20px;
+  position: relative;
+  z-index: 2;
 }
 
 body[data-skin="console"] #doctorSection {
@@ -1360,6 +1363,7 @@ body[data-skin="console"] #issuesPanel {
 
 body[data-skin="console"] #settingsPanel.settings-panel {
   position: fixed;
+  z-index: 40;
   left: 50%;
   top: 50%;
   width: min(780px, calc(100% - 28px));

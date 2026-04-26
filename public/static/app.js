@@ -246,6 +246,7 @@ filesModal.addEventListener("click", (event) => {
 filesList.addEventListener("click", async (event) => {
   const removeButton = event.target.closest("[data-remove-import]");
   if (!removeButton) return;
+  if (!canRemoveImports()) return;
   await removeStoredImport(removeButton.dataset.removeImport);
 });
 accountsButton.addEventListener("click", async () => {
@@ -339,13 +340,19 @@ claimDoctorButton.addEventListener("click", () => {
   claimSelectedRosterName();
 });
 
-settingsToggle.addEventListener("click", () => {
+settingsToggle.addEventListener("click", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
   settingsPanel.classList.toggle("hidden");
 });
-settingsCloseButton.addEventListener("click", () => {
+settingsCloseButton.addEventListener("click", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
   settingsPanel.classList.add("hidden");
 });
-mobileSettingsButton.addEventListener("click", () => {
+mobileSettingsButton.addEventListener("click", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
   settingsPanel.classList.toggle("hidden");
 });
 
@@ -854,17 +861,23 @@ function renderSettings() {
 function renderFilesList() {
   if (!filesList) return;
   if (!selectedFiles.length) {
-    filesList.innerHTML = `<article class="issue-card"><strong>No files imported yet.</strong><p>Add rosters and they will stay here until removed.</p></article>`;
+    const emptyMessage = canRemoveImports()
+      ? "Add rosters and they will stay here until removed."
+      : "Add rosters and they will be retained in the shared roster repository.";
+    filesList.innerHTML = `<article class="issue-card"><strong>No files imported yet.</strong><p>${emptyMessage}</p></article>`;
     return;
   }
 
+  const canRemove = canRemoveImports();
   filesList.innerHTML = selectedFiles.map((entry) => `
     <article class="issue-card">
       <div>
         <strong>${escapeHtml(entry.name)}</strong>
         <p>${escapeHtml(String(entry.sourceType || "").toUpperCase())} · Imported ${escapeHtml(formatTimestamp(entry.addedAt))}</p>
       </div>
-      <button type="button" class="button button-secondary" data-remove-import="${entry.id}">Remove</button>
+      ${canRemove
+        ? `<button type="button" class="button button-secondary" data-remove-import="${entry.id}">Remove</button>`
+        : `<span class="file-readonly">Repository file</span>`}
     </article>
   `).join("");
 }
@@ -2839,6 +2852,10 @@ function currentAccount() {
 
 function isOwnerAccount() {
   return currentUserRole === "creator" || currentAccount()?.role === "owner";
+}
+
+function canRemoveImports() {
+  return isOwnerAccount() && !adminViewingEmail;
 }
 
 function isCreatorAuthenticated() {
