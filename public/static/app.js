@@ -88,6 +88,7 @@ const contextMenu = document.querySelector("#contextMenu");
 
 const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const OWNER_EMAIL = "rhaydon@gmail.com";
+const OWNER_DOCTOR_KEY = "RICHARD HAYDON";
 const DEFAULT_MMC_LOCATION = "MMC Car Park, Tarella Road, Clayton VIC 3168, Australia";
 const DEFAULT_DDH_LOCATION = "DDH Car Park, 135 David St, Dandenong VIC 3175, Australia";
 const SHIFT_COLOUR_DEFAULTS = {
@@ -327,7 +328,7 @@ doctorSelect.addEventListener("change", async () => {
   clearPreviewData();
   saveCurrentSessionState();
   syncActionState();
-  if (selectedDoctor()) await updatePreview();
+  if (selectedDoctor()) await updatePreview({ resetRange: true });
 });
 
 claimDoctorSelect.addEventListener("change", () => {
@@ -766,7 +767,7 @@ async function analyzeFiles() {
     renderFilesList();
     renderDoctorState();
     if (selectedDoctor()) {
-      await updatePreview();
+      await updatePreview({ resetRange: true });
       return;
     }
   } catch (error) {
@@ -902,11 +903,14 @@ function renderDoctorState() {
       option.textContent = doctor.displayName;
       doctorSelect.append(option);
     }
-    if (restoredSessionState?.doctorKey && doctorOptions.some((doctor) => doctor.key === restoredSessionState.doctorKey)) {
+    const preferredDoctorKey = preferredDoctorKeyForCurrentAccount();
+    if (preferredDoctorKey && doctorOptions.some((doctor) => doctor.key === preferredDoctorKey)) {
+      doctorSelect.value = preferredDoctorKey;
+    } else if (restoredSessionState?.doctorKey && doctorOptions.some((doctor) => doctor.key === restoredSessionState.doctorKey)) {
       doctorSelect.value = restoredSessionState.doctorKey;
     }
     doctorSelect.classList.remove("hidden");
-    setStatus("Choose a doctor to load the calendar.");
+    setStatus(preferredDoctorKey ? "Loading calendar..." : "Choose a doctor to load the calendar.");
   }
 
   syncActionState();
@@ -975,7 +979,7 @@ async function claimSelectedRosterName() {
   }
 }
 
-async function updatePreview() {
+async function updatePreview(options = {}) {
   const doctor = selectedDoctor();
   if (!doctor) {
     setStatus("Choose a doctor before loading the calendar.", true);
@@ -983,10 +987,14 @@ async function updatePreview() {
   }
   setStatus("Loading calendar...");
   try {
+    if (options.resetRange) {
+      settings.dateFrom = "";
+      settings.dateTo = "";
+    }
     const data = await buildBrowserPreviewData(doctor);
     latestPreview = data;
-    if (!settings.dateFrom || !settings.dateTo) {
-      const range = deriveRangeBounds(data.events || []);
+    if (options.resetRange || !settings.dateFrom || !settings.dateTo) {
+      const range = deriveDefaultPreviewRange(data.events || []);
       if (!settings.dateFrom) settings.dateFrom = range.start;
       if (!settings.dateTo) settings.dateTo = range.end;
       renderSettings();
@@ -1079,14 +1087,15 @@ function buildClientPreviewData(baseData) {
     events.push(customEventToPreviewEvent(event));
   }
 
-  events.sort(comparePreviewEvents);
   const previewStart = settings.dateFrom || range.start;
   const previewEnd = settings.dateTo || range.end;
+  const visibleEvents = filterEventsByPreviewRange(events, previewStart, previewEnd);
+  visibleEvents.sort(comparePreviewEvents);
   return {
     ...baseData,
-    events,
-    count: events.length,
-    date_range: formatPreviewRange(previewStart, previewEnd) || (events.length ? summarizeEvents(events) : "No events found"),
+    events: visibleEvents,
+    count: visibleEvents.length,
+    date_range: formatPreviewRange(previewStart, previewEnd) || (visibleEvents.length ? summarizeEvents(visibleEvents) : "No events found"),
     previewStart,
     previewEnd,
     hospitals: availablePreviewHospitals,
@@ -1974,7 +1983,15 @@ function closeContextMenu() {
 function selectedDoctor() {
   if (!doctorOptions.length) return null;
   if (doctorOptions.length === 1) return doctorOptions[0];
-  return doctorOptions.find((doctor) => doctor.key === doctorSelect.value) || doctorOptions[0];
+  const preferredDoctorKey = preferredDoctorKeyForCurrentAccount();
+  return doctorOptions.find((doctor) => doctor.key === doctorSelect.value)
+    || doctorOptions.find((doctor) => doctor.key === preferredDoctorKey)
+    || doctorOptions[0];
+}
+
+function preferredDoctorKeyForCurrentAccount() {
+  if (currentUserEmail === OWNER_EMAIL && !adminViewingEmail) return OWNER_DOCTOR_KEY;
+  return "";
 }
 
 function canUseDoctorPicker() {
@@ -2223,6 +2240,37 @@ function deriveRangeBounds(events) {
   return { start, end };
 }
 
+function deriveDefaultPreviewRange(events) {
+  const currentTerm = australianTermForDate(new Date());
+  const nextTerm = nextAustralianTerm(currentTerm);
+  const endTerm = events.some((event) => eventOverlapsDateRange(event, nextTerm.start, addDays(nextTerm.end, -1)))
+    ? nextTerm
+    : currentTerm;
+  return {
+    start: formatDateKey(currentTerm.start),
+    end: formatDateKey(addDays(endTerm.end, -1)),
+  };
+}
+
+function eventOverlapsDateRange(event, rangeStart, rangeEnd) {
+  const eventStart = parseDateOnly(event.start);
+  const eventEnd = previewInclusiveEndDate(event, eventStart, parseDateOnly(event.end));
+  return eventStart <= rangeEnd && eventEnd >= rangeStart;
+}
+
+function filterEventsByPreviewRange(events, start, end) {
+  if (!start && !end) return events;
+  const rangeStart = start ? parseDateOnly(start) : null;
+  const rangeEnd = end ? parseDateOnly(end) : null;
+  return events.filter((event) => {
+    const eventStart = parseDateOnly(event.start);
+    const eventEnd = previewInclusiveEndDate(event, eventStart, parseDateOnly(event.end));
+    if (rangeStart && eventEnd < rangeStart) return false;
+    if (rangeEnd && eventStart > rangeEnd) return false;
+    return true;
+  });
+}
+
 function formatPreviewRange(start, end) {
   if (!start || !end) return "";
   return `${start} to ${end}`;
@@ -2282,6 +2330,10 @@ function buildEventOverridePatch(event, item, override = {}) {
 }
 
 function detectAustralianTerm(date) {
+  return { label: australianTermForDate(date).label };
+}
+
+function australianTermForDate(date) {
   const year = date.getFullYear();
   const candidates = [
     buildAustralianTerm(year, 1, 1),
@@ -2291,7 +2343,13 @@ function detectAustralianTerm(date) {
     buildAustralianTerm(year - 1, 4, 10),
   ];
   const match = candidates.find((term) => date >= term.start && date < term.end);
-  return match || { label: "Schedule" };
+  return match || buildAustralianTerm(year, 1, 1);
+}
+
+function nextAustralianTerm(term) {
+  const nextTermNumber = term.termNumber === 4 ? 1 : term.termNumber + 1;
+  const nextYear = term.termNumber === 4 ? term.year + 1 : term.year;
+  return buildAustralianTerm(nextYear, nextTermNumber, startMonthIndexForTerm(nextTermNumber));
 }
 
 function buildAustralianTerm(year, termNumber, startMonthIndex) {
@@ -2299,9 +2357,15 @@ function buildAustralianTerm(year, termNumber, startMonthIndex) {
   const end = addDays(start, 91);
   return {
     label: `Term ${termNumber}`,
+    year,
+    termNumber,
     start,
     end,
   };
+}
+
+function startMonthIndexForTerm(termNumber) {
+  return [1, 4, 7, 10][Math.max(0, Math.min(3, termNumber - 1))];
 }
 
 function firstMondayOfMonth(year, monthIndex) {
