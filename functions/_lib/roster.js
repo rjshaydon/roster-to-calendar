@@ -75,6 +75,7 @@ const MMC_SECTION_MARKERS = new Set([
   "INTERMEDIATE REG",
   "JUNIOR REG",
   "HMO",
+  "HMO MUST BE",
   "HMO MUST BE 111",
   "HMO - MUST BE 111",
   "ENP",
@@ -1076,7 +1077,7 @@ function parseMmcEntry(day, raw) {
 
   const explicit = extractTimePrefix(raw);
   const label = explicit ? explicit.label : raw.trim();
-  const normalized = normalizeMmcLabel(label);
+  const normalized = normalizeMmcLabel(label) || normalizeGenericMmcTimedLabel(label, explicit);
   if (!normalized) {
     return createUnknownRecord("MMC", day, raw, "MMC shift code not recognised.");
   }
@@ -1088,6 +1089,8 @@ function parseMmcEntry(day, raw) {
       startHm: explicit.start,
       endHm: explicit.end,
       location: normalized.location || "",
+      ambiguous: normalized.ambiguous,
+      warning: normalized.warning,
     });
   }
   if (normalized.allDay) {
@@ -1204,6 +1207,29 @@ function normalizeMmcLabel(label) {
   }
 
   return null;
+}
+
+function normalizeGenericMmcTimedLabel(label, explicit) {
+  if (!explicit) return null;
+  const code = label.trim().toUpperCase();
+  const base = code || inferMmcTimeOnlyShiftLabel(explicit.start, explicit.end);
+  if (!base) return null;
+  return {
+    kind: "shift",
+    titleParts: { base, period: "", suffix: "" },
+    location: MMC_LOCATION,
+    allDay: false,
+    defaultTimes: null,
+    ambiguous: Boolean(code),
+    warning: code ? "MMC shift code not recognised; using explicit roster time." : "",
+  };
+}
+
+function inferMmcTimeOnlyShiftLabel(startHm) {
+  const [hour] = startHm;
+  if (hour >= 22 || hour < 6) return "Night";
+  if (hour >= 14) return "PM";
+  return "AM";
 }
 
 function normalizeDdhLabel(label) {
@@ -1560,12 +1586,12 @@ function parseDdhTimeRow(value) {
 }
 
 function extractTimePrefix(value) {
-  const match = value.match(/^\s*(\d{2})(\d{2})-(\d{2})(\d{2})\s+(.+?)\s*$/);
+  const match = value.match(/^\s*(\d{2})(\d{2})-(\d{2})(\d{2})(?:\s+(.+?))?\s*$/);
   if (!match) return null;
   return {
     start: [Number(match[1]), Number(match[2])],
     end: [Number(match[3]), Number(match[4])],
-    label: match[5].trim(),
+    label: (match[5] || "").trim(),
   };
 }
 
@@ -1601,6 +1627,7 @@ function looksLikePersonName(value) {
   if (["NOT USED", "SMS", "DATE", "WEEK", "ROLE", "PAGER"].some((token) => upper.includes(token))) {
     return false;
   }
+  if (/^\d/.test(cleaned) || /\bVS\b/i.test(cleaned)) return false;
   return /[A-Za-z]/.test(cleaned) && cleaned.includes(" ");
 }
 

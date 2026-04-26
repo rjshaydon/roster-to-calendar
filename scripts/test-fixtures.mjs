@@ -20,6 +20,19 @@ assert.deepEqual(richard.sourceTypes, ["mmc", "ddh"]);
 assert.ok(doctors.find((doctor) => doctor.displayName === "Brianna Dawn Murphy"));
 assert.ok(doctors.find((doctor) => doctor.displayName === "Patrick Tan"));
 assert.equal(doctors.find((doctor) => doctor.displayName === "Aarushi Pathania"), undefined);
+assert.equal(doctors.find((doctor) => doctor.displayName === "HMO MUST BE"), undefined);
+
+const markDouglas = doctors.find((doctor) => doctor.displayName === "Mark Douglas");
+assert.ok(markDouglas);
+const markView = buildRosterView(mmcWorkbook, [], markDouglas.key);
+assert.ok(markView.events.some((event) => event.title === "MMC: AM"));
+assert.ok(markView.events.some((event) => event.title === "MMC: PM"));
+
+const deslinAraullo = doctors.find((doctor) => doctor.displayName === "Deslin Araullo");
+assert.ok(deslinAraullo);
+const deslinView = buildRosterView(mmcWorkbook, [], deslinAraullo.key);
+assert.ok(deslinView.events.some((event) => event.title === "MMC: PHJ"));
+assert.ok(deslinView.events.some((event) => event.title === "MMC: SWA"));
 
 const view = buildRosterView(mmcWorkbook, ddhWorkbook, richard.key);
 const summary = previewSummary(view.events);
@@ -43,6 +56,6 @@ assert.ok(pdfDoctors.find((doctor) => doctor.displayName === "Titus HACKMAN"));
 const pdfRichard = pdfDoctors.find((doctor) => doctor.displayName === "Richard HAYDON");
 const pdfView = buildRosterView(parsedPdf.sources.mmc, parsedPdf.sources.ddh, pdfRichard.key);
 assert.ok(pdfView.events.some((event) => event.title === "MMC: SSU PM"));
-assert.ok(pdfView.issues.some((issue) => issue.rawValue === "0800-1730"));
+assert.ok(pdfView.events.some((event) => event.rawValue === "0800-1730" && event.title === "MMC: AM"));
 
 console.log("Fixture smoke test passed.");
