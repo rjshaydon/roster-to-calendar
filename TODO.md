@@ -4,7 +4,6 @@
 
 - Configure Cloudflare server-side storage for production: create/bind `ROSTER_STORE` KV to the Pages project and redeploy. Without this, account creation, shared repository data, and cross-device persistence cannot work.
 - Verify account creation in production after `ROSTER_STORE` is available: creator creates a user, enters that account, links roster names, logs out/in, and sees persistent data.
-- Stop silent local fallback for production multi-user workflows, or make it explicitly developer-only. Local fallback is useful for testing UI but is not an account system.
 - Implement name-claim conflict workflow: claimed names shown greyed out, user can report conflict, creator can transfer/alias/reject, and both users receive an in-app message.
 
 ## Account And Admin
@@ -12,6 +11,8 @@
 - Creator admin can create accounts, enter them, delete them, and return to creator account.
 - Creator admin can view all users by real name/email, claimed roster names by site, uploaded files, repository files, unresolved name conflicts, and unresolved roster-version conflicts.
 - Creator admin can jump into a user calendar for debugging and then return to their own calendar.
+- Creator admin feature: "When am I working with Dr X?" to search overlap with a selected clinician.
+- Creator admin feature: "Who else am I working with this shift?" to show other rostered clinicians for a selected shift.
 - Standard users can edit email/password/account details and delete their own account.
 - Add in-app messaging for disputes and admin decisions.
 - Add optional outbound email later through Gmail for dispute/admin notifications.
@@ -60,6 +61,7 @@
 - Add per-hospital default car park/location settings.
 - Add shift colour settings and keep the category list aligned with real shift types.
 - Make mobile interactions touch-friendly, including file removal, event editing, and sticky export where appropriate.
+- Tighten the mobile layout substantially; the current mobile version needs dedicated responsive design rather than desktop layout compression.
 
 ## Export
 

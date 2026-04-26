@@ -87,7 +87,6 @@ const SHIFT_COLOUR_DEFAULTS = {
 const ACCOUNT_STATE_KEY = "roster-account-state";
 const SESSION_STATE_KEY = "roster-session-state-v1";
 const ACCOUNT_WORKSPACES_KEY = "roster-account-workspaces-v1";
-const LOCAL_REPOSITORY_KEY = "roster-local-repository-v1";
 const CURRENT_EMAIL_KEY = "roster-current-email";
 const CURRENT_PASSWORD_KEY = "roster-current-password";
 const SKIN_KEY = "roster-active-skin";
@@ -737,7 +736,6 @@ async function analyzeFiles() {
       const serverEntry = (data.imports || []).find((item) => item.id === entry.id);
       return serverEntry ? { ...entry, sourceType: serverEntry.sourceType } : entry;
     });
-    updateLocalRepositoryFromAnalyze(data);
     restoredSessionState = loadCurrentSessionState();
     settings = {
       ...defaultSettings(),
@@ -883,10 +881,6 @@ async function claimSelectedRosterName() {
   }
 
   setStatus("Linking roster name...");
-  if (!cloudAvailable) {
-    await claimLocalRosterName(candidate);
-    return;
-  }
   try {
     const requestEmail = adminViewingEmail ? authUserEmail : currentUserEmail;
     const requestPassword = adminViewingEmail ? authUserPassword : currentUserPassword;
@@ -2557,187 +2551,6 @@ function summarizeDetectedSources(imports) {
   };
 }
 
-function updateLocalRepositoryFromAnalyze(data) {
-  const repository = loadLocalRepository();
-  const importMeta = Array.isArray(data.imports) ? data.imports : [];
-  const nextFiles = selectedFiles
-    .map((entry) => {
-      const meta = importMeta.find((item) => item.id === entry.id) || {};
-      return {
-        id: entry.id,
-        name: entry.name,
-        size: entry.size,
-        lastModified: entry.lastModified,
-        addedAt: entry.addedAt,
-        sourceType: meta.sourceType || entry.sourceType || "pending",
-      };
-    })
-    .filter((entry) => entry.id && entry.sourceType && entry.sourceType !== "pending");
-  const files = dedupeBy([...repository.files, ...nextFiles], (item) => item.id);
-
-  const doctors = dedupeBy([
-    ...repository.doctors,
-    ...sanitizeLocalRepositoryDoctors(data.doctors || []),
-  ], (doctor) => `${doctor.sourceType}:${doctor.key}`);
-
-  saveLocalRepository({ files, doctors });
-  availableRosterDoctors = localRepositoryDoctorCandidates();
-}
-
-function loadLocalRepository() {
-  try {
-    const raw = JSON.parse(localStorage.getItem(LOCAL_REPOSITORY_KEY) || "{}");
-    return {
-      files: Array.isArray(raw.files) ? raw.files.map(sanitizeLocalRepositoryFile).filter(Boolean) : [],
-      doctors: Array.isArray(raw.doctors) ? raw.doctors.map(sanitizeLocalRepositoryDoctor).filter(Boolean) : [],
-    };
-  } catch {
-    return { files: [], doctors: [] };
-  }
-}
-
-function saveLocalRepository(repository) {
-  localStorage.setItem(LOCAL_REPOSITORY_KEY, JSON.stringify({
-    version: 1,
-    files: (repository.files || []).map(sanitizeLocalRepositoryFile).filter(Boolean),
-    doctors: (repository.doctors || []).map(sanitizeLocalRepositoryDoctor).filter(Boolean),
-    updatedAt: new Date().toISOString(),
-  }));
-}
-
-function sanitizeLocalRepositoryFile(file) {
-  if (!file?.id) return null;
-  return {
-    id: String(file.id),
-    name: String(file.name || "roster"),
-    size: Number(file.size || 0),
-    lastModified: Number(file.lastModified || 0),
-    addedAt: String(file.addedAt || ""),
-    sourceType: String(file.sourceType || "").toLowerCase(),
-  };
-}
-
-function sanitizeLocalRepositoryDoctors(doctors) {
-  return (doctors || []).flatMap((doctor) => {
-    const sourceTypes = Array.isArray(doctor.sourceTypes) && doctor.sourceTypes.length
-      ? doctor.sourceTypes
-      : [doctor.sourceType || ""];
-    return sourceTypes.map((sourceType) => sanitizeLocalRepositoryDoctor({
-      ...doctor,
-      sourceType,
-    })).filter(Boolean);
-  });
-}
-
-function sanitizeLocalRepositoryDoctor(doctor) {
-  const key = normalizeRosterName(doctor?.key || doctor?.displayName || "");
-  const sourceType = String(doctor?.sourceType || "").toLowerCase();
-  const displayName = String(doctor?.displayName || "").trim();
-  if (!key || !displayName || !sourceType) return null;
-  return { key, displayName, sourceType };
-}
-
-function localRepositoryDoctorCandidates() {
-  const claimed = claimedLocalRosterNames();
-  return loadLocalRepository().doctors
-    .map((doctor) => {
-      const marker = `${doctor.sourceType}:${doctor.key}`;
-      const owner = claimed.get(marker);
-      return {
-        ...doctor,
-        claimedBy: owner?.email || "",
-        claimedByName: owner?.realName || "",
-      };
-    })
-    .sort((left, right) => {
-      const leftClaimed = left.claimedBy ? 1 : 0;
-      const rightClaimed = right.claimedBy ? 1 : 0;
-      if (leftClaimed !== rightClaimed) return leftClaimed - rightClaimed;
-      return left.displayName.localeCompare(right.displayName) || left.sourceType.localeCompare(right.sourceType);
-    });
-}
-
-function claimedLocalRosterNames() {
-  const claimed = new Map();
-  for (const user of accountState.users || []) {
-    const email = normalizeEmail(user.email);
-    for (const claim of sanitizeRosterClaims(user.claims)) {
-      const marker = `${claim.sourceType}:${claim.key}`;
-      if (!claimed.has(marker)) {
-        claimed.set(marker, {
-          email,
-          realName: String(user.realName || "").trim(),
-        });
-      }
-    }
-  }
-  return claimed;
-}
-
-function matchLocalRepositoryClaims(realName) {
-  return matchLocalRepositoryClaimsForEmail(realName, currentUserEmail || accountState.currentEmail);
-}
-
-function matchLocalRepositoryClaimsForEmail(realName, ownerEmail) {
-  const email = normalizeEmail(ownerEmail);
-  return localRepositoryDoctorCandidates()
-    .filter((doctor) => !doctor.claimedBy || doctor.claimedBy === email)
-    .filter((doctor) => likelySameRosterName(realName, doctor.displayName))
-    .map((doctor) => ({
-      key: doctor.key,
-      displayName: doctor.displayName,
-      sourceType: doctor.sourceType,
-      matchedAt: new Date().toISOString(),
-    }));
-}
-
-function localRepositoryFileRefsForClaims(claims) {
-  const sourceTypes = new Set(sanitizeRosterClaims(claims).map((claim) => claim.sourceType));
-  if (!sourceTypes.size) return [];
-  return loadLocalRepository().files.filter((file) => sourceTypes.has(file.sourceType));
-}
-
-async function claimLocalRosterName(candidate) {
-  const account = currentAccount();
-  const claim = {
-    key: candidate.key,
-    displayName: candidate.displayName,
-    sourceType: candidate.sourceType,
-    matchedAt: new Date().toISOString(),
-  };
-  account.claims = mergeLocalClaims(account.claims, [claim]);
-  currentRosterClaims = sanitizeRosterClaims(account.claims);
-  availableRosterDoctors = localRepositoryDoctorCandidates();
-  saveAccountState();
-  selectedFiles = await loadStoredImportsByRefs(localRepositoryFileRefsForClaims(currentRosterClaims));
-  saveCurrentWorkspace();
-  if (selectedFiles.length) {
-    await analyzeFiles();
-  } else {
-    renderClaimSection();
-  }
-  renderLoginState();
-  setStatus(`Linked ${candidate.displayName} (${candidate.sourceType.toUpperCase()}).`);
-}
-
-function mergeLocalClaims(existing, incoming) {
-  return dedupeBy([...sanitizeRosterClaims(existing), ...sanitizeRosterClaims(incoming)], (claim) => `${claim.sourceType}:${claim.key}`)
-    .sort((left, right) => left.sourceType.localeCompare(right.sourceType) || left.displayName.localeCompare(right.displayName));
-}
-
-function dedupeBy(items, keyFn) {
-  const seen = new Set();
-  const result = [];
-  for (const item of items) {
-    if (!item) continue;
-    const key = keyFn(item);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    result.push(item);
-  }
-  return result;
-}
-
 function latestImportTimestamp() {
   if (!selectedFiles.length) return "";
   return selectedFiles.reduce((latest, entry) => !latest || (entry.addedAt || "") > latest ? entry.addedAt || "" : latest, "");
@@ -2795,29 +2608,19 @@ function saveAccountState() {
 
 function ensureLocalAccountLogin(email, password, options = {}) {
   const realName = String(options.realName || "").trim();
-  const mode = options.mode || "login";
   const existing = accountState.users.find((user) => user.email === email);
   if (!existing) {
-    if (mode === "create" && !realName) {
-      throw new Error("Real name is required to create an account.");
-    }
     accountState.users.push({
       email,
       realName,
       password,
       role: email === OWNER_EMAIL ? "owner" : "user",
-      claims: matchLocalRepositoryClaimsForEmail(realName, email),
+      claims: [],
     });
-  } else if (mode === "create") {
-    throw new Error("An account already exists for that email. Use log in.");
-  } else if (existing.password && existing.password !== password) {
-    throw new Error("Incorrect password.");
-  } else if (!existing.password) {
-    existing.password = password;
-  }
-  if (existing && realName && !existing.realName) {
-    existing.realName = realName;
-    existing.claims = mergeLocalClaims(existing.claims, matchLocalRepositoryClaimsForEmail(realName, email));
+  } else {
+    existing.password = password || existing.password || "";
+    existing.role = existing.role || (email === OWNER_EMAIL ? "owner" : "user");
+    if (realName) existing.realName = realName;
   }
   accountState.currentEmail = email;
   saveAccountState();
@@ -3031,13 +2834,6 @@ async function createAccountFromOwner(formElement) {
 
   setStatus(`Creating ${email}...`);
   try {
-    if (!cloudAvailable) {
-      createLocalAccountForOwner(email, realName, password);
-      formElement.reset();
-      await enterUserAccount(email);
-      setStatus(`Created ${email} as a local-only account. Cloudflare KV is still required for shared persistence.`);
-      return;
-    }
     const response = await fetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -3061,34 +2857,11 @@ async function createAccountFromOwner(formElement) {
     await enterUserAccount(email);
   } catch (error) {
     if (error.message === "Cloud storage is not configured.") {
-      createLocalAccountForOwner(email, realName, password);
-      formElement.reset();
-      await enterUserAccount(email);
-      setStatus(`Created ${email} as a local-only account. Cloudflare KV is still required for shared persistence.`);
+      setStatus(serverStorageRequiredMessage(), true);
       return;
     }
     setStatus(error.message || "Could not create account.", true);
   }
-}
-
-function createLocalAccountForOwner(email, realName, password) {
-  const existing = accountState.users.find((user) => user.email === email);
-  const claims = matchLocalRepositoryClaimsForEmail(realName, email);
-  if (existing) {
-    existing.realName = realName || existing.realName || "";
-    existing.password = password || existing.password || "";
-    existing.role = existing.role || "user";
-    existing.claims = mergeLocalClaims(existing.claims, claims);
-  } else {
-    accountState.users.push({
-      email,
-      realName,
-      password,
-      role: email === OWNER_EMAIL ? "owner" : "user",
-      claims,
-    });
-  }
-  saveAccountState();
 }
 
 function removeLocalAccount(email) {
@@ -3376,7 +3149,7 @@ function renderLoginState() {
   const displayName = me.realName ? `${me.realName} · ` : "";
   const viewingText = adminViewingEmail ? `Viewing as ${displayName}${currentUserEmail}` : `${displayName}${currentUserEmail}`;
   loginIdentity.textContent = loggedIn
-    ? `${viewingText} · ${currentUserRole === "creator" ? "Creator" : "Standard account"}${cloudAvailable ? " · Cloud sync on" : " · Local fallback"}`
+    ? `${viewingText} · ${currentUserRole === "creator" ? "Creator" : "Standard account"}${cloudAvailable ? " · Cloud sync on" : " · Cloud sync required"}`
     : "";
   backToCreatorButton.classList.toggle("hidden", !adminViewingEmail || !isCreatorAuthenticated());
   syncAccountsButton();
@@ -3438,20 +3211,9 @@ async function restoreCloudState(options = {}) {
     const data = await readJsonResponse(response, "Login failed.");
     await applyCloudStateData(data);
   } catch (error) {
-    if (error.message === "Cloud storage is not configured.") {
-      applyLocalFallbackState();
-      setStatus("Logged in with local-only storage. Cloud sync is not configured yet.", true);
-      return;
-    }
-    if (
-      error.message !== "Incorrect password." &&
-      !error.message.startsWith("Account not found") &&
-      !error.message.includes("already exists")
-    ) {
-      applyLocalFallbackState();
-      setStatus("Logged in with local-only storage. Cloud sync is currently unavailable.", true);
-      return;
-    }
+    const message = error.message === "Cloud storage is not configured."
+      ? serverStorageRequiredMessage()
+      : error.message || "Login failed.";
     cloudAvailable = false;
     localStorage.removeItem(CURRENT_EMAIL_KEY);
     sessionStorage.removeItem(CURRENT_PASSWORD_KEY);
@@ -3463,8 +3225,8 @@ async function restoreCloudState(options = {}) {
     currentUserPassword = "";
     renderLoginState();
     openLoginModal();
-    setStatus(error.message || "Login failed.", true);
-    setEntranceStatus(error.message || "Login failed.", true);
+    setStatus(message, true);
+    setEntranceStatus(message, true);
   }
 }
 
@@ -3515,14 +3277,8 @@ async function applyCloudStateData(data) {
   }
 }
 
-function applyLocalFallbackState() {
-  cloudAvailable = false;
-  const account = currentAccount();
-  currentRosterClaims = mergeLocalClaims(account.claims, matchLocalRepositoryClaims(account.realName || ""));
-  account.claims = currentRosterClaims;
-  availableRosterDoctors = localRepositoryDoctorCandidates();
-  saveAccountState();
-  renderLoginState();
+function serverStorageRequiredMessage() {
+  return "Server storage is not configured. Add a Cloudflare KV namespace binding named ROSTER_STORE to the Pages project, redeploy, then log in again.";
 }
 
 function scheduleCloudStateSave() {
@@ -3911,10 +3667,6 @@ async function bootstrapImports() {
       const workspace = loadCurrentWorkspace();
       selectedFiles = await loadStoredImportsByRefs(workspace?.fileRefs || []);
       restoredSessionState = workspace?.session || restoredSessionState;
-    }
-    if (!selectedFiles.length && currentRosterClaims.length) {
-      selectedFiles = await loadStoredImportsByRefs(localRepositoryFileRefsForClaims(currentRosterClaims));
-      if (selectedFiles.length) saveCurrentWorkspace();
     }
     renderFilesList();
     if (selectedFiles.length) {

@@ -333,41 +333,12 @@ h1 {
   color: #8792a6;
 }
 
-.upload-help,
 .status,
 .section-head p,
 .settings-head p,
 .overview-card span,
 .field span {
   color: var(--muted);
-}
-
-.upload-help {
-  margin: 0;
-  width: 100%;
-}
-
-.drop-zone .upload-help {
-  position: absolute;
-  left: 22px;
-  right: 22px;
-  bottom: calc(100% - 12px);
-  z-index: 4;
-  padding: 14px 16px;
-  border: 1px solid rgba(20, 34, 42, 0.1);
-  border-radius: 16px;
-  background: rgba(254, 251, 244, 0.98);
-  box-shadow: 0 16px 36px rgba(20, 34, 42, 0.18);
-  opacity: 0;
-  transform: translateY(8px);
-  pointer-events: none;
-  transition: opacity 160ms ease, transform 160ms ease;
-}
-
-.drop-zone:hover .upload-help,
-.drop-zone:focus-within .upload-help {
-  opacity: 1;
-  transform: translateY(0);
 }
 
 .doctor-section,
@@ -1363,10 +1334,6 @@ body[data-skin="console"] #dropZone {
     linear-gradient(180deg, rgba(111, 97, 246, 0.06), rgba(255, 255, 255, 0)),
     #ffffff;
   border-style: solid;
-}
-
-body[data-skin="console"] #dropZone .upload-help {
-  background: #ffffff;
 }
 
 body[data-skin="console"] #dropZone h2 {
