@@ -2307,11 +2307,11 @@ function openReviewModal(id) {
         <div class="custom-event-grid ${allDay ? "hidden" : ""}" data-override-time-fields="${item.id}">
           <label class="field">
             <span>Start time</span>
-            <input type="time" value="${startTime || "09:00"}" data-override-start-time="${item.id}">
+            <input type="text" inputmode="numeric" value="${formatEditorTime(startTime || "09:00")}" data-override-start-time="${item.id}">
           </label>
           <label class="field">
             <span>End time</span>
-            <input type="time" value="${endTime || "17:00"}" data-override-end-time="${item.id}">
+            <input type="text" inputmode="numeric" value="${formatEditorTime(endTime || "17:00")}" data-override-end-time="${item.id}">
           </label>
         </div>
         <div class="custom-event-grid">
@@ -2355,8 +2355,8 @@ function openCustomEventModal(event = null, presetDate = null) {
   customEventStartDate.value = event?.startDate || now;
   customEventEndDate.value = event?.endDate || event?.startDate || now;
   customEventAllDay.checked = event?.allDay ?? false;
-  customEventStartTime.value = event?.startTime || "09:00";
-  customEventEndTime.value = event?.endTime || "10:00";
+  customEventStartTime.value = formatEditorTime(event?.startTime || "09:00");
+  customEventEndTime.value = formatEditorTime(event?.endTime || "10:00");
   const preset = detectLocationPreset(event?.location || "");
   customEventLocationMode.value = preset.mode;
   customEventCustomLocation.value = preset.customValue;
@@ -2401,8 +2401,8 @@ function readCustomEventForm() {
   const startDate = customEventStartDate.value;
   const endDate = customEventEndDate.value || startDate;
   const allDay = customEventAllDay.checked;
-  const startTime = customEventStartTime.value;
-  const endTime = customEventEndTime.value;
+  const startTime = parseEditorTimeInput(customEventStartTime.value);
+  const endTime = parseEditorTimeInput(customEventEndTime.value);
   const location = resolveCustomEventLocation();
 
   if (!title) {
@@ -2444,8 +2444,12 @@ function applyImportedEventFormState(id) {
   const rawEndDate = reviewModalBody.querySelector(`[data-override-end-date="${id}"]`)?.value || startDate;
   const endDateInput = rawEndDate < startDate ? startDate : rawEndDate;
   const allDay = reviewModalBody.querySelector(`[data-override-all-day="${id}"]`)?.checked ?? baseEvent?.allDay ?? false;
-  const startTime = reviewModalBody.querySelector(`[data-override-start-time="${id}"]`)?.value || extractTimePortion(baseEvent?.start || "") || "09:00";
-  const endTime = reviewModalBody.querySelector(`[data-override-end-time="${id}"]`)?.value || extractTimePortion(baseEvent?.end || "") || "17:00";
+  const startTime = parseEditorTimeInput(reviewModalBody.querySelector(`[data-override-start-time="${id}"]`)?.value)
+    || extractTimePortion(baseEvent?.start || "")
+    || "09:00";
+  const endTime = parseEditorTimeInput(reviewModalBody.querySelector(`[data-override-end-time="${id}"]`)?.value)
+    || extractTimePortion(baseEvent?.end || "")
+    || "17:00";
   const timeFields = reviewModalBody.querySelector(`[data-override-time-fields="${id}"]`);
   if (timeFields) timeFields.classList.toggle("hidden", allDay);
 
@@ -2480,6 +2484,45 @@ function resolveImportedLocation(id) {
 function extractTimePortion(value) {
   const match = String(value).match(/T(\d{2}:\d{2})/);
   return match ? match[1] : "";
+}
+
+function formatEditorTime(value) {
+  const parsed = parseClockParts(value);
+  if (!parsed) return "";
+  const suffix = parsed.hours >= 12 ? "pm" : "am";
+  const hour12 = parsed.hours % 12 || 12;
+  const hourLabel = suffix === "am" && hour12 < 10 ? String(hour12).padStart(2, "0") : String(hour12);
+  return `${hourLabel}:${String(parsed.minutes).padStart(2, "0")} ${suffix}`;
+}
+
+function parseEditorTimeInput(value) {
+  const text = String(value || "").trim().toLowerCase();
+  if (!text) return "";
+  const compact = text.replace(/\s+/g, "");
+  const twelveHour = compact.match(/^(\d{1,2})(?::?(\d{2}))?(am|pm)$/);
+  if (twelveHour) {
+    let hours = Number(twelveHour[1]);
+    const minutes = Number(twelveHour[2] || 0);
+    if (hours < 1 || hours > 12 || minutes > 59) return "";
+    if (twelveHour[3] === "pm" && hours !== 12) hours += 12;
+    if (twelveHour[3] === "am" && hours === 12) hours = 0;
+    return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+  }
+  const twentyFourHour = compact.match(/^(\d{1,2})(?::?(\d{2}))$/);
+  if (!twentyFourHour) return "";
+  const hours = Number(twentyFourHour[1]);
+  const minutes = Number(twentyFourHour[2]);
+  if (hours > 23 || minutes > 59) return "";
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
+
+function parseClockParts(value) {
+  const match = String(value || "").match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours > 23 || minutes > 59) return null;
+  return { hours, minutes };
 }
 
 function compareClockStrings(left, right) {
@@ -2805,8 +2848,32 @@ async function createAccountFromOwner(formElement) {
     formElement.reset();
     await enterUserAccount(email);
   } catch (error) {
+    if (error.message === "Cloud storage is not configured.") {
+      createLocalAccountForOwner(email, realName, password);
+      formElement.reset();
+      await enterUserAccount(email);
+      setStatus(`Created ${email} as a local-only account. Cloudflare KV is still required for shared persistence.`);
+      return;
+    }
     setStatus(error.message || "Could not create account.", true);
   }
+}
+
+function createLocalAccountForOwner(email, realName, password) {
+  const existing = accountState.users.find((user) => user.email === email);
+  if (existing) {
+    existing.realName = realName || existing.realName || "";
+    existing.password = password || existing.password || "";
+    existing.role = existing.role || "user";
+  } else {
+    accountState.users.push({
+      email,
+      realName,
+      password,
+      role: email === OWNER_EMAIL ? "owner" : "user",
+    });
+  }
+  saveAccountState();
 }
 
 function removeLocalAccount(email) {
