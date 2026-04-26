@@ -5,7 +5,7 @@
 - Configure Cloudflare server-side storage for production: create/bind `ROSTER_STORE` KV to the Pages project and redeploy. Without this, account creation, shared repository data, and cross-device persistence cannot work.
 - Verify account creation in production after `ROSTER_STORE` is available: creator creates a user, enters that account, links roster names, logs out/in, and sees persistent data.
 - Implement name-claim conflict workflow: claimed names shown greyed out, user can report conflict, creator can transfer/alias/reject, and both users receive an in-app message.
-- Resolve Cloudflare CPU limits for roster parsing long term: either keep server-side parsing on a Workers plan with adequate CPU, or move spreadsheet/PDF parsing into the browser while retaining server-side storage.
+- Browser-side parsing is now used to avoid Cloudflare CPU limits. Continue tightening this architecture: store normalized roster/event data server-side, keep source files for audit, and avoid reparsing source files on every preview/export.
 
 ## Account And Admin
 

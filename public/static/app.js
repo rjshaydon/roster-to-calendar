@@ -1,3 +1,18 @@
+import {
+  applyEventOverrides,
+  buildRosterView,
+  customEventsToEvents,
+  defaultSettings as rosterDefaultSettings,
+  doctorOptions as rosterDoctorOptions,
+  exportIcs,
+  parseUploadForm,
+  previewSummary,
+  serializeConflict,
+  serializeEvent,
+  serializeReviewItem,
+  sourceNames,
+} from "./roster.js";
+
 const form = document.querySelector("#roster-form");
 const appShell = document.querySelector("#appShell");
 const entrancePage = document.querySelector("#entrancePage");
@@ -119,6 +134,8 @@ const SETTINGS_FIELDS = [
 let doctorOptions = [];
 let detectedSources = {};
 let selectedFiles = [];
+let parsedRosterSources = null;
+let parsedImportDoctors = new Map();
 let settings = defaultSettings();
 let overrides = {};
 let latestPreview = null;
@@ -629,15 +646,8 @@ form.addEventListener("submit", async (event) => {
 
   setStatus("Building calendar file...");
   try {
-    const response = await fetch("/api/export", {
-      method: "POST",
-      body: createFormData(doctor),
-    });
-    const payload = await response.blob();
-    if (!response.ok) {
-      const text = await payload.text();
-      throw new Error(parseError(text));
-    }
+    const ics = await buildBrowserIcs(doctor);
+    const payload = new Blob([ics], { type: "text/calendar; charset=utf-8" });
     const url = URL.createObjectURL(payload);
     const link = document.createElement("a");
     link.href = url;
@@ -724,11 +734,13 @@ async function analyzeFiles() {
   clearPreviewData();
   doctorOptions = [];
   detectedSources = {};
+  parsedRosterSources = null;
+  parsedImportDoctors = new Map();
   controlBar.classList.remove("hidden");
   mobileActionBar.classList.remove("hidden");
   setStatus("Detecting roster sources and consultants...");
   try {
-    const data = await postForm("/api/analyze");
+    const data = await analyzeFilesInBrowser();
     doctorOptions = doctorOptionsForCurrentAccount(data.doctors || []);
     detectedSources = summarizeDetectedSources(data.imports || []);
     selectedFiles = selectedFiles.map((entry) => {
@@ -765,6 +777,63 @@ async function analyzeFiles() {
     syncActionState();
     setStatus(error.message, true);
   }
+}
+
+async function analyzeFilesInBrowser() {
+  const parsed = await parseCurrentRosterForm(null);
+  parsedRosterSources = parsed.sources;
+  parsedImportDoctors = doctorsByImportId(parsed.sources);
+  const imports = sourceImports(parsed.sources);
+  return {
+    sources: sourceNames(parsed.sources),
+    imports,
+    doctors: rosterDoctorOptions(parsed.sources.mmc, parsed.sources.ddh),
+    settings: rosterDefaultSettings(),
+  };
+}
+
+async function parseCurrentRosterForm(doctor = null) {
+  return await parseUploadForm(new Request(`${window.location.origin}/browser-roster-parse`, {
+    method: "POST",
+    body: createFormData(doctor),
+  }));
+}
+
+function sourceImports(sources) {
+  return [
+    ...sources.mmc.map((entry) => sourceImportMeta(entry, "mmc")),
+    ...sources.ddh.map((entry) => sourceImportMeta(entry, "ddh")),
+  ];
+}
+
+function sourceImportMeta(entry, sourceType) {
+  return {
+    id: entry.id,
+    name: entry.file.name,
+    sourceType,
+    addedAt: entry.addedAt || "",
+    size: entry.file.size,
+    lastModified: entry.file.lastModified,
+  };
+}
+
+function doctorsByImportId(sources) {
+  const result = new Map();
+  for (const entry of sources.mmc) {
+    result.set(entry.id, rosterDoctorOptions([entry], []).map((doctor) => ({
+      key: doctor.key,
+      displayName: doctor.displayName,
+      sourceType: "mmc",
+    })));
+  }
+  for (const entry of sources.ddh) {
+    result.set(entry.id, rosterDoctorOptions([], [entry]).map((doctor) => ({
+      key: doctor.key,
+      displayName: doctor.displayName,
+      sourceType: "ddh",
+    })));
+  }
+  return result;
 }
 
 function renderSettings() {
@@ -914,7 +983,7 @@ async function updatePreview() {
   }
   setStatus("Loading calendar...");
   try {
-    const data = await postPreviewForm("/api/preview", doctor);
+    const data = await buildBrowserPreviewData(doctor);
     latestPreview = data;
     if (!settings.dateFrom || !settings.dateTo) {
       const range = deriveRangeBounds(data.events || []);
@@ -930,6 +999,42 @@ async function updatePreview() {
     clearPreviewData();
     setStatus(error.message, true);
   }
+}
+
+async function buildBrowserPreviewData(doctor) {
+  if (!parsedRosterSources) {
+    const parsed = await parseCurrentRosterForm(doctor);
+    parsedRosterSources = parsed.sources;
+    parsedImportDoctors = doctorsByImportId(parsed.sources);
+  }
+  if (!doctor?.key) {
+    throw new Error("A doctor selection is required.");
+  }
+  const validDoctors = new Set(rosterDoctorOptions(parsedRosterSources.mmc, parsedRosterSources.ddh).map((item) => item.key));
+  const requestedKeys = new Set([doctor.key, ...(doctor.aliases || []).map((alias) => alias.key)].filter(Boolean));
+  if (![...requestedKeys].some((key) => validDoctors.has(key))) {
+    throw new Error("The selected doctor was not found in the uploaded roster files.");
+  }
+  const view = buildRosterView(
+    parsedRosterSources.mmc,
+    parsedRosterSources.ddh,
+    doctor.key,
+    settings,
+    overrides,
+    conflictSelections,
+    doctor.aliases || [],
+  );
+  const events = view.events;
+  return {
+    ...previewSummary(events),
+    events: events.map(serializeEvent),
+    review: view.reviewItems.map(serializeReviewItem),
+    issues: view.issues,
+    conflicts: view.conflicts.map(serializeConflict),
+    imports: view.imports,
+    sources: sourceNames(parsedRosterSources),
+    lastParsed: new Date().toISOString(),
+  };
 }
 
 function rebuildClientPreview() {
@@ -1008,6 +1113,36 @@ function availableHospitalsForPreview(events) {
   return [...codes]
     .filter((code) => code === "MMC" || code === "DDH")
     .sort();
+}
+
+async function buildBrowserIcs(doctor) {
+  if (!parsedRosterSources) {
+    const data = await analyzeFilesInBrowser();
+    doctorOptions = doctorOptionsForCurrentAccount(data.doctors || []);
+  }
+  const doctors = rosterDoctorOptions(parsedRosterSources.mmc, parsedRosterSources.ddh);
+  const requestedKeys = new Set([doctor.key, ...(doctor.aliases || []).map((alias) => alias.key)].filter(Boolean));
+  const selectedDoctor = doctors.find((item) => requestedKeys.has(item.key));
+  if (!selectedDoctor) {
+    throw new Error("The selected doctor was not found in the uploaded roster files.");
+  }
+  const rosterEvents = applyEventOverrides(
+    buildRosterView(
+      parsedRosterSources.mmc,
+      parsedRosterSources.ddh,
+      doctor.key,
+      settings,
+      overrides,
+      conflictSelections,
+      doctor.aliases || [],
+    ).events,
+    overrides,
+  );
+  const events = [...rosterEvents, ...customEventsToEvents(customEvents, settings)].sort(comparePreviewEvents);
+  if (!events.length) {
+    throw new Error("No calendar events were found for the selected doctor.");
+  }
+  return exportIcs(events, doctor.displayName || selectedDoctor.displayName);
 }
 
 function enforceSixMonthLimit(view) {
@@ -1345,23 +1480,6 @@ function createFormData(doctor = null) {
   body.append("settings", JSON.stringify(settings));
   body.append("overrides", JSON.stringify(cleanOverrides()));
   body.append("customEvents", JSON.stringify(customEvents));
-  body.append("conflictSelections", JSON.stringify(conflictSelections));
-  return body;
-}
-
-function createPreviewFormData(doctor = null) {
-  const body = new FormData();
-  for (const entry of selectedFiles) {
-    body.append("rosterFiles", entry.file);
-    body.append("rosterFileId", entry.id);
-    body.append("rosterFileAddedAt", entry.addedAt || "");
-  }
-  if (doctor) {
-    body.append("doctorKey", doctor.key);
-    body.append("doctorDisplay", doctor.displayName);
-    body.append("doctorAliases", JSON.stringify(doctor.aliases || []));
-  }
-  body.append("settings", JSON.stringify(settings));
   body.append("conflictSelections", JSON.stringify(conflictSelections));
   return body;
 }
@@ -1851,22 +1969,6 @@ function closeContextMenu() {
   contextMenu.classList.add("hidden");
   contextMenu.setAttribute("aria-hidden", "true");
   contextMenu.innerHTML = "";
-}
-
-async function postForm(url, doctor = null) {
-  const response = await fetch(url, {
-    method: "POST",
-    body: createFormData(doctor),
-  });
-  return await readJsonResponse(response, "Roster analysis failed.");
-}
-
-async function postPreviewForm(url, doctor = null) {
-  const response = await fetch(url, {
-    method: "POST",
-    body: createPreviewFormData(doctor),
-  });
-  return await readJsonResponse(response, "Calendar load failed.");
 }
 
 function selectedDoctor() {
@@ -3363,6 +3465,7 @@ async function serializeCloudImports(imports) {
     lastModified: entry.lastModified,
     addedAt: entry.addedAt,
     sourceType: entry.sourceType,
+    doctors: parsedImportDoctors.get(entry.id) || [],
     type: entry.file?.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     dataUrl: await fileToDataUrl(entry.file),
   })));

@@ -427,11 +427,16 @@ async function upsertImportsIntoRepository(store, index, imports = [], uploadedB
     idByOriginalId.set(item.id, repoId);
     idByDataUrl.set(item.dataUrl, repoId);
     const existing = index.files.find((file) => file.id === repoId);
-    let inspected = null;
-    try {
-      inspected = await inspectImportRecord(item);
-    } catch {
-      inspected = { sourceType: item.sourceType || "unknown", doctors: [] };
+    let inspected = {
+      sourceType: String(item.sourceType || "").toLowerCase(),
+      doctors: sanitizeRepositoryDoctors(item.doctors),
+    };
+    if (!inspected.sourceType || !inspected.doctors.length) {
+      try {
+        inspected = await inspectImportRecord(item);
+      } catch {
+        inspected = { sourceType: item.sourceType || "unknown", doctors: [] };
+      }
     }
     const meta = {
       id: repoId,

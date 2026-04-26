@@ -5,8 +5,9 @@ Cloudflare Pages application for converting MMC and DDH roster exports into an A
 ## Architecture
 
 - `public/`: static frontend served by Cloudflare Pages
-- `functions/api/`: Cloudflare Pages Functions for analyze, preview, and export
-- `functions/_lib/roster.js`: shared roster parsing and `.ics` generation logic
+- `public/static/roster.js`: shared browser-side roster parsing and calendar generation logic
+- `functions/api/`: Cloudflare Pages Functions for account, repository, and fallback calendar endpoints
+- `functions/_lib/roster.js`: server fallback copy of roster parsing and `.ics` generation logic
 - `fixtures/`: sample MMC/DDH spreadsheets and MMC PDF exports for parser regression checks
 - `scripts/test-fixtures.mjs`: fixture smoke test
 - `docs/PRD.md`: consolidated product rules
@@ -70,7 +71,7 @@ npm run deploy
 
 ## Notes
 
-- The backend auto-detects MMC Excel/PDF uploads and DDH FindMyShift spreadsheet exports.
+- The browser auto-detects MMC Excel/PDF uploads and DDH FindMyShift spreadsheet exports, then saves source files and parsed metadata to Cloudflare storage.
 - If only one consultant is detected, the UI shows the doctor name directly.
 - Preview renders a Monday-start weekly grid before export.
 - Users log in with an email address.

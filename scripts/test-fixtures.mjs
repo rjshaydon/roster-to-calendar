@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import XLSX from "xlsx";
 
-import { buildRosterView, doctorOptions, parseUploadForm, previewSummary } from "../functions/_lib/roster.js";
+import { buildRosterView, doctorOptions, parseUploadForm, previewSummary } from "../public/static/roster.js";
 
 const mmcWorkbook = XLSX.readFile(fileURLToPath(new URL("../fixtures/AdultTerm1.2026.xlsx", import.meta.url)), {
   cellDates: true,
