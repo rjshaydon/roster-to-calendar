@@ -35,6 +35,7 @@
   --chip-phnw-bg-soft: rgba(93, 108, 115, 0.12);
   --today-border-color: rgba(196, 73, 73, 0.42);
   --today-fill-color: rgba(196, 73, 73, 0.08);
+  --today-fill-surface: linear-gradient(180deg, var(--today-fill-color), rgba(255, 255, 255, 0.82));
 }
 
 * {
@@ -164,6 +165,37 @@ body.is-dragging #dropZone {
   background: var(--card);
   backdrop-filter: blur(18px);
   box-shadow: var(--shadow);
+}
+
+.entrance-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.entrance-tab {
+  appearance: none;
+  border: 1px solid rgba(20, 34, 42, 0.1);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--muted);
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 700;
+  padding: 14px 18px;
+  cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.entrance-tab:hover {
+  transform: translateY(-1px);
+}
+
+.entrance-tab.is-active {
+  border-color: rgba(217, 95, 52, 0.3);
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--ink);
 }
 
 .entrance-form-grid {
@@ -617,6 +649,30 @@ input[type="color"] {
   font-size: 0.9rem;
 }
 
+.today-preview-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(20, 34, 42, 0.04);
+}
+
+.today-preview-control span {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.today-fill-preview {
+  width: 48px;
+  height: 28px;
+  border-radius: 12px;
+  border: 1px solid var(--today-border-color);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.32);
+  background: var(--today-fill-surface);
+}
+
 .toggle,
 .field {
   display: grid;
@@ -687,6 +743,12 @@ input[type="color"] {
   font-size: 0.88rem;
   color: var(--muted);
   word-break: break-word;
+}
+
+.issue-card.is-next-overlap {
+  border-color: rgba(217, 95, 52, 0.34);
+  background: linear-gradient(180deg, rgba(217, 95, 52, 0.08), rgba(255, 255, 255, 0.9));
+  box-shadow: 0 12px 30px rgba(20, 34, 42, 0.08);
 }
 
 .issue-unknown,
@@ -938,7 +1000,7 @@ input[type="color"] {
 .preview-cell.is-current-day {
   border-color: var(--today-border-color);
   box-shadow: inset 0 0 0 2px var(--today-border-color);
-  background: linear-gradient(180deg, var(--today-fill-color), rgba(255, 255, 255, 0.82));
+  background: var(--today-fill-surface);
 }
 
 .preview-date {
@@ -1610,7 +1672,7 @@ body[data-skin="console"] .preview-cell {
 
 body[data-skin="console"] .preview-cell.is-current-day {
   border-color: var(--today-border-color);
-  background: linear-gradient(180deg, var(--today-fill-color), #ffffff 34%);
+  background: var(--today-fill-surface);
   box-shadow: inset 0 0 0 2px var(--today-border-color);
 }
 

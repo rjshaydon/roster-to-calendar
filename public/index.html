@@ -25,8 +25,12 @@
       </div>
 
       <div class="entrance-card">
+        <div class="entrance-tabs" role="tablist" aria-label="Account access">
+          <button id="loginTabButton" type="button" class="entrance-tab is-active" role="tab" aria-selected="true" aria-controls="loginForm" data-entrance-tab="login">Log in</button>
+          <button id="createTabButton" type="button" class="entrance-tab" role="tab" aria-selected="false" aria-controls="createAccountForm" data-entrance-tab="create">Create account</button>
+        </div>
         <div class="entrance-form-grid">
-          <form id="loginForm" class="entrance-form">
+          <form id="loginForm" class="entrance-form" data-entrance-panel="login" role="tabpanel" aria-labelledby="loginTabButton">
             <div class="section-head">
               <h2>Log in</h2>
               <p>Use your existing account to restore your roster workspace.</p>
@@ -42,7 +46,7 @@
             <button type="submit" class="button button-primary">Log in</button>
           </form>
 
-          <form id="createAccountForm" class="entrance-form">
+          <form id="createAccountForm" class="entrance-form hidden" data-entrance-panel="create" role="tabpanel" aria-labelledby="createTabButton">
             <div class="section-head">
               <h2>Create account</h2>
               <p>Use your roster name so the app can match your shifts across hospitals.</p>
@@ -168,6 +172,17 @@
                     <span>Fill opacity</span>
                     <input id="currentDayBackgroundOpacity" type="range" min="0" max="100" step="1">
                   </label>
+                  <label class="field field-compact">
+                    <span>Fill style</span>
+                    <select id="currentDayFillStyle">
+                      <option value="gradient">Gradient</option>
+                      <option value="solid">Solid</option>
+                    </select>
+                  </label>
+                  <div class="today-preview-control">
+                    <span>Preview</span>
+                    <div id="currentDayPreview" class="today-fill-preview" aria-hidden="true"></div>
+                  </div>
                 </div>
               </fieldset>
 

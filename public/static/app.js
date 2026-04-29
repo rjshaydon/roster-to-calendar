@@ -17,6 +17,9 @@ const form = document.querySelector("#roster-form");
 const appShell = document.querySelector("#appShell");
 const entrancePage = document.querySelector("#entrancePage");
 const entranceStatus = document.querySelector("#entranceStatus");
+const loginTabButton = document.querySelector("#loginTabButton");
+const createTabButton = document.querySelector("#createTabButton");
+const entrancePanels = [...document.querySelectorAll("[data-entrance-panel]")];
 const fileInput = document.querySelector("#rosterFiles");
 const dropZone = document.querySelector("#dropZone");
 const chooseFilesButton = document.querySelector("#chooseFilesButton");
@@ -50,6 +53,7 @@ const createAccountForm = document.querySelector("#createAccountForm");
 const createRealName = document.querySelector("#createRealName");
 const createEmail = document.querySelector("#createEmail");
 const createPassword = document.querySelector("#createPassword");
+const currentDayPreview = document.querySelector("#currentDayPreview");
 const exportButton = document.querySelector("#exportButton");
 const mobileExportButton = document.querySelector("#mobileExportButton");
 const mobileSettingsButton = document.querySelector("#mobileSettingsButton");
@@ -122,6 +126,7 @@ const SETTINGS_FIELDS = [
   "currentDayBorderOpacity",
   "currentDayBackgroundColor",
   "currentDayBackgroundOpacity",
+  "currentDayFillStyle",
   "shiftColorDay",
   "shiftColorEvening",
   "shiftColorNight",
@@ -186,6 +191,7 @@ const settingsInputs = Object.fromEntries(
 applySkin(currentSkin);
 applyShiftColours(settings);
 applyCurrentDayHighlight(settings);
+setEntranceTab("login");
 
 chooseFilesButton.addEventListener("click", (event) => {
   event.preventDefault();
@@ -316,6 +322,7 @@ accountsBody.addEventListener("click", (event) => {
 });
 loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  setEntranceTab("login");
   const email = normalizeEmail(loginEmail.value);
   const password = loginPassword.value;
   if (!email || !password) return;
@@ -323,6 +330,7 @@ loginForm.addEventListener("submit", async (event) => {
 });
 createAccountForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  setEntranceTab("create");
   const realName = createRealName.value.trim();
   const email = normalizeEmail(createEmail.value);
   const password = createPassword.value;
@@ -332,6 +340,8 @@ createAccountForm.addEventListener("submit", async (event) => {
   }
   await loginWithEmail(email, password, { mode: "create", realName });
 });
+loginTabButton?.addEventListener("click", () => setEntranceTab("login"));
+createTabButton?.addEventListener("click", () => setEntranceTab("create"));
 logoutButton.addEventListener("click", logoutCurrentUser);
 backToCreatorButton.addEventListener("click", () => {
   returnToCreatorAccount();
@@ -727,6 +737,7 @@ function defaultSettings() {
     currentDayBorderOpacity: "42",
     currentDayBackgroundColor: "#c44949",
     currentDayBackgroundOpacity: "8",
+    currentDayFillStyle: "gradient",
     shiftColorDay: SHIFT_COLOUR_DEFAULTS.day,
     shiftColorEvening: SHIFT_COLOUR_DEFAULTS.evening,
     shiftColorNight: SHIFT_COLOUR_DEFAULTS.night,
@@ -908,6 +919,17 @@ function renderSettings() {
   }
   applyShiftColours(settings);
   applyCurrentDayHighlight(settings);
+}
+
+function setEntranceTab(tab) {
+  const active = tab === "create" ? "create" : "login";
+  loginTabButton?.classList.toggle("is-active", active === "login");
+  createTabButton?.classList.toggle("is-active", active === "create");
+  loginTabButton?.setAttribute("aria-selected", active === "login" ? "true" : "false");
+  createTabButton?.setAttribute("aria-selected", active === "create" ? "true" : "false");
+  entrancePanels.forEach((panel) => {
+    panel.classList.toggle("hidden", panel.dataset.entrancePanel !== active);
+  });
 }
 
 function renderFilesList() {
@@ -1584,14 +1606,19 @@ function renderInsightsModal() {
 
 function renderWhoInsight() {
   const date = insightsState.date;
-  const mine = selectedDoctorEventsForInsights(date, date);
-  const coworkers = comparisonDoctorOptions()
-    .map((doctor) => ({
-      doctor,
-      events: comparisonDoctorEvents(doctor.key, date, date),
-    }))
-    .filter((entry) => entry.events.length)
-    .sort((left, right) => left.doctor.displayName.localeCompare(right.doctor.displayName));
+  const mine = selectedDoctorEventsForInsights(date, date).filter(isRosterShiftEvent);
+  const activeSources = new Set(mine.map(eventSourceCode).filter(Boolean));
+  const coworkers = mine.length
+    ? comparisonDoctorOptions()
+      .map((doctor) => ({
+        doctor,
+        events: comparisonDoctorEvents(doctor.key, date, date)
+          .filter(isRosterShiftEvent)
+          .filter((event) => !activeSources.size || activeSources.has(eventSourceCode(event))),
+      }))
+      .filter((entry) => entry.events.length)
+      .sort((left, right) => left.doctor.displayName.localeCompare(right.doctor.displayName))
+    : [];
 
   insightsModalTitle.textContent = "Who";
   insightsModalSubtitle.textContent = "Doctors working on the same date as the selected calendar.";
@@ -1624,9 +1651,12 @@ function renderWhenInsight() {
     : options[0]?.key || "";
   insightsState.comparisonDoctorKey = selectedKey;
   const selectedComparison = options.find((doctor) => doctor.key === selectedKey) || null;
-  const mine = selectedDoctorEventsForInsights(insightsState.termStart, insightsState.termEnd);
-  const theirs = selectedComparison ? comparisonDoctorEvents(selectedComparison.key, insightsState.termStart, insightsState.termEnd) : [];
+  const mine = selectedDoctorEventsForInsights(insightsState.termStart, insightsState.termEnd).filter(isRosterShiftEvent);
+  const theirs = selectedComparison
+    ? comparisonDoctorEvents(selectedComparison.key, insightsState.termStart, insightsState.termEnd).filter(isRosterShiftEvent)
+    : [];
   const overlaps = buildOverlapDays(mine, theirs);
+  const nextOverlapDate = chooseNextOverlapDate(overlaps);
 
   insightsModalTitle.textContent = "When";
   insightsModalSubtitle.textContent = "Find the dates where both doctors are working in this term.";
@@ -1644,7 +1674,7 @@ function renderWhenInsight() {
     ${selectedComparison
       ? overlaps.length
         ? overlaps.map((entry) => `
-          <article class="issue-card">
+          <article class="issue-card${entry.date === nextOverlapDate ? " is-next-overlap" : ""}" ${entry.date === nextOverlapDate ? 'data-insight-next="true"' : ""}>
             <strong>${escapeHtml(formatInsightDate(entry.date))}</strong>
             <p><strong>${escapeHtml(selectedDoctor()?.displayName || "Selected doctor")}:</strong> ${escapeHtml(renderInsightShiftSummary(entry.mine))}</p>
             <p><strong>${escapeHtml(selectedComparison.displayName)}:</strong> ${escapeHtml(renderInsightShiftSummary(entry.theirs))}</p>
@@ -1653,6 +1683,10 @@ function renderWhenInsight() {
         : `<article class="issue-card"><p>No overlapping working days were found in ${escapeHtml(detectAustralianTerm(parseDateOnly(insightsState.termStart)).label)}.</p></article>`
       : `<article class="issue-card"><p>No comparison doctors are available in these roster files.</p></article>`}
   `;
+  const nextCard = insightsModalBody.querySelector("[data-insight-next='true']");
+  if (nextCard) {
+    requestAnimationFrame(() => nextCard.scrollIntoView({ block: "nearest", behavior: "smooth" }));
+  }
 }
 
 function comparisonDoctorOptions() {
@@ -1735,6 +1769,30 @@ function renderInsightShiftSummary(events) {
   return events
     .map((event) => `${event.title}${event.allDay || !event.timeLabel ? "" : ` (${event.timeLabel})`}`)
     .join(" | ");
+}
+
+function eventSourceCode(event) {
+  const explicit = String(event?.source || "").trim().toUpperCase();
+  if (explicit === "MMC" || explicit === "DDH") return explicit;
+  const titlePrefix = String(event?.title || "").match(/^(MMC|DDH):/i)?.[1];
+  return titlePrefix ? titlePrefix.toUpperCase() : "";
+}
+
+function isRosterShiftEvent(event) {
+  const text = `${event?.title || ""} ${event?.rawValue || ""}`.toLowerCase();
+  return !(
+    text.includes("annual leave")
+    || text.includes("conference leave")
+    || text.includes("sick leave")
+    || text.includes("phnw")
+    || text.includes("public holiday")
+  );
+}
+
+function chooseNextOverlapDate(overlaps) {
+  if (!overlaps.length) return "";
+  const today = formatDateKey(new Date());
+  return overlaps.find((entry) => entry.date >= today)?.date || overlaps[0].date;
 }
 
 function formatInsightDate(value) {
@@ -2072,10 +2130,10 @@ function finishPreviewGesture(event) {
   const hoverDay = dayKeyAtPoint(event.clientX, event.clientY) || gesture.hoverDay;
   const shouldSuppressClick = gesture.moved;
   stopGestureAutoShift(gesture);
-  if (gesture.minuteOffset !== 0 && hoverDay === gesture.originDay) {
+  if (gesture.moved && gesture.minuteOffset !== 0 && hoverDay === gesture.originDay) {
     commitPreviewGestureTime(gesture);
     suppressPreviewClickUntil = Date.now() + 200;
-  } else if (hoverDay && hoverDay !== gesture.originDay) {
+  } else if (gesture.moved && hoverDay && hoverDay !== gesture.originDay) {
     movePreviewEvent(gesture.id, hoverDay);
     suppressPreviewClickUntil = Date.now() + 200;
   } else {
@@ -3475,6 +3533,7 @@ async function enterUserAccount(email) {
   }
 
   try {
+    cancelScheduledCloudStateSave();
     await saveCloudState();
   } catch {
     // Cloud save failures are surfaced elsewhere; local state is still saved.
@@ -3498,6 +3557,7 @@ async function enterUserAccount(email) {
 async function returnToCreatorAccount() {
   const creatorEmail = authUserEmail || OWNER_EMAIL;
   const creatorPassword = authUserPassword || currentUserPassword;
+  cancelScheduledCloudStateSave();
   adminViewingEmail = "";
   currentUserEmail = creatorEmail;
   currentUserPassword = creatorPassword;
@@ -3542,10 +3602,20 @@ function applyCurrentDayHighlight(sourceSettings = settings) {
   const backgroundColour = isHexColour(sourceSettings.currentDayBackgroundColor) ? sourceSettings.currentDayBackgroundColor : borderColour;
   const borderOpacity = normalizeOpacity(sourceSettings.currentDayBorderOpacity, 42);
   const backgroundOpacity = normalizeOpacity(sourceSettings.currentDayBackgroundOpacity, 8);
+  const fillStyle = sourceSettings.currentDayFillStyle === "solid" ? "solid" : "gradient";
   const borderRgb = hexToRgb(borderColour);
   const backgroundRgb = hexToRgb(backgroundColour);
   document.documentElement.style.setProperty("--today-border-color", `rgba(${borderRgb.r}, ${borderRgb.g}, ${borderRgb.b}, ${borderOpacity})`);
   document.documentElement.style.setProperty("--today-fill-color", `rgba(${backgroundRgb.r}, ${backgroundRgb.g}, ${backgroundRgb.b}, ${backgroundOpacity})`);
+  document.documentElement.style.setProperty(
+    "--today-fill-surface",
+    fillStyle === "solid"
+      ? `rgba(${backgroundRgb.r}, ${backgroundRgb.g}, ${backgroundRgb.b}, ${backgroundOpacity})`
+      : `linear-gradient(180deg, rgba(${backgroundRgb.r}, ${backgroundRgb.g}, ${backgroundRgb.b}, ${backgroundOpacity}), rgba(255, 255, 255, 0.82))`,
+  );
+  if (currentDayPreview) {
+    currentDayPreview.style.borderColor = `rgba(${borderRgb.r}, ${borderRgb.g}, ${borderRgb.b}, ${borderOpacity})`;
+  }
 }
 
 function defaultShiftColourForField(field) {
@@ -3648,6 +3718,7 @@ function normalizeAuthMessage(message) {
 }
 
 function openLoginModal(prefillEmail = currentUserEmail || "") {
+  setEntranceTab("login");
   applyTemporarySkin("console");
   loginEmail.value = prefillEmail;
   loginPassword.value = "";
@@ -3663,6 +3734,7 @@ function closeLoginModal() {
 }
 
 function logoutCurrentUser() {
+  cancelScheduledCloudStateSave();
   localStorage.removeItem(CURRENT_EMAIL_KEY);
   sessionStorage.removeItem(CURRENT_PASSWORD_KEY);
   currentUserEmail = "";
@@ -3702,6 +3774,7 @@ function renderLoginState() {
 async function loginWithEmail(email, password, options = {}) {
   const previousEmail = currentUserEmail;
   try {
+    cancelScheduledCloudStateSave();
     ensureLocalAccountLogin(email, password, options);
     currentUserEmail = normalizeEmail(email);
     currentUserPassword = password;
@@ -3755,6 +3828,7 @@ async function restoreCloudState(options = {}) {
     const data = await readJsonResponse(response, "Login failed.");
     await applyCloudStateData(data);
   } catch (error) {
+    cancelScheduledCloudStateSave();
     const attemptedEmail = currentUserEmail;
     const message = error.message === "Cloud storage is not configured."
       ? serverStorageRequiredMessage()
@@ -3828,33 +3902,49 @@ function serverStorageRequiredMessage() {
 
 function scheduleCloudStateSave() {
   if (!currentUserEmail) return;
-  clearTimeout(cloudSaveTimer);
+  cancelScheduledCloudStateSave();
+  const snapshot = snapshotCloudSavePayload();
   cloudSaveTimer = setTimeout(() => {
-    saveCloudState().catch(() => {
+    saveCloudState(snapshot).catch(() => {
       cloudAvailable = false;
       renderLoginState();
     });
   }, 700);
 }
 
-async function saveCloudState() {
-  const requestEmail = adminViewingEmail ? authUserEmail : currentUserEmail;
-  const requestPassword = adminViewingEmail ? authUserPassword : currentUserPassword;
-  if (!currentUserEmail || !requestEmail || !requestPassword || !cloudAvailable) return;
-  const state = await buildCloudState();
+function cancelScheduledCloudStateSave() {
+  clearTimeout(cloudSaveTimer);
+  cloudSaveTimer = 0;
+}
+
+function snapshotCloudSavePayload() {
+  return {
+    accountEmail: currentUserEmail,
+    requestEmail: adminViewingEmail ? authUserEmail : currentUserEmail,
+    requestPassword: adminViewingEmail ? authUserPassword : currentUserPassword,
+    targetEmail: adminViewingEmail ? currentUserEmail : "",
+    imports: selectedFiles.map((entry) => ({ ...entry })),
+    session: buildActiveSessionState(),
+  };
+}
+
+async function saveCloudState(snapshot = null) {
+  const payload = snapshot || snapshotCloudSavePayload();
+  if (!payload.accountEmail || !payload.requestEmail || !payload.requestPassword || !cloudAvailable) return;
+  const state = await buildCloudState(payload.imports, payload.session);
   const response = await fetch("/api/state", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       action: "save",
-      email: requestEmail,
-      password: requestPassword,
-      targetEmail: adminViewingEmail ? currentUserEmail : "",
+      email: payload.requestEmail,
+      password: payload.requestPassword,
+      targetEmail: payload.targetEmail,
       state,
     }),
   });
   const data = await readJsonResponse(response, "Cloud save failed.");
-  if (data.claims) currentRosterClaims = sanitizeRosterClaims(data.claims);
+  if (data.claims && payload.accountEmail === currentUserEmail) currentRosterClaims = sanitizeRosterClaims(data.claims);
   renderLoginState();
 }
 
@@ -3879,11 +3969,11 @@ async function loadServerUsers() {
   }
 }
 
-async function buildCloudState() {
+async function buildCloudState(imports = selectedFiles, session = buildActiveSessionState()) {
   return {
     version: 1,
-    imports: await serializeCloudImports(selectedFiles),
-    session: buildActiveSessionState(),
+    imports: await serializeCloudImports(imports),
+    session,
   };
 }
 
