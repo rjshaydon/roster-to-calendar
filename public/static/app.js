@@ -3634,9 +3634,22 @@ function normalizeServerUser(value) {
   };
 }
 
-function openLoginModal() {
+function normalizeAuthMessage(message) {
+  const normalized = String(message || "").trim();
+  if (!normalized) return "Incorrect username or password.";
+  if (
+    normalized === "Incorrect password."
+    || normalized === "Account not found."
+    || normalized === "Account not found. Create an account first."
+  ) {
+    return "Incorrect username or password.";
+  }
+  return normalized;
+}
+
+function openLoginModal(prefillEmail = currentUserEmail || "") {
   applyTemporarySkin("console");
-  loginEmail.value = currentUserEmail || "";
+  loginEmail.value = prefillEmail;
   loginPassword.value = "";
   entrancePage.classList.remove("hidden");
   appShell.classList.add("hidden");
@@ -3701,7 +3714,6 @@ async function loginWithEmail(email, password, options = {}) {
     applySkin(loadSkin());
     setStatus("Loading account workspace...");
     setEntranceStatus("Loading account workspace...");
-    closeLoginModal();
     if (previousEmail !== currentUserEmail) {
       await clearLocalWorkspace();
     }
@@ -3713,10 +3725,12 @@ async function loginWithEmail(email, password, options = {}) {
       setStatus(`Matched roster name${latestNameMatches.length === 1 ? "" : "s"} for ${sites || "uploaded rosters"}.`);
     }
     renderLoginState();
+    closeLoginModal();
     setEntranceStatus("");
   } catch (error) {
-    setEntranceStatus(error.message || "Login failed.", true);
-    setStatus(error.message || "Login failed.", true);
+    const message = normalizeAuthMessage(error.message || "Login failed.");
+    setEntranceStatus(message, true);
+    setStatus(message, true);
   }
 }
 
@@ -3741,9 +3755,10 @@ async function restoreCloudState(options = {}) {
     const data = await readJsonResponse(response, "Login failed.");
     await applyCloudStateData(data);
   } catch (error) {
+    const attemptedEmail = currentUserEmail;
     const message = error.message === "Cloud storage is not configured."
       ? serverStorageRequiredMessage()
-      : error.message || "Login failed.";
+      : normalizeAuthMessage(error.message || "Login failed.");
     cloudAvailable = false;
     localStorage.removeItem(CURRENT_EMAIL_KEY);
     sessionStorage.removeItem(CURRENT_PASSWORD_KEY);
@@ -3754,7 +3769,7 @@ async function restoreCloudState(options = {}) {
     currentUserEmail = "";
     currentUserPassword = "";
     renderLoginState();
-    openLoginModal();
+    openLoginModal(attemptedEmail);
     setStatus(message, true);
     setEntranceStatus(message, true);
   }
