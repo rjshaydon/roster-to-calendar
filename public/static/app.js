@@ -175,6 +175,7 @@ let adminViewingEmail = "";
 let currentSkin = loadSkin();
 let cloudAvailable = false;
 let cloudSaveTimer = 0;
+let pendingCloudSaveSnapshot = null;
 let enforcingRosterLimit = false;
 let serverUsers = [];
 let currentRosterClaims = [];
@@ -342,7 +343,9 @@ createAccountForm.addEventListener("submit", async (event) => {
 });
 loginTabButton?.addEventListener("click", () => setEntranceTab("login"));
 createTabButton?.addEventListener("click", () => setEntranceTab("create"));
-logoutButton.addEventListener("click", logoutCurrentUser);
+logoutButton.addEventListener("click", () => {
+  logoutCurrentUser();
+});
 backToCreatorButton.addEventListener("click", () => {
   returnToCreatorAccount();
 });
@@ -1784,6 +1787,8 @@ function isRosterShiftEvent(event) {
     text.includes("annual leave")
     || text.includes("conference leave")
     || text.includes("sick leave")
+    || text.includes("clinical support")
+    || /\bcso?\b/.test(text)
     || text.includes("phnw")
     || text.includes("public holiday")
   );
@@ -3533,6 +3538,7 @@ async function enterUserAccount(email) {
   }
 
   try {
+    await flushCloudStateSave().catch(() => {});
     cancelScheduledCloudStateSave();
     await saveCloudState();
   } catch {
@@ -3557,6 +3563,7 @@ async function enterUserAccount(email) {
 async function returnToCreatorAccount() {
   const creatorEmail = authUserEmail || OWNER_EMAIL;
   const creatorPassword = authUserPassword || currentUserPassword;
+  await flushCloudStateSave().catch(() => {});
   cancelScheduledCloudStateSave();
   adminViewingEmail = "";
   currentUserEmail = creatorEmail;
@@ -3733,7 +3740,12 @@ function closeLoginModal() {
   appShell.classList.remove("hidden");
 }
 
-function logoutCurrentUser() {
+async function logoutCurrentUser() {
+  try {
+    await flushCloudStateSave();
+  } catch {
+    // Keep logout moving even if cloud persistence fails.
+  }
   cancelScheduledCloudStateSave();
   localStorage.removeItem(CURRENT_EMAIL_KEY);
   sessionStorage.removeItem(CURRENT_PASSWORD_KEY);
@@ -3774,6 +3786,7 @@ function renderLoginState() {
 async function loginWithEmail(email, password, options = {}) {
   const previousEmail = currentUserEmail;
   try {
+    await flushCloudStateSave().catch(() => {});
     cancelScheduledCloudStateSave();
     ensureLocalAccountLogin(email, password, options);
     currentUserEmail = normalizeEmail(email);
@@ -3904,8 +3917,11 @@ function scheduleCloudStateSave() {
   if (!currentUserEmail) return;
   cancelScheduledCloudStateSave();
   const snapshot = snapshotCloudSavePayload();
+  pendingCloudSaveSnapshot = snapshot;
   cloudSaveTimer = setTimeout(() => {
-    saveCloudState(snapshot).catch(() => {
+    const queued = pendingCloudSaveSnapshot;
+    pendingCloudSaveSnapshot = null;
+    saveCloudState(queued || snapshot).catch(() => {
       cloudAvailable = false;
       renderLoginState();
     });
@@ -3915,6 +3931,16 @@ function scheduleCloudStateSave() {
 function cancelScheduledCloudStateSave() {
   clearTimeout(cloudSaveTimer);
   cloudSaveTimer = 0;
+  pendingCloudSaveSnapshot = null;
+}
+
+async function flushCloudStateSave() {
+  clearTimeout(cloudSaveTimer);
+  cloudSaveTimer = 0;
+  const snapshot = pendingCloudSaveSnapshot;
+  pendingCloudSaveSnapshot = null;
+  if (!snapshot) return;
+  await saveCloudState(snapshot);
 }
 
 function snapshotCloudSavePayload() {
