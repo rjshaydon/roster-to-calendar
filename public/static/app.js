@@ -820,7 +820,10 @@ async function analyzeFiles() {
       const serverEntry = (data.imports || []).find((item) => item.id === entry.id);
       return serverEntry ? { ...entry, sourceType: serverEntry.sourceType } : entry;
     });
-    restoredSessionState = loadCurrentSessionState();
+    const workspaceSession = loadCurrentSessionState();
+    restoredSessionState = cloudAvailable && restoredSessionState
+      ? restoredSessionState
+      : workspaceSession;
     settings = {
       ...defaultSettings(),
       ...settings,
