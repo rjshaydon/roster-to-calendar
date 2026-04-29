@@ -32,6 +32,11 @@ const accountsCloseButton = document.querySelector("#accountsCloseButton");
 const accountsBody = document.querySelector("#accountsBody");
 const accountsModalTitle = document.querySelector("#accountsModalTitle");
 const accountsModalSubtitle = document.querySelector("#accountsModalSubtitle");
+const insightsModal = document.querySelector("#insightsModal");
+const insightsCloseButton = document.querySelector("#insightsCloseButton");
+const insightsModalTitle = document.querySelector("#insightsModalTitle");
+const insightsModalSubtitle = document.querySelector("#insightsModalSubtitle");
+const insightsModalBody = document.querySelector("#insightsModalBody");
 const loginBar = document.querySelector("#loginBar");
 const loginIdentity = document.querySelector("#loginIdentity");
 const logoutButton = document.querySelector("#logoutButton");
@@ -113,6 +118,10 @@ const SETTINGS_FIELDS = [
   "showTimes",
   "showRawValues",
   "showNormalizedTitles",
+  "currentDayBorderColor",
+  "currentDayBorderOpacity",
+  "currentDayBackgroundColor",
+  "currentDayBackgroundOpacity",
   "shiftColorDay",
   "shiftColorEvening",
   "shiftColorNight",
@@ -166,6 +175,9 @@ let serverUsers = [];
 let currentRosterClaims = [];
 let latestNameMatches = [];
 let availableRosterDoctors = [];
+let insightsState = null;
+let doctorAnalysisCacheKey = "";
+let doctorAnalysisCache = new Map();
 
 const settingsInputs = Object.fromEntries(
   SETTINGS_FIELDS.map((id) => [id, document.querySelector(`#${id}`)]),
@@ -173,6 +185,7 @@ const settingsInputs = Object.fromEntries(
 
 applySkin(currentSkin);
 applyShiftColours(settings);
+applyCurrentDayHighlight(settings);
 
 chooseFilesButton.addEventListener("click", (event) => {
   event.preventDefault();
@@ -260,6 +273,10 @@ accountsButton.addEventListener("click", async () => {
 accountsCloseButton.addEventListener("click", closeAccountsModal);
 accountsModal.addEventListener("click", (event) => {
   if (event.target.matches("[data-close-accounts]")) closeAccountsModal();
+});
+insightsCloseButton.addEventListener("click", closeInsightsModal);
+insightsModal.addEventListener("click", (event) => {
+  if (event.target.matches("[data-close-insights]")) closeInsightsModal();
 });
 accountsBody.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -383,6 +400,12 @@ for (const [key, input] of Object.entries(settingsInputs)) {
       setStatus("Shift colours updated.");
       return;
     }
+    if (key.startsWith("currentDay")) {
+      applyCurrentDayHighlight(settings);
+      if (latestPreview) rebuildClientPreview();
+      setStatus("Current day highlight updated.");
+      return;
+    }
     setStatus("Settings updated.");
   });
 }
@@ -461,6 +484,16 @@ preview.addEventListener("click", (event) => {
     openPreviewRangePicker(rangeTrigger.dataset.rangeTrigger);
     return;
   }
+  const whoTrigger = event.target.closest("[data-insight-who]");
+  if (whoTrigger) {
+    openWhoInsight(whoTrigger.dataset.insightWho, whoTrigger.dataset.insightWhoEnd);
+    return;
+  }
+  const whenTrigger = event.target.closest("[data-insight-when]");
+  if (whenTrigger) {
+    openWhenInsight(whenTrigger.dataset.insightWhen, whenTrigger.dataset.insightWhenEnd);
+    return;
+  }
   const chip = event.target.closest("[data-review-id]");
   if (chip) {
     openReviewModal(chip.dataset.reviewId);
@@ -497,6 +530,19 @@ preview.addEventListener("change", (event) => {
   if (settingsInputs.hospitalFilter) settingsInputs.hospitalFilter.value = settings.hospitalFilter;
   saveCurrentSessionState();
   updatePreview();
+});
+insightsModalBody.addEventListener("change", (event) => {
+  const whoDateInput = event.target.closest("[data-insights-who-date]");
+  if (whoDateInput && insightsState?.mode === "who") {
+    insightsState.date = whoDateInput.value;
+    renderInsightsModal();
+    return;
+  }
+  const whenDoctorSelect = event.target.closest("[data-insights-when-doctor]");
+  if (whenDoctorSelect && insightsState?.mode === "when") {
+    insightsState.comparisonDoctorKey = whenDoctorSelect.value;
+    renderInsightsModal();
+  }
 });
 issuesList.addEventListener("click", (event) => {
   const card = event.target.closest("[data-review-id]");
@@ -677,6 +723,10 @@ function defaultSettings() {
     showTimes: true,
     showRawValues: false,
     showNormalizedTitles: true,
+    currentDayBorderColor: "#c44949",
+    currentDayBorderOpacity: "42",
+    currentDayBackgroundColor: "#c44949",
+    currentDayBackgroundOpacity: "8",
     shiftColorDay: SHIFT_COLOUR_DEFAULTS.day,
     shiftColorEvening: SHIFT_COLOUR_DEFAULTS.evening,
     shiftColorNight: SHIFT_COLOUR_DEFAULTS.night,
@@ -744,6 +794,7 @@ async function analyzeFiles() {
   detectedSources = {};
   parsedRosterSources = null;
   parsedImportDoctors = new Map();
+  clearDoctorAnalysisCache();
   controlBar.classList.remove("hidden");
   mobileActionBar.classList.remove("hidden");
   setStatus("Detecting roster sources and consultants...");
@@ -856,6 +907,7 @@ function renderSettings() {
     }
   }
   applyShiftColours(settings);
+  applyCurrentDayHighlight(settings);
 }
 
 function renderFilesList() {
@@ -1452,6 +1504,8 @@ function renderTermSection(section) {
   const headerCells = DAY_NAMES.map((day) => `<div class="preview-day-name">${day}</div>`).join("");
   const bodyRows = [];
   let lastMonthKey = "";
+  const firstMonday = section.weeks[0]?.week?.[0]?.date;
+  const lastSunday = section.weeks.at(-1)?.week?.at(-1)?.date;
 
   section.weeks.forEach(({ week, index }) => {
     const monday = week[0]?.date;
@@ -1472,7 +1526,13 @@ function renderTermSection(section) {
 
   return `
     <section class="preview-term">
-      <div class="preview-term-title">${escapeHtml(section.label)}</div>
+      <div class="preview-term-header">
+        <div class="preview-term-title">${escapeHtml(section.label)}</div>
+        <div class="preview-term-actions">
+          <button type="button" class="button button-secondary preview-term-button" data-insight-who="${formatDateKey(firstMonday)}" data-insight-who-end="${formatDateKey(lastSunday)}">Who</button>
+          <button type="button" class="button button-secondary preview-term-button" data-insight-when="${formatDateKey(firstMonday)}" data-insight-when-end="${formatDateKey(lastSunday)}">When</button>
+        </div>
+      </div>
       <div class="preview-grid">
         <div class="preview-week-label preview-week-label-head">Week</div>
         ${headerCells}
@@ -1480,6 +1540,254 @@ function renderTermSection(section) {
       </div>
     </section>
   `;
+}
+
+function openWhoInsight(termStart, termEnd) {
+  const date = defaultInsightDate(termStart, termEnd);
+  insightsState = {
+    mode: "who",
+    termStart,
+    termEnd,
+    date,
+  };
+  renderInsightsModal();
+}
+
+function openWhenInsight(termStart, termEnd) {
+  const options = comparisonDoctorOptions();
+  insightsState = {
+    mode: "when",
+    termStart,
+    termEnd,
+    comparisonDoctorKey: options[0]?.key || "",
+  };
+  renderInsightsModal();
+}
+
+function closeInsightsModal() {
+  insightsState = null;
+  insightsModal.classList.add("hidden");
+  insightsModal.setAttribute("aria-hidden", "true");
+  insightsModalBody.innerHTML = "";
+}
+
+function renderInsightsModal() {
+  if (!insightsState) return;
+  if (insightsState.mode === "who") {
+    renderWhoInsight();
+  } else if (insightsState.mode === "when") {
+    renderWhenInsight();
+  }
+  insightsModal.classList.remove("hidden");
+  insightsModal.setAttribute("aria-hidden", "false");
+}
+
+function renderWhoInsight() {
+  const date = insightsState.date;
+  const mine = selectedDoctorEventsForInsights(date, date);
+  const coworkers = comparisonDoctorOptions()
+    .map((doctor) => ({
+      doctor,
+      events: comparisonDoctorEvents(doctor.key, date, date),
+    }))
+    .filter((entry) => entry.events.length)
+    .sort((left, right) => left.doctor.displayName.localeCompare(right.doctor.displayName));
+
+  insightsModalTitle.textContent = "Who";
+  insightsModalSubtitle.textContent = "Doctors working on the same date as the selected calendar.";
+  insightsModalBody.innerHTML = `
+    <div class="insights-controls">
+      <label class="field">
+        <span>Date</span>
+        <input type="date" value="${escapeHtml(date)}" min="${escapeHtml(insightsState.termStart)}" max="${escapeHtml(insightsState.termEnd)}" data-insights-who-date>
+      </label>
+    </div>
+    <div class="issue-card">
+      <strong>${escapeHtml(selectedDoctor()?.displayName || "Selected doctor")}</strong>
+      <p>${mine.length ? escapeHtml(renderInsightShiftSummary(mine)) : "No rostered shifts for this date in the current calendar view."}</p>
+    </div>
+    ${coworkers.length
+      ? coworkers.map(({ doctor, events }) => `
+        <article class="issue-card">
+          <strong>${escapeHtml(doctor.displayName)}</strong>
+          <p>${escapeHtml(renderInsightShiftSummary(events))}</p>
+        </article>
+      `).join("")
+      : `<article class="issue-card"><p>No other doctors are rostered on this date.</p></article>`}
+  `;
+}
+
+function renderWhenInsight() {
+  const options = comparisonDoctorOptions();
+  const selectedKey = options.some((doctor) => doctor.key === insightsState.comparisonDoctorKey)
+    ? insightsState.comparisonDoctorKey
+    : options[0]?.key || "";
+  insightsState.comparisonDoctorKey = selectedKey;
+  const selectedComparison = options.find((doctor) => doctor.key === selectedKey) || null;
+  const mine = selectedDoctorEventsForInsights(insightsState.termStart, insightsState.termEnd);
+  const theirs = selectedComparison ? comparisonDoctorEvents(selectedComparison.key, insightsState.termStart, insightsState.termEnd) : [];
+  const overlaps = buildOverlapDays(mine, theirs);
+
+  insightsModalTitle.textContent = "When";
+  insightsModalSubtitle.textContent = "Find the dates where both doctors are working in this term.";
+  insightsModalBody.innerHTML = `
+    <div class="insights-controls">
+      <label class="field">
+        <span>Doctor</span>
+        <select data-insights-when-doctor>
+          ${options.map((doctor) => `
+            <option value="${escapeHtml(doctor.key)}" ${doctor.key === selectedKey ? "selected" : ""}>${escapeHtml(doctor.displayName)}</option>
+          `).join("")}
+        </select>
+      </label>
+    </div>
+    ${selectedComparison
+      ? overlaps.length
+        ? overlaps.map((entry) => `
+          <article class="issue-card">
+            <strong>${escapeHtml(formatInsightDate(entry.date))}</strong>
+            <p><strong>${escapeHtml(selectedDoctor()?.displayName || "Selected doctor")}:</strong> ${escapeHtml(renderInsightShiftSummary(entry.mine))}</p>
+            <p><strong>${escapeHtml(selectedComparison.displayName)}:</strong> ${escapeHtml(renderInsightShiftSummary(entry.theirs))}</p>
+          </article>
+        `).join("")
+        : `<article class="issue-card"><p>No overlapping working days were found in ${escapeHtml(detectAustralianTerm(parseDateOnly(insightsState.termStart)).label)}.</p></article>`
+      : `<article class="issue-card"><p>No comparison doctors are available in these roster files.</p></article>`}
+  `;
+}
+
+function comparisonDoctorOptions() {
+  if (!parsedRosterSources || (!parsedRosterSources.mmc?.length && !parsedRosterSources.ddh?.length)) return [];
+  return prioritizeDoctorOptions(rosterDoctorOptions(parsedRosterSources?.mmc || [], parsedRosterSources?.ddh || []))
+    .filter((doctor) => doctor.key !== selectedDoctor()?.key);
+}
+
+function selectedDoctorEventsForInsights(start, end) {
+  if (!latestPreview) return [];
+  return buildCurrentDoctorPreviewEvents(start, end);
+}
+
+function comparisonDoctorEvents(doctorKey, start, end) {
+  const cache = getDoctorAnalysisCache();
+  const events = cache.get(doctorKey) || [];
+  return filterInsightEvents(events, start, end);
+}
+
+function buildCurrentDoctorPreviewEvents(start, end) {
+  const baseEvents = new Map((latestPreview?.events || []).map((event) => [event.id, { ...event }]));
+  const events = [];
+  for (const item of reviewIndex.values()) {
+    const event = baseEvents.get(item.id);
+    if (!event) continue;
+    const override = overrides[item.id] || {};
+    const include = typeof override.include === "boolean" ? override.include : item.include;
+    if (!include) continue;
+    events.push(buildEventOverridePatch(event, item, override));
+  }
+  for (const event of customEvents) {
+    if (event.include === false) continue;
+    events.push(customEventToPreviewEvent(event));
+  }
+  return filterInsightEvents(events, start, end);
+}
+
+function filterInsightEvents(events, start, end) {
+  const startDate = parseDateOnly(start);
+  const endDate = parseDateOnly(end);
+  return events
+    .filter((event) => matchesPreviewHospitalFilter(event, settings.hospitalFilter))
+    .filter((event) => eventOverlapsDateRange(event, startDate, endDate))
+    .sort(comparePreviewEvents);
+}
+
+function matchesPreviewHospitalFilter(event, hospitalFilter) {
+  if (!hospitalFilter || hospitalFilter === "all") return true;
+  return String(event.source || "").toLowerCase() === String(hospitalFilter).toLowerCase();
+}
+
+function buildOverlapDays(mine, theirs) {
+  const mineByDay = indexEventsByDay(mine);
+  const theirsByDay = indexEventsByDay(theirs);
+  return [...mineByDay.keys()]
+    .filter((date) => theirsByDay.has(date))
+    .sort()
+    .map((date) => ({
+      date,
+      mine: mineByDay.get(date) || [],
+      theirs: theirsByDay.get(date) || [],
+    }));
+}
+
+function indexEventsByDay(events) {
+  const map = new Map();
+  for (const event of events) {
+    const startDate = parseDateOnly(event.start);
+    const endDate = previewInclusiveEndDate(event, startDate, parseDateOnly(event.end));
+    for (let cursor = new Date(startDate); cursor <= endDate; cursor = addDays(cursor, 1)) {
+      const key = formatDateKey(cursor);
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(event);
+    }
+  }
+  return map;
+}
+
+function renderInsightShiftSummary(events) {
+  return events
+    .map((event) => `${event.title}${event.allDay || !event.timeLabel ? "" : ` (${event.timeLabel})`}`)
+    .join(" | ");
+}
+
+function formatInsightDate(value) {
+  return parseDateOnly(value).toLocaleDateString("en-AU", {
+    weekday: "long",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function defaultInsightDate(termStart, termEnd) {
+  const today = formatDateKey(new Date());
+  if (today < termStart) return termStart;
+  if (today > termEnd) return termStart;
+  return today;
+}
+
+function getDoctorAnalysisCache() {
+  if (!parsedRosterSources || (!parsedRosterSources.mmc?.length && !parsedRosterSources.ddh?.length)) {
+    clearDoctorAnalysisCache();
+    return doctorAnalysisCache;
+  }
+  const cacheKey = JSON.stringify({
+    imports: currentImportStateKey(),
+    sourcePrefix: settings.showSourcePrefix,
+    showAmPm: settings.showAmPm,
+    includeAnnualLeave: settings.includeAnnualLeave,
+    includeConferenceLeave: settings.includeConferenceLeave,
+    includePublicHoliday: settings.includePublicHoliday,
+    includeSickLeave: settings.includeSickLeave,
+  });
+  if (doctorAnalysisCacheKey === cacheKey && doctorAnalysisCache.size) return doctorAnalysisCache;
+  const cache = new Map();
+  const analysisSettings = {
+    ...settings,
+    hospitalFilter: "all",
+    dateFrom: "",
+    dateTo: "",
+    includeLocations: false,
+  };
+  for (const doctor of rosterDoctorOptions(parsedRosterSources?.mmc || [], parsedRosterSources?.ddh || [])) {
+    const view = buildRosterView(parsedRosterSources?.mmc || [], parsedRosterSources?.ddh || [], doctor.key, analysisSettings);
+    cache.set(doctor.key, view.events);
+  }
+  doctorAnalysisCacheKey = cacheKey;
+  doctorAnalysisCache = cache;
+  return doctorAnalysisCache;
+}
+
+function clearDoctorAnalysisCache() {
+  doctorAnalysisCacheKey = "";
+  doctorAnalysisCache = new Map();
 }
 
 function syncActionState() {
@@ -2104,6 +2412,8 @@ function resetDerivedState() {
   overrides = {};
   customEvents = [];
   restoredSessionState = null;
+  clearDoctorAnalysisCache();
+  closeInsightsModal();
   settings = defaultSettings();
   renderSettings();
   doctorSelect.innerHTML = "";
@@ -3227,6 +3537,17 @@ function applyShiftColours(sourceSettings = settings) {
   }
 }
 
+function applyCurrentDayHighlight(sourceSettings = settings) {
+  const borderColour = isHexColour(sourceSettings.currentDayBorderColor) ? sourceSettings.currentDayBorderColor : "#c44949";
+  const backgroundColour = isHexColour(sourceSettings.currentDayBackgroundColor) ? sourceSettings.currentDayBackgroundColor : borderColour;
+  const borderOpacity = normalizeOpacity(sourceSettings.currentDayBorderOpacity, 42);
+  const backgroundOpacity = normalizeOpacity(sourceSettings.currentDayBackgroundOpacity, 8);
+  const borderRgb = hexToRgb(borderColour);
+  const backgroundRgb = hexToRgb(backgroundColour);
+  document.documentElement.style.setProperty("--today-border-color", `rgba(${borderRgb.r}, ${borderRgb.g}, ${borderRgb.b}, ${borderOpacity})`);
+  document.documentElement.style.setProperty("--today-fill-color", `rgba(${backgroundRgb.r}, ${backgroundRgb.g}, ${backgroundRgb.b}, ${backgroundOpacity})`);
+}
+
 function defaultShiftColourForField(field) {
   const key = field.replace(/^shiftColor/, "").toLowerCase();
   return SHIFT_COLOUR_DEFAULTS[key] || SHIFT_COLOUR_DEFAULTS.day;
@@ -3243,6 +3564,12 @@ function hexToRgb(hex) {
     g: Number.parseInt(clean.slice(2, 4), 16),
     b: Number.parseInt(clean.slice(4, 6), 16),
   };
+}
+
+function normalizeOpacity(value, fallbackPercent) {
+  const numeric = Number.parseFloat(String(value ?? fallbackPercent));
+  if (!Number.isFinite(numeric)) return fallbackPercent / 100;
+  return Math.max(0, Math.min(100, numeric)) / 100;
 }
 
 function loadSkin() {

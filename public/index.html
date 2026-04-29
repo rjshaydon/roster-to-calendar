@@ -157,6 +157,18 @@
                 <label class="toggle"><input id="showTimes" type="checkbox" checked> Show times on preview cards</label>
                 <label class="toggle"><input id="showNormalizedTitles" type="checkbox" checked> Show normalized titles</label>
                 <label class="toggle"><input id="showRawValues" type="checkbox"> Show raw roster values</label>
+                <div class="settings-subgrid">
+                  <label class="colour-field"><span>Today border</span><input id="currentDayBorderColor" type="color"></label>
+                  <label class="field field-compact">
+                    <span>Border opacity</span>
+                    <input id="currentDayBorderOpacity" type="range" min="0" max="100" step="1">
+                  </label>
+                  <label class="colour-field"><span>Today fill</span><input id="currentDayBackgroundColor" type="color"></label>
+                  <label class="field field-compact">
+                    <span>Fill opacity</span>
+                    <input id="currentDayBackgroundOpacity" type="range" min="0" max="100" step="1">
+                  </label>
+                </div>
               </fieldset>
 
               <fieldset class="settings-group">
@@ -253,6 +265,18 @@
           <p id="accountsModalSubtitle">Manage account details.</p>
         </div>
         <div id="accountsBody" class="modal-body"></div>
+      </section>
+    </div>
+
+    <div id="insightsModal" class="modal hidden" aria-hidden="true">
+      <div class="modal-backdrop" data-close-insights></div>
+      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="insightsModalTitle">
+        <button type="button" class="modal-close" id="insightsCloseButton" aria-label="Close insights">×</button>
+        <div class="section-head">
+          <h3 id="insightsModalTitle">Insights</h3>
+          <p id="insightsModalSubtitle">Roster comparisons for the selected doctor.</p>
+        </div>
+        <div id="insightsModalBody" class="modal-body"></div>
       </section>
     </div>
 

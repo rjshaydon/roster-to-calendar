@@ -33,6 +33,8 @@
   --chip-phnw-text: #5d6c73;
   --chip-phnw-bg-strong: rgba(93, 108, 115, 0.24);
   --chip-phnw-bg-soft: rgba(93, 108, 115, 0.12);
+  --today-border-color: rgba(196, 73, 73, 0.42);
+  --today-fill-color: rgba(196, 73, 73, 0.08);
 }
 
 * {
@@ -317,6 +319,16 @@ h1 {
 
 .fms-url-entry input {
   width: 100%;
+}
+
+.settings-subgrid {
+  display: grid;
+  gap: 12px;
+}
+
+.field-compact input[type="range"] {
+  width: 100%;
+  padding: 0;
 }
 
 .claim-section {
@@ -821,10 +833,27 @@ input[type="color"] {
   margin-top: 18px;
 }
 
+.preview-term-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
 .preview-term-title {
   font-size: 1.2rem;
   font-weight: 700;
   color: var(--accent-strong);
+}
+
+.preview-term-actions {
+  display: inline-flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.preview-term-button {
+  min-width: 82px;
 }
 
 .preview-grid {
@@ -907,8 +936,9 @@ input[type="color"] {
 }
 
 .preview-cell.is-current-day {
-  border-color: rgba(196, 73, 73, 0.28);
-  box-shadow: inset 0 0 0 2px rgba(196, 73, 73, 0.36);
+  border-color: var(--today-border-color);
+  box-shadow: inset 0 0 0 2px var(--today-border-color);
+  background: linear-gradient(180deg, var(--today-fill-color), rgba(255, 255, 255, 0.82));
 }
 
 .preview-date {
@@ -1529,6 +1559,10 @@ body[data-skin="console"] .preview-term-title {
   font-size: 1.55rem;
 }
 
+body[data-skin="console"] .preview-term-header {
+  padding: 0 6px;
+}
+
 body[data-skin="console"] .preview-grid {
   gap: 0;
   grid-template-columns: 88px repeat(7, minmax(0, 1fr));
@@ -1575,9 +1609,15 @@ body[data-skin="console"] .preview-cell {
 }
 
 body[data-skin="console"] .preview-cell.is-current-day {
-  border-color: rgba(196, 73, 73, 0.3);
-  background: linear-gradient(180deg, rgba(196, 73, 73, 0.04), #ffffff 34%);
-  box-shadow: inset 0 0 0 2px rgba(196, 73, 73, 0.42);
+  border-color: var(--today-border-color);
+  background: linear-gradient(180deg, var(--today-fill-color), #ffffff 34%);
+  box-shadow: inset 0 0 0 2px var(--today-border-color);
+}
+
+.insights-controls {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 14px;
 }
 
 body[data-skin="console"] .preview-date {
