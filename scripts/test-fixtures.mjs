@@ -44,6 +44,38 @@ assert.ok(view.events.some((event) => event.title === "Annual Leave"));
 assert.ok(view.events.some((event) => event.title === "DDH: Orange PM"));
 assert.ok(view.events.some((event) => event.title === "DDH: Sick Leave"));
 
+const ddhFullWorkbook = XLSX.utils.book_new();
+const ddhFullSheet = XLSX.utils.aoa_to_sheet([
+  ["", "Mon. Feb. 02, 2026", "Tue. Feb. 03, 2026", "Wed. Feb. 04, 2026", "Thu. Feb. 05, 2026", "Fri. Feb. 06, 2026", "Sat. Feb. 07, 2026", "Sun. Feb. 08, 2026"],
+  ["Richard Haydon", "", "", "", "", "", "", ""],
+  ["SENIOR MEDICAL STAFF", "", "", "", "", "", "", ""],
+  ["Jim Barton", "AVAO AM", "", "Orange PM (on-call)", "AVAO PM", "Clinical Support", "", ""],
+  ["", "07:30-17:00", "", "15:00-00:00", "14:30-00:00", "", "", ""],
+  ["Caroline Bolt", "Orange PM (on-call)", "", "AVAO AM", "", "Orange AM IC", "", ""],
+  ["", "15:00-00:00", "", "07:30-17:00", "", "08:00-18:00", "", ""],
+  ["Di Flood", "CS AM", "SSU SMS", "Clinical Support", "", "HITH PM", "", ""],
+  ["", "", "07:30-17:30", "", "", "", "", ""],
+]);
+XLSX.utils.book_append_sheet(ddhFullWorkbook, ddhFullSheet, "Sheet1");
+const ddhFullDoctors = doctorOptions([], ddhFullWorkbook);
+assert.ok(ddhFullDoctors.find((doctor) => doctor.displayName === "Jim Barton"));
+assert.ok(ddhFullDoctors.find((doctor) => doctor.displayName === "Caroline Bolt"));
+assert.ok(ddhFullDoctors.find((doctor) => doctor.displayName === "Di Flood"));
+assert.equal(ddhFullDoctors.find((doctor) => doctor.displayName === "SENIOR MEDICAL STAFF"), undefined);
+
+const jim = ddhFullDoctors.find((doctor) => doctor.displayName === "Jim Barton");
+const jimView = buildRosterView([], ddhFullWorkbook, jim.key);
+assert.ok(jimView.events.some((event) => event.title === "DDH: AVAO AM"));
+assert.ok(jimView.events.some((event) => event.title === "DDH: Orange PM"));
+assert.ok(jimView.events.some((event) => event.title === "DDH: AVAO PM"));
+assert.ok(jimView.events.some((event) => event.title === "DDH: CS"));
+
+const diFlood = ddhFullDoctors.find((doctor) => doctor.displayName === "Di Flood");
+const diFloodView = buildRosterView([], ddhFullWorkbook, diFlood.key);
+assert.ok(diFloodView.events.some((event) => event.title === "DDH: CS AM"));
+assert.ok(diFloodView.events.some((event) => event.title === "DDH: SSU" && event.start.includes("07:30:00")));
+assert.ok(diFloodView.events.some((event) => event.title === "DDH: HITH PM"));
+
 const mmcPdfBytes = await readFile(fileURLToPath(new URL("../fixtures/AdultMMCTerm2.2026.Ver1.pdf", import.meta.url)));
 const formData = new FormData();
 formData.append("rosterFiles", new File([mmcPdfBytes], "AdultMMCTerm2.2026.Ver1.pdf", { type: "application/pdf" }));

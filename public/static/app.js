@@ -93,6 +93,7 @@ const customEventLocationMode = document.querySelector("#customEventLocationMode
 const customEventCustomLocationField = document.querySelector("#customEventCustomLocationField");
 const customEventCustomLocation = document.querySelector("#customEventCustomLocation");
 const customEventDeleteButton = document.querySelector("#customEventDeleteButton");
+const customEventWhoButton = document.querySelector("#customEventWhoButton");
 const contextMenu = document.querySelector("#contextMenu");
 
 const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -474,8 +475,14 @@ reviewModalBody.addEventListener("change", (event) => {
 
 reviewModalBody.addEventListener("click", (event) => {
   const resetButton = event.target.closest("[data-override-reset]");
-  if (!resetButton) return;
-  resetImportedEvent(resetButton.dataset.overrideReset);
+  if (resetButton) {
+    resetImportedEvent(resetButton.dataset.overrideReset);
+    return;
+  }
+  const whoButton = event.target.closest("[data-open-who-on]");
+  if (!whoButton) return;
+  closeReviewModal();
+  openWhoInsight(whoButton.dataset.openWhoOn, whoButton.dataset.openWhoOn);
 });
 
 mobileExportButton.addEventListener("click", () => form.requestSubmit());
@@ -509,7 +516,7 @@ preview.addEventListener("click", (event) => {
   }
   const chip = event.target.closest("[data-review-id]");
   if (chip) {
-    openReviewModal(chip.dataset.reviewId);
+    openReviewModal(chip.dataset.reviewId, chip.dataset.reviewDate || "");
     return;
   }
   const cell = event.target.closest("[data-add-date]");
@@ -681,6 +688,11 @@ customEventDeleteButton.addEventListener("click", () => {
   rebuildClientPreview();
   saveCurrentSessionState();
   setStatus("Manual event removed.");
+});
+customEventWhoButton.addEventListener("click", () => {
+  const date = customEventWhoButton.dataset.openWhoOn || customEventStartDate.value || formatDateKey(new Date());
+  closeCustomEventModal();
+  openWhoInsight(date, date);
 });
 customEventForm.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -1494,7 +1506,7 @@ function renderPreviewChip(event, dayKey) {
   const meta = [];
   if (!event.allDay && settings.showTimes && startKey === dayKey && event.timeLabel) meta.push(event.timeLabel);
   const metaMarkup = meta.length ? `<span class="preview-chip-meta">${escapeHtml(meta.join(" · "))}</span>` : "";
-  return `<button type="button" class="preview-chip preview-chip-${eventTone(event)}" data-review-id="${event.id}">${lines.join("")}${metaMarkup}</button>`;
+  return `<button type="button" class="preview-chip preview-chip-${eventTone(event)}" data-review-id="${event.id}" data-review-date="${dayKey}">${lines.join("")}${metaMarkup}</button>`;
 }
 
 function eventTone(event) {
@@ -2829,12 +2841,12 @@ function summarizeEventTimes(start, end, allDay) {
   return `${extractTimePortion(start)}-${extractTimePortion(end)}`;
 }
 
-function openReviewModal(id) {
+function openReviewModal(id, selectedDay = "") {
   const item = reviewIndex.get(id);
   if (!item) {
     const customEvent = customEventsForActiveCalendar().find((entry) => entry.id === id);
     if (customEvent) {
-      openCustomEventModal(customEvent);
+      openCustomEventModal(customEvent, selectedDay || customEvent.startDate);
     }
     return;
   }
@@ -2846,6 +2858,7 @@ function openReviewModal(id) {
   const endDate = event?.allDay
     ? formatDateKey(addDays(parseDateOnly(event.end), -1))
     : event?.end?.slice(0, 10) || item.endDay;
+  const insightDate = selectedDay || startDate;
   const allDay = event?.allDay ?? item.allDay;
   const startTime = event?.allDay ? "" : extractTimePortion(event?.start || "");
   const endTime = event?.allDay ? "" : extractTimePortion(event?.end || "");
@@ -2923,6 +2936,9 @@ function openReviewModal(id) {
         ${item.timeLabel ? `<span>Times: ${escapeHtml(item.timeLabel)}</span>` : ""}
         ${item.location ? `<span>Location: ${escapeHtml(item.location)}</span>` : ""}
       </div>
+      <div class="modal-actions">
+        <button type="button" class="button button-secondary" data-open-who-on="${escapeHtml(insightDate)}">Who else am I working with?</button>
+      </div>
       ${resetButton}
       ${warnings}
     </article>
@@ -2954,6 +2970,7 @@ function openCustomEventModal(event = null, presetDate = null) {
   customEventCustomLocationField.classList.toggle("hidden", preset.mode !== "custom");
   customEventTimeFields.classList.toggle("hidden", customEventAllDay.checked);
   customEventDeleteButton.classList.toggle("hidden", !event);
+  customEventWhoButton.dataset.openWhoOn = event?.startDate || presetDate || now;
   customEventModal.classList.remove("hidden");
   customEventModal.setAttribute("aria-hidden", "false");
 }

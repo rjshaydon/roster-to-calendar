@@ -89,6 +89,49 @@ const MMC_STOP_SECTIONS = new Set([
   "INTERN",
   "LOCUM",
 ]);
+const DDH_SECTION_MARKERS = new Set([
+  "SENIOR MEDICAL STAFF",
+  "JUNIOR MEDICAL STAFF",
+  "REGISTRAR",
+  "REGISTRARS",
+  "HMO",
+  "INTERN",
+  "INTERNS",
+  "PHYSIOTHERAPIST",
+  "PHYSIOTHERAPISTS",
+  "ENP",
+  "AMP",
+]);
+const DDH_IGNORE_PREFIXES = [
+  "YES",
+  "NO",
+  "OK",
+  "N/A",
+  "NA",
+  "OFF",
+  "WORKED",
+  "FOR ",
+  "IN LIEU",
+  "PREFER",
+  "RELUCTANT",
+  "NOT ",
+];
+const DDH_IGNORE_CONTAINS = [
+  "ORIENTATION",
+  "TEACHING",
+  "MEET AND GREET",
+  "SKILLS",
+  "SIM",
+  "EXAM",
+  "PLEASE",
+  "NOT AVAILABLE",
+  "NO CLINICAL",
+  "NO AM",
+  "NO PM",
+  "AM ONLY",
+  "PM ONLY",
+  "AM/PM",
+];
 
 const DEFAULT_SETTINGS = {
   showSourcePrefix: true,
@@ -751,7 +794,6 @@ function mmcSheetFromPdfPage(items) {
 
   const dayCenters = dateItems.map((item) => item.x);
   for (const item of items) {
-    if (item.font !== "TT4") continue;
     const colIndex = nearestIndex(dayCenters, item.x, 38);
     if (colIndex < 0) continue;
     const rowIndex = nearestIndex(rowAnchors.map((row) => row.y), item.y, 5);
@@ -766,7 +808,7 @@ function mmcSheetFromPdfPage(items) {
 
 function extractMmcPdfRowAnchors(items, dateHeaderY) {
   const rowItems = items
-    .filter((item) => item.font === "TT6" && item.x < 160 && item.y < dateHeaderY - 5)
+    .filter((item) => item.x < 160 && item.y < dateHeaderY - 5)
     .filter((item) => looksLikePersonName(item.text) || isMmcSectionMarker(item.text))
     .sort((left, right) => right.y - left.y);
   const seen = new Set();
@@ -958,13 +1000,9 @@ function extractMmcNames(workbook) {
 
 function extractDdhNames(workbook) {
   const names = new Map();
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const range = XLSX.utils.decode_range(sheet["!ref"] || "A1:A1");
-  for (let row = 1; row <= range.e.r + 1; row += 1) {
-    const value = cleanText(getCellValue(sheet, row, 1));
-    if (!value || isDdhDateRow(sheet, row) || !looksLikePersonName(value)) continue;
-    const key = normalizeName(value);
-    if (!names.has(key)) names.set(key, value);
+  for (const entry of iterateDdhWeekEntries(workbook)) {
+    const key = normalizeName(entry.rawName);
+    if (!names.has(key)) names.set(key, entry.rawName);
   }
   return names;
 }
@@ -1009,50 +1047,17 @@ function parseMmcRecords(workbook, doctorKey) {
 
 function parseDdhRecords(workbook, doctorKey) {
   const records = [];
-  const sheet = workbook.Sheets[workbook.SheetNames[0]];
-  const range = XLSX.utils.decode_range(sheet["!ref"] || "A1:A1");
-  let row = 1;
-  while (row <= range.e.r + 1) {
-    if (!isDdhDateRow(sheet, row)) {
-      row += 1;
+  for (const entry of iterateDdhWeekEntries(workbook)) {
+    if (normalizeName(entry.rawName) !== doctorKey) continue;
+    const weeklyLeave = firstWeeklyLeave(entry.labels);
+    if (weeklyLeave) {
+      records.push(createWeeklyLeaveRecord("DDH", entry.weekDates[0], weeklyLeave));
       continue;
     }
-    const weekDates = [];
-    for (let col = 2; col <= 8; col += 1) {
-      const value = parseDdhDate(getCellValue(sheet, row, col));
-      if (!value) {
-        weekDates.length = 0;
-        break;
-      }
-      weekDates.push(value);
-    }
-    if (!weekDates.length) {
-      row += 1;
-      continue;
-    }
-
-    const nameRow = row + 1;
-    const rawName = cleanText(getCellValue(sheet, nameRow, 1));
-    const labels = [];
-    const times = [];
-    for (let col = 2; col <= 8; col += 1) {
-      labels.push(cleanText(getCellValue(sheet, nameRow, col)));
-      times.push(cleanText(getCellValue(sheet, nameRow + 1, col)));
-    }
-    const hasTimeRow = nameRow + 1 <= range.e.r + 1 && !isDdhDateRow(sheet, nameRow + 1) && times.some(Boolean);
-
-    if (normalizeName(rawName) === doctorKey) {
-      const weeklyLeave = firstWeeklyLeave(labels);
-      if (weeklyLeave) {
-        records.push(createWeeklyLeaveRecord("DDH", weekDates[0], weeklyLeave));
-      } else {
-        weekDates.forEach((day, index) => {
-          const record = parseDdhEntry(day, labels[index], hasTimeRow ? times[index] : "");
-          if (record) records.push(record);
-        });
-      }
-    }
-    row += hasTimeRow ? 3 : 2;
+    entry.weekDates.forEach((day, index) => {
+      const record = parseDdhEntry(day, entry.labels[index], entry.times[index] || "");
+      if (record) records.push(record);
+    });
   }
   return records;
 }
@@ -1114,6 +1119,9 @@ function parseDdhEntry(day, label, timeText) {
   if (parseDdhTimeRow(label)) {
     return timeText ? parseDdhEntry(day, timeText, label) : null;
   }
+  if (parseDdhTimeRow(timeText) && shouldIgnoreDdh(label)) {
+    return null;
+  }
   const upper = label.toUpperCase();
   if (upper === "AM" || upper === "PM") return null;
   if (upper === "PHNW" || upper === "PHNW CLINICAL") {
@@ -1130,14 +1138,21 @@ function parseDdhEntry(day, label, timeText) {
       location: "",
     });
   }
-  if (shouldIgnoreCommon(label)) return null;
+  if (upper === "AL" || upper === "A/L") {
+    return createAllDayRecord("DDH", day, label, {
+      kind: "annual_leave",
+      titleParts: { base: "Annual Leave", period: "", suffix: "" },
+      location: "",
+    });
+  }
+  if (shouldIgnoreDdh(label) || shouldIgnoreCommon(label)) return null;
 
   const mapped = DDH_LABEL_MAP[label] || label;
-  const location = mapped === "CS" || mapped === "PHNW" ? "" : DDH_LOCATION;
-  const normalized = normalizeDdhLabel(mapped);
+  const normalized = normalizeDdhLabel(mapped) || normalizeGenericDdhLabel(mapped);
   if (!normalized) {
     return createUnknownRecord("DDH", day, label, "DDH shift label not recognised.");
   }
+  const location = normalizeDdhLocation(mapped, normalized);
 
   const parsedTime = parseDdhTimeRow(timeText);
   if (parsedTime) {
@@ -1258,6 +1273,108 @@ function normalizeDdhLabel(label) {
   }
 
   return { kind: "shift", titleParts: { base: label, period: "", suffix: "" } };
+}
+
+function normalizeGenericDdhLabel(label) {
+  const cleaned = cleanDdhLabel(label);
+  if (!cleaned) return null;
+  const period = extractDdhPeriod(cleaned);
+  const upper = cleaned.toUpperCase();
+
+  if (upper.includes("CLINICAL SUPPORT") || /^CS\b/.test(upper) || upper.includes(" OCS")) {
+    const onsite = upper.includes("ONSITE");
+    return {
+      kind: "shift",
+      titleParts: { base: onsite ? "CS onsite" : "CS", period, suffix: "" },
+    };
+  }
+  if (upper.includes("SSU")) return { kind: "shift", titleParts: { base: upper.includes("NIGHT") ? "Night SSU" : "SSU", period, suffix: "" } };
+  if (upper.includes("AVAO")) return { kind: "shift", titleParts: { base: "AVAO", period, suffix: "" } };
+  if (upper.includes("ORANGE")) return { kind: "shift", titleParts: { base: "Orange", period, suffix: "" } };
+  if (upper.includes("SILVER")) return { kind: "shift", titleParts: { base: "Silver", period, suffix: "" } };
+  if (upper.includes("FAST")) return { kind: "shift", titleParts: { base: "FAST", period, suffix: "" } };
+  if (upper.includes("VHH")) return { kind: "shift", titleParts: { base: period ? "VHH" : cleaned.replace(/\bIC\b/gi, "").trim(), period, suffix: "" } };
+  if (upper.includes("ROVER")) return { kind: "shift", titleParts: { base: "Rover", period, suffix: "" } };
+  if (upper.includes("HITH")) return { kind: "shift", titleParts: { base: "HITH", period, suffix: "" } };
+  if (upper.includes("PAED")) return { kind: "shift", titleParts: { base: "Paeds", period, suffix: "" } };
+  if (upper.includes("NIGHT")) return { kind: "shift", titleParts: { base: cleaned.replace(/\bIC\b/gi, "").trim(), period: "", suffix: "" } };
+  if (upper.includes("AED")) return { kind: "shift", titleParts: { base: "AED", period, suffix: "" } };
+  if (upper.includes("MED")) return { kind: "shift", titleParts: { base: "MED", period, suffix: "" } };
+  if (upper.includes("GED")) return { kind: "shift", titleParts: { base: cleaned.replace(/\bIC\b/gi, "").trim(), period: "", suffix: "" } };
+  if (upper.includes("EXTRA")) return { kind: "shift", titleParts: { base: "Extra", period, suffix: "" } };
+
+  return null;
+}
+
+function normalizeDdhLocation(label, normalized) {
+  const upper = String(label || "").toUpperCase();
+  if (normalized.titleParts.base === "PHNW" || normalized.titleParts.base === "CS") return "";
+  if (upper.includes("OFFSITE") || upper.includes("NOT ONSITE") || upper.includes("CS/OFF")) return "";
+  if (normalized.titleParts.base === "CS onsite") return DDH_LOCATION;
+  return DDH_LOCATION;
+}
+
+function cleanDdhLabel(label) {
+  return String(label || "")
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/\bIC\b/gi, " ")
+    .replace(/\d+\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function extractDdhPeriod(label) {
+  const upper = String(label || "").toUpperCase();
+  if (/\bAM\b/.test(upper)) return "AM";
+  if (/\bPM\b/.test(upper)) return "PM";
+  return "";
+}
+
+function shouldIgnoreDdh(value) {
+  const upper = String(value || "").trim().toUpperCase();
+  if (!upper) return true;
+  if (DDH_IGNORE_PREFIXES.some((prefix) => upper.startsWith(prefix))) return true;
+  return DDH_IGNORE_CONTAINS.some((fragment) => upper.includes(fragment));
+}
+
+function iterateDdhWeekEntries(workbook) {
+  const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const range = XLSX.utils.decode_range(sheet["!ref"] || "A1:A1");
+  const dateRows = [];
+  for (let row = 1; row <= range.e.r + 1; row += 1) {
+    if (isDdhDateRow(sheet, row)) dateRows.push(row);
+  }
+
+  const entries = [];
+  for (let index = 0; index < dateRows.length; index += 1) {
+    const dateRow = dateRows[index];
+    const nextDateRow = dateRows[index + 1] || range.e.r + 2;
+    const weekDates = [];
+    for (let col = 2; col <= 8; col += 1) {
+      const value = parseDdhDate(getCellValue(sheet, dateRow, col));
+      if (!value) {
+        weekDates.length = 0;
+        break;
+      }
+      weekDates.push(value);
+    }
+    if (!weekDates.length) continue;
+
+    for (let row = dateRow + 1; row < nextDateRow; row += 1) {
+      const rawName = cleanText(getCellValue(sheet, row, 1));
+      if (!rawName || !looksLikePersonName(rawName) || isDdhSectionMarker(rawName)) continue;
+      const labels = [];
+      for (let col = 2; col <= 8; col += 1) labels.push(cleanText(getCellValue(sheet, row, col)));
+      const supplementaryRow = row + 1 < nextDateRow && isDdhSupplementaryRow(sheet, row + 1) ? row + 1 : 0;
+      const times = [];
+      for (let col = 2; col <= 8; col += 1) {
+        times.push(supplementaryRow ? cleanText(getCellValue(sheet, supplementaryRow, col)) : "");
+      }
+      entries.push({ rawName, weekDates, labels, times });
+      if (supplementaryRow) row = supplementaryRow;
+    }
+  }
+  return entries;
 }
 
 function createTimedRecord(source, day, rawValue, details) {
@@ -1540,6 +1657,15 @@ function iterateMmcRosterPeople(sheet) {
   return entries;
 }
 
+function isDdhSupplementaryRow(sheet, row) {
+  if (isDdhDateRow(sheet, row)) return false;
+  if (cleanText(getCellValue(sheet, row, 1))) return false;
+  for (let col = 2; col <= 8; col += 1) {
+    if (cleanText(getCellValue(sheet, row, col))) return true;
+  }
+  return false;
+}
+
 function isMmcSectionMarker(value) {
   const upper = cleanText(value).replace(/\s+/g, " ").trim().toUpperCase();
   return MMC_SECTION_MARKERS.has(upper);
@@ -1548,6 +1674,11 @@ function isMmcSectionMarker(value) {
 function isMmcStopSection(value) {
   const upper = cleanText(value).replace(/\s+/g, " ").trim().toUpperCase();
   return MMC_STOP_SECTIONS.has(upper);
+}
+
+function isDdhSectionMarker(value) {
+  const upper = cleanText(value).replace(/\s+/g, " ").trim().toUpperCase();
+  return DDH_SECTION_MARKERS.has(upper);
 }
 
 function cleanMmcRosterName(value) {
