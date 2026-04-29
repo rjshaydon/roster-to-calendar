@@ -676,7 +676,7 @@ customEventModal.addEventListener("click", (event) => {
 customEventDeleteButton.addEventListener("click", () => {
   const id = customEventId.value;
   if (!id) return;
-  customEvents = customEvents.filter((item) => item.id !== id);
+  removeCustomEventForActiveCalendar(id);
   closeCustomEventModal();
   rebuildClientPreview();
   saveCurrentSessionState();
@@ -686,7 +686,8 @@ customEventForm.addEventListener("submit", (event) => {
   event.preventDefault();
   const entry = readCustomEventForm();
   if (!entry) return;
-  const index = customEvents.findIndex((item) => item.id === entry.id);
+  const ownerEmail = activeCalendarEmail();
+  const index = customEvents.findIndex((item) => item.id === entry.id && normalizeEmail(item.ownerEmail) === ownerEmail);
   if (index >= 0) {
     customEvents[index] = entry;
     setStatus("Manual event updated.");
@@ -831,7 +832,7 @@ async function analyzeFiles() {
       ...(restoredSessionState?.settings || {}),
     };
     overrides = sanitizeOverrideState(restoredSessionState?.overrides);
-    customEvents = sanitizeCustomEvents(restoredSessionState?.customEvents);
+    customEvents = sanitizeCustomEvents(restoredSessionState?.customEvents, activeCalendarEmail());
     conflictSelections = {
       ...loadConflictSelections(),
       ...(restoredSessionState?.conflictSelections || {}),
@@ -1176,7 +1177,7 @@ function buildClientPreviewData(baseData) {
     events.push(buildEventOverridePatch(event, item, override));
   }
 
-  for (const event of customEvents) {
+  for (const event of customEventsForActiveCalendar()) {
     events.push(customEventToPreviewEvent(event));
   }
 
@@ -1240,7 +1241,7 @@ async function buildBrowserIcs(doctor) {
     ).events,
     overrides,
   );
-  const events = [...rosterEvents, ...customEventsToEvents(customEvents, settings)].sort(comparePreviewEvents);
+  const events = [...rosterEvents, ...customEventsToEvents(customEventsForActiveCalendar(), settings)].sort(comparePreviewEvents);
   if (!events.length) {
     throw new Error("No calendar events were found for the selected doctor.");
   }
@@ -1723,7 +1724,7 @@ function buildCurrentDoctorPreviewEvents(start, end) {
     if (!include) continue;
     events.push(buildEventOverridePatch(event, item, override));
   }
-  for (const event of customEvents) {
+  for (const event of customEventsForActiveCalendar()) {
     if (event.include === false) continue;
     events.push(customEventToPreviewEvent(event));
   }
@@ -1876,7 +1877,7 @@ function createFormData(doctor = null) {
   }
   body.append("settings", JSON.stringify(settings));
   body.append("overrides", JSON.stringify(cleanOverrides()));
-  body.append("customEvents", JSON.stringify(customEvents));
+  body.append("customEvents", JSON.stringify(customEventsForActiveCalendar()));
   body.append("conflictSelections", JSON.stringify(conflictSelections));
   return body;
 }
@@ -1907,6 +1908,7 @@ function customEventToPreviewEvent(event) {
   if (event.allDay) {
     return {
       id: event.id,
+      ownerEmail: normalizeEmail(event.ownerEmail),
       source: "Custom",
       title: event.title,
       allDay: true,
@@ -1929,6 +1931,7 @@ function customEventToPreviewEvent(event) {
   const end = `${endDate}T${event.endTime}:00`;
   return {
     id: event.id,
+    ownerEmail: normalizeEmail(event.ownerEmail),
     source: "Custom",
     title: event.title,
     allDay: false,
@@ -1947,7 +1950,7 @@ function movePreviewEvent(id, targetDate) {
   if (!event) return;
   if (event.source === "Custom") {
     const updated = shiftPreviewEventToDay(event, targetDate);
-    customEvents = customEvents.map((item) => item.id === id ? previewEventToCustomEvent(updated, item) : item);
+    customEvents = customEvents.map((item) => item.id === id && normalizeEmail(item.ownerEmail) === activeCalendarEmail() ? previewEventToCustomEvent(updated, item) : item);
   } else {
     const updated = shiftPreviewEventToDay(event, targetDate);
     syncImportedOverride(id, {
@@ -1993,6 +1996,7 @@ function shiftPreviewEventToDay(event, targetDate) {
 function previewEventToCustomEvent(event, existing = null) {
   return {
     id: event.id,
+    ownerEmail: normalizeEmail(existing?.ownerEmail || event.ownerEmail || activeCalendarEmail()),
     title: event.title,
     startDate: event.start.slice(0, 10),
     endDate: event.allDay
@@ -2019,6 +2023,7 @@ function pasteCopiedEvent(targetDate) {
   const shifted = shiftPreviewEventToDay({
     ...copiedEvent,
     id: `custom-${Date.now().toString(36)}`,
+    ownerEmail: activeCalendarEmail(),
     source: "Custom",
     isEditedImport: false,
   }, targetDate);
@@ -2033,7 +2038,7 @@ function deletePreviewEvent(id) {
   const event = currentPreviewEvents.get(id);
   if (!event) return;
   if (event.source === "Custom") {
-    customEvents = customEvents.filter((item) => item.id !== id);
+    removeCustomEventForActiveCalendar(id);
     if (openReviewId === id) closeReviewModal();
   } else {
     syncImportedOverride(id, { include: false });
@@ -2281,7 +2286,7 @@ function restorePreviewGestureMeta(gesture) {
 function commitPreviewGestureTime(gesture) {
   const shifted = shiftTimedEventByMinutes(gesture.sourceEvent, gesture.minuteOffset);
   if (shifted.source === "Custom") {
-    customEvents = customEvents.map((item) => item.id === shifted.id ? previewEventToCustomEvent(shifted, item) : item);
+    customEvents = customEvents.map((item) => item.id === shifted.id && normalizeEmail(item.ownerEmail) === activeCalendarEmail() ? previewEventToCustomEvent(shifted, item) : item);
   } else {
     syncImportedOverride(shifted.id, {
       start: shifted.start,
@@ -2827,7 +2832,7 @@ function summarizeEventTimes(start, end, allDay) {
 function openReviewModal(id) {
   const item = reviewIndex.get(id);
   if (!item) {
-    const customEvent = customEvents.find((entry) => entry.id === id);
+    const customEvent = customEventsForActiveCalendar().find((entry) => entry.id === id);
     if (customEvent) {
       openCustomEventModal(customEvent);
     }
@@ -3006,6 +3011,7 @@ function readCustomEventForm() {
 
   return {
     id: customEventId.value || `custom-${Date.now().toString(36)}`,
+    ownerEmail: activeCalendarEmail(),
     title,
     startDate,
     endDate,
@@ -4011,7 +4017,7 @@ function buildActiveSessionState() {
     doctorKey: doctorOptions.length > 1 ? doctorSelect.value : doctorOptions[0]?.key || "",
     settings: { ...settings },
     overrides: cleanOverrides(),
-    customEvents: sanitizeCustomEvents(customEvents),
+    customEvents: customEventsForActiveCalendar(),
     conflictSelections: { ...conflictSelections },
     hadPreview: Boolean(latestPreview),
     savedAt: new Date().toISOString(),
@@ -4121,7 +4127,7 @@ function currentWorkspaceSnapshot() {
       doctorKey: doctorOptions.length > 1 ? doctorSelect.value : doctorOptions[0]?.key || "",
       settings: { ...settings },
       overrides: cleanOverrides(),
-      customEvents: sanitizeCustomEvents(customEvents),
+      customEvents: customEventsForActiveCalendar(),
       conflictSelections: { ...conflictSelections },
       hadPreview: Boolean(latestPreview),
       savedAt: new Date().toISOString(),
@@ -4159,12 +4165,28 @@ function sanitizeOverrideState(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-function sanitizeCustomEvents(items) {
+function activeCalendarEmail() {
+  return normalizeEmail(currentUserEmail);
+}
+
+function customEventsForActiveCalendar() {
+  const ownerEmail = activeCalendarEmail();
+  return sanitizeCustomEvents(customEvents).filter((item) => item.ownerEmail === ownerEmail);
+}
+
+function removeCustomEventForActiveCalendar(id) {
+  const ownerEmail = activeCalendarEmail();
+  customEvents = customEvents.filter((item) => !(item.id === id && normalizeEmail(item.ownerEmail) === ownerEmail));
+}
+
+function sanitizeCustomEvents(items, defaultOwnerEmail = "") {
   if (!Array.isArray(items)) return [];
+  const fallbackOwnerEmail = normalizeEmail(defaultOwnerEmail);
   return items
     .filter((item) => item && item.id && item.title && item.startDate && item.endDate)
     .map((item) => ({
       id: String(item.id),
+      ownerEmail: normalizeEmail(item.ownerEmail || fallbackOwnerEmail),
       title: String(item.title),
       startDate: String(item.startDate),
       endDate: String(item.endDate),
@@ -4173,7 +4195,8 @@ function sanitizeCustomEvents(items) {
       endTime: item.allDay ? "" : String(item.endTime || ""),
       location: String(item.location || ""),
       include: item.include !== false,
-    }));
+    }))
+    .filter((item) => item.ownerEmail);
 }
 
 const DB_NAME = "roster-converter";
