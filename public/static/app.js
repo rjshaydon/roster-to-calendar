@@ -755,8 +755,6 @@ async function analyzeFiles() {
       const serverEntry = (data.imports || []).find((item) => item.id === entry.id);
       return serverEntry ? { ...entry, sourceType: serverEntry.sourceType } : entry;
     });
-    saveCurrentWorkspace();
-    scheduleCloudStateSave();
     restoredSessionState = loadCurrentSessionState();
     settings = {
       ...defaultSettings(),
@@ -773,6 +771,8 @@ async function analyzeFiles() {
     renderSettings();
     renderFilesList();
     renderDoctorState();
+    saveCurrentWorkspace();
+    scheduleCloudStateSave();
     if (selectedDoctor()) {
       await updatePreview({ resetRange: true });
       return;
@@ -1391,8 +1391,9 @@ function renderDayCell(day) {
   const cards = day.events.length
     ? day.events.map((event) => renderPreviewChip(event, formatDateKey(day.date))).join("")
     : `<div class="preview-chip preview-chip-empty"></div>`;
+  const currentDayClass = isCurrentDay(day.date) ? " is-current-day" : "";
   return `
-    <div class="preview-cell" data-add-date="${formatDateKey(day.date)}">
+    <div class="preview-cell${currentDayClass}" data-add-date="${formatDateKey(day.date)}">
       <div class="preview-date">${day.date.getDate()}</div>
       <div class="preview-stack">${cards}</div>
     </div>
@@ -2016,7 +2017,7 @@ function doctorOptionsForCurrentAccount(doctors) {
     ...doctor,
     sourceTypes: Array.isArray(doctor.sourceTypes) ? doctor.sourceTypes : [],
   }));
-  if (canUseDoctorPicker()) return options;
+  if (canUseDoctorPicker()) return prioritizeDoctorOptions(options);
   const matches = options.filter((doctor) => doctorMatchesCurrentAccount(doctor));
   if (!matches.length) return [];
   const aliases = matches.flatMap((doctor) => {
@@ -2034,6 +2035,17 @@ function doctorOptionsForCurrentAccount(doctors) {
     aliases: dedupeDoctorAliases(aliases),
     sourceTypes: [...new Set(aliases.map((alias) => alias.sourceType))],
   }];
+}
+
+function prioritizeDoctorOptions(options) {
+  const preferredDoctorKey = preferredDoctorKeyForCurrentAccount();
+  if (!preferredDoctorKey) return options;
+  return [...options].sort((left, right) => {
+    const leftPreferred = left.key === preferredDoctorKey ? 1 : 0;
+    const rightPreferred = right.key === preferredDoctorKey ? 1 : 0;
+    if (leftPreferred !== rightPreferred) return rightPreferred - leftPreferred;
+    return left.displayName.localeCompare(right.displayName);
+  });
 }
 
 function doctorMatchesCurrentAccount(doctor) {
@@ -2238,6 +2250,13 @@ function formatMonth(date) {
     month: "long",
     year: "numeric",
   });
+}
+
+function isCurrentDay(date) {
+  const today = new Date();
+  return date.getFullYear() === today.getFullYear()
+    && date.getMonth() === today.getMonth()
+    && date.getDate() === today.getDate();
 }
 
 function deriveRangeBounds(events) {
