@@ -3885,7 +3885,9 @@ async function applyCloudStateData(data) {
   if (!cloudAvailable) return;
   if (!data.state) {
     selectedFiles = [];
+    restoredSessionState = null;
     await replaceStoredImports([]);
+    clearWorkspaceStoreEntry(currentUserEmail);
     return;
   }
   const imports = await deserializeCloudImports(data.state.imports || []);
@@ -3893,20 +3895,18 @@ async function applyCloudStateData(data) {
   await replaceStoredImports(imports);
   if (data.state.session) {
     restoredSessionState = data.state.session;
-    const store = loadWorkspaceStore();
-    store[currentUserEmail] = {
-      fileRefs: imports.map((entry) => ({
-        id: entry.id,
-        name: entry.name,
-        size: entry.size,
-        lastModified: entry.lastModified,
-        addedAt: entry.addedAt,
-        sourceType: entry.sourceType,
-      })),
-      session: data.state.session,
-    };
-    saveWorkspaceStore(store);
   }
+  saveWorkspaceSnapshotForEmail(currentUserEmail, {
+    fileRefs: imports.map((entry) => ({
+      id: entry.id,
+      name: entry.name,
+      size: entry.size,
+      lastModified: entry.lastModified,
+      addedAt: entry.addedAt,
+      sourceType: entry.sourceType,
+    })),
+    session: data.state.session && typeof data.state.session === "object" ? data.state.session : {},
+  });
 }
 
 function serverStorageRequiredMessage() {
@@ -4090,6 +4090,20 @@ function saveWorkspaceStore(store) {
   localStorage.setItem(ACCOUNT_WORKSPACES_KEY, JSON.stringify(store));
 }
 
+function saveWorkspaceSnapshotForEmail(email, snapshot) {
+  if (!email) return;
+  const store = loadWorkspaceStore();
+  store[email] = snapshot;
+  saveWorkspaceStore(store);
+}
+
+function clearWorkspaceStoreEntry(email) {
+  if (!email) return;
+  const store = loadWorkspaceStore();
+  delete store[email];
+  saveWorkspaceStore(store);
+}
+
 function currentWorkspaceSnapshot() {
   return {
     fileRefs: selectedFiles.map((entry) => ({
@@ -4120,9 +4134,7 @@ function loadCurrentWorkspace() {
 
 function saveCurrentWorkspace() {
   if (!currentUserEmail) return;
-  const store = loadWorkspaceStore();
-  store[currentUserEmail] = currentWorkspaceSnapshot();
-  saveWorkspaceStore(store);
+  saveWorkspaceSnapshotForEmail(currentUserEmail, currentWorkspaceSnapshot());
 }
 
 function loadCurrentSessionState() {
@@ -4326,9 +4338,13 @@ async function bootstrapImports() {
   try {
     syncAccountsButton();
     if (!selectedFiles.length) {
-      const workspace = loadCurrentWorkspace();
-      selectedFiles = await loadStoredImportsByRefs(workspace?.fileRefs || []);
-      restoredSessionState = workspace?.session || restoredSessionState;
+      if (cloudAvailable) {
+        selectedFiles = [];
+      } else {
+        const workspace = loadCurrentWorkspace();
+        selectedFiles = await loadStoredImportsByRefs(workspace?.fileRefs || []);
+        restoredSessionState = workspace?.session || restoredSessionState;
+      }
     }
     renderFilesList();
     if (selectedFiles.length) {
