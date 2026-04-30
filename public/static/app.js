@@ -4853,7 +4853,7 @@ function sanitizeOverrideState(value) {
 }
 
 function activeCalendarEmail() {
-  return activeCalendarOwnerId();
+  return normalizeEmail(activeCalendarOwnerId());
 }
 
 function customEventsForActiveCalendar() {
