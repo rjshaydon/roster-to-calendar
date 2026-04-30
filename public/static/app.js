@@ -12,6 +12,7 @@ import {
   serializeReviewItem,
   sourceNames,
 } from "./roster.js";
+import * as XLSX from "xlsx";
 
 const form = document.querySelector("#roster-form");
 const appShell = document.querySelector("#appShell");
@@ -151,6 +152,7 @@ let doctorOptions = [];
 let detectedSources = {};
 let selectedFiles = [];
 let parsedRosterSources = null;
+let doctorRoleIndex = null;
 let parsedImportDoctors = new Map();
 let settings = defaultSettings();
 let overrides = {};
@@ -649,6 +651,8 @@ document.addEventListener("keydown", (event) => {
     closeContextMenu();
     closeFilesModal();
     closeAccountsModal();
+    closeInsightsModal();
+    settingsPanel.classList.add("hidden");
   }
 });
 document.addEventListener("click", (event) => {
@@ -656,6 +660,18 @@ document.addEventListener("click", (event) => {
     closeContextMenu();
   }
 });
+document.addEventListener("pointerdown", (event) => {
+  if (
+    !settingsPanel.classList.contains("hidden")
+    && !event.target.closest("#settingsPanel")
+    && !event.target.closest("#settingsToggle")
+    && !event.target.closest("#mobileSettingsButton")
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    settingsPanel.classList.add("hidden");
+  }
+}, true);
 document.addEventListener("pointermove", (event) => {
   if (!previewGesture || event.pointerId !== previewGesture.pointerId) return;
   updatePreviewGesture(event);
@@ -820,6 +836,7 @@ async function analyzeFiles() {
   doctorOptions = [];
   detectedSources = {};
   parsedRosterSources = null;
+  doctorRoleIndex = null;
   parsedImportDoctors = new Map();
   clearDoctorAnalysisCache();
   controlBar.classList.remove("hidden");
@@ -1636,8 +1653,9 @@ function renderWhoInsight() {
           .filter((event) => !activeSources.size || activeSources.has(eventSourceCode(event))),
       }))
       .filter((entry) => entry.events.length)
-      .sort((left, right) => left.doctor.displayName.localeCompare(right.doctor.displayName))
+      .flatMap((entry) => buildWhoAssignments(entry.doctor, entry.events))
     : [];
+  const grouped = groupWhoAssignments(coworkers);
 
   insightsModalTitle.textContent = "Who";
   insightsModalSubtitle.textContent = "Doctors working on the same date as the selected calendar.";
@@ -1653,12 +1671,7 @@ function renderWhoInsight() {
       <p>${mine.length ? escapeHtml(renderInsightShiftSummary(mine)) : "No rostered shifts for this date in the current calendar view."}</p>
     </div>
     ${coworkers.length
-      ? coworkers.map(({ doctor, events }) => `
-        <article class="issue-card">
-          <strong>${escapeHtml(doctor.displayName)}</strong>
-          <p>${escapeHtml(renderInsightShiftSummary(events))}</p>
-        </article>
-      `).join("")
+      ? renderWhoGroups(grouped)
       : `<article class="issue-card"><p>No other doctors are rostered on this date.</p></article>`}
   `;
 }
@@ -1785,9 +1798,216 @@ function indexEventsByDay(events) {
 }
 
 function renderInsightShiftSummary(events) {
-  return events
+  return [...events]
+    .sort(compareInsightEvents)
     .map((event) => `${event.title}${event.allDay || !event.timeLabel ? "" : ` (${event.timeLabel})`}`)
     .join(" | ");
+}
+
+function insightShiftPeriodRank(events) {
+  if (!events?.length) return 99;
+  return Math.min(...events.map(insightEventPeriodRank));
+}
+
+function buildWhoAssignments(doctor, events) {
+  const metadata = doctorMetadataForKey(doctor.key);
+  return dedupeInsightEvents(events)
+    .map((event) => buildWhoAssignment(doctor, metadata, event))
+    .filter(Boolean);
+}
+
+function buildWhoAssignment(doctor, metadata, event) {
+  const source = eventSourceCode(event);
+  const role = metadata[source]?.role || metadata.any?.role || "";
+  const period = whoPeriodLabel(event);
+  const team = whoTeamLabel(event);
+  return {
+    doctorName: doctor.displayName,
+    role,
+    roleLabel: role || "",
+    roleRank: whoRoleRank(role),
+    source,
+    period,
+    team,
+    teamRank: whoTeamRank(team, source),
+    specialTime: whoSpecialTimeLabel(event, period),
+    event,
+  };
+}
+
+function groupWhoAssignments(assignments) {
+  const periods = new Map();
+  for (const assignment of assignments) {
+    if (!periods.has(assignment.period)) periods.set(assignment.period, []);
+    periods.get(assignment.period).push(assignment);
+  }
+  return [...periods.entries()]
+    .map(([period, items]) => ({
+      period,
+      teams: groupWhoTeams(items),
+    }))
+    .sort((left, right) => whoPeriodRank(left.period) - whoPeriodRank(right.period));
+}
+
+function groupWhoTeams(assignments) {
+  const teams = new Map();
+  for (const assignment of assignments) {
+    if (!teams.has(assignment.team)) teams.set(assignment.team, []);
+    teams.get(assignment.team).push(assignment);
+  }
+  return [...teams.entries()]
+    .map(([team, items]) => ({
+      team,
+      items: [...items].sort(compareWhoAssignments),
+    }))
+    .sort((left, right) => {
+      const teamDelta = whoTeamRank(left.team, left.items[0]?.source || "") - whoTeamRank(right.team, right.items[0]?.source || "");
+      if (teamDelta !== 0) return teamDelta;
+      return left.team.localeCompare(right.team);
+    });
+}
+
+function compareWhoAssignments(left, right) {
+  const roleDelta = left.roleRank - right.roleRank;
+  if (roleDelta !== 0) return roleDelta;
+  return left.doctorName.localeCompare(right.doctorName);
+}
+
+function renderWhoGroups(groups) {
+  return groups.map((group) => `
+    <section class="who-period-group">
+      <div class="who-period-divider"><span>${escapeHtml(group.period)}</span></div>
+      ${group.teams.map((team) => `
+        <article class="issue-card who-team-card">
+          <strong class="who-team-title">${escapeHtml(team.team)}</strong>
+          <div class="who-team-list">
+            ${team.items.map((item) => `
+              <div class="who-team-person">
+                <span class="who-team-name">${escapeHtml(item.doctorName)}${item.roleLabel ? ` (${escapeHtml(item.roleLabel)})` : ""}</span>
+                ${item.specialTime ? `<span class="who-team-time">${escapeHtml(item.specialTime)}</span>` : ""}
+              </div>
+            `).join("")}
+          </div>
+        </article>
+      `).join("")}
+    </section>
+  `).join("");
+}
+
+function dedupeInsightEvents(events) {
+  const seen = new Set();
+  const deduped = [];
+  for (const event of [...events].sort(compareInsightEvents)) {
+    const marker = `${event.title}|${event.start}|${event.end}|${event.rawValue || ""}`;
+    if (seen.has(marker)) continue;
+    seen.add(marker);
+    deduped.push(event);
+  }
+  return deduped;
+}
+
+function compareInsightEvents(left, right) {
+  const periodDelta = insightEventPeriodRank(left) - insightEventPeriodRank(right);
+  if (periodDelta !== 0) return periodDelta;
+  const startDelta = String(left.start || "").localeCompare(String(right.start || ""));
+  if (startDelta !== 0) return startDelta;
+  return String(left.title || "").localeCompare(String(right.title || ""));
+}
+
+function insightEventPeriodRank(event) {
+  const text = `${event?.title || ""} ${event?.rawValue || ""}`.toLowerCase();
+  if (text.includes("night")) return 2;
+  if (/\bpm\b/.test(text)) return 1;
+  if (/\bam\b/.test(text)) return 0;
+
+  const clock = extractTimePortion(event?.start || "");
+  if (!clock) return 3;
+  const [hoursText = "0", minutesText = "0"] = clock.split(":");
+  const totalMinutes = Number(hoursText) * 60 + Number(minutesText);
+  if (totalMinutes >= 20 * 60 || totalMinutes < 6 * 60) return 2;
+  if (totalMinutes >= 12 * 60 + 1) return 1;
+  return 0;
+}
+
+function whoPeriodLabel(event) {
+  const text = `${event?.title || ""} ${event?.rawValue || ""}`.toLowerCase();
+  if (text.includes("night")) return "Night";
+  if (/\bpm\b/.test(text)) return "PM";
+  if (/\bam\b/.test(text)) return "AM";
+  const rank = insightEventPeriodRank(event);
+  return rank === 2 ? "Night" : rank === 1 ? "PM" : "AM";
+}
+
+function whoPeriodRank(period) {
+  if (period === "AM") return 0;
+  if (period === "PM") return 1;
+  if (period === "Night") return 2;
+  return 3;
+}
+
+function whoTeamLabel(event) {
+  const text = `${event?.title || ""} ${event?.rawValue || ""}`.toLowerCase();
+  if (text.includes("avao")) return "AVAO";
+  if (text.includes("green")) return "Green";
+  if (text.includes("orange")) return "Orange";
+  if (text.includes("amber")) return "Amber";
+  if (text.includes("silver")) return "Silver";
+  if (text.includes("resus")) return "Resus";
+  if (text.includes("float") || text.includes("rover")) return "Float";
+  if (text.includes("clinic")) return "Clinic";
+  if (text.includes("fast")) return "Fast Track";
+  if (text.includes("ssu")) return "SSU";
+  if (text.includes("hith")) return "HITH";
+  if (text.includes("vhh")) return "VHH";
+  if (text.includes("paed")) return "Paeds";
+  if (text.includes("extra")) return "Extra";
+  return cleanWhoSourceTitle(event.title || "Other");
+}
+
+function cleanWhoSourceTitle(title) {
+  return String(title || "")
+    .replace(/^(MMC|DDH):\s*/i, "")
+    .replace(/\s+(AM|PM)\b/i, "")
+    .trim() || "Other";
+}
+
+function whoTeamRank(team, source) {
+  const normalized = String(team || "").toLowerCase();
+  const sourceCode = String(source || "").toUpperCase();
+  const ranks = sourceCode === "DDH"
+    ? ["avao", "orange", "silver", "resus", "float", "clinic", "fast track", "ssu", "hith", "vhh", "paeds", "extra", "other"]
+    : ["green", "amber", "resus", "float", "clinic", "fast track", "ssu", "other"];
+  const index = ranks.indexOf(normalized);
+  return index >= 0 ? index : ranks.length;
+}
+
+function whoRoleRank(role) {
+  const ranks = {
+    SMS: 0,
+    SR: 1,
+    CMO: 2,
+    IR: 3,
+    JR: 4,
+    HMO: 5,
+    I: 6,
+    ENP: 7,
+    AMP: 8,
+  };
+  return Object.prototype.hasOwnProperty.call(ranks, role) ? ranks[role] : 99;
+}
+
+function whoSpecialTimeLabel(event, period) {
+  if (event.allDay) return "";
+  const start = extractTimePortion(event.start || "");
+  const end = extractTimePortion(event.end || "");
+  if (!start || !end) return "";
+  const source = eventSourceCode(event);
+  const standard = {
+    MMC: { AM: new Set(["07:30", "08:00"]), PM: new Set(["14:30"]), Night: new Set() },
+    DDH: { AM: new Set(["07:30", "08:00"]), PM: new Set(["14:30", "15:00"]), Night: new Set(["23:00"]) },
+  };
+  const standardStarts = standard[source]?.[period] || new Set();
+  return standardStarts.has(start) ? "" : `${start}-${end}`;
 }
 
 function eventSourceCode(event) {
@@ -2488,6 +2708,119 @@ function rosterNameTokens(value) {
     .filter(Boolean);
 }
 
+function doctorMetadataForKey(doctorKey) {
+  if (!doctorRoleIndex) doctorRoleIndex = buildDoctorRoleIndex();
+  return doctorRoleIndex.get(doctorKey) || { any: { role: "" } };
+}
+
+function buildDoctorRoleIndex() {
+  const index = new Map();
+  if (!parsedRosterSources) return index;
+  for (const entry of parsedRosterSources.mmc || []) {
+    collectMmcDoctorRoles(entry.workbook, index);
+  }
+  for (const entry of parsedRosterSources.ddh || []) {
+    collectDdhDoctorRoles(entry.workbook, index);
+  }
+  return index;
+}
+
+function collectMmcDoctorRoles(workbook, index) {
+  const roleMap = new Map([
+    ["SMS", "SMS"],
+    ["CMO", "CMO"],
+    ["SENIOR REG", "SR"],
+    ["INTERMEDIATE REG", "IR"],
+    ["JUNIOR REG", "JR"],
+    ["HMO", "HMO"],
+    ["HMO MUST BE 111", "HMO"],
+    ["HMO - MUST BE 111", "HMO"],
+    ["ENP", "ENP"],
+    ["AMP", "AMP"],
+    ["INTERN", "I"],
+  ]);
+  for (const sheetName of workbook?.SheetNames || []) {
+    if (!String(sheetName).startsWith("Week ")) continue;
+    const sheet = workbook.Sheets[sheetName];
+    const range = decodeSheetRange(sheet);
+    let currentRole = "";
+    for (let row = 1; row <= range.e.r + 1; row += 1) {
+      const marker = cleanSheetCell(sheet, row, 3).replace(/\s+/g, " ").trim().toUpperCase();
+      if (roleMap.has(marker)) currentRole = roleMap.get(marker);
+      const name = cleanSheetCell(sheet, row, 4);
+      if (!looksLikeRosterPerson(name)) continue;
+      assignDoctorRole(index, normalizeRosterName(name), "MMC", currentRole);
+    }
+  }
+}
+
+function collectDdhDoctorRoles(workbook, index) {
+  const sectionMap = new Map([
+    ["SENIOR MEDICAL STAFF", "SMS"],
+    ["SENIOR REGISTRARS", "SR"],
+    ["REGISTRAR", "SR"],
+    ["REGISTRARS", "SR"],
+    ["CMO'S", "CMO"],
+    ["CMOS", "CMO"],
+    ["JUNIOR REGISTRARS", "JR"],
+    ["ED HMO'S", "HMO"],
+    ["HMO'S", "HMO"],
+    ["INTERNS", "I"],
+    ["ENP", "ENP"],
+    ["AMP", "AMP"],
+    ["PHYSIOTHERAPIST", "AMP"],
+    ["PHYSIOTHERAPISTS", "AMP"],
+  ]);
+  const sheet = workbook?.Sheets?.[workbook?.SheetNames?.[0]];
+  if (!sheet) return;
+  const range = decodeSheetRange(sheet);
+  let currentRole = "";
+  for (let row = 1; row <= range.e.r + 1; row += 1) {
+    const value = cleanSheetCell(sheet, row, 1).replace(/\s+/g, " ").trim();
+    if (!value) continue;
+    const upper = value.toUpperCase();
+    if (sectionMap.has(upper)) {
+      currentRole = sectionMap.get(upper);
+      continue;
+    }
+    if (isDdhHmoSectionHeading(upper)) {
+      currentRole = "HMO";
+      continue;
+    }
+    if (!looksLikeRosterPerson(value)) continue;
+    assignDoctorRole(index, normalizeRosterName(value), "DDH", currentRole);
+  }
+}
+
+function assignDoctorRole(index, doctorKey, source, role) {
+  if (!doctorKey) return;
+  if (!index.has(doctorKey)) index.set(doctorKey, { any: { role: "" } });
+  const entry = index.get(doctorKey);
+  if (!entry[source]) entry[source] = { role: "" };
+  if (!entry[source].role && role) entry[source].role = role;
+  if (!entry.any.role && role) entry.any.role = role;
+}
+
+function decodeSheetRange(sheet) {
+  return XLSX.utils.decode_range(sheet?.["!ref"] || "A1:A1");
+}
+
+function cleanSheetCell(sheet, row, col) {
+  const address = XLSX.utils.encode_cell({ r: row - 1, c: col - 1 });
+  return String(sheet?.[address]?.v ?? "").trim();
+}
+
+function looksLikeRosterPerson(value) {
+  const cleaned = String(value || "").trim();
+  if (cleaned.length < 5 || !cleaned.includes(" ") || /^\d/.test(cleaned)) return false;
+  if (/^(WEEK|DATE|HMO|SMS|CMO|ENP|AMP|INTERN|SENIOR|JUNIOR|REGISTRAR|GERIATRICIAN)/i.test(cleaned)) return false;
+  return /[A-Za-z]/.test(cleaned);
+}
+
+function isDdhHmoSectionHeading(value) {
+  return /^ED HMO/i.test(value) || /^HMO\b/i.test(value);
+}
+
 function resetDerivedState() {
   doctorOptions = [];
   detectedSources = {};
@@ -2495,6 +2828,7 @@ function resetDerivedState() {
   overrides = {};
   customEvents = [];
   restoredSessionState = null;
+  doctorRoleIndex = null;
   clearDoctorAnalysisCache();
   closeInsightsModal();
   settings = defaultSettings();
