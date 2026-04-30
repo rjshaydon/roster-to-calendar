@@ -907,18 +907,7 @@ async function analyzeFiles() {
     restoredSessionState = cloudAvailable && restoredSessionState
       ? restoredSessionState
       : workspaceSession;
-    settings = {
-      ...defaultSettings(),
-      ...settings,
-      ...(data.settings || {}),
-      ...(restoredSessionState?.settings || {}),
-    };
-    overrides = sanitizeOverrideState(restoredSessionState?.overrides);
-    customEvents = sanitizeCustomEvents(restoredSessionState?.customEvents, activeCalendarEmail());
-    conflictSelections = {
-      ...loadConflictSelections(),
-      ...(restoredSessionState?.conflictSelections || {}),
-    };
+    applySessionState(restoredSessionState, { inheritedSettings: data.settings || {} });
     renderSettings();
     renderFilesList();
     renderDoctorState();
@@ -4097,6 +4086,8 @@ async function enterDoctorProfileView(doctor) {
   clearPreviewData();
   restoredSessionState = null;
   await restoreDoctorProfileState();
+  applySessionState(restoredSessionState);
+  renderSettings();
   renderDoctorState();
   renderLoginState();
   if (selectedDoctor()) {
@@ -4115,6 +4106,8 @@ async function exitDoctorProfileView() {
   activeDoctorProfile = null;
   clearPreviewData();
   restoredSessionState = loadCurrentSessionState();
+  applySessionState(restoredSessionState);
+  renderSettings();
   renderDoctorState();
   renderLoginState();
   if (selectedDoctor()) {
@@ -4796,6 +4789,24 @@ function saveCurrentSessionState() {
   } catch {
     // Ignore persistence failures for session-only state.
   }
+}
+
+function applySessionState(session, options = {}) {
+  const inheritedSettings = options.inheritedSettings && typeof options.inheritedSettings === "object"
+    ? options.inheritedSettings
+    : {};
+  settings = {
+    ...defaultSettings(),
+    ...settings,
+    ...inheritedSettings,
+    ...(session?.settings || {}),
+  };
+  overrides = sanitizeOverrideState(session?.overrides);
+  customEvents = sanitizeCustomEvents(session?.customEvents, activeCalendarEmail());
+  conflictSelections = {
+    ...loadConflictSelections(),
+    ...(session?.conflictSelections || {}),
+  };
 }
 
 function sanitizeOverrideState(value) {
