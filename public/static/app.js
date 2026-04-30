@@ -187,6 +187,10 @@ let availableRosterDoctors = [];
 let insightsState = null;
 let doctorAnalysisCacheKey = "";
 let doctorAnalysisCache = new Map();
+let undoHistory = [];
+let redoHistory = [];
+let applyingHistory = false;
+let lastHistorySignature = "";
 
 const settingsInputs = Object.fromEntries(
   SETTINGS_FIELDS.map((id) => [id, document.querySelector(`#${id}`)]),
@@ -397,17 +401,33 @@ for (const [key, input] of Object.entries(settingsInputs)) {
       settingsInputs.showNormalizedTitles.checked = true;
     }
     saveCurrentSessionState();
-    if (latestPreview && (key === "dateFrom" || key === "dateTo")) {
+    if (latestPreview && (key === "dateFrom" || key === "dateTo" || key === "hospitalFilter")) {
       rebuildClientPreview();
-      setStatus("Preview range updated.");
+      setStatus(key === "hospitalFilter" ? "Hospital filter updated." : "Preview range updated.");
       return;
     }
-    if (latestPreview && key === "hospitalFilter") {
+    if (latestPreview && [
+      "showSourcePrefix",
+      "showAmPm",
+      "includeAnnualLeave",
+      "includeConferenceLeave",
+      "includePublicHoliday",
+      "includeSickLeave",
+    ].includes(key)) {
       updatePreview();
       return;
     }
-    if (latestPreview && (key === "defaultLocationMmc" || key === "defaultLocationDdh")) {
-      updatePreview();
+    if (latestPreview && ["showTimes", "showRawValues", "showNormalizedTitles"].includes(key)) {
+      rebuildClientPreview();
+      setStatus("Preview display updated.");
+      return;
+    }
+    if (["includeLocations", "defaultLocationMmc", "defaultLocationDdh"].includes(key)) {
+      setStatus(
+        key === "includeLocations"
+          ? "Location export setting updated."
+          : "Default export locations updated.",
+      );
       return;
     }
     if (key.startsWith("shiftColor")) {
@@ -566,6 +586,12 @@ insightsModalBody.addEventListener("change", (event) => {
     renderInsightsModal();
   }
 });
+insightsModalBody.addEventListener("click", async (event) => {
+  const doctorButton = event.target.closest("[data-insights-doctor-key]");
+  if (!doctorButton) return;
+  event.preventDefault();
+  await openDoctorProfileFromInsight(doctorButton.dataset.insightsDoctorKey);
+});
 issuesList.addEventListener("click", (event) => {
   const card = event.target.closest("[data-review-id]");
   if (!card) return;
@@ -645,6 +671,7 @@ reviewModal.addEventListener("click", (event) => {
   }
 });
 document.addEventListener("keydown", (event) => {
+  if (handleHistoryShortcut(event)) return;
   if (event.key === "Escape") {
     closeReviewModal();
     closeCustomEventModal();
@@ -1825,6 +1852,7 @@ function buildWhoAssignment(doctor, metadata, event) {
   const isNightSsu = period === "Night" && rawTeam === "SSU";
   const team = isNightSsu ? "Night" : rawTeam;
   return {
+    doctorKey: doctor.key,
     doctorName: doctor.displayName,
     role,
     roleLabel: role || "",
@@ -1887,7 +1915,7 @@ function renderWhoGroups(groups) {
           <div class="who-team-list">
             ${team.items.map((item) => `
               <div class="who-team-person">
-                <span class="who-team-name">${escapeHtml(item.doctorName)}${item.roleLabel ? ` (${escapeHtml(item.roleLabel)})` : ""}${item.roleNote ? ` (${escapeHtml(item.roleNote)})` : ""}</span>
+                <button type="button" class="who-team-name" data-insights-doctor-key="${escapeHtml(item.doctorKey || "")}" title="Open ${escapeHtml(item.doctorName)}">${escapeHtml(item.doctorName)}${item.roleLabel ? ` (${escapeHtml(item.roleLabel)})` : ""}${item.roleNote ? ` (${escapeHtml(item.roleNote)})` : ""}</button>
                 ${item.specialTime ? `<span class="who-team-time">${escapeHtml(item.specialTime)}</span>` : ""}
               </div>
             `).join("")}
@@ -1896,6 +1924,28 @@ function renderWhoGroups(groups) {
       `).join("")}
     </section>
   `).join("");
+}
+
+async function openDoctorProfileFromInsight(doctorKey) {
+  const normalizedKey = normalizeRosterName(doctorKey);
+  if (!normalizedKey) return;
+  const localOption = doctorOptions.find((doctor) => doctor.key === normalizedKey);
+  if (localOption && doctorOptions.length > 1) {
+    doctorSelect.value = normalizedKey;
+    closeInsightsModal();
+    clearPreviewData();
+    saveCurrentSessionState();
+    syncActionState();
+    await updatePreview({ resetRange: true });
+    return;
+  }
+  const claimedDoctor = availableRosterDoctors.find((doctor) => doctor.key === normalizedKey && doctor.claimedBy);
+  if (isOwnerAccount() && claimedDoctor?.claimedBy && normalizeEmail(claimedDoctor.claimedBy) !== currentUserEmail) {
+    closeInsightsModal();
+    await enterUserAccount(claimedDoctor.claimedBy);
+    return;
+  }
+  setStatus("That doctor is not directly viewable from this account yet.", true);
 }
 
 function dedupeInsightEvents(events) {
@@ -2841,6 +2891,9 @@ function resetDerivedState() {
   customEvents = [];
   restoredSessionState = null;
   doctorRoleIndex = null;
+  undoHistory = [];
+  redoHistory = [];
+  lastHistorySignature = "";
   clearDoctorAnalysisCache();
   closeInsightsModal();
   settings = defaultSettings();
@@ -4498,6 +4551,35 @@ function currentWorkspaceSnapshot() {
   };
 }
 
+function currentHistorySnapshot() {
+  return {
+    doctorKey: doctorOptions.length > 1 ? doctorSelect.value : doctorOptions[0]?.key || "",
+    settings: { ...settings },
+    overrides: cleanOverrides(),
+    customEvents: customEventsForActiveCalendar(),
+    conflictSelections: { ...conflictSelections },
+    hadPreview: Boolean(latestPreview),
+  };
+}
+
+function historySnapshotSignature(snapshot) {
+  return JSON.stringify({
+    ...snapshot,
+    customEvents: sanitizeCustomEvents(snapshot.customEvents || [], activeCalendarEmail()),
+  });
+}
+
+function recordHistorySnapshot() {
+  if (applyingHistory) return;
+  const snapshot = currentHistorySnapshot();
+  const signature = historySnapshotSignature(snapshot);
+  if (signature === lastHistorySignature) return;
+  undoHistory.push(snapshot);
+  if (undoHistory.length > 150) undoHistory.shift();
+  redoHistory = [];
+  lastHistorySignature = signature;
+}
+
 function loadCurrentWorkspace() {
   if (!currentUserEmail) return null;
   const store = loadWorkspaceStore();
@@ -4518,6 +4600,7 @@ function saveCurrentSessionState() {
   try {
     saveCurrentWorkspace();
     scheduleCloudStateSave();
+    recordHistorySnapshot();
   } catch {
     // Ignore persistence failures for session-only state.
   }
@@ -4542,6 +4625,15 @@ function removeCustomEventForActiveCalendar(id) {
   customEvents = customEvents.filter((item) => !(item.id === id && normalizeEmail(item.ownerEmail) === ownerEmail));
 }
 
+function replaceActiveCalendarCustomEvents(items) {
+  const ownerEmail = activeCalendarEmail();
+  const preserved = customEvents.filter((item) => normalizeEmail(item.ownerEmail) !== ownerEmail);
+  customEvents = [
+    ...preserved,
+    ...sanitizeCustomEvents(items, ownerEmail),
+  ];
+}
+
 function sanitizeCustomEvents(items, defaultOwnerEmail = "") {
   if (!Array.isArray(items)) return [];
   const fallbackOwnerEmail = normalizeEmail(defaultOwnerEmail);
@@ -4560,6 +4652,86 @@ function sanitizeCustomEvents(items, defaultOwnerEmail = "") {
       include: item.include !== false,
     }))
     .filter((item) => item.ownerEmail);
+}
+
+async function applyHistorySnapshot(snapshot) {
+  if (!snapshot) return;
+  const previousDoctorKey = selectedDoctor()?.key || "";
+  applyingHistory = true;
+  try {
+    settings = {
+      ...defaultSettings(),
+      ...(snapshot.settings || {}),
+    };
+    overrides = sanitizeOverrideState(snapshot.overrides);
+    replaceActiveCalendarCustomEvents(snapshot.customEvents || []);
+    conflictSelections = {
+      ...loadConflictSelections(),
+      ...(snapshot.conflictSelections || {}),
+    };
+    saveConflictSelections();
+    if (doctorOptions.length > 1 && snapshot.doctorKey && doctorOptions.some((doctor) => doctor.key === snapshot.doctorKey)) {
+      doctorSelect.value = snapshot.doctorKey;
+    }
+    renderSettings();
+    syncActionState();
+    if (!snapshot.hadPreview) {
+      clearPreviewData();
+    } else if ((selectedDoctor()?.key || "") !== previousDoctorKey) {
+      clearPreviewData();
+      await updatePreview({ resetRange: false });
+    } else {
+      rebuildClientPreview();
+    }
+  } finally {
+    applyingHistory = false;
+    lastHistorySignature = historySnapshotSignature(snapshot);
+  }
+}
+
+async function undoHistoryAction() {
+  if (undoHistory.length < 2) return;
+  const current = undoHistory.pop();
+  const previous = undoHistory[undoHistory.length - 1];
+  if (current) redoHistory.push(current);
+  await applyHistorySnapshot(previous);
+  setStatus("Undid the last calendar change.");
+}
+
+async function redoHistoryAction() {
+  if (!redoHistory.length) return;
+  const snapshot = redoHistory.pop();
+  if (!snapshot) return;
+  undoHistory.push(snapshot);
+  await applyHistorySnapshot(snapshot);
+  setStatus("Redid the calendar change.");
+}
+
+function isTextEditingTarget(target) {
+  if (!(target instanceof Element)) return false;
+  return Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
+}
+
+function handleHistoryShortcut(event) {
+  if (isTextEditingTarget(event.target)) return false;
+  const key = event.key.toLowerCase();
+  const metaOrCtrl = event.metaKey || event.ctrlKey;
+  if (!metaOrCtrl || event.altKey) return false;
+  if (key === "z") {
+    event.preventDefault();
+    if (event.shiftKey) {
+      void redoHistoryAction();
+    } else {
+      void undoHistoryAction();
+    }
+    return true;
+  }
+  if (event.ctrlKey && key === "y") {
+    event.preventDefault();
+    void redoHistoryAction();
+    return true;
+  }
+  return false;
 }
 
 const DB_NAME = "roster-converter";

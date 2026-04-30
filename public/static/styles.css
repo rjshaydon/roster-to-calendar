@@ -1331,8 +1331,22 @@ input[type="color"] {
 }
 
 .who-team-name {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-align: left;
   font-weight: 600;
   color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+}
+
+.who-team-name:hover,
+.who-team-name:focus-visible {
+  color: var(--accent);
+  text-decoration: underline;
+  outline: none;
 }
 
 .who-team-time {
