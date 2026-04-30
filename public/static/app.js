@@ -1642,7 +1642,7 @@ function renderInsightsModal() {
 
 function renderWhoInsight() {
   const date = insightsState.date;
-  const mine = selectedDoctorEventsForInsights(date, date).filter(isRosterShiftEvent);
+  const mine = selectedDoctorEventsForInsights(date, date).filter(isRosterShiftEvent).filter((event) => eventRosterDateKey(event) === date);
   const activeSources = new Set(mine.map(eventSourceCode).filter(Boolean));
   const coworkers = mine.length
     ? comparisonDoctorOptions()
@@ -1650,6 +1650,7 @@ function renderWhoInsight() {
         doctor,
         events: comparisonDoctorEvents(doctor.key, date, date)
           .filter(isRosterShiftEvent)
+          .filter((event) => eventRosterDateKey(event) === date)
           .filter((event) => !activeSources.size || activeSources.has(eventSourceCode(event))),
       }))
       .filter((entry) => entry.events.length)
@@ -1820,11 +1821,14 @@ function buildWhoAssignment(doctor, metadata, event) {
   const source = eventSourceCode(event);
   const role = metadata[source]?.role || metadata.any?.role || "";
   const period = whoPeriodLabel(event);
-  const team = whoTeamLabel(event);
+  const rawTeam = whoTeamLabel(event);
+  const isNightSsu = period === "Night" && rawTeam === "SSU";
+  const team = isNightSsu ? "Night" : rawTeam;
   return {
     doctorName: doctor.displayName,
     role,
     roleLabel: role || "",
+    roleNote: isNightSsu ? "SSU" : "",
     roleRank: whoRoleRank(role),
     source,
     period,
@@ -1883,7 +1887,7 @@ function renderWhoGroups(groups) {
           <div class="who-team-list">
             ${team.items.map((item) => `
               <div class="who-team-person">
-                <span class="who-team-name">${escapeHtml(item.doctorName)}${item.roleLabel ? ` (${escapeHtml(item.roleLabel)})` : ""}</span>
+                <span class="who-team-name">${escapeHtml(item.doctorName)}${item.roleLabel ? ` (${escapeHtml(item.roleLabel)})` : ""}${item.roleNote ? ` (${escapeHtml(item.roleNote)})` : ""}</span>
                 ${item.specialTime ? `<span class="who-team-time">${escapeHtml(item.specialTime)}</span>` : ""}
               </div>
             `).join("")}
@@ -2008,6 +2012,11 @@ function whoSpecialTimeLabel(event, period) {
   };
   const standardStarts = standard[source]?.[period] || new Set();
   return standardStarts.has(start) ? "" : `${start}-${end}`;
+}
+
+function eventRosterDateKey(event) {
+  const start = String(event?.start || "");
+  return start.slice(0, 10);
 }
 
 function eventSourceCode(event) {
@@ -2767,7 +2776,10 @@ function collectDdhDoctorRoles(workbook, index) {
     ["HMO'S", "HMO"],
     ["INTERNS", "I"],
     ["ENP", "ENP"],
+    ["NURSE PRACTITIONERS", "ENP"],
+    ["NURSE PRAC. CANDIDATES", "ENP"],
     ["AMP", "AMP"],
+    ["AMP'S", "AMP"],
     ["PHYSIOTHERAPIST", "AMP"],
     ["PHYSIOTHERAPISTS", "AMP"],
   ]);
