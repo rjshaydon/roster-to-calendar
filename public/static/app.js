@@ -96,6 +96,9 @@ const customEventCustomLocation = document.querySelector("#customEventCustomLoca
 const customEventDeleteButton = document.querySelector("#customEventDeleteButton");
 const customEventWhoButton = document.querySelector("#customEventWhoButton");
 const contextMenu = document.querySelector("#contextMenu");
+const switchOverlay = document.querySelector("#switchOverlay");
+const switchOverlayTitle = document.querySelector("#switchOverlayTitle");
+const switchOverlayMessage = document.querySelector("#switchOverlayMessage");
 
 const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const OWNER_EMAIL = "rhaydon@gmail.com";
@@ -2714,6 +2717,20 @@ function canUseDoctorPicker() {
   return isOwnerAccount() && !adminViewingEmail;
 }
 
+function showSwitchOverlay(title, message) {
+  if (!switchOverlay) return;
+  switchOverlayTitle.textContent = title || "Switching…";
+  switchOverlayMessage.textContent = message || "Loading calendar…";
+  switchOverlay.classList.remove("hidden");
+  switchOverlay.setAttribute("aria-hidden", "false");
+}
+
+function hideSwitchOverlay() {
+  if (!switchOverlay) return;
+  switchOverlay.classList.add("hidden");
+  switchOverlay.setAttribute("aria-hidden", "true");
+}
+
 async function switchDoctorSelection(selectedKey, options = {}) {
   const resetRange = options.resetRange !== false;
   doctorSelect.value = selectedKey;
@@ -2723,15 +2740,31 @@ async function switchDoctorSelection(selectedKey, options = {}) {
   }
   const claimedEmail = normalizeEmail(selectedOption?.accountEmail || claimedEmailForDoctorKey(selectedKey, selectedOption?.displayName || ""));
   if (canUseDoctorPicker() && selectedOption && selectedKey !== OWNER_DOCTOR_KEY) {
-    if (claimedEmail && claimedEmail !== currentUserEmail) {
-      await enterUserAccount(claimedEmail);
-    } else {
-      await enterDoctorProfileView(selectedOption);
+    showSwitchOverlay(
+      `Switching to ${selectedOption.displayName}…`,
+      claimedEmail ? "Opening the linked account and rebuilding the calendar." : "Opening the doctor profile and loading saved edits.",
+    );
+  } else if (activeDoctorProfile && selectedKey === OWNER_DOCTOR_KEY) {
+    showSwitchOverlay("Returning to creator…", "Restoring the creator calendar.");
+  }
+  if (canUseDoctorPicker() && selectedOption && selectedKey !== OWNER_DOCTOR_KEY) {
+    try {
+      if (claimedEmail && claimedEmail !== currentUserEmail) {
+        await enterUserAccount(claimedEmail);
+      } else {
+        await enterDoctorProfileView(selectedOption);
+      }
+    } finally {
+      hideSwitchOverlay();
     }
     return;
   }
   if (activeDoctorProfile && selectedKey === OWNER_DOCTOR_KEY) {
-    await exitDoctorProfileView();
+    try {
+      await exitDoctorProfileView();
+    } finally {
+      hideSwitchOverlay();
+    }
     return;
   }
   clearPreviewData();

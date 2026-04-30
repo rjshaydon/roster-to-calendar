@@ -1354,6 +1354,68 @@ input[type="color"] {
   font-size: 0.95rem;
 }
 
+.switch-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+}
+
+.switch-overlay.hidden {
+  display: none;
+}
+
+.switch-overlay-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(247, 243, 236, 0.72);
+  backdrop-filter: blur(6px);
+}
+
+.switch-overlay-panel {
+  position: relative;
+  width: min(420px, calc(100vw - 32px));
+  padding: 22px 22px 20px;
+  border-radius: 26px;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(25, 51, 89, 0.12);
+  box-shadow: 0 24px 56px rgba(18, 33, 52, 0.18);
+  display: grid;
+  gap: 10px;
+}
+
+.switch-overlay-panel strong {
+  font-size: 1.1rem;
+  color: var(--ink);
+}
+
+.switch-overlay-panel p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.switch-overlay-progress {
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(98, 92, 230, 0.12);
+}
+
+.switch-overlay-bar {
+  display: block;
+  width: 42%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #4c49df, #7b64ff);
+  animation: switchOverlaySlide 1.1s ease-in-out infinite;
+}
+
+@keyframes switchOverlaySlide {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(260%); }
+}
+
 .modal-actions {
   display: flex;
   flex-wrap: wrap;
