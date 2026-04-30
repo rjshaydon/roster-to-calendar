@@ -175,6 +175,7 @@ let currentUserRole = currentUserEmail === OWNER_EMAIL ? "creator" : "user";
 let authUserEmail = currentUserEmail;
 let authUserPassword = currentUserPassword;
 let adminViewingEmail = "";
+let activeDoctorProfile = null;
 let currentSkin = loadSkin();
 let cloudAvailable = false;
 let cloudSaveTimer = 0;
@@ -354,6 +355,10 @@ logoutButton.addEventListener("click", () => {
   logoutCurrentUser();
 });
 backToCreatorButton.addEventListener("click", () => {
+  if (activeDoctorProfile) {
+    exitDoctorProfileView();
+    return;
+  }
   returnToCreatorAccount();
 });
 skinSelect.addEventListener("change", () => {
@@ -369,12 +374,16 @@ doctorSelect.addEventListener("change", async () => {
     await loadServerUsers();
   }
   const claimedEmail = normalizeEmail(selectedOption?.accountEmail || claimedEmailForDoctorKey(selectedKey, selectedOption?.displayName || ""));
-  if (
-    canUseDoctorPicker()
-    && claimedEmail
-    && claimedEmail !== currentUserEmail
-  ) {
-    await enterUserAccount(claimedEmail);
+  if (canUseDoctorPicker() && selectedOption && selectedKey !== OWNER_DOCTOR_KEY) {
+    if (claimedEmail && claimedEmail !== currentUserEmail) {
+      await enterUserAccount(claimedEmail);
+    } else {
+      await enterDoctorProfileView(selectedOption);
+    }
+    return;
+  }
+  if (activeDoctorProfile && selectedKey === OWNER_DOCTOR_KEY) {
+    await exitDoctorProfileView();
     return;
   }
   clearPreviewData();
@@ -1070,7 +1079,7 @@ function renderDoctorState() {
       option.textContent = doctor.displayName;
       doctorSelect.append(option);
     }
-    const preferredDoctorKey = preferredDoctorKeyForCurrentAccount();
+    const preferredDoctorKey = activeDoctorProfile?.doctorKey || preferredDoctorKeyForCurrentAccount();
     if (preferredDoctorKey && doctorOptions.some((doctor) => doctor.key === preferredDoctorKey)) {
       doctorSelect.value = preferredDoctorKey;
     } else if (restoredSessionState?.doctorKey && doctorOptions.some((doctor) => doctor.key === restoredSessionState.doctorKey)) {
@@ -1951,18 +1960,22 @@ async function openDoctorProfileFromInsight(doctorKey) {
     if (canUseDoctorPicker() && cloudAvailable && !serverUsers.length) {
       await loadServerUsers();
     }
-    const claimedEmail = claimedEmailForDoctorKey(normalizedKey, localOption.displayName || "");
+    const claimedEmail = normalizeEmail(localOption.accountEmail || claimedEmailForDoctorKey(normalizedKey, localOption.displayName || ""));
     if (canUseDoctorPicker() && claimedEmail && claimedEmail !== currentUserEmail) {
       closeInsightsModal();
       await enterUserAccount(claimedEmail);
       return;
     }
-    doctorSelect.value = normalizedKey;
     closeInsightsModal();
-    clearPreviewData();
-    saveCurrentSessionState();
-    syncActionState();
-    await updatePreview({ resetRange: true });
+    if (canUseDoctorPicker()) {
+      await enterDoctorProfileView(localOption);
+    } else {
+      doctorSelect.value = normalizedKey;
+      clearPreviewData();
+      saveCurrentSessionState();
+      syncActionState();
+      await updatePreview({ resetRange: true });
+    }
     return;
   }
   const claimedEmail = claimedEmailForDoctorKey(normalizedKey);
@@ -2700,7 +2713,7 @@ function selectedDoctor() {
 }
 
 function preferredDoctorKeyForCurrentAccount() {
-  if (currentUserEmail === OWNER_EMAIL && !adminViewingEmail) return OWNER_DOCTOR_KEY;
+  if (currentUserEmail === OWNER_EMAIL && !adminViewingEmail && !activeDoctorProfile) return OWNER_DOCTOR_KEY;
   return "";
 }
 
@@ -2731,6 +2744,21 @@ function claimedEmailForDoctorKey(doctorKey, displayName = "") {
 
 function canUseDoctorPicker() {
   return isOwnerAccount() && !adminViewingEmail;
+}
+
+function activeWorkspaceOwnerKey() {
+  if (activeDoctorProfile?.id) return `profile:${activeDoctorProfile.id}`;
+  return normalizeEmail(currentUserEmail);
+}
+
+function activeCalendarOwnerId() {
+  return activeDoctorProfile?.ownerId || normalizeEmail(currentUserEmail);
+}
+
+function buildDoctorProfileId(doctor) {
+  const key = normalizeRosterName(doctor?.key || "");
+  const sources = [...new Set((Array.isArray(doctor?.sourceTypes) ? doctor.sourceTypes : []).map((item) => String(item || "").toLowerCase()).filter(Boolean))].sort();
+  return key && sources.length ? `${key}::${sources.join("+")}` : "";
 }
 
 function doctorOptionsForCurrentAccount(doctors) {
@@ -2951,6 +2979,7 @@ function resetDerivedState() {
   customEvents = [];
   restoredSessionState = null;
   doctorRoleIndex = null;
+  activeDoctorProfile = null;
   undoHistory = [];
   redoHistory = [];
   lastHistorySignature = "";
@@ -4034,6 +4063,7 @@ async function enterUserAccount(email) {
   authUserEmail = creatorEmail;
   authUserPassword = creatorPassword;
   adminViewingEmail = targetEmail;
+  activeDoctorProfile = null;
   currentUserEmail = targetEmail;
   currentUserPassword = creatorPassword;
   currentUserRole = targetEmail === OWNER_EMAIL ? "creator" : "user";
@@ -4045,12 +4075,60 @@ async function enterUserAccount(email) {
   renderLoginState();
 }
 
+async function enterDoctorProfileView(doctor) {
+  if (!isOwnerAccount()) return;
+  const profileId = buildDoctorProfileId(doctor);
+  if (!profileId) return;
+  try {
+    await flushCloudStateSave().catch(() => {});
+    cancelScheduledCloudStateSave();
+    await saveCloudState();
+  } catch {
+    // Local state is still preserved.
+  }
+  activeDoctorProfile = {
+    id: profileId,
+    ownerId: `doctor-profile:${profileId}`,
+    doctorKey: doctor.key,
+    displayName: doctor.displayName,
+    sourceTypes: Array.isArray(doctor.sourceTypes) ? [...doctor.sourceTypes] : [],
+  };
+  setStatus(`Opening ${doctor.displayName}...`);
+  clearPreviewData();
+  restoredSessionState = null;
+  await restoreDoctorProfileState();
+  renderDoctorState();
+  renderLoginState();
+  if (selectedDoctor()) {
+    await updatePreview({ resetRange: false });
+  }
+}
+
+async function exitDoctorProfileView() {
+  try {
+    await flushCloudStateSave().catch(() => {});
+    cancelScheduledCloudStateSave();
+    await saveCloudState();
+  } catch {
+    // Keep local state even if cloud save fails.
+  }
+  activeDoctorProfile = null;
+  clearPreviewData();
+  restoredSessionState = loadCurrentSessionState();
+  renderDoctorState();
+  renderLoginState();
+  if (selectedDoctor()) {
+    await updatePreview({ resetRange: false });
+  }
+}
+
 async function returnToCreatorAccount() {
   const creatorEmail = authUserEmail || OWNER_EMAIL;
   const creatorPassword = authUserPassword || currentUserPassword;
   await flushCloudStateSave().catch(() => {});
   cancelScheduledCloudStateSave();
   adminViewingEmail = "";
+  activeDoctorProfile = null;
   currentUserEmail = creatorEmail;
   currentUserPassword = creatorPassword;
   currentUserRole = "creator";
@@ -4259,11 +4337,15 @@ function renderLoginState() {
   if (!loggedIn) mobileActionBar.classList.add("hidden");
   const me = currentAccount();
   const displayName = me.realName ? `${me.realName} · ` : "";
-  const viewingText = adminViewingEmail ? `Viewing as ${displayName}${currentUserEmail}` : `${displayName}${currentUserEmail}`;
+  const viewingText = activeDoctorProfile
+    ? `Viewing as ${activeDoctorProfile.displayName} · doctor profile`
+    : adminViewingEmail
+      ? `Viewing as ${displayName}${currentUserEmail}`
+      : `${displayName}${currentUserEmail}`;
   loginIdentity.textContent = loggedIn
     ? `${viewingText} · ${currentUserRole === "creator" ? "Creator" : "Standard account"}${cloudAvailable ? " · Cloud sync on" : " · Cloud sync required"}`
     : "";
-  backToCreatorButton.classList.toggle("hidden", !adminViewingEmail || !isCreatorAuthenticated());
+  backToCreatorButton.classList.toggle("hidden", (!adminViewingEmail && !activeDoctorProfile) || !isCreatorAuthenticated());
   syncAccountsButton();
   syncSkinControl();
 }
@@ -4345,6 +4427,25 @@ async function restoreCloudState(options = {}) {
     setStatus(message, true);
     setEntranceStatus(message, true);
   }
+}
+
+async function restoreDoctorProfileState() {
+  if (!activeDoctorProfile || !cloudAvailable) {
+    restoredSessionState = loadCurrentSessionState();
+    return;
+  }
+  const response = await fetch("/api/state", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      action: "loadDoctorProfile",
+      email: authUserEmail || currentUserEmail,
+      password: authUserPassword || currentUserPassword,
+      profileId: activeDoctorProfile.id,
+    }),
+  });
+  const data = await readJsonResponse(response, "Doctor profile load failed.");
+  restoredSessionState = data.profile?.state?.session || loadCurrentSessionState() || null;
 }
 
 async function applyCloudStateData(data) {
@@ -4429,6 +4530,16 @@ async function flushCloudStateSave() {
 }
 
 function snapshotCloudSavePayload() {
+  if (activeDoctorProfile) {
+    return {
+      accountEmail: currentUserEmail,
+      requestEmail: authUserEmail || currentUserEmail,
+      requestPassword: authUserPassword || currentUserPassword,
+      doctorProfile: { ...activeDoctorProfile },
+      imports: [],
+      session: buildActiveSessionState(),
+    };
+  }
   return {
     accountEmail: currentUserEmail,
     requestEmail: adminViewingEmail ? authUserEmail : currentUserEmail,
@@ -4442,6 +4553,25 @@ function snapshotCloudSavePayload() {
 async function saveCloudState(snapshot = null) {
   const payload = snapshot || snapshotCloudSavePayload();
   if (!payload.accountEmail || !payload.requestEmail || !payload.requestPassword || !cloudAvailable) return;
+  if (payload.doctorProfile) {
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "saveDoctorProfile",
+        email: payload.requestEmail,
+        password: payload.requestPassword,
+        profileId: payload.doctorProfile.id,
+        doctorKey: payload.doctorProfile.doctorKey,
+        displayName: payload.doctorProfile.displayName,
+        sourceTypes: payload.doctorProfile.sourceTypes,
+        state: { version: 1, imports: [], session: payload.session },
+      }),
+    });
+    await readJsonResponse(response, "Doctor profile save failed.");
+    renderLoginState();
+    return;
+  }
   const state = await buildCloudState(payload.imports, payload.session);
   const response = await fetch("/api/state", {
     method: "POST",
@@ -4641,14 +4771,16 @@ function recordHistorySnapshot() {
 }
 
 function loadCurrentWorkspace() {
-  if (!currentUserEmail) return null;
+  const key = activeWorkspaceOwnerKey();
+  if (!key) return null;
   const store = loadWorkspaceStore();
-  return store[currentUserEmail] || null;
+  return store[key] || null;
 }
 
 function saveCurrentWorkspace() {
-  if (!currentUserEmail) return;
-  saveWorkspaceSnapshotForEmail(currentUserEmail, currentWorkspaceSnapshot());
+  const key = activeWorkspaceOwnerKey();
+  if (!key) return;
+  saveWorkspaceSnapshotForEmail(key, currentWorkspaceSnapshot());
 }
 
 function loadCurrentSessionState() {
@@ -4672,7 +4804,7 @@ function sanitizeOverrideState(value) {
 }
 
 function activeCalendarEmail() {
-  return normalizeEmail(currentUserEmail);
+  return activeCalendarOwnerId();
 }
 
 function customEventsForActiveCalendar() {

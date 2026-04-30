@@ -3,6 +3,7 @@ import { inspectImportRecord, normalizeRosterName } from "../_lib/roster.js";
 const CREATOR_EMAIL = "rhaydon@gmail.com";
 const REPOSITORY_INDEX_KEY = "repository:index";
 const REPOSITORY_FILE_PREFIX = "repository:file:";
+const DOCTOR_PROFILE_PREFIX = "doctor-profile:";
 
 export async function onRequestGet(context) {
   return Response.json({ error: "Use POST for account requests." }, { status: 405 });
@@ -175,6 +176,51 @@ export async function onRequestPost(context) {
       return Response.json({ ok: true, role: targetRole, claims });
     }
 
+    if (action === "loadDoctorProfile") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      const profileId = String(body?.profileId || "").trim();
+      if (!profileId) {
+        return Response.json({ error: "Doctor profile is required." }, { status: 400 });
+      }
+      return Response.json({
+        ok: true,
+        cloudAvailable: true,
+        profile: await loadDoctorProfileRecord(context.env.ROSTER_STORE, profileId),
+      });
+    }
+
+    if (action === "saveDoctorProfile") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      const profileId = String(body?.profileId || "").trim();
+      const doctorKey = normalizeRosterName(body?.doctorKey || "");
+      const displayName = String(body?.displayName || "").trim();
+      const sourceTypes = sanitizeSourceTypes(body?.sourceTypes);
+      const state = sanitizeState(body?.state);
+      if (!profileId || !doctorKey || !displayName || !sourceTypes.length) {
+        return Response.json({ error: "Doctor profile details are incomplete." }, { status: 400 });
+      }
+      if (!hasDoctorProfileState(state)) {
+        await context.env.ROSTER_STORE.delete(doctorProfileKey(profileId));
+        return Response.json({ ok: true, deleted: true });
+      }
+      const existing = await loadDoctorProfileRecord(context.env.ROSTER_STORE, profileId);
+      const next = {
+        profileId,
+        doctorKey,
+        displayName,
+        sourceTypes,
+        state,
+        createdAt: existing?.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      await context.env.ROSTER_STORE.put(doctorProfileKey(profileId), JSON.stringify(next));
+      return Response.json({ ok: true, profile: next });
+    }
+
     return Response.json({ error: "Unsupported account action." }, { status: 400 });
   } catch (error) {
     const message = error.message || "Account request failed.";
@@ -192,6 +238,11 @@ async function loadAccountRecord(store, email) {
     throw new Error("Account not found.");
   }
   return record;
+}
+
+async function loadDoctorProfileRecord(store, profileId) {
+  if (!profileId) return null;
+  return sanitizeDoctorProfile(await store.get(doctorProfileKey(profileId), "json").catch(() => null));
 }
 
 function normalizeEmail(value) {
@@ -329,6 +380,7 @@ async function prepareAccountResponse(store, record) {
       ...state,
       imports: await repositoryImportsForClaims(store, index, claims),
     };
+    state = await mergeLinkedDoctorProfiles(store, state, claims, record.email);
     if (nameMatches.length || JSON.stringify(claims) !== JSON.stringify(sanitizeClaims(record.claims))) {
       await store.put(storageKey(record.email), JSON.stringify({
         ...record,
@@ -517,6 +569,10 @@ function repositoryFileKey(id) {
   return `${REPOSITORY_FILE_PREFIX}${id}`;
 }
 
+function doctorProfileKey(profileId) {
+  return `${DOCTOR_PROFILE_PREFIX}${profileId}`;
+}
+
 function repositoryImportRef(item) {
   return {
     repoId: item.repoId || item.repositoryId || item.id,
@@ -566,6 +622,50 @@ async function repositoryImportsForClaims(store, index, claims) {
     if (hasClaim) refs.push(repositoryImportRef(file));
   }
   return resolveStateImports(store, refs);
+}
+
+async function mergeLinkedDoctorProfiles(store, state, claims, ownerEmail = "") {
+  const profileResult = await store.list({ prefix: DOCTOR_PROFILE_PREFIX });
+  if (!(profileResult.keys || []).length) return state;
+  const claimSourcesByKey = new Map();
+  for (const claim of sanitizeClaims(claims)) {
+    if (!claimSourcesByKey.has(claim.key)) claimSourcesByKey.set(claim.key, new Set());
+    claimSourcesByKey.get(claim.key).add(claim.sourceType);
+  }
+  const session = state?.session && typeof state.session === "object" ? { ...state.session } : {};
+  const mergedOverrides = { ...(session.overrides && typeof session.overrides === "object" ? session.overrides : {}) };
+  const mergedConflictSelections = { ...(session.conflictSelections && typeof session.conflictSelections === "object" ? session.conflictSelections : {}) };
+  const mergedCustomEvents = Array.isArray(session.customEvents) ? [...session.customEvents] : [];
+
+  for (const item of profileResult.keys || []) {
+    const profile = sanitizeDoctorProfile(await store.get(item.name, "json").catch(() => null));
+    if (!profile) continue;
+    const allowedSources = claimSourcesByKey.get(profile.doctorKey);
+    if (!allowedSources) continue;
+    if (!profile.sourceTypes.every((sourceType) => allowedSources.has(sourceType))) continue;
+    const profileSession = profile.state?.session && typeof profile.state.session === "object" ? profile.state.session : {};
+    Object.assign(mergedOverrides, profileSession.overrides && typeof profileSession.overrides === "object" ? profileSession.overrides : {});
+    Object.assign(mergedConflictSelections, profileSession.conflictSelections && typeof profileSession.conflictSelections === "object" ? profileSession.conflictSelections : {});
+    for (const event of Array.isArray(profileSession.customEvents) ? profileSession.customEvents : []) {
+      const reassigned = {
+        ...event,
+        ownerEmail: normalizeEmail(ownerEmail || event.ownerEmail || ""),
+      };
+      if (!mergedCustomEvents.some((existing) => existing.id === reassigned.id)) {
+        mergedCustomEvents.push(reassigned);
+      }
+    }
+  }
+
+  return {
+    ...state,
+    session: {
+      ...session,
+      overrides: mergedOverrides,
+      conflictSelections: mergedConflictSelections,
+      customEvents: mergedCustomEvents,
+    },
+  };
 }
 
 function matchRepositoryClaims(index, realName) {
@@ -660,6 +760,37 @@ function sanitizeClaims(claims) {
       matchedAt: String(claim?.matchedAt || ""),
     }))
     .filter((claim) => claim.key && claim.displayName && (claim.sourceType === "mmc" || claim.sourceType === "ddh"));
+}
+
+function sanitizeSourceTypes(items) {
+  if (!Array.isArray(items)) return [];
+  return [...new Set(items.map((item) => String(item || "").toLowerCase()).filter((item) => item === "mmc" || item === "ddh"))];
+}
+
+function sanitizeDoctorProfile(value) {
+  if (!value || typeof value !== "object") return null;
+  const profileId = String(value.profileId || "").trim();
+  const doctorKey = normalizeRosterName(value.doctorKey || "");
+  const displayName = String(value.displayName || "").trim();
+  const sourceTypes = sanitizeSourceTypes(value.sourceTypes);
+  if (!profileId || !doctorKey || !displayName || !sourceTypes.length) return null;
+  return {
+    profileId,
+    doctorKey,
+    displayName,
+    sourceTypes,
+    state: sanitizeState(value.state),
+    createdAt: String(value.createdAt || ""),
+    updatedAt: String(value.updatedAt || ""),
+  };
+}
+
+function hasDoctorProfileState(state) {
+  const session = state?.session && typeof state.session === "object" ? state.session : {};
+  const overrides = session.overrides && typeof session.overrides === "object" ? session.overrides : {};
+  const conflictSelections = session.conflictSelections && typeof session.conflictSelections === "object" ? session.conflictSelections : {};
+  const customEvents = Array.isArray(session.customEvents) ? session.customEvents : [];
+  return Boolean(Object.keys(overrides).length || Object.keys(conflictSelections).length || customEvents.length);
 }
 
 function mergeClaims(existing, incoming) {
