@@ -368,28 +368,7 @@ skinSelect.addEventListener("change", () => {
 });
 
 doctorSelect.addEventListener("change", async () => {
-  const selectedKey = doctorSelect.value;
-  const selectedOption = doctorOptions.find((doctor) => doctor.key === selectedKey) || null;
-  if (canUseDoctorPicker() && cloudAvailable && !serverUsers.length) {
-    await loadServerUsers();
-  }
-  const claimedEmail = normalizeEmail(selectedOption?.accountEmail || claimedEmailForDoctorKey(selectedKey, selectedOption?.displayName || ""));
-  if (canUseDoctorPicker() && selectedOption && selectedKey !== OWNER_DOCTOR_KEY) {
-    if (claimedEmail && claimedEmail !== currentUserEmail) {
-      await enterUserAccount(claimedEmail);
-    } else {
-      await enterDoctorProfileView(selectedOption);
-    }
-    return;
-  }
-  if (activeDoctorProfile && selectedKey === OWNER_DOCTOR_KEY) {
-    await exitDoctorProfileView();
-    return;
-  }
-  clearPreviewData();
-  saveCurrentSessionState();
-  syncActionState();
-  if (selectedDoctor()) await updatePreview({ resetRange: true });
+  await switchDoctorSelection(doctorSelect.value, { resetRange: true });
 });
 
 claimDoctorSelect.addEventListener("change", () => {
@@ -541,7 +520,11 @@ preview.addEventListener("click", (event) => {
   }
   const backTrigger = event.target.closest("[data-preview-back-to-creator]");
   if (backTrigger) {
-    returnToCreatorAccount();
+    if (activeDoctorProfile) {
+      exitDoctorProfileView();
+    } else {
+      returnToCreatorAccount();
+    }
     return;
   }
   const rangeTrigger = event.target.closest("[data-range-trigger]");
@@ -576,11 +559,7 @@ preview.addEventListener("pointerdown", (event) => {
 preview.addEventListener("change", (event) => {
   const doctorPicker = event.target.closest("[data-preview-doctor-select]");
   if (doctorPicker) {
-    doctorSelect.value = doctorPicker.value;
-    clearPreviewData();
-    saveCurrentSessionState();
-    syncActionState();
-    updatePreview();
+    void switchDoctorSelection(doctorPicker.value, { resetRange: true });
     return;
   }
 
@@ -2733,6 +2712,32 @@ function claimedEmailForDoctorKey(doctorKey, displayName = "") {
 
 function canUseDoctorPicker() {
   return isOwnerAccount() && !adminViewingEmail;
+}
+
+async function switchDoctorSelection(selectedKey, options = {}) {
+  const resetRange = options.resetRange !== false;
+  doctorSelect.value = selectedKey;
+  const selectedOption = doctorOptions.find((doctor) => doctor.key === selectedKey) || null;
+  if (canUseDoctorPicker() && cloudAvailable && !serverUsers.length) {
+    await loadServerUsers();
+  }
+  const claimedEmail = normalizeEmail(selectedOption?.accountEmail || claimedEmailForDoctorKey(selectedKey, selectedOption?.displayName || ""));
+  if (canUseDoctorPicker() && selectedOption && selectedKey !== OWNER_DOCTOR_KEY) {
+    if (claimedEmail && claimedEmail !== currentUserEmail) {
+      await enterUserAccount(claimedEmail);
+    } else {
+      await enterDoctorProfileView(selectedOption);
+    }
+    return;
+  }
+  if (activeDoctorProfile && selectedKey === OWNER_DOCTOR_KEY) {
+    await exitDoctorProfileView();
+    return;
+  }
+  clearPreviewData();
+  saveCurrentSessionState();
+  syncActionState();
+  if (selectedDoctor()) await updatePreview({ resetRange });
 }
 
 function activeWorkspaceOwnerKey() {
