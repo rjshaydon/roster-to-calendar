@@ -364,10 +364,11 @@ skinSelect.addEventListener("change", () => {
 
 doctorSelect.addEventListener("change", async () => {
   const selectedKey = doctorSelect.value;
+  const selectedOption = doctorOptions.find((doctor) => doctor.key === selectedKey) || null;
   if (canUseDoctorPicker() && cloudAvailable && !serverUsers.length) {
     await loadServerUsers();
   }
-  const claimedEmail = claimedEmailForDoctorKey(selectedKey);
+  const claimedEmail = claimedEmailForDoctorKey(selectedKey, selectedOption?.displayName || "");
   if (
     canUseDoctorPicker()
     && claimedEmail
@@ -1944,6 +1945,15 @@ async function openDoctorProfileFromInsight(doctorKey) {
   if (!normalizedKey) return;
   const localOption = doctorOptions.find((doctor) => doctor.key === normalizedKey);
   if (localOption && doctorOptions.length > 1) {
+    if (canUseDoctorPicker() && cloudAvailable && !serverUsers.length) {
+      await loadServerUsers();
+    }
+    const claimedEmail = claimedEmailForDoctorKey(normalizedKey, localOption.displayName || "");
+    if (canUseDoctorPicker() && claimedEmail && claimedEmail !== currentUserEmail) {
+      closeInsightsModal();
+      await enterUserAccount(claimedEmail);
+      return;
+    }
     doctorSelect.value = normalizedKey;
     closeInsightsModal();
     clearPreviewData();
@@ -1952,10 +1962,10 @@ async function openDoctorProfileFromInsight(doctorKey) {
     await updatePreview({ resetRange: true });
     return;
   }
-  const claimedDoctor = availableRosterDoctors.find((doctor) => doctor.key === normalizedKey && doctor.claimedBy);
-  if (isOwnerAccount() && claimedDoctor?.claimedBy && normalizeEmail(claimedDoctor.claimedBy) !== currentUserEmail) {
+  const claimedEmail = claimedEmailForDoctorKey(normalizedKey);
+  if (isOwnerAccount() && claimedEmail && claimedEmail !== currentUserEmail) {
     closeInsightsModal();
-    await enterUserAccount(claimedDoctor.claimedBy);
+    await enterUserAccount(claimedEmail);
     return;
   }
   setStatus("That doctor is not directly viewable from this account yet.", true);
@@ -2691,13 +2701,25 @@ function preferredDoctorKeyForCurrentAccount() {
   return "";
 }
 
-function claimedEmailForDoctorKey(doctorKey) {
+function claimedEmailForDoctorKey(doctorKey, displayName = "") {
   const normalizedKey = normalizeRosterName(doctorKey);
+  const normalizedDisplayName = String(displayName || "").trim();
   if (!normalizedKey) return "";
   for (const user of serverUsers) {
     const claims = sanitizeRosterClaims(user?.claims || []);
     if (claims.some((claim) => claim.key === normalizedKey)) {
       return normalizeEmail(user.email);
+    }
+  }
+  if (normalizedDisplayName) {
+    for (const user of serverUsers) {
+      const claims = sanitizeRosterClaims(user?.claims || []);
+      if (claims.some((claim) => likelySameRosterName(claim.displayName, normalizedDisplayName))) {
+        return normalizeEmail(user.email);
+      }
+      if (likelySameRosterName(user?.realName || "", normalizedDisplayName)) {
+        return normalizeEmail(user.email);
+      }
     }
   }
   const claimedDoctor = availableRosterDoctors.find((doctor) => doctor.key === normalizedKey && doctor.claimedBy);
