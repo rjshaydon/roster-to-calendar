@@ -364,6 +364,9 @@ skinSelect.addEventListener("change", () => {
 
 doctorSelect.addEventListener("change", async () => {
   const selectedKey = doctorSelect.value;
+  if (canUseDoctorPicker() && cloudAvailable && !serverUsers.length) {
+    await loadServerUsers();
+  }
   const claimedEmail = claimedEmailForDoctorKey(selectedKey);
   if (
     canUseDoctorPicker()
@@ -2691,6 +2694,12 @@ function preferredDoctorKeyForCurrentAccount() {
 function claimedEmailForDoctorKey(doctorKey) {
   const normalizedKey = normalizeRosterName(doctorKey);
   if (!normalizedKey) return "";
+  for (const user of serverUsers) {
+    const claims = sanitizeRosterClaims(user?.claims || []);
+    if (claims.some((claim) => claim.key === normalizedKey)) {
+      return normalizeEmail(user.email);
+    }
+  }
   const claimedDoctor = availableRosterDoctors.find((doctor) => doctor.key === normalizedKey && doctor.claimedBy);
   return normalizeEmail(claimedDoctor?.claimedBy || "");
 }
