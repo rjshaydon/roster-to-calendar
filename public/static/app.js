@@ -368,7 +368,7 @@ doctorSelect.addEventListener("change", async () => {
   if (canUseDoctorPicker() && cloudAvailable && !serverUsers.length) {
     await loadServerUsers();
   }
-  const claimedEmail = claimedEmailForDoctorKey(selectedKey, selectedOption?.displayName || "");
+  const claimedEmail = normalizeEmail(selectedOption?.accountEmail || claimedEmailForDoctorKey(selectedKey, selectedOption?.displayName || ""));
   if (
     canUseDoctorPicker()
     && claimedEmail
@@ -884,6 +884,9 @@ async function analyzeFiles() {
   mobileActionBar.classList.remove("hidden");
   setStatus("Detecting roster sources and consultants...");
   try {
+    if (canUseDoctorPicker() && cloudAvailable && !serverUsers.length) {
+      await loadServerUsers();
+    }
     const data = await analyzeFilesInBrowser();
     doctorOptions = doctorOptionsForCurrentAccount(data.doctors || []);
     detectedSources = summarizeDetectedSources(data.imports || []);
@@ -2735,7 +2738,7 @@ function doctorOptionsForCurrentAccount(doctors) {
     ...doctor,
     sourceTypes: Array.isArray(doctor.sourceTypes) ? doctor.sourceTypes : [],
   }));
-  if (canUseDoctorPicker()) return prioritizeDoctorOptions(options);
+  if (canUseDoctorPicker()) return buildCreatorDoctorOptions(options);
   const matches = options.filter((doctor) => doctorMatchesCurrentAccount(doctor));
   if (!matches.length) return [];
   const aliases = matches.flatMap((doctor) => {
@@ -2753,6 +2756,15 @@ function doctorOptionsForCurrentAccount(doctors) {
     aliases: dedupeDoctorAliases(aliases),
     sourceTypes: [...new Set(aliases.map((alias) => alias.sourceType))],
   }];
+}
+
+function buildCreatorDoctorOptions(options) {
+  return prioritizeDoctorOptions(
+    options.map((doctor) => ({
+      ...doctor,
+      accountEmail: claimedEmailForDoctorKey(doctor.key, doctor.displayName),
+    })),
+  );
 }
 
 function prioritizeDoctorOptions(options) {
