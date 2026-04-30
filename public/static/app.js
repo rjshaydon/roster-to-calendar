@@ -363,6 +363,16 @@ skinSelect.addEventListener("change", () => {
 });
 
 doctorSelect.addEventListener("change", async () => {
+  const selectedKey = doctorSelect.value;
+  const claimedEmail = claimedEmailForDoctorKey(selectedKey);
+  if (
+    canUseDoctorPicker()
+    && claimedEmail
+    && claimedEmail !== currentUserEmail
+  ) {
+    await enterUserAccount(claimedEmail);
+    return;
+  }
   clearPreviewData();
   saveCurrentSessionState();
   syncActionState();
@@ -2676,6 +2686,13 @@ function selectedDoctor() {
 function preferredDoctorKeyForCurrentAccount() {
   if (currentUserEmail === OWNER_EMAIL && !adminViewingEmail) return OWNER_DOCTOR_KEY;
   return "";
+}
+
+function claimedEmailForDoctorKey(doctorKey) {
+  const normalizedKey = normalizeRosterName(doctorKey);
+  if (!normalizedKey) return "";
+  const claimedDoctor = availableRosterDoctors.find((doctor) => doctor.key === normalizedKey && doctor.claimedBy);
+  return normalizeEmail(claimedDoctor?.claimedBy || "");
 }
 
 function canUseDoctorPicker() {
