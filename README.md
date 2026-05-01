@@ -79,4 +79,4 @@ npm run deploy
 - Creator storage is unrestricted.
 - Standard accounts are prompted to keep only the latest 6 months active.
 - Cross-device persistence requires the `ROSTER_STORE` KV binding above.
-- Claimed accounts can expose a tokenized subscription feed at `/api/feed?token=...`, which Apple Calendar or Google Calendar can subscribe to as a read-only `.ics` URL.
+- Accounts with saved roster data can expose a tokenized subscription feed at `/api/feed?token=...`, which Apple Calendar or Google Calendar can subscribe to as a read-only `.ics` URL.

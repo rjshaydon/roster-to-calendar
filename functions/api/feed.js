@@ -27,21 +27,20 @@ export async function onRequestGet(context) {
     }
 
     const prepared = await prepareAccountResponse(context.env.ROSTER_STORE, record);
-    if (!prepared.subscription?.enabled || !prepared.claims?.length) {
-      return new Response("No claimed roster names are linked to this subscription.", { status: 404 });
+    if (!prepared.subscription?.enabled) {
+      return new Response("No subscription calendar is available for this account yet.", { status: 404 });
     }
 
+    const session = prepared.state?.session && typeof prepared.state.session === "object" ? prepared.state.session : {};
     const aliases = prepared.claims.map((claim) => ({
       key: claim.key,
       displayName: claim.displayName,
       sourceType: claim.sourceType,
     }));
-    const doctorKey = aliases[0]?.key || "";
+    const doctorKey = String(session.doctorKey || aliases[0]?.key || "").trim();
     if (!doctorKey) {
-      return new Response("No claimed doctor selection is available for this subscription.", { status: 404 });
+      return new Response("No doctor selection is available for this subscription.", { status: 404 });
     }
-
-    const session = prepared.state?.session && typeof prepared.state.session === "object" ? prepared.state.session : {};
     const settings = session.settings && typeof session.settings === "object" ? session.settings : {};
     const overrides = session.overrides && typeof session.overrides === "object" ? session.overrides : {};
     const conflictSelections = session.conflictSelections && typeof session.conflictSelections === "object" ? session.conflictSelections : {};
@@ -64,7 +63,7 @@ export async function onRequestGet(context) {
       return left.title.localeCompare(right.title);
     });
 
-    const displayName = prepared.realName || aliases[0]?.displayName || record.email;
+    const displayName = prepared.realName || aliases.find((claim) => claim.key === doctorKey)?.displayName || record.email;
     const ics = exportIcs(events, displayName);
     return new Response(ics, {
       status: 200,

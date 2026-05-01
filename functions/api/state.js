@@ -429,7 +429,7 @@ export async function prepareAccountResponse(store, rawRecord) {
     availableDoctors: await repositoryDoctorCandidates(store, index),
     subscription: {
       token: String(record.subscriptionToken || ""),
-      enabled: claims.length > 0,
+      enabled: claims.length > 0 || ((role === "creator" || role === "owner") && Array.isArray(state.imports) && state.imports.length > 0 && Boolean(state.session?.doctorKey)),
     },
   };
 }

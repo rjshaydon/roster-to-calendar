@@ -24,8 +24,6 @@ const entrancePanels = [...document.querySelectorAll("[data-entrance-panel]")];
 const fileInput = document.querySelector("#rosterFiles");
 const dropZone = document.querySelector("#dropZone");
 const chooseFilesButton = document.querySelector("#chooseFilesButton");
-const fmsUrlInput = document.querySelector("#fmsUrlInput");
-const fmsUrlButton = document.querySelector("#fmsUrlButton");
 const filesButton = document.querySelector("#filesButton");
 const accountsButton = document.querySelector("#accountsButton");
 const filesModal = document.querySelector("#filesModal");
@@ -210,17 +208,6 @@ chooseFilesButton.addEventListener("click", (event) => {
   event.preventDefault();
   event.stopPropagation();
   fileInput.click();
-});
-
-fmsUrlButton.addEventListener("click", (event) => {
-  event.preventDefault();
-  event.stopPropagation();
-  const value = fmsUrlInput.value.trim();
-  if (!value) {
-    setStatus("Paste a FindMyShift webcal:// first.", true);
-    return;
-  }
-  setStatus("FindMyShift URL subscriptions are not active yet. Please upload a FindMyShift export for now.", true);
 });
 
 dropZone.addEventListener("click", (event) => {
@@ -3931,7 +3918,7 @@ function renderSubscriptionCard() {
       <div class="issue-card subscription-card">
         <div>
           <strong>Calendar subscription</strong>
-          <p>Subscription links will appear once this account is linked to at least one roster name.</p>
+          <p>Subscription links will appear once this account has a saved doctor selection and roster data.</p>
         </div>
       </div>
     `;
@@ -3940,7 +3927,7 @@ function renderSubscriptionCard() {
     <div class="issue-card subscription-card">
       <div>
         <strong>Calendar subscription</strong>
-        <p>Subscribe in Apple Calendar or Google Calendar using one of these claimed-account links.</p>
+        <p>Subscribe in Apple Calendar or Google Calendar using one of these account links.</p>
       </div>
       <label class="field">
         <span>HTTPS feed</span>
