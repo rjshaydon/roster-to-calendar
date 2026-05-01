@@ -335,6 +335,13 @@ export async function onRequestPost(context) {
       return Response.json({ ok: true, imports });
     }
 
+    if (action === "loadInsightImports") {
+      const index = await loadRepositoryIndex(context.env.ROSTER_STORE);
+      const refs = (index.files || []).filter((file) => file.active !== false).map((file) => repositoryImportRef(file));
+      const imports = await resolveStateImports(context.env.ROSTER_STORE, refs);
+      return Response.json({ ok: true, imports });
+    }
+
     return Response.json({ error: "Unsupported account action." }, { status: 400 });
   } catch (error) {
     const message = error.message || "Account request failed.";

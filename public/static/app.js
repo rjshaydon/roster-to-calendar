@@ -959,9 +959,20 @@ async function analyzeFilesInBrowser() {
 
 async function parseCurrentRosterForm(doctor = null) {
   await ensureSelectedFilesLoaded();
+  return await parseRosterEntries(selectedFiles, doctor);
+}
+
+async function parseRosterEntries(entries, doctor = null) {
+  const normalizedEntries = Array.isArray(entries) ? entries : [];
+  if (!normalizedEntries.length) {
+    throw new Error("Add a roster file to begin.");
+  }
+  if (normalizedEntries.some((entry) => !entry.file)) {
+    throw new Error("Roster files are not loaded yet.");
+  }
   return await parseUploadForm(new Request(`${window.location.origin}/browser-roster-parse`, {
     method: "POST",
-    body: createFormData(doctor),
+    body: createFormDataForEntries(normalizedEntries, doctor),
   }));
 }
 
@@ -1785,7 +1796,26 @@ async function ensureInsightRosterAnalysis() {
   if (parsedRosterSources && (parsedRosterSources.mmc?.length || parsedRosterSources.ddh?.length)) return;
   if (!selectedFiles.length) return;
   await ensureSelectedFilesLoaded();
-  const parsed = await parseCurrentRosterForm(null);
+  let parsed = await parseCurrentRosterForm(null);
+  const comparisonOptions = rosterDoctorOptions(parsed.sources?.mmc || [], parsed.sources?.ddh || []);
+  if (comparisonOptions.length <= 1 && cloudAvailable) {
+    const requestEmail = adminViewingEmail ? authUserEmail || currentUserEmail : currentUserEmail;
+    const requestPassword = adminViewingEmail ? authUserPassword || currentUserPassword : currentUserPassword;
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "loadInsightImports",
+        email: requestEmail,
+        password: requestPassword,
+      }),
+    });
+    const data = await readJsonResponse(response, "Could not load comparison rosters.");
+    const entries = await deserializeCloudImports(data.imports || []);
+    if (entries.length) {
+      parsed = await parseRosterEntries(entries, null);
+    }
+  }
   parsedRosterSources = parsed.sources;
   parsedImportDoctors = doctorsByImportId(parsed.sources);
 }
@@ -2324,8 +2354,12 @@ function syncActionState() {
 }
 
 function createFormData(doctor = null) {
+  return createFormDataForEntries(selectedFiles, doctor);
+}
+
+function createFormDataForEntries(entries, doctor = null) {
   const body = new FormData();
-  for (const entry of selectedFiles) {
+  for (const entry of entries) {
     if (!entry.file) continue;
     body.append("rosterFiles", entry.file);
     body.append("rosterFileId", entry.id);
