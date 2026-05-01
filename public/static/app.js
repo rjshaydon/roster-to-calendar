@@ -56,6 +56,9 @@ const currentDayPreview = document.querySelector("#currentDayPreview");
 const exportButton = document.querySelector("#exportButton");
 const mobileExportButton = document.querySelector("#mobileExportButton");
 const mobileSettingsButton = document.querySelector("#mobileSettingsButton");
+const exportModal = document.querySelector("#exportModal");
+const exportCloseButton = document.querySelector("#exportCloseButton");
+const exportModalBody = document.querySelector("#exportModalBody");
 const doctorSection = document.querySelector("#doctorSection");
 const doctorSelect = document.querySelector("#doctorSelect");
 const doctorName = document.querySelector("#doctorName");
@@ -194,6 +197,7 @@ let undoHistory = [];
 let redoHistory = [];
 let applyingHistory = false;
 let lastHistorySignature = "";
+let pendingExportVariant = "full";
 
 const settingsInputs = Object.fromEntries(
   SETTINGS_FIELDS.map((id) => [id, document.querySelector(`#${id}`)]),
@@ -261,6 +265,23 @@ filesButton.addEventListener("click", openFilesModal);
 filesCloseButton.addEventListener("click", closeFilesModal);
 filesModal.addEventListener("click", (event) => {
   if (event.target.matches("[data-close-files]")) closeFilesModal();
+});
+exportButton.addEventListener("click", openExportModal);
+mobileExportButton.addEventListener("click", openExportModal);
+exportCloseButton.addEventListener("click", closeExportModal);
+exportModal.addEventListener("click", (event) => {
+  if (event.target.matches("[data-close-export]")) closeExportModal();
+});
+exportModalBody.addEventListener("click", async (event) => {
+  const variantButton = event.target.closest("[data-export-variant]");
+  if (variantButton) {
+    setPendingExportVariant(variantButton.dataset.exportVariant || "full");
+    renderExportModal();
+    return;
+  }
+  const actionButton = event.target.closest("[data-export-action]");
+  if (!actionButton) return;
+  await handleExportAction(actionButton.dataset.exportAction || "");
 });
 filesList.addEventListener("click", async (event) => {
   const removeButton = event.target.closest("[data-remove-import]");
@@ -675,6 +696,7 @@ document.addEventListener("keydown", (event) => {
     closeCustomEventModal();
     closeContextMenu();
     closeFilesModal();
+    closeExportModal();
     closeAccountsModal();
     closeInsightsModal();
     settingsPanel.classList.add("hidden");
@@ -751,36 +773,6 @@ customEventForm.addEventListener("submit", (event) => {
   closeCustomEventModal();
   rebuildClientPreview();
   saveCurrentSessionState();
-});
-
-form.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  if (!selectedFiles.length) {
-    setStatus("Add at least one roster file first.", true);
-    return;
-  }
-  const doctor = selectedDoctor();
-  if (!doctor) {
-    setStatus("Choose a doctor before exporting.", true);
-    return;
-  }
-
-  setStatus("Building calendar file...");
-  try {
-    const ics = await buildBrowserIcs(doctor);
-    const payload = new Blob([ics], { type: "text/calendar; charset=utf-8" });
-    const url = URL.createObjectURL(payload);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${doctor.displayName} roster.ics`;
-    document.body.append(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
-    setStatus("Calendar file ready.");
-  } catch (error) {
-    setStatus(error.message, true);
-  }
 });
 
 function defaultSettings() {
@@ -1163,11 +1155,17 @@ async function buildBrowserPreviewData(doctor) {
   if (![...requestedKeys].some((key) => validDoctors.has(key))) {
     throw new Error("The selected doctor was not found in the uploaded roster files.");
   }
+  const baseSettings = {
+    ...settings,
+    hospitalFilter: "all",
+    dateFrom: "",
+    dateTo: "",
+  };
   const view = buildRosterView(
     parsedRosterSources.mmc,
     parsedRosterSources.ddh,
     doctor.key,
-    settings,
+    baseSettings,
     overrides,
     conflictSelections,
     doctor.aliases || [],
@@ -1198,44 +1196,22 @@ function rebuildClientPreview() {
 }
 
 function buildClientPreviewData(baseData) {
+  const events = buildFilteredPreviewEvents(baseData, settings);
   const baseEvents = new Map((baseData.events || []).map((event) => [event.id, { ...event }]));
   const range = deriveRangeBounds(baseData.events || []);
-  const events = [];
   const deletedItems = [];
   const hospitals = availableHospitalsForPreview(baseData.events || []);
   if (settings.hospitalFilter === "all" || hospitals.length > availablePreviewHospitals.length) {
     availablePreviewHospitals = hospitals;
   }
 
-  for (const item of reviewIndex.values()) {
-    const event = baseEvents.get(item.id);
-    if (!event) continue;
-    const override = overrides[item.id] || {};
-    const include = typeof override.include === "boolean" ? override.include : item.include;
-    if (!include) {
-      deletedItems.push({
-        ...item,
-        status: "deleted",
-        message: "Deleted from preview/export. Open to restore or edit.",
-      });
-      continue;
-    }
-    events.push(buildEventOverridePatch(event, item, override));
-  }
-
-  for (const event of customEventsForActiveCalendar()) {
-    events.push(customEventToPreviewEvent(event));
-  }
-
   const previewStart = settings.dateFrom || range.start;
   const previewEnd = settings.dateTo || range.end;
-  const visibleEvents = filterEventsByPreviewRange(events, previewStart, previewEnd);
-  visibleEvents.sort(comparePreviewEvents);
   return {
     ...baseData,
-    events: visibleEvents,
-    count: visibleEvents.length,
-    date_range: formatPreviewRange(previewStart, previewEnd) || (visibleEvents.length ? summarizeEvents(visibleEvents) : "No events found"),
+    events,
+    count: events.length,
+    date_range: formatPreviewRange(previewStart, previewEnd) || (events.length ? summarizeEvents(events) : "No events found"),
     previewStart,
     previewEnd,
     hospitals: availablePreviewHospitals,
@@ -1252,6 +1228,29 @@ function buildClientPreviewData(baseData) {
   };
 }
 
+function buildFilteredPreviewEvents(baseData, filterSettings) {
+  const baseEvents = new Map((baseData.events || []).map((event) => [event.id, { ...event }]));
+  const range = deriveRangeBounds(baseData.events || []);
+  const events = [];
+  for (const item of reviewIndex.values()) {
+    const event = baseEvents.get(item.id);
+    if (!event) continue;
+    const override = overrides[item.id] || {};
+    const include = typeof override.include === "boolean" ? override.include : item.include;
+    if (!include) continue;
+    events.push(buildEventOverridePatch(event, item, override));
+  }
+  for (const event of customEventsForActiveCalendar()) {
+    events.push(customEventToPreviewEvent(event));
+  }
+  const previewStart = filterSettings.dateFrom || range.start;
+  const previewEnd = filterSettings.dateTo || range.end;
+  const visibleEvents = filterEventsByPreviewRange(events, previewStart, previewEnd)
+    .filter((event) => matchesPreviewHospitalFilter(event, filterSettings.hospitalFilter));
+  visibleEvents.sort(comparePreviewEvents);
+  return visibleEvents;
+}
+
 function availableHospitalsForPreview(events) {
   const codes = new Set();
   for (const event of events || []) {
@@ -1265,33 +1264,46 @@ function availableHospitalsForPreview(events) {
 }
 
 async function buildBrowserIcs(doctor) {
+  const events = await buildBrowserExportEvents(doctor, "full");
+  if (!events.length) {
+    throw new Error("No calendar events were found for the selected doctor.");
+  }
+  return exportIcs(events, doctor.displayName);
+}
+
+async function ensureBasePreviewData(doctor) {
+  if (!doctor) throw new Error("Choose a doctor before exporting.");
   if (!parsedRosterSources) {
     const data = await analyzeFilesInBrowser();
     doctorOptions = doctorOptionsForCurrentAccount(data.doctors || []);
   }
-  const doctors = rosterDoctorOptions(parsedRosterSources.mmc, parsedRosterSources.ddh);
-  const requestedKeys = new Set([doctor.key, ...(doctor.aliases || []).map((alias) => alias.key)].filter(Boolean));
-  const selectedDoctor = doctors.find((item) => requestedKeys.has(item.key));
-  if (!selectedDoctor) {
-    throw new Error("The selected doctor was not found in the uploaded roster files.");
+  const selected = selectedDoctor();
+  if (!latestPreview || selected?.key !== doctor.key) {
+    const data = await buildBrowserPreviewData(doctor);
+    latestPreview = data;
+    indexReviewItems(data.review || []);
   }
-  const rosterEvents = applyEventOverrides(
-    buildRosterView(
-      parsedRosterSources.mmc,
-      parsedRosterSources.ddh,
-      doctor.key,
-      settings,
-      overrides,
-      conflictSelections,
-      doctor.aliases || [],
-    ).events,
-    overrides,
-  );
-  const events = [...rosterEvents, ...customEventsToEvents(customEventsForActiveCalendar(), settings)].sort(comparePreviewEvents);
-  if (!events.length) {
-    throw new Error("No calendar events were found for the selected doctor.");
-  }
-  return exportIcs(events, doctor.displayName || selectedDoctor.displayName);
+  return latestPreview;
+}
+
+function exportSettingsForVariant(variant = "full") {
+  if (variant === "filtered") return { ...settings };
+  return {
+    ...settings,
+    hospitalFilter: "all",
+    dateFrom: "",
+    dateTo: "",
+  };
+}
+
+function buildExportEventsFromBase(baseData, variant = "full") {
+  const viewSettings = exportSettingsForVariant(variant);
+  return buildFilteredPreviewEvents(baseData, viewSettings);
+}
+
+async function buildBrowserExportEvents(doctor, variant = "full") {
+  const baseData = await ensureBasePreviewData(doctor);
+  return buildExportEventsFromBase(baseData, variant);
 }
 
 function enforceSixMonthLimit(view) {
@@ -3673,6 +3685,122 @@ function closeFilesModal() {
   filesModal.setAttribute("aria-hidden", "true");
 }
 
+function openExportModal() {
+  if (!selectedFiles.length) {
+    setStatus("Add at least one roster file first.", true);
+    return;
+  }
+  if (!selectedDoctor()) {
+    setStatus("Choose a doctor before exporting.", true);
+    return;
+  }
+  setPendingExportVariant(hasActiveExportFilters() ? "filtered" : "full");
+  renderExportModal();
+  exportModal.classList.remove("hidden");
+  exportModal.setAttribute("aria-hidden", "false");
+}
+
+function closeExportModal() {
+  exportModal.classList.add("hidden");
+  exportModal.setAttribute("aria-hidden", "true");
+  exportModalBody.innerHTML = "";
+}
+
+function setPendingExportVariant(variant) {
+  pendingExportVariant = variant === "filtered" ? "filtered" : "full";
+}
+
+function renderExportModal() {
+  const doctor = selectedDoctor();
+  const canSubscribe = Boolean(currentSubscription?.enabled && !activeDoctorProfile);
+  const filtersActive = hasActiveExportFilters();
+  exportModalBody.innerHTML = `
+    <article class="review-card">
+      <div class="review-top">
+        <div>
+          <strong>${escapeHtml(doctor?.displayName || "Selected doctor")}</strong>
+          <span>${filtersActive ? "Choose which calendar scope to export." : "Subscription and file export options."}</span>
+        </div>
+      </div>
+      ${filtersActive ? `
+        <div class="export-variant-picker">
+          <button type="button" class="button ${pendingExportVariant === "full" ? "button-primary" : "button-secondary"}" data-export-variant="full">Use complete calendar</button>
+          <button type="button" class="button ${pendingExportVariant === "filtered" ? "button-primary" : "button-secondary"}" data-export-variant="filtered">Use current filtered view</button>
+        </div>
+      ` : ""}
+      <div class="export-actions-grid">
+        <button type="button" class="button button-primary" data-export-action="download">Save as .ics file</button>
+        <button type="button" class="button button-secondary" data-export-action="apple" ${canSubscribe ? "" : "disabled"}>Open in Apple Calendar</button>
+        <button type="button" class="button button-secondary" data-export-action="copy" ${canSubscribe ? "" : "disabled"}>Copy URL</button>
+      </div>
+      ${canSubscribe ? "" : `<p class="status">Subscription links are available only for claimed user accounts and the creator account, not unclaimed doctor profiles.</p>`}
+    </article>
+  `;
+}
+
+async function handleExportAction(action) {
+  const doctor = selectedDoctor();
+  if (!doctor) {
+    setStatus("Choose a doctor before exporting.", true);
+    return;
+  }
+  const variant = pendingExportVariant === "filtered" ? "filtered" : "full";
+  try {
+    if (action === "download") {
+      setStatus("Building calendar file...");
+      const ics = exportIcs(await buildBrowserExportEvents(doctor, variant), doctor.displayName);
+      downloadIcs(ics, `${doctor.displayName} roster.ics`);
+      closeExportModal();
+      setStatus("Calendar file ready.");
+      return;
+    }
+    if (!currentSubscription?.enabled || activeDoctorProfile) {
+      setStatus("Subscription links are not available for this calendar.", true);
+      return;
+    }
+    setStatus("Saving subscription feed...");
+    await flushCloudStateSave();
+    const protocol = action === "apple" ? "webcal" : "https";
+    const url = subscriptionUrl(protocol, variant);
+    if (!url) {
+      throw new Error("No subscription link is available for this account yet.");
+    }
+    if (action === "copy") {
+      await navigator.clipboard.writeText(url);
+      closeExportModal();
+      setStatus("Subscription URL copied.");
+      return;
+    }
+    closeExportModal();
+    window.location.href = url;
+    setStatus("Opening Apple Calendar subscription...");
+  } catch (error) {
+    setStatus(error.message || "Export failed.", true);
+  }
+}
+
+function downloadIcs(ics, filename) {
+  const payload = new Blob([ics], { type: "text/calendar; charset=utf-8" });
+  const url = URL.createObjectURL(payload);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function hasActiveExportFilters() {
+  if (settings.hospitalFilter && settings.hospitalFilter !== "all") return true;
+  if (!latestPreview?.events?.length) return false;
+  const range = deriveRangeBounds(latestPreview.events);
+  return Boolean(
+    (settings.dateFrom && range.start && settings.dateFrom !== range.start)
+    || (settings.dateTo && range.end && settings.dateTo !== range.end),
+  );
+}
+
 function closeAccountsModal() {
   accountsModal.classList.add("hidden");
   accountsModal.setAttribute("aria-hidden", "true");
@@ -3910,8 +4038,8 @@ function renderLinkedRosterNames(claims) {
 function renderSubscriptionCard() {
   if (activeDoctorProfile) return "";
   if (!currentSubscription?.token) return "";
-  const httpsUrl = subscriptionUrl("https");
-  const webcalUrl = subscriptionUrl("webcal");
+  const httpsUrl = subscriptionUrl("https", "full");
+  const webcalUrl = subscriptionUrl("webcal", "full");
   if (!httpsUrl || !webcalUrl) return "";
   if (!currentSubscription.enabled) {
     return `
@@ -3945,10 +4073,11 @@ function renderSubscriptionCard() {
   `;
 }
 
-function subscriptionUrl(protocol = "https") {
+function subscriptionUrl(protocol = "https", view = "full") {
   if (!currentSubscription?.token) return "";
   const url = new URL("/api/feed", window.location.origin);
   url.searchParams.set("token", currentSubscription.token);
+  url.searchParams.set("view", view === "filtered" ? "filtered" : "full");
   if (protocol === "webcal") {
     return url.toString().replace(/^https?:/i, "webcal:");
   }
@@ -3956,7 +4085,7 @@ function subscriptionUrl(protocol = "https") {
 }
 
 async function copySubscriptionLink(kind = "https") {
-  const url = subscriptionUrl(kind === "webcal" ? "webcal" : "https");
+  const url = subscriptionUrl(kind === "webcal" ? "webcal" : "https", "full");
   if (!url) {
     setStatus("No subscription link is available for this account yet.", true);
     return;
@@ -4716,6 +4845,7 @@ async function buildCloudState(imports = selectedFiles, session = buildActiveSes
     version: 1,
     imports: await serializeCloudImports(imports),
     session,
+    subscriptionFeeds: await buildSubscriptionFeeds(),
   };
 }
 
@@ -4728,6 +4858,31 @@ function buildActiveSessionState() {
     conflictSelections: { ...conflictSelections },
     hadPreview: Boolean(latestPreview),
     savedAt: new Date().toISOString(),
+  };
+}
+
+async function buildSubscriptionFeeds() {
+  if (activeDoctorProfile) return {};
+  const doctor = selectedDoctor();
+  if (!doctor || !selectedFiles.length) return {};
+  const fullEvents = await buildBrowserExportEvents(doctor, "full").catch(() => []);
+  const filteredEvents = hasActiveExportFilters()
+    ? await buildBrowserExportEvents(doctor, "filtered").catch(() => [])
+    : fullEvents;
+  if (!fullEvents.length && !filteredEvents.length) return {};
+  return {
+    full: fullEvents.length ? {
+      doctorKey: doctor.key,
+      doctorDisplay: doctor.displayName,
+      generatedAt: new Date().toISOString(),
+      ics: exportIcs(fullEvents, doctor.displayName),
+    } : null,
+    filtered: filteredEvents.length ? {
+      doctorKey: doctor.key,
+      doctorDisplay: doctor.displayName,
+      generatedAt: new Date().toISOString(),
+      ics: exportIcs(filteredEvents, doctor.displayName),
+    } : null,
   };
 }
 

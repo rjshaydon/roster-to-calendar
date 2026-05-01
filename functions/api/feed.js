@@ -1,13 +1,4 @@
-import {
-  applyEventOverrides,
-  buildRosterViewFromStoredImports,
-  customEventsToEvents,
-  exportIcs,
-} from "../_lib/roster.js";
-import {
-  loadAccountBySubscriptionToken,
-  prepareAccountResponse,
-} from "./state.js";
+import { loadAccountBySubscriptionToken, prepareAccountResponse } from "./state.js";
 
 export async function onRequestGet(context) {
   try {
@@ -17,6 +8,7 @@ export async function onRequestGet(context) {
 
     const url = new URL(context.request.url);
     const token = String(url.searchParams.get("token") || "").trim();
+    const view = String(url.searchParams.get("view") || "full").trim() === "filtered" ? "filtered" : "full";
     if (!token) {
       return new Response("Subscription token is required.", { status: 400 });
     }
@@ -27,45 +19,13 @@ export async function onRequestGet(context) {
     }
 
     const prepared = await prepareAccountResponse(context.env.ROSTER_STORE, record);
-    if (!prepared.subscription?.enabled) {
-      return new Response("No subscription calendar is available for this account yet.", { status: 404 });
+    const artifact = prepared.state?.subscriptionFeeds?.[view] || null;
+    if (!prepared.subscription?.enabled || !artifact?.ics) {
+      return new Response("No stored subscription calendar is available for this view.", { status: 404 });
     }
 
-    const session = prepared.state?.session && typeof prepared.state.session === "object" ? prepared.state.session : {};
-    const aliases = prepared.claims.map((claim) => ({
-      key: claim.key,
-      displayName: claim.displayName,
-      sourceType: claim.sourceType,
-    }));
-    const doctorKey = String(session.doctorKey || aliases[0]?.key || "").trim();
-    if (!doctorKey) {
-      return new Response("No doctor selection is available for this subscription.", { status: 404 });
-    }
-    const settings = session.settings && typeof session.settings === "object" ? session.settings : {};
-    const overrides = session.overrides && typeof session.overrides === "object" ? session.overrides : {};
-    const conflictSelections = session.conflictSelections && typeof session.conflictSelections === "object" ? session.conflictSelections : {};
-    const customEvents = Array.isArray(session.customEvents) ? session.customEvents : [];
-
-    const rosterView = await buildRosterViewFromStoredImports(
-      prepared.state?.imports || [],
-      doctorKey,
-      settings,
-      overrides,
-      conflictSelections,
-      aliases,
-    );
-    const rosterEvents = applyEventOverrides(rosterView.events, overrides);
-    const events = [...rosterEvents, ...customEventsToEvents(customEvents, settings)].sort((left, right) => {
-      const leftDate = left.start.slice(0, 10);
-      const rightDate = right.start.slice(0, 10);
-      if (leftDate !== rightDate) return leftDate.localeCompare(rightDate);
-      if (left.allDay !== right.allDay) return left.allDay ? -1 : 1;
-      return left.title.localeCompare(right.title);
-    });
-
-    const displayName = prepared.realName || aliases.find((claim) => claim.key === doctorKey)?.displayName || record.email;
-    const ics = exportIcs(events, displayName);
-    return new Response(ics, {
+    const displayName = artifact.doctorDisplay || prepared.realName || record.email;
+    return new Response(artifact.ics, {
       status: 200,
       headers: {
         "Content-Type": "text/calendar; charset=utf-8",

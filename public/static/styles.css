@@ -1278,6 +1278,22 @@ input[type="color"] {
   padding-right: 4px;
 }
 
+.export-variant-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 10px 0 18px;
+}
+
+.export-actions-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.subscription-card input[readonly] {
+  cursor: text;
+}
+
 .who-period-group {
   display: grid;
   gap: 12px;

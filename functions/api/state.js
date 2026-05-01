@@ -429,7 +429,7 @@ export async function prepareAccountResponse(store, rawRecord) {
     availableDoctors: await repositoryDoctorCandidates(store, index),
     subscription: {
       token: String(record.subscriptionToken || ""),
-      enabled: claims.length > 0 || ((role === "creator" || role === "owner") && Array.isArray(state.imports) && state.imports.length > 0 && Boolean(state.session?.doctorKey)),
+      enabled: Boolean(state.subscriptionFeeds?.full?.ics),
     },
   };
 }
@@ -912,5 +912,22 @@ function sanitizeState(value) {
     version: 1,
     imports: Array.isArray(input.imports) ? input.imports : [],
     session: input.session && typeof input.session === "object" ? input.session : {},
+    subscriptionFeeds: sanitizeSubscriptionFeeds(input.subscriptionFeeds),
   };
+}
+
+function sanitizeSubscriptionFeeds(value) {
+  if (!value || typeof value !== "object") return {};
+  const next = {};
+  for (const key of ["full", "filtered"]) {
+    const item = value[key];
+    if (!item || typeof item !== "object" || typeof item.ics !== "string" || !item.ics.trim()) continue;
+    next[key] = {
+      doctorKey: normalizeRosterName(item.doctorKey || ""),
+      doctorDisplay: String(item.doctorDisplay || "").trim(),
+      generatedAt: String(item.generatedAt || ""),
+      ics: String(item.ics || ""),
+    };
+  }
+  return next;
 }

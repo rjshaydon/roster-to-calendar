@@ -103,7 +103,7 @@
 
           <div id="controlBar" class="control-bar hidden">
             <div class="control-bar-main">
-              <button id="exportButton" type="submit" class="button button-primary" disabled>Export .ics</button>
+              <button id="exportButton" type="button" class="button button-primary" disabled>Export options</button>
               <button id="filesButton" type="button" class="button button-secondary">Files</button>
               <span class="control-bar-spacer" aria-hidden="true"></span>
               <button id="accountsButton" type="button" class="button button-secondary">Accounts</button>
@@ -249,8 +249,20 @@
     </main>
 
     <div id="mobileActionBar" class="mobile-action-bar hidden">
-      <button id="mobileExportButton" type="button" class="button button-primary" disabled>Export .ics</button>
+      <button id="mobileExportButton" type="button" class="button button-primary" disabled>Export options</button>
       <button id="mobileSettingsButton" type="button" class="button button-secondary">Settings</button>
+    </div>
+
+    <div id="exportModal" class="modal hidden" aria-hidden="true">
+      <div class="modal-backdrop" data-close-export></div>
+      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="exportModalTitle">
+        <button type="button" class="modal-close" id="exportCloseButton" aria-label="Close export options">×</button>
+        <div class="section-head">
+          <h3 id="exportModalTitle">Export options</h3>
+          <p>Save a file, open an Apple Calendar subscription, or copy a subscription URL.</p>
+        </div>
+        <div id="exportModalBody" class="modal-body"></div>
+      </section>
     </div>
 
     <div id="filesModal" class="modal hidden" aria-hidden="true">
