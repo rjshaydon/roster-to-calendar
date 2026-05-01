@@ -8,7 +8,7 @@ export async function onRequestGet(context) {
 
     const url = new URL(context.request.url);
     const token = String(url.searchParams.get("token") || "").trim();
-    const view = String(url.searchParams.get("view") || "full").trim() === "filtered" ? "filtered" : "full";
+    const view = String(url.searchParams.get("view") || "full").trim() === "range" ? "range" : "full";
     if (!token) {
       return new Response("Subscription token is required.", { status: 400 });
     }

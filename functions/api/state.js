@@ -153,10 +153,12 @@ export async function onRequestPost(context) {
         return Response.json({ ok: true, ignored: true });
       }
       const message = String(body?.message || "").trim();
+      const errorId = String(body?.errorId || "").trim();
       if (!message) {
         return Response.json({ error: "Error message is required." }, { status: 400 });
       }
       const nextIssues = mergeAdminIssues(targetRecord.adminIssues, [{
+        id: errorId,
         message,
         firstSeenAt: new Date().toISOString(),
         lastSeenAt: new Date().toISOString(),
@@ -967,12 +969,15 @@ function sanitizeState(value) {
 function sanitizeSubscriptionFeeds(value) {
   if (!value || typeof value !== "object") return {};
   const next = {};
-  for (const key of ["full", "filtered"]) {
+  for (const key of ["full", "range"]) {
     const item = value[key];
     if (!item || typeof item !== "object" || typeof item.ics !== "string" || !item.ics.trim()) continue;
     next[key] = {
       doctorKey: normalizeRosterName(item.doctorKey || ""),
       doctorDisplay: String(item.doctorDisplay || "").trim(),
+      startDate: String(item.startDate || "").trim(),
+      endDate: String(item.endDate || "").trim(),
+      allFuture: item.allFuture !== false,
       generatedAt: String(item.generatedAt || ""),
       ics: String(item.ics || ""),
     };
@@ -1001,10 +1006,10 @@ function sanitizeAdminIssues(value) {
 function mergeAdminIssues(existing, incoming) {
   const issues = sanitizeAdminIssues(existing);
   for (const item of sanitizeAdminIssues(incoming)) {
-    const match = issues.find((issue) => issue.message === item.message);
+    const match = issues.find((issue) => (item.id && issue.id === item.id) || issue.message === item.message);
     if (match) {
       match.lastSeenAt = item.lastSeenAt || new Date().toISOString();
-      match.count += item.count || 1;
+      match.count = Math.max(match.count, item.count || 1);
       continue;
     }
     issues.unshift(item);

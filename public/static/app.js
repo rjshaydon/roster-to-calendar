@@ -197,8 +197,10 @@ let undoHistory = [];
 let redoHistory = [];
 let applyingHistory = false;
 let lastHistorySignature = "";
-let pendingExportVariant = "full";
+let pendingExportMode = "full";
+let pendingExportRange = defaultExportRangeState();
 let currentAdminTab = "errors";
+let reportedIssueFingerprints = new Set();
 
 const settingsInputs = Object.fromEntries(
   SETTINGS_FIELDS.map((id) => [id, document.querySelector(`#${id}`)]),
@@ -274,9 +276,16 @@ exportModal.addEventListener("click", (event) => {
   if (event.target.matches("[data-close-export]")) closeExportModal();
 });
 exportModalBody.addEventListener("click", async (event) => {
-  const variantButton = event.target.closest("[data-export-variant]");
-  if (variantButton) {
-    setPendingExportVariant(variantButton.dataset.exportVariant || "full");
+  const modeButton = event.target.closest("[data-export-mode]");
+  if (modeButton) {
+    setPendingExportMode(modeButton.dataset.exportMode || "full");
+    renderExportModal();
+    return;
+  }
+  const futureToggle = event.target.closest("[data-export-all-future]");
+  if (futureToggle) {
+    pendingExportRange.allFuture = futureToggle.checked;
+    if (pendingExportRange.allFuture) pendingExportRange.endDate = "";
     renderExportModal();
     return;
   }
@@ -539,7 +548,6 @@ reviewModalBody.addEventListener("click", (event) => {
   openWhoInsight(whoButton.dataset.openWhoOn, whoButton.dataset.openWhoOn);
 });
 
-mobileExportButton.addEventListener("click", () => form.requestSubmit());
 preview.addEventListener("click", (event) => {
   if (Date.now() < suppressPreviewClickUntil) return;
   closeContextMenu();
@@ -616,6 +624,29 @@ insightsModalBody.addEventListener("change", (event) => {
   if (whenDoctorSelect && insightsState?.mode === "when") {
     insightsState.comparisonDoctorKey = whenDoctorSelect.value;
     renderInsightsModal();
+    return;
+  }
+  const whenHospitalToggle = event.target.closest("[data-insights-when-hospital]");
+  if (whenHospitalToggle && insightsState?.mode === "when") {
+    const hospital = String(whenHospitalToggle.value || "").toUpperCase();
+    const selected = new Set(insightsState.hospitalFilters || []);
+    if (whenHospitalToggle.checked) {
+      selected.add(hospital);
+    } else {
+      selected.delete(hospital);
+    }
+    insightsState.hospitalFilters = [...selected];
+    renderInsightsModal();
+  }
+});
+exportModalBody.addEventListener("change", (event) => {
+  const rangeInput = event.target.closest("[data-export-range-input]");
+  if (!rangeInput) return;
+  if (rangeInput.dataset.exportRangeInput === "start") {
+    pendingExportRange.startDate = rangeInput.value;
+  }
+  if (rangeInput.dataset.exportRangeInput === "end") {
+    pendingExportRange.endDate = rangeInput.value;
   }
 });
 insightsModalBody.addEventListener("click", async (event) => {
@@ -1205,12 +1236,12 @@ function rebuildClientPreview() {
   renderConflicts(view.conflicts || []);
   renderPreviewGrid(doctor, view);
   renderIssues(view.issues || []);
+  void reportPreviewIssues(view.issues || []);
   saveCurrentSessionState();
 }
 
 function buildClientPreviewData(baseData) {
   const events = buildFilteredPreviewEvents(baseData, settings);
-  const baseEvents = new Map((baseData.events || []).map((event) => [event.id, { ...event }]));
   const range = deriveRangeBounds(baseData.events || []);
   const deletedItems = [];
   const hospitals = availableHospitalsForPreview(baseData.events || []);
@@ -1242,8 +1273,18 @@ function buildClientPreviewData(baseData) {
 }
 
 function buildFilteredPreviewEvents(baseData, filterSettings) {
-  const baseEvents = new Map((baseData.events || []).map((event) => [event.id, { ...event }]));
   const range = deriveRangeBounds(baseData.events || []);
+  const events = buildResolvedPreviewEvents(baseData);
+  const previewStart = filterSettings.dateFrom || range.start;
+  const previewEnd = filterSettings.dateTo || range.end;
+  const visibleEvents = filterEventsByPreviewRange(events, previewStart, previewEnd)
+    .filter((event) => matchesPreviewHospitalFilter(event, filterSettings.hospitalFilter));
+  visibleEvents.sort(comparePreviewEvents);
+  return visibleEvents;
+}
+
+function buildResolvedPreviewEvents(baseData) {
+  const baseEvents = new Map((baseData.events || []).map((event) => [event.id, { ...event }]));
   const events = [];
   for (const item of reviewIndex.values()) {
     const event = baseEvents.get(item.id);
@@ -1256,12 +1297,8 @@ function buildFilteredPreviewEvents(baseData, filterSettings) {
   for (const event of customEventsForActiveCalendar()) {
     events.push(customEventToPreviewEvent(event));
   }
-  const previewStart = filterSettings.dateFrom || range.start;
-  const previewEnd = filterSettings.dateTo || range.end;
-  const visibleEvents = filterEventsByPreviewRange(events, previewStart, previewEnd)
-    .filter((event) => matchesPreviewHospitalFilter(event, filterSettings.hospitalFilter));
-  visibleEvents.sort(comparePreviewEvents);
-  return visibleEvents;
+  events.sort(comparePreviewEvents);
+  return events;
 }
 
 function availableHospitalsForPreview(events) {
@@ -1299,24 +1336,65 @@ async function ensureBasePreviewData(doctor) {
   return latestPreview;
 }
 
-function exportSettingsForVariant(variant = "full") {
-  if (variant === "filtered") return { ...settings };
+function normalizeExportRangeState(value = {}) {
   return {
-    ...settings,
-    hospitalFilter: "all",
-    dateFrom: "",
-    dateTo: "",
+    startDate: String(value.startDate || "").trim(),
+    endDate: String(value.endDate || "").trim(),
+    allFuture: value.allFuture !== false,
   };
 }
 
-function buildExportEventsFromBase(baseData, variant = "full") {
-  const viewSettings = exportSettingsForVariant(variant);
-  return buildFilteredPreviewEvents(baseData, viewSettings);
+function defaultExportRangeState() {
+  const doctor = selectedDoctor();
+  const rangeSource = latestPreview?.events?.length
+    ? deriveRangeBounds(latestPreview.events)
+    : doctor && latestPreview
+      ? deriveRangeBounds(latestPreview.events || [])
+      : { start: "", end: "" };
+  const today = formatDateKey(new Date());
+  const startDate = rangeSource.start && rangeSource.start > today ? rangeSource.start : today;
+  return {
+    startDate,
+    endDate: rangeSource.end || "",
+    allFuture: true,
+  };
 }
 
-async function buildBrowserExportEvents(doctor, variant = "full") {
+function exportConfigForMode(mode = "full", rangeState = pendingExportRange) {
+  if (mode !== "range") return { mode: "full" };
+  const normalizedRange = normalizeExportRangeState(rangeState);
+  return {
+    mode: "range",
+    startDate: normalizedRange.startDate,
+    endDate: normalizedRange.allFuture ? "" : normalizedRange.endDate,
+    allFuture: normalizedRange.allFuture !== false,
+  };
+}
+
+function buildExportEventsFromBase(baseData, exportConfig = { mode: "full" }) {
+  const events = buildResolvedPreviewEvents(baseData);
+  if (exportConfig?.mode !== "range") return events;
+  const normalizedRange = exportConfigForMode("range", exportConfig);
+  return filterEventsByExportRange(events, normalizedRange.startDate, normalizedRange.allFuture ? "" : normalizedRange.endDate);
+}
+
+function filterEventsByExportRange(events, startDateKey = "", endDateKey = "") {
+  const startDate = startDateKey ? parseDateOnly(startDateKey) : null;
+  const endDate = endDateKey ? parseDateOnly(endDateKey) : null;
+  return [...events]
+    .filter((event) => {
+      const eventStart = parseDateOnly(String(event.start || "").slice(0, 10));
+      const eventEnd = previewInclusiveEndDate(event, eventStart, parseDateOnly(String(event.end || "").slice(0, 10)));
+      if (startDate && eventEnd < startDate) return false;
+      if (endDate && eventStart > endDate) return false;
+      return true;
+    })
+    .sort(comparePreviewEvents);
+}
+
+async function buildBrowserExportEvents(doctor, exportConfig = { mode: "full" }) {
   const baseData = await ensureBasePreviewData(doctor);
-  return buildExportEventsFromBase(baseData, variant);
+  return buildExportEventsFromBase(baseData, exportConfig);
 }
 
 function enforceSixMonthLimit(view) {
@@ -1388,6 +1466,16 @@ function renderIssues(items) {
     </article>
   `).join("");
   issuesPanel.classList.remove("hidden");
+}
+
+async function reportPreviewIssues(items) {
+  if (!items.length) return;
+  for (const item of items) {
+    const fingerprint = `${activeCalendarOwnerId()}::${item.id || ""}::${item.message || ""}::${item.rawValue || ""}`;
+    if (reportedIssueFingerprints.has(fingerprint)) continue;
+    reportedIssueFingerprints.add(fingerprint);
+    await reportAccountError(`${formatIssueHeading(item)} — ${item.message}`, item.id || fingerprint);
+  }
 }
 
 function indexReviewItems(items) {
@@ -1627,11 +1715,10 @@ function renderTermSection(section) {
   return `
     <section class="preview-term">
       <div class="preview-term-header">
-        <div class="preview-term-title">${escapeHtml(section.label)}</div>
-        <div class="preview-term-actions">
-          <button type="button" class="button button-secondary preview-term-button" data-insight-who="${formatDateKey(firstMonday)}" data-insight-who-end="${formatDateKey(lastSunday)}">Who</button>
-          <button type="button" class="button button-secondary preview-term-button" data-insight-when="${formatDateKey(firstMonday)}" data-insight-when-end="${formatDateKey(lastSunday)}">When</button>
-        </div>
+      <div class="preview-term-title">${escapeHtml(section.label)}</div>
+      <div class="preview-term-actions">
+          <button type="button" class="button button-secondary preview-term-button" data-insight-when="${formatDateKey(firstMonday)}" data-insight-when-end="${formatDateKey(lastSunday)}">When am I working with…?</button>
+      </div>
       </div>
       <div class="preview-grid">
         <div class="preview-week-label preview-week-label-head">Week</div>
@@ -1654,11 +1741,12 @@ function openWhoInsight(termStart, termEnd) {
 }
 
 function openWhenInsight(termStart, termEnd) {
-  const options = comparisonDoctorOptions();
+  const options = comparisonDoctorOptions(termStart, termEnd, []);
   insightsState = {
     mode: "when",
     termStart,
     termEnd,
+    hospitalFilters: [],
     comparisonDoctorKey: options[0]?.key || "",
   };
   renderInsightsModal();
@@ -1720,20 +1808,22 @@ function renderWhoInsight() {
 }
 
 function renderWhenInsight() {
-  const options = comparisonDoctorOptions();
+  const hospitalFilters = Array.isArray(insightsState.hospitalFilters) ? insightsState.hospitalFilters : [];
+  const options = comparisonDoctorOptions(insightsState.termStart, insightsState.termEnd, hospitalFilters);
   const selectedKey = options.some((doctor) => doctor.key === insightsState.comparisonDoctorKey)
     ? insightsState.comparisonDoctorKey
     : options[0]?.key || "";
   insightsState.comparisonDoctorKey = selectedKey;
   const selectedComparison = options.find((doctor) => doctor.key === selectedKey) || null;
-  const mine = selectedDoctorEventsForInsights(insightsState.termStart, insightsState.termEnd).filter(isRosterShiftEvent);
+  const mine = selectedDoctorEventsForInsights(insightsState.termStart, insightsState.termEnd, hospitalFilters).filter(isRosterShiftEvent);
   const theirs = selectedComparison
-    ? comparisonDoctorEvents(selectedComparison.key, insightsState.termStart, insightsState.termEnd).filter(isRosterShiftEvent)
+    ? comparisonDoctorEvents(selectedComparison.key, insightsState.termStart, insightsState.termEnd, hospitalFilters).filter(isRosterShiftEvent)
     : [];
   const overlaps = buildOverlapDays(mine, theirs);
   const nextOverlapDate = chooseNextOverlapDate(overlaps);
+  const hospitalOptions = availableHospitalsForInsightRange(insightsState.termStart, insightsState.termEnd);
 
-  insightsModalTitle.textContent = "When";
+  insightsModalTitle.textContent = "When am I working with…?";
   insightsModalSubtitle.textContent = "Find the dates where both doctors are working in this term.";
   insightsModalBody.innerHTML = `
     <div class="insights-controls">
@@ -1745,6 +1835,18 @@ function renderWhenInsight() {
           `).join("")}
         </select>
       </label>
+      <fieldset class="settings-group insights-hospital-group">
+        <legend>Hospitals</legend>
+        <p class="status">Leave all unticked to search every hospital.</p>
+        <div class="toggle-list">
+          ${hospitalOptions.map((hospital) => `
+            <label class="toggle">
+              <input type="checkbox" value="${escapeHtml(hospital)}" data-insights-when-hospital ${hospitalFilters.includes(hospital) ? "checked" : ""}>
+              ${escapeHtml(hospital)}
+            </label>
+          `).join("")}
+        </div>
+      </fieldset>
     </div>
     ${selectedComparison
       ? overlaps.length
@@ -1764,48 +1866,57 @@ function renderWhenInsight() {
   }
 }
 
-function comparisonDoctorOptions() {
+function comparisonDoctorOptions(start = "", end = "", hospitalFilters = []) {
   if (!parsedRosterSources || (!parsedRosterSources.mmc?.length && !parsedRosterSources.ddh?.length)) return [];
   return prioritizeDoctorOptions(rosterDoctorOptions(parsedRosterSources?.mmc || [], parsedRosterSources?.ddh || []))
-    .filter((doctor) => doctor.key !== selectedDoctor()?.key);
+    .filter((doctor) => doctor.key !== selectedDoctor()?.key)
+    .filter((doctor) => comparisonDoctorEvents(doctor.key, start, end, hospitalFilters).some(isRosterShiftEvent));
 }
 
-function selectedDoctorEventsForInsights(start, end) {
+function selectedDoctorEventsForInsights(start, end, hospitalFilters = []) {
   if (!latestPreview) return [];
-  return buildCurrentDoctorPreviewEvents(start, end);
+  return buildCurrentDoctorPreviewEvents(start, end, hospitalFilters);
 }
 
-function comparisonDoctorEvents(doctorKey, start, end) {
+function comparisonDoctorEvents(doctorKey, start, end, hospitalFilters = []) {
   const cache = getDoctorAnalysisCache();
   const events = cache.get(doctorKey) || [];
-  return filterInsightEvents(events, start, end);
+  return filterInsightEvents(events, start, end, hospitalFilters);
 }
 
-function buildCurrentDoctorPreviewEvents(start, end) {
-  const baseEvents = new Map((latestPreview?.events || []).map((event) => [event.id, { ...event }]));
-  const events = [];
-  for (const item of reviewIndex.values()) {
-    const event = baseEvents.get(item.id);
-    if (!event) continue;
-    const override = overrides[item.id] || {};
-    const include = typeof override.include === "boolean" ? override.include : item.include;
-    if (!include) continue;
-    events.push(buildEventOverridePatch(event, item, override));
-  }
-  for (const event of customEventsForActiveCalendar()) {
-    if (event.include === false) continue;
-    events.push(customEventToPreviewEvent(event));
-  }
-  return filterInsightEvents(events, start, end);
+function buildCurrentDoctorPreviewEvents(start, end, hospitalFilters = []) {
+  const events = buildResolvedPreviewEvents(latestPreview || { events: [] });
+  return filterInsightEvents(events, start, end, hospitalFilters);
 }
 
-function filterInsightEvents(events, start, end) {
+function filterInsightEvents(events, start, end, hospitalFilters = []) {
   const startDate = parseDateOnly(start);
   const endDate = parseDateOnly(end);
   return events
-    .filter((event) => matchesPreviewHospitalFilter(event, settings.hospitalFilter))
+    .filter((event) => matchesInsightHospitalFilters(event, hospitalFilters))
     .filter((event) => eventOverlapsDateRange(event, startDate, endDate))
     .sort(comparePreviewEvents);
+}
+
+function matchesInsightHospitalFilters(event, hospitalFilters = []) {
+  if (!hospitalFilters?.length) return true;
+  return hospitalFilters.includes(eventSourceCode(event));
+}
+
+function availableHospitalsForInsightRange(start, end) {
+  const doctor = selectedDoctor();
+  const seen = new Set();
+  const options = doctor ? [doctor, ...comparisonDoctorOptions(start, end, [])] : comparisonDoctorOptions(start, end, []);
+  for (const option of options) {
+    const events = option.key === doctor?.key
+      ? selectedDoctorEventsForInsights(start, end, [])
+      : comparisonDoctorEvents(option.key, start, end, []);
+    for (const event of events) {
+      const code = eventSourceCode(event);
+      if (code) seen.add(code);
+    }
+  }
+  return [...seen].sort();
 }
 
 function matchesPreviewHospitalFilter(event, hospitalFilter) {
@@ -3049,6 +3160,7 @@ function clearPreviewData() {
   reviewIndex = new Map();
   currentPreviewEvents = new Map();
   availablePreviewHospitals = [];
+  reportedIssueFingerprints = new Set();
   document.body.classList.remove("has-calendar-preview");
   issuesPanel.classList.add("hidden");
   conflictsPanel.classList.add("hidden");
@@ -3707,7 +3819,8 @@ function openExportModal() {
     setStatus("Choose a doctor before exporting.", true);
     return;
   }
-  setPendingExportVariant("full");
+  setPendingExportMode("full");
+  pendingExportRange = defaultExportRangeState();
   renderExportModal();
   exportModal.classList.remove("hidden");
   exportModal.setAttribute("aria-hidden", "false");
@@ -3719,26 +3832,43 @@ function closeExportModal() {
   exportModalBody.innerHTML = "";
 }
 
-function setPendingExportVariant(variant) {
-  pendingExportVariant = variant === "filtered" ? "filtered" : "full";
+function setPendingExportMode(mode) {
+  pendingExportMode = mode === "range" ? "range" : "full";
 }
 
 function renderExportModal() {
   const doctor = selectedDoctor();
   const canSubscribe = Boolean(currentSubscription?.enabled && !activeDoctorProfile);
-  const filtersActive = hasActiveExportFilters();
   exportModalBody.innerHTML = `
     <article class="review-card">
       <div class="review-top">
         <div>
           <strong>${escapeHtml(doctor?.displayName || "Selected doctor")}</strong>
-          <span>${filtersActive ? "Choose which calendar scope to export." : "Subscription and file export options."}</span>
+          <span>Subscription and file export options.</span>
         </div>
       </div>
-      ${filtersActive ? `
-        <div class="export-variant-picker">
-          <button type="button" class="button ${pendingExportVariant === "full" ? "button-primary" : "button-secondary"}" data-export-variant="full">Use complete calendar</button>
-          <button type="button" class="button ${pendingExportVariant === "filtered" ? "button-primary" : "button-secondary"}" data-export-variant="filtered">Use current filtered view</button>
+      <div class="export-variant-picker">
+        <button type="button" class="button ${pendingExportMode === "full" ? "button-primary" : "button-secondary"}" data-export-mode="full">Full calendar</button>
+        <button type="button" class="button ${pendingExportMode === "range" ? "button-primary" : "button-secondary"}" data-export-mode="range">Date range</button>
+      </div>
+      ${pendingExportMode === "range" ? `
+        <div class="export-range-panel">
+          <label class="toggle">
+            <input type="checkbox" data-export-all-future ${pendingExportRange.allFuture ? "checked" : ""}>
+            All future events
+          </label>
+          <div class="settings-subgrid">
+            <label class="field">
+              <span>Start date</span>
+              <input type="date" value="${escapeHtml(pendingExportRange.startDate)}" data-export-range-input="start">
+            </label>
+            ${pendingExportRange.allFuture ? "" : `
+              <label class="field">
+                <span>Finish date</span>
+                <input type="date" value="${escapeHtml(pendingExportRange.endDate)}" data-export-range-input="end" min="${escapeHtml(pendingExportRange.startDate || "")}">
+              </label>
+            `}
+          </div>
         </div>
       ` : ""}
       <div class="export-actions-grid">
@@ -3757,11 +3887,27 @@ async function handleExportAction(action) {
     setStatus("Choose a doctor before exporting.", true);
     return;
   }
-  const variant = pendingExportVariant === "filtered" ? "filtered" : "full";
+  const exportConfig = exportConfigForMode(pendingExportMode, pendingExportRange);
+  if (exportConfig.mode === "range" && !exportConfig.startDate) {
+    setStatus("Choose a start date for the export range.", true);
+    return;
+  }
+  if (exportConfig.mode === "range" && !exportConfig.allFuture && !exportConfig.endDate) {
+    setStatus("Choose a finish date or use all future events.", true);
+    return;
+  }
+  if (exportConfig.mode === "range" && !exportConfig.allFuture && exportConfig.endDate < exportConfig.startDate) {
+    setStatus("The finish date must be on or after the start date.", true);
+    return;
+  }
   try {
     if (action === "download") {
       setStatus("Building calendar file...");
-      const ics = exportIcs(await buildBrowserExportEvents(doctor, variant), doctor.displayName);
+      const events = await buildBrowserExportEvents(doctor, exportConfig);
+      if (!events.length) {
+        throw new Error("No calendar events were found for that export selection.");
+      }
+      const ics = exportIcs(events, doctor.displayName);
       downloadIcs(ics, `${doctor.displayName} roster.ics`);
       closeExportModal();
       setStatus("Calendar file ready.");
@@ -3772,9 +3918,14 @@ async function handleExportAction(action) {
       return;
     }
     setStatus("Saving subscription feed...");
-    await flushCloudStateSave();
+    const snapshot = snapshotCloudSavePayload();
+    snapshot.session = {
+      ...snapshot.session,
+      exportRange: normalizeExportRangeState(exportConfig.mode === "range" ? exportConfig : defaultExportRangeState()),
+    };
+    await saveCloudState(snapshot);
     const protocol = action === "apple" ? "webcal" : "https";
-    const url = subscriptionUrl(protocol, variant);
+    const url = subscriptionUrl(protocol, exportConfig.mode === "range" ? "range" : "full");
     if (!url) {
       throw new Error("No subscription link is available for this account yet.");
     }
@@ -4116,7 +4267,7 @@ function subscriptionUrl(protocol = "https", view = "full") {
   if (!currentSubscription?.token) return "";
   const url = new URL("/api/feed", window.location.origin);
   url.searchParams.set("token", currentSubscription.token);
-  url.searchParams.set("view", view === "filtered" ? "filtered" : "full");
+  url.searchParams.set("view", view === "range" ? "range" : "full");
   if (protocol === "webcal") {
     return url.toString().replace(/^https?:/i, "webcal:");
   }
@@ -4169,9 +4320,9 @@ async function clearAdminErrors(email, errorId = "") {
   }
 }
 
-async function reportAccountError(message) {
+async function reportAccountError(message, errorId = "") {
   if (!message || !cloudAvailable || !currentUserEmail || !currentUserPassword) return;
-  if (currentUserRole === "creator") return;
+  if (currentUserRole === "creator" && !adminViewingEmail) return;
   try {
     await fetch("/api/state", {
       method: "POST",
@@ -4181,6 +4332,7 @@ async function reportAccountError(message) {
         email: adminViewingEmail ? authUserEmail || currentUserEmail : currentUserEmail,
         password: adminViewingEmail ? authUserPassword || currentUserPassword : currentUserPassword,
         targetEmail: adminViewingEmail ? currentUserEmail : "",
+        errorId,
         message,
       }),
     });
@@ -4571,6 +4723,15 @@ function sanitizeSubscription(value) {
   };
 }
 
+function normalizeSavedExportRange(value) {
+  const normalized = normalizeExportRangeState(value);
+  return {
+    startDate: normalized.startDate,
+    endDate: normalized.endDate,
+    allFuture: normalized.allFuture !== false,
+  };
+}
+
 function normalizeServerUser(value) {
   if (typeof value === "string") {
     return {
@@ -4941,7 +5102,7 @@ async function buildCloudState(imports = selectedFiles, session = buildActiveSes
     version: 1,
     imports: await serializeCloudImports(imports),
     session,
-    subscriptionFeeds: await buildSubscriptionFeeds(),
+    subscriptionFeeds: await buildSubscriptionFeeds(session),
   };
 }
 
@@ -4949,6 +5110,7 @@ function buildActiveSessionState() {
   return {
     doctorKey: doctorOptions.length > 1 ? doctorSelect.value : doctorOptions[0]?.key || "",
     settings: { ...settings },
+    exportRange: normalizeSavedExportRange(pendingExportRange),
     overrides: cleanOverrides(),
     customEvents: customEventsForActiveCalendar(),
     conflictSelections: { ...conflictSelections },
@@ -4957,15 +5119,16 @@ function buildActiveSessionState() {
   };
 }
 
-async function buildSubscriptionFeeds() {
+async function buildSubscriptionFeeds(session = buildActiveSessionState()) {
   if (activeDoctorProfile) return {};
   const doctor = selectedDoctor();
   if (!doctor || !selectedFiles.length) return {};
-  const fullEvents = await buildBrowserExportEvents(doctor, "full").catch(() => []);
-  const filteredEvents = hasActiveExportFilters()
-    ? await buildBrowserExportEvents(doctor, "filtered").catch(() => [])
-    : fullEvents;
-  if (!fullEvents.length && !filteredEvents.length) return {};
+  const fullEvents = await buildBrowserExportEvents(doctor, { mode: "full" }).catch(() => []);
+  const rangeConfig = exportConfigForMode("range", session?.exportRange || defaultExportRangeState());
+  const rangeEvents = rangeConfig.startDate
+    ? await buildBrowserExportEvents(doctor, rangeConfig).catch(() => [])
+    : [];
+  if (!fullEvents.length && !rangeEvents.length) return {};
   return {
     full: fullEvents.length ? {
       doctorKey: doctor.key,
@@ -4973,11 +5136,14 @@ async function buildSubscriptionFeeds() {
       generatedAt: new Date().toISOString(),
       ics: exportIcs(fullEvents, doctor.displayName),
     } : null,
-    filtered: filteredEvents.length ? {
+    range: rangeEvents.length ? {
       doctorKey: doctor.key,
       doctorDisplay: doctor.displayName,
+      startDate: rangeConfig.startDate,
+      endDate: rangeConfig.allFuture ? "" : rangeConfig.endDate,
+      allFuture: rangeConfig.allFuture !== false,
       generatedAt: new Date().toISOString(),
-      ics: exportIcs(filteredEvents, doctor.displayName),
+      ics: exportIcs(rangeEvents, doctor.displayName),
     } : null,
   };
 }
@@ -5161,6 +5327,7 @@ function applySessionState(session, options = {}) {
     ...(session?.settings || {}),
   };
   overrides = sanitizeOverrideState(session?.overrides);
+  pendingExportRange = normalizeSavedExportRange(session?.exportRange || defaultExportRangeState());
   customEvents = sanitizeCustomEvents(session?.customEvents, activeCalendarEmail());
   conflictSelections = {
     ...loadConflictSelections(),

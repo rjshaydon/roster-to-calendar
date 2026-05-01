@@ -1313,6 +1313,26 @@ input[type="color"] {
   gap: 12px;
 }
 
+.export-range-panel {
+  display: grid;
+  gap: 14px;
+  margin: 0 0 18px;
+}
+
+.toggle-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+}
+
+.insights-hospital-group {
+  margin: 0;
+}
+
+.insights-hospital-group .status {
+  margin: 0 0 10px;
+}
+
 .subscription-card input[readonly] {
   cursor: text;
 }
