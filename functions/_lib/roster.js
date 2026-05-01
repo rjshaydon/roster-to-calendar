@@ -283,6 +283,27 @@ export async function inspectImportRecord(record) {
   return { sourceType, doctors };
 }
 
+export async function buildRosterViewFromStoredImports(imports, doctorKey, settings = DEFAULT_SETTINGS, overrides = {}, conflictSelections = {}, doctorAliases = []) {
+  const sources = { mmc: [], ddh: [] };
+  for (const item of Array.isArray(imports) ? imports : []) {
+    if (!item?.dataUrl) continue;
+    const workbook = await readWorkbookDataUrl(item.dataUrl, item.name || "roster.xlsx");
+    const sourceType = String(item.sourceType || detectSourceType(workbook, item.name || "roster.xlsx")).toLowerCase();
+    if (sourceType !== "mmc" && sourceType !== "ddh") continue;
+    sources[sourceType].push({
+      id: String(item.id || item.repoId || hashString(`${item.name || "import"}|${item.lastModified || 0}`)),
+      addedAt: String(item.addedAt || ""),
+      file: {
+        name: String(item.name || "roster.xlsx"),
+        size: Number(item.size || 0),
+        lastModified: Number(item.lastModified || 0),
+      },
+      workbook,
+    });
+  }
+  return buildRosterView(sources.mmc, sources.ddh, doctorKey, settings, overrides, conflictSelections, doctorAliases);
+}
+
 export function normalizeRosterName(value) {
   return normalizeName(value);
 }

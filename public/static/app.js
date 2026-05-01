@@ -188,6 +188,7 @@ let serverUsers = [];
 let currentRosterClaims = [];
 let latestNameMatches = [];
 let availableRosterDoctors = [];
+let currentSubscription = null;
 let insightsState = null;
 let doctorAnalysisCacheKey = "";
 let doctorAnalysisCache = new Map();
@@ -312,6 +313,11 @@ accountsBody.addEventListener("submit", (event) => {
   updateAccountDetails(email, { password, realName });
 });
 accountsBody.addEventListener("click", (event) => {
+  const subscriptionButton = event.target.closest("[data-copy-subscription]");
+  if (subscriptionButton) {
+    copySubscriptionLink(subscriptionButton.dataset.copySubscription);
+    return;
+  }
   const deleteButton = event.target.closest("[data-delete-account]");
   if (deleteButton) {
     deleteAccount(deleteButton.dataset.deleteAccount);
@@ -3813,6 +3819,7 @@ function renderAccountsModal() {
   const localOtherUsers = accountState.users.filter((user) => user.email !== me.email);
   const otherUsers = serverOtherUsers.length ? serverOtherUsers : localOtherUsers;
   const linkedNames = renderLinkedRosterNames(currentRosterClaims);
+  const subscriptionCard = renderSubscriptionCard();
   accountsBody.innerHTML = `
     <article class="review-card">
       <div class="review-top">
@@ -3840,6 +3847,7 @@ function renderAccountsModal() {
         </div>
       </form>
       ${linkedNames}
+      ${subscriptionCard}
     </article>
     ${ownerView ? `
       <article class="review-card">
@@ -3910,6 +3918,68 @@ function renderLinkedRosterNames(claims) {
       `).join("")}
     </div>
   `;
+}
+
+function renderSubscriptionCard() {
+  if (activeDoctorProfile) return "";
+  if (!currentSubscription?.token) return "";
+  const httpsUrl = subscriptionUrl("https");
+  const webcalUrl = subscriptionUrl("webcal");
+  if (!httpsUrl || !webcalUrl) return "";
+  if (!currentSubscription.enabled) {
+    return `
+      <div class="issue-card subscription-card">
+        <div>
+          <strong>Calendar subscription</strong>
+          <p>Subscription links will appear once this account is linked to at least one roster name.</p>
+        </div>
+      </div>
+    `;
+  }
+  return `
+    <div class="issue-card subscription-card">
+      <div>
+        <strong>Calendar subscription</strong>
+        <p>Subscribe in Apple Calendar or Google Calendar using one of these claimed-account links.</p>
+      </div>
+      <label class="field">
+        <span>HTTPS feed</span>
+        <input type="text" value="${escapeHtml(httpsUrl)}" readonly>
+      </label>
+      <label class="field">
+        <span>webcal feed</span>
+        <input type="text" value="${escapeHtml(webcalUrl)}" readonly>
+      </label>
+      <div class="account-actions">
+        <button type="button" class="button button-secondary" data-copy-subscription="https">Copy HTTPS</button>
+        <button type="button" class="button button-secondary" data-copy-subscription="webcal">Copy webcal</button>
+      </div>
+    </div>
+  `;
+}
+
+function subscriptionUrl(protocol = "https") {
+  if (!currentSubscription?.token) return "";
+  const url = new URL("/api/feed", window.location.origin);
+  url.searchParams.set("token", currentSubscription.token);
+  if (protocol === "webcal") {
+    return url.toString().replace(/^https?:/i, "webcal:");
+  }
+  return url.toString();
+}
+
+async function copySubscriptionLink(kind = "https") {
+  const url = subscriptionUrl(kind === "webcal" ? "webcal" : "https");
+  if (!url) {
+    setStatus("No subscription link is available for this account yet.", true);
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(url);
+    setStatus(`${kind === "webcal" ? "webcal" : "HTTPS"} subscription link copied.`);
+  } catch {
+    setStatus("Could not copy the subscription link.", true);
+  }
 }
 
 function formatUserSites(user) {
@@ -4284,6 +4354,16 @@ function normalizeEmail(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+function sanitizeSubscription(value) {
+  if (!value || typeof value !== "object") return null;
+  const token = String(value.token || "").trim();
+  if (!token) return null;
+  return {
+    token,
+    enabled: value.enabled === true,
+  };
+}
+
 function normalizeServerUser(value) {
   if (typeof value === "string") {
     return {
@@ -4353,6 +4433,7 @@ async function logoutCurrentUser() {
   currentRosterClaims = [];
   latestNameMatches = [];
   availableRosterDoctors = [];
+  currentSubscription = null;
   selectedFiles = [];
   resetDerivedState();
   renderLoginState();
@@ -4445,6 +4526,7 @@ async function restoreCloudState(options = {}) {
       ? serverStorageRequiredMessage()
       : normalizeAuthMessage(error.message || "Login failed.");
     cloudAvailable = false;
+    currentSubscription = null;
     localStorage.removeItem(CURRENT_EMAIL_KEY);
     sessionStorage.removeItem(CURRENT_PASSWORD_KEY);
     if (options.mode === "create") {
@@ -4485,6 +4567,7 @@ async function applyCloudStateData(data) {
   currentRosterClaims = sanitizeRosterClaims(data.claims || []);
   latestNameMatches = sanitizeRosterClaims(data.nameMatches || []);
   availableRosterDoctors = sanitizeAvailableRosterDoctors(data.availableDoctors || []);
+  currentSubscription = sanitizeSubscription(data.subscription);
   if (data.realName) {
     const localAccount = accountState.users.find((user) => user.email === currentUserEmail);
     if (localAccount) {

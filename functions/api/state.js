@@ -4,6 +4,7 @@ const CREATOR_EMAIL = "rhaydon@gmail.com";
 const REPOSITORY_INDEX_KEY = "repository:index";
 const REPOSITORY_FILE_PREFIX = "repository:file:";
 const DOCTOR_PROFILE_PREFIX = "doctor-profile:";
+const SUBSCRIPTION_TOKEN_PREFIX = "subscription:token:";
 
 export async function onRequestGet(context) {
   return Response.json({ error: "Use POST for account requests." }, { status: 405 });
@@ -41,6 +42,7 @@ export async function onRequestPost(context) {
         claims: prepared.claims,
         nameMatches: prepared.nameMatches,
         availableDoctors: prepared.availableDoctors,
+        subscription: prepared.subscription,
       });
     }
 
@@ -98,6 +100,7 @@ export async function onRequestPost(context) {
         claims: prepared.claims,
         nameMatches: prepared.nameMatches,
         availableDoctors: prepared.availableDoctors,
+        subscription: prepared.subscription,
       });
     }
 
@@ -132,6 +135,7 @@ export async function onRequestPost(context) {
         claims: prepared.claims,
         nameMatches: prepared.nameMatches,
         availableDoctors: prepared.availableDoctors,
+        subscription: prepared.subscription,
       });
     }
 
@@ -149,6 +153,10 @@ export async function onRequestPost(context) {
       }
       if (deleteEmail !== email && account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      const record = await loadAccountRecord(context.env.ROSTER_STORE, deleteEmail).catch(() => null);
+      if (record?.subscriptionToken) {
+        await context.env.ROSTER_STORE.delete(subscriptionTokenKey(record.subscriptionToken));
       }
       await context.env.ROSTER_STORE.delete(storageKey(deleteEmail));
       return Response.json({ ok: true, deletedEmail: deleteEmail });
@@ -229,7 +237,7 @@ export async function onRequestPost(context) {
   }
 }
 
-async function loadAccountRecord(store, email) {
+export async function loadAccountRecord(store, email) {
   if (!email) {
     throw new Error("Target account is required.");
   }
@@ -245,7 +253,7 @@ async function loadDoctorProfileRecord(store, profileId) {
   return sanitizeDoctorProfile(await store.get(doctorProfileKey(profileId), "json").catch(() => null));
 }
 
-function normalizeEmail(value) {
+export function normalizeEmail(value) {
   return String(value || "").trim().toLowerCase();
 }
 
@@ -364,7 +372,8 @@ async function listUsers(store) {
   return users.sort((a, b) => a.email.localeCompare(b.email));
 }
 
-async function prepareAccountResponse(store, record) {
+export async function prepareAccountResponse(store, rawRecord) {
+  let record = await ensureAccountSubscriptionToken(store, rawRecord);
   const role = record.role || roleForEmail(record.email);
   const index = await loadRepositoryIndex(store);
   let claims = sanitizeClaims(record.claims);
@@ -418,7 +427,19 @@ async function prepareAccountResponse(store, record) {
     claims,
     nameMatches,
     availableDoctors: await repositoryDoctorCandidates(store, index),
+    subscription: {
+      token: String(record.subscriptionToken || ""),
+      enabled: claims.length > 0,
+    },
   };
+}
+
+export async function loadAccountBySubscriptionToken(store, token) {
+  const normalizedToken = String(token || "").trim();
+  if (!normalizedToken) return null;
+  const email = await store.get(subscriptionTokenKey(normalizedToken), "text").catch(() => "");
+  if (!email) return null;
+  return await loadAccountRecord(store, normalizeEmail(email)).catch(() => null);
 }
 
 async function hydrateRepositoryFromExistingAccounts(store) {
@@ -571,6 +592,10 @@ function repositoryFileKey(id) {
 
 function doctorProfileKey(profileId) {
   return `${DOCTOR_PROFILE_PREFIX}${profileId}`;
+}
+
+function subscriptionTokenKey(token) {
+  return `${SUBSCRIPTION_TOKEN_PREFIX}${token}`;
 }
 
 function repositoryImportRef(item) {
@@ -851,6 +876,28 @@ function randomSalt() {
   const values = new Uint8Array(16);
   crypto.getRandomValues(values);
   return [...values].map((value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+function randomSubscriptionToken() {
+  const values = new Uint8Array(24);
+  crypto.getRandomValues(values);
+  return [...values].map((value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+async function ensureAccountSubscriptionToken(store, record) {
+  if (!record?.email) return record;
+  if (record.subscriptionToken) {
+    await store.put(subscriptionTokenKey(record.subscriptionToken), normalizeEmail(record.email));
+    return record;
+  }
+  const updated = {
+    ...record,
+    subscriptionToken: randomSubscriptionToken(),
+    updatedAt: new Date().toISOString(),
+  };
+  await store.put(storageKey(updated.email), JSON.stringify(updated));
+  await store.put(subscriptionTokenKey(updated.subscriptionToken), normalizeEmail(updated.email));
+  return updated;
 }
 
 async function sha256(value) {
