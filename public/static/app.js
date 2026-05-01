@@ -549,7 +549,7 @@ reviewModalBody.addEventListener("click", (event) => {
   const whoButton = event.target.closest("[data-open-who-on]");
   if (!whoButton) return;
   closeReviewModal();
-  openWhoInsight(whoButton.dataset.openWhoOn, whoButton.dataset.openWhoOn);
+  void openWhoInsight(whoButton.dataset.openWhoOn, whoButton.dataset.openWhoOn);
 });
 
 preview.addEventListener("click", (event) => {
@@ -576,12 +576,12 @@ preview.addEventListener("click", (event) => {
   }
   const whoTrigger = event.target.closest("[data-insight-who]");
   if (whoTrigger) {
-    openWhoInsight(whoTrigger.dataset.insightWho, whoTrigger.dataset.insightWhoEnd);
+    void openWhoInsight(whoTrigger.dataset.insightWho, whoTrigger.dataset.insightWhoEnd);
     return;
   }
   const whenTrigger = event.target.closest("[data-insight-when]");
   if (whenTrigger) {
-    openWhenInsight(whenTrigger.dataset.insightWhen, whenTrigger.dataset.insightWhenEnd);
+    void openWhenInsight(whenTrigger.dataset.insightWhen, whenTrigger.dataset.insightWhenEnd);
     return;
   }
   const chip = event.target.closest("[data-review-id]");
@@ -621,13 +621,13 @@ insightsModalBody.addEventListener("change", (event) => {
   const whoDateInput = event.target.closest("[data-insights-who-date]");
   if (whoDateInput && insightsState?.mode === "who") {
     insightsState.date = whoDateInput.value;
-    renderInsightsModal();
+    void renderInsightsModal();
     return;
   }
   const whenDoctorSelect = event.target.closest("[data-insights-when-doctor]");
   if (whenDoctorSelect && insightsState?.mode === "when") {
     insightsState.comparisonDoctorKey = whenDoctorSelect.value;
-    renderInsightsModal();
+    void renderInsightsModal();
     return;
   }
   const whenHospitalToggle = event.target.closest("[data-insights-when-hospital]");
@@ -640,7 +640,7 @@ insightsModalBody.addEventListener("change", (event) => {
       selected.delete(hospital);
     }
     insightsState.hospitalFilters = [...selected];
-    renderInsightsModal();
+    void renderInsightsModal();
   }
 });
 exportModalBody.addEventListener("change", (event) => {
@@ -1738,7 +1738,7 @@ function renderTermSection(section) {
   `;
 }
 
-function openWhoInsight(termStart, termEnd) {
+async function openWhoInsight(termStart, termEnd) {
   const date = defaultInsightDate(termStart, termEnd);
   insightsState = {
     mode: "who",
@@ -1746,10 +1746,11 @@ function openWhoInsight(termStart, termEnd) {
     termEnd,
     date,
   };
-  renderInsightsModal();
+  await renderInsightsModal();
 }
 
-function openWhenInsight(termStart, termEnd) {
+async function openWhenInsight(termStart, termEnd) {
+  await ensureInsightRosterAnalysis();
   const options = comparisonDoctorOptions(termStart, termEnd, []);
   insightsState = {
     mode: "when",
@@ -1758,7 +1759,7 @@ function openWhenInsight(termStart, termEnd) {
     hospitalFilters: [],
     comparisonDoctorKey: options[0]?.key || "",
   };
-  renderInsightsModal();
+  await renderInsightsModal();
 }
 
 function closeInsightsModal() {
@@ -1768,8 +1769,9 @@ function closeInsightsModal() {
   insightsModalBody.innerHTML = "";
 }
 
-function renderInsightsModal() {
+async function renderInsightsModal() {
   if (!insightsState) return;
+  await ensureInsightRosterAnalysis();
   if (insightsState.mode === "who") {
     renderWhoInsight();
   } else if (insightsState.mode === "when") {
@@ -1777,6 +1779,15 @@ function renderInsightsModal() {
   }
   insightsModal.classList.remove("hidden");
   insightsModal.setAttribute("aria-hidden", "false");
+}
+
+async function ensureInsightRosterAnalysis() {
+  if (parsedRosterSources && (parsedRosterSources.mmc?.length || parsedRosterSources.ddh?.length)) return;
+  if (!selectedFiles.length) return;
+  await ensureSelectedFilesLoaded();
+  const parsed = await parseCurrentRosterForm(null);
+  parsedRosterSources = parsed.sources;
+  parsedImportDoctors = doctorsByImportId(parsed.sources);
 }
 
 function renderWhoInsight() {
