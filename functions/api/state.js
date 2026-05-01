@@ -146,6 +146,51 @@ export async function onRequestPost(context) {
       return Response.json({ ok: true, users: await listUsers(context.env.ROSTER_STORE) });
     }
 
+    if (action === "reportUserError") {
+      const reportEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
+      const targetRecord = reportEmail === email ? account.record : await loadAccountRecord(context.env.ROSTER_STORE, reportEmail);
+      if ((targetRecord.role || roleForEmail(targetRecord.email)) === "creator") {
+        return Response.json({ ok: true, ignored: true });
+      }
+      const message = String(body?.message || "").trim();
+      if (!message) {
+        return Response.json({ error: "Error message is required." }, { status: 400 });
+      }
+      const nextIssues = mergeAdminIssues(targetRecord.adminIssues, [{
+        message,
+        firstSeenAt: new Date().toISOString(),
+        lastSeenAt: new Date().toISOString(),
+        count: 1,
+      }]);
+      await context.env.ROSTER_STORE.put(storageKey(reportEmail), JSON.stringify({
+        ...targetRecord,
+        adminIssues: nextIssues,
+        updatedAt: new Date().toISOString(),
+      }));
+      return Response.json({ ok: true, issuesCount: nextIssues.length });
+    }
+
+    if (action === "clearUserError") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      const clearEmail = normalizeEmail(targetEmail);
+      if (!clearEmail) {
+        return Response.json({ error: "Target account is required." }, { status: 400 });
+      }
+      const targetRecord = await loadAccountRecord(context.env.ROSTER_STORE, clearEmail);
+      const errorId = String(body?.errorId || "").trim();
+      const nextIssues = errorId
+        ? sanitizeAdminIssues(targetRecord.adminIssues).filter((issue) => issue.id !== errorId)
+        : [];
+      await context.env.ROSTER_STORE.put(storageKey(clearEmail), JSON.stringify({
+        ...targetRecord,
+        adminIssues: nextIssues,
+        updatedAt: new Date().toISOString(),
+      }));
+      return Response.json({ ok: true });
+    }
+
     if (action === "deleteAccount") {
       const deleteEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
       if (deleteEmail === CREATOR_EMAIL) {
@@ -365,6 +410,8 @@ async function listUsers(store) {
       role: record?.role || roleForEmail(email),
       sites: [...new Set(claims.map((claim) => claim.sourceType.toUpperCase()))].sort(),
       claims,
+      adminIssues: sanitizeAdminIssues(record?.adminIssues),
+      issuesCount: sanitizeAdminIssues(record?.adminIssues).length,
       createdAt: record?.createdAt || "",
       updatedAt: record?.updatedAt || "",
     };
@@ -431,6 +478,7 @@ export async function prepareAccountResponse(store, rawRecord) {
       token: String(record.subscriptionToken || ""),
       enabled: Boolean(state.subscriptionFeeds?.full?.ics),
     },
+    adminIssues: sanitizeAdminIssues(record.adminIssues),
   };
 }
 
@@ -930,4 +978,38 @@ function sanitizeSubscriptionFeeds(value) {
     };
   }
   return next;
+}
+
+function sanitizeAdminIssues(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => ({
+      id: String(item?.id || "").trim(),
+      message: String(item?.message || "").trim(),
+      firstSeenAt: String(item?.firstSeenAt || ""),
+      lastSeenAt: String(item?.lastSeenAt || ""),
+      count: Number(item?.count || 1),
+    }))
+    .filter((item) => item.message)
+    .map((item) => ({
+      ...item,
+      id: item.id || randomSalt(),
+      count: Number.isFinite(item.count) && item.count > 0 ? Math.floor(item.count) : 1,
+    }));
+}
+
+function mergeAdminIssues(existing, incoming) {
+  const issues = sanitizeAdminIssues(existing);
+  for (const item of sanitizeAdminIssues(incoming)) {
+    const match = issues.find((issue) => issue.message === item.message);
+    if (match) {
+      match.lastSeenAt = item.lastSeenAt || new Date().toISOString();
+      match.count += item.count || 1;
+      continue;
+    }
+    issues.unshift(item);
+  }
+  return issues
+    .sort((left, right) => (right.lastSeenAt || "").localeCompare(left.lastSeenAt || ""))
+    .slice(0, 50);
 }

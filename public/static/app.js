@@ -198,6 +198,7 @@ let redoHistory = [];
 let applyingHistory = false;
 let lastHistorySignature = "";
 let pendingExportVariant = "full";
+let currentAdminTab = "errors";
 
 const settingsInputs = Object.fromEntries(
   SETTINGS_FIELDS.map((id) => [id, document.querySelector(`#${id}`)]),
@@ -292,6 +293,7 @@ filesList.addEventListener("click", async (event) => {
 accountsButton.addEventListener("click", async () => {
   if (isOwnerAccount()) {
     await loadServerUsers();
+    currentAdminTab = "errors";
   }
   renderAccountsModal();
   accountsModal.classList.remove("hidden");
@@ -321,6 +323,17 @@ accountsBody.addEventListener("submit", (event) => {
   updateAccountDetails(email, { password, realName });
 });
 accountsBody.addEventListener("click", (event) => {
+  const adminTab = event.target.closest("[data-admin-tab]");
+  if (adminTab) {
+    currentAdminTab = adminTab.dataset.adminTab || "errors";
+    renderAccountsModal();
+    return;
+  }
+  const clearAdminErrorsButton = event.target.closest("[data-clear-admin-errors]");
+  if (clearAdminErrorsButton) {
+    clearAdminErrors(clearAdminErrorsButton.dataset.clearAdminErrors || "", clearAdminErrorsButton.dataset.errorId || "");
+    return;
+  }
   const subscriptionButton = event.target.closest("[data-copy-subscription]");
   if (subscriptionButton) {
     copySubscriptionLink(subscriptionButton.dataset.copySubscription);
@@ -3694,7 +3707,7 @@ function openExportModal() {
     setStatus("Choose a doctor before exporting.", true);
     return;
   }
-  setPendingExportVariant(hasActiveExportFilters() ? "filtered" : "full");
+  setPendingExportVariant("full");
   renderExportModal();
   exportModal.classList.remove("hidden");
   exportModal.setAttribute("aria-hidden", "false");
@@ -3917,15 +3930,19 @@ function isCreatorAuthenticated() {
 }
 
 function syncAccountsButton() {
-  accountsButton.textContent = isOwnerAccount() ? "Accounts" : "Account";
+  const ownerView = isOwnerAccount();
+  const issueCount = ownerView ? adminIssueCount() : 0;
+  accountsButton.innerHTML = ownerView
+    ? `Admin${issueCount ? `<span class="notification-badge">${issueCount}</span>` : ""}`
+    : "Account";
 }
 
 function renderAccountsModal() {
   const me = currentAccount();
   const ownerView = isOwnerAccount();
-  accountsModalTitle.textContent = ownerView ? "Accounts" : "Account";
+  accountsModalTitle.textContent = ownerView ? "Admin" : "Account";
   accountsModalSubtitle.textContent = ownerView
-    ? "Manage your account and review other users."
+    ? "Review user issues, manage accounts, and update the owner account."
     : "Manage your account details.";
 
   const serverOtherUsers = serverUsers
@@ -3934,8 +3951,16 @@ function renderAccountsModal() {
   const localOtherUsers = accountState.users.filter((user) => user.email !== me.email);
   const otherUsers = serverOtherUsers.length ? serverOtherUsers : localOtherUsers;
   const linkedNames = renderLinkedRosterNames(currentRosterClaims);
-  const subscriptionCard = renderSubscriptionCard();
-  accountsBody.innerHTML = `
+  if (ownerView && !["errors", "users", "owner"].includes(currentAdminTab)) currentAdminTab = "errors";
+  const issueCount = adminIssueCount();
+  const adminTabs = ownerView ? `
+    <div class="admin-tabs" role="tablist" aria-label="Admin sections">
+      <button type="button" class="entrance-tab ${currentAdminTab === "errors" ? "is-active" : ""}" data-admin-tab="errors">Errors${issueCount ? `<span class="notification-badge">${issueCount}</span>` : ""}</button>
+      <button type="button" class="entrance-tab ${currentAdminTab === "users" ? "is-active" : ""}" data-admin-tab="users">Users</button>
+      <button type="button" class="entrance-tab ${currentAdminTab === "owner" ? "is-active" : ""}" data-admin-tab="owner">Owner account</button>
+    </div>
+  ` : "";
+  const ownerCard = `
     <article class="review-card">
       <div class="review-top">
         <div>
@@ -3962,9 +3987,9 @@ function renderAccountsModal() {
         </div>
       </form>
       ${linkedNames}
-      ${subscriptionCard}
     </article>
-    ${ownerView ? `
+  `;
+  const usersCard = ownerView ? `
       <article class="review-card">
         <div class="review-top">
           <div>
@@ -4012,8 +4037,12 @@ function renderAccountsModal() {
           `).join("") : `<article class="issue-card"><p>No additional users yet.</p></article>`}
         </div>
       </article>
-    ` : ""}
-  `;
+    ` : "";
+  const errorsCard = ownerView ? renderAdminErrorsCard(serverOtherUsers) : "";
+  const adminBody = ownerView
+    ? (currentAdminTab === "errors" ? errorsCard : currentAdminTab === "users" ? usersCard : ownerCard)
+    : ownerCard;
+  accountsBody.innerHTML = `${adminTabs}${adminBody}`;
 }
 
 function renderLinkedRosterNames(claims) {
@@ -4035,41 +4064,51 @@ function renderLinkedRosterNames(claims) {
   `;
 }
 
-function renderSubscriptionCard() {
-  if (activeDoctorProfile) return "";
-  if (!currentSubscription?.token) return "";
-  const httpsUrl = subscriptionUrl("https", "full");
-  const webcalUrl = subscriptionUrl("webcal", "full");
-  if (!httpsUrl || !webcalUrl) return "";
-  if (!currentSubscription.enabled) {
-    return `
-      <div class="issue-card subscription-card">
+function adminIssueCount() {
+  return serverUsers
+    .map(normalizeServerUser)
+    .filter((user) => user.email !== OWNER_EMAIL)
+    .reduce((total, user) => total + ((user.adminIssues || []).length || 0), 0);
+}
+
+function renderAdminErrorsCard(users) {
+  const issueUsers = users.filter((user) => (user.adminIssues || []).length);
+  return `
+    <article class="review-card">
+      <div class="review-top">
         <div>
-          <strong>Calendar subscription</strong>
-          <p>Subscription links will appear once this account has a saved doctor selection and roster data.</p>
+          <strong>Errors</strong>
+          <span>${issueUsers.length ? `${adminIssueCount()} issue${adminIssueCount() === 1 ? "" : "s"} across ${issueUsers.length} user${issueUsers.length === 1 ? "" : "s"}` : "No user issues queued."}</span>
         </div>
       </div>
-    `;
-  }
-  return `
-    <div class="issue-card subscription-card">
-      <div>
-        <strong>Calendar subscription</strong>
-        <p>Subscribe in Apple Calendar or Google Calendar using one of these account links.</p>
+      <div class="issues-list">
+        ${issueUsers.length ? issueUsers.map((user) => `
+          <article class="issue-card">
+            <div>
+              <strong>${escapeHtml(user.realName || "Name not set")}</strong>
+              <p>${escapeHtml(user.email)}</p>
+            </div>
+            <div class="issues-list">
+              ${(user.adminIssues || []).map((issue) => `
+                <article class="issue-card">
+                  <div>
+                    <strong>${escapeHtml(issue.message)}</strong>
+                    <p>${escapeHtml(formatTimestamp(issue.lastSeenAt))}${issue.count > 1 ? ` · seen ${issue.count} times` : ""}</p>
+                  </div>
+                  <div class="account-actions">
+                    <button type="button" class="button button-secondary" data-enter-account="${escapeHtml(user.email)}">Enter account</button>
+                    <button type="button" class="button button-secondary" data-clear-admin-errors="${escapeHtml(user.email)}" data-error-id="${escapeHtml(issue.id)}">Clear</button>
+                  </div>
+                </article>
+              `).join("")}
+            </div>
+            <div class="account-actions">
+              <button type="button" class="button button-secondary" data-clear-admin-errors="${escapeHtml(user.email)}">Clear all for ${escapeHtml(user.realName || user.email)}</button>
+            </div>
+          </article>
+        `).join("") : `<article class="issue-card"><p>No user errors to review.</p></article>`}
       </div>
-      <label class="field">
-        <span>HTTPS feed</span>
-        <input type="text" value="${escapeHtml(httpsUrl)}" readonly>
-      </label>
-      <label class="field">
-        <span>webcal feed</span>
-        <input type="text" value="${escapeHtml(webcalUrl)}" readonly>
-      </label>
-      <div class="account-actions">
-        <button type="button" class="button button-secondary" data-copy-subscription="https">Copy HTTPS</button>
-        <button type="button" class="button button-secondary" data-copy-subscription="webcal">Copy webcal</button>
-      </div>
-    </div>
+    </article>
   `;
 }
 
@@ -4101,6 +4140,58 @@ async function copySubscriptionLink(kind = "https") {
 function formatUserSites(user) {
   const sites = Array.isArray(user.sites) ? user.sites.filter(Boolean) : [];
   return sites.length ? `sites: ${sites.join(", ")}` : "no linked sites";
+}
+
+async function clearAdminErrors(email, errorId = "") {
+  if (!isCreatorAuthenticated()) {
+    setStatus("Creator authentication is required to clear user errors.", true);
+    return;
+  }
+  try {
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "clearUserError",
+        email: authUserEmail || currentUserEmail,
+        password: authUserPassword || currentUserPassword,
+        targetEmail: email,
+        errorId,
+      }),
+    });
+    await readJsonResponse(response, "Could not clear user errors.");
+    await loadServerUsers();
+    renderAccountsModal();
+    syncAccountsButton();
+    setStatus(errorId ? "User error cleared." : "All user errors cleared.");
+  } catch (error) {
+    setStatus(error.message || "Could not clear user errors.", true);
+  }
+}
+
+async function reportAccountError(message) {
+  if (!message || !cloudAvailable || !currentUserEmail || !currentUserPassword) return;
+  if (currentUserRole === "creator") return;
+  try {
+    await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "reportUserError",
+        email: adminViewingEmail ? authUserEmail || currentUserEmail : currentUserEmail,
+        password: adminViewingEmail ? authUserPassword || currentUserPassword : currentUserPassword,
+        targetEmail: adminViewingEmail ? currentUserEmail : "",
+        message,
+      }),
+    });
+    if (isCreatorAuthenticated()) {
+      await loadServerUsers();
+      syncAccountsButton();
+      if (!accountsModal.classList.contains("hidden") && currentAdminTab === "errors") renderAccountsModal();
+    }
+  } catch {
+    // Keep UI responsive if error reporting fails.
+  }
 }
 
 function updateAccountDetails(email, patch) {
@@ -4488,6 +4579,8 @@ function normalizeServerUser(value) {
       role: value === OWNER_EMAIL ? "owner" : "user",
       sites: [],
       claims: [],
+      adminIssues: [],
+      issuesCount: 0,
     };
   }
   const email = normalizeEmail(value?.email);
@@ -4498,6 +4591,8 @@ function normalizeServerUser(value) {
     role: role === "creator" ? "owner" : role,
     sites: Array.isArray(value?.sites) ? value.sites : [],
     claims: sanitizeRosterClaims(value?.claims || []),
+    adminIssues: Array.isArray(value?.adminIssues) ? value.adminIssues : [],
+    issuesCount: Number(value?.issuesCount || 0),
   };
 }
 
@@ -4835,6 +4930,7 @@ async function loadServerUsers() {
     });
     const data = await readJsonResponse(response, "Could not load users.");
     serverUsers = data.users || [];
+    syncAccountsButton();
   } catch {
     // Keep the last available local list.
   }
@@ -5404,6 +5500,9 @@ async function bootstrapApp() {
 function setStatus(message, isError = false) {
   status.textContent = message;
   status.dataset.error = isError ? "true" : "false";
+  if (isError && message) {
+    void reportAccountError(message);
+  }
 }
 
 async function readJsonResponse(response, fallbackMessage = "Request failed.") {
