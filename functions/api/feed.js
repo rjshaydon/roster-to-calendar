@@ -1,4 +1,4 @@
-import { loadAccountBySubscriptionToken, prepareAccountResponse } from "./state.js";
+import { accountSnapshotOwner, loadAccountBySubscriptionToken, loadSnapshotRecord } from "./state.js";
 
 export async function onRequestGet(context) {
   try {
@@ -18,13 +18,14 @@ export async function onRequestGet(context) {
       return new Response("Subscription calendar was not found.", { status: 404 });
     }
 
-    const prepared = await prepareAccountResponse(context.env.ROSTER_STORE, record);
-    const artifact = prepared.state?.subscriptionFeeds?.[view] || null;
-    if (!prepared.subscription?.enabled || !artifact?.ics) {
+    const owner = accountSnapshotOwner(record.email, record.role || "");
+    const snapshot = await loadSnapshotRecord(context.env.ROSTER_STORE, owner.ownerType, owner.ownerId);
+    const artifact = snapshot?.subscriptionFeeds?.[view] || null;
+    if (!artifact?.ics) {
       return new Response("No stored subscription calendar is available for this view.", { status: 404 });
     }
 
-    const displayName = artifact.doctorDisplay || prepared.realName || record.email;
+    const displayName = artifact.doctorDisplay || record.realName || record.email;
     return new Response(artifact.ics, {
       status: 200,
       headers: {

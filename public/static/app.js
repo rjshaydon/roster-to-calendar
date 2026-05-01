@@ -201,6 +201,10 @@ let pendingExportMode = "full";
 let pendingExportRange = defaultExportRangeState();
 let currentAdminTab = "errors";
 let reportedIssueFingerprints = new Set();
+let currentSnapshot = null;
+let currentSnapshotStale = false;
+let currentSnapshotBuiltAt = "";
+let snapshotRefreshPromise = null;
 
 const settingsInputs = Object.fromEntries(
   SETTINGS_FIELDS.map((id) => [id, document.querySelector(`#${id}`)]),
@@ -888,14 +892,17 @@ function validateIncomingFiles(files) {
   return files;
 }
 
-async function analyzeFiles() {
+async function analyzeFiles(options = {}) {
   if (!selectedFiles.length) {
     setStatus("Add a roster file to begin.");
     return;
   }
-  clearPreviewData();
-  doctorOptions = [];
-  detectedSources = {};
+  await ensureSelectedFilesLoaded();
+  if (!options.preserveVisiblePreview) {
+    clearPreviewData();
+    doctorOptions = [];
+    detectedSources = {};
+  }
   parsedRosterSources = null;
   doctorRoleIndex = null;
   parsedImportDoctors = new Map();
@@ -904,9 +911,6 @@ async function analyzeFiles() {
   mobileActionBar.classList.remove("hidden");
   setStatus("Detecting roster sources and consultants...");
   try {
-    if (canUseDoctorPicker() && cloudAvailable && !serverUsers.length) {
-      await loadServerUsers();
-    }
     const data = await analyzeFilesInBrowser();
     doctorOptions = doctorOptionsForCurrentAccount(data.doctors || []);
     detectedSources = summarizeDetectedSources(data.imports || []);
@@ -925,15 +929,17 @@ async function analyzeFiles() {
     saveCurrentWorkspace();
     scheduleCloudStateSave();
     if (selectedDoctor()) {
-      await updatePreview({ resetRange: true });
+      await updatePreview({ resetRange: options.resetRange !== false });
       return;
     }
   } catch (error) {
-    doctorOptions = [];
-    detectedSources = {};
-    clearPreviewData();
-    renderFilesList();
-    syncActionState();
+    if (!options.preserveVisiblePreview) {
+      doctorOptions = [];
+      detectedSources = {};
+      clearPreviewData();
+      renderFilesList();
+      syncActionState();
+    }
     setStatus(error.message, true);
   }
 }
@@ -952,6 +958,7 @@ async function analyzeFilesInBrowser() {
 }
 
 async function parseCurrentRosterForm(doctor = null) {
+  await ensureSelectedFilesLoaded();
   return await parseUploadForm(new Request(`${window.location.origin}/browser-roster-parse`, {
     method: "POST",
     body: createFormData(doctor),
@@ -1177,6 +1184,7 @@ async function updatePreview(options = {}) {
     }
     indexReviewItems(data.review || []);
     rebuildClientPreview();
+    cacheCurrentSnapshot(buildActiveSessionState());
     saveCurrentSessionState();
     setStatus("Calendar loaded.");
   } catch (error) {
@@ -2307,6 +2315,7 @@ function syncActionState() {
 function createFormData(doctor = null) {
   const body = new FormData();
   for (const entry of selectedFiles) {
+    if (!entry.file) continue;
     body.append("rosterFiles", entry.file);
     body.append("rosterFileId", entry.id);
     body.append("rosterFileAddedAt", entry.addedAt || "");
@@ -3912,6 +3921,10 @@ async function handleExportAction(action) {
     return;
   }
   try {
+    if (currentSnapshotStale) {
+      setStatus("Refreshing calendar...");
+      await refreshSnapshotInBackground();
+    }
     if (action === "download") {
       setStatus("Building calendar file...");
       const events = await buildBrowserExportEvents(doctor, exportConfig);
@@ -4564,13 +4577,8 @@ async function enterDoctorProfileView(doctor) {
   clearPreviewData();
   restoredSessionState = null;
   await restoreDoctorProfileState();
-  applySessionState(restoredSessionState);
-  renderSettings();
-  renderDoctorState();
+  await bootstrapImports();
   renderLoginState();
-  if (selectedDoctor()) {
-    await updatePreview({ resetRange: false });
-  }
 }
 
 async function exitDoctorProfileView() {
@@ -4584,13 +4592,11 @@ async function exitDoctorProfileView() {
   activeDoctorProfile = null;
   clearPreviewData();
   restoredSessionState = loadCurrentSessionState();
-  applySessionState(restoredSessionState);
-  renderSettings();
-  renderDoctorState();
+  currentSnapshot = sanitizeWorkspaceSnapshot(loadCurrentWorkspace()?.snapshot);
+  currentSnapshotStale = false;
+  currentSnapshotBuiltAt = "";
+  await bootstrapImports();
   renderLoginState();
-  if (selectedDoctor()) {
-    await updatePreview({ resetRange: false });
-  }
 }
 
 async function returnToCreatorAccount() {
@@ -4615,6 +4621,9 @@ async function returnToCreatorAccount() {
 
 async function clearLocalWorkspace() {
   selectedFiles = [];
+  currentSnapshot = null;
+  currentSnapshotStale = false;
+  currentSnapshotBuiltAt = "";
   resetDerivedState();
   renderFilesList();
 }
@@ -4732,6 +4741,56 @@ function sanitizeSubscription(value) {
     token,
     enabled: value.enabled === true,
   };
+}
+
+function sanitizeWorkspaceSnapshot(value) {
+  if (!value || typeof value !== "object" || !value.preview) return null;
+  return {
+    preview: JSON.parse(JSON.stringify(value.preview)),
+    session: value.session && typeof value.session === "object" ? JSON.parse(JSON.stringify(value.session)) : {},
+    doctorOptions: Array.isArray(value.doctorOptions)
+      ? value.doctorOptions.map((doctor) => ({
+          ...doctor,
+          key: normalizeRosterName(doctor?.key || ""),
+          displayName: String(doctor?.displayName || "").trim(),
+          sourceTypes: Array.isArray(doctor?.sourceTypes) ? doctor.sourceTypes.map((item) => String(item || "").toLowerCase()).filter(Boolean) : [],
+          aliases: Array.isArray(doctor?.aliases) ? doctor.aliases.map((alias) => ({
+            key: normalizeRosterName(alias?.key || ""),
+            displayName: String(alias?.displayName || "").trim(),
+            sourceType: String(alias?.sourceType || "").toLowerCase(),
+          })).filter((alias) => alias.key && alias.displayName) : [],
+          accountEmail: normalizeEmail(doctor?.accountEmail || doctor?.claimedBy || ""),
+          claimedBy: normalizeEmail(doctor?.claimedBy || ""),
+          claimedByName: String(doctor?.claimedByName || "").trim(),
+        })).filter((doctor) => doctor.key && doctor.displayName)
+      : [],
+    detectedSources: {
+      mmc: Array.isArray(value.detectedSources?.mmc) ? value.detectedSources.mmc.map((item) => String(item || "")).filter(Boolean) : [],
+      ddh: Array.isArray(value.detectedSources?.ddh) ? value.detectedSources.ddh.map((item) => String(item || "")).filter(Boolean) : [],
+    },
+    fileRefs: Array.isArray(value.fileRefs) ? value.fileRefs.map(importRefForWorkspace).filter((item) => item.id) : [],
+    subscriptionFeeds: value.subscriptionFeeds && typeof value.subscriptionFeeds === "object" ? JSON.parse(JSON.stringify(value.subscriptionFeeds)) : {},
+  };
+}
+
+function importRefForWorkspace(entry) {
+  return {
+    id: String(entry?.id || entry?.repoId || ""),
+    name: String(entry?.name || "roster.xlsx"),
+    size: Number(entry?.size || 0),
+    lastModified: Number(entry?.lastModified || 0),
+    addedAt: String(entry?.addedAt || ""),
+    sourceType: String(entry?.sourceType || "pending"),
+  };
+}
+
+function importRefsToClientEntries(refs = []) {
+  return (Array.isArray(refs) ? refs : [])
+    .map((entry) => ({
+      ...importRefForWorkspace(entry),
+      repoId: String(entry?.repoId || entry?.id || ""),
+    }))
+    .filter((entry) => entry.id);
 }
 
 function normalizeSavedExportRange(value) {
@@ -4927,6 +4986,9 @@ async function restoreCloudState(options = {}) {
 
 async function restoreDoctorProfileState() {
   if (!activeDoctorProfile || !cloudAvailable) {
+    currentSnapshot = null;
+    currentSnapshotStale = false;
+    currentSnapshotBuiltAt = "";
     restoredSessionState = loadCurrentSessionState();
     return;
   }
@@ -4938,10 +5000,22 @@ async function restoreDoctorProfileState() {
       email: authUserEmail || currentUserEmail,
       password: authUserPassword || currentUserPassword,
       profileId: activeDoctorProfile.id,
+      doctorKey: activeDoctorProfile.doctorKey,
+      displayName: activeDoctorProfile.displayName,
+      sourceTypes: activeDoctorProfile.sourceTypes,
     }),
   });
   const data = await readJsonResponse(response, "Doctor profile load failed.");
-  restoredSessionState = data.profile?.state?.session || loadCurrentSessionState() || null;
+  currentSnapshot = sanitizeWorkspaceSnapshot(data.snapshot);
+  currentSnapshotStale = data.snapshotStale === true;
+  currentSnapshotBuiltAt = String(data.snapshotBuiltAt || "");
+  selectedFiles = importRefsToClientEntries(currentSnapshot?.fileRefs || []);
+  restoredSessionState = currentSnapshot?.session || data.profile?.state?.session || loadCurrentSessionState() || null;
+  saveWorkspaceSnapshotForEmail(activeWorkspaceOwnerKey(), {
+    fileRefs: selectedFiles.map(importRefForWorkspace),
+    session: restoredSessionState || {},
+    snapshot: currentSnapshot,
+  });
 }
 
 async function applyCloudStateData(data) {
@@ -4968,27 +5042,23 @@ async function applyCloudStateData(data) {
   if (!cloudAvailable) return;
   if (!data.state) {
     selectedFiles = [];
+    currentSnapshot = null;
+    currentSnapshotStale = false;
+    currentSnapshotBuiltAt = "";
     restoredSessionState = null;
     await replaceStoredImports([]);
     clearWorkspaceStoreEntry(currentUserEmail);
     return;
   }
-  const imports = await deserializeCloudImports(data.state.imports || []);
-  selectedFiles = imports;
-  await replaceStoredImports(imports);
-  if (data.state.session) {
-    restoredSessionState = data.state.session;
-  }
-  saveWorkspaceSnapshotForEmail(currentUserEmail, {
-    fileRefs: imports.map((entry) => ({
-      id: entry.id,
-      name: entry.name,
-      size: entry.size,
-      lastModified: entry.lastModified,
-      addedAt: entry.addedAt,
-      sourceType: entry.sourceType,
-    })),
-    session: data.state.session && typeof data.state.session === "object" ? data.state.session : {},
+  currentSnapshot = sanitizeWorkspaceSnapshot(data.snapshot);
+  currentSnapshotStale = data.snapshotStale === true;
+  currentSnapshotBuiltAt = String(data.snapshotBuiltAt || "");
+  selectedFiles = importRefsToClientEntries(data.state.imports || currentSnapshot?.fileRefs || []);
+  restoredSessionState = currentSnapshot?.session || (data.state.session && typeof data.state.session === "object" ? data.state.session : null);
+  saveWorkspaceSnapshotForEmail(activeWorkspaceOwnerKey(), {
+    fileRefs: selectedFiles.map(importRefForWorkspace),
+    session: restoredSessionState || {},
+    snapshot: currentSnapshot,
   });
 }
 
@@ -5050,6 +5120,7 @@ function snapshotCloudSavePayload() {
 async function saveCloudState(snapshot = null) {
   const payload = snapshot || snapshotCloudSavePayload();
   if (!payload.accountEmail || !payload.requestEmail || !payload.requestPassword || !cloudAvailable) return;
+  const snapshotPayload = await buildWorkspaceSnapshotPayload(payload.session);
   if (payload.doctorProfile) {
     const response = await fetch("/api/state", {
       method: "POST",
@@ -5063,9 +5134,15 @@ async function saveCloudState(snapshot = null) {
         displayName: payload.doctorProfile.displayName,
         sourceTypes: payload.doctorProfile.sourceTypes,
         state: { version: 1, imports: [], session: payload.session },
+        snapshot: snapshotPayload,
       }),
     });
     await readJsonResponse(response, "Doctor profile save failed.");
+    if (snapshotPayload) {
+      currentSnapshot = sanitizeWorkspaceSnapshot(snapshotPayload);
+      currentSnapshotStale = false;
+      currentSnapshotBuiltAt = new Date().toISOString();
+    }
     renderLoginState();
     return;
   }
@@ -5079,11 +5156,43 @@ async function saveCloudState(snapshot = null) {
       password: payload.requestPassword,
       targetEmail: payload.targetEmail,
       state,
+      snapshot: snapshotPayload,
     }),
   });
   const data = await readJsonResponse(response, "Cloud save failed.");
   if (data.claims && payload.accountEmail === currentUserEmail) currentRosterClaims = sanitizeRosterClaims(data.claims);
+  if (snapshotPayload) {
+    currentSnapshot = sanitizeWorkspaceSnapshot(snapshotPayload);
+    currentSnapshotStale = false;
+    currentSnapshotBuiltAt = new Date().toISOString();
+  }
   renderLoginState();
+}
+
+async function buildWorkspaceSnapshotPayload(session = buildActiveSessionState()) {
+  if (!latestPreview || !selectedDoctor()) return null;
+  return {
+    preview: JSON.parse(JSON.stringify(latestPreview)),
+    session: JSON.parse(JSON.stringify(session || {})),
+    doctorOptions: JSON.parse(JSON.stringify(doctorOptions || [])),
+    detectedSources: JSON.parse(JSON.stringify(detectedSources || {})),
+    fileRefs: selectedFiles.map(importRefForWorkspace),
+    subscriptionFeeds: await buildSubscriptionFeeds(session),
+  };
+}
+
+function cacheCurrentSnapshot(session = buildActiveSessionState()) {
+  if (!latestPreview || !selectedDoctor()) return;
+  currentSnapshot = sanitizeWorkspaceSnapshot({
+    preview: JSON.parse(JSON.stringify(latestPreview)),
+    session: JSON.parse(JSON.stringify(session || {})),
+    doctorOptions: JSON.parse(JSON.stringify(doctorOptions || [])),
+    detectedSources: JSON.parse(JSON.stringify(detectedSources || {})),
+    fileRefs: selectedFiles.map(importRefForWorkspace),
+    subscriptionFeeds: currentSnapshot?.subscriptionFeeds || {},
+  });
+  currentSnapshotStale = false;
+  currentSnapshotBuiltAt = new Date().toISOString();
 }
 
 async function loadServerUsers() {
@@ -5109,11 +5218,12 @@ async function loadServerUsers() {
 }
 
 async function buildCloudState(imports = selectedFiles, session = buildActiveSessionState()) {
+  const subscriptionFeeds = await buildSubscriptionFeeds(session);
   return {
     version: 1,
     imports: await serializeCloudImports(imports),
     session,
-    subscriptionFeeds: await buildSubscriptionFeeds(session),
+    subscriptionFeeds,
   };
 }
 
@@ -5133,11 +5243,15 @@ function buildActiveSessionState() {
 async function buildSubscriptionFeeds(session = buildActiveSessionState()) {
   if (activeDoctorProfile) return {};
   const doctor = selectedDoctor();
-  if (!doctor || !selectedFiles.length) return {};
-  const fullEvents = await buildBrowserExportEvents(doctor, { mode: "full" }).catch(() => []);
+  if (!doctor) return {};
+  const fullEvents = latestPreview?.events?.length
+    ? buildExportEventsFromBase(latestPreview, { mode: "full" })
+    : await buildBrowserExportEvents(doctor, { mode: "full" }).catch(() => []);
   const rangeConfig = exportConfigForMode("range", session?.exportRange || defaultExportRangeState());
   const rangeEvents = rangeConfig.startDate
-    ? await buildBrowserExportEvents(doctor, rangeConfig).catch(() => [])
+    ? (latestPreview?.events?.length
+      ? buildExportEventsFromBase(latestPreview, rangeConfig)
+      : await buildBrowserExportEvents(doctor, rangeConfig).catch(() => []))
     : [];
   if (!fullEvents.length && !rangeEvents.length) return {};
   return {
@@ -5160,17 +5274,22 @@ async function buildSubscriptionFeeds(session = buildActiveSessionState()) {
 }
 
 async function serializeCloudImports(imports) {
-  return await Promise.all(imports.map(async (entry) => ({
-    id: entry.id,
-    name: entry.name,
-    size: entry.size,
-    lastModified: entry.lastModified,
-    addedAt: entry.addedAt,
-    sourceType: entry.sourceType,
-    doctors: parsedImportDoctors.get(entry.id) || [],
-    type: entry.file?.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    dataUrl: await fileToDataUrl(entry.file),
-  })));
+  return await Promise.all(imports.map(async (entry) => {
+    if (!entry.file) {
+      return importRefForWorkspace(entry);
+    }
+    return {
+      id: entry.id,
+      name: entry.name,
+      size: entry.size,
+      lastModified: entry.lastModified,
+      addedAt: entry.addedAt,
+      sourceType: entry.sourceType,
+      doctors: parsedImportDoctors.get(entry.id) || [],
+      type: entry.file?.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      dataUrl: await fileToDataUrl(entry.file),
+    };
+  }));
 }
 
 async function deserializeCloudImports(imports) {
@@ -5250,23 +5369,18 @@ function clearWorkspaceStoreEntry(email) {
 
 function currentWorkspaceSnapshot() {
   return {
-    fileRefs: selectedFiles.map((entry) => ({
-      id: entry.id,
-      name: entry.name,
-      size: entry.size,
-      lastModified: entry.lastModified,
-      addedAt: entry.addedAt,
-      sourceType: entry.sourceType,
-    })),
+    fileRefs: selectedFiles.map(importRefForWorkspace),
     session: {
       doctorKey: doctorOptions.length > 1 ? doctorSelect.value : doctorOptions[0]?.key || "",
       settings: { ...settings },
       overrides: cleanOverrides(),
       customEvents: customEventsForActiveCalendar(),
       conflictSelections: { ...conflictSelections },
+      exportRange: normalizeSavedExportRange(pendingExportRange),
       hadPreview: Boolean(latestPreview),
       savedAt: new Date().toISOString(),
     },
+    snapshot: currentSnapshot,
   };
 }
 
@@ -5522,6 +5636,7 @@ async function replaceStoredImports(imports) {
       const tx = db.transaction(IMPORT_STORE, "readwrite");
       const store = tx.objectStore(IMPORT_STORE);
       for (const entry of imports) {
+        if (!entry.file) continue;
         store.put({
           id: entry.id,
           name: entry.name,
@@ -5645,9 +5760,21 @@ async function bootstrapImports() {
         const workspace = loadCurrentWorkspace();
         selectedFiles = await loadStoredImportsByRefs(workspace?.fileRefs || []);
         restoredSessionState = workspace?.session || restoredSessionState;
+        currentSnapshot = sanitizeWorkspaceSnapshot(workspace?.snapshot);
+        currentSnapshotStale = false;
       }
     }
     renderFilesList();
+    if (currentSnapshot?.preview && currentSnapshot.doctorOptions?.length) {
+      renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+      if (currentSnapshotStale) {
+        setStatus("Refreshing calendar...");
+        void refreshSnapshotInBackground();
+      } else {
+        setStatus("Calendar loaded.");
+      }
+      return;
+    }
     if (selectedFiles.length) {
       await analyzeFiles();
     } else {
@@ -5661,6 +5788,76 @@ async function bootstrapImports() {
     renderFilesList();
     setStatus("Browser storage is unavailable. You can still import files for this session.", true);
   }
+}
+
+function renderWorkspaceFromSnapshot(snapshot, session = {}) {
+  currentSnapshot = sanitizeWorkspaceSnapshot(snapshot);
+  if (!currentSnapshot) return;
+  latestPreview = JSON.parse(JSON.stringify(currentSnapshot.preview));
+  doctorOptions = Array.isArray(currentSnapshot.doctorOptions) ? JSON.parse(JSON.stringify(currentSnapshot.doctorOptions)) : [];
+  detectedSources = JSON.parse(JSON.stringify(currentSnapshot.detectedSources || {}));
+  parsedRosterSources = null;
+  doctorRoleIndex = null;
+  parsedImportDoctors = new Map();
+  clearDoctorAnalysisCache();
+  restoredSessionState = session && typeof session === "object" ? session : {};
+  applySessionState(restoredSessionState, { inheritedSettings: rosterDefaultSettings() });
+  renderSettings();
+  renderFilesList();
+  renderDoctorState();
+  indexReviewItems(latestPreview.review || []);
+  rebuildClientPreview();
+  saveCurrentWorkspace();
+}
+
+async function ensureSelectedFilesLoaded() {
+  if (!selectedFiles.some((entry) => !entry.file)) return;
+  if (cloudAvailable) {
+    const requestEmail = adminViewingEmail ? authUserEmail || currentUserEmail : currentUserEmail;
+    const requestPassword = adminViewingEmail ? authUserPassword || currentUserPassword : currentUserPassword;
+    const action = activeDoctorProfile ? "loadDoctorProfileImports" : "loadImports";
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action,
+        email: requestEmail,
+        password: requestPassword,
+        targetEmail: activeDoctorProfile ? "" : (adminViewingEmail ? currentUserEmail : ""),
+        profileId: activeDoctorProfile?.id || "",
+        doctorKey: activeDoctorProfile?.doctorKey || "",
+        displayName: activeDoctorProfile?.displayName || "",
+        sourceTypes: activeDoctorProfile?.sourceTypes || [],
+      }),
+    });
+    const data = await readJsonResponse(response, "Could not load roster files.");
+    const imports = await deserializeCloudImports(data.imports || []);
+    selectedFiles = imports;
+    await replaceStoredImports(imports);
+    saveCurrentWorkspace();
+    return;
+  }
+  const restored = await loadStoredImportsByRefs(selectedFiles.map(importRefForWorkspace));
+  if (restored.length) {
+    selectedFiles = restored;
+  }
+}
+
+async function refreshSnapshotInBackground() {
+  if (snapshotRefreshPromise) return snapshotRefreshPromise;
+  snapshotRefreshPromise = (async () => {
+    try {
+      await analyzeFiles({ resetRange: false, preserveVisiblePreview: true });
+      currentSnapshotStale = false;
+      currentSnapshotBuiltAt = new Date().toISOString();
+      setStatus("Calendar refreshed.");
+    } catch (error) {
+      setStatus(error.message || "Could not refresh the calendar.", true);
+    } finally {
+      snapshotRefreshPromise = null;
+    }
+  })();
+  return snapshotRefreshPromise;
 }
 
 async function bootstrapApp() {
