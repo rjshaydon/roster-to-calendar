@@ -1469,6 +1469,7 @@ function renderIssues(items) {
 }
 
 async function reportPreviewIssues(items) {
+  if (currentUserRole !== "user" || adminViewingEmail) return;
   if (!items.length) return;
   for (const item of items) {
     const fingerprint = `${activeCalendarOwnerId()}::${item.id || ""}::${item.message || ""}::${item.rawValue || ""}`;
@@ -1853,6 +1854,7 @@ function renderWhenInsight() {
         ? overlaps.map((entry) => `
           <article class="issue-card${entry.date === nextOverlapDate ? " is-next-overlap" : ""}" ${entry.date === nextOverlapDate ? 'data-insight-next="true"' : ""}>
             <strong>${escapeHtml(formatInsightDate(entry.date))}</strong>
+            <p><strong>Hospital:</strong> ${escapeHtml(entry.hospital || "Unknown")}</p>
             <p><strong>${escapeHtml(selectedDoctor()?.displayName || "Selected doctor")}:</strong> ${escapeHtml(renderInsightShiftSummary(entry.mine))}</p>
             <p><strong>${escapeHtml(selectedComparison.displayName)}:</strong> ${escapeHtml(renderInsightShiftSummary(entry.theirs))}</p>
           </article>
@@ -1930,11 +1932,20 @@ function buildOverlapDays(mine, theirs) {
   return [...mineByDay.keys()]
     .filter((date) => theirsByDay.has(date))
     .sort()
-    .map((date) => ({
-      date,
-      mine: mineByDay.get(date) || [],
-      theirs: theirsByDay.get(date) || [],
-    }));
+    .flatMap((date) => {
+      const myEvents = mineByDay.get(date) || [];
+      const theirEvents = theirsByDay.get(date) || [];
+      const myHospitals = new Set(myEvents.map(eventSourceCode).filter(Boolean));
+      const sharedHospitals = [...new Set(theirEvents.map(eventSourceCode).filter(Boolean))]
+        .filter((hospital) => myHospitals.has(hospital));
+      return sharedHospitals.map((hospital) => ({
+        date,
+        hospital,
+        mine: myEvents.filter((event) => eventSourceCode(event) === hospital),
+        theirs: theirEvents.filter((event) => eventSourceCode(event) === hospital),
+      }));
+    })
+    .filter((entry) => entry.mine.length && entry.theirs.length);
 }
 
 function indexEventsByDay(events) {
