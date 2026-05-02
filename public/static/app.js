@@ -1820,7 +1820,12 @@ function renderTermSection(section) {
     const monthKey = monday ? `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, "0")}` : "";
     const isMonthStartWeek = Boolean(monthKey && monthKey !== lastMonthKey);
     if (monthKey && monthKey !== lastMonthKey) {
-      bodyRows.push(`<div class="preview-month-row" data-month-key="${monthKey}">${formatMonth(monday)}</div>`);
+      bodyRows.push(`
+        <div class="preview-month-row" data-month-key="${monthKey}">
+          <span>${formatMonth(monday)}</span>
+          <button type="button" class="button button-secondary preview-month-button" data-insight-when="${formatDateKey(firstMonday)}" data-insight-when-end="${formatDateKey(lastSunday)}">When am I working with…?</button>
+        </div>
+      `);
       lastMonthKey = monthKey;
     }
     bodyRows.push(`
@@ -1836,10 +1841,7 @@ function renderTermSection(section) {
   return `
     <section class="preview-term">
       <div class="preview-term-header">
-      <div class="preview-term-title">${escapeHtml(section.label)}</div>
-      <div class="preview-term-actions">
-          <button type="button" class="button button-secondary preview-term-button" data-insight-when="${formatDateKey(firstMonday)}" data-insight-when-end="${formatDateKey(lastSunday)}">When am I working with…?</button>
-      </div>
+        <div class="preview-term-title">${escapeHtml(section.label)}</div>
       </div>
       <div class="preview-grid">
         <div class="preview-week-label preview-week-label-head">Week</div>

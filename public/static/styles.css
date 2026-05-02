@@ -948,16 +948,6 @@ input[type="color"] {
   color: var(--accent-strong);
 }
 
-.preview-term-actions {
-  display: inline-flex;
-  gap: 10px;
-  align-items: center;
-}
-
-.preview-term-button {
-  min-width: 82px;
-}
-
 .preview-grid {
   display: grid;
   grid-template-columns: 84px repeat(7, minmax(0, 1fr));
@@ -973,11 +963,22 @@ input[type="color"] {
 
 .preview-month-row {
   grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
   padding: 10px 12px 4px;
+  scroll-margin-top: calc(var(--console-header-height) + 18px);
+}
+
+.preview-month-row span {
   font-size: 1.14rem;
   font-weight: 700;
   color: var(--accent-strong);
-  scroll-margin-top: calc(var(--console-header-height) + 18px);
+}
+
+.preview-month-button {
+  min-width: 82px;
 }
 
 .preview-week-label,
