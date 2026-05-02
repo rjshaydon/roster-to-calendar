@@ -1574,9 +1574,10 @@ input[type="color"] {
 
 .mobile-action-bar {
   position: fixed;
-  left: calc(var(--mobile-viewport-left-offset, 0px) + 10px);
-  right: calc(var(--mobile-viewport-right-offset, 0px) + 10px);
-  bottom: calc(env(safe-area-inset-bottom, 0px) + var(--mobile-viewport-bottom-offset, 0px) + 8px);
+  left: var(--mobile-dock-left, 12px);
+  top: var(--mobile-dock-top, auto);
+  bottom: auto;
+  width: var(--mobile-dock-width, calc(100vw - 24px));
   z-index: 10;
   padding: 10px 14px;
   display: none;
@@ -2053,6 +2054,7 @@ body[data-skin="console"] .panel {
   }
 
   .drop-zone,
+  #controlBar,
   .preview-head,
   .preview-toolbar {
     display: none;
@@ -2080,10 +2082,6 @@ body[data-skin="console"] .panel {
     padding: 8px 9px;
   }
 
-  .control-bar-main {
-    display: none;
-  }
-
   .mobile-action-bar {
     display: grid;
     grid-template-columns: minmax(0, 1.15fr) repeat(3, minmax(0, 1fr));
@@ -2106,11 +2104,11 @@ body[data-skin="console"] .panel {
 
   #settingsPanel.settings-panel {
     inset: auto;
-    left: calc(var(--mobile-viewport-left-offset, 0px) + 10px);
-    right: calc(var(--mobile-viewport-right-offset, 0px) + 10px);
+    left: var(--mobile-dock-left, 12px);
+    right: auto;
     top: auto;
-    bottom: calc(env(safe-area-inset-bottom, 0px) + var(--mobile-viewport-bottom-offset, 0px) + 10px);
-    width: auto;
+    bottom: calc(100vh - var(--mobile-dock-top, 100vh) + 8px);
+    width: var(--mobile-dock-width, calc(100vw - 24px));
     max-height: min(78vh, calc(100vh - 24px));
     transform: none;
     border-radius: 24px;
@@ -2156,9 +2154,14 @@ body[data-skin="console"] .panel {
     border-right-width: 0;
   }
 
+  body[data-skin="console"] #controlBar,
+  body[data-skin="console"] .control-bar-main {
+    display: none;
+  }
+
   body[data-skin="console"] #previewSection {
     padding: 16px;
-    padding-bottom: calc(110px + env(safe-area-inset-bottom, 0px) + var(--mobile-viewport-bottom-offset, 0px));
+    padding-bottom: 190px;
     height: auto;
     overflow: visible;
   }

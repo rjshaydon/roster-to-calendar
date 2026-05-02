@@ -1168,19 +1168,20 @@ function isMobileLayout() {
 function syncMobileViewportInsets() {
   const root = document.documentElement;
   const viewport = window.visualViewport;
+  const margin = 12;
+  const dockClearance = 86;
+  const topClearance = 36;
   if (!viewport) {
-    root.style.setProperty("--mobile-viewport-bottom-offset", "0px");
-    root.style.setProperty("--mobile-viewport-top-offset", "0px");
-    root.style.setProperty("--mobile-viewport-left-offset", "0px");
-    root.style.setProperty("--mobile-viewport-right-offset", "0px");
+    root.style.setProperty("--mobile-dock-left", `${margin}px`);
+    root.style.setProperty("--mobile-dock-width", `calc(100vw - ${margin * 2}px)`);
+    root.style.setProperty("--mobile-dock-top", `calc(100vh - ${dockClearance}px)`);
+    root.style.setProperty("--mobile-top-anchor", `${topClearance}px`);
     return;
   }
-  const bottomOffset = Math.max(0, window.innerHeight - (viewport.height + viewport.offsetTop));
-  const rightOffset = Math.max(0, window.innerWidth - (viewport.width + viewport.offsetLeft));
-  root.style.setProperty("--mobile-viewport-bottom-offset", `${Math.round(bottomOffset)}px`);
-  root.style.setProperty("--mobile-viewport-top-offset", `${Math.round(viewport.offsetTop)}px`);
-  root.style.setProperty("--mobile-viewport-left-offset", `${Math.round(viewport.offsetLeft)}px`);
-  root.style.setProperty("--mobile-viewport-right-offset", `${Math.round(rightOffset)}px`);
+  root.style.setProperty("--mobile-dock-left", `${Math.round(viewport.offsetLeft + margin)}px`);
+  root.style.setProperty("--mobile-dock-width", `${Math.round(Math.max(0, viewport.width - margin * 2))}px`);
+  root.style.setProperty("--mobile-dock-top", `${Math.round(viewport.offsetTop + viewport.height - dockClearance)}px`);
+  root.style.setProperty("--mobile-top-anchor", `${Math.round(viewport.offsetTop + topClearance)}px`);
 }
 
 function hasCalendarPreview() {
@@ -3725,25 +3726,7 @@ function applyPreviewRangeChange(which, value) {
   setStatus("Preview range updated.");
 }
 
-function snapPreviewToCurrentMonth(smooth = true) {
-  const mobile = isMobileLayout();
-  const scroller = previewSection;
-  const header = preview.querySelector(".preview-head");
-  const alignTargetTopToBanner = (target) => {
-    if (!target) return false;
-    if (mobile) {
-      const safeTopOffset = Math.max(86, (window.visualViewport?.offsetTop || 0) + 86);
-      const nextTop = Math.max(0, window.scrollY + target.getBoundingClientRect().top - safeTopOffset);
-      window.scrollTo({ top: nextTop, behavior: smooth ? "smooth" : "auto" });
-      return true;
-    }
-    if (!scroller) return false;
-    const bannerBottom = header?.getBoundingClientRect().bottom || 0;
-    const targetTop = target.getBoundingClientRect().top;
-    const nextTop = Math.max(0, scroller.scrollTop + (targetTop - bannerBottom));
-    scroller.scrollTo({ top: nextTop, behavior: smooth ? "smooth" : "auto" });
-    return true;
-  };
+function targetForCurrentPreviewMonth() {
   const todayKey = formatDateKey(new Date());
   const todayCell = preview.querySelector(`[data-add-date="${todayKey}"]`);
   if (todayCell) {
@@ -3766,14 +3749,34 @@ function snapPreviewToCurrentMonth(smooth = true) {
     const target = monthRow
       ? (monthRow === firstMonthRow ? term?.querySelector(".preview-term-header") || monthRow : monthRow)
       : term?.querySelector(".preview-term-header") || weekLabel || todayCell;
-    if (monthRow && alignTargetTopToBanner(monthRow)) return;
-    if (alignTargetTopToBanner(target)) return;
-    return;
+    return monthRow || target;
   }
   const todayMonthKey = todayKey.slice(0, 7);
-  const monthRow = preview.querySelector(`[data-month-key="${todayMonthKey}"]`);
-  if (!monthRow) return;
-  alignTargetTopToBanner(monthRow);
+  return preview.querySelector(`[data-month-key="${todayMonthKey}"]`);
+}
+
+function scrollPreviewTarget(target, smooth = true) {
+  if (!target) return false;
+  if (isMobileLayout()) {
+    syncMobileViewportInsets();
+    const rawAnchor = getComputedStyle(document.documentElement).getPropertyValue("--mobile-top-anchor");
+    const anchor = Number.parseFloat(rawAnchor) || 36;
+    const nextTop = Math.max(0, window.scrollY + target.getBoundingClientRect().top - anchor);
+    window.scrollTo({ top: nextTop, behavior: smooth ? "smooth" : "auto" });
+    return true;
+  }
+  const scroller = previewSection;
+  const header = preview.querySelector(".preview-head");
+  if (!scroller) return false;
+  const bannerBottom = header?.getBoundingClientRect().bottom || 0;
+  const targetTop = target.getBoundingClientRect().top;
+  const nextTop = Math.max(0, scroller.scrollTop + (targetTop - bannerBottom));
+  scroller.scrollTo({ top: nextTop, behavior: smooth ? "smooth" : "auto" });
+  return true;
+}
+
+function snapPreviewToCurrentMonth(smooth = true) {
+  scrollPreviewTarget(targetForCurrentPreviewMonth(), smooth);
 }
 
 function buildEventOverridePatch(event, item, override = {}) {
