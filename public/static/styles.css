@@ -450,6 +450,10 @@ h1 {
   align-items: center;
 }
 
+.mobile-login-access {
+  display: none;
+}
+
 .skin-control {
   display: inline-flex;
   align-items: center;
@@ -620,6 +624,26 @@ input[type="color"] {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
   padding-right: 4px;
+}
+
+.mobile-settings-controls {
+  display: none;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 14px;
+  border: 1px solid rgba(20, 34, 42, 0.08);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.mobile-settings-range {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.mobile-settings-logout {
+  width: 100%;
 }
 
 .settings-panel {
@@ -1567,6 +1591,18 @@ input[type="color"] {
   flex: 1 1 0;
 }
 
+.mobile-bar-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.mobile-bar-glyph {
+  font-size: 1.08rem;
+  line-height: 1;
+}
+
 .hidden {
   display: none !important;
 }
@@ -1987,8 +2023,10 @@ body[data-skin="console"] .panel {
     padding-top: 12px;
   }
 
-  .drop-zone {
-    padding: 22px;
+  .drop-zone,
+  .preview-head,
+  .preview-toolbar {
+    display: none;
   }
 
   .file-summary {
@@ -1998,13 +2036,6 @@ body[data-skin="console"] .panel {
   .preview-grid {
     grid-template-columns: 78px repeat(7, minmax(112px, 1fr));
     overflow-x: auto;
-  }
-
-  .preview-head,
-  .preview-toolbar {
-    grid-template-columns: 1fr;
-    grid-auto-flow: row;
-    grid-auto-columns: auto;
   }
 
   .preview-toolbar-spacer {
@@ -2025,7 +2056,46 @@ body[data-skin="console"] .panel {
   }
 
   .mobile-action-bar {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    inset: auto 10px calc(env(safe-area-inset-bottom, 0px) + 10px);
+    padding: 10px;
+    gap: 8px;
+  }
+
+  .mobile-action-bar .button {
+    min-height: 54px;
+    padding-inline: 8px;
+    font-size: 0.88rem;
+  }
+
+  .mobile-login-access {
+    display: inline-flex;
+  }
+
+  .login-actions #logoutButton {
+    display: none;
+  }
+
+  #settingsPanel.settings-panel {
+    inset: auto 10px calc(env(safe-area-inset-bottom, 0px) + 10px) 10px;
+    left: 10px;
+    right: 10px;
+    top: auto;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 10px);
+    width: auto;
+    max-height: min(78vh, calc(100vh - 24px));
+    transform: none;
+    border-radius: 24px;
+    padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .mobile-settings-controls {
+    display: grid;
+  }
+
+  .settings-grid {
+    grid-template-columns: 1fr;
   }
 
   body[data-skin="console"] .page {
@@ -2061,24 +2131,17 @@ body[data-skin="console"] .panel {
 
   body[data-skin="console"] #previewSection {
     padding: 16px;
+    padding-bottom: 110px;
     height: auto;
     overflow: visible;
   }
 
   body[data-skin="console"] .preview-head {
-    position: static;
-    grid-template-columns: 1fr;
-    gap: 12px;
-    margin: 0 0 16px;
-    padding: 0 0 14px;
+    display: none;
   }
 
   body[data-skin="console"] .preview-toolbar {
-    grid-template-columns: 1fr;
-    grid-auto-flow: row;
-    grid-auto-columns: auto;
-    gap: 10px;
-    justify-content: stretch;
+    display: none;
   }
 
   body[data-skin="console"] .preview-toolbar-spacer {

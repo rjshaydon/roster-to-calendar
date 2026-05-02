@@ -62,6 +62,7 @@ const loginBar = document.querySelector("#loginBar");
 const loginIdentity = document.querySelector("#loginIdentity");
 const logoutButton = document.querySelector("#logoutButton");
 const backToCreatorButton = document.querySelector("#backToCreatorButton");
+const mobileAccountAccessButton = document.querySelector("#mobileAccountAccessButton");
 const skinControl = document.querySelector("#skinControl");
 const skinSelect = document.querySelector("#skinSelect");
 const loginForm = document.querySelector("#loginForm");
@@ -73,8 +74,12 @@ const createEmail = document.querySelector("#createEmail");
 const createPassword = document.querySelector("#createPassword");
 const currentDayPreview = document.querySelector("#currentDayPreview");
 const exportButton = document.querySelector("#exportButton");
+const mobileTodayButton = document.querySelector("#mobileTodayButton");
 const mobileExportButton = document.querySelector("#mobileExportButton");
 const mobileSettingsButton = document.querySelector("#mobileSettingsButton");
+const mobileAccountButton = document.querySelector("#mobileAccountButton");
+const mobileAccountButtonGlyph = document.querySelector("#mobileAccountButtonGlyph");
+const mobileAccountButtonLabel = document.querySelector("#mobileAccountButtonLabel");
 const exportModal = document.querySelector("#exportModal");
 const exportCloseButton = document.querySelector("#exportCloseButton");
 const exportModalBody = document.querySelector("#exportModalBody");
@@ -88,6 +93,12 @@ const claimDoctorButton = document.querySelector("#claimDoctorButton");
 const settingsToggle = document.querySelector("#settingsToggle");
 const settingsPanel = document.querySelector("#settingsPanel");
 const settingsCloseButton = document.querySelector("#settingsCloseButton");
+const mobileSettingsControls = document.querySelector("#mobileSettingsControls");
+const mobileDoctorSelect = document.querySelector("#mobileDoctorSelect");
+const mobileDateFrom = document.querySelector("#mobileDateFrom");
+const mobileDateTo = document.querySelector("#mobileDateTo");
+const mobileHospitalFilter = document.querySelector("#mobileHospitalFilter");
+const mobileLogoutButton = document.querySelector("#mobileLogoutButton");
 const previewSection = document.querySelector("#previewSection");
 const preview = document.querySelector("#preview");
 const issuesPanel = document.querySelector("#issuesPanel");
@@ -300,6 +311,9 @@ filesModal?.addEventListener("click", (event) => {
 });
 exportButton.addEventListener("click", openExportModal);
 mobileExportButton.addEventListener("click", openExportModal);
+mobileTodayButton?.addEventListener("click", () => {
+  snapPreviewToCurrentMonth();
+});
 exportCloseButton.addEventListener("click", closeExportModal);
 exportModal.addEventListener("click", (event) => {
   if (event.target.matches("[data-close-export]")) closeExportModal();
@@ -323,19 +337,24 @@ exportModalBody.addEventListener("click", async (event) => {
   await handleExportAction(actionButton.dataset.exportAction || "");
 });
 filesList.addEventListener("click", async (event) => {
+  const addButton = event.target.closest("[data-open-file-picker]");
+  if (addButton) {
+    fileInput.click();
+    return;
+  }
   const removeButton = event.target.closest("[data-remove-import]");
   if (!removeButton) return;
   if (!canRemoveImports()) return;
   await removeStoredImport(removeButton.dataset.removeImport);
 });
 accountsButton.addEventListener("click", async () => {
-  if (isOwnerAccount()) {
-    await loadServerUsers();
-    currentAdminTab = "system";
-  }
-  renderAccountsModal();
-  accountsModal.classList.remove("hidden");
-  accountsModal.setAttribute("aria-hidden", "false");
+  await openAccountsSurface({ defaultAdminTab: "system" });
+});
+mobileAccountButton?.addEventListener("click", async () => {
+  await openAccountsSurface({ defaultAdminTab: "system" });
+});
+mobileAccountAccessButton?.addEventListener("click", async () => {
+  await openAccountsSurface({ defaultAdminTab: "system" });
 });
 accountsCloseButton.addEventListener("click", closeAccountsModal);
 accountsModal.addEventListener("click", (event) => {
@@ -386,6 +405,11 @@ accountsBody.addEventListener("click", (event) => {
   if (removeImportButton) {
     if (!canRemoveImports()) return;
     void removeStoredImport(removeImportButton.dataset.removeImport);
+    return;
+  }
+  const openFilePickerButton = event.target.closest("[data-open-file-picker]");
+  if (openFilePickerButton) {
+    fileInput.click();
     return;
   }
   const editShiftCodeButton = event.target.closest("[data-edit-parser-rule]");
@@ -470,16 +494,39 @@ settingsToggle.addEventListener("click", (event) => {
   event.preventDefault();
   event.stopPropagation();
   settingsPanel.classList.toggle("hidden");
+  syncMobileSettingsControls();
 });
 settingsCloseButton.addEventListener("click", (event) => {
   event.preventDefault();
   event.stopPropagation();
-  settingsPanel.classList.add("hidden");
+  closeSettingsPanel();
 });
 mobileSettingsButton.addEventListener("click", (event) => {
   event.preventDefault();
   event.stopPropagation();
   settingsPanel.classList.toggle("hidden");
+  syncMobileSettingsControls();
+});
+mobileLogoutButton?.addEventListener("click", () => {
+  logoutCurrentUser();
+});
+mobileDoctorSelect?.addEventListener("change", async () => {
+  if (mobileDoctorSelect.disabled) return;
+  await switchDoctorSelection(mobileDoctorSelect.value, { resetRange: true });
+});
+mobileDateFrom?.addEventListener("change", () => {
+  applyPreviewRangeChange("from", mobileDateFrom.value);
+  syncMobileSettingsControls();
+});
+mobileDateTo?.addEventListener("change", () => {
+  applyPreviewRangeChange("to", mobileDateTo.value);
+  syncMobileSettingsControls();
+});
+mobileHospitalFilter?.addEventListener("change", () => {
+  settings.hospitalFilter = mobileHospitalFilter.value;
+  if (settingsInputs.hospitalFilter) settingsInputs.hospitalFilter.value = settings.hospitalFilter;
+  saveCurrentSessionState();
+  updatePreview();
 });
 
 for (const [key, input] of Object.entries(settingsInputs)) {
@@ -797,7 +844,7 @@ document.addEventListener("keydown", (event) => {
     closeExportModal();
     closeAccountsModal();
     closeInsightsModal();
-    settingsPanel.classList.add("hidden");
+    closeSettingsPanel();
   }
 });
 document.addEventListener("click", (event) => {
@@ -814,9 +861,15 @@ document.addEventListener("pointerdown", (event) => {
   ) {
     event.preventDefault();
     event.stopPropagation();
-    settingsPanel.classList.add("hidden");
+    closeSettingsPanel();
   }
 }, true);
+window.addEventListener("resize", () => {
+  syncMobileChrome();
+});
+window.visualViewport?.addEventListener("resize", () => {
+  syncMobileChrome();
+});
 document.addEventListener("pointermove", (event) => {
   if (!previewGesture || event.pointerId !== previewGesture.pointerId) return;
   updatePreviewGesture(event);
@@ -1092,6 +1145,7 @@ function renderSettings() {
   }
   applyShiftColours(settings);
   applyCurrentDayHighlight(settings);
+  syncMobileSettingsControls();
 }
 
 function setEntranceTab(tab) {
@@ -1105,21 +1159,102 @@ function setEntranceTab(tab) {
   });
 }
 
-function renderFilesMarkup({ canRemove = false, heading = "", description = "" } = {}) {
+function isMobileLayout() {
+  return window.matchMedia("(max-width: 760px)").matches;
+}
+
+function hasCalendarPreview() {
+  return Boolean(latestPreview && selectedDoctor());
+}
+
+function closeSettingsPanel() {
+  settingsPanel.classList.add("hidden");
+}
+
+async function openAccountsSurface(options = {}) {
+  closeSettingsPanel();
+  if (isOwnerAccount()) {
+    await loadServerUsers();
+    if (options.defaultAdminTab) currentAdminTab = options.defaultAdminTab;
+  }
+  renderAccountsModal();
+  accountsModal.classList.remove("hidden");
+  accountsModal.setAttribute("aria-hidden", "false");
+}
+
+function syncMobileAccountButtons() {
+  const creator = isCreatorAuthenticated();
+  const label = creator ? "Admin" : "Account";
+  const glyph = creator ? "🛡" : "👤";
+  if (mobileAccountButtonLabel) mobileAccountButtonLabel.textContent = label;
+  if (mobileAccountButtonGlyph) mobileAccountButtonGlyph.textContent = glyph;
+  if (mobileAccountButton) mobileAccountButton.setAttribute("aria-label", label);
+  if (mobileAccountAccessButton) {
+    mobileAccountAccessButton.textContent = label;
+    mobileAccountAccessButton.setAttribute("aria-label", label);
+  }
+}
+
+function syncMobileSettingsControls() {
+  const mobile = isMobileLayout();
+  mobileSettingsControls?.classList.toggle("hidden", !mobile);
+  if (!mobile) return;
+  if (mobileDoctorSelect) {
+    if (canUseDoctorPicker() && doctorOptions.length > 1) {
+      mobileDoctorSelect.innerHTML = doctorOptions.map((doctor) => `
+        <option value="${escapeHtml(doctor.key)}" ${doctor.key === selectedDoctor()?.key ? "selected" : ""}>
+          ${escapeHtml(doctor.displayName)}
+        </option>
+      `).join("");
+      mobileDoctorSelect.disabled = false;
+    } else {
+      const doctor = selectedDoctor();
+      mobileDoctorSelect.innerHTML = `<option value="${escapeHtml(doctor?.key || "")}">${escapeHtml(doctor?.displayName || currentAccount().realName || "Selected doctor")}</option>`;
+      mobileDoctorSelect.disabled = true;
+    }
+  }
+  if (mobileDateFrom) mobileDateFrom.value = settings.dateFrom || "";
+  if (mobileDateTo) mobileDateTo.value = settings.dateTo || "";
+  if (mobileHospitalFilter) {
+    const hospitals = latestPreview?.hospitals || [];
+    mobileHospitalFilter.innerHTML = `
+      <option value="all" ${settings.hospitalFilter === "all" ? "selected" : ""}>All hospitals</option>
+      ${hospitals.map((code) => {
+        const value = code.toLowerCase();
+        return `<option value="${value}" ${settings.hospitalFilter === value ? "selected" : ""}>${escapeHtml(code)}</option>`;
+      }).join("")}
+    `;
+  }
+}
+
+function syncMobileChrome() {
+  const loggedIn = Boolean(currentUserEmail && currentUserPassword);
+  const mobile = isMobileLayout();
+  const showBar = loggedIn && mobile && hasCalendarPreview();
+  mobileActionBar.classList.toggle("hidden", !showBar);
+  if (mobileAccountAccessButton) {
+    mobileAccountAccessButton.classList.toggle("hidden", !(loggedIn && mobile && !hasCalendarPreview()));
+  }
+  if (!showBar) closeSettingsPanel();
+  syncMobileAccountButtons();
+  syncMobileSettingsControls();
+}
+
+function renderFilesMarkup({ canRemove = false, heading = "", description = "", canAdd = false } = {}) {
   if (!selectedFiles.length) {
     const emptyMessage = canRemove
       ? "Add rosters and they will stay here until removed."
       : "No files are currently linked to this calendar.";
     return `
       <article class="review-card">
-        ${heading ? `<div class="review-top"><div><strong>${escapeHtml(heading)}</strong>${description ? `<span>${escapeHtml(description)}</span>` : ""}</div></div>` : ""}
+        ${heading ? `<div class="review-top"><div><strong>${escapeHtml(heading)}</strong>${description ? `<span>${escapeHtml(description)}</span>` : ""}</div>${canAdd ? `<button type="button" class="button button-secondary" data-open-file-picker>Add files</button>` : ""}</div>` : ""}
         <article class="issue-card"><strong>No files imported yet.</strong><p>${escapeHtml(emptyMessage)}</p></article>
       </article>
     `;
   }
   return `
     <article class="review-card">
-      ${heading ? `<div class="review-top"><div><strong>${escapeHtml(heading)}</strong>${description ? `<span>${escapeHtml(description)}</span>` : ""}</div></div>` : ""}
+      ${heading ? `<div class="review-top"><div><strong>${escapeHtml(heading)}</strong>${description ? `<span>${escapeHtml(description)}</span>` : ""}</div>${canAdd ? `<button type="button" class="button button-secondary" data-open-file-picker>Add files</button>` : ""}</div>` : ""}
       <div class="file-summary">
         ${selectedFiles.map((entry) => `
           <article class="file-pill">
@@ -1135,7 +1270,7 @@ function renderFilesMarkup({ canRemove = false, heading = "", description = "" }
 
 function renderFilesList() {
   if (!filesList) return;
-  filesList.innerHTML = renderFilesMarkup({ canRemove: canRemoveImports() });
+  filesList.innerHTML = renderFilesMarkup({ canRemove: canRemoveImports(), canAdd: true });
 }
 
 function renderDoctorState() {
@@ -1145,8 +1280,7 @@ function renderDoctorState() {
   doctorSelect.classList.add("hidden");
   doctorSection.classList.add("hidden");
   controlBar.classList.toggle("hidden", !selectedFiles.length);
-  mobileActionBar.classList.toggle("hidden", !selectedFiles.length);
-  settingsPanel.classList.add("hidden");
+  closeSettingsPanel();
 
   if (!doctorOptions.length) {
     const message = canUseDoctorPicker()
@@ -1183,6 +1317,7 @@ function renderDoctorState() {
   }
 
   syncActionState();
+  syncMobileChrome();
 }
 
 function renderClaimSection() {
@@ -1609,6 +1744,7 @@ function renderPreviewGrid(doctor, data) {
     `;
     preview.classList.remove("hidden");
     previewSection.classList.remove("hidden");
+    syncMobileChrome();
     return;
   }
   const weeks = chunkWeeks(days);
@@ -1620,6 +1756,7 @@ function renderPreviewGrid(doctor, data) {
   `;
   preview.classList.remove("hidden");
   previewSection.classList.remove("hidden");
+  syncMobileChrome();
   if (pendingPreviewSnapToToday) {
     pendingPreviewSnapToToday = false;
     requestAnimationFrame(() => snapPreviewToCurrentMonth(false));
@@ -2489,6 +2626,7 @@ function syncActionState() {
   const ready = Boolean(selectedDoctor());
   exportButton.disabled = !ready;
   mobileExportButton.disabled = !ready;
+  syncMobileChrome();
 }
 
 function createFormData(doctor = null) {
@@ -3569,10 +3707,18 @@ function applyPreviewRangeChange(which, value) {
 }
 
 function snapPreviewToCurrentMonth(smooth = true) {
+  const mobile = isMobileLayout();
   const scroller = previewSection;
   const header = preview.querySelector(".preview-head");
   const alignTargetTopToBanner = (target) => {
-    if (!target || !scroller) return false;
+    if (!target) return false;
+    if (mobile) {
+      const safeTopOffset = Math.max(52, (window.visualViewport?.offsetTop || 0) + 44);
+      const nextTop = Math.max(0, window.scrollY + target.getBoundingClientRect().top - safeTopOffset);
+      window.scrollTo({ top: nextTop, behavior: smooth ? "smooth" : "auto" });
+      return true;
+    }
+    if (!scroller) return false;
     const bannerBottom = header?.getBoundingClientRect().bottom || 0;
     const targetTop = target.getBoundingClientRect().top;
     const nextTop = Math.max(0, scroller.scrollTop + (targetTop - bannerBottom));
@@ -4435,6 +4581,7 @@ function renderAccountsModal() {
       ${linkedNames}
       ${ownerView ? "" : renderFilesMarkup({
         canRemove: false,
+        canAdd: true,
         heading: "Files used to generate your calendar...",
         description: "These roster files currently feed your calendar.",
       })}
@@ -4493,6 +4640,7 @@ function renderAccountsModal() {
   const systemCard = ownerView ? renderParserRulesCard() : "";
   const filesCard = ownerView ? renderFilesMarkup({
     canRemove: canRemoveImports(),
+    canAdd: true,
     heading: "Files",
     description: "Files currently used to generate the creator calendar.",
   }) : "";
@@ -5557,6 +5705,7 @@ function renderLoginState() {
   backToCreatorButton.classList.toggle("hidden", (!adminViewingEmail && !activeDoctorProfile) || !isCreatorAuthenticated());
   syncAccountsButton();
   syncSkinControl();
+  syncMobileChrome();
 }
 
 async function loginWithEmail(email, password, options = {}) {

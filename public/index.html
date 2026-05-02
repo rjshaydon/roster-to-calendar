@@ -92,6 +92,7 @@
             </label>
             <button id="backToCreatorButton" type="button" class="button button-secondary hidden">Back to creator</button>
             <button id="logoutButton" type="button" class="button button-secondary">Log out</button>
+            <button id="mobileAccountAccessButton" type="button" class="button button-secondary mobile-login-access hidden">Account</button>
           </div>
         </div>
         <form id="roster-form">
@@ -141,6 +142,30 @@
               </div>
               <button id="settingsCloseButton" type="button" class="modal-close" aria-label="Close settings">×</button>
             </div>
+
+            <section id="mobileSettingsControls" class="mobile-settings-controls hidden" aria-label="Mobile calendar controls">
+              <label class="field">
+                <span>Doctor</span>
+                <select id="mobileDoctorSelect"></select>
+              </label>
+              <div class="mobile-settings-range">
+                <label class="field">
+                  <span>From</span>
+                  <input id="mobileDateFrom" type="date">
+                </label>
+                <label class="field">
+                  <span>To</span>
+                  <input id="mobileDateTo" type="date">
+                </label>
+              </div>
+              <label class="field">
+                <span>Hospital</span>
+                <select id="mobileHospitalFilter">
+                  <option value="all">All hospitals</option>
+                </select>
+              </label>
+              <button id="mobileLogoutButton" type="button" class="button button-secondary mobile-settings-logout">Log out</button>
+            </section>
 
             <div class="settings-grid">
               <fieldset class="settings-group">
@@ -248,8 +273,19 @@
     </main>
 
     <div id="mobileActionBar" class="mobile-action-bar hidden">
-      <button id="mobileExportButton" type="button" class="button button-primary" disabled>Export options</button>
-      <button id="mobileSettingsButton" type="button" class="button button-secondary">Settings</button>
+      <button id="mobileTodayButton" type="button" class="button button-secondary mobile-bar-button">Today</button>
+      <button id="mobileExportButton" type="button" class="button button-primary mobile-bar-button" disabled aria-label="Export options">
+        <span class="mobile-bar-glyph" aria-hidden="true">⤴</span>
+        <span>Share</span>
+      </button>
+      <button id="mobileSettingsButton" type="button" class="button button-secondary mobile-bar-button" aria-label="Settings">
+        <span class="mobile-bar-glyph" aria-hidden="true">⚙</span>
+        <span>Settings</span>
+      </button>
+      <button id="mobileAccountButton" type="button" class="button button-secondary mobile-bar-button" aria-label="Account">
+        <span id="mobileAccountButtonGlyph" class="mobile-bar-glyph" aria-hidden="true">👤</span>
+        <span id="mobileAccountButtonLabel">Account</span>
+      </button>
     </div>
 
     <div id="exportModal" class="modal hidden" aria-hidden="true">
