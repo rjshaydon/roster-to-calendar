@@ -1492,16 +1492,16 @@ function rebuildClientPreview() {
 }
 
 function buildClientPreviewData(baseData) {
-  const events = buildFilteredPreviewEvents(baseData, settings);
-  const range = deriveRangeBounds(baseData.events || []);
+  const range = deriveDefaultPreviewRange(baseData.events || []);
+  const events = buildFilteredPreviewEvents(baseData, settings, range);
   const deletedItems = [];
   const hospitals = availableHospitalsForPreview(baseData.events || []);
   if (settings.hospitalFilter === "all" || hospitals.length > availablePreviewHospitals.length) {
     availablePreviewHospitals = hospitals;
   }
 
-  const previewStart = settings.dateFrom || range.start;
-  const previewEnd = settings.dateTo || range.end;
+  const previewStart = boundedPreviewStart(settings.dateFrom, range.start);
+  const previewEnd = boundedPreviewEnd(settings.dateTo, range.end);
   return {
     ...baseData,
     events,
@@ -1529,11 +1529,10 @@ function isSuppressedIssue(issue) {
   return dismissedIssueFingerprints.has(fingerprint) || ignoredIssueFingerprints.has(fingerprint);
 }
 
-function buildFilteredPreviewEvents(baseData, filterSettings) {
-  const range = deriveRangeBounds(baseData.events || []);
+function buildFilteredPreviewEvents(baseData, filterSettings, defaultRange = deriveDefaultPreviewRange(baseData.events || [])) {
   const events = buildResolvedPreviewEvents(baseData);
-  const previewStart = filterSettings.dateFrom || range.start;
-  const previewEnd = filterSettings.dateTo || range.end;
+  const previewStart = boundedPreviewStart(filterSettings.dateFrom, defaultRange.start);
+  const previewEnd = boundedPreviewEnd(filterSettings.dateTo, defaultRange.end);
   const visibleEvents = filterEventsByPreviewRange(events, previewStart, previewEnd)
     .filter((event) => matchesPreviewHospitalFilter(event, filterSettings.hospitalFilter));
   visibleEvents.sort(comparePreviewEvents);
@@ -3747,7 +3746,43 @@ function deriveRangeBounds(events) {
 }
 
 function deriveDefaultPreviewRange(events) {
-  return deriveRangeBounds(events);
+  const today = new Date();
+  const currentTerm = australianTermForDate(today);
+  const nextTerm = nextAustralianTerm(currentTerm);
+  const currentTermStart = formatDateKey(currentTerm.start);
+  const currentTermEnd = formatDateKey(addDays(currentTerm.end, -1));
+  const nextTermStart = nextTerm.start;
+  const nextTermEnd = addDays(nextTerm.end, -1);
+  const hasNextTermEvents = (events || []).some((event) => eventOverlapsDateRange(event, nextTermStart, nextTermEnd));
+  const eventRange = deriveRangeBounds(events || []);
+  return {
+    start: eventRange.start ? minDateKey(eventRange.start, currentTermStart) : currentTermStart,
+    end: hasNextTermEvents ? formatDateKey(nextTermEnd) : maxDateKey(eventRange.end, currentTermEnd),
+  };
+}
+
+function boundedPreviewStart(value, defaultStart) {
+  if (!defaultStart) return value || "";
+  if (!value) return defaultStart;
+  return minDateKey(value, defaultStart);
+}
+
+function boundedPreviewEnd(value, defaultEnd) {
+  if (!defaultEnd) return value || "";
+  if (!value) return defaultEnd;
+  return maxDateKey(value, defaultEnd);
+}
+
+function minDateKey(left, right) {
+  if (!left) return right || "";
+  if (!right) return left || "";
+  return left < right ? left : right;
+}
+
+function maxDateKey(left, right) {
+  if (!left) return right || "";
+  if (!right) return left || "";
+  return left > right ? left : right;
 }
 
 function eventOverlapsDateRange(event, rangeStart, rangeEnd) {
