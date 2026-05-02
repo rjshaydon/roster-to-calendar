@@ -2091,8 +2091,8 @@ body[data-skin="console"] .panel {
   .preview-grid {
     grid-template-columns: repeat(7, minmax(0, 1fr));
     overflow: visible;
-    width: calc(100% - 4px);
-    margin-inline: 2px;
+    width: calc(100% - 8px);
+    margin-inline: 4px;
   }
 
   body[data-skin="console"] .preview-grid {
