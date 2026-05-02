@@ -221,6 +221,9 @@ let currentSnapshot = null;
 let currentSnapshotStale = false;
 let currentSnapshotBuiltAt = "";
 let snapshotRefreshPromise = null;
+let pendingPreviewSnapToToday = false;
+let insightWarmupTimer = 0;
+let insightWarmupPromise = null;
 let parserExtensions = { mmc: [], ddh: [] };
 let dismissedIssueFingerprints = new Set();
 let ignoredIssueFingerprints = new Set();
@@ -596,6 +599,11 @@ preview.addEventListener("click", (event) => {
   const rangeTrigger = event.target.closest("[data-range-trigger]");
   if (rangeTrigger) {
     openPreviewRangePicker(rangeTrigger.dataset.rangeTrigger);
+    return;
+  }
+  const todayTrigger = event.target.closest("[data-range-today]");
+  if (todayTrigger) {
+    snapPreviewToCurrentMonth();
     return;
   }
   const whoTrigger = event.target.closest("[data-insight-who]");
@@ -1229,10 +1237,12 @@ async function updatePreview(options = {}) {
       const range = deriveDefaultPreviewRange(data.events || []);
       if (!settings.dateFrom) settings.dateFrom = range.start;
       if (!settings.dateTo) settings.dateTo = range.end;
+      pendingPreviewSnapToToday = true;
       renderSettings();
     }
     indexReviewItems(data.review || []);
     rebuildClientPreview();
+    scheduleInsightWarmup();
     cacheCurrentSnapshot(buildActiveSessionState());
     saveCurrentSessionState();
     setStatus("Calendar loaded.");
@@ -1581,6 +1591,10 @@ function renderPreviewGrid(doctor, data) {
   `;
   preview.classList.remove("hidden");
   previewSection.classList.remove("hidden");
+  if (pendingPreviewSnapToToday) {
+    pendingPreviewSnapToToday = false;
+    requestAnimationFrame(() => snapPreviewToCurrentMonth(false));
+  }
 }
 
 function renderPreviewHeader(doctor, data) {
@@ -1656,6 +1670,7 @@ function renderPreviewRangeControls(start, end) {
         ${escapeHtml(toValue ? formatDate(toValue) : "Set date")}
       </button>
       <input class="preview-range-input" type="date" value="${escapeHtml(toValue)}" data-range-input="to" tabindex="-1" aria-hidden="true">
+      <button type="button" class="button button-secondary preview-today-button" data-range-today>Today</button>
     </div>
   `;
 }
@@ -1775,7 +1790,7 @@ function renderTermSection(section) {
     const monday = week[0]?.date;
     const monthKey = monday ? `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, "0")}` : "";
     if (monthKey && monthKey !== lastMonthKey) {
-      bodyRows.push(`<div class="preview-month-row">${formatMonth(monday)}</div>`);
+      bodyRows.push(`<div class="preview-month-row" data-month-key="${monthKey}">${formatMonth(monday)}</div>`);
       lastMonthKey = monthKey;
     }
     bodyRows.push(`
@@ -2401,6 +2416,41 @@ function getDoctorAnalysisCache() {
 function clearDoctorAnalysisCache() {
   doctorAnalysisCacheKey = "";
   doctorAnalysisCache = new Map();
+  clearInsightWarmup();
+}
+
+function scheduleInsightWarmup() {
+  clearInsightWarmup();
+  if (!selectedFiles.length || !selectedDoctor() || insightWarmupPromise) return;
+  const runWarmup = () => {
+    insightWarmupPromise = warmInsightData().finally(() => {
+      insightWarmupPromise = null;
+    });
+  };
+  if (typeof requestIdleCallback === "function") {
+    insightWarmupTimer = requestIdleCallback(() => runWarmup(), { timeout: 1500 });
+    return;
+  }
+  insightWarmupTimer = setTimeout(runWarmup, 250);
+}
+
+function clearInsightWarmup() {
+  if (typeof cancelIdleCallback === "function" && typeof insightWarmupTimer === "number" && insightWarmupTimer) {
+    try {
+      cancelIdleCallback(insightWarmupTimer);
+    } catch {
+      // Ignore unsupported idle callback cancellation.
+    }
+  } else {
+    clearTimeout(insightWarmupTimer);
+  }
+  insightWarmupTimer = 0;
+}
+
+async function warmInsightData() {
+  if (!selectedFiles.length || !selectedDoctor()) return;
+  await ensureInsightRosterAnalysis();
+  getDoctorAnalysisCache();
 }
 
 function syncActionState() {
@@ -3432,15 +3482,7 @@ function deriveRangeBounds(events) {
 }
 
 function deriveDefaultPreviewRange(events) {
-  const currentTerm = australianTermForDate(new Date());
-  const nextTerm = nextAustralianTerm(currentTerm);
-  const endTerm = events.some((event) => eventOverlapsDateRange(event, nextTerm.start, addDays(nextTerm.end, -1)))
-    ? nextTerm
-    : currentTerm;
-  return {
-    start: formatDateKey(currentTerm.start),
-    end: formatDateKey(addDays(endTerm.end, -1)),
-  };
+  return deriveRangeBounds(events);
 }
 
 function eventOverlapsDateRange(event, rangeStart, rangeEnd) {
@@ -3492,6 +3534,13 @@ function applyPreviewRangeChange(which, value) {
   rebuildClientPreview();
   saveCurrentSessionState();
   setStatus("Preview range updated.");
+}
+
+function snapPreviewToCurrentMonth(smooth = true) {
+  const todayMonthKey = formatDateKey(new Date()).slice(0, 7);
+  const monthRow = preview.querySelector(`[data-month-key="${todayMonthKey}"]`);
+  if (!monthRow) return;
+  monthRow.scrollIntoView({ block: "start", behavior: smooth ? "smooth" : "auto" });
 }
 
 function buildEventOverridePatch(event, item, override = {}) {
@@ -6148,6 +6197,7 @@ async function bootstrapImports() {
     renderFilesList();
     if (currentSnapshot?.preview && currentSnapshot.doctorOptions?.length) {
       renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+      scheduleInsightWarmup();
       if (currentSnapshotStale) {
         setStatus("Refreshing calendar...");
         void refreshSnapshotInBackground();
@@ -6188,6 +6238,7 @@ function renderWorkspaceFromSnapshot(snapshot, session = {}) {
   renderDoctorState();
   indexReviewItems(latestPreview.review || []);
   rebuildClientPreview();
+  scheduleInsightWarmup();
   saveCurrentWorkspace();
 }
 
