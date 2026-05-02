@@ -10,6 +10,7 @@ import {
   serializeConflict,
   serializeEvent,
   serializeReviewItem,
+  setParserExtensions,
   sourceNames,
 } from "./roster.js";
 import * as XLSX from "xlsx";
@@ -34,6 +35,21 @@ const accountsCloseButton = document.querySelector("#accountsCloseButton");
 const accountsBody = document.querySelector("#accountsBody");
 const accountsModalTitle = document.querySelector("#accountsModalTitle");
 const accountsModalSubtitle = document.querySelector("#accountsModalSubtitle");
+const parserRuleModal = document.querySelector("#parserRuleModal");
+const parserRuleCloseButton = document.querySelector("#parserRuleCloseButton");
+const parserRuleForm = document.querySelector("#parserRuleForm");
+const parserRuleIssueId = document.querySelector("#parserRuleIssueId");
+const parserRuleSource = document.querySelector("#parserRuleSource");
+const parserRuleRawValue = document.querySelector("#parserRuleRawValue");
+const parserRuleCode = document.querySelector("#parserRuleCode");
+const parserRuleBase = document.querySelector("#parserRuleBase");
+const parserRulePeriod = document.querySelector("#parserRulePeriod");
+const parserRuleSuffix = document.querySelector("#parserRuleSuffix");
+const parserRuleAllDay = document.querySelector("#parserRuleAllDay");
+const parserRuleTimeFields = document.querySelector("#parserRuleTimeFields");
+const parserRuleStartTime = document.querySelector("#parserRuleStartTime");
+const parserRuleEndTime = document.querySelector("#parserRuleEndTime");
+const parserRuleLocation = document.querySelector("#parserRuleLocation");
 const insightsModal = document.querySelector("#insightsModal");
 const insightsCloseButton = document.querySelector("#insightsCloseButton");
 const insightsModalTitle = document.querySelector("#insightsModalTitle");
@@ -205,6 +221,9 @@ let currentSnapshot = null;
 let currentSnapshotStale = false;
 let currentSnapshotBuiltAt = "";
 let snapshotRefreshPromise = null;
+let parserExtensions = { mmc: [], ddh: [] };
+let dismissedIssueFingerprints = new Set();
+let ignoredIssueFingerprints = new Set();
 
 const settingsInputs = Object.fromEntries(
   SETTINGS_FIELDS.map((id) => [id, document.querySelector(`#${id}`)]),
@@ -347,9 +366,14 @@ accountsBody.addEventListener("click", (event) => {
     clearAdminErrors(clearAdminErrorsButton.dataset.clearAdminErrors || "", clearAdminErrorsButton.dataset.errorId || "");
     return;
   }
-  const subscriptionButton = event.target.closest("[data-copy-subscription]");
-  if (subscriptionButton) {
-    copySubscriptionLink(subscriptionButton.dataset.copySubscription);
+  const ignoreAdminErrorButton = event.target.closest("[data-ignore-admin-error]");
+  if (ignoreAdminErrorButton) {
+    ignoreAdminErrorForever(ignoreAdminErrorButton.dataset.ignoreAdminError || "", ignoreAdminErrorButton.dataset.errorId || "");
+    return;
+  }
+  const addShiftCodeButton = event.target.closest("[data-add-shift-code]");
+  if (addShiftCodeButton) {
+    openParserRuleModal(addShiftCodeButton.dataset.addShiftCode || "", addShiftCodeButton.dataset.errorId || "");
     return;
   }
   const deleteButton = event.target.closest("[data-delete-account]");
@@ -742,6 +766,7 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     closeReviewModal();
     closeCustomEventModal();
+    closeParserRuleModal();
     closeContextMenu();
     closeFilesModal();
     closeExportModal();
@@ -790,6 +815,19 @@ customEventModal.addEventListener("click", (event) => {
   if (event.target.matches("[data-close-custom-event]")) {
     closeCustomEventModal();
   }
+});
+parserRuleCloseButton?.addEventListener("click", closeParserRuleModal);
+parserRuleModal?.addEventListener("click", (event) => {
+  if (event.target.matches("[data-close-parser-rule]")) {
+    closeParserRuleModal();
+  }
+});
+parserRuleAllDay?.addEventListener("change", () => {
+  parserRuleTimeFields?.classList.toggle("hidden", parserRuleAllDay.checked);
+});
+parserRuleForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await saveParserRuleFromModal();
 });
 customEventDeleteButton.addEventListener("click", () => {
   const id = customEventId.value;
@@ -1284,11 +1322,17 @@ function buildClientPreviewData(baseData) {
       const override = overrides[issue.id] || {};
       const reviewItem = reviewIndex.get(issue.id);
       const include = typeof override.include === "boolean" ? override.include : reviewItem?.include ?? true;
-      return include;
+      return include && !isSuppressedIssue(issue);
       }),
       ...deletedItems,
     ],
   };
+}
+
+function isSuppressedIssue(issue) {
+  const fingerprint = issueFingerprint(issue?.source, issue?.rawValue);
+  if (!fingerprint) return false;
+  return dismissedIssueFingerprints.has(fingerprint) || ignoredIssueFingerprints.has(fingerprint);
 }
 
 function buildFilteredPreviewEvents(baseData, filterSettings) {
@@ -1491,10 +1535,22 @@ async function reportPreviewIssues(items) {
   if (currentUserRole !== "user" || adminViewingEmail) return;
   if (!items.length) return;
   for (const item of items) {
-    const fingerprint = `${activeCalendarOwnerId()}::${item.id || ""}::${item.message || ""}::${item.rawValue || ""}`;
+    if (!item?.message || isSuppressedIssue(item)) continue;
+    const reviewItem = reviewIndex.get(item.id);
+    const issue = {
+      source: sanitizeIssueSource(item.source),
+      date: String(item.startDay || "").trim(),
+      rawValue: String(item.rawValue || "").trim(),
+      message: String(item.message || "").trim(),
+      timeLabel: String(item.timeLabel || reviewItem?.timeLabel || "").trim(),
+      suggestedTitle: String(item.suggestedTitle || reviewItem?.suggestedTitle || "").trim(),
+      fingerprint: issueFingerprint(item.source, item.rawValue),
+    };
+    if (!issue.fingerprint) continue;
+    const fingerprint = `${activeCalendarOwnerId()}::${issue.fingerprint}`;
     if (reportedIssueFingerprints.has(fingerprint)) continue;
     reportedIssueFingerprints.add(fingerprint);
-    await reportAccountError(`${formatIssueHeading(item)} — ${item.message}`, item.id || fingerprint);
+    await reportAccountError(issue, item.id || issue.fingerprint);
   }
 }
 
@@ -3528,7 +3584,54 @@ function formatIssueHeading(item) {
     : item.status === "deleted"
       ? "Deleted"
       : "Review";
-  return `${status} · ${item.source} · ${formatDate(item.startDay)}`;
+  return `${status} · ${item.source} · ${formatDate(item.startDay || item.date)}`;
+}
+
+function parserRuleCodeForIssue(issue) {
+  const source = sanitizeIssueSource(issue?.source);
+  const rawValue = String(issue?.rawValue || "").trim();
+  if (source === "MMC") {
+    const match = rawValue.match(/^\s*\d{2}\d{2}-\d{2}\d{2}\s+(.+?)\s*$/);
+    return (match?.[1] || rawValue).trim().toUpperCase();
+  }
+  return rawValue.trim().toUpperCase();
+}
+
+function parserRulePeriodForIssue(issue) {
+  const title = String(issue?.suggestedTitle || "").trim();
+  const match = title.match(/\b(AM|PM|NIGHT)\b/i);
+  return match ? match[1].toUpperCase() : "";
+}
+
+function parserRuleBaseForIssue(issue) {
+  const source = sanitizeIssueSource(issue?.source);
+  let title = String(issue?.suggestedTitle || "").trim();
+  if (!title) return "";
+  if (source && title.toUpperCase().startsWith(`${source}: `)) {
+    title = title.slice(source.length + 2).trim();
+  }
+  title = title.replace(/\b(AM|PM|NIGHT)\b/gi, " ").replace(/\bFLOAT\b/gi, " ").replace(/\s+/g, " ").trim();
+  return title;
+}
+
+function parserRuleSuffixForIssue(issue) {
+  const title = String(issue?.suggestedTitle || "").trim();
+  if (/\bFLOAT\b/i.test(title)) return "Float";
+  return "";
+}
+
+function timeRangeParts(value) {
+  const match = String(value || "").match(/(\d{2}:\d{2})-(\d{2}:\d{2})/);
+  return {
+    start: match?.[1] || "09:00",
+    end: match?.[2] || "17:00",
+  };
+}
+
+function defaultLocationForIssueSource(source) {
+  if (sanitizeIssueSource(source) === "MMC") return settings.defaultLocationMmc || DEFAULT_MMC_LOCATION;
+  if (sanitizeIssueSource(source) === "DDH") return settings.defaultLocationDdh || DEFAULT_DDH_LOCATION;
+  return "";
 }
 
 function comparePreviewEvents(left, right) {
@@ -3842,6 +3945,10 @@ function parseClockParts(value) {
   const minutes = Number(match[2]);
   if (hours > 23 || minutes > 59) return null;
   return { hours, minutes };
+}
+
+function isClockString(value) {
+  return /^\d{2}:\d{2}$/.test(String(value || "").trim());
 }
 
 function compareClockStrings(left, right) {
@@ -4312,12 +4419,18 @@ function renderAdminErrorsCard(users) {
               ${(user.adminIssues || []).map((issue) => `
                 <article class="issue-card">
                   <div>
-                    <strong>${escapeHtml(issue.message)}</strong>
+                    <strong>${escapeHtml(`${user.realName || user.email} · ${issue.source || "Roster"} · ${formatDate(issue.date || issue.startDay || "")}`)}</strong>
+                    <p>${escapeHtml(issue.message)}</p>
+                    <p>Raw code/value: ${escapeHtml(issue.rawValue || "Unknown")}</p>
+                    ${issue.timeLabel ? `<p>Explicit roster time: ${escapeHtml(issue.timeLabel)}</p>` : ""}
+                    ${issue.suggestedTitle ? `<p>Suggested normalized result: ${escapeHtml(issue.suggestedTitle)}</p>` : `<p>Suggested normalized result: No normalized result</p>`}
                     <p>${escapeHtml(formatTimestamp(issue.lastSeenAt))}${issue.count > 1 ? ` · seen ${issue.count} times` : ""}</p>
                   </div>
                   <div class="account-actions">
                     <button type="button" class="button button-secondary" data-enter-account="${escapeHtml(user.email)}">Enter account</button>
+                    <button type="button" class="button button-secondary" data-add-shift-code="${escapeHtml(user.email)}" data-error-id="${escapeHtml(issue.id)}">Add shift code</button>
                     <button type="button" class="button button-secondary" data-clear-admin-errors="${escapeHtml(user.email)}" data-error-id="${escapeHtml(issue.id)}">Clear</button>
+                    <button type="button" class="button button-secondary" data-ignore-admin-error="${escapeHtml(user.email)}" data-error-id="${escapeHtml(issue.id)}">Ignore forever</button>
                   </div>
                 </article>
               `).join("")}
@@ -4367,6 +4480,8 @@ async function clearAdminErrors(email, errorId = "") {
     setStatus("Creator authentication is required to clear user errors.", true);
     return;
   }
+  const issueBeforeClear = errorId ? findAdminIssue(email, errorId) : null;
+  const issuesBeforeClear = (serverUsers.map(normalizeServerUser).find((item) => item.email === normalizeEmail(email))?.adminIssues || []).map((issue) => issue?.fingerprint).filter(Boolean);
   try {
     const response = await fetch("/api/state", {
       method: "POST",
@@ -4382,15 +4497,160 @@ async function clearAdminErrors(email, errorId = "") {
     await readJsonResponse(response, "Could not clear user errors.");
     await loadServerUsers();
     renderAccountsModal();
+    if (normalizeEmail(email) === currentUserEmail) {
+      if (errorId) {
+        const fingerprint = issueBeforeClear?.fingerprint;
+        if (fingerprint) dismissedIssueFingerprints.add(fingerprint);
+      } else {
+        for (const fingerprint of issuesBeforeClear) {
+          dismissedIssueFingerprints.add(fingerprint);
+        }
+      }
+      rebuildClientPreview();
+    }
     syncAccountsButton();
-    setStatus(errorId ? "User error cleared." : "All user errors cleared.");
+    setStatus(errorId ? "User warning dismissed." : "All user warnings dismissed for that account.");
   } catch (error) {
     setStatus(error.message || "Could not clear user errors.", true);
   }
 }
 
-async function reportAccountError(message, errorId = "") {
-  if (!message || !cloudAvailable || !currentUserEmail || !currentUserPassword) return;
+async function ignoreAdminErrorForever(email, errorId = "") {
+  if (!isCreatorAuthenticated()) {
+    setStatus("Creator authentication is required to ignore parser warnings.", true);
+    return;
+  }
+  const issue = findAdminIssue(email, errorId);
+  if (!issue?.fingerprint) {
+    setStatus("Could not find that parser warning.", true);
+    return;
+  }
+  try {
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "ignoreUserErrorForever",
+        email: authUserEmail || currentUserEmail,
+        password: authUserPassword || currentUserPassword,
+        fingerprint: issue.fingerprint,
+      }),
+    });
+    await readJsonResponse(response, "Could not ignore that parser warning.");
+    ignoredIssueFingerprints.add(issue.fingerprint);
+    await loadServerUsers();
+    renderAccountsModal();
+    syncAccountsButton();
+    rebuildClientPreview();
+    setStatus("Parser warning ignored forever.");
+  } catch (error) {
+    setStatus(error.message || "Could not ignore that parser warning.", true);
+  }
+}
+
+function findAdminIssue(email, errorId = "") {
+  const user = serverUsers.map(normalizeServerUser).find((item) => item.email === normalizeEmail(email));
+  if (!user) return null;
+  return (user.adminIssues || []).find((issue) => issue.id === errorId || issue.fingerprint === errorId) || null;
+}
+
+function openParserRuleModal(email, errorId = "") {
+  const issue = findAdminIssue(email, errorId);
+  if (!issue) {
+    setStatus("Could not find that parser warning.", true);
+    return;
+  }
+  parserRuleIssueId.value = issue.fingerprint || issue.id || "";
+  parserRuleSource.value = issue.source || "";
+  parserRuleRawValue.value = issue.rawValue || "";
+  parserRuleCode.value = parserRuleCodeForIssue(issue);
+  parserRuleBase.value = parserRuleBaseForIssue(issue);
+  parserRulePeriod.value = parserRulePeriodForIssue(issue);
+  parserRuleSuffix.value = parserRuleSuffixForIssue(issue);
+  parserRuleAllDay.checked = !issue.timeLabel || issue.timeLabel === "All day";
+  parserRuleStartTime.value = parserRuleAllDay.checked ? "" : timeRangeParts(issue.timeLabel).start;
+  parserRuleEndTime.value = parserRuleAllDay.checked ? "" : timeRangeParts(issue.timeLabel).end;
+  parserRuleLocation.value = defaultLocationForIssueSource(issue.source);
+  parserRuleTimeFields.classList.toggle("hidden", parserRuleAllDay.checked);
+  parserRuleModal.classList.remove("hidden");
+  parserRuleModal.setAttribute("aria-hidden", "false");
+}
+
+function closeParserRuleModal() {
+  parserRuleModal?.classList.add("hidden");
+  parserRuleModal?.setAttribute("aria-hidden", "true");
+  parserRuleForm?.reset();
+  parserRuleTimeFields?.classList.remove("hidden");
+}
+
+async function saveParserRuleFromModal() {
+  if (!isCreatorAuthenticated()) {
+    setStatus("Creator authentication is required to add shift codes.", true);
+    return;
+  }
+  const source = sanitizeIssueSource(parserRuleSource.value);
+  const rawValue = String(parserRuleRawValue.value || "").trim();
+  const code = String(parserRuleCode.value || "").trim().toUpperCase();
+  const base = String(parserRuleBase.value || "").trim();
+  const period = String(parserRulePeriod.value || "").trim().toUpperCase();
+  const suffix = String(parserRuleSuffix.value || "").trim();
+  const allDay = parserRuleAllDay.checked;
+  const startTime = parseEditorTimeInput(parserRuleStartTime.value);
+  const endTime = parseEditorTimeInput(parserRuleEndTime.value);
+  const location = String(parserRuleLocation.value || "").trim();
+  const fingerprint = sanitizeIssueFingerprint(parserRuleIssueId.value);
+  if (!source || !rawValue || !code || !base) {
+    setStatus("Source, raw value, shift code, and normalized title are required.", true);
+    return;
+  }
+  if (!allDay && (!startTime || !endTime)) {
+    setStatus("Timed shift-code rules need both a start and end time.", true);
+    return;
+  }
+  try {
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "saveParserExtensionRule",
+        email: authUserEmail || currentUserEmail,
+        password: authUserPassword || currentUserPassword,
+        fingerprint,
+        source,
+        rawValue,
+        rule: {
+          source,
+          code,
+          kind: "shift",
+          base,
+          period,
+          suffix,
+          allDay,
+          startTime,
+          endTime,
+          location,
+        },
+      }),
+    });
+    const data = await readJsonResponse(response, "Could not save the shift-code rule.");
+    parserExtensions = sanitizeParserExtensions(data.parserExtensions);
+    setParserExtensions(parserExtensions);
+    if (fingerprint) ignoredIssueFingerprints.delete(fingerprint);
+    closeParserRuleModal();
+    await loadServerUsers();
+    renderAccountsModal();
+    if (selectedFiles.length) {
+      parsedRosterSources = null;
+      await analyzeFiles({ preserveVisiblePreview: true });
+    }
+    setStatus("Shift code added to the parser.");
+  } catch (error) {
+    setStatus(error.message || "Could not save the shift-code rule.", true);
+  }
+}
+
+async function reportAccountError(issue, errorId = "") {
+  if (!issue?.message || !cloudAvailable || !currentUserEmail || !currentUserPassword) return;
   if (currentUserRole === "creator" && !adminViewingEmail) return;
   try {
     await fetch("/api/state", {
@@ -4402,7 +4662,8 @@ async function reportAccountError(message, errorId = "") {
         password: adminViewingEmail ? authUserPassword || currentUserPassword : currentUserPassword,
         targetEmail: adminViewingEmail ? currentUserEmail : "",
         errorId,
-        message,
+        message: `${formatIssueHeading(issue)} — ${issue.message}`,
+        issue,
       }),
     });
     if (isCreatorAuthenticated()) {
@@ -4788,6 +5049,79 @@ function sanitizeSubscription(value) {
   };
 }
 
+function applyIssueConfig(value) {
+  const config = value && typeof value === "object" ? value : {};
+  parserExtensions = sanitizeParserExtensions(config.parserExtensions);
+  dismissedIssueFingerprints = new Set(sanitizeIssueFingerprintList(config.dismissedFingerprints));
+  ignoredIssueFingerprints = new Set(sanitizeIssueFingerprintList(config.ignoredFingerprints));
+  setParserExtensions(parserExtensions);
+}
+
+function sanitizeParserExtensions(value) {
+  const input = value && typeof value === "object" ? value : {};
+  return {
+    mmc: sanitizeParserExtensionRuleList(input.mmc, "MMC"),
+    ddh: sanitizeParserExtensionRuleList(input.ddh, "DDH"),
+  };
+}
+
+function sanitizeParserExtensionRuleList(items, source) {
+  if (!Array.isArray(items)) return [];
+  return items
+    .map((item) => sanitizeParserExtensionRule(item, source))
+    .filter(Boolean);
+}
+
+function sanitizeParserExtensionRule(item, forcedSource = "") {
+  if (!item || typeof item !== "object") return null;
+  const source = sanitizeIssueSource(forcedSource || item.source);
+  const code = String(item.code || "").trim().toUpperCase();
+  const base = String(item.base || "").trim();
+  const period = String(item.period || "").trim().toUpperCase();
+  const suffix = String(item.suffix || "").trim();
+  const allDay = item.allDay === true;
+  const startTime = String(item.startTime || "").trim();
+  const endTime = String(item.endTime || "").trim();
+  const location = String(item.location || "").trim();
+  if (!source || !code || !base) return null;
+  if (!allDay && (!isClockString(startTime) || !isClockString(endTime))) return null;
+  return {
+    source,
+    code,
+    kind: String(item.kind || "shift").trim().toLowerCase(),
+    base,
+    period,
+    suffix,
+    allDay,
+    startTime: allDay ? "" : startTime,
+    endTime: allDay ? "" : endTime,
+    location,
+  };
+}
+
+function sanitizeIssueFingerprintList(items) {
+  if (!Array.isArray(items)) return [];
+  return [...new Set(items.map((item) => sanitizeIssueFingerprint(item)).filter(Boolean))];
+}
+
+function sanitizeIssueFingerprint(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const [source, ...rest] = text.split("::");
+  return issueFingerprint(source, rest.join("::"));
+}
+
+function sanitizeIssueSource(value) {
+  const source = String(value || "").trim().toUpperCase();
+  return source === "MMC" || source === "DDH" ? source : "";
+}
+
+function issueFingerprint(source, rawValue) {
+  const normalizedSource = sanitizeIssueSource(source);
+  const normalizedRaw = String(rawValue || "").trim();
+  return normalizedSource && normalizedRaw ? `${normalizedSource}::${normalizedRaw}` : "";
+}
+
 function sanitizeWorkspaceSnapshot(value) {
   if (!value || typeof value !== "object" || !value.preview) return null;
   return {
@@ -5051,6 +5385,7 @@ async function restoreDoctorProfileState() {
     }),
   });
   const data = await readJsonResponse(response, "Doctor profile load failed.");
+  applyIssueConfig(data.issueConfig);
   currentSnapshot = sanitizeWorkspaceSnapshot(data.snapshot);
   currentSnapshotStale = data.snapshotStale === true;
   currentSnapshotBuiltAt = String(data.snapshotBuiltAt || "");
@@ -5070,6 +5405,7 @@ async function applyCloudStateData(data) {
   latestNameMatches = sanitizeRosterClaims(data.nameMatches || []);
   availableRosterDoctors = sanitizeAvailableRosterDoctors(data.availableDoctors || []);
   currentSubscription = sanitizeSubscription(data.subscription);
+  applyIssueConfig(data.issueConfig);
   if (data.realName) {
     const localAccount = accountState.users.find((user) => user.email === currentUserEmail);
     if (localAccount) {

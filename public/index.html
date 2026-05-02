@@ -301,6 +301,68 @@
       </section>
     </div>
 
+    <div id="parserRuleModal" class="modal hidden" aria-hidden="true">
+      <div class="modal-backdrop" data-close-parser-rule></div>
+      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="parserRuleModalTitle">
+        <button type="button" class="modal-close" id="parserRuleCloseButton" aria-label="Close shift code editor">×</button>
+        <div class="section-head">
+          <h2 id="parserRuleModalTitle">Add shift code</h2>
+          <p>Create a global exact-match parser rule for this hospital.</p>
+        </div>
+        <form id="parserRuleForm" class="review-card">
+          <input id="parserRuleIssueId" type="hidden">
+          <div class="custom-event-grid">
+            <label class="field">
+              <span>Hospital</span>
+              <input id="parserRuleSource" type="text" readonly>
+            </label>
+            <label class="field">
+              <span>Raw roster value</span>
+              <input id="parserRuleRawValue" type="text" readonly>
+            </label>
+          </div>
+          <div class="custom-event-grid">
+            <label class="field">
+              <span>Shift code</span>
+              <input id="parserRuleCode" type="text" required>
+            </label>
+            <label class="field">
+              <span>Normalized title</span>
+              <input id="parserRuleBase" type="text" required>
+            </label>
+          </div>
+          <div class="custom-event-grid">
+            <label class="field">
+              <span>Period</span>
+              <input id="parserRulePeriod" type="text" placeholder="AM, PM, or Night">
+            </label>
+            <label class="field">
+              <span>Suffix</span>
+              <input id="parserRuleSuffix" type="text" placeholder="Float, SSU, etc.">
+            </label>
+          </div>
+          <label class="toggle"><input id="parserRuleAllDay" type="checkbox"> All day</label>
+          <div id="parserRuleTimeFields" class="custom-event-grid">
+            <label class="field">
+              <span>Start time</span>
+              <input id="parserRuleStartTime" type="text" inputmode="numeric" placeholder="2:30 pm">
+            </label>
+            <label class="field">
+              <span>End time</span>
+              <input id="parserRuleEndTime" type="text" inputmode="numeric" placeholder="12:00 am">
+            </label>
+          </div>
+          <label class="field">
+            <span>Location</span>
+            <input id="parserRuleLocation" type="text" placeholder="Optional default location">
+          </label>
+          <div class="modal-actions">
+            <button type="submit" class="button button-primary">Save shift code</button>
+          </div>
+        </form>
+      </section>
+    </div>
+
     <div id="reviewModal" class="modal hidden" aria-hidden="true">
       <div class="modal-backdrop" data-close-review></div>
       <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="reviewModalTitle">

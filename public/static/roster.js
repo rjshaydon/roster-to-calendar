@@ -151,8 +151,14 @@ const DEFAULT_SETTINGS = {
   dateTo: "",
 };
 
+let MANUAL_PARSER_RULES = { mmc: [], ddh: [] };
+
 export function defaultSettings() {
   return { ...DEFAULT_SETTINGS };
+}
+
+export function setParserExtensions(value) {
+  MANUAL_PARSER_RULES = sanitizeParserExtensions(value);
 }
 
 export async function parseUploadForm(request) {
@@ -1082,7 +1088,7 @@ function parseMmcEntry(day, raw) {
 
   const explicit = extractTimePrefix(raw);
   const label = explicit ? explicit.label : raw.trim();
-  const normalized = normalizeMmcLabel(label) || normalizeGenericMmcTimedLabel(label, explicit);
+  const normalized = findManualParserRule("MMC", label, explicit) || normalizeMmcLabel(label) || normalizeGenericMmcTimedLabel(label, explicit);
   if (!normalized) {
     return createUnknownRecord("MMC", day, raw, "MMC shift code not recognised.");
   }
@@ -1148,7 +1154,7 @@ function parseDdhEntry(day, label, timeText) {
   if (shouldIgnoreDdh(label) || shouldIgnoreCommon(label)) return null;
 
   const mapped = DDH_LABEL_MAP[label] || label;
-  const normalized = normalizeDdhLabel(mapped) || normalizeGenericDdhLabel(mapped);
+  const normalized = findManualParserRule("DDH", mapped) || normalizeDdhLabel(mapped) || normalizeGenericDdhLabel(mapped);
   if (!normalized) {
     return createUnknownRecord("DDH", day, label, "DDH shift label not recognised.");
   }
@@ -1239,6 +1245,110 @@ function normalizeGenericMmcTimedLabel(label, explicit) {
     warning: code ? "MMC shift code not recognised; using explicit roster time." : "",
   };
 }
+
+function sanitizeParserExtensions(value) {
+  const input = value && typeof value === "object" ? value : {};
+  return {
+    mmc: sanitizeParserExtensionRuleList(input.mmc, "MMC"),
+    ddh: sanitizeParserExtensionRuleList(input.ddh, "DDH"),
+  };
+}
+
+function sanitizeParserExtensionRuleList(items, source) {
+  if (!Array.isArray(items)) return [];
+  return items
+    .map((item) => sanitizeParserExtensionRule(item, source))
+    .filter(Boolean);
+}
+
+function sanitizeParserExtensionRule(item, forcedSource = "") {
+  if (!item || typeof item !== "object") return null;
+  const source = sanitizeParserRuleSource(forcedSource || item.source);
+  const code = String(item.code || item.rawCode || "").trim().toUpperCase();
+  const kind = String(item.kind || "shift").trim().toLowerCase();
+  const base = String(item.base || item.titleParts?.base || "").trim();
+  const period = String(item.period || item.titleParts?.period || "").trim().toUpperCase();
+  const suffix = String(item.suffix || item.titleParts?.suffix || "").trim();
+  const location = String(item.location || "").trim();
+  const allDay = item.allDay === true;
+  const startTime = String(item.startTime || "").trim();
+  const endTime = String(item.endTime || "").trim();
+  if (!source || !code || !base) return null;
+  if (!allDay && (!isClockString(startTime) || !isClockString(endTime))) return null;
+  return {
+    source,
+    code,
+    kind,
+    base,
+    period,
+    suffix,
+    location,
+    allDay,
+    startTime: allDay ? "" : startTime,
+    endTime: allDay ? "" : endTime,
+  };
+}
+
+function sanitizeParserRuleSource(value) {
+  const source = String(value || "").trim().toUpperCase();
+  return source === "MMC" || source === "DDH" ? source : "";
+}
+
+function findManualParserRule(source, label, explicit = null) {
+  const normalizedSource = sanitizeParserRuleSource(source);
+  const code = normalizeParserRuleCode(normalizedSource, label);
+  if (!normalizedSource || !code) return null;
+  const rules = normalizedSource === "MMC" ? MANUAL_PARSER_RULES.mmc : MANUAL_PARSER_RULES.ddh;
+  const rule = rules.find((item) => item.code === code);
+  return rule ? parserRuleToNormalized(rule, explicit) : null;
+}
+
+function normalizeParserRuleCode(source, label) {
+  const text = String(label || "").trim().toUpperCase();
+  if (!text) return "";
+  if (source === "MMC") {
+    const explicit = extractTimePrefix(text);
+    return String(explicit?.label || text).trim().toUpperCase();
+  }
+  return text;
+}
+
+function parserRuleToNormalized(rule, explicit = null) {
+  const titleParts = {
+    base: rule.base,
+    period: rule.period || "",
+    suffix: rule.suffix || "",
+  };
+  const location = rule.location || "";
+  if (rule.allDay) {
+    return {
+      kind: rule.kind || "shift",
+      titleParts,
+      location,
+      allDay: true,
+      defaultTimes: null,
+    };
+  }
+  const startHm = parseRuleTime(rule.startTime);
+  const endHm = parseRuleTime(rule.endTime);
+  if (!startHm || !endHm) return null;
+  return {
+    kind: rule.kind || "shift",
+    titleParts,
+    location,
+    allDay: false,
+    defaultTimes: [startHm, endHm],
+    ambiguous: false,
+    warning: "",
+  };
+}
+
+function parseRuleTime(value) {
+  const match = String(value || "").match(/^(\d{2}):(\d{2})$/);
+  if (!match) return null;
+  return [Number(match[1]), Number(match[2])];
+}
+
 
 function inferMmcTimeOnlyShiftLabel(startHm) {
   const [hour] = startHm;
@@ -1511,6 +1621,8 @@ function applySettings(records, settings, overrides) {
         rawValue: record.rawValue,
         status: record.status,
         message: record.warnings[0] || "Review this roster entry before export.",
+        suggestedTitle,
+        timeLabel,
       });
     }
 

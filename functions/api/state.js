@@ -7,6 +7,9 @@ const DOCTOR_PROFILE_PREFIX = "doctor-profile:";
 const SUBSCRIPTION_TOKEN_PREFIX = "subscription:token:";
 const SNAPSHOT_PREFIX = "snapshot:";
 const SNAPSHOT_SCHEMA_VERSION = 1;
+const ADMIN_ISSUE_DISMISS_PREFIX = "admin-issue-dismiss:";
+const ADMIN_ISSUE_IGNORE_PREFIX = "admin-issue-ignore:";
+const PARSER_EXTENSION_RULES_KEY = "parser-extension-rules:v1";
 
 export async function onRequestGet(context) {
   return Response.json({ error: "Use POST for account requests." }, { status: 405 });
@@ -48,6 +51,7 @@ export async function onRequestPost(context) {
         snapshotAvailable: prepared.snapshotAvailable,
         snapshotStale: prepared.snapshotStale,
         snapshotBuiltAt: prepared.snapshotBuiltAt,
+        issueConfig: prepared.issueConfig,
       });
     }
 
@@ -108,6 +112,7 @@ export async function onRequestPost(context) {
         snapshotAvailable: prepared.snapshotAvailable,
         snapshotStale: prepared.snapshotStale,
         snapshotBuiltAt: prepared.snapshotBuiltAt,
+        issueConfig: prepared.issueConfig,
       });
     }
 
@@ -143,6 +148,7 @@ export async function onRequestPost(context) {
         nameMatches: prepared.nameMatches,
         availableDoctors: prepared.availableDoctors,
         subscription: prepared.subscription,
+        issueConfig: prepared.issueConfig,
       });
     }
 
@@ -159,17 +165,29 @@ export async function onRequestPost(context) {
       if ((targetRecord.role || roleForEmail(targetRecord.email)) === "creator") {
         return Response.json({ ok: true, ignored: true });
       }
-      const message = String(body?.message || "").trim();
-      const errorId = String(body?.errorId || "").trim();
-      if (!message) {
-        return Response.json({ error: "Error message is required." }, { status: 400 });
-      }
-      const nextIssues = mergeAdminIssues(targetRecord.adminIssues, [{
-        id: errorId,
-        message,
+      const issue = sanitizeAdminIssues([{
+        id: String(body?.errorId || "").trim(),
+        message: body?.message,
+        source: body?.issue?.source,
+        date: body?.issue?.date || body?.issue?.startDay,
+        rawValue: body?.issue?.rawValue,
+        timeLabel: body?.issue?.timeLabel,
+        suggestedTitle: body?.issue?.suggestedTitle,
+        fingerprint: body?.issue?.fingerprint,
         firstSeenAt: new Date().toISOString(),
         lastSeenAt: new Date().toISOString(),
         count: 1,
+      }])[0];
+      if (!issue) {
+        return Response.json({ error: "Structured issue details are required." }, { status: 400 });
+      }
+      const dismissed = new Set(await loadDismissedIssueFingerprints(context.env.ROSTER_STORE, reportEmail));
+      const ignored = new Set(await loadIgnoredIssueFingerprints(context.env.ROSTER_STORE));
+      if (dismissed.has(issue.fingerprint) || ignored.has(issue.fingerprint)) {
+        return Response.json({ ok: true, ignored: true });
+      }
+      const nextIssues = mergeAdminIssues(targetRecord.adminIssues, [{
+        ...issue,
       }]);
       await context.env.ROSTER_STORE.put(storageKey(reportEmail), JSON.stringify({
         ...targetRecord,
@@ -189,8 +207,14 @@ export async function onRequestPost(context) {
       }
       const targetRecord = await loadAccountRecord(context.env.ROSTER_STORE, clearEmail);
       const errorId = String(body?.errorId || "").trim();
+      const existingIssues = sanitizeAdminIssues(targetRecord.adminIssues);
+      const fingerprintsToDismiss = errorId
+        ? existingIssues.filter((issue) => issue.id === errorId || issue.fingerprint === errorId).map((issue) => issue.fingerprint)
+        : existingIssues.map((issue) => issue.fingerprint);
+      const nextDismissed = [...new Set([...(await loadDismissedIssueFingerprints(context.env.ROSTER_STORE, clearEmail)), ...fingerprintsToDismiss])];
+      await saveDismissedIssueFingerprints(context.env.ROSTER_STORE, clearEmail, nextDismissed);
       const nextIssues = errorId
-        ? sanitizeAdminIssues(targetRecord.adminIssues).filter((issue) => issue.id !== errorId)
+        ? existingIssues.filter((issue) => issue.id !== errorId && issue.fingerprint !== errorId)
         : [];
       await context.env.ROSTER_STORE.put(storageKey(clearEmail), JSON.stringify({
         ...targetRecord,
@@ -198,6 +222,38 @@ export async function onRequestPost(context) {
         updatedAt: new Date().toISOString(),
       }));
       return Response.json({ ok: true });
+    }
+
+    if (action === "ignoreUserErrorForever") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      const ignoreFingerprint = sanitizeIssueFingerprint(body?.fingerprint || issueFingerprint(body?.source, body?.rawValue));
+      if (!ignoreFingerprint) {
+        return Response.json({ error: "Issue fingerprint is required." }, { status: 400 });
+      }
+      const ignored = new Set(await loadIgnoredIssueFingerprints(context.env.ROSTER_STORE));
+      ignored.add(ignoreFingerprint);
+      await saveIgnoredIssueFingerprints(context.env.ROSTER_STORE, [...ignored]);
+      await clearIssueFromAllUsers(context.env.ROSTER_STORE, ignoreFingerprint);
+      return Response.json({ ok: true, fingerprint: ignoreFingerprint });
+    }
+
+    if (action === "saveParserExtensionRule") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      const rule = sanitizeParserExtensionRule(body?.rule);
+      if (!rule) {
+        return Response.json({ error: "A valid shift-code rule is required." }, { status: 400 });
+      }
+      const parserExtensions = upsertParserExtensionRule(await loadParserExtensionRules(context.env.ROSTER_STORE), rule);
+      await saveParserExtensionRules(context.env.ROSTER_STORE, parserExtensions);
+      const ignoreFingerprint = sanitizeIssueFingerprint(body?.fingerprint || issueFingerprint(body?.source, body?.rawValue));
+      if (ignoreFingerprint) {
+        await clearIssueFromAllUsers(context.env.ROSTER_STORE, ignoreFingerprint);
+      }
+      return Response.json({ ok: true, parserExtensions });
     }
 
     if (action === "deleteAccount") {
@@ -274,6 +330,7 @@ export async function onRequestPost(context) {
         snapshotAvailable: snapshotInfo.snapshotAvailable,
         snapshotStale: snapshotInfo.snapshotStale,
         snapshotBuiltAt: snapshotInfo.snapshotBuiltAt,
+        issueConfig: await buildIssueConfig(context.env.ROSTER_STORE, ""),
       });
     }
 
@@ -550,6 +607,7 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
   const snapshot = await loadSnapshotRecord(store, owner.ownerType, owner.ownerId);
   const snapshotAvailable = Boolean(snapshot);
   const snapshotStale = !snapshot || snapshot.buildStamp !== buildStamp;
+  const issueConfig = await buildIssueConfig(store, record.email);
 
   return {
     role,
@@ -563,6 +621,7 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
       enabled: Boolean(snapshot?.subscriptionFeeds?.full?.ics),
     },
     adminIssues: sanitizeAdminIssues(record.adminIssues),
+    issueConfig,
     snapshot,
     snapshotAvailable,
     snapshotStale,
@@ -605,6 +664,31 @@ async function hydrateRepositoryFromExistingAccounts(store) {
     }
   }
   if (changed) await saveRepositoryIndex(store, index);
+}
+
+async function buildIssueConfig(store, email = "") {
+  return {
+    parserExtensions: await loadParserExtensionRules(store),
+    dismissedFingerprints: await loadDismissedIssueFingerprints(store, email),
+    ignoredFingerprints: await loadIgnoredIssueFingerprints(store),
+  };
+}
+
+async function clearIssueFromAllUsers(store, fingerprint) {
+  const normalizedFingerprint = sanitizeIssueFingerprint(fingerprint);
+  if (!normalizedFingerprint) return;
+  const result = await store.list({ prefix: "account:" });
+  for (const item of result.keys || []) {
+    const record = await store.get(item.name, "json").catch(() => null);
+    if (!record?.adminIssues?.length) continue;
+    const nextIssues = sanitizeAdminIssues(record.adminIssues).filter((issue) => issue.fingerprint !== normalizedFingerprint);
+    if (nextIssues.length === sanitizeAdminIssues(record.adminIssues).length) continue;
+    await store.put(item.name, JSON.stringify({
+      ...record,
+      adminIssues: nextIssues,
+      updatedAt: new Date().toISOString(),
+    }));
+  }
 }
 
 async function upsertStateImports(store, imports, uploadedBy) {
@@ -1326,14 +1410,20 @@ function sanitizeAdminIssues(value) {
     .map((item) => ({
       id: String(item?.id || "").trim(),
       message: String(item?.message || "").trim(),
+      source: sanitizeIssueSource(item?.source),
+      date: String(item?.date || item?.startDay || "").trim(),
+      rawValue: String(item?.rawValue || "").trim(),
+      timeLabel: String(item?.timeLabel || "").trim(),
+      suggestedTitle: String(item?.suggestedTitle || "").trim(),
+      fingerprint: sanitizeIssueFingerprint(item?.fingerprint || issueFingerprint(item?.source, item?.rawValue)),
       firstSeenAt: String(item?.firstSeenAt || ""),
       lastSeenAt: String(item?.lastSeenAt || ""),
       count: Number(item?.count || 1),
     }))
-    .filter((item) => item.message)
+    .filter((item) => item.message && item.fingerprint)
     .map((item) => ({
       ...item,
-      id: item.id || randomSalt(),
+      id: item.id || item.fingerprint,
       count: Number.isFinite(item.count) && item.count > 0 ? Math.floor(item.count) : 1,
     }));
 }
@@ -1341,10 +1431,16 @@ function sanitizeAdminIssues(value) {
 function mergeAdminIssues(existing, incoming) {
   const issues = sanitizeAdminIssues(existing);
   for (const item of sanitizeAdminIssues(incoming)) {
-    const match = issues.find((issue) => (item.id && issue.id === item.id) || issue.message === item.message);
+    const match = issues.find((issue) => issue.fingerprint === item.fingerprint);
     if (match) {
       match.lastSeenAt = item.lastSeenAt || new Date().toISOString();
       match.count = Math.max(match.count, item.count || 1);
+      match.message = item.message || match.message;
+      match.source = item.source || match.source;
+      match.date = item.date || match.date;
+      match.rawValue = item.rawValue || match.rawValue;
+      match.timeLabel = item.timeLabel || match.timeLabel;
+      match.suggestedTitle = item.suggestedTitle || match.suggestedTitle;
       continue;
     }
     issues.unshift(item);
@@ -1352,4 +1448,138 @@ function mergeAdminIssues(existing, incoming) {
   return issues
     .sort((left, right) => (right.lastSeenAt || "").localeCompare(left.lastSeenAt || ""))
     .slice(0, 50);
+}
+
+function sanitizeIssueSource(value) {
+  const source = String(value || "").trim().toUpperCase();
+  return source === "MMC" || source === "DDH" ? source : "";
+}
+
+function issueFingerprint(source, rawValue) {
+  const normalizedSource = sanitizeIssueSource(source);
+  const normalizedRawValue = String(rawValue || "").trim();
+  return normalizedSource && normalizedRawValue ? `${normalizedSource}::${normalizedRawValue}` : "";
+}
+
+function sanitizeIssueFingerprint(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const [source, ...rest] = raw.split("::");
+  return issueFingerprint(source, rest.join("::"));
+}
+
+function adminIssueDismissKey(email) {
+  return `${ADMIN_ISSUE_DISMISS_PREFIX}${normalizeEmail(email)}`;
+}
+
+function adminIssueIgnoreKey() {
+  return ADMIN_ISSUE_IGNORE_PREFIX;
+}
+
+async function loadDismissedIssueFingerprints(store, email) {
+  if (!email) return [];
+  const values = await store.get(adminIssueDismissKey(email), "json").catch(() => []);
+  return sanitizeIssueFingerprintList(values);
+}
+
+async function saveDismissedIssueFingerprints(store, email, values) {
+  const next = sanitizeIssueFingerprintList(values);
+  if (!email) return;
+  if (!next.length) {
+    await store.delete(adminIssueDismissKey(email));
+    return;
+  }
+  await store.put(adminIssueDismissKey(email), JSON.stringify(next));
+}
+
+async function loadIgnoredIssueFingerprints(store) {
+  const values = await store.get(adminIssueIgnoreKey(), "json").catch(() => []);
+  return sanitizeIssueFingerprintList(values);
+}
+
+async function saveIgnoredIssueFingerprints(store, values) {
+  const next = sanitizeIssueFingerprintList(values);
+  if (!next.length) {
+    await store.delete(adminIssueIgnoreKey());
+    return;
+  }
+  await store.put(adminIssueIgnoreKey(), JSON.stringify(next));
+}
+
+function sanitizeIssueFingerprintList(values) {
+  if (!Array.isArray(values)) return [];
+  return [...new Set(values.map((value) => sanitizeIssueFingerprint(value)).filter(Boolean))].sort();
+}
+
+function sanitizeParserExtensionRules(value) {
+  const source = value && typeof value === "object" ? value : {};
+  return {
+    mmc: sanitizeParserExtensionRuleList(source.mmc, "MMC"),
+    ddh: sanitizeParserExtensionRuleList(source.ddh, "DDH"),
+  };
+}
+
+function sanitizeParserExtensionRuleList(items, source) {
+  if (!Array.isArray(items)) return [];
+  return items
+    .map((item) => sanitizeParserExtensionRule(item, source))
+    .filter(Boolean)
+    .sort((left, right) => left.code.localeCompare(right.code));
+}
+
+function sanitizeParserExtensionRule(item, forcedSource = "") {
+  if (!item || typeof item !== "object") return null;
+  const source = sanitizeIssueSource(forcedSource || item.source);
+  const code = String(item.code || item.rawCode || "").trim().toUpperCase();
+  const kind = String(item.kind || "shift").trim().toLowerCase();
+  const base = String(item.base || item.titleParts?.base || "").trim();
+  const period = String(item.period || item.titleParts?.period || "").trim().toUpperCase();
+  const suffix = String(item.suffix || item.titleParts?.suffix || "").trim();
+  const location = String(item.location || "").trim();
+  const allDay = item.allDay === true;
+  const startTime = String(item.startTime || "").trim();
+  const endTime = String(item.endTime || "").trim();
+  if (!source || !code || !base) return null;
+  if (!allDay && (!isClockString(startTime) || !isClockString(endTime))) return null;
+  return {
+    source,
+    code,
+    kind,
+    base,
+    period,
+    suffix,
+    allDay,
+    startTime: allDay ? "" : startTime,
+    endTime: allDay ? "" : endTime,
+    location,
+  };
+}
+
+async function loadParserExtensionRules(store) {
+  const value = await store.get(PARSER_EXTENSION_RULES_KEY, "json").catch(() => null);
+  return sanitizeParserExtensionRules(value);
+}
+
+async function saveParserExtensionRules(store, value) {
+  const sanitized = sanitizeParserExtensionRules(value);
+  await store.put(PARSER_EXTENSION_RULES_KEY, JSON.stringify(sanitized));
+  return sanitized;
+}
+
+function upsertParserExtensionRule(existing, rule) {
+  const sanitized = sanitizeParserExtensionRules(existing);
+  const nextRule = sanitizeParserExtensionRule(rule);
+  if (!nextRule) return sanitized;
+  const key = nextRule.source.toLowerCase();
+  const items = sanitized[key] || [];
+  const nextItems = items.filter((item) => item.code !== nextRule.code);
+  nextItems.push(nextRule);
+  return {
+    ...sanitized,
+    [key]: nextItems.sort((left, right) => left.code.localeCompare(right.code)),
+  };
+}
+
+function isClockString(value) {
+  return /^\d{2}:\d{2}$/.test(String(value || "").trim());
 }
