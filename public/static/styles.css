@@ -2117,11 +2117,17 @@ body[data-skin="console"] .panel {
     min-height: 34px;
     padding: 6px 2px;
     font-size: 0;
+    line-height: 1;
   }
 
   .preview-day-name::before {
     content: attr(data-short-day);
+    display: block;
     font-size: 0.76rem;
+  }
+
+  body[data-skin="console"] .preview-day-name {
+    font-size: 0;
   }
 
   .preview-day-name.is-weekend,
@@ -2134,25 +2140,27 @@ body[data-skin="console"] .panel {
   }
 
   .preview-cell {
-    min-height: 118px;
-    padding: 6px 4px;
+    min-height: 76px;
+    padding: 5px 3px;
     grid-template-rows: auto 1fr;
+    gap: 3px;
   }
 
   .preview-date {
-    font-size: 0.78rem;
+    font-size: 0.72rem;
+    line-height: 1;
   }
 
   .preview-stack {
-    gap: 4px;
+    gap: 2px;
   }
 
   .preview-chip {
     min-width: 0;
-    padding: 4px 5px;
-    border-radius: 7px;
+    padding: 3px 4px;
+    border-radius: 6px;
     gap: 0;
-    line-height: 1.12;
+    line-height: 1.04;
     overflow: hidden;
   }
 
@@ -2166,18 +2174,20 @@ body[data-skin="console"] .panel {
   .preview-chip .preview-chip-title-mobile {
     display: inline-flex;
     flex-wrap: wrap;
-    gap: 1px 3px;
+    gap: 0 2px;
     align-items: baseline;
     min-width: 0;
-    font-size: clamp(0.58rem, 2.6vw, 0.72rem);
-    line-height: 1.08;
+    font-size: clamp(0.46rem, 1.95vw, 0.6rem);
+    line-height: 1.03;
   }
 
   .preview-chip-title-mobile span:last-child {
     min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: normal;
+    word-break: normal;
   }
 
   .preview-mobile-span-row {

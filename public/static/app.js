@@ -1953,18 +1953,26 @@ function isMobileContinuousEvent(event) {
 function mobilePreviewTitleParts(event) {
   const originalTitle = String(event?.title || "").trim();
   const prefixMatch = originalTitle.match(/^([A-Z]{1,6}):\s*(.+)$/);
-  const prefix = prefixMatch ? `${prefixMatch[1]}:` : "";
+  let prefix = prefixMatch ? `${prefixMatch[1]}:` : "";
   let label = prefixMatch ? prefixMatch[2] : originalTitle;
   const lower = label.toLowerCase();
-  if (lower.includes("sick")) label = "Sick";
-  else if (lower.includes("annual leave")) label = "AL";
-  else if (lower.includes("conference leave")) label = "CL";
-  else {
+  if (lower.includes("sick")) {
+    label = "Sick";
+    prefix = "";
+  } else if (lower.includes("annual leave")) {
+    label = "AL";
+    prefix = "";
+  } else if (lower.includes("conference leave")) {
+    label = "CL";
+    prefix = "";
+  } else {
     label = label
       .replace(/\bClinical Support\b/gi, "CS")
       .replace(/\bFast Track\b/gi, "Fast")
+      .replace(/\bFAST\b/g, "Fast")
       .replace(/\bAM\b/gi, "")
       .replace(/\bPM\b/gi, "")
+      .replace(/\bshift\b/gi, "")
       .replace(/\s+/g, " ")
       .trim();
   }
