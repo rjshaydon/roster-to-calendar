@@ -1905,12 +1905,15 @@ function chunkWeeks(days) {
 }
 
 function renderDayCell(day) {
+  const dayKey = formatDateKey(day.date);
+  const dayIndex = (day.date.getDay() + 6) % 7;
+  const weekendClass = dayIndex >= 5 ? " is-weekend" : "";
   const cards = day.events.length
-    ? day.events.map((event) => renderPreviewChip(event, formatDateKey(day.date))).join("")
+    ? day.events.map((event) => renderPreviewChip(event, dayKey)).join("")
     : `<div class="preview-chip preview-chip-empty"></div>`;
   const currentDayClass = isCurrentDay(day.date) ? " is-current-day" : "";
   return `
-    <div class="preview-cell${currentDayClass}" data-add-date="${formatDateKey(day.date)}">
+    <div class="preview-cell${currentDayClass}${weekendClass}" data-day-index="${dayIndex}" data-add-date="${dayKey}">
       <div class="preview-date">${day.date.getDate()}</div>
       <div class="preview-stack">${cards}</div>
     </div>
@@ -1920,9 +1923,17 @@ function renderDayCell(day) {
 function renderPreviewChip(event, dayKey) {
   const lines = [];
   const startKey = event.start.slice(0, 10);
+  const mobileLabel = mobilePreviewTitleParts(event);
+  const mobileHiddenClass = isMobileContinuousEvent(event) ? " is-mobile-span-source" : "";
   if (settings.showNormalizedTitles || !settings.showRawValues) {
     const marker = event.isEditedImport ? '<span class="preview-chip-marker" aria-label="Imported event edited">*</span>' : "";
-    lines.push(`<strong>${escapeHtml(event.title)}${marker}</strong>`);
+    lines.push(`<strong class="preview-chip-title-full">${escapeHtml(event.title)}${marker}</strong>`);
+    lines.push(`
+      <strong class="preview-chip-title-mobile">
+        ${mobileLabel.prefix ? `<span class="preview-chip-source">${escapeHtml(mobileLabel.prefix)}</span>` : ""}
+        <span>${escapeHtml(mobileLabel.label)}</span>${marker}
+      </strong>
+    `);
   }
   if (settings.showRawValues) {
     lines.push(`<span class="preview-chip-raw">${escapeHtml(event.rawValue)}</span>`);
@@ -1930,7 +1941,70 @@ function renderPreviewChip(event, dayKey) {
   const meta = [];
   if (!event.allDay && settings.showTimes && startKey === dayKey && event.timeLabel) meta.push(event.timeLabel);
   const metaMarkup = meta.length ? `<span class="preview-chip-meta">${escapeHtml(meta.join(" · "))}</span>` : "";
-  return `<button type="button" class="preview-chip preview-chip-${eventTone(event)}" data-review-id="${event.id}" data-review-date="${dayKey}">${lines.join("")}${metaMarkup}</button>`;
+  return `<button type="button" class="preview-chip preview-chip-${eventTone(event)}${mobileHiddenClass}" data-review-id="${event.id}" data-review-date="${dayKey}">${lines.join("")}${metaMarkup}</button>`;
+}
+
+function isMobileContinuousEvent(event) {
+  if (!event?.allDay) return false;
+  const start = parseDateOnly(event.start);
+  const end = previewInclusiveEndDate(event, start, parseDateOnly(event.end));
+  return end > start;
+}
+
+function mobilePreviewTitleParts(event) {
+  const originalTitle = String(event?.title || "").trim();
+  const prefixMatch = originalTitle.match(/^([A-Z]{1,6}):\s*(.+)$/);
+  const prefix = prefixMatch ? `${prefixMatch[1]}:` : "";
+  let label = prefixMatch ? prefixMatch[2] : originalTitle;
+  const lower = label.toLowerCase();
+  if (lower.includes("sick")) label = "Sick";
+  else if (lower.includes("annual leave")) label = "AL";
+  else if (lower.includes("conference leave")) label = "CL";
+  else {
+    label = label
+      .replace(/\bClinical Support\b/gi, "CS")
+      .replace(/\bFast Track\b/gi, "Fast")
+      .replace(/\bAM\b/gi, "")
+      .replace(/\bPM\b/gi, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+  return { prefix, label: label || originalTitle || "Event" };
+}
+
+function renderMobileWeekSpans(week) {
+  const weekStart = week[0]?.date;
+  const weekEnd = week.at(-1)?.date;
+  if (!weekStart || !weekEnd) return "";
+  const unique = new Map();
+  week.forEach((day) => {
+    day.events.forEach((event) => {
+      if (isMobileContinuousEvent(event)) unique.set(event.id, event);
+    });
+  });
+  if (!unique.size) return "";
+  const spans = [...unique.values()].map((event) => {
+    const eventStart = parseDateOnly(event.start);
+    const eventEnd = previewInclusiveEndDate(event, eventStart, parseDateOnly(event.end));
+    const spanStart = eventStart < weekStart ? weekStart : eventStart;
+    const spanEnd = eventEnd > weekEnd ? weekEnd : eventEnd;
+    const startColumn = daysBetween(weekStart, spanStart) + 1;
+    const endColumn = daysBetween(weekStart, spanEnd) + 2;
+    const label = mobilePreviewTitleParts(event);
+    return `
+      <button type="button" class="preview-mobile-span preview-chip-${eventTone(event)}" style="grid-column: ${startColumn} / ${endColumn};" data-review-id="${event.id}" data-review-date="${formatDateKey(spanStart)}">
+        ${label.prefix ? `<span class="preview-chip-source">${escapeHtml(label.prefix)}</span>` : ""}
+        <span>${escapeHtml(label.label)}</span>
+      </button>
+    `;
+  }).join("");
+  return `<div class="preview-mobile-span-row">${spans}</div>`;
+}
+
+function daysBetween(start, end) {
+  const left = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+  const right = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+  return Math.round((right.getTime() - left.getTime()) / 86400000);
 }
 
 function eventTone(event) {
@@ -1966,7 +2040,7 @@ function buildTermSections(weeks) {
 }
 
 function renderTermSection(section) {
-  const headerCells = DAY_NAMES.map((day) => `<div class="preview-day-name">${day}</div>`).join("");
+  const headerCells = DAY_NAMES.map((day, index) => `<div class="preview-day-name${index >= 5 ? " is-weekend" : ""}" data-day-index="${index}" data-short-day="${escapeHtml(day[0])}">${day}</div>`).join("");
   const bodyRows = [];
   let lastMonthKey = "";
   const firstMonday = section.weeks[0]?.week?.[0]?.date;
@@ -1992,6 +2066,7 @@ function renderTermSection(section) {
         <time datetime="${formatDateKey(monday)}">${formatLongDate(monday)}</time>
       </div>
       ${week.map((day) => renderDayCell(day)).join("")}
+      ${renderMobileWeekSpans(week)}
     `);
   });
 
