@@ -2072,8 +2072,8 @@ function renderTermSection(section) {
         <span>starting</span>
         <time datetime="${formatDateKey(monday)}">${formatLongDate(monday)}</time>
       </div>
-      ${week.map((day) => renderDayCell(day)).join("")}
       ${renderMobileWeekSpans(week)}
+      ${week.map((day) => renderDayCell(day)).join("")}
     `);
   });
 

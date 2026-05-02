@@ -2140,11 +2140,17 @@ body[data-skin="console"] .panel {
   }
 
   .preview-cell {
-    min-height: 0;
+    min-height: 58px;
     padding: 5px 3px;
     grid-template-rows: auto auto;
     align-content: start;
     gap: 3px;
+  }
+
+  body[data-skin="console"] .preview-cell {
+    min-height: 58px;
+    padding: 5px 3px;
+    align-content: start;
   }
 
   .preview-date {
