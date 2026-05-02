@@ -1789,12 +1789,13 @@ function renderTermSection(section) {
   section.weeks.forEach(({ week, index }) => {
     const monday = week[0]?.date;
     const monthKey = monday ? `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, "0")}` : "";
+    const isMonthStartWeek = Boolean(monthKey && monthKey !== lastMonthKey);
     if (monthKey && monthKey !== lastMonthKey) {
       bodyRows.push(`<div class="preview-month-row" data-month-key="${monthKey}">${formatMonth(monday)}</div>`);
       lastMonthKey = monthKey;
     }
     bodyRows.push(`
-      <div class="preview-week-label">
+      <div class="preview-week-label" ${isMonthStartWeek ? `data-month-start="${monthKey}"` : ""}>
         <strong>Week ${index + 1}</strong>
         <span>starting</span>
         <time datetime="${formatDateKey(monday)}">${formatLongDate(monday)}</time>
@@ -3538,6 +3539,11 @@ function applyPreviewRangeChange(which, value) {
 
 function snapPreviewToCurrentMonth(smooth = true) {
   const todayMonthKey = formatDateKey(new Date()).slice(0, 7);
+  const monthStart = preview.querySelector(`[data-month-start="${todayMonthKey}"]`);
+  if (monthStart) {
+    monthStart.scrollIntoView({ block: "start", behavior: smooth ? "smooth" : "auto" });
+    return;
+  }
   const monthRow = preview.querySelector(`[data-month-key="${todayMonthKey}"]`);
   if (!monthRow) return;
   monthRow.scrollIntoView({ block: "start", behavior: smooth ? "smooth" : "auto" });
