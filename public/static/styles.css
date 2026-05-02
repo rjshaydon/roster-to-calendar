@@ -928,6 +928,7 @@ input[type="color"] {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
+  scroll-margin-top: calc(var(--console-header-height) + 18px);
 }
 
 .preview-term-title {
@@ -965,6 +966,7 @@ input[type="color"] {
   font-size: 1.14rem;
   font-weight: 700;
   color: var(--accent-strong);
+  scroll-margin-top: calc(var(--console-header-height) + 18px);
 }
 
 .preview-week-label,

@@ -311,6 +311,7 @@
         </div>
         <form id="parserRuleForm" class="review-card">
           <input id="parserRuleIssueId" type="hidden">
+          <input id="parserRuleOriginalCode" type="hidden">
           <div class="custom-event-grid">
             <label class="field">
               <span>Hospital</span>
@@ -327,7 +328,7 @@
               <input id="parserRuleCode" type="text" required>
             </label>
             <label class="field">
-              <span>Normalized title</span>
+              <span>Base title</span>
               <input id="parserRuleBase" type="text" required>
             </label>
           </div>
@@ -356,6 +357,12 @@
             <span>Location</span>
             <input id="parserRuleLocation" type="text" placeholder="Optional default location">
           </label>
+          <div id="parserRulePreview" class="issue-card">
+            <div>
+              <strong>Preview</strong>
+              <p>Fill in the rule to preview the final calendar output before saving.</p>
+            </div>
+          </div>
           <div class="modal-actions">
             <button type="submit" class="button button-primary">Save shift code</button>
           </div>

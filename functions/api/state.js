@@ -247,7 +247,16 @@ export async function onRequestPost(context) {
       if (!rule) {
         return Response.json({ error: "A valid shift-code rule is required." }, { status: 400 });
       }
-      const parserExtensions = upsertParserExtensionRule(await loadParserExtensionRules(context.env.ROSTER_STORE), rule);
+      const previousCode = String(body?.previousCode || "").trim().toUpperCase();
+      let parserExtensions = await loadParserExtensionRules(context.env.ROSTER_STORE);
+      if (previousCode && previousCode !== rule.code) {
+        const sourceKey = rule.source.toLowerCase();
+        parserExtensions = {
+          ...parserExtensions,
+          [sourceKey]: (parserExtensions[sourceKey] || []).filter((item) => item.code !== previousCode),
+        };
+      }
+      parserExtensions = upsertParserExtensionRule(parserExtensions, rule);
       await saveParserExtensionRules(context.env.ROSTER_STORE, parserExtensions);
       const ignoreFingerprint = sanitizeIssueFingerprint(body?.fingerprint || issueFingerprint(body?.source, body?.rawValue));
       if (ignoreFingerprint) {

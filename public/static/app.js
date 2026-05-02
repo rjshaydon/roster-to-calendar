@@ -36,11 +36,13 @@ const accountsBody = document.querySelector("#accountsBody");
 const accountsModalTitle = document.querySelector("#accountsModalTitle");
 const accountsModalSubtitle = document.querySelector("#accountsModalSubtitle");
 const parserRuleModal = document.querySelector("#parserRuleModal");
+const parserRuleModalTitle = document.querySelector("#parserRuleModalTitle");
 const parserRuleCloseButton = document.querySelector("#parserRuleCloseButton");
 const parserRuleForm = document.querySelector("#parserRuleForm");
 const parserRuleIssueId = document.querySelector("#parserRuleIssueId");
 const parserRuleSource = document.querySelector("#parserRuleSource");
 const parserRuleRawValue = document.querySelector("#parserRuleRawValue");
+const parserRuleOriginalCode = document.querySelector("#parserRuleOriginalCode");
 const parserRuleCode = document.querySelector("#parserRuleCode");
 const parserRuleBase = document.querySelector("#parserRuleBase");
 const parserRulePeriod = document.querySelector("#parserRulePeriod");
@@ -50,6 +52,7 @@ const parserRuleTimeFields = document.querySelector("#parserRuleTimeFields");
 const parserRuleStartTime = document.querySelector("#parserRuleStartTime");
 const parserRuleEndTime = document.querySelector("#parserRuleEndTime");
 const parserRuleLocation = document.querySelector("#parserRuleLocation");
+const parserRulePreview = document.querySelector("#parserRulePreview");
 const insightsModal = document.querySelector("#insightsModal");
 const insightsCloseButton = document.querySelector("#insightsCloseButton");
 const insightsModalTitle = document.querySelector("#insightsModalTitle");
@@ -377,6 +380,14 @@ accountsBody.addEventListener("click", (event) => {
   const addShiftCodeButton = event.target.closest("[data-add-shift-code]");
   if (addShiftCodeButton) {
     openParserRuleModal(addShiftCodeButton.dataset.addShiftCode || "", addShiftCodeButton.dataset.errorId || "");
+    return;
+  }
+  const editShiftCodeButton = event.target.closest("[data-edit-parser-rule]");
+  if (editShiftCodeButton) {
+    openParserRuleModalFromRule(
+      editShiftCodeButton.dataset.editParserSource || "",
+      editShiftCodeButton.dataset.editParserRule || "",
+    );
     return;
   }
   const deleteButton = event.target.closest("[data-delete-account]");
@@ -832,7 +843,10 @@ parserRuleModal?.addEventListener("click", (event) => {
 });
 parserRuleAllDay?.addEventListener("change", () => {
   parserRuleTimeFields?.classList.toggle("hidden", parserRuleAllDay.checked);
+  renderParserRulePreview();
 });
+parserRuleForm?.addEventListener("input", () => renderParserRulePreview());
+parserRuleForm?.addEventListener("change", () => renderParserRulePreview());
 parserRuleForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   await saveParserRuleFromModal();
@@ -3541,19 +3555,29 @@ function snapPreviewToCurrentMonth(smooth = true) {
   const todayKey = formatDateKey(new Date());
   const todayCell = preview.querySelector(`[data-add-date="${todayKey}"]`);
   if (todayCell) {
-    let anchor = todayCell.previousElementSibling;
-    while (anchor && !anchor.classList?.contains("preview-week-label")) {
-      anchor = anchor.previousElementSibling;
+    const term = todayCell.closest(".preview-term");
+    let rowPointer = todayCell;
+    let weekLabel = null;
+    while (rowPointer) {
+      if (rowPointer.classList?.contains("preview-week-label")) {
+        weekLabel = rowPointer;
+        break;
+      }
+      rowPointer = rowPointer.previousElementSibling;
     }
-    (anchor || todayCell).scrollIntoView({ block: "start", behavior: smooth ? "smooth" : "auto" });
+    let monthRow = weekLabel?.previousElementSibling || rowPointer?.previousElementSibling || null;
+    while (monthRow && !monthRow.classList?.contains("preview-month-row")) {
+      monthRow = monthRow.previousElementSibling;
+    }
+    const grid = todayCell.closest(".preview-grid");
+    const firstMonthRow = grid?.querySelector(".preview-month-row") || null;
+    const target = monthRow
+      ? (monthRow === firstMonthRow ? term?.querySelector(".preview-term-header") || monthRow : monthRow)
+      : term?.querySelector(".preview-term-header") || weekLabel || todayCell;
+    target?.scrollIntoView({ block: "start", behavior: smooth ? "smooth" : "auto" });
     return;
   }
   const todayMonthKey = todayKey.slice(0, 7);
-  const monthStart = preview.querySelector(`[data-month-start="${todayMonthKey}"]`);
-  if (monthStart) {
-    monthStart.scrollIntoView({ block: "start", behavior: smooth ? "smooth" : "auto" });
-    return;
-  }
   const monthRow = preview.querySelector(`[data-month-key="${todayMonthKey}"]`);
   if (!monthRow) return;
   monthRow.scrollIntoView({ block: "start", behavior: smooth ? "smooth" : "auto" });
@@ -4345,6 +4369,7 @@ function renderAccountsModal() {
   const linkedNames = renderLinkedRosterNames(currentRosterClaims);
   if (ownerView && !["errors", "users", "owner"].includes(currentAdminTab)) currentAdminTab = "errors";
   const issueCount = adminIssueCount();
+  const parserRulesCard = ownerView ? renderParserRulesCard() : "";
   const adminTabs = ownerView ? `
     <div class="admin-tabs" role="tablist" aria-label="Admin sections">
       <button type="button" class="entrance-tab ${currentAdminTab === "errors" ? "is-active" : ""}" data-admin-tab="errors">Errors${issueCount ? `<span class="notification-badge">${issueCount}</span>` : ""}</button>
@@ -4379,6 +4404,7 @@ function renderAccountsModal() {
         </div>
       </form>
       ${linkedNames}
+      ${parserRulesCard}
     </article>
   `;
   const usersCard = ownerView ? `
@@ -4435,6 +4461,47 @@ function renderAccountsModal() {
     ? (currentAdminTab === "errors" ? errorsCard : currentAdminTab === "users" ? usersCard : ownerCard)
     : ownerCard;
   accountsBody.innerHTML = `${adminTabs}${adminBody}`;
+}
+
+function renderParserRulesCard() {
+  const groups = [
+    { source: "MMC", rules: sanitizeParserExtensionRuleList(parserExtensions?.mmc, "MMC") },
+    { source: "DDH", rules: sanitizeParserExtensionRuleList(parserExtensions?.ddh, "DDH") },
+  ].filter((group) => group.rules.length);
+  return `
+    <div class="issues-list">
+      <article class="issue-card">
+        <div>
+          <strong>Shift code rules</strong>
+          <p>${groups.length ? "Review and edit global exact-match parser rules." : "No custom shift-code rules saved yet."}</p>
+        </div>
+        ${groups.map((group) => `
+          <div class="issues-list">
+            <article class="issue-card">
+              <div>
+                <strong>${group.source}</strong>
+                <p>${group.rules.length} saved rule${group.rules.length === 1 ? "" : "s"}</p>
+              </div>
+              <div class="issues-list">
+                ${group.rules.map((rule) => `
+                  <article class="issue-card">
+                    <div>
+                      <strong>${escapeHtml(rule.code)}</strong>
+                      <p>${escapeHtml(parserRulePreviewTitle(rule))}</p>
+                      <p>${escapeHtml(parserRulePreviewMeta(rule))}</p>
+                    </div>
+                    <div class="account-actions">
+                      <button type="button" class="button button-secondary" data-edit-parser-rule="${escapeHtml(rule.code)}" data-edit-parser-source="${escapeHtml(rule.source)}">Edit</button>
+                    </div>
+                  </article>
+                `).join("")}
+              </div>
+            </article>
+          </div>
+        `).join("")}
+      </article>
+    </div>
+  `;
 }
 
 function renderLinkedRosterNames(claims) {
@@ -4619,6 +4686,65 @@ function findAdminIssue(email, errorId = "") {
   return (user.adminIssues || []).find((issue) => issue.id === errorId || issue.fingerprint === errorId) || null;
 }
 
+function findParserExtensionRule(source, code) {
+  const sourceKey = sanitizeIssueSource(source).toLowerCase();
+  const normalizedCode = String(code || "").trim().toUpperCase();
+  if (!sourceKey || !normalizedCode) return null;
+  return sanitizeParserExtensionRuleList(parserExtensions?.[sourceKey], sourceKey.toUpperCase())
+    .find((rule) => rule.code === normalizedCode) || null;
+}
+
+function parserRulePreviewTitle(rule, sourceSettings = settings) {
+  if (!rule) return "";
+  const parts = [];
+  if (rule.base) parts.push(rule.base);
+  if (sourceSettings.showAmPm && rule.period) parts.push(rule.period === "NIGHT" ? "Night" : rule.period);
+  if (rule.suffix) parts.push(rule.suffix);
+  const core = parts.join(" ").trim();
+  if (!core) return "";
+  return sourceSettings.showSourcePrefix ? `${rule.source}: ${core}` : core;
+}
+
+function parserRulePreviewMeta(rule) {
+  if (!rule) return "";
+  const meta = [];
+  meta.push(rule.allDay ? "All day" : summarizeEventTimes(`2000-01-01T${rule.startTime}:00`, `2000-01-01T${rule.endTime}:00`, false));
+  if (rule.location) meta.push(rule.location);
+  return meta.join(" · ");
+}
+
+function renderParserRulePreview() {
+  if (!parserRulePreview) return;
+  const source = sanitizeIssueSource(parserRuleSource?.value);
+  const rule = sanitizeParserExtensionRule({
+    source,
+    code: parserRuleCode?.value,
+    base: parserRuleBase?.value,
+    period: parserRulePeriod?.value,
+    suffix: parserRuleSuffix?.value,
+    allDay: parserRuleAllDay?.checked,
+    startTime: parseEditorTimeInput(parserRuleStartTime?.value || ""),
+    endTime: parseEditorTimeInput(parserRuleEndTime?.value || ""),
+    location: parserRuleLocation?.value,
+  }, source);
+  if (!rule) {
+    parserRulePreview.innerHTML = `
+      <div>
+        <strong>Preview</strong>
+        <p>Fill in the rule to preview the final calendar output before saving.</p>
+      </div>
+    `;
+    return;
+  }
+  parserRulePreview.innerHTML = `
+    <div>
+      <strong>Preview</strong>
+      <p>${escapeHtml(parserRulePreviewTitle(rule))}</p>
+      <p>${escapeHtml(parserRulePreviewMeta(rule))}</p>
+    </div>
+  `;
+}
+
 function openParserRuleModal(email, errorId = "") {
   const issue = findAdminIssue(email, errorId);
   if (!issue) {
@@ -4628,6 +4754,7 @@ function openParserRuleModal(email, errorId = "") {
   parserRuleIssueId.value = issue.fingerprint || issue.id || "";
   parserRuleSource.value = issue.source || "";
   parserRuleRawValue.value = issue.rawValue || "";
+  parserRuleOriginalCode.value = parserRuleCodeForIssue(issue);
   parserRuleCode.value = parserRuleCodeForIssue(issue);
   parserRuleBase.value = parserRuleBaseForIssue(issue);
   parserRulePeriod.value = parserRulePeriodForIssue(issue);
@@ -4637,6 +4764,33 @@ function openParserRuleModal(email, errorId = "") {
   parserRuleEndTime.value = parserRuleAllDay.checked ? "" : timeRangeParts(issue.timeLabel).end;
   parserRuleLocation.value = defaultLocationForIssueSource(issue.source);
   parserRuleTimeFields.classList.toggle("hidden", parserRuleAllDay.checked);
+  parserRuleModalTitle.textContent = "Add shift code";
+  renderParserRulePreview();
+  parserRuleModal.classList.remove("hidden");
+  parserRuleModal.setAttribute("aria-hidden", "false");
+}
+
+function openParserRuleModalFromRule(source, code) {
+  const rule = findParserExtensionRule(source, code);
+  if (!rule) {
+    setStatus("Could not find that saved shift-code rule.", true);
+    return;
+  }
+  parserRuleIssueId.value = "";
+  parserRuleSource.value = rule.source;
+  parserRuleRawValue.value = rule.code;
+  parserRuleOriginalCode.value = rule.code;
+  parserRuleCode.value = rule.code;
+  parserRuleBase.value = rule.base;
+  parserRulePeriod.value = rule.period;
+  parserRuleSuffix.value = rule.suffix;
+  parserRuleAllDay.checked = rule.allDay;
+  parserRuleStartTime.value = rule.allDay ? "" : rule.startTime;
+  parserRuleEndTime.value = rule.allDay ? "" : rule.endTime;
+  parserRuleLocation.value = rule.location || "";
+  parserRuleTimeFields.classList.toggle("hidden", parserRuleAllDay.checked);
+  parserRuleModalTitle.textContent = "Edit shift code";
+  renderParserRulePreview();
   parserRuleModal.classList.remove("hidden");
   parserRuleModal.setAttribute("aria-hidden", "false");
 }
@@ -4646,6 +4800,14 @@ function closeParserRuleModal() {
   parserRuleModal?.setAttribute("aria-hidden", "true");
   parserRuleForm?.reset();
   parserRuleTimeFields?.classList.remove("hidden");
+  if (parserRulePreview) {
+    parserRulePreview.innerHTML = `
+      <div>
+        <strong>Preview</strong>
+        <p>Fill in the rule to preview the final calendar output before saving.</p>
+      </div>
+    `;
+  }
 }
 
 async function saveParserRuleFromModal() {
@@ -4655,6 +4817,7 @@ async function saveParserRuleFromModal() {
   }
   const source = sanitizeIssueSource(parserRuleSource.value);
   const rawValue = String(parserRuleRawValue.value || "").trim();
+  const previousCode = String(parserRuleOriginalCode?.value || "").trim().toUpperCase();
   const code = String(parserRuleCode.value || "").trim().toUpperCase();
   const base = String(parserRuleBase.value || "").trim();
   const period = String(parserRulePeriod.value || "").trim().toUpperCase();
@@ -4664,8 +4827,8 @@ async function saveParserRuleFromModal() {
   const endTime = parseEditorTimeInput(parserRuleEndTime.value);
   const location = String(parserRuleLocation.value || "").trim();
   const fingerprint = sanitizeIssueFingerprint(parserRuleIssueId.value);
-  if (!source || !rawValue || !code || !base) {
-    setStatus("Source, raw value, shift code, and normalized title are required.", true);
+  if (!source || !code || !base) {
+    setStatus("Source, shift code, and base title are required.", true);
     return;
   }
   if (!allDay && (!startTime || !endTime)) {
@@ -4683,6 +4846,7 @@ async function saveParserRuleFromModal() {
         fingerprint,
         source,
         rawValue,
+        previousCode,
         rule: {
           source,
           code,
@@ -6249,6 +6413,7 @@ function renderWorkspaceFromSnapshot(snapshot, session = {}) {
   clearDoctorAnalysisCache();
   restoredSessionState = session && typeof session === "object" ? session : {};
   applySessionState(restoredSessionState, { inheritedSettings: rosterDefaultSettings() });
+  pendingPreviewSnapToToday = true;
   renderSettings();
   renderFilesList();
   renderDoctorState();
