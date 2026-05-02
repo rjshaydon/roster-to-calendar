@@ -1170,7 +1170,7 @@ function syncMobileViewportInsets() {
   const viewport = window.visualViewport;
   const margin = 12;
   const dockClearance = 65;
-  const topClearance = 0;
+  const topClearance = -10;
   if (!viewport) {
     root.style.setProperty("--mobile-dock-left", `${margin}px`);
     root.style.setProperty("--mobile-dock-width", `calc(100vw - ${margin * 2}px)`);
