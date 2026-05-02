@@ -4367,12 +4367,12 @@ function renderAccountsModal() {
   const localOtherUsers = accountState.users.filter((user) => user.email !== me.email);
   const otherUsers = serverOtherUsers.length ? serverOtherUsers : localOtherUsers;
   const linkedNames = renderLinkedRosterNames(currentRosterClaims);
-  if (ownerView && !["errors", "users", "owner"].includes(currentAdminTab)) currentAdminTab = "errors";
+  if (ownerView && !["errors", "system", "users", "owner"].includes(currentAdminTab)) currentAdminTab = "errors";
   const issueCount = adminIssueCount();
-  const parserRulesCard = ownerView ? renderParserRulesCard() : "";
   const adminTabs = ownerView ? `
     <div class="admin-tabs" role="tablist" aria-label="Admin sections">
       <button type="button" class="entrance-tab ${currentAdminTab === "errors" ? "is-active" : ""}" data-admin-tab="errors">Errors${issueCount ? `<span class="notification-badge">${issueCount}</span>` : ""}</button>
+      <button type="button" class="entrance-tab ${currentAdminTab === "system" ? "is-active" : ""}" data-admin-tab="system">System</button>
       <button type="button" class="entrance-tab ${currentAdminTab === "users" ? "is-active" : ""}" data-admin-tab="users">Users</button>
       <button type="button" class="entrance-tab ${currentAdminTab === "owner" ? "is-active" : ""}" data-admin-tab="owner">Owner account</button>
     </div>
@@ -4404,7 +4404,6 @@ function renderAccountsModal() {
         </div>
       </form>
       ${linkedNames}
-      ${parserRulesCard}
     </article>
   `;
   const usersCard = ownerView ? `
@@ -4457,8 +4456,15 @@ function renderAccountsModal() {
       </article>
     ` : "";
   const errorsCard = ownerView ? renderAdminErrorsCard(serverOtherUsers) : "";
+  const systemCard = ownerView ? renderParserRulesCard() : "";
   const adminBody = ownerView
-    ? (currentAdminTab === "errors" ? errorsCard : currentAdminTab === "users" ? usersCard : ownerCard)
+    ? (currentAdminTab === "errors"
+        ? errorsCard
+        : currentAdminTab === "system"
+          ? systemCard
+          : currentAdminTab === "users"
+            ? usersCard
+            : ownerCard)
     : ownerCard;
   accountsBody.innerHTML = `${adminTabs}${adminBody}`;
 }
