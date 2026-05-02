@@ -869,6 +869,9 @@ window.addEventListener("resize", () => {
 window.visualViewport?.addEventListener("resize", () => {
   syncMobileChrome();
 });
+window.visualViewport?.addEventListener("scroll", () => {
+  syncMobileChrome();
+});
 document.addEventListener("pointermove", (event) => {
   if (!previewGesture || event.pointerId !== previewGesture.pointerId) return;
   updatePreviewGesture(event);
@@ -1162,6 +1165,19 @@ function isMobileLayout() {
   return window.matchMedia("(max-width: 760px)").matches;
 }
 
+function syncMobileViewportInsets() {
+  const root = document.documentElement;
+  const viewport = window.visualViewport;
+  if (!viewport) {
+    root.style.setProperty("--mobile-viewport-bottom-offset", "0px");
+    root.style.setProperty("--mobile-viewport-top-offset", "0px");
+    return;
+  }
+  const bottomOffset = Math.max(0, window.innerHeight - (viewport.height + viewport.offsetTop));
+  root.style.setProperty("--mobile-viewport-bottom-offset", `${Math.round(bottomOffset)}px`);
+  root.style.setProperty("--mobile-viewport-top-offset", `${Math.round(viewport.offsetTop)}px`);
+}
+
 function hasCalendarPreview() {
   return Boolean(latestPreview && selectedDoctor());
 }
@@ -1227,6 +1243,7 @@ function syncMobileSettingsControls() {
 function syncMobileChrome() {
   const loggedIn = Boolean(currentUserEmail && currentUserPassword);
   const mobile = isMobileLayout();
+  syncMobileViewportInsets();
   const showBar = loggedIn && mobile && hasCalendarPreview();
   mobileActionBar.classList.toggle("hidden", !showBar);
   if (mobileAccountAccessButton) {
@@ -3710,7 +3727,7 @@ function snapPreviewToCurrentMonth(smooth = true) {
   const alignTargetTopToBanner = (target) => {
     if (!target) return false;
     if (mobile) {
-      const safeTopOffset = Math.max(74, (window.visualViewport?.offsetTop || 0) + 70);
+      const safeTopOffset = Math.max(92, (window.visualViewport?.offsetTop || 0) + 92);
       const nextTop = Math.max(0, window.scrollY + target.getBoundingClientRect().top - safeTopOffset);
       window.scrollTo({ top: nextTop, behavior: smooth ? "smooth" : "auto" });
       return true;
@@ -3723,6 +3740,11 @@ function snapPreviewToCurrentMonth(smooth = true) {
     return true;
   };
   const todayKey = formatDateKey(new Date());
+  const todayMonthKey = todayKey.slice(0, 7);
+  if (mobile) {
+    const currentMonthRow = preview.querySelector(`[data-month-key="${todayMonthKey}"]`);
+    if (currentMonthRow && alignTargetTopToBanner(currentMonthRow)) return;
+  }
   const todayCell = preview.querySelector(`[data-add-date="${todayKey}"]`);
   if (todayCell) {
     const term = todayCell.closest(".preview-term");
@@ -3748,7 +3770,6 @@ function snapPreviewToCurrentMonth(smooth = true) {
     if (alignTargetTopToBanner(target)) return;
     return;
   }
-  const todayMonthKey = todayKey.slice(0, 7);
   const monthRow = preview.querySelector(`[data-month-key="${todayMonthKey}"]`);
   if (!monthRow) return;
   alignTargetTopToBanner(monthRow);

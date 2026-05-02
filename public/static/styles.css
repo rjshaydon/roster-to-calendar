@@ -1574,12 +1574,12 @@ input[type="color"] {
 
 .mobile-action-bar {
   position: fixed;
-  inset: auto 12px 12px;
+  inset: auto 12px calc(env(safe-area-inset-bottom, 0px) + var(--mobile-viewport-bottom-offset, 0px) + 8px);
   z-index: 10;
-  padding: 12px;
+  padding: 10px 14px;
   display: none;
   gap: 10px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   border-radius: 22px;
   background: rgba(254, 251, 244, 0.92);
   border: 1px solid rgba(20, 34, 42, 0.1);
@@ -1589,6 +1589,12 @@ input[type="color"] {
 
 .mobile-action-bar .button {
   flex: 1 1 0;
+  padding: 0;
+  border: 0;
+  background: transparent !important;
+  color: var(--ink) !important;
+  box-shadow: none;
+  transform: none;
 }
 
 .mobile-bar-button {
@@ -1596,6 +1602,7 @@ input[type="color"] {
   align-items: center;
   justify-content: center;
   gap: 0;
+  min-height: 44px;
 }
 
 .mobile-bar-icon {
@@ -1603,6 +1610,12 @@ input[type="color"] {
   height: 22px;
   display: block;
   flex: 0 0 auto;
+}
+
+#mobileTodayButton {
+  justify-content: flex-start;
+  padding-left: 4px;
+  font-weight: 700;
 }
 
 .sr-only {
@@ -2071,15 +2084,14 @@ body[data-skin="console"] .panel {
 
   .mobile-action-bar {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    inset: auto 10px calc(env(safe-area-inset-bottom, 0px) + 10px);
-    padding: 10px;
+    grid-template-columns: minmax(0, 1.15fr) repeat(3, minmax(0, 1fr));
+    inset: auto 10px calc(env(safe-area-inset-bottom, 0px) + var(--mobile-viewport-bottom-offset, 0px) + 8px);
+    padding: 8px 12px;
     gap: 8px;
   }
 
   .mobile-action-bar .button {
-    min-height: 54px;
-    padding-inline: 0;
+    min-height: 44px;
     font-size: 0.88rem;
   }
 
@@ -2092,11 +2104,11 @@ body[data-skin="console"] .panel {
   }
 
   #settingsPanel.settings-panel {
-    inset: auto 10px calc(env(safe-area-inset-bottom, 0px) + 10px) 10px;
+    inset: auto 10px calc(env(safe-area-inset-bottom, 0px) + var(--mobile-viewport-bottom-offset, 0px) + 10px) 10px;
     left: 10px;
     right: 10px;
     top: auto;
-    bottom: calc(env(safe-area-inset-bottom, 0px) + 10px);
+    bottom: calc(env(safe-area-inset-bottom, 0px) + var(--mobile-viewport-bottom-offset, 0px) + 10px);
     width: auto;
     max-height: min(78vh, calc(100vh - 24px));
     transform: none;
@@ -2145,7 +2157,7 @@ body[data-skin="console"] .panel {
 
   body[data-skin="console"] #previewSection {
     padding: 16px;
-    padding-bottom: 110px;
+    padding-bottom: calc(110px + env(safe-area-inset-bottom, 0px) + var(--mobile-viewport-bottom-offset, 0px));
     height: auto;
     overflow: visible;
   }
