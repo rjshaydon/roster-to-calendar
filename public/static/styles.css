@@ -1574,7 +1574,9 @@ input[type="color"] {
 
 .mobile-action-bar {
   position: fixed;
-  inset: auto 12px calc(env(safe-area-inset-bottom, 0px) + var(--mobile-viewport-bottom-offset, 0px) + 8px);
+  left: calc(var(--mobile-viewport-left-offset, 0px) + 10px);
+  right: calc(var(--mobile-viewport-right-offset, 0px) + 10px);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + var(--mobile-viewport-bottom-offset, 0px) + 8px);
   z-index: 10;
   padding: 10px 14px;
   display: none;
@@ -2085,7 +2087,6 @@ body[data-skin="console"] .panel {
   .mobile-action-bar {
     display: grid;
     grid-template-columns: minmax(0, 1.15fr) repeat(3, minmax(0, 1fr));
-    inset: auto 10px calc(env(safe-area-inset-bottom, 0px) + var(--mobile-viewport-bottom-offset, 0px) + 8px);
     padding: 8px 12px;
     gap: 8px;
   }
@@ -2104,9 +2105,9 @@ body[data-skin="console"] .panel {
   }
 
   #settingsPanel.settings-panel {
-    inset: auto 10px calc(env(safe-area-inset-bottom, 0px) + var(--mobile-viewport-bottom-offset, 0px) + 10px) 10px;
-    left: 10px;
-    right: 10px;
+    inset: auto;
+    left: calc(var(--mobile-viewport-left-offset, 0px) + 10px);
+    right: calc(var(--mobile-viewport-right-offset, 0px) + 10px);
     top: auto;
     bottom: calc(env(safe-area-inset-bottom, 0px) + var(--mobile-viewport-bottom-offset, 0px) + 10px);
     width: auto;
