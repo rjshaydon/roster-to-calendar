@@ -78,7 +78,6 @@ const mobileTodayButton = document.querySelector("#mobileTodayButton");
 const mobileExportButton = document.querySelector("#mobileExportButton");
 const mobileSettingsButton = document.querySelector("#mobileSettingsButton");
 const mobileAccountButton = document.querySelector("#mobileAccountButton");
-const mobileAccountButtonGlyph = document.querySelector("#mobileAccountButtonGlyph");
 const mobileAccountButtonLabel = document.querySelector("#mobileAccountButtonLabel");
 const exportModal = document.querySelector("#exportModal");
 const exportCloseButton = document.querySelector("#exportCloseButton");
@@ -1185,9 +1184,7 @@ async function openAccountsSurface(options = {}) {
 function syncMobileAccountButtons() {
   const creator = isCreatorAuthenticated();
   const label = creator ? "Admin" : "Account";
-  const glyph = creator ? "🛡" : "👤";
   if (mobileAccountButtonLabel) mobileAccountButtonLabel.textContent = label;
-  if (mobileAccountButtonGlyph) mobileAccountButtonGlyph.textContent = glyph;
   if (mobileAccountButton) mobileAccountButton.setAttribute("aria-label", label);
   if (mobileAccountAccessButton) {
     mobileAccountAccessButton.textContent = label;
@@ -3713,7 +3710,7 @@ function snapPreviewToCurrentMonth(smooth = true) {
   const alignTargetTopToBanner = (target) => {
     if (!target) return false;
     if (mobile) {
-      const safeTopOffset = Math.max(52, (window.visualViewport?.offsetTop || 0) + 44);
+      const safeTopOffset = Math.max(74, (window.visualViewport?.offsetTop || 0) + 70);
       const nextTop = Math.max(0, window.scrollY + target.getBoundingClientRect().top - safeTopOffset);
       window.scrollTo({ top: nextTop, behavior: smooth ? "smooth" : "auto" });
       return true;

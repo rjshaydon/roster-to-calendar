@@ -275,16 +275,26 @@
     <div id="mobileActionBar" class="mobile-action-bar hidden">
       <button id="mobileTodayButton" type="button" class="button button-secondary mobile-bar-button">Today</button>
       <button id="mobileExportButton" type="button" class="button button-primary mobile-bar-button" disabled aria-label="Export options">
-        <span class="mobile-bar-glyph" aria-hidden="true">⤴</span>
-        <span>Share</span>
+        <svg class="mobile-bar-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M12 3v11" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.9"/>
+          <path d="M8.2 6.8 12 3l3.8 3.8" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.9"/>
+          <path d="M6 10.8v7.1c0 .9.7 1.6 1.6 1.6h8.8c.9 0 1.6-.7 1.6-1.6v-7.1" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.9"/>
+        </svg>
+        <span class="sr-only">Share</span>
       </button>
       <button id="mobileSettingsButton" type="button" class="button button-secondary mobile-bar-button" aria-label="Settings">
-        <span class="mobile-bar-glyph" aria-hidden="true">⚙</span>
-        <span>Settings</span>
+        <svg class="mobile-bar-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="12" r="3.1" fill="none" stroke="currentColor" stroke-width="1.8"/>
+          <path d="m12 3.8 1.1.5.7 1.7 1.9.4 1.5-1 .9.5.3 1.8 1.4 1.2-.3 1.2 1.1 1.5-1.1 1.5.3 1.2-1.4 1.2-.3 1.8-.9.5-1.5-1-1.9.4-.7 1.7-1.1.5-1.1-.5-.7-1.7-1.9-.4-1.5 1-.9-.5-.3-1.8-1.4-1.2.3-1.2L3.8 12l1.1-1.5-.3-1.2L6 8.1l.3-1.8.9-.5 1.5 1 1.9-.4.7-1.7Z" fill="none" stroke="currentColor" stroke-linejoin="round" stroke-width="1.3"/>
+        </svg>
+        <span class="sr-only">Settings</span>
       </button>
       <button id="mobileAccountButton" type="button" class="button button-secondary mobile-bar-button" aria-label="Account">
-        <span id="mobileAccountButtonGlyph" class="mobile-bar-glyph" aria-hidden="true">👤</span>
-        <span id="mobileAccountButtonLabel">Account</span>
+        <svg id="mobileAccountButtonGlyph" class="mobile-bar-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="12" cy="8.1" r="3.2" fill="none" stroke="currentColor" stroke-width="1.9"/>
+          <path d="M6.4 19.2c.8-2.7 3.1-4.3 5.6-4.3s4.8 1.6 5.6 4.3" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.9"/>
+        </svg>
+        <span id="mobileAccountButtonLabel" class="sr-only">Account</span>
       </button>
     </div>
 
