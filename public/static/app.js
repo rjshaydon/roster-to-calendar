@@ -3552,6 +3552,16 @@ function applyPreviewRangeChange(which, value) {
 }
 
 function snapPreviewToCurrentMonth(smooth = true) {
+  const scroller = previewSection;
+  const header = preview.querySelector(".preview-head");
+  const alignTargetBottomToBanner = (target) => {
+    if (!target || !scroller) return false;
+    const bannerBottom = header?.getBoundingClientRect().bottom || 0;
+    const targetBottom = target.getBoundingClientRect().bottom;
+    const nextTop = Math.max(0, scroller.scrollTop + (targetBottom - bannerBottom));
+    scroller.scrollTo({ top: nextTop, behavior: smooth ? "smooth" : "auto" });
+    return true;
+  };
   const todayKey = formatDateKey(new Date());
   const todayCell = preview.querySelector(`[data-add-date="${todayKey}"]`);
   if (todayCell) {
@@ -3574,13 +3584,16 @@ function snapPreviewToCurrentMonth(smooth = true) {
     const target = monthRow
       ? (monthRow === firstMonthRow ? term?.querySelector(".preview-term-header") || monthRow : monthRow)
       : term?.querySelector(".preview-term-header") || weekLabel || todayCell;
-    target?.scrollIntoView({ block: "start", behavior: smooth ? "smooth" : "auto" });
+    if (monthRow && monthRow !== firstMonthRow) {
+      if (alignTargetBottomToBanner(monthRow)) return;
+    }
+    if (alignTargetBottomToBanner(target)) return;
     return;
   }
   const todayMonthKey = todayKey.slice(0, 7);
   const monthRow = preview.querySelector(`[data-month-key="${todayMonthKey}"]`);
   if (!monthRow) return;
-  monthRow.scrollIntoView({ block: "start", behavior: smooth ? "smooth" : "auto" });
+  alignTargetBottomToBanner(monthRow);
 }
 
 function buildEventOverridePatch(event, item, override = {}) {
