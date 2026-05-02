@@ -2140,9 +2140,10 @@ body[data-skin="console"] .panel {
   }
 
   .preview-cell {
-    min-height: 76px;
+    min-height: 0;
     padding: 5px 3px;
-    grid-template-rows: auto 1fr;
+    grid-template-rows: auto auto;
+    align-content: start;
     gap: 3px;
   }
 
@@ -2153,6 +2154,8 @@ body[data-skin="console"] .panel {
 
   .preview-stack {
     gap: 2px;
+    align-self: start;
+    align-content: start;
   }
 
   .preview-chip {
