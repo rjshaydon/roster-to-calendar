@@ -36,6 +36,7 @@
   --today-border-color: rgba(196, 73, 73, 0.42);
   --today-fill-color: rgba(196, 73, 73, 0.08);
   --today-fill-surface: linear-gradient(180deg, var(--today-fill-color), rgba(255, 255, 255, 0.82));
+  --weekend-shade-surface: rgba(229, 231, 235, 0.32);
 }
 
 * {
@@ -1058,6 +1059,13 @@ input[type="color"] {
   background: rgba(255, 255, 255, 0.82);
   cursor: pointer;
   transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
+}
+
+.preview-day-name.is-weekend,
+.preview-cell.is-weekend,
+body[data-skin="console"] .preview-day-name.is-weekend,
+body[data-skin="console"] .preview-cell.is-weekend {
+  background: var(--weekend-shade-surface);
 }
 
 .preview-cell.is-drop-target {
@@ -2128,11 +2136,6 @@ body[data-skin="console"] .panel {
 
   body[data-skin="console"] .preview-day-name {
     font-size: 0;
-  }
-
-  .preview-day-name.is-weekend,
-  .preview-cell.is-weekend {
-    background: rgba(20, 34, 42, 0.025);
   }
 
   .preview-toolbar-spacer {

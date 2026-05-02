@@ -162,6 +162,8 @@ const SETTINGS_FIELDS = [
   "currentDayBackgroundColor",
   "currentDayBackgroundOpacity",
   "currentDayFillStyle",
+  "weekendShadeColor",
+  "weekendShadeOpacity",
   "shiftColorDay",
   "shiftColorEvening",
   "shiftColorNight",
@@ -248,6 +250,7 @@ const settingsInputs = Object.fromEntries(
 applySkin(currentSkin);
 applyShiftColours(settings);
 applyCurrentDayHighlight(settings);
+applyWeekendShade(settings);
 setEntranceTab("login");
 
 chooseFilesButton.addEventListener("click", (event) => {
@@ -575,6 +578,12 @@ for (const [key, input] of Object.entries(settingsInputs)) {
       applyCurrentDayHighlight(settings);
       if (latestPreview) rebuildClientPreview();
       setStatus("Current day highlight updated.");
+      return;
+    }
+    if (key.startsWith("weekendShade")) {
+      applyWeekendShade(settings);
+      if (latestPreview) rebuildClientPreview();
+      setStatus("Weekend shading updated.");
       return;
     }
     setStatus("Settings updated.");
@@ -956,6 +965,8 @@ function defaultSettings() {
     currentDayBackgroundColor: "#c44949",
     currentDayBackgroundOpacity: "8",
     currentDayFillStyle: "gradient",
+    weekendShadeColor: "#e5e7eb",
+    weekendShadeOpacity: "32",
     shiftColorDay: SHIFT_COLOUR_DEFAULTS.day,
     shiftColorEvening: SHIFT_COLOUR_DEFAULTS.evening,
     shiftColorNight: SHIFT_COLOUR_DEFAULTS.night,
@@ -1140,13 +1151,14 @@ function renderSettings() {
     if (input.type === "checkbox") {
       input.checked = Boolean(settings[key]);
     } else if (input.type === "color") {
-      input.value = isHexColour(settings[key]) ? settings[key] : defaultShiftColourForField(key);
+      input.value = isHexColour(settings[key]) ? settings[key] : defaultColourForField(key);
     } else {
       input.value = settings[key] || "";
     }
   }
   applyShiftColours(settings);
   applyCurrentDayHighlight(settings);
+  applyWeekendShade(settings);
   syncMobileSettingsControls();
 }
 
@@ -5536,6 +5548,18 @@ function applyCurrentDayHighlight(sourceSettings = settings) {
   if (currentDayPreview) {
     currentDayPreview.style.borderColor = `rgba(${borderRgb.r}, ${borderRgb.g}, ${borderRgb.b}, ${borderOpacity})`;
   }
+}
+
+function applyWeekendShade(sourceSettings = settings) {
+  const colour = isHexColour(sourceSettings.weekendShadeColor) ? sourceSettings.weekendShadeColor : "#e5e7eb";
+  const opacity = normalizeOpacity(sourceSettings.weekendShadeOpacity, 32);
+  const rgb = hexToRgb(colour);
+  document.documentElement.style.setProperty("--weekend-shade-surface", `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${opacity})`);
+}
+
+function defaultColourForField(field) {
+  if (field === "weekendShadeColor") return "#e5e7eb";
+  return defaultShiftColourForField(field);
 }
 
 function defaultShiftColourForField(field) {
