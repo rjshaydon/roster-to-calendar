@@ -979,6 +979,8 @@ input[type="color"] {
 
 .preview-month-button {
   min-width: 82px;
+  font-size: 0.88rem;
+  font-weight: 700;
 }
 
 .preview-week-label,
@@ -1867,6 +1869,10 @@ body[data-skin="console"] .preview-month-row {
   font-weight: 800;
   background: #ffffff;
   border-top: 1px solid var(--line);
+}
+
+body[data-skin="console"] .preview-month-button {
+  font-size: 0.82rem;
 }
 
 body[data-skin="console"] .preview-week-label,
