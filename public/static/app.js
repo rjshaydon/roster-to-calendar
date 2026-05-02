@@ -293,9 +293,9 @@ dropZone.addEventListener("drop", async (event) => {
   await analyzeFiles();
 });
 
-filesButton.addEventListener("click", openFilesModal);
-filesCloseButton.addEventListener("click", closeFilesModal);
-filesModal.addEventListener("click", (event) => {
+filesButton?.addEventListener("click", openFilesModal);
+filesCloseButton?.addEventListener("click", closeFilesModal);
+filesModal?.addEventListener("click", (event) => {
   if (event.target.matches("[data-close-files]")) closeFilesModal();
 });
 exportButton.addEventListener("click", openExportModal);
@@ -380,6 +380,12 @@ accountsBody.addEventListener("click", (event) => {
   const addShiftCodeButton = event.target.closest("[data-add-shift-code]");
   if (addShiftCodeButton) {
     openParserRuleModal(addShiftCodeButton.dataset.addShiftCode || "", addShiftCodeButton.dataset.errorId || "");
+    return;
+  }
+  const removeImportButton = event.target.closest("[data-remove-import]");
+  if (removeImportButton) {
+    if (!canRemoveImports()) return;
+    void removeStoredImport(removeImportButton.dataset.removeImport);
     return;
   }
   const editShiftCodeButton = event.target.closest("[data-edit-parser-rule]");
@@ -1099,28 +1105,37 @@ function setEntranceTab(tab) {
   });
 }
 
+function renderFilesMarkup({ canRemove = false, heading = "", description = "" } = {}) {
+  if (!selectedFiles.length) {
+    const emptyMessage = canRemove
+      ? "Add rosters and they will stay here until removed."
+      : "No files are currently linked to this calendar.";
+    return `
+      <article class="review-card">
+        ${heading ? `<div class="review-top"><div><strong>${escapeHtml(heading)}</strong>${description ? `<span>${escapeHtml(description)}</span>` : ""}</div></div>` : ""}
+        <article class="issue-card"><strong>No files imported yet.</strong><p>${escapeHtml(emptyMessage)}</p></article>
+      </article>
+    `;
+  }
+  return `
+    <article class="review-card">
+      ${heading ? `<div class="review-top"><div><strong>${escapeHtml(heading)}</strong>${description ? `<span>${escapeHtml(description)}</span>` : ""}</div></div>` : ""}
+      <div class="file-summary">
+        ${selectedFiles.map((entry) => `
+          <article class="file-pill">
+            <span>${escapeHtml(String(entry.sourceType || "").toUpperCase())} · Imported ${escapeHtml(formatTimestamp(entry.addedAt))}</span>
+            <strong>${escapeHtml(entry.name)}</strong>
+            ${canRemove ? `<button type="button" class="file-remove file-remove-visible" aria-label="Remove file" title="Remove file" data-remove-import="${entry.id}">🗑</button>` : ""}
+          </article>
+        `).join("")}
+      </div>
+    </article>
+  `;
+}
+
 function renderFilesList() {
   if (!filesList) return;
-  if (!selectedFiles.length) {
-    const emptyMessage = canRemoveImports()
-      ? "Add rosters and they will stay here until removed."
-      : "Add rosters and they will be retained in the shared roster repository.";
-    filesList.innerHTML = `<article class="issue-card"><strong>No files imported yet.</strong><p>${emptyMessage}</p></article>`;
-    return;
-  }
-
-  const canRemove = canRemoveImports();
-  filesList.innerHTML = selectedFiles.map((entry) => `
-    <article class="issue-card">
-      <div>
-        <strong>${escapeHtml(entry.name)}</strong>
-        <p>${escapeHtml(String(entry.sourceType || "").toUpperCase())} · Imported ${escapeHtml(formatTimestamp(entry.addedAt))}</p>
-      </div>
-      ${canRemove
-        ? `<button type="button" class="button button-secondary" data-remove-import="${entry.id}">Remove</button>`
-        : `<span class="file-readonly">Repository file</span>`}
-    </article>
-  `).join("");
+  filesList.innerHTML = renderFilesMarkup({ canRemove: canRemoveImports() });
 }
 
 function renderDoctorState() {
@@ -3554,11 +3569,11 @@ function applyPreviewRangeChange(which, value) {
 function snapPreviewToCurrentMonth(smooth = true) {
   const scroller = previewSection;
   const header = preview.querySelector(".preview-head");
-  const alignTargetBottomToBanner = (target) => {
+  const alignTargetTopToBanner = (target) => {
     if (!target || !scroller) return false;
     const bannerBottom = header?.getBoundingClientRect().bottom || 0;
-    const targetBottom = target.getBoundingClientRect().bottom;
-    const nextTop = Math.max(0, scroller.scrollTop + (targetBottom - bannerBottom));
+    const targetTop = target.getBoundingClientRect().top;
+    const nextTop = Math.max(0, scroller.scrollTop + (targetTop - bannerBottom));
     scroller.scrollTo({ top: nextTop, behavior: smooth ? "smooth" : "auto" });
     return true;
   };
@@ -3584,16 +3599,14 @@ function snapPreviewToCurrentMonth(smooth = true) {
     const target = monthRow
       ? (monthRow === firstMonthRow ? term?.querySelector(".preview-term-header") || monthRow : monthRow)
       : term?.querySelector(".preview-term-header") || weekLabel || todayCell;
-    if (monthRow && monthRow !== firstMonthRow) {
-      if (alignTargetBottomToBanner(monthRow)) return;
-    }
-    if (alignTargetBottomToBanner(target)) return;
+    if (monthRow && alignTargetTopToBanner(monthRow)) return;
+    if (alignTargetTopToBanner(target)) return;
     return;
   }
   const todayMonthKey = todayKey.slice(0, 7);
   const monthRow = preview.querySelector(`[data-month-key="${todayMonthKey}"]`);
   if (!monthRow) return;
-  alignTargetBottomToBanner(monthRow);
+  alignTargetTopToBanner(monthRow);
 }
 
 function buildEventOverridePatch(event, item, override = {}) {
@@ -4380,13 +4393,14 @@ function renderAccountsModal() {
   const localOtherUsers = accountState.users.filter((user) => user.email !== me.email);
   const otherUsers = serverOtherUsers.length ? serverOtherUsers : localOtherUsers;
   const linkedNames = renderLinkedRosterNames(currentRosterClaims);
-  if (ownerView && !["errors", "system", "users", "owner"].includes(currentAdminTab)) currentAdminTab = "system";
+  if (ownerView && !["errors", "system", "users", "files", "owner"].includes(currentAdminTab)) currentAdminTab = "system";
   const issueCount = adminIssueCount();
   const adminTabs = ownerView ? `
     <div class="admin-tabs" role="tablist" aria-label="Admin sections">
       <button type="button" class="entrance-tab ${currentAdminTab === "system" ? "is-active" : ""}" data-admin-tab="system">System</button>
       <button type="button" class="entrance-tab ${currentAdminTab === "errors" ? "is-active" : ""}" data-admin-tab="errors">Errors${issueCount ? `<span class="notification-badge">${issueCount}</span>` : ""}</button>
       <button type="button" class="entrance-tab ${currentAdminTab === "users" ? "is-active" : ""}" data-admin-tab="users">Users</button>
+      <button type="button" class="entrance-tab ${currentAdminTab === "files" ? "is-active" : ""}" data-admin-tab="files">Files</button>
       <button type="button" class="entrance-tab ${currentAdminTab === "owner" ? "is-active" : ""}" data-admin-tab="owner">Owner account</button>
     </div>
   ` : "";
@@ -4417,6 +4431,11 @@ function renderAccountsModal() {
         </div>
       </form>
       ${linkedNames}
+      ${ownerView ? "" : renderFilesMarkup({
+        canRemove: false,
+        heading: "Files used to generate your calendar...",
+        description: "These roster files currently feed your calendar.",
+      })}
     </article>
   `;
   const usersCard = ownerView ? `
@@ -4470,6 +4489,11 @@ function renderAccountsModal() {
     ` : "";
   const errorsCard = ownerView ? renderAdminErrorsCard(serverOtherUsers) : "";
   const systemCard = ownerView ? renderParserRulesCard() : "";
+  const filesCard = ownerView ? renderFilesMarkup({
+    canRemove: canRemoveImports(),
+    heading: "Files",
+    description: "Files currently used to generate the creator calendar.",
+  }) : "";
   const adminBody = ownerView
     ? (currentAdminTab === "errors"
         ? errorsCard
@@ -4477,7 +4501,9 @@ function renderAccountsModal() {
           ? systemCard
           : currentAdminTab === "users"
             ? usersCard
-            : ownerCard)
+            : currentAdminTab === "files"
+              ? filesCard
+              : ownerCard)
     : ownerCard;
   accountsBody.innerHTML = `${adminTabs}${adminBody}`;
 }
