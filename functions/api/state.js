@@ -1001,6 +1001,9 @@ async function buildAccountSnapshotStamp(store, context) {
       }))
     : [];
   const stateRevision = await buildStateRevision(context?.state || {});
+  const parserExtensions = await loadParserExtensionRules(store);
+  const ignoredFingerprints = await loadIgnoredIssueFingerprints(store);
+  const dismissedFingerprints = await loadDismissedIssueFingerprints(store, context?.email || "");
   return await sha256(JSON.stringify({
     schemaVersion: SNAPSHOT_SCHEMA_VERSION,
     ownerType: role === "creator" || role === "owner" ? "creator-account" : "claimed-account",
@@ -1009,6 +1012,9 @@ async function buildAccountSnapshotStamp(store, context) {
     files: fileMarkers,
     linkedProfiles: linkedProfileMarkers,
     stateRevision,
+    parserExtensions,
+    ignoredFingerprints,
+    dismissedFingerprints,
   }));
 }
 
@@ -1022,6 +1028,8 @@ async function buildDoctorProfileSnapshotStamp(store, profile) {
     addedAt: ref.addedAt,
   }));
   const stateRevision = await buildStateRevision(profile?.state || {});
+  const parserExtensions = await loadParserExtensionRules(store);
+  const ignoredFingerprints = await loadIgnoredIssueFingerprints(store);
   return await sha256(JSON.stringify({
     schemaVersion: SNAPSHOT_SCHEMA_VERSION,
     ownerType: "doctor-profile",
@@ -1031,6 +1039,8 @@ async function buildDoctorProfileSnapshotStamp(store, profile) {
     sourceTypes: sanitizeSourceTypes(profile?.sourceTypes),
     files: fileMarkers,
     stateRevision,
+    parserExtensions,
+    ignoredFingerprints,
   }));
 }
 

@@ -3538,7 +3538,17 @@ function applyPreviewRangeChange(which, value) {
 }
 
 function snapPreviewToCurrentMonth(smooth = true) {
-  const todayMonthKey = formatDateKey(new Date()).slice(0, 7);
+  const todayKey = formatDateKey(new Date());
+  const todayCell = preview.querySelector(`[data-add-date="${todayKey}"]`);
+  if (todayCell) {
+    let anchor = todayCell.previousElementSibling;
+    while (anchor && !anchor.classList?.contains("preview-week-label")) {
+      anchor = anchor.previousElementSibling;
+    }
+    (anchor || todayCell).scrollIntoView({ block: "start", behavior: smooth ? "smooth" : "auto" });
+    return;
+  }
+  const todayMonthKey = todayKey.slice(0, 7);
   const monthStart = preview.querySelector(`[data-month-start="${todayMonthKey}"]`);
   if (monthStart) {
     monthStart.scrollIntoView({ block: "start", behavior: smooth ? "smooth" : "auto" });
