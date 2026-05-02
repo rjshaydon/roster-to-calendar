@@ -206,9 +206,15 @@ body.is-dragging #dropZone {
 
 .admin-tabs {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 18px;
+}
+
+.admin-tabs .entrance-tab {
+  padding-inline: 12px;
+  font-size: 0.95rem;
+  white-space: nowrap;
 }
 
 .notification-badge {
