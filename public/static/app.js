@@ -734,6 +734,12 @@ insightsModalBody.addEventListener("change", (event) => {
     void renderInsightsModal();
     return;
   }
+  const whenFromInput = event.target.closest("[data-insights-when-from]");
+  if (whenFromInput && insightsState?.mode === "when") {
+    insightsState.fromDate = whenFromInput.value || formatDateKey(new Date());
+    void renderInsightsModal();
+    return;
+  }
   const whenHospitalToggle = event.target.closest("[data-insights-when-hospital]");
   if (whenHospitalToggle && insightsState?.mode === "when") {
     const hospital = String(whenHospitalToggle.value || "").toUpperCase();
@@ -2116,11 +2122,15 @@ async function openWhoInsight(termStart, termEnd) {
 
 async function openWhenInsight(termStart, termEnd) {
   await ensureInsightRosterAnalysis();
-  const options = comparisonDoctorOptions(termStart, termEnd, []);
+  const range = availableInsightDateRange();
+  const fromDate = formatDateKey(new Date());
+  const toDate = range.end || termEnd || fromDate;
+  const options = comparisonDoctorOptions(fromDate, toDate, []);
   insightsState = {
     mode: "when",
-    termStart,
-    termEnd,
+    termStart: range.start || termStart || fromDate,
+    termEnd: toDate,
+    fromDate,
     hospitalFilters: [],
     comparisonDoctorKey: options[0]?.key || "",
   };
@@ -2213,22 +2223,24 @@ function renderWhoInsight() {
 
 function renderWhenInsight() {
   const hospitalFilters = Array.isArray(insightsState.hospitalFilters) ? insightsState.hospitalFilters : [];
-  const options = comparisonDoctorOptions(insightsState.termStart, insightsState.termEnd, hospitalFilters);
+  const fromDate = insightsState.fromDate || formatDateKey(new Date());
+  const toDate = insightsState.termEnd || availableInsightDateRange().end || fromDate;
+  const options = comparisonDoctorOptions(fromDate, toDate, hospitalFilters);
   const selectedKey = options.some((doctor) => doctor.key === insightsState.comparisonDoctorKey)
     ? insightsState.comparisonDoctorKey
     : options[0]?.key || "";
   insightsState.comparisonDoctorKey = selectedKey;
   const selectedComparison = options.find((doctor) => doctor.key === selectedKey) || null;
-  const mine = selectedDoctorEventsForInsights(insightsState.termStart, insightsState.termEnd, hospitalFilters).filter(isRosterShiftEvent);
+  const mine = selectedDoctorEventsForInsights(fromDate, toDate, hospitalFilters).filter(isRosterShiftEvent);
   const theirs = selectedComparison
-    ? comparisonDoctorEvents(selectedComparison.key, insightsState.termStart, insightsState.termEnd, hospitalFilters).filter(isRosterShiftEvent)
+    ? comparisonDoctorEvents(selectedComparison.key, fromDate, toDate, hospitalFilters).filter(isRosterShiftEvent)
     : [];
   const overlaps = buildOverlapDays(mine, theirs);
   const nextOverlapDate = chooseNextOverlapDate(overlaps);
-  const hospitalOptions = availableHospitalsForInsightRange(insightsState.termStart, insightsState.termEnd);
+  const hospitalOptions = availableHospitalsForInsightRange(fromDate, toDate);
 
   insightsModalTitle.textContent = "When am I working with…?";
-  insightsModalSubtitle.textContent = "Find the dates where both doctors are working in this term.";
+  insightsModalSubtitle.textContent = "Find future dates where both doctors are working from the selected date.";
   insightsModalBody.innerHTML = `
     <div class="insights-controls">
       <label class="field">
@@ -2240,7 +2252,11 @@ function renderWhenInsight() {
         </select>
       </label>
       <fieldset class="settings-group insights-hospital-group">
-        <legend>Hospitals</legend>
+        <legend>Options</legend>
+        <label class="field">
+          <span>From</span>
+          <input type="date" value="${escapeHtml(fromDate)}" min="${escapeHtml(insightsState.termStart || "")}" max="${escapeHtml(toDate)}" data-insights-when-from>
+        </label>
         <p class="status">Leave all unticked to search every hospital.</p>
         <div class="toggle-list">
           ${hospitalOptions.map((hospital) => `
@@ -2262,7 +2278,7 @@ function renderWhenInsight() {
             <p><strong>${escapeHtml(selectedComparison.displayName)}:</strong> ${escapeHtml(renderInsightShiftSummary(entry.theirs))}</p>
           </article>
         `).join("")
-        : `<article class="issue-card"><p>No overlapping working days were found in ${escapeHtml(detectAustralianTerm(parseDateOnly(insightsState.termStart)).label)}.</p></article>`
+        : `<article class="issue-card"><p>No overlapping working days were found from ${escapeHtml(formatDate(fromDate))}.</p></article>`
       : `<article class="issue-card"><p>No comparison doctors are available in these roster files.</p></article>`}
   `;
   const nextCard = insightsModalBody.querySelector("[data-insight-next='true']");
@@ -2276,6 +2292,14 @@ function comparisonDoctorOptions(start = "", end = "", hospitalFilters = []) {
   return prioritizeDoctorOptions(rosterDoctorOptions(parsedRosterSources?.mmc || [], parsedRosterSources?.ddh || []))
     .filter((doctor) => doctor.key !== selectedDoctor()?.key)
     .filter((doctor) => comparisonDoctorEvents(doctor.key, start, end, hospitalFilters).some(isRosterShiftEvent));
+}
+
+function availableInsightDateRange() {
+  const events = [
+    ...buildResolvedPreviewEvents(latestPreview || { events: [] }),
+    ...[...getDoctorAnalysisCache().values()].flat(),
+  ].filter(isRosterShiftEvent);
+  return deriveRangeBounds(events);
 }
 
 function selectedDoctorEventsForInsights(start, end, hospitalFilters = []) {
