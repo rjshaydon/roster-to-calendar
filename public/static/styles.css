@@ -2317,6 +2317,7 @@ body[data-skin="console"] .panel {
     transform: none;
     border-radius: 24px;
     padding: 18px;
+    display: block;
     overflow-x: hidden;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
@@ -2352,8 +2353,8 @@ body[data-skin="console"] .panel {
 
   .preview-normalized-option,
   .preview-raw-option,
-  .preview-style-options {
-    display: none;
+  #settingsPanel .preview-style-options {
+    display: none !important;
   }
 
   .settings-grid {
