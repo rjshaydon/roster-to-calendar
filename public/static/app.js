@@ -68,6 +68,7 @@ const skinSelect = document.querySelector("#skinSelect");
 const loginForm = document.querySelector("#loginForm");
 const loginEmail = document.querySelector("#loginEmail");
 const loginPassword = document.querySelector("#loginPassword");
+const stayLoggedIn = document.querySelector("#stayLoggedIn");
 const createAccountForm = document.querySelector("#createAccountForm");
 const createRealName = document.querySelector("#createRealName");
 const createEmail = document.querySelector("#createEmail");
@@ -149,6 +150,7 @@ const SESSION_STATE_KEY = "roster-session-state-v1";
 const ACCOUNT_WORKSPACES_KEY = "roster-account-workspaces-v1";
 const CURRENT_EMAIL_KEY = "roster-current-email";
 const CURRENT_PASSWORD_KEY = "roster-current-password";
+const PERSISTENT_PASSWORD_KEY = "roster-persistent-password";
 const SKIN_KEY = "roster-active-skin";
 const SIX_MONTH_LIMIT_DAYS = 183;
 const SETTINGS_FIELDS = [
@@ -208,7 +210,7 @@ let conflictSelections = {};
 let accountState = loadAccountState();
 let restoredSessionState = null;
 let currentUserEmail = loadCurrentUserEmail();
-let currentUserPassword = sessionStorage.getItem(CURRENT_PASSWORD_KEY) || "";
+let currentUserPassword = sessionStorage.getItem(CURRENT_PASSWORD_KEY) || localStorage.getItem(PERSISTENT_PASSWORD_KEY) || "";
 let currentUserRole = currentUserEmail === OWNER_EMAIL ? "creator" : "user";
 let authUserEmail = currentUserEmail;
 let authUserPassword = currentUserPassword;
@@ -466,7 +468,7 @@ loginForm.addEventListener("submit", async (event) => {
   const email = normalizeEmail(loginEmail.value);
   const password = loginPassword.value;
   if (!email || !password) return;
-  await loginWithEmail(email, password, { mode: "login" });
+  await loginWithEmail(email, password, { mode: "login", stayLoggedIn: Boolean(stayLoggedIn?.checked) });
 });
 createAccountForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -5516,6 +5518,7 @@ async function deleteAccount(email) {
     if (deletingCurrentAccount) {
       localStorage.removeItem(CURRENT_EMAIL_KEY);
       sessionStorage.removeItem(CURRENT_PASSWORD_KEY);
+      localStorage.removeItem(PERSISTENT_PASSWORD_KEY);
       currentUserEmail = "";
       currentUserPassword = "";
       authUserEmail = "";
@@ -5958,6 +5961,7 @@ function openLoginModal(prefillEmail = currentUserEmail || "") {
   applyTemporarySkin("console");
   loginEmail.value = prefillEmail;
   loginPassword.value = "";
+  if (stayLoggedIn) stayLoggedIn.checked = Boolean(localStorage.getItem(PERSISTENT_PASSWORD_KEY));
   entrancePage.classList.remove("hidden");
   appShell.classList.add("hidden");
   mobileActionBar.classList.add("hidden");
@@ -5978,6 +5982,7 @@ async function logoutCurrentUser() {
   cancelScheduledCloudStateSave();
   localStorage.removeItem(CURRENT_EMAIL_KEY);
   sessionStorage.removeItem(CURRENT_PASSWORD_KEY);
+  localStorage.removeItem(PERSISTENT_PASSWORD_KEY);
   currentUserEmail = "";
   currentUserPassword = "";
   authUserEmail = "";
@@ -6032,6 +6037,11 @@ async function loginWithEmail(email, password, options = {}) {
     currentUserRole = currentUserEmail === OWNER_EMAIL ? "creator" : "user";
     localStorage.setItem(CURRENT_EMAIL_KEY, currentUserEmail);
     sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
+    if (options.stayLoggedIn) {
+      localStorage.setItem(PERSISTENT_PASSWORD_KEY, currentUserPassword);
+    } else if (!options.adminTargetEmail) {
+      localStorage.removeItem(PERSISTENT_PASSWORD_KEY);
+    }
     applySkin(loadSkin());
     setStatus("Loading account workspace...");
     setEntranceStatus("Loading account workspace...");
@@ -6085,6 +6095,7 @@ async function restoreCloudState(options = {}) {
     currentSubscription = null;
     localStorage.removeItem(CURRENT_EMAIL_KEY);
     sessionStorage.removeItem(CURRENT_PASSWORD_KEY);
+    localStorage.removeItem(PERSISTENT_PASSWORD_KEY);
     if (options.mode === "create") {
       accountState.users = accountState.users.filter((user) => user.email !== currentUserEmail);
       saveAccountState();

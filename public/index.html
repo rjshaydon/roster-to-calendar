@@ -43,6 +43,7 @@
               <span>Password</span>
               <input id="loginPassword" type="password" autocomplete="current-password" required placeholder="Enter password">
             </label>
+            <label class="toggle mobile-stay-login"><input id="stayLoggedIn" type="checkbox"> Stay logged in?</label>
             <button type="submit" class="button button-primary">Log in</button>
           </form>
 
@@ -151,18 +152,18 @@
             </section>
 
             <div class="settings-grid">
-              <fieldset class="settings-group">
+              <fieldset class="settings-group settings-title-group">
                 <legend>Title</legend>
-                <label class="toggle"><input id="showSourcePrefix" type="checkbox" checked> Include hospital prefix</label>
-                <label class="toggle"><input id="showAmPm" type="checkbox" checked> Include AM/PM labels</label>
+                <label class="toggle"><input id="showSourcePrefix" type="checkbox" checked> 'Hospital:' prefix</label>
+                <label class="toggle"><input id="showAmPm" type="checkbox" checked> 'AM/PM' labels</label>
               </fieldset>
 
               <fieldset class="settings-group">
                 <legend>Preview</legend>
-                <label class="toggle"><input id="showTimes" type="checkbox" checked> Show times on preview cards</label>
-                <label class="toggle"><input id="showNormalizedTitles" type="checkbox" checked> Show normalized titles</label>
-                <label class="toggle"><input id="showRawValues" type="checkbox"> Show raw roster values</label>
-                <div class="settings-subgrid">
+                <label class="toggle preview-times-option"><input id="showTimes" type="checkbox" checked> Show times on events</label>
+                <label class="toggle preview-normalized-option"><input id="showNormalizedTitles" type="checkbox" checked> Show normalized titles</label>
+                <label class="toggle preview-raw-option"><input id="showRawValues" type="checkbox"> Show raw roster values</label>
+                <div class="settings-subgrid preview-style-options">
                   <label class="colour-field"><span>Today border</span><input id="currentDayBorderColor" type="color"></label>
                   <label class="field field-compact">
                     <span>Border opacity</span>
