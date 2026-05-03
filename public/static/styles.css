@@ -2301,7 +2301,7 @@ body[data-skin="console"] .panel {
     left: var(--mobile-modal-left, 12px);
     right: auto;
     top: var(--mobile-modal-top, 58px);
-    bottom: calc(100vh - var(--mobile-modal-bottom, 100vh));
+    bottom: calc(100vh - var(--mobile-dock-top, 100vh) + 20px);
     width: var(--mobile-modal-width, calc(100vw - 24px));
     max-width: var(--mobile-modal-width, calc(100vw - 24px));
     max-height: none;
@@ -2315,7 +2315,7 @@ body[data-skin="console"] .panel {
   body[data-skin="console"] #settingsPanel.settings-panel {
     left: var(--mobile-modal-left, 12px);
     top: var(--mobile-modal-top, 58px);
-    bottom: calc(100vh - var(--mobile-modal-bottom, 100vh));
+    bottom: calc(100vh - var(--mobile-dock-top, 100vh) + 20px);
     width: var(--mobile-modal-width, calc(100vw - 24px));
     max-width: var(--mobile-modal-width, calc(100vw - 24px));
     max-height: none;
