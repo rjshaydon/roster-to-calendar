@@ -60,6 +60,11 @@ body {
     linear-gradient(180deg, #f8f2e8 0%, #ede1d0 100%);
 }
 
+body.has-active-popup {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 body::before,
 body::after {
   content: "";
@@ -673,6 +678,7 @@ input[type="color"] {
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 14px;
   overflow: auto;
+  overscroll-behavior: contain;
   padding-right: 4px;
 }
 
@@ -1285,6 +1291,7 @@ body[data-skin="console"] .preview-cell.is-weekend {
   position: fixed;
   inset: 0;
   z-index: 30;
+  overflow: hidden;
 }
 
 .context-menu {
@@ -1356,12 +1363,14 @@ body[data-skin="console"] .preview-cell.is-weekend {
 .modal-body {
   margin-top: 12px;
   overflow: auto;
+  overscroll-behavior: contain;
   padding-right: 4px;
 }
 
 .modal-panel > .issues-list,
 .modal-panel > .custom-event-form {
   overflow: auto;
+  overscroll-behavior: contain;
   padding-right: 4px;
 }
 
@@ -2176,6 +2185,11 @@ body[data-skin="console"] .panel {
     gap: 0;
     line-height: 1.04;
     overflow: hidden;
+    touch-action: pan-y;
+  }
+
+  .preview-chip.is-dragging {
+    touch-action: none;
   }
 
   .preview-chip .preview-chip-title-full,
@@ -2269,10 +2283,12 @@ body[data-skin="console"] .panel {
     top: auto;
     bottom: calc(100vh - var(--mobile-dock-top, 100vh) + 8px);
     width: var(--mobile-dock-width, calc(100vw - 24px));
-    max-height: min(78vh, calc(100vh - 24px));
+    max-width: var(--mobile-dock-width, calc(100vw - 24px));
+    max-height: min(78vh, calc(var(--mobile-dock-top, 100vh) - var(--mobile-modal-top, 0px) - 12px));
     transform: none;
     border-radius: 24px;
     padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+    overflow-x: hidden;
   }
 
   .mobile-settings-controls {
@@ -2351,11 +2367,41 @@ body[data-skin="console"] .panel {
   }
 
   .modal-panel {
-    width: calc(100% - 16px);
-    max-height: calc(100vh - 16px);
-    margin: 8px auto;
+    position: fixed;
+    left: var(--mobile-modal-left, 12px);
+    top: var(--mobile-modal-top, 58px);
+    width: var(--mobile-modal-width, calc(100vw - 24px));
+    max-width: var(--mobile-modal-width, calc(100vw - 24px));
+    max-height: max(220px, calc(var(--mobile-modal-bottom, 100vh) - var(--mobile-modal-top, 58px)));
+    margin: 0;
     padding: 18px;
     border-radius: 20px;
+    overflow-x: hidden;
+  }
+
+  .modal-close,
+  .settings-panel .modal-close {
+    position: sticky;
+    top: 0;
+    align-self: flex-end;
+    flex: 0 0 auto;
+    z-index: 2;
+    margin: -6px -6px 4px auto;
+  }
+
+  .modal-body,
+  .modal-panel > .issues-list,
+  .modal-panel > .custom-event-form,
+  .settings-grid {
+    overflow-x: hidden;
+  }
+
+  .custom-event-grid,
+  .settings-subgrid,
+  .modal-actions,
+  .export-actions-grid {
+    display: grid;
+    grid-template-columns: 1fr;
   }
 }
 

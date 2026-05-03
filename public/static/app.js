@@ -199,6 +199,7 @@ let availablePreviewHospitals = [];
 let dragEventId = null;
 let copiedEvent = null;
 let previewGesture = null;
+let pendingPreviewGesture = null;
 let suppressPreviewClickUntil = 0;
 let openReviewId = "";
 let conflictSelections = {};
@@ -247,10 +248,25 @@ const settingsInputs = Object.fromEntries(
   SETTINGS_FIELDS.map((id) => [id, document.querySelector(`#${id}`)]),
 );
 
+const overlayObserver = new MutationObserver(syncOverlayState);
+[
+  settingsPanel,
+  exportModal,
+  filesModal,
+  accountsModal,
+  insightsModal,
+  parserRuleModal,
+  reviewModal,
+  customEventModal,
+].filter(Boolean).forEach((surface) => {
+  overlayObserver.observe(surface, { attributes: true, attributeFilter: ["class", "aria-hidden"] });
+});
+
 applySkin(currentSkin);
 applyShiftColours(settings);
 applyCurrentDayHighlight(settings);
 applyWeekendShade(settings);
+syncOverlayState();
 setEntranceTab("login");
 
 chooseFilesButton.addEventListener("click", (event) => {
@@ -700,6 +716,10 @@ preview.addEventListener("click", (event) => {
 preview.addEventListener("pointerdown", (event) => {
   const chip = event.target.closest("[data-review-id]");
   if (!chip || event.button !== 0) return;
+  if (isMobileLayout()) {
+    startPendingPreviewGesture(event, chip);
+    return;
+  }
   startPreviewGesture(event, chip);
 });
 preview.addEventListener("change", (event) => {
@@ -888,14 +908,26 @@ window.visualViewport?.addEventListener("scroll", () => {
   syncMobileChrome();
 });
 document.addEventListener("pointermove", (event) => {
+  if (pendingPreviewGesture && event.pointerId === pendingPreviewGesture.pointerId) {
+    updatePendingPreviewGesture(event);
+    return;
+  }
   if (!previewGesture || event.pointerId !== previewGesture.pointerId) return;
   updatePreviewGesture(event);
 });
 document.addEventListener("pointerup", (event) => {
+  if (pendingPreviewGesture && event.pointerId === pendingPreviewGesture.pointerId) {
+    cancelPendingPreviewGesture();
+    return;
+  }
   if (!previewGesture || event.pointerId !== previewGesture.pointerId) return;
   finishPreviewGesture(event);
 });
 document.addEventListener("pointercancel", (event) => {
+  if (pendingPreviewGesture && event.pointerId === pendingPreviewGesture.pointerId) {
+    cancelPendingPreviewGesture();
+    return;
+  }
   if (!previewGesture || event.pointerId !== previewGesture.pointerId) return;
   cancelPreviewGesture();
 });
@@ -1189,17 +1221,27 @@ function syncMobileViewportInsets() {
   const margin = 12;
   const dockClearance = 65;
   const topClearance = -10;
+  const modalTopClearance = 58;
+  const modalBottomClearance = 92;
   if (!viewport) {
     root.style.setProperty("--mobile-dock-left", `${margin}px`);
     root.style.setProperty("--mobile-dock-width", `calc(100vw - ${margin * 2}px)`);
     root.style.setProperty("--mobile-dock-top", `calc(100vh - ${dockClearance}px)`);
     root.style.setProperty("--mobile-top-anchor", `${topClearance}px`);
+    root.style.setProperty("--mobile-modal-left", `${margin}px`);
+    root.style.setProperty("--mobile-modal-width", `calc(100vw - ${margin * 2}px)`);
+    root.style.setProperty("--mobile-modal-top", `${modalTopClearance}px`);
+    root.style.setProperty("--mobile-modal-bottom", `calc(100vh - ${modalBottomClearance}px)`);
     return;
   }
   root.style.setProperty("--mobile-dock-left", `${Math.round(viewport.offsetLeft + margin)}px`);
   root.style.setProperty("--mobile-dock-width", `${Math.round(Math.max(0, viewport.width - margin * 2))}px`);
   root.style.setProperty("--mobile-dock-top", `${Math.round(viewport.offsetTop + viewport.height - dockClearance)}px`);
   root.style.setProperty("--mobile-top-anchor", `${Math.round(viewport.offsetTop + topClearance)}px`);
+  root.style.setProperty("--mobile-modal-left", `${Math.round(viewport.offsetLeft + margin)}px`);
+  root.style.setProperty("--mobile-modal-width", `${Math.round(Math.max(0, viewport.width - margin * 2))}px`);
+  root.style.setProperty("--mobile-modal-top", `${Math.round(viewport.offsetTop + modalTopClearance)}px`);
+  root.style.setProperty("--mobile-modal-bottom", `${Math.round(viewport.offsetTop + viewport.height - modalBottomClearance)}px`);
 }
 
 function hasCalendarPreview() {
@@ -1208,6 +1250,20 @@ function hasCalendarPreview() {
 
 function closeSettingsPanel() {
   settingsPanel.classList.add("hidden");
+}
+
+function syncOverlayState() {
+  const active = [
+    settingsPanel,
+    exportModal,
+    filesModal,
+    accountsModal,
+    insightsModal,
+    parserRuleModal,
+    reviewModal,
+    customEventModal,
+  ].some((surface) => surface && !surface.classList.contains("hidden"));
+  document.body.classList.toggle("has-active-popup", active);
 }
 
 async function openAccountsSurface(options = {}) {
@@ -2973,6 +3029,41 @@ function resetImportedEvent(id) {
 
 function hasImportedOverride(id) {
   return Boolean(overrides[id] && Object.keys(overrides[id]).length);
+}
+
+function startPendingPreviewGesture(event, chip) {
+  cancelPendingPreviewGesture();
+  pendingPreviewGesture = {
+    pointerId: event.pointerId,
+    chip,
+    startX: event.clientX,
+    startY: event.clientY,
+    timer: window.setTimeout(() => {
+      if (!pendingPreviewGesture || pendingPreviewGesture.pointerId !== event.pointerId) return;
+      const pending = pendingPreviewGesture;
+      pendingPreviewGesture = null;
+      suppressPreviewClickUntil = Date.now() + 350;
+      startPreviewGesture({
+        pointerId: pending.pointerId,
+        clientX: pending.startX,
+        clientY: pending.startY,
+      }, pending.chip);
+    }, 450),
+  };
+}
+
+function updatePendingPreviewGesture(event) {
+  const pending = pendingPreviewGesture;
+  if (!pending) return;
+  const dx = event.clientX - pending.startX;
+  const dy = event.clientY - pending.startY;
+  if (Math.hypot(dx, dy) > 10) cancelPendingPreviewGesture();
+}
+
+function cancelPendingPreviewGesture() {
+  if (!pendingPreviewGesture) return;
+  window.clearTimeout(pendingPreviewGesture.timer);
+  pendingPreviewGesture = null;
 }
 
 function startPreviewGesture(event, chip) {
