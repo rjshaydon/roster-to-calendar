@@ -211,16 +211,37 @@ body.is-dragging #dropZone {
 }
 
 .admin-tabs {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 10px;
+  display: flex;
+  gap: 3px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(246, 248, 252, 0.92);
   margin-bottom: 18px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.admin-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .admin-tabs .entrance-tab {
-  padding-inline: 10px;
-  font-size: 0.88rem;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 10px 8px;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  box-shadow: none;
+  font-size: clamp(0.74rem, 1.7vw, 0.9rem);
+  line-height: 1.1;
   white-space: nowrap;
+}
+
+.admin-tabs .entrance-tab.is-active {
+  background: #ffffff;
+  box-shadow: 0 8px 22px rgba(18, 28, 45, 0.08);
 }
 
 .notification-badge {
@@ -2277,18 +2298,34 @@ body[data-skin="console"] .panel {
   }
 
   #settingsPanel.settings-panel {
-    inset: auto;
-    left: var(--mobile-dock-left, 12px);
+    left: var(--mobile-modal-left, 12px);
     right: auto;
-    top: auto;
-    bottom: calc(100vh - var(--mobile-dock-top, 100vh) + 8px);
-    width: var(--mobile-dock-width, calc(100vw - 24px));
-    max-width: var(--mobile-dock-width, calc(100vw - 24px));
-    max-height: min(78vh, calc(var(--mobile-dock-top, 100vh) - var(--mobile-modal-top, 0px) - 12px));
+    top: var(--mobile-modal-top, 58px);
+    bottom: calc(100vh - var(--mobile-modal-bottom, 100vh));
+    width: var(--mobile-modal-width, calc(100vw - 24px));
+    max-width: var(--mobile-modal-width, calc(100vw - 24px));
+    max-height: none;
+    height: auto;
     transform: none;
     border-radius: 24px;
-    padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px));
-    overflow-x: hidden;
+    padding: 18px;
+    overflow: hidden;
+  }
+
+  body[data-skin="console"] #settingsPanel.settings-panel {
+    left: var(--mobile-modal-left, 12px);
+    top: var(--mobile-modal-top, 58px);
+    bottom: calc(100vh - var(--mobile-modal-bottom, 100vh));
+    width: var(--mobile-modal-width, calc(100vw - 24px));
+    max-width: var(--mobile-modal-width, calc(100vw - 24px));
+    max-height: none;
+    height: auto;
+    transform: none;
+  }
+
+  #settingsPanel .settings-head,
+  #settingsPanel .mobile-settings-controls {
+    flex: 0 0 auto;
   }
 
   .mobile-settings-controls {
@@ -2297,6 +2334,18 @@ body[data-skin="console"] .panel {
 
   .settings-grid {
     grid-template-columns: 1fr;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .preview,
+  .preview *,
+  .preview-mobile-span,
+  .preview-mobile-span * {
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
   }
 
   body[data-skin="console"] .page {

@@ -201,6 +201,8 @@ let copiedEvent = null;
 let previewGesture = null;
 let pendingPreviewGesture = null;
 let suppressPreviewClickUntil = 0;
+let mobileScrollLockY = 0;
+let mobileScrollLocked = false;
 let openReviewId = "";
 let conflictSelections = {};
 let accountState = loadAccountState();
@@ -1252,6 +1254,34 @@ function closeSettingsPanel() {
   settingsPanel.classList.add("hidden");
 }
 
+function setMobileBodyScrollLock(locked) {
+  if (locked && !isMobileLayout()) {
+    if (mobileScrollLocked) setMobileBodyScrollLock(false);
+    return;
+  }
+  if (locked && !mobileScrollLocked) {
+    mobileScrollLockY = window.scrollY || document.documentElement.scrollTop || 0;
+    document.body.style.position = "fixed";
+    document.body.style.top = `-${mobileScrollLockY}px`;
+    document.body.style.left = "0";
+    document.body.style.right = "0";
+    document.body.style.width = "100%";
+    mobileScrollLocked = true;
+    return;
+  }
+  if (!locked && mobileScrollLocked) {
+    const restoreY = mobileScrollLockY;
+    document.body.style.position = "";
+    document.body.style.top = "";
+    document.body.style.left = "";
+    document.body.style.right = "";
+    document.body.style.width = "";
+    mobileScrollLocked = false;
+    mobileScrollLockY = 0;
+    window.scrollTo(0, restoreY);
+  }
+}
+
 function syncOverlayState() {
   const active = [
     settingsPanel,
@@ -1264,6 +1294,7 @@ function syncOverlayState() {
     customEventModal,
   ].some((surface) => surface && !surface.classList.contains("hidden"));
   document.body.classList.toggle("has-active-popup", active);
+  setMobileBodyScrollLock(active);
 }
 
 async function openAccountsSurface(options = {}) {
@@ -4816,14 +4847,14 @@ function renderAccountsModal() {
       <button type="button" class="entrance-tab ${currentAdminTab === "errors" ? "is-active" : ""}" data-admin-tab="errors">Errors${issueCount ? `<span class="notification-badge">${issueCount}</span>` : ""}</button>
       <button type="button" class="entrance-tab ${currentAdminTab === "users" ? "is-active" : ""}" data-admin-tab="users">Users</button>
       <button type="button" class="entrance-tab ${currentAdminTab === "files" ? "is-active" : ""}" data-admin-tab="files">Files</button>
-      <button type="button" class="entrance-tab ${currentAdminTab === "owner" ? "is-active" : ""}" data-admin-tab="owner">Owner account</button>
+      <button type="button" class="entrance-tab ${currentAdminTab === "owner" ? "is-active" : ""}" data-admin-tab="owner">Account</button>
     </div>
   ` : "";
   const ownerCard = `
     <article class="review-card">
       <div class="review-top">
         <div>
-          <strong>${ownerView ? "Owner account" : "Your account"}</strong>
+          <strong>${ownerView ? "Account" : "Your account"}</strong>
           <span>${escapeHtml(me.realName || "Name not set")} · ${escapeHtml(me.email)}</span>
         </div>
       </div>
