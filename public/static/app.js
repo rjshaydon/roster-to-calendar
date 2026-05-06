@@ -2030,7 +2030,7 @@ function renderPreviewChip(event, dayKey) {
   const lines = [];
   const startKey = event.start.slice(0, 10);
   const mobileLabel = mobilePreviewTitleParts(event);
-  const continuousClass = continuousEventClass(event, dayKey);
+  const continuous = continuousEventDisplay(event, dayKey);
   if (settings.showNormalizedTitles || !settings.showRawValues) {
     const marker = event.isEditedImport ? '<span class="preview-chip-marker" aria-label="Imported event edited">*</span>' : "";
     lines.push(`<strong class="preview-chip-title-full">${escapeHtml(event.title)}${marker}</strong>`);
@@ -2047,7 +2047,8 @@ function renderPreviewChip(event, dayKey) {
   const meta = [];
   if (!event.allDay && settings.showTimes && startKey === dayKey && event.timeLabel) meta.push(event.timeLabel);
   const metaMarkup = meta.length ? `<span class="preview-chip-meta">${escapeHtml(meta.join(" · "))}</span>` : "";
-  return `<button type="button" class="preview-chip preview-chip-${eventTone(event)}${continuousClass}" data-review-id="${event.id}" data-review-date="${dayKey}">${lines.join("")}${metaMarkup}</button>`;
+  const style = continuous.span > 1 ? ` style="--continuous-span: ${continuous.span};"` : "";
+  return `<button type="button" class="preview-chip preview-chip-${eventTone(event)}${continuous.className}"${style} data-review-id="${event.id}" data-review-date="${dayKey}">${lines.join("")}${metaMarkup}</button>`;
 }
 
 function isMobileContinuousEvent(event) {
@@ -2057,21 +2058,24 @@ function isMobileContinuousEvent(event) {
   return end > start;
 }
 
-function continuousEventClass(event, dayKey) {
-  if (!isMobileContinuousEvent(event)) return "";
+function continuousEventDisplay(event, dayKey) {
+  if (!isMobileContinuousEvent(event)) return { className: "", span: 1 };
   const start = parseDateOnly(event.start);
   const end = previewInclusiveEndDate(event, start, parseDateOnly(event.end));
   const day = parseDateOnly(dayKey);
   const dayIndex = (day.getDay() + 6) % 7;
   const segmentStart = sameDateOnly(day, start) || dayIndex === 0;
-  const segmentEnd = sameDateOnly(day, end) || dayIndex === 6;
+  if (!segmentStart) return { className: " is-continuous-hidden", span: 1 };
   const weekStart = mondayFor(day);
   const weekEnd = addDays(weekStart, 6);
   const spanStart = start < weekStart ? weekStart : start;
   const spanEnd = end > weekEnd ? weekEnd : end;
-  const midpoint = addDays(spanStart, Math.floor(daysBetween(spanStart, spanEnd) / 2));
-  const label = sameDateOnly(day, midpoint) ? " is-continuous-label" : "";
-  return ` is-continuous${segmentStart ? " is-continuous-start" : ""}${segmentEnd ? " is-continuous-end" : ""}${label}`;
+  const span = Math.max(1, daysBetween(spanStart, spanEnd) + 1);
+  const segmentEnd = sameDateOnly(spanEnd, end) || sameDateOnly(spanEnd, weekEnd);
+  return {
+    className: ` is-continuous is-continuous-start${segmentEnd ? " is-continuous-end" : ""}`,
+    span,
+  };
 }
 
 function mobilePreviewTitleParts(event) {
