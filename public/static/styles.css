@@ -867,17 +867,20 @@ input[type="color"] {
 
 .mode-toggle {
   display: grid;
-  grid-template-columns: 0.88fr 1.12fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   overflow: hidden;
   border: 1px solid #d5e0eb;
   border-radius: 999px;
 }
 
 .mode-toggle button {
+  display: grid;
+  place-items: center;
   border: 0;
-  padding: 7px 8px;
+  padding: 7px 6px;
   font-size: 0.82rem;
   font-weight: 700;
+  text-align: center;
 }
 
 .mode-toggle button.is-active,

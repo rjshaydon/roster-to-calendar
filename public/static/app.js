@@ -185,6 +185,18 @@ const SETTINGS_FIELDS = [
   "dateFrom",
   "dateTo",
 ];
+const PREVIEW_STYLE_FIELDS = [
+  "currentDayBorderColor",
+  "currentDayBorderOpacity",
+  "currentDayBorderWidth",
+  "currentDayBackgroundColor",
+  "currentDayBackgroundOpacity",
+  "currentDayFillStyle",
+  "currentDayGradientDirection",
+  "weekendShadeEnabled",
+  "weekendShadeColor",
+  "weekendShadeOpacity",
+];
 
 let doctorOptions = [];
 let detectedSources = {};
@@ -193,6 +205,7 @@ let parsedRosterSources = null;
 let doctorRoleIndex = null;
 let parsedImportDoctors = new Map();
 let settings = defaultSettings();
+let previewStyleDraft = null;
 let overrides = {};
 let latestPreview = null;
 let reviewIndex = new Map();
@@ -552,7 +565,23 @@ mobileHospitalFilter?.addEventListener("change", () => {
 });
 
 for (const [key, input] of Object.entries(settingsInputs)) {
+  if (isPreviewStyleField(key) && input.type === "color") {
+    input.addEventListener("input", () => {
+      previewStyleDraft = readPreviewStyleInputs(previewStyleDraft || settings);
+      applyCurrentDayHighlight(previewStyleDraft, { previewOnly: true });
+      applyWeekendShade(previewStyleDraft, { previewOnly: true });
+      syncPreviewStyleControls(previewStyleDraft);
+    });
+  }
   input.addEventListener("change", () => {
+    if (isPreviewStyleField(key)) {
+      previewStyleDraft = readPreviewStyleInputs(previewStyleDraft || settings);
+      applyCurrentDayHighlight(previewStyleDraft, { previewOnly: true });
+      applyWeekendShade(previewStyleDraft, { previewOnly: true });
+      syncPreviewStyleControls(previewStyleDraft);
+      setStatus("Preview styling updated.");
+      return;
+    }
     settings[key] = input.type === "checkbox" ? input.checked : input.value;
     if (!settings.showNormalizedTitles && !settings.showRawValues) {
       settings.showNormalizedTitles = true;
@@ -631,11 +660,9 @@ settingsPanel?.addEventListener("click", (event) => {
     settingsInputs.currentDayFillStyle.value = mode;
     if (mode === "solid" && settingsInputs.currentDayGradientDirection) {
       settingsInputs.currentDayGradientDirection.value = "";
-      settings.currentDayGradientDirection = "";
     }
     if (mode === "gradient" && settingsInputs.currentDayGradientDirection && !settingsInputs.currentDayGradientDirection.value) {
       settingsInputs.currentDayGradientDirection.value = "90deg";
-      settings.currentDayGradientDirection = "90deg";
     }
     settingsInputs.currentDayFillStyle.dispatchEvent(new Event("change", { bubbles: true }));
     return;
@@ -647,35 +674,37 @@ settingsPanel?.addEventListener("click", (event) => {
       && settingsInputs.currentDayGradientDirection.value === direction;
     settingsInputs.currentDayFillStyle.value = isActive ? "solid" : "gradient";
     settingsInputs.currentDayGradientDirection.value = isActive ? "" : direction;
-    settings.currentDayGradientDirection = settingsInputs.currentDayGradientDirection.value;
     settingsInputs.currentDayFillStyle.dispatchEvent(new Event("change", { bubbles: true }));
     return;
   }
   if (event.target.closest("[data-preview-style-reset]")) {
     const defaults = defaultSettings();
-    [
-      "currentDayBorderColor",
-      "currentDayBorderOpacity",
-      "currentDayBorderWidth",
-      "currentDayBackgroundColor",
-      "currentDayBackgroundOpacity",
-      "currentDayFillStyle",
-      "currentDayGradientDirection",
-      "weekendShadeEnabled",
-      "weekendShadeColor",
-      "weekendShadeOpacity",
-    ].forEach((field) => {
-      settings[field] = defaults[field];
-    });
-    renderSettings();
-    saveCurrentSessionState();
-    applyCurrentDayHighlight(settings);
-    applyWeekendShade(settings);
-    if (latestPreview) rebuildClientPreview();
-    setStatus("Preview styling reset.");
+    previewStyleDraft = pickPreviewStyleSettings(defaults);
+    writePreviewStyleInputs(previewStyleDraft);
+    applyCurrentDayHighlight(previewStyleDraft, { previewOnly: true });
+    applyWeekendShade(previewStyleDraft, { previewOnly: true });
+    syncPreviewStyleControls(previewStyleDraft);
+    setStatus("Preview styling reset in the sample. Save to apply it.");
     return;
   }
-  if (event.target.closest("[data-preview-style-cancel], [data-preview-style-save]")) {
+  if (event.target.closest("[data-preview-style-cancel]")) {
+    previewStyleDraft = null;
+    renderSettings();
+    closeSettingsPanel();
+    setStatus("Preview styling changes cancelled.");
+    return;
+  }
+  if (event.target.closest("[data-preview-style-save]")) {
+    if (previewStyleDraft) {
+      Object.assign(settings, previewStyleDraft);
+      previewStyleDraft = null;
+      saveCurrentSessionState();
+      applyCurrentDayHighlight(settings);
+      applyWeekendShade(settings);
+      syncPreviewStyleControls(settings);
+      if (latestPreview) rebuildClientPreview();
+      setStatus("Preview styling saved.");
+    }
     closeSettingsPanel();
   }
 });
@@ -1278,6 +1307,7 @@ function doctorsByImportId(sources) {
 }
 
 function renderSettings() {
+  previewStyleDraft = null;
   for (const [key, input] of Object.entries(settingsInputs)) {
     if (!input) continue;
     if (input.type === "checkbox") {
@@ -1293,6 +1323,38 @@ function renderSettings() {
   applyWeekendShade(settings);
   syncPreviewStyleControls();
   syncMobileSettingsControls();
+}
+
+function isPreviewStyleField(field) {
+  return PREVIEW_STYLE_FIELDS.includes(field);
+}
+
+function pickPreviewStyleSettings(source = settings) {
+  return Object.fromEntries(PREVIEW_STYLE_FIELDS.map((field) => [field, source[field]]));
+}
+
+function readPreviewStyleInputs(base = settings) {
+  const next = { ...pickPreviewStyleSettings(base) };
+  for (const field of PREVIEW_STYLE_FIELDS) {
+    const input = settingsInputs[field];
+    if (!input) continue;
+    next[field] = input.type === "checkbox" ? input.checked : input.value;
+  }
+  return next;
+}
+
+function writePreviewStyleInputs(source = settings) {
+  for (const field of PREVIEW_STYLE_FIELDS) {
+    const input = settingsInputs[field];
+    if (!input) continue;
+    if (input.type === "checkbox") {
+      input.checked = Boolean(source[field]);
+    } else if (input.type === "color") {
+      input.value = isHexColour(source[field]) ? source[field] : defaultColourForField(field);
+    } else {
+      input.value = source[field] || "";
+    }
+  }
 }
 
 function setEntranceTab(tab) {
@@ -5902,7 +5964,7 @@ function applyShiftColours(sourceSettings = settings) {
   }
 }
 
-function applyCurrentDayHighlight(sourceSettings = settings) {
+function applyCurrentDayHighlight(sourceSettings = settings, options = {}) {
   const borderColour = isHexColour(sourceSettings.currentDayBorderColor) ? sourceSettings.currentDayBorderColor : "#c44949";
   const backgroundColour = isHexColour(sourceSettings.currentDayBackgroundColor) ? sourceSettings.currentDayBackgroundColor : borderColour;
   const borderOpacity = normalizeOpacity(sourceSettings.currentDayBorderOpacity, 20);
@@ -5919,10 +5981,12 @@ function applyCurrentDayHighlight(sourceSettings = settings) {
     : direction === "radial"
       ? `radial-gradient(circle, ${fillColour}, ${fadeColour} 72%, rgba(255, 255, 255, 0.82))`
       : `linear-gradient(${direction || "90deg"}, ${fillColour}, ${fadeColour} 76%, rgba(255, 255, 255, 0.82))`;
-  document.documentElement.style.setProperty("--today-border-color", `rgba(${borderRgb.r}, ${borderRgb.g}, ${borderRgb.b}, ${borderOpacity})`);
-  document.documentElement.style.setProperty("--today-border-width", `${borderWidth}px`);
-  document.documentElement.style.setProperty("--today-fill-color", fillColour);
-  document.documentElement.style.setProperty("--today-fill-surface", fillSurface);
+  if (!options.previewOnly) {
+    document.documentElement.style.setProperty("--today-border-color", `rgba(${borderRgb.r}, ${borderRgb.g}, ${borderRgb.b}, ${borderOpacity})`);
+    document.documentElement.style.setProperty("--today-border-width", `${borderWidth}px`);
+    document.documentElement.style.setProperty("--today-fill-color", fillColour);
+    document.documentElement.style.setProperty("--today-fill-surface", fillSurface);
+  }
   if (currentDayPreview) {
     currentDayPreview.style.borderColor = `rgba(${borderRgb.r}, ${borderRgb.g}, ${borderRgb.b}, ${borderOpacity})`;
     currentDayPreview.style.borderWidth = `${borderWidth}px`;
@@ -5930,33 +5994,45 @@ function applyCurrentDayHighlight(sourceSettings = settings) {
   }
 }
 
-function applyWeekendShade(sourceSettings = settings) {
+function applyWeekendShade(sourceSettings = settings, options = {}) {
+  const previewWeekendDays = document.querySelectorAll(".settings-calendar-day.is-weekend");
   if (sourceSettings.weekendShadeEnabled === false) {
-    document.documentElement.style.setProperty("--weekend-shade-surface", "transparent");
+    if (!options.previewOnly) {
+      document.documentElement.style.setProperty("--weekend-shade-surface", "transparent");
+    }
+    previewWeekendDays.forEach((day) => {
+      day.style.background = "transparent";
+    });
     return;
   }
   const colour = isHexColour(sourceSettings.weekendShadeColor) ? sourceSettings.weekendShadeColor : "#e5e7eb";
   const opacity = normalizeOpacity(sourceSettings.weekendShadeOpacity, 30);
   const rgb = hexToRgb(colour);
-  document.documentElement.style.setProperty("--weekend-shade-surface", `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${opacity})`);
+  const shade = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${opacity})`;
+  if (!options.previewOnly) {
+    document.documentElement.style.setProperty("--weekend-shade-surface", shade);
+  }
+  previewWeekendDays.forEach((day) => {
+    day.style.background = shade;
+  });
 }
 
-function syncPreviewStyleControls() {
+function syncPreviewStyleControls(sourceSettings = settings) {
   for (const output of document.querySelectorAll("[data-opacity-output]")) {
     const field = output.dataset.opacityOutput;
-    output.textContent = `${Math.round(Number(settings[field] || 0))}%`;
+    output.textContent = `${Math.round(Number(sourceSettings[field] || 0))}%`;
   }
-  const fillMode = settings.currentDayFillStyle === "gradient" ? "gradient" : "solid";
+  const fillMode = sourceSettings.currentDayFillStyle === "gradient" ? "gradient" : "solid";
   settingsPanel?.querySelectorAll("[data-fill-mode]").forEach((button) => {
     button.classList.toggle("is-active", button.dataset.fillMode === fillMode);
   });
   settingsPanel?.querySelectorAll("[data-gradient-direction]").forEach((button) => {
-    const active = fillMode === "gradient" && button.dataset.gradientDirection === settings.currentDayGradientDirection;
+    const active = fillMode === "gradient" && button.dataset.gradientDirection === sourceSettings.currentDayGradientDirection;
     button.classList.toggle("is-active", active);
     button.disabled = false;
   });
   settingsPanel?.querySelector(".direction-grid")?.classList.toggle("is-muted", fillMode !== "gradient");
-  const weekendDisabled = settings.weekendShadeEnabled === false;
+  const weekendDisabled = sourceSettings.weekendShadeEnabled === false;
   settingsPanel?.querySelector(".weekend-card")?.classList.toggle("is-disabled", weekendDisabled);
   ["weekendShadeColor"].forEach((field) => {
     if (settingsInputs[field]) settingsInputs[field].disabled = weekendDisabled;
