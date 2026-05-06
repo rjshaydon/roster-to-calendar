@@ -159,41 +159,6 @@
               </fieldset>
 
               <fieldset class="settings-group">
-                <legend>Preview</legend>
-                <label class="toggle preview-times-option"><input id="showTimes" type="checkbox" checked> Show times on events</label>
-                <label class="toggle preview-normalized-option"><input id="showNormalizedTitles" type="checkbox" checked> Show normalized titles</label>
-                <label class="toggle preview-raw-option"><input id="showRawValues" type="checkbox"> Show raw roster values</label>
-                <div class="settings-subgrid preview-style-options">
-                  <label class="colour-field"><span>Today border</span><input id="currentDayBorderColor" type="color"></label>
-                  <label class="field field-compact">
-                    <span>Border opacity</span>
-                    <input id="currentDayBorderOpacity" type="range" min="0" max="100" step="1">
-                  </label>
-                  <label class="colour-field"><span>Today fill</span><input id="currentDayBackgroundColor" type="color"></label>
-                  <label class="field field-compact">
-                    <span>Fill opacity</span>
-                    <input id="currentDayBackgroundOpacity" type="range" min="0" max="100" step="1">
-                  </label>
-                  <label class="field field-compact">
-                    <span>Fill style</span>
-                    <select id="currentDayFillStyle">
-                      <option value="gradient">Gradient</option>
-                      <option value="solid">Solid</option>
-                    </select>
-                  </label>
-                  <label class="colour-field"><span>Weekend shade</span><input id="weekendShadeColor" type="color"></label>
-                  <label class="field field-compact">
-                    <span>Weekend opacity</span>
-                    <input id="weekendShadeOpacity" type="range" min="0" max="100" step="1">
-                  </label>
-                  <div class="today-preview-control">
-                    <span>Preview</span>
-                    <div id="currentDayPreview" class="today-fill-preview" aria-hidden="true"></div>
-                  </div>
-                </div>
-              </fieldset>
-
-              <fieldset class="settings-group">
                 <legend>Shift Colours</legend>
                 <div class="colour-grid">
                   <label class="colour-field"><span>Day / AM</span><input id="shiftColorDay" type="color"></label>
@@ -208,11 +173,13 @@
 
               <fieldset class="settings-group">
                 <legend>Export</legend>
-                <label class="toggle"><input id="includeLocations" type="checkbox" checked> Include locations in .ics</label>
-                <label class="toggle"><input id="includeAnnualLeave" type="checkbox" checked> Include annual leave</label>
-                <label class="toggle"><input id="includeConferenceLeave" type="checkbox" checked> Include conference leave</label>
-                <label class="toggle"><input id="includePublicHoliday" type="checkbox" checked> Include PHNW</label>
-                <label class="toggle"><input id="includeSickLeave" type="checkbox" checked> Include sick leave</label>
+                <div class="settings-checkbox-columns">
+                  <label class="toggle"><input id="includeLocations" type="checkbox" checked> Include locations in .ics</label>
+                  <label class="toggle"><input id="includeAnnualLeave" type="checkbox" checked> Include annual leave</label>
+                  <label class="toggle"><input id="includeConferenceLeave" type="checkbox" checked> Include conference leave</label>
+                  <label class="toggle"><input id="includePublicHoliday" type="checkbox" checked> Include PHNW</label>
+                  <label class="toggle"><input id="includeSickLeave" type="checkbox" checked> Include sick leave</label>
+                </div>
               </fieldset>
 
               <fieldset class="settings-group">
@@ -225,6 +192,113 @@
                   <span>DDH</span>
                   <input id="defaultLocationDdh" type="text">
                 </label>
+              </fieldset>
+
+              <fieldset class="settings-group preview-settings-redesign">
+                <legend>Preview</legend>
+                <label class="toggle preview-times-option"><input id="showTimes" type="checkbox" checked> Show times on events</label>
+                <label class="toggle preview-normalized-option"><input id="showNormalizedTitles" type="checkbox" checked> Show normalized titles</label>
+                <label class="toggle preview-raw-option"><input id="showRawValues" type="checkbox"> Show raw roster values</label>
+                <input id="currentDayFillStyle" type="hidden" value="solid">
+                <input id="currentDayGradientDirection" type="hidden" value="">
+                <div class="preview-style-options preview-style-layout">
+                  <div class="preview-style-left">
+                    <section class="preview-style-section">
+                      <h4>Today styling</h4>
+                      <div class="today-style-layout">
+                        <div class="today-style-controls">
+                          <div class="settings-control-card">
+                            <span class="settings-control-title">Fill</span>
+                            <div class="settings-control-line">
+                              <input id="currentDayBackgroundColor" type="color" aria-label="Today fill colour">
+                              <div class="opacity-stepper" data-opacity-stepper="currentDayBackgroundOpacity">
+                                <button type="button" data-opacity-step="-5" aria-label="Decrease fill opacity">−</button>
+                                <output data-opacity-output="currentDayBackgroundOpacity">20%</output>
+                                <button type="button" data-opacity-step="5" aria-label="Increase fill opacity">+</button>
+                              </div>
+                              <input id="currentDayBackgroundOpacity" type="hidden" value="20">
+                            </div>
+                          </div>
+                          <div class="settings-control-card">
+                            <span class="settings-control-title">Border</span>
+                            <div class="settings-control-line">
+                              <input id="currentDayBorderColor" type="color" aria-label="Today border colour">
+                              <div class="opacity-stepper" data-opacity-stepper="currentDayBorderOpacity">
+                                <button type="button" data-opacity-step="-5" aria-label="Decrease border opacity">−</button>
+                                <output data-opacity-output="currentDayBorderOpacity">20%</output>
+                                <button type="button" data-opacity-step="5" aria-label="Increase border opacity">+</button>
+                              </div>
+                              <input id="currentDayBorderOpacity" type="hidden" value="20">
+                              <select id="currentDayBorderWidth" aria-label="Today border width">
+                                <option value="1">1 px</option>
+                                <option value="2" selected>2 px</option>
+                                <option value="3">3 px</option>
+                                <option value="4">4 px</option>
+                              </select>
+                            </div>
+                          </div>
+                        </div>
+                        <div class="gradient-box">
+                          <div class="mode-toggle" role="group" aria-label="Today fill mode">
+                            <button type="button" data-fill-mode="solid" class="is-active">Solid</button>
+                            <button type="button" data-fill-mode="gradient">Gradient</button>
+                          </div>
+                          <div class="direction-grid" aria-label="Gradient direction">
+                            <button type="button" data-gradient-direction="315deg">↖</button>
+                            <button type="button" data-gradient-direction="0deg">↑</button>
+                            <button type="button" data-gradient-direction="45deg">↗</button>
+                            <button type="button" data-gradient-direction="270deg">←</button>
+                            <button type="button" data-gradient-direction="radial">•</button>
+                            <button type="button" data-gradient-direction="90deg">→</button>
+                            <button type="button" data-gradient-direction="225deg">↙</button>
+                            <button type="button" data-gradient-direction="180deg">↓</button>
+                            <button type="button" data-gradient-direction="135deg">↘</button>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+                    <section class="preview-style-section">
+                      <h4>Weekend styling</h4>
+                      <div class="settings-control-card weekend-card">
+                        <span class="settings-control-title">Shade weekends</span>
+                        <div class="settings-control-line">
+                          <input id="weekendShadeEnabled" type="checkbox" checked aria-label="Shade weekends">
+                          <input id="weekendShadeColor" type="color" aria-label="Weekend shade colour">
+                          <div class="opacity-stepper" data-opacity-stepper="weekendShadeOpacity">
+                            <button type="button" data-opacity-step="-5" aria-label="Decrease weekend opacity">−</button>
+                            <output data-opacity-output="weekendShadeOpacity">30%</output>
+                            <button type="button" data-opacity-step="5" aria-label="Increase weekend opacity">+</button>
+                          </div>
+                          <input id="weekendShadeOpacity" type="hidden" value="30">
+                        </div>
+                      </div>
+                    </section>
+                  </div>
+                  <section class="preview-sample-card">
+                    <h4>Preview</h4>
+                    <p>Month view sample</p>
+                    <div class="settings-calendar-preview" aria-hidden="true">
+                      <div class="settings-calendar-head">Mon</div>
+                      <div class="settings-calendar-head">Tue</div>
+                      <div class="settings-calendar-head">Wed</div>
+                      <div class="settings-calendar-head">Thu</div>
+                      <div class="settings-calendar-head">Fri</div>
+                      <div class="settings-calendar-head">Sat</div>
+                      <div class="settings-calendar-head">Sun</div>
+                      <div class="settings-calendar-day">1</div><div class="settings-calendar-day">2</div><div class="settings-calendar-day">3</div><div class="settings-calendar-day">4</div><div class="settings-calendar-day">5</div><div class="settings-calendar-day is-weekend">6</div><div class="settings-calendar-day is-weekend">7</div>
+                      <div class="settings-calendar-day">8</div><div class="settings-calendar-day">9</div><div class="settings-calendar-day">10</div><div class="settings-calendar-day">11</div><div class="settings-calendar-day">12</div><div class="settings-calendar-day is-weekend">13</div><div id="currentDayPreview" class="settings-calendar-day is-today is-weekend">14</div>
+                      <div class="settings-calendar-day">15</div><div class="settings-calendar-day">16</div><div class="settings-calendar-day">17</div><div class="settings-calendar-day">18</div><div class="settings-calendar-day">19</div><div class="settings-calendar-day is-weekend">20</div><div class="settings-calendar-day is-weekend">21</div>
+                      <div class="settings-calendar-day">22</div><div class="settings-calendar-day">23</div><div class="settings-calendar-day">24</div><div class="settings-calendar-day">25</div><div class="settings-calendar-day">26</div><div class="settings-calendar-day is-weekend">27</div><div class="settings-calendar-day is-weekend">28</div>
+                      <div class="settings-calendar-day">29</div><div class="settings-calendar-day">30</div><div class="settings-calendar-day">31</div><div class="settings-calendar-day">32</div><div class="settings-calendar-day">33</div><div class="settings-calendar-day is-weekend">34</div><div class="settings-calendar-day is-weekend">35</div>
+                    </div>
+                  </section>
+                </div>
+                <div class="settings-preview-footer">
+                  <button type="button" class="button button-secondary" data-preview-style-reset>Reset</button>
+                  <span></span>
+                  <button type="button" class="button button-secondary" data-preview-style-cancel>Cancel</button>
+                  <button type="button" class="button button-primary" data-preview-style-save>Save</button>
+                </div>
               </fieldset>
             </div>
             <div class="hidden" aria-hidden="true">

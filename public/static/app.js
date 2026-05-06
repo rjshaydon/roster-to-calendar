@@ -164,6 +164,9 @@ const SETTINGS_FIELDS = [
   "currentDayBackgroundColor",
   "currentDayBackgroundOpacity",
   "currentDayFillStyle",
+  "currentDayGradientDirection",
+  "currentDayBorderWidth",
+  "weekendShadeEnabled",
   "weekendShadeColor",
   "weekendShadeOpacity",
   "shiftColorDay",
@@ -596,12 +599,14 @@ for (const [key, input] of Object.entries(settingsInputs)) {
     }
     if (key.startsWith("currentDay")) {
       applyCurrentDayHighlight(settings);
+      syncPreviewStyleControls();
       if (latestPreview) rebuildClientPreview();
       setStatus("Current day highlight updated.");
       return;
     }
     if (key.startsWith("weekendShade")) {
       applyWeekendShade(settings);
+      syncPreviewStyleControls();
       if (latestPreview) rebuildClientPreview();
       setStatus("Weekend shading updated.");
       return;
@@ -609,6 +614,74 @@ for (const [key, input] of Object.entries(settingsInputs)) {
     setStatus("Settings updated.");
   });
 }
+
+settingsPanel?.addEventListener("click", (event) => {
+  const stepButton = event.target.closest("[data-opacity-step]");
+  if (stepButton) {
+    const stepper = stepButton.closest("[data-opacity-stepper]");
+    const field = stepper?.dataset.opacityStepper;
+    const input = field ? settingsInputs[field] : null;
+    if (input) {
+      const next = Math.max(0, Math.min(100, Number(input.value || 0) + Number(stepButton.dataset.opacityStep || 0)));
+      input.value = String(next);
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    return;
+  }
+  const fillModeButton = event.target.closest("[data-fill-mode]");
+  if (fillModeButton && settingsInputs.currentDayFillStyle) {
+    const mode = fillModeButton.dataset.fillMode === "gradient" ? "gradient" : "solid";
+    settingsInputs.currentDayFillStyle.value = mode;
+    if (mode === "solid" && settingsInputs.currentDayGradientDirection) {
+      settingsInputs.currentDayGradientDirection.value = "";
+      settings.currentDayGradientDirection = "";
+    }
+    if (mode === "gradient" && settingsInputs.currentDayGradientDirection && !settingsInputs.currentDayGradientDirection.value) {
+      settingsInputs.currentDayGradientDirection.value = "90deg";
+      settings.currentDayGradientDirection = "90deg";
+    }
+    settingsInputs.currentDayFillStyle.dispatchEvent(new Event("change", { bubbles: true }));
+    return;
+  }
+  const directionButton = event.target.closest("[data-gradient-direction]");
+  if (directionButton && settingsInputs.currentDayFillStyle && settingsInputs.currentDayGradientDirection) {
+    const direction = directionButton.dataset.gradientDirection || "90deg";
+    const isActive = settingsInputs.currentDayFillStyle.value === "gradient"
+      && settingsInputs.currentDayGradientDirection.value === direction;
+    settingsInputs.currentDayFillStyle.value = isActive ? "solid" : "gradient";
+    settingsInputs.currentDayGradientDirection.value = isActive ? "" : direction;
+    settings.currentDayGradientDirection = settingsInputs.currentDayGradientDirection.value;
+    settingsInputs.currentDayFillStyle.dispatchEvent(new Event("change", { bubbles: true }));
+    return;
+  }
+  if (event.target.closest("[data-preview-style-reset]")) {
+    const defaults = defaultSettings();
+    [
+      "currentDayBorderColor",
+      "currentDayBorderOpacity",
+      "currentDayBorderWidth",
+      "currentDayBackgroundColor",
+      "currentDayBackgroundOpacity",
+      "currentDayFillStyle",
+      "currentDayGradientDirection",
+      "weekendShadeEnabled",
+      "weekendShadeColor",
+      "weekendShadeOpacity",
+    ].forEach((field) => {
+      settings[field] = defaults[field];
+    });
+    renderSettings();
+    saveCurrentSessionState();
+    applyCurrentDayHighlight(settings);
+    applyWeekendShade(settings);
+    if (latestPreview) rebuildClientPreview();
+    setStatus("Preview styling reset.");
+    return;
+  }
+  if (event.target.closest("[data-preview-style-cancel], [data-preview-style-save]")) {
+    closeSettingsPanel();
+  }
+});
 
 reviewModalBody.addEventListener("input", (event) => {
   const titleInput = event.target.closest("[data-override-title]");
@@ -1003,12 +1076,15 @@ function defaultSettings() {
     showRawValues: false,
     showNormalizedTitles: true,
     currentDayBorderColor: "#c44949",
-    currentDayBorderOpacity: "42",
+    currentDayBorderOpacity: "20",
+    currentDayBorderWidth: "2",
     currentDayBackgroundColor: "#c44949",
-    currentDayBackgroundOpacity: "8",
-    currentDayFillStyle: "gradient",
+    currentDayBackgroundOpacity: "20",
+    currentDayFillStyle: "solid",
+    currentDayGradientDirection: "",
+    weekendShadeEnabled: true,
     weekendShadeColor: "#e5e7eb",
-    weekendShadeOpacity: "32",
+    weekendShadeOpacity: "30",
     shiftColorDay: SHIFT_COLOUR_DEFAULTS.day,
     shiftColorEvening: SHIFT_COLOUR_DEFAULTS.evening,
     shiftColorNight: SHIFT_COLOUR_DEFAULTS.night,
@@ -1201,6 +1277,7 @@ function renderSettings() {
   applyShiftColours(settings);
   applyCurrentDayHighlight(settings);
   applyWeekendShade(settings);
+  syncPreviewStyleControls();
   syncMobileSettingsControls();
 }
 
@@ -5708,29 +5785,65 @@ function applyShiftColours(sourceSettings = settings) {
 function applyCurrentDayHighlight(sourceSettings = settings) {
   const borderColour = isHexColour(sourceSettings.currentDayBorderColor) ? sourceSettings.currentDayBorderColor : "#c44949";
   const backgroundColour = isHexColour(sourceSettings.currentDayBackgroundColor) ? sourceSettings.currentDayBackgroundColor : borderColour;
-  const borderOpacity = normalizeOpacity(sourceSettings.currentDayBorderOpacity, 42);
-  const backgroundOpacity = normalizeOpacity(sourceSettings.currentDayBackgroundOpacity, 8);
+  const borderOpacity = normalizeOpacity(sourceSettings.currentDayBorderOpacity, 20);
+  const backgroundOpacity = normalizeOpacity(sourceSettings.currentDayBackgroundOpacity, 20);
   const fillStyle = sourceSettings.currentDayFillStyle === "solid" ? "solid" : "gradient";
+  const borderWidth = Math.max(1, Math.min(4, Number(sourceSettings.currentDayBorderWidth || 2)));
+  const direction = String(sourceSettings.currentDayGradientDirection || "90deg");
   const borderRgb = hexToRgb(borderColour);
   const backgroundRgb = hexToRgb(backgroundColour);
+  const fillColour = `rgba(${backgroundRgb.r}, ${backgroundRgb.g}, ${backgroundRgb.b}, ${backgroundOpacity})`;
+  const fadeColour = `rgba(${backgroundRgb.r}, ${backgroundRgb.g}, ${backgroundRgb.b}, 0.04)`;
+  const fillSurface = fillStyle === "solid"
+    ? fillColour
+    : direction === "radial"
+      ? `radial-gradient(circle, ${fillColour}, ${fadeColour} 72%, rgba(255, 255, 255, 0.82))`
+      : `linear-gradient(${direction || "90deg"}, ${fillColour}, ${fadeColour} 76%, rgba(255, 255, 255, 0.82))`;
   document.documentElement.style.setProperty("--today-border-color", `rgba(${borderRgb.r}, ${borderRgb.g}, ${borderRgb.b}, ${borderOpacity})`);
-  document.documentElement.style.setProperty("--today-fill-color", `rgba(${backgroundRgb.r}, ${backgroundRgb.g}, ${backgroundRgb.b}, ${backgroundOpacity})`);
-  document.documentElement.style.setProperty(
-    "--today-fill-surface",
-    fillStyle === "solid"
-      ? `rgba(${backgroundRgb.r}, ${backgroundRgb.g}, ${backgroundRgb.b}, ${backgroundOpacity})`
-      : `linear-gradient(180deg, rgba(${backgroundRgb.r}, ${backgroundRgb.g}, ${backgroundRgb.b}, ${backgroundOpacity}), rgba(255, 255, 255, 0.82))`,
-  );
+  document.documentElement.style.setProperty("--today-border-width", `${borderWidth}px`);
+  document.documentElement.style.setProperty("--today-fill-color", fillColour);
+  document.documentElement.style.setProperty("--today-fill-surface", fillSurface);
   if (currentDayPreview) {
     currentDayPreview.style.borderColor = `rgba(${borderRgb.r}, ${borderRgb.g}, ${borderRgb.b}, ${borderOpacity})`;
+    currentDayPreview.style.borderWidth = `${borderWidth}px`;
+    currentDayPreview.style.background = fillSurface;
   }
 }
 
 function applyWeekendShade(sourceSettings = settings) {
+  if (sourceSettings.weekendShadeEnabled === false) {
+    document.documentElement.style.setProperty("--weekend-shade-surface", "transparent");
+    return;
+  }
   const colour = isHexColour(sourceSettings.weekendShadeColor) ? sourceSettings.weekendShadeColor : "#e5e7eb";
-  const opacity = normalizeOpacity(sourceSettings.weekendShadeOpacity, 32);
+  const opacity = normalizeOpacity(sourceSettings.weekendShadeOpacity, 30);
   const rgb = hexToRgb(colour);
   document.documentElement.style.setProperty("--weekend-shade-surface", `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${opacity})`);
+}
+
+function syncPreviewStyleControls() {
+  for (const output of document.querySelectorAll("[data-opacity-output]")) {
+    const field = output.dataset.opacityOutput;
+    output.textContent = `${Math.round(Number(settings[field] || 0))}%`;
+  }
+  const fillMode = settings.currentDayFillStyle === "gradient" ? "gradient" : "solid";
+  settingsPanel?.querySelectorAll("[data-fill-mode]").forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.fillMode === fillMode);
+  });
+  settingsPanel?.querySelectorAll("[data-gradient-direction]").forEach((button) => {
+    const active = fillMode === "gradient" && button.dataset.gradientDirection === settings.currentDayGradientDirection;
+    button.classList.toggle("is-active", active);
+    button.disabled = false;
+  });
+  settingsPanel?.querySelector(".direction-grid")?.classList.toggle("is-muted", fillMode !== "gradient");
+  const weekendDisabled = settings.weekendShadeEnabled === false;
+  settingsPanel?.querySelector(".weekend-card")?.classList.toggle("is-disabled", weekendDisabled);
+  ["weekendShadeColor"].forEach((field) => {
+    if (settingsInputs[field]) settingsInputs[field].disabled = weekendDisabled;
+  });
+  settingsPanel?.querySelectorAll('[data-opacity-stepper="weekendShadeOpacity"] button').forEach((button) => {
+    button.disabled = weekendDisabled;
+  });
 }
 
 function defaultColourForField(field) {
