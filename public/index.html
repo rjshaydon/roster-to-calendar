@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
     <title>Roster Converter</title>
     <link rel="stylesheet" href="/static/styles.css">
   </head>
@@ -517,7 +517,7 @@
             <input id="customEventAllDay" type="checkbox">
             All day
           </label>
-          <div id="customEventTimeFields" class="custom-event-grid">
+          <div id="customEventTimeFields" class="custom-event-grid event-time-grid">
             <label class="field">
               <span>Start time</span>
               <input id="customEventStartTime" type="text" inputmode="numeric" placeholder="09:00 am">
@@ -535,9 +535,9 @@
             <span>Custom location</span>
             <input id="customEventCustomLocation" type="text" placeholder="Meeting room or address">
           </label>
+          <section id="customEventWhoPanel" class="event-inline-insight hidden" aria-live="polite"></section>
           <div class="modal-actions">
             <button id="customEventDeleteButton" type="button" class="button button-secondary hidden">Delete</button>
-            <button id="customEventWhoButton" type="button" class="button button-secondary">Who else am I working with?</button>
             <button type="submit" class="button button-primary">Save Event</button>
           </div>
         </form>

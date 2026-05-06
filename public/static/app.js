@@ -124,7 +124,7 @@ const customEventLocationMode = document.querySelector("#customEventLocationMode
 const customEventCustomLocationField = document.querySelector("#customEventCustomLocationField");
 const customEventCustomLocation = document.querySelector("#customEventCustomLocation");
 const customEventDeleteButton = document.querySelector("#customEventDeleteButton");
-const customEventWhoButton = document.querySelector("#customEventWhoButton");
+const customEventWhoPanel = document.querySelector("#customEventWhoPanel");
 const contextMenu = document.querySelector("#contextMenu");
 const switchOverlay = document.querySelector("#switchOverlay");
 const switchOverlayTitle = document.querySelector("#switchOverlayTitle");
@@ -272,6 +272,12 @@ applyCurrentDayHighlight(settings);
 applyWeekendShade(settings);
 syncOverlayState();
 setEntranceTab("login");
+
+["gesturestart", "gesturechange", "gestureend"].forEach((eventName) => {
+  document.addEventListener(eventName, (event) => {
+    if (isMobileLayout()) event.preventDefault();
+  }, { passive: false });
+});
 
 chooseFilesButton.addEventListener("click", (event) => {
   event.preventDefault();
@@ -729,10 +735,19 @@ reviewModalBody.addEventListener("click", (event) => {
     resetImportedEvent(resetButton.dataset.overrideReset);
     return;
   }
-  const whoButton = event.target.closest("[data-open-who-on]");
-  if (!whoButton) return;
-  closeReviewModal();
-  void openWhoInsight(whoButton.dataset.openWhoOn, whoButton.dataset.openWhoOn);
+  const whenDoctorButton = event.target.closest("[data-inline-when-doctor]");
+  if (whenDoctorButton) {
+    event.preventDefault();
+    const panel = whenDoctorButton.closest(".event-inline-insight");
+    void renderInlineWhenInsight(panel, whenDoctorButton.dataset.inlineWhenDoctor || "");
+    return;
+  }
+  const backButton = event.target.closest("[data-inline-back-who]");
+  if (backButton) {
+    event.preventDefault();
+    const panel = backButton.closest(".event-inline-insight");
+    void renderInlineWhoInsight(panel, backButton.dataset.inlineBackWho || "", { source: backButton.dataset.inlineBackSource || "" });
+  }
 });
 
 preview.addEventListener("click", (event) => {
@@ -1036,10 +1051,18 @@ customEventDeleteButton.addEventListener("click", () => {
   saveCurrentSessionState();
   setStatus("Manual event removed.");
 });
-customEventWhoButton.addEventListener("click", () => {
-  const date = customEventWhoButton.dataset.openWhoOn || customEventStartDate.value || formatDateKey(new Date());
-  closeCustomEventModal();
-  openWhoInsight(date, date);
+customEventForm.addEventListener("click", (event) => {
+  const whenDoctorButton = event.target.closest("[data-inline-when-doctor]");
+  if (whenDoctorButton) {
+    event.preventDefault();
+    void renderInlineWhenInsight(customEventWhoPanel, whenDoctorButton.dataset.inlineWhenDoctor || "");
+    return;
+  }
+  const backButton = event.target.closest("[data-inline-back-who]");
+  if (backButton) {
+    event.preventDefault();
+    void renderInlineWhoInsight(customEventWhoPanel, backButton.dataset.inlineBackWho || "", { source: backButton.dataset.inlineBackSource || "" });
+  }
 });
 customEventForm.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -2672,6 +2695,105 @@ function renderWhoGroups(groups) {
       `).join("")}
     </section>
   `).join("");
+}
+
+async function renderInlineWhoInsight(container, date, options = {}) {
+  if (!container || !date) return;
+  container.classList.remove("hidden");
+  container.dataset.inlineWhoDate = date;
+  container.dataset.inlineWhoSource = String(options.source || "").toUpperCase();
+  container.innerHTML = `<div class="event-inline-loading">Loading who is working with you...</div>`;
+  await ensureInsightRosterAnalysis();
+  const sourceFilter = String(options.source || "").toUpperCase();
+  const sourceFilters = sourceFilter ? [sourceFilter] : [];
+  const mine = selectedDoctorEventsForInsights(date, date, sourceFilters)
+    .filter(isRosterShiftEvent)
+    .filter((event) => eventRosterDateKey(event) === date);
+  const activeSources = new Set((sourceFilter ? [sourceFilter] : mine.map(eventSourceCode)).filter(Boolean));
+  const coworkers = mine.length
+    ? comparisonDoctorOptions(date, date, sourceFilters)
+      .map((doctor) => ({
+        doctor,
+        events: comparisonDoctorEvents(doctor.key, date, date, sourceFilters)
+          .filter(isRosterShiftEvent)
+          .filter((event) => eventRosterDateKey(event) === date)
+          .filter((event) => !activeSources.size || activeSources.has(eventSourceCode(event))),
+      }))
+      .filter((entry) => entry.events.length)
+      .flatMap((entry) => buildWhoAssignments(entry.doctor, entry.events))
+    : [];
+  container.innerHTML = `
+    <div class="event-inline-head">
+      <strong>Who else is working with me?</strong>
+      <span>${escapeHtml(formatInsightDate(date))}${sourceFilter ? ` · ${escapeHtml(sourceFilter)}` : ""}</span>
+    </div>
+    <div class="issue-card event-inline-mine">
+      <strong>${escapeHtml(selectedDoctor()?.displayName || "Selected doctor")}</strong>
+      <p>${mine.length ? escapeHtml(renderInsightShiftSummary(mine)) : "No rostered shift found for this date."}</p>
+    </div>
+    ${coworkers.length
+      ? renderInlineWhoGroups(groupWhoAssignments(coworkers), date, sourceFilter)
+      : `<article class="issue-card"><p>No other clinicians are rostered with you for this shift.</p></article>`}
+  `;
+}
+
+function renderInlineWhoGroups(groups, date, sourceFilter = "") {
+  return groups.map((group) => `
+    <section class="who-period-group">
+      <div class="who-period-divider"><span>${escapeHtml(group.period)}</span></div>
+      ${group.teams.map((team) => `
+        <article class="issue-card who-team-card">
+          <strong class="who-team-title">${escapeHtml(team.team)}</strong>
+          <div class="who-team-list">
+            ${team.items.map((item) => `
+              <div class="who-team-person">
+                <button type="button" class="who-team-name" data-inline-when-doctor="${escapeHtml(item.doctorKey || "")}" title="Show future shifts with ${escapeHtml(item.doctorName)}">${escapeHtml(item.doctorName)}${item.roleLabel ? ` (${escapeHtml(item.roleLabel)})` : ""}${item.roleNote ? ` (${escapeHtml(item.roleNote)})` : ""}</button>
+                ${item.specialTime ? `<span class="who-team-time">${escapeHtml(item.specialTime)}</span>` : ""}
+              </div>
+            `).join("")}
+          </div>
+        </article>
+      `).join("")}
+    </section>
+  `).join("") + `<button type="button" class="button button-secondary event-inline-refresh" data-inline-back-who="${escapeHtml(date)}" data-inline-back-source="${escapeHtml(sourceFilter)}">Refresh list</button>`;
+}
+
+async function renderInlineWhenInsight(container, doctorKey) {
+  if (!container || !doctorKey) return;
+  container.classList.remove("hidden");
+  container.innerHTML = `<div class="event-inline-loading">Loading future shifts together...</div>`;
+  await ensureInsightRosterAnalysis();
+  const fromDate = formatDateKey(new Date());
+  const range = availableInsightDateRange();
+  const toDate = range.end || fromDate;
+  const allOptions = prioritizeDoctorOptions(rosterDoctorOptions(parsedRosterSources?.mmc || [], parsedRosterSources?.ddh || []));
+  const selectedComparison = allOptions.find((doctor) => doctor.key === doctorKey) || null;
+  const mine = selectedDoctorEventsForInsights(fromDate, toDate, []).filter(isRosterShiftEvent);
+  const theirs = selectedComparison
+    ? comparisonDoctorEvents(selectedComparison.key, fromDate, toDate, []).filter(isRosterShiftEvent)
+    : [];
+  const overlaps = selectedComparison ? buildOverlapDays(mine, theirs) : [];
+  const backDate = container.dataset.inlineWhoDate || fromDate;
+  const backSource = container.dataset.inlineWhoSource || "";
+  container.innerHTML = `
+    <div class="event-inline-head">
+      <strong>${selectedComparison ? `When am I working with ${escapeHtml(selectedComparison.displayName)}?` : "Future shifts together"}</strong>
+      <span>From ${escapeHtml(formatDate(fromDate))}</span>
+    </div>
+    <button type="button" class="button button-secondary event-inline-back" data-inline-back-who="${escapeHtml(backDate)}" data-inline-back-source="${escapeHtml(backSource)}">Back to this shift</button>
+    ${selectedComparison
+      ? overlaps.length
+        ? overlaps.map((entry) => `
+          <article class="issue-card">
+            <strong>${escapeHtml(formatInsightDate(entry.date))}</strong>
+            <p><strong>Hospital:</strong> ${escapeHtml(entry.hospital || "Unknown")}</p>
+            <p><strong>${escapeHtml(selectedDoctor()?.displayName || "Selected doctor")}:</strong> ${escapeHtml(renderInsightShiftSummary(entry.mine))}</p>
+            <p><strong>${escapeHtml(selectedComparison.displayName)}:</strong> ${escapeHtml(renderInsightShiftSummary(entry.theirs))}</p>
+          </article>
+        `).join("")
+        : `<article class="issue-card"><p>No future overlapping working days were found.</p></article>`
+      : `<article class="issue-card"><p>This clinician is not available in the comparison roster.</p></article>`}
+  `;
 }
 
 async function openDoctorProfileFromInsight(doctorKey) {
@@ -4379,7 +4501,7 @@ function openReviewModal(id, selectedDay = "") {
           <input type="checkbox" ${allDay ? "checked" : ""} data-override-all-day="${item.id}">
           All day
         </label>
-        <div class="custom-event-grid ${allDay ? "hidden" : ""}" data-override-time-fields="${item.id}">
+        <div class="custom-event-grid event-time-grid ${allDay ? "hidden" : ""}" data-override-time-fields="${item.id}">
           <label class="field">
             <span>Start time</span>
             <input type="text" inputmode="numeric" value="${formatEditorTime(startTime || "09:00")}" data-override-start-time="${item.id}">
@@ -4407,15 +4529,14 @@ function openReviewModal(id, selectedDay = "") {
         ${item.timeLabel ? `<span>Times: ${escapeHtml(item.timeLabel)}</span>` : ""}
         ${item.location ? `<span>Location: ${escapeHtml(item.location)}</span>` : ""}
       </div>
-      <div class="modal-actions">
-        <button type="button" class="button button-secondary" data-open-who-on="${escapeHtml(insightDate)}">Who else am I working with?</button>
-      </div>
+      <section class="event-inline-insight" data-review-who-panel aria-live="polite"></section>
       ${resetButton}
       ${warnings}
     </article>
   `;
   reviewModal.classList.remove("hidden");
   reviewModal.setAttribute("aria-hidden", "false");
+  void renderInlineWhoInsight(reviewModalBody.querySelector("[data-review-who-panel]"), insightDate, { source: eventSourceCode(event) });
 }
 
 function closeReviewModal() {
@@ -4441,7 +4562,11 @@ function openCustomEventModal(event = null, presetDate = null) {
   customEventCustomLocationField.classList.toggle("hidden", preset.mode !== "custom");
   customEventTimeFields.classList.toggle("hidden", customEventAllDay.checked);
   customEventDeleteButton.classList.toggle("hidden", !event);
-  customEventWhoButton.dataset.openWhoOn = event?.startDate || presetDate || now;
+  if (customEventWhoPanel) {
+    customEventWhoPanel.innerHTML = "";
+    customEventWhoPanel.classList.toggle("hidden", !event);
+    if (event) void renderInlineWhoInsight(customEventWhoPanel, event.startDate || presetDate || now);
+  }
   customEventModal.classList.remove("hidden");
   customEventModal.setAttribute("aria-hidden", "false");
 }
@@ -4453,6 +4578,10 @@ function closeCustomEventModal() {
   customEventDeleteButton.classList.add("hidden");
   customEventCustomLocationField.classList.add("hidden");
   customEventTimeFields.classList.remove("hidden");
+  if (customEventWhoPanel) {
+    customEventWhoPanel.classList.add("hidden");
+    customEventWhoPanel.innerHTML = "";
+  }
 }
 
 function populateLocationOptions() {
