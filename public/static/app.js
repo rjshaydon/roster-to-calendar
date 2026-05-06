@@ -2030,7 +2030,7 @@ function renderPreviewChip(event, dayKey) {
   const lines = [];
   const startKey = event.start.slice(0, 10);
   const mobileLabel = mobilePreviewTitleParts(event);
-  const mobileHiddenClass = isMobileContinuousEvent(event) ? " is-mobile-span-source" : "";
+  const continuousClass = continuousEventClass(event, dayKey);
   if (settings.showNormalizedTitles || !settings.showRawValues) {
     const marker = event.isEditedImport ? '<span class="preview-chip-marker" aria-label="Imported event edited">*</span>' : "";
     lines.push(`<strong class="preview-chip-title-full">${escapeHtml(event.title)}${marker}</strong>`);
@@ -2047,7 +2047,7 @@ function renderPreviewChip(event, dayKey) {
   const meta = [];
   if (!event.allDay && settings.showTimes && startKey === dayKey && event.timeLabel) meta.push(event.timeLabel);
   const metaMarkup = meta.length ? `<span class="preview-chip-meta">${escapeHtml(meta.join(" · "))}</span>` : "";
-  return `<button type="button" class="preview-chip preview-chip-${eventTone(event)}${mobileHiddenClass}" data-review-id="${event.id}" data-review-date="${dayKey}">${lines.join("")}${metaMarkup}</button>`;
+  return `<button type="button" class="preview-chip preview-chip-${eventTone(event)}${continuousClass}" data-review-id="${event.id}" data-review-date="${dayKey}">${lines.join("")}${metaMarkup}</button>`;
 }
 
 function isMobileContinuousEvent(event) {
@@ -2055,6 +2055,23 @@ function isMobileContinuousEvent(event) {
   const start = parseDateOnly(event.start);
   const end = previewInclusiveEndDate(event, start, parseDateOnly(event.end));
   return end > start;
+}
+
+function continuousEventClass(event, dayKey) {
+  if (!isMobileContinuousEvent(event)) return "";
+  const start = parseDateOnly(event.start);
+  const end = previewInclusiveEndDate(event, start, parseDateOnly(event.end));
+  const day = parseDateOnly(dayKey);
+  const dayIndex = (day.getDay() + 6) % 7;
+  const segmentStart = sameDateOnly(day, start) || dayIndex === 0;
+  const segmentEnd = sameDateOnly(day, end) || dayIndex === 6;
+  const weekStart = mondayFor(day);
+  const weekEnd = addDays(weekStart, 6);
+  const spanStart = start < weekStart ? weekStart : start;
+  const spanEnd = end > weekEnd ? weekEnd : end;
+  const midpoint = addDays(spanStart, Math.floor(daysBetween(spanStart, spanEnd) / 2));
+  const label = sameDateOnly(day, midpoint) ? " is-continuous-label" : "";
+  return ` is-continuous${segmentStart ? " is-continuous-start" : ""}${segmentEnd ? " is-continuous-end" : ""}${label}`;
 }
 
 function mobilePreviewTitleParts(event) {
@@ -2113,6 +2130,13 @@ function renderMobileWeekSpans(week) {
     `;
   }).join("");
   return `<div class="preview-mobile-span-row">${spans}</div>`;
+}
+
+function sameDateOnly(left, right) {
+  return Boolean(left && right)
+    && left.getFullYear() === right.getFullYear()
+    && left.getMonth() === right.getMonth()
+    && left.getDate() === right.getDate();
 }
 
 function daysBetween(start, end) {
@@ -2179,7 +2203,6 @@ function renderTermSection(section) {
         <span>starting</span>
         <time datetime="${formatDateKey(monday)}">${formatLongDate(monday)}</time>
       </div>
-      ${renderMobileWeekSpans(week)}
       ${week.map((day) => renderDayCell(day)).join("")}
     `);
   });
@@ -2278,7 +2301,7 @@ function renderWhoInsight() {
   const mine = selectedDoctorEventsForInsights(date, date).filter(isRosterShiftEvent).filter((event) => eventRosterDateKey(event) === date);
   const activeSources = new Set(mine.map(eventSourceCode).filter(Boolean));
   const coworkers = mine.length
-    ? comparisonDoctorOptions()
+    ? comparisonDoctorOptions(date, date, [])
       .map((doctor) => ({
         doctor,
         events: comparisonDoctorEvents(doctor.key, date, date)
