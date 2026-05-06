@@ -63,8 +63,7 @@ const loginIdentity = document.querySelector("#loginIdentity");
 const logoutButton = document.querySelector("#logoutButton");
 const backToCreatorButton = document.querySelector("#backToCreatorButton");
 const mobileAccountAccessButton = document.querySelector("#mobileAccountAccessButton");
-const skinControl = document.querySelector("#skinControl");
-const skinSelect = document.querySelector("#skinSelect");
+const loadingScreen = document.querySelector("#loadingScreen");
 const loginForm = document.querySelector("#loginForm");
 const loginEmail = document.querySelector("#loginEmail");
 const loginPassword = document.querySelector("#loginPassword");
@@ -151,7 +150,6 @@ const ACCOUNT_WORKSPACES_KEY = "roster-account-workspaces-v1";
 const CURRENT_EMAIL_KEY = "roster-current-email";
 const CURRENT_PASSWORD_KEY = "roster-current-password";
 const PERSISTENT_PASSWORD_KEY = "roster-persistent-password";
-const SKIN_KEY = "roster-active-skin";
 const SIX_MONTH_LIMIT_DAYS = 183;
 const SETTINGS_FIELDS = [
   "showSourcePrefix",
@@ -219,7 +217,6 @@ let authUserEmail = currentUserEmail;
 let authUserPassword = currentUserPassword;
 let adminViewingEmail = "";
 let activeDoctorProfile = null;
-let currentSkin = loadSkin();
 let cloudAvailable = false;
 let cloudSaveTimer = 0;
 let pendingCloudSaveSnapshot = null;
@@ -269,7 +266,7 @@ const overlayObserver = new MutationObserver(syncOverlayState);
   overlayObserver.observe(surface, { attributes: true, attributeFilter: ["class", "aria-hidden"] });
 });
 
-applySkin(currentSkin);
+forceConsoleSkin();
 applyShiftColours(settings);
 applyCurrentDayHighlight(settings);
 applyWeekendShade(settings);
@@ -497,12 +494,6 @@ backToCreatorButton.addEventListener("click", () => {
   }
   returnToCreatorAccount();
 });
-skinSelect.addEventListener("change", () => {
-  if (!isOwnerAccount()) return;
-  applySkin(skinSelect.value);
-  syncSkinControl();
-});
-
 doctorSelect.addEventListener("change", async () => {
   await switchDoctorSelection(doctorSelect.value, { resetRange: true });
 });
@@ -5682,7 +5673,7 @@ async function enterUserAccount(email) {
   currentUserEmail = targetEmail;
   currentUserPassword = creatorPassword;
   currentUserRole = targetEmail === OWNER_EMAIL ? "creator" : "user";
-  applyTemporarySkin("console");
+  forceConsoleSkin();
   setStatus(`Entering ${targetEmail}...`);
   await clearLocalWorkspace();
   await restoreCloudState({ adminTargetEmail: targetEmail });
@@ -5746,7 +5737,7 @@ async function returnToCreatorAccount() {
   currentUserRole = "creator";
   localStorage.setItem(CURRENT_EMAIL_KEY, currentUserEmail);
   sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
-  applySkin(loadSkin());
+  forceConsoleSkin();
   setStatus("Returning to creator account...");
   await clearLocalWorkspace();
   await restoreCloudState();
@@ -5875,32 +5866,12 @@ function normalizeOpacity(value, fallbackPercent) {
   return Math.max(0, Math.min(100, numeric)) / 100;
 }
 
-function loadSkin() {
-  const stored = localStorage.getItem(SKIN_KEY);
-  const email = loadCurrentUserEmail();
-  if (!email) return "console";
-  if (stored === "original" && email !== OWNER_EMAIL) return "console";
-  if (stored === "original" || stored === "console") return stored;
-  return "console";
+function forceConsoleSkin() {
+  document.body.dataset.skin = "console";
 }
 
-function applySkin(skin) {
-  currentSkin = skin === "console" ? "console" : "original";
-  document.body.dataset.skin = currentSkin;
-  localStorage.setItem(SKIN_KEY, currentSkin);
-}
-
-function applyTemporarySkin(skin) {
-  currentSkin = skin === "original" ? "original" : "console";
-  document.body.dataset.skin = currentSkin;
-  skinSelect.value = currentSkin;
-}
-
-function syncSkinControl() {
-  const authenticated = Boolean(currentUserEmail && currentUserPassword);
-  const canChooseSkins = isOwnerAccount() && authenticated && !adminViewingEmail;
-  skinControl.classList.toggle("hidden", !canChooseSkins);
-  skinSelect.value = currentSkin;
+function hideLoadingScreen() {
+  loadingScreen?.classList.add("hidden");
 }
 
 function setEntranceStatus(message, isError = false) {
@@ -6098,7 +6069,7 @@ function normalizeAuthMessage(message) {
 
 function openLoginModal(prefillEmail = currentUserEmail || "") {
   setEntranceTab("login");
-  applyTemporarySkin("console");
+  forceConsoleSkin();
   loginEmail.value = prefillEmail;
   loginPassword.value = "";
   if (stayLoggedIn) stayLoggedIn.checked = Boolean(localStorage.getItem(PERSISTENT_PASSWORD_KEY));
@@ -6159,7 +6130,6 @@ function renderLoginState() {
     : "";
   backToCreatorButton.classList.toggle("hidden", (!adminViewingEmail && !activeDoctorProfile) || !isCreatorAuthenticated());
   syncAccountsButton();
-  syncSkinControl();
   syncMobileChrome();
 }
 
@@ -6182,7 +6152,7 @@ async function loginWithEmail(email, password, options = {}) {
     } else if (!options.adminTargetEmail) {
       localStorage.removeItem(PERSISTENT_PASSWORD_KEY);
     }
-    applySkin(loadSkin());
+    forceConsoleSkin();
     setStatus("Loading account workspace...");
     setEntranceStatus("Loading account workspace...");
     if (previousEmail !== currentUserEmail) {
@@ -7131,15 +7101,19 @@ async function refreshSnapshotInBackground() {
 }
 
 async function bootstrapApp() {
-  renderLoginState();
-  if (!currentUserEmail || !currentUserPassword) {
-    openLoginModal();
-    setStatus("Log in with an email address to load your roster workspace.");
-    return;
+  try {
+    renderLoginState();
+    if (!currentUserEmail || !currentUserPassword) {
+      openLoginModal();
+      setStatus("Log in with an email address to load your roster workspace.");
+      return;
+    }
+    await restoreCloudState();
+    renderLoginState();
+    await bootstrapImports();
+  } finally {
+    hideLoadingScreen();
   }
-  await restoreCloudState();
-  renderLoginState();
-  await bootstrapImports();
 }
 
 function setStatus(message, isError = false) {

@@ -7,6 +7,12 @@
     <link rel="stylesheet" href="/static/styles.css">
   </head>
   <body data-skin="console">
+    <div id="loadingScreen" class="loading-screen" role="status" aria-live="polite">
+      <div class="loading-card">
+        <strong>Loading calendar...</strong>
+        <span>Preparing your roster workspace.</span>
+      </div>
+    </div>
     <section id="entrancePage" class="entrance-page hidden" aria-label="Roster Converter entrance">
       <div class="entrance-copy">
         <p class="drop-kicker">Roster Converter</p>
@@ -84,13 +90,6 @@
         <div id="loginBar" class="login-bar hidden">
           <span id="loginIdentity"></span>
           <div class="login-actions">
-            <label id="skinControl" class="skin-control hidden">
-              <span>Skin</span>
-              <select id="skinSelect">
-                <option value="original">Original</option>
-                <option value="console">Calendar console</option>
-              </select>
-            </label>
             <button id="backToCreatorButton" type="button" class="button button-secondary hidden">Back to creator</button>
             <button id="logoutButton" type="button" class="button button-secondary">Log out</button>
             <button id="mobileAccountAccessButton" type="button" class="button button-secondary mobile-login-access hidden">Account</button>

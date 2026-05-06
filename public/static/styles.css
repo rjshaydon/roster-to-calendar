@@ -126,6 +126,48 @@ body.is-dragging #dropZone {
   box-shadow: 0 22px 70px rgba(20, 34, 42, 0.24);
 }
 
+.loading-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(circle at 50% 20%, rgba(97, 82, 217, 0.14), transparent 34%),
+    linear-gradient(180deg, #fffdf8 0%, #f7f8fb 100%);
+  color: var(--ink);
+  transition: opacity 180ms ease, visibility 180ms ease;
+}
+
+.loading-screen.hidden {
+  display: grid !important;
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.loading-card {
+  display: grid;
+  gap: 8px;
+  width: min(360px, 100%);
+  padding: 26px;
+  border: 1px solid var(--line);
+  border-radius: 28px;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 24px 90px rgba(18, 28, 45, 0.14);
+  text-align: center;
+}
+
+.loading-card strong {
+  font-size: 1.25rem;
+  font-weight: 800;
+}
+
+.loading-card span {
+  color: var(--muted);
+}
+
 .entrance-page {
   position: relative;
   z-index: 1;
@@ -483,17 +525,6 @@ h1 {
 
 .mobile-stay-login {
   display: none;
-}
-
-.skin-control {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.skin-control span {
-  color: var(--muted);
-  font-size: 0.84rem;
 }
 
 .doctor-section {
@@ -1404,7 +1435,7 @@ body[data-skin="console"] .preview-cell.is-weekend {
   .preview-chip.is-continuous {
     align-content: center;
     min-height: 42px;
-    width: calc((100% * var(--continuous-span)) + (10px * (var(--continuous-span) - 1)));
+    width: calc((100% * var(--continuous-span)) + (20px * (var(--continuous-span) - 1)));
   }
 }
 
@@ -2477,7 +2508,7 @@ body[data-skin="console"] .panel {
     justify-content: center;
     align-content: center;
     border-radius: 999px;
-    width: calc(100% * var(--continuous-span));
+    width: calc((100% * var(--continuous-span)) + (6px * (var(--continuous-span) - 1)));
   }
 
   .preview-chip.is-dragging {
