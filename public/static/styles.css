@@ -1726,6 +1726,25 @@ body[data-skin="console"] .preview-cell.is-weekend {
   margin: 0 0 10px;
 }
 
+.insight-date-button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  text-align: left;
+  font: inherit;
+  font-weight: 700;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.insight-date-button:hover,
+.insight-date-button:focus-visible {
+  color: var(--accent);
+  text-decoration: underline;
+  outline: none;
+}
+
 .subscription-card input[readonly] {
   cursor: text;
 }

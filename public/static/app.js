@@ -781,6 +781,12 @@ reviewModalBody.addEventListener("click", (event) => {
     void renderInlineWhenInsight(panel, whenDoctorButton.dataset.inlineWhenDoctor || "");
     return;
   }
+  const dateButton = event.target.closest("[data-inline-who-on-date]");
+  if (dateButton) {
+    event.preventDefault();
+    void openWhoInsightForDate(dateButton.dataset.inlineWhoOnDate || "");
+    return;
+  }
   const backButton = event.target.closest("[data-inline-back-who]");
   if (backButton) {
     event.preventDefault();
@@ -906,6 +912,12 @@ exportModalBody.addEventListener("change", (event) => {
   }
 });
 insightsModalBody.addEventListener("click", async (event) => {
+  const dateButton = event.target.closest("[data-insights-who-on-date]");
+  if (dateButton) {
+    event.preventDefault();
+    await openWhoInsightForDate(dateButton.dataset.insightsWhoOnDate || "");
+    return;
+  }
   const doctorButton = event.target.closest("[data-insights-doctor-key]");
   if (!doctorButton) return;
   event.preventDefault();
@@ -1095,6 +1107,12 @@ customEventForm.addEventListener("click", (event) => {
   if (whenDoctorButton) {
     event.preventDefault();
     void renderInlineWhenInsight(customEventWhoPanel, whenDoctorButton.dataset.inlineWhenDoctor || "");
+    return;
+  }
+  const dateButton = event.target.closest("[data-inline-who-on-date]");
+  if (dateButton) {
+    event.preventDefault();
+    void openWhoInsightForDate(dateButton.dataset.inlineWhoOnDate || "");
     return;
   }
   const backButton = event.target.closest("[data-inline-back-who]");
@@ -2429,6 +2447,20 @@ async function openWhoInsight(termStart, termEnd) {
   await renderInsightsModal();
 }
 
+async function openWhoInsightForDate(date) {
+  const selectedDate = String(date || "").slice(0, 10);
+  if (!selectedDate) return;
+  await ensureInsightRosterAnalysis();
+  const range = availableInsightDateRange();
+  insightsState = {
+    mode: "who",
+    termStart: range.start || selectedDate,
+    termEnd: range.end || selectedDate,
+    date: selectedDate,
+  };
+  await renderInsightsModal();
+}
+
 async function openWhenInsight(termStart, termEnd) {
   await ensureInsightRosterAnalysis();
   const range = availableInsightDateRange();
@@ -2581,7 +2613,7 @@ function renderWhenInsight() {
       ? overlaps.length
         ? overlaps.map((entry) => `
           <article class="issue-card${entry.date === nextOverlapDate ? " is-next-overlap" : ""}" ${entry.date === nextOverlapDate ? 'data-insight-next="true"' : ""}>
-            <strong>${escapeHtml(formatInsightDate(entry.date))}</strong>
+            ${renderInsightDateButton(entry.date, "data-insights-who-on-date")}
             <p><strong>Hospital:</strong> ${escapeHtml(entry.hospital || "Unknown")}</p>
             <p><strong>${escapeHtml(selectedDoctor()?.displayName || "Selected doctor")}:</strong> ${escapeHtml(renderInsightShiftSummary(entry.mine))}</p>
             <p><strong>${escapeHtml(selectedComparison.displayName)}:</strong> ${escapeHtml(renderInsightShiftSummary(entry.theirs))}</p>
@@ -2887,7 +2919,7 @@ async function renderInlineWhenInsight(container, doctorKey) {
       ? overlaps.length
         ? overlaps.map((entry) => `
           <article class="issue-card">
-            <strong>${escapeHtml(formatInsightDate(entry.date))}</strong>
+            ${renderInsightDateButton(entry.date, "data-inline-who-on-date")}
             <p><strong>Hospital:</strong> ${escapeHtml(entry.hospital || "Unknown")}</p>
             <p><strong>${escapeHtml(selectedDoctor()?.displayName || "Selected doctor")}:</strong> ${escapeHtml(renderInsightShiftSummary(entry.mine))}</p>
             <p><strong>${escapeHtml(selectedComparison.displayName)}:</strong> ${escapeHtml(renderInsightShiftSummary(entry.theirs))}</p>
@@ -3078,6 +3110,15 @@ function chooseNextOverlapDate(overlaps) {
   if (!overlaps.length) return "";
   const today = formatDateKey(new Date());
   return overlaps.find((entry) => entry.date >= today)?.date || overlaps[0].date;
+}
+
+function renderInsightDateButton(date, dataAttribute) {
+  const safeDate = escapeHtml(date);
+  return `
+    <button type="button" class="insight-date-button" ${dataAttribute}="${safeDate}" title="Show everyone working with you on ${escapeHtml(formatInsightDate(date))}">
+      ${escapeHtml(formatInsightDate(date))}
+    </button>
+  `;
 }
 
 function formatInsightDate(value) {
