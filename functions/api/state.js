@@ -1155,9 +1155,13 @@ function mergeProfileSessionIntoState(state, profiles, ownerEmail = "") {
 async function repositoryImportRefsForDoctorProfile(store, profile) {
   const index = await loadRepositoryIndex(store);
   const refs = [];
+  const sourceTypes = sanitizeSourceTypes(profile?.sourceTypes);
   for (const file of index.files || []) {
     if (file.active === false) continue;
-    const hasProfileDoctor = sanitizeRepositoryDoctors(file.doctors).some((doctor) => doctor.key === profile.doctorKey && profile.sourceTypes.includes(doctor.sourceType));
+    const hasProfileDoctor = sanitizeRepositoryDoctors(file.doctors).some((doctor) => (
+      doctor.key === profile.doctorKey
+      && (!sourceTypes.length || sourceTypes.includes(doctor.sourceType))
+    ));
     if (hasProfileDoctor) refs.push(repositoryImportRef(file));
   }
   return refs;

@@ -4104,7 +4104,7 @@ function activeCalendarOwnerId() {
 
 function buildDoctorProfileId(doctor) {
   const key = normalizeRosterName(doctor?.key || "");
-  const sources = normalizedDoctorSourceTypes(doctor).sort();
+  const sources = doctorProfileSourceTypes(doctor).sort();
   return key && sources.length ? `${key}::${sources.join("+")}` : "";
 }
 
@@ -4112,6 +4112,11 @@ function normalizedDoctorSourceTypes(doctor) {
   const values = Array.isArray(doctor?.sourceTypes) ? doctor.sourceTypes : [];
   if (doctor?.sourceType) values.push(doctor.sourceType);
   return [...new Set(values.map((item) => String(item || "").toLowerCase()).filter((item) => item === "mmc" || item === "ddh"))];
+}
+
+function doctorProfileSourceTypes(doctor) {
+  const sourceTypes = normalizedDoctorSourceTypes(doctor);
+  return sourceTypes.length ? sourceTypes : ["ddh", "mmc"];
 }
 
 function doctorOptionsForCurrentAccount(doctors) {
@@ -6328,6 +6333,7 @@ async function enterDoctorProfileView(doctor) {
     setStatus(`Could not open ${doctor?.displayName || "that clinician"} because their roster source was not available.`, true);
     return;
   }
+  const previousState = captureCalendarViewState();
   const creatorEmail = authUserEmail || currentUserEmail;
   const creatorPassword = authUserPassword || currentUserPassword;
   try {
@@ -6350,14 +6356,74 @@ async function enterDoctorProfileView(doctor) {
     ownerId: `doctor-profile:${profileId}`,
     doctorKey: doctor.key,
     displayName: doctor.displayName,
-    sourceTypes: normalizedDoctorSourceTypes(doctor),
+    sourceTypes: doctorProfileSourceTypes(doctor),
   };
   setActiveCalendarContext("doctor-profile", { email: currentUserEmail, profile: activeDoctorProfile });
-  clearPreviewData();
   restoredSessionState = null;
-  await restoreDoctorProfileState();
-  await bootstrapImports();
-  renderLoginState();
+  try {
+    await restoreDoctorProfileState();
+    if (!selectedFiles.length) {
+      throw new Error(`${doctor.displayName} was not found in the stored roster repository.`);
+    }
+    await bootstrapImports();
+    renderLoginState();
+  } catch (error) {
+    restoreCalendarViewState(previousState);
+    renderLoginState();
+    setStatus(error.message || `Could not open ${doctor.displayName}.`, true);
+  }
+}
+
+function captureCalendarViewState() {
+  return {
+    adminViewingEmail,
+    activeDoctorProfile,
+    activeCalendarContext: activeCalendarContext ? { ...activeCalendarContext } : null,
+    currentUserEmail,
+    currentUserPassword,
+    currentUserRole,
+    selectedFiles: selectedFiles.map((entry) => ({ ...entry })),
+    currentSnapshot: currentSnapshot ? JSON.parse(JSON.stringify(currentSnapshot)) : null,
+    currentSnapshotStale,
+    currentSnapshotBuiltAt,
+    restoredSessionState: restoredSessionState ? JSON.parse(JSON.stringify(restoredSessionState)) : null,
+    doctorOptions: doctorOptions.map((doctor) => ({ ...doctor })),
+    detectedSources: JSON.parse(JSON.stringify(detectedSources || {})),
+    latestPreview: latestPreview ? JSON.parse(JSON.stringify(latestPreview)) : null,
+  };
+}
+
+function restoreCalendarViewState(state) {
+  if (!state) return;
+  adminViewingEmail = state.adminViewingEmail;
+  activeDoctorProfile = state.activeDoctorProfile;
+  activeCalendarContext = state.activeCalendarContext;
+  currentUserEmail = state.currentUserEmail;
+  currentUserPassword = state.currentUserPassword;
+  currentUserRole = state.currentUserRole;
+  if (currentUserEmail) localStorage.setItem(CURRENT_EMAIL_KEY, currentUserEmail);
+  if (currentUserPassword) sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
+  selectedFiles = state.selectedFiles || [];
+  currentSnapshot = state.currentSnapshot;
+  currentSnapshotStale = state.currentSnapshotStale;
+  currentSnapshotBuiltAt = state.currentSnapshotBuiltAt;
+  restoredSessionState = state.restoredSessionState;
+  doctorOptions = state.doctorOptions || [];
+  detectedSources = state.detectedSources || {};
+  latestPreview = state.latestPreview;
+  if (latestPreview) {
+    renderWorkspaceFromSnapshot({
+      preview: latestPreview,
+      session: restoredSessionState || {},
+      doctorOptions,
+      detectedSources,
+      fileRefs: selectedFiles.map(importRefForWorkspace),
+    }, restoredSessionState || {});
+  } else {
+    clearPreviewData();
+    renderFilesList();
+    renderDoctorState();
+  }
 }
 
 async function exitDoctorProfileView() {
