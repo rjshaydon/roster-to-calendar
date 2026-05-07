@@ -200,6 +200,12 @@ const PREVIEW_STYLE_FIELDS = [
 const STATUS_MESSAGE_LIMIT = 5;
 const STATUS_MESSAGE_LIFETIME_MS = 5000;
 const STATUS_MESSAGE_FADE_MS = 240;
+const STATUS_SUPERSEDED_MESSAGES = new Map([
+  ["Calendar loaded.", ["Loading calendar...", "Refreshing calendar..."]],
+  ["Calendar refreshed.", ["Refreshing calendar..."]],
+  ["Calendar file ready.", ["Building calendar file..."]],
+  ["Subscription URL copied.", ["Saving subscription feed..."]],
+]);
 
 let doctorOptions = [];
 let detectedSources = {};
@@ -7359,6 +7365,8 @@ function setStatus(message, isError = false) {
   const text = String(message || "").trim();
   if (!status || !text) return;
 
+  removeSupersededStatusMessages(text);
+
   const entry = document.createElement("p");
   entry.className = "status";
   entry.textContent = text;
@@ -7387,6 +7395,18 @@ function setStatus(message, isError = false) {
   if (isError && message) {
     void reportAccountError(text);
   }
+}
+
+function removeSupersededStatusMessages(message) {
+  const supersededMessages = STATUS_SUPERSEDED_MESSAGES.get(message);
+  if (!supersededMessages?.length) return;
+
+  const supersededSet = new Set(supersededMessages);
+  status.querySelectorAll(".status").forEach((entry) => {
+    if (supersededSet.has(entry.textContent.trim())) {
+      entry.remove();
+    }
+  });
 }
 
 async function readJsonResponse(response, fallbackMessage = "Request failed.") {
