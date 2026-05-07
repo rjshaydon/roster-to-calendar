@@ -6370,7 +6370,10 @@ async function enterDoctorProfileView(doctor) {
   try {
     await restoreDoctorProfileState();
     if (!selectedFiles.length) {
-      throw new Error(`${doctor.displayName} was not found in the stored roster repository.`);
+      await restoreDoctorProfileImportsFromPreviousView(previousState);
+    }
+    if (!selectedFiles.length) {
+      throw new Error(`${doctor.displayName} was not found in the stored roster repository or the current creator rosters.`);
     }
     await bootstrapImports();
     renderLoginState();
@@ -6379,6 +6382,15 @@ async function enterDoctorProfileView(doctor) {
     renderLoginState();
     setStatus(error.message || `Could not open ${doctor.displayName}.`, true);
   }
+}
+
+async function restoreDoctorProfileImportsFromPreviousView(previousState) {
+  const previousFiles = previousState?.selectedFiles || [];
+  if (!previousFiles.length) return;
+  const restored = await loadStoredImportsByRefs(previousFiles.map(importRefForWorkspace)).catch(() => []);
+  selectedFiles = restored.length
+    ? restored
+    : previousFiles.map((entry) => ({ ...entry }));
 }
 
 function captureCalendarViewState() {
