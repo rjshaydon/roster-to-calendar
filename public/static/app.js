@@ -6288,6 +6288,8 @@ async function enterDoctorProfileView(doctor) {
   currentUserRole = "creator";
   localStorage.setItem(CURRENT_EMAIL_KEY, currentUserEmail);
   sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
+  setStatus(`Opening ${doctor.displayName}...`);
+  await clearLocalWorkspace();
   activeDoctorProfile = {
     id: profileId,
     ownerId: `doctor-profile:${profileId}`,
@@ -6295,8 +6297,6 @@ async function enterDoctorProfileView(doctor) {
     displayName: doctor.displayName,
     sourceTypes: Array.isArray(doctor.sourceTypes) ? [...doctor.sourceTypes] : [],
   };
-  setStatus(`Opening ${doctor.displayName}...`);
-  await clearLocalWorkspace();
   clearPreviewData();
   restoredSessionState = null;
   await restoreDoctorProfileState();
