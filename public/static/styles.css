@@ -867,7 +867,7 @@ input[type="color"] {
 
 .mode-toggle {
   display: grid;
-  grid-template-columns: max-content max-content;
+  grid-template-columns: 52px 66px;
   justify-content: center;
   overflow: hidden;
   border: 1px solid #d5e0eb;
@@ -878,7 +878,8 @@ input[type="color"] {
   display: grid;
   place-items: center;
   border: 0;
-  padding: 7px 10px;
+  min-inline-size: 0;
+  padding: 7px 8px;
   font-size: 0.78rem;
   font-weight: 700;
   line-height: 1;
