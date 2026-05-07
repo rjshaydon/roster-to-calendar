@@ -916,6 +916,7 @@ function sanitizeAvailableDoctors(value) {
       key: normalizeRosterName(doctor?.key || ""),
       displayName: String(doctor?.displayName || "").trim(),
       sourceType: String(doctor?.sourceType || "").toLowerCase(),
+      sourceTypes: sanitizeSourceTypes(doctor?.sourceTypes || (doctor?.sourceType ? [doctor.sourceType] : [])),
       claimedBy: normalizeEmail(doctor?.claimedBy || ""),
       claimedByName: String(doctor?.claimedByName || "").trim(),
       accountEmail: normalizeEmail(doctor?.accountEmail || doctor?.claimedBy || ""),

@@ -1695,7 +1695,7 @@ function renderDoctorState() {
       option.value = doctor.key;
       option.textContent = doctor.displayName;
       option.dataset.displayName = doctor.displayName;
-      option.dataset.sourceTypes = Array.isArray(doctor.sourceTypes) ? doctor.sourceTypes.join(",") : "";
+      option.dataset.sourceTypes = normalizedDoctorSourceTypes(doctor).join(",");
       option.dataset.accountEmail = doctor.accountEmail || "";
       doctorSelect.append(option);
     }
@@ -4058,14 +4058,14 @@ function selectedDoctorOptionForKey(selectedKey) {
   const normalizedKey = normalizeRosterName(selectedKey);
   const localOption = doctorOptions.find((doctor) => doctor.key === normalizedKey) || null;
   const selectedDomOption = doctorSelect.selectedOptions?.[0] || null;
-  if (localOption && (localOption.sourceTypes?.length || selectedDomOption?.dataset.sourceTypes)) {
+  if (localOption && (normalizedDoctorSourceTypes(localOption).length || selectedDomOption?.dataset.sourceTypes)) {
     const accountEmail = normalizeEmail(localOption.accountEmail || selectedDomOption?.dataset.accountEmail || "");
     return {
       ...localOption,
       accountEmail,
       targetMode: accountEmail ? "claimed-account" : "doctor-profile",
-      sourceTypes: localOption.sourceTypes?.length
-        ? localOption.sourceTypes
+      sourceTypes: normalizedDoctorSourceTypes(localOption).length
+        ? normalizedDoctorSourceTypes(localOption)
         : String(selectedDomOption?.dataset.sourceTypes || "").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean),
     };
   }
@@ -4104,14 +4104,20 @@ function activeCalendarOwnerId() {
 
 function buildDoctorProfileId(doctor) {
   const key = normalizeRosterName(doctor?.key || "");
-  const sources = [...new Set((Array.isArray(doctor?.sourceTypes) ? doctor.sourceTypes : []).map((item) => String(item || "").toLowerCase()).filter(Boolean))].sort();
+  const sources = normalizedDoctorSourceTypes(doctor).sort();
   return key && sources.length ? `${key}::${sources.join("+")}` : "";
+}
+
+function normalizedDoctorSourceTypes(doctor) {
+  const values = Array.isArray(doctor?.sourceTypes) ? doctor.sourceTypes : [];
+  if (doctor?.sourceType) values.push(doctor.sourceType);
+  return [...new Set(values.map((item) => String(item || "").toLowerCase()).filter((item) => item === "mmc" || item === "ddh"))];
 }
 
 function doctorOptionsForCurrentAccount(doctors) {
   const options = (doctors || []).map((doctor) => ({
     ...doctor,
-    sourceTypes: Array.isArray(doctor.sourceTypes) ? doctor.sourceTypes : [],
+    sourceTypes: normalizedDoctorSourceTypes(doctor),
   }));
   if (canUseCreatorDoctorSwitcher()) return buildCreatorDoctorOptions(options);
   const matches = options.filter((doctor) => doctorMatchesCurrentAccount(doctor));
@@ -6318,7 +6324,10 @@ async function enterUserAccount(email) {
 async function enterDoctorProfileView(doctor) {
   if (!isOwnerAccount() && !isCreatorAuthenticated()) return;
   const profileId = buildDoctorProfileId(doctor);
-  if (!profileId) return;
+  if (!profileId) {
+    setStatus(`Could not open ${doctor?.displayName || "that clinician"} because their roster source was not available.`, true);
+    return;
+  }
   const creatorEmail = authUserEmail || currentUserEmail;
   const creatorPassword = authUserPassword || currentUserPassword;
   try {
@@ -6341,7 +6350,7 @@ async function enterDoctorProfileView(doctor) {
     ownerId: `doctor-profile:${profileId}`,
     doctorKey: doctor.key,
     displayName: doctor.displayName,
-    sourceTypes: Array.isArray(doctor.sourceTypes) ? [...doctor.sourceTypes] : [],
+    sourceTypes: normalizedDoctorSourceTypes(doctor),
   };
   setActiveCalendarContext("doctor-profile", { email: currentUserEmail, profile: activeDoctorProfile });
   clearPreviewData();
