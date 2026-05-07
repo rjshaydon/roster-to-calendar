@@ -770,10 +770,18 @@ input[type="color"] {
 }
 
 .settings-example-chip {
-  inline-size: min(100%, 320px);
-  min-height: 72px;
+  inline-size: max-content;
+  min-inline-size: 136px;
+  max-inline-size: 220px;
+  min-height: 0;
   cursor: default;
   pointer-events: none;
+}
+
+.settings-example-chip > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .preview-style-layout {

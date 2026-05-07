@@ -600,19 +600,11 @@ for (const [key, input] of Object.entries(settingsInputs)) {
     }
     if (isPreviewDisplayField(key)) {
       previewDisplayDraft = readPreviewDisplayInputs(previewDisplayDraft || settings);
-      if (!previewDisplayDraft.showNormalizedTitles && !previewDisplayDraft.showRawValues) {
-        previewDisplayDraft.showNormalizedTitles = true;
-        settingsInputs.showNormalizedTitles.checked = true;
-      }
       updatePreviewDisplayExample(previewDisplayDraft);
       setStatus("Preview display updated in the sample. Save or close settings to apply it.");
       return;
     }
     settings[key] = input.type === "checkbox" ? input.checked : input.value;
-    if (!settings.showNormalizedTitles && !settings.showRawValues) {
-      settings.showNormalizedTitles = true;
-      settingsInputs.showNormalizedTitles.checked = true;
-    }
     if (["showTimes", "showRawValues", "showNormalizedTitles"].includes(key)) {
       updatePreviewDisplayExample();
     }
@@ -1503,9 +1495,6 @@ function commitSettingsDrafts() {
   let changed = false;
   if (previewDisplayDraft) {
     const nextDisplay = readPreviewDisplayInputs(previewDisplayDraft);
-    if (!nextDisplay.showNormalizedTitles && !nextDisplay.showRawValues) {
-      nextDisplay.showNormalizedTitles = true;
-    }
     previewNeedsRebuild = ["showTimes", "showRawValues", "showNormalizedTitles"]
       .some((field) => settings[field] !== nextDisplay[field]);
     Object.assign(settings, nextDisplay);
@@ -2164,6 +2153,7 @@ function indexReviewItems(items) {
 function renderPreviewGrid(doctor, data) {
   const events = data.events || [];
   currentPreviewEvents = new Map(events.map((event) => [event.id, event]));
+  updatePreviewDisplayExample(previewDisplayDraft || settings);
   const days = buildPreviewDays(events, data.previewStart, data.previewEnd);
   document.body.classList.add("has-calendar-preview");
   if (!days.length) {
@@ -2334,7 +2324,7 @@ function renderPreviewChip(event, dayKey) {
   const startKey = event.start.slice(0, 10);
   const mobileLabel = mobilePreviewTitleParts(event);
   const continuous = continuousEventDisplay(event, dayKey);
-  if (settings.showNormalizedTitles || !settings.showRawValues) {
+  if (settings.showNormalizedTitles) {
     const marker = event.isEditedImport ? '<span class="preview-chip-marker" aria-label="Imported event edited">*</span>' : "";
     lines.push(`<strong class="preview-chip-title-full">${escapeHtml(event.title)}${marker}</strong>`);
     lines.push(`
@@ -6359,13 +6349,43 @@ function syncPreviewStyleControls(sourceSettings = settings) {
 }
 
 function updatePreviewDisplayExample(sourceSettings = settings) {
+  const chip = document.querySelector(".settings-example-chip");
   const title = document.querySelector("#settingsExampleTitle");
   const raw = document.querySelector("#settingsExampleRaw");
   const time = document.querySelector("#settingsExampleTime");
   if (!title || !raw || !time) return;
-  title.classList.toggle("hidden", !sourceSettings.showNormalizedTitles && sourceSettings.showRawValues);
+  const event = settingsExampleEvent();
+  if (chip) {
+    chip.classList.remove("preview-chip-day", "preview-chip-evening", "preview-chip-night", "preview-chip-cs", "preview-chip-leave", "preview-chip-custom", "preview-chip-phnw");
+    chip.classList.add(`preview-chip-${event.tone}`);
+  }
+  title.textContent = event.title;
+  raw.textContent = event.rawValue;
+  time.textContent = event.timeLabel;
+  title.classList.toggle("hidden", !sourceSettings.showNormalizedTitles);
   raw.classList.toggle("hidden", !sourceSettings.showRawValues);
-  time.classList.toggle("hidden", !sourceSettings.showTimes);
+  time.classList.toggle("hidden", !sourceSettings.showTimes || !event.timeLabel);
+}
+
+function settingsExampleEvent() {
+  const events = currentPreviewEvents.size
+    ? [...currentPreviewEvents.values()]
+    : latestPreview
+      ? buildFilteredPreviewEvents(latestPreview, settings)
+      : [];
+  const usable = events.filter((event) => {
+    const raw = String(event?.rawValue || "").trim();
+    return raw && raw !== "Custom event" && String(event?.title || "").trim();
+  });
+  const preferred = usable.find((event) => !event.allDay && event.timeLabel)
+    || usable.find((event) => event.timeLabel)
+    || usable[0];
+  return {
+    title: String(preferred?.title || "MMC: SSU PM").trim(),
+    rawValue: String(preferred?.rawValue || "1430-0000 PSSC").trim(),
+    timeLabel: String(preferred?.timeLabel || "2:30 pm - 12:00 am").trim(),
+    tone: preferred ? eventTone(preferred) : "day",
+  };
 }
 
 function defaultColourForField(field) {
