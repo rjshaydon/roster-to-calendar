@@ -202,6 +202,7 @@ const PREVIEW_STYLE_FIELDS = [
   "weekendShadeColor",
   "weekendShadeOpacity",
 ];
+const PREVIEW_DISPLAY_FIELDS = ["showTimes", "showRawValues", "showNormalizedTitles"];
 const STATUS_MESSAGE_LIMIT = 5;
 const STATUS_MESSAGE_LIFETIME_MS = 5000;
 const STATUS_MESSAGE_FADE_MS = 240;
@@ -220,6 +221,7 @@ let doctorRoleIndex = null;
 let parsedImportDoctors = new Map();
 let settings = defaultSettings();
 let previewStyleDraft = null;
+let previewDisplayDraft = null;
 let overrides = {};
 let latestPreview = null;
 let reviewIndex = new Map();
@@ -544,8 +546,7 @@ claimDoctorButton.addEventListener("click", () => {
 settingsToggle.addEventListener("click", (event) => {
   event.preventDefault();
   event.stopPropagation();
-  settingsPanel.classList.toggle("hidden");
-  syncMobileSettingsControls();
+  toggleSettingsPanel();
 });
 settingsCloseButton.addEventListener("click", (event) => {
   event.preventDefault();
@@ -555,8 +556,7 @@ settingsCloseButton.addEventListener("click", (event) => {
 mobileSettingsButton.addEventListener("click", (event) => {
   event.preventDefault();
   event.stopPropagation();
-  settingsPanel.classList.toggle("hidden");
-  syncMobileSettingsControls();
+  toggleSettingsPanel();
 });
 mobileLogoutButton?.addEventListener("click", () => {
   logoutCurrentUser();
@@ -596,6 +596,16 @@ for (const [key, input] of Object.entries(settingsInputs)) {
       applyWeekendShade(previewStyleDraft, { previewOnly: true });
       syncPreviewStyleControls(previewStyleDraft);
       setStatus("Preview styling updated.");
+      return;
+    }
+    if (isPreviewDisplayField(key)) {
+      previewDisplayDraft = readPreviewDisplayInputs(previewDisplayDraft || settings);
+      if (!previewDisplayDraft.showNormalizedTitles && !previewDisplayDraft.showRawValues) {
+        previewDisplayDraft.showNormalizedTitles = true;
+        settingsInputs.showNormalizedTitles.checked = true;
+      }
+      updatePreviewDisplayExample(previewDisplayDraft);
+      setStatus("Preview display updated in the sample. Save or close settings to apply it.");
       return;
     }
     settings[key] = input.type === "checkbox" ? input.checked : input.value;
@@ -708,23 +718,15 @@ settingsPanel?.addEventListener("click", (event) => {
   }
   if (event.target.closest("[data-preview-style-cancel]")) {
     previewStyleDraft = null;
+    previewDisplayDraft = null;
     renderSettings();
-    closeSettingsPanel();
-    setStatus("Preview styling changes cancelled.");
+    closeSettingsPanel({ commit: false });
+    setStatus("Preview changes cancelled.");
     return;
   }
   if (event.target.closest("[data-preview-style-save]")) {
-    if (previewStyleDraft) {
-      Object.assign(settings, previewStyleDraft);
-      previewStyleDraft = null;
-      saveCurrentSessionState();
-      applyCurrentDayHighlight(settings);
-      applyWeekendShade(settings);
-      syncPreviewStyleControls(settings);
-      if (latestPreview) rebuildClientPreview();
-      setStatus("Preview styling saved.");
-    }
     closeSettingsPanel();
+    setStatus("Preview settings saved.");
   }
 });
 
@@ -1360,6 +1362,7 @@ function doctorsByImportId(sources) {
 
 function renderSettings() {
   previewStyleDraft = null;
+  previewDisplayDraft = null;
   for (const [key, input] of Object.entries(settingsInputs)) {
     if (!input) continue;
     if (input.type === "checkbox") {
@@ -1380,6 +1383,23 @@ function renderSettings() {
 
 function isPreviewStyleField(field) {
   return PREVIEW_STYLE_FIELDS.includes(field);
+}
+
+function isPreviewDisplayField(field) {
+  return PREVIEW_DISPLAY_FIELDS.includes(field);
+}
+
+function pickPreviewDisplaySettings(source = settings) {
+  return Object.fromEntries(PREVIEW_DISPLAY_FIELDS.map((field) => [field, Boolean(source[field])]));
+}
+
+function readPreviewDisplayInputs(base = settings) {
+  const next = { ...pickPreviewDisplaySettings(base) };
+  for (const field of PREVIEW_DISPLAY_FIELDS) {
+    const input = settingsInputs[field];
+    if (input) next[field] = Boolean(input.checked);
+  }
+  return next;
 }
 
 function pickPreviewStyleSettings(source = settings) {
@@ -1458,8 +1478,53 @@ function hasCalendarPreview() {
   return Boolean(latestPreview && selectedDoctor());
 }
 
-function closeSettingsPanel() {
+function toggleSettingsPanel() {
+  if (settingsPanel.classList.contains("hidden")) {
+    renderSettings();
+    settingsPanel.classList.remove("hidden");
+    syncMobileSettingsControls();
+    syncOverlayState();
+    return;
+  }
+  closeSettingsPanel();
+}
+
+function closeSettingsPanel(options = {}) {
+  const shouldCommit = options.commit !== false;
+  if (shouldCommit) {
+    commitSettingsDrafts();
+  }
   settingsPanel.classList.add("hidden");
+  syncOverlayState();
+}
+
+function commitSettingsDrafts() {
+  let previewNeedsRebuild = false;
+  let changed = false;
+  if (previewDisplayDraft) {
+    const nextDisplay = readPreviewDisplayInputs(previewDisplayDraft);
+    if (!nextDisplay.showNormalizedTitles && !nextDisplay.showRawValues) {
+      nextDisplay.showNormalizedTitles = true;
+    }
+    previewNeedsRebuild = ["showTimes", "showRawValues", "showNormalizedTitles"]
+      .some((field) => settings[field] !== nextDisplay[field]);
+    Object.assign(settings, nextDisplay);
+    previewDisplayDraft = null;
+    changed = changed || previewNeedsRebuild;
+  }
+  if (previewStyleDraft) {
+    Object.assign(settings, previewStyleDraft);
+    previewStyleDraft = null;
+    applyCurrentDayHighlight(settings);
+    applyWeekendShade(settings);
+    syncPreviewStyleControls(settings);
+    previewNeedsRebuild = true;
+    changed = true;
+  }
+  if (!changed) return;
+  saveCurrentSessionState();
+  updatePreviewDisplayExample(settings);
+  if (latestPreview && previewNeedsRebuild) rebuildClientPreview();
 }
 
 function setMobileBodyScrollLock(locked) {
@@ -4157,7 +4222,7 @@ function resetDerivedState() {
   doctorSection.classList.add("hidden");
   controlBar.classList.add("hidden");
   mobileActionBar.classList.add("hidden");
-  settingsPanel.classList.add("hidden");
+  closeSettingsPanel({ commit: false });
   claimSection.classList.add("hidden");
   clearPreviewData();
 }
