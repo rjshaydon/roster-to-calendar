@@ -603,6 +603,9 @@ for (const [key, input] of Object.entries(settingsInputs)) {
       settings.showNormalizedTitles = true;
       settingsInputs.showNormalizedTitles.checked = true;
     }
+    if (["showTimes", "showRawValues", "showNormalizedTitles"].includes(key)) {
+      updatePreviewDisplayExample();
+    }
     saveCurrentSessionState();
     if (latestPreview && (key === "dateFrom" || key === "dateTo" || key === "hospitalFilter")) {
       rebuildClientPreview();
@@ -1371,6 +1374,7 @@ function renderSettings() {
   applyCurrentDayHighlight(settings);
   applyWeekendShade(settings);
   syncPreviewStyleControls();
+  updatePreviewDisplayExample();
   syncMobileSettingsControls();
 }
 
@@ -4658,7 +4662,7 @@ function openReviewModal(id, selectedDay = "") {
       </div>
       <div class="review-body">
         <label class="field">
-          <span>Normalized result</span>
+          <span>Normalised result</span>
           <input
             type="text"
             value="${overrideValue}"
@@ -4708,7 +4712,7 @@ function openReviewModal(id, selectedDay = "") {
         </div>
       </div>
       <div class="review-meta">
-        <span>Suggested title: ${escapeHtml(item.suggestedTitle || "No normalized result")}</span>
+        <span>Suggested title: ${escapeHtml(item.suggestedTitle || "No normalised result")}</span>
         ${item.timeLabel ? `<span>Times: ${escapeHtml(item.timeLabel)}</span>` : ""}
         ${item.location ? `<span>Location: ${escapeHtml(item.location)}</span>` : ""}
       </div>
@@ -5524,7 +5528,7 @@ function renderAdminErrorsCard(users) {
                     <p>${escapeHtml(issue.message)}</p>
                     <p>Raw code/value: ${escapeHtml(issue.rawValue || "Unknown")}</p>
                     ${issue.timeLabel ? `<p>Explicit roster time: ${escapeHtml(issue.timeLabel)}</p>` : ""}
-                    ${issue.suggestedTitle ? `<p>Suggested normalized result: ${escapeHtml(issue.suggestedTitle)}</p>` : `<p>Suggested normalized result: No normalized result</p>`}
+                    ${issue.suggestedTitle ? `<p>Suggested normalised result: ${escapeHtml(issue.suggestedTitle)}</p>` : `<p>Suggested normalised result: No normalised result</p>`}
                     <p>${escapeHtml(formatTimestamp(issue.lastSeenAt))}${issue.count > 1 ? ` · seen ${issue.count} times` : ""}</p>
                   </div>
                   <div class="account-actions">
@@ -6287,6 +6291,16 @@ function syncPreviewStyleControls(sourceSettings = settings) {
   settingsPanel?.querySelectorAll('[data-opacity-stepper="weekendShadeOpacity"] button').forEach((button) => {
     button.disabled = weekendDisabled;
   });
+}
+
+function updatePreviewDisplayExample(sourceSettings = settings) {
+  const title = document.querySelector("#settingsExampleTitle");
+  const raw = document.querySelector("#settingsExampleRaw");
+  const time = document.querySelector("#settingsExampleTime");
+  if (!title || !raw || !time) return;
+  title.classList.toggle("hidden", !sourceSettings.showNormalizedTitles && sourceSettings.showRawValues);
+  raw.classList.toggle("hidden", !sourceSettings.showRawValues);
+  time.classList.toggle("hidden", !sourceSettings.showTimes);
 }
 
 function defaultColourForField(field) {

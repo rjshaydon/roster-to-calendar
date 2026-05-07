@@ -195,9 +195,20 @@
 
               <fieldset class="settings-group preview-settings-redesign">
                 <legend>Preview</legend>
-                <label class="toggle preview-times-option"><input id="showTimes" type="checkbox" checked> Show times on events</label>
-                <label class="toggle preview-normalized-option"><input id="showNormalizedTitles" type="checkbox" checked> Show normalized titles</label>
-                <label class="toggle preview-raw-option"><input id="showRawValues" type="checkbox"> Show raw roster values</label>
+                <div class="preview-display-options">
+                  <div class="preview-display-toggles">
+                    <label class="toggle preview-times-option"><input id="showTimes" type="checkbox" checked> Show times on events</label>
+                    <label class="toggle preview-normalized-option"><input id="showNormalizedTitles" type="checkbox" checked> Show normalised titles</label>
+                    <label class="toggle preview-raw-option"><input id="showRawValues" type="checkbox"> Show raw roster values</label>
+                  </div>
+                  <div class="settings-event-example" aria-label="Preview display example">
+                    <button type="button" class="preview-chip preview-chip-day settings-example-chip" tabindex="-1">
+                      <strong id="settingsExampleTitle" class="preview-chip-title-full">Day shift</strong>
+                      <span id="settingsExampleRaw" class="preview-chip-raw hidden">Raw roster value: D 0730-1700 MMC</span>
+                      <span id="settingsExampleTime" class="preview-chip-meta">07:30 am - 5:00 pm</span>
+                    </button>
+                  </div>
+                </div>
                 <input id="currentDayFillStyle" type="hidden" value="solid">
                 <input id="currentDayGradientDirection" type="hidden" value="">
                 <div class="preview-style-options preview-style-layout">
@@ -491,7 +502,7 @@
         <button type="button" class="modal-close" id="reviewCloseButton" aria-label="Close event details">×</button>
         <div class="section-head">
           <h3 id="reviewModalTitle">Event Details</h3>
-          <p>Adjust the normalized result for this roster item before export.</p>
+          <p>Adjust the normalised result for this roster item before export.</p>
         </div>
         <div id="reviewModalBody" class="modal-body"></div>
       </section>

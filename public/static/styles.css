@@ -750,6 +750,32 @@ input[type="color"] {
   background: #f6f8fb;
 }
 
+.preview-display-options {
+  display: grid;
+  grid-template-columns: minmax(260px, 420px) minmax(220px, 360px);
+  gap: 18px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.preview-display-toggles {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-event-example {
+  display: grid;
+  justify-items: start;
+  align-items: center;
+}
+
+.settings-example-chip {
+  inline-size: min(100%, 320px);
+  min-height: 72px;
+  cursor: default;
+  pointer-events: none;
+}
+
 .preview-style-layout {
   display: grid;
   grid-template-columns: minmax(420px, 520px) minmax(0, 1fr);
@@ -2745,6 +2771,7 @@ body[data-skin="console"] .panel {
 
   .preview-normalized-option,
   .preview-raw-option,
+  .settings-event-example,
   #settingsPanel .preview-style-options {
     display: none !important;
   }
