@@ -1693,6 +1693,9 @@ function renderDoctorState() {
       const option = document.createElement("option");
       option.value = doctor.key;
       option.textContent = doctor.displayName;
+      option.dataset.displayName = doctor.displayName;
+      option.dataset.sourceTypes = Array.isArray(doctor.sourceTypes) ? doctor.sourceTypes.join(",") : "";
+      option.dataset.accountEmail = doctor.accountEmail || "";
       doctorSelect.append(option);
     }
     const preferredDoctorKey = activeDoctorProfile?.doctorKey || preferredDoctorKeyForCurrentAccount();
@@ -3959,7 +3962,7 @@ function canUseDoctorPicker() {
 }
 
 function canUseCreatorDoctorSwitcher() {
-  return canUseDoctorPicker() || Boolean(adminViewingEmail && isCreatorAuthenticated());
+  return Boolean(isCreatorAuthenticated() && (canUseDoctorPicker() || adminViewingEmail || activeDoctorProfile));
 }
 
 function showSwitchOverlay(title, message) {
@@ -3979,7 +3982,7 @@ function hideSwitchOverlay() {
 async function switchDoctorSelection(selectedKey, options = {}) {
   const resetRange = options.resetRange !== false;
   doctorSelect.value = selectedKey;
-  const selectedOption = doctorOptions.find((doctor) => doctor.key === selectedKey) || null;
+  const selectedOption = selectedDoctorOptionForKey(selectedKey);
   const canSwitchAsCreator = canUseCreatorDoctorSwitcher();
   if (canSwitchAsCreator && cloudAvailable && !serverUsers.length) {
     await loadServerUsers();
@@ -4025,6 +4028,24 @@ async function switchDoctorSelection(selectedKey, options = {}) {
   saveCurrentSessionState();
   syncActionState();
   if (selectedDoctor()) await updatePreview({ resetRange });
+}
+
+function selectedDoctorOptionForKey(selectedKey) {
+  const normalizedKey = normalizeRosterName(selectedKey);
+  const localOption = doctorOptions.find((doctor) => doctor.key === normalizedKey) || null;
+  if (localOption) return localOption;
+  const selectedDomOption = doctorSelect.selectedOptions?.[0] || null;
+  if (!selectedDomOption || normalizeRosterName(selectedDomOption.value) !== normalizedKey) return null;
+  const sourceTypes = String(selectedDomOption.dataset.sourceTypes || "")
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+  return {
+    key: normalizedKey,
+    displayName: selectedDomOption.dataset.displayName || selectedDomOption.textContent.trim(),
+    sourceTypes,
+    accountEmail: normalizeEmail(selectedDomOption.dataset.accountEmail || ""),
+  };
 }
 
 function activeWorkspaceOwnerKey() {
