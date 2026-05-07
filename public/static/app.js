@@ -4984,7 +4984,7 @@ function renderExportModal() {
             <input type="checkbox" data-export-all-future ${pendingExportRange.allFuture ? "checked" : ""}>
             All future events
           </label>
-          <div class="settings-subgrid">
+          <div class="settings-subgrid${pendingExportRange.allFuture ? "" : " event-date-grid"}">
             <label class="field">
               <span>Start date</span>
               <input type="date" value="${escapeHtml(pendingExportRange.startDate)}" data-export-range-input="start">

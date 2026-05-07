@@ -2886,16 +2886,34 @@ body[data-skin="console"] .panel {
 
   .insights-controls .field,
   .settings-group .field,
-  .review-card .field {
+  .review-card .field,
+  .custom-event-form .field,
+  .export-range-panel .field {
     min-width: 0;
   }
 
   .insights-controls input[type="date"],
   .settings-group input[type="date"],
-  .review-card input[type="date"] {
+  .review-card input[type="date"],
+  .custom-event-form input[type="date"],
+  .export-range-panel input[type="date"] {
+    appearance: none;
+    -webkit-appearance: none;
+    display: block;
+    inline-size: 100%;
     min-width: 0;
+    width: 100%;
     max-width: 100%;
     padding-inline: 10px;
+  }
+
+  .insights-controls input[type="date"]::-webkit-date-and-time-value,
+  .settings-group input[type="date"]::-webkit-date-and-time-value,
+  .review-card input[type="date"]::-webkit-date-and-time-value,
+  .custom-event-form input[type="date"]::-webkit-date-and-time-value,
+  .export-range-panel input[type="date"]::-webkit-date-and-time-value {
+    min-width: 0;
+    text-align: center;
   }
 
   .event-time-grid,
