@@ -247,6 +247,7 @@ let authUserEmail = currentUserEmail;
 let authUserPassword = currentUserPassword;
 let adminViewingEmail = "";
 let activeDoctorProfile = null;
+let activeCalendarContext = initialCalendarContext();
 let cloudAvailable = false;
 let cloudSaveTimer = 0;
 let pendingCloudSaveSnapshot = null;
@@ -3962,7 +3963,28 @@ function canUseDoctorPicker() {
 }
 
 function canUseCreatorDoctorSwitcher() {
-  return Boolean(isCreatorAuthenticated() && (canUseDoctorPicker() || adminViewingEmail || activeDoctorProfile));
+  return Boolean(isCreatorAuthenticated() && (canUseDoctorPicker() || adminViewingEmail || activeCalendarMode() === "doctor-profile"));
+}
+
+function initialCalendarContext() {
+  const email = normalizeEmail(currentUserEmail);
+  return {
+    mode: email === OWNER_EMAIL ? "creator-account" : "claimed-account",
+    email,
+    profile: null,
+  };
+}
+
+function setActiveCalendarContext(mode, details = {}) {
+  activeCalendarContext = {
+    mode,
+    email: normalizeEmail(details.email || currentUserEmail),
+    profile: details.profile || null,
+  };
+}
+
+function activeCalendarMode() {
+  return activeCalendarContext?.mode || (activeDoctorProfile ? "doctor-profile" : currentUserEmail === OWNER_EMAIL && !adminViewingEmail ? "creator-account" : "claimed-account");
 }
 
 function showSwitchOverlay(title, message) {
@@ -3998,7 +4020,9 @@ async function switchDoctorSelection(selectedKey, options = {}) {
   }
   if (canSwitchAsCreator && selectedOption && selectedKey !== OWNER_DOCTOR_KEY) {
     try {
-      if (claimedEmail && claimedEmail !== currentUserEmail) {
+      if (selectedOption.targetMode === "claimed-account" && claimedEmail && claimedEmail !== currentUserEmail) {
+        await enterUserAccount(claimedEmail);
+      } else if (selectedOption.targetMode === "claimed-account" && claimedEmail && claimedEmail === currentUserEmail && adminViewingEmail) {
         await enterUserAccount(claimedEmail);
       } else {
         await enterDoctorProfileView(selectedOption);
@@ -4033,28 +4057,49 @@ async function switchDoctorSelection(selectedKey, options = {}) {
 function selectedDoctorOptionForKey(selectedKey) {
   const normalizedKey = normalizeRosterName(selectedKey);
   const localOption = doctorOptions.find((doctor) => doctor.key === normalizedKey) || null;
-  if (localOption) return localOption;
   const selectedDomOption = doctorSelect.selectedOptions?.[0] || null;
-  if (!selectedDomOption || normalizeRosterName(selectedDomOption.value) !== normalizedKey) return null;
+  if (localOption && (localOption.sourceTypes?.length || selectedDomOption?.dataset.sourceTypes)) {
+    const accountEmail = normalizeEmail(localOption.accountEmail || selectedDomOption?.dataset.accountEmail || "");
+    return {
+      ...localOption,
+      accountEmail,
+      targetMode: accountEmail ? "claimed-account" : "doctor-profile",
+      sourceTypes: localOption.sourceTypes?.length
+        ? localOption.sourceTypes
+        : String(selectedDomOption?.dataset.sourceTypes || "").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean),
+    };
+  }
+  if (!selectedDomOption || normalizeRosterName(selectedDomOption.value) !== normalizedKey) {
+    if (!localOption) return null;
+    const accountEmail = normalizeEmail(localOption.accountEmail || "");
+    return {
+      ...localOption,
+      accountEmail,
+      targetMode: accountEmail ? "claimed-account" : "doctor-profile",
+    };
+  }
   const sourceTypes = String(selectedDomOption.dataset.sourceTypes || "")
     .split(",")
     .map((item) => item.trim().toLowerCase())
     .filter(Boolean);
+  const accountEmail = normalizeEmail(selectedDomOption.dataset.accountEmail || "");
   return {
     key: normalizedKey,
     displayName: selectedDomOption.dataset.displayName || selectedDomOption.textContent.trim(),
     sourceTypes,
-    accountEmail: normalizeEmail(selectedDomOption.dataset.accountEmail || ""),
+    accountEmail,
+    targetMode: accountEmail ? "claimed-account" : "doctor-profile",
   };
 }
 
 function activeWorkspaceOwnerKey() {
-  if (activeDoctorProfile?.id) return `profile:${activeDoctorProfile.id}`;
+  if (activeCalendarMode() === "doctor-profile" && activeDoctorProfile?.id) return `profile:${activeDoctorProfile.id}`;
   return normalizeEmail(currentUserEmail);
 }
 
 function activeCalendarOwnerId() {
-  return activeDoctorProfile?.ownerId || normalizeEmail(currentUserEmail);
+  if (activeCalendarMode() === "doctor-profile") return activeDoctorProfile?.ownerId || "";
+  return normalizeEmail(currentUserEmail);
 }
 
 function buildDoctorProfileId(doctor) {
@@ -5124,7 +5169,7 @@ function setPendingExportMode(mode) {
 
 function renderExportModal() {
   const doctor = selectedDoctor();
-  const canSubscribe = Boolean(currentSubscription?.enabled && !activeDoctorProfile);
+  const canSubscribe = Boolean(currentSubscription?.enabled && activeCalendarMode() !== "doctor-profile");
   exportModalBody.innerHTML = `
     <article class="review-card">
       <div class="review-top">
@@ -5203,7 +5248,7 @@ async function handleExportAction(action) {
       setStatus("Calendar file ready.");
       return;
     }
-    if (!currentSubscription?.enabled || activeDoctorProfile) {
+    if (!currentSubscription?.enabled || activeCalendarMode() === "doctor-profile") {
       setStatus("Subscription links are not available for this calendar.", true);
       return;
     }
@@ -6237,7 +6282,7 @@ function deleteLocalAccountData(email) {
 
 async function enterUserAccount(email) {
   const targetEmail = normalizeEmail(email);
-  if (!targetEmail || !isOwnerAccount()) return;
+  if (!targetEmail || (!isOwnerAccount() && !isCreatorAuthenticated())) return;
   const creatorEmail = authUserEmail || currentUserEmail;
   const creatorPassword = authUserPassword || currentUserPassword;
   if (normalizeEmail(creatorEmail) !== OWNER_EMAIL || !creatorPassword) {
@@ -6258,6 +6303,7 @@ async function enterUserAccount(email) {
   authUserPassword = creatorPassword;
   adminViewingEmail = targetEmail;
   activeDoctorProfile = null;
+  setActiveCalendarContext(targetEmail === OWNER_EMAIL ? "creator-account" : "claimed-account", { email: targetEmail });
   currentUserEmail = targetEmail;
   currentUserPassword = creatorPassword;
   currentUserRole = targetEmail === OWNER_EMAIL ? "creator" : "user";
@@ -6297,6 +6343,7 @@ async function enterDoctorProfileView(doctor) {
     displayName: doctor.displayName,
     sourceTypes: Array.isArray(doctor.sourceTypes) ? [...doctor.sourceTypes] : [],
   };
+  setActiveCalendarContext("doctor-profile", { email: currentUserEmail, profile: activeDoctorProfile });
   clearPreviewData();
   restoredSessionState = null;
   await restoreDoctorProfileState();
@@ -6313,6 +6360,7 @@ async function exitDoctorProfileView() {
     // Keep local state even if cloud save fails.
   }
   activeDoctorProfile = null;
+  setActiveCalendarContext("creator-account", { email: currentUserEmail });
   clearPreviewData();
   restoredSessionState = loadCurrentSessionState();
   currentSnapshot = sanitizeWorkspaceSnapshot(loadCurrentWorkspace()?.snapshot);
@@ -6332,6 +6380,7 @@ async function returnToCreatorAccount() {
   currentUserEmail = creatorEmail;
   currentUserPassword = creatorPassword;
   currentUserRole = "creator";
+  setActiveCalendarContext("creator-account", { email: currentUserEmail });
   localStorage.setItem(CURRENT_EMAIL_KEY, currentUserEmail);
   sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
   forceConsoleSkin();
@@ -6889,6 +6938,7 @@ async function logoutCurrentUser() {
   adminViewingEmail = "";
   currentUserRole = "user";
   cloudAvailable = false;
+  setActiveCalendarContext("claimed-account", { email: "" });
   currentRosterClaims = [];
   latestNameMatches = [];
   availableRosterDoctors = [];
@@ -6934,6 +6984,7 @@ async function loginWithEmail(email, password, options = {}) {
     authUserPassword = currentUserPassword;
     adminViewingEmail = "";
     currentUserRole = currentUserEmail === OWNER_EMAIL ? "creator" : "user";
+    setActiveCalendarContext(currentUserRole === "creator" ? "creator-account" : "claimed-account", { email: currentUserEmail });
     localStorage.setItem(CURRENT_EMAIL_KEY, currentUserEmail);
     sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
     if (options.stayLoggedIn) {
@@ -6968,6 +7019,11 @@ async function restoreCloudState(options = {}) {
   if (!currentUserEmail) return;
   try {
     const adminTargetEmail = normalizeEmail(options.adminTargetEmail);
+    setActiveCalendarContext(adminTargetEmail
+      ? "claimed-account"
+      : currentUserEmail === OWNER_EMAIL
+        ? "creator-account"
+        : "claimed-account", { email: adminTargetEmail || currentUserEmail });
     const requestEmail = adminTargetEmail ? authUserEmail : currentUserEmail;
     const requestPassword = adminTargetEmail ? authUserPassword : currentUserPassword;
     const response = await fetch("/api/state", {
@@ -7036,11 +7092,35 @@ async function restoreDoctorProfileState() {
   currentSnapshotBuiltAt = String(data.snapshotBuiltAt || "");
   selectedFiles = importRefsToClientEntries(currentSnapshot?.fileRefs || []);
   restoredSessionState = currentSnapshot?.session || data.profile?.state?.session || loadCurrentSessionState() || null;
+  if (!selectedFiles.length) {
+    await loadDoctorProfileImportsIntoWorkspace();
+  }
   saveWorkspaceSnapshotForEmail(activeWorkspaceOwnerKey(), {
     fileRefs: selectedFiles.map(importRefForWorkspace),
     session: restoredSessionState || {},
     snapshot: currentSnapshot,
   });
+}
+
+async function loadDoctorProfileImportsIntoWorkspace() {
+  if (!activeDoctorProfile || !cloudAvailable) return;
+  const response = await fetch("/api/state", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      action: "loadDoctorProfileImports",
+      email: authUserEmail || currentUserEmail,
+      password: authUserPassword || currentUserPassword,
+      profileId: activeDoctorProfile.id,
+      doctorKey: activeDoctorProfile.doctorKey,
+      displayName: activeDoctorProfile.displayName,
+      sourceTypes: activeDoctorProfile.sourceTypes,
+    }),
+  });
+  const data = await readJsonResponse(response, "Could not load roster files.");
+  const imports = await deserializeCloudImports(data.imports || []);
+  selectedFiles = imports;
+  await replaceStoredImports(imports);
 }
 
 async function applyCloudStateData(data) {
@@ -7123,7 +7203,7 @@ async function flushCloudStateSave() {
 }
 
 function snapshotCloudSavePayload() {
-  if (activeDoctorProfile) {
+  if (activeCalendarMode() === "doctor-profile") {
     return {
       accountEmail: currentUserEmail,
       requestEmail: authUserEmail || currentUserEmail,
@@ -7269,7 +7349,7 @@ function buildActiveSessionState() {
 }
 
 async function buildSubscriptionFeeds(session = buildActiveSessionState()) {
-  if (activeDoctorProfile) return {};
+  if (activeCalendarMode() === "doctor-profile") return {};
   const doctor = selectedDoctor();
   if (!doctor) return {};
   const fullEvents = latestPreview?.events?.length
@@ -7852,7 +7932,8 @@ async function ensureSelectedFilesLoaded() {
   if (cloudAvailable) {
     const requestEmail = adminViewingEmail ? authUserEmail || currentUserEmail : currentUserEmail;
     const requestPassword = adminViewingEmail ? authUserPassword || currentUserPassword : currentUserPassword;
-    const action = activeDoctorProfile ? "loadDoctorProfileImports" : "loadImports";
+    const isDoctorProfileContext = activeCalendarMode() === "doctor-profile";
+    const action = isDoctorProfileContext ? "loadDoctorProfileImports" : "loadImports";
     const response = await fetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -7860,7 +7941,7 @@ async function ensureSelectedFilesLoaded() {
         action,
         email: requestEmail,
         password: requestPassword,
-        targetEmail: activeDoctorProfile ? "" : (adminViewingEmail ? currentUserEmail : ""),
+        targetEmail: isDoctorProfileContext ? "" : (adminViewingEmail ? currentUserEmail : ""),
         profileId: activeDoctorProfile?.id || "",
         doctorKey: activeDoctorProfile?.doctorKey || "",
         displayName: activeDoctorProfile?.displayName || "",
