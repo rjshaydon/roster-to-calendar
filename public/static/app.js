@@ -6,6 +6,8 @@ import {
   doctorOptions as rosterDoctorOptions,
   exportIcs,
   parseUploadForm,
+  parserRuleDefaults,
+  parserRuleSeniorities,
   previewSummary,
   serializeConflict,
   serializeEvent,
@@ -43,11 +45,14 @@ const parserRuleIssueId = document.querySelector("#parserRuleIssueId");
 const parserRuleSource = document.querySelector("#parserRuleSource");
 const parserRuleRawValue = document.querySelector("#parserRuleRawValue");
 const parserRuleOriginalCode = document.querySelector("#parserRuleOriginalCode");
+const parserRuleOriginalSeniority = document.querySelector("#parserRuleOriginalSeniority");
 const parserRuleCode = document.querySelector("#parserRuleCode");
+const parserRuleSeniority = document.querySelector("#parserRuleSeniority");
 const parserRuleBase = document.querySelector("#parserRuleBase");
 const parserRulePeriod = document.querySelector("#parserRulePeriod");
 const parserRuleSuffix = document.querySelector("#parserRuleSuffix");
 const parserRuleAllDay = document.querySelector("#parserRuleAllDay");
+const parserRuleIncludeAsShift = document.querySelector("#parserRuleIncludeAsShift");
 const parserRuleTimeFields = document.querySelector("#parserRuleTimeFields");
 const parserRuleStartTime = document.querySelector("#parserRuleStartTime");
 const parserRuleEndTime = document.querySelector("#parserRuleEndTime");
@@ -467,6 +472,7 @@ accountsBody.addEventListener("click", (event) => {
   if (editShiftCodeButton) {
     openParserRuleModalFromRule(
       editShiftCodeButton.dataset.editParserSource || "",
+      editShiftCodeButton.dataset.editParserSeniority || "",
       editShiftCodeButton.dataset.editParserRule || "",
     );
     return;
@@ -931,6 +937,13 @@ insightsModalBody.addEventListener("click", async (event) => {
   await openDoctorProfileFromInsight(profileButton.dataset.insightsDoctorKey);
 });
 issuesList.addEventListener("click", (event) => {
+  const quickRuleButton = event.target.closest("[data-preview-add-shift-code]");
+  if (quickRuleButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    openParserRuleModalFromPreviewIssue(quickRuleButton.dataset.previewAddShiftCode || "");
+    return;
+  }
   const card = event.target.closest("[data-review-id]");
   if (!card) return;
   openReviewModal(card.dataset.reviewId);
@@ -1821,7 +1834,7 @@ function buildClientPreviewData(baseData) {
 }
 
 function isSuppressedIssue(issue) {
-  const fingerprint = issueFingerprint(issue?.source, issue?.rawValue);
+  const fingerprint = issueFingerprint(issue?.source, issue?.rawValue, issue?.seniority);
   if (!fingerprint) return false;
   return dismissedIssueFingerprints.has(fingerprint) || ignoredIssueFingerprints.has(fingerprint);
 }
@@ -2014,6 +2027,7 @@ function renderIssues(items) {
       <div>
         <strong>${formatIssueHeading(item)}</strong>
         <p>${escapeHtml(item.message)}</p>
+        ${isCreatorAuthenticated() && item.status === "unknown" ? `<p><button type="button" class="button button-secondary" data-preview-add-shift-code="${escapeHtml(item.id)}">Edit shift-code rule</button></p>` : ""}
       </div>
       <span>${escapeHtml(item.rawValue)}</span>
     </article>
@@ -2031,10 +2045,11 @@ async function reportPreviewIssues(items) {
       source: sanitizeIssueSource(item.source),
       date: String(item.startDay || "").trim(),
       rawValue: String(item.rawValue || "").trim(),
+      seniority: sanitizeRuleSeniority(item.seniority || reviewItem?.seniority),
       message: String(item.message || "").trim(),
       timeLabel: String(item.timeLabel || reviewItem?.timeLabel || "").trim(),
       suggestedTitle: String(item.suggestedTitle || reviewItem?.suggestedTitle || "").trim(),
-      fingerprint: issueFingerprint(item.source, item.rawValue),
+      fingerprint: issueFingerprint(item.source, item.rawValue, item.seniority || reviewItem?.seniority),
     };
     if (!issue.fingerprint) continue;
     const fingerprint = `${activeCalendarOwnerId()}::${issue.fingerprint}`;
@@ -5354,41 +5369,108 @@ function renderParserRulesCard() {
   const groups = [
     { source: "MMC", rules: sanitizeParserExtensionRuleList(parserExtensions?.mmc, "MMC") },
     { source: "DDH", rules: sanitizeParserExtensionRuleList(parserExtensions?.ddh, "DDH") },
-  ].filter((group) => group.rules.length);
+  ];
+  const unknownIssues = collectUnknownShiftIssues();
   return `
     <div class="issues-list">
+      ${unknownIssues.length ? `
+        <article class="review-card">
+          <div class="review-top">
+            <div>
+              <strong>Unrecognised shift codes</strong>
+              <span>${unknownIssues.length} code${unknownIssues.length === 1 ? "" : "s"} needing translation</span>
+            </div>
+          </div>
+          <div class="issues-list">
+            ${unknownIssues.map((item) => `
+              <article class="issue-card">
+                <div>
+                  <strong>${escapeHtml(item.source)} · ${escapeHtml(item.seniority)} · ${escapeHtml(item.code)}</strong>
+                  <p>${escapeHtml(item.message || "Shift code not recognised.")}</p>
+                  <p>${escapeHtml(item.sample)}${item.count > 1 ? ` · seen ${item.count} times` : ""}</p>
+                </div>
+                <div class="account-actions">
+                  <button type="button" class="button button-secondary" data-add-shift-code="${escapeHtml(item.email)}" data-error-id="${escapeHtml(item.id)}">Add shift code</button>
+                </div>
+              </article>
+            `).join("")}
+          </div>
+        </article>
+      ` : ""}
       <article class="issue-card">
         <div>
           <strong>Shift code rules</strong>
-          <p>${groups.length ? "Review and edit global exact-match parser rules." : "No custom shift-code rules saved yet."}</p>
+          <p>Review and edit parser rules by hospital and seniority.</p>
         </div>
         ${groups.map((group) => `
-          <div class="issues-list">
-            <article class="issue-card">
-              <div>
-                <strong>${group.source}</strong>
-                <p>${group.rules.length} saved rule${group.rules.length === 1 ? "" : "s"}</p>
-              </div>
-              <div class="issues-list">
-                ${group.rules.map((rule) => `
-                  <article class="issue-card">
-                    <div>
-                      <strong>${escapeHtml(rule.code)}</strong>
-                      <p>${escapeHtml(parserRulePreviewTitle(rule))}</p>
-                      <p>${escapeHtml(parserRulePreviewMeta(rule))}</p>
+          <details class="issue-card">
+            <summary><strong>${group.source}</strong> · ${group.rules.length} rule${group.rules.length === 1 ? "" : "s"}</summary>
+            <div class="issues-list">
+              ${parserRuleSeniorities().map((seniority) => {
+                const rules = group.rules.filter((rule) => rule.seniority === seniority);
+                if (!rules.length) return "";
+                return `
+                  <details class="issue-card">
+                    <summary><strong>${escapeHtml(seniority)}</strong> · ${rules.length} rule${rules.length === 1 ? "" : "s"}</summary>
+                    <div class="issues-list">
+                      ${rules.map((rule) => `
+                        <article class="issue-card">
+                          <div>
+                            <strong>${escapeHtml(rule.code)}${rule.includeAsShift === false ? " · Hidden" : ""}</strong>
+                            <p>${escapeHtml(parserRulePreviewTitle(rule))}</p>
+                            <p>${escapeHtml(parserRulePreviewMeta(rule))}</p>
+                          </div>
+                          <div class="account-actions">
+                            <button type="button" class="button button-secondary" data-edit-parser-rule="${escapeHtml(rule.code)}" data-edit-parser-source="${escapeHtml(rule.source)}" data-edit-parser-seniority="${escapeHtml(rule.seniority)}">Edit</button>
+                          </div>
+                        </article>
+                      `).join("")}
                     </div>
-                    <div class="account-actions">
-                      <button type="button" class="button button-secondary" data-edit-parser-rule="${escapeHtml(rule.code)}" data-edit-parser-source="${escapeHtml(rule.source)}">Edit</button>
-                    </div>
-                  </article>
-                `).join("")}
-              </div>
-            </article>
-          </div>
+                  </details>
+                `;
+              }).join("")}
+            </div>
+          </details>
         `).join("")}
       </article>
     </div>
   `;
+}
+
+function collectUnknownShiftIssues() {
+  const byKey = new Map();
+  for (const user of serverUsers.map(normalizeServerUser)) {
+    for (const issue of user.adminIssues || []) {
+      const source = sanitizeIssueSource(issue.source);
+      const seniority = sanitizeRuleSeniority(issue.seniority);
+      const code = parserRuleCodeForIssue(issue);
+      if (!source || !code) continue;
+      const key = `${source}|${seniority}|${code}`;
+      const existing = byKey.get(key);
+      if (existing) {
+        existing.count += issue.count || 1;
+        if ((issue.lastSeenAt || "") > (existing.lastSeenAt || "")) existing.lastSeenAt = issue.lastSeenAt || "";
+        continue;
+      }
+      byKey.set(key, {
+        source,
+        seniority,
+        code,
+        id: issue.id || issue.fingerprint || "",
+        email: user.email,
+        message: issue.message || "",
+        sample: `${user.realName || user.email} · ${formatDate(issue.startDay || issue.date || "")} · ${issue.rawValue || code}`,
+        count: issue.count || 1,
+        lastSeenAt: issue.lastSeenAt || "",
+      });
+    }
+  }
+  return [...byKey.values()].sort((left, right) => {
+    if (left.source !== right.source) return left.source.localeCompare(right.source);
+    const rank = parserRuleSeniorities().indexOf(left.seniority) - parserRuleSeniorities().indexOf(right.seniority);
+    if (rank) return rank;
+    return left.code.localeCompare(right.code);
+  });
 }
 
 function renderLinkedRosterNames(claims) {
@@ -5574,11 +5656,16 @@ function findAdminIssue(email, errorId = "") {
 }
 
 function findParserExtensionRule(source, code) {
+  return findParserExtensionRuleForSeniority(source, "", code);
+}
+
+function findParserExtensionRuleForSeniority(source, seniority, code) {
   const sourceKey = sanitizeIssueSource(source).toLowerCase();
+  const normalizedSeniority = sanitizeRuleSeniority(seniority);
   const normalizedCode = String(code || "").trim().toUpperCase();
   if (!sourceKey || !normalizedCode) return null;
   return sanitizeParserExtensionRuleList(parserExtensions?.[sourceKey], sourceKey.toUpperCase())
-    .find((rule) => rule.code === normalizedCode) || null;
+    .find((rule) => rule.code === normalizedCode && (!seniority || rule.seniority === normalizedSeniority)) || null;
 }
 
 function parserRulePreviewTitle(rule, sourceSettings = settings) {
@@ -5594,6 +5681,7 @@ function parserRulePreviewTitle(rule, sourceSettings = settings) {
 
 function parserRulePreviewMeta(rule) {
   if (!rule) return "";
+  if (rule.includeAsShift === false) return "Hidden from calendar";
   const meta = [];
   meta.push(rule.allDay ? "All day" : summarizeEventTimes(`2000-01-01T${rule.startTime}:00`, `2000-01-01T${rule.endTime}:00`, false));
   if (rule.location) meta.push(rule.location);
@@ -5605,6 +5693,7 @@ function renderParserRulePreview() {
   const source = sanitizeIssueSource(parserRuleSource?.value);
   const rule = sanitizeParserExtensionRule({
     source,
+    seniority: parserRuleSeniority?.value,
     code: parserRuleCode?.value,
     base: parserRuleBase?.value,
     period: parserRulePeriod?.value,
@@ -5613,6 +5702,7 @@ function renderParserRulePreview() {
     startTime: parseEditorTimeInput(parserRuleStartTime?.value || ""),
     endTime: parseEditorTimeInput(parserRuleEndTime?.value || ""),
     location: parserRuleLocation?.value,
+    includeAsShift: parserRuleIncludeAsShift?.checked,
   }, source);
   if (!rule) {
     parserRulePreview.innerHTML = `
@@ -5641,6 +5731,8 @@ function openParserRuleModal(email, errorId = "") {
   parserRuleIssueId.value = issue.fingerprint || issue.id || "";
   parserRuleSource.value = issue.source || "";
   parserRuleRawValue.value = issue.rawValue || "";
+  populateParserRuleSeniorityOptions(issue.seniority);
+  parserRuleOriginalSeniority.value = sanitizeRuleSeniority(issue.seniority);
   parserRuleOriginalCode.value = parserRuleCodeForIssue(issue);
   parserRuleCode.value = parserRuleCodeForIssue(issue);
   parserRuleBase.value = parserRuleBaseForIssue(issue);
@@ -5650,6 +5742,7 @@ function openParserRuleModal(email, errorId = "") {
   parserRuleStartTime.value = parserRuleAllDay.checked ? "" : timeRangeParts(issue.timeLabel).start;
   parserRuleEndTime.value = parserRuleAllDay.checked ? "" : timeRangeParts(issue.timeLabel).end;
   parserRuleLocation.value = defaultLocationForIssueSource(issue.source);
+  parserRuleIncludeAsShift.checked = true;
   parserRuleTimeFields.classList.toggle("hidden", parserRuleAllDay.checked);
   parserRuleModalTitle.textContent = "Add shift code";
   renderParserRulePreview();
@@ -5657,8 +5750,37 @@ function openParserRuleModal(email, errorId = "") {
   parserRuleModal.setAttribute("aria-hidden", "false");
 }
 
-function openParserRuleModalFromRule(source, code) {
-  const rule = findParserExtensionRule(source, code);
+function openParserRuleModalFromPreviewIssue(issueId = "") {
+  const issue = (latestPreview?.issues || []).find((item) => item.id === issueId) || null;
+  if (!issue) {
+    setStatus("Could not find that parser warning.", true);
+    return;
+  }
+  const reviewItem = reviewIndex.get(issue.id);
+  parserRuleIssueId.value = issueFingerprint(issue.source, issue.rawValue, issue.seniority || reviewItem?.seniority);
+  parserRuleSource.value = issue.source || "";
+  parserRuleRawValue.value = issue.rawValue || "";
+  populateParserRuleSeniorityOptions(issue.seniority || reviewItem?.seniority);
+  parserRuleOriginalSeniority.value = sanitizeRuleSeniority(issue.seniority || reviewItem?.seniority);
+  parserRuleOriginalCode.value = parserRuleCodeForIssue(issue);
+  parserRuleCode.value = parserRuleCodeForIssue(issue);
+  parserRuleBase.value = parserRuleBaseForIssue(issue);
+  parserRulePeriod.value = parserRulePeriodForIssue(issue);
+  parserRuleSuffix.value = parserRuleSuffixForIssue(issue);
+  parserRuleAllDay.checked = !issue.timeLabel || issue.timeLabel === "All day";
+  parserRuleStartTime.value = parserRuleAllDay.checked ? "" : timeRangeParts(issue.timeLabel).start;
+  parserRuleEndTime.value = parserRuleAllDay.checked ? "" : timeRangeParts(issue.timeLabel).end;
+  parserRuleLocation.value = defaultLocationForIssueSource(issue.source);
+  parserRuleIncludeAsShift.checked = true;
+  parserRuleTimeFields.classList.toggle("hidden", parserRuleAllDay.checked);
+  parserRuleModalTitle.textContent = "Add shift code";
+  renderParserRulePreview();
+  parserRuleModal.classList.remove("hidden");
+  parserRuleModal.setAttribute("aria-hidden", "false");
+}
+
+function openParserRuleModalFromRule(source, seniority, code) {
+  const rule = findParserExtensionRuleForSeniority(source, seniority, code);
   if (!rule) {
     setStatus("Could not find that saved shift-code rule.", true);
     return;
@@ -5667,11 +5789,15 @@ function openParserRuleModalFromRule(source, code) {
   parserRuleSource.value = rule.source;
   parserRuleRawValue.value = rule.code;
   parserRuleOriginalCode.value = rule.code;
+  populateParserRuleSeniorityOptions(rule.seniority);
+  parserRuleOriginalSeniority.value = rule.seniority;
   parserRuleCode.value = rule.code;
+  parserRuleSeniority.value = rule.seniority;
   parserRuleBase.value = rule.base;
   parserRulePeriod.value = rule.period;
   parserRuleSuffix.value = rule.suffix;
   parserRuleAllDay.checked = rule.allDay;
+  parserRuleIncludeAsShift.checked = rule.includeAsShift !== false;
   parserRuleStartTime.value = rule.allDay ? "" : rule.startTime;
   parserRuleEndTime.value = rule.allDay ? "" : rule.endTime;
   parserRuleLocation.value = rule.location || "";
@@ -5697,6 +5823,15 @@ function closeParserRuleModal() {
   }
 }
 
+function populateParserRuleSeniorityOptions(selected = "") {
+  if (!parserRuleSeniority) return;
+  const normalizedSelected = sanitizeRuleSeniority(selected);
+  parserRuleSeniority.innerHTML = parserRuleSeniorities()
+    .map((seniority) => `<option value="${escapeHtml(seniority)}" ${seniority === normalizedSelected ? "selected" : ""}>${escapeHtml(seniority)}</option>`)
+    .join("");
+  parserRuleSeniority.value = normalizedSelected;
+}
+
 async function saveParserRuleFromModal() {
   if (!isCreatorAuthenticated()) {
     setStatus("Creator authentication is required to add shift codes.", true);
@@ -5705,7 +5840,9 @@ async function saveParserRuleFromModal() {
   const source = sanitizeIssueSource(parserRuleSource.value);
   const rawValue = String(parserRuleRawValue.value || "").trim();
   const previousCode = String(parserRuleOriginalCode?.value || "").trim().toUpperCase();
+  const previousSeniority = sanitizeRuleSeniority(parserRuleOriginalSeniority?.value);
   const code = String(parserRuleCode.value || "").trim().toUpperCase();
+  const seniority = sanitizeRuleSeniority(parserRuleSeniority?.value);
   const base = String(parserRuleBase.value || "").trim();
   const period = String(parserRulePeriod.value || "").trim().toUpperCase();
   const suffix = String(parserRuleSuffix.value || "").trim();
@@ -5713,9 +5850,10 @@ async function saveParserRuleFromModal() {
   const startTime = parseEditorTimeInput(parserRuleStartTime.value);
   const endTime = parseEditorTimeInput(parserRuleEndTime.value);
   const location = String(parserRuleLocation.value || "").trim();
+  const includeAsShift = parserRuleIncludeAsShift?.checked !== false;
   const fingerprint = sanitizeIssueFingerprint(parserRuleIssueId.value);
-  if (!source || !code || !base) {
-    setStatus("Source, shift code, and base title are required.", true);
+  if (!source || !seniority || !code || !base) {
+    setStatus("Source, seniority, shift code, and base title are required.", true);
     return;
   }
   if (!allDay && (!startTime || !endTime)) {
@@ -5734,8 +5872,10 @@ async function saveParserRuleFromModal() {
         source,
         rawValue,
         previousCode,
+        previousSeniority,
         rule: {
           source,
+          seniority,
           code,
           kind: "shift",
           base,
@@ -5745,6 +5885,7 @@ async function saveParserRuleFromModal() {
           startTime,
           endTime,
           location,
+          includeAsShift,
         },
       }),
     });
@@ -5759,7 +5900,7 @@ async function saveParserRuleFromModal() {
       parsedRosterSources = null;
       await analyzeFiles({ preserveVisiblePreview: true });
     }
-    setStatus("Shift code added to the parser.");
+    setStatus(includeAsShift ? "Shift code added to the parser." : "Shift code hidden from calendar.");
   } catch (error) {
     setStatus(error.message || "Could not save the shift-code rule.", true);
   }
@@ -6218,10 +6359,30 @@ function applyIssueConfig(value) {
 
 function sanitizeParserExtensions(value) {
   const input = value && typeof value === "object" ? value : {};
+  const defaults = parserRuleDefaults();
   return {
-    mmc: sanitizeParserExtensionRuleList(input.mmc, "MMC"),
-    ddh: sanitizeParserExtensionRuleList(input.ddh, "DDH"),
+    mmc: mergeParserRuleLists(defaults.mmc, sanitizeParserExtensionRuleList(input.mmc, "MMC")),
+    ddh: mergeParserRuleLists(defaults.ddh, sanitizeParserExtensionRuleList(input.ddh, "DDH")),
   };
+}
+
+function mergeParserRuleLists(defaults, overrides) {
+  const byKey = new Map();
+  for (const rule of defaults) byKey.set(parserRuleStorageKey(rule), rule);
+  for (const rule of overrides) byKey.set(parserRuleStorageKey(rule), rule);
+  return [...byKey.values()].sort(compareParserRules);
+}
+
+function parserRuleStorageKey(rule) {
+  return `${rule.source}|${rule.seniority}|${rule.code}`;
+}
+
+function compareParserRules(left, right) {
+  const leftRank = parserRuleSeniorities().indexOf(left.seniority);
+  const rightRank = parserRuleSeniorities().indexOf(right.seniority);
+  const rankDelta = (leftRank < 0 ? 99 : leftRank) - (rightRank < 0 ? 99 : rightRank);
+  if (rankDelta) return rankDelta;
+  return left.code.localeCompare(right.code);
 }
 
 function sanitizeParserExtensionRuleList(items, source) {
@@ -6234,6 +6395,7 @@ function sanitizeParserExtensionRuleList(items, source) {
 function sanitizeParserExtensionRule(item, forcedSource = "") {
   if (!item || typeof item !== "object") return null;
   const source = sanitizeIssueSource(forcedSource || item.source);
+  const seniority = sanitizeRuleSeniority(item.seniority);
   const code = String(item.code || "").trim().toUpperCase();
   const base = String(item.base || "").trim();
   const period = String(item.period || "").trim().toUpperCase();
@@ -6246,6 +6408,7 @@ function sanitizeParserExtensionRule(item, forcedSource = "") {
   if (!allDay && (!isClockString(startTime) || !isClockString(endTime))) return null;
   return {
     source,
+    seniority,
     code,
     kind: String(item.kind || "shift").trim().toLowerCase(),
     base,
@@ -6255,7 +6418,29 @@ function sanitizeParserExtensionRule(item, forcedSource = "") {
     startTime: allDay ? "" : startTime,
     endTime: allDay ? "" : endTime,
     location,
+    includeAsShift: item.includeAsShift !== false,
   };
+}
+
+function sanitizeRuleSeniority(value) {
+  const text = String(value || "").trim();
+  const upper = text.toUpperCase();
+  const aliases = new Map([
+    ["SR", "Senior Registrar"],
+    ["SENIOR REG", "Senior Registrar"],
+    ["SENIOR REGISTRAR", "Senior Registrar"],
+    ["IR", "Transitional/Intermediate Registrar"],
+    ["INTERMEDIATE REG", "Transitional/Intermediate Registrar"],
+    ["INTERMEDIATE REGISTRAR", "Transitional/Intermediate Registrar"],
+    ["TRANSITIONAL REGISTRAR", "Transitional/Intermediate Registrar"],
+    ["JR", "Junior Registrar"],
+    ["JUNIOR REG", "Junior Registrar"],
+    ["JUNIOR REGISTRAR", "Junior Registrar"],
+    ["I", "Intern"],
+    ["INTERN", "Intern"],
+  ]);
+  if (aliases.has(upper)) return aliases.get(upper);
+  return parserRuleSeniorities().find((item) => item.toUpperCase() === upper) || "Unknown";
 }
 
 function sanitizeIssueFingerprintList(items) {
@@ -6275,10 +6460,11 @@ function sanitizeIssueSource(value) {
   return source === "MMC" || source === "DDH" ? source : "";
 }
 
-function issueFingerprint(source, rawValue) {
+function issueFingerprint(source, rawValue, seniority = "") {
   const normalizedSource = sanitizeIssueSource(source);
+  const normalizedSeniority = seniority ? sanitizeRuleSeniority(seniority) : "";
   const normalizedRaw = String(rawValue || "").trim();
-  return normalizedSource && normalizedRaw ? `${normalizedSource}::${normalizedRaw}` : "";
+  return normalizedSource && normalizedRaw ? `${normalizedSource}::${normalizedSeniority ? `${normalizedSeniority}::` : ""}${normalizedRaw}` : "";
 }
 
 function sanitizeWorkspaceSnapshot(value) {

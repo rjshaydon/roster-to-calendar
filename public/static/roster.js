@@ -5,6 +5,19 @@ const TIMEZONE = "Australia/Melbourne";
 
 const MMC_LOCATION = "MMC Car Park, Tarella Road, Clayton VIC 3168, Australia";
 const DDH_LOCATION = "DDH Car Park, 135 David St, Dandenong VIC 3175, Australia";
+const UNKNOWN_SENIORITY = "Unknown";
+const SENIORITY_LABELS = [
+  "SMS",
+  "CMO",
+  "Senior Registrar",
+  "Transitional/Intermediate Registrar",
+  "Junior Registrar",
+  "HMO",
+  "ENP",
+  "AMP",
+  "Intern",
+  UNKNOWN_SENIORITY,
+];
 
 const MMC_TEAM_MAP = {
   G: "Green",
@@ -159,6 +172,14 @@ export function defaultSettings() {
 
 export function setParserExtensions(value) {
   MANUAL_PARSER_RULES = sanitizeParserExtensions(value);
+}
+
+export function parserRuleDefaults() {
+  return sanitizeParserExtensions(buildDefaultParserRules());
+}
+
+export function parserRuleSeniorities() {
+  return [...SENIORITY_LABELS];
 }
 
 export async function parseUploadForm(request) {
@@ -348,6 +369,7 @@ export function serializeEvent(event) {
   return {
     id: event.id,
     source: event.source,
+    seniority: event.seniority || "",
     title: event.title,
     allDay: event.allDay,
     start: event.start,
@@ -367,6 +389,7 @@ export function serializeReviewItem(item) {
   return {
     id: item.id,
     source: item.source,
+    seniority: item.seniority || "",
     startDay: item.startDay,
     endDay: item.endDay,
     rawValue: item.rawValue,
@@ -1029,7 +1052,15 @@ function parseMmcRecords(workbook, doctorKey) {
     }
     if (!weekDates.length) continue;
 
-    for (const { row, name } of iterateMmcRosterPeople(sheet)) {
+    let currentSeniority = UNKNOWN_SENIORITY;
+    const roleMap = mmcSeniorityMap();
+    const range = XLSX.utils.decode_range(sheet["!ref"] || "A1:A1");
+    for (let row = 1; row <= range.e.r + 1; row += 1) {
+      const marker = cleanText(getCellValue(sheet, row, 3)).replace(/\s+/g, " ").trim().toUpperCase();
+      if (isMmcStopSection(marker)) break;
+      if (roleMap.has(marker)) currentSeniority = roleMap.get(marker);
+      const name = cleanMmcRosterName(getCellValue(sheet, row, 4));
+      if (!looksLikePersonName(name)) continue;
       if (normalizeName(name) !== doctorKey) continue;
       const weekValues = [];
       for (let col = 6; col <= 12; col += 1) {
@@ -1037,11 +1068,11 @@ function parseMmcRecords(workbook, doctorKey) {
       }
       const weeklyLeave = firstWeeklyLeave(weekValues);
       if (weeklyLeave) {
-        records.push(createWeeklyLeaveRecord("MMC", weekDates[0], weeklyLeave));
+        records.push(createWeeklyLeaveRecord("MMC", weekDates[0], weeklyLeave, currentSeniority));
       } else {
         weekValues.forEach((raw, index) => {
           if (!raw) return;
-          const record = parseMmcEntry(weekDates[index], raw);
+          const record = parseMmcEntry(weekDates[index], raw, currentSeniority);
           if (record) records.push(record);
         });
       }
@@ -1057,18 +1088,18 @@ function parseDdhRecords(workbook, doctorKey) {
     if (normalizeName(entry.rawName) !== doctorKey) continue;
     const weeklyLeave = firstWeeklyLeave(entry.labels);
     if (weeklyLeave) {
-      records.push(createWeeklyLeaveRecord("DDH", entry.weekDates[0], weeklyLeave));
+      records.push(createWeeklyLeaveRecord("DDH", entry.weekDates[0], weeklyLeave, entry.seniority));
       continue;
     }
     entry.weekDates.forEach((day, index) => {
-      const record = parseDdhEntry(day, entry.labels[index], entry.times[index] || "");
+      const record = parseDdhEntry(day, entry.labels[index], entry.times[index] || "", entry.seniority);
       if (record) records.push(record);
     });
   }
   return records;
 }
 
-function parseMmcEntry(day, raw) {
+function parseMmcEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
   const upper = raw.toUpperCase();
   if (shouldIgnoreMmc(raw)) return null;
   if (upper === "PHNW") {
@@ -1076,6 +1107,7 @@ function parseMmcEntry(day, raw) {
       kind: "public_holiday",
       titleParts: { base: "PHNW", period: "", suffix: "" },
       location: "",
+      seniority,
     });
   }
   if (upper.startsWith("S/L")) {
@@ -1083,14 +1115,18 @@ function parseMmcEntry(day, raw) {
       kind: "sick_leave",
       titleParts: { base: normalizeSickLeaveLabel(raw), period: "", suffix: "" },
       location: "",
+      seniority,
     });
   }
 
   const explicit = extractTimePrefix(raw);
   const label = explicit ? explicit.label : raw.trim();
-  const normalized = findManualParserRule("MMC", label, explicit) || normalizeMmcLabel(label) || normalizeGenericMmcTimedLabel(label, explicit);
+  const normalized = findManualParserRule("MMC", seniority, label, explicit) || normalizeMmcLabel(label) || normalizeGenericMmcTimedLabel(label, explicit);
   if (!normalized) {
-    return createUnknownRecord("MMC", day, raw, "MMC shift code not recognised.");
+    return createUnknownRecord("MMC", day, raw, "MMC shift code not recognised.", seniority);
+  }
+  if (normalized.includeAsShift === false) {
+    return createHiddenRecord("MMC", day, raw, normalized, seniority);
   }
 
   if (explicit) {
@@ -1102,6 +1138,7 @@ function parseMmcEntry(day, raw) {
       location: normalized.location || "",
       ambiguous: normalized.ambiguous,
       warning: normalized.warning,
+      seniority,
     });
   }
   if (normalized.allDay) {
@@ -1109,6 +1146,7 @@ function parseMmcEntry(day, raw) {
       kind: normalized.kind,
       titleParts: normalized.titleParts,
       location: normalized.location || "",
+      seniority,
     });
   }
   return createTimedRecord("MMC", day, raw, {
@@ -1117,13 +1155,14 @@ function parseMmcEntry(day, raw) {
     startHm: normalized.defaultTimes[0],
     endHm: normalized.defaultTimes[1],
     location: normalized.location || "",
+    seniority,
   });
 }
 
-function parseDdhEntry(day, label, timeText) {
+function parseDdhEntry(day, label, timeText, seniority = UNKNOWN_SENIORITY) {
   if (!label) return null;
   if (parseDdhTimeRow(label)) {
-    return timeText ? parseDdhEntry(day, timeText, label) : null;
+    return timeText ? parseDdhEntry(day, timeText, label, seniority) : null;
   }
   if (parseDdhTimeRow(timeText) && shouldIgnoreDdh(label)) {
     return null;
@@ -1135,6 +1174,7 @@ function parseDdhEntry(day, label, timeText) {
       kind: "public_holiday",
       titleParts: { base: "PHNW", period: "", suffix: "" },
       location: "",
+      seniority,
     });
   }
   if (upper.startsWith("S/L")) {
@@ -1142,6 +1182,7 @@ function parseDdhEntry(day, label, timeText) {
       kind: "sick_leave",
       titleParts: { base: normalizeSickLeaveLabel(label), period: "", suffix: "" },
       location: "",
+      seniority,
     });
   }
   if (upper === "AL" || upper === "A/L") {
@@ -1149,14 +1190,18 @@ function parseDdhEntry(day, label, timeText) {
       kind: "annual_leave",
       titleParts: { base: "Annual Leave", period: "", suffix: "" },
       location: "",
+      seniority,
     });
   }
   if (shouldIgnoreDdh(label) || shouldIgnoreCommon(label)) return null;
 
   const mapped = DDH_LABEL_MAP[label] || label;
-  const normalized = findManualParserRule("DDH", mapped) || normalizeDdhLabel(mapped) || normalizeGenericDdhLabel(mapped);
+  const normalized = findManualParserRule("DDH", seniority, mapped) || normalizeDdhLabel(mapped) || normalizeGenericDdhLabel(mapped);
   if (!normalized) {
-    return createUnknownRecord("DDH", day, label, "DDH shift label not recognised.");
+    return createUnknownRecord("DDH", day, label, "DDH shift label not recognised.", seniority);
+  }
+  if (normalized.includeAsShift === false) {
+    return createHiddenRecord("DDH", day, label, normalized, seniority);
   }
   const location = normalizeDdhLocation(mapped, normalized);
 
@@ -1168,6 +1213,7 @@ function parseDdhEntry(day, label, timeText) {
       startHm: parsedTime[0],
       endHm: parsedTime[1],
       location,
+      seniority,
     });
   }
 
@@ -1175,6 +1221,7 @@ function parseDdhEntry(day, label, timeText) {
     kind: normalized.kind,
     titleParts: normalized.titleParts,
     location,
+    seniority,
   });
 }
 
@@ -1248,10 +1295,28 @@ function normalizeGenericMmcTimedLabel(label, explicit) {
 
 function sanitizeParserExtensions(value) {
   const input = value && typeof value === "object" ? value : {};
+  const defaults = buildDefaultParserRules();
   return {
-    mmc: sanitizeParserExtensionRuleList(input.mmc, "MMC"),
-    ddh: sanitizeParserExtensionRuleList(input.ddh, "DDH"),
+    mmc: mergeParserRuleLists(defaults.mmc, sanitizeParserExtensionRuleList(input.mmc, "MMC")),
+    ddh: mergeParserRuleLists(defaults.ddh, sanitizeParserExtensionRuleList(input.ddh, "DDH")),
   };
+}
+
+function mergeParserRuleLists(defaults, overrides) {
+  const byKey = new Map();
+  for (const rule of defaults) byKey.set(parserRuleKey(rule), rule);
+  for (const rule of overrides) byKey.set(parserRuleKey(rule), rule);
+  return [...byKey.values()].sort(compareParserRules);
+}
+
+function parserRuleKey(rule) {
+  return `${rule.source}|${rule.seniority}|${rule.code}`;
+}
+
+function compareParserRules(left, right) {
+  const rank = seniorityRank(left.seniority) - seniorityRank(right.seniority);
+  if (rank) return rank;
+  return left.code.localeCompare(right.code);
 }
 
 function sanitizeParserExtensionRuleList(items, source) {
@@ -1264,6 +1329,7 @@ function sanitizeParserExtensionRuleList(items, source) {
 function sanitizeParserExtensionRule(item, forcedSource = "") {
   if (!item || typeof item !== "object") return null;
   const source = sanitizeParserRuleSource(forcedSource || item.source);
+  const seniority = sanitizeRuleSeniority(item.seniority);
   const code = String(item.code || item.rawCode || "").trim().toUpperCase();
   const kind = String(item.kind || "shift").trim().toLowerCase();
   const base = String(item.base || item.titleParts?.base || "").trim();
@@ -1277,6 +1343,7 @@ function sanitizeParserExtensionRule(item, forcedSource = "") {
   if (!allDay && (!isClockString(startTime) || !isClockString(endTime))) return null;
   return {
     source,
+    seniority,
     code,
     kind,
     base,
@@ -1286,7 +1353,34 @@ function sanitizeParserExtensionRule(item, forcedSource = "") {
     allDay,
     startTime: allDay ? "" : startTime,
     endTime: allDay ? "" : endTime,
+    includeAsShift: item.includeAsShift !== false,
   };
+}
+
+function sanitizeRuleSeniority(value) {
+  const text = String(value || "").trim();
+  const upper = text.toUpperCase();
+  const aliases = new Map([
+    ["SR", "Senior Registrar"],
+    ["SENIOR REG", "Senior Registrar"],
+    ["SENIOR REGISTRAR", "Senior Registrar"],
+    ["IR", "Transitional/Intermediate Registrar"],
+    ["INTERMEDIATE REG", "Transitional/Intermediate Registrar"],
+    ["INTERMEDIATE REGISTRAR", "Transitional/Intermediate Registrar"],
+    ["TRANSITIONAL REGISTRAR", "Transitional/Intermediate Registrar"],
+    ["JR", "Junior Registrar"],
+    ["JUNIOR REG", "Junior Registrar"],
+    ["JUNIOR REGISTRAR", "Junior Registrar"],
+    ["I", "Intern"],
+    ["INTERN", "Intern"],
+  ]);
+  if (aliases.has(upper)) return aliases.get(upper);
+  return SENIORITY_LABELS.find((item) => item.toUpperCase() === upper) || UNKNOWN_SENIORITY;
+}
+
+function seniorityRank(value) {
+  const index = SENIORITY_LABELS.indexOf(sanitizeRuleSeniority(value));
+  return index >= 0 ? index : SENIORITY_LABELS.length;
 }
 
 function sanitizeParserRuleSource(value) {
@@ -1294,12 +1388,14 @@ function sanitizeParserRuleSource(value) {
   return source === "MMC" || source === "DDH" ? source : "";
 }
 
-function findManualParserRule(source, label, explicit = null) {
+function findManualParserRule(source, seniority, label, explicit = null) {
   const normalizedSource = sanitizeParserRuleSource(source);
+  const normalizedSeniority = sanitizeRuleSeniority(seniority);
   const code = normalizeParserRuleCode(normalizedSource, label);
   if (!normalizedSource || !code) return null;
   const rules = normalizedSource === "MMC" ? MANUAL_PARSER_RULES.mmc : MANUAL_PARSER_RULES.ddh;
-  const rule = rules.find((item) => item.code === code);
+  const rule = rules.find((item) => item.code === code && item.seniority === normalizedSeniority)
+    || rules.find((item) => item.code === code && item.seniority === UNKNOWN_SENIORITY);
   return rule ? parserRuleToNormalized(rule, explicit) : null;
 }
 
@@ -1325,6 +1421,7 @@ function parserRuleToNormalized(rule, explicit = null) {
       kind: rule.kind || "shift",
       titleParts,
       location,
+      includeAsShift: rule.includeAsShift !== false,
       allDay: true,
       defaultTimes: null,
     };
@@ -1336,6 +1433,7 @@ function parserRuleToNormalized(rule, explicit = null) {
     kind: rule.kind || "shift",
     titleParts,
     location,
+    includeAsShift: rule.includeAsShift !== false,
     allDay: false,
     defaultTimes: [startHm, endHm],
     ambiguous: false,
@@ -1347,6 +1445,73 @@ function parseRuleTime(value) {
   const match = String(value || "").match(/^(\d{2}):(\d{2})$/);
   if (!match) return null;
   return [Number(match[1]), Number(match[2])];
+}
+
+function buildDefaultParserRules() {
+  const rules = { mmc: [], ddh: [] };
+  const activeSeniorities = SENIORITY_LABELS.filter((item) => item !== UNKNOWN_SENIORITY);
+  const add = (bucket, source, code, seniority, base, period, suffix, allDay, startTime, endTime, location = source === "MMC" ? MMC_LOCATION : DDH_LOCATION) => {
+    bucket.push({
+      source,
+      seniority,
+      code,
+      kind: "shift",
+      base,
+      period,
+      suffix,
+      allDay,
+      startTime: allDay ? "" : startTime,
+      endTime: allDay ? "" : endTime,
+      location: allDay && base === "CS" ? "" : location,
+      includeAsShift: true,
+    });
+  };
+  for (const seniority of activeSeniorities) {
+    add(rules.mmc, "MMC", "CS", seniority, "CS", "", "", true, "", "", "");
+    add(rules.mmc, "MMC", "CSO", seniority, "CSO", "", "", true, "", "", MMC_LOCATION);
+    for (const periodPrefix of ["A", "P"]) {
+      for (const [teamCode, teamName] of Object.entries(MMC_TEAM_MAP)) {
+        for (const suffixCode of ["C", "R"]) {
+          add(
+            rules.mmc,
+            "MMC",
+            `${periodPrefix}${teamCode}${suffixCode}`,
+            seniority,
+            teamName,
+            periodPrefix === "A" ? "AM" : "PM",
+            suffixCode === "R" ? "Float" : "",
+            false,
+            periodPrefix === "A" ? "08:00" : "14:30",
+            periodPrefix === "A" ? "17:30" : "00:00",
+          );
+        }
+      }
+      for (const suffixCode of ["C", "R"]) {
+        add(
+          rules.mmc,
+          "MMC",
+          `${periodPrefix}SS${suffixCode}`,
+          seniority,
+          "SSU",
+          periodPrefix === "A" ? "AM" : "PM",
+          suffixCode === "R" ? "Float" : "",
+          false,
+          periodPrefix === "A" ? "07:30" : "14:30",
+          periodPrefix === "A" ? "17:30" : "00:00",
+        );
+      }
+    }
+    add(rules.ddh, "DDH", "CS", seniority, "CS", "", "", true, "", "", "");
+    add(rules.ddh, "DDH", "CS ONSITE", seniority, "CS onsite", "", "", true, "", "", DDH_LOCATION);
+    add(rules.ddh, "DDH", "SSU", seniority, "SSU", "", "", true, "", "", DDH_LOCATION);
+    add(rules.ddh, "DDH", "ORANGE AM", seniority, "Orange", "AM", "", true, "", "", DDH_LOCATION);
+    add(rules.ddh, "DDH", "ORANGE PM", seniority, "Orange", "PM", "", true, "", "", DDH_LOCATION);
+    add(rules.ddh, "DDH", "SILVER AM", seniority, "Silver", "AM", "", true, "", "", DDH_LOCATION);
+    add(rules.ddh, "DDH", "FAST PM", seniority, "FAST", "PM", "", true, "", "", DDH_LOCATION);
+    add(rules.ddh, "DDH", "AVAO AM", seniority, "AVAO", "AM", "", true, "", "", DDH_LOCATION);
+    add(rules.ddh, "DDH", "AVAO PM", seniority, "AVAO", "PM", "", true, "", "", DDH_LOCATION);
+  }
+  return rules;
 }
 
 
@@ -1470,8 +1635,19 @@ function iterateDdhWeekEntries(workbook) {
     }
     if (!weekDates.length) continue;
 
+    let currentSeniority = UNKNOWN_SENIORITY;
+    const sectionMap = ddhSeniorityMap();
     for (let row = dateRow + 1; row < nextDateRow; row += 1) {
       const rawName = cleanText(getCellValue(sheet, row, 1));
+      const upperName = rawName.replace(/\s+/g, " ").trim().toUpperCase();
+      if (sectionMap.has(upperName)) {
+        currentSeniority = sectionMap.get(upperName);
+        continue;
+      }
+      if (/^ED HMO/i.test(upperName) || /^HMO\b/i.test(upperName)) {
+        currentSeniority = "HMO";
+        continue;
+      }
       if (!rawName || !looksLikePersonName(rawName) || isDdhSectionMarker(rawName)) continue;
       const labels = [];
       for (let col = 2; col <= 8; col += 1) labels.push(cleanText(getCellValue(sheet, row, col)));
@@ -1480,11 +1656,50 @@ function iterateDdhWeekEntries(workbook) {
       for (let col = 2; col <= 8; col += 1) {
         times.push(supplementaryRow ? cleanText(getCellValue(sheet, supplementaryRow, col)) : "");
       }
-      entries.push({ rawName, weekDates, labels, times });
+      entries.push({ rawName, weekDates, labels, times, seniority: currentSeniority });
       if (supplementaryRow) row = supplementaryRow;
     }
   }
   return entries;
+}
+
+function mmcSeniorityMap() {
+  return new Map([
+    ["SMS", "SMS"],
+    ["GERIATRICIAN", "SMS"],
+    ["CMO", "CMO"],
+    ["SENIOR REG", "Senior Registrar"],
+    ["INTERMEDIATE REG", "Transitional/Intermediate Registrar"],
+    ["JUNIOR REG", "Junior Registrar"],
+    ["HMO", "HMO"],
+    ["HMO MUST BE 111", "HMO"],
+    ["HMO - MUST BE 111", "HMO"],
+    ["ENP", "ENP"],
+    ["AMP", "AMP"],
+    ["EMERGENCY NURSE PRACTITIONER", "ENP"],
+    ["AMBULATORY MUSCULOSKELETAL PHYSIOTHERAPIST", "AMP"],
+    ["INTERN", "Intern"],
+  ]);
+}
+
+function ddhSeniorityMap() {
+  return new Map([
+    ["SENIOR MEDICAL STAFF", "SMS"],
+    ["SENIOR REGISTRARS", "Senior Registrar"],
+    ["REGISTRAR", "Senior Registrar"],
+    ["REGISTRARS", "Senior Registrar"],
+    ["CMO'S", "CMO"],
+    ["CMOS", "CMO"],
+    ["JUNIOR REGISTRARS", "Junior Registrar"],
+    ["INTERNS", "Intern"],
+    ["ENP", "ENP"],
+    ["NURSE PRACTITIONERS", "ENP"],
+    ["NURSE PRAC. CANDIDATES", "ENP"],
+    ["AMP", "AMP"],
+    ["AMP'S", "AMP"],
+    ["PHYSIOTHERAPIST", "AMP"],
+    ["PHYSIOTHERAPISTS", "AMP"],
+  ]);
 }
 
 function createTimedRecord(source, day, rawValue, details) {
@@ -1495,6 +1710,7 @@ function createTimedRecord(source, day, rawValue, details) {
   return {
     id: hashString(`${source}|${day}|${rawValue}|${normalizedTitle}|${start}|${end}`),
     source,
+    seniority: sanitizeRuleSeniority(details.seniority),
     kind: details.kind,
     rawValue,
     startDay: day,
@@ -1517,6 +1733,7 @@ function createAllDayRecord(source, day, rawValue, details) {
   return {
     id: hashString(`${source}|${day}|${rawValue}|${normalizedTitle}|all-day`),
     source,
+    seniority: sanitizeRuleSeniority(details.seniority),
     kind: details.kind,
     rawValue,
     startDay: day,
@@ -1534,13 +1751,14 @@ function createAllDayRecord(source, day, rawValue, details) {
   };
 }
 
-function createWeeklyLeaveRecord(source, monday, rawValue) {
+function createWeeklyLeaveRecord(source, monday, rawValue, seniority = UNKNOWN_SENIORITY) {
   const label = toTitleCase(rawValue);
   const kind = rawValue.toUpperCase() === "CONFERENCE LEAVE" ? "conference_leave" : "annual_leave";
   const normalizedTitle = label;
   return {
     id: hashString(`${source}|${monday}|${rawValue}|week-leave`),
     source,
+    seniority: sanitizeRuleSeniority(seniority),
     kind,
     rawValue,
     startDay: monday,
@@ -1558,10 +1776,11 @@ function createWeeklyLeaveRecord(source, monday, rawValue) {
   };
 }
 
-function createUnknownRecord(source, day, rawValue, warning) {
+function createUnknownRecord(source, day, rawValue, warning, seniority = UNKNOWN_SENIORITY) {
   return {
     id: hashString(`${source}|${day}|${rawValue}|unknown`),
     source,
+    seniority: sanitizeRuleSeniority(seniority),
     kind: "unknown",
     rawValue,
     startDay: day,
@@ -1579,6 +1798,30 @@ function createUnknownRecord(source, day, rawValue, warning) {
   };
 }
 
+function createHiddenRecord(source, day, rawValue, normalized, seniority = UNKNOWN_SENIORITY) {
+  const titleParts = normalized.titleParts || { base: rawValue, period: "", suffix: "" };
+  const normalizedTitle = formatTitle(source, titleParts, { ...DEFAULT_SETTINGS, showTimes: false, showRawValues: false }, normalized.kind || "shift");
+  return {
+    id: hashString(`${source}|${day}|${rawValue}|${normalizedTitle}|hidden`),
+    source,
+    seniority: sanitizeRuleSeniority(seniority),
+    kind: "hidden_shift",
+    rawValue,
+    startDay: day,
+    endDay: addDays(day, 1),
+    allDay: true,
+    start: day,
+    end: addDays(day, 1),
+    location: "",
+    titleParts,
+    normalizedTitle,
+    status: "ok",
+    warnings: [],
+    exportable: false,
+    includeByDefault: false,
+  };
+}
+
 function applySettings(records, settings, overrides) {
   const scopedRecords = records.filter((record) => matchesHospitalFilter(record, settings) && matchesDateFilter(record, settings));
   const events = [];
@@ -1586,6 +1829,7 @@ function applySettings(records, settings, overrides) {
   const issues = [];
 
   for (const record of scopedRecords) {
+    if (record.kind === "hidden_shift") continue;
     const override = overrides[record.id] || {};
     const defaultInclude = record.includeByDefault && isKindEnabled(record.kind, settings);
     const include = typeof override.include === "boolean" ? override.include : defaultInclude;
@@ -1598,6 +1842,7 @@ function applySettings(records, settings, overrides) {
     reviewItems.push({
       id: record.id,
       source: record.source,
+      seniority: record.seniority || UNKNOWN_SENIORITY,
       startDay: record.startDay,
       endDay: record.endDay,
       rawValue: record.rawValue,
@@ -1617,6 +1862,7 @@ function applySettings(records, settings, overrides) {
       issues.push({
         id: record.id,
         source: record.source,
+        seniority: record.seniority || UNKNOWN_SENIORITY,
         startDay: record.startDay,
         rawValue: record.rawValue,
         status: record.status,
@@ -1631,6 +1877,7 @@ function applySettings(records, settings, overrides) {
     events.push({
       id: record.id,
       source: record.source,
+      seniority: record.seniority || UNKNOWN_SENIORITY,
       title: finalTitle,
       allDay: record.allDay,
       start: record.start,

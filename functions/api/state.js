@@ -169,6 +169,7 @@ export async function onRequestPost(context) {
         id: String(body?.errorId || "").trim(),
         message: body?.message,
         source: body?.issue?.source,
+        seniority: body?.issue?.seniority,
         date: body?.issue?.date || body?.issue?.startDay,
         rawValue: body?.issue?.rawValue,
         timeLabel: body?.issue?.timeLabel,
@@ -248,12 +249,13 @@ export async function onRequestPost(context) {
         return Response.json({ error: "A valid shift-code rule is required." }, { status: 400 });
       }
       const previousCode = String(body?.previousCode || "").trim().toUpperCase();
+      const previousSeniority = sanitizeRuleSeniority(body?.previousSeniority || rule.seniority);
       let parserExtensions = await loadParserExtensionRules(context.env.ROSTER_STORE);
-      if (previousCode && previousCode !== rule.code) {
+      if (previousCode && (previousCode !== rule.code || previousSeniority !== rule.seniority)) {
         const sourceKey = rule.source.toLowerCase();
         parserExtensions = {
           ...parserExtensions,
-          [sourceKey]: (parserExtensions[sourceKey] || []).filter((item) => item.code !== previousCode),
+          [sourceKey]: (parserExtensions[sourceKey] || []).filter((item) => item.code !== previousCode || item.seniority !== previousSeniority),
         };
       }
       parserExtensions = upsertParserExtensionRule(parserExtensions, rule);
@@ -1451,11 +1453,12 @@ function sanitizeAdminIssues(value) {
       id: String(item?.id || "").trim(),
       message: String(item?.message || "").trim(),
       source: sanitizeIssueSource(item?.source),
+      seniority: sanitizeRuleSeniority(item?.seniority),
       date: String(item?.date || item?.startDay || "").trim(),
       rawValue: String(item?.rawValue || "").trim(),
       timeLabel: String(item?.timeLabel || "").trim(),
       suggestedTitle: String(item?.suggestedTitle || "").trim(),
-      fingerprint: sanitizeIssueFingerprint(item?.fingerprint || issueFingerprint(item?.source, item?.rawValue)),
+      fingerprint: sanitizeIssueFingerprint(item?.fingerprint || issueFingerprint(item?.source, item?.rawValue, item?.seniority)),
       firstSeenAt: String(item?.firstSeenAt || ""),
       lastSeenAt: String(item?.lastSeenAt || ""),
       count: Number(item?.count || 1),
@@ -1477,6 +1480,7 @@ function mergeAdminIssues(existing, incoming) {
       match.count = Math.max(match.count, item.count || 1);
       match.message = item.message || match.message;
       match.source = item.source || match.source;
+      match.seniority = item.seniority || match.seniority;
       match.date = item.date || match.date;
       match.rawValue = item.rawValue || match.rawValue;
       match.timeLabel = item.timeLabel || match.timeLabel;
@@ -1495,10 +1499,11 @@ function sanitizeIssueSource(value) {
   return source === "MMC" || source === "DDH" ? source : "";
 }
 
-function issueFingerprint(source, rawValue) {
+function issueFingerprint(source, rawValue, seniority = "") {
   const normalizedSource = sanitizeIssueSource(source);
+  const normalizedSeniority = seniority ? sanitizeRuleSeniority(seniority) : "";
   const normalizedRawValue = String(rawValue || "").trim();
-  return normalizedSource && normalizedRawValue ? `${normalizedSource}::${normalizedRawValue}` : "";
+  return normalizedSource && normalizedRawValue ? `${normalizedSource}::${normalizedSeniority ? `${normalizedSeniority}::` : ""}${normalizedRawValue}` : "";
 }
 
 function sanitizeIssueFingerprint(value) {
@@ -1570,6 +1575,7 @@ function sanitizeParserExtensionRuleList(items, source) {
 function sanitizeParserExtensionRule(item, forcedSource = "") {
   if (!item || typeof item !== "object") return null;
   const source = sanitizeIssueSource(forcedSource || item.source);
+  const seniority = sanitizeRuleSeniority(item.seniority);
   const code = String(item.code || item.rawCode || "").trim().toUpperCase();
   const kind = String(item.kind || "shift").trim().toLowerCase();
   const base = String(item.base || item.titleParts?.base || "").trim();
@@ -1583,6 +1589,7 @@ function sanitizeParserExtensionRule(item, forcedSource = "") {
   if (!allDay && (!isClockString(startTime) || !isClockString(endTime))) return null;
   return {
     source,
+    seniority,
     code,
     kind,
     base,
@@ -1592,7 +1599,30 @@ function sanitizeParserExtensionRule(item, forcedSource = "") {
     startTime: allDay ? "" : startTime,
     endTime: allDay ? "" : endTime,
     location,
+    includeAsShift: item.includeAsShift !== false,
   };
+}
+
+function sanitizeRuleSeniority(value) {
+  const text = String(value || "").trim();
+  const upper = text.toUpperCase();
+  const aliases = new Map([
+    ["SR", "Senior Registrar"],
+    ["SENIOR REG", "Senior Registrar"],
+    ["SENIOR REGISTRAR", "Senior Registrar"],
+    ["IR", "Transitional/Intermediate Registrar"],
+    ["INTERMEDIATE REG", "Transitional/Intermediate Registrar"],
+    ["INTERMEDIATE REGISTRAR", "Transitional/Intermediate Registrar"],
+    ["TRANSITIONAL REGISTRAR", "Transitional/Intermediate Registrar"],
+    ["JR", "Junior Registrar"],
+    ["JUNIOR REG", "Junior Registrar"],
+    ["JUNIOR REGISTRAR", "Junior Registrar"],
+    ["I", "Intern"],
+    ["INTERN", "Intern"],
+  ]);
+  if (aliases.has(upper)) return aliases.get(upper);
+  const labels = ["SMS", "CMO", "Senior Registrar", "Transitional/Intermediate Registrar", "Junior Registrar", "HMO", "ENP", "AMP", "Intern", "Unknown"];
+  return labels.find((item) => item.toUpperCase() === upper) || "Unknown";
 }
 
 async function loadParserExtensionRules(store) {
@@ -1612,7 +1642,7 @@ function upsertParserExtensionRule(existing, rule) {
   if (!nextRule) return sanitized;
   const key = nextRule.source.toLowerCase();
   const items = sanitized[key] || [];
-  const nextItems = items.filter((item) => item.code !== nextRule.code);
+  const nextItems = items.filter((item) => item.code !== nextRule.code || item.seniority !== nextRule.seniority);
   nextItems.push(nextRule);
   return {
     ...sanitized,

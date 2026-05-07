@@ -419,6 +419,7 @@
         <form id="parserRuleForm" class="review-card">
           <input id="parserRuleIssueId" type="hidden">
           <input id="parserRuleOriginalCode" type="hidden">
+          <input id="parserRuleOriginalSeniority" type="hidden">
           <div class="custom-event-grid">
             <label class="field">
               <span>Hospital</span>
@@ -435,6 +436,12 @@
               <input id="parserRuleCode" type="text" required>
             </label>
             <label class="field">
+              <span>Seniority</span>
+              <select id="parserRuleSeniority" required></select>
+            </label>
+          </div>
+          <div class="custom-event-grid">
+            <label class="field">
               <span>Base title</span>
               <input id="parserRuleBase" type="text" required>
             </label>
@@ -449,6 +456,7 @@
               <input id="parserRuleSuffix" type="text" placeholder="Float, SSU, etc.">
             </label>
           </div>
+          <label class="toggle"><input id="parserRuleIncludeAsShift" type="checkbox" checked> Include as calendar shift</label>
           <label class="toggle"><input id="parserRuleAllDay" type="checkbox"> All day</label>
           <div id="parserRuleTimeFields" class="custom-event-grid">
             <label class="field">
