@@ -547,6 +547,8 @@ input[type="password"],
 input[type="text"],
 input[type="time"] {
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
   padding: 12px 14px;
   border: 1px solid rgba(24, 35, 28, 0.15);
   border-radius: 14px;
@@ -2875,6 +2877,25 @@ body[data-skin="console"] .panel {
   .export-actions-grid {
     display: grid;
     grid-template-columns: 1fr;
+  }
+
+  .event-date-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .insights-controls .field,
+  .settings-group .field,
+  .review-card .field {
+    min-width: 0;
+  }
+
+  .insights-controls input[type="date"],
+  .settings-group input[type="date"],
+  .review-card input[type="date"] {
+    min-width: 0;
+    max-width: 100%;
+    padding-inline: 10px;
   }
 
   .event-time-grid,

@@ -4655,7 +4655,7 @@ function openReviewModal(id, selectedDay = "") {
           <input type="checkbox" ${includeValue ? "checked" : ""} ${item.exportable ? "" : "disabled"} data-override-include="${item.id}">
           Include in export
         </label>
-        <div class="custom-event-grid">
+        <div class="custom-event-grid event-date-grid">
           <label class="field">
             <span>Start date</span>
             <input type="date" value="${startDate}" data-override-start-date="${item.id}">
