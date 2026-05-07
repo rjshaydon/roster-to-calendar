@@ -784,6 +784,7 @@ reviewModalBody.addEventListener("click", (event) => {
   const dateButton = event.target.closest("[data-inline-who-on-date]");
   if (dateButton) {
     event.preventDefault();
+    closeReviewModal();
     void openWhoInsightForDate(dateButton.dataset.inlineWhoOnDate || "");
     return;
   }
@@ -918,10 +919,16 @@ insightsModalBody.addEventListener("click", async (event) => {
     await openWhoInsightForDate(dateButton.dataset.insightsWhoOnDate || "");
     return;
   }
-  const doctorButton = event.target.closest("[data-insights-doctor-key]");
-  if (!doctorButton) return;
+  const doctorButton = event.target.closest("[data-insights-when-doctor-key]");
+  if (doctorButton) {
+    event.preventDefault();
+    await openWhenInsightForDoctor(doctorButton.dataset.insightsWhenDoctorKey || "");
+    return;
+  }
+  const profileButton = event.target.closest("[data-insights-doctor-key]");
+  if (!profileButton) return;
   event.preventDefault();
-  await openDoctorProfileFromInsight(doctorButton.dataset.insightsDoctorKey);
+  await openDoctorProfileFromInsight(profileButton.dataset.insightsDoctorKey);
 });
 issuesList.addEventListener("click", (event) => {
   const card = event.target.closest("[data-review-id]");
@@ -1112,6 +1119,7 @@ customEventForm.addEventListener("click", (event) => {
   const dateButton = event.target.closest("[data-inline-who-on-date]");
   if (dateButton) {
     event.preventDefault();
+    closeCustomEventModal();
     void openWhoInsightForDate(dateButton.dataset.inlineWhoOnDate || "");
     return;
   }
@@ -2478,6 +2486,23 @@ async function openWhenInsight(termStart, termEnd) {
   await renderInsightsModal();
 }
 
+async function openWhenInsightForDoctor(doctorKey) {
+  const normalizedKey = normalizeRosterName(doctorKey);
+  if (!normalizedKey) return;
+  await ensureInsightRosterAnalysis();
+  const range = availableInsightDateRange();
+  const fromDate = formatDateKey(new Date());
+  insightsState = {
+    mode: "when",
+    termStart: range.start || fromDate,
+    termEnd: range.end || fromDate,
+    fromDate,
+    hospitalFilters: [],
+    comparisonDoctorKey: normalizedKey,
+  };
+  await renderInsightsModal();
+}
+
 function closeInsightsModal() {
   insightsState = null;
   insightsModal.classList.add("hidden");
@@ -2820,7 +2845,7 @@ function renderWhoGroups(groups) {
           <div class="who-team-list">
             ${team.items.map((item) => `
               <div class="who-team-person">
-                <button type="button" class="who-team-name" data-insights-doctor-key="${escapeHtml(item.doctorKey || "")}" title="Open ${escapeHtml(item.doctorName)}">${escapeHtml(item.doctorName)}${item.roleLabel ? ` (${escapeHtml(item.roleLabel)})` : ""}${item.roleNote ? ` (${escapeHtml(item.roleNote)})` : ""}</button>
+                <button type="button" class="who-team-name" data-insights-when-doctor-key="${escapeHtml(item.doctorKey || "")}" title="Show future shifts with ${escapeHtml(item.doctorName)}">${escapeHtml(item.doctorName)}${item.roleLabel ? ` (${escapeHtml(item.roleLabel)})` : ""}${item.roleNote ? ` (${escapeHtml(item.roleNote)})` : ""}</button>
                 ${item.specialTime ? `<span class="who-team-time">${escapeHtml(item.specialTime)}</span>` : ""}
               </div>
             `).join("")}
