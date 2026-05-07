@@ -1668,7 +1668,7 @@ function renderDoctorState() {
   doctorName.classList.add("hidden");
   doctorSelect.classList.add("hidden");
   doctorSection.classList.add("hidden");
-  controlBar.classList.toggle("hidden", !selectedFiles.length);
+  syncControlBarVisibility();
   closeSettingsPanel();
 
   if (!doctorOptions.length) {
@@ -3049,12 +3049,6 @@ async function openDoctorProfileFromInsight(doctorKey) {
     if (canUseDoctorPicker() && cloudAvailable && !serverUsers.length) {
       await loadServerUsers();
     }
-    const claimedEmail = normalizeEmail(localOption.accountEmail || claimedEmailForDoctorKey(normalizedKey, localOption.displayName || ""));
-    if (canUseDoctorPicker() && claimedEmail && claimedEmail !== currentUserEmail) {
-      closeInsightsModal();
-      await enterUserAccount(claimedEmail);
-      return;
-    }
     closeInsightsModal();
     if (canUseDoctorPicker()) {
       await enterDoctorProfileView(localOption);
@@ -3065,12 +3059,6 @@ async function openDoctorProfileFromInsight(doctorKey) {
       syncActionState();
       await updatePreview({ resetRange: true });
     }
-    return;
-  }
-  const claimedEmail = claimedEmailForDoctorKey(normalizedKey);
-  if (isOwnerAccount() && claimedEmail && claimedEmail !== currentUserEmail) {
-    closeInsightsModal();
-    await enterUserAccount(claimedEmail);
     return;
   }
   setStatus("That doctor is not directly viewable from this account yet.", true);
@@ -3365,10 +3353,16 @@ async function warmInsightData() {
 }
 
 function syncActionState() {
+  syncControlBarVisibility();
   const ready = Boolean(selectedDoctor());
   exportButton.disabled = !ready;
   mobileExportButton.disabled = !ready;
   syncMobileChrome();
+}
+
+function syncControlBarVisibility() {
+  const loggedIn = Boolean(currentUserEmail && currentUserPassword);
+  controlBar.classList.toggle("hidden", !loggedIn);
 }
 
 function createFormData(doctor = null) {
@@ -3989,7 +3983,7 @@ async function switchDoctorSelection(selectedKey, options = {}) {
   if (canUseDoctorPicker() && selectedOption && selectedKey !== OWNER_DOCTOR_KEY) {
     showSwitchOverlay(
       `Switching to ${selectedOption.displayName}…`,
-      claimedEmail ? "Opening the linked account and rebuilding the calendar." : "Opening the doctor profile and loading saved edits.",
+      claimedEmail ? "Opening the linked account calendar." : "Opening the roster calendar and loading saved doctor-profile edits.",
     );
   } else if (activeDoctorProfile && selectedKey === OWNER_DOCTOR_KEY) {
     showSwitchOverlay("Returning to creator…", "Restoring the creator calendar.");
@@ -6881,6 +6875,7 @@ function renderLoginState() {
     : "";
   backToCreatorButton.classList.toggle("hidden", (!adminViewingEmail && !activeDoctorProfile) || !isCreatorAuthenticated());
   syncAccountsButton();
+  syncActionState();
   syncMobileChrome();
 }
 
@@ -7443,7 +7438,7 @@ function applySessionState(session, options = {}) {
   };
   overrides = sanitizeOverrideState(session?.overrides);
   pendingExportRange = normalizeSavedExportRange(session?.exportRange || defaultExportRangeState());
-  customEvents = sanitizeCustomEvents(session?.customEvents, activeCalendarEmail());
+  customEvents = sanitizeActiveCalendarCustomEvents(session?.customEvents);
   conflictSelections = {
     ...loadConflictSelections(),
     ...(session?.conflictSelections || {}),
@@ -7460,8 +7455,12 @@ function activeCalendarEmail() {
 }
 
 function customEventsForActiveCalendar() {
+  return sanitizeActiveCalendarCustomEvents(customEvents);
+}
+
+function sanitizeActiveCalendarCustomEvents(items) {
   const ownerEmail = activeCalendarEmail();
-  return sanitizeCustomEvents(customEvents).filter((item) => item.ownerEmail === ownerEmail);
+  return sanitizeCustomEvents(items, ownerEmail).filter((item) => item.ownerEmail === ownerEmail);
 }
 
 function removeCustomEventForActiveCalendar(id) {
@@ -7770,6 +7769,7 @@ async function bootstrapImports() {
       await analyzeFiles();
     } else {
       renderClaimSection();
+      syncActionState();
       setStatus(availableRosterDoctors.length && !currentRosterClaims.length
         ? "Choose your roster name, or upload a roster if your name is not listed."
         : "Add a roster file to begin.");
