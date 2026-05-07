@@ -164,7 +164,7 @@ const DEFAULT_SETTINGS = {
   dateTo: "",
 };
 
-let MANUAL_PARSER_RULES = { mmc: [], ddh: [] };
+let MANUAL_PARSER_RULES = buildDefaultParserRules();
 
 export function defaultSettings() {
   return { ...DEFAULT_SETTINGS };
@@ -1052,7 +1052,7 @@ function parseMmcRecords(workbook, doctorKey) {
     }
     if (!weekDates.length) continue;
 
-    let currentSeniority = UNKNOWN_SENIORITY;
+    let currentSeniority = "SMS";
     const roleMap = mmcSeniorityMap();
     const range = XLSX.utils.decode_range(sheet["!ref"] || "A1:A1");
     for (let row = 1; row <= range.e.r + 1; row += 1) {
@@ -1121,7 +1121,7 @@ function parseMmcEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
 
   const explicit = extractTimePrefix(raw);
   const label = explicit ? explicit.label : raw.trim();
-  const normalized = findManualParserRule("MMC", seniority, label, explicit) || normalizeMmcLabel(label) || normalizeGenericMmcTimedLabel(label, explicit);
+  const normalized = findManualParserRule("MMC", seniority, label, explicit) || normalizeGenericMmcTimedLabel(label, explicit);
   if (!normalized) {
     return createUnknownRecord("MMC", day, raw, "MMC shift code not recognised.", seniority);
   }
@@ -1450,6 +1450,8 @@ function parseRuleTime(value) {
 function buildDefaultParserRules() {
   const rules = { mmc: [], ddh: [] };
   const activeSeniorities = SENIORITY_LABELS.filter((item) => item !== UNKNOWN_SENIORITY);
+  const consultantSeniorities = ["SMS", "CMO"];
+  const nonConsultantMmcSeniorities = ["Senior Registrar", "Transitional/Intermediate Registrar", "Junior Registrar", "HMO", "Intern"];
   const add = (bucket, source, code, seniority, base, period, suffix, allDay, startTime, endTime, location = source === "MMC" ? MMC_LOCATION : DDH_LOCATION) => {
     bucket.push({
       source,
@@ -1469,9 +1471,12 @@ function buildDefaultParserRules() {
   for (const seniority of activeSeniorities) {
     add(rules.mmc, "MMC", "CS", seniority, "CS", "", "", true, "", "", "");
     add(rules.mmc, "MMC", "CSO", seniority, "CSO", "", "", true, "", "", MMC_LOCATION);
+  }
+  for (const seniority of consultantSeniorities) {
     for (const periodPrefix of ["A", "P"]) {
       for (const [teamCode, teamName] of Object.entries(MMC_TEAM_MAP)) {
         for (const suffixCode of ["C", "R"]) {
+          if (suffixCode === "R" && (teamCode === "C" || teamCode === "R")) continue;
           add(
             rules.mmc,
             "MMC",
@@ -1487,6 +1492,7 @@ function buildDefaultParserRules() {
         }
       }
       for (const suffixCode of ["C", "R"]) {
+        if (suffixCode === "R") continue;
         add(
           rules.mmc,
           "MMC",
@@ -1501,6 +1507,15 @@ function buildDefaultParserRules() {
         );
       }
     }
+  }
+  for (const seniority of nonConsultantMmcSeniorities) {
+    add(rules.mmc, "MMC", "SWA", seniority, "Swing", "AM", "", false, "08:00", "17:30", MMC_LOCATION);
+    add(rules.mmc, "MMC", "SWP", seniority, "Swing", "PM", "", false, "14:30", "00:00", MMC_LOCATION);
+    add(rules.mmc, "MMC", "AHJ", seniority, "Hub", "AM", "", false, "08:00", "17:30", MMC_LOCATION);
+    add(rules.mmc, "MMC", "PHJ", seniority, "Hub", "PM", "", false, "14:30", "00:00", MMC_LOCATION);
+    add(rules.mmc, "MMC", "NSSJ", seniority, "Night SSU", "", "", false, "23:00", "08:30", MMC_LOCATION);
+  }
+  for (const seniority of activeSeniorities) {
     add(rules.ddh, "DDH", "CS", seniority, "CS", "", "", true, "", "", "");
     add(rules.ddh, "DDH", "CS ONSITE", seniority, "CS onsite", "", "", true, "", "", DDH_LOCATION);
     add(rules.ddh, "DDH", "SSU", seniority, "SSU", "", "", true, "", "", DDH_LOCATION);

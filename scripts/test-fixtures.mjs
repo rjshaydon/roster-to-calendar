@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import XLSX from "xlsx";
 
-import { buildRosterView, doctorOptions, parseUploadForm, previewSummary } from "../public/static/roster.js";
+import { buildRosterView, doctorOptions, parseUploadForm, parserRuleDefaults, previewSummary } from "../public/static/roster.js";
 
 const mmcWorkbook = XLSX.readFile(fileURLToPath(new URL("../fixtures/AdultTerm1.2026.xlsx", import.meta.url)), {
   cellDates: true,
@@ -13,6 +13,24 @@ const ddhWorkbook = XLSX.readFile(fileURLToPath(new URL("../fixtures/Dandenong_E
 });
 
 const doctors = doctorOptions(mmcWorkbook, ddhWorkbook);
+const defaultRules = parserRuleDefaults();
+const mmcRules = defaultRules.mmc || [];
+const hasMmcRule = (seniority, code) => mmcRules.some((rule) => rule.seniority === seniority && rule.code === code);
+assert.ok(hasMmcRule("SMS", "AGC"));
+assert.ok(hasMmcRule("CMO", "AGC"));
+assert.equal(hasMmcRule("Senior Registrar", "AGC"), false);
+assert.equal(hasMmcRule("HMO", "AGC"), false);
+assert.equal(hasMmcRule("SMS", "ACR"), false);
+assert.equal(hasMmcRule("SMS", "ARR"), false);
+assert.equal(hasMmcRule("SMS", "ASSR"), false);
+assert.ok(hasMmcRule("Senior Registrar", "SWA"));
+assert.ok(hasMmcRule("Transitional/Intermediate Registrar", "SWP"));
+assert.ok(hasMmcRule("Junior Registrar", "AHJ"));
+assert.ok(hasMmcRule("HMO", "PHJ"));
+assert.ok(hasMmcRule("Intern", "NSSJ"));
+const nssjRule = mmcRules.find((rule) => rule.seniority === "HMO" && rule.code === "NSSJ");
+assert.equal(nssjRule.startTime, "23:00");
+assert.equal(nssjRule.endTime, "08:30");
 assert.ok(doctors.length > 100);
 const richard = doctors.find((doctor) => doctor.displayName === "Richard HAYDON");
 assert.ok(richard);
@@ -31,8 +49,8 @@ assert.ok(markView.events.some((event) => event.title === "MMC: PM"));
 const deslinAraullo = doctors.find((doctor) => doctor.displayName === "Deslin Araullo");
 assert.ok(deslinAraullo);
 const deslinView = buildRosterView(mmcWorkbook, [], deslinAraullo.key);
-assert.ok(deslinView.events.some((event) => event.title === "MMC: PHJ"));
-assert.ok(deslinView.events.some((event) => event.title === "MMC: SWA"));
+assert.ok(deslinView.events.some((event) => event.title === "MMC: Hub PM"));
+assert.ok(deslinView.events.some((event) => event.title === "MMC: Swing AM"));
 
 const view = buildRosterView(mmcWorkbook, ddhWorkbook, richard.key);
 const summary = previewSummary(view.events);

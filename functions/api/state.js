@@ -1568,6 +1568,7 @@ function sanitizeParserExtensionRuleList(items, source) {
   if (!Array.isArray(items)) return [];
   return items
     .map((item) => sanitizeParserExtensionRule(item, source))
+    .filter((item) => !isObsoleteSeededParserRule(item))
     .filter(Boolean)
     .sort((left, right) => left.code.localeCompare(right.code));
 }
@@ -1623,6 +1624,56 @@ function sanitizeRuleSeniority(value) {
   if (aliases.has(upper)) return aliases.get(upper);
   const labels = ["SMS", "CMO", "Senior Registrar", "Transitional/Intermediate Registrar", "Junior Registrar", "HMO", "ENP", "AMP", "Intern", "Unknown"];
   return labels.find((item) => item.toUpperCase() === upper) || "Unknown";
+}
+
+function isObsoleteSeededParserRule(rule) {
+  if (!rule || rule.source !== "MMC") return false;
+  if (rule.code === "CS" || rule.code === "CSO") return false;
+  const impossibleFloat = new Set(["ACR", "PCR", "ARR", "PRR", "ASSR", "PSSR"]);
+  if (impossibleFloat.has(rule.code) && isOldDefaultMmcRule(rule)) return true;
+  if (rule.seniority !== "SMS" && rule.seniority !== "CMO" && isConsultantStyleMmcCode(rule.code) && isOldDefaultMmcRule(rule)) return true;
+  return false;
+}
+
+function isConsultantStyleMmcCode(code) {
+  const text = String(code || "").trim().toUpperCase();
+  return /^[AP][GARC][CR]$/.test(text) || /^[AP]SS[CR]$/.test(text);
+}
+
+function isOldDefaultMmcRule(rule) {
+  const expected = oldDefaultMmcRuleShape(rule.code);
+  if (!expected) return false;
+  return rule.base === expected.base
+    && rule.period === expected.period
+    && rule.suffix === expected.suffix
+    && rule.allDay === false
+    && rule.startTime === expected.startTime
+    && rule.endTime === expected.endTime
+    && rule.includeAsShift !== false;
+}
+
+function oldDefaultMmcRuleShape(code) {
+  const text = String(code || "").trim().toUpperCase();
+  const teamMap = { G: "Green", A: "Amber", R: "Resus", C: "Clinic" };
+  const teamMatch = text.match(/^([AP])([GARC])([CR])$/);
+  if (teamMatch) {
+    return {
+      base: teamMap[teamMatch[2]],
+      period: teamMatch[1] === "A" ? "AM" : "PM",
+      suffix: teamMatch[3] === "R" ? "Float" : "",
+      startTime: teamMatch[1] === "A" ? "08:00" : "14:30",
+      endTime: teamMatch[1] === "A" ? "17:30" : "00:00",
+    };
+  }
+  const ssuMatch = text.match(/^([AP])SS([CR])$/);
+  if (!ssuMatch) return null;
+  return {
+    base: "SSU",
+    period: ssuMatch[1] === "A" ? "AM" : "PM",
+    suffix: ssuMatch[2] === "R" ? "Float" : "",
+    startTime: ssuMatch[1] === "A" ? "07:30" : "14:30",
+    endTime: ssuMatch[1] === "A" ? "17:30" : "00:00",
+  };
 }
 
 async function loadParserExtensionRules(store) {

@@ -259,6 +259,8 @@ let currentSubscription = null;
 let insightsState = null;
 let doctorAnalysisCacheKey = "";
 let doctorAnalysisCache = new Map();
+let insightDoctorOptionsCache = [];
+let insightDoctorRoleCache = new Map();
 let undoHistory = [];
 let redoHistory = [];
 let applyingHistory = false;
@@ -2598,6 +2600,7 @@ async function renderInsightsModal() {
 
 async function ensureInsightRosterAnalysis() {
   if (parsedRosterSources && (parsedRosterSources.mmc?.length || parsedRosterSources.ddh?.length)) return;
+  if (hydrateInsightCacheFromSnapshot()) return;
   if (!selectedFiles.length) return;
   await ensureSelectedFilesLoaded();
   let parsed = await parseCurrentRosterForm(null);
@@ -2622,6 +2625,7 @@ async function ensureInsightRosterAnalysis() {
   }
   parsedRosterSources = parsed.sources;
   parsedImportDoctors = doctorsByImportId(parsed.sources);
+  doctorRoleIndex = null;
 }
 
 function renderWhoInsight() {
@@ -2728,10 +2732,18 @@ function renderWhenInsight() {
 }
 
 function comparisonDoctorOptions(start = "", end = "", hospitalFilters = []) {
-  if (!parsedRosterSources || (!parsedRosterSources.mmc?.length && !parsedRosterSources.ddh?.length)) return [];
-  return prioritizeDoctorOptions(rosterDoctorOptions(parsedRosterSources?.mmc || [], parsedRosterSources?.ddh || []))
+  const options = insightDoctorOptions();
+  if (!options.length) return [];
+  return prioritizeDoctorOptions(options)
     .filter((doctor) => doctor.key !== selectedDoctor()?.key)
     .filter((doctor) => comparisonDoctorEvents(doctor.key, start, end, hospitalFilters).some(isRosterShiftEvent));
+}
+
+function insightDoctorOptions() {
+  if (parsedRosterSources && (parsedRosterSources.mmc?.length || parsedRosterSources.ddh?.length)) {
+    return rosterDoctorOptions(parsedRosterSources?.mmc || [], parsedRosterSources?.ddh || []);
+  }
+  return Array.isArray(insightDoctorOptionsCache) ? insightDoctorOptionsCache : [];
 }
 
 function availableInsightDateRange() {
@@ -2999,7 +3011,7 @@ async function renderInlineWhenInsight(container, doctorKey) {
   const fromDate = formatDateKey(new Date());
   const range = availableInsightDateRange();
   const toDate = range.end || fromDate;
-  const allOptions = prioritizeDoctorOptions(rosterDoctorOptions(parsedRosterSources?.mmc || [], parsedRosterSources?.ddh || []));
+  const allOptions = prioritizeDoctorOptions(insightDoctorOptions());
   const selectedComparison = allOptions.find((doctor) => doctor.key === doctorKey) || null;
   const mine = selectedDoctorEventsForInsights(fromDate, toDate, []).filter(isRosterShiftEvent);
   const theirs = selectedComparison
@@ -3238,18 +3250,15 @@ function defaultInsightDate(termStart, termEnd) {
 
 function getDoctorAnalysisCache() {
   if (!parsedRosterSources || (!parsedRosterSources.mmc?.length && !parsedRosterSources.ddh?.length)) {
-    clearDoctorAnalysisCache();
+    if (!hydrateInsightCacheFromSnapshot()) {
+      doctorAnalysisCacheKey = "";
+      doctorAnalysisCache = new Map();
+      insightDoctorOptionsCache = [];
+      insightDoctorRoleCache = new Map();
+    }
     return doctorAnalysisCache;
   }
-  const cacheKey = JSON.stringify({
-    imports: currentImportStateKey(),
-    sourcePrefix: settings.showSourcePrefix,
-    showAmPm: settings.showAmPm,
-    includeAnnualLeave: settings.includeAnnualLeave,
-    includeConferenceLeave: settings.includeConferenceLeave,
-    includePublicHoliday: settings.includePublicHoliday,
-    includeSickLeave: settings.includeSickLeave,
-  });
+  const cacheKey = currentInsightCacheKey();
   if (doctorAnalysisCacheKey === cacheKey && doctorAnalysisCache.size) return doctorAnalysisCache;
   const cache = new Map();
   const analysisSettings = {
@@ -3265,13 +3274,60 @@ function getDoctorAnalysisCache() {
   }
   doctorAnalysisCacheKey = cacheKey;
   doctorAnalysisCache = cache;
+  insightDoctorOptionsCache = rosterDoctorOptions(parsedRosterSources?.mmc || [], parsedRosterSources?.ddh || []);
+  doctorRoleIndex = buildDoctorRoleIndex();
+  insightDoctorRoleCache = new Map(doctorRoleIndex);
+  cacheCurrentInsightSnapshot();
   return doctorAnalysisCache;
 }
 
 function clearDoctorAnalysisCache() {
   doctorAnalysisCacheKey = "";
   doctorAnalysisCache = new Map();
+  insightDoctorOptionsCache = [];
+  insightDoctorRoleCache = new Map();
   clearInsightWarmup();
+}
+
+function currentInsightCacheKey() {
+  return JSON.stringify({
+    imports: currentImportStateKey(),
+    sourcePrefix: settings.showSourcePrefix,
+    showAmPm: settings.showAmPm,
+    includeAnnualLeave: settings.includeAnnualLeave,
+    includeConferenceLeave: settings.includeConferenceLeave,
+    includePublicHoliday: settings.includePublicHoliday,
+    includeSickLeave: settings.includeSickLeave,
+  });
+}
+
+function hydrateInsightCacheFromSnapshot(snapshot = currentSnapshot) {
+  const cache = sanitizeInsightCache(snapshot?.insightCache);
+  if (!cache || cache.key !== currentInsightCacheKey()) return false;
+  doctorAnalysisCacheKey = cache.key;
+  doctorAnalysisCache = new Map(Object.entries(cache.doctorEvents || {}));
+  insightDoctorOptionsCache = cache.doctorOptions || [];
+  insightDoctorRoleCache = new Map(Object.entries(cache.doctorRoles || {}));
+  return Boolean(doctorAnalysisCache.size && insightDoctorOptionsCache.length);
+}
+
+function cacheCurrentInsightSnapshot() {
+  if (!currentSnapshot || !doctorAnalysisCacheKey || !doctorAnalysisCache.size) return;
+  currentSnapshot = sanitizeWorkspaceSnapshot({
+    ...currentSnapshot,
+    insightCache: buildInsightCachePayload(),
+  });
+  saveCurrentWorkspace();
+}
+
+function buildInsightCachePayload() {
+  return {
+    key: doctorAnalysisCacheKey,
+    builtAt: new Date().toISOString(),
+    doctorOptions: insightDoctorOptionsCache,
+    doctorEvents: Object.fromEntries([...doctorAnalysisCache.entries()].map(([key, events]) => [key, events.map(serializeEvent)])),
+    doctorRoles: Object.fromEntries(insightDoctorRoleCache.entries()),
+  };
 }
 
 function scheduleInsightWarmup() {
@@ -4074,6 +4130,7 @@ function rosterNameTokens(value) {
 }
 
 function doctorMetadataForKey(doctorKey) {
+  if (insightDoctorRoleCache.size) return insightDoctorRoleCache.get(doctorKey) || { any: { role: "" } };
   if (!doctorRoleIndex) doctorRoleIndex = buildDoctorRoleIndex();
   return doctorRoleIndex.get(doctorKey) || { any: { role: "" } };
 }
@@ -5430,6 +5487,7 @@ function renderParserRulesCard() {
     { source: "DDH", rules: sanitizeParserExtensionRuleList(parserExtensions?.ddh, "DDH") },
   ];
   const unknownIssues = collectUnknownShiftIssues();
+  const unknownSources = new Set(unknownIssues.map((item) => item.source));
   return `
     <div class="issues-list">
       ${unknownIssues.length ? `
@@ -5463,9 +5521,9 @@ function renderParserRulesCard() {
         </div>
         ${groups.map((group) => `
           <details class="issue-card">
-            <summary><strong>${group.source}</strong> · ${group.rules.length} rule${group.rules.length === 1 ? "" : "s"}</summary>
+            <summary><strong>${group.source}${unknownSources.has(group.source) ? " *" : ""}</strong> · ${group.rules.length} rule${group.rules.length === 1 ? "" : "s"}</summary>
             <div class="issues-list">
-              ${parserRuleSeniorities().map((seniority) => {
+              ${parserRuleSeniorityDisplayOrder().map((seniority) => {
                 const rules = group.rules.filter((rule) => rule.seniority === seniority);
                 if (!rules.length) return "";
                 return `
@@ -5526,10 +5584,15 @@ function collectUnknownShiftIssues() {
   }
   return [...byKey.values()].sort((left, right) => {
     if (left.source !== right.source) return left.source.localeCompare(right.source);
-    const rank = parserRuleSeniorities().indexOf(left.seniority) - parserRuleSeniorities().indexOf(right.seniority);
+    const rank = parserRuleSeniorityDisplayOrder().indexOf(left.seniority) - parserRuleSeniorityDisplayOrder().indexOf(right.seniority);
     if (rank) return rank;
     return left.code.localeCompare(right.code);
   });
+}
+
+function parserRuleSeniorityDisplayOrder() {
+  const values = parserRuleSeniorities();
+  return ["Unknown", ...values.filter((item) => item !== "Unknown")];
 }
 
 function renderLinkedRosterNames(claims) {
@@ -6488,6 +6551,7 @@ function sanitizeParserExtensionRuleList(items, source) {
   if (!Array.isArray(items)) return [];
   return items
     .map((item) => sanitizeParserExtensionRule(item, source))
+    .filter((item) => !isObsoleteSeededParserRule(item))
     .filter(Boolean);
 }
 
@@ -6542,6 +6606,56 @@ function sanitizeRuleSeniority(value) {
   return parserRuleSeniorities().find((item) => item.toUpperCase() === upper) || "Unknown";
 }
 
+function isObsoleteSeededParserRule(rule) {
+  if (!rule || rule.source !== "MMC") return false;
+  if (rule.code === "CS" || rule.code === "CSO") return false;
+  const impossibleFloat = new Set(["ACR", "PCR", "ARR", "PRR", "ASSR", "PSSR"]);
+  if (impossibleFloat.has(rule.code) && isOldDefaultMmcRule(rule)) return true;
+  if (rule.seniority !== "SMS" && rule.seniority !== "CMO" && isConsultantStyleMmcCode(rule.code) && isOldDefaultMmcRule(rule)) return true;
+  return false;
+}
+
+function isConsultantStyleMmcCode(code) {
+  const text = String(code || "").trim().toUpperCase();
+  return /^[AP][GARC][CR]$/.test(text) || /^[AP]SS[CR]$/.test(text);
+}
+
+function isOldDefaultMmcRule(rule) {
+  const expected = oldDefaultMmcRuleShape(rule.code);
+  if (!expected) return false;
+  return rule.base === expected.base
+    && rule.period === expected.period
+    && rule.suffix === expected.suffix
+    && rule.allDay === false
+    && rule.startTime === expected.startTime
+    && rule.endTime === expected.endTime
+    && rule.includeAsShift !== false;
+}
+
+function oldDefaultMmcRuleShape(code) {
+  const text = String(code || "").trim().toUpperCase();
+  const teamMap = { G: "Green", A: "Amber", R: "Resus", C: "Clinic" };
+  const teamMatch = text.match(/^([AP])([GARC])([CR])$/);
+  if (teamMatch) {
+    return {
+      base: teamMap[teamMatch[2]],
+      period: teamMatch[1] === "A" ? "AM" : "PM",
+      suffix: teamMatch[3] === "R" ? "Float" : "",
+      startTime: teamMatch[1] === "A" ? "08:00" : "14:30",
+      endTime: teamMatch[1] === "A" ? "17:30" : "00:00",
+    };
+  }
+  const ssuMatch = text.match(/^([AP])SS([CR])$/);
+  if (!ssuMatch) return null;
+  return {
+    base: "SSU",
+    period: ssuMatch[1] === "A" ? "AM" : "PM",
+    suffix: ssuMatch[2] === "R" ? "Float" : "",
+    startTime: ssuMatch[1] === "A" ? "07:30" : "14:30",
+    endTime: ssuMatch[1] === "A" ? "17:30" : "00:00",
+  };
+}
+
 function sanitizeIssueFingerprintList(items) {
   if (!Array.isArray(items)) return [];
   return [...new Set(items.map((item) => sanitizeIssueFingerprint(item)).filter(Boolean))];
@@ -6593,6 +6707,47 @@ function sanitizeWorkspaceSnapshot(value) {
     },
     fileRefs: Array.isArray(value.fileRefs) ? value.fileRefs.map(importRefForWorkspace).filter((item) => item.id) : [],
     subscriptionFeeds: value.subscriptionFeeds && typeof value.subscriptionFeeds === "object" ? JSON.parse(JSON.stringify(value.subscriptionFeeds)) : {},
+    insightCache: sanitizeInsightCache(value.insightCache),
+  };
+}
+
+function sanitizeInsightCache(value) {
+  if (!value || typeof value !== "object") return null;
+  const doctorEvents = {};
+  for (const [key, events] of Object.entries(value.doctorEvents || {})) {
+    const normalizedKey = normalizeRosterName(key);
+    if (!normalizedKey || !Array.isArray(events)) continue;
+    doctorEvents[normalizedKey] = events
+      .filter((event) => event && typeof event === "object")
+      .map((event) => JSON.parse(JSON.stringify(event)));
+  }
+  const doctorOptions = Array.isArray(value.doctorOptions)
+    ? value.doctorOptions.map((doctor) => ({
+        ...doctor,
+        key: normalizeRosterName(doctor?.key || ""),
+        displayName: String(doctor?.displayName || "").trim(),
+        sourceTypes: Array.isArray(doctor?.sourceTypes) ? doctor.sourceTypes.map((item) => String(item || "").toLowerCase()).filter(Boolean) : [],
+        aliases: Array.isArray(doctor?.aliases) ? doctor.aliases.map((alias) => ({
+          key: normalizeRosterName(alias?.key || ""),
+          displayName: String(alias?.displayName || "").trim(),
+          sourceType: String(alias?.sourceType || "").toLowerCase(),
+        })).filter((alias) => alias.key && alias.displayName) : [],
+      })).filter((doctor) => doctor.key && doctor.displayName)
+    : [];
+  const doctorRoles = {};
+  for (const [key, roles] of Object.entries(value.doctorRoles || {})) {
+    const normalizedKey = normalizeRosterName(key);
+    if (normalizedKey && roles && typeof roles === "object") {
+      doctorRoles[normalizedKey] = JSON.parse(JSON.stringify(roles));
+    }
+  }
+  if (!String(value.key || "") || !Object.keys(doctorEvents).length || !doctorOptions.length) return null;
+  return {
+    key: String(value.key),
+    builtAt: String(value.builtAt || ""),
+    doctorOptions,
+    doctorEvents,
+    doctorRoles,
   };
 }
 
@@ -7011,6 +7166,7 @@ async function buildWorkspaceSnapshotPayload(session = buildActiveSessionState()
     detectedSources: JSON.parse(JSON.stringify(detectedSources || {})),
     fileRefs: selectedFiles.map(importRefForWorkspace),
     subscriptionFeeds: await buildSubscriptionFeeds(session),
+    insightCache: doctorAnalysisCacheKey && doctorAnalysisCache.size ? buildInsightCachePayload() : currentSnapshot?.insightCache || null,
   };
 }
 
@@ -7023,6 +7179,7 @@ function cacheCurrentSnapshot(session = buildActiveSessionState()) {
     detectedSources: JSON.parse(JSON.stringify(detectedSources || {})),
     fileRefs: selectedFiles.map(importRefForWorkspace),
     subscriptionFeeds: currentSnapshot?.subscriptionFeeds || {},
+    insightCache: doctorAnalysisCacheKey && doctorAnalysisCache.size ? buildInsightCachePayload() : currentSnapshot?.insightCache || null,
   });
   currentSnapshotStale = false;
   currentSnapshotBuiltAt = new Date().toISOString();
@@ -7636,6 +7793,7 @@ function renderWorkspaceFromSnapshot(snapshot, session = {}) {
   clearDoctorAnalysisCache();
   restoredSessionState = session && typeof session === "object" ? session : {};
   applySessionState(restoredSessionState, { inheritedSettings: rosterDefaultSettings() });
+  hydrateInsightCacheFromSnapshot(currentSnapshot);
   pendingPreviewSnapToToday = true;
   renderSettings();
   renderFilesList();
