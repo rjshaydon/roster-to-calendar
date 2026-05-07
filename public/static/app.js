@@ -1790,10 +1790,10 @@ async function updatePreview(options = {}) {
     }
     const data = await buildBrowserPreviewData(doctor);
     latestPreview = data;
-    if (options.resetRange || !settings.dateFrom || !settings.dateTo) {
+    if (shouldApplyDefaultPreviewRange(options, data.events || [])) {
       const range = deriveDefaultPreviewRange(data.events || []);
-      if (!settings.dateFrom) settings.dateFrom = range.start;
-      if (!settings.dateTo) settings.dateTo = range.end;
+      settings.dateFrom = range.start;
+      settings.dateTo = range.end;
       pendingPreviewSnapToToday = true;
       renderSettings();
     }
@@ -4516,17 +4516,24 @@ function deriveRangeBounds(events) {
 function deriveDefaultPreviewRange(events) {
   const today = new Date();
   const currentTerm = australianTermForDate(today);
-  const nextTerm = nextAustralianTerm(currentTerm);
   const currentTermStart = formatDateKey(currentTerm.start);
   const currentTermEnd = formatDateKey(addDays(currentTerm.end, -1));
-  const nextTermStart = nextTerm.start;
-  const nextTermEnd = addDays(nextTerm.end, -1);
-  const hasNextTermEvents = (events || []).some((event) => eventOverlapsDateRange(event, nextTermStart, nextTermEnd));
   const eventRange = deriveRangeBounds(events || []);
+  const earliestEventTerm = eventRange.start ? australianTermForDate(parseDateOnly(eventRange.start)) : currentTerm;
+  const latestEventTerm = eventRange.end ? australianTermForDate(parseDateOnly(eventRange.end)) : currentTerm;
+  const earliestEventTermStart = formatDateKey(earliestEventTerm.start);
+  const latestEventTermEnd = formatDateKey(addDays(latestEventTerm.end, -1));
   return {
-    start: eventRange.start ? minDateKey(eventRange.start, currentTermStart) : currentTermStart,
-    end: hasNextTermEvents ? formatDateKey(nextTermEnd) : maxDateKey(eventRange.end, currentTermEnd),
+    start: eventRange.start ? minDateKey(earliestEventTermStart, currentTermStart) : currentTermStart,
+    end: maxDateKey(latestEventTermEnd, currentTermEnd),
   };
+}
+
+function shouldApplyDefaultPreviewRange(options, events) {
+  if (options.resetRange || !settings.dateFrom || !settings.dateTo) return true;
+  const eventRange = deriveRangeBounds(events || []);
+  if (!eventRange.start || !eventRange.end) return false;
+  return settings.dateFrom === eventRange.start && settings.dateTo === eventRange.end;
 }
 
 function boundedPreviewStart(value, defaultStart) {
