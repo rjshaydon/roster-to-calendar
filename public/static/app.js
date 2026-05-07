@@ -1748,6 +1748,7 @@ function rebuildClientPreview() {
   renderPreviewGrid(doctor, view);
   renderIssues(view.issues || []);
   void reportPreviewIssues(view.issues || []);
+  void reportPreviewConflicts(view.conflicts || []);
   saveCurrentSessionState();
 }
 
@@ -1985,7 +1986,7 @@ function renderIssues(items) {
 }
 
 async function reportPreviewIssues(items) {
-  if (currentUserRole !== "user" || adminViewingEmail) return;
+  if (currentUserRole !== "user") return;
   if (!items.length) return;
   for (const item of items) {
     if (!item?.message || isSuppressedIssue(item)) continue;
@@ -2005,6 +2006,35 @@ async function reportPreviewIssues(items) {
     reportedIssueFingerprints.add(fingerprint);
     await reportAccountError(issue, item.id || issue.fingerprint);
   }
+}
+
+async function reportPreviewConflicts(items) {
+  if (currentUserRole !== "user") return;
+  if (!items.length) return;
+  for (const item of items) {
+    const source = sanitizeIssueSource(item.source);
+    const rawValue = String(item.key || `${item.source || ""}:${item.weekKey || ""}`).trim();
+    if (!source || !rawValue) continue;
+    const optionNames = (item.options || []).map((option) => option.importName).filter(Boolean);
+    const issue = {
+      source,
+      date: String(item.weekKey || "").trim(),
+      rawValue,
+      message: `Multiple roster files overlap for ${source} week starting ${item.weekKey || "unknown"}: ${optionNames.join(" vs ") || "conflicting imports"}.`,
+      timeLabel: "",
+      suggestedTitle: item.selectedImportId ? `Selected source: ${selectedConflictImportName(item)}` : "",
+      fingerprint: issueFingerprint(source, rawValue),
+    };
+    if (!issue.fingerprint) continue;
+    const fingerprint = `${activeCalendarOwnerId()}::${issue.fingerprint}`;
+    if (reportedIssueFingerprints.has(fingerprint)) continue;
+    reportedIssueFingerprints.add(fingerprint);
+    await reportAccountError(issue, issue.fingerprint);
+  }
+}
+
+function selectedConflictImportName(item) {
+  return (item.options || []).find((option) => option.importId === item.selectedImportId)?.importName || item.selectedImportId || "";
 }
 
 function indexReviewItems(items) {

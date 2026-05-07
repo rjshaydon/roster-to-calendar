@@ -295,6 +295,9 @@ export async function onRequestPost(context) {
       const claims = targetRole === "creator" || targetRole === "owner"
         ? sanitizeClaims(targetRecord.claims)
         : mergeClaims(targetRecord.claims, matchRepositoryClaims(repository.index, targetRecord.realName || ""));
+      if (targetRole === "creator" || targetRole === "owner") {
+        await reconcileRepositoryActiveFiles(context.env.ROSTER_STORE, repository.index, state.imports);
+      }
       await context.env.ROSTER_STORE.put(storageKey(saveEmail), JSON.stringify({
         ...targetRecord,
         email: saveEmail,
@@ -588,11 +591,12 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
     const hasEmbeddedImports = Array.isArray(state.imports) && state.imports.some((item) => item?.dataUrl);
     const imported = hasEmbeddedImports ? await upsertStateImports(store, state.imports, record.email) : {
       index,
-      refs: (state.imports || []).map(repositoryImportRef),
+      refs: (index.files || []).filter((file) => file.active !== false).map(repositoryImportRef),
       changed: false,
     };
-    const stateWithRefs = { ...state, imports: imported.refs.map(repositoryImportRef) };
-    if (hasEmbeddedImports && (imported.changed || importsChanged(state.imports, imported.refs))) {
+    const creatorRepositoryRefs = (imported.index.files || []).filter((file) => file.active !== false).map(repositoryImportRef);
+    const stateWithRefs = { ...state, imports: creatorRepositoryRefs };
+    if (hasEmbeddedImports && (imported.changed || importsChanged(state.imports, creatorRepositoryRefs))) {
       state = stateWithRefs;
       await store.put(storageKey(record.email), JSON.stringify({
         ...record,
@@ -713,6 +717,23 @@ async function upsertStateImports(store, imports, uploadedBy) {
     }),
     changed: upserted.changed,
   };
+}
+
+async function reconcileRepositoryActiveFiles(store, index, activeImports = []) {
+  const activeIds = new Set((activeImports || [])
+    .map((item) => item?.repoId || item?.repositoryId || item?.id)
+    .filter(Boolean));
+  let changed = false;
+  const files = (index.files || []).map((file) => {
+    const active = activeIds.has(file.id);
+    if ((file.active !== false) === active) return file;
+    changed = true;
+    return { ...file, active };
+  });
+  if (!changed) return index;
+  const next = { ...index, files };
+  await saveRepositoryIndex(store, next);
+  return next;
 }
 
 async function upsertImportsIntoRepository(store, index, imports = [], uploadedBy = "") {
