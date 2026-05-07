@@ -197,6 +197,9 @@ const PREVIEW_STYLE_FIELDS = [
   "weekendShadeColor",
   "weekendShadeOpacity",
 ];
+const STATUS_MESSAGE_LIMIT = 5;
+const STATUS_MESSAGE_LIFETIME_MS = 5000;
+const STATUS_MESSAGE_FADE_MS = 240;
 
 let doctorOptions = [];
 let detectedSources = {};
@@ -223,6 +226,7 @@ let openReviewId = "";
 let conflictSelections = {};
 let accountState = loadAccountState();
 let restoredSessionState = null;
+let statusMessageId = 0;
 let currentUserEmail = loadCurrentUserEmail();
 let currentUserPassword = sessionStorage.getItem(CURRENT_PASSWORD_KEY) || localStorage.getItem(PERSISTENT_PASSWORD_KEY) || "";
 let currentUserRole = currentUserEmail === OWNER_EMAIL ? "creator" : "user";
@@ -7352,10 +7356,36 @@ async function bootstrapApp() {
 }
 
 function setStatus(message, isError = false) {
-  status.textContent = message;
+  const text = String(message || "").trim();
+  if (!status || !text) return;
+
+  const entry = document.createElement("p");
+  entry.className = "status";
+  entry.textContent = text;
+  entry.dataset.error = isError ? "true" : "false";
+  entry.dataset.statusId = String(++statusMessageId);
+  status.prepend(entry);
   status.dataset.error = isError ? "true" : "false";
+
+  while (status.children.length > STATUS_MESSAGE_LIMIT) {
+    status.lastElementChild?.remove();
+  }
+
+  window.setTimeout(() => {
+    entry.classList.add("is-fading");
+    window.setTimeout(() => {
+      entry.remove();
+      const newest = status.querySelector(".status");
+      if (newest) {
+        status.dataset.error = newest.dataset.error === "true" ? "true" : "false";
+      } else {
+        delete status.dataset.error;
+      }
+    }, STATUS_MESSAGE_FADE_MS);
+  }, STATUS_MESSAGE_LIFETIME_MS);
+
   if (isError && message) {
-    void reportAccountError(message);
+    void reportAccountError(text);
   }
 }
 

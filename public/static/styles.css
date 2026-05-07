@@ -1950,12 +1950,25 @@ body[data-skin="console"] .preview-cell.is-weekend {
   gap: 10px;
 }
 
-.status {
-  margin: 0;
-  min-height: 1.5em;
+.status-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
 }
 
-.status[data-error="true"] {
+.status {
+  margin: 0;
+  color: var(--muted);
+  transition: opacity 240ms ease, transform 240ms ease;
+}
+
+.status.is-fading {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+.status[data-error="true"],
+.status-list[data-error="true"] {
   color: var(--warning);
 }
 
