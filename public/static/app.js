@@ -3958,6 +3958,10 @@ function canUseDoctorPicker() {
   return isOwnerAccount() && !adminViewingEmail;
 }
 
+function canUseCreatorDoctorSwitcher() {
+  return canUseDoctorPicker() || Boolean(adminViewingEmail && isCreatorAuthenticated());
+}
+
 function showSwitchOverlay(title, message) {
   if (!switchOverlay) return;
   switchOverlayTitle.textContent = title || "Switching…";
@@ -3976,11 +3980,12 @@ async function switchDoctorSelection(selectedKey, options = {}) {
   const resetRange = options.resetRange !== false;
   doctorSelect.value = selectedKey;
   const selectedOption = doctorOptions.find((doctor) => doctor.key === selectedKey) || null;
-  if (canUseDoctorPicker() && cloudAvailable && !serverUsers.length) {
+  const canSwitchAsCreator = canUseCreatorDoctorSwitcher();
+  if (canSwitchAsCreator && cloudAvailable && !serverUsers.length) {
     await loadServerUsers();
   }
   const claimedEmail = normalizeEmail(selectedOption?.accountEmail || claimedEmailForDoctorKey(selectedKey, selectedOption?.displayName || ""));
-  if (canUseDoctorPicker() && selectedOption && selectedKey !== OWNER_DOCTOR_KEY) {
+  if (canSwitchAsCreator && selectedOption && selectedKey !== OWNER_DOCTOR_KEY) {
     showSwitchOverlay(
       `Switching to ${selectedOption.displayName}…`,
       claimedEmail ? "Opening the linked account calendar." : "Opening the roster calendar and loading saved doctor-profile edits.",
@@ -3988,13 +3993,21 @@ async function switchDoctorSelection(selectedKey, options = {}) {
   } else if (activeDoctorProfile && selectedKey === OWNER_DOCTOR_KEY) {
     showSwitchOverlay("Returning to creator…", "Restoring the creator calendar.");
   }
-  if (canUseDoctorPicker() && selectedOption && selectedKey !== OWNER_DOCTOR_KEY) {
+  if (canSwitchAsCreator && selectedOption && selectedKey !== OWNER_DOCTOR_KEY) {
     try {
       if (claimedEmail && claimedEmail !== currentUserEmail) {
         await enterUserAccount(claimedEmail);
       } else {
         await enterDoctorProfileView(selectedOption);
       }
+    } finally {
+      hideSwitchOverlay();
+    }
+    return;
+  }
+  if (canSwitchAsCreator && selectedKey === OWNER_DOCTOR_KEY && currentUserEmail !== OWNER_EMAIL) {
+    try {
+      await returnToCreatorAccount();
     } finally {
       hideSwitchOverlay();
     }
@@ -4034,7 +4047,7 @@ function doctorOptionsForCurrentAccount(doctors) {
     ...doctor,
     sourceTypes: Array.isArray(doctor.sourceTypes) ? doctor.sourceTypes : [],
   }));
-  if (canUseDoctorPicker()) return buildCreatorDoctorOptions(options);
+  if (canUseCreatorDoctorSwitcher()) return buildCreatorDoctorOptions(options);
   const matches = options.filter((doctor) => doctorMatchesCurrentAccount(doctor));
   if (!matches.length) return [];
   const aliases = matches.flatMap((doctor) => {
@@ -6236,9 +6249,11 @@ async function enterUserAccount(email) {
 }
 
 async function enterDoctorProfileView(doctor) {
-  if (!isOwnerAccount()) return;
+  if (!isOwnerAccount() && !isCreatorAuthenticated()) return;
   const profileId = buildDoctorProfileId(doctor);
   if (!profileId) return;
+  const creatorEmail = authUserEmail || currentUserEmail;
+  const creatorPassword = authUserPassword || currentUserPassword;
   try {
     await flushCloudStateSave().catch(() => {});
     cancelScheduledCloudStateSave();
@@ -6246,6 +6261,12 @@ async function enterDoctorProfileView(doctor) {
   } catch {
     // Local state is still preserved.
   }
+  adminViewingEmail = "";
+  currentUserEmail = creatorEmail;
+  currentUserPassword = creatorPassword;
+  currentUserRole = "creator";
+  localStorage.setItem(CURRENT_EMAIL_KEY, currentUserEmail);
+  sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
   activeDoctorProfile = {
     id: profileId,
     ownerId: `doctor-profile:${profileId}`,
@@ -6254,6 +6275,7 @@ async function enterDoctorProfileView(doctor) {
     sourceTypes: Array.isArray(doctor.sourceTypes) ? [...doctor.sourceTypes] : [],
   };
   setStatus(`Opening ${doctor.displayName}...`);
+  await clearLocalWorkspace();
   clearPreviewData();
   restoredSessionState = null;
   await restoreDoctorProfileState();
