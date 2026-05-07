@@ -783,7 +783,7 @@ input[type="color"] {
 
 .today-style-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 138px;
+  grid-template-columns: minmax(0, 1fr) 150px;
   gap: 12px;
   align-items: stretch;
 }
@@ -867,8 +867,9 @@ input[type="color"] {
 
 .mode-toggle {
   display: grid;
-  grid-template-columns: 52px 66px;
-  justify-content: center;
+  grid-template-columns: 52px 72px;
+  inline-size: 126px;
+  justify-self: center;
   overflow: hidden;
   border: 1px solid #d5e0eb;
   border-radius: 999px;
