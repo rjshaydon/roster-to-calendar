@@ -7675,7 +7675,6 @@ function isObsoleteSeededParserRule(rule) {
   if (rule.code === "CS" || rule.code === "CSO") return false;
   const impossibleFloat = new Set(["ACR", "PCR", "ARR", "PRR", "ASSR", "PSSR"]);
   if (impossibleFloat.has(rule.code) && isOldDefaultMmcRule(rule)) return true;
-  if (rule.seniority !== "SMS" && rule.seniority !== "CMO" && isConsultantStyleMmcCode(rule.code) && isOldDefaultMmcRule(rule)) return true;
   return false;
 }
 

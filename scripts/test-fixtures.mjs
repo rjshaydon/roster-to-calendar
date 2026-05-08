@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import XLSX from "xlsx";
 
 import { onRequestPost as handleStatePost } from "../functions/api/state.js";
-import { buildRosterView, doctorOptions, parseUploadForm, parserRuleDefaults, previewSummary } from "../public/static/roster.js";
+import { buildRosterView, doctorOptions, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
 
 const mmcWorkbook = XLSX.readFile(fileURLToPath(new URL("../fixtures/AdultTerm1.2026.xlsx", import.meta.url)), {
   cellDates: true,
@@ -429,6 +429,47 @@ const staleReport = await postState(stateStore, {
 });
 assert.equal(staleReport.ignored, true, "resolved global shift-code warnings must not be requeued from stale user previews");
 assert.equal((await stateStore.get("account:patrick@example.com", "json")).adminIssues.length, 0, "resolved global shift-code warnings must not return after user login");
+const accParserSave = await postState(stateStore, {
+  action: "saveParserExtensionRule",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  fingerprint: "MMC::Senior Registrar::ACC",
+  source: "MMC",
+  rawValue: "ACC",
+  rule: {
+    source: "MMC",
+    seniority: "Senior Registrar",
+    code: "ACC",
+    kind: "shift",
+    base: "Clinic",
+    period: "AM",
+    suffix: "Charge",
+    allDay: false,
+    startTime: "08:00",
+    endTime: "17:30",
+    includeAsShift: true,
+  },
+});
+assert.ok(accParserSave.parserExtensions.mmc.some((rule) => rule.seniority === "Senior Registrar" && rule.code === "ACC"), "Senior Registrar charge/consultant-style codes must persist as explicit rules");
+setParserExtensions(accParserSave.parserExtensions);
+const srAccWorkbook = XLSX.utils.book_new();
+const srAccSheet = XLSX.utils.aoa_to_sheet([
+  [],
+  [],
+  [],
+  ["", "", "", "", "", "", "", "", "", "", "", ""],
+  ["", "", "SENIOR REG"],
+  ["", "", "", "Patrick Tan", "", "ACC"],
+]);
+for (let index = 0; index < 7; index += 1) {
+  srAccSheet[XLSX.utils.encode_cell({ r: 3, c: 5 + index })] = { t: "d", v: new Date(`2026-05-${String(4 + index).padStart(2, "0")}T00:00:00`) };
+}
+XLSX.utils.book_append_sheet(srAccWorkbook, XLSX.utils.aoa_to_sheet([[]]), "Whole thing");
+XLSX.utils.book_append_sheet(srAccWorkbook, srAccSheet, "Week 1");
+const srAccView = buildRosterView([{ id: "sr-acc", workbook: srAccWorkbook, file: { name: "AdultTerm.xlsx", size: 1, lastModified: 1 } }], [], "PATRICK TAN");
+assert.ok(srAccView.events.some((event) => event.rawValue === "ACC" && event.title === "MMC: Clinic AM Charge"), "Senior Registrar explicit ACC rules must render in user calendars");
+assert.equal(srAccView.issues.some((issue) => issue.rawValue === "ACC"), false);
+setParserExtensions({});
 
 const deletionStore = new MemoryStore();
 await postState(deletionStore, {
