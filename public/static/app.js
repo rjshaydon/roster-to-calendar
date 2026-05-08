@@ -261,6 +261,7 @@ let currentRosterClaims = [];
 let latestNameMatches = [];
 let availableRosterDoctors = [];
 let currentSubscription = null;
+let currentInsightsEnabled = currentUserRole === "creator";
 let creatorCalendarSourceFileRefs = [];
 let insightsState = null;
 let doctorAnalysisCacheKey = "";
@@ -448,6 +449,11 @@ accountsBody.addEventListener("submit", (event) => {
   const password = formElement.querySelector("[data-account-password]")?.value || "";
   if (!email) return;
   updateAccountDetails(email, { password, realName });
+});
+accountsBody.addEventListener("change", (event) => {
+  const insightsToggle = event.target.closest("[data-toggle-user-insights]");
+  if (!insightsToggle) return;
+  void setUserInsightsEnabled(insightsToggle.dataset.toggleUserInsights || "", insightsToggle.checked);
 });
 accountsBody.addEventListener("click", (event) => {
   const adminTab = event.target.closest("[data-admin-tab]");
@@ -809,6 +815,7 @@ reviewModalBody.addEventListener("click", (event) => {
   const whenDoctorButton = event.target.closest("[data-inline-when-doctor]");
   if (whenDoctorButton) {
     event.preventDefault();
+    if (!canUseRosterInsights()) return;
     const panel = whenDoctorButton.closest(".event-inline-insight");
     void renderInlineWhenInsight(panel, whenDoctorButton.dataset.inlineWhenDoctor || "");
     return;
@@ -816,6 +823,7 @@ reviewModalBody.addEventListener("click", (event) => {
   const dateButton = event.target.closest("[data-inline-who-on-date]");
   if (dateButton) {
     event.preventDefault();
+    if (!canUseRosterInsights()) return;
     closeReviewModal();
     void openWhoInsightForDate(dateButton.dataset.inlineWhoOnDate || "");
     return;
@@ -823,6 +831,7 @@ reviewModalBody.addEventListener("click", (event) => {
   const backButton = event.target.closest("[data-inline-back-who]");
   if (backButton) {
     event.preventDefault();
+    if (!canUseRosterInsights()) return;
     const panel = backButton.closest(".event-inline-insight");
     void renderInlineWhoInsight(panel, backButton.dataset.inlineBackWho || "", { source: backButton.dataset.inlineBackSource || "" });
   }
@@ -857,11 +866,13 @@ preview.addEventListener("click", (event) => {
   }
   const whoTrigger = event.target.closest("[data-insight-who]");
   if (whoTrigger) {
+    if (!canUseRosterInsights()) return;
     void openWhoInsight(whoTrigger.dataset.insightWho, whoTrigger.dataset.insightWhoEnd);
     return;
   }
   const whenTrigger = event.target.closest("[data-insight-when]");
   if (whenTrigger) {
+    if (!canUseRosterInsights()) return;
     void openWhenInsight(whenTrigger.dataset.insightWhen, whenTrigger.dataset.insightWhenEnd);
     return;
   }
@@ -2583,7 +2594,7 @@ function renderTermSection(section) {
       bodyRows.push(`
         <div class="preview-month-row" data-month-key="${monthKey}">
           <span>${formatMonth(monday)}</span>
-          <button type="button" class="button button-secondary preview-month-button" data-insight-when="${formatDateKey(firstMonday)}" data-insight-when-end="${formatDateKey(lastSunday)}">When am I working with…?</button>
+          ${canUseRosterInsights() ? `<button type="button" class="button button-secondary preview-month-button" data-insight-when="${formatDateKey(firstMonday)}" data-insight-when-end="${formatDateKey(lastSunday)}">When am I working with…?</button>` : ""}
         </div>
       `);
       lastMonthKey = monthKey;
@@ -2613,6 +2624,7 @@ function renderTermSection(section) {
 }
 
 async function openWhoInsight(termStart, termEnd) {
+  if (!canUseRosterInsights()) return;
   const date = defaultInsightDate(termStart, termEnd);
   insightsState = {
     mode: "who",
@@ -2624,6 +2636,7 @@ async function openWhoInsight(termStart, termEnd) {
 }
 
 async function openWhoInsightForDate(date) {
+  if (!canUseRosterInsights()) return;
   const selectedDate = String(date || "").slice(0, 10);
   if (!selectedDate) return;
   await ensureInsightRosterAnalysis();
@@ -2638,6 +2651,7 @@ async function openWhoInsightForDate(date) {
 }
 
 async function openWhenInsight(termStart, termEnd) {
+  if (!canUseRosterInsights()) return;
   await ensureInsightRosterAnalysis();
   const range = availableInsightDateRange();
   const fromDate = formatDateKey(new Date());
@@ -2655,6 +2669,7 @@ async function openWhenInsight(termStart, termEnd) {
 }
 
 async function openWhenInsightForDoctor(doctorKey) {
+  if (!canUseRosterInsights()) return;
   const normalizedKey = normalizeRosterName(doctorKey);
   if (!normalizedKey) return;
   await ensureInsightRosterAnalysis();
@@ -3036,6 +3051,11 @@ function renderWhoGroups(groups) {
 
 async function renderInlineWhoInsight(container, date, options = {}) {
   if (!container || !date) return;
+  if (!canUseRosterInsights()) {
+    container.classList.add("hidden");
+    container.innerHTML = "";
+    return;
+  }
   container.classList.remove("hidden");
   container.dataset.inlineWhoDate = date;
   container.dataset.inlineWhoSource = String(options.source || "").toUpperCase();
@@ -3097,6 +3117,11 @@ function renderInlineWhoGroups(groups, date, sourceFilter = "") {
 
 async function renderInlineWhenInsight(container, doctorKey) {
   if (!container || !doctorKey) return;
+  if (!canUseRosterInsights()) {
+    container.classList.add("hidden");
+    container.innerHTML = "";
+    return;
+  }
   container.classList.remove("hidden");
   container.innerHTML = `<div class="event-inline-loading">Loading future shifts together...</div>`;
   await ensureInsightRosterAnalysis();
@@ -5117,14 +5142,16 @@ function openReviewModal(id, selectedDay = "") {
         ${item.timeLabel ? `<span>Times: ${escapeHtml(item.timeLabel)}</span>` : ""}
         ${item.location ? `<span>Location: ${escapeHtml(item.location)}</span>` : ""}
       </div>
-      <section class="event-inline-insight" data-review-who-panel aria-live="polite"></section>
+      ${canUseRosterInsights() ? `<section class="event-inline-insight" data-review-who-panel aria-live="polite"></section>` : ""}
       ${resetButton}
       ${warnings}
     </article>
   `;
   reviewModal.classList.remove("hidden");
   reviewModal.setAttribute("aria-hidden", "false");
-  void renderInlineWhoInsight(reviewModalBody.querySelector("[data-review-who-panel]"), insightDate, { source: eventSourceCode(event) });
+  if (canUseRosterInsights()) {
+    void renderInlineWhoInsight(reviewModalBody.querySelector("[data-review-who-panel]"), insightDate, { source: eventSourceCode(event) });
+  }
 }
 
 function closeReviewModal() {
@@ -5633,6 +5660,12 @@ function isOwnerAccount() {
   return currentUserRole === "creator" || currentAccount()?.role === "owner";
 }
 
+function canUseRosterInsights() {
+  if (activeCalendarMode() === "doctor-profile") return isCreatorAuthenticated();
+  if (currentUserRole === "creator" && !adminViewingEmail) return true;
+  return currentInsightsEnabled === true;
+}
+
 function canRemoveImports() {
   return isOwnerAccount() && !adminViewingEmail;
 }
@@ -5749,6 +5782,12 @@ function renderAccountsModal() {
                 <strong>${escapeHtml(user.realName || "Name not set")}</strong>
                 <p>${escapeHtml(user.email)} · ${user.role === "owner" ? "Creator" : "Standard user"} · ${formatUserSites(user)} · storage limit: latest 6 months active</p>
               </div>
+              ${user.role === "owner" ? "" : `
+                <label class="toggle review-toggle">
+                  <input type="checkbox" ${user.insightsEnabled ? "checked" : ""} data-toggle-user-insights="${escapeHtml(user.email)}">
+                  Allow “Who/When am I working with?” tools
+                </label>
+              `}
               <div class="account-actions">
                 <button type="button" class="button button-secondary" data-enter-account="${escapeHtml(user.email)}">Enter account</button>
                 ${user.email !== OWNER_EMAIL ? `<button type="button" class="button button-danger" data-delete-account="${escapeHtml(user.email)}">Delete</button>` : ""}
@@ -6628,6 +6667,47 @@ async function createAccountFromOwner(formElement) {
       return;
     }
     setStatus(error.message || "Could not create account.", true);
+  }
+}
+
+async function setUserInsightsEnabled(email, enabled) {
+  const targetEmail = normalizeEmail(email);
+  if (!targetEmail || !isCreatorAuthenticated()) return;
+  const previousUsers = serverUsers.map((user) => ({ ...normalizeServerUser(user) }));
+  serverUsers = serverUsers.map((user) => {
+    const normalized = normalizeServerUser(user);
+    return normalized.email === targetEmail ? { ...normalized, insightsEnabled: enabled === true } : normalized;
+  });
+  renderAccountsModal();
+  try {
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "setUserInsightsEnabled",
+        email: authUserEmail || currentUserEmail,
+        password: authUserPassword || currentUserPassword,
+        targetEmail,
+        insightsEnabled: enabled === true,
+      }),
+    });
+    const data = await readJsonResponse(response, "Could not update user feature access.");
+    if (data.user) {
+      serverUsers = [
+        ...serverUsers.filter((user) => normalizeServerUser(user).email !== targetEmail),
+        data.user,
+      ].sort((left, right) => normalizeServerUser(left).email.localeCompare(normalizeServerUser(right).email));
+      renderAccountsModal();
+    }
+    if (targetEmail === currentUserEmail) {
+      currentInsightsEnabled = enabled === true;
+      rebuildClientPreview();
+    }
+    setStatus(enabled ? "Working-with tools enabled for that user." : "Working-with tools disabled for that user.");
+  } catch (error) {
+    serverUsers = previousUsers;
+    renderAccountsModal();
+    setStatus(error.message || "Could not update user feature access.", true);
   }
 }
 
@@ -7782,6 +7862,7 @@ function normalizeServerUser(value) {
       role: value === OWNER_EMAIL ? "owner" : "user",
       sites: [],
       claims: [],
+      insightsEnabled: false,
       adminIssues: [],
       issuesCount: 0,
     };
@@ -7794,6 +7875,7 @@ function normalizeServerUser(value) {
     role: role === "creator" ? "owner" : role,
     sites: Array.isArray(value?.sites) ? value.sites : [],
     claims: sanitizeRosterClaims(value?.claims || []),
+    insightsEnabled: role === "owner" || role === "creator" || value?.insightsEnabled === true,
     adminIssues: Array.isArray(value?.adminIssues) ? value.adminIssues : [],
     issuesCount: Number(value?.issuesCount || 0),
   };
@@ -7851,6 +7933,7 @@ async function logoutCurrentUser() {
   latestNameMatches = [];
   availableRosterDoctors = [];
   currentSubscription = null;
+  currentInsightsEnabled = false;
   selectedFiles = [];
   resetDerivedState();
   renderLoginState();
@@ -7960,6 +8043,7 @@ async function restoreCloudState(options = {}) {
     }
     cloudAvailable = false;
     currentSubscription = null;
+    currentInsightsEnabled = false;
     localStorage.removeItem(CURRENT_EMAIL_KEY);
     sessionStorage.removeItem(CURRENT_PASSWORD_KEY);
     localStorage.removeItem(PERSISTENT_PASSWORD_KEY);
@@ -8038,6 +8122,7 @@ async function loadDoctorProfileImportsIntoWorkspace() {
 async function applyCloudStateData(data) {
   cloudAvailable = data.cloudAvailable === true;
   currentUserRole = data.role || currentUserRole;
+  currentInsightsEnabled = currentUserRole === "creator" || data.insightsEnabled === true;
   currentRosterClaims = sanitizeRosterClaims(data.claims || []);
   latestNameMatches = sanitizeRosterClaims(data.nameMatches || []);
   availableRosterDoctors = sanitizeAvailableRosterDoctors(data.availableDoctors || []);

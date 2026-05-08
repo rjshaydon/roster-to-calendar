@@ -48,6 +48,7 @@ export async function onRequestPost(context) {
         nameMatches: prepared.nameMatches,
         availableDoctors: prepared.availableDoctors,
         subscription: prepared.subscription,
+        insightsEnabled: prepared.insightsEnabled,
         snapshot: prepared.snapshot,
         snapshotAvailable: prepared.snapshotAvailable,
         snapshotStale: prepared.snapshotStale,
@@ -87,6 +88,7 @@ export async function onRequestPost(context) {
           role: prepared.role,
           sites: [...new Set(sanitizeClaims(prepared.claims).map((claim) => claim.sourceType.toUpperCase()))].sort(),
           claims: prepared.claims,
+          insightsEnabled: insightsEnabledForRecord({ ...created.record, role: prepared.role }),
           createdAt: created.record.createdAt || "",
           updatedAt: created.record.updatedAt || "",
         },
@@ -109,6 +111,7 @@ export async function onRequestPost(context) {
         nameMatches: prepared.nameMatches,
         availableDoctors: prepared.availableDoctors,
         subscription: prepared.subscription,
+        insightsEnabled: prepared.insightsEnabled,
         snapshot: prepared.snapshot,
         snapshotAvailable: prepared.snapshotAvailable,
         snapshotStale: prepared.snapshotStale,
@@ -149,6 +152,7 @@ export async function onRequestPost(context) {
         nameMatches: prepared.nameMatches,
         availableDoctors: prepared.availableDoctors,
         subscription: prepared.subscription,
+        insightsEnabled: prepared.insightsEnabled,
         issueConfig: prepared.issueConfig,
       });
     }
@@ -161,6 +165,30 @@ export async function onRequestPost(context) {
         ok: true,
         users: await listUsers(context.env.ROSTER_STORE),
         issueConfig: await buildIssueConfig(context.env.ROSTER_STORE, email),
+      });
+    }
+
+    if (action === "setUserInsightsEnabled") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      if (!targetEmail) {
+        return Response.json({ error: "Target account is required." }, { status: 400 });
+      }
+      const targetRecord = await loadAccountRecord(context.env.ROSTER_STORE, targetEmail);
+      const targetRole = targetRecord.role || roleForEmail(targetEmail);
+      if (targetRole === "creator" || targetRole === "owner") {
+        return Response.json({ error: "Creator insights cannot be disabled." }, { status: 400 });
+      }
+      const updated = {
+        ...targetRecord,
+        insightsEnabled: body?.insightsEnabled === true,
+        updatedAt: new Date().toISOString(),
+      };
+      await context.env.ROSTER_STORE.put(storageKey(targetEmail), JSON.stringify(updated));
+      return Response.json({
+        ok: true,
+        user: userSummaryFromRecord(targetEmail, updated),
       });
     }
 
@@ -647,20 +675,32 @@ async function listUsers(store) {
   const users = await Promise.all((result.keys || []).map(async (item) => {
     const email = item.name.replace(/^account:/, "");
     const record = await store.get(item.name, "json").catch(() => null);
-    const claims = sanitizeClaims(record?.claims);
-    return {
-      email,
-      realName: String(record?.realName || "").trim(),
-      role: record?.role || roleForEmail(email),
-      sites: [...new Set(claims.map((claim) => claim.sourceType.toUpperCase()))].sort(),
-      claims,
-      adminIssues: sanitizeAdminIssues(record?.adminIssues),
-      issuesCount: sanitizeAdminIssues(record?.adminIssues).length,
-      createdAt: record?.createdAt || "",
-      updatedAt: record?.updatedAt || "",
-    };
+    return userSummaryFromRecord(email, record);
   }));
   return users.sort((a, b) => a.email.localeCompare(b.email));
+}
+
+function userSummaryFromRecord(email, record) {
+  const claims = sanitizeClaims(record?.claims);
+  const adminIssues = sanitizeAdminIssues(record?.adminIssues);
+  return {
+    email,
+    realName: String(record?.realName || "").trim(),
+    role: record?.role || roleForEmail(email),
+    sites: [...new Set(claims.map((claim) => claim.sourceType.toUpperCase()))].sort(),
+    claims,
+    insightsEnabled: insightsEnabledForRecord(record),
+    adminIssues,
+    issuesCount: adminIssues.length,
+    createdAt: record?.createdAt || "",
+    updatedAt: record?.updatedAt || "",
+  };
+}
+
+function insightsEnabledForRecord(record) {
+  const role = record?.role || roleForEmail(normalizeEmail(record?.email));
+  if (role === "creator" || role === "owner") return true;
+  return record?.insightsEnabled === true;
 }
 
 export async function prepareAccountResponse(store, rawRecord, options = {}) {
@@ -745,6 +785,7 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
       token: String(record.subscriptionToken || ""),
       enabled: Boolean(snapshot?.subscriptionFeeds?.full?.ics),
     },
+    insightsEnabled: insightsEnabledForRecord(record),
     adminIssues: sanitizeAdminIssues(record.adminIssues),
     issueConfig,
     snapshot,

@@ -338,6 +338,32 @@ assert.equal(profileImports.imports[0].repoId, "fixture-roster");
 
 await seedUser(stateStore, "patrick@example.com", "patrick-password", "Patrick Tan");
 await seedUser(stateStore, "senior@example.com", "senior-password", "Senior Registrar");
+const initialUsers = await postState(stateStore, {
+  action: "listUsers",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+});
+assert.equal(initialUsers.users.find((user) => user.email === "patrick@example.com")?.insightsEnabled, false);
+const enabledInsights = await postState(stateStore, {
+  action: "setUserInsightsEnabled",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  targetEmail: "patrick@example.com",
+  insightsEnabled: true,
+});
+assert.equal(enabledInsights.user.insightsEnabled, true);
+const patrickLogin = await postState(stateStore, {
+  action: "login",
+  email: "patrick@example.com",
+  password: "patrick-password",
+});
+assert.equal(patrickLogin.insightsEnabled, true);
+const seniorLogin = await postState(stateStore, {
+  action: "login",
+  email: "senior@example.com",
+  password: "senior-password",
+});
+assert.equal(seniorLogin.insightsEnabled, false);
 const n1Issue = {
   source: "MMC",
   seniority: "Senior Registrar",
