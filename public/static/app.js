@@ -4626,6 +4626,9 @@ function previewInclusiveEndDate(event, startDate, endDate) {
   if (event.allDay) {
     return addDays(endDate, -1);
   }
+  if (endDate > startDate) {
+    return startDate;
+  }
   if (endDate <= startDate) {
     return startDate;
   }

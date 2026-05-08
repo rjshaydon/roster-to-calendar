@@ -2208,6 +2208,24 @@ body[data-skin="console"] #issuesPanel {
   background: #ffffff;
 }
 
+body[data-skin="console"] #issuesPanel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  max-height: calc(100vh - 520px);
+  min-height: 0;
+}
+
+body[data-skin="console"] #issuesPanel.hidden {
+  display: none !important;
+}
+
+body[data-skin="console"] #issuesList {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+
 body[data-skin="console"] #settingsPanel.settings-panel {
   position: fixed;
   z-index: 40;
