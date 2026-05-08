@@ -7829,6 +7829,7 @@ function snapshotCloudSavePayload() {
     targetEmail: adminViewingEmail ? currentUserEmail : "",
     imports: selectedFiles.map((entry) => ({ ...entry })),
     session: buildActiveSessionState(),
+    removedImportIds: [],
   };
 }
 
@@ -7873,6 +7874,7 @@ async function saveCloudState(snapshot = null) {
       targetEmail: payload.targetEmail,
       state,
       snapshot: snapshotPayload,
+      removedImportIds: payload.removedImportIds || [],
     }),
   });
   const data = await readJsonResponse(response, "Cloud save failed.");
@@ -8533,7 +8535,11 @@ async function removeStoredImport(id) {
   renderFileSurfaces();
   try {
     setStatus("Removing roster file...");
-    await saveCloudState();
+    await saveCloudState({
+      ...snapshotCloudSavePayload(),
+      imports: selectedFiles.map((entry) => ({ ...entry })),
+      removedImportIds: [id],
+    });
   } catch (error) {
     setStatus(error.message || "Could not save file removal.", true);
   }

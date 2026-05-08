@@ -213,6 +213,7 @@ assert.ok(pdfView.events.some((event) => event.rawValue === "0800-1730" && event
 class MemoryStore {
   constructor() {
     this.records = new Map();
+    this.deletedKeys = [];
   }
 
   async get(key, type) {
@@ -226,6 +227,7 @@ class MemoryStore {
   }
 
   async delete(key) {
+    this.deletedKeys.push(key);
     this.records.delete(key);
   }
 
@@ -235,6 +237,44 @@ class MemoryStore {
       keys: [...this.records.keys()].filter((name) => name.startsWith(prefix)).map((name) => ({ name })),
     };
   }
+}
+
+function repositoryFile(id, overrides = {}) {
+  return {
+    repoId: id,
+    id,
+    name: `${id}.xlsx`,
+    sourceType: "mmc",
+    active: true,
+    size: 12,
+    lastModified: 1,
+    doctors: [{
+      key: "TITUS HACKMAN",
+      displayName: "Titus HACKMAN",
+      sourceType: "mmc",
+    }],
+    ...overrides,
+  };
+}
+
+async function seedRepository(store, files) {
+  await store.put("repository:index", JSON.stringify({ version: 1, files }));
+  for (const file of files) {
+    await store.put(`repository:file:${file.id}`, JSON.stringify({
+      ...file,
+      dataUrl: `data:application/octet-stream;base64,${Buffer.from(file.id).toString("base64")}`,
+    }));
+  }
+}
+
+async function seedUser(store, email, password, realName = "Titus Hackman") {
+  await postState(store, {
+    action: "login",
+    email,
+    password,
+    mode: "create",
+    realName,
+  });
 }
 
 async function postState(store, payload) {
@@ -258,29 +298,10 @@ await postState(stateStore, {
   email: "rhaydon@gmail.com",
   password: creatorPassword,
 });
-await stateStore.put("repository:index", JSON.stringify({
-  files: [{
-    repoId: "fixture-roster",
-    id: "fixture-roster",
-    name: "AdultMMCTerm2.2026.Ver1.pdf",
-    sourceType: "mmc",
-    active: true,
-    doctors: [{
-      key: "TITUS HACKMAN",
-      displayName: "Titus HACKMAN",
-      sourceType: "unknown",
-    }],
-  }],
-}));
-await stateStore.put("repository:file:fixture-roster", JSON.stringify({
-  repoId: "fixture-roster",
-  id: "fixture-roster",
+await seedRepository(stateStore, [repositoryFile("fixture-roster", {
   name: "AdultMMCTerm2.2026.Ver1.pdf",
-  size: 12,
-  lastModified: 1,
   sourceType: "mmc",
-  dataUrl: "data:application/pdf;base64,cm9zdGVy",
-}));
+})]);
 
 const creatorImports = await postState(stateStore, {
   action: "loadImports",
@@ -301,5 +322,105 @@ const profileImports = await postState(stateStore, {
 });
 assert.equal(profileImports.imports.length, 1);
 assert.equal(profileImports.imports[0].repoId, "fixture-roster");
+
+const deletionStore = new MemoryStore();
+await postState(deletionStore, {
+  action: "login",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+});
+await seedRepository(deletionStore, [
+  repositoryFile("keep-roster"),
+  repositoryFile("missing-from-save", { name: "missing-from-save.xlsx" }),
+  repositoryFile("remove-roster", { name: "remove-roster.xlsx" }),
+]);
+
+await postState(deletionStore, {
+  action: "save",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  state: {
+    version: 1,
+    imports: [{ repoId: "keep-roster", id: "keep-roster", sourceType: "mmc", name: "keep-roster.xlsx" }],
+    session: {},
+  },
+});
+assert.ok(await deletionStore.get("repository:file:missing-from-save", "json"), "ordinary creator save must not delete omitted repository files");
+let deletionIndex = await deletionStore.get("repository:index", "json");
+assert.ok(deletionIndex.files.some((file) => file.id === "missing-from-save"), "ordinary creator save must keep omitted files in the repository index");
+
+await postState(deletionStore, {
+  action: "save",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  state: {
+    version: 1,
+    imports: [{ repoId: "keep-roster", id: "keep-roster", sourceType: "mmc", name: "keep-roster.xlsx" }],
+    session: {},
+  },
+  removedImportIds: ["remove-roster"],
+});
+assert.equal(await deletionStore.get("repository:file:remove-roster", "json"), null);
+deletionIndex = await deletionStore.get("repository:index", "json");
+assert.equal(deletionIndex.files.some((file) => file.id === "remove-roster"), false);
+assert.ok(await deletionStore.get("repository:file:keep-roster", "json"));
+assert.ok(await deletionStore.get("repository:file:missing-from-save", "json"));
+
+await postState(deletionStore, {
+  action: "save",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  state: {
+    version: 1,
+    imports: [{ repoId: "keep-roster", id: "keep-roster", sourceType: "mmc", name: "keep-roster.xlsx" }],
+    session: {},
+  },
+  removedImportIds: ["remove-roster"],
+});
+assert.ok(await deletionStore.get("repository:file:keep-roster", "json"));
+assert.ok(await deletionStore.get("repository:file:missing-from-save", "json"));
+
+await seedUser(deletionStore, "user@example.com", "user-password");
+await postState(deletionStore, {
+  action: "save",
+  email: "user@example.com",
+  password: "user-password",
+  state: {
+    version: 1,
+    imports: [{ repoId: "keep-roster", id: "keep-roster", sourceType: "mmc", name: "keep-roster.xlsx" }],
+    session: {},
+  },
+  removedImportIds: ["keep-roster"],
+});
+assert.ok(await deletionStore.get("repository:file:keep-roster", "json"), "standard users must not delete repository files");
+
+const beforeLoadDeleteCount = deletionStore.deletedKeys.length;
+const deletionCreatorImports = await postState(deletionStore, {
+  action: "loadImports",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+});
+assert.equal(deletionStore.deletedKeys.length, beforeLoadDeleteCount, "loading imports must not delete repository records");
+assert.equal(deletionCreatorImports.imports.some((item) => item.repoId === "remove-roster"), false);
+assert.ok(deletionCreatorImports.imports.some((item) => item.repoId === "keep-roster"));
+assert.ok(deletionCreatorImports.imports.some((item) => item.repoId === "missing-from-save"));
+
+const deletionProfileImports = await postState(deletionStore, {
+  action: "loadDoctorProfileImports",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  profileId: "TITUS HACKMAN::mmc",
+  doctorKey: "TITUS HACKMAN",
+  displayName: "Titus HACKMAN",
+  sourceTypes: ["mmc"],
+});
+assert.equal(deletionProfileImports.imports.some((item) => item.repoId === "remove-roster"), false);
+
+const deletionUserImports = await postState(deletionStore, {
+  action: "loadImports",
+  email: "user@example.com",
+  password: "user-password",
+});
+assert.equal(deletionUserImports.imports.some((item) => item.repoId === "remove-roster"), false);
 
 console.log("Fixture smoke test passed.");

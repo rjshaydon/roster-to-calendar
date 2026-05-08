@@ -297,8 +297,13 @@ export async function onRequestPost(context) {
       const claims = targetRole === "creator" || targetRole === "owner"
         ? sanitizeClaims(targetRecord.claims)
         : mergeClaims(targetRecord.claims, matchRepositoryClaims(repository.index, targetRecord.realName || ""));
-      if (targetRole === "creator" || targetRole === "owner") {
-        await reconcileRepositoryActiveFiles(context.env.ROSTER_STORE, repository.index, state.imports);
+      const removedImportIds = sanitizeRepositoryFileIds(body?.removedImportIds);
+      if ((targetRole === "creator" || targetRole === "owner") && saveEmail === email && removedImportIds.length) {
+        repository.index = await removeRepositoryFiles(context.env.ROSTER_STORE, repository.index, removedImportIds);
+        state.imports = state.imports.filter((item) => {
+          const repoId = item.repoId || item.repositoryId || item.id;
+          return !removedImportIds.includes(repoId);
+        });
       }
       await context.env.ROSTER_STORE.put(storageKey(saveEmail), JSON.stringify({
         ...targetRecord,
@@ -735,30 +740,6 @@ async function upsertStateImports(store, imports, uploadedBy) {
   };
 }
 
-async function reconcileRepositoryActiveFiles(store, index, activeImports = []) {
-  const activeIds = new Set((activeImports || [])
-    .map((item) => item?.repoId || item?.repositoryId || item?.id)
-    .filter(Boolean));
-  let changed = false;
-  const files = [];
-  const deletedIds = [];
-  for (const file of index.files || []) {
-    if (activeIds.has(file.id)) {
-      const activeFile = file.active === false ? { ...file, active: true } : file;
-      if (activeFile !== file) changed = true;
-      files.push(activeFile);
-      continue;
-    }
-    changed = true;
-    deletedIds.push(file.id);
-  }
-  if (!changed) return index;
-  await Promise.all(deletedIds.map((id) => store.delete(repositoryFileKey(id))));
-  const next = { ...index, files };
-  await saveRepositoryIndex(store, next);
-  return next;
-}
-
 async function upsertImportsIntoRepository(store, index, imports = [], uploadedBy = "") {
   const idByOriginalId = new Map();
   const idByDataUrl = new Map();
@@ -820,31 +801,27 @@ async function upsertImportsIntoRepository(store, index, imports = [], uploadedB
 async function loadRepositoryIndex(store) {
   const raw = await store.get(REPOSITORY_INDEX_KEY, "json").catch(() => null);
   const rawFiles = Array.isArray(raw?.files) ? raw.files : [];
-  const inactiveFiles = rawFiles.map(sanitizeRepositoryFile).filter((file) => file && file.active === false);
-  if (inactiveFiles.length) {
-    await Promise.all(inactiveFiles.map((file) => store.delete(repositoryFileKey(file.id))));
-    const activeFiles = rawFiles.map(sanitizeRepositoryFile).filter((file) => file && file.active !== false);
-    await saveRepositoryIndex(store, { version: 1, files: activeFiles });
-    await deleteRepositoryFilesOutsideIndex(store, activeFiles);
-    return { version: 1, files: activeFiles };
-  }
-  const files = rawFiles.map(sanitizeRepositoryFile).filter(Boolean);
-  await deleteRepositoryFilesOutsideIndex(store, files);
+  const files = rawFiles.map(sanitizeRepositoryFile).filter((file) => file && file.active !== false);
   return {
     version: 1,
     files,
   };
 }
 
-async function deleteRepositoryFilesOutsideIndex(store, files = []) {
-  const retainedIds = new Set((files || []).map((file) => file.id));
-  const result = await store.list({ prefix: REPOSITORY_FILE_PREFIX });
-  const staleKeys = (result.keys || []).filter((item) => {
-    const id = String(item.name || "").slice(REPOSITORY_FILE_PREFIX.length);
-    return id && !retainedIds.has(id);
-  });
-  if (!staleKeys.length) return;
-  await Promise.all(staleKeys.map((item) => store.delete(item.name)));
+function sanitizeRepositoryFileIds(ids = []) {
+  return [...new Set((Array.isArray(ids) ? ids : [])
+    .map((id) => String(id || "").trim())
+    .filter(Boolean))];
+}
+
+async function removeRepositoryFiles(store, index, ids = []) {
+  const removedIds = new Set(sanitizeRepositoryFileIds(ids));
+  if (!removedIds.size) return index;
+  const files = (index.files || []).filter((file) => !removedIds.has(file.id));
+  await Promise.all([...removedIds].map((id) => store.delete(repositoryFileKey(id))));
+  const next = { ...index, files };
+  await saveRepositoryIndex(store, next);
+  return next;
 }
 
 async function saveRepositoryIndex(store, index) {
