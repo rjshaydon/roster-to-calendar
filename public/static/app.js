@@ -1690,6 +1690,13 @@ function renderFilesList() {
   filesList.innerHTML = renderFilesMarkup({ canRemove: canRemoveImports(), canAdd: true });
 }
 
+function renderFileSurfaces() {
+  renderFilesList();
+  if (accountsModal && !accountsModal.classList.contains("hidden")) {
+    renderAccountsModal();
+  }
+}
+
 function renderDoctorState() {
   doctorSelect.innerHTML = "";
   doctorName.textContent = "";
@@ -8248,11 +8255,17 @@ async function garbageCollectStoredImports() {
   const records = await listStoredImportRecords();
   const unreferenced = records.filter((record) => !referenced.has(record.id)).map((record) => record.id);
   if (!unreferenced.length) return;
+  await deleteStoredImportRecords(unreferenced);
+}
+
+async function deleteStoredImportRecords(ids = []) {
+  const uniqueIds = [...new Set((ids || []).filter(Boolean))];
+  if (!uniqueIds.length) return;
   const db = await openImportsDb();
   await new Promise((resolve, reject) => {
     const tx = db.transaction(IMPORT_STORE, "readwrite");
     const store = tx.objectStore(IMPORT_STORE);
-    for (const id of unreferenced) {
+    for (const id of uniqueIds) {
       store.delete(id);
     }
     tx.oncomplete = () => resolve();
@@ -8261,22 +8274,68 @@ async function garbageCollectStoredImports() {
   db.close();
 }
 
+function removeImportRefsFromWorkspaceStore(id) {
+  if (!id) return;
+  const store = loadWorkspaceStore();
+  let changed = false;
+  for (const [key, workspace] of Object.entries(store)) {
+    const refs = Array.isArray(workspace?.fileRefs) ? workspace.fileRefs : [];
+    const nextRefs = refs.filter((ref) => ref.id !== id);
+    if (nextRefs.length === refs.length) continue;
+    store[key] = {
+      ...workspace,
+      fileRefs: nextRefs,
+      snapshot: workspace?.snapshot
+        ? {
+            ...workspace.snapshot,
+            fileRefs: Array.isArray(workspace.snapshot.fileRefs)
+              ? workspace.snapshot.fileRefs.filter((ref) => ref.id !== id)
+              : [],
+          }
+        : workspace?.snapshot,
+    };
+    changed = true;
+  }
+  if (changed) saveWorkspaceStore(store);
+}
+
+function removeImportRefsFromCurrentSnapshot(id) {
+  if (!id || !currentSnapshot) return;
+  currentSnapshot = sanitizeWorkspaceSnapshot({
+    ...currentSnapshot,
+    fileRefs: Array.isArray(currentSnapshot.fileRefs)
+      ? currentSnapshot.fileRefs.filter((ref) => ref.id !== id)
+      : [],
+  });
+}
+
 async function removeStoredImport(id) {
+  cancelScheduledCloudStateSave();
   selectedFiles = selectedFiles.filter((entry) => entry.id !== id);
+  removeImportRefsFromCurrentSnapshot(id);
+  removeImportRefsFromWorkspaceStore(id);
   saveCurrentSessionState();
   try {
+    await deleteStoredImportRecords([id]);
     await garbageCollectStoredImports();
   } catch {
     // Keep in-memory removal even if persistent storage is unavailable.
   }
-  renderFilesList();
-  scheduleCloudStateSave();
+  renderFileSurfaces();
+  try {
+    setStatus("Removing roster file...");
+    await saveCloudState();
+  } catch (error) {
+    setStatus(error.message || "Could not save file removal.", true);
+  }
   if (!selectedFiles.length) {
     resetDerivedState();
     setStatus("Add a roster file to begin.");
     return;
   }
   await analyzeFiles();
+  scheduleCloudStateSave();
+  renderFileSurfaces();
 }
 
 function loadConflictSelections() {

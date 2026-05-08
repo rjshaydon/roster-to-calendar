@@ -735,13 +735,20 @@ async function reconcileRepositoryActiveFiles(store, index, activeImports = []) 
     .map((item) => item?.repoId || item?.repositoryId || item?.id)
     .filter(Boolean));
   let changed = false;
-  const files = (index.files || []).map((file) => {
-    const active = activeIds.has(file.id);
-    if ((file.active !== false) === active) return file;
+  const files = [];
+  const deletedIds = [];
+  for (const file of index.files || []) {
+    if (activeIds.has(file.id)) {
+      const activeFile = file.active === false ? { ...file, active: true } : file;
+      if (activeFile !== file) changed = true;
+      files.push(activeFile);
+      continue;
+    }
     changed = true;
-    return { ...file, active };
-  });
+    deletedIds.push(file.id);
+  }
   if (!changed) return index;
+  await Promise.all(deletedIds.map((id) => store.delete(repositoryFileKey(id))));
   const next = { ...index, files };
   await saveRepositoryIndex(store, next);
   return next;
@@ -807,10 +814,32 @@ async function upsertImportsIntoRepository(store, index, imports = [], uploadedB
 
 async function loadRepositoryIndex(store) {
   const raw = await store.get(REPOSITORY_INDEX_KEY, "json").catch(() => null);
+  const rawFiles = Array.isArray(raw?.files) ? raw.files : [];
+  const inactiveFiles = rawFiles.map(sanitizeRepositoryFile).filter((file) => file && file.active === false);
+  if (inactiveFiles.length) {
+    await Promise.all(inactiveFiles.map((file) => store.delete(repositoryFileKey(file.id))));
+    const activeFiles = rawFiles.map(sanitizeRepositoryFile).filter((file) => file && file.active !== false);
+    await saveRepositoryIndex(store, { version: 1, files: activeFiles });
+    await deleteRepositoryFilesOutsideIndex(store, activeFiles);
+    return { version: 1, files: activeFiles };
+  }
+  const files = rawFiles.map(sanitizeRepositoryFile).filter(Boolean);
+  await deleteRepositoryFilesOutsideIndex(store, files);
   return {
     version: 1,
-    files: Array.isArray(raw?.files) ? raw.files.map(sanitizeRepositoryFile).filter(Boolean) : [],
+    files,
   };
+}
+
+async function deleteRepositoryFilesOutsideIndex(store, files = []) {
+  const retainedIds = new Set((files || []).map((file) => file.id));
+  const result = await store.list({ prefix: REPOSITORY_FILE_PREFIX });
+  const staleKeys = (result.keys || []).filter((item) => {
+    const id = String(item.name || "").slice(REPOSITORY_FILE_PREFIX.length);
+    return id && !retainedIds.has(id);
+  });
+  if (!staleKeys.length) return;
+  await Promise.all(staleKeys.map((item) => store.delete(item.name)));
 }
 
 async function saveRepositoryIndex(store, index) {
