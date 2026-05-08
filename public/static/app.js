@@ -257,6 +257,7 @@ let currentRosterClaims = [];
 let latestNameMatches = [];
 let availableRosterDoctors = [];
 let currentSubscription = null;
+let creatorCalendarSourceFileRefs = [];
 let insightsState = null;
 let doctorAnalysisCacheKey = "";
 let doctorAnalysisCache = new Map();
@@ -3987,6 +3988,12 @@ function activeCalendarMode() {
   return activeCalendarContext?.mode || (activeDoctorProfile ? "doctor-profile" : currentUserEmail === OWNER_EMAIL && !adminViewingEmail ? "creator-account" : "claimed-account");
 }
 
+function rememberCreatorCalendarSourceRefs() {
+  if (activeCalendarMode() !== "creator-account") return;
+  const refs = sanitizeClientFileRefs(currentSnapshot?.fileRefs?.length ? currentSnapshot.fileRefs : selectedFiles.map(importRefForWorkspace));
+  if (refs.length) creatorCalendarSourceFileRefs = refs;
+}
+
 function showSwitchOverlay(title, message) {
   if (!switchOverlay) return;
   switchOverlayTitle.textContent = title || "Switching…";
@@ -6335,11 +6342,6 @@ async function enterUserAccount(email) {
 
 async function enterDoctorProfileView(doctor) {
   if (!isOwnerAccount() && !isCreatorAuthenticated()) return;
-  const profileId = buildDoctorProfileId(doctor);
-  if (!profileId) {
-    setStatus(`Could not open ${doctor?.displayName || "that clinician"} because their roster source was not available.`, true);
-    return;
-  }
   const previousState = captureCalendarViewState();
   const creatorEmail = authUserEmail || currentUserEmail;
   const creatorPassword = authUserPassword || currentUserPassword;
@@ -6357,26 +6359,9 @@ async function enterDoctorProfileView(doctor) {
   localStorage.setItem(CURRENT_EMAIL_KEY, currentUserEmail);
   sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
   setStatus(`Opening ${doctor.displayName}...`);
-  await clearLocalWorkspace();
-  activeDoctorProfile = {
-    id: profileId,
-    ownerId: `doctor-profile:${profileId}`,
-    doctorKey: doctor.key,
-    displayName: doctor.displayName,
-    sourceTypes: doctorProfileSourceTypes(doctor),
-  };
-  setActiveCalendarContext("doctor-profile", { email: currentUserEmail, profile: activeDoctorProfile });
-  restoredSessionState = null;
   try {
-    await restoreDoctorProfileState();
-    if (!selectedFiles.length) {
-      await restoreDoctorProfileImportsFromPreviousView(previousState);
-    }
-    if (!selectedFiles.length) {
-      throw new Error(`${doctor.displayName} was not found in the stored roster repository or the current creator rosters.`);
-    }
-    await bootstrapImports();
-    renderLoginState();
+    const result = await loadUnclaimedDoctorCalendar(doctor, previousState);
+    await commitCalendarLoad(result);
   } catch (error) {
     restoreCalendarViewState(previousState);
     renderLoginState();
@@ -6384,13 +6369,217 @@ async function enterDoctorProfileView(doctor) {
   }
 }
 
-async function restoreDoctorProfileImportsFromPreviousView(previousState) {
-  const previousFiles = previousState?.selectedFiles || [];
-  if (!previousFiles.length) return;
-  const restored = await loadStoredImportsByRefs(previousFiles.map(importRefForWorkspace)).catch(() => []);
-  selectedFiles = restored.length
-    ? restored
-    : previousFiles.map((entry) => ({ ...entry }));
+async function loadUnclaimedDoctorCalendar(doctor, sourceContext) {
+  const profileId = buildDoctorProfileId(doctor);
+  if (!profileId) {
+    throw new Error(`Could not open ${doctor?.displayName || "that clinician"} because their roster source was not available.`);
+  }
+  const profile = {
+    id: profileId,
+    ownerId: `doctor-profile:${profileId}`,
+    doctorKey: doctor.key,
+    displayName: doctor.displayName,
+    sourceTypes: doctorProfileSourceTypes(doctor),
+  };
+  const profileData = await fetchDoctorProfileState(profile);
+  const snapshot = sanitizeWorkspaceSnapshot(profileData.snapshot);
+  const snapshotUsable = snapshot?.preview && snapshot?.doctorOptions?.length && profileData.snapshotStale !== true;
+  if (snapshotUsable) {
+    return {
+      mode: "doctor-profile",
+      ownerId: profile.ownerId,
+      doctor: { ...doctor, sourceTypes: profile.sourceTypes },
+      profile,
+      imports: importRefsToClientEntries(snapshot.fileRefs || []),
+      snapshot,
+      session: snapshot.session || profileData.profile?.state?.session || {},
+      preview: snapshot.preview,
+      doctorOptions: snapshot.doctorOptions || [],
+      detectedSources: snapshot.detectedSources || {},
+    };
+  }
+
+  const imports = await loadUnclaimedSourceImports(doctor, sourceContext, profile);
+  if (!imports.length) {
+    throw new Error(`${doctor.displayName} was not found in the roster files used by the current creator calendar.`);
+  }
+  const generated = await buildUnclaimedPreviewFromImports(doctor, profile, imports, profileData.profile?.state?.session || {});
+  return {
+    mode: "doctor-profile",
+    ownerId: profile.ownerId,
+    doctor: generated.doctor,
+    profile,
+    imports,
+    snapshot: null,
+    session: generated.session,
+    preview: generated.preview,
+    doctorOptions: generated.doctorOptions,
+    detectedSources: generated.detectedSources,
+    parsedSources: generated.parsedSources,
+    parsedDoctors: generated.parsedDoctors,
+  };
+}
+
+async function fetchDoctorProfileState(profile) {
+  const response = await fetch("/api/state", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      action: "loadDoctorProfile",
+      email: authUserEmail || currentUserEmail,
+      password: authUserPassword || currentUserPassword,
+      profileId: profile.id,
+      doctorKey: profile.doctorKey,
+      displayName: profile.displayName,
+      sourceTypes: profile.sourceTypes,
+    }),
+  });
+  const data = await readJsonResponse(response, "Doctor profile load failed.");
+  applyIssueConfig(data.issueConfig);
+  return data;
+}
+
+async function loadUnclaimedSourceImports(doctor, sourceContext, profile) {
+  const refs = sanitizeClientFileRefs(
+    activeCalendarMode() === "creator-account" && sourceContext?.currentSnapshot?.fileRefs?.length
+      ? sourceContext.currentSnapshot.fileRefs
+      : creatorCalendarSourceFileRefs,
+  );
+  if (refs.length) {
+    const imports = await loadCloudImportsByRefs(refs).catch(() => []);
+    if (imports.length) return imports;
+  }
+  const previousFiles = activeCalendarMode() === "creator-account" ? (sourceContext?.selectedFiles || []) : [];
+  if (previousFiles.length) {
+    const restored = await loadStoredImportsByRefs(previousFiles.map(importRefForWorkspace)).catch(() => []);
+    if (restored.length) return restored;
+    const inMemory = previousFiles.filter((entry) => entry.file).map((entry) => ({ ...entry }));
+    if (inMemory.length) return inMemory;
+  }
+  return await loadDoctorProfileImportsForProfile(profile).catch(() => []);
+}
+
+function sanitizeClientFileRefs(refs) {
+  if (!Array.isArray(refs)) return [];
+  return refs.map(importRefForWorkspace).filter((ref) => ref.id);
+}
+
+async function loadCloudImportsByRefs(refs) {
+  const response = await fetch("/api/state", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      action: "loadImportRefs",
+      email: authUserEmail || currentUserEmail,
+      password: authUserPassword || currentUserPassword,
+      refs,
+    }),
+  });
+  const data = await readJsonResponse(response, "Could not load roster files.");
+  return await deserializeCloudImports(data.imports || []);
+}
+
+async function loadDoctorProfileImportsForProfile(profile) {
+  const response = await fetch("/api/state", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      action: "loadDoctorProfileImports",
+      email: authUserEmail || currentUserEmail,
+      password: authUserPassword || currentUserPassword,
+      profileId: profile.id,
+      doctorKey: profile.doctorKey,
+      displayName: profile.displayName,
+      sourceTypes: profile.sourceTypes,
+    }),
+  });
+  const data = await readJsonResponse(response, "Could not load roster files.");
+  return await deserializeCloudImports(data.imports || []);
+}
+
+async function buildUnclaimedPreviewFromImports(doctor, profile, imports, session = {}) {
+  const doctorForBuild = {
+    ...doctor,
+    key: profile.doctorKey,
+    displayName: profile.displayName,
+    sourceTypes: profile.sourceTypes,
+  };
+  const parsed = await parseRosterEntries(imports, doctorForBuild);
+  const parsedDoctors = doctorsByImportId(parsed.sources);
+  const allDoctors = buildCreatorDoctorOptions(rosterDoctorOptions(parsed.sources.mmc, parsed.sources.ddh));
+  const selected = allDoctors.find((item) => item.key === doctorForBuild.key) || doctorForBuild;
+  const buildSettings = {
+    ...defaultSettings(),
+    ...settings,
+    ...(session?.settings || {}),
+    hospitalFilter: "all",
+    dateFrom: "",
+    dateTo: "",
+  };
+  const view = buildRosterView(
+    parsed.sources.mmc,
+    parsed.sources.ddh,
+    selected.key,
+    buildSettings,
+    sanitizeOverrideState(session?.overrides),
+    session?.conflictSelections || {},
+    selected.aliases || [],
+  );
+  const events = view.events;
+  return {
+    doctor: selected,
+    parsedSources: parsed.sources,
+    parsedDoctors,
+    doctorOptions: allDoctors,
+    detectedSources: summarizeDetectedSources(sourceImports(parsed.sources)),
+    session: {
+      ...session,
+      doctorKey: selected.key,
+      settings: session?.settings || { ...settings },
+    },
+    preview: {
+      ...previewSummary(events),
+      events: events.map(serializeEvent),
+      review: view.reviewItems.map(serializeReviewItem),
+      issues: view.issues,
+      conflicts: view.conflicts.map(serializeConflict),
+      imports: view.imports,
+      sources: sourceNames(parsed.sources),
+      lastParsed: new Date().toISOString(),
+    },
+  };
+}
+
+async function commitCalendarLoad(result) {
+  if (!result || result.mode !== "doctor-profile") {
+    throw new Error("Unsupported calendar load result.");
+  }
+  activeDoctorProfile = result.profile;
+  setActiveCalendarContext("doctor-profile", { email: currentUserEmail, profile: activeDoctorProfile });
+  selectedFiles = result.imports || [];
+  currentSnapshot = result.snapshot;
+  currentSnapshotStale = false;
+  currentSnapshotBuiltAt = result.snapshot?.builtAt || "";
+  restoredSessionState = result.session || {};
+  doctorOptions = result.doctorOptions?.length ? result.doctorOptions : [result.doctor];
+  detectedSources = result.detectedSources || {};
+  parsedRosterSources = result.parsedSources || null;
+  parsedImportDoctors = result.parsedDoctors || new Map();
+  latestPreview = JSON.parse(JSON.stringify(result.preview));
+  applySessionState(restoredSessionState, { inheritedSettings: rosterDefaultSettings() });
+  if (result.doctor?.key) restoredSessionState.doctorKey = result.doctor.key;
+  renderSettings();
+  renderFilesList();
+  renderDoctorState();
+  if (doctorOptions.length > 1 && result.doctor?.key) doctorSelect.value = result.doctor.key;
+  indexReviewItems(latestPreview.review || []);
+  rebuildClientPreview();
+  scheduleInsightWarmup();
+  cacheCurrentSnapshot(buildActiveSessionState());
+  saveCurrentWorkspace();
+  await saveCloudState();
+  renderLoginState();
+  setStatus("Calendar loaded.");
 }
 
 function captureCalendarViewState() {
@@ -7255,6 +7444,7 @@ async function applyCloudStateData(data) {
   currentSnapshotBuiltAt = String(data.snapshotBuiltAt || "");
   selectedFiles = importRefsToClientEntries(data.state.imports || currentSnapshot?.fileRefs || []);
   restoredSessionState = currentSnapshot?.session || (data.state.session && typeof data.state.session === "object" ? data.state.session : null);
+  rememberCreatorCalendarSourceRefs();
   saveWorkspaceSnapshotForEmail(activeWorkspaceOwnerKey(), {
     fileRefs: selectedFiles.map(importRefForWorkspace),
     session: restoredSessionState || {},
@@ -7342,6 +7532,7 @@ async function saveCloudState(snapshot = null) {
       currentSnapshot = sanitizeWorkspaceSnapshot(snapshotPayload);
       currentSnapshotStale = false;
       currentSnapshotBuiltAt = new Date().toISOString();
+      rememberCreatorCalendarSourceRefs();
     }
     renderLoginState();
     return;
@@ -7365,6 +7556,7 @@ async function saveCloudState(snapshot = null) {
     currentSnapshot = sanitizeWorkspaceSnapshot(snapshotPayload);
     currentSnapshotStale = false;
     currentSnapshotBuiltAt = new Date().toISOString();
+    rememberCreatorCalendarSourceRefs();
   }
   renderLoginState();
 }
@@ -7395,6 +7587,7 @@ function cacheCurrentSnapshot(session = buildActiveSessionState()) {
   });
   currentSnapshotStale = false;
   currentSnapshotBuiltAt = new Date().toISOString();
+  rememberCreatorCalendarSourceRefs();
 }
 
 async function loadServerUsers() {

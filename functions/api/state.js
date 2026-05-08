@@ -406,6 +406,15 @@ export async function onRequestPost(context) {
       return Response.json({ ok: true, imports });
     }
 
+    if (action === "loadImportRefs") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      const refs = sanitizeSnapshotFileRefs(body?.refs || []);
+      const imports = await resolveStateImports(context.env.ROSTER_STORE, refs);
+      return Response.json({ ok: true, imports });
+    }
+
     if (action === "loadInsightImports") {
       const index = await loadRepositoryIndex(context.env.ROSTER_STORE);
       const refs = (index.files || []).filter((file) => file.active !== false).map((file) => repositoryImportRef(file));
@@ -1331,7 +1340,7 @@ function hasDoctorProfileState(state) {
   const overrides = session.overrides && typeof session.overrides === "object" ? session.overrides : {};
   const conflictSelections = session.conflictSelections && typeof session.conflictSelections === "object" ? session.conflictSelections : {};
   const customEvents = Array.isArray(session.customEvents) ? session.customEvents : [];
-  return Boolean(Object.keys(overrides).length || Object.keys(conflictSelections).length || customEvents.length);
+  return Boolean(session.hadPreview || Object.keys(overrides).length || Object.keys(conflictSelections).length || customEvents.length);
 }
 
 function mergeClaims(existing, incoming) {
