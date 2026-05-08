@@ -264,6 +264,7 @@ export async function onRequestPost(context) {
       if (ignoreFingerprint) {
         await clearIssueFromAllUsers(context.env.ROSTER_STORE, ignoreFingerprint);
       }
+      await clearIssuesResolvedByParserRule(context.env.ROSTER_STORE, rule);
       return Response.json({ ok: true, parserExtensions });
     }
 
@@ -723,6 +724,35 @@ async function clearIssueFromAllUsers(store, fingerprint) {
       updatedAt: new Date().toISOString(),
     }));
   }
+}
+
+async function clearIssuesResolvedByParserRule(store, rule) {
+  const normalizedRule = sanitizeParserExtensionRule(rule);
+  if (!normalizedRule) return;
+  const result = await store.list({ prefix: "account:" });
+  for (const item of result.keys || []) {
+    const record = await store.get(item.name, "json").catch(() => null);
+    if (!record?.adminIssues?.length) continue;
+    const existingIssues = sanitizeAdminIssues(record.adminIssues);
+    const nextIssues = existingIssues.filter((issue) => !issueMatchesParserRule(issue, normalizedRule));
+    if (nextIssues.length === existingIssues.length) continue;
+    await store.put(item.name, JSON.stringify({
+      ...record,
+      adminIssues: nextIssues,
+      updatedAt: new Date().toISOString(),
+    }));
+  }
+}
+
+function issueMatchesParserRule(issue, rule) {
+  const source = sanitizeIssueSource(issue?.source);
+  const seniority = sanitizeRuleSeniority(issue?.seniority);
+  const rawValue = String(issue?.rawValue || "").trim().toUpperCase();
+  const fingerprint = sanitizeIssueFingerprint(issue?.fingerprint);
+  const ruleFingerprint = issueFingerprint(rule.source, rule.code, rule.seniority);
+  return source === rule.source
+    && seniority === rule.seniority
+    && (rawValue === rule.code || fingerprint === ruleFingerprint);
 }
 
 async function upsertStateImports(store, imports, uploadedBy) {
@@ -1566,6 +1596,11 @@ function sanitizeIssueFingerprint(value) {
   const raw = String(value || "").trim();
   if (!raw) return "";
   const [source, ...rest] = raw.split("::");
+  if (rest.length >= 2) {
+    const seniority = sanitizeRuleSeniority(rest[0]);
+    const rawValue = rest.slice(1).join("::");
+    return issueFingerprint(source, rawValue, seniority);
+  }
   return issueFingerprint(source, rest.join("::"));
 }
 

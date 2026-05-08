@@ -323,6 +323,60 @@ const profileImports = await postState(stateStore, {
 assert.equal(profileImports.imports.length, 1);
 assert.equal(profileImports.imports[0].repoId, "fixture-roster");
 
+await seedUser(stateStore, "patrick@example.com", "patrick-password", "Patrick Tan");
+await seedUser(stateStore, "senior@example.com", "senior-password", "Senior Registrar");
+const n1Issue = {
+  source: "MMC",
+  seniority: "Senior Registrar",
+  date: "2026-05-01",
+  rawValue: "N1",
+  message: "MMC shift code not recognised.",
+  fingerprint: "MMC::Senior Registrar::N1",
+};
+await postState(stateStore, {
+  action: "reportUserError",
+  email: "patrick@example.com",
+  password: "patrick-password",
+  errorId: n1Issue.fingerprint,
+  message: n1Issue.message,
+  issue: n1Issue,
+});
+await postState(stateStore, {
+  action: "reportUserError",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  targetEmail: "senior@example.com",
+  errorId: n1Issue.fingerprint,
+  message: n1Issue.message,
+  issue: n1Issue,
+});
+assert.equal((await stateStore.get("account:patrick@example.com", "json")).adminIssues.length, 1);
+assert.equal((await stateStore.get("account:senior@example.com", "json")).adminIssues.length, 1);
+const parserSave = await postState(stateStore, {
+  action: "saveParserExtensionRule",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  fingerprint: n1Issue.fingerprint,
+  source: "MMC",
+  rawValue: "N1",
+  rule: {
+    source: "MMC",
+    seniority: "Senior Registrar",
+    code: "N1",
+    kind: "shift",
+    base: "Night",
+    period: "NIGHT",
+    suffix: "",
+    allDay: false,
+    startTime: "22:00",
+    endTime: "08:30",
+    includeAsShift: true,
+  },
+});
+assert.ok(parserSave.parserExtensions.mmc.some((rule) => rule.seniority === "Senior Registrar" && rule.code === "N1"));
+assert.equal((await stateStore.get("account:patrick@example.com", "json")).adminIssues.length, 0, "global parser rule must clear direct-user warnings");
+assert.equal((await stateStore.get("account:senior@example.com", "json")).adminIssues.length, 0, "global parser rule must clear switch-user warnings");
+
 const deletionStore = new MemoryStore();
 await postState(deletionStore, {
   action: "login",

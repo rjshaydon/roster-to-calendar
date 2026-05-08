@@ -2167,7 +2167,7 @@ function renderIssues(items) {
 }
 
 async function reportPreviewIssues(items) {
-  if (currentUserRole !== "user") return;
+  if (currentUserRole !== "user" && !adminViewingEmail) return;
   if (!items.length) return;
   for (const item of items) {
     if (!item?.message || isSuppressedIssue(item)) continue;
@@ -2191,7 +2191,7 @@ async function reportPreviewIssues(items) {
 }
 
 async function reportPreviewConflicts(items) {
-  if (currentUserRole !== "user") return;
+  if (currentUserRole !== "user" && !adminViewingEmail) return;
   if (!items.length) return;
   for (const item of items) {
     const source = sanitizeIssueSource(item.source);
@@ -6298,6 +6298,17 @@ async function saveParserRuleFromModal() {
     if (selectedFiles.length) {
       parsedRosterSources = null;
       await analyzeFiles({ preserveVisiblePreview: true });
+    } else if (latestPreview) {
+      latestPreview = {
+        ...latestPreview,
+        issues: (latestPreview.issues || []).filter((issue) => sanitizeIssueFingerprint(issueFingerprint(issue.source, issue.rawValue, issue.seniority)) !== fingerprint),
+        review: (latestPreview.review || []).map((item) => sanitizeIssueFingerprint(issueFingerprint(item.source, item.rawValue, item.seniority)) === fingerprint ? {
+          ...item,
+          status: "ok",
+          warnings: [],
+        } : item),
+      };
+      rebuildClientPreview();
     }
     setStatus(includeAsShift ? "Shift code added to the parser." : "Shift code hidden from calendar.");
   } catch (error) {
@@ -7350,6 +7361,11 @@ function sanitizeIssueFingerprint(value) {
   const text = String(value || "").trim();
   if (!text) return "";
   const [source, ...rest] = text.split("::");
+  if (rest.length >= 2) {
+    const seniority = sanitizeRuleSeniority(rest[0]);
+    const rawValue = rest.slice(1).join("::");
+    return issueFingerprint(source, rawValue, seniority);
+  }
   return issueFingerprint(source, rest.join("::"));
 }
 
