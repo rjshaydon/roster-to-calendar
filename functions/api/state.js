@@ -943,13 +943,20 @@ function sameParserIssue(left, right) {
 }
 
 function parserRuleCodeForIssue(issue) {
-  const source = sanitizeIssueSource(issue?.source);
-  const rawValue = String(issue?.rawValue || "").trim();
+  return parserRuleCodeFromRawValue(issue?.source, issue?.rawValue);
+}
+
+function parserRuleCodeFromRawValue(sourceValue, rawValue) {
+  const source = sanitizeIssueSource(sourceValue);
+  const text = String(rawValue || "").trim();
+  const upper = text.toUpperCase();
   if (source === "MMC" || source === "Casey") {
-    const match = rawValue.match(/^\s*\d{2}:?\d{2}\s*[-–]\s*\d{2}:?\d{2}\s+(.+?)\s*$/);
-    return (match?.[1] || rawValue).trim().toUpperCase();
+    const prefixMatch = upper.match(/^\s*\d{2}:?\d{2}\s*[-–]\s*\d{2}:?\d{2}\s+(.+?)\s*$/);
+    if (prefixMatch) return prefixMatch[1].trim().toUpperCase();
+    const suffixMatch = upper.match(/^\s*(.+?)\s+\d{2}:?\d{2}\s*[-–]\s*\d{2}:?\d{2}\s*$/);
+    if (suffixMatch) return suffixMatch[1].trim().toUpperCase();
   }
-  return rawValue.toUpperCase();
+  return upper;
 }
 
 async function upsertLocalParserRuleForUser(store, email, rule) {
@@ -1915,7 +1922,7 @@ function sanitizeParserRuleRemoval(item) {
   if (!item || typeof item !== "object") return null;
   const source = sanitizeIssueSource(item.source);
   const seniority = sanitizeRuleSeniority(item.seniority);
-  const code = String(item.code || item.rawCode || "").trim().toUpperCase();
+  const code = normalizeParserExtensionRuleCode(source, item.code || item.rawCode || "");
   if (!source || !code) return null;
   return { source, seniority, code };
 }
@@ -1979,6 +1986,15 @@ function isRestrictedClinicalSupportRule(rule) {
     || base === "CS"
     || base === "CSO"
     || base === "CS ONSITE";
+}
+
+function normalizeParserExtensionRuleCode(source, value) {
+  const text = String(value || "").trim().toUpperCase();
+  if (!text) return "";
+  if (source === "MMC" || source === "Casey") {
+    return parserRuleCodeFromRawValue(source, text);
+  }
+  return text;
 }
 
 function sanitizeRuleSeniority(value) {

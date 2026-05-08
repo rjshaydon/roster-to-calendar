@@ -1261,7 +1261,7 @@ function parseMmcEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
     });
   }
 
-  const explicit = extractTimePrefix(raw);
+  const explicit = extractMmcExplicitTime(raw);
   const label = explicit ? explicit.label : raw.trim();
   const normalized = findManualParserRule("MMC", seniority, label, explicit) || normalizeGenericMmcTimedLabel(label, explicit);
   if (!normalized) {
@@ -1527,6 +1527,10 @@ function normalizeGenericMmcTimedLabel(label, explicit) {
   };
 }
 
+function extractMmcExplicitTime(value) {
+  return extractTimeWithLabel(value);
+}
+
 function normalizeCaseyLabel(label, explicit = null) {
   const code = normalizeCaseyCode(explicit ? explicit.label : label);
   if (!code && explicit) {
@@ -1750,7 +1754,7 @@ function sanitizeParserExtensionRule(item, forcedSource = "") {
   if (!item || typeof item !== "object") return null;
   const source = sanitizeParserRuleSource(forcedSource || item.source);
   const seniority = sanitizeRuleSeniority(item.seniority);
-  const code = String(item.code || item.rawCode || "").trim().toUpperCase();
+  const code = normalizeParserExtensionRuleCode(source, item.code || item.rawCode || "");
   const kind = String(item.kind || "shift").trim().toLowerCase();
   const base = String(item.base || item.titleParts?.base || "").trim();
   const period = String(item.period || item.titleParts?.period || "").trim().toUpperCase();
@@ -1791,6 +1795,16 @@ function isRestrictedClinicalSupportRule(rule) {
     || base === "CS"
     || base === "CSO"
     || base === "CS ONSITE";
+}
+
+function normalizeParserExtensionRuleCode(source, value) {
+  const text = String(value || "").trim().toUpperCase();
+  if (!text) return "";
+  if (source === "MMC" || source === "Casey") {
+    const explicit = extractTimeWithLabel(text);
+    return (explicit?.label || text).trim().toUpperCase();
+  }
+  return text;
 }
 
 function sanitizeRuleSeniority(value) {
@@ -2648,7 +2662,7 @@ function resolveDefaultLocation(source, location, settings) {
 function formatTitle(source, titleParts, settings, kind = "shift") {
   const titleBits = [];
   if (titleParts.base) titleBits.push(titleParts.base);
-  if (settings.showAmPm && titleParts.period) titleBits.push(titleParts.period);
+  if (settings.showAmPm && titleParts.period) titleBits.push(formatTitlePeriod(titleParts.period));
   if (titleParts.suffix) titleBits.push(titleParts.suffix);
   const core = titleBits.join(" ").trim();
   if (!core) return "";
@@ -2656,6 +2670,10 @@ function formatTitle(source, titleParts, settings, kind = "shift") {
     return core;
   }
   return settings.showSourcePrefix ? `${source}: ${core}` : core;
+}
+
+function formatTitlePeriod(value) {
+  return String(value || "").trim().toUpperCase() === "NIGHT" ? "Night" : value;
 }
 
 export function customEventsToEvents(customEvents, settings = DEFAULT_SETTINGS) {
@@ -2808,12 +2826,26 @@ function parseDdhTimeRow(value) {
 }
 
 function extractTimePrefix(value) {
-  const match = value.match(/^\s*(\d{2})(\d{2})-(\d{2})(\d{2})(?:\s+(.+?))?\s*$/);
-  if (!match) return null;
+  return extractTimeWithLabel(value, { prefixOnly: true });
+}
+
+function extractTimeWithLabel(value, options = {}) {
+  const text = String(value || "").trim();
+  const match = text.match(/^\s*(\d{2})(\d{2})-(\d{2})(\d{2})(?:\s+(.+?))?\s*$/);
+  if (match) {
+    return {
+      start: [Number(match[1]), Number(match[2])],
+      end: [Number(match[3]), Number(match[4])],
+      label: (match[5] || "").trim(),
+    };
+  }
+  if (options.prefixOnly) return null;
+  const suffixMatch = text.match(/^\s*(.+?)\s+(\d{2})(\d{2})-(\d{2})(\d{2})\s*$/);
+  if (!suffixMatch) return null;
   return {
-    start: [Number(match[1]), Number(match[2])],
-    end: [Number(match[3]), Number(match[4])],
-    label: (match[5] || "").trim(),
+    start: [Number(suffixMatch[2]), Number(suffixMatch[3])],
+    end: [Number(suffixMatch[4]), Number(suffixMatch[5])],
+    label: suffixMatch[1].trim(),
   };
 }
 

@@ -4975,17 +4975,20 @@ function formatIssueHeading(item) {
 }
 
 function parserRuleCodeForIssue(issue) {
-  const source = sanitizeIssueSource(issue?.source);
-  const rawValue = String(issue?.rawValue || "").trim();
-  if (source === "MMC") {
-    const match = rawValue.match(/^\s*\d{2}\d{2}-\d{2}\d{2}\s+(.+?)\s*$/);
-    return (match?.[1] || rawValue).trim().toUpperCase();
+  return parserRuleCodeFromRawValue(issue?.source, issue?.rawValue);
+}
+
+function parserRuleCodeFromRawValue(sourceValue, rawValue) {
+  const source = sanitizeIssueSource(sourceValue);
+  const text = String(rawValue || "").trim();
+  const upper = text.toUpperCase();
+  if (source === "MMC" || source === "Casey") {
+    const prefixMatch = upper.match(/^\s*\d{2}:?\d{2}\s*[-–]\s*\d{2}:?\d{2}\s+(.+?)\s*$/);
+    if (prefixMatch) return prefixMatch[1].trim().toUpperCase();
+    const suffixMatch = upper.match(/^\s*(.+?)\s+\d{2}:?\d{2}\s*[-–]\s*\d{2}:?\d{2}\s*$/);
+    if (suffixMatch) return suffixMatch[1].trim().toUpperCase();
   }
-  if (source === "Casey") {
-    const match = rawValue.match(/^\s*\d{2}\d{2}-\d{2}\d{2}\s+(.+?)\s*$/);
-    return (match?.[1] || rawValue).trim().toUpperCase();
-  }
-  return rawValue.trim().toUpperCase();
+  return upper;
 }
 
 function parserRulePeriodForIssue(issue) {
@@ -7582,7 +7585,7 @@ function sanitizeParserExtensionRule(item, forcedSource = "") {
   if (!item || typeof item !== "object") return null;
   const source = sanitizeIssueSource(forcedSource || item.source);
   const seniority = sanitizeRuleSeniority(item.seniority);
-  const code = String(item.code || "").trim().toUpperCase();
+  const code = normalizeParserExtensionRuleCode(source, item.code || "");
   const base = String(item.base || "").trim();
   const period = String(item.period || "").trim().toUpperCase();
   const suffix = String(item.suffix || "").trim();
@@ -7622,6 +7625,15 @@ function isRestrictedClinicalSupportRule(rule) {
     || base === "CS"
     || base === "CSO"
     || base === "CS ONSITE";
+}
+
+function normalizeParserExtensionRuleCode(source, value) {
+  const text = String(value || "").trim().toUpperCase();
+  if (!text) return "";
+  if (source === "MMC" || source === "Casey") {
+    return parserRuleCodeFromRawValue(source, text);
+  }
+  return text;
 }
 
 function sanitizeParserRuleSuggestions(value) {

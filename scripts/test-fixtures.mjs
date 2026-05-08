@@ -403,16 +403,34 @@ const parserSave = await postState(stateStore, {
     seniority: "Senior Registrar",
     code: "N1",
     kind: "shift",
-    base: "Night",
+    base: "SR IC",
     period: "NIGHT",
     suffix: "",
     allDay: false,
-    startTime: "22:00",
-    endTime: "08:30",
+    startTime: "23:00",
+    endTime: "09:00",
     includeAsShift: true,
   },
 });
 assert.ok(parserSave.parserExtensions.mmc.some((rule) => rule.seniority === "Senior Registrar" && rule.code === "N1"));
+setParserExtensions(parserSave.parserExtensions);
+const srN1Workbook = XLSX.utils.book_new();
+const srN1Sheet = XLSX.utils.aoa_to_sheet([
+  [],
+  [],
+  [],
+  ["", "", "", "", "", "", "", "", "", "", "", ""],
+  ["", "", "SENIOR REG"],
+  ["", "", "", "Patrick Tan", "", "2300-0900 N1"],
+]);
+for (let index = 0; index < 7; index += 1) {
+  srN1Sheet[XLSX.utils.encode_cell({ r: 3, c: 5 + index })] = { t: "d", v: new Date(`2026-05-${String(4 + index).padStart(2, "0")}T00:00:00`) };
+}
+XLSX.utils.book_append_sheet(srN1Workbook, XLSX.utils.aoa_to_sheet([[]]), "Whole thing");
+XLSX.utils.book_append_sheet(srN1Workbook, srN1Sheet, "Week 1");
+const srN1View = buildRosterView([{ id: "sr-n1", workbook: srN1Workbook, file: { name: "AdultTerm.xlsx", size: 1, lastModified: 1 } }], [], "PATRICK TAN");
+assert.ok(srN1View.events.some((event) => event.rawValue === "2300-0900 N1" && event.title === "MMC: SR IC Night" && event.start.includes("23:00:00") && event.end.includes("09:00:00")), "Senior Registrar N1 explicit-time rules must render with the saved rule title");
+assert.equal(srN1View.issues.some((issue) => issue.rawValue === "2300-0900 N1"), false);
 assert.equal((await stateStore.get("account:patrick@example.com", "json")).adminIssues.length, 0, "global parser rule must clear direct-user warnings");
 assert.equal((await stateStore.get("account:senior@example.com", "json")).adminIssues.length, 0, "global parser rule must clear switch-user warnings");
 const staleReport = await postState(stateStore, {
