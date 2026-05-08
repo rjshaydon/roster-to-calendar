@@ -1319,6 +1319,32 @@ async function parseRosterEntries(entries, doctor = null) {
   }));
 }
 
+async function parseRosterEntriesLenient(entries, doctor = null) {
+  try {
+    return await parseRosterEntries(entries, doctor);
+  } catch (error) {
+    if (!isUnsupportedRosterError(error)) throw error;
+    const sources = { mmc: [], ddh: [] };
+    let parsedAny = false;
+    for (const entry of entries || []) {
+      try {
+        const parsed = await parseRosterEntries([entry], doctor);
+        sources.mmc.push(...(parsed.sources?.mmc || []));
+        sources.ddh.push(...(parsed.sources?.ddh || []));
+        parsedAny = true;
+      } catch (entryError) {
+        if (!isUnsupportedRosterError(entryError)) throw entryError;
+      }
+    }
+    if (!parsedAny) throw error;
+    return { sources };
+  }
+}
+
+function isUnsupportedRosterError(error) {
+  return /is not a supported MMC workbook, MMC PDF, or Dandenong Hospital FindMyShift export/i.test(String(error?.message || error || ""));
+}
+
 function sourceImports(sources) {
   return [
     ...sources.mmc.map((entry) => sourceImportMeta(entry, "mmc")),
@@ -3326,6 +3352,7 @@ function buildInsightCachePayload() {
 function scheduleInsightWarmup() {
   clearInsightWarmup();
   if (!selectedFiles.length || !selectedDoctor() || insightWarmupPromise) return;
+  if (selectedFiles.some((entry) => !entry.file) && !currentSnapshot?.insightCache) return;
   const runWarmup = () => {
     insightWarmupPromise = warmInsightData().finally(() => {
       insightWarmupPromise = null;
@@ -6399,23 +6426,11 @@ async function loadUnclaimedDoctorCalendar(doctor, sourceContext) {
     };
   }
 
+  const cached = buildUnclaimedPreviewFromSnapshotCache(doctor, profile, sourceContext, profileData.profile?.state?.session || {});
+  if (cached) return doctorProfileLoadResultFromCached(profile, cached);
+
   const imports = await loadUnclaimedSourceImports(doctor, sourceContext, profile);
   if (!imports.length) {
-    const cached = buildUnclaimedPreviewFromSnapshotCache(doctor, profile, sourceContext, profileData.profile?.state?.session || {});
-    if (cached) {
-      return {
-        mode: "doctor-profile",
-        ownerId: profile.ownerId,
-        doctor: cached.doctor,
-        profile,
-        imports: cached.imports,
-        snapshot: null,
-        session: cached.session,
-        preview: cached.preview,
-        doctorOptions: cached.doctorOptions,
-        detectedSources: cached.detectedSources,
-      };
-    }
     throw new Error(`${doctor.displayName} was not found in the roster files used by the current creator calendar.`);
   }
   const generated = await buildUnclaimedPreviewFromImports(doctor, profile, imports, profileData.profile?.state?.session || {});
@@ -6432,6 +6447,21 @@ async function loadUnclaimedDoctorCalendar(doctor, sourceContext) {
     detectedSources: generated.detectedSources,
     parsedSources: generated.parsedSources,
     parsedDoctors: generated.parsedDoctors,
+  };
+}
+
+function doctorProfileLoadResultFromCached(profile, cached) {
+  return {
+    mode: "doctor-profile",
+    ownerId: profile.ownerId,
+    doctor: cached.doctor,
+    profile,
+    imports: cached.imports,
+    snapshot: null,
+    session: cached.session,
+    preview: cached.preview,
+    doctorOptions: cached.doctorOptions,
+    detectedSources: cached.detectedSources,
   };
 }
 
@@ -6614,7 +6644,7 @@ async function buildUnclaimedPreviewFromImports(doctor, profile, imports, sessio
     displayName: profile.displayName,
     sourceTypes: profile.sourceTypes,
   };
-  const parsed = await parseRosterEntries(imports, doctorForBuild);
+  const parsed = await parseRosterEntriesLenient(imports, doctorForBuild);
   const parsedDoctors = doctorsByImportId(parsed.sources);
   const allDoctors = buildCreatorDoctorOptions(rosterDoctorOptions(parsed.sources.mmc, parsed.sources.ddh));
   const selected = allDoctors.find((item) => item.key === doctorForBuild.key) || doctorForBuild;
@@ -8280,8 +8310,12 @@ async function bootstrapImports() {
       renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
       scheduleInsightWarmup();
       if (currentSnapshotStale) {
-        setStatus("Refreshing calendar...");
-        void refreshSnapshotInBackground();
+        if (selectedFiles.some((entry) => !entry.file)) {
+          setStatus("Calendar loaded from saved snapshot.");
+        } else {
+          setStatus("Refreshing calendar...");
+          void refreshSnapshotInBackground();
+        }
       } else {
         setStatus("Calendar loaded.");
       }
