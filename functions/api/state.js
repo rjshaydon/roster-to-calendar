@@ -6,7 +6,7 @@ const REPOSITORY_FILE_PREFIX = "repository:file:";
 const DOCTOR_PROFILE_PREFIX = "doctor-profile:";
 const SUBSCRIPTION_TOKEN_PREFIX = "subscription:token:";
 const SNAPSHOT_PREFIX = "snapshot:";
-const SNAPSHOT_SCHEMA_VERSION = 1;
+const SNAPSHOT_SCHEMA_VERSION = 2;
 const ADMIN_ISSUE_DISMISS_PREFIX = "admin-issue-dismiss:";
 const ADMIN_ISSUE_IGNORE_PREFIX = "admin-issue-ignore:";
 const PARSER_EXTENSION_RULES_KEY = "parser-extension-rules:v1";
@@ -582,18 +582,22 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
     nameMatches = matchedClaims.filter((claim) => !claims.some((existing) => sameClaim(existing, claim)));
     claims = merged;
     linkedProfiles = await linkedDoctorProfilesForClaims(store, claims);
+    const accountImportRefs = repositoryImportRefsForAccount(index, { ...record, claims });
     state = {
       ...state,
-      imports: repositoryImportRefsForAccount(index, { ...record, claims }),
+      imports: accountImportRefs,
     };
     state = mergeProfileSessionIntoState(state, linkedProfiles, record.email);
-    if (nameMatches.length || JSON.stringify(claims) !== JSON.stringify(sanitizeClaims(record.claims))) {
+    const previousState = sanitizeState(record.state);
+    const claimsChanged = JSON.stringify(claims) !== JSON.stringify(sanitizeClaims(record.claims));
+    const importRefsChanged = importsChanged(previousState.imports, accountImportRefs);
+    if (nameMatches.length || claimsChanged || importRefsChanged) {
       await store.put(storageKey(record.email), JSON.stringify({
         ...record,
         claims,
         state: {
-          ...sanitizeState(record.state),
-          imports: state.imports.map(repositoryImportRef),
+          ...previousState,
+          imports: accountImportRefs.map(repositoryImportRef),
         },
         updatedAt: new Date().toISOString(),
       }));
@@ -623,6 +627,7 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
   const buildStamp = await buildAccountSnapshotStamp(store, {
     role,
     email: record.email,
+    realName: record.realName || "",
     claims,
     state,
     linkedProfiles,
@@ -1054,7 +1059,11 @@ async function buildAccountSnapshotStamp(store, context) {
   const role = context?.role || "user";
   const refs = role === "creator" || role === "owner"
     ? sanitizeSnapshotFileRefs(context?.state?.imports || [])
-    : repositoryImportRefsForClaims(context?.index || await loadRepositoryIndex(store), context?.claims || []);
+    : repositoryImportRefsForAccount(context?.index || await loadRepositoryIndex(store), {
+        email: context?.email || "",
+        realName: context?.realName || "",
+        claims: context?.claims || [],
+      });
   const fileMarkers = refs.map((ref) => ({
     id: ref.id,
     sourceType: ref.sourceType,
@@ -1250,6 +1259,7 @@ async function storeSnapshotForAccount(store, context) {
   const buildStamp = await buildAccountSnapshotStamp(store, {
     role,
     email: context.email,
+    realName: context.realName || context.record?.realName || "",
     claims,
     state: context.state,
     linkedProfiles,
