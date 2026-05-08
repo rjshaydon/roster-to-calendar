@@ -6346,6 +6346,7 @@ function deleteLocalAccountData(email) {
 async function enterUserAccount(email) {
   const targetEmail = normalizeEmail(email);
   if (!targetEmail || (!isOwnerAccount() && !isCreatorAuthenticated())) return;
+  const previousState = captureCalendarViewState();
   const creatorEmail = authUserEmail || currentUserEmail;
   const creatorPassword = authUserPassword || currentUserPassword;
   if (normalizeEmail(creatorEmail) !== OWNER_EMAIL || !creatorPassword) {
@@ -6372,10 +6373,16 @@ async function enterUserAccount(email) {
   currentUserRole = targetEmail === OWNER_EMAIL ? "creator" : "user";
   forceConsoleSkin();
   setStatus(`Entering ${targetEmail}...`);
-  await clearLocalWorkspace();
-  await restoreCloudState({ adminTargetEmail: targetEmail });
-  await bootstrapImports();
-  renderLoginState();
+  try {
+    await clearLocalWorkspace();
+    await restoreCloudState({ adminTargetEmail: targetEmail, preserveSessionOnFailure: true });
+    await bootstrapImports();
+    renderLoginState();
+  } catch (error) {
+    restoreCalendarViewState(previousState);
+    renderLoginState();
+    setStatus(normalizeAuthMessage(error.message || `Could not enter ${targetEmail}.`), true);
+  }
 }
 
 async function enterDoctorProfileView(doctor) {
@@ -7482,6 +7489,10 @@ async function restoreCloudState(options = {}) {
     const message = error.message === "Cloud storage is not configured."
       ? serverStorageRequiredMessage()
       : normalizeAuthMessage(error.message || "Login failed.");
+    if (options.preserveSessionOnFailure) {
+      setStatus(message, true);
+      throw new Error(message);
+    }
     cloudAvailable = false;
     currentSubscription = null;
     localStorage.removeItem(CURRENT_EMAIL_KEY);
