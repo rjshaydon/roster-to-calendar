@@ -12,8 +12,16 @@ const mmcWorkbook = XLSX.readFile(fileURLToPath(new URL("../fixtures/AdultTerm1.
 const ddhWorkbook = XLSX.readFile(fileURLToPath(new URL("../fixtures/Dandenong_Emergency_Doctors_Roster_02-02-2026_to_03-05-2026.xlsx", import.meta.url)), {
   cellDates: true,
 });
+const caseyWorkbook = XLSX.readFile(fileURLToPath(new URL("../fixtures/Casey_Term_2_2026_DRAFT.xlsm", import.meta.url)), {
+  cellDates: true,
+});
+const caseyBytes = await readFile(fileURLToPath(new URL("../fixtures/Casey_Term_2_2026_DRAFT.xlsm", import.meta.url)));
+const caseyFormData = new FormData();
+caseyFormData.append("rosterFiles", new File([caseyBytes], "Casey_Term_2_2026_DRAFT.xlsm", { type: "application/vnd.ms-excel.sheet.macroEnabled.12" }));
+const parsedCaseyUpload = await parseUploadForm(new Request("http://fixture.test/api/analyze", { method: "POST", body: caseyFormData }));
+assert.equal(parsedCaseyUpload.sources.casey.length, 1);
 
-const doctors = doctorOptions(mmcWorkbook, ddhWorkbook);
+const doctors = doctorOptions(mmcWorkbook, ddhWorkbook, caseyWorkbook);
 const defaultRules = parserRuleDefaults();
 const mmcRules = defaultRules.mmc || [];
 const hasMmcRule = (seniority, code) => mmcRules.some((rule) => rule.seniority === seniority && rule.code === code);
@@ -52,6 +60,38 @@ assert.ok(deslinAraullo);
 const deslinView = buildRosterView(mmcWorkbook, [], deslinAraullo.key);
 assert.ok(deslinView.events.some((event) => event.title === "MMC: Hub PM"));
 assert.ok(deslinView.events.some((event) => event.title === "MMC: Swing AM"));
+
+const caseyDoctors = doctorOptions([], [], caseyWorkbook);
+assert.ok(caseyDoctors.length > 130);
+assert.ok(caseyDoctors.find((doctor) => doctor.displayName === "Andrew Dyall"));
+assert.ok(caseyDoctors.find((doctor) => doctor.displayName === "Dennis Chung"));
+assert.ok(caseyDoctors.find((doctor) => doctor.displayName === "Rizwana Sadaf"));
+assert.ok(caseyDoctors.find((doctor) => doctor.displayName === "Victor Ki Chung Li"));
+assert.equal(caseyDoctors.find((doctor) => doctor.displayName === "Rostered staff"), undefined);
+
+const andrewDyallCasey = caseyDoctors.find((doctor) => doctor.displayName === "Andrew Dyall");
+const andrewCaseyView = buildRosterView([], [], andrewDyallCasey.key, undefined, {}, {}, [], caseyWorkbook);
+assert.ok(andrewCaseyView.events.some((event) => event.title === "Casey: TL AM"));
+assert.ok(andrewCaseyView.events.some((event) => event.title === "Casey: UFD PM"));
+assert.ok(andrewCaseyView.events.some((event) => event.title === "Casey: MIC AM"));
+assert.ok(andrewCaseyView.events.some((event) => event.title === "Casey: PAEDS PM"));
+assert.ok(andrewCaseyView.events.some((event) => event.title === "Casey: CS" && event.start.includes("08:00:00") && event.end.includes("17:30:00")));
+
+const bashirCasey = caseyDoctors.find((doctor) => doctor.displayName === "Bashir Gondal");
+const bashirCaseyView = buildRosterView([], [], bashirCasey.key, undefined, {}, {}, [], caseyWorkbook);
+assert.ok(bashirCaseyView.events.some((event) => event.title === "Casey: SSU AM"));
+
+const dennisCasey = caseyDoctors.find((doctor) => doctor.displayName === "Dennis Chung");
+const dennisCaseyView = buildRosterView([], [], dennisCasey.key, undefined, {}, {}, [], caseyWorkbook);
+assert.ok(dennisCaseyView.events.some((event) => event.title === "Casey: Night" && event.start.includes("23:00:00") && event.end.startsWith("2026-05-06")));
+
+const jasonAwCasey = caseyDoctors.find((doctor) => doctor.displayName === "Jason Aw");
+const jasonAwCaseyView = buildRosterView([], [], jasonAwCasey.key, undefined, {}, {}, [], caseyWorkbook);
+assert.ok(jasonAwCaseyView.events.some((event) => event.title === "Annual Leave"));
+
+const mustafaCasey = caseyDoctors.find((doctor) => doctor.displayName === "Mustafa Al-Asaad");
+const mustafaCaseyView = buildRosterView([], [], mustafaCasey.key, undefined, {}, {}, [], caseyWorkbook);
+assert.ok(mustafaCaseyView.events.some((event) => event.title === "Conference Leave"));
 
 const view = buildRosterView(mmcWorkbook, ddhWorkbook, richard.key);
 const summary = previewSummary(view.events);

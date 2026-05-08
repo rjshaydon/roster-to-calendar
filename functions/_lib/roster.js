@@ -5,6 +5,20 @@ const TIMEZONE = "Australia/Melbourne";
 
 const MMC_LOCATION = "MMC Car Park, Tarella Road, Clayton VIC 3168, Australia";
 const DDH_LOCATION = "DDH Car Park, 135 David St, Dandenong VIC 3175, Australia";
+const CASEY_LOCATION = "Casey Hospital, 62-70 Kangan Drive, Berwick VIC 3806, Australia";
+const UNKNOWN_SENIORITY = "Unknown";
+const SENIORITY_LABELS = [
+  "SMS",
+  "CMO",
+  "Senior Registrar",
+  "Transitional/Intermediate Registrar",
+  "Junior Registrar",
+  "HMO",
+  "ENP",
+  "AMP",
+  "Intern",
+  UNKNOWN_SENIORITY,
+];
 
 const MMC_TEAM_MAP = {
   G: "Green",
@@ -132,6 +146,51 @@ const DDH_IGNORE_CONTAINS = [
   "PM ONLY",
   "AM/PM",
 ];
+const CASEY_SECTION_MARKERS = new Set([
+  "GERIATRICIAN",
+  "SNR CMOS",
+  "SENIOR CMOS",
+  "ED GPS",
+  "SNR REGS",
+  "SENIOR REGS",
+  "JNR REGS",
+  "JUNIOR REGS",
+  "PAEDS ED HMOS",
+  "HMOS",
+  "HMO",
+  "INTERNS",
+  "LOCUMS / EXTRA STAFF",
+  "AMP COVER",
+  "ROSTERED STAFF",
+]);
+const CASEY_STOP_SECTIONS = new Set([
+  "ROSTERED STAFF",
+]);
+const CASEY_IGNORED_EXACT = new Set([
+  "",
+  "0",
+  "1",
+  "2",
+  "OFF",
+  "OFF CS",
+  "MMC",
+  "DDH",
+  "TEACH",
+  "TEACHING",
+  "SIM",
+  "EXAM",
+  "EXAM LEAVE",
+  "SABBATICAL",
+  "SABBATICAL LEAVE",
+  "LONG SERVICE LEAVE",
+  "LSL",
+  "PATERNITY LEAVE",
+  "VHH",
+  "TOX",
+]);
+const CASEY_IGNORED_PREFIXES = [
+  "ORIENT",
+];
 
 const DEFAULT_SETTINGS = {
   showSourcePrefix: true,
@@ -146,12 +205,13 @@ const DEFAULT_SETTINGS = {
   includeSickLeave: true,
   defaultLocationMmc: "MMC Car Park, Tarella Road, Clayton VIC 3168, Australia",
   defaultLocationDdh: "DDH Car Park, 135 David St, Dandenong VIC 3175, Australia",
+  defaultLocationCasey: "Casey Hospital, 62-70 Kangan Drive, Berwick VIC 3806, Australia",
   hospitalFilter: "all",
   dateFrom: "",
   dateTo: "",
 };
 
-let MANUAL_PARSER_RULES = { mmc: [], ddh: [] };
+let MANUAL_PARSER_RULES = buildDefaultParserRules();
 
 export function defaultSettings() {
   return { ...DEFAULT_SETTINGS };
@@ -159,6 +219,14 @@ export function defaultSettings() {
 
 export function setParserExtensions(value) {
   MANUAL_PARSER_RULES = sanitizeParserExtensions(value);
+}
+
+export function parserRuleDefaults() {
+  return sanitizeParserExtensions(buildDefaultParserRules());
+}
+
+export function parserRuleSeniorities() {
+  return [...SENIORITY_LABELS];
 }
 
 export async function parseUploadForm(request) {
@@ -170,7 +238,7 @@ export async function parseUploadForm(request) {
 
   const importIds = formData.getAll("rosterFileId");
   const importAddedAt = formData.getAll("rosterFileAddedAt");
-  const sources = { mmc: [], ddh: [] };
+  const sources = { mmc: [], ddh: [], casey: [] };
   for (let index = 0; index < uploads.length; index += 1) {
     const file = uploads[index];
     const workbook = await readWorkbook(file);
@@ -183,8 +251,8 @@ export async function parseUploadForm(request) {
     });
   }
 
-  if (!sources.mmc.length && !sources.ddh.length) {
-    throw new Error("Upload at least one MMC or DDH roster.");
+  if (!hasAnyRosterSource(sources)) {
+    throw new Error("Upload at least one MMC, DDH, or Casey roster.");
   }
 
   return {
@@ -199,14 +267,16 @@ export async function parseUploadForm(request) {
   };
 }
 
-export function doctorOptions(mmcSources, ddhSources) {
+export function doctorOptions(mmcSources, ddhSources, caseySources = []) {
   const mmcEntries = normalizeSourceEntries(mmcSources);
   const ddhEntries = normalizeSourceEntries(ddhSources);
-  if (!mmcEntries.length && !ddhEntries.length) {
-    throw new Error("Upload at least one MMC or DDH roster.");
+  const caseyEntries = normalizeSourceEntries(caseySources);
+  if (!mmcEntries.length && !ddhEntries.length && !caseyEntries.length) {
+    throw new Error("Upload at least one MMC, DDH, or Casey roster.");
   }
   const mmcNames = new Map();
   const ddhNames = new Map();
+  const caseyNames = new Map();
   for (const entry of mmcEntries) {
     for (const [key, value] of extractMmcNames(entry.workbook)) {
       if (!mmcNames.has(key)) mmcNames.set(key, value);
@@ -217,21 +287,27 @@ export function doctorOptions(mmcSources, ddhSources) {
       if (!ddhNames.has(key)) ddhNames.set(key, value);
     }
   }
-  const keys = [...new Set([...mmcNames.keys(), ...ddhNames.keys()])].sort();
+  for (const entry of caseyEntries) {
+    for (const [key, value] of extractCaseyNames(entry.workbook)) {
+      if (!caseyNames.has(key)) caseyNames.set(key, value);
+    }
+  }
+  const keys = [...new Set([...mmcNames.keys(), ...ddhNames.keys(), ...caseyNames.keys()])].sort();
 
   return keys.map((key) => {
     const sourceTypes = [];
     if (mmcNames.has(key)) sourceTypes.push("mmc");
     if (ddhNames.has(key)) sourceTypes.push("ddh");
+    if (caseyNames.has(key)) sourceTypes.push("casey");
     return {
       key,
-      displayName: mmcNames.get(key) || ddhNames.get(key),
+      displayName: mmcNames.get(key) || ddhNames.get(key) || caseyNames.get(key),
       sourceTypes,
     };
   });
 }
 
-export function buildRosterView(mmcSources, ddhSources, doctorKey, settings = DEFAULT_SETTINGS, overrides = {}, conflictSelections = {}, doctorAliases = []) {
+export function buildRosterView(mmcSources, ddhSources, doctorKey, settings = DEFAULT_SETTINGS, overrides = {}, conflictSelections = {}, doctorAliases = [], caseySources = []) {
   const records = [];
   const keysBySource = doctorKeysBySource(doctorKey, doctorAliases);
   for (const entry of normalizeSourceEntries(mmcSources)) {
@@ -242,6 +318,11 @@ export function buildRosterView(mmcSources, ddhSources, doctorKey, settings = DE
   for (const entry of normalizeSourceEntries(ddhSources)) {
     for (const key of keysBySource.ddh) {
       records.push(...attachImportMeta(parseDdhRecords(entry.workbook, key), entry));
+    }
+  }
+  for (const entry of normalizeSourceEntries(caseySources)) {
+    for (const key of keysBySource.casey) {
+      records.push(...attachImportMeta(parseCaseyRecords(entry.workbook, key), entry));
     }
   }
 
@@ -256,12 +337,12 @@ export function buildRosterView(mmcSources, ddhSources, doctorKey, settings = DE
   return {
     ...view,
     conflicts: merge.conflicts,
-    imports: summarizeImports([...normalizeSourceEntries(mmcSources), ...normalizeSourceEntries(ddhSources)]),
+    imports: summarizeImports([...normalizeSourceEntries(mmcSources), ...normalizeSourceEntries(ddhSources), ...normalizeSourceEntries(caseySources)]),
   };
 }
 
-export function generateEvents(mmcSources, ddhSources, doctorKey, settings = DEFAULT_SETTINGS, overrides = {}, conflictSelections = {}) {
-  return buildRosterView(mmcSources, ddhSources, doctorKey, settings, overrides, conflictSelections).events;
+export function generateEvents(mmcSources, ddhSources, doctorKey, settings = DEFAULT_SETTINGS, overrides = {}, conflictSelections = {}, caseySources = []) {
+  return buildRosterView(mmcSources, ddhSources, doctorKey, settings, overrides, conflictSelections, [], caseySources).events;
 }
 
 export async function inspectImportRecord(record) {
@@ -280,7 +361,7 @@ export async function inspectImportRecord(record) {
     },
     workbook,
   };
-  const doctors = doctorOptions(sourceType === "mmc" ? [entry] : [], sourceType === "ddh" ? [entry] : [])
+  const doctors = doctorOptions(sourceType === "mmc" ? [entry] : [], sourceType === "ddh" ? [entry] : [], sourceType === "casey" ? [entry] : [])
     .map((doctor) => ({
       key: doctor.key,
       displayName: doctor.displayName,
@@ -290,12 +371,12 @@ export async function inspectImportRecord(record) {
 }
 
 export async function buildRosterViewFromStoredImports(imports, doctorKey, settings = DEFAULT_SETTINGS, overrides = {}, conflictSelections = {}, doctorAliases = []) {
-  const sources = { mmc: [], ddh: [] };
+  const sources = { mmc: [], ddh: [], casey: [] };
   for (const item of Array.isArray(imports) ? imports : []) {
     if (!item?.dataUrl) continue;
     const workbook = await readWorkbookDataUrl(item.dataUrl, item.name || "roster.xlsx");
     const sourceType = String(item.sourceType || detectSourceType(workbook, item.name || "roster.xlsx")).toLowerCase();
-    if (sourceType !== "mmc" && sourceType !== "ddh") continue;
+    if (!isRosterSourceType(sourceType)) continue;
     sources[sourceType].push({
       id: String(item.id || item.repoId || hashString(`${item.name || "import"}|${item.lastModified || 0}`)),
       addedAt: String(item.addedAt || ""),
@@ -307,7 +388,7 @@ export async function buildRosterViewFromStoredImports(imports, doctorKey, setti
       workbook,
     });
   }
-  return buildRosterView(sources.mmc, sources.ddh, doctorKey, settings, overrides, conflictSelections, doctorAliases);
+  return buildRosterView(sources.mmc, sources.ddh, doctorKey, settings, overrides, conflictSelections, doctorAliases, sources.casey);
 }
 
 export function normalizeRosterName(value) {
@@ -369,6 +450,7 @@ export function serializeEvent(event) {
   return {
     id: event.id,
     source: event.source,
+    seniority: event.seniority || "",
     title: event.title,
     allDay: event.allDay,
     start: event.start,
@@ -388,6 +470,7 @@ export function serializeReviewItem(item) {
   return {
     id: item.id,
     source: item.source,
+    seniority: item.seniority || "",
     startDay: item.startDay,
     endDay: item.endDay,
     rawValue: item.rawValue,
@@ -408,7 +491,12 @@ export function sourceNames(sources) {
   return {
     mmc: normalizeSourceEntries(sources.mmc).map((entry) => entry.file.name),
     ddh: normalizeSourceEntries(sources.ddh).map((entry) => entry.file.name),
+    casey: normalizeSourceEntries(sources.casey).map((entry) => entry.file.name),
   };
+}
+
+function hasAnyRosterSource(sources) {
+  return Boolean(sources?.mmc?.length || sources?.ddh?.length || sources?.casey?.length);
 }
 
 function normalizeSourceEntries(value) {
@@ -423,6 +511,11 @@ function normalizeSourceEntries(value) {
       workbook: entry,
     };
   });
+}
+
+function isRosterSourceType(value) {
+  const source = String(value || "").toLowerCase();
+  return source === "mmc" || source === "ddh" || source === "casey";
 }
 
 function attachImportMeta(records, entry) {
@@ -578,7 +671,7 @@ function readSpreadsheetWorkbook(bytes, filename) {
     }
     return XLSX.read(bytes, baseOptions);
   } catch {
-    throw new Error(`${filename} is not a supported MMC workbook, MMC PDF, or Dandenong Hospital FindMyShift export.`);
+    throw new Error(`${filename} is not a supported MMC workbook, MMC PDF, Dandenong Hospital FindMyShift export, or Casey roster.`);
   }
 }
 
@@ -603,7 +696,10 @@ function detectSourceType(workbook, filename) {
   if (range.e.c + 1 >= 8 && [1, 2, 3, 4].some((row) => isDdhDateRow(sheet, row))) {
     return "ddh";
   }
-  throw new Error(`${filename} is not a supported MMC workbook, MMC PDF, or Dandenong Hospital FindMyShift export.`);
+  if (isCaseyWorkbook(workbook)) {
+    return "casey";
+  }
+  throw new Error(`${filename} is not a supported MMC workbook, MMC PDF, Dandenong Hospital FindMyShift export, or Casey roster.`);
 }
 
 function isPdfFile(filename, bytes) {
@@ -908,7 +1004,7 @@ function sanitizeDoctorAliases(raw) {
       key: normalizeName(item?.key || ""),
       displayName: String(item?.displayName || "").trim(),
     }))
-    .filter((item) => (item.sourceType === "mmc" || item.sourceType === "ddh") && item.key);
+    .filter((item) => isRosterSourceType(item.sourceType) && item.key);
 }
 
 function doctorKeysBySource(doctorKey, rawAliases = []) {
@@ -916,15 +1012,18 @@ function doctorKeysBySource(doctorKey, rawAliases = []) {
   const aliases = sanitizeDoctorAliases(rawAliases);
   const mmc = new Set();
   const ddh = new Set();
+  const casey = new Set();
   for (const alias of aliases) {
     if (alias.sourceType === "mmc") mmc.add(alias.key);
     if (alias.sourceType === "ddh") ddh.add(alias.key);
+    if (alias.sourceType === "casey") casey.add(alias.key);
   }
   if (fallback) {
     if (!mmc.size) mmc.add(fallback);
     if (!ddh.size) ddh.add(fallback);
+    if (!casey.size) casey.add(fallback);
   }
-  return { mmc: [...mmc], ddh: [...ddh] };
+  return { mmc: [...mmc], ddh: [...ddh], casey: [...casey] };
 }
 
 function parseJsonField(formData, fieldName, fallback) {
@@ -952,7 +1051,8 @@ function sanitizeSettings(raw) {
     includeSickLeave: input.includeSickLeave !== false,
     defaultLocationMmc: sanitizeLocationSetting(input.defaultLocationMmc, DEFAULT_SETTINGS.defaultLocationMmc),
     defaultLocationDdh: sanitizeLocationSetting(input.defaultLocationDdh, DEFAULT_SETTINGS.defaultLocationDdh),
-    hospitalFilter: input.hospitalFilter === "mmc" || input.hospitalFilter === "ddh" ? input.hospitalFilter : "all",
+    defaultLocationCasey: sanitizeLocationSetting(input.defaultLocationCasey, DEFAULT_SETTINGS.defaultLocationCasey),
+    hospitalFilter: isRosterSourceType(input.hospitalFilter) ? input.hospitalFilter : "all",
     dateFrom: isDateString(input.dateFrom) ? input.dateFrom : "",
     dateTo: isDateString(input.dateTo) ? input.dateTo : "",
   };
@@ -1034,6 +1134,15 @@ function extractDdhNames(workbook) {
   return names;
 }
 
+function extractCaseyNames(workbook) {
+  const names = new Map();
+  for (const entry of iterateCaseyWeekEntries(workbook)) {
+    const key = normalizeName(entry.rawName);
+    if (!names.has(key)) names.set(key, entry.displayName || entry.rawName);
+  }
+  return names;
+}
+
 function parseMmcRecords(workbook, doctorKey) {
   const records = [];
   for (const sheetName of workbook.SheetNames) {
@@ -1050,7 +1159,15 @@ function parseMmcRecords(workbook, doctorKey) {
     }
     if (!weekDates.length) continue;
 
-    for (const { row, name } of iterateMmcRosterPeople(sheet)) {
+    let currentSeniority = "SMS";
+    const roleMap = mmcSeniorityMap();
+    const range = XLSX.utils.decode_range(sheet["!ref"] || "A1:A1");
+    for (let row = 1; row <= range.e.r + 1; row += 1) {
+      const marker = cleanText(getCellValue(sheet, row, 3)).replace(/\s+/g, " ").trim().toUpperCase();
+      if (isMmcStopSection(marker)) break;
+      if (roleMap.has(marker)) currentSeniority = roleMap.get(marker);
+      const name = cleanMmcRosterName(getCellValue(sheet, row, 4));
+      if (!looksLikePersonName(name)) continue;
       if (normalizeName(name) !== doctorKey) continue;
       const weekValues = [];
       for (let col = 6; col <= 12; col += 1) {
@@ -1058,11 +1175,11 @@ function parseMmcRecords(workbook, doctorKey) {
       }
       const weeklyLeave = firstWeeklyLeave(weekValues);
       if (weeklyLeave) {
-        records.push(createWeeklyLeaveRecord("MMC", weekDates[0], weeklyLeave));
+        records.push(createWeeklyLeaveRecord("MMC", weekDates[0], weeklyLeave, currentSeniority));
       } else {
         weekValues.forEach((raw, index) => {
           if (!raw) return;
-          const record = parseMmcEntry(weekDates[index], raw);
+          const record = parseMmcEntry(weekDates[index], raw, currentSeniority);
           if (record) records.push(record);
         });
       }
@@ -1078,18 +1195,32 @@ function parseDdhRecords(workbook, doctorKey) {
     if (normalizeName(entry.rawName) !== doctorKey) continue;
     const weeklyLeave = firstWeeklyLeave(entry.labels);
     if (weeklyLeave) {
-      records.push(createWeeklyLeaveRecord("DDH", entry.weekDates[0], weeklyLeave));
+      records.push(createWeeklyLeaveRecord("DDH", entry.weekDates[0], weeklyLeave, entry.seniority));
       continue;
     }
     entry.weekDates.forEach((day, index) => {
-      const record = parseDdhEntry(day, entry.labels[index], entry.times[index] || "");
+      const record = parseDdhEntry(day, entry.labels[index], entry.times[index] || "", entry.seniority);
       if (record) records.push(record);
     });
   }
   return records;
 }
 
-function parseMmcEntry(day, raw) {
+function parseCaseyRecords(workbook, doctorKey) {
+  const records = [];
+  for (const entry of iterateCaseyWeekEntries(workbook)) {
+    if (normalizeName(entry.rawName) !== doctorKey) continue;
+    entry.weekDates.forEach((day, index) => {
+      const raw = entry.labels[index];
+      if (!raw) return;
+      const record = parseCaseyEntry(day, raw, entry.seniority);
+      if (record) records.push(record);
+    });
+  }
+  return records;
+}
+
+function parseMmcEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
   const upper = raw.toUpperCase();
   if (shouldIgnoreMmc(raw)) return null;
   if (upper === "PHNW") {
@@ -1097,6 +1228,7 @@ function parseMmcEntry(day, raw) {
       kind: "public_holiday",
       titleParts: { base: "PHNW", period: "", suffix: "" },
       location: "",
+      seniority,
     });
   }
   if (upper.startsWith("S/L")) {
@@ -1104,14 +1236,18 @@ function parseMmcEntry(day, raw) {
       kind: "sick_leave",
       titleParts: { base: normalizeSickLeaveLabel(raw), period: "", suffix: "" },
       location: "",
+      seniority,
     });
   }
 
   const explicit = extractTimePrefix(raw);
   const label = explicit ? explicit.label : raw.trim();
-  const normalized = findManualParserRule("MMC", label, explicit) || normalizeMmcLabel(label) || normalizeGenericMmcTimedLabel(label, explicit);
+  const normalized = findManualParserRule("MMC", seniority, label, explicit) || normalizeGenericMmcTimedLabel(label, explicit);
   if (!normalized) {
-    return createUnknownRecord("MMC", day, raw, "MMC shift code not recognised.");
+    return createUnknownRecord("MMC", day, raw, "MMC shift code not recognised.", seniority);
+  }
+  if (normalized.includeAsShift === false) {
+    return createHiddenRecord("MMC", day, raw, normalized, seniority);
   }
 
   if (explicit) {
@@ -1123,6 +1259,7 @@ function parseMmcEntry(day, raw) {
       location: normalized.location || "",
       ambiguous: normalized.ambiguous,
       warning: normalized.warning,
+      seniority,
     });
   }
   if (normalized.allDay) {
@@ -1130,6 +1267,7 @@ function parseMmcEntry(day, raw) {
       kind: normalized.kind,
       titleParts: normalized.titleParts,
       location: normalized.location || "",
+      seniority,
     });
   }
   return createTimedRecord("MMC", day, raw, {
@@ -1138,13 +1276,14 @@ function parseMmcEntry(day, raw) {
     startHm: normalized.defaultTimes[0],
     endHm: normalized.defaultTimes[1],
     location: normalized.location || "",
+    seniority,
   });
 }
 
-function parseDdhEntry(day, label, timeText) {
+function parseDdhEntry(day, label, timeText, seniority = UNKNOWN_SENIORITY) {
   if (!label) return null;
   if (parseDdhTimeRow(label)) {
-    return timeText ? parseDdhEntry(day, timeText, label) : null;
+    return timeText ? parseDdhEntry(day, timeText, label, seniority) : null;
   }
   if (parseDdhTimeRow(timeText) && shouldIgnoreDdh(label)) {
     return null;
@@ -1156,6 +1295,7 @@ function parseDdhEntry(day, label, timeText) {
       kind: "public_holiday",
       titleParts: { base: "PHNW", period: "", suffix: "" },
       location: "",
+      seniority,
     });
   }
   if (upper.startsWith("S/L")) {
@@ -1163,6 +1303,7 @@ function parseDdhEntry(day, label, timeText) {
       kind: "sick_leave",
       titleParts: { base: normalizeSickLeaveLabel(label), period: "", suffix: "" },
       location: "",
+      seniority,
     });
   }
   if (upper === "AL" || upper === "A/L") {
@@ -1170,14 +1311,18 @@ function parseDdhEntry(day, label, timeText) {
       kind: "annual_leave",
       titleParts: { base: "Annual Leave", period: "", suffix: "" },
       location: "",
+      seniority,
     });
   }
   if (shouldIgnoreDdh(label) || shouldIgnoreCommon(label)) return null;
 
   const mapped = DDH_LABEL_MAP[label] || label;
-  const normalized = findManualParserRule("DDH", mapped) || normalizeDdhLabel(mapped) || normalizeGenericDdhLabel(mapped);
+  const normalized = findManualParserRule("DDH", seniority, mapped) || normalizeDdhLabel(mapped) || normalizeGenericDdhLabel(mapped);
   if (!normalized) {
-    return createUnknownRecord("DDH", day, label, "DDH shift label not recognised.");
+    return createUnknownRecord("DDH", day, label, "DDH shift label not recognised.", seniority);
+  }
+  if (normalized.includeAsShift === false) {
+    return createHiddenRecord("DDH", day, label, normalized, seniority);
   }
   const location = normalizeDdhLocation(mapped, normalized);
 
@@ -1189,6 +1334,7 @@ function parseDdhEntry(day, label, timeText) {
       startHm: parsedTime[0],
       endHm: parsedTime[1],
       location,
+      seniority,
     });
   }
 
@@ -1196,6 +1342,65 @@ function parseDdhEntry(day, label, timeText) {
     kind: normalized.kind,
     titleParts: normalized.titleParts,
     location,
+    seniority,
+  });
+}
+
+function parseCaseyEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
+  const label = cleanText(raw);
+  if (!label) return null;
+  const upper = label.toUpperCase();
+  if (upper === "PHNW") {
+    return createAllDayRecord("Casey", day, label, {
+      kind: "public_holiday",
+      titleParts: { base: "PHNW", period: "", suffix: "" },
+      location: "",
+      seniority,
+    });
+  }
+  if (upper === "ANNUAL LEAVE" || upper === "ANNUAL" || upper === "AL") {
+    return createAllDayRecord("Casey", day, label, {
+      kind: "annual_leave",
+      titleParts: { base: "Annual Leave", period: "", suffix: "" },
+      location: "",
+      seniority,
+    });
+  }
+  if (upper === "CONFERENCE LEAVE" || upper === "CONFERENCE" || upper === "CONF" || upper === "CONF LEAVE") {
+    return createAllDayRecord("Casey", day, label, {
+      kind: "conference_leave",
+      titleParts: { base: "Conference Leave", period: "", suffix: "" },
+      location: "",
+      seniority,
+    });
+  }
+  if (shouldIgnoreCasey(label) || shouldIgnoreCommon(label)) return null;
+
+  const explicit = extractTimePrefix(label);
+  const normalized = findManualParserRule("Casey", seniority, label, explicit) || normalizeCaseyLabel(label, explicit);
+  if (!normalized) {
+    return createUnknownRecord("Casey", day, label, "Casey shift label not recognised.", seniority);
+  }
+  if (normalized.includeAsShift === false) {
+    return createHiddenRecord("Casey", day, label, normalized, seniority);
+  }
+  if (explicit) {
+    return createTimedRecord("Casey", day, label, {
+      kind: normalized.kind,
+      titleParts: normalized.titleParts,
+      startHm: explicit.start,
+      endHm: explicit.end,
+      location: normalized.location || CASEY_LOCATION,
+      seniority,
+    });
+  }
+  return createTimedRecord("Casey", day, label, {
+    kind: normalized.kind,
+    titleParts: normalized.titleParts,
+    startHm: normalized.defaultTimes[0],
+    endHm: normalized.defaultTimes[1],
+    location: normalized.location || CASEY_LOCATION,
+    seniority,
   });
 }
 
@@ -1267,12 +1472,147 @@ function normalizeGenericMmcTimedLabel(label, explicit) {
   };
 }
 
+function normalizeCaseyLabel(label, explicit = null) {
+  const code = normalizeCaseyCode(explicit ? explicit.label : label);
+  if (!code && explicit) {
+    return {
+      kind: "shift",
+      titleParts: { base: inferCaseyTimeOnlyShiftLabel(explicit.start), period: "", suffix: "" },
+      location: CASEY_LOCATION,
+      allDay: false,
+      defaultTimes: null,
+    };
+  }
+  if (!code) return null;
+  const direct = caseyTimedRuleForCode(code);
+  if (direct) {
+    return {
+      kind: "shift",
+      titleParts: direct.titleParts,
+      location: CASEY_LOCATION,
+      allDay: false,
+      defaultTimes: direct.defaultTimes,
+    };
+  }
+  if (explicit) {
+    return {
+      kind: "shift",
+      titleParts: caseyTitlePartsForCode(code, explicit.start),
+      location: CASEY_LOCATION,
+      allDay: false,
+      defaultTimes: null,
+    };
+  }
+  return null;
+}
+
+function caseyTimedRuleForCode(code) {
+  const rules = {
+    "CS": [["CS", "", ""], [[8, 0], [17, 30]]],
+    "CLIN SUPP": [["CS", "", ""], [[8, 0], [17, 30]]],
+    "CLINICAL SUPP": [["CS", "", ""], [[8, 0], [17, 30]]],
+    "AM TL": [["TL", "AM", ""], [[8, 0], [17, 30]]],
+    "AM T/L": [["TL", "AM", ""], [[8, 0], [17, 30]]],
+    "AM UFD": [["UFD", "AM", ""], [[8, 0], [17, 30]]],
+    "AM MIC": [["MIC", "AM", ""], [[8, 0], [17, 30]]],
+    "PM TL": [["TL", "PM", ""], [[14, 30], [0, 0]]],
+    "PM T/L": [["TL", "PM", ""], [[14, 30], [0, 0]]],
+    "PM UFD": [["UFD", "PM", ""], [[14, 30], [0, 0]]],
+    "PM MIC": [["MIC", "PM", ""], [[14, 30], [0, 0]]],
+    "PM PAEDS": [["PAEDS", "PM", ""], [[14, 30], [0, 0]]],
+    "AM PAEDS": [["PAEDS", "AM", ""], [[7, 30], [17, 0]]],
+    "AM SSU": [["SSU", "AM", ""], [[7, 30], [17, 0]]],
+    "PM": [["PM", "", ""], [[14, 30], [0, 0]]],
+    "AM": [["AM", "", ""], [[8, 0], [17, 30]]],
+  };
+  const item = rules[code];
+  if (!item) return null;
+  return {
+    titleParts: { base: item[0][0], period: item[0][1], suffix: item[0][2] },
+    defaultTimes: item[1],
+  };
+}
+
+function caseyTitlePartsForCode(code, startHm) {
+  const period = extractCaseyPeriod(code) || caseyPeriodFromStart(startHm);
+  const base = normalizeCaseyBase(code.replace(/\b(?:AM|PM)\b/g, " ").trim()) || inferCaseyTimeOnlyShiftLabel(startHm);
+  if (base === "AM" || base === "PM" || base === "Night" || base === "Evening") {
+    return { base, period: "", suffix: "" };
+  }
+  return { base, period, suffix: "" };
+}
+
+function normalizeCaseyCode(label) {
+  return cleanText(label)
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/\+\s*OC\b/gi, "")
+    .replace(/\*/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toUpperCase();
+}
+
+function normalizeCaseyBase(value) {
+  const code = normalizeCaseyCode(value);
+  if (!code) return "";
+  if (code === "CLIN SUPP" || code === "CLINICAL SUPP") return "CS";
+  if (code === "T/L") return "TL";
+  if (code === "C/CARE") return "C/CARE";
+  if (code.includes("PAEDS")) return "PAEDS";
+  if (code.includes("SSU")) return "SSU";
+  if (code.includes("MIC")) return "MIC";
+  if (code.includes("UFD")) return "UFD";
+  if (code.includes("TL") || code.includes("T/L")) return "TL";
+  return code;
+}
+
+function extractCaseyPeriod(label) {
+  const upper = String(label || "").toUpperCase();
+  if (/\bAM\b/.test(upper)) return "AM";
+  if (/\bPM\b/.test(upper)) return "PM";
+  return "";
+}
+
+function caseyPeriodFromStart(startHm) {
+  const [hour] = startHm;
+  if (hour >= 14 && hour < 22) return "PM";
+  if (hour >= 6 && hour < 14) return "AM";
+  return "";
+}
+
+function inferCaseyTimeOnlyShiftLabel(startHm) {
+  const [hour] = startHm;
+  if (hour >= 22 || hour < 6) return "Night";
+  if (hour >= 16) return "Evening";
+  if (hour >= 12) return "PM";
+  return "AM";
+}
+
 function sanitizeParserExtensions(value) {
   const input = value && typeof value === "object" ? value : {};
+  const defaults = buildDefaultParserRules();
   return {
-    mmc: sanitizeParserExtensionRuleList(input.mmc, "MMC"),
-    ddh: sanitizeParserExtensionRuleList(input.ddh, "DDH"),
+    mmc: mergeParserRuleLists(defaults.mmc, sanitizeParserExtensionRuleList(input.mmc, "MMC")),
+    ddh: mergeParserRuleLists(defaults.ddh, sanitizeParserExtensionRuleList(input.ddh, "DDH")),
+    casey: mergeParserRuleLists(defaults.casey, sanitizeParserExtensionRuleList(input.casey, "Casey")),
   };
+}
+
+function mergeParserRuleLists(defaults, overrides) {
+  const byKey = new Map();
+  for (const rule of defaults) byKey.set(parserRuleKey(rule), rule);
+  for (const rule of overrides) byKey.set(parserRuleKey(rule), rule);
+  return [...byKey.values()].sort(compareParserRules);
+}
+
+function parserRuleKey(rule) {
+  return `${rule.source}|${rule.seniority}|${rule.code}`;
+}
+
+function compareParserRules(left, right) {
+  const rank = seniorityRank(left.seniority) - seniorityRank(right.seniority);
+  if (rank) return rank;
+  return left.code.localeCompare(right.code);
 }
 
 function sanitizeParserExtensionRuleList(items, source) {
@@ -1285,6 +1625,7 @@ function sanitizeParserExtensionRuleList(items, source) {
 function sanitizeParserExtensionRule(item, forcedSource = "") {
   if (!item || typeof item !== "object") return null;
   const source = sanitizeParserRuleSource(forcedSource || item.source);
+  const seniority = sanitizeRuleSeniority(item.seniority);
   const code = String(item.code || item.rawCode || "").trim().toUpperCase();
   const kind = String(item.kind || "shift").trim().toLowerCase();
   const base = String(item.base || item.titleParts?.base || "").trim();
@@ -1298,6 +1639,7 @@ function sanitizeParserExtensionRule(item, forcedSource = "") {
   if (!allDay && (!isClockString(startTime) || !isClockString(endTime))) return null;
   return {
     source,
+    seniority,
     code,
     kind,
     base,
@@ -1307,20 +1649,57 @@ function sanitizeParserExtensionRule(item, forcedSource = "") {
     allDay,
     startTime: allDay ? "" : startTime,
     endTime: allDay ? "" : endTime,
+    includeAsShift: item.includeAsShift !== false,
   };
+}
+
+function sanitizeRuleSeniority(value) {
+  const text = String(value || "").trim();
+  const upper = text.toUpperCase();
+  const aliases = new Map([
+    ["SR", "Senior Registrar"],
+    ["SENIOR REG", "Senior Registrar"],
+    ["SENIOR REGISTRAR", "Senior Registrar"],
+    ["IR", "Transitional/Intermediate Registrar"],
+    ["TR", "Transitional/Intermediate Registrar"],
+    ["INTERMEDIATE REG", "Transitional/Intermediate Registrar"],
+    ["INTERMEDIATE REGISTRAR", "Transitional/Intermediate Registrar"],
+    ["TRANSITIONAL REGISTRAR", "Transitional/Intermediate Registrar"],
+    ["JR", "Junior Registrar"],
+    ["JUNIOR REG", "Junior Registrar"],
+    ["JUNIOR REGISTRAR", "Junior Registrar"],
+    ["H", "HMO"],
+    ["HMO", "HMO"],
+    ["ED HMO", "HMO"],
+    ["PAEDS HMO", "HMO"],
+    ["GERI", "SMS"],
+    ["I", "Intern"],
+    ["INTERN", "Intern"],
+  ]);
+  if (aliases.has(upper)) return aliases.get(upper);
+  return SENIORITY_LABELS.find((item) => item.toUpperCase() === upper) || UNKNOWN_SENIORITY;
+}
+
+function seniorityRank(value) {
+  const index = SENIORITY_LABELS.indexOf(sanitizeRuleSeniority(value));
+  return index >= 0 ? index : SENIORITY_LABELS.length;
 }
 
 function sanitizeParserRuleSource(value) {
   const source = String(value || "").trim().toUpperCase();
-  return source === "MMC" || source === "DDH" ? source : "";
+  if (source === "MMC" || source === "DDH") return source;
+  if (source === "CASEY") return "Casey";
+  return "";
 }
 
-function findManualParserRule(source, label, explicit = null) {
+function findManualParserRule(source, seniority, label, explicit = null) {
   const normalizedSource = sanitizeParserRuleSource(source);
+  const normalizedSeniority = sanitizeRuleSeniority(seniority);
   const code = normalizeParserRuleCode(normalizedSource, label);
   if (!normalizedSource || !code) return null;
-  const rules = normalizedSource === "MMC" ? MANUAL_PARSER_RULES.mmc : MANUAL_PARSER_RULES.ddh;
-  const rule = rules.find((item) => item.code === code);
+  const rules = parserRulesForSource(normalizedSource);
+  const rule = rules.find((item) => item.code === code && item.seniority === normalizedSeniority)
+    || rules.find((item) => item.code === code && item.seniority === UNKNOWN_SENIORITY);
   return rule ? parserRuleToNormalized(rule, explicit) : null;
 }
 
@@ -1331,7 +1710,18 @@ function normalizeParserRuleCode(source, label) {
     const explicit = extractTimePrefix(text);
     return String(explicit?.label || text).trim().toUpperCase();
   }
+  if (source === "Casey") {
+    const explicit = extractTimePrefix(text);
+    return normalizeCaseyCode(explicit?.label || text);
+  }
   return text;
+}
+
+function parserRulesForSource(source) {
+  if (source === "MMC") return MANUAL_PARSER_RULES.mmc || [];
+  if (source === "DDH") return MANUAL_PARSER_RULES.ddh || [];
+  if (source === "Casey") return MANUAL_PARSER_RULES.casey || [];
+  return [];
 }
 
 function parserRuleToNormalized(rule, explicit = null) {
@@ -1346,6 +1736,7 @@ function parserRuleToNormalized(rule, explicit = null) {
       kind: rule.kind || "shift",
       titleParts,
       location,
+      includeAsShift: rule.includeAsShift !== false,
       allDay: true,
       defaultTimes: null,
     };
@@ -1357,6 +1748,7 @@ function parserRuleToNormalized(rule, explicit = null) {
     kind: rule.kind || "shift",
     titleParts,
     location,
+    includeAsShift: rule.includeAsShift !== false,
     allDay: false,
     defaultTimes: [startHm, endHm],
     ambiguous: false,
@@ -1368,6 +1760,107 @@ function parseRuleTime(value) {
   const match = String(value || "").match(/^(\d{2}):(\d{2})$/);
   if (!match) return null;
   return [Number(match[1]), Number(match[2])];
+}
+
+function buildDefaultParserRules() {
+  const rules = { mmc: [], ddh: [], casey: [] };
+  const activeSeniorities = SENIORITY_LABELS.filter((item) => item !== UNKNOWN_SENIORITY);
+  const consultantSeniorities = ["SMS", "CMO"];
+  const nonConsultantMmcSeniorities = ["Senior Registrar", "Transitional/Intermediate Registrar", "Junior Registrar", "HMO", "Intern"];
+  const add = (bucket, source, code, seniority, base, period, suffix, allDay, startTime, endTime, location = defaultParserRuleLocation(source)) => {
+    bucket.push({
+      source,
+      seniority,
+      code,
+      kind: "shift",
+      base,
+      period,
+      suffix,
+      allDay,
+      startTime: allDay ? "" : startTime,
+      endTime: allDay ? "" : endTime,
+      location: allDay && base === "CS" ? "" : location,
+      includeAsShift: true,
+    });
+  };
+  for (const seniority of activeSeniorities) {
+    add(rules.mmc, "MMC", "CS", seniority, "CS", "", "", true, "", "", "");
+    add(rules.mmc, "MMC", "CSO", seniority, "CSO", "", "", true, "", "", MMC_LOCATION);
+  }
+  for (const seniority of consultantSeniorities) {
+    for (const periodPrefix of ["A", "P"]) {
+      for (const [teamCode, teamName] of Object.entries(MMC_TEAM_MAP)) {
+        for (const suffixCode of ["C", "R"]) {
+          if (suffixCode === "R" && (teamCode === "C" || teamCode === "R")) continue;
+          add(
+            rules.mmc,
+            "MMC",
+            `${periodPrefix}${teamCode}${suffixCode}`,
+            seniority,
+            teamName,
+            periodPrefix === "A" ? "AM" : "PM",
+            suffixCode === "R" ? "Float" : "",
+            false,
+            periodPrefix === "A" ? "08:00" : "14:30",
+            periodPrefix === "A" ? "17:30" : "00:00",
+          );
+        }
+      }
+      for (const suffixCode of ["C", "R"]) {
+        if (suffixCode === "R") continue;
+        add(
+          rules.mmc,
+          "MMC",
+          `${periodPrefix}SS${suffixCode}`,
+          seniority,
+          "SSU",
+          periodPrefix === "A" ? "AM" : "PM",
+          suffixCode === "R" ? "Float" : "",
+          false,
+          periodPrefix === "A" ? "07:30" : "14:30",
+          periodPrefix === "A" ? "17:30" : "00:00",
+        );
+      }
+    }
+  }
+  for (const seniority of nonConsultantMmcSeniorities) {
+    add(rules.mmc, "MMC", "SWA", seniority, "Swing", "AM", "", false, "08:00", "17:30", MMC_LOCATION);
+    add(rules.mmc, "MMC", "SWP", seniority, "Swing", "PM", "", false, "14:30", "00:00", MMC_LOCATION);
+    add(rules.mmc, "MMC", "AHJ", seniority, "Hub", "AM", "", false, "08:00", "17:30", MMC_LOCATION);
+    add(rules.mmc, "MMC", "PHJ", seniority, "Hub", "PM", "", false, "14:30", "00:00", MMC_LOCATION);
+    add(rules.mmc, "MMC", "NSSJ", seniority, "Night SSU", "", "", false, "23:00", "08:30", MMC_LOCATION);
+  }
+  for (const seniority of activeSeniorities) {
+    add(rules.ddh, "DDH", "CS", seniority, "CS", "", "", true, "", "", "");
+    add(rules.ddh, "DDH", "CS ONSITE", seniority, "CS onsite", "", "", true, "", "", DDH_LOCATION);
+    add(rules.ddh, "DDH", "SSU", seniority, "SSU", "", "", true, "", "", DDH_LOCATION);
+    add(rules.ddh, "DDH", "ORANGE AM", seniority, "Orange", "AM", "", true, "", "", DDH_LOCATION);
+    add(rules.ddh, "DDH", "ORANGE PM", seniority, "Orange", "PM", "", true, "", "", DDH_LOCATION);
+    add(rules.ddh, "DDH", "SILVER AM", seniority, "Silver", "AM", "", true, "", "", DDH_LOCATION);
+    add(rules.ddh, "DDH", "FAST PM", seniority, "FAST", "PM", "", true, "", "", DDH_LOCATION);
+    add(rules.ddh, "DDH", "AVAO AM", seniority, "AVAO", "AM", "", true, "", "", DDH_LOCATION);
+    add(rules.ddh, "DDH", "AVAO PM", seniority, "AVAO", "PM", "", true, "", "", DDH_LOCATION);
+    add(rules.casey, "Casey", "CS", seniority, "CS", "", "", false, "08:00", "17:30", CASEY_LOCATION);
+    add(rules.casey, "Casey", "CLIN SUPP", seniority, "CS", "", "", false, "08:00", "17:30", CASEY_LOCATION);
+    add(rules.casey, "Casey", "CLINICAL SUPP", seniority, "CS", "", "", false, "08:00", "17:30", CASEY_LOCATION);
+    add(rules.casey, "Casey", "AM TL", seniority, "TL", "AM", "", false, "08:00", "17:30", CASEY_LOCATION);
+    add(rules.casey, "Casey", "AM UFD", seniority, "UFD", "AM", "", false, "08:00", "17:30", CASEY_LOCATION);
+    add(rules.casey, "Casey", "AM MIC", seniority, "MIC", "AM", "", false, "08:00", "17:30", CASEY_LOCATION);
+    add(rules.casey, "Casey", "PM TL", seniority, "TL", "PM", "", false, "14:30", "00:00", CASEY_LOCATION);
+    add(rules.casey, "Casey", "PM UFD", seniority, "UFD", "PM", "", false, "14:30", "00:00", CASEY_LOCATION);
+    add(rules.casey, "Casey", "PM MIC", seniority, "MIC", "PM", "", false, "14:30", "00:00", CASEY_LOCATION);
+    add(rules.casey, "Casey", "PM PAEDS", seniority, "PAEDS", "PM", "", false, "14:30", "00:00", CASEY_LOCATION);
+    add(rules.casey, "Casey", "AM PAEDS", seniority, "PAEDS", "AM", "", false, "07:30", "17:00", CASEY_LOCATION);
+    add(rules.casey, "Casey", "AM SSU", seniority, "SSU", "AM", "", false, "07:30", "17:00", CASEY_LOCATION);
+  }
+  return rules;
+}
+
+function defaultParserRuleLocation(source) {
+  if (source === "MMC") return MMC_LOCATION;
+  if (source === "DDH") return DDH_LOCATION;
+  if (source === "Casey") return CASEY_LOCATION;
+  return "";
 }
 
 
@@ -1468,6 +1961,15 @@ function shouldIgnoreDdh(value) {
   return DDH_IGNORE_CONTAINS.some((fragment) => upper.includes(fragment));
 }
 
+function shouldIgnoreCasey(value) {
+  const upper = cleanText(value).replace(/\s+/g, " ").trim().toUpperCase();
+  if (CASEY_IGNORED_EXACT.has(upper)) return true;
+  if (CASEY_IGNORED_PREFIXES.some((prefix) => upper.startsWith(prefix))) return true;
+  if (/^[A-Z]{2,}(?:\s+[A-Z])?$/.test(upper) && upper.length <= 12 && !caseyTimedRuleForCode(upper)) return true;
+  if (/^(MON|TUES|WED|THU|FRI|SAT|SUN)\b/.test(upper)) return true;
+  return false;
+}
+
 function iterateDdhWeekEntries(workbook) {
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
   const range = XLSX.utils.decode_range(sheet["!ref"] || "A1:A1");
@@ -1491,8 +1993,19 @@ function iterateDdhWeekEntries(workbook) {
     }
     if (!weekDates.length) continue;
 
+    let currentSeniority = UNKNOWN_SENIORITY;
+    const sectionMap = ddhSeniorityMap();
     for (let row = dateRow + 1; row < nextDateRow; row += 1) {
       const rawName = cleanText(getCellValue(sheet, row, 1));
+      const upperName = rawName.replace(/\s+/g, " ").trim().toUpperCase();
+      if (sectionMap.has(upperName)) {
+        currentSeniority = sectionMap.get(upperName);
+        continue;
+      }
+      if (/^ED HMO/i.test(upperName) || /^HMO\b/i.test(upperName)) {
+        currentSeniority = "HMO";
+        continue;
+      }
       if (!rawName || !looksLikePersonName(rawName) || isDdhSectionMarker(rawName)) continue;
       const labels = [];
       for (let col = 2; col <= 8; col += 1) labels.push(cleanText(getCellValue(sheet, row, col)));
@@ -1501,11 +2014,149 @@ function iterateDdhWeekEntries(workbook) {
       for (let col = 2; col <= 8; col += 1) {
         times.push(supplementaryRow ? cleanText(getCellValue(sheet, supplementaryRow, col)) : "");
       }
-      entries.push({ rawName, weekDates, labels, times });
+      entries.push({ rawName, weekDates, labels, times, seniority: currentSeniority });
       if (supplementaryRow) row = supplementaryRow;
     }
   }
   return entries;
+}
+
+function iterateCaseyWeekEntries(workbook) {
+  const entries = [];
+  for (const sheetName of workbook.SheetNames || []) {
+    if (!isCaseyWeekSheet(workbook.Sheets[sheetName], sheetName)) continue;
+    const sheet = workbook.Sheets[sheetName];
+    const range = XLSX.utils.decode_range(sheet["!ref"] || "A1:A1");
+    const weekDates = [];
+    for (let col = 2; col <= 8; col += 1) {
+      const value = coerceDate(getCellValue(sheet, 2, col));
+      if (!value) {
+        weekDates.length = 0;
+        break;
+      }
+      weekDates.push(value);
+    }
+    if (!weekDates.length) continue;
+
+    let currentSeniority = "SMS";
+    const sectionMap = caseySeniorityMap();
+    for (let row = 3; row <= range.e.r + 1; row += 1) {
+      const rawName = cleanText(getCellValue(sheet, row, 1));
+      const upperName = rawName.replace(/\s+/g, " ").trim().toUpperCase();
+      if (!upperName) continue;
+      if (CASEY_STOP_SECTIONS.has(upperName)) break;
+      if (sectionMap.has(upperName)) {
+        currentSeniority = sectionMap.get(upperName);
+        continue;
+      }
+      if (upperName.startsWith("ONCALL")) continue;
+      if (isCaseySectionMarker(rawName)) continue;
+      const parsedName = parseCaseyRosterName(rawName);
+      if (!parsedName || !looksLikePersonName(parsedName.name)) continue;
+      const labels = [];
+      for (let col = 2; col <= 8; col += 1) labels.push(cleanText(getCellValue(sheet, row, col)));
+      entries.push({
+        rawName: parsedName.name,
+        displayName: parsedName.name,
+        weekDates,
+        labels,
+        seniority: parsedName.seniority || currentSeniority,
+      });
+    }
+  }
+  return entries;
+}
+
+function isCaseyWorkbook(workbook) {
+  return (workbook.SheetNames || []).some((sheetName) => isCaseyWeekSheet(workbook.Sheets[sheetName], sheetName));
+}
+
+function isCaseyWeekSheet(sheet, sheetName) {
+  if (!sheet || sheetName === "Personal Roster" || sheetName === "DayRoster") return false;
+  const title = cleanText(getCellValue(sheet, 1, 1)).toUpperCase();
+  if (!/^TERM\s+\d+,/.test(title)) return false;
+  const weekdays = [];
+  for (let col = 2; col <= 8; col += 1) weekdays.push(cleanText(getCellValue(sheet, 1, col)).toUpperCase());
+  if (weekdays.join("|") !== "MONDAY|TUESDAY|WEDNESDAY|THURSDAY|FRIDAY|SATURDAY|SUNDAY") return false;
+  return Boolean(coerceDate(getCellValue(sheet, 2, 2)) && coerceDate(getCellValue(sheet, 2, 8)));
+}
+
+function parseCaseyRosterName(value) {
+  const cleaned = cleanText(value)
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+-\s+LOCUM(?:\s+SMS)?$/i, "")
+    .replace(/\s+\(7\/fn\)$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned || cleaned.toUpperCase().includes("TBA")) return null;
+  const match = cleaned.match(/^\(([^)]+)\)\s*(.+)$/);
+  if (!match) return { name: cleaned, seniority: "" };
+  return {
+    name: match[2].trim(),
+    seniority: sanitizeRuleSeniority(match[1]),
+  };
+}
+
+function isCaseySectionMarker(value) {
+  const upper = cleanText(value).replace(/\s+/g, " ").trim().toUpperCase();
+  return CASEY_SECTION_MARKERS.has(upper);
+}
+
+function mmcSeniorityMap() {
+  return new Map([
+    ["SMS", "SMS"],
+    ["GERIATRICIAN", "SMS"],
+    ["CMO", "CMO"],
+    ["SENIOR REG", "Senior Registrar"],
+    ["INTERMEDIATE REG", "Transitional/Intermediate Registrar"],
+    ["JUNIOR REG", "Junior Registrar"],
+    ["HMO", "HMO"],
+    ["HMO MUST BE 111", "HMO"],
+    ["HMO - MUST BE 111", "HMO"],
+    ["ENP", "ENP"],
+    ["AMP", "AMP"],
+    ["EMERGENCY NURSE PRACTITIONER", "ENP"],
+    ["AMBULATORY MUSCULOSKELETAL PHYSIOTHERAPIST", "AMP"],
+    ["INTERN", "Intern"],
+  ]);
+}
+
+function ddhSeniorityMap() {
+  return new Map([
+    ["SENIOR MEDICAL STAFF", "SMS"],
+    ["SENIOR REGISTRARS", "Senior Registrar"],
+    ["REGISTRAR", "Senior Registrar"],
+    ["REGISTRARS", "Senior Registrar"],
+    ["CMO'S", "CMO"],
+    ["CMOS", "CMO"],
+    ["JUNIOR REGISTRARS", "Junior Registrar"],
+    ["INTERNS", "Intern"],
+    ["ENP", "ENP"],
+    ["NURSE PRACTITIONERS", "ENP"],
+    ["NURSE PRAC. CANDIDATES", "ENP"],
+    ["AMP", "AMP"],
+    ["AMP'S", "AMP"],
+    ["PHYSIOTHERAPIST", "AMP"],
+    ["PHYSIOTHERAPISTS", "AMP"],
+  ]);
+}
+
+function caseySeniorityMap() {
+  return new Map([
+    ["GERIATRICIAN", "SMS"],
+    ["SNR CMOS", "CMO"],
+    ["SENIOR CMOS", "CMO"],
+    ["ED GPS", "CMO"],
+    ["SNR REGS", "Senior Registrar"],
+    ["SENIOR REGS", "Senior Registrar"],
+    ["JNR REGS", "Junior Registrar"],
+    ["JUNIOR REGS", "Junior Registrar"],
+    ["PAEDS ED HMOS", "HMO"],
+    ["HMOS", "HMO"],
+    ["HMO", "HMO"],
+    ["INTERNS", "Intern"],
+    ["AMP COVER", "AMP"],
+  ]);
 }
 
 function createTimedRecord(source, day, rawValue, details) {
@@ -1516,6 +2167,7 @@ function createTimedRecord(source, day, rawValue, details) {
   return {
     id: hashString(`${source}|${day}|${rawValue}|${normalizedTitle}|${start}|${end}`),
     source,
+    seniority: sanitizeRuleSeniority(details.seniority),
     kind: details.kind,
     rawValue,
     startDay: day,
@@ -1538,6 +2190,7 @@ function createAllDayRecord(source, day, rawValue, details) {
   return {
     id: hashString(`${source}|${day}|${rawValue}|${normalizedTitle}|all-day`),
     source,
+    seniority: sanitizeRuleSeniority(details.seniority),
     kind: details.kind,
     rawValue,
     startDay: day,
@@ -1555,13 +2208,14 @@ function createAllDayRecord(source, day, rawValue, details) {
   };
 }
 
-function createWeeklyLeaveRecord(source, monday, rawValue) {
+function createWeeklyLeaveRecord(source, monday, rawValue, seniority = UNKNOWN_SENIORITY) {
   const label = toTitleCase(rawValue);
   const kind = rawValue.toUpperCase() === "CONFERENCE LEAVE" ? "conference_leave" : "annual_leave";
   const normalizedTitle = label;
   return {
     id: hashString(`${source}|${monday}|${rawValue}|week-leave`),
     source,
+    seniority: sanitizeRuleSeniority(seniority),
     kind,
     rawValue,
     startDay: monday,
@@ -1579,10 +2233,11 @@ function createWeeklyLeaveRecord(source, monday, rawValue) {
   };
 }
 
-function createUnknownRecord(source, day, rawValue, warning) {
+function createUnknownRecord(source, day, rawValue, warning, seniority = UNKNOWN_SENIORITY) {
   return {
     id: hashString(`${source}|${day}|${rawValue}|unknown`),
     source,
+    seniority: sanitizeRuleSeniority(seniority),
     kind: "unknown",
     rawValue,
     startDay: day,
@@ -1600,6 +2255,30 @@ function createUnknownRecord(source, day, rawValue, warning) {
   };
 }
 
+function createHiddenRecord(source, day, rawValue, normalized, seniority = UNKNOWN_SENIORITY) {
+  const titleParts = normalized.titleParts || { base: rawValue, period: "", suffix: "" };
+  const normalizedTitle = formatTitle(source, titleParts, { ...DEFAULT_SETTINGS, showTimes: false, showRawValues: false }, normalized.kind || "shift");
+  return {
+    id: hashString(`${source}|${day}|${rawValue}|${normalizedTitle}|hidden`),
+    source,
+    seniority: sanitizeRuleSeniority(seniority),
+    kind: "hidden_shift",
+    rawValue,
+    startDay: day,
+    endDay: addDays(day, 1),
+    allDay: true,
+    start: day,
+    end: addDays(day, 1),
+    location: "",
+    titleParts,
+    normalizedTitle,
+    status: "ok",
+    warnings: [],
+    exportable: false,
+    includeByDefault: false,
+  };
+}
+
 function applySettings(records, settings, overrides) {
   const scopedRecords = records.filter((record) => matchesHospitalFilter(record, settings) && matchesDateFilter(record, settings));
   const events = [];
@@ -1607,6 +2286,7 @@ function applySettings(records, settings, overrides) {
   const issues = [];
 
   for (const record of scopedRecords) {
+    if (record.kind === "hidden_shift") continue;
     const override = overrides[record.id] || {};
     const defaultInclude = record.includeByDefault && isKindEnabled(record.kind, settings);
     const include = typeof override.include === "boolean" ? override.include : defaultInclude;
@@ -1619,6 +2299,7 @@ function applySettings(records, settings, overrides) {
     reviewItems.push({
       id: record.id,
       source: record.source,
+      seniority: record.seniority || UNKNOWN_SENIORITY,
       startDay: record.startDay,
       endDay: record.endDay,
       rawValue: record.rawValue,
@@ -1638,6 +2319,7 @@ function applySettings(records, settings, overrides) {
       issues.push({
         id: record.id,
         source: record.source,
+        seniority: record.seniority || UNKNOWN_SENIORITY,
         startDay: record.startDay,
         rawValue: record.rawValue,
         status: record.status,
@@ -1652,6 +2334,7 @@ function applySettings(records, settings, overrides) {
     events.push({
       id: record.id,
       source: record.source,
+      seniority: record.seniority || UNKNOWN_SENIORITY,
       title: finalTitle,
       allDay: record.allDay,
       start: record.start,
@@ -1684,6 +2367,7 @@ function resolveDefaultLocation(source, location, settings) {
   if (!location) return "";
   if (source === "MMC" && location.startsWith("MMC Car Park")) return settings.defaultLocationMmc;
   if (source === "DDH" && location.startsWith("DDH Car Park")) return settings.defaultLocationDdh;
+  if (source === "Casey" && location.startsWith("Casey Hospital")) return settings.defaultLocationCasey;
   return location;
 }
 
@@ -1764,7 +2448,7 @@ function isKindEnabled(kind, settings) {
 
 function matchesHospitalFilter(record, settings) {
   if (settings.hospitalFilter === "all") return true;
-  return settings.hospitalFilter.toUpperCase() === record.source;
+  return settings.hospitalFilter.toLowerCase() === String(record.source || "").toLowerCase();
 }
 
 function matchesDateFilter(record, settings) {

@@ -979,6 +979,7 @@ function sanitizeDetectedSources(value) {
   return {
     mmc: Array.isArray(input.mmc) ? input.mmc.map((item) => String(item || "")).filter(Boolean) : [],
     ddh: Array.isArray(input.ddh) ? input.ddh.map((item) => String(item || "")).filter(Boolean) : [],
+    casey: Array.isArray(input.casey) ? input.casey.map((item) => String(item || "")).filter(Boolean) : [],
   };
 }
 
@@ -1017,8 +1018,6 @@ export async function loadSnapshotRecord(store, ownerType, ownerId) {
 
 async function persistSnapshotRecord(store, ownerType, ownerId, snapshot, buildStamp) {
   const sanitizedInput = sanitizeSnapshotRecord({
-    ownerType,
-    ownerId,
     ...snapshot,
     ownerType,
     ownerId,
@@ -1340,12 +1339,17 @@ function sanitizeClaims(claims) {
       sourceType: String(claim?.sourceType || "").toLowerCase(),
       matchedAt: String(claim?.matchedAt || ""),
     }))
-    .filter((claim) => claim.key && claim.displayName && (claim.sourceType === "mmc" || claim.sourceType === "ddh"));
+    .filter((claim) => claim.key && claim.displayName && isRosterSourceType(claim.sourceType));
 }
 
 function sanitizeSourceTypes(items) {
   if (!Array.isArray(items)) return [];
-  return [...new Set(items.map((item) => String(item || "").toLowerCase()).filter((item) => item === "mmc" || item === "ddh"))];
+  return [...new Set(items.map((item) => String(item || "").toLowerCase()).filter(isRosterSourceType))];
+}
+
+function isRosterSourceType(value) {
+  const source = String(value || "").toLowerCase();
+  return source === "mmc" || source === "ddh" || source === "casey";
 }
 
 function sanitizeDoctorProfile(value) {
@@ -1541,7 +1545,9 @@ function mergeAdminIssues(existing, incoming) {
 
 function sanitizeIssueSource(value) {
   const source = String(value || "").trim().toUpperCase();
-  return source === "MMC" || source === "DDH" ? source : "";
+  if (source === "MMC" || source === "DDH") return source;
+  if (source === "CASEY") return "Casey";
+  return "";
 }
 
 function issueFingerprint(source, rawValue, seniority = "") {
@@ -1606,6 +1612,7 @@ function sanitizeParserExtensionRules(value) {
   return {
     mmc: sanitizeParserExtensionRuleList(source.mmc, "MMC"),
     ddh: sanitizeParserExtensionRuleList(source.ddh, "DDH"),
+    casey: sanitizeParserExtensionRuleList(source.casey, "Casey"),
   };
 }
 
