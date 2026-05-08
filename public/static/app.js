@@ -7887,20 +7887,62 @@ function saveSessionStore(store) {
 
 function loadWorkspaceStore() {
   try {
-    return JSON.parse(localStorage.getItem(ACCOUNT_WORKSPACES_KEY) || "{}");
+    const store = JSON.parse(localStorage.getItem(ACCOUNT_WORKSPACES_KEY) || "{}");
+    if (Object.values(store).some((workspace) => workspace?.snapshot)) {
+      try {
+        saveWorkspaceStore(store);
+      } catch {
+        // Use the in-memory migration for this run even if storage cleanup fails.
+      }
+    }
+    return lightweightWorkspaceStore(store);
   } catch {
     return {};
   }
 }
 
 function saveWorkspaceStore(store) {
-  localStorage.setItem(ACCOUNT_WORKSPACES_KEY, JSON.stringify(store));
+  const lightweight = lightweightWorkspaceStore(store);
+  try {
+    localStorage.setItem(ACCOUNT_WORKSPACES_KEY, JSON.stringify(lightweight));
+  } catch (error) {
+    if (!isStorageQuotaError(error)) throw error;
+    const sessionOnly = {};
+    for (const [key, workspace] of Object.entries(lightweight)) {
+      sessionOnly[key] = {
+        fileRefs: [],
+        session: workspace?.session || {},
+      };
+    }
+    localStorage.setItem(ACCOUNT_WORKSPACES_KEY, JSON.stringify(sessionOnly));
+  }
+}
+
+function lightweightWorkspaceStore(store) {
+  const next = {};
+  for (const [key, workspace] of Object.entries(store || {})) {
+    next[key] = {
+      fileRefs: Array.isArray(workspace?.fileRefs) ? workspace.fileRefs.map(importRefForWorkspace).filter((item) => item.id) : [],
+      session: workspace?.session && typeof workspace.session === "object" ? workspace.session : {},
+    };
+  }
+  return next;
+}
+
+function isStorageQuotaError(error) {
+  return error?.name === "QuotaExceededError"
+    || error?.name === "NS_ERROR_DOM_QUOTA_REACHED"
+    || error?.code === 22
+    || error?.code === 1014;
 }
 
 function saveWorkspaceSnapshotForEmail(email, snapshot) {
   if (!email) return;
   const store = loadWorkspaceStore();
-  store[email] = snapshot;
+  store[email] = {
+    fileRefs: Array.isArray(snapshot?.fileRefs) ? snapshot.fileRefs.map(importRefForWorkspace).filter((item) => item.id) : [],
+    session: snapshot?.session && typeof snapshot.session === "object" ? snapshot.session : {},
+  };
   saveWorkspaceStore(store);
 }
 
@@ -7924,7 +7966,6 @@ function currentWorkspaceSnapshot() {
       hadPreview: Boolean(latestPreview),
       savedAt: new Date().toISOString(),
     },
-    snapshot: currentSnapshot,
   };
 }
 
@@ -8285,14 +8326,6 @@ function removeImportRefsFromWorkspaceStore(id) {
     store[key] = {
       ...workspace,
       fileRefs: nextRefs,
-      snapshot: workspace?.snapshot
-        ? {
-            ...workspace.snapshot,
-            fileRefs: Array.isArray(workspace.snapshot.fileRefs)
-              ? workspace.snapshot.fileRefs.filter((ref) => ref.id !== id)
-              : [],
-          }
-        : workspace?.snapshot,
     };
     changed = true;
   }
