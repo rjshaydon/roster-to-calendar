@@ -10,6 +10,7 @@ const SNAPSHOT_SCHEMA_VERSION = 2;
 const ADMIN_ISSUE_DISMISS_PREFIX = "admin-issue-dismiss:";
 const ADMIN_ISSUE_IGNORE_PREFIX = "admin-issue-ignore:";
 const PARSER_EXTENSION_RULES_KEY = "parser-extension-rules:v1";
+const PARSER_RULE_SUGGESTIONS_KEY = "parser-rule-suggestions:v1";
 
 export async function onRequestGet(context) {
   return Response.json({ error: "Use POST for account requests." }, { status: 405 });
@@ -156,7 +157,11 @@ export async function onRequestPost(context) {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
-      return Response.json({ ok: true, users: await listUsers(context.env.ROSTER_STORE) });
+      return Response.json({
+        ok: true,
+        users: await listUsers(context.env.ROSTER_STORE),
+        issueConfig: await buildIssueConfig(context.env.ROSTER_STORE, email),
+      });
     }
 
     if (action === "reportUserError") {
@@ -266,6 +271,78 @@ export async function onRequestPost(context) {
       }
       await clearIssuesResolvedByParserRule(context.env.ROSTER_STORE, rule);
       return Response.json({ ok: true, parserExtensions });
+    }
+
+    if (action === "saveLocalParserExtensionRule") {
+      const saveEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
+      const targetRecord = saveEmail === email ? account.record : await loadAccountRecord(context.env.ROSTER_STORE, saveEmail);
+      const rule = sanitizeParserExtensionRule(body?.rule);
+      if (!rule) {
+        return Response.json({ error: "A valid shift-code rule is required." }, { status: 400 });
+      }
+      const localParserExtensions = upsertParserExtensionRule(targetRecord.localParserExtensions, rule);
+      const suggestion = sanitizeParserRuleSuggestion({
+        email: saveEmail,
+        realName: targetRecord.realName || "",
+        fingerprint: body?.fingerprint || issueFingerprint(rule.source, rule.code, rule.seniority),
+        rawValue: body?.rawValue || rule.code,
+        rule,
+        status: "pending",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+      let suggestions = await loadParserRuleSuggestions(context.env.ROSTER_STORE);
+      suggestions = upsertParserRuleSuggestion(suggestions, suggestion);
+      await saveParserRuleSuggestions(context.env.ROSTER_STORE, suggestions);
+      await context.env.ROSTER_STORE.put(storageKey(saveEmail), JSON.stringify({
+        ...targetRecord,
+        localParserExtensions,
+        updatedAt: new Date().toISOString(),
+      }));
+      await clearIssuesResolvedByParserRuleForUser(context.env.ROSTER_STORE, saveEmail, rule);
+      return Response.json({
+        ok: true,
+        issueConfig: await buildIssueConfig(context.env.ROSTER_STORE, saveEmail),
+      });
+    }
+
+    if (action === "decideParserRuleSuggestion") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      const suggestionId = String(body?.suggestionId || "").trim();
+      const decision = String(body?.decision || "").trim();
+      let suggestions = await loadParserRuleSuggestions(context.env.ROSTER_STORE);
+      const suggestion = suggestions.find((item) => item.id === suggestionId);
+      if (!suggestion) {
+        return Response.json({ error: "Suggestion was not found." }, { status: 404 });
+      }
+      const rule = sanitizeParserExtensionRule(body?.rule || suggestion.rule);
+      if ((decision === "approveGlobal" || decision === "approveUser") && !rule) {
+        return Response.json({ error: "A valid shift-code rule is required." }, { status: 400 });
+      }
+      if (decision === "approveGlobal") {
+        const parserExtensions = upsertParserExtensionRule(await loadParserExtensionRules(context.env.ROSTER_STORE), rule);
+        await saveParserExtensionRules(context.env.ROSTER_STORE, parserExtensions);
+        await clearIssuesResolvedByParserRule(context.env.ROSTER_STORE, rule);
+        await removeLocalParserRuleFromAllUsers(context.env.ROSTER_STORE, rule);
+        suggestions = suggestions.filter((item) => item.id !== suggestionId);
+      } else if (decision === "approveUser") {
+        await upsertLocalParserRuleForUser(context.env.ROSTER_STORE, suggestion.email, rule);
+        await clearIssuesResolvedByParserRuleForUser(context.env.ROSTER_STORE, suggestion.email, rule);
+        suggestions = suggestions.filter((item) => item.id !== suggestionId);
+      } else if (decision === "reject") {
+        await removeLocalParserRuleForUser(context.env.ROSTER_STORE, suggestion.email, suggestion.rule);
+        suggestions = suggestions.filter((item) => item.id !== suggestionId);
+      } else {
+        return Response.json({ error: "Unsupported suggestion decision." }, { status: 400 });
+      }
+      await saveParserRuleSuggestions(context.env.ROSTER_STORE, suggestions);
+      return Response.json({
+        ok: true,
+        parserExtensions: await loadParserExtensionRules(context.env.ROSTER_STORE),
+        suggestions,
+      });
     }
 
     if (action === "deleteAccount") {
@@ -702,8 +779,15 @@ async function hydrateRepositoryFromExistingAccounts(store) {
 }
 
 async function buildIssueConfig(store, email = "") {
+  const globalParserExtensions = await loadParserExtensionRules(store);
+  const record = email ? await loadAccountRecord(store, email).catch(() => null) : null;
+  const role = record?.role || roleForEmail(email);
+  const localParserExtensions = sanitizeParserExtensionRules(record?.localParserExtensions);
   return {
-    parserExtensions: await loadParserExtensionRules(store),
+    parserExtensions: mergeParserExtensionSets(globalParserExtensions, localParserExtensions),
+    globalParserExtensions,
+    localParserExtensions,
+    parserRuleSuggestions: role === "creator" || role === "owner" ? await loadParserRuleSuggestions(store) : [],
     dismissedFingerprints: await loadDismissedIssueFingerprints(store, email),
     ignoredFingerprints: await loadIgnoredIssueFingerprints(store),
   };
@@ -744,6 +828,22 @@ async function clearIssuesResolvedByParserRule(store, rule) {
   }
 }
 
+async function clearIssuesResolvedByParserRuleForUser(store, email, rule) {
+  const normalizedRule = sanitizeParserExtensionRule(rule);
+  const normalizedEmail = normalizeEmail(email);
+  if (!normalizedRule || !normalizedEmail) return;
+  const record = await loadAccountRecord(store, normalizedEmail).catch(() => null);
+  if (!record?.adminIssues?.length) return;
+  const existingIssues = sanitizeAdminIssues(record.adminIssues);
+  const nextIssues = existingIssues.filter((issue) => !issueMatchesParserRule(issue, normalizedRule));
+  if (nextIssues.length === existingIssues.length) return;
+  await store.put(storageKey(normalizedEmail), JSON.stringify({
+    ...record,
+    adminIssues: nextIssues,
+    updatedAt: new Date().toISOString(),
+  }));
+}
+
 function issueMatchesParserRule(issue, rule) {
   const source = sanitizeIssueSource(issue?.source);
   const seniority = sanitizeRuleSeniority(issue?.seniority);
@@ -753,6 +853,51 @@ function issueMatchesParserRule(issue, rule) {
   return source === rule.source
     && seniority === rule.seniority
     && (rawValue === rule.code || fingerprint === ruleFingerprint);
+}
+
+async function upsertLocalParserRuleForUser(store, email, rule) {
+  const normalizedEmail = normalizeEmail(email);
+  const normalizedRule = sanitizeParserExtensionRule(rule);
+  if (!normalizedEmail || !normalizedRule) return;
+  const record = await loadAccountRecord(store, normalizedEmail).catch(() => null);
+  if (!record) return;
+  await store.put(storageKey(normalizedEmail), JSON.stringify({
+    ...record,
+    localParserExtensions: upsertParserExtensionRule(record.localParserExtensions, normalizedRule),
+    updatedAt: new Date().toISOString(),
+  }));
+}
+
+async function removeLocalParserRuleForUser(store, email, rule) {
+  const normalizedEmail = normalizeEmail(email);
+  const normalizedRule = sanitizeParserExtensionRule(rule);
+  if (!normalizedEmail || !normalizedRule) return;
+  const record = await loadAccountRecord(store, normalizedEmail).catch(() => null);
+  if (!record) return;
+  const localParserExtensions = removeParserExtensionRule(record.localParserExtensions, normalizedRule);
+  await store.put(storageKey(normalizedEmail), JSON.stringify({
+    ...record,
+    localParserExtensions,
+    updatedAt: new Date().toISOString(),
+  }));
+}
+
+async function removeLocalParserRuleFromAllUsers(store, rule) {
+  const normalizedRule = sanitizeParserExtensionRule(rule);
+  if (!normalizedRule) return;
+  const result = await store.list({ prefix: "account:" });
+  for (const item of result.keys || []) {
+    const record = await store.get(item.name, "json").catch(() => null);
+    if (!record?.localParserExtensions) continue;
+    const existing = JSON.stringify(sanitizeParserExtensionRules(record.localParserExtensions));
+    const localParserExtensions = removeParserExtensionRule(record.localParserExtensions, normalizedRule);
+    if (JSON.stringify(localParserExtensions) === existing) continue;
+    await store.put(item.name, JSON.stringify({
+      ...record,
+      localParserExtensions,
+      updatedAt: new Date().toISOString(),
+    }));
+  }
 }
 
 async function upsertStateImports(store, imports, uploadedBy) {
@@ -1792,6 +1937,93 @@ function upsertParserExtensionRule(existing, rule) {
     ...sanitized,
     [key]: nextItems.sort((left, right) => left.code.localeCompare(right.code)),
   };
+}
+
+function removeParserExtensionRule(existing, rule) {
+  const sanitized = sanitizeParserExtensionRules(existing);
+  const target = sanitizeParserExtensionRule(rule);
+  if (!target) return sanitized;
+  const key = target.source.toLowerCase();
+  return {
+    ...sanitized,
+    [key]: (sanitized[key] || []).filter((item) => item.code !== target.code || item.seniority !== target.seniority),
+  };
+}
+
+function mergeParserExtensionSets(globalRules, localRules) {
+  const base = sanitizeParserExtensionRules(globalRules);
+  const local = sanitizeParserExtensionRules(localRules);
+  return {
+    mmc: mergeParserExtensionRuleLists(base.mmc, local.mmc),
+    ddh: mergeParserExtensionRuleLists(base.ddh, local.ddh),
+    casey: mergeParserExtensionRuleLists(base.casey, local.casey),
+    mch: mergeParserExtensionRuleLists(base.mch, local.mch),
+  };
+}
+
+function mergeParserExtensionRuleLists(globalRules, localRules) {
+  const byKey = new Map();
+  for (const rule of globalRules || []) byKey.set(parserExtensionRuleKey(rule), rule);
+  for (const rule of localRules || []) byKey.set(parserExtensionRuleKey(rule), rule);
+  return [...byKey.values()].sort((left, right) => left.code.localeCompare(right.code));
+}
+
+function parserExtensionRuleKey(rule) {
+  const normalized = sanitizeParserExtensionRule(rule);
+  return normalized ? `${normalized.source}|${normalized.seniority}|${normalized.code}` : "";
+}
+
+async function loadParserRuleSuggestions(store) {
+  const value = await store.get(PARSER_RULE_SUGGESTIONS_KEY, "json").catch(() => []);
+  return sanitizeParserRuleSuggestions(value);
+}
+
+async function saveParserRuleSuggestions(store, value) {
+  const sanitized = sanitizeParserRuleSuggestions(value);
+  if (!sanitized.length) {
+    await store.delete(PARSER_RULE_SUGGESTIONS_KEY);
+    return sanitized;
+  }
+  await store.put(PARSER_RULE_SUGGESTIONS_KEY, JSON.stringify(sanitized));
+  return sanitized;
+}
+
+function sanitizeParserRuleSuggestions(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => sanitizeParserRuleSuggestion(item))
+    .filter(Boolean)
+    .sort((left, right) => (right.updatedAt || "").localeCompare(left.updatedAt || ""));
+}
+
+function sanitizeParserRuleSuggestion(item) {
+  if (!item || typeof item !== "object") return null;
+  const email = normalizeEmail(item.email);
+  const rule = sanitizeParserExtensionRule(item.rule);
+  if (!email || !rule) return null;
+  const fingerprint = sanitizeIssueFingerprint(item.fingerprint || issueFingerprint(rule.source, rule.code, rule.seniority));
+  const id = `${email}::${parserExtensionRuleKey(rule)}`;
+  return {
+    id,
+    email,
+    realName: String(item.realName || "").trim(),
+    fingerprint,
+    rawValue: String(item.rawValue || rule.code || "").trim(),
+    rule,
+    status: "pending",
+    createdAt: String(item.createdAt || item.updatedAt || new Date().toISOString()),
+    updatedAt: String(item.updatedAt || item.createdAt || new Date().toISOString()),
+  };
+}
+
+function upsertParserRuleSuggestion(existing, suggestion) {
+  const nextSuggestion = sanitizeParserRuleSuggestion(suggestion);
+  const suggestions = sanitizeParserRuleSuggestions(existing);
+  if (!nextSuggestion) return suggestions;
+  return [
+    nextSuggestion,
+    ...suggestions.filter((item) => item.id !== nextSuggestion.id),
+  ].sort((left, right) => (right.updatedAt || "").localeCompare(left.updatedAt || ""));
 }
 
 function isClockString(value) {

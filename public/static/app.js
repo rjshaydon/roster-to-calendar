@@ -283,6 +283,10 @@ let pendingPreviewSnapToToday = false;
 let insightWarmupTimer = 0;
 let insightWarmupPromise = null;
 let parserExtensions = { mmc: [], ddh: [], casey: [], mch: [] };
+let globalParserExtensions = { mmc: [], ddh: [], casey: [], mch: [] };
+let localParserExtensions = { mmc: [], ddh: [], casey: [], mch: [] };
+let parserRuleSuggestions = [];
+let parserRuleSaveContext = { mode: "global", suggestionId: "", targetEmail: "" };
 let dismissedIssueFingerprints = new Set();
 let ignoredIssueFingerprints = new Set();
 
@@ -465,6 +469,14 @@ accountsBody.addEventListener("click", (event) => {
   const addShiftCodeButton = event.target.closest("[data-add-shift-code]");
   if (addShiftCodeButton) {
     openParserRuleModal(addShiftCodeButton.dataset.addShiftCode || "", addShiftCodeButton.dataset.errorId || "");
+    return;
+  }
+  const suggestionButton = event.target.closest("[data-parser-suggestion-action]");
+  if (suggestionButton) {
+    handleParserSuggestionAction(
+      suggestionButton.dataset.parserSuggestionAction || "",
+      suggestionButton.dataset.suggestionId || "",
+    );
     return;
   }
   const removeImportButton = event.target.closest("[data-remove-import]");
@@ -2158,7 +2170,7 @@ function renderIssues(items) {
       <div>
         <strong>${formatIssueHeading(item)}</strong>
         <p>${escapeHtml(item.message)}</p>
-        ${isCreatorAuthenticated() && item.status === "unknown" ? `<p><button type="button" class="button button-secondary" data-preview-add-shift-code="${escapeHtml(item.id)}">Edit shift-code rule</button></p>` : ""}
+        ${item.status === "unknown" ? `<p><button type="button" class="button button-secondary" data-preview-add-shift-code="${escapeHtml(item.id)}">${isCreatorAuthenticated() ? "Edit shift-code rule" : "Resolve shift code"}</button></p>` : ""}
       </div>
       <span>${escapeHtml(item.rawValue)}</span>
     </article>
@@ -5767,6 +5779,31 @@ function renderParserRulesCard() {
   const unknownSources = new Set(unknownIssues.map((item) => item.source));
   return `
     <div class="issues-list">
+      <article class="review-card">
+        <div class="review-top">
+          <div>
+            <strong>User suggestions</strong>
+            <span>${parserRuleSuggestions.length ? `${parserRuleSuggestions.length} pending suggestion${parserRuleSuggestions.length === 1 ? "" : "s"}` : "No user suggestions pending."}</span>
+          </div>
+        </div>
+        <div class="issues-list">
+          ${parserRuleSuggestions.length ? parserRuleSuggestions.map((suggestion) => `
+            <article class="issue-card">
+              <div>
+                <strong>${escapeHtml(suggestion.rule.source)} · ${escapeHtml(suggestion.rule.seniority)} · ${escapeHtml(suggestion.rule.code)}</strong>
+                <p>${escapeHtml(suggestion.realName || suggestion.email)} suggested ${escapeHtml(parserRulePreviewTitle(suggestion.rule))}</p>
+                <p>${escapeHtml(parserRulePreviewMeta(suggestion.rule))}${suggestion.updatedAt ? ` · ${escapeHtml(formatTimestamp(suggestion.updatedAt))}` : ""}</p>
+              </div>
+              <div class="account-actions">
+                <button type="button" class="button button-secondary" data-parser-suggestion-action="approveGlobal" data-suggestion-id="${escapeHtml(suggestion.id)}">Approve globally</button>
+                <button type="button" class="button button-secondary" data-parser-suggestion-action="approveUser" data-suggestion-id="${escapeHtml(suggestion.id)}">Approve for user</button>
+                <button type="button" class="button button-secondary" data-parser-suggestion-action="overwrite" data-suggestion-id="${escapeHtml(suggestion.id)}">Overwrite</button>
+                <button type="button" class="button button-secondary" data-parser-suggestion-action="reject" data-suggestion-id="${escapeHtml(suggestion.id)}">Reject</button>
+              </div>
+            </article>
+          `).join("") : `<article class="issue-card"><p>No user-created shift-code resolutions are waiting for review.</p></article>`}
+        </div>
+      </article>
       ${unknownIssues.length ? `
         <article class="review-card">
           <div class="review-top">
@@ -6048,6 +6085,57 @@ async function ignoreAdminErrorForever(email, errorId = "") {
   }
 }
 
+async function handleParserSuggestionAction(action, suggestionId) {
+  if (action === "overwrite") {
+    openParserRuleModalFromSuggestion(suggestionId);
+    return;
+  }
+  const suggestion = parserRuleSuggestions.find((item) => item.id === suggestionId);
+  if (!suggestion) {
+    setStatus("Could not find that suggestion.", true);
+    return;
+  }
+  if (action === "approveGlobal" || action === "approveUser" || action === "reject") {
+    await decideParserRuleSuggestion(suggestionId, action, suggestion.rule);
+  }
+}
+
+async function decideParserRuleSuggestion(suggestionId, decision, rule) {
+  if (!isCreatorAuthenticated()) {
+    setStatus("Creator authentication is required to review suggestions.", true);
+    return;
+  }
+  try {
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "decideParserRuleSuggestion",
+        email: authUserEmail || currentUserEmail,
+        password: authUserPassword || currentUserPassword,
+        suggestionId,
+        decision,
+        rule,
+      }),
+    });
+    const data = await readJsonResponse(response, "Could not update that suggestion.");
+    parserExtensions = sanitizeParserExtensions(data.parserExtensions || parserExtensions);
+    globalParserExtensions = sanitizeParserExtensions(data.parserExtensions || globalParserExtensions);
+    parserRuleSuggestions = sanitizeParserRuleSuggestions(data.suggestions);
+    setParserExtensions(parserExtensions);
+    await loadServerUsers();
+    renderAccountsModal();
+    const labels = {
+      approveGlobal: "Suggestion approved globally.",
+      approveUser: "Suggestion approved for that user.",
+      reject: "Suggestion rejected.",
+    };
+    setStatus(labels[decision] || "Suggestion updated.");
+  } catch (error) {
+    setStatus(error.message || "Could not update that suggestion.", true);
+  }
+}
+
 function findAdminIssue(email, errorId = "") {
   const user = serverUsers.map(normalizeServerUser).find((item) => item.email === normalizeEmail(email));
   if (!user) return null;
@@ -6127,6 +6215,7 @@ function openParserRuleModal(email, errorId = "") {
     setStatus("Could not find that parser warning.", true);
     return;
   }
+  parserRuleSaveContext = { mode: "global", suggestionId: "", targetEmail: normalizeEmail(email) };
   parserRuleIssueId.value = issue.fingerprint || issue.id || "";
   parserRuleSource.value = issue.source || "";
   parserRuleRawValue.value = issue.rawValue || "";
@@ -6155,6 +6244,11 @@ function openParserRuleModalFromPreviewIssue(issueId = "") {
     setStatus("Could not find that parser warning.", true);
     return;
   }
+  parserRuleSaveContext = {
+    mode: isCreatorAuthenticated() ? "global" : "local",
+    suggestionId: "",
+    targetEmail: adminViewingEmail || currentUserEmail,
+  };
   const reviewItem = reviewIndex.get(issue.id);
   parserRuleIssueId.value = issueFingerprint(issue.source, issue.rawValue, issue.seniority || reviewItem?.seniority);
   parserRuleSource.value = issue.source || "";
@@ -6172,7 +6266,7 @@ function openParserRuleModalFromPreviewIssue(issueId = "") {
   parserRuleLocation.value = defaultLocationForIssueSource(issue.source);
   parserRuleIncludeAsShift.checked = true;
   parserRuleTimeFields.classList.toggle("hidden", parserRuleAllDay.checked);
-  parserRuleModalTitle.textContent = "Add shift code";
+  parserRuleModalTitle.textContent = isCreatorAuthenticated() ? "Add shift code" : "Resolve shift code";
   renderParserRulePreview();
   parserRuleModal.classList.remove("hidden");
   parserRuleModal.setAttribute("aria-hidden", "false");
@@ -6184,6 +6278,7 @@ function openParserRuleModalFromRule(source, seniority, code) {
     setStatus("Could not find that saved shift-code rule.", true);
     return;
   }
+  parserRuleSaveContext = { mode: "global", suggestionId: "", targetEmail: "" };
   parserRuleIssueId.value = "";
   parserRuleSource.value = rule.source;
   parserRuleRawValue.value = rule.code;
@@ -6207,10 +6302,42 @@ function openParserRuleModalFromRule(source, seniority, code) {
   parserRuleModal.setAttribute("aria-hidden", "false");
 }
 
+function openParserRuleModalFromSuggestion(suggestionId = "") {
+  const suggestion = parserRuleSuggestions.find((item) => item.id === suggestionId);
+  const rule = sanitizeParserExtensionRule(suggestion?.rule);
+  if (!suggestion || !rule) {
+    setStatus("Could not find that suggestion.", true);
+    return;
+  }
+  parserRuleSaveContext = { mode: "suggestionOverwrite", suggestionId, targetEmail: suggestion.email };
+  parserRuleIssueId.value = suggestion.fingerprint || issueFingerprint(rule.source, rule.code, rule.seniority);
+  parserRuleSource.value = rule.source;
+  parserRuleRawValue.value = suggestion.rawValue || rule.code;
+  parserRuleOriginalCode.value = rule.code;
+  populateParserRuleSeniorityOptions(rule.seniority);
+  parserRuleOriginalSeniority.value = rule.seniority;
+  parserRuleCode.value = rule.code;
+  parserRuleSeniority.value = rule.seniority;
+  parserRuleBase.value = rule.base;
+  parserRulePeriod.value = rule.period;
+  parserRuleSuffix.value = rule.suffix;
+  parserRuleAllDay.checked = rule.allDay;
+  parserRuleIncludeAsShift.checked = rule.includeAsShift !== false;
+  parserRuleStartTime.value = rule.allDay ? "" : rule.startTime;
+  parserRuleEndTime.value = rule.allDay ? "" : rule.endTime;
+  parserRuleLocation.value = rule.location || "";
+  parserRuleTimeFields.classList.toggle("hidden", parserRuleAllDay.checked);
+  parserRuleModalTitle.textContent = "Overwrite suggestion";
+  renderParserRulePreview();
+  parserRuleModal.classList.remove("hidden");
+  parserRuleModal.setAttribute("aria-hidden", "false");
+}
+
 function closeParserRuleModal() {
   parserRuleModal?.classList.add("hidden");
   parserRuleModal?.setAttribute("aria-hidden", "true");
   parserRuleForm?.reset();
+  parserRuleSaveContext = { mode: "global", suggestionId: "", targetEmail: "" };
   parserRuleTimeFields?.classList.remove("hidden");
   if (parserRulePreview) {
     parserRulePreview.innerHTML = `
@@ -6232,7 +6359,8 @@ function populateParserRuleSeniorityOptions(selected = "") {
 }
 
 async function saveParserRuleFromModal() {
-  if (!isCreatorAuthenticated()) {
+  const saveMode = parserRuleSaveContext.mode || "global";
+  if (saveMode !== "local" && !isCreatorAuthenticated()) {
     setStatus("Creator authentication is required to add shift codes.", true);
     return;
   }
@@ -6259,7 +6387,59 @@ async function saveParserRuleFromModal() {
     setStatus("Timed shift-code rules need both a start and end time.", true);
     return;
   }
+  const rule = {
+    source,
+    seniority,
+    code,
+    kind: "shift",
+    base,
+    period,
+    suffix,
+    allDay,
+    startTime,
+    endTime,
+    location,
+    includeAsShift,
+  };
   try {
+    if (saveMode === "local") {
+      const response = await fetch("/api/state", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "saveLocalParserExtensionRule",
+          email: currentUserEmail,
+          password: currentUserPassword,
+          targetEmail: parserRuleSaveContext.targetEmail || currentUserEmail,
+          fingerprint,
+          rawValue,
+          rule,
+        }),
+      });
+      const data = await readJsonResponse(response, "Could not save your shift-code resolution.");
+      applyIssueConfig(data.issueConfig);
+      closeParserRuleModal();
+      if (selectedFiles.length) {
+        parsedRosterSources = null;
+        await analyzeFiles({ preserveVisiblePreview: true });
+      } else if (parsedRosterSources) {
+        await updatePreview();
+      } else if (latestPreview) {
+        latestPreview = {
+          ...latestPreview,
+          issues: (latestPreview.issues || []).filter((issue) => sanitizeIssueFingerprint(issueFingerprint(issue.source, issue.rawValue, issue.seniority)) !== fingerprint),
+        };
+        rebuildClientPreview();
+      }
+      setStatus("Shift code resolved for your calendar and sent to Admin.");
+      return;
+    }
+    if (saveMode === "suggestionOverwrite") {
+      await decideParserRuleSuggestion(parserRuleSaveContext.suggestionId, "approveUser", rule);
+      closeParserRuleModal();
+      setStatus("Suggestion overwritten for that user.");
+      return;
+    }
     const response = await fetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -6272,20 +6452,7 @@ async function saveParserRuleFromModal() {
         rawValue,
         previousCode,
         previousSeniority,
-        rule: {
-          source,
-          seniority,
-          code,
-          kind: "shift",
-          base,
-          period,
-          suffix,
-          allDay,
-          startTime,
-          endTime,
-          location,
-          includeAsShift,
-        },
+        rule,
       }),
     });
     const data = await readJsonResponse(response, "Could not save the shift-code rule.");
@@ -7208,6 +7375,9 @@ function sanitizeSubscription(value) {
 function applyIssueConfig(value) {
   const config = value && typeof value === "object" ? value : {};
   parserExtensions = sanitizeParserExtensions(config.parserExtensions);
+  globalParserExtensions = sanitizeParserExtensions(config.globalParserExtensions || config.parserExtensions);
+  localParserExtensions = sanitizeParserExtensions(config.localParserExtensions);
+  parserRuleSuggestions = sanitizeParserRuleSuggestions(config.parserRuleSuggestions);
   dismissedIssueFingerprints = new Set(sanitizeIssueFingerprintList(config.dismissedFingerprints));
   ignoredIssueFingerprints = new Set(sanitizeIssueFingerprintList(config.ignoredFingerprints));
   setParserExtensions(parserExtensions);
@@ -7278,6 +7448,31 @@ function sanitizeParserExtensionRule(item, forcedSource = "") {
     endTime: allDay ? "" : endTime,
     location,
     includeAsShift: item.includeAsShift !== false,
+  };
+}
+
+function sanitizeParserRuleSuggestions(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => sanitizeParserRuleSuggestion(item))
+    .filter(Boolean)
+    .sort((left, right) => (right.updatedAt || "").localeCompare(left.updatedAt || ""));
+}
+
+function sanitizeParserRuleSuggestion(item) {
+  const rule = sanitizeParserExtensionRule(item?.rule);
+  const email = normalizeEmail(item?.email);
+  if (!rule || !email) return null;
+  return {
+    id: String(item.id || `${email}::${rule.source}|${rule.seniority}|${rule.code}`).trim(),
+    email,
+    realName: String(item.realName || "").trim(),
+    fingerprint: sanitizeIssueFingerprint(item.fingerprint || issueFingerprint(rule.source, rule.code, rule.seniority)),
+    rawValue: String(item.rawValue || rule.code || "").trim(),
+    rule,
+    status: "pending",
+    createdAt: String(item.createdAt || ""),
+    updatedAt: String(item.updatedAt || ""),
   };
 }
 
@@ -7949,6 +8144,7 @@ async function loadServerUsers() {
     });
     const data = await readJsonResponse(response, "Could not load users.");
     serverUsers = data.users || [];
+    applyIssueConfig(data.issueConfig);
     syncAccountsButton();
   } catch {
     // Keep the last available local list.
