@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import XLSX from "xlsx";
 
+import { onRequestPost as handleStatePost } from "../functions/api/state.js";
 import { buildRosterView, doctorOptions, parseUploadForm, parserRuleDefaults, previewSummary } from "../public/static/roster.js";
 
 const mmcWorkbook = XLSX.readFile(fileURLToPath(new URL("../fixtures/AdultTerm1.2026.xlsx", import.meta.url)), {
@@ -107,5 +108,97 @@ const pdfRichard = pdfDoctors.find((doctor) => doctor.displayName === "Richard H
 const pdfView = buildRosterView(parsedPdf.sources.mmc, parsedPdf.sources.ddh, pdfRichard.key);
 assert.ok(pdfView.events.some((event) => event.title === "MMC: SSU PM"));
 assert.ok(pdfView.events.some((event) => event.rawValue === "0800-1730" && event.title === "MMC: AM"));
+
+class MemoryStore {
+  constructor() {
+    this.records = new Map();
+  }
+
+  async get(key, type) {
+    const value = this.records.get(key);
+    if (value === undefined) return null;
+    return type === "json" ? JSON.parse(value) : value;
+  }
+
+  async put(key, value) {
+    this.records.set(key, String(value));
+  }
+
+  async delete(key) {
+    this.records.delete(key);
+  }
+
+  async list(options = {}) {
+    const prefix = options.prefix || "";
+    return {
+      keys: [...this.records.keys()].filter((name) => name.startsWith(prefix)).map((name) => ({ name })),
+    };
+  }
+}
+
+async function postState(store, payload) {
+  const response = await handleStatePost({
+    request: new Request("http://fixture.test/api/state", {
+      method: "POST",
+      body: JSON.stringify(payload),
+      headers: { "content-type": "application/json" },
+    }),
+    env: { ROSTER_STORE: store },
+  });
+  const body = await response.json();
+  assert.equal(response.ok, true, body.error || "state request failed");
+  return body;
+}
+
+const stateStore = new MemoryStore();
+const creatorPassword = "fixture-password";
+await postState(stateStore, {
+  action: "login",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+});
+await stateStore.put("repository:index", JSON.stringify({
+  files: [{
+    repoId: "fixture-roster",
+    id: "fixture-roster",
+    name: "AdultMMCTerm2.2026.Ver1.pdf",
+    sourceType: "mmc",
+    active: true,
+    doctors: [{
+      key: "TITUS HACKMAN",
+      displayName: "Titus HACKMAN",
+      sourceType: "unknown",
+    }],
+  }],
+}));
+await stateStore.put("repository:file:fixture-roster", JSON.stringify({
+  repoId: "fixture-roster",
+  id: "fixture-roster",
+  name: "AdultMMCTerm2.2026.Ver1.pdf",
+  size: 12,
+  lastModified: 1,
+  sourceType: "mmc",
+  dataUrl: "data:application/pdf;base64,cm9zdGVy",
+}));
+
+const creatorImports = await postState(stateStore, {
+  action: "loadImports",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+});
+assert.equal(creatorImports.imports.length, 1);
+assert.equal(creatorImports.imports[0].repoId, "fixture-roster");
+
+const profileImports = await postState(stateStore, {
+  action: "loadDoctorProfileImports",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  profileId: "TITUS HACKMAN::mmc",
+  doctorKey: "TITUS HACKMAN",
+  displayName: "Titus HACKMAN",
+  sourceTypes: ["mmc"],
+});
+assert.equal(profileImports.imports.length, 1);
+assert.equal(profileImports.imports[0].repoId, "fixture-roster");
 
 console.log("Fixture smoke test passed.");

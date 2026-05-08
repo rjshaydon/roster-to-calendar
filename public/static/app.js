@@ -6440,28 +6440,43 @@ async function fetchDoctorProfileState(profile) {
 }
 
 async function loadUnclaimedSourceImports(doctor, sourceContext, profile) {
-  const refs = sanitizeClientFileRefs(
-    activeCalendarMode() === "creator-account" && sourceContext?.currentSnapshot?.fileRefs?.length
-      ? sourceContext.currentSnapshot.fileRefs
-      : creatorCalendarSourceFileRefs,
-  );
+  const refs = uniqueClientFileRefs([
+    ...(sourceContext?.creatorCalendarSourceFileRefs || []),
+    ...(sourceContext?.currentSnapshot?.fileRefs || []),
+    ...((sourceContext?.selectedFiles || []).map(importRefForWorkspace)),
+    ...creatorCalendarSourceFileRefs,
+  ]);
   if (refs.length) {
     const imports = await loadCloudImportsByRefs(refs).catch(() => []);
     if (imports.length) return imports;
   }
-  const previousFiles = activeCalendarMode() === "creator-account" ? (sourceContext?.selectedFiles || []) : [];
+  const previousFiles = sourceContext?.selectedFiles || [];
   if (previousFiles.length) {
     const restored = await loadStoredImportsByRefs(previousFiles.map(importRefForWorkspace)).catch(() => []);
     if (restored.length) return restored;
     const inMemory = previousFiles.filter((entry) => entry.file).map((entry) => ({ ...entry }));
     if (inMemory.length) return inMemory;
   }
+  const creatorImports = await loadCreatorAccountImports().catch(() => []);
+  if (creatorImports.length) return creatorImports;
   return await loadDoctorProfileImportsForProfile(profile).catch(() => []);
 }
 
 function sanitizeClientFileRefs(refs) {
   if (!Array.isArray(refs)) return [];
   return refs.map(importRefForWorkspace).filter((ref) => ref.id);
+}
+
+function uniqueClientFileRefs(refs) {
+  const seen = new Set();
+  const unique = [];
+  for (const ref of sanitizeClientFileRefs(refs)) {
+    const marker = ref.id || `${ref.name}:${ref.size}:${ref.lastModified}`;
+    if (seen.has(marker)) continue;
+    seen.add(marker);
+    unique.push(ref);
+  }
+  return unique;
 }
 
 async function loadCloudImportsByRefs(refs) {
@@ -6476,6 +6491,21 @@ async function loadCloudImportsByRefs(refs) {
     }),
   });
   const data = await readJsonResponse(response, "Could not load roster files.");
+  return await deserializeCloudImports(data.imports || []);
+}
+
+async function loadCreatorAccountImports() {
+  const response = await fetch("/api/state", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      action: "loadImports",
+      email: authUserEmail || currentUserEmail,
+      password: authUserPassword || currentUserPassword,
+      targetEmail: "",
+    }),
+  });
+  const data = await readJsonResponse(response, "Could not load creator roster files.");
   return await deserializeCloudImports(data.imports || []);
 }
 
@@ -6591,6 +6621,7 @@ function captureCalendarViewState() {
     currentUserPassword,
     currentUserRole,
     selectedFiles: selectedFiles.map((entry) => ({ ...entry })),
+    creatorCalendarSourceFileRefs: creatorCalendarSourceFileRefs.map((entry) => ({ ...entry })),
     currentSnapshot: currentSnapshot ? JSON.parse(JSON.stringify(currentSnapshot)) : null,
     currentSnapshotStale,
     currentSnapshotBuiltAt,
@@ -6612,6 +6643,7 @@ function restoreCalendarViewState(state) {
   if (currentUserEmail) localStorage.setItem(CURRENT_EMAIL_KEY, currentUserEmail);
   if (currentUserPassword) sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
   selectedFiles = state.selectedFiles || [];
+  creatorCalendarSourceFileRefs = state.creatorCalendarSourceFileRefs || creatorCalendarSourceFileRefs;
   currentSnapshot = state.currentSnapshot;
   currentSnapshotStale = state.currentSnapshotStale;
   currentSnapshotBuiltAt = state.currentSnapshotBuiltAt;

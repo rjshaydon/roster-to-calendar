@@ -1105,7 +1105,9 @@ async function resolveAccountImports(store, record) {
   const role = record?.role || roleForEmail(record?.email || "");
   const state = sanitizeState(record?.state);
   if (role === "creator" || role === "owner") {
-    return resolveStateImports(store, state.imports || []);
+    const index = await loadRepositoryIndex(store);
+    const activeRefs = (index.files || []).filter((file) => file.active !== false).map(repositoryImportRef);
+    return resolveStateImports(store, activeRefs.length ? activeRefs : state.imports || []);
   }
   const index = await loadRepositoryIndex(store);
   return repositoryImportsForClaims(store, index, sanitizeClaims(record?.claims));
@@ -1169,7 +1171,7 @@ async function repositoryImportRefsForDoctorProfile(store, profile) {
     if (file.active === false) continue;
     const hasProfileDoctor = sanitizeRepositoryDoctors(file.doctors).some((doctor) => (
       doctor.key === profile.doctorKey
-      && (!sourceTypes.length || sourceTypes.includes(doctor.sourceType))
+      && (!sourceTypes.length || !sanitizeSourceTypes([doctor.sourceType]).length || sourceTypes.includes(doctor.sourceType))
     ));
     if (hasProfileDoctor) refs.push(repositoryImportRef(file));
   }
