@@ -145,6 +145,7 @@ const andrewHardyMch = mchDoctors.find((doctor) => doctor.displayName === "Dr An
 const andrewHardyMchView = buildRosterView([], [], andrewHardyMch.key, undefined, {}, {}, [], [], mchWorkbook);
 assert.ok(andrewHardyMchView.events.some((event) => event.title === "MCH: OCS" && event.rawValue === "0800-1730 OCS"));
 assert.ok(andrewHardyMchView.events.some((event) => event.title === "MCH: Exam Leave" && event.rawValue === "ME/L" && event.allDay));
+assert.ok(andrewHardyMchView.events.some((event) => event.title === "Conference Leave" && event.rawValue === "CME/L" && event.allDay));
 
 const adamWestMchWeek6 = adamWestMchView.events.filter((event) => event.rawValue === "PHNW 0800-1730");
 assert.ok(adamWestMchWeek6.some((event) => event.title === "MCH: PHNW"));
@@ -169,6 +170,11 @@ assert.equal(houshmandMchView.events.some((event) => String(event.rawValue || ""
 
 const view = buildRosterView(mmcWorkbook, ddhWorkbook, richard.key);
 const summary = previewSummary(view.events);
+
+const aftabMmc = doctors.find((doctor) => doctor.displayName === "Aftab SAMDANI");
+assert.ok(aftabMmc);
+const aftabMmcView = buildRosterView(mmcWorkbook, [], aftabMmc.key);
+assert.ok(aftabMmcView.events.some((event) => event.title === "Conference Leave" && event.rawValue.toUpperCase() === "CME LEAVE" && event.allDay));
 
 assert.equal(view.events.length, 37);
 assert.equal(summary.date_range, "2026-02-09 to 2026-05-02");

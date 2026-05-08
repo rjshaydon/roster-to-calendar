@@ -56,14 +56,13 @@ const KNOWN_DDH_DIRECT_LABELS = new Set([
 ]);
 
 const WEEKDAY_PREFIXES = ["Mon.", "Tue.", "Wed.", "Thu.", "Fri.", "Sat.", "Sun."];
-const WEEKLY_LEAVE_LABELS = new Set(["ANNUAL LEAVE", "CONFERENCE LEAVE"]);
+const WEEKLY_LEAVE_LABELS = new Set(["ANNUAL LEAVE", "CONFERENCE LEAVE", "CME LEAVE", "CME/L"]);
 const IGNORED_EXACT = new Set([
   "",
   "AL",
   "A/L",
   "EXAM",
   "EXAM LEAVE",
-  "CME LEAVE",
   "PARENTAL LEAVE",
   "N/A",
 ]);
@@ -1260,6 +1259,14 @@ function parseMmcEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
       seniority,
     });
   }
+  if (isConferenceLeaveLabel(upper)) {
+    return createAllDayRecord("MMC", day, raw, {
+      kind: "conference_leave",
+      titleParts: { base: "Conference Leave", period: "", suffix: "" },
+      location: "",
+      seniority,
+    });
+  }
 
   const explicit = extractMmcExplicitTime(raw);
   const label = explicit ? explicit.label : raw.trim();
@@ -1335,6 +1342,14 @@ function parseDdhEntry(day, label, timeText, seniority = UNKNOWN_SENIORITY) {
       seniority,
     });
   }
+  if (isConferenceLeaveLabel(upper)) {
+    return createAllDayRecord("DDH", day, label, {
+      kind: "conference_leave",
+      titleParts: { base: "Conference Leave", period: "", suffix: "" },
+      location: "",
+      seniority,
+    });
+  }
   if (shouldIgnoreDdh(label) || shouldIgnoreCommon(label)) return null;
 
   const mapped = DDH_LABEL_MAP[label] || label;
@@ -1389,7 +1404,7 @@ function parseCaseyEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
       seniority,
     });
   }
-  if (upper === "CONFERENCE LEAVE" || upper === "CONFERENCE" || upper === "CONF" || upper === "CONF LEAVE") {
+  if (isConferenceLeaveLabel(upper)) {
     return createAllDayRecord("Casey", day, label, {
       kind: "conference_leave",
       titleParts: { base: "Conference Leave", period: "", suffix: "" },
@@ -1616,12 +1631,23 @@ function normalizeMchLeave(label) {
   if (/^(?:A\/L|AL)(?:\s+0\.5)?$/.test(upper)) return { kind: "annual_leave", title: "Annual Leave" };
   if (/^S\/L(?:\s+(?:AM|PM))?$/.test(upper)) return { kind: "sick_leave", title: normalizeSickLeaveLabel(upper) };
   if (upper === "EXAM" || upper === "ME/L") return { kind: "exam_leave", title: "Exam Leave" };
-  if (upper === "C/L" || upper === "CL") return { kind: "conference_leave", title: "Conference Leave" };
+  if (isConferenceLeaveLabel(upper)) return { kind: "conference_leave", title: "Conference Leave" };
   if (upper === "SAB/L") return { kind: "leave", title: "Sabbatical Leave" };
-  if (upper === "CME/L") return { kind: "leave", title: "CME Leave" };
   if (upper === "PAT/L") return { kind: "leave", title: "Parental Leave" };
   if (upper === "LSL") return { kind: "leave", title: "Long Service Leave" };
   return null;
+}
+
+function isConferenceLeaveLabel(value) {
+  const upper = String(value || "").replace(/\s+/g, " ").trim().toUpperCase();
+  return upper === "CONFERENCE LEAVE"
+    || upper === "CONFERENCE"
+    || upper === "CONF"
+    || upper === "CONF LEAVE"
+    || upper === "C/L"
+    || upper === "CL"
+    || upper === "CME LEAVE"
+    || upper === "CME/L";
 }
 
 function normalizeMchTimedLabel(label) {
@@ -2496,9 +2522,8 @@ function createAllDayRecord(source, day, rawValue, details) {
 }
 
 function createWeeklyLeaveRecord(source, monday, rawValue, seniority = UNKNOWN_SENIORITY) {
-  const label = toTitleCase(rawValue);
-  const kind = rawValue.toUpperCase() === "CONFERENCE LEAVE" ? "conference_leave" : "annual_leave";
-  const normalizedTitle = label;
+  const kind = isConferenceLeaveLabel(rawValue) ? "conference_leave" : "annual_leave";
+  const normalizedTitle = kind === "conference_leave" ? "Conference Leave" : toTitleCase(rawValue);
   return {
     id: hashString(`${source}|${monday}|${rawValue}|week-leave`),
     source,
@@ -2511,7 +2536,7 @@ function createWeeklyLeaveRecord(source, monday, rawValue, seniority = UNKNOWN_S
     start: monday,
     end: addDays(monday, 7),
     location: "",
-    titleParts: { base: label, period: "", suffix: "" },
+    titleParts: { base: normalizedTitle, period: "", suffix: "" },
     normalizedTitle,
     status: "ok",
     warnings: [],
