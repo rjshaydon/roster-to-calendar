@@ -69,6 +69,15 @@ assert.ok(caseyDoctors.find((doctor) => doctor.displayName === "Rizwana Sadaf"))
 assert.ok(caseyDoctors.find((doctor) => doctor.displayName === "Victor Ki Chung Li"));
 assert.equal(caseyDoctors.find((doctor) => doctor.displayName === "Rostered staff"), undefined);
 
+const patrickTan = doctorOptions(mmcWorkbook, [], caseyWorkbook).find((doctor) => doctor.displayName === "Patrick Tan");
+assert.ok(patrickTan);
+assert.deepEqual(patrickTan.sourceTypes, ["mmc", "casey"]);
+const patrickTanView = buildRosterView(mmcWorkbook, [], patrickTan.key, undefined, {}, {}, [], caseyWorkbook);
+const patrickCaseyEvents = patrickTanView.events.filter((event) => event.source === "Casey");
+assert.ok(patrickCaseyEvents.length > 40);
+assert.equal(patrickCaseyEvents.some((event) => event.start.startsWith("2025")), false);
+assert.ok(patrickCaseyEvents.some((event) => event.title === "Casey: MIC PM"));
+
 const andrewDyallCasey = caseyDoctors.find((doctor) => doctor.displayName === "Andrew Dyall");
 const andrewCaseyView = buildRosterView([], [], andrewDyallCasey.key, undefined, {}, {}, [], caseyWorkbook);
 assert.ok(andrewCaseyView.events.some((event) => event.title === "Casey: TL AM"));

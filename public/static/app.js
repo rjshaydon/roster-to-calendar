@@ -6531,8 +6531,10 @@ async function loadUnclaimedDoctorCalendar(doctor, sourceContext) {
     };
   }
 
-  const cached = buildUnclaimedPreviewFromSnapshotCache(doctor, profile, sourceContext, profileData.profile?.state?.session || {});
-  if (cached) return doctorProfileLoadResultFromCached(profile, cached);
+  if (!hasDoctorProfileImportCandidates(sourceContext)) {
+    const cached = buildUnclaimedPreviewFromSnapshotCache(doctor, profile, sourceContext, profileData.profile?.state?.session || {});
+    if (cached) return doctorProfileLoadResultFromCached(profile, cached);
+  }
 
   const imports = await loadUnclaimedSourceImports(doctor, sourceContext, profile);
   if (!imports.length) {
@@ -6553,6 +6555,15 @@ async function loadUnclaimedDoctorCalendar(doctor, sourceContext) {
     parsedSources: generated.parsedSources,
     parsedDoctors: generated.parsedDoctors,
   };
+}
+
+function hasDoctorProfileImportCandidates(sourceContext) {
+  return Boolean(
+    sourceContext?.creatorCalendarSourceFileRefs?.length
+    || sourceContext?.currentSnapshot?.fileRefs?.length
+    || sourceContext?.selectedFiles?.length
+    || creatorCalendarSourceFileRefs.length,
+  );
 }
 
 function doctorProfileLoadResultFromCached(profile, cached) {

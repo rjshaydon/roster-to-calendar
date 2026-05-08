@@ -2006,9 +2006,10 @@ function iterateCaseyWeekEntries(workbook) {
     if (!isCaseyWeekSheet(workbook.Sheets[sheetName], sheetName)) continue;
     const sheet = workbook.Sheets[sheetName];
     const range = XLSX.utils.decode_range(sheet["!ref"] || "A1:A1");
+    const termYear = caseyTermYear(sheet);
     const weekDates = [];
     for (let col = 2; col <= 8; col += 1) {
-      const value = coerceDate(getCellValue(sheet, 2, col));
+      const value = parseCaseyWeekDate(sheet, 2, col, termYear);
       if (!value) {
         weekDates.length = 0;
         break;
@@ -2057,7 +2058,35 @@ function isCaseyWeekSheet(sheet, sheetName) {
   const weekdays = [];
   for (let col = 2; col <= 8; col += 1) weekdays.push(cleanText(getCellValue(sheet, 1, col)).toUpperCase());
   if (weekdays.join("|") !== "MONDAY|TUESDAY|WEDNESDAY|THURSDAY|FRIDAY|SATURDAY|SUNDAY") return false;
-  return Boolean(coerceDate(getCellValue(sheet, 2, 2)) && coerceDate(getCellValue(sheet, 2, 8)));
+  const termYear = caseyTermYear(sheet);
+  return Boolean(parseCaseyWeekDate(sheet, 2, 2, termYear) && parseCaseyWeekDate(sheet, 2, 8, termYear));
+}
+
+function caseyTermYear(sheet) {
+  const match = cleanText(getCellValue(sheet, 1, 1)).match(/\b(20\d{2})\b/);
+  return match ? Number(match[1]) : 0;
+}
+
+function parseCaseyWeekDate(sheet, row, col, termYear) {
+  const address = XLSX.utils.encode_cell({ r: row - 1, c: col - 1 });
+  const cell = sheet[address];
+  const formatted = cleanText(cell?.w || "");
+  const text = formatted || cleanText(cell?.v || "");
+  const match = text.match(/^(\d{1,2})[-/ ]([A-Za-z]{3,})$/);
+  if (match && termYear) {
+    const month = monthIndex(match[2]);
+    if (month >= 0) return formatDateOnly(new Date(termYear, month, Number(match[1])));
+  }
+  const coerced = coerceDate(cell?.v);
+  if (!coerced || !termYear) return coerced;
+  const date = new Date(`${coerced}T00:00:00`);
+  date.setFullYear(termYear);
+  return formatDateOnly(date);
+}
+
+function monthIndex(value) {
+  const index = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"].indexOf(String(value || "").slice(0, 3).toUpperCase());
+  return index;
 }
 
 function parseCaseyRosterName(value) {
