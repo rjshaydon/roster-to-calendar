@@ -584,7 +584,7 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
     linkedProfiles = await linkedDoctorProfilesForClaims(store, claims);
     state = {
       ...state,
-      imports: repositoryImportRefsForClaims(index, claims),
+      imports: repositoryImportRefsForAccount(index, { ...record, claims }),
     };
     state = mergeProfileSessionIntoState(state, linkedProfiles, record.email);
     if (nameMatches.length || JSON.stringify(claims) !== JSON.stringify(sanitizeClaims(record.claims))) {
@@ -1125,6 +1125,24 @@ function repositoryImportRefsForClaims(index, claims) {
   return refs;
 }
 
+function repositoryImportRefsForAccount(index, record) {
+  const claims = sanitizeClaims(record?.claims);
+  const claimKeys = new Set(claims.map((claim) => claim.key));
+  const claimMarkers = new Set(claims.map((claim) => `${claim.sourceType}:${claim.key}`));
+  const realName = String(record?.realName || "").trim();
+  const refs = [];
+  for (const file of index.files || []) {
+    if (file.active === false) continue;
+    const hasAccountDoctor = sanitizeRepositoryDoctors(file.doctors).some((doctor) => (
+      claimMarkers.has(`${doctor.sourceType}:${doctor.key}`)
+      || claimKeys.has(doctor.key)
+      || doctorMatchesRealName(doctor, realName)
+    ));
+    if (hasAccountDoctor) refs.push(repositoryImportRef(file));
+  }
+  return refs;
+}
+
 async function repositoryImportsForClaims(store, index, claims) {
   return resolveStateImports(store, repositoryImportRefsForClaims(index, claims));
 }
@@ -1138,7 +1156,7 @@ async function resolveAccountImports(store, record) {
     return resolveStateImports(store, activeRefs.length ? activeRefs : state.imports || []);
   }
   const index = await loadRepositoryIndex(store);
-  return repositoryImportsForClaims(store, index, sanitizeClaims(record?.claims));
+  return resolveStateImports(store, repositoryImportRefsForAccount(index, record));
 }
 
 async function linkedDoctorProfilesForClaims(store, claims) {
