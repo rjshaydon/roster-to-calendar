@@ -416,8 +416,7 @@ export async function onRequestPost(context) {
     }
 
     if (action === "loadInsightImports") {
-      const index = await loadRepositoryIndex(context.env.ROSTER_STORE);
-      const refs = (index.files || []).filter((file) => file.active !== false).map((file) => repositoryImportRef(file));
+      const refs = await activeRepositoryImportRefs(context.env.ROSTER_STORE);
       const imports = await resolveStateImports(context.env.ROSTER_STORE, refs);
       return Response.json({ ok: true, imports });
     }
@@ -602,10 +601,10 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
     const hasEmbeddedImports = Array.isArray(state.imports) && state.imports.some((item) => item?.dataUrl);
     const imported = hasEmbeddedImports ? await upsertStateImports(store, state.imports, record.email) : {
       index,
-      refs: (index.files || []).filter((file) => file.active !== false).map(repositoryImportRef),
+      refs: await activeRepositoryImportRefs(store, index),
       changed: false,
     };
-    const creatorRepositoryRefs = (imported.index.files || []).filter((file) => file.active !== false).map(repositoryImportRef);
+    const creatorRepositoryRefs = await activeRepositoryImportRefs(store, imported.index);
     const stateWithRefs = { ...state, imports: creatorRepositoryRefs };
     if (hasEmbeddedImports && (imported.changed || importsChanged(state.imports, creatorRepositoryRefs))) {
       state = stateWithRefs;
@@ -813,6 +812,33 @@ async function loadRepositoryIndex(store) {
   };
 }
 
+async function activeRepositoryImportRefs(store, index = null) {
+  const repositoryIndex = index || await loadRepositoryIndex(store);
+  const indexedRefs = (repositoryIndex.files || [])
+    .filter((file) => file.active !== false)
+    .map(repositoryImportRef);
+  if (indexedRefs.length) return indexedRefs;
+  const listedFiles = await listRepositoryFiles(store);
+  return listedFiles
+    .filter((file) => file.active !== false)
+    .map(repositoryImportRef);
+}
+
+async function listRepositoryFiles(store) {
+  const files = [];
+  let cursor = undefined;
+  do {
+    const result = await store.list({ prefix: REPOSITORY_FILE_PREFIX, cursor }).catch(() => ({ keys: [] }));
+    for (const key of result.keys || []) {
+      const stored = await store.get(key.name, "json").catch(() => null);
+      const file = sanitizeRepositoryFile(stored);
+      if (file) files.push(file);
+    }
+    cursor = result.list_complete === false ? result.cursor : "";
+  } while (cursor);
+  return files;
+}
+
 async function saveRepositoryIndex(store, index) {
   await store.put(REPOSITORY_INDEX_KEY, JSON.stringify({
     version: 1,
@@ -822,9 +848,10 @@ async function saveRepositoryIndex(store, index) {
 }
 
 function sanitizeRepositoryFile(file) {
-  if (!file?.id) return null;
+  const id = file?.id || file?.repoId || file?.repositoryId;
+  if (!id) return null;
   return {
-    id: String(file.id),
+    id: String(id),
     name: String(file.name || "roster.xlsx"),
     size: Number(file.size || 0),
     lastModified: Number(file.lastModified || 0),
@@ -1105,8 +1132,7 @@ async function resolveAccountImports(store, record) {
   const role = record?.role || roleForEmail(record?.email || "");
   const state = sanitizeState(record?.state);
   if (role === "creator" || role === "owner") {
-    const index = await loadRepositoryIndex(store);
-    const activeRefs = (index.files || []).filter((file) => file.active !== false).map(repositoryImportRef);
+    const activeRefs = await activeRepositoryImportRefs(store);
     return resolveStateImports(store, activeRefs.length ? activeRefs : state.imports || []);
   }
   const index = await loadRepositoryIndex(store);
@@ -1165,10 +1191,17 @@ function mergeProfileSessionIntoState(state, profiles, ownerEmail = "") {
 
 async function repositoryImportRefsForDoctorProfile(store, profile) {
   const index = await loadRepositoryIndex(store);
-  const refs = [];
   const sourceTypes = sanitizeSourceTypes(profile?.sourceTypes);
-  for (const file of index.files || []) {
-    if (file.active === false) continue;
+  let refs = repositoryImportRefsForDoctorProfileFiles(index.files || [], profile, sourceTypes);
+  if (refs.length) return refs;
+  refs = repositoryImportRefsForDoctorProfileFiles(await listRepositoryFiles(store), profile, sourceTypes);
+  return refs;
+}
+
+function repositoryImportRefsForDoctorProfileFiles(files, profile, sourceTypes) {
+  const refs = [];
+  for (const file of files || []) {
+    if (!file || file.active === false) continue;
     const hasProfileDoctor = sanitizeRepositoryDoctors(file.doctors).some((doctor) => (
       doctor.key === profile.doctorKey
       && (!sourceTypes.length || !sanitizeSourceTypes([doctor.sourceType]).length || sourceTypes.includes(doctor.sourceType))

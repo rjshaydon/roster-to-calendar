@@ -201,4 +201,37 @@ const profileImports = await postState(stateStore, {
 assert.equal(profileImports.imports.length, 1);
 assert.equal(profileImports.imports[0].repoId, "fixture-roster");
 
+await stateStore.delete("repository:index");
+await stateStore.put("repository:file:fixture-roster", JSON.stringify({
+  repoId: "fixture-roster",
+  name: "AdultMMCTerm2.2026.Ver1.pdf",
+  size: 12,
+  lastModified: 1,
+  sourceType: "mmc",
+  doctors: [{
+    key: "TITUS HACKMAN",
+    displayName: "Titus HACKMAN",
+    sourceType: "unknown",
+  }],
+  dataUrl: "data:application/pdf;base64,cm9zdGVy",
+}));
+const creatorImportsWithoutIndex = await postState(stateStore, {
+  action: "loadImports",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+});
+assert.equal(creatorImportsWithoutIndex.imports.length, 1);
+assert.equal(creatorImportsWithoutIndex.imports[0].repoId, "fixture-roster");
+const profileImportsWithoutIndex = await postState(stateStore, {
+  action: "loadDoctorProfileImports",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  profileId: "TITUS HACKMAN::mmc",
+  doctorKey: "TITUS HACKMAN",
+  displayName: "Titus HACKMAN",
+  sourceTypes: ["mmc"],
+});
+assert.equal(profileImportsWithoutIndex.imports.length, 1);
+assert.equal(profileImportsWithoutIndex.imports[0].repoId, "fixture-roster");
+
 console.log("Fixture smoke test passed.");

@@ -6401,6 +6401,21 @@ async function loadUnclaimedDoctorCalendar(doctor, sourceContext) {
 
   const imports = await loadUnclaimedSourceImports(doctor, sourceContext, profile);
   if (!imports.length) {
+    const cached = buildUnclaimedPreviewFromSnapshotCache(doctor, profile, sourceContext, profileData.profile?.state?.session || {});
+    if (cached) {
+      return {
+        mode: "doctor-profile",
+        ownerId: profile.ownerId,
+        doctor: cached.doctor,
+        profile,
+        imports: cached.imports,
+        snapshot: null,
+        session: cached.session,
+        preview: cached.preview,
+        doctorOptions: cached.doctorOptions,
+        detectedSources: cached.detectedSources,
+      };
+    }
     throw new Error(`${doctor.displayName} was not found in the roster files used by the current creator calendar.`);
   }
   const generated = await buildUnclaimedPreviewFromImports(doctor, profile, imports, profileData.profile?.state?.session || {});
@@ -6417,6 +6432,71 @@ async function loadUnclaimedDoctorCalendar(doctor, sourceContext) {
     detectedSources: generated.detectedSources,
     parsedSources: generated.parsedSources,
     parsedDoctors: generated.parsedDoctors,
+  };
+}
+
+function buildUnclaimedPreviewFromSnapshotCache(doctor, profile, sourceContext, session = {}) {
+  const cache = sanitizeInsightCache(sourceContext?.currentSnapshot?.insightCache);
+  if (!cache?.doctorEvents) return null;
+  const requestedKeys = [profile.doctorKey, doctor?.key, ...(doctor?.aliases || []).map((alias) => alias.key)]
+    .map(normalizeRosterName)
+    .filter(Boolean);
+  const matchedKey = requestedKeys.find((key) => Object.prototype.hasOwnProperty.call(cache.doctorEvents, key));
+  if (!matchedKey) return null;
+  const cachedDoctor = cache.doctorOptions.find((item) => item.key === matchedKey)
+    || sourceContext?.doctorOptions?.find((item) => normalizeRosterName(item.key) === matchedKey)
+    || doctor;
+  const selected = {
+    ...cachedDoctor,
+    key: profile.doctorKey,
+    displayName: profile.displayName,
+    sourceTypes: profile.sourceTypes,
+  };
+  const events = (cache.doctorEvents[matchedKey] || [])
+    .filter((event) => event && typeof event === "object")
+    .map(serializeEvent);
+  const review = events.map(reviewItemForCachedEvent);
+  return {
+    doctor: selected,
+    imports: (sourceContext?.selectedFiles || []).map((entry) => ({ ...entry })),
+    doctorOptions: buildCreatorDoctorOptions(cache.doctorOptions.length ? cache.doctorOptions : sourceContext?.doctorOptions || [selected]),
+    detectedSources: sourceContext?.currentSnapshot?.detectedSources || sourceContext?.detectedSources || {},
+    session: {
+      ...session,
+      doctorKey: selected.key,
+      settings: session?.settings || { ...settings },
+    },
+    preview: {
+      ...previewSummary(events),
+      events,
+      review,
+      issues: [],
+      conflicts: [],
+      imports: [],
+      sources: sourceContext?.currentSnapshot?.preview?.sources || [],
+      lastParsed: new Date().toISOString(),
+    },
+  };
+}
+
+function reviewItemForCachedEvent(event) {
+  return {
+    id: event.id,
+    source: event.source,
+    seniority: event.seniority || "",
+    startDay: event.start?.slice(0, 10) || "",
+    endDay: event.end?.slice(0, 10) || event.start?.slice(0, 10) || "",
+    rawValue: event.rawValue || event.title || "",
+    normalizedTitle: event.title,
+    suggestedTitle: event.title,
+    overrideTitle: "",
+    status: "cached",
+    warnings: [],
+    include: true,
+    exportable: true,
+    location: event.location || "",
+    allDay: event.allDay === true,
+    timeLabel: event.timeLabel || summarizeEventTimes(event.start, event.end, event.allDay === true),
   };
 }
 
