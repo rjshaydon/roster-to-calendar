@@ -217,7 +217,8 @@ export async function onRequestPost(context) {
       }
       const dismissed = new Set(await loadDismissedIssueFingerprints(context.env.ROSTER_STORE, reportEmail));
       const ignored = new Set(await loadIgnoredIssueFingerprints(context.env.ROSTER_STORE));
-      if (dismissed.has(issue.fingerprint) || ignored.has(issue.fingerprint)) {
+      if (dismissed.has(issue.fingerprint) || ignored.has(issue.fingerprint) || await isIssueResolvedByParserRules(context.env.ROSTER_STORE, reportEmail, issue)) {
+        await clearIssuesResolvedByIssue(context.env.ROSTER_STORE, reportEmail, issue);
         return Response.json({ ok: true, ignored: true });
       }
       const nextIssues = mergeAdminIssues(targetRecord.adminIssues, [{
@@ -901,12 +902,54 @@ async function clearIssuesResolvedByParserRuleForUser(store, email, rule) {
 function issueMatchesParserRule(issue, rule) {
   const source = sanitizeIssueSource(issue?.source);
   const seniority = sanitizeRuleSeniority(issue?.seniority);
-  const rawValue = String(issue?.rawValue || "").trim().toUpperCase();
+  const issueCode = parserRuleCodeForIssue(issue);
   const fingerprint = sanitizeIssueFingerprint(issue?.fingerprint);
   const ruleFingerprint = issueFingerprint(rule.source, rule.code, rule.seniority);
   return source === rule.source
     && seniority === rule.seniority
-    && (rawValue === rule.code || fingerprint === ruleFingerprint);
+    && (issueCode === rule.code || fingerprint === ruleFingerprint);
+}
+
+async function isIssueResolvedByParserRules(store, email, issue) {
+  const source = sanitizeIssueSource(issue?.source);
+  const seniority = sanitizeRuleSeniority(issue?.seniority);
+  const code = parserRuleCodeForIssue(issue);
+  if (!source || !code) return false;
+  const config = await buildIssueConfig(store, email);
+  const rules = sanitizeParserExtensionRules(config.parserExtensions);
+  const sourceRules = rules[source.toLowerCase()] || [];
+  return sourceRules.some((rule) => rule.source === source && rule.seniority === seniority && rule.code === code);
+}
+
+async function clearIssuesResolvedByIssue(store, email, issue) {
+  const normalizedEmail = normalizeEmail(email);
+  if (!normalizedEmail) return;
+  const record = await loadAccountRecord(store, normalizedEmail).catch(() => null);
+  if (!record?.adminIssues?.length) return;
+  const existingIssues = sanitizeAdminIssues(record.adminIssues);
+  const nextIssues = existingIssues.filter((item) => !sameParserIssue(item, issue));
+  if (nextIssues.length === existingIssues.length) return;
+  await store.put(storageKey(normalizedEmail), JSON.stringify({
+    ...record,
+    adminIssues: nextIssues,
+    updatedAt: new Date().toISOString(),
+  }));
+}
+
+function sameParserIssue(left, right) {
+  return sanitizeIssueSource(left?.source) === sanitizeIssueSource(right?.source)
+    && sanitizeRuleSeniority(left?.seniority) === sanitizeRuleSeniority(right?.seniority)
+    && parserRuleCodeForIssue(left) === parserRuleCodeForIssue(right);
+}
+
+function parserRuleCodeForIssue(issue) {
+  const source = sanitizeIssueSource(issue?.source);
+  const rawValue = String(issue?.rawValue || "").trim();
+  if (source === "MMC" || source === "Casey") {
+    const match = rawValue.match(/^\s*\d{2}:?\d{2}\s*[-–]\s*\d{2}:?\d{2}\s+(.+?)\s*$/);
+    return (match?.[1] || rawValue).trim().toUpperCase();
+  }
+  return rawValue.toUpperCase();
 }
 
 async function upsertLocalParserRuleForUser(store, email, rule) {
