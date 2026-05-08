@@ -980,6 +980,7 @@ function sanitizeDetectedSources(value) {
     mmc: Array.isArray(input.mmc) ? input.mmc.map((item) => String(item || "")).filter(Boolean) : [],
     ddh: Array.isArray(input.ddh) ? input.ddh.map((item) => String(item || "")).filter(Boolean) : [],
     casey: Array.isArray(input.casey) ? input.casey.map((item) => String(item || "")).filter(Boolean) : [],
+    mch: Array.isArray(input.mch) ? input.mch.map((item) => String(item || "")).filter(Boolean) : [],
   };
 }
 
@@ -1365,7 +1366,7 @@ function sanitizeSourceTypes(items) {
 
 function isRosterSourceType(value) {
   const source = String(value || "").toLowerCase();
-  return source === "mmc" || source === "ddh" || source === "casey";
+  return source === "mmc" || source === "ddh" || source === "casey" || source === "mch";
 }
 
 function sanitizeDoctorProfile(value) {
@@ -1563,6 +1564,7 @@ function sanitizeIssueSource(value) {
   const source = String(value || "").trim().toUpperCase();
   if (source === "MMC" || source === "DDH") return source;
   if (source === "CASEY") return "Casey";
+  if (source === "MCH") return "MCH";
   return "";
 }
 
@@ -1629,6 +1631,7 @@ function sanitizeParserExtensionRules(value) {
     mmc: sanitizeParserExtensionRuleList(source.mmc, "MMC"),
     ddh: sanitizeParserExtensionRuleList(source.ddh, "DDH"),
     casey: sanitizeParserExtensionRuleList(source.casey, "Casey"),
+    mch: sanitizeParserExtensionRuleList(source.mch, "MCH"),
   };
 }
 

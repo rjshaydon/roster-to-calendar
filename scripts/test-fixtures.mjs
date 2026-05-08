@@ -15,11 +15,19 @@ const ddhWorkbook = XLSX.readFile(fileURLToPath(new URL("../fixtures/Dandenong_E
 const caseyWorkbook = XLSX.readFile(fileURLToPath(new URL("../fixtures/Casey_Term_2_2026_DRAFT.xlsm", import.meta.url)), {
   cellDates: true,
 });
+const mchWorkbook = XLSX.readFile(fileURLToPath(new URL("../fixtures/Paeds_Term_2_2026.xlsx", import.meta.url)), {
+  cellDates: true,
+});
 const caseyBytes = await readFile(fileURLToPath(new URL("../fixtures/Casey_Term_2_2026_DRAFT.xlsm", import.meta.url)));
+const mchBytes = await readFile(fileURLToPath(new URL("../fixtures/Paeds_Term_2_2026.xlsx", import.meta.url)));
 const caseyFormData = new FormData();
 caseyFormData.append("rosterFiles", new File([caseyBytes], "Casey_Term_2_2026_DRAFT.xlsm", { type: "application/vnd.ms-excel.sheet.macroEnabled.12" }));
 const parsedCaseyUpload = await parseUploadForm(new Request("http://fixture.test/api/analyze", { method: "POST", body: caseyFormData }));
 assert.equal(parsedCaseyUpload.sources.casey.length, 1);
+const mchFormData = new FormData();
+mchFormData.append("rosterFiles", new File([mchBytes], "Paeds_Term_2_2026.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
+const parsedMchUpload = await parseUploadForm(new Request("http://fixture.test/api/analyze", { method: "POST", body: mchFormData }));
+assert.equal(parsedMchUpload.sources.mch.length, 1);
 
 const doctors = doctorOptions(mmcWorkbook, ddhWorkbook, caseyWorkbook);
 const defaultRules = parserRuleDefaults();
@@ -101,6 +109,50 @@ assert.ok(jasonAwCaseyView.events.some((event) => event.title === "Annual Leave"
 const mustafaCasey = caseyDoctors.find((doctor) => doctor.displayName === "Mustafa Al-Asaad");
 const mustafaCaseyView = buildRosterView([], [], mustafaCasey.key, undefined, {}, {}, [], caseyWorkbook);
 assert.ok(mustafaCaseyView.events.some((event) => event.title === "Conference Leave"));
+
+const mchDoctors = doctorOptions([], [], [], mchWorkbook);
+assert.ok(mchDoctors.length >= 60);
+assert.ok(mchDoctors.find((doctor) => doctor.displayName === "Dr Adam West"));
+assert.ok(mchDoctors.find((doctor) => doctor.displayName === "Mark Lim"));
+assert.ok(mchDoctors.find((doctor) => doctor.displayName === "Firas Hamdan"));
+assert.ok(mchDoctors.find((doctor) => doctor.displayName === "Peter Ahn"));
+assert.equal(mchDoctors.find((doctor) => doctor.displayName === "ONCALL 0000-0800"), undefined);
+assert.equal(mchDoctors.find((doctor) => doctor.displayName === "requested off"), undefined);
+
+const adamWestMch = mchDoctors.find((doctor) => doctor.displayName === "Dr Adam West");
+const adamWestMchView = buildRosterView([], [], adamWestMch.key, undefined, {}, {}, [], [], mchWorkbook);
+assert.ok(adamWestMchView.events.some((event) => event.title === "MCH: CS" && event.rawValue === "0800-1730 CS"));
+assert.ok(adamWestMchView.events.some((event) => event.title === "MCH: PM" && event.rawValue === "1430-0000" && event.end.startsWith("2026-05-09")));
+
+const bobSeithMch = mchDoctors.find((doctor) => doctor.displayName === "Dr Bob Seith");
+const bobSeithMchView = buildRosterView([], [], bobSeithMch.key, undefined, {}, {}, [], [], mchWorkbook);
+assert.ok(bobSeithMchView.events.some((event) => event.title === "MCH: DEMT" && event.rawValue === "0800-1730 DEMT"));
+assert.ok(bobSeithMchView.events.some((event) => event.title === "MCH: CS" && event.rawValue === "0800-1730CS"));
+
+const andrewHardyMch = mchDoctors.find((doctor) => doctor.displayName === "Dr Andrew Hardy");
+const andrewHardyMchView = buildRosterView([], [], andrewHardyMch.key, undefined, {}, {}, [], [], mchWorkbook);
+assert.ok(andrewHardyMchView.events.some((event) => event.title === "MCH: OCS" && event.rawValue === "0800-1730 OCS"));
+assert.ok(andrewHardyMchView.events.some((event) => event.title === "MCH: Exam Leave" && event.rawValue === "ME/L" && event.allDay));
+
+const adamWestMchWeek6 = adamWestMchView.events.filter((event) => event.rawValue === "PHNW 0800-1730");
+assert.ok(adamWestMchWeek6.some((event) => event.title === "MCH: PHNW"));
+
+const markLimMch = mchDoctors.find((doctor) => doctor.displayName === "Mark Lim");
+const markLimMchView = buildRosterView([], [], markLimMch.key, undefined, {}, {}, [], [], mchWorkbook);
+assert.ok(markLimMchView.events.some((event) => event.title === "MCH: Night" && event.rawValue === "2300-0830" && event.end.startsWith("2026-05-09")));
+assert.ok(markLimMchView.events.some((event) => event.title === "Conference Leave" && event.rawValue === "C/L" && event.allDay));
+
+const firasMch = mchDoctors.find((doctor) => doctor.displayName === "Firas Hamdan");
+const firasMchView = buildRosterView([], [], firasMch.key, undefined, {}, {}, [], [], mchWorkbook);
+assert.ok(firasMchView.events.some((event) => event.title === "Annual Leave" && event.rawValue === "AL 0.5" && event.allDay));
+
+const marianPanlilioMch = mchDoctors.find((doctor) => doctor.displayName === "Marian Panlilio");
+const marianPanlilioMchView = buildRosterView([], [], marianPanlilioMch.key, undefined, {}, {}, [], [], mchWorkbook);
+assert.ok(marianPanlilioMchView.events.some((event) => event.title === "MCH: Sick Leave PM" && event.rawValue.trim() === "S/L PM" && event.allDay));
+
+const houshmandMch = mchDoctors.find((doctor) => doctor.displayName === "Houshmand Refaei");
+const houshmandMchView = buildRosterView([], [], houshmandMch.key, undefined, {}, {}, [], [], mchWorkbook);
+assert.equal(houshmandMchView.events.some((event) => String(event.rawValue || "").includes("EDO")), false);
 
 const view = buildRosterView(mmcWorkbook, ddhWorkbook, richard.key);
 const summary = previewSummary(view.events);

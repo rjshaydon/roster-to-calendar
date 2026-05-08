@@ -141,6 +141,7 @@ const OWNER_DOCTOR_KEY = "RICHARD HAYDON";
 const DEFAULT_MMC_LOCATION = "MMC Car Park, Tarella Road, Clayton VIC 3168, Australia";
 const DEFAULT_DDH_LOCATION = "DDH Car Park, 135 David St, Dandenong VIC 3175, Australia";
 const DEFAULT_CASEY_LOCATION = "Casey Hospital, 62-70 Kangan Drive, Berwick VIC 3806, Australia";
+const DEFAULT_MCH_LOCATION = "Monash Children's Hospital, 246 Clayton Road, Clayton VIC 3168, Australia";
 const SHIFT_COLOUR_DEFAULTS = {
   day: "#0b8f6a",
   evening: "#c96d14",
@@ -188,6 +189,7 @@ const SETTINGS_FIELDS = [
   "defaultLocationMmc",
   "defaultLocationDdh",
   "defaultLocationCasey",
+  "defaultLocationMch",
   "hospitalFilter",
   "dateFrom",
   "dateTo",
@@ -280,7 +282,7 @@ let snapshotRefreshPromise = null;
 let pendingPreviewSnapToToday = false;
 let insightWarmupTimer = 0;
 let insightWarmupPromise = null;
-let parserExtensions = { mmc: [], ddh: [], casey: [] };
+let parserExtensions = { mmc: [], ddh: [], casey: [], mch: [] };
 let dismissedIssueFingerprints = new Set();
 let ignoredIssueFingerprints = new Set();
 
@@ -636,7 +638,7 @@ for (const [key, input] of Object.entries(settingsInputs)) {
       setStatus("Preview display updated.");
       return;
     }
-    if (["includeLocations", "defaultLocationMmc", "defaultLocationDdh", "defaultLocationCasey"].includes(key)) {
+    if (["includeLocations", "defaultLocationMmc", "defaultLocationDdh", "defaultLocationCasey", "defaultLocationMch"].includes(key)) {
       setStatus(
         key === "includeLocations"
           ? "Location export setting updated."
@@ -1195,6 +1197,7 @@ function defaultSettings() {
     defaultLocationMmc: DEFAULT_MMC_LOCATION,
     defaultLocationDdh: DEFAULT_DDH_LOCATION,
     defaultLocationCasey: DEFAULT_CASEY_LOCATION,
+    defaultLocationMch: DEFAULT_MCH_LOCATION,
     hospitalFilter: "all",
     dateFrom: "",
     dateTo: "",
@@ -1298,7 +1301,7 @@ async function analyzeFilesInBrowser() {
   return {
     sources: sourceNames(parsed.sources),
     imports,
-    doctors: rosterDoctorOptions(parsed.sources.mmc, parsed.sources.ddh, parsed.sources.casey),
+    doctors: rosterDoctorOptions(parsed.sources.mmc, parsed.sources.ddh, parsed.sources.casey, parsed.sources.mch),
     settings: rosterDefaultSettings(),
   };
 }
@@ -1327,7 +1330,7 @@ async function parseRosterEntriesLenient(entries, doctor = null) {
     return await parseRosterEntries(entries, doctor);
   } catch (error) {
     if (!isUnsupportedRosterError(error)) throw error;
-    const sources = { mmc: [], ddh: [], casey: [] };
+    const sources = { mmc: [], ddh: [], casey: [], mch: [] };
     let parsedAny = false;
     for (const entry of entries || []) {
       try {
@@ -1335,6 +1338,7 @@ async function parseRosterEntriesLenient(entries, doctor = null) {
         sources.mmc.push(...(parsed.sources?.mmc || []));
         sources.ddh.push(...(parsed.sources?.ddh || []));
         sources.casey.push(...(parsed.sources?.casey || []));
+        sources.mch.push(...(parsed.sources?.mch || []));
         parsedAny = true;
       } catch (entryError) {
         if (!isUnsupportedRosterError(entryError)) throw entryError;
@@ -1346,14 +1350,15 @@ async function parseRosterEntriesLenient(entries, doctor = null) {
 }
 
 function isUnsupportedRosterError(error) {
-  return /is not a supported MMC workbook, MMC PDF, Dandenong Hospital FindMyShift export, or Casey roster|is not a supported MMC workbook, MMC PDF, or Dandenong Hospital FindMyShift export/i.test(String(error?.message || error || ""));
+  return /is not a supported MMC workbook, MMC PDF, Dandenong Hospital FindMyShift export, Casey roster, or MCH roster|is not a supported MMC workbook, MMC PDF, Dandenong Hospital FindMyShift export, or Casey roster|is not a supported MMC workbook, MMC PDF, or Dandenong Hospital FindMyShift export/i.test(String(error?.message || error || ""));
 }
 
 function sourceImports(sources) {
   return [
-    ...sources.mmc.map((entry) => sourceImportMeta(entry, "mmc")),
-    ...sources.ddh.map((entry) => sourceImportMeta(entry, "ddh")),
-    ...sources.casey.map((entry) => sourceImportMeta(entry, "casey")),
+    ...(sources.mmc || []).map((entry) => sourceImportMeta(entry, "mmc")),
+    ...(sources.ddh || []).map((entry) => sourceImportMeta(entry, "ddh")),
+    ...(sources.casey || []).map((entry) => sourceImportMeta(entry, "casey")),
+    ...(sources.mch || []).map((entry) => sourceImportMeta(entry, "mch")),
   ];
 }
 
@@ -1370,25 +1375,32 @@ function sourceImportMeta(entry, sourceType) {
 
 function doctorsByImportId(sources) {
   const result = new Map();
-  for (const entry of sources.mmc) {
-    result.set(entry.id, rosterDoctorOptions([entry], [], []).map((doctor) => ({
+  for (const entry of sources.mmc || []) {
+    result.set(entry.id, rosterDoctorOptions([entry], [], [], []).map((doctor) => ({
       key: doctor.key,
       displayName: doctor.displayName,
       sourceType: "mmc",
     })));
   }
-  for (const entry of sources.ddh) {
-    result.set(entry.id, rosterDoctorOptions([], [entry], []).map((doctor) => ({
+  for (const entry of sources.ddh || []) {
+    result.set(entry.id, rosterDoctorOptions([], [entry], [], []).map((doctor) => ({
       key: doctor.key,
       displayName: doctor.displayName,
       sourceType: "ddh",
     })));
   }
-  for (const entry of sources.casey) {
-    result.set(entry.id, rosterDoctorOptions([], [], [entry]).map((doctor) => ({
+  for (const entry of sources.casey || []) {
+    result.set(entry.id, rosterDoctorOptions([], [], [entry], []).map((doctor) => ({
       key: doctor.key,
       displayName: doctor.displayName,
       sourceType: "casey",
+    })));
+  }
+  for (const entry of sources.mch || []) {
+    result.set(entry.id, rosterDoctorOptions([], [], [], [entry]).map((doctor) => ({
+      key: doctor.key,
+      displayName: doctor.displayName,
+      sourceType: "mch",
     })));
   }
   return result;
@@ -1864,7 +1876,7 @@ async function buildBrowserPreviewData(doctor) {
   if (!doctor?.key) {
     throw new Error("A doctor selection is required.");
   }
-  const validDoctors = new Set(rosterDoctorOptions(parsedRosterSources.mmc, parsedRosterSources.ddh, parsedRosterSources.casey).map((item) => item.key));
+  const validDoctors = new Set(rosterDoctorOptions(parsedRosterSources.mmc, parsedRosterSources.ddh, parsedRosterSources.casey, parsedRosterSources.mch).map((item) => item.key));
   const requestedKeys = new Set([doctor.key, ...(doctor.aliases || []).map((alias) => alias.key)].filter(Boolean));
   if (![...requestedKeys].some((key) => validDoctors.has(key))) {
     throw new Error("The selected doctor was not found in the uploaded roster files.");
@@ -1884,6 +1896,7 @@ async function buildBrowserPreviewData(doctor) {
     conflictSelections,
     doctor.aliases || [],
     parsedRosterSources.casey,
+    parsedRosterSources.mch,
   );
   const events = view.events;
   return {
@@ -1982,18 +1995,18 @@ function availableHospitalsForPreview(events) {
   const codes = new Set();
   for (const event of events || []) {
     if (event.source) codes.add(displaySourceCode(event.source));
-    const titlePrefix = String(event.title || "").match(/^(MMC|DDH|Casey):/i)?.[1];
+    const titlePrefix = String(event.title || "").match(/^(MMC|DDH|Casey|MCH):/i)?.[1];
     if (titlePrefix) codes.add(displaySourceCode(titlePrefix));
   }
   return [...codes]
-    .filter((code) => code === "MMC" || code === "DDH" || code === "Casey")
+    .filter((code) => code === "MMC" || code === "DDH" || code === "Casey" || code === "MCH")
     .sort();
 }
 
 function displaySourceCode(value) {
   const source = String(value || "").trim().toUpperCase();
   if (source === "CASEY") return "Casey";
-  if (source === "MMC" || source === "DDH") return source;
+  if (source === "MMC" || source === "DDH" || source === "MCH") return source;
   return String(value || "").trim();
 }
 
@@ -2657,12 +2670,12 @@ async function renderInsightsModal() {
 }
 
 async function ensureInsightRosterAnalysis() {
-  if (parsedRosterSources && (parsedRosterSources.mmc?.length || parsedRosterSources.ddh?.length || parsedRosterSources.casey?.length)) return;
+  if (parsedRosterSources && (parsedRosterSources.mmc?.length || parsedRosterSources.ddh?.length || parsedRosterSources.casey?.length || parsedRosterSources.mch?.length)) return;
   if (hydrateInsightCacheFromSnapshot()) return;
   if (!selectedFiles.length) return;
   await ensureSelectedFilesLoaded();
   let parsed = await parseCurrentRosterForm(null);
-  const comparisonOptions = rosterDoctorOptions(parsed.sources?.mmc || [], parsed.sources?.ddh || [], parsed.sources?.casey || []);
+  const comparisonOptions = rosterDoctorOptions(parsed.sources?.mmc || [], parsed.sources?.ddh || [], parsed.sources?.casey || [], parsed.sources?.mch || []);
   if (comparisonOptions.length <= 1 && cloudAvailable) {
     const requestEmail = adminViewingEmail ? authUserEmail || currentUserEmail : currentUserEmail;
     const requestPassword = adminViewingEmail ? authUserPassword || currentUserPassword : currentUserPassword;
@@ -2798,8 +2811,8 @@ function comparisonDoctorOptions(start = "", end = "", hospitalFilters = []) {
 }
 
 function insightDoctorOptions() {
-  if (parsedRosterSources && (parsedRosterSources.mmc?.length || parsedRosterSources.ddh?.length || parsedRosterSources.casey?.length)) {
-    return rosterDoctorOptions(parsedRosterSources?.mmc || [], parsedRosterSources?.ddh || [], parsedRosterSources?.casey || []);
+  if (parsedRosterSources && (parsedRosterSources.mmc?.length || parsedRosterSources.ddh?.length || parsedRosterSources.casey?.length || parsedRosterSources.mch?.length)) {
+    return rosterDoctorOptions(parsedRosterSources?.mmc || [], parsedRosterSources?.ddh || [], parsedRosterSources?.casey || [], parsedRosterSources?.mch || []);
   }
   return Array.isArray(insightDoctorOptionsCache) ? insightDoctorOptionsCache : [];
 }
@@ -3194,7 +3207,7 @@ function whoTeamLabel(event) {
 
 function cleanWhoSourceTitle(title) {
   return String(title || "")
-    .replace(/^(MMC|DDH|Casey):\s*/i, "")
+    .replace(/^(MMC|DDH|Casey|MCH):\s*/i, "")
     .replace(/\s+(AM|PM)\b/i, "")
     .trim() || "Other";
 }
@@ -3234,6 +3247,7 @@ function whoSpecialTimeLabel(event, period) {
     MMC: { AM: new Set(["07:30", "08:00"]), PM: new Set(["14:30"]), Night: new Set() },
     DDH: { AM: new Set(["07:30", "08:00"]), PM: new Set(["14:30", "15:00"]), Night: new Set(["23:00"]) },
     CASEY: { AM: new Set(["07:30", "08:00"]), PM: new Set(["14:30"]), Night: new Set(["23:00"]) },
+    MCH: { AM: new Set(["08:00"]), PM: new Set(["14:30", "15:00"]), Night: new Set(["23:00"]) },
   };
   const standardStarts = standard[source]?.[period] || new Set();
   return standardStarts.has(start) ? "" : `${start}-${end}`;
@@ -3246,8 +3260,8 @@ function eventRosterDateKey(event) {
 
 function eventSourceCode(event) {
   const explicit = String(event?.source || "").trim().toUpperCase();
-  if (explicit === "MMC" || explicit === "DDH" || explicit === "CASEY") return explicit;
-  const titlePrefix = String(event?.title || "").match(/^(MMC|DDH|Casey):/i)?.[1];
+  if (explicit === "MMC" || explicit === "DDH" || explicit === "CASEY" || explicit === "MCH") return explicit;
+  const titlePrefix = String(event?.title || "").match(/^(MMC|DDH|Casey|MCH):/i)?.[1];
   return titlePrefix ? titlePrefix.toUpperCase() : "";
 }
 
@@ -3296,7 +3310,7 @@ function defaultInsightDate(termStart, termEnd) {
 }
 
 function getDoctorAnalysisCache() {
-  if (!parsedRosterSources || (!parsedRosterSources.mmc?.length && !parsedRosterSources.ddh?.length && !parsedRosterSources.casey?.length)) {
+  if (!parsedRosterSources || (!parsedRosterSources.mmc?.length && !parsedRosterSources.ddh?.length && !parsedRosterSources.casey?.length && !parsedRosterSources.mch?.length)) {
     if (!hydrateInsightCacheFromSnapshot()) {
       doctorAnalysisCacheKey = "";
       doctorAnalysisCache = new Map();
@@ -3315,13 +3329,13 @@ function getDoctorAnalysisCache() {
     dateTo: "",
     includeLocations: false,
   };
-  for (const doctor of rosterDoctorOptions(parsedRosterSources?.mmc || [], parsedRosterSources?.ddh || [], parsedRosterSources?.casey || [])) {
-    const view = buildRosterView(parsedRosterSources?.mmc || [], parsedRosterSources?.ddh || [], doctor.key, analysisSettings, {}, {}, [], parsedRosterSources?.casey || []);
+  for (const doctor of rosterDoctorOptions(parsedRosterSources?.mmc || [], parsedRosterSources?.ddh || [], parsedRosterSources?.casey || [], parsedRosterSources?.mch || [])) {
+    const view = buildRosterView(parsedRosterSources?.mmc || [], parsedRosterSources?.ddh || [], doctor.key, analysisSettings, {}, {}, [], parsedRosterSources?.casey || [], parsedRosterSources?.mch || []);
     cache.set(doctor.key, view.events);
   }
   doctorAnalysisCacheKey = cacheKey;
   doctorAnalysisCache = cache;
-  insightDoctorOptionsCache = rosterDoctorOptions(parsedRosterSources?.mmc || [], parsedRosterSources?.ddh || [], parsedRosterSources?.casey || []);
+  insightDoctorOptionsCache = rosterDoctorOptions(parsedRosterSources?.mmc || [], parsedRosterSources?.ddh || [], parsedRosterSources?.casey || [], parsedRosterSources?.mch || []);
   doctorRoleIndex = buildDoctorRoleIndex();
   insightDoctorRoleCache = new Map(doctorRoleIndex);
   cacheCurrentInsightSnapshot();
@@ -4177,12 +4191,12 @@ function buildDoctorProfileId(doctor) {
 function normalizedDoctorSourceTypes(doctor) {
   const values = Array.isArray(doctor?.sourceTypes) ? doctor.sourceTypes : [];
   if (doctor?.sourceType) values.push(doctor.sourceType);
-  return [...new Set(values.map((item) => String(item || "").toLowerCase()).filter((item) => item === "mmc" || item === "ddh" || item === "casey"))];
+  return [...new Set(values.map((item) => String(item || "").toLowerCase()).filter((item) => item === "mmc" || item === "ddh" || item === "casey" || item === "mch"))];
 }
 
 function doctorProfileSourceTypes(doctor) {
   const sourceTypes = normalizedDoctorSourceTypes(doctor);
-  return sourceTypes.length ? sourceTypes : ["casey", "ddh", "mmc"];
+  return sourceTypes.length ? sourceTypes : ["casey", "ddh", "mch", "mmc"];
 }
 
 function doctorOptionsForCurrentAccount(doctors) {
@@ -4297,6 +4311,9 @@ function buildDoctorRoleIndex() {
   for (const entry of parsedRosterSources.casey || []) {
     collectCaseyDoctorRoles(entry.workbook, index);
   }
+  for (const entry of parsedRosterSources.mch || []) {
+    collectMchDoctorRoles(entry.workbook, index);
+  }
   return index;
 }
 
@@ -4408,6 +4425,36 @@ function collectCaseyDoctorRoles(workbook, index) {
       assignDoctorRole(index, normalizeRosterName(name), "CASEY", role);
     }
   }
+}
+
+function collectMchDoctorRoles(workbook, index) {
+  for (const sheetName of workbook?.SheetNames || []) {
+    if (!/^Week\s+\d+$/i.test(sheetName) || sheetName === "Week 0") continue;
+    const sheet = workbook.Sheets[sheetName];
+    if (!String(cleanSheetCell(sheet, 4, 4)).toUpperCase().includes("PAEDIATRIC EMERGENCY DEPARTMENT ROSTER")) continue;
+    const ranges = [
+      [21, 49],
+      [54, 84],
+      [86, 102],
+    ];
+    for (const [startRow, endRow] of ranges) {
+      for (let row = startRow; row <= endRow; row += 1) {
+        const name = cleanSheetCell(sheet, row, 4).replace(/\s*\([^)]*\)\s*$/g, "").replace(/\s+/g, " ").trim();
+        if (!looksLikeRosterPerson(name) || /^locum$/i.test(name)) continue;
+        assignDoctorRole(index, normalizeRosterName(name), "MCH", roleCodeForMchRole(cleanSheetCell(sheet, row, 1)));
+      }
+    }
+  }
+}
+
+function roleCodeForMchRole(value) {
+  const upper = String(value || "").toUpperCase();
+  if (upper.includes("CONSULTANT") || upper.includes("STAFF SPECIALIST")) return "SMS";
+  if (upper.includes("FELLOW")) return "SR";
+  if (upper.includes("REGISTRAR")) return "JR";
+  if (upper.includes("HMO")) return "HMO";
+  if (upper.includes("INTERN")) return "I";
+  return "";
 }
 
 function roleCodeFromRosterPrefix(prefix) {
@@ -4927,6 +4974,7 @@ function defaultLocationForIssueSource(source) {
   if (sanitizeIssueSource(source) === "MMC") return settings.defaultLocationMmc || DEFAULT_MMC_LOCATION;
   if (sanitizeIssueSource(source) === "DDH") return settings.defaultLocationDdh || DEFAULT_DDH_LOCATION;
   if (sanitizeIssueSource(source) === "Casey") return settings.defaultLocationCasey || DEFAULT_CASEY_LOCATION;
+  if (sanitizeIssueSource(source) === "MCH") return settings.defaultLocationMch || DEFAULT_MCH_LOCATION;
   return "";
 }
 
@@ -5109,6 +5157,7 @@ function buildLocationOptionMarkup(selectedMode = "") {
   if (detectedSources.mmc?.length) options.push({ value: "mmc", label: "MMC Car Park" });
   if (detectedSources.ddh?.length) options.push({ value: "ddh", label: "DDH Car Park" });
   if (detectedSources.casey?.length) options.push({ value: "casey", label: "Casey Hospital" });
+  if (detectedSources.mch?.length) options.push({ value: "mch", label: "MCH" });
   options.push({ value: "offsite", label: "Off-site" });
   options.push({ value: "custom", label: "Custom location" });
   return options.map((option) => `<option value="${option.value}" ${option.value === selectedMode ? "selected" : ""}>${option.label}</option>`).join("");
@@ -5119,6 +5168,7 @@ function detectLocationPreset(location) {
   if (location === settings.defaultLocationMmc || location === DEFAULT_MMC_LOCATION) return { mode: "mmc", customValue: "" };
   if (location === settings.defaultLocationDdh || location === DEFAULT_DDH_LOCATION) return { mode: "ddh", customValue: "" };
   if (location === settings.defaultLocationCasey || location === DEFAULT_CASEY_LOCATION) return { mode: "casey", customValue: "" };
+  if (location === settings.defaultLocationMch || location === DEFAULT_MCH_LOCATION) return { mode: "mch", customValue: "" };
   return { mode: "custom", customValue: location };
 }
 
@@ -5162,6 +5212,7 @@ function resolveCustomEventLocation() {
   if (customEventLocationMode.value === "mmc") return settings.defaultLocationMmc || DEFAULT_MMC_LOCATION;
   if (customEventLocationMode.value === "ddh") return settings.defaultLocationDdh || DEFAULT_DDH_LOCATION;
   if (customEventLocationMode.value === "casey") return settings.defaultLocationCasey || DEFAULT_CASEY_LOCATION;
+  if (customEventLocationMode.value === "mch") return settings.defaultLocationMch || DEFAULT_MCH_LOCATION;
   if (customEventLocationMode.value === "custom") return customEventCustomLocation.value.trim();
   return "";
 }
@@ -5204,6 +5255,7 @@ function resolveImportedLocation(id) {
   if (mode === "mmc") return settings.defaultLocationMmc || DEFAULT_MMC_LOCATION;
   if (mode === "ddh") return settings.defaultLocationDdh || DEFAULT_DDH_LOCATION;
   if (mode === "casey") return settings.defaultLocationCasey || DEFAULT_CASEY_LOCATION;
+  if (mode === "mch") return settings.defaultLocationMch || DEFAULT_MCH_LOCATION;
   if (mode === "custom") {
     return reviewModalBody.querySelector(`[data-override-custom-location="${id}"]`)?.value.trim() || "";
   }
@@ -5271,6 +5323,7 @@ function summarizeDetectedSources(imports) {
     mmc: imports.filter((item) => item.sourceType === "mmc").map((item) => item.name),
     ddh: imports.filter((item) => item.sourceType === "ddh").map((item) => item.name),
     casey: imports.filter((item) => item.sourceType === "casey").map((item) => item.name),
+    mch: imports.filter((item) => item.sourceType === "mch").map((item) => item.name),
   };
 }
 
@@ -5708,6 +5761,7 @@ function renderParserRulesCard() {
     { source: "MMC", rules: sanitizeParserExtensionRuleList(parserExtensions?.mmc, "MMC") },
     { source: "DDH", rules: sanitizeParserExtensionRuleList(parserExtensions?.ddh, "DDH") },
     { source: "Casey", rules: sanitizeParserExtensionRuleList(parserExtensions?.casey, "Casey") },
+    { source: "MCH", rules: sanitizeParserExtensionRuleList(parserExtensions?.mch, "MCH") },
   ];
   const unknownIssues = collectUnknownShiftIssues();
   const unknownSources = new Set(unknownIssues.map((item) => item.source));
@@ -6762,7 +6816,7 @@ async function buildUnclaimedPreviewFromImports(doctor, profile, imports, sessio
   };
   const parsed = await parseRosterEntriesLenient(imports, doctorForBuild);
   const parsedDoctors = doctorsByImportId(parsed.sources);
-  const allDoctors = buildCreatorDoctorOptions(rosterDoctorOptions(parsed.sources.mmc, parsed.sources.ddh, parsed.sources.casey));
+  const allDoctors = buildCreatorDoctorOptions(rosterDoctorOptions(parsed.sources.mmc, parsed.sources.ddh, parsed.sources.casey, parsed.sources.mch));
   const selected = allDoctors.find((item) => item.key === doctorForBuild.key) || doctorForBuild;
   const buildSettings = {
     ...defaultSettings(),
@@ -6781,6 +6835,7 @@ async function buildUnclaimedPreviewFromImports(doctor, profile, imports, sessio
     session?.conflictSelections || {},
     selected.aliases || [],
     parsed.sources.casey,
+    parsed.sources.mch,
   );
   const events = view.events;
   return {
@@ -7154,6 +7209,7 @@ function sanitizeParserExtensions(value) {
     mmc: mergeParserRuleLists(defaults.mmc, sanitizeParserExtensionRuleList(input.mmc, "MMC")),
     ddh: mergeParserRuleLists(defaults.ddh, sanitizeParserExtensionRuleList(input.ddh, "DDH")),
     casey: mergeParserRuleLists(defaults.casey, sanitizeParserExtensionRuleList(input.casey, "Casey")),
+    mch: mergeParserRuleLists(defaults.mch, sanitizeParserExtensionRuleList(input.mch, "MCH")),
   };
 }
 
@@ -7301,6 +7357,7 @@ function sanitizeIssueSource(value) {
   const source = String(value || "").trim().toUpperCase();
   if (source === "MMC" || source === "DDH") return source;
   if (source === "CASEY") return "Casey";
+  if (source === "MCH") return "MCH";
   return "";
 }
 
@@ -7336,6 +7393,7 @@ function sanitizeWorkspaceSnapshot(value) {
       mmc: Array.isArray(value.detectedSources?.mmc) ? value.detectedSources.mmc.map((item) => String(item || "")).filter(Boolean) : [],
       ddh: Array.isArray(value.detectedSources?.ddh) ? value.detectedSources.ddh.map((item) => String(item || "")).filter(Boolean) : [],
       casey: Array.isArray(value.detectedSources?.casey) ? value.detectedSources.casey.map((item) => String(item || "")).filter(Boolean) : [],
+      mch: Array.isArray(value.detectedSources?.mch) ? value.detectedSources.mch.map((item) => String(item || "")).filter(Boolean) : [],
     },
     fileRefs: Array.isArray(value.fileRefs) ? value.fileRefs.map(importRefForWorkspace).filter((item) => item.id) : [],
     subscriptionFeeds: value.subscriptionFeeds && typeof value.subscriptionFeeds === "object" ? JSON.parse(JSON.stringify(value.subscriptionFeeds)) : {},

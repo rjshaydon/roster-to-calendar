@@ -15,12 +15,12 @@ export async function onRequestPost(context) {
     if (!doctorKey) {
       throw new Error("A doctor selection is required.");
     }
-    const validDoctors = new Set(doctorOptions(sources.mmc, sources.ddh).map((doctor) => doctor.key));
+    const validDoctors = new Set(doctorOptions(sources.mmc, sources.ddh, sources.casey, sources.mch).map((doctor) => doctor.key));
     const requestedKeys = new Set([doctorKey, ...(doctorAliases || []).map((alias) => alias.key)].filter(Boolean));
     if (![...requestedKeys].some((key) => validDoctors.has(key))) {
       throw new Error("The selected doctor was not found in the uploaded roster files.");
     }
-    const view = buildRosterView(sources.mmc, sources.ddh, doctorKey, settings, overrides, conflictSelections, doctorAliases);
+    const view = buildRosterView(sources.mmc, sources.ddh, doctorKey, settings, overrides, conflictSelections, doctorAliases, sources.casey, sources.mch);
     const events = view.events;
     return Response.json({
       ...previewSummary(events),
