@@ -2231,7 +2231,7 @@ function renderPreviewHeader(doctor, data) {
         ${renderPreviewRangeControls(data.previewStart, data.previewEnd)}
         ${hospitalSelector || `<span class="preview-toolbar-spacer" aria-hidden="true"></span>`}
         <span class="preview-event-count">${data.count} events</span>
-        ${adminViewingEmail && isCreatorAuthenticated()
+        ${canReturnToCreator()
           ? `<button type="button" class="button button-secondary preview-back-button" data-preview-back-to-creator>Back to creator</button>`
           : ""}
         <button type="button" class="button button-secondary preview-logout-button" data-preview-logout>Log out</button>
@@ -3999,6 +3999,10 @@ function canUseDoctorPicker() {
 
 function canUseCreatorDoctorSwitcher() {
   return Boolean(isCreatorAuthenticated() && (canUseDoctorPicker() || adminViewingEmail || activeCalendarMode() === "doctor-profile"));
+}
+
+function canReturnToCreator() {
+  return Boolean(isCreatorAuthenticated() && (adminViewingEmail || activeDoctorProfile));
 }
 
 function initialCalendarContext() {
@@ -7398,7 +7402,7 @@ function renderLoginState() {
   loginIdentity.textContent = loggedIn
     ? `${viewingText} · ${currentUserRole === "creator" ? "Creator" : "Standard account"}${cloudAvailable ? " · Cloud sync on" : " · Cloud sync required"}`
     : "";
-  backToCreatorButton.classList.toggle("hidden", (!adminViewingEmail && !activeDoctorProfile) || !isCreatorAuthenticated());
+  backToCreatorButton.classList.toggle("hidden", !canReturnToCreator());
   syncAccountsButton();
   syncActionState();
   syncMobileChrome();
