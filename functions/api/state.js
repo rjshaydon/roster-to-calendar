@@ -273,6 +273,19 @@ export async function onRequestPost(context) {
       return Response.json({ ok: true, parserExtensions });
     }
 
+    if (action === "deleteParserExtensionRule") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      const target = sanitizeParserRuleRemoval(body?.rule || body);
+      if (!target) {
+        return Response.json({ error: "A valid shift-code rule is required." }, { status: 400 });
+      }
+      const parserExtensions = removeParserExtensionRuleByKey(await loadParserExtensionRules(context.env.ROSTER_STORE), target);
+      await saveParserExtensionRules(context.env.ROSTER_STORE, parserExtensions);
+      return Response.json({ ok: true, parserExtensions });
+    }
+
     if (action === "saveLocalParserExtensionRule") {
       const saveEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
       const targetRecord = saveEmail === email ? account.record : await loadAccountRecord(context.env.ROSTER_STORE, saveEmail);
@@ -1794,12 +1807,38 @@ function sanitizeIssueFingerprintList(values) {
 
 function sanitizeParserExtensionRules(value) {
   const source = value && typeof value === "object" ? value : {};
+  const removed = sanitizeParserRuleRemovals(source._removed);
   return {
-    mmc: sanitizeParserExtensionRuleList(source.mmc, "MMC"),
-    ddh: sanitizeParserExtensionRuleList(source.ddh, "DDH"),
-    casey: sanitizeParserExtensionRuleList(source.casey, "Casey"),
-    mch: sanitizeParserExtensionRuleList(source.mch, "MCH"),
+    mmc: applyParserRuleRemovals(sanitizeParserExtensionRuleList(source.mmc, "MMC"), removed),
+    ddh: applyParserRuleRemovals(sanitizeParserExtensionRuleList(source.ddh, "DDH"), removed),
+    casey: applyParserRuleRemovals(sanitizeParserExtensionRuleList(source.casey, "Casey"), removed),
+    mch: applyParserRuleRemovals(sanitizeParserExtensionRuleList(source.mch, "MCH"), removed),
+    _removed: removed,
   };
+}
+
+function sanitizeParserRuleRemovals(items) {
+  if (!Array.isArray(items)) return [];
+  const byKey = new Map();
+  for (const item of items) {
+    const target = sanitizeParserRuleRemoval(item);
+    if (target) byKey.set(`${target.source}|${target.seniority}|${target.code}`, target);
+  }
+  return [...byKey.values()].sort((left, right) => left.code.localeCompare(right.code));
+}
+
+function sanitizeParserRuleRemoval(item) {
+  if (!item || typeof item !== "object") return null;
+  const source = sanitizeIssueSource(item.source);
+  const seniority = sanitizeRuleSeniority(item.seniority);
+  const code = String(item.code || item.rawCode || "").trim().toUpperCase();
+  if (!source || !code) return null;
+  return { source, seniority, code };
+}
+
+function applyParserRuleRemovals(rules, removals) {
+  const removedKeys = new Set((removals || []).map((item) => `${item.source}|${item.seniority}|${item.code}`));
+  return (rules || []).filter((rule) => !removedKeys.has(`${rule.source}|${rule.seniority}|${rule.code}`));
 }
 
 function sanitizeParserExtensionRuleList(items, source) {
@@ -1825,6 +1864,7 @@ function sanitizeParserExtensionRule(item, forcedSource = "") {
   const startTime = String(item.startTime || "").trim();
   const endTime = String(item.endTime || "").trim();
   if (!source || !code || !base) return null;
+  if (isRestrictedClinicalSupportRule({ seniority, code, base })) return null;
   if (!allDay && (!isClockString(startTime) || !isClockString(endTime))) return null;
   return {
     source,
@@ -1840,6 +1880,21 @@ function sanitizeParserExtensionRule(item, forcedSource = "") {
     location,
     includeAsShift: item.includeAsShift !== false,
   };
+}
+
+function isRestrictedClinicalSupportRule(rule) {
+  const seniority = sanitizeRuleSeniority(rule?.seniority);
+  if (seniority === "SMS" || seniority === "CMO") return false;
+  const code = String(rule?.code || "").trim().toUpperCase();
+  const base = String(rule?.base || "").trim().toUpperCase();
+  return code === "CS"
+    || code === "CSO"
+    || code === "CS ONSITE"
+    || code === "CLIN SUPP"
+    || code === "CLINICAL SUPP"
+    || base === "CS"
+    || base === "CSO"
+    || base === "CS ONSITE";
 }
 
 function sanitizeRuleSeniority(value) {
@@ -1935,7 +1990,21 @@ function upsertParserExtensionRule(existing, rule) {
   nextItems.push(nextRule);
   return {
     ...sanitized,
+    _removed: (sanitized._removed || []).filter((item) => item.source !== nextRule.source || item.code !== nextRule.code || item.seniority !== nextRule.seniority),
     [key]: nextItems.sort((left, right) => left.code.localeCompare(right.code)),
+  };
+}
+
+function removeParserExtensionRuleByKey(existing, targetRule) {
+  const sanitized = sanitizeParserExtensionRules(existing);
+  const target = sanitizeParserRuleRemoval(targetRule);
+  if (!target) return sanitized;
+  const key = target.source.toLowerCase();
+  const removals = sanitizeParserRuleRemovals([...(sanitized._removed || []), target]);
+  return {
+    ...sanitized,
+    _removed: removals,
+    [key]: (sanitized[key] || []).filter((item) => item.code !== target.code || item.seniority !== target.seniority),
   };
 }
 

@@ -35,8 +35,12 @@ const mmcRules = defaultRules.mmc || [];
 const hasMmcRule = (seniority, code) => mmcRules.some((rule) => rule.seniority === seniority && rule.code === code);
 assert.ok(hasMmcRule("SMS", "AGC"));
 assert.ok(hasMmcRule("CMO", "AGC"));
+assert.ok(hasMmcRule("SMS", "CS"));
+assert.ok(hasMmcRule("CMO", "CSO"));
 assert.equal(hasMmcRule("Senior Registrar", "AGC"), false);
 assert.equal(hasMmcRule("HMO", "AGC"), false);
+assert.equal(hasMmcRule("Senior Registrar", "CS"), false);
+assert.equal(hasMmcRule("HMO", "CSO"), false);
 assert.equal(hasMmcRule("SMS", "ACR"), false);
 assert.equal(hasMmcRule("SMS", "ARR"), false);
 assert.equal(hasMmcRule("SMS", "ASSR"), false);
@@ -48,6 +52,12 @@ assert.ok(hasMmcRule("Intern", "NSSJ"));
 const nssjRule = mmcRules.find((rule) => rule.seniority === "HMO" && rule.code === "NSSJ");
 assert.equal(nssjRule.startTime, "23:00");
 assert.equal(nssjRule.endTime, "08:30");
+for (const sourceRules of [defaultRules.ddh, defaultRules.casey]) {
+  assert.equal(sourceRules.some((rule) => rule.seniority === "Senior Registrar" && rule.base === "CS"), false);
+  assert.equal(sourceRules.some((rule) => rule.seniority === "HMO" && rule.base === "CS"), false);
+  assert.ok(sourceRules.some((rule) => rule.seniority === "SMS" && rule.base === "CS"));
+  assert.ok(sourceRules.some((rule) => rule.seniority === "CMO" && rule.base === "CS"));
+}
 assert.ok(doctors.length > 100);
 const richard = doctors.find((doctor) => doctor.displayName === "Richard HAYDON");
 assert.ok(richard);
@@ -85,6 +95,7 @@ const patrickCaseyEvents = patrickTanView.events.filter((event) => event.source 
 assert.ok(patrickCaseyEvents.length > 40);
 assert.equal(patrickCaseyEvents.some((event) => event.start.startsWith("2025")), false);
 assert.ok(patrickCaseyEvents.some((event) => event.title === "Casey: MIC PM"));
+assert.ok(patrickCaseyEvents.some((event) => event.title === "Casey: AM" && event.rawValue === "Orient 0800-1730" && event.start.includes("08:00:00") && event.end.includes("17:30:00")));
 
 const andrewDyallCasey = caseyDoctors.find((doctor) => doctor.displayName === "Andrew Dyall");
 const andrewCaseyView = buildRosterView([], [], andrewDyallCasey.key, undefined, {}, {}, [], caseyWorkbook);

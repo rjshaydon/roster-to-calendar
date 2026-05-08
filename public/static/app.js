@@ -499,6 +499,15 @@ accountsBody.addEventListener("click", (event) => {
     );
     return;
   }
+  const deleteShiftCodeButton = event.target.closest("[data-delete-parser-rule]");
+  if (deleteShiftCodeButton) {
+    deleteParserRule(
+      deleteShiftCodeButton.dataset.deleteParserSource || "",
+      deleteShiftCodeButton.dataset.deleteParserSeniority || "",
+      deleteShiftCodeButton.dataset.deleteParserRule || "",
+    );
+    return;
+  }
   const deleteButton = event.target.closest("[data-delete-account]");
   if (deleteButton) {
     deleteAccount(deleteButton.dataset.deleteAccount);
@@ -5853,6 +5862,7 @@ function renderParserRulesCard() {
                           </div>
                           <div class="account-actions">
                             <button type="button" class="button button-secondary" data-edit-parser-rule="${escapeHtml(rule.code)}" data-edit-parser-source="${escapeHtml(rule.source)}" data-edit-parser-seniority="${escapeHtml(rule.seniority)}">Edit</button>
+                            <button type="button" class="button button-secondary" data-delete-parser-rule="${escapeHtml(rule.code)}" data-delete-parser-source="${escapeHtml(rule.source)}" data-delete-parser-seniority="${escapeHtml(rule.seniority)}">Delete</button>
                           </div>
                         </article>
                       `).join("")}
@@ -6480,6 +6490,50 @@ async function saveParserRuleFromModal() {
     setStatus(includeAsShift ? "Shift code added to the parser." : "Shift code hidden from calendar.");
   } catch (error) {
     setStatus(error.message || "Could not save the shift-code rule.", true);
+  }
+}
+
+async function deleteParserRule(source, seniority, code) {
+  if (!isCreatorAuthenticated()) {
+    setStatus("Creator authentication is required to delete shift-code rules.", true);
+    return;
+  }
+  const rule = findParserExtensionRuleForSeniority(source, seniority, code);
+  if (!rule) {
+    setStatus("Could not find that saved shift-code rule.", true);
+    return;
+  }
+  const confirmed = window.confirm(`Delete the ${rule.source} ${rule.seniority} shift-code rule for ${rule.code}? Roster entries will be rechecked and may return as Unknown.`);
+  if (!confirmed) return;
+  try {
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "deleteParserExtensionRule",
+        email: authUserEmail || currentUserEmail,
+        password: authUserPassword || currentUserPassword,
+        rule: {
+          source: rule.source,
+          seniority: rule.seniority,
+          code: rule.code,
+        },
+      }),
+    });
+    const data = await readJsonResponse(response, "Could not delete the shift-code rule.");
+    parserExtensions = sanitizeParserExtensions(data.parserExtensions);
+    setParserExtensions(parserExtensions);
+    await loadServerUsers();
+    renderAccountsModal();
+    if (selectedFiles.length) {
+      parsedRosterSources = null;
+      await analyzeFiles({ preserveVisiblePreview: true });
+    } else if (latestPreview) {
+      await updatePreview();
+    }
+    setStatus("Shift-code rule deleted. Matching roster entries have been rechecked.");
+  } catch (error) {
+    setStatus(error.message || "Could not delete the shift-code rule.", true);
   }
 }
 
@@ -7386,12 +7440,32 @@ function applyIssueConfig(value) {
 function sanitizeParserExtensions(value) {
   const input = value && typeof value === "object" ? value : {};
   const defaults = parserRuleDefaults();
+  const removed = sanitizeParserRuleRemovals(input._removed);
   return {
-    mmc: mergeParserRuleLists(defaults.mmc, sanitizeParserExtensionRuleList(input.mmc, "MMC")),
-    ddh: mergeParserRuleLists(defaults.ddh, sanitizeParserExtensionRuleList(input.ddh, "DDH")),
-    casey: mergeParserRuleLists(defaults.casey, sanitizeParserExtensionRuleList(input.casey, "Casey")),
-    mch: mergeParserRuleLists(defaults.mch, sanitizeParserExtensionRuleList(input.mch, "MCH")),
+    mmc: applyParserRuleRemovals(mergeParserRuleLists(defaults.mmc, sanitizeParserExtensionRuleList(input.mmc, "MMC")), removed),
+    ddh: applyParserRuleRemovals(mergeParserRuleLists(defaults.ddh, sanitizeParserExtensionRuleList(input.ddh, "DDH")), removed),
+    casey: applyParserRuleRemovals(mergeParserRuleLists(defaults.casey, sanitizeParserExtensionRuleList(input.casey, "Casey")), removed),
+    mch: applyParserRuleRemovals(mergeParserRuleLists(defaults.mch, sanitizeParserExtensionRuleList(input.mch, "MCH")), removed),
+    _removed: removed,
   };
+}
+
+function sanitizeParserRuleRemovals(items) {
+  if (!Array.isArray(items)) return [];
+  const byKey = new Map();
+  for (const item of items) {
+    const source = sanitizeIssueSource(item?.source);
+    const seniority = sanitizeRuleSeniority(item?.seniority);
+    const code = String(item?.code || "").trim().toUpperCase();
+    if (!source || !code) continue;
+    byKey.set(`${source}|${seniority}|${code}`, { source, seniority, code });
+  }
+  return [...byKey.values()].sort(compareParserRules);
+}
+
+function applyParserRuleRemovals(rules, removals) {
+  const removedKeys = new Set((removals || []).map(parserRuleStorageKey));
+  return (rules || []).filter((rule) => !removedKeys.has(parserRuleStorageKey(rule)));
 }
 
 function mergeParserRuleLists(defaults, overrides) {
@@ -7434,6 +7508,7 @@ function sanitizeParserExtensionRule(item, forcedSource = "") {
   const endTime = String(item.endTime || "").trim();
   const location = String(item.location || "").trim();
   if (!source || !code || !base) return null;
+  if (isRestrictedClinicalSupportRule({ seniority, code, base })) return null;
   if (!allDay && (!isClockString(startTime) || !isClockString(endTime))) return null;
   return {
     source,
@@ -7449,6 +7524,21 @@ function sanitizeParserExtensionRule(item, forcedSource = "") {
     location,
     includeAsShift: item.includeAsShift !== false,
   };
+}
+
+function isRestrictedClinicalSupportRule(rule) {
+  const seniority = sanitizeRuleSeniority(rule?.seniority);
+  if (seniority === "SMS" || seniority === "CMO") return false;
+  const code = String(rule?.code || "").trim().toUpperCase();
+  const base = String(rule?.base || "").trim().toUpperCase();
+  return code === "CS"
+    || code === "CSO"
+    || code === "CS ONSITE"
+    || code === "CLIN SUPP"
+    || code === "CLINICAL SUPP"
+    || base === "CS"
+    || base === "CSO"
+    || base === "CS ONSITE";
 }
 
 function sanitizeParserRuleSuggestions(value) {

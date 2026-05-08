@@ -189,10 +189,6 @@ const CASEY_IGNORED_EXACT = new Set([
   "VHH",
   "TOX",
 ]);
-const CASEY_IGNORED_PREFIXES = [
-  "ORIENT",
-];
-
 const DEFAULT_SETTINGS = {
   showSourcePrefix: true,
   showAmPm: true,
@@ -1395,6 +1391,8 @@ function parseDdhEntry(day, label, timeText, seniority = UNKNOWN_SENIORITY) {
 function parseCaseyEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
   const label = cleanText(raw);
   if (!label) return null;
+  const shiftLabel = stripCaseyOrientationMetadata(label);
+  if (!shiftLabel) return null;
   const upper = label.toUpperCase();
   if (upper === "PHNW") {
     return createAllDayRecord("Casey", day, label, {
@@ -1420,10 +1418,10 @@ function parseCaseyEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
       seniority,
     });
   }
-  if (shouldIgnoreCasey(label) || shouldIgnoreCommon(label)) return null;
+  if (shouldIgnoreCasey(shiftLabel) || shouldIgnoreCommon(shiftLabel)) return null;
 
-  const explicit = extractTimePrefix(label);
-  const normalized = findManualParserRule("Casey", seniority, label, explicit) || normalizeCaseyLabel(label, explicit);
+  const explicit = extractTimePrefix(shiftLabel);
+  const normalized = findManualParserRule("Casey", seniority, shiftLabel, explicit) || normalizeCaseyLabel(shiftLabel, explicit);
   if (!normalized) {
     return createUnknownRecord("Casey", day, label, "Casey shift label not recognised.", seniority);
   }
@@ -1717,12 +1715,32 @@ function inferCaseyTimeOnlyShiftLabel(startHm) {
 function sanitizeParserExtensions(value) {
   const input = value && typeof value === "object" ? value : {};
   const defaults = buildDefaultParserRules();
+  const removed = sanitizeParserRuleRemovals(input._removed);
   return {
-    mmc: mergeParserRuleLists(defaults.mmc, sanitizeParserExtensionRuleList(input.mmc, "MMC")),
-    ddh: mergeParserRuleLists(defaults.ddh, sanitizeParserExtensionRuleList(input.ddh, "DDH")),
-    casey: mergeParserRuleLists(defaults.casey, sanitizeParserExtensionRuleList(input.casey, "Casey")),
-    mch: mergeParserRuleLists(defaults.mch, sanitizeParserExtensionRuleList(input.mch, "MCH")),
+    mmc: applyParserRuleRemovals(mergeParserRuleLists(defaults.mmc, sanitizeParserExtensionRuleList(input.mmc, "MMC")), removed),
+    ddh: applyParserRuleRemovals(mergeParserRuleLists(defaults.ddh, sanitizeParserExtensionRuleList(input.ddh, "DDH")), removed),
+    casey: applyParserRuleRemovals(mergeParserRuleLists(defaults.casey, sanitizeParserExtensionRuleList(input.casey, "Casey")), removed),
+    mch: applyParserRuleRemovals(mergeParserRuleLists(defaults.mch, sanitizeParserExtensionRuleList(input.mch, "MCH")), removed),
+    _removed: removed,
   };
+}
+
+function sanitizeParserRuleRemovals(items) {
+  if (!Array.isArray(items)) return [];
+  const byKey = new Map();
+  for (const item of items) {
+    const source = sanitizeParserRuleSource(item?.source);
+    const seniority = sanitizeRuleSeniority(item?.seniority);
+    const code = String(item?.code || "").trim().toUpperCase();
+    if (!source || !code) continue;
+    byKey.set(`${source}|${seniority}|${code}`, { source, seniority, code });
+  }
+  return [...byKey.values()].sort(compareParserRules);
+}
+
+function applyParserRuleRemovals(rules, removals) {
+  const removedKeys = new Set((removals || []).map(parserRuleKey));
+  return (rules || []).filter((rule) => !removedKeys.has(parserRuleKey(rule)));
 }
 
 function mergeParserRuleLists(defaults, overrides) {
@@ -1763,6 +1781,7 @@ function sanitizeParserExtensionRule(item, forcedSource = "") {
   const startTime = String(item.startTime || "").trim();
   const endTime = String(item.endTime || "").trim();
   if (!source || !code || !base) return null;
+  if (isRestrictedClinicalSupportRule({ seniority, code, base })) return null;
   if (!allDay && (!isClockString(startTime) || !isClockString(endTime))) return null;
   return {
     source,
@@ -1778,6 +1797,21 @@ function sanitizeParserExtensionRule(item, forcedSource = "") {
     endTime: allDay ? "" : endTime,
     includeAsShift: item.includeAsShift !== false,
   };
+}
+
+function isRestrictedClinicalSupportRule(rule) {
+  const seniority = sanitizeRuleSeniority(rule?.seniority);
+  if (seniority === "SMS" || seniority === "CMO") return false;
+  const code = String(rule?.code || "").trim().toUpperCase();
+  const base = String(rule?.base || "").trim().toUpperCase();
+  return code === "CS"
+    || code === "CSO"
+    || code === "CS ONSITE"
+    || code === "CLIN SUPP"
+    || code === "CLINICAL SUPP"
+    || base === "CS"
+    || base === "CSO"
+    || base === "CS ONSITE";
 }
 
 function sanitizeRuleSeniority(value) {
@@ -1915,7 +1949,7 @@ function buildDefaultParserRules() {
       includeAsShift: true,
     });
   };
-  for (const seniority of activeSeniorities) {
+  for (const seniority of consultantSeniorities) {
     add(rules.mmc, "MMC", "CS", seniority, "CS", "", "", true, "", "", "");
     add(rules.mmc, "MMC", "CSO", seniority, "CSO", "", "", true, "", "", MMC_LOCATION);
   }
@@ -1963,8 +1997,11 @@ function buildDefaultParserRules() {
     add(rules.mmc, "MMC", "NSSJ", seniority, "Night SSU", "", "", false, "23:00", "08:30", MMC_LOCATION);
   }
   for (const seniority of activeSeniorities) {
-    add(rules.ddh, "DDH", "CS", seniority, "CS", "", "", true, "", "", "");
-    add(rules.ddh, "DDH", "CS ONSITE", seniority, "CS onsite", "", "", true, "", "", DDH_LOCATION);
+    const canWorkClinicalSupport = consultantSeniorities.includes(seniority);
+    if (canWorkClinicalSupport) {
+      add(rules.ddh, "DDH", "CS", seniority, "CS", "", "", true, "", "", "");
+      add(rules.ddh, "DDH", "CS ONSITE", seniority, "CS onsite", "", "", true, "", "", DDH_LOCATION);
+    }
     add(rules.ddh, "DDH", "SSU", seniority, "SSU", "", "", true, "", "", DDH_LOCATION);
     add(rules.ddh, "DDH", "ORANGE AM", seniority, "Orange", "AM", "", true, "", "", DDH_LOCATION);
     add(rules.ddh, "DDH", "ORANGE PM", seniority, "Orange", "PM", "", true, "", "", DDH_LOCATION);
@@ -1972,9 +2009,11 @@ function buildDefaultParserRules() {
     add(rules.ddh, "DDH", "FAST PM", seniority, "FAST", "PM", "", true, "", "", DDH_LOCATION);
     add(rules.ddh, "DDH", "AVAO AM", seniority, "AVAO", "AM", "", true, "", "", DDH_LOCATION);
     add(rules.ddh, "DDH", "AVAO PM", seniority, "AVAO", "PM", "", true, "", "", DDH_LOCATION);
-    add(rules.casey, "Casey", "CS", seniority, "CS", "", "", false, "08:00", "17:30", CASEY_LOCATION);
-    add(rules.casey, "Casey", "CLIN SUPP", seniority, "CS", "", "", false, "08:00", "17:30", CASEY_LOCATION);
-    add(rules.casey, "Casey", "CLINICAL SUPP", seniority, "CS", "", "", false, "08:00", "17:30", CASEY_LOCATION);
+    if (canWorkClinicalSupport) {
+      add(rules.casey, "Casey", "CS", seniority, "CS", "", "", false, "08:00", "17:30", CASEY_LOCATION);
+      add(rules.casey, "Casey", "CLIN SUPP", seniority, "CS", "", "", false, "08:00", "17:30", CASEY_LOCATION);
+      add(rules.casey, "Casey", "CLINICAL SUPP", seniority, "CS", "", "", false, "08:00", "17:30", CASEY_LOCATION);
+    }
     add(rules.casey, "Casey", "AM TL", seniority, "TL", "AM", "", false, "08:00", "17:30", CASEY_LOCATION);
     add(rules.casey, "Casey", "AM UFD", seniority, "UFD", "AM", "", false, "08:00", "17:30", CASEY_LOCATION);
     add(rules.casey, "Casey", "AM MIC", seniority, "MIC", "AM", "", false, "08:00", "17:30", CASEY_LOCATION);
@@ -2097,10 +2136,13 @@ function shouldIgnoreDdh(value) {
 function shouldIgnoreCasey(value) {
   const upper = cleanText(value).replace(/\s+/g, " ").trim().toUpperCase();
   if (CASEY_IGNORED_EXACT.has(upper)) return true;
-  if (CASEY_IGNORED_PREFIXES.some((prefix) => upper.startsWith(prefix))) return true;
   if (/^[A-Z]{2,}(?:\s+[A-Z])?$/.test(upper) && upper.length <= 12 && !caseyTimedRuleForCode(upper)) return true;
   if (/^(MON|TUES|WED|THU|FRI|SAT|SUN)\b/.test(upper)) return true;
   return false;
+}
+
+function stripCaseyOrientationMetadata(value) {
+  return cleanText(value).replace(/\bOrient(?:ation)?\b/gi, " ").replace(/\s+/g, " ").trim();
 }
 
 function shouldIgnoreMch(value) {
