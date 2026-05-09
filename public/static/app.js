@@ -9030,15 +9030,20 @@ async function bootstrapImports() {
     }
     renderFilesList();
     if (currentSnapshot?.preview && currentSnapshot.doctorOptions?.length) {
+      if (currentSnapshotStale && selectedFiles.length) {
+        setStatus("Refreshing calendar...");
+        await ensureSelectedFilesLoaded();
+        if (selectedFiles.length) {
+          await analyzeFiles();
+          scheduleCloudStateSave();
+          return;
+        }
+      }
       renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
       scheduleInsightWarmup();
       if (currentSnapshotStale) {
-        if (selectedFiles.some((entry) => !entry.file)) {
-          setStatus("Calendar loaded from saved snapshot.");
-        } else {
-          setStatus("Refreshing calendar...");
-          void refreshSnapshotInBackground();
-        }
+        setStatus("Refreshing calendar...");
+        void refreshSnapshotInBackground();
       } else {
         setStatus("Calendar loaded.");
       }
