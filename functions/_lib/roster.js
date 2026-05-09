@@ -1103,7 +1103,7 @@ function sanitizeOverrides(raw) {
 
 function sanitizeCustomEvents(raw) {
   if (!Array.isArray(raw)) return [];
-  const events = [];
+  let events = [];
   for (const item of raw) {
     if (!item || typeof item !== "object") continue;
     const title = typeof item.title === "string" ? item.title.trim() : "";
@@ -2614,7 +2614,7 @@ function createHiddenRecord(source, day, rawValue, normalized, seniority = UNKNO
 
 function applySettings(records, settings, overrides) {
   const scopedRecords = records.filter((record) => matchesHospitalFilter(record, settings) && matchesDateFilter(record, settings));
-  const events = [];
+  let events = [];
   const reviewItems = [];
   const issues = [];
 
@@ -2679,6 +2679,8 @@ function applySettings(records, settings, overrides) {
     });
   }
 
+  events = mergeContiguousLeaveEvents(events);
+
   events.sort((left, right) => {
     const leftDate = asDateString(left.start);
     const rightDate = asDateString(right.start);
@@ -2694,6 +2696,66 @@ function applySettings(records, settings, overrides) {
   });
 
   return { events, reviewItems, issues };
+}
+
+function mergeContiguousLeaveEvents(events) {
+  const passthrough = [];
+  const leaveGroups = new Map();
+  for (const event of events) {
+    if (!isMergeableLeaveEvent(event)) {
+      passthrough.push(event);
+      continue;
+    }
+    const key = normalizedLeaveEventKey(event);
+    if (!leaveGroups.has(key)) leaveGroups.set(key, []);
+    leaveGroups.get(key).push(event);
+  }
+
+  const merged = [];
+  for (const [key, group] of leaveGroups.entries()) {
+    const ordered = [...group].sort((left, right) => left.start.localeCompare(right.start) || left.end.localeCompare(right.end));
+    for (const event of ordered) {
+      const previous = merged.length ? merged[merged.length - 1] : null;
+      if (
+        previous
+        && previous._leaveMergeKey === key
+        && event.start <= previous.end
+      ) {
+        previous.end = event.end > previous.end ? event.end : previous.end;
+        previous.rawValue = mergeRawLeaveValues(previous.rawValue, event.rawValue);
+        previous.source = previous.source === event.source ? previous.source : "Leave";
+        previous.id = hashString(`leave|${key}|${previous.start}|${previous.end}`);
+        continue;
+      }
+      merged.push({
+        ...event,
+        id: hashString(`leave|${key}|${event.start}|${event.end}`),
+        _leaveMergeKey: key,
+      });
+    }
+  }
+
+  return [...passthrough, ...merged].map(({ _leaveMergeKey, ...event }) => event);
+}
+
+function isMergeableLeaveEvent(event) {
+  return event?.allDay === true && /\bleave\b/i.test(String(event.title || ""));
+}
+
+function normalizedLeaveEventKey(event) {
+  return String(event.title || "")
+    .replace(/^(MMC|DDH|Casey|MCH):\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toUpperCase();
+}
+
+function mergeRawLeaveValues(left, right) {
+  const values = [left, right]
+    .flatMap((item) => String(item || "").split(" / "))
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return [...new Set(values)].join(" / ");
 }
 
 function resolveDefaultLocation(source, location, settings) {

@@ -146,6 +146,7 @@ const andrewHardyMchView = buildRosterView([], [], andrewHardyMch.key, undefined
 assert.ok(andrewHardyMchView.events.some((event) => event.title === "MCH: OCS" && event.rawValue === "0800-1730 OCS"));
 assert.ok(andrewHardyMchView.events.some((event) => event.title === "MCH: Exam Leave" && event.rawValue === "ME/L" && event.allDay));
 assert.ok(andrewHardyMchView.events.some((event) => event.title === "Conference Leave" && event.rawValue === "CME/L" && event.allDay));
+assert.ok(andrewHardyMchView.events.some((event) => event.title === "Conference Leave" && event.rawValue === "CME/L" && event.start === "2026-06-08" && event.end === "2026-06-15"));
 
 const adamWestMchWeek6 = adamWestMchView.events.filter((event) => event.rawValue === "PHNW 0800-1730");
 assert.ok(adamWestMchWeek6.some((event) => event.title === "MCH: PHNW"));
@@ -167,6 +168,29 @@ assert.ok(marianPanlilioMchView.events.some((event) => event.title === "MCH: Sic
 const houshmandMch = mchDoctors.find((doctor) => doctor.displayName === "Houshmand Refaei");
 const houshmandMchView = buildRosterView([], [], houshmandMch.key, undefined, {}, {}, [], [], mchWorkbook);
 assert.equal(houshmandMchView.events.some((event) => String(event.rawValue || "").includes("EDO")), false);
+
+const overlappingConferenceWorkbook = XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(overlappingConferenceWorkbook, XLSX.utils.aoa_to_sheet([
+  ["TERM 2, 2026", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+  ["", "20-Jul", "21-Jul", "22-Jul", "23-Jul", "24-Jul", "25-Jul", "26-Jul"],
+  ["Dr Michael Coman", "C/L", "C/L", "C/L", "C/L", "C/L", "C/L", "C/L"],
+  ["Dr Daily Leave", "Annual Leave", "Annual Leave", "Annual Leave", "Annual Leave", "Annual Leave", "Annual Leave", "Annual Leave"],
+]), "Week 1");
+const michaelComan = doctorOptions([], [], overlappingConferenceWorkbook, mchWorkbook).find((doctor) => doctor.displayName === "Dr Michael Coman");
+assert.ok(michaelComan);
+const michaelComanView = buildRosterView([], [], michaelComan.key, undefined, {}, {}, [], overlappingConferenceWorkbook, mchWorkbook);
+const michaelConferenceEvents = michaelComanView.events.filter((event) => event.title === "Conference Leave" && event.start === "2026-07-20");
+assert.equal(michaelConferenceEvents.length, 1);
+assert.equal(michaelConferenceEvents[0].end, "2026-07-27");
+assert.equal(michaelConferenceEvents[0].rawValue, "C/L / CME/L");
+
+const dailyLeave = doctorOptions([], [], overlappingConferenceWorkbook).find((doctor) => doctor.displayName === "Dr Daily Leave");
+assert.ok(dailyLeave);
+const dailyLeaveView = buildRosterView([], [], dailyLeave.key, undefined, {}, {}, [], overlappingConferenceWorkbook);
+const dailyAnnualLeave = dailyLeaveView.events.filter((event) => event.title === "Annual Leave");
+assert.equal(dailyAnnualLeave.length, 1);
+assert.equal(dailyAnnualLeave[0].start, "2026-07-20");
+assert.equal(dailyAnnualLeave[0].end, "2026-07-27");
 
 const view = buildRosterView(mmcWorkbook, ddhWorkbook, richard.key);
 const summary = previewSummary(view.events);
