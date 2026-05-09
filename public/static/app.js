@@ -4109,22 +4109,22 @@ function claimedEmailForDoctorKey(doctorKey, displayName = "") {
   for (const user of serverUsers) {
     const claims = sanitizeRosterClaims(user?.claims || []);
     if (claims.some((claim) => claim.key === normalizedKey)) {
-      return normalizeEmail(user.email);
+      return currentClaimedAccountEmail(user.email);
     }
   }
   if (normalizedDisplayName) {
     for (const user of serverUsers) {
       const claims = sanitizeRosterClaims(user?.claims || []);
       if (claims.some((claim) => likelySameRosterName(claim.displayName, normalizedDisplayName))) {
-        return normalizeEmail(user.email);
+        return currentClaimedAccountEmail(user.email);
       }
       if (likelySameRosterName(user?.realName || "", normalizedDisplayName)) {
-        return normalizeEmail(user.email);
+        return currentClaimedAccountEmail(user.email);
       }
     }
   }
   const claimedDoctor = availableRosterDoctors.find((doctor) => doctor.key === normalizedKey && doctor.claimedBy);
-  return normalizeEmail(claimedDoctor?.claimedBy || "");
+  return currentClaimedAccountEmail(claimedDoctor?.claimedBy || "");
 }
 
 function canUseDoctorPicker() {
@@ -4183,11 +4183,11 @@ function hideSwitchOverlay() {
 async function switchDoctorSelection(selectedKey, options = {}) {
   const resetRange = options.resetRange !== false;
   doctorSelect.value = selectedKey;
-  const selectedOption = selectedDoctorOptionForKey(selectedKey);
   const canSwitchAsCreator = canUseCreatorDoctorSwitcher();
   if (canSwitchAsCreator && cloudAvailable && !serverUsers.length) {
     await loadServerUsers();
   }
+  const selectedOption = selectedDoctorOptionForKey(selectedKey);
   const claimedEmail = normalizeEmail(selectedOption?.accountEmail || claimedEmailForDoctorKey(selectedKey, selectedOption?.displayName || ""));
   if (canSwitchAsCreator && selectedOption && selectedKey !== OWNER_DOCTOR_KEY) {
     showSwitchOverlay(
@@ -4238,7 +4238,7 @@ function selectedDoctorOptionForKey(selectedKey) {
   const localOption = doctorOptions.find((doctor) => doctor.key === normalizedKey) || null;
   const selectedDomOption = doctorSelect.selectedOptions?.[0] || null;
   if (localOption && (normalizedDoctorSourceTypes(localOption).length || selectedDomOption?.dataset.sourceTypes)) {
-    const accountEmail = normalizeEmail(localOption.accountEmail || selectedDomOption?.dataset.accountEmail || "");
+    const accountEmail = currentClaimedAccountEmail(localOption.accountEmail || selectedDomOption?.dataset.accountEmail || "");
     return {
       ...localOption,
       accountEmail,
@@ -4250,7 +4250,7 @@ function selectedDoctorOptionForKey(selectedKey) {
   }
   if (!selectedDomOption || normalizeRosterName(selectedDomOption.value) !== normalizedKey) {
     if (!localOption) return null;
-    const accountEmail = normalizeEmail(localOption.accountEmail || "");
+    const accountEmail = currentClaimedAccountEmail(localOption.accountEmail || "");
     return {
       ...localOption,
       accountEmail,
@@ -4261,7 +4261,7 @@ function selectedDoctorOptionForKey(selectedKey) {
     .split(",")
     .map((item) => item.trim().toLowerCase())
     .filter(Boolean);
-  const accountEmail = normalizeEmail(selectedDomOption.dataset.accountEmail || "");
+  const accountEmail = currentClaimedAccountEmail(selectedDomOption.dataset.accountEmail || "");
   return {
     key: normalizedKey,
     displayName: selectedDomOption.dataset.displayName || selectedDomOption.textContent.trim(),
@@ -4269,6 +4269,13 @@ function selectedDoctorOptionForKey(selectedKey) {
     accountEmail,
     targetMode: accountEmail ? "claimed-account" : "doctor-profile",
   };
+}
+
+function currentClaimedAccountEmail(email) {
+  const normalizedEmail = normalizeEmail(email);
+  if (!normalizedEmail) return "";
+  if (normalizedEmail === currentUserEmail && (adminViewingEmail || currentUserEmail !== OWNER_EMAIL)) return normalizedEmail;
+  return serverUsers.map(normalizeServerUser).some((user) => user.email === normalizedEmail) ? normalizedEmail : "";
 }
 
 function activeWorkspaceOwnerKey() {
@@ -6849,7 +6856,6 @@ async function deleteAccount(email) {
 
     deleteLocalAccountData(targetEmail);
     clearDeletedAccountClaims(targetEmail);
-    serverUsers = serverUsers.filter((user) => normalizeServerUser(user).email !== targetEmail);
     closeAccountsModal();
 
     if (deletingCurrentAccount && adminViewingEmail && creatorCanDelete) {
@@ -6878,6 +6884,7 @@ async function deleteAccount(email) {
     }
 
     renderAccountsModal();
+    renderDoctorState();
     setStatus(`Deleted ${targetEmail}.`);
   } catch (error) {
     setStatus(error.message || "Account deletion failed.", true);
@@ -6898,7 +6905,9 @@ function deleteLocalAccountData(email) {
 function clearDeletedAccountClaims(email) {
   const targetEmail = normalizeEmail(email);
   if (!targetEmail) return;
-  const deletedClaims = claimsForDeletedAccount(targetEmail);
+  const deletedUser = serverUsers.map(normalizeServerUser).find((item) => item.email === targetEmail)
+    || accountState.users.find((item) => normalizeEmail(item.email) === targetEmail);
+  const deletedClaims = sanitizeRosterClaims(deletedUser?.claims || []);
   serverUsers = serverUsers.filter((user) => normalizeServerUser(user).email !== targetEmail);
   availableRosterDoctors = clearClaimedDoctorMetadata(availableRosterDoctors, targetEmail, deletedClaims);
   doctorOptions = clearClaimedDoctorMetadata(doctorOptions, targetEmail, deletedClaims);
@@ -6914,13 +6923,6 @@ function clearDeletedAccountClaims(email) {
         : currentSnapshot.insightCache,
     });
   }
-}
-
-function claimsForDeletedAccount(email) {
-  const targetEmail = normalizeEmail(email);
-  const user = serverUsers.map(normalizeServerUser).find((item) => item.email === targetEmail)
-    || accountState.users.find((item) => normalizeEmail(item.email) === targetEmail);
-  return sanitizeRosterClaims(user?.claims || []);
 }
 
 function clearClaimedDoctorMetadata(doctors, deletedEmail, deletedClaims = []) {

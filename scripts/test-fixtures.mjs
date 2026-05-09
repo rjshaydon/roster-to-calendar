@@ -729,6 +729,37 @@ await postState(deletionStore, {
 assert.ok(await deletionStore.get("repository:file:keep-roster", "json"));
 assert.ok(await deletionStore.get("repository:file:missing-from-save", "json"));
 
+await seedUser(deletionStore, "claimed-doctor@example.com", "claimed-password");
+const observerBeforeDelete = await postState(deletionStore, {
+  action: "login",
+  email: "observer@example.com",
+  password: "observer-password",
+  mode: "create",
+  realName: "Observer Person",
+});
+assert.equal(
+  observerBeforeDelete.availableDoctors.find((doctor) => doctor.key === "TITUS HACKMAN")?.claimedBy,
+  "claimed-doctor@example.com",
+  "repository doctor should be marked claimed before deleting the linked account",
+);
+await postState(deletionStore, {
+  action: "deleteAccount",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  targetEmail: "claimed-doctor@example.com",
+});
+assert.equal(await deletionStore.get("account:claimed-doctor@example.com", "json"), null, "deleteAccount must remove the claimed account record");
+const observerAfterDelete = await postState(deletionStore, {
+  action: "login",
+  email: "observer@example.com",
+  password: "observer-password",
+});
+assert.equal(
+  observerAfterDelete.availableDoctors.find((doctor) => doctor.key === "TITUS HACKMAN")?.claimedBy || "",
+  "",
+  "repository doctor should become unclaimed after deleting the linked account",
+);
+
 await seedUser(deletionStore, "user@example.com", "user-password");
 await postState(deletionStore, {
   action: "save",
