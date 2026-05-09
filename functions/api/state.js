@@ -1397,7 +1397,9 @@ function repositoryImportRefsForAccount(index, record) {
   const claims = sanitizeClaims(record?.claims);
   const claimKeys = new Set(claims.map((claim) => claim.key));
   const claimMarkers = new Set(claims.map((claim) => `${claim.sourceType}:${claim.key}`));
+  const claimIdentityKeys = new Set(claims.flatMap((claim) => [rosterIdentityKey(claim.displayName), rosterIdentityKey(claim.key)]).filter(Boolean));
   const realName = String(record?.realName || "").trim();
+  const realIdentityKey = rosterIdentityKey(realName);
   const refs = [];
   const existingRefIds = new Set(sanitizeState(record?.state).imports.map((item) => item?.repoId || item?.repositoryId || item?.id).filter(Boolean));
   for (const file of index.files || []) {
@@ -1409,6 +1411,8 @@ function repositoryImportRefsForAccount(index, record) {
     const hasAccountDoctor = sanitizeRepositoryDoctors(file.doctors).some((doctor) => (
       claimMarkers.has(`${doctor.sourceType}:${doctor.key}`)
       || claimKeys.has(doctor.key)
+      || (realIdentityKey && rosterIdentityKey(doctor.displayName || doctor.key) === realIdentityKey)
+      || claimIdentityKeys.has(rosterIdentityKey(doctor.displayName || doctor.key))
       || doctorMatchesRealName(doctor, realName)
     ));
     if (hasAccountDoctor) refs.push(repositoryImportRef(file));
@@ -1710,8 +1714,11 @@ function sameClaim(left, right) {
 
 function doctorMatchesRealName(doctor, realName) {
   const realKey = normalizeRosterName(realName);
+  const realIdentityKey = rosterIdentityKey(realName);
+  const doctorIdentityKey = rosterIdentityKey(doctor.displayName || doctor.key);
   if (!realKey) return false;
   if (doctor.key === realKey) return true;
+  if (realIdentityKey && doctorIdentityKey && realIdentityKey === doctorIdentityKey) return true;
   if (nameTokenMatch(realName, doctor.displayName)) return true;
   return likelySameRosterName(realName, doctor.displayName);
 }
@@ -1735,7 +1742,11 @@ function likelySameRosterName(left, right) {
 }
 
 function rosterNameTokens(value) {
-  return normalizeRosterName(value).split(" ").filter(Boolean);
+  return rosterIdentityKey(value).split(" ").filter(Boolean);
+}
+
+function rosterIdentityKey(value) {
+  return normalizeRosterName(value).replace(/^(DR|DOCTOR|MR|MRS|MS|MISS|PROF|PROFESSOR|A PROF|ASSOC PROF)\s+/, "");
 }
 
 async function hashPassword(password, salt = randomSalt()) {

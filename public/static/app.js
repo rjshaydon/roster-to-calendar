@@ -4309,7 +4309,9 @@ function prioritizeDoctorOptions(options) {
 
 function doctorMatchesCurrentAccount(doctor) {
   const claimKeys = new Set(currentRosterClaims.map((claim) => claim.key));
+  const claimIdentityKeys = new Set(currentRosterClaims.flatMap((claim) => [rosterIdentityKey(claim.displayName), rosterIdentityKey(claim.key)]).filter(Boolean));
   if (claimKeys.has(doctor.key)) return true;
+  if (claimIdentityKeys.has(rosterIdentityKey(doctor.displayName || doctor.key))) return true;
   return likelySameRosterName(currentAccount().realName, doctor.displayName);
 }
 
@@ -4348,12 +4350,18 @@ function likelySameRosterName(left, right) {
 }
 
 function rosterNameTokens(value) {
+  return rosterIdentityKey(value)
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+function rosterIdentityKey(value) {
   return String(value || "")
     .replace(/[^A-Za-z0-9]+/g, " ")
     .trim()
     .toUpperCase()
-    .split(/\s+/)
-    .filter(Boolean);
+    .replace(/\s+/g, " ")
+    .replace(/^(DR|DOCTOR|MR|MRS|MS|MISS|PROF|PROFESSOR|A PROF|ASSOC PROF)\s+/, "");
 }
 
 function doctorMetadataForKey(doctorKey) {
@@ -9047,7 +9055,8 @@ async function bootstrapImports() {
     }
     renderFilesList();
     if (currentSnapshot?.preview && currentSnapshot.doctorOptions?.length) {
-      if (currentSnapshotStale && selectedFiles.length) {
+      const snapshotInvalid = snapshotHasUnresolvablePreviewEvents(currentSnapshot);
+      if ((currentSnapshotStale || snapshotInvalid) && selectedFiles.length) {
         setStatus("Refreshing calendar...");
         await ensureSelectedFilesLoaded();
         if (selectedFiles.length) {
@@ -9058,7 +9067,7 @@ async function bootstrapImports() {
       }
       renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
       scheduleInsightWarmup();
-      if (currentSnapshotStale) {
+      if (currentSnapshotStale || snapshotInvalid) {
         setStatus("Refreshing calendar...");
         void refreshSnapshotInBackground();
       } else {
@@ -9080,6 +9089,14 @@ async function bootstrapImports() {
     renderFilesList();
     setStatus("Browser storage is unavailable. You can still import files for this session.", true);
   }
+}
+
+function snapshotHasUnresolvablePreviewEvents(snapshot) {
+  const events = Array.isArray(snapshot?.preview?.events) ? snapshot.preview.events : [];
+  if (!events.length) return false;
+  const reviewIds = new Set(Array.isArray(snapshot?.preview?.review) ? snapshot.preview.review.map((item) => item?.id).filter(Boolean) : []);
+  if (!reviewIds.size) return true;
+  return events.some((event) => event?.id && !reviewIds.has(event.id));
 }
 
 function renderWorkspaceFromSnapshot(snapshot, session = {}) {

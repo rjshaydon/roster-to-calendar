@@ -296,20 +296,38 @@ export function doctorOptions(mmcSources, ddhSources, caseySources = [], mchSour
       if (!mchNames.has(key)) mchNames.set(key, value);
     }
   }
-  const keys = [...new Set([...mmcNames.keys(), ...ddhNames.keys(), ...caseyNames.keys(), ...mchNames.keys()])].sort();
+  return mergedDoctorOptions([
+    ["mmc", mmcNames],
+    ["ddh", ddhNames],
+    ["casey", caseyNames],
+    ["mch", mchNames],
+  ]);
+}
 
-  return keys.map((key) => {
-    const sourceTypes = [];
-    if (mmcNames.has(key)) sourceTypes.push("mmc");
-    if (ddhNames.has(key)) sourceTypes.push("ddh");
-    if (caseyNames.has(key)) sourceTypes.push("casey");
-    if (mchNames.has(key)) sourceTypes.push("mch");
+function mergedDoctorOptions(sourceMaps) {
+  const groups = new Map();
+  for (const [sourceType, names] of sourceMaps) {
+    for (const [key, displayName] of names) {
+      const identity = rosterIdentityKey(displayName || key);
+      if (!identity) continue;
+      if (!groups.has(identity)) groups.set(identity, []);
+      groups.get(identity).push({ sourceType, key, displayName });
+    }
+  }
+  return [...groups.values()].map((aliases) => {
+    aliases.sort((left, right) => sourcePriority(left.sourceType) - sourcePriority(right.sourceType) || left.displayName.localeCompare(right.displayName));
+    const primary = aliases[0];
     return {
-      key,
-      displayName: mmcNames.get(key) || ddhNames.get(key) || caseyNames.get(key) || mchNames.get(key),
-      sourceTypes,
+      key: primary.key,
+      displayName: primary.displayName,
+      sourceTypes: [...new Set(aliases.map((alias) => alias.sourceType))],
+      aliases: aliases.map((alias) => ({ ...alias })),
     };
-  });
+  }).sort((left, right) => left.displayName.localeCompare(right.displayName));
+}
+
+function sourcePriority(sourceType) {
+  return { mmc: 0, ddh: 1, casey: 2, mch: 3 }[sourceType] ?? 99;
 }
 
 export function buildRosterView(mmcSources, ddhSources, doctorKey, settings = DEFAULT_SETTINGS, overrides = {}, conflictSelections = {}, doctorAliases = [], caseySources = [], mchSources = []) {
@@ -3003,6 +3021,10 @@ function looksLikePersonName(value) {
 
 function normalizeName(value) {
   return String(value).replace(/[^A-Za-z0-9]+/g, " ").trim().replace(/\s+/g, " ").toUpperCase();
+}
+
+function rosterIdentityKey(value) {
+  return normalizeName(value).replace(/^(DR|DOCTOR|MR|MRS|MS|MISS|PROF|PROFESSOR|A PROF|ASSOC PROF)\s+/, "");
 }
 
 function cleanText(value) {

@@ -67,6 +67,16 @@ assert.ok(doctors.find((doctor) => doctor.displayName === "Patrick Tan"));
 assert.equal(doctors.find((doctor) => doctor.displayName === "Aarushi Pathania"), undefined);
 assert.equal(doctors.find((doctor) => doctor.displayName === "HMO MUST BE"), undefined);
 
+const michaelMerged = doctorOptions(mmcWorkbook, [], [], mchWorkbook).filter((doctor) => doctor.displayName.toUpperCase().includes("MICHAEL COMAN"));
+assert.equal(michaelMerged.length, 1);
+assert.deepEqual(michaelMerged[0].sourceTypes, ["mmc", "mch"]);
+assert.ok(michaelMerged[0].aliases.some((alias) => alias.sourceType === "mmc" && alias.key === "MICHAEL COMAN"));
+assert.ok(michaelMerged[0].aliases.some((alias) => alias.sourceType === "mch" && alias.key === "DR MICHAEL COMAN"));
+const michaelMergedView = buildRosterView(mmcWorkbook, [], michaelMerged[0].key, undefined, {}, {}, michaelMerged[0].aliases, [], mchWorkbook);
+assert.ok(michaelMergedView.events.some((event) => event.source === "MMC"));
+assert.ok(michaelMergedView.events.some((event) => event.source === "MCH"));
+assert.ok(michaelMergedView.events.some((event) => event.title === "Conference Leave"));
+
 const markDouglas = doctors.find((doctor) => doctor.displayName === "Mark Douglas");
 assert.ok(markDouglas);
 const markView = buildRosterView(mmcWorkbook, [], markDouglas.key);
@@ -193,6 +203,22 @@ assert.equal(dailyAnnualLeave.length, 1);
 assert.equal(dailyAnnualLeave[0].start, "2026-07-20");
 assert.equal(dailyAnnualLeave[0].end, "2026-07-27");
 assert.ok(dailyLeaveView.reviewItems.some((item) => item.id === dailyAnnualLeave[0].id));
+
+const michaelAnnualWorkbook = XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(michaelAnnualWorkbook, XLSX.utils.aoa_to_sheet([
+  ["TERM 2, 2026", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+  ["", "27-Jul", "28-Jul", "29-Jul", "30-Jul", "31-Jul", "1-Aug", "2-Aug"],
+  ["Michael Coman", "Annual Leave", "Annual Leave", "Annual Leave", "Annual Leave", "Annual Leave", "Annual Leave", "Annual Leave"],
+]), "Week 1");
+const michaelAnnualOption = doctorOptions([], [], michaelAnnualWorkbook, mchWorkbook).find((doctor) => doctor.displayName === "Michael Coman");
+assert.ok(michaelAnnualOption);
+assert.deepEqual(michaelAnnualOption.sourceTypes, ["casey", "mch"]);
+const michaelAnnualView = buildRosterView([], [], michaelAnnualOption.key, undefined, {}, {}, michaelAnnualOption.aliases, michaelAnnualWorkbook, mchWorkbook);
+const michaelAnnualEvents = michaelAnnualView.events.filter((event) => event.title === "Annual Leave");
+assert.equal(michaelAnnualEvents.length, 1);
+assert.equal(michaelAnnualEvents[0].start, "2026-07-27");
+assert.equal(michaelAnnualEvents[0].end, "2026-08-03");
+assert.ok(michaelAnnualView.events.some((event) => event.source === "MCH"));
 
 const view = buildRosterView(mmcWorkbook, ddhWorkbook, richard.key);
 const summary = previewSummary(view.events);
@@ -355,6 +381,46 @@ const creatorImports = await postState(stateStore, {
 });
 assert.equal(creatorImports.imports.length, 1);
 assert.equal(creatorImports.imports[0].repoId, "fixture-roster");
+
+const michaelStateStore = new MemoryStore();
+await postState(michaelStateStore, {
+  action: "login",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+});
+await seedRepository(michaelStateStore, [
+  repositoryFile("michael-mmc", {
+    name: "michael-mmc.xlsx",
+    sourceType: "mmc",
+    doctors: [{ key: "MICHAEL COMAN", displayName: "Michael COMAN", sourceType: "mmc" }],
+  }),
+  repositoryFile("michael-mch", {
+    name: "michael-mch.xlsx",
+    sourceType: "mch",
+    doctors: [{ key: "DR MICHAEL COMAN", displayName: "Dr Michael Coman", sourceType: "mch" }],
+  }),
+]);
+await seedUser(michaelStateStore, "michael@example.com", "michael-password", "Michael Coman");
+await postState(michaelStateStore, {
+  action: "claimRosterName",
+  email: "michael@example.com",
+  password: "michael-password",
+  claim: { sourceType: "mmc", key: "MICHAEL COMAN" },
+});
+const michaelDirectLogin = await postState(michaelStateStore, {
+  action: "login",
+  email: "michael@example.com",
+  password: "michael-password",
+});
+assert.deepEqual(michaelDirectLogin.state.imports.map((item) => item.repoId).sort(), ["michael-mch", "michael-mmc"]);
+assert.ok(michaelDirectLogin.claims.some((claim) => claim.sourceType === "mch" && claim.key === "DR MICHAEL COMAN"));
+const michaelAdminLoad = await postState(michaelStateStore, {
+  action: "adminLoadUser",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  targetEmail: "michael@example.com",
+});
+assert.deepEqual(michaelAdminLoad.state.imports.map((item) => item.repoId).sort(), ["michael-mch", "michael-mmc"]);
 
 const profileImports = await postState(stateStore, {
   action: "loadDoctorProfileImports",
