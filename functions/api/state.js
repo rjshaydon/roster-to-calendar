@@ -773,7 +773,7 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
   });
   const snapshot = await loadSnapshotRecord(store, owner.ownerType, owner.ownerId);
   const snapshotAvailable = Boolean(snapshot);
-  const snapshotStale = !snapshot || snapshot.buildStamp !== buildStamp;
+  const snapshotStale = !snapshot || snapshot.schemaVersion !== SNAPSHOT_SCHEMA_VERSION || snapshot.buildStamp !== buildStamp;
   const issueConfig = await buildIssueConfig(store, record.email);
 
   return {
@@ -1320,6 +1320,7 @@ async function buildAccountSnapshotStamp(store, context) {
         email: context?.email || "",
         realName: context?.realName || "",
         claims: context?.claims || [],
+        state: context?.state || {},
       });
   const fileMarkers = refs.map((ref) => ({
     id: ref.id,
@@ -1398,8 +1399,13 @@ function repositoryImportRefsForAccount(index, record) {
   const claimMarkers = new Set(claims.map((claim) => `${claim.sourceType}:${claim.key}`));
   const realName = String(record?.realName || "").trim();
   const refs = [];
+  const existingRefIds = new Set(sanitizeState(record?.state).imports.map((item) => item?.repoId || item?.repositoryId || item?.id).filter(Boolean));
   for (const file of index.files || []) {
     if (file.active === false) continue;
+    if (existingRefIds.has(file.id)) {
+      refs.push(repositoryImportRef(file));
+      continue;
+    }
     const hasAccountDoctor = sanitizeRepositoryDoctors(file.doctors).some((doctor) => (
       claimMarkers.has(`${doctor.sourceType}:${doctor.key}`)
       || claimKeys.has(doctor.key)

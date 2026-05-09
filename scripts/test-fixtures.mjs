@@ -183,6 +183,7 @@ const michaelConferenceEvents = michaelComanView.events.filter((event) => event.
 assert.equal(michaelConferenceEvents.length, 1);
 assert.equal(michaelConferenceEvents[0].end, "2026-07-27");
 assert.equal(michaelConferenceEvents[0].rawValue, "C/L / CME/L");
+assert.ok(michaelComanView.reviewItems.some((item) => item.id === michaelConferenceEvents[0].id));
 
 const dailyLeave = doctorOptions([], [], overlappingConferenceWorkbook).find((doctor) => doctor.displayName === "Dr Daily Leave");
 assert.ok(dailyLeave);
@@ -191,6 +192,7 @@ const dailyAnnualLeave = dailyLeaveView.events.filter((event) => event.title ===
 assert.equal(dailyAnnualLeave.length, 1);
 assert.equal(dailyAnnualLeave[0].start, "2026-07-20");
 assert.equal(dailyAnnualLeave[0].end, "2026-07-27");
+assert.ok(dailyLeaveView.reviewItems.some((item) => item.id === dailyAnnualLeave[0].id));
 
 const view = buildRosterView(mmcWorkbook, ddhWorkbook, richard.key);
 const summary = previewSummary(view.events);

@@ -2704,13 +2704,11 @@ function mergeContiguousLeaveEvents(events) {
         previous.end = event.end > previous.end ? event.end : previous.end;
         previous.rawValue = mergeRawLeaveValues(previous.rawValue, event.rawValue);
         previous.sources = mergeLeaveSources(previous.sources, event.sources, previous.source, event.source);
-        previous.id = hashString(`leave|${key}|${previous.start}|${previous.end}`);
         continue;
       }
       merged.push({
         ...event,
         sources: mergeLeaveSources(event.sources, null, event.source),
-        id: hashString(`leave|${key}|${event.start}|${event.end}`),
         _leaveMergeKey: key,
       });
     }
