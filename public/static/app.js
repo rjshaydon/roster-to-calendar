@@ -157,7 +157,6 @@ const ACCOUNT_WORKSPACES_KEY = "roster-account-workspaces-v1";
 const CURRENT_EMAIL_KEY = "roster-current-email";
 const CURRENT_PASSWORD_KEY = "roster-current-password";
 const PERSISTENT_PASSWORD_KEY = "roster-persistent-password";
-const SIX_MONTH_LIMIT_DAYS = 183;
 const SETTINGS_FIELDS = [
   "showSourcePrefix",
   "showAmPm",
@@ -255,7 +254,6 @@ let activeCalendarContext = initialCalendarContext();
 let cloudAvailable = false;
 let cloudSaveTimer = 0;
 let pendingCloudSaveSnapshot = null;
-let enforcingRosterLimit = false;
 let serverUsers = [];
 let currentRosterClaims = [];
 let latestNameMatches = [];
@@ -902,8 +900,15 @@ preview.addEventListener("change", (event) => {
   }
 
   const rangeInput = event.target.closest("[data-range-input]");
-  if (!rangeInput) return;
-  applyPreviewRangeChange(rangeInput.dataset.rangeInput, rangeInput.value);
+  if (rangeInput) {
+    applyPreviewRangeChange(rangeInput.dataset.rangeInput, rangeInput.value);
+    return;
+  }
+
+  const termStartSelect = event.target.closest("[data-preview-term-start]");
+  if (termStartSelect) {
+    applyPreviewTermStart(termStartSelect.value);
+  }
 });
 preview.addEventListener("change", (event) => {
   const hospitalSelect = event.target.closest("[data-preview-hospital-filter]");
@@ -1948,7 +1953,6 @@ function rebuildClientPreview() {
   const doctor = selectedDoctor();
   if (!doctor) return;
   const view = buildClientPreviewData(latestPreview);
-  if (enforceSixMonthLimit(view)) return;
   renderConflicts(view.conflicts || []);
   renderPreviewGrid(doctor, view);
   renderIssues(view.issues || []);
@@ -1968,6 +1972,7 @@ function buildClientPreviewData(baseData) {
 
   const previewStart = boundedPreviewStart(settings.dateFrom, range.start);
   const previewEnd = boundedPreviewEnd(settings.dateTo, range.end);
+  const terms = availablePreviewTerms(baseData.events || []);
   return {
     ...baseData,
     events,
@@ -1975,6 +1980,7 @@ function buildClientPreviewData(baseData) {
     date_range: formatPreviewRange(previewStart, previewEnd) || (events.length ? summarizeEvents(events) : "No events found"),
     previewStart,
     previewEnd,
+    terms,
     hospitals: availablePreviewHospitals,
     lastImport: latestImportTimestamp(),
     issues: [
@@ -2033,6 +2039,33 @@ function availableHospitalsForPreview(events) {
   return [...codes]
     .filter((code) => code === "MMC" || code === "DDH" || code === "Casey" || code === "MCH")
     .sort();
+}
+
+function availablePreviewTerms(events) {
+  const eventRange = deriveRangeBounds(events || []);
+  if (!eventRange.start || !eventRange.end) return [];
+  let term = australianTermForDate(parseDateOnly(eventRange.start));
+  const lastTerm = australianTermForDate(parseDateOnly(eventRange.end));
+  const terms = [];
+  while (term.year < lastTerm.year || (term.year === lastTerm.year && term.termNumber <= lastTerm.termNumber)) {
+    terms.push({
+      label: formatAustralianTermLabel(term),
+      value: formatDateKey(term.start),
+      year: term.year,
+      termNumber: term.termNumber,
+    });
+    term = nextAustralianTerm(term);
+  }
+  return terms;
+}
+
+function selectedPreviewTermValue(terms, previewStart) {
+  if (!terms.length || !previewStart) return "";
+  const start = parseDateOnly(previewStart);
+  const selectedTerm = australianTermForDate(start);
+  const selectedValue = formatDateKey(selectedTerm.start);
+  if (terms.some((term) => term.value === selectedValue)) return selectedValue;
+  return terms[0]?.value || "";
 }
 
 function displaySourceCode(value) {
@@ -2124,35 +2157,6 @@ function filterEventsByExportRange(events, startDateKey = "", endDateKey = "") {
 async function buildBrowserExportEvents(doctor, exportConfig = { mode: "full" }) {
   const baseData = await ensureBasePreviewData(doctor);
   return buildExportEventsFromBase(baseData, exportConfig);
-}
-
-function enforceSixMonthLimit(view) {
-  if (currentUserRole === "creator" || enforcingRosterLimit || !view.events?.length) return false;
-  const range = deriveRangeBounds(view.events);
-  if (!range.start || !range.end) return false;
-  const latest = parseDateOnly(range.end);
-  const cutoff = addDays(latest, -SIX_MONTH_LIMIT_DAYS);
-  const cutoffKey = formatDateKey(cutoff);
-  if (range.start >= cutoffKey || settings.dateFrom >= cutoffKey) return false;
-
-  const ok = window.confirm(
-    `Standard accounts can keep the latest 6 months of roster active. This upload extends before ${formatDate(cutoffKey)}. Delete/hide events before that date and keep the latest roster period?`,
-  );
-  if (!ok) {
-    exportButton.disabled = true;
-    mobileExportButton.disabled = true;
-    setStatus("Export disabled until the roster is limited to 6 months.", true);
-    return false;
-  }
-
-  enforcingRosterLimit = true;
-  settings.dateFrom = cutoffKey;
-  renderSettings();
-  saveCurrentSessionState();
-  rebuildClientPreview();
-  enforcingRosterLimit = false;
-  setStatus("Roster limited to the latest 6 months for this account.");
-  return true;
 }
 
 function renderConflicts(items) {
@@ -2348,6 +2352,8 @@ function renderPreviewHospitalSelector(hospitals) {
 function renderPreviewRangeControls(start, end) {
   const fromValue = start || "";
   const toValue = end || "";
+  const terms = latestPreview ? availablePreviewTerms(latestPreview.events || []) : [];
+  const selectedTermValue = selectedPreviewTermValue(terms, fromValue);
   return `
     <div class="preview-range-controls">
       <span class="preview-range-label">From</span>
@@ -2361,6 +2367,16 @@ function renderPreviewRangeControls(start, end) {
       </button>
       <input class="preview-range-input" type="date" value="${escapeHtml(toValue)}" data-range-input="to" tabindex="-1" aria-hidden="true">
       <button type="button" class="button button-secondary preview-today-button" data-range-today>Today</button>
+      ${terms.length ? `
+        <label class="preview-term-start-control">
+          <span class="preview-range-label">From</span>
+          <select class="preview-range-button preview-term-start-select" data-preview-term-start>
+            ${terms.map((term) => `
+              <option value="${escapeHtml(term.value)}" ${term.value === selectedTermValue ? "selected" : ""}>${escapeHtml(term.label)}</option>
+            `).join("")}
+          </select>
+        </label>
+      ` : ""}
     </div>
   `;
 }
@@ -4770,42 +4786,37 @@ function deriveRangeBounds(events) {
 function deriveDefaultPreviewRange(events) {
   const today = new Date();
   const currentTerm = australianTermForDate(today);
-  const currentTermStart = formatDateKey(currentTerm.start);
+  const defaultStartDate = defaultPreviewStartForTerm(currentTerm, today);
+  const defaultStart = formatDateKey(defaultStartDate);
   const currentTermEnd = formatDateKey(addDays(currentTerm.end, -1));
   const eventRange = deriveRangeBounds(events || []);
-  const earliestEventTerm = eventRange.start ? australianTermForDate(parseDateOnly(eventRange.start)) : currentTerm;
   const latestEventTerm = eventRange.end ? australianTermForDate(parseDateOnly(eventRange.end)) : currentTerm;
-  const earliestEventTermStart = formatDateKey(earliestEventTerm.start);
   const latestEventTermEnd = formatDateKey(addDays(latestEventTerm.end, -1));
   return {
-    start: eventRange.start ? minDateKey(earliestEventTermStart, currentTermStart) : currentTermStart,
+    start: defaultStart,
     end: maxDateKey(latestEventTermEnd, currentTermEnd),
   };
 }
 
 function shouldApplyDefaultPreviewRange(options, events) {
   if (options.resetRange || !settings.dateFrom || !settings.dateTo) return true;
+  const defaultRange = deriveDefaultPreviewRange(events || []);
+  if (!defaultRange.start || !defaultRange.end) return false;
+  if (settings.dateFrom === defaultRange.start && settings.dateTo === defaultRange.end) return true;
   const eventRange = deriveRangeBounds(events || []);
-  if (!eventRange.start || !eventRange.end) return false;
-  return settings.dateFrom === eventRange.start && settings.dateTo === eventRange.end;
+  return Boolean(eventRange.start && eventRange.end && settings.dateFrom === eventRange.start && settings.dateTo === eventRange.end);
 }
 
 function boundedPreviewStart(value, defaultStart) {
   if (!defaultStart) return value || "";
   if (!value) return defaultStart;
-  return minDateKey(value, defaultStart);
+  return value;
 }
 
 function boundedPreviewEnd(value, defaultEnd) {
   if (!defaultEnd) return value || "";
   if (!value) return defaultEnd;
   return maxDateKey(value, defaultEnd);
-}
-
-function minDateKey(left, right) {
-  if (!left) return right || "";
-  if (!right) return left || "";
-  return left < right ? left : right;
 }
 
 function maxDateKey(left, right) {
@@ -4863,6 +4874,26 @@ function applyPreviewRangeChange(which, value) {
   rebuildClientPreview();
   saveCurrentSessionState();
   setStatus("Preview range updated.");
+}
+
+function applyPreviewTermStart(value) {
+  if (!value) return;
+  settings.dateFrom = value;
+  if (settings.dateTo && settings.dateTo < value) settings.dateTo = value;
+  if (settingsInputs.dateFrom) settingsInputs.dateFrom.value = settings.dateFrom;
+  if (settingsInputs.dateTo) settingsInputs.dateTo.value = settings.dateTo;
+  pendingPreviewSnapToToday = true;
+  rebuildClientPreview();
+  saveCurrentSessionState();
+  setStatus("Preview start term updated.");
+}
+
+function defaultPreviewStartForTerm(term, today = new Date()) {
+  const oneMonthAfterTermStart = addDays(term.start, 28);
+  if (today >= term.start && today < oneMonthAfterTermStart) {
+    return addDays(term.start, -28);
+  }
+  return term.start;
 }
 
 function targetForCurrentPreviewMonth() {
@@ -4977,6 +5008,10 @@ function buildAustralianTerm(year, termNumber, startMonthIndex) {
     start,
     end,
   };
+}
+
+function formatAustralianTermLabel(term) {
+  return `Term ${term.termNumber} ${term.year}`;
 }
 
 function startMonthIndexForTerm(termNumber) {
