@@ -404,6 +404,7 @@ export async function onRequestPost(context) {
         await context.env.ROSTER_STORE.delete(snapshotKey(owner.ownerType, owner.ownerId));
       }
       await context.env.ROSTER_STORE.delete(storageKey(deleteEmail));
+      await clearDeletedAccountClaimMetadata(context.env.ROSTER_STORE, deleteEmail, record);
       return Response.json({ ok: true, deletedEmail: deleteEmail });
     }
 
@@ -1592,6 +1593,33 @@ async function claimedRosterNames(store) {
     }
   }
   return claimed;
+}
+
+async function clearDeletedAccountClaimMetadata(store, email, record) {
+  const deletedEmail = normalizeEmail(email);
+  if (!deletedEmail) return;
+  const deletedClaims = sanitizeClaims(record?.claims);
+  if (!deletedClaims.length) return;
+  await removeDeletedClaimsFromRemainingAccounts(store, deletedEmail, deletedClaims);
+}
+
+async function removeDeletedClaimsFromRemainingAccounts(store, deletedEmail, deletedClaims) {
+  const result = await store.list({ prefix: "account:" });
+  for (const item of result.keys || []) {
+    const record = await store.get(item.name, "json").catch(() => null);
+    const email = normalizeEmail(record?.email || item.name.replace(/^account:/, ""));
+    if (!record || email === deletedEmail) continue;
+    const claims = sanitizeClaims(record.claims);
+    const filtered = claims.filter((claim) => !deletedClaims.some((deletedClaim) => sameClaim(claim, deletedClaim)));
+    if (filtered.length === claims.length) continue;
+    await store.put(item.name, JSON.stringify({
+      ...record,
+      claims: filtered,
+      updatedAt: new Date().toISOString(),
+    }));
+    const owner = accountSnapshotOwner(email, record.role || roleForEmail(email));
+    await store.delete(snapshotKey(owner.ownerType, owner.ownerId));
+  }
 }
 
 function findRepositoryDoctor(index, rawClaim) {

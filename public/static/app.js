@@ -6756,6 +6756,7 @@ async function deleteAccount(email) {
     }
 
     deleteLocalAccountData(targetEmail);
+    clearDeletedAccountClaims(targetEmail);
     serverUsers = serverUsers.filter((user) => normalizeServerUser(user).email !== targetEmail);
     closeAccountsModal();
 
@@ -6800,6 +6801,53 @@ function deleteLocalAccountData(email) {
   const store = loadWorkspaceStore();
   delete store[email];
   saveWorkspaceStore(store);
+}
+
+function clearDeletedAccountClaims(email) {
+  const targetEmail = normalizeEmail(email);
+  if (!targetEmail) return;
+  const deletedClaims = claimsForDeletedAccount(targetEmail);
+  serverUsers = serverUsers.filter((user) => normalizeServerUser(user).email !== targetEmail);
+  availableRosterDoctors = clearClaimedDoctorMetadata(availableRosterDoctors, targetEmail, deletedClaims);
+  doctorOptions = clearClaimedDoctorMetadata(doctorOptions, targetEmail, deletedClaims);
+  if (currentSnapshot) {
+    currentSnapshot = sanitizeWorkspaceSnapshot({
+      ...currentSnapshot,
+      doctorOptions: clearClaimedDoctorMetadata(currentSnapshot.doctorOptions || [], targetEmail, deletedClaims),
+      insightCache: currentSnapshot.insightCache
+        ? {
+            ...currentSnapshot.insightCache,
+            doctorOptions: clearClaimedDoctorMetadata(currentSnapshot.insightCache.doctorOptions || [], targetEmail, deletedClaims),
+          }
+        : currentSnapshot.insightCache,
+    });
+  }
+}
+
+function claimsForDeletedAccount(email) {
+  const targetEmail = normalizeEmail(email);
+  const user = serverUsers.map(normalizeServerUser).find((item) => item.email === targetEmail)
+    || accountState.users.find((item) => normalizeEmail(item.email) === targetEmail);
+  return sanitizeRosterClaims(user?.claims || []);
+}
+
+function clearClaimedDoctorMetadata(doctors, deletedEmail, deletedClaims = []) {
+  if (!Array.isArray(doctors)) return [];
+  const normalizedEmail = normalizeEmail(deletedEmail);
+  const claimMarkers = new Set(sanitizeRosterClaims(deletedClaims).map((claim) => `${claim.sourceType}:${claim.key}`));
+  const claimKeys = new Set(sanitizeRosterClaims(deletedClaims).map((claim) => claim.key));
+  return doctors.map((doctor) => {
+    const sourceTypes = normalizedDoctorSourceTypes(doctor);
+    const markers = sourceTypes.map((sourceType) => `${sourceType}:${doctor.key}`);
+    const claimedByDeletedEmail = normalizedEmail && normalizeEmail(doctor.accountEmail || doctor.claimedBy || "") === normalizedEmail;
+    const matchesDeletedClaim = markers.some((marker) => claimMarkers.has(marker)) || claimKeys.has(doctor.key);
+    if (!claimedByDeletedEmail && !matchesDeletedClaim) return doctor;
+    const cleaned = { ...doctor };
+    delete cleaned.accountEmail;
+    delete cleaned.claimedBy;
+    delete cleaned.claimedByName;
+    return cleaned;
+  });
 }
 
 async function enterUserAccount(email) {
