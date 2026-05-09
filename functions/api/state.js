@@ -6,7 +6,7 @@ const REPOSITORY_FILE_PREFIX = "repository:file:";
 const DOCTOR_PROFILE_PREFIX = "doctor-profile:";
 const SUBSCRIPTION_TOKEN_PREFIX = "subscription:token:";
 const SNAPSHOT_PREFIX = "snapshot:";
-const SNAPSHOT_SCHEMA_VERSION = 3;
+const SNAPSHOT_SCHEMA_VERSION = 4;
 const ADMIN_ISSUE_DISMISS_PREFIX = "admin-issue-dismiss:";
 const ADMIN_ISSUE_IGNORE_PREFIX = "admin-issue-ignore:";
 const PARSER_EXTENSION_RULES_KEY = "parser-extension-rules:v1";
@@ -1133,7 +1133,7 @@ function sanitizeRepositoryDoctors(doctors) {
   return doctors
     .map((doctor) => ({
       key: normalizeRosterName(doctor?.key || ""),
-      displayName: String(doctor?.displayName || "").trim(),
+      displayName: formatRosterDisplayName(doctor?.displayName || doctor?.key || ""),
       sourceType: String(doctor?.sourceType || "").toLowerCase(),
     }))
     .filter((doctor) => doctor.key && doctor.displayName);
@@ -1214,7 +1214,7 @@ function sanitizeAvailableDoctors(value) {
   return value
     .map((doctor) => ({
       key: normalizeRosterName(doctor?.key || ""),
-      displayName: String(doctor?.displayName || "").trim(),
+      displayName: formatRosterDisplayName(doctor?.displayName || doctor?.key || ""),
       sourceType: String(doctor?.sourceType || "").toLowerCase(),
       sourceTypes: sanitizeSourceTypes(doctor?.sourceTypes || (doctor?.sourceType ? [doctor.sourceType] : [])),
       claimedBy: normalizeEmail(doctor?.claimedBy || ""),
@@ -1223,7 +1223,7 @@ function sanitizeAvailableDoctors(value) {
       aliases: Array.isArray(doctor?.aliases)
         ? doctor.aliases.map((alias) => ({
             key: normalizeRosterName(alias?.key || ""),
-            displayName: String(alias?.displayName || "").trim(),
+            displayName: formatRosterDisplayName(alias?.displayName || alias?.key || ""),
             sourceType: String(alias?.sourceType || "").toLowerCase(),
           })).filter((alias) => alias.key && alias.displayName)
         : [],
@@ -1747,6 +1747,17 @@ function rosterNameTokens(value) {
 
 function rosterIdentityKey(value) {
   return normalizeRosterName(value).replace(/^(DR|DOCTOR|MR|MRS|MS|MISS|PROF|PROFESSOR|A PROF|ASSOC PROF)\s+/, "");
+}
+
+function formatRosterDisplayName(value) {
+  const identity = rosterIdentityKey(value);
+  const tokens = identity.split(" ").filter(Boolean);
+  if (!tokens.length) return String(value || "").trim();
+  return tokens.map((token, index) => index === tokens.length - 1 ? token : toDisplayNameToken(token)).join(" ");
+}
+
+function toDisplayNameToken(value) {
+  return value.charAt(0).toUpperCase() + value.slice(1).toLowerCase();
 }
 
 async function hashPassword(password, salt = randomSalt()) {

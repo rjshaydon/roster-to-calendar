@@ -319,9 +319,9 @@ function mergedDoctorOptions(sourceMaps) {
     const primary = aliases[0];
     return {
       key: primary.key,
-      displayName: primary.displayName,
+      displayName: formatDoctorDisplayName(primary.displayName),
       sourceTypes: [...new Set(aliases.map((alias) => alias.sourceType))],
-      aliases: aliases.map((alias) => ({ ...alias })),
+      aliases: aliases.map((alias) => ({ ...alias, displayName: formatDoctorDisplayName(alias.displayName) })),
     };
   }).sort((left, right) => left.displayName.localeCompare(right.displayName));
 }
@@ -1278,6 +1278,14 @@ function parseMmcEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
       seniority,
     });
   }
+  if (isAnnualLeaveLabel(upper)) {
+    return createAllDayRecord("MMC", day, raw, {
+      kind: "annual_leave",
+      titleParts: { base: "Annual Leave", period: "", suffix: "" },
+      location: "",
+      seniority,
+    });
+  }
   if (isConferenceLeaveLabel(upper)) {
     return createAllDayRecord("MMC", day, raw, {
       kind: "conference_leave",
@@ -1353,7 +1361,7 @@ function parseDdhEntry(day, label, timeText, seniority = UNKNOWN_SENIORITY) {
       seniority,
     });
   }
-  if (upper === "AL" || upper === "A/L") {
+  if (isAnnualLeaveLabel(upper)) {
     return createAllDayRecord("DDH", day, label, {
       kind: "annual_leave",
       titleParts: { base: "Annual Leave", period: "", suffix: "" },
@@ -1415,7 +1423,7 @@ function parseCaseyEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
       seniority,
     });
   }
-  if (upper === "ANNUAL LEAVE" || upper === "ANNUAL" || upper === "AL") {
+  if (isAnnualLeaveLabel(upper) || upper === "ANNUAL") {
     return createAllDayRecord("Casey", day, label, {
       kind: "annual_leave",
       titleParts: { base: "Annual Leave", period: "", suffix: "" },
@@ -1647,7 +1655,7 @@ function normalizeCaseyCode(label) {
 
 function normalizeMchLeave(label) {
   const upper = cleanText(label).replace(/\s+/g, " ").trim().toUpperCase();
-  if (/^(?:A\/L|AL)(?:\s+0\.5)?$/.test(upper)) return { kind: "annual_leave", title: "Annual Leave" };
+  if (isAnnualLeaveLabel(upper)) return { kind: "annual_leave", title: "Annual Leave" };
   if (/^S\/L(?:\s+(?:AM|PM))?$/.test(upper)) return { kind: "sick_leave", title: normalizeSickLeaveLabel(upper) };
   if (upper === "EXAM" || upper === "ME/L") return { kind: "exam_leave", title: "Exam Leave" };
   if (isConferenceLeaveLabel(upper)) return { kind: "conference_leave", title: "Conference Leave" };
@@ -1667,6 +1675,11 @@ function isConferenceLeaveLabel(value) {
     || upper === "CL"
     || upper === "CME LEAVE"
     || upper === "CME/L";
+}
+
+function isAnnualLeaveLabel(value) {
+  const upper = cleanText(value).replace(/\s+/g, " ").trim().toUpperCase();
+  return upper === "ANNUAL LEAVE" || /^(?:A\/L|(?:[A-Z][A-Z0-9/&-]*\s+)*AL)(?:\s+0\.5)?$/.test(upper);
 }
 
 function normalizeMchTimedLabel(label) {
@@ -2542,7 +2555,7 @@ function createAllDayRecord(source, day, rawValue, details) {
 
 function createWeeklyLeaveRecord(source, monday, rawValue, seniority = UNKNOWN_SENIORITY) {
   const kind = isConferenceLeaveLabel(rawValue) ? "conference_leave" : "annual_leave";
-  const normalizedTitle = kind === "conference_leave" ? "Conference Leave" : toTitleCase(rawValue);
+  const normalizedTitle = kind === "conference_leave" ? "Conference Leave" : "Annual Leave";
   return {
     id: hashString(`${source}|${monday}|${rawValue}|week-leave`),
     source,
@@ -2964,7 +2977,8 @@ function extractTimeWithLabel(value, options = {}) {
 
 function firstWeeklyLeave(values) {
   for (const value of values) {
-    if (WEEKLY_LEAVE_LABELS.has(value.toUpperCase())) return value;
+    const upper = value.toUpperCase();
+    if (WEEKLY_LEAVE_LABELS.has(upper) || isAnnualLeaveLabel(upper)) return value;
   }
   return null;
 }
@@ -3004,6 +3018,17 @@ function normalizeName(value) {
 
 function rosterIdentityKey(value) {
   return normalizeName(value).replace(/^(DR|DOCTOR|MR|MRS|MS|MISS|PROF|PROFESSOR|A PROF|ASSOC PROF)\s+/, "");
+}
+
+function formatDoctorDisplayName(value) {
+  const identity = rosterIdentityKey(value);
+  const tokens = identity.split(" ").filter(Boolean);
+  if (!tokens.length) return cleanText(value);
+  return tokens.map((token, index) => index === tokens.length - 1 ? token : toDisplayNameToken(token)).join(" ");
+}
+
+function toDisplayNameToken(value) {
+  return value.charAt(0).toUpperCase() + value.slice(1).toLowerCase();
 }
 
 function cleanText(value) {

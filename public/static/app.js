@@ -4271,6 +4271,7 @@ function doctorOptionsForCurrentAccount(doctors) {
   const matches = options.filter((doctor) => doctorMatchesCurrentAccount(doctor));
   if (!matches.length) return [];
   const aliases = matches.flatMap((doctor) => {
+    if (Array.isArray(doctor.aliases) && doctor.aliases.length) return doctor.aliases;
     const sourceTypes = doctor.sourceTypes.length ? doctor.sourceTypes : sourceTypesForClaimedDoctor(doctor.key);
     return sourceTypes.map((sourceType) => ({
       sourceType,
@@ -4362,6 +4363,17 @@ function rosterIdentityKey(value) {
     .toUpperCase()
     .replace(/\s+/g, " ")
     .replace(/^(DR|DOCTOR|MR|MRS|MS|MISS|PROF|PROFESSOR|A PROF|ASSOC PROF)\s+/, "");
+}
+
+function formatRosterDisplayName(value) {
+  const identity = rosterIdentityKey(value);
+  const tokens = identity.split(" ").filter(Boolean);
+  if (!tokens.length) return String(value || "").trim();
+  return tokens.map((token, index) => index === tokens.length - 1 ? token : toDisplayNameToken(token)).join(" ");
+}
+
+function toDisplayNameToken(value) {
+  return value.charAt(0).toUpperCase() + value.slice(1).toLowerCase();
 }
 
 function doctorMetadataForKey(doctorKey) {
@@ -5657,7 +5669,7 @@ function sanitizeAvailableRosterDoctors(doctors) {
   return doctors
     .map((doctor) => ({
       key: normalizeRosterName(doctor?.key || ""),
-      displayName: String(doctor?.displayName || "").trim(),
+      displayName: formatRosterDisplayName(doctor?.displayName || doctor?.key || ""),
       sourceType: String(doctor?.sourceType || "").toLowerCase(),
       claimedBy: normalizeEmail(doctor?.claimedBy || ""),
       claimedByName: String(doctor?.claimedByName || "").trim(),
