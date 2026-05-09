@@ -460,6 +460,7 @@ export function serializeEvent(event) {
   return {
     id: event.id,
     source: event.source,
+    sources: Array.isArray(event.sources) ? event.sources : undefined,
     seniority: event.seniority || "",
     title: event.title,
     allDay: event.allDay,
@@ -2723,12 +2724,13 @@ function mergeContiguousLeaveEvents(events) {
       ) {
         previous.end = event.end > previous.end ? event.end : previous.end;
         previous.rawValue = mergeRawLeaveValues(previous.rawValue, event.rawValue);
-        previous.source = previous.source === event.source ? previous.source : "Leave";
+        previous.sources = mergeLeaveSources(previous.sources, event.sources, previous.source, event.source);
         previous.id = hashString(`leave|${key}|${previous.start}|${previous.end}`);
         continue;
       }
       merged.push({
         ...event,
+        sources: mergeLeaveSources(event.sources, null, event.source),
         id: hashString(`leave|${key}|${event.start}|${event.end}`),
         _leaveMergeKey: key,
       });
@@ -2756,6 +2758,14 @@ function mergeRawLeaveValues(left, right) {
     .map((item) => item.trim())
     .filter(Boolean);
   return [...new Set(values)].join(" / ");
+}
+
+function mergeLeaveSources(leftSources, rightSources, leftSource, rightSource) {
+  const values = [leftSources, rightSources, leftSource, rightSource]
+    .flatMap((item) => Array.isArray(item) ? item : [item])
+    .map((item) => String(item || "").trim())
+    .filter((item) => /^(MMC|DDH|Casey|MCH)$/i.test(item));
+  return [...new Set(values.map((item) => item.toUpperCase() === "CASEY" ? "Casey" : item.toUpperCase()))];
 }
 
 function resolveDefaultLocation(source, location, settings) {

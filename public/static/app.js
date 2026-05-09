@@ -2888,7 +2888,8 @@ function filterInsightEvents(events, start, end, hospitalFilters = []) {
 
 function matchesInsightHospitalFilters(event, hospitalFilters = []) {
   if (!hospitalFilters?.length) return true;
-  return hospitalFilters.includes(eventSourceCode(event));
+  const eventSources = eventSourceCodes(event);
+  return eventSources.some((source) => hospitalFilters.includes(source));
 }
 
 function availableHospitalsForInsightRange(start, end) {
@@ -2909,7 +2910,8 @@ function availableHospitalsForInsightRange(start, end) {
 
 function matchesPreviewHospitalFilter(event, hospitalFilter) {
   if (!hospitalFilter || hospitalFilter === "all") return true;
-  return String(event.source || "").toLowerCase() === String(hospitalFilter).toLowerCase();
+  const target = String(hospitalFilter).trim().toUpperCase();
+  return eventSourceCodes(event).includes(target);
 }
 
 function buildOverlapDays(mine, theirs) {
@@ -3305,10 +3307,25 @@ function eventRosterDateKey(event) {
 }
 
 function eventSourceCode(event) {
-  const explicit = String(event?.source || "").trim().toUpperCase();
-  if (explicit === "MMC" || explicit === "DDH" || explicit === "CASEY" || explicit === "MCH") return explicit;
+  return eventSourceCodes(event)[0] || "";
+}
+
+function eventSourceCodes(event) {
+  const values = Array.isArray(event?.sources) ? event.sources : [event?.source];
+  const explicit = values
+    .map((item) => normalizeEventSourceCode(item))
+    .filter(Boolean);
+  if (explicit.length) return [...new Set(explicit)];
   const titlePrefix = String(event?.title || "").match(/^(MMC|DDH|Casey|MCH):/i)?.[1];
-  return titlePrefix ? titlePrefix.toUpperCase() : "";
+  const titleCode = normalizeEventSourceCode(titlePrefix);
+  return titleCode ? [titleCode] : [];
+}
+
+function normalizeEventSourceCode(value) {
+  const code = String(value || "").trim().toUpperCase();
+  if (code === "MMC" || code === "DDH" || code === "MCH") return code;
+  if (code === "CASEY") return "CASEY";
+  return "";
 }
 
 function isRosterShiftEvent(event) {
