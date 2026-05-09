@@ -168,6 +168,17 @@ export async function onRequestPost(context) {
       });
     }
 
+    if (action === "resolveDoctorAccount") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      const resolution = await resolveDoctorAccount(context.env.ROSTER_STORE, body?.doctor);
+      return Response.json({
+        ok: true,
+        ...resolution,
+      });
+    }
+
     if (action === "setUserInsightsEnabled") {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
@@ -1560,7 +1571,6 @@ function matchRepositoryClaims(index, realName) {
 }
 
 async function repositoryDoctorCandidates(store, index) {
-  const claimed = await claimedRosterNames(store);
   const seen = new Set();
   const candidates = [];
   for (const file of index.files || []) {
@@ -1569,12 +1579,13 @@ async function repositoryDoctorCandidates(store, index) {
       const marker = `${doctor.sourceType}:${doctor.key}`;
       if (seen.has(marker)) continue;
       seen.add(marker);
+      const resolved = await resolveDoctorAccount(store, doctor);
       candidates.push({
         key: doctor.key,
         displayName: doctor.displayName,
         sourceType: doctor.sourceType,
-        claimedBy: claimed.get(marker)?.email || "",
-        claimedByName: claimed.get(marker)?.realName || "",
+        claimedBy: resolved.mode === "claimed-account" ? resolved.email : "",
+        claimedByName: resolved.mode === "claimed-account" ? resolved.realName : "",
       });
     }
   }
@@ -1586,23 +1597,96 @@ async function repositoryDoctorCandidates(store, index) {
   });
 }
 
-async function claimedRosterNames(store) {
-  const claimed = new Map();
+function sanitizeDoctorAccountResolutionInput(value) {
+  const sourceTypes = sanitizeSourceTypes(value?.sourceTypes || (value?.sourceType ? [value.sourceType] : []));
+  const aliases = Array.isArray(value?.aliases)
+    ? value.aliases.map((alias) => ({
+        key: normalizeRosterName(alias?.key || ""),
+        displayName: formatRosterDisplayName(alias?.displayName || alias?.key || ""),
+        sourceType: String(alias?.sourceType || "").toLowerCase(),
+      })).filter((alias) => alias.key && alias.displayName && isRosterSourceType(alias.sourceType))
+    : [];
+  const key = normalizeRosterName(value?.key || value?.doctorKey || "");
+  const displayName = formatRosterDisplayName(value?.displayName || value?.key || value?.doctorKey || "");
+  const sourceType = String(value?.sourceType || "").toLowerCase();
+  if (sourceType && isRosterSourceType(sourceType) && !sourceTypes.includes(sourceType)) {
+    sourceTypes.push(sourceType);
+  }
+  return {
+    key,
+    displayName,
+    sourceTypes,
+    aliases,
+  };
+}
+
+function doctorResolutionMarkers(input) {
+  const doctor = sanitizeDoctorAccountResolutionInput(input);
+  const markers = new Set();
+  const keys = new Set([doctor.key, ...doctor.aliases.map((alias) => alias.key)].filter(Boolean));
+  const aliasesByKey = new Map();
+  for (const alias of doctor.aliases) {
+    if (!aliasesByKey.has(alias.key)) aliasesByKey.set(alias.key, new Set());
+    aliasesByKey.get(alias.key).add(alias.sourceType);
+  }
+  for (const key of keys) {
+    const sources = new Set([...(doctor.sourceTypes || []), ...(aliasesByKey.get(key) || [])]);
+    if (!sources.size) {
+      markers.add(`*:${key}`);
+      continue;
+    }
+    for (const sourceType of sources) markers.add(`${sourceType}:${key}`);
+  }
+  return {
+    ...doctor,
+    markers,
+    keys,
+    identityKeys: new Set([
+      rosterIdentityKey(doctor.displayName),
+      rosterIdentityKey(doctor.key),
+      ...doctor.aliases.flatMap((alias) => [rosterIdentityKey(alias.displayName), rosterIdentityKey(alias.key)]),
+    ].filter(Boolean)),
+  };
+}
+
+async function resolveDoctorAccount(store, rawDoctor) {
+  const requested = doctorResolutionMarkers(rawDoctor);
+  if (!requested.key && !requested.displayName && !requested.aliases.length) {
+    return { mode: "doctor-profile", email: "", realName: "" };
+  }
   const result = await store.list({ prefix: "account:" });
   for (const item of result.keys || []) {
     const record = await store.get(item.name, "json").catch(() => null);
     const email = normalizeEmail(record?.email || item.name.replace(/^account:/, ""));
+    const role = record?.role || roleForEmail(email);
+    if (!record || !email || role === "creator" || role === "owner") continue;
+    const realName = String(record.realName || "").trim();
     for (const claim of sanitizeClaims(record?.claims)) {
-      const marker = `${claim.sourceType}:${claim.key}`;
-      if (!claimed.has(marker)) {
-        claimed.set(marker, {
+      if (
+        requested.markers.has(`${claim.sourceType}:${claim.key}`)
+        || requested.markers.has(`*:${claim.key}`)
+        || requested.keys.has(claim.key)
+        || requested.identityKeys.has(rosterIdentityKey(claim.displayName || claim.key))
+      ) {
+        return {
+          mode: "claimed-account",
           email,
-          realName: String(record?.realName || "").trim(),
-        });
+          realName,
+        };
       }
     }
+    if (
+      (requested.displayName && doctorMatchesRealName({ key: requested.key, displayName: requested.displayName }, realName))
+      || requested.aliases.some((alias) => doctorMatchesRealName(alias, realName))
+    ) {
+      return {
+        mode: "claimed-account",
+        email,
+        realName,
+      };
+    }
   }
-  return claimed;
+  return { mode: "doctor-profile", email: "", realName: "" };
 }
 
 async function clearDeletedAccountClaimMetadata(store, email, record) {

@@ -506,6 +506,69 @@ const michaelAdminLoad = await postState(michaelStateStore, {
   targetEmail: "michael@example.com",
 });
 assert.deepEqual(michaelAdminLoad.state.imports.map((item) => item.repoId).sort(), ["michael-mch", "michael-mmc"]);
+const michaelPrimaryResolution = await postState(michaelStateStore, {
+  action: "resolveDoctorAccount",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  doctor: {
+    key: "MICHAEL COMAN",
+    displayName: "Michael COMAN",
+    sourceTypes: ["mmc", "mch"],
+    aliases: [
+      { sourceType: "mmc", key: "MICHAEL COMAN", displayName: "Michael COMAN" },
+      { sourceType: "mch", key: "DR MICHAEL COMAN", displayName: "Dr Michael Coman" },
+    ],
+  },
+});
+assert.equal(michaelPrimaryResolution.mode, "claimed-account");
+assert.equal(michaelPrimaryResolution.email, "michael@example.com");
+const michaelAliasResolution = await postState(michaelStateStore, {
+  action: "resolveDoctorAccount",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  doctor: {
+    key: "DR MICHAEL COMAN",
+    displayName: "Dr Michael Coman",
+    sourceTypes: ["mch"],
+  },
+});
+assert.equal(michaelAliasResolution.mode, "claimed-account");
+assert.equal(michaelAliasResolution.email, "michael@example.com");
+await postState(michaelStateStore, {
+  action: "deleteAccount",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  targetEmail: "michael@example.com",
+});
+const michaelDeletedResolution = await postState(michaelStateStore, {
+  action: "resolveDoctorAccount",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  doctor: {
+    key: "MICHAEL COMAN",
+    displayName: "Michael COMAN",
+    sourceTypes: ["mmc", "mch"],
+    aliases: [
+      { sourceType: "mmc", key: "MICHAEL COMAN", displayName: "Michael COMAN" },
+      { sourceType: "mch", key: "DR MICHAEL COMAN", displayName: "Dr Michael Coman" },
+    ],
+  },
+});
+assert.equal(michaelDeletedResolution.mode, "doctor-profile");
+assert.equal(michaelDeletedResolution.email, "");
+await seedUser(michaelStateStore, "michael@example.com", "michael-password-2", "Michael COMAN");
+const michaelRecreatedResolution = await postState(michaelStateStore, {
+  action: "resolveDoctorAccount",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  doctor: {
+    key: "DR MICHAEL COMAN",
+    displayName: "Dr Michael Coman",
+    sourceTypes: ["mch"],
+  },
+});
+assert.equal(michaelRecreatedResolution.mode, "claimed-account");
+assert.equal(michaelRecreatedResolution.email, "michael@example.com");
 
 const profileImports = await postState(stateStore, {
   action: "loadDoctorProfileImports",

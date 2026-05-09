@@ -4188,20 +4188,29 @@ async function switchDoctorSelection(selectedKey, options = {}) {
     await loadServerUsers();
   }
   const selectedOption = selectedDoctorOptionForKey(selectedKey);
-  const claimedEmail = normalizeEmail(selectedOption?.accountEmail || claimedEmailForDoctorKey(selectedKey, selectedOption?.displayName || ""));
+  let resolvedAccount = null;
+  if (canSwitchAsCreator && selectedOption && selectedKey !== OWNER_DOCTOR_KEY) {
+    try {
+      resolvedAccount = await resolveDoctorAccountForSwitch(selectedOption);
+    } catch (error) {
+      setStatus(error.message || "Could not check whether that calendar is claimed.", true);
+      return;
+    }
+  }
+  const claimedEmail = normalizeEmail(resolvedAccount?.email || selectedOption?.accountEmail || claimedEmailForDoctorKey(selectedKey, selectedOption?.displayName || ""));
   if (canSwitchAsCreator && selectedOption && selectedKey !== OWNER_DOCTOR_KEY) {
     showSwitchOverlay(
       `Switching to ${selectedOption.displayName}…`,
-      claimedEmail ? "Opening the linked account calendar." : "Opening the roster calendar and loading saved doctor-profile edits.",
+      resolvedAccount?.mode === "claimed-account" ? "Opening the linked account calendar." : "Opening the roster calendar and loading saved doctor-profile edits.",
     );
   } else if (activeDoctorProfile && selectedKey === OWNER_DOCTOR_KEY) {
     showSwitchOverlay("Returning to creator…", "Restoring the creator calendar.");
   }
   if (canSwitchAsCreator && selectedOption && selectedKey !== OWNER_DOCTOR_KEY) {
     try {
-      if (selectedOption.targetMode === "claimed-account" && claimedEmail && claimedEmail !== currentUserEmail) {
+      if (resolvedAccount?.mode === "claimed-account" && claimedEmail && claimedEmail !== currentUserEmail) {
         await enterUserAccount(claimedEmail);
-      } else if (selectedOption.targetMode === "claimed-account" && claimedEmail && claimedEmail === currentUserEmail && adminViewingEmail) {
+      } else if (resolvedAccount?.mode === "claimed-account" && claimedEmail && claimedEmail === currentUserEmail && adminViewingEmail) {
         await enterUserAccount(claimedEmail);
       } else {
         await enterDoctorProfileView(selectedOption);
@@ -4231,6 +4240,31 @@ async function switchDoctorSelection(selectedKey, options = {}) {
   saveCurrentSessionState();
   syncActionState();
   if (selectedDoctor()) await updatePreview({ resetRange });
+}
+
+async function resolveDoctorAccountForSwitch(doctor) {
+  const response = await fetch("/api/state", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      action: "resolveDoctorAccount",
+      email: authUserEmail || currentUserEmail,
+      password: authUserPassword || currentUserPassword,
+      doctor: {
+        key: doctor?.key || "",
+        displayName: doctor?.displayName || "",
+        sourceType: doctor?.sourceType || "",
+        sourceTypes: normalizedDoctorSourceTypes(doctor),
+        aliases: Array.isArray(doctor?.aliases) ? doctor.aliases : [],
+      },
+    }),
+  });
+  const data = await readJsonResponse(response, "Could not check whether that calendar is claimed.");
+  const mode = data.mode === "claimed-account" && normalizeEmail(data.email) ? "claimed-account" : "doctor-profile";
+  return {
+    mode,
+    email: mode === "claimed-account" ? normalizeEmail(data.email) : "",
+  };
 }
 
 function selectedDoctorOptionForKey(selectedKey) {
