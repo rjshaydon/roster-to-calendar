@@ -6,6 +6,37 @@ import XLSX from "xlsx";
 import { onRequestPost as handleStatePost } from "../functions/api/state.js";
 import { buildRosterView, doctorOptions, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
 
+function cloneWorkbook(workbook) {
+  return XLSX.read(XLSX.write(workbook, { type: "array", bookType: "xlsx" }), { type: "array", cellDates: true });
+}
+
+function workbookFile(workbook, name) {
+  const bytes = XLSX.write(workbook, { type: "array", bookType: "xlsx" });
+  return new File([bytes], name, { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+}
+
+function withWorkbookCell(workbook, sheetName, cell, value) {
+  const copy = cloneWorkbook(workbook);
+  copy.Sheets[sheetName][cell] = value;
+  return copy;
+}
+
+function withWorkbookDate(workbook, sheetName, cell, date) {
+  return withWorkbookCell(workbook, sheetName, cell, { t: "d", v: date, w: date.toLocaleDateString("en-AU") });
+}
+
+async function assertRejectsMixedTermUpload(label, workbook, filename, expectedParts) {
+  const formData = new FormData();
+  formData.append("rosterFiles", workbookFile(workbook, filename));
+  await assert.rejects(
+    () => parseUploadForm(new Request("http://fixture.test/api/analyze", { method: "POST", body: formData })),
+    (error) => {
+      assert.ok(expectedParts.every((part) => error.message.includes(part)), `${label}: ${error.message}`);
+      return true;
+    },
+  );
+}
+
 const mmcWorkbook = XLSX.readFile(fileURLToPath(new URL("../fixtures/AdultTerm1.2026.xlsx", import.meta.url)), {
   cellDates: true,
 });
@@ -28,6 +59,48 @@ const mchFormData = new FormData();
 mchFormData.append("rosterFiles", new File([mchBytes], "Paeds_Term_2_2026.xlsx", { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
 const parsedMchUpload = await parseUploadForm(new Request("http://fixture.test/api/analyze", { method: "POST", body: mchFormData }));
 assert.equal(parsedMchUpload.sources.mch.length, 1);
+
+const mmcUpload = new FormData();
+mmcUpload.append("rosterFiles", workbookFile(mmcWorkbook, "AdultTerm1.2026.xlsx"));
+const parsedMmcUpload = await parseUploadForm(new Request("http://fixture.test/api/analyze", { method: "POST", body: mmcUpload }));
+assert.equal(parsedMmcUpload.sources.mmc.length, 1);
+
+await assertRejectsMixedTermUpload(
+  "MMC date typo should identify the worksheet and cell",
+  withWorkbookDate(mmcWorkbook, "Week 1", "H4", new Date("2025-02-17T00:00:00")),
+  "AdultTerm1.2026 typo.xlsx",
+  ["AdultTerm1.2026 typo.xlsx has dates from multiple terms", "Week 1 cell H4", "2025-02-17", "Term 1 2025"],
+);
+
+await assertRejectsMixedTermUpload(
+  "Casey date typo should identify the worksheet and cell",
+  withWorkbookCell(caseyWorkbook, "May 4", "B2", { t: "s", v: "01-Feb", w: "01-Feb" }),
+  "Casey_Term_2_2026 typo.xlsm",
+  ["Casey_Term_2_2026 typo.xlsm has dates from multiple terms", "May 4 cell B2", "2026-02-01", "Term 4 2025"],
+);
+
+await assertRejectsMixedTermUpload(
+  "MCH date typo should identify the worksheet and cell",
+  withWorkbookDate(mchWorkbook, "Week 1", "F19", new Date("2025-05-04T00:00:00")),
+  "Paeds_Term_2_2026 typo.xlsx",
+  ["Paeds_Term_2_2026 typo.xlsx has dates from multiple terms", "Week 1 cell F19", "2025-05-04", "Term 1 2025"],
+);
+
+const ddhSheetName = ddhWorkbook.SheetNames[0];
+await assertRejectsMixedTermUpload(
+  "DDH date typo should identify the worksheet and cell",
+  withWorkbookCell(ddhWorkbook, ddhSheetName, "B1", { t: "s", v: "Mon. Feb. 3, 2025", w: "Mon. Feb. 3, 2025" }),
+  "Dandenong typo.xlsx",
+  ["Dandenong typo.xlsx has dates from multiple terms", `${ddhSheetName} cell B1`, "2025-02-03", "Term 1 2025"],
+);
+
+const mixedUpload = new FormData();
+mixedUpload.append("rosterFiles", workbookFile(mmcWorkbook, "AdultTerm1.2026.xlsx"));
+mixedUpload.append("rosterFiles", workbookFile(withWorkbookDate(mmcWorkbook, "Week 1", "H4", new Date("2025-02-17T00:00:00")), "OnlyThisFileIsBad.xlsx"));
+await assert.rejects(
+  () => parseUploadForm(new Request("http://fixture.test/api/analyze", { method: "POST", body: mixedUpload })),
+  (error) => error.message.includes("OnlyThisFileIsBad.xlsx has dates from multiple terms") && !error.message.includes("AdultTerm1.2026.xlsx has dates from multiple terms"),
+);
 
 const doctors = doctorOptions(mmcWorkbook, ddhWorkbook, caseyWorkbook);
 const defaultRules = parserRuleDefaults();

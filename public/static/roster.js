@@ -240,6 +240,7 @@ export async function parseUploadForm(request) {
     const file = uploads[index];
     const workbook = await readWorkbook(file);
     const sourceType = detectSourceType(workbook, file.name);
+    validateRosterDatesWithinSingleTerm(workbook, sourceType, file.name);
     sources[sourceType].push({
       id: String(importIds[index] || hashString(`${file.name}|${file.size}|${file.lastModified}|${index}`)),
       addedAt: String(importAddedAt[index] || ""),
@@ -379,6 +380,7 @@ export async function inspectImportRecord(record) {
   }
   const workbook = await readWorkbookDataUrl(record.dataUrl, record.name || "roster.xlsx");
   const sourceType = detectSourceType(workbook, record.name || "roster.xlsx");
+  validateRosterDatesWithinSingleTerm(workbook, sourceType, record.name || "roster.xlsx");
   const entry = {
     id: String(record.id || ""),
     addedAt: String(record.addedAt || ""),
@@ -712,6 +714,110 @@ function detectSourceType(workbook, filename) {
     return "casey";
   }
   throw new Error(`${filename} is not a supported MMC workbook, MMC PDF, Dandenong Hospital FindMyShift export, Casey roster, or MCH roster.`);
+}
+
+function validateRosterDatesWithinSingleTerm(workbook, sourceType, filename) {
+  const evidence = collectRosterDateEvidence(workbook, sourceType);
+  if (!evidence.length) return;
+  const groups = new Map();
+  for (const item of evidence) {
+    const term = australianTermForDate(parseDateOnly(item.date));
+    const key = `${term.termNumber}-${term.year}`;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        ...term,
+        label: formatAustralianTermLabel(term),
+        items: [],
+      });
+    }
+    groups.get(key).items.push(item);
+  }
+  if (groups.size <= 1) return;
+  const dominant = [...groups.values()].sort((left, right) => (
+    right.items.length - left.items.length
+    || left.year - right.year
+    || left.termNumber - right.termNumber
+  ))[0];
+  const conflicts = [...groups.values()]
+    .filter((group) => group !== dominant)
+    .flatMap((group) => group.items.map((item) => ({ ...item, termLabel: group.label })))
+    .sort((left, right) => left.date.localeCompare(right.date) || left.sheetName.localeCompare(right.sheetName) || left.cell.localeCompare(right.cell));
+  const shown = conflicts.slice(0, 3).map((item) => `${item.sheetName ? `${item.sheetName} ` : ""}${item.cell ? `cell ${item.cell} ` : ""}is ${item.date} (${item.termLabel})`);
+  const remaining = conflicts.length > shown.length ? `, plus ${conflicts.length - shown.length} more conflicting date${conflicts.length - shown.length === 1 ? "" : "s"}` : "";
+  throw new Error(`${filename} has dates from multiple terms. Most dates are ${dominant.label}, but ${shown.join("; ")}${remaining}. Fix the conflicting worksheet/date and upload again.`);
+}
+
+function collectRosterDateEvidence(workbook, sourceType) {
+  if (sourceType === "mmc") return collectMmcDateEvidence(workbook);
+  if (sourceType === "ddh") return collectDdhDateEvidence(workbook);
+  if (sourceType === "casey") return collectCaseyDateEvidence(workbook);
+  if (sourceType === "mch") return collectMchDateEvidence(workbook);
+  return [];
+}
+
+function collectMmcDateEvidence(workbook) {
+  const evidence = [];
+  for (const sheetName of workbook.SheetNames || []) {
+    if (!sheetName.startsWith("Week ")) continue;
+    const sheet = workbook.Sheets[sheetName];
+    for (let col = 6; col <= 12; col += 1) {
+      const date = coerceDate(getCellValue(sheet, 4, col));
+      if (date) evidence.push(dateEvidence(sheetName, 4, col, date));
+    }
+  }
+  return evidence;
+}
+
+function collectDdhDateEvidence(workbook) {
+  const sheetName = workbook.SheetNames?.[0] || "";
+  const sheet = workbook.Sheets?.[sheetName];
+  if (!sheet) return [];
+  const range = XLSX.utils.decode_range(sheet["!ref"] || "A1:A1");
+  const evidence = [];
+  for (let row = 1; row <= range.e.r + 1; row += 1) {
+    if (!isDdhDateRow(sheet, row)) continue;
+    for (let col = 2; col <= 8; col += 1) {
+      const date = parseDdhDate(getCellValue(sheet, row, col));
+      if (date) evidence.push(dateEvidence(sheetName, row, col, date));
+    }
+  }
+  return evidence;
+}
+
+function collectCaseyDateEvidence(workbook) {
+  const evidence = [];
+  for (const sheetName of workbook.SheetNames || []) {
+    const sheet = workbook.Sheets[sheetName];
+    if (!isCaseyWeekSheet(sheet, sheetName)) continue;
+    const termYear = caseyTermYear(sheet);
+    for (let col = 2; col <= 8; col += 1) {
+      const date = parseCaseyWeekDate(sheet, 2, col, termYear);
+      if (date) evidence.push(dateEvidence(sheetName, 2, col, date));
+    }
+  }
+  return evidence;
+}
+
+function collectMchDateEvidence(workbook) {
+  const evidence = [];
+  for (const sheetName of workbook.SheetNames || []) {
+    const sheet = workbook.Sheets[sheetName];
+    if (!isMchWeekSheet(sheet, sheetName)) continue;
+    for (let col = 6; col <= 12; col += 1) {
+      const primaryDate = coerceDate(getCellValue(sheet, 19, col));
+      const fallbackDate = primaryDate || coerceDate(getCellValue(sheet, 2, col));
+      if (fallbackDate) evidence.push(dateEvidence(sheetName, primaryDate ? 19 : 2, col, fallbackDate));
+    }
+  }
+  return evidence;
+}
+
+function dateEvidence(sheetName, row, col, date) {
+  return {
+    sheetName: String(sheetName || ""),
+    cell: XLSX.utils.encode_cell({ r: row - 1, c: col - 1 }),
+    date,
+  };
 }
 
 function isPdfFile(filename, bytes) {
@@ -3042,6 +3148,42 @@ function coerceDate(value) {
 
 function formatDateOnly(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function parseDateOnly(value) {
+  const [year, month, day] = String(value || "").slice(0, 10).split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function australianTermForDate(date) {
+  const year = date.getFullYear();
+  const candidates = [
+    buildAustralianTerm(year, 1, 1),
+    buildAustralianTerm(year, 2, 4),
+    buildAustralianTerm(year, 3, 7),
+    buildAustralianTerm(year, 4, 10),
+    buildAustralianTerm(year - 1, 4, 10),
+  ];
+  return candidates.find((term) => date >= term.start && date < term.end) || buildAustralianTerm(year, 1, 1);
+}
+
+function buildAustralianTerm(year, termNumber, startMonthIndex) {
+  const start = firstMondayOfMonth(year, startMonthIndex);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 91);
+  return { year, termNumber, start, end };
+}
+
+function firstMondayOfMonth(year, monthIndex) {
+  const date = new Date(year, monthIndex, 1);
+  const day = date.getDay();
+  const delta = day === 0 ? 1 : day === 1 ? 0 : 8 - day;
+  date.setDate(date.getDate() + delta);
+  return date;
+}
+
+function formatAustralianTermLabel(term) {
+  return `Term ${term.termNumber} ${term.year}`;
 }
 
 function buildDateTime(day, hm, plusDay = false) {

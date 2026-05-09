@@ -344,6 +344,10 @@ fileInput.addEventListener("change", async () => {
     fileInput.value = "";
     return;
   }
+  if (!await validateFreshRosterUploads(accepted)) {
+    fileInput.value = "";
+    return;
+  }
   await mergeFiles(accepted);
   fileInput.value = "";
   await analyzeFiles();
@@ -369,6 +373,7 @@ for (const eventName of ["dragleave", "dragend", "drop"]) {
 dropZone.addEventListener("drop", async (event) => {
   const accepted = validateIncomingFiles([...event.dataTransfer.files]);
   if (!accepted.length) return;
+  if (!await validateFreshRosterUploads(accepted)) return;
   await mergeFiles(accepted);
   await analyzeFiles();
 });
@@ -1276,6 +1281,21 @@ function validateIncomingFiles(files) {
     return [];
   }
   return files;
+}
+
+async function validateFreshRosterUploads(files) {
+  try {
+    const formData = new FormData();
+    for (const file of files) formData.append("rosterFiles", file);
+    await parseUploadForm(new Request(`${window.location.origin}/browser-roster-validate`, {
+      method: "POST",
+      body: formData,
+    }));
+    return true;
+  } catch (error) {
+    setStatus(error.message || "Could not validate roster dates.", true);
+    return false;
+  }
 }
 
 async function analyzeFiles(options = {}) {
