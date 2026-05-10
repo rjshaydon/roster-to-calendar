@@ -8622,7 +8622,10 @@ async function flushCloudStateSave() {
 }
 
 function shouldRebuildAccountSnapshot(snapshot) {
-  if (currentUserRole === "creator" || activeCalendarMode() === "doctor-profile" || !currentRosterClaims.length) return false;
+  if (currentUserRole === "creator" || activeCalendarMode() === "doctor-profile") return false;
+  if (!currentRosterClaims.length) {
+    return Boolean(snapshot?.doctorOptions?.length || snapshot?.preview?.events?.length);
+  }
   const claimMarkers = new Set(currentRosterClaims.map((claim) => `${claim.sourceType}:${claim.key}`));
   const snapshotMarkers = new Set();
   for (const doctor of snapshot?.doctorOptions || []) {

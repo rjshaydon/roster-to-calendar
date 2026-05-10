@@ -804,7 +804,7 @@ async function listUsers(store) {
 }
 
 function userSummaryFromRecord(email, record) {
-  const claims = sanitizeClaims(record?.claims);
+  const claims = sanitizeClaims(record?.claims).filter((claim) => claimMatchesAccountIdentity(claim, record?.realName || ""));
   const adminIssues = sanitizeAdminIssues(record?.adminIssues);
   return {
     email,
@@ -1755,7 +1755,7 @@ async function loadClaimedAccountIndex(store) {
     accounts.push({
       email,
       realName: String(record.realName || "").trim(),
-      claims: sanitizeClaims(record.claims),
+      claims: sanitizeClaims(record.claims).filter((claim) => claimMatchesAccountIdentity(claim, record.realName || "")),
     });
   }
   return accounts;

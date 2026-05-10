@@ -636,6 +636,19 @@ await postState(identityStore, {
   targetEmail: "barry@example.com",
   claims: [{ sourceType: "ddh", key: "AARON BADWAL" }],
 });
+const aaronAfterBadBarryClaim = await postState(identityStore, {
+  action: "resolveDoctorAccount",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  doctor: { sourceType: "ddh", key: "AARON BADWAL", displayName: "Aaron BADWAL" },
+});
+assert.equal(aaronAfterBadBarryClaim.mode, "doctor-profile");
+const usersAfterBadBarryClaim = await postState(identityStore, {
+  action: "listUsers",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+});
+assert.deepEqual(usersAfterBadBarryClaim.users.find((user) => user.email === "barry@example.com")?.claims || [], []);
 const barryAfterBadClaim = await postState(identityStore, {
   action: "login",
   email: "barry@example.com",
