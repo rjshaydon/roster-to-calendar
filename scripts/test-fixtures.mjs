@@ -15,6 +15,11 @@ function workbookFile(workbook, name) {
   return new File([bytes], name, { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
 }
 
+function workbookDataUrl(workbook) {
+  const bytes = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+  return `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${Buffer.from(bytes).toString("base64")}`;
+}
+
 function withWorkbookCell(workbook, sheetName, cell, value) {
   const copy = cloneWorkbook(workbook);
   copy.Sheets[sheetName][cell] = value;
@@ -433,6 +438,163 @@ class MemoryStore {
   }
 }
 
+class MemoryD1 {
+  constructor() {
+    this.files = new Map();
+    this.doctors = new Map();
+    this.fileDoctors = new Map();
+    this.events = new Map();
+  }
+
+  prepare(sql) {
+    return new MemoryD1Statement(this, sql);
+  }
+}
+
+class MemoryD1Statement {
+  constructor(db, sql) {
+    this.db = db;
+    this.sql = String(sql || "").replace(/\s+/g, " ").trim();
+    this.args = [];
+  }
+
+  bind(...args) {
+    this.args = args;
+    return this;
+  }
+
+  async run() {
+    const sql = this.sql;
+    const args = this.args;
+    if (sql.startsWith("CREATE ")) return { success: true };
+    if (sql.startsWith("INSERT INTO roster_files")) {
+      this.db.files.set(args[0], {
+        id: args[0],
+        name: args[1],
+        source_type: args[2],
+        active: args[3],
+        size: args[4],
+        last_modified: args[5],
+        added_at: args[6],
+        uploaded_at: args[7],
+        uploaded_by: args[8],
+        parsed_at: args[9],
+      });
+      return { success: true };
+    }
+    if (sql.startsWith("DELETE FROM roster_file_doctors")) {
+      for (const key of [...this.db.fileDoctors.keys()]) if (key.startsWith(`${args[0]}|`)) this.db.fileDoctors.delete(key);
+      return { success: true };
+    }
+    if (sql.startsWith("DELETE FROM roster_events")) {
+      for (const [key, value] of [...this.db.events.entries()]) if (value.file_id === args[0]) this.db.events.delete(key);
+      return { success: true };
+    }
+    if (sql.startsWith("DELETE FROM roster_files")) {
+      this.db.files.delete(args[0]);
+      return { success: true };
+    }
+    if (sql.startsWith("INSERT INTO roster_doctors")) {
+      for (let index = 0; index < args.length; index += 4) {
+        this.db.doctors.set(`${args[index]}|${args[index + 1]}`, {
+          source_type: args[index],
+          doctor_key: args[index + 1],
+          display_name: args[index + 2],
+          updated_at: args[index + 3],
+        });
+      }
+      return { success: true };
+    }
+    if (sql.startsWith("INSERT INTO roster_file_doctors")) {
+      for (let index = 0; index < args.length; index += 4) {
+        this.db.fileDoctors.set(`${args[index]}|${args[index + 1]}|${args[index + 2]}`, {
+          file_id: args[index],
+          source_type: args[index + 1],
+          doctor_key: args[index + 2],
+          display_name: args[index + 3],
+        });
+      }
+      return { success: true };
+    }
+    if (sql.startsWith("INSERT INTO roster_events")) {
+      for (let index = 0; index < args.length; index += 16) {
+        this.db.events.set(args[index], {
+          id: args[index],
+          file_id: args[index + 1],
+          source_type: args[index + 2],
+          doctor_key: args[index + 3],
+          display_name: args[index + 4],
+          start_date: args[index + 5],
+          end_date: args[index + 6],
+          start_ts: args[index + 7],
+          end_ts: args[index + 8],
+          title: args[index + 9],
+          raw_value: args[index + 10],
+          seniority: args[index + 11],
+          location: args[index + 12],
+          all_day: args[index + 13],
+          time_label: args[index + 14],
+          event_json: args[index + 15],
+        });
+      }
+      return { success: true };
+    }
+    if (sql.startsWith("UPDATE roster_files SET active")) {
+      const file = this.db.files.get(args[1]);
+      if (file) file.active = args[0];
+      return { success: true };
+    }
+    throw new Error(`Unsupported MemoryD1 run SQL: ${sql}`);
+  }
+
+  async all() {
+    const sql = this.sql;
+    const args = this.args;
+    if (sql.includes("FROM roster_events") && sql.includes("doctor_key IN")) {
+      const end = args[args.length - 2];
+      const start = args[args.length - 1];
+      const keys = new Set(args.slice(0, -2));
+      return {
+        results: [...this.db.events.values()]
+          .filter((event) => this.db.files.get(event.file_id)?.active === 1)
+          .filter((event) => keys.has(event.doctor_key))
+          .filter((event) => event.start_date <= end && event.end_date >= start)
+          .sort((left, right) => left.start_ts.localeCompare(right.start_ts))
+          .map((event) => ({ event_json: event.event_json })),
+      };
+    }
+    if (sql.includes("FROM roster_events") && sql.includes("display_name")) {
+      const end = args[0];
+      const start = args[1];
+      const sourceTypes = new Set(args.slice(2));
+      return {
+        results: [...this.db.events.values()]
+          .filter((event) => this.db.files.get(event.file_id)?.active === 1)
+          .filter((event) => event.start_date <= end && event.end_date >= start)
+          .filter((event) => !sourceTypes.size || sourceTypes.has(event.source_type))
+          .sort((left, right) => left.display_name.localeCompare(right.display_name) || left.start_ts.localeCompare(right.start_ts)),
+      };
+    }
+    throw new Error(`Unsupported MemoryD1 all SQL: ${sql}`);
+  }
+
+  async first() {
+    const sql = this.sql;
+    const args = this.args;
+    if (sql.startsWith("SELECT COUNT(*) AS count FROM roster_events WHERE file_id")) {
+      return {
+        count: [...this.db.events.values()].filter((event) => event.file_id === args[0]).length,
+      };
+    }
+    if (sql.startsWith("SELECT COUNT(*) AS count FROM roster_file_doctors WHERE file_id")) {
+      return {
+        count: [...this.db.fileDoctors.values()].filter((doctor) => doctor.file_id === args[0]).length,
+      };
+    }
+    throw new Error(`Unsupported MemoryD1 first SQL: ${sql}`);
+  }
+}
+
 function repositoryFile(id, overrides = {}) {
   return {
     repoId: id,
@@ -471,14 +633,14 @@ async function seedUser(store, email, password, realName = "Titus Hackman") {
   });
 }
 
-async function postState(store, payload) {
+async function postState(store, payload, db = null) {
   const response = await handleStatePost({
     request: new Request("http://fixture.test/api/state", {
       method: "POST",
       body: JSON.stringify(payload),
       headers: { "content-type": "application/json" },
     }),
-    env: { ROSTER_STORE: store },
+    env: { ROSTER_STORE: store, ROSTER_DB: db },
   });
   const body = await response.json();
   assert.equal(response.ok, true, body.error || "state request failed");
@@ -504,6 +666,111 @@ const creatorImports = await postState(stateStore, {
 });
 assert.equal(creatorImports.imports.length, 1);
 assert.equal(creatorImports.imports[0].repoId, "fixture-roster");
+
+const d1StateStore = new MemoryStore();
+const d1Store = new MemoryD1();
+const d1Doctor = doctorOptions(parsedMmcUpload.sources.mmc, [], [], [])[0];
+assert.ok(d1Doctor?.key, "fixture should expose at least one MMC doctor");
+await postState(d1StateStore, {
+  action: "login",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+}, d1Store);
+await postState(d1StateStore, {
+  action: "save",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  state: {
+    version: 1,
+    imports: [{
+      id: "d1-mmc",
+      name: "AdultTerm1.2026.xlsx",
+      size: 123,
+      lastModified: 1,
+      addedAt: "2026-01-01T00:00:00.000Z",
+      sourceType: "mmc",
+      dataUrl: workbookDataUrl(mmcWorkbook),
+    }],
+    session: {
+      doctorKey: d1Doctor.key,
+      settings: {},
+    },
+  },
+}, d1Store);
+assert.ok(d1Store.events.size > 0, "D1 should contain derived roster events after creator save");
+const d1CreatorLogin = await postState(d1StateStore, {
+  action: "login",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+}, d1Store);
+assert.equal(d1CreatorLogin.snapshot?.preview?.derivedFromD1, true);
+assert.ok(d1CreatorLogin.snapshot.preview.events.length > 0);
+const d1CreatedUser = await postState(d1StateStore, {
+  action: "adminCreateUser",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  targetEmail: "d1-user@example.com",
+  targetRealName: d1Doctor.displayName,
+  targetPassword: "d1-password",
+}, d1Store);
+assert.ok(d1CreatedUser.user.claims.length > 0, "admin-created account should immediately claim exact roster matches");
+const d1DirectLogin = await postState(d1StateStore, {
+  action: "login",
+  email: "d1-user@example.com",
+  password: "d1-password",
+}, d1Store);
+const d1AdminLoad = await postState(d1StateStore, {
+  action: "adminLoadUser",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  targetEmail: "d1-user@example.com",
+}, d1Store);
+assert.deepEqual(
+  d1AdminLoad.snapshot.preview.events.map((event) => event.id),
+  d1DirectLogin.snapshot.preview.events.map((event) => event.id),
+  "direct and creator-switched user loads should use the same D1 calendar events",
+);
+const d1Insights = await postState(d1StateStore, {
+  action: "queryRosterInsights",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  startDate: d1CreatorLogin.snapshot.preview.events[0].start.slice(0, 10),
+  endDate: d1CreatorLogin.snapshot.preview.events[0].start.slice(0, 10),
+}, d1Store);
+assert.ok(Array.isArray(d1Insights.coworkers));
+const d1RepositoryFile = [...d1Store.files.keys()][0];
+await postState(d1StateStore, {
+  action: "saveDerivedCalendarFile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  file: {
+    id: d1RepositoryFile,
+    name: "AdultTerm1.2026.xlsx",
+    sourceType: "mmc",
+    active: true,
+  },
+  doctors: [...d1Store.fileDoctors.values()].map((doctor) => ({
+    key: doctor.doctor_key,
+    displayName: doctor.display_name,
+    sourceType: doctor.source_type,
+  })),
+  eventsByDoctor: Object.fromEntries(
+    [...d1Store.fileDoctors.values()].map((doctor) => [
+      doctor.doctor_key,
+      [...d1Store.events.values()]
+        .filter((event) => event.doctor_key === doctor.doctor_key)
+        .map((event) => JSON.parse(event.event_json)),
+    ]),
+  ),
+}, d1Store);
+const d1Status = await postState(d1StateStore, {
+  action: "calendarStoreStatus",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+}, d1Store);
+assert.equal(d1Status.total, 1);
+assert.equal(d1Status.populated, 1);
+assert.equal(d1Status.remaining, 0);
 
 const michaelStateStore = new MemoryStore();
 await postState(michaelStateStore, {

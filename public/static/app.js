@@ -274,6 +274,8 @@ let lastHistorySignature = "";
 let pendingExportMode = "full";
 let pendingExportRange = defaultExportRangeState();
 let currentAdminTab = "system";
+let calendarStoreStatus = null;
+let calendarStoreBackfillRunning = false;
 let reportedIssueFingerprints = new Set();
 let currentSnapshot = null;
 let currentSnapshotStale = false;
@@ -474,6 +476,21 @@ accountsBody.addEventListener("click", (event) => {
   const ignoreAdminErrorButton = event.target.closest("[data-ignore-admin-error]");
   if (ignoreAdminErrorButton) {
     ignoreAdminErrorForever(ignoreAdminErrorButton.dataset.ignoreAdminError || "", ignoreAdminErrorButton.dataset.errorId || "");
+    return;
+  }
+  const refreshCalendarStoreButton = event.target.closest("[data-refresh-calendar-store]");
+  if (refreshCalendarStoreButton) {
+    refreshCalendarStoreStatus();
+    return;
+  }
+  const backfillCalendarStoreButton = event.target.closest("[data-backfill-calendar-store]");
+  if (backfillCalendarStoreButton) {
+    backfillNextCalendarStoreFile();
+    return;
+  }
+  const resetCalendarStoreFileButton = event.target.closest("[data-reset-calendar-store-file]");
+  if (resetCalendarStoreFileButton) {
+    resetCalendarStoreFile(resetCalendarStoreFileButton.dataset.resetCalendarStoreFile || "");
     return;
   }
   const addShiftCodeButton = event.target.closest("[data-add-shift-code]");
@@ -1704,12 +1721,17 @@ function syncOverlayState() {
 async function openAccountsSurface(options = {}) {
   closeSettingsPanel();
   if (isOwnerAccount()) {
-    await loadServerUsers();
     if (options.defaultAdminTab) currentAdminTab = options.defaultAdminTab;
   }
   renderAccountsModal();
   accountsModal.classList.remove("hidden");
   accountsModal.setAttribute("aria-hidden", "false");
+  if (isOwnerAccount()) {
+    void loadServerUsers().then(() => {
+      if (!accountsModal.classList.contains("hidden")) renderAccountsModal();
+    });
+    void refreshCalendarStoreStatus({ silent: true });
+  }
 }
 
 function syncMobileAccountButtons() {
@@ -2775,6 +2797,7 @@ async function renderInsightsModal() {
 async function ensureInsightRosterAnalysis() {
   if (parsedRosterSources && (parsedRosterSources.mmc?.length || parsedRosterSources.ddh?.length || parsedRosterSources.casey?.length || parsedRosterSources.mch?.length)) return;
   if (hydrateInsightCacheFromSnapshot()) return;
+  if (await hydrateInsightCacheFromServer()) return;
   if (!selectedFiles.length) return;
   await ensureSelectedFilesLoaded();
   let parsed = await parseCurrentRosterForm(null);
@@ -2800,6 +2823,56 @@ async function ensureInsightRosterAnalysis() {
   parsedRosterSources = parsed.sources;
   parsedImportDoctors = doctorsByImportId(parsed.sources);
   doctorRoleIndex = null;
+}
+
+async function hydrateInsightCacheFromServer() {
+  if (!cloudAvailable || !latestPreview) return false;
+  const range = deriveRangeBounds(buildResolvedPreviewEvents(latestPreview || { events: [] }).filter(isRosterShiftEvent));
+  const startDate = range.start || latestPreview.events?.[0]?.start?.slice(0, 10) || "";
+  const endDate = range.end || startDate;
+  if (!startDate || !endDate) return false;
+  try {
+    const requestEmail = adminViewingEmail ? authUserEmail || currentUserEmail : currentUserEmail;
+    const requestPassword = adminViewingEmail ? authUserPassword || currentUserPassword : currentUserPassword;
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "queryRosterInsights",
+        email: requestEmail,
+        password: requestPassword,
+        startDate,
+        endDate,
+      }),
+    });
+    const data = await readJsonResponse(response, "Could not load roster insights.");
+    if (!data.ok || data.unavailable || !Array.isArray(data.coworkers) || !data.coworkers.length) return false;
+    const cache = new Map();
+    const optionMap = new Map();
+    for (const row of data.coworkers) {
+      const key = normalizeRosterName(row.doctorKey || "");
+      if (!key || !row.event) continue;
+      if (!cache.has(key)) cache.set(key, []);
+      cache.get(key).push(serializeEvent(row.event));
+      if (!optionMap.has(key)) {
+        optionMap.set(key, {
+          key,
+          displayName: row.displayName || key,
+          sourceTypes: row.sourceType ? [String(row.sourceType).toLowerCase()] : [],
+          aliases: row.sourceType ? [{ sourceType: String(row.sourceType).toLowerCase(), key, displayName: row.displayName || key }] : [],
+        });
+      }
+    }
+    if (!cache.size) return false;
+    doctorAnalysisCacheKey = currentInsightCacheKey();
+    doctorAnalysisCache = cache;
+    insightDoctorOptionsCache = [...optionMap.values()].sort((left, right) => left.displayName.localeCompare(right.displayName));
+    insightDoctorRoleCache = new Map();
+    cacheCurrentInsightSnapshot();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function renderWhoInsight() {
@@ -6010,7 +6083,7 @@ function renderAccountsModal() {
       </article>
     ` : "";
   const errorsCard = ownerView ? renderAdminErrorsCard(serverOtherUsers) : "";
-  const systemCard = ownerView ? renderParserRulesCard() : "";
+  const systemCard = ownerView ? renderSystemAdminCard() : "";
   const filesCard = ownerView ? renderFilesMarkup({
     canRemove: canRemoveImports(),
     canAdd: true,
@@ -6029,6 +6102,62 @@ function renderAccountsModal() {
               : ownerCard)
     : ownerCard;
   accountsBody.innerHTML = `${adminTabs}${adminBody}`;
+}
+
+function renderSystemAdminCard() {
+  return `
+    <div class="issues-list">
+      ${renderCalendarStoreCard()}
+      ${renderParserRulesCard()}
+    </div>
+  `;
+}
+
+function renderCalendarStoreCard() {
+  const status = calendarStoreStatus;
+  const unavailable = status?.unavailable === true;
+  const total = Number(status?.total || 0);
+  const populated = Number(status?.populated || 0);
+  const partial = Number(status?.partial || 0);
+  const remaining = Number(status?.remaining || 0);
+  const eventCount = Number(status?.eventCount || 0);
+  const nextFile = status?.nextFile || null;
+  const problemFiles = (status?.files || []).filter((file) => file.status === "partial").slice(0, 3);
+  const detail = unavailable
+    ? "D1 is not available to this deployment."
+    : status
+      ? `${populated}/${total} roster files indexed · ${eventCount} SQL events · ${remaining} remaining${partial ? ` · ${partial} partial` : ""}`
+      : "Status not loaded yet.";
+  return `
+    <article class="review-card">
+      <div class="review-top">
+        <div>
+          <strong>SQL calendar store</strong>
+          <span>${escapeHtml(detail)}</span>
+        </div>
+      </div>
+      <div class="review-body">
+        ${nextFile ? `<p class="status">Next file: ${escapeHtml(nextFile.name)} (${escapeHtml(String(nextFile.sourceType || "").toUpperCase())})</p>` : ""}
+        ${problemFiles.length ? `
+          <div class="issues-list">
+            ${problemFiles.map((file) => `
+              <article class="issue-card">
+                <div>
+                  <strong>${escapeHtml(file.name)}</strong>
+                  <p>${Number(file.indexedDoctors || 0)}/${Number(file.expectedDoctors || 0)} doctors indexed · ${Number(file.eventCount || 0)} events</p>
+                </div>
+                <button type="button" class="button button-secondary" data-reset-calendar-store-file="${escapeHtml(file.id)}">Reset and retry</button>
+              </article>
+            `).join("")}
+          </div>
+        ` : ""}
+        <div class="modal-actions">
+          <button type="button" class="button button-secondary" data-refresh-calendar-store ${calendarStoreBackfillRunning ? "disabled" : ""}>Refresh status</button>
+          <button type="button" class="button button-primary" data-backfill-calendar-store ${calendarStoreBackfillRunning || unavailable || !remaining ? "disabled" : ""}>Backfill next roster file</button>
+        </div>
+      </div>
+    </article>
+  `;
 }
 
 function renderParserRulesCard() {
@@ -8799,6 +8928,152 @@ async function loadServerUsers() {
   } catch {
     // Keep the last available local list.
   }
+}
+
+async function refreshCalendarStoreStatus(options = {}) {
+  if (!isCreatorAuthenticated() || !cloudAvailable) return;
+  try {
+    const data = await calendarStoreRequest("calendarStoreStatus");
+    calendarStoreStatus = data;
+    if (!options.silent) setStatus("SQL calendar store status refreshed.");
+  } catch (error) {
+    calendarStoreStatus = { unavailable: true };
+    if (!options.silent) setStatus(error.message || "Could not load SQL calendar store status.", true);
+  }
+  if (!accountsModal.classList.contains("hidden") && currentAdminTab === "system") renderAccountsModal();
+}
+
+async function backfillNextCalendarStoreFile() {
+  if (!isCreatorAuthenticated() || calendarStoreBackfillRunning) return;
+  calendarStoreBackfillRunning = true;
+  renderAccountsModal();
+  setStatus("Loading one roster file for SQL backfill...");
+  try {
+    let nextFile = calendarStoreStatus?.nextFile || null;
+    if (!nextFile) {
+      const status = await calendarStoreRequest("calendarStoreStatus");
+      calendarStoreStatus = status;
+      nextFile = status.nextFile || null;
+    }
+    if (!nextFile?.id) {
+      setStatus("No roster file needed backfilling.");
+      return;
+    }
+    const imports = await loadCloudImportsByRefs([nextFile]);
+    if (!imports.length) throw new Error("Could not load the next roster file for backfill.");
+    setStatus(`Parsing ${nextFile.name || imports[0].name} in the browser...`);
+    const payload = await buildDerivedCalendarFilePayload(imports[0], nextFile);
+    setStatus(`Saving ${payload.eventCount} SQL events...`);
+    const data = await calendarStoreRequest("saveDerivedCalendarFile", payload);
+    calendarStoreStatus = data;
+    setStatus(data.result?.events ? "Backfilled one roster file into SQL." : "No SQL events were created for that file.");
+  } catch (error) {
+    setStatus(error.message || "Could not backfill the next roster file.", true);
+  } finally {
+    calendarStoreBackfillRunning = false;
+    if (!accountsModal.classList.contains("hidden") && currentAdminTab === "system") renderAccountsModal();
+  }
+}
+
+async function resetCalendarStoreFile(fileId) {
+  if (!isCreatorAuthenticated() || !fileId || calendarStoreBackfillRunning) return;
+  calendarStoreBackfillRunning = true;
+  renderAccountsModal();
+  setStatus("Resetting partial SQL backfill...");
+  try {
+    const data = await calendarStoreRequest("resetDerivedCalendarFile", { fileId });
+    calendarStoreStatus = data;
+    setStatus("Partial SQL backfill reset. Retry the next roster file.");
+  } catch (error) {
+    setStatus(error.message || "Could not reset that SQL backfill.", true);
+  } finally {
+    calendarStoreBackfillRunning = false;
+    if (!accountsModal.classList.contains("hidden") && currentAdminTab === "system") renderAccountsModal();
+  }
+}
+
+async function buildDerivedCalendarFilePayload(importEntry, statusFile = {}) {
+  const parsed = await parseRosterEntries([importEntry], null);
+  const sources = parsed.sources || {};
+  const sourceType = sources.mmc?.length ? "mmc"
+    : sources.ddh?.length ? "ddh"
+      : sources.casey?.length ? "casey"
+        : sources.mch?.length ? "mch"
+          : String(statusFile.sourceType || importEntry.sourceType || "").toLowerCase();
+  const sourceEntries = {
+    mmc: sourceType === "mmc" ? sources.mmc || [] : [],
+    ddh: sourceType === "ddh" ? sources.ddh || [] : [],
+    casey: sourceType === "casey" ? sources.casey || [] : [],
+    mch: sourceType === "mch" ? sources.mch || [] : [],
+  };
+  const doctors = rosterDoctorOptions(sourceEntries.mmc, sourceEntries.ddh, sourceEntries.casey, sourceEntries.mch)
+    .flatMap((doctor) => {
+      const aliases = Array.isArray(doctor.aliases) && doctor.aliases.length
+        ? doctor.aliases.filter((alias) => String(alias.sourceType || "").toLowerCase() === sourceType)
+        : [{ key: doctor.key, displayName: doctor.displayName, sourceType }];
+      return aliases.map((alias) => ({
+        key: normalizeRosterName(alias.key || doctor.key),
+        displayName: alias.displayName || doctor.displayName,
+        sourceType,
+      }));
+    });
+  const uniqueDoctors = [];
+  const seenDoctors = new Set();
+  for (const doctor of doctors) {
+    const marker = `${doctor.sourceType}:${doctor.key}`;
+    if (seenDoctors.has(marker)) continue;
+    seenDoctors.add(marker);
+    uniqueDoctors.push(doctor);
+  }
+  const analysisSettings = {
+    ...rosterDefaultSettings(),
+    hospitalFilter: "all",
+    dateFrom: "",
+    dateTo: "",
+    includeLocations: false,
+  };
+  const eventsByDoctor = {};
+  let eventCount = 0;
+  for (const doctor of uniqueDoctors) {
+    const view = buildRosterView(
+      sourceEntries.mmc,
+      sourceEntries.ddh,
+      doctor.key,
+      analysisSettings,
+      {},
+      {},
+      [],
+      sourceEntries.casey,
+      sourceEntries.mch,
+    );
+    const events = view.events.map(serializeEvent);
+    eventsByDoctor[doctor.key] = events;
+    eventCount += events.length;
+  }
+  return {
+    file: {
+      ...importRefForWorkspace(importEntry),
+      id: statusFile.id || importEntry.id,
+      sourceType,
+    },
+    doctors: uniqueDoctors,
+    eventsByDoctor,
+    eventCount,
+  };
+}
+
+async function calendarStoreRequest(action, extra = {}) {
+  const response = await fetch("/api/state", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      action,
+      email: authUserEmail || currentUserEmail,
+      password: authUserPassword || currentUserPassword,
+      ...extra,
+    }),
+  });
+  return await readJsonResponse(response, "SQL calendar store request failed.");
 }
 
 async function buildCloudState(imports = selectedFiles, session = buildActiveSessionState()) {

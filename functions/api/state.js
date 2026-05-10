@@ -1,4 +1,15 @@
 import { inspectImportRecord, normalizeRosterName } from "../_lib/roster.js";
+import {
+  buildPreviewFromDerivedEvents,
+  countDerivedDoctorsByFile,
+  countDerivedEventsByFile,
+  deleteDerivedRosterFile,
+  hasCalendarDb,
+  queryCoworkerEvents,
+  queryDoctorEvents,
+  replaceDerivedRosterFile,
+  upsertDerivedRosterFile,
+} from "../_lib/d1-calendar.js";
 
 const CREATOR_EMAIL = "rhaydon@gmail.com";
 const REPOSITORY_INDEX_KEY = "repository:index";
@@ -36,7 +47,7 @@ export async function onRequestPost(context) {
     }
     if (action === "login") {
       const account = await loadOrCreateAccount(context.env.ROSTER_STORE, email, password, { mode, realName });
-      const prepared = await prepareAccountResponse(context.env.ROSTER_STORE, account.record, { includeAvailableDoctors: account.record.role !== "creator" && account.record.role !== "owner" });
+      const prepared = await prepareAccountResponse(context.env.ROSTER_STORE, account.record, { db: context.env.ROSTER_DB, includeAvailableDoctors: account.record.role !== "creator" && account.record.role !== "owner" });
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -78,7 +89,8 @@ export async function onRequestPost(context) {
         mode: "create",
         realName: targetRealName,
       });
-      const prepared = await prepareAccountResponse(context.env.ROSTER_STORE, created.record);
+      const createdRecord = await autoClaimMatchedRosterNames(context.env.ROSTER_STORE, created.record);
+      const prepared = await prepareAccountResponse(context.env.ROSTER_STORE, createdRecord, { db: context.env.ROSTER_DB });
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -102,7 +114,7 @@ export async function onRequestPost(context) {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
       const target = await loadAccountRecord(context.env.ROSTER_STORE, targetEmail);
-      const prepared = await prepareAccountResponse(context.env.ROSTER_STORE, target, { includeAvailableDoctors: false });
+      const prepared = await prepareAccountResponse(context.env.ROSTER_STORE, target, { db: context.env.ROSTER_DB, includeAvailableDoctors: false });
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -144,7 +156,7 @@ export async function onRequestPost(context) {
         updatedAt: new Date().toISOString(),
       };
       await context.env.ROSTER_STORE.put(storageKey(claimEmail), JSON.stringify(updated));
-      const prepared = await prepareAccountResponse(context.env.ROSTER_STORE, updated);
+      const prepared = await prepareAccountResponse(context.env.ROSTER_STORE, updated, { db: context.env.ROSTER_DB });
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -173,6 +185,65 @@ export async function onRequestPost(context) {
       });
     }
 
+    if (action === "calendarStoreStatus") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      if (!hasCalendarDb(context.env)) {
+        return Response.json({ ok: false, unavailable: true, total: 0, populated: 0, remaining: 0 });
+      }
+      const status = await calendarStoreStatus(context.env.ROSTER_STORE, context.env.ROSTER_DB);
+      return Response.json({ ok: true, ...status });
+    }
+
+    if (action === "rebuildCalendarStore") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      if (!hasCalendarDb(context.env)) {
+        return Response.json({ ok: false, unavailable: true, rebuilt: 0, total: 0, populated: 0, remaining: 0 });
+      }
+      const rebuilt = await rebuildCalendarStoreFromRepository(context.env.ROSTER_STORE, context.env.ROSTER_DB, {
+        fileId: String(body?.fileId || "").trim(),
+        limit: Number(body?.limit || 1) || 1,
+      });
+      const status = await calendarStoreStatus(context.env.ROSTER_STORE, context.env.ROSTER_DB);
+      return Response.json({ ok: true, rebuilt, ...status });
+    }
+
+    if (action === "saveDerivedCalendarFile") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      if (!hasCalendarDb(context.env)) {
+        return Response.json({ ok: false, unavailable: true });
+      }
+      const result = await replaceDerivedRosterFile(
+        context.env.ROSTER_DB,
+        body?.file || {},
+        body?.doctors || [],
+        body?.eventsByDoctor || {},
+      );
+      const status = await calendarStoreStatus(context.env.ROSTER_STORE, context.env.ROSTER_DB);
+      return Response.json({ ok: true, result, ...status });
+    }
+
+    if (action === "resetDerivedCalendarFile") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      if (!hasCalendarDb(context.env)) {
+        return Response.json({ ok: false, unavailable: true });
+      }
+      const fileId = String(body?.fileId || "").trim();
+      if (!fileId) {
+        return Response.json({ error: "Roster file is required." }, { status: 400 });
+      }
+      await deleteDerivedRosterFile(context.env.ROSTER_DB, fileId);
+      const status = await calendarStoreStatus(context.env.ROSTER_STORE, context.env.ROSTER_DB);
+      return Response.json({ ok: true, reset: fileId, ...status });
+    }
+
     if (action === "updateAccount") {
       const saveEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
       const targetRecord = saveEmail === email ? account.record : await loadAccountRecord(context.env.ROSTER_STORE, saveEmail);
@@ -189,7 +260,7 @@ export async function onRequestPost(context) {
       await context.env.ROSTER_STORE.put(storageKey(saveEmail), JSON.stringify(updated));
       const owner = accountSnapshotOwner(saveEmail, updated.role || roleForEmail(saveEmail));
       await context.env.ROSTER_STORE.delete(snapshotKey(owner.ownerType, owner.ownerId));
-      const prepared = await prepareAccountResponse(context.env.ROSTER_STORE, updated, { includeAvailableDoctors: false });
+      const prepared = await prepareAccountResponse(context.env.ROSTER_STORE, updated, { db: context.env.ROSTER_DB, includeAvailableDoctors: false });
       return Response.json({
         ok: true,
         realName: prepared.realName,
@@ -536,12 +607,12 @@ export async function onRequestPost(context) {
       const targetRecord = saveEmail === email ? account.record : await loadAccountRecord(context.env.ROSTER_STORE, saveEmail);
       const targetRole = targetRecord.role || roleForEmail(saveEmail);
       const state = sanitizeState(body?.state);
-      const repository = await upsertStateImports(context.env.ROSTER_STORE, state.imports, saveEmail);
+      const repository = await upsertStateImports(context.env.ROSTER_STORE, state.imports, saveEmail, context.env.ROSTER_DB);
       state.imports = repository.refs;
       const claims = sanitizeClaims(targetRecord.claims);
       const removedImportIds = sanitizeRepositoryFileIds(body?.removedImportIds);
       if ((targetRole === "creator" || targetRole === "owner") && saveEmail === email && removedImportIds.length) {
-        repository.index = await removeRepositoryFiles(context.env.ROSTER_STORE, repository.index, removedImportIds);
+        repository.index = await removeRepositoryFiles(context.env.ROSTER_STORE, repository.index, removedImportIds, context.env.ROSTER_DB);
         state.imports = state.imports.filter((item) => {
           const repoId = item.repoId || item.repositoryId || item.id;
           return !removedImportIds.includes(repoId);
@@ -660,6 +731,25 @@ export async function onRequestPost(context) {
       const refs = sanitizeSnapshotFileRefs(body?.refs || []);
       const imports = await resolveStateImports(context.env.ROSTER_STORE, refs);
       return Response.json({ ok: true, imports });
+    }
+
+    if (action === "queryRosterInsights") {
+      if (!hasCalendarDb(context.env)) {
+        return Response.json({ ok: false, unavailable: true, coworkers: [] });
+      }
+      const startDate = String(body?.startDate || body?.date || "").slice(0, 10);
+      const endDate = String(body?.endDate || body?.date || startDate).slice(0, 10);
+      const sourceTypes = sanitizeSourceTypes(body?.sourceTypes || []);
+      const excludeDoctorKeys = (Array.isArray(body?.excludeDoctorKeys) ? body.excludeDoctorKeys : [])
+        .map((key) => normalizeRosterName(key))
+        .filter(Boolean);
+      const coworkers = await queryCoworkerEvents(context.env.ROSTER_DB, {
+        startDate,
+        endDate,
+        sourceTypes,
+        excludeDoctorKeys,
+      });
+      return Response.json({ ok: true, coworkers });
     }
 
     if (action === "loadInsightImports") {
@@ -803,6 +893,75 @@ async function listUsers(store) {
   return users.sort((a, b) => a.email.localeCompare(b.email));
 }
 
+async function autoClaimMatchedRosterNames(store, record) {
+  const role = record?.role || roleForEmail(record?.email || "");
+  if (!record?.email || role === "creator" || role === "owner") return record;
+  const index = await loadRepositoryIndex(store);
+  const claims = mergeClaims(sanitizeClaims(record.claims), matchRepositoryClaims(index, record.realName || ""));
+  if (!claims.length || JSON.stringify(claims) === JSON.stringify(sanitizeClaims(record.claims))) return record;
+  const state = {
+    ...sanitizeState(record.state),
+    imports: repositoryImportRefsForClaims(index, claims),
+  };
+  const updated = {
+    ...record,
+    claims,
+    state,
+    updatedAt: new Date().toISOString(),
+  };
+  await store.put(storageKey(record.email), JSON.stringify(updated));
+  return updated;
+}
+
+async function rebuildCalendarStoreFromRepository(store, db, options = {}) {
+  const index = await loadRepositoryIndex(store);
+  let rebuilt = 0;
+  const limit = Math.max(1, Math.min(Number(options.limit || 1) || 1, 3));
+  const fileId = String(options.fileId || "").trim();
+  for (const file of index.files || []) {
+    if (fileId && file.id !== fileId) continue;
+    if (rebuilt >= limit) break;
+    const stored = await store.get(repositoryFileKey(file.id), "json").catch(() => null);
+    if (!stored?.dataUrl) continue;
+    const result = await upsertDerivedRosterFile(db, file, stored).catch(() => null);
+    if (result?.ok) rebuilt += 1;
+  }
+  return rebuilt;
+}
+
+async function calendarStoreStatus(store, db) {
+  const index = await loadRepositoryIndex(store);
+  const activeFiles = (index.files || []).filter((file) => file.active !== false);
+  const counts = await countDerivedEventsByFile(db, activeFiles.map((file) => file.id));
+  const doctorCounts = await countDerivedDoctorsByFile(db, activeFiles.map((file) => file.id));
+  const files = activeFiles.map((file) => ({
+    id: file.id,
+    name: file.name,
+    sourceType: file.sourceType,
+    expectedDoctors: sanitizeRepositoryDoctors(file.doctors).length,
+    indexedDoctors: doctorCounts.get(file.id) || 0,
+    eventCount: counts.get(file.id) || 0,
+  })).map((file) => ({
+    ...file,
+    status: file.eventCount <= 0
+      ? "missing"
+      : file.expectedDoctors > 0 && file.indexedDoctors < file.expectedDoctors
+        ? "partial"
+        : "populated",
+  }));
+  const populated = files.filter((file) => file.status === "populated").length;
+  const partial = files.filter((file) => file.status === "partial").length;
+  return {
+    total: files.length,
+    populated,
+    partial,
+    remaining: Math.max(0, files.length - populated),
+    eventCount: files.reduce((total, file) => total + file.eventCount, 0),
+    nextFile: files.find((file) => file.status !== "populated") || null,
+    files,
+  };
+}
+
 function userSummaryFromRecord(email, record) {
   const claims = sanitizeClaims(record?.claims).filter((claim) => claimMatchesAccountIdentity(claim, record?.realName || ""));
   const adminIssues = sanitizeAdminIssues(record?.adminIssues);
@@ -863,7 +1022,7 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
     }
   } else {
     const hasEmbeddedImports = Array.isArray(state.imports) && state.imports.some((item) => item?.dataUrl);
-    const imported = hasEmbeddedImports ? await upsertStateImports(store, state.imports, record.email) : {
+    const imported = hasEmbeddedImports ? await upsertStateImports(store, state.imports, record.email, options.db) : {
       index,
       refs: (index.files || []).filter((file) => file.active !== false).map(repositoryImportRef),
       changed: false,
@@ -892,9 +1051,11 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
     linkedProfiles,
     index,
   });
-  const snapshot = await loadSnapshotRecord(store, owner.ownerType, owner.ownerId);
+  const storedSnapshot = await loadSnapshotRecord(store, owner.ownerType, owner.ownerId);
+  const derivedSnapshot = await buildDerivedAccountSnapshot(options.db, { role, record, state, claims, index });
+  const snapshot = derivedSnapshot || storedSnapshot;
   const snapshotAvailable = Boolean(snapshot);
-  const snapshotStale = !snapshot || snapshot.schemaVersion !== SNAPSHOT_SCHEMA_VERSION || snapshot.buildStamp !== buildStamp;
+  const snapshotStale = derivedSnapshot ? false : (!storedSnapshot || storedSnapshot.schemaVersion !== SNAPSHOT_SCHEMA_VERSION || storedSnapshot.buildStamp !== buildStamp);
   const issueConfig = await buildIssueConfig(store, record.email);
 
   return {
@@ -917,6 +1078,48 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
     snapshotBuiltAt: snapshot?.builtAt || "",
     snapshotBuildStamp: buildStamp,
   };
+}
+
+async function buildDerivedAccountSnapshot(db, context) {
+  if (!hasCalendarDb({ ROSTER_DB: db })) return null;
+  const role = context.role || "user";
+  const state = sanitizeState(context.state);
+  let doctorKeys = [];
+  let doctorOptions = [];
+  if (role === "creator" || role === "owner") {
+    const selectedKey = normalizeRosterName(state.session?.doctorKey || "");
+    if (!selectedKey) return null;
+    const doctor = findRepositoryDoctorByKey(context.index, selectedKey);
+    if (!doctor) return null;
+    doctorKeys = [doctor.key];
+    doctorOptions = buildCreatorDoctorOptions(repositoryDoctorCandidatesFromIndex(context.index));
+  } else {
+    const claims = sanitizeClaims(context.claims);
+    if (!claims.length) return null;
+    doctorKeys = claims.map((claim) => claim.key);
+    doctorOptions = buildCreatorDoctorOptions(claims.map((claim) => ({
+      key: claim.key,
+      displayName: claim.displayName,
+      sourceType: claim.sourceType,
+    })));
+  }
+  const events = await queryDoctorEvents(db, doctorKeys);
+  if (!events.length) return null;
+  const owner = accountSnapshotOwner(context.record.email, role);
+  return sanitizeSnapshotRecord({
+    ownerType: owner.ownerType,
+    ownerId: owner.ownerId,
+    schemaVersion: SNAPSHOT_SCHEMA_VERSION,
+    builtAt: new Date().toISOString(),
+    buildStamp: "d1-derived",
+    preview: buildPreviewFromDerivedEvents(events),
+    session: state.session || {},
+    doctorOptions,
+    detectedSources: {},
+    fileRefs: sanitizeSnapshotFileRefs(state.imports),
+    subscriptionFeeds: {},
+    insightCache: null,
+  });
 }
 
 export async function loadAccountBySubscriptionToken(store, token) {
@@ -1126,9 +1329,9 @@ async function removeLocalParserRuleFromAllUsers(store, rule) {
   }
 }
 
-async function upsertStateImports(store, imports, uploadedBy) {
+async function upsertStateImports(store, imports, uploadedBy, db = null) {
   let index = await loadRepositoryIndex(store);
-  const upserted = await upsertImportsIntoRepository(store, index, imports, uploadedBy);
+  const upserted = await upsertImportsIntoRepository(store, index, imports, uploadedBy, db);
   index = upserted.index;
   if (upserted.changed) await saveRepositoryIndex(store, index);
   return {
@@ -1141,7 +1344,7 @@ async function upsertStateImports(store, imports, uploadedBy) {
   };
 }
 
-async function upsertImportsIntoRepository(store, index, imports = [], uploadedBy = "") {
+async function upsertImportsIntoRepository(store, index, imports = [], uploadedBy = "", db = null) {
   const idByOriginalId = new Map();
   const idByDataUrl = new Map();
   let changed = false;
@@ -1187,12 +1390,19 @@ async function upsertImportsIntoRepository(store, index, imports = [], uploadedB
       }
       changed = true;
     }
+    let storedImport = null;
     if (!existing) {
-      await store.put(repositoryFileKey(repoId), JSON.stringify({
+      storedImport = {
         ...meta,
         type: item.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         dataUrl: item.dataUrl,
-      }));
+      };
+      await store.put(repositoryFileKey(repoId), JSON.stringify(storedImport));
+    } else {
+      storedImport = await store.get(repositoryFileKey(repoId), "json").catch(() => null);
+    }
+    if (db && storedImport?.dataUrl && (!existing || JSON.stringify(existing) !== JSON.stringify(meta))) {
+      await upsertDerivedRosterFile(db, meta, storedImport).catch(() => null);
     }
   }
   index.files.sort((left, right) => (left.addedAt || "").localeCompare(right.addedAt || "") || left.name.localeCompare(right.name));
@@ -1215,11 +1425,14 @@ function sanitizeRepositoryFileIds(ids = []) {
     .filter(Boolean))];
 }
 
-async function removeRepositoryFiles(store, index, ids = []) {
+async function removeRepositoryFiles(store, index, ids = [], db = null) {
   const removedIds = new Set(sanitizeRepositoryFileIds(ids));
   if (!removedIds.size) return index;
   const files = (index.files || []).filter((file) => !removedIds.has(file.id));
   await Promise.all([...removedIds].map((id) => store.delete(repositoryFileKey(id))));
+  if (db) {
+    await Promise.all([...removedIds].map((id) => deleteDerivedRosterFile(db, id).catch(() => null)));
+  }
   const next = { ...index, files };
   await saveRepositoryIndex(store, next);
   return next;
@@ -1686,6 +1899,55 @@ async function repositoryDoctorCandidates(store, index) {
     if (leftClaimed !== rightClaimed) return leftClaimed - rightClaimed;
     return left.displayName.localeCompare(right.displayName) || left.sourceType.localeCompare(right.sourceType);
   });
+}
+
+function repositoryDoctorCandidatesFromIndex(index) {
+  const seen = new Set();
+  const candidates = [];
+  for (const file of index?.files || []) {
+    if (file.active === false) continue;
+    for (const doctor of sanitizeRepositoryDoctors(file.doctors)) {
+      const marker = `${doctor.sourceType}:${doctor.key}`;
+      if (seen.has(marker)) continue;
+      seen.add(marker);
+      candidates.push(doctor);
+    }
+  }
+  return candidates;
+}
+
+function findRepositoryDoctorByKey(index, key) {
+  const normalizedKey = normalizeRosterName(key);
+  if (!normalizedKey) return null;
+  return repositoryDoctorCandidatesFromIndex(index).find((doctor) => doctor.key === normalizedKey) || null;
+}
+
+function buildCreatorDoctorOptions(doctors) {
+  const groups = new Map();
+  for (const doctor of doctors || []) {
+    const identity = rosterIdentityKey(doctor.displayName || doctor.key);
+    if (!identity) continue;
+    if (!groups.has(identity)) groups.set(identity, []);
+    groups.get(identity).push({
+      sourceType: doctor.sourceType,
+      key: doctor.key,
+      displayName: doctor.displayName,
+    });
+  }
+  return [...groups.values()].map((aliases) => {
+    aliases.sort((left, right) => sourcePriority(left.sourceType) - sourcePriority(right.sourceType) || left.displayName.localeCompare(right.displayName));
+    const primary = aliases[0];
+    return {
+      key: primary.key,
+      displayName: primary.displayName,
+      sourceTypes: [...new Set(aliases.map((alias) => alias.sourceType))],
+      aliases,
+    };
+  }).sort((left, right) => left.displayName.localeCompare(right.displayName));
+}
+
+function sourcePriority(sourceType) {
+  return { mmc: 0, ddh: 1, casey: 2, mch: 3 }[sourceType] ?? 99;
 }
 
 function sanitizeDoctorAccountResolutionInput(value) {
