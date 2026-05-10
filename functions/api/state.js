@@ -1571,6 +1571,7 @@ function matchRepositoryClaims(index, realName) {
 }
 
 async function repositoryDoctorCandidates(store, index) {
+  const accountIndex = await loadClaimedAccountIndex(store);
   const seen = new Set();
   const candidates = [];
   for (const file of index.files || []) {
@@ -1579,7 +1580,7 @@ async function repositoryDoctorCandidates(store, index) {
       const marker = `${doctor.sourceType}:${doctor.key}`;
       if (seen.has(marker)) continue;
       seen.add(marker);
-      const resolved = await resolveDoctorAccount(store, doctor);
+      const resolved = resolveDoctorAccountFromIndex(accountIndex, doctor);
       candidates.push({
         key: doctor.key,
         displayName: doctor.displayName,
@@ -1650,18 +1651,33 @@ function doctorResolutionMarkers(input) {
 }
 
 async function resolveDoctorAccount(store, rawDoctor) {
-  const requested = doctorResolutionMarkers(rawDoctor);
-  if (!requested.key && !requested.displayName && !requested.aliases.length) {
-    return { mode: "doctor-profile", email: "", realName: "" };
-  }
+  return resolveDoctorAccountFromIndex(await loadClaimedAccountIndex(store), rawDoctor);
+}
+
+async function loadClaimedAccountIndex(store) {
+  const accounts = [];
   const result = await store.list({ prefix: "account:" });
   for (const item of result.keys || []) {
     const record = await store.get(item.name, "json").catch(() => null);
     const email = normalizeEmail(record?.email || item.name.replace(/^account:/, ""));
     const role = record?.role || roleForEmail(email);
     if (!record || !email || role === "creator" || role === "owner") continue;
-    const realName = String(record.realName || "").trim();
-    for (const claim of sanitizeClaims(record?.claims)) {
+    accounts.push({
+      email,
+      realName: String(record.realName || "").trim(),
+      claims: sanitizeClaims(record.claims),
+    });
+  }
+  return accounts;
+}
+
+function resolveDoctorAccountFromIndex(accounts, rawDoctor) {
+  const requested = doctorResolutionMarkers(rawDoctor);
+  if (!requested.key && !requested.displayName && !requested.aliases.length) {
+    return { mode: "doctor-profile", email: "", realName: "" };
+  }
+  for (const account of accounts || []) {
+    for (const claim of account.claims || []) {
       if (
         requested.markers.has(`${claim.sourceType}:${claim.key}`)
         || requested.markers.has(`*:${claim.key}`)
@@ -1670,19 +1686,19 @@ async function resolveDoctorAccount(store, rawDoctor) {
       ) {
         return {
           mode: "claimed-account",
-          email,
-          realName,
+          email: account.email,
+          realName: account.realName,
         };
       }
     }
     if (
-      (requested.displayName && doctorMatchesRealName({ key: requested.key, displayName: requested.displayName }, realName))
-      || requested.aliases.some((alias) => doctorMatchesRealName(alias, realName))
+      (requested.displayName && doctorMatchesRealName({ key: requested.key, displayName: requested.displayName }, account.realName))
+      || requested.aliases.some((alias) => doctorMatchesRealName(alias, account.realName))
     ) {
       return {
         mode: "claimed-account",
-        email,
-        realName,
+        email: account.email,
+        realName: account.realName,
       };
     }
   }

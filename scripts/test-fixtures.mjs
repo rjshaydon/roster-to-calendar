@@ -370,9 +370,12 @@ class MemoryStore {
   constructor() {
     this.records = new Map();
     this.deletedKeys = [];
+    this.accountListCalls = 0;
+    this.accountGetCalls = 0;
   }
 
   async get(key, type) {
+    if (String(key || "").startsWith("account:")) this.accountGetCalls += 1;
     const value = this.records.get(key);
     if (value === undefined) return null;
     return type === "json" ? JSON.parse(value) : value;
@@ -389,9 +392,15 @@ class MemoryStore {
 
   async list(options = {}) {
     const prefix = options.prefix || "";
+    if (prefix === "account:") this.accountListCalls += 1;
     return {
       keys: [...this.records.keys()].filter((name) => name.startsWith(prefix)).map((name) => ({ name })),
     };
+  }
+
+  resetMetrics() {
+    this.accountListCalls = 0;
+    this.accountGetCalls = 0;
   }
 }
 
@@ -569,6 +578,34 @@ const michaelRecreatedResolution = await postState(michaelStateStore, {
 });
 assert.equal(michaelRecreatedResolution.mode, "claimed-account");
 assert.equal(michaelRecreatedResolution.email, "michael@example.com");
+
+const manyDoctorsStore = new MemoryStore();
+await postState(manyDoctorsStore, {
+  action: "login",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+});
+await seedRepository(manyDoctorsStore, [
+  repositoryFile("many-doctors", {
+    doctors: Array.from({ length: 90 }, (_, index) => ({
+      key: `DOCTOR ${index}`,
+      displayName: `Doctor ${index}`,
+      sourceType: "mmc",
+    })),
+  }),
+]);
+await seedUser(manyDoctorsStore, "doctor-1@example.com", "doctor-password", "Doctor 1");
+await seedUser(manyDoctorsStore, "doctor-2@example.com", "doctor-password", "Doctor 2");
+manyDoctorsStore.resetMetrics();
+const manyDoctorsLogin = await postState(manyDoctorsStore, {
+  action: "login",
+  email: "new-doctor@example.com",
+  password: "new-password",
+  mode: "create",
+  realName: "New Doctor",
+});
+assert.equal(manyDoctorsLogin.availableDoctors.length, 90);
+assert.equal(manyDoctorsStore.accountListCalls, 1, "available doctor claimed status should scan accounts once per login");
 
 const profileImports = await postState(stateStore, {
   action: "loadDoctorProfileImports",
