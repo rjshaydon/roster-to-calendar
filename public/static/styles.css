@@ -2025,6 +2025,18 @@ body[data-skin="console"] .preview-cell.is-weekend {
   justify-self: end;
 }
 
+.account-claim-editor {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.account-claim-editor.hidden {
+  display: none;
+}
+
 .button-small {
   min-height: 34px;
   padding: 8px 12px;
