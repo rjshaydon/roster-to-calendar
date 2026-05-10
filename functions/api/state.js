@@ -46,6 +46,7 @@ export async function onRequestPost(context) {
         state: prepared.state,
         claims: prepared.claims,
         nameMatches: prepared.nameMatches,
+        suggestedClaims: prepared.nameMatches,
         availableDoctors: prepared.availableDoctors,
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
@@ -88,6 +89,7 @@ export async function onRequestPost(context) {
           role: prepared.role,
           sites: [...new Set(sanitizeClaims(prepared.claims).map((claim) => claim.sourceType.toUpperCase()))].sort(),
           claims: prepared.claims,
+          suggestedClaims: prepared.nameMatches,
           insightsEnabled: insightsEnabledForRecord({ ...created.record, role: prepared.role }),
           createdAt: created.record.createdAt || "",
           updatedAt: created.record.updatedAt || "",
@@ -109,6 +111,7 @@ export async function onRequestPost(context) {
         state: prepared.state,
         claims: prepared.claims,
         nameMatches: prepared.nameMatches,
+        suggestedClaims: prepared.nameMatches,
         availableDoctors: prepared.availableDoctors,
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
@@ -150,6 +153,7 @@ export async function onRequestPost(context) {
         state: prepared.state,
         claims: prepared.claims,
         nameMatches: prepared.nameMatches,
+        suggestedClaims: prepared.nameMatches,
         availableDoctors: prepared.availableDoctors,
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
@@ -164,8 +168,116 @@ export async function onRequestPost(context) {
       return Response.json({
         ok: true,
         users: await listUsers(context.env.ROSTER_STORE),
+        availableDoctors: await repositoryDoctorCandidates(context.env.ROSTER_STORE, await loadRepositoryIndex(context.env.ROSTER_STORE)),
         issueConfig: await buildIssueConfig(context.env.ROSTER_STORE, email),
       });
+    }
+
+    if (action === "updateAccount") {
+      const saveEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
+      const targetRecord = saveEmail === email ? account.record : await loadAccountRecord(context.env.ROSTER_STORE, saveEmail);
+      const nextRealName = String(body?.realName ?? targetRecord.realName ?? "").trim();
+      const nextPassword = String(body?.newPassword || "");
+      const passwordRecord = nextPassword ? await hashPassword(nextPassword) : {};
+      const updated = {
+        ...targetRecord,
+        email: saveEmail,
+        realName: nextRealName,
+        ...passwordRecord,
+        updatedAt: new Date().toISOString(),
+      };
+      await context.env.ROSTER_STORE.put(storageKey(saveEmail), JSON.stringify(updated));
+      const owner = accountSnapshotOwner(saveEmail, updated.role || roleForEmail(saveEmail));
+      await context.env.ROSTER_STORE.delete(snapshotKey(owner.ownerType, owner.ownerId));
+      const prepared = await prepareAccountResponse(context.env.ROSTER_STORE, updated, { includeAvailableDoctors: false });
+      return Response.json({
+        ok: true,
+        realName: prepared.realName,
+        claims: prepared.claims,
+        nameMatches: prepared.nameMatches,
+        suggestedClaims: prepared.nameMatches,
+        user: userSummaryFromRecord(saveEmail, { ...updated, claims: prepared.claims }),
+      });
+    }
+
+    if (action === "setAccountRosterClaims") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      if (!targetEmail) {
+        return Response.json({ error: "Target account is required." }, { status: 400 });
+      }
+      const targetRecord = await loadAccountRecord(context.env.ROSTER_STORE, targetEmail);
+      const index = await loadRepositoryIndex(context.env.ROSTER_STORE);
+      const claims = sanitizeClaims((body?.claims || []).map((claim) => findRepositoryDoctor(index, claim)).filter(Boolean).map((claim) => ({ ...claim, matchedAt: new Date().toISOString() })));
+      const state = {
+        ...sanitizeState(targetRecord.state),
+        imports: repositoryImportRefsForClaims(index, claims),
+      };
+      const updated = {
+        ...targetRecord,
+        email: targetEmail,
+        claims,
+        state,
+        updatedAt: new Date().toISOString(),
+      };
+      await context.env.ROSTER_STORE.put(storageKey(targetEmail), JSON.stringify(updated));
+      const owner = accountSnapshotOwner(targetEmail, updated.role || roleForEmail(targetEmail));
+      await context.env.ROSTER_STORE.delete(snapshotKey(owner.ownerType, owner.ownerId));
+      return Response.json({
+        ok: true,
+        user: userSummaryFromRecord(targetEmail, updated),
+        claims,
+      });
+    }
+
+    if (action === "removeRosterClaim") {
+      const claimEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
+      const targetRecord = claimEmail === email ? account.record : await loadAccountRecord(context.env.ROSTER_STORE, claimEmail);
+      const rawClaim = {
+        sourceType: String(body?.claim?.sourceType || "").toLowerCase(),
+        key: normalizeRosterName(body?.claim?.key || ""),
+      };
+      const claims = sanitizeClaims(targetRecord.claims).filter((claim) => !(claim.sourceType === rawClaim.sourceType && claim.key === rawClaim.key));
+      const index = await loadRepositoryIndex(context.env.ROSTER_STORE);
+      const state = {
+        ...sanitizeState(targetRecord.state),
+        imports: repositoryImportRefsForClaims(index, claims),
+      };
+      const updated = {
+        ...targetRecord,
+        email: claimEmail,
+        claims,
+        state,
+        updatedAt: new Date().toISOString(),
+      };
+      await context.env.ROSTER_STORE.put(storageKey(claimEmail), JSON.stringify(updated));
+      const owner = accountSnapshotOwner(claimEmail, updated.role || roleForEmail(claimEmail));
+      await context.env.ROSTER_STORE.delete(snapshotKey(owner.ownerType, owner.ownerId));
+      return Response.json({ ok: true, claims, user: userSummaryFromRecord(claimEmail, updated) });
+    }
+
+    if (action === "reportRosterIdentityIssue") {
+      const reportEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
+      const targetRecord = reportEmail === email ? account.record : await loadAccountRecord(context.env.ROSTER_STORE, reportEmail);
+      const issue = sanitizeAdminIssues([{
+        id: `identity:${Date.now()}`,
+        message: String(body?.message || "Roster name match needs review.").trim(),
+        source: "MMC",
+        seniority: "Unknown",
+        rawValue: String(body?.rawValue || `Identity review: ${targetRecord.realName || reportEmail}`),
+        fingerprint: `MMC::Unknown::Identity review: ${reportEmail}::${Date.now()}`,
+        firstSeenAt: new Date().toISOString(),
+        lastSeenAt: new Date().toISOString(),
+        count: 1,
+      }])[0];
+      const updated = {
+        ...targetRecord,
+        adminIssues: mergeAdminIssues(targetRecord.adminIssues, [issue]),
+        updatedAt: new Date().toISOString(),
+      };
+      await context.env.ROSTER_STORE.put(storageKey(reportEmail), JSON.stringify(updated));
+      return Response.json({ ok: true, user: userSummaryFromRecord(reportEmail, updated) });
     }
 
     if (action === "resolveDoctorAccount") {
@@ -426,9 +538,7 @@ export async function onRequestPost(context) {
       const state = sanitizeState(body?.state);
       const repository = await upsertStateImports(context.env.ROSTER_STORE, state.imports, saveEmail);
       state.imports = repository.refs;
-      const claims = targetRole === "creator" || targetRole === "owner"
-        ? sanitizeClaims(targetRecord.claims)
-        : mergeClaims(targetRecord.claims, matchRepositoryClaims(repository.index, targetRecord.realName || ""));
+      const claims = sanitizeClaims(targetRecord.claims);
       const removedImportIds = sanitizeRepositoryFileIds(body?.removedImportIds);
       if ((targetRole === "creator" || targetRole === "owner") && saveEmail === email && removedImportIds.length) {
         repository.index = await removeRepositoryFiles(context.env.ROSTER_STORE, repository.index, removedImportIds);
@@ -726,21 +836,21 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
   let linkedProfiles = [];
 
   if (role !== "creator" && role !== "owner") {
+    const originalClaims = claims;
+    claims = claims.filter((claim) => claimMatchesAccountIdentity(claim, record.realName || ""));
     const matchedClaims = matchRepositoryClaims(index, record.realName || "");
-    const merged = mergeClaims(claims, matchedClaims);
     nameMatches = matchedClaims.filter((claim) => !claims.some((existing) => sameClaim(existing, claim)));
-    claims = merged;
     linkedProfiles = await linkedDoctorProfilesForClaims(store, claims);
-    const accountImportRefs = repositoryImportRefsForAccount(index, { ...record, claims });
+    const accountImportRefs = repositoryImportRefsForClaims(index, claims);
     state = {
       ...state,
       imports: accountImportRefs,
     };
     state = mergeProfileSessionIntoState(state, linkedProfiles, record.email);
     const previousState = sanitizeState(record.state);
-    const claimsChanged = JSON.stringify(claims) !== JSON.stringify(sanitizeClaims(record.claims));
     const importRefsChanged = importsChanged(previousState.imports, accountImportRefs);
-    if (nameMatches.length || claimsChanged || importRefsChanged) {
+    const claimsChanged = JSON.stringify(claims) !== JSON.stringify(originalClaims);
+    if (claimsChanged || importRefsChanged) {
       await store.put(storageKey(record.email), JSON.stringify({
         ...record,
         claims,
@@ -1406,29 +1516,7 @@ function repositoryImportRefsForClaims(index, claims) {
 
 function repositoryImportRefsForAccount(index, record) {
   const claims = sanitizeClaims(record?.claims);
-  const claimKeys = new Set(claims.map((claim) => claim.key));
-  const claimMarkers = new Set(claims.map((claim) => `${claim.sourceType}:${claim.key}`));
-  const claimIdentityKeys = new Set(claims.flatMap((claim) => [rosterIdentityKey(claim.displayName), rosterIdentityKey(claim.key)]).filter(Boolean));
-  const realName = String(record?.realName || "").trim();
-  const realIdentityKey = rosterIdentityKey(realName);
-  const refs = [];
-  const existingRefIds = new Set(sanitizeState(record?.state).imports.map((item) => item?.repoId || item?.repositoryId || item?.id).filter(Boolean));
-  for (const file of index.files || []) {
-    if (file.active === false) continue;
-    if (existingRefIds.has(file.id)) {
-      refs.push(repositoryImportRef(file));
-      continue;
-    }
-    const hasAccountDoctor = sanitizeRepositoryDoctors(file.doctors).some((doctor) => (
-      claimMarkers.has(`${doctor.sourceType}:${doctor.key}`)
-      || claimKeys.has(doctor.key)
-      || (realIdentityKey && rosterIdentityKey(doctor.displayName || doctor.key) === realIdentityKey)
-      || claimIdentityKeys.has(rosterIdentityKey(doctor.displayName || doctor.key))
-      || doctorMatchesRealName(doctor, realName)
-    ));
-    if (hasAccountDoctor) refs.push(repositoryImportRef(file));
-  }
-  return refs;
+  return repositoryImportRefsForClaims(index, claims);
 }
 
 async function repositoryImportsForClaims(store, index, claims) {
@@ -1555,10 +1643,12 @@ async function storeSnapshotForDoctorProfile(store, profile, snapshot) {
 
 function matchRepositoryClaims(index, realName) {
   const claims = [];
+  const realIdentity = rosterIdentityKey(realName);
+  if (!realIdentity) return claims;
   for (const file of index.files || []) {
     if (file.active === false) continue;
     for (const doctor of sanitizeRepositoryDoctors(file.doctors)) {
-      if (!doctorMatchesRealName(doctor, realName)) continue;
+      if (rosterIdentityKey(doctor.displayName || doctor.key) !== realIdentity) continue;
       claims.push({
         key: doctor.key,
         displayName: doctor.displayName,
@@ -1691,16 +1781,6 @@ function resolveDoctorAccountFromIndex(accounts, rawDoctor) {
         };
       }
     }
-    if (
-      (requested.displayName && doctorMatchesRealName({ key: requested.key, displayName: requested.displayName }, account.realName))
-      || requested.aliases.some((alias) => doctorMatchesRealName(alias, account.realName))
-    ) {
-      return {
-        mode: "claimed-account",
-        email: account.email,
-        realName: account.realName,
-      };
-    }
   }
   return { mode: "doctor-profile", email: "", realName: "" };
 }
@@ -1810,6 +1890,12 @@ function mergeClaims(existing, incoming) {
 
 function sameClaim(left, right) {
   return left?.sourceType === right?.sourceType && left?.key === right?.key;
+}
+
+function claimMatchesAccountIdentity(claim, realName) {
+  const realIdentity = rosterIdentityKey(realName);
+  if (!realIdentity) return true;
+  return rosterIdentityKey(claim?.displayName || claim?.key || "") === realIdentity;
 }
 
 function doctorMatchesRealName(doctor, realName) {

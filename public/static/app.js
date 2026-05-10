@@ -256,6 +256,7 @@ let cloudSaveTimer = 0;
 let pendingCloudSaveSnapshot = null;
 let serverUsers = [];
 let currentRosterClaims = [];
+let currentSuggestedClaims = [];
 let latestNameMatches = [];
 let availableRosterDoctors = [];
 let currentSubscription = null;
@@ -451,7 +452,7 @@ accountsBody.addEventListener("submit", (event) => {
   const realName = formElement.querySelector("[data-account-real-name]")?.value.trim() || "";
   const password = formElement.querySelector("[data-account-password]")?.value || "";
   if (!email) return;
-  updateAccountDetails(email, { password, realName });
+  void updateAccountDetails(email, { password, realName });
 });
 accountsBody.addEventListener("change", (event) => {
   const insightsToggle = event.target.closest("[data-toggle-user-insights]");
@@ -520,6 +521,31 @@ accountsBody.addEventListener("click", (event) => {
   const deleteButton = event.target.closest("[data-delete-account]");
   if (deleteButton) {
     deleteAccount(deleteButton.dataset.deleteAccount);
+    return;
+  }
+  const confirmClaimButton = event.target.closest("[data-confirm-suggested-claim]");
+  if (confirmClaimButton) {
+    confirmSuggestedClaim(Number(confirmClaimButton.dataset.confirmSuggestedClaim));
+    return;
+  }
+  const rejectClaimButton = event.target.closest("[data-reject-suggested-claim]");
+  if (rejectClaimButton) {
+    rejectSuggestedClaim(Number(rejectClaimButton.dataset.rejectSuggestedClaim));
+    return;
+  }
+  const removeClaimButton = event.target.closest("[data-remove-roster-claim]");
+  if (removeClaimButton) {
+    removeRosterClaim(removeClaimButton.dataset.removeRosterClaim || "", removeClaimButton.dataset.claimEmail || "");
+    return;
+  }
+  const reportIdentityButton = event.target.closest("[data-report-roster-identity]");
+  if (reportIdentityButton) {
+    reportRosterIdentityIssue();
+    return;
+  }
+  const adminAddClaimButton = event.target.closest("[data-admin-add-claim]");
+  if (adminAddClaimButton) {
+    addAdminRosterClaim(adminAddClaimButton.dataset.adminAddClaim || "");
     return;
   }
   const enterButton = event.target.closest("[data-enter-account]");
@@ -1854,9 +1880,9 @@ function renderClaimSection() {
   claimDoctorButton.disabled = true;
 }
 
-async function claimSelectedRosterName() {
+async function claimSelectedRosterName(candidateOverride = null) {
   const index = Number(claimDoctorSelect.value);
-  const candidate = Number.isInteger(index) ? availableRosterDoctors[index] : null;
+  const candidate = candidateOverride || (Number.isInteger(index) ? availableRosterDoctors[index] : null);
   if (!candidate) {
     setStatus("If your name is not listed, upload the first roster file for your hospital.", true);
     return;
@@ -5865,7 +5891,7 @@ function renderAccountsModal() {
     .filter((user) => user.email !== me.email);
   const localOtherUsers = accountState.users.filter((user) => user.email !== me.email);
   const otherUsers = serverOtherUsers.length ? serverOtherUsers : localOtherUsers;
-  const linkedNames = renderLinkedRosterNames(currentRosterClaims);
+  const linkedNames = renderLinkedRosterNames(currentRosterClaims, currentSuggestedClaims);
   if (ownerView && !["errors", "system", "users", "files", "owner"].includes(currentAdminTab)) currentAdminTab = "system";
   const issueCount = adminIssueCount();
   const adminTabs = ownerView ? `
@@ -5951,6 +5977,7 @@ function renderAccountsModal() {
               <div>
                 <strong>${escapeHtml(user.realName || "Name not set")}</strong>
                 <p>${escapeHtml(user.email)} · ${user.role === "owner" ? "Creator" : "Standard user"} · ${formatUserSites(user)} · storage limit: latest 6 months active</p>
+                ${renderLinkedRosterNames(user.claims || [], [], { compact: true, email: user.email, creatorTools: user.role !== "owner" })}
               </div>
               ${user.role === "owner" ? "" : `
                 <label class="toggle review-toggle">
@@ -5960,6 +5987,11 @@ function renderAccountsModal() {
               `}
               <div class="account-actions">
                 <button type="button" class="button button-secondary" data-enter-account="${escapeHtml(user.email)}">Enter account</button>
+                <select data-admin-claim-select="${escapeHtml(user.email)}">
+                  <option value="">Add roster name...</option>
+                  ${availableRosterDoctors.map((doctor, index) => `<option value="${index}">${escapeHtml(`${doctor.displayName} (${doctor.sourceType.toUpperCase()})${doctor.claimedBy && doctor.claimedBy !== user.email ? ` - claimed by ${doctor.claimedBy}` : ""}`)}</option>`).join("")}
+                </select>
+                <button type="button" class="button button-secondary" data-admin-add-claim="${escapeHtml(user.email)}">Add name</button>
                 ${user.email !== OWNER_EMAIL ? `<button type="button" class="button button-danger" data-delete-account="${escapeHtml(user.email)}">Delete</button>` : ""}
               </div>
             </article>
@@ -6131,9 +6163,10 @@ function parserRuleSeniorityDisplayOrder() {
   return ["Unknown", ...values.filter((item) => item !== "Unknown")];
 }
 
-function renderLinkedRosterNames(claims) {
+function renderLinkedRosterNames(claims, suggestedClaims = [], options = {}) {
   const items = sanitizeRosterClaims(claims);
-  if (!items.length) {
+  const suggestions = sanitizeRosterClaims(suggestedClaims);
+  if (!items.length && !suggestions.length) {
     return `<p class="status">No roster names are linked to this account yet.</p>`;
   }
   return `
@@ -6144,8 +6177,22 @@ function renderLinkedRosterNames(claims) {
             <strong>${escapeHtml(claim.sourceType.toUpperCase())}</strong>
             <p>${escapeHtml(claim.displayName)}</p>
           </div>
+          ${options.creatorTools || !options.compact ? `<button type="button" class="button button-secondary" data-remove-roster-claim="${escapeHtml(claim.sourceType)}:${escapeHtml(claim.key)}" data-claim-email="${escapeHtml(options.email || currentUserEmail)}">Remove / this is wrong</button>` : ""}
         </article>
       `).join("")}
+      ${suggestions.map((claim, index) => `
+        <article class="issue-card">
+          <div>
+            <strong>Suggested ${escapeHtml(claim.sourceType.toUpperCase())}</strong>
+            <p>${escapeHtml(claim.displayName)}</p>
+          </div>
+          <div class="account-actions">
+            <button type="button" class="button button-primary" data-confirm-suggested-claim="${index}">Confirm</button>
+            <button type="button" class="button button-secondary" data-reject-suggested-claim="${index}">This is wrong</button>
+          </div>
+        </article>
+      `).join("")}
+      ${!options.compact ? `<button type="button" class="button button-secondary" data-report-roster-identity>Report roster name problem</button>` : ""}
     </div>
   `;
 }
@@ -6776,13 +6823,37 @@ async function reportAccountError(issue, errorId = "") {
   }
 }
 
-function updateAccountDetails(email, patch) {
+async function updateAccountDetails(email, patch) {
   accountState.users = accountState.users.map((user) => user.email === email ? {
     ...user,
     password: patch.password || user.password || "",
     realName: patch.realName || user.realName || "",
   } : user);
   saveAccountState();
+  if (cloudAvailable) {
+    try {
+      const response = await fetch("/api/state", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "updateAccount",
+          email: adminViewingEmail ? authUserEmail || currentUserEmail : currentUserEmail,
+          password: adminViewingEmail ? authUserPassword || currentUserPassword : currentUserPassword,
+          targetEmail: adminViewingEmail ? currentUserEmail : "",
+          realName: patch.realName || "",
+          newPassword: patch.password || "",
+        }),
+      });
+      const data = await readJsonResponse(response, "Could not update account.");
+      currentRosterClaims = sanitizeRosterClaims(data.claims || currentRosterClaims);
+      currentSuggestedClaims = sanitizeRosterClaims(data.suggestedClaims || data.nameMatches || currentSuggestedClaims);
+      currentSnapshot = null;
+      if (normalizeEmail(email) === currentUserEmail && patch.password) currentUserPassword = patch.password;
+    } catch (error) {
+      setStatus(error.message || "Could not update account.", true);
+      return;
+    }
+  }
   renderLoginState();
   if (latestPreview) rebuildClientPreview();
   setStatus("Account details updated.");
@@ -6881,6 +6952,128 @@ async function setUserInsightsEnabled(email, enabled) {
   }
 }
 
+async function confirmSuggestedClaim(index) {
+  const claim = currentSuggestedClaims[index];
+  if (!claim) return;
+  await claimSelectedRosterName(claim);
+}
+
+async function rejectSuggestedClaim(index) {
+  const claim = currentSuggestedClaims[index];
+  if (!claim) return;
+  currentSuggestedClaims = currentSuggestedClaims.filter((_, itemIndex) => itemIndex !== index);
+  latestNameMatches = currentSuggestedClaims;
+  await reportRosterIdentityIssue(`Rejected suggested roster name ${claim.displayName} (${claim.sourceType.toUpperCase()}).`);
+  renderAccountsModal();
+  renderClaimSection();
+}
+
+async function removeRosterClaim(marker, claimEmail = "") {
+  const [sourceType, ...keyParts] = String(marker || "").split(":");
+  const key = keyParts.join(":");
+  if (!sourceType || !key) return;
+  const targetEmail = normalizeEmail(claimEmail || currentUserEmail);
+  const creatorAction = isCreatorAuthenticated() && targetEmail && targetEmail !== currentUserEmail;
+  try {
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "removeRosterClaim",
+        email: creatorAction ? authUserEmail || currentUserEmail : currentUserEmail,
+        password: creatorAction ? authUserPassword || currentUserPassword : currentUserPassword,
+        targetEmail: creatorAction ? targetEmail : "",
+        claim: { sourceType, key },
+      }),
+    });
+    const data = await readJsonResponse(response, "Could not remove roster name.");
+    if (targetEmail === currentUserEmail) {
+      currentRosterClaims = sanitizeRosterClaims(data.claims || []);
+      currentSnapshot = null;
+      await replaceStoredImports([]);
+      selectedFiles = [];
+      renderDoctorState();
+    }
+    await reportRosterIdentityIssue(`Removed wrong roster name ${key} (${sourceType.toUpperCase()}).`, targetEmail);
+    if (isCreatorAuthenticated()) await loadServerUsers();
+    renderAccountsModal();
+    setStatus("Roster name removed.");
+  } catch (error) {
+    setStatus(error.message || "Could not remove roster name.", true);
+  }
+}
+
+async function reportRosterIdentityIssue(message = "Roster name match needs review.", email = currentUserEmail) {
+  if (!cloudAvailable && !isCreatorAuthenticated()) return;
+  const targetEmail = normalizeEmail(email || currentUserEmail);
+  const creatorAction = isCreatorAuthenticated() && targetEmail && targetEmail !== currentUserEmail;
+  try {
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "reportRosterIdentityIssue",
+        email: creatorAction ? authUserEmail || currentUserEmail : currentUserEmail,
+        password: creatorAction ? authUserPassword || currentUserPassword : currentUserPassword,
+        targetEmail: creatorAction ? targetEmail : "",
+        message,
+      }),
+    });
+    await readJsonResponse(response, "Could not report roster name problem.");
+    if (isCreatorAuthenticated()) await loadServerUsers();
+    syncAccountsButton();
+    setStatus("Roster name problem reported.");
+  } catch (error) {
+    setStatus(error.message || "Could not report roster name problem.", true);
+  }
+}
+
+async function addAdminRosterClaim(email) {
+  const targetEmail = normalizeEmail(email);
+  if (!targetEmail || !isCreatorAuthenticated()) return;
+  const select = [...accountsBody.querySelectorAll("[data-admin-claim-select]")]
+    .find((item) => normalizeEmail(item.dataset.adminClaimSelect) === targetEmail);
+  const selected = select ? availableRosterDoctors[Number(select.value)] : null;
+  if (!selected) {
+    setStatus("Choose a roster name to add.", true);
+    return;
+  }
+  const user = serverUsers.map(normalizeServerUser).find((item) => item.email === targetEmail);
+  const nextClaims = [
+    ...(user?.claims || []),
+    selected,
+  ];
+  await saveAdminRosterClaims(targetEmail, nextClaims);
+}
+
+async function saveAdminRosterClaims(email, claims) {
+  const targetEmail = normalizeEmail(email);
+  try {
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "setAccountRosterClaims",
+        email: authUserEmail || currentUserEmail,
+        password: authUserPassword || currentUserPassword,
+        targetEmail,
+        claims,
+      }),
+    });
+    const data = await readJsonResponse(response, "Could not update roster names.");
+    if (data.user) {
+      serverUsers = [
+        ...serverUsers.filter((user) => normalizeServerUser(user).email !== targetEmail),
+        data.user,
+      ].sort((left, right) => normalizeServerUser(left).email.localeCompare(normalizeServerUser(right).email));
+    }
+    renderAccountsModal();
+    setStatus("Roster names updated.");
+  } catch (error) {
+    setStatus(error.message || "Could not update roster names.", true);
+  }
+}
+
 function removeLocalAccount(email) {
   accountState.users = accountState.users.filter((user) => user.email !== email);
   if (!accountState.users.some((user) => user.email === accountState.currentEmail)) {
@@ -6905,6 +7098,7 @@ async function deleteAccount(email) {
   const creatorCanDelete = isCreatorAuthenticated();
   const requestEmail = creatorCanDelete ? authUserEmail || currentUserEmail : currentUserEmail;
   const requestPassword = creatorCanDelete ? authUserPassword || currentUserPassword : currentUserPassword;
+  cancelScheduledCloudStateSave();
 
   try {
     if (cloudAvailable) {
@@ -6924,6 +7118,7 @@ async function deleteAccount(email) {
 
     deleteLocalAccountData(targetEmail);
     clearDeletedAccountClaims(targetEmail);
+    if (creatorCanDelete) await loadServerUsers();
     closeAccountsModal();
 
     if (deletingCurrentAccount && adminViewingEmail && creatorCanDelete) {
@@ -8155,6 +8350,7 @@ async function logoutCurrentUser() {
   availableRosterDoctors = [];
   currentSubscription = null;
   currentInsightsEnabled = false;
+  currentSuggestedClaims = [];
   selectedFiles = [];
   resetDerivedState();
   renderLoginState();
@@ -8215,7 +8411,7 @@ async function loginWithEmail(email, password, options = {}) {
     await bootstrapImports();
     if (latestNameMatches.length) {
       const sites = [...new Set(latestNameMatches.map((claim) => claim.sourceType.toUpperCase()))].join(", ");
-      setStatus(`Matched roster name${latestNameMatches.length === 1 ? "" : "s"} for ${sites || "uploaded rosters"}.`);
+      setStatus(`Suggested roster name${latestNameMatches.length === 1 ? "" : "s"} for ${sites || "uploaded rosters"}. Please confirm in Account.`);
     }
     renderLoginState();
     closeLoginModal();
@@ -8345,7 +8541,8 @@ async function applyCloudStateData(data) {
   currentUserRole = data.role || currentUserRole;
   currentInsightsEnabled = currentUserRole === "creator" || data.insightsEnabled === true;
   currentRosterClaims = sanitizeRosterClaims(data.claims || []);
-  latestNameMatches = sanitizeRosterClaims(data.nameMatches || []);
+  currentSuggestedClaims = sanitizeRosterClaims(data.suggestedClaims || data.nameMatches || []);
+  latestNameMatches = currentSuggestedClaims;
   availableRosterDoctors = sanitizeAvailableRosterDoctors(data.availableDoctors || []);
   currentSubscription = sanitizeSubscription(data.subscription);
   applyIssueConfig(data.issueConfig);
@@ -8567,6 +8764,7 @@ async function loadServerUsers() {
     });
     const data = await readJsonResponse(response, "Could not load users.");
     serverUsers = data.users || [];
+    availableRosterDoctors = sanitizeAvailableRosterDoctors(data.availableDoctors || availableRosterDoctors);
     applyIssueConfig(data.issueConfig);
     syncAccountsButton();
   } catch {

@@ -506,8 +506,19 @@ const michaelDirectLogin = await postState(michaelStateStore, {
   email: "michael@example.com",
   password: "michael-password",
 });
-assert.deepEqual(michaelDirectLogin.state.imports.map((item) => item.repoId).sort(), ["michael-mch", "michael-mmc"]);
-assert.ok(michaelDirectLogin.claims.some((claim) => claim.sourceType === "mch" && claim.key === "DR MICHAEL COMAN"));
+assert.deepEqual(michaelDirectLogin.state.imports.map((item) => item.repoId).sort(), ["michael-mmc"]);
+assert.equal(michaelDirectLogin.claims.some((claim) => claim.sourceType === "mch" && claim.key === "DR MICHAEL COMAN"), false);
+assert.ok(michaelDirectLogin.suggestedClaims.some((claim) => claim.sourceType === "mch" && claim.key === "DR MICHAEL COMAN"));
+await postState(michaelStateStore, {
+  action: "setAccountRosterClaims",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  targetEmail: "michael@example.com",
+  claims: [
+    { sourceType: "mmc", key: "MICHAEL COMAN" },
+    { sourceType: "mch", key: "DR MICHAEL COMAN" },
+  ],
+});
 const michaelAdminLoad = await postState(michaelStateStore, {
   action: "adminLoadUser",
   email: "rhaydon@gmail.com",
@@ -576,8 +587,95 @@ const michaelRecreatedResolution = await postState(michaelStateStore, {
     sourceTypes: ["mch"],
   },
 });
-assert.equal(michaelRecreatedResolution.mode, "claimed-account");
-assert.equal(michaelRecreatedResolution.email, "michael@example.com");
+assert.equal(michaelRecreatedResolution.mode, "doctor-profile");
+assert.equal(michaelRecreatedResolution.email, "");
+
+const identityStore = new MemoryStore();
+await postState(identityStore, {
+  action: "login",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+});
+await seedRepository(identityStore, [
+  repositoryFile("identity-ddh", {
+    sourceType: "ddh",
+    doctors: [
+      { key: "AARON BADWAL", displayName: "Aaron BADWAL", sourceType: "ddh" },
+      { key: "ANDREA LIM", displayName: "Andrea LIM", sourceType: "ddh" },
+    ],
+  }),
+  repositoryFile("identity-mch", {
+    sourceType: "mch",
+    doctors: [{ key: "DR ANDREA LIM", displayName: "Dr Andrea LIM", sourceType: "mch" }],
+  }),
+]);
+const andreaLogin = await postState(identityStore, {
+  action: "login",
+  email: "andrea@example.com",
+  password: "andrea-password",
+  mode: "create",
+  realName: "Andrea LIM",
+});
+assert.deepEqual(andreaLogin.claims, []);
+assert.deepEqual(andreaLogin.state.imports, []);
+assert.deepEqual(andreaLogin.suggestedClaims.map((claim) => `${claim.sourceType}:${claim.key}`).sort(), ["ddh:ANDREA LIM", "mch:DR ANDREA LIM"]);
+const barryLogin = await postState(identityStore, {
+  action: "login",
+  email: "barry@example.com",
+  password: "barry-password",
+  mode: "create",
+  realName: "Barry Cunningham",
+});
+assert.deepEqual(barryLogin.claims, []);
+assert.deepEqual(barryLogin.suggestedClaims, []);
+assert.deepEqual(barryLogin.state.imports, []);
+await postState(identityStore, {
+  action: "setAccountRosterClaims",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  targetEmail: "barry@example.com",
+  claims: [{ sourceType: "ddh", key: "AARON BADWAL" }],
+});
+const barryAfterBadClaim = await postState(identityStore, {
+  action: "login",
+  email: "barry@example.com",
+  password: "barry-password",
+});
+assert.deepEqual(barryAfterBadClaim.claims, []);
+assert.deepEqual(barryAfterBadClaim.state.imports, []);
+await postState(identityStore, {
+  action: "setAccountRosterClaims",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  targetEmail: "andrea@example.com",
+  claims: [
+    { sourceType: "ddh", key: "ANDREA LIM" },
+    { sourceType: "mch", key: "DR ANDREA LIM" },
+  ],
+});
+const andreaAssigned = await postState(identityStore, {
+  action: "adminLoadUser",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  targetEmail: "andrea@example.com",
+});
+assert.deepEqual(andreaAssigned.claims.map((claim) => `${claim.sourceType}:${claim.key}`).sort(), ["ddh:ANDREA LIM", "mch:DR ANDREA LIM"]);
+assert.deepEqual(andreaAssigned.state.imports.map((item) => item.repoId).sort(), ["identity-ddh", "identity-mch"]);
+await postState(identityStore, {
+  action: "removeRosterClaim",
+  email: "andrea@example.com",
+  password: "andrea-password",
+  claim: { sourceType: "ddh", key: "ANDREA LIM" },
+});
+await postState(identityStore, {
+  action: "reportRosterIdentityIssue",
+  email: "andrea@example.com",
+  password: "andrea-password",
+  message: "Wrong roster name.",
+});
+const andreaRecordAfterReport = await identityStore.get("account:andrea@example.com", "json");
+assert.equal((andreaRecordAfterReport.claims || []).some((claim) => claim.sourceType === "ddh"), false);
+assert.ok(andreaRecordAfterReport.adminIssues.length >= 1);
 
 const manyDoctorsStore = new MemoryStore();
 await postState(manyDoctorsStore, {
@@ -830,6 +928,12 @@ assert.ok(await deletionStore.get("repository:file:keep-roster", "json"));
 assert.ok(await deletionStore.get("repository:file:missing-from-save", "json"));
 
 await seedUser(deletionStore, "claimed-doctor@example.com", "claimed-password");
+await postState(deletionStore, {
+  action: "claimRosterName",
+  email: "claimed-doctor@example.com",
+  password: "claimed-password",
+  claim: { sourceType: "mmc", key: "TITUS HACKMAN" },
+});
 const observerBeforeDelete = await postState(deletionStore, {
   action: "login",
   email: "observer@example.com",
