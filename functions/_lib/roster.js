@@ -2450,7 +2450,7 @@ function iterateCaseyWeekEntries(workbook) {
       const parsedName = parseCaseyRosterName(rawName);
       if (!parsedName || !looksLikePersonName(parsedName.name)) continue;
       const labels = [];
-      for (let col = 2; col <= 8; col += 1) labels.push(cleanText(getCellValue(sheet, row, col)));
+      for (let col = 2; col <= 8; col += 1) labels.push(getCaseyRosterCellText(sheet, row, col));
       entries.push({
         rawName: parsedName.name,
         displayName: parsedName.name,
@@ -2461,6 +2461,25 @@ function iterateCaseyWeekEntries(workbook) {
     }
   }
   return entries;
+}
+
+function getCaseyRosterCellText(sheet, row, col) {
+  const direct = cleanText(getCellValue(sheet, row, col));
+  if (direct || col < 2 || col > 8) return direct;
+  const merged = caseyMergedRangeForCell(sheet, row, col);
+  if (!merged) return "";
+  return cleanText(getCellValue(sheet, merged.s.r + 1, merged.s.c + 1));
+}
+
+function caseyMergedRangeForCell(sheet, row, col) {
+  const cellRow = row - 1;
+  const cellCol = col - 1;
+  for (const merge of sheet["!merges"] || []) {
+    if (merge.s.r !== cellRow || merge.s.c < 1 || merge.e.c > 7) continue;
+    if (merge.s.c === merge.e.c) continue;
+    if (cellCol >= merge.s.c && cellCol <= merge.e.c) return merge;
+  }
+  return null;
 }
 
 function isCaseyWorkbook(workbook) {

@@ -179,6 +179,18 @@ assert.ok(patrickCaseyEvents.length > 40);
 assert.equal(patrickCaseyEvents.some((event) => event.start.startsWith("2025")), false);
 assert.ok(patrickCaseyEvents.some((event) => event.title === "Casey: MIC PM"));
 assert.ok(patrickCaseyEvents.some((event) => event.title === "Casey: AM" && event.rawValue === "Orient 0800-1730" && event.start.includes("08:00:00") && event.end.includes("17:30:00")));
+const patrickMergedLeave = patrickCaseyEvents.find((event) => event.title === "Annual Leave" && event.start === "2026-07-27");
+assert.ok(patrickMergedLeave);
+assert.equal(patrickMergedLeave.end, "2026-08-03");
+assert.equal(patrickMergedLeave.rawValue, "Annual Leave");
+
+const suzanFoxCasey = caseyDoctors.find((doctor) => doctor.displayName === "Suzan FOX");
+assert.ok(suzanFoxCasey);
+const suzanFoxCaseyView = buildRosterView([], [], suzanFoxCasey.key, undefined, {}, {}, suzanFoxCasey.aliases, caseyWorkbook);
+const suzanMergedLeave = suzanFoxCaseyView.events.find((event) => event.title === "Annual Leave" && event.start === "2026-07-27");
+assert.ok(suzanMergedLeave);
+assert.equal(suzanMergedLeave.end, "2026-08-03");
+assert.equal(suzanMergedLeave.rawValue, "Annual Leave");
 
 const andrewDyallCasey = caseyDoctors.find((doctor) => doctor.displayName === "Andrew DYALL");
 const andrewCaseyView = buildRosterView([], [], andrewDyallCasey.key, undefined, {}, {}, [], caseyWorkbook);
@@ -292,6 +304,23 @@ assert.equal(michaelAnnualEvents.length, 1);
 assert.equal(michaelAnnualEvents[0].start, "2026-07-27");
 assert.equal(michaelAnnualEvents[0].end, "2026-08-03");
 assert.ok(michaelAnnualView.events.some((event) => event.source === "MCH"));
+
+const mergedAnnualWorkbook = XLSX.utils.book_new();
+const mergedAnnualSheet = XLSX.utils.aoa_to_sheet([
+  ["TERM 2, 2026", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+  ["", "27-Jul", "28-Jul", "29-Jul", "30-Jul", "31-Jul", "1-Aug", "2-Aug"],
+  ["Merged LEAVE", "Annual Leave", "", "", "", "", "", ""],
+]);
+mergedAnnualSheet["!merges"] = [{ s: { r: 2, c: 1 }, e: { r: 2, c: 7 } }];
+XLSX.utils.book_append_sheet(mergedAnnualWorkbook, mergedAnnualSheet, "Week 1");
+const mergedAnnualDoctor = doctorOptions([], [], mergedAnnualWorkbook).find((doctor) => doctor.displayName === "Merged LEAVE");
+assert.ok(mergedAnnualDoctor);
+const mergedAnnualView = buildRosterView([], [], mergedAnnualDoctor.key, undefined, {}, {}, [], mergedAnnualWorkbook);
+const mergedAnnualEvents = mergedAnnualView.events.filter((event) => event.title === "Annual Leave");
+assert.equal(mergedAnnualEvents.length, 1);
+assert.equal(mergedAnnualEvents[0].start, "2026-07-27");
+assert.equal(mergedAnnualEvents[0].end, "2026-08-03");
+assert.equal(mergedAnnualEvents[0].rawValue, "Annual Leave");
 
 const annualSynonymWorkbook = XLSX.utils.book_new();
 XLSX.utils.book_append_sheet(annualSynonymWorkbook, XLSX.utils.aoa_to_sheet([
