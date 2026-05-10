@@ -784,6 +784,55 @@ const d1DoctorProfile = await postState(d1StateStore, {
 assert.equal(d1DoctorProfile.snapshot?.preview?.derivedFromD1, true);
 assert.equal(d1DoctorProfile.snapshotStale, false);
 assert.ok(d1DoctorProfile.snapshot.preview.events.length > 0);
+const leaveMergeStore = new MemoryStore();
+const leaveMergeDb = new MemoryD1();
+const leaveDoctor = { key: "LEAVE DOCTOR", displayName: "Leave Doctor", sourceType: "mmc" };
+await seedRepository(leaveMergeStore, [
+  repositoryFile("leave-mmc", { sourceType: "mmc", doctors: [leaveDoctor] }),
+  repositoryFile("leave-ddh", { sourceType: "ddh", doctors: [{ ...leaveDoctor, sourceType: "ddh" }] }),
+]);
+await postState(leaveMergeStore, {
+  action: "login",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+}, leaveMergeDb);
+for (const [fileId, sourceType] of [["leave-mmc", "mmc"], ["leave-ddh", "ddh"]]) {
+  await postState(leaveMergeStore, {
+    action: "saveDerivedCalendarFile",
+    email: "rhaydon@gmail.com",
+    password: creatorPassword,
+    file: { id: fileId, name: `${fileId}.xlsx`, sourceType, active: true },
+    doctors: [{ ...leaveDoctor, sourceType }],
+    eventsByDoctor: {
+      [leaveDoctor.key]: [{
+        id: `${fileId}-leave`,
+        source: sourceType.toUpperCase() === "DDH" ? "DDH" : "MMC",
+        title: "Annual Leave",
+        allDay: true,
+        start: "2026-04-06",
+        end: "2026-04-13",
+        rawValue: "Annual Leave",
+        monthKey: "2026-04",
+      }],
+    },
+  }, leaveMergeDb);
+}
+await seedUser(leaveMergeStore, "leave@example.com", "leave-password", "Leave Doctor");
+await postState(leaveMergeStore, {
+  action: "setAccountRosterClaims",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  targetEmail: "leave@example.com",
+  claims: [{ sourceType: "mmc", key: leaveDoctor.key }, { sourceType: "ddh", key: leaveDoctor.key }],
+}, leaveMergeDb);
+const leaveLogin = await postState(leaveMergeStore, {
+  action: "login",
+  email: "leave@example.com",
+  password: "leave-password",
+}, leaveMergeDb);
+const mergedLeave = leaveLogin.snapshot.preview.events.filter((event) => event.title === "Annual Leave");
+assert.equal(mergedLeave.length, 1);
+assert.deepEqual(mergedLeave[0].sources.sort(), ["DDH", "MMC"]);
 const d1FeedResponse = await handleFeedGet({
   request: new Request(`http://fixture.test/api/feed?token=${d1DirectLogin.subscription.token}`),
   env: { ROSTER_STORE: d1StateStore, ROSTER_DB: d1Store },

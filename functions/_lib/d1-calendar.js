@@ -244,7 +244,7 @@ export async function queryDoctorEvents(db, doctorKeys, options = {}) {
       AND roster_events.end_date >= ?
     ORDER BY roster_events.start_ts, roster_events.source_type, roster_events.title
   `).bind(...keys, end, start).all();
-  return (rows.results || []).map((row) => parseEvent(row.event_json)).filter(Boolean);
+  return mergeDuplicateLeaveEvents((rows.results || []).map((row) => parseEvent(row.event_json)).filter(Boolean));
 }
 
 export async function countDerivedEventsByFile(db, fileIds = []) {
@@ -299,7 +299,7 @@ export async function queryCoworkerEvents(db, options = {}) {
 }
 
 export function buildPreviewFromDerivedEvents(events) {
-  const safeEvents = (events || []).map((event) => ({ ...event }));
+  const safeEvents = mergeDuplicateLeaveEvents(events || []).map((event) => ({ ...event }));
   return {
     ...previewSummary(safeEvents),
     events: safeEvents,
@@ -366,6 +366,69 @@ function parseEvent(value) {
   } catch {
     return null;
   }
+}
+
+function mergeDuplicateLeaveEvents(events) {
+  const passthrough = [];
+  const leaveGroups = new Map();
+  for (const event of events || []) {
+    if (!isMergeableLeaveEvent(event)) {
+      passthrough.push(event);
+      continue;
+    }
+    const key = duplicateLeaveKey(event);
+    if (!leaveGroups.has(key)) leaveGroups.set(key, []);
+    leaveGroups.get(key).push(event);
+  }
+  const merged = [];
+  for (const [key, group] of leaveGroups.entries()) {
+    const ordered = [...group].sort((left, right) => String(left.start || "").localeCompare(String(right.start || "")) || String(left.end || "").localeCompare(String(right.end || "")));
+    for (const event of ordered) {
+      const previous = merged.length ? merged[merged.length - 1] : null;
+      if (previous && previous._leaveMergeKey === key && String(event.start || "") <= String(previous.end || "")) {
+        previous.end = String(event.end || "") > String(previous.end || "") ? event.end : previous.end;
+        previous.rawValue = mergeRawValues(previous.rawValue, event.rawValue);
+        previous.sources = mergeSources(previous.sources, event.sources, previous.source, event.source);
+        continue;
+      }
+      merged.push({
+        ...event,
+        sources: mergeSources(event.sources, null, event.source),
+        _leaveMergeKey: key,
+      });
+    }
+  }
+  return [...passthrough, ...merged]
+    .map(({ _leaveMergeKey, ...event }) => event)
+    .sort((left, right) => String(left.start || "").localeCompare(String(right.start || "")) || String(left.title || "").localeCompare(String(right.title || "")));
+}
+
+function isMergeableLeaveEvent(event) {
+  return event?.allDay === true && /\bleave\b/i.test(String(event.title || ""));
+}
+
+function duplicateLeaveKey(event) {
+  return String(event.title || "")
+    .replace(/^(MMC|DDH|Casey|MCH):\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toUpperCase();
+}
+
+function mergeRawValues(left, right) {
+  const values = [left, right]
+    .flatMap((item) => String(item || "").split(" / "))
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return [...new Set(values)].join(" / ");
+}
+
+function mergeSources(leftSources, rightSources, leftSource, rightSource) {
+  const values = [leftSources, rightSources, leftSource, rightSource]
+    .flatMap((item) => Array.isArray(item) ? item : [item])
+    .map((item) => String(item || "").trim())
+    .filter((item) => /^(MMC|DDH|Casey|MCH)$/i.test(item));
+  return [...new Set(values.map((item) => item.toUpperCase() === "CASEY" ? "Casey" : item.toUpperCase()))];
 }
 
 async function bulkUpsertDoctors(db, sourceType, doctors, updatedAt) {

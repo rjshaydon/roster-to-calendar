@@ -4448,7 +4448,13 @@ function doctorOptionsForCurrentAccount(doctors) {
     ...doctor,
     sourceTypes: normalizedDoctorSourceTypes(doctor),
   }));
-  if (canUseCreatorDoctorSwitcher()) return buildCreatorDoctorOptions(options);
+  if (canUseCreatorDoctorSwitcher()) {
+    const repositoryOptions = availableRosterDoctors.map((doctor) => ({
+      ...doctor,
+      sourceTypes: normalizedDoctorSourceTypes(doctor).length ? normalizedDoctorSourceTypes(doctor) : [String(doctor.sourceType || "").toLowerCase()].filter(Boolean),
+    }));
+    return buildCreatorDoctorOptions(dedupeDoctorOptions([...options, ...repositoryOptions]));
+  }
   const claimedAliases = currentRosterClaims.map((claim) => ({
     sourceType: claim.sourceType,
     key: claim.key,
@@ -4478,6 +4484,19 @@ function doctorOptionsForCurrentAccount(doctors) {
     aliases: dedupedAliases,
     sourceTypes: [...new Set(dedupedAliases.map((alias) => alias.sourceType))],
   }];
+}
+
+function dedupeDoctorOptions(options) {
+  const seen = new Set();
+  const deduped = [];
+  for (const doctor of options || []) {
+    const sourceTypes = normalizedDoctorSourceTypes(doctor);
+    const marker = `${doctor.key}:${sourceTypes.join(",") || doctor.sourceType || ""}`;
+    if (!doctor.key || seen.has(marker)) continue;
+    seen.add(marker);
+    deduped.push(doctor);
+  }
+  return deduped;
 }
 
 function buildCreatorDoctorOptions(options) {
