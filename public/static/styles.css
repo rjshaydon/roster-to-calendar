@@ -2013,6 +2013,22 @@ body[data-skin="console"] .preview-cell.is-weekend {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.account-user-card {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.account-user-card > .account-actions {
+  justify-self: end;
+}
+
+.button-small {
+  min-height: 34px;
+  padding: 8px 12px;
+  font-size: 0.86rem;
 }
 
 .status-list {

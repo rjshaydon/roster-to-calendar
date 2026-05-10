@@ -548,6 +548,11 @@ accountsBody.addEventListener("click", (event) => {
     addAdminRosterClaim(adminAddClaimButton.dataset.adminAddClaim || "");
     return;
   }
+  const editClaimsButton = event.target.closest("[data-edit-roster-claims]");
+  if (editClaimsButton) {
+    focusAdminRosterClaimControls(editClaimsButton.dataset.editRosterClaims || "");
+    return;
+  }
   const enterButton = event.target.closest("[data-enter-account]");
   if (enterButton) {
     enterUserAccount(enterButton.dataset.enterAccount);
@@ -5973,11 +5978,11 @@ function renderAccountsModal() {
         </div>
         <div class="issues-list">
           ${otherUsers.length ? otherUsers.map((user) => `
-            <article class="issue-card">
+            <article class="issue-card account-user-card">
               <div>
                 <strong>${escapeHtml(user.realName || "Name not set")}</strong>
                 <p>${escapeHtml(user.email)} · ${user.role === "owner" ? "Creator" : "Standard user"} · ${formatUserSites(user)} · storage limit: latest 6 months active</p>
-                ${renderLinkedRosterNames(user.claims || [], [], { compact: true, email: user.email, creatorTools: user.role !== "owner" })}
+                ${renderLinkedRosterNames(user.claims || [], [], { compact: true, email: user.email })}
               </div>
               ${user.role === "owner" ? "" : `
                 <label class="toggle review-toggle">
@@ -5987,6 +5992,7 @@ function renderAccountsModal() {
               `}
               <div class="account-actions">
                 <button type="button" class="button button-secondary" data-enter-account="${escapeHtml(user.email)}">Enter account</button>
+                ${(user.claims || []).length ? `<button type="button" class="button button-secondary button-small" data-edit-roster-claims="${escapeHtml(user.email)}">Edit</button>` : ""}
                 <select data-admin-claim-select="${escapeHtml(user.email)}">
                   <option value="">Add roster name...</option>
                   ${availableRosterDoctors.map((doctor, index) => `<option value="${index}">${escapeHtml(`${doctor.displayName} (${doctor.sourceType.toUpperCase()})${doctor.claimedBy && doctor.claimedBy !== user.email ? ` - claimed by ${doctor.claimedBy}` : ""}`)}</option>`).join("")}
@@ -7044,6 +7050,16 @@ async function addAdminRosterClaim(email) {
     selected,
   ];
   await saveAdminRosterClaims(targetEmail, nextClaims);
+}
+
+function focusAdminRosterClaimControls(email) {
+  const targetEmail = normalizeEmail(email);
+  const select = [...accountsBody.querySelectorAll("[data-admin-claim-select]")]
+    .find((item) => normalizeEmail(item.dataset.adminClaimSelect) === targetEmail);
+  if (select) {
+    select.focus();
+    setStatus("Choose a roster name to add, or remove an existing linked name from the account row.");
+  }
 }
 
 async function saveAdminRosterClaims(email, claims) {
