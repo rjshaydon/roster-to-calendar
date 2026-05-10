@@ -771,6 +771,18 @@ const d1Status = await postState(d1StateStore, {
 assert.equal(d1Status.total, 1);
 assert.equal(d1Status.populated, 1);
 assert.equal(d1Status.remaining, 0);
+const d1DoctorProfile = await postState(d1StateStore, {
+  action: "loadDoctorProfile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  profileId: `${d1Doctor.key}::mmc`,
+  doctorKey: d1Doctor.key,
+  displayName: d1Doctor.displayName,
+  sourceTypes: ["mmc"],
+}, d1Store);
+assert.equal(d1DoctorProfile.snapshot?.preview?.derivedFromD1, true);
+assert.equal(d1DoctorProfile.snapshotStale, false);
+assert.ok(d1DoctorProfile.snapshot.preview.events.length > 0);
 
 const michaelStateStore = new MemoryStore();
 await postState(michaelStateStore, {

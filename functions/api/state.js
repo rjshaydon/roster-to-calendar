@@ -653,7 +653,7 @@ export async function onRequestPost(context) {
         sourceTypes: body?.sourceTypes,
         state: sanitizeState(null),
       });
-      const snapshotInfo = await loadDoctorProfileSnapshotInfo(context.env.ROSTER_STORE, profile);
+      const snapshotInfo = await loadDoctorProfileSnapshotInfo(context.env.ROSTER_STORE, profile, context.env.ROSTER_DB);
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -1815,17 +1815,56 @@ async function repositoryImportsForDoctorProfile(store, profile) {
   return resolveStateImports(store, await repositoryImportRefsForDoctorProfile(store, profile));
 }
 
-async function loadDoctorProfileSnapshotInfo(store, profile) {
+async function loadDoctorProfileSnapshotInfo(store, profile, db = null) {
   const owner = doctorProfileSnapshotOwner(profile);
   const buildStamp = await buildDoctorProfileSnapshotStamp(store, profile);
-  const snapshot = await loadSnapshotRecord(store, owner.ownerType, owner.ownerId);
+  const storedSnapshot = await loadSnapshotRecord(store, owner.ownerType, owner.ownerId);
+  const derivedSnapshot = await buildDerivedDoctorProfileSnapshot(store, db, profile);
+  const snapshot = derivedSnapshot || storedSnapshot;
   return {
     snapshot,
     snapshotAvailable: Boolean(snapshot),
-    snapshotStale: !snapshot || snapshot.schemaVersion !== SNAPSHOT_SCHEMA_VERSION || snapshot.buildStamp !== buildStamp,
+    snapshotStale: derivedSnapshot ? false : (!storedSnapshot || storedSnapshot.schemaVersion !== SNAPSHOT_SCHEMA_VERSION || storedSnapshot.buildStamp !== buildStamp),
     snapshotBuiltAt: snapshot?.builtAt || "",
     snapshotBuildStamp: buildStamp,
   };
+}
+
+async function buildDerivedDoctorProfileSnapshot(store, db, profile) {
+  if (!hasCalendarDb({ ROSTER_DB: db }) || !profile?.profileId || !profile?.doctorKey) return null;
+  const events = await queryDoctorEvents(db, [profile.doctorKey]);
+  if (!events.length) return null;
+  const index = await loadRepositoryIndex(store);
+  const refs = await repositoryImportRefsForDoctorProfile(store, profile);
+  const profileSources = sanitizeSourceTypes(profile.sourceTypes);
+  const doctorOptions = buildCreatorDoctorOptions(
+    repositoryDoctorCandidatesFromIndex(index).filter((doctor) => (
+      doctor.key === profile.doctorKey || profileSources.includes(doctor.sourceType)
+    )),
+  );
+  return sanitizeSnapshotRecord({
+    ownerType: "doctor-profile",
+    ownerId: profile.profileId,
+    schemaVersion: SNAPSHOT_SCHEMA_VERSION,
+    builtAt: new Date().toISOString(),
+    buildStamp: "d1-derived",
+    preview: buildPreviewFromDerivedEvents(events),
+    session: profile.state?.session || { doctorKey: profile.doctorKey },
+    doctorOptions: doctorOptions.length ? doctorOptions : [{
+      key: profile.doctorKey,
+      displayName: profile.displayName,
+      sourceTypes: profileSources,
+      aliases: profileSources.map((sourceType) => ({
+        sourceType,
+        key: profile.doctorKey,
+        displayName: profile.displayName,
+      })),
+    }],
+    detectedSources: {},
+    fileRefs: refs,
+    subscriptionFeeds: {},
+    insightCache: null,
+  });
 }
 
 async function storeSnapshotForAccount(store, context) {
