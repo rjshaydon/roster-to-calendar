@@ -6,7 +6,7 @@ const REPOSITORY_FILE_PREFIX = "repository:file:";
 const DOCTOR_PROFILE_PREFIX = "doctor-profile:";
 const SUBSCRIPTION_TOKEN_PREFIX = "subscription:token:";
 const SNAPSHOT_PREFIX = "snapshot:";
-const SNAPSHOT_SCHEMA_VERSION = 4;
+const SNAPSHOT_SCHEMA_VERSION = 5;
 const ADMIN_ISSUE_DISMISS_PREFIX = "admin-issue-dismiss:";
 const ADMIN_ISSUE_IGNORE_PREFIX = "admin-issue-ignore:";
 const PARSER_EXTENSION_RULES_KEY = "parser-extension-rules:v1";
@@ -1609,7 +1609,7 @@ async function loadDoctorProfileSnapshotInfo(store, profile) {
   return {
     snapshot,
     snapshotAvailable: Boolean(snapshot),
-    snapshotStale: !snapshot || snapshot.buildStamp !== buildStamp,
+    snapshotStale: !snapshot || snapshot.schemaVersion !== SNAPSHOT_SCHEMA_VERSION || snapshot.buildStamp !== buildStamp,
     snapshotBuiltAt: snapshot?.builtAt || "",
     snapshotBuildStamp: buildStamp,
   };

@@ -759,6 +759,49 @@ const profileImports = await postState(stateStore, {
 assert.equal(profileImports.imports.length, 1);
 assert.equal(profileImports.imports[0].repoId, "fixture-roster");
 
+await postState(stateStore, {
+  action: "saveDoctorProfile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  profileId: "TITUS HACKMAN::mmc",
+  doctorKey: "TITUS HACKMAN",
+  displayName: "Titus HACKMAN",
+  sourceTypes: ["mmc"],
+  state: { version: 1, imports: [], session: { hadPreview: true } },
+  snapshot: {
+    preview: {
+      count: 1,
+      date_range: "2026-07-27 to 2026-07-28",
+      events: [{ id: "old-leave", source: "Casey", title: "Annual Leave", allDay: true, start: "2026-07-27", end: "2026-07-28", rawValue: "Annual Leave" }],
+      review: [],
+      issues: [],
+      conflicts: [],
+    },
+    session: { hadPreview: true },
+    doctorOptions: [{ key: "TITUS HACKMAN", displayName: "Titus HACKMAN", sourceTypes: ["mmc"] }],
+    detectedSources: { mmc: ["fixture-roster"] },
+    fileRefs: [{ repoId: "fixture-roster", id: "fixture-roster", sourceType: "mmc", name: "AdultMMCTerm2.2026.Ver1.pdf" }],
+  },
+});
+const profileSnapshotKey = "snapshot:doctor-profile:TITUS HACKMAN::mmc";
+const savedProfileSnapshot = await stateStore.get(profileSnapshotKey, "json");
+assert.equal(savedProfileSnapshot.schemaVersion > 1, true);
+await stateStore.put(profileSnapshotKey, JSON.stringify({
+  ...savedProfileSnapshot,
+  schemaVersion: 1,
+}));
+const staleProfileSnapshot = await postState(stateStore, {
+  action: "loadDoctorProfile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  profileId: "TITUS HACKMAN::mmc",
+  doctorKey: "TITUS HACKMAN",
+  displayName: "Titus HACKMAN",
+  sourceTypes: ["mmc"],
+});
+assert.equal(staleProfileSnapshot.snapshotAvailable, true);
+assert.equal(staleProfileSnapshot.snapshotStale, true);
+
 await seedUser(stateStore, "patrick@example.com", "patrick-password", "Patrick TAN");
 await seedUser(stateStore, "senior@example.com", "senior-password", "Senior Registrar");
 const initialUsers = await postState(stateStore, {
