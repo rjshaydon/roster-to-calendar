@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import XLSX from "xlsx";
 
 import { onRequestPost as handleStatePost } from "../functions/api/state.js";
+import { onRequestGet as handleFeedGet } from "../functions/api/feed.js";
 import { buildRosterView, doctorOptions, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
 
 function cloneWorkbook(workbook) {
@@ -783,6 +784,14 @@ const d1DoctorProfile = await postState(d1StateStore, {
 assert.equal(d1DoctorProfile.snapshot?.preview?.derivedFromD1, true);
 assert.equal(d1DoctorProfile.snapshotStale, false);
 assert.ok(d1DoctorProfile.snapshot.preview.events.length > 0);
+const d1FeedResponse = await handleFeedGet({
+  request: new Request(`http://fixture.test/api/feed?token=${d1DirectLogin.subscription.token}`),
+  env: { ROSTER_STORE: d1StateStore, ROSTER_DB: d1Store },
+});
+assert.equal(d1FeedResponse.ok, true);
+const d1FeedText = await d1FeedResponse.text();
+assert.ok(d1FeedText.includes("BEGIN:VCALENDAR"));
+assert.ok(d1FeedText.includes("BEGIN:VEVENT"));
 
 const michaelStateStore = new MemoryStore();
 await postState(michaelStateStore, {
