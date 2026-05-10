@@ -4345,9 +4345,18 @@ function doctorOptionsForCurrentAccount(doctors) {
     sourceTypes: normalizedDoctorSourceTypes(doctor),
   }));
   if (canUseCreatorDoctorSwitcher()) return buildCreatorDoctorOptions(options);
-  const matches = options.filter((doctor) => doctorMatchesCurrentAccount(doctor));
+  const claimedAliases = currentRosterClaims.map((claim) => ({
+    sourceType: claim.sourceType,
+    key: claim.key,
+    displayName: claim.displayName,
+  }));
+  const claimMatches = currentRosterClaims.length
+    ? options.filter((doctor) => currentRosterClaims.some((claim) => doctorMatchesRosterClaim(doctor, claim)))
+    : [];
+  const nameMatches = options.filter((doctor) => !claimMatches.includes(doctor) && doctorMatchesCurrentAccount(doctor));
+  const matches = claimMatches.length ? claimMatches : nameMatches;
   if (!matches.length) return [];
-  const aliases = matches.flatMap((doctor) => {
+  const aliases = [...claimedAliases, ...matches.flatMap((doctor) => {
     if (Array.isArray(doctor.aliases) && doctor.aliases.length) return doctor.aliases;
     const sourceTypes = doctor.sourceTypes.length ? doctor.sourceTypes : sourceTypesForClaimedDoctor(doctor.key);
     return sourceTypes.map((sourceType) => ({
@@ -4355,13 +4364,15 @@ function doctorOptionsForCurrentAccount(doctors) {
       key: doctor.key,
       displayName: doctor.displayName,
     }));
-  });
-  const displayName = currentAccount().realName || matches[0].displayName;
+  })];
+  const dedupedAliases = dedupeDoctorAliases(aliases);
+  const primary = dedupedAliases[0] || matches[0];
+  const displayName = currentAccount().realName || primary.displayName || matches[0].displayName;
   return [{
-    key: matches[0].key,
+    key: primary.key || matches[0].key,
     displayName,
-    aliases: dedupeDoctorAliases(aliases),
-    sourceTypes: [...new Set(aliases.map((alias) => alias.sourceType))],
+    aliases: dedupedAliases,
+    sourceTypes: [...new Set(dedupedAliases.map((alias) => alias.sourceType))],
   }];
 }
 
@@ -4391,6 +4402,29 @@ function doctorMatchesCurrentAccount(doctor) {
   if (claimKeys.has(doctor.key)) return true;
   if (claimIdentityKeys.has(rosterIdentityKey(doctor.displayName || doctor.key))) return true;
   return likelySameRosterName(currentAccount().realName, doctor.displayName);
+}
+
+function doctorMatchesRosterClaim(doctor, claim) {
+  const normalizedClaim = {
+    sourceType: String(claim?.sourceType || "").toLowerCase(),
+    key: normalizeRosterName(claim?.key || ""),
+    displayName: String(claim?.displayName || "").trim(),
+  };
+  if (!normalizedClaim.sourceType || !normalizedClaim.key) return false;
+  const aliases = Array.isArray(doctor?.aliases) && doctor.aliases.length
+    ? doctor.aliases
+    : normalizedDoctorSourceTypes(doctor).map((sourceType) => ({
+        sourceType,
+        key: doctor?.key || "",
+        displayName: doctor?.displayName || "",
+      }));
+  return aliases.some((alias) => {
+    const aliasSource = String(alias?.sourceType || "").toLowerCase();
+    if (aliasSource && aliasSource !== normalizedClaim.sourceType) return false;
+    const aliasKey = normalizeRosterName(alias?.key || "");
+    if (aliasKey && aliasKey === normalizedClaim.key) return true;
+    return rosterIdentityKey(alias?.displayName || aliasKey) === rosterIdentityKey(normalizedClaim.displayName || normalizedClaim.key);
+  });
 }
 
 function sourceTypesForClaimedDoctor(key) {
@@ -8341,6 +8375,9 @@ async function applyCloudStateData(data) {
     return;
   }
   currentSnapshot = sanitizeWorkspaceSnapshot(data.snapshot);
+  if (currentSnapshot && shouldRebuildAccountSnapshot(currentSnapshot)) {
+    currentSnapshot = null;
+  }
   currentSnapshotStale = data.snapshotStale === true;
   currentSnapshotBuiltAt = String(data.snapshotBuiltAt || "");
   selectedFiles = importRefsToClientEntries(data.state.imports || currentSnapshot?.fileRefs || []);
@@ -8385,6 +8422,27 @@ async function flushCloudStateSave() {
   pendingCloudSaveSnapshot = null;
   if (!snapshot) return;
   await saveCloudState(snapshot);
+}
+
+function shouldRebuildAccountSnapshot(snapshot) {
+  if (currentUserRole === "creator" || activeCalendarMode() === "doctor-profile" || !currentRosterClaims.length) return false;
+  const claimMarkers = new Set(currentRosterClaims.map((claim) => `${claim.sourceType}:${claim.key}`));
+  const snapshotMarkers = new Set();
+  for (const doctor of snapshot?.doctorOptions || []) {
+    const aliases = Array.isArray(doctor?.aliases) && doctor.aliases.length
+      ? doctor.aliases
+      : normalizedDoctorSourceTypes(doctor).map((sourceType) => ({
+          sourceType,
+          key: doctor?.key || "",
+          displayName: doctor?.displayName || "",
+        }));
+    for (const alias of aliases) {
+      const sourceType = String(alias?.sourceType || "").toLowerCase();
+      const key = normalizeRosterName(alias?.key || "");
+      if (sourceType && key) snapshotMarkers.add(`${sourceType}:${key}`);
+    }
+  }
+  return [...claimMarkers].some((marker) => !snapshotMarkers.has(marker));
 }
 
 function snapshotCloudSavePayload() {
