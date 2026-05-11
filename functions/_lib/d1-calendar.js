@@ -97,6 +97,18 @@ export async function ensureCalendarSchema(db) {
       updated_at TEXT NOT NULL DEFAULT ''
     )
   `).run();
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS doctor_profiles (
+      profile_id TEXT PRIMARY KEY,
+      doctor_key TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      source_types_json TEXT NOT NULL DEFAULT '[]',
+      state_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT ''
+    )
+  `).run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_doctor_profiles_doctor ON doctor_profiles (doctor_key)").run();
   return true;
 }
 
@@ -472,19 +484,66 @@ export async function loadAccountStateMirror(db, email) {
 }
 
 export async function accountMirrorStatus(db) {
-  if (!db?.prepare) return { unavailable: true, profiles: 0, claims: 0, states: 0 };
+  if (!db?.prepare) return { unavailable: true, profiles: 0, claims: 0, states: 0, doctorProfiles: 0 };
   await ensureCalendarSchema(db);
   const profiles = await db.prepare("SELECT COUNT(*) AS count FROM account_profiles").first();
   const claims = await db.prepare("SELECT COUNT(*) AS count FROM account_claims").first();
   const states = await db.prepare("SELECT COUNT(*) AS count FROM account_states").first();
   const subscriptionTokens = await db.prepare("SELECT COUNT(*) AS count FROM account_profiles WHERE subscription_token <> ''").first();
+  const doctorProfiles = await db.prepare("SELECT COUNT(*) AS count FROM doctor_profiles").first();
   return {
     unavailable: false,
     profiles: Number(profiles?.count || 0),
     claims: Number(claims?.count || 0),
     states: Number(states?.count || 0),
     subscriptionTokens: Number(subscriptionTokens?.count || 0),
+    doctorProfiles: Number(doctorProfiles?.count || 0),
   };
+}
+
+export async function upsertDoctorProfileMirror(db, profile) {
+  if (!db?.prepare || !profile?.profileId) return false;
+  await ensureCalendarSchema(db);
+  const now = new Date().toISOString();
+  await db.prepare(`
+    INSERT INTO doctor_profiles (profile_id, doctor_key, display_name, source_types_json, state_json, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(profile_id) DO UPDATE SET
+      doctor_key = excluded.doctor_key,
+      display_name = excluded.display_name,
+      source_types_json = excluded.source_types_json,
+      state_json = excluded.state_json,
+      updated_at = excluded.updated_at
+  `).bind(
+    String(profile.profileId || "").trim(),
+    String(profile.doctorKey || "").trim(),
+    String(profile.displayName || "").trim(),
+    JSON.stringify(sanitizeSourceTypes(profile.sourceTypes)),
+    JSON.stringify(profile.state && typeof profile.state === "object" ? profile.state : {}),
+    String(profile.createdAt || now),
+    String(profile.updatedAt || now),
+  ).run();
+  return true;
+}
+
+export async function deleteDoctorProfileMirror(db, profileId) {
+  if (!db?.prepare || !profileId) return;
+  await ensureCalendarSchema(db);
+  await db.prepare("DELETE FROM doctor_profiles WHERE profile_id = ?").bind(String(profileId || "").trim()).run();
+}
+
+export async function loadDoctorProfileMirror(db, profileId) {
+  if (!db?.prepare || !profileId) return null;
+  await ensureCalendarSchema(db);
+  const row = await db.prepare("SELECT * FROM doctor_profiles WHERE profile_id = ?").bind(String(profileId || "").trim()).first();
+  return doctorProfileFromRow(row);
+}
+
+export async function queryDoctorProfileMirrors(db) {
+  if (!db?.prepare) return [];
+  await ensureCalendarSchema(db);
+  const rows = await db.prepare("SELECT * FROM doctor_profiles ORDER BY display_name, profile_id").all();
+  return (rows.results || []).map(doctorProfileFromRow).filter(Boolean);
 }
 
 export async function countDerivedEventsByFile(db, fileIds = []) {
@@ -594,6 +653,31 @@ function sanitizeAccountClaims(claims) {
       matchedAt: String(claim?.matchedAt || ""),
     }))
     .filter((claim) => claim.key && claim.displayName && claim.sourceType);
+}
+
+function doctorProfileFromRow(row) {
+  if (!row?.profile_id) return null;
+  let sourceTypes = [];
+  let state = {};
+  try {
+    sourceTypes = JSON.parse(row.source_types_json || "[]");
+  } catch {
+    sourceTypes = [];
+  }
+  try {
+    state = JSON.parse(row.state_json || "{}");
+  } catch {
+    state = {};
+  }
+  return {
+    profileId: String(row.profile_id || "").trim(),
+    doctorKey: String(row.doctor_key || "").trim(),
+    displayName: String(row.display_name || "").trim(),
+    sourceTypes: sanitizeSourceTypes(sourceTypes),
+    state: state && typeof state === "object" ? state : {},
+    createdAt: String(row.created_at || ""),
+    updatedAt: String(row.updated_at || ""),
+  };
 }
 
 function sanitizeSourceTypes(values) {

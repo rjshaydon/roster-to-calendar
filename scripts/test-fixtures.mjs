@@ -448,6 +448,7 @@ class MemoryD1 {
     this.accountProfiles = new Map();
     this.accountClaims = new Map();
     this.accountStates = new Map();
+    this.doctorProfiles = new Map();
   }
 
   prepare(sql) {
@@ -587,6 +588,22 @@ class MemoryD1Statement {
       this.db.accountProfiles.delete(args[0]);
       return { success: true };
     }
+    if (sql.startsWith("INSERT INTO doctor_profiles")) {
+      this.db.doctorProfiles.set(args[0], {
+        profile_id: args[0],
+        doctor_key: args[1],
+        display_name: args[2],
+        source_types_json: args[3],
+        state_json: args[4],
+        created_at: args[5],
+        updated_at: args[6],
+      });
+      return { success: true };
+    }
+    if (sql.startsWith("DELETE FROM doctor_profiles")) {
+      this.db.doctorProfiles.delete(args[0]);
+      return { success: true };
+    }
     if (sql.startsWith("UPDATE roster_files SET active")) {
       const file = this.db.files.get(args[1]);
       if (file) file.active = args[0];
@@ -677,6 +694,12 @@ class MemoryD1Statement {
       }
       return { results };
     }
+    if (sql.startsWith("SELECT * FROM doctor_profiles ORDER BY")) {
+      return {
+        results: [...this.db.doctorProfiles.values()]
+          .sort((left, right) => left.display_name.localeCompare(right.display_name) || left.profile_id.localeCompare(right.profile_id)),
+      };
+    }
     throw new Error(`Unsupported MemoryD1 all SQL: ${sql}`);
   }
 
@@ -707,6 +730,12 @@ class MemoryD1Statement {
     }
     if (sql.startsWith("SELECT COUNT(*) AS count FROM account_states")) {
       return { count: this.db.accountStates.size };
+    }
+    if (sql.startsWith("SELECT COUNT(*) AS count FROM doctor_profiles")) {
+      return { count: this.db.doctorProfiles.size };
+    }
+    if (sql.startsWith("SELECT * FROM doctor_profiles WHERE profile_id")) {
+      return this.db.doctorProfiles.get(args[0]) || null;
     }
     throw new Error(`Unsupported MemoryD1 first SQL: ${sql}`);
   }
@@ -962,6 +991,56 @@ const d1DoctorProfile = await postState(d1StateStore, {
 assert.equal(d1DoctorProfile.snapshot?.preview?.derivedFromD1, true);
 assert.equal(d1DoctorProfile.snapshotStale, false);
 assert.ok(d1DoctorProfile.snapshot.preview.events.length > 0);
+const d1ProfileOverrideEvent = d1DoctorProfile.snapshot.preview.events[0];
+await postState(d1StateStore, {
+  action: "saveDoctorProfile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  profileId: `${d1Doctor.key}::mmc`,
+  doctorKey: d1Doctor.key,
+  displayName: d1Doctor.displayName,
+  sourceTypes: ["mmc"],
+  state: {
+    version: 1,
+    imports: [],
+    session: {
+      doctorKey: d1Doctor.key,
+      hadPreview: true,
+      settings: {},
+      overrides: {
+        [d1ProfileOverrideEvent.id]: { title: "D1 Profile Edited Shift" },
+      },
+      customEvents: [{
+        id: "d1-profile-custom-event",
+        title: "D1 Profile Custom Event",
+        startDate: "2026-02-13",
+        endDate: "2026-02-13",
+        allDay: true,
+        include: true,
+      }],
+    },
+  },
+}, d1Store);
+await d1StateStore.delete(`doctor-profile:${d1Doctor.key}::mmc`);
+await d1StateStore.delete(`snapshot:doctor-profile:${d1Doctor.key}::mmc`);
+const d1OnlyDoctorProfile = await postState(d1StateStore, {
+  action: "loadDoctorProfile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  profileId: `${d1Doctor.key}::mmc`,
+  doctorKey: d1Doctor.key,
+  displayName: d1Doctor.displayName,
+  sourceTypes: ["mmc"],
+}, d1Store);
+assert.equal(d1OnlyDoctorProfile.snapshot?.preview?.derivedFromD1, true);
+assert.ok(d1OnlyDoctorProfile.snapshot.preview.events.some((event) => event.title === "D1 Profile Edited Shift"), "D1 doctor profile should apply stored overrides without KV profile state");
+assert.ok(d1OnlyDoctorProfile.snapshot.preview.events.some((event) => event.title === "D1 Profile Custom Event"), "D1 doctor profile should include stored custom events without KV profile state");
+const d1ProfileStatus = await postState(d1StateStore, {
+  action: "calendarStoreStatus",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+}, d1Store);
+assert.ok(d1ProfileStatus.accounts.doctorProfiles >= 1);
 const leaveMergeStore = new MemoryStore();
 const leaveMergeDb = new MemoryD1();
 const leaveDoctor = { key: "LEAVE DOCTOR", displayName: "Leave Doctor", sourceType: "mmc" };

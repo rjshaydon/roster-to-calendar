@@ -6149,7 +6149,7 @@ function renderCalendarStoreCard() {
   const accountDetail = accountStatus?.unavailable
     ? "Account mirror unavailable."
     : accountStatus
-      ? `${Number(accountStatus.profiles || 0)} accounts · ${Number(accountStatus.claims || 0)} claims · ${Number(accountStatus.states || 0)} session states · ${Number(accountStatus.subscriptionTokens || 0)} subscription tokens`
+      ? `${Number(accountStatus.profiles || 0)}/${Number(accountStatus.kvProfiles || 0)} accounts · ${Number(accountStatus.claims || 0)} claims · ${Number(accountStatus.states || 0)} session states · ${Number(accountStatus.subscriptionTokens || 0)} subscription tokens · ${Number(accountStatus.doctorProfiles || 0)}/${Number(accountStatus.kvDoctorProfiles || 0)} doctor profiles`
       : "Account mirror status not loaded yet.";
   const nextFile = status?.nextFile || null;
   const problemFiles = (status?.files || []).filter((file) => file.status === "partial").slice(0, 3);
@@ -9028,14 +9028,16 @@ async function syncAccountMirror() {
   if (!isCreatorAuthenticated() || calendarStoreBackfillRunning) return;
   calendarStoreBackfillRunning = true;
   renderAccountsModal();
-  setStatus("Syncing account claims and session state to SQL...");
+  setStatus("Syncing account claims, session state, and doctor profiles to SQL...");
   try {
     const data = await calendarStoreRequest("syncAccountMirror", { limit: 100 });
     calendarStoreStatus = {
       ...(calendarStoreStatus || {}),
       accounts: data.accounts || null,
     };
-    setStatus(`Synced ${Number(data.synced || 0)} account records to SQL.`);
+    const syncedAccounts = typeof data.synced === "object" ? Number(data.synced.accounts || 0) : Number(data.synced || 0);
+    const syncedProfiles = typeof data.synced === "object" ? Number(data.synced.doctorProfiles || 0) : 0;
+    setStatus(`Synced ${syncedAccounts} account records and ${syncedProfiles} doctor profiles to SQL.`);
   } catch (error) {
     setStatus(error.message || "Could not sync account mirror.", true);
   } finally {

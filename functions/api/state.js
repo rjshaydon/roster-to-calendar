@@ -6,14 +6,18 @@ import {
   countDerivedEventsByFile,
   deleteAccountMirror,
   deleteDerivedRosterFile,
+  deleteDoctorProfileMirror,
   hasCalendarDb,
   loadAccountStateMirror,
+  loadDoctorProfileMirror,
   queryCoworkerEvents,
   queryClaimedAccounts,
+  queryDoctorProfileMirrors,
   queryDoctorEvents,
   queryRosterDoctors,
   replaceDerivedRosterFile,
   upsertAccountMirror,
+  upsertDoctorProfileMirror,
   upsertDerivedRosterFile,
 } from "../_lib/d1-calendar.js";
 
@@ -204,6 +208,8 @@ export async function onRequestPost(context) {
       }
       const status = await calendarStoreStatus(context.env.ROSTER_STORE, context.env.ROSTER_DB);
       const accounts = await accountMirrorStatus(context.env.ROSTER_DB).catch(() => ({ unavailable: true, profiles: 0, claims: 0, states: 0 }));
+      accounts.kvProfiles = await countKvAccountRecords(context.env.ROSTER_STORE);
+      accounts.kvDoctorProfiles = await countKvDoctorProfileRecords(context.env.ROSTER_STORE);
       return Response.json({ ok: true, ...status, accounts });
     }
 
@@ -219,6 +225,8 @@ export async function onRequestPost(context) {
         limit: Number(body?.limit || 25) || 25,
       });
       const status = await accountMirrorStatus(context.env.ROSTER_DB);
+      status.kvProfiles = await countKvAccountRecords(context.env.ROSTER_STORE);
+      status.kvDoctorProfiles = await countKvDoctorProfileRecords(context.env.ROSTER_STORE);
       return Response.json({ ok: true, synced, accounts: status });
     }
 
@@ -230,6 +238,8 @@ export async function onRequestPost(context) {
         return Response.json({ ok: false, unavailable: true });
       }
       const status = await accountMirrorStatus(context.env.ROSTER_DB);
+      status.kvProfiles = await countKvAccountRecords(context.env.ROSTER_STORE);
+      status.kvDoctorProfiles = await countKvDoctorProfileRecords(context.env.ROSTER_STORE);
       return Response.json({ ok: true, ...status });
     }
 
@@ -671,14 +681,16 @@ export async function onRequestPost(context) {
       };
       await context.env.ROSTER_STORE.put(storageKey(saveEmail), JSON.stringify(updatedRecord));
       await upsertAccountMirror(context.env.ROSTER_DB, updatedRecord).catch(() => null);
-      await storeSnapshotForAccount(context.env.ROSTER_STORE, {
-        email: saveEmail,
-        role: targetRole,
-        claims,
-        state,
-        record: updatedRecord,
-        snapshot: body?.snapshot,
-      });
+      if (!hasCalendarDb(context.env) || targetRole === "creator" || targetRole === "owner") {
+        await storeSnapshotForAccount(context.env.ROSTER_STORE, {
+          email: saveEmail,
+          role: targetRole,
+          claims,
+          state,
+          record: updatedRecord,
+          snapshot: body?.snapshot,
+        });
+      }
       return Response.json({ ok: true, role: targetRole, claims });
     }
 
@@ -690,7 +702,7 @@ export async function onRequestPost(context) {
       if (!profileId) {
         return Response.json({ error: "Doctor profile is required." }, { status: 400 });
       }
-      const profile = await loadDoctorProfileRecord(context.env.ROSTER_STORE, profileId) || sanitizeDoctorProfile({
+      const profile = await loadDoctorProfileState(context.env.ROSTER_STORE, context.env.ROSTER_DB, profileId) || sanitizeDoctorProfile({
         profileId,
         doctorKey: body?.doctorKey,
         displayName: body?.displayName,
@@ -725,9 +737,10 @@ export async function onRequestPost(context) {
       if (!hasDoctorProfileState(state)) {
         await context.env.ROSTER_STORE.delete(doctorProfileKey(profileId));
         await context.env.ROSTER_STORE.delete(snapshotKey("doctor-profile", profileId));
+        await deleteDoctorProfileMirror(context.env.ROSTER_DB, profileId).catch(() => null);
         return Response.json({ ok: true, deleted: true });
       }
-      const existing = await loadDoctorProfileRecord(context.env.ROSTER_STORE, profileId);
+      const existing = await loadDoctorProfileState(context.env.ROSTER_STORE, context.env.ROSTER_DB, profileId);
       const next = {
         profileId,
         doctorKey,
@@ -738,6 +751,7 @@ export async function onRequestPost(context) {
         updatedAt: new Date().toISOString(),
       };
       await context.env.ROSTER_STORE.put(doctorProfileKey(profileId), JSON.stringify(next));
+      await upsertDoctorProfileMirror(context.env.ROSTER_DB, next).catch(() => null);
       await storeSnapshotForDoctorProfile(context.env.ROSTER_STORE, next, body?.snapshot);
       return Response.json({ ok: true, profile: next });
     }
@@ -754,7 +768,7 @@ export async function onRequestPost(context) {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
       const profileId = String(body?.profileId || "").trim();
-      const profile = await loadDoctorProfileRecord(context.env.ROSTER_STORE, profileId) || sanitizeDoctorProfile({
+      const profile = await loadDoctorProfileState(context.env.ROSTER_STORE, context.env.ROSTER_DB, profileId) || sanitizeDoctorProfile({
         profileId,
         doctorKey: body?.doctorKey,
         displayName: body?.displayName,
@@ -825,6 +839,14 @@ export async function loadAccountRecord(store, email) {
 async function loadDoctorProfileRecord(store, profileId) {
   if (!profileId) return null;
   return sanitizeDoctorProfile(await store.get(doctorProfileKey(profileId), "json").catch(() => null));
+}
+
+async function loadDoctorProfileState(store, db, profileId) {
+  const d1Profile = sanitizeDoctorProfile(await loadDoctorProfileMirror(db, profileId).catch(() => null));
+  if (d1Profile) return d1Profile;
+  const kvProfile = await loadDoctorProfileRecord(store, profileId);
+  if (kvProfile) await upsertDoctorProfileMirror(db, kvProfile).catch(() => null);
+  return kvProfile;
 }
 
 export function normalizeEmail(value) {
@@ -1027,7 +1049,25 @@ async function syncAccountMirrorFromKv(store, db, options = {}) {
     const ok = await upsertAccountMirror(db, record, { preserveExistingState: true }).catch(() => false);
     if (ok) synced += 1;
   }
-  return synced;
+  let doctorProfilesSynced = 0;
+  const profileResult = await store.list({ prefix: DOCTOR_PROFILE_PREFIX }).catch(() => ({ keys: [] }));
+  for (const key of profileResult.keys || []) {
+    const profile = sanitizeDoctorProfile(await store.get(key.name, "json").catch(() => null));
+    if (!profile) continue;
+    const ok = await upsertDoctorProfileMirror(db, profile).catch(() => false);
+    if (ok) doctorProfilesSynced += 1;
+  }
+  return { accounts: synced, doctorProfiles: doctorProfilesSynced };
+}
+
+async function countKvAccountRecords(store) {
+  const result = await store.list({ prefix: "account:" }).catch(() => ({ keys: [] }));
+  return (result.keys || []).length;
+}
+
+async function countKvDoctorProfileRecords(store) {
+  const result = await store.list({ prefix: DOCTOR_PROFILE_PREFIX }).catch(() => ({ keys: [] }));
+  return (result.keys || []).length;
 }
 
 function userSummaryFromRecord(email, record) {
@@ -1077,7 +1117,7 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
     claims = claims.filter((claim) => claimMatchesAccountIdentity(claim, record.realName || ""));
     const matchedClaims = matchRepositoryClaims(index, record.realName || "");
     nameMatches = matchedClaims.filter((claim) => !claims.some((existing) => sameClaim(existing, claim)));
-    linkedProfiles = await linkedDoctorProfilesForClaims(store, claims);
+    linkedProfiles = await linkedDoctorProfilesForClaims(store, claims, options.db);
     const accountImportRefs = repositoryImportRefsForClaims(index, claims);
     state = {
       ...state,
@@ -1224,7 +1264,7 @@ function sanitizeSnapshotCustomEvents(items, defaultOwnerEmail = "") {
       location: String(item.location || ""),
       include: item.include !== false,
     }))
-    .filter((item) => item.ownerEmail === ownerEmail);
+    .filter((item) => !ownerEmail || !item.ownerEmail || item.ownerEmail === ownerEmail);
 }
 
 export async function loadAccountBySubscriptionToken(store, token) {
@@ -1853,24 +1893,35 @@ async function resolveAccountImports(store, record) {
   return resolveStateImports(store, repositoryImportRefsForAccount(index, record));
 }
 
-async function linkedDoctorProfilesForClaims(store, claims) {
+async function linkedDoctorProfilesForClaims(store, claims, db = null) {
+  const d1Profiles = await queryDoctorProfileMirrors(db).catch(() => []);
+  const d1Matches = filterLinkedDoctorProfiles(d1Profiles, claims);
+  if (d1Profiles.length) return d1Matches;
   const profileResult = await store.list({ prefix: DOCTOR_PROFILE_PREFIX });
   if (!(profileResult.keys || []).length) return [];
+  const profiles = [];
+  for (const item of profileResult.keys || []) {
+    const profile = sanitizeDoctorProfile(await store.get(item.name, "json").catch(() => null));
+    if (profile) profiles.push(profile);
+  }
+  return filterLinkedDoctorProfiles(profiles, claims);
+}
+
+function filterLinkedDoctorProfiles(profiles, claims) {
   const claimSourcesByKey = new Map();
   for (const claim of sanitizeClaims(claims)) {
     if (!claimSourcesByKey.has(claim.key)) claimSourcesByKey.set(claim.key, new Set());
     claimSourcesByKey.get(claim.key).add(claim.sourceType);
   }
-  const profiles = [];
-  for (const item of profileResult.keys || []) {
-    const profile = sanitizeDoctorProfile(await store.get(item.name, "json").catch(() => null));
+  const matches = [];
+  for (const profile of profiles || []) {
     if (!profile) continue;
     const allowedSources = claimSourcesByKey.get(profile.doctorKey);
     if (!allowedSources) continue;
     if (!profile.sourceTypes.every((sourceType) => allowedSources.has(sourceType))) continue;
-    profiles.push(profile);
+    matches.push(profile);
   }
-  return profiles;
+  return matches;
 }
 
 function mergeProfileSessionIntoState(state, profiles, ownerEmail = "") {
@@ -1937,13 +1988,22 @@ async function loadDoctorProfileSnapshotInfo(store, profile, db = null) {
 
 async function buildDerivedDoctorProfileSnapshot(store, db, profile) {
   if (!hasCalendarDb({ ROSTER_DB: db }) || !profile?.profileId || !profile?.doctorKey) return null;
-  const events = await queryDoctorEvents(db, [profile.doctorKey]);
+  const session = profile.state?.session && typeof profile.state.session === "object" ? profile.state.session : {};
+  const settings = {
+    ...defaultSettings(),
+    ...(session.settings || {}),
+  };
+  const events = [
+    ...applyEventOverrides(await queryDoctorEvents(db, [profile.doctorKey]), session.overrides || {}),
+    ...customEventsToEvents(sanitizeSnapshotCustomEvents(session.customEvents, ""), settings),
+  ];
   if (!events.length) return null;
   const index = await loadRepositoryIndex(store);
   const refs = await repositoryImportRefsForDoctorProfile(store, profile);
   const profileSources = sanitizeSourceTypes(profile.sourceTypes);
+  const d1Doctors = await queryRosterDoctors(db).catch(() => []);
   const doctorOptions = buildCreatorDoctorOptions(
-    repositoryDoctorCandidatesFromIndex(index).filter((doctor) => (
+    (d1Doctors.length ? d1Doctors : repositoryDoctorCandidatesFromIndex(index)).filter((doctor) => (
       doctor.key === profile.doctorKey || profileSources.includes(doctor.sourceType)
     )),
   );
@@ -1954,7 +2014,7 @@ async function buildDerivedDoctorProfileSnapshot(store, db, profile) {
     builtAt: new Date().toISOString(),
     buildStamp: "d1-derived",
     preview: buildPreviewFromDerivedEvents(events),
-    session: profile.state?.session || { doctorKey: profile.doctorKey },
+    session: session && Object.keys(session).length ? session : { doctorKey: profile.doctorKey },
     doctorOptions: doctorOptions.length ? doctorOptions : [{
       key: profile.doctorKey,
       displayName: profile.displayName,
