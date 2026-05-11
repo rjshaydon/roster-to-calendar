@@ -1032,6 +1032,11 @@ const d1UserList = await postState(d1StateStore, {
   password: creatorPassword,
 }, d1Store);
 assert.ok(d1UserList.availableDoctors.some((doctor) => doctor.key === d1Doctor.key));
+assert.equal(
+  d1UserList.availableDoctors.find((doctor) => doctor.key === d1Doctor.key)?.claimedBy,
+  "d1-user@example.com",
+  "D1 doctor directory should include claimed account metadata for the Creator switcher",
+);
 const d1NoKvIndexLogin = await postState(d1StateStore, {
   action: "login",
   email: "d1-user@example.com",

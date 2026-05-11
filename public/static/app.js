@@ -1755,16 +1755,17 @@ function syncMobileSettingsControls() {
   mobileSettingsControls?.classList.toggle("hidden", !mobile);
   if (!mobile) return;
   if (mobileDoctorSelect) {
-    if (canUseDoctorPicker() && doctorOptions.length > 1) {
-      mobileDoctorSelect.innerHTML = doctorOptions.map((doctor) => `
-        <option value="${escapeHtml(doctor.key)}" ${doctor.key === selectedDoctor()?.key ? "selected" : ""}>
+    const pickerOptions = doctorPickerOptions();
+    const selected = selectedDoctor();
+    if (pickerOptions.length > 1) {
+      mobileDoctorSelect.innerHTML = pickerOptions.map((doctor) => `
+        <option value="${escapeHtml(doctor.key)}" ${doctor.key === selected?.key ? "selected" : ""}>
           ${escapeHtml(doctor.displayName)}
         </option>
       `).join("");
       mobileDoctorSelect.disabled = false;
     } else {
-      const doctor = selectedDoctor();
-      mobileDoctorSelect.innerHTML = `<option value="${escapeHtml(doctor?.key || "")}">${escapeHtml(doctor?.displayName || currentAccount().realName || "Selected doctor")}</option>`;
+      mobileDoctorSelect.innerHTML = `<option value="${escapeHtml(selected?.key || "")}">${escapeHtml(selected?.displayName || currentAccount().realName || "Selected doctor")}</option>`;
       mobileDoctorSelect.disabled = true;
     }
   }
@@ -1837,6 +1838,7 @@ function renderFileSurfaces() {
 }
 
 function renderDoctorState() {
+  const pickerOptions = doctorPickerOptions();
   doctorSelect.innerHTML = "";
   doctorName.textContent = "";
   doctorName.classList.add("hidden");
@@ -1845,7 +1847,7 @@ function renderDoctorState() {
   syncControlBarVisibility();
   closeSettingsPanel();
 
-  if (!doctorOptions.length) {
+  if (!pickerOptions.length) {
     const message = canUseDoctorPicker()
       ? "No consultant names could be matched from the uploaded roster files."
       : "No roster entries are currently linked to your account name.";
@@ -1858,12 +1860,12 @@ function renderDoctorState() {
   claimSection.classList.add("hidden");
   doctorSection.classList.remove("hidden");
 
-  if (doctorOptions.length === 1) {
-    doctorName.textContent = doctorOptions[0].displayName;
+  if (pickerOptions.length === 1) {
+    doctorName.textContent = pickerOptions[0].displayName;
     doctorName.classList.remove("hidden");
     setStatus("Loading calendar...");
   } else {
-    for (const doctor of doctorOptions) {
+    for (const doctor of pickerOptions) {
       const option = document.createElement("option");
       option.value = doctor.key;
       option.textContent = doctor.displayName;
@@ -1873,9 +1875,9 @@ function renderDoctorState() {
       doctorSelect.append(option);
     }
     const preferredDoctorKey = activeDoctorProfile?.doctorKey || preferredDoctorKeyForCurrentAccount();
-    if (preferredDoctorKey && doctorOptions.some((doctor) => doctor.key === preferredDoctorKey)) {
+    if (preferredDoctorKey && pickerOptions.some((doctor) => doctor.key === preferredDoctorKey)) {
       doctorSelect.value = preferredDoctorKey;
-    } else if (restoredSessionState?.doctorKey && doctorOptions.some((doctor) => doctor.key === restoredSessionState.doctorKey)) {
+    } else if (restoredSessionState?.doctorKey && pickerOptions.some((doctor) => doctor.key === restoredSessionState.doctorKey)) {
       doctorSelect.value = restoredSessionState.doctorKey;
     }
     doctorSelect.classList.remove("hidden");
@@ -2388,12 +2390,13 @@ function renderPreviewHeader(doctor, data) {
 }
 
 function renderPreviewDoctorControl(doctor) {
-  if (canUseDoctorPicker() && doctorOptions.length > 1) {
+  const pickerOptions = doctorPickerOptions();
+  if (pickerOptions.length > 1) {
     return `
       <label class="preview-doctor-control">
         <span>Doctor</span>
         <select data-preview-doctor-select>
-          ${doctorOptions.map((option) => `
+          ${pickerOptions.map((option) => `
             <option value="${escapeHtml(option.key)}" ${option.key === doctor.key ? "selected" : ""}>
               ${escapeHtml(option.displayName)}
             </option>
@@ -3308,8 +3311,9 @@ async function renderInlineWhenInsight(container, doctorKey) {
 async function openDoctorProfileFromInsight(doctorKey) {
   const normalizedKey = normalizeRosterName(doctorKey);
   if (!normalizedKey) return;
-  const localOption = doctorOptions.find((doctor) => doctor.key === normalizedKey);
-  if (localOption && doctorOptions.length > 1) {
+  const options = doctorPickerOptions();
+  const localOption = options.find((doctor) => doctor.key === normalizedKey);
+  if (localOption && options.length > 1) {
     if (canUseDoctorPicker() && cloudAvailable && !serverUsers.length) {
       await loadServerUsers();
     }
@@ -4198,12 +4202,13 @@ function closeContextMenu() {
 }
 
 function selectedDoctor() {
-  if (!doctorOptions.length) return null;
-  if (doctorOptions.length === 1) return doctorOptions[0];
+  const options = doctorPickerOptions();
+  if (!options.length) return null;
+  if (options.length === 1) return options[0];
   const preferredDoctorKey = preferredDoctorKeyForCurrentAccount();
-  return doctorOptions.find((doctor) => doctor.key === doctorSelect.value)
-    || doctorOptions.find((doctor) => doctor.key === preferredDoctorKey)
-    || doctorOptions[0];
+  return options.find((doctor) => doctor.key === doctorSelect.value)
+    || options.find((doctor) => doctor.key === preferredDoctorKey)
+    || options[0];
 }
 
 function preferredDoctorKeyForCurrentAccount() {
@@ -4293,7 +4298,7 @@ async function switchDoctorSelection(selectedKey, options = {}) {
   const resetRange = options.resetRange !== false;
   doctorSelect.value = selectedKey;
   const canSwitchAsCreator = canUseCreatorDoctorSwitcher();
-  if (canSwitchAsCreator && cloudAvailable && !serverUsers.length) {
+  if (canSwitchAsCreator && cloudAvailable && (!serverUsers.length || !availableRosterDoctors.length)) {
     await loadServerUsers();
   }
   const selectedOption = selectedDoctorOptionForKey(selectedKey);
@@ -4378,7 +4383,7 @@ async function resolveDoctorAccountForSwitch(doctor) {
 
 function selectedDoctorOptionForKey(selectedKey) {
   const normalizedKey = normalizeRosterName(selectedKey);
-  const localOption = doctorOptions.find((doctor) => doctor.key === normalizedKey) || null;
+  const localOption = doctorPickerOptions().find((doctor) => doctor.key === normalizedKey) || null;
   const selectedDomOption = doctorSelect.selectedOptions?.[0] || null;
   if (localOption && (normalizedDoctorSourceTypes(localOption).length || selectedDomOption?.dataset.sourceTypes)) {
     const accountEmail = currentClaimedAccountEmail(localOption.accountEmail || selectedDomOption?.dataset.accountEmail || "");
@@ -4489,6 +4494,28 @@ function doctorOptionsForCurrentAccount(doctors) {
     aliases: dedupedAliases,
     sourceTypes: [...new Set(dedupedAliases.map((alias) => alias.sourceType))],
   }];
+}
+
+function doctorPickerOptions() {
+  if (!canUseCreatorDoctorSwitcher()) return doctorOptions;
+  const repositoryOptions = availableRosterDoctors.map((doctor) => ({
+    ...doctor,
+    sourceTypes: normalizedDoctorSourceTypes(doctor).length
+      ? normalizedDoctorSourceTypes(doctor)
+      : [String(doctor.sourceType || "").toLowerCase()].filter(Boolean),
+  }));
+  const preferredDoctorKey = preferredDoctorKeyForCurrentAccount();
+  const preferredDoctor = preferredDoctorKey && !repositoryOptions.some((doctor) => doctor.key === preferredDoctorKey)
+    ? [{
+        key: preferredDoctorKey,
+        displayName: currentUserEmail === OWNER_EMAIL && !adminViewingEmail && !activeDoctorProfile
+          ? currentAccount().realName || "Creator"
+          : formatRosterDisplayName(preferredDoctorKey),
+        sourceTypes: [],
+      }]
+    : [];
+  const fallbackOptions = repositoryOptions.length ? [] : doctorOptions;
+  return buildCreatorDoctorOptions(dedupeDoctorOptions([...preferredDoctor, ...repositoryOptions, ...fallbackOptions]));
 }
 
 function dedupeDoctorOptions(options) {
@@ -8635,6 +8662,9 @@ async function restoreCloudState(options = {}) {
     });
     const data = await readJsonResponse(response, "Login failed.");
     await applyCloudStateData(data);
+    if (isCreatorAuthenticated()) {
+      await loadServerUsers();
+    }
   } catch (error) {
     cancelScheduledCloudStateSave();
     const attemptedEmail = currentUserEmail;
@@ -8730,7 +8760,10 @@ async function applyCloudStateData(data) {
   currentRosterClaims = sanitizeRosterClaims(data.claims || []);
   currentSuggestedClaims = sanitizeRosterClaims(data.suggestedClaims || data.nameMatches || []);
   latestNameMatches = currentSuggestedClaims;
-  availableRosterDoctors = sanitizeAvailableRosterDoctors(data.availableDoctors || []);
+  const incomingAvailableDoctors = sanitizeAvailableRosterDoctors(data.availableDoctors || []);
+  if (incomingAvailableDoctors.length || !isCreatorAuthenticated()) {
+    availableRosterDoctors = incomingAvailableDoctors;
+  }
   currentSubscription = sanitizeSubscription(data.subscription);
   applyIssueConfig(data.issueConfig);
   if (data.realName) {
