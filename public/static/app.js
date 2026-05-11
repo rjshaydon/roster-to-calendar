@@ -616,11 +616,7 @@ logoutButton.addEventListener("click", () => {
   logoutCurrentUser();
 });
 backToCreatorButton.addEventListener("click", () => {
-  if (activeDoctorProfile) {
-    exitDoctorProfileView();
-    return;
-  }
-  returnToCreatorAccount();
+  void returnToCreatorCalendar();
 });
 doctorSelect.addEventListener("change", async () => {
   await switchDoctorSelection(doctorSelect.value, { resetRange: true });
@@ -903,11 +899,7 @@ preview.addEventListener("click", (event) => {
   }
   const backTrigger = event.target.closest("[data-preview-back-to-creator]");
   if (backTrigger) {
-    if (activeDoctorProfile) {
-      exitDoctorProfileView();
-    } else {
-      returnToCreatorAccount();
-    }
+    void returnToCreatorCalendar();
     return;
   }
   const rangeTrigger = event.target.closest("[data-range-trigger]");
@@ -4299,14 +4291,24 @@ function hideSwitchOverlay() {
 
 async function switchDoctorSelection(selectedKey, options = {}) {
   const resetRange = options.resetRange !== false;
+  const normalizedSelectedKey = normalizeRosterName(selectedKey);
   doctorSelect.value = selectedKey;
   const canSwitchAsCreator = canUseCreatorDoctorSwitcher();
   if (canSwitchAsCreator && cloudAvailable && (!serverUsers.length || !availableRosterDoctors.length)) {
     await loadServerUsers();
   }
   const selectedOption = selectedDoctorOptionForKey(selectedKey);
+  if (canSwitchAsCreator && normalizedSelectedKey === OWNER_DOCTOR_KEY) {
+    try {
+      showSwitchOverlay("Returning to creator...", "Restoring the creator calendar.");
+      await returnToCreatorCalendar();
+    } finally {
+      hideSwitchOverlay();
+    }
+    return;
+  }
   let resolvedAccount = null;
-  if (canSwitchAsCreator && selectedOption && selectedKey !== OWNER_DOCTOR_KEY) {
+  if (canSwitchAsCreator && selectedOption) {
     try {
       resolvedAccount = await resolveDoctorAccountForSwitch(selectedOption);
     } catch (error) {
@@ -4315,15 +4317,13 @@ async function switchDoctorSelection(selectedKey, options = {}) {
     }
   }
   const claimedEmail = normalizeEmail(resolvedAccount?.email || selectedOption?.accountEmail || claimedEmailForDoctorKey(selectedKey, selectedOption?.displayName || ""));
-  if (canSwitchAsCreator && selectedOption && selectedKey !== OWNER_DOCTOR_KEY) {
+  if (canSwitchAsCreator && selectedOption) {
     showSwitchOverlay(
       `Switching to ${selectedOption.displayName}…`,
       resolvedAccount?.mode === "claimed-account" ? "Opening the linked account calendar." : "Opening the roster calendar and loading saved doctor-profile edits.",
     );
-  } else if (activeDoctorProfile && selectedKey === OWNER_DOCTOR_KEY) {
-    showSwitchOverlay("Returning to creator…", "Restoring the creator calendar.");
   }
-  if (canSwitchAsCreator && selectedOption && selectedKey !== OWNER_DOCTOR_KEY) {
+  if (canSwitchAsCreator && selectedOption) {
     try {
       if (resolvedAccount?.mode === "claimed-account" && claimedEmail && claimedEmail !== currentUserEmail) {
         await enterUserAccount(claimedEmail);
@@ -4332,22 +4332,6 @@ async function switchDoctorSelection(selectedKey, options = {}) {
       } else {
         await enterDoctorProfileView(selectedOption);
       }
-    } finally {
-      hideSwitchOverlay();
-    }
-    return;
-  }
-  if (canSwitchAsCreator && selectedKey === OWNER_DOCTOR_KEY && currentUserEmail !== OWNER_EMAIL) {
-    try {
-      await returnToCreatorAccount();
-    } finally {
-      hideSwitchOverlay();
-    }
-    return;
-  }
-  if (activeDoctorProfile && selectedKey === OWNER_DOCTOR_KEY) {
-    try {
-      await exitDoctorProfileView();
     } finally {
       hideSwitchOverlay();
     }
@@ -4511,48 +4495,83 @@ function doctorPickerOptions() {
       : [String(doctor.sourceType || "").toLowerCase()].filter(Boolean),
   }));
   const preferredDoctorKey = preferredDoctorKeyForCurrentAccount();
-  const preferredDoctor = preferredDoctorKey && !repositoryOptions.some((doctor) => doctor.key === preferredDoctorKey)
-    ? [{
-        key: preferredDoctorKey,
-        displayName: currentUserEmail === OWNER_EMAIL && !adminViewingEmail && !activeDoctorProfile
-          ? currentAccount().realName || "Creator"
-          : formatRosterDisplayName(preferredDoctorKey),
-        sourceTypes: [],
-      }]
-    : [];
+  const preferredDoctor = preferredDoctorKey ? [{
+    key: preferredDoctorKey,
+    displayName: preferredDoctorKey === OWNER_DOCTOR_KEY
+      ? formatRosterDisplayName(OWNER_DOCTOR_KEY)
+      : formatRosterDisplayName(preferredDoctorKey),
+    sourceTypes: [],
+    ownerRoute: preferredDoctorKey === OWNER_DOCTOR_KEY,
+  }] : [];
   const fallbackOptions = repositoryOptions.length ? [] : doctorOptions;
   return buildCreatorDoctorOptions(dedupeDoctorOptions([...preferredDoctor, ...repositoryOptions, ...fallbackOptions]));
 }
 
 function dedupeDoctorOptions(options) {
-  const seen = new Set();
-  const deduped = [];
+  const dedupedByIdentity = new Map();
   for (const doctor of options || []) {
-    const sourceTypes = normalizedDoctorSourceTypes(doctor);
-    const marker = `${doctor.key}:${sourceTypes.join(",") || doctor.sourceType || ""}`;
-    if (!doctor.key || seen.has(marker)) continue;
-    seen.add(marker);
-    deduped.push(doctor);
+    if (!doctor?.key) continue;
+    const identity = doctorIdentityKey(doctor);
+    if (!identity) continue;
+    const existing = dedupedByIdentity.get(identity);
+    dedupedByIdentity.set(identity, existing ? mergeDoctorOption(existing, doctor) : { ...doctor });
   }
-  return deduped;
+  return [...dedupedByIdentity.values()];
+}
+
+function doctorIdentityKey(doctor) {
+  if (doctor?.key === OWNER_DOCTOR_KEY || rosterIdentityKey(doctor?.displayName || doctor?.key) === rosterIdentityKey(OWNER_DOCTOR_KEY)) {
+    return `owner:${OWNER_DOCTOR_KEY}`;
+  }
+  return rosterIdentityKey(doctor?.displayName || doctor?.key) || normalizeRosterName(doctor?.key || "");
+}
+
+function mergeDoctorOption(existing, incoming) {
+  const existingAliases = Array.isArray(existing.aliases) ? existing.aliases : [];
+  const incomingAliases = Array.isArray(incoming.aliases) ? incoming.aliases : [];
+  const sourceTypes = [...new Set([
+    ...normalizedDoctorSourceTypes(existing),
+    ...normalizedDoctorSourceTypes(incoming),
+  ])];
+  const ownerRoute = existing.ownerRoute === true || incoming.ownerRoute === true;
+  const preferred = ownerRoute
+    ? (existing.ownerRoute ? existing : incoming.ownerRoute ? incoming : existing)
+    : existing;
+  return {
+    ...existing,
+    ...preferred,
+    key: ownerRoute ? OWNER_DOCTOR_KEY : (preferred.key || existing.key || incoming.key),
+    displayName: ownerRoute ? formatRosterDisplayName(OWNER_DOCTOR_KEY) : (preferred.displayName || existing.displayName || incoming.displayName),
+    sourceType: preferred.sourceType || existing.sourceType || incoming.sourceType || "",
+    sourceTypes,
+    aliases: dedupeDoctorAliases([...existingAliases, ...incomingAliases]),
+    accountEmail: ownerRoute ? "" : (existing.accountEmail || incoming.accountEmail || ""),
+    claimedBy: ownerRoute ? "" : (existing.claimedBy || incoming.claimedBy || ""),
+    claimedByName: ownerRoute ? "" : (existing.claimedByName || incoming.claimedByName || ""),
+    ownerRoute,
+  };
 }
 
 function buildCreatorDoctorOptions(options) {
   return prioritizeDoctorOptions(
     options.map((doctor) => ({
       ...doctor,
-      accountEmail: claimedEmailForDoctorKey(doctor.key, doctor.displayName),
+      accountEmail: doctor.key === OWNER_DOCTOR_KEY || doctor.ownerRoute ? "" : claimedEmailForDoctorKey(doctor.key, doctor.displayName),
     })),
   );
 }
 
 function prioritizeDoctorOptions(options) {
   const preferredDoctorKey = preferredDoctorKeyForCurrentAccount();
-  if (!preferredDoctorKey) return options;
   return [...options].sort((left, right) => {
-    const leftPreferred = left.key === preferredDoctorKey ? 1 : 0;
-    const rightPreferred = right.key === preferredDoctorKey ? 1 : 0;
-    if (leftPreferred !== rightPreferred) return rightPreferred - leftPreferred;
+    const leftOwner = left.key === OWNER_DOCTOR_KEY ? 1 : 0;
+    const rightOwner = right.key === OWNER_DOCTOR_KEY ? 1 : 0;
+    if (leftOwner !== rightOwner) return rightOwner - leftOwner;
+    if (preferredDoctorKey) {
+      const leftPreferred = left.key === preferredDoctorKey ? 1 : 0;
+      const rightPreferred = right.key === preferredDoctorKey ? 1 : 0;
+      if (leftPreferred !== rightPreferred) return rightPreferred - leftPreferred;
+    }
     return left.displayName.localeCompare(right.displayName);
   });
 }
@@ -7362,7 +7381,7 @@ async function deleteAccount(email) {
     closeAccountsModal();
 
     if (deletingCurrentAccount && adminViewingEmail && creatorCanDelete) {
-      await returnToCreatorAccount();
+      await returnToCreatorCalendar();
       setStatus(`Deleted ${targetEmail}.`);
       return;
     }
@@ -7930,6 +7949,10 @@ async function exitDoctorProfileView() {
   renderLoginState();
 }
 
+async function returnToCreatorCalendar() {
+  await returnToCreatorAccount();
+}
+
 async function returnToCreatorAccount() {
   const creatorEmail = authUserEmail || OWNER_EMAIL;
   const creatorPassword = authUserPassword || currentUserPassword;
@@ -7947,9 +7970,27 @@ async function returnToCreatorAccount() {
   setStatus("Returning to creator account...");
   await clearLocalWorkspace();
   await restoreCloudState();
-  renderDoctorState();
-  renderLoginState();
+  restoredSessionState = {
+    ...(restoredSessionState || {}),
+    doctorKey: OWNER_DOCTOR_KEY,
+  };
+  if (currentSnapshot) {
+    currentSnapshot = sanitizeWorkspaceSnapshot({
+      ...currentSnapshot,
+      session: {
+        ...(currentSnapshot.session || {}),
+        doctorKey: OWNER_DOCTOR_KEY,
+      },
+    });
+  }
   await bootstrapImports();
+  if (doctorSelect && doctorPickerOptions().some((doctor) => doctor.key === OWNER_DOCTOR_KEY)) {
+    doctorSelect.value = OWNER_DOCTOR_KEY;
+  }
+  if (selectedDoctor()?.key !== OWNER_DOCTOR_KEY) {
+    clearPreviewData();
+    await updatePreview({ resetRange: false });
+  }
   renderLoginState();
 }
 
