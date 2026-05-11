@@ -653,6 +653,57 @@ class MemoryD1Statement {
           .sort((left, right) => left.display_name.localeCompare(right.display_name) || left.source_type.localeCompare(right.source_type)),
       };
     }
+    if (sql.includes("FROM roster_files") && sql.includes("doctor_count") && sql.includes("event_count")) {
+      const includeInactive = !sql.includes("WHERE roster_files.active = 1");
+      return {
+        results: [...this.db.files.values()]
+          .filter((file) => includeInactive || file.active === 1)
+          .sort((left, right) => String(left.added_at || "").localeCompare(String(right.added_at || "")) || left.name.localeCompare(right.name))
+          .map((file) => ({
+            id: file.id,
+            name: file.name,
+            source_type: file.source_type,
+            active: file.active,
+            size: file.size,
+            last_modified: file.last_modified,
+            added_at: file.added_at,
+            uploaded_at: file.uploaded_at,
+            uploaded_by: file.uploaded_by,
+            doctor_count: [...this.db.fileDoctors.values()].filter((doctor) => doctor.file_id === file.id).length,
+            event_count: [...this.db.events.values()].filter((event) => event.file_id === file.id).length,
+          })),
+      };
+    }
+    if (sql.includes("FROM roster_files") && sql.includes("INNER JOIN roster_file_doctors") && sql.includes("roster_file_doctors.doctor_key IN")) {
+      const keys = new Set(args);
+      const seen = new Set();
+      const results = [];
+      for (const doctor of [...this.db.fileDoctors.values()]) {
+        const file = this.db.files.get(doctor.file_id);
+        if (!file || file.active !== 1 || !keys.has(doctor.doctor_key) || seen.has(file.id)) continue;
+        seen.add(file.id);
+        results.push({
+          id: file.id,
+          name: file.name,
+          source_type: file.source_type,
+          active: file.active,
+          size: file.size,
+          last_modified: file.last_modified,
+          added_at: file.added_at,
+          uploaded_at: file.uploaded_at,
+          uploaded_by: file.uploaded_by,
+        });
+      }
+      return {
+        results: results.sort((left, right) => String(left.added_at || "").localeCompare(String(right.added_at || "")) || left.name.localeCompare(right.name)),
+      };
+    }
+    if (sql.startsWith("SELECT file_id, source_type, doctor_key, display_name FROM roster_file_doctors")) {
+      return {
+        results: [...this.db.fileDoctors.values()]
+          .sort((left, right) => left.display_name.localeCompare(right.display_name) || left.source_type.localeCompare(right.source_type)),
+      };
+    }
     if (sql.includes("FROM account_profiles") && sql.includes("LEFT JOIN account_claims")) {
       const results = [];
       const tokenFilter = sql.includes("WHERE account_profiles.subscription_token = ?");
@@ -812,6 +863,12 @@ const creatorImports = await postState(stateStore, {
 });
 assert.equal(creatorImports.imports.length, 1);
 assert.equal(creatorImports.imports[0].repoId, "fixture-roster");
+const emptyD1Status = await postState(stateStore, {
+  action: "calendarStoreStatus",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+}, new MemoryD1());
+assert.equal(emptyD1Status.total, 1, "KV repository metadata should remain the fallback when D1 roster_files is empty");
 
 const d1StateStore = new MemoryStore();
 const d1Store = new MemoryD1();
@@ -961,12 +1018,27 @@ assert.ok(d1Status.accounts.profiles >= 2);
 assert.ok(d1Status.accounts.claims >= 1);
 assert.ok(d1Status.accounts.states >= 2);
 assert.ok(d1Status.accounts.subscriptionTokens >= 2);
+await d1StateStore.delete("repository:index");
+const d1OnlyRepositoryStatus = await postState(d1StateStore, {
+  action: "calendarStoreStatus",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+}, d1Store);
+assert.equal(d1OnlyRepositoryStatus.total, 1, "D1 roster_files should supply calendar status without KV repository index");
+assert.equal(d1OnlyRepositoryStatus.populated, 1);
 const d1UserList = await postState(d1StateStore, {
   action: "listUsers",
   email: "rhaydon@gmail.com",
   password: creatorPassword,
 }, d1Store);
 assert.ok(d1UserList.availableDoctors.some((doctor) => doctor.key === d1Doctor.key));
+const d1NoKvIndexLogin = await postState(d1StateStore, {
+  action: "login",
+  email: "d1-user@example.com",
+  password: "d1-password",
+}, d1Store);
+assert.equal(d1NoKvIndexLogin.snapshot?.preview?.derivedFromD1, true, "D1 account snapshot should load without KV repository index");
+assert.ok(d1NoKvIndexLogin.availableDoctors.some((doctor) => doctor.key === d1Doctor.key), "D1 doctor directory should load without KV repository index");
 const d1ClaimResolution = await postState(d1StateStore, {
   action: "resolveDoctorAccount",
   email: "rhaydon@gmail.com",
@@ -991,6 +1063,45 @@ const d1DoctorProfile = await postState(d1StateStore, {
 assert.equal(d1DoctorProfile.snapshot?.preview?.derivedFromD1, true);
 assert.equal(d1DoctorProfile.snapshotStale, false);
 assert.ok(d1DoctorProfile.snapshot.preview.events.length > 0);
+assert.ok(d1DoctorProfile.snapshot.fileRefs.some((ref) => ref.id === d1RepositoryFile), "D1 doctor profile should derive file refs without KV repository index");
+const d1RepositoryDoctors = [...d1Store.fileDoctors.values()].map((doctor) => ({
+  key: doctor.doctor_key,
+  displayName: doctor.display_name,
+  sourceType: doctor.source_type,
+}));
+const d1RepositoryEventsByDoctor = Object.fromEntries(
+  [...d1Store.fileDoctors.values()].map((doctor) => [
+    doctor.doctor_key,
+    [...d1Store.events.values()]
+      .filter((event) => event.doctor_key === doctor.doctor_key)
+      .map((event) => JSON.parse(event.event_json)),
+  ]),
+);
+await postState(d1StateStore, {
+  action: "resetDerivedCalendarFile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  fileId: d1RepositoryFile,
+}, d1Store);
+const d1InactiveRepositoryStatus = await postState(d1StateStore, {
+  action: "calendarStoreStatus",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+}, d1Store);
+assert.equal(d1InactiveRepositoryStatus.total, 0, "inactive D1 roster files should not drive active calendar status");
+await postState(d1StateStore, {
+  action: "saveDerivedCalendarFile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  file: {
+    id: d1RepositoryFile,
+    name: "AdultTerm1.2026.xlsx",
+    sourceType: "mmc",
+    active: true,
+  },
+  doctors: d1RepositoryDoctors,
+  eventsByDoctor: d1RepositoryEventsByDoctor,
+}, d1Store);
 const d1ProfileOverrideEvent = d1DoctorProfile.snapshot.preview.events[0];
 await postState(d1StateStore, {
   action: "saveDoctorProfile",

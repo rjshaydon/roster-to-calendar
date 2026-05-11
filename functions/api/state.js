@@ -14,6 +14,8 @@ import {
   queryClaimedAccounts,
   queryDoctorProfileMirrors,
   queryDoctorEvents,
+  queryRosterFileRefsForDoctors,
+  queryRosterFiles,
   queryRosterDoctors,
   replaceDerivedRosterFile,
   upsertAccountMirror,
@@ -100,7 +102,7 @@ export async function onRequestPost(context) {
         mode: "create",
         realName: targetRealName,
       });
-      const createdRecord = await autoClaimMatchedRosterNames(context.env.ROSTER_STORE, created.record);
+      const createdRecord = await autoClaimMatchedRosterNames(context.env.ROSTER_STORE, created.record, context.env.ROSTER_DB);
       await upsertAccountMirror(context.env.ROSTER_DB, createdRecord).catch(() => null);
       const prepared = await prepareAccountResponse(context.env.ROSTER_STORE, createdRecord, { db: context.env.ROSTER_DB });
       return Response.json({
@@ -151,7 +153,7 @@ export async function onRequestPost(context) {
     if (action === "claimRosterName") {
       const claimEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
       const targetRecord = claimEmail === email ? account.record : await loadAccountRecord(context.env.ROSTER_STORE, claimEmail);
-      const index = await loadRepositoryIndex(context.env.ROSTER_STORE);
+      const index = await loadRepositoryIndex(context.env.ROSTER_STORE, context.env.ROSTER_DB);
       const claim = findRepositoryDoctor(index, body?.claim);
       if (!claim) {
         return Response.json({ error: "Roster name was not found in the repository." }, { status: 400 });
@@ -159,7 +161,7 @@ export async function onRequestPost(context) {
       const claims = mergeClaims(targetRecord.claims, [{ ...claim, matchedAt: new Date().toISOString() }]);
       const state = {
         ...sanitizeState(targetRecord.state),
-        imports: (await repositoryImportsForClaims(context.env.ROSTER_STORE, index, claims)).map(repositoryImportRef),
+        imports: (await repositoryImportsForClaims(context.env.ROSTER_STORE, index, claims, context.env.ROSTER_DB)).map(repositoryImportRef),
       };
       const updated = {
         ...targetRecord,
@@ -194,7 +196,7 @@ export async function onRequestPost(context) {
       return Response.json({
         ok: true,
         users: await listUsers(context.env.ROSTER_STORE),
-        availableDoctors: await repositoryDoctorCandidates(context.env.ROSTER_STORE, await loadRepositoryIndex(context.env.ROSTER_STORE), context.env.ROSTER_DB),
+        availableDoctors: await repositoryDoctorCandidates(context.env.ROSTER_STORE, await loadRepositoryIndex(context.env.ROSTER_STORE, context.env.ROSTER_DB), context.env.ROSTER_DB),
         issueConfig: await buildIssueConfig(context.env.ROSTER_STORE, email),
       });
     }
@@ -327,7 +329,7 @@ export async function onRequestPost(context) {
         return Response.json({ error: "Target account is required." }, { status: 400 });
       }
       const targetRecord = await loadAccountRecord(context.env.ROSTER_STORE, targetEmail);
-      const index = await loadRepositoryIndex(context.env.ROSTER_STORE);
+      const index = await loadRepositoryIndex(context.env.ROSTER_STORE, context.env.ROSTER_DB);
       const claims = sanitizeClaims((body?.claims || []).map((claim) => findRepositoryDoctor(index, claim)).filter(Boolean).map((claim) => ({ ...claim, matchedAt: new Date().toISOString() })));
       const state = {
         ...sanitizeState(targetRecord.state),
@@ -359,7 +361,7 @@ export async function onRequestPost(context) {
         key: normalizeRosterName(body?.claim?.key || ""),
       };
       const claims = sanitizeClaims(targetRecord.claims).filter((claim) => !(claim.sourceType === rawClaim.sourceType && claim.key === rawClaim.key));
-      const index = await loadRepositoryIndex(context.env.ROSTER_STORE);
+      const index = await loadRepositoryIndex(context.env.ROSTER_STORE, context.env.ROSTER_DB);
       const state = {
         ...sanitizeState(targetRecord.state),
         imports: repositoryImportRefsForClaims(index, claims),
@@ -759,7 +761,7 @@ export async function onRequestPost(context) {
     if (action === "loadImports") {
       const loadEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
       const targetRecord = loadEmail === email ? account.record : await loadAccountRecord(context.env.ROSTER_STORE, loadEmail);
-      const imports = await resolveAccountImports(context.env.ROSTER_STORE, targetRecord);
+      const imports = await resolveAccountImports(context.env.ROSTER_STORE, targetRecord, context.env.ROSTER_DB);
       return Response.json({ ok: true, imports });
     }
 
@@ -778,7 +780,7 @@ export async function onRequestPost(context) {
       if (!profile) {
         return Response.json({ error: "Doctor profile was not found." }, { status: 404 });
       }
-      const imports = await repositoryImportsForDoctorProfile(context.env.ROSTER_STORE, profile);
+      const imports = await repositoryImportsForDoctorProfile(context.env.ROSTER_STORE, profile, context.env.ROSTER_DB);
       return Response.json({ ok: true, imports });
     }
 
@@ -811,7 +813,7 @@ export async function onRequestPost(context) {
     }
 
     if (action === "loadInsightImports") {
-      const index = await loadRepositoryIndex(context.env.ROSTER_STORE);
+      const index = await loadRepositoryIndex(context.env.ROSTER_STORE, context.env.ROSTER_DB);
       const refs = (index.files || []).filter((file) => file.active !== false).map((file) => repositoryImportRef(file));
       const imports = await resolveStateImports(context.env.ROSTER_STORE, refs);
       return Response.json({ ok: true, imports });
@@ -959,10 +961,10 @@ async function listUsers(store) {
   return users.sort((a, b) => a.email.localeCompare(b.email));
 }
 
-async function autoClaimMatchedRosterNames(store, record) {
+async function autoClaimMatchedRosterNames(store, record, db = null) {
   const role = record?.role || roleForEmail(record?.email || "");
   if (!record?.email || role === "creator" || role === "owner") return record;
-  const index = await loadRepositoryIndex(store);
+  const index = await loadRepositoryIndex(store, db);
   const claims = mergeClaims(sanitizeClaims(record.claims), matchRepositoryClaims(index, record.realName || ""));
   if (!claims.length || JSON.stringify(claims) === JSON.stringify(sanitizeClaims(record.claims))) return record;
   const state = {
@@ -980,7 +982,7 @@ async function autoClaimMatchedRosterNames(store, record) {
 }
 
 async function rebuildCalendarStoreFromRepository(store, db, options = {}) {
-  const index = await loadRepositoryIndex(store);
+  const index = await loadRepositoryIndex(store, db);
   let rebuilt = 0;
   const limit = Math.max(1, Math.min(Number(options.limit || 1) || 1, 3));
   const fileId = String(options.fileId || "").trim();
@@ -996,7 +998,8 @@ async function rebuildCalendarStoreFromRepository(store, db, options = {}) {
 }
 
 async function calendarStoreStatus(store, db) {
-  const index = await loadRepositoryIndex(store);
+  const d1Files = await queryRosterFiles(db).catch(() => []);
+  const index = d1Files.length ? { version: 1, files: d1Files } : await loadRepositoryIndex(store);
   const activeFiles = (index.files || []).filter((file) => file.active !== false);
   const counts = await countDerivedEventsByFile(db, activeFiles.map((file) => file.id));
   const doctorCounts = await countDerivedDoctorsByFile(db, activeFiles.map((file) => file.id));
@@ -1004,9 +1007,9 @@ async function calendarStoreStatus(store, db) {
     id: file.id,
     name: file.name,
     sourceType: file.sourceType,
-    expectedDoctors: sanitizeRepositoryDoctors(file.doctors).length,
-    indexedDoctors: doctorCounts.get(file.id) || 0,
-    eventCount: counts.get(file.id) || 0,
+    expectedDoctors: Number(file.expectedDoctors || 0) || sanitizeRepositoryDoctors(file.doctors).length,
+    indexedDoctors: Number(file.indexedDoctors || 0) || doctorCounts.get(file.id) || 0,
+    eventCount: Number(file.eventCount || 0) || counts.get(file.id) || 0,
   })).map((file) => ({
     ...file,
     status: file.eventCount <= 0
@@ -1096,7 +1099,7 @@ function insightsEnabledForRecord(record) {
 export async function prepareAccountResponse(store, rawRecord, options = {}) {
   let record = await ensureAccountSubscriptionToken(store, rawRecord);
   const role = record.role || roleForEmail(record.email);
-  const index = await loadRepositoryIndex(store);
+  const index = await loadRepositoryIndex(store, options.db);
   let claims = sanitizeClaims(record.claims);
   let nameMatches = [];
   let state = sanitizeState(record.state);
@@ -1207,10 +1210,11 @@ async function buildDerivedAccountSnapshot(db, context) {
   if (role === "creator" || role === "owner") {
     const selectedKey = normalizeRosterName(state.session?.doctorKey || "");
     if (!selectedKey) return null;
-    const doctor = findRepositoryDoctorByKey(context.index, selectedKey);
+    const d1Doctors = await queryRosterDoctors(db).catch(() => []);
+    const doctor = d1Doctors.find((item) => item.key === selectedKey) || findRepositoryDoctorByKey(context.index, selectedKey);
     if (!doctor) return null;
     doctorKeys = [doctor.key];
-    doctorOptions = buildCreatorDoctorOptions(repositoryDoctorCandidatesFromIndex(context.index));
+    doctorOptions = buildCreatorDoctorOptions(d1Doctors.length ? d1Doctors : repositoryDoctorCandidatesFromIndex(context.index));
   } else {
     const claims = sanitizeClaims(context.claims);
     if (!claims.length) return null;
@@ -1554,7 +1558,14 @@ async function upsertImportsIntoRepository(store, index, imports = [], uploadedB
   return { index, changed, idByOriginalId, idByDataUrl };
 }
 
-async function loadRepositoryIndex(store) {
+async function loadRepositoryIndex(store, db = null) {
+  const d1Files = await queryRosterFiles(db).catch(() => []);
+  if (d1Files.length) {
+    return {
+      version: 1,
+      files: d1Files.filter((file) => file.active !== false).map((file) => sanitizeRepositoryFile(file)).filter(Boolean),
+    };
+  }
   const raw = await store.get(REPOSITORY_INDEX_KEY, "json").catch(() => null);
   const rawFiles = Array.isArray(raw?.files) ? raw.files : [];
   const files = rawFiles.map(sanitizeRepositoryFile).filter((file) => file && file.active !== false);
@@ -1835,8 +1846,8 @@ async function buildAccountSnapshotStamp(store, context) {
   }));
 }
 
-async function buildDoctorProfileSnapshotStamp(store, profile) {
-  const refs = await repositoryImportRefsForDoctorProfile(store, profile);
+async function buildDoctorProfileSnapshotStamp(store, profile, db = null) {
+  const refs = await repositoryImportRefsForDoctorProfile(store, profile, db);
   const fileMarkers = refs.map((ref) => ({
     id: ref.id,
     sourceType: ref.sourceType,
@@ -1877,20 +1888,26 @@ function repositoryImportRefsForAccount(index, record) {
   return repositoryImportRefsForClaims(index, claims);
 }
 
-async function repositoryImportsForClaims(store, index, claims) {
-  return resolveStateImports(store, repositoryImportRefsForClaims(index, claims));
+async function d1RepositoryImportRefsForClaims(db, claims) {
+  return await queryRosterFileRefsForDoctors(db, sanitizeClaims(claims).map((claim) => claim.key)).catch(() => []);
 }
 
-async function resolveAccountImports(store, record) {
+async function repositoryImportsForClaims(store, index, claims, db = null) {
+  const d1Refs = await d1RepositoryImportRefsForClaims(db, claims);
+  return resolveStateImports(store, d1Refs.length ? d1Refs : repositoryImportRefsForClaims(index, claims));
+}
+
+async function resolveAccountImports(store, record, db = null) {
   const role = record?.role || roleForEmail(record?.email || "");
   const state = sanitizeState(record?.state);
   if (role === "creator" || role === "owner") {
-    const index = await loadRepositoryIndex(store);
+    const index = await loadRepositoryIndex(store, db);
     const activeRefs = (index.files || []).filter((file) => file.active !== false).map(repositoryImportRef);
     return resolveStateImports(store, activeRefs.length ? activeRefs : state.imports || []);
   }
-  const index = await loadRepositoryIndex(store);
-  return resolveStateImports(store, repositoryImportRefsForAccount(index, record));
+  const index = await loadRepositoryIndex(store, db);
+  const d1Refs = await d1RepositoryImportRefsForClaims(db, record?.claims || []);
+  return resolveStateImports(store, d1Refs.length ? d1Refs : repositoryImportRefsForAccount(index, record));
 }
 
 async function linkedDoctorProfilesForClaims(store, claims, db = null) {
@@ -1954,8 +1971,10 @@ function mergeProfileSessionIntoState(state, profiles, ownerEmail = "") {
   };
 }
 
-async function repositoryImportRefsForDoctorProfile(store, profile) {
-  const index = await loadRepositoryIndex(store);
+async function repositoryImportRefsForDoctorProfile(store, profile, db = null) {
+  const d1Refs = await queryRosterFileRefsForDoctors(db, [profile?.doctorKey].filter(Boolean)).catch(() => []);
+  if (d1Refs.length) return d1Refs;
+  const index = await loadRepositoryIndex(store, db);
   const refs = [];
   for (const file of index.files || []) {
     if (file.active === false) continue;
@@ -1967,13 +1986,13 @@ async function repositoryImportRefsForDoctorProfile(store, profile) {
   return refs;
 }
 
-async function repositoryImportsForDoctorProfile(store, profile) {
-  return resolveStateImports(store, await repositoryImportRefsForDoctorProfile(store, profile));
+async function repositoryImportsForDoctorProfile(store, profile, db = null) {
+  return resolveStateImports(store, await repositoryImportRefsForDoctorProfile(store, profile, db));
 }
 
 async function loadDoctorProfileSnapshotInfo(store, profile, db = null) {
   const owner = doctorProfileSnapshotOwner(profile);
-  const buildStamp = await buildDoctorProfileSnapshotStamp(store, profile);
+  const buildStamp = await buildDoctorProfileSnapshotStamp(store, profile, db);
   const storedSnapshot = await loadSnapshotRecord(store, owner.ownerType, owner.ownerId);
   const derivedSnapshot = await buildDerivedDoctorProfileSnapshot(store, db, profile);
   const snapshot = derivedSnapshot || storedSnapshot;
@@ -1998,8 +2017,8 @@ async function buildDerivedDoctorProfileSnapshot(store, db, profile) {
     ...customEventsToEvents(sanitizeSnapshotCustomEvents(session.customEvents, ""), settings),
   ];
   if (!events.length) return null;
-  const index = await loadRepositoryIndex(store);
-  const refs = await repositoryImportRefsForDoctorProfile(store, profile);
+  const index = await loadRepositoryIndex(store, db);
+  const refs = await repositoryImportRefsForDoctorProfile(store, profile, db);
   const profileSources = sanitizeSourceTypes(profile.sourceTypes);
   const d1Doctors = await queryRosterDoctors(db).catch(() => []);
   const doctorOptions = buildCreatorDoctorOptions(

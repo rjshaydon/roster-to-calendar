@@ -310,6 +310,96 @@ export async function queryRosterDoctors(db) {
     .filter((doctor) => doctor.key && doctor.displayName && SOURCE_TYPES.includes(doctor.sourceType));
 }
 
+export async function queryRosterFiles(db, options = {}) {
+  if (!db?.prepare) return [];
+  await ensureCalendarSchema(db);
+  const includeInactive = options.includeInactive === true;
+  const rows = await db.prepare(`
+    SELECT
+      roster_files.id AS id,
+      roster_files.name AS name,
+      roster_files.source_type AS source_type,
+      roster_files.active AS active,
+      roster_files.size AS size,
+      roster_files.last_modified AS last_modified,
+      roster_files.added_at AS added_at,
+      roster_files.uploaded_at AS uploaded_at,
+      roster_files.uploaded_by AS uploaded_by,
+      (SELECT COUNT(*) FROM roster_file_doctors WHERE roster_file_doctors.file_id = roster_files.id) AS doctor_count,
+      (SELECT COUNT(*) FROM roster_events WHERE roster_events.file_id = roster_files.id) AS event_count
+    FROM roster_files
+    ${includeInactive ? "" : "WHERE roster_files.active = 1"}
+    ORDER BY roster_files.added_at, roster_files.name
+  `).all();
+  const doctorRows = await db.prepare(`
+    SELECT file_id, source_type, doctor_key, display_name
+    FROM roster_file_doctors
+    ORDER BY display_name, source_type
+  `).all();
+  const doctorsByFile = new Map();
+  for (const row of doctorRows.results || []) {
+    const fileId = String(row.file_id || "").trim();
+    if (!doctorsByFile.has(fileId)) doctorsByFile.set(fileId, []);
+    doctorsByFile.get(fileId).push({
+      key: String(row.doctor_key || "").trim(),
+      displayName: String(row.display_name || row.doctor_key || "").trim(),
+      sourceType: String(row.source_type || "").trim().toLowerCase(),
+    });
+  }
+  return (rows.results || []).map((row) => ({
+    id: String(row.id || "").trim(),
+    name: String(row.name || "roster.xlsx"),
+    sourceType: String(row.source_type || "").trim().toLowerCase(),
+    active: row.active !== 0,
+    size: Number(row.size || 0),
+    lastModified: Number(row.last_modified || 0),
+    addedAt: String(row.added_at || ""),
+    uploadedAt: String(row.uploaded_at || ""),
+    uploadedBy: String(row.uploaded_by || ""),
+    doctors: doctorsByFile.get(String(row.id || "").trim()) || [],
+    expectedDoctors: Number(row.doctor_count || 0),
+    indexedDoctors: Number(row.doctor_count || 0),
+    eventCount: Number(row.event_count || 0),
+    derivedFromD1: true,
+  })).filter((file) => file.id && SOURCE_TYPES.includes(file.sourceType));
+}
+
+export async function queryRosterFileRefsForDoctors(db, doctorKeys = []) {
+  if (!db?.prepare || !doctorKeys?.length) return [];
+  await ensureCalendarSchema(db);
+  const keys = [...new Set(doctorKeys.filter(Boolean))];
+  if (!keys.length) return [];
+  const rows = await db.prepare(`
+    SELECT DISTINCT
+      roster_files.id AS id,
+      roster_files.name AS name,
+      roster_files.source_type AS source_type,
+      roster_files.active AS active,
+      roster_files.size AS size,
+      roster_files.last_modified AS last_modified,
+      roster_files.added_at AS added_at,
+      roster_files.uploaded_at AS uploaded_at,
+      roster_files.uploaded_by AS uploaded_by
+    FROM roster_files
+    INNER JOIN roster_file_doctors ON roster_file_doctors.file_id = roster_files.id
+    WHERE roster_files.active = 1
+      AND roster_file_doctors.doctor_key IN (${keys.map(() => "?").join(", ")})
+    ORDER BY roster_files.added_at, roster_files.name
+  `).bind(...keys).all();
+  return (rows.results || []).map((row) => ({
+    id: String(row.id || "").trim(),
+    repoId: String(row.id || "").trim(),
+    name: String(row.name || "roster.xlsx"),
+    sourceType: String(row.source_type || "").trim().toLowerCase(),
+    active: row.active !== 0,
+    size: Number(row.size || 0),
+    lastModified: Number(row.last_modified || 0),
+    addedAt: String(row.added_at || ""),
+    uploadedAt: String(row.uploaded_at || ""),
+    uploadedBy: String(row.uploaded_by || ""),
+  })).filter((file) => file.id && SOURCE_TYPES.includes(file.sourceType));
+}
+
 export async function upsertAccountMirror(db, record, options = {}) {
   if (!db?.prepare || !record?.email) return false;
   await ensureCalendarSchema(db);
