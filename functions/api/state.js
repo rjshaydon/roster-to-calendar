@@ -129,7 +129,7 @@ export async function onRequestPost(context) {
       }
       const target = await loadAccountRecord(context.env.ROSTER_STORE, targetEmail);
       await upsertAccountMirror(context.env.ROSTER_DB, target, { preserveExistingState: true }).catch(() => null);
-      const prepared = await prepareAccountResponse(context.env.ROSTER_STORE, target, { db: context.env.ROSTER_DB, includeAvailableDoctors: false });
+      const prepared = await prepareAccountResponse(context.env.ROSTER_STORE, target, { db: context.env.ROSTER_DB, includeAvailableDoctors: true });
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -1034,7 +1034,7 @@ async function calendarStoreStatus(store, db) {
 async function syncAccountMirrorFromKv(store, db, options = {}) {
   if (!db?.prepare) return 0;
   const targetEmail = normalizeEmail(options.email || "");
-  const limit = Math.max(1, Math.min(Number(options.limit || 25) || 25, 100));
+  const limit = Math.max(1, Math.min(Number(options.limit || 25) || 25, 1000));
   const records = [];
   if (targetEmail) {
     const record = await store.get(storageKey(targetEmail), "json").catch(() => null);
@@ -1061,6 +1061,16 @@ async function syncAccountMirrorFromKv(store, db, options = {}) {
     if (ok) doctorProfilesSynced += 1;
   }
   return { accounts: synced, doctorProfiles: doctorProfilesSynced };
+}
+
+async function ensureAccountMirrorCompleteFromKv(store, db) {
+  if (!db?.prepare) return false;
+  const status = await accountMirrorStatus(db).catch(() => null);
+  if (!status || status.unavailable) return false;
+  const kvProfiles = await countKvAccountRecords(store);
+  if (Number(status.profiles || 0) >= kvProfiles) return false;
+  await syncAccountMirrorFromKv(store, db, { limit: kvProfiles || 1000 });
+  return true;
 }
 
 async function countKvAccountRecords(store) {
@@ -2097,6 +2107,7 @@ function matchRepositoryClaims(index, realName) {
 }
 
 async function repositoryDoctorCandidates(store, index, db = null) {
+  await ensureAccountMirrorCompleteFromKv(store, db).catch(() => false);
   const accountIndex = await loadClaimedAccountIndex(store, db);
   const d1Doctors = await queryRosterDoctors(db).catch(() => []);
   if (d1Doctors.length) return attachClaimedAccountMetadata(d1Doctors, accountIndex);
@@ -2117,6 +2128,7 @@ function attachClaimedAccountMetadata(doctors, accountIndex) {
       sourceType: doctor.sourceType,
       claimedBy: resolved.mode === "claimed-account" ? resolved.email : "",
       claimedByName: resolved.mode === "claimed-account" ? resolved.realName : "",
+      accountEmail: resolved.mode === "claimed-account" ? resolved.email : "",
     });
   }
   return candidates.sort((left, right) => {
@@ -2233,6 +2245,7 @@ async function resolveDoctorAccount(store, rawDoctor, db = null) {
 }
 
 async function loadClaimedAccountIndex(store, db = null) {
+  await ensureAccountMirrorCompleteFromKv(store, db).catch(() => false);
   const d1Accounts = await queryClaimedAccounts(db).catch(() => []);
   if (d1Accounts.length) return d1Accounts;
   const accounts = [];

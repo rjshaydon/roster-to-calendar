@@ -1860,7 +1860,7 @@ function renderDoctorState() {
   claimSection.classList.add("hidden");
   doctorSection.classList.remove("hidden");
 
-  if (pickerOptions.length === 1) {
+  if (pickerOptions.length === 1 && !canUseCreatorDoctorSwitcher()) {
     doctorName.textContent = pickerOptions[0].displayName;
     doctorName.classList.remove("hidden");
     setStatus("Loading calendar...");
@@ -1943,6 +1943,7 @@ async function claimSelectedRosterName(candidateOverride = null) {
     });
     const data = await readJsonResponse(response, "Could not link roster name.");
     await applyCloudStateData(data);
+    if (isCreatorAuthenticated()) await loadServerUsers();
     await bootstrapImports();
     renderLoginState();
     setStatus(`Linked ${candidate.displayName} (${candidate.sourceType.toUpperCase()}).`);
@@ -3314,12 +3315,12 @@ async function openDoctorProfileFromInsight(doctorKey) {
   const options = doctorPickerOptions();
   const localOption = options.find((doctor) => doctor.key === normalizedKey);
   if (localOption && options.length > 1) {
-    if (canUseDoctorPicker() && cloudAvailable && !serverUsers.length) {
+    if (canUseCreatorDoctorSwitcher() && cloudAvailable && !serverUsers.length) {
       await loadServerUsers();
     }
     closeInsightsModal();
-    if (canUseDoctorPicker()) {
-      await enterDoctorProfileView(localOption);
+    if (canUseCreatorDoctorSwitcher()) {
+      await switchDoctorSelection(localOption.key, { resetRange: true });
     } else {
       doctorSelect.value = normalizedKey;
       clearPreviewData();
@@ -4212,6 +4213,8 @@ function selectedDoctor() {
 }
 
 function preferredDoctorKeyForCurrentAccount() {
+  if (activeDoctorProfile?.doctorKey) return activeDoctorProfile.doctorKey;
+  if (activeCalendarMode() === "claimed-account" && currentRosterClaims.length) return currentRosterClaims[0].key;
   if (currentUserEmail === OWNER_EMAIL && !adminViewingEmail && !activeDoctorProfile) return OWNER_DOCTOR_KEY;
   return "";
 }
@@ -4242,7 +4245,7 @@ function claimedEmailForDoctorKey(doctorKey, displayName = "") {
 }
 
 function canUseDoctorPicker() {
-  return isOwnerAccount() && !adminViewingEmail;
+  return isViewingCreatorAccount();
 }
 
 function canUseCreatorDoctorSwitcher() {
@@ -4423,7 +4426,10 @@ function currentClaimedAccountEmail(email) {
   const normalizedEmail = normalizeEmail(email);
   if (!normalizedEmail) return "";
   if (normalizedEmail === currentUserEmail && (adminViewingEmail || currentUserEmail !== OWNER_EMAIL)) return normalizedEmail;
-  return serverUsers.map(normalizeServerUser).some((user) => user.email === normalizedEmail) ? normalizedEmail : "";
+  if (serverUsers.map(normalizeServerUser).some((user) => user.email === normalizedEmail)) return normalizedEmail;
+  return availableRosterDoctors.some((doctor) => normalizeEmail(doctor.accountEmail || doctor.claimedBy || "") === normalizedEmail)
+    ? normalizedEmail
+    : "";
 }
 
 function activeWorkspaceOwnerKey() {
@@ -4848,9 +4854,10 @@ function isDdhHmoSectionHeading(value) {
 }
 
 function resetDerivedState() {
+  const preservedAvailableDoctors = isCreatorAuthenticated() ? availableRosterDoctors : [];
   doctorOptions = [];
   detectedSources = {};
-  availableRosterDoctors = [];
+  availableRosterDoctors = preservedAvailableDoctors;
   overrides = {};
   customEvents = [];
   restoredSessionState = null;
@@ -5956,8 +5963,17 @@ function sanitizeAvailableRosterDoctors(doctors) {
       key: normalizeRosterName(doctor?.key || ""),
       displayName: formatRosterDisplayName(doctor?.displayName || doctor?.key || ""),
       sourceType: String(doctor?.sourceType || "").toLowerCase(),
+      sourceTypes: Array.isArray(doctor?.sourceTypes) ? doctor.sourceTypes.map((item) => String(item || "").toLowerCase()).filter(Boolean) : [],
+      aliases: Array.isArray(doctor?.aliases)
+        ? doctor.aliases.map((alias) => ({
+            key: normalizeRosterName(alias?.key || ""),
+            displayName: formatRosterDisplayName(alias?.displayName || alias?.key || ""),
+            sourceType: String(alias?.sourceType || "").toLowerCase(),
+          })).filter((alias) => alias.key && alias.displayName && alias.sourceType)
+        : [],
       claimedBy: normalizeEmail(doctor?.claimedBy || ""),
       claimedByName: String(doctor?.claimedByName || "").trim(),
+      accountEmail: normalizeEmail(doctor?.accountEmail || doctor?.claimedBy || ""),
     }))
     .filter((doctor) => doctor.key && doctor.displayName && doctor.sourceType);
 }
@@ -5981,6 +5997,13 @@ function currentAccount() {
   };
 }
 
+function isViewingCreatorAccount() {
+  return activeCalendarMode() === "creator-account"
+    && normalizeEmail(currentUserEmail) === OWNER_EMAIL
+    && !adminViewingEmail
+    && !activeDoctorProfile;
+}
+
 function isOwnerAccount() {
   return currentUserRole === "creator" || currentAccount()?.role === "owner";
 }
@@ -5992,7 +6015,7 @@ function canUseRosterInsights() {
 }
 
 function canRemoveImports() {
-  return isOwnerAccount() && !adminViewingEmail;
+  return isViewingCreatorAccount();
 }
 
 function isCreatorAuthenticated() {
@@ -6000,7 +6023,7 @@ function isCreatorAuthenticated() {
 }
 
 function syncAccountsButton() {
-  const ownerView = isOwnerAccount();
+  const ownerView = isViewingCreatorAccount();
   const issueCount = ownerView ? adminIssueCount() : 0;
   accountsButton.innerHTML = ownerView
     ? `Admin${issueCount ? `<span class="notification-badge">${issueCount}</span>` : ""}`
@@ -6009,7 +6032,7 @@ function syncAccountsButton() {
 
 function renderAccountsModal() {
   const me = currentAccount();
-  const ownerView = isOwnerAccount();
+  const ownerView = isViewingCreatorAccount();
   accountsModalTitle.textContent = ownerView ? "Admin" : "Account";
   accountsModalSubtitle.textContent = ownerView
     ? "Review user issues, manage accounts, and update the owner account."
@@ -7047,6 +7070,7 @@ async function updateAccountDetails(email, patch) {
       currentSuggestedClaims = sanitizeRosterClaims(data.suggestedClaims || data.nameMatches || currentSuggestedClaims);
       currentSnapshot = null;
       if (normalizeEmail(email) === currentUserEmail && patch.password) currentUserPassword = patch.password;
+      if (isCreatorAuthenticated()) await loadServerUsers();
     } catch (error) {
       setStatus(error.message || "Could not update account.", true);
       return;
@@ -7099,6 +7123,7 @@ async function createAccountFromOwner(formElement) {
       ].sort((left, right) => normalizeServerUser(left).email.localeCompare(normalizeServerUser(right).email));
     }
     formElement.reset();
+    await loadServerUsers();
     await enterUserAccount(email);
   } catch (error) {
     if (error.message === "Cloud storage is not configured.") {
@@ -7281,6 +7306,7 @@ async function saveAdminRosterClaims(email, claims) {
         data.user,
       ].sort((left, right) => normalizeServerUser(left).email.localeCompare(normalizeServerUser(right).email));
     }
+    await loadServerUsers();
     renderAccountsModal();
     setStatus("Roster names updated.");
   } catch (error) {
@@ -7921,6 +7947,8 @@ async function returnToCreatorAccount() {
   setStatus("Returning to creator account...");
   await clearLocalWorkspace();
   await restoreCloudState();
+  renderDoctorState();
+  renderLoginState();
   await bootstrapImports();
   renderLoginState();
 }
