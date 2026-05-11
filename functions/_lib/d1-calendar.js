@@ -709,49 +709,56 @@ function parseEvent(value) {
 
 function mergeDuplicateLeaveEvents(events) {
   const passthrough = [];
-  const leaveGroups = new Map();
+  const leaveEvents = [];
   for (const event of events || []) {
     if (!isMergeableLeaveEvent(event)) {
       passthrough.push(event);
       continue;
     }
-    const key = duplicateLeaveKey(event);
-    if (!leaveGroups.has(key)) leaveGroups.set(key, []);
-    leaveGroups.get(key).push(event);
+    leaveEvents.push(event);
   }
   const merged = [];
-  for (const [key, group] of leaveGroups.entries()) {
-    const ordered = [...group].sort((left, right) => String(left.start || "").localeCompare(String(right.start || "")) || String(left.end || "").localeCompare(String(right.end || "")));
-    for (const event of ordered) {
-      const previous = merged.length ? merged[merged.length - 1] : null;
-      if (previous && previous._leaveMergeKey === key && String(event.start || "") <= String(previous.end || "")) {
-        previous.end = String(event.end || "") > String(previous.end || "") ? event.end : previous.end;
-        previous.rawValue = mergeRawValues(previous.rawValue, event.rawValue);
-        previous.sources = mergeSources(previous.sources, event.sources, previous.source, event.source);
-        continue;
-      }
-      merged.push({
-        ...event,
-        sources: mergeSources(event.sources, null, event.source),
-        _leaveMergeKey: key,
-      });
+  const ordered = leaveEvents.sort((left, right) => String(left.start || "").localeCompare(String(right.start || "")) || String(left.end || "").localeCompare(String(right.end || "")));
+  for (const event of ordered) {
+    const previous = merged.length ? merged[merged.length - 1] : null;
+    if (previous && leavesOverlap(previous, event)) {
+      previous.end = String(event.end || "") > String(previous.end || "") ? event.end : previous.end;
+      previous.rawValue = mergeRawValues(previous.rawValue, event.rawValue);
+      previous.sources = mergeSources(previous.sources, event.sources, previous.source, event.source);
+      previous.title = preferredLeaveTitle(previous.title, event.title, previous.rawValue);
+      continue;
     }
+    merged.push({
+      ...event,
+      title: preferredLeaveTitle(event.title, "", event.rawValue),
+      sources: mergeSources(event.sources, null, event.source),
+    });
   }
   return [...passthrough, ...merged]
-    .map(({ _leaveMergeKey, ...event }) => event)
     .sort((left, right) => String(left.start || "").localeCompare(String(right.start || "")) || String(left.title || "").localeCompare(String(right.title || "")));
 }
 
 function isMergeableLeaveEvent(event) {
-  return event?.allDay === true && /\bleave\b/i.test(String(event.title || ""));
+  if (event?.allDay !== true) return false;
+  return leaveTextMatches(`${event.title || ""} ${event.rawValue || ""}`);
 }
 
-function duplicateLeaveKey(event) {
-  return String(event.title || "")
-    .replace(/^(MMC|DDH|Casey|MCH):\s*/i, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toUpperCase();
+function leavesOverlap(left, right) {
+  return String(right.start || "") <= String(left.end || left.start || "");
+}
+
+function leaveTextMatches(value) {
+  return /\b(leave|conference|cme|study|annual|sick|personal)\b/i.test(String(value || ""));
+}
+
+function preferredLeaveTitle(leftTitle, rightTitle, rawValue = "") {
+  const combined = `${leftTitle || ""} ${rightTitle || ""} ${rawValue || ""}`;
+  if (/\b(conference|cme)\b/i.test(combined)) return "Conference Leave";
+  if (/\bannual\b/i.test(combined)) return "Annual Leave";
+  if (/\bsick\b/i.test(combined)) return "Sick Leave";
+  if (/\bpersonal\b/i.test(combined)) return "Personal Leave";
+  if (/\bstudy\b/i.test(combined)) return "Study Leave";
+  return String(leftTitle || rightTitle || "Leave").trim();
 }
 
 function mergeRawValues(left, right) {

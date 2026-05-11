@@ -1090,6 +1090,81 @@ const leaveLogin = await postState(leaveMergeStore, {
 const mergedLeave = leaveLogin.snapshot.preview.events.filter((event) => event.title === "Annual Leave");
 assert.equal(mergedLeave.length, 1);
 assert.deepEqual(mergedLeave[0].sources.sort(), ["DDH", "MMC"]);
+const conferenceLeaveStore = new MemoryStore();
+const conferenceLeaveDb = new MemoryD1();
+const conferenceDoctor = { key: "CONFERENCE DOCTOR", displayName: "Conference Doctor", sourceType: "mmc" };
+await seedRepository(conferenceLeaveStore, [
+  repositoryFile("conference-mmc", { sourceType: "mmc", doctors: [conferenceDoctor] }),
+  repositoryFile("conference-mch", { sourceType: "mch", doctors: [{ ...conferenceDoctor, sourceType: "mch" }] }),
+]);
+await postState(conferenceLeaveStore, {
+  action: "login",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+}, conferenceLeaveDb);
+await postState(conferenceLeaveStore, {
+  action: "saveDerivedCalendarFile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  file: { id: "conference-mmc", name: "conference-mmc.xlsx", sourceType: "mmc", active: true },
+  doctors: [{ ...conferenceDoctor, sourceType: "mmc" }],
+  eventsByDoctor: {
+    [conferenceDoctor.key]: [{
+      id: "conference-mmc-leave",
+      source: "MMC",
+      title: "Conference Leave",
+      allDay: true,
+      start: "2026-05-04",
+      end: "2026-05-11",
+      rawValue: "Conference Leave",
+      monthKey: "2026-05",
+    }, {
+      id: "conference-mmc-separate-leave",
+      source: "MMC",
+      title: "Conference Leave",
+      allDay: true,
+      start: "2026-05-18",
+      end: "2026-05-25",
+      rawValue: "Conference Leave",
+      monthKey: "2026-05",
+    }],
+  },
+}, conferenceLeaveDb);
+await postState(conferenceLeaveStore, {
+  action: "saveDerivedCalendarFile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  file: { id: "conference-mch", name: "conference-mch.xlsx", sourceType: "mch", active: true },
+  doctors: [{ ...conferenceDoctor, sourceType: "mch" }],
+  eventsByDoctor: {
+    [conferenceDoctor.key]: [{
+      id: "conference-mch-leave",
+      source: "MCH",
+      title: "CME Leave",
+      allDay: true,
+      start: "2026-05-04",
+      end: "2026-05-11",
+      rawValue: "CME/L",
+      monthKey: "2026-05",
+    }],
+  },
+}, conferenceLeaveDb);
+const conferenceProfile = await postState(conferenceLeaveStore, {
+  action: "loadDoctorProfile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  profileId: `${conferenceDoctor.key}::mmc::mch`,
+  doctorKey: conferenceDoctor.key,
+  displayName: conferenceDoctor.displayName,
+  sourceTypes: ["mmc", "mch"],
+}, conferenceLeaveDb);
+const conferenceLeaves = conferenceProfile.snapshot.preview.events.filter((event) => event.title === "Conference Leave");
+assert.equal(conferenceLeaves.length, 2, "overlapping conference/CME leave should merge, separate weeks should remain separate");
+const overlappingConferenceLeave = conferenceLeaves.find((event) => event.start === "2026-05-04");
+assert.ok(overlappingConferenceLeave);
+assert.equal(overlappingConferenceLeave.end, "2026-05-11");
+assert.deepEqual(overlappingConferenceLeave.sources.sort(), ["MCH", "MMC"]);
+assert.equal(overlappingConferenceLeave.rawValue, "Conference Leave / CME/L");
 const d1FeedResponse = await handleFeedGet({
   request: new Request(`http://fixture.test/api/feed?token=${d1DirectLogin.subscription.token}`),
   env: { ROSTER_STORE: d1StateStore, ROSTER_DB: d1Store },
