@@ -6149,7 +6149,7 @@ function renderCalendarStoreCard() {
   const accountDetail = accountStatus?.unavailable
     ? "Account mirror unavailable."
     : accountStatus
-      ? `${Number(accountStatus.profiles || 0)} accounts · ${Number(accountStatus.claims || 0)} claims · ${Number(accountStatus.states || 0)} session states`
+      ? `${Number(accountStatus.profiles || 0)} accounts · ${Number(accountStatus.claims || 0)} claims · ${Number(accountStatus.states || 0)} session states · ${Number(accountStatus.subscriptionTokens || 0)} subscription tokens`
       : "Account mirror status not loaded yet.";
   const nextFile = status?.nextFile || null;
   const problemFiles = (status?.files || []).filter((file) => file.status === "partial").slice(0, 3);

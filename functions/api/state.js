@@ -1,4 +1,4 @@
-import { inspectImportRecord, normalizeRosterName } from "../_lib/roster.js";
+import { applyEventOverrides, customEventsToEvents, defaultSettings, inspectImportRecord, normalizeRosterName } from "../_lib/roster.js";
 import {
   buildPreviewFromDerivedEvents,
   accountMirrorStatus,
@@ -1181,7 +1181,15 @@ async function buildDerivedAccountSnapshot(db, context) {
       sourceType: claim.sourceType,
     })));
   }
-  const events = await queryDoctorEvents(db, doctorKeys);
+  const session = state.session && typeof state.session === "object" ? state.session : {};
+  const settings = {
+    ...defaultSettings(),
+    ...(session.settings || {}),
+  };
+  const events = [
+    ...applyEventOverrides(await queryDoctorEvents(db, doctorKeys), session.overrides || {}),
+    ...customEventsToEvents(sanitizeSnapshotCustomEvents(session.customEvents, context.record.email), settings),
+  ];
   if (!events.length) return null;
   const owner = accountSnapshotOwner(context.record.email, role);
   return sanitizeSnapshotRecord({
@@ -1191,13 +1199,32 @@ async function buildDerivedAccountSnapshot(db, context) {
     builtAt: new Date().toISOString(),
     buildStamp: "d1-derived",
     preview: buildPreviewFromDerivedEvents(events),
-    session: state.session || {},
+    session,
     doctorOptions,
     detectedSources: {},
     fileRefs: sanitizeSnapshotFileRefs(state.imports),
     subscriptionFeeds: {},
     insightCache: null,
   });
+}
+
+function sanitizeSnapshotCustomEvents(items, defaultOwnerEmail = "") {
+  const ownerEmail = normalizeEmail(defaultOwnerEmail);
+  return (Array.isArray(items) ? items : [])
+    .filter((item) => item && item.id && item.title && item.startDate && item.endDate)
+    .map((item) => ({
+      id: String(item.id),
+      ownerEmail: normalizeEmail(item.ownerEmail || ownerEmail),
+      title: String(item.title),
+      startDate: String(item.startDate).slice(0, 10),
+      endDate: String(item.endDate).slice(0, 10),
+      allDay: item.allDay === true,
+      startTime: item.allDay ? "" : String(item.startTime || ""),
+      endTime: item.allDay ? "" : String(item.endTime || ""),
+      location: String(item.location || ""),
+      include: item.include !== false,
+    }))
+    .filter((item) => item.ownerEmail === ownerEmail);
 }
 
 export async function loadAccountBySubscriptionToken(store, token) {
@@ -1991,7 +2018,7 @@ function matchRepositoryClaims(index, realName) {
 }
 
 async function repositoryDoctorCandidates(store, index, db = null) {
-  const accountIndex = await loadClaimedAccountIndex(store);
+  const accountIndex = await loadClaimedAccountIndex(store, db);
   const d1Doctors = await queryRosterDoctors(db).catch(() => []);
   if (d1Doctors.length) return attachClaimedAccountMetadata(d1Doctors, accountIndex);
   return attachClaimedAccountMetadata(repositoryDoctorCandidatesFromIndex(index), accountIndex);

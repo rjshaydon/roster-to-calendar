@@ -638,7 +638,10 @@ class MemoryD1Statement {
     }
     if (sql.includes("FROM account_profiles") && sql.includes("LEFT JOIN account_claims")) {
       const results = [];
+      const tokenFilter = sql.includes("WHERE account_profiles.subscription_token = ?");
       for (const profile of [...this.db.accountProfiles.values()].sort((left, right) => left.email.localeCompare(right.email))) {
+        if (tokenFilter && profile.subscription_token !== args[0]) continue;
+        const state = this.db.accountStates.get(profile.email) || null;
         const claims = [...this.db.accountClaims.values()]
           .filter((claim) => claim.email === profile.email)
           .sort((left, right) => left.source_type.localeCompare(right.source_type) || left.display_name.localeCompare(right.display_name));
@@ -647,10 +650,13 @@ class MemoryD1Statement {
             email: profile.email,
             real_name: profile.real_name,
             role: profile.role,
+            insights_enabled: profile.insights_enabled,
+            subscription_token: profile.subscription_token,
             source_type: null,
             doctor_key: null,
             display_name: null,
             matched_at: null,
+            session_json: state?.session_json || null,
           });
           continue;
         }
@@ -659,10 +665,13 @@ class MemoryD1Statement {
             email: profile.email,
             real_name: profile.real_name,
             role: profile.role,
+            insights_enabled: profile.insights_enabled,
+            subscription_token: profile.subscription_token,
             source_type: claim.source_type,
             doctor_key: claim.doctor_key,
             display_name: claim.display_name,
             matched_at: claim.matched_at,
+            session_json: state?.session_json || null,
           });
         }
       }
@@ -686,6 +695,9 @@ class MemoryD1Statement {
     }
     if (sql.startsWith("SELECT session_json FROM account_states WHERE email")) {
       return this.db.accountStates.get(args[0]) || null;
+    }
+    if (sql.startsWith("SELECT COUNT(*) AS count FROM account_profiles WHERE subscription_token")) {
+      return { count: [...this.db.accountProfiles.values()].filter((profile) => profile.subscription_token).length };
     }
     if (sql.startsWith("SELECT COUNT(*) AS count FROM account_profiles")) {
       return { count: this.db.accountProfiles.size };
@@ -824,6 +836,7 @@ const d1DirectLogin = await postState(d1StateStore, {
   email: "d1-user@example.com",
   password: "d1-password",
 }, d1Store);
+const d1OverrideEvent = d1DirectLogin.snapshot.preview.events[0];
 await postState(d1StateStore, {
   action: "save",
   email: "d1-user@example.com",
@@ -833,8 +846,22 @@ await postState(d1StateStore, {
     imports: d1DirectLogin.state.imports,
     session: {
       doctorKey: d1Doctor.key,
-      exportRange: { start: "2026-02-01", end: "2026-02-28" },
+      exportRange: { startDate: "2026-02-01", endDate: "2026-02-28", allFuture: false },
       settings: {},
+      overrides: {
+        [d1OverrideEvent.id]: {
+          title: "D1 Edited Shift",
+        },
+      },
+      customEvents: [{
+        id: "d1-custom-event",
+        ownerEmail: "d1-user@example.com",
+        title: "D1 Custom Event",
+        startDate: "2026-02-12",
+        endDate: "2026-02-12",
+        allDay: true,
+        include: true,
+      }],
     },
   },
 }, d1Store);
@@ -846,7 +873,9 @@ const d1SessionLogin = await postState(d1StateStore, {
   email: "d1-user@example.com",
   password: "d1-password",
 }, d1Store);
-assert.equal(d1SessionLogin.state.session.exportRange.start, "2026-02-01", "D1 session mirror should fill KV session gaps");
+assert.equal(d1SessionLogin.state.session.exportRange.startDate, "2026-02-01", "D1 session mirror should fill KV session gaps");
+assert.ok(d1SessionLogin.snapshot.preview.events.some((event) => event.title === "D1 Edited Shift"), "D1 snapshot should apply session overrides");
+assert.ok(d1SessionLogin.snapshot.preview.events.some((event) => event.title === "D1 Custom Event"), "D1 snapshot should include session custom events");
 const d1AdminLoad = await postState(d1StateStore, {
   action: "adminLoadUser",
   email: "rhaydon@gmail.com",
@@ -855,7 +884,7 @@ const d1AdminLoad = await postState(d1StateStore, {
 }, d1Store);
 assert.deepEqual(
   d1AdminLoad.snapshot.preview.events.map((event) => event.id),
-  d1DirectLogin.snapshot.preview.events.map((event) => event.id),
+  d1SessionLogin.snapshot.preview.events.map((event) => event.id),
   "direct and creator-switched user loads should use the same D1 calendar events",
 );
 const d1Insights = await postState(d1StateStore, {
@@ -902,6 +931,7 @@ assert.equal(d1Status.remaining, 0);
 assert.ok(d1Status.accounts.profiles >= 2);
 assert.ok(d1Status.accounts.claims >= 1);
 assert.ok(d1Status.accounts.states >= 2);
+assert.ok(d1Status.accounts.subscriptionTokens >= 2);
 const d1UserList = await postState(d1StateStore, {
   action: "listUsers",
   email: "rhaydon@gmail.com",
@@ -989,6 +1019,17 @@ assert.equal(d1FeedResponse.ok, true);
 const d1FeedText = await d1FeedResponse.text();
 assert.ok(d1FeedText.includes("BEGIN:VCALENDAR"));
 assert.ok(d1FeedText.includes("BEGIN:VEVENT"));
+assert.ok(d1FeedText.includes("D1 Edited Shift"), "D1 subscription feed should apply D1 session overrides");
+assert.ok(d1FeedText.includes("D1 Custom Event"), "D1 subscription feed should include D1 custom events");
+await d1StateStore.delete(`subscription:token:${d1DirectLogin.subscription.token}`);
+await d1StateStore.delete("snapshot:account:d1-user@example.com");
+const d1OnlyFeedResponse = await handleFeedGet({
+  request: new Request(`http://fixture.test/api/feed?token=${d1DirectLogin.subscription.token}&view=range`),
+  env: { ROSTER_STORE: d1StateStore, ROSTER_DB: d1Store },
+});
+assert.equal(d1OnlyFeedResponse.ok, true);
+const d1OnlyFeedText = await d1OnlyFeedResponse.text();
+assert.ok(d1OnlyFeedText.includes("D1 Custom Event"), "D1 feed should resolve account and session without KV token index or snapshot");
 
 const michaelStateStore = new MemoryStore();
 await postState(michaelStateStore, {

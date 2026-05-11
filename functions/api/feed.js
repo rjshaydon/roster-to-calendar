@@ -1,5 +1,5 @@
 import { applyEventOverrides, customEventsToEvents, defaultSettings, exportIcs } from "../_lib/roster.js";
-import { hasCalendarDb, queryDoctorEvents } from "../_lib/d1-calendar.js";
+import { hasCalendarDb, loadAccountMirrorBySubscriptionToken, queryDoctorEvents } from "../_lib/d1-calendar.js";
 import { accountSnapshotOwner, loadAccountBySubscriptionToken, loadSnapshotRecord, normalizeEmail } from "./state.js";
 
 export async function onRequestGet(context) {
@@ -15,7 +15,8 @@ export async function onRequestGet(context) {
       return new Response("Subscription token is required.", { status: 400 });
     }
 
-    const record = await loadAccountBySubscriptionToken(context.env.ROSTER_STORE, token);
+    const record = await loadAccountMirrorBySubscriptionToken(context.env.ROSTER_DB, token)
+      || await loadAccountBySubscriptionToken(context.env.ROSTER_STORE, token);
     if (!record) {
       return new Response("Subscription calendar was not found.", { status: 404 });
     }

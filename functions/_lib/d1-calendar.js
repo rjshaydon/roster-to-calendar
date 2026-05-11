@@ -402,6 +402,62 @@ export async function queryClaimedAccounts(db) {
   return [...accounts.values()];
 }
 
+export async function loadAccountMirrorBySubscriptionToken(db, token) {
+  if (!db?.prepare || !token) return null;
+  await ensureCalendarSchema(db);
+  const rows = await db.prepare(`
+    SELECT
+      account_profiles.email AS email,
+      account_profiles.real_name AS real_name,
+      account_profiles.role AS role,
+      account_profiles.insights_enabled AS insights_enabled,
+      account_profiles.subscription_token AS subscription_token,
+      account_claims.source_type AS source_type,
+      account_claims.doctor_key AS doctor_key,
+      account_claims.display_name AS display_name,
+      account_claims.matched_at AS matched_at,
+      account_states.session_json AS session_json
+    FROM account_profiles
+    LEFT JOIN account_claims ON account_claims.email = account_profiles.email
+    LEFT JOIN account_states ON account_states.email = account_profiles.email
+    WHERE account_profiles.subscription_token = ?
+    ORDER BY account_claims.source_type, account_claims.display_name
+  `).bind(String(token || "").trim()).all();
+  const first = rows.results?.[0];
+  if (!first?.email) return null;
+  const claims = [];
+  for (const row of rows.results || []) {
+    if (!row.doctor_key || !row.source_type) continue;
+    claims.push({
+      key: String(row.doctor_key || "").trim(),
+      displayName: String(row.display_name || row.doctor_key || "").trim(),
+      sourceType: String(row.source_type || "").trim().toLowerCase(),
+      matchedAt: String(row.matched_at || ""),
+    });
+  }
+  let session = {};
+  try {
+    const parsed = first.session_json ? JSON.parse(first.session_json) : {};
+    session = parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    session = {};
+  }
+  return {
+    email: normalizeEmail(first.email),
+    realName: String(first.real_name || "").trim(),
+    role: String(first.role || "user"),
+    insightsEnabled: first.insights_enabled === 1,
+    subscriptionToken: String(first.subscription_token || ""),
+    claims,
+    state: {
+      version: 1,
+      imports: [],
+      session,
+      subscriptionFeeds: {},
+    },
+  };
+}
+
 export async function loadAccountStateMirror(db, email) {
   if (!db?.prepare || !email) return null;
   await ensureCalendarSchema(db);
@@ -421,11 +477,13 @@ export async function accountMirrorStatus(db) {
   const profiles = await db.prepare("SELECT COUNT(*) AS count FROM account_profiles").first();
   const claims = await db.prepare("SELECT COUNT(*) AS count FROM account_claims").first();
   const states = await db.prepare("SELECT COUNT(*) AS count FROM account_states").first();
+  const subscriptionTokens = await db.prepare("SELECT COUNT(*) AS count FROM account_profiles WHERE subscription_token <> ''").first();
   return {
     unavailable: false,
     profiles: Number(profiles?.count || 0),
     claims: Number(claims?.count || 0),
     states: Number(states?.count || 0),
+    subscriptionTokens: Number(subscriptionTokens?.count || 0),
   };
 }
 
