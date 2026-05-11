@@ -445,6 +445,9 @@ class MemoryD1 {
     this.doctors = new Map();
     this.fileDoctors = new Map();
     this.events = new Map();
+    this.accountProfiles = new Map();
+    this.accountClaims = new Map();
+    this.accountStates = new Map();
   }
 
   prepare(sql) {
@@ -540,6 +543,50 @@ class MemoryD1Statement {
       }
       return { success: true };
     }
+    if (sql.startsWith("INSERT INTO account_profiles")) {
+      this.db.accountProfiles.set(args[0], {
+        email: args[0],
+        real_name: args[1],
+        role: args[2],
+        insights_enabled: args[3],
+        subscription_token: args[4],
+        updated_at: args[5],
+      });
+      return { success: true };
+    }
+    if (sql.startsWith("DELETE FROM account_claims")) {
+      for (const key of [...this.db.accountClaims.keys()]) if (key.startsWith(`${args[0]}|`)) this.db.accountClaims.delete(key);
+      return { success: true };
+    }
+    if (sql.startsWith("INSERT INTO account_claims")) {
+      for (let index = 0; index < args.length; index += 6) {
+        this.db.accountClaims.set(`${args[index]}|${args[index + 1]}|${args[index + 2]}`, {
+          email: args[index],
+          source_type: args[index + 1],
+          doctor_key: args[index + 2],
+          display_name: args[index + 3],
+          matched_at: args[index + 4],
+          updated_at: args[index + 5],
+        });
+      }
+      return { success: true };
+    }
+    if (sql.startsWith("INSERT INTO account_states")) {
+      this.db.accountStates.set(args[0], {
+        email: args[0],
+        session_json: args[1],
+        updated_at: args[2],
+      });
+      return { success: true };
+    }
+    if (sql.startsWith("DELETE FROM account_states")) {
+      this.db.accountStates.delete(args[0]);
+      return { success: true };
+    }
+    if (sql.startsWith("DELETE FROM account_profiles")) {
+      this.db.accountProfiles.delete(args[0]);
+      return { success: true };
+    }
     if (sql.startsWith("UPDATE roster_files SET active")) {
       const file = this.db.files.get(args[1]);
       if (file) file.active = args[0];
@@ -589,6 +636,38 @@ class MemoryD1Statement {
           .sort((left, right) => left.display_name.localeCompare(right.display_name) || left.source_type.localeCompare(right.source_type)),
       };
     }
+    if (sql.includes("FROM account_profiles") && sql.includes("LEFT JOIN account_claims")) {
+      const results = [];
+      for (const profile of [...this.db.accountProfiles.values()].sort((left, right) => left.email.localeCompare(right.email))) {
+        const claims = [...this.db.accountClaims.values()]
+          .filter((claim) => claim.email === profile.email)
+          .sort((left, right) => left.source_type.localeCompare(right.source_type) || left.display_name.localeCompare(right.display_name));
+        if (!claims.length) {
+          results.push({
+            email: profile.email,
+            real_name: profile.real_name,
+            role: profile.role,
+            source_type: null,
+            doctor_key: null,
+            display_name: null,
+            matched_at: null,
+          });
+          continue;
+        }
+        for (const claim of claims) {
+          results.push({
+            email: profile.email,
+            real_name: profile.real_name,
+            role: profile.role,
+            source_type: claim.source_type,
+            doctor_key: claim.doctor_key,
+            display_name: claim.display_name,
+            matched_at: claim.matched_at,
+          });
+        }
+      }
+      return { results };
+    }
     throw new Error(`Unsupported MemoryD1 all SQL: ${sql}`);
   }
 
@@ -604,6 +683,18 @@ class MemoryD1Statement {
       return {
         count: [...this.db.fileDoctors.values()].filter((doctor) => doctor.file_id === args[0]).length,
       };
+    }
+    if (sql.startsWith("SELECT session_json FROM account_states WHERE email")) {
+      return this.db.accountStates.get(args[0]) || null;
+    }
+    if (sql.startsWith("SELECT COUNT(*) AS count FROM account_profiles")) {
+      return { count: this.db.accountProfiles.size };
+    }
+    if (sql.startsWith("SELECT COUNT(*) AS count FROM account_claims")) {
+      return { count: this.db.accountClaims.size };
+    }
+    if (sql.startsWith("SELECT COUNT(*) AS count FROM account_states")) {
+      return { count: this.db.accountStates.size };
     }
     throw new Error(`Unsupported MemoryD1 first SQL: ${sql}`);
   }
@@ -733,6 +824,29 @@ const d1DirectLogin = await postState(d1StateStore, {
   email: "d1-user@example.com",
   password: "d1-password",
 }, d1Store);
+await postState(d1StateStore, {
+  action: "save",
+  email: "d1-user@example.com",
+  password: "d1-password",
+  state: {
+    version: 1,
+    imports: d1DirectLogin.state.imports,
+    session: {
+      doctorKey: d1Doctor.key,
+      exportRange: { start: "2026-02-01", end: "2026-02-28" },
+      settings: {},
+    },
+  },
+}, d1Store);
+const d1KvUserRecord = await d1StateStore.get("account:d1-user@example.com", "json");
+d1KvUserRecord.state.session = {};
+await d1StateStore.put("account:d1-user@example.com", JSON.stringify(d1KvUserRecord));
+const d1SessionLogin = await postState(d1StateStore, {
+  action: "login",
+  email: "d1-user@example.com",
+  password: "d1-password",
+}, d1Store);
+assert.equal(d1SessionLogin.state.session.exportRange.start, "2026-02-01", "D1 session mirror should fill KV session gaps");
 const d1AdminLoad = await postState(d1StateStore, {
   action: "adminLoadUser",
   email: "rhaydon@gmail.com",
@@ -785,12 +899,27 @@ const d1Status = await postState(d1StateStore, {
 assert.equal(d1Status.total, 1);
 assert.equal(d1Status.populated, 1);
 assert.equal(d1Status.remaining, 0);
+assert.ok(d1Status.accounts.profiles >= 2);
+assert.ok(d1Status.accounts.claims >= 1);
+assert.ok(d1Status.accounts.states >= 2);
 const d1UserList = await postState(d1StateStore, {
   action: "listUsers",
   email: "rhaydon@gmail.com",
   password: creatorPassword,
 }, d1Store);
 assert.ok(d1UserList.availableDoctors.some((doctor) => doctor.key === d1Doctor.key));
+const d1ClaimResolution = await postState(d1StateStore, {
+  action: "resolveDoctorAccount",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  doctor: {
+    key: d1Doctor.key,
+    displayName: d1Doctor.displayName,
+    sourceTypes: ["mmc"],
+  },
+}, d1Store);
+assert.equal(d1ClaimResolution.mode, "claimed-account");
+assert.equal(d1ClaimResolution.email, "d1-user@example.com");
 const d1DoctorProfile = await postState(d1StateStore, {
   action: "loadDoctorProfile",
   email: "rhaydon@gmail.com",

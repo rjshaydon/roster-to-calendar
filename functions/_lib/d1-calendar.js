@@ -68,6 +68,35 @@ export async function ensureCalendarSchema(db) {
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_events_doctor_range ON roster_events (doctor_key, start_date, end_date)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_events_date_source ON roster_events (start_date, source_type)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_events_file ON roster_events (file_id)").run();
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS account_profiles (
+      email TEXT PRIMARY KEY,
+      real_name TEXT NOT NULL DEFAULT '',
+      role TEXT NOT NULL DEFAULT 'user',
+      insights_enabled INTEGER NOT NULL DEFAULT 0,
+      subscription_token TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT ''
+    )
+  `).run();
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS account_claims (
+      email TEXT NOT NULL,
+      source_type TEXT NOT NULL,
+      doctor_key TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      matched_at TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT '',
+      PRIMARY KEY (email, source_type, doctor_key)
+    )
+  `).run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_account_claims_doctor ON account_claims (source_type, doctor_key)").run();
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS account_states (
+      email TEXT PRIMARY KEY,
+      session_json TEXT NOT NULL DEFAULT '{}',
+      updated_at TEXT NOT NULL DEFAULT ''
+    )
+  `).run();
   return true;
 }
 
@@ -269,6 +298,137 @@ export async function queryRosterDoctors(db) {
     .filter((doctor) => doctor.key && doctor.displayName && SOURCE_TYPES.includes(doctor.sourceType));
 }
 
+export async function upsertAccountMirror(db, record, options = {}) {
+  if (!db?.prepare || !record?.email) return false;
+  await ensureCalendarSchema(db);
+  const email = normalizeEmail(record.email);
+  const role = String(record.role || (email ? "user" : "") || "user");
+  const updatedAt = new Date().toISOString();
+  await db.prepare(`
+    INSERT INTO account_profiles (email, real_name, role, insights_enabled, subscription_token, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(email) DO UPDATE SET
+      real_name = excluded.real_name,
+      role = excluded.role,
+      insights_enabled = excluded.insights_enabled,
+      subscription_token = excluded.subscription_token,
+      updated_at = excluded.updated_at
+  `).bind(
+    email,
+    String(record.realName || ""),
+    role,
+    record.insightsEnabled === true ? 1 : 0,
+    String(record.subscriptionToken || ""),
+    updatedAt,
+  ).run();
+  await db.prepare("DELETE FROM account_claims WHERE email = ?").bind(email).run();
+  const claims = sanitizeAccountClaims(record.claims);
+  for (const chunk of chunkRows(claims.map((claim) => [
+    email,
+    claim.sourceType,
+    claim.key,
+    claim.displayName,
+    claim.matchedAt,
+    updatedAt,
+  ]), 20)) {
+    if (!chunk.length) continue;
+    await db.prepare(`
+      INSERT INTO account_claims (email, source_type, doctor_key, display_name, matched_at, updated_at)
+      VALUES ${chunk.map(() => "(?, ?, ?, ?, ?, ?)").join(", ")}
+    `).bind(...chunk.flat()).run();
+  }
+  const preserveExistingState = options.preserveExistingState === true;
+  const existingState = preserveExistingState
+    ? await db.prepare("SELECT session_json FROM account_states WHERE email = ?").bind(email).first()
+    : null;
+  if (!existingState?.session_json) {
+    const session = record?.state?.session && typeof record.state.session === "object" ? record.state.session : {};
+    await db.prepare(`
+      INSERT INTO account_states (email, session_json, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT(email) DO UPDATE SET
+        session_json = excluded.session_json,
+        updated_at = excluded.updated_at
+    `).bind(email, JSON.stringify(session), updatedAt).run();
+  }
+  return true;
+}
+
+export async function deleteAccountMirror(db, email) {
+  if (!db?.prepare || !email) return;
+  await ensureCalendarSchema(db);
+  const normalizedEmail = normalizeEmail(email);
+  await db.prepare("DELETE FROM account_claims WHERE email = ?").bind(normalizedEmail).run();
+  await db.prepare("DELETE FROM account_states WHERE email = ?").bind(normalizedEmail).run();
+  await db.prepare("DELETE FROM account_profiles WHERE email = ?").bind(normalizedEmail).run();
+}
+
+export async function queryClaimedAccounts(db) {
+  if (!db?.prepare) return [];
+  await ensureCalendarSchema(db);
+  const rows = await db.prepare(`
+    SELECT
+      account_profiles.email AS email,
+      account_profiles.real_name AS real_name,
+      account_profiles.role AS role,
+      account_claims.source_type AS source_type,
+      account_claims.doctor_key AS doctor_key,
+      account_claims.display_name AS display_name,
+      account_claims.matched_at AS matched_at
+    FROM account_profiles
+    LEFT JOIN account_claims ON account_claims.email = account_profiles.email
+    ORDER BY account_profiles.email, account_claims.source_type, account_claims.display_name
+  `).all();
+  const accounts = new Map();
+  for (const row of rows.results || []) {
+    const email = normalizeEmail(row.email);
+    if (!email || row.role === "creator" || row.role === "owner") continue;
+    if (!accounts.has(email)) {
+      accounts.set(email, {
+        email,
+        realName: String(row.real_name || "").trim(),
+        claims: [],
+      });
+    }
+    if (row.doctor_key && row.source_type) {
+      accounts.get(email).claims.push({
+        key: String(row.doctor_key || "").trim(),
+        displayName: String(row.display_name || row.doctor_key || "").trim(),
+        sourceType: String(row.source_type || "").trim().toLowerCase(),
+        matchedAt: String(row.matched_at || ""),
+      });
+    }
+  }
+  return [...accounts.values()];
+}
+
+export async function loadAccountStateMirror(db, email) {
+  if (!db?.prepare || !email) return null;
+  await ensureCalendarSchema(db);
+  const row = await db.prepare("SELECT session_json FROM account_states WHERE email = ?").bind(normalizeEmail(email)).first();
+  if (!row?.session_json) return null;
+  try {
+    const session = JSON.parse(row.session_json);
+    return session && typeof session === "object" ? { session } : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function accountMirrorStatus(db) {
+  if (!db?.prepare) return { unavailable: true, profiles: 0, claims: 0, states: 0 };
+  await ensureCalendarSchema(db);
+  const profiles = await db.prepare("SELECT COUNT(*) AS count FROM account_profiles").first();
+  const claims = await db.prepare("SELECT COUNT(*) AS count FROM account_claims").first();
+  const states = await db.prepare("SELECT COUNT(*) AS count FROM account_states").first();
+  return {
+    unavailable: false,
+    profiles: Number(profiles?.count || 0),
+    claims: Number(claims?.count || 0),
+    states: Number(states?.count || 0),
+  };
+}
+
 export async function countDerivedEventsByFile(db, fileIds = []) {
   if (!db?.prepare || !fileIds?.length) return new Map();
   await ensureCalendarSchema(db);
@@ -367,6 +527,17 @@ function sanitizeFileDoctors(doctors, fallbackSourceType) {
     .filter((doctor) => doctor.key && doctor.displayName && doctor.sourceType);
 }
 
+function sanitizeAccountClaims(claims) {
+  return (Array.isArray(claims) ? claims : [])
+    .map((claim) => ({
+      key: String(claim?.key || "").trim(),
+      displayName: String(claim?.displayName || claim?.key || "").trim(),
+      sourceType: normalizeSourceType(claim?.sourceType || ""),
+      matchedAt: String(claim?.matchedAt || ""),
+    }))
+    .filter((claim) => claim.key && claim.displayName && claim.sourceType);
+}
+
 function sanitizeSourceTypes(values) {
   return [...new Set((Array.isArray(values) ? values : [])
     .map(normalizeSourceType)
@@ -376,6 +547,10 @@ function sanitizeSourceTypes(values) {
 function normalizeSourceType(value) {
   const source = String(value || "").trim().toLowerCase();
   return SOURCE_TYPES.includes(source) ? source : "";
+}
+
+function normalizeEmail(value) {
+  return String(value || "").trim().toLowerCase();
 }
 
 function datePart(value) {

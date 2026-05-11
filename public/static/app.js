@@ -488,6 +488,11 @@ accountsBody.addEventListener("click", (event) => {
     backfillNextCalendarStoreFile();
     return;
   }
+  const syncAccountMirrorButton = event.target.closest("[data-sync-account-mirror]");
+  if (syncAccountMirrorButton) {
+    syncAccountMirror();
+    return;
+  }
   const resetCalendarStoreFileButton = event.target.closest("[data-reset-calendar-store-file]");
   if (resetCalendarStoreFileButton) {
     resetCalendarStoreFile(resetCalendarStoreFileButton.dataset.resetCalendarStoreFile || "");
@@ -6140,6 +6145,12 @@ function renderCalendarStoreCard() {
   const partial = Number(status?.partial || 0);
   const remaining = Number(status?.remaining || 0);
   const eventCount = Number(status?.eventCount || 0);
+  const accountStatus = status?.accounts || null;
+  const accountDetail = accountStatus?.unavailable
+    ? "Account mirror unavailable."
+    : accountStatus
+      ? `${Number(accountStatus.profiles || 0)} accounts · ${Number(accountStatus.claims || 0)} claims · ${Number(accountStatus.states || 0)} session states`
+      : "Account mirror status not loaded yet.";
   const nextFile = status?.nextFile || null;
   const problemFiles = (status?.files || []).filter((file) => file.status === "partial").slice(0, 3);
   const detail = unavailable
@@ -6153,6 +6164,7 @@ function renderCalendarStoreCard() {
         <div>
           <strong>SQL calendar store</strong>
           <span>${escapeHtml(detail)}</span>
+          <span>${escapeHtml(accountDetail)}</span>
         </div>
       </div>
       <div class="review-body">
@@ -6172,6 +6184,7 @@ function renderCalendarStoreCard() {
         ` : ""}
         <div class="modal-actions">
           <button type="button" class="button button-secondary" data-refresh-calendar-store ${calendarStoreBackfillRunning ? "disabled" : ""}>Refresh status</button>
+          <button type="button" class="button button-secondary" data-sync-account-mirror ${calendarStoreBackfillRunning || unavailable ? "disabled" : ""}>Sync account mirror</button>
           <button type="button" class="button button-primary" data-backfill-calendar-store ${calendarStoreBackfillRunning || unavailable || !remaining ? "disabled" : ""}>Backfill next roster file</button>
         </div>
       </div>
@@ -9005,6 +9018,26 @@ async function resetCalendarStoreFile(fileId) {
     setStatus("Partial SQL backfill reset. Retry the next roster file.");
   } catch (error) {
     setStatus(error.message || "Could not reset that SQL backfill.", true);
+  } finally {
+    calendarStoreBackfillRunning = false;
+    if (!accountsModal.classList.contains("hidden") && currentAdminTab === "system") renderAccountsModal();
+  }
+}
+
+async function syncAccountMirror() {
+  if (!isCreatorAuthenticated() || calendarStoreBackfillRunning) return;
+  calendarStoreBackfillRunning = true;
+  renderAccountsModal();
+  setStatus("Syncing account claims and session state to SQL...");
+  try {
+    const data = await calendarStoreRequest("syncAccountMirror", { limit: 100 });
+    calendarStoreStatus = {
+      ...(calendarStoreStatus || {}),
+      accounts: data.accounts || null,
+    };
+    setStatus(`Synced ${Number(data.synced || 0)} account records to SQL.`);
+  } catch (error) {
+    setStatus(error.message || "Could not sync account mirror.", true);
   } finally {
     calendarStoreBackfillRunning = false;
     if (!accountsModal.classList.contains("hidden") && currentAdminTab === "system") renderAccountsModal();
