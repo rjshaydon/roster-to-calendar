@@ -7,6 +7,7 @@ import {
   hasCalendarDb,
   queryCoworkerEvents,
   queryDoctorEvents,
+  queryRosterDoctors,
   replaceDerivedRosterFile,
   upsertDerivedRosterFile,
 } from "../_lib/d1-calendar.js";
@@ -180,7 +181,7 @@ export async function onRequestPost(context) {
       return Response.json({
         ok: true,
         users: await listUsers(context.env.ROSTER_STORE),
-        availableDoctors: await repositoryDoctorCandidates(context.env.ROSTER_STORE, await loadRepositoryIndex(context.env.ROSTER_STORE)),
+        availableDoctors: await repositoryDoctorCandidates(context.env.ROSTER_STORE, await loadRepositoryIndex(context.env.ROSTER_STORE), context.env.ROSTER_DB),
         issueConfig: await buildIssueConfig(context.env.ROSTER_STORE, email),
       });
     }
@@ -1064,7 +1065,7 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
     state,
     claims,
     nameMatches,
-    availableDoctors: options.includeAvailableDoctors === false ? [] : await repositoryDoctorCandidates(store, index),
+    availableDoctors: options.includeAvailableDoctors === false ? [] : await repositoryDoctorCandidates(store, index, options.db),
     subscription: {
       token: String(record.subscriptionToken || ""),
       enabled: Boolean(snapshot?.subscriptionFeeds?.full?.ics),
@@ -1912,25 +1913,28 @@ function matchRepositoryClaims(index, realName) {
   return mergeClaims([], claims);
 }
 
-async function repositoryDoctorCandidates(store, index) {
+async function repositoryDoctorCandidates(store, index, db = null) {
   const accountIndex = await loadClaimedAccountIndex(store);
+  const d1Doctors = await queryRosterDoctors(db).catch(() => []);
+  if (d1Doctors.length) return attachClaimedAccountMetadata(d1Doctors, accountIndex);
+  return attachClaimedAccountMetadata(repositoryDoctorCandidatesFromIndex(index), accountIndex);
+}
+
+function attachClaimedAccountMetadata(doctors, accountIndex) {
   const seen = new Set();
   const candidates = [];
-  for (const file of index.files || []) {
-    if (file.active === false) continue;
-    for (const doctor of sanitizeRepositoryDoctors(file.doctors)) {
-      const marker = `${doctor.sourceType}:${doctor.key}`;
-      if (seen.has(marker)) continue;
-      seen.add(marker);
-      const resolved = resolveDoctorAccountFromIndex(accountIndex, doctor);
-      candidates.push({
-        key: doctor.key,
-        displayName: doctor.displayName,
-        sourceType: doctor.sourceType,
-        claimedBy: resolved.mode === "claimed-account" ? resolved.email : "",
-        claimedByName: resolved.mode === "claimed-account" ? resolved.realName : "",
-      });
-    }
+  for (const doctor of doctors || []) {
+    const marker = `${doctor.sourceType}:${doctor.key}`;
+    if (seen.has(marker)) continue;
+    seen.add(marker);
+    const resolved = resolveDoctorAccountFromIndex(accountIndex, doctor);
+    candidates.push({
+      key: doctor.key,
+      displayName: doctor.displayName,
+      sourceType: doctor.sourceType,
+      claimedBy: resolved.mode === "claimed-account" ? resolved.email : "",
+      claimedByName: resolved.mode === "claimed-account" ? resolved.realName : "",
+    });
   }
   return candidates.sort((left, right) => {
     const leftClaimed = left.claimedBy ? 1 : 0;

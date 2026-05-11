@@ -247,6 +247,28 @@ export async function queryDoctorEvents(db, doctorKeys, options = {}) {
   return mergeDuplicateLeaveEvents((rows.results || []).map((row) => parseEvent(row.event_json)).filter(Boolean));
 }
 
+export async function queryRosterDoctors(db) {
+  if (!db?.prepare) return [];
+  await ensureCalendarSchema(db);
+  const rows = await db.prepare(`
+    SELECT DISTINCT
+      roster_file_doctors.source_type AS source_type,
+      roster_file_doctors.doctor_key AS doctor_key,
+      roster_file_doctors.display_name AS display_name
+    FROM roster_file_doctors
+    INNER JOIN roster_files ON roster_files.id = roster_file_doctors.file_id
+    WHERE roster_files.active = 1
+    ORDER BY roster_file_doctors.display_name, roster_file_doctors.source_type
+  `).all();
+  return (rows.results || [])
+    .map((row) => ({
+      key: String(row.doctor_key || "").trim(),
+      displayName: String(row.display_name || row.doctor_key || "").trim(),
+      sourceType: String(row.source_type || "").trim().toLowerCase(),
+    }))
+    .filter((doctor) => doctor.key && doctor.displayName && SOURCE_TYPES.includes(doctor.sourceType));
+}
+
 export async function countDerivedEventsByFile(db, fileIds = []) {
   if (!db?.prepare || !fileIds?.length) return new Map();
   await ensureCalendarSchema(db);

@@ -576,6 +576,19 @@ class MemoryD1Statement {
           .sort((left, right) => left.display_name.localeCompare(right.display_name) || left.start_ts.localeCompare(right.start_ts)),
       };
     }
+    if (sql.includes("FROM roster_file_doctors") && sql.includes("DISTINCT")) {
+      return {
+        results: [...this.db.fileDoctors.values()]
+          .filter((doctor) => this.db.files.get(doctor.file_id)?.active === 1)
+          .map((doctor) => ({
+            source_type: doctor.source_type,
+            doctor_key: doctor.doctor_key,
+            display_name: doctor.display_name,
+          }))
+          .filter((doctor, index, doctors) => doctors.findIndex((item) => item.source_type === doctor.source_type && item.doctor_key === doctor.doctor_key) === index)
+          .sort((left, right) => left.display_name.localeCompare(right.display_name) || left.source_type.localeCompare(right.source_type)),
+      };
+    }
     throw new Error(`Unsupported MemoryD1 all SQL: ${sql}`);
   }
 
@@ -772,6 +785,12 @@ const d1Status = await postState(d1StateStore, {
 assert.equal(d1Status.total, 1);
 assert.equal(d1Status.populated, 1);
 assert.equal(d1Status.remaining, 0);
+const d1UserList = await postState(d1StateStore, {
+  action: "listUsers",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+}, d1Store);
+assert.ok(d1UserList.availableDoctors.some((doctor) => doctor.key === d1Doctor.key));
 const d1DoctorProfile = await postState(d1StateStore, {
   action: "loadDoctorProfile",
   email: "rhaydon@gmail.com",
