@@ -2836,53 +2836,52 @@ function applySettings(records, settings, overrides) {
 
 function mergeContiguousLeaveEvents(events) {
   const passthrough = [];
-  const leaveGroups = new Map();
+  const leaveEvents = [];
   for (const event of events) {
     if (!isMergeableLeaveEvent(event)) {
       passthrough.push(event);
       continue;
     }
-    const key = normalizedLeaveEventKey(event);
-    if (!leaveGroups.has(key)) leaveGroups.set(key, []);
-    leaveGroups.get(key).push(event);
+    leaveEvents.push(event);
   }
 
   const merged = [];
-  for (const [key, group] of leaveGroups.entries()) {
-    const ordered = [...group].sort((left, right) => left.start.localeCompare(right.start) || left.end.localeCompare(right.end));
-    for (const event of ordered) {
-      const previous = merged.length ? merged[merged.length - 1] : null;
-      if (
-        previous
-        && previous._leaveMergeKey === key
-        && event.start <= previous.end
-      ) {
-        previous.end = event.end > previous.end ? event.end : previous.end;
-        previous.rawValue = mergeRawLeaveValues(previous.rawValue, event.rawValue);
-        previous.sources = mergeLeaveSources(previous.sources, event.sources, previous.source, event.source);
-        continue;
-      }
-      merged.push({
-        ...event,
-        sources: mergeLeaveSources(event.sources, null, event.source),
-        _leaveMergeKey: key,
-      });
+  const ordered = [...leaveEvents].sort((left, right) => left.start.localeCompare(right.start) || left.end.localeCompare(right.end));
+  for (const event of ordered) {
+    const previous = merged.length ? merged[merged.length - 1] : null;
+    if (previous && event.start <= previous.end) {
+      previous.end = event.end > previous.end ? event.end : previous.end;
+      previous.rawValue = mergeRawLeaveValues(previous.rawValue, event.rawValue);
+      previous.sources = mergeLeaveSources(previous.sources, event.sources, previous.source, event.source);
+      previous.title = preferredLeaveTitle(previous.title, event.title, previous.rawValue);
+      continue;
     }
+    merged.push({
+      ...event,
+      title: preferredLeaveTitle(event.title, "", event.rawValue),
+      sources: mergeLeaveSources(event.sources, null, event.source),
+    });
   }
 
-  return [...passthrough, ...merged].map(({ _leaveMergeKey, ...event }) => event);
+  return [...passthrough, ...merged];
 }
 
 function isMergeableLeaveEvent(event) {
-  return event?.allDay === true && /\bleave\b/i.test(String(event.title || ""));
+  return event?.allDay === true && leaveTextMatches(`${event.title || ""} ${event.rawValue || ""}`);
 }
 
-function normalizedLeaveEventKey(event) {
-  return String(event.title || "")
-    .replace(/^(MMC|DDH|Casey|MCH):\s*/i, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toUpperCase();
+function leaveTextMatches(value) {
+  return /\b(leave|conference|cme|study|annual|sick|personal)\b/i.test(String(value || ""));
+}
+
+function preferredLeaveTitle(leftTitle, rightTitle, rawValue = "") {
+  const combined = `${leftTitle || ""} ${rightTitle || ""} ${rawValue || ""}`;
+  if (/\b(conference|cme)\b/i.test(combined)) return "Conference Leave";
+  if (/\bannual\b/i.test(combined)) return "Annual Leave";
+  if (/\bsick\b/i.test(combined)) return "Sick Leave";
+  if (/\bpersonal\b/i.test(combined)) return "Personal Leave";
+  if (/\bstudy\b/i.test(combined)) return "Study Leave";
+  return String(leftTitle || rightTitle || "Leave").trim();
 }
 
 function mergeRawLeaveValues(left, right) {

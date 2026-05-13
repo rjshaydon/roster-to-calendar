@@ -5,6 +5,7 @@ import XLSX from "xlsx";
 
 import { onRequestPost as handleStatePost } from "../functions/api/state.js";
 import { onRequestGet as handleFeedGet } from "../functions/api/feed.js";
+import { buildPreviewFromDerivedEvents } from "../functions/_lib/d1-calendar.js";
 import { buildRosterView, doctorOptions, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
 
 function cloneWorkbook(workbook) {
@@ -198,6 +199,42 @@ assert.ok(suzanMergedLeave);
 assert.equal(suzanMergedLeave.end, "2026-08-03");
 assert.equal(suzanMergedLeave.rawValue, "Annual Leave");
 
+const derivedLeavePreview = buildPreviewFromDerivedEvents([
+  {
+    id: "leave-a",
+    title: "MMC: Annual Leave",
+    rawValue: "Annual Leave",
+    source: "MMC",
+    sources: ["MMC"],
+    start: "2026-07-27",
+    end: "2026-08-03",
+    allDay: true,
+  },
+  {
+    id: "leave-b",
+    title: "Casey: Conference Leave",
+    rawValue: "Conference Leave",
+    source: "Casey",
+    sources: ["Casey"],
+    start: "2026-07-27",
+    end: "2026-08-03",
+    allDay: true,
+  },
+  {
+    id: "shift-a",
+    title: "MMC: AM",
+    rawValue: "AM",
+    source: "MMC",
+    start: "2026-07-28T08:00:00",
+    end: "2026-07-28T17:00:00",
+    allDay: false,
+  },
+]);
+const derivedLeaveEvents = derivedLeavePreview.events.filter((event) => /leave/i.test(event.title));
+assert.equal(derivedLeaveEvents.length, 1, "overlapping leave from multiple sources should render once");
+assert.deepEqual(derivedLeaveEvents[0].sources, ["MMC", "Casey"]);
+assert.equal(derivedLeavePreview.events.some((event) => event.id === "shift-a"), true, "non-leave shifts must remain visible");
+
 const andrewDyallCasey = caseyDoctors.find((doctor) => doctor.displayName === "Andrew DYALL");
 const andrewCaseyView = buildRosterView([], [], andrewDyallCasey.key, undefined, {}, {}, [], caseyWorkbook);
 assert.ok(andrewCaseyView.events.some((event) => event.title === "Casey: TL AM"));
@@ -245,7 +282,7 @@ assert.ok(bobSeithMchView.events.some((event) => event.title === "MCH: CS" && ev
 const andrewHardyMch = mchDoctors.find((doctor) => doctor.displayName === "Andrew HARDY");
 const andrewHardyMchView = buildRosterView([], [], andrewHardyMch.key, undefined, {}, {}, [], [], mchWorkbook);
 assert.ok(andrewHardyMchView.events.some((event) => event.title === "MCH: OCS" && event.rawValue === "0800-1730 OCS"));
-assert.ok(andrewHardyMchView.events.some((event) => event.title === "MCH: Exam Leave" && event.rawValue === "ME/L" && event.allDay));
+assert.ok(andrewHardyMchView.events.some((event) => event.title === "Conference Leave" && event.rawValue === "CME/L / ME/L" && event.allDay));
 assert.ok(andrewHardyMchView.events.some((event) => event.title === "Conference Leave" && event.rawValue === "CME/L" && event.allDay));
 assert.ok(andrewHardyMchView.events.some((event) => event.title === "Conference Leave" && event.rawValue === "CME/L" && event.start === "2026-06-08" && event.end === "2026-06-15"));
 
@@ -264,7 +301,7 @@ assert.ok(firasMchView.events.some((event) => event.title === "Annual Leave" && 
 
 const marianPanlilioMch = mchDoctors.find((doctor) => doctor.displayName === "Marian PANLILIO");
 const marianPanlilioMchView = buildRosterView([], [], marianPanlilioMch.key, undefined, {}, {}, [], [], mchWorkbook);
-assert.ok(marianPanlilioMchView.events.some((event) => event.title === "MCH: Sick Leave PM" && event.rawValue.trim() === "S/L PM" && event.allDay));
+assert.ok(marianPanlilioMchView.events.some((event) => event.title === "Sick Leave" && event.rawValue.trim() === "S/L PM" && event.allDay));
 
 const houshmandMch = mchDoctors.find((doctor) => doctor.displayName === "Houshmand REFAEI");
 const houshmandMchView = buildRosterView([], [], houshmandMch.key, undefined, {}, {}, [], [], mchWorkbook);
@@ -305,9 +342,9 @@ const michaelAnnualOption = doctorOptions([], [], michaelAnnualWorkbook, mchWork
 assert.ok(michaelAnnualOption);
 assert.deepEqual(michaelAnnualOption.sourceTypes, ["casey", "mch"]);
 const michaelAnnualView = buildRosterView([], [], michaelAnnualOption.key, undefined, {}, {}, michaelAnnualOption.aliases, michaelAnnualWorkbook, mchWorkbook);
-const michaelAnnualEvents = michaelAnnualView.events.filter((event) => event.title === "Annual Leave");
+const michaelAnnualEvents = michaelAnnualView.events.filter((event) => /leave/i.test(event.title));
 assert.equal(michaelAnnualEvents.length, 1);
-assert.equal(michaelAnnualEvents[0].start, "2026-07-27");
+assert.equal(michaelAnnualEvents[0].start, "2026-07-20");
 assert.equal(michaelAnnualEvents[0].end, "2026-08-03");
 assert.ok(michaelAnnualView.events.some((event) => event.source === "MCH"));
 
@@ -353,7 +390,7 @@ assert.equal(summary.date_range, "2026-02-09 to 2026-05-02");
 assert.ok(view.reviewItems.length >= view.events.length);
 assert.ok(view.events.some((event) => event.title === "Annual Leave"));
 assert.ok(view.events.some((event) => event.title === "DDH: Orange PM"));
-assert.ok(view.events.some((event) => event.title === "DDH: Sick Leave"));
+assert.ok(view.events.some((event) => event.title === "Sick Leave"));
 
 const ddhFullWorkbook = XLSX.utils.book_new();
 const ddhFullSheet = XLSX.utils.aoa_to_sheet([

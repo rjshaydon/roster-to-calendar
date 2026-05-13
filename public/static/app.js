@@ -2876,6 +2876,72 @@ async function hydrateInsightCacheFromServer() {
   }
 }
 
+function selectedInsightDoctorKeys() {
+  const doctor = selectedDoctor();
+  return [...new Set([
+    doctor?.key,
+    ...(Array.isArray(doctor?.aliases) ? doctor.aliases.map((alias) => alias.key) : []),
+  ].map(normalizeRosterName).filter(Boolean))];
+}
+
+async function fetchRosterInsightRows({ startDate, endDate = startDate, sourceTypes = [], excludeDoctorKeys = [] } = {}) {
+  if (!cloudAvailable || !startDate) return null;
+  try {
+    const requestEmail = adminViewingEmail ? authUserEmail || currentUserEmail : currentUserEmail;
+    const requestPassword = adminViewingEmail ? authUserPassword || currentUserPassword : currentUserPassword;
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "queryRosterInsights",
+        email: requestEmail,
+        password: requestPassword,
+        startDate,
+        endDate,
+        sourceTypes,
+        excludeDoctorKeys,
+      }),
+    });
+    const data = await readJsonResponse(response, "Could not load roster insights.");
+    if (!data.ok || data.unavailable || !Array.isArray(data.coworkers)) return null;
+    return data.coworkers;
+  } catch {
+    return null;
+  }
+}
+
+function insightRowsToDoctorOptions(rows) {
+  const doctors = new Map();
+  for (const row of rows || []) {
+    const key = normalizeRosterName(row.doctorKey || "");
+    const sourceType = String(row.sourceType || "").toLowerCase();
+    if (!key || !row.event) continue;
+    const existing = doctors.get(key) || {
+      key,
+      displayName: row.displayName || key,
+      sourceTypes: [],
+      aliases: [],
+    };
+    if (sourceType && !existing.sourceTypes.includes(sourceType)) existing.sourceTypes.push(sourceType);
+    if (sourceType && !existing.aliases.some((alias) => alias.sourceType === sourceType && alias.key === key)) {
+      existing.aliases.push({ sourceType, key, displayName: row.displayName || key });
+    }
+    doctors.set(key, existing);
+  }
+  return [...doctors.values()].sort((left, right) => left.displayName.localeCompare(right.displayName));
+}
+
+function insightRowsToEventsByDoctor(rows) {
+  const events = new Map();
+  for (const row of rows || []) {
+    const key = normalizeRosterName(row.doctorKey || "");
+    if (!key || !row.event) continue;
+    if (!events.has(key)) events.set(key, []);
+    events.get(key).push(serializeEvent(row.event));
+  }
+  return events;
+}
+
 function renderWhoInsight() {
   const date = insightsState.date;
   const mine = selectedDoctorEventsForInsights(date, date).filter(isRosterShiftEvent).filter((event) => eventRosterDateKey(event) === date);
@@ -3203,15 +3269,36 @@ async function renderInlineWhoInsight(container, date, options = {}) {
   container.dataset.inlineWhoDate = date;
   container.dataset.inlineWhoSource = String(options.source || "").toUpperCase();
   container.innerHTML = `<div class="event-inline-loading">Loading who is working with you...</div>`;
-  await ensureInsightRosterAnalysis();
   const sourceFilter = String(options.source || "").toUpperCase();
   const sourceFilters = sourceFilter ? [sourceFilter] : [];
   const mine = selectedDoctorEventsForInsights(date, date, sourceFilters)
     .filter(isRosterShiftEvent)
     .filter((event) => eventRosterDateKey(event) === date);
   const activeSources = new Set((sourceFilter ? [sourceFilter] : mine.map(eventSourceCode)).filter(Boolean));
-  const coworkers = mine.length
-    ? comparisonDoctorOptions(date, date, sourceFilters)
+  let coworkers = [];
+  const serverRows = mine.length ? await fetchRosterInsightRows({
+    startDate: date,
+    endDate: date,
+    sourceTypes: sourceFilters.map((item) => item.toLowerCase()),
+    excludeDoctorKeys: selectedInsightDoctorKeys(),
+  }) : [];
+  if (serverRows) {
+    const serverDoctors = insightRowsToDoctorOptions(serverRows);
+    const serverEvents = insightRowsToEventsByDoctor(serverRows);
+    coworkers = serverDoctors
+      .map((doctor) => ({
+        doctor,
+        events: (serverEvents.get(doctor.key) || [])
+          .filter(isRosterShiftEvent)
+          .filter((event) => eventRosterDateKey(event) === date)
+          .filter((event) => !activeSources.size || activeSources.has(eventSourceCode(event))),
+      }))
+      .filter((entry) => entry.events.length)
+      .flatMap((entry) => buildWhoAssignments(entry.doctor, entry.events));
+  } else {
+    await ensureInsightRosterAnalysis();
+    coworkers = mine.length
+      ? comparisonDoctorOptions(date, date, sourceFilters)
       .map((doctor) => ({
         doctor,
         events: comparisonDoctorEvents(doctor.key, date, date, sourceFilters)
@@ -3221,7 +3308,8 @@ async function renderInlineWhoInsight(container, date, options = {}) {
       }))
       .filter((entry) => entry.events.length)
       .flatMap((entry) => buildWhoAssignments(entry.doctor, entry.events))
-    : [];
+      : [];
+  }
   container.innerHTML = `
     <div class="event-inline-head">
       <strong>Who else is working with me?</strong>
@@ -3267,10 +3355,23 @@ async function renderInlineWhenInsight(container, doctorKey) {
   }
   container.classList.remove("hidden");
   container.innerHTML = `<div class="event-inline-loading">Loading future shifts together...</div>`;
-  await ensureInsightRosterAnalysis();
   const fromDate = formatDateKey(new Date());
   const range = availableInsightDateRange();
   const toDate = range.end || fromDate;
+  const serverRows = await fetchRosterInsightRows({ startDate: fromDate, endDate: toDate });
+  if (serverRows) {
+    const serverDoctors = prioritizeDoctorOptions(insightRowsToDoctorOptions(serverRows));
+    const serverEvents = insightRowsToEventsByDoctor(serverRows);
+    const selectedComparison = serverDoctors.find((doctor) => doctor.key === doctorKey) || null;
+    const mine = selectedDoctorEventsForInsights(fromDate, toDate, []).filter(isRosterShiftEvent);
+    const theirs = selectedComparison
+      ? (serverEvents.get(selectedComparison.key) || []).filter(isRosterShiftEvent)
+      : [];
+    const overlaps = selectedComparison ? buildOverlapDays(mine, theirs) : [];
+    renderInlineWhenInsightResult(container, { fromDate, selectedComparison, overlaps });
+    return;
+  }
+  await ensureInsightRosterAnalysis();
   const allOptions = prioritizeDoctorOptions(insightDoctorOptions());
   const selectedComparison = allOptions.find((doctor) => doctor.key === doctorKey) || null;
   const mine = selectedDoctorEventsForInsights(fromDate, toDate, []).filter(isRosterShiftEvent);
@@ -3278,6 +3379,10 @@ async function renderInlineWhenInsight(container, doctorKey) {
     ? comparisonDoctorEvents(selectedComparison.key, fromDate, toDate, []).filter(isRosterShiftEvent)
     : [];
   const overlaps = selectedComparison ? buildOverlapDays(mine, theirs) : [];
+  renderInlineWhenInsightResult(container, { fromDate, selectedComparison, overlaps });
+}
+
+function renderInlineWhenInsightResult(container, { fromDate, selectedComparison, overlaps }) {
   const backDate = container.dataset.inlineWhoDate || fromDate;
   const backSource = container.dataset.inlineWhoSource || "";
   container.innerHTML = `
@@ -4898,6 +5003,15 @@ function resetDerivedState() {
   mobileActionBar.classList.add("hidden");
   closeSettingsPanel({ commit: false });
   claimSection.classList.add("hidden");
+  clearPreviewData();
+}
+
+function resetTransientCalendarData() {
+  parsedRosterSources = null;
+  parsedImportDoctors = new Map();
+  doctorRoleIndex = null;
+  restoredSessionState = null;
+  clearDoctorAnalysisCache();
   clearPreviewData();
 }
 
@@ -7497,6 +7611,7 @@ async function enterUserAccount(email) {
   forceConsoleSkin();
   setStatus(`Entering ${targetEmail}...`);
   try {
+    resetTransientCalendarData();
     await clearLocalWorkspace();
     await restoreCloudState({ adminTargetEmail: targetEmail, preserveSessionOnFailure: true });
     await bootstrapImports();
@@ -7850,6 +7965,7 @@ async function commitCalendarLoad(result) {
   }
   activeDoctorProfile = result.profile;
   setActiveCalendarContext("doctor-profile", { email: currentUserEmail, profile: activeDoctorProfile });
+  resetTransientCalendarData();
   selectedFiles = result.imports || [];
   currentSnapshot = result.snapshot;
   currentSnapshotStale = false;
@@ -7968,6 +8084,7 @@ async function returnToCreatorAccount() {
   sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
   forceConsoleSkin();
   setStatus("Returning to creator account...");
+  resetTransientCalendarData();
   await clearLocalWorkspace();
   await restoreCloudState();
   restoredSessionState = {
@@ -7975,6 +8092,7 @@ async function returnToCreatorAccount() {
     doctorKey: OWNER_DOCTOR_KEY,
   };
   if (currentSnapshot) {
+    const snapshotDoctorKey = normalizeRosterName(currentSnapshot.session?.doctorKey || "");
     currentSnapshot = sanitizeWorkspaceSnapshot({
       ...currentSnapshot,
       session: {
@@ -7982,6 +8100,11 @@ async function returnToCreatorAccount() {
         doctorKey: OWNER_DOCTOR_KEY,
       },
     });
+    if (snapshotDoctorKey && snapshotDoctorKey !== OWNER_DOCTOR_KEY) {
+      currentSnapshot = null;
+      currentSnapshotStale = false;
+      currentSnapshotBuiltAt = "";
+    }
   }
   await bootstrapImports();
   if (doctorSelect && doctorPickerOptions().some((doctor) => doctor.key === OWNER_DOCTOR_KEY)) {
