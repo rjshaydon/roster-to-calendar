@@ -2729,7 +2729,7 @@ async function openWhoInsightForDate(date) {
   if (!canUseRosterInsights()) return;
   const selectedDate = String(date || "").slice(0, 10);
   if (!selectedDate) return;
-  const range = availableInsightDateRange();
+  const range = currentCalendarInsightDateRange();
   insightsState = {
     mode: "who",
     termStart: range.start || selectedDate,
@@ -2741,7 +2741,7 @@ async function openWhoInsightForDate(date) {
 
 async function openWhenInsight(termStart, termEnd) {
   if (!canUseRosterInsights()) return;
-  const range = availableInsightDateRange();
+  const range = currentCalendarInsightDateRange();
   const fromDate = formatDateKey(new Date());
   const toDate = range.end || termEnd || fromDate;
   insightsState = {
@@ -2759,7 +2759,7 @@ async function openWhenInsightForDoctor(doctorKey) {
   if (!canUseRosterInsights()) return;
   const normalizedKey = normalizeRosterName(doctorKey);
   if (!normalizedKey) return;
-  const range = availableInsightDateRange();
+  const range = currentCalendarInsightDateRange();
   const fromDate = formatDateKey(new Date());
   insightsState = {
     mode: "when",
@@ -2879,7 +2879,7 @@ function selectedInsightDoctorKeys() {
   ].map(normalizeRosterName).filter(Boolean))];
 }
 
-async function fetchRosterInsightRows({ startDate, endDate = startDate, sourceTypes = [], excludeDoctorKeys = [] } = {}) {
+async function fetchRosterInsightRows({ startDate, endDate = startDate, sourceTypes = [], excludeDoctorKeys = [], doctorKeys = [] } = {}) {
   if (!cloudAvailable || !startDate) return null;
   try {
     const requestEmail = adminViewingEmail ? authUserEmail || currentUserEmail : currentUserEmail;
@@ -2895,6 +2895,7 @@ async function fetchRosterInsightRows({ startDate, endDate = startDate, sourceTy
         endDate,
         sourceTypes,
         excludeDoctorKeys,
+        doctorKeys,
       }),
     });
     const data = await readJsonResponse(response, "Could not load roster insights.");
@@ -2999,7 +3000,7 @@ async function renderWhoInsight() {
 async function renderWhenInsight() {
   const hospitalFilters = Array.isArray(insightsState.hospitalFilters) ? insightsState.hospitalFilters : [];
   const fromDate = insightsState.fromDate || formatDateKey(new Date());
-  const toDate = insightsState.termEnd || availableInsightDateRange().end || fromDate;
+  const toDate = insightsState.termEnd || currentCalendarInsightDateRange().end || fromDate;
   const serverRows = await fetchRosterInsightRows({ startDate: fromDate, endDate: toDate, sourceTypes: hospitalFilters.map((item) => item.toLowerCase()) });
   if (serverRows) {
     const serverOptions = prioritizeDoctorOptions(insightRowsToDoctorOptions(serverRows)).filter((doctor) => doctor.key !== selectedDoctor()?.key);
@@ -3011,7 +3012,8 @@ async function renderWhenInsight() {
     const serverEvents = insightRowsToEventsByDoctor(serverRows);
     const mine = selectedDoctorEventsForInsights(fromDate, toDate, hospitalFilters).filter(isRosterShiftEvent);
     const theirs = selectedComparison ? (serverEvents.get(selectedComparison.key) || []).filter(isRosterShiftEvent) : [];
-    renderWhenInsightResult({ options: serverOptions, selectedComparison, mine, theirs, fromDate, toDate, hospitalFilters });
+    const hospitalOptions = availableHospitalsFromInsightEvents([...mine, ...[...serverEvents.values()].flat()]);
+    renderWhenInsightResult({ options: serverOptions, selectedComparison, mine, theirs, fromDate, toDate, hospitalFilters, hospitalOptions });
     return;
   }
   await ensureInsightRosterAnalysis();
@@ -3028,10 +3030,10 @@ async function renderWhenInsight() {
   renderWhenInsightResult({ options, selectedComparison, mine, theirs, fromDate, toDate, hospitalFilters });
 }
 
-function renderWhenInsightResult({ options, selectedComparison, mine, theirs, fromDate, toDate, hospitalFilters }) {
+function renderWhenInsightResult({ options, selectedComparison, mine, theirs, fromDate, toDate, hospitalFilters, hospitalOptions = null }) {
   const overlaps = buildOverlapDays(mine, theirs);
   const nextOverlapDate = chooseNextOverlapDate(overlaps);
-  const hospitalOptions = availableHospitalsForInsightRange(fromDate, toDate);
+  const availableHospitalOptions = hospitalOptions || availableHospitalsForInsightRange(fromDate, toDate);
 
   insightsModalTitle.textContent = "When am I working with…?";
   insightsModalSubtitle.textContent = "Find future dates where both doctors are working from the selected date.";
@@ -3053,7 +3055,7 @@ function renderWhenInsightResult({ options, selectedComparison, mine, theirs, fr
         </label>
         <p class="status">Leave all unticked to search every hospital.</p>
         <div class="toggle-list">
-          ${hospitalOptions.map((hospital) => `
+          ${availableHospitalOptions.map((hospital) => `
             <label class="toggle">
               <input type="checkbox" value="${escapeHtml(hospital)}" data-insights-when-hospital ${hospitalFilters.includes(hospital) ? "checked" : ""}>
               ${escapeHtml(hospital)}
@@ -3097,6 +3099,21 @@ function insightDoctorOptions() {
 }
 
 function availableInsightDateRange() {
+  return currentCalendarInsightDateRange();
+}
+
+function currentCalendarInsightDateRange() {
+  const currentEvents = buildResolvedPreviewEvents(latestPreview || { events: [] }).filter(isRosterShiftEvent);
+  const range = deriveRangeBounds(currentEvents);
+  if (range.start || range.end) return range;
+  const fallback = deriveRangeBounds(latestPreview?.events || []);
+  return {
+    start: fallback.start || "",
+    end: fallback.end || fallback.start || "",
+  };
+}
+
+function legacyAvailableInsightDateRange() {
   const events = [
     ...buildResolvedPreviewEvents(latestPreview || { events: [] }),
     ...[...getDoctorAnalysisCache().values()].flat(),
@@ -3147,6 +3164,15 @@ function availableHospitalsForInsightRange(start, end) {
       const code = eventSourceCode(event);
       if (code) seen.add(code);
     }
+  }
+  return [...seen].sort();
+}
+
+function availableHospitalsFromInsightEvents(events) {
+  const seen = new Set();
+  for (const event of events || []) {
+    const code = eventSourceCode(event);
+    if (code) seen.add(code);
   }
   return [...seen].sort();
 }
@@ -3392,9 +3418,9 @@ async function renderInlineWhenInsight(container, doctorKey) {
   container.classList.remove("hidden");
   container.innerHTML = `<div class="event-inline-loading">Loading future shifts together...</div>`;
   const fromDate = formatDateKey(new Date());
-  const range = availableInsightDateRange();
+  const range = currentCalendarInsightDateRange();
   const toDate = range.end || fromDate;
-  const serverRows = await fetchRosterInsightRows({ startDate: fromDate, endDate: toDate });
+  const serverRows = await fetchRosterInsightRows({ startDate: fromDate, endDate: toDate, doctorKeys: [doctorKey] });
   if (serverRows) {
     const serverDoctors = prioritizeDoctorOptions(insightRowsToDoctorOptions(serverRows));
     const serverEvents = insightRowsToEventsByDoctor(serverRows);
@@ -3739,18 +3765,8 @@ function buildInsightCachePayload() {
 
 function scheduleInsightWarmup() {
   clearInsightWarmup();
-  if (!selectedFiles.length || !selectedDoctor() || insightWarmupPromise) return;
-  if (selectedFiles.some((entry) => !entry.file) && !currentSnapshot?.insightCache) return;
-  const runWarmup = () => {
-    insightWarmupPromise = warmInsightData().finally(() => {
-      insightWarmupPromise = null;
-    });
-  };
-  if (typeof requestIdleCallback === "function") {
-    insightWarmupTimer = requestIdleCallback(() => runWarmup(), { timeout: 1500 });
-    return;
-  }
-  insightWarmupTimer = setTimeout(runWarmup, 250);
+  // D1 answers insight lookups on demand. Prewarming used to parse every roster
+  // for every doctor in the browser, which blocked calendar load and popups.
 }
 
 function clearInsightWarmup() {

@@ -694,12 +694,17 @@ class MemoryD1Statement {
     if (sql.includes("FROM roster_events") && sql.includes("display_name")) {
       const end = args[0];
       const start = args[1];
-      const sourceTypes = new Set(args.slice(2));
+      const hasSourceFilter = sql.includes("roster_events.source_type IN");
+      const hasDoctorFilter = sql.includes("roster_events.doctor_key IN");
+      const sourceCount = hasSourceFilter ? (sql.match(/roster_events\.source_type IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1 : 0;
+      const sourceTypes = new Set(args.slice(2, 2 + sourceCount));
+      const doctorKeys = new Set(hasDoctorFilter ? args.slice(2 + sourceCount) : []);
       return {
         results: [...this.db.events.values()]
           .filter((event) => this.db.files.get(event.file_id)?.active === 1)
           .filter((event) => event.start_date <= end && event.end_date >= start)
           .filter((event) => !sourceTypes.size || sourceTypes.has(event.source_type))
+          .filter((event) => !doctorKeys.size || doctorKeys.has(event.doctor_key))
           .sort((left, right) => left.display_name.localeCompare(right.display_name) || left.start_ts.localeCompare(right.start_ts)),
       };
     }

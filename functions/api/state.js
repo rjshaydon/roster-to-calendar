@@ -823,11 +823,15 @@ export async function onRequestPost(context) {
       const excludeDoctorKeys = (Array.isArray(body?.excludeDoctorKeys) ? body.excludeDoctorKeys : [])
         .map((key) => normalizeRosterName(key))
         .filter(Boolean);
+      const doctorKeys = (Array.isArray(body?.doctorKeys) ? body.doctorKeys : [])
+        .map((key) => normalizeRosterName(key))
+        .filter(Boolean);
       const coworkers = await queryCoworkerEvents(context.env.ROSTER_DB, {
         startDate,
         endDate,
         sourceTypes,
         excludeDoctorKeys,
+        doctorKeys,
       });
       return Response.json({ ok: true, coworkers });
     }

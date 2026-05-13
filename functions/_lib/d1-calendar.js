@@ -815,7 +815,9 @@ export async function queryCoworkerEvents(db, options = {}) {
   const end = String(options.endDate || options.date || "9999-12-31");
   const sourceTypes = sanitizeSourceTypes(options.sourceTypes);
   const excludeKeys = new Set((options.excludeDoctorKeys || []).filter(Boolean));
+  const includeKeys = [...new Set((options.doctorKeys || []).filter(Boolean))];
   const sourceSql = sourceTypes.length ? `AND roster_events.source_type IN (${sourceTypes.map(() => "?").join(", ")})` : "";
+  const doctorSql = includeKeys.length ? `AND roster_events.doctor_key IN (${includeKeys.map(() => "?").join(", ")})` : "";
   const rows = await db.prepare(`
     SELECT doctor_key, display_name, source_type, event_json
     FROM roster_events
@@ -824,8 +826,9 @@ export async function queryCoworkerEvents(db, options = {}) {
       AND roster_events.start_date <= ?
       AND roster_events.end_date >= ?
       ${sourceSql}
+      ${doctorSql}
     ORDER BY roster_events.display_name, roster_events.start_ts
-  `).bind(end, start, ...sourceTypes).all();
+  `).bind(end, start, ...sourceTypes, ...includeKeys).all();
   return (rows.results || [])
     .filter((row) => !excludeKeys.has(row.doctor_key))
     .map((row) => ({
