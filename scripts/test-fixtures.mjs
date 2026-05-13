@@ -486,6 +486,8 @@ class MemoryD1 {
     this.accountProfiles = new Map();
     this.accountClaims = new Map();
     this.accountStates = new Map();
+    this.subscriptionTokens = new Map();
+    this.parserRules = new Map();
     this.doctorProfiles = new Map();
   }
 
@@ -603,6 +605,42 @@ class MemoryD1Statement {
     }
     if (sql.startsWith("DELETE FROM account_claims")) {
       for (const key of [...this.db.accountClaims.keys()]) if (key.startsWith(`${args[0]}|`)) this.db.accountClaims.delete(key);
+      return { success: true };
+    }
+    if (sql.startsWith("DELETE FROM subscription_tokens WHERE email")) {
+      for (const [token, row] of [...this.db.subscriptionTokens.entries()]) {
+        if (row.email === args[0]) this.db.subscriptionTokens.delete(token);
+      }
+      return { success: true };
+    }
+    if (sql.startsWith("INSERT INTO subscription_tokens")) {
+      this.db.subscriptionTokens.set(args[0], {
+        token: args[0],
+        email: args[1],
+        created_at: args[2],
+        updated_at: args[3],
+      });
+      return { success: true };
+    }
+    if (sql.startsWith("INSERT INTO parser_rules")) {
+      this.db.parserRules.set(args[0], {
+        id: args[0],
+        scope: "global",
+        source_type: args[1],
+        seniority: args[2],
+        code: args[3],
+        title: args[4],
+        rule_json: args[5],
+        updated_at: args[6],
+      });
+      return { success: true };
+    }
+    if (sql.startsWith("DELETE FROM parser_rules")) {
+      for (const [key, rule] of [...this.db.parserRules.entries()]) {
+        if (rule.scope === "global" && rule.source_type === args[0] && rule.seniority === args[1] && rule.code === args[2]) {
+          this.db.parserRules.delete(key);
+        }
+      }
       return { success: true };
     }
     if (sql.startsWith("INSERT INTO account_claims")) {
@@ -827,6 +865,13 @@ class MemoryD1Statement {
       }
       return { results };
     }
+    if (sql.startsWith("SELECT rule_json FROM parser_rules")) {
+      return {
+        results: [...this.db.parserRules.values()]
+          .filter((rule) => rule.scope === "global")
+          .map((rule) => ({ rule_json: rule.rule_json })),
+      };
+    }
     if (sql.startsWith("SELECT * FROM doctor_profiles ORDER BY")) {
       return {
         results: [...this.db.doctorProfiles.values()]
@@ -851,6 +896,9 @@ class MemoryD1Statement {
     }
     if (sql.startsWith("SELECT session_json FROM account_states WHERE email")) {
       return this.db.accountStates.get(args[0]) || null;
+    }
+    if (sql.startsWith("SELECT email FROM subscription_tokens WHERE token")) {
+      return this.db.subscriptionTokens.get(args[0]) || null;
     }
     if (sql.startsWith("SELECT COUNT(*) AS count FROM account_profiles WHERE subscription_token")) {
       return { count: [...this.db.accountProfiles.values()].filter((profile) => profile.subscription_token).length };
@@ -902,6 +950,31 @@ async function seedRepository(store, files) {
   }
 }
 
+function seedD1Repository(db, files) {
+  for (const file of files) {
+    db.files.set(file.id, {
+      id: file.id,
+      name: file.name || `${file.id}.xlsx`,
+      source_type: file.sourceType || "mmc",
+      active: file.active === false ? 0 : 1,
+      size: file.size || 0,
+      last_modified: file.lastModified || 0,
+      added_at: file.addedAt || "",
+      uploaded_at: file.uploadedAt || "",
+      uploaded_by: file.uploadedBy || "",
+      parsed_at: file.parsedAt || "",
+    });
+    for (const doctor of file.doctors || []) {
+      db.fileDoctors.set(`${file.id}|${doctor.sourceType || file.sourceType || "mmc"}|${doctor.key}`, {
+        file_id: file.id,
+        source_type: doctor.sourceType || file.sourceType || "mmc",
+        doctor_key: doctor.key,
+        display_name: doctor.displayName || doctor.key,
+      });
+    }
+  }
+}
+
 async function seedUser(store, email, password, realName = "Titus Hackman", db = null) {
   await postState(store, {
     action: "login",
@@ -913,6 +986,12 @@ async function seedUser(store, email, password, realName = "Titus Hackman", db =
 }
 
 async function postState(store, payload, db = null) {
+  const { response, body } = await postStateRaw(store, payload, db);
+  assert.equal(response.ok, true, body.error || "state request failed");
+  return body;
+}
+
+async function postStateRaw(store, payload, db = null) {
   const rosterDb = db || store?.d1 || new MemoryD1();
   const response = await handleStatePost({
     request: new Request("http://fixture.test/api/state", {
@@ -920,14 +999,31 @@ async function postState(store, payload, db = null) {
       body: JSON.stringify(payload),
       headers: { "content-type": "application/json" },
     }),
-    env: { ROSTER_STORE: store, ROSTER_DB: rosterDb },
+    env: { ROSTER_DB: rosterDb },
   });
   const body = await response.json();
-  assert.equal(response.ok, true, body.error || "state request failed");
-  return body;
+  return { response, body };
+}
+
+function memoryD1AccountRecord(db, email) {
+  const profile = db.accountProfiles.get(email);
+  if (!profile) return null;
+  return {
+    email,
+    realName: profile.real_name,
+    role: profile.role,
+    adminIssues: JSON.parse(profile.admin_issues_json || "[]"),
+    localParserExtensions: JSON.parse(profile.local_parser_extensions_json || "[]"),
+    claims: [...db.accountClaims.values()].filter((claim) => claim.email === email).map((claim) => ({
+      sourceType: claim.source_type,
+      key: claim.doctor_key,
+      displayName: claim.display_name,
+    })),
+  };
 }
 
 const stateStore = new MemoryStore();
+stateStore.d1 = new MemoryD1();
 const creatorPassword = "fixture-password";
 await postState(stateStore, {
   action: "login",
@@ -939,19 +1035,18 @@ await seedRepository(stateStore, [repositoryFile("fixture-roster", {
   sourceType: "mmc",
 })]);
 
-const creatorImports = await postState(stateStore, {
+const creatorImports = await postStateRaw(stateStore, {
   action: "loadImports",
   email: "rhaydon@gmail.com",
   password: creatorPassword,
 });
-assert.equal(creatorImports.imports.length, 1);
-assert.equal(creatorImports.imports[0].repoId, "fixture-roster");
+assert.equal(creatorImports.response.status, 410);
 const emptyD1Status = await postState(stateStore, {
   action: "calendarStoreStatus",
   email: "rhaydon@gmail.com",
   password: creatorPassword,
 });
-assert.equal(emptyD1Status.total, 1, "KV repository metadata should remain the fallback when D1 roster_files is empty");
+assert.equal(emptyD1Status.total, 0, "KV repository metadata must not be used when D1 roster_files is empty");
 
 const d1StateStore = new MemoryStore();
 const d1Store = new MemoryD1();
@@ -961,6 +1056,26 @@ await postState(d1StateStore, {
   action: "login",
   email: "rhaydon@gmail.com",
   password: creatorPassword,
+}, d1Store);
+const d1Doctors = doctorOptions(parsedMmcUpload.sources.mmc, [], [], []);
+const d1EventsByDoctor = Object.fromEntries(d1Doctors.map((doctor) => [
+  doctor.key,
+  buildRosterView(parsedMmcUpload.sources.mmc, [], doctor.key, {}, {}, {}, [], [], []).events,
+]));
+await postState(d1StateStore, {
+  action: "saveDerivedCalendarFile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  file: {
+    id: "d1-mmc",
+    name: "AdultTerm1.2026.xlsx",
+    size: 123,
+    lastModified: 1,
+    addedAt: "2026-01-01T00:00:00.000Z",
+    sourceType: "mmc",
+  },
+  doctors: d1Doctors,
+  eventsByDoctor: d1EventsByDoctor,
 }, d1Store);
 await postState(d1StateStore, {
   action: "save",
@@ -975,7 +1090,6 @@ await postState(d1StateStore, {
       lastModified: 1,
       addedAt: "2026-01-01T00:00:00.000Z",
       sourceType: "mmc",
-      dataUrl: workbookDataUrl(mmcWorkbook),
     }],
     session: {
       doctorKey: d1Doctor.key,
@@ -1034,15 +1148,12 @@ await postState(d1StateStore, {
     },
   },
 }, d1Store);
-const d1KvUserRecord = await d1StateStore.get("account:d1-user@example.com", "json");
-d1KvUserRecord.state.session = {};
-await d1StateStore.put("account:d1-user@example.com", JSON.stringify(d1KvUserRecord));
 const d1SessionLogin = await postState(d1StateStore, {
   action: "login",
   email: "d1-user@example.com",
   password: "d1-password",
 }, d1Store);
-assert.equal(d1SessionLogin.state.session.exportRange.startDate, "2026-02-01", "D1 session mirror should fill KV session gaps");
+assert.equal(d1SessionLogin.state.session.exportRange.startDate, "2026-02-01", "D1 account session should load without KV state");
 assert.ok(d1SessionLogin.snapshot.preview.events.some((event) => event.title === "D1 Edited Shift"), "D1 snapshot should apply session overrides");
 assert.ok(d1SessionLogin.snapshot.preview.events.some((event) => event.title === "D1 Custom Event"), "D1 snapshot should include session custom events");
 const d1AdminLoad = await postState(d1StateStore, {
@@ -1366,7 +1477,7 @@ assert.deepEqual(overlappingConferenceLeave.sources.sort(), ["MCH", "MMC"]);
 assert.equal(overlappingConferenceLeave.rawValue, "Conference Leave / CME/L");
 const d1FeedResponse = await handleFeedGet({
   request: new Request(`http://fixture.test/api/feed?token=${d1DirectLogin.subscription.token}`),
-  env: { ROSTER_STORE: d1StateStore, ROSTER_DB: d1Store },
+  env: { ROSTER_DB: d1Store },
 });
 assert.equal(d1FeedResponse.ok, true);
 const d1FeedText = await d1FeedResponse.text();
@@ -1378,7 +1489,7 @@ await d1StateStore.delete(`subscription:token:${d1DirectLogin.subscription.token
 await d1StateStore.delete("snapshot:account:d1-user@example.com");
 const d1OnlyFeedResponse = await handleFeedGet({
   request: new Request(`http://fixture.test/api/feed?token=${d1DirectLogin.subscription.token}&view=range`),
-  env: { ROSTER_STORE: d1StateStore, ROSTER_DB: d1Store },
+  env: { ROSTER_DB: d1Store },
 });
 assert.equal(d1OnlyFeedResponse.ok, true);
 const d1OnlyFeedText = await d1OnlyFeedResponse.text();
@@ -1396,12 +1507,13 @@ const d1NoKvFeedResponse = await handleFeedGet({
 assert.equal(d1NoKvFeedResponse.ok, true, "subscription feed should resolve from D1 without KV");
 
 const michaelStateStore = new MemoryStore();
+michaelStateStore.d1 = new MemoryD1();
 await postState(michaelStateStore, {
   action: "login",
   email: "rhaydon@gmail.com",
   password: creatorPassword,
 });
-await seedRepository(michaelStateStore, [
+seedD1Repository(michaelStateStore.d1, [
   repositoryFile("michael-mmc", {
     name: "michael-mmc.xlsx",
     sourceType: "mmc",
@@ -1510,12 +1622,13 @@ assert.equal(michaelRecreatedResolution.mode, "doctor-profile");
 assert.equal(michaelRecreatedResolution.email, "");
 
 const identityStore = new MemoryStore();
+identityStore.d1 = new MemoryD1();
 await postState(identityStore, {
   action: "login",
   email: "rhaydon@gmail.com",
   password: creatorPassword,
 });
-await seedRepository(identityStore, [
+seedD1Repository(identityStore.d1, [
   repositoryFile("identity-ddh", {
     sourceType: "ddh",
     doctors: [
@@ -1605,17 +1718,25 @@ await postState(identityStore, {
   password: "andrea-password",
   message: "Wrong roster name.",
 });
-const andreaRecordAfterReport = await identityStore.get("account:andrea@example.com", "json");
+const andreaProfileAfterReport = identityStore.d1.accountProfiles.get("andrea@example.com");
+const andreaRecordAfterReport = {
+  claims: [...identityStore.d1.accountClaims.values()].filter((claim) => claim.email === "andrea@example.com").map((claim) => ({
+    sourceType: claim.source_type,
+    key: claim.doctor_key,
+  })),
+  adminIssues: JSON.parse(andreaProfileAfterReport.admin_issues_json || "[]"),
+};
 assert.equal((andreaRecordAfterReport.claims || []).some((claim) => claim.sourceType === "ddh"), false);
 assert.ok(andreaRecordAfterReport.adminIssues.length >= 1);
 
 const manyDoctorsStore = new MemoryStore();
+manyDoctorsStore.d1 = new MemoryD1();
 await postState(manyDoctorsStore, {
   action: "login",
   email: "rhaydon@gmail.com",
   password: creatorPassword,
 });
-await seedRepository(manyDoctorsStore, [
+seedD1Repository(manyDoctorsStore.d1, [
   repositoryFile("many-doctors", {
     doctors: Array.from({ length: 90 }, (_, index) => ({
       key: `DOCTOR ${index}`,
@@ -1637,7 +1758,7 @@ const manyDoctorsLogin = await postState(manyDoctorsStore, {
 assert.equal(manyDoctorsLogin.availableDoctors.length, 90);
 assert.ok(manyDoctorsStore.accountListCalls <= 2, "available doctor claimed status should avoid repeated account scans");
 
-const profileImports = await postState(stateStore, {
+const profileImports = await postStateRaw(stateStore, {
   action: "loadDoctorProfileImports",
   email: "rhaydon@gmail.com",
   password: creatorPassword,
@@ -1646,8 +1767,7 @@ const profileImports = await postState(stateStore, {
   displayName: "Titus HACKMAN",
   sourceTypes: ["mmc"],
 });
-assert.equal(profileImports.imports.length, 1);
-assert.equal(profileImports.imports[0].repoId, "fixture-roster");
+assert.equal(profileImports.response.status, 410);
 
 await postState(stateStore, {
   action: "saveDoctorProfile",
@@ -1673,14 +1793,7 @@ await postState(stateStore, {
     fileRefs: [{ repoId: "fixture-roster", id: "fixture-roster", sourceType: "mmc", name: "AdultMMCTerm2.2026.Ver1.pdf" }],
   },
 });
-const profileSnapshotKey = "snapshot:doctor-profile:TITUS HACKMAN::mmc";
-const savedProfileSnapshot = await stateStore.get(profileSnapshotKey, "json");
-assert.equal(savedProfileSnapshot.schemaVersion > 1, true);
-await stateStore.put(profileSnapshotKey, JSON.stringify({
-  ...savedProfileSnapshot,
-  schemaVersion: 1,
-}));
-const staleProfileSnapshot = await postState(stateStore, {
+const d1ProfileReload = await postState(stateStore, {
   action: "loadDoctorProfile",
   email: "rhaydon@gmail.com",
   password: creatorPassword,
@@ -1689,8 +1802,7 @@ const staleProfileSnapshot = await postState(stateStore, {
   displayName: "Titus HACKMAN",
   sourceTypes: ["mmc"],
 });
-assert.equal(staleProfileSnapshot.snapshotAvailable, true);
-assert.equal(staleProfileSnapshot.snapshotStale, true);
+assert.equal(d1ProfileReload.profile.profileId, "TITUS HACKMAN::mmc");
 
 await seedUser(stateStore, "patrick@example.com", "patrick-password", "Patrick TAN");
 await seedUser(stateStore, "senior@example.com", "senior-password", "Senior Registrar");
@@ -1745,8 +1857,8 @@ await postState(stateStore, {
   message: n1Issue.message,
   issue: n1Issue,
 });
-assert.equal((await stateStore.get("account:patrick@example.com", "json")).adminIssues.length, 1);
-assert.equal((await stateStore.get("account:senior@example.com", "json")).adminIssues.length, 1);
+assert.equal(memoryD1AccountRecord(stateStore.d1, "patrick@example.com").adminIssues.length, 1);
+assert.equal(memoryD1AccountRecord(stateStore.d1, "senior@example.com").adminIssues.length, 1);
 const parserSave = await postState(stateStore, {
   action: "saveParserExtensionRule",
   email: "rhaydon@gmail.com",
@@ -1787,8 +1899,8 @@ XLSX.utils.book_append_sheet(srN1Workbook, srN1Sheet, "Week 1");
 const srN1View = buildRosterView([{ id: "sr-n1", workbook: srN1Workbook, file: { name: "AdultTerm.xlsx", size: 1, lastModified: 1 } }], [], "PATRICK TAN");
 assert.ok(srN1View.events.some((event) => event.rawValue === "2300-0900 N1" && event.title === "MMC: SR IC Night" && event.start.includes("23:00:00") && event.end.includes("09:00:00")), "Senior Registrar N1 explicit-time rules must render with the saved rule title");
 assert.equal(srN1View.issues.some((issue) => issue.rawValue === "2300-0900 N1"), false);
-assert.equal((await stateStore.get("account:patrick@example.com", "json")).adminIssues.length, 0, "global parser rule must clear direct-user warnings");
-assert.equal((await stateStore.get("account:senior@example.com", "json")).adminIssues.length, 0, "global parser rule must clear switch-user warnings");
+assert.equal(memoryD1AccountRecord(stateStore.d1, "patrick@example.com").adminIssues.length, 0, "global parser rule must clear direct-user warnings");
+assert.equal(memoryD1AccountRecord(stateStore.d1, "senior@example.com").adminIssues.length, 0, "global parser rule must clear switch-user warnings");
 const staleReport = await postState(stateStore, {
   action: "reportUserError",
   email: "patrick@example.com",
@@ -1802,7 +1914,7 @@ const staleReport = await postState(stateStore, {
   },
 });
 assert.equal(staleReport.ignored, true, "resolved global shift-code warnings must not be requeued from stale user previews");
-assert.equal((await stateStore.get("account:patrick@example.com", "json")).adminIssues.length, 0, "resolved global shift-code warnings must not return after user login");
+assert.equal(memoryD1AccountRecord(stateStore.d1, "patrick@example.com").adminIssues.length, 0, "resolved global shift-code warnings must not return after user login");
 const accParserSave = await postState(stateStore, {
   action: "saveParserExtensionRule",
   email: "rhaydon@gmail.com",
@@ -1846,12 +1958,18 @@ assert.equal(srAccView.issues.some((issue) => issue.rawValue === "ACC"), false);
 setParserExtensions({});
 
 const deletionStore = new MemoryStore();
+deletionStore.d1 = new MemoryD1();
 await postState(deletionStore, {
   action: "login",
   email: "rhaydon@gmail.com",
   password: creatorPassword,
 });
 await seedRepository(deletionStore, [
+  repositoryFile("keep-roster"),
+  repositoryFile("missing-from-save", { name: "missing-from-save.xlsx" }),
+  repositoryFile("remove-roster", { name: "remove-roster.xlsx" }),
+]);
+seedD1Repository(deletionStore.d1, [
   repositoryFile("keep-roster"),
   repositoryFile("missing-from-save", { name: "missing-from-save.xlsx" }),
   repositoryFile("remove-roster", { name: "remove-roster.xlsx" }),
@@ -1882,9 +2000,10 @@ await postState(deletionStore, {
   },
   removedImportIds: ["remove-roster"],
 });
-assert.equal(await deletionStore.get("repository:file:remove-roster", "json"), null);
+assert.ok(await deletionStore.get("repository:file:remove-roster", "json"), "D1-only removal must not mutate legacy KV files");
+assert.equal(deletionStore.d1.files.has("remove-roster"), false, "creator removal should delete the D1 roster file");
 deletionIndex = await deletionStore.get("repository:index", "json");
-assert.equal(deletionIndex.files.some((file) => file.id === "remove-roster"), false);
+assert.equal(deletionIndex.files.some((file) => file.id === "remove-roster"), true, "D1-only removal must not mutate legacy KV index");
 assert.ok(await deletionStore.get("repository:file:keep-roster", "json"));
 assert.ok(await deletionStore.get("repository:file:missing-from-save", "json"));
 
@@ -1954,17 +2073,15 @@ await postState(deletionStore, {
 assert.ok(await deletionStore.get("repository:file:keep-roster", "json"), "standard users must not delete repository files");
 
 const beforeLoadDeleteCount = deletionStore.deletedKeys.length;
-const deletionCreatorImports = await postState(deletionStore, {
+const deletionCreatorImports = await postStateRaw(deletionStore, {
   action: "loadImports",
   email: "rhaydon@gmail.com",
   password: creatorPassword,
 });
 assert.equal(deletionStore.deletedKeys.length, beforeLoadDeleteCount, "loading imports must not delete repository records");
-assert.equal(deletionCreatorImports.imports.some((item) => item.repoId === "remove-roster"), false);
-assert.ok(deletionCreatorImports.imports.some((item) => item.repoId === "keep-roster"));
-assert.ok(deletionCreatorImports.imports.some((item) => item.repoId === "missing-from-save"));
+assert.equal(deletionCreatorImports.response.status, 410);
 
-const deletionProfileImports = await postState(deletionStore, {
+const deletionProfileImports = await postStateRaw(deletionStore, {
   action: "loadDoctorProfileImports",
   email: "rhaydon@gmail.com",
   password: creatorPassword,
@@ -1973,13 +2090,13 @@ const deletionProfileImports = await postState(deletionStore, {
   displayName: "Titus HACKMAN",
   sourceTypes: ["mmc"],
 });
-assert.equal(deletionProfileImports.imports.some((item) => item.repoId === "remove-roster"), false);
+assert.equal(deletionProfileImports.response.status, 410);
 
-const deletionUserImports = await postState(deletionStore, {
+const deletionUserImports = await postStateRaw(deletionStore, {
   action: "loadImports",
   email: "user@example.com",
   password: "user-password",
 });
-assert.equal(deletionUserImports.imports.some((item) => item.repoId === "remove-roster"), false);
+assert.equal(deletionUserImports.response.status, 410);
 
 console.log("Fixture smoke test passed.");

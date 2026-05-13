@@ -48,18 +48,18 @@ Root directory: /
 ```
 
 4. Cloudflare Pages will pick up the `/functions` directory automatically.
-5. Create a Workers KV namespace, for example `roster-converter-state`.
-6. In the Pages project, add a KV namespace binding:
+5. Create or attach the D1 database used by the app.
+6. In the Pages project, add a D1 binding:
 
 ```text
-Variable name: ROSTER_STORE
-KV namespace: roster-converter-state
+Variable name: ROSTER_DB
+D1 database: roster-converter-calendar
 ```
 
 7. Redeploy the Pages project after adding the binding.
 8. Add your custom domain in Cloudflare Pages once the deploy succeeds.
 
-Without `ROSTER_STORE`, the account and shared repository features will not run. Roster repository data, user accounts, and persistence must be server-side for the deployed app.
+Without `ROSTER_DB`, account login, calendar loading, roster-derived events, coworker lookups, and subscription feeds will not run. KV is no longer a runtime store; after the D1-only cutover, creator roster files must be re-uploaded once so parsed rows can be persisted to D1.
 
 ## CLI Deploy
 
@@ -71,12 +71,12 @@ npm run deploy
 
 ## Notes
 
-- The browser auto-detects MMC Excel/PDF uploads, DDH FindMyShift spreadsheet exports, and Casey weekly roster workbooks, then saves source files and parsed metadata to Cloudflare storage.
+- The browser auto-detects MMC Excel/PDF uploads, DDH FindMyShift spreadsheet exports, and Casey weekly roster workbooks, then saves parsed roster metadata and events to D1.
 - If only one consultant is detected, the UI shows the doctor name directly.
 - Preview renders a Monday-start weekly grid before export.
 - Users log in with an email address.
-- `rhaydon@gmail.com` is the Creator account and is bootstrapped on first server-backed login if the KV store is empty.
+- `rhaydon@gmail.com` is the Creator account and is bootstrapped on first D1-backed login.
 - Creator storage is unrestricted.
 - Standard accounts are prompted to keep only the latest 6 months active.
-- Cross-device persistence requires the `ROSTER_STORE` KV binding above.
+- Cross-device persistence requires the `ROSTER_DB` D1 binding above.
 - Accounts with saved roster data can expose a tokenized subscription feed at `/api/feed?token=...`, which Apple Calendar or Google Calendar can subscribe to as a read-only `.ics` URL.

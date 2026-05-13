@@ -26,6 +26,7 @@ import {
 } from "../_lib/d1-calendar.js";
 
 const CREATOR_EMAIL = "rhaydon@gmail.com";
+const OWNER_DOCTOR_KEY = "RICHARD HAYDON";
 const REPOSITORY_INDEX_KEY = "repository:index";
 const REPOSITORY_FILE_PREFIX = "repository:file:";
 const DOCTOR_PROFILE_PREFIX = "doctor-profile:";
@@ -61,7 +62,7 @@ export async function onRequestPost(context) {
     }
     if (action === "login") {
       const account = await loadOrCreateD1Account(context.env.ROSTER_DB, email, password, { mode, realName });
-      const prepared = await prepareAccountResponse(context.env.ROSTER_STORE, account.record, { db: context.env.ROSTER_DB, includeAvailableDoctors: account.record.role !== "creator" && account.record.role !== "owner" });
+      const prepared = await prepareAccountResponse(null, account.record, { db: context.env.ROSTER_DB, includeAvailableDoctors: account.record.role !== "creator" && account.record.role !== "owner" });
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -103,9 +104,9 @@ export async function onRequestPost(context) {
         mode: "create",
         realName: targetRealName,
       });
-      const createdRecord = await autoClaimMatchedRosterNames(context.env.ROSTER_STORE, created.record, context.env.ROSTER_DB);
+      const createdRecord = await autoClaimMatchedRosterNames(null, created.record, context.env.ROSTER_DB);
       await upsertAccountMirror(context.env.ROSTER_DB, createdRecord);
-      const prepared = await prepareAccountResponse(context.env.ROSTER_STORE, createdRecord, { db: context.env.ROSTER_DB });
+      const prepared = await prepareAccountResponse(null, createdRecord, { db: context.env.ROSTER_DB });
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -130,7 +131,7 @@ export async function onRequestPost(context) {
       }
       const target = await loadAccountMirror(context.env.ROSTER_DB, targetEmail);
       if (!target) return Response.json({ error: "Account not found." }, { status: 404 });
-      const prepared = await prepareAccountResponse(context.env.ROSTER_STORE, target, { db: context.env.ROSTER_DB, includeAvailableDoctors: true });
+      const prepared = await prepareAccountResponse(null, target, { db: context.env.ROSTER_DB, includeAvailableDoctors: true });
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -155,7 +156,7 @@ export async function onRequestPost(context) {
       const claimEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
       const targetRecord = claimEmail === email ? account.record : await loadAccountMirror(context.env.ROSTER_DB, claimEmail);
       if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
-      const index = await loadRepositoryIndex(context.env.ROSTER_STORE, context.env.ROSTER_DB);
+      const index = await loadRepositoryIndex(null, context.env.ROSTER_DB);
       const claim = findRepositoryDoctor(index, body?.claim);
       if (!claim) {
         return Response.json({ error: "Roster name was not found in the repository." }, { status: 400 });
@@ -163,7 +164,7 @@ export async function onRequestPost(context) {
       const claims = mergeClaims(targetRecord.claims, [{ ...claim, matchedAt: new Date().toISOString() }]);
       const state = {
         ...sanitizeState(targetRecord.state),
-        imports: (await repositoryImportsForClaims(context.env.ROSTER_STORE, index, claims, context.env.ROSTER_DB)).map(repositoryImportRef),
+        imports: repositoryImportRefsForClaims(index, claims),
       };
       const updated = {
         ...targetRecord,
@@ -172,9 +173,9 @@ export async function onRequestPost(context) {
         state,
         updatedAt: new Date().toISOString(),
       };
-      if (context.env.ROSTER_STORE) await context.env.ROSTER_STORE.put(storageKey(claimEmail), JSON.stringify(updated));
+      if (null) await null.put(storageKey(claimEmail), JSON.stringify(updated));
       await upsertAccountMirror(context.env.ROSTER_DB, updated);
-      const prepared = await prepareAccountResponse(context.env.ROSTER_STORE, updated, { db: context.env.ROSTER_DB });
+      const prepared = await prepareAccountResponse(null, updated, { db: context.env.ROSTER_DB });
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -198,8 +199,8 @@ export async function onRequestPost(context) {
       return Response.json({
         ok: true,
         users: await listD1Users(context.env.ROSTER_DB),
-        availableDoctors: await repositoryDoctorCandidates(context.env.ROSTER_STORE, await loadRepositoryIndex(context.env.ROSTER_STORE, context.env.ROSTER_DB), context.env.ROSTER_DB),
-        issueConfig: await buildIssueConfig(context.env.ROSTER_STORE, email, context.env.ROSTER_DB),
+        availableDoctors: await repositoryDoctorCandidates(null, await loadRepositoryIndex(null, context.env.ROSTER_DB), context.env.ROSTER_DB),
+        issueConfig: await buildIssueConfig(null, email, context.env.ROSTER_DB),
       });
     }
 
@@ -210,28 +211,15 @@ export async function onRequestPost(context) {
       if (!hasCalendarDb(context.env)) {
         return Response.json({ ok: false, unavailable: true, total: 0, populated: 0, remaining: 0 });
       }
-      const status = await calendarStoreStatus(context.env.ROSTER_STORE, context.env.ROSTER_DB);
+      const status = await calendarStoreStatus(null, context.env.ROSTER_DB);
       const accounts = await accountMirrorStatus(context.env.ROSTER_DB).catch(() => ({ unavailable: true, profiles: 0, claims: 0, states: 0 }));
-      accounts.kvProfiles = context.env.ROSTER_STORE ? await countKvAccountRecords(context.env.ROSTER_STORE) : 0;
-      accounts.kvDoctorProfiles = context.env.ROSTER_STORE ? await countKvDoctorProfileRecords(context.env.ROSTER_STORE) : 0;
+      accounts.kvProfiles = null ? await countKvAccountRecords(null) : 0;
+      accounts.kvDoctorProfiles = null ? await countKvDoctorProfileRecords(null) : 0;
       return Response.json({ ok: true, ...status, accounts });
     }
 
     if (action === "syncAccountMirror") {
-      if (account.role !== "creator" && account.role !== "owner") {
-        return Response.json({ error: "Creator access is required." }, { status: 403 });
-      }
-      if (!hasCalendarDb(context.env)) {
-        return Response.json({ ok: false, unavailable: true });
-      }
-      const synced = await syncAccountMirrorFromKv(context.env.ROSTER_STORE, context.env.ROSTER_DB, {
-        email: String(body?.targetEmail || "").trim(),
-        limit: Number(body?.limit || 25) || 25,
-      });
-      const status = await accountMirrorStatus(context.env.ROSTER_DB);
-      status.kvProfiles = await countKvAccountRecords(context.env.ROSTER_STORE);
-      status.kvDoctorProfiles = await countKvDoctorProfileRecords(context.env.ROSTER_STORE);
-      return Response.json({ ok: true, synced, accounts: status });
+      return Response.json({ error: "KV account mirror sync has been removed. D1 is the runtime store." }, { status: 410 });
     }
 
     if (action === "accountMirrorStatus") {
@@ -242,24 +230,13 @@ export async function onRequestPost(context) {
         return Response.json({ ok: false, unavailable: true });
       }
       const status = await accountMirrorStatus(context.env.ROSTER_DB);
-      status.kvProfiles = await countKvAccountRecords(context.env.ROSTER_STORE);
-      status.kvDoctorProfiles = await countKvDoctorProfileRecords(context.env.ROSTER_STORE);
+      status.kvProfiles = await countKvAccountRecords(null);
+      status.kvDoctorProfiles = await countKvDoctorProfileRecords(null);
       return Response.json({ ok: true, ...status });
     }
 
     if (action === "rebuildCalendarStore") {
-      if (account.role !== "creator" && account.role !== "owner") {
-        return Response.json({ error: "Creator access is required." }, { status: 403 });
-      }
-      if (!hasCalendarDb(context.env)) {
-        return Response.json({ ok: false, unavailable: true, rebuilt: 0, total: 0, populated: 0, remaining: 0 });
-      }
-      const rebuilt = await rebuildCalendarStoreFromRepository(context.env.ROSTER_STORE, context.env.ROSTER_DB, {
-        fileId: String(body?.fileId || "").trim(),
-        limit: Number(body?.limit || 1) || 1,
-      });
-      const status = await calendarStoreStatus(context.env.ROSTER_STORE, context.env.ROSTER_DB);
-      return Response.json({ ok: true, rebuilt, ...status });
+      return Response.json({ error: "KV roster backfill has been removed. Re-upload roster files to populate D1." }, { status: 410 });
     }
 
     if (action === "saveDerivedCalendarFile") {
@@ -275,7 +252,7 @@ export async function onRequestPost(context) {
         body?.doctors || [],
         body?.eventsByDoctor || {},
       );
-      const status = await calendarStoreStatus(context.env.ROSTER_STORE, context.env.ROSTER_DB);
+      const status = await calendarStoreStatus(null, context.env.ROSTER_DB);
       return Response.json({ ok: true, result, ...status });
     }
 
@@ -291,7 +268,7 @@ export async function onRequestPost(context) {
         return Response.json({ error: "Roster file is required." }, { status: 400 });
       }
       await deleteDerivedRosterFile(context.env.ROSTER_DB, fileId);
-      const status = await calendarStoreStatus(context.env.ROSTER_STORE, context.env.ROSTER_DB);
+      const status = await calendarStoreStatus(null, context.env.ROSTER_DB);
       return Response.json({ ok: true, reset: fileId, ...status });
     }
 
@@ -309,11 +286,11 @@ export async function onRequestPost(context) {
         ...passwordRecord,
         updatedAt: new Date().toISOString(),
       };
-      if (context.env.ROSTER_STORE) await context.env.ROSTER_STORE.put(storageKey(saveEmail), JSON.stringify(updated));
+      if (null) await null.put(storageKey(saveEmail), JSON.stringify(updated));
       await upsertAccountMirror(context.env.ROSTER_DB, updated);
       const owner = accountSnapshotOwner(saveEmail, updated.role || roleForEmail(saveEmail));
-      if (context.env.ROSTER_STORE) await context.env.ROSTER_STORE.delete(snapshotKey(owner.ownerType, owner.ownerId));
-      const prepared = await prepareAccountResponse(context.env.ROSTER_STORE, updated, { db: context.env.ROSTER_DB, includeAvailableDoctors: false });
+      if (null) await null.delete(snapshotKey(owner.ownerType, owner.ownerId));
+      const prepared = await prepareAccountResponse(null, updated, { db: context.env.ROSTER_DB, includeAvailableDoctors: false });
       return Response.json({
         ok: true,
         realName: prepared.realName,
@@ -333,7 +310,7 @@ export async function onRequestPost(context) {
       }
       const targetRecord = await loadAccountMirror(context.env.ROSTER_DB, targetEmail);
       if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
-      const index = await loadRepositoryIndex(context.env.ROSTER_STORE, context.env.ROSTER_DB);
+      const index = await loadRepositoryIndex(null, context.env.ROSTER_DB);
       const claims = sanitizeClaims((body?.claims || [])
         .map((claim) => findRepositoryDoctor(index, claim))
         .filter(Boolean)
@@ -350,10 +327,10 @@ export async function onRequestPost(context) {
         state,
         updatedAt: new Date().toISOString(),
       };
-      if (context.env.ROSTER_STORE) await context.env.ROSTER_STORE.put(storageKey(targetEmail), JSON.stringify(updated));
+      if (null) await null.put(storageKey(targetEmail), JSON.stringify(updated));
       await upsertAccountMirror(context.env.ROSTER_DB, updated);
       const owner = accountSnapshotOwner(targetEmail, updated.role || roleForEmail(targetEmail));
-      if (context.env.ROSTER_STORE) await context.env.ROSTER_STORE.delete(snapshotKey(owner.ownerType, owner.ownerId));
+      if (null) await null.delete(snapshotKey(owner.ownerType, owner.ownerId));
       return Response.json({
         ok: true,
         user: userSummaryFromRecord(targetEmail, updated),
@@ -370,7 +347,7 @@ export async function onRequestPost(context) {
         key: normalizeRosterName(body?.claim?.key || ""),
       };
       const claims = sanitizeClaims(targetRecord.claims).filter((claim) => !(claim.sourceType === rawClaim.sourceType && claim.key === rawClaim.key));
-      const index = await loadRepositoryIndex(context.env.ROSTER_STORE, context.env.ROSTER_DB);
+      const index = await loadRepositoryIndex(null, context.env.ROSTER_DB);
       const state = {
         ...sanitizeState(targetRecord.state),
         imports: repositoryImportRefsForClaims(index, claims),
@@ -382,16 +359,17 @@ export async function onRequestPost(context) {
         state,
         updatedAt: new Date().toISOString(),
       };
-      if (context.env.ROSTER_STORE) await context.env.ROSTER_STORE.put(storageKey(claimEmail), JSON.stringify(updated));
+      if (null) await null.put(storageKey(claimEmail), JSON.stringify(updated));
       await upsertAccountMirror(context.env.ROSTER_DB, updated);
       const owner = accountSnapshotOwner(claimEmail, updated.role || roleForEmail(claimEmail));
-      if (context.env.ROSTER_STORE) await context.env.ROSTER_STORE.delete(snapshotKey(owner.ownerType, owner.ownerId));
+      if (null) await null.delete(snapshotKey(owner.ownerType, owner.ownerId));
       return Response.json({ ok: true, claims, user: userSummaryFromRecord(claimEmail, updated) });
     }
 
     if (action === "reportRosterIdentityIssue") {
       const reportEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
-      const targetRecord = reportEmail === email ? account.record : await loadAccountRecord(context.env.ROSTER_STORE, reportEmail);
+      const targetRecord = reportEmail === email ? account.record : await loadAccountMirror(context.env.ROSTER_DB, reportEmail);
+      if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
       const issue = sanitizeAdminIssues([{
         id: `identity:${Date.now()}`,
         message: String(body?.message || "Roster name match needs review.").trim(),
@@ -408,7 +386,7 @@ export async function onRequestPost(context) {
         adminIssues: mergeAdminIssues(targetRecord.adminIssues, [issue]),
         updatedAt: new Date().toISOString(),
       };
-      await context.env.ROSTER_STORE.put(storageKey(reportEmail), JSON.stringify(updated));
+      await upsertAccountMirror(context.env.ROSTER_DB, updated);
       return Response.json({ ok: true, user: userSummaryFromRecord(reportEmail, updated) });
     }
 
@@ -416,7 +394,7 @@ export async function onRequestPost(context) {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
-      const resolution = await resolveDoctorAccount(context.env.ROSTER_STORE, body?.doctor, context.env.ROSTER_DB);
+      const resolution = await resolveDoctorAccount(null, body?.doctor, context.env.ROSTER_DB);
       return Response.json({
         ok: true,
         ...resolution,
@@ -441,7 +419,7 @@ export async function onRequestPost(context) {
         insightsEnabled: body?.insightsEnabled === true,
         updatedAt: new Date().toISOString(),
       };
-      if (context.env.ROSTER_STORE) await context.env.ROSTER_STORE.put(storageKey(targetEmail), JSON.stringify(updated));
+      if (null) await null.put(storageKey(targetEmail), JSON.stringify(updated));
       await upsertAccountMirror(context.env.ROSTER_DB, updated);
       return Response.json({
         ok: true,
@@ -473,10 +451,10 @@ export async function onRequestPost(context) {
       if (!issue) {
         return Response.json({ error: "Structured issue details are required." }, { status: 400 });
       }
-      const dismissed = new Set(context.env.ROSTER_STORE ? await loadDismissedIssueFingerprints(context.env.ROSTER_STORE, reportEmail) : []);
-      const ignored = new Set(context.env.ROSTER_STORE ? await loadIgnoredIssueFingerprints(context.env.ROSTER_STORE) : []);
-      if (dismissed.has(issue.fingerprint) || ignored.has(issue.fingerprint) || await isIssueResolvedByParserRules(context.env.ROSTER_STORE, reportEmail, issue)) {
-        if (context.env.ROSTER_STORE) await clearIssuesResolvedByIssue(context.env.ROSTER_STORE, reportEmail, issue);
+      const dismissed = new Set(null ? await loadDismissedIssueFingerprints(null, reportEmail) : []);
+      const ignored = new Set(null ? await loadIgnoredIssueFingerprints(null) : []);
+      if (dismissed.has(issue.fingerprint) || ignored.has(issue.fingerprint) || await isIssueResolvedByParserRules(null, reportEmail, issue, context.env.ROSTER_DB)) {
+        if (null) await clearIssuesResolvedByIssue(null, reportEmail, issue);
         return Response.json({ ok: true, ignored: true });
       }
       const nextIssues = mergeAdminIssues(targetRecord.adminIssues, [{
@@ -487,7 +465,7 @@ export async function onRequestPost(context) {
         adminIssues: nextIssues,
         updatedAt: new Date().toISOString(),
       };
-      if (context.env.ROSTER_STORE) await context.env.ROSTER_STORE.put(storageKey(reportEmail), JSON.stringify(updated));
+      if (null) await null.put(storageKey(reportEmail), JSON.stringify(updated));
       await upsertAccountMirror(context.env.ROSTER_DB, updated);
       return Response.json({ ok: true, issuesCount: nextIssues.length });
     }
@@ -500,22 +478,21 @@ export async function onRequestPost(context) {
       if (!clearEmail) {
         return Response.json({ error: "Target account is required." }, { status: 400 });
       }
-      const targetRecord = await loadAccountRecord(context.env.ROSTER_STORE, clearEmail);
+      const targetRecord = await loadAccountMirror(context.env.ROSTER_DB, clearEmail);
+      if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
       const errorId = String(body?.errorId || "").trim();
       const existingIssues = sanitizeAdminIssues(targetRecord.adminIssues);
       const fingerprintsToDismiss = errorId
         ? existingIssues.filter((issue) => issue.id === errorId || issue.fingerprint === errorId).map((issue) => issue.fingerprint)
         : existingIssues.map((issue) => issue.fingerprint);
-      const nextDismissed = [...new Set([...(await loadDismissedIssueFingerprints(context.env.ROSTER_STORE, clearEmail)), ...fingerprintsToDismiss])];
-      await saveDismissedIssueFingerprints(context.env.ROSTER_STORE, clearEmail, nextDismissed);
       const nextIssues = errorId
         ? existingIssues.filter((issue) => issue.id !== errorId && issue.fingerprint !== errorId)
         : [];
-      await context.env.ROSTER_STORE.put(storageKey(clearEmail), JSON.stringify({
+      await upsertAccountMirror(context.env.ROSTER_DB, {
         ...targetRecord,
         adminIssues: nextIssues,
         updatedAt: new Date().toISOString(),
-      }));
+      });
       return Response.json({ ok: true });
     }
 
@@ -527,10 +504,7 @@ export async function onRequestPost(context) {
       if (!ignoreFingerprint) {
         return Response.json({ error: "Issue fingerprint is required." }, { status: 400 });
       }
-      const ignored = new Set(await loadIgnoredIssueFingerprints(context.env.ROSTER_STORE));
-      ignored.add(ignoreFingerprint);
-      await saveIgnoredIssueFingerprints(context.env.ROSTER_STORE, [...ignored]);
-      await clearIssueFromAllUsers(context.env.ROSTER_STORE, ignoreFingerprint);
+      await clearIssueFromAllUsers(context.env.ROSTER_DB, ignoreFingerprint);
       return Response.json({ ok: true, fingerprint: ignoreFingerprint });
     }
 
@@ -544,21 +518,21 @@ export async function onRequestPost(context) {
       }
       const previousCode = String(body?.previousCode || "").trim().toUpperCase();
       const previousSeniority = sanitizeRuleSeniority(body?.previousSeniority || rule.seniority);
-      let parserExtensions = await loadParserExtensionRules(context.env.ROSTER_STORE);
+      let parserExtensions = await loadD1ParserExtensionRules(context.env.ROSTER_DB);
       if (previousCode && (previousCode !== rule.code || previousSeniority !== rule.seniority)) {
-        const sourceKey = rule.source.toLowerCase();
-        parserExtensions = {
-          ...parserExtensions,
-          [sourceKey]: (parserExtensions[sourceKey] || []).filter((item) => item.code !== previousCode || item.seniority !== previousSeniority),
-        };
+        parserExtensions = removeParserExtensionRuleByKey(parserExtensions, {
+          source: rule.source,
+          seniority: previousSeniority,
+          code: previousCode,
+        });
       }
       parserExtensions = upsertParserExtensionRule(parserExtensions, rule);
-      await saveParserExtensionRules(context.env.ROSTER_STORE, parserExtensions);
+      await saveD1ParserExtensionRule(context.env.ROSTER_DB, rule);
       const ignoreFingerprint = sanitizeIssueFingerprint(body?.fingerprint || issueFingerprint(body?.source, body?.rawValue));
       if (ignoreFingerprint) {
-        await clearIssueFromAllUsers(context.env.ROSTER_STORE, ignoreFingerprint);
+        await clearIssueFromAllUsers(context.env.ROSTER_DB, ignoreFingerprint);
       }
-      await clearIssuesResolvedByParserRule(context.env.ROSTER_STORE, rule);
+      await clearIssuesResolvedByParserRule(context.env.ROSTER_DB, rule);
       return Response.json({ ok: true, parserExtensions });
     }
 
@@ -570,14 +544,15 @@ export async function onRequestPost(context) {
       if (!target) {
         return Response.json({ error: "A valid shift-code rule is required." }, { status: 400 });
       }
-      const parserExtensions = removeParserExtensionRuleByKey(await loadParserExtensionRules(context.env.ROSTER_STORE), target);
-      await saveParserExtensionRules(context.env.ROSTER_STORE, parserExtensions);
+      const parserExtensions = removeParserExtensionRuleByKey(await loadD1ParserExtensionRules(context.env.ROSTER_DB), target);
+      await deleteD1ParserExtensionRule(context.env.ROSTER_DB, target);
       return Response.json({ ok: true, parserExtensions });
     }
 
     if (action === "saveLocalParserExtensionRule") {
       const saveEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
-      const targetRecord = saveEmail === email ? account.record : await loadAccountRecord(context.env.ROSTER_STORE, saveEmail);
+      const targetRecord = saveEmail === email ? account.record : await loadAccountMirror(context.env.ROSTER_DB, saveEmail);
+      if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
       const rule = sanitizeParserExtensionRule(body?.rule);
       if (!rule) {
         return Response.json({ error: "A valid shift-code rule is required." }, { status: 400 });
@@ -593,18 +568,15 @@ export async function onRequestPost(context) {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       });
-      let suggestions = await loadParserRuleSuggestions(context.env.ROSTER_STORE);
-      suggestions = upsertParserRuleSuggestion(suggestions, suggestion);
-      await saveParserRuleSuggestions(context.env.ROSTER_STORE, suggestions);
-      await context.env.ROSTER_STORE.put(storageKey(saveEmail), JSON.stringify({
+      await upsertAccountMirror(context.env.ROSTER_DB, {
         ...targetRecord,
         localParserExtensions,
         updatedAt: new Date().toISOString(),
-      }));
-      await clearIssuesResolvedByParserRuleForUser(context.env.ROSTER_STORE, saveEmail, rule);
+      });
+      await clearIssuesResolvedByParserRuleForUser(context.env.ROSTER_DB, saveEmail, rule);
       return Response.json({
         ok: true,
-        issueConfig: await buildIssueConfig(context.env.ROSTER_STORE, saveEmail),
+        issueConfig: await buildIssueConfig(null, saveEmail, context.env.ROSTER_DB),
       });
     }
 
@@ -614,36 +586,13 @@ export async function onRequestPost(context) {
       }
       const suggestionId = String(body?.suggestionId || "").trim();
       const decision = String(body?.decision || "").trim();
-      let suggestions = await loadParserRuleSuggestions(context.env.ROSTER_STORE);
-      const suggestion = suggestions.find((item) => item.id === suggestionId);
-      if (!suggestion) {
-        return Response.json({ error: "Suggestion was not found." }, { status: 404 });
-      }
-      const rule = sanitizeParserExtensionRule(body?.rule || suggestion.rule);
-      if ((decision === "approveGlobal" || decision === "approveUser") && !rule) {
-        return Response.json({ error: "A valid shift-code rule is required." }, { status: 400 });
-      }
-      if (decision === "approveGlobal") {
-        const parserExtensions = upsertParserExtensionRule(await loadParserExtensionRules(context.env.ROSTER_STORE), rule);
-        await saveParserExtensionRules(context.env.ROSTER_STORE, parserExtensions);
-        await clearIssuesResolvedByParserRule(context.env.ROSTER_STORE, rule);
-        await removeLocalParserRuleFromAllUsers(context.env.ROSTER_STORE, rule);
-        suggestions = suggestions.filter((item) => item.id !== suggestionId);
-      } else if (decision === "approveUser") {
-        await upsertLocalParserRuleForUser(context.env.ROSTER_STORE, suggestion.email, rule);
-        await clearIssuesResolvedByParserRuleForUser(context.env.ROSTER_STORE, suggestion.email, rule);
-        suggestions = suggestions.filter((item) => item.id !== suggestionId);
-      } else if (decision === "reject") {
-        await removeLocalParserRuleForUser(context.env.ROSTER_STORE, suggestion.email, suggestion.rule);
-        suggestions = suggestions.filter((item) => item.id !== suggestionId);
-      } else {
+      if (!["approveGlobal", "approveUser", "reject"].includes(decision)) {
         return Response.json({ error: "Unsupported suggestion decision." }, { status: 400 });
       }
-      await saveParserRuleSuggestions(context.env.ROSTER_STORE, suggestions);
       return Response.json({
         ok: true,
-        parserExtensions: await loadParserExtensionRules(context.env.ROSTER_STORE),
-        suggestions,
+        parserExtensions: {},
+        suggestions: [],
       });
     }
 
@@ -655,17 +604,9 @@ export async function onRequestPost(context) {
       if (deleteEmail !== email && account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
-      const record = await loadAccountRecord(context.env.ROSTER_STORE, deleteEmail).catch(() => null);
-      if (record?.subscriptionToken) {
-        await context.env.ROSTER_STORE.delete(subscriptionTokenKey(record.subscriptionToken));
-      }
-      if (record?.email) {
-        const owner = accountSnapshotOwner(record.email, record.role || roleForEmail(record.email));
-        await context.env.ROSTER_STORE.delete(snapshotKey(owner.ownerType, owner.ownerId));
-      }
-      await context.env.ROSTER_STORE.delete(storageKey(deleteEmail));
+      const record = await loadAccountMirror(context.env.ROSTER_DB, deleteEmail).catch(() => null);
       await deleteAccountMirror(context.env.ROSTER_DB, deleteEmail).catch(() => null);
-      await clearDeletedAccountClaimMetadata(context.env.ROSTER_STORE, deleteEmail, record);
+      await clearDeletedAccountClaimMetadata(context.env.ROSTER_DB, deleteEmail, record);
       return Response.json({ ok: true, deletedEmail: deleteEmail });
     }
 
@@ -675,17 +616,18 @@ export async function onRequestPost(context) {
       if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
       const targetRole = targetRecord.role || roleForEmail(saveEmail);
       const state = sanitizeState(body?.state);
-      if (!context.env.ROSTER_STORE && state.imports.some((item) => item?.dataUrl)) {
+      if (!null && state.imports.some((item) => item?.dataUrl)) {
         return Response.json({ error: "Raw roster file storage is not configured. Upload persistence requires object storage." }, { status: 503 });
       }
-      const repository = context.env.ROSTER_STORE
-        ? await upsertStateImports(context.env.ROSTER_STORE, state.imports, saveEmail, context.env.ROSTER_DB)
+      const repository = null
+        ? await upsertStateImports(null, state.imports, saveEmail, context.env.ROSTER_DB)
         : { index: await loadRepositoryIndex(null, context.env.ROSTER_DB), refs: state.imports.map(repositoryImportRef), changed: false };
       state.imports = repository.refs;
       const claims = sanitizeClaims(targetRecord.claims);
       const removedImportIds = sanitizeRepositoryFileIds(body?.removedImportIds);
       if ((targetRole === "creator" || targetRole === "owner") && saveEmail === email && removedImportIds.length) {
-        repository.index = await removeRepositoryFiles(context.env.ROSTER_STORE, repository.index, removedImportIds, context.env.ROSTER_DB);
+        await Promise.all(removedImportIds.map((id) => deleteDerivedRosterFile(context.env.ROSTER_DB, id).catch(() => null)));
+        repository.index = await loadRepositoryIndex(null, context.env.ROSTER_DB);
         state.imports = state.imports.filter((item) => {
           const repoId = item.repoId || item.repositoryId || item.id;
           return !removedImportIds.includes(repoId);
@@ -700,10 +642,10 @@ export async function onRequestPost(context) {
         state,
         updatedAt: new Date().toISOString(),
       };
-      if (context.env.ROSTER_STORE) await context.env.ROSTER_STORE.put(storageKey(saveEmail), JSON.stringify(updatedRecord));
+      if (null) await null.put(storageKey(saveEmail), JSON.stringify(updatedRecord));
       await upsertAccountMirror(context.env.ROSTER_DB, updatedRecord);
-      if (context.env.ROSTER_STORE && (!hasCalendarDb(context.env) || targetRole === "creator" || targetRole === "owner")) {
-        await storeSnapshotForAccount(context.env.ROSTER_STORE, {
+      if (null && (!hasCalendarDb(context.env) || targetRole === "creator" || targetRole === "owner")) {
+        await storeSnapshotForAccount(null, {
           email: saveEmail,
           role: targetRole,
           claims,
@@ -723,14 +665,14 @@ export async function onRequestPost(context) {
       if (!profileId) {
         return Response.json({ error: "Doctor profile is required." }, { status: 400 });
       }
-      const profile = await loadDoctorProfileState(context.env.ROSTER_STORE, context.env.ROSTER_DB, profileId) || sanitizeDoctorProfile({
+      const profile = await loadDoctorProfileState(null, context.env.ROSTER_DB, profileId) || sanitizeDoctorProfile({
         profileId,
         doctorKey: body?.doctorKey,
         displayName: body?.displayName,
         sourceTypes: body?.sourceTypes,
         state: sanitizeState(null),
       });
-      const snapshotInfo = await loadDoctorProfileSnapshotInfo(context.env.ROSTER_STORE, profile, context.env.ROSTER_DB);
+      const snapshotInfo = await loadDoctorProfileSnapshotInfo(null, profile, context.env.ROSTER_DB);
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -739,7 +681,7 @@ export async function onRequestPost(context) {
         snapshotAvailable: snapshotInfo.snapshotAvailable,
         snapshotStale: snapshotInfo.snapshotStale,
         snapshotBuiltAt: snapshotInfo.snapshotBuiltAt,
-        issueConfig: await buildIssueConfig(context.env.ROSTER_STORE, ""),
+        issueConfig: await buildIssueConfig(null, ""),
       });
     }
 
@@ -756,12 +698,10 @@ export async function onRequestPost(context) {
         return Response.json({ error: "Doctor profile details are incomplete." }, { status: 400 });
       }
       if (!hasDoctorProfileState(state)) {
-        await context.env.ROSTER_STORE.delete(doctorProfileKey(profileId));
-        await context.env.ROSTER_STORE.delete(snapshotKey("doctor-profile", profileId));
         await deleteDoctorProfileMirror(context.env.ROSTER_DB, profileId).catch(() => null);
         return Response.json({ ok: true, deleted: true });
       }
-      const existing = await loadDoctorProfileState(context.env.ROSTER_STORE, context.env.ROSTER_DB, profileId);
+      const existing = await loadDoctorProfileState(null, context.env.ROSTER_DB, profileId);
       const next = {
         profileId,
         doctorKey,
@@ -771,46 +711,20 @@ export async function onRequestPost(context) {
         createdAt: existing?.createdAt || new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
-      await context.env.ROSTER_STORE.put(doctorProfileKey(profileId), JSON.stringify(next));
       await upsertDoctorProfileMirror(context.env.ROSTER_DB, next).catch(() => null);
-      await storeSnapshotForDoctorProfile(context.env.ROSTER_STORE, next, body?.snapshot);
       return Response.json({ ok: true, profile: next });
     }
 
     if (action === "loadImports") {
-      const loadEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
-      const targetRecord = loadEmail === email ? account.record : await loadAccountMirror(context.env.ROSTER_DB, loadEmail);
-      if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
-      const imports = await resolveAccountImports(context.env.ROSTER_STORE, targetRecord, context.env.ROSTER_DB);
-      return Response.json({ ok: true, imports });
+      return Response.json({ error: "Raw roster import loading has been removed. Calendar data is served from D1; re-upload roster files if D1 has no rows." }, { status: 410 });
     }
 
     if (action === "loadDoctorProfileImports") {
-      if (account.role !== "creator" && account.role !== "owner") {
-        return Response.json({ error: "Creator access is required." }, { status: 403 });
-      }
-      const profileId = String(body?.profileId || "").trim();
-      const profile = await loadDoctorProfileState(context.env.ROSTER_STORE, context.env.ROSTER_DB, profileId) || sanitizeDoctorProfile({
-        profileId,
-        doctorKey: body?.doctorKey,
-        displayName: body?.displayName,
-        sourceTypes: body?.sourceTypes,
-        state: sanitizeState(null),
-      });
-      if (!profile) {
-        return Response.json({ error: "Doctor profile was not found." }, { status: 404 });
-      }
-      const imports = await repositoryImportsForDoctorProfile(context.env.ROSTER_STORE, profile, context.env.ROSTER_DB);
-      return Response.json({ ok: true, imports });
+      return Response.json({ error: "Raw doctor profile import loading has been removed. Doctor profile calendars are served from D1." }, { status: 410 });
     }
 
     if (action === "loadImportRefs") {
-      if (account.role !== "creator" && account.role !== "owner") {
-        return Response.json({ error: "Creator access is required." }, { status: 403 });
-      }
-      const refs = sanitizeSnapshotFileRefs(body?.refs || []);
-      const imports = await resolveStateImports(context.env.ROSTER_STORE, refs);
-      return Response.json({ ok: true, imports });
+      return Response.json({ error: "Raw roster import refs have been removed. Calendar data is served from D1." }, { status: 410 });
     }
 
     if (action === "queryRosterInsights") {
@@ -837,10 +751,7 @@ export async function onRequestPost(context) {
     }
 
     if (action === "loadInsightImports") {
-      const index = await loadRepositoryIndex(context.env.ROSTER_STORE, context.env.ROSTER_DB);
-      const refs = (index.files || []).filter((file) => file.active !== false).map((file) => repositoryImportRef(file));
-      const imports = await resolveStateImports(context.env.ROSTER_STORE, refs);
-      return Response.json({ ok: true, imports });
+      return Response.json({ error: "Insight import hydration has been removed. Insights query D1 directly." }, { status: 410 });
     }
 
     return Response.json({ error: "Unsupported account action." }, { status: 400 });
@@ -870,6 +781,7 @@ async function loadDoctorProfileRecord(store, profileId) {
 async function loadDoctorProfileState(store, db, profileId) {
   const d1Profile = sanitizeDoctorProfile(await loadDoctorProfileMirror(db, profileId).catch(() => null));
   if (d1Profile) return d1Profile;
+  if (!store?.get) return null;
   const kvProfile = await loadDoctorProfileRecord(store, profileId);
   if (kvProfile) await upsertDoctorProfileMirror(db, kvProfile).catch(() => null);
   return kvProfile;
@@ -1098,7 +1010,8 @@ async function autoClaimMatchedRosterNames(store, record, db = null) {
     state,
     updatedAt: new Date().toISOString(),
   };
-  await store.put(storageKey(record.email), JSON.stringify(updated));
+  if (store?.put) await store.put(storageKey(record.email), JSON.stringify(updated));
+  await upsertAccountMirror(db, updated).catch(() => null);
   return updated;
 }
 
@@ -1231,6 +1144,9 @@ function insightsEnabledForRecord(record) {
 
 export async function prepareAccountResponse(store, rawRecord, options = {}) {
   let record = await ensureAccountSubscriptionToken(store, rawRecord);
+  if (record?.subscriptionToken && record.subscriptionToken !== rawRecord?.subscriptionToken) {
+    await upsertAccountMirror(options.db, record, { preserveExistingState: true }).catch(() => null);
+  }
   const role = record.role || roleForEmail(record.email);
   const index = await loadRepositoryIndex(store, options.db);
   let claims = sanitizeClaims(record.claims);
@@ -1344,17 +1260,23 @@ async function buildDerivedAccountSnapshot(db, context) {
   const state = sanitizeState(context.state);
   let doctorKeys = [];
   let doctorOptions = [];
+  let selectedKey = "";
   if (role === "creator" || role === "owner") {
-    const selectedKey = normalizeRosterName(state.session?.doctorKey || "");
-    if (!selectedKey) return null;
     const d1Doctors = await queryRosterDoctors(db).catch(() => []);
-    const doctor = d1Doctors.find((item) => item.key === selectedKey) || findRepositoryDoctorByKey(context.index, selectedKey);
+    const requestedKey = normalizeRosterName(state.session?.doctorKey || "");
+    selectedKey = requestedKey || OWNER_DOCTOR_KEY;
+    let doctor = d1Doctors.find((item) => item.key === selectedKey) || findRepositoryDoctorByKey(context.index, selectedKey);
+    if (requestedKey && selectedKey !== OWNER_DOCTOR_KEY && !doctor) {
+      selectedKey = OWNER_DOCTOR_KEY;
+      doctor = d1Doctors.find((item) => item.key === selectedKey) || findRepositoryDoctorByKey(context.index, selectedKey);
+    }
     if (!doctor) return null;
     doctorKeys = [doctor.key];
     doctorOptions = buildCreatorDoctorOptions(d1Doctors.length ? d1Doctors : repositoryDoctorCandidatesFromIndex(context.index));
   } else {
     const claims = sanitizeClaims(context.claims);
     if (!claims.length) return null;
+    selectedKey = claims[0].key;
     doctorKeys = claims.map((claim) => claim.key);
     doctorOptions = buildCreatorDoctorOptions(claims.map((claim) => ({
       key: claim.key,
@@ -1363,13 +1285,17 @@ async function buildDerivedAccountSnapshot(db, context) {
     })));
   }
   const session = state.session && typeof state.session === "object" ? state.session : {};
+  const normalizedSession = {
+    ...session,
+    doctorKey: selectedKey,
+  };
   const settings = {
     ...defaultSettings(),
-    ...(session.settings || {}),
+    ...(normalizedSession.settings || {}),
   };
   const events = [
-    ...applyEventOverrides(await queryDoctorEvents(db, doctorKeys), session.overrides || {}),
-    ...customEventsToEvents(sanitizeSnapshotCustomEvents(session.customEvents, context.record.email), settings),
+    ...applyEventOverrides(await queryDoctorEvents(db, doctorKeys), normalizedSession.overrides || {}),
+    ...customEventsToEvents(sanitizeSnapshotCustomEvents(normalizedSession.customEvents, context.record.email), settings),
   ];
   if (!events.length) return null;
   const owner = accountSnapshotOwner(context.record.email, role);
@@ -1380,7 +1306,7 @@ async function buildDerivedAccountSnapshot(db, context) {
     builtAt: new Date().toISOString(),
     buildStamp: "d1-derived",
     preview: buildPreviewFromDerivedEvents(events),
-    session,
+    session: normalizedSession,
     doctorOptions,
     detectedSources: {},
     fileRefs: sanitizeSnapshotFileRefs(state.imports),
@@ -1445,7 +1371,7 @@ async function hydrateRepositoryFromExistingAccounts(store) {
 }
 
 async function buildIssueConfig(store, email = "", db = null) {
-  const globalParserExtensions = store?.get ? await loadParserExtensionRules(store) : {};
+  const globalParserExtensions = db?.prepare ? await loadD1ParserExtensionRules(db) : (store?.get ? await loadParserExtensionRules(store) : {});
   const record = email
     ? (await loadAccountMirror(db, email).catch(() => null)) || (store?.get ? await loadAccountRecord(store, email).catch(() => null) : null)
     : null;
@@ -1461,55 +1387,63 @@ async function buildIssueConfig(store, email = "", db = null) {
   };
 }
 
-async function clearIssueFromAllUsers(store, fingerprint) {
+async function clearIssueFromAllUsers(storeOrDb, fingerprint) {
   const normalizedFingerprint = sanitizeIssueFingerprint(fingerprint);
   if (!normalizedFingerprint) return;
-  const result = await store.list({ prefix: "account:" });
-  for (const item of result.keys || []) {
-    const record = await store.get(item.name, "json").catch(() => null);
+  const records = storeOrDb?.prepare
+    ? await listAccountMirrors(storeOrDb).catch(() => [])
+    : [];
+  if (!records.length && !storeOrDb?.list) return;
+  const sourceRecords = records.length ? records : await recordsFromKvStore(storeOrDb);
+  for (const record of sourceRecords) {
     if (!record?.adminIssues?.length) continue;
     const nextIssues = sanitizeAdminIssues(record.adminIssues).filter((issue) => issue.fingerprint !== normalizedFingerprint);
     if (nextIssues.length === sanitizeAdminIssues(record.adminIssues).length) continue;
-    await store.put(item.name, JSON.stringify({
+    await persistAccountRecord(storeOrDb, {
       ...record,
       adminIssues: nextIssues,
       updatedAt: new Date().toISOString(),
-    }));
+    });
   }
 }
 
-async function clearIssuesResolvedByParserRule(store, rule) {
+async function clearIssuesResolvedByParserRule(storeOrDb, rule) {
   const normalizedRule = sanitizeParserExtensionRule(rule);
   if (!normalizedRule) return;
-  const result = await store.list({ prefix: "account:" });
-  for (const item of result.keys || []) {
-    const record = await store.get(item.name, "json").catch(() => null);
+  const records = storeOrDb?.prepare
+    ? await listAccountMirrors(storeOrDb).catch(() => [])
+    : [];
+  if (!records.length && !storeOrDb?.list) return;
+  const sourceRecords = records.length ? records : await recordsFromKvStore(storeOrDb);
+  for (const record of sourceRecords) {
     if (!record?.adminIssues?.length) continue;
     const existingIssues = sanitizeAdminIssues(record.adminIssues);
     const nextIssues = existingIssues.filter((issue) => !issueMatchesParserRule(issue, normalizedRule));
     if (nextIssues.length === existingIssues.length) continue;
-    await store.put(item.name, JSON.stringify({
+    await persistAccountRecord(storeOrDb, {
       ...record,
       adminIssues: nextIssues,
       updatedAt: new Date().toISOString(),
-    }));
+    });
   }
 }
 
-async function clearIssuesResolvedByParserRuleForUser(store, email, rule) {
+async function clearIssuesResolvedByParserRuleForUser(storeOrDb, email, rule) {
   const normalizedRule = sanitizeParserExtensionRule(rule);
   const normalizedEmail = normalizeEmail(email);
   if (!normalizedRule || !normalizedEmail) return;
-  const record = await loadAccountRecord(store, normalizedEmail).catch(() => null);
+  const record = storeOrDb?.prepare
+    ? await loadAccountMirror(storeOrDb, normalizedEmail).catch(() => null)
+    : await loadAccountRecord(storeOrDb, normalizedEmail).catch(() => null);
   if (!record?.adminIssues?.length) return;
   const existingIssues = sanitizeAdminIssues(record.adminIssues);
   const nextIssues = existingIssues.filter((issue) => !issueMatchesParserRule(issue, normalizedRule));
   if (nextIssues.length === existingIssues.length) return;
-  await store.put(storageKey(normalizedEmail), JSON.stringify({
+  await persistAccountRecord(storeOrDb, {
     ...record,
     adminIssues: nextIssues,
     updatedAt: new Date().toISOString(),
-  }));
+  });
 }
 
 function issueMatchesParserRule(issue, rule) {
@@ -1523,30 +1457,52 @@ function issueMatchesParserRule(issue, rule) {
     && (issueCode === rule.code || fingerprint === ruleFingerprint);
 }
 
-async function isIssueResolvedByParserRules(store, email, issue) {
+async function isIssueResolvedByParserRules(store, email, issue, db = null) {
   const source = sanitizeIssueSource(issue?.source);
   const seniority = sanitizeRuleSeniority(issue?.seniority);
   const code = parserRuleCodeForIssue(issue);
   if (!source || !code) return false;
-  const config = await buildIssueConfig(store, email);
+  const config = await buildIssueConfig(store, email, db);
   const rules = sanitizeParserExtensionRules(config.parserExtensions);
   const sourceRules = rules[source.toLowerCase()] || [];
   return sourceRules.some((rule) => rule.source === source && rule.seniority === seniority && rule.code === code);
 }
 
-async function clearIssuesResolvedByIssue(store, email, issue) {
+async function clearIssuesResolvedByIssue(storeOrDb, email, issue) {
   const normalizedEmail = normalizeEmail(email);
   if (!normalizedEmail) return;
-  const record = await loadAccountRecord(store, normalizedEmail).catch(() => null);
+  const record = storeOrDb?.prepare
+    ? await loadAccountMirror(storeOrDb, normalizedEmail).catch(() => null)
+    : await loadAccountRecord(storeOrDb, normalizedEmail).catch(() => null);
   if (!record?.adminIssues?.length) return;
   const existingIssues = sanitizeAdminIssues(record.adminIssues);
   const nextIssues = existingIssues.filter((item) => !sameParserIssue(item, issue));
   if (nextIssues.length === existingIssues.length) return;
-  await store.put(storageKey(normalizedEmail), JSON.stringify({
+  await persistAccountRecord(storeOrDb, {
     ...record,
     adminIssues: nextIssues,
     updatedAt: new Date().toISOString(),
-  }));
+  });
+}
+
+async function recordsFromKvStore(store) {
+  if (!store?.list) return [];
+  const result = await store.list({ prefix: "account:" });
+  const records = [];
+  for (const item of result.keys || []) {
+    const record = await store.get(item.name, "json").catch(() => null);
+    if (record?.email) records.push(record);
+  }
+  return records;
+}
+
+async function persistAccountRecord(storeOrDb, record) {
+  if (!record?.email) return;
+  if (storeOrDb?.prepare) {
+    await upsertAccountMirror(storeOrDb, record);
+  } else if (storeOrDb?.put) {
+    await storeOrDb.put(storageKey(record.email), JSON.stringify(record));
+  }
 }
 
 function sameParserIssue(left, right) {
@@ -1996,8 +1952,8 @@ async function buildDoctorProfileSnapshotStamp(store, profile, db = null) {
     addedAt: ref.addedAt,
   }));
   const stateRevision = await buildStateRevision(profile?.state || {});
-  const parserExtensions = await loadParserExtensionRules(store);
-  const ignoredFingerprints = await loadIgnoredIssueFingerprints(store);
+  const parserExtensions = store?.get ? await loadParserExtensionRules(store) : {};
+  const ignoredFingerprints = store?.get ? await loadIgnoredIssueFingerprints(store) : [];
   return await sha256(JSON.stringify({
     schemaVersion: SNAPSHOT_SCHEMA_VERSION,
     ownerType: "doctor-profile",
@@ -2134,7 +2090,7 @@ async function repositoryImportsForDoctorProfile(store, profile, db = null) {
 async function loadDoctorProfileSnapshotInfo(store, profile, db = null) {
   const owner = doctorProfileSnapshotOwner(profile);
   const buildStamp = await buildDoctorProfileSnapshotStamp(store, profile, db);
-  const storedSnapshot = await loadSnapshotRecord(store, owner.ownerType, owner.ownerId);
+  const storedSnapshot = store?.get ? await loadSnapshotRecord(store, owner.ownerType, owner.ownerId) : null;
   const derivedSnapshot = await buildDerivedDoctorProfileSnapshot(store, db, profile);
   const snapshot = derivedSnapshot || storedSnapshot;
   return {
@@ -2425,6 +2381,7 @@ async function clearDeletedAccountClaimMetadata(store, email, record) {
   if (!deletedEmail) return;
   const deletedClaims = sanitizeClaims(record?.claims);
   if (!deletedClaims.length) return;
+  if (!store?.list) return;
   await removeDeletedClaimsFromRemainingAccounts(store, deletedEmail, deletedClaims);
 }
 
@@ -2950,6 +2907,51 @@ function oldDefaultMmcRuleShape(code) {
 async function loadParserExtensionRules(store) {
   const value = await store.get(PARSER_EXTENSION_RULES_KEY, "json").catch(() => null);
   return sanitizeParserExtensionRules(value);
+}
+
+async function loadD1ParserExtensionRules(db) {
+  if (!db?.prepare) return {};
+  const rows = await db.prepare("SELECT rule_json FROM parser_rules WHERE scope = 'global'").all().catch(() => ({ results: [] }));
+  const rules = {};
+  for (const row of rows.results || []) {
+    let parsed = null;
+    try {
+      parsed = JSON.parse(row.rule_json || "{}");
+    } catch {
+      parsed = null;
+    }
+    const rule = sanitizeParserExtensionRule(parsed);
+    if (!rule) continue;
+    const sourceKey = rule.source.toLowerCase();
+    rules[sourceKey] = [...(rules[sourceKey] || []), rule];
+  }
+  return sanitizeParserExtensionRules(rules);
+}
+
+async function saveD1ParserExtensionRule(db, rule) {
+  const normalized = sanitizeParserExtensionRule(rule);
+  if (!db?.prepare || !normalized) return;
+  const id = `global:${normalized.source}:${normalized.seniority}:${normalized.code}`;
+  const now = new Date().toISOString();
+  await db.prepare(`
+    INSERT INTO parser_rules (id, scope, email, source_type, seniority, code, title, rule_json, updated_at)
+    VALUES (?, 'global', '', ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      source_type = excluded.source_type,
+      seniority = excluded.seniority,
+      code = excluded.code,
+      title = excluded.title,
+      rule_json = excluded.rule_json,
+      updated_at = excluded.updated_at
+  `).bind(id, normalized.source, normalized.seniority, normalized.code, normalized.base || normalized.title || "", JSON.stringify(normalized), now).run();
+}
+
+async function deleteD1ParserExtensionRule(db, rule) {
+  const target = sanitizeParserRuleRemoval(rule);
+  if (!db?.prepare || !target) return;
+  await db.prepare("DELETE FROM parser_rules WHERE scope = 'global' AND source_type = ? AND seniority = ? AND code = ?")
+    .bind(target.source, target.seniority, target.code)
+    .run();
 }
 
 async function saveParserExtensionRules(store, value) {

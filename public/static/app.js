@@ -1409,7 +1409,9 @@ async function analyzeFilesInBrowser() {
 }
 
 async function parseCurrentRosterForm(doctor = null) {
-  await ensureSelectedFilesLoaded();
+  if (!await ensureSelectedFilesLoaded()) {
+    throw new Error("Roster files need to be re-uploaded so they can be parsed into D1.");
+  }
   return await parseRosterEntries(selectedFiles, doctor);
 }
 
@@ -2795,27 +2797,9 @@ async function ensureInsightRosterAnalysis() {
   if (hydrateInsightCacheFromSnapshot()) return;
   if (await hydrateInsightCacheFromServer()) return;
   if (!selectedFiles.length) return;
-  await ensureSelectedFilesLoaded();
+  if (!await ensureSelectedFilesLoaded()) return;
   let parsed = await parseCurrentRosterForm(null);
   const comparisonOptions = rosterDoctorOptions(parsed.sources?.mmc || [], parsed.sources?.ddh || [], parsed.sources?.casey || [], parsed.sources?.mch || []);
-  if (comparisonOptions.length <= 1 && cloudAvailable) {
-    const requestEmail = adminViewingEmail ? authUserEmail || currentUserEmail : currentUserEmail;
-    const requestPassword = adminViewingEmail ? authUserPassword || currentUserPassword : currentUserPassword;
-    const response = await fetch("/api/state", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        action: "loadInsightImports",
-        email: requestEmail,
-        password: requestPassword,
-      }),
-    });
-    const data = await readJsonResponse(response, "Could not load comparison rosters.");
-    const entries = await deserializeCloudImports(data.imports || []);
-    if (entries.length) {
-      parsed = await parseRosterEntries(entries, null);
-    }
-  }
   parsedRosterSources = parsed.sources;
   parsedImportDoctors = doctorsByImportId(parsed.sources);
   doctorRoleIndex = null;
@@ -7909,51 +7893,15 @@ function uniqueClientFileRefs(refs) {
 }
 
 async function loadCloudImportsByRefs(refs) {
-  const response = await fetch("/api/state", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      action: "loadImportRefs",
-      email: authUserEmail || currentUserEmail,
-      password: authUserPassword || currentUserPassword,
-      refs,
-    }),
-  });
-  const data = await readJsonResponse(response, "Could not load roster files.");
-  return await deserializeCloudImports(data.imports || []);
+  return [];
 }
 
 async function loadCreatorAccountImports() {
-  const response = await fetch("/api/state", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      action: "loadImports",
-      email: authUserEmail || currentUserEmail,
-      password: authUserPassword || currentUserPassword,
-      targetEmail: "",
-    }),
-  });
-  const data = await readJsonResponse(response, "Could not load creator roster files.");
-  return await deserializeCloudImports(data.imports || []);
+  return [];
 }
 
 async function loadDoctorProfileImportsForProfile(profile) {
-  const response = await fetch("/api/state", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      action: "loadDoctorProfileImports",
-      email: authUserEmail || currentUserEmail,
-      password: authUserPassword || currentUserPassword,
-      profileId: profile.id,
-      doctorKey: profile.doctorKey,
-      displayName: profile.displayName,
-      sourceTypes: profile.sourceTypes,
-    }),
-  });
-  const data = await readJsonResponse(response, "Could not load roster files.");
-  return await deserializeCloudImports(data.imports || []);
+  return [];
 }
 
 async function buildUnclaimedPreviewFromImports(doctor, profile, imports, session = {}) {
@@ -8977,24 +8925,7 @@ async function restoreDoctorProfileState() {
 }
 
 async function loadDoctorProfileImportsIntoWorkspace() {
-  if (!activeDoctorProfile || !cloudAvailable) return;
-  const response = await fetch("/api/state", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      action: "loadDoctorProfileImports",
-      email: authUserEmail || currentUserEmail,
-      password: authUserPassword || currentUserPassword,
-      profileId: activeDoctorProfile.id,
-      doctorKey: activeDoctorProfile.doctorKey,
-      displayName: activeDoctorProfile.displayName,
-      sourceTypes: activeDoctorProfile.sourceTypes,
-    }),
-  });
-  const data = await readJsonResponse(response, "Could not load roster files.");
-  const imports = await deserializeCloudImports(data.imports || []);
-  selectedFiles = imports;
-  await replaceStoredImports(imports);
+  selectedFiles = [];
 }
 
 async function applyCloudStateData(data) {
@@ -9052,7 +8983,7 @@ async function applyCloudStateData(data) {
 }
 
 function serverStorageRequiredMessage() {
-  return "Server storage is not configured. Add a Cloudflare KV namespace binding named ROSTER_STORE to the Pages project, redeploy, then log in again.";
+  return "Server storage is not configured. Add the D1 ROSTER_DB binding to the Pages project, redeploy, then log in again.";
 }
 
 function scheduleCloudStateSave() {
@@ -9254,34 +9185,7 @@ async function refreshCalendarStoreStatus(options = {}) {
 
 async function backfillNextCalendarStoreFile() {
   if (!isCreatorAuthenticated() || calendarStoreBackfillRunning) return;
-  calendarStoreBackfillRunning = true;
-  renderAccountsModal();
-  setStatus("Loading one roster file for SQL backfill...");
-  try {
-    let nextFile = calendarStoreStatus?.nextFile || null;
-    if (!nextFile) {
-      const status = await calendarStoreRequest("calendarStoreStatus");
-      calendarStoreStatus = status;
-      nextFile = status.nextFile || null;
-    }
-    if (!nextFile?.id) {
-      setStatus("No roster file needed backfilling.");
-      return;
-    }
-    const imports = await loadCloudImportsByRefs([nextFile]);
-    if (!imports.length) throw new Error("Could not load the next roster file for backfill.");
-    setStatus(`Parsing ${nextFile.name || imports[0].name} in the browser...`);
-    const payload = await buildDerivedCalendarFilePayload(imports[0], nextFile);
-    setStatus(`Saving ${payload.eventCount} SQL events...`);
-    const data = await calendarStoreRequest("saveDerivedCalendarFile", payload);
-    calendarStoreStatus = data;
-    setStatus(data.result?.events ? "Backfilled one roster file into SQL." : "No SQL events were created for that file.");
-  } catch (error) {
-    setStatus(error.message || "Could not backfill the next roster file.", true);
-  } finally {
-    calendarStoreBackfillRunning = false;
-    if (!accountsModal.classList.contains("hidden") && currentAdminTab === "system") renderAccountsModal();
-  }
+  setStatus("KV backfill has been removed. Re-upload roster files to populate D1.", true);
 }
 
 async function resetCalendarStoreFile(fileId) {
@@ -9303,24 +9207,7 @@ async function resetCalendarStoreFile(fileId) {
 
 async function syncAccountMirror() {
   if (!isCreatorAuthenticated() || calendarStoreBackfillRunning) return;
-  calendarStoreBackfillRunning = true;
-  renderAccountsModal();
-  setStatus("Syncing account claims, session state, and doctor profiles to SQL...");
-  try {
-    const data = await calendarStoreRequest("syncAccountMirror", { limit: 100 });
-    calendarStoreStatus = {
-      ...(calendarStoreStatus || {}),
-      accounts: data.accounts || null,
-    };
-    const syncedAccounts = typeof data.synced === "object" ? Number(data.synced.accounts || 0) : Number(data.synced || 0);
-    const syncedProfiles = typeof data.synced === "object" ? Number(data.synced.doctorProfiles || 0) : 0;
-    setStatus(`Synced ${syncedAccounts} account records and ${syncedProfiles} doctor profiles to SQL.`);
-  } catch (error) {
-    setStatus(error.message || "Could not sync account mirror.", true);
-  } finally {
-    calendarStoreBackfillRunning = false;
-    if (!accountsModal.classList.contains("hidden") && currentAdminTab === "system") renderAccountsModal();
-  }
+  setStatus("KV account sync has been removed. D1 is now the runtime account store.", true);
 }
 
 async function buildDerivedCalendarFilePayload(importEntry, statusFile = {}) {
@@ -9408,13 +9295,24 @@ async function calendarStoreRequest(action, extra = {}) {
 }
 
 async function buildCloudState(imports = selectedFiles, session = buildActiveSessionState()) {
+  await saveSelectedRosterFilesToD1(imports);
   const subscriptionFeeds = await buildSubscriptionFeeds(session);
   return {
     version: 1,
-    imports: await serializeCloudImports(imports),
+    imports: imports.map(importRefForWorkspace),
     session,
     subscriptionFeeds,
   };
+}
+
+async function saveSelectedRosterFilesToD1(imports = selectedFiles) {
+  if (!cloudAvailable || !isCreatorAuthenticated()) return;
+  const entries = (imports || []).filter((entry) => entry?.file);
+  for (const entry of entries) {
+    const payload = await buildDerivedCalendarFilePayload(entry, entry);
+    const data = await calendarStoreRequest("saveDerivedCalendarFile", payload);
+    calendarStoreStatus = data;
+  }
 }
 
 function buildActiveSessionState() {
@@ -10117,37 +10015,13 @@ function renderWorkspaceFromSnapshot(snapshot, session = {}) {
 }
 
 async function ensureSelectedFilesLoaded() {
-  if (!selectedFiles.some((entry) => !entry.file)) return;
-  if (cloudAvailable) {
-    const requestEmail = adminViewingEmail ? authUserEmail || currentUserEmail : currentUserEmail;
-    const requestPassword = adminViewingEmail ? authUserPassword || currentUserPassword : currentUserPassword;
-    const isDoctorProfileContext = activeCalendarMode() === "doctor-profile";
-    const action = isDoctorProfileContext ? "loadDoctorProfileImports" : "loadImports";
-    const response = await fetch("/api/state", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        action,
-        email: requestEmail,
-        password: requestPassword,
-        targetEmail: isDoctorProfileContext ? "" : (adminViewingEmail ? currentUserEmail : ""),
-        profileId: activeDoctorProfile?.id || "",
-        doctorKey: activeDoctorProfile?.doctorKey || "",
-        displayName: activeDoctorProfile?.displayName || "",
-        sourceTypes: activeDoctorProfile?.sourceTypes || [],
-      }),
-    });
-    const data = await readJsonResponse(response, "Could not load roster files.");
-    const imports = await deserializeCloudImports(data.imports || []);
-    selectedFiles = imports;
-    await replaceStoredImports(imports);
-    saveCurrentWorkspace();
-    return;
-  }
+  if (!selectedFiles.some((entry) => !entry.file)) return true;
   const restored = await loadStoredImportsByRefs(selectedFiles.map(importRefForWorkspace));
   if (restored.length) {
     selectedFiles = restored;
+    return true;
   }
+  return false;
 }
 
 async function refreshSnapshotInBackground() {

@@ -119,6 +119,70 @@ export async function ensureCalendarSchema(db) {
     )
   `).run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_doctor_profiles_doctor ON doctor_profiles (doctor_key)").run();
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS subscription_tokens (
+      token TEXT PRIMARY KEY,
+      email TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT ''
+    )
+  `).run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_subscription_tokens_email ON subscription_tokens (email)").run();
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS parser_rules (
+      id TEXT PRIMARY KEY,
+      scope TEXT NOT NULL DEFAULT 'global',
+      email TEXT NOT NULL DEFAULT '',
+      source_type TEXT NOT NULL,
+      seniority TEXT NOT NULL DEFAULT '',
+      code TEXT NOT NULL,
+      title TEXT NOT NULL DEFAULT '',
+      rule_json TEXT NOT NULL DEFAULT '{}',
+      updated_at TEXT NOT NULL DEFAULT ''
+    )
+  `).run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_parser_rules_scope ON parser_rules (scope, email, source_type)").run();
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS parser_rule_suggestions (
+      id TEXT PRIMARY KEY,
+      email TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending',
+      suggestion_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT ''
+    )
+  `).run();
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS issue_dismissals (
+      email TEXT NOT NULL,
+      fingerprint TEXT NOT NULL,
+      dismissed_at TEXT NOT NULL DEFAULT '',
+      PRIMARY KEY (email, fingerprint)
+    )
+  `).run();
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS issue_ignores (
+      fingerprint TEXT PRIMARY KEY,
+      ignored_at TEXT NOT NULL DEFAULT ''
+    )
+  `).run();
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS calendar_snapshots (
+      owner_type TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      snapshot_json TEXT NOT NULL DEFAULT '{}',
+      built_at TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT '',
+      PRIMARY KEY (owner_type, owner_id)
+    )
+  `).run();
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS raw_roster_files (
+      file_id TEXT PRIMARY KEY,
+      object_key TEXT NOT NULL DEFAULT '',
+      uploaded_at TEXT NOT NULL DEFAULT ''
+    )
+  `).run();
   return true;
 }
 
@@ -452,6 +516,16 @@ export async function upsertAccountMirror(db, record, options = {}) {
     updatedAt,
   ).run();
   await db.prepare("DELETE FROM account_claims WHERE email = ?").bind(email).run();
+  await db.prepare("DELETE FROM subscription_tokens WHERE email = ?").bind(email).run();
+  if (record.subscriptionToken) {
+    await db.prepare(`
+      INSERT INTO subscription_tokens (token, email, created_at, updated_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(token) DO UPDATE SET
+        email = excluded.email,
+        updated_at = excluded.updated_at
+    `).bind(String(record.subscriptionToken || ""), email, String(record.createdAt || updatedAt), updatedAt).run();
+  }
   const claims = sanitizeAccountClaims(record.claims);
   for (const chunk of chunkRows(claims.map((claim) => [
     email,
@@ -490,6 +564,7 @@ export async function deleteAccountMirror(db, email) {
   const normalizedEmail = normalizeEmail(email);
   await db.prepare("DELETE FROM account_claims WHERE email = ?").bind(normalizedEmail).run();
   await db.prepare("DELETE FROM account_states WHERE email = ?").bind(normalizedEmail).run();
+  await db.prepare("DELETE FROM subscription_tokens WHERE email = ?").bind(normalizedEmail).run();
   await db.prepare("DELETE FROM account_profiles WHERE email = ?").bind(normalizedEmail).run();
 }
 
@@ -535,6 +610,10 @@ export async function queryClaimedAccounts(db) {
 export async function loadAccountMirrorBySubscriptionToken(db, token) {
   if (!db?.prepare || !token) return null;
   await ensureCalendarSchema(db);
+  const tokenRow = await db.prepare("SELECT email FROM subscription_tokens WHERE token = ?").bind(String(token || "").trim()).first();
+  if (tokenRow?.email) {
+    return await loadAccountMirror(db, tokenRow.email);
+  }
   const rows = await db.prepare(`
     SELECT
       account_profiles.email AS email,

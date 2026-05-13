@@ -2,10 +2,10 @@
 
 ## Launch Blockers
 
-- Configure Cloudflare server-side storage for production: create/bind `ROSTER_STORE` KV to the Pages project and redeploy. Without this, account creation, shared repository data, and cross-device persistence cannot work.
-- Verify account creation in production after `ROSTER_STORE` is available: creator creates a user, enters that account, links roster names, logs out/in, and sees persistent data.
+- Configure Cloudflare server-side storage for production: create/bind `ROSTER_DB` D1 to the Pages project and redeploy. Without this, account creation, parsed roster rows, and cross-device persistence cannot work.
+- After the D1-only cutover deploys, re-upload roster files once so D1 has parsed roster file, doctor, and event rows.
 - Implement name-claim conflict workflow: claimed names shown greyed out, user can report conflict, creator can transfer/alias/reject, and both users receive an in-app message.
-- Browser-side parsing is now used to avoid Cloudflare CPU limits. Continue tightening this architecture: store normalized roster/event data server-side, keep source files for audit, and avoid reparsing source files on every preview/export.
+- Browser-side parsing is now used to avoid Cloudflare CPU limits. Continue tightening this architecture: store normalized roster/event data in D1, add R2 later only if raw source files need audit retention, and avoid reparsing source files on every preview/export.
 
 ## Account And Admin
 
