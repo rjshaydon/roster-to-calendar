@@ -75,9 +75,19 @@ export async function ensureCalendarSchema(db) {
       role TEXT NOT NULL DEFAULT 'user',
       insights_enabled INTEGER NOT NULL DEFAULT 0,
       subscription_token TEXT NOT NULL DEFAULT '',
+      password_salt TEXT NOT NULL DEFAULT '',
+      password_hash TEXT NOT NULL DEFAULT '',
+      admin_issues_json TEXT NOT NULL DEFAULT '[]',
+      local_parser_extensions_json TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL DEFAULT '',
       updated_at TEXT NOT NULL DEFAULT ''
     )
   `).run();
+  await ensureColumn(db, "account_profiles", "password_salt", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn(db, "account_profiles", "password_hash", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn(db, "account_profiles", "admin_issues_json", "TEXT NOT NULL DEFAULT '[]'");
+  await ensureColumn(db, "account_profiles", "local_parser_extensions_json", "TEXT NOT NULL DEFAULT '[]'");
+  await ensureColumn(db, "account_profiles", "created_at", "TEXT NOT NULL DEFAULT ''");
   await db.prepare(`
     CREATE TABLE IF NOT EXISTS account_claims (
       email TEXT NOT NULL,
@@ -110,6 +120,12 @@ export async function ensureCalendarSchema(db) {
   `).run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_doctor_profiles_doctor ON doctor_profiles (doctor_key)").run();
   return true;
+}
+
+async function ensureColumn(db, table, column, definition) {
+  const info = await db.prepare(`PRAGMA table_info(${table})`).all();
+  if ((info.results || []).some((row) => row.name === column)) return;
+  await db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run();
 }
 
 export async function upsertDerivedRosterFile(db, file, storedImport) {
@@ -407,13 +423,20 @@ export async function upsertAccountMirror(db, record, options = {}) {
   const role = String(record.role || (email ? "user" : "") || "user");
   const updatedAt = new Date().toISOString();
   await db.prepare(`
-    INSERT INTO account_profiles (email, real_name, role, insights_enabled, subscription_token, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO account_profiles (
+      email, real_name, role, insights_enabled, subscription_token, password_salt, password_hash,
+      admin_issues_json, local_parser_extensions_json, created_at, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(email) DO UPDATE SET
       real_name = excluded.real_name,
       role = excluded.role,
       insights_enabled = excluded.insights_enabled,
       subscription_token = excluded.subscription_token,
+      password_salt = CASE WHEN excluded.password_salt <> '' THEN excluded.password_salt ELSE account_profiles.password_salt END,
+      password_hash = CASE WHEN excluded.password_hash <> '' THEN excluded.password_hash ELSE account_profiles.password_hash END,
+      admin_issues_json = excluded.admin_issues_json,
+      local_parser_extensions_json = excluded.local_parser_extensions_json,
       updated_at = excluded.updated_at
   `).bind(
     email,
@@ -421,6 +444,11 @@ export async function upsertAccountMirror(db, record, options = {}) {
     role,
     record.insightsEnabled === true ? 1 : 0,
     String(record.subscriptionToken || ""),
+    String(record.passwordSalt || ""),
+    String(record.passwordHash || ""),
+    JSON.stringify(Array.isArray(record.adminIssues) ? record.adminIssues : []),
+    JSON.stringify(Array.isArray(record.localParserExtensions) ? record.localParserExtensions : []),
+    String(record.createdAt || updatedAt),
     updatedAt,
   ).run();
   await db.prepare("DELETE FROM account_claims WHERE email = ?").bind(email).run();
@@ -551,6 +579,128 @@ export async function loadAccountMirrorBySubscriptionToken(db, token) {
     insightsEnabled: first.insights_enabled === 1,
     subscriptionToken: String(first.subscription_token || ""),
     claims,
+    state: {
+      version: 1,
+      imports: [],
+      session,
+      subscriptionFeeds: {},
+    },
+  };
+}
+
+export async function loadAccountMirror(db, email) {
+  if (!db?.prepare || !email) return null;
+  await ensureCalendarSchema(db);
+  const rows = await db.prepare(`
+    SELECT
+      account_profiles.email AS email,
+      account_profiles.real_name AS real_name,
+      account_profiles.role AS role,
+      account_profiles.insights_enabled AS insights_enabled,
+      account_profiles.subscription_token AS subscription_token,
+      account_profiles.password_salt AS password_salt,
+      account_profiles.password_hash AS password_hash,
+      account_profiles.admin_issues_json AS admin_issues_json,
+      account_profiles.local_parser_extensions_json AS local_parser_extensions_json,
+      account_profiles.created_at AS created_at,
+      account_profiles.updated_at AS updated_at,
+      account_claims.source_type AS source_type,
+      account_claims.doctor_key AS doctor_key,
+      account_claims.display_name AS display_name,
+      account_claims.matched_at AS matched_at,
+      account_states.session_json AS session_json
+    FROM account_profiles
+    LEFT JOIN account_claims ON account_claims.email = account_profiles.email
+    LEFT JOIN account_states ON account_states.email = account_profiles.email
+    WHERE account_profiles.email = ?
+    ORDER BY account_claims.source_type, account_claims.display_name
+  `).bind(normalizeEmail(email)).all();
+  return accountMirrorFromRows(rows.results || []);
+}
+
+export async function listAccountMirrors(db) {
+  if (!db?.prepare) return [];
+  await ensureCalendarSchema(db);
+  const rows = await db.prepare(`
+    SELECT
+      account_profiles.email AS email,
+      account_profiles.real_name AS real_name,
+      account_profiles.role AS role,
+      account_profiles.insights_enabled AS insights_enabled,
+      account_profiles.subscription_token AS subscription_token,
+      account_profiles.password_salt AS password_salt,
+      account_profiles.password_hash AS password_hash,
+      account_profiles.admin_issues_json AS admin_issues_json,
+      account_profiles.local_parser_extensions_json AS local_parser_extensions_json,
+      account_profiles.created_at AS created_at,
+      account_profiles.updated_at AS updated_at,
+      account_claims.source_type AS source_type,
+      account_claims.doctor_key AS doctor_key,
+      account_claims.display_name AS display_name,
+      account_claims.matched_at AS matched_at,
+      account_states.session_json AS session_json
+    FROM account_profiles
+    LEFT JOIN account_claims ON account_claims.email = account_profiles.email
+    LEFT JOIN account_states ON account_states.email = account_profiles.email
+    ORDER BY account_profiles.email, account_claims.source_type, account_claims.display_name
+  `).all();
+  const grouped = new Map();
+  for (const row of rows.results || []) {
+    const email = normalizeEmail(row.email);
+    if (!email) continue;
+    if (!grouped.has(email)) grouped.set(email, []);
+    grouped.get(email).push(row);
+  }
+  return [...grouped.values()].map(accountMirrorFromRows).filter(Boolean);
+}
+
+function accountMirrorFromRows(rows) {
+  const first = rows?.[0];
+  if (!first?.email) return null;
+  const claims = [];
+  for (const row of rows || []) {
+    if (!row.doctor_key || !row.source_type) continue;
+    claims.push({
+      key: String(row.doctor_key || "").trim(),
+      displayName: String(row.display_name || row.doctor_key || "").trim(),
+      sourceType: String(row.source_type || "").trim().toLowerCase(),
+      matchedAt: String(row.matched_at || ""),
+    });
+  }
+  let session = {};
+  let adminIssues = [];
+  let localParserExtensions = [];
+  try {
+    const parsed = first.session_json ? JSON.parse(first.session_json) : {};
+    session = parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    session = {};
+  }
+  try {
+    const parsed = first.admin_issues_json ? JSON.parse(first.admin_issues_json) : [];
+    adminIssues = Array.isArray(parsed) ? parsed : [];
+  } catch {
+    adminIssues = [];
+  }
+  try {
+    const parsed = first.local_parser_extensions_json ? JSON.parse(first.local_parser_extensions_json) : [];
+    localParserExtensions = Array.isArray(parsed) ? parsed : [];
+  } catch {
+    localParserExtensions = [];
+  }
+  return {
+    email: normalizeEmail(first.email),
+    realName: String(first.real_name || "").trim(),
+    role: String(first.role || "user"),
+    insightsEnabled: first.insights_enabled === 1,
+    subscriptionToken: String(first.subscription_token || ""),
+    passwordSalt: String(first.password_salt || ""),
+    passwordHash: String(first.password_hash || ""),
+    adminIssues,
+    localParserExtensions,
+    claims,
+    createdAt: String(first.created_at || ""),
+    updatedAt: String(first.updated_at || ""),
     state: {
       version: 1,
       imports: [],

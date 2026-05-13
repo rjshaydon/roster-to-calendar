@@ -8,6 +8,8 @@ import {
   deleteDerivedRosterFile,
   deleteDoctorProfileMirror,
   hasCalendarDb,
+  listAccountMirrors,
+  loadAccountMirror,
   loadAccountStateMirror,
   loadDoctorProfileMirror,
   queryCoworkerEvents,
@@ -51,15 +53,14 @@ export async function onRequestPost(context) {
     if (!email) {
       return Response.json({ error: "Email address is required." }, { status: 400 });
     }
-    if (!context.env.ROSTER_STORE) {
-      return Response.json({ error: "Cloud storage is not configured." }, { status: 503 });
+    if (!hasCalendarDb(context.env)) {
+      return Response.json({ error: "D1 database is not configured." }, { status: 503 });
     }
     if (!password) {
       return Response.json({ error: "Password is required." }, { status: 400 });
     }
     if (action === "login") {
-      const account = await loadOrCreateAccount(context.env.ROSTER_STORE, email, password, { mode, realName });
-      await upsertAccountMirror(context.env.ROSTER_DB, account.record, { preserveExistingState: true }).catch(() => null);
+      const account = await loadOrCreateD1Account(context.env.ROSTER_DB, email, password, { mode, realName });
       const prepared = await prepareAccountResponse(context.env.ROSTER_STORE, account.record, { db: context.env.ROSTER_DB, includeAvailableDoctors: account.record.role !== "creator" && account.record.role !== "owner" });
       return Response.json({
         ok: true,
@@ -82,7 +83,7 @@ export async function onRequestPost(context) {
       });
     }
 
-    const account = await verifyAccount(context.env.ROSTER_STORE, email, password);
+    const account = await verifyD1Account(context.env.ROSTER_DB, email, password);
     if (action === "adminCreateUser") {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
@@ -98,12 +99,12 @@ export async function onRequestPost(context) {
       if (!targetPassword) {
         return Response.json({ error: "New account password is required." }, { status: 400 });
       }
-      const created = await loadOrCreateAccount(context.env.ROSTER_STORE, targetEmail, targetPassword, {
+      const created = await loadOrCreateD1Account(context.env.ROSTER_DB, targetEmail, targetPassword, {
         mode: "create",
         realName: targetRealName,
       });
       const createdRecord = await autoClaimMatchedRosterNames(context.env.ROSTER_STORE, created.record, context.env.ROSTER_DB);
-      await upsertAccountMirror(context.env.ROSTER_DB, createdRecord).catch(() => null);
+      await upsertAccountMirror(context.env.ROSTER_DB, createdRecord);
       const prepared = await prepareAccountResponse(context.env.ROSTER_STORE, createdRecord, { db: context.env.ROSTER_DB });
       return Response.json({
         ok: true,
@@ -127,8 +128,8 @@ export async function onRequestPost(context) {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
-      const target = await loadAccountRecord(context.env.ROSTER_STORE, targetEmail);
-      await upsertAccountMirror(context.env.ROSTER_DB, target, { preserveExistingState: true }).catch(() => null);
+      const target = await loadAccountMirror(context.env.ROSTER_DB, targetEmail);
+      if (!target) return Response.json({ error: "Account not found." }, { status: 404 });
       const prepared = await prepareAccountResponse(context.env.ROSTER_STORE, target, { db: context.env.ROSTER_DB, includeAvailableDoctors: true });
       return Response.json({
         ok: true,
@@ -152,7 +153,8 @@ export async function onRequestPost(context) {
 
     if (action === "claimRosterName") {
       const claimEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
-      const targetRecord = claimEmail === email ? account.record : await loadAccountRecord(context.env.ROSTER_STORE, claimEmail);
+      const targetRecord = claimEmail === email ? account.record : await loadAccountMirror(context.env.ROSTER_DB, claimEmail);
+      if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
       const index = await loadRepositoryIndex(context.env.ROSTER_STORE, context.env.ROSTER_DB);
       const claim = findRepositoryDoctor(index, body?.claim);
       if (!claim) {
@@ -170,8 +172,8 @@ export async function onRequestPost(context) {
         state,
         updatedAt: new Date().toISOString(),
       };
-      await context.env.ROSTER_STORE.put(storageKey(claimEmail), JSON.stringify(updated));
-      await upsertAccountMirror(context.env.ROSTER_DB, updated).catch(() => null);
+      if (context.env.ROSTER_STORE) await context.env.ROSTER_STORE.put(storageKey(claimEmail), JSON.stringify(updated));
+      await upsertAccountMirror(context.env.ROSTER_DB, updated);
       const prepared = await prepareAccountResponse(context.env.ROSTER_STORE, updated, { db: context.env.ROSTER_DB });
       return Response.json({
         ok: true,
@@ -195,9 +197,9 @@ export async function onRequestPost(context) {
       }
       return Response.json({
         ok: true,
-        users: await listUsers(context.env.ROSTER_STORE),
+        users: await listD1Users(context.env.ROSTER_DB),
         availableDoctors: await repositoryDoctorCandidates(context.env.ROSTER_STORE, await loadRepositoryIndex(context.env.ROSTER_STORE, context.env.ROSTER_DB), context.env.ROSTER_DB),
-        issueConfig: await buildIssueConfig(context.env.ROSTER_STORE, email),
+        issueConfig: await buildIssueConfig(context.env.ROSTER_STORE, email, context.env.ROSTER_DB),
       });
     }
 
@@ -210,8 +212,8 @@ export async function onRequestPost(context) {
       }
       const status = await calendarStoreStatus(context.env.ROSTER_STORE, context.env.ROSTER_DB);
       const accounts = await accountMirrorStatus(context.env.ROSTER_DB).catch(() => ({ unavailable: true, profiles: 0, claims: 0, states: 0 }));
-      accounts.kvProfiles = await countKvAccountRecords(context.env.ROSTER_STORE);
-      accounts.kvDoctorProfiles = await countKvDoctorProfileRecords(context.env.ROSTER_STORE);
+      accounts.kvProfiles = context.env.ROSTER_STORE ? await countKvAccountRecords(context.env.ROSTER_STORE) : 0;
+      accounts.kvDoctorProfiles = context.env.ROSTER_STORE ? await countKvDoctorProfileRecords(context.env.ROSTER_STORE) : 0;
       return Response.json({ ok: true, ...status, accounts });
     }
 
@@ -295,7 +297,8 @@ export async function onRequestPost(context) {
 
     if (action === "updateAccount") {
       const saveEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
-      const targetRecord = saveEmail === email ? account.record : await loadAccountRecord(context.env.ROSTER_STORE, saveEmail);
+      const targetRecord = saveEmail === email ? account.record : await loadAccountMirror(context.env.ROSTER_DB, saveEmail);
+      if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
       const nextRealName = String(body?.realName ?? targetRecord.realName ?? "").trim();
       const nextPassword = String(body?.newPassword || "");
       const passwordRecord = nextPassword ? await hashPassword(nextPassword) : {};
@@ -306,10 +309,10 @@ export async function onRequestPost(context) {
         ...passwordRecord,
         updatedAt: new Date().toISOString(),
       };
-      await context.env.ROSTER_STORE.put(storageKey(saveEmail), JSON.stringify(updated));
-      await upsertAccountMirror(context.env.ROSTER_DB, updated).catch(() => null);
+      if (context.env.ROSTER_STORE) await context.env.ROSTER_STORE.put(storageKey(saveEmail), JSON.stringify(updated));
+      await upsertAccountMirror(context.env.ROSTER_DB, updated);
       const owner = accountSnapshotOwner(saveEmail, updated.role || roleForEmail(saveEmail));
-      await context.env.ROSTER_STORE.delete(snapshotKey(owner.ownerType, owner.ownerId));
+      if (context.env.ROSTER_STORE) await context.env.ROSTER_STORE.delete(snapshotKey(owner.ownerType, owner.ownerId));
       const prepared = await prepareAccountResponse(context.env.ROSTER_STORE, updated, { db: context.env.ROSTER_DB, includeAvailableDoctors: false });
       return Response.json({
         ok: true,
@@ -328,9 +331,14 @@ export async function onRequestPost(context) {
       if (!targetEmail) {
         return Response.json({ error: "Target account is required." }, { status: 400 });
       }
-      const targetRecord = await loadAccountRecord(context.env.ROSTER_STORE, targetEmail);
+      const targetRecord = await loadAccountMirror(context.env.ROSTER_DB, targetEmail);
+      if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
       const index = await loadRepositoryIndex(context.env.ROSTER_STORE, context.env.ROSTER_DB);
-      const claims = sanitizeClaims((body?.claims || []).map((claim) => findRepositoryDoctor(index, claim)).filter(Boolean).map((claim) => ({ ...claim, matchedAt: new Date().toISOString() })));
+      const claims = sanitizeClaims((body?.claims || [])
+        .map((claim) => findRepositoryDoctor(index, claim))
+        .filter(Boolean)
+        .map((claim) => ({ ...claim, matchedAt: new Date().toISOString() })))
+        .filter((claim) => claimMatchesAccountIdentity(claim, targetRecord.realName || ""));
       const state = {
         ...sanitizeState(targetRecord.state),
         imports: repositoryImportRefsForClaims(index, claims),
@@ -342,10 +350,10 @@ export async function onRequestPost(context) {
         state,
         updatedAt: new Date().toISOString(),
       };
-      await context.env.ROSTER_STORE.put(storageKey(targetEmail), JSON.stringify(updated));
-      await upsertAccountMirror(context.env.ROSTER_DB, updated).catch(() => null);
+      if (context.env.ROSTER_STORE) await context.env.ROSTER_STORE.put(storageKey(targetEmail), JSON.stringify(updated));
+      await upsertAccountMirror(context.env.ROSTER_DB, updated);
       const owner = accountSnapshotOwner(targetEmail, updated.role || roleForEmail(targetEmail));
-      await context.env.ROSTER_STORE.delete(snapshotKey(owner.ownerType, owner.ownerId));
+      if (context.env.ROSTER_STORE) await context.env.ROSTER_STORE.delete(snapshotKey(owner.ownerType, owner.ownerId));
       return Response.json({
         ok: true,
         user: userSummaryFromRecord(targetEmail, updated),
@@ -355,7 +363,8 @@ export async function onRequestPost(context) {
 
     if (action === "removeRosterClaim") {
       const claimEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
-      const targetRecord = claimEmail === email ? account.record : await loadAccountRecord(context.env.ROSTER_STORE, claimEmail);
+      const targetRecord = claimEmail === email ? account.record : await loadAccountMirror(context.env.ROSTER_DB, claimEmail);
+      if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
       const rawClaim = {
         sourceType: String(body?.claim?.sourceType || "").toLowerCase(),
         key: normalizeRosterName(body?.claim?.key || ""),
@@ -373,10 +382,10 @@ export async function onRequestPost(context) {
         state,
         updatedAt: new Date().toISOString(),
       };
-      await context.env.ROSTER_STORE.put(storageKey(claimEmail), JSON.stringify(updated));
-      await upsertAccountMirror(context.env.ROSTER_DB, updated).catch(() => null);
+      if (context.env.ROSTER_STORE) await context.env.ROSTER_STORE.put(storageKey(claimEmail), JSON.stringify(updated));
+      await upsertAccountMirror(context.env.ROSTER_DB, updated);
       const owner = accountSnapshotOwner(claimEmail, updated.role || roleForEmail(claimEmail));
-      await context.env.ROSTER_STORE.delete(snapshotKey(owner.ownerType, owner.ownerId));
+      if (context.env.ROSTER_STORE) await context.env.ROSTER_STORE.delete(snapshotKey(owner.ownerType, owner.ownerId));
       return Response.json({ ok: true, claims, user: userSummaryFromRecord(claimEmail, updated) });
     }
 
@@ -421,7 +430,8 @@ export async function onRequestPost(context) {
       if (!targetEmail) {
         return Response.json({ error: "Target account is required." }, { status: 400 });
       }
-      const targetRecord = await loadAccountRecord(context.env.ROSTER_STORE, targetEmail);
+      const targetRecord = await loadAccountMirror(context.env.ROSTER_DB, targetEmail);
+      if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
       const targetRole = targetRecord.role || roleForEmail(targetEmail);
       if (targetRole === "creator" || targetRole === "owner") {
         return Response.json({ error: "Creator insights cannot be disabled." }, { status: 400 });
@@ -431,8 +441,8 @@ export async function onRequestPost(context) {
         insightsEnabled: body?.insightsEnabled === true,
         updatedAt: new Date().toISOString(),
       };
-      await context.env.ROSTER_STORE.put(storageKey(targetEmail), JSON.stringify(updated));
-      await upsertAccountMirror(context.env.ROSTER_DB, updated).catch(() => null);
+      if (context.env.ROSTER_STORE) await context.env.ROSTER_STORE.put(storageKey(targetEmail), JSON.stringify(updated));
+      await upsertAccountMirror(context.env.ROSTER_DB, updated);
       return Response.json({
         ok: true,
         user: userSummaryFromRecord(targetEmail, updated),
@@ -441,7 +451,8 @@ export async function onRequestPost(context) {
 
     if (action === "reportUserError") {
       const reportEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
-      const targetRecord = reportEmail === email ? account.record : await loadAccountRecord(context.env.ROSTER_STORE, reportEmail);
+      const targetRecord = reportEmail === email ? account.record : await loadAccountMirror(context.env.ROSTER_DB, reportEmail);
+      if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
       if ((targetRecord.role || roleForEmail(targetRecord.email)) === "creator") {
         return Response.json({ ok: true, ignored: true });
       }
@@ -462,20 +473,22 @@ export async function onRequestPost(context) {
       if (!issue) {
         return Response.json({ error: "Structured issue details are required." }, { status: 400 });
       }
-      const dismissed = new Set(await loadDismissedIssueFingerprints(context.env.ROSTER_STORE, reportEmail));
-      const ignored = new Set(await loadIgnoredIssueFingerprints(context.env.ROSTER_STORE));
+      const dismissed = new Set(context.env.ROSTER_STORE ? await loadDismissedIssueFingerprints(context.env.ROSTER_STORE, reportEmail) : []);
+      const ignored = new Set(context.env.ROSTER_STORE ? await loadIgnoredIssueFingerprints(context.env.ROSTER_STORE) : []);
       if (dismissed.has(issue.fingerprint) || ignored.has(issue.fingerprint) || await isIssueResolvedByParserRules(context.env.ROSTER_STORE, reportEmail, issue)) {
-        await clearIssuesResolvedByIssue(context.env.ROSTER_STORE, reportEmail, issue);
+        if (context.env.ROSTER_STORE) await clearIssuesResolvedByIssue(context.env.ROSTER_STORE, reportEmail, issue);
         return Response.json({ ok: true, ignored: true });
       }
       const nextIssues = mergeAdminIssues(targetRecord.adminIssues, [{
         ...issue,
       }]);
-      await context.env.ROSTER_STORE.put(storageKey(reportEmail), JSON.stringify({
+      const updated = {
         ...targetRecord,
         adminIssues: nextIssues,
         updatedAt: new Date().toISOString(),
-      }));
+      };
+      if (context.env.ROSTER_STORE) await context.env.ROSTER_STORE.put(storageKey(reportEmail), JSON.stringify(updated));
+      await upsertAccountMirror(context.env.ROSTER_DB, updated);
       return Response.json({ ok: true, issuesCount: nextIssues.length });
     }
 
@@ -658,10 +671,16 @@ export async function onRequestPost(context) {
 
     if (action === "save") {
       const saveEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
-      const targetRecord = saveEmail === email ? account.record : await loadAccountRecord(context.env.ROSTER_STORE, saveEmail);
+      const targetRecord = saveEmail === email ? account.record : await loadAccountMirror(context.env.ROSTER_DB, saveEmail);
+      if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
       const targetRole = targetRecord.role || roleForEmail(saveEmail);
       const state = sanitizeState(body?.state);
-      const repository = await upsertStateImports(context.env.ROSTER_STORE, state.imports, saveEmail, context.env.ROSTER_DB);
+      if (!context.env.ROSTER_STORE && state.imports.some((item) => item?.dataUrl)) {
+        return Response.json({ error: "Raw roster file storage is not configured. Upload persistence requires object storage." }, { status: 503 });
+      }
+      const repository = context.env.ROSTER_STORE
+        ? await upsertStateImports(context.env.ROSTER_STORE, state.imports, saveEmail, context.env.ROSTER_DB)
+        : { index: await loadRepositoryIndex(null, context.env.ROSTER_DB), refs: state.imports.map(repositoryImportRef), changed: false };
       state.imports = repository.refs;
       const claims = sanitizeClaims(targetRecord.claims);
       const removedImportIds = sanitizeRepositoryFileIds(body?.removedImportIds);
@@ -681,9 +700,9 @@ export async function onRequestPost(context) {
         state,
         updatedAt: new Date().toISOString(),
       };
-      await context.env.ROSTER_STORE.put(storageKey(saveEmail), JSON.stringify(updatedRecord));
-      await upsertAccountMirror(context.env.ROSTER_DB, updatedRecord).catch(() => null);
-      if (!hasCalendarDb(context.env) || targetRole === "creator" || targetRole === "owner") {
+      if (context.env.ROSTER_STORE) await context.env.ROSTER_STORE.put(storageKey(saveEmail), JSON.stringify(updatedRecord));
+      await upsertAccountMirror(context.env.ROSTER_DB, updatedRecord);
+      if (context.env.ROSTER_STORE && (!hasCalendarDb(context.env) || targetRole === "creator" || targetRole === "owner")) {
         await storeSnapshotForAccount(context.env.ROSTER_STORE, {
           email: saveEmail,
           role: targetRole,
@@ -760,7 +779,8 @@ export async function onRequestPost(context) {
 
     if (action === "loadImports") {
       const loadEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
-      const targetRecord = loadEmail === email ? account.record : await loadAccountRecord(context.env.ROSTER_STORE, loadEmail);
+      const targetRecord = loadEmail === email ? account.record : await loadAccountMirror(context.env.ROSTER_DB, loadEmail);
+      if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
       const imports = await resolveAccountImports(context.env.ROSTER_STORE, targetRecord, context.env.ROSTER_DB);
       return Response.json({ ok: true, imports });
     }
@@ -936,8 +956,98 @@ async function loadOrCreateAccount(store, email, password, options = {}) {
   };
 }
 
+async function loadOrCreateD1Account(db, email, password, options = {}) {
+  const mode = options.mode || "login";
+  const realName = String(options.realName || "").trim();
+  const existing = await loadAccountMirror(db, email);
+  if (!existing) {
+    const canBootstrapCreator = email === CREATOR_EMAIL && mode === "login";
+    if (!canBootstrapCreator && (mode !== "create" || !realName)) {
+      throw new Error("Account not found. Create an account first.");
+    }
+    const passwordRecord = await hashPassword(password);
+    const now = new Date().toISOString();
+    const record = {
+      email,
+      realName: realName || (email === CREATOR_EMAIL ? "Richard Haydon" : ""),
+      role: roleForEmail(email),
+      ...passwordRecord,
+      state: sanitizeState(null),
+      claims: [],
+      adminIssues: [],
+      localParserExtensions: [],
+      subscriptionToken: randomSubscriptionToken(),
+      createdAt: now,
+      updatedAt: now,
+    };
+    await upsertAccountMirror(db, record);
+    return {
+      created: true,
+      role: record.role,
+      realName: record.realName,
+      state: record.state,
+      record,
+    };
+  }
+  if (mode === "create") {
+    throw new Error("An account already exists for that email. Use log in.");
+  }
+  if (!existing.passwordHash || !existing.passwordSalt) {
+    const passwordRecord = await hashPassword(password);
+    const updated = {
+      ...existing,
+      realName: existing.realName || realName || "",
+      ...passwordRecord,
+      updatedAt: new Date().toISOString(),
+    };
+    await upsertAccountMirror(db, updated, { preserveExistingState: false });
+    return {
+      created: false,
+      role: updated.role || roleForEmail(email),
+      realName: updated.realName || "",
+      state: sanitizeState(updated.state),
+      record: updated,
+    };
+  }
+  const ok = await verifyPassword(password, existing.passwordSalt, existing.passwordHash);
+  if (!ok) {
+    throw new Error("Incorrect password.");
+  }
+  let updated = existing;
+  if (realName && !existing.realName) {
+    updated = {
+      ...existing,
+      realName,
+      updatedAt: new Date().toISOString(),
+    };
+    await upsertAccountMirror(db, updated, { preserveExistingState: false });
+  }
+  return {
+    created: false,
+    role: updated.role || roleForEmail(email),
+    realName: updated.realName || "",
+    state: sanitizeState(updated.state),
+    record: updated,
+  };
+}
+
 async function verifyAccount(store, email, password) {
   const record = await store.get(storageKey(email), "json");
+  if (!record?.passwordHash || !record?.passwordSalt) {
+    throw new Error("Account not found.");
+  }
+  const ok = await verifyPassword(password, record.passwordSalt, record.passwordHash);
+  if (!ok) {
+    throw new Error("Incorrect password.");
+  }
+  return {
+    record,
+    role: record.role || roleForEmail(email),
+  };
+}
+
+async function verifyD1Account(db, email, password) {
+  const record = await loadAccountMirror(db, email);
   if (!record?.passwordHash || !record?.passwordSalt) {
     throw new Error("Account not found.");
   }
@@ -959,6 +1069,13 @@ async function listUsers(store) {
     return userSummaryFromRecord(email, record);
   }));
   return users.sort((a, b) => a.email.localeCompare(b.email));
+}
+
+async function listD1Users(db) {
+  const records = await listAccountMirrors(db);
+  return records
+    .map((record) => userSummaryFromRecord(record.email, record))
+    .sort((a, b) => a.email.localeCompare(b.email));
 }
 
 async function autoClaimMatchedRosterNames(store, record, db = null) {
@@ -1074,11 +1191,13 @@ async function ensureAccountMirrorCompleteFromKv(store, db) {
 }
 
 async function countKvAccountRecords(store) {
+  if (!store?.list) return 0;
   const result = await store.list({ prefix: "account:" }).catch(() => ({ keys: [] }));
   return (result.keys || []).length;
 }
 
 async function countKvDoctorProfileRecords(store) {
+  if (!store?.list) return 0;
   const result = await store.list({ prefix: DOCTOR_PROFILE_PREFIX }).catch(() => ({ keys: [] }));
   return (result.keys || []).length;
 }
@@ -1141,7 +1260,7 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
     const importRefsChanged = importsChanged(previousState.imports, accountImportRefs);
     const claimsChanged = JSON.stringify(claims) !== JSON.stringify(originalClaims);
     if (claimsChanged || importRefsChanged) {
-      await store.put(storageKey(record.email), JSON.stringify({
+      const updatedRecord = {
         ...record,
         claims,
         state: {
@@ -1149,11 +1268,13 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
           imports: accountImportRefs.map(repositoryImportRef),
         },
         updatedAt: new Date().toISOString(),
-      }));
+      };
+      if (store?.put) await store.put(storageKey(record.email), JSON.stringify(updatedRecord));
+      await upsertAccountMirror(options.db, updatedRecord).catch(() => null);
     }
   } else {
     const hasEmbeddedImports = Array.isArray(state.imports) && state.imports.some((item) => item?.dataUrl);
-    const imported = hasEmbeddedImports ? await upsertStateImports(store, state.imports, record.email, options.db) : {
+    const imported = hasEmbeddedImports && store?.put ? await upsertStateImports(store, state.imports, record.email, options.db) : {
       index,
       refs: (index.files || []).filter((file) => file.active !== false).map(repositoryImportRef),
       changed: false,
@@ -1162,11 +1283,13 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
     const stateWithRefs = { ...state, imports: creatorRepositoryRefs };
     if (hasEmbeddedImports && (imported.changed || importsChanged(state.imports, creatorRepositoryRefs))) {
       state = stateWithRefs;
-      await store.put(storageKey(record.email), JSON.stringify({
+      const updatedRecord = {
         ...record,
         state,
         updatedAt: new Date().toISOString(),
-      }));
+      };
+      if (store?.put) await store.put(storageKey(record.email), JSON.stringify(updatedRecord));
+      await upsertAccountMirror(options.db, updatedRecord).catch(() => null);
     } else {
       state = stateWithRefs;
     }
@@ -1182,12 +1305,12 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
     linkedProfiles,
     index,
   });
-  const storedSnapshot = await loadSnapshotRecord(store, owner.ownerType, owner.ownerId);
+  const storedSnapshot = store?.get ? await loadSnapshotRecord(store, owner.ownerType, owner.ownerId) : null;
   const derivedSnapshot = await buildDerivedAccountSnapshot(options.db, { role, record, state, claims, index });
   const snapshot = derivedSnapshot || storedSnapshot;
   const snapshotAvailable = Boolean(snapshot);
   const snapshotStale = derivedSnapshot ? false : (!storedSnapshot || storedSnapshot.schemaVersion !== SNAPSHOT_SCHEMA_VERSION || storedSnapshot.buildStamp !== buildStamp);
-  const issueConfig = await buildIssueConfig(store, record.email);
+  const issueConfig = await buildIssueConfig(store, record.email, options.db);
 
   return {
     role,
@@ -1317,18 +1440,20 @@ async function hydrateRepositoryFromExistingAccounts(store) {
   if (changed) await saveRepositoryIndex(store, index);
 }
 
-async function buildIssueConfig(store, email = "") {
-  const globalParserExtensions = await loadParserExtensionRules(store);
-  const record = email ? await loadAccountRecord(store, email).catch(() => null) : null;
+async function buildIssueConfig(store, email = "", db = null) {
+  const globalParserExtensions = store?.get ? await loadParserExtensionRules(store) : {};
+  const record = email
+    ? (await loadAccountMirror(db, email).catch(() => null)) || (store?.get ? await loadAccountRecord(store, email).catch(() => null) : null)
+    : null;
   const role = record?.role || roleForEmail(email);
   const localParserExtensions = sanitizeParserExtensionRules(record?.localParserExtensions);
   return {
     parserExtensions: mergeParserExtensionSets(globalParserExtensions, localParserExtensions),
     globalParserExtensions,
     localParserExtensions,
-    parserRuleSuggestions: role === "creator" || role === "owner" ? await loadParserRuleSuggestions(store) : [],
-    dismissedFingerprints: await loadDismissedIssueFingerprints(store, email),
-    ignoredFingerprints: await loadIgnoredIssueFingerprints(store),
+    parserRuleSuggestions: (role === "creator" || role === "owner") && store?.get ? await loadParserRuleSuggestions(store) : [],
+    dismissedFingerprints: store?.get ? await loadDismissedIssueFingerprints(store, email) : [],
+    ignoredFingerprints: store?.get ? await loadIgnoredIssueFingerprints(store) : [],
   };
 }
 
@@ -1576,6 +1701,7 @@ async function loadRepositoryIndex(store, db = null) {
       files: d1Files.filter((file) => file.active !== false).map((file) => sanitizeRepositoryFile(file)).filter(Boolean),
     };
   }
+  if (!store?.get) return { version: 1, files: [] };
   const raw = await store.get(REPOSITORY_INDEX_KEY, "json").catch(() => null);
   const rawFiles = Array.isArray(raw?.files) ? raw.files : [];
   const files = rawFiles.map(sanitizeRepositoryFile).filter((file) => file && file.active !== false);
@@ -1839,9 +1965,9 @@ async function buildAccountSnapshotStamp(store, context) {
       }))
     : [];
   const stateRevision = await buildStateRevision(context?.state || {});
-  const parserExtensions = await loadParserExtensionRules(store);
-  const ignoredFingerprints = await loadIgnoredIssueFingerprints(store);
-  const dismissedFingerprints = await loadDismissedIssueFingerprints(store, context?.email || "");
+  const parserExtensions = store?.get ? await loadParserExtensionRules(store) : {};
+  const ignoredFingerprints = store?.get ? await loadIgnoredIssueFingerprints(store) : [];
+  const dismissedFingerprints = store?.get ? await loadDismissedIssueFingerprints(store, context?.email || "") : [];
   return await sha256(JSON.stringify({
     schemaVersion: SNAPSHOT_SCHEMA_VERSION,
     ownerType: role === "creator" || role === "owner" ? "creator-account" : "claimed-account",
@@ -1924,6 +2050,7 @@ async function linkedDoctorProfilesForClaims(store, claims, db = null) {
   const d1Profiles = await queryDoctorProfileMirrors(db).catch(() => []);
   const d1Matches = filterLinkedDoctorProfiles(d1Profiles, claims);
   if (d1Profiles.length) return d1Matches;
+  if (!store?.list) return [];
   const profileResult = await store.list({ prefix: DOCTOR_PROFILE_PREFIX });
   if (!(profileResult.keys || []).length) return [];
   const profiles = [];
@@ -2245,9 +2372,10 @@ async function resolveDoctorAccount(store, rawDoctor, db = null) {
 }
 
 async function loadClaimedAccountIndex(store, db = null) {
-  await ensureAccountMirrorCompleteFromKv(store, db).catch(() => false);
+  if (store?.list) await ensureAccountMirrorCompleteFromKv(store, db).catch(() => false);
   const d1Accounts = await queryClaimedAccounts(db).catch(() => []);
   if (d1Accounts.length) return d1Accounts;
+  if (!store?.list) return [];
   const accounts = [];
   const result = await store.list({ prefix: "account:" });
   for (const item of result.keys || []) {
@@ -2475,7 +2603,7 @@ function randomSubscriptionToken() {
 async function ensureAccountSubscriptionToken(store, record) {
   if (!record?.email) return record;
   if (record.subscriptionToken) {
-    await store.put(subscriptionTokenKey(record.subscriptionToken), normalizeEmail(record.email));
+    if (store?.put) await store.put(subscriptionTokenKey(record.subscriptionToken), normalizeEmail(record.email));
     return record;
   }
   const updated = {
@@ -2483,8 +2611,10 @@ async function ensureAccountSubscriptionToken(store, record) {
     subscriptionToken: randomSubscriptionToken(),
     updatedAt: new Date().toISOString(),
   };
-  await store.put(storageKey(updated.email), JSON.stringify(updated));
-  await store.put(subscriptionTokenKey(updated.subscriptionToken), normalizeEmail(updated.email));
+  if (store?.put) {
+    await store.put(storageKey(updated.email), JSON.stringify(updated));
+    await store.put(subscriptionTokenKey(updated.subscriptionToken), normalizeEmail(updated.email));
+  }
   return updated;
 }
 

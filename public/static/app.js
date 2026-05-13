@@ -2729,7 +2729,6 @@ async function openWhoInsightForDate(date) {
   if (!canUseRosterInsights()) return;
   const selectedDate = String(date || "").slice(0, 10);
   if (!selectedDate) return;
-  await ensureInsightRosterAnalysis();
   const range = availableInsightDateRange();
   insightsState = {
     mode: "who",
@@ -2742,18 +2741,16 @@ async function openWhoInsightForDate(date) {
 
 async function openWhenInsight(termStart, termEnd) {
   if (!canUseRosterInsights()) return;
-  await ensureInsightRosterAnalysis();
   const range = availableInsightDateRange();
   const fromDate = formatDateKey(new Date());
   const toDate = range.end || termEnd || fromDate;
-  const options = comparisonDoctorOptions(fromDate, toDate, []);
   insightsState = {
     mode: "when",
     termStart: range.start || termStart || fromDate,
     termEnd: toDate,
     fromDate,
     hospitalFilters: [],
-    comparisonDoctorKey: options[0]?.key || "",
+    comparisonDoctorKey: "",
   };
   await renderInsightsModal();
 }
@@ -2762,7 +2759,6 @@ async function openWhenInsightForDoctor(doctorKey) {
   if (!canUseRosterInsights()) return;
   const normalizedKey = normalizeRosterName(doctorKey);
   if (!normalizedKey) return;
-  await ensureInsightRosterAnalysis();
   const range = availableInsightDateRange();
   const fromDate = formatDateKey(new Date());
   insightsState = {
@@ -2785,11 +2781,10 @@ function closeInsightsModal() {
 
 async function renderInsightsModal() {
   if (!insightsState) return;
-  await ensureInsightRosterAnalysis();
   if (insightsState.mode === "who") {
-    renderWhoInsight();
+    await renderWhoInsight();
   } else if (insightsState.mode === "when") {
-    renderWhenInsight();
+    await renderWhenInsight();
   }
   insightsModal.classList.remove("hidden");
   insightsModal.setAttribute("aria-hidden", "false");
@@ -2942,12 +2937,33 @@ function insightRowsToEventsByDoctor(rows) {
   return events;
 }
 
-function renderWhoInsight() {
+async function renderWhoInsight() {
   const date = insightsState.date;
   const mine = selectedDoctorEventsForInsights(date, date).filter(isRosterShiftEvent).filter((event) => eventRosterDateKey(event) === date);
   const activeSources = new Set(mine.map(eventSourceCode).filter(Boolean));
-  const coworkers = mine.length
-    ? comparisonDoctorOptions(date, date, [])
+  let coworkers = [];
+  const serverRows = mine.length ? await fetchRosterInsightRows({
+    startDate: date,
+    endDate: date,
+    excludeDoctorKeys: selectedInsightDoctorKeys(),
+  }) : [];
+  if (serverRows) {
+    const serverDoctors = insightRowsToDoctorOptions(serverRows);
+    const serverEvents = insightRowsToEventsByDoctor(serverRows);
+    coworkers = serverDoctors
+      .map((doctor) => ({
+        doctor,
+        events: (serverEvents.get(doctor.key) || [])
+          .filter(isRosterShiftEvent)
+          .filter((event) => eventRosterDateKey(event) === date)
+          .filter((event) => !activeSources.size || activeSources.has(eventSourceCode(event))),
+      }))
+      .filter((entry) => entry.events.length)
+      .flatMap((entry) => buildWhoAssignments(entry.doctor, entry.events));
+  } else {
+    await ensureInsightRosterAnalysis();
+    coworkers = mine.length
+      ? comparisonDoctorOptions(date, date, [])
       .map((doctor) => ({
         doctor,
         events: comparisonDoctorEvents(doctor.key, date, date)
@@ -2957,7 +2973,8 @@ function renderWhoInsight() {
       }))
       .filter((entry) => entry.events.length)
       .flatMap((entry) => buildWhoAssignments(entry.doctor, entry.events))
-    : [];
+      : [];
+  }
   const grouped = groupWhoAssignments(coworkers);
 
   insightsModalTitle.textContent = "Who";
@@ -2979,10 +2996,25 @@ function renderWhoInsight() {
   `;
 }
 
-function renderWhenInsight() {
+async function renderWhenInsight() {
   const hospitalFilters = Array.isArray(insightsState.hospitalFilters) ? insightsState.hospitalFilters : [];
   const fromDate = insightsState.fromDate || formatDateKey(new Date());
   const toDate = insightsState.termEnd || availableInsightDateRange().end || fromDate;
+  const serverRows = await fetchRosterInsightRows({ startDate: fromDate, endDate: toDate, sourceTypes: hospitalFilters.map((item) => item.toLowerCase()) });
+  if (serverRows) {
+    const serverOptions = prioritizeDoctorOptions(insightRowsToDoctorOptions(serverRows)).filter((doctor) => doctor.key !== selectedDoctor()?.key);
+    const selectedKey = serverOptions.some((doctor) => doctor.key === insightsState.comparisonDoctorKey)
+      ? insightsState.comparisonDoctorKey
+      : serverOptions[0]?.key || "";
+    insightsState.comparisonDoctorKey = selectedKey;
+    const selectedComparison = serverOptions.find((doctor) => doctor.key === selectedKey) || null;
+    const serverEvents = insightRowsToEventsByDoctor(serverRows);
+    const mine = selectedDoctorEventsForInsights(fromDate, toDate, hospitalFilters).filter(isRosterShiftEvent);
+    const theirs = selectedComparison ? (serverEvents.get(selectedComparison.key) || []).filter(isRosterShiftEvent) : [];
+    renderWhenInsightResult({ options: serverOptions, selectedComparison, mine, theirs, fromDate, toDate, hospitalFilters });
+    return;
+  }
+  await ensureInsightRosterAnalysis();
   const options = comparisonDoctorOptions(fromDate, toDate, hospitalFilters);
   const selectedKey = options.some((doctor) => doctor.key === insightsState.comparisonDoctorKey)
     ? insightsState.comparisonDoctorKey
@@ -2993,6 +3025,10 @@ function renderWhenInsight() {
   const theirs = selectedComparison
     ? comparisonDoctorEvents(selectedComparison.key, fromDate, toDate, hospitalFilters).filter(isRosterShiftEvent)
     : [];
+  renderWhenInsightResult({ options, selectedComparison, mine, theirs, fromDate, toDate, hospitalFilters });
+}
+
+function renderWhenInsightResult({ options, selectedComparison, mine, theirs, fromDate, toDate, hospitalFilters }) {
   const overlaps = buildOverlapDays(mine, theirs);
   const nextOverlapDate = chooseNextOverlapDate(overlaps);
   const hospitalOptions = availableHospitalsForInsightRange(fromDate, toDate);

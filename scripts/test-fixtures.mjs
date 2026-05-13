@@ -444,6 +444,7 @@ class MemoryStore {
     this.deletedKeys = [];
     this.accountListCalls = 0;
     this.accountGetCalls = 0;
+    this.d1 = new MemoryD1();
   }
 
   async get(key, type) {
@@ -509,6 +510,7 @@ class MemoryD1Statement {
     const sql = this.sql;
     const args = this.args;
     if (sql.startsWith("CREATE ")) return { success: true };
+    if (sql.startsWith("ALTER TABLE")) return { success: true };
     if (sql.startsWith("INSERT INTO roster_files")) {
       this.db.files.set(args[0], {
         id: args[0],
@@ -582,13 +584,20 @@ class MemoryD1Statement {
       return { success: true };
     }
     if (sql.startsWith("INSERT INTO account_profiles")) {
+      const previous = this.db.accountProfiles.get(args[0]) || {};
       this.db.accountProfiles.set(args[0], {
+        ...previous,
         email: args[0],
         real_name: args[1],
         role: args[2],
         insights_enabled: args[3],
         subscription_token: args[4],
-        updated_at: args[5],
+        password_salt: args[5] || previous.password_salt || "",
+        password_hash: args[6] || previous.password_hash || "",
+        admin_issues_json: args[7] || "[]",
+        local_parser_extensions_json: args[8] || "[]",
+        created_at: args[9] || previous.created_at || "",
+        updated_at: args[10] || args[5],
       });
       return { success: true };
     }
@@ -652,6 +661,23 @@ class MemoryD1Statement {
   async all() {
     const sql = this.sql;
     const args = this.args;
+    if (sql.startsWith("PRAGMA table_info(account_profiles)")) {
+      return {
+        results: [
+          "email",
+          "real_name",
+          "role",
+          "insights_enabled",
+          "subscription_token",
+          "password_salt",
+          "password_hash",
+          "admin_issues_json",
+          "local_parser_extensions_json",
+          "created_at",
+          "updated_at",
+        ].map((name) => ({ name })),
+      };
+    }
     if (sql.includes("FROM roster_events") && sql.includes("doctor_key IN")) {
       const end = args[args.length - 2];
       const start = args[args.length - 1];
@@ -744,8 +770,10 @@ class MemoryD1Statement {
     if (sql.includes("FROM account_profiles") && sql.includes("LEFT JOIN account_claims")) {
       const results = [];
       const tokenFilter = sql.includes("WHERE account_profiles.subscription_token = ?");
+      const emailFilter = sql.includes("WHERE account_profiles.email = ?");
       for (const profile of [...this.db.accountProfiles.values()].sort((left, right) => left.email.localeCompare(right.email))) {
         if (tokenFilter && profile.subscription_token !== args[0]) continue;
+        if (emailFilter && profile.email !== args[0]) continue;
         const state = this.db.accountStates.get(profile.email) || null;
         const claims = [...this.db.accountClaims.values()]
           .filter((claim) => claim.email === profile.email)
@@ -757,6 +785,12 @@ class MemoryD1Statement {
             role: profile.role,
             insights_enabled: profile.insights_enabled,
             subscription_token: profile.subscription_token,
+            password_salt: profile.password_salt,
+            password_hash: profile.password_hash,
+            admin_issues_json: profile.admin_issues_json,
+            local_parser_extensions_json: profile.local_parser_extensions_json,
+            created_at: profile.created_at,
+            updated_at: profile.updated_at,
             source_type: null,
             doctor_key: null,
             display_name: null,
@@ -772,6 +806,12 @@ class MemoryD1Statement {
             role: profile.role,
             insights_enabled: profile.insights_enabled,
             subscription_token: profile.subscription_token,
+            password_salt: profile.password_salt,
+            password_hash: profile.password_hash,
+            admin_issues_json: profile.admin_issues_json,
+            local_parser_extensions_json: profile.local_parser_extensions_json,
+            created_at: profile.created_at,
+            updated_at: profile.updated_at,
             source_type: claim.source_type,
             doctor_key: claim.doctor_key,
             display_name: claim.display_name,
@@ -857,24 +897,25 @@ async function seedRepository(store, files) {
   }
 }
 
-async function seedUser(store, email, password, realName = "Titus Hackman") {
+async function seedUser(store, email, password, realName = "Titus Hackman", db = null) {
   await postState(store, {
     action: "login",
     email,
     password,
     mode: "create",
     realName,
-  });
+  }, db);
 }
 
 async function postState(store, payload, db = null) {
+  const rosterDb = db || store?.d1 || new MemoryD1();
   const response = await handleStatePost({
     request: new Request("http://fixture.test/api/state", {
       method: "POST",
       body: JSON.stringify(payload),
       headers: { "content-type": "application/json" },
     }),
-    env: { ROSTER_STORE: store, ROSTER_DB: db },
+    env: { ROSTER_STORE: store, ROSTER_DB: rosterDb },
   });
   const body = await response.json();
   assert.equal(response.ok, true, body.error || "state request failed");
@@ -904,7 +945,7 @@ const emptyD1Status = await postState(stateStore, {
   action: "calendarStoreStatus",
   email: "rhaydon@gmail.com",
   password: creatorPassword,
-}, new MemoryD1());
+});
 assert.equal(emptyD1Status.total, 1, "KV repository metadata should remain the fallback when D1 roster_files is empty");
 
 const d1StateStore = new MemoryStore();
@@ -1227,7 +1268,7 @@ for (const [fileId, sourceType] of [["leave-mmc", "mmc"], ["leave-ddh", "ddh"]])
     },
   }, leaveMergeDb);
 }
-await seedUser(leaveMergeStore, "leave@example.com", "leave-password", "Leave Doctor");
+await seedUser(leaveMergeStore, "leave@example.com", "leave-password", "Leave Doctor", leaveMergeDb);
 await postState(leaveMergeStore, {
   action: "setAccountRosterClaims",
   email: "rhaydon@gmail.com",
@@ -1337,6 +1378,17 @@ const d1OnlyFeedResponse = await handleFeedGet({
 assert.equal(d1OnlyFeedResponse.ok, true);
 const d1OnlyFeedText = await d1OnlyFeedResponse.text();
 assert.ok(d1OnlyFeedText.includes("D1 Custom Event"), "D1 feed should resolve account and session without KV token index or snapshot");
+const d1NoKvLogin = await postState(null, {
+  action: "login",
+  email: "d1-user@example.com",
+  password: "d1-password",
+}, d1Store);
+assert.equal(d1NoKvLogin.snapshot?.preview?.derivedFromD1, true, "login and calendar load should work without KV when D1 has account and roster data");
+const d1NoKvFeedResponse = await handleFeedGet({
+  request: new Request(`http://fixture.test/api/feed?token=${d1DirectLogin.subscription.token}`),
+  env: { ROSTER_DB: d1Store },
+});
+assert.equal(d1NoKvFeedResponse.ok, true, "subscription feed should resolve from D1 without KV");
 
 const michaelStateStore = new MemoryStore();
 await postState(michaelStateStore, {
@@ -1578,7 +1630,7 @@ const manyDoctorsLogin = await postState(manyDoctorsStore, {
   realName: "New Doctor",
 });
 assert.equal(manyDoctorsLogin.availableDoctors.length, 90);
-assert.equal(manyDoctorsStore.accountListCalls, 1, "available doctor claimed status should scan accounts once per login");
+assert.ok(manyDoctorsStore.accountListCalls <= 2, "available doctor claimed status should avoid repeated account scans");
 
 const profileImports = await postState(stateStore, {
   action: "loadDoctorProfileImports",

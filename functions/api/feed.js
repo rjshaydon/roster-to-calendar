@@ -1,11 +1,11 @@
 import { applyEventOverrides, customEventsToEvents, defaultSettings, exportIcs } from "../_lib/roster.js";
 import { hasCalendarDb, loadAccountMirrorBySubscriptionToken, queryDoctorEvents } from "../_lib/d1-calendar.js";
-import { accountSnapshotOwner, loadAccountBySubscriptionToken, loadSnapshotRecord, normalizeEmail } from "./state.js";
+import { normalizeEmail } from "./state.js";
 
 export async function onRequestGet(context) {
   try {
-    if (!context.env.ROSTER_STORE) {
-      return new Response("Cloud storage is not configured.", { status: 503 });
+    if (!hasCalendarDb(context.env)) {
+      return new Response("D1 database is not configured.", { status: 503 });
     }
 
     const url = new URL(context.request.url);
@@ -15,8 +15,7 @@ export async function onRequestGet(context) {
       return new Response("Subscription token is required.", { status: 400 });
     }
 
-    const record = await loadAccountMirrorBySubscriptionToken(context.env.ROSTER_DB, token)
-      || await loadAccountBySubscriptionToken(context.env.ROSTER_STORE, token);
+    const record = await loadAccountMirrorBySubscriptionToken(context.env.ROSTER_DB, token);
     if (!record) {
       return new Response("Subscription calendar was not found.", { status: 404 });
     }
@@ -26,14 +25,7 @@ export async function onRequestGet(context) {
       return calendarResponse(d1Feed.ics, d1Feed.displayName || record.realName || record.email);
     }
 
-    const owner = accountSnapshotOwner(record.email, record.role || "");
-    const snapshot = await loadSnapshotRecord(context.env.ROSTER_STORE, owner.ownerType, owner.ownerId);
-    const artifact = snapshot?.subscriptionFeeds?.[view] || null;
-    if (!artifact?.ics) {
-      return new Response("No stored subscription calendar is available for this view.", { status: 404 });
-    }
-
-    return calendarResponse(artifact.ics, artifact.doctorDisplay || record.realName || record.email);
+    return new Response("No D1 subscription calendar is available for this view.", { status: 404 });
   } catch (error) {
     return new Response(error.message || "Subscription feed failed.", { status: 400 });
   }
