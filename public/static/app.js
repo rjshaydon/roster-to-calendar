@@ -8854,6 +8854,7 @@ async function restoreCloudState(options = {}) {
     });
     const data = await readJsonResponse(response, "Login failed.");
     await applyCloudStateData(data);
+    await loadCloudCalendarEvents({ adminTargetEmail });
     if (isCreatorAuthenticated()) {
       await loadServerUsers();
     }
@@ -8980,6 +8981,44 @@ async function applyCloudStateData(data) {
     session: restoredSessionState || {},
     snapshot: currentSnapshot,
   });
+}
+
+async function loadCloudCalendarEvents(options = {}) {
+  if (!cloudAvailable) return false;
+  const adminTargetEmail = normalizeEmail(options.adminTargetEmail);
+  const requestEmail = adminTargetEmail ? authUserEmail : currentUserEmail;
+  const requestPassword = adminTargetEmail ? authUserPassword : currentUserPassword;
+  if (!requestEmail || !requestPassword) return false;
+  const preferredDoctorKey = normalizeRosterName(
+    restoredSessionState?.doctorKey
+    || selectedDoctor()?.key
+    || (isCreatorAuthenticated() && !adminTargetEmail ? OWNER_DOCTOR_KEY : currentRosterClaims[0]?.key)
+    || "",
+  );
+  const response = await fetch("/api/state", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      action: "loadCalendarEvents",
+      email: requestEmail,
+      password: requestPassword,
+      targetEmail: adminTargetEmail,
+      doctorKey: preferredDoctorKey,
+    }),
+  });
+  const data = await readJsonResponse(response, "Calendar load failed.");
+  currentSnapshot = sanitizeWorkspaceSnapshot(data.snapshot);
+  currentSnapshotStale = data.snapshotStale === true;
+  currentSnapshotBuiltAt = String(data.snapshotBuiltAt || "");
+  if (!currentSnapshot) return false;
+  selectedFiles = importRefsToClientEntries(currentSnapshot.fileRefs || selectedFiles.map(importRefForWorkspace));
+  restoredSessionState = currentSnapshot.session || restoredSessionState || {};
+  saveWorkspaceSnapshotForEmail(activeWorkspaceOwnerKey(), {
+    fileRefs: selectedFiles.map(importRefForWorkspace),
+    session: restoredSessionState || {},
+    snapshot: currentSnapshot,
+  });
+  return true;
 }
 
 function serverStorageRequiredMessage() {
@@ -10122,7 +10161,7 @@ function parseError(text, fallbackMessage = "Request failed.") {
     return JSON.parse(text).error || fallbackMessage;
   } catch {
     if (/Worker exceeded resource limits|Error 1102/i.test(String(text || ""))) {
-      return `${fallbackMessage} Cloudflare exceeded its CPU or memory limit while parsing the roster. Try again after the latest deploy; if it persists, the app needs a higher Workers CPU limit or client-side parsing.`;
+      return `${fallbackMessage} Cloudflare exceeded CPU or memory while handling this request.`;
     }
     const cleaned = String(text || "")
       .replace(/<script[\s\S]*?<\/script>/gi, " ")

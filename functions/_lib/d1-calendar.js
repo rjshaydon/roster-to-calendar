@@ -6,6 +6,8 @@ import {
 } from "./roster.js";
 
 const SOURCE_TYPES = ["mmc", "ddh", "casey", "mch"];
+const ensuredCalendarDbs = new WeakSet();
+const pendingCalendarSchemaEnsures = new WeakMap();
 
 export function hasCalendarDb(env) {
   return Boolean(env?.ROSTER_DB?.prepare);
@@ -13,6 +15,24 @@ export function hasCalendarDb(env) {
 
 export async function ensureCalendarSchema(db) {
   if (!db?.prepare) return false;
+  if (ensuredCalendarDbs.has(db)) return true;
+  const pending = pendingCalendarSchemaEnsures.get(db);
+  if (pending) return pending;
+  const ensurePromise = ensureCalendarSchemaUncached(db)
+    .then(() => {
+      ensuredCalendarDbs.add(db);
+      pendingCalendarSchemaEnsures.delete(db);
+      return true;
+    })
+    .catch((error) => {
+      pendingCalendarSchemaEnsures.delete(db);
+      throw error;
+    });
+  pendingCalendarSchemaEnsures.set(db, ensurePromise);
+  return ensurePromise;
+}
+
+async function ensureCalendarSchemaUncached(db) {
   await db.prepare(`
     CREATE TABLE IF NOT EXISTS roster_files (
       id TEXT PRIMARY KEY,
@@ -67,6 +87,7 @@ export async function ensureCalendarSchema(db) {
   `).run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_events_doctor_range ON roster_events (doctor_key, start_date, end_date)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_events_date_source ON roster_events (start_date, source_type)").run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_events_source_range ON roster_events (source_type, start_date, end_date)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_events_file ON roster_events (file_id)").run();
   await db.prepare(`
     CREATE TABLE IF NOT EXISTS account_profiles (

@@ -76,10 +76,10 @@ export async function onRequestPost(context) {
         availableDoctors: prepared.availableDoctors,
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
-        snapshot: prepared.snapshot,
-        snapshotAvailable: prepared.snapshotAvailable,
-        snapshotStale: prepared.snapshotStale,
-        snapshotBuiltAt: prepared.snapshotBuiltAt,
+        snapshot: null,
+        snapshotAvailable: false,
+        snapshotStale: false,
+        snapshotBuiltAt: "",
         issueConfig: prepared.issueConfig,
       });
     }
@@ -750,6 +750,36 @@ export async function onRequestPost(context) {
       return Response.json({ ok: true, coworkers });
     }
 
+    if (action === "loadCalendarEvents") {
+      if (!hasCalendarDb(context.env)) {
+        return Response.json({ ok: false, unavailable: true, snapshot: null });
+      }
+      const targetRecord = targetEmail && (account.role === "creator" || account.role === "owner")
+        ? await loadAccountMirror(context.env.ROSTER_DB, targetEmail)
+        : account.record;
+      const prepared = await prepareAccountResponse(null, targetRecord, {
+        db: context.env.ROSTER_DB,
+        includeAvailableDoctors: false,
+      });
+      const snapshot = await buildDerivedAccountSnapshot(context.env.ROSTER_DB, {
+        role: prepared.role,
+        record: targetRecord,
+        state: prepared.state,
+        claims: prepared.claims,
+        index: await loadRepositoryIndex(null, context.env.ROSTER_DB),
+        startDate: String(body?.startDate || "").slice(0, 10),
+        endDate: String(body?.endDate || "").slice(0, 10),
+        doctorKey: normalizeRosterName(body?.doctorKey || ""),
+      });
+      return Response.json({
+        ok: true,
+        snapshot,
+        snapshotAvailable: Boolean(snapshot),
+        snapshotStale: false,
+        snapshotBuiltAt: snapshot?.builtAt || "",
+      });
+    }
+
     if (action === "loadInsightImports") {
       return Response.json({ error: "Insight import hydration has been removed. Insights query D1 directly." }, { status: 410 });
     }
@@ -1214,6 +1244,7 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
       state = stateWithRefs;
     }
   }
+  state = applyDefaultSelectedDoctorToState(state, role, claims);
 
   const owner = accountSnapshotOwner(record.email, role);
   const buildStamp = await buildAccountSnapshotStamp(store, {
@@ -1226,10 +1257,8 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
     index,
   });
   const storedSnapshot = store?.get ? await loadSnapshotRecord(store, owner.ownerType, owner.ownerId) : null;
-  const derivedSnapshot = await buildDerivedAccountSnapshot(options.db, { role, record, state, claims, index });
-  const snapshot = derivedSnapshot || storedSnapshot;
-  const snapshotAvailable = Boolean(snapshot);
-  const snapshotStale = derivedSnapshot ? false : (!storedSnapshot || storedSnapshot.schemaVersion !== SNAPSHOT_SCHEMA_VERSION || storedSnapshot.buildStamp !== buildStamp);
+  const snapshotAvailable = Boolean(storedSnapshot);
+  const snapshotStale = !storedSnapshot || storedSnapshot.schemaVersion !== SNAPSHOT_SCHEMA_VERSION || storedSnapshot.buildStamp !== buildStamp;
   const issueConfig = await buildIssueConfig(store, record.email, options.db);
 
   return {
@@ -1241,16 +1270,31 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
     availableDoctors: options.includeAvailableDoctors === false ? [] : await repositoryDoctorCandidates(store, index, options.db),
     subscription: {
       token: String(record.subscriptionToken || ""),
-      enabled: Boolean(snapshot?.subscriptionFeeds?.full?.ics),
+      enabled: Boolean(storedSnapshot?.subscriptionFeeds?.full?.ics),
     },
     insightsEnabled: insightsEnabledForRecord(record),
     adminIssues: sanitizeAdminIssues(record.adminIssues),
     issueConfig,
-    snapshot,
+    snapshot: null,
     snapshotAvailable,
     snapshotStale,
-    snapshotBuiltAt: snapshot?.builtAt || "",
+    snapshotBuiltAt: "",
     snapshotBuildStamp: buildStamp,
+  };
+}
+
+function applyDefaultSelectedDoctorToState(state, role, claims = []) {
+  const session = state.session && typeof state.session === "object" ? state.session : {};
+  const existingKey = normalizeRosterName(session.doctorKey || "");
+  const defaultKey = role === "creator" || role === "owner"
+    ? OWNER_DOCTOR_KEY
+    : sanitizeClaims(claims)[0]?.key || "";
+  return {
+    ...state,
+    session: {
+      ...session,
+      doctorKey: existingKey || defaultKey,
+    },
   };
 }
 
@@ -1263,7 +1307,7 @@ async function buildDerivedAccountSnapshot(db, context) {
   let selectedKey = "";
   if (role === "creator" || role === "owner") {
     const d1Doctors = await queryRosterDoctors(db).catch(() => []);
-    const requestedKey = normalizeRosterName(state.session?.doctorKey || "");
+    const requestedKey = normalizeRosterName(context.doctorKey || state.session?.doctorKey || "");
     selectedKey = requestedKey || OWNER_DOCTOR_KEY;
     let doctor = d1Doctors.find((item) => item.key === selectedKey) || findRepositoryDoctorByKey(context.index, selectedKey);
     if (requestedKey && selectedKey !== OWNER_DOCTOR_KEY && !doctor) {
@@ -1276,8 +1320,9 @@ async function buildDerivedAccountSnapshot(db, context) {
   } else {
     const claims = sanitizeClaims(context.claims);
     if (!claims.length) return null;
-    selectedKey = claims[0].key;
-    doctorKeys = claims.map((claim) => claim.key);
+    const requestedKey = normalizeRosterName(context.doctorKey || state.session?.doctorKey || "");
+    selectedKey = claims.some((claim) => claim.key === requestedKey) ? requestedKey : claims[0].key;
+    doctorKeys = [selectedKey];
     doctorOptions = buildCreatorDoctorOptions(claims.map((claim) => ({
       key: claim.key,
       displayName: claim.displayName,
@@ -1294,7 +1339,10 @@ async function buildDerivedAccountSnapshot(db, context) {
     ...(normalizedSession.settings || {}),
   };
   const events = [
-    ...applyEventOverrides(await queryDoctorEvents(db, doctorKeys), normalizedSession.overrides || {}),
+    ...applyEventOverrides(await queryDoctorEvents(db, doctorKeys, {
+      startDate: context.startDate || "",
+      endDate: context.endDate || "",
+    }), normalizedSession.overrides || {}),
     ...customEventsToEvents(sanitizeSnapshotCustomEvents(normalizedSession.customEvents, context.record.email), settings),
   ];
   if (!events.length) return null;

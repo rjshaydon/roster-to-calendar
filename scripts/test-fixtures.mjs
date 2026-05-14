@@ -1025,6 +1025,9 @@ function memoryD1AccountRecord(db, email) {
 const stateStore = new MemoryStore();
 stateStore.d1 = new MemoryD1();
 const creatorPassword = "fixture-password";
+const wranglerConfig = await readFile(new URL("../wrangler.toml", import.meta.url), "utf8");
+assert.ok(/binding\s*=\s*"ROSTER_DB"/.test(wranglerConfig), "wrangler.toml must bind D1 ROSTER_DB");
+assert.ok(!/ROSTER_STORE/.test(wranglerConfig), "wrangler.toml must not reintroduce KV ROSTER_STORE");
 await postState(stateStore, {
   action: "login",
   email: "rhaydon@gmail.com",
@@ -1103,8 +1106,15 @@ const d1CreatorLogin = await postState(d1StateStore, {
   email: "rhaydon@gmail.com",
   password: creatorPassword,
 }, d1Store);
-assert.equal(d1CreatorLogin.snapshot?.preview?.derivedFromD1, true);
-assert.ok(d1CreatorLogin.snapshot.preview.events.length > 0);
+assert.equal(d1CreatorLogin.snapshot, null, "login should not build or return a full calendar snapshot");
+assert.equal(d1CreatorLogin.state.session.doctorKey, d1Doctor.key, "creator login should keep selected doctor metadata");
+const d1CreatorCalendar = await postState(d1StateStore, {
+  action: "loadCalendarEvents",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+}, d1Store);
+assert.equal(d1CreatorCalendar.snapshot?.preview?.derivedFromD1, true);
+assert.ok(d1CreatorCalendar.snapshot.preview.events.length > 0);
 const d1CreatedUser = await postState(d1StateStore, {
   action: "adminCreateUser",
   email: "rhaydon@gmail.com",
@@ -1119,7 +1129,14 @@ const d1DirectLogin = await postState(d1StateStore, {
   email: "d1-user@example.com",
   password: "d1-password",
 }, d1Store);
-const d1OverrideEvent = d1DirectLogin.snapshot.preview.events[0];
+assert.equal(d1DirectLogin.snapshot, null, "claimed login should not build or return a full calendar snapshot");
+assert.equal(d1DirectLogin.state.session.doctorKey, d1Doctor.key, "claimed login should default to the claimed doctor");
+const d1DirectCalendar = await postState(d1StateStore, {
+  action: "loadCalendarEvents",
+  email: "d1-user@example.com",
+  password: "d1-password",
+}, d1Store);
+const d1OverrideEvent = d1DirectCalendar.snapshot.preview.events[0];
 await postState(d1StateStore, {
   action: "save",
   email: "d1-user@example.com",
@@ -1154,25 +1171,37 @@ const d1SessionLogin = await postState(d1StateStore, {
   password: "d1-password",
 }, d1Store);
 assert.equal(d1SessionLogin.state.session.exportRange.startDate, "2026-02-01", "D1 account session should load without KV state");
-assert.ok(d1SessionLogin.snapshot.preview.events.some((event) => event.title === "D1 Edited Shift"), "D1 snapshot should apply session overrides");
-assert.ok(d1SessionLogin.snapshot.preview.events.some((event) => event.title === "D1 Custom Event"), "D1 snapshot should include session custom events");
+const d1SessionCalendar = await postState(d1StateStore, {
+  action: "loadCalendarEvents",
+  email: "d1-user@example.com",
+  password: "d1-password",
+}, d1Store);
+assert.ok(d1SessionCalendar.snapshot.preview.events.some((event) => event.title === "D1 Edited Shift"), "D1 calendar load should apply session overrides");
+assert.ok(d1SessionCalendar.snapshot.preview.events.some((event) => event.title === "D1 Custom Event"), "D1 calendar load should include session custom events");
 const d1AdminLoad = await postState(d1StateStore, {
   action: "adminLoadUser",
   email: "rhaydon@gmail.com",
   password: creatorPassword,
   targetEmail: "d1-user@example.com",
 }, d1Store);
+assert.equal(d1AdminLoad.snapshot, null, "admin user switch should not build or return a full calendar snapshot");
+const d1AdminCalendar = await postState(d1StateStore, {
+  action: "loadCalendarEvents",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  targetEmail: "d1-user@example.com",
+}, d1Store);
 assert.deepEqual(
-  d1AdminLoad.snapshot.preview.events.map((event) => event.id),
-  d1SessionLogin.snapshot.preview.events.map((event) => event.id),
+  d1AdminCalendar.snapshot.preview.events.map((event) => event.id),
+  d1SessionCalendar.snapshot.preview.events.map((event) => event.id),
   "direct and creator-switched user loads should use the same D1 calendar events",
 );
 const d1Insights = await postState(d1StateStore, {
   action: "queryRosterInsights",
   email: "rhaydon@gmail.com",
   password: creatorPassword,
-  startDate: d1CreatorLogin.snapshot.preview.events[0].start.slice(0, 10),
-  endDate: d1CreatorLogin.snapshot.preview.events[0].start.slice(0, 10),
+  startDate: d1CreatorCalendar.snapshot.preview.events[0].start.slice(0, 10),
+  endDate: d1CreatorCalendar.snapshot.preview.events[0].start.slice(0, 10),
 }, d1Store);
 assert.ok(Array.isArray(d1Insights.coworkers));
 const d1RepositoryFile = [...d1Store.files.keys()][0];
@@ -1236,7 +1265,13 @@ const d1NoKvIndexLogin = await postState(d1StateStore, {
   email: "d1-user@example.com",
   password: "d1-password",
 }, d1Store);
-assert.equal(d1NoKvIndexLogin.snapshot?.preview?.derivedFromD1, true, "D1 account snapshot should load without KV repository index");
+assert.equal(d1NoKvIndexLogin.snapshot, null, "D1 account login should stay lightweight without KV repository index");
+const d1NoKvIndexCalendar = await postState(d1StateStore, {
+  action: "loadCalendarEvents",
+  email: "d1-user@example.com",
+  password: "d1-password",
+}, d1Store);
+assert.equal(d1NoKvIndexCalendar.snapshot?.preview?.derivedFromD1, true, "D1 account calendar load should work without KV repository index");
 assert.ok(d1NoKvIndexLogin.availableDoctors.some((doctor) => doctor.key === d1Doctor.key), "D1 doctor directory should load without KV repository index");
 const d1ClaimResolution = await postState(d1StateStore, {
   action: "resolveDoctorAccount",
@@ -1397,7 +1432,13 @@ const leaveLogin = await postState(leaveMergeStore, {
   email: "leave@example.com",
   password: "leave-password",
 }, leaveMergeDb);
-const mergedLeave = leaveLogin.snapshot.preview.events.filter((event) => event.title === "Annual Leave");
+assert.equal(leaveLogin.snapshot, null, "login should stay lightweight for duplicate leave accounts");
+const leaveCalendar = await postState(leaveMergeStore, {
+  action: "loadCalendarEvents",
+  email: "leave@example.com",
+  password: "leave-password",
+}, leaveMergeDb);
+const mergedLeave = leaveCalendar.snapshot.preview.events.filter((event) => event.title === "Annual Leave");
 assert.equal(mergedLeave.length, 1);
 assert.deepEqual(mergedLeave[0].sources.sort(), ["DDH", "MMC"]);
 const conferenceLeaveStore = new MemoryStore();
@@ -1499,7 +1540,13 @@ const d1NoKvLogin = await postState(null, {
   email: "d1-user@example.com",
   password: "d1-password",
 }, d1Store);
-assert.equal(d1NoKvLogin.snapshot?.preview?.derivedFromD1, true, "login and calendar load should work without KV when D1 has account and roster data");
+assert.equal(d1NoKvLogin.snapshot, null, "D1-only login should not depend on KV snapshots");
+const d1NoKvCalendar = await postState(null, {
+  action: "loadCalendarEvents",
+  email: "d1-user@example.com",
+  password: "d1-password",
+}, d1Store);
+assert.equal(d1NoKvCalendar.snapshot?.preview?.derivedFromD1, true, "separate calendar load should work without KV when D1 has account and roster data");
 const d1NoKvFeedResponse = await handleFeedGet({
   request: new Request(`http://fixture.test/api/feed?token=${d1DirectLogin.subscription.token}`),
   env: { ROSTER_DB: d1Store },
