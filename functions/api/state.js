@@ -216,7 +216,10 @@ export async function onRequestPost(context) {
       if (!hasCalendarDb(context.env)) {
         return Response.json({ ok: false, unavailable: true, total: 0, populated: 0, remaining: 0 });
       }
-      const status = await calendarStoreStatus(null, context.env.ROSTER_DB, { doctorKey: body?.selectedDoctorKey || body?.doctorKey || OWNER_DOCTOR_KEY });
+      const status = await calendarStoreStatus(null, context.env.ROSTER_DB, {
+        doctorKey: body?.selectedDoctorKey || body?.doctorKey || OWNER_DOCTOR_KEY,
+        expectedFileIds: sanitizeRepositoryFileIds(body?.expectedFileIds),
+      });
       const accounts = await accountMirrorStatus(context.env.ROSTER_DB).catch(() => ({ unavailable: true, profiles: 0, claims: 0, states: 0 }));
       accounts.kvProfiles = null ? await countKvAccountRecords(null) : 0;
       accounts.kvDoctorProfiles = null ? await countKvDoctorProfileRecords(null) : 0;
@@ -261,7 +264,10 @@ export async function onRequestPost(context) {
         body?.eventsByDoctor || {},
       );
       const supersession = await reconcileRosterFileSupersession(context.env.ROSTER_DB, filePayload, { uploaderEmail: email });
-      const status = await calendarStoreStatus(null, context.env.ROSTER_DB, { doctorKey: selectedDoctorKey });
+      const status = await calendarStoreStatus(null, context.env.ROSTER_DB, {
+        doctorKey: selectedDoctorKey,
+        expectedFileIds: sanitizeRepositoryFileIds(body?.expectedFileIds),
+      });
       return Response.json({ ok: true, result, supersession, ...status });
     }
 
@@ -1078,7 +1084,8 @@ async function rebuildCalendarStoreFromRepository(store, db, options = {}) {
 }
 
 async function calendarStoreStatus(store, db, options = {}) {
-  const d1Files = await queryRosterFiles(db).catch(() => []);
+  const allD1Files = await queryRosterFiles(db, { includeInactive: true }).catch(() => []);
+  const d1Files = allD1Files.filter((file) => file.active !== false);
   const index = d1Files.length ? { version: 1, files: d1Files } : await loadRepositoryIndex(store);
   const activeFiles = (index.files || []).filter((file) => file.active !== false);
   const counts = await countDerivedEventsByFile(db, activeFiles.map((file) => file.id));
@@ -1114,6 +1121,7 @@ async function calendarStoreStatus(store, db, options = {}) {
   }));
   const populated = files.filter((file) => file.status === "populated").length;
   const partial = files.filter((file) => file.status === "partial").length;
+  const expectedFiles = summarizeExpectedRosterFiles(allD1Files, options.expectedFileIds);
   return {
     total: files.length,
     populated,
@@ -1123,8 +1131,25 @@ async function calendarStoreStatus(store, db, options = {}) {
     selectedDoctorKey,
     selectedDoctorEventCount: files.reduce((total, file) => total + file.selectedDoctorEventCount, 0),
     selectedDoctorFiles: selectedDoctorRows.map(rosterFileDoctorDiagnostic),
+    expectedFiles,
     nextFile: files.find((file) => file.status !== "populated") || null,
     files,
+  };
+}
+
+function summarizeExpectedRosterFiles(allFiles = [], expectedFileIds = []) {
+  const expectedIds = sanitizeRepositoryFileIds(expectedFileIds);
+  const filesById = new Map((allFiles || []).map((file) => [file.id, file]));
+  const persistedFileIds = expectedIds.filter((id) => filesById.has(id));
+  const activeFileIds = persistedFileIds.filter((id) => filesById.get(id)?.active !== false);
+  return {
+    expectedCount: expectedIds.length,
+    expectedFileIds: expectedIds,
+    persistedCount: persistedFileIds.length,
+    activeCount: activeFileIds.length,
+    persistedFileIds,
+    activeFileIds,
+    missingFileIds: expectedIds.filter((id) => !filesById.has(id)),
   };
 }
 

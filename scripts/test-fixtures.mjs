@@ -1299,10 +1299,15 @@ const d1Status = await postState(d1StateStore, {
   action: "calendarStoreStatus",
   email: "rhaydon@gmail.com",
   password: creatorPassword,
+  expectedFileIds: ["d1-mmc", "missing-d1-mmc"],
 }, d1Store);
 assert.equal(d1Status.total, 1);
 assert.equal(d1Status.populated, 1);
 assert.equal(d1Status.remaining, 0);
+assert.equal(d1Status.expectedFiles.expectedCount, 2);
+assert.equal(d1Status.expectedFiles.persistedCount, 1);
+assert.deepEqual(d1Status.expectedFiles.persistedFileIds, ["d1-mmc"]);
+assert.deepEqual(d1Status.expectedFiles.missingFileIds, ["missing-d1-mmc"]);
 assert.ok(d1Status.accounts.profiles >= 2);
 assert.ok(d1Status.accounts.claims >= 1);
 assert.ok(d1Status.accounts.states >= 2);
@@ -1616,6 +1621,78 @@ assert.deepEqual(
 );
 assert.equal(fourRosterCalendar.diagnostics.queryMode, "file-doctor-pairs");
 assert.equal(fourRosterCalendar.diagnostics.selectedDoctorFiles.length, 4, "diagnostics should include each resolved file/doctor pair");
+const fourRosterExpectedStatus = await postState(fourRosterStore, {
+  action: "calendarStoreStatus",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  selectedDoctorKey: "RICHARD HAYDON",
+  expectedFileIds: ["creator-mmc-t1", "creator-ddh-t1", "creator-mmc-t2", "creator-ddh-t2"],
+}, fourRosterDb);
+assert.equal(fourRosterExpectedStatus.expectedFiles.expectedCount, 4);
+assert.equal(fourRosterExpectedStatus.expectedFiles.persistedCount, 4);
+assert.equal(fourRosterExpectedStatus.expectedFiles.activeCount, 4);
+assert.deepEqual(fourRosterExpectedStatus.expectedFiles.missingFileIds, []);
+
+const partialUploadStore = new MemoryStore();
+const partialUploadDb = new MemoryD1();
+await postState(partialUploadStore, {
+  action: "login",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+}, partialUploadDb);
+await postState(partialUploadStore, {
+  action: "saveDerivedCalendarFile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  expectedFileIds: ["partial-mmc", "partial-ddh"],
+  file: { id: "partial-mmc", name: "partial-mmc.xlsx", sourceType: "mmc", active: true },
+  doctors: [{ key: "RICHARD HAYDON", displayName: "Richard HAYDON", sourceType: "mmc" }],
+  eventsByDoctor: {
+    "RICHARD HAYDON": [{
+      id: "partial-mmc-shift",
+      source: "MMC",
+      title: "Persisted MMC Shift",
+      allDay: true,
+      start: "2026-02-03",
+      end: "2026-02-03",
+      rawValue: "Persisted MMC Shift",
+      monthKey: "2026-02",
+    }],
+  },
+}, partialUploadDb);
+await postState(partialUploadStore, {
+  action: "save",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  state: {
+    version: 1,
+    imports: [
+      { repoId: "partial-mmc", id: "partial-mmc", sourceType: "mmc", name: "partial-mmc.xlsx" },
+      { repoId: "partial-ddh", id: "partial-ddh", sourceType: "ddh", name: "partial-ddh.xlsx" },
+    ],
+    session: { doctorKey: "RICHARD HAYDON", settings: {} },
+  },
+}, partialUploadDb);
+const partialUploadStatus = await postState(partialUploadStore, {
+  action: "calendarStoreStatus",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  selectedDoctorKey: "RICHARD HAYDON",
+  expectedFileIds: ["partial-mmc", "partial-ddh"],
+}, partialUploadDb);
+assert.equal(partialUploadStatus.expectedFiles.persistedCount, 1, "partial upload status should report only persisted D1 files");
+assert.deepEqual(partialUploadStatus.expectedFiles.missingFileIds, ["partial-ddh"]);
+const partialUploadCalendar = await postState(partialUploadStore, {
+  action: "loadCalendarEvents",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  doctorKey: "RICHARD HAYDON",
+}, partialUploadDb);
+assert.deepEqual(
+  partialUploadCalendar.snapshot.preview.events.map((event) => event.title),
+  ["Persisted MMC Shift"],
+  "post-login calendar rebuild should only use D1-persisted roster rows",
+);
 const sharedUploadStore = new MemoryStore();
 const sharedUploadDb = new MemoryD1();
 await postState(sharedUploadStore, {

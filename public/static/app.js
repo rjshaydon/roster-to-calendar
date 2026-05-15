@@ -275,6 +275,7 @@ let pendingExportMode = "full";
 let pendingExportRange = defaultExportRangeState();
 let currentAdminTab = "system";
 let calendarStoreStatus = null;
+let lastRosterPersistence = null;
 let calendarStoreBackfillRunning = false;
 let reportedIssueFingerprints = new Set();
 let currentSnapshot = null;
@@ -1293,6 +1294,7 @@ function defaultSettings() {
 
 async function mergeFiles(files) {
   let persistenceFailed = false;
+  lastRosterPersistence = null;
   for (const file of files) {
     const id = fileFingerprint(file);
     selectedFiles = selectedFiles.filter((entry) => entry.id !== id);
@@ -1812,7 +1814,9 @@ function renderFilesMarkup({ canRemove = false, heading = "", description = "", 
           <article class="file-pill">
             <span>${escapeHtml(String(entry.sourceType || "").toUpperCase())} · Imported ${escapeHtml(formatTimestamp(entry.addedAt))}</span>
             <strong>${escapeHtml(entry.name)}</strong>
-            ${statusFiles.has(entry.id) ? `<span>${Number(statusFiles.get(entry.id)?.eventCount || 0)} events · ${Number(statusFiles.get(entry.id)?.selectedDoctorEventCount || 0)} for selected doctor</span>` : ""}
+            ${statusFiles.has(entry.id)
+              ? `<span>${Number(statusFiles.get(entry.id)?.eventCount || 0)} events · ${Number(statusFiles.get(entry.id)?.selectedDoctorEventCount || 0)} for selected doctor</span>`
+              : entry.file ? `<span>Not yet confirmed in D1</span>` : ""}
             ${canRemove ? `<button type="button" class="file-remove file-remove-visible" aria-label="Remove file" title="Remove file" data-remove-import="${entry.id}">🗑</button>` : ""}
           </article>
         `).join("")}
@@ -1974,7 +1978,9 @@ async function updatePreview(options = {}) {
     scheduleInsightWarmup();
     cacheCurrentSnapshot(buildActiveSessionState());
     saveCurrentSessionState();
-    setStatus("Calendar loaded.");
+    setStatus(hasUnconfirmedLocalRosterFiles()
+      ? "Calendar preview loaded locally. Saving roster files to D1..."
+      : "Calendar loaded.");
   } catch (error) {
     clearPreviewData();
     setStatus(error.message, true);
@@ -5029,6 +5035,7 @@ function resetDerivedState() {
   redoHistory = [];
   lastHistorySignature = "";
   clearDoctorAnalysisCache();
+  lastRosterPersistence = null;
   closeInsightsModal();
   settings = defaultSettings();
   renderSettings();
@@ -6367,6 +6374,7 @@ function renderCalendarStoreCard() {
   const remaining = Number(status?.remaining || 0);
   const eventCount = Number(status?.eventCount || 0);
   const accountStatus = status?.accounts || null;
+  const selectedPersistence = summarizeSelectedRosterPersistence(selectedFiles, status);
   const accountDetail = accountStatus?.unavailable
     ? "Account mirror unavailable."
     : accountStatus
@@ -6374,10 +6382,11 @@ function renderCalendarStoreCard() {
       : "Account mirror status not loaded yet.";
   const nextFile = status?.nextFile || null;
   const problemFiles = (status?.files || []).filter((file) => file.status === "partial").slice(0, 3);
+  const missingSelectedFiles = selectedPersistence.missingEntries.slice(0, 3);
   const detail = unavailable
     ? "D1 is not available to this deployment."
     : status
-      ? `${populated}/${total} roster files indexed · ${eventCount} SQL events · ${remaining} remaining${partial ? ` · ${partial} partial` : ""}`
+      ? `${populated}/${total} roster files indexed · ${eventCount} SQL events · ${remaining} remaining${partial ? ` · ${partial} partial` : ""}${selectedPersistence.expectedCount ? ` · ${selectedPersistence.persistedCount}/${selectedPersistence.expectedCount} selected uploads confirmed` : ""}`
       : "Status not loaded yet.";
   return `
     <article class="review-card">
@@ -6399,6 +6408,18 @@ function renderCalendarStoreCard() {
                   <p>${Number(file.indexedDoctors || 0)}/${Number(file.expectedDoctors || 0)} doctors indexed · ${Number(file.eventCount || 0)} events</p>
                 </div>
                 <button type="button" class="button button-secondary" data-reset-calendar-store-file="${escapeHtml(file.id)}">Reset and retry</button>
+              </article>
+            `).join("")}
+          </div>
+        ` : ""}
+        ${missingSelectedFiles.length ? `
+          <div class="issues-list">
+            ${missingSelectedFiles.map((entry) => `
+              <article class="issue-card">
+                <div>
+                  <strong>${escapeHtml(entry.name)}</strong>
+                  <p>Selected locally but not confirmed in D1.</p>
+                </div>
               </article>
             `).join("")}
           </div>
@@ -9069,9 +9090,10 @@ function scheduleCloudStateSave() {
   cloudSaveTimer = setTimeout(() => {
     const queued = pendingCloudSaveSnapshot;
     pendingCloudSaveSnapshot = null;
-    saveCloudState(queued || snapshot).catch(() => {
-      cloudAvailable = false;
+    saveCloudState(queued || snapshot).catch((error) => {
+      if (!error?.isRosterPersistenceError) cloudAvailable = false;
       renderLoginState();
+      setStatus(error.message || "Cloud save failed.", true);
     });
   }, 700);
 }
@@ -9248,7 +9270,10 @@ async function loadServerUsers() {
 async function refreshCalendarStoreStatus(options = {}) {
   if (!isCreatorAuthenticated() || !cloudAvailable) return;
   try {
-    const data = await calendarStoreRequest("calendarStoreStatus", { selectedDoctorKey: selectedDoctor()?.key || OWNER_DOCTOR_KEY });
+    const data = await calendarStoreRequest("calendarStoreStatus", {
+      selectedDoctorKey: selectedDoctor()?.key || OWNER_DOCTOR_KEY,
+      expectedFileIds: selectedFiles.map((entry) => entry.id),
+    });
     calendarStoreStatus = data;
     if (!options.silent) setStatus("SQL calendar store status refreshed.");
   } catch (error) {
@@ -9382,13 +9407,124 @@ async function buildCloudState(imports = selectedFiles, session = buildActiveSes
 }
 
 async function saveSelectedRosterFilesToD1(imports = selectedFiles) {
-  if (!cloudAvailable || !currentUserEmail) return;
+  if (!cloudAvailable || !currentUserEmail) return emptyRosterPersistenceSummary();
   const entries = (imports || []).filter((entry) => entry?.file);
+  if (!entries.length) return emptyRosterPersistenceSummary();
+  const expectedFileIds = entries.map((entry) => entry.id);
+  const saveResults = [];
+  let latestStatus = null;
   for (const entry of entries) {
-    const payload = await buildDerivedCalendarFilePayload(entry, entry);
-    const data = await calendarStoreRequest("saveDerivedCalendarFile", payload);
-    calendarStoreStatus = data;
+    try {
+      const payload = await buildDerivedCalendarFilePayload(entry, entry);
+      latestStatus = await calendarStoreRequest("saveDerivedCalendarFile", {
+        ...payload,
+        expectedFileIds,
+      });
+      saveResults.push({ entry, ok: true });
+    } catch (error) {
+      saveResults.push({ entry, ok: false, error });
+    }
   }
+  if (isCreatorAuthenticated()) {
+    try {
+      latestStatus = await calendarStoreRequest("calendarStoreStatus", {
+        selectedDoctorKey: selectedDoctor()?.key || OWNER_DOCTOR_KEY,
+        expectedFileIds,
+      });
+    } catch {
+      // Keep the most recent save response if the creator status refresh fails.
+    }
+  }
+  if (latestStatus) calendarStoreStatus = latestStatus;
+  const summary = summarizeRosterPersistence(entries, latestStatus, saveResults);
+  lastRosterPersistence = summary;
+  renderFileSurfaces();
+  if (!summary.complete) {
+    const error = new Error(rosterPersistenceFailureMessage(summary));
+    error.isRosterPersistenceError = true;
+    throw error;
+  }
+  setStatus(`Calendar saved to D1. ${summary.persistedCount}/${summary.expectedCount} roster file${summary.expectedCount === 1 ? "" : "s"} confirmed.`);
+  return summary;
+}
+
+function emptyRosterPersistenceSummary() {
+  return {
+    expectedCount: 0,
+    persistedCount: 0,
+    activeCount: 0,
+    expectedFileIds: [],
+    persistedFileIds: [],
+    missingEntries: [],
+    failedEntries: [],
+    complete: true,
+  };
+}
+
+function summarizeSelectedRosterPersistence(imports = selectedFiles, status = calendarStoreStatus) {
+  return summarizeRosterPersistence(
+    (imports || []).filter((entry) => entry?.file),
+    status,
+    [],
+  );
+}
+
+function summarizeRosterPersistence(entries = [], status = null, saveResults = []) {
+  const expectedEntries = (entries || []).filter((entry) => entry?.id);
+  const expectedFileIds = expectedEntries.map((entry) => entry.id);
+  const expectedFileIdSet = new Set(expectedFileIds);
+  const statusExpected = status?.expectedFiles && typeof status.expectedFiles === "object"
+    ? status.expectedFiles
+    : null;
+  const statusExpectedIds = Array.isArray(statusExpected?.expectedFileIds) ? statusExpected.expectedFileIds : [];
+  const statusMatchesEntries = Boolean(statusExpected)
+    && statusExpectedIds.length === expectedFileIds.length
+    && statusExpectedIds.every((id) => expectedFileIdSet.has(id));
+  const persistedFileIds = statusMatchesEntries
+    ? (statusExpected.persistedFileIds || []).filter((id) => expectedFileIdSet.has(id))
+    : (status?.files || []).map((file) => file.id).filter((id) => expectedFileIdSet.has(id));
+  const persistedSet = new Set(persistedFileIds);
+  const activeFileIds = statusMatchesEntries
+    ? (statusExpected.activeFileIds || []).filter((id) => expectedFileIdSet.has(id))
+    : (status?.files || []).filter((file) => file.active !== false).map((file) => file.id).filter((id) => expectedFileIdSet.has(id));
+  const failedEntries = saveResults
+    .filter((result) => result && result.ok === false && result.entry?.id)
+    .map((result) => ({
+      id: result.entry.id,
+      name: result.entry.name,
+      message: result.error?.message || "D1 save failed.",
+    }));
+  const missingEntries = expectedEntries
+    .filter((entry) => !persistedSet.has(entry.id))
+    .map((entry) => ({ id: entry.id, name: entry.name }));
+  return {
+    expectedCount: expectedEntries.length,
+    persistedCount: persistedFileIds.length,
+    activeCount: activeFileIds.length,
+    expectedFileIds,
+    persistedFileIds,
+    missingEntries,
+    failedEntries,
+    complete: expectedEntries.length === persistedFileIds.length && failedEntries.length === 0,
+  };
+}
+
+function hasUnconfirmedLocalRosterFiles() {
+  const localEntries = selectedFiles.filter((entry) => entry?.file);
+  if (!localEntries.length) return false;
+  const summary = summarizeSelectedRosterPersistence(localEntries, calendarStoreStatus);
+  if (!lastRosterPersistence) return !summary.complete;
+  const currentIds = localEntries.map((entry) => entry.id).sort().join("|");
+  const persistedIds = [...(lastRosterPersistence.expectedFileIds || [])].sort().join("|");
+  return currentIds !== persistedIds || !lastRosterPersistence.complete || !summary.complete;
+}
+
+function rosterPersistenceFailureMessage(summary) {
+  const failedNames = summary.failedEntries.map((entry) => entry.name);
+  const missingNames = summary.missingEntries.map((entry) => entry.name);
+  const names = [...new Set([...failedNames, ...missingNames].filter(Boolean))];
+  const detail = names.length ? ` Missing from D1: ${names.join(", ")}.` : "";
+  return `Roster save incomplete: ${summary.persistedCount}/${summary.expectedCount} selected roster file${summary.expectedCount === 1 ? "" : "s"} confirmed in D1.${detail}`;
 }
 
 function buildActiveSessionState() {
