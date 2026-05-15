@@ -1694,6 +1694,43 @@ assert.deepEqual(
   ["Persisted MMC Shift"],
   "post-login calendar rebuild should only use D1-persisted roster rows",
 );
+const invalidReplacement = await postStateRaw(partialUploadStore, {
+  action: "saveDerivedCalendarFile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  file: { id: "partial-mmc", name: "partial-mmc.xlsx", sourceType: "mmc", active: true },
+  doctors: [{ key: "RICHARD HAYDON", displayName: "Richard HAYDON", sourceType: "mmc" }],
+  eventsByDoctor: { "RICHARD HAYDON": [] },
+}, partialUploadDb);
+assert.equal(invalidReplacement.response.status, 422, "empty derived uploads should be rejected before replacing D1 rows");
+assert.equal(
+  [...partialUploadDb.events.values()].filter((event) => event.file_id === "partial-mmc").length,
+  1,
+  "rejected derived uploads must preserve previously indexed D1 events",
+);
+const sparseReplacement = await postStateRaw(partialUploadStore, {
+  action: "saveDerivedCalendarFile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  file: { id: "partial-mmc", name: "partial-mmc.xlsx", sourceType: "mmc", active: true },
+  doctors: [
+    { key: "RICHARD HAYDON", displayName: "Richard HAYDON", sourceType: "mmc" },
+    { key: "SECOND DOCTOR", displayName: "Second Doctor", sourceType: "mmc" },
+  ],
+  eventsByDoctor: {
+    "RICHARD HAYDON": [{
+      id: "partial-mmc-shift",
+      source: "MMC",
+      title: "Persisted MMC Shift",
+      allDay: true,
+      start: "2026-02-03",
+      end: "2026-02-03",
+      rawValue: "Persisted MMC Shift",
+      monthKey: "2026-02",
+    }],
+  },
+}, partialUploadDb);
+assert.equal(sparseReplacement.response.status, 422, "suspiciously sparse derived uploads should be rejected before replacing D1 rows");
 const sharedUploadStore = new MemoryStore();
 const sharedUploadDb = new MemoryD1();
 await postState(sharedUploadStore, {

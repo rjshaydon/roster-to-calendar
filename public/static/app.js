@@ -9370,6 +9370,7 @@ async function buildDerivedCalendarFilePayload(importEntry, statusFile = {}) {
     eventsByDoctor[doctor.key] = events;
     eventCount += events.length;
   }
+  assertDerivedCalendarFilePayload(importEntry, uniqueDoctors, eventCount);
   return {
     file: {
       ...importRefForWorkspace(importEntry),
@@ -9381,6 +9382,19 @@ async function buildDerivedCalendarFilePayload(importEntry, statusFile = {}) {
     eventsByDoctor,
     eventCount,
   };
+}
+
+function assertDerivedCalendarFilePayload(importEntry, doctors, eventCount) {
+  const name = importEntry?.name || "Uploaded roster";
+  if (!doctors.length) {
+    throw new Error(`${name} could not be indexed: no doctors were found.`);
+  }
+  if (!eventCount) {
+    throw new Error(`${name} could not be indexed: no events were found.`);
+  }
+  if (eventCount < doctors.length) {
+    throw new Error(`${name} could not be indexed reliably: only ${eventCount} events were found for ${doctors.length} doctors.`);
+  }
 }
 
 async function calendarStoreRequest(action, extra = {}) {
@@ -9522,11 +9536,11 @@ function hasUnconfirmedLocalRosterFiles() {
 }
 
 function rosterPersistenceFailureMessage(summary) {
-  const failedNames = summary.failedEntries.map((entry) => entry.name);
   const missingNames = summary.missingEntries.map((entry) => entry.name);
-  const names = [...new Set([...failedNames, ...missingNames].filter(Boolean))];
-  const detail = names.length ? ` Missing from D1: ${names.join(", ")}.` : "";
-  return `Roster save incomplete: ${summary.persistedCount}/${summary.expectedCount} selected roster file${summary.expectedCount === 1 ? "" : "s"} confirmed in D1.${detail}`;
+  const failedNames = summary.failedEntries.map((entry) => entry.name);
+  const missingDetail = missingNames.length ? ` Missing from D1: ${[...new Set(missingNames)].join(", ")}.` : "";
+  const failedDetail = failedNames.length ? ` Failed to save this upload: ${[...new Set(failedNames)].join(", ")}.` : "";
+  return `Roster save incomplete: ${summary.persistedCount}/${summary.expectedCount} selected roster file${summary.expectedCount === 1 ? "" : "s"} confirmed in D1.${missingDetail}${failedDetail}`;
 }
 
 function buildActiveSessionState() {

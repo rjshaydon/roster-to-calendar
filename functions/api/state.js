@@ -251,6 +251,10 @@ export async function onRequestPost(context) {
       if (!hasCalendarDb(context.env)) {
         return Response.json({ ok: false, unavailable: true });
       }
+      const derivedPayloadIssue = validateDerivedCalendarPayload(body?.doctors, body?.eventsByDoctor);
+      if (derivedPayloadIssue) {
+        return Response.json({ error: derivedPayloadIssue }, { status: 422 });
+      }
       const selectedDoctorKey = normalizeRosterName(body?.selectedDoctorKey || body?.doctorKey || OWNER_DOCTOR_KEY);
       const filePayload = {
         ...(body?.file || {}),
@@ -812,6 +816,23 @@ export async function onRequestPost(context) {
     const status = message === "Incorrect password." || message.startsWith("Account not found") ? 401 : 400;
     return Response.json({ error: message }, { status });
   }
+}
+
+function validateDerivedCalendarPayload(doctors, eventsByDoctor) {
+  const safeDoctors = Array.isArray(doctors) ? doctors.filter((doctor) => doctor?.key) : [];
+  if (!safeDoctors.length) {
+    return "Roster indexing produced no doctors. The uploaded file was not saved to D1.";
+  }
+  const eventCount = safeDoctors.reduce((count, doctor) => (
+    count + (Array.isArray(eventsByDoctor?.[doctor.key]) ? eventsByDoctor[doctor.key].length : 0)
+  ), 0);
+  if (!eventCount) {
+    return "Roster indexing produced no events. The uploaded file was not saved to D1.";
+  }
+  if (eventCount < safeDoctors.length) {
+    return `Roster indexing produced only ${eventCount} events for ${safeDoctors.length} doctors. The uploaded file was not saved to D1.`;
+  }
+  return "";
 }
 
 export async function loadAccountRecord(store, email) {
