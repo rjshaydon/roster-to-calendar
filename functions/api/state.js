@@ -761,14 +761,18 @@ export async function onRequestPost(context) {
         db: context.env.ROSTER_DB,
         includeAvailableDoctors: false,
       });
+      const requestedRange = boundedCalendarEventRange({
+        startDate: body?.startDate,
+        endDate: body?.endDate,
+      });
       const snapshot = await buildDerivedAccountSnapshot(context.env.ROSTER_DB, {
         role: prepared.role,
         record: targetRecord,
         state: prepared.state,
         claims: prepared.claims,
         index: await loadRepositoryIndex(null, context.env.ROSTER_DB),
-        startDate: String(body?.startDate || "").slice(0, 10),
-        endDate: String(body?.endDate || "").slice(0, 10),
+        startDate: requestedRange.startDate,
+        endDate: requestedRange.endDate,
         doctorKey: normalizeRosterName(body?.doctorKey || ""),
       });
       return Response.json({
@@ -1298,6 +1302,35 @@ function applyDefaultSelectedDoctorToState(state, role, claims = []) {
   };
 }
 
+function boundedCalendarEventRange(input = {}) {
+  const today = isoDateKey(new Date());
+  const requestedStart = dateKeyOrEmpty(input.startDate);
+  const requestedEnd = dateKeyOrEmpty(input.endDate);
+  let startDate = requestedStart || isoDateKey(addUtcDays(today, -45));
+  let endDate = requestedEnd || isoDateKey(addUtcDays(today, 210));
+  if (endDate < startDate) endDate = startDate;
+  const maxEndDate = isoDateKey(addUtcDays(startDate, 370));
+  if (endDate > maxEndDate) endDate = maxEndDate;
+  return { startDate, endDate };
+}
+
+function dateKeyOrEmpty(value) {
+  const key = String(value || "").slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(key) ? key : "";
+}
+
+function isoDateKey(value) {
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value || "").slice(0, 10);
+}
+
+function addUtcDays(dateKey, days) {
+  const [year, month, day] = String(dateKey || "").split("-").map((part) => Number(part));
+  const date = new Date(Date.UTC(year || 1970, (month || 1) - 1, day || 1));
+  date.setUTCDate(date.getUTCDate() + Number(days || 0));
+  return date;
+}
+
 async function buildDerivedAccountSnapshot(db, context) {
   if (!hasCalendarDb({ ROSTER_DB: db })) return null;
   const role = context.role || "user";
@@ -1337,6 +1370,8 @@ async function buildDerivedAccountSnapshot(db, context) {
   const settings = {
     ...defaultSettings(),
     ...(normalizedSession.settings || {}),
+    dateFrom: context.startDate || normalizedSession.settings?.dateFrom || "",
+    dateTo: context.endDate || normalizedSession.settings?.dateTo || "",
   };
   const events = [
     ...applyEventOverrides(await queryDoctorEvents(db, doctorKeys, {
