@@ -489,6 +489,8 @@ class MemoryD1 {
     this.subscriptionTokens = new Map();
     this.parserRules = new Map();
     this.doctorProfiles = new Map();
+    this.consoleMessages = [];
+    this.nextConsoleMessageId = 1;
   }
 
   prepare(sql) {
@@ -682,6 +684,22 @@ class MemoryD1Statement {
         created_at: args[5],
         updated_at: args[6],
       });
+      return { success: true };
+    }
+    if (sql.startsWith("INSERT INTO console_messages")) {
+      this.db.consoleMessages.push({
+        id: this.db.nextConsoleMessageId++,
+        actor_email: args[0],
+        message: args[1],
+        is_error: args[2],
+        created_at: args[3],
+      });
+      return { success: true };
+    }
+    if (sql.startsWith("DELETE FROM console_messages")) {
+      this.db.consoleMessages = [...this.db.consoleMessages]
+        .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)) || right.id - left.id)
+        .slice(0, 50);
       return { success: true };
     }
     if (sql.startsWith("DELETE FROM doctor_profiles")) {
@@ -938,6 +956,13 @@ class MemoryD1Statement {
       return {
         results: [...this.db.doctorProfiles.values()]
           .sort((left, right) => left.display_name.localeCompare(right.display_name) || left.profile_id.localeCompare(right.profile_id)),
+      };
+    }
+    if (sql.includes("FROM console_messages")) {
+      return {
+        results: [...this.db.consoleMessages]
+          .sort((left, right) => String(right.created_at).localeCompare(String(left.created_at)) || right.id - left.id)
+          .slice(0, Number(args[0] || 50)),
       };
     }
     throw new Error(`Unsupported MemoryD1 all SQL: ${sql}`);
@@ -1633,6 +1658,24 @@ assert.equal(fourRosterExpectedStatus.expectedFiles.expectedCount, 4);
 assert.equal(fourRosterExpectedStatus.expectedFiles.persistedCount, 4);
 assert.equal(fourRosterExpectedStatus.expectedFiles.activeCount, 4);
 assert.deepEqual(fourRosterExpectedStatus.expectedFiles.missingFileIds, []);
+for (let index = 1; index <= 55; index += 1) {
+  await postState(fourRosterStore, {
+    action: "appendConsoleMessage",
+    email: "rhaydon@gmail.com",
+    password: creatorPassword,
+    message: `Console message ${index}`,
+    isError: index === 55,
+  }, fourRosterDb);
+}
+const consoleHistory = await postState(fourRosterStore, {
+  action: "consoleMessages",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+}, fourRosterDb);
+assert.equal(consoleHistory.messages.length, 50, "console history should keep only the latest 50 messages");
+assert.equal(consoleHistory.messages[0].message, "Console message 55");
+assert.equal(consoleHistory.messages[0].isError, true);
+assert.equal(consoleHistory.messages.at(-1).message, "Console message 6");
 
 const partialUploadStore = new MemoryStore();
 const partialUploadDb = new MemoryD1();

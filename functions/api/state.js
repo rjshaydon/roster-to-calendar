@@ -2,6 +2,7 @@ import { applyEventOverrides, customEventsToEvents, defaultSettings, inspectImpo
 import {
   buildPreviewFromDerivedEvents,
   accountMirrorStatus,
+  appendConsoleMessage,
   countDerivedDoctorsByFile,
   countDerivedEventsByFile,
   countDerivedEventsByFileDoctorPairs,
@@ -10,6 +11,7 @@ import {
   deleteDoctorProfileMirror,
   hasCalendarDb,
   listAccountMirrors,
+  listConsoleMessages,
   loadAccountMirror,
   loadAccountStateMirror,
   loadDoctorProfileMirror,
@@ -221,30 +223,25 @@ export async function onRequestPost(context) {
         expectedFileIds: sanitizeRepositoryFileIds(body?.expectedFileIds),
       });
       const accounts = await accountMirrorStatus(context.env.ROSTER_DB).catch(() => ({ unavailable: true, profiles: 0, claims: 0, states: 0 }));
-      accounts.kvProfiles = null ? await countKvAccountRecords(null) : 0;
-      accounts.kvDoctorProfiles = null ? await countKvDoctorProfileRecords(null) : 0;
       return Response.json({ ok: true, ...status, accounts });
     }
 
-    if (action === "syncAccountMirror") {
-      return Response.json({ error: "KV account mirror sync has been removed. D1 is the runtime store." }, { status: 410 });
+    if (action === "appendConsoleMessage") {
+      if (!hasCalendarDb(context.env)) return Response.json({ ok: false, unavailable: true });
+      await appendConsoleMessage(context.env.ROSTER_DB, {
+        actorEmail: email,
+        message: body?.message,
+        isError: body?.isError === true,
+      });
+      return Response.json({ ok: true });
     }
 
-    if (action === "accountMirrorStatus") {
+    if (action === "consoleMessages") {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
-      if (!hasCalendarDb(context.env)) {
-        return Response.json({ ok: false, unavailable: true });
-      }
-      const status = await accountMirrorStatus(context.env.ROSTER_DB);
-      status.kvProfiles = await countKvAccountRecords(null);
-      status.kvDoctorProfiles = await countKvDoctorProfileRecords(null);
-      return Response.json({ ok: true, ...status });
-    }
-
-    if (action === "rebuildCalendarStore") {
-      return Response.json({ error: "KV roster backfill has been removed. Re-upload roster files to populate D1." }, { status: 410 });
+      if (!hasCalendarDb(context.env)) return Response.json({ ok: false, unavailable: true, messages: [] });
+      return Response.json({ ok: true, messages: await listConsoleMessages(context.env.ROSTER_DB, 50) });
     }
 
     if (action === "saveDerivedCalendarFile") {

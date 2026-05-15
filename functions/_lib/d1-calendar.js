@@ -182,6 +182,16 @@ async function ensureCalendarSchemaUncached(db) {
     )
   `).run();
   await db.prepare(`
+    CREATE TABLE IF NOT EXISTS console_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      actor_email TEXT NOT NULL DEFAULT '',
+      message TEXT NOT NULL DEFAULT '',
+      is_error INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT ''
+    )
+  `).run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_console_messages_created_at ON console_messages (created_at DESC, id DESC)").run();
+  await db.prepare(`
     CREATE TABLE IF NOT EXISTS issue_ignores (
       fingerprint TEXT PRIMARY KEY,
       ignored_at TEXT NOT NULL DEFAULT ''
@@ -933,6 +943,48 @@ export async function accountMirrorStatus(db) {
     subscriptionTokens: Number(subscriptionTokens?.count || 0),
     doctorProfiles: Number(doctorProfiles?.count || 0),
   };
+}
+
+export async function appendConsoleMessage(db, entry = {}) {
+  if (!db?.prepare || !entry?.message) return false;
+  await ensureCalendarSchema(db);
+  await db.prepare(`
+    INSERT INTO console_messages (actor_email, message, is_error, created_at)
+    VALUES (?, ?, ?, ?)
+  `).bind(
+    normalizeEmail(entry.actorEmail || ""),
+    String(entry.message || "").trim(),
+    entry.isError === true ? 1 : 0,
+    String(entry.createdAt || new Date().toISOString()),
+  ).run();
+  await db.prepare(`
+    DELETE FROM console_messages
+    WHERE id NOT IN (
+      SELECT id FROM console_messages
+      ORDER BY created_at DESC, id DESC
+      LIMIT 50
+    )
+  `).run();
+  return true;
+}
+
+export async function listConsoleMessages(db, limit = 50) {
+  if (!db?.prepare) return [];
+  await ensureCalendarSchema(db);
+  const safeLimit = Math.max(1, Math.min(Number(limit || 50) || 50, 50));
+  const result = await db.prepare(`
+    SELECT id, actor_email, message, is_error, created_at
+    FROM console_messages
+    ORDER BY created_at DESC, id DESC
+    LIMIT ?
+  `).bind(safeLimit).all();
+  return (result?.results || []).map((row) => ({
+    id: Number(row.id || 0),
+    actorEmail: String(row.actor_email || ""),
+    message: String(row.message || ""),
+    isError: Number(row.is_error || 0) === 1,
+    createdAt: String(row.created_at || ""),
+  }));
 }
 
 export async function upsertDoctorProfileMirror(db, profile) {

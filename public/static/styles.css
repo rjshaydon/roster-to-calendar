@@ -2065,6 +2065,14 @@ body[data-skin="console"] .preview-cell.is-weekend {
   color: var(--warning);
 }
 
+.console-history {
+  margin-top: 14px;
+}
+
+.console-entry.is-error p {
+  color: var(--warning);
+}
+
 .mobile-action-bar {
   position: fixed;
   left: var(--mobile-dock-left, 12px);

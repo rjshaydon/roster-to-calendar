@@ -276,7 +276,9 @@ let pendingExportRange = defaultExportRangeState();
 let currentAdminTab = "system";
 let calendarStoreStatus = null;
 let lastRosterPersistence = null;
-let calendarStoreBackfillRunning = false;
+let adminConsoleOpen = false;
+let adminConsoleLoading = false;
+let adminConsoleMessages = [];
 let reportedIssueFingerprints = new Set();
 let currentSnapshot = null;
 let currentSnapshotStale = false;
@@ -484,19 +486,9 @@ accountsBody.addEventListener("click", (event) => {
     refreshCalendarStoreStatus();
     return;
   }
-  const backfillCalendarStoreButton = event.target.closest("[data-backfill-calendar-store]");
-  if (backfillCalendarStoreButton) {
-    backfillNextCalendarStoreFile();
-    return;
-  }
-  const syncAccountMirrorButton = event.target.closest("[data-sync-account-mirror]");
-  if (syncAccountMirrorButton) {
-    syncAccountMirror();
-    return;
-  }
-  const resetCalendarStoreFileButton = event.target.closest("[data-reset-calendar-store-file]");
-  if (resetCalendarStoreFileButton) {
-    resetCalendarStoreFile(resetCalendarStoreFileButton.dataset.resetCalendarStoreFile || "");
+  const viewConsoleButton = event.target.closest("[data-view-console]");
+  if (viewConsoleButton) {
+    toggleAdminConsole();
     return;
   }
   const addShiftCodeButton = event.target.closest("[data-add-shift-code]");
@@ -6372,23 +6364,19 @@ function renderCalendarStoreCard() {
   const unavailable = status?.unavailable === true;
   const total = Number(status?.total || 0);
   const populated = Number(status?.populated || 0);
-  const partial = Number(status?.partial || 0);
-  const remaining = Number(status?.remaining || 0);
   const eventCount = Number(status?.eventCount || 0);
   const accountStatus = status?.accounts || null;
   const selectedPersistence = summarizeSelectedRosterPersistence(selectedFiles, status);
   const accountDetail = accountStatus?.unavailable
-    ? "Account mirror unavailable."
+    ? "Account store unavailable."
     : accountStatus
-      ? `${Number(accountStatus.profiles || 0)}/${Number(accountStatus.kvProfiles || 0)} accounts · ${Number(accountStatus.claims || 0)} claims · ${Number(accountStatus.states || 0)} session states · ${Number(accountStatus.subscriptionTokens || 0)} subscription tokens · ${Number(accountStatus.doctorProfiles || 0)}/${Number(accountStatus.kvDoctorProfiles || 0)} doctor profiles`
-      : "Account mirror status not loaded yet.";
-  const nextFile = status?.nextFile || null;
-  const problemFiles = (status?.files || []).filter((file) => file.status === "partial").slice(0, 3);
+      ? `${Number(accountStatus.profiles || 0)} accounts · ${Number(accountStatus.claims || 0)} claims · ${Number(accountStatus.states || 0)} session states · ${Number(accountStatus.subscriptionTokens || 0)} subscription tokens · ${Number(accountStatus.doctorProfiles || 0)} doctor profiles`
+      : "Account store status not loaded yet.";
   const missingSelectedFiles = selectedPersistence.missingEntries.slice(0, 3);
   const detail = unavailable
     ? "D1 is not available to this deployment."
     : status
-      ? `${populated}/${total} roster files indexed · ${eventCount} SQL events · ${remaining} remaining${partial ? ` · ${partial} partial` : ""}${selectedPersistence.expectedCount ? ` · ${selectedPersistence.persistedCount}/${selectedPersistence.expectedCount} selected uploads confirmed · ${selectedPersistence.activeCount}/${selectedPersistence.expectedCount} active` : ""}`
+      ? `${populated}/${total} active roster files indexed · ${eventCount} SQL events${selectedPersistence.expectedCount ? ` · ${selectedPersistence.persistedCount}/${selectedPersistence.expectedCount} selected uploads confirmed · ${selectedPersistence.activeCount}/${selectedPersistence.expectedCount} active` : ""}`
       : "Status not loaded yet.";
   return `
     <article class="review-card">
@@ -6400,20 +6388,6 @@ function renderCalendarStoreCard() {
         </div>
       </div>
       <div class="review-body">
-        ${nextFile ? `<p class="status">Next file: ${escapeHtml(nextFile.name)} (${escapeHtml(String(nextFile.sourceType || "").toUpperCase())})</p>` : ""}
-        ${problemFiles.length ? `
-          <div class="issues-list">
-            ${problemFiles.map((file) => `
-              <article class="issue-card">
-                <div>
-                  <strong>${escapeHtml(file.name)}</strong>
-                  <p>${Number(file.indexedDoctors || 0)}/${Number(file.expectedDoctors || 0)} doctors indexed · ${Number(file.eventCount || 0)} events</p>
-                </div>
-                <button type="button" class="button button-secondary" data-reset-calendar-store-file="${escapeHtml(file.id)}">Reset and retry</button>
-              </article>
-            `).join("")}
-          </div>
-        ` : ""}
         ${missingSelectedFiles.length ? `
           <div class="issues-list">
             ${missingSelectedFiles.map((entry) => `
@@ -6427,13 +6401,34 @@ function renderCalendarStoreCard() {
           </div>
         ` : ""}
         <div class="modal-actions">
-          <button type="button" class="button button-secondary" data-refresh-calendar-store ${calendarStoreBackfillRunning ? "disabled" : ""}>Refresh status</button>
-          <button type="button" class="button button-secondary" data-sync-account-mirror ${calendarStoreBackfillRunning || unavailable ? "disabled" : ""}>Sync account mirror</button>
-          <button type="button" class="button button-primary" data-backfill-calendar-store ${calendarStoreBackfillRunning || unavailable || !remaining ? "disabled" : ""}>Backfill next roster file</button>
+          <button type="button" class="button button-secondary" data-refresh-calendar-store>Refresh status</button>
+          <button type="button" class="button button-secondary" data-view-console>${adminConsoleOpen ? "Hide console" : "View console"}</button>
         </div>
+        ${adminConsoleOpen ? renderAdminConsoleMarkup() : ""}
       </div>
     </article>
   `;
+}
+
+function renderAdminConsoleMarkup() {
+  const body = adminConsoleLoading
+    ? `<article class="issue-card"><p>Loading console...</p></article>`
+    : adminConsoleMessages.length
+      ? adminConsoleMessages.map((entry) => `
+          <article class="issue-card console-entry ${entry.isError ? "is-error" : ""}">
+            <div>
+              <strong>${escapeHtml(formatConsoleTimestamp(entry.createdAt))}</strong>
+              <p>${escapeHtml(entry.message)}</p>
+            </div>
+          </article>
+        `).join("")
+      : `<article class="issue-card"><p>No console messages stored yet.</p></article>`;
+  return `<div class="issues-list console-history">${body}</div>`;
+}
+
+function formatConsoleTimestamp(value) {
+  const date = new Date(value || "");
+  return Number.isNaN(date.getTime()) ? "Unknown time" : date.toLocaleString();
 }
 
 function renderParserRulesCard() {
@@ -9285,31 +9280,33 @@ async function refreshCalendarStoreStatus(options = {}) {
   if (!accountsModal.classList.contains("hidden") && currentAdminTab === "system") renderAccountsModal();
 }
 
-async function backfillNextCalendarStoreFile() {
-  if (!isCreatorAuthenticated() || calendarStoreBackfillRunning) return;
-  setStatus("KV backfill has been removed. Re-upload roster files to populate D1.", true);
-}
-
-async function resetCalendarStoreFile(fileId) {
-  if (!isCreatorAuthenticated() || !fileId || calendarStoreBackfillRunning) return;
-  calendarStoreBackfillRunning = true;
+async function toggleAdminConsole() {
+  adminConsoleOpen = !adminConsoleOpen;
+  if (!adminConsoleOpen) {
+    renderAccountsModal();
+    return;
+  }
+  adminConsoleLoading = true;
   renderAccountsModal();
-  setStatus("Resetting partial SQL backfill...");
   try {
-    const data = await calendarStoreRequest("resetDerivedCalendarFile", { fileId });
-    calendarStoreStatus = data;
-    setStatus("Partial SQL backfill reset. Retry the next roster file.");
+    const data = await calendarStoreRequest("consoleMessages");
+    adminConsoleMessages = Array.isArray(data.messages) ? data.messages : [];
   } catch (error) {
-    setStatus(error.message || "Could not reset that SQL backfill.", true);
+    adminConsoleMessages = [];
+    setStatus(error.message || "Could not load console history.", true);
   } finally {
-    calendarStoreBackfillRunning = false;
+    adminConsoleLoading = false;
     if (!accountsModal.classList.contains("hidden") && currentAdminTab === "system") renderAccountsModal();
   }
 }
 
-async function syncAccountMirror() {
-  if (!isCreatorAuthenticated() || calendarStoreBackfillRunning) return;
-  setStatus("KV account sync has been removed. D1 is now the runtime account store.", true);
+async function persistConsoleMessage(message, isError) {
+  if (!cloudAvailable || !currentUserEmail || !currentUserPassword) return;
+  try {
+    await calendarStoreRequest("appendConsoleMessage", { message, isError: isError === true });
+  } catch {
+    // Console persistence must not interfere with the foreground workflow.
+  }
 }
 
 async function buildDerivedCalendarFilePayload(importEntry, statusFile = {}) {
@@ -10319,6 +10316,7 @@ function setStatus(message, isError = false) {
   if (isError && message) {
     void reportAccountError(text);
   }
+  void persistConsoleMessage(text, isError);
 }
 
 function removeSupersededStatusMessages(message) {
