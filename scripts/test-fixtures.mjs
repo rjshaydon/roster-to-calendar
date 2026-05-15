@@ -1441,6 +1441,59 @@ const leaveCalendar = await postState(leaveMergeStore, {
 const mergedLeave = leaveCalendar.snapshot.preview.events.filter((event) => event.title === "Annual Leave");
 assert.equal(mergedLeave.length, 1);
 assert.deepEqual(mergedLeave[0].sources.sort(), ["DDH", "MMC"]);
+const aliasClaimsStore = new MemoryStore();
+const aliasClaimsDb = new MemoryD1();
+await postState(aliasClaimsStore, {
+  action: "login",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+}, aliasClaimsDb);
+for (const [fileId, sourceType, key, title] of [
+  ["alias-mmc", "mmc", "ALIAS DOCTOR", "MMC Alias Shift"],
+  ["alias-ddh", "ddh", "DR ALIAS DOCTOR", "DDH Alias Shift"],
+]) {
+  await postState(aliasClaimsStore, {
+    action: "saveDerivedCalendarFile",
+    email: "rhaydon@gmail.com",
+    password: creatorPassword,
+    file: { id: fileId, name: `${fileId}.xlsx`, sourceType, active: true },
+    doctors: [{ key, displayName: "Alias Doctor", sourceType }],
+    eventsByDoctor: {
+      [key]: [{
+        id: `${fileId}-shift`,
+        source: sourceType.toUpperCase(),
+        title,
+        allDay: true,
+        start: "2026-05-18",
+        end: "2026-05-19",
+        rawValue: title,
+        monthKey: "2026-05",
+      }],
+    },
+  }, aliasClaimsDb);
+}
+await seedUser(aliasClaimsStore, "alias@example.com", "alias-password", "Alias Doctor", aliasClaimsDb);
+await postState(aliasClaimsStore, {
+  action: "setAccountRosterClaims",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  targetEmail: "alias@example.com",
+  claims: [
+    { sourceType: "mmc", key: "ALIAS DOCTOR" },
+    { sourceType: "ddh", key: "DR ALIAS DOCTOR" },
+  ],
+}, aliasClaimsDb);
+const aliasCalendar = await postState(aliasClaimsStore, {
+  action: "loadCalendarEvents",
+  email: "alias@example.com",
+  password: "alias-password",
+  doctorKey: "ALIAS DOCTOR",
+}, aliasClaimsDb);
+assert.deepEqual(
+  aliasCalendar.snapshot.preview.events.map((event) => event.title).sort(),
+  ["DDH Alias Shift", "MMC Alias Shift"],
+  "calendar load should include all selected doctor alias keys across hospitals",
+);
 const conferenceLeaveStore = new MemoryStore();
 const conferenceLeaveDb = new MemoryD1();
 const conferenceDoctor = { key: "CONFERENCE DOCTOR", displayName: "Conference Doctor", sourceType: "mmc" };

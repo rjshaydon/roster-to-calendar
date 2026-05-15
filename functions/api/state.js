@@ -1340,27 +1340,31 @@ async function buildDerivedAccountSnapshot(db, context) {
   let selectedKey = "";
   if (role === "creator" || role === "owner") {
     const d1Doctors = await queryRosterDoctors(db).catch(() => []);
+    const sourceDoctors = d1Doctors.length ? d1Doctors : repositoryDoctorCandidatesFromIndex(context.index);
+    const groupedDoctors = buildCreatorDoctorOptions(sourceDoctors);
     const requestedKey = normalizeRosterName(context.doctorKey || state.session?.doctorKey || "");
     selectedKey = requestedKey || OWNER_DOCTOR_KEY;
-    let doctor = d1Doctors.find((item) => item.key === selectedKey) || findRepositoryDoctorByKey(context.index, selectedKey);
+    let doctor = findDoctorOptionByKey(groupedDoctors, selectedKey) || findRepositoryDoctorByKey(context.index, selectedKey);
     if (requestedKey && selectedKey !== OWNER_DOCTOR_KEY && !doctor) {
       selectedKey = OWNER_DOCTOR_KEY;
-      doctor = d1Doctors.find((item) => item.key === selectedKey) || findRepositoryDoctorByKey(context.index, selectedKey);
+      doctor = findDoctorOptionByKey(groupedDoctors, selectedKey) || findRepositoryDoctorByKey(context.index, selectedKey);
     }
     if (!doctor) return null;
-    doctorKeys = [doctor.key];
-    doctorOptions = buildCreatorDoctorOptions(d1Doctors.length ? d1Doctors : repositoryDoctorCandidatesFromIndex(context.index));
+    doctorKeys = doctorKeysForOption(doctor);
+    doctorOptions = groupedDoctors;
   } else {
     const claims = sanitizeClaims(context.claims);
     if (!claims.length) return null;
-    const requestedKey = normalizeRosterName(context.doctorKey || state.session?.doctorKey || "");
-    selectedKey = claims.some((claim) => claim.key === requestedKey) ? requestedKey : claims[0].key;
-    doctorKeys = [selectedKey];
-    doctorOptions = buildCreatorDoctorOptions(claims.map((claim) => ({
+    const groupedClaims = buildCreatorDoctorOptions(claims.map((claim) => ({
       key: claim.key,
       displayName: claim.displayName,
       sourceType: claim.sourceType,
     })));
+    const requestedKey = normalizeRosterName(context.doctorKey || state.session?.doctorKey || "");
+    const selectedClaimOption = findDoctorOptionByKey(groupedClaims, requestedKey) || groupedClaims[0];
+    selectedKey = selectedClaimOption?.key || claims[0].key;
+    doctorKeys = doctorKeysForOption(selectedClaimOption);
+    doctorOptions = groupedClaims;
   }
   const session = state.session && typeof state.session === "object" ? state.session : {};
   const normalizedSession = {
@@ -1396,6 +1400,23 @@ async function buildDerivedAccountSnapshot(db, context) {
     subscriptionFeeds: {},
     insightCache: null,
   });
+}
+
+function findDoctorOptionByKey(options, key) {
+  const normalizedKey = normalizeRosterName(key || "");
+  if (!normalizedKey) return null;
+  return (options || []).find((doctor) => {
+    if (normalizeRosterName(doctor?.key || "") === normalizedKey) return true;
+    return (doctor?.aliases || []).some((alias) => normalizeRosterName(alias?.key || "") === normalizedKey);
+  }) || null;
+}
+
+function doctorKeysForOption(doctor) {
+  const keys = [
+    doctor?.key,
+    ...(Array.isArray(doctor?.aliases) ? doctor.aliases.map((alias) => alias.key) : []),
+  ];
+  return [...new Set(keys.map((key) => normalizeRosterName(key || "")).filter(Boolean))];
 }
 
 function sanitizeSnapshotCustomEvents(items, defaultOwnerEmail = "") {
