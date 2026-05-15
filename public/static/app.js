@@ -1792,6 +1792,7 @@ function syncMobileChrome() {
 }
 
 function renderFilesMarkup({ canRemove = false, heading = "", description = "", canAdd = false } = {}) {
+  const statusFiles = new Map((calendarStoreStatus?.files || []).map((file) => [file.id, file]));
   if (!selectedFiles.length) {
     const emptyMessage = canRemove
       ? "Add rosters and they will stay here until removed."
@@ -1811,6 +1812,7 @@ function renderFilesMarkup({ canRemove = false, heading = "", description = "", 
           <article class="file-pill">
             <span>${escapeHtml(String(entry.sourceType || "").toUpperCase())} · Imported ${escapeHtml(formatTimestamp(entry.addedAt))}</span>
             <strong>${escapeHtml(entry.name)}</strong>
+            ${statusFiles.has(entry.id) ? `<span>${Number(statusFiles.get(entry.id)?.eventCount || 0)} events · ${Number(statusFiles.get(entry.id)?.selectedDoctorEventCount || 0)} for selected doctor</span>` : ""}
             ${canRemove ? `<button type="button" class="file-remove file-remove-visible" aria-label="Remove file" title="Remove file" data-remove-import="${entry.id}">🗑</button>` : ""}
           </article>
         `).join("")}
@@ -9246,7 +9248,7 @@ async function loadServerUsers() {
 async function refreshCalendarStoreStatus(options = {}) {
   if (!isCreatorAuthenticated() || !cloudAvailable) return;
   try {
-    const data = await calendarStoreRequest("calendarStoreStatus");
+    const data = await calendarStoreRequest("calendarStoreStatus", { selectedDoctorKey: selectedDoctor()?.key || OWNER_DOCTOR_KEY });
     calendarStoreStatus = data;
     if (!options.silent) setStatus("SQL calendar store status refreshed.");
   } catch (error) {
@@ -9347,6 +9349,7 @@ async function buildDerivedCalendarFilePayload(importEntry, statusFile = {}) {
       id: statusFile.id || importEntry.id,
       sourceType,
     },
+    selectedDoctorKey: selectedDoctor()?.key || OWNER_DOCTOR_KEY,
     doctors: uniqueDoctors,
     eventsByDoctor,
     eventCount,
@@ -9379,7 +9382,7 @@ async function buildCloudState(imports = selectedFiles, session = buildActiveSes
 }
 
 async function saveSelectedRosterFilesToD1(imports = selectedFiles) {
-  if (!cloudAvailable || !isCreatorAuthenticated()) return;
+  if (!cloudAvailable || !currentUserEmail) return;
   const entries = (imports || []).filter((entry) => entry?.file);
   for (const entry of entries) {
     const payload = await buildDerivedCalendarFilePayload(entry, entry);

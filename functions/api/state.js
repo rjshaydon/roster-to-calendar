@@ -4,6 +4,7 @@ import {
   accountMirrorStatus,
   countDerivedDoctorsByFile,
   countDerivedEventsByFile,
+  countDerivedEventsByFileDoctorPairs,
   deleteAccountMirror,
   deleteDerivedRosterFile,
   deleteDoctorProfileMirror,
@@ -16,10 +17,14 @@ import {
   queryClaimedAccounts,
   queryDoctorProfileMirrors,
   queryDoctorEvents,
+  queryDoctorEventsForFileDoctorPairs,
+  queryRosterFileDoctors,
   queryRosterFileRefsForDoctors,
   queryRosterFiles,
+  queryRosterFileRanges,
   queryRosterDoctors,
   replaceDerivedRosterFile,
+  setDerivedRosterFileActive,
   upsertAccountMirror,
   upsertDoctorProfileMirror,
   upsertDerivedRosterFile,
@@ -211,7 +216,7 @@ export async function onRequestPost(context) {
       if (!hasCalendarDb(context.env)) {
         return Response.json({ ok: false, unavailable: true, total: 0, populated: 0, remaining: 0 });
       }
-      const status = await calendarStoreStatus(null, context.env.ROSTER_DB);
+      const status = await calendarStoreStatus(null, context.env.ROSTER_DB, { doctorKey: body?.selectedDoctorKey || body?.doctorKey || OWNER_DOCTOR_KEY });
       const accounts = await accountMirrorStatus(context.env.ROSTER_DB).catch(() => ({ unavailable: true, profiles: 0, claims: 0, states: 0 }));
       accounts.kvProfiles = null ? await countKvAccountRecords(null) : 0;
       accounts.kvDoctorProfiles = null ? await countKvDoctorProfileRecords(null) : 0;
@@ -240,20 +245,24 @@ export async function onRequestPost(context) {
     }
 
     if (action === "saveDerivedCalendarFile") {
-      if (account.role !== "creator" && account.role !== "owner") {
-        return Response.json({ error: "Creator access is required." }, { status: 403 });
-      }
       if (!hasCalendarDb(context.env)) {
         return Response.json({ ok: false, unavailable: true });
       }
+      const selectedDoctorKey = normalizeRosterName(body?.selectedDoctorKey || body?.doctorKey || OWNER_DOCTOR_KEY);
+      const filePayload = {
+        ...(body?.file || {}),
+        uploadedBy: email,
+        uploadedAt: new Date().toISOString(),
+      };
       const result = await replaceDerivedRosterFile(
         context.env.ROSTER_DB,
-        body?.file || {},
+        filePayload,
         body?.doctors || [],
         body?.eventsByDoctor || {},
       );
-      const status = await calendarStoreStatus(null, context.env.ROSTER_DB);
-      return Response.json({ ok: true, result, ...status });
+      const supersession = await reconcileRosterFileSupersession(context.env.ROSTER_DB, filePayload, { uploaderEmail: email });
+      const status = await calendarStoreStatus(null, context.env.ROSTER_DB, { doctorKey: selectedDoctorKey });
+      return Response.json({ ok: true, result, supersession, ...status });
     }
 
     if (action === "resetDerivedCalendarFile") {
@@ -268,7 +277,7 @@ export async function onRequestPost(context) {
         return Response.json({ error: "Roster file is required." }, { status: 400 });
       }
       await deleteDerivedRosterFile(context.env.ROSTER_DB, fileId);
-      const status = await calendarStoreStatus(null, context.env.ROSTER_DB);
+      const status = await calendarStoreStatus(null, context.env.ROSTER_DB, { doctorKey: OWNER_DOCTOR_KEY });
       return Response.json({ ok: true, reset: fileId, ...status });
     }
 
@@ -765,6 +774,7 @@ export async function onRequestPost(context) {
         startDate: body?.startDate,
         endDate: body?.endDate,
       });
+      const diagnostics = {};
       const snapshot = await buildDerivedAccountSnapshot(context.env.ROSTER_DB, {
         role: prepared.role,
         record: targetRecord,
@@ -774,6 +784,7 @@ export async function onRequestPost(context) {
         startDate: requestedRange.startDate,
         endDate: requestedRange.endDate,
         doctorKey: normalizeRosterName(body?.doctorKey || ""),
+        diagnostics,
       });
       return Response.json({
         ok: true,
@@ -781,6 +792,7 @@ export async function onRequestPost(context) {
         snapshotAvailable: Boolean(snapshot),
         snapshotStale: false,
         snapshotBuiltAt: snapshot?.builtAt || "",
+        diagnostics,
       });
     }
 
@@ -1065,12 +1077,25 @@ async function rebuildCalendarStoreFromRepository(store, db, options = {}) {
   return rebuilt;
 }
 
-async function calendarStoreStatus(store, db) {
+async function calendarStoreStatus(store, db, options = {}) {
   const d1Files = await queryRosterFiles(db).catch(() => []);
   const index = d1Files.length ? { version: 1, files: d1Files } : await loadRepositoryIndex(store);
   const activeFiles = (index.files || []).filter((file) => file.active !== false);
   const counts = await countDerivedEventsByFile(db, activeFiles.map((file) => file.id));
   const doctorCounts = await countDerivedDoctorsByFile(db, activeFiles.map((file) => file.id));
+  const selectedDoctorKey = normalizeRosterName(options.doctorKey || "");
+  const selectedDoctorRows = selectedDoctorKey
+    ? await resolveRosterFileDoctorRows(db, {
+        doctorKey: selectedDoctorKey,
+        doctorOptions: await creatorDoctorOptionsForD1(db, index),
+      })
+    : [];
+  const selectedPairs = selectedDoctorRows.map((row) => ({ fileId: row.fileId, doctorKey: row.doctorKey }));
+  const selectedCounts = await countDerivedEventsByFileDoctorPairs(db, selectedPairs);
+  const selectedCountsByFile = new Map();
+  for (const row of selectedDoctorRows) {
+    selectedCountsByFile.set(row.fileId, (selectedCountsByFile.get(row.fileId) || 0) + Number(selectedCounts.get(`${row.fileId}:${row.doctorKey}`) || 0));
+  }
   const files = activeFiles.map((file) => ({
     id: file.id,
     name: file.name,
@@ -1078,6 +1103,7 @@ async function calendarStoreStatus(store, db) {
     expectedDoctors: Number(file.expectedDoctors || 0) || sanitizeRepositoryDoctors(file.doctors).length,
     indexedDoctors: Number(file.indexedDoctors || 0) || doctorCounts.get(file.id) || 0,
     eventCount: Number(file.eventCount || 0) || counts.get(file.id) || 0,
+    selectedDoctorEventCount: selectedCountsByFile.get(file.id) || 0,
   })).map((file) => ({
     ...file,
     status: file.eventCount <= 0
@@ -1094,9 +1120,95 @@ async function calendarStoreStatus(store, db) {
     partial,
     remaining: Math.max(0, files.length - populated),
     eventCount: files.reduce((total, file) => total + file.eventCount, 0),
+    selectedDoctorKey,
+    selectedDoctorEventCount: files.reduce((total, file) => total + file.selectedDoctorEventCount, 0),
+    selectedDoctorFiles: selectedDoctorRows.map(rosterFileDoctorDiagnostic),
     nextFile: files.find((file) => file.status !== "populated") || null,
     files,
   };
+}
+
+async function reconcileRosterFileSupersession(db, savedFile = {}, options = {}) {
+  if (!db?.prepare) return { deactivated: [], ambiguous: [] };
+  const files = (await queryRosterFileRanges(db, { includeInactive: false }).catch(() => []))
+    .filter((file) => file.active && file.eventCount > 0 && file.startDate && file.endDate);
+  const savedId = String(savedFile?.id || "").trim();
+  const affected = files.filter((file) => !savedId || file.id === savedId || file.sourceType === String(savedFile?.sourceType || "").toLowerCase());
+  const deactivated = [];
+  const ambiguous = [];
+  for (let leftIndex = 0; leftIndex < affected.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < affected.length; rightIndex += 1) {
+      const left = affected[leftIndex];
+      const right = affected[rightIndex];
+      if (left.sourceType !== right.sourceType || !dateRangesOverlap(left, right)) continue;
+      const winner = chooseLatestRosterFile(left, right);
+      if (!winner) {
+        ambiguous.push({ left, right });
+        continue;
+      }
+      const loser = winner.id === left.id ? right : left;
+      if (deactivated.some((file) => file.id === loser.id)) continue;
+      await setDerivedRosterFileActive(db, loser.id, false);
+      deactivated.push(loser);
+    }
+  }
+  if (ambiguous.length) {
+    await reportSupersessionAmbiguity(db, ambiguous, options.uploaderEmail || "");
+  }
+  return {
+    deactivated: deactivated.map((file) => ({ id: file.id, name: file.name, sourceType: file.sourceType })),
+    ambiguous: ambiguous.map(({ left, right }) => ({
+      sourceType: left.sourceType,
+      files: [left, right].map((file) => ({ id: file.id, name: file.name, startDate: file.startDate, endDate: file.endDate })),
+    })),
+  };
+}
+
+function dateRangesOverlap(left, right) {
+  return String(left.startDate || "") <= String(right.endDate || "") && String(right.startDate || "") <= String(left.endDate || "");
+}
+
+function chooseLatestRosterFile(left, right) {
+  if (Number(left.lastModified || 0) && Number(right.lastModified || 0) && Number(left.lastModified) !== Number(right.lastModified)) {
+    return Number(left.lastModified) > Number(right.lastModified) ? left : right;
+  }
+  const leftNamedDate = rosterFileNameDate(left.name);
+  const rightNamedDate = rosterFileNameDate(right.name);
+  if (leftNamedDate && rightNamedDate && leftNamedDate !== rightNamedDate) {
+    return leftNamedDate > rightNamedDate ? left : right;
+  }
+  return null;
+}
+
+function rosterFileNameDate(name = "") {
+  const value = String(name || "");
+  const rangeMatch = value.match(/(\d{2})[-_](\d{2})[-_](\d{4}).*?(?:to|_to_).*?(\d{2})[-_](\d{2})[-_](\d{4})/i);
+  if (rangeMatch) return `${rangeMatch[6]}-${rangeMatch[5]}-${rangeMatch[4]}`;
+  const termMatch = value.match(/term\s*([1-4])\D+(\d{4})/i);
+  if (termMatch) return `${termMatch[2]}-${String(Number(termMatch[1]) * 3).padStart(2, "0")}-01`;
+  return "";
+}
+
+async function reportSupersessionAmbiguity(db, ambiguousPairs = [], uploaderEmail = "") {
+  const creator = await loadAccountMirror(db, CREATOR_EMAIL).catch(() => null);
+  if (!creator) return;
+  const now = new Date().toISOString();
+  const issues = ambiguousPairs.map(({ left, right }) => ({
+    id: `supersession:${left.sourceType}:${left.id}:${right.id}`,
+    message: `Could not determine the latest ${left.sourceType.toUpperCase()} roster between ${left.name} and ${right.name}.`,
+    source: left.sourceType.toUpperCase(),
+    seniority: "Unknown",
+    rawValue: `Roster supersession review: ${left.name} vs ${right.name}`,
+    fingerprint: `${left.sourceType.toUpperCase()}::Unknown::Roster supersession review::${left.id}::${right.id}`,
+    firstSeenAt: now,
+    lastSeenAt: now,
+    count: 1,
+  }));
+  await upsertAccountMirror(db, {
+    ...creator,
+    adminIssues: mergeAdminIssues(creator.adminIssues, issues),
+    updatedAt: now,
+  });
 }
 
 async function syncAccountMirrorFromKv(store, db, options = {}) {
@@ -1303,11 +1415,12 @@ function applyDefaultSelectedDoctorToState(state, role, claims = []) {
 }
 
 function boundedCalendarEventRange(input = {}) {
-  const today = isoDateKey(new Date());
+  const now = new Date();
+  const currentYear = now.getUTCFullYear();
   const requestedStart = dateKeyOrEmpty(input.startDate);
   const requestedEnd = dateKeyOrEmpty(input.endDate);
-  let startDate = requestedStart || isoDateKey(addUtcDays(today, -45));
-  let endDate = requestedEnd || isoDateKey(addUtcDays(today, 210));
+  let startDate = requestedStart || `${currentYear}-01-01`;
+  let endDate = requestedEnd || `${currentYear + 1}-01-31`;
   if (endDate < startDate) endDate = startDate;
   const maxEndDate = isoDateKey(addUtcDays(startDate, 370));
   if (endDate > maxEndDate) endDate = maxEndDate;
@@ -1336,12 +1449,12 @@ async function buildDerivedAccountSnapshot(db, context) {
   const role = context.role || "user";
   const state = sanitizeState(context.state);
   let doctorKeys = [];
+  let doctorPairs = [];
+  let doctorDiagnostics = [];
   let doctorOptions = [];
   let selectedKey = "";
   if (role === "creator" || role === "owner") {
-    const d1Doctors = await queryRosterDoctors(db).catch(() => []);
-    const sourceDoctors = d1Doctors.length ? d1Doctors : repositoryDoctorCandidatesFromIndex(context.index);
-    const groupedDoctors = buildCreatorDoctorOptions(sourceDoctors);
+    const groupedDoctors = await creatorDoctorOptionsForD1(db, context.index);
     const requestedKey = normalizeRosterName(context.doctorKey || state.session?.doctorKey || "");
     selectedKey = requestedKey || OWNER_DOCTOR_KEY;
     let doctor = findDoctorOptionByKey(groupedDoctors, selectedKey) || findRepositoryDoctorByKey(context.index, selectedKey);
@@ -1351,6 +1464,8 @@ async function buildDerivedAccountSnapshot(db, context) {
     }
     if (!doctor) return null;
     doctorKeys = doctorKeysForOption(doctor);
+    doctorDiagnostics = await resolveRosterFileDoctorRows(db, { doctorKey: selectedKey, doctorOptions: groupedDoctors });
+    doctorPairs = doctorDiagnostics.map((row) => ({ fileId: row.fileId, doctorKey: row.doctorKey }));
     doctorOptions = groupedDoctors;
   } else {
     const claims = sanitizeClaims(context.claims);
@@ -1377,11 +1492,22 @@ async function buildDerivedAccountSnapshot(db, context) {
     dateFrom: context.startDate || normalizedSession.settings?.dateFrom || "",
     dateTo: context.endDate || normalizedSession.settings?.dateTo || "",
   };
+  const rosterEvents = doctorPairs.length
+    ? await queryDoctorEventsForFileDoctorPairs(db, doctorPairs, {
+        startDate: context.startDate || "",
+        endDate: context.endDate || "",
+      })
+    : await queryDoctorEvents(db, doctorKeys, {
+        startDate: context.startDate || "",
+        endDate: context.endDate || "",
+      });
+  if (context.diagnostics && typeof context.diagnostics === "object") {
+    context.diagnostics.selectedDoctorKey = selectedKey;
+    context.diagnostics.selectedDoctorFiles = doctorDiagnostics.map(rosterFileDoctorDiagnostic);
+    context.diagnostics.queryMode = doctorPairs.length ? "file-doctor-pairs" : "doctor-keys";
+  }
   const events = [
-    ...applyEventOverrides(await queryDoctorEvents(db, doctorKeys, {
-      startDate: context.startDate || "",
-      endDate: context.endDate || "",
-    }), normalizedSession.overrides || {}),
+    ...applyEventOverrides(rosterEvents, normalizedSession.overrides || {}),
     ...customEventsToEvents(sanitizeSnapshotCustomEvents(normalizedSession.customEvents, context.record.email), settings),
   ];
   if (!events.length) return null;
@@ -1417,6 +1543,55 @@ function doctorKeysForOption(doctor) {
     ...(Array.isArray(doctor?.aliases) ? doctor.aliases.map((alias) => alias.key) : []),
   ];
   return [...new Set(keys.map((key) => normalizeRosterName(key || "")).filter(Boolean))];
+}
+
+async function creatorDoctorOptionsForD1(db, index) {
+  const d1Doctors = await queryRosterDoctors(db).catch(() => []);
+  const sourceDoctors = d1Doctors.length ? d1Doctors : repositoryDoctorCandidatesFromIndex(index);
+  return buildCreatorDoctorOptions(sourceDoctors);
+}
+
+async function resolveRosterFileDoctorRows(db, options = {}) {
+  const doctorRows = await queryRosterFileDoctors(db).catch(() => []);
+  if (!doctorRows.length) return [];
+  const requestedKey = normalizeRosterName(options.doctorKey || "");
+  const selectedOption = findDoctorOptionByKey(options.doctorOptions || [], requestedKey);
+  const candidateKeys = new Set([requestedKey, ...doctorKeysForOption(selectedOption)]);
+  const candidateIdentities = new Set([
+    rosterIdentityKey(options.doctorKey || ""),
+    rosterIdentityKey(selectedOption?.displayName || ""),
+    ...(selectedOption?.aliases || []).flatMap((alias) => [
+      rosterIdentityKey(alias.displayName || ""),
+      rosterIdentityKey(alias.key || ""),
+    ]),
+  ].filter(Boolean));
+  const matched = [];
+  for (const row of doctorRows) {
+    const rowKey = normalizeRosterName(row.doctorKey || "");
+    const rowIdentity = rosterIdentityKey(row.displayName || row.doctorKey || "");
+    const directMatch = candidateKeys.has(rowKey) || candidateIdentities.has(rowIdentity);
+    const fuzzyMatch = [...candidateIdentities].some((identity) => identity && (nameTokenMatch(identity, rowIdentity) || likelySameRosterName(identity, rowIdentity)));
+    if (!directMatch && !fuzzyMatch) continue;
+    const existing = matched.find((item) => item.fileId === row.fileId);
+    if (existing && existing.eventCount >= row.eventCount) continue;
+    if (existing) {
+      const index = matched.indexOf(existing);
+      matched.splice(index, 1);
+    }
+    matched.push(row);
+  }
+  return matched.sort((left, right) => left.fileId.localeCompare(right.fileId) || left.sourceType.localeCompare(right.sourceType));
+}
+
+function rosterFileDoctorDiagnostic(row) {
+  return {
+    fileId: row.fileId,
+    fileName: row.fileName || "",
+    sourceType: row.sourceType || row.fileSourceType || "",
+    doctorKey: row.doctorKey,
+    displayName: row.displayName,
+    eventCount: Number(row.eventCount || 0),
+  };
 }
 
 function sanitizeSnapshotCustomEvents(items, defaultOwnerEmail = "") {

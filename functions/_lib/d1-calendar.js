@@ -389,6 +389,62 @@ export async function queryDoctorEvents(db, doctorKeys, options = {}) {
   return mergeDuplicateLeaveEvents((rows.results || []).map((row) => parseEvent(row.event_json)).filter(Boolean));
 }
 
+export async function queryDoctorEventsForFileDoctorPairs(db, pairs = [], options = {}) {
+  if (!db?.prepare || !pairs?.length) return [];
+  await ensureCalendarSchema(db);
+  const safePairs = uniqueFileDoctorPairs(pairs);
+  if (!safePairs.length) return [];
+  const pairSql = safePairs.map(() => "(roster_events.file_id = ? AND roster_events.doctor_key = ?)").join(" OR ");
+  const pairArgs = safePairs.flatMap((pair) => [pair.fileId, pair.doctorKey]);
+  const start = String(options.startDate || "0000-01-01");
+  const end = String(options.endDate || "9999-12-31");
+  const rows = await db.prepare(`
+    SELECT event_json
+    FROM roster_events
+    INNER JOIN roster_files ON roster_files.id = roster_events.file_id
+    WHERE roster_files.active = 1
+      AND (${pairSql})
+      AND roster_events.start_date <= ?
+      AND roster_events.end_date >= ?
+    ORDER BY roster_events.start_ts, roster_events.source_type, roster_events.title
+  `).bind(...pairArgs, end, start).all();
+  return mergeDuplicateLeaveEvents((rows.results || []).map((row) => parseEvent(row.event_json)).filter(Boolean));
+}
+
+export async function queryRosterFileDoctors(db) {
+  if (!db?.prepare) return [];
+  await ensureCalendarSchema(db);
+  const rows = await db.prepare(`
+    SELECT
+      roster_file_doctors.file_id AS file_id,
+      roster_files.name AS file_name,
+      roster_files.source_type AS file_source_type,
+      roster_files.active AS active,
+      roster_file_doctors.source_type AS source_type,
+      roster_file_doctors.doctor_key AS doctor_key,
+      roster_file_doctors.display_name AS display_name,
+      (SELECT COUNT(*) FROM roster_events
+        WHERE roster_events.file_id = roster_file_doctors.file_id
+          AND roster_events.doctor_key = roster_file_doctors.doctor_key) AS event_count
+    FROM roster_file_doctors
+    INNER JOIN roster_files ON roster_files.id = roster_file_doctors.file_id
+    WHERE roster_files.active = 1
+    ORDER BY roster_files.added_at, roster_files.name, roster_file_doctors.display_name
+  `).all();
+  return (rows.results || [])
+    .map((row) => ({
+      fileId: String(row.file_id || "").trim(),
+      fileName: String(row.file_name || "").trim(),
+      fileSourceType: String(row.file_source_type || "").trim().toLowerCase(),
+      active: row.active !== 0,
+      sourceType: String(row.source_type || "").trim().toLowerCase(),
+      doctorKey: String(row.doctor_key || "").trim(),
+      displayName: String(row.display_name || row.doctor_key || "").trim(),
+      eventCount: Number(row.event_count || 0),
+    }))
+    .filter((row) => row.fileId && row.doctorKey && row.displayName && SOURCE_TYPES.includes(row.sourceType));
+}
+
 export async function queryRosterDoctors(db) {
   if (!db?.prepare) return [];
   await ensureCalendarSchema(db);
@@ -462,6 +518,42 @@ export async function queryRosterFiles(db, options = {}) {
     indexedDoctors: Number(row.doctor_count || 0),
     eventCount: Number(row.event_count || 0),
     derivedFromD1: true,
+  })).filter((file) => file.id && SOURCE_TYPES.includes(file.sourceType));
+}
+
+export async function queryRosterFileRanges(db, options = {}) {
+  if (!db?.prepare) return [];
+  await ensureCalendarSchema(db);
+  const includeInactive = options.includeInactive === true;
+  const rows = await db.prepare(`
+    SELECT
+      roster_files.id AS id,
+      roster_files.name AS name,
+      roster_files.source_type AS source_type,
+      roster_files.active AS active,
+      roster_files.last_modified AS last_modified,
+      roster_files.added_at AS added_at,
+      roster_files.uploaded_at AS uploaded_at,
+      MIN(roster_events.start_date) AS start_date,
+      MAX(roster_events.end_date) AS end_date,
+      COUNT(roster_events.id) AS event_count
+    FROM roster_files
+    LEFT JOIN roster_events ON roster_events.file_id = roster_files.id
+    ${includeInactive ? "" : "WHERE roster_files.active = 1"}
+    GROUP BY roster_files.id
+    ORDER BY roster_files.source_type, start_date, roster_files.name
+  `).all();
+  return (rows.results || []).map((row) => ({
+    id: String(row.id || "").trim(),
+    name: String(row.name || "roster.xlsx"),
+    sourceType: String(row.source_type || "").trim().toLowerCase(),
+    active: row.active !== 0,
+    lastModified: Number(row.last_modified || 0),
+    addedAt: String(row.added_at || ""),
+    uploadedAt: String(row.uploaded_at || ""),
+    startDate: String(row.start_date || ""),
+    endDate: String(row.end_date || ""),
+    eventCount: Number(row.event_count || 0),
   })).filter((file) => file.id && SOURCE_TYPES.includes(file.sourceType));
 }
 
@@ -897,6 +989,17 @@ export async function countDerivedEventsByFile(db, fileIds = []) {
   return counts;
 }
 
+export async function countDerivedEventsByFileDoctorPairs(db, pairs = []) {
+  if (!db?.prepare || !pairs?.length) return new Map();
+  await ensureCalendarSchema(db);
+  const counts = new Map();
+  for (const pair of uniqueFileDoctorPairs(pairs)) {
+    const row = await db.prepare("SELECT COUNT(*) AS count FROM roster_events WHERE file_id = ? AND doctor_key = ?").bind(pair.fileId, pair.doctorKey).first();
+    counts.set(`${pair.fileId}:${pair.doctorKey}`, Number(row?.count || 0));
+  }
+  return counts;
+}
+
 export async function countDerivedDoctorsByFile(db, fileIds = []) {
   if (!db?.prepare || !fileIds?.length) return new Map();
   await ensureCalendarSchema(db);
@@ -1032,6 +1135,21 @@ function sanitizeSourceTypes(values) {
 function normalizeSourceType(value) {
   const source = String(value || "").trim().toLowerCase();
   return SOURCE_TYPES.includes(source) ? source : "";
+}
+
+function uniqueFileDoctorPairs(pairs = []) {
+  const seen = new Set();
+  const result = [];
+  for (const pair of pairs || []) {
+    const fileId = String(pair?.fileId || pair?.file_id || "").trim();
+    const doctorKey = String(pair?.doctorKey || pair?.doctor_key || pair?.key || "").trim();
+    if (!fileId || !doctorKey) continue;
+    const marker = `${fileId}:${doctorKey}`;
+    if (seen.has(marker)) continue;
+    seen.add(marker);
+    result.push({ fileId, doctorKey });
+  }
+  return result;
 }
 
 function normalizeEmail(value) {
