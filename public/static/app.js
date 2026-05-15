@@ -5015,14 +5015,16 @@ function isDdhHmoSectionHeading(value) {
   return /^ED HMO/i.test(value) || /^HMO\b/i.test(value);
 }
 
-function resetDerivedState() {
+function resetDerivedState(options = {}) {
+  const preserveSession = options.preserveSession === true;
   const preservedAvailableDoctors = isCreatorAuthenticated() ? availableRosterDoctors : [];
+  const preservedSession = preserveSession ? buildActiveSessionState() : null;
   doctorOptions = [];
   detectedSources = {};
   availableRosterDoctors = preservedAvailableDoctors;
-  overrides = {};
-  customEvents = [];
-  restoredSessionState = null;
+  overrides = preserveSession ? sanitizeOverrideState(preservedSession?.overrides) : {};
+  customEvents = preserveSession ? sanitizeActiveCalendarCustomEvents(preservedSession?.customEvents) : [];
+  restoredSessionState = preserveSession ? preservedSession : null;
   doctorRoleIndex = null;
   activeDoctorProfile = null;
   undoHistory = [];
@@ -10135,7 +10137,7 @@ async function removeStoredImport(id) {
     setStatus(error.message || "Could not save file removal.", true);
   }
   if (!selectedFiles.length) {
-    resetDerivedState();
+    resetDerivedState({ preserveSession: true });
     setStatus("Add a roster file to begin.");
     return;
   }
