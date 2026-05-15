@@ -9521,7 +9521,7 @@ function summarizeRosterPersistence(entries = [], status = null, saveResults = [
     persistedFileIds,
     missingEntries,
     failedEntries,
-    complete: expectedEntries.length === persistedFileIds.length && failedEntries.length === 0,
+    complete: expectedEntries.length === persistedFileIds.length,
   };
 }
 
