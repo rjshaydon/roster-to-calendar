@@ -9010,12 +9010,12 @@ async function loadCloudCalendarEvents(options = {}) {
     }),
   });
   const data = await readJsonResponse(response, "Calendar load failed.");
-  currentSnapshot = sanitizeWorkspaceSnapshot(data.snapshot);
+  currentSnapshot = sanitizeWorkspaceSnapshot(clearCloudLoadedSnapshotFilters(data.snapshot));
   currentSnapshotStale = data.snapshotStale === true;
   currentSnapshotBuiltAt = String(data.snapshotBuiltAt || "");
   if (!currentSnapshot) return false;
   selectedFiles = importRefsToClientEntries(currentSnapshot.fileRefs || selectedFiles.map(importRefForWorkspace));
-  restoredSessionState = currentSnapshot.session || restoredSessionState || {};
+  restoredSessionState = currentSnapshot.session || clearCloudLoadedSessionFilters(restoredSessionState || {});
   saveWorkspaceSnapshotForEmail(activeWorkspaceOwnerKey(), {
     fileRefs: selectedFiles.map(importRefForWorkspace),
     session: restoredSessionState || {},
@@ -9025,26 +9025,34 @@ async function loadCloudCalendarEvents(options = {}) {
 }
 
 function cloudCalendarEventRange() {
-  const sessionSettings = restoredSessionState?.settings && typeof restoredSessionState.settings === "object"
-    ? restoredSessionState.settings
-    : {};
-  const startDate = dateKeyOrEmpty(settings.dateFrom)
-    || dateKeyOrEmpty(sessionSettings.dateFrom)
-    || dateKeyOrEmpty(restoredSessionState?.exportRange?.startDate)
-    || formatDateKey(addDays(new Date(), -45));
-  const endDate = dateKeyOrEmpty(settings.dateTo)
-    || dateKeyOrEmpty(sessionSettings.dateTo)
-    || dateKeyOrEmpty(restoredSessionState?.exportRange?.endDate)
-    || formatDateKey(addDays(new Date(), 210));
+  const today = new Date();
+  const startDate = `${today.getFullYear()}-01-01`;
+  const endDate = formatDateKey(new Date(today.getFullYear() + 1, 0, 31));
   return {
     startDate,
     endDate: endDate < startDate ? startDate : endDate,
   };
 }
 
-function dateKeyOrEmpty(value) {
-  const key = String(value || "").slice(0, 10);
-  return /^\d{4}-\d{2}-\d{2}$/.test(key) ? key : "";
+function clearCloudLoadedSnapshotFilters(snapshot) {
+  if (!snapshot || typeof snapshot !== "object") return snapshot;
+  return {
+    ...snapshot,
+    session: clearCloudLoadedSessionFilters(snapshot.session || {}),
+  };
+}
+
+function clearCloudLoadedSessionFilters(session) {
+  const settingsState = session?.settings && typeof session.settings === "object" ? session.settings : {};
+  return {
+    ...(session || {}),
+    settings: {
+      ...settingsState,
+      dateFrom: "",
+      dateTo: "",
+      hospitalFilter: "all",
+    },
+  };
 }
 
 function serverStorageRequiredMessage() {
