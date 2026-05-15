@@ -834,6 +834,7 @@ class MemoryD1Statement {
               added_at: file.added_at,
               uploaded_at: file.uploaded_at,
               start_date: starts[0] || "",
+              coverage_end_date: starts[starts.length - 1] || "",
               end_date: ends[ends.length - 1] || "",
               event_count: events.length,
             };
@@ -1755,6 +1756,41 @@ for (const [fileId, name, lastModified, title] of [
 }
 assert.equal(sharedUploadDb.files.get("supersede-old")?.active, 0, "older overlapping same-source roster should be deactivated");
 assert.equal(sharedUploadDb.files.get("supersede-new")?.active, 1, "latest overlapping same-source roster should remain active");
+for (const [fileId, name, lastModified, start, end] of [
+  ["adjacent-term-1", "MMC_Term1_2026.xlsx", 10, "2026-05-03", "2026-05-04"],
+  ["adjacent-term-2", "MMC_Term2_2026.xlsx", 30, "2026-05-04", "2026-05-04"],
+]) {
+  await postState(sharedUploadStore, {
+    action: "saveDerivedCalendarFile",
+    email: "shared-user@example.com",
+    password: "shared-password",
+    file: { id: fileId, name, sourceType: "mmc", active: true, lastModified },
+    doctors: [{ key: "ADJACENT DOCTOR", displayName: "Adjacent Doctor", sourceType: "mmc" }],
+    eventsByDoctor: {
+      "ADJACENT DOCTOR": [{
+        id: `${fileId}-shift`,
+        source: "MMC",
+        title: fileId,
+        allDay: false,
+        start,
+        end,
+        rawValue: fileId,
+        monthKey: start.slice(0, 7),
+      }, ...(fileId === "adjacent-term-1" ? [{
+        id: `${fileId}-early-shift`,
+        source: "MMC",
+        title: `${fileId}-early`,
+        allDay: false,
+        start: "2026-02-02",
+        end: "2026-02-02",
+        rawValue: `${fileId}-early`,
+        monthKey: "2026-02",
+      }] : [])],
+    },
+  }, sharedUploadDb);
+}
+assert.equal(sharedUploadDb.files.get("adjacent-term-1")?.active, 1, "adjacent terms should remain active when the earlier roster only ends on the next term boundary");
+assert.equal(sharedUploadDb.files.get("adjacent-term-2")?.active, 1, "adjacent next-term roster should remain active");
 await postState(sharedUploadStore, {
   action: "saveDerivedCalendarFile",
   email: "shared-user@example.com",

@@ -1795,6 +1795,7 @@ function syncMobileChrome() {
 
 function renderFilesMarkup({ canRemove = false, heading = "", description = "", canAdd = false } = {}) {
   const statusFiles = new Map((calendarStoreStatus?.files || []).map((file) => [file.id, file]));
+  const persistedSelectedFileIds = new Set(calendarStoreStatus?.expectedFiles?.persistedFileIds || []);
   if (!selectedFiles.length) {
     const emptyMessage = canRemove
       ? "Add rosters and they will stay here until removed."
@@ -1816,6 +1817,7 @@ function renderFilesMarkup({ canRemove = false, heading = "", description = "", 
             <strong>${escapeHtml(entry.name)}</strong>
             ${statusFiles.has(entry.id)
               ? `<span>${Number(statusFiles.get(entry.id)?.eventCount || 0)} events · ${Number(statusFiles.get(entry.id)?.selectedDoctorEventCount || 0)} for selected doctor</span>`
+              : persistedSelectedFileIds.has(entry.id) ? `<span>Saved in D1 · inactive</span>`
               : entry.file ? `<span>Not yet confirmed in D1</span>` : ""}
             ${canRemove ? `<button type="button" class="file-remove file-remove-visible" aria-label="Remove file" title="Remove file" data-remove-import="${entry.id}">🗑</button>` : ""}
           </article>
@@ -6386,7 +6388,7 @@ function renderCalendarStoreCard() {
   const detail = unavailable
     ? "D1 is not available to this deployment."
     : status
-      ? `${populated}/${total} roster files indexed · ${eventCount} SQL events · ${remaining} remaining${partial ? ` · ${partial} partial` : ""}${selectedPersistence.expectedCount ? ` · ${selectedPersistence.persistedCount}/${selectedPersistence.expectedCount} selected uploads confirmed` : ""}`
+      ? `${populated}/${total} roster files indexed · ${eventCount} SQL events · ${remaining} remaining${partial ? ` · ${partial} partial` : ""}${selectedPersistence.expectedCount ? ` · ${selectedPersistence.persistedCount}/${selectedPersistence.expectedCount} selected uploads confirmed · ${selectedPersistence.activeCount}/${selectedPersistence.expectedCount} active` : ""}`
       : "Status not loaded yet.";
   return `
     <article class="review-card">

@@ -535,6 +535,7 @@ export async function queryRosterFileRanges(db, options = {}) {
       roster_files.added_at AS added_at,
       roster_files.uploaded_at AS uploaded_at,
       MIN(roster_events.start_date) AS start_date,
+      MAX(roster_events.start_date) AS coverage_end_date,
       MAX(roster_events.end_date) AS end_date,
       COUNT(roster_events.id) AS event_count
     FROM roster_files
@@ -552,6 +553,7 @@ export async function queryRosterFileRanges(db, options = {}) {
     addedAt: String(row.added_at || ""),
     uploadedAt: String(row.uploaded_at || ""),
     startDate: String(row.start_date || ""),
+    coverageEndDate: String(row.coverage_end_date || ""),
     endDate: String(row.end_date || ""),
     eventCount: Number(row.event_count || 0),
   })).filter((file) => file.id && SOURCE_TYPES.includes(file.sourceType));

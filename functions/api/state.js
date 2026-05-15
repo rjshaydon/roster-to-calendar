@@ -1190,7 +1190,9 @@ async function reconcileRosterFileSupersession(db, savedFile = {}, options = {})
 }
 
 function dateRangesOverlap(left, right) {
-  return String(left.startDate || "") <= String(right.endDate || "") && String(right.startDate || "") <= String(left.endDate || "");
+  const leftEnd = String(left.coverageEndDate || left.endDate || "");
+  const rightEnd = String(right.coverageEndDate || right.endDate || "");
+  return String(left.startDate || "") <= rightEnd && String(right.startDate || "") <= leftEnd;
 }
 
 function chooseLatestRosterFile(left, right) {
