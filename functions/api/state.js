@@ -1641,7 +1641,7 @@ function rosterFileDoctorDiagnostic(row) {
 
 function sanitizeSnapshotCustomEvents(items, defaultOwnerEmail = "") {
   const ownerEmail = normalizeEmail(defaultOwnerEmail);
-  return (Array.isArray(items) ? items : [])
+  const events = (Array.isArray(items) ? items : [])
     .filter((item) => item && item.id && item.title && item.startDate && item.endDate)
     .map((item) => ({
       id: String(item.id),
@@ -1656,6 +1656,16 @@ function sanitizeSnapshotCustomEvents(items, defaultOwnerEmail = "") {
       include: item.include !== false,
     }))
     .filter((item) => !ownerEmail || !item.ownerEmail || item.ownerEmail === ownerEmail);
+  return latestCustomEventsById(events);
+}
+
+function latestCustomEventsById(events) {
+  const byId = new Map();
+  for (const event of events || []) {
+    byId.delete(event.id);
+    byId.set(event.id, event);
+  }
+  return [...byId.values()];
 }
 
 export async function loadAccountBySubscriptionToken(store, token) {
@@ -2911,10 +2921,14 @@ async function sha256(value) {
 
 function sanitizeState(value) {
   const input = value && typeof value === "object" ? value : {};
+  const session = input.session && typeof input.session === "object" ? {
+    ...input.session,
+    customEvents: sanitizeSnapshotCustomEvents(input.session.customEvents),
+  } : {};
   return {
     version: 1,
     imports: Array.isArray(input.imports) ? input.imports : [],
-    session: input.session && typeof input.session === "object" ? input.session : {},
+    session,
     subscriptionFeeds: sanitizeSubscriptionFeeds(input.subscriptionFeeds),
   };
 }

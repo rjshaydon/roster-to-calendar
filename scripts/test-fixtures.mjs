@@ -58,6 +58,17 @@ const mchWorkbook = XLSX.readFile(fileURLToPath(new URL("../fixtures/Paeds_Term_
 });
 const caseyBytes = await readFile(fileURLToPath(new URL("../fixtures/Casey_Term_2_2026_DRAFT.xlsm", import.meta.url)));
 const mchBytes = await readFile(fileURLToPath(new URL("../fixtures/Paeds_Term_2_2026.xlsx", import.meta.url)));
+const appSource = await readFile(new URL("../public/static/app.js", import.meta.url), "utf8");
+assert.match(
+  appSource,
+  /function pasteCopiedEvent[\s\S]*openCustomEventModal\(previewEventToCustomEvent\(shifted\), targetDate, \{ draft: true \}\);/,
+  "pasting should open a custom-event draft instead of persisting immediately",
+);
+assert.doesNotMatch(
+  appSource.match(/function openCustomEventModal[\s\S]*?function closeCustomEventModal/)?.[0] || "",
+  /renderInlineWhoInsight/,
+  "custom-event modal should not request roster coworker insights",
+);
 const caseyFormData = new FormData();
 caseyFormData.append("rosterFiles", new File([caseyBytes], "Casey_Term_2_2026_DRAFT.xlsm", { type: "application/vnd.ms-excel.sheet.macroEnabled.12" }));
 const parsedCaseyUpload = await parseUploadForm(new Request("http://fixture.test/api/analyze", { method: "POST", body: caseyFormData }));
@@ -1248,9 +1259,17 @@ await postState(d1StateStore, {
       customEvents: [{
         id: "d1-custom-event",
         ownerEmail: "d1-user@example.com",
-        title: "D1 Custom Event",
+        title: "D1 Custom Event stale",
         startDate: "2026-02-12",
         endDate: "2026-02-12",
+        allDay: true,
+        include: true,
+      }, {
+        id: "d1-custom-event",
+        ownerEmail: "d1-user@example.com",
+        title: "D1 Custom Event",
+        startDate: "2026-02-13",
+        endDate: "2026-02-13",
         allDay: true,
         include: true,
       }],
@@ -1263,6 +1282,11 @@ const d1SessionLogin = await postState(d1StateStore, {
   password: "d1-password",
 }, d1Store);
 assert.equal(d1SessionLogin.state.session.exportRange.startDate, "2026-02-01", "D1 account session should load without KV state");
+assert.deepEqual(
+  d1SessionLogin.state.session.customEvents.map((event) => [event.id, event.title, event.startDate]),
+  [["d1-custom-event", "D1 Custom Event", "2026-02-13"]],
+  "D1 session save should collapse duplicate custom event ids with the latest value winning",
+);
 const d1SessionCalendar = await postState(d1StateStore, {
   action: "loadCalendarEvents",
   email: "d1-user@example.com",

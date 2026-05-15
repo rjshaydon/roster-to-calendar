@@ -1207,7 +1207,7 @@ function sanitizeOverrides(raw) {
 
 function sanitizeCustomEvents(raw) {
   if (!Array.isArray(raw)) return [];
-  let events = [];
+  const events = [];
   for (const item of raw) {
     if (!item || typeof item !== "object") continue;
     const title = typeof item.title === "string" ? item.title.trim() : "";
@@ -1230,7 +1230,16 @@ function sanitizeCustomEvents(raw) {
       include: item.include !== false,
     });
   }
-  return events;
+  return latestCustomEventsById(events);
+}
+
+function latestCustomEventsById(events) {
+  const byId = new Map();
+  for (const event of events || []) {
+    byId.delete(event.id);
+    byId.set(event.id, event);
+  }
+  return [...byId.values()];
 }
 
 function extractMmcNames(workbook) {

@@ -3951,16 +3951,13 @@ function pasteCopiedEvent(targetDate) {
   if (!copiedEvent) return;
   const shifted = shiftPreviewEventToDay({
     ...copiedEvent,
-    id: `custom-${Date.now().toString(36)}`,
+    id: newCustomEventId(),
     ownerEmail: activeCalendarEmail(),
     source: "Custom",
     isEditedImport: false,
   }, targetDate);
-  customEvents.push(previewEventToCustomEvent(shifted));
   closeContextMenu();
-  rebuildClientPreview();
-  saveCurrentSessionState();
-  setStatus("Event pasted.");
+  openCustomEventModal(previewEventToCustomEvent(shifted), targetDate, { draft: true });
 }
 
 function deletePreviewEvent(id) {
@@ -5667,7 +5664,7 @@ function closeReviewModal() {
   reviewModalBody.innerHTML = "";
 }
 
-function openCustomEventModal(event = null, presetDate = null) {
+function openCustomEventModal(event = null, presetDate = null, options = {}) {
   populateLocationOptions();
   const now = presetDate || latestPreview?.events?.[0]?.start?.slice(0, 10) || formatDateKey(new Date());
   customEventId.value = event?.id || "";
@@ -5682,11 +5679,11 @@ function openCustomEventModal(event = null, presetDate = null) {
   customEventCustomLocation.value = preset.customValue;
   customEventCustomLocationField.classList.toggle("hidden", preset.mode !== "custom");
   customEventTimeFields.classList.toggle("hidden", customEventAllDay.checked);
-  customEventDeleteButton.classList.toggle("hidden", !event);
+  customEventDeleteButton.classList.toggle("hidden", !event || options.draft === true);
   if (customEventWhoPanel) {
+    // Custom events are not rostered shifts, so coworker lookup is not meaningful here.
     customEventWhoPanel.innerHTML = "";
-    customEventWhoPanel.classList.toggle("hidden", !event);
-    if (event) void renderInlineWhoInsight(customEventWhoPanel, event.startDate || presetDate || now);
+    customEventWhoPanel.classList.add("hidden");
   }
   customEventModal.classList.remove("hidden");
   customEventModal.setAttribute("aria-hidden", "false");
@@ -5752,7 +5749,7 @@ function readCustomEventForm() {
   }
 
   return {
-    id: customEventId.value || `custom-${Date.now().toString(36)}`,
+    id: customEventId.value || newCustomEventId(),
     ownerEmail: activeCalendarEmail(),
     title,
     startDate,
@@ -5763,6 +5760,11 @@ function readCustomEventForm() {
     location,
     include: true,
   };
+}
+
+function newCustomEventId() {
+  if (globalThis.crypto?.randomUUID) return `custom-${globalThis.crypto.randomUUID()}`;
+  return `custom-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function resolveCustomEventLocation() {
@@ -9851,7 +9853,7 @@ function replaceActiveCalendarCustomEvents(items) {
 function sanitizeCustomEvents(items, defaultOwnerEmail = "") {
   if (!Array.isArray(items)) return [];
   const fallbackOwnerEmail = normalizeEmail(defaultOwnerEmail);
-  return items
+  const events = items
     .filter((item) => item && item.id && item.title && item.startDate && item.endDate)
     .map((item) => ({
       id: String(item.id),
@@ -9866,6 +9868,16 @@ function sanitizeCustomEvents(items, defaultOwnerEmail = "") {
       include: item.include !== false,
     }))
     .filter((item) => item.ownerEmail);
+  return latestCustomEventsById(events);
+}
+
+function latestCustomEventsById(events) {
+  const byId = new Map();
+  for (const event of events || []) {
+    byId.delete(event.id);
+    byId.set(event.id, event);
+  }
+  return [...byId.values()];
 }
 
 async function applyHistorySnapshot(snapshot) {
