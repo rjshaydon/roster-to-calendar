@@ -87,6 +87,14 @@ assert.doesNotMatch(
   /calendarStoreStatus = \{ unavailable: true \}/,
   "failed status checks should not erase the last valid D1 status",
 );
+assert.match(
+  appSource.match(/async function saveSelectedRosterFilesToD1[\s\S]*?function emptyRosterPersistenceSummary/)?.[0] || "",
+  /entriesToSave = options\.force === true[\s\S]*entries\.filter\(\(entry\) => !persistedIds\.has\(entry\.id\) \|\| failedIds\.has\(entry\.id\)\)/,
+  "ordinary roster sync should process only missing or failed files",
+);
+assert.match(appSource, /function rosterSyncLabel/, "file cards should expose live roster sync labels");
+assert.match(appSource, /function rosterSyncSummary/, "system card should expose aggregate roster sync progress");
+assert.match(appSource, /function scheduleFailedRosterRetry/, "failed roster syncs should schedule targeted retries");
 assert.doesNotMatch(
   appSource.match(/async function renderWhoInsight[\s\S]*?async function renderWhenInsight/)?.[0] || "",
   /ensureInsightRosterAnalysis/,

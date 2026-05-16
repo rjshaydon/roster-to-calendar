@@ -277,6 +277,9 @@ let pendingExportRange = defaultExportRangeState();
 let currentAdminTab = "system";
 let calendarStoreStatus = null;
 let calendarStoreStatusError = "";
+let rosterSyncStates = new Map();
+let rosterSyncRefreshTimer = 0;
+let rosterSyncRetryTimer = 0;
 let lastRosterPersistence = null;
 let adminConsoleOpen = false;
 let adminConsoleLoading = false;
@@ -1833,11 +1836,11 @@ function renderFilesMarkup({ canRemove = false, heading = "", description = "", 
           <article class="file-pill">
             <span>${escapeHtml(String(entry.sourceType || "").toUpperCase())} · Imported ${escapeHtml(formatTimestamp(entry.addedAt))}</span>
             <strong>${escapeHtml(entry.name)}</strong>
-            ${statusFiles.has(entry.id)
+            ${rosterSyncLabel(entry) || (statusFiles.has(entry.id)
               ? `<span>${Number(statusFiles.get(entry.id)?.eventCount || 0)} events · ${Number(statusFiles.get(entry.id)?.selectedDoctorEventCount || 0)} for selected doctor</span>`
               : persistedSelectedFileIds.has(entry.id) ? `<span>Saved in D1 · inactive</span>`
               : entry.file && hasUsableStatus ? `<span>Not yet confirmed in D1</span>`
-              : entry.file ? `<span>Roster database status not checked</span>` : ""}
+              : entry.file ? `<span>Roster database status not checked</span>` : "")}
             ${canRemove ? `<button type="button" class="file-remove file-remove-visible" aria-label="Remove file" title="Remove file" data-remove-import="${entry.id}">🗑</button>` : ""}
           </article>
         `).join("")}
@@ -6444,7 +6447,10 @@ function renderCalendarStoreCard() {
   const selectedPersistence = summarizeSelectedRosterPersistence(selectedFiles, status);
   const missingSelectedFiles = selectedPersistence.missingEntries.slice(0, 3);
   const checkedAt = status?.checkedAt ? `Last checked ${formatTimestamp(status.checkedAt)}.` : "Not checked yet.";
-  const detail = calendarStoreStatusError
+  const syncSummary = rosterSyncSummary();
+  const detail = syncSummary
+    ? `${syncSummary}. ${checkedAt}`
+    : calendarStoreStatusError
     ? `Status check failed. ${checkedAt}`
     : unavailable
       ? "Roster database is unavailable to this deployment."
@@ -9308,7 +9314,7 @@ async function replaceActiveRostersWithCurrentUploads() {
   if (!isCreatorAuthenticated()) return;
   try {
     setStatus("Rebuilding roster database from roster files...");
-    await saveSelectedRosterFilesToD1(selectedFiles);
+    await saveSelectedRosterFilesToD1(selectedFiles, { force: true });
     const keepFileIds = selectedFiles.map((entry) => entry.id);
     calendarStoreStatus = {
       ...await calendarStoreRequest("replaceActiveRosterFiles", {
@@ -9537,23 +9543,34 @@ async function buildCloudState(imports = selectedFiles, session = buildActiveSes
   };
 }
 
-async function saveSelectedRosterFilesToD1(imports = selectedFiles) {
+async function saveSelectedRosterFilesToD1(imports = selectedFiles, options = {}) {
   if (!cloudAvailable || !currentUserEmail) return emptyRosterPersistenceSummary();
   const entries = (imports || []).filter((entry) => entry?.file);
   if (!entries.length) return emptyRosterPersistenceSummary();
   const expectedFileIds = entries.map((entry) => entry.id);
+  const persistedIds = new Set(calendarStoreStatus?.expectedFiles?.persistedFileIds || []);
+  const failedIds = new Set([...rosterSyncStates.entries()].filter(([, state]) => state.status === "failed").map(([id]) => id));
+  const entriesToSave = options.force === true
+    ? entries
+    : entries.filter((entry) => !persistedIds.has(entry.id) || failedIds.has(entry.id));
   const saveResults = [];
-  let latestStatus = null;
-  for (const entry of entries) {
+  let latestStatus = calendarStoreStatus;
+  if (!entriesToSave.length) return summarizeRosterPersistence(entries, latestStatus, saveResults);
+  beginRosterSync(entriesToSave, options.force === true ? "rebuild" : "sync");
+  for (const entry of entriesToSave) {
     try {
+      setRosterSyncState(entry, "parsing");
       const payload = await buildDerivedCalendarFilePayload(entry, entry);
+      setRosterSyncState(entry, "saving");
       latestStatus = await calendarStoreRequest("saveDerivedCalendarFile", {
         ...payload,
         expectedFileIds,
       });
       saveResults.push({ entry, ok: true });
+      setRosterSyncState(entry, "synced");
     } catch (error) {
       saveResults.push({ entry, ok: false, error });
+      setRosterSyncState(entry, "failed", error?.message || "D1 save failed.");
     }
   }
   if (isCreatorAuthenticated()) {
@@ -9566,17 +9583,73 @@ async function saveSelectedRosterFilesToD1(imports = selectedFiles) {
       // Keep the most recent save response if the creator status refresh fails.
     }
   }
-  if (latestStatus) calendarStoreStatus = latestStatus;
-  const summary = summarizeRosterPersistence(entries, latestStatus, saveResults);
+  if (latestStatus) calendarStoreStatus = { ...latestStatus, checkedAt: new Date().toISOString() };
+  const summary = summarizeRosterPersistence(entries, calendarStoreStatus, saveResults);
   lastRosterPersistence = summary;
   renderFileSurfaces();
   if (!summary.complete) {
+    finishRosterSync();
+    scheduleFailedRosterRetry();
     const error = new Error(rosterPersistenceFailureMessage(summary));
     error.isRosterPersistenceError = true;
     throw error;
   }
   setStatus(`Calendar saved to D1. ${summary.persistedCount}/${summary.expectedCount} roster file${summary.expectedCount === 1 ? "" : "s"} confirmed.`);
+  finishRosterSync();
   return summary;
+}
+
+
+function beginRosterSync(entries, mode = "sync") {
+  for (const entry of entries) setRosterSyncState(entry, "pending", "", mode);
+  scheduleRosterSyncRefresh();
+}
+
+function setRosterSyncState(entry, status, message = "", mode = "sync") {
+  rosterSyncStates.set(entry.id, { status, message, mode, name: entry.name });
+  renderFileSurfaces();
+  if (!accountsModal.classList.contains("hidden") && currentAdminTab === "system") renderAccountsModal();
+}
+
+function finishRosterSync() {
+  if (![...rosterSyncStates.values()].some((state) => ["pending", "parsing", "saving"].includes(state.status))) {
+    clearInterval(rosterSyncRefreshTimer);
+    rosterSyncRefreshTimer = 0;
+  }
+}
+
+function scheduleFailedRosterRetry() {
+  if (rosterSyncRetryTimer || ![...rosterSyncStates.values()].some((state) => state.status === "failed")) return;
+  rosterSyncRetryTimer = setTimeout(async () => {
+    rosterSyncRetryTimer = 0;
+    try {
+      await saveSelectedRosterFilesToD1(selectedFiles);
+    } catch {
+      // Keep failed states visible; a later save or explicit rebuild can retry again.
+    }
+  }, 5000);
+}
+
+function scheduleRosterSyncRefresh() {
+  if (rosterSyncRefreshTimer) return;
+  rosterSyncRefreshTimer = setInterval(() => void refreshCalendarStoreStatus({ silent: true }), 5000);
+}
+
+function rosterSyncLabel(entry) {
+  const state = rosterSyncStates.get(entry.id);
+  if (!state || state.status === "synced") return "";
+  const labels = { pending: "Queued to sync", parsing: "Parsing roster file…", saving: "Saving to roster database…", failed: `Sync failed${state.message ? `: ${state.message}` : ""}` };
+  return `<span>${escapeHtml(labels[state.status] || "")}</span>`;
+}
+
+function rosterSyncSummary() {
+  const states = [...rosterSyncStates.values()];
+  const active = states.filter((state) => ["pending", "parsing", "saving"].includes(state.status));
+  if (!active.length) return "";
+  const done = states.filter((state) => state.status === "synced").length;
+  const total = states.length;
+  const verb = states.some((state) => state.mode === "rebuild") ? "Rebuilding" : "Syncing";
+  return `${verb} ${done}/${total} roster files`;
 }
 
 function emptyRosterPersistenceSummary() {
