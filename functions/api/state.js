@@ -756,6 +756,9 @@ export async function onRequestPost(context) {
       const doctorKeys = (Array.isArray(body?.doctorKeys) ? body.doctorKeys : [])
         .map((key) => normalizeRosterName(key))
         .filter(Boolean);
+      const overlapDoctorKeys = (Array.isArray(body?.overlapDoctorKeys) ? body.overlapDoctorKeys : [])
+        .map((key) => normalizeRosterName(key))
+        .filter(Boolean);
       const startedAt = Date.now();
       try {
         const coworkers = await queryCoworkerEvents(context.env.ROSTER_DB, {
@@ -764,6 +767,7 @@ export async function onRequestPost(context) {
           sourceTypes,
           excludeDoctorKeys,
           doctorKeys,
+          overlapDoctorKeys,
         });
         return Response.json({ ok: true, coworkers, queryMs: Date.now() - startedAt });
       } catch (error) {
@@ -772,6 +776,7 @@ export async function onRequestPost(context) {
           endDate,
           sourceTypes,
           doctorKeyCount: doctorKeys.length,
+          overlapDoctorKeyCount: overlapDoctorKeys.length,
           excludeDoctorKeyCount: excludeDoctorKeys.length,
           queryMs: Date.now() - startedAt,
           error: error?.message || String(error),

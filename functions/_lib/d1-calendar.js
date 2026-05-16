@@ -1073,9 +1073,43 @@ export async function queryCoworkerEvents(db, options = {}) {
   const sourceTypes = sanitizeSourceTypes(options.sourceTypes);
   const excludeKeys = new Set((options.excludeDoctorKeys || []).filter(Boolean));
   const includeKeys = [...new Set((options.doctorKeys || []).filter(Boolean))];
+  const overlapKeys = [...new Set((options.overlapDoctorKeys || []).filter(Boolean))];
   const sourceSql = sourceTypes.length ? `AND roster_events.source_type IN (${sourceTypes.map(() => "?").join(", ")})` : "";
   const doctorSql = includeKeys.length ? `AND roster_events.doctor_key IN (${includeKeys.map(() => "?").join(", ")})` : "";
   const excludeDoctorSql = excludeKeys.size ? `AND roster_events.doctor_key NOT IN (${[...excludeKeys].map(() => "?").join(", ")})` : "";
+  if (overlapKeys.length) {
+    const overlapSourceSql = sourceTypes.length ? `AND other_events.source_type IN (${sourceTypes.map(() => "?").join(", ")})` : "";
+    const overlapDoctorSql = includeKeys.length ? `AND other_events.doctor_key IN (${includeKeys.map(() => "?").join(", ")})` : "";
+    const overlapExcludeDoctorSql = excludeKeys.size ? `AND other_events.doctor_key NOT IN (${[...excludeKeys].map(() => "?").join(", ")})` : "";
+    const rows = await db.prepare(`
+      SELECT DISTINCT
+        other_events.id AS event_id,
+        other_events.doctor_key,
+        other_events.display_name,
+        other_events.source_type,
+        other_events.event_json,
+        other_events.start_ts
+      FROM roster_events AS mine
+      INNER JOIN roster_files AS mine_files ON mine_files.id = mine.file_id
+      INNER JOIN roster_events AS other_events
+        ON other_events.source_type = mine.source_type
+       AND other_events.start_date <= mine.end_date
+       AND other_events.end_date >= mine.start_date
+      INNER JOIN roster_files AS other_files ON other_files.id = other_events.file_id
+      WHERE mine_files.active = 1
+        AND other_files.active = 1
+        AND mine.doctor_key IN (${overlapKeys.map(() => "?").join(", ")})
+        AND mine.start_date <= ?
+        AND mine.end_date >= ?
+        AND other_events.start_date <= ?
+        AND other_events.end_date >= ?
+        ${overlapSourceSql}
+        ${overlapDoctorSql}
+        ${overlapExcludeDoctorSql}
+      ORDER BY other_events.display_name, other_events.start_ts
+    `).bind(...overlapKeys, end, start, end, start, ...sourceTypes, ...includeKeys, ...excludeKeys).all();
+    return rowsToCoworkerEvents(rows);
+  }
   const rows = await db.prepare(`
     SELECT
       roster_events.doctor_key,
@@ -1092,6 +1126,10 @@ export async function queryCoworkerEvents(db, options = {}) {
       ${excludeDoctorSql}
     ORDER BY roster_events.display_name, roster_events.start_ts
   `).bind(end, start, ...sourceTypes, ...includeKeys, ...excludeKeys).all();
+  return rowsToCoworkerEvents(rows);
+}
+
+function rowsToCoworkerEvents(rows) {
   return (rows.results || [])
     .map((row) => ({
       doctorKey: row.doctor_key,

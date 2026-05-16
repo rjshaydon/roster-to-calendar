@@ -94,8 +94,8 @@ assert.doesNotMatch(
 );
 assert.match(
   appSource.match(/async function renderWhenInsight[\s\S]*?function renderWhenInsightResult/)?.[0] || "",
-  /const requestedDoctorKeys = insightsState\.comparisonDoctorKey \? \[insightsState\.comparisonDoctorKey\] : \[\];[\s\S]*doctorKeys: requestedDoctorKeys/,
-  "doctor-specific when insights should query only the selected doctor from D1",
+  /const requestedDoctorKeys = insightsState\.comparisonDoctorKey \? \[insightsState\.comparisonDoctorKey\] : \[\];[\s\S]*doctorKeys: requestedDoctorKeys,[\s\S]*overlapDoctorKeys: requestedDoctorKeys\.length \? \[\] : selectedInsightDoctorKeys\(\)/,
+  "when insights should use a targeted doctor query or SQL overlap query instead of loading the whole term",
 );
 assert.match(
   calendarMigrationSource,
@@ -824,6 +824,37 @@ class MemoryD1Statement {
           .map((event) => ({ event_json: event.event_json })),
       };
     }
+    if (sql.includes("FROM roster_events AS mine")) {
+      const overlapKeyCount = (sql.match(/mine\.doctor_key IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1;
+      const overlapKeys = new Set(args.slice(0, overlapKeyCount));
+      const end = args[overlapKeyCount];
+      const start = args[overlapKeyCount + 1];
+      const sourceOffset = overlapKeyCount + 4;
+      const hasSourceFilter = sql.includes("other_events.source_type IN");
+      const hasDoctorFilter = sql.includes("other_events.doctor_key IN");
+      const hasExcludedDoctorFilter = sql.includes("other_events.doctor_key NOT IN");
+      const sourceCount = hasSourceFilter ? (sql.match(/other_events\.source_type IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1 : 0;
+      const doctorCount = hasDoctorFilter ? (sql.match(/other_events\.doctor_key IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1 : 0;
+      const excludedDoctorCount = hasExcludedDoctorFilter ? (sql.match(/other_events\.doctor_key NOT IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1 : 0;
+      const sourceTypes = new Set(args.slice(sourceOffset, sourceOffset + sourceCount));
+      const doctorKeys = new Set(args.slice(sourceOffset + sourceCount, sourceOffset + sourceCount + doctorCount));
+      const excludedDoctorKeys = new Set(args.slice(sourceOffset + sourceCount + doctorCount, sourceOffset + sourceCount + doctorCount + excludedDoctorCount));
+      const myEvents = [...this.db.events.values()]
+        .filter((event) => this.db.files.get(event.file_id)?.active === 1)
+        .filter((event) => overlapKeys.has(event.doctor_key))
+        .filter((event) => event.start_date <= end && event.end_date >= start);
+      return {
+        results: [...this.db.events.values()]
+          .filter((event) => this.db.files.get(event.file_id)?.active === 1)
+          .filter((event) => event.start_date <= end && event.end_date >= start)
+          .filter((event) => myEvents.some((mine) => mine.source_type === event.source_type && event.start_date <= mine.end_date && event.end_date >= mine.start_date))
+          .filter((event) => !sourceTypes.size || sourceTypes.has(event.source_type))
+          .filter((event) => !doctorKeys.size || doctorKeys.has(event.doctor_key))
+          .filter((event) => !excludedDoctorKeys.has(event.doctor_key))
+          .filter((event, index, events) => events.findIndex((item) => item.id === event.id) === index)
+          .sort((left, right) => left.display_name.localeCompare(right.display_name) || left.start_ts.localeCompare(right.start_ts)),
+      };
+    }
     if (sql.includes("FROM roster_events") && sql.includes("doctor_key IN")) {
       const end = args[args.length - 2];
       const start = args[args.length - 1];
@@ -1379,6 +1410,20 @@ const d1InsightsExcludingSelectedDoctor = await postState(d1StateStore, {
 assert.ok(
   d1InsightsExcludingSelectedDoctor.coworkers.every((row) => row.doctorKey !== d1Doctor.key),
   "coworker lookup should exclude the selected doctor in SQL",
+);
+const d1OverlapInsights = await postState(d1StateStore, {
+  action: "queryRosterInsights",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  startDate: d1CreatorCalendar.snapshot.preview.events[0].start.slice(0, 10),
+  endDate: d1CreatorCalendar.snapshot.preview.events.at(-1).start.slice(0, 10),
+  overlapDoctorKeys: [d1Doctor.key],
+  excludeDoctorKeys: [d1Doctor.key],
+}, d1Store);
+assert.ok(Array.isArray(d1OverlapInsights.coworkers), "overlap coworker lookup should return SQL-derived rows");
+assert.ok(
+  d1OverlapInsights.coworkers.every((row) => row.doctorKey !== d1Doctor.key),
+  "overlap coworker lookup should exclude the selected doctor in SQL",
 );
 const d1RepositoryFile = [...d1Store.files.keys()][0];
 await postState(d1StateStore, {

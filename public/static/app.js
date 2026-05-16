@@ -2858,7 +2858,7 @@ function selectedInsightDoctorKeys() {
   ].map(normalizeRosterName).filter(Boolean))];
 }
 
-async function fetchRosterInsightRows({ startDate, endDate = startDate, sourceTypes = [], excludeDoctorKeys = [], doctorKeys = [] } = {}) {
+async function fetchRosterInsightRows({ startDate, endDate = startDate, sourceTypes = [], excludeDoctorKeys = [], doctorKeys = [], overlapDoctorKeys = [] } = {}) {
   if (!cloudAvailable || !startDate) return { ok: false, unavailable: true, rows: [] };
   const startedAt = performance.now();
   try {
@@ -2876,19 +2876,20 @@ async function fetchRosterInsightRows({ startDate, endDate = startDate, sourceTy
         sourceTypes,
         excludeDoctorKeys,
         doctorKeys,
+        overlapDoctorKeys,
       }),
     });
     const data = await readJsonResponse(response, "Could not load roster insights.");
     const elapsedMs = Math.round(performance.now() - startedAt);
     if (!data.ok || data.unavailable || !Array.isArray(data.coworkers)) {
-      console.warn("Roster insight SQL lookup unavailable", { elapsedMs, startDate, endDate, sourceTypes, doctorKeys });
+      console.warn("Roster insight SQL lookup unavailable", { elapsedMs, startDate, endDate, sourceTypes, doctorKeys, overlapDoctorKeys });
       return { ok: false, unavailable: true, rows: [], elapsedMs };
     }
-    if (elapsedMs > 1000) console.warn("Roster insight SQL lookup was slow", { elapsedMs, queryMs: data.queryMs, startDate, endDate, sourceTypes, doctorKeys });
+    if (elapsedMs > 1000) console.warn("Roster insight SQL lookup was slow", { elapsedMs, queryMs: data.queryMs, startDate, endDate, sourceTypes, doctorKeys, overlapDoctorKeys });
     return { ok: true, rows: data.coworkers, elapsedMs, queryMs: data.queryMs };
   } catch (error) {
     const elapsedMs = Math.round(performance.now() - startedAt);
-    console.warn("Roster insight SQL lookup failed", { elapsedMs, startDate, endDate, sourceTypes, doctorKeys, error });
+    console.warn("Roster insight SQL lookup failed", { elapsedMs, startDate, endDate, sourceTypes, doctorKeys, overlapDoctorKeys, error });
     return { ok: false, unavailable: true, rows: [], elapsedMs };
   }
 }
@@ -2987,6 +2988,7 @@ async function renderWhenInsight() {
     endDate: toDate,
     sourceTypes: hospitalFilters.map((item) => item.toLowerCase()),
     doctorKeys: requestedDoctorKeys,
+    overlapDoctorKeys: requestedDoctorKeys.length ? [] : selectedInsightDoctorKeys(),
   });
   if (serverResult.ok) {
     const serverRows = serverResult.rows;
