@@ -2829,7 +2829,10 @@ function mergeContiguousLeaveEvents(events) {
   const ordered = [...leaveEvents].sort((left, right) => left.start.localeCompare(right.start) || left.end.localeCompare(right.end));
   for (const event of ordered) {
     const previous = merged.length ? merged[merged.length - 1] : null;
-    if (previous && event.start <= previous.end) {
+    const overlaps = previous && event.start < previous.end;
+    const adjacentSameType = previous && event.start === previous.end
+      && preferredLeaveTitle(previous.title, "", previous.rawValue) === preferredLeaveTitle(event.title, "", event.rawValue);
+    if (previous && (overlaps || adjacentSameType)) {
       previous.end = event.end > previous.end ? event.end : previous.end;
       previous.rawValue = mergeRawLeaveValues(previous.rawValue, event.rawValue);
       previous.sources = mergeLeaveSources(previous.sources, event.sources, previous.source, event.source);

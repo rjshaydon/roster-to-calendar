@@ -77,6 +77,8 @@ assert.match(
   /canUseRosterInsights\(\) && !isLeaveEvent\(event\)[\s\S]*renderInlineWhoInsight/,
   "leave review modals should not request roster coworker insights",
 );
+assert.match(appSource, /let cloudStateSaveQueue = Promise\.resolve\(\);/, "cloud saves should be serialized");
+assert.match(appSource, /data-replace-active-rosters/, "creator UI should expose a roster recovery action");
 assert.doesNotMatch(
   appSource.match(/async function renderWhoInsight[\s\S]*?async function renderWhenInsight/)?.[0] || "",
   /ensureInsightRosterAnalysis/,
@@ -298,6 +300,15 @@ const derivedLeaveEvents = derivedLeavePreview.events.filter((event) => /leave/i
 assert.equal(derivedLeaveEvents.length, 1, "overlapping leave from multiple sources should render once");
 assert.deepEqual(derivedLeaveEvents[0].sources, ["MMC", "Casey"]);
 assert.equal(derivedLeavePreview.events.some((event) => event.id === "shift-a"), true, "non-leave shifts must remain visible");
+const adjacentMixedLeavePreview = buildPreviewFromDerivedEvents([
+  { id: "conference-week", title: "Conference Leave", rawValue: "Conference Leave", source: "MMC", start: "2026-02-02", end: "2026-02-09", allDay: true },
+  { id: "annual-week", title: "Annual Leave", rawValue: "Annual Leave", source: "MMC", start: "2026-02-09", end: "2026-02-16", allDay: true },
+]);
+assert.deepEqual(
+  adjacentMixedLeavePreview.events.map((event) => [event.title, event.start, event.end]),
+  [["Conference Leave", "2026-02-02", "2026-02-09"], ["Annual Leave", "2026-02-09", "2026-02-16"]],
+  "adjacent different leave types should not be merged",
+);
 
 const andrewDyallCasey = caseyDoctors.find((doctor) => doctor.displayName === "Andrew DYALL");
 const andrewCaseyView = buildRosterView([], [], andrewDyallCasey.key, undefined, {}, {}, [], caseyWorkbook);
@@ -346,8 +357,8 @@ assert.ok(bobSeithMchView.events.some((event) => event.title === "MCH: CS" && ev
 const andrewHardyMch = mchDoctors.find((doctor) => doctor.displayName === "Andrew HARDY");
 const andrewHardyMchView = buildRosterView([], [], andrewHardyMch.key, undefined, {}, {}, [], [], mchWorkbook);
 assert.ok(andrewHardyMchView.events.some((event) => event.title === "MCH: OCS" && event.rawValue === "0800-1730 OCS"));
-assert.ok(andrewHardyMchView.events.some((event) => event.title === "Conference Leave" && event.rawValue === "CME/L / ME/L" && event.allDay));
 assert.ok(andrewHardyMchView.events.some((event) => event.title === "Conference Leave" && event.rawValue === "CME/L" && event.allDay));
+assert.ok(andrewHardyMchView.events.some((event) => event.title === "Exam Leave" && event.rawValue === "ME/L" && event.allDay));
 assert.ok(andrewHardyMchView.events.some((event) => event.title === "Conference Leave" && event.rawValue === "CME/L" && event.start === "2026-06-08" && event.end === "2026-06-15"));
 
 const adamWestMchWeek6 = adamWestMchView.events.filter((event) => event.rawValue === "PHNW 0800-1730");
@@ -407,9 +418,9 @@ assert.ok(michaelAnnualOption);
 assert.deepEqual(michaelAnnualOption.sourceTypes, ["casey", "mch"]);
 const michaelAnnualView = buildRosterView([], [], michaelAnnualOption.key, undefined, {}, {}, michaelAnnualOption.aliases, michaelAnnualWorkbook, mchWorkbook);
 const michaelAnnualEvents = michaelAnnualView.events.filter((event) => /leave/i.test(event.title));
-assert.equal(michaelAnnualEvents.length, 1);
-assert.equal(michaelAnnualEvents[0].start, "2026-07-20");
-assert.equal(michaelAnnualEvents[0].end, "2026-08-03");
+assert.equal(michaelAnnualEvents.length, 2);
+assert.ok(michaelAnnualEvents.some((event) => event.title === "Conference Leave" && event.start === "2026-07-20" && event.end === "2026-07-27"));
+assert.ok(michaelAnnualEvents.some((event) => event.title === "Annual Leave" && event.start === "2026-07-27" && event.end === "2026-08-03"));
 assert.ok(michaelAnnualView.events.some((event) => event.source === "MCH"));
 
 const mergedAnnualWorkbook = XLSX.utils.book_new();
@@ -452,7 +463,7 @@ assert.ok(aftabMmc);
 const aftabMmcView = buildRosterView(mmcWorkbook, [], aftabMmc.key);
 assert.ok(aftabMmcView.events.some((event) => event.title === "Conference Leave" && event.rawValue.toUpperCase() === "CME LEAVE" && event.allDay));
 
-assert.equal(view.events.length, 37);
+assert.equal(view.events.length, 38);
 assert.equal(summary.date_range, "2026-02-02 to 2026-05-02");
 assert.ok(view.events.some((event) => event.title === "Conference Leave" && event.rawValue.includes("Dandenong CL")));
 assert.ok(view.reviewItems.length >= view.events.length);
@@ -1386,6 +1397,27 @@ assert.deepEqual(
   [["d1-custom-event", "D1 Custom Event", "2026-02-13"]],
   "D1 session save should collapse duplicate custom event ids with the latest value winning",
 );
+await postState(d1StateStore, {
+  action: "save",
+  email: "d1-user@example.com",
+  password: "d1-password",
+  state: {
+    ...d1SessionLogin.state,
+    session: {
+      ...d1SessionLogin.state.session,
+      customEvents: [
+        ...d1SessionLogin.state.session.customEvents,
+        { id: "different-id-same-event", ownerEmail: "d1-user@example.com", title: "D1 Custom Event", startDate: "2026-02-13", endDate: "2026-02-13", allDay: true, include: true },
+      ],
+    },
+  },
+}, d1Store);
+const d1IdentityDedupedLogin = await postState(d1StateStore, {
+  action: "login",
+  email: "d1-user@example.com",
+  password: "d1-password",
+}, d1Store);
+assert.equal(d1IdentityDedupedLogin.state.session.customEvents.length, 1, "matching logical custom events should collapse even when ids differ");
 const d1SessionCalendar = await postState(d1StateStore, {
   action: "loadCalendarEvents",
   email: "d1-user@example.com",
@@ -2663,6 +2695,14 @@ deletionIndex = await deletionStore.get("repository:index", "json");
 assert.equal(deletionIndex.files.some((file) => file.id === "remove-roster"), true, "D1-only removal must not mutate legacy KV index");
 assert.ok(await deletionStore.get("repository:file:keep-roster", "json"));
 assert.ok(await deletionStore.get("repository:file:missing-from-save", "json"));
+await postState(deletionStore, {
+  action: "replaceActiveRosterFiles",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  keepFileIds: ["keep-roster"],
+}, deletionStore.d1);
+assert.equal(deletionStore.d1.files.has("keep-roster"), true, "recovery should retain the requested current roster");
+assert.equal(deletionStore.d1.files.has("missing-from-save"), false, "recovery should remove active rosters outside the current upload set");
 
 await postState(deletionStore, {
   action: "save",

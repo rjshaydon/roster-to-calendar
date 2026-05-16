@@ -254,6 +254,7 @@ let activeCalendarContext = initialCalendarContext();
 let cloudAvailable = false;
 let cloudSaveTimer = 0;
 let pendingCloudSaveSnapshot = null;
+let cloudStateSaveQueue = Promise.resolve();
 let serverUsers = [];
 let currentRosterClaims = [];
 let currentSuggestedClaims = [];
@@ -484,6 +485,11 @@ accountsBody.addEventListener("click", (event) => {
   const refreshCalendarStoreButton = event.target.closest("[data-refresh-calendar-store]");
   if (refreshCalendarStoreButton) {
     refreshCalendarStoreStatus();
+    return;
+  }
+  const replaceActiveRostersButton = event.target.closest("[data-replace-active-rosters]");
+  if (replaceActiveRostersButton) {
+    void replaceActiveRostersWithCurrentUploads();
     return;
   }
   const viewConsoleButton = event.target.closest("[data-view-console]");
@@ -6448,6 +6454,7 @@ function renderCalendarStoreCard() {
         ` : ""}
         <div class="modal-actions">
           <button type="button" class="button button-secondary" data-refresh-calendar-store>Refresh status</button>
+          <button type="button" class="button button-secondary" data-replace-active-rosters>Replace active rosters with current uploads</button>
           <button type="button" class="button button-secondary" data-view-console>${adminConsoleOpen ? "Hide console" : "View console"}</button>
         </div>
         ${adminConsoleOpen ? renderAdminConsoleMarkup() : ""}
@@ -9203,6 +9210,13 @@ function snapshotCloudSavePayload() {
 }
 
 async function saveCloudState(snapshot = null) {
+  const task = () => saveCloudStateNow(snapshot);
+  const queued = cloudStateSaveQueue.then(task, task);
+  cloudStateSaveQueue = queued.catch(() => {});
+  return await queued;
+}
+
+async function saveCloudStateNow(snapshot = null) {
   const payload = snapshot || snapshotCloudSavePayload();
   if (!payload.accountEmail || !payload.requestEmail || !payload.requestPassword || !cloudAvailable) return;
   const snapshotPayload = await buildWorkspaceSnapshotPayload(payload.session);
@@ -9255,6 +9269,26 @@ async function saveCloudState(snapshot = null) {
     rememberCreatorCalendarSourceRefs();
   }
   renderLoginState();
+}
+
+async function replaceActiveRostersWithCurrentUploads() {
+  if (!isCreatorAuthenticated()) return;
+  try {
+    setStatus("Replacing active rosters with current uploads...");
+    await saveSelectedRosterFilesToD1(selectedFiles);
+    const keepFileIds = selectedFiles.map((entry) => entry.id);
+    calendarStoreStatus = await calendarStoreRequest("replaceActiveRosterFiles", {
+      keepFileIds,
+      selectedDoctorKey: selectedDoctor()?.key || OWNER_DOCTOR_KEY,
+    });
+    replaceActiveCalendarCustomEvents(customEventsForActiveCalendar());
+    await saveCloudState(snapshotCloudSavePayload());
+    await analyzeFiles();
+    renderFileSurfaces();
+    setStatus(`Active rosters replaced. ${keepFileIds.length} current upload${keepFileIds.length === 1 ? "" : "s"} retained.`);
+  } catch (error) {
+    setStatus(error.message || "Could not replace active rosters.", true);
+  }
 }
 
 async function buildWorkspaceSnapshotPayload(session = buildActiveSessionState()) {
@@ -9910,7 +9944,7 @@ function sanitizeCustomEvents(items, defaultOwnerEmail = "") {
       include: item.include !== false,
     }))
     .filter((item) => item.ownerEmail);
-  return latestCustomEventsById(events);
+  return latestCustomEventsByIdentity(events);
 }
 
 function latestCustomEventsById(events) {
@@ -9920,6 +9954,23 @@ function latestCustomEventsById(events) {
     byId.set(event.id, event);
   }
   return [...byId.values()];
+}
+
+function latestCustomEventsByIdentity(events) {
+  const byIdentity = new Map();
+  for (const event of latestCustomEventsById(events)) {
+    const key = [
+      normalizeEmail(event.ownerEmail),
+      event.title,
+      event.startDate,
+      event.endDate,
+      event.allDay ? "all-day" : `${event.startTime}|${event.endTime}`,
+      event.location,
+    ].join("|");
+    byIdentity.delete(key);
+    byIdentity.set(key, event);
+  }
+  return [...byIdentity.values()];
 }
 
 async function applyHistorySnapshot(snapshot) {

@@ -289,6 +289,23 @@ export async function onRequestPost(context) {
       return Response.json({ ok: true, reset: fileId, ...status });
     }
 
+    if (action === "replaceActiveRosterFiles") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      const keepFileIds = sanitizeRepositoryFileIds(body?.keepFileIds);
+      const activeFiles = await queryRosterFileRanges(context.env.ROSTER_DB, { includeInactive: false });
+      const removedFileIds = activeFiles
+        .map((file) => file.id)
+        .filter((id) => id && !keepFileIds.includes(id));
+      await Promise.all(removedFileIds.map((id) => deleteDerivedRosterFile(context.env.ROSTER_DB, id).catch(() => null)));
+      const status = await calendarStoreStatus(null, context.env.ROSTER_DB, {
+        doctorKey: normalizeRosterName(body?.selectedDoctorKey || OWNER_DOCTOR_KEY),
+        expectedFileIds: keepFileIds,
+      });
+      return Response.json({ ok: true, keptFileIds: keepFileIds, removedFileIds, ...status });
+    }
+
     if (action === "updateAccount") {
       const saveEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
       const targetRecord = saveEmail === email ? account.record : await loadAccountMirror(context.env.ROSTER_DB, saveEmail);
@@ -1710,7 +1727,7 @@ function sanitizeSnapshotCustomEvents(items, defaultOwnerEmail = "") {
       include: item.include !== false,
     }))
     .filter((item) => !ownerEmail || !item.ownerEmail || item.ownerEmail === ownerEmail);
-  return latestCustomEventsById(events);
+  return latestCustomEventsByIdentity(events);
 }
 
 function latestCustomEventsById(events) {
@@ -1720,6 +1737,23 @@ function latestCustomEventsById(events) {
     byId.set(event.id, event);
   }
   return [...byId.values()];
+}
+
+function latestCustomEventsByIdentity(events) {
+  const byIdentity = new Map();
+  for (const event of latestCustomEventsById(events)) {
+    const key = [
+      normalizeEmail(event.ownerEmail),
+      event.title,
+      event.startDate,
+      event.endDate,
+      event.allDay ? "all-day" : `${event.startTime}|${event.endTime}`,
+      event.location,
+    ].join("|");
+    byIdentity.delete(key);
+    byIdentity.set(key, event);
+  }
+  return [...byIdentity.values()];
 }
 
 export async function loadAccountBySubscriptionToken(store, token) {
@@ -2440,9 +2474,7 @@ function mergeProfileSessionIntoState(state, profiles, ownerEmail = "") {
         ...event,
         ownerEmail: normalizeEmail(ownerEmail || event.ownerEmail || ""),
       };
-      if (!mergedCustomEvents.some((existing) => existing.id === reassigned.id)) {
-        mergedCustomEvents.push(reassigned);
-      }
+      mergedCustomEvents.push(reassigned);
     }
   }
   return {
@@ -2451,7 +2483,7 @@ function mergeProfileSessionIntoState(state, profiles, ownerEmail = "") {
       ...session,
       overrides: mergedOverrides,
       conflictSelections: mergedConflictSelections,
-      customEvents: mergedCustomEvents,
+      customEvents: latestCustomEventsByIdentity(sanitizeSnapshotCustomEvents(mergedCustomEvents, ownerEmail)),
     },
   };
 }

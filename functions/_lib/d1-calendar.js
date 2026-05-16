@@ -1320,7 +1320,10 @@ function mergeDuplicateLeaveEvents(events) {
   const ordered = leaveEvents.sort((left, right) => String(left.start || "").localeCompare(String(right.start || "")) || String(left.end || "").localeCompare(String(right.end || "")));
   for (const event of ordered) {
     const previous = merged.length ? merged[merged.length - 1] : null;
-    if (previous && leavesOverlap(previous, event)) {
+    const overlaps = previous && String(event.start || "") < String(previous.end || previous.start || "");
+    const adjacentSameType = previous && String(event.start || "") === String(previous.end || previous.start || "")
+      && preferredLeaveTitle(previous.title, "", previous.rawValue) === preferredLeaveTitle(event.title, "", event.rawValue);
+    if (previous && (overlaps || adjacentSameType)) {
       previous.end = String(event.end || "") > String(previous.end || "") ? event.end : previous.end;
       previous.rawValue = mergeRawValues(previous.rawValue, event.rawValue);
       previous.sources = mergeSources(previous.sources, event.sources, previous.source, event.source);
