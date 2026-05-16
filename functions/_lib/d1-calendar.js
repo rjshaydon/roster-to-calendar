@@ -1140,6 +1140,47 @@ function rowsToCoworkerEvents(rows) {
     .filter((row) => row.event);
 }
 
+export async function queryOverlapDoctors(db, options = {}) {
+  if (!db?.prepare) return [];
+  await ensureCalendarSchema(db);
+  const start = String(options.startDate || options.date || "0000-01-01");
+  const end = String(options.endDate || options.date || "9999-12-31");
+  const sourceTypes = sanitizeSourceTypes(options.sourceTypes);
+  const overlapKeys = [...new Set((options.overlapDoctorKeys || []).filter(Boolean))];
+  const excludeKeys = [...new Set((options.excludeDoctorKeys || []).filter(Boolean))];
+  if (!overlapKeys.length) return [];
+  const sourceSql = sourceTypes.length ? `AND other_events.source_type IN (${sourceTypes.map(() => "?").join(", ")})` : "";
+  const excludeDoctorSql = excludeKeys.length ? `AND other_events.doctor_key NOT IN (${excludeKeys.map(() => "?").join(", ")})` : "";
+  const rows = await db.prepare(`
+    SELECT DISTINCT
+      other_events.doctor_key,
+      other_events.display_name,
+      other_events.source_type
+    FROM roster_events AS mine
+    INNER JOIN roster_files AS mine_files ON mine_files.id = mine.file_id
+    INNER JOIN roster_events AS other_events
+      ON other_events.source_type = mine.source_type
+     AND other_events.start_date <= mine.end_date
+     AND other_events.end_date >= mine.start_date
+    INNER JOIN roster_files AS other_files ON other_files.id = other_events.file_id
+    WHERE mine_files.active = 1
+      AND other_files.active = 1
+      AND mine.doctor_key IN (${overlapKeys.map(() => "?").join(", ")})
+      AND mine.start_date <= ?
+      AND mine.end_date >= ?
+      AND other_events.start_date <= ?
+      AND other_events.end_date >= ?
+      ${sourceSql}
+      ${excludeDoctorSql}
+    ORDER BY other_events.display_name, other_events.source_type
+  `).bind(...overlapKeys, end, start, end, start, ...sourceTypes, ...excludeKeys).all();
+  return (rows.results || []).map((row) => ({
+    doctorKey: row.doctor_key,
+    displayName: row.display_name,
+    sourceType: row.source_type,
+  }));
+}
+
 export function buildPreviewFromDerivedEvents(events) {
   const safeEvents = mergeDuplicateLeaveEvents(events || []).map((event) => ({ ...event }));
   return {

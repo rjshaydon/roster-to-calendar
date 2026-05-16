@@ -16,6 +16,7 @@ import {
   loadAccountStateMirror,
   loadDoctorProfileMirror,
   queryCoworkerEvents,
+  queryOverlapDoctors,
   queryClaimedAccounts,
   queryDoctorProfileMirrors,
   queryDoctorEvents,
@@ -782,6 +783,40 @@ export async function onRequestPost(context) {
           error: error?.message || String(error),
         });
         return Response.json({ ok: false, unavailable: true, coworkers: [] }, { status: 503 });
+      }
+    }
+
+    if (action === "queryRosterOverlapDoctors") {
+      const startDate = String(body?.startDate || body?.date || "").slice(0, 10);
+      const endDate = String(body?.endDate || body?.date || startDate).slice(0, 10);
+      const sourceTypes = sanitizeSourceTypes(body?.sourceTypes || []);
+      const excludeDoctorKeys = (Array.isArray(body?.excludeDoctorKeys) ? body.excludeDoctorKeys : [])
+        .map((key) => normalizeRosterName(key))
+        .filter(Boolean);
+      const overlapDoctorKeys = (Array.isArray(body?.overlapDoctorKeys) ? body.overlapDoctorKeys : [])
+        .map((key) => normalizeRosterName(key))
+        .filter(Boolean);
+      const startedAt = Date.now();
+      try {
+        const doctors = await queryOverlapDoctors(context.env.ROSTER_DB, {
+          startDate,
+          endDate,
+          sourceTypes,
+          excludeDoctorKeys,
+          overlapDoctorKeys,
+        });
+        return Response.json({ ok: true, doctors, queryMs: Date.now() - startedAt });
+      } catch (error) {
+        console.error("queryRosterOverlapDoctors failed", {
+          startDate,
+          endDate,
+          sourceTypes,
+          overlapDoctorKeyCount: overlapDoctorKeys.length,
+          excludeDoctorKeyCount: excludeDoctorKeys.length,
+          queryMs: Date.now() - startedAt,
+          error: error?.message || String(error),
+        });
+        return Response.json({ ok: false, unavailable: true, doctors: [] }, { status: 503 });
       }
     }
 

@@ -2894,6 +2894,38 @@ async function fetchRosterInsightRows({ startDate, endDate = startDate, sourceTy
   }
 }
 
+async function fetchRosterOverlapDoctors({ startDate, endDate = startDate, sourceTypes = [], excludeDoctorKeys = [], overlapDoctorKeys = [] } = {}) {
+  if (!cloudAvailable || !startDate || !overlapDoctorKeys.length) return { ok: false, unavailable: true, doctors: [] };
+  const startedAt = performance.now();
+  try {
+    const requestEmail = adminViewingEmail ? authUserEmail || currentUserEmail : currentUserEmail;
+    const requestPassword = adminViewingEmail ? authUserPassword || currentUserPassword : currentUserPassword;
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "queryRosterOverlapDoctors",
+        email: requestEmail,
+        password: requestPassword,
+        startDate,
+        endDate,
+        sourceTypes,
+        excludeDoctorKeys,
+        overlapDoctorKeys,
+      }),
+    });
+    const data = await readJsonResponse(response, "Could not load roster overlap doctors.");
+    const elapsedMs = Math.round(performance.now() - startedAt);
+    if (!data.ok || data.unavailable || !Array.isArray(data.doctors)) return { ok: false, unavailable: true, doctors: [], elapsedMs };
+    if (elapsedMs > 1000) console.warn("Roster overlap doctor SQL lookup was slow", { elapsedMs, queryMs: data.queryMs, startDate, endDate, sourceTypes, overlapDoctorKeys });
+    return { ok: true, doctors: data.doctors, elapsedMs, queryMs: data.queryMs };
+  } catch (error) {
+    const elapsedMs = Math.round(performance.now() - startedAt);
+    console.warn("Roster overlap doctor SQL lookup failed", { elapsedMs, startDate, endDate, sourceTypes, overlapDoctorKeys, error });
+    return { ok: false, unavailable: true, doctors: [], elapsedMs };
+  }
+}
+
 function renderRosterInsightUnavailable() {
   return `<article class="issue-card"><p>Roster insight data is unavailable right now. Please try again shortly.</p></article>`;
 }
@@ -2982,13 +3014,49 @@ async function renderWhenInsight() {
   const hospitalFilters = Array.isArray(insightsState.hospitalFilters) ? insightsState.hospitalFilters : [];
   const fromDate = insightsState.fromDate || formatDateKey(new Date());
   const toDate = insightsState.termEnd || currentCalendarInsightDateRange().end || fromDate;
-  const requestedDoctorKeys = insightsState.comparisonDoctorKey ? [insightsState.comparisonDoctorKey] : [];
+  let requestedDoctorKeys = insightsState.comparisonDoctorKey ? [insightsState.comparisonDoctorKey] : [];
+  if (!requestedDoctorKeys.length) {
+    const doctorResult = await fetchRosterOverlapDoctors({
+      startDate: fromDate,
+      endDate: toDate,
+      sourceTypes: hospitalFilters.map((item) => item.toLowerCase()),
+      excludeDoctorKeys: selectedInsightDoctorKeys(),
+      overlapDoctorKeys: selectedInsightDoctorKeys(),
+    });
+    if (!doctorResult.ok) {
+      insightsModalTitle.textContent = "When am I working with…?";
+      insightsModalSubtitle.textContent = "Find future dates where both doctors are working from the selected date.";
+      insightsModalBody.innerHTML = renderRosterInsightUnavailable();
+      return;
+    }
+    const options = prioritizeDoctorOptions(insightRowsToDoctorOptions(doctorResult.doctors.map((doctor) => ({
+      doctorKey: doctor.doctorKey,
+      displayName: doctor.displayName,
+      sourceType: doctor.sourceType,
+      event: {},
+    }))));
+    insightsState.comparisonDoctorKey = options[0]?.key || "";
+    if (!insightsState.comparisonDoctorKey) {
+      renderWhenInsightResult({
+        options,
+        selectedComparison: null,
+        mine: selectedDoctorEventsForInsights(fromDate, toDate, hospitalFilters).filter(isRosterShiftEvent),
+        theirs: [],
+        fromDate,
+        toDate,
+        hospitalFilters,
+        hospitalOptions: [],
+      });
+      return;
+    }
+    requestedDoctorKeys = [insightsState.comparisonDoctorKey];
+  }
   const serverResult = await fetchRosterInsightRows({
     startDate: fromDate,
     endDate: toDate,
     sourceTypes: hospitalFilters.map((item) => item.toLowerCase()),
     doctorKeys: requestedDoctorKeys,
-    overlapDoctorKeys: requestedDoctorKeys.length ? [] : selectedInsightDoctorKeys(),
+    overlapDoctorKeys: [],
   });
   if (serverResult.ok) {
     const serverRows = serverResult.rows;

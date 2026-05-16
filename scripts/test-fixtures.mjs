@@ -94,8 +94,8 @@ assert.doesNotMatch(
 );
 assert.match(
   appSource.match(/async function renderWhenInsight[\s\S]*?function renderWhenInsightResult/)?.[0] || "",
-  /const requestedDoctorKeys = insightsState\.comparisonDoctorKey \? \[insightsState\.comparisonDoctorKey\] : \[\];[\s\S]*doctorKeys: requestedDoctorKeys,[\s\S]*overlapDoctorKeys: requestedDoctorKeys\.length \? \[\] : selectedInsightDoctorKeys\(\)/,
-  "when insights should use a targeted doctor query or SQL overlap query instead of loading the whole term",
+  /fetchRosterOverlapDoctors[\s\S]*requestedDoctorKeys = \[insightsState\.comparisonDoctorKey\];[\s\S]*doctorKeys: requestedDoctorKeys/,
+  "general when insights should fetch a compact overlap doctor list before loading one selected doctor's events",
 );
 assert.match(
   calendarMigrationSource,
@@ -843,8 +843,7 @@ class MemoryD1Statement {
         .filter((event) => this.db.files.get(event.file_id)?.active === 1)
         .filter((event) => overlapKeys.has(event.doctor_key))
         .filter((event) => event.start_date <= end && event.end_date >= start);
-      return {
-        results: [...this.db.events.values()]
+      const results = [...this.db.events.values()]
           .filter((event) => this.db.files.get(event.file_id)?.active === 1)
           .filter((event) => event.start_date <= end && event.end_date >= start)
           .filter((event) => myEvents.some((mine) => mine.source_type === event.source_type && event.start_date <= mine.end_date && event.end_date >= mine.start_date))
@@ -852,8 +851,15 @@ class MemoryD1Statement {
           .filter((event) => !doctorKeys.size || doctorKeys.has(event.doctor_key))
           .filter((event) => !excludedDoctorKeys.has(event.doctor_key))
           .filter((event, index, events) => events.findIndex((item) => item.id === event.id) === index)
-          .sort((left, right) => left.display_name.localeCompare(right.display_name) || left.start_ts.localeCompare(right.start_ts)),
-      };
+          .sort((left, right) => left.display_name.localeCompare(right.display_name) || left.start_ts.localeCompare(right.start_ts));
+      if (!sql.includes("event_json")) {
+        return {
+          results: results
+            .map((event) => ({ doctor_key: event.doctor_key, display_name: event.display_name, source_type: event.source_type }))
+            .filter((event, index, events) => events.findIndex((item) => item.doctor_key === event.doctor_key && item.source_type === event.source_type) === index),
+        };
+      }
+      return { results };
     }
     if (sql.includes("FROM roster_events") && sql.includes("doctor_key IN")) {
       const end = args[args.length - 2];
@@ -1425,6 +1431,16 @@ assert.ok(
   d1OverlapInsights.coworkers.every((row) => row.doctorKey !== d1Doctor.key),
   "overlap coworker lookup should exclude the selected doctor in SQL",
 );
+const d1OverlapDoctors = await postState(d1StateStore, {
+  action: "queryRosterOverlapDoctors",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  startDate: d1CreatorCalendar.snapshot.preview.events[0].start.slice(0, 10),
+  endDate: d1CreatorCalendar.snapshot.preview.events.at(-1).start.slice(0, 10),
+  overlapDoctorKeys: [d1Doctor.key],
+  excludeDoctorKeys: [d1Doctor.key],
+}, d1Store);
+assert.ok(Array.isArray(d1OverlapDoctors.doctors), "overlap doctor lookup should return compact doctor rows");
 const d1RepositoryFile = [...d1Store.files.keys()][0];
 await postState(d1StateStore, {
   action: "saveDerivedCalendarFile",
