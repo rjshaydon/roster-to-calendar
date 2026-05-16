@@ -661,8 +661,13 @@ export async function onRequestPost(context) {
       const removedImportIds = sanitizeRepositoryFileIds(body?.removedImportIds);
       if ((targetRole === "creator" || targetRole === "owner") && saveEmail === email) {
         const keepFileIds = sanitizeRepositoryFileIds(state.imports.map((item) => item.repoId || item.repositoryId || item.id));
+        const allFiles = await queryRosterFiles(context.env.ROSTER_DB, { includeInactive: true }).catch(() => []);
+        const persistedKeepFileIds = keepFileIds.filter((id) => allFiles.some((file) => file.id === id));
+        const canReconcileToFullSet = persistedKeepFileIds.length === keepFileIds.length;
         const activeFiles = await queryRosterFileRanges(context.env.ROSTER_DB, { includeInactive: false }).catch(() => []);
-        const staleFileIds = activeFiles.map((file) => file.id).filter((id) => id && !keepFileIds.includes(id));
+        const staleFileIds = canReconcileToFullSet
+          ? activeFiles.map((file) => file.id).filter((id) => id && !keepFileIds.includes(id))
+          : [];
         await Promise.all([...new Set([...removedImportIds, ...staleFileIds])].map((id) => deleteDerivedRosterFile(context.env.ROSTER_DB, id).catch(() => null)));
         repository.index = await loadRepositoryIndex(null, context.env.ROSTER_DB);
         state.imports = state.imports.filter((item) => {

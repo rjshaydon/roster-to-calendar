@@ -2712,6 +2712,32 @@ await postState(deletionStore, {
 assert.equal(deletionStore.d1.files.has("keep-roster"), true, "recovery should retain the requested current roster");
 assert.equal(deletionStore.d1.files.has("missing-from-save"), false, "recovery should remove active rosters outside the current upload set");
 
+const failedReplacementStore = new MemoryStore();
+failedReplacementStore.d1 = new MemoryD1();
+await postState(failedReplacementStore, {
+  action: "login",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+});
+seedD1Repository(failedReplacementStore.d1, [
+  repositoryFile("last-known-good", { name: "last-known-good.xlsx" }),
+]);
+await postState(failedReplacementStore, {
+  action: "save",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  state: {
+    version: 1,
+    imports: [{ repoId: "new-not-persisted", id: "new-not-persisted", sourceType: "mmc", name: "new-not-persisted.xlsx" }],
+    session: {},
+  },
+});
+assert.equal(
+  failedReplacementStore.d1.files.has("last-known-good"),
+  true,
+  "creator save should keep the last-known-good D1 roster set when the replacement files are not yet persisted",
+);
+
 await postState(deletionStore, {
   action: "save",
   email: "rhaydon@gmail.com",
