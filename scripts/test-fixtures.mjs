@@ -95,15 +95,11 @@ assert.match(
 assert.match(appSource, /function rosterSyncLabel/, "file cards should expose live roster sync labels");
 assert.match(appSource, /function rosterSyncSummary/, "system card should expose aggregate roster sync progress");
 assert.match(appSource, /function scheduleFailedRosterRetry/, "failed roster syncs should schedule targeted retries");
+assert.match(appSource, /data-reparse-import/, "file cards should expose a visible reparse action");
 assert.match(
-  appSource.match(/filesList\.addEventListener\(\"contextmenu\"[\s\S]*?\n\}\);/)?.[0] || "",
-  /openRosterFileContextMenu/,
-  "main file cards should expose a right-click reparse action",
-);
-assert.match(
-  appSource.match(/accountsBody\.addEventListener\(\"contextmenu\"[\s\S]*?\n\}\);/)?.[0] || "",
-  /currentAdminTab !== \"files\"[\s\S]*openRosterFileContextMenu/,
-  "admin file cards should expose the same right-click reparse action",
+  appSource.match(/accountsBody\.addEventListener\(\"click\"[\s\S]*?\n\}\);/)?.[0] || "",
+  /data-reparse-import[\s\S]*reparseRosterFile/,
+  "admin file reparse buttons should invoke the single-file reparse path",
 );
 assert.doesNotMatch(
   appSource.match(/async function renderWhoInsight[\s\S]*?async function renderWhenInsight/)?.[0] || "",

@@ -432,13 +432,6 @@ filesList.addEventListener("click", async (event) => {
   if (!canRemoveImports()) return;
   await removeStoredImport(removeButton.dataset.removeImport);
 });
-filesList.addEventListener("contextmenu", (event) => {
-  openRosterFileContextMenu(event);
-});
-accountsBody.addEventListener("contextmenu", (event) => {
-  if (currentAdminTab !== "files") return;
-  openRosterFileContextMenu(event);
-});
 accountsButton.addEventListener("click", async () => {
   await openAccountsSurface({ defaultAdminTab: "system" });
 });
@@ -525,6 +518,12 @@ accountsBody.addEventListener("click", (event) => {
   if (removeImportButton) {
     if (!canRemoveImports()) return;
     void removeStoredImport(removeImportButton.dataset.removeImport);
+    return;
+  }
+  const reparseImportButton = event.target.closest("[data-reparse-import]");
+  if (reparseImportButton) {
+    if (!canRemoveImports()) return;
+    void reparseRosterFile(reparseImportButton.dataset.reparseImport);
     return;
   }
   const openFilePickerButton = event.target.closest("[data-open-file-picker]");
@@ -1849,6 +1848,7 @@ function renderFilesMarkup({ canRemove = false, heading = "", description = "", 
               : entry.file && hasUsableStatus ? `<span>Not yet confirmed in D1</span>`
               : entry.file ? `<span>Roster database status not checked</span>` : "")}
             ${canRemove ? `<button type="button" class="file-remove file-remove-visible" aria-label="Remove file" title="Remove file" data-remove-import="${entry.id}">🗑</button>` : ""}
+            ${canRemove ? `<button type="button" class="file-reparse file-reparse-visible" aria-label="Reparse roster file" title="Reparse roster file" data-reparse-import="${entry.id}">↻</button>` : ""}
           </article>
         `).join("")}
       </div>
@@ -9355,17 +9355,6 @@ async function reparseRosterFile(id) {
   }
 }
 
-function openRosterFileContextMenu(event) {
-  const pill = event.target.closest("[data-file-id]");
-  if (!pill || !canRemoveImports()) return;
-  const entry = selectedFiles.find((item) => item.id === pill.dataset.fileId);
-  if (!entry?.file) return;
-  event.preventDefault();
-  openContextMenu(event.clientX, event.clientY, [{
-    label: "Reparse this roster file",
-    action: () => reparseRosterFile(entry.id),
-  }]);
-}
 
 async function buildWorkspaceSnapshotPayload(session = buildActiveSessionState()) {
   if (!latestPreview || !selectedDoctor()) return null;

@@ -627,8 +627,32 @@ input[type="color"] {
   transition: opacity 160ms ease, transform 160ms ease, background-color 160ms ease;
 }
 
+.file-reparse {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  font: inherit;
+  font-size: 1.25rem;
+  line-height: 1;
+  color: var(--ink);
+  background: rgba(20, 34, 42, 0.08);
+  cursor: pointer;
+  opacity: 0;
+  transform: scale(0.88);
+  transition: opacity 160ms ease, transform 160ms ease, background-color 160ms ease;
+}
+
 .file-pill:hover .file-remove,
-.file-pill:focus-within .file-remove {
+.file-pill:focus-within .file-remove,
+.file-pill:hover .file-reparse,
+.file-pill:focus-within .file-reparse {
   opacity: 1;
   transform: scale(1);
 }
@@ -637,7 +661,12 @@ input[type="color"] {
   background: rgba(217, 95, 52, 0.2);
 }
 
-.file-remove-visible {
+.file-reparse:hover {
+  background: rgba(20, 34, 42, 0.14);
+}
+
+.file-remove-visible,
+.file-reparse-visible {
   opacity: 1;
   transform: scale(1);
 }
@@ -3028,7 +3057,8 @@ body[data-skin="console"] .panel {
 }
 
 @media (hover: none), (pointer: coarse) {
-  .file-remove {
+  .file-remove,
+  .file-reparse {
     opacity: 1;
     transform: scale(1);
   }
