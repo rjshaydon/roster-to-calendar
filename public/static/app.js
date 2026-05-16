@@ -433,15 +433,11 @@ filesList.addEventListener("click", async (event) => {
   await removeStoredImport(removeButton.dataset.removeImport);
 });
 filesList.addEventListener("contextmenu", (event) => {
-  const pill = event.target.closest("[data-file-id]");
-  if (!pill || !canRemoveImports()) return;
-  const entry = selectedFiles.find((item) => item.id === pill.dataset.fileId);
-  if (!entry?.file) return;
-  event.preventDefault();
-  openContextMenu(event.clientX, event.clientY, [{
-    label: "Reparse this roster file",
-    action: () => reparseRosterFile(entry.id),
-  }]);
+  openRosterFileContextMenu(event);
+});
+accountsBody.addEventListener("contextmenu", (event) => {
+  if (currentAdminTab !== "files") return;
+  openRosterFileContextMenu(event);
 });
 accountsButton.addEventListener("click", async () => {
   await openAccountsSurface({ defaultAdminTab: "system" });
@@ -9357,6 +9353,18 @@ async function reparseRosterFile(id) {
   } catch (error) {
     setStatus(error.message || `Could not reparse ${entry.name}.`, true);
   }
+}
+
+function openRosterFileContextMenu(event) {
+  const pill = event.target.closest("[data-file-id]");
+  if (!pill || !canRemoveImports()) return;
+  const entry = selectedFiles.find((item) => item.id === pill.dataset.fileId);
+  if (!entry?.file) return;
+  event.preventDefault();
+  openContextMenu(event.clientX, event.clientY, [{
+    label: "Reparse this roster file",
+    action: () => reparseRosterFile(entry.id),
+  }]);
 }
 
 async function buildWorkspaceSnapshotPayload(session = buildActiveSessionState()) {

@@ -97,8 +97,13 @@ assert.match(appSource, /function rosterSyncSummary/, "system card should expose
 assert.match(appSource, /function scheduleFailedRosterRetry/, "failed roster syncs should schedule targeted retries");
 assert.match(
   appSource.match(/filesList\.addEventListener\(\"contextmenu\"[\s\S]*?\n\}\);/)?.[0] || "",
-  /Reparse this roster file[\s\S]*reparseRosterFile/,
-  "file cards should expose a right-click reparse action",
+  /openRosterFileContextMenu/,
+  "main file cards should expose a right-click reparse action",
+);
+assert.match(
+  appSource.match(/accountsBody\.addEventListener\(\"contextmenu\"[\s\S]*?\n\}\);/)?.[0] || "",
+  /currentAdminTab !== \"files\"[\s\S]*openRosterFileContextMenu/,
+  "admin file cards should expose the same right-click reparse action",
 );
 assert.doesNotMatch(
   appSource.match(/async function renderWhoInsight[\s\S]*?async function renderWhenInsight/)?.[0] || "",
