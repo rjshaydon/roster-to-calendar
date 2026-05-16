@@ -432,6 +432,17 @@ filesList.addEventListener("click", async (event) => {
   if (!canRemoveImports()) return;
   await removeStoredImport(removeButton.dataset.removeImport);
 });
+filesList.addEventListener("contextmenu", (event) => {
+  const pill = event.target.closest("[data-file-id]");
+  if (!pill || !canRemoveImports()) return;
+  const entry = selectedFiles.find((item) => item.id === pill.dataset.fileId);
+  if (!entry?.file) return;
+  event.preventDefault();
+  openContextMenu(event.clientX, event.clientY, [{
+    label: "Reparse this roster file",
+    action: () => reparseRosterFile(entry.id),
+  }]);
+});
 accountsButton.addEventListener("click", async () => {
   await openAccountsSurface({ defaultAdminTab: "system" });
 });
@@ -1833,7 +1844,7 @@ function renderFilesMarkup({ canRemove = false, heading = "", description = "", 
       ${heading ? `<div class="review-top"><div><strong>${escapeHtml(heading)}</strong>${description ? `<span>${escapeHtml(description)}</span>` : ""}</div>${canAdd ? `<button type="button" class="button button-secondary" data-open-file-picker>Add files</button>` : ""}</div>` : ""}
       <div class="file-summary">
         ${selectedFiles.map((entry) => `
-          <article class="file-pill">
+          <article class="file-pill" data-file-id="${entry.id}">
             <span>${escapeHtml(String(entry.sourceType || "").toUpperCase())} · Imported ${escapeHtml(formatTimestamp(entry.addedAt))}</span>
             <strong>${escapeHtml(entry.name)}</strong>
             ${rosterSyncLabel(entry) || (statusFiles.has(entry.id)
@@ -9331,6 +9342,20 @@ async function replaceActiveRostersWithCurrentUploads() {
     setStatus(`Roster database rebuilt from ${keepFileIds.length} roster file${keepFileIds.length === 1 ? "" : "s"}.`);
   } catch (error) {
     setStatus(error.message || "Could not replace active rosters.", true);
+  }
+}
+
+async function reparseRosterFile(id) {
+  const entry = selectedFiles.find((item) => item.id === id);
+  if (!entry?.file) return;
+  try {
+    setStatus(`Reparsing ${entry.name}...`);
+    await saveSelectedRosterFilesToD1([entry], { force: true });
+    await refreshCalendarStoreStatus({ silent: true });
+    renderFileSurfaces();
+    setStatus(`${entry.name} reparsed.`);
+  } catch (error) {
+    setStatus(error.message || `Could not reparse ${entry.name}.`, true);
   }
 }
 

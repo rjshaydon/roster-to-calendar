@@ -95,6 +95,11 @@ assert.match(
 assert.match(appSource, /function rosterSyncLabel/, "file cards should expose live roster sync labels");
 assert.match(appSource, /function rosterSyncSummary/, "system card should expose aggregate roster sync progress");
 assert.match(appSource, /function scheduleFailedRosterRetry/, "failed roster syncs should schedule targeted retries");
+assert.match(
+  appSource.match(/filesList\.addEventListener\(\"contextmenu\"[\s\S]*?\n\}\);/)?.[0] || "",
+  /Reparse this roster file[\s\S]*reparseRosterFile/,
+  "file cards should expose a right-click reparse action",
+);
 assert.doesNotMatch(
   appSource.match(/async function renderWhoInsight[\s\S]*?async function renderWhenInsight/)?.[0] || "",
   /ensureInsightRosterAnalysis/,
