@@ -2794,6 +2794,9 @@ function applySettings(records, settings, overrides) {
         rawValue: record.rawValue,
         status: record.status,
         message: record.warnings[0] || "Review this roster entry before export.",
+        resolutionType: record.status === "unknown" || record.warnings.some((warning) => /shift (code|label) not recognised/i.test(warning))
+          ? "shift_code"
+          : "review",
         suggestedTitle,
         timeLabel,
       });

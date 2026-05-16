@@ -575,6 +575,7 @@ class MemoryD1 {
     this.accountStates = new Map();
     this.subscriptionTokens = new Map();
     this.parserRules = new Map();
+    this.parserRuleSuggestions = new Map();
     this.doctorProfiles = new Map();
     this.consoleMessages = [];
     this.nextConsoleMessageId = 1;
@@ -730,6 +731,21 @@ class MemoryD1Statement {
           this.db.parserRules.delete(key);
         }
       }
+      return { success: true };
+    }
+    if (sql.startsWith("DELETE FROM parser_rule_suggestions")) {
+      this.db.parserRuleSuggestions.clear();
+      return { success: true };
+    }
+    if (sql.startsWith("INSERT INTO parser_rule_suggestions")) {
+      this.db.parserRuleSuggestions.set(args[0], {
+        id: args[0],
+        email: args[1],
+        status: "pending",
+        suggestion_json: args[2],
+        created_at: args[3],
+        updated_at: args[4],
+      });
       return { success: true };
     }
     if (sql.startsWith("INSERT INTO account_claims")) {
@@ -1079,6 +1095,14 @@ class MemoryD1Statement {
         results: [...this.db.parserRules.values()]
           .filter((rule) => rule.scope === "global")
           .map((rule) => ({ rule_json: rule.rule_json })),
+      };
+    }
+    if (sql.startsWith("SELECT suggestion_json FROM parser_rule_suggestions")) {
+      return {
+        results: [...this.db.parserRuleSuggestions.values()]
+          .filter((suggestion) => suggestion.status === "pending")
+          .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
+          .map((suggestion) => ({ suggestion_json: suggestion.suggestion_json })),
       };
     }
     if (sql.startsWith("SELECT * FROM doctor_profiles ORDER BY")) {
@@ -2556,6 +2580,39 @@ await postState(stateStore, {
 });
 assert.equal(memoryD1AccountRecord(stateStore.d1, "patrick@example.com").adminIssues.length, 1);
 assert.equal(memoryD1AccountRecord(stateStore.d1, "senior@example.com").adminIssues.length, 1);
+await postState(stateStore, {
+  action: "saveLocalParserExtensionRule",
+  email: "patrick@example.com",
+  password: "patrick-password",
+  fingerprint: n1Issue.fingerprint,
+  rawValue: "N1",
+  rule: {
+    source: "MMC",
+    seniority: "Senior Registrar",
+    code: "N1",
+    kind: "shift",
+    base: "SR IC",
+    period: "NIGHT",
+    suffix: "",
+    allDay: false,
+    startTime: "23:00",
+    endTime: "09:00",
+    includeAsShift: true,
+  },
+});
+const creatorSuggestionView = await postState(stateStore, {
+  action: "login",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+});
+assert.equal(creatorSuggestionView.issueConfig.parserRuleSuggestions.length, 1, "user shift-code resolutions must be visible to the creator");
+await postState(stateStore, {
+  action: "decideParserRuleSuggestion",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  suggestionId: creatorSuggestionView.issueConfig.parserRuleSuggestions[0].id,
+  decision: "reject",
+});
 const parserSave = await postState(stateStore, {
   action: "saveParserExtensionRule",
   email: "rhaydon@gmail.com",

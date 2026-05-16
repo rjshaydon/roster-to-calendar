@@ -1029,6 +1029,13 @@ insightsModalBody.addEventListener("click", async (event) => {
   await openDoctorProfileFromInsight(profileButton.dataset.insightsDoctorKey);
 });
 issuesList.addEventListener("click", (event) => {
+  const reviewButton = event.target.closest("[data-open-review]");
+  if (reviewButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    openReviewModal(reviewButton.dataset.openReview || "");
+    return;
+  }
   const quickRuleButton = event.target.closest("[data-preview-add-shift-code]");
   if (quickRuleButton) {
     event.preventDefault();
@@ -1038,7 +1045,14 @@ issuesList.addEventListener("click", (event) => {
   }
   const card = event.target.closest("[data-review-id]");
   if (!card) return;
-  openReviewModal(card.dataset.reviewId);
+  const issue = (latestPreview?.issues || []).find((item) => item.id === card.dataset.reviewId);
+  if (isShiftCodeIssue(issue)) {
+    openParserRuleModalFromPreviewIssue(card.dataset.reviewId);
+    return;
+  }
+  // Warnings should be fix-first. Non-parser warnings currently have no bespoke
+  // resolver, so leave the event editor behind an explicit action instead.
+  card.querySelector("[data-open-review]")?.focus();
 });
 conflictsList.addEventListener("change", async (event) => {
   const select = event.target.closest("[data-conflict-key]");
@@ -1047,6 +1061,10 @@ conflictsList.addEventListener("change", async (event) => {
   saveConflictSelections();
   saveCurrentSessionState();
   await updatePreview();
+});
+conflictsList.addEventListener("click", (event) => {
+  if (event.target.closest("select")) return;
+  event.target.closest(".issue-card")?.querySelector("[data-conflict-key]")?.focus();
 });
 preview.addEventListener("contextmenu", (event) => {
   const chip = event.target.closest("[data-review-id]");
@@ -2280,7 +2298,7 @@ function renderIssues(items) {
       <div>
         <strong>${formatIssueHeading(item)}</strong>
         <p>${escapeHtml(item.message)}</p>
-        ${item.status === "unknown" ? `<p><button type="button" class="button button-secondary" data-preview-add-shift-code="${escapeHtml(item.id)}">${isCreatorAuthenticated() ? "Edit shift-code rule" : "Resolve shift code"}</button></p>` : ""}
+        ${isShiftCodeIssue(item) ? `<p><button type="button" class="button button-secondary" data-preview-add-shift-code="${escapeHtml(item.id)}">${isCreatorAuthenticated() ? "Edit shift-code rule" : "Resolve shift code"}</button></p>` : `<p><button type="button" class="button button-secondary" data-open-review="${escapeHtml(item.id)}">View event</button></p>`}
       </div>
       <span>${escapeHtml(item.rawValue)}</span>
     </article>
@@ -2288,8 +2306,14 @@ function renderIssues(items) {
   issuesPanel.classList.remove("hidden");
 }
 
+function isShiftCodeIssue(item) {
+  if (item?.resolutionType === "shift_code") return true;
+  const message = String(item?.message || "").toLowerCase();
+  return item?.status === "unknown" || message.includes("shift code not recognised") || message.includes("shift label not recognised");
+}
+
 async function reportPreviewIssues(items) {
-  if (currentUserRole !== "user" && !adminViewingEmail) return;
+  if (!currentUserEmail && !adminViewingEmail) return;
   if (!items.length) return;
   for (const item of items) {
     if (!item?.message || isSuppressedIssue(item)) continue;
@@ -2313,7 +2337,7 @@ async function reportPreviewIssues(items) {
 }
 
 async function reportPreviewConflicts(items) {
-  if (currentUserRole !== "user" && !adminViewingEmail) return;
+  if (!currentUserEmail && !adminViewingEmail) return;
   if (!items.length) return;
   for (const item of items) {
     const source = sanitizeIssueSource(item.source);
@@ -6551,6 +6575,17 @@ function renderParserRulesCard() {
           <details class="issue-card">
             <summary><strong>${group.source}${unknownSources.has(group.source) ? " *" : ""}</strong> · ${group.rules.length} rule${group.rules.length === 1 ? "" : "s"}</summary>
             <div class="issues-list">
+              ${unknownIssues.filter((item) => item.source === group.source).map((item) => `
+                <article class="issue-card issue-unknown">
+                  <div>
+                    <strong>${escapeHtml(item.code)} · Unrecognised</strong>
+                    <p>${escapeHtml(item.seniority)} · ${escapeHtml(item.message || "Shift code not recognised.")}</p>
+                  </div>
+                  <div class="account-actions">
+                    <button type="button" class="button button-secondary" data-add-shift-code="${escapeHtml(item.email)}" data-error-id="${escapeHtml(item.id)}">Add shift code</button>
+                  </div>
+                </article>
+              `).join("")}
               ${parserRuleSeniorityDisplayOrder().map((seniority) => {
                 const rules = group.rules.filter((rule) => rule.seniority === seniority);
                 if (!rules.length) return "";

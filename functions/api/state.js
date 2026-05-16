@@ -465,9 +465,6 @@ export async function onRequestPost(context) {
       const reportEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
       const targetRecord = reportEmail === email ? account.record : await loadAccountMirror(context.env.ROSTER_DB, reportEmail);
       if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
-      if ((targetRecord.role || roleForEmail(targetRecord.email)) === "creator") {
-        return Response.json({ ok: true, ignored: true });
-      }
       const issue = sanitizeAdminIssues([{
         id: String(body?.errorId || "").trim(),
         message: body?.message,
@@ -607,6 +604,10 @@ export async function onRequestPost(context) {
         localParserExtensions,
         updatedAt: new Date().toISOString(),
       });
+      if (suggestion) {
+        const suggestions = await loadParserRuleSuggestions(null, context.env.ROSTER_DB);
+        await saveParserRuleSuggestions(null, upsertParserRuleSuggestion(suggestions, suggestion), context.env.ROSTER_DB);
+      }
       await clearIssuesResolvedByParserRuleForUser(context.env.ROSTER_DB, saveEmail, rule);
       return Response.json({
         ok: true,
@@ -623,10 +624,30 @@ export async function onRequestPost(context) {
       if (!["approveGlobal", "approveUser", "reject"].includes(decision)) {
         return Response.json({ error: "Unsupported suggestion decision." }, { status: 400 });
       }
+      const suggestions = await loadParserRuleSuggestions(null, context.env.ROSTER_DB);
+      const suggestion = suggestions.find((item) => item.id === suggestionId);
+      if (!suggestion) return Response.json({ error: "Suggestion not found." }, { status: 404 });
+      const rule = sanitizeParserExtensionRule(body?.rule || suggestion.rule);
+      if (!rule) return Response.json({ error: "A valid shift-code rule is required." }, { status: 400 });
+      if (decision === "approveGlobal") {
+        await saveD1ParserExtensionRule(context.env.ROSTER_DB, rule);
+        await clearIssuesResolvedByParserRule(context.env.ROSTER_DB, rule);
+      } else if (decision === "approveUser") {
+        const target = await loadAccountMirror(context.env.ROSTER_DB, suggestion.email);
+        if (target) {
+          await upsertAccountMirror(context.env.ROSTER_DB, {
+            ...target,
+            localParserExtensions: upsertParserExtensionRule(target.localParserExtensions, rule),
+            updatedAt: new Date().toISOString(),
+          });
+          await clearIssuesResolvedByParserRuleForUser(context.env.ROSTER_DB, suggestion.email, rule);
+        }
+      }
+      await saveParserRuleSuggestions(null, suggestions.filter((item) => item.id !== suggestionId), context.env.ROSTER_DB);
       return Response.json({
         ok: true,
-        parserExtensions: {},
-        suggestions: [],
+        parserExtensions: await loadD1ParserExtensionRules(context.env.ROSTER_DB),
+        suggestions: await loadParserRuleSuggestions(null, context.env.ROSTER_DB),
       });
     }
 
@@ -1811,7 +1832,7 @@ async function buildIssueConfig(store, email = "", db = null) {
     parserExtensions: mergeParserExtensionSets(globalParserExtensions, localParserExtensions),
     globalParserExtensions,
     localParserExtensions,
-    parserRuleSuggestions: (role === "creator" || role === "owner") && store?.get ? await loadParserRuleSuggestions(store) : [],
+    parserRuleSuggestions: (role === "creator" || role === "owner") ? await loadParserRuleSuggestions(store, db) : [],
     dismissedFingerprints: store?.get ? await loadDismissedIssueFingerprints(store, email) : [],
     ignoredFingerprints: store?.get ? await loadIgnoredIssueFingerprints(store) : [],
   };
@@ -3454,18 +3475,40 @@ function parserExtensionRuleKey(rule) {
   return normalized ? `${normalized.source}|${normalized.seniority}|${normalized.code}` : "";
 }
 
-async function loadParserRuleSuggestions(store) {
-  const value = await store.get(PARSER_RULE_SUGGESTIONS_KEY, "json").catch(() => []);
+async function loadParserRuleSuggestions(store, db = null) {
+  if (db?.prepare) {
+    const result = await db.prepare("SELECT suggestion_json FROM parser_rule_suggestions WHERE status = 'pending' ORDER BY updated_at DESC").all();
+    return sanitizeParserRuleSuggestions((result?.results || []).map((row) => {
+      try { return JSON.parse(row.suggestion_json || "{}"); } catch { return null; }
+    }));
+  }
+  const value = store?.get ? await store.get(PARSER_RULE_SUGGESTIONS_KEY, "json").catch(() => []) : [];
   return sanitizeParserRuleSuggestions(value);
 }
 
-async function saveParserRuleSuggestions(store, value) {
+async function saveParserRuleSuggestions(store, value, db = null) {
   const sanitized = sanitizeParserRuleSuggestions(value);
-  if (!sanitized.length) {
-    await store.delete(PARSER_RULE_SUGGESTIONS_KEY);
+  if (db?.prepare) {
+    await db.prepare("DELETE FROM parser_rule_suggestions").run();
+    for (const suggestion of sanitized) {
+      await db.prepare(`
+        INSERT INTO parser_rule_suggestions (id, email, status, suggestion_json, created_at, updated_at)
+        VALUES (?, ?, 'pending', ?, ?, ?)
+      `).bind(
+        suggestion.id,
+        suggestion.email,
+        JSON.stringify(suggestion),
+        suggestion.createdAt,
+        suggestion.updatedAt,
+      ).run();
+    }
     return sanitized;
   }
-  await store.put(PARSER_RULE_SUGGESTIONS_KEY, JSON.stringify(sanitized));
+  if (!sanitized.length) {
+    await store?.delete?.(PARSER_RULE_SUGGESTIONS_KEY);
+    return sanitized;
+  }
+  await store?.put?.(PARSER_RULE_SUGGESTIONS_KEY, JSON.stringify(sanitized));
   return sanitized;
 }
 
