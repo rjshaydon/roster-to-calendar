@@ -9370,7 +9370,7 @@ async function reparseRosterFile(id) {
     setStatus(`Reparsing ${entry.name}...`);
     const retained = await ensureRosterEntrySource(entry);
     if (!retained?.file) throw new Error(`${entry.name} has no retained source file. Re-upload it once to enable reparsing.`);
-    await saveSelectedRosterFilesToD1([retained], { force: true, retainSources: false });
+    await saveSelectedRosterFilesToD1([retained], { force: true });
     await refreshCalendarStoreStatus({ silent: true });
     const reparsed = (calendarStoreStatus?.files || []).find((file) => file.id === entry.id);
     if (!reparsed || Number(reparsed.eventCount || 0) <= 0) {

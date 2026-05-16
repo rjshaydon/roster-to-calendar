@@ -1423,6 +1423,29 @@ const retainedRaw = await postState(d1StateStore, {
   fileId: "d1-mmc",
 }, d1Store);
 assert.match(retainedRaw.dataUrl, /^data:/, "retained raw files should be fetchable for browser-side reparsing");
+const legacyRawStore = new MemoryStore();
+const legacyRawDb = new MemoryD1();
+await postState(legacyRawStore, {
+  action: "login",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+}, legacyRawDb);
+legacyRawDb.rawFiles.set("legacy-raw", {
+  file_id: "legacy-raw",
+  object_key: "",
+  type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  data_url: workbookDataUrl(mmcWorkbook),
+  uploaded_at: "2026-01-01T00:00:00.000Z",
+});
+const migratedRaw = await postState(legacyRawStore, {
+  action: "fetchRawRosterFile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  fileId: "legacy-raw",
+}, legacyRawDb);
+assert.match(migratedRaw.dataUrl, /^data:/, "legacy raw files should remain fetchable during lazy migration");
+assert.equal(legacyRawDb.rawFiles.get("legacy-raw")?.object_key, "rosters/legacy-raw", "legacy raw files should be promoted to R2 when fetched");
+assert.equal(legacyRawDb.rawFiles.get("legacy-raw")?.data_url, "", "lazy migration should clear the inline D1 payload after promotion");
 const reparsedD1Status = await postState(d1StateStore, {
   action: "calendarStoreStatus",
   email: "rhaydon@gmail.com",
