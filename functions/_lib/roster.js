@@ -1397,35 +1397,13 @@ function parseMchRecords(workbook, doctorKey) {
 
 function parseMmcEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
   const upper = raw.toUpperCase();
+  const leaveRecord = createRecognizedLeaveRecord("MMC", day, raw, seniority);
+  if (leaveRecord) return leaveRecord;
   if (shouldIgnoreMmc(raw)) return null;
   if (upper === "PHNW") {
     return createAllDayRecord("MMC", day, raw, {
       kind: "public_holiday",
       titleParts: { base: "PHNW", period: "", suffix: "" },
-      location: "",
-      seniority,
-    });
-  }
-  if (upper.startsWith("S/L")) {
-    return createAllDayRecord("MMC", day, raw, {
-      kind: "sick_leave",
-      titleParts: { base: normalizeSickLeaveLabel(raw), period: "", suffix: "" },
-      location: "",
-      seniority,
-    });
-  }
-  if (isAnnualLeaveLabel(upper)) {
-    return createAllDayRecord("MMC", day, raw, {
-      kind: "annual_leave",
-      titleParts: { base: "Annual Leave", period: "", suffix: "" },
-      location: "",
-      seniority,
-    });
-  }
-  if (isConferenceLeaveLabel(upper)) {
-    return createAllDayRecord("MMC", day, raw, {
-      kind: "conference_leave",
-      titleParts: { base: "Conference Leave", period: "", suffix: "" },
       location: "",
       seniority,
     });
@@ -1480,35 +1458,13 @@ function parseDdhEntry(day, label, timeText, seniority = UNKNOWN_SENIORITY) {
     return null;
   }
   const upper = label.toUpperCase();
+  const leaveRecord = createRecognizedLeaveRecord("DDH", day, label, seniority);
+  if (leaveRecord) return leaveRecord;
   if (upper === "AM" || upper === "PM") return null;
   if (upper === "PHNW" || upper === "PHNW CLINICAL") {
     return createAllDayRecord("DDH", day, label, {
       kind: "public_holiday",
       titleParts: { base: "PHNW", period: "", suffix: "" },
-      location: "",
-      seniority,
-    });
-  }
-  if (upper.startsWith("S/L")) {
-    return createAllDayRecord("DDH", day, label, {
-      kind: "sick_leave",
-      titleParts: { base: normalizeSickLeaveLabel(label), period: "", suffix: "" },
-      location: "",
-      seniority,
-    });
-  }
-  if (isAnnualLeaveLabel(upper)) {
-    return createAllDayRecord("DDH", day, label, {
-      kind: "annual_leave",
-      titleParts: { base: "Annual Leave", period: "", suffix: "" },
-      location: "",
-      seniority,
-    });
-  }
-  if (isConferenceLeaveLabel(upper)) {
-    return createAllDayRecord("DDH", day, label, {
-      kind: "conference_leave",
-      titleParts: { base: "Conference Leave", period: "", suffix: "" },
       location: "",
       seniority,
     });
@@ -1551,26 +1507,12 @@ function parseCaseyEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
   const shiftLabel = stripCaseyOrientationMetadata(label);
   if (!shiftLabel) return null;
   const upper = label.toUpperCase();
+  const leaveRecord = createRecognizedLeaveRecord("Casey", day, label, seniority);
+  if (leaveRecord) return leaveRecord;
   if (upper === "PHNW") {
     return createAllDayRecord("Casey", day, label, {
       kind: "public_holiday",
       titleParts: { base: "PHNW", period: "", suffix: "" },
-      location: "",
-      seniority,
-    });
-  }
-  if (isAnnualLeaveLabel(upper) || upper === "ANNUAL") {
-    return createAllDayRecord("Casey", day, label, {
-      kind: "annual_leave",
-      titleParts: { base: "Annual Leave", period: "", suffix: "" },
-      location: "",
-      seniority,
-    });
-  }
-  if (isConferenceLeaveLabel(upper)) {
-    return createAllDayRecord("Casey", day, label, {
-      kind: "conference_leave",
-      titleParts: { base: "Conference Leave", period: "", suffix: "" },
       location: "",
       seniority,
     });
@@ -1790,7 +1732,7 @@ function normalizeCaseyCode(label) {
 }
 
 function normalizeMchLeave(label) {
-  const upper = cleanText(label).replace(/\s+/g, " ").trim().toUpperCase();
+  const upper = normalizedLeaveLabel(label);
   if (isAnnualLeaveLabel(upper)) return { kind: "annual_leave", title: "Annual Leave" };
   if (/^S\/L(?:\s+(?:AM|PM))?$/.test(upper)) return { kind: "sick_leave", title: normalizeSickLeaveLabel(upper) };
   if (upper === "EXAM" || upper === "ME/L") return { kind: "exam_leave", title: "Exam Leave" };
@@ -1799,6 +1741,35 @@ function normalizeMchLeave(label) {
   if (upper === "PAT/L") return { kind: "leave", title: "Parental Leave" };
   if (upper === "LSL") return { kind: "leave", title: "Long Service Leave" };
   return null;
+}
+
+function createRecognizedLeaveRecord(source, day, rawValue, seniority = UNKNOWN_SENIORITY) {
+  const leave = normalizeRecognizedLeave(rawValue);
+  if (!leave) return null;
+  return createAllDayRecord(source, day, rawValue, {
+    kind: leave.kind,
+    titleParts: { base: leave.title, period: "", suffix: "" },
+    location: "",
+    seniority,
+  });
+}
+
+function normalizeRecognizedLeave(value) {
+  for (const candidate of leaveLabelCandidates(value)) {
+    const leave = normalizeMchLeave(candidate);
+    if (leave) return leave;
+    if (candidate === "ANNUAL") return { kind: "annual_leave", title: "Annual Leave" };
+  }
+  return null;
+}
+
+function leaveLabelCandidates(value) {
+  const words = normalizedLeaveLabel(value).split(" ").filter(Boolean);
+  return words.map((_, index) => words.slice(index).join(" "));
+}
+
+function normalizedLeaveLabel(value) {
+  return cleanText(value).replace(/\s+/g, " ").trim().toUpperCase();
 }
 
 function isConferenceLeaveLabel(value) {
@@ -2709,7 +2680,7 @@ function createAllDayRecord(source, day, rawValue, details) {
 }
 
 function createWeeklyLeaveRecord(source, monday, rawValue, seniority = UNKNOWN_SENIORITY) {
-  const kind = isConferenceLeaveLabel(rawValue) ? "conference_leave" : "annual_leave";
+  const kind = normalizeRecognizedLeave(rawValue)?.kind === "conference_leave" ? "conference_leave" : "annual_leave";
   const normalizedTitle = kind === "conference_leave" ? "Conference Leave" : "Annual Leave";
   return {
     id: hashString(`${source}|${monday}|${rawValue}|week-leave`),
@@ -2901,7 +2872,7 @@ function isMergeableLeaveEvent(event) {
 }
 
 function leaveTextMatches(value) {
-  return /\b(leave|conference|cme|study|annual|sick|personal)\b/i.test(String(value || ""));
+  return /\b(leave|conference|cme|study|annual|sick|personal|exam|sabbatical|parental|long service)\b/i.test(String(value || ""));
 }
 
 function preferredLeaveTitle(leftTitle, rightTitle, rawValue = "") {
@@ -2911,6 +2882,10 @@ function preferredLeaveTitle(leftTitle, rightTitle, rawValue = "") {
   if (/\bsick\b/i.test(combined)) return "Sick Leave";
   if (/\bpersonal\b/i.test(combined)) return "Personal Leave";
   if (/\bstudy\b/i.test(combined)) return "Study Leave";
+  if (/\bexam\b/i.test(combined)) return "Exam Leave";
+  if (/\bsabbatical\b/i.test(combined)) return "Sabbatical Leave";
+  if (/\bparental\b/i.test(combined)) return "Parental Leave";
+  if (/\blong service\b/i.test(combined)) return "Long Service Leave";
   return String(leftTitle || rightTitle || "Leave").trim();
 }
 
@@ -3131,8 +3106,8 @@ function extractTimeWithLabel(value, options = {}) {
 
 function firstWeeklyLeave(values) {
   for (const value of values) {
-    const upper = value.toUpperCase();
-    if (WEEKLY_LEAVE_LABELS.has(upper) || isAnnualLeaveLabel(upper)) return value;
+    const leave = normalizeRecognizedLeave(value);
+    if (leave?.kind === "annual_leave" || leave?.kind === "conference_leave") return value;
   }
   return null;
 }

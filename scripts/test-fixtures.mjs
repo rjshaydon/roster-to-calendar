@@ -72,6 +72,11 @@ assert.doesNotMatch(
   /renderInlineWhoInsight/,
   "custom-event modal should not request roster coworker insights",
 );
+assert.match(
+  appSource.match(/function openReviewModal[\s\S]*?function closeReviewModal/)?.[0] || "",
+  /canUseRosterInsights\(\) && !isLeaveEvent\(event\)[\s\S]*renderInlineWhoInsight/,
+  "leave review modals should not request roster coworker insights",
+);
 assert.doesNotMatch(
   appSource.match(/async function renderWhoInsight[\s\S]*?async function renderWhenInsight/)?.[0] || "",
   /ensureInsightRosterAnalysis/,
@@ -86,6 +91,11 @@ assert.doesNotMatch(
   appSource.match(/async function renderWhenInsight[\s\S]*?function renderWhenInsightResult/)?.[0] || "",
   /ensureInsightRosterAnalysis/,
   "when insights should not fall back to reparsing roster files",
+);
+assert.doesNotMatch(
+  appSource.match(/function isRosterShiftEvent[\s\S]*?function chooseNextOverlapDate/)?.[0] || "",
+  /clinical support|\\bcso\?\\b/i,
+  "clinical support shifts should count as rostered work for insight lookups",
 );
 assert.doesNotMatch(
   appSource.match(/function renderWhenInsightResult[\s\S]*?function comparisonDoctorOptions/)?.[0] || "",
@@ -425,11 +435,14 @@ XLSX.utils.book_append_sheet(annualSynonymWorkbook, XLSX.utils.aoa_to_sheet([
   ["", "3-Aug", "4-Aug", "5-Aug", "6-Aug", "7-Aug", "8-Aug", "9-Aug"],
   ["Paeds Annual", "Paeds AL", "", "", "", "", "", ""],
   ["Casey Annual", "Casey AL", "", "", "", "", "", ""],
+  ["Paeds Sick", "Paeds S/L", "", "", "", "", "", ""],
 ]), "Week 1");
 const paedsAnnual = doctorOptions([], [], annualSynonymWorkbook).find((doctor) => doctor.displayName === "Paeds ANNUAL");
 const caseyAnnual = doctorOptions([], [], annualSynonymWorkbook).find((doctor) => doctor.displayName === "Casey ANNUAL");
+const paedsSick = doctorOptions([], [], annualSynonymWorkbook).find((doctor) => doctor.displayName === "Paeds SICK");
 assert.ok(buildRosterView([], [], paedsAnnual.key, undefined, {}, {}, paedsAnnual.aliases, annualSynonymWorkbook).events.some((event) => event.title === "Annual Leave" && event.rawValue === "Paeds AL"));
 assert.ok(buildRosterView([], [], caseyAnnual.key, undefined, {}, {}, caseyAnnual.aliases, annualSynonymWorkbook).events.some((event) => event.title === "Annual Leave" && event.rawValue === "Casey AL"));
+assert.ok(buildRosterView([], [], paedsSick.key, undefined, {}, {}, paedsSick.aliases, annualSynonymWorkbook).events.some((event) => event.title === "Sick Leave" && event.rawValue === "Paeds S/L"));
 
 const view = buildRosterView(mmcWorkbook, ddhWorkbook, richard.key);
 const summary = previewSummary(view.events);
@@ -440,9 +453,10 @@ const aftabMmcView = buildRosterView(mmcWorkbook, [], aftabMmc.key);
 assert.ok(aftabMmcView.events.some((event) => event.title === "Conference Leave" && event.rawValue.toUpperCase() === "CME LEAVE" && event.allDay));
 
 assert.equal(view.events.length, 37);
-assert.equal(summary.date_range, "2026-02-09 to 2026-05-02");
+assert.equal(summary.date_range, "2026-02-02 to 2026-05-02");
+assert.ok(view.events.some((event) => event.title === "Conference Leave" && event.rawValue.includes("Dandenong CL")));
 assert.ok(view.reviewItems.length >= view.events.length);
-assert.ok(view.events.some((event) => event.title === "Annual Leave"));
+assert.ok(view.events.some((event) => event.rawValue.includes("Annual leave")));
 assert.ok(view.events.some((event) => event.title === "DDH: Orange PM"));
 assert.ok(view.events.some((event) => event.title === "Sick Leave"));
 

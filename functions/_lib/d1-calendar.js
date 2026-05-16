@@ -1347,7 +1347,7 @@ function leavesOverlap(left, right) {
 }
 
 function leaveTextMatches(value) {
-  return /\b(leave|conference|cme|study|annual|sick|personal)\b/i.test(String(value || ""));
+  return /\b(leave|conference|cme|study|annual|sick|personal|exam|sabbatical|parental|long service)\b/i.test(String(value || ""));
 }
 
 function preferredLeaveTitle(leftTitle, rightTitle, rawValue = "") {
@@ -1357,6 +1357,10 @@ function preferredLeaveTitle(leftTitle, rightTitle, rawValue = "") {
   if (/\bsick\b/i.test(combined)) return "Sick Leave";
   if (/\bpersonal\b/i.test(combined)) return "Personal Leave";
   if (/\bstudy\b/i.test(combined)) return "Study Leave";
+  if (/\bexam\b/i.test(combined)) return "Exam Leave";
+  if (/\bsabbatical\b/i.test(combined)) return "Sabbatical Leave";
+  if (/\bparental\b/i.test(combined)) return "Parental Leave";
+  if (/\blong service\b/i.test(combined)) return "Long Service Leave";
   return String(leftTitle || rightTitle || "Leave").trim();
 }
 

@@ -3667,14 +3667,14 @@ function normalizeEventSourceCode(value) {
   return "";
 }
 
+function isLeaveEvent(event) {
+  return /\b(?:leave|conference|cme|annual|sick|personal|study|exam|sabbatical|parental|long service)\b/i.test(`${event?.title || ""} ${event?.rawValue || ""}`);
+}
+
 function isRosterShiftEvent(event) {
   const text = `${event?.title || ""} ${event?.rawValue || ""}`.toLowerCase();
   return !(
-    text.includes("annual leave")
-    || text.includes("conference leave")
-    || text.includes("sick leave")
-    || text.includes("clinical support")
-    || /\bcso?\b/.test(text)
+    isLeaveEvent(event)
     || text.includes("phnw")
     || text.includes("public holiday")
   );
@@ -5687,14 +5687,14 @@ function openReviewModal(id, selectedDay = "") {
         ${item.timeLabel ? `<span>Times: ${escapeHtml(item.timeLabel)}</span>` : ""}
         ${item.location ? `<span>Location: ${escapeHtml(item.location)}</span>` : ""}
       </div>
-      ${canUseRosterInsights() ? `<section class="event-inline-insight" data-review-who-panel aria-live="polite"></section>` : ""}
+      ${canUseRosterInsights() && !isLeaveEvent(event) ? `<section class="event-inline-insight" data-review-who-panel aria-live="polite"></section>` : ""}
       ${resetButton}
       ${warnings}
     </article>
   `;
   reviewModal.classList.remove("hidden");
   reviewModal.setAttribute("aria-hidden", "false");
-  if (canUseRosterInsights()) {
+  if (canUseRosterInsights() && !isLeaveEvent(event)) {
     void renderInlineWhoInsight(reviewModalBody.querySelector("[data-review-who-panel]"), insightDate, { source: eventSourceCode(event) });
   }
 }
