@@ -276,6 +276,7 @@ let pendingExportMode = "full";
 let pendingExportRange = defaultExportRangeState();
 let currentAdminTab = "system";
 let calendarStoreStatus = null;
+let calendarStoreStatusError = "";
 let lastRosterPersistence = null;
 let adminConsoleOpen = false;
 let adminConsoleLoading = false;
@@ -1792,6 +1793,7 @@ function syncMobileChrome() {
 }
 
 function renderFilesMarkup({ canRemove = false, heading = "", description = "", canAdd = false } = {}) {
+  const hasUsableStatus = Boolean(calendarStoreStatus && calendarStoreStatus.unavailable !== true && !calendarStoreStatusError);
   const statusFiles = new Map((calendarStoreStatus?.files || []).map((file) => [file.id, file]));
   const persistedSelectedFileIds = new Set(calendarStoreStatus?.expectedFiles?.persistedFileIds || []);
   if (!selectedFiles.length) {
@@ -1816,7 +1818,8 @@ function renderFilesMarkup({ canRemove = false, heading = "", description = "", 
             ${statusFiles.has(entry.id)
               ? `<span>${Number(statusFiles.get(entry.id)?.eventCount || 0)} events · ${Number(statusFiles.get(entry.id)?.selectedDoctorEventCount || 0)} for selected doctor</span>`
               : persistedSelectedFileIds.has(entry.id) ? `<span>Saved in D1 · inactive</span>`
-              : entry.file ? `<span>Not yet confirmed in D1</span>` : ""}
+              : entry.file && hasUsableStatus ? `<span>Not yet confirmed in D1</span>`
+              : entry.file ? `<span>Roster database status not checked</span>` : ""}
             ${canRemove ? `<button type="button" class="file-remove file-remove-visible" aria-label="Remove file" title="Remove file" data-remove-import="${entry.id}">🗑</button>` : ""}
           </article>
         `).join("")}
@@ -6414,29 +6417,24 @@ function renderSystemAdminCard() {
 function renderCalendarStoreCard() {
   const status = calendarStoreStatus;
   const unavailable = status?.unavailable === true;
-  const total = Number(status?.total || 0);
-  const populated = Number(status?.populated || 0);
-  const eventCount = Number(status?.eventCount || 0);
-  const accountStatus = status?.accounts || null;
   const selectedPersistence = summarizeSelectedRosterPersistence(selectedFiles, status);
-  const accountDetail = accountStatus?.unavailable
-    ? "Account store unavailable."
-    : accountStatus
-      ? `${Number(accountStatus.profiles || 0)} accounts · ${Number(accountStatus.claims || 0)} claims · ${Number(accountStatus.states || 0)} session states · ${Number(accountStatus.subscriptionTokens || 0)} subscription tokens · ${Number(accountStatus.doctorProfiles || 0)} doctor profiles`
-      : "Account store status not loaded yet.";
   const missingSelectedFiles = selectedPersistence.missingEntries.slice(0, 3);
-  const detail = unavailable
-    ? "D1 is not available to this deployment."
-    : status
-      ? `${populated}/${total} active roster files indexed · ${eventCount} SQL events${selectedPersistence.expectedCount ? ` · ${selectedPersistence.persistedCount}/${selectedPersistence.expectedCount} selected uploads confirmed · ${selectedPersistence.activeCount}/${selectedPersistence.expectedCount} active` : ""}`
-      : "Status not loaded yet.";
+  const checkedAt = status?.checkedAt ? `Last checked ${formatTimestamp(status.checkedAt)}.` : "Not checked yet.";
+  const detail = calendarStoreStatusError
+    ? `Status check failed. ${checkedAt}`
+    : unavailable
+      ? "Roster database is unavailable to this deployment."
+      : status && selectedPersistence.complete
+        ? `${selectedPersistence.persistedCount} roster file${selectedPersistence.persistedCount === 1 ? "" : "s"} synced. ${checkedAt}`
+        : status
+          ? `Sync issue detected: ${selectedPersistence.persistedCount}/${selectedPersistence.expectedCount} roster files confirmed. ${checkedAt}`
+          : "Roster database status not checked yet.";
   return `
     <article class="review-card">
       <div class="review-top">
         <div>
-          <strong>SQL calendar store</strong>
+          <strong>Roster database</strong>
           <span>${escapeHtml(detail)}</span>
-          <span>${escapeHtml(accountDetail)}</span>
         </div>
       </div>
       <div class="review-body">
@@ -6446,15 +6444,15 @@ function renderCalendarStoreCard() {
               <article class="issue-card">
                 <div>
                   <strong>${escapeHtml(entry.name)}</strong>
-                  <p>Selected locally but not confirmed in D1.</p>
+                  <p>Roster file not yet synced.</p>
                 </div>
               </article>
             `).join("")}
           </div>
         ` : ""}
         <div class="modal-actions">
-          <button type="button" class="button button-secondary" data-refresh-calendar-store>Refresh status</button>
-          <button type="button" class="button button-secondary" data-replace-active-rosters>Replace active rosters with current uploads</button>
+          <button type="button" class="button button-secondary" data-refresh-calendar-store>Check status</button>
+          <button type="button" class="button button-secondary" data-replace-active-rosters>Rebuild from roster files</button>
           <button type="button" class="button button-secondary" data-view-console>${adminConsoleOpen ? "Hide console" : "View console"}</button>
         </div>
         ${adminConsoleOpen ? renderAdminConsoleMarkup() : ""}
@@ -9274,18 +9272,22 @@ async function saveCloudStateNow(snapshot = null) {
 async function replaceActiveRostersWithCurrentUploads() {
   if (!isCreatorAuthenticated()) return;
   try {
-    setStatus("Replacing active rosters with current uploads...");
+    setStatus("Rebuilding roster database from roster files...");
     await saveSelectedRosterFilesToD1(selectedFiles);
     const keepFileIds = selectedFiles.map((entry) => entry.id);
-    calendarStoreStatus = await calendarStoreRequest("replaceActiveRosterFiles", {
-      keepFileIds,
-      selectedDoctorKey: selectedDoctor()?.key || OWNER_DOCTOR_KEY,
-    });
+    calendarStoreStatus = {
+      ...await calendarStoreRequest("replaceActiveRosterFiles", {
+        keepFileIds,
+        selectedDoctorKey: selectedDoctor()?.key || OWNER_DOCTOR_KEY,
+      }),
+      checkedAt: new Date().toISOString(),
+    };
+    calendarStoreStatusError = "";
     replaceActiveCalendarCustomEvents(customEventsForActiveCalendar());
     await saveCloudState(snapshotCloudSavePayload());
     await analyzeFiles();
     renderFileSurfaces();
-    setStatus(`Active rosters replaced. ${keepFileIds.length} current upload${keepFileIds.length === 1 ? "" : "s"} retained.`);
+    setStatus(`Roster database rebuilt from ${keepFileIds.length} roster file${keepFileIds.length === 1 ? "" : "s"}.`);
   } catch (error) {
     setStatus(error.message || "Could not replace active rosters.", true);
   }
@@ -9351,11 +9353,12 @@ async function refreshCalendarStoreStatus(options = {}) {
       selectedDoctorKey: selectedDoctor()?.key || OWNER_DOCTOR_KEY,
       expectedFileIds: selectedFiles.map((entry) => entry.id),
     });
-    calendarStoreStatus = data;
-    if (!options.silent) setStatus("SQL calendar store status refreshed.");
+    calendarStoreStatus = { ...data, checkedAt: new Date().toISOString() };
+    calendarStoreStatusError = "";
+    if (!options.silent) setStatus("Roster database status checked.");
   } catch (error) {
-    calendarStoreStatus = { unavailable: true };
-    if (!options.silent) setStatus(error.message || "Could not load SQL calendar store status.", true);
+    calendarStoreStatusError = error.message || "Could not check roster database status.";
+    if (!options.silent) setStatus(calendarStoreStatusError, true);
   }
   if (!accountsModal.classList.contains("hidden") && currentAdminTab === "system") renderAccountsModal();
 }

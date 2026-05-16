@@ -79,6 +79,14 @@ assert.match(
 );
 assert.match(appSource, /let cloudStateSaveQueue = Promise\.resolve\(\);/, "cloud saves should be serialized");
 assert.match(appSource, /data-replace-active-rosters/, "creator UI should expose a roster recovery action");
+assert.match(appSource, /<strong>Roster database<\/strong>/, "system card should use plain roster-database language");
+assert.match(appSource, />Check status<\/button>/, "system card should expose a non-mutating status check");
+assert.match(appSource, />Rebuild from roster files<\/button>/, "system card should expose an explicit roster rebuild action");
+assert.doesNotMatch(
+  appSource.match(/async function refreshCalendarStoreStatus[\s\S]*?async function toggleAdminConsole/)?.[0] || "",
+  /calendarStoreStatus = \{ unavailable: true \}/,
+  "failed status checks should not erase the last valid D1 status",
+);
 assert.doesNotMatch(
   appSource.match(/async function renderWhoInsight[\s\S]*?async function renderWhenInsight/)?.[0] || "",
   /ensureInsightRosterAnalysis/,
@@ -2674,7 +2682,7 @@ await postState(deletionStore, {
     session: {},
   },
 });
-assert.ok(await deletionStore.get("repository:file:missing-from-save", "json"), "ordinary creator save must not delete omitted repository files");
+assert.equal(deletionStore.d1.files.has("missing-from-save"), false, "ordinary creator save should reconcile omitted D1 roster files");
 let deletionIndex = await deletionStore.get("repository:index", "json");
 assert.ok(deletionIndex.files.some((file) => file.id === "missing-from-save"), "ordinary creator save must keep omitted files in the repository index");
 

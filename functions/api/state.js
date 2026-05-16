@@ -659,12 +659,15 @@ export async function onRequestPost(context) {
       state.imports = repository.refs;
       const claims = sanitizeClaims(targetRecord.claims);
       const removedImportIds = sanitizeRepositoryFileIds(body?.removedImportIds);
-      if ((targetRole === "creator" || targetRole === "owner") && saveEmail === email && removedImportIds.length) {
-        await Promise.all(removedImportIds.map((id) => deleteDerivedRosterFile(context.env.ROSTER_DB, id).catch(() => null)));
+      if ((targetRole === "creator" || targetRole === "owner") && saveEmail === email) {
+        const keepFileIds = sanitizeRepositoryFileIds(state.imports.map((item) => item.repoId || item.repositoryId || item.id));
+        const activeFiles = await queryRosterFileRanges(context.env.ROSTER_DB, { includeInactive: false }).catch(() => []);
+        const staleFileIds = activeFiles.map((file) => file.id).filter((id) => id && !keepFileIds.includes(id));
+        await Promise.all([...new Set([...removedImportIds, ...staleFileIds])].map((id) => deleteDerivedRosterFile(context.env.ROSTER_DB, id).catch(() => null)));
         repository.index = await loadRepositoryIndex(null, context.env.ROSTER_DB);
         state.imports = state.imports.filter((item) => {
           const repoId = item.repoId || item.repositoryId || item.id;
-          return !removedImportIds.includes(repoId);
+          return keepFileIds.includes(repoId);
         });
       }
       const updatedRecord = {
