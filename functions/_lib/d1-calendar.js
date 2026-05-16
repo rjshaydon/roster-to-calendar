@@ -211,9 +211,13 @@ async function ensureCalendarSchemaUncached(db) {
     CREATE TABLE IF NOT EXISTS raw_roster_files (
       file_id TEXT PRIMARY KEY,
       object_key TEXT NOT NULL DEFAULT '',
+      type TEXT NOT NULL DEFAULT '',
+      data_url TEXT NOT NULL DEFAULT '',
       uploaded_at TEXT NOT NULL DEFAULT ''
     )
   `).run();
+  await ensureColumn(db, "raw_roster_files", "type", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn(db, "raw_roster_files", "data_url", "TEXT NOT NULL DEFAULT ''");
   return true;
 }
 
@@ -229,6 +233,15 @@ export async function upsertDerivedRosterFile(db, file, storedImport) {
   const sourceType = normalizeSourceType(file.sourceType || storedImport.sourceType);
   if (!sourceType) return { ok: false, reason: "unsupported-source" };
   const doctors = sanitizeFileDoctors(file.doctors, sourceType);
+  const derivedByDoctor = [];
+  let totalEvents = 0;
+  for (const doctor of doctors) {
+    const view = await buildRosterViewFromStoredImports([{ ...storedImport, sourceType, id: file.id, repoId: file.id }], doctor.key, defaultSettings(), {}, {}, []);
+    const events = view.events.map(serializeEvent);
+    derivedByDoctor.push({ doctor, events });
+    totalEvents += events.length;
+  }
+  if (!doctors.length || totalEvents <= 0) return { ok: false, reason: "zero-events", doctors: doctors.length, events: totalEvents };
   const parsedAt = new Date().toISOString();
   await db.prepare(`
     INSERT INTO roster_files (id, name, source_type, active, size, last_modified, added_at, uploaded_at, uploaded_by, parsed_at)
@@ -257,7 +270,7 @@ export async function upsertDerivedRosterFile(db, file, storedImport) {
   ).run();
   await db.prepare("DELETE FROM roster_file_doctors WHERE file_id = ?").bind(file.id).run();
   await db.prepare("DELETE FROM roster_events WHERE file_id = ?").bind(file.id).run();
-  for (const doctor of doctors) {
+  for (const { doctor, events } of derivedByDoctor) {
     await db.prepare(`
       INSERT INTO roster_doctors (source_type, doctor_key, display_name, updated_at)
       VALUES (?, ?, ?, ?)
@@ -270,8 +283,7 @@ export async function upsertDerivedRosterFile(db, file, storedImport) {
       VALUES (?, ?, ?, ?)
       ON CONFLICT(file_id, source_type, doctor_key) DO UPDATE SET display_name = excluded.display_name
     `).bind(file.id, sourceType, doctor.key, doctor.displayName).run();
-    const view = await buildRosterViewFromStoredImports([{ ...storedImport, sourceType, id: file.id, repoId: file.id }], doctor.key, defaultSettings(), {}, {}, []);
-    for (const event of view.events.map(serializeEvent)) {
+    for (const event of events) {
       await db.prepare(`
         INSERT INTO roster_events (
           id, file_id, source_type, doctor_key, display_name, start_date, end_date, start_ts, end_ts,
@@ -297,7 +309,7 @@ export async function upsertDerivedRosterFile(db, file, storedImport) {
       ).run();
     }
   }
-  return { ok: true, doctors: doctors.length };
+  return { ok: true, doctors: doctors.length, events: totalEvents };
 }
 
 export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor) {
@@ -376,6 +388,51 @@ export async function deleteDerivedRosterFile(db, fileId) {
   await db.prepare("DELETE FROM roster_events WHERE file_id = ?").bind(fileId).run();
   await db.prepare("DELETE FROM roster_file_doctors WHERE file_id = ?").bind(fileId).run();
   await db.prepare("DELETE FROM roster_files WHERE id = ?").bind(fileId).run();
+}
+
+export async function upsertRawRosterFile(db, file, raw = {}) {
+  if (!db?.prepare || !file?.id || !raw?.dataUrl) return { ok: false, reason: "missing-input" };
+  await ensureCalendarSchema(db);
+  await db.prepare(`
+    INSERT INTO raw_roster_files (file_id, object_key, type, data_url, uploaded_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(file_id) DO UPDATE SET
+      object_key = excluded.object_key,
+      type = excluded.type,
+      data_url = excluded.data_url,
+      uploaded_at = excluded.uploaded_at
+  `).bind(
+    file.id,
+    String(raw.objectKey || ""),
+    String(raw.type || ""),
+    String(raw.dataUrl || ""),
+    String(raw.uploadedAt || new Date().toISOString()),
+  ).run();
+  return { ok: true };
+}
+
+export async function loadRawRosterFile(db, fileId) {
+  if (!db?.prepare || !fileId) return null;
+  await ensureCalendarSchema(db);
+  const row = await db.prepare(`
+    SELECT file_id, object_key, type, data_url, uploaded_at
+    FROM raw_roster_files
+    WHERE file_id = ?
+  `).bind(fileId).first();
+  if (!row?.file_id || !row?.data_url) return null;
+  return {
+    fileId: String(row.file_id),
+    objectKey: String(row.object_key || ""),
+    type: String(row.type || ""),
+    dataUrl: String(row.data_url || ""),
+    uploadedAt: String(row.uploaded_at || ""),
+  };
+}
+
+export async function deleteRawRosterFile(db, fileId) {
+  if (!db?.prepare || !fileId) return;
+  await ensureCalendarSchema(db);
+  await db.prepare("DELETE FROM raw_roster_files WHERE file_id = ?").bind(fileId).run();
 }
 
 export async function queryDoctorEvents(db, doctorKeys, options = {}) {

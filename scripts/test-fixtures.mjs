@@ -80,6 +80,7 @@ assert.match(
 assert.match(appSource, /let cloudStateSaveQueue = Promise\.resolve\(\);/, "cloud saves should be serialized");
 assert.match(appSource, /data-replace-active-rosters/, "creator UI should expose a roster recovery action");
 assert.match(appSource, /<strong>Roster database<\/strong>/, "system card should use plain roster-database language");
+assert.match(appSource, /source file\$\{retainedSourceTotal === 1 \? \"\" : \"s\"\} retained/, "system card should report retained raw source coverage");
 assert.match(appSource, />Check status<\/button>/, "system card should expose a non-mutating status check");
 assert.match(appSource, />Rebuild from roster files<\/button>/, "system card should expose an explicit roster rebuild action");
 assert.doesNotMatch(
@@ -586,6 +587,7 @@ class MemoryD1 {
     this.doctors = new Map();
     this.fileDoctors = new Map();
     this.events = new Map();
+    this.rawFiles = new Map();
     this.accountProfiles = new Map();
     this.accountClaims = new Map();
     this.accountStates = new Map();
@@ -634,6 +636,16 @@ class MemoryD1Statement {
       });
       return { success: true };
     }
+    if (sql.startsWith("INSERT INTO raw_roster_files")) {
+      this.db.rawFiles.set(args[0], {
+        file_id: args[0],
+        object_key: args[1],
+        type: args[2],
+        data_url: args[3],
+        uploaded_at: args[4],
+      });
+      return { success: true };
+    }
     if (sql.startsWith("DELETE FROM roster_file_doctors")) {
       for (const key of [...this.db.fileDoctors.keys()]) if (key.startsWith(`${args[0]}|`)) this.db.fileDoctors.delete(key);
       return { success: true };
@@ -644,6 +656,10 @@ class MemoryD1Statement {
     }
     if (sql.startsWith("DELETE FROM roster_files")) {
       this.db.files.delete(args[0]);
+      return { success: true };
+    }
+    if (sql.startsWith("DELETE FROM raw_roster_files")) {
+      this.db.rawFiles.delete(args[0]);
       return { success: true };
     }
     if (sql.startsWith("INSERT INTO roster_doctors")) {
@@ -851,6 +867,11 @@ class MemoryD1Statement {
           "created_at",
           "updated_at",
         ].map((name) => ({ name })),
+      };
+    }
+    if (sql.startsWith("PRAGMA table_info(raw_roster_files)")) {
+      return {
+        results: ["file_id", "object_key", "type", "data_url", "uploaded_at"].map((name) => ({ name })),
       };
     }
     if (sql.includes("FROM roster_file_doctors") && sql.includes("file_name") && sql.includes("event_count")) {
@@ -1179,6 +1200,9 @@ class MemoryD1Statement {
     if (sql.startsWith("SELECT * FROM doctor_profiles WHERE profile_id")) {
       return this.db.doctorProfiles.get(args[0]) || null;
     }
+    if (sql.includes("FROM raw_roster_files") && sql.includes("WHERE file_id = ?")) {
+      return this.db.rawFiles.get(args[0]) || null;
+    }
     throw new Error(`Unsupported MemoryD1 first SQL: ${sql}`);
   }
 }
@@ -1340,7 +1364,52 @@ await postState(d1StateStore, {
   },
   doctors: d1Doctors,
   eventsByDoctor: d1EventsByDoctor,
+  rawFile: {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    dataUrl: workbookDataUrl(mmcWorkbook),
+  },
 }, d1Store);
+const reparsedD1Status = await postState(d1StateStore, {
+  action: "reparseRosterFile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  fileId: "d1-mmc",
+  selectedDoctorKey: d1Doctor.key,
+}, d1Store);
+assert.equal(reparsedD1Status.files.find((file) => file.id === "d1-mmc")?.rawSourceAvailable, true, "durably stored raw files should be reparsable after upload");
+assert.ok(reparsedD1Status.files.find((file) => file.id === "d1-mmc")?.eventCount > 0, "server-side reparse should repopulate derived events");
+const rebuiltD1Status = await postState(d1StateStore, {
+  action: "rebuildActiveRosterFiles",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  selectedDoctorKey: d1Doctor.key,
+}, d1Store);
+assert.deepEqual(rebuiltD1Status.rebuiltFileIds, ["d1-mmc"], "rebuild should use retained raw roster files");
+
+const missingRawDb = new MemoryD1();
+await postState(new MemoryStore(), {
+  action: "login",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+}, missingRawDb);
+await postState(new MemoryStore(), {
+  action: "saveDerivedCalendarFile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  file: { id: "missing-raw", name: "missing-raw.xlsx", sourceType: "mmc", active: true },
+  doctors: [{ key: "RICHARD HAYDON", displayName: "Richard HAYDON", sourceType: "mmc" }],
+  eventsByDoctor: {
+    "RICHARD HAYDON": [{ id: "missing-raw-shift", source: "MMC", title: "MMC shift", allDay: true, start: "2026-02-03", end: "2026-02-03", rawValue: "MMC shift" }],
+  },
+}, missingRawDb);
+const missingRawReparse = await postStateRaw(new MemoryStore(), {
+  action: "reparseRosterFile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  fileId: "missing-raw",
+}, missingRawDb);
+assert.equal(missingRawReparse.response.status, 409, "files without retained raw bytes should fail reparsing explicitly");
+assert.match(missingRawReparse.body.error, /Re-upload it once/, "missing raw bytes should explain the recovery path");
 await postState(d1StateStore, {
   action: "save",
   email: "rhaydon@gmail.com",

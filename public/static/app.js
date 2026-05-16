@@ -1847,6 +1847,9 @@ function renderFilesMarkup({ canRemove = false, heading = "", description = "", 
               : persistedSelectedFileIds.has(entry.id) ? `<span>Saved in D1 · inactive</span>`
               : entry.file && hasUsableStatus ? `<span>Not yet confirmed in D1</span>`
               : entry.file ? `<span>Roster database status not checked</span>` : "")}
+            ${statusFiles.has(entry.id) && statusFiles.get(entry.id)?.rawSourceAvailable !== true
+              ? `<span>Source file not retained · re-upload once to enable reparse</span>`
+              : ""}
             ${canRemove ? `<button type="button" class="file-remove file-remove-visible" aria-label="Remove file" title="Remove file" data-remove-import="${entry.id}">🗑</button>` : ""}
             ${canRemove ? `<button type="button" class="file-reparse file-reparse-visible" aria-label="Reparse roster file" title="Reparse roster file" data-reparse-import="${entry.id}">↻</button>` : ""}
           </article>
@@ -4873,12 +4876,15 @@ function rosterNameTokens(value) {
 }
 
 function rosterIdentityKey(value) {
-  return String(value || "")
-    .replace(/[^A-Za-z0-9]+/g, " ")
+  const raw = String(value || "");
+  const stripped = raw
+    .replace(/[^A-Za-z0-9,]+/g, " ")
     .trim()
     .toUpperCase()
     .replace(/\s+/g, " ")
     .replace(/^(DR|DOCTOR|MR|MRS|MS|MISS|PROF|PROFESSOR|A PROF|ASSOC PROF)\s+/, "");
+  const parts = stripped.split(/\s*,\s*/).filter(Boolean);
+  return parts.length === 2 ? `${parts[1]} ${parts[0]}`.trim() : stripped.replace(/,/g, "");
 }
 
 function formatRosterDisplayName(value) {
@@ -6454,6 +6460,11 @@ function renderCalendarStoreCard() {
   const unavailable = status?.unavailable === true;
   const selectedPersistence = summarizeSelectedRosterPersistence(selectedFiles, status);
   const missingSelectedFiles = selectedPersistence.missingEntries.slice(0, 3);
+  const retainedSourceCount = (status?.files || []).filter((file) => file.rawSourceAvailable === true).length;
+  const retainedSourceTotal = (status?.files || []).length;
+  const retainedSourceDetail = status && !unavailable
+    ? `${retainedSourceCount}/${retainedSourceTotal} source file${retainedSourceTotal === 1 ? "" : "s"} retained.`
+    : "";
   const checkedAt = status?.checkedAt ? `Last checked ${formatTimestamp(status.checkedAt)}.` : "Not checked yet.";
   const syncSummary = rosterSyncSummary();
   const detail = syncSummary
@@ -6463,9 +6474,9 @@ function renderCalendarStoreCard() {
     : unavailable
       ? "Roster database is unavailable to this deployment."
       : status && selectedPersistence.complete
-        ? `${selectedPersistence.persistedCount} roster file${selectedPersistence.persistedCount === 1 ? "" : "s"} synced. ${checkedAt}`
+        ? `${selectedPersistence.persistedCount} roster file${selectedPersistence.persistedCount === 1 ? "" : "s"} synced. ${retainedSourceDetail} ${checkedAt}`
         : status
-          ? `Sync issue detected: ${selectedPersistence.persistedCount}/${selectedPersistence.expectedCount} roster files confirmed. ${checkedAt}`
+          ? `Sync issue detected: ${selectedPersistence.persistedCount}/${selectedPersistence.expectedCount} roster files confirmed. ${retainedSourceDetail} ${checkedAt}`
           : "Roster database status not checked yet.";
   return `
     <article class="review-card">
@@ -9322,19 +9333,37 @@ async function replaceActiveRostersWithCurrentUploads() {
   if (!isCreatorAuthenticated()) return;
   try {
     setStatus("Rebuilding roster database from roster files...");
-    await saveSelectedRosterFilesToD1(selectedFiles, { force: true });
+    const rawUnavailableIds = new Set((calendarStoreStatus?.files || [])
+      .filter((file) => file.rawSourceAvailable !== true)
+      .map((file) => file.id));
+    const localRecoveryEntries = selectedFiles.filter((entry) => entry.file && rawUnavailableIds.has(entry.id));
+    if (localRecoveryEntries.length) {
+      await saveSelectedRosterFilesToD1(localRecoveryEntries, { force: true });
+    }
     const keepFileIds = selectedFiles.map((entry) => entry.id);
     calendarStoreStatus = {
-      ...await calendarStoreRequest("replaceActiveRosterFiles", {
-        keepFileIds,
+      ...await calendarStoreRequest("rebuildActiveRosterFiles", {
+        expectedFileIds: keepFileIds,
         selectedDoctorKey: selectedDoctor()?.key || OWNER_DOCTOR_KEY,
       }),
       checkedAt: new Date().toISOString(),
     };
     calendarStoreStatusError = "";
+    if (calendarStoreStatus.unavailableFileIds?.length) {
+      const unavailableNames = selectedFiles
+        .filter((entry) => calendarStoreStatus.unavailableFileIds.includes(entry.id))
+        .map((entry) => entry.name);
+      throw new Error(`Could not rebuild ${unavailableNames.join(", ")} because the retained source file is missing. Re-upload ${unavailableNames.length === 1 ? "it" : "them"} once.`);
+    }
+    if (calendarStoreStatus.failedFileIds?.length) {
+      const failedNames = selectedFiles
+        .filter((entry) => calendarStoreStatus.failedFileIds.includes(entry.id))
+        .map((entry) => entry.name);
+      throw new Error(`Rebuild failed for ${failedNames.join(", ")}.`);
+    }
     replaceActiveCalendarCustomEvents(customEventsForActiveCalendar());
-    await saveCloudState(snapshotCloudSavePayload());
-    await analyzeFiles();
+    await loadCloudCalendarEvents();
+    if (currentSnapshot) renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
     renderFileSurfaces();
     setStatus(`Roster database rebuilt from ${keepFileIds.length} roster file${keepFileIds.length === 1 ? "" : "s"}.`);
   } catch (error) {
@@ -9344,17 +9373,28 @@ async function replaceActiveRostersWithCurrentUploads() {
 
 async function reparseRosterFile(id) {
   const entry = selectedFiles.find((item) => item.id === id);
-  if (!entry?.file) return;
+  if (!entry) return;
   try {
     setStatus(`Reparsing ${entry.name}...`);
-    await saveSelectedRosterFilesToD1([entry], { force: true });
-    await refreshCalendarStoreStatus({ silent: true });
+    if (entry.file && calendarStoreStatus?.files?.find((file) => file.id === entry.id)?.rawSourceAvailable !== true) {
+      await saveSelectedRosterFilesToD1([entry], { force: true });
+    }
+    calendarStoreStatus = {
+      ...await calendarStoreRequest("reparseRosterFile", {
+        fileId: entry.id,
+        selectedDoctorKey: selectedDoctor()?.key || OWNER_DOCTOR_KEY,
+        expectedFileIds: selectedFiles.map((item) => item.id),
+      }),
+      checkedAt: new Date().toISOString(),
+    };
     const reparsed = (calendarStoreStatus?.files || []).find((file) => file.id === entry.id);
     if (!reparsed || Number(reparsed.eventCount || 0) <= 0) {
       setRosterSyncState(entry, "failed", "Reparse produced 0 events.");
       renderFileSurfaces();
       throw new Error(`${entry.name} reparse produced 0 events.`);
     }
+    await loadCloudCalendarEvents();
+    if (currentSnapshot) renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
     renderFileSurfaces();
     setStatus(`${entry.name} reparsed.`);
   } catch (error) {
@@ -9531,6 +9571,10 @@ async function buildDerivedCalendarFilePayload(importEntry, statusFile = {}) {
     doctors: uniqueDoctors,
     eventsByDoctor,
     eventCount,
+    rawFile: {
+      type: importEntry.file?.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      dataUrl: importEntry.file ? await fileToDataUrl(importEntry.file) : "",
+    },
   };
 }
 

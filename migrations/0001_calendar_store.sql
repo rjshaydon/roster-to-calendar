@@ -50,3 +50,11 @@ CREATE INDEX IF NOT EXISTS idx_roster_events_doctor_range ON roster_events (doct
 CREATE INDEX IF NOT EXISTS idx_roster_events_date_source ON roster_events (start_date, source_type);
 CREATE INDEX IF NOT EXISTS idx_roster_events_source_range ON roster_events (source_type, start_date, end_date);
 CREATE INDEX IF NOT EXISTS idx_roster_events_file ON roster_events (file_id);
+
+CREATE TABLE IF NOT EXISTS raw_roster_files (
+  file_id TEXT PRIMARY KEY,
+  object_key TEXT NOT NULL DEFAULT '',
+  type TEXT NOT NULL DEFAULT '',
+  data_url TEXT NOT NULL DEFAULT '',
+  uploaded_at TEXT NOT NULL DEFAULT ''
+);

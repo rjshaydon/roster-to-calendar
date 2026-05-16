@@ -9,12 +9,14 @@ import {
   deleteAccountMirror,
   deleteDerivedRosterFile,
   deleteDoctorProfileMirror,
+  deleteRawRosterFile,
   hasCalendarDb,
   listAccountMirrors,
   listConsoleMessages,
   loadAccountMirror,
   loadAccountStateMirror,
   loadDoctorProfileMirror,
+  loadRawRosterFile,
   queryCoworkerEvents,
   queryOverlapDoctors,
   queryClaimedAccounts,
@@ -31,6 +33,7 @@ import {
   upsertAccountMirror,
   upsertDoctorProfileMirror,
   upsertDerivedRosterFile,
+  upsertRawRosterFile,
 } from "../_lib/d1-calendar.js";
 
 const CREATOR_EMAIL = "rhaydon@gmail.com";
@@ -259,6 +262,13 @@ export async function onRequestPost(context) {
         uploadedBy: email,
         uploadedAt: new Date().toISOString(),
       };
+      if (body?.rawFile?.dataUrl) {
+        await upsertRawRosterFile(context.env.ROSTER_DB, filePayload, {
+          dataUrl: body.rawFile.dataUrl,
+          type: body.rawFile.type,
+          uploadedAt: filePayload.uploadedAt,
+        });
+      }
       const result = await replaceDerivedRosterFile(
         context.env.ROSTER_DB,
         filePayload,
@@ -273,6 +283,79 @@ export async function onRequestPost(context) {
       return Response.json({ ok: true, result, supersession, ...status });
     }
 
+    if (action === "reparseRosterFile") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      const fileId = String(body?.fileId || "").trim();
+      if (!fileId) return Response.json({ error: "Roster file is required." }, { status: 400 });
+      const files = await queryRosterFiles(context.env.ROSTER_DB, { includeInactive: true });
+      const file = files.find((item) => item.id === fileId);
+      if (!file) return Response.json({ error: "Roster file was not found." }, { status: 404 });
+      const raw = await loadRawRosterFile(context.env.ROSTER_DB, fileId);
+      if (!raw?.dataUrl) {
+        return Response.json({ error: `${file.name} has no retained source file. Re-upload it once to enable reparsing.` }, { status: 409 });
+      }
+      const inspected = await inspectImportRecord({
+        ...file,
+        type: raw.type,
+        dataUrl: raw.dataUrl,
+      });
+      const result = await upsertDerivedRosterFile(context.env.ROSTER_DB, {
+        ...file,
+        sourceType: inspected.sourceType || file.sourceType,
+        doctors: inspected.doctors || file.doctors,
+      }, {
+        ...file,
+        ...inspected,
+        type: raw.type,
+        dataUrl: raw.dataUrl,
+      });
+      if (!result?.ok) {
+        return Response.json({ error: `${file.name} reparse produced 0 events.` }, { status: 422 });
+      }
+      const status = await calendarStoreStatus(null, context.env.ROSTER_DB, {
+        doctorKey: normalizeRosterName(body?.selectedDoctorKey || OWNER_DOCTOR_KEY),
+        expectedFileIds: sanitizeRepositoryFileIds(body?.expectedFileIds),
+      });
+      return Response.json({ ok: true, reparsed: fileId, result, ...status });
+    }
+
+    if (action === "rebuildActiveRosterFiles") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      const files = (await queryRosterFiles(context.env.ROSTER_DB, { includeInactive: false })).filter((file) => file.active !== false);
+      const rebuiltFileIds = [];
+      const unavailableFileIds = [];
+      const failedFileIds = [];
+      for (const file of files) {
+        const raw = await loadRawRosterFile(context.env.ROSTER_DB, file.id);
+        if (!raw?.dataUrl) {
+          unavailableFileIds.push(file.id);
+          continue;
+        }
+        const inspected = await inspectImportRecord({ ...file, type: raw.type, dataUrl: raw.dataUrl });
+        const result = await upsertDerivedRosterFile(context.env.ROSTER_DB, {
+          ...file,
+          sourceType: inspected.sourceType || file.sourceType,
+          doctors: inspected.doctors || file.doctors,
+        }, {
+          ...file,
+          ...inspected,
+          type: raw.type,
+          dataUrl: raw.dataUrl,
+        });
+        if (result?.ok) rebuiltFileIds.push(file.id);
+        else failedFileIds.push(file.id);
+      }
+      const status = await calendarStoreStatus(null, context.env.ROSTER_DB, {
+        doctorKey: normalizeRosterName(body?.selectedDoctorKey || OWNER_DOCTOR_KEY),
+        expectedFileIds: sanitizeRepositoryFileIds(body?.expectedFileIds),
+      });
+      return Response.json({ ok: true, rebuiltFileIds, unavailableFileIds, failedFileIds, ...status });
+    }
+
     if (action === "resetDerivedCalendarFile") {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
@@ -285,6 +368,7 @@ export async function onRequestPost(context) {
         return Response.json({ error: "Roster file is required." }, { status: 400 });
       }
       await deleteDerivedRosterFile(context.env.ROSTER_DB, fileId);
+      await deleteRawRosterFile(context.env.ROSTER_DB, fileId);
       const status = await calendarStoreStatus(null, context.env.ROSTER_DB, { doctorKey: OWNER_DOCTOR_KEY });
       return Response.json({ ok: true, reset: fileId, ...status });
     }
@@ -299,6 +383,7 @@ export async function onRequestPost(context) {
         .map((file) => file.id)
         .filter((id) => id && !keepFileIds.includes(id));
       await Promise.all(removedFileIds.map((id) => deleteDerivedRosterFile(context.env.ROSTER_DB, id).catch(() => null)));
+      await Promise.all(removedFileIds.map((id) => deleteRawRosterFile(context.env.ROSTER_DB, id).catch(() => null)));
       const status = await calendarStoreStatus(null, context.env.ROSTER_DB, {
         doctorKey: normalizeRosterName(body?.selectedDoctorKey || OWNER_DOCTOR_KEY),
         expectedFileIds: keepFileIds,
@@ -689,7 +774,9 @@ export async function onRequestPost(context) {
         const staleFileIds = canReconcileToFullSet
           ? activeFiles.map((file) => file.id).filter((id) => id && !keepFileIds.includes(id))
           : [];
-        await Promise.all([...new Set([...removedImportIds, ...staleFileIds])].map((id) => deleteDerivedRosterFile(context.env.ROSTER_DB, id).catch(() => null)));
+        const removedIds = [...new Set([...removedImportIds, ...staleFileIds])];
+        await Promise.all(removedIds.map((id) => deleteDerivedRosterFile(context.env.ROSTER_DB, id).catch(() => null)));
+        await Promise.all(removedIds.map((id) => deleteRawRosterFile(context.env.ROSTER_DB, id).catch(() => null)));
         repository.index = await loadRepositoryIndex(null, context.env.ROSTER_DB);
         state.imports = state.imports.filter((item) => {
           const repoId = item.repoId || item.repositoryId || item.id;
@@ -1221,6 +1308,7 @@ async function calendarStoreStatus(store, db, options = {}) {
   for (const row of selectedDoctorRows) {
     selectedCountsByFile.set(row.fileId, (selectedCountsByFile.get(row.fileId) || 0) + Number(selectedCounts.get(`${row.fileId}:${row.doctorKey}`) || 0));
   }
+  const rawAvailability = new Map(await Promise.all(activeFiles.map(async (file) => [file.id, Boolean((await loadRawRosterFile(db, file.id).catch(() => null))?.dataUrl)])));
   const files = activeFiles.map((file) => ({
     id: file.id,
     name: file.name,
@@ -1229,6 +1317,7 @@ async function calendarStoreStatus(store, db, options = {}) {
     indexedDoctors: Number(file.indexedDoctors || 0) || doctorCounts.get(file.id) || 0,
     eventCount: Number(file.eventCount || 0) || counts.get(file.id) || 0,
     selectedDoctorEventCount: selectedCountsByFile.get(file.id) || 0,
+    rawSourceAvailable: rawAvailability.get(file.id) === true,
   })).map((file) => ({
     ...file,
     status: file.eventCount <= 0
@@ -2138,6 +2227,7 @@ async function removeRepositoryFiles(store, index, ids = [], db = null) {
   await Promise.all([...removedIds].map((id) => store.delete(repositoryFileKey(id))));
   if (db) {
     await Promise.all([...removedIds].map((id) => deleteDerivedRosterFile(db, id).catch(() => null)));
+    await Promise.all([...removedIds].map((id) => deleteRawRosterFile(db, id).catch(() => null)));
   }
   const next = { ...index, files };
   await saveRepositoryIndex(store, next);
@@ -2976,7 +3066,14 @@ function rosterNameTokens(value) {
 }
 
 function rosterIdentityKey(value) {
-  return normalizeRosterName(value).replace(/^(DR|DOCTOR|MR|MRS|MS|MISS|PROF|PROFESSOR|A PROF|ASSOC PROF)\s+/, "");
+  const stripped = String(value || "")
+    .replace(/[^A-Za-z0-9,]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toUpperCase()
+    .replace(/^(DR|DOCTOR|MR|MRS|MS|MISS|PROF|PROFESSOR|A PROF|ASSOC PROF)\s+/, "");
+  const parts = stripped.split(/\s*,\s*/).filter(Boolean);
+  return parts.length === 2 ? `${parts[1]} ${parts[0]}`.trim() : stripped.replace(/,/g, "");
 }
 
 function formatRosterDisplayName(value) {

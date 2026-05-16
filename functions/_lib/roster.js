@@ -3152,7 +3152,14 @@ function normalizeName(value) {
 }
 
 function rosterIdentityKey(value) {
-  return normalizeName(value).replace(/^(DR|DOCTOR|MR|MRS|MS|MISS|PROF|PROFESSOR|A PROF|ASSOC PROF)\s+/, "");
+  const stripped = String(value || "")
+    .replace(/[^A-Za-z0-9,]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toUpperCase()
+    .replace(/^(DR|DOCTOR|MR|MRS|MS|MISS|PROF|PROFESSOR|A PROF|ASSOC PROF)\s+/, "");
+  const parts = stripped.split(/\s*,\s*/).filter(Boolean);
+  return parts.length === 2 ? `${parts[1]} ${parts[0]}`.trim() : stripped.replace(/,/g, "");
 }
 
 function formatDoctorDisplayName(value) {
