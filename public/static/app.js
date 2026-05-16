@@ -9333,34 +9333,26 @@ async function replaceActiveRostersWithCurrentUploads() {
   if (!isCreatorAuthenticated()) return;
   try {
     setStatus("Rebuilding roster database from roster files...");
-    const rawUnavailableIds = new Set((calendarStoreStatus?.files || [])
-      .filter((file) => file.rawSourceAvailable !== true)
-      .map((file) => file.id));
-    const localRecoveryEntries = selectedFiles.filter((entry) => entry.file && rawUnavailableIds.has(entry.id));
-    if (localRecoveryEntries.length) {
-      await saveSelectedRosterFilesToD1(localRecoveryEntries, { force: true });
+    const rebuildEntries = [];
+    const unavailableNames = [];
+    for (const entry of selectedFiles) {
+      const retained = await ensureRosterEntrySource(entry).catch(() => null);
+      if (!retained?.file) unavailableNames.push(entry.name);
+      else rebuildEntries.push(retained);
     }
+    if (unavailableNames.length) {
+      throw new Error(`Could not rebuild ${unavailableNames.join(", ")} because the retained source file is missing. Re-upload ${unavailableNames.length === 1 ? "it" : "them"} once.`);
+    }
+    await saveSelectedRosterFilesToD1(rebuildEntries, { force: true, retainSources: false });
     const keepFileIds = selectedFiles.map((entry) => entry.id);
     calendarStoreStatus = {
-      ...await calendarStoreRequest("rebuildActiveRosterFiles", {
-        expectedFileIds: keepFileIds,
+      ...await calendarStoreRequest("replaceActiveRosterFiles", {
+        keepFileIds,
         selectedDoctorKey: selectedDoctor()?.key || OWNER_DOCTOR_KEY,
       }),
       checkedAt: new Date().toISOString(),
     };
     calendarStoreStatusError = "";
-    if (calendarStoreStatus.unavailableFileIds?.length) {
-      const unavailableNames = selectedFiles
-        .filter((entry) => calendarStoreStatus.unavailableFileIds.includes(entry.id))
-        .map((entry) => entry.name);
-      throw new Error(`Could not rebuild ${unavailableNames.join(", ")} because the retained source file is missing. Re-upload ${unavailableNames.length === 1 ? "it" : "them"} once.`);
-    }
-    if (calendarStoreStatus.failedFileIds?.length) {
-      const failedNames = selectedFiles
-        .filter((entry) => calendarStoreStatus.failedFileIds.includes(entry.id))
-        .map((entry) => entry.name);
-      throw new Error(`Rebuild failed for ${failedNames.join(", ")}.`);
-    }
     replaceActiveCalendarCustomEvents(customEventsForActiveCalendar());
     await loadCloudCalendarEvents();
     if (currentSnapshot) renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
@@ -9376,17 +9368,10 @@ async function reparseRosterFile(id) {
   if (!entry) return;
   try {
     setStatus(`Reparsing ${entry.name}...`);
-    if (entry.file && calendarStoreStatus?.files?.find((file) => file.id === entry.id)?.rawSourceAvailable !== true) {
-      await saveSelectedRosterFilesToD1([entry], { force: true });
-    }
-    calendarStoreStatus = {
-      ...await calendarStoreRequest("reparseRosterFile", {
-        fileId: entry.id,
-        selectedDoctorKey: selectedDoctor()?.key || OWNER_DOCTOR_KEY,
-        expectedFileIds: selectedFiles.map((item) => item.id),
-      }),
-      checkedAt: new Date().toISOString(),
-    };
+    const retained = await ensureRosterEntrySource(entry);
+    if (!retained?.file) throw new Error(`${entry.name} has no retained source file. Re-upload it once to enable reparsing.`);
+    await saveSelectedRosterFilesToD1([retained], { force: true, retainSources: false });
+    await refreshCalendarStoreStatus({ silent: true });
     const reparsed = (calendarStoreStatus?.files || []).find((file) => file.id === entry.id);
     if (!reparsed || Number(reparsed.eventCount || 0) <= 0) {
       setRosterSyncState(entry, "failed", "Reparse produced 0 events.");
@@ -9571,10 +9556,6 @@ async function buildDerivedCalendarFilePayload(importEntry, statusFile = {}) {
     doctors: uniqueDoctors,
     eventsByDoctor,
     eventCount,
-    rawFile: {
-      type: importEntry.file?.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      dataUrl: importEntry.file ? await fileToDataUrl(importEntry.file) : "",
-    },
   };
 }
 
@@ -9632,6 +9613,10 @@ async function saveSelectedRosterFilesToD1(imports = selectedFiles, options = {}
   beginRosterSync(entriesToSave, options.force === true ? "rebuild" : "sync");
   for (const entry of entriesToSave) {
     try {
+      if (options.retainSources !== false) {
+        setRosterSyncState(entry, "uploading-source");
+        await retainRosterSource(entry);
+      }
       setRosterSyncState(entry, "parsing");
       const payload = await buildDerivedCalendarFilePayload(entry, entry);
       setRosterSyncState(entry, "saving");
@@ -9711,7 +9696,7 @@ function scheduleRosterSyncRefresh() {
 function rosterSyncLabel(entry) {
   const state = rosterSyncStates.get(entry.id);
   if (!state || state.status === "synced") return "";
-  const labels = { pending: "Queued to sync", parsing: "Parsing roster file…", saving: "Saving to roster database…", failed: `Sync failed${state.message ? `: ${state.message}` : ""}` };
+  const labels = { pending: "Queued to sync", "uploading-source": "Retaining source file…", parsing: "Parsing roster file…", saving: "Saving to roster database…", failed: `Sync failed${state.message ? `: ${state.message}` : ""}` };
   return `<span>${escapeHtml(labels[state.status] || "")}</span>`;
 }
 
@@ -9899,6 +9884,31 @@ function fileToDataUrl(file) {
 async function dataUrlToBlob(dataUrl) {
   const response = await fetch(dataUrl);
   return await response.blob();
+}
+
+async function retainRosterSource(entry) {
+  if (!entry?.file) return;
+  await calendarStoreRequest("uploadRawRosterFile", {
+    file: importRefForWorkspace(entry),
+    type: entry.file.type || "application/octet-stream",
+    dataUrl: await fileToDataUrl(entry.file),
+  });
+}
+
+async function ensureRosterEntrySource(entry) {
+  if (entry?.file) return entry;
+  const raw = await calendarStoreRequest("fetchRawRosterFile", { fileId: entry.id });
+  if (!raw?.dataUrl) return entry;
+  const blob = await dataUrlToBlob(raw.dataUrl);
+  const hydrated = {
+    ...entry,
+    file: new File([blob], entry.name, {
+      type: raw.type || blob.type || "application/octet-stream",
+      lastModified: entry.lastModified || Date.now(),
+    }),
+  };
+  selectedFiles = selectedFiles.map((item) => item.id === hydrated.id ? hydrated : item);
+  return hydrated;
 }
 
 function currentImportStateKey() {

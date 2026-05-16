@@ -24,6 +24,7 @@ import {
   queryDoctorEvents,
   queryDoctorEventsForFileDoctorPairs,
   queryRosterFileDoctors,
+  queryRosterFileDoctorsForKeys,
   queryRosterFileRefsForDoctors,
   queryRosterFiles,
   queryRosterFileRanges,
@@ -262,13 +263,6 @@ export async function onRequestPost(context) {
         uploadedBy: email,
         uploadedAt: new Date().toISOString(),
       };
-      if (body?.rawFile?.dataUrl) {
-        await upsertRawRosterFile(context.env.ROSTER_DB, filePayload, {
-          dataUrl: body.rawFile.dataUrl,
-          type: body.rawFile.type,
-          uploadedAt: filePayload.uploadedAt,
-        });
-      }
       const result = await replaceDerivedRosterFile(
         context.env.ROSTER_DB,
         filePayload,
@@ -283,77 +277,35 @@ export async function onRequestPost(context) {
       return Response.json({ ok: true, result, supersession, ...status });
     }
 
-    if (action === "reparseRosterFile") {
+    if (action === "uploadRawRosterFile") {
+      if (!hasCalendarDb(context.env)) return Response.json({ ok: false, unavailable: true });
+      const file = body?.file || {};
+      const dataUrl = String(body?.dataUrl || "");
+      if (!file?.id || !dataUrl) return Response.json({ error: "Roster source file is required." }, { status: 400 });
+      const objectKey = rawRosterObjectKey(file.id);
+      if (context.env.ROSTER_FILES?.put) {
+        await context.env.ROSTER_FILES.put(objectKey, dataUrlToBytes(dataUrl), {
+          httpMetadata: { contentType: String(body?.type || file.type || "application/octet-stream") },
+        });
+      }
+      await upsertRawRosterFile(context.env.ROSTER_DB, file, {
+        objectKey: context.env.ROSTER_FILES?.put ? objectKey : "",
+        dataUrl: context.env.ROSTER_FILES?.put ? "" : dataUrl,
+        type: body?.type || file.type,
+        uploadedAt: new Date().toISOString(),
+      });
+      return Response.json({ ok: true, objectKey, retainedIn: context.env.ROSTER_FILES?.put ? "r2" : "d1" });
+    }
+
+    if (action === "fetchRawRosterFile") {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
       const fileId = String(body?.fileId || "").trim();
       if (!fileId) return Response.json({ error: "Roster file is required." }, { status: 400 });
-      const files = await queryRosterFiles(context.env.ROSTER_DB, { includeInactive: true });
-      const file = files.find((item) => item.id === fileId);
-      if (!file) return Response.json({ error: "Roster file was not found." }, { status: 404 });
-      const raw = await loadRawRosterFile(context.env.ROSTER_DB, fileId);
-      if (!raw?.dataUrl) {
-        return Response.json({ error: `${file.name} has no retained source file. Re-upload it once to enable reparsing.` }, { status: 409 });
-      }
-      const inspected = await inspectImportRecord({
-        ...file,
-        type: raw.type,
-        dataUrl: raw.dataUrl,
-      });
-      const result = await upsertDerivedRosterFile(context.env.ROSTER_DB, {
-        ...file,
-        sourceType: inspected.sourceType || file.sourceType,
-        doctors: inspected.doctors || file.doctors,
-      }, {
-        ...file,
-        ...inspected,
-        type: raw.type,
-        dataUrl: raw.dataUrl,
-      });
-      if (!result?.ok) {
-        return Response.json({ error: `${file.name} reparse produced 0 events.` }, { status: 422 });
-      }
-      const status = await calendarStoreStatus(null, context.env.ROSTER_DB, {
-        doctorKey: normalizeRosterName(body?.selectedDoctorKey || OWNER_DOCTOR_KEY),
-        expectedFileIds: sanitizeRepositoryFileIds(body?.expectedFileIds),
-      });
-      return Response.json({ ok: true, reparsed: fileId, result, ...status });
-    }
-
-    if (action === "rebuildActiveRosterFiles") {
-      if (account.role !== "creator" && account.role !== "owner") {
-        return Response.json({ error: "Creator access is required." }, { status: 403 });
-      }
-      const files = (await queryRosterFiles(context.env.ROSTER_DB, { includeInactive: false })).filter((file) => file.active !== false);
-      const rebuiltFileIds = [];
-      const unavailableFileIds = [];
-      const failedFileIds = [];
-      for (const file of files) {
-        const raw = await loadRawRosterFile(context.env.ROSTER_DB, file.id);
-        if (!raw?.dataUrl) {
-          unavailableFileIds.push(file.id);
-          continue;
-        }
-        const inspected = await inspectImportRecord({ ...file, type: raw.type, dataUrl: raw.dataUrl });
-        const result = await upsertDerivedRosterFile(context.env.ROSTER_DB, {
-          ...file,
-          sourceType: inspected.sourceType || file.sourceType,
-          doctors: inspected.doctors || file.doctors,
-        }, {
-          ...file,
-          ...inspected,
-          type: raw.type,
-          dataUrl: raw.dataUrl,
-        });
-        if (result?.ok) rebuiltFileIds.push(file.id);
-        else failedFileIds.push(file.id);
-      }
-      const status = await calendarStoreStatus(null, context.env.ROSTER_DB, {
-        doctorKey: normalizeRosterName(body?.selectedDoctorKey || OWNER_DOCTOR_KEY),
-        expectedFileIds: sanitizeRepositoryFileIds(body?.expectedFileIds),
-      });
-      return Response.json({ ok: true, rebuiltFileIds, unavailableFileIds, failedFileIds, ...status });
+      const raw = await readRetainedRawRosterFile(context.env, fileId);
+      if (!raw?.dataUrl) return Response.json({ error: "Retained roster source was not found." }, { status: 404 });
+      return Response.json({ ok: true, fileId, type: raw.type, dataUrl: raw.dataUrl });
     }
 
     if (action === "resetDerivedCalendarFile") {
@@ -1308,7 +1260,10 @@ async function calendarStoreStatus(store, db, options = {}) {
   for (const row of selectedDoctorRows) {
     selectedCountsByFile.set(row.fileId, (selectedCountsByFile.get(row.fileId) || 0) + Number(selectedCounts.get(`${row.fileId}:${row.doctorKey}`) || 0));
   }
-  const rawAvailability = new Map(await Promise.all(activeFiles.map(async (file) => [file.id, Boolean((await loadRawRosterFile(db, file.id).catch(() => null))?.dataUrl)])));
+  const rawAvailability = new Map(await Promise.all(activeFiles.map(async (file) => {
+    const raw = await loadRawRosterFile(db, file.id).catch(() => null);
+    return [file.id, Boolean(raw?.objectKey || raw?.dataUrl)];
+  })));
   const files = activeFiles.map((file) => ({
     id: file.id,
     name: file.name,
@@ -1691,7 +1646,7 @@ async function buildDerivedAccountSnapshot(db, context) {
   let doctorOptions = [];
   let selectedKey = "";
   if (role === "creator" || role === "owner") {
-    const groupedDoctors = await creatorDoctorOptionsForD1(db, context.index);
+    const groupedDoctors = buildCreatorDoctorOptions(repositoryDoctorCandidatesFromIndex(context.index));
     const requestedKey = normalizeRosterName(context.doctorKey || state.session?.doctorKey || "");
     selectedKey = requestedKey || OWNER_DOCTOR_KEY;
     let doctor = findDoctorOptionByKey(groupedDoctors, selectedKey) || findRepositoryDoctorByKey(context.index, selectedKey);
@@ -1701,7 +1656,7 @@ async function buildDerivedAccountSnapshot(db, context) {
     }
     if (!doctor) return null;
     doctorKeys = doctorKeysForOption(doctor);
-    doctorDiagnostics = await resolveRosterFileDoctorRows(db, { doctorKey: selectedKey, doctorOptions: groupedDoctors });
+    doctorDiagnostics = await queryRosterFileDoctorsForKeys(db, doctorKeys);
     doctorPairs = doctorDiagnostics.map((row) => ({ fileId: row.fileId, doctorKey: row.doctorKey }));
     doctorOptions = groupedDoctors;
   } else {
@@ -1763,6 +1718,54 @@ async function buildDerivedAccountSnapshot(db, context) {
     subscriptionFeeds: {},
     insightCache: null,
   });
+}
+
+function rawRosterObjectKey(fileId) {
+  return `rosters/${String(fileId || "").trim()}`;
+}
+
+async function readRetainedRawRosterFile(env, fileId) {
+  const raw = await loadRawRosterFile(env.ROSTER_DB, fileId);
+  if (!raw) return null;
+  if (raw.objectKey && env.ROSTER_FILES?.get) {
+    const object = await env.ROSTER_FILES.get(raw.objectKey);
+    if (object) {
+      const bytes = new Uint8Array(await object.arrayBuffer());
+      return {
+        ...raw,
+        type: raw.type || object.httpMetadata?.contentType || "application/octet-stream",
+        dataUrl: bytesToDataUrl(bytes, raw.type || object.httpMetadata?.contentType || "application/octet-stream"),
+      };
+    }
+  }
+  if (raw.dataUrl && env.ROSTER_FILES?.put) {
+    const objectKey = raw.objectKey || rawRosterObjectKey(fileId);
+    await env.ROSTER_FILES.put(objectKey, dataUrlToBytes(raw.dataUrl), {
+      httpMetadata: { contentType: raw.type || "application/octet-stream" },
+    });
+    await upsertRawRosterFile(env.ROSTER_DB, { id: fileId }, {
+      objectKey,
+      dataUrl: "",
+      type: raw.type,
+      uploadedAt: raw.uploadedAt,
+    });
+    return { ...raw, objectKey };
+  }
+  return raw.dataUrl ? raw : null;
+}
+
+function dataUrlToBytes(dataUrl) {
+  const base64 = String(dataUrl || "").split(",")[1] || "";
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+function bytesToDataUrl(bytes, type) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return `data:${type || "application/octet-stream"};base64,${btoa(binary)}`;
 }
 
 function findDoctorOptionByKey(options, key) {

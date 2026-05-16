@@ -94,6 +94,16 @@ assert.match(
   "ordinary roster sync should process only missing or failed files",
 );
 assert.match(appSource, /function rosterSyncLabel/, "file cards should expose live roster sync labels");
+assert.doesNotMatch(
+  appSource.match(/async function buildDerivedCalendarFilePayload[\s\S]*?function assertDerivedCalendarFilePayload/)?.[0] || "",
+  /rawFile:/,
+  "derived-file saves should not carry retained raw file bytes",
+);
+assert.match(
+  d1CalendarSource,
+  /queryRosterFileDoctorsForKeys/,
+  "D1 helpers should expose a narrow selected-doctor file lookup",
+);
 assert.match(appSource, /function rosterSyncSummary/, "system card should expose aggregate roster sync progress");
 assert.match(appSource, /function scheduleFailedRosterRetry/, "failed roster syncs should schedule targeted retries");
 assert.match(appSource, /data-reparse-import/, "file cards should expose a visible reparse action");
@@ -549,6 +559,7 @@ class MemoryStore {
     this.accountListCalls = 0;
     this.accountGetCalls = 0;
     this.d1 = new MemoryD1();
+    this.r2 = new MemoryR2();
   }
 
   async get(key, type) {
@@ -578,6 +589,29 @@ class MemoryStore {
   resetMetrics() {
     this.accountListCalls = 0;
     this.accountGetCalls = 0;
+  }
+}
+
+class MemoryR2 {
+  constructor() {
+    this.objects = new Map();
+  }
+
+  async put(key, value, options = {}) {
+    const bytes = value instanceof Uint8Array ? value : new Uint8Array(value);
+    this.objects.set(key, {
+      bytes,
+      httpMetadata: options.httpMetadata || {},
+    });
+  }
+
+  async get(key) {
+    const item = this.objects.get(key);
+    if (!item) return null;
+    return {
+      httpMetadata: item.httpMetadata,
+      arrayBuffer: async () => item.bytes.buffer.slice(item.bytes.byteOffset, item.bytes.byteOffset + item.bytes.byteLength),
+    };
   }
 }
 
@@ -875,9 +909,11 @@ class MemoryD1Statement {
       };
     }
     if (sql.includes("FROM roster_file_doctors") && sql.includes("file_name") && sql.includes("event_count")) {
+      const requestedKeys = sql.includes("roster_file_doctors.doctor_key IN") ? new Set(args) : null;
       return {
         results: [...this.db.fileDoctors.values()]
           .filter((doctor) => this.db.files.get(doctor.file_id)?.active === 1)
+          .filter((doctor) => !requestedKeys || requestedKeys.has(doctor.doctor_key))
           .map((doctor) => {
             const file = this.db.files.get(doctor.file_id);
             return {
@@ -1284,7 +1320,7 @@ async function postStateRaw(store, payload, db = null) {
       body: JSON.stringify(payload),
       headers: { "content-type": "application/json" },
     }),
-    env: { ROSTER_DB: rosterDb },
+    env: { ROSTER_DB: rosterDb, ROSTER_FILES: store?.r2 || new MemoryR2() },
   });
   const body = await response.json();
   return { response, body };
@@ -1351,6 +1387,21 @@ const d1EventsByDoctor = Object.fromEntries(d1Doctors.map((doctor) => [
   buildRosterView(parsedMmcUpload.sources.mmc, [], doctor.key, {}, {}, {}, [], [], []).events,
 ]));
 await postState(d1StateStore, {
+  action: "uploadRawRosterFile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  file: {
+    id: "d1-mmc",
+    name: "AdultTerm1.2026.xlsx",
+    size: 123,
+    lastModified: 1,
+    addedAt: "2026-01-01T00:00:00.000Z",
+    sourceType: "mmc",
+  },
+  type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  dataUrl: workbookDataUrl(mmcWorkbook),
+}, d1Store);
+await postState(d1StateStore, {
   action: "saveDerivedCalendarFile",
   email: "rhaydon@gmail.com",
   password: creatorPassword,
@@ -1364,27 +1415,21 @@ await postState(d1StateStore, {
   },
   doctors: d1Doctors,
   eventsByDoctor: d1EventsByDoctor,
-  rawFile: {
-    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    dataUrl: workbookDataUrl(mmcWorkbook),
-  },
 }, d1Store);
-const reparsedD1Status = await postState(d1StateStore, {
-  action: "reparseRosterFile",
+const retainedRaw = await postState(d1StateStore, {
+  action: "fetchRawRosterFile",
   email: "rhaydon@gmail.com",
   password: creatorPassword,
   fileId: "d1-mmc",
-  selectedDoctorKey: d1Doctor.key,
 }, d1Store);
-assert.equal(reparsedD1Status.files.find((file) => file.id === "d1-mmc")?.rawSourceAvailable, true, "durably stored raw files should be reparsable after upload");
-assert.ok(reparsedD1Status.files.find((file) => file.id === "d1-mmc")?.eventCount > 0, "server-side reparse should repopulate derived events");
-const rebuiltD1Status = await postState(d1StateStore, {
-  action: "rebuildActiveRosterFiles",
+assert.match(retainedRaw.dataUrl, /^data:/, "retained raw files should be fetchable for browser-side reparsing");
+const reparsedD1Status = await postState(d1StateStore, {
+  action: "calendarStoreStatus",
   email: "rhaydon@gmail.com",
   password: creatorPassword,
   selectedDoctorKey: d1Doctor.key,
 }, d1Store);
-assert.deepEqual(rebuiltD1Status.rebuiltFileIds, ["d1-mmc"], "rebuild should use retained raw roster files");
+assert.equal(reparsedD1Status.files.find((file) => file.id === "d1-mmc")?.rawSourceAvailable, true, "durably stored raw files should be visible in status");
 
 const missingRawDb = new MemoryD1();
 await postState(new MemoryStore(), {
@@ -1403,13 +1448,12 @@ await postState(new MemoryStore(), {
   },
 }, missingRawDb);
 const missingRawReparse = await postStateRaw(new MemoryStore(), {
-  action: "reparseRosterFile",
+  action: "fetchRawRosterFile",
   email: "rhaydon@gmail.com",
   password: creatorPassword,
   fileId: "missing-raw",
 }, missingRawDb);
-assert.equal(missingRawReparse.response.status, 409, "files without retained raw bytes should fail reparsing explicitly");
-assert.match(missingRawReparse.body.error, /Re-upload it once/, "missing raw bytes should explain the recovery path");
+assert.equal(missingRawReparse.response.status, 404, "files without retained raw bytes should fail source fetch explicitly");
 await postState(d1StateStore, {
   action: "save",
   email: "rhaydon@gmail.com",

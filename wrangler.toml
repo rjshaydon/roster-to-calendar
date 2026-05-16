@@ -10,3 +10,7 @@ binding = "ROSTER_DB"
 database_name = "roster-converter-calendar"
 database_id = "237d0d52-3a7c-4e02-8648-9f4dedbc1cb0"
 preview_database_id = "237d0d52-3a7c-4e02-8648-9f4dedbc1cb0"
+
+[[r2_buckets]]
+binding = "ROSTER_FILES"
+bucket_name = "roster-converter-source-files"

@@ -391,7 +391,7 @@ export async function deleteDerivedRosterFile(db, fileId) {
 }
 
 export async function upsertRawRosterFile(db, file, raw = {}) {
-  if (!db?.prepare || !file?.id || !raw?.dataUrl) return { ok: false, reason: "missing-input" };
+  if (!db?.prepare || !file?.id || (!raw?.dataUrl && !raw?.objectKey)) return { ok: false, reason: "missing-input" };
   await ensureCalendarSchema(db);
   await db.prepare(`
     INSERT INTO raw_roster_files (file_id, object_key, type, data_url, uploaded_at)
@@ -419,7 +419,7 @@ export async function loadRawRosterFile(db, fileId) {
     FROM raw_roster_files
     WHERE file_id = ?
   `).bind(fileId).first();
-  if (!row?.file_id || !row?.data_url) return null;
+  if (!row?.file_id || (!row?.data_url && !row?.object_key)) return null;
   return {
     fileId: String(row.file_id),
     objectKey: String(row.object_key || ""),
@@ -427,6 +427,44 @@ export async function loadRawRosterFile(db, fileId) {
     dataUrl: String(row.data_url || ""),
     uploadedAt: String(row.uploaded_at || ""),
   };
+}
+
+export async function queryRosterFileDoctorsForKeys(db, doctorKeys = []) {
+  if (!db?.prepare || !doctorKeys?.length) return [];
+  await ensureCalendarSchema(db);
+  const keys = [...new Set(doctorKeys.map((key) => String(key || "").trim()).filter(Boolean))];
+  if (!keys.length) return [];
+  const placeholders = keys.map(() => "?").join(", ");
+  const rows = await db.prepare(`
+    SELECT
+      roster_file_doctors.file_id AS file_id,
+      roster_files.name AS file_name,
+      roster_files.source_type AS file_source_type,
+      roster_files.active AS active,
+      roster_file_doctors.source_type AS source_type,
+      roster_file_doctors.doctor_key AS doctor_key,
+      roster_file_doctors.display_name AS display_name,
+      (SELECT COUNT(*) FROM roster_events
+        WHERE roster_events.file_id = roster_file_doctors.file_id
+          AND roster_events.doctor_key = roster_file_doctors.doctor_key) AS event_count
+    FROM roster_file_doctors
+    INNER JOIN roster_files ON roster_files.id = roster_file_doctors.file_id
+    WHERE roster_files.active = 1
+      AND roster_file_doctors.doctor_key IN (${placeholders})
+    ORDER BY roster_files.added_at, roster_files.name, roster_file_doctors.display_name
+  `).bind(...keys).all();
+  return (rows.results || [])
+    .map((row) => ({
+      fileId: String(row.file_id || "").trim(),
+      fileName: String(row.file_name || "").trim(),
+      fileSourceType: String(row.file_source_type || "").trim().toLowerCase(),
+      active: row.active !== 0,
+      sourceType: String(row.source_type || "").trim().toLowerCase(),
+      doctorKey: String(row.doctor_key || "").trim(),
+      displayName: String(row.display_name || row.doctor_key || "").trim(),
+      eventCount: Number(row.event_count || 0),
+    }))
+    .filter((row) => row.fileId && row.doctorKey && row.displayName && SOURCE_TYPES.includes(row.sourceType));
 }
 
 export async function deleteRawRosterFile(db, fileId) {
