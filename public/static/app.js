@@ -5541,13 +5541,14 @@ function firstMondayOfMonth(year, monthIndex) {
 
 function formatTimestamp(value) {
   if (!value) return "-";
-  return new Date(value).toLocaleString("en-AU", {
+  const formatted = new Date(value).toLocaleString("en-AU", {
     day: "numeric",
     month: "short",
     year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
   });
+  return formatted.replace(/,\s0(\d:\d{2}\s?pm)$/i, ", $1");
 }
 
 function formatIssueHeading(item) {
@@ -9348,6 +9349,12 @@ async function reparseRosterFile(id) {
     setStatus(`Reparsing ${entry.name}...`);
     await saveSelectedRosterFilesToD1([entry], { force: true });
     await refreshCalendarStoreStatus({ silent: true });
+    const reparsed = (calendarStoreStatus?.files || []).find((file) => file.id === entry.id);
+    if (!reparsed || Number(reparsed.eventCount || 0) <= 0) {
+      setRosterSyncState(entry, "failed", "Reparse produced 0 events.");
+      renderFileSurfaces();
+      throw new Error(`${entry.name} reparse produced 0 events.`);
+    }
     renderFileSurfaces();
     setStatus(`${entry.name} reparsed.`);
   } catch (error) {
@@ -9707,7 +9714,7 @@ function summarizeRosterPersistence(entries = [], status = null, saveResults = [
     && statusExpectedIds.length === expectedFileIds.length
     && statusExpectedIds.every((id) => expectedFileIdSet.has(id));
   const persistedFileIds = statusMatchesEntries
-    ? (statusExpected.persistedFileIds || []).filter((id) => expectedFileIdSet.has(id))
+    ? (statusExpected.populatedFileIds || []).filter((id) => expectedFileIdSet.has(id))
     : (status?.files || []).map((file) => file.id).filter((id) => expectedFileIdSet.has(id));
   const persistedSet = new Set(persistedFileIds);
   const activeFileIds = statusMatchesEntries

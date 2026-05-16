@@ -1259,13 +1259,16 @@ function summarizeExpectedRosterFiles(allFiles = [], expectedFileIds = []) {
   const expectedIds = sanitizeRepositoryFileIds(expectedFileIds);
   const filesById = new Map((allFiles || []).map((file) => [file.id, file]));
   const persistedFileIds = expectedIds.filter((id) => filesById.has(id));
-  const activeFileIds = persistedFileIds.filter((id) => filesById.get(id)?.active !== false);
+  const populatedFileIds = persistedFileIds.filter((id) => Number(filesById.get(id)?.eventCount || 0) > 0);
+  const activeFileIds = populatedFileIds.filter((id) => filesById.get(id)?.active !== false);
   return {
     expectedCount: expectedIds.length,
     expectedFileIds: expectedIds,
     persistedCount: persistedFileIds.length,
+    populatedCount: populatedFileIds.length,
     activeCount: activeFileIds.length,
     persistedFileIds,
+    populatedFileIds,
     activeFileIds,
     missingFileIds: expectedIds.filter((id) => !filesById.has(id)),
   };

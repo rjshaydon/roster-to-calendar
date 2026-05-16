@@ -96,6 +96,8 @@ assert.match(appSource, /function rosterSyncLabel/, "file cards should expose li
 assert.match(appSource, /function rosterSyncSummary/, "system card should expose aggregate roster sync progress");
 assert.match(appSource, /function scheduleFailedRosterRetry/, "failed roster syncs should schedule targeted retries");
 assert.match(appSource, /data-reparse-import/, "file cards should expose a visible reparse action");
+assert.match(appSource, /Reparse produced 0 events/, "zero-event reparses should remain visibly failed");
+assert.match(appSource, /formatted\.replace\(\/,\\s0\(\\d:\\d\{2\}\\s\?pm\)\$\/i, \", \$1\"\)/, "PM timestamps should drop their leading zero");
 assert.match(
   appSource.match(/accountsBody\.addEventListener\(\"click\"[\s\S]*?\n\}\);/)?.[0] || "",
   /data-reparse-import[\s\S]*reparseRosterFile/,
@@ -1569,7 +1571,9 @@ assert.equal(d1Status.populated, 1);
 assert.equal(d1Status.remaining, 0);
 assert.equal(d1Status.expectedFiles.expectedCount, 2);
 assert.equal(d1Status.expectedFiles.persistedCount, 1);
+assert.equal(d1Status.expectedFiles.populatedCount, 1);
 assert.deepEqual(d1Status.expectedFiles.persistedFileIds, ["d1-mmc"]);
+assert.deepEqual(d1Status.expectedFiles.populatedFileIds, ["d1-mmc"]);
 assert.deepEqual(d1Status.expectedFiles.missingFileIds, ["missing-d1-mmc"]);
 assert.ok(d1Status.accounts.profiles >= 2);
 assert.ok(d1Status.accounts.claims >= 1);
@@ -1962,6 +1966,7 @@ const partialUploadStatus = await postState(partialUploadStore, {
   expectedFileIds: ["partial-mmc", "partial-ddh"],
 }, partialUploadDb);
 assert.equal(partialUploadStatus.expectedFiles.persistedCount, 1, "partial upload status should report only persisted D1 files");
+assert.equal(partialUploadStatus.expectedFiles.populatedCount, 1, "partial upload status should count only populated roster files as synced");
 assert.deepEqual(partialUploadStatus.expectedFiles.missingFileIds, ["partial-ddh"]);
 const partialUploadCalendar = await postState(partialUploadStore, {
   action: "loadCalendarEvents",
