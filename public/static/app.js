@@ -2981,7 +2981,13 @@ async function renderWhenInsight() {
   const hospitalFilters = Array.isArray(insightsState.hospitalFilters) ? insightsState.hospitalFilters : [];
   const fromDate = insightsState.fromDate || formatDateKey(new Date());
   const toDate = insightsState.termEnd || currentCalendarInsightDateRange().end || fromDate;
-  const serverResult = await fetchRosterInsightRows({ startDate: fromDate, endDate: toDate, sourceTypes: hospitalFilters.map((item) => item.toLowerCase()) });
+  const requestedDoctorKeys = insightsState.comparisonDoctorKey ? [insightsState.comparisonDoctorKey] : [];
+  const serverResult = await fetchRosterInsightRows({
+    startDate: fromDate,
+    endDate: toDate,
+    sourceTypes: hospitalFilters.map((item) => item.toLowerCase()),
+    doctorKeys: requestedDoctorKeys,
+  });
   if (serverResult.ok) {
     const serverRows = serverResult.rows;
     const serverOptions = prioritizeDoctorOptions(insightRowsToDoctorOptions(serverRows)).filter((doctor) => doctor.key !== selectedDoctor()?.key);

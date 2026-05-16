@@ -93,6 +93,11 @@ assert.doesNotMatch(
   "when insight rendering should not reference an out-of-scope selectedKey",
 );
 assert.match(
+  appSource.match(/async function renderWhenInsight[\s\S]*?function renderWhenInsightResult/)?.[0] || "",
+  /const requestedDoctorKeys = insightsState\.comparisonDoctorKey \? \[insightsState\.comparisonDoctorKey\] : \[\];[\s\S]*doctorKeys: requestedDoctorKeys/,
+  "doctor-specific when insights should query only the selected doctor from D1",
+);
+assert.match(
   calendarMigrationSource,
   /CREATE INDEX IF NOT EXISTS idx_roster_events_source_range ON roster_events \(source_type, start_date, end_date\);/,
   "calendar migration should include the source/date range index used by insight lookups",
