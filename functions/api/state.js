@@ -756,14 +756,28 @@ export async function onRequestPost(context) {
       const doctorKeys = (Array.isArray(body?.doctorKeys) ? body.doctorKeys : [])
         .map((key) => normalizeRosterName(key))
         .filter(Boolean);
-      const coworkers = await queryCoworkerEvents(context.env.ROSTER_DB, {
-        startDate,
-        endDate,
-        sourceTypes,
-        excludeDoctorKeys,
-        doctorKeys,
-      });
-      return Response.json({ ok: true, coworkers });
+      const startedAt = Date.now();
+      try {
+        const coworkers = await queryCoworkerEvents(context.env.ROSTER_DB, {
+          startDate,
+          endDate,
+          sourceTypes,
+          excludeDoctorKeys,
+          doctorKeys,
+        });
+        return Response.json({ ok: true, coworkers, queryMs: Date.now() - startedAt });
+      } catch (error) {
+        console.error("queryRosterInsights failed", {
+          startDate,
+          endDate,
+          sourceTypes,
+          doctorKeyCount: doctorKeys.length,
+          excludeDoctorKeyCount: excludeDoctorKeys.length,
+          queryMs: Date.now() - startedAt,
+          error: error?.message || String(error),
+        });
+        return Response.json({ ok: false, unavailable: true, coworkers: [] }, { status: 503 });
+      }
     }
 
     if (action === "loadCalendarEvents") {

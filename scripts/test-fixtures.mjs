@@ -59,6 +59,8 @@ const mchWorkbook = XLSX.readFile(fileURLToPath(new URL("../fixtures/Paeds_Term_
 const caseyBytes = await readFile(fileURLToPath(new URL("../fixtures/Casey_Term_2_2026_DRAFT.xlsm", import.meta.url)));
 const mchBytes = await readFile(fileURLToPath(new URL("../fixtures/Paeds_Term_2_2026.xlsx", import.meta.url)));
 const appSource = await readFile(new URL("../public/static/app.js", import.meta.url), "utf8");
+const calendarMigrationSource = await readFile(new URL("../migrations/0001_calendar_store.sql", import.meta.url), "utf8");
+const insightIndexMigrationSource = await readFile(new URL("../migrations/0005_roster_insight_index.sql", import.meta.url), "utf8");
 assert.match(
   appSource,
   /function pasteCopiedEvent[\s\S]*openCustomEventModal\(previewEventToCustomEvent\(shifted\), targetDate, \{ draft: true \}\);/,
@@ -68,6 +70,36 @@ assert.doesNotMatch(
   appSource.match(/function openCustomEventModal[\s\S]*?function closeCustomEventModal/)?.[0] || "",
   /renderInlineWhoInsight/,
   "custom-event modal should not request roster coworker insights",
+);
+assert.doesNotMatch(
+  appSource.match(/async function renderWhoInsight[\s\S]*?async function renderWhenInsight/)?.[0] || "",
+  /ensureInsightRosterAnalysis/,
+  "who insights should not fall back to reparsing roster files",
+);
+assert.doesNotMatch(
+  appSource.match(/async function renderInlineWhoInsight[\s\S]*?function renderInlineWhoGroups/)?.[0] || "",
+  /ensureInsightRosterAnalysis/,
+  "inline who insights should not fall back to reparsing roster files",
+);
+assert.doesNotMatch(
+  appSource.match(/async function renderWhenInsight[\s\S]*?function renderWhenInsightResult/)?.[0] || "",
+  /ensureInsightRosterAnalysis/,
+  "when insights should not fall back to reparsing roster files",
+);
+assert.doesNotMatch(
+  appSource.match(/function renderWhenInsightResult[\s\S]*?function comparisonDoctorOptions/)?.[0] || "",
+  /doctor\.key === selectedKey/,
+  "when insight rendering should not reference an out-of-scope selectedKey",
+);
+assert.match(
+  calendarMigrationSource,
+  /CREATE INDEX IF NOT EXISTS idx_roster_events_source_range ON roster_events \(source_type, start_date, end_date\);/,
+  "calendar migration should include the source/date range index used by insight lookups",
+);
+assert.match(
+  insightIndexMigrationSource,
+  /CREATE INDEX IF NOT EXISTS idx_roster_events_source_range ON roster_events \(source_type, start_date, end_date\);/,
+  "existing databases should receive the insight query index through a forward migration",
 );
 const caseyFormData = new FormData();
 caseyFormData.append("rosterFiles", new File([caseyBytes], "Casey_Term_2_2026_DRAFT.xlsm", { type: "application/vnd.ms-excel.sheet.macroEnabled.12" }));
@@ -799,15 +831,20 @@ class MemoryD1Statement {
       const start = args[1];
       const hasSourceFilter = sql.includes("roster_events.source_type IN");
       const hasDoctorFilter = sql.includes("roster_events.doctor_key IN");
+      const hasExcludedDoctorFilter = sql.includes("roster_events.doctor_key NOT IN");
       const sourceCount = hasSourceFilter ? (sql.match(/roster_events\.source_type IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1 : 0;
+      const doctorCount = hasDoctorFilter ? (sql.match(/roster_events\.doctor_key IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1 : 0;
+      const excludedDoctorCount = hasExcludedDoctorFilter ? (sql.match(/roster_events\.doctor_key NOT IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1 : 0;
       const sourceTypes = new Set(args.slice(2, 2 + sourceCount));
-      const doctorKeys = new Set(hasDoctorFilter ? args.slice(2 + sourceCount) : []);
+      const doctorKeys = new Set(args.slice(2 + sourceCount, 2 + sourceCount + doctorCount));
+      const excludedDoctorKeys = new Set(args.slice(2 + sourceCount + doctorCount, 2 + sourceCount + doctorCount + excludedDoctorCount));
       return {
         results: [...this.db.events.values()]
           .filter((event) => this.db.files.get(event.file_id)?.active === 1)
           .filter((event) => event.start_date <= end && event.end_date >= start)
           .filter((event) => !sourceTypes.size || sourceTypes.has(event.source_type))
           .filter((event) => !doctorKeys.size || doctorKeys.has(event.doctor_key))
+          .filter((event) => !excludedDoctorKeys.has(event.doctor_key))
           .sort((left, right) => left.display_name.localeCompare(right.display_name) || left.start_ts.localeCompare(right.start_ts)),
       };
     }
@@ -1320,6 +1357,18 @@ const d1Insights = await postState(d1StateStore, {
   endDate: d1CreatorCalendar.snapshot.preview.events[0].start.slice(0, 10),
 }, d1Store);
 assert.ok(Array.isArray(d1Insights.coworkers));
+const d1InsightsExcludingSelectedDoctor = await postState(d1StateStore, {
+  action: "queryRosterInsights",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  startDate: d1CreatorCalendar.snapshot.preview.events[0].start.slice(0, 10),
+  endDate: d1CreatorCalendar.snapshot.preview.events[0].start.slice(0, 10),
+  excludeDoctorKeys: [d1Doctor.key],
+}, d1Store);
+assert.ok(
+  d1InsightsExcludingSelectedDoctor.coworkers.every((row) => row.doctorKey !== d1Doctor.key),
+  "coworker lookup should exclude the selected doctor in SQL",
+);
 const d1RepositoryFile = [...d1Store.files.keys()][0];
 await postState(d1StateStore, {
   action: "saveDerivedCalendarFile",
