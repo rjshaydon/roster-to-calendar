@@ -61,6 +61,7 @@ const mchBytes = await readFile(fileURLToPath(new URL("../fixtures/Paeds_Term_2_
 const appSource = await readFile(new URL("../public/static/app.js", import.meta.url), "utf8");
 const calendarMigrationSource = await readFile(new URL("../migrations/0001_calendar_store.sql", import.meta.url), "utf8");
 const insightIndexMigrationSource = await readFile(new URL("../migrations/0005_roster_insight_index.sql", import.meta.url), "utf8");
+const d1CalendarSource = await readFile(new URL("../functions/_lib/d1-calendar.js", import.meta.url), "utf8");
 assert.match(
   appSource,
   /function pasteCopiedEvent[\s\S]*openCustomEventModal\(previewEventToCustomEvent\(shifted\), targetDate, \{ draft: true \}\);/,
@@ -100,6 +101,11 @@ assert.match(
   insightIndexMigrationSource,
   /CREATE INDEX IF NOT EXISTS idx_roster_events_source_range ON roster_events \(source_type, start_date, end_date\);/,
   "existing databases should receive the insight query index through a forward migration",
+);
+assert.match(
+  d1CalendarSource,
+  /SELECT[\s\S]*roster_events\.doctor_key,[\s\S]*roster_events\.display_name,[\s\S]*roster_events\.source_type,[\s\S]*roster_events\.event_json[\s\S]*FROM roster_events[\s\S]*INNER JOIN roster_files/,
+  "coworker lookup should qualify selected roster_events columns across the roster_files join",
 );
 const caseyFormData = new FormData();
 caseyFormData.append("rosterFiles", new File([caseyBytes], "Casey_Term_2_2026_DRAFT.xlsm", { type: "application/vnd.ms-excel.sheet.macroEnabled.12" }));

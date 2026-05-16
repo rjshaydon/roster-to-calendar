@@ -1077,7 +1077,11 @@ export async function queryCoworkerEvents(db, options = {}) {
   const doctorSql = includeKeys.length ? `AND roster_events.doctor_key IN (${includeKeys.map(() => "?").join(", ")})` : "";
   const excludeDoctorSql = excludeKeys.size ? `AND roster_events.doctor_key NOT IN (${[...excludeKeys].map(() => "?").join(", ")})` : "";
   const rows = await db.prepare(`
-    SELECT doctor_key, display_name, source_type, event_json
+    SELECT
+      roster_events.doctor_key,
+      roster_events.display_name,
+      roster_events.source_type,
+      roster_events.event_json
     FROM roster_events
     INNER JOIN roster_files ON roster_files.id = roster_events.file_id
     WHERE roster_files.active = 1
