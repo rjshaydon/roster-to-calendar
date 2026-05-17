@@ -765,7 +765,7 @@ export async function onRequestPost(context) {
         const keepFileIds = sanitizeRepositoryFileIds(state.imports.map((item) => item.repoId || item.repositoryId || item.id));
         const allFiles = await queryRosterFiles(context.env.ROSTER_DB, { includeInactive: true }).catch(() => []);
         const persistedKeepFileIds = keepFileIds.filter((id) => allFiles.some((file) => file.id === id));
-        const canReconcileToFullSet = persistedKeepFileIds.length === keepFileIds.length;
+        const canReconcileToFullSet = keepFileIds.length > 0 && persistedKeepFileIds.length === keepFileIds.length;
         const activeFiles = await queryRosterFileRanges(context.env.ROSTER_DB, { includeInactive: false }).catch(() => []);
         const staleFileIds = canReconcileToFullSet
           ? activeFiles.map((file) => file.id).filter((id) => id && !keepFileIds.includes(id))
@@ -1594,6 +1594,13 @@ async function prepareLightweightAccountResponse(rawRecord, options = {}) {
     };
   }
   const claims = sanitizeClaims(record.claims);
+  if ((role === "creator" || role === "owner") && options.db) {
+    const files = await queryRosterFiles(options.db).catch(() => []);
+    state = {
+      ...state,
+      imports: files.filter((file) => file.active !== false).map(repositoryImportRef),
+    };
+  }
   return {
     role,
     realName: record.realName || "",

@@ -99,6 +99,18 @@ assert.doesNotMatch(
   /autoClaimMatchedRosterNames|prepareAccountResponse|loadRepositoryIndex|buildIssueConfig/,
   "login should stay lightweight and avoid broad account hydration",
 );
+assert.match(
+  (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
+    .match(/async function prepareLightweightAccountResponse[\s\S]*?export async function prepareAccountResponse/)?.[0] || "",
+  /role === "creator" \|\| role === "owner"[\s\S]*queryRosterFiles\(options\.db\)[\s\S]*imports:/,
+  "lightweight creator responses should still preserve active roster-file refs",
+);
+assert.match(
+  (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
+    .match(/if \(action === "save"\)[\s\S]*?if \(null && \(!hasCalendarDb/)?.[0] || "",
+  /keepFileIds\.length > 0 && persistedKeepFileIds\.length === keepFileIds\.length/,
+  "empty creator import snapshots must not be interpreted as permission to delete every active roster file",
+);
 assert.doesNotMatch(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
     .match(/if \(action === "adminCreateUser"\)[\s\S]*?if \(action === "resolveAccountClaims"\)/)?.[0] || "",
