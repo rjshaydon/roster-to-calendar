@@ -7914,30 +7914,9 @@ async function loadUnclaimedDoctorCalendar(doctor, sourceContext) {
     };
   }
 
-  if (!hasDoctorProfileImportCandidates(sourceContext)) {
-    const cached = buildUnclaimedPreviewFromSnapshotCache(doctor, profile, sourceContext, profileData.profile?.state?.session || {});
-    if (cached) return doctorProfileLoadResultFromCached(profile, cached);
-  }
-
-  const imports = await loadUnclaimedSourceImports(doctor, sourceContext, profile);
-  if (!imports.length) {
-    throw new Error(`${doctor.displayName} was not found in the roster files used by the current creator calendar.`);
-  }
-  const generated = await buildUnclaimedPreviewFromImports(doctor, profile, imports, profileData.profile?.state?.session || {});
-  return {
-    mode: "doctor-profile",
-    ownerId: profile.ownerId,
-    doctor: generated.doctor,
-    profile,
-    imports,
-    snapshot: null,
-    session: generated.session,
-    preview: generated.preview,
-    doctorOptions: generated.doctorOptions,
-    detectedSources: generated.detectedSources,
-    parsedSources: generated.parsedSources,
-    parsedDoctors: generated.parsedDoctors,
-  };
+  const cached = buildUnclaimedPreviewFromSnapshotCache(doctor, profile, sourceContext, profileData.profile?.state?.session || {});
+  if (cached) return doctorProfileLoadResultFromCached(profile, cached);
+  throw new Error(`${doctor.displayName} could not be loaded from the roster database. Rebuild the roster database from Admin > Files if this persists.`);
 }
 
 function hasDoctorProfileImportCandidates(sourceContext) {

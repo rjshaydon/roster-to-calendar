@@ -22,6 +22,8 @@ import {
   queryClaimedAccounts,
   queryDoctorProfileMirrors,
   queryDoctorEvents,
+  queryAccountCustomEvents,
+  queryCanonicalDoctors,
   queryDoctorSeniorities,
   queryDoctorEventsForFileDoctorPairs,
   queryRosterFileDoctors,
@@ -31,6 +33,8 @@ import {
   queryRosterFileRanges,
   queryRosterDoctors,
   replaceDerivedRosterFile,
+  replaceAccountCustomEvents,
+  replaceCanonicalDoctors,
   setDerivedRosterFileActive,
   upsertAccountMirror,
   upsertDoctorProfileMirror,
@@ -280,6 +284,7 @@ export async function onRequestPost(context) {
         body?.eventsByDoctor || {},
       );
       const supersession = await reconcileRosterFileSupersession(context.env.ROSTER_DB, filePayload, { uploaderEmail: email });
+      await refreshCanonicalDoctors(context.env.ROSTER_DB);
       const status = await calendarStoreStatus(null, context.env.ROSTER_DB, {
         doctorKey: selectedDoctorKey,
         expectedFileIds: sanitizeRepositoryFileIds(body?.expectedFileIds),
@@ -330,6 +335,7 @@ export async function onRequestPost(context) {
         return Response.json({ error: "Roster file is required." }, { status: 400 });
       }
       await deleteDerivedRosterFile(context.env.ROSTER_DB, fileId);
+      await refreshCanonicalDoctors(context.env.ROSTER_DB);
       await deleteRawRosterFile(context.env.ROSTER_DB, fileId);
       const status = await calendarStoreStatus(null, context.env.ROSTER_DB, { doctorKey: OWNER_DOCTOR_KEY });
       return Response.json({ ok: true, reset: fileId, ...status });
@@ -345,6 +351,7 @@ export async function onRequestPost(context) {
         .map((file) => file.id)
         .filter((id) => id && !keepFileIds.includes(id));
       await Promise.all(removedFileIds.map((id) => deleteDerivedRosterFile(context.env.ROSTER_DB, id).catch(() => null)));
+      await refreshCanonicalDoctors(context.env.ROSTER_DB);
       await Promise.all(removedFileIds.map((id) => deleteRawRosterFile(context.env.ROSTER_DB, id).catch(() => null)));
       const status = await calendarStoreStatus(null, context.env.ROSTER_DB, {
         doctorKey: normalizeRosterName(body?.selectedDoctorKey || OWNER_DOCTOR_KEY),
@@ -738,6 +745,7 @@ export async function onRequestPost(context) {
         const removedIds = [...new Set([...removedImportIds, ...staleFileIds])];
         await Promise.all(removedIds.map((id) => deleteDerivedRosterFile(context.env.ROSTER_DB, id).catch(() => null)));
         await Promise.all(removedIds.map((id) => deleteRawRosterFile(context.env.ROSTER_DB, id).catch(() => null)));
+        if (removedIds.length) await refreshCanonicalDoctors(context.env.ROSTER_DB);
         repository.index = await loadRepositoryIndex(null, context.env.ROSTER_DB);
         state.imports = state.imports.filter((item) => {
           const repoId = item.repoId || item.repositoryId || item.id;
@@ -755,6 +763,7 @@ export async function onRequestPost(context) {
       };
       if (null) await null.put(storageKey(saveEmail), JSON.stringify(updatedRecord));
       await upsertAccountMirror(context.env.ROSTER_DB, updatedRecord);
+      await replaceAccountCustomEvents(context.env.ROSTER_DB, saveEmail, sanitizeSnapshotCustomEvents(state.session?.customEvents, saveEmail));
       if (null && (!hasCalendarDb(context.env) || targetRole === "creator" || targetRole === "owner")) {
         await storeSnapshotForAccount(null, {
           email: saveEmail,
@@ -1534,6 +1543,21 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
       },
     };
   }
+  const d1CustomEvents = await queryAccountCustomEvents(options.db, record.email).catch(() => []);
+  if (d1CustomEvents.length) {
+    state = {
+      ...state,
+      session: {
+        ...state.session,
+        customEvents: latestCustomEventsByIdentity([
+          ...sanitizeSnapshotCustomEvents(state.session?.customEvents, record.email),
+          ...d1CustomEvents,
+        ]),
+      },
+    };
+  } else if (state.session?.customEvents?.length) {
+    await replaceAccountCustomEvents(options.db, record.email, sanitizeSnapshotCustomEvents(state.session.customEvents, record.email)).catch(() => null);
+  }
   let linkedProfiles = [];
 
   if (role !== "creator" && role !== "owner") {
@@ -1679,7 +1703,7 @@ async function buildDerivedAccountSnapshot(db, context) {
   let doctorOptions = [];
   let selectedKey = "";
   if (role === "creator" || role === "owner") {
-    const groupedDoctors = buildCreatorDoctorOptions(repositoryDoctorCandidatesFromIndex(context.index));
+    const groupedDoctors = await creatorDoctorOptionsForD1(db, context.index);
     const requestedKey = normalizeRosterName(context.doctorKey || state.session?.doctorKey || "");
     selectedKey = requestedKey || OWNER_DOCTOR_KEY;
     let doctor = findDoctorOptionByKey(groupedDoctors, selectedKey) || findRepositoryDoctorByKey(context.index, selectedKey);
@@ -1731,9 +1755,13 @@ async function buildDerivedAccountSnapshot(db, context) {
     context.diagnostics.selectedDoctorFiles = doctorDiagnostics.map(rosterFileDoctorDiagnostic);
     context.diagnostics.queryMode = doctorPairs.length ? "file-doctor-pairs" : "doctor-keys";
   }
+  const d1CustomEvents = await queryAccountCustomEvents(db, context.record.email).catch(() => []);
   const events = [
     ...applyEventOverrides(rosterEvents, normalizedSession.overrides || {}),
-    ...customEventsToEvents(sanitizeSnapshotCustomEvents(normalizedSession.customEvents, context.record.email), settings),
+    ...customEventsToEvents(latestCustomEventsByIdentity([
+      ...sanitizeSnapshotCustomEvents(normalizedSession.customEvents, context.record.email),
+      ...d1CustomEvents,
+    ]), settings),
   ];
   if (!events.length) return null;
   const owner = accountSnapshotOwner(context.record.email, role);
@@ -1819,6 +1847,8 @@ function doctorKeysForOption(doctor) {
 }
 
 async function creatorDoctorOptionsForD1(db, index) {
+  const canonicalDoctors = await queryCanonicalDoctors(db).catch(() => []);
+  if (canonicalDoctors.length) return canonicalDoctors;
   const doctorRows = await queryRosterFileDoctors(db).catch(() => []);
   if (doctorRows.length) return await buildCanonicalDoctorOptionsFromRows(db, doctorRows);
   return buildCreatorDoctorOptions(repositoryDoctorCandidatesFromIndex(index));
@@ -2814,11 +2844,28 @@ function matchRepositoryClaims(index, realName) {
 async function repositoryDoctorCandidates(store, index, db = null, options = {}) {
   await ensureAccountMirrorCompleteFromKv(store, db).catch(() => false);
   const accountIndex = await loadClaimedAccountIndex(store, db);
+  const canonicalDoctors = await queryCanonicalDoctors(db, {
+    includeZeroEventStandalone: options.hideZeroEventStandalone !== true,
+  }).catch(() => []);
+  if (canonicalDoctors.length) return attachClaimedAccountMetadata(canonicalDoctors, accountIndex);
   const doctorRows = await queryRosterFileDoctors(db).catch(() => []);
   if (doctorRows.length) return attachClaimedAccountMetadata(await buildCanonicalDoctorOptionsFromRows(db, doctorRows, {
     includeZeroEventStandalone: options.hideZeroEventStandalone !== true,
   }), accountIndex);
   return attachClaimedAccountMetadata(repositoryDoctorCandidatesFromIndex(index), accountIndex);
+}
+
+async function refreshCanonicalDoctors(db) {
+  const doctorRows = await queryRosterFileDoctors(db).catch(() => []);
+  if (!doctorRows.length) {
+    await replaceCanonicalDoctors(db, []);
+    return [];
+  }
+  const doctors = await buildCanonicalDoctorOptionsFromRows(db, doctorRows, {
+    includeZeroEventStandalone: true,
+  });
+  await replaceCanonicalDoctors(db, doctors);
+  return doctors;
 }
 
 function attachClaimedAccountMetadata(doctors, accountIndex) {

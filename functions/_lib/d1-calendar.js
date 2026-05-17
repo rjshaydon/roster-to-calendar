@@ -129,6 +129,34 @@ async function ensureCalendarSchemaUncached(db) {
     )
   `).run();
   await db.prepare(`
+    CREATE TABLE IF NOT EXISTS canonical_doctors (
+      canonical_key TEXT PRIMARY KEY,
+      display_name TEXT NOT NULL,
+      source_type TEXT NOT NULL DEFAULT '',
+      source_types_json TEXT NOT NULL DEFAULT '[]',
+      aliases_json TEXT NOT NULL DEFAULT '[]',
+      has_events INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL DEFAULT ''
+    )
+  `).run();
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS custom_events (
+      owner_email TEXT NOT NULL,
+      id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      start_date TEXT NOT NULL,
+      end_date TEXT NOT NULL,
+      all_day INTEGER NOT NULL DEFAULT 0,
+      start_time TEXT NOT NULL DEFAULT '',
+      end_time TEXT NOT NULL DEFAULT '',
+      location TEXT NOT NULL DEFAULT '',
+      include INTEGER NOT NULL DEFAULT 1,
+      updated_at TEXT NOT NULL DEFAULT '',
+      PRIMARY KEY (owner_email, id)
+    )
+  `).run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_custom_events_owner_range ON custom_events (owner_email, start_date, end_date)").run();
+  await db.prepare(`
     CREATE TABLE IF NOT EXISTS doctor_profiles (
       profile_id TEXT PRIMARY KEY,
       doctor_key TEXT NOT NULL,
@@ -805,8 +833,112 @@ export async function deleteAccountMirror(db, email) {
   const normalizedEmail = normalizeEmail(email);
   await db.prepare("DELETE FROM account_claims WHERE email = ?").bind(normalizedEmail).run();
   await db.prepare("DELETE FROM account_states WHERE email = ?").bind(normalizedEmail).run();
+  await db.prepare("DELETE FROM custom_events WHERE owner_email = ?").bind(normalizedEmail).run();
   await db.prepare("DELETE FROM subscription_tokens WHERE email = ?").bind(normalizedEmail).run();
   await db.prepare("DELETE FROM account_profiles WHERE email = ?").bind(normalizedEmail).run();
+}
+
+export async function replaceCanonicalDoctors(db, doctors = []) {
+  if (!db?.prepare) return false;
+  await ensureCalendarSchema(db);
+  const now = new Date().toISOString();
+  const statements = [db.prepare("DELETE FROM canonical_doctors")];
+  for (const doctor of doctors || []) {
+    if (!doctor?.key || !doctor?.displayName) continue;
+    statements.push(db.prepare(`
+      INSERT INTO canonical_doctors (
+        canonical_key, display_name, source_type, source_types_json, aliases_json, has_events, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      String(doctor.key || "").trim(),
+      String(doctor.displayName || "").trim(),
+      String(doctor.sourceType || doctor.sourceTypes?.[0] || "").trim().toLowerCase(),
+      JSON.stringify(Array.isArray(doctor.sourceTypes) ? doctor.sourceTypes : []),
+      JSON.stringify(Array.isArray(doctor.aliases) ? doctor.aliases : []),
+      doctor.hasEvents === false ? 0 : 1,
+      now,
+    ));
+  }
+  await runTransactionalBatch(db, statements);
+  return true;
+}
+
+export async function queryCanonicalDoctors(db, options = {}) {
+  if (!db?.prepare) return [];
+  await ensureCalendarSchema(db);
+  const rows = await db.prepare(`
+    SELECT canonical_key, display_name, source_type, source_types_json, aliases_json, has_events
+    FROM canonical_doctors
+    ${options.includeZeroEventStandalone === false ? "WHERE has_events = 1" : ""}
+    ORDER BY display_name, source_type
+  `).all();
+  return (rows.results || []).map((row) => {
+    let sourceTypes = [];
+    let aliases = [];
+    try { sourceTypes = JSON.parse(row.source_types_json || "[]"); } catch {}
+    try { aliases = JSON.parse(row.aliases_json || "[]"); } catch {}
+    return {
+      key: String(row.canonical_key || "").trim(),
+      displayName: String(row.display_name || "").trim(),
+      sourceType: String(row.source_type || "").trim().toLowerCase(),
+      sourceTypes: Array.isArray(sourceTypes) ? sourceTypes : [],
+      aliases: Array.isArray(aliases) ? aliases : [],
+      hasEvents: Number(row.has_events || 0) === 1,
+    };
+  }).filter((doctor) => doctor.key && doctor.displayName);
+}
+
+export async function replaceAccountCustomEvents(db, ownerEmail, events = []) {
+  if (!db?.prepare || !ownerEmail) return false;
+  await ensureCalendarSchema(db);
+  const email = normalizeEmail(ownerEmail);
+  const now = new Date().toISOString();
+  const statements = [db.prepare("DELETE FROM custom_events WHERE owner_email = ?").bind(email)];
+  for (const event of events || []) {
+    if (!event?.id || !event?.title || !event?.startDate || !event?.endDate) continue;
+    statements.push(db.prepare(`
+      INSERT INTO custom_events (
+        owner_email, id, title, start_date, end_date, all_day, start_time, end_time, location, include, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      email,
+      String(event.id),
+      String(event.title),
+      String(event.startDate).slice(0, 10),
+      String(event.endDate).slice(0, 10),
+      event.allDay === true ? 1 : 0,
+      event.allDay === true ? "" : String(event.startTime || ""),
+      event.allDay === true ? "" : String(event.endTime || ""),
+      String(event.location || ""),
+      event.include === false ? 0 : 1,
+      now,
+    ));
+  }
+  await runTransactionalBatch(db, statements);
+  return true;
+}
+
+export async function queryAccountCustomEvents(db, ownerEmail) {
+  if (!db?.prepare || !ownerEmail) return [];
+  await ensureCalendarSchema(db);
+  const rows = await db.prepare(`
+    SELECT id, title, start_date, end_date, all_day, start_time, end_time, location, include
+    FROM custom_events
+    WHERE owner_email = ?
+    ORDER BY start_date, start_time, title, id
+  `).bind(normalizeEmail(ownerEmail)).all();
+  return (rows.results || []).map((row) => ({
+    id: String(row.id || ""),
+    ownerEmail: normalizeEmail(ownerEmail),
+    title: String(row.title || ""),
+    startDate: String(row.start_date || ""),
+    endDate: String(row.end_date || ""),
+    allDay: Number(row.all_day || 0) === 1,
+    startTime: String(row.start_time || ""),
+    endTime: String(row.end_time || ""),
+    location: String(row.location || ""),
+    include: Number(row.include ?? 1) !== 0,
+  })).filter((event) => event.id && event.title && event.startDate && event.endDate);
 }
 
 export async function queryClaimedAccounts(db) {

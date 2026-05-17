@@ -683,6 +683,8 @@ class MemoryD1 {
     this.accountProfiles = new Map();
     this.accountClaims = new Map();
     this.accountStates = new Map();
+    this.canonicalDoctors = new Map();
+    this.customEvents = new Map();
     this.subscriptionTokens = new Map();
     this.parserRules = new Map();
     this.parserRuleSuggestions = new Map();
@@ -706,6 +708,8 @@ class MemoryD1 {
       "accountProfiles",
       "accountClaims",
       "accountStates",
+      "canonicalDoctors",
+      "customEvents",
       "subscriptionTokens",
       "parserRules",
       "parserRuleSuggestions",
@@ -927,6 +931,40 @@ class MemoryD1Statement {
       this.db.accountStates.delete(args[0]);
       return { success: true };
     }
+    if (sql.startsWith("DELETE FROM canonical_doctors")) {
+      this.db.canonicalDoctors.clear();
+      return { success: true };
+    }
+    if (sql.startsWith("INSERT INTO canonical_doctors")) {
+      this.db.canonicalDoctors.set(args[0], {
+        canonical_key: args[0],
+        display_name: args[1],
+        source_type: args[2],
+        source_types_json: args[3],
+        aliases_json: args[4],
+        has_events: args[5],
+      });
+      return { success: true };
+    }
+    if (sql.startsWith("DELETE FROM custom_events")) {
+      for (const key of [...this.db.customEvents.keys()]) if (key.startsWith(`${args[0]}|`)) this.db.customEvents.delete(key);
+      return { success: true };
+    }
+    if (sql.startsWith("INSERT INTO custom_events")) {
+      this.db.customEvents.set(`${args[0]}|${args[1]}`, {
+        owner_email: args[0],
+        id: args[1],
+        title: args[2],
+        start_date: args[3],
+        end_date: args[4],
+        all_day: args[5],
+        start_time: args[6],
+        end_time: args[7],
+        location: args[8],
+        include: args[9],
+      });
+      return { success: true };
+    }
     if (sql.startsWith("DELETE FROM account_profiles")) {
       this.db.accountProfiles.delete(args[0]);
       return { success: true };
@@ -1016,6 +1054,20 @@ class MemoryD1Statement {
             };
           })
           .sort((left, right) => String(left.file_id).localeCompare(String(right.file_id)) || String(left.display_name).localeCompare(String(right.display_name))),
+      };
+    }
+    if (sql.includes("FROM canonical_doctors")) {
+      return {
+        results: [...this.db.canonicalDoctors.values()]
+          .filter((doctor) => !sql.includes("WHERE has_events = 1") || doctor.has_events === 1)
+          .sort((left, right) => left.display_name.localeCompare(right.display_name) || left.source_type.localeCompare(right.source_type)),
+      };
+    }
+    if (sql.includes("FROM custom_events")) {
+      return {
+        results: [...this.db.customEvents.values()]
+          .filter((event) => event.owner_email === args[0])
+          .sort((left, right) => left.start_date.localeCompare(right.start_date) || left.start_time.localeCompare(right.start_time) || left.title.localeCompare(right.title) || left.id.localeCompare(right.id)),
       };
     }
     if (sql.includes("FROM roster_events") && sql.includes("(roster_events.file_id = ? AND roster_events.doctor_key = ?)")) {
@@ -1395,6 +1447,7 @@ async function seedRepository(store, files) {
 }
 
 function seedD1Repository(db, files) {
+  db.canonicalDoctors.clear();
   for (const file of files) {
     db.files.set(file.id, {
       id: file.id,
