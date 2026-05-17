@@ -279,7 +279,6 @@ let calendarStoreStatus = null;
 let calendarStoreStatusError = "";
 let rosterSyncStates = new Map();
 let rosterSyncRefreshTimer = 0;
-let rosterSyncRetryTimer = 0;
 let lastRosterPersistence = null;
 let adminConsoleOpen = false;
 let adminConsoleLoading = false;
@@ -9703,7 +9702,6 @@ async function saveSelectedRosterFilesToD1(imports = selectedFiles, options = {}
   renderFileSurfaces();
   if (!summary.complete) {
     finishRosterSync();
-    scheduleFailedRosterRetry();
     const error = new Error(rosterPersistenceFailureMessage(summary));
     error.isRosterPersistenceError = true;
     throw error;
@@ -9730,18 +9728,6 @@ function finishRosterSync() {
     clearInterval(rosterSyncRefreshTimer);
     rosterSyncRefreshTimer = 0;
   }
-}
-
-function scheduleFailedRosterRetry() {
-  if (rosterSyncRetryTimer || ![...rosterSyncStates.values()].some((state) => state.status === "failed")) return;
-  rosterSyncRetryTimer = setTimeout(async () => {
-    rosterSyncRetryTimer = 0;
-    try {
-      await saveSelectedRosterFilesToD1(selectedFiles);
-    } catch {
-      // Keep failed states visible; a later save or explicit rebuild can retry again.
-    }
-  }, 5000);
 }
 
 function scheduleRosterSyncRefresh() {

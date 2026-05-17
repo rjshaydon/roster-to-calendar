@@ -1251,10 +1251,7 @@ async function calendarStoreStatus(store, db, options = {}) {
   const doctorCounts = await countDerivedDoctorsByFile(db, activeFiles.map((file) => file.id));
   const selectedDoctorKey = normalizeRosterName(options.doctorKey || "");
   const selectedDoctorRows = selectedDoctorKey
-    ? await resolveRosterFileDoctorRows(db, {
-        doctorKey: selectedDoctorKey,
-        doctorOptions: await creatorDoctorOptionsForD1(db, index),
-      })
+    ? await resolveSelectedRosterFileDoctorRows(db, selectedDoctorKey)
     : [];
   const selectedPairs = selectedDoctorRows.map((row) => ({ fileId: row.fileId, doctorKey: row.doctorKey }));
   const selectedCounts = await countDerivedEventsByFileDoctorPairs(db, selectedPairs);
@@ -1793,8 +1790,19 @@ async function creatorDoctorOptionsForD1(db, index) {
   return buildCreatorDoctorOptions(repositoryDoctorCandidatesFromIndex(index));
 }
 
-async function resolveRosterFileDoctorRows(db, options = {}) {
+async function resolveSelectedRosterFileDoctorRows(db, doctorKey) {
   const doctorRows = await queryRosterFileDoctors(db).catch(() => []);
+  if (!doctorRows.length) return [];
+  const selectedOption = await resolveCanonicalDoctorOptionForKey(db, doctorRows, doctorKey);
+  return await resolveRosterFileDoctorRows(db, {
+    doctorKey,
+    doctorRows,
+    doctorOptions: selectedOption ? [selectedOption] : [],
+  });
+}
+
+async function resolveRosterFileDoctorRows(db, options = {}) {
+  const doctorRows = options.doctorRows || await queryRosterFileDoctors(db).catch(() => []);
   if (!doctorRows.length) return [];
   const requestedKey = normalizeRosterName(options.doctorKey || "");
   const selectedOption = findDoctorOptionByKey(options.doctorOptions || [], requestedKey);

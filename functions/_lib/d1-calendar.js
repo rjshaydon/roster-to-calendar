@@ -319,7 +319,7 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
   if (!sourceType) return { ok: false, reason: "unsupported-source" };
   const safeDoctors = sanitizeFileDoctors(doctors, sourceType);
   const parsedAt = new Date().toISOString();
-  await db.prepare(`
+  const statements = [db.prepare(`
     INSERT INTO roster_files (id, name, source_type, active, size, last_modified, added_at, uploaded_at, uploaded_by, parsed_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
@@ -343,11 +343,13 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
     String(file.uploadedAt || ""),
     String(file.uploadedBy || ""),
     parsedAt,
-  ).run();
-  await db.prepare("DELETE FROM roster_file_doctors WHERE file_id = ?").bind(file.id).run();
-  await db.prepare("DELETE FROM roster_events WHERE file_id = ?").bind(file.id).run();
-  await bulkUpsertDoctors(db, sourceType, safeDoctors, parsedAt);
-  await bulkInsertFileDoctors(db, file.id, sourceType, safeDoctors);
+  )];
+  statements.push(
+    db.prepare("DELETE FROM roster_file_doctors WHERE file_id = ?").bind(file.id),
+    db.prepare("DELETE FROM roster_events WHERE file_id = ?").bind(file.id),
+    ...bulkUpsertDoctorStatements(db, sourceType, safeDoctors, parsedAt),
+    ...bulkInsertFileDoctorStatements(db, file.id, sourceType, safeDoctors),
+  );
   const eventRows = [];
   for (const doctor of safeDoctors) {
     const events = Array.isArray(eventsByDoctor?.[doctor.key]) ? eventsByDoctor[doctor.key] : [];
@@ -372,7 +374,8 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
       ]);
     }
   }
-  await bulkInsertEvents(db, eventRows);
+  statements.push(...bulkInsertEventStatements(db, eventRows));
+  await runTransactionalBatch(db, statements);
   return { ok: true, doctors: safeDoctors.length, events: eventRows.length };
 }
 
@@ -1480,39 +1483,62 @@ function mergeSources(leftSources, rightSources, leftSource, rightSource) {
 }
 
 async function bulkUpsertDoctors(db, sourceType, doctors, updatedAt) {
-  for (const chunk of chunkRows(doctors.map((doctor) => [sourceType, doctor.key, doctor.displayName, updatedAt]), 20)) {
-    if (!chunk.length) continue;
-    await db.prepare(`
+  for (const statement of bulkUpsertDoctorStatements(db, sourceType, doctors, updatedAt)) {
+    await statement.run();
+  }
+}
+
+function bulkUpsertDoctorStatements(db, sourceType, doctors, updatedAt) {
+  return chunkRows(doctors.map((doctor) => [sourceType, doctor.key, doctor.displayName, updatedAt]), 20)
+    .filter((chunk) => chunk.length)
+    .map((chunk) => db.prepare(`
       INSERT INTO roster_doctors (source_type, doctor_key, display_name, updated_at)
       VALUES ${chunk.map(() => "(?, ?, ?, ?)").join(", ")}
       ON CONFLICT(source_type, doctor_key) DO UPDATE SET
         display_name = excluded.display_name,
         updated_at = excluded.updated_at
-    `).bind(...chunk.flat()).run();
-  }
+    `).bind(...chunk.flat()));
 }
 
 async function bulkInsertFileDoctors(db, fileId, sourceType, doctors) {
-  for (const chunk of chunkRows(doctors.map((doctor) => [fileId, sourceType, doctor.key, doctor.displayName]), 20)) {
-    if (!chunk.length) continue;
-    await db.prepare(`
-      INSERT INTO roster_file_doctors (file_id, source_type, doctor_key, display_name)
-      VALUES ${chunk.map(() => "(?, ?, ?, ?)").join(", ")}
-      ON CONFLICT(file_id, source_type, doctor_key) DO UPDATE SET display_name = excluded.display_name
-    `).bind(...chunk.flat()).run();
+  for (const statement of bulkInsertFileDoctorStatements(db, fileId, sourceType, doctors)) {
+    await statement.run();
   }
 }
 
+function bulkInsertFileDoctorStatements(db, fileId, sourceType, doctors) {
+  return chunkRows(doctors.map((doctor) => [fileId, sourceType, doctor.key, doctor.displayName]), 20)
+    .filter((chunk) => chunk.length)
+    .map((chunk) => db.prepare(`
+      INSERT INTO roster_file_doctors (file_id, source_type, doctor_key, display_name)
+      VALUES ${chunk.map(() => "(?, ?, ?, ?)").join(", ")}
+      ON CONFLICT(file_id, source_type, doctor_key) DO UPDATE SET display_name = excluded.display_name
+    `).bind(...chunk.flat()));
+}
+
 async function bulkInsertEvents(db, rows) {
-  for (const chunk of chunkRows(rows, 5)) {
-    if (!chunk.length) continue;
-    await db.prepare(`
+  for (const statement of bulkInsertEventStatements(db, rows)) {
+    await statement.run();
+  }
+}
+
+function bulkInsertEventStatements(db, rows) {
+  return chunkRows(rows, 5)
+    .filter((chunk) => chunk.length)
+    .map((chunk) => db.prepare(`
       INSERT INTO roster_events (
         id, file_id, source_type, doctor_key, display_name, start_date, end_date, start_ts, end_ts,
         title, raw_value, seniority, location, all_day, time_label, event_json
       ) VALUES ${chunk.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ")}
-    `).bind(...chunk.flat()).run();
-  }
+    `).bind(...chunk.flat()));
+}
+
+async function runTransactionalBatch(db, statements) {
+  if (!statements.length) return [];
+  if (typeof db.batch === "function") return await db.batch(statements);
+  const results = [];
+  for (const statement of statements) results.push(await statement.run());
+  return results;
 }
 
 function chunkRows(rows, size) {

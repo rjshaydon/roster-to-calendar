@@ -93,6 +93,11 @@ assert.match(
   /resetTransientCalendarData\(\);\s*forceCreatorDoctorSession\(\);[\s\S]*restoreCloudState/,
   "returning to the creator should normalize the creator doctor before calendar events load",
 );
+assert.match(
+  await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"),
+  /async function calendarStoreStatus[\s\S]*resolveSelectedRosterFileDoctorRows\(db, selectedDoctorKey\)/,
+  "calendar status should resolve only the selected doctor instead of rebuilding every canonical option",
+);
 assert.match(appSource, /data-replace-active-rosters/, "creator UI should expose a roster recovery action");
 assert.match(appSource, /<strong>Roster database<\/strong>/, "system card should use plain roster-database language");
 assert.match(appSource, /source file\$\{retainedSourceTotal === 1 \? \"\" : \"s\"\} retained/, "system card should report retained raw source coverage");
@@ -120,7 +125,7 @@ assert.match(
   "D1 helpers should expose a narrow selected-doctor file lookup",
 );
 assert.match(appSource, /function rosterSyncSummary/, "system card should expose aggregate roster sync progress");
-assert.match(appSource, /function scheduleFailedRosterRetry/, "failed roster syncs should schedule targeted retries");
+assert.doesNotMatch(appSource, /function scheduleFailedRosterRetry/, "failed roster syncs should not schedule automatic retry storms");
 assert.match(appSource, /data-reparse-import/, "file cards should expose a visible reparse action");
 assert.match(appSource, /Reparse produced 0 events/, "zero-event reparses should remain visibly failed");
 assert.match(appSource, /formatted\.replace\(\/,\\s0\(\\d:\\d\{2\}\\s\?pm\)\$\/i, \", \$1\"\)/, "PM timestamps should drop their leading zero");
@@ -646,10 +651,36 @@ class MemoryD1 {
     this.doctorProfiles = new Map();
     this.consoleMessages = [];
     this.nextConsoleMessageId = 1;
+    this.failNextEventInsert = false;
   }
 
   prepare(sql) {
     return new MemoryD1Statement(this, sql);
+  }
+
+  async batch(statements) {
+    const snapshots = Object.fromEntries([
+      "files",
+      "doctors",
+      "fileDoctors",
+      "events",
+      "rawFiles",
+      "accountProfiles",
+      "accountClaims",
+      "accountStates",
+      "subscriptionTokens",
+      "parserRules",
+      "parserRuleSuggestions",
+      "doctorProfiles",
+    ].map((key) => [key, new Map(this[key])]));
+    try {
+      const results = [];
+      for (const statement of statements) results.push(await statement.run());
+      return results;
+    } catch (error) {
+      for (const [key, value] of Object.entries(snapshots)) this[key] = value;
+      throw error;
+    }
   }
 }
 
@@ -734,6 +765,10 @@ class MemoryD1Statement {
       return { success: true };
     }
     if (sql.startsWith("INSERT INTO roster_events")) {
+      if (this.db.failNextEventInsert) {
+        this.db.failNextEventInsert = false;
+        throw new Error("Injected event insert failure.");
+      }
       for (let index = 0; index < args.length; index += 16) {
         this.db.events.set(args[index], {
           id: args[index],
@@ -1536,6 +1571,40 @@ await postState(d1StateStore, {
   },
 }, d1Store);
 assert.ok(d1Store.events.size > 0, "D1 should contain derived roster events after creator save");
+const transactionalDb = new MemoryD1();
+const transactionalStore = new MemoryStore();
+await postState(transactionalStore, {
+  action: "login",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+}, transactionalDb);
+await postState(transactionalStore, {
+  action: "saveDerivedCalendarFile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  file: { id: "safe-refresh", name: "safe-refresh.xlsx", sourceType: "mmc" },
+  doctors: [{ key: "RICHARD HAYDON", displayName: "Richard HAYDON", sourceType: "mmc" }],
+  eventsByDoctor: {
+    "RICHARD HAYDON": [{ id: "original", source: "MMC", title: "Original", allDay: true, start: "2026-02-03", end: "2026-02-03", rawValue: "Original" }],
+  },
+}, transactionalDb);
+transactionalDb.failNextEventInsert = true;
+const failedRefresh = await postStateRaw(transactionalStore, {
+  action: "saveDerivedCalendarFile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  file: { id: "safe-refresh", name: "safe-refresh.xlsx", sourceType: "mmc" },
+  doctors: [{ key: "RICHARD HAYDON", displayName: "Richard HAYDON", sourceType: "mmc" }],
+  eventsByDoctor: {
+    "RICHARD HAYDON": [{ id: "replacement", source: "MMC", title: "Replacement", allDay: true, start: "2026-02-04", end: "2026-02-04", rawValue: "Replacement" }],
+  },
+}, transactionalDb);
+assert.equal(failedRefresh.response.ok, false, "injected replacement failure should surface");
+assert.deepEqual(
+  [...transactionalDb.events.values()].map((event) => event.title),
+  ["Original"],
+  "failed derived-file refresh should preserve the previous events transactionally",
+);
 const d1CreatorLogin = await postState(d1StateStore, {
   action: "login",
   email: "rhaydon@gmail.com",
