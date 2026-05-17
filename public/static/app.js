@@ -4818,16 +4818,10 @@ function buildCreatorDoctorOptions(options) {
 }
 
 function prioritizeDoctorOptions(options) {
-  const preferredDoctorKey = preferredDoctorKeyForCurrentAccount();
   return [...options].sort((left, right) => {
     const leftOwner = left.key === OWNER_DOCTOR_KEY ? 1 : 0;
     const rightOwner = right.key === OWNER_DOCTOR_KEY ? 1 : 0;
     if (leftOwner !== rightOwner) return rightOwner - leftOwner;
-    if (preferredDoctorKey) {
-      const leftPreferred = left.key === preferredDoctorKey ? 1 : 0;
-      const rightPreferred = right.key === preferredDoctorKey ? 1 : 0;
-      if (leftPreferred !== rightPreferred) return rightPreferred - leftPreferred;
-    }
     return left.displayName.localeCompare(right.displayName);
   });
 }
@@ -8763,6 +8757,7 @@ function sanitizeWorkspaceSnapshot(value) {
     fileRefs: Array.isArray(value.fileRefs) ? value.fileRefs.map(importRefForWorkspace).filter((item) => item.id) : [],
     subscriptionFeeds: value.subscriptionFeeds && typeof value.subscriptionFeeds === "object" ? JSON.parse(JSON.stringify(value.subscriptionFeeds)) : {},
     insightCache: sanitizeInsightCache(value.insightCache),
+    profileCoverage: value.profileCoverage && typeof value.profileCoverage === "object" ? JSON.parse(JSON.stringify(value.profileCoverage)) : null,
   };
 }
 

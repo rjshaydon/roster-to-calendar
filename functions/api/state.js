@@ -211,7 +211,7 @@ export async function onRequestPost(context) {
       return Response.json({
         ok: true,
         users: await listD1Users(context.env.ROSTER_DB),
-        availableDoctors: await repositoryDoctorCandidates(null, await loadRepositoryIndex(null, context.env.ROSTER_DB), context.env.ROSTER_DB),
+        availableDoctors: await repositoryDoctorCandidates(null, await loadRepositoryIndex(null, context.env.ROSTER_DB), context.env.ROSTER_DB, { hideZeroEventStandalone: true }),
         issueConfig: await buildIssueConfig(null, email, context.env.ROSTER_DB),
       });
     }
@@ -1786,9 +1786,9 @@ function doctorKeysForOption(doctor) {
 }
 
 async function creatorDoctorOptionsForD1(db, index) {
-  const d1Doctors = await queryRosterDoctors(db).catch(() => []);
-  const sourceDoctors = d1Doctors.length ? d1Doctors : repositoryDoctorCandidatesFromIndex(index);
-  return buildCreatorDoctorOptions(sourceDoctors);
+  const doctorRows = await queryRosterFileDoctors(db).catch(() => []);
+  if (doctorRows.length) return await buildCanonicalDoctorOptionsFromRows(db, doctorRows);
+  return buildCreatorDoctorOptions(repositoryDoctorCandidatesFromIndex(index));
 }
 
 async function resolveRosterFileDoctorRows(db, options = {}) {
@@ -2404,6 +2404,17 @@ function sanitizeSnapshotRecord(value) {
     detectedSources: sanitizeDetectedSources(value.detectedSources),
     fileRefs: sanitizeSnapshotFileRefs(value.fileRefs),
     subscriptionFeeds: sanitizeSubscriptionFeeds(value.subscriptionFeeds),
+    profileCoverage: sanitizeProfileCoverage(value.profileCoverage),
+  };
+}
+
+function sanitizeProfileCoverage(value) {
+  if (!value || typeof value !== "object") return null;
+  return {
+    matchedAliases: Array.isArray(value.matchedAliases) ? value.matchedAliases.map(rosterFileDoctorDiagnostic) : [],
+    matchedFiles: Array.isArray(value.matchedFiles) ? value.matchedFiles.map((item) => String(item || "")).filter(Boolean) : [],
+    zeroEventAliases: Array.isArray(value.zeroEventAliases) ? value.zeroEventAliases.map(rosterFileDoctorDiagnostic) : [],
+    absentSources: sanitizeSourceTypes(value.absentSources),
   };
 }
 
@@ -2654,20 +2665,31 @@ async function buildDerivedDoctorProfileSnapshot(store, db, profile) {
     ...defaultSettings(),
     ...(session.settings || {}),
   };
+  const doctorRows = await queryRosterFileDoctors(db).catch(() => []);
+  const canonicalDoctor = doctorRows.length ? await resolveCanonicalDoctorOptionForKey(db, doctorRows, profile.doctorKey) : null;
+  const doctorKeys = doctorKeysForOption(canonicalDoctor || profile);
+  const doctorDiagnostics = canonicalDoctor
+    ? doctorRows.filter((row) => doctorKeys.includes(normalizeRosterName(row.doctorKey)))
+    : await queryRosterFileDoctorsForKeys(db, doctorKeys);
+  const doctorPairs = doctorDiagnostics.map((row) => ({ fileId: row.fileId, doctorKey: row.doctorKey }));
   const events = [
-    ...applyEventOverrides(await queryDoctorEvents(db, [profile.doctorKey]), session.overrides || {}),
+    ...applyEventOverrides(
+      doctorPairs.length
+        ? await queryDoctorEventsForFileDoctorPairs(db, doctorPairs)
+        : await queryDoctorEvents(db, doctorKeys),
+      session.overrides || {},
+    ),
     ...customEventsToEvents(sanitizeSnapshotCustomEvents(session.customEvents, ""), settings),
   ];
   if (!events.length) return null;
   const index = await loadRepositoryIndex(store, db);
   const refs = await repositoryImportRefsForDoctorProfile(store, profile, db);
   const profileSources = sanitizeSourceTypes(profile.sourceTypes);
-  const d1Doctors = await queryRosterDoctors(db).catch(() => []);
-  const doctorOptions = buildCreatorDoctorOptions(
-    (d1Doctors.length ? d1Doctors : repositoryDoctorCandidatesFromIndex(index)).filter((doctor) => (
+  const doctorOptions = canonicalDoctor
+    ? [canonicalDoctor]
+    : buildCreatorDoctorOptions(repositoryDoctorCandidatesFromIndex(index).filter((doctor) => (
       doctor.key === profile.doctorKey || profileSources.includes(doctor.sourceType)
-    )),
-  );
+    )));
   return sanitizeSnapshotRecord({
     ownerType: "doctor-profile",
     ownerId: profile.profileId,
@@ -2690,6 +2712,7 @@ async function buildDerivedDoctorProfileSnapshot(store, db, profile) {
     fileRefs: refs,
     subscriptionFeeds: {},
     insightCache: null,
+    profileCoverage: doctorProfileCoverage(doctorRows, canonicalDoctor || profile, profileSources),
   });
 }
 
@@ -2738,11 +2761,13 @@ function matchRepositoryClaims(index, realName) {
   return mergeClaims([], claims);
 }
 
-async function repositoryDoctorCandidates(store, index, db = null) {
+async function repositoryDoctorCandidates(store, index, db = null, options = {}) {
   await ensureAccountMirrorCompleteFromKv(store, db).catch(() => false);
   const accountIndex = await loadClaimedAccountIndex(store, db);
-  const d1Doctors = await queryRosterDoctors(db).catch(() => []);
-  if (d1Doctors.length) return attachClaimedAccountMetadata(d1Doctors, accountIndex);
+  const doctorRows = await queryRosterFileDoctors(db).catch(() => []);
+  if (doctorRows.length) return attachClaimedAccountMetadata(await buildCanonicalDoctorOptionsFromRows(db, doctorRows, {
+    includeZeroEventStandalone: options.hideZeroEventStandalone !== true,
+  }), accountIndex);
   return attachClaimedAccountMetadata(repositoryDoctorCandidatesFromIndex(index), accountIndex);
 }
 
@@ -2757,7 +2782,10 @@ function attachClaimedAccountMetadata(doctors, accountIndex) {
     candidates.push({
       key: doctor.key,
       displayName: doctor.displayName,
-      sourceType: doctor.sourceType,
+      sourceType: doctor.sourceType || doctor.sourceTypes?.[0] || "",
+      sourceTypes: doctor.sourceTypes || [doctor.sourceType].filter(Boolean),
+      aliases: doctor.aliases || [],
+      hasEvents: doctor.hasEvents !== false,
       claimedBy: resolved.mode === "claimed-account" ? resolved.email : "",
       claimedByName: resolved.mode === "claimed-account" ? resolved.realName : "",
       accountEmail: resolved.mode === "claimed-account" ? resolved.email : "",
@@ -2802,6 +2830,7 @@ function buildCreatorDoctorOptions(doctors) {
       sourceType: doctor.sourceType,
       key: doctor.key,
       displayName: doctor.displayName,
+      eventCount: Number(doctor.eventCount || 0),
     });
   }
   return [...groups.values()].map((aliases) => {
@@ -2810,10 +2839,140 @@ function buildCreatorDoctorOptions(doctors) {
     return {
       key: primary.key,
       displayName: primary.displayName,
+      sourceType: primary.sourceType,
       sourceTypes: [...new Set(aliases.map((alias) => alias.sourceType))],
       aliases,
+      hasEvents: aliases.some((alias) => Number(alias.eventCount || 0) > 0),
     };
   }).sort((left, right) => left.displayName.localeCompare(right.displayName));
+}
+
+async function buildCanonicalDoctorOptionsFromRows(db, rows, options = {}) {
+  const exactGroups = new Map();
+  for (const row of rows || []) {
+    const identity = rosterIdentityKey(row.displayName || row.doctorKey);
+    if (!identity) continue;
+    if (!exactGroups.has(identity)) exactGroups.set(identity, []);
+    exactGroups.get(identity).push(row);
+  }
+  const groups = [...exactGroups.values()];
+  const eventCache = new Map();
+  const groupEvents = async (group) => {
+    const key = group.map((row) => row.doctorKey).sort().join("|");
+    if (!eventCache.has(key)) eventCache.set(key, queryDoctorEvents(db, [...new Set(group.map((row) => row.doctorKey))]));
+    return await eventCache.get(key);
+  };
+  for (let leftIndex = 0; leftIndex < groups.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < groups.length; rightIndex += 1) {
+      const left = groups[leftIndex];
+      const right = groups[rightIndex];
+      if (!isConservativeDoctorVariant(left, right)) continue;
+      if (groupsShareFile(left, right)) continue;
+      if (await groupsHaveConflictingWorkingEvents(await groupEvents(left), await groupEvents(right))) continue;
+      left.push(...right);
+      groups.splice(rightIndex, 1);
+      rightIndex -= 1;
+    }
+  }
+  return groups
+    .filter((aliases) => options.includeZeroEventStandalone === true || aliases.some((alias) => Number(alias.eventCount || 0) > 0))
+    .map(buildDoctorOptionFromRows)
+    .sort((left, right) => left.displayName.localeCompare(right.displayName));
+}
+
+async function resolveCanonicalDoctorOptionForKey(db, rows, doctorKey) {
+  const normalizedKey = normalizeRosterName(doctorKey || "");
+  if (!normalizedKey) return null;
+  const group = (rows || []).filter((row) => normalizeRosterName(row.doctorKey) === normalizedKey);
+  if (!group.length) return null;
+  const seen = new Set(group.map((row) => `${row.fileId}:${row.doctorKey}`));
+  let existingEvents = await queryDoctorEvents(db, [...new Set(group.map((row) => row.doctorKey))]);
+  for (const row of rows || []) {
+    const marker = `${row.fileId}:${row.doctorKey}`;
+    if (seen.has(marker) || !isConservativeDoctorVariant(group, [row]) || groupsShareFile(group, [row])) continue;
+    const candidateEvents = await queryDoctorEvents(db, [row.doctorKey]);
+    if (await groupsHaveConflictingWorkingEvents(existingEvents, candidateEvents)) continue;
+    group.push(row);
+    existingEvents = [...existingEvents, ...candidateEvents];
+    seen.add(marker);
+  }
+  return buildDoctorOptionFromRows(group);
+}
+
+function buildDoctorOptionFromRows(aliases) {
+  aliases.sort((left, right) => Number(right.eventCount || 0) - Number(left.eventCount || 0) || sourcePriority(left.sourceType) - sourcePriority(right.sourceType) || left.displayName.localeCompare(right.displayName));
+  const primary = aliases[0];
+  return {
+    key: primary.doctorKey,
+    displayName: primary.displayName,
+    sourceType: primary.sourceType,
+    sourceTypes: [...new Set(aliases.map((alias) => alias.sourceType))],
+    aliases: aliases.map((alias) => ({
+      sourceType: alias.sourceType,
+      key: alias.doctorKey,
+      displayName: alias.displayName,
+      fileId: alias.fileId,
+      fileName: alias.fileName,
+      eventCount: Number(alias.eventCount || 0),
+    })),
+    hasEvents: aliases.some((alias) => Number(alias.eventCount || 0) > 0),
+  };
+}
+
+function isConservativeDoctorVariant(leftRows, rightRows) {
+  const left = rosterNameTokens(leftRows[0]?.displayName || leftRows[0]?.doctorKey || "");
+  const right = rosterNameTokens(rightRows[0]?.displayName || rightRows[0]?.doctorKey || "");
+  if (left.length < 2 || right.length < 2 || left.length !== right.length) return false;
+  const leftGiven = left.slice(0, -1).join(" ");
+  const rightGiven = right.slice(0, -1).join(" ");
+  if (leftGiven !== rightGiven) return false;
+  return levenshteinDistance(left.at(-1), right.at(-1)) === 1;
+}
+
+function groupsShareFile(left, right) {
+  const files = new Set(left.map((row) => row.fileId));
+  return right.some((row) => files.has(row.fileId));
+}
+
+async function groupsHaveConflictingWorkingEvents(leftEvents, rightEvents) {
+  return leftEvents.some((left) => isWorkingRosterEvent(left) && rightEvents.some((right) => (
+    isWorkingRosterEvent(right)
+    && String(left.start || "") < String(right.end || right.start || "")
+    && String(right.start || "") < String(left.end || left.start || "")
+  )));
+}
+
+function isWorkingRosterEvent(event) {
+  const title = String(event?.title || "").toLowerCase();
+  return !["annual leave", "conference leave", "sick leave", "phnw", "public holiday"].some((label) => title.includes(label));
+}
+
+function levenshteinDistance(left, right) {
+  const a = String(left || "");
+  const b = String(right || "");
+  const table = Array.from({ length: a.length + 1 }, (_, row) => Array.from({ length: b.length + 1 }, (_, col) => row ? (col ? 0 : row) : col));
+  for (let row = 1; row <= a.length; row += 1) {
+    for (let col = 1; col <= b.length; col += 1) {
+      table[row][col] = Math.min(
+        table[row - 1][col] + 1,
+        table[row][col - 1] + 1,
+        table[row - 1][col - 1] + (a[row - 1] === b[col - 1] ? 0 : 1),
+      );
+    }
+  }
+  return table[a.length][b.length];
+}
+
+function doctorProfileCoverage(rows, doctor, sourceTypes) {
+  const keys = new Set(doctorKeysForOption(doctor));
+  const matched = (rows || []).filter((row) => keys.has(normalizeRosterName(row.doctorKey)));
+  const matchedSources = new Set(matched.map((row) => row.sourceType));
+  return {
+    matchedAliases: matched.map(rosterFileDoctorDiagnostic),
+    matchedFiles: [...new Set(matched.map((row) => row.fileId))],
+    zeroEventAliases: matched.filter((row) => Number(row.eventCount || 0) === 0).map(rosterFileDoctorDiagnostic),
+    absentSources: (sourceTypes || []).filter((source) => !matchedSources.has(source)),
+  };
 }
 
 function sourcePriority(sourceType) {

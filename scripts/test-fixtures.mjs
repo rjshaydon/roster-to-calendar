@@ -1018,6 +1018,29 @@ class MemoryD1Statement {
           .sort((left, right) => left.display_name.localeCompare(right.display_name) || left.start_ts.localeCompare(right.start_ts)),
       };
     }
+    if (sql.includes("FROM roster_file_doctors") && sql.includes("roster_file_doctors.file_id AS file_id")) {
+      const hasKeyFilter = sql.includes("roster_file_doctors.doctor_key IN");
+      const keys = new Set(args);
+      return {
+        results: [...this.db.fileDoctors.values()]
+          .filter((doctor) => this.db.files.get(doctor.file_id)?.active === 1)
+          .filter((doctor) => !hasKeyFilter || keys.has(doctor.doctor_key))
+          .map((doctor) => {
+            const file = this.db.files.get(doctor.file_id);
+            return {
+              file_id: doctor.file_id,
+              file_name: file?.name || "",
+              file_source_type: file?.source_type || doctor.source_type,
+              active: file?.active ?? 0,
+              source_type: doctor.source_type,
+              doctor_key: doctor.doctor_key,
+              display_name: doctor.display_name,
+              event_count: [...this.db.events.values()].filter((event) => event.file_id === doctor.file_id && event.doctor_key === doctor.doctor_key).length,
+            };
+          })
+          .sort((left, right) => String(left.file_name).localeCompare(String(right.file_name)) || left.display_name.localeCompare(right.display_name)),
+      };
+    }
     if (sql.includes("FROM roster_file_doctors") && sql.includes("DISTINCT")) {
       return {
         results: [...this.db.fileDoctors.values()]
@@ -1975,6 +1998,68 @@ assert.deepEqual(
   ["DDH Alias Shift", "MMC Alias Shift"],
   "calendar load should include all selected doctor alias keys across hospitals",
 );
+const typoAliasStore = new MemoryStore();
+const typoAliasDb = new MemoryD1();
+await postState(typoAliasStore, {
+  action: "login",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+}, typoAliasDb);
+await postState(typoAliasStore, {
+  action: "saveDerivedCalendarFile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  file: { id: "aeshan-mch", name: "aeshan-mch.xlsx", sourceType: "mch", active: true },
+  doctors: [{ key: "AESHAN KULARATNE", displayName: "Aeshan KULARATNE", sourceType: "mch" }],
+  eventsByDoctor: { "AESHAN KULARATNE": [{ id: "aeshan-mch-shift", source: "MCH", title: "MCH Shift", allDay: false, start: "2026-02-03T08:00:00", end: "2026-02-03T17:00:00", rawValue: "MCH Shift" }] },
+}, typoAliasDb);
+seedD1Repository(typoAliasDb, [
+  repositoryFile("aeshan-ddh", { sourceType: "ddh", doctors: [{ key: "AESHAN KULURATNE", displayName: "Aeshan KULURATNE", sourceType: "ddh" }] }),
+  repositoryFile("zero-only", { sourceType: "ddh", doctors: [{ key: "ZERO PERSON", displayName: "Zero PERSON", sourceType: "ddh" }] }),
+]);
+const typoDoctors = await postState(typoAliasStore, {
+  action: "listUsers",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+}, typoAliasDb);
+const aeshanOption = typoDoctors.availableDoctors.find((doctor) => doctor.displayName === "Aeshan KULARATNE");
+assert.ok(aeshanOption, "event-backed typo variants should keep the event-backed display name");
+assert.deepEqual(aeshanOption.aliases.map((alias) => alias.key).sort(), ["AESHAN KULARATNE", "AESHAN KULURATNE"]);
+assert.equal(typoDoctors.availableDoctors.some((doctor) => doctor.key === "ZERO PERSON"), false, "zero-event standalone identities should be hidden from the picker");
+const typoProfile = await postState(typoAliasStore, {
+  action: "loadDoctorProfile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  profileId: "AESHAN KULARATNE::ddh+mch",
+  doctorKey: "AESHAN KULARATNE",
+  displayName: "Aeshan KULARATNE",
+  sourceTypes: ["ddh", "mch"],
+}, typoAliasDb);
+assert.deepEqual(typoProfile.snapshot.preview.events.map((event) => event.title), ["MCH Shift"]);
+assert.equal(typoProfile.snapshot.profileCoverage.zeroEventAliases.length, 1);
+assert.deepEqual(typoProfile.snapshot.profileCoverage.absentSources, []);
+const conflictingAliasDb = new MemoryD1();
+const conflictingAliasStore = new MemoryStore();
+await postState(conflictingAliasStore, { action: "login", email: "rhaydon@gmail.com", password: creatorPassword }, conflictingAliasDb);
+for (const [fileId, sourceType, key, displayName] of [
+  ["aeshan-a", "mmc", "AESHAN KULARATNE", "Aeshan KULARATNE"],
+  ["aeshan-b", "mch", "AESHAN KULURATNE", "Aeshan KULURATNE"],
+]) {
+  await postState(conflictingAliasStore, {
+    action: "saveDerivedCalendarFile",
+    email: "rhaydon@gmail.com",
+    password: creatorPassword,
+    file: { id: fileId, name: `${fileId}.xlsx`, sourceType, active: true },
+    doctors: [{ key, displayName, sourceType }],
+    eventsByDoctor: { [key]: [{ id: `${fileId}-shift`, source: sourceType.toUpperCase(), title: `${displayName} Shift`, allDay: false, start: "2026-05-05T08:00:00", end: "2026-05-05T17:00:00", rawValue: "Shift" }] },
+  }, conflictingAliasDb);
+}
+const conflictingDoctors = await postState(conflictingAliasStore, {
+  action: "listUsers",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+}, conflictingAliasDb);
+assert.equal(conflictingDoctors.availableDoctors.filter((doctor) => doctor.key === "AESHAN KULARATNE" || doctor.key === "AESHAN KULURATNE").length, 2, "overlapping working shifts should block typo merges");
 const fourRosterStore = new MemoryStore();
 const fourRosterDb = new MemoryD1();
 await postState(fourRosterStore, {
