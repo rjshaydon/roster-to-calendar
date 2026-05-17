@@ -107,8 +107,8 @@ assert.doesNotMatch(
 );
 assert.match(
   appSource.match(/async function restoreCloudState[\s\S]*?async function restoreDoctorProfileState/)?.[0] || "",
-  /if \(!adminTargetEmail && currentUserEmail !== OWNER_EMAIL && data\.created === true\)[\s\S]*resolveCurrentAccountClaims\(\)[\s\S]*void loadServerUsers\(\)/,
-  "claim resolution and creator user-list hydration should happen outside the login request itself",
+  /if \(!adminTargetEmail && currentUserEmail !== OWNER_EMAIL\)[\s\S]*resolveCurrentAccountClaims\(\)[\s\S]*loadCloudCalendarEvents[\s\S]*void loadServerUsers\(\)/,
+  "claim resolution should finish before user calendars load, while creator user-list hydration remains non-blocking",
 );
 assert.match(
   appSource.match(/function buildResolvedPreviewEvents[\s\S]*?function latestPreviewEventsByIdentity/)?.[0] || "",

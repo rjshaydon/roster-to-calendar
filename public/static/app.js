@@ -9030,16 +9030,13 @@ async function restoreCloudState(options = {}) {
     });
     const data = await readJsonResponse(response, "Login failed.");
     await applyCloudStateData(data);
-    if (!adminTargetEmail && currentUserEmail !== OWNER_EMAIL && data.created === true) {
+    if (!adminTargetEmail && currentUserEmail !== OWNER_EMAIL) {
       await resolveCurrentAccountClaims();
     }
     if (!adminTargetEmail && currentUserEmail === OWNER_EMAIL) {
       forceCreatorDoctorSession();
     }
     await loadCloudCalendarEvents({ adminTargetEmail });
-    if (!adminTargetEmail && currentUserEmail !== OWNER_EMAIL && data.created !== true) {
-      void resolveCurrentAccountClaims().catch(() => {});
-    }
     if (isCreatorAuthenticated()) {
       void loadServerUsers();
     }
