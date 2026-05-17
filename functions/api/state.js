@@ -428,14 +428,16 @@ export async function onRequestPost(context) {
       }
       const targetRecord = await loadAccountMirror(context.env.ROSTER_DB, targetEmail);
       if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
-      const index = await loadRepositoryIndex(null, context.env.ROSTER_DB);
+      const canonicalDoctors = await queryCanonicalDoctors(context.env.ROSTER_DB).catch(() => []);
+      const index = canonicalDoctors.length ? null : await loadRepositoryIndex(null, context.env.ROSTER_DB);
       const claims = sanitizeClaims((body?.claims || [])
-        .map((claim) => findRepositoryDoctor(index, claim))
+        .map((claim) => findDoctorClaimCandidate(canonicalDoctors, index, claim))
         .filter(Boolean)
         .map((claim) => ({ ...claim, matchedAt: new Date().toISOString() })));
+      const d1Refs = await d1RepositoryImportRefsForClaims(context.env.ROSTER_DB, claims);
       const state = {
         ...sanitizeState(targetRecord.state),
-        imports: repositoryImportRefsForClaims(index, claims),
+        imports: d1Refs.length ? d1Refs : repositoryImportRefsForClaims(index, claims),
       };
       const updated = {
         ...targetRecord,
@@ -464,10 +466,11 @@ export async function onRequestPost(context) {
         key: normalizeRosterName(body?.claim?.key || ""),
       };
       const claims = sanitizeClaims(targetRecord.claims).filter((claim) => !(claim.sourceType === rawClaim.sourceType && claim.key === rawClaim.key));
-      const index = await loadRepositoryIndex(null, context.env.ROSTER_DB);
+      const d1Refs = await d1RepositoryImportRefsForClaims(context.env.ROSTER_DB, claims);
+      const index = d1Refs.length ? null : await loadRepositoryIndex(null, context.env.ROSTER_DB);
       const state = {
         ...sanitizeState(targetRecord.state),
-        imports: repositoryImportRefsForClaims(index, claims),
+        imports: d1Refs.length ? d1Refs : repositoryImportRefsForClaims(index, claims),
       };
       const updated = {
         ...targetRecord,
