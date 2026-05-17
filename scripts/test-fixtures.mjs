@@ -93,6 +93,11 @@ assert.match(
   /resetTransientCalendarData\(\);\s*forceCreatorDoctorSession\(\);[\s\S]*restoreCloudState/,
   "returning to the creator should normalize the creator doctor before calendar events load",
 );
+assert.match(
+  appSource.match(/function buildResolvedPreviewEvents[\s\S]*?function latestPreviewEventsByIdentity/)?.[0] || "",
+  /previewCustomEventIds[\s\S]*customEventsMaterialized === true && previewCustomEventIds\.has\(event\.id\)/,
+  "D1-loaded previews should merge newly added local custom events that were not in the server snapshot",
+);
 assert.match(appSource, /data-admin-user-seniority-filter/, "admin users should expose a seniority filter");
 assert.doesNotMatch(
   appSource.match(/async function deleteAccount[\s\S]*?function deleteLocalAccountData/)?.[0] || "",

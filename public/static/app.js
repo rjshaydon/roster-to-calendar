@@ -2145,10 +2145,15 @@ function buildResolvedPreviewEvents(baseData) {
     if (!include) continue;
     events.push(buildEventOverridePatch(event, item, override));
   }
-  if (baseData.customEventsMaterialized !== true) {
-    for (const event of customEventsForActiveCalendar()) {
-      events.push(customEventToPreviewEvent(event));
-    }
+  const previewCustomEventIds = new Set(
+    (baseData.events || [])
+      .filter((event) => String(event?.source || "").toLowerCase() === "custom")
+      .map((event) => String(event.id || ""))
+      .filter(Boolean),
+  );
+  for (const event of customEventsForActiveCalendar()) {
+    if (baseData.customEventsMaterialized === true && previewCustomEventIds.has(event.id)) continue;
+    events.push(customEventToPreviewEvent(event));
   }
   const dedupedEvents = latestPreviewEventsByIdentity(events);
   dedupedEvents.sort(comparePreviewEvents);
