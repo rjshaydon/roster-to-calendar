@@ -75,7 +75,8 @@ export async function onRequestPost(context) {
     }
     if (action === "login") {
       const account = await loadOrCreateD1Account(context.env.ROSTER_DB, email, password, { mode, realName });
-      const prepared = await prepareAccountResponse(null, account.record, { db: context.env.ROSTER_DB, includeAvailableDoctors: account.record.role !== "creator" && account.record.role !== "owner" });
+      const loginRecord = await autoClaimMatchedRosterNames(null, account.record, context.env.ROSTER_DB);
+      const prepared = await prepareAccountResponse(null, loginRecord, { db: context.env.ROSTER_DB, includeAvailableDoctors: loginRecord.role !== "creator" && loginRecord.role !== "owner" });
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -179,6 +180,9 @@ export async function onRequestPost(context) {
         return Response.json({ error: "Roster name was not found in the repository." }, { status: 400 });
       }
       const claims = mergeClaims(targetRecord.claims, [{ ...claim, matchedAt: new Date().toISOString() }]);
+      const updatedAdminIssues = claimMatchesAccountIdentity(claim, targetRecord.realName || "")
+        ? targetRecord.adminIssues
+        : mergeAdminIssues(targetRecord.adminIssues, [manualRosterClaimIssue(targetRecord, claim)]);
       const state = {
         ...sanitizeState(targetRecord.state),
         imports: repositoryImportRefsForClaims(index, claims),
@@ -187,6 +191,7 @@ export async function onRequestPost(context) {
         ...targetRecord,
         email: claimEmail,
         claims,
+        adminIssues: updatedAdminIssues,
         state,
         updatedAt: new Date().toISOString(),
       };
@@ -390,8 +395,7 @@ export async function onRequestPost(context) {
       const claims = sanitizeClaims((body?.claims || [])
         .map((claim) => findRepositoryDoctor(index, claim))
         .filter(Boolean)
-        .map((claim) => ({ ...claim, matchedAt: new Date().toISOString() })))
-        .filter((claim) => claimMatchesAccountIdentity(claim, targetRecord.realName || ""));
+        .map((claim) => ({ ...claim, matchedAt: new Date().toISOString() })));
       const state = {
         ...sanitizeState(targetRecord.state),
         imports: repositoryImportRefsForClaims(index, claims),
@@ -1407,6 +1411,24 @@ async function reportSupersessionAmbiguity(db, ambiguousPairs = [], uploaderEmai
   });
 }
 
+function manualRosterClaimIssue(record, claim) {
+  const now = new Date().toISOString();
+  const displayName = String(claim?.displayName || claim?.key || "").trim();
+  const source = String(claim?.sourceType || "").toUpperCase() || "MMC";
+  const accountName = String(record?.realName || record?.email || "").trim();
+  return {
+    id: `identity-claim:${normalizeEmail(record?.email)}:${claim?.sourceType || ""}:${claim?.key || ""}`,
+    message: `${accountName || record?.email || "User"} manually linked roster name ${displayName || claim?.key || "Unknown"}.`,
+    source,
+    seniority: "Unknown",
+    rawValue: `Manual roster claim review: ${accountName || record?.email || ""} -> ${displayName || claim?.key || ""}`,
+    fingerprint: `${source}::Unknown::Manual roster claim review::${normalizeEmail(record?.email)}::${claim?.sourceType || ""}:${claim?.key || ""}`,
+    firstSeenAt: now,
+    lastSeenAt: now,
+    count: 1,
+  };
+}
+
 async function syncAccountMirrorFromKv(store, db, options = {}) {
   if (!db?.prepare) return 0;
   const targetEmail = normalizeEmail(options.email || "");
@@ -1462,7 +1484,7 @@ async function countKvDoctorProfileRecords(store) {
 }
 
 async function userSummaryFromRecord(email, record, options = {}) {
-  const claims = sanitizeClaims(record?.claims).filter((claim) => claimMatchesAccountIdentity(claim, record?.realName || ""));
+  const claims = sanitizeClaims(record?.claims);
   const adminIssues = sanitizeAdminIssues(record?.adminIssues);
   const seniorities = options.db
     ? await queryDoctorSeniorities(options.db, claims.map((claim) => claim.key)).catch(() => [])
@@ -1512,7 +1534,6 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
 
   if (role !== "creator" && role !== "owner") {
     const originalClaims = claims;
-    claims = claims.filter((claim) => claimMatchesAccountIdentity(claim, record.realName || ""));
     const matchedClaims = matchRepositoryClaims(index, record.realName || "");
     nameMatches = matchedClaims.filter((claim) => !claims.some((existing) => sameClaim(existing, claim)));
     linkedProfiles = await linkedDoctorProfilesForClaims(store, claims, options.db);
@@ -2768,7 +2789,7 @@ function matchRepositoryClaims(index, realName) {
   for (const file of index.files || []) {
     if (file.active === false) continue;
     for (const doctor of sanitizeRepositoryDoctors(file.doctors)) {
-      if (rosterIdentityKey(doctor.displayName || doctor.key) !== realIdentity) continue;
+      if (!doctorMatchesRealName(doctor, realName)) continue;
       claims.push({
         key: doctor.key,
         displayName: doctor.displayName,
@@ -3228,9 +3249,11 @@ function sameClaim(left, right) {
 }
 
 function claimMatchesAccountIdentity(claim, realName) {
-  const realIdentity = rosterIdentityKey(realName);
-  if (!realIdentity) return true;
-  return rosterIdentityKey(claim?.displayName || claim?.key || "") === realIdentity;
+  if (!rosterIdentityKey(realName)) return true;
+  return doctorMatchesRealName({
+    key: normalizeRosterName(claim?.key || ""),
+    displayName: String(claim?.displayName || claim?.key || "").trim(),
+  }, realName);
 }
 
 function doctorMatchesRealName(doctor, realName) {

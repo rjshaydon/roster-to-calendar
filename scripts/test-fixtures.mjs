@@ -2676,9 +2676,9 @@ const michaelDirectLogin = await postState(michaelStateStore, {
   email: "michael@example.com",
   password: "michael-password",
 });
-assert.deepEqual(michaelDirectLogin.state.imports.map((item) => item.repoId).sort(), ["michael-mmc"]);
-assert.equal(michaelDirectLogin.claims.some((claim) => claim.sourceType === "mch" && claim.key === "DR MICHAEL COMAN"), false);
-assert.ok(michaelDirectLogin.suggestedClaims.some((claim) => claim.sourceType === "mch" && claim.key === "DR MICHAEL COMAN"));
+assert.deepEqual(michaelDirectLogin.state.imports.map((item) => item.repoId).sort(), ["michael-mch", "michael-mmc"]);
+assert.equal(michaelDirectLogin.claims.some((claim) => claim.sourceType === "mch" && claim.key === "DR MICHAEL COMAN"), true);
+assert.equal(michaelDirectLogin.suggestedClaims.some((claim) => claim.sourceType === "mch" && claim.key === "DR MICHAEL COMAN"), false);
 await postState(michaelStateStore, {
   action: "setAccountRosterClaims",
   email: "rhaydon@gmail.com",
@@ -2757,8 +2757,8 @@ const michaelRecreatedResolution = await postState(michaelStateStore, {
     sourceTypes: ["mch"],
   },
 });
-assert.equal(michaelRecreatedResolution.mode, "doctor-profile");
-assert.equal(michaelRecreatedResolution.email, "");
+assert.equal(michaelRecreatedResolution.mode, "claimed-account");
+assert.equal(michaelRecreatedResolution.email, "michael@example.com");
 
 const identityStore = new MemoryStore();
 identityStore.d1 = new MemoryD1();
@@ -2773,6 +2773,7 @@ seedD1Repository(identityStore.d1, [
     doctors: [
       { key: "AARON BADWAL", displayName: "Aaron BADWAL", sourceType: "ddh" },
       { key: "ANDREA LIM", displayName: "Andrea LIM", sourceType: "ddh" },
+      { key: "ABI THANIKASALAM", displayName: "Abi THANIKASALAM", sourceType: "ddh" },
     ],
   }),
   repositoryFile("identity-mch", {
@@ -2780,6 +2781,14 @@ seedD1Repository(identityStore.d1, [
     doctors: [{ key: "DR ANDREA LIM", displayName: "Dr Andrea LIM", sourceType: "mch" }],
   }),
 ]);
+const abiAutoClaim = await postState(identityStore, {
+  action: "login",
+  email: "abi@example.com",
+  password: "abi-password",
+  mode: "create",
+  realName: "Abirama Thanikasalam",
+});
+assert.deepEqual(abiAutoClaim.claims.map((claim) => `${claim.sourceType}:${claim.key}`), ["ddh:ABI THANIKASALAM"]);
 const andreaLogin = await postState(identityStore, {
   action: "login",
   email: "andrea@example.com",
@@ -2787,9 +2796,9 @@ const andreaLogin = await postState(identityStore, {
   mode: "create",
   realName: "Andrea LIM",
 });
-assert.deepEqual(andreaLogin.claims, []);
-assert.deepEqual(andreaLogin.state.imports, []);
-assert.deepEqual(andreaLogin.suggestedClaims.map((claim) => `${claim.sourceType}:${claim.key}`).sort(), ["ddh:ANDREA LIM", "mch:DR ANDREA LIM"]);
+assert.deepEqual(andreaLogin.claims.map((claim) => `${claim.sourceType}:${claim.key}`).sort(), ["ddh:ANDREA LIM", "mch:DR ANDREA LIM"]);
+assert.deepEqual(andreaLogin.state.imports.map((item) => item.repoId).sort(), ["identity-ddh", "identity-mch"]);
+assert.deepEqual(andreaLogin.suggestedClaims, []);
 const barryLogin = await postState(identityStore, {
   action: "login",
   email: "barry@example.com",
@@ -2813,20 +2822,30 @@ const aaronAfterBadBarryClaim = await postState(identityStore, {
   password: creatorPassword,
   doctor: { sourceType: "ddh", key: "AARON BADWAL", displayName: "Aaron BADWAL" },
 });
-assert.equal(aaronAfterBadBarryClaim.mode, "doctor-profile");
+assert.equal(aaronAfterBadBarryClaim.mode, "claimed-account");
 const usersAfterBadBarryClaim = await postState(identityStore, {
   action: "listUsers",
   email: "rhaydon@gmail.com",
   password: creatorPassword,
 });
-assert.deepEqual(usersAfterBadBarryClaim.users.find((user) => user.email === "barry@example.com")?.claims || [], []);
+assert.deepEqual(usersAfterBadBarryClaim.users.find((user) => user.email === "barry@example.com")?.claims.map((claim) => `${claim.sourceType}:${claim.key}`) || [], ["ddh:AARON BADWAL"]);
 const barryAfterBadClaim = await postState(identityStore, {
   action: "login",
   email: "barry@example.com",
   password: "barry-password",
 });
-assert.deepEqual(barryAfterBadClaim.claims, []);
-assert.deepEqual(barryAfterBadClaim.state.imports, []);
+assert.deepEqual(barryAfterBadClaim.claims.map((claim) => `${claim.sourceType}:${claim.key}`), ["ddh:AARON BADWAL"]);
+assert.deepEqual(barryAfterBadClaim.state.imports.map((item) => item.repoId), ["identity-ddh"]);
+await postState(identityStore, {
+  action: "claimRosterName",
+  email: "barry@example.com",
+  password: "barry-password",
+  claim: { sourceType: "ddh", key: "AARON BADWAL" },
+});
+assert.ok(
+  memoryD1AccountRecord(identityStore.d1, "barry@example.com").adminIssues.some((issue) => issue.rawValue.includes("Manual roster claim review")),
+  "mismatched manual claims should create a Creator review issue",
+);
 await postState(identityStore, {
   action: "setAccountRosterClaims",
   email: "rhaydon@gmail.com",
