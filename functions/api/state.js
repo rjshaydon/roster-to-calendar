@@ -79,8 +79,11 @@ export async function onRequestPost(context) {
     }
     if (action === "login") {
       const account = await loadOrCreateD1Account(context.env.ROSTER_DB, email, password, { mode, realName });
-      const loginRecord = await autoClaimMatchedRosterNames(null, account.record, context.env.ROSTER_DB);
-      const prepared = await prepareAccountResponse(null, loginRecord, { db: context.env.ROSTER_DB, includeAvailableDoctors: loginRecord.role !== "creator" && loginRecord.role !== "owner" });
+      const loginRecord = account.created
+        ? await autoClaimMatchedCanonicalDoctors(account.record, context.env.ROSTER_DB)
+        : account.record;
+      if (loginRecord !== account.record) await upsertAccountMirror(context.env.ROSTER_DB, loginRecord);
+      const prepared = await prepareLightweightAccountResponse(loginRecord, { db: context.env.ROSTER_DB });
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -89,16 +92,16 @@ export async function onRequestPost(context) {
         realName: prepared.realName,
         state: prepared.state,
         claims: prepared.claims,
-        nameMatches: prepared.nameMatches,
-        suggestedClaims: prepared.nameMatches,
-        availableDoctors: prepared.availableDoctors,
+        nameMatches: [],
+        suggestedClaims: [],
+        availableDoctors: [],
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
         snapshot: null,
         snapshotAvailable: false,
         snapshotStale: false,
         snapshotBuiltAt: "",
-        issueConfig: prepared.issueConfig,
+        issueConfig: null,
       });
     }
 
@@ -122,10 +125,9 @@ export async function onRequestPost(context) {
         mode: "create",
         realName: targetRealName,
       });
-      const createdRecord = await autoClaimMatchedRosterNames(null, created.record, context.env.ROSTER_DB);
+      const createdRecord = await autoClaimMatchedCanonicalDoctors(created.record, context.env.ROSTER_DB);
       await upsertAccountMirror(context.env.ROSTER_DB, createdRecord);
-      const createdClaims = sanitizeClaims(createdRecord.claims)
-        .filter((claim) => claimMatchesAccountIdentity(claim, createdRecord.realName || ""));
+      const createdClaims = sanitizeClaims(createdRecord.claims);
       const createdRole = createdRecord.role || roleForEmail(targetEmail);
       const createdSeniorities = await queryDoctorSeniorities(context.env.ROSTER_DB, createdClaims.map((claim) => claim.key)).catch(() => []);
       return Response.json({
@@ -144,6 +146,32 @@ export async function onRequestPost(context) {
           createdAt: created.record.createdAt || "",
           updatedAt: created.record.updatedAt || "",
         },
+      });
+    }
+
+    if (action === "resolveAccountClaims") {
+      const targetRecord = targetEmail && (account.role === "creator" || account.role === "owner")
+        ? await loadAccountMirror(context.env.ROSTER_DB, targetEmail)
+        : account.record;
+      if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
+      const resolved = await autoClaimMatchedRosterNames(null, targetRecord, context.env.ROSTER_DB);
+      const prepared = await prepareAccountResponse(null, resolved, {
+        db: context.env.ROSTER_DB,
+        includeAvailableDoctors: resolved.role !== "creator" && resolved.role !== "owner",
+      });
+      return Response.json({
+        ok: true,
+        cloudAvailable: true,
+        role: prepared.role,
+        realName: prepared.realName,
+        state: prepared.state,
+        claims: prepared.claims,
+        nameMatches: [],
+        suggestedClaims: [],
+        availableDoctors: prepared.availableDoctors,
+        subscription: prepared.subscription,
+        insightsEnabled: prepared.insightsEnabled,
+        issueConfig: prepared.issueConfig,
       });
     }
 
@@ -934,10 +962,7 @@ export async function onRequestPost(context) {
       const targetRecord = targetEmail && (account.role === "creator" || account.role === "owner")
         ? await loadAccountMirror(context.env.ROSTER_DB, targetEmail)
         : account.record;
-      const prepared = await prepareAccountResponse(null, targetRecord, {
-        db: context.env.ROSTER_DB,
-        includeAvailableDoctors: false,
-      });
+      const prepared = await prepareLightweightAccountResponse(targetRecord, { db: context.env.ROSTER_DB });
       const requestedRange = boundedCalendarEventRange({
         startDate: body?.startDate,
         endDate: body?.endDate,
@@ -1230,9 +1255,13 @@ async function listD1Users(db) {
 async function autoClaimMatchedRosterNames(store, record, db = null) {
   const role = record?.role || roleForEmail(record?.email || "");
   if (!record?.email || role === "creator" || role === "owner") return record;
-  const index = await loadRepositoryIndex(store, db);
-  const claims = mergeClaims(sanitizeClaims(record.claims), matchRepositoryClaims(index, record.realName || ""));
+  const canonicalDoctors = await queryCanonicalDoctors(db).catch(() => []);
+  const matchedClaims = canonicalDoctors.length
+    ? matchDoctorClaims(canonicalDoctors, record.realName || "")
+    : matchRepositoryClaims(await loadRepositoryIndex(store, db), record.realName || "");
+  const claims = mergeClaims(sanitizeClaims(record.claims), matchedClaims);
   if (!claims.length || JSON.stringify(claims) === JSON.stringify(sanitizeClaims(record.claims))) return record;
+  const index = await loadRepositoryIndex(store, db);
   const state = {
     ...sanitizeState(record.state),
     imports: repositoryImportRefsForClaims(index, claims),
@@ -1246,6 +1275,20 @@ async function autoClaimMatchedRosterNames(store, record, db = null) {
   if (store?.put) await store.put(storageKey(record.email), JSON.stringify(updated));
   await upsertAccountMirror(db, updated).catch(() => null);
   return updated;
+}
+
+async function autoClaimMatchedCanonicalDoctors(record, db = null) {
+  const role = record?.role || roleForEmail(record?.email || "");
+  if (!record?.email || role === "creator" || role === "owner") return record;
+  const canonicalDoctors = await queryCanonicalDoctors(db).catch(() => []);
+  const indexedDoctors = canonicalDoctors.length ? canonicalDoctors : await queryRosterDoctors(db).catch(() => []);
+  const claims = mergeClaims(sanitizeClaims(record.claims), matchDoctorClaims(indexedDoctors, record.realName || ""));
+  if (!claims.length || JSON.stringify(claims) === JSON.stringify(sanitizeClaims(record.claims))) return record;
+  return {
+    ...record,
+    claims,
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 async function rebuildCalendarStoreFromRepository(store, db, options = {}) {
@@ -1521,6 +1564,47 @@ function insightsEnabledForRecord(record) {
   const role = record?.role || roleForEmail(normalizeEmail(record?.email));
   if (role === "creator" || role === "owner") return true;
   return record?.insightsEnabled === true;
+}
+
+async function prepareLightweightAccountResponse(rawRecord, options = {}) {
+  const record = rawRecord;
+  const role = record.role || roleForEmail(record.email);
+  let state = sanitizeState(record.state);
+  const mirroredState = await loadAccountStateMirror(options.db, record.email).catch(() => null);
+  if (mirroredState?.session) {
+    state = {
+      ...state,
+      session: {
+        ...state.session,
+        ...mirroredState.session,
+      },
+    };
+  }
+  const d1CustomEvents = await queryAccountCustomEvents(options.db, record.email).catch(() => []);
+  if (d1CustomEvents.length) {
+    state = {
+      ...state,
+      session: {
+        ...state.session,
+        customEvents: latestCustomEventsByIdentity([
+          ...sanitizeSnapshotCustomEvents(state.session?.customEvents, record.email),
+          ...d1CustomEvents,
+        ]),
+      },
+    };
+  }
+  const claims = sanitizeClaims(record.claims);
+  return {
+    role,
+    realName: record.realName || "",
+    state: applyDefaultSelectedDoctorToState(state, role, claims),
+    claims,
+    subscription: {
+      token: String(record.subscriptionToken || ""),
+      enabled: false,
+    },
+    insightsEnabled: insightsEnabledForRecord(record),
+  };
 }
 
 export async function prepareAccountResponse(store, rawRecord, options = {}) {
@@ -2823,17 +2907,21 @@ async function storeSnapshotForDoctorProfile(store, profile, snapshot) {
 }
 
 function matchRepositoryClaims(index, realName) {
+  return matchDoctorClaims(repositoryDoctorCandidatesFromIndex(index), realName);
+}
+
+function matchDoctorClaims(doctors, realName) {
   const claims = [];
   const realIdentity = rosterIdentityKey(realName);
   if (!realIdentity) return claims;
-  for (const file of index.files || []) {
-    if (file.active === false) continue;
-    for (const doctor of sanitizeRepositoryDoctors(file.doctors)) {
-      if (!doctorMatchesRealName(doctor, realName)) continue;
+  for (const doctor of doctors || []) {
+    if (!doctorMatchesRealName(doctor, realName)) continue;
+    const aliases = Array.isArray(doctor.aliases) && doctor.aliases.length ? doctor.aliases : [doctor];
+    for (const alias of aliases) {
       claims.push({
-        key: doctor.key,
-        displayName: doctor.displayName,
-        sourceType: doctor.sourceType,
+        key: alias.key || doctor.key,
+        displayName: alias.displayName || doctor.displayName,
+        sourceType: alias.sourceType || doctor.sourceType,
         matchedAt: new Date().toISOString(),
       });
     }

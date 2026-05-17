@@ -93,6 +93,23 @@ assert.match(
   /resetTransientCalendarData\(\);\s*forceCreatorDoctorSession\(\);[\s\S]*restoreCloudState/,
   "returning to the creator should normalize the creator doctor before calendar events load",
 );
+assert.doesNotMatch(
+  (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
+    .match(/if \(action === "login"\)[\s\S]*?const account = await verifyD1Account/)?.[0] || "",
+  /autoClaimMatchedRosterNames|prepareAccountResponse|loadRepositoryIndex|buildIssueConfig/,
+  "login should stay lightweight and avoid broad account hydration",
+);
+assert.doesNotMatch(
+  (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
+    .match(/if \(action === "adminCreateUser"\)[\s\S]*?if \(action === "resolveAccountClaims"\)/)?.[0] || "",
+  /autoClaimMatchedRosterNames|prepareAccountResponse|loadRepositoryIndex|buildIssueConfig/,
+  "admin user creation should stay lightweight and avoid broad account hydration",
+);
+assert.match(
+  appSource.match(/async function restoreCloudState[\s\S]*?async function restoreDoctorProfileState/)?.[0] || "",
+  /if \(!adminTargetEmail && currentUserEmail !== OWNER_EMAIL && data\.created === true\)[\s\S]*resolveCurrentAccountClaims\(\)[\s\S]*void loadServerUsers\(\)/,
+  "claim resolution and creator user-list hydration should happen outside the login request itself",
+);
 assert.match(
   appSource.match(/function buildResolvedPreviewEvents[\s\S]*?function latestPreviewEventsByIdentity/)?.[0] || "",
   /activeCustomEventIds[\s\S]*!activeCustomEventIds\.has\(event\.id\)[\s\S]*previewCustomEventIds[\s\S]*customEventsMaterialized === true && previewCustomEventIds\.has\(event\.id\)/,
@@ -2031,7 +2048,12 @@ const d1NoKvIndexCalendar = await postState(d1StateStore, {
   password: "d1-password",
 }, d1Store);
 assert.equal(d1NoKvIndexCalendar.snapshot?.preview?.derivedFromD1, true, "D1 account calendar load should work without KV repository index");
-assert.ok(d1NoKvIndexLogin.availableDoctors.some((doctor) => doctor.key === d1Doctor.key), "D1 doctor directory should load without KV repository index");
+const d1NoKvIndexEnrichment = await postState(d1StateStore, {
+  action: "resolveAccountClaims",
+  email: "d1-user@example.com",
+  password: "d1-password",
+}, d1Store);
+assert.ok(d1NoKvIndexEnrichment.availableDoctors.some((doctor) => doctor.key === d1Doctor.key), "D1 doctor directory should load outside the login hot path without KV repository index");
 const d1ClaimResolution = await postState(d1StateStore, {
   action: "resolveDoctorAccount",
   email: "rhaydon@gmail.com",
@@ -2761,9 +2783,14 @@ const michaelDirectLogin = await postState(michaelStateStore, {
   email: "michael@example.com",
   password: "michael-password",
 });
-assert.deepEqual(michaelDirectLogin.state.imports.map((item) => item.repoId).sort(), ["michael-mch", "michael-mmc"]);
-assert.equal(michaelDirectLogin.claims.some((claim) => claim.sourceType === "mch" && claim.key === "DR MICHAEL COMAN"), true);
-assert.equal(michaelDirectLogin.suggestedClaims.some((claim) => claim.sourceType === "mch" && claim.key === "DR MICHAEL COMAN"), false);
+const michaelEnrichedLogin = await postState(michaelStateStore, {
+  action: "resolveAccountClaims",
+  email: "michael@example.com",
+  password: "michael-password",
+});
+assert.deepEqual(michaelEnrichedLogin.state.imports.map((item) => item.repoId).sort(), ["michael-mch", "michael-mmc"]);
+assert.equal(michaelEnrichedLogin.claims.some((claim) => claim.sourceType === "mch" && claim.key === "DR MICHAEL COMAN"), true);
+assert.equal(michaelEnrichedLogin.suggestedClaims.some((claim) => claim.sourceType === "mch" && claim.key === "DR MICHAEL COMAN"), false);
 await postState(michaelStateStore, {
   action: "setAccountRosterClaims",
   email: "rhaydon@gmail.com",
@@ -2881,9 +2908,14 @@ const andreaLogin = await postState(identityStore, {
   mode: "create",
   realName: "Andrea LIM",
 });
+const andreaEnrichedLogin = await postState(identityStore, {
+  action: "resolveAccountClaims",
+  email: "andrea@example.com",
+  password: "andrea-password",
+});
 assert.deepEqual(andreaLogin.claims.map((claim) => `${claim.sourceType}:${claim.key}`).sort(), ["ddh:ANDREA LIM", "mch:DR ANDREA LIM"]);
-assert.deepEqual(andreaLogin.state.imports.map((item) => item.repoId).sort(), ["identity-ddh", "identity-mch"]);
-assert.deepEqual(andreaLogin.suggestedClaims, []);
+assert.deepEqual(andreaEnrichedLogin.state.imports.map((item) => item.repoId).sort(), ["identity-ddh", "identity-mch"]);
+assert.deepEqual(andreaEnrichedLogin.suggestedClaims, []);
 const barryLogin = await postState(identityStore, {
   action: "login",
   email: "barry@example.com",
@@ -2919,8 +2951,13 @@ const barryAfterBadClaim = await postState(identityStore, {
   email: "barry@example.com",
   password: "barry-password",
 });
+const barryAfterBadClaimEnriched = await postState(identityStore, {
+  action: "resolveAccountClaims",
+  email: "barry@example.com",
+  password: "barry-password",
+});
 assert.deepEqual(barryAfterBadClaim.claims.map((claim) => `${claim.sourceType}:${claim.key}`), ["ddh:AARON BADWAL"]);
-assert.deepEqual(barryAfterBadClaim.state.imports.map((item) => item.repoId), ["identity-ddh"]);
+assert.deepEqual(barryAfterBadClaimEnriched.state.imports.map((item) => item.repoId), ["identity-ddh"]);
 await postState(identityStore, {
   action: "claimRosterName",
   email: "barry@example.com",
@@ -2998,7 +3035,12 @@ const manyDoctorsLogin = await postState(manyDoctorsStore, {
   mode: "create",
   realName: "New Doctor",
 });
-assert.equal(manyDoctorsLogin.availableDoctors.length, 90);
+const manyDoctorsEnrichment = await postState(manyDoctorsStore, {
+  action: "resolveAccountClaims",
+  email: "new-doctor@example.com",
+  password: "new-password",
+});
+assert.equal(manyDoctorsEnrichment.availableDoctors.length, 90);
 assert.ok(manyDoctorsStore.accountListCalls <= 2, "available doctor claimed status should avoid repeated account scans");
 
 const profileImports = await postStateRaw(stateStore, {
@@ -3123,7 +3165,7 @@ await postState(stateStore, {
   },
 });
 const creatorSuggestionView = await postState(stateStore, {
-  action: "login",
+  action: "listUsers",
   email: "rhaydon@gmail.com",
   password: creatorPassword,
 });
@@ -3345,8 +3387,13 @@ const observerBeforeDelete = await postState(deletionStore, {
   mode: "create",
   realName: "Observer Person",
 });
+const observerBeforeDeleteEnriched = await postState(deletionStore, {
+  action: "resolveAccountClaims",
+  email: "observer@example.com",
+  password: "observer-password",
+});
 assert.equal(
-  observerBeforeDelete.availableDoctors.find((doctor) => doctor.key === "TITUS HACKMAN")?.claimedBy,
+  observerBeforeDeleteEnriched.availableDoctors.find((doctor) => doctor.key === "TITUS HACKMAN")?.claimedBy,
   "claimed-doctor@example.com",
   "repository doctor should be marked claimed before deleting the linked account",
 );

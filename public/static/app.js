@@ -9030,12 +9030,18 @@ async function restoreCloudState(options = {}) {
     });
     const data = await readJsonResponse(response, "Login failed.");
     await applyCloudStateData(data);
+    if (!adminTargetEmail && currentUserEmail !== OWNER_EMAIL && data.created === true) {
+      await resolveCurrentAccountClaims();
+    }
     if (!adminTargetEmail && currentUserEmail === OWNER_EMAIL) {
       forceCreatorDoctorSession();
     }
     await loadCloudCalendarEvents({ adminTargetEmail });
+    if (!adminTargetEmail && currentUserEmail !== OWNER_EMAIL && data.created !== true) {
+      void resolveCurrentAccountClaims().catch(() => {});
+    }
     if (isCreatorAuthenticated()) {
-      await loadServerUsers();
+      void loadServerUsers();
     }
   } catch (error) {
     cancelScheduledCloudStateSave();
@@ -9064,6 +9070,21 @@ async function restoreCloudState(options = {}) {
     setStatus(message, true);
     setEntranceStatus(message, true);
   }
+}
+
+async function resolveCurrentAccountClaims() {
+  if (!currentUserEmail || currentUserEmail === OWNER_EMAIL) return;
+  const response = await fetch("/api/state", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      action: "resolveAccountClaims",
+      email: currentUserEmail,
+      password: currentUserPassword,
+    }),
+  });
+  const data = await readJsonResponse(response, "Account claim resolution failed.");
+  await applyCloudStateData(data);
 }
 
 async function restoreDoctorProfileState() {
