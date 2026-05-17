@@ -7783,7 +7783,7 @@ async function enterUserAccount(email) {
   try {
     await flushCloudStateSave().catch(() => {});
     cancelScheduledCloudStateSave();
-    await saveCloudState();
+    await saveCloudState(creatorCalendarSavePayload());
   } catch {
     // Cloud save failures are surfaced elsewhere; local state is still saved.
   }
@@ -8238,12 +8238,10 @@ async function returnToCreatorAccount() {
   forceConsoleSkin();
   setStatus("Returning to creator account...");
   resetTransientCalendarData();
+  forceCreatorDoctorSession();
   await clearLocalWorkspace();
   await restoreCloudState();
-  restoredSessionState = {
-    ...(restoredSessionState || {}),
-    doctorKey: OWNER_DOCTOR_KEY,
-  };
+  forceCreatorDoctorSession();
   if (currentSnapshot) {
     const snapshotDoctorKey = normalizeRosterName(currentSnapshot.session?.doctorKey || "");
     currentSnapshot = sanitizeWorkspaceSnapshot({
@@ -9008,6 +9006,9 @@ async function restoreCloudState(options = {}) {
     });
     const data = await readJsonResponse(response, "Login failed.");
     await applyCloudStateData(data);
+    if (!adminTargetEmail && currentUserEmail === OWNER_EMAIL) {
+      forceCreatorDoctorSession();
+    }
     await loadCloudCalendarEvents({ adminTargetEmail });
     if (isCreatorAuthenticated()) {
       await loadServerUsers();
@@ -9286,6 +9287,38 @@ function snapshotCloudSavePayload() {
     targetEmail: adminViewingEmail ? currentUserEmail : "",
     imports: selectedFiles.map((entry) => ({ ...entry })),
     session: buildActiveSessionState(),
+    removedImportIds: [],
+  };
+}
+
+function forceCreatorDoctorSession() {
+  restoredSessionState = {
+    ...(restoredSessionState || {}),
+    doctorKey: OWNER_DOCTOR_KEY,
+  };
+  if (currentSnapshot) {
+    currentSnapshot = sanitizeWorkspaceSnapshot({
+      ...currentSnapshot,
+      session: {
+        ...(currentSnapshot.session || {}),
+        doctorKey: OWNER_DOCTOR_KEY,
+      },
+    });
+  }
+}
+
+function creatorCalendarSavePayload() {
+  if (currentUserEmail !== OWNER_EMAIL || adminViewingEmail || activeDoctorProfile) return null;
+  return {
+    accountEmail: currentUserEmail,
+    requestEmail: currentUserEmail,
+    requestPassword: currentUserPassword,
+    targetEmail: "",
+    imports: selectedFiles.map((entry) => ({ ...entry })),
+    session: {
+      ...buildActiveSessionState(),
+      doctorKey: OWNER_DOCTOR_KEY,
+    },
     removedImportIds: [],
   };
 }

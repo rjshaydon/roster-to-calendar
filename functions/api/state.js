@@ -118,19 +118,21 @@ export async function onRequestPost(context) {
       });
       const createdRecord = await autoClaimMatchedRosterNames(null, created.record, context.env.ROSTER_DB);
       await upsertAccountMirror(context.env.ROSTER_DB, createdRecord);
-      const prepared = await prepareAccountResponse(null, createdRecord, { db: context.env.ROSTER_DB });
+      const createdClaims = sanitizeClaims(createdRecord.claims)
+        .filter((claim) => claimMatchesAccountIdentity(claim, createdRecord.realName || ""));
+      const createdRole = createdRecord.role || roleForEmail(targetEmail);
       return Response.json({
         ok: true,
         cloudAvailable: true,
         created: true,
         user: {
           email: targetEmail,
-          realName: prepared.realName,
-          role: prepared.role,
-          sites: [...new Set(sanitizeClaims(prepared.claims).map((claim) => claim.sourceType.toUpperCase()))].sort(),
-          claims: prepared.claims,
-          suggestedClaims: prepared.nameMatches,
-          insightsEnabled: insightsEnabledForRecord({ ...created.record, role: prepared.role }),
+          realName: createdRecord.realName || "",
+          role: createdRole,
+          sites: [...new Set(createdClaims.map((claim) => claim.sourceType.toUpperCase()))].sort(),
+          claims: createdClaims,
+          suggestedClaims: [],
+          insightsEnabled: insightsEnabledForRecord({ ...createdRecord, role: createdRole }),
           createdAt: created.record.createdAt || "",
           updatedAt: created.record.updatedAt || "",
         },
@@ -3085,8 +3087,28 @@ async function clearDeletedAccountClaimMetadata(store, email, record) {
   if (!deletedEmail) return;
   const deletedClaims = sanitizeClaims(record?.claims);
   if (!deletedClaims.length) return;
+  if (store?.prepare) {
+    await removeDeletedClaimsFromRemainingD1Accounts(store, deletedEmail, deletedClaims);
+    return;
+  }
   if (!store?.list) return;
   await removeDeletedClaimsFromRemainingAccounts(store, deletedEmail, deletedClaims);
+}
+
+async function removeDeletedClaimsFromRemainingD1Accounts(db, deletedEmail, deletedClaims) {
+  const records = await listAccountMirrors(db);
+  for (const record of records || []) {
+    const email = normalizeEmail(record?.email);
+    if (!record || email === deletedEmail) continue;
+    const claims = sanitizeClaims(record.claims);
+    const filtered = claims.filter((claim) => !deletedClaims.some((deletedClaim) => sameClaim(claim, deletedClaim)));
+    if (filtered.length === claims.length) continue;
+    await upsertAccountMirror(db, {
+      ...record,
+      claims: filtered,
+      updatedAt: new Date().toISOString(),
+    }, { preserveExistingState: true });
+  }
 }
 
 async function removeDeletedClaimsFromRemainingAccounts(store, deletedEmail, deletedClaims) {

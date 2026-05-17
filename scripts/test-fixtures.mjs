@@ -78,6 +78,21 @@ assert.match(
   "leave review modals should not request roster coworker insights",
 );
 assert.match(appSource, /let cloudStateSaveQueue = Promise\.resolve\(\);/, "cloud saves should be serialized");
+assert.match(
+  appSource.match(/async function enterUserAccount[\s\S]*?async function enterDoctorProfileView/)?.[0] || "",
+  /saveCloudState\(creatorCalendarSavePayload\(\)\)/,
+  "switching from the creator account should persist the creator doctor rather than the viewed doctor",
+);
+assert.match(
+  appSource.match(/async function restoreCloudState[\s\S]*?async function restoreDoctorProfileState/)?.[0] || "",
+  /currentUserEmail === OWNER_EMAIL[\s\S]*forceCreatorDoctorSession\(\)[\s\S]*loadCloudCalendarEvents/,
+  "fresh creator login should normalize the creator doctor before calendar events load",
+);
+assert.match(
+  appSource.match(/async function returnToCreatorAccount[\s\S]*?async function clearLocalWorkspace/)?.[0] || "",
+  /resetTransientCalendarData\(\);\s*forceCreatorDoctorSession\(\);[\s\S]*restoreCloudState/,
+  "returning to the creator should normalize the creator doctor before calendar events load",
+);
 assert.match(appSource, /data-replace-active-rosters/, "creator UI should expose a roster recovery action");
 assert.match(appSource, /<strong>Roster database<\/strong>/, "system card should use plain roster-database language");
 assert.match(appSource, /source file\$\{retainedSourceTotal === 1 \? \"\" : \"s\"\} retained/, "system card should report retained raw source coverage");
@@ -1656,6 +1671,56 @@ assert.deepEqual(
   d1SessionCalendar.snapshot.preview.events.map((event) => event.id),
   "direct and creator-switched user loads should use the same D1 calendar events",
 );
+
+const recreateDb = new MemoryD1();
+const recreateStore = new MemoryStore();
+seedD1Repository(recreateDb, [{
+  id: "recreate-roster",
+  name: "recreate.xlsx",
+  sourceType: "mmc",
+  active: true,
+  doctors: [{ key: "TITUS HACKMAN", displayName: "Titus Hackman", sourceType: "mmc" }],
+  eventsByDoctor: {
+    "TITUS HACKMAN": [{ id: "recreate-shift", source: "MMC", title: "Roster shift", allDay: true, start: "2026-02-03", end: "2026-02-03", rawValue: "Roster shift" }],
+  },
+}]);
+await postState(recreateStore, {
+  action: "login",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+}, recreateDb);
+const firstMatchedCreate = await postState(recreateStore, {
+  action: "adminCreateUser",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  targetEmail: "recreated@example.com",
+  targetRealName: "Titus Hackman",
+  targetPassword: "recreated-password",
+}, recreateDb);
+assert.equal(firstMatchedCreate.user.claims.length, 1, "first matched create should auto-claim the roster doctor");
+await postState(recreateStore, {
+  action: "deleteAccount",
+  email: "recreated@example.com",
+  password: "recreated-password",
+}, recreateDb);
+const recreatedMatchedUser = await postState(recreateStore, {
+  action: "adminCreateUser",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  targetEmail: "recreated@example.com",
+  targetRealName: "Titus Hackman",
+  targetPassword: "recreated-password-2",
+}, recreateDb);
+assert.equal(recreatedMatchedUser.user.claims.length, 1, "recreating a self-deleted matched user should auto-claim cleanly");
+const madeUpUser = await postState(recreateStore, {
+  action: "adminCreateUser",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  targetEmail: "made-up@example.com",
+  targetRealName: "Made Up",
+  targetPassword: "made-up-password",
+}, recreateDb);
+assert.equal(madeUpUser.user.claims.length, 0, "creating a no-roster user should remain lightweight and unclaimed");
 const d1Insights = await postState(d1StateStore, {
   action: "queryRosterInsights",
   email: "rhaydon@gmail.com",
