@@ -95,8 +95,23 @@ assert.match(
 );
 assert.match(
   appSource.match(/function buildResolvedPreviewEvents[\s\S]*?function latestPreviewEventsByIdentity/)?.[0] || "",
-  /previewCustomEventIds[\s\S]*customEventsMaterialized === true && previewCustomEventIds\.has\(event\.id\)/,
-  "D1-loaded previews should merge newly added local custom events that were not in the server snapshot",
+  /activeCustomEventIds[\s\S]*!activeCustomEventIds\.has\(event\.id\)[\s\S]*previewCustomEventIds[\s\S]*customEventsMaterialized === true && previewCustomEventIds\.has\(event\.id\)/,
+  "D1-loaded previews should merge newly added local custom events and drop materialized custom events removed from active state",
+);
+assert.match(
+  appSource.match(/function openReviewModal[\s\S]*?function closeReviewModal/)?.[0] || "",
+  /isCustomPreviewEvent\(previewEvent\)[\s\S]*openCustomEventModal/,
+  "materialized custom events should open in the custom-event editor before generic review handling",
+);
+assert.match(
+  appSource.match(/function deletePreviewEvent[\s\S]*?function resetImportedEvent/)?.[0] || "",
+  /isCustomPreviewEvent\(event\)[\s\S]*ensureEditableCustomEvent\(event\)[\s\S]*removeCustomEventForActiveCalendar/,
+  "materialized custom events should be rehydrated before deletion",
+);
+assert.match(
+  appSource.match(/function renderWorkspaceFromSnapshot[\s\S]*?async function ensureSelectedFilesLoaded/)?.[0] || "",
+  /applySessionState[\s\S]*reconcileMaterializedPreviewCustomEvents\(\)/,
+  "rendering a D1 snapshot should reconcile materialized custom events into editable state",
 );
 assert.match(appSource, /data-admin-user-seniority-filter/, "admin users should expose a seniority filter");
 assert.doesNotMatch(

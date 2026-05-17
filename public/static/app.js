@@ -2135,7 +2135,16 @@ function buildFilteredPreviewEvents(baseData, filterSettings, defaultRange = der
 }
 
 function buildResolvedPreviewEvents(baseData) {
-  const baseEvents = new Map((baseData.events || []).map((event) => [event.id, { ...event }]));
+  const activeCustomEventIds = new Set(customEventsForActiveCalendar().map((event) => event.id));
+  const baseEvents = new Map(
+    (baseData.events || [])
+      .filter((event) => !(
+        baseData.customEventsMaterialized === true
+        && isCustomPreviewEvent(event)
+        && !activeCustomEventIds.has(event.id)
+      ))
+      .map((event) => [event.id, { ...event }]),
+  );
   const events = [];
   for (const item of reviewIndex.values()) {
     const event = baseEvents.get(item.id);
@@ -2147,7 +2156,7 @@ function buildResolvedPreviewEvents(baseData) {
   }
   const previewCustomEventIds = new Set(
     (baseData.events || [])
-      .filter((event) => String(event?.source || "").toLowerCase() === "custom")
+      .filter(isCustomPreviewEvent)
       .map((event) => String(event.id || ""))
       .filter(Boolean),
   );
@@ -4004,7 +4013,7 @@ function customEventToPreviewEvent(event) {
 function movePreviewEvent(id, targetDate) {
   const event = currentPreviewEvents.get(id);
   if (!event) return;
-  if (event.source === "Custom") {
+  if (isCustomPreviewEvent(event)) {
     const updated = shiftPreviewEventToDay(event, targetDate);
     customEvents = customEvents.map((item) => item.id === id && normalizeEmail(item.ownerEmail) === activeCalendarEmail() ? previewEventToCustomEvent(updated, item) : item);
   } else {
@@ -4090,7 +4099,8 @@ function pasteCopiedEvent(targetDate) {
 function deletePreviewEvent(id) {
   const event = currentPreviewEvents.get(id);
   if (!event) return;
-  if (event.source === "Custom") {
+  if (isCustomPreviewEvent(event)) {
+    ensureEditableCustomEvent(event);
     removeCustomEventForActiveCalendar(id);
     if (openReviewId === id) closeReviewModal();
   } else {
@@ -5676,6 +5686,14 @@ function summarizeEventTimes(start, end, allDay) {
 }
 
 function openReviewModal(id, selectedDay = "") {
+  const previewEvent = currentPreviewEvents.get(id);
+  if (isCustomPreviewEvent(previewEvent)) {
+    const customEvent = ensureEditableCustomEvent(previewEvent);
+    if (customEvent) {
+      openCustomEventModal(customEvent, selectedDay || customEvent.startDate);
+    }
+    return;
+  }
   const item = reviewIndex.get(id);
   if (!item) {
     const customEvent = customEventsForActiveCalendar().find((entry) => entry.id === id);
@@ -10169,6 +10187,39 @@ function customEventsForActiveCalendar() {
   return sanitizeActiveCalendarCustomEvents(customEvents);
 }
 
+function isCustomPreviewEvent(event) {
+  return String(event?.source || "").toLowerCase() === "custom";
+}
+
+function ensureEditableCustomEvent(event) {
+  if (!isCustomPreviewEvent(event)) return null;
+  const existing = customEventsForActiveCalendar().find((entry) => entry.id === event.id);
+  if (existing) return existing;
+  const restored = previewEventToCustomEvent(event);
+  replaceActiveCalendarCustomEvents([
+    ...customEventsForActiveCalendar(),
+    restored,
+  ]);
+  saveCurrentSessionState();
+  return customEventsForActiveCalendar().find((entry) => entry.id === event.id) || null;
+}
+
+function reconcileMaterializedPreviewCustomEvents() {
+  if (latestPreview?.customEventsMaterialized !== true) return;
+  const restored = (latestPreview.events || [])
+    .filter(isCustomPreviewEvent)
+    .map((event) => previewEventToCustomEvent(event));
+  if (!restored.length) return;
+  const before = customEventsForActiveCalendar().length;
+  replaceActiveCalendarCustomEvents([
+    ...customEventsForActiveCalendar(),
+    ...restored,
+  ]);
+  if (customEventsForActiveCalendar().length !== before) {
+    saveCurrentSessionState();
+  }
+}
+
 function sanitizeActiveCalendarCustomEvents(items) {
   const ownerEmail = activeCalendarEmail();
   return sanitizeCustomEvents(items, ownerEmail).filter((item) => item.ownerEmail === ownerEmail);
@@ -10597,6 +10648,7 @@ function renderWorkspaceFromSnapshot(snapshot, session = {}) {
   clearDoctorAnalysisCache();
   restoredSessionState = session && typeof session === "object" ? session : {};
   applySessionState(restoredSessionState, { inheritedSettings: rosterDefaultSettings() });
+  reconcileMaterializedPreviewCustomEvents();
   hydrateInsightCacheFromSnapshot(currentSnapshot);
   pendingPreviewSnapToToday = true;
   renderSettings();
