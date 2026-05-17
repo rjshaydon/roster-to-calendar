@@ -2139,11 +2139,39 @@ function buildResolvedPreviewEvents(baseData) {
     if (!include) continue;
     events.push(buildEventOverridePatch(event, item, override));
   }
-  for (const event of customEventsForActiveCalendar()) {
-    events.push(customEventToPreviewEvent(event));
+  if (baseData.customEventsMaterialized !== true) {
+    for (const event of customEventsForActiveCalendar()) {
+      events.push(customEventToPreviewEvent(event));
+    }
   }
-  events.sort(comparePreviewEvents);
-  return events;
+  const dedupedEvents = latestPreviewEventsByIdentity(events);
+  dedupedEvents.sort(comparePreviewEvents);
+  return dedupedEvents;
+}
+
+function latestPreviewEventsByIdentity(events) {
+  const byIdentity = new Map();
+  for (const event of events || []) {
+    const key = previewEventIdentity(event);
+    byIdentity.delete(key);
+    byIdentity.set(key, event);
+  }
+  return [...byIdentity.values()];
+}
+
+function previewEventIdentity(event) {
+  if (String(event?.source || "").toLowerCase() !== "custom") {
+    return `event:${String(event?.id || "")}`;
+  }
+  return [
+    "custom",
+    normalizeEmail(event.ownerEmail || activeCalendarEmail()),
+    String(event.title || ""),
+    String(event.start || ""),
+    String(event.end || ""),
+    event.allDay === true ? "all-day" : String(event.timeLabel || ""),
+    String(event.location || ""),
+  ].join("|");
 }
 
 function availableHospitalsForPreview(events) {

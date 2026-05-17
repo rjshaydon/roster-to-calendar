@@ -2923,6 +2923,7 @@ export function customEventsToEvents(customEvents, settings = DEFAULT_SETTINGS) 
       if (item.allDay) {
         return {
           id: item.id,
+          ownerEmail: item.ownerEmail || "",
           source: "Custom",
           title: item.title,
           allDay: true,
@@ -2941,6 +2942,7 @@ export function customEventsToEvents(customEvents, settings = DEFAULT_SETTINGS) 
       const endDate = explicitEndDay || (compareTimes(endHm, startHm) <= 0 ? addDays(item.startDate, 1) : item.startDate);
       return {
         id: item.id,
+        ownerEmail: item.ownerEmail || "",
         source: "Custom",
         title: item.title,
         allDay: false,

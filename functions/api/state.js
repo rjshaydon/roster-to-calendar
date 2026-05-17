@@ -1710,7 +1710,7 @@ async function buildDerivedAccountSnapshot(db, context) {
     schemaVersion: SNAPSHOT_SCHEMA_VERSION,
     builtAt: new Date().toISOString(),
     buildStamp: "d1-derived",
-    preview: buildPreviewFromDerivedEvents(events),
+    preview: buildPreviewFromDerivedEvents(events, { customEventsMaterialized: true }),
     session: normalizedSession,
     doctorOptions,
     detectedSources: {},
@@ -2674,7 +2674,7 @@ async function buildDerivedDoctorProfileSnapshot(store, db, profile) {
     schemaVersion: SNAPSHOT_SCHEMA_VERSION,
     builtAt: new Date().toISOString(),
     buildStamp: "d1-derived",
-    preview: buildPreviewFromDerivedEvents(events),
+    preview: buildPreviewFromDerivedEvents(events, { customEventsMaterialized: true }),
     session: session && Object.keys(session).length ? session : { doctorKey: profile.doctorKey },
     doctorOptions: doctorOptions.length ? doctorOptions : [{
       key: profile.doctorKey,

@@ -1609,6 +1609,12 @@ const d1SessionCalendar = await postState(d1StateStore, {
 }, d1Store);
 assert.ok(d1SessionCalendar.snapshot.preview.events.some((event) => event.title === "D1 Edited Shift"), "D1 calendar load should apply session overrides");
 assert.ok(d1SessionCalendar.snapshot.preview.events.some((event) => event.title === "D1 Custom Event"), "D1 calendar load should include session custom events");
+assert.equal(d1SessionCalendar.snapshot.preview.customEventsMaterialized, true, "D1 calendar snapshots should declare custom events already materialized");
+assert.equal(
+  d1SessionCalendar.snapshot.preview.events.filter((event) => event.title === "D1 Custom Event").length,
+  1,
+  "D1 calendar snapshots should carry each logical custom event once",
+);
 const d1AdminLoad = await postState(d1StateStore, {
   action: "adminLoadUser",
   email: "rhaydon@gmail.com",
@@ -1852,6 +1858,7 @@ const d1OnlyDoctorProfile = await postState(d1StateStore, {
   sourceTypes: ["mmc"],
 }, d1Store);
 assert.equal(d1OnlyDoctorProfile.snapshot?.preview?.derivedFromD1, true);
+assert.equal(d1OnlyDoctorProfile.snapshot?.preview?.customEventsMaterialized, true);
 assert.ok(d1OnlyDoctorProfile.snapshot.preview.events.some((event) => event.title === "D1 Profile Edited Shift"), "D1 doctor profile should apply stored overrides without KV profile state");
 assert.ok(d1OnlyDoctorProfile.snapshot.preview.events.some((event) => event.title === "D1 Profile Custom Event"), "D1 doctor profile should include stored custom events without KV profile state");
 const d1ProfileStatus = await postState(d1StateStore, {

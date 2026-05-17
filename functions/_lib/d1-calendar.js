@@ -1276,7 +1276,7 @@ export async function queryOverlapDoctors(db, options = {}) {
   }));
 }
 
-export function buildPreviewFromDerivedEvents(events) {
+export function buildPreviewFromDerivedEvents(events, options = {}) {
   const safeEvents = mergeDuplicateLeaveEvents(events || []).map((event) => ({ ...event }));
   return {
     ...previewSummary(safeEvents),
@@ -1288,6 +1288,7 @@ export function buildPreviewFromDerivedEvents(events) {
     sources: {},
     lastParsed: new Date().toISOString(),
     derivedFromD1: true,
+    customEventsMaterialized: options.customEventsMaterialized === true,
   };
 }
 
