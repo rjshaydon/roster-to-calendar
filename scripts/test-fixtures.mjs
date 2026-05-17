@@ -117,6 +117,30 @@ assert.doesNotMatch(
   /autoClaimMatchedRosterNames|prepareAccountResponse|loadRepositoryIndex|buildIssueConfig/,
   "admin user creation should stay lightweight and avoid broad account hydration",
 );
+assert.doesNotMatch(
+  (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
+    .match(/if \(action === "loadCalendarEvents"\)[\s\S]*?if \(action === "loadInsightImports"\)/)?.[0] || "",
+  /loadRepositoryIndex/,
+  "calendar event loads should be D1-first and avoid repository-index hydration",
+);
+assert.doesNotMatch(
+  (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
+    .match(/if \(action === "save"\)[\s\S]*?if \(action === "loadDoctorProfile"\)/)?.[0] || "",
+  /loadRepositoryIndex/,
+  "ordinary cloud saves should not load the repository index",
+);
+assert.match(
+  (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
+    .match(/if \(action === "claimRosterName"\)[\s\S]*?if \(action === "listUsers"\)/)?.[0] || "",
+  /queryCanonicalDoctors[\s\S]*findDoctorClaimCandidate/,
+  "manual roster claims should resolve from canonical D1 doctors before legacy repository fallback",
+);
+assert.match(
+  (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
+    .match(/if \(action === "save"\)[\s\S]*?if \(action === "loadDoctorProfile"\)/)?.[0] || "",
+  /replaceAccountCustomEvents[\s\S]*stripRelationalCustomEventsFromSession/,
+  "account saves should keep custom-event truth in D1 rows rather than session JSON",
+);
 assert.match(
   appSource.match(/async function restoreCloudState[\s\S]*?async function restoreDoctorProfileState/)?.[0] || "",
   /if \(!adminTargetEmail && currentUserEmail !== OWNER_EMAIL\)[\s\S]*resolveCurrentAccountClaims\(\)[\s\S]*loadCloudCalendarEvents[\s\S]*void loadServerUsers\(\)/,

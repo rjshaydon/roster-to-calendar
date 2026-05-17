@@ -1,5 +1,5 @@
 import { applyEventOverrides, customEventsToEvents, defaultSettings, exportIcs } from "../_lib/roster.js";
-import { hasCalendarDb, loadAccountMirrorBySubscriptionToken, queryDoctorEvents } from "../_lib/d1-calendar.js";
+import { hasCalendarDb, loadAccountMirrorBySubscriptionToken, queryAccountCustomEvents, queryDoctorEvents } from "../_lib/d1-calendar.js";
 import { normalizeEmail } from "./state.js";
 
 export async function onRequestGet(context) {
@@ -47,7 +47,11 @@ async function buildD1SubscriptionFeed(db, record, view) {
     ? { startDate: range.startDate, endDate: range.allFuture ? "9999-12-31" : range.endDate || range.startDate }
     : {};
   const rosterEvents = applyEventOverrides(await queryDoctorEvents(db, claims.map((claim) => claim.key), queryOptions), session.overrides || {});
-  const customEvents = customEventsToEvents(sanitizeCustomEvents(session.customEvents, record.email), settings);
+  const d1CustomEvents = await queryAccountCustomEvents(db, record.email).catch(() => []);
+  const customEvents = customEventsToEvents(latestCustomEventsByIdentity([
+    ...sanitizeCustomEvents(session.customEvents, record.email),
+    ...sanitizeCustomEvents(d1CustomEvents, record.email),
+  ]), settings);
   const events = [...rosterEvents, ...customEvents]
     .filter((event) => range.mode !== "range" || eventInRange(event, range))
     .sort(compareEvents);
@@ -98,6 +102,28 @@ function sanitizeCustomEvents(items, defaultOwnerEmail = "") {
       include: item.include !== false,
     }))
     .filter((item) => item.ownerEmail === ownerEmail);
+}
+
+function latestCustomEventsByIdentity(events) {
+  const byId = new Map();
+  for (const event of events || []) {
+    byId.delete(event.id);
+    byId.set(event.id, event);
+  }
+  const byIdentity = new Map();
+  for (const event of byId.values()) {
+    const key = [
+      normalizeEmail(event.ownerEmail),
+      event.title,
+      event.startDate,
+      event.endDate,
+      event.allDay ? "all-day" : `${event.startTime}|${event.endTime}`,
+      event.location,
+    ].join("|");
+    byIdentity.delete(key);
+    byIdentity.set(key, event);
+  }
+  return [...byIdentity.values()];
 }
 
 function normalizeExportRange(value) {
