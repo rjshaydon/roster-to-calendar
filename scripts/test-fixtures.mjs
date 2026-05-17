@@ -124,6 +124,18 @@ assert.match(
   /async function calendarStoreStatus[\s\S]*resolveSelectedRosterFileDoctorRows\(db, selectedDoctorKey\)/,
   "calendar status should resolve only the selected doctor instead of rebuilding every canonical option",
 );
+assert.match(
+  (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
+    .match(/async function buildDerivedDoctorProfileSnapshot[\s\S]*?async function storeSnapshotForAccount/)?.[0] || "",
+  /queryRosterFileDoctorsForKeys\(db, doctorKeysForOption\(profile\)\)/,
+  "doctor profile load should resolve only the requested doctor instead of rebuilding every canonical option",
+);
+assert.match(
+  (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
+    .match(/async function buildDerivedDoctorProfileSnapshot[\s\S]*?async function storeSnapshotForAccount/)?.[0] || "",
+  /if \(!doctorDiagnostics\.length\)[\s\S]*queryRosterFileDoctors\(db\)[\s\S]*resolveCanonicalDoctorOptionForKey/,
+  "doctor profile load should reserve full canonical rebuilds for the rare targeted-lookup miss path",
+);
 assert.match(appSource, /data-replace-active-rosters/, "creator UI should expose a roster recovery action");
 assert.match(appSource, /<strong>Roster database<\/strong>/, "system card should use plain roster-database language");
 assert.match(appSource, /source file\$\{retainedSourceTotal === 1 \? \"\" : \"s\"\} retained/, "system card should report retained raw source coverage");

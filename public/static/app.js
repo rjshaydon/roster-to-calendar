@@ -7894,6 +7894,7 @@ async function loadUnclaimedDoctorCalendar(doctor, sourceContext) {
     doctorKey: doctor.key,
     displayName: doctor.displayName,
     sourceTypes: doctorProfileSourceTypes(doctor),
+    aliases: Array.isArray(doctor.aliases) ? doctor.aliases : [],
   };
   const profileData = await fetchDoctorProfileState(profile);
   const snapshot = sanitizeWorkspaceSnapshot(profileData.snapshot);
@@ -8040,6 +8041,7 @@ async function fetchDoctorProfileState(profile) {
       doctorKey: profile.doctorKey,
       displayName: profile.displayName,
       sourceTypes: profile.sourceTypes,
+      aliases: profile.aliases,
     }),
   });
   const data = await readJsonResponse(response, "Doctor profile load failed.");

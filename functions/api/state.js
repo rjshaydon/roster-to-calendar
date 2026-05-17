@@ -783,7 +783,11 @@ export async function onRequestPost(context) {
         sourceTypes: body?.sourceTypes,
         state: sanitizeState(null),
       });
-      const snapshotInfo = await loadDoctorProfileSnapshotInfo(null, profile, context.env.ROSTER_DB);
+      const requestedAliases = sanitizeDoctorAccountResolutionInput({ aliases: body?.aliases }).aliases;
+      const snapshotInfo = await loadDoctorProfileSnapshotInfo(null, {
+        ...profile,
+        aliases: requestedAliases,
+      }, context.env.ROSTER_DB);
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -2705,12 +2709,17 @@ async function buildDerivedDoctorProfileSnapshot(store, db, profile) {
     ...defaultSettings(),
     ...(session.settings || {}),
   };
-  const doctorRows = await queryRosterFileDoctors(db).catch(() => []);
-  const canonicalDoctor = doctorRows.length ? await resolveCanonicalDoctorOptionForKey(db, doctorRows, profile.doctorKey) : null;
-  const doctorKeys = doctorKeysForOption(canonicalDoctor || profile);
-  const doctorDiagnostics = canonicalDoctor
-    ? doctorRows.filter((row) => doctorKeys.includes(normalizeRosterName(row.doctorKey)))
-    : await queryRosterFileDoctorsForKeys(db, doctorKeys);
+  let doctorDiagnostics = await queryRosterFileDoctorsForKeys(db, doctorKeysForOption(profile));
+  if (!doctorDiagnostics.length) {
+    const doctorRows = await queryRosterFileDoctors(db).catch(() => []);
+    const fallbackDoctor = doctorRows.length ? await resolveCanonicalDoctorOptionForKey(db, doctorRows, profile.doctorKey) : null;
+    doctorDiagnostics = fallbackDoctor
+      ? doctorRows.filter((row) => doctorKeysForOption(fallbackDoctor).includes(normalizeRosterName(row.doctorKey)))
+      : [];
+  }
+  const doctorKeys = doctorDiagnostics.length
+    ? [...new Set(doctorDiagnostics.map((row) => normalizeRosterName(row.doctorKey)).filter(Boolean))]
+    : doctorKeysForOption(profile);
   const doctorPairs = doctorDiagnostics.map((row) => ({ fileId: row.fileId, doctorKey: row.doctorKey }));
   const events = [
     ...applyEventOverrides(
@@ -2725,8 +2734,9 @@ async function buildDerivedDoctorProfileSnapshot(store, db, profile) {
   const index = await loadRepositoryIndex(store, db);
   const refs = await repositoryImportRefsForDoctorProfile(store, profile, db);
   const profileSources = sanitizeSourceTypes(profile.sourceTypes);
-  const doctorOptions = canonicalDoctor
-    ? [canonicalDoctor]
+  const doctorOption = doctorDiagnostics.length ? buildDoctorOptionFromRows([...doctorDiagnostics]) : null;
+  const doctorOptions = doctorOption
+    ? [doctorOption]
     : buildCreatorDoctorOptions(repositoryDoctorCandidatesFromIndex(index).filter((doctor) => (
       doctor.key === profile.doctorKey || profileSources.includes(doctor.sourceType)
     )));
@@ -2752,7 +2762,7 @@ async function buildDerivedDoctorProfileSnapshot(store, db, profile) {
     fileRefs: refs,
     subscriptionFeeds: {},
     insightCache: null,
-    profileCoverage: doctorProfileCoverage(doctorRows, canonicalDoctor || profile, profileSources),
+    profileCoverage: doctorProfileCoverage(doctorDiagnostics, doctorOption || profile, profileSources),
   });
 }
 
