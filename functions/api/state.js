@@ -44,11 +44,6 @@ import {
 
 const CREATOR_EMAIL = "rhaydon@gmail.com";
 const OWNER_DOCTOR_KEY = "RICHARD HAYDON";
-const REPOSITORY_INDEX_KEY = "repository:index";
-const REPOSITORY_FILE_PREFIX = "repository:file:";
-const DOCTOR_PROFILE_PREFIX = "doctor-profile:";
-const SUBSCRIPTION_TOKEN_PREFIX = "subscription:token:";
-const SNAPSHOT_PREFIX = "snapshot:";
 const SNAPSHOT_SCHEMA_VERSION = 5;
 const ADMIN_ISSUE_DISMISS_PREFIX = "admin-issue-dismiss:";
 const ADMIN_ISSUE_IGNORE_PREFIX = "admin-issue-ignore:";
@@ -206,11 +201,10 @@ export async function onRequestPost(context) {
       const claimEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
       const targetRecord = claimEmail === email ? account.record : await loadAccountMirror(context.env.ROSTER_DB, claimEmail);
       if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
-      const canonicalDoctors = await queryCanonicalDoctors(context.env.ROSTER_DB).catch(() => []);
-      const index = canonicalDoctors.length ? null : await loadRepositoryIndex(null, context.env.ROSTER_DB);
-      const claim = findDoctorClaimCandidate(canonicalDoctors, index, body?.claim);
+      const doctorCandidates = await loadSqlDoctorCandidates(context.env.ROSTER_DB);
+      const claim = findDoctorClaimCandidate(doctorCandidates, body?.claim);
       if (!claim) {
-        return Response.json({ error: "Roster name was not found in the repository." }, { status: 400 });
+        return Response.json({ error: "Roster name was not found." }, { status: 400 });
       }
       const claims = mergeClaims(targetRecord.claims, [{ ...claim, matchedAt: new Date().toISOString() }]);
       const updatedAdminIssues = claimMatchesAccountIdentity(claim, targetRecord.realName || "")
@@ -219,7 +213,7 @@ export async function onRequestPost(context) {
       const d1Refs = await d1RepositoryImportRefsForClaims(context.env.ROSTER_DB, claims);
       const state = {
         ...sanitizeState(targetRecord.state),
-        imports: d1Refs.length ? d1Refs : repositoryImportRefsForClaims(index, claims),
+        imports: d1Refs,
       };
       const updated = {
         ...targetRecord,
@@ -229,7 +223,6 @@ export async function onRequestPost(context) {
         state,
         updatedAt: new Date().toISOString(),
       };
-      if (null) await null.put(storageKey(claimEmail), JSON.stringify(updated));
       await upsertAccountMirror(context.env.ROSTER_DB, updated);
       const prepared = await prepareAccountResponse(null, updated, { db: context.env.ROSTER_DB });
       return Response.json({
@@ -404,10 +397,7 @@ export async function onRequestPost(context) {
         ...passwordRecord,
         updatedAt: new Date().toISOString(),
       };
-      if (null) await null.put(storageKey(saveEmail), JSON.stringify(updated));
       await upsertAccountMirror(context.env.ROSTER_DB, updated);
-      const owner = accountSnapshotOwner(saveEmail, updated.role || roleForEmail(saveEmail));
-      if (null) await null.delete(snapshotKey(owner.ownerType, owner.ownerId));
       const prepared = await prepareAccountResponse(null, updated, { db: context.env.ROSTER_DB, includeAvailableDoctors: false });
       return Response.json({
         ok: true,
@@ -428,16 +418,15 @@ export async function onRequestPost(context) {
       }
       const targetRecord = await loadAccountMirror(context.env.ROSTER_DB, targetEmail);
       if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
-      const canonicalDoctors = await queryCanonicalDoctors(context.env.ROSTER_DB).catch(() => []);
-      const index = canonicalDoctors.length ? null : await loadRepositoryIndex(null, context.env.ROSTER_DB);
+      const canonicalDoctors = await loadSqlDoctorCandidates(context.env.ROSTER_DB);
       const claims = sanitizeClaims((body?.claims || [])
-        .map((claim) => findDoctorClaimCandidate(canonicalDoctors, index, claim))
+        .map((claim) => findDoctorClaimCandidate(canonicalDoctors, claim))
         .filter(Boolean)
         .map((claim) => ({ ...claim, matchedAt: new Date().toISOString() })));
       const d1Refs = await d1RepositoryImportRefsForClaims(context.env.ROSTER_DB, claims);
       const state = {
         ...sanitizeState(targetRecord.state),
-        imports: d1Refs.length ? d1Refs : repositoryImportRefsForClaims(index, claims),
+        imports: d1Refs,
       };
       const updated = {
         ...targetRecord,
@@ -446,10 +435,7 @@ export async function onRequestPost(context) {
         state,
         updatedAt: new Date().toISOString(),
       };
-      if (null) await null.put(storageKey(targetEmail), JSON.stringify(updated));
       await upsertAccountMirror(context.env.ROSTER_DB, updated);
-      const owner = accountSnapshotOwner(targetEmail, updated.role || roleForEmail(targetEmail));
-      if (null) await null.delete(snapshotKey(owner.ownerType, owner.ownerId));
       return Response.json({
         ok: true,
         user: await userSummaryFromRecord(targetEmail, updated, { db: context.env.ROSTER_DB }),
@@ -467,10 +453,9 @@ export async function onRequestPost(context) {
       };
       const claims = sanitizeClaims(targetRecord.claims).filter((claim) => !(claim.sourceType === rawClaim.sourceType && claim.key === rawClaim.key));
       const d1Refs = await d1RepositoryImportRefsForClaims(context.env.ROSTER_DB, claims);
-      const index = d1Refs.length ? null : await loadRepositoryIndex(null, context.env.ROSTER_DB);
       const state = {
         ...sanitizeState(targetRecord.state),
-        imports: d1Refs.length ? d1Refs : repositoryImportRefsForClaims(index, claims),
+        imports: d1Refs,
       };
       const updated = {
         ...targetRecord,
@@ -479,10 +464,7 @@ export async function onRequestPost(context) {
         state,
         updatedAt: new Date().toISOString(),
       };
-      if (null) await null.put(storageKey(claimEmail), JSON.stringify(updated));
       await upsertAccountMirror(context.env.ROSTER_DB, updated);
-      const owner = accountSnapshotOwner(claimEmail, updated.role || roleForEmail(claimEmail));
-      if (null) await null.delete(snapshotKey(owner.ownerType, owner.ownerId));
       return Response.json({ ok: true, claims, user: await userSummaryFromRecord(claimEmail, updated, { db: context.env.ROSTER_DB }) });
     }
 
@@ -539,7 +521,6 @@ export async function onRequestPost(context) {
         insightsEnabled: body?.insightsEnabled === true,
         updatedAt: new Date().toISOString(),
       };
-      if (null) await null.put(storageKey(targetEmail), JSON.stringify(updated));
       await upsertAccountMirror(context.env.ROSTER_DB, updated);
       return Response.json({
         ok: true,
@@ -582,7 +563,6 @@ export async function onRequestPost(context) {
         adminIssues: nextIssues,
         updatedAt: new Date().toISOString(),
       };
-      if (null) await null.put(storageKey(reportEmail), JSON.stringify(updated));
       await upsertAccountMirror(context.env.ROSTER_DB, updated);
       return Response.json({ ok: true, issuesCount: nextIssues.length });
     }
@@ -795,18 +775,7 @@ export async function onRequestPost(context) {
         state: durableState,
         updatedAt: new Date().toISOString(),
       };
-      if (null) await null.put(storageKey(saveEmail), JSON.stringify(updatedRecord));
       await upsertAccountMirror(context.env.ROSTER_DB, updatedRecord);
-      if (null && (!hasCalendarDb(context.env) || targetRole === "creator" || targetRole === "owner")) {
-        await storeSnapshotForAccount(null, {
-          email: saveEmail,
-          role: targetRole,
-          claims,
-          state,
-          record: updatedRecord,
-          snapshot: body?.snapshot,
-        });
-      }
       return Response.json({ ok: true, role: targetRole, claims });
     }
 
@@ -1023,29 +992,8 @@ function validateDerivedCalendarPayload(doctors, eventsByDoctor) {
   return "";
 }
 
-export async function loadAccountRecord(store, email) {
-  if (!email) {
-    throw new Error("Target account is required.");
-  }
-  const record = await store.get(storageKey(email), "json");
-  if (!record) {
-    throw new Error("Account not found.");
-  }
-  return record;
-}
-
-async function loadDoctorProfileRecord(store, profileId) {
-  if (!profileId) return null;
-  return sanitizeDoctorProfile(await store.get(doctorProfileKey(profileId), "json").catch(() => null));
-}
-
 async function loadDoctorProfileState(store, db, profileId) {
-  const d1Profile = sanitizeDoctorProfile(await loadDoctorProfileMirror(db, profileId).catch(() => null));
-  if (d1Profile) return d1Profile;
-  if (!store?.get) return null;
-  const kvProfile = await loadDoctorProfileRecord(store, profileId);
-  if (kvProfile) await upsertDoctorProfileMirror(db, kvProfile).catch(() => null);
-  return kvProfile;
+  return sanitizeDoctorProfile(await loadDoctorProfileMirror(db, profileId).catch(() => null));
 }
 
 export function normalizeEmail(value) {
@@ -1054,83 +1002,6 @@ export function normalizeEmail(value) {
 
 function roleForEmail(email) {
   return email === CREATOR_EMAIL ? "creator" : "user";
-}
-
-function storageKey(email) {
-  return `account:${email}`;
-}
-
-async function loadOrCreateAccount(store, email, password, options = {}) {
-  const mode = options.mode || "login";
-  const realName = String(options.realName || "").trim();
-  const existing = await store.get(storageKey(email), "json");
-  if (!existing) {
-    const canBootstrapCreator = email === CREATOR_EMAIL && mode === "login";
-    if (!canBootstrapCreator && (mode !== "create" || !realName)) {
-      throw new Error("Account not found. Create an account first.");
-    }
-    const passwordRecord = await hashPassword(password);
-    const record = {
-      email,
-      realName: realName || (email === CREATOR_EMAIL ? "Richard Haydon" : ""),
-      role: roleForEmail(email),
-      ...passwordRecord,
-      state: sanitizeState(null),
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    await store.put(storageKey(email), JSON.stringify(record));
-    return {
-      created: true,
-      role: record.role,
-      realName: record.realName,
-      state: record.state,
-      record,
-    };
-  }
-  if (mode === "create") {
-    throw new Error("An account already exists for that email. Use log in.");
-  }
-  if (!existing.passwordHash || !existing.passwordSalt) {
-    const passwordRecord = await hashPassword(password);
-    const role = existing.role || roleForEmail(email);
-    const state = role === "creator" ? sanitizeState(existing.state) : sanitizeState(null);
-    const upgraded = {
-      ...existing,
-      realName: existing.realName || realName || "",
-      state,
-      ...passwordRecord,
-      updatedAt: new Date().toISOString(),
-    };
-    await store.put(storageKey(email), JSON.stringify(upgraded));
-    return {
-      created: false,
-      role,
-      realName: upgraded.realName || "",
-      state,
-      record: upgraded,
-    };
-  }
-  const ok = await verifyPassword(password, existing.passwordSalt, existing.passwordHash);
-  if (!ok) {
-    throw new Error("Incorrect password.");
-  }
-  let updated = existing;
-  if (realName && !existing.realName) {
-    updated = {
-      ...existing,
-      realName,
-      updatedAt: new Date().toISOString(),
-    };
-    await store.put(storageKey(email), JSON.stringify(updated));
-  }
-  return {
-    created: false,
-    role: updated.role || roleForEmail(email),
-    realName: updated.realName || "",
-    state: sanitizeState(updated.state),
-    record: updated,
-  };
 }
 
 async function loadOrCreateD1Account(db, email, password, options = {}) {
@@ -1208,21 +1079,6 @@ async function loadOrCreateD1Account(db, email, password, options = {}) {
   };
 }
 
-async function verifyAccount(store, email, password) {
-  const record = await store.get(storageKey(email), "json");
-  if (!record?.passwordHash || !record?.passwordSalt) {
-    throw new Error("Account not found.");
-  }
-  const ok = await verifyPassword(password, record.passwordSalt, record.passwordHash);
-  if (!ok) {
-    throw new Error("Incorrect password.");
-  }
-  return {
-    record,
-    role: record.role || roleForEmail(email),
-  };
-}
-
 async function verifyD1Account(db, email, password) {
   const record = await loadAccountMirror(db, email);
   if (!record?.passwordHash || !record?.passwordSalt) {
@@ -1238,16 +1094,6 @@ async function verifyD1Account(db, email, password) {
   };
 }
 
-async function listUsers(store) {
-  const result = await store.list({ prefix: "account:" });
-  const users = await Promise.all((result.keys || []).map(async (item) => {
-    const email = item.name.replace(/^account:/, "");
-    const record = await store.get(item.name, "json").catch(() => null);
-    return await userSummaryFromRecord(email, record);
-  }));
-  return users.sort((a, b) => a.email.localeCompare(b.email));
-}
-
 async function listD1Users(db) {
   const records = await listAccountMirrors(db);
   const users = [];
@@ -1260,17 +1106,13 @@ async function listD1Users(db) {
 async function autoClaimMatchedRosterNames(store, record, db = null) {
   const role = record?.role || roleForEmail(record?.email || "");
   if (!record?.email || role === "creator" || role === "owner") return record;
-  const canonicalDoctors = await queryCanonicalDoctors(db).catch(() => []);
-  const matchedClaims = canonicalDoctors.length
-    ? matchDoctorClaims(canonicalDoctors, record.realName || "")
-    : matchRepositoryClaims(await loadRepositoryIndex(store, db), record.realName || "");
+  const matchedClaims = matchDoctorClaims(await loadSqlDoctorCandidates(db), record.realName || "");
   const claims = mergeClaims(sanitizeClaims(record.claims), matchedClaims);
   if (!claims.length || JSON.stringify(claims) === JSON.stringify(sanitizeClaims(record.claims))) return record;
   const d1Refs = await d1RepositoryImportRefsForClaims(db, claims);
-  const index = d1Refs.length ? null : await loadRepositoryIndex(store, db);
   const state = {
     ...sanitizeState(record.state),
-    imports: d1Refs.length ? d1Refs : repositoryImportRefsForClaims(index, claims),
+    imports: d1Refs,
   };
   const updated = {
     ...record,
@@ -1278,7 +1120,6 @@ async function autoClaimMatchedRosterNames(store, record, db = null) {
     state,
     updatedAt: new Date().toISOString(),
   };
-  if (store?.put) await store.put(storageKey(record.email), JSON.stringify(updated));
   await upsertAccountMirror(db, updated).catch(() => null);
   return updated;
 }
@@ -1297,27 +1138,10 @@ async function autoClaimMatchedCanonicalDoctors(record, db = null) {
   };
 }
 
-async function rebuildCalendarStoreFromRepository(store, db, options = {}) {
-  const index = await loadRepositoryIndex(store, db);
-  let rebuilt = 0;
-  const limit = Math.max(1, Math.min(Number(options.limit || 1) || 1, 3));
-  const fileId = String(options.fileId || "").trim();
-  for (const file of index.files || []) {
-    if (fileId && file.id !== fileId) continue;
-    if (rebuilt >= limit) break;
-    const stored = await store.get(repositoryFileKey(file.id), "json").catch(() => null);
-    if (!stored?.dataUrl) continue;
-    const result = await upsertDerivedRosterFile(db, file, stored).catch(() => null);
-    if (result?.ok) rebuilt += 1;
-  }
-  return rebuilt;
-}
-
 async function calendarStoreStatus(store, db, options = {}) {
   const allD1Files = await queryRosterFiles(db, { includeInactive: true }).catch(() => []);
   const d1Files = allD1Files.filter((file) => file.active !== false);
-  const index = d1Files.length ? { version: 1, files: d1Files } : await loadRepositoryIndex(store);
-  const activeFiles = (index.files || []).filter((file) => file.active !== false);
+  const activeFiles = d1Files;
   const counts = await countDerivedEventsByFile(db, activeFiles.map((file) => file.id));
   const doctorCounts = await countDerivedDoctorsByFile(db, activeFiles.map((file) => file.id));
   const selectedDoctorKey = normalizeRosterName(options.doctorKey || "");
@@ -1491,60 +1315,6 @@ function manualRosterClaimIssue(record, claim) {
   };
 }
 
-async function syncAccountMirrorFromKv(store, db, options = {}) {
-  if (!db?.prepare) return 0;
-  const targetEmail = normalizeEmail(options.email || "");
-  const limit = Math.max(1, Math.min(Number(options.limit || 25) || 25, 1000));
-  const records = [];
-  if (targetEmail) {
-    const record = await store.get(storageKey(targetEmail), "json").catch(() => null);
-    if (record?.email) records.push(record);
-  } else {
-    const listed = await store.list({ prefix: "account:" });
-    for (const key of listed.keys || []) {
-      if (records.length >= limit) break;
-      const record = await store.get(key.name, "json").catch(() => null);
-      if (record?.email) records.push(record);
-    }
-  }
-  let synced = 0;
-  for (const record of records) {
-    const ok = await upsertAccountMirror(db, record, { preserveExistingState: true }).catch(() => false);
-    if (ok) synced += 1;
-  }
-  let doctorProfilesSynced = 0;
-  const profileResult = await store.list({ prefix: DOCTOR_PROFILE_PREFIX }).catch(() => ({ keys: [] }));
-  for (const key of profileResult.keys || []) {
-    const profile = sanitizeDoctorProfile(await store.get(key.name, "json").catch(() => null));
-    if (!profile) continue;
-    const ok = await upsertDoctorProfileMirror(db, profile).catch(() => false);
-    if (ok) doctorProfilesSynced += 1;
-  }
-  return { accounts: synced, doctorProfiles: doctorProfilesSynced };
-}
-
-async function ensureAccountMirrorCompleteFromKv(store, db) {
-  if (!db?.prepare) return false;
-  const status = await accountMirrorStatus(db).catch(() => null);
-  if (!status || status.unavailable) return false;
-  const kvProfiles = await countKvAccountRecords(store);
-  if (Number(status.profiles || 0) >= kvProfiles) return false;
-  await syncAccountMirrorFromKv(store, db, { limit: kvProfiles || 1000 });
-  return true;
-}
-
-async function countKvAccountRecords(store) {
-  if (!store?.list) return 0;
-  const result = await store.list({ prefix: "account:" }).catch(() => ({ keys: [] }));
-  return (result.keys || []).length;
-}
-
-async function countKvDoctorProfileRecords(store) {
-  if (!store?.list) return 0;
-  const result = await store.list({ prefix: DOCTOR_PROFILE_PREFIX }).catch(() => ({ keys: [] }));
-  return (result.keys || []).length;
-}
-
 async function userSummaryFromRecord(email, record, options = {}) {
   const claims = sanitizeClaims(record?.claims);
   const adminIssues = sanitizeAdminIssues(record?.adminIssues);
@@ -1626,7 +1396,6 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
     await upsertAccountMirror(options.db, record, { preserveExistingState: true }).catch(() => null);
   }
   const role = record.role || roleForEmail(record.email);
-  let index = null;
   let claims = sanitizeClaims(record.claims);
   let nameMatches = [];
   let state = sanitizeState(record.state);
@@ -1659,16 +1428,11 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
 
   if (role !== "creator" && role !== "owner") {
     const originalClaims = claims;
-    const canonicalDoctors = await queryCanonicalDoctors(options.db).catch(() => []);
-    const matchedClaims = canonicalDoctors.length
-      ? matchDoctorClaims(canonicalDoctors, record.realName || "")
-      : matchRepositoryClaims(index = await loadRepositoryIndex(store, options.db), record.realName || "");
+    const matchedClaims = matchDoctorClaims(await loadSqlDoctorCandidates(options.db), record.realName || "");
     nameMatches = matchedClaims.filter((claim) => !claims.some((existing) => sameClaim(existing, claim)));
     linkedProfiles = await linkedDoctorProfilesForClaims(store, claims, options.db);
     const d1Refs = await d1RepositoryImportRefsForClaims(options.db, claims);
-    const accountImportRefs = d1Refs.length
-      ? d1Refs
-      : repositoryImportRefsForClaims(index || (index = await loadRepositoryIndex(store, options.db)), claims);
+    const accountImportRefs = d1Refs;
     state = {
       ...state,
       imports: accountImportRefs,
@@ -1687,51 +1451,23 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
         },
         updatedAt: new Date().toISOString(),
       };
-      if (store?.put) await store.put(storageKey(record.email), JSON.stringify(updatedRecord));
       await upsertAccountMirror(options.db, updatedRecord).catch(() => null);
     }
   } else {
-    const hasEmbeddedImports = Array.isArray(state.imports) && state.imports.some((item) => item?.dataUrl);
     const d1Files = await queryRosterFiles(options.db).catch(() => []);
-    const fallbackIndex = d1Files.length ? null : (index || (index = await loadRepositoryIndex(store, options.db)));
-    const imported = hasEmbeddedImports && store?.put ? await upsertStateImports(store, state.imports, record.email, options.db) : {
-      index: d1Files.length ? { version: 1, files: d1Files } : fallbackIndex,
-      refs: d1Files.length
-        ? d1Files.filter((file) => file.active !== false).map(repositoryImportRef)
-        : (fallbackIndex.files || []).filter((file) => file.active !== false).map(repositoryImportRef),
+    const imported = {
+      index: { version: 1, files: d1Files },
+      refs: d1Files.filter((file) => file.active !== false).map(repositoryImportRef),
       changed: false,
     };
     const creatorRepositoryRefs = (imported.index.files || []).filter((file) => file.active !== false).map(repositoryImportRef);
     const stateWithRefs = { ...state, imports: creatorRepositoryRefs };
-    if (hasEmbeddedImports && (imported.changed || importsChanged(state.imports, creatorRepositoryRefs))) {
-      state = stateWithRefs;
-      const updatedRecord = {
-        ...record,
-        state,
-        updatedAt: new Date().toISOString(),
-      };
-      if (store?.put) await store.put(storageKey(record.email), JSON.stringify(updatedRecord));
-      await upsertAccountMirror(options.db, updatedRecord).catch(() => null);
-    } else {
-      state = stateWithRefs;
-    }
+    state = stateWithRefs;
   }
   state = applyDefaultSelectedDoctorToState(state, role, claims);
 
-  const usesD1Truth = Boolean(options.db?.prepare);
-  const owner = accountSnapshotOwner(record.email, role);
-  const buildStamp = usesD1Truth ? "" : await buildAccountSnapshotStamp(store, {
-    role,
-    email: record.email,
-    realName: record.realName || "",
-    claims,
-    state,
-    linkedProfiles,
-    index: index || await loadRepositoryIndex(store, options.db),
-  });
-  const storedSnapshot = !usesD1Truth && store?.get ? await loadSnapshotRecord(store, owner.ownerType, owner.ownerId) : null;
-  const snapshotAvailable = Boolean(storedSnapshot);
-  const snapshotStale = usesD1Truth ? false : (!storedSnapshot || storedSnapshot.schemaVersion !== SNAPSHOT_SCHEMA_VERSION || storedSnapshot.buildStamp !== buildStamp);
+  const snapshotAvailable = false;
+  const snapshotStale = false;
   const issueConfig = await buildIssueConfig(store, record.email, options.db);
 
   return {
@@ -1740,10 +1476,10 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
     state,
     claims,
     nameMatches,
-    availableDoctors: options.includeAvailableDoctors === false ? [] : await repositoryDoctorCandidates(store, index, options.db),
+    availableDoctors: options.includeAvailableDoctors === false ? [] : await repositoryDoctorCandidates(store, null, options.db),
     subscription: {
       token: String(record.subscriptionToken || ""),
-      enabled: Boolean(storedSnapshot?.subscriptionFeeds?.full?.ics),
+      enabled: false,
     },
     insightsEnabled: insightsEnabledForRecord(record),
     adminIssues: sanitizeAdminIssues(record.adminIssues),
@@ -1752,7 +1488,7 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
     snapshotAvailable,
     snapshotStale,
     snapshotBuiltAt: "",
-    snapshotBuildStamp: buildStamp,
+    snapshotBuildStamp: "",
   };
 }
 
@@ -1814,10 +1550,10 @@ async function buildDerivedAccountSnapshot(db, context) {
     const groupedDoctors = await creatorDoctorOptionsForD1(db, context.index);
     const requestedKey = normalizeRosterName(context.doctorKey || state.session?.doctorKey || "");
     selectedKey = requestedKey || OWNER_DOCTOR_KEY;
-    let doctor = findDoctorOptionByKey(groupedDoctors, selectedKey) || findRepositoryDoctorByKey(context.index, selectedKey);
+    let doctor = findDoctorOptionByKey(groupedDoctors, selectedKey);
     if (requestedKey && selectedKey !== OWNER_DOCTOR_KEY && !doctor) {
       selectedKey = OWNER_DOCTOR_KEY;
-      doctor = findDoctorOptionByKey(groupedDoctors, selectedKey) || findRepositoryDoctorByKey(context.index, selectedKey);
+      doctor = findDoctorOptionByKey(groupedDoctors, selectedKey);
     }
     if (!doctor) return null;
     doctorKeys = doctorKeysForOption(doctor);
@@ -1872,10 +1608,9 @@ async function buildDerivedAccountSnapshot(db, context) {
     ]), settings),
   ];
   if (!events.length) return null;
-  const owner = accountSnapshotOwner(context.record.email, role);
   return sanitizeSnapshotRecord({
-    ownerType: owner.ownerType,
-    ownerId: owner.ownerId,
+    ownerType: role === "creator" || role === "owner" ? "creator-account" : "claimed-account",
+    ownerId: normalizeEmail(context.record.email),
     schemaVersion: SNAPSHOT_SCHEMA_VERSION,
     builtAt: new Date().toISOString(),
     buildStamp: "d1-derived",
@@ -1958,9 +1693,18 @@ async function creatorDoctorOptionsForD1(db, index) {
   const canonicalDoctors = await queryCanonicalDoctors(db).catch(() => []);
   if (canonicalDoctors.length) return canonicalDoctors;
   const doctorRows = await queryRosterFileDoctors(db).catch(() => []);
-  if (doctorRows.length) return await buildCanonicalDoctorOptionsFromRows(db, doctorRows);
-  const fallbackIndex = index || await loadRepositoryIndex(null, db);
-  return buildCreatorDoctorOptions(repositoryDoctorCandidatesFromIndex(fallbackIndex));
+  if (doctorRows.length) return await buildCanonicalDoctorOptionsFromRows(db, doctorRows, { includeZeroEventStandalone: true });
+  return [];
+}
+
+async function loadSqlDoctorCandidates(db) {
+  const canonicalDoctors = await queryCanonicalDoctors(db).catch(() => []);
+  if (canonicalDoctors.length) return canonicalDoctors;
+  const rosterDoctors = await queryRosterDoctors(db).catch(() => []);
+  if (rosterDoctors.length) return rosterDoctors;
+  const doctorRows = await queryRosterFileDoctors(db).catch(() => []);
+  if (doctorRows.length) return await buildCanonicalDoctorOptionsFromRows(db, doctorRows, { includeZeroEventStandalone: true });
+  return [];
 }
 
 async function resolveSelectedRosterFileDoctorRows(db, doctorKey) {
@@ -2069,46 +1813,10 @@ function latestCustomEventsByIdentity(events) {
   return [...byIdentity.values()];
 }
 
-export async function loadAccountBySubscriptionToken(store, token) {
-  const normalizedToken = String(token || "").trim();
-  if (!normalizedToken) return null;
-  const email = await store.get(subscriptionTokenKey(normalizedToken), "text").catch(() => "");
-  if (!email) return null;
-  return await loadAccountRecord(store, normalizeEmail(email)).catch(() => null);
-}
-
-async function hydrateRepositoryFromExistingAccounts(store) {
-  let index = await loadRepositoryIndex(store);
-  const result = await store.list({ prefix: "account:" });
-  let changed = false;
-  for (const item of result.keys || []) {
-    const record = await store.get(item.name, "json").catch(() => null);
-    if (!record?.state?.imports?.some((importItem) => importItem?.dataUrl)) continue;
-    const upserted = await upsertImportsIntoRepository(store, index, record.state.imports, record.email || item.name.replace(/^account:/, ""));
-    index = upserted.index;
-    changed = changed || upserted.changed;
-    const refs = record.state.imports.map((importItem) => {
-      const repoId = importItem.repoId || importItem.repositoryId || upserted.idByOriginalId.get(importItem.id) || upserted.idByDataUrl.get(importItem.dataUrl);
-      return repoId ? repositoryImportRef(index.files.find((file) => file.id === repoId) || { ...importItem, id: repoId }) : repositoryImportRef(importItem);
-    });
-    if (importsChanged(record.state.imports, refs)) {
-      await store.put(item.name, JSON.stringify({
-        ...record,
-        state: {
-          ...sanitizeState(record.state),
-          imports: refs,
-        },
-        updatedAt: new Date().toISOString(),
-      }));
-    }
-  }
-  if (changed) await saveRepositoryIndex(store, index);
-}
-
 async function buildIssueConfig(store, email = "", db = null) {
-  const globalParserExtensions = db?.prepare ? await loadD1ParserExtensionRules(db) : (store?.get ? await loadParserExtensionRules(store) : {});
+  const globalParserExtensions = await loadD1ParserExtensionRules(db);
   const record = email
-    ? (await loadAccountMirror(db, email).catch(() => null)) || (store?.get ? await loadAccountRecord(store, email).catch(() => null) : null)
+    ? await loadAccountMirror(db, email).catch(() => null)
     : null;
   const role = record?.role || roleForEmail(email);
   const localParserExtensions = sanitizeParserExtensionRules(record?.localParserExtensions);
@@ -2116,20 +1824,16 @@ async function buildIssueConfig(store, email = "", db = null) {
     parserExtensions: mergeParserExtensionSets(globalParserExtensions, localParserExtensions),
     globalParserExtensions,
     localParserExtensions,
-    parserRuleSuggestions: (role === "creator" || role === "owner") ? await loadParserRuleSuggestions(store, db) : [],
-    dismissedFingerprints: store?.get ? await loadDismissedIssueFingerprints(store, email) : [],
-    ignoredFingerprints: store?.get ? await loadIgnoredIssueFingerprints(store) : [],
+    parserRuleSuggestions: (role === "creator" || role === "owner") ? await loadParserRuleSuggestions(null, db) : [],
+    dismissedFingerprints: [],
+    ignoredFingerprints: [],
   };
 }
 
 async function clearIssueFromAllUsers(storeOrDb, fingerprint) {
   const normalizedFingerprint = sanitizeIssueFingerprint(fingerprint);
   if (!normalizedFingerprint) return;
-  const records = storeOrDb?.prepare
-    ? await listAccountMirrors(storeOrDb).catch(() => [])
-    : [];
-  if (!records.length && !storeOrDb?.list) return;
-  const sourceRecords = records.length ? records : await recordsFromKvStore(storeOrDb);
+  const sourceRecords = await listAccountMirrors(storeOrDb).catch(() => []);
   for (const record of sourceRecords) {
     if (!record?.adminIssues?.length) continue;
     const nextIssues = sanitizeAdminIssues(record.adminIssues).filter((issue) => issue.fingerprint !== normalizedFingerprint);
@@ -2145,11 +1849,7 @@ async function clearIssueFromAllUsers(storeOrDb, fingerprint) {
 async function clearIssuesResolvedByParserRule(storeOrDb, rule) {
   const normalizedRule = sanitizeParserExtensionRule(rule);
   if (!normalizedRule) return;
-  const records = storeOrDb?.prepare
-    ? await listAccountMirrors(storeOrDb).catch(() => [])
-    : [];
-  if (!records.length && !storeOrDb?.list) return;
-  const sourceRecords = records.length ? records : await recordsFromKvStore(storeOrDb);
+  const sourceRecords = await listAccountMirrors(storeOrDb).catch(() => []);
   for (const record of sourceRecords) {
     if (!record?.adminIssues?.length) continue;
     const existingIssues = sanitizeAdminIssues(record.adminIssues);
@@ -2167,9 +1867,7 @@ async function clearIssuesResolvedByParserRuleForUser(storeOrDb, email, rule) {
   const normalizedRule = sanitizeParserExtensionRule(rule);
   const normalizedEmail = normalizeEmail(email);
   if (!normalizedRule || !normalizedEmail) return;
-  const record = storeOrDb?.prepare
-    ? await loadAccountMirror(storeOrDb, normalizedEmail).catch(() => null)
-    : await loadAccountRecord(storeOrDb, normalizedEmail).catch(() => null);
+  const record = await loadAccountMirror(storeOrDb, normalizedEmail).catch(() => null);
   if (!record?.adminIssues?.length) return;
   const existingIssues = sanitizeAdminIssues(record.adminIssues);
   const nextIssues = existingIssues.filter((issue) => !issueMatchesParserRule(issue, normalizedRule));
@@ -2206,9 +1904,7 @@ async function isIssueResolvedByParserRules(store, email, issue, db = null) {
 async function clearIssuesResolvedByIssue(storeOrDb, email, issue) {
   const normalizedEmail = normalizeEmail(email);
   if (!normalizedEmail) return;
-  const record = storeOrDb?.prepare
-    ? await loadAccountMirror(storeOrDb, normalizedEmail).catch(() => null)
-    : await loadAccountRecord(storeOrDb, normalizedEmail).catch(() => null);
+  const record = await loadAccountMirror(storeOrDb, normalizedEmail).catch(() => null);
   if (!record?.adminIssues?.length) return;
   const existingIssues = sanitizeAdminIssues(record.adminIssues);
   const nextIssues = existingIssues.filter((item) => !sameParserIssue(item, issue));
@@ -2220,24 +1916,9 @@ async function clearIssuesResolvedByIssue(storeOrDb, email, issue) {
   });
 }
 
-async function recordsFromKvStore(store) {
-  if (!store?.list) return [];
-  const result = await store.list({ prefix: "account:" });
-  const records = [];
-  for (const item of result.keys || []) {
-    const record = await store.get(item.name, "json").catch(() => null);
-    if (record?.email) records.push(record);
-  }
-  return records;
-}
-
 async function persistAccountRecord(storeOrDb, record) {
   if (!record?.email) return;
-  if (storeOrDb?.prepare) {
-    await upsertAccountMirror(storeOrDb, record);
-  } else if (storeOrDb?.put) {
-    await storeOrDb.put(storageKey(record.email), JSON.stringify(record));
-  }
+  await upsertAccountMirror(storeOrDb, record);
 }
 
 function sameParserIssue(left, right) {
@@ -2263,175 +1944,10 @@ function parserRuleCodeFromRawValue(sourceValue, rawValue) {
   return upper;
 }
 
-async function upsertLocalParserRuleForUser(store, email, rule) {
-  const normalizedEmail = normalizeEmail(email);
-  const normalizedRule = sanitizeParserExtensionRule(rule);
-  if (!normalizedEmail || !normalizedRule) return;
-  const record = await loadAccountRecord(store, normalizedEmail).catch(() => null);
-  if (!record) return;
-  await store.put(storageKey(normalizedEmail), JSON.stringify({
-    ...record,
-    localParserExtensions: upsertParserExtensionRule(record.localParserExtensions, normalizedRule),
-    updatedAt: new Date().toISOString(),
-  }));
-}
-
-async function removeLocalParserRuleForUser(store, email, rule) {
-  const normalizedEmail = normalizeEmail(email);
-  const normalizedRule = sanitizeParserExtensionRule(rule);
-  if (!normalizedEmail || !normalizedRule) return;
-  const record = await loadAccountRecord(store, normalizedEmail).catch(() => null);
-  if (!record) return;
-  const localParserExtensions = removeParserExtensionRule(record.localParserExtensions, normalizedRule);
-  await store.put(storageKey(normalizedEmail), JSON.stringify({
-    ...record,
-    localParserExtensions,
-    updatedAt: new Date().toISOString(),
-  }));
-}
-
-async function removeLocalParserRuleFromAllUsers(store, rule) {
-  const normalizedRule = sanitizeParserExtensionRule(rule);
-  if (!normalizedRule) return;
-  const result = await store.list({ prefix: "account:" });
-  for (const item of result.keys || []) {
-    const record = await store.get(item.name, "json").catch(() => null);
-    if (!record?.localParserExtensions) continue;
-    const existing = JSON.stringify(sanitizeParserExtensionRules(record.localParserExtensions));
-    const localParserExtensions = removeParserExtensionRule(record.localParserExtensions, normalizedRule);
-    if (JSON.stringify(localParserExtensions) === existing) continue;
-    await store.put(item.name, JSON.stringify({
-      ...record,
-      localParserExtensions,
-      updatedAt: new Date().toISOString(),
-    }));
-  }
-}
-
-async function upsertStateImports(store, imports, uploadedBy, db = null) {
-  let index = await loadRepositoryIndex(store);
-  const upserted = await upsertImportsIntoRepository(store, index, imports, uploadedBy, db);
-  index = upserted.index;
-  if (upserted.changed) await saveRepositoryIndex(store, index);
-  return {
-    index,
-    refs: (imports || []).map((item) => {
-      const repoId = item.repoId || item.repositoryId || upserted.idByOriginalId.get(item.id) || upserted.idByDataUrl.get(item.dataUrl);
-      return repoId ? repositoryImportRef(index.files.find((file) => file.id === repoId) || { ...item, id: repoId }) : repositoryImportRef(item);
-    }),
-    changed: upserted.changed,
-  };
-}
-
-async function upsertImportsIntoRepository(store, index, imports = [], uploadedBy = "", db = null) {
-  const idByOriginalId = new Map();
-  const idByDataUrl = new Map();
-  let changed = false;
-  for (const item of imports || []) {
-    if (!item?.dataUrl) {
-      const repoId = item?.repoId || item?.repositoryId || item?.id || "";
-      if (repoId) idByOriginalId.set(item.id, repoId);
-      continue;
-    }
-    const contentHash = await sha256(item.dataUrl);
-    const repoId = `sha256-${contentHash}`;
-    idByOriginalId.set(item.id, repoId);
-    idByDataUrl.set(item.dataUrl, repoId);
-    const existing = index.files.find((file) => file.id === repoId);
-    let inspected = {
-      sourceType: String(item.sourceType || "").toLowerCase(),
-      doctors: sanitizeRepositoryDoctors(item.doctors),
-    };
-    if (!inspected.sourceType || !inspected.doctors.length) {
-      try {
-        inspected = await inspectImportRecord(item);
-      } catch {
-        inspected = { sourceType: item.sourceType || "unknown", doctors: [] };
-      }
-    }
-    const meta = {
-      id: repoId,
-      name: String(item.name || existing?.name || "roster.xlsx"),
-      size: Number(item.size || existing?.size || 0),
-      lastModified: Number(item.lastModified || existing?.lastModified || 0),
-      addedAt: String(item.addedAt || existing?.addedAt || new Date().toISOString()),
-      uploadedAt: existing?.uploadedAt || new Date().toISOString(),
-      uploadedBy: existing?.uploadedBy || uploadedBy,
-      sourceType: inspected.sourceType || item.sourceType || existing?.sourceType || "unknown",
-      doctors: inspected.doctors?.length ? inspected.doctors : sanitizeRepositoryDoctors(existing?.doctors),
-      active: existing?.active !== false,
-    };
-    if (!existing || JSON.stringify(existing) !== JSON.stringify(meta)) {
-      if (existing) {
-        index.files = index.files.map((file) => file.id === repoId ? meta : file);
-      } else {
-        index.files.push(meta);
-      }
-      changed = true;
-    }
-    let storedImport = null;
-    if (!existing) {
-      storedImport = {
-        ...meta,
-        type: item.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        dataUrl: item.dataUrl,
-      };
-      await store.put(repositoryFileKey(repoId), JSON.stringify(storedImport));
-    } else {
-      storedImport = await store.get(repositoryFileKey(repoId), "json").catch(() => null);
-    }
-    if (db && storedImport?.dataUrl && (!existing || JSON.stringify(existing) !== JSON.stringify(meta))) {
-      await upsertDerivedRosterFile(db, meta, storedImport).catch(() => null);
-    }
-  }
-  index.files.sort((left, right) => (left.addedAt || "").localeCompare(right.addedAt || "") || left.name.localeCompare(right.name));
-  return { index, changed, idByOriginalId, idByDataUrl };
-}
-
-async function loadRepositoryIndex(store, db = null) {
-  const d1Files = await queryRosterFiles(db).catch(() => []);
-  if (d1Files.length) {
-    return {
-      version: 1,
-      files: d1Files.filter((file) => file.active !== false).map((file) => sanitizeRepositoryFile(file)).filter(Boolean),
-    };
-  }
-  if (!store?.get) return { version: 1, files: [] };
-  const raw = await store.get(REPOSITORY_INDEX_KEY, "json").catch(() => null);
-  const rawFiles = Array.isArray(raw?.files) ? raw.files : [];
-  const files = rawFiles.map(sanitizeRepositoryFile).filter((file) => file && file.active !== false);
-  return {
-    version: 1,
-    files,
-  };
-}
-
 function sanitizeRepositoryFileIds(ids = []) {
   return [...new Set((Array.isArray(ids) ? ids : [])
     .map((id) => String(id || "").trim())
     .filter(Boolean))];
-}
-
-async function removeRepositoryFiles(store, index, ids = [], db = null) {
-  const removedIds = new Set(sanitizeRepositoryFileIds(ids));
-  if (!removedIds.size) return index;
-  const files = (index.files || []).filter((file) => !removedIds.has(file.id));
-  await Promise.all([...removedIds].map((id) => store.delete(repositoryFileKey(id))));
-  if (db) {
-    await Promise.all([...removedIds].map((id) => deleteDerivedRosterFile(db, id).catch(() => null)));
-    await Promise.all([...removedIds].map((id) => deleteRawRosterFile(db, id).catch(() => null)));
-  }
-  const next = { ...index, files };
-  await saveRepositoryIndex(store, next);
-  return next;
-}
-
-async function saveRepositoryIndex(store, index) {
-  await store.put(REPOSITORY_INDEX_KEY, JSON.stringify({
-    version: 1,
-    files: (index.files || []).map(sanitizeRepositoryFile).filter(Boolean),
-    updatedAt: new Date().toISOString(),
-  }));
 }
 
 function sanitizeRepositoryFile(file) {
@@ -2461,36 +1977,6 @@ function sanitizeRepositoryDoctors(doctors) {
     .filter((doctor) => doctor.key && doctor.displayName);
 }
 
-function repositoryFileKey(id) {
-  return `${REPOSITORY_FILE_PREFIX}${id}`;
-}
-
-function doctorProfileKey(profileId) {
-  return `${DOCTOR_PROFILE_PREFIX}${profileId}`;
-}
-
-function subscriptionTokenKey(token) {
-  return `${SUBSCRIPTION_TOKEN_PREFIX}${token}`;
-}
-
-function snapshotKey(ownerType, ownerId) {
-  return `${SNAPSHOT_PREFIX}${ownerType}:${ownerId}`;
-}
-
-export function accountSnapshotOwner(email, role) {
-  return {
-    ownerType: role === "creator" || role === "owner" ? "creator-account" : "claimed-account",
-    ownerId: normalizeEmail(email),
-  };
-}
-
-function doctorProfileSnapshotOwner(profile) {
-  return {
-    ownerType: "doctor-profile",
-    ownerId: String(profile?.profileId || "").trim(),
-  };
-}
-
 function repositoryImportRef(item) {
   return {
     repoId: item.repoId || item.repositoryId || item.id,
@@ -2505,30 +1991,6 @@ function repositoryImportRef(item) {
 
 function importsChanged(current = [], next = []) {
   return JSON.stringify((current || []).map(repositoryImportRef)) !== JSON.stringify((next || []).map(repositoryImportRef));
-}
-
-async function resolveStateImports(store, imports = []) {
-  const resolved = [];
-  for (const ref of imports || []) {
-    const repoId = ref.repoId || ref.repositoryId || ref.id;
-    const stored = repoId ? await store.get(repositoryFileKey(repoId), "json").catch(() => null) : null;
-    if (stored?.dataUrl) {
-      resolved.push({
-        id: repoId,
-        repoId,
-        name: stored.name || ref.name,
-        size: stored.size || ref.size || 0,
-        lastModified: stored.lastModified || ref.lastModified || 0,
-        addedAt: ref.addedAt || stored.addedAt || "",
-        sourceType: stored.sourceType || ref.sourceType || "pending",
-        type: stored.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        dataUrl: stored.dataUrl,
-      });
-    } else if (ref?.dataUrl) {
-      resolved.push(ref);
-    }
-  }
-  return resolved;
 }
 
 function sanitizeAvailableDoctors(value) {
@@ -2607,114 +2069,6 @@ function sanitizeProfileCoverage(value) {
   };
 }
 
-export async function loadSnapshotRecord(store, ownerType, ownerId) {
-  if (!ownerType || !ownerId) return null;
-  return sanitizeSnapshotRecord(await store.get(snapshotKey(ownerType, ownerId), "json").catch(() => null));
-}
-
-async function persistSnapshotRecord(store, ownerType, ownerId, snapshot, buildStamp) {
-  const sanitizedInput = sanitizeSnapshotRecord({
-    ...snapshot,
-    ownerType,
-    ownerId,
-    buildStamp,
-    builtAt: new Date().toISOString(),
-    schemaVersion: SNAPSHOT_SCHEMA_VERSION,
-  });
-  if (!sanitizedInput) return null;
-  const persisted = {
-    ...sanitizedInput,
-    buildStamp,
-    builtAt: new Date().toISOString(),
-    schemaVersion: SNAPSHOT_SCHEMA_VERSION,
-  };
-  await store.put(snapshotKey(ownerType, ownerId), JSON.stringify(persisted));
-  return persisted;
-}
-
-async function buildStateRevision(state) {
-  const session = state?.session && typeof state.session === "object" ? state.session : {};
-  return await sha256(JSON.stringify({
-    imports: sanitizeSnapshotFileRefs(state?.imports || []),
-    settings: session.settings || {},
-    exportRange: session.exportRange || {},
-    overrides: session.overrides || {},
-    customEvents: session.customEvents || [],
-    conflictSelections: session.conflictSelections || {},
-    doctorKey: session.doctorKey || "",
-  }));
-}
-
-async function buildAccountSnapshotStamp(store, context) {
-  const role = context?.role || "user";
-  const refs = role === "creator" || role === "owner"
-    ? sanitizeSnapshotFileRefs(context?.state?.imports || [])
-    : repositoryImportRefsForAccount(context?.index || await loadRepositoryIndex(store), {
-        email: context?.email || "",
-        realName: context?.realName || "",
-        claims: context?.claims || [],
-        state: context?.state || {},
-      });
-  const fileMarkers = refs.map((ref) => ({
-    id: ref.id,
-    sourceType: ref.sourceType,
-    size: ref.size,
-    lastModified: ref.lastModified,
-    addedAt: ref.addedAt,
-  }));
-  const linkedProfileMarkers = Array.isArray(context?.linkedProfiles)
-    ? context.linkedProfiles.map((profile) => ({
-        profileId: profile.profileId,
-        doctorKey: profile.doctorKey,
-        sourceTypes: profile.sourceTypes,
-        updatedAt: profile.updatedAt,
-        stateRevision: profile.state ? JSON.stringify(profile.state.session || {}) : "",
-      }))
-    : [];
-  const stateRevision = await buildStateRevision(context?.state || {});
-  const parserExtensions = store?.get ? await loadParserExtensionRules(store) : {};
-  const ignoredFingerprints = store?.get ? await loadIgnoredIssueFingerprints(store) : [];
-  const dismissedFingerprints = store?.get ? await loadDismissedIssueFingerprints(store, context?.email || "") : [];
-  return await sha256(JSON.stringify({
-    schemaVersion: SNAPSHOT_SCHEMA_VERSION,
-    ownerType: role === "creator" || role === "owner" ? "creator-account" : "claimed-account",
-    ownerId: normalizeEmail(context?.email || ""),
-    claims: sanitizeClaims(context?.claims || []),
-    files: fileMarkers,
-    linkedProfiles: linkedProfileMarkers,
-    stateRevision,
-    parserExtensions,
-    ignoredFingerprints,
-    dismissedFingerprints,
-  }));
-}
-
-async function buildDoctorProfileSnapshotStamp(store, profile, db = null) {
-  const refs = await repositoryImportRefsForDoctorProfile(store, profile, db);
-  const fileMarkers = refs.map((ref) => ({
-    id: ref.id,
-    sourceType: ref.sourceType,
-    size: ref.size,
-    lastModified: ref.lastModified,
-    addedAt: ref.addedAt,
-  }));
-  const stateRevision = await buildStateRevision(profile?.state || {});
-  const parserExtensions = store?.get ? await loadParserExtensionRules(store) : {};
-  const ignoredFingerprints = store?.get ? await loadIgnoredIssueFingerprints(store) : [];
-  return await sha256(JSON.stringify({
-    schemaVersion: SNAPSHOT_SCHEMA_VERSION,
-    ownerType: "doctor-profile",
-    ownerId: String(profile?.profileId || "").trim(),
-    doctorKey: normalizeRosterName(profile?.doctorKey || ""),
-    displayName: String(profile?.displayName || "").trim(),
-    sourceTypes: sanitizeSourceTypes(profile?.sourceTypes),
-    files: fileMarkers,
-    stateRevision,
-    parserExtensions,
-    ignoredFingerprints,
-  }));
-}
-
 function repositoryImportRefsForClaims(index, claims) {
   const claimSet = new Set(sanitizeClaims(claims).map((claim) => `${claim.sourceType}:${claim.key}`));
   const refs = [];
@@ -2735,37 +2089,9 @@ async function d1RepositoryImportRefsForClaims(db, claims) {
   return await queryRosterFileRefsForDoctors(db, sanitizeClaims(claims).map((claim) => claim.key)).catch(() => []);
 }
 
-async function repositoryImportsForClaims(store, index, claims, db = null) {
-  const d1Refs = await d1RepositoryImportRefsForClaims(db, claims);
-  return resolveStateImports(store, d1Refs.length ? d1Refs : repositoryImportRefsForClaims(index, claims));
-}
-
-async function resolveAccountImports(store, record, db = null) {
-  const role = record?.role || roleForEmail(record?.email || "");
-  const state = sanitizeState(record?.state);
-  if (role === "creator" || role === "owner") {
-    const index = await loadRepositoryIndex(store, db);
-    const activeRefs = (index.files || []).filter((file) => file.active !== false).map(repositoryImportRef);
-    return resolveStateImports(store, activeRefs.length ? activeRefs : state.imports || []);
-  }
-  const index = await loadRepositoryIndex(store, db);
-  const d1Refs = await d1RepositoryImportRefsForClaims(db, record?.claims || []);
-  return resolveStateImports(store, d1Refs.length ? d1Refs : repositoryImportRefsForAccount(index, record));
-}
-
 async function linkedDoctorProfilesForClaims(store, claims, db = null) {
   const d1Profiles = await queryDoctorProfileMirrors(db).catch(() => []);
-  const d1Matches = filterLinkedDoctorProfiles(d1Profiles, claims);
-  if (d1Profiles.length) return d1Matches;
-  if (!store?.list) return [];
-  const profileResult = await store.list({ prefix: DOCTOR_PROFILE_PREFIX });
-  if (!(profileResult.keys || []).length) return [];
-  const profiles = [];
-  for (const item of profileResult.keys || []) {
-    const profile = sanitizeDoctorProfile(await store.get(item.name, "json").catch(() => null));
-    if (profile) profiles.push(profile);
-  }
-  return filterLinkedDoctorProfiles(profiles, claims);
+  return filterLinkedDoctorProfiles(d1Profiles, claims);
 }
 
 function filterLinkedDoctorProfiles(profiles, claims) {
@@ -2814,45 +2140,17 @@ function mergeProfileSessionIntoState(state, profiles, ownerEmail = "") {
 }
 
 async function repositoryImportRefsForDoctorProfile(store, profile, db = null) {
-  const d1Refs = await queryRosterFileRefsForDoctors(db, [profile?.doctorKey].filter(Boolean)).catch(() => []);
-  if (d1Refs.length) return d1Refs;
-  const index = await loadRepositoryIndex(store, db);
-  const refs = [];
-  for (const file of index.files || []) {
-    if (file.active === false) continue;
-    const hasProfileDoctor = sanitizeRepositoryDoctors(file.doctors).some((doctor) => (
-      doctor.key === profile.doctorKey
-    ));
-    if (hasProfileDoctor) refs.push(repositoryImportRef(file));
-  }
-  return refs;
-}
-
-async function repositoryImportsForDoctorProfile(store, profile, db = null) {
-  return resolveStateImports(store, await repositoryImportRefsForDoctorProfile(store, profile, db));
+  return await queryRosterFileRefsForDoctors(db, [profile?.doctorKey].filter(Boolean)).catch(() => []);
 }
 
 async function loadDoctorProfileSnapshotInfo(store, profile, db = null) {
   const derivedSnapshot = await buildDerivedDoctorProfileSnapshot(store, db, profile);
-  if (db?.prepare) {
-    return {
-      snapshot: derivedSnapshot,
-      snapshotAvailable: Boolean(derivedSnapshot),
-      snapshotStale: false,
-      snapshotBuiltAt: derivedSnapshot?.builtAt || "",
-      snapshotBuildStamp: "",
-    };
-  }
-  const owner = doctorProfileSnapshotOwner(profile);
-  const buildStamp = await buildDoctorProfileSnapshotStamp(store, profile, db);
-  const storedSnapshot = store?.get ? await loadSnapshotRecord(store, owner.ownerType, owner.ownerId) : null;
-  const snapshot = derivedSnapshot || storedSnapshot;
   return {
-    snapshot,
-    snapshotAvailable: Boolean(snapshot),
-    snapshotStale: derivedSnapshot ? false : (!storedSnapshot || storedSnapshot.schemaVersion !== SNAPSHOT_SCHEMA_VERSION || storedSnapshot.buildStamp !== buildStamp),
-    snapshotBuiltAt: snapshot?.builtAt || "",
-    snapshotBuildStamp: buildStamp,
+    snapshot: derivedSnapshot,
+    snapshotAvailable: Boolean(derivedSnapshot),
+    snapshotStale: false,
+    snapshotBuiltAt: derivedSnapshot?.builtAt || "",
+    snapshotBuildStamp: "",
   };
 }
 
@@ -2888,12 +2186,9 @@ async function buildDerivedDoctorProfileSnapshot(store, db, profile) {
   const refs = await repositoryImportRefsForDoctorProfile(store, profile, db);
   const profileSources = sanitizeSourceTypes(profile.sourceTypes);
   const doctorOption = doctorDiagnostics.length ? buildDoctorOptionFromRows([...doctorDiagnostics]) : null;
-  const index = doctorOption ? null : await loadRepositoryIndex(store, db);
   const doctorOptions = doctorOption
     ? [doctorOption]
-    : buildCreatorDoctorOptions(repositoryDoctorCandidatesFromIndex(index).filter((doctor) => (
-      doctor.key === profile.doctorKey || profileSources.includes(doctor.sourceType)
-    )));
+    : [];
   return sanitizeSnapshotRecord({
     ownerType: "doctor-profile",
     ownerId: profile.profileId,
@@ -2920,36 +2215,6 @@ async function buildDerivedDoctorProfileSnapshot(store, db, profile) {
   });
 }
 
-async function storeSnapshotForAccount(store, context) {
-  if (!context?.snapshot) return null;
-  const role = context.role || roleForEmail(context.email || "");
-  const owner = accountSnapshotOwner(context.email, role);
-  const index = await loadRepositoryIndex(store);
-  const claims = sanitizeClaims(context.claims);
-  const linkedProfiles = role === "creator" || role === "owner" ? [] : await linkedDoctorProfilesForClaims(store, claims);
-  const buildStamp = await buildAccountSnapshotStamp(store, {
-    role,
-    email: context.email,
-    realName: context.realName || context.record?.realName || "",
-    claims,
-    state: context.state,
-    linkedProfiles,
-    index,
-  });
-  return persistSnapshotRecord(store, owner.ownerType, owner.ownerId, context.snapshot, buildStamp);
-}
-
-async function storeSnapshotForDoctorProfile(store, profile, snapshot) {
-  if (!snapshot || !profile?.profileId) return null;
-  const owner = doctorProfileSnapshotOwner(profile);
-  const buildStamp = await buildDoctorProfileSnapshotStamp(store, profile);
-  return persistSnapshotRecord(store, owner.ownerType, owner.ownerId, snapshot, buildStamp);
-}
-
-function matchRepositoryClaims(index, realName) {
-  return matchDoctorClaims(repositoryDoctorCandidatesFromIndex(index), realName);
-}
-
 function matchDoctorClaims(doctors, realName) {
   const claims = [];
   const realIdentity = rosterIdentityKey(realName);
@@ -2970,7 +2235,6 @@ function matchDoctorClaims(doctors, realName) {
 }
 
 async function repositoryDoctorCandidates(store, index, db = null, options = {}) {
-  await ensureAccountMirrorCompleteFromKv(store, db).catch(() => false);
   const accountIndex = await loadClaimedAccountIndex(store, db);
   const canonicalDoctors = await queryCanonicalDoctors(db, {
     includeZeroEventStandalone: options.hideZeroEventStandalone !== true,
@@ -2980,7 +2244,7 @@ async function repositoryDoctorCandidates(store, index, db = null, options = {})
   if (doctorRows.length) return attachClaimedAccountMetadata(await buildCanonicalDoctorOptionsFromRows(db, doctorRows, {
     includeZeroEventStandalone: options.hideZeroEventStandalone !== true,
   }), accountIndex);
-  return attachClaimedAccountMetadata(repositoryDoctorCandidatesFromIndex(index), accountIndex);
+  return [];
 }
 
 async function refreshCanonicalDoctors(db) {
@@ -3022,27 +2286,6 @@ function attachClaimedAccountMetadata(doctors, accountIndex) {
     if (leftClaimed !== rightClaimed) return leftClaimed - rightClaimed;
     return left.displayName.localeCompare(right.displayName) || left.sourceType.localeCompare(right.sourceType);
   });
-}
-
-function repositoryDoctorCandidatesFromIndex(index) {
-  const seen = new Set();
-  const candidates = [];
-  for (const file of index?.files || []) {
-    if (file.active === false) continue;
-    for (const doctor of sanitizeRepositoryDoctors(file.doctors)) {
-      const marker = `${doctor.sourceType}:${doctor.key}`;
-      if (seen.has(marker)) continue;
-      seen.add(marker);
-      candidates.push(doctor);
-    }
-  }
-  return candidates;
-}
-
-function findRepositoryDoctorByKey(index, key) {
-  const normalizedKey = normalizeRosterName(key);
-  if (!normalizedKey) return null;
-  return repositoryDoctorCandidatesFromIndex(index).find((doctor) => doctor.key === normalizedKey) || null;
 }
 
 function buildCreatorDoctorOptions(doctors) {
@@ -3261,24 +2504,7 @@ async function resolveDoctorAccount(store, rawDoctor, db = null) {
 }
 
 async function loadClaimedAccountIndex(store, db = null) {
-  if (store?.list) await ensureAccountMirrorCompleteFromKv(store, db).catch(() => false);
-  const d1Accounts = await queryClaimedAccounts(db).catch(() => []);
-  if (d1Accounts.length) return d1Accounts;
-  if (!store?.list) return [];
-  const accounts = [];
-  const result = await store.list({ prefix: "account:" });
-  for (const item of result.keys || []) {
-    const record = await store.get(item.name, "json").catch(() => null);
-    const email = normalizeEmail(record?.email || item.name.replace(/^account:/, ""));
-    const role = record?.role || roleForEmail(email);
-    if (!record || !email || role === "creator" || role === "owner") continue;
-    accounts.push({
-      email,
-      realName: String(record.realName || "").trim(),
-      claims: sanitizeClaims(record.claims).filter((claim) => claimMatchesAccountIdentity(claim, record.realName || "")),
-    });
-  }
-  return accounts;
+  return await queryClaimedAccounts(db).catch(() => []);
 }
 
 function resolveDoctorAccountFromIndex(accounts, rawDoctor) {
@@ -3310,12 +2536,7 @@ async function clearDeletedAccountClaimMetadata(store, email, record) {
   if (!deletedEmail) return;
   const deletedClaims = sanitizeClaims(record?.claims);
   if (!deletedClaims.length) return;
-  if (store?.prepare) {
-    await removeDeletedClaimsFromRemainingD1Accounts(store, deletedEmail, deletedClaims);
-    return;
-  }
-  if (!store?.list) return;
-  await removeDeletedClaimsFromRemainingAccounts(store, deletedEmail, deletedClaims);
+  await removeDeletedClaimsFromRemainingD1Accounts(store, deletedEmail, deletedClaims);
 }
 
 async function removeDeletedClaimsFromRemainingD1Accounts(db, deletedEmail, deletedClaims) {
@@ -3334,45 +2555,7 @@ async function removeDeletedClaimsFromRemainingD1Accounts(db, deletedEmail, dele
   }
 }
 
-async function removeDeletedClaimsFromRemainingAccounts(store, deletedEmail, deletedClaims) {
-  const result = await store.list({ prefix: "account:" });
-  for (const item of result.keys || []) {
-    const record = await store.get(item.name, "json").catch(() => null);
-    const email = normalizeEmail(record?.email || item.name.replace(/^account:/, ""));
-    if (!record || email === deletedEmail) continue;
-    const claims = sanitizeClaims(record.claims);
-    const filtered = claims.filter((claim) => !deletedClaims.some((deletedClaim) => sameClaim(claim, deletedClaim)));
-    if (filtered.length === claims.length) continue;
-    await store.put(item.name, JSON.stringify({
-      ...record,
-      claims: filtered,
-      updatedAt: new Date().toISOString(),
-    }));
-    const owner = accountSnapshotOwner(email, record.role || roleForEmail(email));
-    await store.delete(snapshotKey(owner.ownerType, owner.ownerId));
-  }
-}
-
-function findRepositoryDoctor(index, rawClaim) {
-  const claim = {
-    key: normalizeRosterName(rawClaim?.key || ""),
-    sourceType: String(rawClaim?.sourceType || "").toLowerCase(),
-  };
-  if (!claim.key || !claim.sourceType) return null;
-  const seen = new Set();
-  for (const file of index?.files || []) {
-    if (file.active === false) continue;
-    for (const doctor of sanitizeRepositoryDoctors(file.doctors)) {
-      const marker = `${doctor.sourceType}:${doctor.key}`;
-      if (seen.has(marker)) continue;
-      seen.add(marker);
-      if (doctor.key === claim.key && doctor.sourceType === claim.sourceType) return doctor;
-    }
-  }
-  return null;
-}
-
-function findDoctorClaimCandidate(canonicalDoctors, index, rawClaim) {
+function findDoctorClaimCandidate(canonicalDoctors, rawClaim) {
   const claim = {
     key: normalizeRosterName(rawClaim?.key || ""),
     sourceType: String(rawClaim?.sourceType || "").toLowerCase(),
@@ -3391,7 +2574,7 @@ function findDoctorClaimCandidate(canonicalDoctors, index, rawClaim) {
       sourceType: String(alias.sourceType || doctor.sourceType || "").toLowerCase(),
     };
   }
-  return findRepositoryDoctor(index, rawClaim);
+  return null;
 }
 
 function sanitizeClaims(claims) {
@@ -3543,20 +2726,12 @@ function randomSubscriptionToken() {
 
 async function ensureAccountSubscriptionToken(store, record) {
   if (!record?.email) return record;
-  if (record.subscriptionToken) {
-    if (store?.put) await store.put(subscriptionTokenKey(record.subscriptionToken), normalizeEmail(record.email));
-    return record;
-  }
-  const updated = {
+  if (record.subscriptionToken) return record;
+  return {
     ...record,
     subscriptionToken: randomSubscriptionToken(),
     updatedAt: new Date().toISOString(),
   };
-  if (store?.put) {
-    await store.put(storageKey(updated.email), JSON.stringify(updated));
-    await store.put(subscriptionTokenKey(updated.subscriptionToken), normalizeEmail(updated.email));
-  }
-  return updated;
 }
 
 async function sha256(value) {

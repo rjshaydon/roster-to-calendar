@@ -226,16 +226,6 @@ async function ensureCalendarSchemaUncached(db) {
     )
   `).run();
   await db.prepare(`
-    CREATE TABLE IF NOT EXISTS calendar_snapshots (
-      owner_type TEXT NOT NULL,
-      owner_id TEXT NOT NULL,
-      snapshot_json TEXT NOT NULL DEFAULT '{}',
-      built_at TEXT NOT NULL DEFAULT '',
-      updated_at TEXT NOT NULL DEFAULT '',
-      PRIMARY KEY (owner_type, owner_id)
-    )
-  `).run();
-  await db.prepare(`
     CREATE TABLE IF NOT EXISTS raw_roster_files (
       file_id TEXT PRIMARY KEY,
       object_key TEXT NOT NULL DEFAULT '',

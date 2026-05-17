@@ -107,7 +107,7 @@ assert.match(
 );
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
-    .match(/if \(action === "save"\)[\s\S]*?if \(null && \(!hasCalendarDb/)?.[0] || "",
+    .match(/if \(action === "save"\)[\s\S]*?if \(action === "loadDoctorProfile"\)/)?.[0] || "",
   /keepFileIds\.length > 0 && persistedKeepFileIds\.length === keepFileIds\.length/,
   "empty creator import snapshots must not be interpreted as permission to delete every active roster file",
 );
@@ -132,8 +132,8 @@ assert.doesNotMatch(
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
     .match(/if \(action === "claimRosterName"\)[\s\S]*?if \(action === "listUsers"\)/)?.[0] || "",
-  /queryCanonicalDoctors[\s\S]*findDoctorClaimCandidate/,
-  "manual roster claims should resolve from canonical D1 doctors before legacy repository fallback",
+  /loadSqlDoctorCandidates[\s\S]*findDoctorClaimCandidate/,
+  "manual roster claims should resolve from SQL doctor candidates",
 );
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
@@ -189,13 +189,13 @@ assert.match(
 );
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
-    .match(/async function buildDerivedDoctorProfileSnapshot[\s\S]*?async function storeSnapshotForAccount/)?.[0] || "",
+    .match(/async function buildDerivedDoctorProfileSnapshot[\s\S]*?function matchDoctorClaims/)?.[0] || "",
   /queryRosterFileDoctorsForKeys\(db, doctorKeysForOption\(profile\)\)/,
   "doctor profile load should resolve only the requested doctor instead of rebuilding every canonical option",
 );
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
-    .match(/async function buildDerivedDoctorProfileSnapshot[\s\S]*?async function storeSnapshotForAccount/)?.[0] || "",
+    .match(/async function buildDerivedDoctorProfileSnapshot[\s\S]*?function matchDoctorClaims/)?.[0] || "",
   /if \(!doctorDiagnostics\.length\)[\s\S]*queryRosterFileDoctors\(db\)[\s\S]*resolveCanonicalDoctorOptionForKey/,
   "doctor profile load should reserve full canonical rebuilds for the rare targeted-lookup miss path",
 );
@@ -204,6 +204,11 @@ assert.match(appSource, /<strong>Roster database<\/strong>/, "system card should
 assert.match(appSource, /source file\$\{retainedSourceTotal === 1 \? \"\" : \"s\"\} retained/, "system card should report retained raw source coverage");
 assert.match(appSource, />Check status<\/button>/, "system card should expose a non-mutating status check");
 assert.match(appSource, />Rebuild from roster files<\/button>/, "system card should expose an explicit roster rebuild action");
+assert.doesNotMatch(
+  await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"),
+  /loadRepositoryIndex|loadSnapshotRecord|persistSnapshotRecord|storeSnapshotForAccount|storeSnapshotForDoctorProfile/,
+  "D1 serving code should not retain repository-index or snapshot serving helpers",
+);
 assert.doesNotMatch(
   appSource.match(/async function refreshCalendarStoreStatus[\s\S]*?async function toggleAdminConsole/)?.[0] || "",
   /calendarStoreStatus = \{ unavailable: true \}/,
