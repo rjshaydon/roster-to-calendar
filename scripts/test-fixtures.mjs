@@ -142,6 +142,16 @@ assert.match(
   /applySessionState[\s\S]*reconcileMaterializedPreviewCustomEvents\(\)/,
   "rendering a D1 snapshot should reconcile materialized custom events into editable state",
 );
+assert.match(
+  appSource.match(/function renderCalendarStoreCard[\s\S]*?function renderAdminConsoleMarkup/)?.[0] || "",
+  /serverStatusComplete[\s\S]*serverSyncedCount[\s\S]*roster file\$\{serverSyncedCount === 1 \? "" : "s"\} synced/,
+  "healthy server roster status should drive the System-card synced count",
+);
+assert.match(
+  appSource.match(/function renderCalendarStoreCard[\s\S]*?function renderAdminConsoleMarkup/)?.[0] || "",
+  /Sync issue detected: \$\{serverSyncedCount\}\/\$\{serverExpectedCount\}/,
+  "System-card sync issues should compare server counts rather than empty local file handles",
+);
 assert.match(appSource, /data-admin-user-seniority-filter/, "admin users should expose a seniority filter");
 assert.doesNotMatch(
   appSource.match(/async function deleteAccount[\s\S]*?function deleteLocalAccountData/)?.[0] || "",

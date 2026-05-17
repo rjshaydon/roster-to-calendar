@@ -6530,16 +6530,21 @@ function renderCalendarStoreCard() {
     : "";
   const checkedAt = status?.checkedAt ? `Last checked ${formatTimestamp(status.checkedAt)}.` : "Not checked yet.";
   const syncSummary = rosterSyncSummary();
+  const serverSyncedCount = Number(status?.populated || 0);
+  const serverExpectedCount = Number(status?.total || 0);
+  const serverStatusComplete = Boolean(status && !unavailable && serverExpectedCount > 0 && serverSyncedCount === serverExpectedCount);
   const detail = syncSummary
     ? `${syncSummary}. ${checkedAt}`
     : calendarStoreStatusError
     ? `Status check failed. ${checkedAt}`
     : unavailable
       ? "Roster database is unavailable to this deployment."
-      : status && selectedPersistence.complete
-        ? `${selectedPersistence.persistedCount} roster file${selectedPersistence.persistedCount === 1 ? "" : "s"} synced. ${retainedSourceDetail} ${checkedAt}`
+      : serverStatusComplete
+        ? `${serverSyncedCount} roster file${serverSyncedCount === 1 ? "" : "s"} synced. ${retainedSourceDetail} ${checkedAt}`
+        : status && selectedPersistence.expectedCount > 0 && selectedPersistence.complete
+          ? `${selectedPersistence.persistedCount} roster file${selectedPersistence.persistedCount === 1 ? "" : "s"} synced. ${retainedSourceDetail} ${checkedAt}`
         : status
-          ? `Sync issue detected: ${selectedPersistence.persistedCount}/${selectedPersistence.expectedCount} roster files confirmed. ${retainedSourceDetail} ${checkedAt}`
+          ? `Sync issue detected: ${serverSyncedCount}/${serverExpectedCount} roster files confirmed. ${retainedSourceDetail} ${checkedAt}`
           : "Roster database status not checked yet.";
   return `
     <article class="review-card">
