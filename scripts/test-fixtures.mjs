@@ -93,6 +93,12 @@ assert.match(
   /resetTransientCalendarData\(\);\s*forceCreatorDoctorSession\(\);[\s\S]*restoreCloudState/,
   "returning to the creator should normalize the creator doctor before calendar events load",
 );
+assert.match(appSource, /data-admin-user-seniority-filter/, "admin users should expose a seniority filter");
+assert.doesNotMatch(
+  appSource.match(/async function deleteAccount[\s\S]*?function deleteLocalAccountData/)?.[0] || "",
+  /if \(creatorCanDelete\) await loadServerUsers\(\);\s*closeAccountsModal\(\);/,
+  "deleting another account should not close the Admin modal",
+);
 assert.match(
   await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"),
   /async function calendarStoreStatus[\s\S]*resolveSelectedRosterFileDoctorRows\(db, selectedDoctorKey\)/,
@@ -1033,6 +1039,18 @@ class MemoryD1Statement {
       }
       return { results };
     }
+    if (sql.includes("SELECT DISTINCT roster_events.seniority AS seniority")) {
+      const keys = new Set(args);
+      return {
+        results: [...new Set([...this.db.events.values()]
+          .filter((event) => this.db.files.get(event.file_id)?.active === 1)
+          .filter((event) => keys.has(event.doctor_key))
+          .map((event) => event.seniority)
+          .filter(Boolean))]
+          .sort()
+          .map((seniority) => ({ seniority })),
+      };
+    }
     if (sql.includes("FROM roster_events") && sql.includes("doctor_key IN")) {
       const end = args[args.length - 2];
       const start = args[args.length - 1];
@@ -1750,9 +1768,27 @@ seedD1Repository(recreateDb, [{
   active: true,
   doctors: [{ key: "TITUS HACKMAN", displayName: "Titus Hackman", sourceType: "mmc" }],
   eventsByDoctor: {
-    "TITUS HACKMAN": [{ id: "recreate-shift", source: "MMC", title: "Roster shift", allDay: true, start: "2026-02-03", end: "2026-02-03", rawValue: "Roster shift" }],
+    "TITUS HACKMAN": [{ id: "recreate-shift", source: "MMC", title: "Roster shift", seniority: "Intern", allDay: true, start: "2026-02-03", end: "2026-02-03", rawValue: "Roster shift" }],
   },
 }]);
+recreateDb.events.set("recreate-event", {
+  id: "recreate-event",
+  file_id: "recreate-roster",
+  source_type: "mmc",
+  doctor_key: "TITUS HACKMAN",
+  display_name: "Titus Hackman",
+  start_date: "2026-02-03",
+  end_date: "2026-02-03",
+  start_ts: "2026-02-03",
+  end_ts: "2026-02-03",
+  title: "Roster shift",
+  raw_value: "Roster shift",
+  seniority: "Intern",
+  location: "",
+  all_day: 1,
+  time_label: "",
+  event_json: JSON.stringify({ id: "recreate-shift", source: "MMC", title: "Roster shift", seniority: "Intern", allDay: true, start: "2026-02-03", end: "2026-02-03", rawValue: "Roster shift" }),
+});
 await postState(recreateStore, {
   action: "login",
   email: "rhaydon@gmail.com",
@@ -1767,6 +1803,7 @@ const firstMatchedCreate = await postState(recreateStore, {
   targetPassword: "recreated-password",
 }, recreateDb);
 assert.equal(firstMatchedCreate.user.claims.length, 1, "first matched create should auto-claim the roster doctor");
+assert.deepEqual(firstMatchedCreate.user.seniorities, ["Intern"], "user summaries should include roster-derived seniorities");
 await postState(recreateStore, {
   action: "deleteAccount",
   email: "recreated@example.com",

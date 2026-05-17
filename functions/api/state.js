@@ -22,6 +22,7 @@ import {
   queryClaimedAccounts,
   queryDoctorProfileMirrors,
   queryDoctorEvents,
+  queryDoctorSeniorities,
   queryDoctorEventsForFileDoctorPairs,
   queryRosterFileDoctors,
   queryRosterFileDoctorsForKeys,
@@ -121,6 +122,7 @@ export async function onRequestPost(context) {
       const createdClaims = sanitizeClaims(createdRecord.claims)
         .filter((claim) => claimMatchesAccountIdentity(claim, createdRecord.realName || ""));
       const createdRole = createdRecord.role || roleForEmail(targetEmail);
+      const createdSeniorities = await queryDoctorSeniorities(context.env.ROSTER_DB, createdClaims.map((claim) => claim.key)).catch(() => []);
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -130,6 +132,7 @@ export async function onRequestPost(context) {
           realName: createdRecord.realName || "",
           role: createdRole,
           sites: [...new Set(createdClaims.map((claim) => claim.sourceType.toUpperCase()))].sort(),
+          seniorities: createdSeniorities,
           claims: createdClaims,
           suggestedClaims: [],
           insightsEnabled: insightsEnabledForRecord({ ...createdRecord, role: createdRole }),
@@ -370,7 +373,7 @@ export async function onRequestPost(context) {
         claims: prepared.claims,
         nameMatches: prepared.nameMatches,
         suggestedClaims: prepared.nameMatches,
-        user: userSummaryFromRecord(saveEmail, { ...updated, claims: prepared.claims }),
+        user: await userSummaryFromRecord(saveEmail, { ...updated, claims: prepared.claims }, { db: context.env.ROSTER_DB }),
       });
     }
 
@@ -406,7 +409,7 @@ export async function onRequestPost(context) {
       if (null) await null.delete(snapshotKey(owner.ownerType, owner.ownerId));
       return Response.json({
         ok: true,
-        user: userSummaryFromRecord(targetEmail, updated),
+        user: await userSummaryFromRecord(targetEmail, updated, { db: context.env.ROSTER_DB }),
         claims,
       });
     }
@@ -436,7 +439,7 @@ export async function onRequestPost(context) {
       await upsertAccountMirror(context.env.ROSTER_DB, updated);
       const owner = accountSnapshotOwner(claimEmail, updated.role || roleForEmail(claimEmail));
       if (null) await null.delete(snapshotKey(owner.ownerType, owner.ownerId));
-      return Response.json({ ok: true, claims, user: userSummaryFromRecord(claimEmail, updated) });
+      return Response.json({ ok: true, claims, user: await userSummaryFromRecord(claimEmail, updated, { db: context.env.ROSTER_DB }) });
     }
 
     if (action === "reportRosterIdentityIssue") {
@@ -460,7 +463,7 @@ export async function onRequestPost(context) {
         updatedAt: new Date().toISOString(),
       };
       await upsertAccountMirror(context.env.ROSTER_DB, updated);
-      return Response.json({ ok: true, user: userSummaryFromRecord(reportEmail, updated) });
+      return Response.json({ ok: true, user: await userSummaryFromRecord(reportEmail, updated, { db: context.env.ROSTER_DB }) });
     }
 
     if (action === "resolveDoctorAccount") {
@@ -496,7 +499,7 @@ export async function onRequestPost(context) {
       await upsertAccountMirror(context.env.ROSTER_DB, updated);
       return Response.json({
         ok: true,
-        user: userSummaryFromRecord(targetEmail, updated),
+        user: await userSummaryFromRecord(targetEmail, updated, { db: context.env.ROSTER_DB }),
       });
     }
 
@@ -1193,16 +1196,18 @@ async function listUsers(store) {
   const users = await Promise.all((result.keys || []).map(async (item) => {
     const email = item.name.replace(/^account:/, "");
     const record = await store.get(item.name, "json").catch(() => null);
-    return userSummaryFromRecord(email, record);
+    return await userSummaryFromRecord(email, record);
   }));
   return users.sort((a, b) => a.email.localeCompare(b.email));
 }
 
 async function listD1Users(db) {
   const records = await listAccountMirrors(db);
-  return records
-    .map((record) => userSummaryFromRecord(record.email, record))
-    .sort((a, b) => a.email.localeCompare(b.email));
+  const users = [];
+  for (const record of records) {
+    users.push(await userSummaryFromRecord(record.email, record, { db }));
+  }
+  return users.sort((a, b) => a.email.localeCompare(b.email));
 }
 
 async function autoClaimMatchedRosterNames(store, record, db = null) {
@@ -1456,14 +1461,18 @@ async function countKvDoctorProfileRecords(store) {
   return (result.keys || []).length;
 }
 
-function userSummaryFromRecord(email, record) {
+async function userSummaryFromRecord(email, record, options = {}) {
   const claims = sanitizeClaims(record?.claims).filter((claim) => claimMatchesAccountIdentity(claim, record?.realName || ""));
   const adminIssues = sanitizeAdminIssues(record?.adminIssues);
+  const seniorities = options.db
+    ? await queryDoctorSeniorities(options.db, claims.map((claim) => claim.key)).catch(() => [])
+    : [];
   return {
     email,
     realName: String(record?.realName || "").trim(),
     role: record?.role || roleForEmail(email),
     sites: [...new Set(claims.map((claim) => claim.sourceType.toUpperCase()))].sort(),
+    seniorities,
     claims,
     insightsEnabled: insightsEnabledForRecord(record),
     adminIssues,

@@ -275,6 +275,7 @@ let lastHistorySignature = "";
 let pendingExportMode = "full";
 let pendingExportRange = defaultExportRangeState();
 let currentAdminTab = "system";
+let adminUserSeniorityFilter = "";
 let calendarStoreStatus = null;
 let calendarStoreStatusError = "";
 let rosterSyncStates = new Map();
@@ -464,6 +465,12 @@ accountsBody.addEventListener("submit", (event) => {
   void updateAccountDetails(email, { password, realName });
 });
 accountsBody.addEventListener("change", (event) => {
+  const seniorityFilter = event.target.closest("[data-admin-user-seniority-filter]");
+  if (seniorityFilter) {
+    adminUserSeniorityFilter = String(seniorityFilter.value || "");
+    renderAccountsModal();
+    return;
+  }
   const insightsToggle = event.target.closest("[data-toggle-user-insights]");
   if (!insightsToggle) return;
   void setUserInsightsEnabled(insightsToggle.dataset.toggleUserInsights || "", insightsToggle.checked);
@@ -6332,6 +6339,11 @@ function renderAccountsModal() {
     .filter((user) => user.email !== me.email);
   const localOtherUsers = accountState.users.filter((user) => user.email !== me.email);
   const otherUsers = serverOtherUsers.length ? serverOtherUsers : localOtherUsers;
+  const availableUserSeniorities = [...new Set(otherUsers.flatMap((user) => normalizeServerUser(user).seniorities || []))].sort();
+  if (adminUserSeniorityFilter && !availableUserSeniorities.includes(adminUserSeniorityFilter)) adminUserSeniorityFilter = "";
+  const filteredOtherUsers = adminUserSeniorityFilter
+    ? otherUsers.filter((user) => normalizeServerUser(user).seniorities.includes(adminUserSeniorityFilter))
+    : otherUsers;
   const linkedNames = renderLinkedRosterNames(currentRosterClaims, currentSuggestedClaims);
   if (ownerView && !["errors", "system", "users", "files", "owner"].includes(currentAdminTab)) currentAdminTab = "system";
   const issueCount = adminIssueCount();
@@ -6409,11 +6421,18 @@ function renderAccountsModal() {
         <div class="review-top">
           <div>
             <strong>Other users</strong>
-            <span>${otherUsers.length ? `${otherUsers.length} account${otherUsers.length === 1 ? "" : "s"}` : "No other users have logged in yet."}</span>
+            <span>${filteredOtherUsers.length ? `${filteredOtherUsers.length} account${filteredOtherUsers.length === 1 ? "" : "s"}` : otherUsers.length ? "No matching users." : "No other users have logged in yet."}</span>
           </div>
         </div>
+        <label class="field">
+          <span>Filter by seniority</span>
+          <select data-admin-user-seniority-filter>
+            <option value="">All seniorities</option>
+            ${availableUserSeniorities.map((seniority) => `<option value="${escapeHtml(seniority)}" ${seniority === adminUserSeniorityFilter ? "selected" : ""}>${escapeHtml(seniority)}</option>`).join("")}
+          </select>
+        </label>
         <div class="issues-list">
-          ${otherUsers.length ? otherUsers.map((user) => `
+          ${filteredOtherUsers.length ? filteredOtherUsers.map((user) => `
             <article class="issue-card account-user-card">
               <div>
                 <strong>${escapeHtml(user.realName || "Name not set")}</strong>
@@ -6441,7 +6460,7 @@ function renderAccountsModal() {
                 </div>
               `}
             </article>
-          `).join("") : `<article class="issue-card"><p>No additional users yet.</p></article>`}
+          `).join("") : `<article class="issue-card"><p>${otherUsers.length ? "No users match this seniority." : "No additional users yet."}</p></article>`}
         </div>
       </article>
     ` : "";
@@ -7680,15 +7699,16 @@ async function deleteAccount(email) {
     deleteLocalAccountData(targetEmail);
     clearDeletedAccountClaims(targetEmail);
     if (creatorCanDelete) await loadServerUsers();
-    closeAccountsModal();
 
     if (deletingCurrentAccount && adminViewingEmail && creatorCanDelete) {
+      closeAccountsModal();
       await returnToCreatorCalendar();
       setStatus(`Deleted ${targetEmail}.`);
       return;
     }
 
     if (deletingCurrentAccount) {
+      closeAccountsModal();
       localStorage.removeItem(CURRENT_EMAIL_KEY);
       sessionStorage.removeItem(CURRENT_PASSWORD_KEY);
       localStorage.removeItem(PERSISTENT_PASSWORD_KEY);
@@ -8847,6 +8867,7 @@ function normalizeServerUser(value) {
     realName: String(value?.realName || "").trim(),
     role: role === "creator" ? "owner" : role,
     sites: Array.isArray(value?.sites) ? value.sites : [],
+    seniorities: Array.isArray(value?.seniorities) ? value.seniorities.map((item) => String(item || "").trim()).filter(Boolean) : [],
     claims: sanitizeRosterClaims(value?.claims || []),
     insightsEnabled: role === "owner" || role === "creator" || value?.insightsEnabled === true,
     adminIssues: Array.isArray(value?.adminIssues) ? value.adminIssues : [],

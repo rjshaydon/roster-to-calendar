@@ -497,6 +497,24 @@ export async function queryDoctorEvents(db, doctorKeys, options = {}) {
   return mergeDuplicateLeaveEvents((rows.results || []).map((row) => parseEvent(row.event_json)).filter(Boolean));
 }
 
+export async function queryDoctorSeniorities(db, doctorKeys = []) {
+  if (!db?.prepare || !doctorKeys?.length) return [];
+  await ensureCalendarSchema(db);
+  const keys = [...new Set(doctorKeys.map((key) => String(key || "").trim()).filter(Boolean))];
+  if (!keys.length) return [];
+  const placeholders = keys.map(() => "?").join(", ");
+  const rows = await db.prepare(`
+    SELECT DISTINCT roster_events.seniority AS seniority
+    FROM roster_events
+    INNER JOIN roster_files ON roster_files.id = roster_events.file_id
+    WHERE roster_files.active = 1
+      AND roster_events.doctor_key IN (${placeholders})
+      AND roster_events.seniority <> ''
+    ORDER BY roster_events.seniority
+  `).bind(...keys).all();
+  return (rows.results || []).map((row) => String(row.seniority || "").trim()).filter(Boolean);
+}
+
 export async function queryDoctorEventsForFileDoctorPairs(db, pairs = [], options = {}) {
   if (!db?.prepare || !pairs?.length) return [];
   await ensureCalendarSchema(db);
