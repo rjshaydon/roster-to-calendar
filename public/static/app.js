@@ -299,6 +299,7 @@ let parserRuleSuggestions = [];
 let parserRuleSaveContext = { mode: "global", suggestionId: "", targetEmail: "" };
 let dismissedIssueFingerprints = new Set();
 let ignoredIssueFingerprints = new Set();
+let lastLoginTimings = null;
 
 const settingsInputs = Object.fromEntries(
   SETTINGS_FIELDS.map((id) => [id, document.querySelector(`#${id}`)]),
@@ -9015,6 +9016,7 @@ function renderLoginState() {
 
 async function loginWithEmail(email, password, options = {}) {
   const previousEmail = currentUserEmail;
+  const loginStartedAt = performance.now();
   try {
     await flushCloudStateSave().catch(() => {});
     cancelScheduledCloudStateSave();
@@ -9039,16 +9041,14 @@ async function loginWithEmail(email, password, options = {}) {
     if (previousEmail !== currentUserEmail) {
       await clearLocalWorkspace();
     }
-    await restoreCloudState(options);
+    await restoreCloudState({ ...options, deferHydration: true, loginStartedAt });
     if (!currentUserEmail) return;
-    await bootstrapImports();
-    if (latestNameMatches.length) {
-      const sites = [...new Set(latestNameMatches.map((claim) => claim.sourceType.toUpperCase()))].join(", ");
-      setStatus(`Suggested roster name${latestNameMatches.length === 1 ? "" : "s"} for ${sites || "uploaded rosters"}. Please confirm in Account.`);
-    }
     renderLoginState();
     closeLoginModal();
     setEntranceStatus("");
+    markLoginPhase("shellRendered", loginStartedAt);
+    setStatus("Loading calendar...");
+    void hydrateAuthenticatedWorkspace({ ...options, includeBootstrap: true }, loginStartedAt);
   } catch (error) {
     const message = normalizeAuthMessage(error.message || "Login failed.");
     setEntranceStatus(message, true);
@@ -9081,16 +9081,8 @@ async function restoreCloudState(options = {}) {
     });
     const data = await readJsonResponse(response, "Login failed.");
     await applyCloudStateData(data);
-    if (!adminTargetEmail && currentUserEmail !== OWNER_EMAIL) {
-      await resolveCurrentAccountClaims();
-    }
-    if (!adminTargetEmail && currentUserEmail === OWNER_EMAIL) {
-      forceCreatorDoctorSession();
-    }
-    await loadCloudCalendarEvents({ adminTargetEmail });
-    if (isCreatorAuthenticated()) {
-      void loadServerUsers();
-    }
+    markLoginPhase("authenticated", options.loginStartedAt);
+    if (!options.deferHydration) await hydrateAuthenticatedWorkspace({ ...options, includeBootstrap: false }, options.loginStartedAt);
   } catch (error) {
     cancelScheduledCloudStateSave();
     const attemptedEmail = currentUserEmail;
@@ -9117,6 +9109,49 @@ async function restoreCloudState(options = {}) {
     openLoginModal(attemptedEmail);
     setStatus(message, true);
     setEntranceStatus(message, true);
+  }
+}
+
+async function hydrateAuthenticatedWorkspace(options = {}, loginStartedAt = 0) {
+  if (!currentUserEmail) return;
+  try {
+    const adminTargetEmail = normalizeEmail(options.adminTargetEmail);
+    if (!adminTargetEmail && currentUserEmail !== OWNER_EMAIL) {
+      await resolveCurrentAccountClaims();
+      markLoginPhase("claimsResolved", loginStartedAt);
+    }
+    if (!adminTargetEmail && currentUserEmail === OWNER_EMAIL) {
+      forceCreatorDoctorSession();
+    }
+    await loadCloudCalendarEvents({ adminTargetEmail });
+    markLoginPhase("calendarLoaded", loginStartedAt);
+    if (options.includeBootstrap !== false) {
+      await bootstrapImports();
+      markLoginPhase("workspaceRendered", loginStartedAt);
+    }
+    if (latestNameMatches.length) {
+      const sites = [...new Set(latestNameMatches.map((claim) => claim.sourceType.toUpperCase()))].join(", ");
+      setStatus(`Suggested roster name${latestNameMatches.length === 1 ? "" : "s"} for ${sites || "uploaded rosters"}. Please confirm in Account.`);
+    }
+    if (isCreatorAuthenticated()) {
+      void loadServerUsers();
+    }
+  } catch (error) {
+    const message = normalizeAuthMessage(error.message || "Workspace hydration failed.");
+    setStatus(message, true);
+    console.warn("Post-login workspace hydration failed", { message, email: currentUserEmail, error, timings: lastLoginTimings });
+  }
+}
+
+function markLoginPhase(phase, loginStartedAt = 0) {
+  if (!loginStartedAt) return;
+  if (!lastLoginTimings || lastLoginTimings.startedAt !== loginStartedAt) {
+    lastLoginTimings = { startedAt: loginStartedAt };
+  }
+  lastLoginTimings[phase] = Math.round(performance.now() - loginStartedAt);
+  window.__rosterLoginTimings = { ...lastLoginTimings };
+  if (phase === "workspaceRendered") {
+    console.info("Login timings", window.__rosterLoginTimings);
   }
 }
 

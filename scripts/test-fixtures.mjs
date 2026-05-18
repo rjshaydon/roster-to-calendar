@@ -84,9 +84,9 @@ assert.match(
   "switching from the creator account should persist the creator doctor rather than the viewed doctor",
 );
 assert.match(
-  appSource.match(/async function restoreCloudState[\s\S]*?async function restoreDoctorProfileState/)?.[0] || "",
+  appSource.match(/async function hydrateAuthenticatedWorkspace[\s\S]*?function markLoginPhase/)?.[0] || "",
   /currentUserEmail === OWNER_EMAIL[\s\S]*forceCreatorDoctorSession\(\)[\s\S]*loadCloudCalendarEvents/,
-  "fresh creator login should normalize the creator doctor before calendar events load",
+  "creator hydration should normalize the creator doctor before calendar events load",
 );
 assert.match(
   appSource.match(/async function returnToCreatorAccount[\s\S]*?async function clearLocalWorkspace/)?.[0] || "",
@@ -162,9 +162,19 @@ assert.match(
   "account saves should keep custom-event truth in D1 rows rather than session JSON",
 );
 assert.match(
-  appSource.match(/async function restoreCloudState[\s\S]*?async function restoreDoctorProfileState/)?.[0] || "",
+  appSource.match(/async function hydrateAuthenticatedWorkspace[\s\S]*?function markLoginPhase/)?.[0] || "",
   /if \(!adminTargetEmail && currentUserEmail !== OWNER_EMAIL\)[\s\S]*resolveCurrentAccountClaims\(\)[\s\S]*loadCloudCalendarEvents[\s\S]*void loadServerUsers\(\)/,
   "claim resolution should finish before user calendars load, while creator user-list hydration remains non-blocking",
+);
+assert.match(
+  appSource.match(/async function loginWithEmail[\s\S]*?async function restoreCloudState/)?.[0] || "",
+  /restoreCloudState\(\{ \.\.\.options, deferHydration: true[\s\S]*renderLoginState\(\);\s*closeLoginModal\(\);[\s\S]*hydrateAuthenticatedWorkspace\(\{ \.\.\.options, includeBootstrap: true \}/,
+  "successful login should reveal the shell before background workspace hydration completes",
+);
+assert.doesNotMatch(
+  await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"),
+  /ADMIN_ISSUE_DISMISS_PREFIX|ADMIN_ISSUE_IGNORE_PREFIX|PARSER_EXTENSION_RULES_KEY|PARSER_RULE_SUGGESTIONS_KEY|loadParserExtensionRules\(|saveParserExtensionRules\(/,
+  "D1-only state routes should not retain dead KV-era helper scaffolding",
 );
 assert.match(
   appSource.match(/function buildResolvedPreviewEvents[\s\S]*?function latestPreviewEventsByIdentity/)?.[0] || "",

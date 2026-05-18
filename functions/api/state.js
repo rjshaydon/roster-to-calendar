@@ -45,10 +45,6 @@ import {
 const CREATOR_EMAIL = "rhaydon@gmail.com";
 const OWNER_DOCTOR_KEY = "RICHARD HAYDON";
 const SNAPSHOT_SCHEMA_VERSION = 5;
-const ADMIN_ISSUE_DISMISS_PREFIX = "admin-issue-dismiss:";
-const ADMIN_ISSUE_IGNORE_PREFIX = "admin-issue-ignore:";
-const PARSER_EXTENSION_RULES_KEY = "parser-extension-rules:v1";
-const PARSER_RULE_SUGGESTIONS_KEY = "parser-rule-suggestions:v1";
 
 export async function onRequestGet(context) {
   return Response.json({ error: "Use POST for account requests." }, { status: 405 });
@@ -549,10 +545,9 @@ export async function onRequestPost(context) {
       if (!issue) {
         return Response.json({ error: "Structured issue details are required." }, { status: 400 });
       }
-      const dismissed = new Set(null ? await loadDismissedIssueFingerprints(null, reportEmail) : []);
-      const ignored = new Set(null ? await loadIgnoredIssueFingerprints(null) : []);
+      const dismissed = new Set();
+      const ignored = new Set();
       if (dismissed.has(issue.fingerprint) || ignored.has(issue.fingerprint) || await isIssueResolvedByParserRules(null, reportEmail, issue, context.env.ROSTER_DB)) {
-        if (null) await clearIssuesResolvedByIssue(null, reportEmail, issue);
         return Response.json({ ok: true, ignored: true });
       }
       const nextIssues = mergeAdminIssues(targetRecord.adminIssues, [{
@@ -2848,44 +2843,6 @@ function sanitizeIssueFingerprint(value) {
   return issueFingerprint(source, rest.join("::"));
 }
 
-function adminIssueDismissKey(email) {
-  return `${ADMIN_ISSUE_DISMISS_PREFIX}${normalizeEmail(email)}`;
-}
-
-function adminIssueIgnoreKey() {
-  return ADMIN_ISSUE_IGNORE_PREFIX;
-}
-
-async function loadDismissedIssueFingerprints(store, email) {
-  if (!email) return [];
-  const values = await store.get(adminIssueDismissKey(email), "json").catch(() => []);
-  return sanitizeIssueFingerprintList(values);
-}
-
-async function saveDismissedIssueFingerprints(store, email, values) {
-  const next = sanitizeIssueFingerprintList(values);
-  if (!email) return;
-  if (!next.length) {
-    await store.delete(adminIssueDismissKey(email));
-    return;
-  }
-  await store.put(adminIssueDismissKey(email), JSON.stringify(next));
-}
-
-async function loadIgnoredIssueFingerprints(store) {
-  const values = await store.get(adminIssueIgnoreKey(), "json").catch(() => []);
-  return sanitizeIssueFingerprintList(values);
-}
-
-async function saveIgnoredIssueFingerprints(store, values) {
-  const next = sanitizeIssueFingerprintList(values);
-  if (!next.length) {
-    await store.delete(adminIssueIgnoreKey());
-    return;
-  }
-  await store.put(adminIssueIgnoreKey(), JSON.stringify(next));
-}
-
 function sanitizeIssueFingerprintList(values) {
   if (!Array.isArray(values)) return [];
   return [...new Set(values.map((value) => sanitizeIssueFingerprint(value)).filter(Boolean))].sort();
@@ -3063,11 +3020,6 @@ function oldDefaultMmcRuleShape(code) {
   };
 }
 
-async function loadParserExtensionRules(store) {
-  const value = await store.get(PARSER_EXTENSION_RULES_KEY, "json").catch(() => null);
-  return sanitizeParserExtensionRules(value);
-}
-
 async function loadD1ParserExtensionRules(db) {
   if (!db?.prepare) return {};
   const rows = await db.prepare("SELECT rule_json FROM parser_rules WHERE scope = 'global'").all().catch(() => ({ results: [] }));
@@ -3111,12 +3063,6 @@ async function deleteD1ParserExtensionRule(db, rule) {
   await db.prepare("DELETE FROM parser_rules WHERE scope = 'global' AND source_type = ? AND seniority = ? AND code = ?")
     .bind(target.source, target.seniority, target.code)
     .run();
-}
-
-async function saveParserExtensionRules(store, value) {
-  const sanitized = sanitizeParserExtensionRules(value);
-  await store.put(PARSER_EXTENSION_RULES_KEY, JSON.stringify(sanitized));
-  return sanitized;
 }
 
 function upsertParserExtensionRule(existing, rule) {
@@ -3181,40 +3127,30 @@ function parserExtensionRuleKey(rule) {
   return normalized ? `${normalized.source}|${normalized.seniority}|${normalized.code}` : "";
 }
 
-async function loadParserRuleSuggestions(store, db = null) {
-  if (db?.prepare) {
-    const result = await db.prepare("SELECT suggestion_json FROM parser_rule_suggestions WHERE status = 'pending' ORDER BY updated_at DESC").all();
-    return sanitizeParserRuleSuggestions((result?.results || []).map((row) => {
-      try { return JSON.parse(row.suggestion_json || "{}"); } catch { return null; }
-    }));
-  }
-  const value = store?.get ? await store.get(PARSER_RULE_SUGGESTIONS_KEY, "json").catch(() => []) : [];
-  return sanitizeParserRuleSuggestions(value);
+async function loadParserRuleSuggestions(_store, db = null) {
+  if (!db?.prepare) return [];
+  const result = await db.prepare("SELECT suggestion_json FROM parser_rule_suggestions WHERE status = 'pending' ORDER BY updated_at DESC").all();
+  return sanitizeParserRuleSuggestions((result?.results || []).map((row) => {
+    try { return JSON.parse(row.suggestion_json || "{}"); } catch { return null; }
+  }));
 }
 
-async function saveParserRuleSuggestions(store, value, db = null) {
+async function saveParserRuleSuggestions(_store, value, db = null) {
   const sanitized = sanitizeParserRuleSuggestions(value);
-  if (db?.prepare) {
-    await db.prepare("DELETE FROM parser_rule_suggestions").run();
-    for (const suggestion of sanitized) {
-      await db.prepare(`
-        INSERT INTO parser_rule_suggestions (id, email, status, suggestion_json, created_at, updated_at)
-        VALUES (?, ?, 'pending', ?, ?, ?)
-      `).bind(
-        suggestion.id,
-        suggestion.email,
-        JSON.stringify(suggestion),
-        suggestion.createdAt,
-        suggestion.updatedAt,
-      ).run();
-    }
-    return sanitized;
+  if (!db?.prepare) return sanitized;
+  await db.prepare("DELETE FROM parser_rule_suggestions").run();
+  for (const suggestion of sanitized) {
+    await db.prepare(`
+      INSERT INTO parser_rule_suggestions (id, email, status, suggestion_json, created_at, updated_at)
+      VALUES (?, ?, 'pending', ?, ?, ?)
+    `).bind(
+      suggestion.id,
+      suggestion.email,
+      JSON.stringify(suggestion),
+      suggestion.createdAt,
+      suggestion.updatedAt,
+    ).run();
   }
-  if (!sanitized.length) {
-    await store?.delete?.(PARSER_RULE_SUGGESTIONS_KEY);
-    return sanitized;
-  }
-  await store?.put?.(PARSER_RULE_SUGGESTIONS_KEY, JSON.stringify(sanitized));
   return sanitized;
 }
 
