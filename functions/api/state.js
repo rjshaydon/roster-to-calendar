@@ -1379,7 +1379,7 @@ async function prepareLightweightAccountResponse(rawRecord, options = {}) {
     claims,
     subscription: {
       token: String(record.subscriptionToken || ""),
-      enabled: false,
+      enabled: Boolean(record.subscriptionToken),
     },
     insightsEnabled: insightsEnabledForRecord(record),
   };
@@ -1474,7 +1474,7 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
     availableDoctors: options.includeAvailableDoctors === false ? [] : await repositoryDoctorCandidates(store, null, options.db),
     subscription: {
       token: String(record.subscriptionToken || ""),
-      enabled: false,
+      enabled: Boolean(record.subscriptionToken),
     },
     insightsEnabled: insightsEnabledForRecord(record),
     adminIssues: sanitizeAdminIssues(record.adminIssues),

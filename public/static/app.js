@@ -274,6 +274,7 @@ let applyingHistory = false;
 let lastHistorySignature = "";
 let pendingExportMode = "full";
 let pendingExportRange = defaultExportRangeState();
+let pendingExportHospitals = [];
 let currentAdminTab = "system";
 let adminUserSeniorityFilter = "";
 let calendarStoreStatus = null;
@@ -408,6 +409,15 @@ exportModalBody.addEventListener("click", async (event) => {
   if (futureToggle) {
     pendingExportRange.allFuture = futureToggle.checked;
     if (pendingExportRange.allFuture) pendingExportRange.endDate = "";
+    renderExportModal();
+    return;
+  }
+  const hospitalButton = event.target.closest("[data-export-hospital]");
+  if (hospitalButton) {
+    const hospital = String(hospitalButton.dataset.exportHospital || "").toUpperCase();
+    pendingExportHospitals = pendingExportHospitals.includes(hospital)
+      ? pendingExportHospitals.filter((item) => item !== hospital)
+      : [...pendingExportHospitals, hospital];
     renderExportModal();
     return;
   }
@@ -2335,7 +2345,9 @@ function exportConfigForMode(mode = "full", rangeState = pendingExportRange) {
 }
 
 function buildExportEventsFromBase(baseData, exportConfig = { mode: "full" }) {
-  const events = buildResolvedPreviewEvents(baseData);
+  const selectedHospitals = normalizeExportHospitals(exportConfig?.hospitals);
+  const events = buildResolvedPreviewEvents(baseData)
+    .filter((event) => matchesExportHospitals(event, selectedHospitals));
   if (exportConfig?.mode !== "range") return events;
   const normalizedRange = exportConfigForMode("range", exportConfig);
   return filterEventsByExportRange(events, normalizedRange.startDate, normalizedRange.allFuture ? "" : normalizedRange.endDate);
@@ -2358,6 +2370,22 @@ function filterEventsByExportRange(events, startDateKey = "", endDateKey = "") {
 async function buildBrowserExportEvents(doctor, exportConfig = { mode: "full" }) {
   const baseData = await ensureBasePreviewData(doctor);
   return buildExportEventsFromBase(baseData, exportConfig);
+}
+
+function exportHospitalOptions() {
+  return availableHospitalsForPreview(latestPreview?.events || []);
+}
+
+function normalizeExportHospitals(value) {
+  return Array.isArray(value)
+    ? [...new Set(value.map((item) => String(item || "").trim().toUpperCase()).filter(Boolean))]
+    : [];
+}
+
+function matchesExportHospitals(event, selectedHospitals = []) {
+  if (!selectedHospitals.length) return true;
+  if (String(event?.source || "").trim().toUpperCase() === "CUSTOM") return true;
+  return selectedHospitals.includes(String(event?.source || "").trim().toUpperCase());
 }
 
 function renderConflicts(items) {
@@ -6092,6 +6120,7 @@ function openExportModal() {
   }
   setPendingExportMode("full");
   pendingExportRange = defaultExportRangeState();
+  pendingExportHospitals = exportHospitalOptions();
   renderExportModal();
   exportModal.classList.remove("hidden");
   exportModal.setAttribute("aria-hidden", "false");
@@ -6109,13 +6138,14 @@ function setPendingExportMode(mode) {
 
 function renderExportModal() {
   const doctor = selectedDoctor();
-  const canSubscribe = Boolean(currentSubscription?.enabled && activeCalendarMode() !== "doctor-profile");
+  const hospitalOptions = exportHospitalOptions();
+  const canCopySubscription = canCopySubscriptionUrl();
   exportModalBody.innerHTML = `
     <article class="review-card">
       <div class="review-top">
         <div>
           <strong>${escapeHtml(doctor?.displayName || "Selected doctor")}</strong>
-          <span>Subscription and file export options.</span>
+          <span>Create a one-off export, or copy a subscription URL.</span>
         </div>
       </div>
       <div class="export-variant-picker">
@@ -6142,12 +6172,22 @@ function renderExportModal() {
           </div>
         </div>
       ` : ""}
+      ${hospitalOptions.length > 1 ? `
+        <div class="export-hospital-panel">
+          <span>Hospitals</span>
+          <div class="export-hospital-picker">
+            ${hospitalOptions.map((hospital) => `
+              <button type="button" class="button ${pendingExportHospitals.includes(hospital) ? "button-primary" : "button-secondary"}" data-export-hospital="${escapeHtml(hospital)}">${escapeHtml(displaySourceCode(hospital))}</button>
+            `).join("")}
+          </div>
+        </div>
+      ` : ""}
       <div class="export-actions-grid">
         <button type="button" class="button button-primary" data-export-action="download">Save as .ics file</button>
-        <button type="button" class="button button-secondary" data-export-action="apple" ${canSubscribe ? "" : "disabled"}>Open in Apple Calendar</button>
-        <button type="button" class="button button-secondary" data-export-action="copy" ${canSubscribe ? "" : "disabled"}>Copy URL</button>
+        <button type="button" class="button button-secondary" data-export-action="apple">Open in Apple Calendar</button>
+        <button type="button" class="button button-secondary" data-export-action="copy" ${canCopySubscription ? "" : "disabled"}>Copy URL</button>
       </div>
-      ${canSubscribe ? "" : `<p class="status">Subscription links are available only for claimed user accounts and the creator account, not unclaimed doctor profiles.</p>`}
+      ${canCopySubscription ? "" : `<p class="status">Subscription URLs are available only for claimed user accounts and the creator account, not unclaimed doctor profiles.</p>`}
     </article>
   `;
 }
@@ -6171,24 +6211,32 @@ async function handleExportAction(action) {
     setStatus("The finish date must be on or after the start date.", true);
     return;
   }
+  if ((action === "download" || action === "apple") && exportHospitalOptions().length > 1 && !pendingExportHospitals.length) {
+    setStatus("Choose at least one hospital for this export.", true);
+    return;
+  }
   try {
     if (currentSnapshotStale) {
       setStatus("Refreshing calendar...");
       await refreshSnapshotInBackground();
     }
-    if (action === "download") {
+    if (action === "download" || action === "apple") {
       setStatus("Building calendar file...");
-      const events = await buildBrowserExportEvents(doctor, exportConfig);
+      const events = await buildBrowserExportEvents(doctor, { ...exportConfig, hospitals: pendingExportHospitals });
       if (!events.length) {
         throw new Error("No calendar events were found for that export selection.");
       }
       const ics = exportIcs(events, doctor.displayName);
-      downloadIcs(ics, `${doctor.displayName} roster.ics`);
+      if (action === "apple") {
+        openIcsInAppleCalendar(ics, `${doctor.displayName} roster.ics`);
+      } else {
+        downloadIcs(ics, `${doctor.displayName} roster.ics`);
+      }
       closeExportModal();
-      setStatus("Calendar file ready.");
+      setStatus(action === "apple" ? "Opening Apple Calendar import..." : "Calendar file ready.");
       return;
     }
-    if (!currentSubscription?.enabled || activeCalendarMode() === "doctor-profile") {
+    if (!canCopySubscriptionUrl()) {
       setStatus("Subscription links are not available for this calendar.", true);
       return;
     }
@@ -6199,20 +6247,13 @@ async function handleExportAction(action) {
       exportRange: normalizeExportRangeState(exportConfig.mode === "range" ? exportConfig : defaultExportRangeState()),
     };
     await saveCloudState(snapshot);
-    const protocol = action === "apple" ? "webcal" : "https";
-    const url = subscriptionUrl(protocol, exportConfig.mode === "range" ? "range" : "full");
+    const url = subscriptionUrl("https", exportConfig.mode === "range" ? "range" : "full");
     if (!url) {
       throw new Error("No subscription link is available for this account yet.");
     }
-    if (action === "copy") {
-      await navigator.clipboard.writeText(url);
-      closeExportModal();
-      setStatus("Subscription URL copied.");
-      return;
-    }
+    await navigator.clipboard.writeText(url);
     closeExportModal();
-    window.location.href = url;
-    setStatus("Opening Apple Calendar subscription...");
+    setStatus("Subscription URL copied.");
   } catch (error) {
     setStatus(error.message || "Export failed.", true);
   }
@@ -6228,6 +6269,10 @@ function downloadIcs(ics, filename) {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+function openIcsInAppleCalendar(ics, filename) {
+  downloadIcs(ics, filename);
 }
 
 function hasActiveExportFilters() {
@@ -6896,6 +6941,10 @@ function subscriptionUrl(protocol = "https", view = "full") {
   return url.toString();
 }
 
+function canCopySubscriptionUrl() {
+  return Boolean(currentSubscription?.enabled && activeCalendarMode() !== "doctor-profile");
+}
+
 async function copySubscriptionLink(kind = "https") {
   const url = subscriptionUrl(kind === "webcal" ? "webcal" : "https", "full");
   if (!url) {
@@ -7432,7 +7481,6 @@ async function deleteParserRule(source, seniority, code) {
 
 async function reportAccountError(issue, errorId = "") {
   if (!issue?.message || !cloudAvailable || !currentUserEmail || !currentUserPassword) return;
-  if (currentUserRole === "creator" && !adminViewingEmail) return;
   try {
     await fetch("/api/state", {
       method: "POST",

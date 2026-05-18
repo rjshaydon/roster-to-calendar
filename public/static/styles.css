@@ -1737,6 +1737,26 @@ body[data-skin="console"] .preview-cell.is-weekend {
   margin: 0 0 18px;
 }
 
+.export-hospital-panel {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 18px;
+}
+
+.export-hospital-panel > span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.export-hospital-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
 .toggle-list {
   display: flex;
   flex-wrap: wrap;

@@ -1427,6 +1427,7 @@ function parseMmcEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
       endHm: explicit.end,
       location: normalized.location || "",
       ambiguous: normalized.ambiguous,
+      status: normalized.status,
       warning: normalized.warning,
       seniority,
     });
@@ -1489,6 +1490,8 @@ function parseDdhEntry(day, label, timeText, seniority = UNKNOWN_SENIORITY) {
       startHm: parsedTime[0],
       endHm: parsedTime[1],
       location,
+      status: normalized.status,
+      warning: normalized.warning,
       seniority,
     });
   }
@@ -1497,6 +1500,8 @@ function parseDdhEntry(day, label, timeText, seniority = UNKNOWN_SENIORITY) {
     kind: normalized.kind,
     titleParts: normalized.titleParts,
     location,
+    status: normalized.status,
+    warning: normalized.warning,
     seniority,
   });
 }
@@ -1534,6 +1539,8 @@ function parseCaseyEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
       startHm: explicit.start,
       endHm: explicit.end,
       location: normalized.location || CASEY_LOCATION,
+      status: normalized.status,
+      warning: normalized.warning,
       seniority,
     });
   }
@@ -1642,7 +1649,7 @@ function normalizeGenericMmcTimedLabel(label, explicit) {
     location: MMC_LOCATION,
     allDay: false,
     defaultTimes: null,
-    ambiguous: Boolean(code),
+    status: code ? "unknown" : "ok",
     warning: code ? "MMC shift code not recognised; using explicit roster time." : "",
   };
 }
@@ -1680,6 +1687,8 @@ function normalizeCaseyLabel(label, explicit = null) {
       location: CASEY_LOCATION,
       allDay: false,
       defaultTimes: null,
+      status: "unknown",
+      warning: "Casey shift label not recognised; using explicit roster time.",
     };
   }
   return null;
@@ -2237,27 +2246,33 @@ function normalizeGenericDdhLabel(label) {
 
   if (upper.includes("CLINICAL SUPPORT") || /^CS\b/.test(upper) || upper.includes(" OCS")) {
     const onsite = upper.includes("ONSITE");
-    return {
-      kind: "shift",
-      titleParts: { base: onsite ? "CS onsite" : "CS", period, suffix: "" },
-    };
+    return genericUnknownDdhShift({ base: onsite ? "CS onsite" : "CS", period, suffix: "" });
   }
-  if (upper.includes("SSU")) return { kind: "shift", titleParts: { base: upper.includes("NIGHT") ? "Night SSU" : "SSU", period, suffix: "" } };
-  if (upper.includes("AVAO")) return { kind: "shift", titleParts: { base: "AVAO", period, suffix: "" } };
-  if (upper.includes("ORANGE")) return { kind: "shift", titleParts: { base: "Orange", period, suffix: "" } };
-  if (upper.includes("SILVER")) return { kind: "shift", titleParts: { base: "Silver", period, suffix: "" } };
-  if (upper.includes("FAST")) return { kind: "shift", titleParts: { base: "FAST", period, suffix: "" } };
-  if (upper.includes("VHH")) return { kind: "shift", titleParts: { base: period ? "VHH" : cleaned.replace(/\bIC\b/gi, "").trim(), period, suffix: "" } };
-  if (upper.includes("ROVER")) return { kind: "shift", titleParts: { base: "Rover", period, suffix: "" } };
-  if (upper.includes("HITH")) return { kind: "shift", titleParts: { base: "HITH", period, suffix: "" } };
-  if (upper.includes("PAED")) return { kind: "shift", titleParts: { base: "Paeds", period, suffix: "" } };
-  if (upper.includes("NIGHT")) return { kind: "shift", titleParts: { base: cleaned.replace(/\bIC\b/gi, "").trim(), period: "", suffix: "" } };
-  if (upper.includes("AED")) return { kind: "shift", titleParts: { base: "AED", period, suffix: "" } };
-  if (upper.includes("MED")) return { kind: "shift", titleParts: { base: "MED", period, suffix: "" } };
-  if (upper.includes("GED")) return { kind: "shift", titleParts: { base: cleaned.replace(/\bIC\b/gi, "").trim(), period: "", suffix: "" } };
-  if (upper.includes("EXTRA")) return { kind: "shift", titleParts: { base: "Extra", period, suffix: "" } };
+  if (upper.includes("SSU")) return genericUnknownDdhShift({ base: upper.includes("NIGHT") ? "Night SSU" : "SSU", period, suffix: "" });
+  if (upper.includes("AVAO")) return genericUnknownDdhShift({ base: "AVAO", period, suffix: "" });
+  if (upper.includes("ORANGE")) return genericUnknownDdhShift({ base: "Orange", period, suffix: "" });
+  if (upper.includes("SILVER")) return genericUnknownDdhShift({ base: "Silver", period, suffix: "" });
+  if (upper.includes("FAST")) return genericUnknownDdhShift({ base: "FAST", period, suffix: "" });
+  if (upper.includes("VHH")) return genericUnknownDdhShift({ base: period ? "VHH" : cleaned.replace(/\bIC\b/gi, "").trim(), period, suffix: "" });
+  if (upper.includes("ROVER")) return genericUnknownDdhShift({ base: "Rover", period, suffix: "" });
+  if (upper.includes("HITH")) return genericUnknownDdhShift({ base: "HITH", period, suffix: "" });
+  if (upper.includes("PAED")) return genericUnknownDdhShift({ base: "Paeds", period, suffix: "" });
+  if (upper.includes("NIGHT")) return genericUnknownDdhShift({ base: cleaned.replace(/\bIC\b/gi, "").trim(), period: "", suffix: "" });
+  if (upper.includes("AED")) return genericUnknownDdhShift({ base: "AED", period, suffix: "" });
+  if (upper.includes("MED")) return genericUnknownDdhShift({ base: "MED", period, suffix: "" });
+  if (upper.includes("GED")) return genericUnknownDdhShift({ base: cleaned.replace(/\bIC\b/gi, "").trim(), period: "", suffix: "" });
+  if (upper.includes("EXTRA")) return genericUnknownDdhShift({ base: "Extra", period, suffix: "" });
 
   return null;
+}
+
+function genericUnknownDdhShift(titleParts) {
+  return {
+    kind: "shift",
+    titleParts,
+    status: "unknown",
+    warning: "DDH shift label not recognised; using roster time.",
+  };
 }
 
 function normalizeDdhLocation(label, normalized) {
@@ -2649,7 +2664,7 @@ function createTimedRecord(source, day, rawValue, details) {
     location: details.location || "",
     titleParts: details.titleParts,
     normalizedTitle,
-    status: details.ambiguous ? "ambiguous" : "ok",
+    status: details.status || (details.ambiguous ? "ambiguous" : "ok"),
     warnings: details.warning ? [details.warning] : [],
     exportable: true,
     includeByDefault: true,
@@ -2672,7 +2687,7 @@ function createAllDayRecord(source, day, rawValue, details) {
     location: details.location || "",
     titleParts: details.titleParts,
     normalizedTitle,
-    status: details.ambiguous ? "ambiguous" : "ok",
+    status: details.status || (details.ambiguous ? "ambiguous" : "ok"),
     warnings: details.warning ? [details.warning] : [],
     exportable: true,
     includeByDefault: true,

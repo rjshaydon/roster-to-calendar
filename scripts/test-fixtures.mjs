@@ -250,6 +250,19 @@ assert.match(
   "ordinary roster sync should process only missing or failed files",
 );
 assert.match(appSource, /function rosterSyncLabel/, "file cards should expose live roster sync labels");
+assert.match(appSource, /function exportHospitalOptions/, "one-off exports should expose hospital options");
+assert.match(appSource, /function matchesExportHospitals/, "one-off exports should support hospital filtering");
+assert.match(appSource, /function canCopySubscriptionUrl/, "subscription URL availability should be separate from one-off exports");
+assert.match(
+  appSource.match(/function renderExportModal[\s\S]*?async function handleExportAction/)?.[0] || "",
+  /data-export-action="apple">Open in Apple Calendar/,
+  "Apple Calendar one-off import should not be disabled by subscription availability",
+);
+assert.doesNotMatch(
+  appSource.match(/async function reportAccountError[\s\S]*?async function updateAccountDetails/)?.[0] || "",
+  /currentUserRole === "creator" && !adminViewingEmail/,
+  "creator-owned unresolved shift codes should be reportable into the admin issue flow",
+);
 assert.doesNotMatch(
   appSource.match(/async function buildDerivedCalendarFilePayload[\s\S]*?function assertDerivedCalendarFilePayload/)?.[0] || "",
   /rawFile:/,
@@ -388,6 +401,30 @@ assert.ok(hasMmcRule("HMO", "PHJ"));
 assert.ok(hasMmcRule("Intern", "NSSJ"));
 const nssjRule = mmcRules.find((rule) => rule.seniority === "HMO" && rule.code === "NSSJ");
 assert.equal(nssjRule.startTime, "23:00");
+
+const unmappedTimedMmcWorkbook = XLSX.utils.book_new();
+const unmappedTimedMmcSheet = XLSX.utils.aoa_to_sheet([
+  [],
+  [],
+  [],
+  ["", "", "", "", "", "", "", "", "", "", "", ""],
+  ["", "", "SENIOR REG"],
+  ["", "", "", "Patrick TAN", "", "0800-1730 ASSJ"],
+]);
+for (let index = 0; index < 7; index += 1) {
+  unmappedTimedMmcSheet[XLSX.utils.encode_cell({ r: 3, c: 5 + index })] = { t: "d", v: new Date(`2026-05-${String(4 + index).padStart(2, "0")}T00:00:00`) };
+}
+XLSX.utils.book_append_sheet(unmappedTimedMmcWorkbook, XLSX.utils.aoa_to_sheet([[]]), "Whole thing");
+XLSX.utils.book_append_sheet(unmappedTimedMmcWorkbook, unmappedTimedMmcSheet, "Week 1");
+const unmappedTimedMmcView = buildRosterView([{ id: "unmapped-assj", workbook: unmappedTimedMmcWorkbook, file: { name: "AdultTerm.xlsx", size: 1, lastModified: 1 } }], [], "PATRICK TAN");
+assert.ok(
+  unmappedTimedMmcView.events.some((event) => event.rawValue === "0800-1730 ASSJ" && event.title === "MMC: ASSJ" && event.start.includes("08:00:00") && event.end.includes("17:30:00")),
+  "unmapped explicit-time MMC shifts should remain visible at their rostered time",
+);
+assert.ok(
+  unmappedTimedMmcView.issues.some((issue) => issue.rawValue === "0800-1730 ASSJ" && issue.status === "unknown" && issue.resolutionType === "shift_code"),
+  "unmapped explicit-time MMC shifts should enter the unresolved shift-code workflow",
+);
 assert.equal(nssjRule.endTime, "08:30");
 for (const sourceRules of [defaultRules.ddh, defaultRules.casey]) {
   assert.equal(sourceRules.some((rule) => rule.seniority === "Senior Registrar" && rule.base === "CS"), false);
@@ -1813,6 +1850,7 @@ const d1CreatorLogin = await postState(d1StateStore, {
 }, d1Store);
 assert.equal(d1CreatorLogin.snapshot, null, "login should not build or return a full calendar snapshot");
 assert.equal(d1CreatorLogin.state.session.doctorKey, d1Doctor.key, "creator login should keep selected doctor metadata");
+assert.equal(d1CreatorLogin.subscription.enabled, true, "creator account should expose subscription URL capability");
 const d1CreatorCalendar = await postState(d1StateStore, {
   action: "loadCalendarEvents",
   email: "rhaydon@gmail.com",
@@ -1820,6 +1858,11 @@ const d1CreatorCalendar = await postState(d1StateStore, {
 }, d1Store);
 assert.equal(d1CreatorCalendar.snapshot?.preview?.derivedFromD1, true);
 assert.ok(d1CreatorCalendar.snapshot.preview.events.length > 0);
+const d1CreatorFeedResponse = await handleFeedGet({
+  request: new Request(`http://fixture.test/api/feed?token=${d1CreatorLogin.subscription.token}`),
+  env: { ROSTER_DB: d1Store },
+});
+assert.equal(d1CreatorFeedResponse.ok, true, "creator subscription feed should resolve from the creator-selected doctor");
 const d1CreatedUser = await postState(d1StateStore, {
   action: "adminCreateUser",
   email: "rhaydon@gmail.com",

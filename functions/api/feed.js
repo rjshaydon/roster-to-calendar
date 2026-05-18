@@ -34,10 +34,12 @@ export async function onRequestGet(context) {
 async function buildD1SubscriptionFeed(db, record, view) {
   if (!hasCalendarDb({ ROSTER_DB: db })) return null;
   const role = record?.role || "";
-  if (role === "creator" || role === "owner") return null;
   const claims = sanitizeClaims(record.claims);
-  if (!claims.length) return null;
   const session = record?.state?.session && typeof record.state.session === "object" ? record.state.session : {};
+  const doctorKeys = (role === "creator" || role === "owner")
+    ? [String(session.doctorKey || "").trim()].filter(Boolean)
+    : claims.map((claim) => claim.key);
+  if (!doctorKeys.length) return null;
   const settings = {
     ...defaultSettings(),
     ...(session.settings || {}),
@@ -46,7 +48,7 @@ async function buildD1SubscriptionFeed(db, record, view) {
   const queryOptions = range.mode === "range" && range.startDate
     ? { startDate: range.startDate, endDate: range.allFuture ? "9999-12-31" : range.endDate || range.startDate }
     : {};
-  const rosterEvents = applyEventOverrides(await queryDoctorEvents(db, claims.map((claim) => claim.key), queryOptions), session.overrides || {});
+  const rosterEvents = applyEventOverrides(await queryDoctorEvents(db, doctorKeys, queryOptions), session.overrides || {});
   const d1CustomEvents = await queryAccountCustomEvents(db, record.email).catch(() => []);
   const customEvents = customEventsToEvents(latestCustomEventsByIdentity([
     ...sanitizeCustomEvents(session.customEvents, record.email),
