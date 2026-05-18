@@ -104,6 +104,7 @@
           <div id="controlBar" class="control-bar hidden">
             <div class="control-bar-main">
               <button id="exportButton" type="button" class="button button-primary" disabled>Export options</button>
+              <button id="addRosterFilesButton" type="button" class="button button-secondary">Add Roster Files</button>
               <span class="control-bar-spacer" aria-hidden="true"></span>
               <button id="accountsButton" type="button" class="button button-secondary">Accounts</button>
               <button id="settingsToggle" type="button" class="button button-secondary">Settings</button>
@@ -124,13 +125,7 @@
             <button id="claimDoctorButton" type="button" class="button button-secondary">Use Selected Name</button>
           </section>
 
-          <div id="dropZone" class="drop-zone" tabindex="0" role="button" aria-label="Choose roster files">
-            <input id="rosterFiles" name="rosterFiles" type="file" accept=".xlsx,.xlsm,.xltx,.xltm,.pdf,application/pdf" multiple hidden>
-            <p class="drop-kicker">Import Rosters</p>
-            <h2>Drop other roster files here.</h2>
-            <div class="drop-or">OR</div>
-            <button type="button" class="button button-secondary" id="chooseFilesButton">Choose Files</button>
-          </div>
+          <input id="rosterFiles" name="rosterFiles" type="file" accept=".xlsx,.xlsm,.xltx,.xltm,.pdf,application/pdf" multiple hidden>
           <div id="status" class="status-list" aria-live="polite" aria-relevant="additions removals"></div>
 
           <section id="settingsPanel" class="settings-panel hidden" aria-label="Roster settings">
@@ -351,6 +346,10 @@
         </form>
       </section>
     </main>
+
+    <div id="rosterDropOverlay" class="roster-drop-overlay hidden" aria-hidden="true">
+      <strong>Add Roster Files</strong>
+    </div>
 
     <div id="mobileActionBar" class="mobile-action-bar hidden">
       <button id="mobileTodayButton" type="button" class="button button-secondary mobile-bar-button">Today</button>

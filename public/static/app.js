@@ -25,8 +25,8 @@ const loginTabButton = document.querySelector("#loginTabButton");
 const createTabButton = document.querySelector("#createTabButton");
 const entrancePanels = [...document.querySelectorAll("[data-entrance-panel]")];
 const fileInput = document.querySelector("#rosterFiles");
-const dropZone = document.querySelector("#dropZone");
-const chooseFilesButton = document.querySelector("#chooseFilesButton");
+const addRosterFilesButton = document.querySelector("#addRosterFilesButton");
+const rosterDropOverlay = document.querySelector("#rosterDropOverlay");
 const filesButton = document.querySelector("#filesButton");
 const accountsButton = document.querySelector("#accountsButton");
 const filesModal = document.querySelector("#filesModal");
@@ -331,22 +331,9 @@ setEntranceTab("login");
   }, { passive: false });
 });
 
-chooseFilesButton.addEventListener("click", (event) => {
+addRosterFilesButton.addEventListener("click", (event) => {
   event.preventDefault();
-  event.stopPropagation();
   fileInput.click();
-});
-
-dropZone.addEventListener("click", (event) => {
-  if (event.target.closest("button, input, label, select, textarea, a")) return;
-  fileInput.click();
-});
-dropZone.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" || event.key === " ") {
-    if (event.target.closest("button, input, label, select, textarea, a")) return;
-    event.preventDefault();
-    fileInput.click();
-  }
 });
 
 fileInput.addEventListener("change", async () => {
@@ -364,24 +351,30 @@ fileInput.addEventListener("change", async () => {
   await analyzeFiles();
 });
 
+let rosterDragDepth = 0;
+
 for (const eventName of ["dragenter", "dragover"]) {
-  dropZone.addEventListener(eventName, (event) => {
+  window.addEventListener(eventName, (event) => {
+    if (!hasFileDrag(event.dataTransfer)) return;
     event.preventDefault();
-    dropZone.classList.add("is-dragging");
-    document.body.classList.add("is-dragging");
+    if (eventName === "dragenter") rosterDragDepth += 1;
+    syncRosterDragState(event.dataTransfer);
   });
 }
 
-for (const eventName of ["dragleave", "dragend", "drop"]) {
-  dropZone.addEventListener(eventName, (event) => {
-    event.preventDefault();
-    if (eventName === "dragleave" && dropZone.contains(event.relatedTarget)) return;
-    dropZone.classList.remove("is-dragging");
-    document.body.classList.remove("is-dragging");
-  });
-}
+window.addEventListener("dragleave", (event) => {
+  if (!hasFileDrag(event.dataTransfer)) return;
+  event.preventDefault();
+  rosterDragDepth = Math.max(0, rosterDragDepth - 1);
+  if (rosterDragDepth === 0) clearRosterDragState();
+});
 
-dropZone.addEventListener("drop", async (event) => {
+window.addEventListener("dragend", clearRosterDragState);
+
+window.addEventListener("drop", async (event) => {
+  if (!hasFileDrag(event.dataTransfer)) return;
+  event.preventDefault();
+  clearRosterDragState();
   const accepted = validateIncomingFiles([...event.dataTransfer.files]);
   if (!accepted.length) return;
   if (!await validateFreshRosterUploads(accepted)) return;
@@ -1360,6 +1353,49 @@ function validateIncomingFiles(files) {
     return [];
   }
   return files;
+}
+
+function hasFileDrag(dataTransfer) {
+  return Boolean(dataTransfer?.types && [...dataTransfer.types].includes("Files"));
+}
+
+function syncRosterDragState(dataTransfer) {
+  const supported = isSupportedRosterDrag(dataTransfer);
+  document.body.classList.toggle("is-roster-dragging", supported);
+  rosterDropOverlay.classList.toggle("hidden", !supported);
+  rosterDropOverlay.setAttribute("aria-hidden", supported ? "false" : "true");
+}
+
+function clearRosterDragState() {
+  rosterDragDepth = 0;
+  document.body.classList.remove("is-roster-dragging");
+  rosterDropOverlay.classList.add("hidden");
+  rosterDropOverlay.setAttribute("aria-hidden", "true");
+}
+
+function isSupportedRosterDrag(dataTransfer) {
+  const files = [...(dataTransfer?.files || [])];
+  if (files.length) return files.every(isSupportedRosterFile);
+
+  const fileItems = [...(dataTransfer?.items || [])].filter((item) => item.kind === "file");
+  if (!fileItems.length) return false;
+  const itemFiles = fileItems.map((item) => item.getAsFile?.()).filter(Boolean);
+  if (itemFiles.length === fileItems.length) return itemFiles.every(isSupportedRosterFile);
+  return fileItems.every((item) => isSupportedRosterMimeType(item.type));
+}
+
+function isSupportedRosterFile(file) {
+  return Boolean(file?.name?.match(/\.(xlsx|xlsm|xltx|xltm|pdf)$/i));
+}
+
+function isSupportedRosterMimeType(type) {
+  return [
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-excel.sheet.macroenabled.12",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.template",
+    "application/vnd.ms-excel.template.macroenabled.12",
+  ].includes(String(type || "").toLowerCase());
 }
 
 async function validateFreshRosterUploads(files) {
