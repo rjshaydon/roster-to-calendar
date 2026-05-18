@@ -250,6 +250,12 @@ assert.match(
   "ordinary roster sync should process only missing or failed files",
 );
 assert.match(appSource, /function rosterSyncLabel/, "file cards should expose live roster sync labels");
+assert.match(appSource, /Missing \/ unresolved shift codes/, "system card should expose unresolved shift-code review");
+assert.match(
+  appSource.match(/function renderParserRulesCard[\s\S]*?function collectUnknownShiftIssues/)?.[0] || "",
+  /parserRuleSuggestions\.length \? `[\s\S]*<strong>User suggestions<\/strong>/,
+  "empty user-suggestion sections should be omitted",
+);
 assert.match(appSource, /function exportHospitalOptions/, "one-off exports should expose hospital options");
 assert.match(appSource, /function matchesExportHospitals/, "one-off exports should support hospital filtering");
 assert.match(appSource, /function canCopySubscriptionUrl/, "subscription URL availability should be separate from one-off exports");

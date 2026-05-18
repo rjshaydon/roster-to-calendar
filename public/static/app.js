@@ -6700,55 +6700,55 @@ function renderParserRulesCard() {
   const unknownSources = new Set(unknownIssues.map((item) => item.source));
   return `
     <div class="issues-list">
-      <article class="review-card">
-        <div class="review-top">
-          <div>
-            <strong>User suggestions</strong>
-            <span>${parserRuleSuggestions.length ? `${parserRuleSuggestions.length} pending suggestion${parserRuleSuggestions.length === 1 ? "" : "s"}` : "No user suggestions pending."}</span>
-          </div>
-        </div>
-        <div class="issues-list">
-          ${parserRuleSuggestions.length ? parserRuleSuggestions.map((suggestion) => `
-            <article class="issue-card">
-              <div>
-                <strong>${escapeHtml(suggestion.rule.source)} · ${escapeHtml(suggestion.rule.seniority)} · ${escapeHtml(suggestion.rule.code)}</strong>
-                <p>${escapeHtml(suggestion.realName || suggestion.email)} suggested ${escapeHtml(parserRulePreviewTitle(suggestion.rule))}</p>
-                <p>${escapeHtml(parserRulePreviewMeta(suggestion.rule))}${suggestion.updatedAt ? ` · ${escapeHtml(formatTimestamp(suggestion.updatedAt))}` : ""}</p>
-              </div>
-              <div class="account-actions">
-                <button type="button" class="button button-secondary" data-parser-suggestion-action="approveGlobal" data-suggestion-id="${escapeHtml(suggestion.id)}">Approve globally</button>
-                <button type="button" class="button button-secondary" data-parser-suggestion-action="approveUser" data-suggestion-id="${escapeHtml(suggestion.id)}">Approve for user</button>
-                <button type="button" class="button button-secondary" data-parser-suggestion-action="overwrite" data-suggestion-id="${escapeHtml(suggestion.id)}">Overwrite</button>
-                <button type="button" class="button button-secondary" data-parser-suggestion-action="reject" data-suggestion-id="${escapeHtml(suggestion.id)}">Reject</button>
-              </div>
-            </article>
-          `).join("") : `<article class="issue-card"><p>No user-created shift-code resolutions are waiting for review.</p></article>`}
-        </div>
-      </article>
-      ${unknownIssues.length ? `
+      ${parserRuleSuggestions.length ? `
         <article class="review-card">
           <div class="review-top">
             <div>
-              <strong>Unrecognised shift codes</strong>
-              <span>${unknownIssues.length} code${unknownIssues.length === 1 ? "" : "s"} needing translation</span>
+              <strong>User suggestions</strong>
+              <span>${parserRuleSuggestions.length} pending suggestion${parserRuleSuggestions.length === 1 ? "" : "s"}</span>
             </div>
           </div>
           <div class="issues-list">
-            ${unknownIssues.map((item) => `
+            ${parserRuleSuggestions.map((suggestion) => `
               <article class="issue-card">
                 <div>
-                  <strong>${escapeHtml(item.source)} · ${escapeHtml(item.seniority)} · ${escapeHtml(item.code)}</strong>
-                  <p>${escapeHtml(item.message || "Shift code not recognised.")}</p>
-                  <p>${escapeHtml(item.sample)}${item.count > 1 ? ` · seen ${item.count} times` : ""}</p>
+                  <strong>${escapeHtml(suggestion.rule.source)} · ${escapeHtml(suggestion.rule.seniority)} · ${escapeHtml(suggestion.rule.code)}</strong>
+                  <p>${escapeHtml(suggestion.realName || suggestion.email)} suggested ${escapeHtml(parserRulePreviewTitle(suggestion.rule))}</p>
+                  <p>${escapeHtml(parserRulePreviewMeta(suggestion.rule))}${suggestion.updatedAt ? ` · ${escapeHtml(formatTimestamp(suggestion.updatedAt))}` : ""}</p>
                 </div>
                 <div class="account-actions">
-                  <button type="button" class="button button-secondary" data-add-shift-code="${escapeHtml(item.email)}" data-error-id="${escapeHtml(item.id)}">Add shift code</button>
+                  <button type="button" class="button button-secondary" data-parser-suggestion-action="approveGlobal" data-suggestion-id="${escapeHtml(suggestion.id)}">Approve globally</button>
+                  <button type="button" class="button button-secondary" data-parser-suggestion-action="approveUser" data-suggestion-id="${escapeHtml(suggestion.id)}">Approve for user</button>
+                  <button type="button" class="button button-secondary" data-parser-suggestion-action="overwrite" data-suggestion-id="${escapeHtml(suggestion.id)}">Overwrite</button>
+                  <button type="button" class="button button-secondary" data-parser-suggestion-action="reject" data-suggestion-id="${escapeHtml(suggestion.id)}">Reject</button>
                 </div>
               </article>
             `).join("")}
           </div>
         </article>
       ` : ""}
+      <article class="review-card">
+        <div class="review-top">
+          <div>
+            <strong>Missing / unresolved shift codes</strong>
+            <span>${unknownIssues.length ? `${unknownIssues.length} code${unknownIssues.length === 1 ? "" : "s"} needing review` : "No unresolved shift codes."}</span>
+          </div>
+        </div>
+        <div class="issues-list">
+          ${unknownIssues.length ? unknownIssues.map((item) => `
+            <article class="issue-card">
+              <div>
+                <strong>${escapeHtml(item.source)} · ${escapeHtml(item.seniority)} · ${escapeHtml(item.code)}</strong>
+                <p>${escapeHtml(item.message || "Shift code not recognised.")}</p>
+                <p>${escapeHtml(item.sample)}${item.count > 1 ? ` · seen ${item.count} times` : ""}</p>
+              </div>
+              <div class="account-actions">
+                <button type="button" class="button button-secondary" data-add-shift-code="${escapeHtml(item.email)}" data-error-id="${escapeHtml(item.id)}">Add shift code</button>
+              </div>
+            </article>
+          `).join("") : `<article class="issue-card"><p>No missing or unresolved shift codes need review.</p></article>`}
+        </div>
+      </article>
       <article class="issue-card">
         <div>
           <strong>Shift code rules</strong>
