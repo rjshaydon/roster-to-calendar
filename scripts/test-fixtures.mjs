@@ -5,6 +5,7 @@ import XLSX from "xlsx";
 
 import { onRequestPost as handleStatePost } from "../functions/api/state.js";
 import { onRequestGet as handleFeedGet } from "../functions/api/feed.js";
+import { onRequestGet as handleImportGet } from "../functions/api/import.js";
 import { buildPreviewFromDerivedEvents } from "../functions/_lib/d1-calendar.js";
 import { buildRosterView, doctorOptions, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
 
@@ -259,6 +260,12 @@ assert.match(
 assert.match(appSource, /function exportHospitalOptions/, "one-off exports should expose hospital options");
 assert.match(appSource, /function matchesExportHospitals/, "one-off exports should support hospital filtering");
 assert.match(appSource, /function canCopySubscriptionUrl/, "subscription URL availability should be separate from one-off exports");
+assert.match(appSource, /function oneOffImportUrl/, "Apple Calendar one-off imports should use a dedicated import URL");
+assert.match(
+  appSource.match(/async function handleExportAction[\s\S]*?function downloadIcs/)?.[0] || "",
+  /await navigator\.clipboard\.writeText\(url\)[\s\S]*saveCloudState\(snapshot\)\.catch/,
+  "subscription URLs should be copied before async feed persistence runs",
+);
 assert.match(
   appSource.match(/function renderExportModal[\s\S]*?async function handleExportAction/)?.[0] || "",
   /data-export-action="apple">Open in Apple Calendar/,
@@ -1869,6 +1876,13 @@ const d1CreatorFeedResponse = await handleFeedGet({
   env: { ROSTER_DB: d1Store },
 });
 assert.equal(d1CreatorFeedResponse.ok, true, "creator subscription feed should resolve from the creator-selected doctor");
+const d1CreatorImportResponse = await handleImportGet({
+  request: new Request(`http://fixture.test/api/import?token=${d1CreatorLogin.subscription.token}&view=full&hospitals=MMC`),
+  env: { ROSTER_DB: d1Store },
+});
+assert.equal(d1CreatorImportResponse.ok, true, "creator one-off import should resolve from the creator-selected doctor");
+assert.equal(d1CreatorImportResponse.headers.get("content-type"), "text/calendar; charset=utf-8");
+assert.match(d1CreatorImportResponse.headers.get("content-disposition") || "", /roster\.ics/, "one-off imports should advertise an .ics import payload");
 const d1CreatedUser = await postState(d1StateStore, {
   action: "adminCreateUser",
   email: "rhaydon@gmail.com",

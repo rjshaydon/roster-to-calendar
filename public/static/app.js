@@ -6220,40 +6220,52 @@ async function handleExportAction(action) {
       setStatus("Refreshing calendar...");
       await refreshSnapshotInBackground();
     }
-    if (action === "download" || action === "apple") {
+    if (action === "download") {
       setStatus("Building calendar file...");
       const events = await buildBrowserExportEvents(doctor, { ...exportConfig, hospitals: pendingExportHospitals });
       if (!events.length) {
         throw new Error("No calendar events were found for that export selection.");
       }
       const ics = exportIcs(events, doctor.displayName);
-      if (action === "apple") {
-        openIcsInAppleCalendar(ics, `${doctor.displayName} roster.ics`);
-      } else {
-        downloadIcs(ics, `${doctor.displayName} roster.ics`);
-      }
+      downloadIcs(ics, `${doctor.displayName} roster.ics`);
       closeExportModal();
-      setStatus(action === "apple" ? "Opening Apple Calendar import..." : "Calendar file ready.");
+      setStatus("Calendar file ready.");
+      return;
+    }
+    if (action === "apple") {
+      setStatus("Preparing Apple Calendar import...");
+      if (canCopySubscriptionUrl()) {
+        const snapshot = snapshotCloudSavePayload();
+        await saveCloudState(snapshot);
+        const url = oneOffImportUrl(exportConfig, pendingExportHospitals);
+        if (!url) throw new Error("No import link is available for this account yet.");
+        closeExportModal();
+        window.location.href = url;
+        setStatus("Opening Apple Calendar import...");
+        return;
+      }
+      const events = await buildBrowserExportEvents(doctor, { ...exportConfig, hospitals: pendingExportHospitals });
+      if (!events.length) throw new Error("No calendar events were found for that export selection.");
+      openIcsInAppleCalendar(exportIcs(events, doctor.displayName));
+      closeExportModal();
+      setStatus("Opening Apple Calendar import...");
       return;
     }
     if (!canCopySubscriptionUrl()) {
       setStatus("Subscription links are not available for this calendar.", true);
       return;
     }
-    setStatus("Saving subscription feed...");
+    const url = subscriptionUrl("https", exportConfig.mode === "range" ? "range" : "full");
+    if (!url) throw new Error("No subscription link is available for this account yet.");
+    await navigator.clipboard.writeText(url);
+    closeExportModal();
+    setStatus("Subscription URL copied.");
     const snapshot = snapshotCloudSavePayload();
     snapshot.session = {
       ...snapshot.session,
       exportRange: normalizeExportRangeState(exportConfig.mode === "range" ? exportConfig : defaultExportRangeState()),
     };
-    await saveCloudState(snapshot);
-    const url = subscriptionUrl("https", exportConfig.mode === "range" ? "range" : "full");
-    if (!url) {
-      throw new Error("No subscription link is available for this account yet.");
-    }
-    await navigator.clipboard.writeText(url);
-    closeExportModal();
-    setStatus("Subscription URL copied.");
+    saveCloudState(snapshot).catch(() => setStatus("Subscription URL copied, but the saved feed range could not be updated.", true));
   } catch (error) {
     setStatus(error.message || "Export failed.", true);
   }
@@ -6271,8 +6283,11 @@ function downloadIcs(ics, filename) {
   URL.revokeObjectURL(url);
 }
 
-function openIcsInAppleCalendar(ics, filename) {
-  downloadIcs(ics, filename);
+function openIcsInAppleCalendar(ics) {
+  const payload = new Blob([ics], { type: "text/calendar; charset=utf-8" });
+  const url = URL.createObjectURL(payload);
+  window.location.href = url;
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
 function hasActiveExportFilters() {
@@ -6938,6 +6953,21 @@ function subscriptionUrl(protocol = "https", view = "full") {
   if (protocol === "webcal") {
     return url.toString().replace(/^https?:/i, "webcal:");
   }
+  return url.toString();
+}
+
+function oneOffImportUrl(exportConfig = { mode: "full" }, hospitals = []) {
+  if (!currentSubscription?.token) return "";
+  const url = new URL("/api/import", window.location.origin);
+  url.searchParams.set("token", currentSubscription.token);
+  url.searchParams.set("view", exportConfig.mode === "range" ? "range" : "full");
+  if (exportConfig.mode === "range") {
+    url.searchParams.set("startDate", exportConfig.startDate || "");
+    url.searchParams.set("endDate", exportConfig.allFuture ? "" : exportConfig.endDate || "");
+    url.searchParams.set("allFuture", exportConfig.allFuture !== false ? "true" : "false");
+  }
+  const selectedHospitals = normalizeExportHospitals(hospitals);
+  if (selectedHospitals.length) url.searchParams.set("hospitals", selectedHospitals.join(","));
   return url.toString();
 }
 
