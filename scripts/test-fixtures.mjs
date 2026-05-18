@@ -93,6 +93,26 @@ assert.match(
   /resetTransientCalendarData\(\);\s*forceCreatorDoctorSession\(\);[\s\S]*restoreCloudState/,
   "returning to the creator should normalize the creator doctor before calendar events load",
 );
+assert.match(
+  appSource.match(/function currentAccount[\s\S]*?function canUseRosterInsights/)?.[0] || "",
+  /viewedAccountEmail\(\)[\s\S]*function viewedAccountEmail[\s\S]*adminViewingEmail \|\| currentUserEmail[\s\S]*function isOwnerAccount\(\) \{\s*return isViewingCreatorAccount\(\);/,
+  "switched-user account surfaces should be driven by viewed identity rather than creator authentication",
+);
+assert.match(
+  appSource.match(/async function deleteAccount[\s\S]*?function deleteLocalAccountData/)?.[0] || "",
+  /creatorDeletingSwitchedUser[\s\S]*if \(creatorDeletingSwitchedUser\)[\s\S]*returnToCreatorCalendar[\s\S]*if \(deletingViewedAccount\)[\s\S]*setActiveCalendarContext\(\"claimed-account\", \{ email: \"\" \}\)/,
+  "deleting a switched user should return to creator, while user self-delete should clear into logged-out context",
+);
+assert.doesNotMatch(
+  appSource.match(/function deleteLocalAccountData[\s\S]*?function clearDeletedAccountClaims/)?.[0] || "",
+  /accountState\.currentEmail = OWNER_EMAIL/,
+  "deleting the current local user should not silently select the creator account",
+);
+assert.match(
+  appSource.match(/function snapshotCloudSavePayload[\s\S]*?function forceCreatorDoctorSession/)?.[0] || "",
+  /accountEmail: viewedAccountEmail\(\)[\s\S]*requestEmail: adminViewingEmail \? authenticatedAccountEmail\(\) : viewedAccountEmail\(\)[\s\S]*targetEmail: adminViewingEmail \? viewedAccountEmail\(\) : \"\"/,
+  "switched-user settings should save to the viewed account using creator authentication only for the request",
+);
 assert.doesNotMatch(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
     .match(/if \(action === "login"\)[\s\S]*?const account = await verifyD1Account/)?.[0] || "",

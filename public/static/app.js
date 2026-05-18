@@ -1753,13 +1753,13 @@ function syncOverlayState() {
 
 async function openAccountsSurface(options = {}) {
   closeSettingsPanel();
-  if (isOwnerAccount()) {
+  if (isViewingCreatorAccount()) {
     if (options.defaultAdminTab) currentAdminTab = options.defaultAdminTab;
   }
   renderAccountsModal();
   accountsModal.classList.remove("hidden");
   accountsModal.setAttribute("aria-hidden", "false");
-  if (isOwnerAccount()) {
+  if (isViewingCreatorAccount()) {
     void loadServerUsers().then(() => {
       if (!accountsModal.classList.contains("hidden")) renderAccountsModal();
     });
@@ -1768,8 +1768,7 @@ async function openAccountsSurface(options = {}) {
 }
 
 function syncMobileAccountButtons() {
-  const creator = isCreatorAuthenticated();
-  const label = creator ? "Admin" : "Account";
+  const label = isViewingCreatorAccount() ? "Admin" : "Account";
   if (mobileAccountButtonLabel) mobileAccountButtonLabel.textContent = label;
   if (mobileAccountButton) mobileAccountButton.setAttribute("aria-label", label);
   if (mobileAccountAccessButton) {
@@ -4695,12 +4694,12 @@ function currentClaimedAccountEmail(email) {
 
 function activeWorkspaceOwnerKey() {
   if (activeCalendarMode() === "doctor-profile" && activeDoctorProfile?.id) return `profile:${activeDoctorProfile.id}`;
-  return normalizeEmail(currentUserEmail);
+  return viewedAccountEmail();
 }
 
 function activeCalendarOwnerId() {
   if (activeCalendarMode() === "doctor-profile") return activeDoctorProfile?.ownerId || "";
-  return normalizeEmail(currentUserEmail);
+  return viewedAccountEmail();
 }
 
 function buildDoctorProfileId(doctor) {
@@ -6306,14 +6305,23 @@ function normalizeRosterName(value) {
 }
 
 function currentAccount() {
-  const email = currentUserEmail || accountState.currentEmail;
-  return accountState.users.find((user) => user.email === email) || {
+  const email = viewedAccountEmail() || accountState.currentEmail;
+  const serverAccount = serverUsers.map(normalizeServerUser).find((user) => user.email === email);
+  return serverAccount || accountState.users.find((user) => user.email === email) || {
     email,
     realName: "",
     password: "",
     role: currentUserRole === "creator" ? "owner" : "user",
     claims: [],
   };
+}
+
+function viewedAccountEmail() {
+  return normalizeEmail(adminViewingEmail || currentUserEmail);
+}
+
+function authenticatedAccountEmail() {
+  return normalizeEmail(authUserEmail || currentUserEmail);
 }
 
 function isViewingCreatorAccount() {
@@ -6324,7 +6332,7 @@ function isViewingCreatorAccount() {
 }
 
 function isOwnerAccount() {
-  return currentUserRole === "creator" || currentAccount()?.role === "owner";
+  return isViewingCreatorAccount();
 }
 
 function canUseRosterInsights() {
@@ -7426,9 +7434,9 @@ async function updateAccountDetails(email, patch) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           action: "updateAccount",
-          email: adminViewingEmail ? authUserEmail || currentUserEmail : currentUserEmail,
+          email: adminViewingEmail ? authenticatedAccountEmail() : viewedAccountEmail(),
           password: adminViewingEmail ? authUserPassword || currentUserPassword : currentUserPassword,
-          targetEmail: adminViewingEmail ? currentUserEmail : "",
+          targetEmail: adminViewingEmail ? viewedAccountEmail() : "",
           realName: patch.realName || "",
           newPassword: patch.password || "",
         }),
@@ -7685,7 +7693,7 @@ async function saveAdminRosterClaims(email, claims) {
 function removeLocalAccount(email) {
   accountState.users = accountState.users.filter((user) => user.email !== email);
   if (!accountState.users.some((user) => user.email === accountState.currentEmail)) {
-    accountState.currentEmail = OWNER_EMAIL;
+    accountState.currentEmail = "";
   }
   saveAccountState();
   setStatus("User removed from local account list.");
@@ -7699,7 +7707,8 @@ async function deleteAccount(email) {
     return;
   }
 
-  const deletingCurrentAccount = targetEmail === currentUserEmail;
+  const deletingViewedAccount = targetEmail === viewedAccountEmail();
+  const creatorDeletingSwitchedUser = deletingViewedAccount && Boolean(adminViewingEmail) && isCreatorAuthenticated();
   const confirmed = window.confirm(`Delete account ${targetEmail}? This removes the account login and saved workspace. This cannot be undone.`);
   if (!confirmed) return;
 
@@ -7728,14 +7737,14 @@ async function deleteAccount(email) {
     clearDeletedAccountClaims(targetEmail);
     if (creatorCanDelete) await loadServerUsers();
 
-    if (deletingCurrentAccount && adminViewingEmail && creatorCanDelete) {
+    if (creatorDeletingSwitchedUser) {
       closeAccountsModal();
       await returnToCreatorCalendar();
       setStatus(`Deleted ${targetEmail}.`);
       return;
     }
 
-    if (deletingCurrentAccount) {
+    if (deletingViewedAccount) {
       closeAccountsModal();
       localStorage.removeItem(CURRENT_EMAIL_KEY);
       sessionStorage.removeItem(CURRENT_PASSWORD_KEY);
@@ -7747,6 +7756,7 @@ async function deleteAccount(email) {
       adminViewingEmail = "";
       currentUserRole = "user";
       cloudAvailable = false;
+      setActiveCalendarContext("claimed-account", { email: "" });
       await clearLocalWorkspace();
       renderLoginState();
       openLoginModal();
@@ -7766,7 +7776,7 @@ async function deleteAccount(email) {
 function deleteLocalAccountData(email) {
   accountState.users = accountState.users.filter((user) => user.email !== email);
   if (!accountState.users.some((user) => user.email === accountState.currentEmail)) {
-    accountState.currentEmail = OWNER_EMAIL;
+    accountState.currentEmail = "";
   }
   saveAccountState();
   const store = loadWorkspaceStore();
@@ -9328,10 +9338,10 @@ function snapshotCloudSavePayload() {
     };
   }
   return {
-    accountEmail: currentUserEmail,
-    requestEmail: adminViewingEmail ? authUserEmail : currentUserEmail,
+    accountEmail: viewedAccountEmail(),
+    requestEmail: adminViewingEmail ? authenticatedAccountEmail() : viewedAccountEmail(),
     requestPassword: adminViewingEmail ? authUserPassword : currentUserPassword,
-    targetEmail: adminViewingEmail ? currentUserEmail : "",
+    targetEmail: adminViewingEmail ? viewedAccountEmail() : "",
     imports: selectedFiles.map((entry) => ({ ...entry })),
     session: buildActiveSessionState(),
     removedImportIds: [],
