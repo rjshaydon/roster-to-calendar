@@ -6145,7 +6145,7 @@ function renderExportModal() {
       <div class="review-top">
         <div>
           <strong>${escapeHtml(doctor?.displayName || "Selected doctor")}</strong>
-          <span>Create a one-off export, or copy a subscription URL.</span>
+          <span>Save a one-off export, or open/copy a live subscription feed.</span>
         </div>
       </div>
       <div class="export-variant-picker">
@@ -6211,7 +6211,7 @@ async function handleExportAction(action) {
     setStatus("The finish date must be on or after the start date.", true);
     return;
   }
-  if ((action === "download" || action === "apple") && exportHospitalOptions().length > 1 && !pendingExportHospitals.length) {
+  if (action === "download" && exportHospitalOptions().length > 1 && !pendingExportHospitals.length) {
     setStatus("Choose at least one hospital for this export.", true);
     return;
   }
@@ -6233,22 +6233,22 @@ async function handleExportAction(action) {
       return;
     }
     if (action === "apple") {
-      setStatus("Preparing Apple Calendar import...");
-      if (canCopySubscriptionUrl()) {
-        const snapshot = snapshotCloudSavePayload();
-        await saveCloudState(snapshot);
-        const url = oneOffImportUrl(exportConfig, pendingExportHospitals);
-        if (!url) throw new Error("No import link is available for this account yet.");
-        closeExportModal();
-        window.location.href = url;
-        setStatus("Opening Apple Calendar import...");
+      if (!canCopySubscriptionUrl()) {
+        setStatus("Subscription links are not available for this calendar.", true);
         return;
       }
-      const events = await buildBrowserExportEvents(doctor, { ...exportConfig, hospitals: pendingExportHospitals });
-      if (!events.length) throw new Error("No calendar events were found for that export selection.");
-      openIcsInAppleCalendar(exportIcs(events, doctor.displayName));
+      setStatus("Saving subscription feed...");
+      const snapshot = snapshotCloudSavePayload();
+      snapshot.session = {
+        ...snapshot.session,
+        exportRange: normalizeExportRangeState(exportConfig.mode === "range" ? exportConfig : defaultExportRangeState()),
+      };
+      await saveCloudState(snapshot);
+      const url = subscriptionUrl("webcal", exportConfig.mode === "range" ? "range" : "full");
+      if (!url) throw new Error("No subscription link is available for this account yet.");
       closeExportModal();
-      setStatus("Opening Apple Calendar import...");
+      window.location.href = url;
+      setStatus("Opening Apple Calendar subscription...");
       return;
     }
     if (!canCopySubscriptionUrl()) {
@@ -6281,13 +6281,6 @@ function downloadIcs(ics, filename) {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
-}
-
-function openIcsInAppleCalendar(ics) {
-  const payload = new Blob([ics], { type: "text/calendar; charset=utf-8" });
-  const url = URL.createObjectURL(payload);
-  window.location.href = url;
-  setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
 function hasActiveExportFilters() {
@@ -6956,20 +6949,6 @@ function subscriptionUrl(protocol = "https", view = "full") {
   return url.toString();
 }
 
-function oneOffImportUrl(exportConfig = { mode: "full" }, hospitals = []) {
-  if (!currentSubscription?.token) return "";
-  const url = new URL("/api/import", window.location.origin);
-  url.searchParams.set("token", currentSubscription.token);
-  url.searchParams.set("view", exportConfig.mode === "range" ? "range" : "full");
-  if (exportConfig.mode === "range") {
-    url.searchParams.set("startDate", exportConfig.startDate || "");
-    url.searchParams.set("endDate", exportConfig.allFuture ? "" : exportConfig.endDate || "");
-    url.searchParams.set("allFuture", exportConfig.allFuture !== false ? "true" : "false");
-  }
-  const selectedHospitals = normalizeExportHospitals(hospitals);
-  if (selectedHospitals.length) url.searchParams.set("hospitals", selectedHospitals.join(","));
-  return url.toString();
-}
 
 function canCopySubscriptionUrl() {
   return Boolean(currentSubscription?.enabled && activeCalendarMode() !== "doctor-profile");
