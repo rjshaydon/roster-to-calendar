@@ -1772,6 +1772,13 @@ body[data-skin="console"] .preview-cell.is-weekend {
   gap: 10px 14px;
 }
 
+.parser-seniority-picker {
+  padding: 10px;
+  border: 1px solid rgba(20, 34, 42, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.66);
+}
+
 .insights-hospital-group {
   margin: 0;
 }

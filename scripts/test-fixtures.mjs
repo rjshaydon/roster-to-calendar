@@ -251,6 +251,10 @@ assert.match(
 );
 assert.match(appSource, /function rosterSyncLabel/, "file cards should expose live roster sync labels");
 assert.match(appSource, /Missing \/ unresolved shift codes/, "system card should expose unresolved shift-code review");
+assert.match(appSource, /parserRuleSeniorityOption/, "shift-code editor should expose multi-seniority selection");
+assert.match(appSource, /function selectedParserRuleSeniorities/, "shift-code editor should save selected seniorities as a batch");
+assert.match(appSource, /parserRuleExistsForIssue/, "system shift-code review should hide only issues resolved by active rules");
+assert.match(appSource, /matchingParserRuleGroup/, "saved shift-code rules should reopen with equivalent seniorities selected");
 assert.match(
   appSource.match(/function renderParserRulesCard[\s\S]*?function collectUnknownShiftIssues/)?.[0] || "",
   /parserRuleSuggestions\.length \? `[\s\S]*<strong>User suggestions<\/strong>/,
@@ -3474,8 +3478,8 @@ XLSX.utils.book_append_sheet(srN1Workbook, srN1Sheet, "Week 1");
 const srN1View = buildRosterView([{ id: "sr-n1", workbook: srN1Workbook, file: { name: "AdultTerm.xlsx", size: 1, lastModified: 1 } }], [], "PATRICK TAN");
 assert.ok(srN1View.events.some((event) => event.rawValue === "2300-0900 N1" && event.title === "MMC: SR IC Night" && event.start.includes("23:00:00") && event.end.includes("09:00:00")), "Senior Registrar N1 explicit-time rules must render with the saved rule title");
 assert.equal(srN1View.issues.some((issue) => issue.rawValue === "2300-0900 N1"), false);
-assert.equal(memoryD1AccountRecord(stateStore.d1, "patrick@example.com").adminIssues.length, 0, "global parser rule must clear direct-user warnings");
-assert.equal(memoryD1AccountRecord(stateStore.d1, "senior@example.com").adminIssues.length, 0, "global parser rule must clear switch-user warnings");
+assert.equal(memoryD1AccountRecord(stateStore.d1, "patrick@example.com").adminIssues.length, 1, "global parser rule must keep direct-user warning evidence for future reappearance");
+assert.equal(memoryD1AccountRecord(stateStore.d1, "senior@example.com").adminIssues.length, 1, "global parser rule must keep switch-user warning evidence for future reappearance");
 const staleReport = await postState(stateStore, {
   action: "reportUserError",
   email: "patrick@example.com",
@@ -3489,7 +3493,117 @@ const staleReport = await postState(stateStore, {
   },
 });
 assert.equal(staleReport.ignored, true, "resolved global shift-code warnings must not be requeued from stale user previews");
-assert.equal(memoryD1AccountRecord(stateStore.d1, "patrick@example.com").adminIssues.length, 0, "resolved global shift-code warnings must not return after user login");
+assert.equal(memoryD1AccountRecord(stateStore.d1, "patrick@example.com").adminIssues.length, 1, "resolved global shift-code warning evidence must remain persisted");
+const ssuBatchSave = await postState(stateStore, {
+  action: "saveParserExtensionRule",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  source: "MMC",
+  rawValue: "ASSJ",
+  rules: ["HMO", "Intern"].map((seniority) => ({
+    source: "MMC",
+    seniority,
+    code: "ASSJ",
+    kind: "shift",
+    base: "SSU",
+    period: "AM",
+    suffix: "",
+    allDay: false,
+    startTime: "07:30",
+    endTime: "17:30",
+    includeAsShift: true,
+  })),
+});
+assert.ok(ssuBatchSave.parserExtensions.mmc.some((rule) => rule.seniority === "HMO" && rule.code === "ASSJ"), "batch parser save should add HMO ASSJ");
+assert.ok(ssuBatchSave.parserExtensions.mmc.some((rule) => rule.seniority === "Intern" && rule.code === "ASSJ"), "batch parser save should add Intern ASSJ");
+assert.equal(ssuBatchSave.parserExtensions.mmc.some((rule) => rule.seniority === "Senior Registrar" && rule.code === "ASSJ"), false, "batch parser save should not add unselected seniorities");
+const pssjBatchSave = await postState(stateStore, {
+  action: "saveParserExtensionRule",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  source: "MMC",
+  rawValue: "PSSJ",
+  rules: ["HMO", "Intern"].map((seniority) => ({
+    source: "MMC",
+    seniority,
+    code: "PSSJ",
+    kind: "shift",
+    base: "SSU",
+    period: "PM",
+    suffix: "",
+    allDay: false,
+    startTime: "14:30",
+    endTime: "00:00",
+    includeAsShift: true,
+  })),
+});
+setParserExtensions(pssjBatchSave.parserExtensions);
+const hmoSsuWorkbook = XLSX.utils.book_new();
+const hmoSsuSheet = XLSX.utils.aoa_to_sheet([
+  [],
+  [],
+  [],
+  ["", "", "", "", "", "", "", "", "", "", "", ""],
+  ["", "", "HMO"],
+  ["", "", "", "Patrick TAN", "", "0800-1730 ASSJ", "1430-0000 PSSJ"],
+]);
+for (let index = 0; index < 7; index += 1) {
+  hmoSsuSheet[XLSX.utils.encode_cell({ r: 3, c: 5 + index })] = { t: "d", v: new Date(`2026-05-${String(4 + index).padStart(2, "0")}T00:00:00`) };
+}
+XLSX.utils.book_append_sheet(hmoSsuWorkbook, XLSX.utils.aoa_to_sheet([[]]), "Whole thing");
+XLSX.utils.book_append_sheet(hmoSsuWorkbook, hmoSsuSheet, "Week 1");
+const hmoSsuView = buildRosterView([{ id: "hmo-ssu", workbook: hmoSsuWorkbook, file: { name: "AdultTerm.xlsx", size: 1, lastModified: 1 } }], [], "PATRICK TAN");
+assert.ok(hmoSsuView.events.some((event) => event.rawValue === "0800-1730 ASSJ" && event.title === "MMC: SSU AM" && event.start.includes("08:00:00") && event.end.includes("17:30:00")), "HMO ASSJ should resolve to SSU AM while preserving explicit roster time");
+assert.ok(hmoSsuView.events.some((event) => event.rawValue === "1430-0000 PSSJ" && event.title === "MMC: SSU PM" && event.start.includes("14:30:00") && event.end.includes("00:00:00")), "HMO PSSJ should resolve to SSU PM");
+assert.equal(hmoSsuView.issues.some((issue) => issue.rawValue.includes("SSJ")), false, "selected seniorities should no longer surface ASSJ/PSSJ as unresolved");
+const deletedAssj = await postState(stateStore, {
+  action: "saveParserExtensionRule",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  source: "MMC",
+  rawValue: "ASSJ",
+  replacementTargets: [
+    { source: "MMC", seniority: "HMO", code: "ASSJ" },
+    { source: "MMC", seniority: "Intern", code: "ASSJ" },
+  ],
+  rules: [{
+    source: "MMC",
+    seniority: "HMO",
+    code: "ASSJ",
+    kind: "shift",
+    base: "SSU",
+    period: "AM",
+    suffix: "",
+    allDay: false,
+    startTime: "07:30",
+    endTime: "17:30",
+    includeAsShift: true,
+  }],
+});
+assert.ok(deletedAssj.parserExtensions.mmc.some((rule) => rule.seniority === "HMO" && rule.code === "ASSJ"), "replacement save should keep selected matching seniority");
+assert.equal(deletedAssj.parserExtensions.mmc.some((rule) => rule.seniority === "Intern" && rule.code === "ASSJ"), false, "replacement save should delete deselected matching seniority");
+await postState(stateStore, {
+  action: "deleteParserExtensionRule",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  rule: { source: "MMC", seniority: "HMO", code: "ASSJ" },
+});
+const hmoAssjReappears = await postState(stateStore, {
+  action: "reportUserError",
+  email: "patrick@example.com",
+  password: "patrick-password",
+  errorId: "MMC::HMO::0800-1730 ASSJ",
+  message: "MMC shift code not recognised.",
+  issue: {
+    source: "MMC",
+    seniority: "HMO",
+    date: "2026-05-01",
+    rawValue: "0800-1730 ASSJ",
+    message: "MMC shift code not recognised.",
+    fingerprint: "MMC::HMO::0800-1730 ASSJ",
+  },
+});
+assert.equal(hmoAssjReappears.ignored, undefined, "deleted shift-code disambiguations should allow unresolved reports to reappear");
 const accParserSave = await postState(stateStore, {
   action: "saveParserExtensionRule",
   email: "rhaydon@gmail.com",

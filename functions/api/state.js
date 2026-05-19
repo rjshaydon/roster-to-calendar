@@ -623,27 +623,41 @@ export async function onRequestPost(context) {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
-      const rule = sanitizeParserExtensionRule(body?.rule);
-      if (!rule) {
+      const rules = (Array.isArray(body?.rules) ? body.rules : [body?.rule])
+        .map((item) => sanitizeParserExtensionRule(item))
+        .filter(Boolean);
+      if (!rules.length) {
         return Response.json({ error: "A valid shift-code rule is required." }, { status: 400 });
       }
+      const rule = rules[0];
       const previousCode = String(body?.previousCode || "").trim().toUpperCase();
       const previousSeniority = sanitizeRuleSeniority(body?.previousSeniority || rule.seniority);
       let parserExtensions = await loadD1ParserExtensionRules(context.env.ROSTER_DB);
-      if (previousCode && (previousCode !== rule.code || previousSeniority !== rule.seniority)) {
+      const replacementTargets = Array.isArray(body?.replacementTargets)
+        ? body.replacementTargets.map((item) => sanitizeParserRuleRemoval(item)).filter(Boolean)
+        : [];
+      const nextKeys = new Set(rules.map((item) => `${item.source}|${item.seniority}|${item.code}`));
+      for (const target of replacementTargets) {
+        if (nextKeys.has(`${target.source}|${target.seniority}|${target.code}`)) continue;
+        parserExtensions = removeParserExtensionRuleByKey(parserExtensions, target);
+        await deleteD1ParserExtensionRule(context.env.ROSTER_DB, target);
+      }
+      if (!replacementTargets.length && previousCode && (previousCode !== rule.code || previousSeniority !== rule.seniority)) {
         parserExtensions = removeParserExtensionRuleByKey(parserExtensions, {
           source: rule.source,
           seniority: previousSeniority,
           code: previousCode,
         });
+        await deleteD1ParserExtensionRule(context.env.ROSTER_DB, {
+          source: rule.source,
+          seniority: previousSeniority,
+          code: previousCode,
+        });
       }
-      parserExtensions = upsertParserExtensionRule(parserExtensions, rule);
-      await saveD1ParserExtensionRule(context.env.ROSTER_DB, rule);
-      const ignoreFingerprint = sanitizeIssueFingerprint(body?.fingerprint || issueFingerprint(body?.source, body?.rawValue));
-      if (ignoreFingerprint) {
-        await clearIssueFromAllUsers(context.env.ROSTER_DB, ignoreFingerprint);
+      for (const item of rules) {
+        parserExtensions = upsertParserExtensionRule(parserExtensions, item);
+        await saveD1ParserExtensionRule(context.env.ROSTER_DB, item);
       }
-      await clearIssuesResolvedByParserRule(context.env.ROSTER_DB, rule);
       return Response.json({ ok: true, parserExtensions });
     }
 
@@ -688,7 +702,6 @@ export async function onRequestPost(context) {
         const suggestions = await loadParserRuleSuggestions(null, context.env.ROSTER_DB);
         await saveParserRuleSuggestions(null, upsertParserRuleSuggestion(suggestions, suggestion), context.env.ROSTER_DB);
       }
-      await clearIssuesResolvedByParserRuleForUser(context.env.ROSTER_DB, saveEmail, rule);
       return Response.json({
         ok: true,
         issueConfig: await buildIssueConfig(null, saveEmail, context.env.ROSTER_DB),
@@ -711,7 +724,6 @@ export async function onRequestPost(context) {
       if (!rule) return Response.json({ error: "A valid shift-code rule is required." }, { status: 400 });
       if (decision === "approveGlobal") {
         await saveD1ParserExtensionRule(context.env.ROSTER_DB, rule);
-        await clearIssuesResolvedByParserRule(context.env.ROSTER_DB, rule);
       } else if (decision === "approveUser") {
         const target = await loadAccountMirror(context.env.ROSTER_DB, suggestion.email);
         if (target) {
@@ -720,7 +732,6 @@ export async function onRequestPost(context) {
             localParserExtensions: upsertParserExtensionRule(target.localParserExtensions, rule),
             updatedAt: new Date().toISOString(),
           });
-          await clearIssuesResolvedByParserRuleForUser(context.env.ROSTER_DB, suggestion.email, rule);
         }
       }
       await saveParserRuleSuggestions(null, suggestions.filter((item) => item.id !== suggestionId), context.env.ROSTER_DB);

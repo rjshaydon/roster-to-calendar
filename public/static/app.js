@@ -6819,7 +6819,7 @@ function renderParserRulesCard() {
                 <p>${escapeHtml(item.sample)}${item.count > 1 ? ` · seen ${item.count} times` : ""}</p>
               </div>
               <div class="account-actions">
-                <button type="button" class="button button-secondary" data-add-shift-code="${escapeHtml(item.email)}" data-error-id="${escapeHtml(item.id)}">Add shift code</button>
+                <button type="button" class="button button-secondary" data-add-shift-code="${escapeHtml(item.email)}" data-error-id="${escapeHtml(item.id)}">Edit shift code</button>
               </div>
             </article>
           `).join("") : `<article class="issue-card"><p>No missing or unresolved shift codes need review.</p></article>`}
@@ -6841,7 +6841,7 @@ function renderParserRulesCard() {
                     <p>${escapeHtml(item.seniority)} · ${escapeHtml(item.message || "Shift code not recognised.")}</p>
                   </div>
                   <div class="account-actions">
-                    <button type="button" class="button button-secondary" data-add-shift-code="${escapeHtml(item.email)}" data-error-id="${escapeHtml(item.id)}">Add shift code</button>
+                    <button type="button" class="button button-secondary" data-add-shift-code="${escapeHtml(item.email)}" data-error-id="${escapeHtml(item.id)}">Edit shift code</button>
                   </div>
                 </article>
               `).join("")}
@@ -6885,6 +6885,7 @@ function collectUnknownShiftIssues() {
       const seniority = sanitizeRuleSeniority(issue.seniority);
       const code = parserRuleCodeForIssue(issue);
       if (!source || !code) continue;
+      if (parserRuleExistsForIssue({ source, seniority, rawValue: code })) continue;
       const key = `${source}|${seniority}|${code}`;
       const existing = byKey.get(key);
       if (existing) {
@@ -7184,6 +7185,46 @@ function findParserExtensionRuleForSeniority(source, seniority, code) {
     .find((rule) => rule.code === normalizedCode && (!seniority || rule.seniority === normalizedSeniority)) || null;
 }
 
+function parserRuleExistsForIssue(issue) {
+  const source = sanitizeIssueSource(issue?.source);
+  const seniority = sanitizeRuleSeniority(issue?.seniority);
+  const code = parserRuleCodeForIssue(issue);
+  return Boolean(findParserExtensionRuleForSeniority(source, seniority, code));
+}
+
+function issueMatchesSavedParserRule(issue, rule) {
+  const normalizedRule = sanitizeParserExtensionRule(rule);
+  if (!normalizedRule) return false;
+  return sanitizeIssueSource(issue?.source) === normalizedRule.source
+    && sanitizeRuleSeniority(issue?.seniority) === normalizedRule.seniority
+    && parserRuleCodeForIssue(issue) === normalizedRule.code;
+}
+
+function parserRulesEquivalent(left, right) {
+  const leftRule = sanitizeParserExtensionRule(left);
+  const rightRule = sanitizeParserExtensionRule(right);
+  if (!leftRule || !rightRule) return false;
+  return leftRule.source === rightRule.source
+    && leftRule.code === rightRule.code
+    && leftRule.kind === rightRule.kind
+    && leftRule.base === rightRule.base
+    && leftRule.period === rightRule.period
+    && leftRule.suffix === rightRule.suffix
+    && leftRule.allDay === rightRule.allDay
+    && leftRule.startTime === rightRule.startTime
+    && leftRule.endTime === rightRule.endTime
+    && leftRule.location === rightRule.location
+    && leftRule.includeAsShift === rightRule.includeAsShift;
+}
+
+function matchingParserRuleGroup(rule) {
+  const normalized = sanitizeParserExtensionRule(rule);
+  if (!normalized) return [];
+  const sourceKey = normalized.source.toLowerCase();
+  return sanitizeParserExtensionRuleList(parserExtensions?.[sourceKey], normalized.source)
+    .filter((item) => parserRulesEquivalent(item, normalized));
+}
+
 function parserRulePreviewTitle(rule, sourceSettings = settings) {
   if (!rule) return "";
   const parts = [];
@@ -7207,9 +7248,10 @@ function parserRulePreviewMeta(rule) {
 function renderParserRulePreview() {
   if (!parserRulePreview) return;
   const source = sanitizeIssueSource(parserRuleSource?.value);
+  const seniorities = selectedParserRuleSeniorities();
   const rule = sanitizeParserExtensionRule({
     source,
-    seniority: parserRuleSeniority?.value,
+    seniority: seniorities[0],
     code: parserRuleCode?.value,
     base: parserRuleBase?.value,
     period: parserRulePeriod?.value,
@@ -7233,7 +7275,7 @@ function renderParserRulePreview() {
     <div>
       <strong>Preview</strong>
       <p>${escapeHtml(parserRulePreviewTitle(rule))}</p>
-      <p>${escapeHtml(parserRulePreviewMeta(rule))}</p>
+      <p>${escapeHtml(seniorities.length > 1 ? `${seniorities.length} seniorities` : rule.seniority)} · ${escapeHtml(parserRulePreviewMeta(rule))}</p>
     </div>
   `;
 }
@@ -7244,11 +7286,11 @@ function openParserRuleModal(email, errorId = "") {
     setStatus("Could not find that parser warning.", true);
     return;
   }
-  parserRuleSaveContext = { mode: "global", suggestionId: "", targetEmail: normalizeEmail(email) };
+  parserRuleSaveContext = { mode: "global", suggestionId: "", targetEmail: normalizeEmail(email), replacementTargets: [] };
   parserRuleIssueId.value = issue.fingerprint || issue.id || "";
   parserRuleSource.value = issue.source || "";
   parserRuleRawValue.value = issue.rawValue || "";
-  populateParserRuleSeniorityOptions(issue.seniority);
+  populateParserRuleSeniorityOptions([issue.seniority], true);
   parserRuleOriginalSeniority.value = sanitizeRuleSeniority(issue.seniority);
   parserRuleOriginalCode.value = parserRuleCodeForIssue(issue);
   parserRuleCode.value = parserRuleCodeForIssue(issue);
@@ -7261,7 +7303,7 @@ function openParserRuleModal(email, errorId = "") {
   parserRuleLocation.value = defaultLocationForIssueSource(issue.source);
   parserRuleIncludeAsShift.checked = true;
   parserRuleTimeFields.classList.toggle("hidden", parserRuleAllDay.checked);
-  parserRuleModalTitle.textContent = "Add shift code";
+  parserRuleModalTitle.textContent = "Edit shift code";
   renderParserRulePreview();
   parserRuleModal.classList.remove("hidden");
   parserRuleModal.setAttribute("aria-hidden", "false");
@@ -7277,12 +7319,13 @@ function openParserRuleModalFromPreviewIssue(issueId = "") {
     mode: isCreatorAuthenticated() ? "global" : "local",
     suggestionId: "",
     targetEmail: adminViewingEmail || currentUserEmail,
+    replacementTargets: [],
   };
   const reviewItem = reviewIndex.get(issue.id);
   parserRuleIssueId.value = issueFingerprint(issue.source, issue.rawValue, issue.seniority || reviewItem?.seniority);
   parserRuleSource.value = issue.source || "";
   parserRuleRawValue.value = issue.rawValue || "";
-  populateParserRuleSeniorityOptions(issue.seniority || reviewItem?.seniority);
+  populateParserRuleSeniorityOptions([issue.seniority || reviewItem?.seniority], isCreatorAuthenticated());
   parserRuleOriginalSeniority.value = sanitizeRuleSeniority(issue.seniority || reviewItem?.seniority);
   parserRuleOriginalCode.value = parserRuleCodeForIssue(issue);
   parserRuleCode.value = parserRuleCodeForIssue(issue);
@@ -7295,7 +7338,7 @@ function openParserRuleModalFromPreviewIssue(issueId = "") {
   parserRuleLocation.value = defaultLocationForIssueSource(issue.source);
   parserRuleIncludeAsShift.checked = true;
   parserRuleTimeFields.classList.toggle("hidden", parserRuleAllDay.checked);
-  parserRuleModalTitle.textContent = isCreatorAuthenticated() ? "Add shift code" : "Resolve shift code";
+  parserRuleModalTitle.textContent = isCreatorAuthenticated() ? "Edit shift code" : "Resolve shift code";
   renderParserRulePreview();
   parserRuleModal.classList.remove("hidden");
   parserRuleModal.setAttribute("aria-hidden", "false");
@@ -7307,15 +7350,20 @@ function openParserRuleModalFromRule(source, seniority, code) {
     setStatus("Could not find that saved shift-code rule.", true);
     return;
   }
-  parserRuleSaveContext = { mode: "global", suggestionId: "", targetEmail: "" };
+  const group = matchingParserRuleGroup(rule);
+  parserRuleSaveContext = {
+    mode: "globalEdit",
+    suggestionId: "",
+    targetEmail: "",
+    replacementTargets: group.map((item) => ({ source: item.source, seniority: item.seniority, code: item.code })),
+  };
   parserRuleIssueId.value = "";
   parserRuleSource.value = rule.source;
   parserRuleRawValue.value = rule.code;
   parserRuleOriginalCode.value = rule.code;
-  populateParserRuleSeniorityOptions(rule.seniority);
+  populateParserRuleSeniorityOptions(group.length ? group.map((item) => item.seniority) : [rule.seniority], true);
   parserRuleOriginalSeniority.value = rule.seniority;
   parserRuleCode.value = rule.code;
-  parserRuleSeniority.value = rule.seniority;
   parserRuleBase.value = rule.base;
   parserRulePeriod.value = rule.period;
   parserRuleSuffix.value = rule.suffix;
@@ -7343,10 +7391,9 @@ function openParserRuleModalFromSuggestion(suggestionId = "") {
   parserRuleSource.value = rule.source;
   parserRuleRawValue.value = suggestion.rawValue || rule.code;
   parserRuleOriginalCode.value = rule.code;
-  populateParserRuleSeniorityOptions(rule.seniority);
+  populateParserRuleSeniorityOptions([rule.seniority], false);
   parserRuleOriginalSeniority.value = rule.seniority;
   parserRuleCode.value = rule.code;
-  parserRuleSeniority.value = rule.seniority;
   parserRuleBase.value = rule.base;
   parserRulePeriod.value = rule.period;
   parserRuleSuffix.value = rule.suffix;
@@ -7366,7 +7413,7 @@ function closeParserRuleModal() {
   parserRuleModal?.classList.add("hidden");
   parserRuleModal?.setAttribute("aria-hidden", "true");
   parserRuleForm?.reset();
-  parserRuleSaveContext = { mode: "global", suggestionId: "", targetEmail: "" };
+  parserRuleSaveContext = { mode: "global", suggestionId: "", targetEmail: "", replacementTargets: [] };
   parserRuleTimeFields?.classList.remove("hidden");
   if (parserRulePreview) {
     parserRulePreview.innerHTML = `
@@ -7378,13 +7425,27 @@ function closeParserRuleModal() {
   }
 }
 
-function populateParserRuleSeniorityOptions(selected = "") {
+function populateParserRuleSeniorityOptions(selected = [], allowMultiple = false) {
   if (!parserRuleSeniority) return;
-  const normalizedSelected = sanitizeRuleSeniority(selected);
+  const selectedValues = Array.isArray(selected) ? selected : [selected];
+  const normalizedSelected = new Set(selectedValues.map(sanitizeRuleSeniority).filter(Boolean));
+  if (!normalizedSelected.size) normalizedSelected.add("Unknown");
+  const inputType = allowMultiple ? "checkbox" : "radio";
   parserRuleSeniority.innerHTML = parserRuleSeniorities()
-    .map((seniority) => `<option value="${escapeHtml(seniority)}" ${seniority === normalizedSelected ? "selected" : ""}>${escapeHtml(seniority)}</option>`)
+    .map((seniority) => `
+      <label class="toggle">
+        <input type="${inputType}" name="parserRuleSeniorityOption" value="${escapeHtml(seniority)}" ${normalizedSelected.has(seniority) ? "checked" : ""}>
+        ${escapeHtml(seniority)}
+      </label>
+    `)
     .join("");
-  parserRuleSeniority.value = normalizedSelected;
+}
+
+function selectedParserRuleSeniorities() {
+  if (!parserRuleSeniority) return [];
+  return [...parserRuleSeniority.querySelectorAll('input[name="parserRuleSeniorityOption"]:checked')]
+    .map((input) => sanitizeRuleSeniority(input.value))
+    .filter(Boolean);
 }
 
 async function saveParserRuleFromModal() {
@@ -7398,7 +7459,8 @@ async function saveParserRuleFromModal() {
   const previousCode = String(parserRuleOriginalCode?.value || "").trim().toUpperCase();
   const previousSeniority = sanitizeRuleSeniority(parserRuleOriginalSeniority?.value);
   const code = String(parserRuleCode.value || "").trim().toUpperCase();
-  const seniority = sanitizeRuleSeniority(parserRuleSeniority?.value);
+  const selectedSeniorities = selectedParserRuleSeniorities();
+  const seniority = selectedSeniorities[0] || "";
   const base = String(parserRuleBase.value || "").trim();
   const period = String(parserRulePeriod.value || "").trim().toUpperCase();
   const suffix = String(parserRuleSuffix.value || "").trim();
@@ -7408,7 +7470,7 @@ async function saveParserRuleFromModal() {
   const location = String(parserRuleLocation.value || "").trim();
   const includeAsShift = parserRuleIncludeAsShift?.checked !== false;
   const fingerprint = sanitizeIssueFingerprint(parserRuleIssueId.value);
-  if (!source || !seniority || !code || !base) {
+  if (!source || !selectedSeniorities.length || !code || !base) {
     setStatus("Source, seniority, shift code, and base title are required.", true);
     return;
   }
@@ -7416,9 +7478,8 @@ async function saveParserRuleFromModal() {
     setStatus("Timed shift-code rules need both a start and end time.", true);
     return;
   }
-  const rule = {
+  const ruleTemplate = {
     source,
-    seniority,
     code,
     kind: "shift",
     base,
@@ -7430,6 +7491,8 @@ async function saveParserRuleFromModal() {
     location,
     includeAsShift,
   };
+  const rules = selectedSeniorities.map((item) => ({ ...ruleTemplate, seniority: item }));
+  const rule = rules[0];
   try {
     if (saveMode === "local") {
       const response = await fetch("/api/state", {
@@ -7481,6 +7544,8 @@ async function saveParserRuleFromModal() {
         rawValue,
         previousCode,
         previousSeniority,
+        replacementTargets: saveMode === "globalEdit" ? parserRuleSaveContext.replacementTargets || [] : [],
+        rules,
         rule,
       }),
     });
@@ -7497,8 +7562,8 @@ async function saveParserRuleFromModal() {
     } else if (latestPreview) {
       latestPreview = {
         ...latestPreview,
-        issues: (latestPreview.issues || []).filter((issue) => sanitizeIssueFingerprint(issueFingerprint(issue.source, issue.rawValue, issue.seniority)) !== fingerprint),
-        review: (latestPreview.review || []).map((item) => sanitizeIssueFingerprint(issueFingerprint(item.source, item.rawValue, item.seniority)) === fingerprint ? {
+        issues: (latestPreview.issues || []).filter((issue) => !rules.some((savedRule) => issueMatchesSavedParserRule(issue, savedRule))),
+        review: (latestPreview.review || []).map((item) => rules.some((savedRule) => issueMatchesSavedParserRule(item, savedRule)) ? {
           ...item,
           status: "ok",
           warnings: [],
