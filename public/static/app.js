@@ -6651,13 +6651,16 @@ function renderAccountHospitalLocationsCard() {
   `;
 }
 
+const ACCOUNT_HOSPITAL_LOCATION_ORDER = ["mmc", "ddh", "mch", "casey"];
+
 function recognizedHospitalTypesForActiveAccount() {
   if (isViewingCreatorAccount()) {
-    return ["mmc", "ddh", "casey", "mch"].filter((sourceType) => detectedSources[sourceType]?.length);
+    return ACCOUNT_HOSPITAL_LOCATION_ORDER.filter((sourceType) => detectedSources[sourceType]?.length);
   }
   const claimTypes = currentRosterClaims.map((claim) => String(claim.sourceType || "").toLowerCase());
   const doctorTypes = normalizedDoctorSourceTypes(selectedDoctor());
-  return [...new Set([...claimTypes, ...doctorTypes])].filter((sourceType) => ["mmc", "ddh", "casey", "mch"].includes(sourceType));
+  const linkedTypes = new Set([...claimTypes, ...doctorTypes]);
+  return ACCOUNT_HOSPITAL_LOCATION_ORDER.filter((sourceType) => linkedTypes.has(sourceType));
 }
 
 function hospitalLocationConfig(sourceType) {

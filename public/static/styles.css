@@ -1595,6 +1595,15 @@ body[data-skin="console"] .preview-cell.is-weekend {
   align-items: end;
 }
 
+.account-hospital-locations {
+  grid-template-columns: 1fr;
+}
+
+.account-hospital-locations > .field,
+.account-hospital-locations > .issue-card {
+  width: 100%;
+}
+
 .review-body > .custom-event-grid {
   grid-column: 1 / -1;
 }

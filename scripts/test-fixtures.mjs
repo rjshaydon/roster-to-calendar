@@ -259,6 +259,7 @@ assert.match(
 assert.match(appSource, /function exportHospitalOptions/, "one-off exports should expose hospital options");
 assert.match(appSource, /Recognised hospitals &amp; default locations/, "account modal should expose recognised hospital locations");
 assert.match(appSource, /data-account-location-key/, "account modal locations should bind to shared settings keys");
+assert.match(appSource, /ACCOUNT_HOSPITAL_LOCATION_ORDER = \["mmc", "ddh", "mch", "casey"\]/, "account modal should keep hospital locations in the expected vertical order");
 assert.match(d1CalendarSource, /CREATE TABLE IF NOT EXISTS account_hospital_locations/, "D1 should store account hospital locations relationally");
 assert.match(d1CalendarSource, /function applyAccountHospitalLocations/, "SQL-first roster reads should apply account hospital defaults");
 assert.match(
