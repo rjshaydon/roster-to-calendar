@@ -129,6 +129,15 @@ async function ensureCalendarSchemaUncached(db) {
     )
   `).run();
   await db.prepare(`
+    CREATE TABLE IF NOT EXISTS account_hospital_locations (
+      email TEXT NOT NULL,
+      source_type TEXT NOT NULL,
+      location TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT '',
+      PRIMARY KEY (email, source_type)
+    )
+  `).run();
+  await db.prepare(`
     CREATE TABLE IF NOT EXISTS canonical_doctors (
       canonical_key TEXT PRIMARY KEY,
       display_name TEXT NOT NULL,
@@ -814,6 +823,7 @@ export async function upsertAccountMirror(db, record, options = {}) {
         updated_at = excluded.updated_at
     `).bind(email, JSON.stringify(session), updatedAt).run();
   }
+  await upsertAccountHospitalLocations(db, email, hospitalLocationsFromSession(record?.state?.session), { preserveExisting: preserveExistingState });
   return true;
 }
 
@@ -823,6 +833,7 @@ export async function deleteAccountMirror(db, email) {
   const normalizedEmail = normalizeEmail(email);
   await db.prepare("DELETE FROM account_claims WHERE email = ?").bind(normalizedEmail).run();
   await db.prepare("DELETE FROM account_states WHERE email = ?").bind(normalizedEmail).run();
+  await db.prepare("DELETE FROM account_hospital_locations WHERE email = ?").bind(normalizedEmail).run();
   await db.prepare("DELETE FROM custom_events WHERE owner_email = ?").bind(normalizedEmail).run();
   await db.prepare("DELETE FROM subscription_tokens WHERE email = ?").bind(normalizedEmail).run();
   await db.prepare("DELETE FROM account_profiles WHERE email = ?").bind(normalizedEmail).run();
@@ -1165,6 +1176,121 @@ export async function loadAccountStateMirror(db, email) {
   }
 }
 
+export async function loadAccountHospitalLocations(db, email, fallbackSession = null) {
+  if (!db?.prepare || !email) return hospitalLocationsFromSession(fallbackSession);
+  await ensureCalendarSchema(db);
+  const normalizedEmail = normalizeEmail(email);
+  let rows = [];
+  try {
+    const result = await db.prepare(`
+      SELECT source_type, location
+      FROM account_hospital_locations
+      WHERE email = ?
+      ORDER BY source_type
+    `).bind(normalizedEmail).all();
+    rows = result.results || [];
+  } catch {
+    rows = [];
+  }
+  if (!rows.length) {
+    const locations = hospitalLocationsFromSession(fallbackSession);
+    await upsertAccountHospitalLocations(db, normalizedEmail, locations, { preserveExisting: true }).catch(() => null);
+    return locations;
+  }
+  return normalizeHospitalLocationMap(Object.fromEntries(rows.map((row) => [String(row.source_type || "").toLowerCase(), row.location])));
+}
+
+export async function upsertAccountHospitalLocations(db, email, locations = {}, options = {}) {
+  if (!db?.prepare || !email) return normalizeHospitalLocationMap(locations);
+  await ensureCalendarSchema(db);
+  const normalizedEmail = normalizeEmail(email);
+  const next = normalizeHospitalLocationMap(locations);
+  if (options.preserveExisting === true) {
+    const rows = await db.prepare("SELECT source_type, location FROM account_hospital_locations WHERE email = ?").bind(normalizedEmail).all().catch(() => ({ results: [] }));
+    const existing = Object.fromEntries((rows.results || []).map((row) => [String(row.source_type || "").toLowerCase(), String(row.location || "")]));
+    for (const sourceType of SOURCE_TYPES) {
+      if (existing[sourceType]) next[sourceType] = existing[sourceType];
+    }
+  }
+  const updatedAt = new Date().toISOString();
+  for (const sourceType of SOURCE_TYPES) {
+    await db.prepare(`
+      INSERT INTO account_hospital_locations (email, source_type, location, updated_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(email, source_type) DO UPDATE SET
+        location = excluded.location,
+        updated_at = excluded.updated_at
+    `).bind(normalizedEmail, sourceType, next[sourceType], updatedAt).run();
+  }
+  return next;
+}
+
+export function hospitalLocationsFromSession(session = null) {
+  const settings = session?.settings && typeof session.settings === "object" ? session.settings : {};
+  return normalizeHospitalLocationMap({
+    mmc: settings.defaultLocationMmc,
+    ddh: settings.defaultLocationDdh,
+    casey: settings.defaultLocationCasey,
+    mch: settings.defaultLocationMch,
+  });
+}
+
+export function mergeHospitalLocationsIntoSettings(settings = {}, locations = {}) {
+  const normalized = normalizeHospitalLocationMap(locations);
+  return {
+    ...(settings || {}),
+    defaultLocationMmc: normalized.mmc,
+    defaultLocationDdh: normalized.ddh,
+    defaultLocationCasey: normalized.casey,
+    defaultLocationMch: normalized.mch,
+  };
+}
+
+export function applyAccountHospitalLocations(events = [], locations = {}, options = {}) {
+  if (options.includeLocations === false) return (events || []).map((event) => ({ ...event, location: "" }));
+  const normalized = normalizeHospitalLocationMap(locations);
+  return (events || []).map((event) => {
+    const sourceType = eventSourceType(event);
+    if (!SOURCE_TYPES.includes(sourceType) || isOffsiteClinicalSupportEvent(event) || isLocationlessRosterEvent(event)) return event;
+    const location = normalized[sourceType] || "";
+    return location ? { ...event, location } : event;
+  });
+}
+
+function normalizeHospitalLocationMap(value = {}) {
+  const defaults = defaultSettings();
+  return {
+    mmc: String(value.mmc || value.defaultLocationMmc || defaults.defaultLocationMmc).trim() || defaults.defaultLocationMmc,
+    ddh: String(value.ddh || value.defaultLocationDdh || defaults.defaultLocationDdh).trim() || defaults.defaultLocationDdh,
+    casey: String(value.casey || value.defaultLocationCasey || defaults.defaultLocationCasey).trim() || defaults.defaultLocationCasey,
+    mch: String(value.mch || value.defaultLocationMch || defaults.defaultLocationMch).trim() || defaults.defaultLocationMch,
+  };
+}
+
+function eventSourceType(event) {
+  const source = String(event?.source || event?.sourceType || "").trim().toLowerCase();
+  if (source === "casey") return "casey";
+  return SOURCE_TYPES.includes(source) ? source : "";
+}
+
+function isOffsiteClinicalSupportEvent(event) {
+  const sourceType = eventSourceType(event);
+  if (sourceType !== "mmc" && sourceType !== "ddh") return false;
+  const title = String(event?.title || "").replace(/^[A-Z]+:\s*/, "").trim().toUpperCase();
+  const raw = String(event?.rawValue || "").trim().toUpperCase();
+  if (sourceType === "mmc") return title === "CS" || raw === "CS";
+  if (sourceType === "ddh") {
+    if (title.includes("ONSITE") || raw.includes("ONSITE")) return false;
+    return title === "CS" || raw === "CS" || raw.includes("OFFSITE") || raw.includes("NOT ONSITE") || raw.includes("CS/OFF");
+  }
+  return false;
+}
+
+function isLocationlessRosterEvent(event) {
+  const text = `${event?.title || ""} ${event?.rawValue || ""}`.toLowerCase();
+  return /\b(leave|conference|cme|sick|study|exam|parental|phnw|public holiday)\b/.test(text);
+}
+
 export async function accountMirrorStatus(db) {
   if (!db?.prepare) return { unavailable: true, profiles: 0, claims: 0, states: 0, doctorProfiles: 0 };
   await ensureCalendarSchema(db);
@@ -1273,33 +1399,46 @@ export async function queryDoctorProfileMirrors(db) {
 export async function countDerivedEventsByFile(db, fileIds = []) {
   if (!db?.prepare || !fileIds?.length) return new Map();
   await ensureCalendarSchema(db);
-  const counts = new Map();
-  for (const fileId of [...new Set(fileIds.filter(Boolean))]) {
-    const row = await db.prepare("SELECT COUNT(*) AS count FROM roster_events WHERE file_id = ?").bind(fileId).first();
-    counts.set(fileId, Number(row?.count || 0));
-  }
+  const ids = [...new Set(fileIds.filter(Boolean))];
+  const rows = await db.prepare(`
+    SELECT file_id, COUNT(*) AS count
+    FROM roster_events
+    WHERE file_id IN (${ids.map(() => "?").join(", ")})
+    GROUP BY file_id
+  `).bind(...ids).all();
+  const counts = new Map(ids.map((id) => [id, 0]));
+  for (const row of rows.results || []) counts.set(String(row.file_id || ""), Number(row.count || 0));
   return counts;
 }
 
 export async function countDerivedEventsByFileDoctorPairs(db, pairs = []) {
   if (!db?.prepare || !pairs?.length) return new Map();
   await ensureCalendarSchema(db);
-  const counts = new Map();
-  for (const pair of uniqueFileDoctorPairs(pairs)) {
-    const row = await db.prepare("SELECT COUNT(*) AS count FROM roster_events WHERE file_id = ? AND doctor_key = ?").bind(pair.fileId, pair.doctorKey).first();
-    counts.set(`${pair.fileId}:${pair.doctorKey}`, Number(row?.count || 0));
-  }
+  const safePairs = uniqueFileDoctorPairs(pairs);
+  const pairSql = safePairs.map(() => "(file_id = ? AND doctor_key = ?)").join(" OR ");
+  const rows = await db.prepare(`
+    SELECT file_id, doctor_key, COUNT(*) AS count
+    FROM roster_events
+    WHERE ${pairSql}
+    GROUP BY file_id, doctor_key
+  `).bind(...safePairs.flatMap((pair) => [pair.fileId, pair.doctorKey])).all();
+  const counts = new Map(safePairs.map((pair) => [`${pair.fileId}:${pair.doctorKey}`, 0]));
+  for (const row of rows.results || []) counts.set(`${row.file_id}:${row.doctor_key}`, Number(row.count || 0));
   return counts;
 }
 
 export async function countDerivedDoctorsByFile(db, fileIds = []) {
   if (!db?.prepare || !fileIds?.length) return new Map();
   await ensureCalendarSchema(db);
-  const counts = new Map();
-  for (const fileId of [...new Set(fileIds.filter(Boolean))]) {
-    const row = await db.prepare("SELECT COUNT(*) AS count FROM roster_file_doctors WHERE file_id = ?").bind(fileId).first();
-    counts.set(fileId, Number(row?.count || 0));
-  }
+  const ids = [...new Set(fileIds.filter(Boolean))];
+  const rows = await db.prepare(`
+    SELECT file_id, COUNT(*) AS count
+    FROM roster_file_doctors
+    WHERE file_id IN (${ids.map(() => "?").join(", ")})
+    GROUP BY file_id
+  `).bind(...ids).all();
+  const counts = new Map(ids.map((id) => [id, 0]));
+  for (const row of rows.results || []) counts.set(String(row.file_id || ""), Number(row.count || 0));
   return counts;
 }
 

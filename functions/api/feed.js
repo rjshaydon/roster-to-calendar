@@ -1,5 +1,5 @@
 import { applyEventOverrides, customEventsToEvents, defaultSettings, exportIcs } from "../_lib/roster.js";
-import { hasCalendarDb, loadAccountMirrorBySubscriptionToken, queryAccountCustomEvents, queryDoctorEvents } from "../_lib/d1-calendar.js";
+import { applyAccountHospitalLocations, hasCalendarDb, loadAccountHospitalLocations, loadAccountMirrorBySubscriptionToken, queryAccountCustomEvents, queryDoctorEvents } from "../_lib/d1-calendar.js";
 import { normalizeEmail } from "./state.js";
 
 export async function onRequestGet(context) {
@@ -48,7 +48,11 @@ async function buildD1SubscriptionFeed(db, record, view) {
   const queryOptions = range.mode === "range" && range.startDate
     ? { startDate: range.startDate, endDate: range.allFuture ? "9999-12-31" : range.endDate || range.startDate }
     : {};
-  const rosterEvents = applyEventOverrides(await queryDoctorEvents(db, doctorKeys, queryOptions), session.overrides || {});
+  const hospitalLocations = await loadAccountHospitalLocations(db, record.email, session).catch(() => null);
+  const rosterEvents = applyEventOverrides(
+    applyAccountHospitalLocations(await queryDoctorEvents(db, doctorKeys, queryOptions), hospitalLocations || {}, { includeLocations: settings.includeLocations !== false }),
+    session.overrides || {},
+  );
   const d1CustomEvents = await queryAccountCustomEvents(db, record.email).catch(() => []);
   const customEvents = customEventsToEvents(latestCustomEventsByIdentity([
     ...sanitizeCustomEvents(session.customEvents, record.email),

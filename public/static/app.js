@@ -469,6 +469,11 @@ accountsBody.addEventListener("submit", (event) => {
   void updateAccountDetails(email, { password, realName });
 });
 accountsBody.addEventListener("change", (event) => {
+  const accountLocationInput = event.target.closest("[data-account-location-key]");
+  if (accountLocationInput) {
+    updateDefaultLocationSetting(accountLocationInput.dataset.accountLocationKey || "", accountLocationInput.value);
+    return;
+  }
   const seniorityFilter = event.target.closest("[data-admin-user-seniority-filter]");
   if (seniorityFilter) {
     adminUserSeniorityFilter = String(seniorityFilter.value || "");
@@ -5838,7 +5843,7 @@ function openReviewModal(id, selectedDay = "") {
           <label class="field">
             <span>Location</span>
             <select data-override-location-mode="${item.id}">
-              ${buildLocationOptionMarkup(preset.mode)}
+              ${buildLocationOptionMarkup(preset.mode, item.source)}
             </select>
           </label>
           <label class="field ${preset.mode === "custom" ? "" : "hidden"}" data-override-custom-location-field="${item.id}">
@@ -5913,15 +5918,22 @@ function populateLocationOptions() {
   customEventLocationMode.innerHTML = buildLocationOptionMarkup();
 }
 
-function buildLocationOptionMarkup(selectedMode = "") {
+function buildLocationOptionMarkup(selectedMode = "", source = "") {
   const options = [];
-  if (detectedSources.mmc?.length) options.push({ value: "mmc", label: "MMC Car Park" });
-  if (detectedSources.ddh?.length) options.push({ value: "ddh", label: "DDH Car Park" });
-  if (detectedSources.casey?.length) options.push({ value: "casey", label: "Casey Hospital" });
-  if (detectedSources.mch?.length) options.push({ value: "mch", label: "MCH" });
+  const sourceTypes = new Set(locationOptionSourceTypes(source));
+  if (detectedSources.mmc?.length || sourceTypes.has("mmc")) options.push({ value: "mmc", label: "MMC Car Park" });
+  if (detectedSources.ddh?.length || sourceTypes.has("ddh")) options.push({ value: "ddh", label: "DDH Car Park" });
+  if (detectedSources.casey?.length || sourceTypes.has("casey")) options.push({ value: "casey", label: "Casey Hospital" });
+  if (detectedSources.mch?.length || sourceTypes.has("mch")) options.push({ value: "mch", label: "MCH" });
   options.push({ value: "offsite", label: "Off-site" });
   options.push({ value: "custom", label: "Custom location" });
   return options.map((option) => `<option value="${option.value}" ${option.value === selectedMode ? "selected" : ""}>${option.label}</option>`).join("");
+}
+
+function locationOptionSourceTypes(source = "") {
+  const explicit = String(source || "").trim().toLowerCase();
+  if (["mmc", "ddh", "casey", "mch"].includes(explicit)) return [explicit];
+  return recognizedHospitalTypesForActiveAccount();
 }
 
 function detectLocationPreset(location) {
@@ -6503,6 +6515,7 @@ function renderAccountsModal() {
           ${me.email !== OWNER_EMAIL ? `<button type="button" class="button button-danger" data-delete-account="${escapeHtml(me.email)}">Delete account</button>` : ""}
         </div>
       </form>
+      ${renderAccountHospitalLocationsCard()}
       ${linkedNames}
       ${ownerView ? "" : renderFilesMarkup({
         canRemove: false,
@@ -6616,6 +6629,55 @@ function renderSystemAdminCard() {
   `;
 }
 
+function renderAccountHospitalLocationsCard() {
+  const sourceTypes = recognizedHospitalTypesForActiveAccount();
+  const rows = sourceTypes.map((sourceType) => {
+    const config = hospitalLocationConfig(sourceType);
+    return `
+      <label class="field">
+        <span>${escapeHtml(config.label)}</span>
+        <input type="text" value="${escapeHtml(settings[config.settingKey] || config.defaultValue)}" data-account-location-key="${config.settingKey}">
+      </label>
+    `;
+  }).join("");
+  return `
+    <section class="review-body account-hospital-locations">
+      <div class="section-head">
+        <h4>Recognised hospitals &amp; default locations</h4>
+        <p>${sourceTypes.length ? "These hospitals are linked to this account's roster data." : "No linked hospitals recognised yet."}</p>
+      </div>
+      ${rows || `<article class="issue-card"><p>Link a roster identity to expose hospital defaults here.</p></article>`}
+    </section>
+  `;
+}
+
+function recognizedHospitalTypesForActiveAccount() {
+  if (isViewingCreatorAccount()) {
+    return ["mmc", "ddh", "casey", "mch"].filter((sourceType) => detectedSources[sourceType]?.length);
+  }
+  const claimTypes = currentRosterClaims.map((claim) => String(claim.sourceType || "").toLowerCase());
+  const doctorTypes = normalizedDoctorSourceTypes(selectedDoctor());
+  return [...new Set([...claimTypes, ...doctorTypes])].filter((sourceType) => ["mmc", "ddh", "casey", "mch"].includes(sourceType));
+}
+
+function hospitalLocationConfig(sourceType) {
+  return {
+    mmc: { label: "MMC", settingKey: "defaultLocationMmc", defaultValue: DEFAULT_MMC_LOCATION },
+    ddh: { label: "DDH", settingKey: "defaultLocationDdh", defaultValue: DEFAULT_DDH_LOCATION },
+    casey: { label: "Casey", settingKey: "defaultLocationCasey", defaultValue: DEFAULT_CASEY_LOCATION },
+    mch: { label: "MCH", settingKey: "defaultLocationMch", defaultValue: DEFAULT_MCH_LOCATION },
+  }[sourceType];
+}
+
+function updateDefaultLocationSetting(settingKey, value) {
+  if (!["defaultLocationMmc", "defaultLocationDdh", "defaultLocationCasey", "defaultLocationMch"].includes(settingKey)) return;
+  settings[settingKey] = String(value || "").trim() || defaultSettings()[settingKey];
+  renderSettings();
+  saveCurrentSessionState();
+  if (latestPreview) rebuildClientPreview();
+  setStatus("Default export locations updated.");
+}
+
 function renderCalendarStoreCard() {
   const status = calendarStoreStatus;
   const unavailable = status?.unavailable === true;
@@ -6631,10 +6693,13 @@ function renderCalendarStoreCard() {
   const serverSyncedCount = Number(status?.populated || 0);
   const serverExpectedCount = Number(status?.total || 0);
   const serverStatusComplete = Boolean(status && !unavailable && serverExpectedCount > 0 && serverSyncedCount === serverExpectedCount);
+  const statusErrorDetail = calendarStoreStatusError
+    ? `${status ? `${serverSyncedCount}/${serverExpectedCount || selectedPersistence.expectedCount || "?"} roster files confirmed from last good status. ` : ""}Status check failed: ${calendarStoreStatusError}. ${checkedAt}`
+    : "";
   const detail = syncSummary
     ? `${syncSummary}. ${checkedAt}`
     : calendarStoreStatusError
-    ? `Status check failed. ${checkedAt}`
+    ? statusErrorDetail
     : unavailable
       ? "Roster database is unavailable to this deployment."
       : serverStatusComplete
@@ -9766,7 +9831,7 @@ async function buildDerivedCalendarFilePayload(importEntry, statusFile = {}) {
     hospitalFilter: "all",
     dateFrom: "",
     dateTo: "",
-    includeLocations: false,
+    includeLocations: true,
   };
   const eventsByDoctor = {};
   let eventCount = 0;
@@ -9864,7 +9929,9 @@ async function saveSelectedRosterFilesToD1(imports = selectedFiles, options = {}
       latestStatus = await calendarStoreRequest("saveDerivedCalendarFile", {
         ...payload,
         expectedFileIds,
+        skipStatus: true,
       });
+      latestStatus = mergeLightweightRosterStatus(latestStatus, payload.file, latestStatus.fileStatus, expectedFileIds);
       saveResults.push({ entry, ok: true });
       setRosterSyncState(entry, "synced");
     } catch (error) {
@@ -9878,7 +9945,9 @@ async function saveSelectedRosterFilesToD1(imports = selectedFiles, options = {}
         selectedDoctorKey: selectedDoctor()?.key || OWNER_DOCTOR_KEY,
         expectedFileIds,
       });
-    } catch {
+      calendarStoreStatusError = "";
+    } catch (error) {
+      calendarStoreStatusError = error.message || "Could not check roster database status.";
       // Keep the most recent save response if the creator status refresh fails.
     }
   }
@@ -9895,6 +9964,47 @@ async function saveSelectedRosterFilesToD1(imports = selectedFiles, options = {}
   setStatus(`Calendar saved to D1. ${summary.persistedCount}/${summary.expectedCount} roster file${summary.expectedCount === 1 ? "" : "s"} confirmed.`);
   finishRosterSync();
   return summary;
+}
+
+function mergeLightweightRosterStatus(status, file, fileStatus, expectedFileIds = []) {
+  const base = status && Array.isArray(status.files) ? status : calendarStoreStatus || { files: [] };
+  const normalizedFile = {
+    id: fileStatus?.id || file?.id,
+    name: fileStatus?.name || file?.name || "roster.xlsx",
+    sourceType: fileStatus?.sourceType || file?.sourceType || "",
+    expectedDoctors: Number(fileStatus?.indexedDoctors || 0),
+    indexedDoctors: Number(fileStatus?.indexedDoctors || 0),
+    eventCount: Number(fileStatus?.eventCount || 0),
+    selectedDoctorEventCount: 0,
+    rawSourceAvailable: true,
+    status: fileStatus?.status || (Number(fileStatus?.eventCount || 0) > 0 ? "populated" : "missing"),
+  };
+  const files = [...(base.files || []).filter((item) => item.id !== normalizedFile.id), normalizedFile]
+    .sort((left, right) => String(left.name || "").localeCompare(String(right.name || "")));
+  const populated = files.filter((item) => item.status === "populated").length;
+  const partial = files.filter((item) => item.status === "partial").length;
+  const expectedIds = expectedFileIds.length ? expectedFileIds : files.map((item) => item.id);
+  return {
+    ...base,
+    ok: true,
+    total: files.length,
+    populated,
+    partial,
+    remaining: Math.max(0, files.length - populated),
+    eventCount: files.reduce((total, item) => total + Number(item.eventCount || 0), 0),
+    files,
+    expectedFiles: {
+      expectedCount: expectedIds.length,
+      expectedFileIds: expectedIds,
+      persistedCount: files.filter((item) => expectedIds.includes(item.id)).length,
+      populatedCount: files.filter((item) => expectedIds.includes(item.id) && Number(item.eventCount || 0) > 0).length,
+      activeCount: files.filter((item) => expectedIds.includes(item.id) && Number(item.eventCount || 0) > 0).length,
+      persistedFileIds: files.filter((item) => expectedIds.includes(item.id)).map((item) => item.id),
+      populatedFileIds: files.filter((item) => expectedIds.includes(item.id) && Number(item.eventCount || 0) > 0).map((item) => item.id),
+      activeFileIds: files.filter((item) => expectedIds.includes(item.id) && Number(item.eventCount || 0) > 0).map((item) => item.id),
+      missingFileIds: expectedIds.filter((id) => !files.some((item) => item.id === id)),
+    },
+  };
 }
 
 

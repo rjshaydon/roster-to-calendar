@@ -11,6 +11,9 @@ import {
   deleteDoctorProfileMirror,
   deleteRawRosterFile,
   hasCalendarDb,
+  applyAccountHospitalLocations,
+  loadAccountHospitalLocations,
+  mergeHospitalLocationsIntoSettings,
   listAccountMirrors,
   listConsoleMessages,
   loadAccountMirror,
@@ -35,6 +38,7 @@ import {
   replaceDerivedRosterFile,
   replaceAccountCustomEvents,
   replaceCanonicalDoctors,
+  upsertAccountHospitalLocations,
   setDerivedRosterFileActive,
   upsertAccountMirror,
   upsertDoctorProfileMirror,
@@ -304,6 +308,21 @@ export async function onRequestPost(context) {
       );
       const supersession = await reconcileRosterFileSupersession(context.env.ROSTER_DB, filePayload, { uploaderEmail: email });
       await refreshCanonicalDoctors(context.env.ROSTER_DB);
+      if (body?.skipStatus === true) {
+        return Response.json({
+          ok: true,
+          result,
+          supersession,
+          fileStatus: {
+            id: String(filePayload.id || ""),
+            name: String(filePayload.name || "roster.xlsx"),
+            sourceType: String(filePayload.sourceType || "").toLowerCase(),
+            indexedDoctors: Number(result.doctors || 0),
+            eventCount: Number(result.events || 0),
+            status: Number(result.events || 0) > 0 ? "populated" : "missing",
+          },
+        });
+      }
       const status = await calendarStoreStatus(null, context.env.ROSTER_DB, {
         doctorKey: selectedDoctorKey,
         expectedFileIds: sanitizeRepositoryFileIds(body?.expectedFileIds),
@@ -793,7 +812,7 @@ export async function onRequestPost(context) {
       const snapshotInfo = await loadDoctorProfileSnapshotInfo(null, {
         ...profile,
         aliases: requestedAliases,
-      }, context.env.ROSTER_DB);
+      }, context.env.ROSTER_DB, email);
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -1351,6 +1370,7 @@ async function prepareLightweightAccountResponse(rawRecord, options = {}) {
       },
     };
   }
+  state = await applySqlHospitalLocationSettings(options.db, record.email, state);
   const d1CustomEvents = await queryAccountCustomEvents(options.db, record.email).catch(() => []);
   if (d1CustomEvents.length) {
     state = {
@@ -1385,6 +1405,18 @@ async function prepareLightweightAccountResponse(rawRecord, options = {}) {
   };
 }
 
+async function applySqlHospitalLocationSettings(db, email, state) {
+  const locations = await loadAccountHospitalLocations(db, email, state?.session).catch(() => null);
+  if (!locations) return state;
+  return {
+    ...state,
+    session: {
+      ...(state.session || {}),
+      settings: mergeHospitalLocationsIntoSettings(state.session?.settings || {}, locations),
+    },
+  };
+}
+
 export async function prepareAccountResponse(store, rawRecord, options = {}) {
   let record = await ensureAccountSubscriptionToken(store, rawRecord);
   if (record?.subscriptionToken && record.subscriptionToken !== rawRecord?.subscriptionToken) {
@@ -1404,6 +1436,7 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
       },
     };
   }
+  state = await applySqlHospitalLocationSettings(options.db, record.email, state);
   const d1CustomEvents = await queryAccountCustomEvents(options.db, record.email).catch(() => []);
   if (d1CustomEvents.length) {
     state = {
@@ -1541,6 +1574,7 @@ async function buildDerivedAccountSnapshot(db, context) {
   let doctorDiagnostics = [];
   let doctorOptions = [];
   let selectedKey = "";
+  let selectedSourceTypes = [];
   if (role === "creator" || role === "owner") {
     const groupedDoctors = await creatorDoctorOptionsForD1(db, context.index);
     const requestedKey = normalizeRosterName(context.doctorKey || state.session?.doctorKey || "");
@@ -1555,6 +1589,7 @@ async function buildDerivedAccountSnapshot(db, context) {
     doctorDiagnostics = await queryRosterFileDoctorsForKeys(db, doctorKeys);
     doctorPairs = doctorDiagnostics.map((row) => ({ fileId: row.fileId, doctorKey: row.doctorKey }));
     doctorOptions = groupedDoctors;
+    selectedSourceTypes = doctor?.sourceTypes || [doctor?.sourceType].filter(Boolean);
   } else {
     const claims = sanitizeClaims(context.claims);
     if (!claims.length) return null;
@@ -1568,6 +1603,7 @@ async function buildDerivedAccountSnapshot(db, context) {
     selectedKey = selectedClaimOption?.key || claims[0].key;
     doctorKeys = doctorKeysForOption(selectedClaimOption);
     doctorOptions = groupedClaims;
+    selectedSourceTypes = selectedClaimOption?.sourceTypes || [selectedClaimOption?.sourceType].filter(Boolean);
   }
   const session = state.session && typeof state.session === "object" ? state.session : {};
   const normalizedSession = {
@@ -1595,8 +1631,9 @@ async function buildDerivedAccountSnapshot(db, context) {
     context.diagnostics.queryMode = doctorPairs.length ? "file-doctor-pairs" : "doctor-keys";
   }
   const d1CustomEvents = await queryAccountCustomEvents(db, context.record.email).catch(() => []);
+  const hospitalLocations = await loadAccountHospitalLocations(db, context.record.email, normalizedSession).catch(() => null);
   const events = [
-    ...applyEventOverrides(rosterEvents, normalizedSession.overrides || {}),
+    ...applyEventOverrides(applyAccountHospitalLocations(rosterEvents, hospitalLocations || {}, { includeLocations: settings.includeLocations !== false }), normalizedSession.overrides || {}),
     ...customEventsToEvents(latestCustomEventsByIdentity([
       ...sanitizeSnapshotCustomEvents(normalizedSession.customEvents, context.record.email),
       ...d1CustomEvents,
@@ -1612,7 +1649,11 @@ async function buildDerivedAccountSnapshot(db, context) {
     preview: buildPreviewFromDerivedEvents(events, { customEventsMaterialized: true }),
     session: normalizedSession,
     doctorOptions,
-    detectedSources: {},
+    detectedSources: detectedSourcesForSnapshot(
+      role === "creator" || role === "owner"
+        ? sanitizeSnapshotFileRefs(state.imports)
+        : selectedSourceTypes,
+    ),
     fileRefs: sanitizeSnapshotFileRefs(state.imports),
     subscriptionFeeds: {},
     insightCache: null,
@@ -2025,6 +2066,18 @@ function sanitizeDetectedSources(value) {
   };
 }
 
+function detectedSourcesForSnapshot(value) {
+  const imports = Array.isArray(value) && value.some((item) => item && typeof item === "object")
+    ? value
+    : sanitizeSourceTypes(Array.isArray(value) ? value : []).map((sourceType) => ({ sourceType, name: sourceType }));
+  return {
+    mmc: imports.filter((item) => item.sourceType === "mmc").map((item) => String(item.name || item.sourceType || "mmc")),
+    ddh: imports.filter((item) => item.sourceType === "ddh").map((item) => String(item.name || item.sourceType || "ddh")),
+    casey: imports.filter((item) => item.sourceType === "casey").map((item) => String(item.name || item.sourceType || "casey")),
+    mch: imports.filter((item) => item.sourceType === "mch").map((item) => String(item.name || item.sourceType || "mch")),
+  };
+}
+
 function sanitizeSnapshotFileRefs(value) {
   if (!Array.isArray(value)) return [];
   return value
@@ -2138,8 +2191,8 @@ async function repositoryImportRefsForDoctorProfile(store, profile, db = null) {
   return await queryRosterFileRefsForDoctors(db, [profile?.doctorKey].filter(Boolean)).catch(() => []);
 }
 
-async function loadDoctorProfileSnapshotInfo(store, profile, db = null) {
-  const derivedSnapshot = await buildDerivedDoctorProfileSnapshot(store, db, profile);
+async function loadDoctorProfileSnapshotInfo(store, profile, db = null, ownerEmail = "") {
+  const derivedSnapshot = await buildDerivedDoctorProfileSnapshot(store, db, profile, ownerEmail);
   return {
     snapshot: derivedSnapshot,
     snapshotAvailable: Boolean(derivedSnapshot),
@@ -2149,7 +2202,7 @@ async function loadDoctorProfileSnapshotInfo(store, profile, db = null) {
   };
 }
 
-async function buildDerivedDoctorProfileSnapshot(store, db, profile) {
+async function buildDerivedDoctorProfileSnapshot(store, db, profile, ownerEmail = "") {
   if (!hasCalendarDb({ ROSTER_DB: db }) || !profile?.profileId || !profile?.doctorKey) return null;
   const session = profile.state?.session && typeof profile.state.session === "object" ? profile.state.session : {};
   const settings = {
@@ -2168,11 +2221,16 @@ async function buildDerivedDoctorProfileSnapshot(store, db, profile) {
     ? [...new Set(doctorDiagnostics.map((row) => normalizeRosterName(row.doctorKey)).filter(Boolean))]
     : doctorKeysForOption(profile);
   const doctorPairs = doctorDiagnostics.map((row) => ({ fileId: row.fileId, doctorKey: row.doctorKey }));
+  const hospitalLocations = await loadAccountHospitalLocations(db, ownerEmail, session).catch(() => null);
   const events = [
     ...applyEventOverrides(
-      doctorPairs.length
-        ? await queryDoctorEventsForFileDoctorPairs(db, doctorPairs)
-        : await queryDoctorEvents(db, doctorKeys),
+      applyAccountHospitalLocations(
+        doctorPairs.length
+          ? await queryDoctorEventsForFileDoctorPairs(db, doctorPairs)
+          : await queryDoctorEvents(db, doctorKeys),
+        hospitalLocations || {},
+        { includeLocations: settings.includeLocations !== false },
+      ),
       session.overrides || {},
     ),
     ...customEventsToEvents(sanitizeSnapshotCustomEvents(session.customEvents, ""), settings),
@@ -2202,7 +2260,7 @@ async function buildDerivedDoctorProfileSnapshot(store, db, profile) {
         displayName: profile.displayName,
       })),
     }],
-    detectedSources: {},
+    detectedSources: detectedSourcesForSnapshot(profileSources),
     fileRefs: refs,
     subscriptionFeeds: {},
     insightCache: null,

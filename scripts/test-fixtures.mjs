@@ -257,6 +257,22 @@ assert.match(
   "empty user-suggestion sections should be omitted",
 );
 assert.match(appSource, /function exportHospitalOptions/, "one-off exports should expose hospital options");
+assert.match(appSource, /Recognised hospitals &amp; default locations/, "account modal should expose recognised hospital locations");
+assert.match(appSource, /data-account-location-key/, "account modal locations should bind to shared settings keys");
+assert.match(d1CalendarSource, /CREATE TABLE IF NOT EXISTS account_hospital_locations/, "D1 should store account hospital locations relationally");
+assert.match(d1CalendarSource, /function applyAccountHospitalLocations/, "SQL-first roster reads should apply account hospital defaults");
+assert.match(
+  appSource.match(/function buildLocationOptionMarkup[\s\S]*?function detectLocationPreset/)?.[0] || "",
+  /locationOptionSourceTypes\(source\)/,
+  "location options should consider the roster event source, not only detected imports",
+);
+assert.match(
+  appSource.match(/async function buildDerivedCalendarFilePayload[\s\S]*?function assertDerivedCalendarFilePayload/)?.[0] || "",
+  /includeLocations: true/,
+  "D1 roster materialisation should retain canonical onsite locations for rebuilds",
+);
+assert.match(appSource, /skipStatus: true/, "rebuild saves should avoid full aggregate status checks after every file");
+assert.match(appSource, /mergeLightweightRosterStatus/, "rebuild saves should merge lightweight per-file status");
 assert.match(appSource, /function matchesExportHospitals/, "one-off exports should support hospital filtering");
 assert.match(appSource, /function canCopySubscriptionUrl/, "subscription URL availability should be separate from one-off exports");
 assert.match(
@@ -834,6 +850,7 @@ class MemoryD1 {
     this.accountProfiles = new Map();
     this.accountClaims = new Map();
     this.accountStates = new Map();
+    this.accountHospitalLocations = new Map();
     this.canonicalDoctors = new Map();
     this.customEvents = new Map();
     this.subscriptionTokens = new Map();
@@ -859,6 +876,7 @@ class MemoryD1 {
       "accountProfiles",
       "accountClaims",
       "accountStates",
+      "accountHospitalLocations",
       "canonicalDoctors",
       "customEvents",
       "subscriptionTokens",
@@ -1082,6 +1100,21 @@ class MemoryD1Statement {
       this.db.accountStates.delete(args[0]);
       return { success: true };
     }
+    if (sql.startsWith("DELETE FROM account_hospital_locations")) {
+      for (const key of [...this.db.accountHospitalLocations.keys()]) if (key.startsWith(`${args[0]}|`)) this.db.accountHospitalLocations.delete(key);
+      return { success: true };
+    }
+    if (sql.startsWith("INSERT INTO account_hospital_locations")) {
+      for (let index = 0; index < args.length; index += 4) {
+        this.db.accountHospitalLocations.set(`${args[index]}|${args[index + 1]}`, {
+          email: args[index],
+          source_type: args[index + 1],
+          location: args[index + 2],
+          updated_at: args[index + 3],
+        });
+      }
+      return { success: true };
+    }
     if (sql.startsWith("DELETE FROM canonical_doctors")) {
       this.db.canonicalDoctors.clear();
       return { success: true };
@@ -1220,6 +1253,47 @@ class MemoryD1Statement {
           .filter((event) => event.owner_email === args[0])
           .sort((left, right) => left.start_date.localeCompare(right.start_date) || left.start_time.localeCompare(right.start_time) || left.title.localeCompare(right.title) || left.id.localeCompare(right.id)),
       };
+    }
+    if (sql.includes("FROM account_hospital_locations")) {
+      return {
+        results: [...this.db.accountHospitalLocations.values()]
+          .filter((row) => row.email === args[0])
+          .sort((left, right) => left.source_type.localeCompare(right.source_type)),
+      };
+    }
+    if (sql.includes("FROM roster_events") && sql.includes("GROUP BY file_id, doctor_key")) {
+      const pairs = new Set();
+      for (let index = 0; index < args.length; index += 2) pairs.add(`${args[index]}:${args[index + 1]}`);
+      const grouped = new Map();
+      for (const event of this.db.events.values()) {
+        const key = `${event.file_id}:${event.doctor_key}`;
+        if (!pairs.has(key)) continue;
+        grouped.set(key, (grouped.get(key) || 0) + 1);
+      }
+      return {
+        results: [...grouped.entries()].map(([key, count]) => {
+          const [file_id, doctor_key] = key.split(":");
+          return { file_id, doctor_key, count };
+        }),
+      };
+    }
+    if (sql.includes("FROM roster_events") && sql.includes("GROUP BY file_id")) {
+      const ids = new Set(args);
+      const grouped = new Map();
+      for (const event of this.db.events.values()) {
+        if (!ids.has(event.file_id)) continue;
+        grouped.set(event.file_id, (grouped.get(event.file_id) || 0) + 1);
+      }
+      return { results: [...grouped.entries()].map(([file_id, count]) => ({ file_id, count })) };
+    }
+    if (sql.includes("FROM roster_file_doctors") && sql.includes("GROUP BY file_id")) {
+      const ids = new Set(args);
+      const grouped = new Map();
+      for (const doctor of this.db.fileDoctors.values()) {
+        if (!ids.has(doctor.file_id)) continue;
+        grouped.set(doctor.file_id, (grouped.get(doctor.file_id) || 0) + 1);
+      }
+      return { results: [...grouped.entries()].map(([file_id, count]) => ({ file_id, count })) };
     }
     if (sql.includes("FROM roster_events") && sql.includes("(roster_events.file_id = ? AND roster_events.doctor_key = ?)")) {
       const end = args[args.length - 2];
@@ -1874,6 +1948,7 @@ const d1CreatorCalendar = await postState(d1StateStore, {
 }, d1Store);
 assert.equal(d1CreatorCalendar.snapshot?.preview?.derivedFromD1, true);
 assert.ok(d1CreatorCalendar.snapshot.preview.events.length > 0);
+assert.ok(d1CreatorCalendar.snapshot.detectedSources.mmc.length > 0, "creator D1 snapshots should retain detected roster sources");
 const d1CreatorFeedResponse = await handleFeedGet({
   request: new Request(`http://fixture.test/api/feed?token=${d1CreatorLogin.subscription.token}`),
   env: { ROSTER_DB: d1Store },
@@ -1900,6 +1975,47 @@ const d1DirectCalendar = await postState(d1StateStore, {
   email: "d1-user@example.com",
   password: "d1-password",
 }, d1Store);
+assert.ok(d1DirectCalendar.snapshot.detectedSources.mmc.length > 0, "claimed D1 snapshots should retain linked roster sources");
+const d1OnsiteMmcEvent = d1DirectCalendar.snapshot.preview.events.find((event) => event.source === "MMC" && !/\\b(CS|leave|conference|PHNW)\\b/i.test(`${event.title} ${event.rawValue}`));
+assert.ok(d1OnsiteMmcEvent?.location, "D1 account calendar load should apply SQL-backed hospital defaults to onsite shifts");
+await postState(d1StateStore, {
+  action: "save",
+  email: "d1-user@example.com",
+  password: "d1-password",
+  state: {
+    version: 1,
+    imports: d1DirectLogin.state.imports,
+    session: {
+      doctorKey: d1Doctor.key,
+      settings: {
+        defaultLocationMmc: "User One MMC Location",
+      },
+    },
+  },
+}, d1Store);
+for (const row of d1Store.events.values()) {
+  const event = JSON.parse(row.event_json);
+  if (event.source !== "MMC" || /\b(CS|leave|conference|PHNW)\b/i.test(`${event.title} ${event.rawValue}`)) continue;
+  event.location = "";
+  row.location = "";
+  row.event_json = JSON.stringify(event);
+  break;
+}
+const d1CustomLocationCalendar = await postState(d1StateStore, {
+  action: "loadCalendarEvents",
+  email: "d1-user@example.com",
+  password: "d1-password",
+}, d1Store);
+assert.ok(
+  d1CustomLocationCalendar.snapshot.preview.events.some((event) => event.source === "MMC" && event.location === "User One MMC Location"),
+  "account SQL hospital location should override shared roster-event location",
+);
+const d1UserFeedResponse = await handleFeedGet({
+  request: new Request(`http://fixture.test/api/feed?token=${d1DirectLogin.subscription.token}`),
+  env: { ROSTER_DB: d1Store },
+});
+assert.equal(d1UserFeedResponse.ok, true, "claimed user subscription feed should resolve");
+assert.match(await d1UserFeedResponse.text(), /LOCATION:User One MMC Location/, "subscription feed should apply account hospital defaults");
 const d1OverrideEvent = d1DirectCalendar.snapshot.preview.events[0];
 await postState(d1StateStore, {
   action: "save",
