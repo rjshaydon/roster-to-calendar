@@ -554,6 +554,7 @@ export async function onRequestPost(context) {
         seniority: body?.issue?.seniority,
         date: body?.issue?.date || body?.issue?.startDay,
         rawValue: body?.issue?.rawValue,
+        code: body?.issue?.code,
         timeLabel: body?.issue?.timeLabel,
         suggestedTitle: body?.issue?.suggestedTitle,
         fingerprint: body?.issue?.fingerprint,
@@ -1975,6 +1976,8 @@ function sameParserIssue(left, right) {
 }
 
 function parserRuleCodeForIssue(issue) {
+  const code = String(issue?.code || "").trim().toUpperCase();
+  if (code) return code;
   return parserRuleCodeFromRawValue(issue?.source, issue?.rawValue);
 }
 
@@ -2847,6 +2850,7 @@ function sanitizeAdminIssues(value) {
       seniority: sanitizeRuleSeniority(item?.seniority),
       date: String(item?.date || item?.startDay || "").trim(),
       rawValue: String(item?.rawValue || "").trim(),
+      code: String(item?.code || "").trim().toUpperCase(),
       timeLabel: String(item?.timeLabel || "").trim(),
       suggestedTitle: String(item?.suggestedTitle || "").trim(),
       fingerprint: sanitizeIssueFingerprint(item?.fingerprint || issueFingerprint(item?.source, item?.rawValue, item?.seniority)),
@@ -2874,6 +2878,7 @@ function mergeAdminIssues(existing, incoming) {
       match.seniority = item.seniority || match.seniority;
       match.date = item.date || match.date;
       match.rawValue = item.rawValue || match.rawValue;
+      match.code = item.code || match.code;
       match.timeLabel = item.timeLabel || match.timeLabel;
       match.suggestedTitle = item.suggestedTitle || match.suggestedTitle;
       continue;

@@ -255,6 +255,10 @@ assert.match(appSource, /parserRuleSeniorityOption/, "shift-code editor should e
 assert.match(appSource, /function selectedParserRuleSeniorities/, "shift-code editor should save selected seniorities as a batch");
 assert.match(appSource, /parserRuleExistsForIssue/, "system shift-code review should hide only issues resolved by active rules");
 assert.match(appSource, /matchingParserRuleGroup/, "saved shift-code rules should reopen with equivalent seniorities selected");
+assert.match(appSource, /function synthesizeIncompleteShiftCodeIssues/, "derived code-only shift titles should synthesize unresolved shift-code issues");
+assert.match(appSource, /data-ignore-unresolved-shift-code/, "missing shift-code queue should expose a non-destructive ignore action");
+assert.match(appSource, /allUnknownIssues\.filter\(\(item\) => item\.source === group\.source\)/, "ignored shift codes should remain visible in hospital unrecognised sections");
+assert.match(appSource, /UNRESOLVED_SHIFT_CODE_IGNORE_KEY/, "top-level shift-code ignores should persist separately from admin issue deletion");
 assert.match(
   appSource.match(/function renderParserRulesCard[\s\S]*?function collectUnknownShiftIssues/)?.[0] || "",
   /parserRuleSuggestions\.length \? `[\s\S]*<strong>User suggestions<\/strong>/,
