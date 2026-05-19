@@ -59,6 +59,7 @@ const mchWorkbook = XLSX.readFile(fileURLToPath(new URL("../fixtures/Paeds_Term_
 const caseyBytes = await readFile(fileURLToPath(new URL("../fixtures/Casey_Term_2_2026_DRAFT.xlsm", import.meta.url)));
 const mchBytes = await readFile(fileURLToPath(new URL("../fixtures/Paeds_Term_2_2026.xlsx", import.meta.url)));
 const appSource = await readFile(new URL("../public/static/app.js", import.meta.url), "utf8");
+const styleSource = await readFile(new URL("../public/static/styles.css", import.meta.url), "utf8");
 const calendarMigrationSource = await readFile(new URL("../migrations/0001_calendar_store.sql", import.meta.url), "utf8");
 const insightIndexMigrationSource = await readFile(new URL("../migrations/0005_roster_insight_index.sql", import.meta.url), "utf8");
 const d1CalendarSource = await readFile(new URL("../functions/_lib/d1-calendar.js", import.meta.url), "utf8");
@@ -259,6 +260,11 @@ assert.match(appSource, /function synthesizeIncompleteShiftCodeIssues/, "derived
 assert.match(appSource, /data-ignore-unresolved-shift-code/, "missing shift-code queue should expose a non-destructive ignore action");
 assert.match(appSource, /allUnknownIssues\.filter\(\(item\) => item\.source === group\.source\)/, "ignored shift codes should remain visible in hospital unrecognised sections");
 assert.match(appSource, /UNRESOLVED_SHIFT_CODE_IGNORE_KEY/, "top-level shift-code ignores should persist separately from admin issue deletion");
+assert.match(appSource, /parserRuleSeniorityAll/, "shift-code seniority picker should expose an All option");
+assert.match(appSource, /function normalizeParserRuleSenioritySelection/, "shift-code seniority picker should keep All and Unknown selections consistent");
+assert.match(appSource, /const key = `\$\{source\}\|\$\{code\}`/, "unresolved shift-code grouping should be by hospital and code");
+assert.match(appSource, /formatShiftCodeSeniorities/, "grouped unresolved shift-code rows should summarize detected seniorities");
+assert.match(styleSource, /#parserRuleForm[\s\S]*overflow-y: auto/, "shift-code editor form should scroll vertically when it exceeds available height");
 assert.match(
   appSource.match(/function renderParserRulesCard[\s\S]*?function collectUnknownShiftIssues/)?.[0] || "",
   /parserRuleSuggestions\.length \? `[\s\S]*<strong>User suggestions<\/strong>/,

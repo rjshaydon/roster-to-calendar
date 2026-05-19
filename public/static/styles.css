@@ -1728,6 +1728,17 @@ body[data-skin="console"] .preview-cell.is-weekend {
   padding-right: 4px;
 }
 
+#parserRuleModal .modal-panel {
+  min-height: 0;
+}
+
+#parserRuleForm {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+
 .export-variant-picker {
   display: flex;
   flex-wrap: wrap;
@@ -1777,6 +1788,8 @@ body[data-skin="console"] .preview-cell.is-weekend {
   border: 1px solid rgba(20, 34, 42, 0.12);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.66);
+  max-height: 220px;
+  overflow-y: auto;
 }
 
 .insights-hospital-group {

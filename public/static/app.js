@@ -520,7 +520,11 @@ accountsBody.addEventListener("click", (event) => {
   }
   const addShiftCodeButton = event.target.closest("[data-add-shift-code]");
   if (addShiftCodeButton) {
-    openParserRuleModal(addShiftCodeButton.dataset.addShiftCode || "", addShiftCodeButton.dataset.errorId || "");
+    openParserRuleModal(
+      addShiftCodeButton.dataset.addShiftCode || "",
+      addShiftCodeButton.dataset.errorId || "",
+      splitShiftCodeSeniorities(addShiftCodeButton.dataset.shiftCodeSeniorities || ""),
+    );
     return;
   }
   const ignoreShiftCodeButton = event.target.closest("[data-ignore-unresolved-shift-code]");
@@ -1249,7 +1253,12 @@ parserRuleAllDay?.addEventListener("change", () => {
   renderParserRulePreview();
 });
 parserRuleForm?.addEventListener("input", () => renderParserRulePreview());
-parserRuleForm?.addEventListener("change", () => renderParserRulePreview());
+parserRuleForm?.addEventListener("change", (event) => {
+  if (event.target?.matches?.('input[name="parserRuleSeniorityOption"], input[name="parserRuleSeniorityAll"]')) {
+    normalizeParserRuleSenioritySelection(event.target);
+  }
+  renderParserRulePreview();
+});
 parserRuleForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   await saveParserRuleFromModal();
@@ -6885,12 +6894,13 @@ function renderParserRulesCard() {
           ${unknownIssues.length ? unknownIssues.map((item) => `
             <article class="issue-card">
               <div>
-                <strong>${escapeHtml(item.source)} · ${escapeHtml(item.seniority)} · ${escapeHtml(item.code)}</strong>
+                <strong>${escapeHtml(item.source)} · ${escapeHtml(item.code)}</strong>
+                <p>${escapeHtml(item.seniorityLabel)}</p>
                 <p>${escapeHtml(item.message || "Shift code not recognised.")}</p>
                 <p>${escapeHtml(item.sample)}${item.count > 1 ? ` · seen ${item.count} times` : ""}</p>
               </div>
               <div class="account-actions">
-                <button type="button" class="button button-secondary" data-add-shift-code="${escapeHtml(item.email)}" data-error-id="${escapeHtml(item.id)}">Edit shift code</button>
+                <button type="button" class="button button-secondary" data-add-shift-code="${escapeHtml(item.email)}" data-error-id="${escapeHtml(item.id)}" data-shift-code-seniorities="${escapeHtml(item.seniorities.join("|"))}">Edit shift code</button>
                 <button type="button" class="button button-secondary" data-ignore-unresolved-shift-code="${escapeHtml(unresolvedShiftCodeIgnoreKey(item))}">Ignore</button>
               </div>
             </article>
@@ -6910,10 +6920,10 @@ function renderParserRulesCard() {
                 <article class="issue-card issue-unknown">
                   <div>
                     <strong>${escapeHtml(item.code)} · Unrecognised</strong>
-                    <p>${escapeHtml(item.seniority)} · ${escapeHtml(item.message || "Shift code not recognised.")}</p>
+                    <p>${escapeHtml(item.seniorityLabel)} · ${escapeHtml(item.message || "Shift code not recognised.")}</p>
                   </div>
                   <div class="account-actions">
-                    <button type="button" class="button button-secondary" data-add-shift-code="${escapeHtml(item.email)}" data-error-id="${escapeHtml(item.id)}">Edit shift code</button>
+                    <button type="button" class="button button-secondary" data-add-shift-code="${escapeHtml(item.email)}" data-error-id="${escapeHtml(item.id)}" data-shift-code-seniorities="${escapeHtml(item.seniorities.join("|"))}">Edit shift code</button>
                   </div>
                 </article>
               `).join("")}
@@ -6958,16 +6968,21 @@ function collectUnknownShiftIssues() {
       const code = parserRuleCodeForIssue(issue);
       if (!source || !code) continue;
       if (parserRuleExistsForIssue({ source, seniority, rawValue: code })) continue;
-      const key = `${source}|${seniority}|${code}`;
+      const key = `${source}|${code}`;
       const existing = byKey.get(key);
       if (existing) {
         existing.count += issue.count || 1;
+        existing.seniorities = addUniqueSeniority(existing.seniorities, seniority);
+        existing.seniorityLabel = formatShiftCodeSeniorities(existing.seniorities);
         if ((issue.lastSeenAt || "") > (existing.lastSeenAt || "")) existing.lastSeenAt = issue.lastSeenAt || "";
         continue;
       }
+      const seniorities = addUniqueSeniority([], seniority);
       byKey.set(key, {
         source,
         seniority,
+        seniorities,
+        seniorityLabel: formatShiftCodeSeniorities(seniorities),
         code,
         id: issue.id || issue.fingerprint || "",
         email: user.email,
@@ -6980,17 +6995,39 @@ function collectUnknownShiftIssues() {
   }
   return [...byKey.values()].sort((left, right) => {
     if (left.source !== right.source) return left.source.localeCompare(right.source);
-    const rank = parserRuleSeniorityDisplayOrder().indexOf(left.seniority) - parserRuleSeniorityDisplayOrder().indexOf(right.seniority);
-    if (rank) return rank;
     return left.code.localeCompare(right.code);
   });
 }
 
+function addUniqueSeniority(items = [], seniority = "") {
+  const normalized = sanitizeRuleSeniority(seniority);
+  return [...new Set([...items, normalized])].sort((left, right) => senioritySortRank(left) - senioritySortRank(right));
+}
+
+function senioritySortRank(value) {
+  const order = parserRuleSeniorityDisplayOrder();
+  const index = order.indexOf(sanitizeRuleSeniority(value));
+  return index >= 0 ? index : order.length;
+}
+
+function formatShiftCodeSeniorities(items = []) {
+  const seniorities = [...new Set(items.map(sanitizeRuleSeniority).filter(Boolean))].sort((left, right) => senioritySortRank(left) - senioritySortRank(right));
+  if (!seniorities.length) return "Unknown seniority";
+  if (seniorities.length === 1) return seniorities[0];
+  return `${seniorities.length} seniorities: ${seniorities.join(", ")}`;
+}
+
+function splitShiftCodeSeniorities(value = "") {
+  return String(value || "")
+    .split("|")
+    .map(sanitizeRuleSeniority)
+    .filter(Boolean);
+}
+
 function unresolvedShiftCodeIgnoreKey(item) {
   const source = sanitizeIssueSource(item?.source);
-  const seniority = sanitizeRuleSeniority(item?.seniority);
   const code = String(item?.code || parserRuleCodeForIssue(item) || "").trim().toUpperCase();
-  return source && code ? `${source}|${seniority}|${code}` : "";
+  return source && code ? `${source}|${code}` : "";
 }
 
 function isUnresolvedShiftCodeIgnored(item) {
@@ -7389,7 +7426,7 @@ function renderParserRulePreview() {
   `;
 }
 
-function openParserRuleModal(email, errorId = "") {
+function openParserRuleModal(email, errorId = "", selectedSeniorities = []) {
   const issue = findAdminIssue(email, errorId);
   if (!issue) {
     setStatus("Could not find that parser warning.", true);
@@ -7399,7 +7436,7 @@ function openParserRuleModal(email, errorId = "") {
   parserRuleIssueId.value = issue.fingerprint || issue.id || "";
   parserRuleSource.value = issue.source || "";
   parserRuleRawValue.value = issue.rawValue || "";
-  populateParserRuleSeniorityOptions([issue.seniority], true);
+  populateParserRuleSeniorityOptions(selectedSeniorities.length ? selectedSeniorities : [issue.seniority], true);
   parserRuleOriginalSeniority.value = sanitizeRuleSeniority(issue.seniority);
   parserRuleOriginalCode.value = parserRuleCodeForIssue(issue);
   parserRuleCode.value = parserRuleCodeForIssue(issue);
@@ -7539,8 +7576,17 @@ function populateParserRuleSeniorityOptions(selected = [], allowMultiple = false
   const selectedValues = Array.isArray(selected) ? selected : [selected];
   const normalizedSelected = new Set(selectedValues.map(sanitizeRuleSeniority).filter(Boolean));
   if (!normalizedSelected.size) normalizedSelected.add("Unknown");
+  const seniorities = parserRuleSeniorities();
+  const concreteSeniorities = seniorities.filter((item) => item !== "Unknown");
   const inputType = allowMultiple ? "checkbox" : "radio";
-  parserRuleSeniority.innerHTML = parserRuleSeniorities()
+  const allChecked = allowMultiple && concreteSeniorities.every((seniority) => normalizedSelected.has(seniority));
+  const allOption = allowMultiple ? `
+      <label class="toggle">
+        <input type="checkbox" name="parserRuleSeniorityAll" value="all" ${allChecked ? "checked" : ""}>
+        All
+      </label>
+    ` : "";
+  parserRuleSeniority.innerHTML = allOption + seniorities
     .map((seniority) => `
       <label class="toggle">
         <input type="${inputType}" name="parserRuleSeniorityOption" value="${escapeHtml(seniority)}" ${normalizedSelected.has(seniority) ? "checked" : ""}>
@@ -7548,6 +7594,7 @@ function populateParserRuleSeniorityOptions(selected = [], allowMultiple = false
       </label>
     `)
     .join("");
+  normalizeParserRuleSenioritySelection();
 }
 
 function selectedParserRuleSeniorities() {
@@ -7555,6 +7602,34 @@ function selectedParserRuleSeniorities() {
   return [...parserRuleSeniority.querySelectorAll('input[name="parserRuleSeniorityOption"]:checked')]
     .map((input) => sanitizeRuleSeniority(input.value))
     .filter(Boolean);
+}
+
+function normalizeParserRuleSenioritySelection(trigger = null) {
+  if (!parserRuleSeniority) return;
+  const allInput = parserRuleSeniority.querySelector('input[name="parserRuleSeniorityAll"]');
+  const options = [...parserRuleSeniority.querySelectorAll('input[name="parserRuleSeniorityOption"]')];
+  const unknown = options.find((input) => sanitizeRuleSeniority(input.value) === "Unknown");
+  const concrete = options.filter((input) => sanitizeRuleSeniority(input.value) !== "Unknown");
+  if (allInput && trigger === allInput) {
+    if (allInput.checked) {
+      concrete.forEach((input) => { input.checked = true; });
+      if (unknown) unknown.checked = false;
+    } else {
+      concrete.forEach((input) => { input.checked = false; });
+      if (unknown) unknown.checked = true;
+    }
+  } else if (trigger && concrete.includes(trigger) && trigger.checked) {
+    if (unknown) unknown.checked = false;
+  } else if (trigger === unknown && unknown?.checked) {
+    concrete.forEach((input) => { input.checked = false; });
+  }
+  const checkedConcrete = concrete.filter((input) => input.checked);
+  if (checkedConcrete.length) {
+    if (unknown) unknown.checked = false;
+  } else if (unknown) {
+    unknown.checked = true;
+  }
+  if (allInput) allInput.checked = concrete.length > 0 && concrete.every((input) => input.checked);
 }
 
 async function saveParserRuleFromModal() {
