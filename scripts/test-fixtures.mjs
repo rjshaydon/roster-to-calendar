@@ -141,8 +141,26 @@ assert.doesNotMatch(
 assert.doesNotMatch(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
     .match(/if \(action === "loadCalendarEvents"\)[\s\S]*?if \(action === "loadInsightImports"\)/)?.[0] || "",
-  /loadRepositoryIndex/,
-  "calendar event loads should be D1-first and avoid repository-index hydration",
+  /loadRepositoryIndex|creatorDoctorOptionsForD1|mergedDoctorOptionsFromD1|buildCanonicalDoctorOptionsFromRows/,
+  "calendar event loads should stay targeted and avoid broad doctor-directory hydration",
+);
+const creatorSnapshotSource =
+  (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
+    .match(/async function buildDerivedAccountSnapshot[\s\S]*?function rawRosterObjectKey/)?.[0] || "";
+assert.match(
+  creatorSnapshotSource,
+  /resolveSelectedDoctorForCalendarSnapshot/,
+  "creator calendar snapshots should use targeted selected-doctor lookup",
+);
+assert.match(
+  creatorSnapshotSource,
+  /doctorOptions = \[doctor\]/,
+  "creator calendar snapshots should not return the full doctor directory",
+);
+assert.match(
+  creatorSnapshotSource,
+  /selectedDoctorKeyVariants/,
+  "creator calendar snapshots should resolve deterministic key variants",
 );
 assert.doesNotMatch(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
@@ -2013,6 +2031,8 @@ const d1CreatorCalendar = await postState(d1StateStore, {
 }, d1Store);
 assert.equal(d1CreatorCalendar.snapshot?.preview?.derivedFromD1, true);
 assert.ok(d1CreatorCalendar.snapshot.preview.events.length > 0);
+assert.equal(d1CreatorCalendar.snapshot.doctorOptions.length, 1, "creator calendar load should not return the full doctor directory");
+assert.equal(d1CreatorCalendar.snapshot.doctorOptions[0].key, d1Doctor.key);
 assert.ok(d1CreatorCalendar.snapshot.detectedSources.mmc.length > 0, "creator D1 snapshots should retain detected roster sources");
 const d1CreatorFeedResponse = await handleFeedGet({
   request: new Request(`http://fixture.test/api/feed?token=${d1CreatorLogin.subscription.token}`),

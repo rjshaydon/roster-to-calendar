@@ -1599,19 +1599,19 @@ async function buildDerivedAccountSnapshot(db, context) {
   let selectedKey = "";
   let selectedSourceTypes = [];
   if (role === "creator" || role === "owner") {
-    const groupedDoctors = await creatorDoctorOptionsForD1(db, context.index);
     const requestedKey = normalizeRosterName(context.doctorKey || state.session?.doctorKey || "");
     selectedKey = requestedKey || OWNER_DOCTOR_KEY;
-    let doctor = findDoctorOptionByKey(groupedDoctors, selectedKey);
-    if (requestedKey && selectedKey !== OWNER_DOCTOR_KEY && !doctor) {
+    let resolved = await resolveSelectedDoctorForCalendarSnapshot(db, selectedKey);
+    if (requestedKey && selectedKey !== OWNER_DOCTOR_KEY && !resolved.doctor) {
       selectedKey = OWNER_DOCTOR_KEY;
-      doctor = findDoctorOptionByKey(groupedDoctors, selectedKey);
+      resolved = await resolveSelectedDoctorForCalendarSnapshot(db, selectedKey);
     }
+    const doctor = resolved.doctor;
     if (!doctor) return null;
     doctorKeys = doctorKeysForOption(doctor);
-    doctorDiagnostics = await queryRosterFileDoctorsForKeys(db, doctorKeys);
+    doctorDiagnostics = resolved.rows;
     doctorPairs = doctorDiagnostics.map((row) => ({ fileId: row.fileId, doctorKey: row.doctorKey }));
-    doctorOptions = groupedDoctors;
+    doctorOptions = [doctor];
     selectedSourceTypes = doctor?.sourceTypes || [doctor?.sourceType].filter(Boolean);
   } else {
     const claims = sanitizeClaims(context.claims);
@@ -1681,6 +1681,25 @@ async function buildDerivedAccountSnapshot(db, context) {
     subscriptionFeeds: {},
     insightCache: null,
   });
+}
+
+async function resolveSelectedDoctorForCalendarSnapshot(db, doctorKey) {
+  const normalizedKey = normalizeRosterName(doctorKey || "");
+  if (!normalizedKey) return { doctor: null, rows: [] };
+  const rows = await queryRosterFileDoctorsForKeys(db, selectedDoctorKeyVariants(normalizedKey)).catch(() => []);
+  if (!rows.length) return { doctor: null, rows: [] };
+  return {
+    doctor: buildDoctorOptionFromRows([...rows]),
+    rows,
+  };
+}
+
+function selectedDoctorKeyVariants(doctorKey) {
+  const normalized = normalizeRosterName(doctorKey || "");
+  const tokens = normalized.split(" ").filter(Boolean);
+  const variants = [normalized];
+  if (tokens.length === 2) variants.push(`${tokens[1]} ${tokens[0]}`);
+  return [...new Set(variants.filter(Boolean))];
 }
 
 function rawRosterObjectKey(fileId) {
