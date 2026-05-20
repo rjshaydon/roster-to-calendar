@@ -201,8 +201,7 @@ export async function onRequestPost(context) {
       const claimEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
       const targetRecord = claimEmail === email ? account.record : await loadAccountMirror(context.env.ROSTER_DB, claimEmail);
       if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
-      const doctorCandidates = await loadSqlDoctorCandidates(context.env.ROSTER_DB);
-      const claim = findDoctorClaimCandidate(doctorCandidates, body?.claim);
+      const claim = await resolveDoctorClaimCandidate(context.env.ROSTER_DB, body?.claim);
       if (!claim) {
         return Response.json({ error: "Roster name was not found." }, { status: 400 });
       }
@@ -1760,11 +1759,36 @@ async function mergedDoctorOptionsFromD1(db, options = {}) {
     queryRosterFileDoctors(db).catch(() => []),
   ]);
   const rowDoctors = doctorRows.length
-    ? await buildCanonicalDoctorOptionsFromRows(db, doctorRows, {
+    ? buildFastDoctorOptionsFromRows(doctorRows, {
         includeZeroEventStandalone: options.includeZeroEventStandalone === true,
       })
     : [];
   return mergeDoctorOptions(canonicalDoctors, rowDoctors, options);
+}
+
+function buildFastDoctorOptionsFromRows(rows, options = {}) {
+  const groups = new Map();
+  for (const row of rows || []) {
+    const identity = rosterIdentityKey(row.displayName || row.doctorKey);
+    if (!identity) continue;
+    if (!groups.has(identity)) groups.set(identity, []);
+    groups.get(identity).push(row);
+  }
+  const merged = [...groups.values()];
+  for (let leftIndex = 0; leftIndex < merged.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < merged.length; rightIndex += 1) {
+      const left = merged[leftIndex];
+      const right = merged[rightIndex];
+      if (!isConservativeDoctorVariant(left, right) || groupsShareFile(left, right)) continue;
+      left.push(...right);
+      merged.splice(rightIndex, 1);
+      rightIndex -= 1;
+    }
+  }
+  return merged
+    .filter((aliases) => options.includeZeroEventStandalone === true || aliases.some((alias) => Number(alias.eventCount || 0) > 0))
+    .map(buildDoctorOptionFromRows)
+    .sort((left, right) => left.displayName.localeCompare(right.displayName));
 }
 
 function mergeDoctorOptions(primary = [], fallback = [], options = {}) {
@@ -2774,6 +2798,27 @@ function findDoctorClaimCandidate(canonicalDoctors, rawClaim) {
     };
   }
   return null;
+}
+
+async function resolveDoctorClaimCandidate(db, rawClaim) {
+  const claim = {
+    key: normalizeRosterName(rawClaim?.key || ""),
+    sourceType: String(rawClaim?.sourceType || "").toLowerCase(),
+  };
+  if (!claim.key || !isRosterSourceType(claim.sourceType)) return null;
+  const exactRows = await queryRosterFileDoctorsForKeys(db, [claim.key]).catch(() => []);
+  const exactMatch = exactRows.find((row) => String(row.sourceType || "").toLowerCase() === claim.sourceType);
+  if (exactMatch) {
+    return {
+      key: normalizeRosterName(exactMatch.doctorKey),
+      displayName: String(exactMatch.displayName || exactMatch.doctorKey || "").trim(),
+      sourceType: String(exactMatch.sourceType || "").toLowerCase(),
+    };
+  }
+  const canonicalMatch = findDoctorClaimCandidate(await queryCanonicalDoctors(db, { includeZeroEventStandalone: true }).catch(() => []), rawClaim);
+  if (canonicalMatch) return canonicalMatch;
+  const doctorCandidates = await loadSqlDoctorCandidates(db);
+  return findDoctorClaimCandidate(doctorCandidates, rawClaim);
 }
 
 function sanitizeClaims(claims) {

@@ -153,8 +153,8 @@ assert.doesNotMatch(
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
     .match(/if \(action === "claimRosterName"\)[\s\S]*?if \(action === "listUsers"\)/)?.[0] || "",
-  /loadSqlDoctorCandidates[\s\S]*findDoctorClaimCandidate/,
-  "manual roster claims should resolve from SQL doctor candidates",
+  /resolveDoctorClaimCandidate/,
+  "manual roster claims should use targeted SQL doctor resolution",
 );
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
@@ -232,8 +232,8 @@ assert.match(
 );
 assert.match(
   await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"),
-  /mergedDoctorOptionsFromD1[\s\S]*queryCanonicalDoctors[\s\S]*queryRosterFileDoctors/,
-  "available doctor candidates should merge canonical doctors with live roster-file doctors",
+  /mergedDoctorOptionsFromD1[\s\S]*queryCanonicalDoctors[\s\S]*queryRosterFileDoctors[\s\S]*buildFastDoctorOptionsFromRows/,
+  "available doctor candidates should cheaply merge canonical doctors with live roster-file doctors",
 );
 assert.match(
   await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"),
@@ -3411,6 +3411,14 @@ const staleCanonicalClaim = await postState(staleCanonicalStore, {
   claim: { sourceType: "mmc", key: "TITUS HACKMAN" },
 });
 assert.equal(staleCanonicalClaim.claims[0]?.key, "TITUS HACKMAN", "Use Selected Name should claim a doctor available only from live roster rows");
+staleCanonicalStore.d1.canonicalDoctors.clear();
+const liveOnlyClaim = await postState(staleCanonicalStore, {
+  action: "claimRosterName",
+  email: "titus@example.com",
+  password: "titus-password",
+  claim: { sourceType: "mmc", key: "TITUS HACKMAN" },
+});
+assert.equal(liveOnlyClaim.claims[0]?.key, "TITUS HACKMAN", "Use Selected Name should claim by targeted live roster lookup without canonical doctors");
 const staleCanonicalProfile = await postState(staleCanonicalStore, {
   action: "loadDoctorProfile",
   email: "rhaydon@gmail.com",
