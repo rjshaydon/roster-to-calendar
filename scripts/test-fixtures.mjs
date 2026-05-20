@@ -265,6 +265,10 @@ assert.match(appSource, /function normalizeParserRuleSenioritySelection/, "shift
 assert.match(appSource, /const key = `\$\{source\}\|\$\{code\}`/, "unresolved shift-code grouping should be by hospital and code");
 assert.match(appSource, /formatShiftCodeSeniorities/, "grouped unresolved shift-code rows should summarize detected seniorities");
 assert.match(styleSource, /#parserRuleForm[\s\S]*overflow-y: auto/, "shift-code editor form should scroll vertically when it exceeds available height");
+assert.match(appSource, /normalizeDdhParserRuleCodeText/, "DDH shift-code issues should use parser-equivalent label codes");
+assert.match(appSource, /seniority !== "Unknown"[\s\S]*some\(\(rule\) => rule\.code === code\)/, "Unknown-seniority shift-code issues should resolve by source/code");
+assert.match(appSource, /isKnownResolvedShiftCodeValue/, "derived warnings should not be synthesized for built-in recognised shift labels");
+assert.match(appSource, /if \(parsedRosterSources\)[\s\S]*await updatePreview\(\)[\s\S]*else if \(latestPreview\)/, "saving parser rules should refresh the visible preview before trying to reparse cloud file refs");
 assert.match(
   appSource.match(/function renderParserRulesCard[\s\S]*?function collectUnknownShiftIssues/)?.[0] || "",
   /parserRuleSuggestions\.length \? `[\s\S]*<strong>User suggestions<\/strong>/,
@@ -3614,6 +3618,74 @@ const hmoAssjReappears = await postState(stateStore, {
   },
 });
 assert.equal(hmoAssjReappears.ignored, undefined, "deleted shift-code disambiguations should allow unresolved reports to reappear");
+const knownDdhClinicalSupport = await postState(stateStore, {
+  action: "reportUserError",
+  email: "patrick@example.com",
+  password: "patrick-password",
+  errorId: "DDH::Unknown::Clinical Support",
+  message: "DDH shift code not recognised; using explicit roster time.",
+  issue: {
+    source: "DDH",
+    seniority: "Unknown",
+    date: "2026-03-02",
+    rawValue: "Clinical Support",
+    message: "DDH shift code not recognised; using explicit roster time.",
+    fingerprint: "DDH::Unknown::Clinical Support",
+  },
+});
+assert.equal(knownDdhClinicalSupport.ignored, true, "known DDH Clinical Support mappings should not enter unresolved shift-code queues");
+const knownDdhSsuSms = await postState(stateStore, {
+  action: "reportUserError",
+  email: "patrick@example.com",
+  password: "patrick-password",
+  errorId: "DDH::Unknown::SSU SMS",
+  message: "DDH shift code not recognised; using explicit roster time.",
+  issue: {
+    source: "DDH",
+    seniority: "Unknown",
+    date: "2026-03-06",
+    rawValue: "SSU SMS",
+    message: "DDH shift code not recognised; using explicit roster time.",
+    fingerprint: "DDH::Unknown::SSU SMS",
+  },
+});
+assert.equal(knownDdhSsuSms.ignored, true, "known DDH SSU SMS mappings should not enter unresolved shift-code queues");
+await postState(stateStore, {
+  action: "saveParserExtensionRule",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  source: "DDH",
+  rawValue: "Rover AM",
+  rules: ["SMS", "CMO"].map((seniority) => ({
+    source: "DDH",
+    seniority,
+    code: "ROVER AM",
+    kind: "shift",
+    base: "Rover",
+    period: "AM",
+    suffix: "",
+    allDay: false,
+    startTime: "08:00",
+    endTime: "18:00",
+    includeAsShift: true,
+  })),
+});
+const staleUnknownRover = await postState(stateStore, {
+  action: "reportUserError",
+  email: "patrick@example.com",
+  password: "patrick-password",
+  errorId: "DDH::Unknown::Rover AM",
+  message: "DDH shift label not recognised; using roster time.",
+  issue: {
+    source: "DDH",
+    seniority: "Unknown",
+    date: "2026-05-14",
+    rawValue: "Rover AM",
+    message: "DDH shift label not recognised; using roster time.",
+    fingerprint: "DDH::Unknown::Rover AM",
+  },
+});
+assert.equal(staleUnknownRover.ignored, true, "stale Unknown-seniority DDH warnings should resolve once a source/code rule exists");
 const accParserSave = await postState(stateStore, {
   action: "saveParserExtensionRule",
   email: "rhaydon@gmail.com",

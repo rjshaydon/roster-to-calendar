@@ -1943,9 +1943,13 @@ async function isIssueResolvedByParserRules(store, email, issue, db = null) {
   const seniority = sanitizeRuleSeniority(issue?.seniority);
   const code = parserRuleCodeForIssue(issue);
   if (!source || !code) return false;
+  if (isKnownResolvedShiftCodeValue(source, issue?.rawValue || code)) return true;
   const config = await buildIssueConfig(store, email, db);
   const rules = sanitizeParserExtensionRules(config.parserExtensions);
   const sourceRules = rules[source.toLowerCase()] || [];
+  if (seniority === "Unknown") {
+    return sourceRules.some((rule) => rule.source === source && rule.code === code);
+  }
   return sourceRules.some((rule) => rule.source === source && rule.seniority === seniority && rule.code === code);
 }
 
@@ -1985,6 +1989,7 @@ function parserRuleCodeFromRawValue(sourceValue, rawValue) {
   const source = sanitizeIssueSource(sourceValue);
   const text = String(rawValue || "").trim();
   const upper = text.toUpperCase();
+  if (source === "DDH") return normalizeDdhParserRuleCodeText(text);
   if (source === "MMC" || source === "Casey") {
     const prefixMatch = upper.match(/^\s*\d{2}:?\d{2}\s*[-–]\s*\d{2}:?\d{2}\s+(.+?)\s*$/);
     if (prefixMatch) return prefixMatch[1].trim().toUpperCase();
@@ -1992,6 +1997,30 @@ function parserRuleCodeFromRawValue(sourceValue, rawValue) {
     if (suffixMatch) return suffixMatch[1].trim().toUpperCase();
   }
   return upper;
+}
+
+function normalizeDdhParserRuleCodeText(value) {
+  const text = String(value || "").trim();
+  const upper = text.toUpperCase();
+  const aliases = new Map([
+    ["CLINICAL SUPPORT", "CS"],
+    ["SSU SMS", "SSU"],
+    ["ORANGE PM (ON-CALL)", "ORANGE PM"],
+    ["PM FAST IC", "FAST PM"],
+    ["ORANGE AM IC", "ORANGE AM"],
+    ["ONSITE CS", "CS ONSITE"],
+  ]);
+  return aliases.get(upper) || upper;
+}
+
+function isKnownResolvedShiftCodeValue(sourceValue, rawValue) {
+  const source = sanitizeIssueSource(sourceValue);
+  const code = parserRuleCodeFromRawValue(source, rawValue);
+  if (source === "DDH") {
+    if (["CS", "CS ONSITE", "SSU"].includes(code)) return true;
+    if (/^(ORANGE|SILVER|FAST|AVAO)\s+(AM|PM)$/.test(code)) return true;
+  }
+  return false;
 }
 
 function sanitizeRepositoryFileIds(ids = []) {

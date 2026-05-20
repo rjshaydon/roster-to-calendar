@@ -2190,7 +2190,7 @@ function buildClientPreviewData(baseData) {
       const override = overrides[issue.id] || {};
       const reviewItem = reviewIndex.get(issue.id);
       const include = typeof override.include === "boolean" ? override.include : reviewItem?.include ?? true;
-      return include && !isSuppressedIssue(issue);
+      return include && !isSuppressedIssue(issue) && !isShiftCodeResolvedByActiveRules(issue);
       }),
       ...deletedItems,
     ],
@@ -2213,7 +2213,8 @@ function incompleteShiftCodeIssueForReviewItem(item, event = null) {
   const code = incompleteShiftCodeFromTitle(source, normalizedTitle) || parserRuleCodeFromRawValue(source, rawValue);
   if (!source || !seniority || !code || !rawValue) return null;
   if (!looksLikeIncompleteShiftCodeTitle(source, normalizedTitle, code)) return null;
-  if (parserRuleExistsForIssue({ source, seniority, code, rawValue: code })) return null;
+  if (isKnownResolvedShiftCodeValue(source, rawValue, normalizedTitle)) return null;
+  if (isShiftCodeResolvedByActiveRules({ source, seniority, code, rawValue: code })) return null;
   const id = issueFingerprint(source, code, seniority);
   return {
     id,
@@ -2237,6 +2238,9 @@ function incompleteShiftCodeFromTitle(source, title) {
   const core = prefix && text.toUpperCase().startsWith(prefix.toUpperCase())
     ? text.slice(prefix.length).trim()
     : text;
+  if (normalizedSource === "DDH" && /^[A-Z0-9/]+(?:\s+(?:AM|PM|NIGHT))?$/i.test(core)) {
+    return normalizeDdhParserRuleCodeText(core);
+  }
   return /^[A-Z0-9/]{2,8}$/.test(core) ? core.toUpperCase() : "";
 }
 
@@ -5765,6 +5769,7 @@ function parserRuleCodeFromRawValue(sourceValue, rawValue) {
   const source = sanitizeIssueSource(sourceValue);
   const text = String(rawValue || "").trim();
   const upper = text.toUpperCase();
+  if (source === "DDH") return normalizeDdhParserRuleCodeText(text);
   if (source === "MMC" || source === "Casey") {
     const prefixMatch = upper.match(/^\s*\d{2}:?\d{2}\s*[-–]\s*\d{2}:?\d{2}\s+(.+?)\s*$/);
     if (prefixMatch) return prefixMatch[1].trim().toUpperCase();
@@ -5772,6 +5777,20 @@ function parserRuleCodeFromRawValue(sourceValue, rawValue) {
     if (suffixMatch) return suffixMatch[1].trim().toUpperCase();
   }
   return upper;
+}
+
+function normalizeDdhParserRuleCodeText(value) {
+  const text = String(value || "").trim();
+  const upper = text.toUpperCase();
+  const aliases = new Map([
+    ["CLINICAL SUPPORT", "CS"],
+    ["SSU SMS", "SSU"],
+    ["ORANGE PM (ON-CALL)", "ORANGE PM"],
+    ["PM FAST IC", "FAST PM"],
+    ["ORANGE AM IC", "ORANGE AM"],
+    ["ONSITE CS", "CS ONSITE"],
+  ]);
+  return aliases.get(upper) || upper;
 }
 
 function parserRulePeriodForIssue(issue) {
@@ -6967,7 +6986,8 @@ function collectUnknownShiftIssues() {
       const seniority = sanitizeRuleSeniority(issue.seniority);
       const code = parserRuleCodeForIssue(issue);
       if (!source || !code) continue;
-      if (parserRuleExistsForIssue({ source, seniority, rawValue: code })) continue;
+      if (isKnownResolvedShiftCodeValue(source, issue.rawValue, issue.suggestedTitle)) continue;
+      if (isShiftCodeResolvedByActiveRules({ source, seniority, code, rawValue: code })) continue;
       const key = `${source}|${code}`;
       const existing = byKey.get(key);
       if (existing) {
@@ -7335,7 +7355,30 @@ function parserRuleExistsForIssue(issue) {
   const source = sanitizeIssueSource(issue?.source);
   const seniority = sanitizeRuleSeniority(issue?.seniority);
   const code = parserRuleCodeForIssue(issue);
-  return Boolean(findParserExtensionRuleForSeniority(source, seniority, code));
+  return isShiftCodeResolvedByActiveRules({ source, seniority, code });
+}
+
+function isShiftCodeResolvedByActiveRules(issue) {
+  const source = sanitizeIssueSource(issue?.source);
+  const seniority = sanitizeRuleSeniority(issue?.seniority);
+  const code = parserRuleCodeForIssue(issue);
+  if (!source || !code) return false;
+  if (seniority !== "Unknown") return Boolean(findParserExtensionRuleForSeniority(source, seniority, code));
+  const sourceKey = source.toLowerCase();
+  return sanitizeParserExtensionRuleList(parserExtensions?.[sourceKey], source)
+    .some((rule) => rule.code === code);
+}
+
+function isKnownResolvedShiftCodeValue(sourceValue, rawValue, normalizedTitle = "") {
+  const source = sanitizeIssueSource(sourceValue);
+  const code = parserRuleCodeFromRawValue(source, rawValue);
+  if (!source || !code) return false;
+  if (source === "DDH") {
+    if (["CS", "CS ONSITE", "SSU"].includes(code)) return true;
+    if (/^(ORANGE|SILVER|FAST|AVAO)\s+(AM|PM)$/.test(code)) return true;
+  }
+  const titleCode = incompleteShiftCodeFromTitle(source, normalizedTitle);
+  return Boolean(titleCode && isShiftCodeResolvedByActiveRules({ source, seniority: "Unknown", code: titleCode }));
 }
 
 function issueMatchesSavedParserRule(issue, rule) {
@@ -7740,9 +7783,8 @@ async function saveParserRuleFromModal() {
     closeParserRuleModal();
     await loadServerUsers();
     renderAccountsModal();
-    if (selectedFiles.length) {
-      parsedRosterSources = null;
-      await analyzeFiles({ preserveVisiblePreview: true });
+    if (parsedRosterSources) {
+      await updatePreview();
     } else if (latestPreview) {
       latestPreview = {
         ...latestPreview,
@@ -7754,6 +7796,9 @@ async function saveParserRuleFromModal() {
         } : item),
       };
       rebuildClientPreview();
+    } else if (selectedFiles.length) {
+      parsedRosterSources = null;
+      await analyzeFiles({ preserveVisiblePreview: true });
     }
     setStatus(includeAsShift ? "Shift code added to the parser." : "Shift code hidden from calendar.");
   } catch (error) {
