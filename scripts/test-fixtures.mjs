@@ -230,6 +230,16 @@ assert.match(
   /if \(!doctorDiagnostics\.length\)[\s\S]*queryRosterFileDoctors\(db\)[\s\S]*resolveCanonicalDoctorOptionForKey/,
   "doctor profile load should reserve full canonical rebuilds for the rare targeted-lookup miss path",
 );
+assert.match(
+  await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"),
+  /mergedDoctorOptionsFromD1[\s\S]*queryCanonicalDoctors[\s\S]*queryRosterFileDoctors/,
+  "available doctor candidates should merge canonical doctors with live roster-file doctors",
+);
+assert.match(
+  await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"),
+  /doctorProfileLoadDiagnostics/,
+  "failed doctor profile loads should return targeted diagnostics",
+);
 assert.match(appSource, /data-replace-active-rosters/, "creator UI should expose a roster recovery action");
 assert.match(appSource, /<strong>Roster database<\/strong>/, "system card should use plain roster-database language");
 assert.match(appSource, /source file\$\{retainedSourceTotal === 1 \? \"\" : \"s\"\} retained/, "system card should report retained raw source coverage");
@@ -273,6 +283,23 @@ assert.match(
   appSource.match(/function renderParserRulesCard[\s\S]*?function collectUnknownShiftIssues/)?.[0] || "",
   /parserRuleSuggestions\.length \? `[\s\S]*<strong>User suggestions<\/strong>/,
   "empty user-suggestion sections should be omitted",
+);
+assert.match(appSource, /function visibleAdminIssues/, "admin warnings should have one shared visible-issue predicate");
+assert.match(
+  appSource.match(/function renderAdminErrorsCard[\s\S]*?function subscriptionUrl/)?.[0] || "",
+  /visibleAdminIssues/,
+  "Admin Errors should hide resolved parser-warning evidence at render time",
+);
+assert.match(
+  appSource.match(/function openParserRuleModalFromPreviewIssue[\s\S]*?function openParserRuleModalFromRule/)?.[0] || "",
+  /renderedPreviewIssueIndex[\s\S]*buildClientPreviewData\(latestPreview\)\.issues/,
+  "Warnings-panel shift-code editing should find synthesized rendered issues",
+);
+assert.match(appSource, /function rosterDoctorIdentityKey/, "claim dropdowns should use stable roster doctor identities");
+assert.match(
+  appSource.match(/function renderClaimSection[\s\S]*?async function updatePreview/)?.[0] || "",
+  /renderedClaimDoctorIndex[\s\S]*rosterDoctorIdentityKey[\s\S]*findAvailableRosterDoctorByIdentity/,
+  "Use Selected Name should resolve doctors by source/key instead of fragile array index",
 );
 assert.match(appSource, /function exportHospitalOptions/, "one-off exports should expose hospital options");
 assert.match(appSource, /Recognised hospitals &amp; default locations/, "account modal should expose recognised hospital locations");
@@ -3317,6 +3344,84 @@ const manyDoctorsEnrichment = await postState(manyDoctorsStore, {
 });
 assert.equal(manyDoctorsEnrichment.availableDoctors.length, 90);
 assert.ok(manyDoctorsStore.accountListCalls <= 2, "available doctor claimed status should avoid repeated account scans");
+
+const staleCanonicalStore = new MemoryStore();
+staleCanonicalStore.d1 = new MemoryD1();
+seedD1Repository(staleCanonicalStore.d1, [{
+  id: "stale-canonical-roster",
+  name: "AdultMMCTerm2.2026.Ver1.pdf",
+  sourceType: "mmc",
+  active: true,
+  doctors: [
+    { key: "TITUS HACKMAN", displayName: "Titus HACKMAN", sourceType: "mmc" },
+  ],
+}]);
+staleCanonicalStore.d1.canonicalDoctors.set("OTHER DOCTOR", {
+  canonical_key: "OTHER DOCTOR",
+  display_name: "Other Doctor",
+  source_type: "mmc",
+  source_types_json: JSON.stringify(["mmc"]),
+  aliases_json: JSON.stringify([{ sourceType: "mmc", key: "OTHER DOCTOR", displayName: "Other Doctor" }]),
+  has_events: 1,
+});
+staleCanonicalStore.d1.events.set("titus-stale-canonical-shift", {
+  id: "titus-stale-canonical-shift",
+  file_id: "stale-canonical-roster",
+  source_type: "mmc",
+  doctor_key: "TITUS HACKMAN",
+  display_name: "Titus HACKMAN",
+  start_date: "2026-05-06",
+  end_date: "2026-05-06",
+  start_ts: "2026-05-06T08:00:00",
+  end_ts: "2026-05-06T17:00:00",
+  title: "MMC: Ward AM",
+  raw_value: "0800-1700 WARD",
+  seniority: "Intern",
+  location: "",
+  all_day: 0,
+  time_label: "08:00-17:00",
+  event_json: JSON.stringify({
+    id: "titus-stale-canonical-shift",
+    source: "MMC",
+    title: "MMC: Ward AM",
+    seniority: "Intern",
+    allDay: false,
+    start: "2026-05-06T08:00:00",
+    end: "2026-05-06T17:00:00",
+    rawValue: "0800-1700 WARD",
+    timeLabel: "08:00-17:00",
+  }),
+});
+await postState(staleCanonicalStore, {
+  action: "login",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+});
+await seedUser(staleCanonicalStore, "titus@example.com", "titus-password", "Titus Hackman");
+const staleCanonicalAvailable = await postState(staleCanonicalStore, {
+  action: "resolveAccountClaims",
+  email: "titus@example.com",
+  password: "titus-password",
+});
+assert.ok(staleCanonicalAvailable.availableDoctors.some((doctor) => doctor.key === "TITUS HACKMAN"), "live roster-file doctors should appear even when canonical doctors are stale");
+const staleCanonicalClaim = await postState(staleCanonicalStore, {
+  action: "claimRosterName",
+  email: "titus@example.com",
+  password: "titus-password",
+  claim: { sourceType: "mmc", key: "TITUS HACKMAN" },
+});
+assert.equal(staleCanonicalClaim.claims[0]?.key, "TITUS HACKMAN", "Use Selected Name should claim a doctor available only from live roster rows");
+const staleCanonicalProfile = await postState(staleCanonicalStore, {
+  action: "loadDoctorProfile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  profileId: "TITUS HACKMAN::mmc",
+  doctorKey: "TITUS HACKMAN",
+  displayName: "Titus HACKMAN",
+  sourceTypes: ["mmc"],
+});
+assert.equal(staleCanonicalProfile.snapshotAvailable, true, "doctor profile load should use live roster rows even when canonical doctors are stale");
+assert.ok(staleCanonicalProfile.snapshot.preview.events.some((event) => event.rawValue === "0800-1700 WARD"));
 
 const profileImports = await postStateRaw(stateStore, {
   action: "loadDoctorProfileImports",

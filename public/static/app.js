@@ -229,6 +229,7 @@ let previewDisplayDraft = null;
 let overrides = {};
 let latestPreview = null;
 let reviewIndex = new Map();
+let renderedPreviewIssueIndex = new Map();
 let customEvents = [];
 let currentPreviewEvents = new Map();
 let availablePreviewHospitals = [];
@@ -261,6 +262,7 @@ let currentRosterClaims = [];
 let currentSuggestedClaims = [];
 let latestNameMatches = [];
 let availableRosterDoctors = [];
+let renderedClaimDoctorIndex = new Map();
 let currentSubscription = null;
 let currentInsightsEnabled = currentUserRole === "creator";
 let creatorCalendarSourceFileRefs = [];
@@ -1999,13 +2001,19 @@ function renderClaimSection() {
   if (!claimSection) return;
   const shouldShow = !canUseDoctorPicker() && !doctorOptions.length && availableRosterDoctors.length;
   claimSection.classList.toggle("hidden", !shouldShow);
-  if (!shouldShow) return;
+  if (!shouldShow) {
+    renderedClaimDoctorIndex = new Map();
+    return;
+  }
 
   const unclaimed = [];
   const claimed = [];
+  renderedClaimDoctorIndex = new Map();
   availableRosterDoctors.forEach((doctor, index) => {
+    const identity = rosterDoctorIdentityKey(doctor) || `index:${index}`;
+    renderedClaimDoctorIndex.set(identity, doctor);
     const item = {
-      index,
+      identity,
       claimed: Boolean(doctor.claimedBy),
       label: `${doctor.displayName} (${doctor.sourceType.toUpperCase()})${doctor.claimedBy ? " - already claimed" : ""}`,
     };
@@ -2015,15 +2023,15 @@ function renderClaimSection() {
   claimed.sort((left, right) => left.label.localeCompare(right.label));
   claimDoctorSelect.innerHTML = `
     <option value="">My name is not listed</option>
-    ${unclaimed.length ? `<optgroup label="Unclaimed names">${unclaimed.map((item) => `<option value="${item.index}">${escapeHtml(item.label)}</option>`).join("")}</optgroup>` : ""}
-    ${claimed.length ? `<optgroup label="Already claimed">${claimed.map((item) => `<option value="${item.index}" class="claimed-option">${escapeHtml(item.label)}</option>`).join("")}</optgroup>` : ""}
+    ${unclaimed.length ? `<optgroup label="Unclaimed names">${unclaimed.map((item) => `<option value="${escapeHtml(item.identity)}">${escapeHtml(item.label)}</option>`).join("")}</optgroup>` : ""}
+    ${claimed.length ? `<optgroup label="Already claimed">${claimed.map((item) => `<option value="${escapeHtml(item.identity)}" class="claimed-option">${escapeHtml(item.label)}</option>`).join("")}</optgroup>` : ""}
   `;
   claimDoctorButton.disabled = true;
 }
 
 async function claimSelectedRosterName(candidateOverride = null) {
-  const index = Number(claimDoctorSelect.value);
-  const candidate = candidateOverride || (Number.isInteger(index) ? availableRosterDoctors[index] : null);
+  const selectedIdentity = String(claimDoctorSelect.value || "").trim();
+  const candidate = candidateOverride || renderedClaimDoctorIndex.get(selectedIdentity) || findAvailableRosterDoctorByIdentity(selectedIdentity);
   if (!candidate) {
     setStatus("If your name is not listed, upload the first roster file for your hospital.", true);
     return;
@@ -2057,6 +2065,18 @@ async function claimSelectedRosterName(candidateOverride = null) {
   } catch (error) {
     setStatus(error.message || "Could not link roster name.", true);
   }
+}
+
+function rosterDoctorIdentityKey(doctor) {
+  const sourceType = String(doctor?.sourceType || doctor?.sourceTypes?.[0] || "").trim().toLowerCase();
+  const key = normalizeRosterName(doctor?.key || "");
+  return sourceType && key ? `${sourceType}:${key}` : "";
+}
+
+function findAvailableRosterDoctorByIdentity(identity = "") {
+  const normalized = String(identity || "").trim();
+  if (!normalized) return null;
+  return availableRosterDoctors.find((doctor) => rosterDoctorIdentityKey(doctor) === normalized) || null;
 }
 
 async function updatePreview(options = {}) {
@@ -2500,9 +2520,11 @@ function renderIssues(items) {
   if (!items.length) {
     issuesPanel.classList.add("hidden");
     issuesList.innerHTML = "";
+    renderedPreviewIssueIndex = new Map();
     return;
   }
 
+  renderedPreviewIssueIndex = new Map(items.map((item) => [item.id, item]));
   issuesList.innerHTML = items.map((item) => `
     <article class="issue-card issue-${item.status}" data-review-id="${item.id}" tabindex="0" role="button">
       <div>
@@ -5334,6 +5356,7 @@ function resetTransientCalendarData() {
 function clearPreviewData() {
   latestPreview = null;
   reviewIndex = new Map();
+  renderedPreviewIssueIndex = new Map();
   currentPreviewEvents = new Map();
   availablePreviewHospitals = [];
   reportedIssueFingerprints = new Set();
@@ -6975,7 +6998,7 @@ function renderParserRulesCard() {
 function collectUnknownShiftIssues() {
   const byKey = new Map();
   for (const user of serverUsers.map(normalizeServerUser)) {
-    for (const issue of user.adminIssues || []) {
+    for (const issue of visibleAdminIssues(user)) {
       const source = sanitizeIssueSource(issue.source);
       const seniority = sanitizeRuleSeniority(issue.seniority);
       const code = parserRuleCodeForIssue(issue);
@@ -7117,11 +7140,13 @@ function adminIssueCount() {
   return serverUsers
     .map(normalizeServerUser)
     .filter((user) => user.email !== OWNER_EMAIL)
-    .reduce((total, user) => total + ((user.adminIssues || []).length || 0), 0);
+    .reduce((total, user) => total + visibleAdminIssues(user).length, 0);
 }
 
 function renderAdminErrorsCard(users) {
-  const issueUsers = users.filter((user) => (user.adminIssues || []).length);
+  const issueUsers = users.map(normalizeServerUser)
+    .map((user) => ({ ...user, visibleAdminIssues: visibleAdminIssues(user) }))
+    .filter((user) => user.visibleAdminIssues.length);
   return `
     <article class="review-card">
       <div class="review-top">
@@ -7138,7 +7163,7 @@ function renderAdminErrorsCard(users) {
               <p>${escapeHtml(user.email)}</p>
             </div>
             <div class="issues-list">
-              ${(user.adminIssues || []).map((issue) => `
+              ${user.visibleAdminIssues.map((issue) => `
                 <article class="issue-card">
                   <div>
                     <strong>${escapeHtml(`${user.realName || user.email} · ${issue.source || "Roster"} · ${formatDate(issue.date || issue.startDay || "")}`)}</strong>
@@ -7165,6 +7190,26 @@ function renderAdminErrorsCard(users) {
       </div>
     </article>
   `;
+}
+
+function visibleAdminIssues(user) {
+  return (normalizeServerUser(user).adminIssues || []).filter((issue) => shouldShowAdminIssue(issue));
+}
+
+function shouldShowAdminIssue(issue) {
+  if (!issue) return false;
+  if (isSuppressedIssue(issue)) return false;
+  if (!isShiftCodeIssue(issue)) return true;
+  const source = sanitizeIssueSource(issue.source);
+  const code = parserRuleCodeForIssue(issue);
+  if (source && code && isKnownResolvedShiftCodeValue(source, issue.rawValue, issue.suggestedTitle)) return false;
+  if (source && code && isShiftCodeResolvedByActiveRules({
+    source,
+    seniority: issue.seniority,
+    code,
+    rawValue: code,
+  })) return false;
+  return true;
 }
 
 function subscriptionUrl(protocol = "https", view = "full") {
@@ -7383,6 +7428,16 @@ function issueMatchesSavedParserRule(issue, rule) {
     && parserRuleCodeForIssue(issue) === normalizedRule.code;
 }
 
+function issueResolvedBySavedParserRule(issue, rule) {
+  const normalizedRule = sanitizeParserExtensionRule(rule);
+  if (!normalizedRule) return false;
+  const source = sanitizeIssueSource(issue?.source);
+  const seniority = sanitizeRuleSeniority(issue?.seniority);
+  const code = parserRuleCodeForIssue(issue);
+  if (source !== normalizedRule.source || code !== normalizedRule.code) return false;
+  return seniority === "Unknown" || seniority === normalizedRule.seniority;
+}
+
 function parserRulesEquivalent(left, right) {
   const leftRule = sanitizeParserExtensionRule(left);
   const rightRule = sanitizeParserExtensionRule(right);
@@ -7493,7 +7548,10 @@ function openParserRuleModal(email, errorId = "", selectedSeniorities = []) {
 }
 
 function openParserRuleModalFromPreviewIssue(issueId = "") {
-  const issue = (latestPreview?.issues || []).find((item) => item.id === issueId) || null;
+  const issue = renderedPreviewIssueIndex.get(issueId)
+    || (latestPreview?.issues || []).find((item) => item.id === issueId)
+    || (latestPreview ? buildClientPreviewData(latestPreview).issues.find((item) => item.id === issueId) : null)
+    || null;
   if (!issue) {
     setStatus("Could not find that parser warning.", true);
     return;
@@ -7782,8 +7840,8 @@ async function saveParserRuleFromModal() {
     } else if (latestPreview) {
       latestPreview = {
         ...latestPreview,
-        issues: (latestPreview.issues || []).filter((issue) => !rules.some((savedRule) => issueMatchesSavedParserRule(issue, savedRule))),
-        review: (latestPreview.review || []).map((item) => rules.some((savedRule) => issueMatchesSavedParserRule(item, savedRule)) ? {
+        issues: (latestPreview.issues || []).filter((issue) => !rules.some((savedRule) => issueResolvedBySavedParserRule(issue, savedRule))),
+        review: (latestPreview.review || []).map((item) => rules.some((savedRule) => issueResolvedBySavedParserRule(item, savedRule)) ? {
           ...item,
           status: "ok",
           warnings: [],
