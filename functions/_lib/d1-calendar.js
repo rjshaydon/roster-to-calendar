@@ -90,6 +90,26 @@ async function ensureCalendarSchemaUncached(db) {
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_events_source_range ON roster_events (source_type, start_date, end_date)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_events_file ON roster_events (file_id)").run();
   await db.prepare(`
+    CREATE TABLE IF NOT EXISTS roster_issues (
+      id TEXT PRIMARY KEY,
+      file_id TEXT NOT NULL,
+      source_type TEXT NOT NULL,
+      doctor_key TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      start_date TEXT NOT NULL DEFAULT '',
+      raw_value TEXT NOT NULL DEFAULT '',
+      seniority TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT '',
+      message TEXT NOT NULL DEFAULT '',
+      resolution_type TEXT NOT NULL DEFAULT '',
+      suggested_title TEXT NOT NULL DEFAULT '',
+      time_label TEXT NOT NULL DEFAULT '',
+      issue_json TEXT NOT NULL
+    )
+  `).run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_issues_doctor_date ON roster_issues (doctor_key, start_date)").run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_issues_file ON roster_issues (file_id)").run();
+  await db.prepare(`
     CREATE TABLE IF NOT EXISTS account_profiles (
       email TEXT PRIMARY KEY,
       real_name TEXT NOT NULL DEFAULT '',
@@ -265,7 +285,8 @@ export async function upsertDerivedRosterFile(db, file, storedImport) {
   for (const doctor of doctors) {
     const view = await buildRosterViewFromStoredImports([{ ...storedImport, sourceType, id: file.id, repoId: file.id }], doctor.key, defaultSettings(), {}, {}, []);
     const events = view.events.map(serializeEvent);
-    derivedByDoctor.push({ doctor, events });
+    const issues = (view.issues || []).map(sanitizeIssue).filter(Boolean);
+    derivedByDoctor.push({ doctor, events, issues });
     totalEvents += events.length;
   }
   if (!doctors.length || totalEvents <= 0) return { ok: false, reason: "zero-events", doctors: doctors.length, events: totalEvents };
@@ -297,7 +318,8 @@ export async function upsertDerivedRosterFile(db, file, storedImport) {
   ).run();
   await db.prepare("DELETE FROM roster_file_doctors WHERE file_id = ?").bind(file.id).run();
   await db.prepare("DELETE FROM roster_events WHERE file_id = ?").bind(file.id).run();
-  for (const { doctor, events } of derivedByDoctor) {
+  await db.prepare("DELETE FROM roster_issues WHERE file_id = ?").bind(file.id).run();
+  for (const { doctor, events, issues } of derivedByDoctor) {
     await db.prepare(`
       INSERT INTO roster_doctors (source_type, doctor_key, display_name, updated_at)
       VALUES (?, ?, ?, ?)
@@ -335,11 +357,34 @@ export async function upsertDerivedRosterFile(db, file, storedImport) {
         JSON.stringify(event),
       ).run();
     }
+    for (const issue of issues) {
+      await db.prepare(`
+        INSERT INTO roster_issues (
+          id, file_id, source_type, doctor_key, display_name, start_date, raw_value, seniority,
+          status, message, resolution_type, suggested_title, time_label, issue_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(
+        `${file.id}:${doctor.key}:${issue.id}`,
+        file.id,
+        sourceType,
+        doctor.key,
+        doctor.displayName,
+        String(issue.startDay || issue.date || ""),
+        String(issue.rawValue || ""),
+        String(issue.seniority || ""),
+        String(issue.status || ""),
+        String(issue.message || ""),
+        String(issue.resolutionType || ""),
+        String(issue.suggestedTitle || ""),
+        String(issue.timeLabel || ""),
+        JSON.stringify(issue),
+      ).run();
+    }
   }
   return { ok: true, doctors: doctors.length, events: totalEvents };
 }
 
-export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor) {
+export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor, issuesByDoctor = {}) {
   if (!db?.prepare || !file?.id) return { ok: false, reason: "missing-input" };
   await ensureCalendarSchema(db);
   const sourceType = normalizeSourceType(file.sourceType);
@@ -374,10 +419,12 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
   statements.push(
     db.prepare("DELETE FROM roster_file_doctors WHERE file_id = ?").bind(file.id),
     db.prepare("DELETE FROM roster_events WHERE file_id = ?").bind(file.id),
+    db.prepare("DELETE FROM roster_issues WHERE file_id = ?").bind(file.id),
     ...bulkUpsertDoctorStatements(db, sourceType, safeDoctors, parsedAt),
     ...bulkInsertFileDoctorStatements(db, file.id, sourceType, safeDoctors),
   );
   const eventRows = [];
+  const issueRows = [];
   for (const doctor of safeDoctors) {
     const events = Array.isArray(eventsByDoctor?.[doctor.key]) ? eventsByDoctor[doctor.key] : [];
     for (const event of events.map(sanitizeEvent).filter(Boolean)) {
@@ -400,10 +447,30 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
         JSON.stringify(event),
       ]);
     }
+    const issues = Array.isArray(issuesByDoctor?.[doctor.key]) ? issuesByDoctor[doctor.key] : [];
+    for (const issue of issues.map(sanitizeIssue).filter(Boolean)) {
+      issueRows.push([
+        `${file.id}:${doctor.key}:${issue.id}`,
+        file.id,
+        sourceType,
+        doctor.key,
+        doctor.displayName,
+        String(issue.startDay || issue.date || ""),
+        String(issue.rawValue || ""),
+        String(issue.seniority || ""),
+        String(issue.status || ""),
+        String(issue.message || ""),
+        String(issue.resolutionType || ""),
+        String(issue.suggestedTitle || ""),
+        String(issue.timeLabel || ""),
+        JSON.stringify(issue),
+      ]);
+    }
   }
   statements.push(...bulkInsertEventStatements(db, eventRows));
+  statements.push(...bulkInsertIssueStatements(db, issueRows));
   await runTransactionalBatch(db, statements);
-  return { ok: true, doctors: safeDoctors.length, events: eventRows.length };
+  return { ok: true, doctors: safeDoctors.length, events: eventRows.length, issues: issueRows.length };
 }
 
 export async function setDerivedRosterFileActive(db, fileId, active) {
@@ -416,6 +483,7 @@ export async function deleteDerivedRosterFile(db, fileId) {
   if (!db?.prepare || !fileId) return;
   await ensureCalendarSchema(db);
   await db.prepare("DELETE FROM roster_events WHERE file_id = ?").bind(fileId).run();
+  await db.prepare("DELETE FROM roster_issues WHERE file_id = ?").bind(fileId).run();
   await db.prepare("DELETE FROM roster_file_doctors WHERE file_id = ?").bind(fileId).run();
   await db.prepare("DELETE FROM roster_files WHERE id = ?").bind(fileId).run();
 }
@@ -562,6 +630,49 @@ export async function queryDoctorEventsForFileDoctorPairs(db, pairs = [], option
     ORDER BY roster_events.start_ts, roster_events.source_type, roster_events.title
   `).bind(...pairArgs, end, start).all();
   return mergeDuplicateLeaveEvents((rows.results || []).map((row) => parseEvent(row.event_json)).filter(Boolean));
+}
+
+export async function queryDoctorIssues(db, doctorKeys, options = {}) {
+  if (!db?.prepare || !doctorKeys?.length) return [];
+  await ensureCalendarSchema(db);
+  const keys = [...new Set(doctorKeys.filter(Boolean))];
+  if (!keys.length) return [];
+  const placeholders = keys.map(() => "?").join(", ");
+  const start = String(options.startDate || "0000-01-01");
+  const end = String(options.endDate || "9999-12-31");
+  const rows = await db.prepare(`
+    SELECT issue_json
+    FROM roster_issues
+    INNER JOIN roster_files ON roster_files.id = roster_issues.file_id
+    WHERE roster_files.active = 1
+      AND roster_issues.doctor_key IN (${placeholders})
+      AND roster_issues.start_date <= ?
+      AND roster_issues.start_date >= ?
+    ORDER BY roster_issues.start_date, roster_issues.source_type, roster_issues.raw_value
+  `).bind(...keys, end, start).all();
+  return (rows.results || []).map((row) => parseIssue(row.issue_json)).filter(Boolean);
+}
+
+export async function queryDoctorIssuesForFileDoctorPairs(db, pairs = [], options = {}) {
+  if (!db?.prepare || !pairs?.length) return [];
+  await ensureCalendarSchema(db);
+  const safePairs = uniqueFileDoctorPairs(pairs);
+  if (!safePairs.length) return [];
+  const pairSql = safePairs.map(() => "(roster_issues.file_id = ? AND roster_issues.doctor_key = ?)").join(" OR ");
+  const pairArgs = safePairs.flatMap((pair) => [pair.fileId, pair.doctorKey]);
+  const start = String(options.startDate || "0000-01-01");
+  const end = String(options.endDate || "9999-12-31");
+  const rows = await db.prepare(`
+    SELECT issue_json
+    FROM roster_issues
+    INNER JOIN roster_files ON roster_files.id = roster_issues.file_id
+    WHERE roster_files.active = 1
+      AND (${pairSql})
+      AND roster_issues.start_date <= ?
+      AND roster_issues.start_date >= ?
+    ORDER BY roster_issues.start_date, roster_issues.source_type, roster_issues.raw_value
+  `).bind(...pairArgs, end, start).all();
+  return (rows.results || []).map((row) => parseIssue(row.issue_json)).filter(Boolean);
 }
 
 export async function queryRosterFileDoctors(db) {
@@ -1560,11 +1671,12 @@ export async function queryOverlapDoctors(db, options = {}) {
 
 export function buildPreviewFromDerivedEvents(events, options = {}) {
   const safeEvents = mergeDuplicateLeaveEvents(events || []).map((event) => ({ ...event }));
+  const issues = (Array.isArray(options.issues) ? options.issues : []).map(sanitizeIssue).filter(Boolean);
   return {
     ...previewSummary(safeEvents),
     events: safeEvents,
     review: safeEvents.map((event) => reviewItemForEvent(event)),
-    issues: [],
+    issues,
     conflicts: [],
     imports: [],
     sources: {},
@@ -1593,6 +1705,27 @@ function reviewItemForEvent(event) {
     location: event.location || "",
     allDay: event.allDay === true,
     timeLabel: event.timeLabel || "",
+  };
+}
+
+function sanitizeIssue(value) {
+  if (!value || typeof value !== "object") return null;
+  const id = String(value.id || value.fingerprint || "").trim();
+  const source = String(value.source || "").trim();
+  const rawValue = String(value.rawValue || "").trim();
+  const message = String(value.message || "").trim();
+  if (!id || !source || !rawValue || !message) return null;
+  return {
+    id,
+    source,
+    seniority: String(value.seniority || "").trim(),
+    startDay: String(value.startDay || value.date || "").slice(0, 10),
+    rawValue,
+    status: String(value.status || "unknown").trim() || "unknown",
+    message,
+    resolutionType: String(value.resolutionType || "").trim(),
+    suggestedTitle: String(value.suggestedTitle || "").trim(),
+    timeLabel: String(value.timeLabel || "").trim(),
   };
 }
 
@@ -1679,6 +1812,14 @@ function datePart(value) {
 function parseEvent(value) {
   try {
     return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function parseIssue(value) {
+  try {
+    return sanitizeIssue(JSON.parse(value));
   } catch {
     return null;
   }
@@ -1809,6 +1950,17 @@ function bulkInsertEventStatements(db, rows) {
         id, file_id, source_type, doctor_key, display_name, start_date, end_date, start_ts, end_ts,
         title, raw_value, seniority, location, all_day, time_label, event_json
       ) VALUES ${chunk.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ")}
+    `).bind(...chunk.flat()));
+}
+
+function bulkInsertIssueStatements(db, rows) {
+  return chunkRows(rows, 10)
+    .filter((chunk) => chunk.length)
+    .map((chunk) => db.prepare(`
+      INSERT INTO roster_issues (
+        id, file_id, source_type, doctor_key, display_name, start_date, raw_value, seniority,
+        status, message, resolution_type, suggested_title, time_label, issue_json
+      ) VALUES ${chunk.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ")}
     `).bind(...chunk.flat()));
 }
 

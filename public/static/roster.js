@@ -2212,6 +2212,8 @@ function buildDefaultParserRules() {
     add(rules.ddh, "DDH", "FAST PM", seniority, "FAST", "PM", "", true, "", "", DDH_LOCATION);
     add(rules.ddh, "DDH", "AVAO AM", seniority, "AVAO", "AM", "", true, "", "", DDH_LOCATION);
     add(rules.ddh, "DDH", "AVAO PM", seniority, "AVAO", "PM", "", true, "", "", DDH_LOCATION);
+    add(rules.ddh, "DDH", "ROVER AM", seniority, "Rover", "AM", "", false, "08:00", "18:00", DDH_LOCATION);
+    add(rules.ddh, "DDH", "ROVER PM", seniority, "Rover", "PM", "", false, "14:30", "00:00", DDH_LOCATION);
     if (canWorkClinicalSupport) {
       add(rules.casey, "Casey", "CS", seniority, "CS", "", "", false, "08:00", "17:30", CASEY_LOCATION);
       add(rules.casey, "Casey", "CLIN SUPP", seniority, "CS", "", "", false, "08:00", "17:30", CASEY_LOCATION);

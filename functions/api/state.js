@@ -25,10 +25,12 @@ import {
   queryClaimedAccounts,
   queryDoctorProfileMirrors,
   queryDoctorEvents,
+  queryDoctorIssues,
   queryAccountCustomEvents,
   queryCanonicalDoctors,
   queryDoctorSeniorities,
   queryDoctorEventsForFileDoctorPairs,
+  queryDoctorIssuesForFileDoctorPairs,
   queryRosterFileDoctors,
   queryRosterFileDoctorsForKeys,
   queryRosterFileRefsForDoctors,
@@ -310,6 +312,7 @@ export async function onRequestPost(context) {
         filePayload,
         body?.doctors || [],
         body?.eventsByDoctor || {},
+        body?.issuesByDoctor || {},
       );
       const supersession = await reconcileRosterFileSupersession(context.env.ROSTER_DB, filePayload, { uploaderEmail: email });
       await refreshCanonicalDoctors(context.env.ROSTER_DB);
@@ -1676,6 +1679,15 @@ async function buildDerivedAccountSnapshot(db, context) {
         startDate: context.startDate || "",
         endDate: context.endDate || "",
       });
+  const rosterIssues = doctorPairs.length
+    ? await queryDoctorIssuesForFileDoctorPairs(db, doctorPairs, {
+        startDate: context.startDate || "",
+        endDate: context.endDate || "",
+      })
+    : await queryDoctorIssues(db, doctorKeys, {
+        startDate: context.startDate || "",
+        endDate: context.endDate || "",
+      });
   if (context.diagnostics && typeof context.diagnostics === "object") {
     context.diagnostics.selectedDoctorKey = selectedKey;
     context.diagnostics.selectedDoctorFiles = doctorDiagnostics.map(rosterFileDoctorDiagnostic);
@@ -1697,7 +1709,10 @@ async function buildDerivedAccountSnapshot(db, context) {
     schemaVersion: SNAPSHOT_SCHEMA_VERSION,
     builtAt: new Date().toISOString(),
     buildStamp: "d1-derived",
-    preview: buildPreviewFromDerivedEvents(events, { customEventsMaterialized: true }),
+    preview: buildPreviewFromDerivedEvents(events, {
+      customEventsMaterialized: true,
+      issues: filterStoredRosterIssuesForPreview(rosterIssues),
+    }),
     session: normalizedSession,
     doctorOptions,
     detectedSources: detectedSourcesForSnapshot(
@@ -2094,7 +2109,7 @@ function isKnownResolvedShiftCodeValue(sourceValue, rawValue) {
   if (source === "MCH" && ["CS", "OCS", "0CS", "CSOS"].includes(code)) return true;
   if (source === "DDH") {
     if (["CS", "CS ONSITE", "SSU"].includes(code)) return true;
-    if (/^(ORANGE|SILVER|FAST|AVAO)\s+(AM|PM)$/.test(code)) return true;
+    if (/^(ORANGE|SILVER|FAST|AVAO|ROVER)\s+(AM|PM)$/.test(code)) return true;
   }
   return false;
 }
@@ -2341,6 +2356,9 @@ async function buildDerivedDoctorProfileSnapshot(store, db, profile, ownerEmail 
     : doctorKeysForOption(profile);
   const doctorPairs = doctorDiagnostics.map((row) => ({ fileId: row.fileId, doctorKey: row.doctorKey }));
   const hospitalLocations = await loadAccountHospitalLocations(db, ownerEmail, session).catch(() => null);
+  const rosterIssues = doctorPairs.length
+    ? await queryDoctorIssuesForFileDoctorPairs(db, doctorPairs)
+    : await queryDoctorIssues(db, doctorKeys);
   const events = [
     ...applyEventOverrides(
       applyAccountHospitalLocations(
@@ -2367,7 +2385,10 @@ async function buildDerivedDoctorProfileSnapshot(store, db, profile, ownerEmail 
     schemaVersion: SNAPSHOT_SCHEMA_VERSION,
     builtAt: new Date().toISOString(),
     buildStamp: "d1-derived",
-    preview: buildPreviewFromDerivedEvents(events, { customEventsMaterialized: true }),
+    preview: buildPreviewFromDerivedEvents(events, {
+      customEventsMaterialized: true,
+      issues: filterStoredRosterIssuesForPreview(rosterIssues),
+    }),
     session: session && Object.keys(session).length ? session : { doctorKey: profile.doctorKey },
     doctorOptions: doctorOptions.length ? doctorOptions : [{
       key: profile.doctorKey,
@@ -2385,6 +2406,11 @@ async function buildDerivedDoctorProfileSnapshot(store, db, profile, ownerEmail 
     insightCache: null,
     profileCoverage: doctorProfileCoverage(doctorDiagnostics, doctorOption || profile, profileSources),
   });
+}
+
+function filterStoredRosterIssuesForPreview(issues) {
+  return (Array.isArray(issues) ? issues : [])
+    .filter((issue) => !isKnownResolvedShiftCodeValue(issue?.source, issue?.rawValue || issue?.code || ""));
 }
 
 function matchDoctorClaims(doctors, realName) {

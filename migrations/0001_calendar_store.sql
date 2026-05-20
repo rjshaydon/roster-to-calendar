@@ -51,6 +51,26 @@ CREATE INDEX IF NOT EXISTS idx_roster_events_date_source ON roster_events (start
 CREATE INDEX IF NOT EXISTS idx_roster_events_source_range ON roster_events (source_type, start_date, end_date);
 CREATE INDEX IF NOT EXISTS idx_roster_events_file ON roster_events (file_id);
 
+CREATE TABLE IF NOT EXISTS roster_issues (
+  id TEXT PRIMARY KEY,
+  file_id TEXT NOT NULL,
+  source_type TEXT NOT NULL,
+  doctor_key TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  start_date TEXT NOT NULL DEFAULT '',
+  raw_value TEXT NOT NULL DEFAULT '',
+  seniority TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT '',
+  message TEXT NOT NULL DEFAULT '',
+  resolution_type TEXT NOT NULL DEFAULT '',
+  suggested_title TEXT NOT NULL DEFAULT '',
+  time_label TEXT NOT NULL DEFAULT '',
+  issue_json TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_roster_issues_doctor_date ON roster_issues (doctor_key, start_date);
+CREATE INDEX IF NOT EXISTS idx_roster_issues_file ON roster_issues (file_id);
+
 CREATE TABLE IF NOT EXISTS raw_roster_files (
   file_id TEXT PRIMARY KEY,
   object_key TEXT NOT NULL DEFAULT '',

@@ -334,6 +334,31 @@ assert.match(
   /pruneResolvedLatestPreviewIssues\(\)/,
   "preview rendering should prune resolved warnings once review context is current",
 );
+assert.match(
+  calendarMigrationSource,
+  /CREATE TABLE IF NOT EXISTS roster_issues/,
+  "calendar migration should persist parser diagnostics beside indexed roster events",
+);
+assert.match(
+  d1CalendarSource,
+  /INSERT INTO roster_issues/,
+  "derived roster saves should persist import-time parser diagnostics",
+);
+assert.match(
+  d1CalendarSource,
+  /export async function queryDoctorIssues/,
+  "calendar loads should read stored parser diagnostics from D1",
+);
+assert.match(
+  appSource.match(/function synthesizeIncompleteShiftCodeIssues[\s\S]*?function incompleteShiftCodeIssueForReviewItem/)?.[0] || "",
+  /if \(baseData\?\.derivedFromD1\) return \[\];/,
+  "D1 calendar loads should not synthesize parser warnings from already-indexed events",
+);
+assert.match(
+  appSource.match(/async function reportPreviewIssues[\s\S]*?async function reportAccountError/)?.[0] || "",
+  /if \(latestPreview\?\.derivedFromD1\) return;/,
+  "D1 calendar loads should not report parser warnings during normal rendering",
+);
 assert.doesNotMatch(
   appSource.match(/function applyIssueConfig[\s\S]*?function sanitizeParserExtensions/)?.[0] || "",
   /pruneResolvedLatestPreviewIssues\(\)/,
@@ -505,6 +530,7 @@ const doctors = doctorOptions(mmcWorkbook, ddhWorkbook, caseyWorkbook);
 const defaultRules = parserRuleDefaults();
 const mmcRules = defaultRules.mmc || [];
 const mchRules = defaultRules.mch || [];
+const ddhRules = defaultRules.ddh || [];
 const hasMmcRule = (seniority, code) => mmcRules.some((rule) => rule.seniority === seniority && rule.code === code);
 const hasMchRule = (seniority, code, base = "") => mchRules.some((rule) => rule.seniority === seniority && rule.code === code && (!base || rule.base === base));
 assert.ok(hasMmcRule("SMS", "AGC"));
@@ -526,6 +552,8 @@ assert.ok(hasMmcRule("Intern", "NSSJ"));
 assert.ok(hasMchRule("SMS", "CS", "CS"));
 assert.ok(hasMchRule("CMO", "OCS", "CS Office"));
 assert.ok(hasMchRule("HMO", "PHNW", "PHNW"));
+assert.ok(ddhRules.some((rule) => rule.code === "ROVER AM" && rule.base === "Rover" && rule.period === "AM"));
+assert.ok(ddhRules.some((rule) => rule.code === "ROVER PM" && rule.base === "Rover" && rule.period === "PM"));
 const nssjRule = mmcRules.find((rule) => rule.seniority === "HMO" && rule.code === "NSSJ");
 assert.equal(nssjRule.startTime, "23:00");
 
@@ -944,6 +972,7 @@ class MemoryD1 {
     this.doctors = new Map();
     this.fileDoctors = new Map();
     this.events = new Map();
+    this.issues = new Map();
     this.rawFiles = new Map();
     this.accountProfiles = new Map();
     this.accountClaims = new Map();
@@ -970,6 +999,7 @@ class MemoryD1 {
       "doctors",
       "fileDoctors",
       "events",
+      "issues",
       "rawFiles",
       "accountProfiles",
       "accountClaims",
@@ -1043,6 +1073,10 @@ class MemoryD1Statement {
       for (const [key, value] of [...this.db.events.entries()]) if (value.file_id === args[0]) this.db.events.delete(key);
       return { success: true };
     }
+    if (sql.startsWith("DELETE FROM roster_issues")) {
+      for (const [key, value] of [...this.db.issues.entries()]) if (value.file_id === args[0]) this.db.issues.delete(key);
+      return { success: true };
+    }
     if (sql.startsWith("DELETE FROM roster_files")) {
       this.db.files.delete(args[0]);
       return { success: true };
@@ -1096,6 +1130,27 @@ class MemoryD1Statement {
           all_day: args[index + 13],
           time_label: args[index + 14],
           event_json: args[index + 15],
+        });
+      }
+      return { success: true };
+    }
+    if (sql.startsWith("INSERT INTO roster_issues")) {
+      for (let index = 0; index < args.length; index += 14) {
+        this.db.issues.set(args[index], {
+          id: args[index],
+          file_id: args[index + 1],
+          source_type: args[index + 2],
+          doctor_key: args[index + 3],
+          display_name: args[index + 4],
+          start_date: args[index + 5],
+          raw_value: args[index + 6],
+          seniority: args[index + 7],
+          status: args[index + 8],
+          message: args[index + 9],
+          resolution_type: args[index + 10],
+          suggested_title: args[index + 11],
+          time_label: args[index + 12],
+          issue_json: args[index + 13],
         });
       }
       return { success: true };
@@ -1316,6 +1371,26 @@ class MemoryD1Statement {
         results: ["file_id", "object_key", "type", "data_url", "uploaded_at"].map((name) => ({ name })),
       };
     }
+    if (sql.startsWith("PRAGMA table_info(roster_issues)")) {
+      return {
+        results: [
+          "id",
+          "file_id",
+          "source_type",
+          "doctor_key",
+          "display_name",
+          "start_date",
+          "raw_value",
+          "seniority",
+          "status",
+          "message",
+          "resolution_type",
+          "suggested_title",
+          "time_label",
+          "issue_json",
+        ].map((name) => ({ name })),
+      };
+    }
     if (sql.includes("FROM roster_file_doctors") && sql.includes("file_name") && sql.includes("event_count")) {
       const requestedKeys = sql.includes("roster_file_doctors.doctor_key IN") ? new Set(args) : null;
       return {
@@ -1409,6 +1484,22 @@ class MemoryD1Statement {
           .map((event) => ({ event_json: event.event_json })),
       };
     }
+    if (sql.includes("FROM roster_issues") && sql.includes("(roster_issues.file_id = ? AND roster_issues.doctor_key = ?)")) {
+      const end = args[args.length - 2];
+      const start = args[args.length - 1];
+      const pairs = new Set();
+      for (let index = 0; index < args.length - 2; index += 2) {
+        pairs.add(`${args[index]}:${args[index + 1]}`);
+      }
+      return {
+        results: [...this.db.issues.values()]
+          .filter((issue) => this.db.files.get(issue.file_id)?.active === 1)
+          .filter((issue) => pairs.has(`${issue.file_id}:${issue.doctor_key}`))
+          .filter((issue) => issue.start_date <= end && issue.start_date >= start)
+          .sort((left, right) => left.start_date.localeCompare(right.start_date))
+          .map((issue) => ({ issue_json: issue.issue_json })),
+      };
+    }
     if (sql.includes("FROM roster_events AS mine")) {
       const overlapKeyCount = (sql.match(/mine\.doctor_key IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1;
       const overlapKeys = new Set(args.slice(0, overlapKeyCount));
@@ -1469,6 +1560,19 @@ class MemoryD1Statement {
           .filter((event) => event.start_date <= end && event.end_date >= start)
           .sort((left, right) => left.start_ts.localeCompare(right.start_ts))
           .map((event) => ({ event_json: event.event_json })),
+      };
+    }
+    if (sql.includes("FROM roster_issues") && sql.includes("doctor_key IN")) {
+      const end = args[args.length - 2];
+      const start = args[args.length - 1];
+      const keys = new Set(args.slice(0, -2));
+      return {
+        results: [...this.db.issues.values()]
+          .filter((issue) => this.db.files.get(issue.file_id)?.active === 1)
+          .filter((issue) => keys.has(issue.doctor_key))
+          .filter((issue) => issue.start_date <= end && issue.start_date >= start)
+          .sort((left, right) => left.start_date.localeCompare(right.start_date))
+          .map((issue) => ({ issue_json: issue.issue_json })),
       };
     }
     if (sql.includes("FROM roster_events") && sql.includes("display_name")) {
@@ -2074,6 +2178,128 @@ const d1DirectCalendar = await postState(d1StateStore, {
   password: "d1-password",
 }, d1Store);
 assert.ok(d1DirectCalendar.snapshot.detectedSources.mmc.length > 0, "claimed D1 snapshots should retain linked roster sources");
+await postState(d1StateStore, {
+  action: "saveDerivedCalendarFile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  file: {
+    id: "ddh-rover-diagnostics",
+    name: "Dandenong 2026.xlsx",
+    sourceType: "ddh",
+    active: true,
+  },
+  doctors: [{ key: d1Doctor.key, displayName: d1Doctor.displayName, sourceType: "ddh" }],
+  eventsByDoctor: {
+    [d1Doctor.key]: [{
+      id: "ddh-rover-event",
+      source: "DDH",
+      seniority: "Unknown",
+      title: "DDH: Rover AM",
+      allDay: false,
+      start: "2026-05-14T08:00:00",
+      end: "2026-05-14T18:00:00",
+      rawValue: "Rover AM",
+      timeLabel: "08:00-18:00",
+    }],
+  },
+  issuesByDoctor: {
+    [d1Doctor.key]: [
+      {
+        id: "DDH::Unknown::2026-05-14::Rover AM",
+        source: "DDH",
+        seniority: "Unknown",
+        startDay: "2026-05-14",
+        rawValue: "Rover AM",
+        status: "unknown",
+        message: "DDH shift code not recognised; using explicit roster time.",
+        resolutionType: "shift_code",
+        suggestedTitle: "DDH: Rover AM",
+        timeLabel: "08:00-18:00",
+      },
+      {
+        id: "DDH::Unknown::2026-05-15::Mystery AM",
+        source: "DDH",
+        seniority: "Unknown",
+        startDay: "2026-05-15",
+        rawValue: "Mystery AM",
+        status: "unknown",
+        message: "DDH shift code not recognised; using explicit roster time.",
+        resolutionType: "shift_code",
+        suggestedTitle: "DDH: Mystery AM",
+        timeLabel: "08:00-18:00",
+      },
+    ],
+  },
+}, d1Store);
+assert.equal(
+  [...d1Store.issues.values()].filter((issue) => issue.file_id === "ddh-rover-diagnostics").length,
+  2,
+  "derived roster saves should persist parser diagnostics transactionally",
+);
+const d1StoredIssueCalendar = await postState(d1StateStore, {
+  action: "loadCalendarEvents",
+  email: "d1-user@example.com",
+  password: "d1-password",
+}, d1Store);
+assert.ok(
+  d1StoredIssueCalendar.snapshot.preview.events.some((event) => event.title === "DDH: Rover AM"),
+  "DDH Rover shifts should render from indexed events",
+);
+assert.equal(
+  d1StoredIssueCalendar.snapshot.preview.issues.some((issue) => issue.rawValue === "Rover AM"),
+  false,
+  "stale DDH Rover diagnostics should be hidden on first D1 calendar load",
+);
+assert.equal(
+  d1StoredIssueCalendar.snapshot.preview.issues.some((issue) => issue.rawValue === "Mystery AM"),
+  true,
+  "calendar loads should show unresolved diagnostics stored during import",
+);
+await postState(d1StateStore, {
+  action: "saveDerivedCalendarFile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  file: {
+    id: "ddh-rover-diagnostics",
+    name: "Dandenong 2026.xlsx",
+    sourceType: "ddh",
+    active: true,
+  },
+  doctors: [{ key: d1Doctor.key, displayName: d1Doctor.displayName, sourceType: "ddh" }],
+  eventsByDoctor: {
+    [d1Doctor.key]: [{
+      id: "ddh-rover-event",
+      source: "DDH",
+      seniority: "Unknown",
+      title: "DDH: Rover AM",
+      allDay: false,
+      start: "2026-05-14T08:00:00",
+      end: "2026-05-14T18:00:00",
+      rawValue: "Rover AM",
+      timeLabel: "08:00-18:00",
+    }],
+  },
+  issuesByDoctor: {},
+}, d1Store);
+assert.equal(
+  [...d1Store.issues.values()].some((issue) => issue.file_id === "ddh-rover-diagnostics"),
+  false,
+  "reparsed roster files should replace stale diagnostics instead of accumulating them",
+);
+const d1ClearedIssueCalendar = await postState(d1StateStore, {
+  action: "loadCalendarEvents",
+  email: "d1-user@example.com",
+  password: "d1-password",
+}, d1Store);
+assert.equal(
+  d1ClearedIssueCalendar.snapshot.preview.issues.some((issue) => issue.rawValue === "Mystery AM"),
+  false,
+  "cleared import diagnostics should not reappear on later D1 calendar loads",
+);
+for (const [key, event] of [...d1Store.events.entries()]) if (event.file_id === "ddh-rover-diagnostics") d1Store.events.delete(key);
+for (const [key, issue] of [...d1Store.issues.entries()]) if (issue.file_id === "ddh-rover-diagnostics") d1Store.issues.delete(key);
+for (const [key, doctor] of [...d1Store.fileDoctors.entries()]) if (doctor.file_id === "ddh-rover-diagnostics") d1Store.fileDoctors.delete(key);
+d1Store.files.delete("ddh-rover-diagnostics");
 await seedUser(d1StateStore, "admin-enter-match@example.com", "admin-enter-password", d1Doctor.displayName, d1Store);
 for (const key of [...d1Store.accountClaims.keys()]) {
   if (key.startsWith("admin-enter-match@example.com|")) d1Store.accountClaims.delete(key);

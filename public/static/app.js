@@ -2206,7 +2206,8 @@ function buildClientPreviewData(baseData) {
 }
 
 function synthesizeIncompleteShiftCodeIssues(baseData) {
-  if (!baseData?.derivedFromD1 && !baseData?.review?.some((item) => item.status === "cached" || item.status === "derived")) return [];
+  if (baseData?.derivedFromD1) return [];
+  if (!baseData?.review?.some((item) => item.status === "cached" || item.status === "derived")) return [];
   const eventsById = new Map((baseData.events || []).map((event) => [event.id, event]));
   return (baseData.review || [])
     .map((item) => incompleteShiftCodeIssueForReviewItem(item, eventsById.get(item.id)))
@@ -2531,6 +2532,7 @@ function isShiftCodeIssue(item) {
 }
 
 async function reportPreviewIssues(items) {
+  if (latestPreview?.derivedFromD1) return;
   if (!currentUserEmail && !adminViewingEmail) return;
   if (!items.length) return;
   for (const item of items) {
@@ -7394,7 +7396,7 @@ function isKnownResolvedShiftCodeValue(sourceValue, rawValue, normalizedTitle = 
   if (source === "MCH" && ["CS", "OCS", "0CS", "CSOS"].includes(code)) return true;
   if (source === "DDH") {
     if (["CS", "CS ONSITE", "SSU"].includes(code)) return true;
-    if (/^(ORANGE|SILVER|FAST|AVAO)\s+(AM|PM)$/.test(code)) return true;
+    if (/^(ORANGE|SILVER|FAST|AVAO|ROVER)\s+(AM|PM)$/.test(code)) return true;
   }
   const titleCode = incompleteShiftCodeFromTitle(source, normalizedTitle);
   return Boolean(titleCode && isShiftCodeResolvedByActiveRules({ source, seniority: "Unknown", code: titleCode }));
@@ -10213,6 +10215,7 @@ async function buildDerivedCalendarFilePayload(importEntry, statusFile = {}) {
     includeLocations: true,
   };
   const eventsByDoctor = {};
+  const issuesByDoctor = {};
   let eventCount = 0;
   for (const doctor of uniqueDoctors) {
     const view = buildRosterView(
@@ -10228,6 +10231,18 @@ async function buildDerivedCalendarFilePayload(importEntry, statusFile = {}) {
     );
     const events = view.events.map(serializeEvent);
     eventsByDoctor[doctor.key] = events;
+    issuesByDoctor[doctor.key] = (view.issues || []).map((issue) => ({
+      id: issue.id,
+      source: issue.source,
+      seniority: issue.seniority,
+      startDay: issue.startDay,
+      rawValue: issue.rawValue,
+      status: issue.status,
+      message: issue.message,
+      resolutionType: issue.resolutionType,
+      suggestedTitle: issue.suggestedTitle,
+      timeLabel: issue.timeLabel,
+    }));
     eventCount += events.length;
   }
   assertDerivedCalendarFilePayload(importEntry, uniqueDoctors, eventCount);
@@ -10240,6 +10255,7 @@ async function buildDerivedCalendarFilePayload(importEntry, statusFile = {}) {
     selectedDoctorKey: selectedDoctor()?.key || OWNER_DOCTOR_KEY,
     doctors: uniqueDoctors,
     eventsByDoctor,
+    issuesByDoctor,
     eventCount,
   };
 }
