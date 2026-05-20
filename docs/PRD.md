@@ -229,7 +229,7 @@ PDF parser rules:
 
 - Convert supported roster PDFs into the same internal week grid used by spreadsheet parsers.
 - Prefer visible text in the PDF; do not infer clinical areas from colours unless a hospital-specific rule has been validated.
-- If a PDF cell contains only a time and no shift code, flag it for review rather than silently guessing the shift type.
+- If a PDF cell contains only a time and no shift code, infer a generic AM/PM/Night shift label from the time.
 - Keep PDF files in the repository using the same duplicate and version-resolution rules as spreadsheets.
 
 MMC roster-name detection should include consultant, CMO, registrar, HMO, ENP, and AMP rows from supported roster exports. Intern rows are not exposed for self-service calendars at this stage.

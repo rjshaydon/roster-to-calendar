@@ -37,7 +37,7 @@
 ## Sources And Parsing
 
 - MMC Excel import: working for current sample.
-- MMC PDF import: initial support exists; bare time-only cells are flagged for review because the PDF text may not contain a shift code.
+- MMC PDF import: initial support exists; bare time-only cells are converted to generic AM/PM/Night shift labels.
 - DDH FindMyShift spreadsheet export: working for current sample.
 - FindMyShift `webcal://` subscription URL ingestion: not built yet.
 - For FindMyShift URLs, store the URL as a private secret-like value, refresh on login/app entry, and do not display the full token back to users.

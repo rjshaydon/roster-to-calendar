@@ -1452,8 +1452,17 @@ function parseMmcEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
 
 function parseDdhEntry(day, label, timeText, seniority = UNKNOWN_SENIORITY) {
   if (!label) return null;
-  if (parseDdhTimeRow(label)) {
-    return timeText ? parseDdhEntry(day, timeText, label, seniority) : null;
+  const labelTime = parseDdhTimeRow(label);
+  if (labelTime) {
+    if (timeText) return parseDdhEntry(day, timeText, label, seniority);
+    return createTimedRecord("DDH", day, label, {
+      kind: "shift",
+      titleParts: genericTimeOnlyShiftTitleParts(labelTime[0], "DDH"),
+      startHm: labelTime[0],
+      endHm: labelTime[1],
+      location: DDH_LOCATION,
+      seniority,
+    });
   }
   if (parseDdhTimeRow(timeText) && shouldIgnoreDdh(label)) {
     return null;
@@ -1641,11 +1650,14 @@ function normalizeMmcLabel(label) {
 function normalizeGenericMmcTimedLabel(label, explicit) {
   if (!explicit) return null;
   const code = label.trim().toUpperCase();
-  const base = code || inferMmcTimeOnlyShiftLabel(explicit.start, explicit.end);
+  const titleParts = code
+    ? { base: code, period: "", suffix: "" }
+    : genericTimeOnlyShiftTitleParts(explicit.start, "MMC");
+  const base = titleParts.base;
   if (!base) return null;
   return {
     kind: "shift",
-    titleParts: { base, period: "", suffix: "" },
+    titleParts,
     location: MMC_LOCATION,
     allDay: false,
     defaultTimes: null,
@@ -1663,7 +1675,7 @@ function normalizeCaseyLabel(label, explicit = null) {
   if (!code && explicit) {
     return {
       kind: "shift",
-      titleParts: { base: inferCaseyTimeOnlyShiftLabel(explicit.start), period: "", suffix: "" },
+      titleParts: genericTimeOnlyShiftTitleParts(explicit.start, "Casey"),
       location: CASEY_LOCATION,
       allDay: false,
       defaultTimes: null,
@@ -1813,7 +1825,7 @@ function normalizeMchTimedLabel(label) {
   if (suffix === "EDO") return null;
   const titleParts = suffix
     ? { base: suffix, period: "", suffix: "" }
-    : { base: inferMchTimeOnlyShiftLabel(start), period: "", suffix: "" };
+    : genericTimeOnlyShiftTitleParts(start, "MCH");
   return { start, end, titleParts };
 }
 
@@ -1831,6 +1843,16 @@ function inferMchTimeOnlyShiftLabel(startHm) {
   if (hour >= 22 || hour < 6) return "Night";
   if (hour >= 12) return "PM";
   return "AM";
+}
+
+function genericTimeOnlyShiftTitleParts(startHm, source = "") {
+  const period = inferGenericTimeOnlyShiftPeriod(startHm, source);
+  return { base: `${period} shift`, period: "", suffix: "" };
+}
+
+function inferGenericTimeOnlyShiftPeriod(startHm, source = "") {
+  if (source === "MCH") return inferMchTimeOnlyShiftLabel(startHm);
+  return inferMmcTimeOnlyShiftLabel(startHm);
 }
 
 function normalizeCaseyBase(value) {

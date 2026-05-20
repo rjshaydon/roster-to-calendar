@@ -515,8 +515,8 @@ assert.ok(michaelMergedView.events.some((event) => event.title === "Conference L
 const markDouglas = doctors.find((doctor) => doctor.displayName === "Mark DOUGLAS");
 assert.ok(markDouglas);
 const markView = buildRosterView(mmcWorkbook, [], markDouglas.key);
-assert.ok(markView.events.some((event) => event.title === "MMC: AM"));
-assert.ok(markView.events.some((event) => event.title === "MMC: PM"));
+assert.ok(markView.events.some((event) => event.title === "MMC: AM shift"));
+assert.ok(markView.events.some((event) => event.title === "MMC: PM shift"));
 
 const deslinAraullo = doctors.find((doctor) => doctor.displayName === "Deslin ARAULLO");
 assert.ok(deslinAraullo);
@@ -540,7 +540,7 @@ const patrickCaseyEvents = patrickTanView.events.filter((event) => event.source 
 assert.ok(patrickCaseyEvents.length > 40);
 assert.equal(patrickCaseyEvents.some((event) => event.start.startsWith("2025")), false);
 assert.ok(patrickCaseyEvents.some((event) => event.title === "Casey: MIC PM"));
-assert.ok(patrickCaseyEvents.some((event) => event.title === "Casey: AM" && event.rawValue === "Orient 0800-1730" && event.start.includes("08:00:00") && event.end.includes("17:30:00")));
+assert.ok(patrickCaseyEvents.some((event) => event.title === "Casey: AM shift" && event.rawValue === "Orient 0800-1730" && event.start.includes("08:00:00") && event.end.includes("17:30:00")));
 const patrickMergedLeave = patrickCaseyEvents.find((event) => event.title === "Annual Leave" && event.start === "2026-07-27");
 assert.ok(patrickMergedLeave);
 assert.equal(patrickMergedLeave.end, "2026-08-03");
@@ -613,8 +613,8 @@ assert.ok(bashirCaseyView.events.some((event) => event.title === "Casey: SSU AM"
 
 const dennisCasey = caseyDoctors.find((doctor) => doctor.displayName === "Dennis CHUNG");
 const dennisCaseyView = buildRosterView([], [], dennisCasey.key, undefined, {}, {}, [], caseyWorkbook);
-assert.ok(dennisCaseyView.events.some((event) => event.title === "Casey: Night" && event.start.includes("23:00:00") && event.end.startsWith("2026-05-06")));
-assert.equal(dennisCaseyView.events.filter((event) => event.title === "Casey: Night" && event.start.startsWith("2026-05-05") && event.end.startsWith("2026-05-06")).length, 1);
+assert.ok(dennisCaseyView.events.some((event) => event.title === "Casey: Night shift" && event.start.includes("23:00:00") && event.end.startsWith("2026-05-06")));
+assert.equal(dennisCaseyView.events.filter((event) => event.title === "Casey: Night shift" && event.start.startsWith("2026-05-05") && event.end.startsWith("2026-05-06")).length, 1);
 
 const jasonAwCasey = caseyDoctors.find((doctor) => doctor.displayName === "Jason AW");
 const jasonAwCaseyView = buildRosterView([], [], jasonAwCasey.key, undefined, {}, {}, [], caseyWorkbook);
@@ -636,7 +636,7 @@ assert.equal(mchDoctors.find((doctor) => doctor.displayName === "requested off")
 const adamWestMch = mchDoctors.find((doctor) => doctor.displayName === "Adam WEST");
 const adamWestMchView = buildRosterView([], [], adamWestMch.key, undefined, {}, {}, [], [], mchWorkbook);
 assert.ok(adamWestMchView.events.some((event) => event.title === "MCH: CS" && event.rawValue === "0800-1730 CS"));
-assert.ok(adamWestMchView.events.some((event) => event.title === "MCH: PM" && event.rawValue === "1430-0000" && event.end.startsWith("2026-05-09")));
+assert.ok(adamWestMchView.events.some((event) => event.title === "MCH: PM shift" && event.rawValue === "1430-0000" && event.end.startsWith("2026-05-09")));
 
 const bobSeithMch = mchDoctors.find((doctor) => doctor.displayName === "Bob SEITH");
 const bobSeithMchView = buildRosterView([], [], bobSeithMch.key, undefined, {}, {}, [], [], mchWorkbook);
@@ -655,8 +655,8 @@ assert.ok(adamWestMchWeek6.some((event) => event.title === "MCH: PHNW"));
 
 const markLimMch = mchDoctors.find((doctor) => doctor.displayName === "Mark LIM");
 const markLimMchView = buildRosterView([], [], markLimMch.key, undefined, {}, {}, [], [], mchWorkbook);
-assert.ok(markLimMchView.events.some((event) => event.title === "MCH: Night" && event.rawValue === "2300-0830" && event.end.startsWith("2026-05-09")));
-assert.equal(markLimMchView.events.filter((event) => event.title === "MCH: Night" && event.rawValue === "2300-0830" && event.start.startsWith("2026-05-08") && event.end.startsWith("2026-05-09")).length, 1);
+assert.ok(markLimMchView.events.some((event) => event.title === "MCH: Night shift" && event.rawValue === "2300-0830" && event.end.startsWith("2026-05-09")));
+assert.equal(markLimMchView.events.filter((event) => event.title === "MCH: Night shift" && event.rawValue === "2300-0830" && event.start.startsWith("2026-05-08") && event.end.startsWith("2026-05-09")).length, 1);
 assert.ok(markLimMchView.events.some((event) => event.title === "Conference Leave" && event.rawValue === "C/L" && event.allDay));
 
 const firasMch = mchDoctors.find((doctor) => doctor.displayName === "Firas HAMDAN");
@@ -804,7 +804,7 @@ assert.ok(pdfDoctors.find((doctor) => doctor.displayName === "Titus HACKMAN"));
 const pdfRichard = pdfDoctors.find((doctor) => doctor.displayName === "Richard HAYDON");
 const pdfView = buildRosterView(parsedPdf.sources.mmc, parsedPdf.sources.ddh, pdfRichard.key);
 assert.ok(pdfView.events.some((event) => event.title === "MMC: SSU PM"));
-assert.ok(pdfView.events.some((event) => event.rawValue === "0800-1730" && event.title === "MMC: AM"));
+assert.ok(pdfView.events.some((event) => event.rawValue === "0800-1730" && event.title === "MMC: AM shift"));
 
 class MemoryStore {
   constructor() {
