@@ -371,8 +371,8 @@ assert.doesNotMatch(
 );
 assert.match(
   appSource.match(/async function renderWhenInsight[\s\S]*?function renderWhenInsightResult/)?.[0] || "",
-  /fetchRosterOverlapDoctors[\s\S]*requestedDoctorKeys = \[insightsState\.comparisonDoctorKey\];[\s\S]*doctorKeys: requestedDoctorKeys/,
-  "general when insights should fetch a compact overlap doctor list before loading one selected doctor's events",
+  /fetchRosterOverlapDoctors[\s\S]*const options = prioritizeDoctorOptions[\s\S]*doctorKeys: \[selectedKey\][\s\S]*renderWhenInsightResult\(\{ options, selectedComparison/,
+  "general when insights should keep all compact overlap doctors in the dropdown while loading one selected doctor's events",
 );
 assert.match(
   calendarMigrationSource,
