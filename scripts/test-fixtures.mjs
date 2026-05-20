@@ -85,12 +85,6 @@ assert.match(
   "switching from the creator account should persist the creator doctor rather than the viewed doctor",
 );
 assert.match(
-  (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
-    .match(/if \(action === "adminLoadUser"\)[\s\S]*?if \(action === "claimRosterName"\)/)?.[0] || "",
-  /prepareLightweightAccountResponse[\s\S]*availableDoctors: \[\]/,
-  "Admin Users modal entry should avoid blocking on full doctor-directory hydration",
-);
-assert.match(
   appSource.match(/async function hydrateAuthenticatedWorkspace[\s\S]*?function markLoginPhase/)?.[0] || "",
   /currentUserEmail === OWNER_EMAIL[\s\S]*forceCreatorDoctorSession\(\)[\s\S]*loadCloudCalendarEvents/,
   "creator hydration should normalize the creator doctor before calendar events load",

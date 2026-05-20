@@ -176,7 +176,7 @@ export async function onRequestPost(context) {
       }
       const target = await loadAccountMirror(context.env.ROSTER_DB, targetEmail);
       if (!target) return Response.json({ error: "Account not found." }, { status: 404 });
-      const prepared = await prepareLightweightAccountResponse(target, { db: context.env.ROSTER_DB });
+      const prepared = await prepareAccountResponse(null, target, { db: context.env.ROSTER_DB, includeAvailableDoctors: true });
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -184,16 +184,16 @@ export async function onRequestPost(context) {
         realName: prepared.realName,
         state: prepared.state,
         claims: prepared.claims,
-        nameMatches: [],
-        suggestedClaims: [],
-        availableDoctors: [],
+        nameMatches: prepared.nameMatches,
+        suggestedClaims: prepared.nameMatches,
+        availableDoctors: prepared.availableDoctors,
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
-        snapshot: null,
-        snapshotAvailable: false,
-        snapshotStale: false,
-        snapshotBuiltAt: "",
-        issueConfig: null,
+        snapshot: prepared.snapshot,
+        snapshotAvailable: prepared.snapshotAvailable,
+        snapshotStale: prepared.snapshotStale,
+        snapshotBuiltAt: prepared.snapshotBuiltAt,
+        issueConfig: prepared.issueConfig,
       });
     }
 
