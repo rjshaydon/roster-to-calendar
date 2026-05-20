@@ -1408,6 +1408,12 @@ async function prepareLightweightAccountResponse(rawRecord, options = {}) {
       ...state,
       imports: files.filter((file) => file.active !== false).map(repositoryImportRef),
     };
+  } else if (options.db) {
+    const d1Refs = await d1RepositoryImportRefsForClaims(options.db, claims);
+    state = {
+      ...state,
+      imports: d1Refs,
+    };
   }
   return {
     role,
