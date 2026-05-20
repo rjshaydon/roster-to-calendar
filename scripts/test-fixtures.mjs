@@ -154,7 +154,25 @@ assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
     .match(/if \(action === "claimRosterName"\)[\s\S]*?if \(action === "listUsers"\)/)?.[0] || "",
   /resolveDoctorClaimCandidate/,
-  "manual roster claims should use targeted SQL doctor resolution",
+  "manual roster claims should use targeted live roster doctor lookup",
+);
+assert.doesNotMatch(
+  (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
+    .match(/if \(action === "claimRosterName"\)[\s\S]*?if \(action === "listUsers"\)/)?.[0] || "",
+  /loadSqlDoctorCandidates|mergedDoctorOptionsFromD1|buildCanonicalDoctorOptionsFromRows/,
+  "manual roster claims must not load or canonicalize the whole doctor directory",
+);
+assert.match(
+  (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
+    .match(/if \(action === "adminLoadUser"\)[\s\S]*?if \(action === "claimRosterName"\)/)?.[0] || "",
+  /includeAvailableDoctors: !targetClaims\.length/,
+  "claimed-account entry should not load the full available-doctor directory",
+);
+assert.doesNotMatch(
+  (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
+    .match(/if \(action === "adminLoadUser"\)[\s\S]*?if \(action === "claimRosterName"\)/)?.[0] || "",
+  /loadSqlDoctorCandidates|mergedDoctorOptionsFromD1|buildCanonicalDoctorOptionsFromRows/,
+  "admin user entry should not directly load or canonicalize the whole doctor directory",
 );
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
@@ -232,8 +250,8 @@ assert.match(
 );
 assert.match(
   await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"),
-  /mergedDoctorOptionsFromD1[\s\S]*queryCanonicalDoctors[\s\S]*queryRosterFileDoctors[\s\S]*buildFastDoctorOptionsFromRows/,
-  "available doctor candidates should cheaply merge canonical doctors with live roster-file doctors",
+  /mergedDoctorOptionsFromD1[\s\S]*queryCanonicalDoctors[\s\S]*queryRosterFileDoctors/,
+  "available doctor candidates should merge canonical doctors with live roster-file doctors",
 );
 assert.match(
   await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"),
@@ -260,6 +278,7 @@ assert.match(
   /entriesToSave = options\.force === true[\s\S]*entries\.filter\(\(entry\) => !persistedIds\.has\(entry\.id\)\)/,
   "ordinary roster sync should process missing files without automatically retrying failed files",
 );
+assert.match(await readFile(new URL("../README.md", import.meta.url), "utf8"), /Cloudflare 503 \/ CPU guardrail/, "README should document Cloudflare 503 CPU guardrails");
 assert.match(appSource, /function rosterSyncLabel/, "file cards should expose live roster sync labels");
 assert.match(appSource, /Missing \/ unresolved shift codes/, "system card should expose unresolved shift-code review");
 assert.match(appSource, /parserRuleSeniorityOption/, "shift-code editor should expose multi-seniority selection");
@@ -3110,6 +3129,7 @@ const michaelAdminLoad = await postState(michaelStateStore, {
   targetEmail: "michael@example.com",
 });
 assert.deepEqual(michaelAdminLoad.state.imports.map((item) => item.repoId).sort(), ["michael-mch", "michael-mmc"]);
+assert.deepEqual(michaelAdminLoad.availableDoctors, [], "claimed admin account entry should not load the full available-doctor directory");
 const michaelPrimaryResolution = await postState(michaelStateStore, {
   action: "resolveDoctorAccount",
   email: "rhaydon@gmail.com",
@@ -3411,6 +3431,7 @@ const staleCanonicalClaim = await postState(staleCanonicalStore, {
   claim: { sourceType: "mmc", key: "TITUS HACKMAN" },
 });
 assert.equal(staleCanonicalClaim.claims[0]?.key, "TITUS HACKMAN", "Use Selected Name should claim a doctor available only from live roster rows");
+assert.deepEqual(staleCanonicalClaim.availableDoctors, [], "claiming a roster name should not reload the full available-doctor directory");
 staleCanonicalStore.d1.canonicalDoctors.clear();
 const liveOnlyClaim = await postState(staleCanonicalStore, {
   action: "claimRosterName",

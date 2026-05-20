@@ -80,3 +80,7 @@ npm run deploy
 - Standard accounts are prompted to keep only the latest 6 months active.
 - Cross-device persistence requires the `ROSTER_DB` D1 binding above.
 - Accounts with saved roster data can expose a tokenized subscription feed at `/api/feed?token=...`, which Apple Calendar or Google Calendar can subscribe to as a read-only `.ics` URL.
+
+## Cloudflare 503 / CPU guardrail
+
+Cloudflare 503 CPU or memory failures are release-blocking. Login, account entry, calendar switching, and roster-name claiming must avoid whole-roster parsing, full doctor-directory canonicalization, and broad account hydration in their blocking request paths. Any change touching those flows needs fixture or static-test coverage proving the hot path stays targeted.
