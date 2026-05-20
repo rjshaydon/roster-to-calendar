@@ -278,6 +278,27 @@ assert.match(styleSource, /#parserRuleForm[\s\S]*overflow-y: auto/, "shift-code 
 assert.match(appSource, /normalizeDdhParserRuleCodeText/, "DDH shift-code issues should use parser-equivalent label codes");
 assert.match(appSource, /seniority !== "Unknown"[\s\S]*some\(\(rule\) => rule\.code === code\)/, "Unknown-seniority shift-code issues should resolve by source/code");
 assert.match(appSource, /isKnownResolvedShiftCodeValue/, "derived warnings should not be synthesized for built-in recognised shift labels");
+assert.match(appSource, /function shouldShowPreviewIssue/, "Warnings panel should centralize resolved shift-code issue filtering");
+assert.match(
+  appSource.match(/function shouldShowPreviewIssue[\s\S]*?function pruneResolvedLatestPreviewIssues/)?.[0] || "",
+  /isKnownResolvedShiftCodeValue[\s\S]*isShiftCodeResolvedByActiveRules/,
+  "Warnings panel should hide review-derived shift-code warnings resolved by built-ins or active rules",
+);
+assert.match(
+  appSource.match(/function buildClientPreviewData[\s\S]*?function synthesizeIncompleteShiftCodeIssues/)?.[0] || "",
+  /issues\.filter\(shouldShowPreviewIssue\)/,
+  "active preview data should use the shared Warnings issue filter",
+);
+assert.match(
+  appSource.match(/function openParserRuleModalFromPreviewIssue[\s\S]*?async function saveParserRuleFromModal/)?.[0] || "",
+  /shouldShowPreviewIssue[\s\S]*That parser warning has already been resolved/,
+  "shift-code warning editor should refresh resolved stale cards instead of opening missing issues",
+);
+assert.match(
+  appSource.match(/function applyIssueConfig[\s\S]*?function sanitizeParserExtensions/)?.[0] || "",
+  /pruneResolvedLatestPreviewIssues\(\)/,
+  "parser config changes should immediately prune resolved preview warnings",
+);
 assert.match(appSource, /if \(parsedRosterSources\)[\s\S]*await updatePreview\(\)[\s\S]*else if \(latestPreview\)/, "saving parser rules should refresh the visible preview before trying to reparse cloud file refs");
 assert.match(
   appSource.match(/function renderParserRulesCard[\s\S]*?function collectUnknownShiftIssues/)?.[0] || "",

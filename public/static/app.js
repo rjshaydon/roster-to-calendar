@@ -2197,12 +2197,7 @@ function buildClientPreviewData(baseData) {
     hospitals: availablePreviewHospitals,
     lastImport: latestImportTimestamp(),
     issues: [
-      ...issues.filter((issue) => {
-      const override = overrides[issue.id] || {};
-      const reviewItem = reviewIndex.get(issue.id);
-      const include = typeof override.include === "boolean" ? override.include : reviewItem?.include ?? true;
-      return include && !isSuppressedIssue(issue) && !isShiftCodeResolvedByActiveRules(issue);
-      }),
+      ...issues.filter(shouldShowPreviewIssue),
       ...deletedItems,
     ],
   };
@@ -7403,6 +7398,40 @@ function isKnownResolvedShiftCodeValue(sourceValue, rawValue, normalizedTitle = 
   return Boolean(titleCode && isShiftCodeResolvedByActiveRules({ source, seniority: "Unknown", code: titleCode }));
 }
 
+function previewIssueWithReviewContext(issue) {
+  const reviewItem = issue?.id ? reviewIndex.get(issue.id) : null;
+  if (!reviewItem) return issue;
+  return {
+    ...issue,
+    seniority: issue?.seniority || reviewItem.seniority,
+    rawValue: issue?.rawValue || reviewItem.rawValue,
+    suggestedTitle: issue?.suggestedTitle || reviewItem.normalizedTitle || reviewItem.suggestedTitle,
+    normalizedTitle: issue?.normalizedTitle || reviewItem.normalizedTitle || reviewItem.suggestedTitle,
+    timeLabel: issue?.timeLabel || reviewItem.timeLabel,
+  };
+}
+
+function shouldShowPreviewIssue(issue) {
+  if (!issue) return false;
+  const reviewItem = issue?.id ? reviewIndex.get(issue.id) : null;
+  const override = overrides[issue.id] || {};
+  const include = typeof override.include === "boolean" ? override.include : reviewItem?.include ?? true;
+  if (!include || isSuppressedIssue(issue)) return false;
+  const contextualIssue = previewIssueWithReviewContext(issue);
+  if (!isShiftCodeIssue(contextualIssue)) return true;
+  const normalizedTitle = contextualIssue?.normalizedTitle || contextualIssue?.suggestedTitle || "";
+  if (isKnownResolvedShiftCodeValue(contextualIssue?.source, contextualIssue?.rawValue, normalizedTitle)) return false;
+  return !isShiftCodeResolvedByActiveRules(contextualIssue);
+}
+
+function pruneResolvedLatestPreviewIssues() {
+  if (!latestPreview) return;
+  latestPreview = {
+    ...latestPreview,
+    issues: (latestPreview.issues || []).filter(shouldShowPreviewIssue),
+  };
+}
+
 function issueMatchesSavedParserRule(issue, rule) {
   const normalizedRule = sanitizeParserExtensionRule(rule);
   if (!normalizedRule) return false;
@@ -7521,9 +7550,11 @@ function openParserRuleModal(email, errorId = "", selectedSeniorities = []) {
 }
 
 function openParserRuleModalFromPreviewIssue(issueId = "") {
-  const issue = (latestPreview?.issues || []).find((item) => item.id === issueId) || null;
-  if (!issue) {
-    setStatus("Could not find that parser warning.", true);
+  const issue = previewIssueWithReviewContext((latestPreview?.issues || []).find((item) => item.id === issueId) || null);
+  if (!issue || !shouldShowPreviewIssue(issue)) {
+    pruneResolvedLatestPreviewIssues();
+    rebuildClientPreview();
+    setStatus("That parser warning has already been resolved.");
     return;
   }
   parserRuleSaveContext = {
@@ -7801,6 +7832,7 @@ async function saveParserRuleFromModal() {
     const data = await readJsonResponse(response, "Could not save the shift-code rule.");
     parserExtensions = sanitizeParserExtensions(data.parserExtensions);
     setParserExtensions(parserExtensions);
+    pruneResolvedLatestPreviewIssues();
     if (fingerprint) ignoredIssueFingerprints.delete(fingerprint);
     closeParserRuleModal();
     await loadServerUsers();
@@ -8999,6 +9031,7 @@ function applyIssueConfig(value) {
   dismissedIssueFingerprints = new Set(sanitizeIssueFingerprintList(config.dismissedFingerprints));
   ignoredIssueFingerprints = new Set(sanitizeIssueFingerprintList(config.ignoredFingerprints));
   setParserExtensions(parserExtensions);
+  pruneResolvedLatestPreviewIssues();
 }
 
 function sanitizeParserExtensions(value) {
