@@ -164,8 +164,18 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function hydrateAuthenticatedWorkspace[\s\S]*?function markLoginPhase/)?.[0] || "",
-  /if \(!adminTargetEmail && currentUserEmail !== OWNER_EMAIL\)[\s\S]*resolveCurrentAccountClaims\(\)[\s\S]*loadCloudCalendarEvents[\s\S]*void loadServerUsers\(\)/,
-  "claim resolution should finish before user calendars load, while creator user-list hydration remains non-blocking",
+  /adminTargetEmail && adminTargetEmail !== OWNER_EMAIL[\s\S]*resolveCurrentAccountClaims\(adminTargetEmail\)[\s\S]*!adminTargetEmail && currentUserEmail !== OWNER_EMAIL[\s\S]*resolveCurrentAccountClaims\(\)[\s\S]*loadCloudCalendarEvents[\s\S]*void loadServerUsers\(\)/,
+  "claim resolution should finish before user and admin-entered calendars load, while creator user-list hydration remains non-blocking",
+);
+assert.match(
+  appSource.match(/async function claimSelectedRosterName[\s\S]*?async function updatePreview/)?.[0] || "",
+  /applyCloudStateData\(data\)[\s\S]*loadCloudCalendarEvents\(\{ adminTargetEmail: adminViewingEmail \? viewedAccountEmail\(\) : "" \}\)[\s\S]*if \(loadedCalendar\)[\s\S]*bootstrapImports\(\)/,
+  "manual roster claims should load a D1 calendar snapshot before bootstrapping repository refs",
+);
+assert.match(
+  appSource.match(/async function bootstrapImports[\s\S]*?function snapshotHasUnresolvablePreviewEvents/)?.[0] || "",
+  /cloudAvailable && selectedFiles\.length && selectedFiles\.some\(\(entry\) => !entry\.file\)[\s\S]*loadCloudCalendarEvents\(\{ adminTargetEmail: adminViewingEmail \? viewedAccountEmail\(\) : "" \}\)[\s\S]*No D1 calendar events were found/,
+  "cloud repository refs should use D1 calendar loading instead of falling through to local browser parsing",
 );
 assert.match(
   appSource.match(/async function loginWithEmail[\s\S]*?async function restoreCloudState/)?.[0] || "",
@@ -1995,6 +2005,34 @@ const d1DirectCalendar = await postState(d1StateStore, {
   password: "d1-password",
 }, d1Store);
 assert.ok(d1DirectCalendar.snapshot.detectedSources.mmc.length > 0, "claimed D1 snapshots should retain linked roster sources");
+await seedUser(d1StateStore, "admin-enter-match@example.com", "admin-enter-password", d1Doctor.displayName, d1Store);
+for (const key of [...d1Store.accountClaims.keys()]) {
+  if (key.startsWith("admin-enter-match@example.com|")) d1Store.accountClaims.delete(key);
+}
+const adminEnteredResolution = await postState(d1StateStore, {
+  action: "resolveAccountClaims",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  targetEmail: "admin-enter-match@example.com",
+}, d1Store);
+assert.ok(
+  adminEnteredResolution.claims.some((claim) => claim.key === d1Doctor.key && claim.sourceType === "mmc"),
+  "creator-entered matching users should resolve and persist D1 roster claims",
+);
+const adminEnteredCalendar = await postState(d1StateStore, {
+  action: "loadCalendarEvents",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  targetEmail: "admin-enter-match@example.com",
+}, d1Store);
+assert.equal(
+  adminEnteredCalendar.snapshot?.preview?.derivedFromD1,
+  true,
+  "creator-entered matching users should load calendars from D1 after claim resolution",
+);
+for (const key of [...d1Store.accountClaims.keys()]) {
+  if (key.startsWith("admin-enter-match@example.com|")) d1Store.accountClaims.delete(key);
+}
 const d1OnsiteMmcEvent = d1DirectCalendar.snapshot.preview.events.find((event) => event.source === "MMC" && !/\\b(CS|leave|conference|PHNW)\\b/i.test(`${event.title} ${event.rawValue}`));
 assert.ok(d1OnsiteMmcEvent?.location, "D1 account calendar load should apply SQL-backed hospital defaults to onsite shifts");
 await postState(d1StateStore, {

@@ -2050,8 +2050,19 @@ async function claimSelectedRosterName(candidateOverride = null) {
     });
     const data = await readJsonResponse(response, "Could not link roster name.");
     await applyCloudStateData(data);
+    const loadedCalendar = await loadCloudCalendarEvents({ adminTargetEmail: adminViewingEmail ? viewedAccountEmail() : "" });
     if (isCreatorAuthenticated()) await loadServerUsers();
-    await bootstrapImports();
+    if (loadedCalendar) {
+      await bootstrapImports();
+    } else if (cloudAvailable && selectedFiles.some((entry) => !entry.file)) {
+      renderFilesList();
+      renderClaimSection();
+      syncActionState();
+      setStatus(`Linked ${candidate.displayName} (${candidate.sourceType.toUpperCase()}), but no D1 calendar events were found for this roster name.`, true);
+      return;
+    } else {
+      await bootstrapImports();
+    }
     renderLoginState();
     setStatus(`Linked ${candidate.displayName} (${candidate.sourceType.toUpperCase()}).`);
   } catch (error) {
@@ -9535,7 +9546,10 @@ async function hydrateAuthenticatedWorkspace(options = {}, loginStartedAt = 0) {
   if (!currentUserEmail) return;
   try {
     const adminTargetEmail = normalizeEmail(options.adminTargetEmail);
-    if (!adminTargetEmail && currentUserEmail !== OWNER_EMAIL) {
+    if (adminTargetEmail && adminTargetEmail !== OWNER_EMAIL) {
+      await resolveCurrentAccountClaims(adminTargetEmail);
+      markLoginPhase("claimsResolved", loginStartedAt);
+    } else if (!adminTargetEmail && currentUserEmail !== OWNER_EMAIL) {
       await resolveCurrentAccountClaims();
       markLoginPhase("claimsResolved", loginStartedAt);
     }
@@ -9574,15 +9588,20 @@ function markLoginPhase(phase, loginStartedAt = 0) {
   }
 }
 
-async function resolveCurrentAccountClaims() {
-  if (!currentUserEmail || currentUserEmail === OWNER_EMAIL) return;
+async function resolveCurrentAccountClaims(targetEmailOverride = "") {
+  const targetEmail = normalizeEmail(targetEmailOverride);
+  if (!currentUserEmail || (!targetEmail && currentUserEmail === OWNER_EMAIL)) return;
+  const requestEmail = targetEmail ? authUserEmail : currentUserEmail;
+  const requestPassword = targetEmail ? authUserPassword : currentUserPassword;
+  if (!requestEmail || !requestPassword) return;
   const response = await fetch("/api/state", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       action: "resolveAccountClaims",
-      email: currentUserEmail,
-      password: currentUserPassword,
+      email: requestEmail,
+      password: requestPassword,
+      targetEmail,
     }),
   });
   const data = await readJsonResponse(response, "Account claim resolution failed.");
@@ -11159,6 +11178,19 @@ async function bootstrapImports() {
       } else {
         setStatus("Calendar loaded.");
       }
+      return;
+    }
+    if (cloudAvailable && selectedFiles.length && selectedFiles.some((entry) => !entry.file)) {
+      const loadedCalendar = await loadCloudCalendarEvents({ adminTargetEmail: adminViewingEmail ? viewedAccountEmail() : "" });
+      if (loadedCalendar) {
+        renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+        scheduleInsightWarmup();
+        setStatus("Calendar loaded.");
+        return;
+      }
+      renderClaimSection();
+      syncActionState();
+      setStatus("No D1 calendar events were found for this roster name. Check that the roster files have been indexed for the linked account.", true);
       return;
     }
     if (selectedFiles.length) {
