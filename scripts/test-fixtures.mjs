@@ -195,8 +195,8 @@ assert.doesNotMatch(
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
     .match(/if \(action === "adminLoadUser"\)[\s\S]*?if \(action === "claimRosterName"\)/)?.[0] || "",
-  /includeAvailableDoctors: !targetClaims\.length/,
-  "claimed-account entry should not load the full available-doctor directory",
+  /prepareLightweightAccountResponse[\s\S]*availableDoctors: targetClaims\.length[\s\S]*\? \[\][\s\S]*repositoryDoctorCandidates/,
+  "claimed-account entry should use lightweight state and only load the picker for unclaimed accounts",
 );
 assert.doesNotMatch(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
@@ -214,6 +214,11 @@ assert.match(
   appSource.match(/async function hydrateAuthenticatedWorkspace[\s\S]*?function markLoginPhase/)?.[0] || "",
   /if \(!adminTargetEmail && currentUserEmail !== OWNER_EMAIL\)[\s\S]*resolveCurrentAccountClaims\(\)[\s\S]*loadCloudCalendarEvents[\s\S]*void loadServerUsers\(\)/,
   "claim resolution should finish before user calendars load, while creator user-list hydration remains non-blocking",
+);
+assert.match(
+  appSource.match(/async function loadServerUsers[\s\S]*?async function refreshCalendarStoreStatus/)?.[0] || "",
+  /availableRosterDoctors[\s\S]*renderDoctorState\(\)/,
+  "deferred server user enrichment should refresh the Creator doctor switcher once doctors arrive",
 );
 assert.match(
   appSource.match(/async function loginWithEmail[\s\S]*?async function restoreCloudState/)?.[0] || "",

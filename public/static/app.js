@@ -10091,6 +10091,10 @@ async function loadServerUsers() {
     availableRosterDoctors = sanitizeAvailableRosterDoctors(data.availableDoctors || availableRosterDoctors);
     applyIssueConfig(data.issueConfig);
     syncAccountsButton();
+    if (isViewingCreatorAccount()) {
+      renderDoctorState();
+      if (latestPreview) setStatus("Calendar loaded.");
+    }
   } catch {
     // Keep the last available local list.
   }

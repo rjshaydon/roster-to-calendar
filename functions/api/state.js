@@ -177,10 +177,7 @@ export async function onRequestPost(context) {
       const target = await loadAccountMirror(context.env.ROSTER_DB, targetEmail);
       if (!target) return Response.json({ error: "Account not found." }, { status: 404 });
       const targetClaims = sanitizeClaims(target.claims);
-      const prepared = await prepareAccountResponse(null, target, {
-        db: context.env.ROSTER_DB,
-        includeAvailableDoctors: !targetClaims.length,
-      });
+      const prepared = await prepareLightweightAccountResponse(target, { db: context.env.ROSTER_DB });
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -188,16 +185,18 @@ export async function onRequestPost(context) {
         realName: prepared.realName,
         state: prepared.state,
         claims: prepared.claims,
-        nameMatches: prepared.nameMatches,
-        suggestedClaims: prepared.nameMatches,
-        availableDoctors: prepared.availableDoctors,
+        nameMatches: [],
+        suggestedClaims: [],
+        availableDoctors: targetClaims.length
+          ? []
+          : await repositoryDoctorCandidates(null, null, context.env.ROSTER_DB, { hideZeroEventStandalone: true }),
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
-        snapshot: prepared.snapshot,
-        snapshotAvailable: prepared.snapshotAvailable,
-        snapshotStale: prepared.snapshotStale,
-        snapshotBuiltAt: prepared.snapshotBuiltAt,
-        issueConfig: prepared.issueConfig,
+        snapshot: null,
+        snapshotAvailable: false,
+        snapshotStale: false,
+        snapshotBuiltAt: "",
+        issueConfig: null,
       });
     }
 
@@ -1413,6 +1412,11 @@ async function prepareLightweightAccountResponse(rawRecord, options = {}) {
     state = {
       ...state,
       imports: files.map(repositoryImportRef),
+    };
+  } else if (claims.length && options.db) {
+    state = {
+      ...state,
+      imports: await d1RepositoryImportRefsForClaims(options.db, claims),
     };
   }
   return {
