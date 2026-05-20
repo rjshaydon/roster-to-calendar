@@ -1581,6 +1581,40 @@ function parseMchEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
 
   if (upper.includes("EDO")) return null;
 
+  const explicit = extractTimeWithLabel(label);
+  const manual = findManualParserRule("MCH", seniority, label, explicit);
+  if (manual) {
+    if (manual.includeAsShift === false) {
+      return createHiddenRecord("MCH", day, label, manual, seniority);
+    }
+    if (explicit) {
+      return createTimedRecord("MCH", day, label, {
+        kind: manual.kind,
+        titleParts: manual.titleParts,
+        startHm: explicit.start,
+        endHm: explicit.end,
+        location: manual.location || MCH_LOCATION,
+        seniority,
+      });
+    }
+    if (manual.allDay) {
+      return createAllDayRecord("MCH", day, label, {
+        kind: manual.kind,
+        titleParts: manual.titleParts,
+        location: manual.location || "",
+        seniority,
+      });
+    }
+    return createTimedRecord("MCH", day, label, {
+      kind: manual.kind,
+      titleParts: manual.titleParts,
+      startHm: manual.defaultTimes[0],
+      endHm: manual.defaultTimes[1],
+      location: manual.location || MCH_LOCATION,
+      seniority,
+    });
+  }
+
   const timed = normalizeMchTimedLabel(label);
   if (!timed) {
     return createUnknownRecord("MCH", day, label, "MCH shift label not recognised.", seniority);
@@ -1832,8 +1866,8 @@ function normalizeMchTimedLabel(label) {
 function normalizeMchShiftSuffix(value) {
   const suffix = String(value || "").replace(/[^A-Z0-9]/gi, "").toUpperCase();
   if (!suffix) return "";
-  if (suffix === "CS" || suffix === "OCS" || suffix === "DEMT" || suffix === "PHNW") return suffix;
-  if (suffix === "0CS" || suffix === "CSOS") return "OCS";
+  if (suffix === "OCS" || suffix === "0CS" || suffix === "CSOS") return "CS Office";
+  if (suffix === "CS" || suffix === "DEMT" || suffix === "PHNW") return suffix;
   if (suffix === "EDO") return "EDO";
   return suffix;
 }
@@ -1996,7 +2030,7 @@ function isRestrictedClinicalSupportRule(rule) {
 function normalizeParserExtensionRuleCode(source, value) {
   const text = String(value || "").trim().toUpperCase();
   if (!text) return "";
-  if (source === "MMC" || source === "Casey") {
+  if (source === "MMC" || source === "Casey" || source === "MCH") {
     const explicit = extractTimeWithLabel(text);
     return (explicit?.label || text).trim().toUpperCase();
   }
@@ -2066,7 +2100,8 @@ function normalizeParserRuleCode(source, label) {
     return normalizeCaseyCode(explicit?.label || text);
   }
   if (source === "MCH") {
-    return text.replace(/\s+/g, " ").trim();
+    const explicit = extractTimeWithLabel(text);
+    return (explicit?.label || text).replace(/\s+/g, " ").trim();
   }
   return text;
 }
@@ -2187,10 +2222,12 @@ function buildDefaultParserRules() {
   }
   for (const seniority of activeSeniorities) {
     const canWorkClinicalSupport = consultantSeniorities.includes(seniority);
+    add(rules.mmc, "MMC", "PHNW", seniority, "PHNW", "", "", true, "", "", "");
     if (canWorkClinicalSupport) {
       add(rules.ddh, "DDH", "CS", seniority, "CS", "", "", true, "", "", "");
       add(rules.ddh, "DDH", "CS ONSITE", seniority, "CS onsite", "", "", true, "", "", DDH_LOCATION);
     }
+    add(rules.ddh, "DDH", "PHNW", seniority, "PHNW", "", "", true, "", "", "");
     add(rules.ddh, "DDH", "SSU", seniority, "SSU", "", "", true, "", "", DDH_LOCATION);
     add(rules.ddh, "DDH", "ORANGE AM", seniority, "Orange", "AM", "", true, "", "", DDH_LOCATION);
     add(rules.ddh, "DDH", "ORANGE PM", seniority, "Orange", "PM", "", true, "", "", DDH_LOCATION);
@@ -2202,7 +2239,13 @@ function buildDefaultParserRules() {
       add(rules.casey, "Casey", "CS", seniority, "CS", "", "", false, "08:00", "17:30", CASEY_LOCATION);
       add(rules.casey, "Casey", "CLIN SUPP", seniority, "CS", "", "", false, "08:00", "17:30", CASEY_LOCATION);
       add(rules.casey, "Casey", "CLINICAL SUPP", seniority, "CS", "", "", false, "08:00", "17:30", CASEY_LOCATION);
+      add(rules.mch, "MCH", "CS", seniority, "CS", "", "", false, "08:00", "17:30", MCH_LOCATION);
+      add(rules.mch, "MCH", "OCS", seniority, "CS Office", "", "", false, "08:00", "17:30", MCH_LOCATION);
+      add(rules.mch, "MCH", "0CS", seniority, "CS Office", "", "", false, "08:00", "17:30", MCH_LOCATION);
+      add(rules.mch, "MCH", "CSOS", seniority, "CS Office", "", "", false, "08:00", "17:30", MCH_LOCATION);
     }
+    add(rules.casey, "Casey", "PHNW", seniority, "PHNW", "", "", true, "", "", "");
+    add(rules.mch, "MCH", "PHNW", seniority, "PHNW", "", "", true, "", "", "");
     add(rules.casey, "Casey", "AM TL", seniority, "TL", "AM", "", false, "08:00", "17:30", CASEY_LOCATION);
     add(rules.casey, "Casey", "AM UFD", seniority, "UFD", "AM", "", false, "08:00", "17:30", CASEY_LOCATION);
     add(rules.casey, "Casey", "AM MIC", seniority, "MIC", "AM", "", false, "08:00", "17:30", CASEY_LOCATION);
@@ -3131,7 +3174,7 @@ function extractTimePrefix(value) {
 
 function extractTimeWithLabel(value, options = {}) {
   const text = String(value || "").trim();
-  const match = text.match(/^\s*(\d{2})(\d{2})-(\d{2})(\d{2})(?:\s+(.+?))?\s*$/);
+  const match = text.match(/^\s*(\d{2})(\d{2})-(\d{2})(\d{2})(?:\s*(.+?))?\s*$/);
   if (match) {
     return {
       start: [Number(match[1]), Number(match[2])],

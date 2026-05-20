@@ -245,6 +245,7 @@ export async function onRequestPost(context) {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
+      await cleanupResolvedAdminIssues(context.env.ROSTER_DB);
       return Response.json({
         ok: true,
         users: await listD1Users(context.env.ROSTER_DB),
@@ -658,6 +659,7 @@ export async function onRequestPost(context) {
       for (const item of rules) {
         parserExtensions = upsertParserExtensionRule(parserExtensions, item);
         await saveD1ParserExtensionRule(context.env.ROSTER_DB, item);
+        await clearIssuesResolvedByParserRule(context.env.ROSTER_DB, item);
       }
       return Response.json({ ok: true, parserExtensions });
     }
@@ -699,6 +701,7 @@ export async function onRequestPost(context) {
         localParserExtensions,
         updatedAt: new Date().toISOString(),
       });
+      await clearIssuesResolvedByParserRuleForUser(context.env.ROSTER_DB, saveEmail, rule);
       if (suggestion) {
         const suggestions = await loadParserRuleSuggestions(null, context.env.ROSTER_DB);
         await saveParserRuleSuggestions(null, upsertParserRuleSuggestion(suggestions, suggestion), context.env.ROSTER_DB);
@@ -725,6 +728,7 @@ export async function onRequestPost(context) {
       if (!rule) return Response.json({ error: "A valid shift-code rule is required." }, { status: 400 });
       if (decision === "approveGlobal") {
         await saveD1ParserExtensionRule(context.env.ROSTER_DB, rule);
+        await clearIssuesResolvedByParserRule(context.env.ROSTER_DB, rule);
       } else if (decision === "approveUser") {
         const target = await loadAccountMirror(context.env.ROSTER_DB, suggestion.email);
         if (target) {
@@ -733,6 +737,7 @@ export async function onRequestPost(context) {
             localParserExtensions: upsertParserExtensionRule(target.localParserExtensions, rule),
             updatedAt: new Date().toISOString(),
           });
+          await clearIssuesResolvedByParserRuleForUser(context.env.ROSTER_DB, suggestion.email, rule);
         }
       }
       await saveParserRuleSuggestions(null, suggestions.filter((item) => item.id !== suggestionId), context.env.ROSTER_DB);
@@ -1894,6 +1899,25 @@ async function clearIssueFromAllUsers(storeOrDb, fingerprint) {
   }
 }
 
+async function cleanupResolvedAdminIssues(storeOrDb) {
+  const records = await listAccountMirrors(storeOrDb).catch(() => []);
+  for (const record of records) {
+    if (!record?.adminIssues?.length) continue;
+    const existingIssues = sanitizeAdminIssues(record.adminIssues);
+    const nextIssues = [];
+    for (const issue of existingIssues) {
+      if (await isIssueResolvedByParserRules(null, record.email, issue, storeOrDb)) continue;
+      nextIssues.push(issue);
+    }
+    if (nextIssues.length === existingIssues.length) continue;
+    await persistAccountRecord(storeOrDb, {
+      ...record,
+      adminIssues: nextIssues,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+}
+
 async function clearIssuesResolvedByParserRule(storeOrDb, rule) {
   const normalizedRule = sanitizeParserExtensionRule(rule);
   if (!normalizedRule) return;
@@ -1990,13 +2014,27 @@ function parserRuleCodeFromRawValue(sourceValue, rawValue) {
   const text = String(rawValue || "").trim();
   const upper = text.toUpperCase();
   if (source === "DDH") return normalizeDdhParserRuleCodeText(text);
-  if (source === "MMC" || source === "Casey") {
-    const prefixMatch = upper.match(/^\s*\d{2}:?\d{2}\s*[-–]\s*\d{2}:?\d{2}\s+(.+?)\s*$/);
-    if (prefixMatch) return prefixMatch[1].trim().toUpperCase();
-    const suffixMatch = upper.match(/^\s*(.+?)\s+\d{2}:?\d{2}\s*[-–]\s*\d{2}:?\d{2}\s*$/);
-    if (suffixMatch) return suffixMatch[1].trim().toUpperCase();
-  }
+  const timedCode = parserRuleCodeFromTimedRawValue(source, upper);
+  if (timedCode) return timedCode;
   return upper;
+}
+
+function parserRuleCodeFromTimedRawValue(source, value) {
+  const prefixMatch = String(value || "").match(/^\s*(\d{2}):?(\d{2})\s*[-–]\s*(\d{2}):?(\d{2})(?:\s*(.+?))?\s*$/);
+  if (prefixMatch) {
+    const label = String(prefixMatch[5] || "").trim().toUpperCase();
+    if (label) return label;
+    return inferParserRulePeriodCode([Number(prefixMatch[1]), Number(prefixMatch[2])], source);
+  }
+  const suffixMatch = String(value || "").match(/^\s*(.+?)\s+(\d{2}):?(\d{2})\s*[-–]\s*(\d{2}):?(\d{2})\s*$/);
+  return suffixMatch ? suffixMatch[1].trim().toUpperCase() : "";
+}
+
+function inferParserRulePeriodCode(startHm, source = "") {
+  const [hour] = startHm;
+  if (hour >= 22 || hour < 6) return "NIGHT";
+  if (source === "MCH" ? hour >= 12 : hour >= 14) return "PM";
+  return "AM";
 }
 
 function normalizeDdhParserRuleCodeText(value) {
@@ -2016,6 +2054,10 @@ function normalizeDdhParserRuleCodeText(value) {
 function isKnownResolvedShiftCodeValue(sourceValue, rawValue) {
   const source = sanitizeIssueSource(sourceValue);
   const code = parserRuleCodeFromRawValue(source, rawValue);
+  if (!source || !code) return false;
+  if (["AM", "PM", "NIGHT"].includes(code)) return true;
+  if (code === "PHNW") return true;
+  if (source === "MCH" && ["CS", "OCS", "0CS", "CSOS"].includes(code)) return true;
   if (source === "DDH") {
     if (["CS", "CS ONSITE", "SSU"].includes(code)) return true;
     if (/^(ORANGE|SILVER|FAST|AVAO)\s+(AM|PM)$/.test(code)) return true;
@@ -3000,7 +3042,7 @@ function sanitizeParserExtensionRule(item, forcedSource = "") {
   if (!item || typeof item !== "object") return null;
   const source = sanitizeIssueSource(forcedSource || item.source);
   const seniority = sanitizeRuleSeniority(item.seniority);
-  const code = String(item.code || item.rawCode || "").trim().toUpperCase();
+  const code = normalizeParserExtensionRuleCode(source, item.code || item.rawCode || "");
   const kind = String(item.kind || "shift").trim().toLowerCase();
   const base = String(item.base || item.titleParts?.base || "").trim();
   const period = String(item.period || item.titleParts?.period || "").trim().toUpperCase();
@@ -3046,7 +3088,7 @@ function isRestrictedClinicalSupportRule(rule) {
 function normalizeParserExtensionRuleCode(source, value) {
   const text = String(value || "").trim().toUpperCase();
   if (!text) return "";
-  if (source === "MMC" || source === "Casey") {
+  if (source === "MMC" || source === "Casey" || source === "MCH") {
     return parserRuleCodeFromRawValue(source, text);
   }
   return text;

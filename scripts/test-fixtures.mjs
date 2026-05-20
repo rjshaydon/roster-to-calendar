@@ -443,7 +443,9 @@ await assert.rejects(
 const doctors = doctorOptions(mmcWorkbook, ddhWorkbook, caseyWorkbook);
 const defaultRules = parserRuleDefaults();
 const mmcRules = defaultRules.mmc || [];
+const mchRules = defaultRules.mch || [];
 const hasMmcRule = (seniority, code) => mmcRules.some((rule) => rule.seniority === seniority && rule.code === code);
+const hasMchRule = (seniority, code, base = "") => mchRules.some((rule) => rule.seniority === seniority && rule.code === code && (!base || rule.base === base));
 assert.ok(hasMmcRule("SMS", "AGC"));
 assert.ok(hasMmcRule("CMO", "AGC"));
 assert.ok(hasMmcRule("SMS", "CS"));
@@ -460,6 +462,9 @@ assert.ok(hasMmcRule("Transitional/Intermediate Registrar", "SWP"));
 assert.ok(hasMmcRule("Junior Registrar", "AHJ"));
 assert.ok(hasMmcRule("HMO", "PHJ"));
 assert.ok(hasMmcRule("Intern", "NSSJ"));
+assert.ok(hasMchRule("SMS", "CS", "CS"));
+assert.ok(hasMchRule("CMO", "OCS", "CS Office"));
+assert.ok(hasMchRule("HMO", "PHNW", "PHNW"));
 const nssjRule = mmcRules.find((rule) => rule.seniority === "HMO" && rule.code === "NSSJ");
 assert.equal(nssjRule.startTime, "23:00");
 
@@ -645,13 +650,16 @@ assert.ok(bobSeithMchView.events.some((event) => event.title === "MCH: CS" && ev
 
 const andrewHardyMch = mchDoctors.find((doctor) => doctor.displayName === "Andrew HARDY");
 const andrewHardyMchView = buildRosterView([], [], andrewHardyMch.key, undefined, {}, {}, [], [], mchWorkbook);
-assert.ok(andrewHardyMchView.events.some((event) => event.title === "MCH: OCS" && event.rawValue === "0800-1730 OCS"));
+assert.ok(andrewHardyMchView.events.some((event) => event.title === "MCH: CS Office" && event.rawValue === "0800-1730 OCS"));
 assert.ok(andrewHardyMchView.events.some((event) => event.title === "Conference Leave" && event.rawValue === "CME/L" && event.allDay));
 assert.ok(andrewHardyMchView.events.some((event) => event.title === "Exam Leave" && event.rawValue === "ME/L" && event.allDay));
 assert.ok(andrewHardyMchView.events.some((event) => event.title === "Conference Leave" && event.rawValue === "CME/L" && event.start === "2026-06-08" && event.end === "2026-06-15"));
 
 const adamWestMchWeek6 = adamWestMchView.events.filter((event) => event.rawValue === "PHNW 0800-1730");
 assert.ok(adamWestMchWeek6.some((event) => event.title === "MCH: PHNW"));
+const noSpacePhnwMchWorkbook = withWorkbookCell(mchWorkbook, "Week 6", "F21", { t: "s", v: "0800-1730PHNW", w: "0800-1730PHNW" });
+const noSpacePhnwMchView = buildRosterView([], [], adamWestMch.key, undefined, {}, {}, [], [], noSpacePhnwMchWorkbook);
+assert.ok(noSpacePhnwMchView.events.some((event) => event.title === "MCH: PHNW" && event.rawValue === "0800-1730PHNW"));
 
 const markLimMch = mchDoctors.find((doctor) => doctor.displayName === "Mark LIM");
 const markLimMchView = buildRosterView([], [], markLimMch.key, undefined, {}, {}, [], [], mchWorkbook);
@@ -3477,6 +3485,8 @@ await postState(stateStore, {
     includeAsShift: true,
   },
 });
+assert.equal(memoryD1AccountRecord(stateStore.d1, "patrick@example.com").adminIssues.length, 0, "local parser rule should clear matching user warning evidence");
+assert.equal(memoryD1AccountRecord(stateStore.d1, "senior@example.com").adminIssues.length, 1, "local parser rule should not clear other users");
 const creatorSuggestionView = await postState(stateStore, {
   action: "listUsers",
   email: "rhaydon@gmail.com",
@@ -3530,8 +3540,8 @@ XLSX.utils.book_append_sheet(srN1Workbook, srN1Sheet, "Week 1");
 const srN1View = buildRosterView([{ id: "sr-n1", workbook: srN1Workbook, file: { name: "AdultTerm.xlsx", size: 1, lastModified: 1 } }], [], "PATRICK TAN");
 assert.ok(srN1View.events.some((event) => event.rawValue === "2300-0900 N1" && event.title === "MMC: SR IC Night" && event.start.includes("23:00:00") && event.end.includes("09:00:00")), "Senior Registrar N1 explicit-time rules must render with the saved rule title");
 assert.equal(srN1View.issues.some((issue) => issue.rawValue === "2300-0900 N1"), false);
-assert.equal(memoryD1AccountRecord(stateStore.d1, "patrick@example.com").adminIssues.length, 1, "global parser rule must keep direct-user warning evidence for future reappearance");
-assert.equal(memoryD1AccountRecord(stateStore.d1, "senior@example.com").adminIssues.length, 1, "global parser rule must keep switch-user warning evidence for future reappearance");
+assert.equal(memoryD1AccountRecord(stateStore.d1, "patrick@example.com").adminIssues.length, 0, "global parser rule should keep direct-user warning evidence cleared");
+assert.equal(memoryD1AccountRecord(stateStore.d1, "senior@example.com").adminIssues.length, 0, "global parser rule should clear matching switch-user warning evidence");
 const staleReport = await postState(stateStore, {
   action: "reportUserError",
   email: "patrick@example.com",
@@ -3545,7 +3555,7 @@ const staleReport = await postState(stateStore, {
   },
 });
 assert.equal(staleReport.ignored, true, "resolved global shift-code warnings must not be requeued from stale user previews");
-assert.equal(memoryD1AccountRecord(stateStore.d1, "patrick@example.com").adminIssues.length, 1, "resolved global shift-code warning evidence must remain persisted");
+assert.equal(memoryD1AccountRecord(stateStore.d1, "patrick@example.com").adminIssues.length, 0, "resolved global shift-code warning evidence must remain cleared");
 const ssuBatchSave = await postState(stateStore, {
   action: "saveParserExtensionRule",
   email: "rhaydon@gmail.com",
@@ -3688,6 +3698,65 @@ const knownDdhSsuSms = await postState(stateStore, {
   },
 });
 assert.equal(knownDdhSsuSms.ignored, true, "known DDH SSU SMS mappings should not enter unresolved shift-code queues");
+await seedUser(stateStore, "michael@example.com", "michael-password", "Michael Coman");
+const michaelProfile = stateStore.d1.accountProfiles.get("michael@example.com");
+michaelProfile.admin_issues_json = JSON.stringify([
+  {
+    id: "MCH::SMS::OCS",
+    source: "MCH",
+    seniority: "SMS",
+    date: "2026-03-25",
+    rawValue: "0800-1730 OCS",
+    code: "OCS",
+    timeLabel: "08:00-17:30",
+    suggestedTitle: "MCH: OCS",
+    fingerprint: "MCH::SMS::OCS",
+    message: "MCH shift code not recognised; using explicit roster time.",
+  },
+  {
+    id: "MCH::SMS::PHNW",
+    source: "MCH",
+    seniority: "SMS",
+    date: "2026-03-09",
+    rawValue: "0800-1730PHNW",
+    code: "PHNW",
+    timeLabel: "08:00-17:30",
+    suggestedTitle: "MCH: PHNW",
+    fingerprint: "MCH::SMS::PHNW",
+    message: "MCH shift code not recognised; using explicit roster time.",
+  },
+  {
+    id: "MCH::SMS::AM",
+    source: "MCH",
+    seniority: "SMS",
+    date: "2026-02-10",
+    rawValue: "0800-1730",
+    code: "AM",
+    timeLabel: "08:00-17:30",
+    suggestedTitle: "MCH: AM",
+    fingerprint: "MCH::SMS::AM",
+    message: "MCH shift code not recognised; using explicit roster time.",
+  },
+  {
+    id: "MMC::CMO::PM",
+    source: "MMC",
+    seniority: "CMO",
+    date: "2026-02-09",
+    rawValue: "1430-0000",
+    code: "PM",
+    timeLabel: "14:30-00:00",
+    suggestedTitle: "MMC: PM",
+    fingerprint: "MMC::CMO::PM",
+    message: "MMC shift code not recognised; using explicit roster time.",
+  },
+]);
+const cleanedUserList = await postState(stateStore, {
+  action: "listUsers",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+});
+assert.equal(cleanedUserList.users.find((user) => user.email === "michael@example.com")?.adminIssues.length, 0, "creator user list should hide stale resolved shift-code issues");
+assert.equal(memoryD1AccountRecord(stateStore.d1, "michael@example.com").adminIssues.length, 0, "creator user list should persist cleanup of stale resolved shift-code issues");
 await postState(stateStore, {
   action: "saveParserExtensionRule",
   email: "rhaydon@gmail.com",

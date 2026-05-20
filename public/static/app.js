@@ -5775,13 +5775,27 @@ function parserRuleCodeFromRawValue(sourceValue, rawValue) {
   const text = String(rawValue || "").trim();
   const upper = text.toUpperCase();
   if (source === "DDH") return normalizeDdhParserRuleCodeText(text);
-  if (source === "MMC" || source === "Casey") {
-    const prefixMatch = upper.match(/^\s*\d{2}:?\d{2}\s*[-–]\s*\d{2}:?\d{2}\s+(.+?)\s*$/);
-    if (prefixMatch) return prefixMatch[1].trim().toUpperCase();
-    const suffixMatch = upper.match(/^\s*(.+?)\s+\d{2}:?\d{2}\s*[-–]\s*\d{2}:?\d{2}\s*$/);
-    if (suffixMatch) return suffixMatch[1].trim().toUpperCase();
-  }
+  const timedCode = parserRuleCodeFromTimedRawValue(source, upper);
+  if (timedCode) return timedCode;
   return upper;
+}
+
+function parserRuleCodeFromTimedRawValue(source, value) {
+  const prefixMatch = String(value || "").match(/^\s*(\d{2}):?(\d{2})\s*[-–]\s*(\d{2}):?(\d{2})(?:\s*(.+?))?\s*$/);
+  if (prefixMatch) {
+    const label = String(prefixMatch[5] || "").trim().toUpperCase();
+    if (label) return label;
+    return inferParserRulePeriodCode([Number(prefixMatch[1]), Number(prefixMatch[2])], source);
+  }
+  const suffixMatch = String(value || "").match(/^\s*(.+?)\s+(\d{2}):?(\d{2})\s*[-–]\s*(\d{2}):?(\d{2})\s*$/);
+  return suffixMatch ? suffixMatch[1].trim().toUpperCase() : "";
+}
+
+function inferParserRulePeriodCode(startHm, source = "") {
+  const [hour] = startHm;
+  if (hour >= 22 || hour < 6) return "NIGHT";
+  if (source === "MCH" ? hour >= 12 : hour >= 14) return "PM";
+  return "AM";
 }
 
 function normalizeDdhParserRuleCodeText(value) {
@@ -7378,6 +7392,9 @@ function isKnownResolvedShiftCodeValue(sourceValue, rawValue, normalizedTitle = 
   const source = sanitizeIssueSource(sourceValue);
   const code = parserRuleCodeFromRawValue(source, rawValue);
   if (!source || !code) return false;
+  if (["AM", "PM", "NIGHT"].includes(code)) return true;
+  if (code === "PHNW") return true;
+  if (source === "MCH" && ["CS", "OCS", "0CS", "CSOS"].includes(code)) return true;
   if (source === "DDH") {
     if (["CS", "CS ONSITE", "SSU"].includes(code)) return true;
     if (/^(ORANGE|SILVER|FAST|AVAO)\s+(AM|PM)$/.test(code)) return true;
@@ -9091,7 +9108,7 @@ function isRestrictedClinicalSupportRule(rule) {
 function normalizeParserExtensionRuleCode(source, value) {
   const text = String(value || "").trim().toUpperCase();
   if (!text) return "";
-  if (source === "MMC" || source === "Casey") {
+  if (source === "MMC" || source === "Casey" || source === "MCH") {
     return parserRuleCodeFromRawValue(source, text);
   }
   return text;
