@@ -123,8 +123,14 @@ assert.doesNotMatch(
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
     .match(/async function prepareLightweightAccountResponse[\s\S]*?export async function prepareAccountResponse/)?.[0] || "",
-  /role === "creator" \|\| role === "owner"[\s\S]*queryRosterFiles\(options\.db\)[\s\S]*imports:/,
-  "lightweight creator responses should still preserve active roster-file refs",
+  /role === "creator" \|\| role === "owner"[\s\S]*queryRosterFileRanges\(options\.db, \{ includeInactive: false \}\)[\s\S]*imports:/,
+  "lightweight creator responses should preserve active roster-file refs without loading roster doctors",
+);
+assert.doesNotMatch(
+  (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
+    .match(/async function prepareLightweightAccountResponse[\s\S]*?export async function prepareAccountResponse/)?.[0] || "",
+  /queryRosterFiles|queryRosterFileDoctors|queryRosterDoctors|queryCanonicalDoctors|loadSqlDoctorCandidates/,
+  "lightweight account responses should not hydrate broad doctor directories",
 );
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
@@ -161,6 +167,12 @@ assert.match(
   creatorSnapshotSource,
   /selectedDoctorKeyVariants/,
   "creator calendar snapshots should resolve deterministic key variants",
+);
+assert.doesNotMatch(
+  (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
+    .match(/export async function prepareAccountResponse[\s\S]*?function applyDefaultSelectedDoctorToState/)?.[0] || "",
+  /role !== "creator"[\s\S]*else \{[\s\S]*queryRosterFiles\(options\.db\)/,
+  "creator account preparation should use file ranges instead of full roster-file doctor hydration",
 );
 assert.doesNotMatch(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))

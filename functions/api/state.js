@@ -1409,10 +1409,10 @@ async function prepareLightweightAccountResponse(rawRecord, options = {}) {
   }
   const claims = sanitizeClaims(record.claims);
   if ((role === "creator" || role === "owner") && options.db) {
-    const files = await queryRosterFiles(options.db).catch(() => []);
+    const files = await queryRosterFileRanges(options.db, { includeInactive: false }).catch(() => []);
     state = {
       ...state,
-      imports: files.filter((file) => file.active !== false).map(repositoryImportRef),
+      imports: files.map(repositoryImportRef),
     };
   }
   return {
@@ -1505,13 +1505,13 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
       await upsertAccountMirror(options.db, updatedRecord).catch(() => null);
     }
   } else {
-    const d1Files = await queryRosterFiles(options.db).catch(() => []);
+    const d1Files = await queryRosterFileRanges(options.db, { includeInactive: false }).catch(() => []);
     const imported = {
       index: { version: 1, files: d1Files },
-      refs: d1Files.filter((file) => file.active !== false).map(repositoryImportRef),
+      refs: d1Files.map(repositoryImportRef),
       changed: false,
     };
-    const creatorRepositoryRefs = (imported.index.files || []).filter((file) => file.active !== false).map(repositoryImportRef);
+    const creatorRepositoryRefs = (imported.index.files || []).map(repositoryImportRef);
     const stateWithRefs = { ...state, imports: creatorRepositoryRefs };
     state = stateWithRefs;
   }
