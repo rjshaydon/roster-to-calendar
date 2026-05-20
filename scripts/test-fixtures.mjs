@@ -85,6 +85,12 @@ assert.match(
   "switching from the creator account should persist the creator doctor rather than the viewed doctor",
 );
 assert.match(
+  (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
+    .match(/if \(action === "adminLoadUser"\)[\s\S]*?if \(action === "claimRosterName"\)/)?.[0] || "",
+  /prepareLightweightAccountResponse[\s\S]*availableDoctors: \[\]/,
+  "Admin Users modal entry should avoid blocking on full doctor-directory hydration",
+);
+assert.match(
   appSource.match(/async function hydrateAuthenticatedWorkspace[\s\S]*?function markLoginPhase/)?.[0] || "",
   /currentUserEmail === OWNER_EMAIL[\s\S]*forceCreatorDoctorSession\(\)[\s\S]*loadCloudCalendarEvents/,
   "creator hydration should normalize the creator doctor before calendar events load",
@@ -257,8 +263,8 @@ assert.doesNotMatch(
 );
 assert.match(
   appSource.match(/async function saveSelectedRosterFilesToD1[\s\S]*?function emptyRosterPersistenceSummary/)?.[0] || "",
-  /entriesToSave = options\.force === true[\s\S]*entries\.filter\(\(entry\) => !persistedIds\.has\(entry\.id\) \|\| failedIds\.has\(entry\.id\)\)/,
-  "ordinary roster sync should process only missing or failed files",
+  /entriesToSave = options\.force === true[\s\S]*entries\.filter\(\(entry\) => !persistedIds\.has\(entry\.id\)\)/,
+  "ordinary roster sync should process missing files without automatically retrying failed files",
 );
 assert.match(appSource, /function rosterSyncLabel/, "file cards should expose live roster sync labels");
 assert.match(appSource, /Missing \/ unresolved shift codes/, "system card should expose unresolved shift-code review");

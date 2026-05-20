@@ -10258,10 +10258,9 @@ async function saveSelectedRosterFilesToD1(imports = selectedFiles, options = {}
   if (!entries.length) return emptyRosterPersistenceSummary();
   const expectedFileIds = entries.map((entry) => entry.id);
   const persistedIds = new Set(calendarStoreStatus?.expectedFiles?.persistedFileIds || []);
-  const failedIds = new Set([...rosterSyncStates.entries()].filter(([, state]) => state.status === "failed").map(([id]) => id));
   const entriesToSave = options.force === true
     ? entries
-    : entries.filter((entry) => !persistedIds.has(entry.id) || failedIds.has(entry.id));
+    : entries.filter((entry) => !persistedIds.has(entry.id));
   const saveResults = [];
   let latestStatus = calendarStoreStatus;
   if (!entriesToSave.length) return summarizeRosterPersistence(entries, latestStatus, saveResults);
