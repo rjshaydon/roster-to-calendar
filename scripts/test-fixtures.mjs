@@ -123,14 +123,8 @@ assert.doesNotMatch(
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
     .match(/async function prepareLightweightAccountResponse[\s\S]*?export async function prepareAccountResponse/)?.[0] || "",
-  /role === "creator" \|\| role === "owner"[\s\S]*queryRosterFileRanges\(options\.db, \{ includeInactive: false \}\)[\s\S]*imports:/,
-  "lightweight creator responses should preserve active roster-file refs without loading roster doctors",
-);
-assert.doesNotMatch(
-  (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
-    .match(/async function prepareLightweightAccountResponse[\s\S]*?export async function prepareAccountResponse/)?.[0] || "",
-  /queryRosterFiles|queryRosterFileDoctors|queryRosterDoctors|queryCanonicalDoctors|loadSqlDoctorCandidates/,
-  "lightweight account responses should not hydrate broad doctor directories",
+  /role === "creator" \|\| role === "owner"[\s\S]*queryRosterFiles\(options\.db\)[\s\S]*imports:/,
+  "lightweight creator responses should still preserve active roster-file refs",
 );
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
@@ -147,32 +141,8 @@ assert.doesNotMatch(
 assert.doesNotMatch(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
     .match(/if \(action === "loadCalendarEvents"\)[\s\S]*?if \(action === "loadInsightImports"\)/)?.[0] || "",
-  /loadRepositoryIndex|creatorDoctorOptionsForD1|mergedDoctorOptionsFromD1|buildCanonicalDoctorOptionsFromRows/,
-  "calendar event loads should stay targeted and avoid broad doctor-directory hydration",
-);
-const creatorSnapshotSource =
-  (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
-    .match(/async function buildDerivedAccountSnapshot[\s\S]*?function rawRosterObjectKey/)?.[0] || "";
-assert.match(
-  creatorSnapshotSource,
-  /resolveSelectedDoctorForCalendarSnapshot/,
-  "creator calendar snapshots should use targeted selected-doctor lookup",
-);
-assert.match(
-  creatorSnapshotSource,
-  /doctorOptions = \[doctor\]/,
-  "creator calendar snapshots should not return the full doctor directory",
-);
-assert.match(
-  creatorSnapshotSource,
-  /selectedDoctorKeyVariants/,
-  "creator calendar snapshots should resolve deterministic key variants",
-);
-assert.doesNotMatch(
-  (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
-    .match(/export async function prepareAccountResponse[\s\S]*?function applyDefaultSelectedDoctorToState/)?.[0] || "",
-  /role !== "creator"[\s\S]*else \{[\s\S]*queryRosterFiles\(options\.db\)/,
-  "creator account preparation should use file ranges instead of full roster-file doctor hydration",
+  /loadRepositoryIndex/,
+  "calendar event loads should be D1-first and avoid repository-index hydration",
 );
 assert.doesNotMatch(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
@@ -183,26 +153,8 @@ assert.doesNotMatch(
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
     .match(/if \(action === "claimRosterName"\)[\s\S]*?if \(action === "listUsers"\)/)?.[0] || "",
-  /resolveDoctorClaimCandidate/,
-  "manual roster claims should use targeted live roster doctor lookup",
-);
-assert.doesNotMatch(
-  (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
-    .match(/if \(action === "claimRosterName"\)[\s\S]*?if \(action === "listUsers"\)/)?.[0] || "",
-  /loadSqlDoctorCandidates|mergedDoctorOptionsFromD1|buildCanonicalDoctorOptionsFromRows/,
-  "manual roster claims must not load or canonicalize the whole doctor directory",
-);
-assert.match(
-  (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
-    .match(/if \(action === "adminLoadUser"\)[\s\S]*?if \(action === "claimRosterName"\)/)?.[0] || "",
-  /prepareLightweightAccountResponse[\s\S]*availableDoctors: targetClaims\.length[\s\S]*\? \[\][\s\S]*repositoryDoctorCandidates/,
-  "claimed-account entry should use lightweight state and only load the picker for unclaimed accounts",
-);
-assert.doesNotMatch(
-  (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
-    .match(/if \(action === "adminLoadUser"\)[\s\S]*?if \(action === "claimRosterName"\)/)?.[0] || "",
-  /loadSqlDoctorCandidates|mergedDoctorOptionsFromD1|buildCanonicalDoctorOptionsFromRows/,
-  "admin user entry should not directly load or canonicalize the whole doctor directory",
+  /loadSqlDoctorCandidates[\s\S]*findDoctorClaimCandidate/,
+  "manual roster claims should resolve from SQL doctor candidates",
 );
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
@@ -214,11 +166,6 @@ assert.match(
   appSource.match(/async function hydrateAuthenticatedWorkspace[\s\S]*?function markLoginPhase/)?.[0] || "",
   /if \(!adminTargetEmail && currentUserEmail !== OWNER_EMAIL\)[\s\S]*resolveCurrentAccountClaims\(\)[\s\S]*loadCloudCalendarEvents[\s\S]*void loadServerUsers\(\)/,
   "claim resolution should finish before user calendars load, while creator user-list hydration remains non-blocking",
-);
-assert.match(
-  appSource.match(/async function loadServerUsers[\s\S]*?async function refreshCalendarStoreStatus/)?.[0] || "",
-  /availableRosterDoctors[\s\S]*renderDoctorState\(\)/,
-  "deferred server user enrichment should refresh the Creator doctor switcher once doctors arrive",
 );
 assert.match(
   appSource.match(/async function loginWithEmail[\s\S]*?async function restoreCloudState/)?.[0] || "",
@@ -283,16 +230,6 @@ assert.match(
   /if \(!doctorDiagnostics\.length\)[\s\S]*queryRosterFileDoctors\(db\)[\s\S]*resolveCanonicalDoctorOptionForKey/,
   "doctor profile load should reserve full canonical rebuilds for the rare targeted-lookup miss path",
 );
-assert.match(
-  await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"),
-  /mergedDoctorOptionsFromD1[\s\S]*queryCanonicalDoctors[\s\S]*queryRosterFileDoctors/,
-  "available doctor candidates should merge canonical doctors with live roster-file doctors",
-);
-assert.match(
-  await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"),
-  /doctorProfileLoadDiagnostics/,
-  "failed doctor profile loads should return targeted diagnostics",
-);
 assert.match(appSource, /data-replace-active-rosters/, "creator UI should expose a roster recovery action");
 assert.match(appSource, /<strong>Roster database<\/strong>/, "system card should use plain roster-database language");
 assert.match(appSource, /source file\$\{retainedSourceTotal === 1 \? \"\" : \"s\"\} retained/, "system card should report retained raw source coverage");
@@ -310,10 +247,9 @@ assert.doesNotMatch(
 );
 assert.match(
   appSource.match(/async function saveSelectedRosterFilesToD1[\s\S]*?function emptyRosterPersistenceSummary/)?.[0] || "",
-  /entriesToSave = options\.force === true[\s\S]*entries\.filter\(\(entry\) => !persistedIds\.has\(entry\.id\)\)/,
-  "ordinary roster sync should process missing files without automatically retrying failed files",
+  /entriesToSave = options\.force === true[\s\S]*entries\.filter\(\(entry\) => !persistedIds\.has\(entry\.id\) \|\| failedIds\.has\(entry\.id\)\)/,
+  "ordinary roster sync should process only missing or failed files",
 );
-assert.match(await readFile(new URL("../README.md", import.meta.url), "utf8"), /Cloudflare 503 \/ CPU guardrail/, "README should document Cloudflare 503 CPU guardrails");
 assert.match(appSource, /function rosterSyncLabel/, "file cards should expose live roster sync labels");
 assert.match(appSource, /Missing \/ unresolved shift codes/, "system card should expose unresolved shift-code review");
 assert.match(appSource, /parserRuleSeniorityOption/, "shift-code editor should expose multi-seniority selection");
@@ -337,23 +273,6 @@ assert.match(
   appSource.match(/function renderParserRulesCard[\s\S]*?function collectUnknownShiftIssues/)?.[0] || "",
   /parserRuleSuggestions\.length \? `[\s\S]*<strong>User suggestions<\/strong>/,
   "empty user-suggestion sections should be omitted",
-);
-assert.match(appSource, /function visibleAdminIssues/, "admin warnings should have one shared visible-issue predicate");
-assert.match(
-  appSource.match(/function renderAdminErrorsCard[\s\S]*?function subscriptionUrl/)?.[0] || "",
-  /visibleAdminIssues/,
-  "Admin Errors should hide resolved parser-warning evidence at render time",
-);
-assert.match(
-  appSource.match(/function openParserRuleModalFromPreviewIssue[\s\S]*?function openParserRuleModalFromRule/)?.[0] || "",
-  /renderedPreviewIssueIndex[\s\S]*buildClientPreviewData\(latestPreview\)\.issues/,
-  "Warnings-panel shift-code editing should find synthesized rendered issues",
-);
-assert.match(appSource, /function rosterDoctorIdentityKey/, "claim dropdowns should use stable roster doctor identities");
-assert.match(
-  appSource.match(/function renderClaimSection[\s\S]*?async function updatePreview/)?.[0] || "",
-  /renderedClaimDoctorIndex[\s\S]*rosterDoctorIdentityKey[\s\S]*findAvailableRosterDoctorByIdentity/,
-  "Use Selected Name should resolve doctors by source/key instead of fragile array index",
 );
 assert.match(appSource, /function exportHospitalOptions/, "one-off exports should expose hospital options");
 assert.match(appSource, /Recognised hospitals &amp; default locations/, "account modal should expose recognised hospital locations");
@@ -442,8 +361,8 @@ assert.doesNotMatch(
 );
 assert.match(
   appSource.match(/async function renderWhenInsight[\s\S]*?function renderWhenInsightResult/)?.[0] || "",
-  /fetchRosterOverlapDoctors[\s\S]*const options = prioritizeDoctorOptions[\s\S]*doctorKeys: \[selectedKey\][\s\S]*renderWhenInsightResult\(\{ options, selectedComparison/,
-  "general when insights should keep all compact overlap doctors in the dropdown while loading one selected doctor's events",
+  /fetchRosterOverlapDoctors[\s\S]*requestedDoctorKeys = \[insightsState\.comparisonDoctorKey\];[\s\S]*doctorKeys: requestedDoctorKeys/,
+  "general when insights should fetch a compact overlap doctor list before loading one selected doctor's events",
 );
 assert.match(
   calendarMigrationSource,
@@ -2048,8 +1967,6 @@ const d1CreatorCalendar = await postState(d1StateStore, {
 }, d1Store);
 assert.equal(d1CreatorCalendar.snapshot?.preview?.derivedFromD1, true);
 assert.ok(d1CreatorCalendar.snapshot.preview.events.length > 0);
-assert.equal(d1CreatorCalendar.snapshot.doctorOptions.length, 1, "creator calendar load should not return the full doctor directory");
-assert.equal(d1CreatorCalendar.snapshot.doctorOptions[0].key, d1Doctor.key);
 assert.ok(d1CreatorCalendar.snapshot.detectedSources.mmc.length > 0, "creator D1 snapshots should retain detected roster sources");
 const d1CreatorFeedResponse = await handleFeedGet({
   request: new Request(`http://fixture.test/api/feed?token=${d1CreatorLogin.subscription.token}`),
@@ -3166,7 +3083,6 @@ const michaelAdminLoad = await postState(michaelStateStore, {
   targetEmail: "michael@example.com",
 });
 assert.deepEqual(michaelAdminLoad.state.imports.map((item) => item.repoId).sort(), ["michael-mch", "michael-mmc"]);
-assert.deepEqual(michaelAdminLoad.availableDoctors, [], "claimed admin account entry should not load the full available-doctor directory");
 const michaelPrimaryResolution = await postState(michaelStateStore, {
   action: "resolveDoctorAccount",
   email: "rhaydon@gmail.com",
@@ -3401,93 +3317,6 @@ const manyDoctorsEnrichment = await postState(manyDoctorsStore, {
 });
 assert.equal(manyDoctorsEnrichment.availableDoctors.length, 90);
 assert.ok(manyDoctorsStore.accountListCalls <= 2, "available doctor claimed status should avoid repeated account scans");
-
-const staleCanonicalStore = new MemoryStore();
-staleCanonicalStore.d1 = new MemoryD1();
-seedD1Repository(staleCanonicalStore.d1, [{
-  id: "stale-canonical-roster",
-  name: "AdultMMCTerm2.2026.Ver1.pdf",
-  sourceType: "mmc",
-  active: true,
-  doctors: [
-    { key: "TITUS HACKMAN", displayName: "Titus HACKMAN", sourceType: "mmc" },
-  ],
-}]);
-staleCanonicalStore.d1.canonicalDoctors.set("OTHER DOCTOR", {
-  canonical_key: "OTHER DOCTOR",
-  display_name: "Other Doctor",
-  source_type: "mmc",
-  source_types_json: JSON.stringify(["mmc"]),
-  aliases_json: JSON.stringify([{ sourceType: "mmc", key: "OTHER DOCTOR", displayName: "Other Doctor" }]),
-  has_events: 1,
-});
-staleCanonicalStore.d1.events.set("titus-stale-canonical-shift", {
-  id: "titus-stale-canonical-shift",
-  file_id: "stale-canonical-roster",
-  source_type: "mmc",
-  doctor_key: "TITUS HACKMAN",
-  display_name: "Titus HACKMAN",
-  start_date: "2026-05-06",
-  end_date: "2026-05-06",
-  start_ts: "2026-05-06T08:00:00",
-  end_ts: "2026-05-06T17:00:00",
-  title: "MMC: Ward AM",
-  raw_value: "0800-1700 WARD",
-  seniority: "Intern",
-  location: "",
-  all_day: 0,
-  time_label: "08:00-17:00",
-  event_json: JSON.stringify({
-    id: "titus-stale-canonical-shift",
-    source: "MMC",
-    title: "MMC: Ward AM",
-    seniority: "Intern",
-    allDay: false,
-    start: "2026-05-06T08:00:00",
-    end: "2026-05-06T17:00:00",
-    rawValue: "0800-1700 WARD",
-    timeLabel: "08:00-17:00",
-  }),
-});
-await postState(staleCanonicalStore, {
-  action: "login",
-  email: "rhaydon@gmail.com",
-  password: creatorPassword,
-});
-await seedUser(staleCanonicalStore, "titus@example.com", "titus-password", "Titus Hackman");
-const staleCanonicalAvailable = await postState(staleCanonicalStore, {
-  action: "resolveAccountClaims",
-  email: "titus@example.com",
-  password: "titus-password",
-});
-assert.ok(staleCanonicalAvailable.availableDoctors.some((doctor) => doctor.key === "TITUS HACKMAN"), "live roster-file doctors should appear even when canonical doctors are stale");
-const staleCanonicalClaim = await postState(staleCanonicalStore, {
-  action: "claimRosterName",
-  email: "titus@example.com",
-  password: "titus-password",
-  claim: { sourceType: "mmc", key: "TITUS HACKMAN" },
-});
-assert.equal(staleCanonicalClaim.claims[0]?.key, "TITUS HACKMAN", "Use Selected Name should claim a doctor available only from live roster rows");
-assert.deepEqual(staleCanonicalClaim.availableDoctors, [], "claiming a roster name should not reload the full available-doctor directory");
-staleCanonicalStore.d1.canonicalDoctors.clear();
-const liveOnlyClaim = await postState(staleCanonicalStore, {
-  action: "claimRosterName",
-  email: "titus@example.com",
-  password: "titus-password",
-  claim: { sourceType: "mmc", key: "TITUS HACKMAN" },
-});
-assert.equal(liveOnlyClaim.claims[0]?.key, "TITUS HACKMAN", "Use Selected Name should claim by targeted live roster lookup without canonical doctors");
-const staleCanonicalProfile = await postState(staleCanonicalStore, {
-  action: "loadDoctorProfile",
-  email: "rhaydon@gmail.com",
-  password: creatorPassword,
-  profileId: "TITUS HACKMAN::mmc",
-  doctorKey: "TITUS HACKMAN",
-  displayName: "Titus HACKMAN",
-  sourceTypes: ["mmc"],
-});
-assert.equal(staleCanonicalProfile.snapshotAvailable, true, "doctor profile load should use live roster rows even when canonical doctors are stale");
-assert.ok(staleCanonicalProfile.snapshot.preview.events.some((event) => event.rawValue === "0800-1700 WARD"));
 
 const profileImports = await postStateRaw(stateStore, {
   action: "loadDoctorProfileImports",

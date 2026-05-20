@@ -176,8 +176,7 @@ export async function onRequestPost(context) {
       }
       const target = await loadAccountMirror(context.env.ROSTER_DB, targetEmail);
       if (!target) return Response.json({ error: "Account not found." }, { status: 404 });
-      const targetClaims = sanitizeClaims(target.claims);
-      const prepared = await prepareLightweightAccountResponse(target, { db: context.env.ROSTER_DB });
+      const prepared = await prepareAccountResponse(null, target, { db: context.env.ROSTER_DB, includeAvailableDoctors: true });
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -185,18 +184,16 @@ export async function onRequestPost(context) {
         realName: prepared.realName,
         state: prepared.state,
         claims: prepared.claims,
-        nameMatches: [],
-        suggestedClaims: [],
-        availableDoctors: targetClaims.length
-          ? []
-          : await repositoryDoctorCandidates(null, null, context.env.ROSTER_DB, { hideZeroEventStandalone: true }),
+        nameMatches: prepared.nameMatches,
+        suggestedClaims: prepared.nameMatches,
+        availableDoctors: prepared.availableDoctors,
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
-        snapshot: null,
-        snapshotAvailable: false,
-        snapshotStale: false,
-        snapshotBuiltAt: "",
-        issueConfig: null,
+        snapshot: prepared.snapshot,
+        snapshotAvailable: prepared.snapshotAvailable,
+        snapshotStale: prepared.snapshotStale,
+        snapshotBuiltAt: prepared.snapshotBuiltAt,
+        issueConfig: prepared.issueConfig,
       });
     }
 
@@ -204,7 +201,8 @@ export async function onRequestPost(context) {
       const claimEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
       const targetRecord = claimEmail === email ? account.record : await loadAccountMirror(context.env.ROSTER_DB, claimEmail);
       if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
-      const claim = await resolveDoctorClaimCandidate(context.env.ROSTER_DB, body?.claim);
+      const doctorCandidates = await loadSqlDoctorCandidates(context.env.ROSTER_DB);
+      const claim = findDoctorClaimCandidate(doctorCandidates, body?.claim);
       if (!claim) {
         return Response.json({ error: "Roster name was not found." }, { status: 400 });
       }
@@ -226,10 +224,7 @@ export async function onRequestPost(context) {
         updatedAt: new Date().toISOString(),
       };
       await upsertAccountMirror(context.env.ROSTER_DB, updated);
-      const prepared = await prepareAccountResponse(null, updated, {
-        db: context.env.ROSTER_DB,
-        includeAvailableDoctors: false,
-      });
+      const prepared = await prepareAccountResponse(null, updated, { db: context.env.ROSTER_DB });
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -830,10 +825,6 @@ export async function onRequestPost(context) {
         ...profile,
         aliases: requestedAliases,
       }, context.env.ROSTER_DB, email);
-      const diagnostics = snapshotInfo.snapshotAvailable ? null : await doctorProfileLoadDiagnostics(context.env.ROSTER_DB, {
-        ...profile,
-        aliases: requestedAliases,
-      });
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -842,7 +833,6 @@ export async function onRequestPost(context) {
         snapshotAvailable: snapshotInfo.snapshotAvailable,
         snapshotStale: snapshotInfo.snapshotStale,
         snapshotBuiltAt: snapshotInfo.snapshotBuiltAt,
-        diagnostics,
         issueConfig: await buildIssueConfig(null, ""),
       });
     }
@@ -1408,15 +1398,10 @@ async function prepareLightweightAccountResponse(rawRecord, options = {}) {
   }
   const claims = sanitizeClaims(record.claims);
   if ((role === "creator" || role === "owner") && options.db) {
-    const files = await queryRosterFileRanges(options.db, { includeInactive: false }).catch(() => []);
+    const files = await queryRosterFiles(options.db).catch(() => []);
     state = {
       ...state,
-      imports: files.map(repositoryImportRef),
-    };
-  } else if (claims.length && options.db) {
-    state = {
-      ...state,
-      imports: await d1RepositoryImportRefsForClaims(options.db, claims),
+      imports: files.filter((file) => file.active !== false).map(repositoryImportRef),
     };
   }
   return {
@@ -1483,7 +1468,7 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
 
   if (role !== "creator" && role !== "owner") {
     const originalClaims = claims;
-    const matchedClaims = claims.length ? [] : matchDoctorClaims(await loadSqlDoctorCandidates(options.db), record.realName || "");
+    const matchedClaims = matchDoctorClaims(await loadSqlDoctorCandidates(options.db), record.realName || "");
     nameMatches = matchedClaims.filter((claim) => !claims.some((existing) => sameClaim(existing, claim)));
     linkedProfiles = await linkedDoctorProfilesForClaims(store, claims, options.db);
     const d1Refs = await d1RepositoryImportRefsForClaims(options.db, claims);
@@ -1509,13 +1494,13 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
       await upsertAccountMirror(options.db, updatedRecord).catch(() => null);
     }
   } else {
-    const d1Files = await queryRosterFileRanges(options.db, { includeInactive: false }).catch(() => []);
+    const d1Files = await queryRosterFiles(options.db).catch(() => []);
     const imported = {
       index: { version: 1, files: d1Files },
-      refs: d1Files.map(repositoryImportRef),
+      refs: d1Files.filter((file) => file.active !== false).map(repositoryImportRef),
       changed: false,
     };
-    const creatorRepositoryRefs = (imported.index.files || []).map(repositoryImportRef);
+    const creatorRepositoryRefs = (imported.index.files || []).filter((file) => file.active !== false).map(repositoryImportRef);
     const stateWithRefs = { ...state, imports: creatorRepositoryRefs };
     state = stateWithRefs;
   }
@@ -1603,19 +1588,19 @@ async function buildDerivedAccountSnapshot(db, context) {
   let selectedKey = "";
   let selectedSourceTypes = [];
   if (role === "creator" || role === "owner") {
+    const groupedDoctors = await creatorDoctorOptionsForD1(db, context.index);
     const requestedKey = normalizeRosterName(context.doctorKey || state.session?.doctorKey || "");
     selectedKey = requestedKey || OWNER_DOCTOR_KEY;
-    let resolved = await resolveSelectedDoctorForCalendarSnapshot(db, selectedKey);
-    if (requestedKey && selectedKey !== OWNER_DOCTOR_KEY && !resolved.doctor) {
+    let doctor = findDoctorOptionByKey(groupedDoctors, selectedKey);
+    if (requestedKey && selectedKey !== OWNER_DOCTOR_KEY && !doctor) {
       selectedKey = OWNER_DOCTOR_KEY;
-      resolved = await resolveSelectedDoctorForCalendarSnapshot(db, selectedKey);
+      doctor = findDoctorOptionByKey(groupedDoctors, selectedKey);
     }
-    const doctor = resolved.doctor;
     if (!doctor) return null;
     doctorKeys = doctorKeysForOption(doctor);
-    doctorDiagnostics = resolved.rows;
+    doctorDiagnostics = await queryRosterFileDoctorsForKeys(db, doctorKeys);
     doctorPairs = doctorDiagnostics.map((row) => ({ fileId: row.fileId, doctorKey: row.doctorKey }));
-    doctorOptions = [doctor];
+    doctorOptions = groupedDoctors;
     selectedSourceTypes = doctor?.sourceTypes || [doctor?.sourceType].filter(Boolean);
   } else {
     const claims = sanitizeClaims(context.claims);
@@ -1687,25 +1672,6 @@ async function buildDerivedAccountSnapshot(db, context) {
   });
 }
 
-async function resolveSelectedDoctorForCalendarSnapshot(db, doctorKey) {
-  const normalizedKey = normalizeRosterName(doctorKey || "");
-  if (!normalizedKey) return { doctor: null, rows: [] };
-  const rows = await queryRosterFileDoctorsForKeys(db, selectedDoctorKeyVariants(normalizedKey)).catch(() => []);
-  if (!rows.length) return { doctor: null, rows: [] };
-  return {
-    doctor: buildDoctorOptionFromRows([...rows]),
-    rows,
-  };
-}
-
-function selectedDoctorKeyVariants(doctorKey) {
-  const normalized = normalizeRosterName(doctorKey || "");
-  const tokens = normalized.split(" ").filter(Boolean);
-  const variants = [normalized];
-  if (tokens.length === 2) variants.push(`${tokens[1]} ${tokens[0]}`);
-  return [...new Set(variants.filter(Boolean))];
-}
-
 function rawRosterObjectKey(fileId) {
   return `rosters/${String(fileId || "").trim()}`;
 }
@@ -1772,97 +1738,21 @@ function doctorKeysForOption(doctor) {
 }
 
 async function creatorDoctorOptionsForD1(db, index) {
-  return await mergedDoctorOptionsFromD1(db, { includeZeroEventStandalone: true });
-}
-
-async function loadSqlDoctorCandidates(db) {
-  const mergedDoctors = await mergedDoctorOptionsFromD1(db, { includeZeroEventStandalone: true });
-  if (mergedDoctors.length) return mergedDoctors;
-  const rosterDoctors = await queryRosterDoctors(db).catch(() => []);
-  if (rosterDoctors.length) return rosterDoctors;
+  const canonicalDoctors = await queryCanonicalDoctors(db).catch(() => []);
+  if (canonicalDoctors.length) return canonicalDoctors;
+  const doctorRows = await queryRosterFileDoctors(db).catch(() => []);
+  if (doctorRows.length) return await buildCanonicalDoctorOptionsFromRows(db, doctorRows, { includeZeroEventStandalone: true });
   return [];
 }
 
-async function mergedDoctorOptionsFromD1(db, options = {}) {
-  const [canonicalDoctors, doctorRows] = await Promise.all([
-    queryCanonicalDoctors(db, { includeZeroEventStandalone: options.includeZeroEventStandalone !== false }).catch(() => []),
-    queryRosterFileDoctors(db).catch(() => []),
-  ]);
-  const rowDoctors = doctorRows.length
-    ? await buildCanonicalDoctorOptionsFromRows(db, doctorRows, {
-        includeZeroEventStandalone: options.includeZeroEventStandalone === true,
-      })
-    : [];
-  return mergeDoctorOptions(canonicalDoctors, rowDoctors, options);
-}
-
-function mergeDoctorOptions(primary = [], fallback = [], options = {}) {
-  const byIdentity = new Map();
-  const includeZero = options.includeZeroEventStandalone === true;
-  for (const doctor of [...primary, ...fallback]) {
-    const normalized = normalizeDoctorOptionForMerge(doctor);
-    if (!normalized?.key || !normalized.displayName) continue;
-    const marker = `${normalized.sourceType || ""}:${normalized.key}`;
-    if (byIdentity.has(marker)) {
-      const existing = byIdentity.get(marker);
-      byIdentity.set(marker, {
-        ...existing,
-        ...normalized,
-        sourceTypes: [...new Set([...(existing.sourceTypes || []), ...(normalized.sourceTypes || [])])],
-        aliases: mergeDoctorAliases(existing.aliases || [], normalized.aliases || []),
-        hasEvents: existing.hasEvents !== false || normalized.hasEvents !== false,
-      });
-      continue;
-    }
-    byIdentity.set(marker, normalized);
-  }
-  return [...byIdentity.values()]
-    .filter((doctor) => includeZero || doctor.hasEvents !== false)
-    .sort((left, right) => left.displayName.localeCompare(right.displayName) || String(left.sourceType || "").localeCompare(String(right.sourceType || "")));
-}
-
-function normalizeDoctorOptionForMerge(doctor) {
-  const sourceTypes = sanitizeSourceTypes(doctor?.sourceTypes || (doctor?.sourceType ? [doctor.sourceType] : []));
-  const sourceType = String(doctor?.sourceType || sourceTypes[0] || "").toLowerCase();
-  const key = normalizeRosterName(doctor?.key || doctor?.doctorKey || "");
-  const displayName = formatRosterDisplayName(doctor?.displayName || doctor?.key || doctor?.doctorKey || "");
-  const aliases = Array.isArray(doctor?.aliases)
-    ? doctor.aliases.map((alias) => ({
-        ...alias,
-        key: normalizeRosterName(alias?.key || ""),
-        displayName: formatRosterDisplayName(alias?.displayName || alias?.key || ""),
-        sourceType: String(alias?.sourceType || "").toLowerCase(),
-      })).filter((alias) => alias.key && alias.displayName && isRosterSourceType(alias.sourceType))
-    : sourceTypes.map((item) => ({
-        sourceType: item,
-        key,
-        displayName,
-      })).filter((alias) => alias.key && alias.displayName && isRosterSourceType(alias.sourceType));
-  return {
-    ...doctor,
-    key,
-    displayName,
-    sourceType: isRosterSourceType(sourceType) ? sourceType : sourceTypes[0] || "",
-    sourceTypes,
-    aliases,
-    hasEvents: doctor?.hasEvents !== false,
-  };
-}
-
-function mergeDoctorAliases(left = [], right = []) {
-  const byMarker = new Map();
-  for (const alias of [...left, ...right]) {
-    const sourceType = String(alias?.sourceType || "").toLowerCase();
-    const key = normalizeRosterName(alias?.key || "");
-    if (!sourceType || !key) continue;
-    byMarker.set(`${sourceType}:${key}`, {
-      ...alias,
-      sourceType,
-      key,
-      displayName: String(alias?.displayName || key).trim(),
-    });
-  }
-  return [...byMarker.values()];
+async function loadSqlDoctorCandidates(db) {
+  const canonicalDoctors = await queryCanonicalDoctors(db).catch(() => []);
+  if (canonicalDoctors.length) return canonicalDoctors;
+  const rosterDoctors = await queryRosterDoctors(db).catch(() => []);
+  if (rosterDoctors.length) return rosterDoctors;
+  const doctorRows = await queryRosterFileDoctors(db).catch(() => []);
+  if (doctorRows.length) return await buildCanonicalDoctorOptionsFromRows(db, doctorRows, { includeZeroEventStandalone: true });
+  return [];
 }
 
 async function resolveSelectedRosterFileDoctorRows(db, doctorKey) {
@@ -2421,32 +2311,6 @@ async function buildDerivedDoctorProfileSnapshot(store, db, profile, ownerEmail 
   });
 }
 
-async function doctorProfileLoadDiagnostics(db, profile) {
-  if (!hasCalendarDb({ ROSTER_DB: db }) || !profile?.doctorKey) return null;
-  const requestedKeys = doctorKeysForOption(profile);
-  const [directRows, allRows, canonicalDoctors] = await Promise.all([
-    queryRosterFileDoctorsForKeys(db, requestedKeys).catch(() => []),
-    queryRosterFileDoctors(db).catch(() => []),
-    queryCanonicalDoctors(db).catch(() => []),
-  ]);
-  const requestedKeySet = new Set(requestedKeys.map(normalizeRosterName));
-  const canonicalMatches = canonicalDoctors.filter((doctor) => doctorKeysForOption(doctor).some((key) => requestedKeySet.has(normalizeRosterName(key))));
-  const identity = rosterIdentityKey(profile.displayName || profile.doctorKey);
-  const fuzzyRows = allRows.filter((row) => {
-    const rowIdentity = rosterIdentityKey(row.displayName || row.doctorKey);
-    return requestedKeySet.has(normalizeRosterName(row.doctorKey)) || (identity && rowIdentity && likelySameRosterName(identity, rowIdentity));
-  });
-  return {
-    requestedKey: normalizeRosterName(profile.doctorKey || ""),
-    requestedSourceTypes: sanitizeSourceTypes(profile.sourceTypes),
-    directRosterRowCount: directRows.length,
-    fuzzyRosterRowCount: fuzzyRows.length,
-    canonicalMatchCount: canonicalMatches.length,
-    directEventCount: directRows.reduce((total, row) => total + Number(row.eventCount || 0), 0),
-    fuzzyEventCount: fuzzyRows.reduce((total, row) => total + Number(row.eventCount || 0), 0),
-  };
-}
-
 function matchDoctorClaims(doctors, realName) {
   const claims = [];
   const realIdentity = rosterIdentityKey(realName);
@@ -2468,10 +2332,14 @@ function matchDoctorClaims(doctors, realName) {
 
 async function repositoryDoctorCandidates(store, index, db = null, options = {}) {
   const accountIndex = await loadClaimedAccountIndex(store, db);
-  const doctors = await mergedDoctorOptionsFromD1(db, {
+  const canonicalDoctors = await queryCanonicalDoctors(db, {
     includeZeroEventStandalone: options.hideZeroEventStandalone !== true,
-  });
-  if (doctors.length) return attachClaimedAccountMetadata(doctors, accountIndex);
+  }).catch(() => []);
+  if (canonicalDoctors.length) return attachClaimedAccountMetadata(canonicalDoctors, accountIndex);
+  const doctorRows = await queryRosterFileDoctors(db).catch(() => []);
+  if (doctorRows.length) return attachClaimedAccountMetadata(await buildCanonicalDoctorOptionsFromRows(db, doctorRows, {
+    includeZeroEventStandalone: options.hideZeroEventStandalone !== true,
+  }), accountIndex);
   return [];
 }
 
@@ -2803,22 +2671,6 @@ function findDoctorClaimCandidate(canonicalDoctors, rawClaim) {
     };
   }
   return null;
-}
-
-async function resolveDoctorClaimCandidate(db, rawClaim) {
-  const claim = {
-    key: normalizeRosterName(rawClaim?.key || ""),
-    sourceType: String(rawClaim?.sourceType || "").toLowerCase(),
-  };
-  if (!claim.key || !isRosterSourceType(claim.sourceType)) return null;
-  const rows = await queryRosterFileDoctorsForKeys(db, [claim.key]).catch(() => []);
-  const exact = rows.find((row) => String(row.sourceType || "").toLowerCase() === claim.sourceType);
-  if (!exact) return null;
-  return {
-    key: normalizeRosterName(exact.doctorKey),
-    displayName: String(exact.displayName || exact.doctorKey || "").trim(),
-    sourceType: String(exact.sourceType || "").toLowerCase(),
-  };
 }
 
 function sanitizeClaims(claims) {
