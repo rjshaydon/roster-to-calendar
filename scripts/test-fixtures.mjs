@@ -59,6 +59,7 @@ const mchWorkbook = XLSX.readFile(fileURLToPath(new URL("../fixtures/Paeds_Term_
 const caseyBytes = await readFile(fileURLToPath(new URL("../fixtures/Casey_Term_2_2026_DRAFT.xlsm", import.meta.url)));
 const mchBytes = await readFile(fileURLToPath(new URL("../fixtures/Paeds_Term_2_2026.xlsx", import.meta.url)));
 const appSource = await readFile(new URL("../public/static/app.js", import.meta.url), "utf8");
+const stateSource = await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8");
 const styleSource = await readFile(new URL("../public/static/styles.css", import.meta.url), "utf8");
 const calendarMigrationSource = await readFile(new URL("../migrations/0001_calendar_store.sql", import.meta.url), "utf8");
 const insightIndexMigrationSource = await readFile(new URL("../migrations/0005_roster_insight_index.sql", import.meta.url), "utf8");
@@ -85,9 +86,25 @@ assert.match(
   "switching from the creator account should persist the creator doctor rather than the viewed doctor",
 );
 assert.match(
+  appSource.match(/async function enterUserAccount[\s\S]*?async function enterDoctorProfileView/)?.[0] || "",
+  /accountSwitchStartedAt[\s\S]*restoreCloudState\(\{ adminTargetEmail: targetEmail[\s\S]*accountSwitchStartedAt[\s\S]*markAccountSwitchPhase\("workspaceRendered"/,
+  "switched-account entry should expose lightweight phase timings",
+);
+assert.match(appSource, /function markAccountSwitchPhase/, "account switching should expose debug timings separately from login timings");
+assert.match(
   appSource.match(/async function hydrateAuthenticatedWorkspace[\s\S]*?function markLoginPhase/)?.[0] || "",
   /currentUserEmail === OWNER_EMAIL[\s\S]*forceCreatorDoctorSession\(\)[\s\S]*loadCloudCalendarEvents/,
   "creator hydration should normalize the creator doctor before calendar events load",
+);
+assert.match(
+  stateSource.match(/if \(action === "adminLoadUser"\)[\s\S]*?if \(action === "claimRosterName"\)/)?.[0] || "",
+  /prepareLightweightAccountResponse[\s\S]*snapshot: null[\s\S]*issueConfig: null/,
+  "admin account switching should use the lightweight account response and defer calendar snapshots",
+);
+assert.doesNotMatch(
+  stateSource.match(/if \(action === "adminLoadUser"\)[\s\S]*?if \(action === "claimRosterName"\)/)?.[0] || "",
+  /prepareAccountResponse/,
+  "admin account switching should not run full account enrichment before calendar load",
 );
 assert.match(
   appSource.match(/async function returnToCreatorAccount[\s\S]*?async function clearLocalWorkspace/)?.[0] || "",
@@ -151,16 +168,34 @@ assert.doesNotMatch(
   "ordinary cloud saves should not load the repository index",
 );
 assert.match(
-  (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
-    .match(/if \(action === "claimRosterName"\)[\s\S]*?if \(action === "listUsers"\)/)?.[0] || "",
+  stateSource.match(/if \(action === "claimRosterName"\)[\s\S]*?if \(action === "listUsers"\)/)?.[0] || "",
   /loadSqlDoctorCandidates[\s\S]*findDoctorClaimCandidate/,
   "manual roster claims should resolve from SQL doctor candidates",
 );
 assert.match(
-  (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
-    .match(/if \(action === "save"\)[\s\S]*?if \(action === "loadDoctorProfile"\)/)?.[0] || "",
+  stateSource.match(/if \(action === "save"\)[\s\S]*?if \(action === "loadDoctorProfile"\)/)?.[0] || "",
   /replaceAccountCustomEvents[\s\S]*stripRelationalCustomEventsFromSession/,
   "account saves should keep custom-event truth in D1 rows rather than session JSON",
+);
+assert.match(
+  stateSource.match(/if \(action === "resolveAccountClaims"\)[\s\S]*?if \(action === "adminLoadUser"\)/)?.[0] || "",
+  /resolvedClaims[\s\S]*includeAvailableDoctors:[\s\S]*&& !resolvedClaims\.length/,
+  "claim resolution should only load full doctor candidates while an account still has no claims",
+);
+assert.doesNotMatch(
+  stateSource.match(/if \(action === "listUsers"\)[\s\S]*?if \(action === "calendarStoreStatus"\)/)?.[0] || "",
+  /cleanupResolvedAdminIssues/,
+  "creator user-list loading should not synchronously clean every account",
+);
+assert.match(
+  stateSource.match(/if \(action === "listUsers"\)[\s\S]*?if \(action === "calendarStoreStatus"\)/)?.[0] || "",
+  /globalParserExtensions[\s\S]*listD1Users\(context\.env\.ROSTER_DB, \{ globalParserExtensions \}\)/,
+  "creator user-list loading should reuse one parser-rule load for stale issue filtering",
+);
+assert.match(
+  stateSource.match(/async function userSummaryFromRecord[\s\S]*?function insightsEnabledForRecord/)?.[0] || "",
+  /filterResolvedAdminIssuesForSummary/,
+  "user summaries should hide resolved stale parser issues without foreground cleanup",
 );
 assert.match(
   appSource.match(/async function hydrateAuthenticatedWorkspace[\s\S]*?function markLoginPhase/)?.[0] || "",
@@ -183,7 +218,7 @@ assert.match(
   "successful login should reveal the shell before background workspace hydration completes",
 );
 assert.doesNotMatch(
-  await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"),
+  stateSource,
   /ADMIN_ISSUE_DISMISS_PREFIX|ADMIN_ISSUE_IGNORE_PREFIX|PARSER_EXTENSION_RULES_KEY|PARSER_RULE_SUGGESTIONS_KEY|loadParserExtensionRules\(|saveParserExtensionRules\(/,
   "D1-only state routes should not retain dead KV-era helper scaffolding",
 );
@@ -295,9 +330,14 @@ assert.match(
   "shift-code warning editor should refresh resolved stale cards instead of opening missing issues",
 );
 assert.match(
+  appSource.match(/function rebuildClientPreview[\s\S]*?function buildClientPreviewData/)?.[0] || "",
+  /pruneResolvedLatestPreviewIssues\(\)/,
+  "preview rendering should prune resolved warnings once review context is current",
+);
+assert.doesNotMatch(
   appSource.match(/function applyIssueConfig[\s\S]*?function sanitizeParserExtensions/)?.[0] || "",
   /pruneResolvedLatestPreviewIssues\(\)/,
-  "parser config changes should immediately prune resolved preview warnings",
+  "parser config application should stay lightweight during login and account switching",
 );
 assert.match(appSource, /if \(parsedRosterSources\)[\s\S]*await updatePreview\(\)[\s\S]*else if \(latestPreview\)/, "saving parser rules should refresh the visible preview before trying to reparse cloud file refs");
 assert.match(
@@ -2395,7 +2435,14 @@ const d1NoKvIndexEnrichment = await postState(d1StateStore, {
   email: "d1-user@example.com",
   password: "d1-password",
 }, d1Store);
-assert.ok(d1NoKvIndexEnrichment.availableDoctors.some((doctor) => doctor.key === d1Doctor.key), "D1 doctor directory should load outside the login hot path without KV repository index");
+assert.deepEqual(d1NoKvIndexEnrichment.availableDoctors, [], "claimed-account enrichment should not reload the full doctor directory");
+await seedUser(d1StateStore, "d1-unmatched@example.com", "d1-unmatched-password", "Unmatched Person", d1Store);
+const d1UnmatchedEnrichment = await postState(d1StateStore, {
+  action: "resolveAccountClaims",
+  email: "d1-unmatched@example.com",
+  password: "d1-unmatched-password",
+}, d1Store);
+assert.ok(d1UnmatchedEnrichment.availableDoctors.some((doctor) => doctor.key === d1Doctor.key), "D1 doctor directory should load only when claim resolution still leaves the account unclaimed");
 const d1ClaimResolution = await postState(d1StateStore, {
   action: "resolveDoctorAccount",
   email: "rhaydon@gmail.com",
@@ -3777,7 +3824,7 @@ const cleanedUserList = await postState(stateStore, {
   password: creatorPassword,
 });
 assert.equal(cleanedUserList.users.find((user) => user.email === "michael@example.com")?.adminIssues.length, 0, "creator user list should hide stale resolved shift-code issues");
-assert.equal(memoryD1AccountRecord(stateStore.d1, "michael@example.com").adminIssues.length, 0, "creator user list should persist cleanup of stale resolved shift-code issues");
+assert.ok(memoryD1AccountRecord(stateStore.d1, "michael@example.com").adminIssues.length > 0, "creator user list should not persist a full stale-issue cleanup during load");
 await postState(stateStore, {
   action: "saveParserExtensionRule",
   email: "rhaydon@gmail.com",

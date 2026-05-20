@@ -303,6 +303,7 @@ let dismissedIssueFingerprints = new Set();
 let ignoredIssueFingerprints = new Set();
 let ignoredUnresolvedShiftCodeKeys = loadIgnoredUnresolvedShiftCodeKeys();
 let lastLoginTimings = null;
+let lastAccountSwitchTimings = null;
 
 const settingsInputs = Object.fromEntries(
   SETTINGS_FIELDS.map((id) => [id, document.querySelector(`#${id}`)]),
@@ -2153,6 +2154,7 @@ function rebuildClientPreview() {
   if (!latestPreview) return;
   const doctor = selectedDoctor();
   if (!doctor) return;
+  pruneResolvedLatestPreviewIssues();
   const view = buildClientPreviewData(latestPreview);
   renderConflicts(view.conflicts || []);
   renderPreviewGrid(doctor, view);
@@ -8340,6 +8342,7 @@ async function enterUserAccount(email) {
   const targetEmail = normalizeEmail(email);
   if (!targetEmail || (!isOwnerAccount() && !isCreatorAuthenticated())) return;
   const previousState = captureCalendarViewState();
+  const accountSwitchStartedAt = performance.now();
   const creatorEmail = authUserEmail || currentUserEmail;
   const creatorPassword = authUserPassword || currentUserPassword;
   if (normalizeEmail(creatorEmail) !== OWNER_EMAIL || !creatorPassword) {
@@ -8369,8 +8372,9 @@ async function enterUserAccount(email) {
   try {
     resetTransientCalendarData();
     await clearLocalWorkspace();
-    await restoreCloudState({ adminTargetEmail: targetEmail, preserveSessionOnFailure: true });
+    await restoreCloudState({ adminTargetEmail: targetEmail, preserveSessionOnFailure: true, accountSwitchStartedAt });
     await bootstrapImports();
+    markAccountSwitchPhase("workspaceRendered", accountSwitchStartedAt);
     renderLoginState();
   } catch (error) {
     restoreCalendarViewState(previousState);
@@ -9031,7 +9035,6 @@ function applyIssueConfig(value) {
   dismissedIssueFingerprints = new Set(sanitizeIssueFingerprintList(config.dismissedFingerprints));
   ignoredIssueFingerprints = new Set(sanitizeIssueFingerprintList(config.ignoredFingerprints));
   setParserExtensions(parserExtensions);
-  pruneResolvedLatestPreviewIssues();
 }
 
 function sanitizeParserExtensions(value) {
@@ -9556,6 +9559,7 @@ async function restoreCloudState(options = {}) {
     const data = await readJsonResponse(response, "Login failed.");
     await applyCloudStateData(data);
     markLoginPhase("authenticated", options.loginStartedAt);
+    markAccountSwitchPhase("adminLoadUser", options.accountSwitchStartedAt);
     if (!options.deferHydration) await hydrateAuthenticatedWorkspace({ ...options, includeBootstrap: false }, options.loginStartedAt);
   } catch (error) {
     cancelScheduledCloudStateSave();
@@ -9593,6 +9597,7 @@ async function hydrateAuthenticatedWorkspace(options = {}, loginStartedAt = 0) {
     if (adminTargetEmail && adminTargetEmail !== OWNER_EMAIL) {
       await resolveCurrentAccountClaims(adminTargetEmail);
       markLoginPhase("claimsResolved", loginStartedAt);
+      markAccountSwitchPhase("claimsResolved", options.accountSwitchStartedAt);
     } else if (!adminTargetEmail && currentUserEmail !== OWNER_EMAIL) {
       await resolveCurrentAccountClaims();
       markLoginPhase("claimsResolved", loginStartedAt);
@@ -9602,9 +9607,11 @@ async function hydrateAuthenticatedWorkspace(options = {}, loginStartedAt = 0) {
     }
     await loadCloudCalendarEvents({ adminTargetEmail });
     markLoginPhase("calendarLoaded", loginStartedAt);
+    markAccountSwitchPhase("calendarLoaded", options.accountSwitchStartedAt);
     if (options.includeBootstrap !== false) {
       await bootstrapImports();
       markLoginPhase("workspaceRendered", loginStartedAt);
+      markAccountSwitchPhase("workspaceRendered", options.accountSwitchStartedAt);
     }
     if (latestNameMatches.length) {
       const sites = [...new Set(latestNameMatches.map((claim) => claim.sourceType.toUpperCase()))].join(", ");
@@ -9629,6 +9636,18 @@ function markLoginPhase(phase, loginStartedAt = 0) {
   window.__rosterLoginTimings = { ...lastLoginTimings };
   if (phase === "workspaceRendered") {
     console.info("Login timings", window.__rosterLoginTimings);
+  }
+}
+
+function markAccountSwitchPhase(phase, accountSwitchStartedAt = 0) {
+  if (!accountSwitchStartedAt) return;
+  if (!lastAccountSwitchTimings || lastAccountSwitchTimings.startedAt !== accountSwitchStartedAt) {
+    lastAccountSwitchTimings = { startedAt: accountSwitchStartedAt };
+  }
+  lastAccountSwitchTimings[phase] = Math.round(performance.now() - accountSwitchStartedAt);
+  window.__rosterAccountSwitchTimings = { ...lastAccountSwitchTimings };
+  if (phase === "workspaceRendered") {
+    console.info("Account switch timings", window.__rosterAccountSwitchTimings);
   }
 }
 

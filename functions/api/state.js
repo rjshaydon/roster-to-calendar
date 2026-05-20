@@ -150,9 +150,10 @@ export async function onRequestPost(context) {
         : account.record;
       if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
       const resolved = await autoClaimMatchedRosterNames(null, targetRecord, context.env.ROSTER_DB);
+      const resolvedClaims = sanitizeClaims(resolved.claims);
       const prepared = await prepareAccountResponse(null, resolved, {
         db: context.env.ROSTER_DB,
-        includeAvailableDoctors: resolved.role !== "creator" && resolved.role !== "owner",
+        includeAvailableDoctors: resolved.role !== "creator" && resolved.role !== "owner" && !resolvedClaims.length,
       });
       return Response.json({
         ok: true,
@@ -176,7 +177,8 @@ export async function onRequestPost(context) {
       }
       const target = await loadAccountMirror(context.env.ROSTER_DB, targetEmail);
       if (!target) return Response.json({ error: "Account not found." }, { status: 404 });
-      const prepared = await prepareAccountResponse(null, target, { db: context.env.ROSTER_DB, includeAvailableDoctors: true });
+      const targetClaims = sanitizeClaims(target.claims);
+      const prepared = await prepareLightweightAccountResponse(target, { db: context.env.ROSTER_DB });
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -184,16 +186,18 @@ export async function onRequestPost(context) {
         realName: prepared.realName,
         state: prepared.state,
         claims: prepared.claims,
-        nameMatches: prepared.nameMatches,
-        suggestedClaims: prepared.nameMatches,
-        availableDoctors: prepared.availableDoctors,
+        nameMatches: [],
+        suggestedClaims: [],
+        availableDoctors: targetClaims.length
+          ? []
+          : await repositoryDoctorCandidates(null, null, context.env.ROSTER_DB, { hideZeroEventStandalone: true }),
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
-        snapshot: prepared.snapshot,
-        snapshotAvailable: prepared.snapshotAvailable,
-        snapshotStale: prepared.snapshotStale,
-        snapshotBuiltAt: prepared.snapshotBuiltAt,
-        issueConfig: prepared.issueConfig,
+        snapshot: null,
+        snapshotAvailable: false,
+        snapshotStale: false,
+        snapshotBuiltAt: "",
+        issueConfig: null,
       });
     }
 
@@ -245,10 +249,10 @@ export async function onRequestPost(context) {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
-      await cleanupResolvedAdminIssues(context.env.ROSTER_DB);
+      const globalParserExtensions = await loadD1ParserExtensionRules(context.env.ROSTER_DB);
       return Response.json({
         ok: true,
-        users: await listD1Users(context.env.ROSTER_DB),
+        users: await listD1Users(context.env.ROSTER_DB, { globalParserExtensions }),
         availableDoctors: await repositoryDoctorCandidates(null, null, context.env.ROSTER_DB, { hideZeroEventStandalone: true }),
         issueConfig: await buildIssueConfig(null, email, context.env.ROSTER_DB),
       });
@@ -1125,11 +1129,12 @@ async function verifyD1Account(db, email, password) {
   };
 }
 
-async function listD1Users(db) {
+async function listD1Users(db, options = {}) {
   const records = await listAccountMirrors(db);
+  const globalParserExtensions = sanitizeParserExtensionRules(options.globalParserExtensions);
   const users = [];
   for (const record of records) {
-    users.push(await userSummaryFromRecord(record.email, record, { db }));
+    users.push(await userSummaryFromRecord(record.email, record, { db, globalParserExtensions }));
   }
   return users.sort((a, b) => a.email.localeCompare(b.email));
 }
@@ -1348,7 +1353,7 @@ function manualRosterClaimIssue(record, claim) {
 
 async function userSummaryFromRecord(email, record, options = {}) {
   const claims = sanitizeClaims(record?.claims);
-  const adminIssues = sanitizeAdminIssues(record?.adminIssues);
+  const adminIssues = filterResolvedAdminIssuesForSummary(record, options.globalParserExtensions);
   const seniorities = options.db
     ? await queryDoctorSeniorities(options.db, claims.map((claim) => claim.key)).catch(() => [])
     : [];
@@ -1365,6 +1370,29 @@ async function userSummaryFromRecord(email, record, options = {}) {
     createdAt: record?.createdAt || "",
     updatedAt: record?.updatedAt || "",
   };
+}
+
+function filterResolvedAdminIssuesForSummary(record, globalParserExtensions = {}) {
+  const existingIssues = sanitizeAdminIssues(record?.adminIssues);
+  if (!existingIssues.length) return [];
+  const ruleSets = mergeParserExtensionSets(
+    sanitizeParserExtensionRules(globalParserExtensions),
+    sanitizeParserExtensionRules(record?.localParserExtensions),
+  );
+  return existingIssues.filter((issue) => !isIssueResolvedByRuleSets(issue, ruleSets));
+}
+
+function isIssueResolvedByRuleSets(issue, ruleSets = {}) {
+  const source = sanitizeIssueSource(issue?.source);
+  const seniority = sanitizeRuleSeniority(issue?.seniority);
+  const code = parserRuleCodeForIssue(issue);
+  if (!source || !code) return false;
+  if (isKnownResolvedShiftCodeValue(source, issue?.rawValue || code)) return true;
+  const sourceRules = ruleSets[source.toLowerCase()] || [];
+  if (seniority === "Unknown") {
+    return sourceRules.some((rule) => rule.source === source && rule.code === code);
+  }
+  return sourceRules.some((rule) => rule.source === source && rule.seniority === seniority && rule.code === code);
 }
 
 function insightsEnabledForRecord(record) {
