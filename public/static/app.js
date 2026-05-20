@@ -3258,63 +3258,57 @@ async function renderWhenInsight() {
   const hospitalFilters = Array.isArray(insightsState.hospitalFilters) ? insightsState.hospitalFilters : [];
   const fromDate = insightsState.fromDate || formatDateKey(new Date());
   const toDate = insightsState.termEnd || currentCalendarInsightDateRange().end || fromDate;
-  let requestedDoctorKeys = insightsState.comparisonDoctorKey ? [insightsState.comparisonDoctorKey] : [];
-  if (!requestedDoctorKeys.length) {
-    const doctorResult = await fetchRosterOverlapDoctors({
-      startDate: fromDate,
-      endDate: toDate,
-      sourceTypes: hospitalFilters.map((item) => item.toLowerCase()),
-      excludeDoctorKeys: selectedInsightDoctorKeys(),
-      overlapDoctorKeys: selectedInsightDoctorKeys(),
+  const doctorResult = await fetchRosterOverlapDoctors({
+    startDate: fromDate,
+    endDate: toDate,
+    sourceTypes: hospitalFilters.map((item) => item.toLowerCase()),
+    excludeDoctorKeys: selectedInsightDoctorKeys(),
+    overlapDoctorKeys: selectedInsightDoctorKeys(),
+  });
+  if (!doctorResult.ok) {
+    insightsModalTitle.textContent = "When am I working with…?";
+    insightsModalSubtitle.textContent = "Find future dates where both doctors are working from the selected date.";
+    insightsModalBody.innerHTML = renderRosterInsightUnavailable();
+    return;
+  }
+  const options = prioritizeDoctorOptions(insightRowsToDoctorOptions(doctorResult.doctors.map((doctor) => ({
+    doctorKey: doctor.doctorKey,
+    displayName: doctor.displayName,
+    sourceType: doctor.sourceType,
+    event: {},
+  }))));
+  const selectedKey = options.some((doctor) => doctor.key === insightsState.comparisonDoctorKey)
+    ? insightsState.comparisonDoctorKey
+    : options[0]?.key || "";
+  insightsState.comparisonDoctorKey = selectedKey;
+  if (!selectedKey) {
+    renderWhenInsightResult({
+      options,
+      selectedComparison: null,
+      mine: selectedDoctorEventsForInsights(fromDate, toDate, hospitalFilters).filter(isRosterShiftEvent),
+      theirs: [],
+      fromDate,
+      toDate,
+      hospitalFilters,
+      hospitalOptions: [],
     });
-    if (!doctorResult.ok) {
-      insightsModalTitle.textContent = "When am I working with…?";
-      insightsModalSubtitle.textContent = "Find future dates where both doctors are working from the selected date.";
-      insightsModalBody.innerHTML = renderRosterInsightUnavailable();
-      return;
-    }
-    const options = prioritizeDoctorOptions(insightRowsToDoctorOptions(doctorResult.doctors.map((doctor) => ({
-      doctorKey: doctor.doctorKey,
-      displayName: doctor.displayName,
-      sourceType: doctor.sourceType,
-      event: {},
-    }))));
-    insightsState.comparisonDoctorKey = options[0]?.key || "";
-    if (!insightsState.comparisonDoctorKey) {
-      renderWhenInsightResult({
-        options,
-        selectedComparison: null,
-        mine: selectedDoctorEventsForInsights(fromDate, toDate, hospitalFilters).filter(isRosterShiftEvent),
-        theirs: [],
-        fromDate,
-        toDate,
-        hospitalFilters,
-        hospitalOptions: [],
-      });
-      return;
-    }
-    requestedDoctorKeys = [insightsState.comparisonDoctorKey];
+    return;
   }
   const serverResult = await fetchRosterInsightRows({
     startDate: fromDate,
     endDate: toDate,
     sourceTypes: hospitalFilters.map((item) => item.toLowerCase()),
-    doctorKeys: requestedDoctorKeys,
+    doctorKeys: [selectedKey],
     overlapDoctorKeys: [],
   });
   if (serverResult.ok) {
     const serverRows = serverResult.rows;
-    const serverOptions = prioritizeDoctorOptions(insightRowsToDoctorOptions(serverRows)).filter((doctor) => doctor.key !== selectedDoctor()?.key);
-    const selectedKey = serverOptions.some((doctor) => doctor.key === insightsState.comparisonDoctorKey)
-      ? insightsState.comparisonDoctorKey
-      : serverOptions[0]?.key || "";
-    insightsState.comparisonDoctorKey = selectedKey;
-    const selectedComparison = serverOptions.find((doctor) => doctor.key === selectedKey) || null;
+    const selectedComparison = options.find((doctor) => doctor.key === selectedKey) || null;
     const serverEvents = insightRowsToEventsByDoctor(serverRows);
     const mine = selectedDoctorEventsForInsights(fromDate, toDate, hospitalFilters).filter(isRosterShiftEvent);
     const theirs = selectedComparison ? (serverEvents.get(selectedComparison.key) || []).filter(isRosterShiftEvent) : [];
     const hospitalOptions = availableHospitalsFromInsightEvents([...mine, ...[...serverEvents.values()].flat()]);
-    renderWhenInsightResult({ options: serverOptions, selectedComparison, mine, theirs, fromDate, toDate, hospitalFilters, hospitalOptions });
+    renderWhenInsightResult({ options, selectedComparison, mine, theirs, fromDate, toDate, hospitalFilters, hospitalOptions });
     return;
   }
   insightsModalTitle.textContent = "When am I working with…?";
