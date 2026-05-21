@@ -2045,6 +2045,16 @@ body[data-skin="console"] .preview-cell.is-weekend {
   align-items: center;
 }
 
+.account-claim-card {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.account-claim-remove {
+  justify-self: end;
+  white-space: nowrap;
+}
+
 .account-user-card {
   grid-template-columns: minmax(0, 1fr);
 }

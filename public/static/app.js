@@ -3241,7 +3241,11 @@ async function renderWhoInsight() {
       .filter((entry) => entry.events.length)
       .flatMap((entry) => buildWhoAssignments(entry.doctor, entry.events));
   }
-  const grouped = groupWhoAssignments(coworkers);
+  const teamAssignments = [
+    ...buildSelectedWhoAssignments(mine),
+    ...coworkers,
+  ];
+  const grouped = groupWhoAssignments(teamAssignments);
 
   insightsModalTitle.textContent = "Who";
   insightsModalSubtitle.textContent = "Doctors working on the same date as the selected calendar.";
@@ -3258,7 +3262,7 @@ async function renderWhoInsight() {
     </div>
     ${!serverResult.ok
       ? renderRosterInsightUnavailable()
-      : coworkers.length
+      : teamAssignments.length
       ? renderWhoGroups(grouped)
       : `<article class="issue-card"><p>No other doctors are rostered on this date.</p></article>`}
   `;
@@ -3528,6 +3532,7 @@ function insightShiftPeriodRank(events) {
 }
 
 function buildWhoAssignments(doctor, events) {
+  if (!doctor) return [];
   const metadata = doctorMetadataForKey(doctor.key);
   return dedupeInsightEvents(events)
     .map((event) => buildWhoAssignment(doctor, metadata, event))
@@ -3536,7 +3541,7 @@ function buildWhoAssignments(doctor, events) {
 
 function buildWhoAssignment(doctor, metadata, event) {
   const source = eventSourceCode(event);
-  const role = metadata[source]?.role || metadata.any?.role || "";
+  const role = metadata[source]?.role || metadata.any?.role || eventSeniorityRoleCode(event) || "";
   const period = whoPeriodLabel(event);
   const rawTeam = whoTeamLabel(event);
   const isNightSsu = period === "Night" && rawTeam === "SSU";
@@ -3555,6 +3560,16 @@ function buildWhoAssignment(doctor, metadata, event) {
     specialTime: whoSpecialTimeLabel(event, period),
     event,
   };
+}
+
+function buildSelectedWhoAssignments(events) {
+  return buildWhoAssignments(selectedDoctor(), events)
+    .filter((assignment) => isWhoTeamRole(assignment.team));
+}
+
+function isWhoTeamRole(team) {
+  const normalized = String(team || "").trim().toLowerCase();
+  return normalized && normalized !== "float" && normalized !== "rover";
 }
 
 function groupWhoAssignments(assignments) {
@@ -3655,6 +3670,10 @@ async function renderInlineWhoInsight(container, date, options = {}) {
       .filter((entry) => entry.events.length)
       .flatMap((entry) => buildWhoAssignments(entry.doctor, entry.events));
   }
+  const teamAssignments = [
+    ...buildSelectedWhoAssignments(mine),
+    ...coworkers,
+  ];
   container.innerHTML = `
     <div class="event-inline-head">
       <strong>Who else is working with me?</strong>
@@ -3666,8 +3685,8 @@ async function renderInlineWhoInsight(container, date, options = {}) {
     </div>
     ${!serverResult.ok
       ? renderRosterInsightUnavailable()
-      : coworkers.length
-      ? renderInlineWhoGroups(groupWhoAssignments(coworkers), date, sourceFilter)
+      : teamAssignments.length
+      ? renderInlineWhoGroups(groupWhoAssignments(teamAssignments), date, sourceFilter)
       : `<article class="issue-card"><p>No other clinicians are rostered with you for this shift.</p></article>`}
   `;
 }
@@ -3858,10 +3877,11 @@ function whoTeamRank(team, source) {
 }
 
 function whoRoleRank(role) {
+  const normalized = normalizeWhoRole(role);
   const ranks = {
     SMS: 0,
-    SR: 1,
-    CMO: 2,
+    CMO: 1,
+    SR: 2,
     IR: 3,
     JR: 4,
     HMO: 5,
@@ -3869,7 +3889,26 @@ function whoRoleRank(role) {
     ENP: 7,
     AMP: 8,
   };
-  return Object.prototype.hasOwnProperty.call(ranks, role) ? ranks[role] : 99;
+  return Object.prototype.hasOwnProperty.call(ranks, normalized) ? ranks[normalized] : 99;
+}
+
+function normalizeWhoRole(role) {
+  const upper = String(role || "").trim().toUpperCase();
+  if (!upper) return "";
+  if (upper === "SMS" || upper.includes("SENIOR MEDICAL STAFF") || upper.includes("CONSULTANT") || upper.includes("STAFF SPECIALIST")) return "SMS";
+  if (upper === "CMO" || upper.includes("CMO")) return "CMO";
+  if (upper === "SR" || upper.includes("SENIOR REGISTRAR") || upper.includes("SENIOR REG")) return "SR";
+  if (upper === "IR" || upper === "TR" || upper.includes("TRANSITIONAL") || upper.includes("INTERMEDIATE")) return "IR";
+  if (upper === "JR" || upper.includes("JUNIOR REGISTRAR") || upper.includes("JUNIOR REG")) return "JR";
+  if (upper === "H" || upper === "HMO" || upper.includes("HMO")) return "HMO";
+  if (upper === "I" || upper.includes("INTERN")) return "I";
+  if (upper === "ENP" || upper.includes("NURSE PRACTITIONER")) return "ENP";
+  if (upper === "AMP" || upper.includes("PHYSIOTHERAPIST")) return "AMP";
+  return upper;
+}
+
+function eventSeniorityRoleCode(event) {
+  return normalizeWhoRole(event?.seniority || event?.role || "");
 }
 
 function whoSpecialTimeLabel(event, period) {
@@ -7112,12 +7151,12 @@ function renderLinkedRosterNames(claims, suggestedClaims = [], options = {}) {
   return `
     <div class="issues-list account-claim-list">
       ${items.map((claim) => `
-        <article class="issue-card">
+        <article class="issue-card account-claim-card">
           <div>
             <strong>${escapeHtml(claim.sourceType.toUpperCase())}</strong>
             <p>${escapeHtml(claim.displayName)}</p>
           </div>
-          ${options.creatorTools || !options.compact ? `<button type="button" class="button button-secondary" data-remove-roster-claim="${escapeHtml(claim.sourceType)}:${escapeHtml(claim.key)}" data-claim-email="${escapeHtml(options.email || currentUserEmail)}">Remove / this is wrong</button>` : ""}
+          ${options.creatorTools || !options.compact ? `<button type="button" class="button button-secondary button-small account-claim-remove" data-remove-roster-claim="${escapeHtml(claim.sourceType)}:${escapeHtml(claim.key)}" data-claim-email="${escapeHtml(options.email || currentUserEmail)}">Remove / this is wrong</button>` : ""}
         </article>
       `).join("")}
       ${suggestions.map((claim, index) => `
