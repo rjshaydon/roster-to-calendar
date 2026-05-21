@@ -324,7 +324,9 @@ assert.match(appSource, /matchingParserRuleGroup/, "saved shift-code rules shoul
 assert.match(appSource, /<span class="who-team-role">/, "Who role labels should render separately from doctor buttons");
 assert.doesNotMatch(appSource, /data-who-role-shift-code|handleWhoRoleRuleClick/, "Who role labels should not be clickable shift-code controls");
 assert.match(appSource, /isWhoNightIcShift[\s\S]*nightIcRank/, "Night IC shifts should rank above other night staff in Who lists");
-assert.match(appSource, /\(isNightSsu \|\| isNightIc\) \? "Night"/, "Night IC shifts should group into the Night team");
+assert.match(appSource, /function whoDisplayTeamLabel[\s\S]*Night main team[\s\S]*Night Hub[\s\S]*Night SSU/, "Night teams should use explicit main, hub, and SSU labels");
+assert.match(appSource, /night main team", "night hub", "night ssu"/, "Night Hub should sort between Night main team and Night SSU");
+assert.match(appSource, /Night Hub/, "Hub night shift-code rules should preview as Night Hub");
 assert.match(appSource, /refreshActiveWhoInsightSurfaces/, "saving shift-code rules should refresh active Who insight panels");
 assert.match(appSource, /function synthesizeIncompleteShiftCodeIssues/, "derived code-only shift titles should synthesize unresolved shift-code issues");
 assert.match(appSource, /data-ignore-unresolved-shift-code/, "missing shift-code queue should expose a non-destructive ignore action");

@@ -3611,13 +3611,13 @@ function buildWhoAssignment(doctor, metadata, event) {
   const rawTeam = activeRule?.base ? activeRule.base : whoTeamLabel(eventForGrouping);
   const isNightSsu = period === "Night" && rawTeam === "SSU";
   const isNightIc = isWhoNightIcShift({ event, period, rawTeam, rule: activeRule, ruleTitle });
-  const team = (isNightSsu || isNightIc) ? "Night" : rawTeam;
+  const team = whoDisplayTeamLabel({ period, rawTeam, isNightIc });
   return {
     doctorKey: doctor.key,
     doctorName: doctor.displayName,
     role,
     roleLabel: role || "",
-    roleNote: isNightIc ? "IC" : isNightSsu ? "SSU" : "",
+    roleNote: isNightIc ? "IC" : "",
     roleRank: whoRoleRank(role),
     nightIcRank: isNightIc ? 0 : 1,
     source,
@@ -3633,6 +3633,14 @@ function buildWhoAssignment(doctor, metadata, event) {
     location: String(event?.location || "").trim(),
     event,
   };
+}
+
+function whoDisplayTeamLabel({ period, rawTeam, isNightIc }) {
+  if (period !== "Night") return rawTeam;
+  if (isNightIc || rawTeam === "Night") return "Night main team";
+  if (rawTeam === "Hub") return "Night Hub";
+  if (rawTeam === "SSU" || rawTeam === "Night SSU") return "Night SSU";
+  return rawTeam;
 }
 
 function isWhoNightIcShift({ event, period, rawTeam, rule, ruleTitle }) {
@@ -3967,7 +3975,7 @@ function whoTeamRank(team, source) {
   const sourceCode = String(source || "").toUpperCase();
   const ranks = sourceCode === "DDH"
     ? ["avao", "orange", "silver", "resus", "float", "clinic", "fast track", "ssu", "hith", "vhh", "paeds", "extra", "other"]
-    : ["green", "amber", "resus", "float", "clinic", "fast track", "ssu", "other"];
+    : ["green", "amber", "resus", "float", "clinic", "fast track", "night main team", "night hub", "night ssu", "ssu", "other"];
   const index = ranks.indexOf(normalized);
   return index >= 0 ? index : ranks.length;
 }
@@ -7683,6 +7691,9 @@ function matchingParserRuleGroup(rule) {
 
 function parserRulePreviewTitle(rule, sourceSettings = settings) {
   if (!rule) return "";
+  if (String(rule.base || "").trim().toLowerCase() === "hub" && String(rule.period || "").trim().toUpperCase() === "NIGHT") {
+    return sourceSettings.showSourcePrefix ? `${rule.source}: Night Hub` : "Night Hub";
+  }
   const parts = [];
   if (rule.base) parts.push(rule.base);
   if (sourceSettings.showAmPm && rule.period) parts.push(rule.period === "NIGHT" ? "Night" : rule.period);
