@@ -1905,7 +1905,20 @@ function renderFilesMarkup({ canRemove = false, heading = "", description = "", 
   const hasUsableStatus = Boolean(calendarStoreStatus && calendarStoreStatus.unavailable !== true && !calendarStoreStatusError);
   const statusFiles = new Map((calendarStoreStatus?.files || []).map((file) => [file.id, file]));
   const persistedSelectedFileIds = new Set(calendarStoreStatus?.expectedFiles?.persistedFileIds || []);
-  if (!selectedFiles.length) {
+  const statusOnlyEntries = hasUsableStatus
+    ? (calendarStoreStatus?.files || [])
+      .filter((file) => file?.id)
+      .map((file) => ({
+        id: file.id,
+        repoId: file.id,
+        name: file.name,
+        sourceType: file.sourceType,
+        addedAt: "",
+        fromRosterDatabase: true,
+      }))
+    : [];
+  const displayFiles = selectedFiles.length ? selectedFiles : statusOnlyEntries;
+  if (!displayFiles.length) {
     const emptyMessage = canRemove
       ? "Add rosters and they will stay here until removed."
       : "No files are currently linked to this calendar.";
@@ -1920,9 +1933,9 @@ function renderFilesMarkup({ canRemove = false, heading = "", description = "", 
     <article class="review-card">
       ${heading ? `<div class="review-top"><div><strong>${escapeHtml(heading)}</strong>${description ? `<span>${escapeHtml(description)}</span>` : ""}</div>${canAdd ? `<button type="button" class="button button-secondary" data-open-file-picker>Add files</button>` : ""}</div>` : ""}
       <div class="file-summary">
-        ${selectedFiles.map((entry) => `
+        ${displayFiles.map((entry) => `
           <article class="file-pill" data-file-id="${entry.id}">
-            <span>${escapeHtml(String(entry.sourceType || "").toUpperCase())} · Imported ${escapeHtml(formatTimestamp(entry.addedAt))}</span>
+            <span>${escapeHtml(String(entry.sourceType || "").toUpperCase())}${entry.addedAt ? ` · Imported ${escapeHtml(formatTimestamp(entry.addedAt))}` : " · Roster database"}</span>
             <strong>${escapeHtml(entry.name)}</strong>
             ${rosterSyncLabel(entry) || (statusFiles.has(entry.id)
               ? `<span>${Number(statusFiles.get(entry.id)?.eventCount || 0)} events · ${Number(statusFiles.get(entry.id)?.selectedDoctorEventCount || 0)} for selected doctor</span>`
@@ -1933,7 +1946,7 @@ function renderFilesMarkup({ canRemove = false, heading = "", description = "", 
               ? `<span>Source file not retained · re-upload once to enable reparse</span>`
               : ""}
             ${canRemove ? `<button type="button" class="file-remove file-remove-visible" aria-label="Remove file" title="Remove file" data-remove-import="${entry.id}">🗑</button>` : ""}
-            ${canRemove ? `<button type="button" class="file-reparse file-reparse-visible" aria-label="Reparse roster file" title="Reparse roster file" data-reparse-import="${entry.id}">↻</button>` : ""}
+            ${canRemove && (!entry.fromRosterDatabase || statusFiles.get(entry.id)?.rawSourceAvailable === true) ? `<button type="button" class="file-reparse file-reparse-visible" aria-label="Reparse roster file" title="Reparse roster file" data-reparse-import="${entry.id}">↻</button>` : ""}
           </article>
         `).join("")}
       </div>
@@ -10494,6 +10507,9 @@ async function saveCloudStateNow(snapshot = null) {
 async function replaceActiveRostersWithCurrentUploads() {
   if (!isCreatorAuthenticated()) return;
   try {
+    if (!selectedFiles.length) {
+      throw new Error("Rebuild requires at least one roster file. Re-upload the missing source files first if none are listed.");
+    }
     setStatus("Rebuilding roster database from roster files...");
     const rebuildEntries = [];
     const unavailableNames = [];
@@ -10526,7 +10542,14 @@ async function replaceActiveRostersWithCurrentUploads() {
 }
 
 async function reparseRosterFile(id) {
-  const entry = selectedFiles.find((item) => item.id === id);
+  const statusEntry = (calendarStoreStatus?.files || []).find((file) => file.id === id);
+  const entry = selectedFiles.find((item) => item.id === id) || (statusEntry ? {
+    id: statusEntry.id,
+    repoId: statusEntry.id,
+    name: statusEntry.name,
+    sourceType: statusEntry.sourceType,
+    addedAt: "",
+  } : null);
   if (!entry) return;
   try {
     setStatus(`Reparsing ${entry.name}...`);

@@ -398,6 +398,9 @@ export async function onRequestPost(context) {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
       const keepFileIds = sanitizeRepositoryFileIds(body?.keepFileIds);
+      if (!keepFileIds.length) {
+        return Response.json({ error: "Rebuild requires at least one retained roster file." }, { status: 400 });
+      }
       const activeFiles = await queryRosterFileRanges(context.env.ROSTER_DB, { includeInactive: false });
       const removedFileIds = activeFiles
         .map((file) => file.id)
@@ -787,22 +790,14 @@ export async function onRequestPost(context) {
       state.imports = state.imports.map(repositoryImportRef);
       const claims = sanitizeClaims(targetRecord.claims);
       const removedImportIds = sanitizeRepositoryFileIds(body?.removedImportIds);
-      if ((targetRole === "creator" || targetRole === "owner") && saveEmail === email) {
-        const keepFileIds = sanitizeRepositoryFileIds(state.imports.map((item) => item.repoId || item.repositoryId || item.id));
-        const allFiles = await queryRosterFiles(context.env.ROSTER_DB, { includeInactive: true }).catch(() => []);
-        const persistedKeepFileIds = keepFileIds.filter((id) => allFiles.some((file) => file.id === id));
-        const canReconcileToFullSet = keepFileIds.length > 0 && persistedKeepFileIds.length === keepFileIds.length;
-        const activeFiles = await queryRosterFileRanges(context.env.ROSTER_DB, { includeInactive: false }).catch(() => []);
-        const staleFileIds = canReconcileToFullSet
-          ? activeFiles.map((file) => file.id).filter((id) => id && !keepFileIds.includes(id))
-          : [];
-        const removedIds = [...new Set([...removedImportIds, ...staleFileIds])];
+      if ((targetRole === "creator" || targetRole === "owner") && saveEmail === email && removedImportIds.length) {
+        const removedIds = [...new Set(removedImportIds)];
         await Promise.all(removedIds.map((id) => deleteDerivedRosterFile(context.env.ROSTER_DB, id).catch(() => null)));
         await Promise.all(removedIds.map((id) => deleteRawRosterFile(context.env.ROSTER_DB, id).catch(() => null)));
-        if (removedIds.length) await refreshCanonicalDoctors(context.env.ROSTER_DB);
+        await refreshCanonicalDoctors(context.env.ROSTER_DB);
         state.imports = state.imports.filter((item) => {
           const repoId = item.repoId || item.repositoryId || item.id;
-          return keepFileIds.includes(repoId);
+          return !removedIds.includes(repoId);
         });
       }
       await replaceAccountCustomEvents(context.env.ROSTER_DB, saveEmail, sanitizeSnapshotCustomEvents(state.session?.customEvents, saveEmail));

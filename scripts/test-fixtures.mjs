@@ -154,8 +154,14 @@ assert.match(
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
     .match(/if \(action === "save"\)[\s\S]*?if \(action === "loadDoctorProfile"\)/)?.[0] || "",
-  /keepFileIds\.length > 0 && persistedKeepFileIds\.length === keepFileIds\.length/,
-  "empty creator import snapshots must not be interpreted as permission to delete every active roster file",
+  /removedImportIds\.length[\s\S]*deleteDerivedRosterFile[\s\S]*deleteRawRosterFile/,
+  "ordinary saves must only delete roster database rows when explicit removed import ids are supplied",
+);
+assert.doesNotMatch(
+  (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
+    .match(/if \(action === "save"\)[\s\S]*?if \(action === "loadDoctorProfile"\)/)?.[0] || "",
+  /staleFileIds|canReconcileToFullSet|queryRosterFileRanges/,
+  "ordinary saves must not infer roster deletions from partial account import snapshots",
 );
 assert.doesNotMatch(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
@@ -234,6 +240,21 @@ assert.match(
   appSource.match(/async function bootstrapImports[\s\S]*?function snapshotHasUnresolvablePreviewEvents/)?.[0] || "",
   /cloudAvailable && selectedFiles\.length && selectedFiles\.some\(\(entry\) => !entry\.file\)[\s\S]*loadCloudCalendarEvents\(\{ adminTargetEmail: adminViewingEmail \? viewedAccountEmail\(\) : "" \}\)[\s\S]*No D1 calendar events were found/,
   "cloud repository refs should use D1 calendar loading instead of falling through to local browser parsing",
+);
+assert.match(
+  appSource.match(/function renderFilesMarkup[\s\S]*?function renderFilesList/)?.[0] || "",
+  /statusOnlyEntries[\s\S]*const displayFiles = selectedFiles\.length \? selectedFiles : statusOnlyEntries/,
+  "Admin Files should render D1 roster status files when local selected files are empty",
+);
+assert.match(
+  appSource.match(/async function replaceActiveRostersWithCurrentUploads[\s\S]*?async function reparseRosterFile/)?.[0] || "",
+  /if \(!selectedFiles\.length\)[\s\S]*Rebuild requires at least one roster file/,
+  "rebuild-all should refuse an empty local roster set",
+);
+assert.match(
+  appSource.match(/async function reparseRosterFile[\s\S]*?async function refreshCalendarStoreStatus/)?.[0] || "",
+  /calendarStoreStatus\?\.files[\s\S]*ensureRosterEntrySource\(entry\)/,
+  "per-file refresh should be able to hydrate status-only files from retained R2 source",
 );
 assert.match(
   appSource.match(/async function loginWithEmail[\s\S]*?async function restoreCloudState/)?.[0] || "",
@@ -4199,7 +4220,7 @@ await postState(deletionStore, {
     session: {},
   },
 });
-assert.equal(deletionStore.d1.files.has("missing-from-save"), false, "ordinary creator save should reconcile omitted D1 roster files");
+assert.equal(deletionStore.d1.files.has("missing-from-save"), true, "ordinary creator save must not delete omitted D1 roster files");
 let deletionIndex = await deletionStore.get("repository:index", "json");
 assert.ok(deletionIndex.files.some((file) => file.id === "missing-from-save"), "ordinary creator save must keep omitted files in the repository index");
 
@@ -4228,6 +4249,14 @@ await postState(deletionStore, {
 }, deletionStore.d1);
 assert.equal(deletionStore.d1.files.has("keep-roster"), true, "recovery should retain the requested current roster");
 assert.equal(deletionStore.d1.files.has("missing-from-save"), false, "recovery should remove active rosters outside the current upload set");
+
+const emptyReplacement = await postStateRaw(deletionStore, {
+  action: "replaceActiveRosterFiles",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  keepFileIds: [],
+}, deletionStore.d1);
+assert.equal(emptyReplacement.response.status, 400, "rebuild-all must not accept an empty retained roster set");
 
 const failedReplacementStore = new MemoryStore();
 failedReplacementStore.d1 = new MemoryD1();
