@@ -82,7 +82,7 @@ assert.match(
 assert.match(appSource, /let cloudStateSaveQueue = Promise\.resolve\(\);/, "cloud saves should be serialized");
 assert.match(
   appSource.match(/async function enterUserAccount[\s\S]*?async function enterDoctorProfileView/)?.[0] || "",
-  /queueBackgroundCloudStateSave\(capturePendingCloudStateSave\(\) \|\| creatorCalendarSavePayload\(\) \|\| snapshotCloudSavePayload\(\)\)/,
+  /queueBackgroundCloudStateSave\(capturePendingCloudStateSave\(\) \|\| creatorCalendarSavePayload\(\) \|\| snapshotCloudSavePayload\(\), \{ delayMs: 1500 \}\)/,
   "switching from the creator account should queue the creator doctor save without blocking entry",
 );
 assert.match(
@@ -217,8 +217,13 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function hydrateAuthenticatedWorkspace[\s\S]*?function markLoginPhase/)?.[0] || "",
-  /adminTargetEmail && adminTargetEmail !== OWNER_EMAIL[\s\S]*resolveCurrentAccountClaims\(adminTargetEmail\)[\s\S]*!adminTargetEmail && currentUserEmail !== OWNER_EMAIL[\s\S]*resolveCurrentAccountClaims\(\)[\s\S]*loadCloudCalendarEvents[\s\S]*void loadServerUsers\(\)/,
-  "claim resolution should finish before user and admin-entered calendars load, while creator user-list hydration remains non-blocking",
+  /adminTargetEmail && adminTargetEmail !== OWNER_EMAIL && !currentRosterClaims\.length[\s\S]*resolveCurrentAccountClaims\(adminTargetEmail\)[\s\S]*!adminTargetEmail && currentUserEmail !== OWNER_EMAIL && !currentRosterClaims\.length[\s\S]*resolveCurrentAccountClaims\(\)[\s\S]*loadCloudCalendarEvents[\s\S]*void loadServerUsers\(\)/,
+  "claim resolution should be skipped for already-claimed account entry while still resolving unclaimed users before calendar load",
+);
+assert.match(
+  stateSource.match(/async function buildDerivedAccountSnapshot[\s\S]*?function rawRosterObjectKey/)?.[0] || "",
+  /snapshotFileRefs[\s\S]*d1RepositoryImportRefsForClaims\(db, claims\)[\s\S]*fileRefs: snapshotFileRefs/,
+  "claimed-account snapshots should derive source file refs from D1 claims when lightweight account state omits imports",
 );
 assert.match(
   appSource.match(/async function claimSelectedRosterName[\s\S]*?async function updatePreview/)?.[0] || "",
@@ -2684,6 +2689,7 @@ const d1NoKvIndexCalendar = await postState(d1StateStore, {
   password: "d1-password",
 }, d1Store);
 assert.equal(d1NoKvIndexCalendar.snapshot?.preview?.derivedFromD1, true, "D1 account calendar load should work without KV repository index");
+assert.ok(d1NoKvIndexCalendar.snapshot.fileRefs.some((ref) => ref.id === d1RepositoryFile), "D1 claimed-account calendar snapshots should include source file refs for the Account modal");
 const d1NoKvIndexEnrichment = await postState(d1StateStore, {
   action: "resolveAccountClaims",
   email: "d1-user@example.com",

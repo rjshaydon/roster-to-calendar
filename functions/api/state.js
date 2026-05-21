@@ -1670,6 +1670,7 @@ async function buildDerivedAccountSnapshot(db, context) {
   if (!hasCalendarDb({ ROSTER_DB: db })) return null;
   const role = context.role || "user";
   const state = sanitizeState(context.state);
+  const claims = sanitizeClaims(context.claims);
   let doctorKeys = [];
   let doctorPairs = [];
   let doctorDiagnostics = [];
@@ -1694,7 +1695,6 @@ async function buildDerivedAccountSnapshot(db, context) {
     doctorOptions = groupedDoctors;
     selectedSourceTypes = doctor?.sourceTypes || [doctor?.sourceType].filter(Boolean);
   } else {
-    const claims = sanitizeClaims(context.claims);
     if (!claims.length) return null;
     const groupedClaims = buildCreatorDoctorOptions(claims.map((claim) => ({
       key: claim.key,
@@ -1752,6 +1752,12 @@ async function buildDerivedAccountSnapshot(db, context) {
     ]), settings),
   ];
   if (!events.length) return null;
+  const stateFileRefs = sanitizeSnapshotFileRefs(state.imports);
+  const snapshotFileRefs = role === "creator" || role === "owner"
+    ? stateFileRefs
+    : stateFileRefs.length
+      ? stateFileRefs
+      : await d1RepositoryImportRefsForClaims(db, claims);
   return sanitizeSnapshotRecord({
     ownerType: role === "creator" || role === "owner" ? "creator-account" : "claimed-account",
     ownerId: normalizeEmail(context.record.email),
@@ -1765,11 +1771,11 @@ async function buildDerivedAccountSnapshot(db, context) {
     session: normalizedSession,
     doctorOptions,
     detectedSources: detectedSourcesForSnapshot(
-      (role === "creator" || role === "owner") && sanitizeSnapshotFileRefs(state.imports).length
-        ? sanitizeSnapshotFileRefs(state.imports)
+      snapshotFileRefs.length
+        ? snapshotFileRefs
         : selectedSourceTypes,
     ),
-    fileRefs: sanitizeSnapshotFileRefs(state.imports),
+    fileRefs: snapshotFileRefs,
     subscriptionFeeds: {},
     insightCache: null,
   });

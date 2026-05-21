@@ -8693,7 +8693,7 @@ async function enterUserAccount(email) {
     setStatus("Creator authentication is required to enter another account.", true);
     return;
   }
-  queueBackgroundCloudStateSave(capturePendingCloudStateSave() || creatorCalendarSavePayload() || snapshotCloudSavePayload());
+  queueBackgroundCloudStateSave(capturePendingCloudStateSave() || creatorCalendarSavePayload() || snapshotCloudSavePayload(), { delayMs: 1500 });
 
   closeAccountsModal();
   authUserEmail = creatorEmail;
@@ -8733,7 +8733,7 @@ async function enterDoctorProfileView(doctor) {
   const previousState = captureCalendarViewState();
   const creatorEmail = authUserEmail || currentUserEmail;
   const creatorPassword = authUserPassword || currentUserPassword;
-  queueBackgroundCloudStateSave(capturePendingCloudStateSave() || snapshotCloudSavePayload());
+  queueBackgroundCloudStateSave(capturePendingCloudStateSave() || snapshotCloudSavePayload(), { delayMs: 1500 });
   const profile = doctorProfileForDoctor(doctor);
   const targetContext = profile ? calendarSnapshotContext({
     mode: "doctor-profile",
@@ -9169,7 +9169,7 @@ async function returnToCreatorAccount() {
   const accountSwitchStartedAt = performance.now();
   const creatorEmail = authUserEmail || OWNER_EMAIL;
   const creatorPassword = authUserPassword || currentUserPassword;
-  queueBackgroundCloudStateSave(capturePendingCloudStateSave() || snapshotCloudSavePayload());
+  queueBackgroundCloudStateSave(capturePendingCloudStateSave() || snapshotCloudSavePayload(), { delayMs: 1500 });
   adminViewingEmail = "";
   activeDoctorProfile = null;
   currentUserEmail = creatorEmail;
@@ -10008,11 +10008,11 @@ async function hydrateAuthenticatedWorkspace(options = {}, loginStartedAt = 0) {
   if (!currentUserEmail) return;
   try {
     const adminTargetEmail = normalizeEmail(options.adminTargetEmail);
-    if (adminTargetEmail && adminTargetEmail !== OWNER_EMAIL) {
+    if (adminTargetEmail && adminTargetEmail !== OWNER_EMAIL && !currentRosterClaims.length) {
       await resolveCurrentAccountClaims(adminTargetEmail);
       markLoginPhase("claimsResolved", loginStartedAt);
       markAccountSwitchPhase("claimsResolved", options.accountSwitchStartedAt);
-    } else if (!adminTargetEmail && currentUserEmail !== OWNER_EMAIL) {
+    } else if (!adminTargetEmail && currentUserEmail !== OWNER_EMAIL && !currentRosterClaims.length) {
       await resolveCurrentAccountClaims();
       markLoginPhase("claimsResolved", loginStartedAt);
     }
@@ -10319,14 +10319,20 @@ function capturePendingCloudStateSave() {
   return snapshot;
 }
 
-function queueBackgroundCloudStateSave(snapshot = null) {
+function queueBackgroundCloudStateSave(snapshot = null, options = {}) {
   const payload = snapshot || snapshotCloudSavePayload();
   if (!payload) return;
-  saveCloudState(payload).catch((error) => {
+  const run = () => saveCloudState(payload).catch((error) => {
     if (!error?.isRosterPersistenceError) cloudAvailable = false;
     renderLoginState();
     setStatus(error.message || "Cloud save failed.", true);
   });
+  const delayMs = Math.max(0, Number(options.delayMs || 0));
+  if (delayMs) {
+    window.setTimeout(run, delayMs);
+  } else {
+    run();
+  }
 }
 
 function shouldRebuildAccountSnapshot(snapshot) {
