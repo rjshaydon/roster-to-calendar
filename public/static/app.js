@@ -903,12 +903,6 @@ reviewModalBody.addEventListener("change", (event) => {
 });
 
 reviewModalBody.addEventListener("click", (event) => {
-  const roleButton = event.target.closest("[data-who-role-shift-code]");
-  if (roleButton) {
-    event.preventDefault();
-    void handleWhoRoleRuleClick(roleButton);
-    return;
-  }
   const resetButton = event.target.closest("[data-override-reset]");
   if (resetButton) {
     resetImportedEvent(resetButton.dataset.overrideReset);
@@ -1061,12 +1055,6 @@ exportModalBody.addEventListener("change", (event) => {
   }
 });
 insightsModalBody.addEventListener("click", async (event) => {
-  const roleButton = event.target.closest("[data-who-role-shift-code]");
-  if (roleButton) {
-    event.preventDefault();
-    await handleWhoRoleRuleClick(roleButton);
-    return;
-  }
   const dateButton = event.target.closest("[data-insights-who-on-date]");
   if (dateButton) {
     event.preventDefault();
@@ -1294,12 +1282,6 @@ customEventDeleteButton.addEventListener("click", () => {
   setStatus("Manual event removed.");
 });
 customEventForm.addEventListener("click", (event) => {
-  const roleButton = event.target.closest("[data-who-role-shift-code]");
-  if (roleButton) {
-    event.preventDefault();
-    void handleWhoRoleRuleClick(roleButton);
-    return;
-  }
   const whenDoctorButton = event.target.closest("[data-inline-when-doctor]");
   if (whenDoctorButton) {
     event.preventDefault();
@@ -3622,8 +3604,11 @@ function buildWhoAssignments(doctor, events) {
 function buildWhoAssignment(doctor, metadata, event) {
   const source = eventSourceCode(event);
   const role = metadata[source]?.role || metadata.any?.role || eventSeniorityRoleCode(event) || "";
-  const period = whoPeriodLabel(event);
-  const rawTeam = whoTeamLabel(event);
+  const activeRule = parserRuleForWhoEvent(event, source, role);
+  const ruleTitle = activeRule ? parserRulePreviewTitle(activeRule) : "";
+  const eventForGrouping = ruleTitle ? { ...event, title: ruleTitle } : event;
+  const period = activeRule?.period ? whoPeriodLabel({ ...eventForGrouping, rawValue: activeRule.period }) : whoPeriodLabel(eventForGrouping);
+  const rawTeam = activeRule?.base ? activeRule.base : whoTeamLabel(eventForGrouping);
   const isNightSsu = period === "Night" && rawTeam === "SSU";
   const team = isNightSsu ? "Night" : rawTeam;
   return {
@@ -3639,13 +3624,21 @@ function buildWhoAssignment(doctor, metadata, event) {
     teamRank: whoTeamRank(team, source),
     specialTime: whoSpecialTimeLabel(event, period),
     rawValue: String(event?.rawValue || "").trim(),
-    ruleCode: parserRuleCodeFromRawValue(source, event?.rawValue || "") || incompleteShiftCodeFromTitle(source, event?.title || ""),
-    suggestedTitle: String(event?.title || "").trim(),
+    ruleCode: activeRule?.code || parserRuleCodeFromRawValue(source, event?.rawValue || "") || incompleteShiftCodeFromTitle(source, event?.title || ""),
+    suggestedTitle: ruleTitle || String(event?.title || "").trim(),
     timeLabel: event?.timeLabel || summarizeEventTimes(event?.start || "", event?.end || "", event?.allDay === true),
     date: eventRosterDateKey(event),
     location: String(event?.location || "").trim(),
     event,
   };
+}
+
+function parserRuleForWhoEvent(event, source, role) {
+  const normalizedSource = sanitizeIssueSource(source);
+  const seniority = sanitizeRuleSeniority(event?.seniority || role);
+  const code = parserRuleCodeFromRawValue(normalizedSource, event?.rawValue || "") || incompleteShiftCodeFromTitle(normalizedSource, event?.title || "");
+  if (!normalizedSource || !seniority || !code) return null;
+  return findParserExtensionRuleForSeniority(normalizedSource, seniority, code);
 }
 
 function buildSelectedWhoAssignments(events) {
@@ -3798,21 +3791,7 @@ function renderWhoTeamPerson(item, doctorAttribute) {
     <div class="who-team-person">
       <button type="button" class="who-team-name" ${doctorAttribute}="${escapeHtml(item.doctorKey || "")}" title="Show future shifts with ${escapeHtml(item.doctorName)}">${escapeHtml(item.doctorName)}</button>
       <span class="who-team-meta">
-        ${roleParts.length ? `
-          <button
-            type="button"
-            class="who-team-role"
-            data-who-role-shift-code="${escapeHtml(item.ruleCode || "")}"
-            data-who-role-source="${escapeHtml(item.source || "")}"
-            data-who-role-seniority="${escapeHtml(sanitizeRuleSeniority(item.roleLabel || item.role || ""))}"
-            data-who-role-raw-value="${escapeHtml(item.rawValue || item.ruleCode || "")}"
-            data-who-role-title="${escapeHtml(item.suggestedTitle || "")}"
-            data-who-role-time-label="${escapeHtml(item.timeLabel || "")}"
-            data-who-role-date="${escapeHtml(item.date || "")}"
-            data-who-role-location="${escapeHtml(item.location || "")}"
-            title="Open shift-code rule for ${escapeHtml(roleParts.join(" "))}"
-          >${escapeHtml(roleParts.join(" · "))}</button>
-        ` : ""}
+        ${roleParts.length ? `<span class="who-team-role">${escapeHtml(roleParts.join(" · "))}</span>` : ""}
         ${item.specialTime ? `<span class="who-team-time">${escapeHtml(item.specialTime)}</span>` : ""}
       </span>
     </div>
@@ -7574,86 +7553,8 @@ function findParserExtensionRuleForSeniority(source, seniority, code) {
     .find((rule) => rule.code === normalizedCode && (!seniority || rule.seniority === normalizedSeniority)) || null;
 }
 
-async function handleWhoRoleRuleClick(button) {
-  const issue = parserRuleIssueFromWhoRoleButton(button);
-  if (!issue) {
-    setStatus("Could not resolve that role to a shift-code rule.", true);
-    return;
-  }
-  const rule = findParserExtensionRuleForSeniority(issue.source, issue.seniority, issue.code);
-  if (rule) {
-    await openAndFocusParserRule(rule);
-    return;
-  }
-  openParserRuleModalFromSyntheticIssue(issue, {
-    mode: isCreatorAuthenticated() ? "global" : "local",
-    title: "Add shift code",
-    allowMultipleSeniorities: isCreatorAuthenticated(),
-  });
-}
-
-function parserRuleIssueFromWhoRoleButton(button) {
-  const source = sanitizeIssueSource(button?.dataset?.whoRoleSource);
-  const seniority = sanitizeRuleSeniority(button?.dataset?.whoRoleSeniority);
-  const rawValue = String(button?.dataset?.whoRoleRawValue || button?.dataset?.whoRoleShiftCode || "").trim();
-  const code = String(button?.dataset?.whoRoleShiftCode || parserRuleCodeFromRawValue(source, rawValue)).trim().toUpperCase();
-  if (!source || !seniority || !code) return null;
-  const suggestedTitle = String(button?.dataset?.whoRoleTitle || "").trim();
-  const timeLabel = String(button?.dataset?.whoRoleTimeLabel || "").trim();
-  const startDay = String(button?.dataset?.whoRoleDate || "").trim();
-  return {
-    id: issueFingerprint(source, rawValue || code, seniority),
-    fingerprint: issueFingerprint(source, rawValue || code, seniority),
-    source,
-    seniority,
-    code,
-    rawValue: rawValue || code,
-    startDay,
-    message: `${source} shift code needs normalisation.`,
-    resolutionType: "shift_code",
-    suggestedTitle,
-    timeLabel,
-    location: String(button?.dataset?.whoRoleLocation || "").trim(),
-  };
-}
-
-async function openAndFocusParserRule(rule) {
-  if (!isCreatorAuthenticated()) {
-    setStatus("Creator authentication is required to open shift-code rules.", true);
-    return;
-  }
-  closeInsightsModal();
-  closeReviewModal();
-  closeCustomEventModal();
-  if (!isViewingCreatorAccount()) {
-    await returnToCreatorAccount();
-  }
-  await openAccountsSurface({ defaultAdminTab: "system" });
-  requestAnimationFrame(() => focusParserRuleInAdmin(rule));
-}
-
-function focusParserRuleInAdmin(rule) {
-  const normalized = sanitizeParserExtensionRule(rule);
-  if (!normalized) return;
-  const sourceDetails = accountsBody.querySelector(`[data-parser-rule-source-section="${cssEscapeAttr(normalized.source)}"]`);
-  if (sourceDetails) sourceDetails.open = true;
-  const seniorityDetails = accountsBody.querySelector(`[data-parser-rule-seniority-section="${cssEscapeAttr(`${normalized.source}|${normalized.seniority}`)}"]`);
-  if (seniorityDetails) seniorityDetails.open = true;
-  const card = accountsBody.querySelector(`[data-parser-rule-card="${cssEscapeAttr(parserRuleFocusKey(normalized))}"]`);
-  if (!card) return;
-  accountsBody.querySelectorAll(".is-parser-rule-focus").forEach((item) => item.classList.remove("is-parser-rule-focus"));
-  card.classList.add("is-parser-rule-focus");
-  card.scrollIntoView({ block: "center", behavior: "smooth" });
-  window.setTimeout(() => card.classList.remove("is-parser-rule-focus"), 2600);
-}
-
 function parserRuleFocusKey(rule) {
   return `${rule.source}|${rule.seniority}|${rule.code}`;
-}
-
-function cssEscapeAttr(value) {
-  if (window.CSS?.escape) return CSS.escape(String(value || ""));
-  return String(value || "").replace(/["\\]/g, "\\$&");
 }
 
 function parserRuleExistsForIssue(issue) {
@@ -8153,12 +8054,14 @@ async function saveParserRuleFromModal() {
         };
         rebuildClientPreview();
       }
+      await refreshActiveWhoInsightSurfaces();
       setStatus("Shift code resolved for your calendar and sent to Admin.");
       return;
     }
     if (saveMode === "suggestionOverwrite") {
       await decideParserRuleSuggestion(parserRuleSaveContext.suggestionId, "approveUser", rule);
       closeParserRuleModal();
+      await refreshActiveWhoInsightSurfaces();
       setStatus("Suggestion overwritten for that user.");
       return;
     }
@@ -8204,9 +8107,21 @@ async function saveParserRuleFromModal() {
       parsedRosterSources = null;
       await analyzeFiles({ preserveVisiblePreview: true });
     }
+    await refreshActiveWhoInsightSurfaces();
     setStatus(includeAsShift ? "Shift code added to the parser." : "Shift code hidden from calendar.");
   } catch (error) {
     setStatus(error.message || "Could not save the shift-code rule.", true);
+  }
+}
+
+async function refreshActiveWhoInsightSurfaces() {
+  const panels = [...document.querySelectorAll(".event-inline-insight[data-inline-who-date]")]
+    .filter((panel) => !panel.classList.contains("hidden"));
+  await Promise.all(panels.map((panel) => renderInlineWhoInsight(panel, panel.dataset.inlineWhoDate || "", {
+    source: panel.dataset.inlineWhoSource || "",
+  })));
+  if (!insightsModal.classList.contains("hidden") && insightsState?.mode === "who") {
+    await renderWhoInsight();
   }
 }
 

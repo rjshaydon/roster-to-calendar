@@ -2195,6 +2195,8 @@ function buildDefaultParserRules() {
     add(rules.mmc, "MMC", "SWP", seniority, "Swing", "PM", "", false, "14:30", "00:00", MMC_LOCATION);
     add(rules.mmc, "MMC", "AHJ", seniority, "Hub", "AM", "", false, "08:00", "17:30", MMC_LOCATION);
     add(rules.mmc, "MMC", "PHJ", seniority, "Hub", "PM", "", false, "14:30", "00:00", MMC_LOCATION);
+    add(rules.mmc, "MMC", "ASSJ", seniority, "SSU", "AM", "", false, "07:30", "17:30", MMC_LOCATION);
+    add(rules.mmc, "MMC", "PSSJ", seniority, "SSU", "PM", "", false, "14:30", "00:00", MMC_LOCATION);
     add(rules.mmc, "MMC", "NSSJ", seniority, "Night SSU", "", "", false, "23:00", "08:30", MMC_LOCATION);
   }
   for (const seniority of activeSeniorities) {

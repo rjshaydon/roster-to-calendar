@@ -309,9 +309,9 @@ assert.match(appSource, /function selectedParserRuleSeniorities/, "shift-code ed
 assert.match(appSource, /function openManualParserRuleModal/, "shift-code editor should support manual rule creation without an existing issue");
 assert.match(appSource, /parserRuleExistsForIssue/, "system shift-code review should hide only issues resolved by active rules");
 assert.match(appSource, /matchingParserRuleGroup/, "saved shift-code rules should reopen with equivalent seniorities selected");
-assert.match(appSource, /data-who-role-shift-code/, "Who role labels should be separate clickable shift-code controls");
-assert.match(appSource, /handleWhoRoleRuleClick[\s\S]*findParserExtensionRuleForSeniority/, "Who role clicks should resolve against parser rules before creating a new rule");
-assert.match(appSource, /openAndFocusParserRule[\s\S]*data-parser-rule-card/, "Who role clicks should focus existing parser rules in Admin > System");
+assert.match(appSource, /<span class="who-team-role">/, "Who role labels should render separately from doctor buttons");
+assert.doesNotMatch(appSource, /data-who-role-shift-code|handleWhoRoleRuleClick/, "Who role labels should not be clickable shift-code controls");
+assert.match(appSource, /refreshActiveWhoInsightSurfaces/, "saving shift-code rules should refresh active Who insight panels");
 assert.match(appSource, /function synthesizeIncompleteShiftCodeIssues/, "derived code-only shift titles should synthesize unresolved shift-code issues");
 assert.match(appSource, /data-ignore-unresolved-shift-code/, "missing shift-code queue should expose a non-destructive ignore action");
 assert.match(appSource, /allUnknownIssues\.filter\(\(item\) => item\.source === group\.source\)/, "ignored shift codes should remain visible in hospital unrecognised sections");
@@ -560,6 +560,10 @@ assert.ok(hasMmcRule("Transitional/Intermediate Registrar", "SWP"));
 assert.ok(hasMmcRule("Junior Registrar", "AHJ"));
 assert.ok(hasMmcRule("HMO", "PHJ"));
 assert.ok(hasMmcRule("Intern", "NSSJ"));
+for (const seniority of ["Senior Registrar", "Transitional/Intermediate Registrar", "Junior Registrar", "HMO", "Intern"]) {
+  assert.ok(hasMmcRule(seniority, "ASSJ"), `default MMC rules should include ASSJ for ${seniority}`);
+  assert.ok(hasMmcRule(seniority, "PSSJ"), `default MMC rules should include PSSJ for ${seniority}`);
+}
 assert.ok(hasMchRule("SMS", "CS", "CS"));
 assert.ok(hasMchRule("CMO", "OCS", "CS Office"));
 assert.ok(hasMchRule("HMO", "PHNW", "PHNW"));
@@ -584,13 +588,10 @@ XLSX.utils.book_append_sheet(unmappedTimedMmcWorkbook, XLSX.utils.aoa_to_sheet([
 XLSX.utils.book_append_sheet(unmappedTimedMmcWorkbook, unmappedTimedMmcSheet, "Week 1");
 const unmappedTimedMmcView = buildRosterView([{ id: "unmapped-assj", workbook: unmappedTimedMmcWorkbook, file: { name: "AdultTerm.xlsx", size: 1, lastModified: 1 } }], [], "PATRICK TAN");
 assert.ok(
-  unmappedTimedMmcView.events.some((event) => event.rawValue === "0800-1730 ASSJ" && event.title === "MMC: ASSJ" && event.start.includes("08:00:00") && event.end.includes("17:30:00")),
-  "unmapped explicit-time MMC shifts should remain visible at their rostered time",
+  unmappedTimedMmcView.events.some((event) => event.rawValue === "0800-1730 ASSJ" && event.title === "MMC: SSU AM" && event.start.includes("08:00:00") && event.end.includes("17:30:00")),
+  "default ASSJ rules should resolve Senior Registrar SSU AM while preserving explicit roster time",
 );
-assert.ok(
-  unmappedTimedMmcView.issues.some((issue) => issue.rawValue === "0800-1730 ASSJ" && issue.status === "unknown" && issue.resolutionType === "shift_code"),
-  "unmapped explicit-time MMC shifts should enter the unresolved shift-code workflow",
-);
+assert.equal(unmappedTimedMmcView.issues.some((issue) => issue.rawValue === "0800-1730 ASSJ"), false, "default ASSJ rules should not enter the unresolved shift-code workflow");
 assert.equal(nssjRule.endTime, "08:30");
 for (const sourceRules of [defaultRules.ddh, defaultRules.casey]) {
   assert.equal(sourceRules.some((rule) => rule.seniority === "Senior Registrar" && rule.base === "CS"), false);
