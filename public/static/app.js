@@ -154,6 +154,7 @@ const SHIFT_COLOUR_DEFAULTS = {
 const ACCOUNT_STATE_KEY = "roster-account-state";
 const SESSION_STATE_KEY = "roster-session-state-v1";
 const ACCOUNT_WORKSPACES_KEY = "roster-account-workspaces-v1";
+const CALENDAR_SNAPSHOT_CACHE_KEY = "roster-calendar-snapshot-cache-v1";
 const UNRESOLVED_SHIFT_CODE_IGNORE_KEY = "roster-unresolved-shift-code-ignore-v1";
 const CURRENT_EMAIL_KEY = "roster-current-email";
 const CURRENT_PASSWORD_KEY = "roster-current-password";
@@ -290,10 +291,13 @@ let reportedIssueFingerprints = new Set();
 let currentSnapshot = null;
 let currentSnapshotStale = false;
 let currentSnapshotBuiltAt = "";
+let currentCalendarRevision = "";
 let snapshotRefreshPromise = null;
 let pendingPreviewSnapToToday = false;
 let insightWarmupTimer = 0;
 let insightWarmupPromise = null;
+let visibleInsightWarmCache = new Map();
+let visibleInsightWarmKey = "";
 let parserExtensions = { mmc: [], ddh: [], casey: [], mch: [] };
 let globalParserExtensions = { mmc: [], ddh: [], casey: [], mch: [] };
 let localParserExtensions = { mmc: [], ddh: [], casey: [], mch: [] };
@@ -3136,6 +3140,10 @@ function selectedInsightDoctorKeys() {
 
 async function fetchRosterInsightRows({ startDate, endDate = startDate, sourceTypes = [], excludeDoctorKeys = [], doctorKeys = [], overlapDoctorKeys = [] } = {}) {
   if (!cloudAvailable || !startDate) return { ok: false, unavailable: true, rows: [] };
+  const cacheKey = rosterInsightCacheKey({ startDate, endDate, sourceTypes, excludeDoctorKeys, doctorKeys, overlapDoctorKeys });
+  if (visibleInsightWarmCache.has(cacheKey)) {
+    return { ok: true, rows: visibleInsightWarmCache.get(cacheKey), elapsedMs: 0, cached: true };
+  }
   const startedAt = performance.now();
   try {
     const requestEmail = adminViewingEmail ? authUserEmail || currentUserEmail : currentUserEmail;
@@ -3162,6 +3170,7 @@ async function fetchRosterInsightRows({ startDate, endDate = startDate, sourceTy
       return { ok: false, unavailable: true, rows: [], elapsedMs };
     }
     if (elapsedMs > 1000) console.warn("Roster insight SQL lookup was slow", { elapsedMs, queryMs: data.queryMs, startDate, endDate, sourceTypes, doctorKeys, overlapDoctorKeys });
+    visibleInsightWarmCache.set(cacheKey, data.coworkers);
     return { ok: true, rows: data.coworkers, elapsedMs, queryMs: data.queryMs };
   } catch (error) {
     const elapsedMs = Math.round(performance.now() - startedAt);
@@ -3172,6 +3181,10 @@ async function fetchRosterInsightRows({ startDate, endDate = startDate, sourceTy
 
 async function fetchRosterOverlapDoctors({ startDate, endDate = startDate, sourceTypes = [], excludeDoctorKeys = [], overlapDoctorKeys = [] } = {}) {
   if (!cloudAvailable || !startDate || !overlapDoctorKeys.length) return { ok: false, unavailable: true, doctors: [] };
+  const cacheKey = rosterOverlapDoctorCacheKey({ startDate, endDate, sourceTypes, excludeDoctorKeys, overlapDoctorKeys });
+  if (visibleInsightWarmCache.has(cacheKey)) {
+    return { ok: true, doctors: visibleInsightWarmCache.get(cacheKey), elapsedMs: 0, cached: true };
+  }
   const startedAt = performance.now();
   try {
     const requestEmail = adminViewingEmail ? authUserEmail || currentUserEmail : currentUserEmail;
@@ -3194,6 +3207,7 @@ async function fetchRosterOverlapDoctors({ startDate, endDate = startDate, sourc
     const elapsedMs = Math.round(performance.now() - startedAt);
     if (!data.ok || data.unavailable || !Array.isArray(data.doctors)) return { ok: false, unavailable: true, doctors: [], elapsedMs };
     if (elapsedMs > 1000) console.warn("Roster overlap doctor SQL lookup was slow", { elapsedMs, queryMs: data.queryMs, startDate, endDate, sourceTypes, overlapDoctorKeys });
+    visibleInsightWarmCache.set(cacheKey, data.doctors);
     return { ok: true, doctors: data.doctors, elapsedMs, queryMs: data.queryMs };
   } catch (error) {
     const elapsedMs = Math.round(performance.now() - startedAt);
@@ -3236,6 +3250,50 @@ function insightRowsToEventsByDoctor(rows) {
     events.get(key).push(serializeEvent(row.event));
   }
   return events;
+}
+
+function insightWarmBaseKey() {
+  return [
+    activeWorkspaceOwnerKey(),
+    selectedInsightDoctorKeys().join(","),
+    currentCalendarRevision,
+  ].join("|");
+}
+
+function stableInsightList(values = []) {
+  return [...new Set((values || []).map((item) => String(item || "").trim()).filter(Boolean))]
+    .sort()
+    .join(",");
+}
+
+function rosterInsightCacheKey({ startDate, endDate = startDate, sourceTypes = [], excludeDoctorKeys = [], doctorKeys = [], overlapDoctorKeys = [] } = {}) {
+  return [
+    "rows",
+    insightWarmBaseKey(),
+    startDate || "",
+    endDate || startDate || "",
+    stableInsightList(sourceTypes.map((item) => item.toLowerCase())),
+    stableInsightList(excludeDoctorKeys.map(normalizeRosterName)),
+    stableInsightList(doctorKeys.map(normalizeRosterName)),
+    stableInsightList(overlapDoctorKeys.map(normalizeRosterName)),
+  ].join("|");
+}
+
+function rosterOverlapDoctorCacheKey({ startDate, endDate = startDate, sourceTypes = [], excludeDoctorKeys = [], overlapDoctorKeys = [] } = {}) {
+  return [
+    "overlapDoctors",
+    insightWarmBaseKey(),
+    startDate || "",
+    endDate || startDate || "",
+    stableInsightList(sourceTypes.map((item) => item.toLowerCase())),
+    stableInsightList(excludeDoctorKeys.map(normalizeRosterName)),
+    stableInsightList(overlapDoctorKeys.map(normalizeRosterName)),
+  ].join("|");
+}
+
+function resetVisibleInsightWarmCache() {
+  visibleInsightWarmCache = new Map();
+  visibleInsightWarmKey = "";
 }
 
 async function renderWhoInsight() {
@@ -4131,8 +4189,26 @@ function buildInsightCachePayload() {
 
 function scheduleInsightWarmup() {
   clearInsightWarmup();
-  // D1 answers insight lookups on demand. Prewarming used to parse every roster
-  // for every doctor in the browser, which blocked calendar load and popups.
+  if (!canUseRosterInsights() || !latestPreview || !selectedDoctor()) return;
+  const warmKey = [
+    insightWarmBaseKey(),
+    settings.dateFrom || "",
+    settings.dateTo || "",
+    settings.hospitalFilter || "all",
+  ].join("|");
+  if (visibleInsightWarmKey === warmKey && visibleInsightWarmCache.size) return;
+  visibleInsightWarmKey = warmKey;
+  const run = () => {
+    insightWarmupTimer = 0;
+    insightWarmupPromise = warmInsightData().catch((error) => {
+      console.warn("Roster insight warmup failed", error);
+    });
+  };
+  if (typeof requestIdleCallback === "function") {
+    insightWarmupTimer = requestIdleCallback(run, { timeout: 1200 });
+  } else {
+    insightWarmupTimer = setTimeout(run, 250);
+  }
 }
 
 function clearInsightWarmup() {
@@ -4149,7 +4225,42 @@ function clearInsightWarmup() {
 }
 
 async function warmInsightData() {
-  // Insights are loaded from D1 on demand; never pre-parse roster files in-browser.
+  if (!canUseRosterInsights() || !latestPreview || !selectedDoctor()) return;
+  const range = currentCalendarInsightDateRange();
+  const startDate = settings.dateFrom || range.start || "";
+  const endDate = settings.dateTo || range.end || startDate;
+  if (!startDate || !endDate) return;
+  const selectedKeys = selectedInsightDoctorKeys();
+  const selectedEvents = selectedDoctorEventsForInsights(startDate, endDate).filter(isRosterShiftEvent);
+  const dates = [...new Set(selectedEvents.map(eventRosterDateKey).filter(Boolean))]
+    .sort()
+    .slice(0, 42);
+  await Promise.all(dates.map((date) => fetchRosterInsightRows({
+    startDate: date,
+    endDate: date,
+    excludeDoctorKeys: selectedKeys,
+  })));
+  const dateSourcePairs = [];
+  for (const event of selectedEvents) {
+    const date = eventRosterDateKey(event);
+    const source = eventSourceCode(event);
+    if (date && source) dateSourcePairs.push(`${date}|${source}`);
+  }
+  await Promise.all([...new Set(dateSourcePairs)].slice(0, 64).map((pair) => {
+    const [date, source] = pair.split("|");
+    return fetchRosterInsightRows({
+      startDate: date,
+      endDate: date,
+      sourceTypes: [source.toLowerCase()],
+      excludeDoctorKeys: selectedKeys,
+    });
+  }));
+  await fetchRosterOverlapDoctors({
+    startDate,
+    endDate,
+    excludeDoctorKeys: selectedKeys,
+    overlapDoctorKeys: selectedKeys,
+  });
 }
 
 function syncActionState() {
@@ -5404,6 +5515,7 @@ function resetDerivedState(options = {}) {
   redoHistory = [];
   lastHistorySignature = "";
   clearDoctorAnalysisCache();
+  resetVisibleInsightWarmCache();
   lastRosterPersistence = null;
   closeInsightsModal();
   settings = defaultSettings();
@@ -5426,6 +5538,7 @@ function resetTransientCalendarData() {
   doctorRoleIndex = null;
   restoredSessionState = null;
   clearDoctorAnalysisCache();
+  resetVisibleInsightWarmCache();
   clearPreviewData();
 }
 
@@ -6318,6 +6431,9 @@ function openFilesModal() {
   renderFilesList();
   filesModal.classList.remove("hidden");
   filesModal.setAttribute("aria-hidden", "false");
+  if (isCreatorAuthenticated() && cloudAvailable) {
+    void refreshCalendarStoreStatus({ silent: true });
+  }
 }
 
 function closeFilesModal() {
@@ -9511,7 +9627,7 @@ function issueFingerprint(source, rawValue, seniority = "") {
 
 function sanitizeWorkspaceSnapshot(value) {
   if (!value || typeof value !== "object" || !value.preview) return null;
-  return {
+  const snapshot = {
     preview: JSON.parse(JSON.stringify(value.preview)),
     session: value.session && typeof value.session === "object" ? JSON.parse(JSON.stringify(value.session)) : {},
     doctorOptions: Array.isArray(value.doctorOptions)
@@ -9541,6 +9657,10 @@ function sanitizeWorkspaceSnapshot(value) {
     insightCache: sanitizeInsightCache(value.insightCache),
     profileCoverage: value.profileCoverage && typeof value.profileCoverage === "object" ? JSON.parse(JSON.stringify(value.profileCoverage)) : null,
   };
+  snapshot.calendarRevision = String(value.calendarRevision || "");
+  snapshot.cacheKey = String(value.cacheKey || "");
+  snapshot.cachedAt = String(value.cachedAt || "");
+  return snapshot;
 }
 
 function sanitizeInsightCache(value) {
@@ -9756,7 +9876,8 @@ async function loginWithEmail(email, password, options = {}) {
     closeLoginModal();
     setEntranceStatus("");
     markLoginPhase("shellRendered", loginStartedAt);
-    setStatus("Loading calendar...");
+    const renderedCachedSnapshot = renderCachedCalendarSnapshot({ loginStartedAt });
+    setStatus(renderedCachedSnapshot ? "Checking calendar for updates..." : "Loading calendar...");
     void hydrateAuthenticatedWorkspace({ ...options, includeBootstrap: true }, loginStartedAt);
   } catch (error) {
     const message = normalizeAuthMessage(error.message || "Login failed.");
@@ -9837,11 +9958,18 @@ async function hydrateAuthenticatedWorkspace(options = {}, loginStartedAt = 0) {
     if (!adminTargetEmail && currentUserEmail === OWNER_EMAIL) {
       forceCreatorDoctorSession();
     }
-    await loadCloudCalendarEvents({ adminTargetEmail });
+    const cachedRevision = currentSnapshot?.cacheKey === currentCalendarSnapshotCacheKey()
+      ? currentSnapshot.calendarRevision || currentCalendarRevision || ""
+      : "";
+    const loadedFreshCalendar = await loadCloudCalendarEvents({ adminTargetEmail, cachedRevision });
     markLoginPhase("calendarLoaded", loginStartedAt);
     markAccountSwitchPhase("calendarLoaded", options.accountSwitchStartedAt);
     if (options.includeBootstrap !== false) {
-      await bootstrapImports();
+      if (loadedFreshCalendar || currentSnapshot?.preview) {
+        await bootstrapImports();
+      } else {
+        await bootstrapImports();
+      }
       markLoginPhase("workspaceRendered", loginStartedAt);
       markAccountSwitchPhase("workspaceRendered", options.accountSwitchStartedAt);
     }
@@ -9947,6 +10075,7 @@ async function loadDoctorProfileImportsIntoWorkspace() {
 
 async function applyCloudStateData(data) {
   cloudAvailable = data.cloudAvailable === true;
+  currentCalendarRevision = String(data.calendarRevision || currentCalendarRevision || "");
   currentUserRole = data.role || currentUserRole;
   currentInsightsEnabled = currentUserRole === "creator" || data.insightsEnabled === true;
   currentRosterClaims = sanitizeRosterClaims(data.claims || []);
@@ -9984,6 +10113,7 @@ async function applyCloudStateData(data) {
     return;
   }
   currentSnapshot = sanitizeWorkspaceSnapshot(data.snapshot);
+  if (currentSnapshot && currentCalendarRevision) currentSnapshot.calendarRevision = currentCalendarRevision;
   if (currentSnapshot && shouldRebuildAccountSnapshot(currentSnapshot)) {
     currentSnapshot = null;
   }
@@ -10023,10 +10153,21 @@ async function loadCloudCalendarEvents(options = {}) {
       doctorKey: preferredDoctorKey,
       startDate: range.startDate,
       endDate: range.endDate,
+      cachedRevision: options.cachedRevision || "",
     }),
   });
   const data = await readJsonResponse(response, "Calendar load failed.");
+  currentCalendarRevision = String(data.calendarRevision || currentCalendarRevision || "");
+  if (data.snapshotCurrent === true) {
+    if (currentSnapshot && currentCalendarRevision) currentSnapshot.calendarRevision = currentCalendarRevision;
+    if (currentSnapshot) saveCalendarSnapshotCache(currentSnapshot);
+    return Boolean(currentSnapshot);
+  }
   currentSnapshot = sanitizeWorkspaceSnapshot(clearCloudLoadedSnapshotFilters(data.snapshot));
+  if (currentSnapshot) {
+    currentSnapshot.calendarRevision = currentCalendarRevision;
+    currentSnapshot.cacheKey = currentCalendarSnapshotCacheKey();
+  }
   currentSnapshotStale = data.snapshotStale === true;
   currentSnapshotBuiltAt = String(data.snapshotBuiltAt || "");
   if (!currentSnapshot) return false;
@@ -10037,6 +10178,7 @@ async function loadCloudCalendarEvents(options = {}) {
     session: restoredSessionState || {},
     snapshot: currentSnapshot,
   });
+  saveCalendarSnapshotCache(currentSnapshot);
   return true;
 }
 
@@ -10214,9 +10356,11 @@ async function saveCloudStateNow(snapshot = null) {
     await readJsonResponse(response, "Doctor profile save failed.");
     if (snapshotPayload) {
       currentSnapshot = sanitizeWorkspaceSnapshot(snapshotPayload);
+      if (currentSnapshot) currentSnapshot.calendarRevision = currentCalendarRevision;
       currentSnapshotStale = false;
       currentSnapshotBuiltAt = new Date().toISOString();
       rememberCreatorCalendarSourceRefs();
+      saveCalendarSnapshotCache(currentSnapshot);
     }
     renderLoginState();
     return;
@@ -10236,12 +10380,15 @@ async function saveCloudStateNow(snapshot = null) {
     }),
   });
   const data = await readJsonResponse(response, "Cloud save failed.");
+  currentCalendarRevision = String(data.calendarRevision || currentCalendarRevision || "");
   if (data.claims && payload.accountEmail === currentUserEmail) currentRosterClaims = sanitizeRosterClaims(data.claims);
   if (snapshotPayload) {
     currentSnapshot = sanitizeWorkspaceSnapshot(snapshotPayload);
+    if (currentSnapshot) currentSnapshot.calendarRevision = currentCalendarRevision;
     currentSnapshotStale = false;
     currentSnapshotBuiltAt = new Date().toISOString();
     rememberCreatorCalendarSourceRefs();
+    saveCalendarSnapshotCache(currentSnapshot);
   }
   renderLoginState();
 }
@@ -10315,6 +10462,7 @@ async function buildWorkspaceSnapshotPayload(session = buildActiveSessionState()
     fileRefs: selectedFiles.map(importRefForWorkspace),
     subscriptionFeeds: await buildSubscriptionFeeds(session),
     insightCache: doctorAnalysisCacheKey && doctorAnalysisCache.size ? buildInsightCachePayload() : currentSnapshot?.insightCache || null,
+    calendarRevision: currentCalendarRevision,
   };
 }
 
@@ -10328,10 +10476,14 @@ function cacheCurrentSnapshot(session = buildActiveSessionState()) {
     fileRefs: selectedFiles.map(importRefForWorkspace),
     subscriptionFeeds: currentSnapshot?.subscriptionFeeds || {},
     insightCache: doctorAnalysisCacheKey && doctorAnalysisCache.size ? buildInsightCachePayload() : currentSnapshot?.insightCache || null,
+    calendarRevision: currentCalendarRevision,
+    cacheKey: currentCalendarSnapshotCacheKey(),
+    cachedAt: new Date().toISOString(),
   });
   currentSnapshotStale = false;
   currentSnapshotBuiltAt = new Date().toISOString();
   rememberCreatorCalendarSourceRefs();
+  saveCalendarSnapshotCache(currentSnapshot);
 }
 
 async function loadServerUsers() {
@@ -10366,6 +10518,11 @@ async function refreshCalendarStoreStatus(options = {}) {
       expectedFileIds: selectedFiles.map((entry) => entry.id),
     });
     calendarStoreStatus = { ...data, checkedAt: new Date().toISOString() };
+    if (isCreatorAuthenticated() && Array.isArray(data.files) && data.files.length && !selectedFiles.some((entry) => entry.file)) {
+      selectedFiles = importRefsToClientEntries(data.files);
+      rememberCreatorCalendarSourceRefs();
+      renderFilesList();
+    }
     calendarStoreStatusError = "";
     if (!options.silent) setStatus("Roster database status checked.");
   } catch (error) {
@@ -10577,6 +10734,7 @@ async function saveSelectedRosterFilesToD1(imports = selectedFiles, options = {}
     }
   }
   if (latestStatus) calendarStoreStatus = { ...latestStatus, checkedAt: new Date().toISOString() };
+  invalidateCalendarSnapshotCache();
   const summary = summarizeRosterPersistence(entries, calendarStoreStatus, saveResults);
   lastRosterPersistence = summary;
   renderFileSurfaces();
@@ -10940,6 +11098,92 @@ function isStorageQuotaError(error) {
     || error?.name === "NS_ERROR_DOM_QUOTA_REACHED"
     || error?.code === 22
     || error?.code === 1014;
+}
+
+function loadCalendarSnapshotCacheStore() {
+  try {
+    const store = JSON.parse(localStorage.getItem(CALENDAR_SNAPSHOT_CACHE_KEY) || "{}");
+    return store && typeof store === "object" ? store : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveCalendarSnapshotCacheStore(store) {
+  try {
+    localStorage.setItem(CALENDAR_SNAPSHOT_CACHE_KEY, JSON.stringify(store || {}));
+  } catch (error) {
+    if (!isStorageQuotaError(error)) throw error;
+    const entries = Object.entries(store || {})
+      .sort((left, right) => String(right[1]?.cachedAt || "").localeCompare(String(left[1]?.cachedAt || "")))
+      .slice(0, 3);
+    localStorage.setItem(CALENDAR_SNAPSHOT_CACHE_KEY, JSON.stringify(Object.fromEntries(entries)));
+  }
+}
+
+function currentCalendarSnapshotCacheKey(options = {}) {
+  const owner = normalizeEmail(options.ownerEmail || activeWorkspaceOwnerKey() || viewedAccountEmail() || currentUserEmail);
+  if (!owner) return "";
+  const mode = options.mode || activeCalendarMode();
+  const doctorKey = normalizeRosterName(
+    options.doctorKey
+    || restoredSessionState?.doctorKey
+    || selectedDoctor()?.key
+    || preferredDoctorKeyForCurrentAccount()
+    || "",
+  );
+  const range = options.range || cloudCalendarEventRange();
+  return [mode, owner, doctorKey, range.startDate || "", range.endDate || ""].join("|");
+}
+
+function loadCachedCalendarSnapshot() {
+  const key = currentCalendarSnapshotCacheKey();
+  if (!key) return null;
+  const entry = loadCalendarSnapshotCacheStore()[key];
+  const snapshot = sanitizeWorkspaceSnapshot(entry?.snapshot || entry);
+  if (!snapshot?.preview) return null;
+  snapshot.cacheKey = key;
+  snapshot.calendarRevision = String(entry?.calendarRevision || snapshot.calendarRevision || "");
+  snapshot.cachedAt = String(entry?.cachedAt || snapshot.cachedAt || "");
+  return snapshot;
+}
+
+function saveCalendarSnapshotCache(snapshot = currentSnapshot) {
+  const sanitized = sanitizeWorkspaceSnapshot(snapshot);
+  if (!sanitized?.preview) return;
+  const key = currentCalendarSnapshotCacheKey({ doctorKey: sanitized.session?.doctorKey || selectedDoctor()?.key || "" });
+  if (!key) return;
+  const store = loadCalendarSnapshotCacheStore();
+  sanitized.cacheKey = key;
+  sanitized.calendarRevision = String(sanitized.calendarRevision || currentCalendarRevision || "");
+  sanitized.cachedAt = new Date().toISOString();
+  store[key] = {
+    calendarRevision: sanitized.calendarRevision,
+    cachedAt: sanitized.cachedAt,
+    snapshot: sanitized,
+  };
+  saveCalendarSnapshotCacheStore(store);
+}
+
+function invalidateCalendarSnapshotCache() {
+  try {
+    localStorage.removeItem(CALENDAR_SNAPSHOT_CACHE_KEY);
+  } catch {
+    // Cache invalidation must not block the foreground workflow.
+  }
+}
+
+function renderCachedCalendarSnapshot(options = {}) {
+  const cached = loadCachedCalendarSnapshot();
+  if (!cached?.preview) return false;
+  currentSnapshot = cached;
+  currentSnapshotStale = false;
+  currentSnapshotBuiltAt = cached.cachedAt || cached.preview?.lastParsed || "";
+  currentCalendarRevision = cached.calendarRevision || currentCalendarRevision;
+  renderWorkspaceFromSnapshot(cached, cached.session || {});
+  markLoginPhase("cachedCalendarRendered", options.loginStartedAt);
+  setStatus("Calendar loaded from cache. Checking for updates...");
+  return true;
 }
 
 function saveWorkspaceSnapshotForEmail(email, snapshot) {

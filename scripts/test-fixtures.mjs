@@ -137,11 +137,17 @@ assert.doesNotMatch(
   /autoClaimMatchedRosterNames|prepareAccountResponse|loadRepositoryIndex|buildIssueConfig/,
   "login should stay lightweight and avoid broad account hydration",
 );
+assert.doesNotMatch(
+  (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
+    .match(/async function prepareLightweightAccountResponse[\s\S]*?export async function prepareAccountResponse/)?.[0] || "",
+  /queryRosterFiles\(options\.db\)/,
+  "lightweight login responses should not load full roster-file metadata",
+);
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
     .match(/async function prepareLightweightAccountResponse[\s\S]*?export async function prepareAccountResponse/)?.[0] || "",
-  /role === "creator" \|\| role === "owner"[\s\S]*queryRosterFiles\(options\.db\)[\s\S]*imports:/,
-  "lightweight creator responses should still preserve active roster-file refs",
+  /includeImportRefs === false[\s\S]*imports: \[\]/,
+  "lightweight login responses should be able to skip import refs entirely",
 );
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
@@ -3012,8 +3018,16 @@ assert.deepEqual(
   ["DDH Term 1", "DDH Term 2", "MMC Term 1", "MMC Term 2"],
   "creator calendar load should include both hospitals across both terms",
 );
-assert.equal(fourRosterCalendar.diagnostics.queryMode, "file-doctor-pairs");
-assert.equal(fourRosterCalendar.diagnostics.selectedDoctorFiles.length, 4, "diagnostics should include each resolved file/doctor pair");
+assert.deepEqual(fourRosterCalendar.diagnostics, {}, "default calendar loads should avoid file/doctor diagnostics");
+const fourRosterDiagnosticCalendar = await postState(fourRosterStore, {
+  action: "loadCalendarEvents",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  doctorKey: "RICHARD HAYDON",
+  diagnostics: true,
+}, fourRosterDb);
+assert.equal(fourRosterDiagnosticCalendar.diagnostics.queryMode, "file-doctor-pairs");
+assert.equal(fourRosterDiagnosticCalendar.diagnostics.selectedDoctorFiles.length, 4, "diagnostics should include each resolved file/doctor pair when requested");
 const fourRosterExpectedStatus = await postState(fourRosterStore, {
   action: "calendarStoreStatus",
   email: "rhaydon@gmail.com",
@@ -3427,7 +3441,7 @@ const michaelAdminLoad = await postState(michaelStateStore, {
   password: creatorPassword,
   targetEmail: "michael@example.com",
 });
-assert.deepEqual(michaelAdminLoad.state.imports.map((item) => item.repoId).sort(), ["michael-mch", "michael-mmc"]);
+assert.deepEqual(michaelAdminLoad.state.imports.map((item) => item.repoId).sort(), [], "admin account loads should not hydrate roster file refs during login");
 const michaelPrimaryResolution = await postState(michaelStateStore, {
   action: "resolveDoctorAccount",
   email: "rhaydon@gmail.com",
@@ -3605,7 +3619,7 @@ const andreaAssigned = await postState(identityStore, {
   targetEmail: "andrea@example.com",
 });
 assert.deepEqual(andreaAssigned.claims.map((claim) => `${claim.sourceType}:${claim.key}`).sort(), ["ddh:ANDREA LIM", "mch:DR ANDREA LIM"]);
-assert.deepEqual(andreaAssigned.state.imports.map((item) => item.repoId).sort(), ["identity-ddh", "identity-mch"]);
+assert.deepEqual(andreaAssigned.state.imports.map((item) => item.repoId).sort(), [], "admin account loads should not hydrate roster file refs during login");
 await postState(identityStore, {
   action: "removeRosterClaim",
   email: "andrea@example.com",

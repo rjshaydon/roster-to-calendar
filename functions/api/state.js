@@ -28,6 +28,8 @@ import {
   queryDoctorIssues,
   queryAccountCustomEvents,
   queryCanonicalDoctors,
+  queryActiveRosterFileRefs,
+  queryCalendarRevision,
   queryDoctorSeniorities,
   queryDoctorEventsForFileDoctorPairs,
   queryDoctorIssuesForFileDoctorPairs,
@@ -80,7 +82,8 @@ export async function onRequestPost(context) {
         ? await autoClaimMatchedCanonicalDoctors(account.record, context.env.ROSTER_DB)
         : account.record;
       if (loginRecord !== account.record) await upsertAccountMirror(context.env.ROSTER_DB, loginRecord);
-      const prepared = await prepareLightweightAccountResponse(loginRecord, { db: context.env.ROSTER_DB });
+      const prepared = await prepareLightweightAccountResponse(loginRecord, { db: context.env.ROSTER_DB, includeImportRefs: false });
+      const calendarRevision = await queryCalendarRevision(context.env.ROSTER_DB, loginRecord.email).catch(() => "");
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -94,6 +97,7 @@ export async function onRequestPost(context) {
         availableDoctors: [],
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
+        calendarRevision,
         snapshot: null,
         snapshotAvailable: false,
         snapshotStale: false,
@@ -180,7 +184,8 @@ export async function onRequestPost(context) {
       const target = await loadAccountMirror(context.env.ROSTER_DB, targetEmail);
       if (!target) return Response.json({ error: "Account not found." }, { status: 404 });
       const targetClaims = sanitizeClaims(target.claims);
-      const prepared = await prepareLightweightAccountResponse(target, { db: context.env.ROSTER_DB });
+      const prepared = await prepareLightweightAccountResponse(target, { db: context.env.ROSTER_DB, includeImportRefs: false });
+      const calendarRevision = await queryCalendarRevision(context.env.ROSTER_DB, target.email).catch(() => "");
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -195,6 +200,7 @@ export async function onRequestPost(context) {
           : await repositoryDoctorCandidates(null, null, context.env.ROSTER_DB, { hideZeroEventStandalone: true }),
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
+        calendarRevision,
         snapshot: null,
         snapshotAvailable: false,
         snapshotStale: false,
@@ -814,7 +820,8 @@ export async function onRequestPost(context) {
         updatedAt: new Date().toISOString(),
       };
       await upsertAccountMirror(context.env.ROSTER_DB, updatedRecord);
-      return Response.json({ ok: true, role: targetRole, claims });
+      const calendarRevision = await queryCalendarRevision(context.env.ROSTER_DB, saveEmail).catch(() => "");
+      return Response.json({ ok: true, role: targetRole, claims, calendarRevision });
     }
 
     if (action === "loadDoctorProfile") {
@@ -974,7 +981,20 @@ export async function onRequestPost(context) {
       const targetRecord = targetEmail && (account.role === "creator" || account.role === "owner")
         ? await loadAccountMirror(context.env.ROSTER_DB, targetEmail)
         : account.record;
-      const prepared = await prepareLightweightAccountResponse(targetRecord, { db: context.env.ROSTER_DB });
+      const prepared = await prepareLightweightAccountResponse(targetRecord, { db: context.env.ROSTER_DB, includeImportRefs: false });
+      const calendarRevision = await queryCalendarRevision(context.env.ROSTER_DB, targetRecord.email).catch(() => "");
+      if (body?.cachedRevision && String(body.cachedRevision) === calendarRevision) {
+        return Response.json({
+          ok: true,
+          snapshot: null,
+          snapshotCurrent: true,
+          snapshotAvailable: false,
+          snapshotStale: false,
+          snapshotBuiltAt: "",
+          calendarRevision,
+          diagnostics: {},
+        });
+      }
       const requestedRange = boundedCalendarEventRange({
         startDate: body?.startDate,
         endDate: body?.endDate,
@@ -990,6 +1010,7 @@ export async function onRequestPost(context) {
         endDate: requestedRange.endDate,
         doctorKey: normalizeRosterName(body?.doctorKey || ""),
         diagnostics,
+        diagnosticsRequested: body?.diagnostics === true,
       });
       return Response.json({
         ok: true,
@@ -997,7 +1018,8 @@ export async function onRequestPost(context) {
         snapshotAvailable: Boolean(snapshot),
         snapshotStale: false,
         snapshotBuiltAt: snapshot?.builtAt || "",
-        diagnostics,
+        calendarRevision,
+        diagnostics: body?.diagnostics === true ? diagnostics : {},
       });
     }
 
@@ -1433,11 +1455,16 @@ async function prepareLightweightAccountResponse(rawRecord, options = {}) {
     };
   }
   const claims = sanitizeClaims(record.claims);
-  if ((role === "creator" || role === "owner") && options.db) {
-    const files = await queryRosterFiles(options.db).catch(() => []);
+  if (options.includeImportRefs === false) {
     state = {
       ...state,
-      imports: files.filter((file) => file.active !== false).map(repositoryImportRef),
+      imports: [],
+    };
+  } else if ((role === "creator" || role === "owner") && options.db) {
+    const files = await queryActiveRosterFileRefs(options.db).catch(() => []);
+    state = {
+      ...state,
+      imports: files.map(repositoryImportRef),
     };
   } else if (options.db) {
     const d1Refs = await d1RepositoryImportRefsForClaims(options.db, claims);
@@ -1640,8 +1667,10 @@ async function buildDerivedAccountSnapshot(db, context) {
     }
     if (!doctor) return null;
     doctorKeys = doctorKeysForOption(doctor);
-    doctorDiagnostics = await queryRosterFileDoctorsForKeys(db, doctorKeys);
-    doctorPairs = doctorDiagnostics.map((row) => ({ fileId: row.fileId, doctorKey: row.doctorKey }));
+    if (context.diagnosticsRequested === true) {
+      doctorDiagnostics = await queryRosterFileDoctorsForKeys(db, doctorKeys);
+      doctorPairs = doctorDiagnostics.map((row) => ({ fileId: row.fileId, doctorKey: row.doctorKey }));
+    }
     doctorOptions = groupedDoctors;
     selectedSourceTypes = doctor?.sourceTypes || [doctor?.sourceType].filter(Boolean);
   } else {
@@ -1716,7 +1745,7 @@ async function buildDerivedAccountSnapshot(db, context) {
     session: normalizedSession,
     doctorOptions,
     detectedSources: detectedSourcesForSnapshot(
-      role === "creator" || role === "owner"
+      (role === "creator" || role === "owner") && sanitizeSnapshotFileRefs(state.imports).length
         ? sanitizeSnapshotFileRefs(state.imports)
         : selectedSourceTypes,
     ),

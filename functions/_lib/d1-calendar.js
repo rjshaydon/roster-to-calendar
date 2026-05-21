@@ -859,6 +859,68 @@ export async function queryRosterFileRefsForDoctors(db, doctorKeys = []) {
   })).filter((file) => file.id && SOURCE_TYPES.includes(file.sourceType));
 }
 
+export async function queryActiveRosterFileRefs(db) {
+  if (!db?.prepare) return [];
+  await ensureCalendarSchema(db);
+  const rows = await db.prepare(`
+    SELECT
+      id,
+      name,
+      source_type,
+      active,
+      size,
+      last_modified,
+      added_at,
+      uploaded_at,
+      uploaded_by
+    FROM roster_files
+    WHERE active = 1
+    ORDER BY added_at, name
+  `).all();
+  return (rows.results || []).map((row) => ({
+    id: String(row.id || "").trim(),
+    repoId: String(row.id || "").trim(),
+    name: String(row.name || "roster.xlsx"),
+    sourceType: String(row.source_type || "").trim().toLowerCase(),
+    active: row.active !== 0,
+    size: Number(row.size || 0),
+    lastModified: Number(row.last_modified || 0),
+    addedAt: String(row.added_at || ""),
+    uploadedAt: String(row.uploaded_at || ""),
+    uploadedBy: String(row.uploaded_by || ""),
+  })).filter((file) => file.id && SOURCE_TYPES.includes(file.sourceType));
+}
+
+export async function queryCalendarRevision(db, ownerEmail = "") {
+  if (!db?.prepare) return "";
+  await ensureCalendarSchema(db);
+  const email = normalizeEmail(ownerEmail);
+  const roster = await db.prepare(`
+    SELECT
+      COUNT(*) AS active_file_count,
+      COALESCE(MAX(parsed_at), '') AS max_parsed_at,
+      COALESCE(MAX(uploaded_at), '') AS max_uploaded_at,
+      COALESCE(MAX(last_modified), 0) AS max_last_modified
+    FROM roster_files
+    WHERE active = 1
+  `).first();
+  const accountState = email
+    ? await db.prepare("SELECT updated_at FROM account_states WHERE email = ?").bind(email).first()
+    : null;
+  const customEvents = email
+    ? await db.prepare("SELECT COUNT(*) AS count, COALESCE(MAX(updated_at), '') AS max_updated_at FROM custom_events WHERE owner_email = ?").bind(email).first()
+    : null;
+  return [
+    Number(roster?.active_file_count || 0),
+    String(roster?.max_parsed_at || ""),
+    String(roster?.max_uploaded_at || ""),
+    Number(roster?.max_last_modified || 0),
+    String(accountState?.updated_at || ""),
+    Number(customEvents?.count || 0),
+    String(customEvents?.max_updated_at || ""),
+  ].join("|");
+}
+
 export async function upsertAccountMirror(db, record, options = {}) {
   if (!db?.prepare || !record?.email) return false;
   await ensureCalendarSchema(db);
