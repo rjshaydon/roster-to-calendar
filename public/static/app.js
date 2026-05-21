@@ -3610,14 +3610,16 @@ function buildWhoAssignment(doctor, metadata, event) {
   const period = activeRule?.period ? whoPeriodLabel({ ...eventForGrouping, rawValue: activeRule.period }) : whoPeriodLabel(eventForGrouping);
   const rawTeam = activeRule?.base ? activeRule.base : whoTeamLabel(eventForGrouping);
   const isNightSsu = period === "Night" && rawTeam === "SSU";
-  const team = isNightSsu ? "Night" : rawTeam;
+  const isNightIc = isWhoNightIcShift({ event, period, rawTeam, rule: activeRule, ruleTitle });
+  const team = (isNightSsu || isNightIc) ? "Night" : rawTeam;
   return {
     doctorKey: doctor.key,
     doctorName: doctor.displayName,
     role,
     roleLabel: role || "",
-    roleNote: isNightSsu ? "SSU" : "",
+    roleNote: isNightIc ? "IC" : isNightSsu ? "SSU" : "",
     roleRank: whoRoleRank(role),
+    nightIcRank: isNightIc ? 0 : 1,
     source,
     period,
     team,
@@ -3631,6 +3633,12 @@ function buildWhoAssignment(doctor, metadata, event) {
     location: String(event?.location || "").trim(),
     event,
   };
+}
+
+function isWhoNightIcShift({ event, period, rawTeam, rule, ruleTitle }) {
+  if (period !== "Night") return false;
+  const text = `${rawTeam || ""} ${rule?.base || ""} ${ruleTitle || ""} ${event?.title || ""} ${event?.rawValue || ""}`.toUpperCase();
+  return /\bIC\b/.test(text) || /\bN1\b/.test(text);
 }
 
 function parserRuleForWhoEvent(event, source, role) {
@@ -3684,6 +3692,8 @@ function groupWhoTeams(assignments) {
 }
 
 function compareWhoAssignments(left, right) {
+  const nightIcDelta = (left.nightIcRank ?? 1) - (right.nightIcRank ?? 1);
+  if (nightIcDelta !== 0) return nightIcDelta;
   const roleDelta = left.roleRank - right.roleRank;
   if (roleDelta !== 0) return roleDelta;
   return left.doctorName.localeCompare(right.doctorName);

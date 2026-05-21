@@ -311,6 +311,8 @@ assert.match(appSource, /parserRuleExistsForIssue/, "system shift-code review sh
 assert.match(appSource, /matchingParserRuleGroup/, "saved shift-code rules should reopen with equivalent seniorities selected");
 assert.match(appSource, /<span class="who-team-role">/, "Who role labels should render separately from doctor buttons");
 assert.doesNotMatch(appSource, /data-who-role-shift-code|handleWhoRoleRuleClick/, "Who role labels should not be clickable shift-code controls");
+assert.match(appSource, /isWhoNightIcShift[\s\S]*nightIcRank/, "Night IC shifts should rank above other night staff in Who lists");
+assert.match(appSource, /\(isNightSsu \|\| isNightIc\) \? "Night"/, "Night IC shifts should group into the Night team");
 assert.match(appSource, /refreshActiveWhoInsightSurfaces/, "saving shift-code rules should refresh active Who insight panels");
 assert.match(appSource, /function synthesizeIncompleteShiftCodeIssues/, "derived code-only shift titles should synthesize unresolved shift-code issues");
 assert.match(appSource, /data-ignore-unresolved-shift-code/, "missing shift-code queue should expose a non-destructive ignore action");
