@@ -257,12 +257,20 @@ async function ensureCalendarSchemaUncached(db) {
   await db.prepare(`
     CREATE TABLE IF NOT EXISTS raw_roster_files (
       file_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL DEFAULT '',
+      source_type TEXT NOT NULL DEFAULT '',
+      size INTEGER NOT NULL DEFAULT 0,
+      last_modified INTEGER NOT NULL DEFAULT 0,
       object_key TEXT NOT NULL DEFAULT '',
       type TEXT NOT NULL DEFAULT '',
       data_url TEXT NOT NULL DEFAULT '',
       uploaded_at TEXT NOT NULL DEFAULT ''
     )
   `).run();
+  await ensureColumn(db, "raw_roster_files", "name", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn(db, "raw_roster_files", "source_type", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn(db, "raw_roster_files", "size", "INTEGER NOT NULL DEFAULT 0");
+  await ensureColumn(db, "raw_roster_files", "last_modified", "INTEGER NOT NULL DEFAULT 0");
   await ensureColumn(db, "raw_roster_files", "type", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn(db, "raw_roster_files", "data_url", "TEXT NOT NULL DEFAULT ''");
   return true;
@@ -492,15 +500,23 @@ export async function upsertRawRosterFile(db, file, raw = {}) {
   if (!db?.prepare || !file?.id || (!raw?.dataUrl && !raw?.objectKey)) return { ok: false, reason: "missing-input" };
   await ensureCalendarSchema(db);
   await db.prepare(`
-    INSERT INTO raw_roster_files (file_id, object_key, type, data_url, uploaded_at)
-    VALUES (?, ?, ?, ?, ?)
+    INSERT INTO raw_roster_files (file_id, name, source_type, size, last_modified, object_key, type, data_url, uploaded_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(file_id) DO UPDATE SET
+      name = excluded.name,
+      source_type = excluded.source_type,
+      size = excluded.size,
+      last_modified = excluded.last_modified,
       object_key = excluded.object_key,
       type = excluded.type,
       data_url = excluded.data_url,
       uploaded_at = excluded.uploaded_at
   `).bind(
     file.id,
+    String(file.name || fileNameFromRawRosterFileId(file.id) || "roster.xlsx"),
+    normalizeSourceType(file.sourceType || raw.sourceType || "") || inferSourceTypeFromRosterFileName(file.name || file.id),
+    Number(file.size || 0),
+    Number(file.lastModified || file.last_modified || 0),
     String(raw.objectKey || ""),
     String(raw.type || ""),
     String(raw.dataUrl || ""),
@@ -509,22 +525,26 @@ export async function upsertRawRosterFile(db, file, raw = {}) {
   return { ok: true };
 }
 
+export async function queryRawRosterFiles(db) {
+  if (!db?.prepare) return [];
+  await ensureCalendarSchema(db);
+  const rows = await db.prepare(`
+    SELECT file_id, name, source_type, size, last_modified, object_key, type, data_url, uploaded_at
+    FROM raw_roster_files
+    ORDER BY uploaded_at, file_id
+  `).all();
+  return (rows.results || []).map(rawRosterFileFromRow).filter(Boolean);
+}
+
 export async function loadRawRosterFile(db, fileId) {
   if (!db?.prepare || !fileId) return null;
   await ensureCalendarSchema(db);
   const row = await db.prepare(`
-    SELECT file_id, object_key, type, data_url, uploaded_at
+    SELECT file_id, name, source_type, size, last_modified, object_key, type, data_url, uploaded_at
     FROM raw_roster_files
     WHERE file_id = ?
   `).bind(fileId).first();
-  if (!row?.file_id || (!row?.data_url && !row?.object_key)) return null;
-  return {
-    fileId: String(row.file_id),
-    objectKey: String(row.object_key || ""),
-    type: String(row.type || ""),
-    dataUrl: String(row.data_url || ""),
-    uploadedAt: String(row.uploaded_at || ""),
-  };
+  return rawRosterFileFromRow(row);
 }
 
 export async function queryRosterFileDoctorsForKeys(db, doctorKeys = []) {
@@ -1848,6 +1868,40 @@ function normalizeSourceType(value) {
   return SOURCE_TYPES.includes(source) ? source : "";
 }
 
+function rawRosterFileFromRow(row) {
+  if (!row?.file_id || (!row?.data_url && !row?.object_key)) return null;
+  const fileId = String(row.file_id || "").trim();
+  const name = String(row.name || fileNameFromRawRosterFileId(fileId) || "roster.xlsx");
+  return {
+    fileId,
+    id: fileId,
+    repoId: fileId,
+    name,
+    sourceType: normalizeSourceType(row.source_type || "") || inferSourceTypeFromRosterFileName(name),
+    size: Number(row.size || 0),
+    lastModified: Number(row.last_modified || 0),
+    objectKey: String(row.object_key || ""),
+    type: String(row.type || ""),
+    dataUrl: String(row.data_url || ""),
+    uploadedAt: String(row.uploaded_at || ""),
+    rawSourceAvailable: true,
+  };
+}
+
+function fileNameFromRawRosterFileId(fileId) {
+  const parts = String(fileId || "").split(":");
+  return parts.length > 2 ? parts.slice(0, -2).join(":") : String(fileId || "");
+}
+
+function inferSourceTypeFromRosterFileName(name) {
+  const text = String(name || "").toLowerCase();
+  if (text.includes("dandenong") || text.includes("ddh")) return "ddh";
+  if (text.includes("casey")) return "casey";
+  if (text.includes("paeds") || text.includes("mch") || text.includes("children")) return "mch";
+  if (text.includes("adult") || text.includes("mmc") || text.includes("monash")) return "mmc";
+  return "";
+}
+
 function uniqueFileDoctorPairs(pairs = []) {
   const seen = new Set();
   const result = [];
@@ -2005,7 +2059,7 @@ async function bulkInsertEvents(db, rows) {
 }
 
 function bulkInsertEventStatements(db, rows) {
-  return chunkRows(rows, 5)
+  return chunkRows(rows, 1)
     .filter((chunk) => chunk.length)
     .map((chunk) => db.prepare(`
       INSERT INTO roster_events (
@@ -2016,7 +2070,7 @@ function bulkInsertEventStatements(db, rows) {
 }
 
 function bulkInsertIssueStatements(db, rows) {
-  return chunkRows(rows, 10)
+  return chunkRows(rows, 1)
     .filter((chunk) => chunk.length)
     .map((chunk) => db.prepare(`
       INSERT INTO roster_issues (

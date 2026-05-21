@@ -36,6 +36,7 @@ import {
   queryRosterFileDoctors,
   queryRosterFileDoctorsForKeys,
   queryRosterFileRefsForDoctors,
+  queryRawRosterFiles,
   queryRosterFiles,
   queryRosterFileRanges,
   queryRosterDoctors,
@@ -1216,8 +1217,30 @@ async function autoClaimMatchedCanonicalDoctors(record, db = null) {
 
 async function calendarStoreStatus(store, db, options = {}) {
   const allD1Files = await queryRosterFiles(db, { includeInactive: true }).catch(() => []);
+  const rawFiles = await queryRawRosterFiles(db).catch(() => []);
+  const derivedFileIds = new Set(allD1Files.map((file) => file.id));
+  const retainedOnlyFiles = rawFiles
+    .filter((file) => file.id && !derivedFileIds.has(file.id))
+    .map((file) => ({
+      id: file.id,
+      name: file.name,
+      sourceType: file.sourceType,
+      active: true,
+      size: file.size,
+      lastModified: file.lastModified,
+      addedAt: file.uploadedAt,
+      uploadedAt: file.uploadedAt,
+      uploadedBy: "",
+      doctors: [],
+      expectedDoctors: 0,
+      indexedDoctors: 0,
+      eventCount: 0,
+      derivedFromD1: false,
+      retainedSourceOnly: true,
+    }));
+  const allFiles = [...allD1Files, ...retainedOnlyFiles];
   const d1Files = allD1Files.filter((file) => file.active !== false);
-  const activeFiles = d1Files;
+  const activeFiles = [...d1Files, ...retainedOnlyFiles];
   const counts = await countDerivedEventsByFile(db, activeFiles.map((file) => file.id));
   const doctorCounts = await countDerivedDoctorsByFile(db, activeFiles.map((file) => file.id));
   const selectedDoctorKey = normalizeRosterName(options.doctorKey || "");
@@ -1230,10 +1253,7 @@ async function calendarStoreStatus(store, db, options = {}) {
   for (const row of selectedDoctorRows) {
     selectedCountsByFile.set(row.fileId, (selectedCountsByFile.get(row.fileId) || 0) + Number(selectedCounts.get(`${row.fileId}:${row.doctorKey}`) || 0));
   }
-  const rawAvailability = new Map(await Promise.all(activeFiles.map(async (file) => {
-    const raw = await loadRawRosterFile(db, file.id).catch(() => null);
-    return [file.id, Boolean(raw?.objectKey || raw?.dataUrl)];
-  })));
+  const rawAvailability = new Map(rawFiles.map((file) => [file.id, true]));
   const files = activeFiles.map((file) => ({
     id: file.id,
     name: file.name,
@@ -1243,9 +1263,12 @@ async function calendarStoreStatus(store, db, options = {}) {
     eventCount: Number(file.eventCount || 0) || counts.get(file.id) || 0,
     selectedDoctorEventCount: selectedCountsByFile.get(file.id) || 0,
     rawSourceAvailable: rawAvailability.get(file.id) === true,
+    retainedSourceOnly: file.retainedSourceOnly === true,
   })).map((file) => ({
     ...file,
-    status: file.eventCount <= 0
+    status: file.retainedSourceOnly
+      ? "retained"
+      : file.eventCount <= 0
       ? "missing"
       : file.expectedDoctors > 0 && file.indexedDoctors < file.expectedDoctors
         ? "partial"
@@ -1253,7 +1276,7 @@ async function calendarStoreStatus(store, db, options = {}) {
   }));
   const populated = files.filter((file) => file.status === "populated").length;
   const partial = files.filter((file) => file.status === "partial").length;
-  const expectedFiles = summarizeExpectedRosterFiles(allD1Files, options.expectedFileIds);
+  const expectedFiles = summarizeExpectedRosterFiles(allFiles, options.expectedFileIds);
   return {
     total: files.length,
     populated,

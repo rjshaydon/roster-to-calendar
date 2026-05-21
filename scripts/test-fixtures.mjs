@@ -248,13 +248,33 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function replaceActiveRostersWithCurrentUploads[\s\S]*?async function reparseRosterFile/)?.[0] || "",
-  /if \(!selectedFiles\.length\)[\s\S]*Rebuild requires at least one roster file/,
-  "rebuild-all should refuse an empty local roster set",
+  /retainedRosterEntriesFromStatus[\s\S]*Rebuild requires at least one retained roster file/,
+  "rebuild-all should use retained roster sources and refuse an empty retained roster set",
 );
 assert.match(
   appSource.match(/async function reparseRosterFile[\s\S]*?async function refreshCalendarStoreStatus/)?.[0] || "",
   /calendarStoreStatus\?\.files[\s\S]*ensureRosterEntrySource\(entry\)/,
   "per-file refresh should be able to hydrate status-only files from retained R2 source",
+);
+assert.match(
+  d1CalendarSource.match(/async function runTransactionalBatch[\s\S]*?function chunkRows/)?.[0] || "",
+  /db\.batch\(statements\)/,
+  "D1 roster imports should keep file replacement statements transactional",
+);
+assert.match(
+  d1CalendarSource.match(/function bulkInsertEventStatements[\s\S]*?function bulkInsertIssueStatements/)?.[0] || "",
+  /chunkRows\(rows, 1\)/,
+  "D1 roster event inserts should stay under SQL variable limits",
+);
+assert.match(
+  d1CalendarSource.match(/function bulkInsertIssueStatements[\s\S]*?async function runTransactionalBatch/)?.[0] || "",
+  /chunkRows\(rows, 1\)/,
+  "D1 roster issue inserts should stay under SQL variable limits",
+);
+assert.match(
+  stateSource.match(/async function calendarStoreStatus[\s\S]*?function summarizeExpectedRosterFiles/)?.[0] || "",
+  /queryRawRosterFiles[\s\S]*retainedOnlyFiles[\s\S]*retainedSourceOnly/,
+  "calendar status should include retained R2 source pointers without derived rows",
 );
 assert.match(
   appSource.match(/async function loginWithEmail[\s\S]*?async function restoreCloudState/)?.[0] || "",
@@ -1112,10 +1132,14 @@ class MemoryD1Statement {
     if (sql.startsWith("INSERT INTO raw_roster_files")) {
       this.db.rawFiles.set(args[0], {
         file_id: args[0],
-        object_key: args[1],
-        type: args[2],
-        data_url: args[3],
-        uploaded_at: args[4],
+        name: args[1],
+        source_type: args[2],
+        size: args[3],
+        last_modified: args[4],
+        object_key: args[5],
+        type: args[6],
+        data_url: args[7],
+        uploaded_at: args[8],
       });
       return { success: true };
     }
@@ -1422,7 +1446,7 @@ class MemoryD1Statement {
     }
     if (sql.startsWith("PRAGMA table_info(raw_roster_files)")) {
       return {
-        results: ["file_id", "object_key", "type", "data_url", "uploaded_at"].map((name) => ({ name })),
+        results: ["file_id", "name", "source_type", "size", "last_modified", "object_key", "type", "data_url", "uploaded_at"].map((name) => ({ name })),
       };
     }
     if (sql.startsWith("PRAGMA table_info(roster_issues)")) {
@@ -1706,6 +1730,11 @@ class MemoryD1Statement {
             doctor_count: [...this.db.fileDoctors.values()].filter((doctor) => doctor.file_id === file.id).length,
             event_count: [...this.db.events.values()].filter((event) => event.file_id === file.id).length,
           })),
+      };
+    }
+    if (sql.includes("FROM raw_roster_files") && !sql.includes("WHERE file_id = ?")) {
+      return {
+        results: [...this.db.rawFiles.values()].sort((left, right) => String(left.uploaded_at || "").localeCompare(String(right.uploaded_at || "")) || String(left.file_id || "").localeCompare(String(right.file_id || ""))),
       };
     }
     if (sql.includes("MIN(roster_events.start_date)") && sql.includes("FROM roster_files")) {
@@ -2103,6 +2132,25 @@ const migratedRaw = await postState(legacyRawStore, {
 assert.match(migratedRaw.dataUrl, /^data:/, "legacy raw files should remain fetchable during lazy migration");
 assert.equal(legacyRawDb.rawFiles.get("legacy-raw")?.object_key, "rosters/legacy-raw", "legacy raw files should be promoted to R2 when fetched");
 assert.equal(legacyRawDb.rawFiles.get("legacy-raw")?.data_url, "", "lazy migration should clear the inline D1 payload after promotion");
+legacyRawDb.rawFiles.set("retained-only:1:1", {
+  file_id: "retained-only:1:1",
+  name: "Dandenong retained only.xlsx",
+  source_type: "ddh",
+  size: 1,
+  last_modified: 1,
+  object_key: "rosters/retained-only:1:1",
+  type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  data_url: "",
+  uploaded_at: "2026-01-01T00:01:00.000Z",
+});
+const retainedOnlyStatus = await postState(legacyRawStore, {
+  action: "calendarStoreStatus",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+}, legacyRawDb);
+const retainedOnlyFile = retainedOnlyStatus.files.find((file) => file.id === "retained-only:1:1");
+assert.equal(retainedOnlyFile?.retainedSourceOnly, true, "calendar status should list retained R2 source files without derived rows");
+assert.equal(retainedOnlyFile?.status, "retained");
 const reparsedD1Status = await postState(d1StateStore, {
   action: "calendarStoreStatus",
   email: "rhaydon@gmail.com",

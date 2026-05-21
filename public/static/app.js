@@ -1938,7 +1938,9 @@ function renderFilesMarkup({ canRemove = false, heading = "", description = "", 
             <span>${escapeHtml(String(entry.sourceType || "").toUpperCase())}${entry.addedAt ? ` · Imported ${escapeHtml(formatTimestamp(entry.addedAt))}` : " · Roster database"}</span>
             <strong>${escapeHtml(entry.name)}</strong>
             ${rosterSyncLabel(entry) || (statusFiles.has(entry.id)
-              ? `<span>${Number(statusFiles.get(entry.id)?.eventCount || 0)} events · ${Number(statusFiles.get(entry.id)?.selectedDoctorEventCount || 0)} for selected doctor</span>`
+              ? statusFiles.get(entry.id)?.retainedSourceOnly
+                ? `<span>Retained in R2 · not yet synced to D1</span>`
+                : `<span>${Number(statusFiles.get(entry.id)?.eventCount || 0)} events · ${Number(statusFiles.get(entry.id)?.selectedDoctorEventCount || 0)} for selected doctor</span>`
               : persistedSelectedFileIds.has(entry.id) ? `<span>Saved in D1 · inactive</span>`
               : entry.file && hasUsableStatus ? `<span>Not yet confirmed in D1</span>`
               : entry.file ? `<span>Roster database status not checked</span>` : "")}
@@ -10507,13 +10509,15 @@ async function saveCloudStateNow(snapshot = null) {
 async function replaceActiveRostersWithCurrentUploads() {
   if (!isCreatorAuthenticated()) return;
   try {
-    if (!selectedFiles.length) {
-      throw new Error("Rebuild requires at least one roster file. Re-upload the missing source files first if none are listed.");
-    }
     setStatus("Rebuilding roster database from roster files...");
+    if (!selectedFiles.length) await refreshCalendarStoreStatus({ silent: true });
+    const sourceEntries = selectedFiles.length ? selectedFiles : retainedRosterEntriesFromStatus();
+    if (!sourceEntries.length) {
+      throw new Error("Rebuild requires at least one retained roster file. Re-upload the missing source files first if none are listed.");
+    }
     const rebuildEntries = [];
     const unavailableNames = [];
-    for (const entry of selectedFiles) {
+    for (const entry of sourceEntries) {
       const retained = await ensureRosterEntrySource(entry).catch(() => null);
       if (!retained?.file) unavailableNames.push(entry.name);
       else rebuildEntries.push(retained);
@@ -10522,7 +10526,7 @@ async function replaceActiveRostersWithCurrentUploads() {
       throw new Error(`Could not rebuild ${unavailableNames.join(", ")} because the retained source file is missing. Re-upload ${unavailableNames.length === 1 ? "it" : "them"} once.`);
     }
     await saveSelectedRosterFilesToD1(rebuildEntries, { force: true, retainSources: false });
-    const keepFileIds = selectedFiles.map((entry) => entry.id);
+    const keepFileIds = rebuildEntries.map((entry) => entry.id);
     calendarStoreStatus = {
       ...await calendarStoreRequest("replaceActiveRosterFiles", {
         keepFileIds,
@@ -10539,6 +10543,20 @@ async function replaceActiveRostersWithCurrentUploads() {
   } catch (error) {
     setStatus(error.message || "Could not replace active rosters.", true);
   }
+}
+
+function retainedRosterEntriesFromStatus() {
+  return (calendarStoreStatus?.files || [])
+    .filter((file) => file?.id && file.rawSourceAvailable === true)
+    .map((file) => ({
+      id: file.id,
+      repoId: file.id,
+      name: file.name,
+      sourceType: file.sourceType,
+      size: file.size || 0,
+      lastModified: file.lastModified || 0,
+      addedAt: file.uploadedAt || "",
+    }));
 }
 
 async function reparseRosterFile(id) {
