@@ -82,15 +82,17 @@ assert.match(
 assert.match(appSource, /let cloudStateSaveQueue = Promise\.resolve\(\);/, "cloud saves should be serialized");
 assert.match(
   appSource.match(/async function enterUserAccount[\s\S]*?async function enterDoctorProfileView/)?.[0] || "",
-  /saveCloudState\(creatorCalendarSavePayload\(\)\)/,
-  "switching from the creator account should persist the creator doctor rather than the viewed doctor",
+  /queueBackgroundCloudStateSave\(capturePendingCloudStateSave\(\) \|\| creatorCalendarSavePayload\(\) \|\| snapshotCloudSavePayload\(\)\)/,
+  "switching from the creator account should queue the creator doctor save without blocking entry",
 );
 assert.match(
   appSource.match(/async function enterUserAccount[\s\S]*?async function enterDoctorProfileView/)?.[0] || "",
-  /accountSwitchStartedAt[\s\S]*restoreCloudState\(\{ adminTargetEmail: targetEmail[\s\S]*accountSwitchStartedAt[\s\S]*markAccountSwitchPhase\("workspaceRendered"/,
-  "switched-account entry should expose lightweight phase timings",
+  /accountSwitchStartedAt[\s\S]*renderCachedCalendarSnapshotForContext\(targetContext[\s\S]*validateClaimedAccountCalendarInBackground\(targetContext/,
+  "switched-account entry should render a cached target snapshot before background validation",
 );
 assert.match(appSource, /function markAccountSwitchPhase/, "account switching should expose debug timings separately from login timings");
+assert.match(appSource, /function renderCachedCalendarSnapshotForContext/, "calendar switching should have an explicit-context snapshot renderer");
+assert.match(appSource, /function validateDoctorProfileCalendarInBackground/, "doctor-profile switching should validate cached snapshots in the background");
 assert.match(
   appSource.match(/async function hydrateAuthenticatedWorkspace[\s\S]*?function markLoginPhase/)?.[0] || "",
   /currentUserEmail === OWNER_EMAIL[\s\S]*forceCreatorDoctorSession\(\)[\s\S]*loadCloudCalendarEvents/,
@@ -108,8 +110,8 @@ assert.doesNotMatch(
 );
 assert.match(
   appSource.match(/async function returnToCreatorAccount[\s\S]*?async function clearLocalWorkspace/)?.[0] || "",
-  /resetTransientCalendarData\(\);\s*forceCreatorDoctorSession\(\);[\s\S]*restoreCloudState/,
-  "returning to the creator should normalize the creator doctor before calendar events load",
+  /forceCreatorDoctorSession\(\);[\s\S]*renderCachedCalendarSnapshotForContext\(targetContext[\s\S]*validateClaimedAccountCalendarInBackground/,
+  "returning to the creator should render the cached creator calendar before calendar validation",
 );
 assert.match(
   appSource.match(/function currentAccount[\s\S]*?function canUseRosterInsights/)?.[0] || "",
@@ -166,6 +168,16 @@ assert.doesNotMatch(
     .match(/if \(action === "loadCalendarEvents"\)[\s\S]*?if \(action === "loadInsightImports"\)/)?.[0] || "",
   /loadRepositoryIndex/,
   "calendar event loads should be D1-first and avoid repository-index hydration",
+);
+assert.match(
+  stateSource.match(/if \(action === "loadDoctorProfile"\)[\s\S]*?if \(action === "saveDoctorProfile"\)/)?.[0] || "",
+  /cachedRevision[\s\S]*snapshotCurrent[\s\S]*calendarRevision/,
+  "doctor profile loads should support cached-revision validation without rebuilding the snapshot",
+);
+assert.match(
+  stateSource,
+  /async function queryDoctorProfileCalendarRevision[\s\S]*queryCalendarRevision/,
+  "doctor profile cache validation should use a lightweight calendar revision",
 );
 assert.doesNotMatch(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))

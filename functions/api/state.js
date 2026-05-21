@@ -840,6 +840,24 @@ export async function onRequestPost(context) {
         state: sanitizeState(null),
       });
       const requestedAliases = sanitizeDoctorAccountResolutionInput({ aliases: body?.aliases }).aliases;
+      const calendarRevision = await queryDoctorProfileCalendarRevision(context.env.ROSTER_DB, {
+        ...profile,
+        aliases: requestedAliases,
+      }, email).catch(() => "");
+      if (calendarRevision && String(body?.cachedRevision || "") === calendarRevision) {
+        return Response.json({
+          ok: true,
+          cloudAvailable: true,
+          profile,
+          snapshot: null,
+          snapshotCurrent: true,
+          snapshotAvailable: false,
+          snapshotStale: false,
+          snapshotBuiltAt: "",
+          calendarRevision,
+          issueConfig: await buildIssueConfig(null, ""),
+        });
+      }
       const snapshotInfo = await loadDoctorProfileSnapshotInfo(null, {
         ...profile,
         aliases: requestedAliases,
@@ -852,6 +870,7 @@ export async function onRequestPost(context) {
         snapshotAvailable: snapshotInfo.snapshotAvailable,
         snapshotStale: snapshotInfo.snapshotStale,
         snapshotBuiltAt: snapshotInfo.snapshotBuiltAt,
+        calendarRevision,
         issueConfig: await buildIssueConfig(null, ""),
       });
     }
@@ -883,7 +902,8 @@ export async function onRequestPost(context) {
         updatedAt: new Date().toISOString(),
       };
       await upsertDoctorProfileMirror(context.env.ROSTER_DB, next).catch(() => null);
-      return Response.json({ ok: true, profile: next });
+      const calendarRevision = await queryDoctorProfileCalendarRevision(context.env.ROSTER_DB, next, email).catch(() => "");
+      return Response.json({ ok: true, profile: next, calendarRevision });
     }
 
     if (action === "loadImports") {
@@ -2363,6 +2383,18 @@ async function loadDoctorProfileSnapshotInfo(store, profile, db = null, ownerEma
     snapshotBuiltAt: derivedSnapshot?.builtAt || "",
     snapshotBuildStamp: "",
   };
+}
+
+async function queryDoctorProfileCalendarRevision(db, profile, ownerEmail = "") {
+  if (!hasCalendarDb({ ROSTER_DB: db })) return "";
+  const rosterRevision = await queryCalendarRevision(db, ownerEmail).catch(() => "");
+  return [
+    rosterRevision,
+    String(profile?.profileId || ""),
+    String(profile?.doctorKey || ""),
+    sanitizeSourceTypes(profile?.sourceTypes).join(","),
+    String(profile?.updatedAt || ""),
+  ].join("|");
 }
 
 async function buildDerivedDoctorProfileSnapshot(store, db, profile, ownerEmail = "") {
