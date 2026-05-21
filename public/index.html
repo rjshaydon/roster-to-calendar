@@ -437,15 +437,18 @@
           <input id="parserRuleIssueId" type="hidden">
           <input id="parserRuleOriginalCode" type="hidden">
           <input id="parserRuleOriginalSeniority" type="hidden">
-          <input id="parserRuleCode" type="hidden" required>
           <div class="custom-event-grid">
             <label class="field">
               <span>Hospital</span>
-              <input id="parserRuleSource" type="text" readonly>
+              <input id="parserRuleSource" type="text">
+            </label>
+            <label class="field">
+              <span>Shift code</span>
+              <input id="parserRuleCode" type="text" required>
             </label>
             <label class="field">
               <span>Raw roster value</span>
-              <input id="parserRuleRawValue" type="text" readonly>
+              <input id="parserRuleRawValue" type="text">
             </label>
           </div>
           <div class="custom-event-grid">

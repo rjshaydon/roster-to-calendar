@@ -528,6 +528,10 @@ accountsBody.addEventListener("click", (event) => {
     );
     return;
   }
+  if (event.target.closest("[data-add-manual-shift-code]")) {
+    openManualParserRuleModal();
+    return;
+  }
   const ignoreShiftCodeButton = event.target.closest("[data-ignore-unresolved-shift-code]");
   if (ignoreShiftCodeButton) {
     ignoreUnresolvedShiftCodeInTopQueue(ignoreShiftCodeButton.dataset.ignoreUnresolvedShiftCode || "");
@@ -895,6 +899,12 @@ reviewModalBody.addEventListener("change", (event) => {
 });
 
 reviewModalBody.addEventListener("click", (event) => {
+  const roleButton = event.target.closest("[data-who-role-shift-code]");
+  if (roleButton) {
+    event.preventDefault();
+    void handleWhoRoleRuleClick(roleButton);
+    return;
+  }
   const resetButton = event.target.closest("[data-override-reset]");
   if (resetButton) {
     resetImportedEvent(resetButton.dataset.overrideReset);
@@ -1047,6 +1057,12 @@ exportModalBody.addEventListener("change", (event) => {
   }
 });
 insightsModalBody.addEventListener("click", async (event) => {
+  const roleButton = event.target.closest("[data-who-role-shift-code]");
+  if (roleButton) {
+    event.preventDefault();
+    await handleWhoRoleRuleClick(roleButton);
+    return;
+  }
   const dateButton = event.target.closest("[data-insights-who-on-date]");
   if (dateButton) {
     event.preventDefault();
@@ -1274,6 +1290,12 @@ customEventDeleteButton.addEventListener("click", () => {
   setStatus("Manual event removed.");
 });
 customEventForm.addEventListener("click", (event) => {
+  const roleButton = event.target.closest("[data-who-role-shift-code]");
+  if (roleButton) {
+    event.preventDefault();
+    void handleWhoRoleRuleClick(roleButton);
+    return;
+  }
   const whenDoctorButton = event.target.closest("[data-inline-when-doctor]");
   if (whenDoctorButton) {
     event.preventDefault();
@@ -3558,6 +3580,12 @@ function buildWhoAssignment(doctor, metadata, event) {
     team,
     teamRank: whoTeamRank(team, source),
     specialTime: whoSpecialTimeLabel(event, period),
+    rawValue: String(event?.rawValue || "").trim(),
+    ruleCode: parserRuleCodeFromRawValue(source, event?.rawValue || "") || incompleteShiftCodeFromTitle(source, event?.title || ""),
+    suggestedTitle: String(event?.title || "").trim(),
+    timeLabel: event?.timeLabel || summarizeEventTimes(event?.start || "", event?.end || "", event?.allDay === true),
+    date: eventRosterDateKey(event),
+    location: String(event?.location || "").trim(),
     event,
   };
 }
@@ -3619,10 +3647,7 @@ function renderWhoGroups(groups) {
           <strong class="who-team-title">${escapeHtml(team.team)}</strong>
           <div class="who-team-list">
             ${team.items.map((item) => `
-              <div class="who-team-person">
-                <button type="button" class="who-team-name" data-insights-when-doctor-key="${escapeHtml(item.doctorKey || "")}" title="Show future shifts with ${escapeHtml(item.doctorName)}">${escapeHtml(item.doctorName)}${item.roleLabel ? ` (${escapeHtml(item.roleLabel)})` : ""}${item.roleNote ? ` (${escapeHtml(item.roleNote)})` : ""}</button>
-                ${item.specialTime ? `<span class="who-team-time">${escapeHtml(item.specialTime)}</span>` : ""}
-              </div>
+              ${renderWhoTeamPerson(item, "data-insights-when-doctor-key")}
             `).join("")}
           </div>
         </article>
@@ -3700,16 +3725,40 @@ function renderInlineWhoGroups(groups, date, sourceFilter = "") {
           <strong class="who-team-title">${escapeHtml(team.team)}</strong>
           <div class="who-team-list">
             ${team.items.map((item) => `
-              <div class="who-team-person">
-                <button type="button" class="who-team-name" data-inline-when-doctor="${escapeHtml(item.doctorKey || "")}" title="Show future shifts with ${escapeHtml(item.doctorName)}">${escapeHtml(item.doctorName)}${item.roleLabel ? ` (${escapeHtml(item.roleLabel)})` : ""}${item.roleNote ? ` (${escapeHtml(item.roleNote)})` : ""}</button>
-                ${item.specialTime ? `<span class="who-team-time">${escapeHtml(item.specialTime)}</span>` : ""}
-              </div>
+              ${renderWhoTeamPerson(item, "data-inline-when-doctor")}
             `).join("")}
           </div>
         </article>
       `).join("")}
     </section>
   `).join("") + `<button type="button" class="button button-secondary event-inline-refresh" data-inline-back-who="${escapeHtml(date)}" data-inline-back-source="${escapeHtml(sourceFilter)}">Refresh list</button>`;
+}
+
+function renderWhoTeamPerson(item, doctorAttribute) {
+  const roleParts = [item.roleLabel, item.roleNote].filter(Boolean);
+  return `
+    <div class="who-team-person">
+      <button type="button" class="who-team-name" ${doctorAttribute}="${escapeHtml(item.doctorKey || "")}" title="Show future shifts with ${escapeHtml(item.doctorName)}">${escapeHtml(item.doctorName)}</button>
+      <span class="who-team-meta">
+        ${roleParts.length ? `
+          <button
+            type="button"
+            class="who-team-role"
+            data-who-role-shift-code="${escapeHtml(item.ruleCode || "")}"
+            data-who-role-source="${escapeHtml(item.source || "")}"
+            data-who-role-seniority="${escapeHtml(sanitizeRuleSeniority(item.roleLabel || item.role || ""))}"
+            data-who-role-raw-value="${escapeHtml(item.rawValue || item.ruleCode || "")}"
+            data-who-role-title="${escapeHtml(item.suggestedTitle || "")}"
+            data-who-role-time-label="${escapeHtml(item.timeLabel || "")}"
+            data-who-role-date="${escapeHtml(item.date || "")}"
+            data-who-role-location="${escapeHtml(item.location || "")}"
+            title="Open shift-code rule for ${escapeHtml(roleParts.join(" "))}"
+          >${escapeHtml(roleParts.join(" · "))}</button>
+        ` : ""}
+        ${item.specialTime ? `<span class="who-team-time">${escapeHtml(item.specialTime)}</span>` : ""}
+      </span>
+    </div>
+  `;
 }
 
 async function renderInlineWhenInsight(container, doctorKey) {
@@ -6965,6 +7014,7 @@ function renderParserRulesCard() {
             <strong>Missing / unresolved shift codes</strong>
             <span>${unknownIssues.length ? `${unknownIssues.length} code${unknownIssues.length === 1 ? "" : "s"} needing review` : "No unresolved shift codes."}</span>
           </div>
+          <button type="button" class="button button-secondary button-small" data-add-manual-shift-code>Add</button>
         </div>
         <div class="issues-list">
           ${unknownIssues.length ? unknownIssues.map((item) => `
@@ -6989,7 +7039,7 @@ function renderParserRulesCard() {
           <p>Review and edit parser rules by hospital and seniority.</p>
         </div>
         ${groups.map((group) => `
-          <details class="issue-card">
+          <details class="issue-card" data-parser-rule-source-section="${escapeHtml(group.source)}">
             <summary><strong>${group.source}${unknownSources.has(group.source) ? " *" : ""}</strong> · ${group.rules.length} rule${group.rules.length === 1 ? "" : "s"}</summary>
             <div class="issues-list">
               ${allUnknownIssues.filter((item) => item.source === group.source).map((item) => `
@@ -7007,11 +7057,11 @@ function renderParserRulesCard() {
                 const rules = group.rules.filter((rule) => rule.seniority === seniority);
                 if (!rules.length) return "";
                 return `
-                  <details class="issue-card">
+                  <details class="issue-card" data-parser-rule-seniority-section="${escapeHtml(`${group.source}|${seniority}`)}">
                     <summary><strong>${escapeHtml(seniority)}</strong> · ${rules.length} rule${rules.length === 1 ? "" : "s"}</summary>
                     <div class="issues-list">
                       ${rules.map((rule) => `
-                        <article class="issue-card">
+                        <article class="issue-card" data-parser-rule-card="${escapeHtml(parserRuleFocusKey(rule))}">
                           <div>
                             <strong>${escapeHtml(rule.code)}${rule.includeAsShift === false ? " · Hidden" : ""}</strong>
                             <p>${escapeHtml(parserRulePreviewTitle(rule))}</p>
@@ -7408,6 +7458,88 @@ function findParserExtensionRuleForSeniority(source, seniority, code) {
     .find((rule) => rule.code === normalizedCode && (!seniority || rule.seniority === normalizedSeniority)) || null;
 }
 
+async function handleWhoRoleRuleClick(button) {
+  const issue = parserRuleIssueFromWhoRoleButton(button);
+  if (!issue) {
+    setStatus("Could not resolve that role to a shift-code rule.", true);
+    return;
+  }
+  const rule = findParserExtensionRuleForSeniority(issue.source, issue.seniority, issue.code);
+  if (rule) {
+    await openAndFocusParserRule(rule);
+    return;
+  }
+  openParserRuleModalFromSyntheticIssue(issue, {
+    mode: isCreatorAuthenticated() ? "global" : "local",
+    title: "Add shift code",
+    allowMultipleSeniorities: isCreatorAuthenticated(),
+  });
+}
+
+function parserRuleIssueFromWhoRoleButton(button) {
+  const source = sanitizeIssueSource(button?.dataset?.whoRoleSource);
+  const seniority = sanitizeRuleSeniority(button?.dataset?.whoRoleSeniority);
+  const rawValue = String(button?.dataset?.whoRoleRawValue || button?.dataset?.whoRoleShiftCode || "").trim();
+  const code = String(button?.dataset?.whoRoleShiftCode || parserRuleCodeFromRawValue(source, rawValue)).trim().toUpperCase();
+  if (!source || !seniority || !code) return null;
+  const suggestedTitle = String(button?.dataset?.whoRoleTitle || "").trim();
+  const timeLabel = String(button?.dataset?.whoRoleTimeLabel || "").trim();
+  const startDay = String(button?.dataset?.whoRoleDate || "").trim();
+  return {
+    id: issueFingerprint(source, rawValue || code, seniority),
+    fingerprint: issueFingerprint(source, rawValue || code, seniority),
+    source,
+    seniority,
+    code,
+    rawValue: rawValue || code,
+    startDay,
+    message: `${source} shift code needs normalisation.`,
+    resolutionType: "shift_code",
+    suggestedTitle,
+    timeLabel,
+    location: String(button?.dataset?.whoRoleLocation || "").trim(),
+  };
+}
+
+async function openAndFocusParserRule(rule) {
+  if (!isCreatorAuthenticated()) {
+    setStatus("Creator authentication is required to open shift-code rules.", true);
+    return;
+  }
+  closeInsightsModal();
+  closeReviewModal();
+  closeCustomEventModal();
+  if (!isViewingCreatorAccount()) {
+    await returnToCreatorAccount();
+  }
+  await openAccountsSurface({ defaultAdminTab: "system" });
+  requestAnimationFrame(() => focusParserRuleInAdmin(rule));
+}
+
+function focusParserRuleInAdmin(rule) {
+  const normalized = sanitizeParserExtensionRule(rule);
+  if (!normalized) return;
+  const sourceDetails = accountsBody.querySelector(`[data-parser-rule-source-section="${cssEscapeAttr(normalized.source)}"]`);
+  if (sourceDetails) sourceDetails.open = true;
+  const seniorityDetails = accountsBody.querySelector(`[data-parser-rule-seniority-section="${cssEscapeAttr(`${normalized.source}|${normalized.seniority}`)}"]`);
+  if (seniorityDetails) seniorityDetails.open = true;
+  const card = accountsBody.querySelector(`[data-parser-rule-card="${cssEscapeAttr(parserRuleFocusKey(normalized))}"]`);
+  if (!card) return;
+  accountsBody.querySelectorAll(".is-parser-rule-focus").forEach((item) => item.classList.remove("is-parser-rule-focus"));
+  card.classList.add("is-parser-rule-focus");
+  card.scrollIntoView({ block: "center", behavior: "smooth" });
+  window.setTimeout(() => card.classList.remove("is-parser-rule-focus"), 2600);
+}
+
+function parserRuleFocusKey(rule) {
+  return `${rule.source}|${rule.seniority}|${rule.code}`;
+}
+
+function cssEscapeAttr(value) {
+  if (window.CSS?.escape) return CSS.escape(String(value || ""));
+  return String(value || "").replace(/["\\]/g, "\\$&");
+}
+
 function parserRuleExistsForIssue(issue) {
   const source = sanitizeIssueSource(issue?.source);
   const seniority = sanitizeRuleSeniority(issue?.seniority);
@@ -7563,6 +7695,88 @@ function renderParserRulePreview() {
   `;
 }
 
+function setParserRuleSourceRawReadonly(readonly = true) {
+  if (parserRuleSource) parserRuleSource.readOnly = readonly;
+  if (parserRuleRawValue) parserRuleRawValue.readOnly = readonly;
+}
+
+function setParserRuleModalIssueFields(issue, selectedSeniorities = [], options = {}) {
+  const source = sanitizeIssueSource(issue?.source);
+  const seniority = sanitizeRuleSeniority(issue?.seniority);
+  const rawValue = String(issue?.rawValue || issue?.code || "").trim();
+  const code = parserRuleCodeForIssue({ ...issue, rawValue });
+  parserRuleIssueId.value = issue?.fingerprint || issue?.id || issueFingerprint(source, rawValue || code, seniority);
+  parserRuleSource.value = source;
+  parserRuleRawValue.value = rawValue;
+  populateParserRuleSeniorityOptions(selectedSeniorities.length ? selectedSeniorities : [seniority], options.allowMultipleSeniorities !== false);
+  parserRuleOriginalSeniority.value = seniority;
+  parserRuleOriginalCode.value = code;
+  parserRuleCode.value = code;
+  parserRuleBase.value = parserRuleBaseForIssue(issue);
+  parserRulePeriod.value = parserRulePeriodForIssue(issue);
+  parserRuleSuffix.value = parserRuleSuffixForIssue(issue);
+  parserRuleAllDay.checked = !issue?.timeLabel || issue.timeLabel === "All day";
+  parserRuleStartTime.value = parserRuleAllDay.checked ? "" : timeRangeParts(issue?.timeLabel).start;
+  parserRuleEndTime.value = parserRuleAllDay.checked ? "" : timeRangeParts(issue?.timeLabel).end;
+  parserRuleLocation.value = issue?.location || defaultLocationForIssueSource(source);
+  parserRuleIncludeAsShift.checked = true;
+  parserRuleTimeFields.classList.toggle("hidden", parserRuleAllDay.checked);
+  setParserRuleSourceRawReadonly(options.readonlySourceRaw !== false);
+}
+
+function openParserRuleModalFromSyntheticIssue(issue, options = {}) {
+  const source = sanitizeIssueSource(issue?.source);
+  const seniority = sanitizeRuleSeniority(issue?.seniority);
+  const code = String(issue?.code || parserRuleCodeForIssue(issue)).trim().toUpperCase();
+  if (!source || !seniority || !code) {
+    setStatus("Could not prepare that shift-code rule.", true);
+    return;
+  }
+  parserRuleSaveContext = {
+    mode: options.mode || (isCreatorAuthenticated() ? "global" : "local"),
+    suggestionId: "",
+    targetEmail: options.targetEmail || adminViewingEmail || currentUserEmail,
+    replacementTargets: [],
+  };
+  setParserRuleModalIssueFields({ ...issue, source, seniority, code }, [seniority], {
+    allowMultipleSeniorities: options.allowMultipleSeniorities,
+    readonlySourceRaw: options.readonlySourceRaw,
+  });
+  parserRuleModalTitle.textContent = options.title || "Add shift code";
+  renderParserRulePreview();
+  parserRuleModal.classList.remove("hidden");
+  parserRuleModal.setAttribute("aria-hidden", "false");
+}
+
+function openManualParserRuleModal() {
+  if (!isCreatorAuthenticated()) {
+    setStatus("Creator authentication is required to add shift-code rules.", true);
+    return;
+  }
+  parserRuleSaveContext = { mode: "global", suggestionId: "", targetEmail: "", replacementTargets: [] };
+  parserRuleIssueId.value = "";
+  parserRuleOriginalCode.value = "";
+  parserRuleOriginalSeniority.value = "Unknown";
+  parserRuleSource.value = "";
+  parserRuleRawValue.value = "";
+  parserRuleCode.value = "";
+  populateParserRuleSeniorityOptions(["Unknown"], true);
+  parserRuleBase.value = "";
+  parserRulePeriod.value = "";
+  parserRuleSuffix.value = "";
+  parserRuleAllDay.checked = false;
+  parserRuleIncludeAsShift.checked = true;
+  parserRuleStartTime.value = "";
+  parserRuleEndTime.value = "";
+  parserRuleLocation.value = "";
+  parserRuleTimeFields.classList.remove("hidden");
+  setParserRuleSourceRawReadonly(false);
+  parserRuleModalTitle.textContent = "Add shift code";
+  renderParserRulePreview();
+  parserRuleModal.classList.remove("hidden");
+  parserRuleModal.setAttribute("aria-hidden", "false");
+}
+
 function openParserRuleModal(email, errorId = "", selectedSeniorities = []) {
   const issue = findAdminIssue(email, errorId);
   if (!issue) {
@@ -7570,22 +7784,7 @@ function openParserRuleModal(email, errorId = "", selectedSeniorities = []) {
     return;
   }
   parserRuleSaveContext = { mode: "global", suggestionId: "", targetEmail: normalizeEmail(email), replacementTargets: [] };
-  parserRuleIssueId.value = issue.fingerprint || issue.id || "";
-  parserRuleSource.value = issue.source || "";
-  parserRuleRawValue.value = issue.rawValue || "";
-  populateParserRuleSeniorityOptions(selectedSeniorities.length ? selectedSeniorities : [issue.seniority], true);
-  parserRuleOriginalSeniority.value = sanitizeRuleSeniority(issue.seniority);
-  parserRuleOriginalCode.value = parserRuleCodeForIssue(issue);
-  parserRuleCode.value = parserRuleCodeForIssue(issue);
-  parserRuleBase.value = parserRuleBaseForIssue(issue);
-  parserRulePeriod.value = parserRulePeriodForIssue(issue);
-  parserRuleSuffix.value = parserRuleSuffixForIssue(issue);
-  parserRuleAllDay.checked = !issue.timeLabel || issue.timeLabel === "All day";
-  parserRuleStartTime.value = parserRuleAllDay.checked ? "" : timeRangeParts(issue.timeLabel).start;
-  parserRuleEndTime.value = parserRuleAllDay.checked ? "" : timeRangeParts(issue.timeLabel).end;
-  parserRuleLocation.value = defaultLocationForIssueSource(issue.source);
-  parserRuleIncludeAsShift.checked = true;
-  parserRuleTimeFields.classList.toggle("hidden", parserRuleAllDay.checked);
+  setParserRuleModalIssueFields(issue, selectedSeniorities.length ? selectedSeniorities : [issue.seniority]);
   parserRuleModalTitle.textContent = "Edit shift code";
   renderParserRulePreview();
   parserRuleModal.classList.remove("hidden");
@@ -7607,22 +7806,11 @@ function openParserRuleModalFromPreviewIssue(issueId = "") {
     replacementTargets: [],
   };
   const reviewItem = reviewIndex.get(issue.id);
-  parserRuleIssueId.value = issueFingerprint(issue.source, issue.rawValue, issue.seniority || reviewItem?.seniority);
-  parserRuleSource.value = issue.source || "";
-  parserRuleRawValue.value = issue.rawValue || "";
-  populateParserRuleSeniorityOptions([issue.seniority || reviewItem?.seniority], isCreatorAuthenticated());
-  parserRuleOriginalSeniority.value = sanitizeRuleSeniority(issue.seniority || reviewItem?.seniority);
-  parserRuleOriginalCode.value = parserRuleCodeForIssue(issue);
-  parserRuleCode.value = parserRuleCodeForIssue(issue);
-  parserRuleBase.value = parserRuleBaseForIssue(issue);
-  parserRulePeriod.value = parserRulePeriodForIssue(issue);
-  parserRuleSuffix.value = parserRuleSuffixForIssue(issue);
-  parserRuleAllDay.checked = !issue.timeLabel || issue.timeLabel === "All day";
-  parserRuleStartTime.value = parserRuleAllDay.checked ? "" : timeRangeParts(issue.timeLabel).start;
-  parserRuleEndTime.value = parserRuleAllDay.checked ? "" : timeRangeParts(issue.timeLabel).end;
-  parserRuleLocation.value = defaultLocationForIssueSource(issue.source);
-  parserRuleIncludeAsShift.checked = true;
-  parserRuleTimeFields.classList.toggle("hidden", parserRuleAllDay.checked);
+  setParserRuleModalIssueFields({
+    ...issue,
+    fingerprint: issueFingerprint(issue.source, issue.rawValue, issue.seniority || reviewItem?.seniority),
+    seniority: issue.seniority || reviewItem?.seniority,
+  }, [issue.seniority || reviewItem?.seniority], { allowMultipleSeniorities: isCreatorAuthenticated() });
   parserRuleModalTitle.textContent = isCreatorAuthenticated() ? "Edit shift code" : "Resolve shift code";
   renderParserRulePreview();
   parserRuleModal.classList.remove("hidden");
@@ -7658,6 +7846,7 @@ function openParserRuleModalFromRule(source, seniority, code) {
   parserRuleEndTime.value = rule.allDay ? "" : rule.endTime;
   parserRuleLocation.value = rule.location || "";
   parserRuleTimeFields.classList.toggle("hidden", parserRuleAllDay.checked);
+  setParserRuleSourceRawReadonly(true);
   parserRuleModalTitle.textContent = "Edit shift code";
   renderParserRulePreview();
   parserRuleModal.classList.remove("hidden");
@@ -7688,6 +7877,7 @@ function openParserRuleModalFromSuggestion(suggestionId = "") {
   parserRuleEndTime.value = rule.allDay ? "" : rule.endTime;
   parserRuleLocation.value = rule.location || "";
   parserRuleTimeFields.classList.toggle("hidden", parserRuleAllDay.checked);
+  setParserRuleSourceRawReadonly(true);
   parserRuleModalTitle.textContent = "Overwrite suggestion";
   renderParserRulePreview();
   parserRuleModal.classList.remove("hidden");
@@ -7700,6 +7890,7 @@ function closeParserRuleModal() {
   parserRuleForm?.reset();
   parserRuleSaveContext = { mode: "global", suggestionId: "", targetEmail: "", replacementTargets: [] };
   parserRuleTimeFields?.classList.remove("hidden");
+  setParserRuleSourceRawReadonly(true);
   if (parserRulePreview) {
     parserRulePreview.innerHTML = `
       <div>

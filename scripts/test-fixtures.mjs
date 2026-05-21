@@ -297,10 +297,15 @@ assert.match(
 );
 assert.match(appSource, /function rosterSyncLabel/, "file cards should expose live roster sync labels");
 assert.match(appSource, /Missing \/ unresolved shift codes/, "system card should expose unresolved shift-code review");
+assert.match(appSource, /data-add-manual-shift-code/, "missing shift-code heading should expose a manual Add action");
 assert.match(appSource, /parserRuleSeniorityOption/, "shift-code editor should expose multi-seniority selection");
 assert.match(appSource, /function selectedParserRuleSeniorities/, "shift-code editor should save selected seniorities as a batch");
+assert.match(appSource, /function openManualParserRuleModal/, "shift-code editor should support manual rule creation without an existing issue");
 assert.match(appSource, /parserRuleExistsForIssue/, "system shift-code review should hide only issues resolved by active rules");
 assert.match(appSource, /matchingParserRuleGroup/, "saved shift-code rules should reopen with equivalent seniorities selected");
+assert.match(appSource, /data-who-role-shift-code/, "Who role labels should be separate clickable shift-code controls");
+assert.match(appSource, /handleWhoRoleRuleClick[\s\S]*findParserExtensionRuleForSeniority/, "Who role clicks should resolve against parser rules before creating a new rule");
+assert.match(appSource, /openAndFocusParserRule[\s\S]*data-parser-rule-card/, "Who role clicks should focus existing parser rules in Admin > System");
 assert.match(appSource, /function synthesizeIncompleteShiftCodeIssues/, "derived code-only shift titles should synthesize unresolved shift-code issues");
 assert.match(appSource, /data-ignore-unresolved-shift-code/, "missing shift-code queue should expose a non-destructive ignore action");
 assert.match(appSource, /allUnknownIssues\.filter\(\(item\) => item\.source === group\.source\)/, "ignored shift codes should remain visible in hospital unrecognised sections");

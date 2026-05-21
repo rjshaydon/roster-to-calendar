@@ -1875,6 +1875,14 @@ body[data-skin="console"] .preview-cell.is-weekend {
   gap: 10px;
 }
 
+.who-team-meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  justify-content: flex-end;
+  align-items: baseline;
+}
+
 .who-team-name {
   appearance: none;
   border: 0;
@@ -1887,8 +1895,22 @@ body[data-skin="console"] .preview-cell.is-weekend {
   font: inherit;
 }
 
+.who-team-role {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--accent-strong);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
 .who-team-name:hover,
-.who-team-name:focus-visible {
+.who-team-name:focus-visible,
+.who-team-role:hover,
+.who-team-role:focus-visible {
   color: var(--accent);
   text-decoration: underline;
   outline: none;
@@ -1897,6 +1919,11 @@ body[data-skin="console"] .preview-cell.is-weekend {
 .who-team-time {
   color: var(--muted);
   font-size: 0.95rem;
+}
+
+.is-parser-rule-focus {
+  border-color: rgba(76, 73, 223, 0.55);
+  box-shadow: 0 0 0 3px rgba(76, 73, 223, 0.14);
 }
 
 .event-inline-insight {
