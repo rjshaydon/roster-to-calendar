@@ -1962,7 +1962,8 @@ function sanitizeParserExtensionRule(item, forcedSource = "") {
   const source = sanitizeParserRuleSource(forcedSource || item.source);
   const seniority = sanitizeRuleSeniority(item.seniority);
   const code = normalizeParserExtensionRuleCode(source, item.code || item.rawCode || "");
-  const kind = String(item.kind || "shift").trim().toLowerCase();
+  const ignore = item.ignore === true || String(item.kind || "").trim().toLowerCase() === "ignore";
+  const kind = ignore ? "ignore" : String(item.kind || "shift").trim().toLowerCase();
   const base = String(item.base || item.titleParts?.base || "").trim();
   const period = String(item.period || item.titleParts?.period || "").trim().toUpperCase();
   const suffix = String(item.suffix || item.titleParts?.suffix || "").trim();
@@ -1970,9 +1971,9 @@ function sanitizeParserExtensionRule(item, forcedSource = "") {
   const allDay = item.allDay === true;
   const startTime = String(item.startTime || "").trim();
   const endTime = String(item.endTime || "").trim();
-  if (!source || !code || !base) return null;
+  if (!source || !code || (!ignore && !base)) return null;
   if (isRestrictedClinicalSupportRule({ seniority, code, base })) return null;
-  if (!allDay && (!isClockString(startTime) || !isClockString(endTime))) return null;
+  if (!ignore && !allDay && (!isClockString(startTime) || !isClockString(endTime))) return null;
   return {
     source,
     seniority,
@@ -1982,10 +1983,11 @@ function sanitizeParserExtensionRule(item, forcedSource = "") {
     period,
     suffix,
     location,
-    allDay,
-    startTime: allDay ? "" : startTime,
-    endTime: allDay ? "" : endTime,
-    includeAsShift: item.includeAsShift !== false,
+    allDay: ignore ? true : allDay,
+    startTime: ignore || allDay ? "" : startTime,
+    endTime: ignore || allDay ? "" : endTime,
+    includeAsShift: ignore ? false : item.includeAsShift !== false,
+    ignore,
   };
 }
 

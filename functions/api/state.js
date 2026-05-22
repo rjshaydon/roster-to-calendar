@@ -321,6 +321,7 @@ export async function onRequestPost(context) {
         body?.eventsByDoctor || {},
         body?.issuesByDoctor || {},
       );
+      await propagateDerivedShiftCodeIssues(context.env.ROSTER_DB, body?.doctors || [], body?.issuesByDoctor || {});
       const supersession = await reconcileRosterFileSupersession(context.env.ROSTER_DB, filePayload, { uploaderEmail: email });
       await refreshCanonicalDoctors(context.env.ROSTER_DB);
       if (body?.skipStatus === true) {
@@ -719,7 +720,7 @@ export async function onRequestPost(context) {
         updatedAt: new Date().toISOString(),
       });
       await clearIssuesResolvedByParserRuleForUser(context.env.ROSTER_DB, saveEmail, rule);
-      if (suggestion) {
+      if (suggestion && rule.ignore !== true) {
         const suggestions = await loadParserRuleSuggestions(null, context.env.ROSTER_DB);
         await saveParserRuleSuggestions(null, upsertParserRuleSuggestion(suggestions, suggestion), context.env.ROSTER_DB);
       }
@@ -2084,6 +2085,81 @@ function issueMatchesParserRule(issue, rule) {
     && (issueCode === rule.code || fingerprint === ruleFingerprint);
 }
 
+async function propagateDerivedShiftCodeIssues(db, doctors = [], issuesByDoctor = {}) {
+  const claimedAccounts = await queryClaimedAccounts(db).catch(() => []);
+  if (!claimedAccounts.length) return;
+  const accountRecords = new Map((await listAccountMirrors(db).catch(() => [])).map((record) => [normalizeEmail(record.email), record]));
+  const globalParserExtensions = await loadD1ParserExtensionRules(db);
+  const updatesByEmail = new Map();
+  const now = new Date().toISOString();
+  for (const doctor of Array.isArray(doctors) ? doctors : []) {
+    const key = normalizeRosterName(doctor?.key || "");
+    if (!key) continue;
+    const rawKey = String(doctor?.key || "").trim();
+    const issues = Array.isArray(issuesByDoctor?.[rawKey])
+      ? issuesByDoctor[rawKey]
+      : Array.isArray(issuesByDoctor?.[key])
+        ? issuesByDoctor[key]
+        : [];
+    if (!issues.length) continue;
+    const resolvedAccount = resolveDoctorAccountFromIndex(claimedAccounts, doctor);
+    const targetEmail = normalizeEmail(resolvedAccount?.email);
+    if (!targetEmail) continue;
+    const targetRecord = updatesByEmail.get(targetEmail) || accountRecords.get(targetEmail);
+    if (!targetRecord) continue;
+    const ruleSets = mergeParserExtensionSets(
+      sanitizeParserExtensionRules(globalParserExtensions),
+      sanitizeParserExtensionRules(targetRecord.localParserExtensions),
+    );
+    const incoming = [];
+    for (const rawIssue of issues) {
+      const issue = adminIssueFromRosterDiagnostic(rawIssue, now);
+      if (!issue || !isShiftCodeAdminIssue(issue)) continue;
+      if (isIssueResolvedByRuleSets(issue, ruleSets)) continue;
+      incoming.push(issue);
+    }
+    if (!incoming.length) continue;
+    updatesByEmail.set(targetEmail, {
+      ...targetRecord,
+      adminIssues: mergeAdminIssues(targetRecord.adminIssues, incoming),
+      updatedAt: now,
+    });
+  }
+  for (const record of updatesByEmail.values()) {
+    await upsertAccountMirror(db, record);
+  }
+}
+
+function adminIssueFromRosterDiagnostic(rawIssue, now = new Date().toISOString()) {
+  const source = sanitizeIssueSource(rawIssue?.source);
+  const seniority = sanitizeRuleSeniority(rawIssue?.seniority);
+  const rawValue = String(rawIssue?.rawValue || "").trim();
+  const code = String(rawIssue?.code || parserRuleCodeForIssue(rawIssue)).trim().toUpperCase();
+  const message = String(rawIssue?.message || "").trim();
+  const fingerprint = sanitizeIssueFingerprint(rawIssue?.fingerprint || issueFingerprint(source, rawValue || code, seniority));
+  return sanitizeAdminIssues([{
+    id: String(rawIssue?.id || fingerprint).trim(),
+    message,
+    source,
+    seniority,
+    date: rawIssue?.date || rawIssue?.startDay,
+    rawValue,
+    code,
+    timeLabel: rawIssue?.timeLabel,
+    suggestedTitle: rawIssue?.suggestedTitle,
+    fingerprint,
+    firstSeenAt: now,
+    lastSeenAt: now,
+    count: 1,
+  }])[0] || null;
+}
+
+function isShiftCodeAdminIssue(issue) {
+  const message = String(issue?.message || "").toLowerCase();
+  return Boolean(parserRuleCodeForIssue(issue))
+    && (message.includes("shift code not recognised") || message.includes("shift label not recognised") || issue?.resolutionType === "shift_code");
+}
+
 async function isIssueResolvedByParserRules(store, email, issue, db = null) {
   const source = sanitizeIssueSource(issue?.source);
   const seniority = sanitizeRuleSeniority(issue?.seniority);
@@ -3188,7 +3264,8 @@ function sanitizeParserExtensionRule(item, forcedSource = "") {
   const source = sanitizeIssueSource(forcedSource || item.source);
   const seniority = sanitizeRuleSeniority(item.seniority);
   const code = normalizeParserExtensionRuleCode(source, item.code || item.rawCode || "");
-  const kind = String(item.kind || "shift").trim().toLowerCase();
+  const ignore = item.ignore === true || String(item.kind || "").trim().toLowerCase() === "ignore";
+  const kind = ignore ? "ignore" : String(item.kind || "shift").trim().toLowerCase();
   const base = String(item.base || item.titleParts?.base || "").trim();
   const period = String(item.period || item.titleParts?.period || "").trim().toUpperCase();
   const suffix = String(item.suffix || item.titleParts?.suffix || "").trim();
@@ -3196,9 +3273,9 @@ function sanitizeParserExtensionRule(item, forcedSource = "") {
   const allDay = item.allDay === true;
   const startTime = String(item.startTime || "").trim();
   const endTime = String(item.endTime || "").trim();
-  if (!source || !code || !base) return null;
+  if (!source || !code || (!ignore && !base)) return null;
   if (isRestrictedClinicalSupportRule({ seniority, code, base })) return null;
-  if (!allDay && (!isClockString(startTime) || !isClockString(endTime))) return null;
+  if (!ignore && !allDay && (!isClockString(startTime) || !isClockString(endTime))) return null;
   return {
     source,
     seniority,
@@ -3207,11 +3284,12 @@ function sanitizeParserExtensionRule(item, forcedSource = "") {
     base,
     period,
     suffix,
-    allDay,
-    startTime: allDay ? "" : startTime,
-    endTime: allDay ? "" : endTime,
+    allDay: ignore ? true : allDay,
+    startTime: ignore || allDay ? "" : startTime,
+    endTime: ignore || allDay ? "" : endTime,
     location,
-    includeAsShift: item.includeAsShift !== false,
+    includeAsShift: ignore ? false : item.includeAsShift !== false,
+    ignore,
   };
 }
 

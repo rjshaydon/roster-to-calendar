@@ -53,6 +53,7 @@ const parserRulePeriod = document.querySelector("#parserRulePeriod");
 const parserRuleSuffix = document.querySelector("#parserRuleSuffix");
 const parserRuleAllDay = document.querySelector("#parserRuleAllDay");
 const parserRuleIncludeAsShift = document.querySelector("#parserRuleIncludeAsShift");
+const parserRuleIgnore = document.querySelector("#parserRuleIgnore");
 const parserRuleTimeFields = document.querySelector("#parserRuleTimeFields");
 const parserRuleStartTime = document.querySelector("#parserRuleStartTime");
 const parserRuleEndTime = document.querySelector("#parserRuleEndTime");
@@ -155,7 +156,6 @@ const ACCOUNT_STATE_KEY = "roster-account-state";
 const SESSION_STATE_KEY = "roster-session-state-v1";
 const ACCOUNT_WORKSPACES_KEY = "roster-account-workspaces-v1";
 const CALENDAR_SNAPSHOT_CACHE_KEY = "roster-calendar-snapshot-cache-v1";
-const UNRESOLVED_SHIFT_CODE_IGNORE_KEY = "roster-unresolved-shift-code-ignore-v1";
 const CURRENT_EMAIL_KEY = "roster-current-email";
 const CURRENT_PASSWORD_KEY = "roster-current-password";
 const PERSISTENT_PASSWORD_KEY = "roster-persistent-password";
@@ -305,7 +305,6 @@ let parserRuleSuggestions = [];
 let parserRuleSaveContext = { mode: "global", suggestionId: "", targetEmail: "" };
 let dismissedIssueFingerprints = new Set();
 let ignoredIssueFingerprints = new Set();
-let ignoredUnresolvedShiftCodeKeys = loadIgnoredUnresolvedShiftCodeKeys();
 let lastLoginTimings = null;
 let lastAccountSwitchTimings = null;
 
@@ -532,13 +531,18 @@ accountsBody.addEventListener("click", (event) => {
     );
     return;
   }
-  if (event.target.closest("[data-add-manual-shift-code]")) {
-    openManualParserRuleModal();
+  const ignoreShiftCodeRuleButton = event.target.closest("[data-ignore-shift-code]");
+  if (ignoreShiftCodeRuleButton) {
+    openParserRuleModal(
+      ignoreShiftCodeRuleButton.dataset.ignoreShiftCode || "",
+      ignoreShiftCodeRuleButton.dataset.errorId || "",
+      splitShiftCodeSeniorities(ignoreShiftCodeRuleButton.dataset.shiftCodeSeniorities || ""),
+      { ignore: true },
+    );
     return;
   }
-  const ignoreShiftCodeButton = event.target.closest("[data-ignore-unresolved-shift-code]");
-  if (ignoreShiftCodeButton) {
-    ignoreUnresolvedShiftCodeInTopQueue(ignoreShiftCodeButton.dataset.ignoreUnresolvedShiftCode || "");
+  if (event.target.closest("[data-add-manual-shift-code]")) {
+    openManualParserRuleModal();
     return;
   }
   const suggestionButton = event.target.closest("[data-parser-suggestion-action]");
@@ -1261,11 +1265,16 @@ parserRuleAllDay?.addEventListener("change", () => {
   parserRuleTimeFields?.classList.toggle("hidden", parserRuleAllDay.checked);
   renderParserRulePreview();
 });
+parserRuleIgnore?.addEventListener("change", () => {
+  syncParserRuleIgnoreControls();
+  renderParserRulePreview();
+});
 parserRuleForm?.addEventListener("input", () => renderParserRulePreview());
 parserRuleForm?.addEventListener("change", (event) => {
   if (event.target?.matches?.('input[name="parserRuleSeniorityOption"], input[name="parserRuleSeniorityAll"]')) {
     normalizeParserRuleSenioritySelection(event.target);
   }
+  if (event.target === parserRuleIgnore) syncParserRuleIgnoreControls();
   renderParserRulePreview();
 });
 parserRuleForm?.addEventListener("submit", async (event) => {
@@ -7119,7 +7128,7 @@ function renderParserRulesCard() {
     { source: "MCH", rules: sanitizeParserExtensionRuleList(parserExtensions?.mch, "MCH") },
   ];
   const allUnknownIssues = collectUnknownShiftIssues();
-  const unknownIssues = allUnknownIssues.filter((item) => !isUnresolvedShiftCodeIgnored(item));
+  const unknownIssues = allUnknownIssues;
   const unknownSources = new Set(allUnknownIssues.map((item) => item.source));
   return `
     <div class="issues-list">
@@ -7169,7 +7178,7 @@ function renderParserRulesCard() {
               </div>
               <div class="account-actions">
                 <button type="button" class="button button-secondary" data-add-shift-code="${escapeHtml(item.email)}" data-error-id="${escapeHtml(item.id)}" data-shift-code-seniorities="${escapeHtml(item.seniorities.join("|"))}">Edit shift code</button>
-                <button type="button" class="button button-secondary" data-ignore-unresolved-shift-code="${escapeHtml(unresolvedShiftCodeIgnoreKey(item))}">Ignore</button>
+                <button type="button" class="button button-secondary" data-ignore-shift-code="${escapeHtml(item.email)}" data-error-id="${escapeHtml(item.id)}" data-shift-code-seniorities="${escapeHtml(item.seniorities.join("|"))}">Ignore</button>
               </div>
             </article>
           `).join("") : `<article class="issue-card"><p>No missing or unresolved shift codes need review.</p></article>`}
@@ -7182,7 +7191,7 @@ function renderParserRulesCard() {
         </div>
         ${groups.map((group) => `
           <details class="issue-card" data-parser-rule-source-section="${escapeHtml(group.source)}">
-            <summary><strong>${group.source}${unknownSources.has(group.source) ? " *" : ""}</strong> · ${group.rules.length} rule${group.rules.length === 1 ? "" : "s"}</summary>
+            <summary><strong>${group.source}${unknownSources.has(group.source) ? " *" : ""}</strong> · ${visibleParserRules(group.rules).length} rule${visibleParserRules(group.rules).length === 1 ? "" : "s"}</summary>
             <div class="issues-list">
               ${allUnknownIssues.filter((item) => item.source === group.source).map((item) => `
                 <article class="issue-card issue-unknown">
@@ -7196,7 +7205,7 @@ function renderParserRulesCard() {
                 </article>
               `).join("")}
               ${parserRuleSeniorityDisplayOrder().map((seniority) => {
-                const rules = group.rules.filter((rule) => rule.seniority === seniority);
+                const rules = visibleParserRules(group.rules).filter((rule) => rule.seniority === seniority);
                 if (!rules.length) return "";
                 return `
                   <details class="issue-card" data-parser-rule-seniority-section="${escapeHtml(`${group.source}|${seniority}`)}">
@@ -7219,12 +7228,40 @@ function renderParserRulesCard() {
                   </details>
                 `;
               }).join("")}
+              ${ignoredParserRules(group.rules).length ? `
+                <details class="issue-card" data-parser-rule-ignored-section="${escapeHtml(group.source)}">
+                  <summary><strong>Ignored shift codes</strong> · ${ignoredParserRules(group.rules).length} code${ignoredParserRules(group.rules).length === 1 ? "" : "s"}</summary>
+                  <div class="issues-list">
+                    ${ignoredParserRules(group.rules).map((rule) => `
+                      <article class="issue-card" data-parser-rule-card="${escapeHtml(parserRuleFocusKey(rule))}">
+                        <div>
+                          <strong>${escapeHtml(rule.code)} · Ignored</strong>
+                          <p>${escapeHtml(rule.seniority)}</p>
+                          <p>${escapeHtml(parserRulePreviewMeta(rule))}</p>
+                        </div>
+                        <div class="account-actions">
+                          <button type="button" class="button button-secondary" data-edit-parser-rule="${escapeHtml(rule.code)}" data-edit-parser-source="${escapeHtml(rule.source)}" data-edit-parser-seniority="${escapeHtml(rule.seniority)}">Edit</button>
+                          <button type="button" class="button button-secondary" data-delete-parser-rule="${escapeHtml(rule.code)}" data-delete-parser-source="${escapeHtml(rule.source)}" data-delete-parser-seniority="${escapeHtml(rule.seniority)}">Delete</button>
+                        </div>
+                      </article>
+                    `).join("")}
+                  </div>
+                </details>
+              ` : ""}
             </div>
           </details>
         `).join("")}
       </article>
     </div>
   `;
+}
+
+function visibleParserRules(rules = []) {
+  return (rules || []).filter((rule) => rule.ignore !== true && rule.kind !== "ignore");
+}
+
+function ignoredParserRules(rules = []) {
+  return (rules || []).filter((rule) => rule.ignore === true || rule.kind === "ignore");
 }
 
 function collectUnknownShiftIssues() {
@@ -7291,42 +7328,6 @@ function splitShiftCodeSeniorities(value = "") {
     .split("|")
     .map(sanitizeRuleSeniority)
     .filter(Boolean);
-}
-
-function unresolvedShiftCodeIgnoreKey(item) {
-  const source = sanitizeIssueSource(item?.source);
-  const code = String(item?.code || parserRuleCodeForIssue(item) || "").trim().toUpperCase();
-  return source && code ? `${source}|${code}` : "";
-}
-
-function isUnresolvedShiftCodeIgnored(item) {
-  const key = unresolvedShiftCodeIgnoreKey(item);
-  return key ? ignoredUnresolvedShiftCodeKeys.has(key) : false;
-}
-
-function loadIgnoredUnresolvedShiftCodeKeys() {
-  try {
-    const raw = JSON.parse(localStorage.getItem(UNRESOLVED_SHIFT_CODE_IGNORE_KEY) || "[]");
-    return new Set(Array.isArray(raw) ? raw.map((item) => String(item || "").trim()).filter(Boolean) : []);
-  } catch {
-    return new Set();
-  }
-}
-
-function saveIgnoredUnresolvedShiftCodeKeys() {
-  localStorage.setItem(UNRESOLVED_SHIFT_CODE_IGNORE_KEY, JSON.stringify([...ignoredUnresolvedShiftCodeKeys].sort()));
-}
-
-function ignoreUnresolvedShiftCodeInTopQueue(key = "") {
-  const normalizedKey = String(key || "").trim();
-  if (!normalizedKey) {
-    setStatus("Could not ignore that shift code.", true);
-    return;
-  }
-  ignoredUnresolvedShiftCodeKeys.add(normalizedKey);
-  saveIgnoredUnresolvedShiftCodeKeys();
-  renderAccountsModal();
-  setStatus("Shift code hidden from the missing-code queue.");
 }
 
 function parserRuleSeniorityDisplayOrder() {
@@ -7693,7 +7694,8 @@ function parserRulesEquivalent(left, right) {
     && leftRule.startTime === rightRule.startTime
     && leftRule.endTime === rightRule.endTime
     && leftRule.location === rightRule.location
-    && leftRule.includeAsShift === rightRule.includeAsShift;
+    && leftRule.includeAsShift === rightRule.includeAsShift
+    && leftRule.ignore === rightRule.ignore;
 }
 
 function matchingParserRuleGroup(rule) {
@@ -7706,6 +7708,7 @@ function matchingParserRuleGroup(rule) {
 
 function parserRulePreviewTitle(rule, sourceSettings = settings) {
   if (!rule) return "";
+  if (rule.ignore === true || rule.kind === "ignore") return `${rule.source}: ${rule.code}`;
   if (String(rule.base || "").trim().toLowerCase() === "hub" && String(rule.period || "").trim().toUpperCase() === "NIGHT") {
     return sourceSettings.showSourcePrefix ? `${rule.source}: Night Hub` : "Night Hub";
   }
@@ -7720,6 +7723,7 @@ function parserRulePreviewTitle(rule, sourceSettings = settings) {
 
 function parserRulePreviewMeta(rule) {
   if (!rule) return "";
+  if (rule.ignore === true || rule.kind === "ignore") return "Ignored shift code";
   if (rule.includeAsShift === false) return "Hidden from calendar";
   const meta = [];
   meta.push(rule.allDay ? "All day" : summarizeEventTimes(`2000-01-01T${rule.startTime}:00`, `2000-01-01T${rule.endTime}:00`, false));
@@ -7731,10 +7735,13 @@ function renderParserRulePreview() {
   if (!parserRulePreview) return;
   const source = sanitizeIssueSource(parserRuleSource?.value);
   const seniorities = selectedParserRuleSeniorities();
+  const ignore = parserRuleIgnore?.checked === true;
   const rule = sanitizeParserExtensionRule({
     source,
     seniority: seniorities[0],
     code: parserRuleCode?.value,
+    kind: ignore ? "ignore" : "shift",
+    ignore,
     base: parserRuleBase?.value,
     period: parserRulePeriod?.value,
     suffix: parserRuleSuffix?.value,
@@ -7742,7 +7749,7 @@ function renderParserRulePreview() {
     startTime: parseEditorTimeInput(parserRuleStartTime?.value || ""),
     endTime: parseEditorTimeInput(parserRuleEndTime?.value || ""),
     location: parserRuleLocation?.value,
-    includeAsShift: parserRuleIncludeAsShift?.checked,
+    includeAsShift: ignore ? false : parserRuleIncludeAsShift?.checked,
   }, source);
   if (!rule) {
     parserRulePreview.innerHTML = `
@@ -7760,6 +7767,20 @@ function renderParserRulePreview() {
       <p>${escapeHtml(seniorities.length > 1 ? `${seniorities.length} seniorities` : rule.seniority)} · ${escapeHtml(parserRulePreviewMeta(rule))}</p>
     </div>
   `;
+}
+
+function syncParserRuleIgnoreControls() {
+  const ignore = parserRuleIgnore?.checked === true;
+  if (parserRuleIncludeAsShift) {
+    if (ignore) parserRuleIncludeAsShift.checked = false;
+    parserRuleIncludeAsShift.disabled = ignore;
+  }
+  if (parserRuleBase) parserRuleBase.required = !ignore;
+  if (parserRuleAllDay) parserRuleAllDay.disabled = ignore;
+  if (parserRuleStartTime) parserRuleStartTime.disabled = ignore;
+  if (parserRuleEndTime) parserRuleEndTime.disabled = ignore;
+  if (ignore && parserRuleTimeFields) parserRuleTimeFields.classList.add("hidden");
+  if (!ignore && parserRuleTimeFields) parserRuleTimeFields.classList.toggle("hidden", parserRuleAllDay?.checked === true);
 }
 
 function setParserRuleSourceRawReadonly(readonly = true) {
@@ -7786,9 +7807,11 @@ function setParserRuleModalIssueFields(issue, selectedSeniorities = [], options 
   parserRuleStartTime.value = parserRuleAllDay.checked ? "" : timeRangeParts(issue?.timeLabel).start;
   parserRuleEndTime.value = parserRuleAllDay.checked ? "" : timeRangeParts(issue?.timeLabel).end;
   parserRuleLocation.value = issue?.location || defaultLocationForIssueSource(source);
+  if (parserRuleIgnore) parserRuleIgnore.checked = options.ignore === true || issue?.ignore === true || issue?.kind === "ignore";
   parserRuleIncludeAsShift.checked = true;
   parserRuleTimeFields.classList.toggle("hidden", parserRuleAllDay.checked);
   setParserRuleSourceRawReadonly(options.readonlySourceRaw !== false);
+  syncParserRuleIgnoreControls();
 }
 
 function openParserRuleModalFromSyntheticIssue(issue, options = {}) {
@@ -7832,26 +7855,28 @@ function openManualParserRuleModal() {
   parserRulePeriod.value = "";
   parserRuleSuffix.value = "";
   parserRuleAllDay.checked = false;
+  if (parserRuleIgnore) parserRuleIgnore.checked = false;
   parserRuleIncludeAsShift.checked = true;
   parserRuleStartTime.value = "";
   parserRuleEndTime.value = "";
   parserRuleLocation.value = "";
   parserRuleTimeFields.classList.remove("hidden");
   setParserRuleSourceRawReadonly(false);
+  syncParserRuleIgnoreControls();
   parserRuleModalTitle.textContent = "Add shift code";
   renderParserRulePreview();
   parserRuleModal.classList.remove("hidden");
   parserRuleModal.setAttribute("aria-hidden", "false");
 }
 
-function openParserRuleModal(email, errorId = "", selectedSeniorities = []) {
+function openParserRuleModal(email, errorId = "", selectedSeniorities = [], options = {}) {
   const issue = findAdminIssue(email, errorId);
   if (!issue) {
     setStatus("Could not find that parser warning.", true);
     return;
   }
   parserRuleSaveContext = { mode: "global", suggestionId: "", targetEmail: normalizeEmail(email), replacementTargets: [] };
-  setParserRuleModalIssueFields(issue, selectedSeniorities.length ? selectedSeniorities : [issue.seniority]);
+  setParserRuleModalIssueFields(issue, selectedSeniorities.length ? selectedSeniorities : [issue.seniority], options);
   parserRuleModalTitle.textContent = "Edit shift code";
   renderParserRulePreview();
   parserRuleModal.classList.remove("hidden");
@@ -7908,12 +7933,14 @@ function openParserRuleModalFromRule(source, seniority, code) {
   parserRulePeriod.value = rule.period;
   parserRuleSuffix.value = rule.suffix;
   parserRuleAllDay.checked = rule.allDay;
+  if (parserRuleIgnore) parserRuleIgnore.checked = rule.ignore === true || rule.kind === "ignore";
   parserRuleIncludeAsShift.checked = rule.includeAsShift !== false;
   parserRuleStartTime.value = rule.allDay ? "" : rule.startTime;
   parserRuleEndTime.value = rule.allDay ? "" : rule.endTime;
   parserRuleLocation.value = rule.location || "";
   parserRuleTimeFields.classList.toggle("hidden", parserRuleAllDay.checked);
   setParserRuleSourceRawReadonly(true);
+  syncParserRuleIgnoreControls();
   parserRuleModalTitle.textContent = "Edit shift code";
   renderParserRulePreview();
   parserRuleModal.classList.remove("hidden");
@@ -7939,12 +7966,14 @@ function openParserRuleModalFromSuggestion(suggestionId = "") {
   parserRulePeriod.value = rule.period;
   parserRuleSuffix.value = rule.suffix;
   parserRuleAllDay.checked = rule.allDay;
+  if (parserRuleIgnore) parserRuleIgnore.checked = rule.ignore === true || rule.kind === "ignore";
   parserRuleIncludeAsShift.checked = rule.includeAsShift !== false;
   parserRuleStartTime.value = rule.allDay ? "" : rule.startTime;
   parserRuleEndTime.value = rule.allDay ? "" : rule.endTime;
   parserRuleLocation.value = rule.location || "";
   parserRuleTimeFields.classList.toggle("hidden", parserRuleAllDay.checked);
   setParserRuleSourceRawReadonly(true);
+  syncParserRuleIgnoreControls();
   parserRuleModalTitle.textContent = "Overwrite suggestion";
   renderParserRulePreview();
   parserRuleModal.classList.remove("hidden");
@@ -7955,6 +7984,11 @@ function closeParserRuleModal() {
   parserRuleModal?.classList.add("hidden");
   parserRuleModal?.setAttribute("aria-hidden", "true");
   parserRuleForm?.reset();
+  if (parserRuleIncludeAsShift) parserRuleIncludeAsShift.disabled = false;
+  if (parserRuleBase) parserRuleBase.required = true;
+  if (parserRuleAllDay) parserRuleAllDay.disabled = false;
+  if (parserRuleStartTime) parserRuleStartTime.disabled = false;
+  if (parserRuleEndTime) parserRuleEndTime.disabled = false;
   parserRuleSaveContext = { mode: "global", suggestionId: "", targetEmail: "", replacementTargets: [] };
   parserRuleTimeFields?.classList.remove("hidden");
   setParserRuleSourceRawReadonly(true);
@@ -8045,30 +8079,32 @@ async function saveParserRuleFromModal() {
   const base = String(parserRuleBase.value || "").trim();
   const period = String(parserRulePeriod.value || "").trim().toUpperCase();
   const suffix = String(parserRuleSuffix.value || "").trim();
+  const ignore = parserRuleIgnore?.checked === true;
   const allDay = parserRuleAllDay.checked;
   const startTime = parseEditorTimeInput(parserRuleStartTime.value);
   const endTime = parseEditorTimeInput(parserRuleEndTime.value);
   const location = String(parserRuleLocation.value || "").trim();
-  const includeAsShift = parserRuleIncludeAsShift?.checked !== false;
+  const includeAsShift = ignore ? false : parserRuleIncludeAsShift?.checked !== false;
   const fingerprint = sanitizeIssueFingerprint(parserRuleIssueId.value);
-  if (!source || !selectedSeniorities.length || !code || !base) {
+  if (!source || !selectedSeniorities.length || !code || (!ignore && !base)) {
     setStatus("Source, seniority, shift code, and base title are required.", true);
     return;
   }
-  if (!allDay && (!startTime || !endTime)) {
+  if (!ignore && !allDay && (!startTime || !endTime)) {
     setStatus("Timed shift-code rules need both a start and end time.", true);
     return;
   }
   const ruleTemplate = {
     source,
     code,
-    kind: "shift",
+    kind: ignore ? "ignore" : "shift",
+    ignore,
     base,
     period,
     suffix,
-    allDay,
-    startTime,
-    endTime,
+    allDay: ignore ? true : allDay,
+    startTime: ignore ? "" : startTime,
+    endTime: ignore ? "" : endTime,
     location,
     includeAsShift,
   };
@@ -8105,7 +8141,7 @@ async function saveParserRuleFromModal() {
         rebuildClientPreview();
       }
       await refreshActiveWhoInsightSurfaces();
-      setStatus("Shift code resolved for your calendar and sent to Admin.");
+      setStatus(ignore ? "Shift code ignored for your calendar." : "Shift code resolved for your calendar and sent to Admin.");
       return;
     }
     if (saveMode === "suggestionOverwrite") {
@@ -8158,7 +8194,7 @@ async function saveParserRuleFromModal() {
       await analyzeFiles({ preserveVisiblePreview: true });
     }
     await refreshActiveWhoInsightSurfaces();
-    setStatus(includeAsShift ? "Shift code added to the parser." : "Shift code hidden from calendar.");
+    setStatus(ignore ? "Shift code ignored." : includeAsShift ? "Shift code added to the parser." : "Shift code hidden from calendar.");
   } catch (error) {
     setStatus(error.message || "Could not save the shift-code rule.", true);
   }
@@ -9524,6 +9560,7 @@ function sanitizeParserExtensionRule(item, forcedSource = "") {
   const source = sanitizeIssueSource(forcedSource || item.source);
   const seniority = sanitizeRuleSeniority(item.seniority);
   const code = normalizeParserExtensionRuleCode(source, item.code || "");
+  const ignore = item.ignore === true || String(item.kind || "").trim().toLowerCase() === "ignore";
   const base = String(item.base || "").trim();
   const period = String(item.period || "").trim().toUpperCase();
   const suffix = String(item.suffix || "").trim();
@@ -9531,22 +9568,23 @@ function sanitizeParserExtensionRule(item, forcedSource = "") {
   const startTime = String(item.startTime || "").trim();
   const endTime = String(item.endTime || "").trim();
   const location = String(item.location || "").trim();
-  if (!source || !code || !base) return null;
+  if (!source || !code || (!ignore && !base)) return null;
   if (isRestrictedClinicalSupportRule({ seniority, code, base })) return null;
-  if (!allDay && (!isClockString(startTime) || !isClockString(endTime))) return null;
+  if (!ignore && !allDay && (!isClockString(startTime) || !isClockString(endTime))) return null;
   return {
     source,
     seniority,
     code,
-    kind: String(item.kind || "shift").trim().toLowerCase(),
+    kind: ignore ? "ignore" : String(item.kind || "shift").trim().toLowerCase(),
     base,
     period,
     suffix,
-    allDay,
-    startTime: allDay ? "" : startTime,
-    endTime: allDay ? "" : endTime,
+    allDay: ignore ? true : allDay,
+    startTime: ignore || allDay ? "" : startTime,
+    endTime: ignore || allDay ? "" : endTime,
     location,
-    includeAsShift: item.includeAsShift !== false,
+    includeAsShift: ignore ? false : item.includeAsShift !== false,
+    ignore,
   };
 }
 

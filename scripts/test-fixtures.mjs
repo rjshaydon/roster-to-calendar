@@ -375,9 +375,9 @@ assert.match(appSource, /night main team", "night hub", "night ssu"/, "Night Hub
 assert.match(appSource, /Night Hub/, "Hub night shift-code rules should preview as Night Hub");
 assert.match(appSource, /refreshActiveWhoInsightSurfaces/, "saving shift-code rules should refresh active Who insight panels");
 assert.match(appSource, /function synthesizeIncompleteShiftCodeIssues/, "derived code-only shift titles should synthesize unresolved shift-code issues");
-assert.match(appSource, /data-ignore-unresolved-shift-code/, "missing shift-code queue should expose a non-destructive ignore action");
-assert.match(appSource, /allUnknownIssues\.filter\(\(item\) => item\.source === group\.source\)/, "ignored shift codes should remain visible in hospital unrecognised sections");
-assert.match(appSource, /UNRESOLVED_SHIFT_CODE_IGNORE_KEY/, "top-level shift-code ignores should persist separately from admin issue deletion");
+assert.match(appSource, /parserRuleIgnore/, "shift-code editor should expose persistent ignore mode");
+assert.match(appSource, /data-ignore-shift-code/, "missing shift-code queue should open the shared ignore rule flow");
+assert.match(appSource, /Ignored shift codes/, "ignored shift codes should remain editable in hospital rule sections");
 assert.match(appSource, /parserRuleSeniorityAll/, "shift-code seniority picker should expose an All option");
 assert.match(appSource, /function normalizeParserRuleSenioritySelection/, "shift-code seniority picker should keep All and Unknown selections consistent");
 assert.match(appSource, /const key = `\$\{source\}\|\$\{code\}`/, "unresolved shift-code grouping should be by hospital and code");
@@ -3843,6 +3843,98 @@ const seniorLogin = await postState(stateStore, {
   password: "senior-password",
 });
 assert.equal(seniorLogin.insightsEnabled, false);
+stateStore.d1.accountClaims.set("patrick@example.com|mmc|PATRICK TAN", {
+  email: "patrick@example.com",
+  source_type: "mmc",
+  doctor_key: "PATRICK TAN",
+  display_name: "Patrick TAN",
+  matched_at: "2026-05-01T00:00:00.000Z",
+  updated_at: "2026-05-01T00:00:00.000Z",
+});
+const writerCodeIssue = {
+  id: "writer-code",
+  source: "MMC",
+  seniority: "Senior Registrar",
+  startDay: "2026-05-02",
+  date: "2026-05-02",
+  rawValue: "WRITER",
+  code: "WRITER",
+  status: "unknown",
+  message: "MMC shift code not recognised.",
+  resolutionType: "shift_code",
+  fingerprint: "MMC::Senior Registrar::WRITER",
+};
+await postState(stateStore, {
+  action: "saveDerivedCalendarFile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  file: { id: "writer-code-file", name: "Writer Code.xlsx", sourceType: "mmc", size: 1, lastModified: 1 },
+  doctors: [{ key: "PATRICK TAN", displayName: "Patrick TAN", sourceType: "mmc" }],
+  eventsByDoctor: {
+    "PATRICK TAN": [{
+      id: "writer-code-event",
+      source: "MMC",
+      seniority: "Senior Registrar",
+      title: "MMC: WRITER",
+      allDay: true,
+      start: "2026-05-02",
+      end: "2026-05-03",
+      rawValue: "WRITER",
+    }],
+  },
+  issuesByDoctor: { "PATRICK TAN": [writerCodeIssue] },
+  skipStatus: true,
+});
+assert.ok(memoryD1AccountRecord(stateStore.d1, "patrick@example.com").adminIssues.some((issue) => issue.code === "WRITER"), "D1 ingestion should promote unresolved shift-code diagnostics into Creator Errors");
+const patrickWriterCalendar = await postState(stateStore, {
+  action: "loadCalendarEvents",
+  email: "patrick@example.com",
+  password: "patrick-password",
+  doctorKey: "PATRICK TAN",
+});
+assert.ok(patrickWriterCalendar.snapshot.preview.issues.some((issue) => issue.rawValue === "WRITER"), "D1-derived user calendar should still expose the warning panel issue");
+await postState(stateStore, {
+  action: "reportUserError",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  targetEmail: "senior@example.com",
+  errorId: writerCodeIssue.fingerprint,
+  message: writerCodeIssue.message,
+  issue: writerCodeIssue,
+});
+await postState(stateStore, {
+  action: "saveLocalParserExtensionRule",
+  email: "patrick@example.com",
+  password: "patrick-password",
+  fingerprint: writerCodeIssue.fingerprint,
+  rawValue: "WRITER",
+  rule: {
+    source: "MMC",
+    seniority: "Senior Registrar",
+    code: "WRITER",
+    kind: "ignore",
+    ignore: true,
+    includeAsShift: false,
+  },
+});
+assert.equal(memoryD1AccountRecord(stateStore.d1, "patrick@example.com").adminIssues.some((issue) => issue.code === "WRITER"), false, "local ignored shift code should clear that user's warning evidence");
+assert.equal(memoryD1AccountRecord(stateStore.d1, "senior@example.com").adminIssues.some((issue) => issue.code === "WRITER"), true, "local ignored shift code should not clear other users");
+await postState(stateStore, {
+  action: "saveParserExtensionRule",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  source: "MMC",
+  rawValue: "WRITER",
+  rule: {
+    source: "MMC",
+    seniority: "Senior Registrar",
+    code: "WRITER",
+    kind: "ignore",
+    ignore: true,
+    includeAsShift: false,
+  },
+});
+assert.equal(memoryD1AccountRecord(stateStore.d1, "senior@example.com").adminIssues.some((issue) => issue.code === "WRITER"), false, "creator ignored shift code should clear matching warnings globally");
 const n1Issue = {
   source: "MMC",
   seniority: "Senior Registrar",
