@@ -30,6 +30,7 @@ import {
   queryCanonicalDoctors,
   queryActiveRosterFileRefs,
   queryCalendarRevision,
+  queryRosterRevision,
   queryDoctorSeniorities,
   queryDoctorEventsForFileDoctorPairs,
   queryDoctorIssuesForFileDoctorPairs,
@@ -1025,6 +1026,7 @@ export async function onRequestPost(context) {
           },
         });
       }
+      const rosterRevision = await queryRosterRevision(context.env.ROSTER_DB, targetRecord.email).catch(() => "");
       const requestedRange = boundedCalendarEventRange({
         startDate: body?.startDate,
         endDate: body?.endDate,
@@ -1040,7 +1042,7 @@ export async function onRequestPost(context) {
         cacheHit: false,
       };
       if (cacheKey) {
-        const cached = await loadR2CachedSnapshot(r2, cacheKey, calendarRevision, diagnostics);
+        const cached = await loadR2CachedSnapshot(r2, cacheKey, rosterRevision, diagnostics);
         if (cached) {
           diagnostics.cacheHit = true;
           return Response.json({
@@ -1068,7 +1070,7 @@ export async function onRequestPost(context) {
         diagnosticsRequested: body?.diagnostics === true,
       });
       if (snapshot) {
-        await storeR2CachedSnapshot(r2, cacheKey, calendarRevision, snapshot, diagnostics);
+        await storeR2CachedSnapshot(r2, cacheKey, rosterRevision, snapshot, diagnostics);
       }
       return Response.json({
         ok: true,
@@ -1856,7 +1858,7 @@ async function warmR2Snapshots(env) {
     doctorKey,
   });
   if (!snapshot) return;
-  const revision = await queryCalendarRevision(db, creatorEmail).catch(() => "");
+  const revision = await queryRosterRevision(db, creatorEmail).catch(() => "");
   const cacheKey = r2SnapshotCacheKey({
     mode: record.role === "creator" || record.role === "owner" ? "creator-account" : "claimed-account",
     ownerId: creatorEmail,

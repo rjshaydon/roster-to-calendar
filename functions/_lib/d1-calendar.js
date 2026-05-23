@@ -967,6 +967,26 @@ export async function queryCalendarRevision(db, ownerEmail = "") {
   ].join("|");
 }
 
+export async function queryRosterRevision(db, ownerEmail = "") {
+  if (!db?.prepare) return "";
+  await ensureCalendarSchema(db);
+  const email = normalizeEmail(ownerEmail);
+  const roster = await db.prepare(`
+    SELECT COUNT(*) AS active_file_count,
+           COALESCE(MAX(parsed_at), '') AS max_parsed_at
+    FROM roster_files WHERE active = 1
+  `).first();
+  const customEvents = email
+    ? await db.prepare("SELECT COUNT(*) AS count, COALESCE(MAX(updated_at), '') AS max_updated_at FROM custom_events WHERE owner_email = ?").bind(email).first()
+    : null;
+  return [
+    Number(roster?.active_file_count || 0),
+    String(roster?.max_parsed_at || ""),
+    Number(customEvents?.count || 0),
+    String(customEvents?.max_updated_at || ""),
+  ].join("|");
+}
+
 export async function upsertAccountMirror(db, record, options = {}) {
   if (!db?.prepare || !record?.email) return false;
   await ensureCalendarSchema(db);
