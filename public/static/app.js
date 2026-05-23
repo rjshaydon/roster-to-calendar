@@ -12032,7 +12032,22 @@ async function refreshSnapshotInBackground() {
   return snapshotRefreshPromise;
 }
 
+async function initVersionBar() {
+  const el = document.getElementById("versionBar");
+  if (!el) return;
+  try {
+    const res = await fetch("/api/version");
+    const data = await res.json();
+    const branch = escapeHtml(String(data.branch || ""));
+    const commit = escapeHtml(String(data.commit || ""));
+    el.textContent = branch && commit ? `${branch} · ${commit}` : branch || commit || "";
+  } catch {
+    el.textContent = "";
+  }
+}
+
 async function bootstrapApp() {
+  initVersionBar().catch(() => {});
   try {
     renderLoginState();
     if (!currentUserEmail || !currentUserPassword) {

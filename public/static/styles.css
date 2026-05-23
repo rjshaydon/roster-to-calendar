@@ -3087,3 +3087,21 @@ body[data-skin="console"] .panel {
     transform: translate3d(-36px, -18px, 0) scale(1.08);
   }
 }
+
+.version-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 999;
+  display: flex;
+  justify-content: flex-end;
+  padding: 1px 8px;
+  font-family: SF Mono, ui-monospace, Menlo, Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--muted);
+  background: rgba(20, 34, 42, 0.06);
+  user-select: none;
+  pointer-events: none;
+}
