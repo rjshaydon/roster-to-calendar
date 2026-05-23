@@ -12064,6 +12064,7 @@ function updateVersionBar() {
     else if (lastCacheDiagnostics.cacheNotChecked === true) cachePart = " · no refresh";
     else if (!lastCacheDiagnostics.cacheEngine) cachePart = "";
     else if (lastCacheDiagnostics.cacheHit === true) cachePart = " · cache hit";
+    else if (lastCacheDiagnostics.missReason) cachePart = ` · miss (${escapeHtml(lastCacheDiagnostics.missReason)})`;
     else cachePart = " · miss";
   }
   el.textContent = gitPart + cachePart;

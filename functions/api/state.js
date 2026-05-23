@@ -1034,9 +1034,15 @@ export async function onRequestPost(context) {
       const doctorKey = normalizeRosterName(body?.doctorKey || targetRecord.state?.session?.doctorKey || "");
       const cacheKey = r2SnapshotCacheKey({ mode, ownerId, doctorKey, startDate: requestedRange.startDate, endDate: requestedRange.endDate });
       const r2 = context.env.ROSTER_FILES;
+      const diagnostics = {
+        cacheEngine: "r2",
+        cacheKey,
+        cacheHit: false,
+      };
       if (cacheKey) {
-        const cached = await loadR2CachedSnapshot(r2, cacheKey, calendarRevision);
+        const cached = await loadR2CachedSnapshot(r2, cacheKey, calendarRevision, diagnostics);
         if (cached) {
+          diagnostics.cacheHit = true;
           return Response.json({
             ok: true,
             snapshot: cached.snapshot,
@@ -1045,19 +1051,10 @@ export async function onRequestPost(context) {
             snapshotStale: false,
             snapshotBuiltAt: cached.snapshot?.builtAt || "",
             calendarRevision,
-            diagnostics: {
-              cacheEngine: "r2",
-              cacheKey,
-              cacheHit: true,
-            },
+            diagnostics,
           });
         }
       }
-      const diagnostics = {
-        cacheEngine: "r2",
-        cacheKey,
-        cacheHit: false,
-      };
       const snapshot = await buildDerivedAccountSnapshot(context.env.ROSTER_DB, {
         role: prepared.role,
         record: targetRecord,
@@ -1071,11 +1068,7 @@ export async function onRequestPost(context) {
         diagnosticsRequested: body?.diagnostics === true,
       });
       if (snapshot) {
-        try {
-          await storeR2CachedSnapshot(r2, cacheKey, calendarRevision, snapshot);
-        } catch (error) {
-          diagnostics.cacheStoreError = String(error?.message || error).slice(0, 200);
-        }
+        await storeR2CachedSnapshot(r2, cacheKey, calendarRevision, snapshot, diagnostics);
       }
       return Response.json({
         ok: true,

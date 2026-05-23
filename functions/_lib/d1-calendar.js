@@ -2201,31 +2201,50 @@ export function r2SnapshotCacheKey({ mode, ownerId, doctorKey, startDate = "", e
   return `snap/${key}`;
 }
 
-export async function loadR2CachedSnapshot(r2, cacheKey, expectedRevision) {
+export async function loadR2CachedSnapshot(r2, cacheKey, expectedRevision, diagnostics) {
   if (!r2?.head || !cacheKey) return null;
   try {
     const head = await r2.head(cacheKey);
-    if (!head?.customMetadata) return null;
-    if (String(head.customMetadata.revision || "") !== String(expectedRevision || "")) return null;
+    if (!head) {
+      if (diagnostics) diagnostics.missReason = "head-not-found";
+      return null;
+    }
+    if (!head.customMetadata) {
+      if (diagnostics) diagnostics.missReason = "no-metadata";
+      return null;
+    }
+    const storedRevision = String(head.customMetadata.revision || "");
+    if (storedRevision !== String(expectedRevision || "")) {
+      if (diagnostics) diagnostics.missReason = `revision-mismatch stored=${storedRevision.slice(0,40)} expected=${String(expectedRevision || "").slice(0,40)}`;
+      return null;
+    }
     const object = await r2.get(cacheKey);
-    if (!object) return null;
+    if (!object) {
+      if (diagnostics) diagnostics.missReason = "get-null";
+      return null;
+    }
     const bytes = await object.arrayBuffer();
     const text = new TextDecoder().decode(bytes);
-    return { revision: String(expectedRevision || ""), snapshot: JSON.parse(text) };
+    const snapshot = JSON.parse(text);
+    return { revision: String(expectedRevision || ""), snapshot };
   } catch (error) {
-    console.error("R2 snapshot load error:", error?.message || error);
+    if (diagnostics) diagnostics.missReason = `error:${String(error?.message || error).slice(0,100)}`;
     return null;
   }
 }
 
-export async function storeR2CachedSnapshot(r2, cacheKey, revision, snapshot) {
-  if (!r2?.put || !cacheKey || revision == null || !snapshot) return;
+export async function storeR2CachedSnapshot(r2, cacheKey, revision, snapshot, diagnostics) {
+  if (!r2?.put || !cacheKey || revision == null || !snapshot) {
+    if (diagnostics) diagnostics.storeSkipped = "missing-param";
+    return;
+  }
   try {
     await r2.put(cacheKey, JSON.stringify(snapshot), {
       customMetadata: { revision: String(revision) },
     });
+    if (diagnostics) diagnostics.storedAt = new Date().toISOString();
   } catch (error) {
-    console.error("R2 snapshot store error:", error?.message || error);
+    if (diagnostics) diagnostics.cacheStoreError = String(error?.message || error).slice(0, 200);
   }
 }
 
