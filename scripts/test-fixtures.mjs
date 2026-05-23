@@ -545,8 +545,8 @@ assert.match(
 );
 assert.match(
   d1CalendarSource,
-  /SELECT[\s\S]*roster_events\.doctor_key,[\s\S]*roster_events\.display_name,[\s\S]*roster_events\.source_type,[\s\S]*roster_events\.event_json[\s\S]*FROM roster_events[\s\S]*INNER JOIN roster_files/,
-  "coworker lookup should qualify selected roster_events columns across the roster_files join",
+  /SELECT DISTINCT[\s\S]*od\.event_json,[\s\S]*od\.doctor_key,[\s\S]*od\.display_name,[\s\S]*od\.source_type[\s\S]*FROM roster_daily_overlaps/,
+  "coworker lookup should select from roster_daily_overlaps with DISTINCT deduplication",
 );
 const caseyFormData = new FormData();
 caseyFormData.append("rosterFiles", new File([caseyBytes], "Casey_Term_2_2026_DRAFT.xlsm", { type: "application/vnd.ms-excel.sheet.macroEnabled.12" }));
@@ -1058,6 +1058,7 @@ class MemoryD1 {
     this.parserRules = new Map();
     this.parserRuleSuggestions = new Map();
     this.doctorProfiles = new Map();
+    this.dailyOverlaps = new Map();
     this.consoleMessages = [];
     this.nextConsoleMessageId = 1;
     this.failNextEventInsert = false;
@@ -1085,6 +1086,7 @@ class MemoryD1 {
       "parserRules",
       "parserRuleSuggestions",
       "doctorProfiles",
+      "dailyOverlaps",
     ].map((key) => [key, new Map(this[key])]));
     try {
       const results = [];
@@ -1421,6 +1423,33 @@ class MemoryD1Statement {
       if (file) file.active = args[0];
       return { success: true };
     }
+    if (sql.includes("CREATE TABLE IF NOT EXISTS roster_daily_overlaps")) {
+      return { success: true };
+    }
+    if (sql.startsWith("INSERT INTO roster_daily_overlaps")) {
+      for (let index = 0; index < args.length; index += 8) {
+        const id = args[index + 4];
+        this.db.dailyOverlaps.set(id, {
+          date: args[index],
+          source_type: args[index + 1],
+          doctor_key: args[index + 2],
+          display_name: args[index + 3],
+          event_id: id,
+          event_json: args[index + 5],
+          start_ts: args[index + 6],
+          end_ts: args[index + 7],
+        });
+      }
+      return { success: true };
+    }
+    if (sql.startsWith("DELETE FROM roster_daily_overlaps")) {
+      const pattern = args[0];
+      const prefix = pattern.replace(/%/g, "");
+      for (const key of [...this.db.dailyOverlaps.keys()]) {
+        if (key.startsWith(prefix)) this.db.dailyOverlaps.delete(key);
+      }
+      return { success: true };
+    }
     throw new Error(`Unsupported MemoryD1 run SQL: ${sql}`);
   }
 
@@ -1576,6 +1605,64 @@ class MemoryD1Statement {
           .filter((issue) => issue.start_date <= end && issue.start_date >= start)
           .sort((left, right) => left.start_date.localeCompare(right.start_date))
           .map((issue) => ({ issue_json: issue.issue_json })),
+      };
+    }
+    if (sql.includes("FROM roster_daily_overlaps AS mine")) {
+      const overlapKeyCount = (sql.match(/mine\.doctor_key IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1;
+      const overlapKeys = new Set(args.slice(0, overlapKeyCount));
+      const start = args[overlapKeyCount];
+      const end = args[overlapKeyCount + 1];
+      const sourceOffset = overlapKeyCount + 4;
+      const hasSourceFilter = sql.includes("od.source_type IN");
+      const hasDoctorFilter = sql.includes("od.doctor_key IN");
+      const hasExcludedDoctorFilter = sql.includes("od.doctor_key NOT IN");
+      const sourceCount = hasSourceFilter ? (sql.match(/od\.source_type IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1 : 0;
+      const doctorCount = hasDoctorFilter ? (sql.match(/od\.doctor_key IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1 : 0;
+      const excludedDoctorCount = hasExcludedDoctorFilter ? (sql.match(/od\.doctor_key NOT IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1 : 0;
+      const sourceTypes = new Set(args.slice(sourceOffset, sourceOffset + sourceCount));
+      const doctorKeys = new Set(args.slice(sourceOffset + sourceCount, sourceOffset + sourceCount + doctorCount));
+      const excludedDoctorKeys = new Set(args.slice(sourceOffset + sourceCount + doctorCount, sourceOffset + sourceCount + doctorCount + excludedDoctorCount));
+      const myEvents = [...this.db.events.values()]
+        .filter((event) => this.db.files.get(event.file_id)?.active === 1)
+        .filter((event) => overlapKeys.has(event.doctor_key))
+        .filter((event) => event.start_date <= end && event.end_date >= start);
+      const results = [...this.db.events.values()]
+          .filter((event) => this.db.files.get(event.file_id)?.active === 1)
+          .filter((event) => event.start_date <= end && event.end_date >= start)
+          .filter((event) => myEvents.some((mine) => mine.source_type === event.source_type && event.start_date <= mine.end_date && event.end_date >= mine.start_date))
+          .filter((event) => !sourceTypes.size || sourceTypes.has(event.source_type))
+          .filter((event) => !doctorKeys.size || doctorKeys.has(event.doctor_key))
+          .filter((event) => !excludedDoctorKeys.has(event.doctor_key))
+          .filter((event, index, events) => events.findIndex((item) => item.id === event.id) === index);
+      if (!sql.includes("event_json")) {
+        return {
+          results: results
+            .map((event) => ({ doctor_key: event.doctor_key, display_name: event.display_name, source_type: event.source_type }))
+            .filter((event, index, eventsList) => eventsList.findIndex((item) => item.doctor_key === event.doctor_key && item.source_type === event.source_type) === index),
+        };
+      }
+      return { results };
+    }
+    if (sql.includes("FROM roster_daily_overlaps") && !sql.includes("AS mine")) {
+      const start = args[0];
+      const end = args[1];
+      const hasSourceFilter = sql.includes("od.source_type IN");
+      const hasDoctorFilter = sql.includes("od.doctor_key IN");
+      const hasExcludedDoctorFilter = sql.includes("od.doctor_key NOT IN");
+      const sourceCount = hasSourceFilter ? (sql.match(/od\.source_type IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1 : 0;
+      const doctorCount = hasDoctorFilter ? (sql.match(/od\.doctor_key IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1 : 0;
+      const excludedDoctorCount = hasExcludedDoctorFilter ? (sql.match(/od\.doctor_key NOT IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1 : 0;
+      const sourceTypes = new Set(args.slice(2, 2 + sourceCount));
+      const doctorKeys = new Set(args.slice(2 + sourceCount, 2 + sourceCount + doctorCount));
+      const excludedDoctorKeys = new Set(args.slice(2 + sourceCount + doctorCount, 2 + sourceCount + doctorCount + excludedDoctorCount));
+      return {
+        results: [...this.db.events.values()]
+          .filter((event) => this.db.files.get(event.file_id)?.active === 1)
+          .filter((event) => event.start_date <= end && event.end_date >= start)
+          .filter((event) => !sourceTypes.size || sourceTypes.has(event.source_type))
+          .filter((event) => !doctorKeys.size || doctorKeys.has(event.doctor_key))
+          .filter((event) => !excludedDoctorKeys.has(event.doctor_key))
+          .filter((event, index, events) => events.findIndex((item) => item.id === event.id) === index),
       };
     }
     if (sql.includes("FROM roster_events AS mine")) {
