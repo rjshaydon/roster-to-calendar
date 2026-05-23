@@ -12063,9 +12063,20 @@ function updateVersionBar() {
     if (lastCacheDiagnostics.cacheStoreError) cachePart = ` · store error: ${escapeHtml(lastCacheDiagnostics.cacheStoreError)}`;
     else if (lastCacheDiagnostics.cacheNotChecked === true) cachePart = " · no refresh";
     else if (!lastCacheDiagnostics.cacheEngine) cachePart = "";
-    else if (lastCacheDiagnostics.cacheHit === true) cachePart = " · cache hit";
-    else if (lastCacheDiagnostics.missReason) cachePart = ` · miss (${escapeHtml(lastCacheDiagnostics.missReason)})`;
-    else cachePart = " · miss";
+    else if (lastCacheDiagnostics.cacheHit === true) {
+      const r2Ms = lastCacheDiagnostics.r2LoadMs;
+      const size = lastCacheDiagnostics.snapshotSizeBytes;
+      const timing = r2Ms != null ? ` ${r2Ms}ms` : "";
+      const sizeStr = size != null ? ` ${(size / 1024).toFixed(0)}KB` : "";
+      cachePart = ` · cache hit${timing}${sizeStr}`;
+    }     else if (lastCacheDiagnostics.missReason) cachePart = ` · miss (${escapeHtml(lastCacheDiagnostics.missReason)}${lastCacheDiagnostics.buildMs != null ? ` ${lastCacheDiagnostics.buildMs}ms` : ""})`;
+    else {
+      const buildMs = lastCacheDiagnostics.buildMs;
+      const size = lastCacheDiagnostics.snapshotSizeBytes;
+      const timing = buildMs != null ? ` ${buildMs}ms` : "";
+      const sizeStr = size != null ? ` ${(size / 1024).toFixed(0)}KB` : "";
+      cachePart = ` · miss${timing}${sizeStr}`;
+    }
   }
   el.textContent = gitPart + cachePart;
 }

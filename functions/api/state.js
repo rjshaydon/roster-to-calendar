@@ -1035,9 +1035,12 @@ export async function onRequestPost(context) {
       const cacheKey = r2SnapshotCacheKey({ mode, ownerId, doctorKey, startDate: requestedRange.startDate, endDate: requestedRange.endDate });
       const r2 = context.env.ROSTER_FILES;
       const diagnostics = { cacheEngine: "r2", cacheKey, cacheHit: false };
+      const t0 = Date.now();
       const cached = cacheKey ? await loadR2CachedSnapshot(r2, cacheKey) : null;
+      diagnostics.r2LoadMs = Date.now() - t0;
       if (cached) {
         diagnostics.cacheHit = true;
+        diagnostics.snapshotSizeBytes = JSON.stringify(cached).length;
         const buildContext = {
           role: prepared.role,
           record: targetRecord,
@@ -1060,6 +1063,7 @@ export async function onRequestPost(context) {
             diagnostics,
           });
       }
+      const tb0 = Date.now();
       const snapshot = await buildDerivedAccountSnapshot(context.env.ROSTER_DB, {
         role: prepared.role,
         record: targetRecord,
@@ -1072,7 +1076,9 @@ export async function onRequestPost(context) {
         diagnostics,
         diagnosticsRequested: body?.diagnostics === true,
       });
+      diagnostics.buildMs = Date.now() - tb0;
       if (snapshot) {
+        diagnostics.snapshotSizeBytes = JSON.stringify(snapshot).length;
         await storeR2CachedSnapshot(r2, cacheKey, snapshot, calendarRevision);
       }
       return Response.json({
