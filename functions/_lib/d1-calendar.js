@@ -2208,7 +2208,8 @@ export async function loadCachedSnapshot(kv, key) {
     const raw = await kv.get(key, "json");
     if (!raw || typeof raw !== "object") return null;
     return { revision: String(raw.revision || ""), snapshot: raw.snapshot || null };
-  } catch {
+  } catch (error) {
+    console.error("ROSTER_CACHE load error:", error?.message || error);
     return null;
   }
 }
@@ -2219,8 +2220,8 @@ export async function storeCachedSnapshot(kv, key, revision, snapshot) {
     await kv.put(key, JSON.stringify({ revision, snapshot }), {
       expirationTtl: 86400 * 7,
     });
-  } catch {
-    /* non-blocking cache write */
+  } catch (error) {
+    console.error("ROSTER_CACHE store error:", error?.message || error);
   }
 }
 
@@ -2236,8 +2237,8 @@ export async function deleteCachedSnapshotsByPrefix(kv, prefix) {
       }
       cursor = result.cursor;
     } while (cursor);
-  } catch {
-    /* non-blocking cache cleanup */
+  } catch (error) {
+    console.error("ROSTER_CACHE delete-by-prefix error:", error?.message || error);
   }
 }
 
@@ -2253,7 +2254,7 @@ export async function invalidateCachedSnapshotsForOwner(kv, ownerId) {
       }
       cursor = result.cursor;
     } while (cursor);
-  } catch {
-    /* non-blocking cache cleanup */
+  } catch (error) {
+    console.error("ROSTER_CACHE invalidate error:", error?.message || error);
   }
 }

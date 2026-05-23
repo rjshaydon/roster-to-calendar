@@ -292,6 +292,7 @@ let currentSnapshot = null;
 let currentSnapshotStale = false;
 let currentSnapshotBuiltAt = "";
 let currentCalendarRevision = "";
+let lastCacheDiagnostics = null;
 let snapshotRefreshPromise = null;
 let pendingPreviewSnapToToday = false;
 let insightWarmupTimer = 0;
@@ -10274,6 +10275,8 @@ async function loadCloudCalendarEvents(options = {}) {
   });
   const data = await readJsonResponse(response, "Calendar load failed.");
   currentCalendarRevision = String(data.calendarRevision || currentCalendarRevision || "");
+  lastCacheDiagnostics = (data.diagnostics && typeof data.diagnostics === "object") ? data.diagnostics : null;
+  updateVersionBar();
   if (data.snapshotCurrent === true) {
     if (currentSnapshot && currentCalendarRevision) currentSnapshot.calendarRevision = currentCalendarRevision;
     if (currentSnapshot) saveCalendarSnapshotCache(currentSnapshot);
@@ -12040,10 +12043,29 @@ async function initVersionBar() {
     const data = await res.json();
     const branch = escapeHtml(String(data.branch || ""));
     const commit = escapeHtml(String(data.commit || ""));
-    el.textContent = branch && commit ? `${branch} · ${commit}` : branch || commit || "";
+    el.dataset.branch = branch;
+    el.dataset.commit = commit;
+    updateVersionBar();
   } catch {
-    el.textContent = "";
+    const el2 = document.getElementById("versionBar");
+    if (el2) el2.textContent = "";
   }
+}
+
+function updateVersionBar() {
+  const el = document.getElementById("versionBar");
+  if (!el) return;
+  const branch = el.dataset.branch || "";
+  const commit = el.dataset.commit || "";
+  const gitPart = branch && commit ? `${branch} · ${commit}` : branch || commit || "";
+  let cachePart = "";
+  if (lastCacheDiagnostics) {
+    if (lastCacheDiagnostics.cacheHit === true) cachePart = " · cache hit";
+    else if (lastCacheDiagnostics.cacheNotChecked === true) cachePart = " · no refresh";
+    else if (lastCacheDiagnostics.cacheBinding === false) cachePart = " · no binding";
+    else cachePart = " · miss";
+  }
+  el.textContent = gitPart + cachePart;
 }
 
 async function bootstrapApp() {

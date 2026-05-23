@@ -1025,7 +1025,10 @@ export async function onRequestPost(context) {
           snapshotStale: false,
           snapshotBuiltAt: "",
           calendarRevision,
-          diagnostics: {},
+          diagnostics: {
+            cacheNotChecked: true,
+            reason: "cachedRevision matched",
+          },
         });
       }
       const requestedRange = boundedCalendarEventRange({
@@ -1048,11 +1051,19 @@ export async function onRequestPost(context) {
             snapshotStale: false,
             snapshotBuiltAt: cached.snapshot?.builtAt || "",
             calendarRevision,
-            diagnostics: {},
+            diagnostics: {
+              cacheBinding: true,
+              cacheKey,
+              cacheHit: true,
+            },
           });
         }
       }
-      const diagnostics = {};
+      const diagnostics = {
+        cacheBinding: Boolean(kv),
+        cacheKey: kv ? cacheKey : null,
+        cacheHit: false,
+      };
       const snapshot = await buildDerivedAccountSnapshot(context.env.ROSTER_DB, {
         role: prepared.role,
         record: targetRecord,
