@@ -967,26 +967,6 @@ export async function queryCalendarRevision(db, ownerEmail = "") {
   ].join("|");
 }
 
-export async function queryRosterRevision(db, ownerEmail = "") {
-  if (!db?.prepare) return "";
-  await ensureCalendarSchema(db);
-  const email = normalizeEmail(ownerEmail);
-  const roster = await db.prepare(`
-    SELECT COUNT(*) AS active_file_count,
-           COALESCE(MAX(parsed_at), '') AS max_parsed_at
-    FROM roster_files WHERE active = 1
-  `).first();
-  const customEvents = email
-    ? await db.prepare("SELECT COUNT(*) AS count, COALESCE(MAX(updated_at), '') AS max_updated_at FROM custom_events WHERE owner_email = ?").bind(email).first()
-    : null;
-  return [
-    Number(roster?.active_file_count || 0),
-    String(roster?.max_parsed_at || ""),
-    Number(customEvents?.count || 0),
-    String(customEvents?.max_updated_at || ""),
-  ].join("|");
-}
-
 export async function upsertAccountMirror(db, record, options = {}) {
   if (!db?.prepare || !record?.email) return false;
   await ensureCalendarSchema(db);
@@ -2221,50 +2201,25 @@ export function r2SnapshotCacheKey({ mode, ownerId, doctorKey, startDate = "", e
   return `snap/${key}`;
 }
 
-export async function loadR2CachedSnapshot(r2, cacheKey, expectedRevision, diagnostics) {
-  if (!r2?.head || !cacheKey) return null;
+export async function loadR2CachedSnapshot(r2, cacheKey) {
+  if (!r2?.get || !cacheKey) return null;
   try {
-    const head = await r2.head(cacheKey);
-    if (!head) {
-      if (diagnostics) diagnostics.missReason = "head-not-found";
-      return null;
-    }
-    if (!head.customMetadata) {
-      if (diagnostics) diagnostics.missReason = "no-metadata";
-      return null;
-    }
-    const storedRevision = String(head.customMetadata.revision || "");
-    if (storedRevision !== String(expectedRevision || "")) {
-      if (diagnostics) diagnostics.missReason = `revision-mismatch stored=${storedRevision.slice(0,40)} expected=${String(expectedRevision || "").slice(0,40)}`;
-      return null;
-    }
     const object = await r2.get(cacheKey);
-    if (!object) {
-      if (diagnostics) diagnostics.missReason = "get-null";
-      return null;
-    }
+    if (!object) return null;
     const bytes = await object.arrayBuffer();
-    const text = new TextDecoder().decode(bytes);
-    const snapshot = JSON.parse(text);
-    return { revision: String(expectedRevision || ""), snapshot };
-  } catch (error) {
-    if (diagnostics) diagnostics.missReason = `error:${String(error?.message || error).slice(0,100)}`;
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
     return null;
   }
 }
 
-export async function storeR2CachedSnapshot(r2, cacheKey, revision, snapshot, diagnostics) {
-  if (!r2?.put || !cacheKey || revision == null || !snapshot) {
-    if (diagnostics) diagnostics.storeSkipped = "missing-param";
-    return;
-  }
+export async function storeR2CachedSnapshot(r2, cacheKey, snapshot, revision) {
+  if (!r2?.put || !cacheKey || !snapshot) return;
   try {
-    await r2.put(cacheKey, JSON.stringify(snapshot), {
-      customMetadata: { revision: String(revision) },
-    });
-    if (diagnostics) diagnostics.storedAt = new Date().toISOString();
+    const options = revision != null ? { customMetadata: { revision: String(revision) } } : {};
+    await r2.put(cacheKey, JSON.stringify(snapshot), options);
   } catch (error) {
-    if (diagnostics) diagnostics.cacheStoreError = String(error?.message || error).slice(0, 200);
+    console.error("R2 snapshot store error:", error?.message || error);
   }
 }
 

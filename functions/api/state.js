@@ -30,7 +30,6 @@ import {
   queryCanonicalDoctors,
   queryActiveRosterFileRefs,
   queryCalendarRevision,
-  queryRosterRevision,
   queryDoctorSeniorities,
   queryDoctorEventsForFileDoctorPairs,
   queryDoctorIssuesForFileDoctorPairs,
@@ -1026,7 +1025,6 @@ export async function onRequestPost(context) {
           },
         });
       }
-      const rosterRevision = await queryRosterRevision(context.env.ROSTER_DB, targetRecord.email).catch(() => "");
       const requestedRange = boundedCalendarEventRange({
         startDate: body?.startDate,
         endDate: body?.endDate,
@@ -1036,26 +1034,31 @@ export async function onRequestPost(context) {
       const doctorKey = normalizeRosterName(body?.doctorKey || targetRecord.state?.session?.doctorKey || "");
       const cacheKey = r2SnapshotCacheKey({ mode, ownerId, doctorKey, startDate: requestedRange.startDate, endDate: requestedRange.endDate });
       const r2 = context.env.ROSTER_FILES;
-      const diagnostics = {
-        cacheEngine: "r2",
-        cacheKey,
-        cacheHit: false,
-      };
-      if (cacheKey) {
-        const cached = await loadR2CachedSnapshot(r2, cacheKey, rosterRevision, diagnostics);
-        if (cached) {
-          diagnostics.cacheHit = true;
+      const diagnostics = { cacheEngine: "r2", cacheKey, cacheHit: false };
+      const cached = cacheKey ? await loadR2CachedSnapshot(r2, cacheKey) : null;
+      if (cached) {
+        diagnostics.cacheHit = true;
+        const buildContext = {
+          role: prepared.role,
+          record: targetRecord,
+          state: prepared.state,
+          claims: prepared.claims,
+          index: null,
+          startDate: requestedRange.startDate,
+          endDate: requestedRange.endDate,
+          doctorKey: normalizeRosterName(body?.doctorKey || ""),
+        };
+        context.waitUntil(revalidateCalendarSnapshot(context.env, cacheKey, buildContext).catch(() => {}));
           return Response.json({
             ok: true,
-            snapshot: cached.snapshot,
+            snapshot: cached,
             snapshotCurrent: false,
-            snapshotAvailable: Boolean(cached.snapshot),
+            snapshotAvailable: true,
             snapshotStale: false,
-            snapshotBuiltAt: cached.snapshot?.builtAt || "",
+            snapshotBuiltAt: cached?.builtAt || "",
             calendarRevision,
             diagnostics,
           });
-        }
       }
       const snapshot = await buildDerivedAccountSnapshot(context.env.ROSTER_DB, {
         role: prepared.role,
@@ -1070,7 +1073,7 @@ export async function onRequestPost(context) {
         diagnosticsRequested: body?.diagnostics === true,
       });
       if (snapshot) {
-        await storeR2CachedSnapshot(r2, cacheKey, rosterRevision, snapshot, diagnostics);
+        await storeR2CachedSnapshot(r2, cacheKey, snapshot, calendarRevision);
       }
       return Response.json({
         ok: true,
@@ -1858,7 +1861,7 @@ async function warmR2Snapshots(env) {
     doctorKey,
   });
   if (!snapshot) return;
-  const revision = await queryRosterRevision(db, creatorEmail).catch(() => "");
+  const revision = await queryCalendarRevision(db, creatorEmail).catch(() => "");
   const cacheKey = r2SnapshotCacheKey({
     mode: record.role === "creator" || record.role === "owner" ? "creator-account" : "claimed-account",
     ownerId: creatorEmail,
@@ -1866,7 +1869,20 @@ async function warmR2Snapshots(env) {
     startDate: settings.dateFrom || "",
     endDate: settings.dateTo || "",
   });
-  await storeR2CachedSnapshot(r2, cacheKey, revision, snapshot);
+  await storeR2CachedSnapshot(r2, cacheKey, snapshot, revision);
+}
+
+async function revalidateCalendarSnapshot(env, cacheKey, buildContext) {
+  const db = env?.ROSTER_DB;
+  const r2 = env?.ROSTER_FILES;
+  if (!db?.prepare || !r2?.head || !cacheKey) return;
+  const revision = await queryCalendarRevision(db, buildContext?.record?.email || "").catch(() => "");
+  const head = await r2.head(cacheKey).catch(() => null);
+  if (head?.customMetadata && String(head.customMetadata.revision || "") === revision) return;
+  const snapshot = await buildDerivedAccountSnapshot(db, buildContext);
+  if (snapshot) {
+    await storeR2CachedSnapshot(r2, cacheKey, snapshot, revision);
+  }
 }
 
 function rawRosterObjectKey(fileId) {
