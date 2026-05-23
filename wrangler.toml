@@ -11,11 +11,6 @@ database_name = "roster-converter-calendar"
 database_id = "237d0d52-3a7c-4e02-8648-9f4dedbc1cb0"
 preview_database_id = "237d0d52-3a7c-4e02-8648-9f4dedbc1cb0"
 
-[[kv_namespaces]]
-binding = "ROSTER_CACHE"
-id = "8856c13d0a144d9fa2cf8ae0d9c76cf7"
-preview_id = "8856c13d0a144d9fa2cf8ae0d9c76cf7"
-
 [[r2_buckets]]
 binding = "ROSTER_FILES"
 bucket_name = "roster-converter-source-files"

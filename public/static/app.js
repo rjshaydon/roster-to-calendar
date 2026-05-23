@@ -12063,7 +12063,7 @@ function updateVersionBar() {
     if (lastCacheDiagnostics.cacheStoreError) cachePart = ` · store error: ${escapeHtml(lastCacheDiagnostics.cacheStoreError)}`;
     else if (lastCacheDiagnostics.cacheHit === true) cachePart = " · cache hit";
     else if (lastCacheDiagnostics.cacheNotChecked === true) cachePart = " · no refresh";
-    else if (lastCacheDiagnostics.cacheBinding === false) cachePart = " · no binding";
+    else if (!lastCacheDiagnostics.cacheEngine) cachePart = " · no d1";
     else cachePart = " · miss";
   }
   el.textContent = gitPart + cachePart;

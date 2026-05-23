@@ -1450,6 +1450,30 @@ class MemoryD1Statement {
       }
       return { success: true };
     }
+    if (sql.includes("CREATE TABLE IF NOT EXISTS roster_snapshots")) {
+      if (!this.db.rosterSnapshots) this.db.rosterSnapshots = new Map();
+      return { success: true };
+    }
+    if (sql.startsWith("INSERT OR REPLACE INTO roster_snapshots")) {
+      if (!this.db.rosterSnapshots) this.db.rosterSnapshots = new Map();
+      this.db.rosterSnapshots.set(args[0], {
+        cache_key: args[0],
+        owner_email: args[1],
+        revision: args[2],
+        snapshot_json: args[3],
+        built_at: args[4],
+      });
+      return { success: true };
+    }
+    if (sql.startsWith("DELETE FROM roster_snapshots WHERE owner_email = ?")) {
+      const ownerEmail = args[0];
+      if (this.db.rosterSnapshots) {
+        for (const [key, row] of this.db.rosterSnapshots) {
+          if (row.owner_email === ownerEmail) this.db.rosterSnapshots.delete(key);
+        }
+      }
+      return { success: true };
+    }
     throw new Error(`Unsupported MemoryD1 run SQL: ${sql}`);
   }
 
@@ -2011,6 +2035,9 @@ class MemoryD1Statement {
     if (sql.includes("FROM raw_roster_files") && sql.includes("WHERE file_id = ?")) {
       return this.db.rawFiles.get(args[0]) || null;
     }
+    if (sql.includes("FROM roster_snapshots WHERE cache_key = ?")) {
+      return this.db.rosterSnapshots?.get(args[0]) || null;
+    }
     throw new Error(`Unsupported MemoryD1 first SQL: ${sql}`);
   }
 }
@@ -2094,6 +2121,7 @@ async function postStateRaw(store, payload, db = null) {
       headers: { "content-type": "application/json" },
     }),
     env: { ROSTER_DB: rosterDb, ROSTER_FILES: store?.r2 || new MemoryR2() },
+    waitUntil: () => {},
   });
   const body = await response.json();
   return { response, body };

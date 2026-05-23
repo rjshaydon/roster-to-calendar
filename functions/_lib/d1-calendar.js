@@ -283,6 +283,16 @@ async function ensureCalendarSchemaUncached(db) {
   `).run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_daily_overlaps_doctor ON roster_daily_overlaps (doctor_key, date)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_daily_overlaps_date_source ON roster_daily_overlaps (date, source_type)").run();
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS roster_snapshots (
+      cache_key TEXT PRIMARY KEY,
+      owner_email TEXT NOT NULL,
+      revision TEXT NOT NULL,
+      snapshot_json TEXT NOT NULL,
+      built_at TEXT NOT NULL
+    )
+  `).run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_snapshots_owner ON roster_snapshots (owner_email)").run();
   await ensureColumn(db, "raw_roster_files", "source_type", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn(db, "raw_roster_files", "size", "INTEGER NOT NULL DEFAULT 0");
   await ensureColumn(db, "raw_roster_files", "last_modified", "INTEGER NOT NULL DEFAULT 0");
@@ -2193,69 +2203,43 @@ function sanitizeEvent(value) {
   };
 }
 
-// ── KV Snapshot Cache ──────────────────────────────────────────────────────
+// ── D1 Snapshot Cache ───────────────────────────────────────────────────────
 
-const CACHE_KEY_PREFIX = "snap:";
-
-export function snapshotCacheKey({ mode, ownerId, doctorKey, startDate = "", endDate = "" } = {}) {
+export function d1SnapshotCacheKey({ mode, ownerId, doctorKey, startDate = "", endDate = "" } = {}) {
   const parts = [mode, ownerId, doctorKey, String(startDate).slice(0, 10), String(endDate).slice(0, 10)];
-  return CACHE_KEY_PREFIX + parts.map((part) => String(part || "").replace(/:/g, "_")).join(":");
+  return parts.map((part) => String(part || "").replace(/:/g, "_")).join(":");
 }
 
-export async function loadCachedSnapshot(kv, key) {
-  if (!kv?.get) return null;
+export async function loadD1Snapshot(db, cacheKey) {
+  if (!db?.prepare || !cacheKey) return null;
   try {
-    const raw = await kv.get(key, "json");
-    if (!raw || typeof raw !== "object") return null;
-    return { revision: String(raw.revision || ""), snapshot: raw.snapshot || null };
-  } catch (error) {
-    console.error("ROSTER_CACHE load error:", error?.message || error);
+    const row = await db.prepare("SELECT revision, snapshot_json FROM roster_snapshots WHERE cache_key = ?").bind(cacheKey).first();
+    if (!row) return null;
+    let snapshot = null;
+    try { snapshot = JSON.parse(row.snapshot_json || "null"); } catch { return null; }
+    return { revision: String(row.revision || ""), snapshot };
+  } catch {
     return null;
   }
 }
 
-export async function storeCachedSnapshot(kv, key, revision, snapshot) {
-  if (!kv?.put || !key || !revision || !snapshot) return;
+export async function storeD1Snapshot(db, cacheKey, ownerEmail, revision, snapshot) {
+  if (!db?.prepare || !cacheKey || !revision || !snapshot) return;
   try {
-    await kv.put(key, JSON.stringify({ revision, snapshot }), {
-      expirationTtl: 86400 * 7,
-    });
+    await db.prepare(`
+      INSERT OR REPLACE INTO roster_snapshots (cache_key, owner_email, revision, snapshot_json, built_at)
+      VALUES (?, ?, ?, ?, ?)
+    `).bind(cacheKey, ownerEmail, revision, JSON.stringify(snapshot), new Date().toISOString()).run();
   } catch (error) {
-    console.error("ROSTER_CACHE store error:", error?.message || error);
-    throw error;
+    console.error("D1 snapshot store error:", error?.message || error);
   }
 }
 
-export async function deleteCachedSnapshotsByPrefix(kv, prefix) {
-  if (!kv?.list || !prefix) return;
+export async function deleteD1SnapshotsForOwner(db, ownerEmail) {
+  if (!db?.prepare || !ownerEmail) return;
   try {
-    const fullPrefix = CACHE_KEY_PREFIX + prefix;
-    let cursor;
-    do {
-      const result = await kv.list({ prefix: fullPrefix, cursor });
-      if (result.keys.length) {
-        await kv.delete(result.keys.map((k) => k.name));
-      }
-      cursor = result.cursor;
-    } while (cursor);
+    await db.prepare("DELETE FROM roster_snapshots WHERE owner_email = ?").bind(ownerEmail).run();
   } catch (error) {
-    console.error("ROSTER_CACHE delete-by-prefix error:", error?.message || error);
-  }
-}
-
-export async function invalidateCachedSnapshotsForOwner(kv, ownerId) {
-  if (!kv?.list || !ownerId) return;
-  try {
-    const searchPrefix = `${CACHE_KEY_PREFIX}${String(ownerId || "").replace(/:/g, "_")}`;
-    let cursor;
-    do {
-      const result = await kv.list({ prefix: searchPrefix, cursor });
-      if (result.keys.length) {
-        await kv.delete(result.keys.map((k) => k.name));
-      }
-      cursor = result.cursor;
-    } while (cursor);
-  } catch (error) {
-    console.error("ROSTER_CACHE invalidate error:", error?.message || error);
+    console.error("D1 snapshot delete error:", error?.message || error);
   }
 }

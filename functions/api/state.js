@@ -49,10 +49,10 @@ import {
   upsertDoctorProfileMirror,
   upsertDerivedRosterFile,
   upsertRawRosterFile,
-  snapshotCacheKey,
-  loadCachedSnapshot,
-  storeCachedSnapshot,
-  invalidateCachedSnapshotsForOwner,
+  d1SnapshotCacheKey,
+  loadD1Snapshot,
+  storeD1Snapshot,
+  deleteD1SnapshotsForOwner,
 } from "../_lib/d1-calendar.js";
 
 const CREATOR_EMAIL = "rhaydon@gmail.com";
@@ -328,10 +328,8 @@ export async function onRequestPost(context) {
       await propagateDerivedShiftCodeIssues(context.env.ROSTER_DB, body?.doctors || [], body?.issuesByDoctor || {});
       const supersession = await reconcileRosterFileSupersession(context.env.ROSTER_DB, filePayload, { uploaderEmail: email });
       await refreshCanonicalDoctors(context.env.ROSTER_DB);
-      if (context.env.ROSTER_CACHE) {
-        invalidateCachedSnapshotsForOwner(context.env.ROSTER_CACHE, normalizeEmail(CREATOR_EMAIL)).catch(() => {});
-        warmCreatorSnapshotCache(context.env).catch(() => {});
-      }
+      deleteD1SnapshotsForOwner(context.env.ROSTER_DB, normalizeEmail(CREATOR_EMAIL)).catch(() => {});
+      context.waitUntil(warmD1Snapshots(context.env).catch(() => {}));
       if (body?.skipStatus === true) {
         return Response.json({
           ok: true,
@@ -399,10 +397,8 @@ export async function onRequestPost(context) {
       await deleteDerivedRosterFile(context.env.ROSTER_DB, fileId);
       await refreshCanonicalDoctors(context.env.ROSTER_DB);
       await deleteRawRosterFile(context.env.ROSTER_DB, fileId);
-      if (context.env.ROSTER_CACHE) {
-        invalidateCachedSnapshotsForOwner(context.env.ROSTER_CACHE, normalizeEmail(CREATOR_EMAIL)).catch(() => {});
-        warmCreatorSnapshotCache(context.env).catch(() => {});
-      }
+      deleteD1SnapshotsForOwner(context.env.ROSTER_DB, normalizeEmail(CREATOR_EMAIL)).catch(() => {});
+      context.waitUntil(warmD1Snapshots(context.env).catch(() => {}));
       const status = await calendarStoreStatus(null, context.env.ROSTER_DB, { doctorKey: OWNER_DOCTOR_KEY });
       return Response.json({ ok: true, reset: fileId, ...status });
     }
@@ -422,10 +418,8 @@ export async function onRequestPost(context) {
       await Promise.all(removedFileIds.map((id) => deleteDerivedRosterFile(context.env.ROSTER_DB, id).catch(() => null)));
       await refreshCanonicalDoctors(context.env.ROSTER_DB);
       await Promise.all(removedFileIds.map((id) => deleteRawRosterFile(context.env.ROSTER_DB, id).catch(() => null)));
-      if (context.env.ROSTER_CACHE) {
-        invalidateCachedSnapshotsForOwner(context.env.ROSTER_CACHE, normalizeEmail(CREATOR_EMAIL)).catch(() => {});
-        warmCreatorSnapshotCache(context.env).catch(() => {});
-      }
+      deleteD1SnapshotsForOwner(context.env.ROSTER_DB, normalizeEmail(CREATOR_EMAIL)).catch(() => {});
+      context.waitUntil(warmD1Snapshots(context.env).catch(() => {}));
       const status = await calendarStoreStatus(null, context.env.ROSTER_DB, {
         doctorKey: normalizeRosterName(body?.selectedDoctorKey || OWNER_DOCTOR_KEY),
         expectedFileIds: keepFileIds,
@@ -1038,10 +1032,10 @@ export async function onRequestPost(context) {
       const mode = prepared.role === "creator" || prepared.role === "owner" ? "creator-account" : "claimed-account";
       const ownerId = normalizeEmail(targetRecord.email);
       const doctorKey = normalizeRosterName(body?.doctorKey || targetRecord.state?.session?.doctorKey || "");
-      const cacheKey = snapshotCacheKey({ mode, ownerId, doctorKey, startDate: requestedRange.startDate, endDate: requestedRange.endDate });
-      const kv = context.env.ROSTER_CACHE;
-      if (kv) {
-        const cached = await loadCachedSnapshot(kv, cacheKey);
+      const cacheKey = d1SnapshotCacheKey({ mode, ownerId, doctorKey, startDate: requestedRange.startDate, endDate: requestedRange.endDate });
+      const db = context.env.ROSTER_DB;
+      if (cacheKey) {
+        const cached = await loadD1Snapshot(db, cacheKey);
         if (cached && cached.revision === calendarRevision) {
           return Response.json({
             ok: true,
@@ -1052,7 +1046,7 @@ export async function onRequestPost(context) {
             snapshotBuiltAt: cached.snapshot?.builtAt || "",
             calendarRevision,
             diagnostics: {
-              cacheBinding: true,
+              cacheEngine: "d1",
               cacheKey,
               cacheHit: true,
             },
@@ -1060,8 +1054,8 @@ export async function onRequestPost(context) {
         }
       }
       const diagnostics = {
-        cacheBinding: Boolean(kv),
-        cacheKey: kv ? cacheKey : null,
+        cacheEngine: "d1",
+        cacheKey,
         cacheHit: false,
       };
       const snapshot = await buildDerivedAccountSnapshot(context.env.ROSTER_DB, {
@@ -1076,9 +1070,9 @@ export async function onRequestPost(context) {
         diagnostics,
         diagnosticsRequested: body?.diagnostics === true,
       });
-      if (kv && snapshot) {
+      if (snapshot) {
         try {
-          await storeCachedSnapshot(kv, cacheKey, calendarRevision, snapshot);
+          await storeD1Snapshot(db, cacheKey, ownerId, calendarRevision, snapshot);
         } catch (error) {
           diagnostics.cacheStoreError = String(error?.message || error).slice(0, 200);
         }
@@ -1846,10 +1840,9 @@ async function buildDerivedAccountSnapshot(db, context) {
   });
 }
 
-async function warmCreatorSnapshotCache(env) {
-  const kv = env?.ROSTER_CACHE;
+async function warmD1Snapshots(env) {
   const db = env?.ROSTER_DB;
-  if (!kv?.get || !db?.prepare) return;
+  if (!db?.prepare) return;
   const creatorEmail = normalizeEmail(CREATOR_EMAIL);
   const record = await loadAccountMirror(db, creatorEmail);
   if (!record) return;
@@ -1870,14 +1863,14 @@ async function warmCreatorSnapshotCache(env) {
   });
   if (!snapshot) return;
   const revision = await queryCalendarRevision(db, creatorEmail).catch(() => "");
-  const cacheKey = snapshotCacheKey({
+  const cacheKey = d1SnapshotCacheKey({
     mode: record.role === "creator" || record.role === "owner" ? "creator-account" : "claimed-account",
     ownerId: creatorEmail,
     doctorKey,
     startDate: settings.dateFrom || "",
     endDate: settings.dateTo || "",
   });
-  await storeCachedSnapshot(kv, cacheKey, revision, snapshot);
+  await storeD1Snapshot(db, cacheKey, creatorEmail, revision, snapshot);
 }
 
 function rawRosterObjectKey(fileId) {
