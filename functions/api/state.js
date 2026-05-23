@@ -1084,7 +1084,7 @@ export async function onRequestPost(context) {
         snapshotStale: false,
         snapshotBuiltAt: snapshot?.builtAt || "",
         calendarRevision,
-        diagnostics: body?.diagnostics === true ? diagnostics : {},
+        diagnostics,
       });
     }
 
@@ -1798,7 +1798,7 @@ async function buildDerivedAccountSnapshot(db, context) {
     queryAccountCustomEvents(db, context.record.email).catch(() => []),
     loadAccountHospitalLocations(db, context.record.email, normalizedSession).catch(() => null),
   ]);
-  if (context.diagnostics && typeof context.diagnostics === "object") {
+  if (context.diagnosticsRequested === true && context.diagnostics && typeof context.diagnostics === "object") {
     context.diagnostics.selectedDoctorKey = selectedKey;
     context.diagnostics.selectedDoctorFiles = doctorDiagnostics.map(rosterFileDoctorDiagnostic);
     context.diagnostics.queryMode = doctorPairs.length ? "file-doctor-pairs" : "doctor-keys";

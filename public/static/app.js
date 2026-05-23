@@ -12061,9 +12061,9 @@ function updateVersionBar() {
   let cachePart = "";
   if (lastCacheDiagnostics) {
     if (lastCacheDiagnostics.cacheStoreError) cachePart = ` · store error: ${escapeHtml(lastCacheDiagnostics.cacheStoreError)}`;
-    else if (lastCacheDiagnostics.cacheHit === true) cachePart = " · cache hit";
     else if (lastCacheDiagnostics.cacheNotChecked === true) cachePart = " · no refresh";
-    else if (!lastCacheDiagnostics.cacheEngine) cachePart = " · no d1";
+    else if (!lastCacheDiagnostics.cacheEngine) cachePart = "";
+    else if (lastCacheDiagnostics.cacheHit === true) cachePart = " · cache hit";
     else cachePart = " · miss";
   }
   el.textContent = gitPart + cachePart;

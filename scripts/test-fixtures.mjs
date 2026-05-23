@@ -3225,7 +3225,9 @@ assert.deepEqual(
   ["DDH Term 1", "DDH Term 2", "MMC Term 1", "MMC Term 2"],
   "creator calendar load should include both hospitals across both terms",
 );
-assert.deepEqual(fourRosterCalendar.diagnostics, {}, "default calendar loads should avoid file/doctor diagnostics");
+assert.equal(fourRosterCalendar.diagnostics.cacheEngine, "d1", "default calendar loads should report d1 cache engine");
+assert.equal(fourRosterCalendar.diagnostics.cacheHit, false, "default calendar loads should report cache miss on first load");
+assert.equal(fourRosterCalendar.diagnostics.selectedDoctorKey, undefined, "default calendar loads should avoid file/doctor diagnostics");
 const fourRosterDiagnosticCalendar = await postState(fourRosterStore, {
   action: "loadCalendarEvents",
   email: "rhaydon@gmail.com",
