@@ -1077,7 +1077,11 @@ export async function onRequestPost(context) {
         diagnosticsRequested: body?.diagnostics === true,
       });
       if (kv && snapshot) {
-        storeCachedSnapshot(kv, cacheKey, calendarRevision, snapshot).catch(() => {});
+        try {
+          await storeCachedSnapshot(kv, cacheKey, calendarRevision, snapshot);
+        } catch (error) {
+          diagnostics.cacheStoreError = String(error?.message || error).slice(0, 200);
+        }
       }
       return Response.json({
         ok: true,

@@ -2222,6 +2222,7 @@ export async function storeCachedSnapshot(kv, key, revision, snapshot) {
     });
   } catch (error) {
     console.error("ROSTER_CACHE store error:", error?.message || error);
+    throw error;
   }
 }
 
