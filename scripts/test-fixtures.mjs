@@ -1027,6 +1027,7 @@ class MemoryR2 {
     this.objects.set(key, {
       bytes,
       httpMetadata: options.httpMetadata || {},
+      customMetadata: options.customMetadata || {},
     });
   }
 
@@ -1035,8 +1036,25 @@ class MemoryR2 {
     if (!item) return null;
     return {
       httpMetadata: item.httpMetadata,
+      customMetadata: item.customMetadata,
       arrayBuffer: async () => item.bytes.buffer.slice(item.bytes.byteOffset, item.bytes.byteOffset + item.bytes.byteLength),
     };
+  }
+
+  async head(key) {
+    const item = this.objects.get(key);
+    if (!item) return null;
+    return { customMetadata: item.customMetadata };
+  }
+
+  async delete(keys) {
+    const list = Array.isArray(keys) ? keys : [keys];
+    for (const k of list) this.objects.delete(k);
+  }
+
+  async list({ prefix = "" } = {}) {
+    const matching = [...this.objects.keys()].filter((k) => k.startsWith(prefix)).sort();
+    return { objects: matching.map((key) => ({ key })), truncated: false };
   }
 }
 
@@ -1450,30 +1468,7 @@ class MemoryD1Statement {
       }
       return { success: true };
     }
-    if (sql.includes("CREATE TABLE IF NOT EXISTS roster_snapshots")) {
-      if (!this.db.rosterSnapshots) this.db.rosterSnapshots = new Map();
-      return { success: true };
-    }
-    if (sql.startsWith("INSERT OR REPLACE INTO roster_snapshots")) {
-      if (!this.db.rosterSnapshots) this.db.rosterSnapshots = new Map();
-      this.db.rosterSnapshots.set(args[0], {
-        cache_key: args[0],
-        owner_email: args[1],
-        revision: args[2],
-        snapshot_json: args[3],
-        built_at: args[4],
-      });
-      return { success: true };
-    }
-    if (sql.startsWith("DELETE FROM roster_snapshots WHERE owner_email = ?")) {
-      const ownerEmail = args[0];
-      if (this.db.rosterSnapshots) {
-        for (const [key, row] of this.db.rosterSnapshots) {
-          if (row.owner_email === ownerEmail) this.db.rosterSnapshots.delete(key);
-        }
-      }
-      return { success: true };
-    }
+
     throw new Error(`Unsupported MemoryD1 run SQL: ${sql}`);
   }
 
@@ -2034,9 +2029,6 @@ class MemoryD1Statement {
     }
     if (sql.includes("FROM raw_roster_files") && sql.includes("WHERE file_id = ?")) {
       return this.db.rawFiles.get(args[0]) || null;
-    }
-    if (sql.includes("FROM roster_snapshots WHERE cache_key = ?")) {
-      return this.db.rosterSnapshots?.get(args[0]) || null;
     }
     throw new Error(`Unsupported MemoryD1 first SQL: ${sql}`);
   }
@@ -3225,7 +3217,7 @@ assert.deepEqual(
   ["DDH Term 1", "DDH Term 2", "MMC Term 1", "MMC Term 2"],
   "creator calendar load should include both hospitals across both terms",
 );
-assert.equal(fourRosterCalendar.diagnostics.cacheEngine, "d1", "default calendar loads should report d1 cache engine");
+assert.equal(fourRosterCalendar.diagnostics.cacheEngine, "r2", "default calendar loads should report r2 cache engine");
 assert.equal(fourRosterCalendar.diagnostics.cacheHit, false, "default calendar loads should report cache miss on first load");
 assert.equal(fourRosterCalendar.diagnostics.selectedDoctorKey, undefined, "default calendar loads should avoid file/doctor diagnostics");
 const fourRosterDiagnosticCalendar = await postState(fourRosterStore, {
