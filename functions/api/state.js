@@ -330,6 +330,7 @@ export async function onRequestPost(context) {
       await refreshCanonicalDoctors(context.env.ROSTER_DB);
       if (context.env.ROSTER_CACHE) {
         invalidateCachedSnapshotsForOwner(context.env.ROSTER_CACHE, normalizeEmail(CREATOR_EMAIL)).catch(() => {});
+        warmCreatorSnapshotCache(context.env).catch(() => {});
       }
       if (body?.skipStatus === true) {
         return Response.json({
@@ -400,6 +401,7 @@ export async function onRequestPost(context) {
       await deleteRawRosterFile(context.env.ROSTER_DB, fileId);
       if (context.env.ROSTER_CACHE) {
         invalidateCachedSnapshotsForOwner(context.env.ROSTER_CACHE, normalizeEmail(CREATOR_EMAIL)).catch(() => {});
+        warmCreatorSnapshotCache(context.env).catch(() => {});
       }
       const status = await calendarStoreStatus(null, context.env.ROSTER_DB, { doctorKey: OWNER_DOCTOR_KEY });
       return Response.json({ ok: true, reset: fileId, ...status });
@@ -422,6 +424,7 @@ export async function onRequestPost(context) {
       await Promise.all(removedFileIds.map((id) => deleteRawRosterFile(context.env.ROSTER_DB, id).catch(() => null)));
       if (context.env.ROSTER_CACHE) {
         invalidateCachedSnapshotsForOwner(context.env.ROSTER_CACHE, normalizeEmail(CREATOR_EMAIL)).catch(() => {});
+        warmCreatorSnapshotCache(context.env).catch(() => {});
       }
       const status = await calendarStoreStatus(null, context.env.ROSTER_DB, {
         doctorKey: normalizeRosterName(body?.selectedDoctorKey || OWNER_DOCTOR_KEY),
@@ -1774,31 +1777,23 @@ async function buildDerivedAccountSnapshot(db, context) {
     dateFrom: context.startDate || normalizedSession.settings?.dateFrom || "",
     dateTo: context.endDate || normalizedSession.settings?.dateTo || "",
   };
-  const rosterEvents = doctorPairs.length
-    ? await queryDoctorEventsForFileDoctorPairs(db, doctorPairs, {
-        startDate: context.startDate || "",
-        endDate: context.endDate || "",
-      })
-    : await queryDoctorEvents(db, doctorKeys, {
-        startDate: context.startDate || "",
-        endDate: context.endDate || "",
-      });
-  const rosterIssues = doctorPairs.length
-    ? await queryDoctorIssuesForFileDoctorPairs(db, doctorPairs, {
-        startDate: context.startDate || "",
-        endDate: context.endDate || "",
-      })
-    : await queryDoctorIssues(db, doctorKeys, {
-        startDate: context.startDate || "",
-        endDate: context.endDate || "",
-      });
+  const startDate = context.startDate || "";
+  const endDate = context.endDate || "";
+  const [rosterEvents, rosterIssues, d1CustomEvents, hospitalLocations] = await Promise.all([
+    doctorPairs.length
+      ? queryDoctorEventsForFileDoctorPairs(db, doctorPairs, { startDate, endDate })
+      : queryDoctorEvents(db, doctorKeys, { startDate, endDate }),
+    doctorPairs.length
+      ? queryDoctorIssuesForFileDoctorPairs(db, doctorPairs, { startDate, endDate })
+      : queryDoctorIssues(db, doctorKeys, { startDate, endDate }),
+    queryAccountCustomEvents(db, context.record.email).catch(() => []),
+    loadAccountHospitalLocations(db, context.record.email, normalizedSession).catch(() => null),
+  ]);
   if (context.diagnostics && typeof context.diagnostics === "object") {
     context.diagnostics.selectedDoctorKey = selectedKey;
     context.diagnostics.selectedDoctorFiles = doctorDiagnostics.map(rosterFileDoctorDiagnostic);
     context.diagnostics.queryMode = doctorPairs.length ? "file-doctor-pairs" : "doctor-keys";
   }
-  const d1CustomEvents = await queryAccountCustomEvents(db, context.record.email).catch(() => []);
-  const hospitalLocations = await loadAccountHospitalLocations(db, context.record.email, normalizedSession).catch(() => null);
   const events = [
     ...applyEventOverrides(applyAccountHospitalLocations(rosterEvents, hospitalLocations || {}, { includeLocations: settings.includeLocations !== false }), normalizedSession.overrides || {}),
     ...customEventsToEvents(latestCustomEventsByIdentity([
@@ -1834,6 +1829,40 @@ async function buildDerivedAccountSnapshot(db, context) {
     subscriptionFeeds: {},
     insightCache: null,
   });
+}
+
+async function warmCreatorSnapshotCache(env) {
+  const kv = env?.ROSTER_CACHE;
+  const db = env?.ROSTER_DB;
+  if (!kv?.get || !db?.prepare) return;
+  const creatorEmail = normalizeEmail(CREATOR_EMAIL);
+  const record = await loadAccountMirror(db, creatorEmail);
+  if (!record) return;
+  const state = sanitizeState(record.state);
+  const claims = sanitizeClaims(record.claims || []);
+  const session = state?.session || {};
+  const settings = { ...defaultSettings(), ...session?.settings };
+  const doctorKey = normalizeRosterName(session?.doctorKey || "");
+  const snapshot = await buildDerivedAccountSnapshot(db, {
+    role: record.role || roleForEmail(creatorEmail),
+    record,
+    state,
+    claims,
+    index: null,
+    startDate: settings.dateFrom || "",
+    endDate: settings.dateTo || "",
+    doctorKey,
+  });
+  if (!snapshot) return;
+  const revision = await queryCalendarRevision(db, creatorEmail).catch(() => "");
+  const cacheKey = snapshotCacheKey({
+    mode: record.role === "creator" || record.role === "owner" ? "creator-account" : "claimed-account",
+    ownerId: creatorEmail,
+    doctorKey,
+    startDate: settings.dateFrom || "",
+    endDate: settings.dateTo || "",
+  });
+  await storeCachedSnapshot(kv, cacheKey, revision, snapshot);
 }
 
 function rawRosterObjectKey(fileId) {

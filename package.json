@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "predev": "node scripts/write-version.mjs",
     "dev": "wrangler pages dev public",
+    "predeploy": "node scripts/write-version.mjs",
     "deploy": "wrangler pages deploy public",
     "check": "node --check public/static/app.js",
     "test:fixtures": "node scripts/test-fixtures.mjs"
