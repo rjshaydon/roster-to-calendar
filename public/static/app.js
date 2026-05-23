@@ -12039,7 +12039,7 @@ async function initVersionBar() {
   const el = document.getElementById("versionBar");
   if (!el) return;
   try {
-    const res = await fetch("/version.json");
+    const res = await fetch("/api/version");
     const data = await res.json();
     const branch = escapeHtml(String(data.branch || ""));
     const commit = escapeHtml(String(data.commit || ""));
