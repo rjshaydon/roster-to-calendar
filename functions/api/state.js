@@ -10,15 +10,19 @@ import {
   deleteDerivedRosterFile,
   deleteDoctorProfileMirror,
   deleteRawRosterFile,
+  deleteCachedSnapshotsForOwner,
+  deleteSnapshotRegistryEntriesForOwner,
   hasCalendarDb,
   applyAccountHospitalLocations,
   loadAccountHospitalLocations,
+  loadCachedSnapshot,
   mergeHospitalLocationsIntoSettings,
   listAccountMirrors,
   listConsoleMessages,
   loadAccountMirror,
   loadAccountStateMirror,
   loadDoctorProfileMirror,
+  loadSnapshotRegistryEntry,
   loadRawRosterFile,
   queryCoworkerEvents,
   queryOverlapDoctors,
@@ -43,6 +47,10 @@ import {
   replaceDerivedRosterFile,
   replaceAccountCustomEvents,
   replaceCanonicalDoctors,
+  snapshotArtifactKey,
+  snapshotRegistryRangeKey,
+  storeCachedSnapshot,
+  upsertSnapshotRegistryEntry,
   upsertAccountHospitalLocations,
   setDerivedRosterFileActive,
   upsertAccountMirror,
@@ -79,12 +87,22 @@ export async function onRequestPost(context) {
     }
     if (action === "login") {
       const account = await loadOrCreateD1Account(context.env.ROSTER_DB, email, password, { mode, realName });
-      const loginRecord = account.created
+      let loginRecord = account.created
         ? await autoClaimMatchedCanonicalDoctors(account.record, context.env.ROSTER_DB)
         : account.record;
+      if ((loginRecord.role || roleForEmail(loginRecord.email)) !== "creator" && (loginRecord.role || roleForEmail(loginRecord.email)) !== "owner" && !sanitizeClaims(loginRecord.claims).length) {
+        loginRecord = await autoClaimMatchedRosterNames(null, loginRecord, context.env.ROSTER_DB);
+      }
       if (loginRecord !== account.record) await upsertAccountMirror(context.env.ROSTER_DB, loginRecord);
-      const prepared = await prepareLightweightAccountResponse(loginRecord, { db: context.env.ROSTER_DB, includeImportRefs: false });
-      const calendarRevision = await queryCalendarRevision(context.env.ROSTER_DB, loginRecord.email).catch(() => "");
+      const prepared = await prepareAccountResponse(null, loginRecord, {
+        db: context.env.ROSTER_DB,
+        includeAvailableDoctors: (loginRecord.role || roleForEmail(loginRecord.email)) !== "creator" && (loginRecord.role || roleForEmail(loginRecord.email)) !== "owner" && !sanitizeClaims(loginRecord.claims).length,
+      });
+      const snapshotPayload = await loadAccountSnapshotPayload(context, {
+        targetRecord: loginRecord,
+        prepared,
+        reason: "login",
+      });
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -93,17 +111,22 @@ export async function onRequestPost(context) {
         realName: prepared.realName,
         state: prepared.state,
         claims: prepared.claims,
-        nameMatches: [],
-        suggestedClaims: [],
-        availableDoctors: [],
+        nameMatches: prepared.nameMatches,
+        suggestedClaims: prepared.nameMatches,
+        availableDoctors: prepared.availableDoctors,
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
-        calendarRevision,
-        snapshot: null,
-        snapshotAvailable: false,
-        snapshotStale: false,
-        snapshotBuiltAt: "",
-        issueConfig: null,
+        calendarRevision: snapshotPayload.calendarRevision,
+        snapshot: snapshotPayload.snapshot,
+        snapshotAvailable: snapshotPayload.snapshotAvailable,
+        snapshotStale: snapshotPayload.snapshotStale,
+        snapshotBuiltAt: snapshotPayload.snapshotBuiltAt,
+        snapshotStatus: snapshotPayload.snapshotStatus,
+        snapshotSource: snapshotPayload.snapshotSource,
+        snapshotRevision: snapshotPayload.snapshotRevision,
+        stale: snapshotPayload.stale,
+        ...viewedAccountPayload(loginRecord, loginRecord, prepared),
+        issueConfig: prepared.issueConfig,
       });
     }
 
@@ -174,6 +197,7 @@ export async function onRequestPost(context) {
         availableDoctors: prepared.availableDoctors,
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
+        ...viewedAccountPayload(account.record, targetRecord, prepared),
         issueConfig: prepared.issueConfig,
       });
     }
@@ -182,11 +206,22 @@ export async function onRequestPost(context) {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
-      const target = await loadAccountMirror(context.env.ROSTER_DB, targetEmail);
+      let target = await loadAccountMirror(context.env.ROSTER_DB, targetEmail);
       if (!target) return Response.json({ error: "Account not found." }, { status: 404 });
+      if (!sanitizeClaims(target.claims).length) {
+        target = await autoClaimMatchedRosterNames(null, target, context.env.ROSTER_DB);
+        await upsertAccountMirror(context.env.ROSTER_DB, target).catch(() => null);
+      }
       const targetClaims = sanitizeClaims(target.claims);
-      const prepared = await prepareLightweightAccountResponse(target, { db: context.env.ROSTER_DB, includeImportRefs: false });
-      const calendarRevision = await queryCalendarRevision(context.env.ROSTER_DB, target.email).catch(() => "");
+      const prepared = await prepareAccountResponse(null, target, {
+        db: context.env.ROSTER_DB,
+        includeAvailableDoctors: !targetClaims.length,
+      });
+      const snapshotPayload = await loadAccountSnapshotPayload(context, {
+        targetRecord: target,
+        prepared,
+        reason: "adminLoadUser",
+      });
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -194,19 +229,22 @@ export async function onRequestPost(context) {
         realName: prepared.realName,
         state: prepared.state,
         claims: prepared.claims,
-        nameMatches: [],
-        suggestedClaims: [],
-        availableDoctors: targetClaims.length
-          ? []
-          : await repositoryDoctorCandidates(null, null, context.env.ROSTER_DB, { hideZeroEventStandalone: true }),
+        nameMatches: prepared.nameMatches,
+        suggestedClaims: prepared.nameMatches,
+        availableDoctors: prepared.availableDoctors,
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
-        calendarRevision,
-        snapshot: null,
-        snapshotAvailable: false,
-        snapshotStale: false,
-        snapshotBuiltAt: "",
-        issueConfig: null,
+        calendarRevision: snapshotPayload.calendarRevision,
+        snapshot: snapshotPayload.snapshot,
+        snapshotAvailable: snapshotPayload.snapshotAvailable,
+        snapshotStale: snapshotPayload.snapshotStale,
+        snapshotBuiltAt: snapshotPayload.snapshotBuiltAt,
+        snapshotStatus: snapshotPayload.snapshotStatus,
+        snapshotSource: snapshotPayload.snapshotSource,
+        snapshotRevision: snapshotPayload.snapshotRevision,
+        stale: snapshotPayload.stale,
+        ...viewedAccountPayload(account.record, target, prepared),
+        issueConfig: prepared.issueConfig,
       });
     }
 
@@ -237,6 +275,7 @@ export async function onRequestPost(context) {
         updatedAt: new Date().toISOString(),
       };
       await upsertAccountMirror(context.env.ROSTER_DB, updated);
+      scheduleSnapshotWarmupForAccount(context, claimEmail, { reason: "claimRosterName" });
       const prepared = await prepareAccountResponse(null, updated, { db: context.env.ROSTER_DB });
       return Response.json({
         ok: true,
@@ -250,6 +289,7 @@ export async function onRequestPost(context) {
         availableDoctors: prepared.availableDoctors,
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
+        ...viewedAccountPayload(account.record, updated, prepared),
         issueConfig: prepared.issueConfig,
       });
     }
@@ -324,6 +364,7 @@ export async function onRequestPost(context) {
       await propagateDerivedShiftCodeIssues(context.env.ROSTER_DB, body?.doctors || [], body?.issuesByDoctor || {});
       const supersession = await reconcileRosterFileSupersession(context.env.ROSTER_DB, filePayload, { uploaderEmail: email });
       await refreshCanonicalDoctors(context.env.ROSTER_DB);
+      scheduleSnapshotWarmupForAllAccounts(context, { reason: "saveDerivedCalendarFile" });
       if (body?.skipStatus === true) {
         return Response.json({
           ok: true,
@@ -391,6 +432,7 @@ export async function onRequestPost(context) {
       await deleteDerivedRosterFile(context.env.ROSTER_DB, fileId);
       await refreshCanonicalDoctors(context.env.ROSTER_DB);
       await deleteRawRosterFile(context.env.ROSTER_DB, fileId);
+      scheduleSnapshotWarmupForAllAccounts(context, { reason: "resetDerivedCalendarFile" });
       const status = await calendarStoreStatus(null, context.env.ROSTER_DB, { doctorKey: OWNER_DOCTOR_KEY });
       return Response.json({ ok: true, reset: fileId, ...status });
     }
@@ -410,6 +452,7 @@ export async function onRequestPost(context) {
       await Promise.all(removedFileIds.map((id) => deleteDerivedRosterFile(context.env.ROSTER_DB, id).catch(() => null)));
       await refreshCanonicalDoctors(context.env.ROSTER_DB);
       await Promise.all(removedFileIds.map((id) => deleteRawRosterFile(context.env.ROSTER_DB, id).catch(() => null)));
+      scheduleSnapshotWarmupForAllAccounts(context, { reason: "replaceActiveRosterFiles" });
       const status = await calendarStoreStatus(null, context.env.ROSTER_DB, {
         doctorKey: normalizeRosterName(body?.selectedDoctorKey || OWNER_DOCTOR_KEY),
         expectedFileIds: keepFileIds,
@@ -432,6 +475,7 @@ export async function onRequestPost(context) {
         updatedAt: new Date().toISOString(),
       };
       await upsertAccountMirror(context.env.ROSTER_DB, updated);
+      scheduleSnapshotWarmupForAccount(context, saveEmail, { reason: "updateAccount" });
       const prepared = await prepareAccountResponse(null, updated, { db: context.env.ROSTER_DB, includeAvailableDoctors: false });
       return Response.json({
         ok: true,
@@ -470,6 +514,7 @@ export async function onRequestPost(context) {
         updatedAt: new Date().toISOString(),
       };
       await upsertAccountMirror(context.env.ROSTER_DB, updated);
+      scheduleSnapshotWarmupForAccount(context, targetEmail, { reason: "setAccountRosterClaims" });
       return Response.json({
         ok: true,
         user: await userSummaryFromRecord(targetEmail, updated, { db: context.env.ROSTER_DB }),
@@ -499,6 +544,7 @@ export async function onRequestPost(context) {
         updatedAt: new Date().toISOString(),
       };
       await upsertAccountMirror(context.env.ROSTER_DB, updated);
+      scheduleSnapshotWarmupForAccount(context, claimEmail, { reason: "removeRosterClaim" });
       return Response.json({ ok: true, claims, user: await userSummaryFromRecord(claimEmail, updated, { db: context.env.ROSTER_DB }) });
     }
 
@@ -776,6 +822,10 @@ export async function onRequestPost(context) {
       }
       const record = await loadAccountMirror(context.env.ROSTER_DB, deleteEmail).catch(() => null);
       await deleteAccountMirror(context.env.ROSTER_DB, deleteEmail).catch(() => null);
+      await deleteSnapshotRegistryEntriesForOwner(context.env.ROSTER_DB, "user-account", deleteEmail).catch(() => null);
+      await deleteCachedSnapshotsForOwner(context.env.ROSTER_CACHE, "user-account", deleteEmail).catch(() => null);
+      await deleteSnapshotRegistryEntriesForOwner(context.env.ROSTER_DB, "claimed-account", deleteEmail).catch(() => null);
+      await deleteCachedSnapshotsForOwner(context.env.ROSTER_CACHE, "claimed-account", deleteEmail).catch(() => null);
       await clearDeletedAccountClaimMetadata(context.env.ROSTER_DB, deleteEmail, record);
       return Response.json({ ok: true, deletedEmail: deleteEmail });
     }
@@ -818,6 +868,11 @@ export async function onRequestPost(context) {
       };
       await upsertAccountMirror(context.env.ROSTER_DB, updatedRecord);
       const calendarRevision = await queryCalendarRevision(context.env.ROSTER_DB, saveEmail).catch(() => "");
+      if (removedImportIds.length) {
+        scheduleSnapshotWarmupForAllAccounts(context, { reason: "save-removeImports" });
+      } else {
+        scheduleSnapshotWarmupForAccount(context, saveEmail, { reason: "save" });
+      }
       return Response.json({ ok: true, role: targetRole, claims, calendarRevision });
     }
 
@@ -855,10 +910,12 @@ export async function onRequestPost(context) {
           issueConfig: await buildIssueConfig(null, ""),
         });
       }
-      const snapshotInfo = await loadDoctorProfileSnapshotInfo(null, {
+      const snapshotInfo = await loadDoctorProfileSnapshotPayload(context, {
         ...profile,
         aliases: requestedAliases,
-      }, context.env.ROSTER_DB, email);
+      }, email, {
+        cachedRevision: body?.cachedRevision,
+      });
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -867,6 +924,10 @@ export async function onRequestPost(context) {
         snapshotAvailable: snapshotInfo.snapshotAvailable,
         snapshotStale: snapshotInfo.snapshotStale,
         snapshotBuiltAt: snapshotInfo.snapshotBuiltAt,
+        snapshotStatus: snapshotInfo.snapshotStatus,
+        snapshotSource: snapshotInfo.snapshotSource,
+        snapshotRevision: snapshotInfo.snapshotRevision,
+        stale: snapshotInfo.stale,
         calendarRevision,
         issueConfig: await buildIssueConfig(null, ""),
       });
@@ -886,6 +947,8 @@ export async function onRequestPost(context) {
       }
       if (!hasDoctorProfileState(state)) {
         await deleteDoctorProfileMirror(context.env.ROSTER_DB, profileId).catch(() => null);
+        await deleteSnapshotRegistryEntriesForOwner(context.env.ROSTER_DB, "doctor-profile", profileId).catch(() => null);
+        await deleteCachedSnapshotsForOwner(context.env.ROSTER_CACHE, "doctor-profile", profileId).catch(() => null);
         return Response.json({ ok: true, deleted: true });
       }
       const existing = await loadDoctorProfileState(null, context.env.ROSTER_DB, profileId);
@@ -900,6 +963,7 @@ export async function onRequestPost(context) {
       };
       await upsertDoctorProfileMirror(context.env.ROSTER_DB, next).catch(() => null);
       const calendarRevision = await queryDoctorProfileCalendarRevision(context.env.ROSTER_DB, next, email).catch(() => "");
+      scheduleDoctorProfileSnapshotWarmup(context, next, email, { reason: "saveDoctorProfile" });
       return Response.json({ ok: true, profile: next, calendarRevision });
     }
 
@@ -999,45 +1063,21 @@ export async function onRequestPost(context) {
         ? await loadAccountMirror(context.env.ROSTER_DB, targetEmail)
         : account.record;
       const prepared = await prepareLightweightAccountResponse(targetRecord, { db: context.env.ROSTER_DB, includeImportRefs: false });
-      const calendarRevision = await queryCalendarRevision(context.env.ROSTER_DB, targetRecord.email).catch(() => "");
-      if (body?.cachedRevision && String(body.cachedRevision) === calendarRevision) {
-        return Response.json({
-          ok: true,
-          snapshot: null,
-          snapshotCurrent: true,
-          snapshotAvailable: false,
-          snapshotStale: false,
-          snapshotBuiltAt: "",
-          calendarRevision,
-          diagnostics: {},
-        });
-      }
       const requestedRange = boundedCalendarEventRange({
         startDate: body?.startDate,
         endDate: body?.endDate,
       });
-      const diagnostics = {};
-      const snapshot = await buildDerivedAccountSnapshot(context.env.ROSTER_DB, {
-        role: prepared.role,
-        record: targetRecord,
-        state: prepared.state,
-        claims: prepared.claims,
-        index: null,
+      const payload = await loadAccountSnapshotPayload(context, {
+        targetRecord,
+        prepared,
         startDate: requestedRange.startDate,
         endDate: requestedRange.endDate,
         doctorKey: normalizeRosterName(body?.doctorKey || ""),
-        diagnostics,
+        cachedRevision: body?.cachedRevision || "",
         diagnosticsRequested: body?.diagnostics === true,
+        reason: "loadCalendarEvents",
       });
-      return Response.json({
-        ok: true,
-        snapshot,
-        snapshotAvailable: Boolean(snapshot),
-        snapshotStale: false,
-        snapshotBuiltAt: snapshot?.builtAt || "",
-        calendarRevision,
-        diagnostics: body?.diagnostics === true ? diagnostics : {},
-      });
+      return Response.json(payload);
     }
 
     if (action === "loadInsightImports") {
@@ -1673,6 +1713,22 @@ function dateKeyOrEmpty(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(key) ? key : "";
 }
 
+function stableJsonStringify(value) {
+  try {
+    return JSON.stringify(value ?? null);
+  } catch {
+    return "";
+  }
+}
+
+function sortObjectKeys(value) {
+  if (Array.isArray(value)) return value.map(sortObjectKeys);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.keys(value).sort().map((key) => [key, sortObjectKeys(value[key])]),
+  );
+}
+
 function isoDateKey(value) {
   if (value instanceof Date) return value.toISOString().slice(0, 10);
   return String(value || "").slice(0, 10);
@@ -1683,6 +1739,404 @@ function addUtcDays(dateKey, days) {
   const date = new Date(Date.UTC(year || 1970, (month || 1) - 1, day || 1));
   date.setUTCDate(date.getUTCDate() + Number(days || 0));
   return date;
+}
+
+function defaultSnapshotRange() {
+  const now = new Date();
+  return boundedCalendarEventRange({
+    startDate: `${now.getUTCFullYear()}-01-01`,
+    endDate: isoDateKey(new Date(Date.UTC(now.getUTCFullYear() + 1, 0, 31))),
+  });
+}
+
+function snapshotOwnerTypeForRecord(record, role = "") {
+  return role === "creator" || role === "owner" ? "creator-account" : "user-account";
+}
+
+function viewedAccountTypeForRecord(record, role = "") {
+  if (role === "creator" || role === "owner") return "creator";
+  return sanitizeClaims(record?.claims).length ? "claimed-user" : "unclaimed-user";
+}
+
+function buildSnapshotCacheDescriptor({ ownerType = "", ownerId = "", doctorKey = "", range = defaultSnapshotRange() } = {}) {
+  const normalizedOwnerId = ownerType === "doctor-profile"
+    ? String(ownerId || "").trim()
+    : normalizeEmail(ownerId || "");
+  const rangeKey = snapshotRegistryRangeKey(range);
+  const normalizedDoctorKey = normalizeRosterName(doctorKey || "");
+  return {
+    ownerType,
+    ownerId: normalizedOwnerId,
+    doctorKey: normalizedDoctorKey,
+    rangeKey,
+    artifactKey: snapshotArtifactKey({
+      ownerType,
+      ownerId: normalizedOwnerId,
+      doctorKey: normalizedDoctorKey,
+      rangeKey,
+    }),
+  };
+}
+
+function buildAccountSnapshotCacheDescriptor(record, role, doctorKey, range) {
+  return buildSnapshotCacheDescriptor({
+    ownerType: snapshotOwnerTypeForRecord(record, role),
+    ownerId: record?.email || "",
+    doctorKey,
+    range,
+  });
+}
+
+function buildDoctorProfileSnapshotCacheDescriptor(profile, range) {
+  return buildSnapshotCacheDescriptor({
+    ownerType: "doctor-profile",
+    ownerId: profile?.profileId || "",
+    doctorKey: profile?.doctorKey || "",
+    range,
+  });
+}
+
+function snapshotRegistryState(status = "missing", cache = {}) {
+  return {
+    snapshotStatus: status,
+    snapshotSource: cache.snapshotSource || (status === "ready" ? "server-cache" : "d1-build"),
+    snapshotRevision: String(cache.snapshotRevision || ""),
+    stale: cache.stale === true,
+  };
+}
+
+function viewedAccountPayload(authRecord, targetRecord, prepared = {}) {
+  const authEmail = normalizeEmail(authRecord?.email || "");
+  const targetEmail = normalizeEmail(targetRecord?.email || "");
+  const role = prepared.role || targetRecord?.role || roleForEmail(targetEmail);
+  const isCreatorAuth = authEmail === CREATOR_EMAIL || roleForEmail(authEmail) === "creator";
+  const impersonating = Boolean(isCreatorAuth && targetEmail && authEmail && authEmail !== targetEmail);
+  return {
+    viewedAccountId: targetEmail,
+    viewedAccountType: viewedAccountTypeForRecord(targetRecord, role),
+    isImpersonating: impersonating,
+    impersonatedByCreator: impersonating,
+    returnToCreatorAvailable: impersonating,
+  };
+}
+
+async function loadSnapshotPayloadFromRegistry(context, options = {}) {
+  const db = context.env?.ROSTER_DB;
+  const cacheBucket = context.env?.ROSTER_CACHE;
+  const descriptor = options.descriptor;
+  const registry = await loadSnapshotRegistryEntry(db, descriptor).catch(() => null);
+  const cachedRevision = String(options.cachedRevision || "");
+  const calendarRevision = String(options.calendarRevision || "");
+  if (cachedRevision && cachedRevision === calendarRevision) {
+    return {
+      ok: true,
+      snapshot: null,
+      snapshotCurrent: true,
+      snapshotAvailable: false,
+      snapshotStale: false,
+      snapshotBuiltAt: registry?.builtAt || "",
+      calendarRevision,
+      diagnostics: {
+        cacheNotChecked: true,
+        reason: "cachedRevision matched",
+      },
+      ...snapshotRegistryState(registry?.status || "ready", {
+        snapshotSource: "browser",
+        snapshotRevision: calendarRevision,
+      }),
+    };
+  }
+  const diagnostics = {
+    cacheEngine: cacheBucket?.get ? "r2+d1-registry" : "d1-inline",
+    rangeKey: descriptor.rangeKey,
+    ownerType: descriptor.ownerType,
+    ownerId: descriptor.ownerId,
+    doctorKey: descriptor.doctorKey,
+    cacheHit: false,
+  };
+  if (cacheBucket?.get && registry?.artifactKey) {
+    const cachedSnapshot = await loadCachedSnapshot(cacheBucket, registry.artifactKey).catch(() => null);
+    if (cachedSnapshot) {
+      diagnostics.cacheHit = registry.builtRevision === calendarRevision;
+      diagnostics.snapshotSizeBytes = JSON.stringify(cachedSnapshot).length;
+      if (registry.builtRevision === calendarRevision && registry.status === "ready") {
+        return {
+          ok: true,
+          snapshot: cachedSnapshot,
+          snapshotAvailable: true,
+          snapshotStale: false,
+          snapshotBuiltAt: registry.builtAt || cachedSnapshot?.builtAt || "",
+          calendarRevision,
+          diagnostics,
+          ...snapshotRegistryState("ready", {
+            snapshotSource: "server-cache",
+            snapshotRevision: calendarRevision,
+          }),
+        };
+      }
+      if (typeof options.scheduleRebuild === "function") options.scheduleRebuild();
+      return {
+        ok: true,
+        snapshot: cachedSnapshot,
+        snapshotAvailable: true,
+        snapshotStale: true,
+        snapshotBuiltAt: registry.builtAt || cachedSnapshot?.builtAt || "",
+        calendarRevision,
+        diagnostics: {
+          ...diagnostics,
+          staleBuiltRevision: registry.builtRevision || "",
+          missReason: "stale-registry",
+        },
+        ...snapshotRegistryState("stale", {
+          snapshotSource: "stale-server-cache",
+          snapshotRevision: calendarRevision,
+          stale: true,
+        }),
+      };
+    }
+  }
+  const built = await options.buildInline();
+  return {
+    ok: true,
+    snapshot: built.snapshot,
+    snapshotAvailable: Boolean(built.snapshot),
+    snapshotStale: false,
+    snapshotBuiltAt: built.snapshot?.builtAt || "",
+    calendarRevision,
+    diagnostics: {
+      ...diagnostics,
+      ...built.diagnostics,
+      buildMs: built.buildMs,
+      snapshotSizeBytes: built.sizeBytes,
+      missReason: cacheBucket?.get ? "cache-miss" : "cache-disabled",
+    },
+    ...snapshotRegistryState("ready", {
+      snapshotSource: "d1-build",
+      snapshotRevision: calendarRevision,
+    }),
+  };
+}
+
+async function loadAccountSnapshotPayload(context, params = {}) {
+  const db = context.env?.ROSTER_DB;
+  const targetRecord = params.targetRecord;
+  const prepared = params.prepared;
+  const requestedRange = boundedCalendarEventRange({
+    startDate: params.startDate,
+    endDate: params.endDate,
+  });
+  const doctorKey = normalizeRosterName(
+    params.doctorKey
+    || prepared?.state?.session?.doctorKey
+    || targetRecord?.state?.session?.doctorKey
+    || ""
+  );
+  const calendarRevision = await queryCalendarRevision(db, targetRecord.email).catch(() => "");
+  const descriptor = buildAccountSnapshotCacheDescriptor(targetRecord, prepared.role, doctorKey, requestedRange);
+  return await loadSnapshotPayloadFromRegistry(context, {
+    descriptor,
+    calendarRevision,
+    cachedRevision: params.cachedRevision,
+    scheduleRebuild: () => scheduleAccountSnapshotRebuild(context, {
+      targetRecord,
+      prepared,
+      requestedRange,
+      doctorKey,
+      descriptor,
+      revision: calendarRevision,
+      reason: "stale-read",
+    }),
+    buildInline: () => buildAndStoreAccountSnapshot(context, {
+      targetRecord,
+      prepared,
+      requestedRange,
+      doctorKey,
+      descriptor,
+      revision: calendarRevision,
+      diagnosticsRequested: params.diagnosticsRequested === true,
+      reason: params.reason || "inline-build",
+    }),
+  });
+}
+
+function scheduleAccountSnapshotRebuild(context, job = {}) {
+  if (typeof context.waitUntil !== "function") return;
+  context.waitUntil(
+    buildAndStoreAccountSnapshot(context, job).catch((error) => {
+      console.warn("Background snapshot rebuild failed", {
+        owner: job?.targetRecord?.email || job?.descriptor?.ownerId || "",
+        doctorKey: job?.doctorKey || "",
+        reason: job?.reason || "",
+        error: error?.message || String(error),
+      });
+    })
+  );
+}
+
+async function buildAndStoreAccountSnapshot(context, job = {}) {
+  const db = context.env?.ROSTER_DB;
+  const cacheBucket = context.env?.ROSTER_CACHE;
+  const descriptor = job.descriptor || buildAccountSnapshotCacheDescriptor(job.targetRecord, job.prepared?.role, job.doctorKey, job.requestedRange || defaultSnapshotRange());
+  const revision = String(job.revision || await queryCalendarRevision(db, job.targetRecord?.email || "").catch(() => ""));
+  const startedAt = Date.now();
+  await upsertSnapshotRegistryEntry(db, {
+    ...descriptor,
+    requestedRevision: revision,
+    builtRevision: "",
+    status: "building",
+    artifactKey: descriptor.artifactKey,
+    builtAt: "",
+    sizeBytes: 0,
+    buildMs: 0,
+    lastError: "",
+  }).catch(() => null);
+  try {
+    const diagnostics = {};
+    const snapshot = await buildDerivedAccountSnapshot(db, {
+      role: job.prepared.role,
+      record: job.targetRecord,
+      state: job.prepared.state,
+      claims: job.prepared.claims,
+      index: null,
+      startDate: job.requestedRange.startDate,
+      endDate: job.requestedRange.endDate,
+      doctorKey: descriptor.doctorKey,
+      diagnostics,
+      diagnosticsRequested: job.diagnosticsRequested === true,
+    });
+    const buildMs = Date.now() - startedAt;
+    const sizeBytes = snapshot ? JSON.stringify(snapshot).length : 0;
+    if (snapshot && cacheBucket?.put) {
+      await storeCachedSnapshot(cacheBucket, descriptor.artifactKey, snapshot, {
+        revision,
+        ownerType: descriptor.ownerType,
+        ownerId: descriptor.ownerId,
+        doctorKey: descriptor.doctorKey,
+        rangeKey: descriptor.rangeKey,
+      }).catch(() => null);
+    }
+    await upsertSnapshotRegistryEntry(db, {
+      ...descriptor,
+      requestedRevision: revision,
+      builtRevision: revision,
+      status: snapshot ? "ready" : "missing",
+      artifactKey: descriptor.artifactKey,
+      builtAt: snapshot?.builtAt || new Date().toISOString(),
+      sizeBytes,
+      buildMs,
+      lastError: "",
+    }).catch(() => null);
+    return { snapshot, buildMs, sizeBytes, diagnostics };
+  } catch (error) {
+    await upsertSnapshotRegistryEntry(db, {
+      ...descriptor,
+      requestedRevision: revision,
+      builtRevision: "",
+      status: "error",
+      artifactKey: descriptor.artifactKey,
+      builtAt: "",
+      sizeBytes: 0,
+      buildMs: Date.now() - startedAt,
+      lastError: error?.message || String(error),
+    }).catch(() => null);
+    throw error;
+  }
+}
+
+function scheduleSnapshotWarmupForAccount(context, email, options = {}) {
+  if (typeof context.waitUntil !== "function" || !email) return;
+  context.waitUntil((async () => {
+    const record = await loadAccountMirror(context.env.ROSTER_DB, email).catch(() => null);
+    if (!record) return;
+    const prepared = await prepareAccountResponse(null, record, {
+      db: context.env.ROSTER_DB,
+      includeAvailableDoctors: false,
+    });
+    const requestedRange = defaultSnapshotRange();
+    const doctorKey = normalizeRosterName(
+      prepared.state?.session?.doctorKey
+      || (prepared.role === "creator" || prepared.role === "owner" ? OWNER_DOCTOR_KEY : prepared.claims?.[0]?.key)
+      || ""
+    );
+    await buildAndStoreAccountSnapshot(context, {
+      targetRecord: record,
+      prepared,
+      requestedRange,
+      doctorKey,
+      descriptor: buildAccountSnapshotCacheDescriptor(record, prepared.role, doctorKey, requestedRange),
+      reason: options.reason || "background-warm",
+    });
+  })().catch((error) => {
+    console.warn("Account snapshot warmup failed", {
+      email,
+      reason: options.reason || "background-warm",
+      error: error?.message || String(error),
+    });
+  }));
+}
+
+function scheduleDoctorProfileSnapshotWarmup(context, profile, ownerEmail = "", options = {}) {
+  if (typeof context.waitUntil !== "function" || !profile?.profileId) return;
+  context.waitUntil((async () => {
+    await buildAndStoreDoctorProfileSnapshot(context, {
+      profile,
+      ownerEmail,
+      requestedRange: defaultSnapshotRange(),
+      descriptor: buildDoctorProfileSnapshotCacheDescriptor(profile, defaultSnapshotRange()),
+      reason: options.reason || "doctor-profile-warm",
+    });
+  })().catch((error) => {
+    console.warn("Doctor profile snapshot warmup failed", {
+      profileId: profile?.profileId || "",
+      reason: options.reason || "doctor-profile-warm",
+      error: error?.message || String(error),
+    });
+  }));
+}
+
+function scheduleSnapshotWarmupForAllAccounts(context, options = {}) {
+  if (typeof context.waitUntil !== "function") return;
+  context.waitUntil((async () => {
+    const records = await listAccountMirrors(context.env.ROSTER_DB).catch(() => []);
+    const emails = records.map((record) => normalizeEmail(record?.email || "")).filter(Boolean);
+    for (const email of [...new Set(emails)]) {
+      const record = await loadAccountMirror(context.env.ROSTER_DB, email).catch(() => null);
+      if (!record) continue;
+      const prepared = await prepareAccountResponse(null, record, {
+        db: context.env.ROSTER_DB,
+        includeAvailableDoctors: false,
+      });
+      const requestedRange = defaultSnapshotRange();
+      const doctorKey = normalizeRosterName(
+        prepared.state?.session?.doctorKey
+        || (prepared.role === "creator" || prepared.role === "owner" ? OWNER_DOCTOR_KEY : prepared.claims?.[0]?.key)
+        || ""
+      );
+      await buildAndStoreAccountSnapshot(context, {
+        targetRecord: record,
+        prepared,
+        requestedRange,
+        doctorKey,
+        descriptor: buildAccountSnapshotCacheDescriptor(record, prepared.role, doctorKey, requestedRange),
+        reason: options.reason || "roster-change",
+      }).catch(() => null);
+    }
+    const profiles = await queryDoctorProfileMirrors(context.env.ROSTER_DB).catch(() => []);
+    for (const profile of profiles) {
+      await buildAndStoreDoctorProfileSnapshot(context, {
+        profile,
+        ownerEmail: CREATOR_EMAIL,
+        requestedRange: defaultSnapshotRange(),
+        descriptor: buildDoctorProfileSnapshotCacheDescriptor(profile, defaultSnapshotRange()),
+        reason: options.reason || "roster-change",
+      }).catch(() => null);
+    }
+  })().catch((error) => {
+    console.warn("Global snapshot warmup failed", {
+      reason: options.reason || "roster-change",
+      error: error?.message || String(error),
+    });
+  }));
 }
 
 async function buildDerivedAccountSnapshot(db, context) {
@@ -1756,7 +2210,7 @@ async function buildDerivedAccountSnapshot(db, context) {
         startDate: context.startDate || "",
         endDate: context.endDate || "",
       });
-  if (context.diagnostics && typeof context.diagnostics === "object") {
+  if (context.diagnosticsRequested === true && context.diagnostics && typeof context.diagnostics === "object") {
     context.diagnostics.selectedDoctorKey = selectedKey;
     context.diagnostics.selectedDoctorFiles = doctorDiagnostics.map(rosterFileDoctorDiagnostic);
     context.diagnostics.queryMode = doctorPairs.length ? "file-doctor-pairs" : "doctor-keys";
@@ -1778,7 +2232,7 @@ async function buildDerivedAccountSnapshot(db, context) {
       ? stateFileRefs
       : await d1RepositoryImportRefsForClaims(db, claims);
   return sanitizeSnapshotRecord({
-    ownerType: role === "creator" || role === "owner" ? "creator-account" : "claimed-account",
+    ownerType: role === "creator" || role === "owner" ? "creator-account" : "user-account",
     ownerId: normalizeEmail(context.record.email),
     schemaVersion: SNAPSHOT_SCHEMA_VERSION,
     builtAt: new Date().toISOString(),
@@ -2493,8 +2947,92 @@ async function queryDoctorProfileCalendarRevision(db, profile, ownerEmail = "") 
     String(profile?.profileId || ""),
     String(profile?.doctorKey || ""),
     sanitizeSourceTypes(profile?.sourceTypes).join(","),
+    stableJsonStringify(sortObjectKeys(profile?.state?.session || {})),
     String(profile?.updatedAt || ""),
   ].join("|");
+}
+
+async function loadDoctorProfileSnapshotPayload(context, profile, ownerEmail = "", options = {}) {
+  const db = context.env?.ROSTER_DB;
+  const requestedRange = boundedCalendarEventRange({
+    startDate: options.startDate,
+    endDate: options.endDate,
+  });
+  const descriptor = buildDoctorProfileSnapshotCacheDescriptor(profile, requestedRange);
+  const calendarRevision = await queryDoctorProfileCalendarRevision(db, profile, ownerEmail).catch(() => "");
+  return await loadSnapshotPayloadFromRegistry(context, {
+    descriptor,
+    calendarRevision,
+    cachedRevision: options.cachedRevision,
+    scheduleRebuild: () => scheduleDoctorProfileSnapshotWarmup(context, profile, ownerEmail, { reason: "stale-read" }),
+    buildInline: () => buildAndStoreDoctorProfileSnapshot(context, {
+      profile,
+      ownerEmail,
+      requestedRange,
+      descriptor,
+      revision: calendarRevision,
+      reason: options.reason || "inline-build",
+    }),
+  });
+}
+
+async function buildAndStoreDoctorProfileSnapshot(context, job = {}) {
+  const db = context.env?.ROSTER_DB;
+  const cacheBucket = context.env?.ROSTER_CACHE;
+  const requestedRange = job.requestedRange || defaultSnapshotRange();
+  const descriptor = job.descriptor || buildDoctorProfileSnapshotCacheDescriptor(job.profile, requestedRange);
+  const revision = String(job.revision || await queryDoctorProfileCalendarRevision(db, job.profile, job.ownerEmail || "").catch(() => ""));
+  const startedAt = Date.now();
+  await upsertSnapshotRegistryEntry(db, {
+    ...descriptor,
+    requestedRevision: revision,
+    builtRevision: "",
+    status: "building",
+    artifactKey: descriptor.artifactKey,
+    builtAt: "",
+    sizeBytes: 0,
+    buildMs: 0,
+    lastError: "",
+  }).catch(() => null);
+  try {
+    const snapshot = await buildDerivedDoctorProfileSnapshot(null, db, job.profile, job.ownerEmail || "");
+    const buildMs = Date.now() - startedAt;
+    const sizeBytes = snapshot ? JSON.stringify(snapshot).length : 0;
+    if (snapshot && cacheBucket?.put) {
+      await storeCachedSnapshot(cacheBucket, descriptor.artifactKey, snapshot, {
+        revision,
+        ownerType: descriptor.ownerType,
+        ownerId: descriptor.ownerId,
+        doctorKey: descriptor.doctorKey,
+        rangeKey: descriptor.rangeKey,
+      }).catch(() => null);
+    }
+    await upsertSnapshotRegistryEntry(db, {
+      ...descriptor,
+      requestedRevision: revision,
+      builtRevision: revision,
+      status: snapshot ? "ready" : "missing",
+      artifactKey: descriptor.artifactKey,
+      builtAt: snapshot?.builtAt || new Date().toISOString(),
+      sizeBytes,
+      buildMs,
+      lastError: "",
+    }).catch(() => null);
+    return { snapshot, buildMs, sizeBytes, diagnostics: {} };
+  } catch (error) {
+    await upsertSnapshotRegistryEntry(db, {
+      ...descriptor,
+      requestedRevision: revision,
+      builtRevision: "",
+      status: "error",
+      artifactKey: descriptor.artifactKey,
+      builtAt: "",
+      sizeBytes: 0,
+      buildMs: Date.now() - startedAt,
+      lastError: error?.message || String(error),
+    }).catch(() => null);
+    throw error;
+  }
 }
 
 async function buildDerivedDoctorProfileSnapshot(store, db, profile, ownerEmail = "") {

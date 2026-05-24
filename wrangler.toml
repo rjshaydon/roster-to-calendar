@@ -14,3 +14,7 @@ preview_database_id = "237d0d52-3a7c-4e02-8648-9f4dedbc1cb0"
 [[r2_buckets]]
 binding = "ROSTER_FILES"
 bucket_name = "roster-converter-source-files"
+
+[[r2_buckets]]
+binding = "ROSTER_CACHE"
+bucket_name = "roster-converter-cache"

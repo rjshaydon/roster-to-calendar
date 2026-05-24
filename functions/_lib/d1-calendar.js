@@ -267,6 +267,37 @@ async function ensureCalendarSchemaUncached(db) {
       uploaded_at TEXT NOT NULL DEFAULT ''
     )
   `).run();
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS roster_daily_presence (
+      date TEXT NOT NULL,
+      source_type TEXT NOT NULL,
+      doctor_key TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      event_id TEXT NOT NULL,
+      PRIMARY KEY (date, source_type, doctor_key, event_id)
+    )
+  `).run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_daily_presence_doctor_date ON roster_daily_presence (doctor_key, date)").run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_daily_presence_date_source ON roster_daily_presence (date, source_type)").run();
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS snapshot_registry (
+      owner_type TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      doctor_key TEXT NOT NULL DEFAULT '',
+      range_key TEXT NOT NULL,
+      requested_revision TEXT NOT NULL DEFAULT '',
+      built_revision TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'missing',
+      artifact_key TEXT NOT NULL DEFAULT '',
+      built_at TEXT NOT NULL DEFAULT '',
+      size_bytes INTEGER NOT NULL DEFAULT 0,
+      build_ms INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT '',
+      PRIMARY KEY (owner_type, owner_id, doctor_key, range_key)
+    )
+  `).run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_snapshot_registry_owner ON snapshot_registry (owner_type, owner_id, updated_at DESC)").run();
   await ensureColumn(db, "raw_roster_files", "name", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn(db, "raw_roster_files", "source_type", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn(db, "raw_roster_files", "size", "INTEGER NOT NULL DEFAULT 0");
@@ -389,6 +420,11 @@ export async function upsertDerivedRosterFile(db, file, storedImport) {
       ).run();
     }
   }
+  const eventsByDoctorForPresence = Object.fromEntries(
+    derivedByDoctor.map(({ doctor, events }) => [doctor.key, events])
+  );
+  await deleteDailyPresenceForFile(db, file.id);
+  await populateDailyPresenceForFile(db, file.id, eventsByDoctorForPresence);
   return { ok: true, doctors: doctors.length, events: totalEvents };
 }
 
@@ -477,7 +513,9 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
   }
   statements.push(...bulkInsertEventStatements(db, eventRows));
   statements.push(...bulkInsertIssueStatements(db, issueRows));
+  await deleteDailyPresenceForFile(db, file.id);
   await runTransactionalBatch(db, statements);
+  await populateDailyPresenceForFile(db, file.id, eventsByDoctor);
   return { ok: true, doctors: safeDoctors.length, events: eventRows.length, issues: issueRows.length };
 }
 
@@ -485,6 +523,11 @@ export async function setDerivedRosterFileActive(db, fileId, active) {
   if (!db?.prepare || !fileId) return;
   await ensureCalendarSchema(db);
   await db.prepare("UPDATE roster_files SET active = ? WHERE id = ?").bind(active ? 1 : 0, fileId).run();
+  if (!active) {
+    await deleteDailyPresenceForFile(db, fileId);
+    return;
+  }
+  await rebuildDailyPresenceForFile(db, fileId);
 }
 
 export async function deleteDerivedRosterFile(db, fileId) {
@@ -493,6 +536,7 @@ export async function deleteDerivedRosterFile(db, fileId) {
   await db.prepare("DELETE FROM roster_events WHERE file_id = ?").bind(fileId).run();
   await db.prepare("DELETE FROM roster_issues WHERE file_id = ?").bind(fileId).run();
   await db.prepare("DELETE FROM roster_file_doctors WHERE file_id = ?").bind(fileId).run();
+  await deleteDailyPresenceForFile(db, fileId);
   await db.prepare("DELETE FROM roster_files WHERE id = ?").bind(fileId).run();
 }
 
@@ -925,19 +969,40 @@ export async function queryCalendarRevision(db, ownerEmail = "") {
     WHERE active = 1
   `).first();
   const accountState = email
-    ? await db.prepare("SELECT updated_at FROM account_states WHERE email = ?").bind(email).first()
+    ? await db.prepare("SELECT session_json FROM account_states WHERE email = ?").bind(email).first()
     : null;
   const customEvents = email
     ? await db.prepare("SELECT COUNT(*) AS count, COALESCE(MAX(updated_at), '') AS max_updated_at FROM custom_events WHERE owner_email = ?").bind(email).first()
     : null;
+  const claims = email
+    ? await db.prepare("SELECT COUNT(*) AS count, COALESCE(MAX(updated_at), '') AS max_updated_at FROM account_claims WHERE email = ?").bind(email).first()
+    : null;
+  const locations = email
+    ? await db.prepare("SELECT COUNT(*) AS count, COALESCE(MAX(updated_at), '') AS max_updated_at FROM account_hospital_locations WHERE email = ?").bind(email).first()
+    : null;
+  const profiles = email
+    ? await db.prepare(`
+      SELECT COUNT(DISTINCT doctor_profiles.profile_id) AS count, COALESCE(MAX(doctor_profiles.updated_at), '') AS max_updated_at
+      FROM doctor_profiles
+      INNER JOIN account_claims ON account_claims.doctor_key = doctor_profiles.doctor_key
+      WHERE account_claims.email = ?
+    `).bind(email).first()
+    : null;
+  const materializedSession = materializedSessionStateForRevision(parseJsonObject(accountState?.session_json, {}));
   return [
     Number(roster?.active_file_count || 0),
     String(roster?.max_parsed_at || ""),
     String(roster?.max_uploaded_at || ""),
     Number(roster?.max_last_modified || 0),
-    String(accountState?.updated_at || ""),
+    stableJsonStringify(materializedSession),
+    Number(claims?.count || 0),
+    String(claims?.max_updated_at || ""),
+    Number(locations?.count || 0),
+    String(locations?.max_updated_at || ""),
     Number(customEvents?.count || 0),
     String(customEvents?.max_updated_at || ""),
+    Number(profiles?.count || 0),
+    String(profiles?.max_updated_at || ""),
   ].join("|");
 }
 
@@ -1644,58 +1709,48 @@ export async function queryCoworkerEvents(db, options = {}) {
   const excludeKeys = new Set((options.excludeDoctorKeys || []).filter(Boolean));
   const includeKeys = [...new Set((options.doctorKeys || []).filter(Boolean))];
   const overlapKeys = [...new Set((options.overlapDoctorKeys || []).filter(Boolean))];
-  const sourceSql = sourceTypes.length ? `AND roster_events.source_type IN (${sourceTypes.map(() => "?").join(", ")})` : "";
-  const doctorSql = includeKeys.length ? `AND roster_events.doctor_key IN (${includeKeys.map(() => "?").join(", ")})` : "";
-  const excludeDoctorSql = excludeKeys.size ? `AND roster_events.doctor_key NOT IN (${[...excludeKeys].map(() => "?").join(", ")})` : "";
+  const sourceSql = sourceTypes.length ? `AND p.source_type IN (${sourceTypes.map(() => "?").join(", ")})` : "";
+  const doctorSql = includeKeys.length ? `AND p.doctor_key IN (${includeKeys.map(() => "?").join(", ")})` : "";
+  const excludeDoctorSql = excludeKeys.size ? `AND p.doctor_key NOT IN (${[...excludeKeys].map(() => "?").join(", ")})` : "";
   if (overlapKeys.length) {
-    const overlapSourceSql = sourceTypes.length ? `AND other_events.source_type IN (${sourceTypes.map(() => "?").join(", ")})` : "";
-    const overlapDoctorSql = includeKeys.length ? `AND other_events.doctor_key IN (${includeKeys.map(() => "?").join(", ")})` : "";
-    const overlapExcludeDoctorSql = excludeKeys.size ? `AND other_events.doctor_key NOT IN (${[...excludeKeys].map(() => "?").join(", ")})` : "";
     const rows = await db.prepare(`
       SELECT DISTINCT
-        other_events.id AS event_id,
-        other_events.doctor_key,
-        other_events.display_name,
-        other_events.source_type,
-        other_events.event_json,
-        other_events.start_ts
-      FROM roster_events AS mine
-      INNER JOIN roster_files AS mine_files ON mine_files.id = mine.file_id
-      INNER JOIN roster_events AS other_events
-        ON other_events.source_type = mine.source_type
-       AND other_events.start_date <= mine.end_date
-       AND other_events.end_date >= mine.start_date
-      INNER JOIN roster_files AS other_files ON other_files.id = other_events.file_id
-      WHERE mine_files.active = 1
-        AND other_files.active = 1
-        AND mine.doctor_key IN (${overlapKeys.map(() => "?").join(", ")})
-        AND mine.start_date <= ?
-        AND mine.end_date >= ?
-        AND other_events.start_date <= ?
-        AND other_events.end_date >= ?
-        ${overlapSourceSql}
-        ${overlapDoctorSql}
-        ${overlapExcludeDoctorSql}
-      ORDER BY other_events.display_name, other_events.start_ts
-    `).bind(...overlapKeys, end, start, end, start, ...sourceTypes, ...includeKeys, ...excludeKeys).all();
+        ev.event_json,
+        p.doctor_key,
+        p.display_name,
+        p.source_type
+      FROM roster_daily_presence AS mine
+      INNER JOIN roster_daily_presence AS p
+        ON p.date = mine.date
+       AND p.source_type = mine.source_type
+      INNER JOIN roster_events AS ev ON ev.id = p.event_id
+      WHERE mine.doctor_key IN (${overlapKeys.map(() => "?").join(", ")})
+        AND mine.date >= ?
+        AND mine.date <= ?
+        AND p.date >= ?
+        AND p.date <= ?
+        ${sourceSql}
+        ${doctorSql}
+        ${excludeDoctorSql}
+      ORDER BY p.display_name, ev.start_ts
+    `).bind(...overlapKeys, start, end, start, end, ...sourceTypes, ...includeKeys, ...excludeKeys).all();
     return rowsToCoworkerEvents(rows);
   }
   const rows = await db.prepare(`
-    SELECT
-      roster_events.doctor_key,
-      roster_events.display_name,
-      roster_events.source_type,
-      roster_events.event_json
-    FROM roster_events
-    INNER JOIN roster_files ON roster_files.id = roster_events.file_id
-    WHERE roster_files.active = 1
-      AND roster_events.start_date <= ?
-      AND roster_events.end_date >= ?
+    SELECT DISTINCT
+      ev.event_json,
+      p.doctor_key,
+      p.display_name,
+      p.source_type
+    FROM roster_daily_presence AS p
+    INNER JOIN roster_events AS ev ON ev.id = p.event_id
+    WHERE p.date >= ?
+      AND p.date <= ?
       ${sourceSql}
       ${doctorSql}
       ${excludeDoctorSql}
-    ORDER BY roster_events.display_name, roster_events.start_ts
-  `).bind(end, start, ...sourceTypes, ...includeKeys, ...excludeKeys).all();
+    ORDER BY p.display_name, ev.start_ts
+  `).bind(start, end, ...sourceTypes, ...includeKeys, ...excludeKeys).all();
   return rowsToCoworkerEvents(rows);
 }
 
@@ -1719,36 +1774,116 @@ export async function queryOverlapDoctors(db, options = {}) {
   const overlapKeys = [...new Set((options.overlapDoctorKeys || []).filter(Boolean))];
   const excludeKeys = [...new Set((options.excludeDoctorKeys || []).filter(Boolean))];
   if (!overlapKeys.length) return [];
-  const sourceSql = sourceTypes.length ? `AND other_events.source_type IN (${sourceTypes.map(() => "?").join(", ")})` : "";
-  const excludeDoctorSql = excludeKeys.length ? `AND other_events.doctor_key NOT IN (${excludeKeys.map(() => "?").join(", ")})` : "";
+  const sourceSql = sourceTypes.length ? `AND p.source_type IN (${sourceTypes.map(() => "?").join(", ")})` : "";
+  const excludeDoctorSql = excludeKeys.length ? `AND p.doctor_key NOT IN (${excludeKeys.map(() => "?").join(", ")})` : "";
   const rows = await db.prepare(`
     SELECT DISTINCT
-      other_events.doctor_key,
-      other_events.display_name,
-      other_events.source_type
-    FROM roster_events AS mine
-    INNER JOIN roster_files AS mine_files ON mine_files.id = mine.file_id
-    INNER JOIN roster_events AS other_events
-      ON other_events.source_type = mine.source_type
-     AND other_events.start_date <= mine.end_date
-     AND other_events.end_date >= mine.start_date
-    INNER JOIN roster_files AS other_files ON other_files.id = other_events.file_id
-    WHERE mine_files.active = 1
-      AND other_files.active = 1
-      AND mine.doctor_key IN (${overlapKeys.map(() => "?").join(", ")})
-      AND mine.start_date <= ?
-      AND mine.end_date >= ?
-      AND other_events.start_date <= ?
-      AND other_events.end_date >= ?
+      p.doctor_key,
+      p.display_name,
+      p.source_type
+    FROM roster_daily_presence AS mine
+    INNER JOIN roster_daily_presence AS p
+      ON p.date = mine.date
+     AND p.source_type = mine.source_type
+    WHERE mine.doctor_key IN (${overlapKeys.map(() => "?").join(", ")})
+      AND mine.date >= ?
+      AND mine.date <= ?
+      AND p.date >= ?
+      AND p.date <= ?
       ${sourceSql}
       ${excludeDoctorSql}
-    ORDER BY other_events.display_name, other_events.source_type
-  `).bind(...overlapKeys, end, start, end, start, ...sourceTypes, ...excludeKeys).all();
+    ORDER BY p.display_name, p.source_type
+  `).bind(...overlapKeys, start, end, start, end, ...sourceTypes, ...excludeKeys).all();
   return (rows.results || []).map((row) => ({
     doctorKey: row.doctor_key,
     displayName: row.display_name,
     sourceType: row.source_type,
   }));
+}
+
+export async function deleteDailyPresenceForFile(db, fileId) {
+  if (!db?.prepare || !fileId) return;
+  await ensureCalendarSchema(db);
+  await db.prepare(`
+    DELETE FROM roster_daily_presence
+    WHERE event_id LIKE ? ESCAPE '\\'
+  `).bind(`${escapeLike(fileId)}:%`).run();
+}
+
+export async function populateDailyPresenceForFile(db, fileId, eventsByDoctor = {}) {
+  if (!db?.prepare || !fileId) return;
+  await ensureCalendarSchema(db);
+  const rows = [];
+  for (const events of Object.values(eventsByDoctor || {})) {
+    for (const event of Array.isArray(events) ? events : []) {
+      for (const row of expandEventToDailyPresenceRows(event)) {
+        rows.push([
+          row.date,
+          row.sourceType,
+          row.doctorKey,
+          row.displayName,
+          `${fileId}:${row.doctorKey}:${row.eventId}`,
+        ]);
+      }
+    }
+  }
+  for (const chunk of chunkRows(rows, 100)) {
+    if (!chunk.length) continue;
+    await db.prepare(`
+      INSERT OR IGNORE INTO roster_daily_presence (date, source_type, doctor_key, display_name, event_id)
+      VALUES ${chunk.map(() => "(?, ?, ?, ?, ?)").join(", ")}
+    `).bind(...chunk.flat()).run();
+  }
+}
+
+export async function rebuildDailyPresenceForFile(db, fileId) {
+  if (!db?.prepare || !fileId) return;
+  await ensureCalendarSchema(db);
+  const rows = await db.prepare(`
+    SELECT doctor_key, event_json
+    FROM roster_events
+    INNER JOIN roster_files ON roster_files.id = roster_events.file_id
+    WHERE roster_events.file_id = ?
+      AND roster_files.active = 1
+  `).bind(fileId).all();
+  const eventsByDoctor = new Map();
+  for (const row of rows.results || []) {
+    const doctorKey = String(row.doctor_key || "").trim();
+    const event = parseEvent(row.event_json);
+    if (!doctorKey || !event) continue;
+    if (!eventsByDoctor.has(doctorKey)) eventsByDoctor.set(doctorKey, []);
+    eventsByDoctor.get(doctorKey).push(event);
+  }
+  await deleteDailyPresenceForFile(db, fileId);
+  await populateDailyPresenceForFile(db, fileId, Object.fromEntries(eventsByDoctor));
+}
+
+function expandEventToDailyPresenceRows(event) {
+  const start = String(event?.start || "").slice(0, 10);
+  const end = String(event?.end || event?.start || "").slice(0, 10);
+  const sourceType = eventSourceType(event);
+  const doctorKey = String(event?.doctorKey || event?.doctor_key || "").trim();
+  const displayName = String(event?.displayName || event?.doctorDisplay || doctorKey || "").trim();
+  const eventId = String(event?.id || "").trim();
+  if (!start || !end || start > end || !sourceType || !doctorKey || !eventId) return [];
+  const rows = [];
+  let cursor = start;
+  while (cursor <= end) {
+    rows.push({ date: cursor, sourceType, doctorKey, displayName, eventId });
+    cursor = nextDateKey(cursor);
+  }
+  return rows;
+}
+
+function nextDateKey(dateKey) {
+  const [year, month, day] = String(dateKey || "").split("-").map((part) => Number(part));
+  const date = new Date(Date.UTC(year || 1970, (month || 1) - 1, day || 1));
+  date.setUTCDate(date.getUTCDate() + 1);
+  return date.toISOString().slice(0, 10);
+}
+
+function escapeLike(value) {
+  return String(value || "").replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
 }
 
 export function buildPreviewFromDerivedEvents(events, options = {}) {
@@ -2094,6 +2229,194 @@ function chunkRows(rows, size) {
     chunks.push(rows.slice(index, index + size));
   }
   return chunks;
+}
+
+export function snapshotRegistryRangeKey({ startDate = "", endDate = "" } = {}) {
+  return `${String(startDate || "").slice(0, 10)}..${String(endDate || "").slice(0, 10)}`;
+}
+
+export function snapshotArtifactKey({ ownerType = "", ownerId = "", doctorKey = "", rangeKey = "" } = {}) {
+  const parts = [ownerType, ownerId, doctorKey, rangeKey]
+    .map((part) => String(part || "").trim().replace(/[^A-Za-z0-9_.@-]+/g, "_"));
+  return `snapshots/${parts.join("/")}.json.gz`;
+}
+
+export async function loadSnapshotRegistryEntry(db, key = {}) {
+  if (!db?.prepare) return null;
+  await ensureCalendarSchema(db);
+  const row = await db.prepare(`
+    SELECT owner_type, owner_id, doctor_key, range_key, requested_revision, built_revision, status, artifact_key,
+           built_at, size_bytes, build_ms, last_error, updated_at
+    FROM snapshot_registry
+    WHERE owner_type = ? AND owner_id = ? AND doctor_key = ? AND range_key = ?
+  `).bind(
+    String(key.ownerType || ""),
+    normalizeOwnerIdValue(key.ownerId || key.owner_id || ""),
+    String(key.doctorKey || key.doctor_key || ""),
+    String(key.rangeKey || key.range_key || ""),
+  ).first();
+  return snapshotRegistryEntryFromRow(row);
+}
+
+export async function upsertSnapshotRegistryEntry(db, entry = {}) {
+  if (!db?.prepare || !entry?.ownerType || !entry?.ownerId || !entry?.rangeKey) return false;
+  await ensureCalendarSchema(db);
+  const updatedAt = String(entry.updatedAt || new Date().toISOString());
+  await db.prepare(`
+    INSERT INTO snapshot_registry (
+      owner_type, owner_id, doctor_key, range_key, requested_revision, built_revision, status, artifact_key,
+      built_at, size_bytes, build_ms, last_error, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(owner_type, owner_id, doctor_key, range_key) DO UPDATE SET
+      requested_revision = excluded.requested_revision,
+      built_revision = excluded.built_revision,
+      status = excluded.status,
+      artifact_key = excluded.artifact_key,
+      built_at = excluded.built_at,
+      size_bytes = excluded.size_bytes,
+      build_ms = excluded.build_ms,
+      last_error = excluded.last_error,
+      updated_at = excluded.updated_at
+  `).bind(
+    String(entry.ownerType || ""),
+    normalizeOwnerIdValue(entry.ownerId || ""),
+    String(entry.doctorKey || ""),
+    String(entry.rangeKey || ""),
+    String(entry.requestedRevision || ""),
+    String(entry.builtRevision || ""),
+    String(entry.status || "missing"),
+    String(entry.artifactKey || ""),
+    String(entry.builtAt || ""),
+    Number(entry.sizeBytes || 0),
+    Number(entry.buildMs || 0),
+    String(entry.lastError || ""),
+    updatedAt,
+  ).run();
+  return true;
+}
+
+export async function listSnapshotRegistryEntriesForOwner(db, ownerType, ownerId) {
+  if (!db?.prepare || !ownerType || !ownerId) return [];
+  await ensureCalendarSchema(db);
+  const rows = await db.prepare(`
+    SELECT owner_type, owner_id, doctor_key, range_key, requested_revision, built_revision, status, artifact_key,
+           built_at, size_bytes, build_ms, last_error, updated_at
+    FROM snapshot_registry
+    WHERE owner_type = ? AND owner_id = ?
+    ORDER BY updated_at DESC
+  `).bind(String(ownerType || ""), normalizeOwnerIdValue(ownerId || "")).all();
+  return (rows.results || []).map(snapshotRegistryEntryFromRow).filter(Boolean);
+}
+
+export async function deleteSnapshotRegistryEntriesForOwner(db, ownerType, ownerId) {
+  if (!db?.prepare || !ownerType || !ownerId) return;
+  await ensureCalendarSchema(db);
+  await db.prepare("DELETE FROM snapshot_registry WHERE owner_type = ? AND owner_id = ?").bind(
+    String(ownerType || ""),
+    normalizeOwnerIdValue(ownerId || ""),
+  ).run();
+}
+
+function snapshotRegistryEntryFromRow(row) {
+  if (!row?.owner_type || !row?.owner_id || !row?.range_key) return null;
+  return {
+    ownerType: String(row.owner_type || ""),
+    ownerId: normalizeOwnerIdValue(row.owner_id || ""),
+    doctorKey: String(row.doctor_key || ""),
+    rangeKey: String(row.range_key || ""),
+    requestedRevision: String(row.requested_revision || ""),
+    builtRevision: String(row.built_revision || ""),
+    status: String(row.status || "missing"),
+    artifactKey: String(row.artifact_key || ""),
+    builtAt: String(row.built_at || ""),
+    sizeBytes: Number(row.size_bytes || 0),
+    buildMs: Number(row.build_ms || 0),
+    lastError: String(row.last_error || ""),
+    updatedAt: String(row.updated_at || ""),
+  };
+}
+
+export async function loadCachedSnapshot(r2, artifactKey) {
+  if (!r2?.get || !artifactKey) return null;
+  try {
+    const object = await r2.get(artifactKey);
+    if (!object) return null;
+    const bytes = await object.arrayBuffer();
+    const header = new Uint8Array(bytes, 0, Math.min(2, bytes.byteLength));
+    const isGzip = header.length === 2 && header[0] === 0x1f && header[1] === 0x8b;
+    const text = isGzip
+      ? await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).text()
+      : new TextDecoder().decode(bytes);
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+export async function storeCachedSnapshot(r2, artifactKey, snapshot, metadata = {}) {
+  if (!r2?.put || !artifactKey || !snapshot) return false;
+  const json = JSON.stringify(snapshot);
+  const compressed = await new Response(new Blob([json]).stream().pipeThrough(new CompressionStream("gzip"))).arrayBuffer();
+  await r2.put(artifactKey, compressed, {
+    customMetadata: {
+      revision: String(metadata.revision || ""),
+      ownerType: String(metadata.ownerType || ""),
+      ownerId: normalizeOwnerIdValue(metadata.ownerId || ""),
+      doctorKey: String(metadata.doctorKey || ""),
+      rangeKey: String(metadata.rangeKey || ""),
+    },
+    httpMetadata: { contentType: "application/json", contentEncoding: "gzip" },
+  });
+  return true;
+}
+
+export async function deleteCachedSnapshotsForOwner(r2, ownerType, ownerId) {
+  if (!r2?.list || !ownerType || !ownerId) return;
+  const prefix = `snapshots/${String(ownerType || "").trim().replace(/[^A-Za-z0-9_.@-]+/g, "_")}/${normalizeOwnerIdValue(ownerId || "")}/`;
+  let cursor = undefined;
+  do {
+    const listed = await r2.list({ prefix, cursor });
+    if (listed.objects.length) await r2.delete(listed.objects.map((object) => object.key));
+    cursor = listed.truncated ? listed.cursor : undefined;
+  } while (cursor);
+}
+
+function parseJsonObject(value, fallback = {}) {
+  if (typeof value !== "string" || !value.trim()) return fallback;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeOwnerIdValue(value) {
+  const raw = String(value || "").trim();
+  return raw.includes("@") ? normalizeEmail(raw) : raw;
+}
+
+function materializedSessionStateForRevision(session = {}) {
+  const safe = session && typeof session === "object" ? session : {};
+  return {
+    doctorKey: String(safe.doctorKey || "").trim().toUpperCase(),
+    overrides: sortObjectKeys(safe.overrides && typeof safe.overrides === "object" ? safe.overrides : {}),
+    conflictSelections: sortObjectKeys(safe.conflictSelections && typeof safe.conflictSelections === "object" ? safe.conflictSelections : {}),
+  };
+}
+
+function stableJsonStringify(value) {
+  return JSON.stringify(sortObjectKeys(value));
+}
+
+function sortObjectKeys(value) {
+  if (Array.isArray(value)) return value.map(sortObjectKeys);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, sortObjectKeys(value[key])])
+  );
 }
 
 function sanitizeEvent(value) {

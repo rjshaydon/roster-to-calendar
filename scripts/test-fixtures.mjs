@@ -22,6 +22,25 @@ function workbookDataUrl(workbook) {
   return `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${Buffer.from(bytes).toString("base64")}`;
 }
 
+function eventDates(event) {
+  const dates = [];
+  let cursor = String(event.start_date || "");
+  const end = String(event.end_date || event.start_date || "");
+  while (cursor && end && cursor <= end) {
+    dates.push(cursor);
+    const [year, month, day] = cursor.split("-").map(Number);
+    const next = new Date(Date.UTC(year || 1970, (month || 1) - 1, day || 1));
+    next.setUTCDate(next.getUTCDate() + 1);
+    cursor = next.toISOString().slice(0, 10);
+  }
+  return dates;
+}
+
+function sharedEventDate(left, right, start, end) {
+  const rightDates = new Set(eventDates(right).filter((date) => date >= start && date <= end));
+  return eventDates(left).some((date) => date >= start && date <= end && rightDates.has(date));
+}
+
 function withWorkbookCell(workbook, sheetName, cell, value) {
   const copy = cloneWorkbook(workbook);
   copy.Sheets[sheetName][cell] = value;
@@ -93,6 +112,7 @@ assert.match(
 assert.match(appSource, /function markAccountSwitchPhase/, "account switching should expose debug timings separately from login timings");
 assert.match(appSource, /function renderCachedCalendarSnapshotForContext/, "calendar switching should have an explicit-context snapshot renderer");
 assert.match(appSource, /function validateDoctorProfileCalendarInBackground/, "doctor-profile switching should validate cached snapshots in the background");
+assert.match(appSource, /function queueCreatorSwitchTargetPrefetch\(\)/, "creator login should prefetch switch targets into browser snapshot cache");
 assert.match(
   appSource.match(/async function hydrateAuthenticatedWorkspace[\s\S]*?function markLoginPhase/)?.[0] || "",
   /currentUserEmail === OWNER_EMAIL[\s\S]*forceCreatorDoctorSession\(\)[\s\S]*loadCloudCalendarEvents/,
@@ -100,13 +120,8 @@ assert.match(
 );
 assert.match(
   stateSource.match(/if \(action === "adminLoadUser"\)[\s\S]*?if \(action === "claimRosterName"\)/)?.[0] || "",
-  /prepareLightweightAccountResponse[\s\S]*snapshot: null[\s\S]*issueConfig: null/,
-  "admin account switching should use the lightweight account response and defer calendar snapshots",
-);
-assert.doesNotMatch(
-  stateSource.match(/if \(action === "adminLoadUser"\)[\s\S]*?if \(action === "claimRosterName"\)/)?.[0] || "",
-  /prepareAccountResponse/,
-  "admin account switching should not run full account enrichment before calendar load",
+  /prepareAccountResponse[\s\S]*loadAccountSnapshotPayload[\s\S]*snapshotStatus[\s\S]*snapshotSource[\s\S]*snapshotRevision[\s\S]*viewedAccountPayload/,
+  "admin account switching should hydrate the target account and return an inline snapshot payload",
 );
 assert.match(
   appSource.match(/async function returnToCreatorAccount[\s\S]*?async function clearLocalWorkspace/)?.[0] || "",
@@ -133,11 +148,11 @@ assert.match(
   /accountEmail: viewedAccountEmail\(\)[\s\S]*requestEmail: adminViewingEmail \? authenticatedAccountEmail\(\) : viewedAccountEmail\(\)[\s\S]*targetEmail: adminViewingEmail \? viewedAccountEmail\(\) : \"\"/,
   "switched-user settings should save to the viewed account using creator authentication only for the request",
 );
-assert.doesNotMatch(
+assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
     .match(/if \(action === "login"\)[\s\S]*?const account = await verifyD1Account/)?.[0] || "",
-  /autoClaimMatchedRosterNames|prepareAccountResponse|loadRepositoryIndex|buildIssueConfig/,
-  "login should stay lightweight and avoid broad account hydration",
+  /prepareAccountResponse[\s\S]*loadAccountSnapshotPayload[\s\S]*snapshotStatus[\s\S]*snapshotSource[\s\S]*snapshotRevision[\s\S]*viewedAccountPayload/,
+  "login should build the fast-path account payload and return the default snapshot inline",
 );
 assert.doesNotMatch(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
@@ -177,7 +192,7 @@ assert.doesNotMatch(
 );
 assert.match(
   stateSource.match(/if \(action === "loadDoctorProfile"\)[\s\S]*?if \(action === "saveDoctorProfile"\)/)?.[0] || "",
-  /cachedRevision[\s\S]*snapshotCurrent[\s\S]*calendarRevision/,
+  /cachedRevision[\s\S]*snapshotCurrent[\s\S]*loadDoctorProfileSnapshotPayload[\s\S]*snapshotStatus[\s\S]*snapshotSource[\s\S]*calendarRevision/,
   "doctor profile loads should support cached-revision validation without rebuilding the snapshot",
 );
 assert.match(
@@ -545,8 +560,8 @@ assert.match(
 );
 assert.match(
   d1CalendarSource,
-  /SELECT[\s\S]*roster_events\.doctor_key,[\s\S]*roster_events\.display_name,[\s\S]*roster_events\.source_type,[\s\S]*roster_events\.event_json[\s\S]*FROM roster_events[\s\S]*INNER JOIN roster_files/,
-  "coworker lookup should qualify selected roster_events columns across the roster_files join",
+  /FROM roster_daily_presence[\s\S]*INNER JOIN roster_events AS ev ON ev\.id = p\.event_id/,
+  "coworker lookup should read from daily presence materialization and join roster events for details",
 );
 const caseyFormData = new FormData();
 caseyFormData.append("rosterFiles", new File([caseyBytes], "Casey_Term_2_2026_DRAFT.xlsm", { type: "application/vnd.ms-excel.sheet.macroEnabled.12" }));
@@ -1155,6 +1170,9 @@ class MemoryD1Statement {
       for (const [key, value] of [...this.db.issues.entries()]) if (value.file_id === args[0]) this.db.issues.delete(key);
       return { success: true };
     }
+    if (sql.startsWith("DELETE FROM roster_daily_presence")) {
+      return { success: true };
+    }
     if (sql.startsWith("DELETE FROM roster_files")) {
       this.db.files.delete(args[0]);
       return { success: true };
@@ -1231,6 +1249,9 @@ class MemoryD1Statement {
           issue_json: args[index + 13],
         });
       }
+      return { success: true };
+    }
+    if (sql.startsWith("INSERT OR IGNORE INTO roster_daily_presence")) {
       return { success: true };
     }
     if (sql.startsWith("INSERT INTO account_profiles")) {
@@ -1577,6 +1598,77 @@ class MemoryD1Statement {
           .sort((left, right) => left.start_date.localeCompare(right.start_date))
           .map((issue) => ({ issue_json: issue.issue_json })),
       };
+    }
+    if (sql.includes("FROM roster_daily_presence AS mine")) {
+      const overlapKeyCount = (sql.match(/mine\.doctor_key IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1;
+      const overlapKeys = new Set(args.slice(0, overlapKeyCount));
+      const start = args[overlapKeyCount];
+      const end = args[overlapKeyCount + 1];
+      const sourceOffset = overlapKeyCount + 4;
+      const hasSourceFilter = sql.includes("p.source_type IN");
+      const hasDoctorFilter = sql.includes("p.doctor_key IN");
+      const hasExcludedDoctorFilter = sql.includes("p.doctor_key NOT IN");
+      const sourceCount = hasSourceFilter ? (sql.match(/p\.source_type IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1 : 0;
+      const doctorCount = hasDoctorFilter ? (sql.match(/p\.doctor_key IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1 : 0;
+      const excludedDoctorCount = hasExcludedDoctorFilter ? (sql.match(/p\.doctor_key NOT IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1 : 0;
+      const sourceTypes = new Set(args.slice(sourceOffset, sourceOffset + sourceCount));
+      const doctorKeys = new Set(args.slice(sourceOffset + sourceCount, sourceOffset + sourceCount + doctorCount));
+      const excludedDoctorKeys = new Set(args.slice(sourceOffset + sourceCount + doctorCount, sourceOffset + sourceCount + doctorCount + excludedDoctorCount));
+      const events = [...this.db.events.values()].filter((event) => this.db.files.get(event.file_id)?.active === 1);
+      const mineEvents = events.filter((event) => overlapKeys.has(event.doctor_key) && eventDates(event).some((date) => date >= start && date <= end));
+      const results = events
+        .filter((event) => eventDates(event).some((date) => date >= start && date <= end))
+        .filter((event) => mineEvents.some((mine) => mine.source_type === event.source_type && sharedEventDate(event, mine, start, end)))
+        .filter((event) => !sourceTypes.size || sourceTypes.has(event.source_type))
+        .filter((event) => !doctorKeys.size || doctorKeys.has(event.doctor_key))
+        .filter((event) => !excludedDoctorKeys.has(event.doctor_key))
+        .filter((event, index, list) => list.findIndex((item) => item.id === event.id) === index)
+        .sort((left, right) => left.display_name.localeCompare(right.display_name) || left.start_ts.localeCompare(right.start_ts));
+      if (!sql.includes("event_json")) {
+        return {
+          results: results
+            .map((event) => ({ doctor_key: event.doctor_key, display_name: event.display_name, source_type: event.source_type }))
+            .filter((event, index, list) => list.findIndex((item) => item.doctor_key === event.doctor_key && item.source_type === event.source_type) === index),
+        };
+      }
+      return {
+        results: results.map((event) => ({
+          doctor_key: event.doctor_key,
+          display_name: event.display_name,
+          source_type: event.source_type,
+          event_json: event.event_json,
+          start_ts: event.start_ts,
+        })),
+      };
+    }
+    if (sql.includes("FROM roster_daily_presence AS p") && sql.includes("INNER JOIN roster_events AS ev")) {
+      const start = args[0];
+      const end = args[1];
+      let offset = 2;
+      const sourceCount = sql.includes("p.source_type IN") ? (sql.match(/p\.source_type IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1 : 0;
+      const doctorCount = sql.includes("p.doctor_key IN") ? (sql.match(/p\.doctor_key IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1 : 0;
+      const excludedDoctorCount = sql.includes("p.doctor_key NOT IN") ? (sql.match(/p\.doctor_key NOT IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1 : 0;
+      const sourceTypes = new Set(args.slice(offset, offset + sourceCount));
+      offset += sourceCount;
+      const doctorKeys = new Set(args.slice(offset, offset + doctorCount));
+      offset += doctorCount;
+      const excludedDoctorKeys = new Set(args.slice(offset, offset + excludedDoctorCount));
+      const results = [...this.db.events.values()]
+        .filter((event) => this.db.files.get(event.file_id)?.active === 1)
+        .filter((event) => eventDates(event).some((date) => date >= start && date <= end))
+        .filter((event) => !sourceTypes.size || sourceTypes.has(event.source_type))
+        .filter((event) => !doctorKeys.size || doctorKeys.has(event.doctor_key))
+        .filter((event) => !excludedDoctorKeys.has(event.doctor_key))
+        .filter((event, index, list) => list.findIndex((item) => item.id === event.id) === index)
+        .sort((left, right) => left.display_name.localeCompare(right.display_name) || left.start_ts.localeCompare(right.start_ts))
+        .map((event) => ({
+          doctor_key: event.doctor_key,
+          display_name: event.display_name,
+          source_type: event.source_type,
+          event_json: event.event_json,
+          start_ts: event.start_ts,
+        }));
+      return { results };
     }
     if (sql.includes("FROM roster_events AS mine")) {
       const overlapKeyCount = (sql.match(/mine\.doctor_key IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1;
@@ -2242,7 +2334,9 @@ const d1CreatorLogin = await postState(d1StateStore, {
   email: "rhaydon@gmail.com",
   password: creatorPassword,
 }, d1Store);
-assert.equal(d1CreatorLogin.snapshot, null, "login should not build or return a full calendar snapshot");
+assert.equal(d1CreatorLogin.snapshot?.preview?.derivedFromD1, true, "creator login should return an inline D1-derived snapshot");
+assert.equal(d1CreatorLogin.viewedAccountType, "creator", "creator login should identify the viewed account as the creator context");
+assert.equal(d1CreatorLogin.isImpersonating, false, "creator login should not impersonate another account");
 assert.equal(d1CreatorLogin.state.session.doctorKey, d1Doctor.key, "creator login should keep selected doctor metadata");
 assert.equal(d1CreatorLogin.subscription.enabled, true, "creator account should expose subscription URL capability");
 const d1CreatorCalendar = await postState(d1StateStore, {
@@ -2272,7 +2366,9 @@ const d1DirectLogin = await postState(d1StateStore, {
   email: "d1-user@example.com",
   password: "d1-password",
 }, d1Store);
-assert.equal(d1DirectLogin.snapshot, null, "claimed login should not build or return a full calendar snapshot");
+assert.equal(d1DirectLogin.snapshot?.preview?.derivedFromD1, true, "claimed login should return an inline D1-derived snapshot");
+assert.equal(d1DirectLogin.viewedAccountType, "claimed-user", "claimed direct login should identify the viewed account type");
+assert.equal(d1DirectLogin.isImpersonating, false, "claimed direct login should not be marked as creator impersonation");
 assert.equal(d1DirectLogin.state.session.doctorKey, d1Doctor.key, "claimed login should default to the claimed doctor");
 const d1DirectCalendar = await postState(d1StateStore, {
   action: "loadCalendarEvents",
@@ -2558,7 +2654,12 @@ const d1AdminLoad = await postState(d1StateStore, {
   password: creatorPassword,
   targetEmail: "d1-user@example.com",
 }, d1Store);
-assert.equal(d1AdminLoad.snapshot, null, "admin user switch should not build or return a full calendar snapshot");
+assert.equal(d1AdminLoad.snapshot?.preview?.derivedFromD1, true, "admin user switch should return an inline D1-derived snapshot");
+assert.equal(d1AdminLoad.viewedAccountId, "d1-user@example.com", "creator switch should identify the viewed account");
+assert.equal(d1AdminLoad.viewedAccountType, "claimed-user", "creator switch should retain the target user's account type");
+assert.equal(d1AdminLoad.isImpersonating, true, "creator switch should explicitly enter impersonation mode");
+assert.equal(d1AdminLoad.returnToCreatorAvailable, true, "creator switch should advertise the Back to creator affordance");
+assert.equal(d1AdminLoad.snapshot.ownerType, d1DirectLogin.snapshot.ownerType, "creator switch and direct login should reuse the same canonical snapshot ownership");
 const d1AdminCalendar = await postState(d1StateStore, {
   action: "loadCalendarEvents",
   email: "rhaydon@gmail.com",
@@ -2751,7 +2852,7 @@ const d1NoKvIndexLogin = await postState(d1StateStore, {
   email: "d1-user@example.com",
   password: "d1-password",
 }, d1Store);
-assert.equal(d1NoKvIndexLogin.snapshot, null, "D1 account login should stay lightweight without KV repository index");
+assert.equal(d1NoKvIndexLogin.snapshot?.preview?.derivedFromD1, true, "D1 account login should return a D1-derived snapshot without KV repository index");
 const d1NoKvIndexCalendar = await postState(d1StateStore, {
   action: "loadCalendarEvents",
   email: "d1-user@example.com",
@@ -2932,7 +3033,7 @@ const leaveLogin = await postState(leaveMergeStore, {
   email: "leave@example.com",
   password: "leave-password",
 }, leaveMergeDb);
-assert.equal(leaveLogin.snapshot, null, "login should stay lightweight for duplicate leave accounts");
+assert.equal(leaveLogin.snapshot?.preview?.derivedFromD1, true, "duplicate leave account login should return a D1-derived snapshot");
 const leaveCalendar = await postState(leaveMergeStore, {
   action: "loadCalendarEvents",
   email: "leave@example.com",
@@ -3110,7 +3211,7 @@ assert.deepEqual(
   ["DDH Term 1", "DDH Term 2", "MMC Term 1", "MMC Term 2"],
   "creator calendar load should include both hospitals across both terms",
 );
-assert.deepEqual(fourRosterCalendar.diagnostics, {}, "default calendar loads should avoid file/doctor diagnostics");
+assert.equal(fourRosterCalendar.diagnostics?.selectedDoctorFiles, undefined, "default calendar loads should avoid file/doctor diagnostics by default");
 const fourRosterDiagnosticCalendar = await postState(fourRosterStore, {
   action: "loadCalendarEvents",
   email: "rhaydon@gmail.com",
@@ -3465,7 +3566,7 @@ const d1NoKvLogin = await postState(null, {
   email: "d1-user@example.com",
   password: "d1-password",
 }, d1Store);
-assert.equal(d1NoKvLogin.snapshot, null, "D1-only login should not depend on KV snapshots");
+assert.equal(d1NoKvLogin.snapshot?.preview?.derivedFromD1, true, "D1-only login should return a D1-derived snapshot");
 const d1NoKvCalendar = await postState(null, {
   action: "loadCalendarEvents",
   email: "d1-user@example.com",
@@ -3533,7 +3634,11 @@ const michaelAdminLoad = await postState(michaelStateStore, {
   password: creatorPassword,
   targetEmail: "michael@example.com",
 });
-assert.deepEqual(michaelAdminLoad.state.imports.map((item) => item.repoId).sort(), [], "admin account loads should not hydrate roster file refs during login");
+assert.deepEqual(
+  michaelAdminLoad.state.imports.map((item) => item.repoId).sort(),
+  ["michael-mch", "michael-mmc"],
+  "admin account loads should include the target account roster refs for the inline snapshot fast path",
+);
 const michaelPrimaryResolution = await postState(michaelStateStore, {
   action: "resolveDoctorAccount",
   email: "rhaydon@gmail.com",
@@ -3711,7 +3816,11 @@ const andreaAssigned = await postState(identityStore, {
   targetEmail: "andrea@example.com",
 });
 assert.deepEqual(andreaAssigned.claims.map((claim) => `${claim.sourceType}:${claim.key}`).sort(), ["ddh:ANDREA LIM", "mch:DR ANDREA LIM"]);
-assert.deepEqual(andreaAssigned.state.imports.map((item) => item.repoId).sort(), [], "admin account loads should not hydrate roster file refs during login");
+assert.deepEqual(
+  andreaAssigned.state.imports.map((item) => item.repoId).sort(),
+  ["identity-ddh", "identity-mch"],
+  "admin account loads should include roster refs needed for the inline snapshot fast path",
+);
 await postState(identityStore, {
   action: "removeRosterClaim",
   email: "andrea@example.com",
