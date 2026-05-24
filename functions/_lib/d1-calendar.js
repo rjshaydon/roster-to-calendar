@@ -2207,6 +2207,11 @@ export async function loadR2CachedSnapshot(r2, cacheKey) {
     const object = await r2.get(cacheKey);
     if (!object) return null;
     const bytes = await object.arrayBuffer();
+    const header = new Uint8Array(bytes, 0, 2);
+    if (bytes.byteLength >= 2 && header[0] === 0x1f && header[1] === 0x8b) {
+      const decompressed = await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
+      return JSON.parse(decompressed);
+    }
     return JSON.parse(new TextDecoder().decode(bytes));
   } catch {
     return null;
@@ -2216,8 +2221,10 @@ export async function loadR2CachedSnapshot(r2, cacheKey) {
 export async function storeR2CachedSnapshot(r2, cacheKey, snapshot, revision) {
   if (!r2?.put || !cacheKey || !snapshot) return;
   try {
+    const json = JSON.stringify(snapshot);
+    const compressed = await new Response(new Blob([json]).stream().pipeThrough(new CompressionStream("gzip"))).arrayBuffer();
     const options = revision != null ? { customMetadata: { revision: String(revision) } } : {};
-    await r2.put(cacheKey, JSON.stringify(snapshot), options);
+    await r2.put(cacheKey, compressed, { ...options, httpMetadata: { contentType: "application/json", contentEncoding: "gzip" } });
   } catch (error) {
     console.error("R2 snapshot store error:", error?.message || error);
   }

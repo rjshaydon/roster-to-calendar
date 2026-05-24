@@ -1036,33 +1036,36 @@ export async function onRequestPost(context) {
       const r2 = context.env.ROSTER_FILES;
       const diagnostics = { cacheEngine: "r2", cacheKey, cacheHit: false };
       const t0 = Date.now();
-      const cached = cacheKey ? await loadR2CachedSnapshot(r2, cacheKey) : null;
-      diagnostics.r2LoadMs = Date.now() - t0;
-      if (cached) {
-        diagnostics.cacheHit = true;
-        diagnostics.snapshotSizeBytes = JSON.stringify(cached).length;
-        const buildContext = {
-          role: prepared.role,
-          record: targetRecord,
-          state: prepared.state,
-          claims: prepared.claims,
-          index: null,
-          startDate: requestedRange.startDate,
-          endDate: requestedRange.endDate,
-          doctorKey: normalizeRosterName(body?.doctorKey || ""),
-        };
-        context.waitUntil(revalidateCalendarSnapshot(context.env, cacheKey, buildContext).catch(() => {}));
-          return Response.json({
-            ok: true,
-            snapshot: cached,
-            snapshotCurrent: false,
-            snapshotAvailable: true,
-            snapshotStale: false,
-            snapshotBuiltAt: cached?.builtAt || "",
-            calendarRevision,
-            diagnostics,
-          });
+      const head = cacheKey && r2?.head ? await r2.head(cacheKey).catch(() => null) : null;
+      if (head) {
+        const storedRevision = String(head?.customMetadata?.revision || "");
+        if (!storedRevision) {
+          diagnostics.missReason = "no-stored-revision";
+        } else if (storedRevision !== calendarRevision) {
+          diagnostics.missReason = `revision-changed`;
+        } else {
+          const cached = cacheKey ? await loadR2CachedSnapshot(r2, cacheKey) : null;
+          diagnostics.r2LoadMs = Date.now() - t0;
+          if (cached) {
+            diagnostics.cacheHit = true;
+            diagnostics.snapshotSizeBytes = JSON.stringify(cached).length;
+            return Response.json({
+              ok: true,
+              snapshot: cached,
+              snapshotCurrent: false,
+              snapshotAvailable: true,
+              snapshotStale: false,
+              snapshotBuiltAt: cached?.builtAt || "",
+              calendarRevision,
+              diagnostics,
+            });
+          }
+          diagnostics.missReason = "head-ok-but-load-failed";
+        }
+      } else {
+        diagnostics.missReason = "no-cached-snapshot";
       }
+      diagnostics.r2LoadMs = Date.now() - t0;
       const tb0 = Date.now();
       const snapshot = await buildDerivedAccountSnapshot(context.env.ROSTER_DB, {
         role: prepared.role,
