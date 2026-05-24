@@ -151,8 +151,13 @@ assert.match(
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
     .match(/if \(action === "login"\)[\s\S]*?const account = await verifyD1Account/)?.[0] || "",
-  /responseMode === "fast"[\s\S]*prepareFastLoginEnvelope[\s\S]*loadAccountSnapshotPayload[\s\S]*snapshotStatus[\s\S]*snapshotSource[\s\S]*snapshotRevision[\s\S]*viewedAccountPayload/,
+  /responseMode === "fast"[\s\S]*prepareFastLoginEnvelope[\s\S]*loadAccountSnapshotPayload[\s\S]*allowInlineBuild: responseMode !== "fast"[\s\S]*snapshotStatus[\s\S]*snapshotSource[\s\S]*snapshotRevision[\s\S]*viewedAccountPayload/,
   "login should build the fast-path account payload and return the default snapshot inline",
+);
+assert.match(
+  stateSource.match(/async function loadSnapshotPayloadFromRegistry[\s\S]*?async function loadAccountSnapshotPayload/)?.[0] || "",
+  /allowInlineBuild === false[\s\S]*scheduleRebuild[\s\S]*snapshot: null[\s\S]*snapshotSource: cacheBucket\?\.get \? "server-cache-miss" : "d1-inline-disabled"/,
+  "fast login should skip inline snapshot builds on server-cache misses",
 );
 assert.match(
   stateSource.match(/if \(action === "adminLoadUser"\)[\s\S]*?if \(action === "claimRosterName"\)/)?.[0] || "",

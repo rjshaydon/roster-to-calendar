@@ -109,6 +109,7 @@ export async function onRequestPost(context) {
       const snapshotPayload = await loadAccountSnapshotPayload(context, {
         targetRecord: loginRecord,
         prepared,
+        allowInlineBuild: responseMode !== "fast",
         reason: "login",
       });
       const responsePayload = {
@@ -2086,6 +2087,27 @@ async function loadSnapshotPayloadFromRegistry(context, options = {}) {
       };
     }
   }
+  if (options.allowInlineBuild === false) {
+    if (typeof options.scheduleRebuild === "function") options.scheduleRebuild();
+    return {
+      ok: true,
+      snapshot: null,
+      snapshotAvailable: false,
+      snapshotStale: false,
+      snapshotBuiltAt: registry?.builtAt || "",
+      calendarRevision,
+      diagnostics: {
+        ...diagnostics,
+        missReason: cacheBucket?.get ? "cache-miss-no-inline-build" : "cache-disabled-no-inline-build",
+      },
+      snapshotLookupMs: Date.now() - lookupStartedAt,
+      snapshotBuildMs: 0,
+      ...snapshotRegistryState(registry?.status || "missing", {
+        snapshotSource: cacheBucket?.get ? "server-cache-miss" : "d1-inline-disabled",
+        snapshotRevision: calendarRevision,
+      }),
+    };
+  }
   const built = await options.buildInline();
   return {
     ok: true,
@@ -2133,6 +2155,7 @@ async function loadAccountSnapshotPayload(context, params = {}) {
     descriptor,
     calendarRevision,
     cachedRevision: params.cachedRevision,
+    allowInlineBuild: params.allowInlineBuild !== false,
     scheduleRebuild: () => scheduleAccountSnapshotRebuild(context, {
       targetRecord,
       prepared,
