@@ -6476,8 +6476,21 @@ function closeFilesModal() {
   filesModal.setAttribute("aria-hidden", "true");
 }
 
+function hasLoadedExportPreview() {
+  return Boolean(latestPreview || currentSnapshot?.preview);
+}
+
+function exportSourceEntries() {
+  if (selectedFiles.length) return selectedFiles;
+  return importRefsToClientEntries(currentSnapshot?.fileRefs || []);
+}
+
+function canOpenExportModal() {
+  return Boolean(selectedFiles.length || hasLoadedExportPreview());
+}
+
 function openExportModal() {
-  if (!selectedFiles.length) {
+  if (!canOpenExportModal()) {
     setStatus("Add at least one roster file first.", true);
     return;
   }
@@ -6604,18 +6617,21 @@ async function handleExportAction(action) {
         setStatus("Subscription links are not available for this calendar.", true);
         return;
       }
-      setStatus("Saving subscription feed...");
       const snapshot = snapshotCloudSavePayload();
       snapshot.session = {
         ...snapshot.session,
         exportRange: normalizeExportRangeState(exportConfig.mode === "range" ? exportConfig : defaultExportRangeState()),
       };
-      await saveCloudState(snapshot);
+      snapshot.imports = exportSourceEntries().map(importRefForWorkspace);
       const url = subscriptionUrl("webcal", exportConfig.mode === "range" ? "range" : "full");
       if (!url) throw new Error("No subscription link is available for this account yet.");
       closeExportModal();
-      window.location.href = url;
       setStatus("Opening Apple Calendar subscription...");
+      queueBackgroundCloudStateSave(snapshot, {
+        reportErrors: false,
+        onError: () => setStatus("Opening Apple Calendar subscription. Feed settings could not be saved in the background.", true),
+      });
+      window.location.href = url;
       return;
     }
     if (!canCopySubscriptionUrl()) {
@@ -6632,6 +6648,7 @@ async function handleExportAction(action) {
       ...snapshot.session,
       exportRange: normalizeExportRangeState(exportConfig.mode === "range" ? exportConfig : defaultExportRangeState()),
     };
+    snapshot.imports = exportSourceEntries().map(importRefForWorkspace);
     saveCloudState(snapshot).catch(() => setStatus("Subscription URL copied, but the saved feed range could not be updated.", true));
   } catch (error) {
     setStatus(error.message || "Export failed.", true);
@@ -10333,6 +10350,18 @@ function serverStorageRequiredMessage() {
   return "Server storage is not configured. Add the D1 ROSTER_DB binding to the Pages project, redeploy, then log in again.";
 }
 
+function reportCloudSaveFailure(error, payload = null, options = {}) {
+  if (options.reportErrors === false) {
+    if (typeof options.onError === "function") options.onError(error);
+    return;
+  }
+  const payloadStillMatchesView = payload ? savePayloadMatchesActiveCalendar(payload) : true;
+  if (!payloadStillMatchesView) return;
+  if (!error?.isRosterPersistenceError) cloudAvailable = false;
+  renderLoginState();
+  setStatus(error.message || "Cloud save failed.", true);
+}
+
 function scheduleCloudStateSave() {
   if (!currentUserEmail) return;
   cancelScheduledCloudStateSave();
@@ -10341,11 +10370,7 @@ function scheduleCloudStateSave() {
   cloudSaveTimer = setTimeout(() => {
     const queued = pendingCloudSaveSnapshot;
     pendingCloudSaveSnapshot = null;
-    saveCloudState(queued || snapshot).catch((error) => {
-      if (!error?.isRosterPersistenceError) cloudAvailable = false;
-      renderLoginState();
-      setStatus(error.message || "Cloud save failed.", true);
-    });
+    saveCloudState(queued || snapshot).catch((error) => reportCloudSaveFailure(error, queued || snapshot));
   }, 700);
 }
 
@@ -10375,11 +10400,7 @@ function capturePendingCloudStateSave() {
 function queueBackgroundCloudStateSave(snapshot = null, options = {}) {
   const payload = snapshot || snapshotCloudSavePayload();
   if (!payload) return;
-  const run = () => saveCloudState(payload).catch((error) => {
-    if (!error?.isRosterPersistenceError) cloudAvailable = false;
-    renderLoginState();
-    setStatus(error.message || "Cloud save failed.", true);
-  });
+  const run = () => saveCloudState(payload).catch((error) => reportCloudSaveFailure(error, payload, options));
   const delayMs = Math.max(0, Number(options.delayMs || 0));
   if (delayMs) {
     window.setTimeout(run, delayMs);
