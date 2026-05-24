@@ -93,6 +93,7 @@ export async function onRequestPost(context) {
       if ((loginRecord.role || roleForEmail(loginRecord.email)) !== "creator" && (loginRecord.role || roleForEmail(loginRecord.email)) !== "owner" && !sanitizeClaims(loginRecord.claims).length) {
         loginRecord = await autoClaimMatchedRosterNames(null, loginRecord, context.env.ROSTER_DB);
       }
+      loginRecord = await repairAccountClaimsIfNeeded(context.env.ROSTER_DB, loginRecord, { reason: "login" });
       if (loginRecord !== account.record) await upsertAccountMirror(context.env.ROSTER_DB, loginRecord);
       const prepared = await prepareAccountResponse(null, loginRecord, {
         db: context.env.ROSTER_DB,
@@ -126,6 +127,9 @@ export async function onRequestPost(context) {
         snapshotRevision: snapshotPayload.snapshotRevision,
         stale: snapshotPayload.stale,
         ...viewedAccountPayload(loginRecord, loginRecord, prepared),
+        defaultDoctorKey: prepared.defaultDoctorKey || "",
+        snapshotOwnerType: snapshotPayload.snapshot?.ownerType || snapshotOwnerTypeForRecord(loginRecord, prepared.role),
+        snapshotOwnerId: snapshotPayload.snapshot?.ownerId || normalizeEmail(loginRecord.email),
         issueConfig: prepared.issueConfig,
       });
     }
@@ -198,6 +202,9 @@ export async function onRequestPost(context) {
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
         ...viewedAccountPayload(account.record, targetRecord, prepared),
+        defaultDoctorKey: prepared.defaultDoctorKey || "",
+        snapshotOwnerType: snapshotOwnerTypeForRecord(targetRecord, prepared.role),
+        snapshotOwnerId: normalizeEmail(targetRecord.email),
         issueConfig: prepared.issueConfig,
       });
     }
@@ -212,6 +219,7 @@ export async function onRequestPost(context) {
         target = await autoClaimMatchedRosterNames(null, target, context.env.ROSTER_DB);
         await upsertAccountMirror(context.env.ROSTER_DB, target).catch(() => null);
       }
+      target = await repairAccountClaimsIfNeeded(context.env.ROSTER_DB, target, { reason: "adminLoadUser" });
       const targetClaims = sanitizeClaims(target.claims);
       const prepared = await prepareAccountResponse(null, target, {
         db: context.env.ROSTER_DB,
@@ -244,6 +252,9 @@ export async function onRequestPost(context) {
         snapshotRevision: snapshotPayload.snapshotRevision,
         stale: snapshotPayload.stale,
         ...viewedAccountPayload(account.record, target, prepared),
+        defaultDoctorKey: prepared.defaultDoctorKey || "",
+        snapshotOwnerType: snapshotPayload.snapshot?.ownerType || snapshotOwnerTypeForRecord(target, prepared.role),
+        snapshotOwnerId: snapshotPayload.snapshot?.ownerId || normalizeEmail(target.email),
         issueConfig: prepared.issueConfig,
       });
     }
@@ -299,9 +310,13 @@ export async function onRequestPost(context) {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
       const globalParserExtensions = await loadD1ParserExtensionRules(context.env.ROSTER_DB);
+      const repairedUsers = [];
+      for (const record of await listAccountMirrors(context.env.ROSTER_DB).catch(() => [])) {
+        repairedUsers.push(await repairAccountClaimsIfNeeded(context.env.ROSTER_DB, record, { reason: "listUsers" }));
+      }
       return Response.json({
         ok: true,
-        users: await listD1Users(context.env.ROSTER_DB, { globalParserExtensions }),
+        users: await Promise.all(repairedUsers.map((record) => userSummaryFromRecord(record.email, record, { db: context.env.ROSTER_DB, globalParserExtensions }))),
         availableDoctors: await repositoryDoctorCandidates(null, null, context.env.ROSTER_DB, { hideZeroEventStandalone: true }),
         issueConfig: await buildIssueConfig(null, email, context.env.ROSTER_DB),
       });
@@ -1457,6 +1472,11 @@ function manualRosterClaimIssue(record, claim) {
 
 async function userSummaryFromRecord(email, record, options = {}) {
   const claims = sanitizeClaims(record?.claims);
+  const defaultDoctorKey = canonicalDefaultDoctorKeyForAccount({
+    role: record?.role || roleForEmail(email),
+    claims,
+    state: sanitizeState(record?.state),
+  });
   const adminIssues = filterResolvedAdminIssuesForSummary(record, options.globalParserExtensions);
   const seniorities = options.db
     ? await queryDoctorSeniorities(options.db, claims.map((claim) => claim.key)).catch(() => [])
@@ -1471,9 +1491,41 @@ async function userSummaryFromRecord(email, record, options = {}) {
     insightsEnabled: insightsEnabledForRecord(record),
     adminIssues,
     issuesCount: adminIssues.length,
+    defaultDoctorKey,
     createdAt: record?.createdAt || "",
     updatedAt: record?.updatedAt || "",
   };
+}
+
+async function repairAccountClaimsIfNeeded(db, record, options = {}) {
+  if (!record?.email) return record;
+  const role = record.role || roleForEmail(record.email);
+  if (role === "creator" || role === "owner") return record;
+  const state = sanitizeState(record.state);
+  const claims = sanitizeClaims(record.claims);
+  const defaultDoctorKey = canonicalDefaultDoctorKeyForAccount({ role, claims, state });
+  const existingDoctorKey = normalizeRosterName(state?.session?.doctorKey || "");
+  const nextDoctorKey = defaultDoctorKey || existingDoctorKey;
+  const normalizedRecord = {
+    ...record,
+    claims,
+    state: {
+      ...state,
+      session: {
+        ...(state.session || {}),
+        doctorKey: nextDoctorKey,
+      },
+    },
+  };
+  const claimsChanged = JSON.stringify(claims) !== JSON.stringify(sanitizeClaims(record.claims));
+  const doctorKeyChanged = nextDoctorKey !== existingDoctorKey;
+  if (!claimsChanged && !doctorKeyChanged) return normalizedRecord;
+  await upsertAccountMirror(db, {
+    ...normalizedRecord,
+    updatedAt: new Date().toISOString(),
+  }).catch(() => null);
+  logClaimedAccountSnapshotSelection(record, claims, nextDoctorKey, existingDoctorKey, options.reason || "repairAccountClaims");
+  return normalizedRecord;
 }
 
 function filterResolvedAdminIssuesForSummary(record, globalParserExtensions = {}) {
@@ -1618,6 +1670,7 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
     const originalClaims = claims;
     const matchedClaims = matchDoctorClaims(await loadSqlDoctorCandidates(options.db), record.realName || "");
     nameMatches = matchedClaims.filter((claim) => !claims.some((existing) => sameClaim(existing, claim)));
+    claims = mergeClaims(claims, matchedClaims);
     linkedProfiles = await linkedDoctorProfilesForClaims(store, claims, options.db);
     const d1Refs = await d1RepositoryImportRefsForClaims(options.db, claims);
     const accountImportRefs = d1Refs;
@@ -1652,7 +1705,27 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
     const stateWithRefs = { ...state, imports: creatorRepositoryRefs };
     state = stateWithRefs;
   }
-  state = applyDefaultSelectedDoctorToState(state, role, claims);
+  const defaultDoctorKey = canonicalDefaultDoctorKeyForAccount({ role, claims, state });
+  state = applyDefaultSelectedDoctorToState(state, role, claims, defaultDoctorKey);
+  if (role !== "creator" && role !== "owner") {
+    const persistedDoctorKey = normalizeRosterName(record?.state?.session?.doctorKey || "");
+    if (defaultDoctorKey && persistedDoctorKey !== defaultDoctorKey) {
+      await upsertAccountMirror(options.db, {
+        ...record,
+        claims,
+        state: {
+          ...sanitizeState(record.state),
+          imports: sanitizeState(record.state).imports,
+          session: {
+            ...(sanitizeState(record.state).session || {}),
+            doctorKey: defaultDoctorKey,
+          },
+        },
+        updatedAt: new Date().toISOString(),
+      }).catch(() => null);
+    }
+    logClaimedAccountSnapshotSelection(record, claims, defaultDoctorKey, state.session?.doctorKey || "", options.diagnosticsReason || "prepareAccountResponse");
+  }
 
   const snapshotAvailable = false;
   const snapshotStale = false;
@@ -1672,6 +1745,7 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
     insightsEnabled: insightsEnabledForRecord(record),
     adminIssues: sanitizeAdminIssues(record.adminIssues),
     issueConfig,
+    defaultDoctorKey,
     snapshot: null,
     snapshotAvailable,
     snapshotStale,
@@ -1680,12 +1754,12 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
   };
 }
 
-function applyDefaultSelectedDoctorToState(state, role, claims = []) {
+function applyDefaultSelectedDoctorToState(state, role, claims = [], defaultDoctorKey = "") {
   const session = state.session && typeof state.session === "object" ? state.session : {};
   const existingKey = normalizeRosterName(session.doctorKey || "");
   const defaultKey = role === "creator" || role === "owner"
     ? OWNER_DOCTOR_KEY
-    : sanitizeClaims(claims)[0]?.key || "";
+    : normalizeRosterName(defaultDoctorKey || canonicalDefaultDoctorKeyForAccount({ role, claims, state }) || "");
   return {
     ...state,
     session: {
@@ -1693,6 +1767,43 @@ function applyDefaultSelectedDoctorToState(state, role, claims = []) {
       doctorKey: existingKey || defaultKey,
     },
   };
+}
+
+function canonicalDefaultDoctorKeyForAccount({ role = "", claims = [], state = null } = {}) {
+  if (role === "creator" || role === "owner") return OWNER_DOCTOR_KEY;
+  const groupedClaims = buildCreatorDoctorOptions(sanitizeClaims(claims).map((claim) => ({
+    key: claim.key,
+    displayName: claim.displayName,
+    sourceType: claim.sourceType,
+  })));
+  const persistedKey = normalizeRosterName(state?.session?.doctorKey || "");
+  if (persistedKey && groupedClaims.some((doctor) => doctor.key === persistedKey)) return persistedKey;
+  return normalizeRosterName(groupedClaims[0]?.key || sanitizeClaims(claims)[0]?.key || "");
+}
+
+function logClaimedAccountSnapshotSelection(record, claims, selectedDoctorKey = "", previousDoctorKey = "", reason = "") {
+  if (!selectedDoctorKey || !record?.email) return;
+  const groupedClaims = buildCreatorDoctorOptions(sanitizeClaims(claims).map((claim) => ({
+    key: claim.key,
+    displayName: claim.displayName,
+    sourceType: claim.sourceType,
+  })));
+  const dedupedClaims = sanitizeClaims(claims);
+  if (dedupedClaims.length < 2 && groupedClaims.length < 2) return;
+  console.info("Claimed account selection", {
+    email: normalizeEmail(record.email),
+    reason,
+    rawClaimCount: Array.isArray(record.claims) ? record.claims.length : dedupedClaims.length,
+    dedupedClaimCount: dedupedClaims.length,
+    selectedDoctorKey,
+    previousDoctorKey: normalizeRosterName(previousDoctorKey || ""),
+    selectedChanged: normalizeRosterName(previousDoctorKey || "") !== selectedDoctorKey,
+    groupedDoctorOptions: groupedClaims.map((doctor) => ({
+      key: doctor.key,
+      displayName: doctor.displayName,
+      sourceTypes: doctor.sourceTypes || [doctor.sourceType].filter(Boolean),
+    })),
+  });
 }
 
 function boundedCalendarEventRange(input = {}) {
@@ -1927,6 +2038,7 @@ async function loadAccountSnapshotPayload(context, params = {}) {
   });
   const doctorKey = normalizeRosterName(
     params.doctorKey
+    || prepared?.defaultDoctorKey
     || prepared?.state?.session?.doctorKey
     || targetRecord?.state?.session?.doctorKey
     || ""

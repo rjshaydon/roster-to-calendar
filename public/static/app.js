@@ -257,6 +257,9 @@ let viewedAccountType = currentUserRole === "creator" ? "creator" : "claimed-use
 let isImpersonating = false;
 let impersonatedByCreator = false;
 let returnToCreatorAvailable = false;
+let currentDefaultDoctorKey = currentUserEmail === OWNER_EMAIL ? OWNER_DOCTOR_KEY : "";
+let currentSnapshotOwnerType = currentUserEmail === OWNER_EMAIL ? "creator-account" : "user-account";
+let currentSnapshotOwnerId = normalizeEmail(currentUserEmail);
 let activeCalendarContext = initialCalendarContext();
 let cloudAvailable = false;
 let cloudSaveTimer = 0;
@@ -300,6 +303,8 @@ let currentCalendarRevision = "";
 let snapshotRefreshPromise = null;
 let switchTargetPrefetchRunId = 0;
 let switchTargetPrefetchPromise = null;
+let deferredBootstrapRunId = 0;
+let deferredBootstrapTimer = 0;
 let pendingPreviewSnapToToday = false;
 let insightWarmupTimer = 0;
 let insightWarmupPromise = null;
@@ -4864,7 +4869,7 @@ function selectedDoctor() {
 
 function preferredDoctorKeyForCurrentAccount() {
   if (activeDoctorProfile?.doctorKey) return activeDoctorProfile.doctorKey;
-  if (activeCalendarMode() === "claimed-account" && currentRosterClaims.length) return currentRosterClaims[0].key;
+  if (activeCalendarMode() === "claimed-account") return normalizeRosterName(currentDefaultDoctorKey || currentRosterClaims[0]?.key || "");
   if (currentUserEmail === OWNER_EMAIL && !adminViewingEmail && !activeDoctorProfile) return OWNER_DOCTOR_KEY;
   return "";
 }
@@ -4874,6 +4879,7 @@ function preferredDoctorKeyForAccountEmail(email) {
   if (!targetEmail) return "";
   if (targetEmail === OWNER_EMAIL) return OWNER_DOCTOR_KEY;
   const serverUser = serverUsers.map(normalizeServerUser).find((user) => user.email === targetEmail);
+  if (serverUser?.defaultDoctorKey) return normalizeRosterName(serverUser.defaultDoctorKey);
   const claims = sanitizeRosterClaims(serverUser?.claims || []);
   if (claims.length) return claims[0].key;
   const localUser = accountState.users.find((user) => normalizeEmail(user.email) === targetEmail);
@@ -4990,10 +4996,22 @@ async function switchDoctorSelection(selectedKey, options = {}) {
   }
   const claimedEmail = normalizeEmail(resolvedAccount?.email || selectedOption?.accountEmail || claimedEmailForDoctorKey(selectedKey, selectedOption?.displayName || ""));
   if (canSwitchAsCreator && selectedOption) {
-    showSwitchOverlay(
-      `Switching to ${selectedOption.displayName}…`,
-      resolvedAccount?.mode === "claimed-account" ? "Opening the linked account calendar." : "Opening the roster calendar and loading saved doctor-profile edits.",
-    );
+    const switchProfile = doctorProfileForDoctor(selectedOption);
+    const targetContext = resolvedAccount?.mode === "claimed-account" && claimedEmail
+      ? accountCalendarContextForEmail(claimedEmail)
+      : switchProfile
+        ? calendarSnapshotContext({
+            mode: "doctor-profile",
+            ownerId: switchProfile.ownerId,
+            doctorKey: switchProfile.doctorKey,
+          })
+        : null;
+    if (!targetContext || !loadCachedCalendarSnapshotForContext(targetContext)?.preview) {
+      showSwitchOverlay(
+        `Switching to ${selectedOption.displayName}…`,
+        resolvedAccount?.mode === "claimed-account" ? "Opening the linked account calendar." : "Opening the roster calendar and loading saved doctor-profile edits.",
+      );
+    }
   }
   if (canSwitchAsCreator && selectedOption) {
     try {
@@ -5601,6 +5619,18 @@ function clearPreviewData() {
   closeReviewModal();
   closeCustomEventModal();
   closeContextMenu();
+}
+
+function clearActiveViewedAccountState() {
+  cancelDeferredBootstrapImports();
+  currentSnapshot = null;
+  currentSnapshotStale = false;
+  currentSnapshotBuiltAt = "";
+  currentCalendarRevision = "";
+  restoredSessionState = null;
+  selectedFiles = [];
+  doctorOptions = [];
+  activeDoctorProfile = null;
 }
 
 function ensureOverride(id) {
@@ -8735,10 +8765,16 @@ async function validateClaimedAccountCalendarInBackground(context = {}, options 
     currentSnapshotStale = false;
     currentSnapshotBuiltAt = cachedSnapshot.cachedAt || cachedSnapshot.preview?.lastParsed || "";
   }
+  if (!cachedSnapshot?.preview && currentSnapshot?.preview) {
+    renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+    setStatus(currentSnapshotStale ? "Refreshing calendar..." : "Calendar loaded.");
+    renderLoginState();
+  }
   await hydrateAuthenticatedWorkspace({
     adminTargetEmail: targetEmail === OWNER_EMAIL ? "" : targetEmail,
     includeBootstrap: true,
     accountSwitchStartedAt: options.accountSwitchStartedAt,
+    doctorKey: context.doctorKey || "",
     cachedRevision,
   }, 0);
   renderLoginState();
@@ -8779,6 +8815,7 @@ async function enterUserAccount(email) {
   isImpersonating = true;
   impersonatedByCreator = true;
   returnToCreatorAvailable = true;
+  currentDefaultDoctorKey = preferredDoctorKeyForAccountEmail(targetEmail);
   activeDoctorProfile = null;
   setActiveCalendarContext(targetEmail === OWNER_EMAIL ? "creator-account" : "claimed-account", { email: targetEmail });
   currentUserEmail = targetEmail;
@@ -8788,6 +8825,11 @@ async function enterUserAccount(email) {
   setStatus(`Entering ${targetEmail}...`);
   const targetContext = accountCalendarContextForEmail(targetEmail);
   const renderedCachedSnapshot = renderCachedCalendarSnapshotForContext(targetContext, { accountSwitchStartedAt });
+  if (!renderedCachedSnapshot) {
+    clearPreviewData();
+    doctorOptions = [];
+    selectedFiles = [];
+  }
   renderLoginState();
   try {
     const validation = validateClaimedAccountCalendarInBackground(targetContext, {
@@ -8826,6 +8868,7 @@ async function enterDoctorProfileView(doctor) {
   isImpersonating = false;
   impersonatedByCreator = false;
   returnToCreatorAvailable = true;
+  currentDefaultDoctorKey = normalizeRosterName(profile?.doctorKey || "");
   currentUserEmail = creatorEmail;
   currentUserPassword = creatorPassword;
   currentUserRole = "creator";
@@ -8837,6 +8880,11 @@ async function enterDoctorProfileView(doctor) {
   const renderedCachedSnapshot = targetContext
     ? renderCachedCalendarSnapshotForContext(targetContext, { accountSwitchStartedAt: performance.now() })
     : false;
+  if (!renderedCachedSnapshot) {
+    clearPreviewData();
+    doctorOptions = [];
+    selectedFiles = [];
+  }
   renderLoginState();
   try {
     const validation = validateDoctorProfileCalendarInBackground(doctor, previousState, {
@@ -8889,7 +8937,7 @@ async function loadUnclaimedDoctorCalendar(doctor, sourceContext, options = {}) 
   }
   const snapshot = sanitizeWorkspaceSnapshot(profileData.snapshot);
   if (snapshot && profileData.calendarRevision) snapshot.calendarRevision = String(profileData.calendarRevision);
-  const snapshotUsable = snapshot?.preview && snapshot?.doctorOptions?.length && profileData.snapshotStale !== true;
+  const snapshotUsable = snapshot?.preview && snapshot?.doctorOptions?.length;
   if (snapshotUsable) {
     return {
       mode: "doctor-profile",
@@ -9135,6 +9183,7 @@ async function commitCalendarLoad(result, options = {}) {
   activeDoctorProfile = result.profile;
   setActiveCalendarContext("doctor-profile", { email: currentUserEmail, profile: activeDoctorProfile });
   resetTransientCalendarData();
+  currentDefaultDoctorKey = normalizeRosterName(result.profile?.doctorKey || result.doctor?.key || "");
   selectedFiles = result.imports || [];
   currentSnapshot = result.snapshot;
   currentCalendarRevision = String(result.calendarRevision || currentSnapshot?.calendarRevision || currentCalendarRevision || "");
@@ -9250,6 +9299,7 @@ async function exitDoctorProfileView() {
   isImpersonating = false;
   impersonatedByCreator = false;
   returnToCreatorAvailable = false;
+  currentDefaultDoctorKey = OWNER_DOCTOR_KEY;
   setActiveCalendarContext("creator-account", { email: currentUserEmail });
   clearPreviewData();
   restoredSessionState = loadCurrentSessionState();
@@ -9276,6 +9326,7 @@ async function returnToCreatorAccount() {
   isImpersonating = false;
   impersonatedByCreator = false;
   returnToCreatorAvailable = false;
+  currentDefaultDoctorKey = OWNER_DOCTOR_KEY;
   activeDoctorProfile = null;
   currentUserEmail = creatorEmail;
   currentUserPassword = creatorPassword;
@@ -9908,6 +9959,7 @@ function normalizeServerUser(value) {
       role: value === OWNER_EMAIL ? "owner" : "user",
       sites: [],
       claims: [],
+      defaultDoctorKey: "",
       insightsEnabled: false,
       adminIssues: [],
       issuesCount: 0,
@@ -9922,6 +9974,7 @@ function normalizeServerUser(value) {
     sites: Array.isArray(value?.sites) ? value.sites : [],
     seniorities: Array.isArray(value?.seniorities) ? value.seniorities.map((item) => String(item || "").trim()).filter(Boolean) : [],
     claims: sanitizeRosterClaims(value?.claims || []),
+    defaultDoctorKey: normalizeRosterName(value?.defaultDoctorKey || ""),
     insightsEnabled: role === "owner" || role === "creator" || value?.insightsEnabled === true,
     adminIssues: Array.isArray(value?.adminIssues) ? value.adminIssues : [],
     issuesCount: Number(value?.issuesCount || 0),
@@ -9968,6 +10021,7 @@ async function logoutCurrentUser() {
   localStorage.removeItem(CURRENT_EMAIL_KEY);
   sessionStorage.removeItem(CURRENT_PASSWORD_KEY);
   localStorage.removeItem(PERSISTENT_PASSWORD_KEY);
+  clearActiveViewedAccountState();
   currentUserEmail = "";
   currentUserPassword = "";
   authUserEmail = "";
@@ -9978,6 +10032,9 @@ async function logoutCurrentUser() {
   isImpersonating = false;
   impersonatedByCreator = false;
   returnToCreatorAvailable = false;
+  currentDefaultDoctorKey = "";
+  currentSnapshotOwnerType = "";
+  currentSnapshotOwnerId = "";
   currentUserRole = "user";
   cloudAvailable = false;
   setActiveCalendarContext("claimed-account", { email: "" });
@@ -10031,6 +10088,7 @@ async function loginWithEmail(email, password, options = {}) {
   try {
     await flushCloudStateSave().catch(() => {});
     cancelScheduledCloudStateSave();
+    clearActiveViewedAccountState();
     ensureLocalAccountLogin(email, password, options);
     currentUserEmail = normalizeEmail(email);
     currentUserPassword = password;
@@ -10042,6 +10100,9 @@ async function loginWithEmail(email, password, options = {}) {
     isImpersonating = false;
     impersonatedByCreator = false;
     returnToCreatorAvailable = false;
+    currentDefaultDoctorKey = currentUserEmail === OWNER_EMAIL ? OWNER_DOCTOR_KEY : "";
+    currentSnapshotOwnerType = currentUserEmail === OWNER_EMAIL ? "creator-account" : "user-account";
+    currentSnapshotOwnerId = currentUserEmail;
     currentUserRole = currentUserEmail === OWNER_EMAIL ? "creator" : "user";
     setActiveCalendarContext(currentUserRole === "creator" ? "creator-account" : "claimed-account", { email: currentUserEmail });
     localStorage.setItem(CURRENT_EMAIL_KEY, currentUserEmail);
@@ -10065,7 +10126,20 @@ async function loginWithEmail(email, password, options = {}) {
     closeLoginModal();
     setEntranceStatus("");
     markLoginPhase("shellRendered", loginStartedAt);
-    const renderedCachedSnapshot = renderCachedCalendarSnapshot({ loginStartedAt });
+    const inlineSnapshotReady = Boolean(
+      currentSnapshot?.preview
+      && currentUserRole === "creator"
+      && normalizeRosterName(currentSnapshot?.session?.doctorKey || "") === OWNER_DOCTOR_KEY
+      && String(currentSnapshot.calendarRevision || currentCalendarRevision || "")
+      && String(currentSnapshot.calendarRevision || currentCalendarRevision || "") === String(currentCalendarRevision || "")
+    );
+    if (inlineSnapshotReady) {
+      renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+      markLoginPhase("cachedCalendarRendered", loginStartedAt);
+    }
+    const renderedCachedSnapshot = inlineSnapshotReady
+      ? true
+      : renderCachedCalendarSnapshotForContext(accountCalendarContextForEmail(currentUserEmail), { loginStartedAt });
     setStatus(renderedCachedSnapshot ? "Checking calendar for updates..." : "Loading calendar...");
     void hydrateAuthenticatedWorkspace({ ...options, includeBootstrap: true }, loginStartedAt);
   } catch (error) {
@@ -10164,24 +10238,32 @@ async function hydrateAuthenticatedWorkspace(options = {}, loginStartedAt = 0) {
         : "");
     const loadedFreshCalendar = inlineSnapshotReady
       ? true
-      : await loadCloudCalendarEvents({ adminTargetEmail, cachedRevision });
+      : await loadCloudCalendarEvents({ adminTargetEmail, doctorKey: options.doctorKey || "", cachedRevision });
     markLoginPhase("calendarLoaded", loginStartedAt);
     markAccountSwitchPhase("calendarLoaded", options.accountSwitchStartedAt);
     if (options.includeBootstrap !== false) {
-      if (loadedFreshCalendar || currentSnapshot?.preview) {
-        await bootstrapImports();
+      if (inlineSnapshotReady && currentSnapshot?.preview) {
+        queueDeferredBootstrapImports({
+          expectedKey: activeBootstrapContextKey(),
+          loginStartedAt,
+          accountSwitchStartedAt: options.accountSwitchStartedAt,
+        });
+        markLoginPhase("workspaceRendered", loginStartedAt);
+        markAccountSwitchPhase("workspaceRendered", options.accountSwitchStartedAt);
       } else {
         await bootstrapImports();
+        markLoginPhase("workspaceRendered", loginStartedAt);
+        markAccountSwitchPhase("workspaceRendered", options.accountSwitchStartedAt);
       }
-      markLoginPhase("workspaceRendered", loginStartedAt);
-      markAccountSwitchPhase("workspaceRendered", options.accountSwitchStartedAt);
     }
     if (latestNameMatches.length) {
       const sites = [...new Set(latestNameMatches.map((claim) => claim.sourceType.toUpperCase()))].join(", ");
       setStatus(`Suggested roster name${latestNameMatches.length === 1 ? "" : "s"} for ${sites || "uploaded rosters"}. Please confirm in Account.`);
     }
     if (isCreatorAuthenticated()) {
-      void loadServerUsers();
+      window.setTimeout(() => {
+        void loadServerUsers();
+      }, 0);
     }
   } catch (error) {
     const message = normalizeAuthMessage(error.message || "Workspace hydration failed.");
@@ -10212,6 +10294,42 @@ function markAccountSwitchPhase(phase, accountSwitchStartedAt = 0) {
   if (phase === "workspaceRendered") {
     console.info("Account switch timings", window.__rosterAccountSwitchTimings);
   }
+}
+
+function activeBootstrapContextKey() {
+  if (activeCalendarMode() === "doctor-profile") {
+    return `doctor-profile:${activeDoctorProfile?.id || ""}:${normalizeRosterName(activeDoctorProfile?.doctorKey || "")}`;
+  }
+  return `${activeCalendarMode()}:${viewedAccountEmail()}:${normalizeRosterName(currentDefaultDoctorKey || "")}`;
+}
+
+function cancelDeferredBootstrapImports() {
+  clearTimeout(deferredBootstrapTimer);
+  deferredBootstrapTimer = 0;
+  deferredBootstrapRunId += 1;
+}
+
+function queueDeferredBootstrapImports(options = {}) {
+  cancelDeferredBootstrapImports();
+  const runId = deferredBootstrapRunId;
+  const expectedKey = options.expectedKey || activeBootstrapContextKey();
+  const delayMs = Math.max(0, Number(options.delayMs || 0));
+  deferredBootstrapTimer = window.setTimeout(() => {
+    deferredBootstrapTimer = 0;
+    void (async () => {
+      if (runId !== deferredBootstrapRunId) return;
+      if (activeBootstrapContextKey() !== expectedKey) return;
+      try {
+        await bootstrapImports();
+        if (runId !== deferredBootstrapRunId || activeBootstrapContextKey() !== expectedKey) return;
+        markLoginPhase("workspaceRendered", options.loginStartedAt);
+        markAccountSwitchPhase("workspaceRendered", options.accountSwitchStartedAt);
+      } catch (error) {
+        if (runId !== deferredBootstrapRunId || activeBootstrapContextKey() !== expectedKey) return;
+        setStatus(error.message || "Could not finish loading the calendar workspace.", true);
+      }
+    })();
+  }, delayMs);
 }
 
 async function resolveCurrentAccountClaims(targetEmailOverride = "") {
@@ -10282,6 +10400,9 @@ async function applyCloudStateData(data) {
   cloudAvailable = data.cloudAvailable === true;
   currentCalendarRevision = String(data.snapshotRevision || data.calendarRevision || currentCalendarRevision || "");
   currentUserRole = data.role || currentUserRole;
+  currentDefaultDoctorKey = normalizeRosterName(data.defaultDoctorKey || currentDefaultDoctorKey || "");
+  currentSnapshotOwnerType = String(data.snapshotOwnerType || currentSnapshotOwnerType || "");
+  currentSnapshotOwnerId = String(data.snapshotOwnerId || currentSnapshotOwnerId || "").trim();
   viewedAccountId = normalizeEmail(data.viewedAccountId || viewedAccountEmail() || currentUserEmail);
   viewedAccountType = String(data.viewedAccountType || (currentUserRole === "creator" ? "creator" : "claimed-user"));
   isImpersonating = data.isImpersonating === true;
@@ -10326,7 +10447,7 @@ async function applyCloudStateData(data) {
   currentSnapshot = sanitizeWorkspaceSnapshot(data.snapshot);
   if (currentSnapshot && currentCalendarRevision) {
     currentSnapshot.calendarRevision = currentCalendarRevision;
-    currentSnapshot.cacheKey = currentCalendarSnapshotCacheKey();
+    currentSnapshot.cacheKey = currentCalendarSnapshotCacheKey({ ownerEmail: viewedAccountEmail(), doctorKey: currentDefaultDoctorKey || currentSnapshot?.session?.doctorKey || "" });
   }
   currentSnapshotStale = data.snapshotStale === true;
   currentSnapshotBuiltAt = String(data.snapshotBuiltAt || "");
@@ -10338,7 +10459,12 @@ async function applyCloudStateData(data) {
     session: restoredSessionState || {},
     snapshot: currentSnapshot,
   });
-  if (currentSnapshot) saveCalendarSnapshotCache(currentSnapshot);
+  if (currentSnapshot) {
+    saveCalendarSnapshotCacheForContext(currentSnapshot, {
+      ownerEmail: viewedAccountEmail(),
+      doctorKey: currentDefaultDoctorKey || currentSnapshot?.session?.doctorKey || "",
+    });
+  }
 }
 
 async function loadCloudCalendarEvents(options = {}) {
@@ -10348,9 +10474,11 @@ async function loadCloudCalendarEvents(options = {}) {
   const requestPassword = adminTargetEmail ? authUserPassword : currentUserPassword;
   if (!requestEmail || !requestPassword) return false;
   const preferredDoctorKey = normalizeRosterName(
-    restoredSessionState?.doctorKey
+    options.doctorKey
+    || (adminTargetEmail ? preferredDoctorKeyForAccountEmail(adminTargetEmail) : currentDefaultDoctorKey)
+    || restoredSessionState?.doctorKey
     || selectedDoctor()?.key
-    || (isCreatorAuthenticated() && !adminTargetEmail ? OWNER_DOCTOR_KEY : currentRosterClaims[0]?.key)
+    || (isCreatorAuthenticated() && !adminTargetEmail ? OWNER_DOCTOR_KEY : currentDefaultDoctorKey || currentRosterClaims[0]?.key)
     || "",
   );
   const range = cloudCalendarEventRange();
@@ -10372,13 +10500,21 @@ async function loadCloudCalendarEvents(options = {}) {
   currentCalendarRevision = String(data.snapshotRevision || data.calendarRevision || currentCalendarRevision || "");
   if (data.snapshotCurrent === true) {
     if (currentSnapshot && currentCalendarRevision) currentSnapshot.calendarRevision = currentCalendarRevision;
-    if (currentSnapshot) saveCalendarSnapshotCache(currentSnapshot);
+    if (currentSnapshot) {
+      saveCalendarSnapshotCacheForContext(currentSnapshot, {
+        ownerEmail: adminTargetEmail || viewedAccountEmail(),
+        doctorKey: preferredDoctorKey || currentSnapshot.session?.doctorKey || "",
+      });
+    }
     return Boolean(currentSnapshot);
   }
   currentSnapshot = sanitizeWorkspaceSnapshot(clearCloudLoadedSnapshotFilters(data.snapshot));
   if (currentSnapshot) {
     currentSnapshot.calendarRevision = currentCalendarRevision;
-    currentSnapshot.cacheKey = currentCalendarSnapshotCacheKey();
+    currentSnapshot.cacheKey = currentCalendarSnapshotCacheKey({
+      ownerEmail: adminTargetEmail || viewedAccountEmail(),
+      doctorKey: preferredDoctorKey || currentSnapshot.session?.doctorKey || "",
+    });
   }
   currentSnapshotStale = data.snapshotStale === true;
   currentSnapshotBuiltAt = String(data.snapshotBuiltAt || "");
@@ -10390,7 +10526,10 @@ async function loadCloudCalendarEvents(options = {}) {
     session: restoredSessionState || {},
     snapshot: currentSnapshot,
   });
-  saveCalendarSnapshotCache(currentSnapshot);
+  saveCalendarSnapshotCacheForContext(currentSnapshot, {
+    ownerEmail: adminTargetEmail || viewedAccountEmail(),
+    doctorKey: preferredDoctorKey || currentSnapshot.session?.doctorKey || "",
+  });
   return true;
 }
 
@@ -11498,14 +11637,19 @@ function saveCalendarSnapshotCacheStore(store) {
 
 function calendarSnapshotContext(options = {}) {
   const mode = options.mode || activeCalendarMode();
+  const explicitTarget = Object.prototype.hasOwnProperty.call(options, "ownerEmail")
+    || Object.prototype.hasOwnProperty.call(options, "ownerId")
+    || Object.prototype.hasOwnProperty.call(options, "doctorKey");
   const owner = mode === "doctor-profile"
     ? String(options.ownerId || activeDoctorProfile?.ownerId || activeWorkspaceOwnerKey() || "").trim()
     : normalizeEmail(options.ownerEmail || options.ownerId || activeWorkspaceOwnerKey() || viewedAccountEmail() || currentUserEmail);
   const doctorKey = normalizeRosterName(
     options.doctorKey
-    || restoredSessionState?.doctorKey
-    || selectedDoctor()?.key
-    || (options.ownerEmail ? preferredDoctorKeyForAccountEmail(options.ownerEmail) : preferredDoctorKeyForCurrentAccount())
+    || (mode === "doctor-profile"
+      ? activeDoctorProfile?.doctorKey
+      : explicitTarget
+        ? preferredDoctorKeyForAccountEmail(options.ownerEmail || options.ownerId || "")
+        : restoredSessionState?.doctorKey || selectedDoctor()?.key || preferredDoctorKeyForCurrentAccount())
     || "",
   );
   const range = options.range || cloudCalendarEventRange();

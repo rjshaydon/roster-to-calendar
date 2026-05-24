@@ -1409,7 +1409,7 @@ function accountMirrorFromRows(rows) {
     passwordHash: String(first.password_hash || ""),
     adminIssues,
     localParserExtensions,
-    claims,
+    claims: sanitizeAccountClaims(claims),
     createdAt: String(first.created_at || ""),
     updatedAt: String(first.updated_at || ""),
     state: {
@@ -1957,7 +1957,7 @@ function sanitizeFileDoctors(doctors, fallbackSourceType) {
 }
 
 function sanitizeAccountClaims(claims) {
-  return (Array.isArray(claims) ? claims : [])
+  const normalized = (Array.isArray(claims) ? claims : [])
     .map((claim) => ({
       key: String(claim?.key || "").trim(),
       displayName: String(claim?.displayName || claim?.key || "").trim(),
@@ -1965,6 +1965,15 @@ function sanitizeAccountClaims(claims) {
       matchedAt: String(claim?.matchedAt || ""),
     }))
     .filter((claim) => claim.key && claim.displayName && claim.sourceType);
+  const deduped = [];
+  const seen = new Set();
+  for (const claim of normalized) {
+    const marker = `${claim.sourceType}:${claim.key}`;
+    if (seen.has(marker)) continue;
+    seen.add(marker);
+    deduped.push(claim);
+  }
+  return deduped.sort((left, right) => left.sourceType.localeCompare(right.sourceType) || left.displayName.localeCompare(right.displayName) || left.key.localeCompare(right.key));
 }
 
 function doctorProfileFromRow(row) {

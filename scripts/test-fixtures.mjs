@@ -228,7 +228,7 @@ assert.doesNotMatch(
 );
 assert.match(
   stateSource.match(/if \(action === "listUsers"\)[\s\S]*?if \(action === "calendarStoreStatus"\)/)?.[0] || "",
-  /globalParserExtensions[\s\S]*listD1Users\(context\.env\.ROSTER_DB, \{ globalParserExtensions \}\)/,
+  /globalParserExtensions[\s\S]*repairAccountClaimsIfNeeded[\s\S]*userSummaryFromRecord\(record\.email, record, \{ db: context\.env\.ROSTER_DB, globalParserExtensions \}\)/,
   "creator user-list loading should reuse one parser-rule load for stale issue filtering",
 );
 assert.match(
@@ -238,8 +238,13 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function hydrateAuthenticatedWorkspace[\s\S]*?function markLoginPhase/)?.[0] || "",
-  /adminTargetEmail && adminTargetEmail !== OWNER_EMAIL && !currentRosterClaims\.length[\s\S]*resolveCurrentAccountClaims\(adminTargetEmail\)[\s\S]*!adminTargetEmail && currentUserEmail !== OWNER_EMAIL && !currentRosterClaims\.length[\s\S]*resolveCurrentAccountClaims\(\)[\s\S]*loadCloudCalendarEvents[\s\S]*void loadServerUsers\(\)/,
+  /adminTargetEmail && adminTargetEmail !== OWNER_EMAIL && !currentRosterClaims\.length[\s\S]*resolveCurrentAccountClaims\(adminTargetEmail\)[\s\S]*!adminTargetEmail && currentUserEmail !== OWNER_EMAIL && !currentRosterClaims\.length[\s\S]*resolveCurrentAccountClaims\(\)[\s\S]*loadCloudCalendarEvents[\s\S]*queueDeferredBootstrapImports[\s\S]*void loadServerUsers\(\)/,
   "claim resolution should be skipped for already-claimed account entry while still resolving unclaimed users before calendar load",
+);
+assert.match(
+  appSource.match(/async function validateClaimedAccountCalendarInBackground[\s\S]*?async function validateDoctorProfileCalendarInBackground/)?.[0] || "",
+  /restoreCloudState[\s\S]*!cachedSnapshot\?\.preview && currentSnapshot\?\.preview[\s\S]*renderWorkspaceFromSnapshot\(currentSnapshot[\s\S]*hydrateAuthenticatedWorkspace/,
+  "claimed-account switching should render an inline server snapshot before background hydration finishes",
 );
 assert.match(
   stateSource.match(/async function buildDerivedAccountSnapshot[\s\S]*?function rawRosterObjectKey/)?.[0] || "",
