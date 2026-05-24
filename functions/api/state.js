@@ -74,6 +74,7 @@ export async function onRequestPost(context) {
     const password = String(body?.password || "");
     const action = String(body?.action || "login");
     const mode = String(body?.mode || "login");
+    const responseMode = String(body?.responseMode || "full").trim().toLowerCase() === "fast" ? "fast" : "full";
     const realName = String(body?.realName || "").trim();
     const targetEmail = normalizeEmail(body?.targetEmail);
     if (!email) {
@@ -86,6 +87,7 @@ export async function onRequestPost(context) {
       return Response.json({ error: "Password is required." }, { status: 400 });
     }
     if (action === "login") {
+      const authStartedAt = Date.now();
       const account = await loadOrCreateD1Account(context.env.ROSTER_DB, email, password, { mode, realName });
       let loginRecord = account.created
         ? await autoClaimMatchedCanonicalDoctors(account.record, context.env.ROSTER_DB)
@@ -95,28 +97,29 @@ export async function onRequestPost(context) {
       }
       loginRecord = await repairAccountClaimsIfNeeded(context.env.ROSTER_DB, loginRecord, { reason: "login" });
       if (loginRecord !== account.record) await upsertAccountMirror(context.env.ROSTER_DB, loginRecord);
-      const prepared = await prepareAccountResponse(null, loginRecord, {
-        db: context.env.ROSTER_DB,
-        includeAvailableDoctors: (loginRecord.role || roleForEmail(loginRecord.email)) !== "creator" && (loginRecord.role || roleForEmail(loginRecord.email)) !== "owner" && !sanitizeClaims(loginRecord.claims).length,
-      });
+      const authMs = Date.now() - authStartedAt;
+      const prepareStartedAt = Date.now();
+      const prepared = responseMode === "fast"
+        ? await prepareFastLoginEnvelope(loginRecord, { db: context.env.ROSTER_DB })
+        : await prepareAccountResponse(null, loginRecord, {
+            db: context.env.ROSTER_DB,
+            includeAvailableDoctors: (loginRecord.role || roleForEmail(loginRecord.email)) !== "creator" && (loginRecord.role || roleForEmail(loginRecord.email)) !== "owner" && !sanitizeClaims(loginRecord.claims).length,
+          });
+      const prepareMs = Date.now() - prepareStartedAt;
       const snapshotPayload = await loadAccountSnapshotPayload(context, {
         targetRecord: loginRecord,
         prepared,
         reason: "login",
       });
-      return Response.json({
+      const responsePayload = {
         ok: true,
         cloudAvailable: true,
         created: account.created,
+        responseMode,
         role: prepared.role,
         realName: prepared.realName,
         state: prepared.state,
         claims: prepared.claims,
-        nameMatches: prepared.nameMatches,
-        suggestedClaims: prepared.nameMatches,
-        availableDoctors: prepared.availableDoctors,
-        subscription: prepared.subscription,
-        insightsEnabled: prepared.insightsEnabled,
         calendarRevision: snapshotPayload.calendarRevision,
         snapshot: snapshotPayload.snapshot,
         snapshotAvailable: snapshotPayload.snapshotAvailable,
@@ -130,8 +133,28 @@ export async function onRequestPost(context) {
         defaultDoctorKey: prepared.defaultDoctorKey || "",
         snapshotOwnerType: snapshotPayload.snapshot?.ownerType || snapshotOwnerTypeForRecord(loginRecord, prepared.role),
         snapshotOwnerId: snapshotPayload.snapshot?.ownerId || normalizeEmail(loginRecord.email),
-        issueConfig: prepared.issueConfig,
-      });
+      };
+      if (responseMode !== "fast") {
+        responsePayload.nameMatches = prepared.nameMatches;
+        responsePayload.suggestedClaims = prepared.nameMatches;
+        responsePayload.availableDoctors = prepared.availableDoctors;
+        responsePayload.subscription = prepared.subscription;
+        responsePayload.insightsEnabled = prepared.insightsEnabled;
+        responsePayload.issueConfig = prepared.issueConfig;
+      } else if ((prepared.role === "creator" || prepared.role === "owner") && body?.diagnostics !== false) {
+        responsePayload.diagnostics = {
+          login: {
+            authMs,
+            prepareMs,
+            revisionMs: Number(snapshotPayload.revisionMs || 0),
+            snapshotLookupMs: Number(snapshotPayload.snapshotLookupMs || 0),
+            snapshotBuildMs: Number(snapshotPayload.snapshotBuildMs || 0),
+            snapshotSource: snapshotPayload.snapshotSource || "",
+            responseMode,
+          },
+        };
+      }
+      return Response.json(responsePayload);
     }
 
     const account = await verifyD1Account(context.env.ROSTER_DB, email, password);
@@ -255,6 +278,32 @@ export async function onRequestPost(context) {
         defaultDoctorKey: prepared.defaultDoctorKey || "",
         snapshotOwnerType: snapshotPayload.snapshot?.ownerType || snapshotOwnerTypeForRecord(target, prepared.role),
         snapshotOwnerId: snapshotPayload.snapshot?.ownerId || normalizeEmail(target.email),
+        issueConfig: prepared.issueConfig,
+      });
+    }
+
+    if (action === "loadAccountContext") {
+      const targetRecord = targetEmail && (account.role === "creator" || account.role === "owner")
+        ? await loadAccountMirror(context.env.ROSTER_DB, targetEmail)
+        : account.record;
+      if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
+      const targetClaims = sanitizeClaims(targetRecord.claims);
+      const prepared = await prepareAccountResponse(null, targetRecord, {
+        db: context.env.ROSTER_DB,
+        includeAvailableDoctors: (targetRecord.role || roleForEmail(targetRecord.email)) !== "creator"
+          && (targetRecord.role || roleForEmail(targetRecord.email)) !== "owner"
+          && !targetClaims.length,
+      });
+      return Response.json({
+        ok: true,
+        responseMode: "context",
+        role: prepared.role,
+        realName: prepared.realName,
+        subscription: prepared.subscription,
+        insightsEnabled: prepared.insightsEnabled,
+        nameMatches: prepared.nameMatches,
+        suggestedClaims: prepared.nameMatches,
+        availableDoctors: prepared.availableDoctors,
         issueConfig: prepared.issueConfig,
       });
     }
@@ -1604,16 +1653,40 @@ async function prepareLightweightAccountResponse(rawRecord, options = {}) {
       imports: d1Refs,
     };
   }
+  const defaultDoctorKey = canonicalDefaultDoctorKeyForAccount({ role, claims, state });
   return {
     role,
     realName: record.realName || "",
-    state: applyDefaultSelectedDoctorToState(state, role, claims),
+    state: applyDefaultSelectedDoctorToState(state, role, claims, defaultDoctorKey),
     claims,
+    defaultDoctorKey,
     subscription: {
       token: String(record.subscriptionToken || ""),
       enabled: Boolean(record.subscriptionToken),
     },
     insightsEnabled: insightsEnabledForRecord(record),
+  };
+}
+
+async function prepareFastLoginEnvelope(rawRecord, options = {}) {
+  const lightweight = await prepareLightweightAccountResponse(rawRecord, options);
+  return {
+    role: lightweight.role,
+    realName: lightweight.realName,
+    state: lightweight.state,
+    claims: lightweight.claims,
+    nameMatches: [],
+    availableDoctors: [],
+    subscription: null,
+    insightsEnabled: lightweight.role === "creator" || lightweight.role === "owner",
+    adminIssues: [],
+    issueConfig: null,
+    defaultDoctorKey: lightweight.defaultDoctorKey || "",
+    snapshot: null,
+    snapshotAvailable: false,
+    snapshotStale: false,
+    snapshotBuiltAt: "",
+    snapshotBuildStamp: "",
   };
 }
 
@@ -1935,6 +2008,7 @@ async function loadSnapshotPayloadFromRegistry(context, options = {}) {
   const db = context.env?.ROSTER_DB;
   const cacheBucket = context.env?.ROSTER_CACHE;
   const descriptor = options.descriptor;
+  const lookupStartedAt = Date.now();
   const registry = await loadSnapshotRegistryEntry(db, descriptor).catch(() => null);
   const cachedRevision = String(options.cachedRevision || "");
   const calendarRevision = String(options.calendarRevision || "");
@@ -1951,6 +2025,8 @@ async function loadSnapshotPayloadFromRegistry(context, options = {}) {
         cacheNotChecked: true,
         reason: "cachedRevision matched",
       },
+      snapshotLookupMs: Date.now() - lookupStartedAt,
+      snapshotBuildMs: 0,
       ...snapshotRegistryState(registry?.status || "ready", {
         snapshotSource: "browser",
         snapshotRevision: calendarRevision,
@@ -1974,16 +2050,18 @@ async function loadSnapshotPayloadFromRegistry(context, options = {}) {
         return {
           ok: true,
           snapshot: cachedSnapshot,
-          snapshotAvailable: true,
-          snapshotStale: false,
-          snapshotBuiltAt: registry.builtAt || cachedSnapshot?.builtAt || "",
-          calendarRevision,
-          diagnostics,
-          ...snapshotRegistryState("ready", {
-            snapshotSource: "server-cache",
-            snapshotRevision: calendarRevision,
-          }),
-        };
+        snapshotAvailable: true,
+        snapshotStale: false,
+        snapshotBuiltAt: registry.builtAt || cachedSnapshot?.builtAt || "",
+        calendarRevision,
+        diagnostics,
+        snapshotLookupMs: Date.now() - lookupStartedAt,
+        snapshotBuildMs: 0,
+        ...snapshotRegistryState("ready", {
+          snapshotSource: "server-cache",
+          snapshotRevision: calendarRevision,
+        }),
+      };
       }
       if (typeof options.scheduleRebuild === "function") options.scheduleRebuild();
       return {
@@ -1998,6 +2076,8 @@ async function loadSnapshotPayloadFromRegistry(context, options = {}) {
           staleBuiltRevision: registry.builtRevision || "",
           missReason: "stale-registry",
         },
+        snapshotLookupMs: Date.now() - lookupStartedAt,
+        snapshotBuildMs: 0,
         ...snapshotRegistryState("stale", {
           snapshotSource: "stale-server-cache",
           snapshotRevision: calendarRevision,
@@ -2021,6 +2101,8 @@ async function loadSnapshotPayloadFromRegistry(context, options = {}) {
       snapshotSizeBytes: built.sizeBytes,
       missReason: cacheBucket?.get ? "cache-miss" : "cache-disabled",
     },
+    snapshotLookupMs: Date.now() - lookupStartedAt,
+    snapshotBuildMs: Number(built.buildMs || 0),
     ...snapshotRegistryState("ready", {
       snapshotSource: "d1-build",
       snapshotRevision: calendarRevision,
@@ -2043,9 +2125,11 @@ async function loadAccountSnapshotPayload(context, params = {}) {
     || targetRecord?.state?.session?.doctorKey
     || ""
   );
+  const revisionStartedAt = Date.now();
   const calendarRevision = await queryCalendarRevision(db, targetRecord.email).catch(() => "");
+  const revisionMs = Date.now() - revisionStartedAt;
   const descriptor = buildAccountSnapshotCacheDescriptor(targetRecord, prepared.role, doctorKey, requestedRange);
-  return await loadSnapshotPayloadFromRegistry(context, {
+  const payload = await loadSnapshotPayloadFromRegistry(context, {
     descriptor,
     calendarRevision,
     cachedRevision: params.cachedRevision,
@@ -2069,6 +2153,12 @@ async function loadAccountSnapshotPayload(context, params = {}) {
       reason: params.reason || "inline-build",
     }),
   });
+  return {
+    ...payload,
+    revisionMs,
+    snapshotLookupMs: Number(payload.snapshotLookupMs || 0),
+    snapshotBuildMs: Number(payload.snapshotBuildMs || 0),
+  };
 }
 
 function scheduleAccountSnapshotRebuild(context, job = {}) {

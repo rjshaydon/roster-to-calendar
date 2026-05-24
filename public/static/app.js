@@ -305,6 +305,7 @@ let switchTargetPrefetchRunId = 0;
 let switchTargetPrefetchPromise = null;
 let deferredBootstrapRunId = 0;
 let deferredBootstrapTimer = 0;
+let deferredAccountContextRunId = 0;
 let pendingPreviewSnapToToday = false;
 let insightWarmupTimer = 0;
 let insightWarmupPromise = null;
@@ -5623,6 +5624,7 @@ function clearPreviewData() {
 
 function clearActiveViewedAccountState() {
   cancelDeferredBootstrapImports();
+  cancelDeferredAccountContextLoad();
   currentSnapshot = null;
   currentSnapshotStale = false;
   currentSnapshotBuiltAt = "";
@@ -9847,6 +9849,8 @@ function issueFingerprint(source, rawValue, seniority = "") {
 function sanitizeWorkspaceSnapshot(value) {
   if (!value || typeof value !== "object" || !value.preview) return null;
   const snapshot = {
+    ownerType: String(value.ownerType || "").trim(),
+    ownerId: String(value.ownerId || "").trim(),
     preview: JSON.parse(JSON.stringify(value.preview)),
     session: value.session && typeof value.session === "object" ? JSON.parse(JSON.stringify(value.session)) : {},
     doctorOptions: Array.isArray(value.doctorOptions)
@@ -10120,19 +10124,21 @@ async function loginWithEmail(email, password, options = {}) {
     }
     switchTargetPrefetchRunId += 1;
     switchTargetPrefetchPromise = null;
-    await restoreCloudState({ ...options, deferHydration: true, loginStartedAt });
+    const loginData = await restoreCloudState({
+      ...options,
+      deferHydration: true,
+      deferContext: true,
+      deferSnapshotPersistence: true,
+      skipSnapshotCacheWriteIfCurrent: true,
+      responseMode: "fast",
+      loginStartedAt,
+    });
     if (!currentUserEmail) return;
     renderLoginState();
     closeLoginModal();
     setEntranceStatus("");
     markLoginPhase("shellRendered", loginStartedAt);
-    const inlineSnapshotReady = Boolean(
-      currentSnapshot?.preview
-      && currentUserRole === "creator"
-      && normalizeRosterName(currentSnapshot?.session?.doctorKey || "") === OWNER_DOCTOR_KEY
-      && String(currentSnapshot.calendarRevision || currentCalendarRevision || "")
-      && String(currentSnapshot.calendarRevision || currentCalendarRevision || "") === String(currentCalendarRevision || "")
-    );
+    const inlineSnapshotReady = loginSnapshotReadyForRender();
     if (inlineSnapshotReady) {
       renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
       markLoginPhase("cachedCalendarRendered", loginStartedAt);
@@ -10140,6 +10146,13 @@ async function loginWithEmail(email, password, options = {}) {
     const renderedCachedSnapshot = inlineSnapshotReady
       ? true
       : renderCachedCalendarSnapshotForContext(accountCalendarContextForEmail(currentUserEmail), { loginStartedAt });
+    if ((loginData?.responseMode || "full") === "fast") {
+      queueDeferredAccountContextLoad({
+        loginStartedAt,
+        targetEmail: "",
+        responseMode: loginData?.responseMode || "fast",
+      });
+    }
     setStatus(renderedCachedSnapshot ? "Checking calendar for updates..." : "Loading calendar...");
     void hydrateAuthenticatedWorkspace({ ...options, includeBootstrap: true }, loginStartedAt);
   } catch (error) {
@@ -10169,14 +10182,23 @@ async function restoreCloudState(options = {}) {
         password: requestPassword,
         targetEmail: adminTargetEmail,
         mode: options.mode || "login",
+        responseMode: options.responseMode || "full",
         realName: options.realName || "",
       }),
     });
     const data = await readJsonResponse(response, "Login failed.");
-    await applyCloudStateData(data);
+    await applyCloudStateData(data, {
+      deferContext: options.deferContext === true,
+      deferSnapshotPersistence: options.deferSnapshotPersistence === true,
+      skipSnapshotCacheWriteIfCurrent: options.skipSnapshotCacheWriteIfCurrent === true,
+    });
+    if (currentUserEmail === OWNER_EMAIL && data?.diagnostics?.login) {
+      console.info("Login server timings", data.diagnostics.login);
+    }
     markLoginPhase("authenticated", options.loginStartedAt);
     markAccountSwitchPhase("adminLoadUser", options.accountSwitchStartedAt);
     if (!options.deferHydration) await hydrateAuthenticatedWorkspace({ ...options, includeBootstrap: false }, options.loginStartedAt);
+    return data;
   } catch (error) {
     cancelScheduledCloudStateSave();
     const attemptedEmail = currentUserEmail;
@@ -10309,6 +10331,10 @@ function cancelDeferredBootstrapImports() {
   deferredBootstrapRunId += 1;
 }
 
+function cancelDeferredAccountContextLoad() {
+  deferredAccountContextRunId += 1;
+}
+
 function queueDeferredBootstrapImports(options = {}) {
   cancelDeferredBootstrapImports();
   const runId = deferredBootstrapRunId;
@@ -10330,6 +10356,56 @@ function queueDeferredBootstrapImports(options = {}) {
       }
     })();
   }, delayMs);
+}
+
+function loginSnapshotReadyForRender() {
+  if (!currentSnapshot?.preview) return false;
+  if (String(currentSnapshot.calendarRevision || currentCalendarRevision || "") !== String(currentCalendarRevision || "")) return false;
+  if (activeCalendarMode() === "creator-account") {
+    return normalizeRosterName(currentSnapshot?.session?.doctorKey || "") === OWNER_DOCTOR_KEY;
+  }
+  if (activeCalendarMode() === "claimed-account") {
+    const snapshotDoctorKey = normalizeRosterName(currentSnapshot?.session?.doctorKey || "");
+    return !currentDefaultDoctorKey || snapshotDoctorKey === normalizeRosterName(currentDefaultDoctorKey);
+  }
+  return activeCalendarMode() === "doctor-profile";
+}
+
+async function loadDeferredAccountContext(options = {}) {
+  const requestEmail = normalizeEmail(options.targetEmail) ? authUserEmail : currentUserEmail;
+  const requestPassword = normalizeEmail(options.targetEmail) ? authUserPassword : currentUserPassword;
+  if (!requestEmail || !requestPassword || !cloudAvailable) return null;
+  const response = await fetch("/api/state", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      action: "loadAccountContext",
+      email: requestEmail,
+      password: requestPassword,
+      targetEmail: normalizeEmail(options.targetEmail || ""),
+    }),
+  });
+  return await readJsonResponse(response, "Could not load account context.");
+}
+
+function queueDeferredAccountContextLoad(options = {}) {
+  const runId = ++deferredAccountContextRunId;
+  window.setTimeout(() => {
+    void (async () => {
+      try {
+        const data = await loadDeferredAccountContext(options);
+        if (runId !== deferredAccountContextRunId || !data || viewedAccountEmail() !== normalizeEmail(options.targetEmail || currentUserEmail)) return;
+        applyCloudStateContext(data);
+        renderLoginState();
+      } catch (error) {
+        if (runId !== deferredAccountContextRunId) return;
+        console.warn("Deferred account context load failed", {
+          email: normalizeEmail(options.targetEmail || currentUserEmail),
+          message: error?.message || String(error),
+        });
+      }
+    })();
+  }, 0);
 }
 
 async function resolveCurrentAccountClaims(targetEmailOverride = "") {
@@ -10396,7 +10472,23 @@ async function loadDoctorProfileImportsIntoWorkspace() {
   selectedFiles = [];
 }
 
-async function applyCloudStateData(data) {
+function saveLocalAccountIdentity(realName = "") {
+  if (!realName) return;
+  const localAccount = accountState.users.find((user) => user.email === currentUserEmail);
+  if (localAccount) {
+    localAccount.realName = realName;
+  } else {
+    accountState.users.push({
+      email: currentUserEmail,
+      realName,
+      password: "",
+      role: currentUserEmail === OWNER_EMAIL ? "owner" : "user",
+    });
+  }
+  saveAccountState();
+}
+
+function applyCloudStateIdentity(data) {
   cloudAvailable = data.cloudAvailable === true;
   currentCalendarRevision = String(data.snapshotRevision || data.calendarRevision || currentCalendarRevision || "");
   currentUserRole = data.role || currentUserRole;
@@ -10409,8 +10501,12 @@ async function applyCloudStateData(data) {
   impersonatedByCreator = data.impersonatedByCreator === true;
   returnToCreatorAvailable = data.returnToCreatorAvailable === true || Boolean(isImpersonating);
   adminViewingEmail = isImpersonating ? viewedAccountId : "";
-  currentInsightsEnabled = currentUserRole === "creator" || data.insightsEnabled === true;
   currentRosterClaims = sanitizeRosterClaims(data.claims || []);
+  if (data.realName) saveLocalAccountIdentity(data.realName);
+}
+
+function applyCloudStateContext(data) {
+  currentInsightsEnabled = currentUserRole === "creator" || data.insightsEnabled === true;
   currentSuggestedClaims = sanitizeRosterClaims(data.suggestedClaims || data.nameMatches || []);
   latestNameMatches = currentSuggestedClaims;
   const incomingAvailableDoctors = sanitizeAvailableRosterDoctors(data.availableDoctors || []);
@@ -10419,20 +10515,9 @@ async function applyCloudStateData(data) {
   }
   currentSubscription = sanitizeSubscription(data.subscription);
   applyIssueConfig(data.issueConfig);
-  if (data.realName) {
-    const localAccount = accountState.users.find((user) => user.email === currentUserEmail);
-    if (localAccount) {
-      localAccount.realName = data.realName;
-    } else {
-      accountState.users.push({
-        email: currentUserEmail,
-        realName: data.realName,
-        password: "",
-        role: currentUserEmail === OWNER_EMAIL ? "owner" : "user",
-      });
-    }
-    saveAccountState();
-  }
+}
+
+async function applyCloudStateSnapshot(data, options = {}) {
   if (!cloudAvailable) return;
   if (!data.state) {
     selectedFiles = [];
@@ -10460,11 +10545,26 @@ async function applyCloudStateData(data) {
     snapshot: currentSnapshot,
   });
   if (currentSnapshot) {
-    saveCalendarSnapshotCacheForContext(currentSnapshot, {
+    const cacheContext = {
       ownerEmail: viewedAccountEmail(),
       doctorKey: currentDefaultDoctorKey || currentSnapshot?.session?.doctorKey || "",
-    });
+    };
+    if (options.deferSnapshotPersistence === true) {
+      queueDeferredSnapshotCachePersist(currentSnapshot, cacheContext, {
+        skipIfRevisionMatches: options.skipSnapshotCacheWriteIfCurrent === true,
+      });
+    } else {
+      saveCalendarSnapshotCacheForContext(currentSnapshot, cacheContext, {
+        snapshotReady: true,
+      });
+    }
   }
+}
+
+async function applyCloudStateData(data, options = {}) {
+  applyCloudStateIdentity(data);
+  if (!options.deferContext) applyCloudStateContext(data);
+  await applyCloudStateSnapshot(data, options);
 }
 
 async function loadCloudCalendarEvents(options = {}) {
@@ -11688,8 +11788,8 @@ function loadCachedCalendarSnapshot() {
   return loadCachedCalendarSnapshotForContext();
 }
 
-function saveCalendarSnapshotCacheForContext(snapshot = currentSnapshot, context = {}) {
-  const sanitized = sanitizeWorkspaceSnapshot(snapshot);
+function saveCalendarSnapshotCacheForContext(snapshot = currentSnapshot, context = {}, options = {}) {
+  const sanitized = options.snapshotReady === true ? snapshot : sanitizeWorkspaceSnapshot(snapshot);
   if (!sanitized?.preview) return;
   const key = calendarSnapshotCacheKeyForContext({
     ...context,
@@ -11697,6 +11797,9 @@ function saveCalendarSnapshotCacheForContext(snapshot = currentSnapshot, context
   });
   if (!key) return;
   const store = loadCalendarSnapshotCacheStore();
+  if (options.skipIfRevisionMatches === true && String(store[key]?.calendarRevision || "") === String(sanitized.calendarRevision || currentCalendarRevision || "")) {
+    return;
+  }
   sanitized.cacheKey = key;
   sanitized.calendarRevision = String(sanitized.calendarRevision || currentCalendarRevision || "");
   sanitized.cachedAt = new Date().toISOString();
@@ -11710,6 +11813,31 @@ function saveCalendarSnapshotCacheForContext(snapshot = currentSnapshot, context
 
 function saveCalendarSnapshotCache(snapshot = currentSnapshot) {
   saveCalendarSnapshotCacheForContext(snapshot);
+}
+
+function queueDeferredSnapshotCachePersist(snapshot = currentSnapshot, context = {}, options = {}) {
+  const run = () => {
+    try {
+      saveCalendarSnapshotCacheForContext(snapshot, context, {
+        snapshotReady: true,
+        skipIfRevisionMatches: options.skipIfRevisionMatches === true,
+      });
+    } catch {
+      // Snapshot cache persistence must not block the foreground workflow.
+    }
+  };
+  const scheduleIdle = () => {
+    if (typeof requestIdleCallback === "function") {
+      requestIdleCallback(run, { timeout: 1200 });
+    } else {
+      window.setTimeout(run, 0);
+    }
+  };
+  if (typeof requestAnimationFrame === "function") {
+    requestAnimationFrame(scheduleIdle);
+  } else {
+    scheduleIdle();
+  }
 }
 
 function invalidateCalendarSnapshotCache() {

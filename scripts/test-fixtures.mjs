@@ -151,8 +151,13 @@ assert.match(
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
     .match(/if \(action === "login"\)[\s\S]*?const account = await verifyD1Account/)?.[0] || "",
-  /prepareAccountResponse[\s\S]*loadAccountSnapshotPayload[\s\S]*snapshotStatus[\s\S]*snapshotSource[\s\S]*snapshotRevision[\s\S]*viewedAccountPayload/,
+  /responseMode === "fast"[\s\S]*prepareFastLoginEnvelope[\s\S]*loadAccountSnapshotPayload[\s\S]*snapshotStatus[\s\S]*snapshotSource[\s\S]*snapshotRevision[\s\S]*viewedAccountPayload/,
   "login should build the fast-path account payload and return the default snapshot inline",
+);
+assert.match(
+  stateSource.match(/if \(action === "adminLoadUser"\)[\s\S]*?if \(action === "claimRosterName"\)/)?.[0] || "",
+  /if \(action === "loadAccountContext"\)[\s\S]*prepareAccountResponse[\s\S]*issueConfig/,
+  "deferred login bootstrap should have a dedicated authenticated account-context route",
 );
 assert.doesNotMatch(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
@@ -308,8 +313,23 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function loginWithEmail[\s\S]*?async function restoreCloudState/)?.[0] || "",
-  /restoreCloudState\(\{ \.\.\.options, deferHydration: true[\s\S]*renderLoginState\(\);\s*closeLoginModal\(\);[\s\S]*hydrateAuthenticatedWorkspace\(\{ \.\.\.options, includeBootstrap: true \}/,
+  /restoreCloudState\(\{[\s\S]*deferContext: true[\s\S]*deferSnapshotPersistence: true[\s\S]*responseMode: "fast"/,
+  "login should request the fast phased cloud-state response",
+);
+assert.match(
+  appSource.match(/async function loginWithEmail[\s\S]*?async function restoreCloudState/)?.[0] || "",
+  /renderLoginState\(\);\s*closeLoginModal\(\);[\s\S]*queueDeferredAccountContextLoad[\s\S]*void hydrateAuthenticatedWorkspace\(\{[\s\S]*includeBootstrap: true/,
   "successful login should reveal the shell before background workspace hydration completes",
+);
+assert.match(
+  appSource.match(/async function restoreCloudState[\s\S]*?async function hydrateAuthenticatedWorkspace/)?.[0] || "",
+  /applyCloudStateData\(data, \{[\s\S]*deferContext[\s\S]*deferSnapshotPersistence[\s\S]*skipSnapshotCacheWriteIfCurrent[\s\S]*\}\)[\s\S]*Login server timings/,
+  "restoreCloudState should support the fast-login phased apply path and creator diagnostics",
+);
+assert.match(
+  appSource.match(/function saveCalendarSnapshotCacheForContext[\s\S]*?function invalidateCalendarSnapshotCache/)?.[0] || "",
+  /skipIfRevisionMatches[\s\S]*requestIdleCallback[\s\S]*requestAnimationFrame/,
+  "snapshot cache persistence should be deferrable and skip redundant warm-login rewrites",
 );
 assert.doesNotMatch(
   stateSource,
