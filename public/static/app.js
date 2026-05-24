@@ -10328,9 +10328,6 @@ async function applyCloudStateData(data) {
     currentSnapshot.calendarRevision = currentCalendarRevision;
     currentSnapshot.cacheKey = currentCalendarSnapshotCacheKey();
   }
-  if (currentSnapshot && shouldRebuildAccountSnapshot(currentSnapshot)) {
-    currentSnapshot = null;
-  }
   currentSnapshotStale = data.snapshotStale === true;
   currentSnapshotBuiltAt = String(data.snapshotBuiltAt || "");
   selectedFiles = importRefsToClientEntries(data.state.imports || currentSnapshot?.fileRefs || []);
@@ -12126,20 +12123,28 @@ async function bootstrapImports() {
     renderFilesList();
     if (currentSnapshot?.preview && currentSnapshot.doctorOptions?.length) {
       const snapshotInvalid = snapshotHasUnresolvablePreviewEvents(currentSnapshot);
-      if ((currentSnapshotStale || snapshotInvalid) && selectedFiles.length) {
-        setStatus("Refreshing calendar...");
-        await ensureSelectedFilesLoaded();
-        if (selectedFiles.length) {
-          await analyzeFiles();
-          scheduleCloudStateSave();
-          return;
-        }
-      }
       renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
       scheduleInsightWarmup();
       if (currentSnapshotStale || snapshotInvalid) {
         setStatus("Refreshing calendar...");
-        void refreshSnapshotInBackground();
+        const canRefreshFromBrowserFiles = selectedFiles.length && (selectedFiles.every((entry) => entry.file) || await ensureSelectedFilesLoaded());
+        if (canRefreshFromBrowserFiles) {
+          void refreshSnapshotInBackground();
+        } else if (cloudAvailable) {
+          void loadCloudCalendarEvents({ adminTargetEmail: adminViewingEmail ? viewedAccountEmail() : "" })
+            .then((loadedCalendar) => {
+              if (!loadedCalendar || !currentSnapshot?.preview) return;
+              renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+              currentSnapshotStale = false;
+              currentSnapshotBuiltAt = new Date().toISOString();
+              setStatus("Calendar refreshed.");
+            })
+            .catch((error) => {
+              setStatus(error.message || "Could not refresh the calendar.", true);
+            });
+        } else {
+          setStatus("Calendar loaded.");
+        }
       } else {
         setStatus("Calendar loaded.");
       }
@@ -12168,9 +12173,11 @@ async function bootstrapImports() {
         : "Add a roster file to begin.");
     }
   } catch (error) {
-    selectedFiles = [];
+    if (currentSnapshot?.preview) {
+      renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+    }
     renderFilesList();
-    setStatus("Browser storage is unavailable. You can still import files for this session.", true);
+    setStatus(error.message || "Could not restore browser-stored roster files.", true);
   }
 }
 

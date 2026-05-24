@@ -256,6 +256,16 @@ assert.match(
   /cloudAvailable && selectedFiles\.length && selectedFiles\.some\(\(entry\) => !entry\.file\)[\s\S]*loadCloudCalendarEvents\(\{ adminTargetEmail: adminViewingEmail \? viewedAccountEmail\(\) : "" \}\)[\s\S]*No D1 calendar events were found/,
   "cloud repository refs should use D1 calendar loading instead of falling through to local browser parsing",
 );
+assert.doesNotMatch(
+  appSource.match(/async function applyCloudStateData[\s\S]*?async function loadCloudCalendarEvents/)?.[0] || "",
+  /shouldRebuildAccountSnapshot\(currentSnapshot\)/,
+  "server-delivered account snapshots should not be discarded before first render",
+);
+assert.match(
+  appSource.match(/async function bootstrapImports[\s\S]*?function snapshotHasUnresolvablePreviewEvents/)?.[0] || "",
+  /currentSnapshot\?\.preview[\s\S]*renderWorkspaceFromSnapshot\(currentSnapshot[\s\S]*loadCloudCalendarEvents\(\{ adminTargetEmail: adminViewingEmail \? viewedAccountEmail\(\) : "" \}\)/,
+  "bootstrap should keep rendering server snapshots while cloud refresh runs in the background",
+);
 assert.match(
   appSource.match(/function renderFilesMarkup[\s\S]*?function renderFilesList/)?.[0] || "",
   /statusOnlyEntries[\s\S]*const displayFiles = selectedFiles\.length \? selectedFiles : statusOnlyEntries/,
