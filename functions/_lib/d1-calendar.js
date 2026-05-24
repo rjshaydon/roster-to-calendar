@@ -950,9 +950,6 @@ export async function queryCalendarRevision(db, ownerEmail = "") {
     FROM roster_files
     WHERE active = 1
   `).first();
-  const accountState = email
-    ? await db.prepare("SELECT updated_at FROM account_states WHERE email = ?").bind(email).first()
-    : null;
   const customEvents = email
     ? await db.prepare("SELECT COUNT(*) AS count, COALESCE(MAX(updated_at), '') AS max_updated_at FROM custom_events WHERE owner_email = ?").bind(email).first()
     : null;
@@ -961,7 +958,6 @@ export async function queryCalendarRevision(db, ownerEmail = "") {
     String(roster?.max_parsed_at || ""),
     String(roster?.max_uploaded_at || ""),
     Number(roster?.max_last_modified || 0),
-    String(accountState?.updated_at || ""),
     Number(customEvents?.count || 0),
     String(customEvents?.max_updated_at || ""),
   ].join("|");
