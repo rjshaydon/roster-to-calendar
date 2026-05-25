@@ -3117,6 +3117,7 @@ async function hydrateInsightCacheFromServer() {
         password: requestPassword,
         startDate,
         endDate,
+        allowFallback: true,
       }),
     });
     const data = await readJsonResponse(response, "Could not load roster insights.");
@@ -3157,9 +3158,9 @@ function selectedInsightDoctorKeys() {
   ].map(normalizeRosterName).filter(Boolean))];
 }
 
-async function fetchRosterInsightRows({ startDate, endDate = startDate, sourceTypes = [], excludeDoctorKeys = [], doctorKeys = [], overlapDoctorKeys = [] } = {}) {
+async function fetchRosterInsightRows({ startDate, endDate = startDate, sourceTypes = [], excludeDoctorKeys = [], doctorKeys = [], overlapDoctorKeys = [], allowFallback = true } = {}) {
   if (!cloudAvailable || !startDate) return { ok: false, unavailable: true, rows: [] };
-  const cacheKey = rosterInsightCacheKey({ startDate, endDate, sourceTypes, excludeDoctorKeys, doctorKeys, overlapDoctorKeys });
+  const cacheKey = `${rosterInsightCacheKey({ startDate, endDate, sourceTypes, excludeDoctorKeys, doctorKeys, overlapDoctorKeys })}|fallback:${allowFallback ? "1" : "0"}`;
   if (visibleInsightWarmCache.has(cacheKey)) {
     return { ok: true, rows: visibleInsightWarmCache.get(cacheKey), elapsedMs: 0, cached: true };
   }
@@ -3180,6 +3181,7 @@ async function fetchRosterInsightRows({ startDate, endDate = startDate, sourceTy
         excludeDoctorKeys,
         doctorKeys,
         overlapDoctorKeys,
+        allowFallback,
       }),
     });
     const data = await readJsonResponse(response, "Could not load roster insights.");
@@ -3198,9 +3200,9 @@ async function fetchRosterInsightRows({ startDate, endDate = startDate, sourceTy
   }
 }
 
-async function fetchRosterOverlapDoctors({ startDate, endDate = startDate, sourceTypes = [], excludeDoctorKeys = [], overlapDoctorKeys = [] } = {}) {
+async function fetchRosterOverlapDoctors({ startDate, endDate = startDate, sourceTypes = [], excludeDoctorKeys = [], overlapDoctorKeys = [], allowFallback = true } = {}) {
   if (!cloudAvailable || !startDate || !overlapDoctorKeys.length) return { ok: false, unavailable: true, doctors: [] };
-  const cacheKey = rosterOverlapDoctorCacheKey({ startDate, endDate, sourceTypes, excludeDoctorKeys, overlapDoctorKeys });
+  const cacheKey = `${rosterOverlapDoctorCacheKey({ startDate, endDate, sourceTypes, excludeDoctorKeys, overlapDoctorKeys })}|fallback:${allowFallback ? "1" : "0"}`;
   if (visibleInsightWarmCache.has(cacheKey)) {
     return { ok: true, doctors: visibleInsightWarmCache.get(cacheKey), elapsedMs: 0, cached: true };
   }
@@ -3220,6 +3222,7 @@ async function fetchRosterOverlapDoctors({ startDate, endDate = startDate, sourc
         sourceTypes,
         excludeDoctorKeys,
         overlapDoctorKeys,
+        allowFallback,
       }),
     });
     const data = await readJsonResponse(response, "Could not load roster overlap doctors.");
@@ -4273,6 +4276,7 @@ async function warmInsightData() {
     startDate: date,
     endDate: date,
     excludeDoctorKeys: selectedKeys,
+    allowFallback: false,
   })));
   const dateSourcePairs = [];
   for (const event of selectedEvents) {
@@ -4287,6 +4291,7 @@ async function warmInsightData() {
       endDate: date,
       sourceTypes: [source.toLowerCase()],
       excludeDoctorKeys: selectedKeys,
+      allowFallback: false,
     });
   }));
   await fetchRosterOverlapDoctors({
@@ -4294,6 +4299,7 @@ async function warmInsightData() {
     endDate,
     excludeDoctorKeys: selectedKeys,
     overlapDoctorKeys: selectedKeys,
+    allowFallback: false,
   });
 }
 
