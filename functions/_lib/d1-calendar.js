@@ -1065,6 +1065,10 @@ export async function upsertAccountMirror(db, record, options = {}) {
     await db.prepare(`
       INSERT INTO account_claims (email, source_type, doctor_key, display_name, matched_at, updated_at)
       VALUES ${chunk.map(() => "(?, ?, ?, ?, ?, ?)").join(", ")}
+      ON CONFLICT(email, source_type, doctor_key) DO UPDATE SET
+        display_name = excluded.display_name,
+        matched_at = excluded.matched_at,
+        updated_at = excluded.updated_at
     `).bind(...chunk.flat()).run();
   }
   const preserveExistingState = options.preserveExistingState === true;

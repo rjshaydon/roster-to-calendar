@@ -151,13 +151,24 @@ assert.match(
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
     .match(/if \(action === "login"\)[\s\S]*?const account = await verifyD1Account/)?.[0] || "",
-  /responseMode === "fast"[\s\S]*prepareFastLoginEnvelope[\s\S]*loadAccountSnapshotPayload[\s\S]*allowInlineBuild: responseMode !== "fast"[\s\S]*snapshotStatus[\s\S]*snapshotSource[\s\S]*snapshotRevision[\s\S]*viewedAccountPayload/,
-  "login should build the fast-path account payload and return the default snapshot inline",
+  /responseMode === "fast"[\s\S]*prepareFastLoginEnvelope\(loginRecord\)[\s\S]*loadFastAccountSnapshotPayload[\s\S]*snapshotStatus[\s\S]*snapshotSource[\s\S]*snapshotRevision[\s\S]*viewedAccountPayload/,
+  "fast login should build a minimal account payload and use the revision-free snapshot path",
+);
+assert.doesNotMatch(
+  (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
+    .match(/async function loadFastAccountSnapshotPayload[\s\S]*?function scheduleAccountSnapshotRebuild/)?.[0] || "",
+  /queryCalendarRevision|loadAccountSnapshotPayload/,
+  "fast login should not use the revision-based account snapshot loader",
 );
 assert.match(
-  stateSource.match(/async function loadSnapshotPayloadFromRegistry[\s\S]*?async function loadAccountSnapshotPayload/)?.[0] || "",
+  stateSource.match(/async function loadSnapshotPayloadFromRegistry[\s\S]*?async function loadFastAccountSnapshotPayload/)?.[0] || "",
   /allowInlineBuild === false[\s\S]*scheduleRebuild[\s\S]*snapshot: null[\s\S]*snapshotSource: cacheBucket\?\.get \? "server-cache-miss" : "d1-inline-disabled"/,
-  "fast login should skip inline snapshot builds on server-cache misses",
+  "non-inline snapshot requests should schedule rebuilds instead of building on cache misses",
+);
+assert.match(
+  stateSource.match(/async function loadFastAccountSnapshotPayload[\s\S]*?function scheduleAccountSnapshotRebuild/)?.[0] || "",
+  /allowInlineBuild: false[\s\S]*skipRevisionCheck: true[\s\S]*revisionSkipped: true/,
+  "fast login snapshots should skip revision calculation and inline builds",
 );
 assert.match(
   stateSource.match(/if \(action === "adminLoadUser"\)[\s\S]*?if \(action === "claimRosterName"\)/)?.[0] || "",
@@ -312,6 +323,11 @@ assert.match(
   "D1 roster issue inserts should stay under SQL variable limits",
 );
 assert.match(
+  d1CalendarSource.match(/INSERT INTO account_claims[\s\S]*?bind\(\.\.\.chunk\.flat\(\)\)\.run\(\)/)?.[0] || "",
+  /ON CONFLICT\(email, source_type, doctor_key\) DO UPDATE/,
+  "account claim writes should be idempotent for duplicate or concurrent claim repairs",
+);
+assert.match(
   stateSource.match(/async function calendarStoreStatus[\s\S]*?function summarizeExpectedRosterFiles/)?.[0] || "",
   /queryRawRosterFiles[\s\S]*retainedOnlyFiles[\s\S]*retainedSourceOnly/,
   "calendar status should include retained R2 source pointers without derived rows",
@@ -323,8 +339,18 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function loginWithEmail[\s\S]*?async function restoreCloudState/)?.[0] || "",
-  /renderLoginState\(\);\s*closeLoginModal\(\);[\s\S]*queueDeferredAccountContextLoad[\s\S]*void hydrateAuthenticatedWorkspace\(\{[\s\S]*includeBootstrap: true/,
+  /renderLoginState\(\);\s*closeLoginModal\(\);[\s\S]*queueDeferredAccountContextLoad[\s\S]*queuePostLoginHydration\(\{[\s\S]*includeBootstrap: true[\s\S]*allowInlineBuild: false/,
   "successful login should reveal the shell before background workspace hydration completes",
+);
+assert.match(
+  appSource.match(/async function hydrateAuthenticatedWorkspace[\s\S]*?function markLoginPhase/)?.[0] || "",
+  /forceCalendarRefresh[\s\S]*allowInlineBuild: options\.allowInlineBuild !== false[\s\S]*preserveExistingSnapshot: true/,
+  "post-login hydration should refresh calendar data in the background without blanking the visible snapshot",
+);
+assert.match(
+  appSource.match(/async function loadCloudCalendarEvents[\s\S]*?function cloudCalendarEventRange/)?.[0] || "",
+  /allowInlineBuild: options\.allowInlineBuild !== false[\s\S]*!data\.snapshot && options\.preserveExistingSnapshot === true/,
+  "non-inline calendar refreshes should preserve existing cached snapshots on server cache misses",
 );
 assert.match(
   appSource.match(/async function restoreCloudState[\s\S]*?async function hydrateAuthenticatedWorkspace/)?.[0] || "",

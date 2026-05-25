@@ -100,18 +100,24 @@ export async function onRequestPost(context) {
       const authMs = Date.now() - authStartedAt;
       const prepareStartedAt = Date.now();
       const prepared = responseMode === "fast"
-        ? await prepareFastLoginEnvelope(loginRecord, { db: context.env.ROSTER_DB })
+        ? await prepareFastLoginEnvelope(loginRecord)
         : await prepareAccountResponse(null, loginRecord, {
             db: context.env.ROSTER_DB,
             includeAvailableDoctors: (loginRecord.role || roleForEmail(loginRecord.email)) !== "creator" && (loginRecord.role || roleForEmail(loginRecord.email)) !== "owner" && !sanitizeClaims(loginRecord.claims).length,
           });
       const prepareMs = Date.now() - prepareStartedAt;
-      const snapshotPayload = await loadAccountSnapshotPayload(context, {
-        targetRecord: loginRecord,
-        prepared,
-        allowInlineBuild: responseMode !== "fast",
-        reason: "login",
-      });
+      const snapshotPayload = responseMode === "fast"
+        ? await loadFastAccountSnapshotPayload(context, {
+            targetRecord: loginRecord,
+            prepared,
+            reason: "login",
+          })
+        : await loadAccountSnapshotPayload(context, {
+            targetRecord: loginRecord,
+            prepared,
+            allowInlineBuild: true,
+            reason: "login",
+          });
       const responsePayload = {
         ok: true,
         cloudAvailable: true,
@@ -150,6 +156,8 @@ export async function onRequestPost(context) {
             revisionMs: Number(snapshotPayload.revisionMs || 0),
             snapshotLookupMs: Number(snapshotPayload.snapshotLookupMs || 0),
             snapshotBuildMs: Number(snapshotPayload.snapshotBuildMs || 0),
+            skippedRevision: snapshotPayload.revisionSkipped === true,
+            skippedInlineBuild: true,
             snapshotSource: snapshotPayload.snapshotSource || "",
             responseMode,
           },
@@ -1139,6 +1147,7 @@ export async function onRequestPost(context) {
         endDate: requestedRange.endDate,
         doctorKey: normalizeRosterName(body?.doctorKey || ""),
         cachedRevision: body?.cachedRevision || "",
+        allowInlineBuild: body?.allowInlineBuild !== false,
         diagnosticsRequested: body?.diagnostics === true,
         reason: "loadCalendarEvents",
       });
@@ -1670,7 +1679,21 @@ async function prepareLightweightAccountResponse(rawRecord, options = {}) {
 }
 
 async function prepareFastLoginEnvelope(rawRecord, options = {}) {
-  const lightweight = await prepareLightweightAccountResponse(rawRecord, options);
+  const record = rawRecord;
+  const role = record.role || roleForEmail(record.email);
+  const claims = sanitizeClaims(record.claims);
+  const state = sanitizeState({
+    session: sanitizeState(record.state).session || {},
+    imports: [],
+  });
+  const defaultDoctorKey = canonicalDefaultDoctorKeyForAccount({ role, claims, state });
+  const lightweight = {
+    role,
+    realName: record.realName || "",
+    state: applyDefaultSelectedDoctorToState(state, role, claims, defaultDoctorKey),
+    claims,
+    defaultDoctorKey,
+  };
   return {
     role: lightweight.role,
     realName: lightweight.realName,
@@ -2045,6 +2068,28 @@ async function loadSnapshotPayloadFromRegistry(context, options = {}) {
   if (cacheBucket?.get && registry?.artifactKey) {
     const cachedSnapshot = await loadCachedSnapshot(cacheBucket, registry.artifactKey).catch(() => null);
     if (cachedSnapshot) {
+      if (options.skipRevisionCheck === true) {
+        diagnostics.cacheHit = true;
+        diagnostics.snapshotSizeBytes = JSON.stringify(cachedSnapshot).length;
+        diagnostics.revisionUnchecked = true;
+        if (typeof options.scheduleRebuild === "function") options.scheduleRebuild();
+        return {
+          ok: true,
+          snapshot: cachedSnapshot,
+          snapshotAvailable: true,
+          snapshotStale: true,
+          snapshotBuiltAt: registry.builtAt || cachedSnapshot?.builtAt || "",
+          calendarRevision: registry.builtRevision || calendarRevision,
+          diagnostics,
+          snapshotLookupMs: Date.now() - lookupStartedAt,
+          snapshotBuildMs: 0,
+          ...snapshotRegistryState(registry.status || "stale", {
+            snapshotSource: "unverified-server-cache",
+            snapshotRevision: registry.builtRevision || calendarRevision,
+            stale: true,
+          }),
+        };
+      }
       diagnostics.cacheHit = registry.builtRevision === calendarRevision;
       diagnostics.snapshotSizeBytes = JSON.stringify(cachedSnapshot).length;
       if (registry.builtRevision === calendarRevision && registry.status === "ready") {
@@ -2182,6 +2227,72 @@ async function loadAccountSnapshotPayload(context, params = {}) {
     snapshotLookupMs: Number(payload.snapshotLookupMs || 0),
     snapshotBuildMs: Number(payload.snapshotBuildMs || 0),
   };
+}
+
+async function loadFastAccountSnapshotPayload(context, params = {}) {
+  const targetRecord = params.targetRecord;
+  const prepared = params.prepared;
+  const requestedRange = boundedCalendarEventRange({
+    startDate: params.startDate,
+    endDate: params.endDate,
+  });
+  const doctorKey = normalizeRosterName(
+    params.doctorKey
+    || prepared?.defaultDoctorKey
+    || prepared?.state?.session?.doctorKey
+    || targetRecord?.state?.session?.doctorKey
+    || ""
+  );
+  const descriptor = buildAccountSnapshotCacheDescriptor(targetRecord, prepared.role, doctorKey, requestedRange);
+  const payload = await loadSnapshotPayloadFromRegistry(context, {
+    descriptor,
+    calendarRevision: "",
+    cachedRevision: "",
+    allowInlineBuild: false,
+    skipRevisionCheck: true,
+    scheduleRebuild: () => scheduleFastAccountSnapshotRebuild(context, {
+      targetRecord,
+      requestedRange,
+      doctorKey,
+      descriptor,
+    }),
+  });
+  return {
+    ...payload,
+    revisionMs: 0,
+    revisionSkipped: true,
+    snapshotLookupMs: Number(payload.snapshotLookupMs || 0),
+    snapshotBuildMs: Number(payload.snapshotBuildMs || 0),
+  };
+}
+
+function scheduleFastAccountSnapshotRebuild(context, job = {}) {
+  if (typeof context.waitUntil !== "function") return;
+  context.waitUntil((async () => {
+    const db = context.env?.ROSTER_DB;
+    const record = await loadAccountMirror(db, job.targetRecord?.email || "").catch(() => null) || job.targetRecord;
+    if (!record) return;
+    const role = record.role || roleForEmail(record.email);
+    const prepared = await prepareAccountResponse(null, record, {
+      db,
+      includeAvailableDoctors: false,
+    });
+    await buildAndStoreAccountSnapshot(context, {
+      targetRecord: record,
+      prepared,
+      requestedRange: job.requestedRange,
+      doctorKey: job.doctorKey || prepared.defaultDoctorKey || "",
+      descriptor: job.descriptor || buildAccountSnapshotCacheDescriptor(record, role, job.doctorKey || prepared.defaultDoctorKey || "", job.requestedRange || defaultSnapshotRange()),
+      revision: "",
+      reason: "fast-login-refresh",
+    });
+  })().catch((error) => {
+    console.warn("Fast login snapshot refresh failed", {
+      owner: job?.targetRecord?.email || job?.descriptor?.ownerId || "",
+      doctorKey: job?.doctorKey || "",
+      error: error?.message || String(error),
+    });
+  }));
 }
 
 function scheduleAccountSnapshotRebuild(context, job = {}) {

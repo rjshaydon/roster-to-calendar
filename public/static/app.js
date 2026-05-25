@@ -10151,10 +10151,17 @@ async function loginWithEmail(email, password, options = {}) {
         loginStartedAt,
         targetEmail: "",
         responseMode: loginData?.responseMode || "fast",
+        delayMs: 50,
       });
     }
+    markLoginPhase(renderedCachedSnapshot ? "firstCalendarPaint" : "firstShellPaint", loginStartedAt);
     setStatus(renderedCachedSnapshot ? "Checking calendar for updates..." : "Loading calendar...");
-    void hydrateAuthenticatedWorkspace({ ...options, includeBootstrap: true }, loginStartedAt);
+    queuePostLoginHydration({
+      ...options,
+      includeBootstrap: true,
+      forceCalendarRefresh: renderedCachedSnapshot,
+      allowInlineBuild: false,
+    }, loginStartedAt);
   } catch (error) {
     const message = normalizeAuthMessage(error.message || "Login failed.");
     setEntranceStatus(message, true);
@@ -10258,9 +10265,16 @@ async function hydrateAuthenticatedWorkspace(options = {}, loginStartedAt = 0) {
       : options.cachedRevision || (currentSnapshot?.cacheKey === currentCalendarSnapshotCacheKey()
         ? currentSnapshot.calendarRevision || currentCalendarRevision || ""
         : "");
-    const loadedFreshCalendar = inlineSnapshotReady
-      ? true
-      : await loadCloudCalendarEvents({ adminTargetEmail, doctorKey: options.doctorKey || "", cachedRevision });
+    const shouldRefreshCalendar = options.forceCalendarRefresh === true || !inlineSnapshotReady;
+    const loadedFreshCalendar = shouldRefreshCalendar
+      ? await loadCloudCalendarEvents({
+          adminTargetEmail,
+          doctorKey: options.doctorKey || "",
+          cachedRevision,
+          allowInlineBuild: options.allowInlineBuild !== false,
+          preserveExistingSnapshot: true,
+        })
+      : true;
     markLoginPhase("calendarLoaded", loginStartedAt);
     markAccountSwitchPhase("calendarLoaded", options.accountSwitchStartedAt);
     if (options.includeBootstrap !== false) {
@@ -10291,6 +10305,21 @@ async function hydrateAuthenticatedWorkspace(options = {}, loginStartedAt = 0) {
     const message = normalizeAuthMessage(error.message || "Workspace hydration failed.");
     setStatus(message, true);
     console.warn("Post-login workspace hydration failed", { message, email: currentUserEmail, error, timings: lastLoginTimings });
+  }
+}
+
+function queuePostLoginHydration(options = {}, loginStartedAt = 0) {
+  const expectedEmail = viewedAccountEmail();
+  const run = () => {
+    void hydrateAuthenticatedWorkspace(options, loginStartedAt).then(() => {
+      if (viewedAccountEmail() === expectedEmail) markLoginPhase("backgroundHydrationComplete", loginStartedAt);
+    });
+  };
+  const afterFrame = () => window.setTimeout(run, 0);
+  if (typeof requestAnimationFrame === "function") {
+    requestAnimationFrame(afterFrame);
+  } else {
+    afterFrame();
   }
 }
 
@@ -10390,6 +10419,7 @@ async function loadDeferredAccountContext(options = {}) {
 
 function queueDeferredAccountContextLoad(options = {}) {
   const runId = ++deferredAccountContextRunId;
+  const delayMs = Math.max(0, Number(options.delayMs || 0));
   window.setTimeout(() => {
     void (async () => {
       try {
@@ -10405,7 +10435,7 @@ function queueDeferredAccountContextLoad(options = {}) {
         });
       }
     })();
-  }, 0);
+  }, delayMs);
 }
 
 async function resolveCurrentAccountClaims(targetEmailOverride = "") {
@@ -10536,7 +10566,8 @@ async function applyCloudStateSnapshot(data, options = {}) {
   }
   currentSnapshotStale = data.snapshotStale === true;
   currentSnapshotBuiltAt = String(data.snapshotBuiltAt || "");
-  selectedFiles = importRefsToClientEntries(data.state.imports || currentSnapshot?.fileRefs || []);
+  const stateImports = Array.isArray(data.state.imports) && data.state.imports.length ? data.state.imports : null;
+  selectedFiles = importRefsToClientEntries(stateImports || currentSnapshot?.fileRefs || []);
   restoredSessionState = currentSnapshot?.session || (data.state.session && typeof data.state.session === "object" ? data.state.session : null);
   rememberCreatorCalendarSourceRefs();
   saveWorkspaceSnapshotForEmail(activeWorkspaceOwnerKey(), {
@@ -10594,6 +10625,7 @@ async function loadCloudCalendarEvents(options = {}) {
       startDate: range.startDate,
       endDate: range.endDate,
       cachedRevision: options.cachedRevision || "",
+      allowInlineBuild: options.allowInlineBuild !== false,
     }),
   });
   const data = await readJsonResponse(response, "Calendar load failed.");
@@ -10606,6 +10638,11 @@ async function loadCloudCalendarEvents(options = {}) {
         doctorKey: preferredDoctorKey || currentSnapshot.session?.doctorKey || "",
       });
     }
+    return Boolean(currentSnapshot);
+  }
+  if (!data.snapshot && options.preserveExistingSnapshot === true) {
+    currentSnapshotStale = data.snapshotStale === true || currentSnapshotStale;
+    currentSnapshotBuiltAt = String(data.snapshotBuiltAt || currentSnapshotBuiltAt || "");
     return Boolean(currentSnapshot);
   }
   currentSnapshot = sanitizeWorkspaceSnapshot(clearCloudLoadedSnapshotFilters(data.snapshot));
