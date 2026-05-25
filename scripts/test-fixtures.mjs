@@ -358,6 +358,16 @@ assert.match(
   "post-render insight warmup must not trigger direct roster_events fallback work",
 );
 assert.match(
+  appSource.match(/async function renderInsightsModal[\s\S]*?async function ensureInsightRosterAnalysis/)?.[0] || "",
+  /renderWhenInsightLoading\(\);\s*showInsightsModal\(\);\s*await renderWhenInsight/,
+  "When insight modal should open immediately before SQL-backed rows finish loading",
+);
+assert.match(
+  appSource.match(/async function renderWhenInsight[\s\S]*?function renderWhenInsightResult/)?.[0] || "",
+  /isCurrentInsightRender\(renderRunId, "when"\)[\s\S]*isCurrentInsightRender\(renderRunId, "when"\)/,
+  "When insight async renders should ignore stale results after close or selection changes",
+);
+assert.match(
   appSource.match(/async function fetchRosterInsightRows[\s\S]*?async function fetchRosterOverlapDoctors/)?.[0] || "",
   /allowFallback = true[\s\S]*allowFallback/,
   "explicit roster insight actions should be able to request the correctness fallback",

@@ -311,6 +311,7 @@ let insightWarmupTimer = 0;
 let insightWarmupPromise = null;
 let visibleInsightWarmCache = new Map();
 let visibleInsightWarmKey = "";
+let insightsRenderRunId = 0;
 let parserExtensions = { mmc: [], ddh: [], casey: [], mch: [] };
 let globalParserExtensions = { mmc: [], ddh: [], casey: [], mch: [] };
 let localParserExtensions = { mmc: [], ddh: [], casey: [], mch: [] };
@@ -3076,6 +3077,7 @@ async function openWhenInsightForDoctor(doctorKey) {
 }
 
 function closeInsightsModal() {
+  insightsRenderRunId += 1;
   insightsState = null;
   insightsModal.classList.add("hidden");
   insightsModal.setAttribute("aria-hidden", "true");
@@ -3084,13 +3086,33 @@ function closeInsightsModal() {
 
 async function renderInsightsModal() {
   if (!insightsState) return;
+  const renderRunId = insightsRenderRunId + 1;
+  insightsRenderRunId = renderRunId;
+  insightsState.renderRunId = renderRunId;
   if (insightsState.mode === "who") {
     await renderWhoInsight();
   } else if (insightsState.mode === "when") {
-    await renderWhenInsight();
+    renderWhenInsightLoading();
+    showInsightsModal();
+    await renderWhenInsight({ renderRunId });
+    return;
   }
+  showInsightsModal();
+}
+
+function showInsightsModal() {
   insightsModal.classList.remove("hidden");
   insightsModal.setAttribute("aria-hidden", "false");
+}
+
+function isCurrentInsightRender(renderRunId, mode) {
+  return Boolean(insightsState && insightsState.mode === mode && insightsState.renderRunId === renderRunId);
+}
+
+function renderWhenInsightLoading() {
+  insightsModalTitle.textContent = "When am I working with…?";
+  insightsModalSubtitle.textContent = "Find future dates where both doctors are working from the selected date.";
+  insightsModalBody.innerHTML = `<article class="issue-card"><p>Loading doctors and shared shifts...</p></article>`;
 }
 
 async function ensureInsightRosterAnalysis() {
@@ -3370,7 +3392,7 @@ async function renderWhoInsight() {
   `;
 }
 
-async function renderWhenInsight() {
+async function renderWhenInsight({ renderRunId = insightsState?.renderRunId } = {}) {
   const hospitalFilters = Array.isArray(insightsState.hospitalFilters) ? insightsState.hospitalFilters : [];
   const fromDate = insightsState.fromDate || formatDateKey(new Date());
   const toDate = insightsState.termEnd || currentCalendarInsightDateRange().end || fromDate;
@@ -3381,6 +3403,7 @@ async function renderWhenInsight() {
     excludeDoctorKeys: selectedInsightDoctorKeys(),
     overlapDoctorKeys: selectedInsightDoctorKeys(),
   });
+  if (!isCurrentInsightRender(renderRunId, "when")) return;
   if (!doctorResult.ok) {
     insightsModalTitle.textContent = "When am I working with…?";
     insightsModalSubtitle.textContent = "Find future dates where both doctors are working from the selected date.";
@@ -3417,6 +3440,7 @@ async function renderWhenInsight() {
     doctorKeys: [selectedKey],
     overlapDoctorKeys: [],
   });
+  if (!isCurrentInsightRender(renderRunId, "when")) return;
   if (serverResult.ok) {
     const serverRows = serverResult.rows;
     const selectedComparison = options.find((doctor) => doctor.key === selectedKey) || null;
