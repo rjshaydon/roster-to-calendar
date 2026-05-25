@@ -1127,7 +1127,6 @@ class MemoryD1 {
     this.doctors = new Map();
     this.fileDoctors = new Map();
     this.events = new Map();
-    this.dailyPresence = new Map();
     this.issues = new Map();
     this.rawFiles = new Map();
     this.accountProfiles = new Map();
@@ -1155,7 +1154,6 @@ class MemoryD1 {
       "doctors",
       "fileDoctors",
       "events",
-      "dailyPresence",
       "issues",
       "rawFiles",
       "accountProfiles",
@@ -1239,10 +1237,6 @@ class MemoryD1Statement {
       return { success: true };
     }
     if (sql.startsWith("DELETE FROM roster_daily_presence")) {
-      const prefix = String(args[0] || "").replace(/\\([%_\\])/g, "$1").replace(/%$/, "");
-      for (const [key, value] of [...this.db.dailyPresence.entries()]) {
-        if (String(value.event_id || "").startsWith(prefix)) this.db.dailyPresence.delete(key);
-      }
       return { success: true };
     }
     if (sql.startsWith("DELETE FROM roster_files")) {
@@ -1324,17 +1318,6 @@ class MemoryD1Statement {
       return { success: true };
     }
     if (sql.startsWith("INSERT OR IGNORE INTO roster_daily_presence")) {
-      for (let index = 0; index < args.length; index += 5) {
-        const row = {
-          date: args[index],
-          source_type: args[index + 1],
-          doctor_key: args[index + 2],
-          display_name: args[index + 3],
-          event_id: args[index + 4],
-        };
-        const key = `${row.date}|${row.source_type}|${row.doctor_key}|${row.event_id}`;
-        if (!this.db.dailyPresence.has(key)) this.db.dailyPresence.set(key, row);
-      }
       return { success: true };
     }
     if (sql.startsWith("INSERT INTO account_profiles")) {
@@ -1697,31 +1680,28 @@ class MemoryD1Statement {
       const sourceTypes = new Set(args.slice(sourceOffset, sourceOffset + sourceCount));
       const doctorKeys = new Set(args.slice(sourceOffset + sourceCount, sourceOffset + sourceCount + doctorCount));
       const excludedDoctorKeys = new Set(args.slice(sourceOffset + sourceCount + doctorCount, sourceOffset + sourceCount + doctorCount + excludedDoctorCount));
-      const presence = [...this.db.dailyPresence.values()];
-      const minePresence = presence.filter((row) => overlapKeys.has(row.doctor_key) && row.date >= start && row.date <= end);
-      const resultPresence = presence
-        .filter((row) => row.date >= start && row.date <= end)
-        .filter((row) => minePresence.some((mine) => mine.date === row.date && mine.source_type === row.source_type))
-        .filter((row) => !sourceTypes.size || sourceTypes.has(row.source_type))
-        .filter((row) => !doctorKeys.size || doctorKeys.has(row.doctor_key))
-        .filter((row) => !excludedDoctorKeys.has(row.doctor_key))
-        .filter((row, index, list) => list.findIndex((item) => item.event_id === row.event_id && item.doctor_key === row.doctor_key && item.source_type === row.source_type) === index);
-      const results = resultPresence
-        .map((row) => ({ presence: row, event: this.db.events.get(row.event_id) }))
-        .filter(({ event }) => event && this.db.files.get(event.file_id)?.active === 1)
-        .sort((left, right) => left.presence.display_name.localeCompare(right.presence.display_name) || left.event.start_ts.localeCompare(right.event.start_ts));
+      const events = [...this.db.events.values()].filter((event) => this.db.files.get(event.file_id)?.active === 1);
+      const mineEvents = events.filter((event) => overlapKeys.has(event.doctor_key) && eventDates(event).some((date) => date >= start && date <= end));
+      const results = events
+        .filter((event) => eventDates(event).some((date) => date >= start && date <= end))
+        .filter((event) => mineEvents.some((mine) => mine.source_type === event.source_type && sharedEventDate(event, mine, start, end)))
+        .filter((event) => !sourceTypes.size || sourceTypes.has(event.source_type))
+        .filter((event) => !doctorKeys.size || doctorKeys.has(event.doctor_key))
+        .filter((event) => !excludedDoctorKeys.has(event.doctor_key))
+        .filter((event, index, list) => list.findIndex((item) => item.id === event.id) === index)
+        .sort((left, right) => left.display_name.localeCompare(right.display_name) || left.start_ts.localeCompare(right.start_ts));
       if (!sql.includes("event_json")) {
         return {
           results: results
-            .map(({ presence }) => ({ doctor_key: presence.doctor_key, display_name: presence.display_name, source_type: presence.source_type }))
+            .map((event) => ({ doctor_key: event.doctor_key, display_name: event.display_name, source_type: event.source_type }))
             .filter((event, index, list) => list.findIndex((item) => item.doctor_key === event.doctor_key && item.source_type === event.source_type) === index),
         };
       }
       return {
-        results: results.map(({ presence, event }) => ({
-          doctor_key: presence.doctor_key,
-          display_name: presence.display_name,
-          source_type: presence.source_type,
+        results: results.map((event) => ({
+          doctor_key: event.doctor_key,
+          display_name: event.display_name,
+          source_type: event.source_type,
           event_json: event.event_json,
           start_ts: event.start_ts,
         })),
@@ -1739,19 +1719,18 @@ class MemoryD1Statement {
       const doctorKeys = new Set(args.slice(offset, offset + doctorCount));
       offset += doctorCount;
       const excludedDoctorKeys = new Set(args.slice(offset, offset + excludedDoctorCount));
-      const results = [...this.db.dailyPresence.values()]
-        .filter((row) => row.date >= start && row.date <= end)
-        .filter((row) => !sourceTypes.size || sourceTypes.has(row.source_type))
-        .filter((row) => !doctorKeys.size || doctorKeys.has(row.doctor_key))
-        .filter((row) => !excludedDoctorKeys.has(row.doctor_key))
-        .filter((row, index, list) => list.findIndex((item) => item.event_id === row.event_id) === index)
-        .map((row) => ({ presence: row, event: this.db.events.get(row.event_id) }))
-        .filter(({ event }) => event && this.db.files.get(event.file_id)?.active === 1)
-        .sort((left, right) => left.presence.display_name.localeCompare(right.presence.display_name) || left.event.start_ts.localeCompare(right.event.start_ts))
-        .map(({ presence, event }) => ({
-          doctor_key: presence.doctor_key,
-          display_name: presence.display_name,
-          source_type: presence.source_type,
+      const results = [...this.db.events.values()]
+        .filter((event) => this.db.files.get(event.file_id)?.active === 1)
+        .filter((event) => eventDates(event).some((date) => date >= start && date <= end))
+        .filter((event) => !sourceTypes.size || sourceTypes.has(event.source_type))
+        .filter((event) => !doctorKeys.size || doctorKeys.has(event.doctor_key))
+        .filter((event) => !excludedDoctorKeys.has(event.doctor_key))
+        .filter((event, index, list) => list.findIndex((item) => item.id === event.id) === index)
+        .sort((left, right) => left.display_name.localeCompare(right.display_name) || left.start_ts.localeCompare(right.start_ts))
+        .map((event) => ({
+          doctor_key: event.doctor_key,
+          display_name: event.display_name,
+          source_type: event.source_type,
           event_json: event.event_json,
           start_ts: event.start_ts,
         }));
@@ -1804,31 +1783,6 @@ class MemoryD1Statement {
           .filter(Boolean))]
           .sort()
           .map((seniority) => ({ seniority })),
-      };
-    }
-    if (sql.includes("SELECT id FROM roster_files WHERE active = 1")) {
-      return {
-        results: [...this.db.files.values()]
-          .filter((file) => file.active === 1)
-          .sort((left, right) => String(left.added_at || "").localeCompare(String(right.added_at || "")) || String(left.name || "").localeCompare(String(right.name || "")))
-          .map((file) => ({ id: file.id })),
-      };
-    }
-    if (sql.includes("SELECT") && sql.includes("roster_events.id") && sql.includes("WHERE roster_events.file_id = ?")) {
-      return {
-        results: [...this.db.events.values()]
-          .filter((event) => event.file_id === args[0])
-          .filter((event) => this.db.files.get(event.file_id)?.active === 1)
-          .map((event) => ({
-            id: event.id,
-            source_type: event.source_type,
-            doctor_key: event.doctor_key,
-            display_name: event.display_name,
-            start_date: event.start_date,
-            end_date: event.end_date,
-            start_ts: event.start_ts,
-            end_ts: event.end_ts,
-          })),
       };
     }
     if (sql.includes("FROM roster_events") && sql.includes("doctor_key IN")) {
@@ -2860,12 +2814,6 @@ const d1Insights = await postState(d1StateStore, {
   endDate: d1CreatorCalendar.snapshot.preview.events[0].start.slice(0, 10),
 }, d1Store);
 assert.ok(Array.isArray(d1Insights.coworkers));
-assert.equal(d1Insights.source, "daily-presence", "coworker lookup should use populated daily presence when available");
-assert.ok(d1Store.dailyPresence.size > 0, "daily presence should be populated during derived roster storage");
-assert.ok(
-  [...d1Store.dailyPresence.values()].some((row) => d1Store.events.has(row.event_id)),
-  "daily presence rows should include references to stored roster event ids",
-);
 const d1InsightsExcludingSelectedDoctor = await postState(d1StateStore, {
   action: "queryRosterInsights",
   email: "rhaydon@gmail.com",
@@ -2902,50 +2850,6 @@ const d1OverlapDoctors = await postState(d1StateStore, {
   excludeDoctorKeys: [d1Doctor.key],
 }, d1Store);
 assert.ok(Array.isArray(d1OverlapDoctors.doctors), "overlap doctor lookup should return compact doctor rows");
-assert.equal(d1OverlapDoctors.source, "daily-presence", "overlap doctor lookup should use daily presence when available");
-const savedEventJsonWithoutDoctorMetadata = [...d1Store.events.values()].find((event) => {
-  const parsed = JSON.parse(event.event_json || "{}");
-  return !parsed.doctorKey && !parsed.displayName;
-});
-assert.ok(savedEventJsonWithoutDoctorMetadata, "fixture should cover stored events without doctor metadata in event_json");
-d1Store.dailyPresence.clear();
-const d1FallbackInsights = await postState(d1StateStore, {
-  action: "queryRosterInsights",
-  email: "rhaydon@gmail.com",
-  password: creatorPassword,
-  startDate: d1CreatorCalendar.snapshot.preview.events[0].start.slice(0, 10),
-  endDate: d1CreatorCalendar.snapshot.preview.events[0].start.slice(0, 10),
-  excludeDoctorKeys: [d1Doctor.key],
-}, d1Store);
-assert.equal(d1FallbackInsights.source, "roster-events-fallback", "empty daily presence should fall back to roster_events for correctness");
-assert.ok(d1FallbackInsights.coworkers.length, "fallback coworker lookup should still return roster rows");
-const d1FallbackOverlapDoctors = await postState(d1StateStore, {
-  action: "queryRosterOverlapDoctors",
-  email: "rhaydon@gmail.com",
-  password: creatorPassword,
-  startDate: d1CreatorCalendar.snapshot.preview.events[0].start.slice(0, 10),
-  endDate: d1CreatorCalendar.snapshot.preview.events.at(-1).start.slice(0, 10),
-  overlapDoctorKeys: [d1Doctor.key],
-  excludeDoctorKeys: [d1Doctor.key],
-}, d1Store);
-assert.equal(d1FallbackOverlapDoctors.source, "roster-events-fallback", "empty daily presence should fall back for overlap doctor lists");
-const repairedPresence = await postState(d1StateStore, {
-  action: "repairRosterDailyPresence",
-  email: "rhaydon@gmail.com",
-  password: creatorPassword,
-}, d1Store);
-assert.ok(repairedPresence.repaired.files > 0, "daily presence repair should process active files");
-assert.ok(d1Store.dailyPresence.size > 0, "daily presence repair should rebuild rows from roster_events");
-const d1RepairedOverlapDoctors = await postState(d1StateStore, {
-  action: "queryRosterOverlapDoctors",
-  email: "rhaydon@gmail.com",
-  password: creatorPassword,
-  startDate: d1CreatorCalendar.snapshot.preview.events[0].start.slice(0, 10),
-  endDate: d1CreatorCalendar.snapshot.preview.events.at(-1).start.slice(0, 10),
-  overlapDoctorKeys: [d1Doctor.key],
-  excludeDoctorKeys: [d1Doctor.key],
-}, d1Store);
-assert.equal(d1RepairedOverlapDoctors.source, "daily-presence", "repaired daily presence should restore the fast overlap path");
 const d1RepositoryFile = [...d1Store.files.keys()][0];
 await postState(d1StateStore, {
   action: "saveDerivedCalendarFile",

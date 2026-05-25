@@ -424,10 +424,7 @@ export async function upsertDerivedRosterFile(db, file, storedImport) {
     derivedByDoctor.map(({ doctor, events }) => [doctor.key, events])
   );
   await deleteDailyPresenceForFile(db, file.id);
-  await populateDailyPresenceForFile(db, file.id, eventsByDoctorForPresence, {
-    sourceType,
-    doctors,
-  });
+  await populateDailyPresenceForFile(db, file.id, eventsByDoctorForPresence);
   return { ok: true, doctors: doctors.length, events: totalEvents };
 }
 
@@ -518,10 +515,7 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
   statements.push(...bulkInsertIssueStatements(db, issueRows));
   await deleteDailyPresenceForFile(db, file.id);
   await runTransactionalBatch(db, statements);
-  await populateDailyPresenceForFile(db, file.id, eventsByDoctor, {
-    sourceType,
-    doctors: safeDoctors,
-  });
+  await populateDailyPresenceForFile(db, file.id, eventsByDoctor);
   return { ok: true, doctors: safeDoctors.length, events: eventRows.length, issues: issueRows.length };
 }
 
@@ -1764,69 +1758,6 @@ export async function queryCoworkerEvents(db, options = {}) {
   return rowsToCoworkerEvents(rows);
 }
 
-export async function queryCoworkerEventsFromEvents(db, options = {}) {
-  if (!db?.prepare) return [];
-  await ensureCalendarSchema(db);
-  const start = String(options.startDate || options.date || "0000-01-01");
-  const end = String(options.endDate || options.date || "9999-12-31");
-  const sourceTypes = sanitizeSourceTypes(options.sourceTypes);
-  const excludeKeys = new Set((options.excludeDoctorKeys || []).filter(Boolean));
-  const includeKeys = [...new Set((options.doctorKeys || []).filter(Boolean))];
-  const overlapKeys = [...new Set((options.overlapDoctorKeys || []).filter(Boolean))];
-  const sourceSql = sourceTypes.length ? `AND roster_events.source_type IN (${sourceTypes.map(() => "?").join(", ")})` : "";
-  const doctorSql = includeKeys.length ? `AND roster_events.doctor_key IN (${includeKeys.map(() => "?").join(", ")})` : "";
-  const excludeDoctorSql = excludeKeys.size ? `AND roster_events.doctor_key NOT IN (${[...excludeKeys].map(() => "?").join(", ")})` : "";
-  if (overlapKeys.length) {
-    const overlapSourceSql = sourceTypes.length ? `AND other_events.source_type IN (${sourceTypes.map(() => "?").join(", ")})` : "";
-    const overlapDoctorSql = includeKeys.length ? `AND other_events.doctor_key IN (${includeKeys.map(() => "?").join(", ")})` : "";
-    const overlapExcludeDoctorSql = excludeKeys.size ? `AND other_events.doctor_key NOT IN (${[...excludeKeys].map(() => "?").join(", ")})` : "";
-    const rows = await db.prepare(`
-      SELECT DISTINCT
-        other_events.doctor_key,
-        other_events.display_name,
-        other_events.source_type,
-        other_events.event_json,
-        other_events.start_ts
-      FROM roster_events AS mine
-      INNER JOIN roster_files AS mine_files ON mine_files.id = mine.file_id
-      INNER JOIN roster_events AS other_events
-        ON other_events.source_type = mine.source_type
-       AND other_events.start_date <= mine.end_date
-       AND other_events.end_date >= mine.start_date
-      INNER JOIN roster_files AS other_files ON other_files.id = other_events.file_id
-      WHERE mine_files.active = 1
-        AND other_files.active = 1
-        AND mine.doctor_key IN (${overlapKeys.map(() => "?").join(", ")})
-        AND mine.start_date <= ?
-        AND mine.end_date >= ?
-        AND other_events.start_date <= ?
-        AND other_events.end_date >= ?
-        ${overlapSourceSql}
-        ${overlapDoctorSql}
-        ${overlapExcludeDoctorSql}
-      ORDER BY other_events.display_name, other_events.start_ts
-    `).bind(...overlapKeys, end, start, end, start, ...sourceTypes, ...includeKeys, ...excludeKeys).all();
-    return rowsToCoworkerEvents(rows);
-  }
-  const rows = await db.prepare(`
-    SELECT
-      roster_events.doctor_key,
-      roster_events.display_name,
-      roster_events.source_type,
-      roster_events.event_json
-    FROM roster_events
-    INNER JOIN roster_files ON roster_files.id = roster_events.file_id
-    WHERE roster_files.active = 1
-      AND roster_events.start_date <= ?
-      AND roster_events.end_date >= ?
-      ${sourceSql}
-      ${doctorSql}
-      ${excludeDoctorSql}
-    ORDER BY roster_events.display_name, roster_events.start_ts
-  `).bind(end, start, ...sourceTypes, ...includeKeys, ...excludeKeys).all();
-  return rowsToCoworkerEvents(rows);
-}
-
 function rowsToCoworkerEvents(rows) {
   return (rows.results || [])
     .map((row) => ({
@@ -1874,47 +1805,6 @@ export async function queryOverlapDoctors(db, options = {}) {
   }));
 }
 
-export async function queryOverlapDoctorsFromEvents(db, options = {}) {
-  if (!db?.prepare) return [];
-  await ensureCalendarSchema(db);
-  const start = String(options.startDate || options.date || "0000-01-01");
-  const end = String(options.endDate || options.date || "9999-12-31");
-  const sourceTypes = sanitizeSourceTypes(options.sourceTypes);
-  const overlapKeys = [...new Set((options.overlapDoctorKeys || []).filter(Boolean))];
-  const excludeKeys = [...new Set((options.excludeDoctorKeys || []).filter(Boolean))];
-  if (!overlapKeys.length) return [];
-  const sourceSql = sourceTypes.length ? `AND other_events.source_type IN (${sourceTypes.map(() => "?").join(", ")})` : "";
-  const excludeDoctorSql = excludeKeys.length ? `AND other_events.doctor_key NOT IN (${excludeKeys.map(() => "?").join(", ")})` : "";
-  const rows = await db.prepare(`
-    SELECT DISTINCT
-      other_events.doctor_key,
-      other_events.display_name,
-      other_events.source_type
-    FROM roster_events AS mine
-    INNER JOIN roster_files AS mine_files ON mine_files.id = mine.file_id
-    INNER JOIN roster_events AS other_events
-      ON other_events.source_type = mine.source_type
-     AND other_events.start_date <= mine.end_date
-     AND other_events.end_date >= mine.start_date
-    INNER JOIN roster_files AS other_files ON other_files.id = other_events.file_id
-    WHERE mine_files.active = 1
-      AND other_files.active = 1
-      AND mine.doctor_key IN (${overlapKeys.map(() => "?").join(", ")})
-      AND mine.start_date <= ?
-      AND mine.end_date >= ?
-      AND other_events.start_date <= ?
-      AND other_events.end_date >= ?
-      ${sourceSql}
-      ${excludeDoctorSql}
-    ORDER BY other_events.display_name, other_events.source_type
-  `).bind(...overlapKeys, end, start, end, start, ...sourceTypes, ...excludeKeys).all();
-  return (rows.results || []).map((row) => ({
-    doctorKey: row.doctor_key,
-    displayName: row.display_name,
-    sourceType: row.source_type,
-  }));
-}
-
 export async function deleteDailyPresenceForFile(db, fileId) {
   if (!db?.prepare || !fileId) return;
   await ensureCalendarSchema(db);
@@ -1924,27 +1814,19 @@ export async function deleteDailyPresenceForFile(db, fileId) {
   `).bind(`${escapeLike(fileId)}:%`).run();
 }
 
-export async function populateDailyPresenceForFile(db, fileId, eventsByDoctor = {}, options = {}) {
+export async function populateDailyPresenceForFile(db, fileId, eventsByDoctor = {}) {
   if (!db?.prepare || !fileId) return;
   await ensureCalendarSchema(db);
   const rows = [];
-  const doctorMetadata = new Map((options.doctors || []).map((doctor) => [String(doctor?.key || doctor?.doctorKey || doctor?.doctor_key || "").trim(), doctor]));
-  const fallbackSourceType = normalizeSourceType(options.sourceType || "");
-  for (const [doctorKey, events] of Object.entries(eventsByDoctor || {})) {
-    const metadata = doctorMetadata.get(String(doctorKey || "").trim()) || {};
+  for (const events of Object.values(eventsByDoctor || {})) {
     for (const event of Array.isArray(events) ? events : []) {
-      for (const row of expandEventToDailyPresenceRows(event, {
-        sourceType: fallbackSourceType || normalizeSourceType(metadata.sourceType || metadata.source_type || ""),
-        doctorKey,
-        displayName: metadata.displayName || metadata.display_name || doctorKey,
-        storedEventId: options.storedEventIds?.get?.(event) || "",
-      })) {
+      for (const row of expandEventToDailyPresenceRows(event)) {
         rows.push([
           row.date,
           row.sourceType,
           row.doctorKey,
           row.displayName,
-          row.storedEventId || `${fileId}:${row.doctorKey}:${row.eventId}`,
+          `${fileId}:${row.doctorKey}:${row.eventId}`,
         ]);
       }
     }
@@ -1962,80 +1844,36 @@ export async function rebuildDailyPresenceForFile(db, fileId) {
   if (!db?.prepare || !fileId) return;
   await ensureCalendarSchema(db);
   const rows = await db.prepare(`
-    SELECT
-      roster_events.id AS id,
-      roster_events.source_type AS source_type,
-      roster_events.doctor_key AS doctor_key,
-      roster_events.display_name AS display_name,
-      roster_events.start_date AS start_date,
-      roster_events.end_date AS end_date,
-      roster_events.start_ts AS start_ts,
-      roster_events.end_ts AS end_ts
+    SELECT doctor_key, event_json
     FROM roster_events
     INNER JOIN roster_files ON roster_files.id = roster_events.file_id
     WHERE roster_events.file_id = ?
       AND roster_files.active = 1
   `).bind(fileId).all();
-  await deleteDailyPresenceForFile(db, fileId);
-  const presenceRows = [];
+  const eventsByDoctor = new Map();
   for (const row of rows.results || []) {
     const doctorKey = String(row.doctor_key || "").trim();
-    const event = {
-      id: String(row.id || "").split(":").pop(),
-      source: String(row.source_type || ""),
-      start: String(row.start_ts || row.start_date || ""),
-      end: String(row.end_ts || row.end_date || row.start_ts || row.start_date || ""),
-    };
-    for (const presence of expandEventToDailyPresenceRows(event, {
-      sourceType: row.source_type,
-      doctorKey,
-      displayName: row.display_name,
-      storedEventId: row.id,
-    })) {
-      presenceRows.push([
-        presence.date,
-        presence.sourceType,
-        presence.doctorKey,
-        presence.displayName,
-        presence.storedEventId,
-      ]);
-    }
+    const event = parseEvent(row.event_json);
+    if (!doctorKey || !event) continue;
+    if (!eventsByDoctor.has(doctorKey)) eventsByDoctor.set(doctorKey, []);
+    eventsByDoctor.get(doctorKey).push(event);
   }
-  for (const chunk of chunkRows(presenceRows, 100)) {
-    if (!chunk.length) continue;
-    await db.prepare(`
-      INSERT OR IGNORE INTO roster_daily_presence (date, source_type, doctor_key, display_name, event_id)
-      VALUES ${chunk.map(() => "(?, ?, ?, ?, ?)").join(", ")}
-    `).bind(...chunk.flat()).run();
-  }
+  await deleteDailyPresenceForFile(db, fileId);
+  await populateDailyPresenceForFile(db, fileId, Object.fromEntries(eventsByDoctor));
 }
 
-export async function rebuildDailyPresenceForActiveFiles(db) {
-  if (!db?.prepare) return { files: 0 };
-  await ensureCalendarSchema(db);
-  const rows = await db.prepare("SELECT id FROM roster_files WHERE active = 1 ORDER BY added_at, name").all();
-  let count = 0;
-  for (const row of rows.results || []) {
-    const fileId = String(row.id || "").trim();
-    if (!fileId) continue;
-    await rebuildDailyPresenceForFile(db, fileId);
-    count += 1;
-  }
-  return { files: count };
-}
-
-function expandEventToDailyPresenceRows(event, context = {}) {
+function expandEventToDailyPresenceRows(event) {
   const start = String(event?.start || "").slice(0, 10);
   const end = String(event?.end || event?.start || "").slice(0, 10);
-  const sourceType = eventSourceType(event) || normalizeSourceType(context.sourceType || "");
-  const doctorKey = String(event?.doctorKey || event?.doctor_key || context.doctorKey || "").trim();
-  const displayName = String(event?.displayName || event?.doctorDisplay || context.displayName || doctorKey || "").trim();
+  const sourceType = eventSourceType(event);
+  const doctorKey = String(event?.doctorKey || event?.doctor_key || "").trim();
+  const displayName = String(event?.displayName || event?.doctorDisplay || doctorKey || "").trim();
   const eventId = String(event?.id || "").trim();
   if (!start || !end || start > end || !sourceType || !doctorKey || !eventId) return [];
   const rows = [];
   let cursor = start;
   while (cursor <= end) {
-    rows.push({ date: cursor, sourceType, doctorKey, displayName, eventId, storedEventId: String(context.storedEventId || "") });
+    rows.push({ date: cursor, sourceType, doctorKey, displayName, eventId });
     cursor = nextDateKey(cursor);
   }
   return rows;
