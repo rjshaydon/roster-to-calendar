@@ -5,7 +5,12 @@ import XLSX from "xlsx";
 
 import { onRequestPost as handleStatePost } from "../functions/api/state.js";
 import { onRequestGet as handleFeedGet } from "../functions/api/feed.js";
-import { buildPreviewFromDerivedEvents } from "../functions/_lib/d1-calendar.js";
+import {
+  buildPreviewFromDerivedEvents,
+  queryCoworkerEventsFromInsightCache,
+  queryOverlapDoctorsFromInsightCache,
+  rebuildRosterInsightCachesForActiveFiles,
+} from "../functions/_lib/d1-calendar.js";
 import { buildRosterView, doctorOptions, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
 
 function cloneWorkbook(workbook) {
@@ -39,6 +44,83 @@ function eventDates(event) {
 function sharedEventDate(left, right, start, end) {
   const rightDates = new Set(eventDates(right).filter((date) => date >= start && date <= end));
   return eventDates(left).some((date) => date >= start && date <= end && rightDates.has(date));
+}
+
+function queryMemoryCoworkerPresence(db, presenceMap, sql, args) {
+  const overlapKeyCount = (sql.match(/mine\.doctor_key IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1;
+  const overlapKeys = new Set(args.slice(0, overlapKeyCount));
+  const start = args[overlapKeyCount];
+  const end = args[overlapKeyCount + 1];
+  const sourceOffset = overlapKeyCount + 4;
+  const hasSourceFilter = sql.includes("p.source_type IN");
+  const hasDoctorFilter = sql.includes("p.doctor_key IN");
+  const hasExcludedDoctorFilter = sql.includes("p.doctor_key NOT IN");
+  const sourceCount = hasSourceFilter ? (sql.match(/p\.source_type IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1 : 0;
+  const doctorCount = hasDoctorFilter ? (sql.match(/p\.doctor_key IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1 : 0;
+  const excludedDoctorCount = hasExcludedDoctorFilter ? (sql.match(/p\.doctor_key NOT IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1 : 0;
+  const sourceTypes = new Set(args.slice(sourceOffset, sourceOffset + sourceCount));
+  const doctorKeys = new Set(args.slice(sourceOffset + sourceCount, sourceOffset + sourceCount + doctorCount));
+  const excludedDoctorKeys = new Set(args.slice(sourceOffset + sourceCount + doctorCount, sourceOffset + sourceCount + doctorCount + excludedDoctorCount));
+  const presence = [...presenceMap.values()];
+  const minePresence = presence.filter((row) => overlapKeys.has(row.doctor_key) && row.date >= start && row.date <= end);
+  const resultPresence = presence
+    .filter((row) => row.date >= start && row.date <= end)
+    .filter((row) => minePresence.some((mine) => mine.date === row.date && mine.source_type === row.source_type))
+    .filter((row) => !sourceTypes.size || sourceTypes.has(row.source_type))
+    .filter((row) => !doctorKeys.size || doctorKeys.has(row.doctor_key))
+    .filter((row) => !excludedDoctorKeys.has(row.doctor_key))
+    .filter((row, index, list) => list.findIndex((item) => item.event_id === row.event_id && item.doctor_key === row.doctor_key && item.source_type === row.source_type) === index);
+  const results = resultPresence
+    .map((row) => ({ presence: row, event: db.events.get(row.event_id) }))
+    .filter(({ event }) => event && db.files.get(event.file_id)?.active === 1)
+    .sort((left, right) => left.presence.display_name.localeCompare(right.presence.display_name) || left.event.start_ts.localeCompare(right.event.start_ts));
+  if (!sql.includes("event_json")) {
+    return {
+      results: results
+        .map(({ presence }) => ({ doctor_key: presence.doctor_key, display_name: presence.display_name, source_type: presence.source_type }))
+        .filter((event, index, list) => list.findIndex((item) => item.doctor_key === event.doctor_key && item.source_type === event.source_type) === index),
+    };
+  }
+  return {
+    results: results.map(({ presence, event }) => ({
+      doctor_key: presence.doctor_key,
+      display_name: presence.display_name,
+      source_type: presence.source_type,
+      event_json: event.event_json,
+      start_ts: event.start_ts,
+    })),
+  };
+}
+
+function queryMemoryDayPresence(db, presenceMap, sql, args) {
+  const start = args[0];
+  const end = args[1];
+  let offset = 2;
+  const sourceCount = sql.includes("p.source_type IN") ? (sql.match(/p\.source_type IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1 : 0;
+  const doctorCount = sql.includes("p.doctor_key IN") ? (sql.match(/p\.doctor_key IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1 : 0;
+  const excludedDoctorCount = sql.includes("p.doctor_key NOT IN") ? (sql.match(/p\.doctor_key NOT IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1 : 0;
+  const sourceTypes = new Set(args.slice(offset, offset + sourceCount));
+  offset += sourceCount;
+  const doctorKeys = new Set(args.slice(offset, offset + doctorCount));
+  offset += doctorCount;
+  const excludedDoctorKeys = new Set(args.slice(offset, offset + excludedDoctorCount));
+  const results = [...presenceMap.values()]
+    .filter((row) => row.date >= start && row.date <= end)
+    .filter((row) => !sourceTypes.size || sourceTypes.has(row.source_type))
+    .filter((row) => !doctorKeys.size || doctorKeys.has(row.doctor_key))
+    .filter((row) => !excludedDoctorKeys.has(row.doctor_key))
+    .filter((row, index, list) => list.findIndex((item) => item.event_id === row.event_id) === index)
+    .map((row) => ({ presence: row, event: db.events.get(row.event_id) }))
+    .filter(({ event }) => event && db.files.get(event.file_id)?.active === 1)
+    .sort((left, right) => left.presence.display_name.localeCompare(right.presence.display_name) || left.event.start_ts.localeCompare(right.event.start_ts))
+    .map(({ presence, event }) => ({
+      doctor_key: presence.doctor_key,
+      display_name: presence.display_name,
+      source_type: presence.source_type,
+      event_json: event.event_json,
+      start_ts: event.start_ts,
+    }));
+  return { results };
 }
 
 function withWorkbookCell(workbook, sheetName, cell, value) {
@@ -82,6 +164,7 @@ const stateSource = await readFile(new URL("../functions/api/state.js", import.m
 const styleSource = await readFile(new URL("../public/static/styles.css", import.meta.url), "utf8");
 const calendarMigrationSource = await readFile(new URL("../migrations/0001_calendar_store.sql", import.meta.url), "utf8");
 const insightIndexMigrationSource = await readFile(new URL("../migrations/0005_roster_insight_index.sql", import.meta.url), "utf8");
+const insightCacheMigrationSource = await readFile(new URL("../migrations/0009_roster_insight_caches.sql", import.meta.url), "utf8");
 const d1CalendarSource = await readFile(new URL("../functions/_lib/d1-calendar.js", import.meta.url), "utf8");
 assert.match(
   appSource,
@@ -354,8 +437,13 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function warmInsightData[\s\S]*?function syncActionState/)?.[0] || "",
-  /allowFallback: false[\s\S]*allowFallback: false[\s\S]*allowFallback: false/,
+  /prioritizedInsightWarmupEvents[\s\S]*warmInsightEvent[\s\S]*fetchRosterOverlapDoctors[\s\S]*allowFallback: false[\s\S]*async function warmInsightEvent[\s\S]*allowFallback: false/,
   "post-render insight warmup must not trigger direct roster_events fallback work",
+);
+assert.doesNotMatch(
+  appSource.match(/async function warmInsightData[\s\S]*?function syncActionState/)?.[0] || "",
+  /slice\(0, 42\)|slice\(0, 64\)|Promise\.all\(dates|Promise\.all\(\[\.\.\.new Set\(dateSourcePairs\)/,
+  "post-render insight warmup should not broad-warm many dates after login",
 );
 assert.match(
   appSource.match(/async function renderInsightsModal[\s\S]*?async function ensureInsightRosterAnalysis/)?.[0] || "",
@@ -658,6 +746,16 @@ assert.match(
   d1CalendarSource,
   /FROM roster_daily_presence[\s\S]*INNER JOIN roster_events AS ev ON ev\.id = p\.event_id/,
   "coworker lookup should read from daily presence materialization and join roster events for details",
+);
+assert.match(
+  insightCacheMigrationSource,
+  /CREATE TABLE IF NOT EXISTS roster_day_coworkers[\s\S]*CREATE TABLE IF NOT EXISTS roster_term_overlap_doctors/,
+  "insight caches should have a forward migration for existing D1 databases",
+);
+assert.match(
+  d1CalendarSource,
+  /queryCoworkerEventsFromInsightCache[\s\S]*FROM roster_day_coworkers[\s\S]*queryOverlapDoctorsFromInsightCache[\s\S]*FROM roster_term_overlap_doctors/,
+  "roster insight queries should have prebuilt-cache helpers before falling back to joins",
 );
 const caseyFormData = new FormData();
 caseyFormData.append("rosterFiles", new File([caseyBytes], "Casey_Term_2_2026_DRAFT.xlsm", { type: "application/vnd.ms-excel.sheet.macroEnabled.12" }));
@@ -1158,6 +1256,8 @@ class MemoryD1 {
     this.fileDoctors = new Map();
     this.events = new Map();
     this.dailyPresence = new Map();
+    this.dayCoworkers = new Map();
+    this.termOverlapDoctors = new Map();
     this.issues = new Map();
     this.rawFiles = new Map();
     this.accountProfiles = new Map();
@@ -1186,6 +1286,8 @@ class MemoryD1 {
       "fileDoctors",
       "events",
       "dailyPresence",
+      "dayCoworkers",
+      "termOverlapDoctors",
       "issues",
       "rawFiles",
       "accountProfiles",
@@ -1272,6 +1374,18 @@ class MemoryD1Statement {
       const prefix = String(args[0] || "").replace(/\\([%_\\])/g, "$1").replace(/%$/, "");
       for (const [key, value] of [...this.db.dailyPresence.entries()]) {
         if (String(value.event_id || "").startsWith(prefix)) this.db.dailyPresence.delete(key);
+      }
+      return { success: true };
+    }
+    if (sql.startsWith("DELETE FROM roster_day_coworkers")) {
+      for (const [key, value] of [...this.db.dayCoworkers.entries()]) {
+        if (value.term_key === args[0] && value.source_type === args[1]) this.db.dayCoworkers.delete(key);
+      }
+      return { success: true };
+    }
+    if (sql.startsWith("DELETE FROM roster_term_overlap_doctors")) {
+      for (const [key, value] of [...this.db.termOverlapDoctors.entries()]) {
+        if (value.term_key === args[0] && value.source_type === args[1]) this.db.termOverlapDoctors.delete(key);
       }
       return { success: true };
     }
@@ -1364,6 +1478,37 @@ class MemoryD1Statement {
         };
         const key = `${row.date}|${row.source_type}|${row.doctor_key}|${row.event_id}`;
         if (!this.db.dailyPresence.has(key)) this.db.dailyPresence.set(key, row);
+      }
+      return { success: true };
+    }
+    if (sql.startsWith("INSERT OR REPLACE INTO roster_day_coworkers")) {
+      for (let index = 0; index < args.length; index += 7) {
+        const row = {
+          term_key: args[index],
+          date: args[index + 1],
+          source_type: args[index + 2],
+          doctor_key: args[index + 3],
+          display_name: args[index + 4],
+          event_id: args[index + 5],
+          updated_at: args[index + 6],
+        };
+        this.db.dayCoworkers.set(`${row.term_key}|${row.date}|${row.source_type}|${row.doctor_key}|${row.event_id}`, row);
+      }
+      return { success: true };
+    }
+    if (sql.startsWith("INSERT OR REPLACE INTO roster_term_overlap_doctors")) {
+      for (let index = 0; index < args.length; index += 8) {
+        const row = {
+          term_key: args[index],
+          date: args[index + 1],
+          source_type: args[index + 2],
+          doctor_key: args[index + 3],
+          display_name: args[index + 4],
+          overlap_doctor_key: args[index + 5],
+          overlap_display_name: args[index + 6],
+          updated_at: args[index + 7],
+        };
+        this.db.termOverlapDoctors.set(`${row.term_key}|${row.date}|${row.source_type}|${row.doctor_key}|${row.overlap_doctor_key}`, row);
       }
       return { success: true };
     }
@@ -1646,6 +1791,18 @@ class MemoryD1Statement {
           .sort((left, right) => left.source_type.localeCompare(right.source_type)),
       };
     }
+    if (sql.includes("FROM roster_events") && sql.includes("MIN(start_date) AS start_date") && sql.includes("GROUP BY source_type")) {
+      const ids = sql.includes("file_id IN") ? new Set(args) : new Set([args[0]]);
+      const grouped = new Map();
+      for (const event of this.db.events.values()) {
+        if (!ids.has(event.file_id)) continue;
+        const existing = grouped.get(event.source_type) || { source_type: event.source_type, start_date: event.start_date, end_date: event.end_date };
+        if (event.start_date < existing.start_date) existing.start_date = event.start_date;
+        if (event.end_date > existing.end_date) existing.end_date = event.end_date;
+        grouped.set(event.source_type, existing);
+      }
+      return { results: [...grouped.values()] };
+    }
     if (sql.includes("FROM roster_events") && sql.includes("GROUP BY file_id, doctor_key")) {
       const pairs = new Set();
       for (let index = 0; index < args.length; index += 2) pairs.add(`${args[index]}:${args[index + 1]}`);
@@ -1710,6 +1867,83 @@ class MemoryD1Statement {
           .filter((issue) => issue.start_date <= end && issue.start_date >= start)
           .sort((left, right) => left.start_date.localeCompare(right.start_date))
           .map((issue) => ({ issue_json: issue.issue_json })),
+      };
+    }
+    if (sql.includes("FROM roster_day_coworkers AS mine")) {
+      return queryMemoryCoworkerPresence(this.db, this.db.dayCoworkers, sql, args);
+    }
+    if (sql.includes("FROM roster_day_coworkers AS p") && sql.includes("INNER JOIN roster_events AS ev")) {
+      return queryMemoryDayPresence(this.db, this.db.dayCoworkers, sql, args);
+    }
+    if (sql.includes("FROM roster_term_overlap_doctors")) {
+      const overlapKeyCount = (sql.match(/doctor_key IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1;
+      const overlapKeys = new Set(args.slice(0, overlapKeyCount));
+      const start = args[overlapKeyCount];
+      const end = args[overlapKeyCount + 1];
+      const sourceOffset = overlapKeyCount + 2;
+      const sourceCount = sql.includes("source_type IN") ? (sql.match(/source_type IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1 : 0;
+      const excludedCount = sql.includes("overlap_doctor_key NOT IN") ? (sql.match(/overlap_doctor_key NOT IN \(([^)]*)\)/)?.[1].split("?").length || 0) - 1 : 0;
+      const sourceTypes = new Set(args.slice(sourceOffset, sourceOffset + sourceCount));
+      const excluded = new Set(args.slice(sourceOffset + sourceCount, sourceOffset + sourceCount + excludedCount));
+      return {
+        results: [...this.db.termOverlapDoctors.values()]
+          .filter((row) => overlapKeys.has(row.doctor_key))
+          .filter((row) => row.date >= start && row.date <= end)
+          .filter((row) => !sourceTypes.size || sourceTypes.has(row.source_type))
+          .filter((row) => !excluded.has(row.overlap_doctor_key))
+          .map((row) => ({ doctor_key: row.overlap_doctor_key, display_name: row.overlap_display_name, source_type: row.source_type }))
+          .filter((row, index, list) => list.findIndex((item) => item.doctor_key === row.doctor_key && item.source_type === row.source_type) === index)
+          .sort((left, right) => left.display_name.localeCompare(right.display_name) || left.source_type.localeCompare(right.source_type)),
+      };
+    }
+    if (sql.includes("FROM roster_daily_presence AS mine") && sql.includes("INNER JOIN roster_daily_presence AS other")) {
+      const sourceType = args[0];
+      const start = args[1];
+      const end = args[2];
+      const presence = [...this.db.dailyPresence.values()]
+        .filter((row) => row.source_type === sourceType && row.date >= start && row.date <= end)
+        .filter((row) => this.db.files.get(this.db.events.get(row.event_id)?.file_id)?.active === 1);
+      const results = [];
+      const grouped = new Map();
+      for (const row of presence) {
+        const key = `${row.date}|${row.source_type}`;
+        if (!grouped.has(key)) grouped.set(key, []);
+        grouped.get(key).push(row);
+      }
+      for (const group of grouped.values()) {
+        const doctors = [...new Map(group.map((row) => [`${row.doctor_key}|${row.display_name}`, row])).values()];
+        for (const mine of doctors) {
+          for (const other of doctors) {
+            if (mine.doctor_key === other.doctor_key) continue;
+            results.push({
+              date: mine.date,
+              source_type: mine.source_type,
+              doctor_key: mine.doctor_key,
+              display_name: mine.display_name,
+              overlap_doctor_key: other.doctor_key,
+              overlap_display_name: other.display_name,
+            });
+          }
+        }
+      }
+      return {
+        results: results.filter((row, index, list) => list.findIndex((item) => (
+          item.date === row.date
+          && item.source_type === row.source_type
+          && item.doctor_key === row.doctor_key
+          && item.overlap_doctor_key === row.overlap_doctor_key
+        )) === index),
+      };
+    }
+    if (sql.includes("FROM roster_daily_presence AS p") && sql.includes("INNER JOIN roster_events AS ev") && sql.includes("files.active = 1")) {
+      const sourceType = args[0];
+      const start = args[1];
+      const end = args[2];
+      return {
+        results: [...this.db.dailyPresence.values()]
+          .filter((row) => row.source_type === sourceType && row.date >= start && row.date <= end)
+          .filter((row) => this.db.files.get(this.db.events.get(row.event_id)?.file_id)?.active === 1)
+          .map((row) => ({ ...row })),
       };
     }
     if (sql.includes("FROM roster_daily_presence AS mine")) {
@@ -2885,20 +3119,21 @@ const madeUpUser = await postState(recreateStore, {
   targetPassword: "made-up-password",
 }, recreateDb);
 assert.equal(madeUpUser.user.claims.length, 0, "creating a no-roster user should remain lightweight and unclaimed");
+assert.ok(d1Store.dailyPresence.size > 0, "daily presence should be populated during derived roster storage");
+assert.ok(
+  [...d1Store.dailyPresence.values()].some((row) => d1Store.events.has(row.event_id)),
+  "daily presence rows should include references to stored roster event ids",
+);
 const d1Insights = await postState(d1StateStore, {
   action: "queryRosterInsights",
   email: "rhaydon@gmail.com",
   password: creatorPassword,
   startDate: d1CreatorCalendar.snapshot.preview.events[0].start.slice(0, 10),
   endDate: d1CreatorCalendar.snapshot.preview.events[0].start.slice(0, 10),
+  allowFallback: true,
 }, d1Store);
 assert.ok(Array.isArray(d1Insights.coworkers));
-assert.equal(d1Insights.source, "daily-presence", "coworker lookup should use populated daily presence when available");
-assert.ok(d1Store.dailyPresence.size > 0, "daily presence should be populated during derived roster storage");
-assert.ok(
-  [...d1Store.dailyPresence.values()].some((row) => d1Store.events.has(row.event_id)),
-  "daily presence rows should include references to stored roster event ids",
-);
+assert.equal(d1Insights.source, "daily-presence", "explicit coworker lookup should fall back to daily presence while insight caches are empty");
 const d1InsightsExcludingSelectedDoctor = await postState(d1StateStore, {
   action: "queryRosterInsights",
   email: "rhaydon@gmail.com",
@@ -2906,6 +3141,7 @@ const d1InsightsExcludingSelectedDoctor = await postState(d1StateStore, {
   startDate: d1CreatorCalendar.snapshot.preview.events[0].start.slice(0, 10),
   endDate: d1CreatorCalendar.snapshot.preview.events[0].start.slice(0, 10),
   excludeDoctorKeys: [d1Doctor.key],
+  allowFallback: true,
 }, d1Store);
 assert.ok(
   d1InsightsExcludingSelectedDoctor.coworkers.every((row) => row.doctorKey !== d1Doctor.key),
@@ -2919,6 +3155,7 @@ const d1OverlapInsights = await postState(d1StateStore, {
   endDate: d1CreatorCalendar.snapshot.preview.events.at(-1).start.slice(0, 10),
   overlapDoctorKeys: [d1Doctor.key],
   excludeDoctorKeys: [d1Doctor.key],
+  allowFallback: true,
 }, d1Store);
 assert.ok(Array.isArray(d1OverlapInsights.coworkers), "overlap coworker lookup should return SQL-derived rows");
 assert.ok(
@@ -2933,15 +3170,17 @@ const d1OverlapDoctors = await postState(d1StateStore, {
   endDate: d1CreatorCalendar.snapshot.preview.events.at(-1).start.slice(0, 10),
   overlapDoctorKeys: [d1Doctor.key],
   excludeDoctorKeys: [d1Doctor.key],
+  allowFallback: true,
 }, d1Store);
 assert.ok(Array.isArray(d1OverlapDoctors.doctors), "overlap doctor lookup should return compact doctor rows");
-assert.equal(d1OverlapDoctors.source, "daily-presence", "overlap doctor lookup should use daily presence when available");
+assert.equal(d1OverlapDoctors.source, "daily-presence", "explicit overlap lookup should fall back to daily presence while insight caches are empty");
 const savedEventJsonWithoutDoctorMetadata = [...d1Store.events.values()].find((event) => {
   const parsed = JSON.parse(event.event_json || "{}");
   return !parsed.doctorKey && !parsed.displayName;
 });
 assert.ok(savedEventJsonWithoutDoctorMetadata, "fixture should cover stored events without doctor metadata in event_json");
-d1Store.dailyPresence.clear();
+d1Store.dayCoworkers.clear();
+d1Store.termOverlapDoctors.clear();
 const d1WarmupStyleInsights = await postState(d1StateStore, {
   action: "queryRosterInsights",
   email: "rhaydon@gmail.com",
@@ -2951,10 +3190,10 @@ const d1WarmupStyleInsights = await postState(d1StateStore, {
   excludeDoctorKeys: [d1Doctor.key],
   allowFallback: false,
 }, d1Store);
-assert.equal(d1WarmupStyleInsights.source, "daily-presence", "warmup insight requests should stay on the materialized path");
+assert.equal(d1WarmupStyleInsights.source, "insight-cache", "warmup insight requests should stay on the prebuilt cache path");
 assert.equal(d1WarmupStyleInsights.fallbackSkipped, true, "warmup insight requests should skip the direct roster_events fallback");
-assert.equal(d1WarmupStyleInsights.coworkers.length, 0, "empty daily presence should not trigger expensive fallback for warmup");
-assert.equal(d1Store.dailyPresence.size, 0, "warmup insight requests should not repair daily presence");
+assert.equal(d1WarmupStyleInsights.coworkers.length, 0, "empty insight cache should not trigger expensive fallback for warmup");
+assert.equal(d1Store.dayCoworkers.size, 0, "warmup insight requests should not repair day coworker cache");
 const d1FallbackInsights = await postState(d1StateStore, {
   action: "queryRosterInsights",
   email: "rhaydon@gmail.com",
@@ -2964,40 +3203,44 @@ const d1FallbackInsights = await postState(d1StateStore, {
   excludeDoctorKeys: [d1Doctor.key],
   allowFallback: true,
 }, d1Store);
-assert.equal(d1FallbackInsights.source, "roster-events-fallback", "explicit insight requests can fall back to roster_events for correctness");
+assert.equal(d1FallbackInsights.source, "daily-presence", "explicit insight requests can fall back to daily presence for correctness");
 assert.ok(d1FallbackInsights.coworkers.length, "fallback coworker lookup should still return roster rows");
-assert.equal(d1Store.dailyPresence.size, 0, "explicit fallback should not run a full daily-presence repair");
-const d1FallbackOverlapDoctors = await postState(d1StateStore, {
-  action: "queryRosterOverlapDoctors",
-  email: "rhaydon@gmail.com",
-  password: creatorPassword,
-  startDate: d1CreatorCalendar.snapshot.preview.events[0].start.slice(0, 10),
-  endDate: d1CreatorCalendar.snapshot.preview.events.at(-1).start.slice(0, 10),
-  overlapDoctorKeys: [d1Doctor.key],
-  excludeDoctorKeys: [d1Doctor.key],
-  allowFallback: true,
-}, d1Store);
-assert.equal(d1FallbackOverlapDoctors.source, "roster-events-fallback", "explicit overlap requests can fall back to roster_events");
-const repairedPresence = await postState(d1StateStore, {
-  action: "repairRosterDailyPresence",
-  email: "rhaydon@gmail.com",
-  password: creatorPassword,
-  limit: 1,
-  offset: 0,
-}, d1Store);
-assert.ok(repairedPresence.repaired.files > 0, "daily presence repair should process active files");
-assert.ok(Object.hasOwn(repairedPresence.repaired, "done"), "daily presence repair should return bounded batch state");
-assert.ok(d1Store.dailyPresence.size > 0, "daily presence repair should rebuild rows from roster_events");
-const d1RepairedOverlapDoctors = await postState(d1StateStore, {
-  action: "queryRosterOverlapDoctors",
-  email: "rhaydon@gmail.com",
-  password: creatorPassword,
-  startDate: d1CreatorCalendar.snapshot.preview.events[0].start.slice(0, 10),
-  endDate: d1CreatorCalendar.snapshot.preview.events.at(-1).start.slice(0, 10),
-  overlapDoctorKeys: [d1Doctor.key],
-  excludeDoctorKeys: [d1Doctor.key],
-}, d1Store);
-assert.equal(d1RepairedOverlapDoctors.source, "daily-presence", "repaired daily presence should restore the fast overlap path");
+assert.equal(d1Store.dayCoworkers.size, 0, "explicit fallback should not run a full insight-cache repair");
+const insightCacheDb = new MemoryD1();
+insightCacheDb.files.set("cache-roster", { id: "cache-roster", name: "cache.xlsx", source_type: "mmc", active: 1, added_at: "", uploaded_at: "", uploaded_by: "", parsed_at: "" });
+for (const doctor of [
+  { key: "CACHE ONE", displayName: "Cache One" },
+  { key: "CACHE TWO", displayName: "Cache Two" },
+]) {
+  insightCacheDb.fileDoctors.set(`cache-roster|mmc|${doctor.key}`, { file_id: "cache-roster", source_type: "mmc", doctor_key: doctor.key, display_name: doctor.displayName });
+  insightCacheDb.events.set(`cache-roster:${doctor.key}:shift`, {
+    id: `cache-roster:${doctor.key}:shift`,
+    file_id: "cache-roster",
+    source_type: "mmc",
+    doctor_key: doctor.key,
+    display_name: doctor.displayName,
+    start_date: "2026-02-09",
+    end_date: "2026-02-09",
+    start_ts: "2026-02-09T08:00:00",
+    end_ts: "2026-02-09T16:00:00",
+    title: "MMC: Shift",
+    raw_value: "Shift",
+    seniority: "Registrar",
+    location: "",
+    all_day: 0,
+    time_label: "",
+    event_json: JSON.stringify({ id: "shift", source: "MMC", title: "MMC: Shift", start: "2026-02-09T08:00:00", end: "2026-02-09T16:00:00", rawValue: "Shift" }),
+  });
+}
+const repairedInsightCaches = await rebuildRosterInsightCachesForActiveFiles(insightCacheDb, { limit: 1, offset: 0 });
+assert.ok(repairedInsightCaches.files > 0, "bounded insight repair should process active files");
+assert.ok(Object.hasOwn(repairedInsightCaches, "done"), "bounded insight repair should return batch state");
+assert.ok(insightCacheDb.dayCoworkers.size > 0, "insight repair should rebuild day coworker cache rows");
+assert.ok(insightCacheDb.termOverlapDoctors.size > 0, "insight repair should rebuild term overlap doctor cache rows");
+const cachedCoworkers = await queryCoworkerEventsFromInsightCache(insightCacheDb, { startDate: "2026-02-09", endDate: "2026-02-09", excludeDoctorKeys: ["CACHE ONE"] });
+assert.ok(cachedCoworkers.some((row) => row.doctorKey === "CACHE TWO"), "coworker cache should return prebuilt rows");
+const cachedOverlapDoctors = await queryOverlapDoctorsFromInsightCache(insightCacheDb, { startDate: "2026-02-09", endDate: "2026-02-09", overlapDoctorKeys: ["CACHE ONE"], excludeDoctorKeys: ["CACHE ONE"] });
+assert.ok(cachedOverlapDoctors.some((row) => row.doctorKey === "CACHE TWO"), "term overlap cache should return prebuilt comparison doctors");
 const d1RepositoryFile = [...d1Store.files.keys()][0];
 await postState(d1StateStore, {
   action: "saveDerivedCalendarFile",

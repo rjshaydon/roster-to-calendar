@@ -4293,36 +4293,65 @@ async function warmInsightData() {
   if (!startDate || !endDate) return;
   const selectedKeys = selectedInsightDoctorKeys();
   const selectedEvents = selectedDoctorEventsForInsights(startDate, endDate).filter(isRosterShiftEvent);
-  const dates = [...new Set(selectedEvents.map(eventRosterDateKey).filter(Boolean))]
-    .sort()
-    .slice(0, 42);
-  await Promise.all(dates.map((date) => fetchRosterInsightRows({
-    startDate: date,
-    endDate: date,
-    excludeDoctorKeys: selectedKeys,
-    allowFallback: false,
-  })));
-  const dateSourcePairs = [];
-  for (const event of selectedEvents) {
-    const date = eventRosterDateKey(event);
-    const source = eventSourceCode(event);
-    if (date && source) dateSourcePairs.push(`${date}|${source}`);
+  const priorityEvents = prioritizedInsightWarmupEvents(selectedEvents);
+  for (const event of priorityEvents) {
+    await warmInsightEvent(event, selectedKeys);
   }
-  await Promise.all([...new Set(dateSourcePairs)].slice(0, 64).map((pair) => {
-    const [date, source] = pair.split("|");
-    return fetchRosterInsightRows({
-      startDate: date,
-      endDate: date,
-      sourceTypes: [source.toLowerCase()],
-      excludeDoctorKeys: selectedKeys,
-      allowFallback: false,
-    });
-  }));
   await fetchRosterOverlapDoctors({
     startDate,
     endDate,
     excludeDoctorKeys: selectedKeys,
     overlapDoctorKeys: selectedKeys,
+    allowFallback: false,
+  });
+}
+
+function prioritizedInsightWarmupEvents(events = []) {
+  const sorted = [...events].filter(isRosterShiftEvent).sort(comparePreviewEvents);
+  if (!sorted.length) return [];
+  const now = new Date();
+  const nowMs = now.getTime();
+  const anchor = sorted.find((event) => {
+    const start = new Date(event.start).getTime();
+    const end = new Date(event.end || event.start).getTime();
+    return Number.isFinite(start) && Number.isFinite(end) && start <= nowMs && end >= nowMs;
+  }) || sorted.find((event) => {
+    const start = new Date(event.start).getTime();
+    return Number.isFinite(start) && start >= nowMs;
+  }) || sorted[0];
+  const anchorDate = eventRosterDateKey(anchor);
+  if (!anchorDate) return [anchor];
+  const weekStart = formatDateKey(mondayFor(parseDateOnly(anchorDate)));
+  const weekEnd = formatDateKey(addDays(parseDateOnly(weekStart), 6));
+  const seen = new Set();
+  const addUnique = (list, event) => {
+    const marker = `${eventRosterDateKey(event)}|${eventSourceCode(event)}|${event.id || event.title || event.start}`;
+    if (seen.has(marker)) return;
+    seen.add(marker);
+    list.push(event);
+  };
+  const prioritized = [];
+  addUnique(prioritized, anchor);
+  for (const event of sorted) {
+    const date = eventRosterDateKey(event);
+    if (date > anchorDate && date >= weekStart && date <= weekEnd) addUnique(prioritized, event);
+  }
+  for (const event of sorted) {
+    const date = eventRosterDateKey(event);
+    if (date < anchorDate && date >= weekStart && date <= weekEnd) addUnique(prioritized, event);
+  }
+  return prioritized;
+}
+
+async function warmInsightEvent(event, selectedKeys = []) {
+  const date = eventRosterDateKey(event);
+  const source = eventSourceCode(event);
+  if (!date) return;
+  await fetchRosterInsightRows({
+    startDate: date,
+    endDate: date,
+    sourceTypes: source ? [source.toLowerCase()] : [],
+    excludeDoctorKeys: selectedKeys,
     allowFallback: false,
   });
 }
