@@ -25,7 +25,9 @@ import {
   loadSnapshotRegistryEntry,
   loadRawRosterFile,
   queryCoworkerEvents,
+  queryCoworkerEventsFromEvents,
   queryOverlapDoctors,
+  queryOverlapDoctorsFromEvents,
   queryClaimedAccounts,
   queryDoctorProfileMirrors,
   queryDoctorEvents,
@@ -45,6 +47,7 @@ import {
   queryRosterFileRanges,
   queryRosterDoctors,
   replaceDerivedRosterFile,
+  rebuildDailyPresenceForActiveFiles,
   replaceAccountCustomEvents,
   replaceCanonicalDoctors,
   snapshotArtifactKey,
@@ -1052,6 +1055,15 @@ export async function onRequestPost(context) {
       return Response.json({ error: "Raw roster import refs have been removed. Calendar data is served from D1." }, { status: 410 });
     }
 
+    if (action === "repairRosterDailyPresence") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      const startedAt = Date.now();
+      const repaired = await rebuildDailyPresenceForActiveFiles(context.env.ROSTER_DB);
+      return Response.json({ ok: true, repaired, queryMs: Date.now() - startedAt });
+    }
+
     if (action === "queryRosterInsights") {
       if (!hasCalendarDb(context.env)) {
         return Response.json({ ok: false, unavailable: true, coworkers: [] });
@@ -1070,15 +1082,26 @@ export async function onRequestPost(context) {
         .filter(Boolean);
       const startedAt = Date.now();
       try {
-        const coworkers = await queryCoworkerEvents(context.env.ROSTER_DB, {
+        const queryOptions = {
           startDate,
           endDate,
           sourceTypes,
           excludeDoctorKeys,
           doctorKeys,
           overlapDoctorKeys,
-        });
-        return Response.json({ ok: true, coworkers, queryMs: Date.now() - startedAt });
+        };
+        const materialized = await queryCoworkerEvents(context.env.ROSTER_DB, queryOptions);
+        let coworkers = materialized;
+        let source = "daily-presence";
+        if (!materialized.length) {
+          const fallback = await queryCoworkerEventsFromEvents(context.env.ROSTER_DB, queryOptions);
+          if (fallback.length) {
+            coworkers = fallback;
+            source = "roster-events-fallback";
+            scheduleDailyPresenceRepair(context, { reason: "queryRosterInsights-fallback" });
+          }
+        }
+        return Response.json({ ok: true, coworkers, queryMs: Date.now() - startedAt, source });
       } catch (error) {
         console.error("queryRosterInsights failed", {
           startDate,
@@ -1106,14 +1129,25 @@ export async function onRequestPost(context) {
         .filter(Boolean);
       const startedAt = Date.now();
       try {
-        const doctors = await queryOverlapDoctors(context.env.ROSTER_DB, {
+        const queryOptions = {
           startDate,
           endDate,
           sourceTypes,
           excludeDoctorKeys,
           overlapDoctorKeys,
-        });
-        return Response.json({ ok: true, doctors, queryMs: Date.now() - startedAt });
+        };
+        const materialized = await queryOverlapDoctors(context.env.ROSTER_DB, queryOptions);
+        let doctors = materialized;
+        let source = "daily-presence";
+        if (!materialized.length) {
+          const fallback = await queryOverlapDoctorsFromEvents(context.env.ROSTER_DB, queryOptions);
+          if (fallback.length) {
+            doctors = fallback;
+            source = "roster-events-fallback";
+            scheduleDailyPresenceRepair(context, { reason: "queryRosterOverlapDoctors-fallback" });
+          }
+        }
+        return Response.json({ ok: true, doctors, queryMs: Date.now() - startedAt, source });
       } catch (error) {
         console.error("queryRosterOverlapDoctors failed", {
           startDate,
@@ -2026,6 +2060,18 @@ function viewedAccountPayload(authRecord, targetRecord, prepared = {}) {
     impersonatedByCreator: impersonating,
     returnToCreatorAvailable: impersonating,
   };
+}
+
+function scheduleDailyPresenceRepair(context, options = {}) {
+  if (typeof context.waitUntil !== "function") return;
+  context.waitUntil(
+    rebuildDailyPresenceForActiveFiles(context.env?.ROSTER_DB).catch((error) => {
+      console.warn("Daily presence repair failed", {
+        reason: options.reason || "",
+        error: error?.message || String(error),
+      });
+    })
+  );
 }
 
 async function loadSnapshotPayloadFromRegistry(context, options = {}) {
