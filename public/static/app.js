@@ -307,6 +307,8 @@ let switchTargetPrefetchPromise = null;
 let deferredBootstrapRunId = 0;
 let deferredBootstrapTimer = 0;
 let deferredAccountContextRunId = 0;
+let calendarTransitionRunId = 0;
+let accountClaimResolutionTransition = null;
 let pendingPreviewSnapToToday = false;
 let insightWarmupTimer = 0;
 let insightWarmupPromise = null;
@@ -6967,6 +6969,30 @@ function canUseRosterInsights() {
   return currentInsightsEnabled === true;
 }
 
+function knownInsightsAccessForEmail(email) {
+  const targetEmail = normalizeEmail(email);
+  if (!targetEmail) return false;
+  if (targetEmail === OWNER_EMAIL) return true;
+  const serverUser = serverUsers.map(normalizeServerUser).find((user) => user.email === targetEmail);
+  return serverUser?.insightsEnabled === true;
+}
+
+function primeInsightsAccessForCurrentView(options = {}) {
+  if (activeCalendarMode() === "doctor-profile") {
+    currentInsightsEnabled = isCreatorAuthenticated();
+    return;
+  }
+  if (currentUserRole === "creator" && !adminViewingEmail) {
+    currentInsightsEnabled = true;
+    return;
+  }
+  if (typeof options.insightsEnabled === "boolean") {
+    currentInsightsEnabled = options.insightsEnabled === true;
+    return;
+  }
+  currentInsightsEnabled = knownInsightsAccessForEmail(viewedAccountEmail());
+}
+
 function canRemoveImports() {
   return isViewingCreatorAccount();
 }
@@ -8874,7 +8900,9 @@ async function validateClaimedAccountCalendarInBackground(context = {}, options 
     preserveSessionOnFailure: true,
     deferHydration: true,
     accountSwitchStartedAt: options.accountSwitchStartedAt,
+    transition: options.transition,
   });
+  if (!calendarTransitionStillCurrent(options.transition)) return;
   if (cachedSnapshot?.preview && (!currentSnapshot?.preview || currentSnapshot.cacheKey !== cachedSnapshot.cacheKey)) {
     currentSnapshot = cachedSnapshot;
     currentSnapshotStale = false;
@@ -8891,7 +8919,9 @@ async function validateClaimedAccountCalendarInBackground(context = {}, options 
     accountSwitchStartedAt: options.accountSwitchStartedAt,
     doctorKey: context.doctorKey || "",
     cachedRevision,
+    transition: options.transition,
   }, 0);
+  if (!calendarTransitionStillCurrent(options.transition)) return;
   renderLoginState();
 }
 
@@ -8899,9 +8929,11 @@ async function validateDoctorProfileCalendarInBackground(doctor, previousState, 
   const result = await loadUnclaimedDoctorCalendar(doctor, previousState, {
     profile: options.profile,
     cachedRevision: options.cachedRevision || "",
+    transition: options.transition,
   });
+  if (!calendarTransitionStillCurrent(options.transition)) return;
   if (result) {
-    await commitCalendarLoad(result, { saveInBackground: true });
+    await commitCalendarLoad(result, { saveInBackground: true, transition: options.transition });
   } else {
     renderLoginState();
     setStatus("Calendar is up to date.");
@@ -8936,10 +8968,12 @@ async function enterUserAccount(email) {
   currentUserEmail = targetEmail;
   currentUserPassword = creatorPassword;
   currentUserRole = targetEmail === OWNER_EMAIL ? "creator" : "user";
+  primeInsightsAccessForCurrentView();
+  const transition = beginCalendarTransition();
   forceConsoleSkin();
   setStatus(`Entering ${targetEmail}...`);
   const targetContext = accountCalendarContextForEmail(targetEmail);
-  const renderedCachedSnapshot = renderCachedCalendarSnapshotForContext(targetContext, { accountSwitchStartedAt });
+  const renderedCachedSnapshot = renderCachedCalendarSnapshotForContext(targetContext, { accountSwitchStartedAt, transition });
   if (!renderedCachedSnapshot) {
     clearPreviewData();
     doctorOptions = [];
@@ -8950,15 +8984,18 @@ async function enterUserAccount(email) {
     const validation = validateClaimedAccountCalendarInBackground(targetContext, {
       accountSwitchStartedAt,
       preserveRenderedSnapshot: renderedCachedSnapshot,
+      transition,
     });
     if (renderedCachedSnapshot) {
       void validation.catch((error) => {
+        if (!calendarTransitionStillCurrent(transition)) return;
         setStatus(normalizeAuthMessage(error.message || `Could not update ${targetEmail}.`), true);
       });
     } else {
       await validation;
     }
   } catch (error) {
+    if (!calendarTransitionStillCurrent(transition)) return;
     restoreCalendarViewState(previousState);
     renderLoginState();
     setStatus(normalizeAuthMessage(error.message || `Could not enter ${targetEmail}.`), true);
@@ -8989,11 +9026,14 @@ async function enterDoctorProfileView(doctor) {
   currentUserRole = "creator";
   activeDoctorProfile = profile;
   if (profile) setActiveCalendarContext("doctor-profile", { email: currentUserEmail, profile });
+  primeInsightsAccessForCurrentView();
+  const accountSwitchStartedAt = performance.now();
+  const transition = beginCalendarTransition();
   localStorage.setItem(CURRENT_EMAIL_KEY, currentUserEmail);
   sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
   setStatus(`Opening ${doctor.displayName}...`);
   const renderedCachedSnapshot = targetContext
-    ? renderCachedCalendarSnapshotForContext(targetContext, { accountSwitchStartedAt: performance.now() })
+    ? renderCachedCalendarSnapshotForContext(targetContext, { accountSwitchStartedAt, transition })
     : false;
   if (!renderedCachedSnapshot) {
     clearPreviewData();
@@ -9006,15 +9046,18 @@ async function enterDoctorProfileView(doctor) {
       profile,
       cachedRevision: renderedCachedSnapshot ? currentSnapshot?.calendarRevision || "" : "",
       renderedCachedSnapshot,
+      transition,
     });
     if (renderedCachedSnapshot) {
       void validation.catch((error) => {
+        if (!calendarTransitionStillCurrent(transition)) return;
         setStatus(error.message || `Could not update ${doctor.displayName}.`, true);
       });
     } else {
       await validation;
     }
   } catch (error) {
+    if (!calendarTransitionStillCurrent(transition)) return;
     restoreCalendarViewState(previousState);
     renderLoginState();
     setStatus(error.message || `Could not open ${doctor.displayName}.`, true);
@@ -9040,6 +9083,7 @@ async function loadUnclaimedDoctorCalendar(doctor, sourceContext, options = {}) 
     throw new Error(`Could not open ${doctor?.displayName || "that clinician"} because their roster source was not available.`);
   }
   const profileData = await fetchDoctorProfileState(profile, { cachedRevision: options.cachedRevision || "" });
+  if (!calendarTransitionStillCurrent(options.transition)) return null;
   if (profileData.snapshotCurrent === true) {
     currentCalendarRevision = String(profileData.calendarRevision || currentCalendarRevision || "");
     if (currentSnapshot) currentSnapshot.calendarRevision = currentCalendarRevision;
@@ -9292,6 +9336,7 @@ async function buildUnclaimedPreviewFromImports(doctor, profile, imports, sessio
 }
 
 async function commitCalendarLoad(result, options = {}) {
+  if (!calendarTransitionStillCurrent(options.transition)) return;
   if (!result || result.mode !== "doctor-profile") {
     throw new Error("Unsupported calendar load result.");
   }
@@ -9332,6 +9377,7 @@ async function commitCalendarLoad(result, options = {}) {
   } else {
     await saveCloudState();
   }
+  if (!calendarTransitionStillCurrent(options.transition)) return;
   renderLoginState();
   setStatus("Calendar loaded.");
 }
@@ -9447,19 +9493,23 @@ async function returnToCreatorAccount() {
   currentUserPassword = creatorPassword;
   currentUserRole = "creator";
   setActiveCalendarContext("creator-account", { email: currentUserEmail });
+  primeInsightsAccessForCurrentView();
+  const transition = beginCalendarTransition();
   localStorage.setItem(CURRENT_EMAIL_KEY, currentUserEmail);
   sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
   forceConsoleSkin();
   setStatus("Returning to creator account...");
   forceCreatorDoctorSession();
   const targetContext = accountCalendarContextForEmail(OWNER_EMAIL);
-  const renderedCachedSnapshot = renderCachedCalendarSnapshotForContext(targetContext, { accountSwitchStartedAt });
+  const renderedCachedSnapshot = renderCachedCalendarSnapshotForContext(targetContext, { accountSwitchStartedAt, transition });
   renderLoginState();
   const validateCreator = async () => {
     await validateClaimedAccountCalendarInBackground(targetContext, {
       accountSwitchStartedAt,
       preserveRenderedSnapshot: renderedCachedSnapshot,
+      transition,
     });
+    if (!calendarTransitionStillCurrent(transition)) return;
     forceCreatorDoctorSession();
     if (currentSnapshot) {
       const snapshotDoctorKey = normalizeRosterName(currentSnapshot.session?.doctorKey || "");
@@ -9487,12 +9537,14 @@ async function returnToCreatorAccount() {
   };
   if (renderedCachedSnapshot) {
     void validateCreator().catch((error) => {
+      if (!calendarTransitionStillCurrent(transition)) return;
       setStatus(normalizeAuthMessage(error.message || "Could not update the creator calendar."), true);
     });
   } else {
     try {
       await validateCreator();
     } catch (error) {
+      if (!calendarTransitionStillCurrent(transition)) return;
       restoreCalendarViewState(previousState);
       renderLoginState();
       setStatus(normalizeAuthMessage(error.message || "Could not return to creator account."), true);
@@ -10222,6 +10274,8 @@ async function loginWithEmail(email, password, options = {}) {
     currentSnapshotOwnerId = currentUserEmail;
     currentUserRole = currentUserEmail === OWNER_EMAIL ? "creator" : "user";
     setActiveCalendarContext(currentUserRole === "creator" ? "creator-account" : "claimed-account", { email: currentUserEmail });
+    primeInsightsAccessForCurrentView();
+    const transition = beginCalendarTransition();
     localStorage.setItem(CURRENT_EMAIL_KEY, currentUserEmail);
     sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
     if (options.stayLoggedIn) {
@@ -10245,8 +10299,9 @@ async function loginWithEmail(email, password, options = {}) {
       skipSnapshotCacheWriteIfCurrent: true,
       responseMode: "fast",
       loginStartedAt,
+      transition,
     });
-    if (!currentUserEmail) return;
+    if (!currentUserEmail || !calendarTransitionStillCurrent(transition)) return;
     renderLoginState();
     closeLoginModal();
     setEntranceStatus("");
@@ -10258,13 +10313,14 @@ async function loginWithEmail(email, password, options = {}) {
     }
     const renderedCachedSnapshot = inlineSnapshotReady
       ? true
-      : renderCachedCalendarSnapshotForContext(accountCalendarContextForEmail(currentUserEmail), { loginStartedAt });
+      : renderCachedCalendarSnapshotForContext(accountCalendarContextForEmail(currentUserEmail), { loginStartedAt, transition });
     if ((loginData?.responseMode || "full") === "fast") {
       queueDeferredAccountContextLoad({
         loginStartedAt,
         targetEmail: "",
         responseMode: loginData?.responseMode || "fast",
         delayMs: 50,
+        transition,
       });
     }
     markLoginPhase(renderedCachedSnapshot ? "firstCalendarPaint" : "firstShellPaint", loginStartedAt);
@@ -10274,6 +10330,7 @@ async function loginWithEmail(email, password, options = {}) {
       includeBootstrap: true,
       forceCalendarRefresh: renderedCachedSnapshot,
       allowInlineBuild: false,
+      transition,
     }, loginStartedAt);
   } catch (error) {
     const message = normalizeAuthMessage(error.message || "Login failed.");
@@ -10307,11 +10364,14 @@ async function restoreCloudState(options = {}) {
       }),
     });
     const data = await readJsonResponse(response, "Login failed.");
+    if (!calendarTransitionStillCurrent(options.transition)) return null;
     await applyCloudStateData(data, {
       deferContext: options.deferContext === true,
       deferSnapshotPersistence: options.deferSnapshotPersistence === true,
       skipSnapshotCacheWriteIfCurrent: options.skipSnapshotCacheWriteIfCurrent === true,
+      transition: options.transition,
     });
+    if (!calendarTransitionStillCurrent(options.transition)) return null;
     if (currentUserEmail === OWNER_EMAIL && data?.diagnostics?.login) {
       console.info("Login server timings", data.diagnostics.login);
     }
@@ -10320,6 +10380,7 @@ async function restoreCloudState(options = {}) {
     if (!options.deferHydration) await hydrateAuthenticatedWorkspace({ ...options, includeBootstrap: false }, options.loginStartedAt);
     return data;
   } catch (error) {
+    if (!calendarTransitionStillCurrent(options.transition)) return null;
     cancelScheduledCloudStateSave();
     const attemptedEmail = currentUserEmail;
     const message = error.message === "Cloud storage is not configured."
@@ -10355,14 +10416,27 @@ async function restoreCloudState(options = {}) {
 
 async function hydrateAuthenticatedWorkspace(options = {}, loginStartedAt = 0) {
   if (!currentUserEmail) return;
+  if (!calendarTransitionStillCurrent(options.transition)) return;
   try {
     const adminTargetEmail = normalizeEmail(options.adminTargetEmail);
     if (adminTargetEmail && adminTargetEmail !== OWNER_EMAIL && !currentRosterClaims.length) {
-      await resolveCurrentAccountClaims(adminTargetEmail);
+      accountClaimResolutionTransition = options.transition;
+      try {
+        await resolveCurrentAccountClaims(adminTargetEmail);
+      } finally {
+        accountClaimResolutionTransition = null;
+      }
+      if (!calendarTransitionStillCurrent(options.transition)) return;
       markLoginPhase("claimsResolved", loginStartedAt);
       markAccountSwitchPhase("claimsResolved", options.accountSwitchStartedAt);
     } else if (!adminTargetEmail && currentUserEmail !== OWNER_EMAIL && !currentRosterClaims.length) {
-      await resolveCurrentAccountClaims();
+      accountClaimResolutionTransition = options.transition;
+      try {
+        await resolveCurrentAccountClaims();
+      } finally {
+        accountClaimResolutionTransition = null;
+      }
+      if (!calendarTransitionStillCurrent(options.transition)) return;
       markLoginPhase("claimsResolved", loginStartedAt);
     }
     if (!adminTargetEmail && currentUserEmail === OWNER_EMAIL) {
@@ -10386,8 +10460,10 @@ async function hydrateAuthenticatedWorkspace(options = {}, loginStartedAt = 0) {
           cachedRevision,
           allowInlineBuild: options.allowInlineBuild !== false,
           preserveExistingSnapshot: true,
+          transition: options.transition,
         })
       : true;
+    if (!calendarTransitionStillCurrent(options.transition)) return;
     markLoginPhase("calendarLoaded", loginStartedAt);
     markAccountSwitchPhase("calendarLoaded", options.accountSwitchStartedAt);
     if (options.includeBootstrap !== false) {
@@ -10401,6 +10477,7 @@ async function hydrateAuthenticatedWorkspace(options = {}, loginStartedAt = 0) {
         markAccountSwitchPhase("workspaceRendered", options.accountSwitchStartedAt);
       } else {
         await bootstrapImports();
+        if (!calendarTransitionStillCurrent(options.transition)) return;
         markLoginPhase("workspaceRendered", loginStartedAt);
         markAccountSwitchPhase("workspaceRendered", options.accountSwitchStartedAt);
       }
@@ -10411,10 +10488,12 @@ async function hydrateAuthenticatedWorkspace(options = {}, loginStartedAt = 0) {
     }
     if (isCreatorAuthenticated()) {
       window.setTimeout(() => {
+        if (!calendarTransitionStillCurrent(options.transition)) return;
         void loadServerUsers();
       }, 0);
     }
   } catch (error) {
+    if (!calendarTransitionStillCurrent(options.transition)) return;
     const message = normalizeAuthMessage(error.message || "Workspace hydration failed.");
     setStatus(message, true);
     console.warn("Post-login workspace hydration failed", { message, email: currentUserEmail, error, timings: lastLoginTimings });
@@ -10424,8 +10503,9 @@ async function hydrateAuthenticatedWorkspace(options = {}, loginStartedAt = 0) {
 function queuePostLoginHydration(options = {}, loginStartedAt = 0) {
   const expectedEmail = viewedAccountEmail();
   const run = () => {
+    if (!calendarTransitionStillCurrent(options.transition)) return;
     void hydrateAuthenticatedWorkspace(options, loginStartedAt).then(() => {
-      if (viewedAccountEmail() === expectedEmail) markLoginPhase("backgroundHydrationComplete", loginStartedAt);
+      if (viewedAccountEmail() === expectedEmail && calendarTransitionStillCurrent(options.transition)) markLoginPhase("backgroundHydrationComplete", loginStartedAt);
     });
   };
   const afterFrame = () => window.setTimeout(run, 0);
@@ -10465,6 +10545,29 @@ function activeBootstrapContextKey() {
     return `doctor-profile:${activeDoctorProfile?.id || ""}:${normalizeRosterName(activeDoctorProfile?.doctorKey || "")}`;
   }
   return `${activeCalendarMode()}:${viewedAccountEmail()}:${normalizeRosterName(currentDefaultDoctorKey || "")}`;
+}
+
+function activeCalendarTransitionKey() {
+  if (activeCalendarMode() === "doctor-profile") {
+    return `doctor-profile:${activeDoctorProfile?.id || activeDoctorProfile?.ownerId || ""}`;
+  }
+  return `${activeCalendarMode()}:${viewedAccountEmail()}`;
+}
+
+function beginCalendarTransition(expectedKey = activeCalendarTransitionKey()) {
+  calendarTransitionRunId += 1;
+  cancelDeferredBootstrapImports();
+  cancelDeferredAccountContextLoad();
+  return {
+    runId: calendarTransitionRunId,
+    expectedKey: expectedKey || activeCalendarTransitionKey(),
+  };
+}
+
+function calendarTransitionStillCurrent(transition = null) {
+  if (!transition) return true;
+  return transition.runId === calendarTransitionRunId
+    && activeCalendarTransitionKey() === transition.expectedKey;
 }
 
 function cancelDeferredBootstrapImports() {
@@ -10536,12 +10639,13 @@ function queueDeferredAccountContextLoad(options = {}) {
   window.setTimeout(() => {
     void (async () => {
       try {
+        if (!calendarTransitionStillCurrent(options.transition)) return;
         const data = await loadDeferredAccountContext(options);
-        if (runId !== deferredAccountContextRunId || !data || viewedAccountEmail() !== normalizeEmail(options.targetEmail || currentUserEmail)) return;
+        if (runId !== deferredAccountContextRunId || !data || viewedAccountEmail() !== normalizeEmail(options.targetEmail || currentUserEmail) || !calendarTransitionStillCurrent(options.transition)) return;
         applyCloudStateContext(data);
         renderLoginState();
       } catch (error) {
-        if (runId !== deferredAccountContextRunId) return;
+        if (runId !== deferredAccountContextRunId || !calendarTransitionStillCurrent(options.transition)) return;
         console.warn("Deferred account context load failed", {
           email: normalizeEmail(options.targetEmail || currentUserEmail),
           message: error?.message || String(error),
@@ -10551,7 +10655,8 @@ function queueDeferredAccountContextLoad(options = {}) {
   }, delayMs);
 }
 
-async function resolveCurrentAccountClaims(targetEmailOverride = "") {
+async function resolveCurrentAccountClaims(targetEmailOverride = "", options = {}) {
+  const transition = options.transition || accountClaimResolutionTransition;
   const targetEmail = normalizeEmail(targetEmailOverride);
   if (!currentUserEmail || (!targetEmail && currentUserEmail === OWNER_EMAIL)) return;
   const requestEmail = targetEmail ? authUserEmail : currentUserEmail;
@@ -10568,7 +10673,8 @@ async function resolveCurrentAccountClaims(targetEmailOverride = "") {
     }),
   });
   const data = await readJsonResponse(response, "Account claim resolution failed.");
-  await applyCloudStateData(data);
+  if (!calendarTransitionStillCurrent(transition)) return;
+  await applyCloudStateData(data, { transition });
 }
 
 async function restoreDoctorProfileState() {
@@ -10645,10 +10751,14 @@ function applyCloudStateIdentity(data) {
   returnToCreatorAvailable = data.returnToCreatorAvailable === true || Boolean(isImpersonating);
   adminViewingEmail = isImpersonating ? viewedAccountId : "";
   currentRosterClaims = sanitizeRosterClaims(data.claims || []);
+  if (typeof data.insightsEnabled === "boolean") {
+    primeInsightsAccessForCurrentView({ insightsEnabled: data.insightsEnabled });
+  }
   if (data.realName) saveLocalAccountIdentity(data.realName);
 }
 
 function applyCloudStateContext(data) {
+  const previousInsightsEnabled = currentInsightsEnabled;
   currentInsightsEnabled = currentUserRole === "creator" || data.insightsEnabled === true;
   currentSuggestedClaims = sanitizeRosterClaims(data.suggestedClaims || data.nameMatches || []);
   latestNameMatches = currentSuggestedClaims;
@@ -10658,10 +10768,12 @@ function applyCloudStateContext(data) {
   }
   currentSubscription = sanitizeSubscription(data.subscription);
   applyIssueConfig(data.issueConfig);
+  if (previousInsightsEnabled !== currentInsightsEnabled && latestPreview) rebuildClientPreview();
 }
 
 async function applyCloudStateSnapshot(data, options = {}) {
   if (!cloudAvailable) return;
+  if (!calendarTransitionStillCurrent(options.transition)) return;
   if (!data.state) {
     selectedFiles = [];
     currentSnapshot = null;
@@ -10669,6 +10781,7 @@ async function applyCloudStateSnapshot(data, options = {}) {
     currentSnapshotBuiltAt = "";
     restoredSessionState = null;
     await replaceStoredImports([]);
+    if (!calendarTransitionStillCurrent(options.transition)) return;
     clearWorkspaceStoreEntry(currentUserEmail);
     return;
   }
@@ -10706,13 +10819,18 @@ async function applyCloudStateSnapshot(data, options = {}) {
 }
 
 async function applyCloudStateData(data, options = {}) {
+  if (!calendarTransitionStillCurrent(options.transition)) return false;
   applyCloudStateIdentity(data);
+  if (!calendarTransitionStillCurrent(options.transition)) return false;
   if (!options.deferContext) applyCloudStateContext(data);
+  if (!calendarTransitionStillCurrent(options.transition)) return false;
   await applyCloudStateSnapshot(data, options);
+  return calendarTransitionStillCurrent(options.transition);
 }
 
 async function loadCloudCalendarEvents(options = {}) {
   if (!cloudAvailable) return false;
+  if (!calendarTransitionStillCurrent(options.transition)) return false;
   const adminTargetEmail = normalizeEmail(options.adminTargetEmail);
   const requestEmail = adminTargetEmail ? authUserEmail : currentUserEmail;
   const requestPassword = adminTargetEmail ? authUserPassword : currentUserPassword;
@@ -10742,6 +10860,7 @@ async function loadCloudCalendarEvents(options = {}) {
     }),
   });
   const data = await readJsonResponse(response, "Calendar load failed.");
+  if (!calendarTransitionStillCurrent(options.transition)) return false;
   currentCalendarRevision = String(data.snapshotRevision || data.calendarRevision || currentCalendarRevision || "");
   if (data.snapshotCurrent === true) {
     if (currentSnapshot && currentCalendarRevision) currentSnapshot.calendarRevision = currentCalendarRevision;
@@ -12003,8 +12122,10 @@ function renderCachedCalendarSnapshot(options = {}) {
 }
 
 function renderCachedCalendarSnapshotForContext(context = {}, options = {}) {
+  if (!calendarTransitionStillCurrent(options.transition)) return false;
   const cached = loadCachedCalendarSnapshotForContext(context);
   if (!cached?.preview) return false;
+  if (!calendarTransitionStillCurrent(options.transition)) return false;
   currentSnapshot = cached;
   currentSnapshotStale = false;
   currentSnapshotBuiltAt = cached.cachedAt || cached.preview?.lastParsed || "";

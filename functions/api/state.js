@@ -139,6 +139,7 @@ export async function onRequestPost(context) {
         stale: snapshotPayload.stale,
         ...viewedAccountPayload(loginRecord, loginRecord, prepared),
         defaultDoctorKey: prepared.defaultDoctorKey || "",
+        insightsEnabled: prepared.insightsEnabled,
         snapshotOwnerType: snapshotPayload.snapshot?.ownerType || snapshotOwnerTypeForRecord(loginRecord, prepared.role),
         snapshotOwnerId: snapshotPayload.snapshot?.ownerId || normalizeEmail(loginRecord.email),
       };
@@ -147,7 +148,6 @@ export async function onRequestPost(context) {
         responsePayload.suggestedClaims = prepared.nameMatches;
         responsePayload.availableDoctors = prepared.availableDoctors;
         responsePayload.subscription = prepared.subscription;
-        responsePayload.insightsEnabled = prepared.insightsEnabled;
         responsePayload.issueConfig = prepared.issueConfig;
       } else if ((prepared.role === "creator" || prepared.role === "owner") && body?.diagnostics !== false) {
         responsePayload.diagnostics = {
@@ -1068,6 +1068,9 @@ export async function onRequestPost(context) {
       if (!hasCalendarDb(context.env)) {
         return Response.json({ ok: false, unavailable: true, coworkers: [] });
       }
+      if (!insightsEnabledForRecord({ ...account.record, role: account.role })) {
+        return Response.json({ ok: false, unavailable: true, coworkers: [] }, { status: 403 });
+      }
       const startDate = String(body?.startDate || body?.date || "").slice(0, 10);
       const endDate = String(body?.endDate || body?.date || startDate).slice(0, 10);
       const sourceTypes = sanitizeSourceTypes(body?.sourceTypes || []);
@@ -1108,6 +1111,9 @@ export async function onRequestPost(context) {
     }
 
     if (action === "queryRosterOverlapDoctors") {
+      if (!insightsEnabledForRecord({ ...account.record, role: account.role })) {
+        return Response.json({ ok: false, unavailable: true, doctors: [] }, { status: 403 });
+      }
       const startDate = String(body?.startDate || body?.date || "").slice(0, 10);
       const endDate = String(body?.endDate || body?.date || startDate).slice(0, 10);
       const sourceTypes = sanitizeSourceTypes(body?.sourceTypes || []);
@@ -1716,7 +1722,7 @@ async function prepareFastLoginEnvelope(rawRecord, options = {}) {
     nameMatches: [],
     availableDoctors: [],
     subscription: null,
-    insightsEnabled: lightweight.role === "creator" || lightweight.role === "owner",
+    insightsEnabled: insightsEnabledForRecord(record),
     adminIssues: [],
     issueConfig: null,
     defaultDoctorKey: lightweight.defaultDoctorKey || "",
