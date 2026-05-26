@@ -7181,7 +7181,7 @@ function renderCalendarStoreCard() {
           <span>${escapeHtml(detail)}</span>
         </div>
       </div>
-      <div class="review-body">
+      <div class="review-body system-admin-body">
         ${missingSelectedFiles.length ? `
           <div class="issues-list">
             ${missingSelectedFiles.map((entry) => `

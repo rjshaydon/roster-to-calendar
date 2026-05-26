@@ -1595,6 +1595,11 @@ body[data-skin="console"] .preview-cell.is-weekend {
   align-items: end;
 }
 
+.system-admin-body > .modal-actions,
+.system-admin-body > .console-history {
+  grid-column: 1 / -1;
+}
+
 .account-hospital-locations {
   grid-template-columns: 1fr;
 }
