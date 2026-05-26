@@ -354,8 +354,23 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function warmInsightData[\s\S]*?function syncActionState/)?.[0] || "",
-  /allowFallback: false[\s\S]*allowFallback: false[\s\S]*allowFallback: false/,
-  "post-render insight warmup must not trigger direct roster_events fallback work",
+  /fetchRosterOverlapDoctors[\s\S]*allowFallback: true/,
+  "post-render insight warmup should only prefetch the When doctor list after first paint",
+);
+assert.doesNotMatch(
+  appSource.match(/async function warmInsightData[\s\S]*?function syncActionState/)?.[0] || "",
+  /fetchRosterInsightRows/,
+  "post-render insight warmup must not fan out broad coworker SQL requests",
+);
+assert.match(
+  appSource.match(/async function fetchRosterOverlapDoctors[\s\S]*?function renderRosterInsightUnavailable/)?.[0] || "",
+  /readPersistentRosterOverlapDoctors\(cacheKey\)[\s\S]*writePersistentRosterOverlapDoctors\(cacheKey, data\.doctors\)/,
+  "When doctor-list queries should use persistent revision-keyed browser cache",
+);
+assert.match(
+  appSource.match(/function rosterOverlapDoctorCacheKey[\s\S]*?function resetVisibleInsightWarmCache/)?.[0] || "",
+  /insightWarmBaseKey\(\)[\s\S]*ROSTER_OVERLAP_DOCTOR_CACHE_KEY[\s\S]*currentCalendarRevision/,
+  "When doctor-list cache keys should include the active calendar revision",
 );
 assert.match(
   appSource.match(/async function renderInsightsModal[\s\S]*?async function ensureInsightRosterAnalysis/)?.[0] || "",
@@ -2893,7 +2908,7 @@ const d1Insights = await postState(d1StateStore, {
   endDate: d1CreatorCalendar.snapshot.preview.events[0].start.slice(0, 10),
 }, d1Store);
 assert.ok(Array.isArray(d1Insights.coworkers));
-assert.equal(d1Insights.source, "daily-presence", "coworker lookup should use populated daily presence when available");
+assert.equal(d1Insights.source, "roster-events", "coworker lookup should use the proven direct roster_events path");
 assert.ok(d1Store.dailyPresence.size > 0, "daily presence should be populated during derived roster storage");
 assert.ok(
   [...d1Store.dailyPresence.values()].some((row) => d1Store.events.has(row.event_id)),
@@ -2935,7 +2950,7 @@ const d1OverlapDoctors = await postState(d1StateStore, {
   excludeDoctorKeys: [d1Doctor.key],
 }, d1Store);
 assert.ok(Array.isArray(d1OverlapDoctors.doctors), "overlap doctor lookup should return compact doctor rows");
-assert.equal(d1OverlapDoctors.source, "daily-presence", "overlap doctor lookup should use daily presence when available");
+assert.equal(d1OverlapDoctors.source, "roster-events", "overlap doctor lookup should use the proven direct roster_events path");
 const savedEventJsonWithoutDoctorMetadata = [...d1Store.events.values()].find((event) => {
   const parsed = JSON.parse(event.event_json || "{}");
   return !parsed.doctorKey && !parsed.displayName;
@@ -2951,9 +2966,8 @@ const d1WarmupStyleInsights = await postState(d1StateStore, {
   excludeDoctorKeys: [d1Doctor.key],
   allowFallback: false,
 }, d1Store);
-assert.equal(d1WarmupStyleInsights.source, "daily-presence", "warmup insight requests should stay on the materialized path");
-assert.equal(d1WarmupStyleInsights.fallbackSkipped, true, "warmup insight requests should skip the direct roster_events fallback");
-assert.equal(d1WarmupStyleInsights.coworkers.length, 0, "empty daily presence should not trigger expensive fallback for warmup");
+assert.equal(d1WarmupStyleInsights.source, "roster-events", "insight requests should no longer depend on daily presence");
+assert.ok(d1WarmupStyleInsights.coworkers.length, "direct roster_events insight lookup should still return rows when daily presence is empty");
 assert.equal(d1Store.dailyPresence.size, 0, "warmup insight requests should not repair daily presence");
 const d1FallbackInsights = await postState(d1StateStore, {
   action: "queryRosterInsights",
@@ -2964,9 +2978,9 @@ const d1FallbackInsights = await postState(d1StateStore, {
   excludeDoctorKeys: [d1Doctor.key],
   allowFallback: true,
 }, d1Store);
-assert.equal(d1FallbackInsights.source, "roster-events-fallback", "explicit insight requests can fall back to roster_events for correctness");
-assert.ok(d1FallbackInsights.coworkers.length, "fallback coworker lookup should still return roster rows");
-assert.equal(d1Store.dailyPresence.size, 0, "explicit fallback should not run a full daily-presence repair");
+assert.equal(d1FallbackInsights.source, "roster-events", "explicit insight requests should use roster_events directly");
+assert.ok(d1FallbackInsights.coworkers.length, "direct coworker lookup should still return roster rows");
+assert.equal(d1Store.dailyPresence.size, 0, "explicit insight requests should not run a full daily-presence repair");
 const d1FallbackOverlapDoctors = await postState(d1StateStore, {
   action: "queryRosterOverlapDoctors",
   email: "rhaydon@gmail.com",
@@ -2977,7 +2991,7 @@ const d1FallbackOverlapDoctors = await postState(d1StateStore, {
   excludeDoctorKeys: [d1Doctor.key],
   allowFallback: true,
 }, d1Store);
-assert.equal(d1FallbackOverlapDoctors.source, "roster-events-fallback", "explicit overlap requests can fall back to roster_events");
+assert.equal(d1FallbackOverlapDoctors.source, "roster-events", "explicit overlap requests should use roster_events directly");
 const repairedPresence = await postState(d1StateStore, {
   action: "repairRosterDailyPresence",
   email: "rhaydon@gmail.com",
@@ -2997,7 +3011,7 @@ const d1RepairedOverlapDoctors = await postState(d1StateStore, {
   overlapDoctorKeys: [d1Doctor.key],
   excludeDoctorKeys: [d1Doctor.key],
 }, d1Store);
-assert.equal(d1RepairedOverlapDoctors.source, "daily-presence", "repaired daily presence should restore the fast overlap path");
+assert.equal(d1RepairedOverlapDoctors.source, "roster-events", "repaired daily presence should not change the direct overlap path");
 const d1RepositoryFile = [...d1Store.files.keys()][0];
 await postState(d1StateStore, {
   action: "saveDerivedCalendarFile",

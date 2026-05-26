@@ -24,9 +24,7 @@ import {
   loadDoctorProfileMirror,
   loadSnapshotRegistryEntry,
   loadRawRosterFile,
-  queryCoworkerEvents,
   queryCoworkerEventsFromEvents,
-  queryOverlapDoctors,
   queryOverlapDoctorsFromEvents,
   queryClaimedAccounts,
   queryDoctorProfileMirrors,
@@ -1082,7 +1080,6 @@ export async function onRequestPost(context) {
       const overlapDoctorKeys = (Array.isArray(body?.overlapDoctorKeys) ? body.overlapDoctorKeys : [])
         .map((key) => normalizeRosterName(key))
         .filter(Boolean);
-      const allowFallback = body?.allowFallback === true;
       const startedAt = Date.now();
       try {
         const queryOptions = {
@@ -1093,17 +1090,8 @@ export async function onRequestPost(context) {
           doctorKeys,
           overlapDoctorKeys,
         };
-        const materialized = await queryCoworkerEvents(context.env.ROSTER_DB, queryOptions);
-        let coworkers = materialized;
-        let source = "daily-presence";
-        if (!materialized.length && allowFallback) {
-          const fallback = await queryCoworkerEventsFromEvents(context.env.ROSTER_DB, queryOptions);
-          if (fallback.length) {
-            coworkers = fallback;
-            source = "roster-events-fallback";
-          }
-        }
-        return Response.json({ ok: true, coworkers, queryMs: Date.now() - startedAt, source, fallbackSkipped: !allowFallback && !materialized.length });
+        const coworkers = await queryCoworkerEventsFromEvents(context.env.ROSTER_DB, queryOptions);
+        return Response.json({ ok: true, coworkers, queryMs: Date.now() - startedAt, source: "roster-events" });
       } catch (error) {
         console.error("queryRosterInsights failed", {
           startDate,
@@ -1129,7 +1117,6 @@ export async function onRequestPost(context) {
       const overlapDoctorKeys = (Array.isArray(body?.overlapDoctorKeys) ? body.overlapDoctorKeys : [])
         .map((key) => normalizeRosterName(key))
         .filter(Boolean);
-      const allowFallback = body?.allowFallback === true;
       const startedAt = Date.now();
       try {
         const queryOptions = {
@@ -1139,17 +1126,8 @@ export async function onRequestPost(context) {
           excludeDoctorKeys,
           overlapDoctorKeys,
         };
-        const materialized = await queryOverlapDoctors(context.env.ROSTER_DB, queryOptions);
-        let doctors = materialized;
-        let source = "daily-presence";
-        if (!materialized.length && allowFallback) {
-          const fallback = await queryOverlapDoctorsFromEvents(context.env.ROSTER_DB, queryOptions);
-          if (fallback.length) {
-            doctors = fallback;
-            source = "roster-events-fallback";
-          }
-        }
-        return Response.json({ ok: true, doctors, queryMs: Date.now() - startedAt, source, fallbackSkipped: !allowFallback && !materialized.length });
+        const doctors = await queryOverlapDoctorsFromEvents(context.env.ROSTER_DB, queryOptions);
+        return Response.json({ ok: true, doctors, queryMs: Date.now() - startedAt, source: "roster-events" });
       } catch (error) {
         console.error("queryRosterOverlapDoctors failed", {
           startDate,

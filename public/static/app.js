@@ -156,6 +156,7 @@ const ACCOUNT_STATE_KEY = "roster-account-state";
 const SESSION_STATE_KEY = "roster-session-state-v1";
 const ACCOUNT_WORKSPACES_KEY = "roster-account-workspaces-v1";
 const CALENDAR_SNAPSHOT_CACHE_KEY = "roster-calendar-snapshot-cache-v1";
+const ROSTER_OVERLAP_DOCTOR_CACHE_KEY = "roster-overlap-doctor-cache-v1";
 const CURRENT_EMAIL_KEY = "roster-current-email";
 const CURRENT_PASSWORD_KEY = "roster-current-password";
 const PERSISTENT_PASSWORD_KEY = "roster-persistent-password";
@@ -3228,6 +3229,11 @@ async function fetchRosterOverlapDoctors({ startDate, endDate = startDate, sourc
   if (visibleInsightWarmCache.has(cacheKey)) {
     return { ok: true, doctors: visibleInsightWarmCache.get(cacheKey), elapsedMs: 0, cached: true };
   }
+  const persistentDoctors = readPersistentRosterOverlapDoctors(cacheKey);
+  if (persistentDoctors) {
+    visibleInsightWarmCache.set(cacheKey, persistentDoctors);
+    return { ok: true, doctors: persistentDoctors, elapsedMs: 0, cached: true, persistentCached: true };
+  }
   const startedAt = performance.now();
   try {
     const requestEmail = adminViewingEmail ? authUserEmail || currentUserEmail : currentUserEmail;
@@ -3252,6 +3258,7 @@ async function fetchRosterOverlapDoctors({ startDate, endDate = startDate, sourc
     if (!data.ok || data.unavailable || !Array.isArray(data.doctors)) return { ok: false, unavailable: true, doctors: [], elapsedMs };
     if (elapsedMs > 1000) console.warn("Roster overlap doctor SQL lookup was slow", { elapsedMs, queryMs: data.queryMs, startDate, endDate, sourceTypes, overlapDoctorKeys });
     visibleInsightWarmCache.set(cacheKey, data.doctors);
+    writePersistentRosterOverlapDoctors(cacheKey, data.doctors);
     return { ok: true, doctors: data.doctors, elapsedMs, queryMs: data.queryMs };
   } catch (error) {
     const elapsedMs = Math.round(performance.now() - startedAt);
@@ -3333,6 +3340,45 @@ function rosterOverlapDoctorCacheKey({ startDate, endDate = startDate, sourceTyp
     stableInsightList(excludeDoctorKeys.map(normalizeRosterName)),
     stableInsightList(overlapDoctorKeys.map(normalizeRosterName)),
   ].join("|");
+}
+
+function loadPersistentRosterOverlapDoctorCache() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(ROSTER_OVERLAP_DOCTOR_CACHE_KEY) || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function savePersistentRosterOverlapDoctorCache(store) {
+  try {
+    const entries = Object.entries(store || {})
+      .filter(([, entry]) => Array.isArray(entry?.doctors))
+      .sort((left, right) => Number(right[1]?.savedAt || 0) - Number(left[1]?.savedAt || 0))
+      .slice(0, 80);
+    localStorage.setItem(ROSTER_OVERLAP_DOCTOR_CACHE_KEY, JSON.stringify(Object.fromEntries(entries)));
+  } catch {
+    // Persistent insight cache must never affect calendar interaction.
+  }
+}
+
+function readPersistentRosterOverlapDoctors(cacheKey) {
+  if (!cacheKey || !currentCalendarRevision) return null;
+  const entry = loadPersistentRosterOverlapDoctorCache()[cacheKey];
+  if (!entry || entry.revision !== currentCalendarRevision || !Array.isArray(entry.doctors)) return null;
+  return entry.doctors;
+}
+
+function writePersistentRosterOverlapDoctors(cacheKey, doctors = []) {
+  if (!cacheKey || !currentCalendarRevision || !Array.isArray(doctors)) return;
+  const store = loadPersistentRosterOverlapDoctorCache();
+  store[cacheKey] = {
+    revision: currentCalendarRevision,
+    savedAt: Date.now(),
+    doctors,
+  };
+  savePersistentRosterOverlapDoctorCache(store);
 }
 
 function resetVisibleInsightWarmCache() {
@@ -4292,38 +4338,12 @@ async function warmInsightData() {
   const endDate = settings.dateTo || range.end || startDate;
   if (!startDate || !endDate) return;
   const selectedKeys = selectedInsightDoctorKeys();
-  const selectedEvents = selectedDoctorEventsForInsights(startDate, endDate).filter(isRosterShiftEvent);
-  const dates = [...new Set(selectedEvents.map(eventRosterDateKey).filter(Boolean))]
-    .sort()
-    .slice(0, 42);
-  await Promise.all(dates.map((date) => fetchRosterInsightRows({
-    startDate: date,
-    endDate: date,
-    excludeDoctorKeys: selectedKeys,
-    allowFallback: false,
-  })));
-  const dateSourcePairs = [];
-  for (const event of selectedEvents) {
-    const date = eventRosterDateKey(event);
-    const source = eventSourceCode(event);
-    if (date && source) dateSourcePairs.push(`${date}|${source}`);
-  }
-  await Promise.all([...new Set(dateSourcePairs)].slice(0, 64).map((pair) => {
-    const [date, source] = pair.split("|");
-    return fetchRosterInsightRows({
-      startDate: date,
-      endDate: date,
-      sourceTypes: [source.toLowerCase()],
-      excludeDoctorKeys: selectedKeys,
-      allowFallback: false,
-    });
-  }));
   await fetchRosterOverlapDoctors({
     startDate,
     endDate,
     excludeDoctorKeys: selectedKeys,
     overlapDoctorKeys: selectedKeys,
-    allowFallback: false,
+    allowFallback: true,
   });
 }
 
