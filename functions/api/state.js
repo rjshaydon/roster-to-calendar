@@ -25,10 +25,8 @@ import {
   loadSnapshotRegistryEntry,
   loadRawRosterFile,
   queryCoworkerEvents,
-  queryCoworkerEventsFromInsightCache,
   queryCoworkerEventsFromEvents,
   queryOverlapDoctors,
-  queryOverlapDoctorsFromInsightCache,
   queryOverlapDoctorsFromEvents,
   queryClaimedAccounts,
   queryDoctorProfileMirrors,
@@ -48,11 +46,8 @@ import {
   queryRosterFiles,
   queryRosterFileRanges,
   queryRosterDoctors,
-  queryRosterInsightCacheRangesForFile,
-  queryRosterInsightCacheRangesForFiles,
   replaceDerivedRosterFile,
-  rebuildRosterInsightCachesForActiveFiles,
-  rebuildRosterInsightCachesForRanges,
+  rebuildDailyPresenceForActiveFiles,
   replaceAccountCustomEvents,
   replaceCanonicalDoctors,
   snapshotArtifactKey,
@@ -444,13 +439,8 @@ export async function onRequestPost(context) {
       );
       await propagateDerivedShiftCodeIssues(context.env.ROSTER_DB, body?.doctors || [], body?.issuesByDoctor || {});
       const supersession = await reconcileRosterFileSupersession(context.env.ROSTER_DB, filePayload, { uploaderEmail: email });
-      const insightRanges = await queryRosterInsightCacheRangesForFiles(context.env.ROSTER_DB, [
-        String(filePayload.id || ""),
-        ...((supersession.deactivated || []).map((file) => file.id)),
-      ]).catch(() => []);
       await refreshCanonicalDoctors(context.env.ROSTER_DB);
       scheduleSnapshotWarmupForAllAccounts(context, { reason: "saveDerivedCalendarFile" });
-      scheduleRosterInsightCacheRebuild(context, insightRanges, { reason: "saveDerivedCalendarFile" });
       if (body?.skipStatus === true) {
         return Response.json({
           ok: true,
@@ -515,12 +505,10 @@ export async function onRequestPost(context) {
       if (!fileId) {
         return Response.json({ error: "Roster file is required." }, { status: 400 });
       }
-      const insightRanges = await queryRosterInsightCacheRangesForFile(context.env.ROSTER_DB, fileId).catch(() => []);
       await deleteDerivedRosterFile(context.env.ROSTER_DB, fileId);
       await refreshCanonicalDoctors(context.env.ROSTER_DB);
       await deleteRawRosterFile(context.env.ROSTER_DB, fileId);
       scheduleSnapshotWarmupForAllAccounts(context, { reason: "resetDerivedCalendarFile" });
-      scheduleRosterInsightCacheRebuild(context, insightRanges, { reason: "resetDerivedCalendarFile" });
       const status = await calendarStoreStatus(null, context.env.ROSTER_DB, { doctorKey: OWNER_DOCTOR_KEY });
       return Response.json({ ok: true, reset: fileId, ...status });
     }
@@ -537,12 +525,10 @@ export async function onRequestPost(context) {
       const removedFileIds = activeFiles
         .map((file) => file.id)
         .filter((id) => id && !keepFileIds.includes(id));
-      const insightRanges = await queryRosterInsightCacheRangesForFiles(context.env.ROSTER_DB, removedFileIds).catch(() => []);
       await Promise.all(removedFileIds.map((id) => deleteDerivedRosterFile(context.env.ROSTER_DB, id).catch(() => null)));
       await refreshCanonicalDoctors(context.env.ROSTER_DB);
       await Promise.all(removedFileIds.map((id) => deleteRawRosterFile(context.env.ROSTER_DB, id).catch(() => null)));
       scheduleSnapshotWarmupForAllAccounts(context, { reason: "replaceActiveRosterFiles" });
-      scheduleRosterInsightCacheRebuild(context, insightRanges, { reason: "replaceActiveRosterFiles" });
       const status = await calendarStoreStatus(null, context.env.ROSTER_DB, {
         doctorKey: normalizeRosterName(body?.selectedDoctorKey || OWNER_DOCTOR_KEY),
         expectedFileIds: keepFileIds,
@@ -934,11 +920,9 @@ export async function onRequestPost(context) {
       const removedImportIds = sanitizeRepositoryFileIds(body?.removedImportIds);
       if ((targetRole === "creator" || targetRole === "owner") && saveEmail === email && removedImportIds.length) {
         const removedIds = [...new Set(removedImportIds)];
-        const insightRanges = await queryRosterInsightCacheRangesForFiles(context.env.ROSTER_DB, removedIds).catch(() => []);
         await Promise.all(removedIds.map((id) => deleteDerivedRosterFile(context.env.ROSTER_DB, id).catch(() => null)));
         await Promise.all(removedIds.map((id) => deleteRawRosterFile(context.env.ROSTER_DB, id).catch(() => null)));
         await refreshCanonicalDoctors(context.env.ROSTER_DB);
-        scheduleRosterInsightCacheRebuild(context, insightRanges, { reason: "save-removeImports" });
         state.imports = state.imports.filter((item) => {
           const repoId = item.repoId || item.repositoryId || item.id;
           return !removedIds.includes(repoId);
@@ -1078,7 +1062,7 @@ export async function onRequestPost(context) {
       const startedAt = Date.now();
       const limit = Math.max(1, Math.min(Number.parseInt(body?.limit ?? 10, 10) || 10, 25));
       const offset = Math.max(0, Number.parseInt(body?.offset ?? 0, 10) || 0);
-      const repaired = await rebuildRosterInsightCachesForActiveFiles(context.env.ROSTER_DB, { limit, offset });
+      const repaired = await rebuildDailyPresenceForActiveFiles(context.env.ROSTER_DB, { limit, offset });
       return Response.json({ ok: true, repaired, queryMs: Date.now() - startedAt });
     }
 
@@ -1109,22 +1093,17 @@ export async function onRequestPost(context) {
           doctorKeys,
           overlapDoctorKeys,
         };
-        const cached = await queryCoworkerEventsFromInsightCache(context.env.ROSTER_DB, queryOptions);
-        let coworkers = cached;
-        let source = "insight-cache";
-        if (!cached.length && allowFallback) {
-          const materialized = await queryCoworkerEvents(context.env.ROSTER_DB, queryOptions);
-          coworkers = materialized;
-          source = "daily-presence";
-          if (!materialized.length) {
-            const fallback = await queryCoworkerEventsFromEvents(context.env.ROSTER_DB, queryOptions);
-            if (fallback.length) {
-              coworkers = fallback;
-              source = "roster-events-fallback";
-            }
+        const materialized = await queryCoworkerEvents(context.env.ROSTER_DB, queryOptions);
+        let coworkers = materialized;
+        let source = "daily-presence";
+        if (!materialized.length && allowFallback) {
+          const fallback = await queryCoworkerEventsFromEvents(context.env.ROSTER_DB, queryOptions);
+          if (fallback.length) {
+            coworkers = fallback;
+            source = "roster-events-fallback";
           }
         }
-        return Response.json({ ok: true, coworkers, queryMs: Date.now() - startedAt, source, fallbackSkipped: !allowFallback && !cached.length });
+        return Response.json({ ok: true, coworkers, queryMs: Date.now() - startedAt, source, fallbackSkipped: !allowFallback && !materialized.length });
       } catch (error) {
         console.error("queryRosterInsights failed", {
           startDate,
@@ -1160,22 +1139,17 @@ export async function onRequestPost(context) {
           excludeDoctorKeys,
           overlapDoctorKeys,
         };
-        const cached = await queryOverlapDoctorsFromInsightCache(context.env.ROSTER_DB, queryOptions);
-        let doctors = cached;
-        let source = "insight-cache";
-        if (!cached.length && allowFallback) {
-          const materialized = await queryOverlapDoctors(context.env.ROSTER_DB, queryOptions);
-          doctors = materialized;
-          source = "daily-presence";
-          if (!materialized.length) {
-            const fallback = await queryOverlapDoctorsFromEvents(context.env.ROSTER_DB, queryOptions);
-            if (fallback.length) {
-              doctors = fallback;
-              source = "roster-events-fallback";
-            }
+        const materialized = await queryOverlapDoctors(context.env.ROSTER_DB, queryOptions);
+        let doctors = materialized;
+        let source = "daily-presence";
+        if (!materialized.length && allowFallback) {
+          const fallback = await queryOverlapDoctorsFromEvents(context.env.ROSTER_DB, queryOptions);
+          if (fallback.length) {
+            doctors = fallback;
+            source = "roster-events-fallback";
           }
         }
-        return Response.json({ ok: true, doctors, queryMs: Date.now() - startedAt, source, fallbackSkipped: !allowFallback && !cached.length });
+        return Response.json({ ok: true, doctors, queryMs: Date.now() - startedAt, source, fallbackSkipped: !allowFallback && !materialized.length });
       } catch (error) {
         console.error("queryRosterOverlapDoctors failed", {
           startDate,
@@ -2535,19 +2509,6 @@ function scheduleSnapshotWarmupForAllAccounts(context, options = {}) {
       error: error?.message || String(error),
     });
   }));
-}
-
-function scheduleRosterInsightCacheRebuild(context, ranges = [], options = {}) {
-  if (typeof context.waitUntil !== "function" || !ranges?.length) return;
-  context.waitUntil(
-    rebuildRosterInsightCachesForRanges(context.env.ROSTER_DB, ranges).catch((error) => {
-      console.warn("Roster insight cache rebuild failed", {
-        reason: options.reason || "roster-change",
-        rangeCount: ranges.length,
-        error: error?.message || String(error),
-      });
-    })
-  );
 }
 
 async function buildDerivedAccountSnapshot(db, context) {
