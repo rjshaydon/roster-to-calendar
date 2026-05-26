@@ -411,7 +411,7 @@ filesModal?.addEventListener("click", (event) => {
   if (event.target.matches("[data-close-files]")) closeFilesModal();
 });
 exportButton.addEventListener("click", openExportModal);
-mobileExportButton.addEventListener("click", openExportModal);
+mobileExportButton.addEventListener("click", openMobileExportModal);
 mobileTodayButton?.addEventListener("click", () => {
   snapPreviewToCurrentMonth();
 });
@@ -1219,6 +1219,7 @@ document.addEventListener("pointerdown", (event) => {
     && !event.target.closest("#settingsPanel")
     && !event.target.closest("#settingsToggle")
     && !event.target.closest("#mobileSettingsButton")
+    && !event.target.closest("#mobileExportButton")
   ) {
     event.preventDefault();
     event.stopPropagation();
@@ -2437,17 +2438,66 @@ async function buildBrowserIcs(doctor) {
 
 async function ensureBasePreviewData(doctor) {
   if (!doctor) throw new Error("Choose a doctor before exporting.");
-  if (!parsedRosterSources) {
-    const data = await analyzeFilesInBrowser();
-    doctorOptions = doctorOptionsForCurrentAccount(data.doctors || []);
+  if (latestPreview && previewMatchesDoctor(latestPreview, doctor)) {
+    return latestPreview;
   }
-  const selected = selectedDoctor();
-  if (!latestPreview || selected?.key !== doctor.key) {
-    const data = await buildBrowserPreviewData(doctor);
-    latestPreview = data;
-    indexReviewItems(data.review || []);
+  if (currentSnapshot?.preview && snapshotMatchesDoctor(currentSnapshot, doctor)) {
+    latestPreview = JSON.parse(JSON.stringify(currentSnapshot.preview));
+    indexReviewItems(latestPreview.review || []);
+    return latestPreview;
   }
+  if (cloudAvailable && selectedFiles.some((entry) => !entry.file)) {
+    const loaded = await loadCloudCalendarEvents({
+      adminTargetEmail: adminViewingEmail ? viewedAccountEmail() : "",
+      doctorKey: doctor.key,
+      preserveExistingSnapshot: true,
+    });
+    if (loaded && currentSnapshot?.preview && snapshotMatchesDoctor(currentSnapshot, doctor)) {
+      latestPreview = JSON.parse(JSON.stringify(currentSnapshot.preview));
+      indexReviewItems(latestPreview.review || []);
+      return latestPreview;
+    }
+  }
+  if (!selectedFiles.length || selectedFiles.some((entry) => !entry.file)) {
+    throw new Error("Calendar data is not loaded yet. Refresh the calendar, then try exporting again.");
+  }
+
+  const data = await buildBrowserPreviewData(doctor);
+  latestPreview = data;
+  indexReviewItems(data.review || []);
   return latestPreview;
+}
+
+function previewMatchesDoctor(previewData, doctor) {
+  if (!previewData || !doctor?.key) return false;
+  if (currentSnapshot?.preview && samePreviewData(previewData, currentSnapshot.preview)) {
+    return snapshotMatchesDoctor(currentSnapshot, doctor);
+  }
+  if (previewData.derivedFromD1) return false;
+  return selectedDoctor()?.key === doctor.key;
+}
+
+function samePreviewData(left, right) {
+  if (!left || !right) return false;
+  if (left === right) return true;
+  const leftIds = (left.events || []).map((event) => event.id).join("|");
+  const rightIds = (right.events || []).map((event) => event.id).join("|");
+  return String(left.lastParsed || "") === String(right.lastParsed || "")
+    && leftIds === rightIds;
+}
+
+function snapshotMatchesDoctor(snapshot, doctor) {
+  if (!snapshot?.preview || !doctor?.key) return false;
+  const snapshotDoctorKey = normalizeRosterName(snapshot.session?.doctorKey || "");
+  if (!snapshotDoctorKey) return selectedDoctor()?.key === doctor.key;
+  return doctorOptionMatchesKey(doctor, snapshotDoctorKey);
+}
+
+function doctorOptionMatchesKey(doctor, key) {
+  const normalizedKey = normalizeRosterName(key);
+  if (!normalizedKey || !doctor?.key) return false;
+  return [doctor.key, ...(doctor.aliases || []).map((alias) => alias.key)]
+    .some((item) => normalizeRosterName(item) === normalizedKey);
 }
 
 function normalizeExportRangeState(value = {}) {
@@ -4349,7 +4399,7 @@ async function warmInsightData() {
 
 function syncActionState() {
   syncControlBarVisibility();
-  const ready = Boolean(selectedDoctor());
+  const ready = canUseExportControls();
   exportButton.disabled = !ready;
   mobileExportButton.disabled = !ready;
   syncMobileChrome();
@@ -6576,6 +6626,19 @@ function exportSourceEntries() {
 
 function canOpenExportModal() {
   return Boolean(selectedFiles.length || hasLoadedExportPreview());
+}
+
+function canUseExportControls() {
+  return Boolean(selectedDoctor() && canOpenExportModal());
+}
+
+function openMobileExportModal(event) {
+  event?.preventDefault();
+  event?.stopPropagation();
+  if (mobileExportButton?.disabled) return;
+  if (!settingsPanel.classList.contains("hidden")) closeSettingsPanel();
+  syncMobileViewportInsets();
+  openExportModal();
 }
 
 function openExportModal() {
