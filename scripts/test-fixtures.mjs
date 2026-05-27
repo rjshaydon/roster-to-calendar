@@ -152,23 +152,38 @@ assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
     .match(/if \(action === "login"\)[\s\S]*?const account = await verifyD1Account/)?.[0] || "",
   /responseMode === "fast"[\s\S]*prepareFastLoginEnvelope\(loginRecord\)[\s\S]*loadFastAccountSnapshotPayload[\s\S]*snapshotStatus[\s\S]*snapshotSource[\s\S]*snapshotRevision[\s\S]*viewedAccountPayload/,
-  "fast login should build a minimal account payload and use the revision-free snapshot path",
+  "fast login should build a minimal account payload and use the lightweight snapshot path",
 );
-assert.doesNotMatch(
+assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
     .match(/async function loadFastAccountSnapshotPayload[\s\S]*?function scheduleAccountSnapshotRebuild/)?.[0] || "",
-  /queryCalendarRevision|loadAccountSnapshotPayload/,
-  "fast login should not use the revision-based account snapshot loader",
+  /queryCalendarRevision[\s\S]*allowInlineBuild: false[\s\S]*revisionSkipped: false/,
+  "fast login should validate server cache revisions without allowing inline snapshot builds",
 );
 assert.match(
   stateSource.match(/async function loadSnapshotPayloadFromRegistry[\s\S]*?async function loadFastAccountSnapshotPayload/)?.[0] || "",
-  /allowInlineBuild === false[\s\S]*scheduleRebuild[\s\S]*snapshot: null[\s\S]*snapshotSource: cacheBucket\?\.get \? "server-cache-miss" : "d1-inline-disabled"/,
+  /allowInlineBuild === false \|\| buildInProgress[\s\S]*scheduleRebuild[\s\S]*snapshot: null[\s\S]*snapshotSource: buildInProgress \? "server-cache-building" : cacheBucket\?\.get \? "server-cache-miss" : "d1-inline-disabled"/,
   "non-inline snapshot requests should schedule rebuilds instead of building on cache misses",
 );
 assert.match(
+  stateSource.match(/async function loadSnapshotPayloadFromRegistry[\s\S]*?async function loadFastAccountSnapshotPayload/)?.[0] || "",
+  /snapshotRegistryBuildInProgress[\s\S]*server-cache-building/,
+  "recent building snapshot rows should suppress duplicate inline rebuilds",
+);
+assert.match(
+  stateSource.match(/function scheduleSnapshotWarmupForAllAccounts[\s\S]*?async function buildDerivedAccountSnapshot/)?.[0] || "",
+  /SNAPSHOT_GLOBAL_WARMUP_LIMIT[\s\S]*sanitizeClaims\(record\?\.claims\)\.length[\s\S]*listSnapshotRegistryWarmupCandidates[\s\S]*statuses: \["ready"\]/,
+  "global snapshot warmup should be bounded to active claimed accounts and existing ready profile snapshots",
+);
+assert.match(
+  appSource.match(/async function prefetchCreatorSwitchTarget[\s\S]*?function queueCreatorSwitchTargetPrefetch/)?.[0] || "",
+  /allowInlineBuild: false[\s\S]*skipRebuild: true/,
+  "creator switch-target prefetch should not build missing snapshots in the background",
+);
+assert.match(
   stateSource.match(/async function loadFastAccountSnapshotPayload[\s\S]*?function scheduleAccountSnapshotRebuild/)?.[0] || "",
-  /allowInlineBuild: false[\s\S]*skipRevisionCheck: true[\s\S]*revisionSkipped: true/,
-  "fast login snapshots should skip revision calculation and inline builds",
+  /queryCalendarRevision[\s\S]*allowInlineBuild: false[\s\S]*revisionSkipped: false/,
+  "fast login snapshots should use a lightweight revision check while keeping inline builds disabled",
 );
 assert.match(
   stateSource.match(/if \(action === "adminLoadUser"\)[\s\S]*?if \(action === "claimRosterName"\)/)?.[0] || "",
@@ -279,7 +294,7 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function bootstrapImports[\s\S]*?function snapshotHasUnresolvablePreviewEvents/)?.[0] || "",
-  /cloudAvailable && selectedFiles\.length && selectedFiles\.some\(\(entry\) => !entry\.file\)[\s\S]*loadCloudCalendarEvents\(\{ adminTargetEmail: adminViewingEmail \? viewedAccountEmail\(\) : "" \}\)[\s\S]*No D1 calendar events were found/,
+  /cloudAvailable && selectedFiles\.length && selectedFiles\.some\(\(entry\) => !entry\.file\)[\s\S]*loadCloudCalendarEvents\(\{[\s\S]*adminTargetEmail: adminViewingEmail \? viewedAccountEmail\(\) : ""[\s\S]*transition: options\.transition[\s\S]*No D1 calendar events were found/,
   "cloud repository refs should use D1 calendar loading instead of falling through to local browser parsing",
 );
 assert.doesNotMatch(
@@ -289,7 +304,7 @@ assert.doesNotMatch(
 );
 assert.match(
   appSource.match(/async function bootstrapImports[\s\S]*?function snapshotHasUnresolvablePreviewEvents/)?.[0] || "",
-  /currentSnapshot\?\.preview[\s\S]*renderWorkspaceFromSnapshot\(currentSnapshot[\s\S]*loadCloudCalendarEvents\(\{ adminTargetEmail: adminViewingEmail \? viewedAccountEmail\(\) : "" \}\)/,
+  /currentSnapshot\?\.preview[\s\S]*renderWorkspaceFromSnapshot\(currentSnapshot[\s\S]*loadCloudCalendarEvents\(\{[\s\S]*adminTargetEmail: adminViewingEmail \? viewedAccountEmail\(\) : ""[\s\S]*preserveExistingSnapshot: true/,
   "bootstrap should keep rendering server snapshots while cloud refresh runs in the background",
 );
 assert.match(
@@ -339,7 +354,7 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function loginWithEmail[\s\S]*?async function restoreCloudState/)?.[0] || "",
-  /renderLoginState\(\);\s*closeLoginModal\(\);[\s\S]*queueDeferredAccountContextLoad[\s\S]*queuePostLoginHydration\(\{[\s\S]*includeBootstrap: true[\s\S]*allowInlineBuild: false/,
+  /renderLoginState\(\);\s*closeLoginModal\(\);[\s\S]*queueDeferredAccountContextLoad[\s\S]*queuePostLoginHydration\(\{[\s\S]*includeBootstrap: true[\s\S]*allowInlineBuild: !renderedCachedSnapshot/,
   "successful login should reveal the shell before background workspace hydration completes",
 );
 assert.match(
@@ -1185,6 +1200,7 @@ class MemoryD1 {
     this.parserRules = new Map();
     this.parserRuleSuggestions = new Map();
     this.doctorProfiles = new Map();
+    this.snapshotRegistry = new Map();
     this.consoleMessages = [];
     this.nextConsoleMessageId = 1;
     this.failNextEventInsert = false;
@@ -1213,6 +1229,7 @@ class MemoryD1 {
       "parserRules",
       "parserRuleSuggestions",
       "doctorProfiles",
+      "snapshotRegistry",
     ].map((key) => [key, new Map(this[key])]));
     try {
       const results = [];
@@ -1545,6 +1562,25 @@ class MemoryD1Statement {
       });
       return { success: true };
     }
+    if (sql.startsWith("INSERT INTO snapshot_registry")) {
+      const row = {
+        owner_type: args[0],
+        owner_id: args[1],
+        doctor_key: args[2],
+        range_key: args[3],
+        requested_revision: args[4],
+        built_revision: args[5],
+        status: args[6],
+        artifact_key: args[7],
+        built_at: args[8],
+        size_bytes: args[9],
+        build_ms: args[10],
+        last_error: args[11],
+        updated_at: args[12],
+      };
+      this.db.snapshotRegistry.set(`${row.owner_type}|${row.owner_id}|${row.doctor_key}|${row.range_key}`, row);
+      return { success: true };
+    }
     if (sql.startsWith("INSERT INTO console_messages")) {
       this.db.consoleMessages.push({
         id: this.db.nextConsoleMessageId++,
@@ -1563,6 +1599,12 @@ class MemoryD1Statement {
     }
     if (sql.startsWith("DELETE FROM doctor_profiles")) {
       this.db.doctorProfiles.delete(args[0]);
+      return { success: true };
+    }
+    if (sql.startsWith("DELETE FROM snapshot_registry")) {
+      for (const [key, row] of [...this.db.snapshotRegistry.entries()]) {
+        if (row.owner_type === args[0] && row.owner_id === args[1]) this.db.snapshotRegistry.delete(key);
+      }
       return { success: true };
     }
     if (sql.startsWith("UPDATE roster_files SET active")) {
@@ -2121,6 +2163,31 @@ class MemoryD1Statement {
           .sort((left, right) => left.display_name.localeCompare(right.display_name) || left.profile_id.localeCompare(right.profile_id)),
       };
     }
+    if (sql.includes("FROM snapshot_registry") && sql.includes("WHERE owner_type = ? AND owner_id = ?")) {
+      return {
+        results: [...this.db.snapshotRegistry.values()]
+          .filter((row) => row.owner_type === args[0] && row.owner_id === args[1])
+          .sort((left, right) => String(right.updated_at || "").localeCompare(String(left.updated_at || ""))),
+      };
+    }
+    if (sql.includes("FROM snapshot_registry") && sql.includes("owner_type IN")) {
+      const ownerTypeCount = (sql.match(/owner_type IN \(([^)]*)\)/)?.[1].match(/\?/g) || []).length;
+      const statusCount = (sql.match(/status IN \(([^)]*)\)/)?.[1].match(/\?/g) || []).length;
+      const ownerTypes = new Set(args.slice(0, ownerTypeCount));
+      const statuses = new Set(args.slice(ownerTypeCount, ownerTypeCount + statusCount));
+      let offset = ownerTypeCount + statusCount;
+      const hasRange = sql.includes("AND range_key = ?");
+      const rangeKey = hasRange ? args[offset++] : "";
+      const limit = Number(args[offset] || 25);
+      return {
+        results: [...this.db.snapshotRegistry.values()]
+          .filter((row) => ownerTypes.has(row.owner_type))
+          .filter((row) => statuses.has(row.status))
+          .filter((row) => !hasRange || row.range_key === rangeKey)
+          .sort((left, right) => String(right.updated_at || "").localeCompare(String(left.updated_at || "")))
+          .slice(0, limit),
+      };
+    }
     if (sql.includes("FROM console_messages")) {
       return {
         results: [...this.db.consoleMessages]
@@ -2134,6 +2201,44 @@ class MemoryD1Statement {
   async first() {
     const sql = this.sql;
     const args = this.args;
+    if (sql.includes("COUNT(*) AS active_file_count") && sql.includes("FROM roster_files")) {
+      const activeFiles = [...this.db.files.values()].filter((file) => file.active === 1);
+      return {
+        active_file_count: activeFiles.length,
+        max_parsed_at: activeFiles.map((file) => String(file.parsed_at || "")).sort().at(-1) || "",
+        max_uploaded_at: activeFiles.map((file) => String(file.uploaded_at || "")).sort().at(-1) || "",
+        max_last_modified: Math.max(0, ...activeFiles.map((file) => Number(file.last_modified || 0))),
+      };
+    }
+    if (sql.includes("FROM custom_events") && sql.includes("COUNT(*) AS count")) {
+      const rows = [...this.db.customEvents.values()].filter((event) => event.owner_email === args[0]);
+      return {
+        count: rows.length,
+        max_updated_at: rows.map((row) => String(row.updated_at || "")).sort().at(-1) || "",
+      };
+    }
+    if (sql.includes("FROM account_claims") && sql.includes("COUNT(*) AS count") && sql.includes("WHERE email = ?")) {
+      const rows = [...this.db.accountClaims.values()].filter((claim) => claim.email === args[0]);
+      return {
+        count: rows.length,
+        max_updated_at: rows.map((row) => String(row.updated_at || "")).sort().at(-1) || "",
+      };
+    }
+    if (sql.includes("FROM account_hospital_locations") && sql.includes("COUNT(*) AS count") && sql.includes("WHERE email = ?")) {
+      const rows = [...this.db.accountHospitalLocations.values()].filter((row) => row.email === args[0]);
+      return {
+        count: rows.length,
+        max_updated_at: rows.map((row) => String(row.updated_at || "")).sort().at(-1) || "",
+      };
+    }
+    if (sql.includes("FROM doctor_profiles") && sql.includes("INNER JOIN account_claims")) {
+      const claimKeys = new Set([...this.db.accountClaims.values()].filter((claim) => claim.email === args[0]).map((claim) => claim.doctor_key));
+      const rows = [...this.db.doctorProfiles.values()].filter((profile) => claimKeys.has(profile.doctor_key));
+      return {
+        count: new Set(rows.map((row) => row.profile_id)).size,
+        max_updated_at: rows.map((row) => String(row.updated_at || "")).sort().at(-1) || "",
+      };
+    }
     if (sql.startsWith("SELECT COUNT(*) AS count FROM roster_events WHERE file_id = ? AND doctor_key = ?")) {
       return {
         count: [...this.db.events.values()].filter((event) => event.file_id === args[0] && event.doctor_key === args[1]).length,
@@ -2172,6 +2277,9 @@ class MemoryD1Statement {
     }
     if (sql.startsWith("SELECT * FROM doctor_profiles WHERE profile_id")) {
       return this.db.doctorProfiles.get(args[0]) || null;
+    }
+    if (sql.includes("FROM snapshot_registry") && sql.includes("WHERE owner_type = ? AND owner_id = ? AND doctor_key = ? AND range_key = ?")) {
+      return this.db.snapshotRegistry.get(`${args[0]}|${args[1]}|${args[2]}|${args[3]}`) || null;
     }
     if (sql.includes("FROM raw_roster_files") && sql.includes("WHERE file_id = ?")) {
       return this.db.rawFiles.get(args[0]) || null;
@@ -2258,7 +2366,11 @@ async function postStateRaw(store, payload, db = null) {
       body: JSON.stringify(payload),
       headers: { "content-type": "application/json" },
     }),
-    env: { ROSTER_DB: rosterDb, ROSTER_FILES: store?.r2 || new MemoryR2() },
+    env: {
+      ROSTER_DB: rosterDb,
+      ROSTER_FILES: store?.r2 || new MemoryR2(),
+      ROSTER_CACHE: store?.cacheR2 || store?.r2 || new MemoryR2(),
+    },
   });
   const body = await response.json();
   return { response, body };
@@ -2530,6 +2642,68 @@ assert.equal(d1DirectLogin.snapshot?.preview?.derivedFromD1, true, "claimed logi
 assert.equal(d1DirectLogin.viewedAccountType, "claimed-user", "claimed direct login should identify the viewed account type");
 assert.equal(d1DirectLogin.isImpersonating, false, "claimed direct login should not be marked as creator impersonation");
 assert.equal(d1DirectLogin.state.session.doctorKey, d1Doctor.key, "claimed login should default to the claimed doctor");
+const d1FastCachedLogin = await postState(d1StateStore, {
+  action: "login",
+  email: "d1-user@example.com",
+  password: "d1-password",
+  responseMode: "fast",
+}, d1Store);
+assert.equal(d1FastCachedLogin.snapshotSource, "server-cache", "fast login should serve a ready server snapshot as current");
+assert.equal(d1FastCachedLogin.snapshotStale, false, "fast login should not mark revision-matched server cache stale");
+assert.equal(d1FastCachedLogin.snapshot?.preview?.derivedFromD1, true, "fast login should return the cached server snapshot");
+const d1CurrentRevisionCheck = await postState(d1StateStore, {
+  action: "loadCalendarEvents",
+  email: "d1-user@example.com",
+  password: "d1-password",
+  cachedRevision: d1FastCachedLogin.snapshotRevision,
+  allowInlineBuild: false,
+}, d1Store);
+assert.equal(d1CurrentRevisionCheck.snapshotCurrent, true, "cachedRevision should let the server confirm the visible calendar is current");
+assert.equal(d1CurrentRevisionCheck.snapshot, null, "current-revision checks should not resend or replace the snapshot");
+const d1UserRegistryKey = [...d1Store.snapshotRegistry.keys()].find((key) => key.startsWith(`user-account|d1-user@example.com|${d1Doctor.key}|`));
+assert.ok(d1UserRegistryKey, "claimed D1 account should have a snapshot registry entry");
+const d1UserRegistry = d1Store.snapshotRegistry.get(d1UserRegistryKey);
+d1UserRegistry.built_revision = "outdated-revision";
+d1UserRegistry.status = "ready";
+const d1StaleServerCache = await postState(d1StateStore, {
+  action: "loadCalendarEvents",
+  email: "d1-user@example.com",
+  password: "d1-password",
+  allowInlineBuild: false,
+}, d1Store);
+assert.equal(d1StaleServerCache.snapshotSource, "stale-server-cache", "stale server snapshots should be returned as stale cache");
+assert.equal(d1StaleServerCache.snapshotStale, true, "revision-mismatched server cache should be marked stale");
+d1UserRegistry.built_revision = d1FastCachedLogin.snapshotRevision;
+d1UserRegistry.status = "building";
+d1UserRegistry.updated_at = new Date().toISOString();
+d1UserRegistry.size_bytes = 0;
+d1StateStore.r2.objects.delete(d1UserRegistry.artifact_key);
+const d1RecentBuilding = await postState(d1StateStore, {
+  action: "loadCalendarEvents",
+  email: "d1-user@example.com",
+  password: "d1-password",
+  allowInlineBuild: true,
+}, d1Store);
+assert.equal(d1RecentBuilding.snapshotSource, "server-cache-building", "recent building rows should suppress duplicate inline builds");
+assert.equal(d1RecentBuilding.snapshot, null, "recent building rows should not replace the visible snapshot");
+d1UserRegistry.updated_at = "2000-01-01T00:00:00.000Z";
+const d1ExpiredBuildingRetry = await postState(d1StateStore, {
+  action: "loadCalendarEvents",
+  email: "d1-user@example.com",
+  password: "d1-password",
+  allowInlineBuild: true,
+}, d1Store);
+assert.equal(d1ExpiredBuildingRetry.snapshotSource, "d1-build", "expired building rows should be retried by the next real request");
+assert.equal(d1ExpiredBuildingRetry.snapshot?.preview?.derivedFromD1, true);
+const d1CacheMissNoInline = await postState(d1StateStore, {
+  action: "loadCalendarEvents",
+  email: "d1-user@example.com",
+  password: "d1-password",
+  allowInlineBuild: false,
+  doctorKey: "NOT A REAL DOCTOR",
+}, d1Store);
+assert.equal(d1CacheMissNoInline.snapshotSource, "server-cache-miss", "non-inline cache misses should not build synchronously");
+assert.equal(d1CacheMissNoInline.snapshot, null);
 const d1DirectCalendar = await postState(d1StateStore, {
   action: "loadCalendarEvents",
   email: "d1-user@example.com",
@@ -3126,6 +3300,31 @@ assert.equal(d1DoctorProfile.snapshot?.preview?.derivedFromD1, true);
 assert.equal(d1DoctorProfile.snapshotStale, false);
 assert.ok(d1DoctorProfile.snapshot.preview.events.length > 0);
 assert.ok(d1DoctorProfile.snapshot.fileRefs.some((ref) => ref.id === d1RepositoryFile), "D1 doctor profile should derive file refs without KV repository index");
+const d1DoctorProfileServerCache = await postState(d1StateStore, {
+  action: "loadDoctorProfile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  profileId: `${d1Doctor.key}::mmc`,
+  doctorKey: d1Doctor.key,
+  displayName: d1Doctor.displayName,
+  sourceTypes: ["mmc"],
+  allowInlineBuild: false,
+}, d1Store);
+assert.equal(d1DoctorProfileServerCache.snapshotSource, "server-cache", "doctor-profile loads should reuse ready server cache generically");
+assert.equal(d1DoctorProfileServerCache.snapshotStale, false);
+const d1DoctorProfileCurrent = await postState(d1StateStore, {
+  action: "loadDoctorProfile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  profileId: `${d1Doctor.key}::mmc`,
+  doctorKey: d1Doctor.key,
+  displayName: d1Doctor.displayName,
+  sourceTypes: ["mmc"],
+  cachedRevision: d1DoctorProfileServerCache.snapshotRevision,
+  allowInlineBuild: false,
+}, d1Store);
+assert.equal(d1DoctorProfileCurrent.snapshotCurrent, true, "doctor-profile cachedRevision should validate without replacing the displayed profile");
+assert.equal(d1DoctorProfileCurrent.snapshot, null);
 const d1RepositoryDoctors = [...d1Store.fileDoctors.values()].map((doctor) => ({
   key: doctor.doctor_key,
   displayName: doctor.display_name,

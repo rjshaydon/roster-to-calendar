@@ -2496,6 +2496,33 @@ export async function listSnapshotRegistryEntriesForOwner(db, ownerType, ownerId
   return (rows.results || []).map(snapshotRegistryEntryFromRow).filter(Boolean);
 }
 
+export async function listSnapshotRegistryWarmupCandidates(db, options = {}) {
+  if (!db?.prepare) return [];
+  const ownerTypes = [...new Set((options.ownerTypes || []).map((item) => String(item || "").trim()).filter(Boolean))];
+  const statuses = [...new Set((options.statuses || ["ready"]).map((item) => String(item || "").trim()).filter(Boolean))];
+  const rangeKey = String(options.rangeKey || "").trim();
+  const limit = Math.max(1, Math.min(Number.parseInt(options.limit ?? 25, 10) || 25, 100));
+  if (!ownerTypes.length || !statuses.length) return [];
+  await ensureCalendarSchema(db);
+  const ownerSql = ownerTypes.map(() => "?").join(", ");
+  const statusSql = statuses.map(() => "?").join(", ");
+  const rangeSql = rangeKey ? "AND range_key = ?" : "";
+  const binds = [...ownerTypes, ...statuses];
+  if (rangeKey) binds.push(rangeKey);
+  binds.push(limit);
+  const rows = await db.prepare(`
+    SELECT owner_type, owner_id, doctor_key, range_key, requested_revision, built_revision, status, artifact_key,
+           built_at, size_bytes, build_ms, last_error, updated_at
+    FROM snapshot_registry
+    WHERE owner_type IN (${ownerSql})
+      AND status IN (${statusSql})
+      ${rangeSql}
+    ORDER BY updated_at DESC
+    LIMIT ?
+  `).bind(...binds).all();
+  return (rows.results || []).map(snapshotRegistryEntryFromRow).filter(Boolean);
+}
+
 export async function deleteSnapshotRegistryEntriesForOwner(db, ownerType, ownerId) {
   if (!db?.prepare || !ownerType || !ownerId) return;
   await ensureCalendarSchema(db);

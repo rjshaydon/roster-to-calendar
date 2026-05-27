@@ -23,6 +23,7 @@ import {
   loadAccountStateMirror,
   loadDoctorProfileMirror,
   loadSnapshotRegistryEntry,
+  listSnapshotRegistryWarmupCandidates,
   loadRawRosterFile,
   queryCoworkerEventsFromEvents,
   queryOverlapDoctorsFromEvents,
@@ -63,6 +64,8 @@ import {
 const CREATOR_EMAIL = "rhaydon@gmail.com";
 const OWNER_DOCTOR_KEY = "RICHARD HAYDON";
 const SNAPSHOT_SCHEMA_VERSION = 5;
+const SNAPSHOT_BUILDING_RETRY_MS = 15 * 60 * 1000;
+const SNAPSHOT_GLOBAL_WARMUP_LIMIT = 25;
 
 export async function onRequestGet(context) {
   return Response.json({ error: "Use POST for account requests." }, { status: 405 });
@@ -261,6 +264,8 @@ export async function onRequestPost(context) {
       const snapshotPayload = await loadAccountSnapshotPayload(context, {
         targetRecord: target,
         prepared,
+        cachedRevision: body?.cachedRevision || "",
+        allowInlineBuild: responseMode === "fast" ? false : body?.allowInlineBuild !== false,
         reason: "adminLoadUser",
       });
       return Response.json({
@@ -989,6 +994,8 @@ export async function onRequestPost(context) {
         aliases: requestedAliases,
       }, email, {
         cachedRevision: body?.cachedRevision,
+        allowInlineBuild: body?.allowInlineBuild !== false,
+        skipRebuild: body?.skipRebuild === true,
       });
       return Response.json({
         ok: true,
@@ -1168,6 +1175,7 @@ export async function onRequestPost(context) {
         doctorKey: normalizeRosterName(body?.doctorKey || ""),
         cachedRevision: body?.cachedRevision || "",
         allowInlineBuild: body?.allowInlineBuild !== false,
+        skipRebuild: body?.skipRebuild === true,
         diagnosticsRequested: body?.diagnostics === true,
         reason: "loadCalendarEvents",
       });
@@ -1598,7 +1606,7 @@ async function repairAccountClaimsIfNeeded(db, record, options = {}) {
   };
   const claimsChanged = JSON.stringify(claims) !== JSON.stringify(sanitizeClaims(record.claims));
   const doctorKeyChanged = nextDoctorKey !== existingDoctorKey;
-  if (!claimsChanged && !doctorKeyChanged) return normalizedRecord;
+  if (!claimsChanged && !doctorKeyChanged) return record;
   await upsertAccountMirror(db, {
     ...normalizedRecord,
     updatedAt: new Date().toISOString(),
@@ -2033,6 +2041,16 @@ function snapshotRegistryState(status = "missing", cache = {}) {
   };
 }
 
+function snapshotRegistryBuildInProgress(registry) {
+  if (registry?.status !== "building") return false;
+  const updatedAt = Date.parse(registry.updatedAt || "");
+  return Number.isFinite(updatedAt) && Date.now() - updatedAt < SNAPSHOT_BUILDING_RETRY_MS;
+}
+
+function shouldScheduleSnapshotRebuild(registry) {
+  return !snapshotRegistryBuildInProgress(registry);
+}
+
 function viewedAccountPayload(authRecord, targetRecord, prepared = {}) {
   const authEmail = normalizeEmail(authRecord?.email || "");
   const targetEmail = normalizeEmail(targetRecord?.email || "");
@@ -2056,7 +2074,9 @@ async function loadSnapshotPayloadFromRegistry(context, options = {}) {
   const registry = await loadSnapshotRegistryEntry(db, descriptor).catch(() => null);
   const cachedRevision = String(options.cachedRevision || "");
   const calendarRevision = String(options.calendarRevision || "");
-  if (cachedRevision && cachedRevision === calendarRevision) {
+  const buildInProgress = snapshotRegistryBuildInProgress(registry);
+  const canScheduleRebuild = shouldScheduleSnapshotRebuild(registry);
+  if (!options.bypassCache && cachedRevision && cachedRevision === calendarRevision) {
     return {
       ok: true,
       snapshot: null,
@@ -2084,76 +2104,61 @@ async function loadSnapshotPayloadFromRegistry(context, options = {}) {
     ownerId: descriptor.ownerId,
     doctorKey: descriptor.doctorKey,
     cacheHit: false,
+    buildInProgress,
   };
-  if (cacheBucket?.get && registry?.artifactKey) {
+  if (!options.bypassCache && cacheBucket?.get && registry?.artifactKey) {
     const cachedSnapshot = await loadCachedSnapshot(cacheBucket, registry.artifactKey).catch(() => null);
     if (cachedSnapshot) {
-      if (options.skipRevisionCheck === true) {
-        diagnostics.cacheHit = true;
-        diagnostics.snapshotSizeBytes = JSON.stringify(cachedSnapshot).length;
-        diagnostics.revisionUnchecked = true;
-        if (typeof options.scheduleRebuild === "function") options.scheduleRebuild();
+      const registryCurrent = Boolean(calendarRevision && registry.builtRevision === calendarRevision && registry.status === "ready");
+      diagnostics.cacheHit = registryCurrent;
+      diagnostics.snapshotSizeBytes = JSON.stringify(cachedSnapshot).length;
+      if (registryCurrent) {
+        return {
+          ok: true,
+          snapshot: cachedSnapshot,
+          snapshotAvailable: true,
+          snapshotStale: false,
+          snapshotBuiltAt: registry.builtAt || cachedSnapshot?.builtAt || "",
+          calendarRevision,
+          diagnostics,
+          snapshotLookupMs: Date.now() - lookupStartedAt,
+          snapshotBuildMs: 0,
+          ...snapshotRegistryState("ready", {
+            snapshotSource: "server-cache",
+            snapshotRevision: calendarRevision,
+          }),
+        };
+      }
+      if (options.allowInlineBuild !== false && !buildInProgress) {
+        diagnostics.staleBuiltRevision = registry.builtRevision || "";
+        diagnostics.missReason = "stale-registry";
+      } else {
+        if (canScheduleRebuild && typeof options.scheduleRebuild === "function") options.scheduleRebuild();
         return {
           ok: true,
           snapshot: cachedSnapshot,
           snapshotAvailable: true,
           snapshotStale: true,
           snapshotBuiltAt: registry.builtAt || cachedSnapshot?.builtAt || "",
-          calendarRevision: registry.builtRevision || calendarRevision,
-          diagnostics,
+          calendarRevision,
+          diagnostics: {
+            ...diagnostics,
+            staleBuiltRevision: registry.builtRevision || "",
+            missReason: buildInProgress ? "build-in-progress" : "stale-registry",
+          },
           snapshotLookupMs: Date.now() - lookupStartedAt,
           snapshotBuildMs: 0,
           ...snapshotRegistryState(registry.status || "stale", {
-            snapshotSource: "unverified-server-cache",
-            snapshotRevision: registry.builtRevision || calendarRevision,
+            snapshotSource: "stale-server-cache",
+            snapshotRevision: calendarRevision,
             stale: true,
           }),
         };
       }
-      diagnostics.cacheHit = registry.builtRevision === calendarRevision;
-      diagnostics.snapshotSizeBytes = JSON.stringify(cachedSnapshot).length;
-      if (registry.builtRevision === calendarRevision && registry.status === "ready") {
-        return {
-          ok: true,
-          snapshot: cachedSnapshot,
-        snapshotAvailable: true,
-        snapshotStale: false,
-        snapshotBuiltAt: registry.builtAt || cachedSnapshot?.builtAt || "",
-        calendarRevision,
-        diagnostics,
-        snapshotLookupMs: Date.now() - lookupStartedAt,
-        snapshotBuildMs: 0,
-        ...snapshotRegistryState("ready", {
-          snapshotSource: "server-cache",
-          snapshotRevision: calendarRevision,
-        }),
-      };
-      }
-      if (typeof options.scheduleRebuild === "function") options.scheduleRebuild();
-      return {
-        ok: true,
-        snapshot: cachedSnapshot,
-        snapshotAvailable: true,
-        snapshotStale: true,
-        snapshotBuiltAt: registry.builtAt || cachedSnapshot?.builtAt || "",
-        calendarRevision,
-        diagnostics: {
-          ...diagnostics,
-          staleBuiltRevision: registry.builtRevision || "",
-          missReason: "stale-registry",
-        },
-        snapshotLookupMs: Date.now() - lookupStartedAt,
-        snapshotBuildMs: 0,
-        ...snapshotRegistryState("stale", {
-          snapshotSource: "stale-server-cache",
-          snapshotRevision: calendarRevision,
-          stale: true,
-        }),
-      };
     }
   }
-  if (options.allowInlineBuild === false) {
-    if (typeof options.scheduleRebuild === "function") options.scheduleRebuild();
+  if (options.allowInlineBuild === false || buildInProgress) {
+    if (canScheduleRebuild && typeof options.scheduleRebuild === "function") options.scheduleRebuild();
     return {
       ok: true,
       snapshot: null,
@@ -2163,12 +2168,14 @@ async function loadSnapshotPayloadFromRegistry(context, options = {}) {
       calendarRevision,
       diagnostics: {
         ...diagnostics,
-        missReason: cacheBucket?.get ? "cache-miss-no-inline-build" : "cache-disabled-no-inline-build",
+        missReason: buildInProgress
+          ? "build-in-progress"
+          : cacheBucket?.get ? "cache-miss-no-inline-build" : "cache-disabled-no-inline-build",
       },
       snapshotLookupMs: Date.now() - lookupStartedAt,
       snapshotBuildMs: 0,
       ...snapshotRegistryState(registry?.status || "missing", {
-        snapshotSource: cacheBucket?.get ? "server-cache-miss" : "d1-inline-disabled",
+        snapshotSource: buildInProgress ? "server-cache-building" : cacheBucket?.get ? "server-cache-miss" : "d1-inline-disabled",
         snapshotRevision: calendarRevision,
       }),
     };
@@ -2221,7 +2228,8 @@ async function loadAccountSnapshotPayload(context, params = {}) {
     calendarRevision,
     cachedRevision: params.cachedRevision,
     allowInlineBuild: params.allowInlineBuild !== false,
-    scheduleRebuild: () => scheduleAccountSnapshotRebuild(context, {
+    bypassCache: params.diagnosticsRequested === true,
+    scheduleRebuild: params.skipRebuild === true ? null : () => scheduleAccountSnapshotRebuild(context, {
       targetRecord,
       prepared,
       requestedRange,
@@ -2250,6 +2258,7 @@ async function loadAccountSnapshotPayload(context, params = {}) {
 }
 
 async function loadFastAccountSnapshotPayload(context, params = {}) {
+  const db = context.env?.ROSTER_DB;
   const targetRecord = params.targetRecord;
   const prepared = params.prepared;
   const requestedRange = boundedCalendarEventRange({
@@ -2264,23 +2273,26 @@ async function loadFastAccountSnapshotPayload(context, params = {}) {
     || ""
   );
   const descriptor = buildAccountSnapshotCacheDescriptor(targetRecord, prepared.role, doctorKey, requestedRange);
+  const revisionStartedAt = Date.now();
+  const calendarRevision = await queryCalendarRevision(db, targetRecord.email).catch(() => "");
+  const revisionMs = Date.now() - revisionStartedAt;
   const payload = await loadSnapshotPayloadFromRegistry(context, {
     descriptor,
-    calendarRevision: "",
-    cachedRevision: "",
+    calendarRevision,
+    cachedRevision: params.cachedRevision || "",
     allowInlineBuild: false,
-    skipRevisionCheck: true,
     scheduleRebuild: () => scheduleFastAccountSnapshotRebuild(context, {
       targetRecord,
       requestedRange,
       doctorKey,
       descriptor,
+      revision: calendarRevision,
     }),
   });
   return {
     ...payload,
-    revisionMs: 0,
-    revisionSkipped: true,
+    revisionMs,
+    revisionSkipped: false,
     snapshotLookupMs: Number(payload.snapshotLookupMs || 0),
     snapshotBuildMs: Number(payload.snapshotBuildMs || 0),
   };
@@ -2303,7 +2315,7 @@ function scheduleFastAccountSnapshotRebuild(context, job = {}) {
       requestedRange: job.requestedRange,
       doctorKey: job.doctorKey || prepared.defaultDoctorKey || "",
       descriptor: job.descriptor || buildAccountSnapshotCacheDescriptor(record, role, job.doctorKey || prepared.defaultDoctorKey || "", job.requestedRange || defaultSnapshotRange()),
-      revision: "",
+      revision: job.revision || "",
       reason: "fast-login-refresh",
     });
   })().catch((error) => {
@@ -2450,19 +2462,42 @@ function scheduleDoctorProfileSnapshotWarmup(context, profile, ownerEmail = "", 
   }));
 }
 
+function doctorProfileFromSnapshotRegistryEntry(entry) {
+  const profileId = String(entry?.ownerId || "").trim();
+  const doctorKey = normalizeRosterName(entry?.doctorKey || profileId.split("::")[0] || "");
+  const sourceText = String(profileId.split("::")[1] || "");
+  return sanitizeDoctorProfile({
+    profileId,
+    doctorKey,
+    displayName: formatRosterDisplayName(doctorKey),
+    sourceTypes: sourceText.split("+").filter(Boolean),
+    state: sanitizeState(null),
+  });
+}
+
 function scheduleSnapshotWarmupForAllAccounts(context, options = {}) {
   if (typeof context.waitUntil !== "function") return;
   context.waitUntil((async () => {
+    const requestedRange = defaultSnapshotRange();
+    const rangeKey = snapshotRegistryRangeKey(requestedRange);
+    const limit = Math.max(1, Math.min(Number.parseInt(options.limit ?? SNAPSHOT_GLOBAL_WARMUP_LIMIT, 10) || SNAPSHOT_GLOBAL_WARMUP_LIMIT, 100));
+    let warmed = 0;
     const records = await listAccountMirrors(context.env.ROSTER_DB).catch(() => []);
-    const emails = records.map((record) => normalizeEmail(record?.email || "")).filter(Boolean);
+    const emails = records
+      .filter((record) => {
+        const role = record?.role || roleForEmail(record?.email);
+        return role === "creator" || role === "owner" || sanitizeClaims(record?.claims).length;
+      })
+      .map((record) => normalizeEmail(record?.email || ""))
+      .filter(Boolean);
     for (const email of [...new Set(emails)]) {
+      if (warmed >= limit) break;
       const record = await loadAccountMirror(context.env.ROSTER_DB, email).catch(() => null);
       if (!record) continue;
       const prepared = await prepareAccountResponse(null, record, {
         db: context.env.ROSTER_DB,
         includeAvailableDoctors: false,
       });
-      const requestedRange = defaultSnapshotRange();
       const doctorKey = normalizeRosterName(
         prepared.state?.session?.doctorKey
         || (prepared.role === "creator" || prepared.role === "owner" ? OWNER_DOCTOR_KEY : prepared.claims?.[0]?.key)
@@ -2476,14 +2511,25 @@ function scheduleSnapshotWarmupForAllAccounts(context, options = {}) {
         descriptor: buildAccountSnapshotCacheDescriptor(record, prepared.role, doctorKey, requestedRange),
         reason: options.reason || "roster-change",
       }).catch(() => null);
+      warmed += 1;
     }
-    const profiles = await queryDoctorProfileMirrors(context.env.ROSTER_DB).catch(() => []);
-    for (const profile of profiles) {
+    const remaining = limit - warmed;
+    if (remaining <= 0) return;
+    const profileCandidates = await listSnapshotRegistryWarmupCandidates(context.env.ROSTER_DB, {
+      ownerTypes: ["doctor-profile"],
+      statuses: ["ready"],
+      rangeKey,
+      limit: remaining,
+    }).catch(() => []);
+    for (const candidate of profileCandidates) {
+      const profile = await loadDoctorProfileState(null, context.env.ROSTER_DB, candidate.ownerId).catch(() => null)
+        || doctorProfileFromSnapshotRegistryEntry(candidate);
+      if (!profile) continue;
       await buildAndStoreDoctorProfileSnapshot(context, {
         profile,
         ownerEmail: CREATOR_EMAIL,
-        requestedRange: defaultSnapshotRange(),
-        descriptor: buildDoctorProfileSnapshotCacheDescriptor(profile, defaultSnapshotRange()),
+        requestedRange,
+        descriptor: buildDoctorProfileSnapshotCacheDescriptor(profile, requestedRange),
         reason: options.reason || "roster-change",
       }).catch(() => null);
     }
@@ -3320,7 +3366,8 @@ async function loadDoctorProfileSnapshotPayload(context, profile, ownerEmail = "
     descriptor,
     calendarRevision,
     cachedRevision: options.cachedRevision,
-    scheduleRebuild: () => scheduleDoctorProfileSnapshotWarmup(context, profile, ownerEmail, { reason: "stale-read" }),
+    allowInlineBuild: options.allowInlineBuild !== false,
+    scheduleRebuild: options.skipRebuild === true ? null : () => scheduleDoctorProfileSnapshotWarmup(context, profile, ownerEmail, { reason: "stale-read" }),
     buildInline: () => buildAndStoreDoctorProfileSnapshot(context, {
       profile,
       ownerEmail,

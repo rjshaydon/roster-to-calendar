@@ -8912,11 +8912,15 @@ async function validateClaimedAccountCalendarInBackground(context = {}, options 
     adminTargetEmail: targetEmail === OWNER_EMAIL ? "" : targetEmail,
     preserveSessionOnFailure: true,
     deferHydration: true,
+    responseMode: "fast",
+    cachedRevision,
+    allowInlineBuild: !cachedSnapshot?.preview,
+    preserveExistingSnapshot: Boolean(cachedSnapshot?.preview),
     accountSwitchStartedAt: options.accountSwitchStartedAt,
     transition: options.transition,
   });
   if (!calendarTransitionStillCurrent(options.transition)) return;
-  if (cachedSnapshot?.preview && (!currentSnapshot?.preview || currentSnapshot.cacheKey !== cachedSnapshot.cacheKey)) {
+  if (cachedSnapshot?.preview && (currentSnapshotStale || !currentSnapshot?.preview || currentSnapshot.cacheKey !== cachedSnapshot.cacheKey)) {
     currentSnapshot = cachedSnapshot;
     currentSnapshotStale = false;
     currentSnapshotBuiltAt = cachedSnapshot.cachedAt || cachedSnapshot.preview?.lastParsed || "";
@@ -8932,6 +8936,7 @@ async function validateClaimedAccountCalendarInBackground(context = {}, options 
     accountSwitchStartedAt: options.accountSwitchStartedAt,
     doctorKey: context.doctorKey || "",
     cachedRevision,
+    allowInlineBuild: !cachedSnapshot?.preview,
     transition: options.transition,
   }, 0);
   if (!calendarTransitionStillCurrent(options.transition)) return;
@@ -8942,6 +8947,7 @@ async function validateDoctorProfileCalendarInBackground(doctor, previousState, 
   const result = await loadUnclaimedDoctorCalendar(doctor, previousState, {
     profile: options.profile,
     cachedRevision: options.cachedRevision || "",
+    allowInlineBuild: options.renderedCachedSnapshot ? false : true,
     transition: options.transition,
   });
   if (!calendarTransitionStillCurrent(options.transition)) return;
@@ -9095,7 +9101,10 @@ async function loadUnclaimedDoctorCalendar(doctor, sourceContext, options = {}) 
   if (!profile?.id) {
     throw new Error(`Could not open ${doctor?.displayName || "that clinician"} because their roster source was not available.`);
   }
-  const profileData = await fetchDoctorProfileState(profile, { cachedRevision: options.cachedRevision || "" });
+  const profileData = await fetchDoctorProfileState(profile, {
+    cachedRevision: options.cachedRevision || "",
+    allowInlineBuild: options.allowInlineBuild !== false,
+  });
   if (!calendarTransitionStillCurrent(options.transition)) return null;
   if (profileData.snapshotCurrent === true) {
     currentCalendarRevision = String(profileData.calendarRevision || currentCalendarRevision || "");
@@ -9125,6 +9134,7 @@ async function loadUnclaimedDoctorCalendar(doctor, sourceContext, options = {}) 
       calendarRevision: profileData.calendarRevision || "",
     };
   }
+  if (options.allowInlineBuild === false && currentSnapshot?.preview) return null;
 
   const cached = buildUnclaimedPreviewFromSnapshotCache(doctor, profile, sourceContext, profileData.profile?.state?.session || {});
   if (cached) return doctorProfileLoadResultFromCached(profile, cached);
@@ -9234,6 +9244,7 @@ async function fetchDoctorProfileState(profile, options = {}) {
       sourceTypes: profile.sourceTypes,
       aliases: profile.aliases,
       cachedRevision: options.cachedRevision || "",
+      allowInlineBuild: options.allowInlineBuild !== false,
     }),
   });
   const data = await readJsonResponse(response, "Doctor profile load failed.");
@@ -10342,7 +10353,7 @@ async function loginWithEmail(email, password, options = {}) {
       ...options,
       includeBootstrap: true,
       forceCalendarRefresh: renderedCachedSnapshot,
-      allowInlineBuild: false,
+      allowInlineBuild: !renderedCachedSnapshot,
       transition,
     }, loginStartedAt);
   } catch (error) {
@@ -10374,6 +10385,8 @@ async function restoreCloudState(options = {}) {
         mode: options.mode || "login",
         responseMode: options.responseMode || "full",
         realName: options.realName || "",
+        cachedRevision: options.cachedRevision || "",
+        allowInlineBuild: options.allowInlineBuild !== false,
       }),
     });
     const data = await readJsonResponse(response, "Login failed.");
@@ -10485,11 +10498,16 @@ async function hydrateAuthenticatedWorkspace(options = {}, loginStartedAt = 0) {
           expectedKey: activeBootstrapContextKey(),
           loginStartedAt,
           accountSwitchStartedAt: options.accountSwitchStartedAt,
+          allowInlineBuild: options.allowInlineBuild !== false,
+          transition: options.transition,
         });
         markLoginPhase("workspaceRendered", loginStartedAt);
         markAccountSwitchPhase("workspaceRendered", options.accountSwitchStartedAt);
       } else {
-        await bootstrapImports();
+        await bootstrapImports({
+          allowInlineBuild: options.allowInlineBuild !== false,
+          transition: options.transition,
+        });
         if (!calendarTransitionStillCurrent(options.transition)) return;
         markLoginPhase("workspaceRendered", loginStartedAt);
         markAccountSwitchPhase("workspaceRendered", options.accountSwitchStartedAt);
@@ -10603,13 +10621,17 @@ function queueDeferredBootstrapImports(options = {}) {
     void (async () => {
       if (runId !== deferredBootstrapRunId) return;
       if (activeBootstrapContextKey() !== expectedKey) return;
+      if (!calendarTransitionStillCurrent(options.transition)) return;
       try {
-        await bootstrapImports();
-        if (runId !== deferredBootstrapRunId || activeBootstrapContextKey() !== expectedKey) return;
+        await bootstrapImports({
+          allowInlineBuild: options.allowInlineBuild !== false,
+          transition: options.transition,
+        });
+        if (runId !== deferredBootstrapRunId || activeBootstrapContextKey() !== expectedKey || !calendarTransitionStillCurrent(options.transition)) return;
         markLoginPhase("workspaceRendered", options.loginStartedAt);
         markAccountSwitchPhase("workspaceRendered", options.accountSwitchStartedAt);
       } catch (error) {
-        if (runId !== deferredBootstrapRunId || activeBootstrapContextKey() !== expectedKey) return;
+        if (runId !== deferredBootstrapRunId || activeBootstrapContextKey() !== expectedKey || !calendarTransitionStillCurrent(options.transition)) return;
         setStatus(error.message || "Could not finish loading the calendar workspace.", true);
       }
     })();
@@ -10798,6 +10820,18 @@ async function applyCloudStateSnapshot(data, options = {}) {
     clearWorkspaceStoreEntry(currentUserEmail);
     return;
   }
+  if (data.snapshotCurrent === true) {
+    currentCalendarRevision = String(data.snapshotRevision || data.calendarRevision || currentCalendarRevision || "");
+    if (currentSnapshot && currentCalendarRevision) currentSnapshot.calendarRevision = currentCalendarRevision;
+    currentSnapshotStale = false;
+    currentSnapshotBuiltAt = String(data.snapshotBuiltAt || currentSnapshotBuiltAt || "");
+    return;
+  }
+  if (!data.snapshot && options.preserveExistingSnapshot === true && currentSnapshot?.preview) {
+    currentSnapshotStale = data.snapshotStale === true || currentSnapshotStale;
+    currentSnapshotBuiltAt = String(data.snapshotBuiltAt || currentSnapshotBuiltAt || "");
+    return;
+  }
   currentSnapshot = sanitizeWorkspaceSnapshot(data.snapshot);
   if (currentSnapshot && currentCalendarRevision) {
     currentSnapshot.calendarRevision = currentCalendarRevision;
@@ -10844,6 +10878,7 @@ async function applyCloudStateData(data, options = {}) {
 async function loadCloudCalendarEvents(options = {}) {
   if (!cloudAvailable) return false;
   if (!calendarTransitionStillCurrent(options.transition)) return false;
+  const expectedKey = options.expectedKey || activeCalendarTransitionKey();
   const adminTargetEmail = normalizeEmail(options.adminTargetEmail);
   const requestEmail = adminTargetEmail ? authUserEmail : currentUserEmail;
   const requestPassword = adminTargetEmail ? authUserPassword : currentUserPassword;
@@ -10874,6 +10909,7 @@ async function loadCloudCalendarEvents(options = {}) {
   });
   const data = await readJsonResponse(response, "Calendar load failed.");
   if (!calendarTransitionStillCurrent(options.transition)) return false;
+  if (activeCalendarTransitionKey() !== expectedKey) return false;
   currentCalendarRevision = String(data.snapshotRevision || data.calendarRevision || currentCalendarRevision || "");
   if (data.snapshotCurrent === true) {
     if (currentSnapshot && currentCalendarRevision) currentSnapshot.calendarRevision = currentCalendarRevision;
@@ -11158,6 +11194,8 @@ async function prefetchCreatorSwitchTarget(target) {
         doctorKey: target.context?.doctorKey || "",
         startDate: target.context?.range?.startDate || "",
         endDate: target.context?.range?.endDate || "",
+        allowInlineBuild: false,
+        skipRebuild: true,
       }),
     });
   } else if (target.kind === "doctor-profile") {
@@ -11172,6 +11210,8 @@ async function prefetchCreatorSwitchTarget(target) {
         doctorKey: target.profile.doctorKey,
         displayName: target.profile.displayName,
         sourceTypes: target.profile.sourceTypes,
+        allowInlineBuild: false,
+        skipRebuild: true,
       }),
     });
   } else {
@@ -12662,8 +12702,9 @@ function saveConflictSelections() {
   localStorage.setItem(CONFLICT_SELECTIONS_KEY, JSON.stringify(conflictSelections));
 }
 
-async function bootstrapImports() {
+async function bootstrapImports(options = {}) {
   try {
+    if (!calendarTransitionStillCurrent(options.transition)) return;
     syncAccountsButton();
     if (!selectedFiles.length) {
       if (cloudAvailable) {
@@ -12677,6 +12718,7 @@ async function bootstrapImports() {
       }
     }
     renderFilesList();
+    if (!calendarTransitionStillCurrent(options.transition)) return;
     if (currentSnapshot?.preview && currentSnapshot.doctorOptions?.length) {
       const snapshotInvalid = snapshotHasUnresolvablePreviewEvents(currentSnapshot);
       renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
@@ -12687,15 +12729,26 @@ async function bootstrapImports() {
         if (canRefreshFromBrowserFiles) {
           void refreshSnapshotInBackground();
         } else if (cloudAvailable) {
-          void loadCloudCalendarEvents({ adminTargetEmail: adminViewingEmail ? viewedAccountEmail() : "" })
+          void loadCloudCalendarEvents({
+            adminTargetEmail: adminViewingEmail ? viewedAccountEmail() : "",
+            allowInlineBuild: options.allowInlineBuild !== false,
+            preserveExistingSnapshot: true,
+            transition: options.transition,
+          })
             .then((loadedCalendar) => {
+              if (!calendarTransitionStillCurrent(options.transition)) return;
               if (!loadedCalendar || !currentSnapshot?.preview) return;
+              if (currentSnapshotStale) {
+                setStatus("Calendar loaded. Checking for updates...");
+                return;
+              }
               renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
               currentSnapshotStale = false;
               currentSnapshotBuiltAt = new Date().toISOString();
               setStatus("Calendar refreshed.");
             })
             .catch((error) => {
+              if (!calendarTransitionStillCurrent(options.transition)) return;
               setStatus(error.message || "Could not refresh the calendar.", true);
             });
         } else {
@@ -12707,7 +12760,13 @@ async function bootstrapImports() {
       return;
     }
     if (cloudAvailable && selectedFiles.length && selectedFiles.some((entry) => !entry.file)) {
-      const loadedCalendar = await loadCloudCalendarEvents({ adminTargetEmail: adminViewingEmail ? viewedAccountEmail() : "" });
+      const loadedCalendar = await loadCloudCalendarEvents({
+        adminTargetEmail: adminViewingEmail ? viewedAccountEmail() : "",
+        allowInlineBuild: options.allowInlineBuild !== false,
+        preserveExistingSnapshot: true,
+        transition: options.transition,
+      });
+      if (!calendarTransitionStillCurrent(options.transition)) return;
       if (loadedCalendar) {
         renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
         scheduleInsightWarmup();
