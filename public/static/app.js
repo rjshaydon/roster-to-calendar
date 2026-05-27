@@ -3765,7 +3765,7 @@ function buildWhoAssignments(doctor, events) {
 
 function buildWhoAssignment(doctor, metadata, event) {
   const source = eventSourceCode(event);
-  const role = metadata[source]?.role || metadata.any?.role || eventSeniorityRoleCode(event) || "";
+  const role = metadata[source]?.role || metadata.any?.role || eventSeniorityRoleCode(event) || inferredWhoRoleForDoctor(doctor) || "";
   const activeRule = parserRuleForWhoEvent(event, source, role);
   const ruleTitle = activeRule ? parserRulePreviewTitle(activeRule) : "";
   const eventForGrouping = ruleTitle ? { ...event, title: ruleTitle } : event;
@@ -3778,7 +3778,7 @@ function buildWhoAssignment(doctor, metadata, event) {
     doctorKey: doctor.key,
     doctorName: doctor.displayName,
     role,
-    roleLabel: role || "",
+    roleLabel: whoRoleDisplayLabel(role),
     roleNote: isNightIc ? "IC" : "",
     roleRank: whoRoleRank(role),
     nightIcRank: isNightIc ? 0 : 1,
@@ -4161,6 +4161,7 @@ function whoRoleRank(role) {
 function normalizeWhoRole(role) {
   const upper = String(role || "").trim().toUpperCase();
   if (!upper) return "";
+  if (upper === "UNKNOWN") return "";
   if (upper === "SMS" || upper.includes("SENIOR MEDICAL STAFF") || upper.includes("CONSULTANT") || upper.includes("STAFF SPECIALIST")) return "SMS";
   if (upper === "CMO" || upper.includes("CMO")) return "CMO";
   if (upper === "SR" || upper.includes("SENIOR REGISTRAR") || upper.includes("SENIOR REG")) return "SR";
@@ -4175,6 +4176,18 @@ function normalizeWhoRole(role) {
 
 function eventSeniorityRoleCode(event) {
   return normalizeWhoRole(event?.seniority || event?.role || "");
+}
+
+function inferredWhoRoleForDoctor(doctor) {
+  const key = normalizeRosterName(doctor?.key || "");
+  if (key && key === OWNER_DOCTOR_KEY) return "SMS";
+  return "";
+}
+
+function whoRoleDisplayLabel(role) {
+  const normalized = normalizeWhoRole(role);
+  if (normalized === "I") return "Intern";
+  return normalized;
 }
 
 function whoSpecialTimeLabel(event, period) {
