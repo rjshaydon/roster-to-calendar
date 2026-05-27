@@ -10337,7 +10337,11 @@ async function loginWithEmail(email, password, options = {}) {
     }
     const renderedCachedSnapshot = inlineSnapshotReady
       ? true
-      : renderCachedCalendarSnapshotForContext(accountCalendarContextForEmail(currentUserEmail), { loginStartedAt, transition });
+      : renderCachedCalendarSnapshotForContext(accountCalendarContextForEmail(currentUserEmail), {
+          loginStartedAt,
+          transition,
+          expectedRevision: currentCalendarRevision,
+        });
     if ((loginData?.responseMode || "full") === "fast") {
       queueDeferredAccountContextLoad({
         loginStartedAt,
@@ -12178,11 +12182,13 @@ function renderCachedCalendarSnapshotForContext(context = {}, options = {}) {
   if (!calendarTransitionStillCurrent(options.transition)) return false;
   const cached = loadCachedCalendarSnapshotForContext(context);
   if (!cached?.preview) return false;
+  const expectedRevision = String(options.expectedRevision || "");
+  if (expectedRevision && String(cached.calendarRevision || "") !== expectedRevision) return false;
   if (!calendarTransitionStillCurrent(options.transition)) return false;
   currentSnapshot = cached;
   currentSnapshotStale = false;
   currentSnapshotBuiltAt = cached.cachedAt || cached.preview?.lastParsed || "";
-  currentCalendarRevision = cached.calendarRevision || currentCalendarRevision;
+  currentCalendarRevision = expectedRevision || cached.calendarRevision || currentCalendarRevision;
   selectedFiles = importRefsToClientEntries(cached.fileRefs || []);
   renderWorkspaceFromSnapshot(cached, cached.session || {});
   markLoginPhase("cachedCalendarRendered", options.loginStartedAt);

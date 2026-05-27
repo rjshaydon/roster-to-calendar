@@ -5,7 +5,7 @@ import XLSX from "xlsx";
 
 import { onRequestPost as handleStatePost } from "../functions/api/state.js";
 import { onRequestGet as handleFeedGet } from "../functions/api/feed.js";
-import { buildPreviewFromDerivedEvents } from "../functions/_lib/d1-calendar.js";
+import { buildPreviewFromDerivedEvents, storeCachedSnapshot } from "../functions/_lib/d1-calendar.js";
 import { buildRosterView, doctorOptions, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
 
 function cloneWorkbook(workbook) {
@@ -111,8 +111,23 @@ assert.match(
 );
 assert.match(appSource, /function markAccountSwitchPhase/, "account switching should expose debug timings separately from login timings");
 assert.match(appSource, /function renderCachedCalendarSnapshotForContext/, "calendar switching should have an explicit-context snapshot renderer");
+assert.match(
+  appSource.match(/function renderCachedCalendarSnapshotForContext[\s\S]*?function saveWorkspaceSnapshotForEmail/)?.[0] || "",
+  /expectedRevision[\s\S]*cached\.calendarRevision[\s\S]*return false/,
+  "browser snapshot rendering should reject stale local cache when the server supplied a current revision",
+);
 assert.match(appSource, /function validateDoctorProfileCalendarInBackground/, "doctor-profile switching should validate cached snapshots in the background");
 assert.match(appSource, /function queueCreatorSwitchTargetPrefetch\(\)/, "creator login should prefetch switch targets into browser snapshot cache");
+assert.match(
+  d1CalendarSource.match(/export async function queryCalendarRevision[\s\S]*?export async function upsertAccountMirror/)?.[0] || "",
+  /FROM parser_rules[\s\S]*local_parser_extensions_json/,
+  "calendar revisions should include parser-rule state so resolved warnings invalidate stale snapshots",
+);
+assert.match(
+  stateSource,
+  /filterCachedSnapshotForReturn[\s\S]*filterSnapshotPreviewIssuesForOwner[\s\S]*filterStoredRosterIssuesForPreview\(issues, ruleSets/,
+  "cached server snapshots should be filtered through current parser rules before return",
+);
 assert.match(
   appSource.match(/async function hydrateAuthenticatedWorkspace[\s\S]*?function markLoginPhase/)?.[0] || "",
   /currentUserEmail === OWNER_EMAIL[\s\S]*forceCreatorDoctorSession\(\)[\s\S]*loadCloudCalendarEvents/,
@@ -2239,6 +2254,22 @@ class MemoryD1Statement {
         max_updated_at: rows.map((row) => String(row.updated_at || "")).sort().at(-1) || "",
       };
     }
+    if (sql.includes("FROM parser_rules") && sql.includes("COUNT(*) AS count")) {
+      const rows = [...this.db.parserRules.values()].filter((rule) => rule.scope === "global");
+      return {
+        count: rows.length,
+        max_updated_at: rows.map((row) => String(row.updated_at || "")).sort().at(-1) || "",
+      };
+    }
+    if (sql.includes("account_profiles.local_parser_extensions_json") && sql.includes("LEFT JOIN account_states")) {
+      const profile = this.db.accountProfiles.get(args[0]) || null;
+      const state = this.db.accountStates.get(args[0]) || null;
+      if (!profile && !state) return null;
+      return {
+        session_json: state?.session_json || null,
+        local_parser_extensions_json: profile?.local_parser_extensions_json || "[]",
+      };
+    }
     if (sql.startsWith("SELECT COUNT(*) AS count FROM roster_events WHERE file_id = ? AND doctor_key = ?")) {
       return {
         count: [...this.db.events.values()].filter((event) => event.file_id === args[0] && event.doctor_key === args[1]).length,
@@ -2710,6 +2741,68 @@ const d1DirectCalendar = await postState(d1StateStore, {
   password: "d1-password",
 }, d1Store);
 assert.ok(d1DirectCalendar.snapshot.detectedSources.mmc.length > 0, "claimed D1 snapshots should retain linked roster sources");
+const staleResolvedDdhIssue = {
+  id: "DDH::Unknown::2026-06-08::PHNW CS",
+  source: "DDH",
+  seniority: "Unknown",
+  startDay: "2026-06-08",
+  rawValue: "PHNW CS",
+  code: "PHNW CS",
+  status: "unknown",
+  message: "DDH shift label not recognised.",
+  resolutionType: "shift_code",
+  suggestedTitle: "DDH: PHNW",
+  timeLabel: "",
+};
+const currentD1UserRegistry = d1Store.snapshotRegistry.get(d1UserRegistryKey);
+await storeCachedSnapshot(d1StateStore.r2, currentD1UserRegistry.artifact_key, {
+  ...d1DirectCalendar.snapshot,
+  preview: {
+    ...d1DirectCalendar.snapshot.preview,
+    issues: [...(d1DirectCalendar.snapshot.preview.issues || []), staleResolvedDdhIssue],
+  },
+}, {
+  revision: d1DirectCalendar.snapshotRevision,
+  ownerType: currentD1UserRegistry.owner_type,
+  ownerId: currentD1UserRegistry.owner_id,
+  doctorKey: currentD1UserRegistry.doctor_key,
+  rangeKey: currentD1UserRegistry.range_key,
+});
+await postState(d1StateStore, {
+  action: "saveParserExtensionRule",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  source: "DDH",
+  rawValue: "PHNW CS",
+  rule: {
+    source: "DDH",
+    seniority: "SMS",
+    code: "PHNW CS",
+    kind: "shift",
+    base: "PHNW",
+    period: "",
+    suffix: "",
+    allDay: true,
+    startTime: "",
+    endTime: "",
+    location: "",
+    includeAsShift: true,
+  },
+}, d1Store);
+const d1ParserRevisionCheck = await postState(d1StateStore, {
+  action: "loadCalendarEvents",
+  email: "d1-user@example.com",
+  password: "d1-password",
+  cachedRevision: d1DirectCalendar.snapshotRevision,
+  allowInlineBuild: false,
+}, d1Store);
+assert.notEqual(d1ParserRevisionCheck.snapshotCurrent, true, "parser-rule changes should invalidate cachedRevision checks");
+assert.equal(d1ParserRevisionCheck.snapshotSource, "stale-server-cache", "parser-rule revision changes may reuse stale server cache without inline build");
+assert.equal(
+  d1ParserRevisionCheck.snapshot.preview.issues.some((issue) => issue.rawValue === "PHNW CS"),
+  false,
+  "resolved parser warnings should be filtered out of stale server snapshots before return",
+);
 await postState(d1StateStore, {
   action: "saveDerivedCalendarFile",
   email: "rhaydon@gmail.com",
@@ -2749,6 +2842,19 @@ await postState(d1StateStore, {
         timeLabel: "08:00-18:00",
       },
       {
+        id: "DDH::Unknown::2026-06-08::PHNW CS",
+        source: "DDH",
+        seniority: "Unknown",
+        startDay: "2026-06-08",
+        rawValue: "PHNW CS",
+        code: "PHNW CS",
+        status: "unknown",
+        message: "DDH shift label not recognised.",
+        resolutionType: "shift_code",
+        suggestedTitle: "DDH: PHNW",
+        timeLabel: "",
+      },
+      {
         id: "DDH::Unknown::2026-05-15::Mystery AM",
         source: "DDH",
         seniority: "Unknown",
@@ -2765,7 +2871,7 @@ await postState(d1StateStore, {
 }, d1Store);
 assert.equal(
   [...d1Store.issues.values()].filter((issue) => issue.file_id === "ddh-rover-diagnostics").length,
-  2,
+  3,
   "derived roster saves should persist parser diagnostics transactionally",
 );
 const d1StoredIssueCalendar = await postState(d1StateStore, {
@@ -2781,6 +2887,11 @@ assert.equal(
   d1StoredIssueCalendar.snapshot.preview.issues.some((issue) => issue.rawValue === "Rover AM"),
   false,
   "stale DDH Rover diagnostics should be hidden on first D1 calendar load",
+);
+assert.equal(
+  d1StoredIssueCalendar.snapshot.preview.issues.some((issue) => issue.rawValue === "PHNW CS"),
+  false,
+  "server-built snapshots should hide roster issues resolved by active parser rules",
 );
 assert.equal(
   d1StoredIssueCalendar.snapshot.preview.issues.some((issue) => issue.rawValue === "Mystery AM"),

@@ -2109,16 +2109,17 @@ async function loadSnapshotPayloadFromRegistry(context, options = {}) {
   if (!options.bypassCache && cacheBucket?.get && registry?.artifactKey) {
     const cachedSnapshot = await loadCachedSnapshot(cacheBucket, registry.artifactKey).catch(() => null);
     if (cachedSnapshot) {
+      const returnedSnapshot = await filterCachedSnapshotForReturn(cachedSnapshot, options);
       const registryCurrent = Boolean(calendarRevision && registry.builtRevision === calendarRevision && registry.status === "ready");
       diagnostics.cacheHit = registryCurrent;
-      diagnostics.snapshotSizeBytes = JSON.stringify(cachedSnapshot).length;
+      diagnostics.snapshotSizeBytes = JSON.stringify(returnedSnapshot).length;
       if (registryCurrent) {
         return {
           ok: true,
-          snapshot: cachedSnapshot,
+          snapshot: returnedSnapshot,
           snapshotAvailable: true,
           snapshotStale: false,
-          snapshotBuiltAt: registry.builtAt || cachedSnapshot?.builtAt || "",
+          snapshotBuiltAt: registry.builtAt || returnedSnapshot?.builtAt || "",
           calendarRevision,
           diagnostics,
           snapshotLookupMs: Date.now() - lookupStartedAt,
@@ -2136,10 +2137,10 @@ async function loadSnapshotPayloadFromRegistry(context, options = {}) {
         if (canScheduleRebuild && typeof options.scheduleRebuild === "function") options.scheduleRebuild();
         return {
           ok: true,
-          snapshot: cachedSnapshot,
+          snapshot: returnedSnapshot,
           snapshotAvailable: true,
           snapshotStale: true,
-          snapshotBuiltAt: registry.builtAt || cachedSnapshot?.builtAt || "",
+          snapshotBuiltAt: registry.builtAt || returnedSnapshot?.builtAt || "",
           calendarRevision,
           diagnostics: {
             ...diagnostics,
@@ -2204,6 +2205,11 @@ async function loadSnapshotPayloadFromRegistry(context, options = {}) {
   };
 }
 
+async function filterCachedSnapshotForReturn(snapshot, options = {}) {
+  if (!snapshot || typeof options.filterSnapshot !== "function") return snapshot;
+  return await options.filterSnapshot(snapshot).catch(() => snapshot);
+}
+
 async function loadAccountSnapshotPayload(context, params = {}) {
   const db = context.env?.ROSTER_DB;
   const targetRecord = params.targetRecord;
@@ -2238,6 +2244,7 @@ async function loadAccountSnapshotPayload(context, params = {}) {
       revision: calendarRevision,
       reason: "stale-read",
     }),
+    filterSnapshot: (snapshot) => filterSnapshotPreviewIssuesForOwner(db, snapshot, targetRecord.email, targetRecord),
     buildInline: () => buildAndStoreAccountSnapshot(context, {
       targetRecord,
       prepared,
@@ -2288,6 +2295,7 @@ async function loadFastAccountSnapshotPayload(context, params = {}) {
       descriptor,
       revision: calendarRevision,
     }),
+    filterSnapshot: (snapshot) => filterSnapshotPreviewIssuesForOwner(db, snapshot, targetRecord.email, targetRecord),
   });
   return {
     ...payload,
@@ -2633,6 +2641,7 @@ async function buildDerivedAccountSnapshot(db, context) {
     : stateFileRefs.length
       ? stateFileRefs
       : await d1RepositoryImportRefsForClaims(db, claims);
+  const ruleSets = await snapshotPreviewIssueRuleSets(db, context.record.email, context.record);
   return sanitizeSnapshotRecord({
     ownerType: role === "creator" || role === "owner" ? "creator-account" : "user-account",
     ownerId: normalizeEmail(context.record.email),
@@ -2641,7 +2650,7 @@ async function buildDerivedAccountSnapshot(db, context) {
     buildStamp: "d1-derived",
     preview: buildPreviewFromDerivedEvents(events, {
       customEventsMaterialized: true,
-      issues: filterStoredRosterIssuesForPreview(rosterIssues),
+      issues: filterStoredRosterIssuesForPreview(rosterIssues, ruleSets),
     }),
     session: normalizedSession,
     doctorOptions,
@@ -3368,6 +3377,7 @@ async function loadDoctorProfileSnapshotPayload(context, profile, ownerEmail = "
     cachedRevision: options.cachedRevision,
     allowInlineBuild: options.allowInlineBuild !== false,
     scheduleRebuild: options.skipRebuild === true ? null : () => scheduleDoctorProfileSnapshotWarmup(context, profile, ownerEmail, { reason: "stale-read" }),
+    filterSnapshot: (snapshot) => filterSnapshotPreviewIssuesForOwner(db, snapshot, ownerEmail),
     buildInline: () => buildAndStoreDoctorProfileSnapshot(context, {
       profile,
       ownerEmail,
@@ -3481,6 +3491,7 @@ async function buildDerivedDoctorProfileSnapshot(store, db, profile, ownerEmail 
   const doctorOptions = doctorOption
     ? [doctorOption]
     : [];
+  const ruleSets = await snapshotPreviewIssueRuleSets(db, ownerEmail);
   return sanitizeSnapshotRecord({
     ownerType: "doctor-profile",
     ownerId: profile.profileId,
@@ -3489,7 +3500,7 @@ async function buildDerivedDoctorProfileSnapshot(store, db, profile, ownerEmail 
     buildStamp: "d1-derived",
     preview: buildPreviewFromDerivedEvents(events, {
       customEventsMaterialized: true,
-      issues: filterStoredRosterIssuesForPreview(rosterIssues),
+      issues: filterStoredRosterIssuesForPreview(rosterIssues, ruleSets),
     }),
     session: session && Object.keys(session).length ? session : { doctorKey: profile.doctorKey },
     doctorOptions: doctorOptions.length ? doctorOptions : [{
@@ -3510,9 +3521,32 @@ async function buildDerivedDoctorProfileSnapshot(store, db, profile, ownerEmail 
   });
 }
 
-function filterStoredRosterIssuesForPreview(issues) {
+async function filterSnapshotPreviewIssuesForOwner(db, snapshot, ownerEmail = "", record = null) {
+  if (!snapshot?.preview || !Array.isArray(snapshot.preview.issues) || !snapshot.preview.issues.length) return snapshot;
+  const ruleSets = await snapshotPreviewIssueRuleSets(db, ownerEmail, record);
+  const issues = filterStoredRosterIssuesForPreview(snapshot.preview.issues, ruleSets);
+  if (issues.length === snapshot.preview.issues.length) return snapshot;
+  return {
+    ...snapshot,
+    preview: {
+      ...snapshot.preview,
+      issues,
+    },
+  };
+}
+
+async function snapshotPreviewIssueRuleSets(db, ownerEmail = "", record = null) {
+  const globalParserExtensions = await loadD1ParserExtensionRules(db);
+  const accountRecord = record || (ownerEmail ? await loadAccountMirror(db, ownerEmail).catch(() => null) : null);
+  return mergeParserExtensionSets(
+    sanitizeParserExtensionRules(globalParserExtensions),
+    sanitizeParserExtensionRules(accountRecord?.localParserExtensions),
+  );
+}
+
+function filterStoredRosterIssuesForPreview(issues, ruleSets = {}) {
   return (Array.isArray(issues) ? issues : [])
-    .filter((issue) => !isKnownResolvedShiftCodeValue(issue?.source, issue?.rawValue || issue?.code || ""));
+    .filter((issue) => !isIssueResolvedByRuleSets(issue, ruleSets));
 }
 
 function matchDoctorClaims(doctors, realName) {

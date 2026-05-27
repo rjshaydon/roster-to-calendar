@@ -974,9 +974,21 @@ export async function queryCalendarRevision(db, ownerEmail = "") {
     FROM roster_files
     WHERE active = 1
   `).first();
-  const accountState = email
-    ? await db.prepare("SELECT session_json FROM account_states WHERE email = ?").bind(email).first()
+  const accountContext = email
+    ? await db.prepare(`
+      SELECT
+        account_states.session_json AS session_json,
+        account_profiles.local_parser_extensions_json AS local_parser_extensions_json
+      FROM account_profiles
+      LEFT JOIN account_states ON account_states.email = account_profiles.email
+      WHERE account_profiles.email = ?
+    `).bind(email).first()
     : null;
+  const parserRules = await db.prepare(`
+    SELECT COUNT(*) AS count, COALESCE(MAX(updated_at), '') AS max_updated_at
+    FROM parser_rules
+    WHERE scope = 'global'
+  `).first();
   const customEvents = email
     ? await db.prepare("SELECT COUNT(*) AS count, COALESCE(MAX(updated_at), '') AS max_updated_at FROM custom_events WHERE owner_email = ?").bind(email).first()
     : null;
@@ -994,13 +1006,17 @@ export async function queryCalendarRevision(db, ownerEmail = "") {
       WHERE account_claims.email = ?
     `).bind(email).first()
     : null;
-  const materializedSession = materializedSessionStateForRevision(parseJsonObject(accountState?.session_json, {}));
+  const materializedSession = materializedSessionStateForRevision(parseJsonObject(accountContext?.session_json, {}));
+  const localParserExtensions = parseJsonObject(accountContext?.local_parser_extensions_json, {});
   return [
     Number(roster?.active_file_count || 0),
     String(roster?.max_parsed_at || ""),
     String(roster?.max_uploaded_at || ""),
     Number(roster?.max_last_modified || 0),
     stableJsonStringify(materializedSession),
+    Number(parserRules?.count || 0),
+    String(parserRules?.max_updated_at || ""),
+    stableJsonStringify(localParserExtensions),
     Number(claims?.count || 0),
     String(claims?.max_updated_at || ""),
     Number(locations?.count || 0),
