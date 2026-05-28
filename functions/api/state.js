@@ -46,6 +46,7 @@ import {
   queryRosterFileRanges,
   queryRosterDoctors,
   replaceDerivedRosterFile,
+  populateDailyPresenceForFile,
   rebuildDailyPresenceForActiveFiles,
   replaceAccountCustomEvents,
   replaceCanonicalDoctors,
@@ -398,7 +399,11 @@ export async function onRequestPost(context) {
         expectedFileIds: sanitizeRepositoryFileIds(body?.expectedFileIds),
       });
       const accounts = await accountMirrorStatus(context.env.ROSTER_DB).catch(() => ({ unavailable: true, profiles: 0, claims: 0, states: 0 }));
-      return Response.json({ ok: true, ...status, accounts });
+      const response = { ok: true, ...status, accounts };
+      if (body?.includeAvailableDoctors === true) {
+        response.availableDoctors = await repositoryDoctorCandidates(null, null, context.env.ROSTER_DB, { hideZeroEventStandalone: true });
+      }
+      return Response.json(response);
     }
 
     if (action === "appendConsoleMessage") {
@@ -439,16 +444,25 @@ export async function onRequestPost(context) {
         body?.doctors || [],
         body?.eventsByDoctor || {},
         body?.issuesByDoctor || {},
+        { deferDailyPresence: true },
       );
       await propagateDerivedShiftCodeIssues(context.env.ROSTER_DB, body?.doctors || [], body?.issuesByDoctor || {});
       const supersession = await reconcileRosterFileSupersession(context.env.ROSTER_DB, filePayload, { uploaderEmail: email });
-      await refreshCanonicalDoctors(context.env.ROSTER_DB);
+      await scheduleDeferredDailyPresenceIndexing(context, {
+        fileId: String(filePayload.id || ""),
+        sourceType: String(filePayload.sourceType || "").toLowerCase(),
+        doctors: body?.doctors || [],
+        eventsByDoctor: body?.eventsByDoctor || {},
+        reason: "saveDerivedCalendarFile",
+      });
+      deferCanonicalDoctorRefresh(context, "saveDerivedCalendarFile");
       scheduleSnapshotWarmupForAllAccounts(context, { reason: "saveDerivedCalendarFile" });
       if (body?.skipStatus === true) {
         return Response.json({
           ok: true,
           result,
           supersession,
+          indexing: "scheduled",
           fileStatus: {
             id: String(filePayload.id || ""),
             name: String(filePayload.name || "roster.xlsx"),
@@ -925,7 +939,7 @@ export async function onRequestPost(context) {
         const removedIds = [...new Set(removedImportIds)];
         await Promise.all(removedIds.map((id) => deleteDerivedRosterFile(context.env.ROSTER_DB, id).catch(() => null)));
         await Promise.all(removedIds.map((id) => deleteRawRosterFile(context.env.ROSTER_DB, id).catch(() => null)));
-        await refreshCanonicalDoctors(context.env.ROSTER_DB);
+        deferCanonicalDoctorRefresh(context, "save-removeImports");
         state.imports = state.imports.filter((item) => {
           const repoId = item.repoId || item.repositoryId || item.id;
           return !removedIds.includes(repoId);
@@ -3592,6 +3606,38 @@ async function refreshCanonicalDoctors(db) {
   });
   await replaceCanonicalDoctors(db, doctors);
   return doctors;
+}
+
+function deferCanonicalDoctorRefresh(context, reason = "roster-change") {
+  const run = () => refreshCanonicalDoctors(context.env.ROSTER_DB).catch((error) => {
+    console.warn("Deferred canonical doctor refresh failed", {
+      reason,
+      error: error?.message || String(error),
+    });
+  });
+  if (typeof context.waitUntil === "function") {
+    context.waitUntil(run());
+    return;
+  }
+  return run();
+}
+
+function scheduleDeferredDailyPresenceIndexing(context, job = {}) {
+  const run = () => populateDailyPresenceForFile(context.env.ROSTER_DB, job.fileId, job.eventsByDoctor || {}, {
+    sourceType: job.sourceType || "",
+    doctors: job.doctors || [],
+  }).catch((error) => {
+    console.warn("Deferred daily presence indexing failed", {
+      reason: job.reason || "roster-change",
+      fileId: job.fileId || "",
+      error: error?.message || String(error),
+    });
+  });
+  if (typeof context.waitUntil === "function") {
+    context.waitUntil(run());
+    return Promise.resolve();
+  }
+  return run();
 }
 
 function attachClaimedAccountMetadata(doctors, accountIndex) {

@@ -291,6 +291,7 @@ let adminUserSeniorityFilter = "";
 let calendarStoreStatus = null;
 let calendarStoreStatusError = "";
 let rosterSyncStates = new Map();
+const pendingRemovedImportIds = new Set();
 let rosterSyncRefreshTimer = 0;
 let lastRosterPersistence = null;
 let adminConsoleOpen = false;
@@ -373,38 +374,63 @@ fileInput.addEventListener("change", async () => {
   }
   await mergeFiles(accepted);
   fileInput.value = "";
-  await analyzeFiles();
+  await refreshCreatorCalendarAfterFileChange();
 });
 
 let rosterDragDepth = 0;
+let rosterDragStaleTimer = 0;
+let rosterDragAborted = false;
+
+function handleRosterDragOver(event) {
+  if (!hasFileDrag(event.dataTransfer)) return;
+  event.preventDefault();
+  if (rosterDragAborted) {
+    event.dataTransfer.dropEffect = "none";
+    touchRosterDragActivity();
+    return;
+  }
+  syncRosterDragState(event.dataTransfer);
+  touchRosterDragActivity();
+}
 
 for (const eventName of ["dragenter", "dragover"]) {
   window.addEventListener(eventName, (event) => {
     if (!hasFileDrag(event.dataTransfer)) return;
     event.preventDefault();
-    if (eventName === "dragenter") rosterDragDepth += 1;
-    syncRosterDragState(event.dataTransfer);
+    if (eventName === "dragenter" && !rosterDragAborted) rosterDragDepth += 1;
+    handleRosterDragOver(event);
   });
 }
 
 window.addEventListener("dragleave", (event) => {
   if (!hasFileDrag(event.dataTransfer)) return;
   event.preventDefault();
-  rosterDragDepth = Math.max(0, rosterDragDepth - 1);
-  if (rosterDragDepth === 0) clearRosterDragState();
+  const related = event.relatedTarget;
+  if (related && document.documentElement.contains(related)) return;
+  if (!rosterDragAborted) rosterDragDepth = Math.max(0, rosterDragDepth - 1);
+  if (rosterDragDepth === 0 || rosterDragAborted) clearRosterDragState();
 });
 
 window.addEventListener("dragend", clearRosterDragState);
 
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  if (!document.body.classList.contains("is-roster-dragging") && !rosterDragAborted) return;
+  event.preventDefault();
+  abortRosterFileDrag();
+}, true);
+
 window.addEventListener("drop", async (event) => {
   if (!hasFileDrag(event.dataTransfer)) return;
   event.preventDefault();
+  const wasAborted = rosterDragAborted;
   clearRosterDragState();
+  if (wasAborted) return;
   const accepted = validateIncomingFiles([...event.dataTransfer.files]);
   if (!accepted.length) return;
   if (!await validateFreshRosterUploads(accepted)) return;
   await mergeFiles(accepted);
-  await analyzeFiles();
+  await refreshCreatorCalendarAfterFileChange();
 });
 
 filesButton?.addEventListener("click", openFilesModal);
@@ -1428,17 +1454,62 @@ function hasFileDrag(dataTransfer) {
 }
 
 function syncRosterDragState(dataTransfer) {
-  const supported = isSupportedRosterDrag(dataTransfer);
-  document.body.classList.toggle("is-roster-dragging", supported);
-  rosterDropOverlay.classList.toggle("hidden", !supported);
-  rosterDropOverlay.setAttribute("aria-hidden", supported ? "false" : "true");
+  if (rosterDragAborted) return;
+  const active = shouldShowRosterDragOverlay(dataTransfer);
+  document.body.classList.toggle("is-roster-dragging", active);
+  rosterDropOverlay.classList.toggle("hidden", !active);
+  rosterDropOverlay.setAttribute("aria-hidden", active ? "false" : "true");
+  if (active) touchRosterDragActivity();
+}
+
+function abortRosterFileDrag() {
+  rosterDragAborted = true;
+  rosterDragDepth = 0;
+  clearRosterDragVisualState();
+  touchRosterDragActivity();
+}
+
+function clearRosterDragVisualState() {
+  clearTimeout(rosterDragStaleTimer);
+  rosterDragStaleTimer = 0;
+  document.body.classList.remove("is-roster-dragging");
+  rosterDropOverlay.classList.add("hidden");
+  rosterDropOverlay.setAttribute("aria-hidden", "true");
 }
 
 function clearRosterDragState() {
   rosterDragDepth = 0;
-  document.body.classList.remove("is-roster-dragging");
-  rosterDropOverlay.classList.add("hidden");
-  rosterDropOverlay.setAttribute("aria-hidden", "true");
+  rosterDragAborted = false;
+  clearRosterDragVisualState();
+}
+
+function touchRosterDragActivity() {
+  clearTimeout(rosterDragStaleTimer);
+  rosterDragStaleTimer = window.setTimeout(() => {
+    rosterDragStaleTimer = 0;
+    if (rosterDragAborted || document.body.classList.contains("is-roster-dragging")) clearRosterDragState();
+  }, 250);
+}
+
+function shouldShowRosterDragOverlay(dataTransfer) {
+  if (!hasFileDrag(dataTransfer)) return false;
+
+  const files = [...(dataTransfer?.files || [])];
+  if (files.length) return files.every(isSupportedRosterFile);
+
+  const fileItems = [...(dataTransfer?.items || [])].filter((item) => item.kind === "file");
+  if (!fileItems.length) return false;
+
+  const itemFiles = fileItems.map((item) => item.getAsFile?.()).filter(Boolean);
+  if (itemFiles.length === fileItems.length) return itemFiles.every(isSupportedRosterFile);
+
+  const itemsWithTypes = fileItems.filter((item) => String(item.type || "").trim());
+  if (itemsWithTypes.length) {
+    if (itemsWithTypes.some((item) => !isSupportedRosterMimeType(item.type))) return false;
+    if (itemsWithTypes.length === fileItems.length) return true;
+  }
+
+  return true;
 }
 
 function isSupportedRosterDrag(dataTransfer) {
@@ -1944,7 +2015,8 @@ function renderFilesMarkup({ canRemove = false, heading = "", description = "", 
         fromRosterDatabase: true,
       }))
     : [];
-  const displayFiles = selectedFiles.length ? selectedFiles : statusOnlyEntries;
+  const displayFiles = rosterDisplayFiles(hasUsableStatus, statusOnlyEntries)
+    .filter((entry) => !pendingRemovedImportIds.has(entry.id));
   if (!displayFiles.length) {
     const emptyMessage = canRemove
       ? "Add rosters and they will stay here until removed."
@@ -10135,6 +10207,149 @@ function importRefsToClientEntries(refs = []) {
     .filter((entry) => entry.id);
 }
 
+function rosterStoreFileToClientEntry(file) {
+  if (!file?.id) return null;
+  return {
+    id: file.id,
+    repoId: file.id,
+    name: file.name || "roster.xlsx",
+    sourceType: file.sourceType || "",
+    size: Number(file.size || 0),
+    lastModified: Number(file.lastModified || 0),
+    addedAt: file.uploadedAt || "",
+    fromRosterDatabase: true,
+  };
+}
+
+function mergeRosterFileEntries(baseEntries, status = calendarStoreStatus, options = {}) {
+  if (!isViewingCreatorAccount() || !status || !Array.isArray(status.files)) {
+    return Array.isArray(baseEntries) ? [...baseEntries] : [];
+  }
+  const storeIds = new Set(status.files.map((file) => file.id).filter(Boolean));
+  const removedIds = new Set([
+    ...(Array.isArray(options.removedIds) ? options.removedIds.filter(Boolean) : []),
+    ...pendingRemovedImportIds,
+  ]);
+  const byId = new Map();
+
+  for (const entry of baseEntries || []) {
+    if (!entry?.id || removedIds.has(entry.id)) continue;
+    if (options.removeMissingFromStore && storeIds.size && !storeIds.has(entry.id)) continue;
+    byId.set(entry.id, entry);
+  }
+
+  for (const file of status.files) {
+    if (!file?.id || removedIds.has(file.id)) continue;
+    const storeEntry = rosterStoreFileToClientEntry(file);
+    if (!storeEntry) continue;
+    const existing = byId.get(file.id);
+    if (existing) {
+      byId.set(file.id, {
+        ...storeEntry,
+        ...existing,
+        file: existing.file || null,
+        addedAt: existing.addedAt || storeEntry.addedAt,
+        fromRosterDatabase: !existing.file,
+      });
+    } else {
+      byId.set(file.id, storeEntry);
+    }
+  }
+
+  return [...byId.values()].sort(
+    (left, right) => (left.addedAt || "").localeCompare(right.addedAt || "") || String(left.name || "").localeCompare(String(right.name || "")),
+  );
+}
+
+function mergeSelectedFilesWithRosterStoreStatus(status = calendarStoreStatus, options = {}) {
+  const next = mergeRosterFileEntries(selectedFiles, status, options);
+  const prevKey = selectedFiles.map((entry) => entry.id).join("|");
+  const nextKey = next.map((entry) => entry.id).join("|");
+  selectedFiles = next;
+  if (prevKey !== nextKey || options.force === true) rememberCreatorCalendarSourceRefs();
+  return selectedFiles;
+}
+
+function rosterDisplayFiles(hasUsableStatus, statusOnlyEntries = []) {
+  if (isViewingCreatorAccount() && hasUsableStatus && (calendarStoreStatus?.files || []).length) {
+    return mergeRosterFileEntries(selectedFiles, calendarStoreStatus);
+  }
+  return selectedFiles.length ? selectedFiles : statusOnlyEntries;
+}
+
+function selectedFilesNeedD1CalendarReload() {
+  if (!isViewingCreatorAccount() || !cloudAvailable || !selectedFiles.length) return false;
+  return selectedFiles.some((entry) => !entry.file);
+}
+
+function selectedFilesHavePendingD1Uploads(status = calendarStoreStatus) {
+  if (!selectedFiles.length) return false;
+  const persistedIds = new Set(status?.expectedFiles?.persistedFileIds || []);
+  const failedIds = new Set(
+    [...rosterSyncStates.entries()]
+      .filter(([, state]) => state.status === "failed")
+      .map(([id]) => id),
+  );
+  return selectedFiles.some(
+    (entry) => entry?.file && (!persistedIds.has(entry.id) || failedIds.has(entry.id)),
+  );
+}
+
+async function refreshCreatorCalendarAfterFileChange(options = {}) {
+  if (!selectedFiles.length) return;
+  if (options.refreshStatus !== false && isCreatorAuthenticated()) {
+    await refreshCalendarStoreStatus({ silent: true }).catch(() => null);
+  }
+  if (isViewingCreatorAccount()) {
+    mergeSelectedFilesWithRosterStoreStatus(calendarStoreStatus, {
+      removeMissingFromStore: options.removeMissingFromStore === true,
+      removedIds: options.removedIds || [],
+      force: options.force === true,
+    });
+  }
+  const pendingUploads = selectedFiles.filter((entry) => entry?.file);
+  if (pendingUploads.length && selectedFilesHavePendingD1Uploads(calendarStoreStatus)) {
+    try {
+      await saveSelectedRosterFilesToD1(pendingUploads);
+    } catch (error) {
+      setStatus(error.message || "Could not save roster file to D1.", true);
+    }
+    if (isCreatorAuthenticated()) {
+      await refreshCalendarStoreStatus({ silent: true }).catch(() => null);
+      mergeSelectedFilesWithRosterStoreStatus(calendarStoreStatus, { force: true });
+    }
+    renderFileSurfaces();
+  }
+  if (selectedFilesNeedD1CalendarReload()) {
+    setStatus("Loading calendar...");
+    try {
+      const loaded = await loadCloudCalendarEvents({ preserveExistingSnapshot: false });
+      if (loaded && currentSnapshot) {
+        renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+        setStatus("Calendar refreshed.");
+      } else if (!loaded) {
+        setStatus("Could not reload calendar from roster database.", true);
+      }
+    } catch (error) {
+      setStatus(error.message || "Could not reload calendar from roster database.", true);
+    }
+    await refreshAvailableDoctorsAfterRosterChange();
+    return;
+  }
+  await analyzeFiles(options.analyzeOptions || {});
+  await refreshAvailableDoctorsAfterRosterChange();
+}
+
+async function refreshAvailableDoctorsAfterRosterChange() {
+  if (!isCreatorAuthenticated() || !cloudAvailable) return;
+  for (const delay of [0, 3000]) {
+    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+    await refreshCalendarStoreStatus({ silent: true, includeAvailableDoctors: true }).catch(() => null);
+  }
+  renderDoctorState();
+  syncAccountsButton();
+}
+
 function normalizeSavedExportRange(value) {
   const normalized = normalizeExportRangeState(value);
   return {
@@ -11277,7 +11492,9 @@ async function saveCloudStateNow(snapshot = null) {
     renderLoginState();
     return;
   }
-  const state = await buildCloudState(payload.imports, payload.session);
+  const state = (payload.removedImportIds || []).length
+    ? await buildCloudStateWithoutRosterSync(payload.imports, payload.session)
+    : await buildCloudState(payload.imports, payload.session);
   const response = await fetch("/api/state", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -11456,14 +11673,19 @@ async function refreshCalendarStoreStatus(options = {}) {
     const data = await calendarStoreRequest("calendarStoreStatus", {
       selectedDoctorKey: selectedDoctor()?.key || OWNER_DOCTOR_KEY,
       expectedFileIds: selectedFiles.map((entry) => entry.id),
+      ...(options.includeAvailableDoctors ? { includeAvailableDoctors: true } : {}),
     });
     calendarStoreStatus = { ...data, checkedAt: new Date().toISOString() };
+    if (Array.isArray(data.availableDoctors) && data.availableDoctors.length) {
+      availableRosterDoctors = sanitizeAvailableRosterDoctors(data.availableDoctors);
+    }
     if (isCreatorAuthenticated() && Array.isArray(data.files) && data.files.length && !selectedFiles.some((entry) => entry.file)) {
       selectedFiles = importRefsToClientEntries(data.files);
       rememberCreatorCalendarSourceRefs();
       renderFilesList();
     }
     calendarStoreStatusError = "";
+    reconcileRosterSyncStates(calendarStoreStatus);
     if (!options.silent) setStatus("Roster database status checked.");
   } catch (error) {
     calendarStoreStatusError = error.message || "Could not check roster database status.";
@@ -11614,12 +11836,45 @@ async function calendarStoreRequest(action, extra = {}) {
   return await readJsonResponse(response, "SQL calendar store request failed.");
 }
 
+async function calendarStoreRequestWithRetry(action, extra = {}, options = {}) {
+  const attempts = Math.max(1, Number(options.attempts || 1));
+  let lastError = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const response = await fetch("/api/state", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action,
+          email: authUserEmail || currentUserEmail,
+          password: authUserPassword || currentUserPassword,
+          ...extra,
+        }),
+      });
+      if (response.status === 503 && attempt + 1 < attempts) {
+        await new Promise((resolve) => setTimeout(resolve, 600 * (attempt + 1)));
+        continue;
+      }
+      return await readJsonResponse(response, "SQL calendar store request failed.");
+    } catch (error) {
+      lastError = error;
+      if (attempt + 1 >= attempts) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 600 * (attempt + 1)));
+    }
+  }
+  throw lastError || new Error("SQL calendar store request failed.");
+}
+
 async function buildCloudState(imports = selectedFiles, session = buildActiveSessionState()) {
   await saveSelectedRosterFilesToD1(imports);
+  return buildCloudStateWithoutRosterSync(imports, session);
+}
+
+async function buildCloudStateWithoutRosterSync(imports = selectedFiles, session = buildActiveSessionState()) {
   const subscriptionFeeds = await buildSubscriptionFeeds(session);
   return {
     version: 1,
-    imports: imports.map(importRefForWorkspace),
+    imports: (imports || []).map(importRefForWorkspace),
     session,
     subscriptionFeeds,
   };
@@ -11648,11 +11903,11 @@ async function saveSelectedRosterFilesToD1(imports = selectedFiles, options = {}
       setRosterSyncState(entry, "parsing");
       const payload = await buildDerivedCalendarFilePayload(entry, entry);
       setRosterSyncState(entry, "saving");
-      latestStatus = await calendarStoreRequest("saveDerivedCalendarFile", {
+      latestStatus = await calendarStoreRequestWithRetry("saveDerivedCalendarFile", {
         ...payload,
         expectedFileIds,
         skipStatus: true,
-      });
+      }, { attempts: 2 });
       latestStatus = mergeLightweightRosterStatus(latestStatus, payload.file, latestStatus.fileStatus, expectedFileIds);
       saveResults.push({ entry, ok: true });
       setRosterSyncState(entry, "synced");
@@ -11674,7 +11929,7 @@ async function saveSelectedRosterFilesToD1(imports = selectedFiles, options = {}
     }
   }
   if (latestStatus) calendarStoreStatus = { ...latestStatus, checkedAt: new Date().toISOString() };
-  invalidateCalendarSnapshotCache();
+  reconcileRosterSyncStates(calendarStoreStatus);
   const summary = summarizeRosterPersistence(entries, calendarStoreStatus, saveResults);
   lastRosterPersistence = summary;
   renderFileSurfaces();
@@ -11684,6 +11939,7 @@ async function saveSelectedRosterFilesToD1(imports = selectedFiles, options = {}
     error.isRosterPersistenceError = true;
     throw error;
   }
+  invalidateCalendarSnapshotCache();
   setStatus(`Calendar saved to D1. ${summary.persistedCount}/${summary.expectedCount} roster file${summary.expectedCount === 1 ? "" : "s"} confirmed.`);
   finishRosterSync();
   return summary;
@@ -11754,9 +12010,44 @@ function scheduleRosterSyncRefresh() {
   rosterSyncRefreshTimer = setInterval(() => void refreshCalendarStoreStatus({ silent: true }), 5000);
 }
 
+function isRosterFileStatusHealthy(file) {
+  if (!file?.id) return false;
+  return file.status === "populated" || Number(file.eventCount || 0) > 0;
+}
+
+function reconcileRosterSyncStates(status = calendarStoreStatus) {
+  if (!status || !Array.isArray(status.files)) return false;
+  const filesById = new Map(status.files.map((file) => [file.id, file]));
+  const knownIds = new Set([
+    ...selectedFiles.map((entry) => entry.id),
+    ...status.files.map((file) => file.id),
+  ]);
+  const activeStatuses = new Set(["pending", "uploading-source", "parsing", "saving"]);
+  let changed = false;
+  for (const [id, state] of rosterSyncStates.entries()) {
+    if (activeStatuses.has(state.status)) continue;
+    const file = filesById.get(id);
+    if (state.status === "failed" && isRosterFileStatusHealthy(file)) {
+      rosterSyncStates.delete(id);
+      changed = true;
+      continue;
+    }
+    if ((state.status === "failed" || state.status === "synced") && !knownIds.has(id)) {
+      rosterSyncStates.delete(id);
+      changed = true;
+    }
+  }
+  if (changed) renderFileSurfaces();
+  return changed;
+}
+
 function rosterSyncLabel(entry) {
   const state = rosterSyncStates.get(entry.id);
   if (!state || state.status === "synced") return "";
+  if (state.status === "failed") {
+    const statusFile = (calendarStoreStatus?.files || []).find((file) => file.id === entry.id);
+    if (isRosterFileStatusHealthy(statusFile)) return "";
+  }
   const labels = { pending: "Queued to sync", "uploading-source": "Retaining source file…", parsing: "Parsing roster file…", saving: "Saving to roster database…", failed: `Sync failed${state.message ? `: ${state.message}` : ""}` };
   return `<span>${escapeHtml(labels[state.status] || "")}</span>`;
 }
@@ -12664,36 +12955,57 @@ function removeImportRefsFromCurrentSnapshot(id) {
 }
 
 async function removeStoredImport(id) {
+  if (!id || pendingRemovedImportIds.has(id)) return;
+  const removedEntry = selectedFiles.find((entry) => entry.id === id)
+    || (calendarStoreStatus?.files || []).find((file) => file.id === id);
+  const removedName = removedEntry?.name || "roster file";
+  pendingRemovedImportIds.add(id);
   cancelScheduledCloudStateSave();
+  rosterSyncStates.delete(id);
   selectedFiles = selectedFiles.filter((entry) => entry.id !== id);
   removeImportRefsFromCurrentSnapshot(id);
   removeImportRefsFromWorkspaceStore(id);
   saveCurrentSessionState();
-  try {
-    await deleteStoredImportRecords([id]);
-    await garbageCollectStoredImports();
-  } catch {
-    // Keep in-memory removal even if persistent storage is unavailable.
-  }
   renderFileSurfaces();
+  setStatus(`Removing ${removedName}...`);
   try {
-    setStatus("Removing roster file...");
-    await saveCloudState({
-      ...snapshotCloudSavePayload(),
-      imports: selectedFiles.map((entry) => ({ ...entry })),
-      removedImportIds: [id],
-    });
-  } catch (error) {
-    setStatus(error.message || "Could not save file removal.", true);
+    try {
+      await deleteStoredImportRecords([id]);
+      await garbageCollectStoredImports();
+    } catch {
+      // Keep in-memory removal even if persistent storage is unavailable.
+    }
+    try {
+      await saveCloudState({
+        ...snapshotCloudSavePayload(),
+        imports: selectedFiles.map((entry) => ({ ...entry })),
+        removedImportIds: [id],
+      });
+    } catch (error) {
+      setStatus(error.message || "Could not save file removal.", true);
+      scheduleCloudStateSave();
+    }
+    if (!selectedFiles.length) {
+      resetDerivedState({ preserveSession: true });
+      setStatus("Add a roster file to begin.");
+      return;
+    }
+    try {
+      await refreshCreatorCalendarAfterFileChange({
+        refreshStatus: true,
+        removeMissingFromStore: true,
+        removedIds: [id],
+        analyzeOptions: { preserveVisiblePreview: true },
+      });
+    } catch (error) {
+      setStatus(error.message || "Could not refresh calendar after file removal.", true);
+    }
+    scheduleCloudStateSave();
+    setStatus(`${removedName} removed.`);
+  } finally {
+    pendingRemovedImportIds.delete(id);
+    renderFileSurfaces();
   }
-  if (!selectedFiles.length) {
-    resetDerivedState({ preserveSession: true });
-    setStatus("Add a roster file to begin.");
-    return;
-  }
-  await analyzeFiles();
-  scheduleCloudStateSave();
-  renderFileSurfaces();
 }
 
 function loadConflictSelections() {

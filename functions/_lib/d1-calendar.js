@@ -431,7 +431,11 @@ export async function upsertDerivedRosterFile(db, file, storedImport) {
   return { ok: true, doctors: doctors.length, events: totalEvents };
 }
 
-export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor, issuesByDoctor = {}) {
+const D1_MAX_BIND_PARAMS = 100;
+const D1_MAX_BATCH_STATEMENTS = 800;
+const D1_PRESENCE_BATCH_STATEMENTS = 80;
+
+export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor, issuesByDoctor = {}, options = {}) {
   if (!db?.prepare || !file?.id) return { ok: false, reason: "missing-input" };
   await ensureCalendarSchema(db);
   const sourceType = normalizeSourceType(file.sourceType);
@@ -518,10 +522,12 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
   statements.push(...bulkInsertIssueStatements(db, issueRows));
   await deleteDailyPresenceForFile(db, file.id);
   await runTransactionalBatch(db, statements);
-  await populateDailyPresenceForFile(db, file.id, eventsByDoctor, {
-    sourceType,
-    doctors: safeDoctors,
-  });
+  if (options.deferDailyPresence !== true) {
+    await populateDailyPresenceForFile(db, file.id, eventsByDoctor, {
+      sourceType,
+      doctors: safeDoctors,
+    });
+  }
   return { ok: true, doctors: safeDoctors.length, events: eventRows.length, issues: issueRows.length };
 }
 
@@ -1075,14 +1081,14 @@ export async function upsertAccountMirror(db, record, options = {}) {
     `).bind(String(record.subscriptionToken || ""), email, String(record.createdAt || updatedAt), updatedAt).run();
   }
   const claims = sanitizeAccountClaims(record.claims);
-  for (const chunk of chunkRows(claims.map((claim) => [
+  for (const chunk of chunkRowsForBindLimit(claims.map((claim) => [
     email,
     claim.sourceType,
     claim.key,
     claim.displayName,
     claim.matchedAt,
     updatedAt,
-  ]), 20)) {
+  ]), 6, D1_MAX_BIND_PARAMS)) {
     if (!chunk.length) continue;
     await db.prepare(`
       INSERT INTO account_claims (email, source_type, doctor_key, display_name, matched_at, updated_at)
@@ -1968,14 +1974,17 @@ export async function populateDailyPresenceForFile(db, fileId, eventsByDoctor = 
   await insertDailyPresenceRows(db, rows);
 }
 
-async function insertDailyPresenceRows(db, rows) {
-  for (const chunk of chunkRows(rows, 100)) {
-    if (!chunk.length) continue;
-    await db.prepare(`
+function dailyPresenceInsertStatements(db, rows) {
+  return chunkRowsForBindLimit(rows, 5, D1_MAX_BIND_PARAMS)
+    .filter((chunk) => chunk.length)
+    .map((chunk) => db.prepare(`
       INSERT OR IGNORE INTO roster_daily_presence (date, source_type, doctor_key, display_name, event_id)
       VALUES ${chunk.map(() => "(?, ?, ?, ?, ?)").join(", ")}
-    `).bind(...chunk.flat()).run();
-  }
+    `).bind(...chunk.flat()));
+}
+
+async function insertDailyPresenceRows(db, rows) {
+  await runStatementBatches(db, dailyPresenceInsertStatements(db, rows), D1_PRESENCE_BATCH_STATEMENTS);
 }
 
 export async function rebuildDailyPresenceForFile(db, fileId) {
@@ -2364,7 +2373,7 @@ async function bulkUpsertDoctors(db, sourceType, doctors, updatedAt) {
 }
 
 function bulkUpsertDoctorStatements(db, sourceType, doctors, updatedAt) {
-  return chunkRows(doctors.map((doctor) => [sourceType, doctor.key, doctor.displayName, updatedAt]), 20)
+  return chunkRowsForBindLimit(doctors.map((doctor) => [sourceType, doctor.key, doctor.displayName, updatedAt]), 4, D1_MAX_BIND_PARAMS)
     .filter((chunk) => chunk.length)
     .map((chunk) => db.prepare(`
       INSERT INTO roster_doctors (source_type, doctor_key, display_name, updated_at)
@@ -2382,7 +2391,7 @@ async function bulkInsertFileDoctors(db, fileId, sourceType, doctors) {
 }
 
 function bulkInsertFileDoctorStatements(db, fileId, sourceType, doctors) {
-  return chunkRows(doctors.map((doctor) => [fileId, sourceType, doctor.key, doctor.displayName]), 20)
+  return chunkRowsForBindLimit(doctors.map((doctor) => [fileId, sourceType, doctor.key, doctor.displayName]), 4, D1_MAX_BIND_PARAMS)
     .filter((chunk) => chunk.length)
     .map((chunk) => db.prepare(`
       INSERT INTO roster_file_doctors (file_id, source_type, doctor_key, display_name)
@@ -2419,12 +2428,24 @@ function bulkInsertIssueStatements(db, rows) {
     `).bind(...chunk.flat()));
 }
 
-async function runTransactionalBatch(db, statements) {
+async function runStatementBatches(db, statements, batchSize = D1_MAX_BATCH_STATEMENTS) {
   if (!statements.length) return [];
-  if (typeof db.batch === "function") return await db.batch(statements);
   const results = [];
-  for (const statement of statements) results.push(await statement.run());
+  for (const chunk of chunkRows(statements, batchSize)) {
+    if (!chunk.length) continue;
+    if (typeof db.batch === "function") results.push(...(await db.batch(chunk)));
+    else for (const statement of chunk) results.push(await statement.run());
+  }
   return results;
+}
+
+async function runTransactionalBatch(db, statements) {
+  return runStatementBatches(db, statements, D1_MAX_BATCH_STATEMENTS);
+}
+
+function chunkRowsForBindLimit(rows, columnsPerRow, maxParams = D1_MAX_BIND_PARAMS) {
+  const rowChunkSize = Math.max(1, Math.floor(maxParams / Math.max(1, columnsPerRow)));
+  return chunkRows(rows, rowChunkSize);
 }
 
 function chunkRows(rows, size) {

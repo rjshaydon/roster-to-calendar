@@ -119,6 +119,36 @@ assert.match(
 assert.match(appSource, /function validateDoctorProfileCalendarInBackground/, "doctor-profile switching should validate cached snapshots in the background");
 assert.match(appSource, /function queueCreatorSwitchTargetPrefetch\(\)/, "creator login should prefetch switch targets into browser snapshot cache");
 assert.match(
+  appSource.match(/function syncRosterDragState[\s\S]*?function isSupportedRosterDrag/)?.[0] || "",
+  /shouldShowRosterDragOverlay\(dataTransfer\)/,
+  "roster drag overlay should use supported-only logic with macOS ambiguity fallback",
+);
+assert.match(
+  appSource.match(/window\.addEventListener\(\"dragleave\"[\s\S]*?window\.addEventListener\(\"dragend\"/)?.[0] || "",
+  /relatedTarget[\s\S]*document\.documentElement\.contains\(related\)/,
+  "roster drag overlay should ignore dragleave events that stay inside the page",
+);
+assert.match(
+  styleSource,
+  /body\.is-roster-dragging #addRosterFilesButton/,
+  "roster drag overlay should spotlight the add roster files button",
+);
+assert.match(
+  appSource.match(/function clearRosterDragState[\s\S]*?function shouldShowRosterDragOverlay/)?.[0] || "",
+  /touchRosterDragActivity/,
+  "roster drag overlay should clear when the drag leaves the page without a drop",
+);
+assert.match(
+  appSource.match(/document\.addEventListener\(\"keydown\"[\s\S]*?window\.addEventListener\(\"drop\"/)?.[0] || "",
+  /Escape[\s\S]*abortRosterFileDrag/,
+  "escape should abort an active roster file drag",
+);
+assert.match(
+  appSource.match(/function handleRosterDragOver[\s\S]*?function syncRosterDragState/)?.[0] || "",
+  /rosterDragAborted[\s\S]*dropEffect = \"none\"/,
+  "aborted roster drags should reject drops until the drag session ends",
+);
+assert.match(
   d1CalendarSource.match(/export async function queryCalendarRevision[\s\S]*?export async function upsertAccountMirror/)?.[0] || "",
   /FROM parser_rules[\s\S]*local_parser_extensions_json/,
   "calendar revisions should include parser-rule state so resolved warnings invalidate stale snapshots",
@@ -268,6 +298,11 @@ assert.match(
   "account saves should keep custom-event truth in D1 rows rather than session JSON",
 );
 assert.match(
+  stateSource.match(/if \(action === "save"\)[\s\S]*?if \(action === "loadDoctorProfile"\)/)?.[0] || "",
+  /deferCanonicalDoctorRefresh\(context, "save-removeImports"\)/,
+  "roster deletion saves should defer canonical doctor refresh instead of blocking the response",
+);
+assert.match(
   stateSource.match(/if \(action === "resolveAccountClaims"\)[\s\S]*?if \(action === "adminLoadUser"\)/)?.[0] || "",
   /resolvedClaims[\s\S]*includeAvailableDoctors:[\s\S]*&& !resolvedClaims\.length/,
   "claim resolution should only load full doctor candidates while an account still has no claims",
@@ -324,8 +359,23 @@ assert.match(
 );
 assert.match(
   appSource.match(/function renderFilesMarkup[\s\S]*?function renderFilesList/)?.[0] || "",
-  /statusOnlyEntries[\s\S]*const displayFiles = selectedFiles\.length \? selectedFiles : statusOnlyEntries/,
-  "Admin Files should render D1 roster status files when local selected files are empty",
+  /rosterDisplayFiles\(hasUsableStatus, statusOnlyEntries\)[\s\S]*pendingRemovedImportIds/,
+  "creator roster lists should merge D1 status files and hide files pending removal",
+);
+assert.match(
+  appSource.match(/async function removeStoredImport[\s\S]*?function loadConflictSelections/)?.[0] || "",
+  /refreshCreatorCalendarAfterFileChange[\s\S]*removeMissingFromStore: true[\s\S]*preserveVisiblePreview: true/,
+  "roster deletion should refresh the creator calendar without clearing the visible preview first",
+);
+assert.match(
+  appSource.match(/async function refreshCreatorCalendarAfterFileChange[\s\S]*?function normalizeSavedExportRange/)?.[0] || "",
+  /selectedFilesNeedD1CalendarReload\(\)[\s\S]*loadCloudCalendarEvents\(\{ preserveExistingSnapshot: false \}\)/,
+  "creator roster changes should reload the calendar from D1 when local roster blobs are unavailable",
+);
+assert.match(
+  appSource.match(/async function saveCloudStateNow[\s\S]*?async function replaceActiveRostersWithCurrentUploads/)?.[0] || "",
+  /removedImportIds[\s\S]*buildCloudStateWithoutRosterSync/,
+  "roster deletion saves should skip redundant D1 roster sync",
 );
 assert.match(
   appSource.match(/async function replaceActiveRostersWithCurrentUploads[\s\S]*?async function reparseRosterFile/)?.[0] || "",
@@ -338,9 +388,39 @@ assert.match(
   "per-file refresh should be able to hydrate status-only files from retained R2 source",
 );
 assert.match(
-  d1CalendarSource.match(/async function runTransactionalBatch[\s\S]*?function chunkRows/)?.[0] || "",
-  /db\.batch\(statements\)/,
-  "D1 roster imports should keep file replacement statements transactional",
+  d1CalendarSource.match(/async function runTransactionalBatch[\s\S]*?function chunkRowsForBindLimit/)?.[0] || "",
+  /runStatementBatches\(db, statements, D1_MAX_BATCH_STATEMENTS\)/,
+  "D1 roster imports should sub-batch large db.batch calls",
+);
+assert.match(
+  d1CalendarSource.match(/function dailyPresenceInsertStatements[\s\S]*?async function rebuildDailyPresenceForFile/)?.[0] || "",
+  /chunkRowsForBindLimit\(rows, 5/,
+  "daily presence inserts should stay under D1 bind-parameter limits",
+);
+assert.match(
+  stateSource.match(/if \(action === "saveDerivedCalendarFile"\)[\s\S]*?if \(action === "uploadRawRosterFile"\)/)?.[0] || "",
+  /deferDailyPresence: true[\s\S]*scheduleDeferredDailyPresenceIndexing[\s\S]*deferCanonicalDoctorRefresh\(context, "saveDerivedCalendarFile"\)/,
+  "derived roster saves should defer heavy indexing work",
+);
+assert.match(
+  stateSource.match(/if \(action === "calendarStoreStatus"\)[\s\S]*?if \(action === "appendConsoleMessage"\)/)?.[0] || "",
+  /includeAvailableDoctors === true[\s\S]*repositoryDoctorCandidates/,
+  "calendar status should optionally return available doctors for switcher refresh",
+);
+assert.match(
+  appSource.match(/function isRosterFileStatusHealthy[\s\S]*?function reconcileRosterSyncStates/)?.[0] || "",
+  /function isRosterFileStatusHealthy/,
+  "roster sync reconciliation should detect healthy D1 file status",
+);
+assert.match(
+  appSource.match(/function rosterSyncLabel[\s\S]*?function rosterSyncSummary/)?.[0] || "",
+  /state\.status === "failed"[\s\S]*isRosterFileStatusHealthy\(statusFile\)/,
+  "roster sync labels should clear stale failed states when D1 status is healthy",
+);
+assert.match(
+  appSource.match(/async function refreshCreatorCalendarAfterFileChange[\s\S]*?function normalizeSavedExportRange/)?.[0] || "",
+  /refreshAvailableDoctorsAfterRosterChange\(\)/,
+  "creator roster changes should refresh switcher doctors after add or delete",
 );
 assert.match(
   d1CalendarSource.match(/function bulkInsertEventStatements[\s\S]*?function bulkInsertIssueStatements/)?.[0] || "",
@@ -514,6 +594,11 @@ assert.match(
   appSource.match(/async function saveSelectedRosterFilesToD1[\s\S]*?function emptyRosterPersistenceSummary/)?.[0] || "",
   /entriesToSave = options\.force === true[\s\S]*entries\.filter\(\(entry\) => !persistedIds\.has\(entry\.id\) \|\| failedIds\.has\(entry\.id\)\)/,
   "ordinary roster sync should process only missing or failed files",
+);
+assert.match(
+  appSource.match(/async function saveSelectedRosterFilesToD1[\s\S]*?function emptyRosterPersistenceSummary/)?.[0] || "",
+  /if \(!summary\.complete\)[\s\S]*invalidateCalendarSnapshotCache\(\)/,
+  "roster sync should invalidate snapshot cache only after a successful save",
 );
 assert.match(appSource, /function rosterSyncLabel/, "file cards should expose live roster sync labels");
 assert.match(appSource, /Missing \/ unresolved shift codes/, "system card should expose unresolved shift-code review");
@@ -2497,6 +2582,65 @@ await postState(d1StateStore, {
   doctors: d1Doctors,
   eventsByDoctor: d1EventsByDoctor,
 }, d1Store);
+const d1CaseyDoctorOptions = doctorOptions([], [], caseyWorkbook);
+const d1CaseyDoctors = [];
+const seenCaseyDoctorKeys = new Set();
+for (const doctor of d1CaseyDoctorOptions) {
+  const aliases = Array.isArray(doctor.aliases) && doctor.aliases.length
+    ? doctor.aliases.filter((alias) => String(alias.sourceType || "").toLowerCase() === "casey")
+    : [{ key: doctor.key, displayName: doctor.displayName, sourceType: "casey" }];
+  for (const alias of aliases) {
+    const key = String(alias.key || doctor.key || "").trim();
+    if (!key || seenCaseyDoctorKeys.has(key)) continue;
+    seenCaseyDoctorKeys.add(key);
+    d1CaseyDoctors.push({
+      key,
+      displayName: alias.displayName || doctor.displayName,
+      sourceType: "casey",
+    });
+  }
+}
+const d1CaseyEventsByDoctor = Object.fromEntries(d1CaseyDoctors.map((doctor) => [
+  doctor.key,
+  buildRosterView([], [], doctor.key, undefined, {}, {}, [], caseyWorkbook).events,
+]));
+const d1CaseyStore = new MemoryStore();
+const d1CaseyDb = new MemoryD1();
+await postState(d1CaseyStore, {
+  action: "login",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+}, d1CaseyDb);
+const caseySave = await postState(d1CaseyStore, {
+  action: "saveDerivedCalendarFile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  file: {
+    id: "d1-casey",
+    name: "Casey_Term_2_2026_DRAFT.xlsm",
+    size: caseyBytes.length,
+    lastModified: 1,
+    addedAt: "2026-01-01T00:00:00.000Z",
+    sourceType: "casey",
+  },
+  doctors: d1CaseyDoctors,
+  eventsByDoctor: d1CaseyEventsByDoctor,
+  skipStatus: true,
+}, d1CaseyDb);
+assert.equal(caseySave.indexing, "scheduled");
+assert.ok(Number(caseySave.result?.events || 0) > 1000, "Casey roster save should persist a large event set");
+assert.ok(d1CaseyDb.dailyPresence.size > 1000, "Casey roster save should index daily presence rows");
+const caseyStatus = await postState(d1CaseyStore, {
+  action: "calendarStoreStatus",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  includeAvailableDoctors: true,
+}, d1CaseyDb);
+assert.equal(caseyStatus.files.find((file) => file.id === "d1-casey")?.status, "populated");
+assert.ok(
+  (caseyStatus.availableDoctors || []).some((doctor) => doctor.displayName === "Andrew DYALL" && doctor.sourceType === "casey"),
+  "Casey roster save should expose Casey-only doctors for switcher refresh",
+);
 const retainedRaw = await postState(d1StateStore, {
   action: "fetchRawRosterFile",
   email: "rhaydon@gmail.com",
