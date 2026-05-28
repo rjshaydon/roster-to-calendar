@@ -379,8 +379,13 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function saveSelectedRosterFilesToD1[\s\S]*?function mergeLightweightRosterStatus/)?.[0] || "",
-  /indexing === "scheduled"[\s\S]*waitForRosterFilePersistence/,
-  "scheduled roster saves should poll D1 until the upload is confirmed",
+  /failStep = "parse"[\s\S]*buildDerivedCalendarFilePayload[\s\S]*retainRosterSource/,
+  "roster save should parse before attempting source retention",
+);
+assert.match(
+  appSource.match(/function slimDerivedCalendarRequest[\s\S]*?async function saveDerivedCalendarFilePayload/)?.[0] || "",
+  /eventsByDoctor: _eventsByDoctor[\s\S]*issuesByDoctor: _issuesByDoctor/,
+  "derived calendar save requests should strip full event payloads from non-chunk phases",
 );
 assert.match(
   appSource.match(/async function saveCloudStateNow[\s\S]*?async function replaceActiveRostersWithCurrentUploads/)?.[0] || "",
