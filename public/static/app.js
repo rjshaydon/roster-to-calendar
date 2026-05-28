@@ -326,6 +326,18 @@ let ignoredIssueFingerprints = new Set();
 let lastLoginTimings = null;
 let lastAccountSwitchTimings = null;
 
+// #region agent log
+function debugLog(hypothesisId, location, message, data = {}) {
+  const payload = { sessionId: "04e966", hypothesisId, location, message, data, timestamp: Date.now(), runId: "pre-fix" };
+  console.warn("[debug-04e966]", payload);
+  fetch("http://127.0.0.1:7330/ingest/aa91ef39-4758-45c4-bdf1-4cfd1e2083f8", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "04e966" },
+    body: JSON.stringify(payload),
+  }).catch(() => {});
+}
+// #endregion
+
 const settingsInputs = Object.fromEntries(
   SETTINGS_FIELDS.map((id) => [id, document.querySelector(`#${id}`)]),
 );
@@ -2223,6 +2235,14 @@ async function updatePreview(options = {}) {
       ? "Calendar preview loaded locally. Saving roster files to D1..."
       : "Calendar loaded.");
   } catch (error) {
+    // #region agent log
+    debugLog("H1", "app.js:updatePreview", "updatePreview failed", {
+      error: error?.message || String(error),
+      doctorKey: doctor?.key || "",
+      isCreator: isViewingCreatorAccount(),
+      cloudAvailable,
+    });
+    // #endregion
     clearPreviewData();
     setStatus(error.message, true);
   }
@@ -2240,6 +2260,21 @@ async function buildBrowserPreviewData(doctor) {
   const validDoctors = new Set(rosterDoctorOptions(parsedRosterSources.mmc, parsedRosterSources.ddh, parsedRosterSources.casey, parsedRosterSources.mch).map((item) => item.key));
   const requestedKeys = new Set([doctor.key, ...(doctor.aliases || []).map((alias) => alias.key)].filter(Boolean));
   if (![...requestedKeys].some((key) => validDoctors.has(key))) {
+    // #region agent log
+    debugLog("H1", "app.js:buildBrowserPreviewData", "doctor not in parsed roster sources", {
+      doctorKey: doctor.key,
+      validDoctorCount: validDoctors.size,
+      hasParsedSources: Boolean(parsedRosterSources),
+      sourceCounts: parsedRosterSources ? {
+        mmc: parsedRosterSources.mmc?.length || 0,
+        ddh: parsedRosterSources.ddh?.length || 0,
+        casey: parsedRosterSources.casey?.length || 0,
+        mch: parsedRosterSources.mch?.length || 0,
+      } : null,
+      selectedFileIds: selectedFiles.map((entry) => entry.id),
+      selectedFilesWithBlob: selectedFiles.filter((entry) => entry?.file).length,
+    });
+    // #endregion
     throw new Error("The selected doctor was not found in the uploaded roster files.");
   }
   const baseSettings = {
@@ -9626,6 +9661,17 @@ async function returnToCreatorAccount() {
       doctorSelect.value = OWNER_DOCTOR_KEY;
     }
     if (selectedDoctor()?.key !== OWNER_DOCTOR_KEY) {
+      // #region agent log
+      debugLog("H4", "app.js:returnToCreatorAccount", "calling updatePreview instead of D1 reload", {
+        selectedDoctorKey: selectedDoctor()?.key || "",
+        ownerDoctorKey: OWNER_DOCTOR_KEY,
+        doctorSelectValue: doctorSelect?.value || "",
+        hasCurrentSnapshot: Boolean(currentSnapshot?.preview),
+        snapshotDoctorKey: currentSnapshot?.session?.doctorKey || "",
+        selectedFileCount: selectedFiles.length,
+        d1OnlyFileCount: selectedFiles.filter((entry) => !entry?.file).length,
+      });
+      // #endregion
       clearPreviewData();
       await updatePreview({ resetRange: false });
     }
@@ -11886,7 +11932,17 @@ async function waitForRosterFilePersistence(entry, expectedFileIds = [], options
   const timeoutMs = Number(options.timeoutMs || 180000);
   const pollMs = Number(options.pollMs || 2500);
   const started = Date.now();
+  let pollCount = 0;
+  // #region agent log
+  debugLog("H2", "app.js:waitForRosterFilePersistence", "poll started", {
+    entryId: entry?.id || "",
+    entryName: entry?.name || "",
+    expectedFileIds,
+    timeoutMs,
+  });
+  // #endregion
   while (Date.now() - started < timeoutMs) {
+    pollCount += 1;
     const latestStatus = await calendarStoreRequest("calendarStoreStatus", {
       selectedDoctorKey: selectedDoctor()?.key || OWNER_DOCTOR_KEY,
       expectedFileIds,
@@ -11895,9 +11951,22 @@ async function waitForRosterFilePersistence(entry, expectedFileIds = [], options
     reconcileRosterSyncStates(calendarStoreStatus);
     renderFileSurfaces();
     const statusFile = (latestStatus.files || []).find((file) => file.id === entry.id);
+    // #region agent log
+    debugLog("H2", "app.js:waitForRosterFilePersistence", "poll tick", {
+      pollCount,
+      entryId: entry?.id || "",
+      fileStatus: statusFile?.status || "missing",
+      eventCount: Number(statusFile?.eventCount || 0),
+      persistedCount: latestStatus?.expectedFiles?.persistedCount ?? null,
+      expectedCount: latestStatus?.expectedFiles?.expectedCount ?? null,
+    });
+    // #endregion
     if (isRosterFileStatusHealthy(statusFile)) return latestStatus;
     await new Promise((resolve) => setTimeout(resolve, pollMs));
   }
+  // #region agent log
+  debugLog("H2", "app.js:waitForRosterFilePersistence", "poll timed out", { entryId: entry?.id || "", pollCount });
+  // #endregion
   throw new Error(`${entry.name || "Roster file"} was not confirmed in D1 before the save timed out.`);
 }
 
@@ -11944,6 +12013,15 @@ async function saveSelectedRosterFilesToD1(imports = selectedFiles, options = {}
         expectedFileIds,
         skipStatus: true,
       }, { attempts: 2 });
+      // #region agent log
+      debugLog("H5", "app.js:saveSelectedRosterFilesToD1", "saveDerivedCalendarFile response", {
+        entryId: entry?.id || "",
+        entryName: entry?.name || "",
+        indexing: saveResponse?.indexing || "",
+        fileStatus: saveResponse?.fileStatus?.status || "",
+        eventCount: Number(saveResponse?.fileStatus?.eventCount || 0),
+      });
+      // #endregion
       if (saveResponse.indexing === "scheduled") {
         setRosterSyncState(entry, "saving", "Saving to roster database…");
         latestStatus = await waitForRosterFilePersistence(entry, expectedFileIds);

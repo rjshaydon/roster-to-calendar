@@ -3647,9 +3647,21 @@ function scheduleDeferredDailyPresenceIndexing(context, job = {}) {
 }
 
 async function runDeferredDerivedRosterSave(context, job = {}) {
+  const fileId = String(job.file?.id || "");
+  // #region agent log
+  fetch("http://127.0.0.1:7330/ingest/aa91ef39-4758-45c4-bdf1-4cfd1e2083f8", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "04e966" },
+    body: JSON.stringify({
+      sessionId: "04e966", hypothesisId: "H5", location: "state.js:runDeferredDerivedRosterSave",
+      message: "deferred save started", data: { fileId, doctorCount: (job.doctors || []).length }, timestamp: Date.now(), runId: "pre-fix",
+    }),
+  }).catch(() => {});
+  // #endregion
   const db = context.env.ROSTER_DB;
   const filePayload = job.file || {};
-  const result = await replaceDerivedRosterFile(
+  try {
+    const result = await replaceDerivedRosterFile(
     db,
     filePayload,
     job.doctors || [],
@@ -3668,7 +3680,30 @@ async function runDeferredDerivedRosterSave(context, job = {}) {
   });
   deferCanonicalDoctorRefresh(context, job.reason || "saveDerivedCalendarFile");
   scheduleSnapshotWarmupForAllAccounts(context, { reason: job.reason || "saveDerivedCalendarFile" });
+  // #region agent log
+  fetch("http://127.0.0.1:7330/ingest/aa91ef39-4758-45c4-bdf1-4cfd1e2083f8", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "04e966" },
+    body: JSON.stringify({
+      sessionId: "04e966", hypothesisId: "H5", location: "state.js:runDeferredDerivedRosterSave",
+      message: "deferred save completed", data: { fileId, events: Number(result?.events || 0) }, timestamp: Date.now(), runId: "pre-fix",
+    }),
+  }).catch(() => {});
+  // #endregion
   return { ok: true, result, supersession };
+  } catch (error) {
+    // #region agent log
+    fetch("http://127.0.0.1:7330/ingest/aa91ef39-4758-45c4-bdf1-4cfd1e2083f8", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "04e966" },
+      body: JSON.stringify({
+        sessionId: "04e966", hypothesisId: "H5", location: "state.js:runDeferredDerivedRosterSave",
+        message: "deferred save failed", data: { fileId, error: error?.message || String(error) }, timestamp: Date.now(), runId: "pre-fix",
+      }),
+    }).catch(() => {});
+    // #endregion
+    throw error;
+  }
 }
 
 function attachClaimedAccountMetadata(doctors, accountIndex) {
