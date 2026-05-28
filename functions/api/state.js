@@ -446,31 +446,21 @@ export async function onRequestPost(context) {
         email,
         reason: "saveDerivedCalendarFile",
       };
-      const deferredSave = typeof context.waitUntil === "function";
-      let saveResult = null;
-      if (deferredSave) {
-        context.waitUntil(runDeferredDerivedRosterSave(context, saveJob).catch((error) => {
-          console.warn("Deferred derived roster save failed", {
-            fileId: String(filePayload.id || ""),
-            error: error?.message || String(error),
-          });
-        }));
-      } else {
-        saveResult = await runDeferredDerivedRosterSave(context, saveJob);
-      }
+      const saveResult = await runCoreDerivedRosterSave(context, saveJob);
       const fileStatus = {
         id: String(filePayload.id || ""),
         name: String(filePayload.name || "roster.xlsx"),
         sourceType: String(filePayload.sourceType || "").toLowerCase(),
-        indexedDoctors: deferredSave ? 0 : Number(saveResult?.result?.doctors || 0),
-        eventCount: deferredSave ? 0 : Number(saveResult?.result?.events || 0),
-        status: deferredSave ? "indexing" : (Number(saveResult?.result?.events || 0) > 0 ? "populated" : "missing"),
+        indexedDoctors: Number(saveResult?.result?.doctors || 0),
+        eventCount: Number(saveResult?.result?.events || 0),
+        status: Number(saveResult?.result?.events || 0) > 0 ? "populated" : "missing",
       };
       if (body?.skipStatus === true) {
         return Response.json({
           ok: true,
-          indexing: deferredSave ? "scheduled" : "complete",
-          supersession: null,
+          indexing: "complete",
+          result: saveResult?.result || null,
+          supersession: saveResult?.supersession || null,
           fileStatus,
         });
       }
@@ -480,7 +470,9 @@ export async function onRequestPost(context) {
       });
       return Response.json({
         ok: true,
-        indexing: deferredSave ? "scheduled" : "complete",
+        indexing: "complete",
+        result: saveResult?.result || null,
+        supersession: saveResult?.supersession || null,
         ...status,
         fileStatus,
       });
@@ -3646,15 +3638,15 @@ function scheduleDeferredDailyPresenceIndexing(context, job = {}) {
   return run();
 }
 
-async function runDeferredDerivedRosterSave(context, job = {}) {
+async function runCoreDerivedRosterSave(context, job = {}) {
   const fileId = String(job.file?.id || "");
   // #region agent log
   fetch("http://127.0.0.1:7330/ingest/aa91ef39-4758-45c4-bdf1-4cfd1e2083f8", {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "04e966" },
     body: JSON.stringify({
-      sessionId: "04e966", hypothesisId: "H5", location: "state.js:runDeferredDerivedRosterSave",
-      message: "deferred save started", data: { fileId, doctorCount: (job.doctors || []).length }, timestamp: Date.now(), runId: "pre-fix",
+      sessionId: "04e966", hypothesisId: "H5", location: "state.js:runCoreDerivedRosterSave",
+      message: "core save started", data: { fileId, doctorCount: (job.doctors || []).length }, timestamp: Date.now(), runId: "post-fix",
     }),
   }).catch(() => {});
   // #endregion
@@ -3662,48 +3654,63 @@ async function runDeferredDerivedRosterSave(context, job = {}) {
   const filePayload = job.file || {};
   try {
     const result = await replaceDerivedRosterFile(
-    db,
-    filePayload,
-    job.doctors || [],
-    job.eventsByDoctor || {},
-    job.issuesByDoctor || {},
-    { deferDailyPresence: true },
-  );
-  await propagateDerivedShiftCodeIssues(db, job.doctors || [], job.issuesByDoctor || {});
-  const supersession = await reconcileRosterFileSupersession(db, filePayload, { uploaderEmail: job.email || "" });
-  await scheduleDeferredDailyPresenceIndexing(context, {
-    fileId: String(filePayload.id || ""),
-    sourceType: String(filePayload.sourceType || "").toLowerCase(),
-    doctors: job.doctors || [],
-    eventsByDoctor: job.eventsByDoctor || {},
-    reason: job.reason || "saveDerivedCalendarFile",
-  });
-  deferCanonicalDoctorRefresh(context, job.reason || "saveDerivedCalendarFile");
-  scheduleSnapshotWarmupForAllAccounts(context, { reason: job.reason || "saveDerivedCalendarFile" });
-  // #region agent log
-  fetch("http://127.0.0.1:7330/ingest/aa91ef39-4758-45c4-bdf1-4cfd1e2083f8", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "04e966" },
-    body: JSON.stringify({
-      sessionId: "04e966", hypothesisId: "H5", location: "state.js:runDeferredDerivedRosterSave",
-      message: "deferred save completed", data: { fileId, events: Number(result?.events || 0) }, timestamp: Date.now(), runId: "pre-fix",
-    }),
-  }).catch(() => {});
-  // #endregion
-  return { ok: true, result, supersession };
+      db,
+      filePayload,
+      job.doctors || [],
+      job.eventsByDoctor || {},
+      job.issuesByDoctor || {},
+      { deferDailyPresence: true },
+    );
+    await propagateDerivedShiftCodeIssues(db, job.doctors || [], job.issuesByDoctor || {});
+    const supersession = await reconcileRosterFileSupersession(db, filePayload, { uploaderEmail: job.email || "" });
+    const postSave = () => scheduleDeferredDailyPresenceIndexing(context, {
+      fileId: String(filePayload.id || ""),
+      sourceType: String(filePayload.sourceType || "").toLowerCase(),
+      doctors: job.doctors || [],
+      eventsByDoctor: job.eventsByDoctor || {},
+      reason: job.reason || "saveDerivedCalendarFile",
+    }).then(() => {
+      deferCanonicalDoctorRefresh(context, job.reason || "saveDerivedCalendarFile");
+      scheduleSnapshotWarmupForAllAccounts(context, { reason: job.reason || "saveDerivedCalendarFile" });
+    });
+    if (typeof context.waitUntil === "function") {
+      context.waitUntil(postSave().catch((error) => {
+        console.warn("Deferred post-save indexing failed", {
+          fileId,
+          error: error?.message || String(error),
+        });
+      }));
+    } else {
+      await postSave();
+    }
+    // #region agent log
+    fetch("http://127.0.0.1:7330/ingest/aa91ef39-4758-45c4-bdf1-4cfd1e2083f8", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "04e966" },
+      body: JSON.stringify({
+        sessionId: "04e966", hypothesisId: "H5", location: "state.js:runCoreDerivedRosterSave",
+        message: "core save completed", data: { fileId, events: Number(result?.events || 0) }, timestamp: Date.now(), runId: "post-fix",
+      }),
+    }).catch(() => {});
+    // #endregion
+    return { ok: true, result, supersession };
   } catch (error) {
     // #region agent log
     fetch("http://127.0.0.1:7330/ingest/aa91ef39-4758-45c4-bdf1-4cfd1e2083f8", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "04e966" },
       body: JSON.stringify({
-        sessionId: "04e966", hypothesisId: "H5", location: "state.js:runDeferredDerivedRosterSave",
-        message: "deferred save failed", data: { fileId, error: error?.message || String(error) }, timestamp: Date.now(), runId: "pre-fix",
+        sessionId: "04e966", hypothesisId: "H5", location: "state.js:runCoreDerivedRosterSave",
+        message: "core save failed", data: { fileId, error: error?.message || String(error) }, timestamp: Date.now(), runId: "post-fix",
       }),
     }).catch(() => {});
     // #endregion
     throw error;
   }
+}
+
+async function runDeferredDerivedRosterSave(context, job = {}) {
+  return runCoreDerivedRosterSave(context, job);
 }
 
 function attachClaimedAccountMetadata(doctors, accountIndex) {

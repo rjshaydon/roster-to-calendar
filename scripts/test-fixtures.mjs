@@ -409,8 +409,13 @@ assert.match(
 );
 assert.match(
   stateSource.match(/if \(action === "saveDerivedCalendarFile"\)[\s\S]*?if \(action === "uploadRawRosterFile"\)/)?.[0] || "",
-  /context\.waitUntil\(runDeferredDerivedRosterSave/,
-  "derived roster saves should defer the full D1 write to waitUntil in production",
+  /await runCoreDerivedRosterSave\(context, saveJob\)/,
+  "derived roster saves should write core D1 data synchronously before responding",
+);
+assert.match(
+  stateSource.match(/async function runCoreDerivedRosterSave[\s\S]*?async function runDeferredDerivedRosterSave/)?.[0] || "",
+  /context\.waitUntil\(postSave\(\)/,
+  "derived roster saves should defer only post-save indexing to waitUntil",
 );
 assert.match(
   stateSource.match(/if \(action === "calendarStoreStatus"\)[\s\S]*?if \(action === "appendConsoleMessage"\)/)?.[0] || "",
