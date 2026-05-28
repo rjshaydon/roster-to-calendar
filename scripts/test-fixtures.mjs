@@ -439,13 +439,23 @@ assert.match(
 );
 assert.match(
   d1CalendarSource.match(/function bulkInsertEventStatements[\s\S]*?function bulkInsertIssueStatements/)?.[0] || "",
-  /chunkRows\(rows, 1\)/,
-  "D1 roster event inserts should stay under SQL variable limits",
+  /chunkRowsForBindLimit\(rows, 16, D1_MAX_BIND_PARAMS\)/,
+  "D1 roster event inserts should batch multiple rows per statement",
 );
 assert.match(
   d1CalendarSource.match(/function bulkInsertIssueStatements[\s\S]*?async function runTransactionalBatch/)?.[0] || "",
-  /chunkRows\(rows, 1\)/,
-  "D1 roster issue inserts should stay under SQL variable limits",
+  /chunkRowsForBindLimit\(rows, 14, D1_MAX_BIND_PARAMS\)/,
+  "D1 roster issue inserts should batch multiple rows per statement",
+);
+assert.match(
+  d1CalendarSource.match(/export async function startDerivedRosterFileSave[\s\S]*?export async function appendDerivedRosterFileEvents/)?.[0] || "",
+  /startDerivedRosterFileSave/,
+  "large roster saves should support phased D1 writes",
+);
+assert.match(
+  appSource.match(/async function saveDerivedCalendarFilePayload[\s\S]*?async function saveSelectedRosterFilesToD1/)?.[0] || "",
+  /phase: "start"[\s\S]*phase: "events"[\s\S]*phase: "finish"/,
+  "large roster uploads should save to D1 in client-driven chunks",
 );
 assert.match(
   d1CalendarSource.match(/INSERT INTO account_claims[\s\S]*?bind\(\.\.\.chunk\.flat\(\)\)\.run\(\)/)?.[0] || "",

@@ -435,14 +435,8 @@ const D1_MAX_BIND_PARAMS = 100;
 const D1_MAX_BATCH_STATEMENTS = 800;
 const D1_PRESENCE_BATCH_STATEMENTS = 80;
 
-export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor, issuesByDoctor = {}, options = {}) {
-  if (!db?.prepare || !file?.id) return { ok: false, reason: "missing-input" };
-  await ensureCalendarSchema(db);
-  const sourceType = normalizeSourceType(file.sourceType);
-  if (!sourceType) return { ok: false, reason: "unsupported-source" };
-  const safeDoctors = sanitizeFileDoctors(doctors, sourceType);
-  const parsedAt = new Date().toISOString();
-  const statements = [db.prepare(`
+function derivedRosterFileUpsertStatement(db, file, sourceType, parsedAt) {
+  return db.prepare(`
     INSERT INTO roster_files (id, name, source_type, active, size, last_modified, added_at, uploaded_at, uploaded_by, parsed_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
@@ -466,14 +460,10 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
     String(file.uploadedAt || ""),
     String(file.uploadedBy || ""),
     parsedAt,
-  )];
-  statements.push(
-    db.prepare("DELETE FROM roster_file_doctors WHERE file_id = ?").bind(file.id),
-    db.prepare("DELETE FROM roster_events WHERE file_id = ?").bind(file.id),
-    db.prepare("DELETE FROM roster_issues WHERE file_id = ?").bind(file.id),
-    ...bulkUpsertDoctorStatements(db, sourceType, safeDoctors, parsedAt),
-    ...bulkInsertFileDoctorStatements(db, file.id, sourceType, safeDoctors),
   );
+}
+
+function collectDerivedEventAndIssueRows(file, sourceType, safeDoctors, eventsByDoctor = {}, issuesByDoctor = {}) {
   const eventRows = [];
   const issueRows = [];
   for (const doctor of safeDoctors) {
@@ -518,8 +508,64 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
       ]);
     }
   }
-  statements.push(...bulkInsertEventStatements(db, eventRows));
-  statements.push(...bulkInsertIssueStatements(db, issueRows));
+  return { eventRows, issueRows };
+}
+
+export async function startDerivedRosterFileSave(db, file, doctors, options = {}) {
+  if (!db?.prepare || !file?.id) return { ok: false, reason: "missing-input" };
+  await ensureCalendarSchema(db);
+  const sourceType = normalizeSourceType(file.sourceType);
+  if (!sourceType) return { ok: false, reason: "unsupported-source" };
+  const safeDoctors = sanitizeFileDoctors(doctors, sourceType);
+  const parsedAt = new Date().toISOString();
+  const statements = [
+    derivedRosterFileUpsertStatement(db, file, sourceType, parsedAt),
+    db.prepare("DELETE FROM roster_file_doctors WHERE file_id = ?").bind(file.id),
+    db.prepare("DELETE FROM roster_events WHERE file_id = ?").bind(file.id),
+    db.prepare("DELETE FROM roster_issues WHERE file_id = ?").bind(file.id),
+    ...bulkUpsertDoctorStatements(db, sourceType, safeDoctors, parsedAt),
+    ...bulkInsertFileDoctorStatements(db, file.id, sourceType, safeDoctors),
+  ];
+  if (options.clearDailyPresence !== false) {
+    await deleteDailyPresenceForFile(db, file.id);
+  }
+  await runTransactionalBatch(db, statements);
+  return { ok: true, doctors: safeDoctors.length, events: 0, issues: 0 };
+}
+
+export async function appendDerivedRosterFileEvents(db, file, doctors, eventsByDoctor = {}, issuesByDoctor = {}) {
+  if (!db?.prepare || !file?.id) return { ok: false, reason: "missing-input" };
+  await ensureCalendarSchema(db);
+  const sourceType = normalizeSourceType(file.sourceType);
+  if (!sourceType) return { ok: false, reason: "unsupported-source" };
+  const safeDoctors = sanitizeFileDoctors(doctors, sourceType);
+  const { eventRows, issueRows } = collectDerivedEventAndIssueRows(file, sourceType, safeDoctors, eventsByDoctor, issuesByDoctor);
+  const statements = [
+    ...bulkInsertEventStatements(db, eventRows),
+    ...bulkInsertIssueStatements(db, issueRows),
+  ];
+  if (statements.length) await runTransactionalBatch(db, statements);
+  return { ok: true, doctors: safeDoctors.length, events: eventRows.length, issues: issueRows.length };
+}
+
+export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor, issuesByDoctor = {}, options = {}) {
+  if (!db?.prepare || !file?.id) return { ok: false, reason: "missing-input" };
+  await ensureCalendarSchema(db);
+  const sourceType = normalizeSourceType(file.sourceType);
+  if (!sourceType) return { ok: false, reason: "unsupported-source" };
+  const safeDoctors = sanitizeFileDoctors(doctors, sourceType);
+  const parsedAt = new Date().toISOString();
+  const { eventRows, issueRows } = collectDerivedEventAndIssueRows(file, sourceType, safeDoctors, eventsByDoctor, issuesByDoctor);
+  const statements = [
+    derivedRosterFileUpsertStatement(db, file, sourceType, parsedAt),
+    db.prepare("DELETE FROM roster_file_doctors WHERE file_id = ?").bind(file.id),
+    db.prepare("DELETE FROM roster_events WHERE file_id = ?").bind(file.id),
+    db.prepare("DELETE FROM roster_issues WHERE file_id = ?").bind(file.id),
+    ...bulkUpsertDoctorStatements(db, sourceType, safeDoctors, parsedAt),
+    ...bulkInsertFileDoctorStatements(db, file.id, sourceType, safeDoctors),
+    ...bulkInsertEventStatements(db, eventRows),
+    ...bulkInsertIssueStatements(db, issueRows),
+  ];
   await deleteDailyPresenceForFile(db, file.id);
   await runTransactionalBatch(db, statements);
   if (options.deferDailyPresence !== true) {
@@ -2407,7 +2453,7 @@ async function bulkInsertEvents(db, rows) {
 }
 
 function bulkInsertEventStatements(db, rows) {
-  return chunkRows(rows, 1)
+  return chunkRowsForBindLimit(rows, 16, D1_MAX_BIND_PARAMS)
     .filter((chunk) => chunk.length)
     .map((chunk) => db.prepare(`
       INSERT INTO roster_events (
@@ -2418,7 +2464,7 @@ function bulkInsertEventStatements(db, rows) {
 }
 
 function bulkInsertIssueStatements(db, rows) {
-  return chunkRows(rows, 1)
+  return chunkRowsForBindLimit(rows, 14, D1_MAX_BIND_PARAMS)
     .filter((chunk) => chunk.length)
     .map((chunk) => db.prepare(`
       INSERT INTO roster_issues (

@@ -46,6 +46,9 @@ import {
   queryRosterFileRanges,
   queryRosterDoctors,
   replaceDerivedRosterFile,
+  startDerivedRosterFileSave,
+  appendDerivedRosterFileEvents,
+  rebuildDailyPresenceForFile,
   populateDailyPresenceForFile,
   rebuildDailyPresenceForActiveFiles,
   replaceAccountCustomEvents,
@@ -428,7 +431,8 @@ export async function onRequestPost(context) {
       if (!hasCalendarDb(context.env)) {
         return Response.json({ ok: false, unavailable: true });
       }
-      const derivedPayloadIssue = validateDerivedCalendarPayload(body?.doctors, body?.eventsByDoctor);
+      const savePhase = String(body?.phase || "complete").toLowerCase();
+      const derivedPayloadIssue = validateDerivedCalendarPayload(body?.doctors, body?.eventsByDoctor, { phase: savePhase });
       if (derivedPayloadIssue) {
         return Response.json({ error: derivedPayloadIssue }, { status: 422 });
       }
@@ -445,37 +449,62 @@ export async function onRequestPost(context) {
         issuesByDoctor: body?.issuesByDoctor || {},
         email,
         reason: "saveDerivedCalendarFile",
+        phase: savePhase,
       };
-      const saveResult = await runCoreDerivedRosterSave(context, saveJob);
-      const fileStatus = {
-        id: String(filePayload.id || ""),
-        name: String(filePayload.name || "roster.xlsx"),
-        sourceType: String(filePayload.sourceType || "").toLowerCase(),
-        indexedDoctors: Number(saveResult?.result?.doctors || 0),
-        eventCount: Number(saveResult?.result?.events || 0),
-        status: Number(saveResult?.result?.events || 0) > 0 ? "populated" : "missing",
-      };
-      if (body?.skipStatus === true) {
+      try {
+        const saveResult = await runCoreDerivedRosterSave(context, saveJob);
+        const persistedEvents = Number(saveResult?.result?.events || 0);
+        const persistedDoctors = Number(saveResult?.result?.doctors || 0);
+        const fileStatus = {
+          id: String(filePayload.id || ""),
+          name: String(filePayload.name || "roster.xlsx"),
+          sourceType: String(filePayload.sourceType || "").toLowerCase(),
+          indexedDoctors: persistedDoctors,
+          eventCount: persistedEvents,
+          status: savePhase === "start" || savePhase === "events"
+            ? "indexing"
+            : (persistedEvents > 0 ? "populated" : "missing"),
+        };
+        if (body?.skipStatus === true) {
+          return Response.json({
+            ok: true,
+            phase: savePhase,
+            indexing: savePhase === "complete" || savePhase === "finish" ? "complete" : "in-progress",
+            result: saveResult?.result || null,
+            supersession: saveResult?.supersession || null,
+            fileStatus,
+          });
+        }
+        const status = await calendarStoreStatus(null, context.env.ROSTER_DB, {
+          doctorKey: selectedDoctorKey,
+          expectedFileIds: sanitizeRepositoryFileIds(body?.expectedFileIds),
+        });
         return Response.json({
           ok: true,
-          indexing: "complete",
+          phase: savePhase,
+          indexing: savePhase === "complete" || savePhase === "finish" ? "complete" : "in-progress",
           result: saveResult?.result || null,
           supersession: saveResult?.supersession || null,
+          ...status,
           fileStatus,
         });
+      } catch (error) {
+        // #region agent log
+        fetch("http://127.0.0.1:7330/ingest/aa91ef39-4758-45c4-bdf1-4cfd1e2083f8", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "04e966" },
+          body: JSON.stringify({
+            sessionId: "04e966", hypothesisId: "H6", location: "state.js:saveDerivedCalendarFile",
+            message: "save handler failed", data: { fileId: String(filePayload.id || ""), phase: savePhase, error: error?.message || String(error) }, timestamp: Date.now(), runId: "post-fix-2",
+          }),
+        }).catch(() => {});
+        // #endregion
+        return Response.json({
+          error: error?.message || "Could not save roster file to D1.",
+          phase: savePhase,
+          fileId: String(filePayload.id || ""),
+        }, { status: 503 });
       }
-      const status = await calendarStoreStatus(null, context.env.ROSTER_DB, {
-        doctorKey: selectedDoctorKey,
-        expectedFileIds: sanitizeRepositoryFileIds(body?.expectedFileIds),
-      });
-      return Response.json({
-        ok: true,
-        indexing: "complete",
-        result: saveResult?.result || null,
-        supersession: saveResult?.supersession || null,
-        ...status,
-        fileStatus,
-      });
     }
 
     if (action === "uploadRawRosterFile") {
@@ -1206,17 +1235,23 @@ export async function onRequestPost(context) {
   }
 }
 
-function validateDerivedCalendarPayload(doctors, eventsByDoctor) {
+function validateDerivedCalendarPayload(doctors, eventsByDoctor, options = {}) {
+  const phase = String(options.phase || "complete").toLowerCase();
   const safeDoctors = Array.isArray(doctors) ? doctors.filter((doctor) => doctor?.key) : [];
+  if (phase === "finish") return "";
   if (!safeDoctors.length) {
     return "Roster indexing produced no doctors. The uploaded file was not saved to D1.";
   }
   const eventCount = safeDoctors.reduce((count, doctor) => (
     count + (Array.isArray(eventsByDoctor?.[doctor.key]) ? eventsByDoctor[doctor.key].length : 0)
   ), 0);
+  if (phase === "start") return "";
   if (!eventCount) {
-    return "Roster indexing produced no events. The uploaded file was not saved to D1.";
+    return phase === "events"
+      ? "Roster event chunk was empty. The uploaded file was not saved to D1."
+      : "Roster indexing produced no events. The uploaded file was not saved to D1.";
   }
+  if (phase === "events") return "";
   if (eventCount < safeDoctors.length) {
     return `Roster indexing produced only ${eventCount} events for ${safeDoctors.length} doctors. The uploaded file was not saved to D1.`;
   }
@@ -3640,48 +3675,79 @@ function scheduleDeferredDailyPresenceIndexing(context, job = {}) {
 
 async function runCoreDerivedRosterSave(context, job = {}) {
   const fileId = String(job.file?.id || "");
+  const phase = String(job.phase || "complete").toLowerCase();
   // #region agent log
   fetch("http://127.0.0.1:7330/ingest/aa91ef39-4758-45c4-bdf1-4cfd1e2083f8", {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "04e966" },
     body: JSON.stringify({
       sessionId: "04e966", hypothesisId: "H5", location: "state.js:runCoreDerivedRosterSave",
-      message: "core save started", data: { fileId, doctorCount: (job.doctors || []).length }, timestamp: Date.now(), runId: "post-fix",
+      message: "core save started", data: { fileId, phase, doctorCount: (job.doctors || []).length }, timestamp: Date.now(), runId: "post-fix-2",
     }),
   }).catch(() => {});
   // #endregion
   const db = context.env.ROSTER_DB;
   const filePayload = job.file || {};
   try {
-    const result = await replaceDerivedRosterFile(
-      db,
-      filePayload,
-      job.doctors || [],
-      job.eventsByDoctor || {},
-      job.issuesByDoctor || {},
-      { deferDailyPresence: true },
-    );
-    await propagateDerivedShiftCodeIssues(db, job.doctors || [], job.issuesByDoctor || {});
-    const supersession = await reconcileRosterFileSupersession(db, filePayload, { uploaderEmail: job.email || "" });
-    const postSave = () => scheduleDeferredDailyPresenceIndexing(context, {
-      fileId: String(filePayload.id || ""),
-      sourceType: String(filePayload.sourceType || "").toLowerCase(),
-      doctors: job.doctors || [],
-      eventsByDoctor: job.eventsByDoctor || {},
-      reason: job.reason || "saveDerivedCalendarFile",
-    }).then(() => {
-      deferCanonicalDoctorRefresh(context, job.reason || "saveDerivedCalendarFile");
-      scheduleSnapshotWarmupForAllAccounts(context, { reason: job.reason || "saveDerivedCalendarFile" });
-    });
-    if (typeof context.waitUntil === "function") {
-      context.waitUntil(postSave().catch((error) => {
-        console.warn("Deferred post-save indexing failed", {
-          fileId,
-          error: error?.message || String(error),
-        });
-      }));
+    let result = null;
+    if (phase === "start") {
+      result = await startDerivedRosterFileSave(db, filePayload, job.doctors || []);
+    } else if (phase === "events") {
+      result = await appendDerivedRosterFileEvents(
+        db,
+        filePayload,
+        job.doctors || [],
+        job.eventsByDoctor || {},
+        job.issuesByDoctor || {},
+      );
+    } else if (phase === "finish") {
+      const eventCounts = await countDerivedEventsByFile(db, [fileId]);
+      const doctorCounts = await countDerivedDoctorsByFile(db, [fileId]);
+      result = {
+        ok: true,
+        doctors: Number(doctorCounts.get(fileId) || 0),
+        events: Number(eventCounts.get(fileId) || 0),
+      };
+      if (!result.events) {
+        throw new Error("Roster save finished with 0 events in D1.");
+      }
+      await propagateDerivedShiftCodeIssues(db, job.doctors || [], job.issuesByDoctor || {});
     } else {
-      await postSave();
+      result = await replaceDerivedRosterFile(
+        db,
+        filePayload,
+        job.doctors || [],
+        job.eventsByDoctor || {},
+        job.issuesByDoctor || {},
+        { deferDailyPresence: true },
+      );
+      await propagateDerivedShiftCodeIssues(db, job.doctors || [], job.issuesByDoctor || {});
+    }
+    let supersession = null;
+    if (phase === "complete" || phase === "finish") {
+      supersession = await reconcileRosterFileSupersession(db, filePayload, { uploaderEmail: job.email || "" });
+      const postSave = () => {
+        const presence = phase === "finish" || Number(result?.events || 0) > 1200
+          ? rebuildDailyPresenceForFile(db, fileId)
+          : populateDailyPresenceForFile(db, fileId, job.eventsByDoctor || {}, {
+            sourceType: String(filePayload.sourceType || "").toLowerCase(),
+            doctors: job.doctors || [],
+          });
+        return Promise.resolve(presence).then(() => {
+          deferCanonicalDoctorRefresh(context, job.reason || "saveDerivedCalendarFile");
+          scheduleSnapshotWarmupForAllAccounts(context, { reason: job.reason || "saveDerivedCalendarFile" });
+        });
+      };
+      if (typeof context.waitUntil === "function") {
+        context.waitUntil(postSave().catch((error) => {
+          console.warn("Deferred post-save indexing failed", {
+            fileId,
+            error: error?.message || String(error),
+          });
+        }));
+      } else {
+        await postSave();
+      }
     }
     // #region agent log
     fetch("http://127.0.0.1:7330/ingest/aa91ef39-4758-45c4-bdf1-4cfd1e2083f8", {
@@ -3689,7 +3755,7 @@ async function runCoreDerivedRosterSave(context, job = {}) {
       headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "04e966" },
       body: JSON.stringify({
         sessionId: "04e966", hypothesisId: "H5", location: "state.js:runCoreDerivedRosterSave",
-        message: "core save completed", data: { fileId, events: Number(result?.events || 0) }, timestamp: Date.now(), runId: "post-fix",
+        message: "core save completed", data: { fileId, phase, events: Number(result?.events || 0) }, timestamp: Date.now(), runId: "post-fix-2",
       }),
     }).catch(() => {});
     // #endregion
@@ -3701,7 +3767,7 @@ async function runCoreDerivedRosterSave(context, job = {}) {
       headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "04e966" },
       body: JSON.stringify({
         sessionId: "04e966", hypothesisId: "H5", location: "state.js:runCoreDerivedRosterSave",
-        message: "core save failed", data: { fileId, error: error?.message || String(error) }, timestamp: Date.now(), runId: "post-fix",
+        message: "core save failed", data: { fileId, phase, error: error?.message || String(error) }, timestamp: Date.now(), runId: "post-fix-2",
       }),
     }).catch(() => {});
     // #endregion

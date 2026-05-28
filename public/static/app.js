@@ -12025,6 +12025,74 @@ async function buildCloudStateWithoutRosterSync(imports = selectedFiles, session
   };
 }
 
+const LARGE_ROSTER_EVENT_THRESHOLD = 1200;
+const LARGE_ROSTER_DOCTOR_CHUNK = 18;
+
+function rosterSaveUsesChunkedUpload(payload = {}) {
+  return Number(payload?.eventCount || 0) >= LARGE_ROSTER_EVENT_THRESHOLD
+    || (payload?.doctors || []).length >= 80;
+}
+
+async function saveDerivedCalendarFilePayload(payload, entry, expectedFileIds) {
+  if (!rosterSaveUsesChunkedUpload(payload)) {
+    return calendarStoreRequestWithRetry("saveDerivedCalendarFile", {
+      ...payload,
+      expectedFileIds,
+      skipStatus: true,
+    }, { attempts: 4 });
+  }
+  // #region agent log
+  debugLog("H6", "app.js:saveDerivedCalendarFilePayload", "chunked save started", {
+    entryId: entry?.id || "",
+    entryName: entry?.name || "",
+    eventCount: Number(payload?.eventCount || 0),
+    doctorCount: (payload?.doctors || []).length,
+    chunkSize: LARGE_ROSTER_DOCTOR_CHUNK,
+  });
+  // #endregion
+  await calendarStoreRequestWithRetry("saveDerivedCalendarFile", {
+    ...payload,
+    phase: "start",
+    eventsByDoctor: {},
+    issuesByDoctor: {},
+    expectedFileIds,
+    skipStatus: true,
+  }, { attempts: 4 });
+  const doctorKeys = (payload.doctors || []).map((doctor) => doctor.key).filter(Boolean);
+  for (let index = 0; index < doctorKeys.length; index += LARGE_ROSTER_DOCTOR_CHUNK) {
+    const keys = doctorKeys.slice(index, index + LARGE_ROSTER_DOCTOR_CHUNK);
+    const chunkDoctors = (payload.doctors || []).filter((doctor) => keys.includes(doctor.key));
+    const eventsByDoctor = Object.fromEntries(keys.map((key) => [key, payload.eventsByDoctor?.[key] || []]));
+    const issuesByDoctor = Object.fromEntries(keys.map((key) => [key, payload.issuesByDoctor?.[key] || []]));
+    const chunkEvents = keys.reduce((total, key) => total + (payload.eventsByDoctor?.[key]?.length || 0), 0);
+    setRosterSyncState(entry, "saving", `Saving ${Math.min(index + keys.length, doctorKeys.length)}/${doctorKeys.length} doctors…`);
+    // #region agent log
+    debugLog("H6", "app.js:saveDerivedCalendarFilePayload", "chunk upload", {
+      entryId: entry?.id || "",
+      chunkIndex: Math.floor(index / LARGE_ROSTER_DOCTOR_CHUNK) + 1,
+      doctorCount: keys.length,
+      chunkEvents,
+    });
+    // #endregion
+    await calendarStoreRequestWithRetry("saveDerivedCalendarFile", {
+      ...payload,
+      phase: "events",
+      doctors: chunkDoctors,
+      eventsByDoctor,
+      issuesByDoctor,
+      expectedFileIds,
+      skipStatus: true,
+    }, { attempts: 4 });
+  }
+  return calendarStoreRequestWithRetry("saveDerivedCalendarFile", {
+    ...payload,
+    phase: "finish",
+    eventsByDoctor: {},
+    expectedFileIds,
+    skipStatus: true,
+  }, { attempts: 4 });
+}
+
 async function saveSelectedRosterFilesToD1(imports = selectedFiles, options = {}) {
   if (!cloudAvailable || !currentUserEmail) return emptyRosterPersistenceSummary();
   const entries = (imports || []).filter((entry) => entry?.file);
@@ -12056,21 +12124,18 @@ async function saveSelectedRosterFilesToD1(imports = selectedFiles, options = {}
       setRosterSyncState(entry, "parsing");
       const payload = await buildDerivedCalendarFilePayload(entry, entry);
       setRosterSyncState(entry, "saving");
-      let saveResponse = await calendarStoreRequestWithRetry("saveDerivedCalendarFile", {
-        ...payload,
-        expectedFileIds,
-        skipStatus: true,
-      }, { attempts: 4 });
+      let saveResponse = await saveDerivedCalendarFilePayload(payload, entry, expectedFileIds);
       // #region agent log
       debugLog("H5", "app.js:saveSelectedRosterFilesToD1", "saveDerivedCalendarFile response", {
         entryId: entry?.id || "",
         entryName: entry?.name || "",
+        phase: saveResponse?.phase || "",
         indexing: saveResponse?.indexing || "",
         fileStatus: saveResponse?.fileStatus?.status || "",
         eventCount: Number(saveResponse?.fileStatus?.eventCount || 0),
       });
       // #endregion
-      if (saveResponse.indexing === "scheduled" || !isRosterFileStatusHealthy(saveResponse?.fileStatus)) {
+      if (saveResponse.indexing === "scheduled" || saveResponse.indexing === "in-progress" || !isRosterFileStatusHealthy(saveResponse?.fileStatus)) {
         setRosterSyncState(entry, "saving", "Saving to roster database…");
         latestStatus = await waitForRosterFilePersistence(entry, expectedFileIds);
       } else {
@@ -12312,8 +12377,11 @@ function hasUnconfirmedLocalRosterFiles() {
 function rosterPersistenceFailureMessage(summary) {
   const missingNames = summary.missingEntries.map((entry) => entry.name);
   const failedNames = summary.failedEntries.map((entry) => entry.name);
+  const failedMessages = [...new Set(summary.failedEntries.map((entry) => entry.message).filter(Boolean))];
   const missingDetail = missingNames.length ? ` Missing from D1: ${[...new Set(missingNames)].join(", ")}.` : "";
-  const failedDetail = failedNames.length ? ` Failed to save this upload: ${[...new Set(failedNames)].join(", ")}.` : "";
+  const failedDetail = failedNames.length
+    ? ` Failed to save this upload: ${[...new Set(failedNames)].join(", ")}.${failedMessages.length ? ` Reason: ${failedMessages[0]}` : ""}`
+    : "";
   return `Roster save incomplete: ${summary.persistedCount}/${summary.expectedCount} selected roster file${summary.expectedCount === 1 ? "" : "s"} confirmed in D1.${missingDetail}${failedDetail}`;
 }
 
