@@ -438,46 +438,52 @@ export async function onRequestPost(context) {
         uploadedBy: email,
         uploadedAt: new Date().toISOString(),
       };
-      const result = await replaceDerivedRosterFile(
-        context.env.ROSTER_DB,
-        filePayload,
-        body?.doctors || [],
-        body?.eventsByDoctor || {},
-        body?.issuesByDoctor || {},
-        { deferDailyPresence: true },
-      );
-      await propagateDerivedShiftCodeIssues(context.env.ROSTER_DB, body?.doctors || [], body?.issuesByDoctor || {});
-      const supersession = await reconcileRosterFileSupersession(context.env.ROSTER_DB, filePayload, { uploaderEmail: email });
-      await scheduleDeferredDailyPresenceIndexing(context, {
-        fileId: String(filePayload.id || ""),
-        sourceType: String(filePayload.sourceType || "").toLowerCase(),
+      const saveJob = {
+        file: filePayload,
         doctors: body?.doctors || [],
         eventsByDoctor: body?.eventsByDoctor || {},
+        issuesByDoctor: body?.issuesByDoctor || {},
+        email,
         reason: "saveDerivedCalendarFile",
-      });
-      deferCanonicalDoctorRefresh(context, "saveDerivedCalendarFile");
-      scheduleSnapshotWarmupForAllAccounts(context, { reason: "saveDerivedCalendarFile" });
+      };
+      const deferredSave = typeof context.waitUntil === "function";
+      let saveResult = null;
+      if (deferredSave) {
+        context.waitUntil(runDeferredDerivedRosterSave(context, saveJob).catch((error) => {
+          console.warn("Deferred derived roster save failed", {
+            fileId: String(filePayload.id || ""),
+            error: error?.message || String(error),
+          });
+        }));
+      } else {
+        saveResult = await runDeferredDerivedRosterSave(context, saveJob);
+      }
+      const fileStatus = {
+        id: String(filePayload.id || ""),
+        name: String(filePayload.name || "roster.xlsx"),
+        sourceType: String(filePayload.sourceType || "").toLowerCase(),
+        indexedDoctors: deferredSave ? 0 : Number(saveResult?.result?.doctors || 0),
+        eventCount: deferredSave ? 0 : Number(saveResult?.result?.events || 0),
+        status: deferredSave ? "indexing" : (Number(saveResult?.result?.events || 0) > 0 ? "populated" : "missing"),
+      };
       if (body?.skipStatus === true) {
         return Response.json({
           ok: true,
-          result,
-          supersession,
-          indexing: "scheduled",
-          fileStatus: {
-            id: String(filePayload.id || ""),
-            name: String(filePayload.name || "roster.xlsx"),
-            sourceType: String(filePayload.sourceType || "").toLowerCase(),
-            indexedDoctors: Number(result.doctors || 0),
-            eventCount: Number(result.events || 0),
-            status: Number(result.events || 0) > 0 ? "populated" : "missing",
-          },
+          indexing: deferredSave ? "scheduled" : "complete",
+          supersession: null,
+          fileStatus,
         });
       }
       const status = await calendarStoreStatus(null, context.env.ROSTER_DB, {
         doctorKey: selectedDoctorKey,
         expectedFileIds: sanitizeRepositoryFileIds(body?.expectedFileIds),
       });
-      return Response.json({ ok: true, result, supersession, ...status });
+      return Response.json({
+        ok: true,
+        indexing: deferredSave ? "scheduled" : "complete",
+        ...status,
+        fileStatus,
+      });
     }
 
     if (action === "uploadRawRosterFile") {
@@ -3638,6 +3644,31 @@ function scheduleDeferredDailyPresenceIndexing(context, job = {}) {
     return Promise.resolve();
   }
   return run();
+}
+
+async function runDeferredDerivedRosterSave(context, job = {}) {
+  const db = context.env.ROSTER_DB;
+  const filePayload = job.file || {};
+  const result = await replaceDerivedRosterFile(
+    db,
+    filePayload,
+    job.doctors || [],
+    job.eventsByDoctor || {},
+    job.issuesByDoctor || {},
+    { deferDailyPresence: true },
+  );
+  await propagateDerivedShiftCodeIssues(db, job.doctors || [], job.issuesByDoctor || {});
+  const supersession = await reconcileRosterFileSupersession(db, filePayload, { uploaderEmail: job.email || "" });
+  await scheduleDeferredDailyPresenceIndexing(context, {
+    fileId: String(filePayload.id || ""),
+    sourceType: String(filePayload.sourceType || "").toLowerCase(),
+    doctors: job.doctors || [],
+    eventsByDoctor: job.eventsByDoctor || {},
+    reason: job.reason || "saveDerivedCalendarFile",
+  });
+  deferCanonicalDoctorRefresh(context, job.reason || "saveDerivedCalendarFile");
+  scheduleSnapshotWarmupForAllAccounts(context, { reason: job.reason || "saveDerivedCalendarFile" });
+  return { ok: true, result, supersession };
 }
 
 function attachClaimedAccountMetadata(doctors, accountIndex) {

@@ -10307,8 +10307,10 @@ async function refreshCreatorCalendarAfterFileChange(options = {}) {
       force: options.force === true,
     });
   }
+  let performedLocalUpload = false;
   const pendingUploads = selectedFiles.filter((entry) => entry?.file);
   if (pendingUploads.length && selectedFilesHavePendingD1Uploads(calendarStoreStatus)) {
+    performedLocalUpload = true;
     try {
       await saveSelectedRosterFilesToD1(pendingUploads);
     } catch (error) {
@@ -10320,7 +10322,12 @@ async function refreshCreatorCalendarAfterFileChange(options = {}) {
     }
     renderFileSurfaces();
   }
-  if (selectedFilesNeedD1CalendarReload()) {
+  const shouldReloadFromD1 = isViewingCreatorAccount() && cloudAvailable && (
+    options.removeMissingFromStore === true
+    || selectedFilesNeedD1CalendarReload()
+    || performedLocalUpload
+  );
+  if (shouldReloadFromD1) {
     setStatus("Loading calendar...");
     try {
       const loaded = await loadCloudCalendarEvents({ preserveExistingSnapshot: false });
@@ -11460,8 +11467,9 @@ function queueCreatorSwitchTargetPrefetch() {
 async function saveCloudStateNow(snapshot = null) {
   const payload = snapshot || snapshotCloudSavePayload();
   if (!payload.accountEmail || !payload.requestEmail || !payload.requestPassword || !cloudAvailable) return;
-  const snapshotPayload = await buildWorkspaceSnapshotPayload(payload.session);
-  const shouldApplySavedSnapshot = savePayloadMatchesActiveCalendar(payload);
+  const isDeleteSave = (payload.removedImportIds || []).length > 0;
+  const snapshotPayload = isDeleteSave ? null : await buildWorkspaceSnapshotPayload(payload.session);
+  const shouldApplySavedSnapshot = savePayloadMatchesActiveCalendar(payload) && !isDeleteSave;
   if (payload.doctorProfile) {
     const response = await fetch("/api/state", {
       method: "POST",
@@ -11495,19 +11503,28 @@ async function saveCloudStateNow(snapshot = null) {
   const state = (payload.removedImportIds || []).length
     ? await buildCloudStateWithoutRosterSync(payload.imports, payload.session)
     : await buildCloudState(payload.imports, payload.session);
-  const response = await fetch("/api/state", {
+  const saveBody = {
+    action: "save",
+    email: payload.requestEmail,
+    password: payload.requestPassword,
+    targetEmail: payload.targetEmail,
+    state,
+    snapshot: snapshotPayload,
+    removedImportIds: payload.removedImportIds || [],
+  };
+  let response = await fetch("/api/state", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      action: "save",
-      email: payload.requestEmail,
-      password: payload.requestPassword,
-      targetEmail: payload.targetEmail,
-      state,
-      snapshot: snapshotPayload,
-      removedImportIds: payload.removedImportIds || [],
-    }),
+    body: JSON.stringify(saveBody),
   });
+  if (response.status === 503 && isDeleteSave) {
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(saveBody),
+    });
+  }
   const data = await readJsonResponse(response, "Cloud save failed.");
   const savedCalendarRevision = String(data.calendarRevision || "");
   if (shouldApplySavedSnapshot && savedCalendarRevision) currentCalendarRevision = savedCalendarRevision;
@@ -11865,6 +11882,25 @@ async function calendarStoreRequestWithRetry(action, extra = {}, options = {}) {
   throw lastError || new Error("SQL calendar store request failed.");
 }
 
+async function waitForRosterFilePersistence(entry, expectedFileIds = [], options = {}) {
+  const timeoutMs = Number(options.timeoutMs || 180000);
+  const pollMs = Number(options.pollMs || 2500);
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const latestStatus = await calendarStoreRequest("calendarStoreStatus", {
+      selectedDoctorKey: selectedDoctor()?.key || OWNER_DOCTOR_KEY,
+      expectedFileIds,
+    });
+    calendarStoreStatus = { ...latestStatus, checkedAt: new Date().toISOString() };
+    reconcileRosterSyncStates(calendarStoreStatus);
+    renderFileSurfaces();
+    const statusFile = (latestStatus.files || []).find((file) => file.id === entry.id);
+    if (isRosterFileStatusHealthy(statusFile)) return latestStatus;
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+  throw new Error(`${entry.name || "Roster file"} was not confirmed in D1 before the save timed out.`);
+}
+
 async function buildCloudState(imports = selectedFiles, session = buildActiveSessionState()) {
   await saveSelectedRosterFilesToD1(imports);
   return buildCloudStateWithoutRosterSync(imports, session);
@@ -11903,12 +11939,17 @@ async function saveSelectedRosterFilesToD1(imports = selectedFiles, options = {}
       setRosterSyncState(entry, "parsing");
       const payload = await buildDerivedCalendarFilePayload(entry, entry);
       setRosterSyncState(entry, "saving");
-      latestStatus = await calendarStoreRequestWithRetry("saveDerivedCalendarFile", {
+      let saveResponse = await calendarStoreRequestWithRetry("saveDerivedCalendarFile", {
         ...payload,
         expectedFileIds,
         skipStatus: true,
       }, { attempts: 2 });
-      latestStatus = mergeLightweightRosterStatus(latestStatus, payload.file, latestStatus.fileStatus, expectedFileIds);
+      if (saveResponse.indexing === "scheduled") {
+        setRosterSyncState(entry, "saving", "Saving to roster database…");
+        latestStatus = await waitForRosterFilePersistence(entry, expectedFileIds);
+      } else {
+        latestStatus = mergeLightweightRosterStatus(saveResponse, payload.file, saveResponse.fileStatus, expectedFileIds);
+      }
       saveResults.push({ entry, ok: true });
       setRosterSyncState(entry, "synced");
     } catch (error) {

@@ -369,8 +369,18 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function refreshCreatorCalendarAfterFileChange[\s\S]*?function normalizeSavedExportRange/)?.[0] || "",
-  /selectedFilesNeedD1CalendarReload\(\)[\s\S]*loadCloudCalendarEvents\(\{ preserveExistingSnapshot: false \}\)/,
-  "creator roster changes should reload the calendar from D1 when local roster blobs are unavailable",
+  /removeMissingFromStore === true[\s\S]*performedLocalUpload[\s\S]*loadCloudCalendarEvents\(\{ preserveExistingSnapshot: false \}\)/,
+  "creator roster changes should reload the calendar from D1 after delete or upload",
+);
+assert.match(
+  appSource.match(/async function saveCloudStateNow[\s\S]*?async function replaceActiveRostersWithCurrentUploads/)?.[0] || "",
+  /isDeleteSave[\s\S]*snapshotPayload = isDeleteSave \? null/,
+  "roster deletion saves should skip uploading a full workspace snapshot",
+);
+assert.match(
+  appSource.match(/async function saveSelectedRosterFilesToD1[\s\S]*?function mergeLightweightRosterStatus/)?.[0] || "",
+  /indexing === "scheduled"[\s\S]*waitForRosterFilePersistence/,
+  "scheduled roster saves should poll D1 until the upload is confirmed",
 );
 assert.match(
   appSource.match(/async function saveCloudStateNow[\s\S]*?async function replaceActiveRostersWithCurrentUploads/)?.[0] || "",
@@ -399,8 +409,8 @@ assert.match(
 );
 assert.match(
   stateSource.match(/if \(action === "saveDerivedCalendarFile"\)[\s\S]*?if \(action === "uploadRawRosterFile"\)/)?.[0] || "",
-  /deferDailyPresence: true[\s\S]*scheduleDeferredDailyPresenceIndexing[\s\S]*deferCanonicalDoctorRefresh\(context, "saveDerivedCalendarFile"\)/,
-  "derived roster saves should defer heavy indexing work",
+  /context\.waitUntil\(runDeferredDerivedRosterSave/,
+  "derived roster saves should defer the full D1 write to waitUntil in production",
 );
 assert.match(
   stateSource.match(/if \(action === "calendarStoreStatus"\)[\s\S]*?if \(action === "appendConsoleMessage"\)/)?.[0] || "",
@@ -2627,8 +2637,8 @@ const caseySave = await postState(d1CaseyStore, {
   eventsByDoctor: d1CaseyEventsByDoctor,
   skipStatus: true,
 }, d1CaseyDb);
-assert.equal(caseySave.indexing, "scheduled");
-assert.ok(Number(caseySave.result?.events || 0) > 1000, "Casey roster save should persist a large event set");
+assert.equal(caseySave.indexing, "complete");
+assert.ok(Number(caseySave.fileStatus?.eventCount || 0) > 1000, "Casey roster save should persist a large event set");
 assert.ok(d1CaseyDb.dailyPresence.size > 1000, "Casey roster save should index daily presence rows");
 const caseyStatus = await postState(d1CaseyStore, {
   action: "calendarStoreStatus",
