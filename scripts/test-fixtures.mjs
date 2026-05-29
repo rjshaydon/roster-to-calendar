@@ -438,6 +438,36 @@ assert.match(
   "creator roster imports should refresh the doctor picker before requesting a lightweight calendar snapshot",
 );
 assert.match(
+  appSource.match(/async function bootstrapImports[\s\S]*?function snapshotHasUnresolvablePreviewEvents/)?.[0] || "",
+  /isViewingCreatorAccount\(\) && cloudAvailable[\s\S]*refreshCreatorSnapshotInBackground/,
+  "stale creator bootstrap should refresh from cloud snapshots instead of browser file re-parse",
+);
+assert.match(
+  appSource.match(/async function refreshSnapshotInBackground[\s\S]*?async function bootstrapApp/)?.[0] || "",
+  /isViewingCreatorAccount\(\) && cloudAvailable[\s\S]*refreshCreatorSnapshotInBackground/,
+  "background snapshot refresh should delegate creator calendars to the cloud refresh helper",
+);
+assert.match(
+  appSource.match(/function beginCalendarTransition[\s\S]*?function calendarTransitionStillCurrent/)?.[0] || "",
+  /cancelCalendarImportPoll\(\)/,
+  "calendar transitions should cancel in-flight roster import polling",
+);
+assert.match(
+  appSource.match(/async function updatePreview[\s\S]*?async function buildBrowserPreviewData/)?.[0] || "",
+  /preserveVisiblePreview = Boolean\(latestPreview && isViewingCreatorAccount\(\) && cloudAvailable\)/,
+  "creator cloud preview failures should keep the last visible calendar on screen",
+);
+assert.match(
+  appSource.match(/async function buildBrowserPreviewData[\s\S]*?function rebuildClientPreview/)?.[0] || "",
+  /OWNER_DOCTOR_KEY && canUseCreatorDoctorSwitcher\(\)/,
+  "creator owner route should not require the owner name to appear in parsed roster files",
+);
+assert.match(
+  appSource.match(/async function analyzeFiles[\s\S]*?async function parseCurrentRosterForm/)?.[0] || "",
+  /isViewingCreatorAccount\(\) && cloudAvailable[\s\S]*updatePreview/,
+  "creator cloud workspaces should skip browser preview rebuild after file analysis",
+);
+assert.match(
   await readFile(new URL("../public/index.html", import.meta.url), "utf8"),
   /id="rosterImportOverlay"/,
   "index should include the roster import overlay shell",
