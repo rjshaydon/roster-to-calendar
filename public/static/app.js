@@ -9115,7 +9115,10 @@ async function enterUserAccount(email) {
     if (renderedCachedSnapshot) {
       void validation.catch((error) => {
         if (!calendarTransitionStillCurrent(transition)) return;
-        setStatus(normalizeAuthMessage(error.message || `Could not update ${targetEmail}.`), true);
+        reportBackgroundValidationError(error, {
+          preserveRenderedSnapshot: true,
+          fallbackMessage: `Could not update ${targetEmail}.`,
+        });
       });
     } else {
       await validation;
@@ -9177,7 +9180,10 @@ async function enterDoctorProfileView(doctor) {
     if (renderedCachedSnapshot) {
       void validation.catch((error) => {
         if (!calendarTransitionStillCurrent(transition)) return;
-        setStatus(error.message || `Could not update ${doctor.displayName}.`, true);
+        reportBackgroundValidationError(error, {
+          preserveRenderedSnapshot: true,
+          fallbackMessage: `Could not update ${doctor.displayName}.`,
+        });
       });
     } else {
       await validation;
@@ -9665,26 +9671,33 @@ async function returnToCreatorAccount() {
     }
     if (selectedDoctor()?.key !== OWNER_DOCTOR_KEY || cloudAvailable) {
       if (cloudAvailable) {
-        const loaded = await loadCloudCalendarEvents({
-          preserveExistingSnapshot: Boolean(renderedCachedSnapshot && currentSnapshot?.preview),
-          doctorKey: OWNER_DOCTOR_KEY,
-          transition,
-        });
-        if (loaded && currentSnapshot) {
-          renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+        if (!visibleSnapshotIsCurrent({ requireNotStale: true })) {
+          const loaded = await loadCloudCalendarEvents({
+            doctorKey: OWNER_DOCTOR_KEY,
+            cachedRevision: currentSnapshot?.calendarRevision || currentCalendarRevision || "",
+            allowInlineBuild: false,
+            preserveExistingSnapshot: true,
+            transition,
+          });
+          if (loaded && currentSnapshot) {
+            renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+          }
         }
       } else {
         clearPreviewData();
         await updatePreview({ resetRange: false });
       }
     }
-    await syncCreatorFileListFromStore();
+    void syncCreatorFileListFromStore().catch(() => null);
     renderLoginState();
   };
   if (renderedCachedSnapshot) {
     void validateCreator().catch((error) => {
       if (!calendarTransitionStillCurrent(transition)) return;
-      setStatus(normalizeAuthMessage(error.message || "Could not update the creator calendar."), true);
+      reportBackgroundValidationError(error, {
+        preserveRenderedSnapshot: true,
+        fallbackMessage: "Could not update the creator calendar.",
+      });
     });
   } else {
     try {
@@ -10544,12 +10557,14 @@ async function pollCalendarAfterRosterChange() {
         const loaded = await loadCloudCalendarEvents({
           preserveExistingSnapshot: true,
           allowInlineBuild: false,
+          cachedRevision: currentSnapshot?.calendarRevision || currentCalendarRevision || "",
+          doctorKey: OWNER_DOCTOR_KEY,
         });
         if (pollRunId !== calendarImportPollRunId) return;
         if (loaded && currentSnapshot) {
           renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
           setStatus("Calendar loaded.");
-          await syncCreatorFileListFromStore().catch(() => null);
+          void syncCreatorFileListFromStore().catch(() => null);
           return;
         }
       } catch {
@@ -10570,6 +10585,7 @@ async function refreshCreatorSnapshotInBackground(options = {}) {
     const loaded = await loadCloudCalendarEvents({
       preserveExistingSnapshot: true,
       allowInlineBuild: false,
+      cachedRevision: currentSnapshot?.calendarRevision || currentCalendarRevision || "",
       doctorKey: OWNER_DOCTOR_KEY,
       transition: options.transition,
     });
@@ -10578,7 +10594,7 @@ async function refreshCreatorSnapshotInBackground(options = {}) {
       renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
       currentSnapshotStale = false;
       currentSnapshotBuiltAt = new Date().toISOString();
-      await syncCreatorFileListFromStore();
+      void syncCreatorFileListFromStore().catch(() => null);
       setStatus("Calendar refreshed.");
       return true;
     }
@@ -10950,11 +10966,7 @@ async function hydrateAuthenticatedWorkspace(options = {}, loginStartedAt = 0) {
     if (!adminTargetEmail && currentUserEmail === OWNER_EMAIL) {
       forceCreatorDoctorSession();
     }
-    const inlineSnapshotReady = Boolean(
-      currentSnapshot?.preview
-      && String(currentSnapshot.calendarRevision || currentCalendarRevision || "")
-      && String(currentSnapshot.calendarRevision || currentCalendarRevision || "") === String(currentCalendarRevision || "")
-    );
+    const inlineSnapshotReady = visibleSnapshotIsCurrent();
     const cachedRevision = inlineSnapshotReady
       ? ""
       : options.cachedRevision || (currentSnapshot?.cacheKey === currentCalendarSnapshotCacheKey()
@@ -11136,6 +11148,24 @@ function loginSnapshotReadyForRender() {
     return !currentDefaultDoctorKey || snapshotDoctorKey === normalizeRosterName(currentDefaultDoctorKey);
   }
   return activeCalendarMode() === "doctor-profile";
+}
+
+function visibleSnapshotIsCurrent(options = {}) {
+  if (!currentSnapshot?.preview) return false;
+  if (options.requireNotStale && currentSnapshotStale) return false;
+  const revision = String(currentSnapshot.calendarRevision || currentCalendarRevision || "");
+  if (!revision || revision !== String(currentCalendarRevision || "")) return false;
+  return loginSnapshotReadyForRender();
+}
+
+function reportBackgroundValidationError(error, options = {}) {
+  const message = normalizeAuthMessage(error?.message || options.fallbackMessage || "Could not update the calendar.");
+  const overload = /502|503|CPU|memory|overload|Bad Gateway/i.test(String(error?.message || ""));
+  if (options.preserveRenderedSnapshot && visibleSnapshotIsCurrent() && overload) {
+    console.warn("Background calendar validation failed; keeping cached calendar.", { message, error });
+    return;
+  }
+  setStatus(message, true);
 }
 
 async function loadDeferredAccountContext(options = {}) {
@@ -13495,7 +13525,7 @@ async function bootstrapImports(options = {}) {
       if (cloudAvailable) {
         restoreCreatorImportFilesIfNeeded();
         if (!selectedFiles.length) {
-          await syncCreatorFileListFromStore().catch(() => null);
+          void syncCreatorFileListFromStore().catch(() => null);
         }
       } else {
         const workspace = loadCurrentWorkspace();
@@ -13523,6 +13553,7 @@ async function bootstrapImports(options = {}) {
             adminTargetEmail: adminViewingEmail ? viewedAccountEmail() : "",
             allowInlineBuild: options.allowInlineBuild !== false,
             preserveExistingSnapshot: true,
+            cachedRevision: currentSnapshot?.calendarRevision || currentCalendarRevision || "",
             transition: options.transition,
           })
             .then((loadedCalendar) => {

@@ -513,6 +513,41 @@ assert.match(
   "roster deletion should drop removed files from remembered creator import refs",
 );
 assert.match(
+  appSource,
+  /function visibleSnapshotIsCurrent\(/,
+  "account switching should expose a shared visible-snapshot revision helper",
+);
+assert.match(
+  appSource.match(/async function returnToCreatorAccount[\s\S]*?async function clearLocalWorkspace/)?.[0] || "",
+  /visibleSnapshotIsCurrent\(\{ requireNotStale: true \}\)[\s\S]*cachedRevision:[\s\S]*allowInlineBuild: false[\s\S]*preserveExistingSnapshot: true/,
+  "creator return validation should skip or lightweight-check calendar loads when the visible snapshot is current",
+);
+assert.doesNotMatch(
+  appSource.match(/async function returnToCreatorAccount[\s\S]*?async function clearLocalWorkspace/)?.[0] || "",
+  /await syncCreatorFileListFromStore\(\)/,
+  "creator return validation should not block account switching on D1 file-status refresh",
+);
+assert.doesNotMatch(
+  appSource.match(/async function bootstrapImports[\s\S]*?function snapshotHasUnresolvablePreviewEvents/)?.[0] || "",
+  /await syncCreatorFileListFromStore\(\)/,
+  "bootstrap imports should defer D1 file-status refresh instead of blocking workspace render",
+);
+assert.match(
+  appSource.match(/async function enterUserAccount[\s\S]*?async function enterDoctorProfileView/)?.[0] || "",
+  /reportBackgroundValidationError\(error, \{[\s\S]*preserveRenderedSnapshot: true/,
+  "claimed-account background validation should suppress overload errors when cached calendar remains valid",
+);
+assert.match(
+  appSource.match(/async function enterDoctorProfileView[\s\S]*?async function exitDoctorProfileView/)?.[0] || "",
+  /reportBackgroundValidationError\(error, \{[\s\S]*preserveRenderedSnapshot: true/,
+  "doctor-profile background validation should suppress overload errors when cached calendar remains valid",
+);
+assert.match(
+  appSource.match(/async function refreshCreatorSnapshotInBackground[\s\S]*?async function refreshAvailableDoctorsAfterRosterChange/)?.[0] || "",
+  /preserveExistingSnapshot: true[\s\S]*allowInlineBuild: false[\s\S]*cachedRevision:/,
+  "creator background snapshot refresh should pass cachedRevision for lightweight server checks",
+);
+assert.match(
   await readFile(new URL("../public/index.html", import.meta.url), "utf8"),
   /id="rosterImportOverlay"/,
   "index should include the roster import overlay shell",
