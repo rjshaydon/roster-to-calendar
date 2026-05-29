@@ -80,3 +80,4 @@ npm run deploy
 - Standard accounts are prompted to keep only the latest 6 months active.
 - Cross-device persistence requires the `ROSTER_DB` D1 binding above.
 - Accounts with saved roster data can expose a tokenized subscription feed at `/api/feed?token=...`, which Apple Calendar or Google Calendar can subscribe to as a read-only `.ics` URL.
+- The **When am I working with…?** insight excludes Clinical Support overlaps by default; tick **Include CS** in the modal Options to show them.

@@ -1215,6 +1215,31 @@ assert.match(
   "general when insights should keep all compact overlap doctors in the dropdown while loading one selected doctor's events",
 );
 assert.match(
+  appSource,
+  /function isClinicalSupportEvent\(event\)[\s\S]*function filterWhenInsightEvents\(events, includeCs = false\)/,
+  "when insights should detect clinical support separately from roster shift filtering",
+);
+assert.match(
+  appSource.match(/async function openWhenInsight[\s\S]*?async function openWhenInsightForDoctor/)?.[0] || "",
+  /includeCs: false/,
+  "when insights modal should default Include CS to off",
+);
+assert.match(
+  appSource.match(/function renderWhenInsightResult[\s\S]*?function comparisonDoctorOptions/)?.[0] || "",
+  /data-insights-when-include-cs/,
+  "when insights modal should render an Include CS toggle",
+);
+assert.match(
+  appSource.match(/async function renderWhenInsight[\s\S]*?function renderWhenInsightResult/)?.[0] || "",
+  /filterWhenInsightEvents/,
+  "when insights should filter clinical support overlaps via filterWhenInsightEvents",
+);
+assert.match(
+  appSource.match(/async function renderInlineWhenInsight[\s\S]*?function renderInlineWhenInsightResult/)?.[0] || "",
+  /filterWhenInsightEvents\([^,]+, false\)/,
+  "inline when insights should exclude clinical support overlaps by default",
+);
+assert.match(
   calendarMigrationSource,
   /CREATE INDEX IF NOT EXISTS idx_roster_events_source_range ON roster_events \(source_type, start_date, end_date\);/,
   "calendar migration should include the source/date range index used by insight lookups",

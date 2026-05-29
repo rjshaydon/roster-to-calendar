@@ -1087,6 +1087,12 @@ insightsModalBody.addEventListener("change", (event) => {
     }
     insightsState.hospitalFilters = [...selected];
     void renderInsightsModal();
+    return;
+  }
+  const whenIncludeCsToggle = event.target.closest("[data-insights-when-include-cs]");
+  if (whenIncludeCsToggle && insightsState?.mode === "when") {
+    insightsState.includeCs = whenIncludeCsToggle.checked;
+    void renderInsightsModal();
   }
 });
 exportModalBody.addEventListener("change", (event) => {
@@ -3267,11 +3273,16 @@ function daysBetween(start, end) {
   return Math.round((right.getTime() - left.getTime()) / 86400000);
 }
 
+function isClinicalSupportEvent(event) {
+  const text = `${event?.title || ""} ${event?.rawValue || ""}`.toLowerCase();
+  return text.includes("clinical support") || /\bcs\b/.test(text) || /\bcso\b/.test(text);
+}
+
 function eventTone(event) {
   const text = `${event.title || ""} ${event.rawValue || ""}`.toLowerCase();
   if (text.includes("annual") || text.includes("conference") || text.includes("leave")) return "leave";
   if (text.includes("phnw")) return "phnw";
-  if (text.includes("clinical support") || /\bcs\b/.test(text) || /\bcso\b/.test(text)) return "cs";
+  if (isClinicalSupportEvent(event)) return "cs";
   if (text.includes("night")) return "night";
   if (text.includes("pm") || text.includes("orange")) return "evening";
   if (text.includes("custom") || event.isCustom) return "custom";
@@ -3380,6 +3391,7 @@ async function openWhenInsight(termStart, termEnd) {
     termEnd: toDate,
     fromDate,
     hospitalFilters: [],
+    includeCs: false,
     comparisonDoctorKey: "",
   };
   await renderInsightsModal();
@@ -3397,6 +3409,7 @@ async function openWhenInsightForDoctor(doctorKey) {
     termEnd: range.end || fromDate,
     fromDate,
     hospitalFilters: [],
+    includeCs: false,
     comparisonDoctorKey: normalizedKey,
   };
   await renderInsightsModal();
@@ -3765,6 +3778,7 @@ async function renderWhoInsight() {
 
 async function renderWhenInsight({ renderRunId = insightsState?.renderRunId } = {}) {
   const hospitalFilters = Array.isArray(insightsState.hospitalFilters) ? insightsState.hospitalFilters : [];
+  const includeCs = Boolean(insightsState.includeCs);
   const fromDate = insightsState.fromDate || formatDateKey(new Date());
   const toDate = insightsState.termEnd || currentCalendarInsightDateRange().end || fromDate;
   const doctorResult = await fetchRosterOverlapDoctors({
@@ -3795,11 +3809,12 @@ async function renderWhenInsight({ renderRunId = insightsState?.renderRunId } = 
     renderWhenInsightResult({
       options,
       selectedComparison: null,
-      mine: selectedDoctorEventsForInsights(fromDate, toDate, hospitalFilters).filter(isRosterShiftEvent),
+      mine: filterWhenInsightEvents(selectedDoctorEventsForInsights(fromDate, toDate, hospitalFilters), includeCs),
       theirs: [],
       fromDate,
       toDate,
       hospitalFilters,
+      includeCs,
       hospitalOptions: [],
     });
     return;
@@ -3816,10 +3831,12 @@ async function renderWhenInsight({ renderRunId = insightsState?.renderRunId } = 
     const serverRows = serverResult.rows;
     const selectedComparison = options.find((doctor) => doctor.key === selectedKey) || null;
     const serverEvents = insightRowsToEventsByDoctor(serverRows);
-    const mine = selectedDoctorEventsForInsights(fromDate, toDate, hospitalFilters).filter(isRosterShiftEvent);
-    const theirs = selectedComparison ? (serverEvents.get(selectedComparison.key) || []).filter(isRosterShiftEvent) : [];
+    const mine = filterWhenInsightEvents(selectedDoctorEventsForInsights(fromDate, toDate, hospitalFilters), includeCs);
+    const theirs = selectedComparison
+      ? filterWhenInsightEvents(serverEvents.get(selectedComparison.key) || [], includeCs)
+      : [];
     const hospitalOptions = availableHospitalsFromInsightEvents([...mine, ...[...serverEvents.values()].flat()]);
-    renderWhenInsightResult({ options, selectedComparison, mine, theirs, fromDate, toDate, hospitalFilters, hospitalOptions });
+    renderWhenInsightResult({ options, selectedComparison, mine, theirs, fromDate, toDate, hospitalFilters, includeCs, hospitalOptions });
     return;
   }
   insightsModalTitle.textContent = "When am I working with…?";
@@ -3827,7 +3844,7 @@ async function renderWhenInsight({ renderRunId = insightsState?.renderRunId } = 
   insightsModalBody.innerHTML = renderRosterInsightUnavailable();
 }
 
-function renderWhenInsightResult({ options, selectedComparison, mine, theirs, fromDate, toDate, hospitalFilters, hospitalOptions = null }) {
+function renderWhenInsightResult({ options, selectedComparison, mine, theirs, fromDate, toDate, hospitalFilters, includeCs = false, hospitalOptions = null }) {
   const overlaps = buildOverlapDays(mine, theirs);
   const nextOverlapDate = chooseNextOverlapDate(overlaps);
   const availableHospitalOptions = hospitalOptions || availableHospitalsForInsightRange(fromDate, toDate);
@@ -3851,6 +3868,11 @@ function renderWhenInsightResult({ options, selectedComparison, mine, theirs, fr
           <input type="date" value="${escapeHtml(fromDate)}" min="${escapeHtml(insightsState.termStart || "")}" max="${escapeHtml(toDate)}" data-insights-when-from>
         </label>
         <p class="status">Leave all unticked to search every hospital.</p>
+        <label class="toggle">
+          <input type="checkbox" data-insights-when-include-cs ${includeCs ? "checked" : ""}>
+          Include CS
+        </label>
+        <p class="status">Unticked hides Clinical Support overlaps.</p>
         <div class="toggle-list">
           ${availableHospitalOptions.map((hospital) => `
             <label class="toggle">
@@ -4269,9 +4291,9 @@ async function renderInlineWhenInsight(container, doctorKey) {
     const serverDoctors = prioritizeDoctorOptions(insightRowsToDoctorOptions(serverRows));
     const serverEvents = insightRowsToEventsByDoctor(serverRows);
     const selectedComparison = serverDoctors.find((doctor) => doctor.key === doctorKey) || null;
-    const mine = selectedDoctorEventsForInsights(fromDate, toDate, []).filter(isRosterShiftEvent);
+    const mine = filterWhenInsightEvents(selectedDoctorEventsForInsights(fromDate, toDate, []), false);
     const theirs = selectedComparison
-      ? (serverEvents.get(selectedComparison.key) || []).filter(isRosterShiftEvent)
+      ? filterWhenInsightEvents(serverEvents.get(selectedComparison.key) || [], false)
       : [];
     const overlaps = selectedComparison ? buildOverlapDays(mine, theirs) : [];
     renderInlineWhenInsightResult(container, { fromDate, selectedComparison, overlaps });
@@ -4517,6 +4539,10 @@ function isRosterShiftEvent(event) {
     || text.includes("phnw")
     || text.includes("public holiday")
   );
+}
+
+function filterWhenInsightEvents(events, includeCs = false) {
+  return events.filter(isRosterShiftEvent).filter((event) => includeCs || !isClinicalSupportEvent(event));
 }
 
 function chooseNextOverlapDate(overlaps) {
