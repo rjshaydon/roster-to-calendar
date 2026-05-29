@@ -383,6 +383,41 @@ assert.match(
   "creator roster changes should force D1 resync for freshly uploaded local files",
 );
 assert.match(
+  appSource.match(/function mergeRosterFileEntries[\s\S]*?function mergeSelectedFilesWithRosterStoreStatus/)?.[0] || "",
+  /existing\.sourceType === "pending"[\s\S]*storeEntry\.sourceType \|\| existing\.sourceType/,
+  "merged roster file entries should prefer D1 source types over pending placeholders",
+);
+assert.match(
+  appSource.match(/async function importRosterFiles[\s\S]*?async function switchDoctorSelection/)?.[0] || "",
+  /showRosterImportOverlay[\s\S]*finishRosterImportOverlay/,
+  "roster imports should show an overlay while files are added",
+);
+assert.match(
+  appSource.match(/async function finishRosterImportOverlay[\s\S]*?async function importRosterFiles/)?.[0] || "",
+  /ROSTER_IMPORT_OVERLAY_MIN_MS/,
+  "roster import overlay should stay visible for at least the configured minimum duration",
+);
+assert.match(
+  appSource.match(/async function refreshCalendarStoreStatus[\s\S]*?async function toggleAdminConsole/)?.[0] || "",
+  /renderFileSurfaces\(\);/,
+  "roster status refreshes should re-render file surfaces for the active admin tab",
+);
+assert.doesNotMatch(
+  appSource.match(/function setRosterSyncState[\s\S]*?function finishRosterSync/)?.[0] || "",
+  /currentAdminTab === "system"/,
+  "roster sync state updates should not be limited to the system admin tab",
+);
+assert.match(
+  appSource.match(/async function refreshCreatorCalendarAfterFileChange[\s\S]*?async function refreshAvailableDoctorsAfterRosterChange/)?.[0] || "",
+  /mergeSelectedFilesWithRosterStoreStatus\(calendarStoreStatus, \{ force: true \}\)[\s\S]*renderFileSurfaces\(\);[\s\S]*return;/,
+  "creator roster imports should refresh merged file metadata before returning",
+);
+assert.match(
+  await readFile(new URL("../public/index.html", import.meta.url), "utf8"),
+  /id="rosterImportOverlay"/,
+  "index should include the roster import overlay shell",
+);
+assert.match(
   appSource.match(/function isRosterFileStatusHealthy[\s\S]*?function reconcileRosterSyncStates/)?.[0] || "",
   /retainedSourceOnly === true[\s\S]*function isLocalRosterFileSyncedToD1/,
   "retained R2-only roster files should not count as synced derived D1 files",
@@ -1010,7 +1045,7 @@ const aliAsadpourCasey = caseyDoctors.find((doctor) => doctor.displayName === "A
 assert.ok(aliAsadpourCasey, "fixture should include Ali ASADPOUR");
 const aliAsadpourCaseyView = buildRosterView([], [], aliAsadpourCasey.key, undefined, {}, {}, [], caseyWorkbook);
 assert.ok(
-  aliAsadpourCaseyView.events.some((event) => event.source === "Casey" && event.title === "Casey: MIC" && event.allDay === true),
+  aliAsadpourCaseyView.events.some((event) => event.source === "Casey" && event.title === "Casey: MIC AM" && event.allDay === true),
   "all-day Casey parser rules should render MIC shifts without crashing import",
 );
 setParserExtensions(defaultParserRules);

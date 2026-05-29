@@ -135,6 +135,9 @@ const contextMenu = document.querySelector("#contextMenu");
 const switchOverlay = document.querySelector("#switchOverlay");
 const switchOverlayTitle = document.querySelector("#switchOverlayTitle");
 const switchOverlayMessage = document.querySelector("#switchOverlayMessage");
+const rosterImportOverlay = document.querySelector("#rosterImportOverlay");
+const rosterImportOverlayTitle = document.querySelector("#rosterImportOverlayTitle");
+const ROSTER_IMPORT_OVERLAY_MIN_MS = 2000;
 
 const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const OWNER_EMAIL = "rhaydon@gmail.com";
@@ -363,18 +366,8 @@ addRosterFilesButton.addEventListener("click", (event) => {
 });
 
 fileInput.addEventListener("change", async () => {
-  const accepted = validateIncomingFiles([...fileInput.files]);
-  if (!accepted.length) {
-    fileInput.value = "";
-    return;
-  }
-  if (!await validateFreshRosterUploads(accepted)) {
-    fileInput.value = "";
-    return;
-  }
-  await mergeFiles(accepted);
+  await importRosterFiles([...fileInput.files]);
   fileInput.value = "";
-  await refreshCreatorCalendarAfterFileChange();
 });
 
 let rosterDragDepth = 0;
@@ -426,11 +419,7 @@ window.addEventListener("drop", async (event) => {
   const wasAborted = rosterDragAborted;
   clearRosterDragState();
   if (wasAborted) return;
-  const accepted = validateIncomingFiles([...event.dataTransfer.files]);
-  if (!accepted.length) return;
-  if (!await validateFreshRosterUploads(accepted)) return;
-  await mergeFiles(accepted);
-  await refreshCreatorCalendarAfterFileChange();
+  await importRosterFiles([...event.dataTransfer.files]);
 });
 
 filesButton?.addEventListener("click", openFilesModal);
@@ -5154,6 +5143,41 @@ function hideSwitchOverlay() {
   if (!switchOverlay) return;
   switchOverlay.classList.add("hidden");
   switchOverlay.setAttribute("aria-hidden", "true");
+}
+
+function showRosterImportOverlay(fileCount = 1) {
+  if (!rosterImportOverlay) return;
+  if (rosterImportOverlayTitle) {
+    rosterImportOverlayTitle.textContent = fileCount === 1 ? "Adding Roster File" : "Adding Roster Files";
+  }
+  rosterImportOverlay.classList.remove("hidden");
+  rosterImportOverlay.setAttribute("aria-hidden", "false");
+}
+
+function hideRosterImportOverlay() {
+  if (!rosterImportOverlay) return;
+  rosterImportOverlay.classList.add("hidden");
+  rosterImportOverlay.setAttribute("aria-hidden", "true");
+}
+
+async function finishRosterImportOverlay(startedAt = Date.now()) {
+  const remaining = ROSTER_IMPORT_OVERLAY_MIN_MS - (Date.now() - startedAt);
+  if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
+  hideRosterImportOverlay();
+}
+
+async function importRosterFiles(files) {
+  const accepted = validateIncomingFiles(files);
+  if (!accepted.length) return;
+  if (!await validateFreshRosterUploads(accepted)) return;
+  const startedAt = Date.now();
+  showRosterImportOverlay(accepted.length);
+  try {
+    await mergeFiles(accepted);
+    await refreshCreatorCalendarAfterFileChange();
+  } finally {
+    await finishRosterImportOverlay(startedAt);
+  }
 }
 
 async function switchDoctorSelection(selectedKey, options = {}) {
@@ -10259,6 +10283,9 @@ function mergeRosterFileEntries(baseEntries, status = calendarStoreStatus, optio
       byId.set(file.id, {
         ...storeEntry,
         ...existing,
+        sourceType: existing.sourceType === "pending"
+          ? (storeEntry.sourceType || existing.sourceType)
+          : (existing.sourceType || storeEntry.sourceType),
         file: existing.file || null,
         addedAt: existing.addedAt || storeEntry.addedAt,
         fromRosterDatabase: !existing.file,
@@ -10354,10 +10381,14 @@ async function refreshCreatorCalendarAfterFileChange(options = {}) {
       setStatus(error.message || "Could not reload calendar from roster database.", true);
     }
     await refreshAvailableDoctorsAfterRosterChange();
+    mergeSelectedFilesWithRosterStoreStatus(calendarStoreStatus, { force: true });
+    renderFileSurfaces();
     return;
   }
   await analyzeFiles(options.analyzeOptions || {});
   await refreshAvailableDoctorsAfterRosterChange();
+  mergeSelectedFilesWithRosterStoreStatus(calendarStoreStatus, { force: true });
+  renderFileSurfaces();
 }
 
 async function refreshAvailableDoctorsAfterRosterChange() {
@@ -10368,6 +10399,7 @@ async function refreshAvailableDoctorsAfterRosterChange() {
   }
   renderDoctorState();
   syncAccountsButton();
+  renderFileSurfaces();
 }
 
 function normalizeSavedExportRange(value) {
@@ -11732,7 +11764,7 @@ async function refreshCalendarStoreStatus(options = {}) {
     calendarStoreStatusError = error.message || "Could not check roster database status.";
     if (!options.silent) setStatus(calendarStoreStatusError, true);
   }
-  if (!accountsModal.classList.contains("hidden") && currentAdminTab === "system") renderAccountsModal();
+  renderFileSurfaces();
 }
 
 async function toggleAdminConsole() {
@@ -12040,6 +12072,8 @@ async function saveSelectedRosterFilesToD1(imports = selectedFiles, options = {}
         latestStatus = mergeLightweightRosterStatus(saveResponse, payload.file, saveResponse.fileStatus, expectedFileIds);
       }
       saveResults.push({ entry, ok: true });
+      entry.sourceType = payload.file?.sourceType || entry.sourceType;
+      entry.needsD1Resync = false;
       setRosterSyncState(entry, "synced");
     } catch (error) {
       const errorMessage = error?.message || String(error);
@@ -12126,7 +12160,6 @@ function beginRosterSync(entries, mode = "sync") {
 function setRosterSyncState(entry, status, message = "", mode = "sync") {
   rosterSyncStates.set(entry.id, { status, message, mode, name: entry.name });
   renderFileSurfaces();
-  if (!accountsModal.classList.contains("hidden") && currentAdminTab === "system") renderAccountsModal();
 }
 
 function finishRosterSync() {
