@@ -9130,6 +9130,7 @@ async function enterUserAccount(email) {
 
 async function enterDoctorProfileView(doctor) {
   if (!isOwnerAccount() && !isCreatorAuthenticated()) return;
+  rememberCreatorCalendarSourceRefs();
   const previousState = captureCalendarViewState();
   const creatorEmail = authUserEmail || currentUserEmail;
   const creatorPassword = authUserPassword || currentUserPassword;
@@ -9164,7 +9165,6 @@ async function enterDoctorProfileView(doctor) {
   if (!renderedCachedSnapshot) {
     clearPreviewData();
     doctorOptions = [];
-    selectedFiles = [];
   }
   renderLoginState();
   try {
@@ -9631,8 +9631,11 @@ async function returnToCreatorAccount() {
   forceConsoleSkin();
   setStatus("Returning to creator account...");
   forceCreatorDoctorSession();
+  restoreCreatorImportFilesIfNeeded();
   const targetContext = accountCalendarContextForEmail(OWNER_EMAIL);
   const renderedCachedSnapshot = renderCachedCalendarSnapshotForContext(targetContext, { accountSwitchStartedAt, transition });
+  restoreCreatorImportFilesIfNeeded();
+  renderFileSurfaces();
   renderLoginState();
   const validateCreator = async () => {
     await validateClaimedAccountCalendarInBackground(targetContext, {
@@ -9675,6 +9678,7 @@ async function returnToCreatorAccount() {
         await updatePreview({ resetRange: false });
       }
     }
+    await syncCreatorFileListFromStore();
     renderLoginState();
   };
   if (renderedCachedSnapshot) {
@@ -10253,6 +10257,52 @@ function importRefsToClientEntries(refs = []) {
     .filter((entry) => entry.id);
 }
 
+function restoreCreatorImportFilesIfNeeded() {
+  if (!isViewingCreatorAccount() || selectedFiles.length) return false;
+  const skipIds = pendingRemovedImportIds;
+  const refsFromMemory = creatorCalendarSourceFileRefs.filter((entry) => entry?.id && !skipIds.has(entry.id));
+  if (refsFromMemory.length) {
+    selectedFiles = importRefsToClientEntries(refsFromMemory);
+    return selectedFiles.length > 0;
+  }
+  const refsFromSnapshot = (currentSnapshot?.fileRefs || []).filter((entry) => entry?.id && !skipIds.has(entry.id));
+  if (refsFromSnapshot.length) {
+    selectedFiles = importRefsToClientEntries(refsFromSnapshot);
+    if (selectedFiles.length) rememberCreatorCalendarSourceRefs();
+    return selectedFiles.length > 0;
+  }
+  return false;
+}
+
+async function syncCreatorFileListFromStore(options = {}) {
+  if (!isViewingCreatorAccount() || !cloudAvailable) return;
+  if (!selectedFiles.length) restoreCreatorImportFilesIfNeeded();
+  await refreshCalendarStoreStatus({ silent: true, includeAvailableDoctors: options.includeAvailableDoctors === true }).catch(() => null);
+  if ((calendarStoreStatus?.files || []).length) {
+    mergeSelectedFilesWithRosterStoreStatus(calendarStoreStatus, {
+      force: true,
+      removeMissingFromStore: options.removeMissingFromStore === true,
+      removedIds: options.removedIds || [],
+    });
+  } else if (!selectedFiles.length) {
+    restoreCreatorImportFilesIfNeeded();
+  }
+  renderFileSurfaces();
+}
+
+function applyLoadedCalendarFileRefs(snapshot) {
+  const snapshotRefs = (Array.isArray(snapshot?.fileRefs) ? snapshot.fileRefs : [])
+    .filter((entry) => entry?.id && !pendingRemovedImportIds.has(entry.id));
+  if (snapshotRefs.length) {
+    selectedFiles = importRefsToClientEntries(snapshotRefs);
+    rememberCreatorCalendarSourceRefs();
+    return;
+  }
+  if (isViewingCreatorAccount() && !selectedFiles.length) {
+    restoreCreatorImportFilesIfNeeded();
+  }
+}
+
 function rosterStoreFileToClientEntry(file) {
   if (!file?.id) return null;
   return {
@@ -10499,6 +10549,7 @@ async function pollCalendarAfterRosterChange() {
         if (loaded && currentSnapshot) {
           renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
           setStatus("Calendar loaded.");
+          await syncCreatorFileListFromStore().catch(() => null);
           return;
         }
       } catch {
@@ -10527,6 +10578,7 @@ async function refreshCreatorSnapshotInBackground(options = {}) {
       renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
       currentSnapshotStale = false;
       currentSnapshotBuiltAt = new Date().toISOString();
+      await syncCreatorFileListFromStore();
       setStatus("Calendar refreshed.");
       return true;
     }
@@ -11372,7 +11424,7 @@ async function loadCloudCalendarEvents(options = {}) {
   currentSnapshotStale = data.snapshotStale === true;
   currentSnapshotBuiltAt = String(data.snapshotBuiltAt || "");
   if (!currentSnapshot) return false;
-  selectedFiles = importRefsToClientEntries(currentSnapshot.fileRefs || selectedFiles.map(importRefForWorkspace));
+  applyLoadedCalendarFileRefs(currentSnapshot);
   restoredSessionState = currentSnapshot.session || clearCloudLoadedSessionFilters(restoredSessionState || {});
   saveWorkspaceSnapshotForEmail(activeWorkspaceOwnerKey(), {
     fileRefs: selectedFiles.map(importRefForWorkspace),
@@ -11916,17 +11968,18 @@ async function refreshCalendarStoreStatus(options = {}) {
     if (options.includeAvailableDoctors === true && Array.isArray(data.availableDoctors)) {
       availableRosterDoctors = sanitizeAvailableRosterDoctors(data.availableDoctors);
     }
-    if (isCreatorAuthenticated() && Array.isArray(data.files) && data.files.length && !selectedFiles.some((entry) => entry.file)) {
-      selectedFiles = importRefsToClientEntries(data.files);
-      rememberCreatorCalendarSourceRefs();
-      renderFilesList();
+    if (isCreatorAuthenticated() && Array.isArray(data.files) && data.files.length) {
+      restoreCreatorImportFilesIfNeeded();
+      mergeSelectedFilesWithRosterStoreStatus(calendarStoreStatus, { force: true });
     }
     calendarStoreStatusError = "";
     reconcileRosterSyncStates(calendarStoreStatus);
     if (!options.silent) setStatus("Roster database status checked.");
   } catch (error) {
-    calendarStoreStatusError = error.message || "Could not check roster database status.";
-    if (!options.silent) setStatus(calendarStoreStatusError, true);
+    if (!options.silent) {
+      calendarStoreStatusError = error.message || "Could not check roster database status.";
+      setStatus(calendarStoreStatusError, true);
+    }
   }
   renderFileSurfaces();
 }
@@ -12824,7 +12877,7 @@ function renderCachedCalendarSnapshotForContext(context = {}, options = {}) {
   currentSnapshotStale = false;
   currentSnapshotBuiltAt = cached.cachedAt || cached.preview?.lastParsed || "";
   currentCalendarRevision = expectedRevision || cached.calendarRevision || currentCalendarRevision;
-  selectedFiles = importRefsToClientEntries(cached.fileRefs || []);
+  applyLoadedCalendarFileRefs(cached);
   renderWorkspaceFromSnapshot(cached, cached.session || {});
   markLoginPhase("cachedCalendarRendered", options.loginStartedAt);
   markAccountSwitchPhase("cachedCalendarRendered", options.accountSwitchStartedAt);
@@ -13307,6 +13360,7 @@ async function removeStoredImport(id) {
   cancelScheduledCloudStateSave();
   rosterSyncStates.delete(id);
   selectedFiles = selectedFiles.filter((entry) => entry.id !== id);
+  creatorCalendarSourceFileRefs = creatorCalendarSourceFileRefs.filter((entry) => entry.id !== id);
   removeImportRefsFromCurrentSnapshot(id);
   removeImportRefsFromWorkspaceStore(id);
   saveCurrentSessionState();
@@ -13408,6 +13462,10 @@ async function removeStoredImport(id) {
       });
     } catch (error) {
       setStatus(error.message || "Could not refresh calendar after file removal.", true);
+      await syncCreatorFileListFromStore({
+        removeMissingFromStore: rosterDataRemoved,
+        removedIds: rosterDataRemoved ? [id] : [],
+      }).catch(() => null);
     }
     scheduleCloudStateSave();
     setStatus(`${removedName} removed.`);
@@ -13435,7 +13493,10 @@ async function bootstrapImports(options = {}) {
     syncAccountsButton();
     if (!selectedFiles.length) {
       if (cloudAvailable) {
-        selectedFiles = [];
+        restoreCreatorImportFilesIfNeeded();
+        if (!selectedFiles.length) {
+          await syncCreatorFileListFromStore().catch(() => null);
+        }
       } else {
         const workspace = loadCurrentWorkspace();
         selectedFiles = await loadStoredImportsByRefs(workspace?.fileRefs || []);

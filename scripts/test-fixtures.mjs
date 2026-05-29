@@ -468,6 +468,51 @@ assert.match(
   "creator cloud workspaces should skip browser preview rebuild after file analysis",
 );
 assert.match(
+  appSource.match(/async function enterDoctorProfileView[\s\S]*?async function exitDoctorProfileView/)?.[0] || "",
+  /rememberCreatorCalendarSourceRefs\(\)/,
+  "doctor-profile entry should preserve creator import refs before switching context",
+);
+assert.doesNotMatch(
+  appSource.match(/async function enterDoctorProfileView[\s\S]*?async function exitDoctorProfileView/)?.[0] || "",
+  /if \(!renderedCachedSnapshot\) \{[\s\S]*selectedFiles = \[\]/,
+  "doctor-profile entry should not clear creator import files when cache is unavailable",
+);
+assert.match(
+  appSource.match(/function restoreCreatorImportFilesIfNeeded[\s\S]*?function applyLoadedCalendarFileRefs/)?.[0] || "",
+  /pendingRemovedImportIds[\s\S]*creatorCalendarSourceFileRefs/,
+  "creator import restore should skip files pending removal",
+);
+assert.match(
+  appSource.match(/function applyLoadedCalendarFileRefs[\s\S]*?function rosterStoreFileToClientEntry/)?.[0] || "",
+  /pendingRemovedImportIds[\s\S]*!selectedFiles\.length[\s\S]*restoreCreatorImportFilesIfNeeded/,
+  "loaded calendar snapshots should preserve existing creator files when snapshot refs are empty",
+);
+assert.match(
+  appSource.match(/function renderCachedCalendarSnapshotForContext[\s\S]*?function saveWorkspaceSnapshotForEmail/)?.[0] || "",
+  /applyLoadedCalendarFileRefs\(cached\)/,
+  "cached calendar rendering should preserve creator import files when cache refs are empty",
+);
+assert.match(
+  appSource.match(/async function returnToCreatorAccount[\s\S]*?async function clearLocalWorkspace/)?.[0] || "",
+  /restoreCreatorImportFilesIfNeeded\(\)[\s\S]*renderFileSurfaces\(\)/,
+  "returning to creator should restore and render import files before background validation",
+);
+assert.match(
+  appSource.match(/async function syncCreatorFileListFromStore[\s\S]*?function applyLoadedCalendarFileRefs/)?.[0] || "",
+  /calendarStoreStatus\?\.files[\s\S]*mergeSelectedFilesWithRosterStoreStatus[\s\S]*removeMissingFromStore/,
+  "creator file sync should reconcile against D1 without restoring stale refs after a successful delete",
+);
+assert.match(
+  appSource.match(/async function refreshCalendarStoreStatus[\s\S]*?async function toggleAdminConsole/)?.[0] || "",
+  /if \(!options\.silent\)[\s\S]*calendarStoreStatusError/,
+  "silent roster status refreshes should keep the last known file list when the server is overloaded",
+);
+assert.match(
+  appSource.match(/async function removeStoredImport[\s\S]*?function loadConflictSelections/)?.[0] || "",
+  /creatorCalendarSourceFileRefs = creatorCalendarSourceFileRefs\.filter/,
+  "roster deletion should drop removed files from remembered creator import refs",
+);
+assert.match(
   await readFile(new URL("../public/index.html", import.meta.url), "utf8"),
   /id="rosterImportOverlay"/,
   "index should include the roster import overlay shell",
