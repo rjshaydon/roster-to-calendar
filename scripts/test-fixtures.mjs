@@ -216,9 +216,34 @@ assert.match(
   "recent building snapshot rows should suppress duplicate inline rebuilds",
 );
 assert.match(
-  stateSource.match(/function scheduleSnapshotWarmupForAllAccounts[\s\S]*?async function buildDerivedAccountSnapshot/)?.[0] || "",
-  /SNAPSHOT_GLOBAL_WARMUP_LIMIT[\s\S]*sanitizeClaims\(record\?\.claims\)\.length[\s\S]*listSnapshotRegistryWarmupCandidates[\s\S]*statuses: \["ready"\]/,
-  "global snapshot warmup should be bounded to active claimed accounts and existing ready profile snapshots",
+  stateSource.match(/function snapshotWarmupSourceTypeSet[\s\S]*?function scheduleSnapshotWarmupForAllAccounts/)?.[0] || "",
+  /accountWarmupAffectedBySourceTypes[\s\S]*doctorProfileWarmupAffectedBySourceTypes[\s\S]*SNAPSHOT_GLOBAL_WARMUP_LIMIT[\s\S]*listSnapshotRegistryWarmupCandidates[\s\S]*statuses: \["ready"\]/,
+  "scoped snapshot warmup should only rebuild creator, affected claimed accounts, and matching doctor profiles",
+);
+assert.match(
+  appSource.match(/function doctorProfileSourceTypes[\s\S]*?function doctorOptionsForCurrentAccount/)?.[0] || "",
+  /normalizedDoctorSourceTypes\(repositoryDoctor\)/,
+  "doctor profile source types should come from doctor metadata rather than defaulting to every hospital",
+);
+assert.doesNotMatch(
+  appSource.match(/function doctorProfileSourceTypes[\s\S]*?function doctorOptionsForCurrentAccount/)?.[0] || "",
+  /\["casey", "ddh", "mch", "mmc"\]/,
+  "doctor profile source types must not fall back to all hospitals",
+);
+assert.match(
+  appSource.match(/function calendarSnapshotCacheAffectedBySourceTypes[\s\S]*?function invalidateCalendarSnapshotCachesForSourceTypes/)?.[0] || "",
+  /profileSources\.some\(\(sourceType\) => changed\.has\(sourceType\)\)/,
+  "browser snapshot cache invalidation should be scoped to overlapping hospital source types",
+);
+assert.match(
+  appSource.match(/async function validateDoctorProfileCalendarInBackground[\s\S]*?async function enterUserAccount/)?.[0] || "",
+  /renderedCachedSnapshot && visibleSnapshotIsCurrent\(\{ requireNotStale: true \}\)/,
+  "doctor profile background validation should skip network work when the browser cache is current",
+);
+assert.match(
+  appSource.match(/async function validateClaimedAccountCalendarInBackground[\s\S]*?async function validateDoctorProfileCalendarInBackground/)?.[0] || "",
+  /preserveRenderedSnapshot && visibleSnapshotIsCurrent\(\{ requireNotStale: true \}\)/,
+  "claimed account background validation should skip network work when the browser cache is current",
 );
 assert.match(
   appSource.match(/async function prefetchCreatorSwitchTarget[\s\S]*?function queueCreatorSwitchTargetPrefetch/)?.[0] || "",
@@ -309,8 +334,8 @@ assert.match(
 );
 assert.match(
   stateSource.match(/async function purgeRosterImports[\s\S]*?function deferCanonicalDoctorRefresh/)?.[0] || "",
-  /deleteDerivedRosterFile[\s\S]*deleteRetainedRosterSource[\s\S]*deferCanonicalDoctorRefresh/,
-  "roster purge should delete R2 sources before deferring canonical doctor refresh",
+  /querySourceTypesForFileIds[\s\S]*deleteDerivedRosterFile[\s\S]*deleteRetainedRosterSource[\s\S]*deferCanonicalDoctorRefresh/,
+  "roster purge should resolve source types before deleting R2 sources and deferring canonical doctor refresh",
 );
 assert.match(
   stateSource.match(/async function repositoryDoctorCandidates[\s\S]*?async function refreshCanonicalDoctors/)?.[0] || "",
@@ -384,7 +409,7 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function removeStoredImport[\s\S]*?function loadConflictSelections/)?.[0] || "",
-  /removeRosterImports[\s\S]*invalidateCalendarSnapshotCache[\s\S]*refreshCreatorCalendarAfterFileChange[\s\S]*removeMissingFromStore: true[\s\S]*preserveVisiblePreview: true/,
+  /removeRosterImports[\s\S]*invalidateCalendarSnapshotCachesForChangedRosterFiles[\s\S]*refreshCreatorCalendarAfterFileChange[\s\S]*removeMissingFromStore: true[\s\S]*preserveVisiblePreview: true/,
   "roster deletion should purge cloud roster storage first, then refresh the creator calendar without clearing the visible preview first",
 );
 assert.match(
@@ -817,7 +842,7 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function saveSelectedRosterFilesToD1[\s\S]*?function emptyRosterPersistenceSummary/)?.[0] || "",
-  /if \(!summary\.complete\)[\s\S]*invalidateCalendarSnapshotCache\(\)/,
+  /if \(!summary\.complete\)[\s\S]*invalidateCalendarSnapshotCachesForChangedRosterFiles\(entriesToSave\)/,
   "roster sync should invalidate snapshot cache only after a successful save",
 );
 assert.match(appSource, /function rosterSyncLabel/, "file cards should expose live roster sync labels");

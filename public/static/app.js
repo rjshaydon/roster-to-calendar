@@ -5352,8 +5352,12 @@ function normalizedDoctorSourceTypes(doctor) {
 }
 
 function doctorProfileSourceTypes(doctor) {
-  const sourceTypes = normalizedDoctorSourceTypes(doctor);
-  return sourceTypes.length ? sourceTypes : ["casey", "ddh", "mch", "mmc"];
+  const fromDoctor = normalizedDoctorSourceTypes(doctor);
+  if (fromDoctor.length) return fromDoctor;
+  const repositoryDoctor = (availableRosterDoctors || []).find(
+    (entry) => doctorIdentityKey(entry) === doctorIdentityKey(doctor),
+  );
+  return normalizedDoctorSourceTypes(repositoryDoctor);
 }
 
 function doctorOptionsForCurrentAccount(doctors) {
@@ -9012,6 +9016,9 @@ function accountCalendarContextForEmail(email) {
 }
 
 async function validateClaimedAccountCalendarInBackground(context = {}, options = {}) {
+  if (options.preserveRenderedSnapshot && visibleSnapshotIsCurrent({ requireNotStale: true })) {
+    return;
+  }
   const targetEmail = normalizeEmail(context.ownerEmail || context.ownerId);
   const cachedSnapshot = options.preserveRenderedSnapshot ? currentSnapshot : null;
   const cachedRevision = cachedSnapshot?.calendarRevision || "";
@@ -9051,6 +9058,10 @@ async function validateClaimedAccountCalendarInBackground(context = {}, options 
 }
 
 async function validateDoctorProfileCalendarInBackground(doctor, previousState, options = {}) {
+  if (options.renderedCachedSnapshot && visibleSnapshotIsCurrent({ requireNotStale: true })) {
+    renderLoginState();
+    return;
+  }
   const result = await loadUnclaimedDoctorCalendar(doctor, previousState, {
     profile: options.profile,
     cachedRevision: options.cachedRevision || "",
@@ -12351,7 +12362,7 @@ async function saveSelectedRosterFilesToD1(imports = selectedFiles, options = {}
     error.isRosterPersistenceError = true;
     throw error;
   }
-  invalidateCalendarSnapshotCache();
+  invalidateCalendarSnapshotCachesForChangedRosterFiles(entriesToSave);
   setStatus(`Calendar saved to D1. ${summary.persistedCount}/${summary.expectedCount} roster file${summary.expectedCount === 1 ? "" : "s"} confirmed.`);
   finishRosterSync();
   return summary;
@@ -12885,11 +12896,66 @@ function queueDeferredSnapshotCachePersist(snapshot = currentSnapshot, context =
 }
 
 function invalidateCalendarSnapshotCache() {
+  invalidateCalendarSnapshotCachesForSourceTypes(["mmc", "ddh", "casey", "mch"], { includeCreator: true, includeAllProfiles: true });
+}
+
+function sourceTypesFromCalendarSnapshotCacheKey(key = "") {
+  const [mode = "", ownerId = "", doctorKey = ""] = String(key || "").split("|");
+  if (mode === "doctor-profile") {
+    const profileId = ownerId.startsWith("doctor-profile:") ? ownerId.slice("doctor-profile:".length) : ownerId;
+    const sourceText = profileId.includes("::") ? profileId.split("::").slice(1).join("::") : "";
+    return sourceText.split("+").map((item) => String(item || "").toLowerCase()).filter((item) => item === "mmc" || item === "ddh" || item === "casey" || item === "mch");
+  }
+  if (mode === "creator-account") {
+    return ["mmc", "ddh", "casey", "mch"];
+  }
+  const snapshot = loadCalendarSnapshotCacheStore()[key]?.snapshot;
+  const doctor = Array.isArray(snapshot?.doctorOptions)
+    ? snapshot.doctorOptions.find((entry) => normalizeRosterName(entry?.key || "") === normalizeRosterName(doctorKey))
+      || snapshot.doctorOptions[0]
+    : null;
+  const fromDoctor = normalizedDoctorSourceTypes(doctor);
+  if (fromDoctor.length) return fromDoctor;
+  const claims = sanitizeRosterClaims(snapshot?.session?.claims || currentRosterClaims || []);
+  return [...new Set(claims.map((claim) => String(claim?.sourceType || "").toLowerCase()).filter((item) => item === "mmc" || item === "ddh" || item === "casey" || item === "mch"))];
+}
+
+function calendarSnapshotCacheAffectedBySourceTypes(key = "", entry = null, changedSourceTypes = [], options = {}) {
+  const changed = new Set(
+    (Array.isArray(changedSourceTypes) ? changedSourceTypes : [])
+      .map((item) => String(item || "").toLowerCase())
+      .filter((item) => item === "mmc" || item === "ddh" || item === "casey" || item === "mch"),
+  );
+  if (!changed.size || options.includeAllProfiles === true) return true;
+  const mode = String(key || "").split("|")[0] || "";
+  if (options.includeCreator !== false && mode === "creator-account") return true;
+  const profileSources = sourceTypesFromCalendarSnapshotCacheKey(key);
+  if (!profileSources.length) return false;
+  return profileSources.some((sourceType) => changed.has(sourceType));
+}
+
+function invalidateCalendarSnapshotCachesForSourceTypes(changedSourceTypes = [], options = {}) {
   try {
-    localStorage.removeItem(CALENDAR_SNAPSHOT_CACHE_KEY);
+    const store = loadCalendarSnapshotCacheStore();
+    let changed = false;
+    for (const [key, entry] of Object.entries(store)) {
+      if (!calendarSnapshotCacheAffectedBySourceTypes(key, entry, changedSourceTypes, options)) continue;
+      delete store[key];
+      changed = true;
+    }
+    if (changed) saveCalendarSnapshotCacheStore(store);
   } catch {
     // Cache invalidation must not block the foreground workflow.
   }
+}
+
+function invalidateCalendarSnapshotCachesForChangedRosterFiles(entries = [], options = {}) {
+  const sourceTypes = [...new Set(
+    (Array.isArray(entries) ? entries : [])
+      .map((entry) => String(entry?.sourceType || "").toLowerCase())
+      .filter((item) => item === "mmc" || item === "ddh" || item === "casey" || item === "mch"),
+  )];
+  invalidateCalendarSnapshotCachesForSourceTypes(sourceTypes, options);
 }
 
 function renderCachedCalendarSnapshot(options = {}) {
@@ -12911,7 +12977,7 @@ function renderCachedCalendarSnapshotForContext(context = {}, options = {}) {
   renderWorkspaceFromSnapshot(cached, cached.session || {});
   markLoginPhase("cachedCalendarRendered", options.loginStartedAt);
   markAccountSwitchPhase("cachedCalendarRendered", options.accountSwitchStartedAt);
-  setStatus("Calendar loaded from cache. Checking for updates...");
+  setStatus("Calendar loaded from cache.");
   return true;
 }
 
@@ -13411,7 +13477,7 @@ async function removeStoredImport(id) {
       try {
         await calendarStoreRequestWithRetry("removeRosterImports", { removedImportIds: [id] }, { attempts: 4 });
         rosterDataRemoved = true;
-        invalidateCalendarSnapshotCache();
+        invalidateCalendarSnapshotCachesForChangedRosterFiles([removedEntry]);
       } catch (error) {
         const overload = /503|CPU|memory|overload/i.test(String(error?.message || ""));
         if (!overload) {
@@ -13427,7 +13493,7 @@ async function removeStoredImport(id) {
       });
       if (!rosterDataRemoved) {
         rosterDataRemoved = true;
-        invalidateCalendarSnapshotCache();
+        invalidateCalendarSnapshotCachesForChangedRosterFiles([removedEntry]);
       }
     } catch (error) {
       const overload = /503|CPU|memory|overload/i.test(String(error?.message || ""));

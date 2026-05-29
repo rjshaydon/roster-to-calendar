@@ -44,6 +44,7 @@ import {
   queryRawRosterFiles,
   queryRosterFiles,
   queryRosterFileRanges,
+  querySourceTypesForFileIds,
   queryRosterDoctors,
   replaceDerivedRosterFile,
   startDerivedRosterFileSave,
@@ -421,9 +422,9 @@ export async function onRequestPost(context) {
         return Response.json({ error: "Roster file ids are required." }, { status: 400 });
       }
       try {
-        await purgeRosterImports(context, removedIds, "removeRosterImports");
-        scheduleSnapshotWarmupForAllAccounts(context, { reason: "removeRosterImports" });
-        return Response.json({ ok: true, removedImportIds: removedIds });
+        const purgeResult = await purgeRosterImports(context, removedIds, "removeRosterImports");
+        scheduleSnapshotWarmupForSourceTypes(context, purgeResult.sourceTypes, { reason: "removeRosterImports" });
+        return Response.json({ ok: true, removedImportIds: purgeResult.removedIds });
       } catch (error) {
         return Response.json({ error: error?.message || "Could not remove roster files." }, { status: 503 });
       }
@@ -560,13 +561,14 @@ export async function onRequestPost(context) {
         return Response.json({ error: "Roster file is required." }, { status: 400 });
       }
       try {
+        const sourceTypes = await querySourceTypesForFileIds(context.env.ROSTER_DB, [fileId]).catch(() => []);
         await deleteDerivedRosterFile(context.env.ROSTER_DB, fileId);
         await deleteRetainedRosterSource(context.env.ROSTER_DB, context.env.ROSTER_FILES, fileId);
         deferCanonicalDoctorRefresh(context, "resetDerivedCalendarFile");
+        scheduleSnapshotWarmupForSourceTypes(context, sourceTypes, { reason: "resetDerivedCalendarFile" });
       } catch (error) {
         return Response.json({ error: error?.message || "Could not reset roster file." }, { status: 503 });
       }
-      scheduleSnapshotWarmupForAllAccounts(context, { reason: "resetDerivedCalendarFile" });
       const status = await calendarStoreStatus(null, context.env.ROSTER_DB, { doctorKey: OWNER_DOCTOR_KEY });
       return Response.json({ ok: true, reset: fileId, ...status });
     }
@@ -584,15 +586,16 @@ export async function onRequestPost(context) {
         .map((file) => file.id)
         .filter((id) => id && !keepFileIds.includes(id));
       try {
+        const removedSourceTypes = await querySourceTypesForFileIds(context.env.ROSTER_DB, removedFileIds).catch(() => []);
         for (const id of removedFileIds) {
           await deleteDerivedRosterFile(context.env.ROSTER_DB, id);
           await deleteRetainedRosterSource(context.env.ROSTER_DB, context.env.ROSTER_FILES, id);
         }
         deferCanonicalDoctorRefresh(context, "replaceActiveRosterFiles");
+        scheduleSnapshotWarmupForSourceTypes(context, removedSourceTypes, { reason: "replaceActiveRosterFiles" });
       } catch (error) {
         return Response.json({ error: error?.message || "Could not remove roster files." }, { status: 503 });
       }
-      scheduleSnapshotWarmupForAllAccounts(context, { reason: "replaceActiveRosterFiles" });
       const status = await calendarStoreStatus(null, context.env.ROSTER_DB, {
         doctorKey: normalizeRosterName(body?.selectedDoctorKey || OWNER_DOCTOR_KEY),
         expectedFileIds: keepFileIds,
@@ -982,10 +985,12 @@ export async function onRequestPost(context) {
       state.imports = state.imports.map(repositoryImportRef);
       const claims = sanitizeClaims(targetRecord.claims);
       const removedImportIds = sanitizeRepositoryFileIds(body?.removedImportIds);
+      let removedRosterSourceTypes = [];
       if ((targetRole === "creator" || targetRole === "owner") && saveEmail === email && removedImportIds.length) {
         const removedIds = [...new Set(removedImportIds)];
         try {
-          await purgeRosterImports(context, removedIds, "save-removeImports");
+          const purgeResult = await purgeRosterImports(context, removedIds, "save-removeImports");
+          removedRosterSourceTypes = purgeResult.sourceTypes || [];
         } catch (error) {
           return Response.json({ error: error?.message || "Could not remove roster files." }, { status: 503 });
         }
@@ -1011,7 +1016,7 @@ export async function onRequestPost(context) {
       await upsertAccountMirror(context.env.ROSTER_DB, updatedRecord);
       const calendarRevision = await queryCalendarRevision(context.env.ROSTER_DB, saveEmail).catch(() => "");
       if (removedImportIds.length) {
-        scheduleSnapshotWarmupForAllAccounts(context, { reason: "save-removeImports" });
+        scheduleSnapshotWarmupForSourceTypes(context, removedRosterSourceTypes, { reason: "save-removeImports" });
       } else {
         scheduleSnapshotWarmupForAccount(context, saveEmail, { reason: "save" });
       }
@@ -2552,8 +2557,27 @@ function doctorProfileFromSnapshotRegistryEntry(entry) {
   });
 }
 
-function scheduleSnapshotWarmupForAllAccounts(context, options = {}) {
+function snapshotWarmupSourceTypeSet(sourceTypes = []) {
+  const normalized = sanitizeSourceTypes(sourceTypes);
+  return new Set((normalized.length ? normalized : ["mmc", "ddh", "casey", "mch"]).map((item) => String(item).toLowerCase()));
+}
+
+function accountWarmupAffectedBySourceTypes(prepared, changedSourceTypes = []) {
+  const changed = snapshotWarmupSourceTypeSet(changedSourceTypes);
+  const role = prepared?.role || "";
+  if (role === "creator" || role === "owner") return true;
+  return sanitizeClaims(prepared?.claims || []).some((claim) => changed.has(String(claim?.sourceType || "").toLowerCase()));
+}
+
+function doctorProfileWarmupAffectedBySourceTypes(profile, changedSourceTypes = []) {
+  const changed = snapshotWarmupSourceTypeSet(changedSourceTypes);
+  const profileSources = sanitizeSourceTypes(profile?.sourceTypes || doctorProfileFromSnapshotRegistryEntry({ ownerId: profile?.profileId || profile?.id || "" }).sourceTypes);
+  return profileSources.some((sourceType) => changed.has(String(sourceType).toLowerCase()));
+}
+
+function scheduleSnapshotWarmupForSourceTypes(context, sourceTypes = [], options = {}) {
   if (typeof context.waitUntil !== "function") return;
+  const changedSourceTypes = [...snapshotWarmupSourceTypeSet(sourceTypes)];
   context.waitUntil((async () => {
     const requestedRange = defaultSnapshotRange();
     const rangeKey = snapshotRegistryRangeKey(requestedRange);
@@ -2575,6 +2599,7 @@ function scheduleSnapshotWarmupForAllAccounts(context, options = {}) {
         db: context.env.ROSTER_DB,
         includeAvailableDoctors: false,
       });
+      if (!accountWarmupAffectedBySourceTypes(prepared, changedSourceTypes)) continue;
       const doctorKey = normalizeRosterName(
         prepared.state?.session?.doctorKey
         || (prepared.role === "creator" || prepared.role === "owner" ? OWNER_DOCTOR_KEY : prepared.claims?.[0]?.key)
@@ -2596,12 +2621,13 @@ function scheduleSnapshotWarmupForAllAccounts(context, options = {}) {
       ownerTypes: ["doctor-profile"],
       statuses: ["ready"],
       rangeKey,
-      limit: remaining,
+      limit: remaining * 3,
     }).catch(() => []);
     for (const candidate of profileCandidates) {
+      if (warmed >= limit) break;
       const profile = await loadDoctorProfileState(null, context.env.ROSTER_DB, candidate.ownerId).catch(() => null)
         || doctorProfileFromSnapshotRegistryEntry(candidate);
-      if (!profile) continue;
+      if (!profile || !doctorProfileWarmupAffectedBySourceTypes(profile, changedSourceTypes)) continue;
       await buildAndStoreDoctorProfileSnapshot(context, {
         profile,
         ownerEmail: CREATOR_EMAIL,
@@ -2609,13 +2635,19 @@ function scheduleSnapshotWarmupForAllAccounts(context, options = {}) {
         descriptor: buildDoctorProfileSnapshotCacheDescriptor(profile, requestedRange),
         reason: options.reason || "roster-change",
       }).catch(() => null);
+      warmed += 1;
     }
   })().catch((error) => {
-    console.warn("Global snapshot warmup failed", {
+    console.warn("Scoped snapshot warmup failed", {
       reason: options.reason || "roster-change",
+      sourceTypes: changedSourceTypes,
       error: error?.message || String(error),
     });
   }));
+}
+
+function scheduleSnapshotWarmupForAllAccounts(context, options = {}) {
+  scheduleSnapshotWarmupForSourceTypes(context, ["mmc", "ddh", "casey", "mch"], options);
 }
 
 async function buildDerivedAccountSnapshot(db, context) {
@@ -3667,13 +3699,14 @@ async function refreshCanonicalDoctors(db) {
 
 async function purgeRosterImports(context, fileIds, reason = "removeRosterImports") {
   const removedIds = sanitizeRepositoryFileIds(fileIds);
-  if (!removedIds.length) return [];
+  if (!removedIds.length) return { removedIds: [], sourceTypes: [] };
+  const sourceTypes = await querySourceTypesForFileIds(context.env.ROSTER_DB, removedIds).catch(() => []);
   for (const id of removedIds) {
     await deleteDerivedRosterFile(context.env.ROSTER_DB, id);
     await deleteRetainedRosterSource(context.env.ROSTER_DB, context.env.ROSTER_FILES, id);
   }
   deferCanonicalDoctorRefresh(context, reason);
-  return removedIds;
+  return { removedIds, sourceTypes };
 }
 
 function deferCanonicalDoctorRefresh(context, reason = "roster-change") {
@@ -3760,7 +3793,9 @@ async function runCoreDerivedRosterSave(context, job = {}) {
           });
         return Promise.resolve(presence).then(() => {
           deferCanonicalDoctorRefresh(context, job.reason || "saveDerivedCalendarFile");
-          scheduleSnapshotWarmupForAllAccounts(context, { reason: job.reason || "saveDerivedCalendarFile" });
+          scheduleSnapshotWarmupForSourceTypes(context, [String(filePayload.sourceType || "").toLowerCase()].filter(Boolean), {
+            reason: job.reason || "saveDerivedCalendarFile",
+          });
         });
       };
       if (typeof context.waitUntil === "function") {

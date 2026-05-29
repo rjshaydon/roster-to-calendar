@@ -920,6 +920,22 @@ export async function queryRosterFiles(db, options = {}) {
   })).filter((file) => file.id && SOURCE_TYPES.includes(file.sourceType));
 }
 
+export async function querySourceTypesForFileIds(db, fileIds = []) {
+  if (!db?.prepare) return [];
+  const ids = [...new Set((Array.isArray(fileIds) ? fileIds : []).map((id) => String(id || "").trim()).filter(Boolean))];
+  if (!ids.length) return [];
+  await ensureCalendarSchema(db);
+  const placeholders = ids.map(() => "?").join(", ");
+  const rows = await db.prepare(`
+    SELECT DISTINCT source_type AS source_type
+    FROM roster_files
+    WHERE id IN (${placeholders})
+  `).bind(...ids).all();
+  return [...new Set((rows?.results || rows || [])
+    .map((row) => String(row?.source_type || "").toLowerCase())
+    .filter((sourceType) => SOURCE_TYPES.includes(sourceType)))];
+}
+
 export async function queryRosterFileRanges(db, options = {}) {
   if (!db?.prepare) return [];
   await ensureCalendarSchema(db);
