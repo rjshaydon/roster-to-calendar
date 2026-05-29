@@ -1065,14 +1065,6 @@ preview.addEventListener("change", (event) => {
     applyPreviewTermStart(termStartSelect.value);
   }
 });
-preview.addEventListener("change", (event) => {
-  const hospitalSelect = event.target.closest("[data-preview-hospital-filter]");
-  if (!hospitalSelect) return;
-  settings.hospitalFilter = hospitalSelect.value;
-  if (settingsInputs.hospitalFilter) settingsInputs.hospitalFilter.value = settings.hospitalFilter;
-  saveCurrentSessionState();
-  updatePreview();
-});
 insightsModalBody.addEventListener("change", (event) => {
   const whoDateInput = event.target.closest("[data-insights-who-date]");
   if (whoDateInput && insightsState?.mode === "who") {
@@ -2703,7 +2695,7 @@ function buildFilteredPreviewEvents(baseData, filterSettings, defaultRange = der
   const previewStart = boundedPreviewStart(filterSettings.dateFrom, defaultRange.start);
   const previewEnd = boundedPreviewEnd(filterSettings.dateTo, defaultRange.end);
   const visibleEvents = filterEventsByPreviewRange(events, previewStart, previewEnd)
-    .filter((event) => matchesPreviewHospitalFilter(event, filterSettings.hospitalFilter));
+    .filter((event) => matchesPreviewHospitalFilter(event, "all"));
   visibleEvents.sort(comparePreviewEvents);
   return visibleEvents;
 }
@@ -3106,13 +3098,11 @@ function renderPreviewGrid(doctor, data) {
 }
 
 function renderPreviewHeader(doctor, data) {
-  const hospitalSelector = renderPreviewHospitalSelector(data.hospitals || []);
   return `
     <div class="preview-head">
       ${renderPreviewDoctorControl(doctor)}
       <div class="preview-toolbar">
         ${renderPreviewRangeControls(data.previewStart, data.previewEnd)}
-        ${hospitalSelector || `<span class="preview-toolbar-spacer" aria-hidden="true"></span>`}
         <span class="preview-event-count">${data.count} events</span>
         ${canReturnToCreator()
           ? `<button type="button" class="button button-secondary preview-back-button" data-preview-back-to-creator>Back to creator</button>`
@@ -3145,22 +3135,6 @@ function renderPreviewDoctorControl(doctor) {
       <span>Doctor</span>
       <strong>${escapeHtml(doctor?.displayName || currentAccount().realName || "Selected doctor")}</strong>
     </div>
-  `;
-}
-
-function renderPreviewHospitalSelector(hospitals) {
-  if (!hospitals || hospitals.length < 2) return "";
-  return `
-    <label class="preview-hospital-filter">
-      <span>Hospital</span>
-      <select data-preview-hospital-filter>
-        <option value="all" ${settings.hospitalFilter === "all" ? "selected" : ""}>All hospitals</option>
-        ${hospitals.map((code) => {
-          const value = code.toLowerCase();
-          return `<option value="${value}" ${settings.hospitalFilter === value ? "selected" : ""}>${escapeHtml(code)}</option>`;
-        }).join("")}
-      </select>
-    </label>
   `;
 }
 
