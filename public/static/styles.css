@@ -522,6 +522,11 @@ input[type="color"] {
   font-weight: 700;
 }
 
+.admin-files-sort {
+  margin-top: 16px;
+  max-width: 280px;
+}
+
 .file-summary {
   margin-top: 20px;
   display: grid;

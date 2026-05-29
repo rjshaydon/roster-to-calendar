@@ -294,6 +294,16 @@ let pendingExportRange = defaultExportRangeState();
 let pendingExportHospitals = [];
 let currentAdminTab = "system";
 let adminUserSeniorityFilter = "";
+let adminFilesSortOrder = "hospital-term";
+const ADMIN_FILES_SORT_OPTIONS = [
+  { value: "hospital-term", label: "Hospital & Term" },
+  { value: "hospital", label: "Hospital" },
+  { value: "term", label: "Term" },
+  { value: "alphabet", label: "Alphabet" },
+  { value: "date-added", label: "Date added" },
+  { value: "date-modified", label: "Date modified" },
+];
+const ROSTER_HOSPITAL_SORT_RANK = { mmc: 0, ddh: 1, casey: 2, mch: 3 };
 let calendarStoreStatus = null;
 let calendarStoreStatusError = "";
 let rosterSyncStates = new Map();
@@ -520,6 +530,12 @@ accountsBody.addEventListener("change", (event) => {
   const seniorityFilter = event.target.closest("[data-admin-user-seniority-filter]");
   if (seniorityFilter) {
     adminUserSeniorityFilter = String(seniorityFilter.value || "");
+    renderAccountsModal();
+    return;
+  }
+  const adminFilesSort = event.target.closest("[data-admin-files-sort]");
+  if (adminFilesSort) {
+    adminFilesSortOrder = normalizeAdminFilesSortOrder(adminFilesSort.value);
     renderAccountsModal();
     return;
   }
@@ -2029,7 +2045,89 @@ function syncMobileChrome() {
   syncMobileSettingsControls();
 }
 
-function renderFilesMarkup({ canRemove = false, heading = "", description = "", canAdd = false } = {}) {
+function normalizeAdminFilesSortOrder(value = "") {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ADMIN_FILES_SORT_OPTIONS.some((option) => option.value === normalized) ? normalized : "hospital-term";
+}
+
+function rosterHospitalSortKey(sourceType = "") {
+  const key = String(sourceType || "").trim().toLowerCase();
+  const rank = Object.hasOwn(ROSTER_HOSPITAL_SORT_RANK, key) ? ROSTER_HOSPITAL_SORT_RANK[key] : 99;
+  return `${String(rank).padStart(2, "0")}:${key}`;
+}
+
+function rosterFileTermSortKey(name = "") {
+  const value = String(name || "");
+  const termMatch = value.match(/term\s*([1-4])\D+(\d{4})/i);
+  if (termMatch) {
+    return `${termMatch[2]}-${String(Number(termMatch[1])).padStart(2, "0")}`;
+  }
+  const rangeMatch = value.match(/(\d{2})[-_](\d{2})[-_](\d{4}).*?(?:to|_to_).*?(\d{2})[-_](\d{2})[-_](\d{4})/i);
+  if (rangeMatch) {
+    const endDate = parseDateOnly(`${rangeMatch[6]}-${rangeMatch[5]}-${rangeMatch[4]}`);
+    if (endDate) {
+      const term = australianTermForDate(endDate);
+      return `${term.year}-${String(term.termNumber).padStart(2, "0")}`;
+    }
+  }
+  return "9999-99";
+}
+
+function enrichRosterFileEntry(entry, statusFile = null) {
+  if (!entry) return entry;
+  const addedAt = entry.addedAt || statusFile?.uploadedAt || statusFile?.addedAt || "";
+  const lastModified = Number(entry.lastModified || statusFile?.lastModified || 0);
+  return { ...entry, addedAt, lastModified };
+}
+
+function sortRosterFileEntries(files = [], sortOrder = "hospital-term") {
+  const order = normalizeAdminFilesSortOrder(sortOrder);
+  const sorted = [...files];
+  sorted.sort((left, right) => {
+    const leftName = String(left?.name || "");
+    const rightName = String(right?.name || "");
+    const leftHospital = rosterHospitalSortKey(left?.sourceType);
+    const rightHospital = rosterHospitalSortKey(right?.sourceType);
+    const leftTerm = rosterFileTermSortKey(leftName);
+    const rightTerm = rosterFileTermSortKey(rightName);
+    const leftAdded = String(left?.addedAt || "");
+    const rightAdded = String(right?.addedAt || "");
+    const leftModified = Number(left?.lastModified || 0);
+    const rightModified = Number(right?.lastModified || 0);
+    let compare = 0;
+    if (order === "hospital") {
+      compare = leftHospital.localeCompare(rightHospital) || leftName.localeCompare(rightName);
+    } else if (order === "term") {
+      compare = leftTerm.localeCompare(rightTerm) || leftHospital.localeCompare(rightHospital) || leftName.localeCompare(rightName);
+    } else if (order === "hospital-term") {
+      compare = leftHospital.localeCompare(rightHospital) || leftTerm.localeCompare(rightTerm) || leftName.localeCompare(rightName);
+    } else if (order === "alphabet") {
+      compare = leftName.localeCompare(rightName, undefined, { sensitivity: "base" });
+    } else if (order === "date-added") {
+      compare = rightAdded.localeCompare(leftAdded) || leftName.localeCompare(rightName);
+    } else if (order === "date-modified") {
+      compare = rightModified - leftModified || leftName.localeCompare(rightName);
+    }
+    return compare;
+  });
+  return sorted;
+}
+
+function renderAdminFilesSortControl(sortOrder = "hospital-term") {
+  const selected = normalizeAdminFilesSortOrder(sortOrder);
+  return `
+    <label class="field admin-files-sort">
+      <span>Sort by</span>
+      <select data-admin-files-sort>
+        ${ADMIN_FILES_SORT_OPTIONS.map((option) => `
+          <option value="${escapeHtml(option.value)}" ${option.value === selected ? "selected" : ""}>${escapeHtml(option.label)}</option>
+        `).join("")}
+      </select>
+    </label>
+  `;
+}
+
+function renderFilesMarkup({ canRemove = false, heading = "", description = "", canAdd = false, sortOrder = "", showSortControl = false } = {}) {
   const profileView = activeCalendarMode() === "doctor-profile";
   const hasUsableStatus = !profileView && Boolean(calendarStoreStatus && calendarStoreStatus.unavailable !== true && !calendarStoreStatusError);
   const statusFiles = new Map((calendarStoreStatus?.files || []).map((file) => [file.id, file]));
@@ -2042,12 +2140,17 @@ function renderFilesMarkup({ canRemove = false, heading = "", description = "", 
         repoId: file.id,
         name: file.name,
         sourceType: file.sourceType,
-        addedAt: "",
+        addedAt: file.uploadedAt || file.addedAt || "",
+        lastModified: Number(file.lastModified || 0),
         fromRosterDatabase: true,
       }))
     : calendarFilesForActiveView();
-  const displayFiles = rosterDisplayFiles(hasUsableStatus, statusOnlyEntries)
-    .filter((entry) => !pendingRemovedImportIds.has(entry.id));
+  let displayFiles = rosterDisplayFiles(hasUsableStatus, statusOnlyEntries)
+    .filter((entry) => !pendingRemovedImportIds.has(entry.id))
+    .map((entry) => enrichRosterFileEntry(entry, statusFiles.get(entry.id)));
+  if (sortOrder) {
+    displayFiles = sortRosterFileEntries(displayFiles, sortOrder);
+  }
   if (!displayFiles.length) {
     const emptyMessage = canRemove
       ? "Add rosters and they will stay here until removed."
@@ -2055,6 +2158,7 @@ function renderFilesMarkup({ canRemove = false, heading = "", description = "", 
     return `
       <article class="review-card">
         ${heading ? `<div class="review-top"><div><strong>${escapeHtml(heading)}</strong>${description ? `<span>${escapeHtml(description)}</span>` : ""}</div>${canAdd ? `<button type="button" class="button button-secondary" data-open-file-picker>Add files</button>` : ""}</div>` : ""}
+        ${showSortControl ? renderAdminFilesSortControl(sortOrder) : ""}
         <article class="issue-card"><strong>No files imported yet.</strong><p>${escapeHtml(emptyMessage)}</p></article>
       </article>
     `;
@@ -2062,6 +2166,7 @@ function renderFilesMarkup({ canRemove = false, heading = "", description = "", 
   return `
     <article class="review-card">
       ${heading ? `<div class="review-top"><div><strong>${escapeHtml(heading)}</strong>${description ? `<span>${escapeHtml(description)}</span>` : ""}</div>${canAdd ? `<button type="button" class="button button-secondary" data-open-file-picker>Add files</button>` : ""}</div>` : ""}
+      ${showSortControl ? renderAdminFilesSortControl(sortOrder) : ""}
       <div class="file-summary">
         ${displayFiles.map((entry) => `
           <article class="file-pill" data-file-id="${entry.id}">
@@ -7565,6 +7670,8 @@ function renderAccountsModal() {
     canAdd: true,
     heading: "Files",
     description: "Files currently used to generate the creator calendar.",
+    sortOrder: adminFilesSortOrder,
+    showSortControl: true,
   }) : "";
   const adminBody = ownerView
     ? (currentAdminTab === "errors"

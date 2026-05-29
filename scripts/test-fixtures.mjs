@@ -943,6 +943,22 @@ assert.match(
   "System-card sync issues should compare server counts rather than empty local file handles",
 );
 assert.match(appSource, /data-admin-user-seniority-filter/, "admin users should expose a seniority filter");
+assert.match(appSource, /data-admin-files-sort/, "admin files tab should expose a roster file sort control");
+assert.match(
+  appSource,
+  /adminFilesSortOrder = "hospital-term"[\s\S]*function sortRosterFileEntries/,
+  "admin files should default to hospital and term sorting",
+);
+assert.match(
+  appSource.match(/function sortRosterFileEntries[\s\S]*?function renderAdminFilesSortControl/)?.[0] || "",
+  /order === "hospital-term"/,
+  "admin files sort should support hospital then term ordering",
+);
+assert.match(
+  stateSource.match(/async function calendarStoreStatus[\s\S]*?function summarizeExpectedRosterFiles/)?.[0] || "",
+  /lastModified: Number\(file\.lastModified/,
+  "calendar store status should expose roster file modified timestamps",
+);
 assert.doesNotMatch(
   appSource.match(/async function deleteAccount[\s\S]*?function deleteLocalAccountData/)?.[0] || "",
   /if \(creatorCanDelete\) await loadServerUsers\(\);\s*closeAccountsModal\(\);/,
