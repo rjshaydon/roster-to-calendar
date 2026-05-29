@@ -464,8 +464,18 @@ assert.match(
 );
 assert.match(
   appSource.match(/function announceCreatorSwitcherUpdateIfChanged[\s\S]*?function renderDoctorState/)?.[0] || "",
-  /Switcher menu updated/,
-  "creator switcher changes should emit a console status when the visible menu changes",
+  /creatorSwitcherAnnouncementBaseline !== null/,
+  "creator switcher announcements during roster refresh should wait for the final rebuild",
+);
+assert.match(
+  appSource.match(/function finalizeCreatorSwitcherAnnouncementWait[\s\S]*?function announceCreatorSwitcherUpdateIfChanged/)?.[0] || "",
+  /renderedCreatorSwitcherSignature[\s\S]*Switcher menu updated/,
+  "creator switcher announcements should compare the rendered select menu before emitting status",
+);
+assert.match(
+  appSource.match(/async function refreshCreatorCalendarAfterFileChange[\s\S]*?async function rosterDoctorsFromSelectedFiles/)?.[0] || "",
+  /beginCreatorSwitcherAnnouncementWait[\s\S]*finalizeCreatorSwitcherAnnouncementWait/,
+  "roster file changes should defer switcher announcements until the creator refresh completes",
 );
 assert.match(
   appSource.match(/function renderDoctorState[\s\S]*?function renderClaimSection/)?.[0] || "",

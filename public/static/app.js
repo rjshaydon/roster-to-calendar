@@ -303,6 +303,7 @@ let lastRosterPersistence = null;
 let adminConsoleOpen = false;
 let adminConsoleLoading = false;
 let adminConsoleMessages = [];
+let creatorSwitcherAnnouncementBaseline = null;
 let lastRenderedCreatorSwitcherSignature = null;
 let reportedIssueFingerprints = new Set();
 let currentSnapshot = null;
@@ -2099,9 +2100,42 @@ function creatorDoctorSwitcherSignature(options = doctorPickerOptions()) {
     .join("|");
 }
 
-function announceCreatorSwitcherUpdateIfChanged(options = doctorPickerOptions()) {
-  if (!canUseCreatorDoctorSwitcher()) return;
-  const nextSignature = creatorDoctorSwitcherSignature(options);
+function renderedCreatorSwitcherSignature() {
+  if (!canUseCreatorDoctorSwitcher()) return "";
+  if (doctorSelect && !doctorSelect.classList.contains("hidden") && doctorSelect.options.length) {
+    return [...doctorSelect.options]
+      .map((option) => {
+        const displayName = option.dataset.displayName || option.textContent || "";
+        return `${doctorIdentityKey({ key: option.value, displayName })}:${displayName}`;
+      })
+      .sort()
+      .join("|");
+  }
+  return creatorDoctorSwitcherSignature();
+}
+
+function beginCreatorSwitcherAnnouncementWait() {
+  if (!canUseCreatorDoctorSwitcher()) {
+    creatorSwitcherAnnouncementBaseline = null;
+    return;
+  }
+  creatorSwitcherAnnouncementBaseline = renderedCreatorSwitcherSignature();
+}
+
+function finalizeCreatorSwitcherAnnouncementWait() {
+  if (!canUseCreatorDoctorSwitcher() || creatorSwitcherAnnouncementBaseline === null) return;
+  const baseline = creatorSwitcherAnnouncementBaseline;
+  const nextSignature = renderedCreatorSwitcherSignature();
+  creatorSwitcherAnnouncementBaseline = null;
+  lastRenderedCreatorSwitcherSignature = nextSignature;
+  if (baseline !== nextSignature) {
+    setStatus("Switcher menu updated.");
+  }
+}
+
+function announceCreatorSwitcherUpdateIfChanged() {
+  if (!canUseCreatorDoctorSwitcher() || creatorSwitcherAnnouncementBaseline !== null) return;
+  const nextSignature = renderedCreatorSwitcherSignature();
   const previousSignature = lastRenderedCreatorSwitcherSignature;
   lastRenderedCreatorSwitcherSignature = nextSignature;
   if (previousSignature !== null && previousSignature !== nextSignature) {
@@ -2126,7 +2160,7 @@ function renderDoctorState() {
     setStatus(message, true);
     renderClaimSection();
     syncActionState();
-    announceCreatorSwitcherUpdateIfChanged([]);
+    announceCreatorSwitcherUpdateIfChanged();
     return;
   }
 
@@ -2137,7 +2171,7 @@ function renderDoctorState() {
     doctorName.textContent = pickerOptions[0].displayName;
     doctorName.classList.remove("hidden");
     setStatus("Loading calendar...");
-    announceCreatorSwitcherUpdateIfChanged(pickerOptions);
+    announceCreatorSwitcherUpdateIfChanged();
     syncActionState();
     syncMobileChrome();
     return;
@@ -2161,7 +2195,7 @@ function renderDoctorState() {
     setStatus(preferredDoctorKey ? "Loading calendar..." : "Choose a doctor to load the calendar.");
   }
 
-  announceCreatorSwitcherUpdateIfChanged(pickerOptions);
+  announceCreatorSwitcherUpdateIfChanged();
   syncActionState();
   syncMobileChrome();
 }
@@ -5860,6 +5894,7 @@ function resetDerivedState(options = {}) {
   clearDoctorAnalysisCache();
   resetVisibleInsightWarmCache();
   lastRosterPersistence = null;
+  creatorSwitcherAnnouncementBaseline = null;
   lastRenderedCreatorSwitcherSignature = null;
   closeInsightsModal();
   settings = defaultSettings();
@@ -10631,37 +10666,47 @@ async function refreshCreatorCalendarAfterFileChange(options = {}) {
     renderFileSurfaces();
   }
   if (isViewingCreatorAccount() && cloudAvailable) {
-    await refreshAvailableDoctorsAfterRosterChange();
-    mergeSelectedFilesWithRosterStoreStatus(calendarStoreStatus, { force: true });
-    renderFileSurfaces();
-    setStatus(performedLocalUpload ? "Updating calendar..." : "Loading calendar...");
+    beginCreatorSwitcherAnnouncementWait();
+    let deferSwitcherAnnouncementToPoll = false;
     try {
-      const loaded = await loadCloudCalendarEvents({
-        preserveExistingSnapshot: true,
-        allowInlineBuild: false,
-      });
-      if (loaded && currentSnapshot) {
-        renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
-        mergeSelectedFilesWithRosterStoreStatus(calendarStoreStatus, { force: true });
-        try {
-          await syncCreatorDoctorPickerWithRemainingRosters();
-        } catch {
-          // Keep the last merged doctor list.
+      await refreshAvailableDoctorsAfterRosterChange();
+      mergeSelectedFilesWithRosterStoreStatus(calendarStoreStatus, { force: true });
+      renderFileSurfaces();
+      setStatus(performedLocalUpload ? "Updating calendar..." : "Loading calendar...");
+      try {
+        const loaded = await loadCloudCalendarEvents({
+          preserveExistingSnapshot: true,
+          allowInlineBuild: false,
+        });
+        if (loaded && currentSnapshot) {
+          renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+          mergeSelectedFilesWithRosterStoreStatus(calendarStoreStatus, { force: true });
+          try {
+            await syncCreatorDoctorPickerWithRemainingRosters();
+          } catch {
+            // Keep the last merged doctor list.
+          }
+          renderDoctorState();
+          setStatus(performedLocalUpload ? "Calendar refreshed." : "Calendar loaded.");
+        } else if (performedLocalUpload || currentSnapshotStale) {
+          setStatus("Roster saved. Calendar snapshot is building...");
+          deferSwitcherAnnouncementToPoll = true;
+          void pollCalendarAfterRosterChange();
+        } else if (!loaded) {
+          setStatus("Could not reload calendar from roster database.", true);
         }
-        renderDoctorState();
-        setStatus(performedLocalUpload ? "Calendar refreshed." : "Calendar loaded.");
-      } else if (performedLocalUpload || currentSnapshotStale) {
-        setStatus("Roster saved. Calendar snapshot is building...");
+      } catch (error) {
+        const overload = /503|CPU|memory|overload/i.test(String(error?.message || ""));
+        setStatus(overload
+          ? "Roster saved. Calendar snapshot is building..."
+          : (error.message || "Could not reload calendar from roster database."), overload);
+        deferSwitcherAnnouncementToPoll = true;
         void pollCalendarAfterRosterChange();
-      } else if (!loaded) {
-        setStatus("Could not reload calendar from roster database.", true);
       }
-    } catch (error) {
-      const overload = /503|CPU|memory|overload/i.test(String(error?.message || ""));
-      setStatus(overload
-        ? "Roster saved. Calendar snapshot is building..."
-        : (error.message || "Could not reload calendar from roster database."), overload);
-      void pollCalendarAfterRosterChange();
+    } finally {
+      if (!deferSwitcherAnnouncementToPoll) {
+        finalizeCreatorSwitcherAnnouncementWait();
+      }
     }
     return;
   }
@@ -10741,37 +10786,41 @@ async function pollCalendarAfterRosterChange() {
   if (calendarImportPollPromise) return calendarImportPollPromise;
   const pollRunId = calendarImportPollRunId;
   calendarImportPollPromise = (async () => {
-    for (const delay of [2000, 5000, 10000, 20000]) {
-      await new Promise((resolve) => setTimeout(resolve, delay));
-      if (pollRunId !== calendarImportPollRunId) return;
-      if (!isViewingCreatorAccount() || !cloudAvailable) return;
-      try {
-        const loaded = await loadCloudCalendarEvents({
-          preserveExistingSnapshot: true,
-          allowInlineBuild: false,
-          cachedRevision: currentSnapshot?.calendarRevision || currentCalendarRevision || "",
-          doctorKey: OWNER_DOCTOR_KEY,
-        });
+    try {
+      for (const delay of [2000, 5000, 10000, 20000]) {
+        await new Promise((resolve) => setTimeout(resolve, delay));
         if (pollRunId !== calendarImportPollRunId) return;
-        if (loaded && currentSnapshot) {
-          renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
-          mergeSelectedFilesWithRosterStoreStatus(calendarStoreStatus, { force: true });
-          try {
-            await syncCreatorDoctorPickerWithRemainingRosters();
-          } catch {
-            // Keep the last merged doctor list.
+        if (!isViewingCreatorAccount() || !cloudAvailable) return;
+        try {
+          const loaded = await loadCloudCalendarEvents({
+            preserveExistingSnapshot: true,
+            allowInlineBuild: false,
+            cachedRevision: currentSnapshot?.calendarRevision || currentCalendarRevision || "",
+            doctorKey: OWNER_DOCTOR_KEY,
+          });
+          if (pollRunId !== calendarImportPollRunId) return;
+          if (loaded && currentSnapshot) {
+            renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+            mergeSelectedFilesWithRosterStoreStatus(calendarStoreStatus, { force: true });
+            try {
+              await syncCreatorDoctorPickerWithRemainingRosters();
+            } catch {
+              // Keep the last merged doctor list.
+            }
+            renderDoctorState();
+            setStatus("Calendar loaded.");
+            void syncCreatorFileListFromStore({ includeAvailableDoctors: true }).catch(() => null);
+            return;
           }
-          renderDoctorState();
-          setStatus("Calendar loaded.");
-          void syncCreatorFileListFromStore({ includeAvailableDoctors: true }).catch(() => null);
-          return;
+        } catch {
+          // Keep polling until the warmed snapshot is ready.
         }
-      } catch {
-        // Keep polling until the warmed snapshot is ready.
       }
+      if (pollRunId !== calendarImportPollRunId) return;
+      setStatus("Calendar snapshot is still building. Switch doctor or refresh again shortly.");
+    } finally {
+      finalizeCreatorSwitcherAnnouncementWait();
     }
-    if (pollRunId !== calendarImportPollRunId) return;
-    setStatus("Calendar snapshot is still building. Switch doctor or refresh again shortly.");
   })().finally(() => {
     calendarImportPollPromise = null;
   });
