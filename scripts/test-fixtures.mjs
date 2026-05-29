@@ -985,6 +985,35 @@ assert.ok(deslinView.events.some((event) => event.title === "MMC: Swing AM"));
 
 const caseyDoctors = doctorOptions([], [], caseyWorkbook);
 assert.ok(caseyDoctors.length > 130);
+const defaultParserRules = parserRuleDefaults();
+setParserExtensions({
+  ...defaultParserRules,
+  casey: [
+    ...defaultParserRules.casey.filter((rule) => rule.code !== "AM MIC"),
+    {
+      source: "Casey",
+      seniority: "SMS",
+      code: "AM MIC",
+      kind: "shift",
+      base: "MIC",
+      period: "AM",
+      suffix: "",
+      allDay: true,
+      startTime: "",
+      endTime: "",
+      location: "",
+      includeAsShift: true,
+    },
+  ],
+});
+const aliAsadpourCasey = caseyDoctors.find((doctor) => doctor.displayName === "Ali ASADPOUR");
+assert.ok(aliAsadpourCasey, "fixture should include Ali ASADPOUR");
+const aliAsadpourCaseyView = buildRosterView([], [], aliAsadpourCasey.key, undefined, {}, {}, [], caseyWorkbook);
+assert.ok(
+  aliAsadpourCaseyView.events.some((event) => event.source === "Casey" && event.title === "Casey: MIC" && event.allDay === true),
+  "all-day Casey parser rules should render MIC shifts without crashing import",
+);
+setParserExtensions(defaultParserRules);
 assert.ok(caseyDoctors.find((doctor) => doctor.displayName === "Andrew DYALL"));
 assert.ok(caseyDoctors.find((doctor) => doctor.displayName === "Dennis CHUNG"));
 assert.ok(caseyDoctors.find((doctor) => doctor.displayName === "Rizwana SADAF"));

@@ -1520,7 +1520,18 @@ function parseCaseyEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
   if (normalized.includeAsShift === false) {
     return createHiddenRecord("Casey", day, label, normalized, seniority);
   }
+  if (normalized.allDay) {
+    return createAllDayRecord("Casey", day, label, {
+      kind: normalized.kind || "shift",
+      titleParts: normalized.titleParts,
+      location: normalized.location || CASEY_LOCATION,
+      seniority,
+    });
+  }
   if (explicit) {
+    if (!Array.isArray(explicit.start) || !Array.isArray(explicit.end)) {
+      return createUnknownRecord("Casey", day, label, "Casey shift time could not be parsed.", seniority);
+    }
     return createTimedRecord("Casey", day, label, {
       kind: normalized.kind,
       titleParts: normalized.titleParts,
@@ -1531,6 +1542,9 @@ function parseCaseyEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
       warning: normalized.warning,
       seniority,
     });
+  }
+  if (!Array.isArray(normalized.defaultTimes) || normalized.defaultTimes.length < 2) {
+    return createUnknownRecord("Casey", day, label, "Casey shift times are missing.", seniority);
   }
   return createTimedRecord("Casey", day, label, {
     kind: normalized.kind,
@@ -1685,7 +1699,7 @@ function extractMmcExplicitTime(value) {
 
 function normalizeCaseyLabel(label, explicit = null) {
   const code = normalizeCaseyCode(explicit ? explicit.label : label);
-  if (!code && explicit) {
+  if (!code && explicit?.start) {
     return {
       kind: "shift",
       titleParts: genericTimeOnlyShiftTitleParts(explicit.start, "Casey"),
@@ -2252,6 +2266,7 @@ function defaultParserRuleLocation(source) {
 
 
 function inferMmcTimeOnlyShiftLabel(startHm) {
+  if (!Array.isArray(startHm)) return "AM";
   const [hour] = startHm;
   if (hour >= 22 || hour < 6) return "Night";
   if (hour >= 14) return "PM";
