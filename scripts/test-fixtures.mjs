@@ -459,8 +459,23 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function refreshAvailableDoctorsAfterRosterChange[\s\S]*?function normalizeSavedExportRange/)?.[0] || "",
-  /10000, 20000[\s\S]*mergeAvailableDoctors: true[\s\S]*syncCreatorDoctorPickerWithRemainingRosters[\s\S]*renderDoctorState/,
+  /10000, 20000[\s\S]*mergeAvailableDoctors: !localOnly[\s\S]*syncCreatorDoctorPickerWithRemainingRosters\(\{ localOnly \}\)[\s\S]*renderDoctorState/,
   "roster changes should merge local and repository doctors before re-rendering the creator switcher",
+);
+assert.match(
+  appSource.match(/async function removeStoredImport[\s\S]*?function loadConflictSelections/)?.[0] || "",
+  /syncCreatorDoctorPickerWithRemainingRosters\(\{ localOnly: true \}\)/,
+  "roster deletion should prune the creator switcher to doctors from remaining roster files",
+);
+assert.match(
+  appSource.match(/function mergeAvailableRosterDoctors[\s\S]*?async function syncCreatorDoctorPickerWithRemainingRosters/)?.[0] || "",
+  /options\.localOnly === true[\s\S]*if \(localOnly\) return sanitizeAvailableRosterDoctors\(merged\)/,
+  "local-only doctor merges should not re-add repository doctors removed with a deleted roster",
+);
+assert.match(
+  appSource.match(/async function refreshCreatorCalendarAfterFileChange[\s\S]*?async function rosterDoctorsFromSelectedFiles/)?.[0] || "",
+  /afterRosterRemoval[\s\S]*preserveExistingSnapshot: !afterRosterRemoval[\s\S]*localOnly: afterRosterRemoval/,
+  "creator roster deletion should reload calendar state and prune switcher doctors",
 );
 assert.match(
   appSource.match(/function tryAnnounceCreatorSwitcherRosterUpdate[\s\S]*?function renderDoctorState/)?.[0] || "",
@@ -534,8 +549,8 @@ assert.doesNotMatch(
 );
 assert.match(
   appSource.match(/async function refreshCreatorCalendarAfterFileChange[\s\S]*?async function rosterDoctorsFromSelectedFiles/)?.[0] || "",
-  /syncCreatorDoctorPickerWithRemainingRosters[\s\S]*allowInlineBuild: false[\s\S]*pollCalendarAfterRosterChange/,
-  "creator roster imports should refresh the doctor picker before requesting a lightweight calendar snapshot",
+  /syncCreatorDoctorPickerWithRemainingRosters[\s\S]*loadCloudCalendarEvents[\s\S]*pollCalendarAfterRosterChange/,
+  "creator roster imports should refresh the doctor picker before requesting a calendar snapshot reload",
 );
 assert.match(
   appSource.match(/async function bootstrapImports[\s\S]*?function snapshotHasUnresolvablePreviewEvents/)?.[0] || "",
@@ -729,7 +744,7 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function refreshCreatorCalendarAfterFileChange[\s\S]*?function normalizeSavedExportRange/)?.[0] || "",
-  /refreshAvailableDoctorsAfterRosterChange\(\)/,
+  /refreshAvailableDoctorsAfterRosterChange\(\{/,
   "creator roster changes should refresh switcher doctors after add or delete",
 );
 assert.match(
@@ -922,6 +937,11 @@ assert.match(
   await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"),
   /lightweight: body\?\.lightweight === true/,
   "calendar status API should accept a lightweight status request",
+);
+assert.match(
+  await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"),
+  /async function purgeRosterImports[\s\S]*await refreshCanonicalDoctors\(context\.env\.ROSTER_DB\)/,
+  "roster purge should refresh canonical doctors before returning",
 );
 assert.match(
   await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"),

@@ -3739,7 +3739,12 @@ async function purgeRosterImports(context, fileIds, reason = "removeRosterImport
     await deleteDerivedRosterFile(context.env.ROSTER_DB, id);
     await deleteRetainedRosterSource(context.env.ROSTER_DB, context.env.ROSTER_FILES, id);
   }
-  deferCanonicalDoctorRefresh(context, reason);
+  await refreshCanonicalDoctors(context.env.ROSTER_DB).catch((error) => {
+    console.warn("Canonical doctor refresh failed after roster purge", {
+      reason,
+      error: error?.message || String(error),
+    });
+  });
   return { removedIds, sourceTypes };
 }
 
