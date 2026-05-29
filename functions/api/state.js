@@ -401,9 +401,12 @@ export async function onRequestPost(context) {
       const status = await calendarStoreStatus(null, context.env.ROSTER_DB, {
         doctorKey: body?.selectedDoctorKey || body?.doctorKey || OWNER_DOCTOR_KEY,
         expectedFileIds: sanitizeRepositoryFileIds(body?.expectedFileIds),
+        lightweight: body?.lightweight === true,
       });
-      const accounts = await accountMirrorStatus(context.env.ROSTER_DB).catch(() => ({ unavailable: true, profiles: 0, claims: 0, states: 0 }));
-      const response = { ok: true, ...status, accounts };
+      const response = { ok: true, ...status };
+      if (body?.lightweight !== true) {
+        response.accounts = await accountMirrorStatus(context.env.ROSTER_DB).catch(() => ({ unavailable: true, profiles: 0, claims: 0, states: 0 }));
+      }
       if (body?.includeAvailableDoctors === true) {
         response.availableDoctors = await repositoryDoctorCandidates(null, null, context.env.ROSTER_DB, { hideZeroEventStandalone: true });
       }
@@ -1465,15 +1468,17 @@ async function calendarStoreStatus(store, db, options = {}) {
   const activeFiles = [...d1Files, ...retainedOnlyFiles];
   const counts = await countDerivedEventsByFile(db, activeFiles.map((file) => file.id));
   const doctorCounts = await countDerivedDoctorsByFile(db, activeFiles.map((file) => file.id));
+  const lightweight = options.lightweight === true;
   const selectedDoctorKey = normalizeRosterName(options.doctorKey || "");
-  const selectedDoctorRows = selectedDoctorKey
-    ? await resolveSelectedRosterFileDoctorRows(db, selectedDoctorKey)
-    : [];
-  const selectedPairs = selectedDoctorRows.map((row) => ({ fileId: row.fileId, doctorKey: row.doctorKey }));
-  const selectedCounts = await countDerivedEventsByFileDoctorPairs(db, selectedPairs);
+  let selectedDoctorRows = [];
   const selectedCountsByFile = new Map();
-  for (const row of selectedDoctorRows) {
-    selectedCountsByFile.set(row.fileId, (selectedCountsByFile.get(row.fileId) || 0) + Number(selectedCounts.get(`${row.fileId}:${row.doctorKey}`) || 0));
+  if (!lightweight && selectedDoctorKey) {
+    selectedDoctorRows = await resolveSelectedRosterFileDoctorRows(db, selectedDoctorKey);
+    const selectedPairs = selectedDoctorRows.map((row) => ({ fileId: row.fileId, doctorKey: row.doctorKey }));
+    const selectedCounts = await countDerivedEventsByFileDoctorPairs(db, selectedPairs);
+    for (const row of selectedDoctorRows) {
+      selectedCountsByFile.set(row.fileId, (selectedCountsByFile.get(row.fileId) || 0) + Number(selectedCounts.get(`${row.fileId}:${row.doctorKey}`) || 0));
+    }
   }
   const rawAvailability = new Map(rawFiles.map((file) => [file.id, true]));
   const files = activeFiles.map((file) => ({

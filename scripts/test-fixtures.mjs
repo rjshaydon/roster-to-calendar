@@ -499,7 +499,7 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function refreshCalendarStoreStatus[\s\S]*?async function toggleAdminConsole/)?.[0] || "",
-  /mergeAvailableDoctors === true[\s\S]*mergeAvailableRosterDoctors\(availableRosterDoctors, incomingDoctors\)/,
+  /mergeAvailableDoctors !== false[\s\S]*mergeAvailableRosterDoctors\(availableRosterDoctors, incomingDoctors\)/,
   "roster status refreshes should merge repository doctors instead of replacing the local picker list",
 );
 assert.match(
@@ -879,9 +879,54 @@ assert.doesNotMatch(
   "deleting another account should not close the Admin modal",
 );
 assert.match(
+  appSource.match(/function renderCalendarStoreCard[\s\S]*?function renderAdminConsoleMarkup/)?.[0] || "",
+  /hasUsableStatus[\s\S]*missingSelectedFiles = hasUsableStatus/,
+  "roster database status card should only list missing files when status is usable",
+);
+assert.match(
+  appSource.match(/function renderCalendarStoreCard[\s\S]*?function renderAdminConsoleMarkup/)?.[0] || "",
+  /Status check pending — roster files may already be synced/,
+  "unchecked roster database status should not claim files are unsynced",
+);
+assert.match(
+  appSource.match(/async function refreshCalendarStoreStatus[\s\S]*?async function toggleAdminConsole/)?.[0] || "",
+  /calendarStoreRequestWithRetry\("calendarStoreStatus"/,
+  "roster status checks should retry transient SQL store failures",
+);
+assert.match(
+  appSource.match(/data-refresh-calendar-store[\s\S]*?data-replace-active-rosters/)?.[0] || "",
+  /refreshCalendarStoreStatus\(\{ silent: false, syncSwitcher: true \}\)/,
+  "Check status should refresh the creator switcher after a successful status check",
+);
+assert.match(
+  appSource.match(/function applyCloudStateContext[\s\S]*?async function applyCloudStateSnapshot/)?.[0] || "",
+  /isCreatorAuthenticated\(\) && incomingAvailableDoctors\.length[\s\S]*mergeAvailableRosterDoctors\(availableRosterDoctors, incomingAvailableDoctors\)/,
+  "creator login should merge server doctor lists instead of replacing locally known doctors",
+);
+assert.match(
+  appSource.match(/async function loadServerUsers[\s\S]*?async function refreshCalendarStoreStatus/)?.[0] || "",
+  /mergeAvailableRosterDoctors\([\s\S]*availableRosterDoctors[\s\S]*sanitizeAvailableRosterDoctors\(data\.availableDoctors/,
+  "loading admin users should merge repository doctors into the creator switcher list",
+);
+assert.match(
+  appSource.match(/async function bootstrapImports[\s\S]*?function snapshotHasUnresolvablePreviewEvents/)?.[0] || "",
+  /syncCreatorDoctorPickerWithRemainingRosters\(\{ snapshotDoctors: currentSnapshot\.doctorOptions/,
+  "creator bootstrap should sync the switcher from roster files and snapshot doctors before rendering",
+);
+assert.match(
+  appSource.match(/async function syncCreatorDoctorPickerWithRemainingRosters[\s\S]*?async function pollCalendarAfterRosterChange/)?.[0] || "",
+  /snapshotDoctors[\s\S]*availableDoctorsFromRosterDoctorOptions\(snapshotDoctors\)/,
+  "creator doctor picker sync should fall back to snapshot doctors when local parse is unavailable",
+);
+assert.match(
   await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"),
-  /async function calendarStoreStatus[\s\S]*resolveSelectedRosterFileDoctorRows\(db, selectedDoctorKey\)/,
-  "calendar status should resolve only the selected doctor instead of rebuilding every canonical option",
+  /lightweight: body\?\.lightweight === true/,
+  "calendar status API should accept a lightweight status request",
+);
+assert.match(
+  await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"),
+  /const lightweight = options\.lightweight === true[\s\S]*if \(!lightweight && selectedDoctorKey\)/,
+  "lightweight calendar status should skip selected-doctor event counts",
 );
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))

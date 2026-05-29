@@ -549,7 +549,7 @@ accountsBody.addEventListener("click", (event) => {
   }
   const refreshCalendarStoreButton = event.target.closest("[data-refresh-calendar-store]");
   if (refreshCalendarStoreButton) {
-    refreshCalendarStoreStatus();
+    void refreshCalendarStoreStatus({ silent: false, syncSwitcher: true });
     return;
   }
   const replaceActiveRostersButton = event.target.closest("[data-replace-active-rosters]");
@@ -1942,7 +1942,7 @@ async function openAccountsSurface(options = {}) {
     void loadServerUsers().then(() => {
       if (!accountsModal.classList.contains("hidden")) renderAccountsModal();
     });
-    void refreshCalendarStoreStatus({ silent: true });
+    void refreshCalendarStoreStatus({ silent: true, syncSwitcher: false });
   }
 }
 
@@ -7543,33 +7543,43 @@ function renderCalendarStoreCard() {
   const status = calendarStoreStatus;
   const unavailable = status?.unavailable === true;
   const selectedPersistence = summarizeSelectedRosterPersistence(selectedFiles, status);
-  const missingSelectedFiles = selectedPersistence.missingEntries.slice(0, 3);
+  const statusMatchesSelection = selectedPersistence.statusMatchesEntries;
+  const hasUsableStatus = Boolean(status && !unavailable && !calendarStoreStatusError);
+  const missingSelectedFiles = hasUsableStatus ? selectedPersistence.missingEntries.slice(0, 3) : [];
   const retainedSourceCount = (status?.files || []).filter((file) => file.rawSourceAvailable === true).length;
   const retainedSourceTotal = (status?.files || []).length;
   const retainedSourceDetail = status && !unavailable
     ? `${retainedSourceCount}/${retainedSourceTotal} source file${retainedSourceTotal === 1 ? "" : "s"} retained.`
     : "";
-  const checkedAt = status?.checkedAt ? `Last checked ${formatTimestamp(status.checkedAt)}.` : "Not checked yet.";
+  const checkedAt = status?.checkedAt ? `Last checked ${formatTimestamp(status.checkedAt)}.` : "";
   const syncSummary = rosterSyncSummary();
   const serverSyncedCount = Number(status?.populated || 0);
   const serverExpectedCount = Number(status?.total || 0);
   const serverStatusComplete = Boolean(status && !unavailable && serverExpectedCount > 0 && serverSyncedCount === serverExpectedCount);
-  const statusErrorDetail = calendarStoreStatusError
-    ? `${status ? `${serverSyncedCount}/${serverExpectedCount || selectedPersistence.expectedCount || "?"} roster files confirmed from last good status. ` : ""}Status check failed: ${calendarStoreStatusError}. ${checkedAt}`
-    : "";
+  let statusErrorDetail = "";
+  if (calendarStoreStatusError) {
+    const errorSuffix = `Status check failed: ${calendarStoreStatusError}.${checkedAt ? ` ${checkedAt}` : ""}`;
+    if (status && statusMatchesSelection) {
+      statusErrorDetail = `Last good check: ${selectedPersistence.persistedCount}/${selectedPersistence.expectedCount || "?"} roster files synced. ${errorSuffix}`;
+    } else if (status) {
+      statusErrorDetail = `Status check failed — last result is outdated. ${errorSuffix}`;
+    } else {
+      statusErrorDetail = errorSuffix;
+    }
+  }
   const detail = syncSummary
-    ? `${syncSummary}. ${checkedAt}`
+    ? `${syncSummary}.${checkedAt ? ` ${checkedAt}` : ""}`
     : calendarStoreStatusError
     ? statusErrorDetail
     : unavailable
       ? "Roster database is unavailable to this deployment."
       : serverStatusComplete
-        ? `${serverSyncedCount} roster file${serverSyncedCount === 1 ? "" : "s"} synced. ${retainedSourceDetail} ${checkedAt}`
+        ? `${serverSyncedCount} roster file${serverSyncedCount === 1 ? "" : "s"} synced. ${retainedSourceDetail}${checkedAt ? ` ${checkedAt}` : ""}`
         : status && selectedPersistence.expectedCount > 0 && selectedPersistence.complete
-          ? `${selectedPersistence.persistedCount} roster file${selectedPersistence.persistedCount === 1 ? "" : "s"} synced. ${retainedSourceDetail} ${checkedAt}`
+          ? `${selectedPersistence.persistedCount} roster file${selectedPersistence.persistedCount === 1 ? "" : "s"} synced. ${retainedSourceDetail}${checkedAt ? ` ${checkedAt}` : ""}`
         : status
-          ? `Sync issue detected: ${serverSyncedCount}/${serverExpectedCount} roster files confirmed. ${retainedSourceDetail} ${checkedAt}`
-          : "Roster database status not checked yet.";
+          ? `Sync issue detected: ${serverSyncedCount}/${serverExpectedCount} roster files confirmed. ${retainedSourceDetail}${checkedAt ? ` ${checkedAt}` : ""}`
+          : "Status check pending — roster files may already be synced.";
   return `
     <article class="review-card">
       <div class="review-top">
@@ -10801,14 +10811,20 @@ function mergeAvailableRosterDoctors(localDoctors = [], repositoryDoctors = avai
   return sanitizeAvailableRosterDoctors(merged);
 }
 
-async function syncCreatorDoctorPickerWithRemainingRosters() {
+async function syncCreatorDoctorPickerWithRemainingRosters(options = {}) {
   if (!canUseCreatorDoctorSwitcher()) return;
   if (!selectedFiles.length) {
     availableRosterDoctors = [];
     return;
   }
   await ensureSelectedFilesLoaded().catch(() => null);
-  const localDoctors = availableDoctorsFromRosterDoctorOptions(await rosterDoctorsFromSelectedFiles());
+  let localDoctors = availableDoctorsFromRosterDoctorOptions(await rosterDoctorsFromSelectedFiles());
+  if (!localDoctors.length) {
+    const snapshotDoctors = options.snapshotDoctors || doctorOptions;
+    if (snapshotDoctors.length) {
+      localDoctors = availableDoctorsFromRosterDoctorOptions(snapshotDoctors);
+    }
+  }
   if (localDoctors.length) {
     availableRosterDoctors = mergeAvailableRosterDoctors(localDoctors, availableRosterDoctors);
     return;
@@ -11308,6 +11324,15 @@ async function hydrateAuthenticatedWorkspace(options = {}, loginStartedAt = 0) {
         if (!calendarTransitionStillCurrent(options.transition)) return;
         void loadServerUsers();
       }, 0);
+      void refreshCalendarStoreStatus({ silent: true, syncSwitcher: false }).then(async () => {
+        if (!calendarTransitionStillCurrent(options.transition)) return;
+        try {
+          await syncCreatorDoctorPickerWithRemainingRosters({ snapshotDoctors: currentSnapshot?.doctorOptions || [] });
+        } catch {
+          // Keep the last merged doctor list.
+        }
+        if (latestPreview) renderDoctorState();
+      }).catch(() => null);
     }
   } catch (error) {
     if (!calendarTransitionStillCurrent(options.transition)) return;
@@ -11631,7 +11656,9 @@ function applyCloudStateContext(data) {
   latestNameMatches = currentSuggestedClaims;
   const incomingAvailableDoctors = sanitizeAvailableRosterDoctors(data.availableDoctors || []);
   if (incomingAvailableDoctors.length || !isCreatorAuthenticated()) {
-    availableRosterDoctors = incomingAvailableDoctors;
+    availableRosterDoctors = isCreatorAuthenticated() && incomingAvailableDoctors.length
+      ? mergeAvailableRosterDoctors(availableRosterDoctors, incomingAvailableDoctors)
+      : incomingAvailableDoctors;
   }
   currentSubscription = sanitizeSubscription(data.subscription);
   applyIssueConfig(data.issueConfig);
@@ -12345,10 +12372,14 @@ async function loadServerUsers() {
     });
     const data = await readJsonResponse(response, "Could not load users.");
     serverUsers = data.users || [];
-    availableRosterDoctors = sanitizeAvailableRosterDoctors(data.availableDoctors || availableRosterDoctors);
+    availableRosterDoctors = mergeAvailableRosterDoctors(
+      availableRosterDoctors,
+      sanitizeAvailableRosterDoctors(data.availableDoctors || []),
+    );
     applyIssueConfig(data.issueConfig);
     syncAccountsButton();
     queueCreatorSwitchTargetPrefetch();
+    if (isViewingCreatorAccount() && latestPreview) renderDoctorState();
   } catch {
     // Keep the last available local list.
   }
@@ -12356,16 +12387,22 @@ async function loadServerUsers() {
 
 async function refreshCalendarStoreStatus(options = {}) {
   if (!isCreatorAuthenticated() || !cloudAvailable) return;
+  const statusPayload = {
+    selectedDoctorKey: selectedDoctor()?.key || OWNER_DOCTOR_KEY,
+    expectedFileIds: selectedFiles.map((entry) => entry.id),
+    ...(options.includeAvailableDoctors ? { includeAvailableDoctors: true } : {}),
+    ...(options.lightweight !== false ? { lightweight: true } : {}),
+  };
+  const requestStatus = options.useRetry === false
+    ? () => calendarStoreRequest("calendarStoreStatus", statusPayload)
+    : () => calendarStoreRequestWithRetry("calendarStoreStatus", statusPayload, { attempts: options.attempts || 4 });
   try {
-    const data = await calendarStoreRequest("calendarStoreStatus", {
-      selectedDoctorKey: selectedDoctor()?.key || OWNER_DOCTOR_KEY,
-      expectedFileIds: selectedFiles.map((entry) => entry.id),
-      ...(options.includeAvailableDoctors ? { includeAvailableDoctors: true } : {}),
-    });
+    const data = await requestStatus();
     calendarStoreStatus = { ...data, checkedAt: new Date().toISOString() };
     if (options.includeAvailableDoctors === true && Array.isArray(data.availableDoctors)) {
       const incomingDoctors = sanitizeAvailableRosterDoctors(data.availableDoctors);
-      availableRosterDoctors = options.mergeAvailableDoctors === true
+      const shouldMergeDoctors = options.mergeAvailableDoctors !== false;
+      availableRosterDoctors = shouldMergeDoctors
         ? mergeAvailableRosterDoctors(availableRosterDoctors, incomingDoctors)
         : incomingDoctors;
     }
@@ -12376,6 +12413,14 @@ async function refreshCalendarStoreStatus(options = {}) {
     calendarStoreStatusError = "";
     reconcileRosterSyncStates(calendarStoreStatus);
     if (!options.silent) setStatus("Roster database status checked.");
+    if (options.syncSwitcher === true && isCreatorAuthenticated()) {
+      try {
+        await syncCreatorDoctorPickerWithRemainingRosters({ snapshotDoctors: doctorOptions });
+      } catch {
+        // Keep the last merged doctor list.
+      }
+      renderDoctorState();
+    }
   } catch (error) {
     if (!options.silent) {
       calendarStoreStatusError = error.message || "Could not check roster database status.";
@@ -12927,6 +12972,7 @@ function summarizeRosterPersistence(entries = [], status = null, saveResults = [
     persistedFileIds,
     missingEntries,
     failedEntries,
+    statusMatchesEntries,
     complete: expectedEntries.length === persistedFileIds.length,
   };
 }
@@ -13994,6 +14040,13 @@ async function bootstrapImports(options = {}) {
     if (!calendarTransitionStillCurrent(options.transition)) return;
     if (currentSnapshot?.preview && currentSnapshot.doctorOptions?.length) {
       const snapshotInvalid = snapshotHasUnresolvablePreviewEvents(currentSnapshot);
+      if (isViewingCreatorAccount() && selectedFiles.length) {
+        try {
+          await syncCreatorDoctorPickerWithRemainingRosters({ snapshotDoctors: currentSnapshot.doctorOptions || [] });
+        } catch {
+          // Keep the last merged doctor list.
+        }
+      }
       renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
       scheduleInsightWarmup();
       if (currentSnapshotStale || snapshotInvalid) {
