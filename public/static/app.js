@@ -1925,6 +1925,7 @@ function syncOverlayState() {
 
 async function openAccountsSurface(options = {}) {
   closeSettingsPanel();
+  adminConsoleOpen = false;
   if (isViewingCreatorAccount()) {
     if (options.defaultAdminTab) currentAdminTab = options.defaultAdminTab;
   }
@@ -6986,6 +6987,7 @@ function hasActiveExportFilters() {
 }
 
 function closeAccountsModal() {
+  adminConsoleOpen = false;
   accountsModal.classList.add("hidden");
   accountsModal.setAttribute("aria-hidden", "true");
 }
@@ -10446,7 +10448,10 @@ function applyLoadedCalendarFileRefs(snapshot) {
   const snapshotRefs = (Array.isArray(snapshot?.fileRefs) ? snapshot.fileRefs : [])
     .filter((entry) => entry?.id && !pendingRemovedImportIds.has(entry.id));
   if (snapshotRefs.length) {
-    selectedFiles = importRefsToClientEntries(snapshotRefs);
+    const fromSnapshot = importRefsToClientEntries(snapshotRefs);
+    selectedFiles = isViewingCreatorAccount() && Array.isArray(calendarStoreStatus?.files) && calendarStoreStatus.files.length
+      ? mergeRosterFileEntries(fromSnapshot, calendarStoreStatus)
+      : fromSnapshot;
     rememberCreatorCalendarSourceRefs();
     return;
   }
@@ -10611,6 +10616,13 @@ async function refreshCreatorCalendarAfterFileChange(options = {}) {
       });
       if (loaded && currentSnapshot) {
         renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+        mergeSelectedFilesWithRosterStoreStatus(calendarStoreStatus, { force: true });
+        try {
+          await syncCreatorDoctorPickerWithRemainingRosters();
+        } catch {
+          // Keep the last merged doctor list.
+        }
+        renderDoctorState();
         setStatus(performedLocalUpload ? "Calendar refreshed." : "Calendar loaded.");
       } else if (performedLocalUpload || currentSnapshotStale) {
         setStatus("Roster saved. Calendar snapshot is building...");
@@ -10690,6 +10702,7 @@ async function syncCreatorDoctorPickerWithRemainingRosters() {
     availableRosterDoctors = [];
     return;
   }
+  await ensureSelectedFilesLoaded().catch(() => null);
   const localDoctors = availableDoctorsFromRosterDoctorOptions(await rosterDoctorsFromSelectedFiles());
   if (localDoctors.length) {
     availableRosterDoctors = mergeAvailableRosterDoctors(localDoctors, availableRosterDoctors);
@@ -10716,8 +10729,15 @@ async function pollCalendarAfterRosterChange() {
         if (pollRunId !== calendarImportPollRunId) return;
         if (loaded && currentSnapshot) {
           renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+          mergeSelectedFilesWithRosterStoreStatus(calendarStoreStatus, { force: true });
+          try {
+            await syncCreatorDoctorPickerWithRemainingRosters();
+          } catch {
+            // Keep the last merged doctor list.
+          }
+          renderDoctorState();
           setStatus("Calendar loaded.");
-          void syncCreatorFileListFromStore().catch(() => null);
+          void syncCreatorFileListFromStore({ includeAvailableDoctors: true }).catch(() => null);
           return;
         }
       } catch {
@@ -10768,19 +10788,33 @@ async function refreshCreatorSnapshotInBackground(options = {}) {
 
 async function refreshAvailableDoctorsAfterRosterChange() {
   if (!isCreatorAuthenticated() || !cloudAvailable) return;
-  for (const delay of [0, 3000]) {
-    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
-    await refreshCalendarStoreStatus({ silent: true, includeAvailableDoctors: true }).catch(() => null);
-  }
+  mergeSelectedFilesWithRosterStoreStatus(calendarStoreStatus, { force: true });
+  const previousSwitcherKeys = doctorPickerOptions().map((doctor) => doctorIdentityKey(doctor)).sort().join("|");
   try {
     await syncCreatorDoctorPickerWithRemainingRosters();
   } catch {
     // Keep the last repository-backed doctor list.
   }
+  for (const delay of [0, 3000, 10000, 20000]) {
+    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+    await refreshCalendarStoreStatus({
+      silent: true,
+      includeAvailableDoctors: true,
+      mergeAvailableDoctors: true,
+    }).catch(() => null);
+    try {
+      await syncCreatorDoctorPickerWithRemainingRosters();
+    } catch {
+      // Keep the last merged doctor list.
+    }
+  }
   renderDoctorState();
   syncAccountsButton();
   renderFileSurfaces();
-  setStatus("Switcher menu updated.");
+  const nextSwitcherKeys = doctorPickerOptions().map((doctor) => doctorIdentityKey(doctor)).sort().join("|");
+  if (previousSwitcherKeys !== nextSwitcherKeys) {
+    setStatus("Switcher menu updated.");
+  }
 }
 
 function normalizeSavedExportRange(value) {
@@ -12226,7 +12260,10 @@ async function refreshCalendarStoreStatus(options = {}) {
     });
     calendarStoreStatus = { ...data, checkedAt: new Date().toISOString() };
     if (options.includeAvailableDoctors === true && Array.isArray(data.availableDoctors)) {
-      availableRosterDoctors = sanitizeAvailableRosterDoctors(data.availableDoctors);
+      const incomingDoctors = sanitizeAvailableRosterDoctors(data.availableDoctors);
+      availableRosterDoctors = options.mergeAvailableDoctors === true
+        ? mergeAvailableRosterDoctors(availableRosterDoctors, incomingDoctors)
+        : incomingDoctors;
     }
     if (isCreatorAuthenticated() && Array.isArray(data.files) && data.files.length) {
       restoreCreatorImportFilesIfNeeded();

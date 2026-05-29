@@ -459,8 +459,23 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function refreshAvailableDoctorsAfterRosterChange[\s\S]*?function normalizeSavedExportRange/)?.[0] || "",
-  /syncCreatorDoctorPickerWithRemainingRosters[\s\S]*renderDoctorState[\s\S]*Switcher menu updated/,
-  "roster changes should announce when the creator doctor switcher has finished updating",
+  /10000, 20000[\s\S]*mergeAvailableDoctors: true[\s\S]*syncCreatorDoctorPickerWithRemainingRosters[\s\S]*renderDoctorState[\s\S]*Switcher menu updated/,
+  "roster changes should merge local and repository doctors before announcing switcher updates",
+);
+assert.match(
+  appSource.match(/function applyLoadedCalendarFileRefs[\s\S]*?function rosterStoreFileToClientEntry/)?.[0] || "",
+  /mergeRosterFileEntries\(fromSnapshot, calendarStoreStatus\)/,
+  "creator calendar loads should keep roster files that exist in the store but not yet in the snapshot",
+);
+assert.match(
+  appSource.match(/async function syncCreatorDoctorPickerWithRemainingRosters[\s\S]*?async function pollCalendarAfterRosterChange/)?.[0] || "",
+  /ensureSelectedFilesLoaded\(\)/,
+  "creator doctor picker sync should hydrate retained roster files before parsing",
+);
+assert.match(
+  appSource.match(/async function refreshCalendarStoreStatus[\s\S]*?async function toggleAdminConsole/)?.[0] || "",
+  /mergeAvailableDoctors === true[\s\S]*mergeAvailableRosterDoctors\(availableRosterDoctors, incomingDoctors\)/,
+  "roster status refreshes should merge repository doctors instead of replacing the local picker list",
 );
 assert.match(
   appSource.match(/accountsBody\.addEventListener\("click"[\s\S]*?if \(adminTab\)[\s\S]*?return;/)?.[0] || "",
@@ -471,6 +486,16 @@ assert.match(
   appSource.match(/function setStatus[\s\S]*?function removeSupersededStatusMessages/)?.[0] || "",
   /adminConsoleOpen && currentAdminTab === "system" && !adminConsoleLoading[\s\S]*appendLiveAdminConsoleMessage[\s\S]*refreshAdminConsoleMarkupIfVisible/,
   "status messages should append live to the admin console while it is open on the system tab",
+);
+assert.match(
+  appSource.match(/async function openAccountsSurface[\s\S]*?async function refreshDoctorProfileFileRefs/)?.[0] || "",
+  /adminConsoleOpen = false/,
+  "opening the admin modal should collapse the console by default",
+);
+assert.match(
+  appSource.match(/function closeAccountsModal[\s\S]*?function loadAccountState/)?.[0] || "",
+  /adminConsoleOpen = false/,
+  "closing the admin modal should collapse the console",
 );
 assert.match(
   appSource.match(/async function refreshCalendarStoreStatus[\s\S]*?async function toggleAdminConsole/)?.[0] || "",
