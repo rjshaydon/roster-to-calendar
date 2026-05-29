@@ -3799,12 +3799,14 @@ async function syncRosterRepositoryToKeepFileIds(context, keepFileIds = [], opti
     expectedFileIds: keepIds,
     lightweight: options.lightweight !== false,
   });
+  const availableDoctors = await repositoryDoctorCandidates(null, null, db, { hideZeroEventStandalone: true });
   return {
     keptFileIds: keepIds,
     removedFileIds,
     verification,
     allPurged,
     sourceTypes,
+    availableDoctors,
     ...status,
   };
 }

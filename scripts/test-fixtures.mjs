@@ -349,6 +349,11 @@ assert.match(
 );
 assert.match(
   stateSource.match(/async function syncRosterRepositoryToKeepFileIds[\s\S]*?async function purgeRosterImports/)?.[0] || "",
+  /verifyRosterFilesPurged[\s\S]*repositoryDoctorCandidates[\s\S]*availableDoctors/,
+  "repository sync should return live availableDoctors after verified purge",
+);
+assert.match(
+  stateSource.match(/async function syncRosterRepositoryToKeepFileIds[\s\S]*?async function purgeRosterImports/)?.[0] || "",
   /querySourceTypesForFileIds[\s\S]*deleteDerivedRosterFile[\s\S]*deleteRetainedRosterSource[\s\S]*deferCanonicalDoctorRefresh[\s\S]*verifyRosterFilesPurged/,
   "repository sync should purge orphans, verify removal, and defer canonical doctor refresh",
 );
@@ -444,8 +449,18 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function completeRosterRemovalAfterSync[\s\S]*?function scheduleRosterRemovalRetry/)?.[0] || "",
-  /tryAnnounceCreatorSwitcherRosterUpdate[\s\S]*queueAccountImportsSave/,
-  "roster removal completion should announce switcher updates before background account sync",
+  /waitForCreatorSwitcherRemovalSettled[\s\S]*tryAnnounceCreatorSwitcherRosterUpdate[\s\S]*queueAccountImportsSave/,
+  "roster removal completion should wait for switcher settlement before announcing and account sync",
+);
+assert.match(
+  appSource.match(/function syncRosterRepositoryToSelection[\s\S]*?function restoreRemovedImportAfterFailedRemoval/)?.[0] || "",
+  /applyAuthoritativeAvailableDoctors\(syncResult\.availableDoctors\)/,
+  "repository sync should replace available doctors from the server response",
+);
+assert.match(
+  appSource.match(/function pickerHasRemovedSourceDoctors[\s\S]*?function restoreRemovedImportAfterFailedRemoval/)?.[0] || "",
+  /isCreatorSwitcherRemovalStable[\s\S]*waitForCreatorSwitcherRemovalSettled/,
+  "delete switcher settlement should wait until removed source doctors disappear from the picker",
 );
 assert.match(
   appSource.match(/function queueAccountImportsSave[\s\S]*?function keepFileIdsAfterRemoval/)?.[0] || "",
@@ -494,13 +509,18 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function refreshAvailableDoctorsAfterRosterChange[\s\S]*?function normalizeSavedExportRange/)?.[0] || "",
-  /10000, 20000[\s\S]*mergeAvailableDoctors: !localOnly[\s\S]*syncCreatorDoctorPickerWithRemainingRosters\(\{ localOnly \}\)[\s\S]*renderDoctorState/,
-  "roster changes should merge local and repository doctors before re-rendering the creator switcher",
+  /mergeAvailableDoctors = options\.mergeAvailableDoctors \?\? !localOnly[\s\S]*10000, 20000[\s\S]*mergeAvailableDoctors[\s\S]*syncCreatorDoctorPickerWithRemainingRosters\(\{ localOnly \}\)[\s\S]*renderDoctorState/,
+  "roster changes should poll repository doctors and optionally replace the local picker list on delete",
 );
 assert.match(
-  appSource.match(/async function removeStoredImport[\s\S]*?function loadConflictSelections/)?.[0] || "",
+  appSource.match(/async function completeRosterRemovalAfterSync[\s\S]*?function scheduleRosterRemovalRetry/)?.[0] || "",
+  /refreshAvailableDoctorsAfterRosterChange\(\{ localOnly: true, mergeAvailableDoctors: false \}\)/,
+  "roster deletion completion should poll server doctors without merging stale removed-source names back in",
+);
+assert.doesNotMatch(
+  appSource.match(/async function removeStoredImport[\s\S]*?setStatus\(`Removing \$\{removedName\}\.\.\.`\)/)?.[0] || "",
   /syncCreatorDoctorPickerWithRemainingRosters\(\{ localOnly: true \}\)/,
-  "roster deletion should prune the creator switcher to doctors from remaining roster files",
+  "roster deletion should not optimistically mutate the switcher before server purge completes",
 );
 assert.match(
   appSource.match(/function mergeAvailableRosterDoctors[\s\S]*?async function syncCreatorDoctorPickerWithRemainingRosters/)?.[0] || "",
@@ -534,8 +554,8 @@ assert.doesNotMatch(
 );
 assert.match(
   appSource.match(/async function removeStoredImport[\s\S]*?cancelScheduledCloudStateSave/)?.[0] || "",
-  /captureCreatorSwitcherVisibleBaseline/,
-  "roster deletion should capture the visible switcher baseline before optimistic refresh",
+  /creatorSwitcherAnnouncementBaseline = null[\s\S]*captureCreatorSwitcherVisibleBaseline/,
+  "roster deletion should reset and capture the visible switcher baseline before optimistic file-list refresh",
 );
 assert.match(
   appSource.match(/function applyLoadedCalendarFileRefs[\s\S]*?function rosterStoreFileToClientEntry/)?.[0] || "",

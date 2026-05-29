@@ -2180,6 +2180,85 @@ function tryAnnounceCreatorSwitcherRosterUpdate() {
   });
 }
 
+function remainingSelectedSourceTypes() {
+  return new Set(selectedFiles.map((entry) => String(entry?.sourceType || "").toLowerCase()).filter(Boolean));
+}
+
+function removedSourceTypesForEntry(removedEntry) {
+  const removedType = String(removedEntry?.sourceType || "").toLowerCase();
+  if (!removedType) return new Set();
+  const remaining = remainingSelectedSourceTypes();
+  if (remaining.has(removedType)) return new Set();
+  return new Set([removedType]);
+}
+
+function pickerHasRemovedSourceDoctors(removedSourceTypes) {
+  if (!removedSourceTypes?.size) return false;
+  return doctorPickerOptions().some((doctor) => (
+    normalizedDoctorSourceTypes(doctor).some((type) => removedSourceTypes.has(type))
+  ));
+}
+
+function filterSnapshotDoctorsAfterRemoval(snapshot, removedEntry) {
+  if (!snapshot?.doctorOptions?.length) return snapshot;
+  const removedSourceTypes = removedSourceTypesForEntry(removedEntry);
+  if (!removedSourceTypes.size) return snapshot;
+  const filtered = snapshot.doctorOptions.filter((doctor) => (
+    !normalizedDoctorSourceTypes(doctor).some((type) => removedSourceTypes.has(type))
+  ));
+  if (filtered.length === snapshot.doctorOptions.length) return snapshot;
+  return { ...snapshot, doctorOptions: filtered };
+}
+
+function applyAuthoritativeAvailableDoctors(doctors = []) {
+  availableRosterDoctors = sanitizeAvailableRosterDoctors(doctors);
+}
+
+async function waitForAnimationFrame() {
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+}
+
+async function isCreatorSwitcherRemovalStable(removedSourceTypes) {
+  for (let frame = 0; frame < 2; frame += 1) {
+    await waitForAnimationFrame();
+    if (!isCreatorSwitcherRepositorySettled()) return false;
+    if (!isCreatorSwitcherVisibleAndAligned()) return false;
+    if (pickerHasRemovedSourceDoctors(removedSourceTypes)) return false;
+  }
+  return true;
+}
+
+async function waitForCreatorSwitcherRemovalSettled(removedEntry, options = {}) {
+  if (!canUseCreatorDoctorSwitcher()) return { settled: true };
+  const removedSourceTypes = removedSourceTypesForEntry(removedEntry);
+  if (!selectedFiles.length) {
+    for (const delay of options.delays || [0, 500, 1500, 4000, 10000]) {
+      if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+      await waitForAnimationFrame();
+      if (!doctorPickerOptions().length && isCreatorSwitcherRepositorySettled()) {
+        return { settled: true };
+      }
+      availableRosterDoctors = [];
+      renderDoctorState();
+    }
+    throw new Error("Switcher did not refresh after roster removal.");
+  }
+  if (!removedSourceTypes.size) return { settled: true };
+  for (const delay of options.delays || [0, 500, 1500, 4000, 10000]) {
+    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+    try {
+      await syncCreatorDoctorPickerWithRemainingRosters({ localOnly: true });
+    } catch {
+      // Keep polling with the last merged doctor list.
+    }
+    renderDoctorState();
+    if (await isCreatorSwitcherRemovalStable(removedSourceTypes)) {
+      return { settled: true };
+    }
+  }
+  throw new Error("Switcher did not refresh after roster removal.");
+}
+
 function renderDoctorState() {
   const pickerOptions = doctorPickerOptions();
   doctorSelect.innerHTML = "";
@@ -10929,6 +11008,7 @@ async function refreshCreatorSnapshotInBackground(options = {}) {
 async function refreshAvailableDoctorsAfterRosterChange(options = {}) {
   if (!isCreatorAuthenticated() || !cloudAvailable) return;
   const localOnly = options.localOnly === true;
+  const mergeAvailableDoctors = options.mergeAvailableDoctors ?? !localOnly;
   mergeSelectedFilesWithRosterStoreStatus(calendarStoreStatus, { force: true });
   try {
     await syncCreatorDoctorPickerWithRemainingRosters({ localOnly });
@@ -10940,7 +11020,7 @@ async function refreshAvailableDoctorsAfterRosterChange(options = {}) {
     await refreshCalendarStoreStatus({
       silent: true,
       includeAvailableDoctors: true,
-      mergeAvailableDoctors: !localOnly,
+      mergeAvailableDoctors,
     }).catch(() => null);
     try {
       await syncCreatorDoctorPickerWithRemainingRosters({ localOnly });
@@ -13930,6 +14010,9 @@ async function syncRosterRepositoryToSelection(removedId = null, options = {}) {
     calendarStoreStatus = { ...syncResult, checkedAt: new Date().toISOString() };
     calendarStoreStatusError = "";
   }
+  if (Array.isArray(syncResult?.availableDoctors)) {
+    applyAuthoritativeAvailableDoctors(syncResult.availableDoctors);
+  }
   return syncResult;
 }
 
@@ -13960,16 +14043,13 @@ async function completeRosterRemovalAfterSync(id, removedEntry, removedName) {
 
   if (!selectedFiles.length) {
     if (isViewingCreatorAccount() && cloudAvailable) {
-      try {
-        await syncCreatorDoctorPickerWithRemainingRosters({ localOnly: true });
-        renderDoctorState();
-        const announced = await tryAnnounceCreatorSwitcherRosterUpdate();
-        if (!announced && creatorSwitcherAnnouncementBaseline !== null) {
-          setStatus("Roster removed from storage but switcher did not refresh yet; retrying…", true);
-          throw new Error("Switcher did not refresh after roster removal.");
-        }
-      } catch (error) {
-        if (String(error?.message || "").includes("Switcher did not refresh")) throw error;
+      applyAuthoritativeAvailableDoctors([]);
+      await refreshAvailableDoctorsAfterRosterChange({ localOnly: true, mergeAvailableDoctors: false });
+      await waitForCreatorSwitcherRemovalSettled(removedEntry);
+      const announced = await tryAnnounceCreatorSwitcherRosterUpdate();
+      if (!announced && creatorSwitcherAnnouncementBaseline !== null) {
+        setStatus("Roster removed from storage but switcher did not refresh yet; retrying…", true);
+        throw new Error("Switcher did not refresh after roster removal.");
       }
     }
     resetDerivedState({ preserveSession: true });
@@ -13980,7 +14060,7 @@ async function completeRosterRemovalAfterSync(id, removedEntry, removedName) {
     return;
   }
 
-  await refreshCalendarStoreStatus({ silent: true, syncSwitcher: false }).catch(() => null);
+  await refreshAvailableDoctorsAfterRosterChange({ localOnly: true, mergeAvailableDoctors: false });
 
   const loaded = await loadCloudCalendarEvents({
     preserveExistingSnapshot: false,
@@ -13988,6 +14068,7 @@ async function completeRosterRemovalAfterSync(id, removedEntry, removedName) {
     allowInlineBuild: true,
   });
   if (loaded && currentSnapshot) {
+    currentSnapshot = filterSnapshotDoctorsAfterRemoval(currentSnapshot, removedEntry);
     renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
   } else if (!loaded) {
     throw new Error("Could not reload calendar after roster removal.");
@@ -13999,6 +14080,8 @@ async function completeRosterRemovalAfterSync(id, removedEntry, removedName) {
   } catch {
     // Keep the last merged doctor list.
   }
+
+  await waitForCreatorSwitcherRemovalSettled(removedEntry);
 
   const announced = await tryAnnounceCreatorSwitcherRosterUpdate();
   if (!announced && isViewingCreatorAccount() && cloudAvailable && creatorSwitcherAnnouncementBaseline !== null) {
@@ -14047,6 +14130,7 @@ async function removeStoredImport(id) {
   const removedName = removedEntry?.name || "roster file";
   pendingRemovedImportIds.add(id);
   if (isViewingCreatorAccount() && cloudAvailable) {
+    creatorSwitcherAnnouncementBaseline = null;
     captureCreatorSwitcherVisibleBaseline();
   }
   cancelScheduledCloudStateSave();
@@ -14057,9 +14141,6 @@ async function removeStoredImport(id) {
   removeImportRefsFromWorkspaceStore(id);
   saveCurrentSessionState();
   renderFileSurfaces();
-  void syncCreatorDoctorPickerWithRemainingRosters({ localOnly: true })
-    .then(() => renderDoctorState())
-    .catch(() => null);
   setStatus(`Removing ${removedName}...`);
   let rosterDataRemoved = false;
   let removalCompleted = false;
