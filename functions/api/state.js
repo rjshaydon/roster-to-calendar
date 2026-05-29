@@ -1044,6 +1044,10 @@ export async function onRequestPost(context) {
         aliases: requestedAliases,
       }, email).catch(() => "");
       if (calendarRevision && String(body?.cachedRevision || "") === calendarRevision) {
+        const fileRefs = await doctorProfileImportRefs(context.env.ROSTER_DB, {
+          ...profile,
+          aliases: requestedAliases,
+        }).catch(() => []);
         return Response.json({
           ok: true,
           cloudAvailable: true,
@@ -1054,6 +1058,7 @@ export async function onRequestPost(context) {
           snapshotStale: false,
           snapshotBuiltAt: "",
           calendarRevision,
+          fileRefs,
           issueConfig: await buildIssueConfig(null, ""),
         });
       }
@@ -3436,8 +3441,32 @@ function mergeProfileSessionIntoState(state, profiles, ownerEmail = "") {
   };
 }
 
-async function repositoryImportRefsForDoctorProfile(store, profile, db = null) {
-  return await queryRosterFileRefsForDoctors(db, [profile?.doctorKey].filter(Boolean)).catch(() => []);
+async function doctorProfileImportRefs(db, profile) {
+  let doctorDiagnostics = await queryRosterFileDoctorsForKeys(db, doctorKeysForOption({
+    key: profile?.doctorKey,
+    aliases: profile?.aliases || [],
+  })).catch(() => []);
+  if (!doctorDiagnostics.length) {
+    const doctorRows = await queryRosterFileDoctors(db).catch(() => []);
+    const fallbackDoctor = doctorRows.length ? await resolveCanonicalDoctorOptionForKey(db, doctorRows, profile.doctorKey) : null;
+    doctorDiagnostics = fallbackDoctor
+      ? doctorRows.filter((row) => doctorKeysForOption(fallbackDoctor).includes(normalizeRosterName(row.doctorKey)))
+      : [];
+  }
+  return repositoryImportRefsForDoctorProfile(null, profile, db, doctorDiagnostics);
+}
+
+async function repositoryImportRefsForDoctorProfile(store, profile, db = null, doctorDiagnostics = []) {
+  const keysFromDiagnostics = [...new Set((doctorDiagnostics || [])
+    .map((row) => normalizeRosterName(row?.doctorKey || ""))
+    .filter(Boolean))];
+  const keys = keysFromDiagnostics.length
+    ? keysFromDiagnostics
+    : doctorKeysForOption({
+      key: profile?.doctorKey,
+      aliases: profile?.aliases || [],
+    });
+  return await queryRosterFileRefsForDoctors(db, keys).catch(() => []);
 }
 
 async function loadDoctorProfileSnapshotInfo(store, profile, db = null, ownerEmail = "") {
@@ -3586,7 +3615,7 @@ async function buildDerivedDoctorProfileSnapshot(store, db, profile, ownerEmail 
     ...customEventsToEvents(sanitizeSnapshotCustomEvents(session.customEvents, ""), settings),
   ];
   if (!events.length) return null;
-  const refs = await repositoryImportRefsForDoctorProfile(store, profile, db);
+  const refs = await repositoryImportRefsForDoctorProfile(store, profile, db, doctorDiagnostics);
   const profileSources = sanitizeSourceTypes(profile.sourceTypes);
   const doctorOption = doctorDiagnostics.length ? buildDoctorOptionFromRows([...doctorDiagnostics]) : null;
   const doctorOptions = doctorOption

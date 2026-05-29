@@ -1926,12 +1926,36 @@ async function openAccountsSurface(options = {}) {
   renderAccountsModal();
   accountsModal.classList.remove("hidden");
   accountsModal.setAttribute("aria-hidden", "false");
+  if (activeCalendarMode() === "doctor-profile" && activeDoctorProfile && cloudAvailable) {
+    void refreshDoctorProfileFileRefs().then(() => {
+      if (!accountsModal.classList.contains("hidden")) renderAccountsModal();
+    }).catch(() => null);
+  }
   if (isViewingCreatorAccount()) {
     void loadServerUsers().then(() => {
       if (!accountsModal.classList.contains("hidden")) renderAccountsModal();
     });
     void refreshCalendarStoreStatus({ silent: true });
   }
+}
+
+async function refreshDoctorProfileFileRefs() {
+  if (!activeDoctorProfile || !cloudAvailable) return;
+  const data = await fetchDoctorProfileState(activeDoctorProfile, {
+    cachedRevision: currentCalendarRevision || currentSnapshot?.calendarRevision || "",
+    allowInlineBuild: false,
+  });
+  if (!Array.isArray(data.fileRefs) || !data.fileRefs.length) return;
+  selectedFiles = importRefsToClientEntries(data.fileRefs);
+  if (currentSnapshot) {
+    currentSnapshot.fileRefs = data.fileRefs;
+    saveCalendarSnapshotCacheForContext(currentSnapshot, {
+      mode: "doctor-profile",
+      ownerId: activeDoctorProfile.ownerId,
+      doctorKey: activeDoctorProfile.doctorKey,
+    });
+  }
+  renderFileSurfaces();
 }
 
 function syncMobileAccountButtons() {
@@ -1992,7 +2016,8 @@ function syncMobileChrome() {
 }
 
 function renderFilesMarkup({ canRemove = false, heading = "", description = "", canAdd = false } = {}) {
-  const hasUsableStatus = Boolean(calendarStoreStatus && calendarStoreStatus.unavailable !== true && !calendarStoreStatusError);
+  const profileView = activeCalendarMode() === "doctor-profile";
+  const hasUsableStatus = !profileView && Boolean(calendarStoreStatus && calendarStoreStatus.unavailable !== true && !calendarStoreStatusError);
   const statusFiles = new Map((calendarStoreStatus?.files || []).map((file) => [file.id, file]));
   const populatedSelectedFileIds = new Set(calendarStoreStatus?.expectedFiles?.populatedFileIds || []);
   const statusOnlyEntries = hasUsableStatus
@@ -2006,7 +2031,7 @@ function renderFilesMarkup({ canRemove = false, heading = "", description = "", 
         addedAt: "",
         fromRosterDatabase: true,
       }))
-    : [];
+    : calendarFilesForActiveView();
   const displayFiles = rosterDisplayFiles(hasUsableStatus, statusOnlyEntries)
     .filter((entry) => !pendingRemovedImportIds.has(entry.id));
   if (!displayFiles.length) {
@@ -7056,7 +7081,39 @@ function normalizeRosterName(value) {
     .toUpperCase();
 }
 
+function rosterClaimsForDoctorProfile(profile) {
+  if (!profile) return [];
+  const aliases = Array.isArray(profile.aliases) && profile.aliases.length
+    ? profile.aliases
+    : (profile.sourceTypes || []).map((sourceType) => ({
+      sourceType,
+      key: profile.doctorKey,
+      displayName: profile.displayName,
+    }));
+  return sanitizeRosterClaims(aliases.map((alias) => ({
+    sourceType: alias.sourceType,
+    key: alias.key || profile.doctorKey,
+    displayName: alias.displayName || profile.displayName,
+  })));
+}
+
 function currentAccount() {
+  if (activeCalendarMode() === "doctor-profile" && activeDoctorProfile) {
+    const linkedEmail = linkedAccountEmailForDoctorProfile(activeDoctorProfile);
+    if (linkedEmail) {
+      const serverAccount = serverUsers.map(normalizeServerUser).find((user) => user.email === linkedEmail);
+      if (serverAccount) return serverAccount;
+      const localAccount = accountState.users.find((user) => user.email === linkedEmail);
+      if (localAccount) return localAccount;
+    }
+    return {
+      email: "",
+      realName: activeDoctorProfile.displayName || "",
+      password: "",
+      role: "user",
+      claims: rosterClaimsForDoctorProfile(activeDoctorProfile),
+    };
+  }
   const email = viewedAccountEmail() || accountState.currentEmail;
   const serverAccount = serverUsers.map(normalizeServerUser).find((user) => user.email === email);
   return serverAccount || accountState.users.find((user) => user.email === email) || {
@@ -7068,7 +7125,18 @@ function currentAccount() {
   };
 }
 
+function linkedAccountEmailForDoctorProfile(profile) {
+  if (!profile?.doctorKey) return "";
+  const identity = doctorIdentityKey({ key: profile.doctorKey, displayName: profile.displayName });
+  const doctor = (availableRosterDoctors || []).find((entry) => doctorIdentityKey(entry) === identity)
+    || (availableRosterDoctors || []).find((entry) => normalizeRosterName(entry.key) === normalizeRosterName(profile.doctorKey));
+  return normalizeEmail(doctor?.accountEmail || doctor?.claimedBy || "");
+}
+
 function viewedAccountEmail() {
+  if (activeCalendarMode() === "doctor-profile") {
+    return linkedAccountEmailForDoctorProfile(activeDoctorProfile) || "";
+  }
   return normalizeEmail(adminViewingEmail || currentUserEmail);
 }
 
@@ -7136,10 +7204,13 @@ function syncAccountsButton() {
 function renderAccountsModal() {
   const me = currentAccount();
   const ownerView = isViewingCreatorAccount();
+  const doctorProfileView = activeCalendarMode() === "doctor-profile" && activeDoctorProfile;
   accountsModalTitle.textContent = ownerView ? "Admin" : "Account";
   accountsModalSubtitle.textContent = ownerView
     ? "Review user issues, manage accounts, and update the owner account."
-    : "Manage your account details.";
+    : doctorProfileView
+      ? "Review the roster account details used for this calendar."
+      : "Manage your account details.";
 
   const serverOtherUsers = serverUsers
     .map(normalizeServerUser)
@@ -7167,10 +7238,18 @@ function renderAccountsModal() {
     <article class="review-card">
       <div class="review-top">
         <div>
-          <strong>${ownerView ? "Account" : "Your account"}</strong>
-          <span>${escapeHtml(me.realName || "Name not set")} · ${escapeHtml(me.email)}</span>
+          <strong>${ownerView ? "Account" : doctorProfileView ? "Roster account" : "Your account"}</strong>
+          <span>${escapeHtml(me.realName || "Name not set")}${me.email ? ` · ${escapeHtml(me.email)}` : doctorProfileView ? " · No linked account" : ""}</span>
         </div>
       </div>
+      ${doctorProfileView ? `
+        <div class="review-body">
+          <label class="field">
+            <span>Email address</span>
+            <input type="email" value="" readonly placeholder="No linked account">
+          </label>
+        </div>
+      ` : `
       <form class="review-body" data-account-form>
         <label class="field">
           <span>Preferred display name</span>
@@ -7189,11 +7268,12 @@ function renderAccountsModal() {
           ${me.email !== OWNER_EMAIL ? `<button type="button" class="button button-danger" data-delete-account="${escapeHtml(me.email)}">Delete account</button>` : ""}
         </div>
       </form>
+      `}
       ${renderAccountHospitalLocationsCard()}
       ${linkedNames}
       ${ownerView ? "" : renderFilesMarkup({
         canRemove: false,
-        canAdd: true,
+        canAdd: !doctorProfileView,
         heading: "Files used to generate your calendar...",
         description: "These roster files currently feed your calendar.",
       })}
@@ -7330,6 +7410,10 @@ const ACCOUNT_HOSPITAL_LOCATION_ORDER = ["mmc", "ddh", "mch", "casey"];
 function recognizedHospitalTypesForActiveAccount() {
   if (isViewingCreatorAccount()) {
     return ACCOUNT_HOSPITAL_LOCATION_ORDER.filter((sourceType) => detectedSources[sourceType]?.length);
+  }
+  if (activeCalendarMode() === "doctor-profile" && activeDoctorProfile?.sourceTypes?.length) {
+    const linkedTypes = new Set(activeDoctorProfile.sourceTypes.map((sourceType) => String(sourceType || "").toLowerCase()));
+    return ACCOUNT_HOSPITAL_LOCATION_ORDER.filter((sourceType) => linkedTypes.has(sourceType));
   }
   const claimTypes = currentRosterClaims.map((claim) => String(claim.sourceType || "").toLowerCase());
   const doctorTypes = normalizedDoctorSourceTypes(selectedDoctor());
@@ -9166,6 +9250,10 @@ async function enterDoctorProfileView(doctor) {
   currentUserPassword = creatorPassword;
   currentUserRole = "creator";
   activeDoctorProfile = profile;
+  if (profile) {
+    currentRosterClaims = rosterClaimsForDoctorProfile(profile);
+    currentSuggestedClaims = [];
+  }
   if (profile) setActiveCalendarContext("doctor-profile", { email: currentUserEmail, profile });
   primeInsightsAccessForCurrentView();
   const accountSwitchStartedAt = performance.now();
@@ -9232,12 +9320,25 @@ async function loadUnclaimedDoctorCalendar(doctor, sourceContext, options = {}) 
   if (!calendarTransitionStillCurrent(options.transition)) return null;
   if (profileData.snapshotCurrent === true) {
     currentCalendarRevision = String(profileData.calendarRevision || currentCalendarRevision || "");
-    if (currentSnapshot) currentSnapshot.calendarRevision = currentCalendarRevision;
-    if (currentSnapshot) saveCalendarSnapshotCacheForContext(currentSnapshot, {
-      mode: "doctor-profile",
-      ownerId: profile.ownerId,
-      doctorKey: profile.doctorKey,
-    });
+    if (Array.isArray(profileData.fileRefs) && profileData.fileRefs.length) {
+      selectedFiles = importRefsToClientEntries(profileData.fileRefs);
+      if (currentSnapshot) {
+        currentSnapshot.fileRefs = profileData.fileRefs;
+        currentSnapshot.calendarRevision = currentCalendarRevision;
+        saveCalendarSnapshotCacheForContext(currentSnapshot, {
+          mode: "doctor-profile",
+          ownerId: profile.ownerId,
+          doctorKey: profile.doctorKey,
+        });
+      }
+    } else if (currentSnapshot) {
+      currentSnapshot.calendarRevision = currentCalendarRevision;
+      saveCalendarSnapshotCacheForContext(currentSnapshot, {
+        mode: "doctor-profile",
+        ownerId: profile.ownerId,
+        doctorKey: profile.doctorKey,
+      });
+    }
     return null;
   }
   const snapshot = sanitizeWorkspaceSnapshot(profileData.snapshot);
@@ -9489,6 +9590,8 @@ async function commitCalendarLoad(result, options = {}) {
     throw new Error("Unsupported calendar load result.");
   }
   activeDoctorProfile = result.profile;
+  currentRosterClaims = rosterClaimsForDoctorProfile(result.profile);
+  currentSuggestedClaims = [];
   setActiveCalendarContext("doctor-profile", { email: currentUserEmail, profile: activeDoctorProfile });
   resetTransientCalendarData();
   currentDefaultDoctorKey = normalizeRosterName(result.profile?.doctorKey || result.doctor?.key || "");
@@ -10393,7 +10496,21 @@ function mergeSelectedFilesWithRosterStoreStatus(status = calendarStoreStatus, o
   return selectedFiles;
 }
 
+function calendarFilesForActiveView() {
+  const fromSelected = (selectedFiles || []).filter((entry) => entry?.id);
+  if (fromSelected.length) return fromSelected;
+  let fromSnapshot = importRefsToClientEntries(currentSnapshot?.fileRefs || []);
+  if (activeCalendarMode() === "doctor-profile" && activeDoctorProfile?.sourceTypes?.length) {
+    const allowedSources = new Set(activeDoctorProfile.sourceTypes.map((item) => String(item || "").toLowerCase()));
+    fromSnapshot = fromSnapshot.filter((entry) => allowedSources.has(String(entry.sourceType || "").toLowerCase()));
+  }
+  return fromSnapshot;
+}
+
 function rosterDisplayFiles(hasUsableStatus, statusOnlyEntries = []) {
+  if (activeCalendarMode() === "doctor-profile") {
+    return calendarFilesForActiveView();
+  }
   if (isViewingCreatorAccount() && hasUsableStatus && (calendarStoreStatus?.files || []).length) {
     return mergeRosterFileEntries(selectedFiles, calendarStoreStatus);
   }

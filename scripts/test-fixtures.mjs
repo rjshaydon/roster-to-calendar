@@ -175,8 +175,18 @@ assert.match(
 );
 assert.match(
   appSource.match(/function currentAccount[\s\S]*?function canUseRosterInsights/)?.[0] || "",
-  /viewedAccountEmail\(\)[\s\S]*function viewedAccountEmail[\s\S]*adminViewingEmail \|\| currentUserEmail[\s\S]*function isOwnerAccount\(\) \{\s*return isViewingCreatorAccount\(\);/,
+  /activeCalendarMode\(\) === "doctor-profile" && activeDoctorProfile[\s\S]*function viewedAccountEmail[\s\S]*activeCalendarMode\(\) === "doctor-profile"[\s\S]*function isOwnerAccount\(\) \{\s*return isViewingCreatorAccount\(\);/,
   "switched-user account surfaces should be driven by viewed identity rather than creator authentication",
+);
+assert.match(
+  appSource.match(/function calendarFilesForActiveView[\s\S]*?function rosterDisplayFiles/)?.[0] || "",
+  /activeCalendarMode\(\) === "doctor-profile"[\s\S]*activeDoctorProfile\.sourceTypes/,
+  "doctor-profile account files should come from the viewed calendar snapshot rather than creator roster status",
+);
+assert.match(
+  stateSource.match(/async function repositoryImportRefsForDoctorProfile[\s\S]*?async function loadDoctorProfileSnapshotInfo/)?.[0] || "",
+  /doctorDiagnostics[\s\S]*doctorKeysForOption[\s\S]*queryRosterFileRefsForDoctors/,
+  "doctor profile file refs should resolve from every matched roster alias key",
 );
 assert.match(
   appSource.match(/async function deleteAccount[\s\S]*?function deleteLocalAccountData/)?.[0] || "",
@@ -2739,6 +2749,37 @@ function seedD1Repository(db, files) {
   }
 }
 
+function seedMinimalD1DoctorEvent(db, fileId, doctorKey, sourceType, displayName = doctorKey) {
+  const id = `${fileId}:${doctorKey}`;
+  const event = {
+    id,
+    source: String(sourceType || "mmc").toUpperCase(),
+    title: "Shift",
+    start: "2026-01-01T09:00:00",
+    end: "2026-01-01T17:00:00",
+    allDay: false,
+    rawValue: "Shift",
+  };
+  db.events.set(id, {
+    id,
+    file_id: fileId,
+    source_type: sourceType,
+    doctor_key: doctorKey,
+    display_name: displayName,
+    start_date: "2026-01-01",
+    end_date: "2026-01-01",
+    start_ts: "2026-01-01T09:00:00",
+    end_ts: "2026-01-01T17:00:00",
+    title: "Shift",
+    raw_value: "Shift",
+    seniority: "Registrar",
+    location: "",
+    all_day: 0,
+    time_label: "0900-1700",
+    event_json: JSON.stringify(event),
+  });
+}
+
 async function seedUser(store, email, password, realName = "Titus Hackman", db = null) {
   await postState(store, {
     action: "login",
@@ -3861,6 +3902,7 @@ const d1DoctorProfileCurrent = await postState(d1StateStore, {
 }, d1Store);
 assert.equal(d1DoctorProfileCurrent.snapshotCurrent, true, "doctor-profile cachedRevision should validate without replacing the displayed profile");
 assert.equal(d1DoctorProfileCurrent.snapshot, null);
+assert.ok(d1DoctorProfileCurrent.fileRefs.some((ref) => ref.id === d1RepositoryFile), "doctor-profile revision checks should still return current file refs");
 const d1RepositoryDoctors = [...d1Store.fileDoctors.values()].map((doctor) => ({
   key: doctor.doctor_key,
   displayName: doctor.display_name,
@@ -4652,6 +4694,26 @@ const michaelDeletedResolution = await postState(michaelStateStore, {
 });
 assert.equal(michaelDeletedResolution.mode, "doctor-profile");
 assert.equal(michaelDeletedResolution.email, "");
+seedMinimalD1DoctorEvent(michaelStateStore.d1, "michael-mmc", "MICHAEL COMAN", "mmc", "Michael COMAN");
+seedMinimalD1DoctorEvent(michaelStateStore.d1, "michael-mch", "DR MICHAEL COMAN", "mch", "Dr Michael Coman");
+const michaelDoctorProfile = await postState(michaelStateStore, {
+  action: "loadDoctorProfile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  profileId: "MICHAEL COMAN::mch+mmc",
+  doctorKey: "MICHAEL COMAN",
+  displayName: "Michael COMAN",
+  sourceTypes: ["mmc", "mch"],
+  aliases: [
+    { sourceType: "mmc", key: "MICHAEL COMAN", displayName: "Michael COMAN" },
+    { sourceType: "mch", key: "DR MICHAEL COMAN", displayName: "Dr Michael Coman" },
+  ],
+});
+assert.deepEqual(
+  michaelDoctorProfile.snapshot.fileRefs.map((ref) => ref.id).sort(),
+  ["michael-mch", "michael-mmc"],
+  "doctor profile snapshots should include every roster file matched by alias keys",
+);
 await seedUser(michaelStateStore, "michael@example.com", "michael-password-2", "Michael COMAN");
 const michaelRecreatedResolution = await postState(michaelStateStore, {
   action: "resolveDoctorAccount",
