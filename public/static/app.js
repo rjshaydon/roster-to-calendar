@@ -2014,7 +2014,7 @@ function syncMobileChrome() {
 function renderFilesMarkup({ canRemove = false, heading = "", description = "", canAdd = false } = {}) {
   const hasUsableStatus = Boolean(calendarStoreStatus && calendarStoreStatus.unavailable !== true && !calendarStoreStatusError);
   const statusFiles = new Map((calendarStoreStatus?.files || []).map((file) => [file.id, file]));
-  const persistedSelectedFileIds = new Set(calendarStoreStatus?.expectedFiles?.persistedFileIds || []);
+  const populatedSelectedFileIds = new Set(calendarStoreStatus?.expectedFiles?.populatedFileIds || []);
   const statusOnlyEntries = hasUsableStatus
     ? (calendarStoreStatus?.files || [])
       .filter((file) => file?.id)
@@ -2052,7 +2052,7 @@ function renderFilesMarkup({ canRemove = false, heading = "", description = "", 
               ? statusFiles.get(entry.id)?.retainedSourceOnly
                 ? `<span>Retained in R2 · not yet synced to D1</span>`
                 : `<span>${Number(statusFiles.get(entry.id)?.eventCount || 0)} events · ${Number(statusFiles.get(entry.id)?.selectedDoctorEventCount || 0)} for selected doctor</span>`
-              : persistedSelectedFileIds.has(entry.id) ? `<span>Saved in D1 · inactive</span>`
+              : populatedSelectedFileIds.has(entry.id) ? `<span>Saved in D1 · inactive</span>`
               : entry.file && hasUsableStatus ? `<span>Not yet confirmed in D1</span>`
               : entry.file ? `<span>Roster database status not checked</span>` : "")}
             ${statusFiles.has(entry.id) && statusFiles.get(entry.id)?.rawSourceAvailable !== true
@@ -10345,14 +10345,13 @@ function selectedFilesNeedD1CalendarReload() {
 
 function selectedFilesHavePendingD1Uploads(status = calendarStoreStatus) {
   if (!selectedFiles.length) return false;
-  const persistedIds = new Set(status?.expectedFiles?.persistedFileIds || []);
   const failedIds = new Set(
     [...rosterSyncStates.entries()]
       .filter(([, state]) => state.status === "failed")
       .map(([id]) => id),
   );
   return selectedFiles.some(
-    (entry) => entry?.file && (!persistedIds.has(entry.id) || failedIds.has(entry.id)),
+    (entry) => entry?.file && (!isLocalRosterFileSyncedToD1(entry, status) || failedIds.has(entry.id)),
   );
 }
 
@@ -10369,11 +10368,20 @@ async function refreshCreatorCalendarAfterFileChange(options = {}) {
     });
   }
   let performedLocalUpload = false;
-  const pendingUploads = selectedFiles.filter((entry) => entry?.file);
-  if (pendingUploads.length && selectedFilesHavePendingD1Uploads(calendarStoreStatus)) {
+  const unsyncedLocalEntries = selectedFiles.filter((entry) => entry?.file && !isLocalRosterFileSyncedToD1(entry));
+  // #region agent log
+  debugLog("H9", "app.js:refreshCreatorCalendarAfterFileChange", "roster change sync plan", {
+    unsyncedCount: unsyncedLocalEntries.length,
+    unsyncedNames: unsyncedLocalEntries.map((entry) => entry.name),
+    pendingD1Uploads: selectedFilesHavePendingD1Uploads(calendarStoreStatus),
+    creatorView: isViewingCreatorAccount(),
+    cloudAvailable,
+  });
+  // #endregion
+  if (unsyncedLocalEntries.length && cloudAvailable && isCreatorAuthenticated()) {
     performedLocalUpload = true;
     try {
-      await saveSelectedRosterFilesToD1(pendingUploads);
+      await saveSelectedRosterFilesToD1(unsyncedLocalEntries);
     } catch (error) {
       setStatus(error.message || "Could not save roster file to D1.", true);
     }
@@ -10383,18 +10391,13 @@ async function refreshCreatorCalendarAfterFileChange(options = {}) {
     }
     renderFileSurfaces();
   }
-  const shouldReloadFromD1 = isViewingCreatorAccount() && cloudAvailable && (
-    options.removeMissingFromStore === true
-    || selectedFilesNeedD1CalendarReload()
-    || performedLocalUpload
-  );
-  if (shouldReloadFromD1) {
+  if (isViewingCreatorAccount() && cloudAvailable) {
     setStatus("Loading calendar...");
     try {
       const loaded = await loadCloudCalendarEvents({ preserveExistingSnapshot: false });
       if (loaded && currentSnapshot) {
         renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
-        setStatus("Calendar refreshed.");
+        setStatus(performedLocalUpload ? "Calendar refreshed." : "Calendar loaded.");
       } else if (!loaded) {
         setStatus("Could not reload calendar from roster database.", true);
       }
@@ -12108,11 +12111,10 @@ async function saveSelectedRosterFilesToD1(imports = selectedFiles, options = {}
     expectedFileIds,
   });
   // #endregion
-  const persistedIds = new Set(calendarStoreStatus?.expectedFiles?.persistedFileIds || []);
   const failedIds = new Set([...rosterSyncStates.entries()].filter(([, state]) => state.status === "failed").map(([id]) => id));
   const entriesToSave = options.force === true
     ? entries
-    : entries.filter((entry) => !persistedIds.has(entry.id) || failedIds.has(entry.id));
+    : entries.filter((entry) => !isLocalRosterFileSyncedToD1(entry) || failedIds.has(entry.id));
   const saveResults = [];
   let latestStatus = calendarStoreStatus;
   if (!entriesToSave.length) return summarizeRosterPersistence(entries, latestStatus, saveResults);
@@ -12285,7 +12287,14 @@ function scheduleRosterSyncRefresh() {
 
 function isRosterFileStatusHealthy(file) {
   if (!file?.id) return false;
+  if (file.retainedSourceOnly === true) return false;
   return file.status === "populated" || Number(file.eventCount || 0) > 0;
+}
+
+function isLocalRosterFileSyncedToD1(entry, status = calendarStoreStatus) {
+  if (!entry?.id) return false;
+  const statusFile = (status?.files || []).find((file) => file.id === entry.id);
+  return isRosterFileStatusHealthy(statusFile);
 }
 
 function reconcileRosterSyncStates(status = calendarStoreStatus) {
@@ -13283,7 +13292,10 @@ async function removeStoredImport(id) {
         removedImportIds: [id],
       });
     } catch (error) {
-      setStatus(error.message || "Could not save file removal.", true);
+      const overload = /503|CPU|memory|overload/i.test(String(error?.message || ""));
+      setStatus(overload
+        ? `${removedName} removed locally. Cloud sync will finish when the roster database is available.`
+        : (error.message || "Could not save file removal."), true);
       scheduleCloudStateSave();
     }
     if (!selectedFiles.length) {

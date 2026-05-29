@@ -368,9 +368,14 @@ assert.match(
   "roster deletion should refresh the creator calendar without clearing the visible preview first",
 );
 assert.match(
-  appSource.match(/async function refreshCreatorCalendarAfterFileChange[\s\S]*?function normalizeSavedExportRange/)?.[0] || "",
-  /removeMissingFromStore === true[\s\S]*performedLocalUpload[\s\S]*loadCloudCalendarEvents\(\{ preserveExistingSnapshot: false \}\)/,
-  "creator roster changes should reload the calendar from D1 after delete or upload",
+  appSource.match(/function isRosterFileStatusHealthy[\s\S]*?function reconcileRosterSyncStates/)?.[0] || "",
+  /retainedSourceOnly === true[\s\S]*function isLocalRosterFileSyncedToD1/,
+  "retained R2-only roster files should not count as synced derived D1 files",
+);
+assert.match(
+  appSource.match(/async function refreshCreatorCalendarAfterFileChange[\s\S]*?async function refreshAvailableDoctorsAfterRosterChange/)?.[0] || "",
+  /unsyncedLocalEntries[\s\S]*saveSelectedRosterFilesToD1[\s\S]*loadCloudCalendarEvents/,
+  "creator roster changes should save unsynced local files then reload from D1",
 );
 assert.match(
   appSource.match(/async function saveCloudStateNow[\s\S]*?async function replaceActiveRostersWithCurrentUploads/)?.[0] || "",
@@ -622,7 +627,7 @@ assert.doesNotMatch(
 );
 assert.match(
   appSource.match(/async function saveSelectedRosterFilesToD1[\s\S]*?function emptyRosterPersistenceSummary/)?.[0] || "",
-  /entriesToSave = options\.force === true[\s\S]*entries\.filter\(\(entry\) => !persistedIds\.has\(entry\.id\) \|\| failedIds\.has\(entry\.id\)\)/,
+  /entriesToSave = options\.force === true[\s\S]*entries\.filter\(\(entry\) => !isLocalRosterFileSyncedToD1\(entry\) \|\| failedIds\.has\(entry\.id\)\)/,
   "ordinary roster sync should process only missing or failed files",
 );
 assert.match(
