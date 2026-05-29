@@ -424,8 +424,23 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function removeStoredImport[\s\S]*?function loadConflictSelections/)?.[0] || "",
-  /removeRosterImports[\s\S]*invalidateCalendarSnapshotCachesForChangedRosterFiles[\s\S]*refreshCreatorCalendarAfterFileChange[\s\S]*removeMissingFromStore: true[\s\S]*preserveVisiblePreview: true/,
-  "roster deletion should purge cloud roster storage first, then refresh the creator calendar without clearing the visible preview first",
+  /removeRosterImports[\s\S]*finishRosterRemovalAfterStorage[\s\S]*scheduleRosterRemovalRetry/,
+  "roster deletion should finish successful purges immediately and retry failed D1 removals in the background",
+);
+assert.match(
+  appSource.match(/function rosterRemovalCloudSavePayload[\s\S]*?function restoreRemovedImportAfterFailedRemoval/)?.[0] || "",
+  /removedImportIds: \[id\]/,
+  "roster deletion saves should keep removedImportIds for D1 purge retries",
+);
+assert.match(
+  appSource.match(/function scheduleRosterRemovalRetry[\s\S]*?async function removeStoredImport/)?.[0] || "",
+  /Retrying removal of \$\{removedName\}/,
+  "background roster removal retries should report progress in the admin console",
+);
+assert.match(
+  appSource.match(/function rosterDisplayFiles[\s\S]*?function selectedFilesNeedD1CalendarReload/)?.[0] || "",
+  /pendingRemovedImportIds\.has\(entry\.id\)/,
+  "creator roster lists should hide files pending background removal even when D1 status is stale",
 );
 assert.match(
   appSource.match(/async function mergeFiles[\s\S]*?function validateIncomingFiles/)?.[0] || "",
@@ -940,8 +955,8 @@ assert.match(
 );
 assert.match(
   await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"),
-  /async function purgeRosterImports[\s\S]*await refreshCanonicalDoctors\(context\.env\.ROSTER_DB\)/,
-  "roster purge should refresh canonical doctors before returning",
+  /async function purgeRosterImports[\s\S]*deferCanonicalDoctorRefresh\(context, reason\)/,
+  "roster purge should defer canonical doctor refresh to avoid CPU timeouts during deletion",
 );
 assert.match(
   await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"),
