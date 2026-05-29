@@ -12213,6 +12213,7 @@ async function saveCloudStateNow(snapshot = null) {
     state,
     snapshot: snapshotPayload,
     removedImportIds: payload.removedImportIds || [],
+    ...(payload.repositorySynced === true ? { repositorySynced: true } : {}),
   };
   let response = await fetch("/api/state", {
     method: "POST",
@@ -13886,12 +13887,50 @@ function removeImportRefsFromCurrentSnapshot(id) {
   });
 }
 
-function rosterRemovalCloudSavePayload(id, imports = selectedFiles) {
+function accountImportsSavePayload(imports = selectedFiles) {
   return {
     ...snapshotCloudSavePayload(),
     imports: (imports || []).map((entry) => ({ ...entry })),
-    removedImportIds: [id],
+    removedImportIds: [],
+    repositorySynced: true,
   };
+}
+
+function queueAccountImportsSave(options = {}) {
+  const payload = accountImportsSavePayload();
+  queueBackgroundCloudStateSave(payload, {
+    delayMs: options.delayMs ?? 0,
+    reportErrors: false,
+    onError: () => setStatus("Account sync will retry in the background."),
+  });
+}
+
+function keepFileIdsAfterRemoval() {
+  return selectedFiles.map((entry) => entry.id).filter(Boolean);
+}
+
+function syncResponsePurgedRemovedId(syncResult, removedId) {
+  if (!removedId) return syncResult?.allPurged === true;
+  const verification = syncResult?.verification || [];
+  const entry = verification.find((item) => item.fileId === removedId);
+  if (entry) return entry.purged === true;
+  return !(syncResult?.removedFileIds || []).includes(removedId);
+}
+
+async function syncRosterRepositoryToSelection(removedId = null, options = {}) {
+  const keepFileIds = keepFileIdsAfterRemoval();
+  const syncResult = await calendarStoreRequestWithRetry("syncRosterRepository", {
+    keepFileIds,
+    selectedDoctorKey: selectedDoctor()?.key || OWNER_DOCTOR_KEY,
+  }, { attempts: options.attempts || 4 });
+  if (removedId && !syncResponsePurgedRemovedId(syncResult, removedId)) {
+    throw new Error("Roster repository sync did not confirm removal.");
+  }
+  if (syncResult?.files || syncResult?.keptFileIds) {
+    calendarStoreStatus = { ...syncResult, checkedAt: new Date().toISOString() };
+    calendarStoreStatusError = "";
+  }
+  return syncResult;
 }
 
 function restoreRemovedImportAfterFailedRemoval(id, removedEntry) {
@@ -13916,48 +13955,58 @@ function restoreRemovedImportAfterFailedRemoval(id, removedEntry) {
     .catch(() => null);
 }
 
-async function finishRosterRemovalAfterStorage(id, removedEntry, removedName) {
+async function completeRosterRemovalAfterSync(id, removedEntry, removedName) {
+  invalidateCalendarSnapshotCachesForChangedRosterFiles([removedEntry]);
+
   if (!selectedFiles.length) {
     if (isViewingCreatorAccount() && cloudAvailable) {
       try {
-        await refreshAvailableDoctorsAfterRosterChange({ localOnly: true });
+        await syncCreatorDoctorPickerWithRemainingRosters({ localOnly: true });
         renderDoctorState();
-        await tryAnnounceCreatorSwitcherRosterUpdate();
-      } catch {
-        // Fall through to reset even if the final switcher refresh fails.
+        const announced = await tryAnnounceCreatorSwitcherRosterUpdate();
+        if (!announced && creatorSwitcherAnnouncementBaseline !== null) {
+          setStatus("Roster removed from storage but switcher did not refresh yet; retrying…", true);
+          throw new Error("Switcher did not refresh after roster removal.");
+        }
+      } catch (error) {
+        if (String(error?.message || "").includes("Switcher did not refresh")) throw error;
       }
     }
     resetDerivedState({ preserveSession: true });
-    setStatus("Add a roster file to begin.");
+    queueAccountImportsSave();
+    if (!canUseCreatorDoctorSwitcher() || creatorSwitcherAnnouncementBaseline === null) {
+      setStatus("Add a roster file to begin.");
+    }
     return;
   }
-  try {
-    await refreshCreatorCalendarAfterFileChange({
-      refreshStatus: true,
-      removeMissingFromStore: true,
-      removedIds: [id],
-      analyzeOptions: { preserveVisiblePreview: true },
-    });
-  } catch (error) {
-    setStatus(error.message || "Could not refresh calendar after file removal.", true);
-    await syncCreatorFileListFromStore({
-      removeMissingFromStore: true,
-      removedIds: [id],
-    }).catch(() => null);
-    try {
-      await syncCreatorDoctorPickerWithRemainingRosters({ localOnly: true });
-      renderDoctorState();
-      await tryAnnounceCreatorSwitcherRosterUpdate();
-    } catch {
-      // Keep the last merged doctor list.
-    }
+
+  await refreshCalendarStoreStatus({ silent: true, syncSwitcher: false }).catch(() => null);
+
+  const loaded = await loadCloudCalendarEvents({
+    preserveExistingSnapshot: false,
+    cachedRevision: "",
+    allowInlineBuild: true,
+  });
+  if (loaded && currentSnapshot) {
+    renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+  } else if (!loaded) {
+    throw new Error("Could not reload calendar after roster removal.");
   }
+
   try {
-    await saveCloudState(rosterRemovalCloudSavePayload(id));
+    await syncCreatorDoctorPickerWithRemainingRosters({ localOnly: true });
+    renderDoctorState();
   } catch {
-    queueBackgroundCloudStateSave(rosterRemovalCloudSavePayload(id), { delayMs: 2000 });
+    // Keep the last merged doctor list.
   }
-  setStatus(`${removedName} removed.`);
+
+  const announced = await tryAnnounceCreatorSwitcherRosterUpdate();
+  if (!announced && isViewingCreatorAccount() && cloudAvailable && creatorSwitcherAnnouncementBaseline !== null) {
+    setStatus("Roster removed from storage but switcher did not refresh yet; retrying…", true);
+    throw new Error("Switcher did not refresh after roster removal.");
+  }
+
+  queueAccountImportsSave();
 }
 
 function scheduleRosterRemovalRetry(id, removedEntry, removedName) {
@@ -13972,14 +14021,9 @@ function scheduleRosterRemovalRetry(id, removedEntry, removedName) {
       if (!pendingRemovedImportIds.has(id)) return;
       try {
         setStatus(`Retrying removal of ${removedName}...`);
-        try {
-          await calendarStoreRequestWithRetry("removeRosterImports", { removedImportIds: [id] }, { attempts: 4 });
-        } catch (removeError) {
-          await saveCloudState(rosterRemovalCloudSavePayload(id));
-        }
-        invalidateCalendarSnapshotCachesForChangedRosterFiles([removedEntry]);
+        await syncRosterRepositoryToSelection(id, { attempts: 4 });
         pendingRemovedImportIds.delete(id);
-        await finishRosterRemovalAfterStorage(id, removedEntry, removedName);
+        await completeRosterRemovalAfterSync(id, removedEntry, removedName);
         renderFileSurfaces();
         return;
       } catch (error) {
@@ -14028,35 +14072,28 @@ async function removeStoredImport(id) {
     }
     if (cloudAvailable && isCreatorAuthenticated()) {
       try {
-        await calendarStoreRequestWithRetry("removeRosterImports", { removedImportIds: [id] }, { attempts: 4 });
+        await syncRosterRepositoryToSelection(id, { attempts: 4 });
         rosterDataRemoved = true;
-        invalidateCalendarSnapshotCachesForChangedRosterFiles([removedEntry]);
       } catch (error) {
-        const overload = /503|CPU|memory|overload/i.test(String(error?.message || ""));
+        const overload = /503|429|CPU|memory|overload/i.test(String(error?.message || ""));
         if (!overload) {
           setStatus(error.message || `Could not remove ${removedName} from roster storage.`, true);
         }
       }
     }
     if (rosterDataRemoved) {
-      pendingRemovedImportIds.delete(id);
       removalCompleted = true;
-      await finishRosterRemovalAfterStorage(id, removedEntry, removedName);
+      await completeRosterRemovalAfterSync(id, removedEntry, removedName);
+      pendingRemovedImportIds.delete(id);
       return;
     }
-    try {
-      await saveCloudState(rosterRemovalCloudSavePayload(id));
-      rosterDataRemoved = true;
-      invalidateCalendarSnapshotCachesForChangedRosterFiles([removedEntry]);
-      pendingRemovedImportIds.delete(id);
-      removalCompleted = true;
-      await finishRosterRemovalAfterStorage(id, removedEntry, removedName);
-    } catch (error) {
-      const overload = /503|429|CPU|memory|overload/i.test(String(error?.message || ""));
-      setStatus(overload
-        ? `Could not remove ${removedName} from roster storage yet. Retrying in the background...`
-        : (error.message || "Could not save file removal."), true);
+    if (cloudAvailable && isCreatorAuthenticated()) {
+      setStatus(`Could not remove ${removedName} from roster storage yet. Retrying in the background...`, true);
       scheduleRosterRemovalRetry(id, removedEntry, removedName);
+    } else {
+      queueAccountImportsSave();
+      removalCompleted = true;
+      pendingRemovedImportIds.delete(id);
     }
   } finally {
     if (removalCompleted) pendingRemovedImportIds.delete(id);

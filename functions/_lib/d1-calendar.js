@@ -598,6 +598,30 @@ export async function deleteDerivedRosterFile(db, fileId) {
   await db.prepare("DELETE FROM roster_files WHERE id = ?").bind(fileId).run();
 }
 
+export async function verifyRosterFilesPurged(db, fileIds = []) {
+  if (!db?.prepare) return [];
+  await ensureCalendarSchema(db);
+  const ids = [...new Set((fileIds || []).map((id) => String(id || "").trim()).filter(Boolean))];
+  if (!ids.length) return [];
+  const results = [];
+  for (const fileId of ids) {
+    const d1Row = await db.prepare("SELECT id FROM roster_files WHERE id = ?").bind(fileId).first();
+    const rawRow = await db.prepare("SELECT file_id FROM raw_roster_files WHERE file_id = ?").bind(fileId).first();
+    const eventRow = await db.prepare("SELECT COUNT(*) AS count FROM roster_events WHERE file_id = ?").bind(fileId).first();
+    const eventCount = Number(eventRow?.count || 0);
+    const d1File = Boolean(d1Row?.id);
+    const r2Raw = Boolean(rawRow?.file_id);
+    results.push({
+      fileId,
+      d1File,
+      r2Raw,
+      eventCount,
+      purged: !d1File && !r2Raw && eventCount <= 0,
+    });
+  }
+  return results;
+}
+
 export async function upsertRawRosterFile(db, file, raw = {}) {
   if (!db?.prepare || !file?.id || (!raw?.dataUrl && !raw?.objectKey)) return { ok: false, reason: "missing-input" };
   await ensureCalendarSchema(db);

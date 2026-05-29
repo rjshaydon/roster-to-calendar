@@ -290,8 +290,8 @@ assert.match(
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
     .match(/if \(action === "save"\)[\s\S]*?if \(action === "loadDoctorProfile"\)/)?.[0] || "",
-  /removedImportIds\.length[\s\S]*purgeRosterImports\(context, removedIds, "save-removeImports"\)/,
-  "ordinary saves must only delete roster database rows when explicit removed import ids are supplied",
+  /removedImportIds\.length[\s\S]*!repositoryAlreadySynced[\s\S]*syncRosterRepositoryToKeepFileIds/,
+  "ordinary saves must only delete roster database rows when explicit removed import ids are supplied and repository is not already synced",
 );
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8")),
@@ -344,23 +344,33 @@ assert.match(
 );
 assert.match(
   stateSource.match(/if \(action === "save"\)[\s\S]*?if \(action === "loadDoctorProfile"\)/)?.[0] || "",
-  /purgeRosterImports\(context, removedIds, "save-removeImports"\)/,
-  "roster deletion saves should purge derived rows and R2 sources before updating account state",
+  /repositoryAlreadySynced[\s\S]*syncRosterRepositoryToKeepFileIds/,
+  "roster deletion saves should purge derived rows and R2 sources before updating account state unless repositorySynced is set",
 );
 assert.match(
-  stateSource.match(/async function purgeRosterImports[\s\S]*?function deferCanonicalDoctorRefresh/)?.[0] || "",
-  /querySourceTypesForFileIds[\s\S]*deleteDerivedRosterFile[\s\S]*deleteRetainedRosterSource[\s\S]*deferCanonicalDoctorRefresh/,
-  "roster purge should resolve source types before deleting R2 sources and deferring canonical doctor refresh",
+  stateSource.match(/async function syncRosterRepositoryToKeepFileIds[\s\S]*?async function purgeRosterImports/)?.[0] || "",
+  /querySourceTypesForFileIds[\s\S]*deleteDerivedRosterFile[\s\S]*deleteRetainedRosterSource[\s\S]*deferCanonicalDoctorRefresh[\s\S]*verifyRosterFilesPurged/,
+  "repository sync should purge orphans, verify removal, and defer canonical doctor refresh",
+);
+assert.match(
+  d1CalendarSource,
+  /export async function verifyRosterFilesPurged[\s\S]*purged: !d1File && !r2Raw && eventCount <= 0/,
+  "roster purge verification should confirm D1 and R2 rows are absent",
+);
+assert.match(
+  stateSource.match(/if \(action === "syncRosterRepository"\)[\s\S]*?if \(action === "removeRosterImports"\)/)?.[0] || "",
+  /syncRosterRepositoryToKeepFileIds[\s\S]*sanitizeRepositoryFileIds\(body\?\.keepFileIds\)/,
+  "syncRosterRepository should accept keepFileIds including empty arrays",
+);
+assert.match(
+  stateSource.match(/if \(action === "removeRosterImports"\)[\s\S]*?if \(action === "appendConsoleMessage"\)/)?.[0] || "",
+  /syncRosterRepositoryToKeepFileIds/,
+  "dedicated roster removal should sync repository to remaining files without a full account save",
 );
 assert.match(
   stateSource.match(/async function repositoryDoctorCandidates[\s\S]*?async function refreshCanonicalDoctors/)?.[0] || "",
   /queryRosterFileDoctors\(db\)[\s\S]*buildCanonicalDoctorOptionsFromRows[\s\S]*queryCanonicalDoctors/,
   "doctor directory responses should prefer live roster file doctors over stale canonical cache rows",
-);
-assert.match(
-  stateSource.match(/if \(action === "removeRosterImports"\)[\s\S]*?if \(action === "appendConsoleMessage"\)/)?.[0] || "",
-  /purgeRosterImports\(context, removedIds, "removeRosterImports"\)/,
-  "dedicated roster removal should purge D1 and R2 without a full account save",
 );
 assert.match(
   stateSource.match(/if \(action === "resolveAccountClaims"\)[\s\S]*?if \(action === "adminLoadUser"\)/)?.[0] || "",
@@ -424,13 +434,23 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function removeStoredImport[\s\S]*?function loadConflictSelections/)?.[0] || "",
-  /removeRosterImports[\s\S]*finishRosterRemovalAfterStorage[\s\S]*scheduleRosterRemovalRetry/,
-  "roster deletion should finish successful purges immediately and retry failed D1 removals in the background",
+  /syncRosterRepositoryToSelection[\s\S]*completeRosterRemovalAfterSync[\s\S]*scheduleRosterRemovalRetry/,
+  "roster deletion should sync repository to remaining selection and finish only after verified purge",
 );
 assert.match(
-  appSource.match(/function rosterRemovalCloudSavePayload[\s\S]*?function restoreRemovedImportAfterFailedRemoval/)?.[0] || "",
-  /removedImportIds: \[id\]/,
-  "roster deletion saves should keep removedImportIds for D1 purge retries",
+  appSource.match(/function accountImportsSavePayload[\s\S]*?function restoreRemovedImportAfterFailedRemoval/)?.[0] || "",
+  /removedImportIds: \[\][\s\S]*repositorySynced: true/,
+  "post-delete account saves should skip re-purge when repository is already synced",
+);
+assert.match(
+  appSource.match(/async function completeRosterRemovalAfterSync[\s\S]*?function scheduleRosterRemovalRetry/)?.[0] || "",
+  /tryAnnounceCreatorSwitcherRosterUpdate[\s\S]*queueAccountImportsSave/,
+  "roster removal completion should announce switcher updates before background account sync",
+);
+assert.match(
+  appSource.match(/function queueAccountImportsSave[\s\S]*?function keepFileIdsAfterRemoval/)?.[0] || "",
+  /reportErrors: false/,
+  "background account sync after roster removal should not surface cloud save failures as delete errors",
 );
 assert.match(
   appSource.match(/function scheduleRosterRemovalRetry[\s\S]*?async function removeStoredImport/)?.[0] || "",
@@ -955,8 +975,8 @@ assert.match(
 );
 assert.match(
   await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"),
-  /async function purgeRosterImports[\s\S]*deferCanonicalDoctorRefresh\(context, reason\)/,
-  "roster purge should defer canonical doctor refresh to avoid CPU timeouts during deletion",
+  /async function syncRosterRepositoryToKeepFileIds[\s\S]*deferCanonicalDoctorRefresh\(context, options\.reason/,
+  "repository sync should defer canonical doctor refresh to avoid CPU timeouts during deletion",
 );
 assert.match(
   await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"),
@@ -2835,6 +2855,10 @@ class MemoryD1Statement {
     }
     if (sql.includes("FROM raw_roster_files") && sql.includes("WHERE file_id = ?")) {
       return this.db.rawFiles.get(args[0]) || null;
+    }
+    if (sql.startsWith("SELECT id FROM roster_files WHERE id = ?")) {
+      const file = this.db.files.get(args[0]);
+      return file ? { id: file.id } : null;
     }
     throw new Error(`Unsupported MemoryD1 first SQL: ${sql}`);
   }

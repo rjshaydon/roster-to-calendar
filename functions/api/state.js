@@ -64,6 +64,7 @@ import {
   upsertDoctorProfileMirror,
   upsertDerivedRosterFile,
   upsertRawRosterFile,
+  verifyRosterFilesPurged,
 } from "../_lib/d1-calendar.js";
 
 const CREATOR_EMAIL = "rhaydon@gmail.com";
@@ -413,6 +414,28 @@ export async function onRequestPost(context) {
       return Response.json(response);
     }
 
+    if (action === "syncRosterRepository") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      if (!hasCalendarDb(context.env)) {
+        return Response.json({ ok: false, unavailable: true });
+      }
+      try {
+        const syncResult = await syncRosterRepositoryToKeepFileIds(
+          context,
+          sanitizeRepositoryFileIds(body?.keepFileIds),
+          {
+            reason: "syncRosterRepository",
+            doctorKey: body?.selectedDoctorKey || body?.doctorKey || OWNER_DOCTOR_KEY,
+          },
+        );
+        return Response.json({ ok: true, ...syncResult });
+      } catch (error) {
+        return Response.json({ error: error?.message || "Could not sync roster repository." }, { status: 503 });
+      }
+    }
+
     if (action === "removeRosterImports") {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
@@ -425,9 +448,24 @@ export async function onRequestPost(context) {
         return Response.json({ error: "Roster file ids are required." }, { status: 400 });
       }
       try {
-        const purgeResult = await purgeRosterImports(context, removedIds, "removeRosterImports");
-        scheduleSnapshotWarmupForSourceTypes(context, purgeResult.sourceTypes, { reason: "removeRosterImports" });
-        return Response.json({ ok: true, removedImportIds: purgeResult.removedIds });
+        const db = context.env.ROSTER_DB;
+        const activeFiles = await queryRosterFiles(db, { includeInactive: true }).catch(() => []);
+        const rawFiles = await queryRawRosterFiles(db).catch(() => []);
+        const allIds = [...new Set([
+          ...activeFiles.map((file) => file.id),
+          ...rawFiles.map((file) => file.id),
+        ].filter(Boolean))];
+        const removedSet = new Set(removedIds);
+        const keepFileIds = allIds.filter((id) => !removedSet.has(id));
+        const syncResult = await syncRosterRepositoryToKeepFileIds(context, keepFileIds, {
+          reason: "removeRosterImports",
+          doctorKey: body?.selectedDoctorKey || body?.doctorKey || OWNER_DOCTOR_KEY,
+        });
+        return Response.json({
+          ok: true,
+          removedImportIds: syncResult.removedFileIds,
+          ...syncResult,
+        });
       } catch (error) {
         return Response.json({ error: error?.message || "Could not remove roster files." }, { status: 503 });
       }
@@ -584,26 +622,16 @@ export async function onRequestPost(context) {
       if (!keepFileIds.length) {
         return Response.json({ error: "Rebuild requires at least one retained roster file." }, { status: 400 });
       }
-      const activeFiles = await queryRosterFileRanges(context.env.ROSTER_DB, { includeInactive: false });
-      const removedFileIds = activeFiles
-        .map((file) => file.id)
-        .filter((id) => id && !keepFileIds.includes(id));
       try {
-        const removedSourceTypes = await querySourceTypesForFileIds(context.env.ROSTER_DB, removedFileIds).catch(() => []);
-        for (const id of removedFileIds) {
-          await deleteDerivedRosterFile(context.env.ROSTER_DB, id);
-          await deleteRetainedRosterSource(context.env.ROSTER_DB, context.env.ROSTER_FILES, id);
-        }
-        deferCanonicalDoctorRefresh(context, "replaceActiveRosterFiles");
-        scheduleSnapshotWarmupForSourceTypes(context, removedSourceTypes, { reason: "replaceActiveRosterFiles" });
+        const syncResult = await syncRosterRepositoryToKeepFileIds(context, keepFileIds, {
+          reason: "replaceActiveRosterFiles",
+          doctorKey: body?.selectedDoctorKey || body?.doctorKey || OWNER_DOCTOR_KEY,
+          lightweight: false,
+        });
+        return Response.json({ ok: true, ...syncResult });
       } catch (error) {
         return Response.json({ error: error?.message || "Could not remove roster files." }, { status: 503 });
       }
-      const status = await calendarStoreStatus(null, context.env.ROSTER_DB, {
-        doctorKey: normalizeRosterName(body?.selectedDoctorKey || OWNER_DOCTOR_KEY),
-        expectedFileIds: keepFileIds,
-      });
-      return Response.json({ ok: true, keptFileIds: keepFileIds, removedFileIds, ...status });
     }
 
     if (action === "updateAccount") {
@@ -989,11 +1017,23 @@ export async function onRequestPost(context) {
       const claims = sanitizeClaims(targetRecord.claims);
       const removedImportIds = sanitizeRepositoryFileIds(body?.removedImportIds);
       let removedRosterSourceTypes = [];
-      if ((targetRole === "creator" || targetRole === "owner") && saveEmail === email && removedImportIds.length) {
+      const repositoryAlreadySynced = body?.repositorySynced === true;
+      if ((targetRole === "creator" || targetRole === "owner") && saveEmail === email && removedImportIds.length && !repositoryAlreadySynced) {
         const removedIds = [...new Set(removedImportIds)];
         try {
-          const purgeResult = await purgeRosterImports(context, removedIds, "save-removeImports");
-          removedRosterSourceTypes = purgeResult.sourceTypes || [];
+          const activeFiles = await queryRosterFiles(context.env.ROSTER_DB, { includeInactive: true }).catch(() => []);
+          const rawFiles = await queryRawRosterFiles(context.env.ROSTER_DB).catch(() => []);
+          const allIds = [...new Set([
+            ...activeFiles.map((file) => file.id),
+            ...rawFiles.map((file) => file.id),
+          ].filter(Boolean))];
+          const removedSet = new Set(removedIds);
+          const keepFileIds = allIds.filter((id) => !removedSet.has(id));
+          const syncResult = await syncRosterRepositoryToKeepFileIds(context, keepFileIds, {
+            reason: "save-removeImports",
+            doctorKey: OWNER_DOCTOR_KEY,
+          });
+          removedRosterSourceTypes = syncResult.sourceTypes || [];
         } catch (error) {
           return Response.json({ error: error?.message || "Could not remove roster files." }, { status: 503 });
         }
@@ -3731,16 +3771,58 @@ async function refreshCanonicalDoctors(db) {
   return doctors;
 }
 
+async function syncRosterRepositoryToKeepFileIds(context, keepFileIds = [], options = {}) {
+  const db = context.env.ROSTER_DB;
+  const keepIds = sanitizeRepositoryFileIds(keepFileIds);
+  const keepSet = new Set(keepIds);
+  const activeFiles = await queryRosterFiles(db, { includeInactive: true }).catch(() => []);
+  const rawFiles = await queryRawRosterFiles(db).catch(() => []);
+  const allFileIds = [...new Set([
+    ...activeFiles.map((file) => file.id),
+    ...rawFiles.map((file) => file.id),
+  ].filter(Boolean))];
+  const removedFileIds = allFileIds.filter((id) => !keepSet.has(id));
+  let sourceTypes = [];
+  if (removedFileIds.length) {
+    sourceTypes = await querySourceTypesForFileIds(db, removedFileIds).catch(() => []);
+    for (const id of removedFileIds) {
+      await deleteDerivedRosterFile(db, id);
+      await deleteRetainedRosterSource(db, context.env.ROSTER_FILES, id);
+    }
+    deferCanonicalDoctorRefresh(context, options.reason || "syncRosterRepository");
+    scheduleSnapshotWarmupForSourceTypes(context, sourceTypes, { reason: options.reason || "syncRosterRepository" });
+  }
+  const verification = await verifyRosterFilesPurged(db, removedFileIds);
+  const allPurged = !removedFileIds.length || verification.every((entry) => entry.purged === true);
+  const status = await calendarStoreStatus(null, db, {
+    doctorKey: normalizeRosterName(options.doctorKey || OWNER_DOCTOR_KEY),
+    expectedFileIds: keepIds,
+    lightweight: options.lightweight !== false,
+  });
+  return {
+    keptFileIds: keepIds,
+    removedFileIds,
+    verification,
+    allPurged,
+    sourceTypes,
+    ...status,
+  };
+}
+
 async function purgeRosterImports(context, fileIds, reason = "removeRosterImports") {
   const removedIds = sanitizeRepositoryFileIds(fileIds);
   if (!removedIds.length) return { removedIds: [], sourceTypes: [] };
-  const sourceTypes = await querySourceTypesForFileIds(context.env.ROSTER_DB, removedIds).catch(() => []);
-  for (const id of removedIds) {
-    await deleteDerivedRosterFile(context.env.ROSTER_DB, id);
-    await deleteRetainedRosterSource(context.env.ROSTER_DB, context.env.ROSTER_FILES, id);
-  }
-  deferCanonicalDoctorRefresh(context, reason);
-  return { removedIds, sourceTypes };
+  const db = context.env.ROSTER_DB;
+  const activeFiles = await queryRosterFiles(db, { includeInactive: true }).catch(() => []);
+  const rawFiles = await queryRawRosterFiles(db).catch(() => []);
+  const allIds = [...new Set([
+    ...activeFiles.map((file) => file.id),
+    ...rawFiles.map((file) => file.id),
+  ].filter(Boolean))];
+  const removedSet = new Set(removedIds);
+  const keepFileIds = allIds.filter((id) => !removedSet.has(id));
+  const syncResult = await syncRosterRepositoryToKeepFileIds(context, keepFileIds, { reason });
+  return { removedIds: syncResult.removedFileIds, sourceTypes: syncResult.sourceTypes || [] };
 }
 
 function deferCanonicalDoctorRefresh(context, reason = "roster-change") {
