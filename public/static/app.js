@@ -13195,6 +13195,7 @@ async function removeStoredImport(id) {
     .then(() => renderDoctorState())
     .catch(() => null);
   setStatus(`Removing ${removedName}...`);
+  let rosterDataRemoved = false;
   try {
     try {
       await deleteStoredImportRecords([id]);
@@ -13202,19 +13203,76 @@ async function removeStoredImport(id) {
     } catch {
       // Keep in-memory removal even if persistent storage is unavailable.
     }
+    if (cloudAvailable && isCreatorAuthenticated()) {
+      try {
+        await calendarStoreRequestWithRetry("removeRosterImports", { removedImportIds: [id] }, { attempts: 4 });
+        rosterDataRemoved = true;
+        invalidateCalendarSnapshotCache();
+      } catch (error) {
+        const overload = /503|CPU|memory|overload/i.test(String(error?.message || ""));
+        if (!overload) {
+          setStatus(error.message || `Could not remove ${removedName} from roster storage.`, true);
+        }
+      }
+    }
     try {
       await saveCloudState({
         ...snapshotCloudSavePayload(),
         imports: selectedFiles.map((entry) => ({ ...entry })),
         removedImportIds: [id],
       });
-      invalidateCalendarSnapshotCache();
+      if (!rosterDataRemoved) {
+        rosterDataRemoved = true;
+        invalidateCalendarSnapshotCache();
+      }
     } catch (error) {
       const overload = /503|CPU|memory|overload/i.test(String(error?.message || ""));
-      setStatus(overload
-        ? `${removedName} removed locally. Cloud sync will finish when the roster database is available.`
-        : (error.message || "Could not save file removal."), true);
-      scheduleCloudStateSave();
+      if (rosterDataRemoved) {
+        scheduleCloudStateSave();
+        setStatus(`${removedName} removed from roster storage. Finishing account sync...`);
+      } else {
+        setStatus(overload
+          ? `Could not remove ${removedName} from roster storage yet. Retrying in the background...`
+          : (error.message || "Could not save file removal."), true);
+        scheduleCloudStateSave();
+        if (removedEntry && !selectedFiles.some((entry) => entry.id === removedEntry.id)) {
+          selectedFiles = [...selectedFiles, {
+            id: removedEntry.id,
+            repoId: removedEntry.repoId || removedEntry.id,
+            name: removedEntry.name,
+            sourceType: removedEntry.sourceType,
+            size: removedEntry.size || 0,
+            lastModified: removedEntry.lastModified || 0,
+            addedAt: removedEntry.addedAt || "",
+            file: removedEntry.file || null,
+          }];
+          renderFileSurfaces();
+          void syncCreatorDoctorPickerWithRemainingRosters()
+            .then(() => renderDoctorState())
+            .catch(() => null);
+        }
+        return;
+      }
+    }
+    if (!rosterDataRemoved) {
+      setStatus(`Could not remove ${removedName} from roster storage.`, true);
+      if (removedEntry && !selectedFiles.some((entry) => entry.id === removedEntry.id)) {
+        selectedFiles = [...selectedFiles, {
+          id: removedEntry.id,
+          repoId: removedEntry.repoId || removedEntry.id,
+          name: removedEntry.name,
+          sourceType: removedEntry.sourceType,
+          size: removedEntry.size || 0,
+          lastModified: removedEntry.lastModified || 0,
+          addedAt: removedEntry.addedAt || "",
+          file: removedEntry.file || null,
+        }];
+        renderFileSurfaces();
+        void syncCreatorDoctorPickerWithRemainingRosters()
+          .then(() => renderDoctorState())
+          .catch(() => null);
+      }
+      return;
     }
     if (!selectedFiles.length) {
       resetDerivedState({ preserveSession: true });

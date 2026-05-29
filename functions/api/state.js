@@ -409,6 +409,26 @@ export async function onRequestPost(context) {
       return Response.json(response);
     }
 
+    if (action === "removeRosterImports") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      if (!hasCalendarDb(context.env)) {
+        return Response.json({ ok: false, unavailable: true });
+      }
+      const removedIds = sanitizeRepositoryFileIds(body?.removedImportIds);
+      if (!removedIds.length) {
+        return Response.json({ error: "Roster file ids are required." }, { status: 400 });
+      }
+      try {
+        await purgeRosterImports(context, removedIds, "removeRosterImports");
+        scheduleSnapshotWarmupForAllAccounts(context, { reason: "removeRosterImports" });
+        return Response.json({ ok: true, removedImportIds: removedIds });
+      } catch (error) {
+        return Response.json({ error: error?.message || "Could not remove roster files." }, { status: 503 });
+      }
+    }
+
     if (action === "appendConsoleMessage") {
       if (!hasCalendarDb(context.env)) return Response.json({ ok: false, unavailable: true });
       await appendConsoleMessage(context.env.ROSTER_DB, {
@@ -541,8 +561,8 @@ export async function onRequestPost(context) {
       }
       try {
         await deleteDerivedRosterFile(context.env.ROSTER_DB, fileId);
-        await refreshCanonicalDoctors(context.env.ROSTER_DB);
         await deleteRetainedRosterSource(context.env.ROSTER_DB, context.env.ROSTER_FILES, fileId);
+        deferCanonicalDoctorRefresh(context, "resetDerivedCalendarFile");
       } catch (error) {
         return Response.json({ error: error?.message || "Could not reset roster file." }, { status: 503 });
       }
@@ -566,11 +586,9 @@ export async function onRequestPost(context) {
       try {
         for (const id of removedFileIds) {
           await deleteDerivedRosterFile(context.env.ROSTER_DB, id);
-        }
-        await refreshCanonicalDoctors(context.env.ROSTER_DB);
-        for (const id of removedFileIds) {
           await deleteRetainedRosterSource(context.env.ROSTER_DB, context.env.ROSTER_FILES, id);
         }
+        deferCanonicalDoctorRefresh(context, "replaceActiveRosterFiles");
       } catch (error) {
         return Response.json({ error: error?.message || "Could not remove roster files." }, { status: 503 });
       }
@@ -967,13 +985,7 @@ export async function onRequestPost(context) {
       if ((targetRole === "creator" || targetRole === "owner") && saveEmail === email && removedImportIds.length) {
         const removedIds = [...new Set(removedImportIds)];
         try {
-          for (const id of removedIds) {
-            await deleteDerivedRosterFile(context.env.ROSTER_DB, id);
-          }
-          await refreshCanonicalDoctors(context.env.ROSTER_DB);
-          for (const id of removedIds) {
-            await deleteRetainedRosterSource(context.env.ROSTER_DB, context.env.ROSTER_FILES, id);
-          }
+          await purgeRosterImports(context, removedIds, "save-removeImports");
         } catch (error) {
           return Response.json({ error: error?.message || "Could not remove roster files." }, { status: 503 });
         }
@@ -3649,6 +3661,17 @@ async function refreshCanonicalDoctors(db) {
   });
   await replaceCanonicalDoctors(db, doctors);
   return doctors;
+}
+
+async function purgeRosterImports(context, fileIds, reason = "removeRosterImports") {
+  const removedIds = sanitizeRepositoryFileIds(fileIds);
+  if (!removedIds.length) return [];
+  for (const id of removedIds) {
+    await deleteDerivedRosterFile(context.env.ROSTER_DB, id);
+    await deleteRetainedRosterSource(context.env.ROSTER_DB, context.env.ROSTER_FILES, id);
+  }
+  deferCanonicalDoctorRefresh(context, reason);
+  return removedIds;
 }
 
 function deferCanonicalDoctorRefresh(context, reason = "roster-change") {

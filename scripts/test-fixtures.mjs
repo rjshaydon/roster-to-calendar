@@ -250,7 +250,7 @@ assert.match(
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
     .match(/if \(action === "save"\)[\s\S]*?if \(action === "loadDoctorProfile"\)/)?.[0] || "",
-  /removedImportIds\.length[\s\S]*deleteDerivedRosterFile[\s\S]*deleteRetainedRosterSource/,
+  /removedImportIds\.length[\s\S]*purgeRosterImports\(context, removedIds, "save-removeImports"\)/,
   "ordinary saves must only delete roster database rows when explicit removed import ids are supplied",
 );
 assert.match(
@@ -304,8 +304,18 @@ assert.match(
 );
 assert.match(
   stateSource.match(/if \(action === "save"\)[\s\S]*?if \(action === "loadDoctorProfile"\)/)?.[0] || "",
-  /await refreshCanonicalDoctors\(context\.env\.ROSTER_DB\)[\s\S]*deleteRetainedRosterSource/,
-  "roster deletion saves should refresh canonical doctors before returning",
+  /purgeRosterImports\(context, removedIds, "save-removeImports"\)/,
+  "roster deletion saves should purge derived rows and R2 sources before updating account state",
+);
+assert.match(
+  stateSource.match(/async function purgeRosterImports[\s\S]*?function deferCanonicalDoctorRefresh/)?.[0] || "",
+  /deleteDerivedRosterFile[\s\S]*deleteRetainedRosterSource[\s\S]*deferCanonicalDoctorRefresh/,
+  "roster purge should delete R2 sources before deferring canonical doctor refresh",
+);
+assert.match(
+  stateSource.match(/if \(action === "removeRosterImports"\)[\s\S]*?if \(action === "appendConsoleMessage"\)/)?.[0] || "",
+  /purgeRosterImports\(context, removedIds, "removeRosterImports"\)/,
+  "dedicated roster removal should purge D1 and R2 without a full account save",
 );
 assert.match(
   stateSource.match(/if \(action === "resolveAccountClaims"\)[\s\S]*?if \(action === "adminLoadUser"\)/)?.[0] || "",
@@ -369,8 +379,8 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function removeStoredImport[\s\S]*?function loadConflictSelections/)?.[0] || "",
-  /invalidateCalendarSnapshotCache[\s\S]*refreshCreatorCalendarAfterFileChange[\s\S]*removeMissingFromStore: true[\s\S]*preserveVisiblePreview: true/,
-  "roster deletion should invalidate cached snapshots and refresh the creator calendar without clearing the visible preview first",
+  /removeRosterImports[\s\S]*invalidateCalendarSnapshotCache[\s\S]*refreshCreatorCalendarAfterFileChange[\s\S]*removeMissingFromStore: true[\s\S]*preserveVisiblePreview: true/,
+  "roster deletion should purge cloud roster storage first, then refresh the creator calendar without clearing the visible preview first",
 );
 assert.match(
   appSource.match(/async function mergeFiles[\s\S]*?function validateIncomingFiles/)?.[0] || "",
