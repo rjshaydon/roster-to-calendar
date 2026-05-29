@@ -304,7 +304,6 @@ let adminConsoleOpen = false;
 let adminConsoleLoading = false;
 let adminConsoleMessages = [];
 let creatorSwitcherAnnouncementBaseline = null;
-let lastRenderedCreatorSwitcherSignature = null;
 let reportedIssueFingerprints = new Set();
 let currentSnapshot = null;
 let currentSnapshotStale = false;
@@ -2100,47 +2099,84 @@ function creatorDoctorSwitcherSignature(options = doctorPickerOptions()) {
     .join("|");
 }
 
-function renderedCreatorSwitcherSignature() {
-  if (!canUseCreatorDoctorSwitcher()) return "";
-  if (doctorSelect && !doctorSelect.classList.contains("hidden") && doctorSelect.options.length) {
-    return [...doctorSelect.options]
-      .map((option) => {
-        const displayName = option.dataset.displayName || option.textContent || "";
-        return `${doctorIdentityKey({ key: option.value, displayName })}:${displayName}`;
-      })
-      .sort()
-      .join("|");
-  }
-  return creatorDoctorSwitcherSignature();
+function creatorSwitcherOptionSignature(selectElement) {
+  if (!selectElement?.options?.length) return "";
+  return [...selectElement.options]
+    .map((option) => {
+      const displayName = option.dataset.displayName || option.textContent || "";
+      return `${doctorIdentityKey({ key: option.value, displayName })}:${displayName}`;
+    })
+    .sort()
+    .join("|");
 }
 
-function beginCreatorSwitcherAnnouncementWait() {
+function visibleCreatorSwitcherSignature() {
+  if (!canUseCreatorDoctorSwitcher()) return null;
+  const pickerOptions = doctorPickerOptions();
+  if (isMobileLayout() && mobileDoctorSelect && !mobileDoctorSelect.disabled && mobileDoctorSelect.options.length) {
+    return creatorSwitcherOptionSignature(mobileDoctorSelect);
+  }
+  if (doctorSelect && !doctorSelect.classList.contains("hidden") && doctorSelect.options.length) {
+    return creatorSwitcherOptionSignature(doctorSelect);
+  }
+  if (!pickerOptions.length) return "";
+  return null;
+}
+
+function captureCreatorSwitcherVisibleBaseline() {
   if (!canUseCreatorDoctorSwitcher()) {
     creatorSwitcherAnnouncementBaseline = null;
     return;
   }
-  creatorSwitcherAnnouncementBaseline = renderedCreatorSwitcherSignature();
+  if (creatorSwitcherAnnouncementBaseline !== null) return;
+  creatorSwitcherAnnouncementBaseline = visibleCreatorSwitcherSignature();
 }
 
-function finalizeCreatorSwitcherAnnouncementWait() {
-  if (!canUseCreatorDoctorSwitcher() || creatorSwitcherAnnouncementBaseline === null) return;
-  const baseline = creatorSwitcherAnnouncementBaseline;
-  const nextSignature = renderedCreatorSwitcherSignature();
-  creatorSwitcherAnnouncementBaseline = null;
-  lastRenderedCreatorSwitcherSignature = nextSignature;
-  if (baseline !== nextSignature) {
-    setStatus("Switcher menu updated.");
-  }
+function isCreatorSwitcherVisibleAndAligned() {
+  const visibleSignature = visibleCreatorSwitcherSignature();
+  if (visibleSignature === null) return false;
+  return visibleSignature === creatorDoctorSwitcherSignature();
 }
 
-function announceCreatorSwitcherUpdateIfChanged() {
-  if (!canUseCreatorDoctorSwitcher() || creatorSwitcherAnnouncementBaseline !== null) return;
-  const nextSignature = renderedCreatorSwitcherSignature();
-  const previousSignature = lastRenderedCreatorSwitcherSignature;
-  lastRenderedCreatorSwitcherSignature = nextSignature;
-  if (previousSignature !== null && previousSignature !== nextSignature) {
-    setStatus("Switcher menu updated.");
+function isCreatorSwitcherRepositorySettled() {
+  if (!isViewingCreatorAccount() || !cloudAvailable) return true;
+  if (selectedFilesHavePendingD1Uploads()) return false;
+  const activeSync = [...rosterSyncStates.values()].some((state) => (
+    ["pending", "parsing", "saving", "uploading-source"].includes(state.status)
+  ));
+  if (activeSync) return false;
+  const storeIds = new Set((calendarStoreStatus?.files || []).map((file) => file.id).filter(Boolean));
+  for (const entry of selectedFiles) {
+    if (!entry?.id) continue;
+    if (!storeIds.has(entry.id)) return false;
   }
+  return true;
+}
+
+function tryAnnounceCreatorSwitcherRosterUpdate() {
+  return new Promise((resolve) => {
+    if (!canUseCreatorDoctorSwitcher() || creatorSwitcherAnnouncementBaseline === null) {
+      resolve(false);
+      return;
+    }
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (!isCreatorSwitcherRepositorySettled() || !isCreatorSwitcherVisibleAndAligned()) {
+          resolve(false);
+          return;
+        }
+        const baseline = creatorSwitcherAnnouncementBaseline;
+        const visibleSignature = visibleCreatorSwitcherSignature();
+        if (visibleSignature === null || visibleSignature === baseline) {
+          resolve(false);
+          return;
+        }
+        setStatus("Switcher menu updated.");
+        creatorSwitcherAnnouncementBaseline = null;
+        resolve(true);
+      });
+    });
+  });
 }
 
 function renderDoctorState() {
@@ -2160,7 +2196,6 @@ function renderDoctorState() {
     setStatus(message, true);
     renderClaimSection();
     syncActionState();
-    announceCreatorSwitcherUpdateIfChanged();
     return;
   }
 
@@ -2171,7 +2206,6 @@ function renderDoctorState() {
     doctorName.textContent = pickerOptions[0].displayName;
     doctorName.classList.remove("hidden");
     setStatus("Loading calendar...");
-    announceCreatorSwitcherUpdateIfChanged();
     syncActionState();
     syncMobileChrome();
     return;
@@ -2195,7 +2229,6 @@ function renderDoctorState() {
     setStatus(preferredDoctorKey ? "Loading calendar..." : "Choose a doctor to load the calendar.");
   }
 
-  announceCreatorSwitcherUpdateIfChanged();
   syncActionState();
   syncMobileChrome();
 }
@@ -5895,7 +5928,6 @@ function resetDerivedState(options = {}) {
   resetVisibleInsightWarmCache();
   lastRosterPersistence = null;
   creatorSwitcherAnnouncementBaseline = null;
-  lastRenderedCreatorSwitcherSignature = null;
   closeInsightsModal();
   settings = defaultSettings();
   renderSettings();
@@ -10627,6 +10659,9 @@ function selectedFilesHavePendingD1Uploads(status = calendarStoreStatus) {
 
 async function refreshCreatorCalendarAfterFileChange(options = {}) {
   if (!selectedFiles.length) return;
+  if (isViewingCreatorAccount() && cloudAvailable) {
+    captureCreatorSwitcherVisibleBaseline();
+  }
   if (options.refreshStatus !== false && isCreatorAuthenticated()) {
     await refreshCalendarStoreStatus({ silent: true }).catch(() => null);
   }
@@ -10666,7 +10701,6 @@ async function refreshCreatorCalendarAfterFileChange(options = {}) {
     renderFileSurfaces();
   }
   if (isViewingCreatorAccount() && cloudAvailable) {
-    beginCreatorSwitcherAnnouncementWait();
     let deferSwitcherAnnouncementToPoll = false;
     try {
       await refreshAvailableDoctorsAfterRosterChange();
@@ -10705,7 +10739,7 @@ async function refreshCreatorCalendarAfterFileChange(options = {}) {
       }
     } finally {
       if (!deferSwitcherAnnouncementToPoll) {
-        finalizeCreatorSwitcherAnnouncementWait();
+        await tryAnnounceCreatorSwitcherRosterUpdate();
       }
     }
     return;
@@ -10819,7 +10853,7 @@ async function pollCalendarAfterRosterChange() {
       if (pollRunId !== calendarImportPollRunId) return;
       setStatus("Calendar snapshot is still building. Switch doctor or refresh again shortly.");
     } finally {
-      finalizeCreatorSwitcherAnnouncementWait();
+      await tryAnnounceCreatorSwitcherRosterUpdate();
     }
   })().finally(() => {
     calendarImportPollPromise = null;
@@ -13796,6 +13830,9 @@ async function removeStoredImport(id) {
     || (calendarStoreStatus?.files || []).find((file) => file.id === id);
   const removedName = removedEntry?.name || "roster file";
   pendingRemovedImportIds.add(id);
+  if (isViewingCreatorAccount() && cloudAvailable) {
+    captureCreatorSwitcherVisibleBaseline();
+  }
   cancelScheduledCloudStateSave();
   rosterSyncStates.delete(id);
   selectedFiles = selectedFiles.filter((entry) => entry.id !== id);
@@ -13888,6 +13925,15 @@ async function removeStoredImport(id) {
       return;
     }
     if (!selectedFiles.length) {
+      if (isViewingCreatorAccount() && cloudAvailable) {
+        try {
+          await refreshAvailableDoctorsAfterRosterChange();
+          renderDoctorState();
+          await tryAnnounceCreatorSwitcherRosterUpdate();
+        } catch {
+          // Fall through to reset even if the final switcher refresh fails.
+        }
+      }
       resetDerivedState({ preserveSession: true });
       setStatus("Add a roster file to begin.");
       return;

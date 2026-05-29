@@ -463,24 +463,29 @@ assert.match(
   "roster changes should merge local and repository doctors before re-rendering the creator switcher",
 );
 assert.match(
-  appSource.match(/function announceCreatorSwitcherUpdateIfChanged[\s\S]*?function renderDoctorState/)?.[0] || "",
-  /creatorSwitcherAnnouncementBaseline !== null/,
-  "creator switcher announcements during roster refresh should wait for the final rebuild",
+  appSource.match(/function tryAnnounceCreatorSwitcherRosterUpdate[\s\S]*?function renderDoctorState/)?.[0] || "",
+  /isCreatorSwitcherRepositorySettled[\s\S]*isCreatorSwitcherVisibleAndAligned[\s\S]*Switcher menu updated/,
+  "creator switcher announcements should require repository settlement and visible DOM alignment",
 );
 assert.match(
-  appSource.match(/function finalizeCreatorSwitcherAnnouncementWait[\s\S]*?function announceCreatorSwitcherUpdateIfChanged/)?.[0] || "",
-  /renderedCreatorSwitcherSignature[\s\S]*Switcher menu updated/,
-  "creator switcher announcements should compare the rendered select menu before emitting status",
+  appSource.match(/function visibleCreatorSwitcherSignature[\s\S]*?function captureCreatorSwitcherVisibleBaseline/)?.[0] || "",
+  /mobileDoctorSelect[\s\S]*return null/,
+  "creator switcher visibility checks should use DOM-only signatures without in-memory fallback",
 );
 assert.match(
   appSource.match(/async function refreshCreatorCalendarAfterFileChange[\s\S]*?async function rosterDoctorsFromSelectedFiles/)?.[0] || "",
-  /beginCreatorSwitcherAnnouncementWait[\s\S]*finalizeCreatorSwitcherAnnouncementWait/,
-  "roster file changes should defer switcher announcements until the creator refresh completes",
+  /captureCreatorSwitcherVisibleBaseline[\s\S]*tryAnnounceCreatorSwitcherRosterUpdate/,
+  "roster file changes should capture a visible baseline first and announce only after the refresh completes",
+);
+assert.doesNotMatch(
+  appSource.match(/function renderDoctorState[\s\S]*?function renderClaimSection/)?.[0] || "",
+  /announceCreatorSwitcherUpdateIfChanged|tryAnnounceCreatorSwitcherRosterUpdate/,
+  "renderDoctorState should rebuild the switcher without emitting roster console messages directly",
 );
 assert.match(
-  appSource.match(/function renderDoctorState[\s\S]*?function renderClaimSection/)?.[0] || "",
-  /announceCreatorSwitcherUpdateIfChanged/,
-  "creator switcher re-renders should check whether the visible doctor menu changed",
+  appSource.match(/async function removeStoredImport[\s\S]*?cancelScheduledCloudStateSave/)?.[0] || "",
+  /captureCreatorSwitcherVisibleBaseline/,
+  "roster deletion should capture the visible switcher baseline before optimistic refresh",
 );
 assert.match(
   appSource.match(/function applyLoadedCalendarFileRefs[\s\S]*?function rosterStoreFileToClientEntry/)?.[0] || "",
