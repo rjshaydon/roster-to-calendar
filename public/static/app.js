@@ -137,7 +137,7 @@ const switchOverlayTitle = document.querySelector("#switchOverlayTitle");
 const switchOverlayMessage = document.querySelector("#switchOverlayMessage");
 const rosterImportOverlay = document.querySelector("#rosterImportOverlay");
 const rosterImportOverlayTitle = document.querySelector("#rosterImportOverlayTitle");
-const ROSTER_IMPORT_OVERLAY_MIN_MS = 2000;
+const ROSTER_IMPORT_OVERLAY_MAX_MS = 1500;
 
 const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const OWNER_EMAIL = "rhaydon@gmail.com";
@@ -5161,7 +5161,7 @@ function hideRosterImportOverlay() {
 }
 
 async function finishRosterImportOverlay(startedAt = Date.now()) {
-  const remaining = ROSTER_IMPORT_OVERLAY_MIN_MS - (Date.now() - startedAt);
+  const remaining = ROSTER_IMPORT_OVERLAY_MAX_MS - (Date.now() - startedAt);
   if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
   hideRosterImportOverlay();
 }
@@ -5174,7 +5174,9 @@ async function importRosterFiles(files) {
   showRosterImportOverlay(accepted.length);
   try {
     await mergeFiles(accepted);
-    await refreshCreatorCalendarAfterFileChange();
+    void refreshCreatorCalendarAfterFileChange().catch((error) => {
+      setStatus(error.message || "Could not refresh after roster import.", true);
+    });
   } finally {
     await finishRosterImportOverlay(startedAt);
   }
@@ -10391,11 +10393,53 @@ async function refreshCreatorCalendarAfterFileChange(options = {}) {
   renderFileSurfaces();
 }
 
+async function syncCreatorDoctorPickerWithRemainingRosters() {
+  if (!canUseCreatorDoctorSwitcher()) return;
+  if (!selectedFiles.length) {
+    availableRosterDoctors = [];
+    return;
+  }
+  await ensureSelectedFilesLoaded();
+  const data = await analyzeFilesInBrowser();
+  const localDoctors = sanitizeAvailableRosterDoctors(
+    (data.doctors || []).flatMap((doctor) => {
+      const sourceTypes = normalizedDoctorSourceTypes(doctor);
+      if (!sourceTypes.length) return [];
+      return sourceTypes.map((sourceType) => ({
+        key: doctor.key,
+        displayName: doctor.displayName,
+        sourceType,
+        sourceTypes,
+        aliases: Array.isArray(doctor.aliases) ? doctor.aliases : [],
+      }));
+    }),
+  );
+  const localKeys = new Set(localDoctors.map((doctor) => doctorIdentityKey(doctor)));
+  if (!localKeys.size) {
+    availableRosterDoctors = [];
+    return;
+  }
+  const merged = availableRosterDoctors.filter((doctor) => localKeys.has(doctorIdentityKey(doctor)));
+  const knownKeys = new Set(merged.map((doctor) => doctorIdentityKey(doctor)));
+  for (const doctor of localDoctors) {
+    const identity = doctorIdentityKey(doctor);
+    if (knownKeys.has(identity)) continue;
+    merged.push(doctor);
+    knownKeys.add(identity);
+  }
+  availableRosterDoctors = sanitizeAvailableRosterDoctors(merged);
+}
+
 async function refreshAvailableDoctorsAfterRosterChange() {
   if (!isCreatorAuthenticated() || !cloudAvailable) return;
   for (const delay of [0, 3000]) {
     if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
     await refreshCalendarStoreStatus({ silent: true, includeAvailableDoctors: true }).catch(() => null);
+  }
+  try {
+    await syncCreatorDoctorPickerWithRemainingRosters();
+  } catch {
+    // Keep the last repository-backed doctor list.
   }
   renderDoctorState();
   syncAccountsButton();
@@ -11749,7 +11793,7 @@ async function refreshCalendarStoreStatus(options = {}) {
       ...(options.includeAvailableDoctors ? { includeAvailableDoctors: true } : {}),
     });
     calendarStoreStatus = { ...data, checkedAt: new Date().toISOString() };
-    if (Array.isArray(data.availableDoctors) && data.availableDoctors.length) {
+    if (options.includeAvailableDoctors === true && Array.isArray(data.availableDoctors)) {
       availableRosterDoctors = sanitizeAvailableRosterDoctors(data.availableDoctors);
     }
     if (isCreatorAuthenticated() && Array.isArray(data.files) && data.files.length && !selectedFiles.some((entry) => entry.file)) {
@@ -13147,6 +13191,9 @@ async function removeStoredImport(id) {
   removeImportRefsFromWorkspaceStore(id);
   saveCurrentSessionState();
   renderFileSurfaces();
+  void syncCreatorDoctorPickerWithRemainingRosters()
+    .then(() => renderDoctorState())
+    .catch(() => null);
   setStatus(`Removing ${removedName}...`);
   try {
     try {

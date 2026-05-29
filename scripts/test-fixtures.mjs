@@ -304,8 +304,8 @@ assert.match(
 );
 assert.match(
   stateSource.match(/if \(action === "save"\)[\s\S]*?if \(action === "loadDoctorProfile"\)/)?.[0] || "",
-  /deferCanonicalDoctorRefresh\(context, "save-removeImports"\)/,
-  "roster deletion saves should defer canonical doctor refresh instead of blocking the response",
+  /await refreshCanonicalDoctors\(context\.env\.ROSTER_DB\)[\s\S]*deleteRetainedRosterSource/,
+  "roster deletion saves should refresh canonical doctors before returning",
 );
 assert.match(
   stateSource.match(/if \(action === "resolveAccountClaims"\)[\s\S]*?if \(action === "adminLoadUser"\)/)?.[0] || "",
@@ -389,13 +389,23 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function importRosterFiles[\s\S]*?async function switchDoctorSelection/)?.[0] || "",
-  /showRosterImportOverlay[\s\S]*finishRosterImportOverlay/,
-  "roster imports should show an overlay while files are added",
+  /showRosterImportOverlay[\s\S]*void refreshCreatorCalendarAfterFileChange/,
+  "roster imports should acknowledge uploads briefly while refresh continues in the background",
 );
 assert.match(
   appSource.match(/async function finishRosterImportOverlay[\s\S]*?async function importRosterFiles/)?.[0] || "",
-  /ROSTER_IMPORT_OVERLAY_MIN_MS/,
-  "roster import overlay should stay visible for at least the configured minimum duration",
+  /ROSTER_IMPORT_OVERLAY_MAX_MS/,
+  "roster import overlay should hide after the configured maximum duration",
+);
+assert.match(
+  appSource.match(/async function refreshCalendarStoreStatus[\s\S]*?async function toggleAdminConsole/)?.[0] || "",
+  /includeAvailableDoctors === true && Array\.isArray\(data\.availableDoctors\)/,
+  "roster status refreshes should apply doctor-directory updates even when the list shrinks",
+);
+assert.match(
+  appSource.match(/async function refreshAvailableDoctorsAfterRosterChange[\s\S]*?function normalizeSavedExportRange/)?.[0] || "",
+  /syncCreatorDoctorPickerWithRemainingRosters/,
+  "roster changes should reconcile the creator doctor picker against remaining roster files",
 );
 assert.match(
   appSource.match(/async function refreshCalendarStoreStatus[\s\S]*?async function toggleAdminConsole/)?.[0] || "",

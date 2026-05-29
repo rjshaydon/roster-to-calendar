@@ -970,7 +970,7 @@ export async function onRequestPost(context) {
           for (const id of removedIds) {
             await deleteDerivedRosterFile(context.env.ROSTER_DB, id);
           }
-          deferCanonicalDoctorRefresh(context, "save-removeImports");
+          await refreshCanonicalDoctors(context.env.ROSTER_DB);
           for (const id of removedIds) {
             await deleteRetainedRosterSource(context.env.ROSTER_DB, context.env.ROSTER_FILES, id);
           }
