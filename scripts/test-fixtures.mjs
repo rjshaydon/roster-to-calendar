@@ -313,6 +313,11 @@ assert.match(
   "roster purge should delete R2 sources before deferring canonical doctor refresh",
 );
 assert.match(
+  stateSource.match(/async function repositoryDoctorCandidates[\s\S]*?async function refreshCanonicalDoctors/)?.[0] || "",
+  /queryRosterFileDoctors\(db\)[\s\S]*buildCanonicalDoctorOptionsFromRows[\s\S]*queryCanonicalDoctors/,
+  "doctor directory responses should prefer live roster file doctors over stale canonical cache rows",
+);
+assert.match(
   stateSource.match(/if \(action === "removeRosterImports"\)[\s\S]*?if \(action === "appendConsoleMessage"\)/)?.[0] || "",
   /purgeRosterImports\(context, removedIds, "removeRosterImports"\)/,
   "dedicated roster removal should purge D1 and R2 without a full account save",
@@ -428,9 +433,9 @@ assert.doesNotMatch(
   "roster sync state updates should not be limited to the system admin tab",
 );
 assert.match(
-  appSource.match(/async function refreshCreatorCalendarAfterFileChange[\s\S]*?async function refreshAvailableDoctorsAfterRosterChange/)?.[0] || "",
-  /mergeSelectedFilesWithRosterStoreStatus\(calendarStoreStatus, \{ force: true \}\)[\s\S]*renderFileSurfaces\(\);[\s\S]*return;/,
-  "creator roster imports should refresh merged file metadata before returning",
+  appSource.match(/async function refreshCreatorCalendarAfterFileChange[\s\S]*?async function rosterDoctorsFromSelectedFiles/)?.[0] || "",
+  /syncCreatorDoctorPickerWithRemainingRosters[\s\S]*allowInlineBuild: false[\s\S]*pollCalendarAfterRosterChange/,
+  "creator roster imports should refresh the doctor picker before requesting a lightweight calendar snapshot",
 );
 assert.match(
   await readFile(new URL("../public/index.html", import.meta.url), "utf8"),

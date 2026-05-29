@@ -3639,14 +3639,16 @@ function matchDoctorClaims(doctors, realName) {
 
 async function repositoryDoctorCandidates(store, index, db = null, options = {}) {
   const accountIndex = await loadClaimedAccountIndex(store, db);
+  const doctorRows = await queryRosterFileDoctors(db).catch(() => []);
+  if (doctorRows.length) {
+    return attachClaimedAccountMetadata(await buildCanonicalDoctorOptionsFromRows(db, doctorRows, {
+      includeZeroEventStandalone: options.hideZeroEventStandalone !== true,
+    }), accountIndex);
+  }
   const canonicalDoctors = await queryCanonicalDoctors(db, {
     includeZeroEventStandalone: options.hideZeroEventStandalone !== true,
   }).catch(() => []);
   if (canonicalDoctors.length) return attachClaimedAccountMetadata(canonicalDoctors, accountIndex);
-  const doctorRows = await queryRosterFileDoctors(db).catch(() => []);
-  if (doctorRows.length) return attachClaimedAccountMetadata(await buildCanonicalDoctorOptionsFromRows(db, doctorRows, {
-    includeZeroEventStandalone: options.hideZeroEventStandalone !== true,
-  }), accountIndex);
   return [];
 }
 
