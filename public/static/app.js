@@ -303,6 +303,7 @@ let lastRosterPersistence = null;
 let adminConsoleOpen = false;
 let adminConsoleLoading = false;
 let adminConsoleMessages = [];
+let lastRenderedCreatorSwitcherSignature = null;
 let reportedIssueFingerprints = new Set();
 let currentSnapshot = null;
 let currentSnapshotStale = false;
@@ -2090,6 +2091,24 @@ function renderFileSurfaces() {
   }
 }
 
+function creatorDoctorSwitcherSignature(options = doctorPickerOptions()) {
+  if (!canUseCreatorDoctorSwitcher()) return "";
+  return (options || [])
+    .map((doctor) => `${doctorIdentityKey(doctor)}:${doctor.displayName}`)
+    .sort()
+    .join("|");
+}
+
+function announceCreatorSwitcherUpdateIfChanged(options = doctorPickerOptions()) {
+  if (!canUseCreatorDoctorSwitcher()) return;
+  const nextSignature = creatorDoctorSwitcherSignature(options);
+  const previousSignature = lastRenderedCreatorSwitcherSignature;
+  lastRenderedCreatorSwitcherSignature = nextSignature;
+  if (previousSignature !== null && previousSignature !== nextSignature) {
+    setStatus("Switcher menu updated.");
+  }
+}
+
 function renderDoctorState() {
   const pickerOptions = doctorPickerOptions();
   doctorSelect.innerHTML = "";
@@ -2107,6 +2126,7 @@ function renderDoctorState() {
     setStatus(message, true);
     renderClaimSection();
     syncActionState();
+    announceCreatorSwitcherUpdateIfChanged([]);
     return;
   }
 
@@ -2117,6 +2137,10 @@ function renderDoctorState() {
     doctorName.textContent = pickerOptions[0].displayName;
     doctorName.classList.remove("hidden");
     setStatus("Loading calendar...");
+    announceCreatorSwitcherUpdateIfChanged(pickerOptions);
+    syncActionState();
+    syncMobileChrome();
+    return;
   } else {
     for (const doctor of pickerOptions) {
       const option = document.createElement("option");
@@ -2137,6 +2161,7 @@ function renderDoctorState() {
     setStatus(preferredDoctorKey ? "Loading calendar..." : "Choose a doctor to load the calendar.");
   }
 
+  announceCreatorSwitcherUpdateIfChanged(pickerOptions);
   syncActionState();
   syncMobileChrome();
 }
@@ -5835,6 +5860,7 @@ function resetDerivedState(options = {}) {
   clearDoctorAnalysisCache();
   resetVisibleInsightWarmCache();
   lastRosterPersistence = null;
+  lastRenderedCreatorSwitcherSignature = null;
   closeInsightsModal();
   settings = defaultSettings();
   renderSettings();
@@ -10789,7 +10815,6 @@ async function refreshCreatorSnapshotInBackground(options = {}) {
 async function refreshAvailableDoctorsAfterRosterChange() {
   if (!isCreatorAuthenticated() || !cloudAvailable) return;
   mergeSelectedFilesWithRosterStoreStatus(calendarStoreStatus, { force: true });
-  const previousSwitcherKeys = doctorPickerOptions().map((doctor) => doctorIdentityKey(doctor)).sort().join("|");
   try {
     await syncCreatorDoctorPickerWithRemainingRosters();
   } catch {
@@ -10811,10 +10836,6 @@ async function refreshAvailableDoctorsAfterRosterChange() {
   renderDoctorState();
   syncAccountsButton();
   renderFileSurfaces();
-  const nextSwitcherKeys = doctorPickerOptions().map((doctor) => doctorIdentityKey(doctor)).sort().join("|");
-  if (previousSwitcherKeys !== nextSwitcherKeys) {
-    setStatus("Switcher menu updated.");
-  }
 }
 
 function normalizeSavedExportRange(value) {

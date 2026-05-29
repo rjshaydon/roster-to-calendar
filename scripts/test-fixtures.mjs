@@ -459,8 +459,18 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function refreshAvailableDoctorsAfterRosterChange[\s\S]*?function normalizeSavedExportRange/)?.[0] || "",
-  /10000, 20000[\s\S]*mergeAvailableDoctors: true[\s\S]*syncCreatorDoctorPickerWithRemainingRosters[\s\S]*renderDoctorState[\s\S]*Switcher menu updated/,
-  "roster changes should merge local and repository doctors before announcing switcher updates",
+  /10000, 20000[\s\S]*mergeAvailableDoctors: true[\s\S]*syncCreatorDoctorPickerWithRemainingRosters[\s\S]*renderDoctorState/,
+  "roster changes should merge local and repository doctors before re-rendering the creator switcher",
+);
+assert.match(
+  appSource.match(/function announceCreatorSwitcherUpdateIfChanged[\s\S]*?function renderDoctorState/)?.[0] || "",
+  /Switcher menu updated/,
+  "creator switcher changes should emit a console status when the visible menu changes",
+);
+assert.match(
+  appSource.match(/function renderDoctorState[\s\S]*?function renderClaimSection/)?.[0] || "",
+  /announceCreatorSwitcherUpdateIfChanged/,
+  "creator switcher re-renders should check whether the visible doctor menu changed",
 );
 assert.match(
   appSource.match(/function applyLoadedCalendarFileRefs[\s\S]*?function rosterStoreFileToClientEntry/)?.[0] || "",
