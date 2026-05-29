@@ -9,7 +9,7 @@ import {
   deleteAccountMirror,
   deleteDerivedRosterFile,
   deleteDoctorProfileMirror,
-  deleteRawRosterFile,
+  deleteRetainedRosterSource,
   deleteCachedSnapshotsForOwner,
   deleteSnapshotRegistryEntriesForOwner,
   hasCalendarDb,
@@ -489,16 +489,6 @@ export async function onRequestPost(context) {
           fileStatus,
         });
       } catch (error) {
-        // #region agent log
-        fetch("http://127.0.0.1:7330/ingest/aa91ef39-4758-45c4-bdf1-4cfd1e2083f8", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "04e966" },
-          body: JSON.stringify({
-            sessionId: "04e966", hypothesisId: "H6", location: "state.js:saveDerivedCalendarFile",
-            message: "save handler failed", data: { fileId: String(filePayload.id || ""), phase: savePhase, error: error?.message || String(error) }, timestamp: Date.now(), runId: "post-fix-2",
-          }),
-        }).catch(() => {});
-        // #endregion
         return Response.json({
           error: error?.message || "Could not save roster file to D1.",
           phase: savePhase,
@@ -549,9 +539,13 @@ export async function onRequestPost(context) {
       if (!fileId) {
         return Response.json({ error: "Roster file is required." }, { status: 400 });
       }
-      await deleteDerivedRosterFile(context.env.ROSTER_DB, fileId);
-      await refreshCanonicalDoctors(context.env.ROSTER_DB);
-      await deleteRawRosterFile(context.env.ROSTER_DB, fileId);
+      try {
+        await deleteDerivedRosterFile(context.env.ROSTER_DB, fileId);
+        await refreshCanonicalDoctors(context.env.ROSTER_DB);
+        await deleteRetainedRosterSource(context.env.ROSTER_DB, context.env.ROSTER_FILES, fileId);
+      } catch (error) {
+        return Response.json({ error: error?.message || "Could not reset roster file." }, { status: 503 });
+      }
       scheduleSnapshotWarmupForAllAccounts(context, { reason: "resetDerivedCalendarFile" });
       const status = await calendarStoreStatus(null, context.env.ROSTER_DB, { doctorKey: OWNER_DOCTOR_KEY });
       return Response.json({ ok: true, reset: fileId, ...status });
@@ -569,9 +563,17 @@ export async function onRequestPost(context) {
       const removedFileIds = activeFiles
         .map((file) => file.id)
         .filter((id) => id && !keepFileIds.includes(id));
-      await Promise.all(removedFileIds.map((id) => deleteDerivedRosterFile(context.env.ROSTER_DB, id).catch(() => null)));
-      await refreshCanonicalDoctors(context.env.ROSTER_DB);
-      await Promise.all(removedFileIds.map((id) => deleteRawRosterFile(context.env.ROSTER_DB, id).catch(() => null)));
+      try {
+        for (const id of removedFileIds) {
+          await deleteDerivedRosterFile(context.env.ROSTER_DB, id);
+        }
+        await refreshCanonicalDoctors(context.env.ROSTER_DB);
+        for (const id of removedFileIds) {
+          await deleteRetainedRosterSource(context.env.ROSTER_DB, context.env.ROSTER_FILES, id);
+        }
+      } catch (error) {
+        return Response.json({ error: error?.message || "Could not remove roster files." }, { status: 503 });
+      }
       scheduleSnapshotWarmupForAllAccounts(context, { reason: "replaceActiveRosterFiles" });
       const status = await calendarStoreStatus(null, context.env.ROSTER_DB, {
         doctorKey: normalizeRosterName(body?.selectedDoctorKey || OWNER_DOCTOR_KEY),
@@ -964,9 +966,17 @@ export async function onRequestPost(context) {
       const removedImportIds = sanitizeRepositoryFileIds(body?.removedImportIds);
       if ((targetRole === "creator" || targetRole === "owner") && saveEmail === email && removedImportIds.length) {
         const removedIds = [...new Set(removedImportIds)];
-        await Promise.all(removedIds.map((id) => deleteDerivedRosterFile(context.env.ROSTER_DB, id).catch(() => null)));
-        await Promise.all(removedIds.map((id) => deleteRawRosterFile(context.env.ROSTER_DB, id).catch(() => null)));
-        deferCanonicalDoctorRefresh(context, "save-removeImports");
+        try {
+          for (const id of removedIds) {
+            await deleteDerivedRosterFile(context.env.ROSTER_DB, id);
+          }
+          deferCanonicalDoctorRefresh(context, "save-removeImports");
+          for (const id of removedIds) {
+            await deleteRetainedRosterSource(context.env.ROSTER_DB, context.env.ROSTER_FILES, id);
+          }
+        } catch (error) {
+          return Response.json({ error: error?.message || "Could not remove roster files." }, { status: 503 });
+        }
         state.imports = state.imports.filter((item) => {
           const repoId = item.repoId || item.repositoryId || item.id;
           return !removedIds.includes(repoId);
@@ -3676,16 +3686,6 @@ function scheduleDeferredDailyPresenceIndexing(context, job = {}) {
 async function runCoreDerivedRosterSave(context, job = {}) {
   const fileId = String(job.file?.id || "");
   const phase = String(job.phase || "complete").toLowerCase();
-  // #region agent log
-  fetch("http://127.0.0.1:7330/ingest/aa91ef39-4758-45c4-bdf1-4cfd1e2083f8", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "04e966" },
-    body: JSON.stringify({
-      sessionId: "04e966", hypothesisId: "H5", location: "state.js:runCoreDerivedRosterSave",
-      message: "core save started", data: { fileId, phase, doctorCount: (job.doctors || []).length }, timestamp: Date.now(), runId: "post-fix-2",
-    }),
-  }).catch(() => {});
-  // #endregion
   const db = context.env.ROSTER_DB;
   const filePayload = job.file || {};
   try {
@@ -3749,28 +3749,8 @@ async function runCoreDerivedRosterSave(context, job = {}) {
         await postSave();
       }
     }
-    // #region agent log
-    fetch("http://127.0.0.1:7330/ingest/aa91ef39-4758-45c4-bdf1-4cfd1e2083f8", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "04e966" },
-      body: JSON.stringify({
-        sessionId: "04e966", hypothesisId: "H5", location: "state.js:runCoreDerivedRosterSave",
-        message: "core save completed", data: { fileId, phase, events: Number(result?.events || 0) }, timestamp: Date.now(), runId: "post-fix-2",
-      }),
-    }).catch(() => {});
-    // #endregion
     return { ok: true, result, supersession };
   } catch (error) {
-    // #region agent log
-    fetch("http://127.0.0.1:7330/ingest/aa91ef39-4758-45c4-bdf1-4cfd1e2083f8", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "04e966" },
-      body: JSON.stringify({
-        sessionId: "04e966", hypothesisId: "H5", location: "state.js:runCoreDerivedRosterSave",
-        message: "core save failed", data: { fileId, phase, error: error?.message || String(error) }, timestamp: Date.now(), runId: "post-fix-2",
-      }),
-    }).catch(() => {});
-    // #endregion
     throw error;
   }
 }

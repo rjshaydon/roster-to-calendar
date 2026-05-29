@@ -250,8 +250,13 @@ assert.match(
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
     .match(/if \(action === "save"\)[\s\S]*?if \(action === "loadDoctorProfile"\)/)?.[0] || "",
-  /removedImportIds\.length[\s\S]*deleteDerivedRosterFile[\s\S]*deleteRawRosterFile/,
+  /removedImportIds\.length[\s\S]*deleteDerivedRosterFile[\s\S]*deleteRetainedRosterSource/,
   "ordinary saves must only delete roster database rows when explicit removed import ids are supplied",
+);
+assert.match(
+  (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8")),
+  /deleteRetainedRosterSource\(context\.env\.ROSTER_DB, context\.env\.ROSTER_FILES/,
+  "roster deletion paths must remove retained R2 source bytes alongside D1 metadata",
 );
 assert.doesNotMatch(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
@@ -364,8 +369,18 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function removeStoredImport[\s\S]*?function loadConflictSelections/)?.[0] || "",
-  /refreshCreatorCalendarAfterFileChange[\s\S]*removeMissingFromStore: true[\s\S]*preserveVisiblePreview: true/,
-  "roster deletion should refresh the creator calendar without clearing the visible preview first",
+  /invalidateCalendarSnapshotCache[\s\S]*refreshCreatorCalendarAfterFileChange[\s\S]*removeMissingFromStore: true[\s\S]*preserveVisiblePreview: true/,
+  "roster deletion should invalidate cached snapshots and refresh the creator calendar without clearing the visible preview first",
+);
+assert.match(
+  appSource.match(/async function mergeFiles[\s\S]*?function validateIncomingFiles/)?.[0] || "",
+  /needsD1Resync: true/,
+  "explicit roster uploads should mark files for a forced D1 resync",
+);
+assert.match(
+  appSource.match(/async function refreshCreatorCalendarAfterFileChange[\s\S]*?async function refreshAvailableDoctorsAfterRosterChange/)?.[0] || "",
+  /needsD1Resync === true[\s\S]*saveSelectedRosterFilesToD1[\s\S]*force:/,
+  "creator roster changes should force D1 resync for freshly uploaded local files",
 );
 assert.match(
   appSource.match(/function isRosterFileStatusHealthy[\s\S]*?function reconcileRosterSyncStates/)?.[0] || "",
@@ -1313,6 +1328,13 @@ class MemoryR2 {
       httpMetadata: item.httpMetadata,
       arrayBuffer: async () => item.bytes.buffer.slice(item.bytes.byteOffset, item.bytes.byteOffset + item.bytes.byteLength),
     };
+  }
+
+  async delete(keyOrKeys) {
+    const keys = Array.isArray(keyOrKeys) ? keyOrKeys : [keyOrKeys];
+    for (const key of keys) {
+      if (key) this.objects.delete(key);
+    }
   }
 }
 
@@ -5190,6 +5212,20 @@ assert.equal(deletionStore.d1.files.has("missing-from-save"), true, "ordinary cr
 let deletionIndex = await deletionStore.get("repository:index", "json");
 assert.ok(deletionIndex.files.some((file) => file.id === "missing-from-save"), "ordinary creator save must keep omitted files in the repository index");
 
+deletionStore.d1.rawFiles.set("remove-roster", {
+  file_id: "remove-roster",
+  name: "remove-roster.xlsx",
+  source_type: "mmc",
+  size: 12,
+  last_modified: 1,
+  object_key: "rosters/remove-roster",
+  type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  data_url: "",
+  uploaded_at: "2026-01-01T00:00:00.000Z",
+});
+await deletionStore.r2.put("rosters/remove-roster", new Uint8Array([1, 2, 3]));
+assert.ok(deletionStore.r2.objects.has("rosters/remove-roster"), "fixture should seed retained R2 source before removal");
+
 await postState(deletionStore, {
   action: "save",
   email: "rhaydon@gmail.com",
@@ -5203,6 +5239,14 @@ await postState(deletionStore, {
 });
 assert.ok(await deletionStore.get("repository:file:remove-roster", "json"), "D1-only removal must not mutate legacy KV files");
 assert.equal(deletionStore.d1.files.has("remove-roster"), false, "creator removal should delete the D1 roster file");
+assert.equal(deletionStore.d1.rawFiles.has("remove-roster"), false, "creator removal should delete raw roster metadata");
+assert.ok(!deletionStore.r2.objects.has("rosters/remove-roster"), "creator removal should delete retained R2 source bytes");
+const removedRosterStatus = await postState(deletionStore, {
+  action: "calendarStoreStatus",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+}, deletionStore.d1);
+assert.equal(removedRosterStatus.files.some((file) => file.id === "remove-roster"), false, "calendar status must not list removed roster files");
 deletionIndex = await deletionStore.get("repository:index", "json");
 assert.equal(deletionIndex.files.some((file) => file.id === "remove-roster"), true, "D1-only removal must not mutate legacy KV index");
 assert.ok(await deletionStore.get("repository:file:keep-roster", "json"));

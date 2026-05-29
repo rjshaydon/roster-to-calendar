@@ -693,6 +693,19 @@ export async function deleteRawRosterFile(db, fileId) {
   await db.prepare("DELETE FROM raw_roster_files WHERE file_id = ?").bind(fileId).run();
 }
 
+export async function deleteRetainedRosterSource(db, r2, fileId) {
+  const normalizedId = String(fileId || "").trim();
+  if (!normalizedId) return;
+  if (!db?.prepare) return;
+  await ensureCalendarSchema(db);
+  const raw = await loadRawRosterFile(db, normalizedId);
+  const objectKey = String(raw?.objectKey || "").trim() || `rosters/${normalizedId}`;
+  if (r2?.delete) {
+    await r2.delete(objectKey);
+  }
+  await deleteRawRosterFile(db, normalizedId);
+}
+
 export async function queryDoctorEvents(db, doctorKeys, options = {}) {
   if (!db?.prepare || !doctorKeys?.length) return [];
   await ensureCalendarSchema(db);

@@ -326,18 +326,6 @@ let ignoredIssueFingerprints = new Set();
 let lastLoginTimings = null;
 let lastAccountSwitchTimings = null;
 
-// #region agent log
-function debugLog(hypothesisId, location, message, data = {}) {
-  const payload = { sessionId: "04e966", hypothesisId, location, message, data, timestamp: Date.now(), runId: "post-fix-3" };
-  console.error("[debug-04e966]", message, data?.error || "", payload);
-  fetch("http://127.0.0.1:7330/ingest/aa91ef39-4758-45c4-bdf1-4cfd1e2083f8", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "04e966" },
-    body: JSON.stringify(payload),
-  }).catch(() => {});
-}
-// #endregion
-
 const settingsInputs = Object.fromEntries(
   SETTINGS_FIELDS.map((id) => [id, document.querySelector(`#${id}`)]),
 );
@@ -1437,6 +1425,7 @@ async function mergeFiles(files) {
       lastModified: file.lastModified,
       addedAt: new Date().toISOString(),
       sourceType: "pending",
+      needsD1Resync: true,
     };
     selectedFiles.push(entry);
     try {
@@ -2235,14 +2224,6 @@ async function updatePreview(options = {}) {
       ? "Calendar preview loaded locally. Saving roster files to D1..."
       : "Calendar loaded.");
   } catch (error) {
-    // #region agent log
-    debugLog("H1", "app.js:updatePreview", "updatePreview failed", {
-      error: error?.message || String(error),
-      doctorKey: doctor?.key || "",
-      isCreator: isViewingCreatorAccount(),
-      cloudAvailable,
-    });
-    // #endregion
     clearPreviewData();
     setStatus(error.message, true);
   }
@@ -2260,21 +2241,6 @@ async function buildBrowserPreviewData(doctor) {
   const validDoctors = new Set(rosterDoctorOptions(parsedRosterSources.mmc, parsedRosterSources.ddh, parsedRosterSources.casey, parsedRosterSources.mch).map((item) => item.key));
   const requestedKeys = new Set([doctor.key, ...(doctor.aliases || []).map((alias) => alias.key)].filter(Boolean));
   if (![...requestedKeys].some((key) => validDoctors.has(key))) {
-    // #region agent log
-    debugLog("H1", "app.js:buildBrowserPreviewData", "doctor not in parsed roster sources", {
-      doctorKey: doctor.key,
-      validDoctorCount: validDoctors.size,
-      hasParsedSources: Boolean(parsedRosterSources),
-      sourceCounts: parsedRosterSources ? {
-        mmc: parsedRosterSources.mmc?.length || 0,
-        ddh: parsedRosterSources.ddh?.length || 0,
-        casey: parsedRosterSources.casey?.length || 0,
-        mch: parsedRosterSources.mch?.length || 0,
-      } : null,
-      selectedFileIds: selectedFiles.map((entry) => entry.id),
-      selectedFilesWithBlob: selectedFiles.filter((entry) => entry?.file).length,
-    });
-    // #endregion
     throw new Error("The selected doctor was not found in the uploaded roster files.");
   }
   const baseSettings = {
@@ -9662,15 +9628,6 @@ async function returnToCreatorAccount() {
     }
     if (selectedDoctor()?.key !== OWNER_DOCTOR_KEY || cloudAvailable) {
       if (cloudAvailable) {
-        // #region agent log
-        debugLog("H4", "app.js:returnToCreatorAccount", "creator return reloading from D1", {
-          selectedDoctorKey: selectedDoctor()?.key || "",
-          ownerDoctorKey: OWNER_DOCTOR_KEY,
-          hasCurrentSnapshot: Boolean(currentSnapshot?.preview),
-          selectedFileCount: selectedFiles.length,
-          d1OnlyFileCount: selectedFiles.filter((entry) => !entry?.file).length,
-        });
-        // #endregion
         const loaded = await loadCloudCalendarEvents({
           preserveExistingSnapshot: Boolean(renderedCachedSnapshot && currentSnapshot?.preview),
           doctorKey: OWNER_DOCTOR_KEY,
@@ -9680,12 +9637,6 @@ async function returnToCreatorAccount() {
           renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
         }
       } else {
-        // #region agent log
-        debugLog("H4", "app.js:returnToCreatorAccount", "creator return falling back to local parse", {
-          selectedDoctorKey: selectedDoctor()?.key || "",
-          ownerDoctorKey: OWNER_DOCTOR_KEY,
-        });
-        // #endregion
         clearPreviewData();
         await updatePreview({ resetRange: false });
       }
@@ -10368,20 +10319,18 @@ async function refreshCreatorCalendarAfterFileChange(options = {}) {
     });
   }
   let performedLocalUpload = false;
-  const unsyncedLocalEntries = selectedFiles.filter((entry) => entry?.file && !isLocalRosterFileSyncedToD1(entry));
-  // #region agent log
-  debugLog("H9", "app.js:refreshCreatorCalendarAfterFileChange", "roster change sync plan", {
-    unsyncedCount: unsyncedLocalEntries.length,
-    unsyncedNames: unsyncedLocalEntries.map((entry) => entry.name),
-    pendingD1Uploads: selectedFilesHavePendingD1Uploads(calendarStoreStatus),
-    creatorView: isViewingCreatorAccount(),
-    cloudAvailable,
-  });
-  // #endregion
+  const unsyncedLocalEntries = selectedFiles.filter((entry) => entry?.file && (
+    entry.needsD1Resync === true || !isLocalRosterFileSyncedToD1(entry)
+  ));
   if (unsyncedLocalEntries.length && cloudAvailable && isCreatorAuthenticated()) {
     performedLocalUpload = true;
     try {
-      await saveSelectedRosterFilesToD1(unsyncedLocalEntries);
+      await saveSelectedRosterFilesToD1(unsyncedLocalEntries, {
+        force: unsyncedLocalEntries.some((entry) => entry.needsD1Resync === true),
+      });
+      for (const entry of unsyncedLocalEntries) {
+        if (entry) entry.needsD1Resync = false;
+      }
     } catch (error) {
       setStatus(error.message || "Could not save roster file to D1.", true);
     }
@@ -11963,14 +11912,6 @@ async function waitForRosterFilePersistence(entry, expectedFileIds = [], options
   const pollMs = Number(options.pollMs || 2500);
   const started = Date.now();
   let pollCount = 0;
-  // #region agent log
-  debugLog("H2", "app.js:waitForRosterFilePersistence", "poll started", {
-    entryId: entry?.id || "",
-    entryName: entry?.name || "",
-    expectedFileIds,
-    timeoutMs,
-  });
-  // #endregion
   while (Date.now() - started < timeoutMs) {
     pollCount += 1;
     let latestStatus = null;
@@ -11980,13 +11921,6 @@ async function waitForRosterFilePersistence(entry, expectedFileIds = [], options
         expectedFileIds,
       }, { attempts: 4 });
     } catch (error) {
-      // #region agent log
-      debugLog("H2", "app.js:waitForRosterFilePersistence", "poll request failed, retrying", {
-        pollCount,
-        entryId: entry?.id || "",
-        error: error?.message || String(error),
-      });
-      // #endregion
       await new Promise((resolve) => setTimeout(resolve, pollMs));
       continue;
     }
@@ -11994,22 +11928,9 @@ async function waitForRosterFilePersistence(entry, expectedFileIds = [], options
     reconcileRosterSyncStates(calendarStoreStatus);
     renderFileSurfaces();
     const statusFile = (latestStatus.files || []).find((file) => file.id === entry.id);
-    // #region agent log
-    debugLog("H2", "app.js:waitForRosterFilePersistence", "poll tick", {
-      pollCount,
-      entryId: entry?.id || "",
-      fileStatus: statusFile?.status || "missing",
-      eventCount: Number(statusFile?.eventCount || 0),
-      persistedCount: latestStatus?.expectedFiles?.persistedCount ?? null,
-      expectedCount: latestStatus?.expectedFiles?.expectedCount ?? null,
-    });
-    // #endregion
     if (isRosterFileStatusHealthy(statusFile)) return latestStatus;
     await new Promise((resolve) => setTimeout(resolve, pollMs));
   }
-  // #region agent log
-  debugLog("H2", "app.js:waitForRosterFilePersistence", "poll timed out", { entryId: entry?.id || "", pollCount });
-  // #endregion
   throw new Error(`${entry.name || "Roster file"} was not confirmed in D1 before the save timed out.`);
 }
 
@@ -12048,15 +11969,6 @@ async function saveDerivedCalendarFilePayload(payload, entry, expectedFileIds) {
       skipStatus: true,
     }), { attempts: 4 });
   }
-  // #region agent log
-  debugLog("H6", "app.js:saveDerivedCalendarFilePayload", "chunked save started", {
-    entryId: entry?.id || "",
-    entryName: entry?.name || "",
-    eventCount: Number(payload?.eventCount || 0),
-    doctorCount: (payload?.doctors || []).length,
-    chunkSize: LARGE_ROSTER_DOCTOR_CHUNK,
-  });
-  // #endregion
   await calendarStoreRequestWithRetry("saveDerivedCalendarFile", slimDerivedCalendarRequest(payload, {
     phase: "start",
     eventsByDoctor: {},
@@ -12072,14 +11984,6 @@ async function saveDerivedCalendarFilePayload(payload, entry, expectedFileIds) {
     const issuesByDoctor = Object.fromEntries(keys.map((key) => [key, payload.issuesByDoctor?.[key] || []]));
     const chunkEvents = keys.reduce((total, key) => total + (payload.eventsByDoctor?.[key]?.length || 0), 0);
     setRosterSyncState(entry, "saving", `Saving ${Math.min(index + keys.length, doctorKeys.length)}/${doctorKeys.length} doctors…`);
-    // #region agent log
-    debugLog("H6", "app.js:saveDerivedCalendarFilePayload", "chunk upload", {
-      entryId: entry?.id || "",
-      chunkIndex: Math.floor(index / LARGE_ROSTER_DOCTOR_CHUNK) + 1,
-      doctorCount: keys.length,
-      chunkEvents,
-    });
-    // #endregion
     await calendarStoreRequestWithRetry("saveDerivedCalendarFile", slimDerivedCalendarRequest(payload, {
       phase: "events",
       doctors: chunkDoctors,
@@ -12104,13 +12008,6 @@ async function saveSelectedRosterFilesToD1(imports = selectedFiles, options = {}
   if (!entries.length) return emptyRosterPersistenceSummary();
   const allExpectedFileIds = [...new Set(selectedFiles.map((entry) => entry.id).filter(Boolean))];
   const expectedFileIds = allExpectedFileIds.length ? allExpectedFileIds : entries.map((entry) => entry.id);
-  // #region agent log
-  debugLog("H5", "app.js:saveSelectedRosterFilesToD1", "save started", {
-    entryCount: entries.length,
-    entryNames: entries.map((entry) => entry.name),
-    expectedFileIds,
-  });
-  // #endregion
   const failedIds = new Set([...rosterSyncStates.entries()].filter(([, state]) => state.status === "failed").map(([id]) => id));
   const entriesToSave = options.force === true
     ? entries
@@ -12124,51 +12021,18 @@ async function saveSelectedRosterFilesToD1(imports = selectedFiles, options = {}
     try {
       setRosterSyncState(entry, "parsing");
       failStep = "parse";
-      // #region agent log
-      debugLog("H8", "app.js:saveSelectedRosterFilesToD1", "parse started", {
-        entryId: entry?.id || "",
-        entryName: entry?.name || "",
-      });
-      // #endregion
       const payload = await buildDerivedCalendarFilePayload(entry, entry);
-      // #region agent log
-      debugLog("H8", "app.js:saveSelectedRosterFilesToD1", "parse completed", {
-        entryId: entry?.id || "",
-        entryName: entry?.name || "",
-        doctorCount: (payload?.doctors || []).length,
-        eventCount: Number(payload?.eventCount || 0),
-        sourceType: payload?.file?.sourceType || "",
-        chunked: rosterSaveUsesChunkedUpload(payload),
-      });
-      // #endregion
       if (options.retainSources !== false) {
         failStep = "retain-source";
         setRosterSyncState(entry, "uploading-source");
         try {
           await retainRosterSource(entry);
         } catch (error) {
-          // #region agent log
-          debugLog("H7", "app.js:saveSelectedRosterFilesToD1", "source retain failed, continuing D1 save", {
-            entryId: entry?.id || "",
-            entryName: entry?.name || "",
-            error: error?.message || String(error),
-          });
-          // #endregion
         }
       }
       failStep = "d1-save";
       setRosterSyncState(entry, "saving");
       let saveResponse = await saveDerivedCalendarFilePayload(payload, entry, expectedFileIds);
-      // #region agent log
-      debugLog("H5", "app.js:saveSelectedRosterFilesToD1", "saveDerivedCalendarFile response", {
-        entryId: entry?.id || "",
-        entryName: entry?.name || "",
-        phase: saveResponse?.phase || "",
-        indexing: saveResponse?.indexing || "",
-        fileStatus: saveResponse?.fileStatus?.status || "",
-        eventCount: Number(saveResponse?.fileStatus?.eventCount || 0),
-      });
-      // #endregion
       if (saveResponse.indexing === "scheduled" || saveResponse.indexing === "in-progress" || !isRosterFileStatusHealthy(saveResponse?.fileStatus)) {
         setRosterSyncState(entry, "saving", "Saving to roster database…");
         latestStatus = await waitForRosterFilePersistence(entry, expectedFileIds);
@@ -12179,14 +12043,6 @@ async function saveSelectedRosterFilesToD1(imports = selectedFiles, options = {}
       setRosterSyncState(entry, "synced");
     } catch (error) {
       const errorMessage = error?.message || String(error);
-      // #region agent log
-      debugLog("H5", "app.js:saveSelectedRosterFilesToD1", "save failed", {
-        entryId: entry?.id || "",
-        entryName: entry?.name || "",
-        failStep,
-        error: errorMessage,
-      });
-      // #endregion
       saveResults.push({ entry, ok: false, error, failStep, message: `${failStep}: ${errorMessage}` });
       setRosterSyncState(entry, "failed", `${failStep}: ${errorMessage}`);
     }
@@ -12529,32 +12385,13 @@ async function retainRosterSource(entry) {
   if (!entry?.file) return;
   const statusFile = (calendarStoreStatus?.files || []).find((file) => file.id === entry.id);
   if (statusFile?.rawSourceAvailable === true) {
-    // #region agent log
-    debugLog("H7", "app.js:retainRosterSource", "source already retained, skipping upload", {
-      entryId: entry?.id || "",
-      entryName: entry?.name || "",
-    });
-    // #endregion
     return;
   }
-  // #region agent log
-  debugLog("H7", "app.js:retainRosterSource", "upload started", {
-    entryId: entry?.id || "",
-    entryName: entry?.name || "",
-    fileSize: Number(entry?.file?.size || 0),
-  });
-  // #endregion
   await calendarStoreRequestWithRetry("uploadRawRosterFile", {
     file: importRefForWorkspace(entry),
     type: entry.file.type || "application/octet-stream",
     dataUrl: await fileToDataUrl(entry.file),
   }, { attempts: 3 });
-  // #region agent log
-  debugLog("H7", "app.js:retainRosterSource", "upload completed", {
-    entryId: entry?.id || "",
-    entryName: entry?.name || "",
-  });
-  // #endregion
 }
 
 async function ensureRosterEntrySource(entry) {
@@ -13291,6 +13128,7 @@ async function removeStoredImport(id) {
         imports: selectedFiles.map((entry) => ({ ...entry })),
         removedImportIds: [id],
       });
+      invalidateCalendarSnapshotCache();
     } catch (error) {
       const overload = /503|CPU|memory|overload/i.test(String(error?.message || ""));
       setStatus(overload
