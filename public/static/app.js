@@ -267,6 +267,7 @@ let currentSnapshotOwnerId = normalizeEmail(currentUserEmail);
 let activeCalendarContext = initialCalendarContext();
 let cloudAvailable = false;
 let cloudSaveTimer = 0;
+let backgroundCloudSaveTimer = 0;
 let pendingCloudSaveSnapshot = null;
 let cloudStateSaveQueue = Promise.resolve();
 let serverUsers = [];
@@ -9148,16 +9149,18 @@ async function validateDoctorProfileCalendarInBackground(doctor, previousState, 
   }
   const result = await loadUnclaimedDoctorCalendar(doctor, previousState, {
     profile: options.profile,
-    cachedRevision: options.cachedRevision || "",
-    allowInlineBuild: options.renderedCachedSnapshot ? false : true,
+    cachedRevision: options.renderedCachedSnapshot ? (options.cachedRevision || currentSnapshot?.calendarRevision || "") : "",
+    allowInlineBuild: false,
     transition: options.transition,
   });
   if (!calendarTransitionStillCurrent(options.transition)) return;
   if (result) {
     await commitCalendarLoad(result, { saveInBackground: true, transition: options.transition });
-  } else {
+  } else if (calendarSnapshotMatchesActiveContext(currentSnapshot)) {
     renderLoginState();
     setStatus("Calendar is up to date.");
+  } else {
+    throw new Error(`${doctor.displayName} calendar is not ready yet. Try again in a moment.`);
   }
 }
 
@@ -9172,7 +9175,9 @@ async function enterUserAccount(email) {
     setStatus("Creator authentication is required to enter another account.", true);
     return;
   }
-  queueBackgroundCloudStateSave(capturePendingCloudStateSave() || creatorCalendarSavePayload() || snapshotCloudSavePayload(), { delayMs: 1500 });
+  cancelScheduledCloudStateSave();
+  const outgoingSave = capturePendingCloudStateSave() || outgoingSnapshotSavePayload(previousState);
+  if (outgoingSave) queueBackgroundCloudStateSave(outgoingSave, { delayMs: 1500 });
 
   closeAccountsModal();
   authUserEmail = creatorEmail;
@@ -9232,7 +9237,9 @@ async function enterDoctorProfileView(doctor) {
   const previousState = captureCalendarViewState();
   const creatorEmail = authUserEmail || currentUserEmail;
   const creatorPassword = authUserPassword || currentUserPassword;
-  queueBackgroundCloudStateSave(capturePendingCloudStateSave() || snapshotCloudSavePayload(), { delayMs: 1500 });
+  cancelScheduledCloudStateSave();
+  const outgoingSave = capturePendingCloudStateSave() || outgoingSnapshotSavePayload(previousState);
+  if (outgoingSave) queueBackgroundCloudStateSave(outgoingSave, { delayMs: 1500 });
   const profile = doctorProfileForDoctor(doctor);
   const targetContext = profile ? calendarSnapshotContext({
     mode: "doctor-profile",
@@ -9265,7 +9272,11 @@ async function enterDoctorProfileView(doctor) {
     ? renderCachedCalendarSnapshotForContext(targetContext, { accountSwitchStartedAt, transition })
     : false;
   if (!renderedCachedSnapshot) {
-    clearPreviewData();
+    currentSnapshot = null;
+    currentSnapshotStale = false;
+    currentSnapshotBuiltAt = "";
+    currentCalendarRevision = "";
+    resetTransientCalendarData();
     doctorOptions = [];
   }
   renderLoginState();
@@ -9318,7 +9329,7 @@ async function loadUnclaimedDoctorCalendar(doctor, sourceContext, options = {}) 
     allowInlineBuild: options.allowInlineBuild !== false,
   });
   if (!calendarTransitionStillCurrent(options.transition)) return null;
-  if (profileData.snapshotCurrent === true) {
+  if (profileData.snapshotCurrent === true && calendarSnapshotMatchesActiveContext(currentSnapshot)) {
     currentCalendarRevision = String(profileData.calendarRevision || currentCalendarRevision || "");
     if (Array.isArray(profileData.fileRefs) && profileData.fileRefs.length) {
       selectedFiles = importRefsToClientEntries(profileData.fileRefs);
@@ -9359,7 +9370,15 @@ async function loadUnclaimedDoctorCalendar(doctor, sourceContext, options = {}) 
       calendarRevision: profileData.calendarRevision || "",
     };
   }
-  if (options.allowInlineBuild === false && currentSnapshot?.preview) return null;
+  if (options.allowInlineBuild === false && calendarSnapshotMatchesActiveContext(currentSnapshot)) return null;
+  if (options.allowInlineBuild === false) {
+    const building = profileData.snapshotSource === "server-cache-building" || profileData.snapshotStatus === "building";
+    if (building) {
+      setStatus(`${doctor.displayName} calendar is building...`);
+      return null;
+    }
+    throw new Error(`${doctor.displayName} calendar is not ready yet. Try again in a moment.`);
+  }
 
   const cached = buildUnclaimedPreviewFromSnapshotCache(doctor, profile, sourceContext, profileData.profile?.state?.session || {});
   if (cached) return doctorProfileLoadResultFromCached(profile, cached);
@@ -9731,7 +9750,9 @@ async function returnToCreatorAccount() {
   const accountSwitchStartedAt = performance.now();
   const creatorEmail = authUserEmail || OWNER_EMAIL;
   const creatorPassword = authUserPassword || currentUserPassword;
-  queueBackgroundCloudStateSave(capturePendingCloudStateSave() || snapshotCloudSavePayload(), { delayMs: 1500 });
+  cancelScheduledCloudStateSave();
+  const outgoingSave = capturePendingCloudStateSave() || outgoingSnapshotSavePayload(previousState);
+  if (outgoingSave) queueBackgroundCloudStateSave(outgoingSave, { delayMs: 1500 });
   adminViewingEmail = "";
   viewedAccountId = normalizeEmail(creatorEmail);
   viewedAccountType = "creator";
@@ -11265,17 +11286,37 @@ function queueDeferredBootstrapImports(options = {}) {
   }, delayMs);
 }
 
+function calendarSnapshotMatchesActiveContext(snapshot = currentSnapshot) {
+  if (!snapshot?.preview) return false;
+  if (activeCalendarMode() === "doctor-profile") {
+    if (!activeDoctorProfile?.ownerId) return false;
+    const expectedKey = calendarSnapshotCacheKeyForContext({
+      mode: "doctor-profile",
+      ownerId: activeDoctorProfile.ownerId,
+      doctorKey: activeDoctorProfile.doctorKey,
+    });
+    if (!expectedKey) return false;
+    const snapshotDoctorKey = normalizeRosterName(
+      snapshot?.session?.doctorKey
+      || snapshot?.doctorOptions?.[0]?.key
+      || "",
+    );
+    return snapshotDoctorKey === normalizeRosterName(activeDoctorProfile.doctorKey);
+  }
+  if (activeCalendarMode() === "creator-account") {
+    return normalizeRosterName(snapshot?.session?.doctorKey || "") === OWNER_DOCTOR_KEY;
+  }
+  if (activeCalendarMode() === "claimed-account") {
+    const snapshotDoctorKey = normalizeRosterName(snapshot?.session?.doctorKey || "");
+    return !currentDefaultDoctorKey || snapshotDoctorKey === normalizeRosterName(currentDefaultDoctorKey);
+  }
+  return true;
+}
+
 function loginSnapshotReadyForRender() {
   if (!currentSnapshot?.preview) return false;
   if (String(currentSnapshot.calendarRevision || currentCalendarRevision || "") !== String(currentCalendarRevision || "")) return false;
-  if (activeCalendarMode() === "creator-account") {
-    return normalizeRosterName(currentSnapshot?.session?.doctorKey || "") === OWNER_DOCTOR_KEY;
-  }
-  if (activeCalendarMode() === "claimed-account") {
-    const snapshotDoctorKey = normalizeRosterName(currentSnapshot?.session?.doctorKey || "");
-    return !currentDefaultDoctorKey || snapshotDoctorKey === normalizeRosterName(currentDefaultDoctorKey);
-  }
-  return activeCalendarMode() === "doctor-profile";
+  return calendarSnapshotMatchesActiveContext(currentSnapshot);
 }
 
 function visibleSnapshotIsCurrent(options = {}) {
@@ -11292,6 +11333,9 @@ function reportBackgroundValidationError(error, options = {}) {
   if (options.preserveRenderedSnapshot && visibleSnapshotIsCurrent() && overload) {
     console.warn("Background calendar validation failed; keeping cached calendar.", { message, error });
     return;
+  }
+  if (options.preserveRenderedSnapshot && overload && !calendarSnapshotMatchesActiveContext(currentSnapshot)) {
+    console.warn("Background calendar validation failed; calendar did not match active profile.", { message, error });
   }
   setStatus(message, true);
 }
@@ -11658,6 +11702,8 @@ function scheduleCloudStateSave() {
 function cancelScheduledCloudStateSave() {
   clearTimeout(cloudSaveTimer);
   cloudSaveTimer = 0;
+  clearTimeout(backgroundCloudSaveTimer);
+  backgroundCloudSaveTimer = 0;
   pendingCloudSaveSnapshot = null;
 }
 
@@ -11681,13 +11727,53 @@ function capturePendingCloudStateSave() {
 function queueBackgroundCloudStateSave(snapshot = null, options = {}) {
   const payload = snapshot || snapshotCloudSavePayload();
   if (!payload) return;
-  const run = () => saveCloudState(payload).catch((error) => reportCloudSaveFailure(error, payload, options));
+  clearTimeout(backgroundCloudSaveTimer);
+  const run = () => {
+    backgroundCloudSaveTimer = 0;
+    saveCloudState(payload).catch((error) => reportCloudSaveFailure(error, payload, options));
+  };
   const delayMs = Math.max(0, Number(options.delayMs || 0));
   if (delayMs) {
-    window.setTimeout(run, delayMs);
+    backgroundCloudSaveTimer = window.setTimeout(run, delayMs);
   } else {
     run();
   }
+}
+
+function outgoingSnapshotSavePayload(state = captureCalendarViewState()) {
+  if (!state) return null;
+  if (state.activeDoctorProfile?.id) {
+    return {
+      accountEmail: state.currentUserEmail,
+      requestEmail: authUserEmail || state.currentUserEmail,
+      requestPassword: authUserPassword || state.currentUserPassword,
+      doctorProfile: { ...state.activeDoctorProfile },
+      imports: [],
+      session: state.restoredSessionState || state.currentSnapshot?.session || {},
+    };
+  }
+  if (normalizeEmail(state.currentUserEmail) === OWNER_EMAIL && !state.adminViewingEmail) {
+    return {
+      accountEmail: state.currentUserEmail,
+      requestEmail: authUserEmail || state.currentUserEmail,
+      requestPassword: authUserPassword || state.currentUserPassword,
+      targetEmail: "",
+      imports: (state.selectedFiles || []).map((entry) => ({ ...entry })),
+      session: state.restoredSessionState || state.currentSnapshot?.session || {},
+      removedImportIds: [],
+    };
+  }
+  const viewedEmail = normalizeEmail(state.adminViewingEmail || state.currentUserEmail);
+  if (!viewedEmail) return null;
+  return {
+    accountEmail: viewedEmail,
+    requestEmail: authUserEmail || state.currentUserEmail,
+    requestPassword: authUserPassword || state.currentUserPassword,
+    targetEmail: state.adminViewingEmail ? viewedEmail : "",
+    imports: (state.selectedFiles || []).map((entry) => ({ ...entry })),
+    session: state.restoredSessionState || state.currentSnapshot?.session || {},
+    removedImportIds: [],
+  };
 }
 
 function shouldRebuildAccountSnapshot(snapshot) {
@@ -11780,6 +11866,16 @@ function savePayloadMatchesActiveCalendar(payload) {
     return activeCalendarMode() === "doctor-profile" && activeDoctorProfile?.id === payload.doctorProfile.id;
   }
   return normalizeEmail(payload?.accountEmail || "") === viewedAccountEmail() && !activeDoctorProfile;
+}
+
+function snapshotMatchesDoctorProfile(snapshot, profile) {
+  if (!snapshot?.preview || !profile?.doctorKey) return false;
+  const snapshotDoctorKey = normalizeRosterName(
+    snapshot?.session?.doctorKey
+    || snapshot?.doctorOptions?.[0]?.key
+    || "",
+  );
+  return snapshotDoctorKey === normalizeRosterName(profile.doctorKey);
 }
 
 function creatorSwitchTargetsForPrefetch() {
@@ -11888,7 +11984,8 @@ async function saveCloudStateNow(snapshot = null) {
   if (!payload.accountEmail || !payload.requestEmail || !payload.requestPassword || !cloudAvailable) return;
   const isDeleteSave = (payload.removedImportIds || []).length > 0;
   const snapshotPayload = isDeleteSave ? null : await buildWorkspaceSnapshotPayload(payload.session);
-  const shouldApplySavedSnapshot = savePayloadMatchesActiveCalendar(payload) && !isDeleteSave;
+  const shouldApplySavedSnapshot = savePayloadMatchesActiveCalendar(payload) && !isDeleteSave
+    && (!payload.doctorProfile || snapshotMatchesDoctorProfile(snapshotPayload, payload.doctorProfile));
   if (payload.doctorProfile) {
     const response = await fetch("/api/state", {
       method: "POST",

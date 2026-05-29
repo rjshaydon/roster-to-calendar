@@ -101,8 +101,8 @@ assert.match(
 assert.match(appSource, /let cloudStateSaveQueue = Promise\.resolve\(\);/, "cloud saves should be serialized");
 assert.match(
   appSource.match(/async function enterUserAccount[\s\S]*?async function enterDoctorProfileView/)?.[0] || "",
-  /queueBackgroundCloudStateSave\(capturePendingCloudStateSave\(\) \|\| creatorCalendarSavePayload\(\) \|\| snapshotCloudSavePayload\(\), \{ delayMs: 1500 \}\)/,
-  "switching from the creator account should queue the creator doctor save without blocking entry",
+  /cancelScheduledCloudStateSave\(\)[\s\S]*outgoingSnapshotSavePayload\(previousState\)[\s\S]*queueBackgroundCloudStateSave\(outgoingSave, \{ delayMs: 1500 \}\)/,
+  "switching from the creator account should queue the outgoing profile save without blocking entry",
 );
 assert.match(
   appSource.match(/async function enterUserAccount[\s\S]*?async function enterDoctorProfileView/)?.[0] || "",
@@ -247,8 +247,13 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function validateDoctorProfileCalendarInBackground[\s\S]*?async function enterUserAccount/)?.[0] || "",
-  /renderedCachedSnapshot && visibleSnapshotIsCurrent\(\{ requireNotStale: true \}\)/,
-  "doctor profile background validation should skip network work when the browser cache is current",
+  /renderedCachedSnapshot && visibleSnapshotIsCurrent\(\{ requireNotStale: true \}\)[\s\S]*allowInlineBuild: false/,
+  "doctor profile background validation should skip network work when the browser cache is current and never inline-build on switch",
+);
+assert.match(
+  appSource.match(/function loginSnapshotReadyForRender[\s\S]*?function visibleSnapshotIsCurrent/)?.[0] || "",
+  /calendarSnapshotMatchesActiveContext/,
+  "visible snapshot checks should require the rendered calendar to match the active profile",
 );
 assert.match(
   appSource.match(/async function validateClaimedAccountCalendarInBackground[\s\S]*?async function validateDoctorProfileCalendarInBackground/)?.[0] || "",
