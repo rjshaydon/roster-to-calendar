@@ -528,7 +528,11 @@ accountsBody.addEventListener("change", (event) => {
 accountsBody.addEventListener("click", (event) => {
   const adminTab = event.target.closest("[data-admin-tab]");
   if (adminTab) {
-    currentAdminTab = adminTab.dataset.adminTab || "errors";
+    const nextTab = adminTab.dataset.adminTab || "errors";
+    if (nextTab === "system" || currentAdminTab === "system") {
+      adminConsoleOpen = false;
+    }
+    currentAdminTab = nextTab;
     renderAccountsModal();
     return;
   }
@@ -10776,6 +10780,7 @@ async function refreshAvailableDoctorsAfterRosterChange() {
   renderDoctorState();
   syncAccountsButton();
   renderFileSurfaces();
+  setStatus("Switcher menu updated.");
 }
 
 function normalizeSavedExportRange(value) {
@@ -12257,6 +12262,23 @@ async function toggleAdminConsole() {
     adminConsoleLoading = false;
     if (!accountsModal.classList.contains("hidden") && currentAdminTab === "system") renderAccountsModal();
   }
+}
+
+function appendLiveAdminConsoleMessage(message, isError = false) {
+  const text = String(message || "").trim();
+  if (!text) return;
+  adminConsoleMessages = [{
+    message: text,
+    isError: isError === true,
+    createdAt: new Date().toISOString(),
+  }, ...adminConsoleMessages].slice(0, 50);
+}
+
+function refreshAdminConsoleMarkupIfVisible() {
+  if (!adminConsoleOpen || currentAdminTab !== "system" || adminConsoleLoading) return;
+  const consoleContainer = accountsBody?.querySelector(".console-history");
+  if (!consoleContainer) return;
+  consoleContainer.outerHTML = renderAdminConsoleMarkup();
 }
 
 async function persistConsoleMessage(message, isError) {
@@ -14013,6 +14035,10 @@ function setStatus(message, isError = false) {
     void reportAccountError(text);
   }
   void persistConsoleMessage(text, isError);
+  if (adminConsoleOpen && currentAdminTab === "system" && !adminConsoleLoading) {
+    appendLiveAdminConsoleMessage(text, isError);
+    refreshAdminConsoleMarkupIfVisible();
+  }
 }
 
 function removeSupersededStatusMessages(message) {

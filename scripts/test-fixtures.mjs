@@ -459,8 +459,18 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function refreshAvailableDoctorsAfterRosterChange[\s\S]*?function normalizeSavedExportRange/)?.[0] || "",
-  /syncCreatorDoctorPickerWithRemainingRosters/,
-  "roster changes should reconcile the creator doctor picker against remaining roster files",
+  /syncCreatorDoctorPickerWithRemainingRosters[\s\S]*renderDoctorState[\s\S]*Switcher menu updated/,
+  "roster changes should announce when the creator doctor switcher has finished updating",
+);
+assert.match(
+  appSource.match(/accountsBody\.addEventListener\("click"[\s\S]*?if \(adminTab\)[\s\S]*?return;/)?.[0] || "",
+  /nextTab === "system" \|\| currentAdminTab === "system"[\s\S]*adminConsoleOpen = false/,
+  "opening or leaving the system admin tab should collapse the console by default",
+);
+assert.match(
+  appSource.match(/function setStatus[\s\S]*?function removeSupersededStatusMessages/)?.[0] || "",
+  /adminConsoleOpen && currentAdminTab === "system" && !adminConsoleLoading[\s\S]*appendLiveAdminConsoleMessage[\s\S]*refreshAdminConsoleMarkupIfVisible/,
+  "status messages should append live to the admin console while it is open on the system tab",
 );
 assert.match(
   appSource.match(/async function refreshCalendarStoreStatus[\s\S]*?async function toggleAdminConsole/)?.[0] || "",
