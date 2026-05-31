@@ -1859,7 +1859,10 @@ async function prepareFastLoginEnvelope(rawRecord, options = {}) {
     claims: lightweight.claims,
     nameMatches: [],
     availableDoctors: role === "creator" || role === "owner"
-      ? await repositoryDoctorCandidates(null, null, options.db, { hideZeroEventStandalone: true })
+      ? await repositoryDoctorCandidates(null, null, options.db, {
+        hideZeroEventStandalone: true,
+        preferCanonical: true,
+      })
       : [],
     subscription: null,
     insightsEnabled: insightsEnabledForRecord(record),
@@ -3753,15 +3756,18 @@ function matchDoctorClaims(doctors, realName) {
 
 async function repositoryDoctorCandidates(store, index, db = null, options = {}) {
   const accountIndex = await loadClaimedAccountIndex(store, db);
+  const canonicalOptions = {
+    includeZeroEventStandalone: options.hideZeroEventStandalone !== true,
+  };
+  if (options.preferCanonical === true) {
+    const canonicalDoctors = await queryCanonicalDoctors(db, canonicalOptions).catch(() => []);
+    if (canonicalDoctors.length) return attachClaimedAccountMetadata(canonicalDoctors, accountIndex);
+  }
   const doctorRows = await queryRosterFileDoctors(db).catch(() => []);
   if (doctorRows.length) {
-    return attachClaimedAccountMetadata(await buildCanonicalDoctorOptionsFromRows(db, doctorRows, {
-      includeZeroEventStandalone: options.hideZeroEventStandalone !== true,
-    }), accountIndex);
+    return attachClaimedAccountMetadata(await buildCanonicalDoctorOptionsFromRows(db, doctorRows, canonicalOptions), accountIndex);
   }
-  const canonicalDoctors = await queryCanonicalDoctors(db, {
-    includeZeroEventStandalone: options.hideZeroEventStandalone !== true,
-  }).catch(() => []);
+  const canonicalDoctors = await queryCanonicalDoctors(db, canonicalOptions).catch(() => []);
   if (canonicalDoctors.length) return attachClaimedAccountMetadata(canonicalDoctors, accountIndex);
   return [];
 }
