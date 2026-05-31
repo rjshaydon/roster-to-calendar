@@ -110,7 +110,7 @@ export async function onRequestPost(context) {
       const authMs = Date.now() - authStartedAt;
       const prepareStartedAt = Date.now();
       const prepared = responseMode === "fast"
-        ? await prepareFastLoginEnvelope(loginRecord)
+        ? await prepareFastLoginEnvelope(loginRecord, { db: context.env.ROSTER_DB })
         : await prepareAccountResponse(null, loginRecord, {
             db: context.env.ROSTER_DB,
             includeAvailableDoctors: (loginRecord.role || roleForEmail(loginRecord.email)) !== "creator" && (loginRecord.role || roleForEmail(loginRecord.email)) !== "owner" && !sanitizeClaims(loginRecord.claims).length,
@@ -152,6 +152,9 @@ export async function onRequestPost(context) {
         snapshotOwnerType: snapshotPayload.snapshot?.ownerType || snapshotOwnerTypeForRecord(loginRecord, prepared.role),
         snapshotOwnerId: snapshotPayload.snapshot?.ownerId || normalizeEmail(loginRecord.email),
       };
+      if ((prepared.role === "creator" || prepared.role === "owner") && Array.isArray(prepared.availableDoctors) && prepared.availableDoctors.length) {
+        responsePayload.availableDoctors = prepared.availableDoctors;
+      }
       if (responseMode !== "fast") {
         responsePayload.nameMatches = prepared.nameMatches;
         responsePayload.suggestedClaims = prepared.nameMatches;
@@ -1855,7 +1858,9 @@ async function prepareFastLoginEnvelope(rawRecord, options = {}) {
     state: lightweight.state,
     claims: lightweight.claims,
     nameMatches: [],
-    availableDoctors: [],
+    availableDoctors: role === "creator" || role === "owner"
+      ? await repositoryDoctorCandidates(null, null, options.db, { hideZeroEventStandalone: true })
+      : [],
     subscription: null,
     insightsEnabled: insightsEnabledForRecord(record),
     adminIssues: [],

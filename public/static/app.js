@@ -11896,17 +11896,21 @@ function applyCloudStateIdentity(data) {
   if (data.realName) saveLocalAccountIdentity(data.realName);
 }
 
+function applyAvailableRosterDoctorsFromData(data) {
+  const incomingAvailableDoctors = sanitizeAvailableRosterDoctors(data.availableDoctors || []);
+  if (!incomingAvailableDoctors.length && isCreatorAuthenticated()) return false;
+  availableRosterDoctors = isCreatorAuthenticated() && incomingAvailableDoctors.length
+    ? mergeAvailableRosterDoctors(availableRosterDoctors, incomingAvailableDoctors)
+    : incomingAvailableDoctors;
+  return incomingAvailableDoctors.length > 0;
+}
+
 function applyCloudStateContext(data) {
   const previousInsightsEnabled = currentInsightsEnabled;
   currentInsightsEnabled = currentUserRole === "creator" || data.insightsEnabled === true;
   currentSuggestedClaims = sanitizeRosterClaims(data.suggestedClaims || data.nameMatches || []);
   latestNameMatches = currentSuggestedClaims;
-  const incomingAvailableDoctors = sanitizeAvailableRosterDoctors(data.availableDoctors || []);
-  if (incomingAvailableDoctors.length || !isCreatorAuthenticated()) {
-    availableRosterDoctors = isCreatorAuthenticated() && incomingAvailableDoctors.length
-      ? mergeAvailableRosterDoctors(availableRosterDoctors, incomingAvailableDoctors)
-      : incomingAvailableDoctors;
-  }
+  applyAvailableRosterDoctorsFromData(data);
   currentSubscription = sanitizeSubscription(data.subscription);
   applyIssueConfig(data.issueConfig);
   if (previousInsightsEnabled !== currentInsightsEnabled && latestPreview) rebuildClientPreview();
@@ -11975,7 +11979,8 @@ async function applyCloudStateData(data, options = {}) {
   if (!calendarTransitionStillCurrent(options.transition)) return false;
   applyCloudStateIdentity(data);
   if (!calendarTransitionStillCurrent(options.transition)) return false;
-  if (!options.deferContext) applyCloudStateContext(data);
+  if (options.deferContext) applyAvailableRosterDoctorsFromData(data);
+  else applyCloudStateContext(data);
   if (!calendarTransitionStillCurrent(options.transition)) return false;
   await applyCloudStateSnapshot(data, options);
   return calendarTransitionStillCurrent(options.transition);
