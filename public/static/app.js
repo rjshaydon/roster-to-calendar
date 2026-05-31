@@ -159,6 +159,7 @@ const ACCOUNT_STATE_KEY = "roster-account-state";
 const SESSION_STATE_KEY = "roster-session-state-v1";
 const ACCOUNT_WORKSPACES_KEY = "roster-account-workspaces-v1";
 const CALENDAR_SNAPSHOT_CACHE_KEY = "roster-calendar-snapshot-cache-v1";
+const MAX_MEMORY_SNAPSHOT_CACHE_ENTRIES = 160;
 const ROSTER_OVERLAP_DOCTOR_CACHE_KEY = "roster-overlap-doctor-cache-v1";
 const CURRENT_EMAIL_KEY = "roster-current-email";
 const CURRENT_PASSWORD_KEY = "roster-current-password";
@@ -275,6 +276,7 @@ let currentRosterClaims = [];
 let currentSuggestedClaims = [];
 let latestNameMatches = [];
 let availableRosterDoctors = [];
+let calendarSnapshotMemoryCache = new Map();
 let calendarImportPollPromise = null;
 let calendarImportPollRunId = 0;
 let currentSubscription = null;
@@ -726,6 +728,8 @@ backToCreatorButton.addEventListener("click", () => {
 doctorSelect.addEventListener("change", async () => {
   await switchDoctorSelection(doctorSelect.value, { resetRange: true });
 });
+doctorSelect.addEventListener("pointerdown", () => queueCreatorSwitchTargetPrefetch());
+doctorSelect.addEventListener("focus", () => queueCreatorSwitchTargetPrefetch());
 
 claimDoctorSelect.addEventListener("change", () => {
   claimDoctorButton.disabled = !claimDoctorSelect.value;
@@ -757,6 +761,8 @@ mobileDoctorSelect?.addEventListener("change", async () => {
   if (mobileDoctorSelect.disabled) return;
   await switchDoctorSelection(mobileDoctorSelect.value, { resetRange: true });
 });
+mobileDoctorSelect?.addEventListener("pointerdown", () => queueCreatorSwitchTargetPrefetch());
+mobileDoctorSelect?.addEventListener("focus", () => queueCreatorSwitchTargetPrefetch());
 mobileDateFrom?.addEventListener("change", () => {
   applyPreviewRangeChange("from", mobileDateFrom.value);
   syncMobileSettingsControls();
@@ -1039,6 +1045,9 @@ preview.addEventListener("click", (event) => {
   openCustomEventModal(null, cell.dataset.addDate);
 });
 preview.addEventListener("pointerdown", (event) => {
+  if (event.target.closest("[data-preview-doctor-select]")) {
+    queueCreatorSwitchTargetPrefetch();
+  }
   const chip = event.target.closest("[data-review-id]");
   if (!chip || event.button !== 0) return;
   if (isMobileLayout()) {
@@ -1046,6 +1055,11 @@ preview.addEventListener("pointerdown", (event) => {
     return;
   }
   startPreviewGesture(event, chip);
+});
+preview.addEventListener("focusin", (event) => {
+  if (event.target.closest("[data-preview-doctor-select]")) {
+    queueCreatorSwitchTargetPrefetch();
+  }
 });
 preview.addEventListener("change", (event) => {
   const doctorPicker = event.target.closest("[data-preview-doctor-select]");
@@ -5504,7 +5518,7 @@ async function switchDoctorSelection(selectedKey, options = {}) {
   doctorSelect.value = selectedKey;
   const canSwitchAsCreator = canUseCreatorDoctorSwitcher();
   if (canSwitchAsCreator && cloudAvailable && (!serverUsers.length || !availableRosterDoctors.length)) {
-    await loadServerUsers();
+    void loadServerUsers();
   }
   const selectedOption = selectedDoctorOptionForKey(selectedKey);
   if (canSwitchAsCreator && normalizedSelectedKey === OWNER_DOCTOR_KEY) {
@@ -5518,11 +5532,15 @@ async function switchDoctorSelection(selectedKey, options = {}) {
   }
   let resolvedAccount = null;
   if (canSwitchAsCreator && selectedOption) {
-    try {
-      resolvedAccount = await resolveDoctorAccountForSwitch(selectedOption);
-    } catch (error) {
-      setStatus(error.message || "Could not check whether that calendar is claimed.", true);
-      return;
+    resolvedAccount = locallyResolvedDoctorAccountForSwitch(selectedOption, selectedKey);
+    if (!resolvedAccount) {
+      setStatus(`Opening ${selectedOption.displayName}...`);
+      try {
+        resolvedAccount = await resolveDoctorAccountForSwitch(selectedOption);
+      } catch (error) {
+        setStatus(error.message || "Could not check whether that calendar is claimed.", true);
+        return;
+      }
     }
   }
   const claimedEmail = normalizeEmail(resolvedAccount?.email || selectedOption?.accountEmail || claimedEmailForDoctorKey(selectedKey, selectedOption?.displayName || ""));
@@ -5537,7 +5555,10 @@ async function switchDoctorSelection(selectedKey, options = {}) {
             doctorKey: switchProfile.doctorKey,
           })
         : null;
-    if (!targetContext || !loadCachedCalendarSnapshotForContext(targetContext)?.preview) {
+    const targetSnapshotReady = targetContext
+      ? Boolean(await loadCachedCalendarSnapshotForContextAsync(targetContext))
+      : false;
+    if (!targetContext || !targetSnapshotReady) {
       showSwitchOverlay(
         `Switching to ${selectedOption.displayName}…`,
         resolvedAccount?.mode === "claimed-account" ? "Opening the linked account calendar." : "Opening the roster calendar and loading saved doctor-profile edits.",
@@ -5587,6 +5608,28 @@ async function resolveDoctorAccountForSwitch(doctor) {
     mode,
     email: mode === "claimed-account" ? normalizeEmail(data.email) : "",
   };
+}
+
+function locallyResolvedDoctorAccountForSwitch(doctor, selectedKey = "") {
+  const accountEmail = currentClaimedAccountEmail(doctor?.accountEmail || doctor?.claimedBy || "")
+    || claimedEmailForDoctorKey(selectedKey || doctor?.key || "", doctor?.displayName || "");
+  if (accountEmail) {
+    return {
+      mode: "claimed-account",
+      email: accountEmail,
+    };
+  }
+  if (
+    doctor?.targetMode === "doctor-profile"
+    && availableRosterDoctors.length
+    && serverUsers.length
+  ) {
+    return {
+      mode: "doctor-profile",
+      email: "",
+    };
+  }
+  return null;
 }
 
 function selectedDoctorOptionForKey(selectedKey) {
@@ -9495,7 +9538,7 @@ async function enterUserAccount(email) {
   forceConsoleSkin();
   setStatus(`Entering ${targetEmail}...`);
   const targetContext = accountCalendarContextForEmail(targetEmail);
-  const renderedCachedSnapshot = renderCachedCalendarSnapshotForContext(targetContext, { accountSwitchStartedAt, transition });
+  const renderedCachedSnapshot = await renderCachedCalendarSnapshotForContextAsync(targetContext, { accountSwitchStartedAt, transition });
   if (!renderedCachedSnapshot) {
     clearPreviewData();
     doctorOptions = [];
@@ -9565,7 +9608,7 @@ async function enterDoctorProfileView(doctor) {
   sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
   setStatus(`Opening ${doctor.displayName}...`);
   const renderedCachedSnapshot = targetContext
-    ? renderCachedCalendarSnapshotForContext(targetContext, { accountSwitchStartedAt, transition })
+    ? await renderCachedCalendarSnapshotForContextAsync(targetContext, { accountSwitchStartedAt, transition })
     : false;
   if (!renderedCachedSnapshot) {
     currentSnapshot = null;
@@ -10070,7 +10113,7 @@ async function returnToCreatorAccount() {
   forceCreatorDoctorSession();
   restoreCreatorImportFilesIfNeeded();
   const targetContext = accountCalendarContextForEmail(OWNER_EMAIL);
-  const renderedCachedSnapshot = renderCachedCalendarSnapshotForContext(targetContext, { accountSwitchStartedAt, transition });
+  const renderedCachedSnapshot = await renderCachedCalendarSnapshotForContextAsync(targetContext, { accountSwitchStartedAt, transition });
   restoreCreatorImportFilesIfNeeded();
   renderFileSurfaces();
   renderLoginState();
@@ -11535,6 +11578,7 @@ async function hydrateAuthenticatedWorkspace(options = {}, loginStartedAt = 0) {
           // Keep the last merged doctor list.
         }
         if (latestPreview) renderDoctorState();
+        queueCreatorSwitchTargetPrefetch();
       }).catch(() => null);
     }
   } catch (error) {
@@ -12255,6 +12299,25 @@ function creatorSwitchTargetsForPrefetch() {
   if (!isViewingCreatorAccount()) return [];
   const seen = new Set();
   const targets = [];
+  for (const doctor of doctorPickerOptions()) {
+    const accountEmail = currentClaimedAccountEmail(doctor.accountEmail || doctor.claimedBy || "");
+    if (normalizeRosterName(doctor.key) === OWNER_DOCTOR_KEY) continue;
+    const profile = accountEmail ? null : doctorProfileForDoctor(doctor);
+    if (!accountEmail && !profile?.id) continue;
+    const context = accountEmail
+      ? accountCalendarContextForEmail(accountEmail)
+      : calendarSnapshotContext({
+          mode: "doctor-profile",
+          ownerId: profile.ownerId,
+          doctorKey: profile.doctorKey,
+        });
+    const key = calendarSnapshotCacheKeyForContext(context);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    targets.push(accountEmail
+      ? { kind: "account", email: accountEmail, context }
+      : { kind: "doctor-profile", profile, context });
+  }
   for (const user of serverUsers.map(normalizeServerUser)) {
     if (!user?.email || user.email === OWNER_EMAIL) continue;
     const context = accountCalendarContextForEmail(user.email);
@@ -12267,31 +12330,12 @@ function creatorSwitchTargetsForPrefetch() {
       context,
     });
   }
-  for (const doctor of doctorPickerOptions()) {
-    const accountEmail = currentClaimedAccountEmail(doctor.accountEmail || doctor.claimedBy || "");
-    if (accountEmail || normalizeRosterName(doctor.key) === OWNER_DOCTOR_KEY) continue;
-    const profile = doctorProfileForDoctor(doctor);
-    if (!profile?.id) continue;
-    const context = calendarSnapshotContext({
-      mode: "doctor-profile",
-      ownerId: profile.ownerId,
-      doctorKey: profile.doctorKey,
-    });
-    const key = calendarSnapshotCacheKeyForContext(context);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    targets.push({
-      kind: "doctor-profile",
-      profile,
-      context,
-    });
-  }
   return targets;
 }
 
 async function prefetchCreatorSwitchTarget(target) {
   if (!isViewingCreatorAccount() || !cloudAvailable) return;
-  if (loadCachedCalendarSnapshotForContext(target.context)?.preview) return;
+  if ((await loadCachedCalendarSnapshotForContextAsync(target.context))?.preview) return;
   const requestEmail = authUserEmail || currentUserEmail;
   const requestPassword = authUserPassword || currentUserPassword;
   if (!requestEmail || !requestPassword) return;
@@ -12324,6 +12368,7 @@ async function prefetchCreatorSwitchTarget(target) {
         doctorKey: target.profile.doctorKey,
         displayName: target.profile.displayName,
         sourceTypes: target.profile.sourceTypes,
+        aliases: target.profile.aliases,
         allowInlineBuild: false,
         skipRebuild: true,
       }),
@@ -12340,13 +12385,20 @@ async function prefetchCreatorSwitchTarget(target) {
 
 function queueCreatorSwitchTargetPrefetch() {
   if (!isViewingCreatorAccount() || !cloudAvailable || !isCreatorAuthenticated()) return;
-  const runId = ++switchTargetPrefetchRunId;
   if (switchTargetPrefetchPromise) return;
+  const runId = ++switchTargetPrefetchRunId;
   switchTargetPrefetchPromise = (async () => {
-    for (const target of creatorSwitchTargetsForPrefetch()) {
-      if (runId !== switchTargetPrefetchRunId || !isViewingCreatorAccount()) return;
-      await prefetchCreatorSwitchTarget(target).catch(() => null);
-    }
+    const targets = creatorSwitchTargetsForPrefetch();
+    let nextIndex = 0;
+    const workerCount = Math.min(4, targets.length);
+    await Promise.all(Array.from({ length: workerCount }, async () => {
+      while (nextIndex < targets.length) {
+        const target = targets[nextIndex];
+        nextIndex += 1;
+        if (runId !== switchTargetPrefetchRunId || !isViewingCreatorAccount()) return;
+        await prefetchCreatorSwitchTarget(target).catch(() => null);
+      }
+    }));
   })().finally(() => {
     if (runId === switchTargetPrefetchRunId) switchTargetPrefetchPromise = null;
   });
@@ -13405,6 +13457,39 @@ function loadCalendarSnapshotCacheStore() {
   }
 }
 
+function normalizeCalendarSnapshotCacheEntry(entry, key = "") {
+  if (!entry) return null;
+  const snapshot = sanitizeWorkspaceSnapshot(entry?.snapshot || entry);
+  if (!snapshot?.preview) return null;
+  const cachedAt = String(entry?.cachedAt || snapshot.cachedAt || new Date().toISOString());
+  const calendarRevision = String(entry?.calendarRevision || snapshot.calendarRevision || "");
+  snapshot.cacheKey = key || snapshot.cacheKey || "";
+  snapshot.calendarRevision = calendarRevision;
+  snapshot.cachedAt = cachedAt;
+  return {
+    calendarRevision,
+    cachedAt,
+    snapshot,
+  };
+}
+
+function rememberCalendarSnapshotCacheEntry(key, entry) {
+  if (!key || !entry?.snapshot?.preview) return;
+  calendarSnapshotMemoryCache.delete(key);
+  calendarSnapshotMemoryCache.set(key, entry);
+  if (calendarSnapshotMemoryCache.size <= MAX_MEMORY_SNAPSHOT_CACHE_ENTRIES) return;
+  const oldest = [...calendarSnapshotMemoryCache.entries()]
+    .sort((left, right) => String(left[1]?.cachedAt || "").localeCompare(String(right[1]?.cachedAt || "")))[0]?.[0];
+  if (oldest) calendarSnapshotMemoryCache.delete(oldest);
+}
+
+function calendarSnapshotFromCacheEntry(entry, key = "") {
+  const normalized = normalizeCalendarSnapshotCacheEntry(entry, key);
+  if (!normalized) return null;
+  rememberCalendarSnapshotCacheEntry(key || normalized.snapshot.cacheKey || "", normalized);
+  return normalized.snapshot;
+}
+
 function saveCalendarSnapshotCacheStore(store) {
   try {
     localStorage.setItem(CALENDAR_SNAPSHOT_CACHE_KEY, JSON.stringify(store || {}));
@@ -13457,13 +13542,10 @@ function currentCalendarSnapshotCacheKey(options = {}) {
 function loadCachedCalendarSnapshotForContext(context = {}) {
   const key = calendarSnapshotCacheKeyForContext(context);
   if (!key) return null;
+  const memoryEntry = calendarSnapshotMemoryCache.get(key);
+  if (memoryEntry) return calendarSnapshotFromCacheEntry(memoryEntry, key);
   const entry = loadCalendarSnapshotCacheStore()[key];
-  const snapshot = sanitizeWorkspaceSnapshot(entry?.snapshot || entry);
-  if (!snapshot?.preview) return null;
-  snapshot.cacheKey = key;
-  snapshot.calendarRevision = String(entry?.calendarRevision || snapshot.calendarRevision || "");
-  snapshot.cachedAt = String(entry?.cachedAt || snapshot.cachedAt || "");
-  return snapshot;
+  return calendarSnapshotFromCacheEntry(entry, key);
 }
 
 function loadCachedCalendarSnapshot() {
@@ -13485,12 +13567,15 @@ function saveCalendarSnapshotCacheForContext(snapshot = currentSnapshot, context
   sanitized.cacheKey = key;
   sanitized.calendarRevision = String(sanitized.calendarRevision || currentCalendarRevision || "");
   sanitized.cachedAt = new Date().toISOString();
-  store[key] = {
+  const entry = {
     calendarRevision: sanitized.calendarRevision,
     cachedAt: sanitized.cachedAt,
     snapshot: sanitized,
   };
+  rememberCalendarSnapshotCacheEntry(key, entry);
+  store[key] = entry;
   saveCalendarSnapshotCacheStore(store);
+  queueStoredCalendarSnapshotPersist(key, entry);
 }
 
 function saveCalendarSnapshotCache(snapshot = currentSnapshot) {
@@ -13526,7 +13611,7 @@ function invalidateCalendarSnapshotCache() {
   invalidateCalendarSnapshotCachesForSourceTypes(["mmc", "ddh", "casey", "mch"], { includeCreator: true, includeAllProfiles: true });
 }
 
-function sourceTypesFromCalendarSnapshotCacheKey(key = "") {
+function sourceTypesFromCalendarSnapshotCacheKey(key = "", entry = null) {
   const [mode = "", ownerId = "", doctorKey = ""] = String(key || "").split("|");
   if (mode === "doctor-profile") {
     const profileId = ownerId.startsWith("doctor-profile:") ? ownerId.slice("doctor-profile:".length) : ownerId;
@@ -13536,7 +13621,7 @@ function sourceTypesFromCalendarSnapshotCacheKey(key = "") {
   if (mode === "creator-account") {
     return ["mmc", "ddh", "casey", "mch"];
   }
-  const snapshot = loadCalendarSnapshotCacheStore()[key]?.snapshot;
+  const snapshot = entry?.snapshot || loadCalendarSnapshotCacheStore()[key]?.snapshot;
   const doctor = Array.isArray(snapshot?.doctorOptions)
     ? snapshot.doctorOptions.find((entry) => normalizeRosterName(entry?.key || "") === normalizeRosterName(doctorKey))
       || snapshot.doctorOptions[0]
@@ -13556,7 +13641,7 @@ function calendarSnapshotCacheAffectedBySourceTypes(key = "", entry = null, chan
   if (!changed.size || options.includeAllProfiles === true) return true;
   const mode = String(key || "").split("|")[0] || "";
   if (options.includeCreator !== false && mode === "creator-account") return true;
-  const profileSources = sourceTypesFromCalendarSnapshotCacheKey(key);
+  const profileSources = sourceTypesFromCalendarSnapshotCacheKey(key, entry);
   if (!profileSources.length) return false;
   return profileSources.some((sourceType) => changed.has(sourceType));
 }
@@ -13570,7 +13655,13 @@ function invalidateCalendarSnapshotCachesForSourceTypes(changedSourceTypes = [],
       delete store[key];
       changed = true;
     }
+    for (const [key, entry] of calendarSnapshotMemoryCache.entries()) {
+      if (!calendarSnapshotCacheAffectedBySourceTypes(key, entry, changedSourceTypes, options)) continue;
+      calendarSnapshotMemoryCache.delete(key);
+      changed = true;
+    }
     if (changed) saveCalendarSnapshotCacheStore(store);
+    void deleteStoredCalendarSnapshotsForSourceTypes(changedSourceTypes, options).catch(() => null);
   } catch {
     // Cache invalidation must not block the foreground workflow.
   }
@@ -13593,6 +13684,19 @@ function renderCachedCalendarSnapshotForContext(context = {}, options = {}) {
   if (!calendarTransitionStillCurrent(options.transition)) return false;
   const cached = loadCachedCalendarSnapshotForContext(context);
   if (!cached?.preview) return false;
+  return applyCachedCalendarSnapshot(cached, options);
+}
+
+async function renderCachedCalendarSnapshotForContextAsync(context = {}, options = {}) {
+  if (renderCachedCalendarSnapshotForContext(context, options)) return true;
+  if (!calendarTransitionStillCurrent(options.transition)) return false;
+  const cached = await loadCachedCalendarSnapshotForContextAsync(context);
+  if (!cached?.preview) return false;
+  if (!calendarTransitionStillCurrent(options.transition)) return false;
+  return applyCachedCalendarSnapshot(cached, options);
+}
+
+function applyCachedCalendarSnapshot(cached, options = {}) {
   const expectedRevision = String(options.expectedRevision || "");
   if (expectedRevision && String(cached.calendarRevision || "") !== expectedRevision) return false;
   if (!calendarTransitionStillCurrent(options.transition)) return false;
@@ -13910,8 +14014,9 @@ function handleHistoryShortcut(event) {
 }
 
 const DB_NAME = "roster-converter";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const IMPORT_STORE = "imports";
+const SNAPSHOT_STORE = "calendarSnapshots";
 const CONFLICT_SELECTIONS_KEY = "roster-conflict-selections";
 
 async function openImportsDb() {
@@ -13925,10 +14030,111 @@ async function openImportsDb() {
       if (!db.objectStoreNames.contains(IMPORT_STORE)) {
         db.createObjectStore(IMPORT_STORE, { keyPath: "id" });
       }
+      if (!db.objectStoreNames.contains(SNAPSHOT_STORE)) {
+        db.createObjectStore(SNAPSHOT_STORE, { keyPath: "key" });
+      }
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error || new Error("Could not open import storage."));
   });
+}
+
+async function loadStoredCalendarSnapshotEntry(key) {
+  if (!key || !("indexedDB" in window)) return null;
+  const db = await openImportsDb();
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(SNAPSHOT_STORE, "readonly");
+      const request = tx.objectStore(SNAPSHOT_STORE).get(key);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error || new Error("Could not load snapshot cache."));
+    });
+  } finally {
+    db.close();
+  }
+}
+
+async function loadCachedCalendarSnapshotForContextAsync(context = {}) {
+  const cached = loadCachedCalendarSnapshotForContext(context);
+  if (cached?.preview) return cached;
+  const key = calendarSnapshotCacheKeyForContext(context);
+  if (!key) return null;
+  const stored = await loadStoredCalendarSnapshotEntry(key).catch(() => null);
+  const entry = normalizeCalendarSnapshotCacheEntry(stored, key);
+  if (!entry) return null;
+  rememberCalendarSnapshotCacheEntry(key, entry);
+  return entry.snapshot;
+}
+
+async function saveStoredCalendarSnapshotEntry(key, entry) {
+  if (!key || !entry?.snapshot?.preview || !("indexedDB" in window)) return;
+  const db = await openImportsDb();
+  try {
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(SNAPSHOT_STORE, "readwrite");
+      tx.objectStore(SNAPSHOT_STORE).put({
+        key,
+        calendarRevision: String(entry.calendarRevision || ""),
+        cachedAt: String(entry.cachedAt || new Date().toISOString()),
+        snapshot: entry.snapshot,
+      });
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error || new Error("Could not save snapshot cache."));
+    });
+  } finally {
+    db.close();
+  }
+}
+
+function queueStoredCalendarSnapshotPersist(key, entry) {
+  const run = () => {
+    void saveStoredCalendarSnapshotEntry(key, entry).catch(() => null);
+  };
+  if (typeof requestIdleCallback === "function") {
+    requestIdleCallback(run, { timeout: 1500 });
+  } else {
+    window.setTimeout(run, 0);
+  }
+}
+
+async function deleteStoredCalendarSnapshots(keys = []) {
+  const uniqueKeys = [...new Set(keys.filter(Boolean))];
+  if (!uniqueKeys.length || !("indexedDB" in window)) return;
+  const db = await openImportsDb();
+  try {
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(SNAPSHOT_STORE, "readwrite");
+      const store = tx.objectStore(SNAPSHOT_STORE);
+      for (const key of uniqueKeys) store.delete(key);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error || new Error("Could not clear snapshot cache."));
+    });
+  } finally {
+    db.close();
+  }
+}
+
+async function deleteStoredCalendarSnapshotsForSourceTypes(changedSourceTypes = [], options = {}) {
+  if (!("indexedDB" in window)) return;
+  const db = await openImportsDb();
+  try {
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(SNAPSHOT_STORE, "readwrite");
+      const store = tx.objectStore(SNAPSHOT_STORE);
+      const request = store.getAll();
+      request.onsuccess = () => {
+        for (const entry of request.result || []) {
+          if (!calendarSnapshotCacheAffectedBySourceTypes(entry.key, entry, changedSourceTypes, options)) continue;
+          store.delete(entry.key);
+        }
+      };
+      request.onerror = () => reject(request.error || new Error("Could not inspect snapshot cache."));
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error || new Error("Could not clear snapshot cache."));
+    });
+  } finally {
+    db.close();
+  }
 }
 
 async function saveStoredImport(entry) {
