@@ -1683,6 +1683,10 @@ body[data-skin="console"] .preview-cell.is-weekend {
   box-shadow: 0 30px 90px rgba(20, 34, 42, 0.26);
 }
 
+.modal-panel-wide {
+  width: min(980px, calc(100% - 24px));
+}
+
 .modal-close {
   position: absolute;
   top: 12px;
@@ -1721,6 +1725,21 @@ body[data-skin="console"] .preview-cell.is-weekend {
   overflow-y: auto;
   overscroll-behavior: contain;
   padding-right: 4px;
+}
+
+.shift-code-review-controls {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(160px, 220px);
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.shift-code-review-source > summary {
+  cursor: pointer;
+}
+
+.shift-code-review-row {
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .export-variant-picker {
@@ -2560,6 +2579,11 @@ body[data-skin="console"] .panel {
 }
 
 @media (max-width: 760px) {
+  .shift-code-review-controls,
+  .shift-code-review-row {
+    grid-template-columns: 1fr;
+  }
+
   html,
   body {
     max-width: 100%;

@@ -64,6 +64,10 @@ const insightsCloseButton = document.querySelector("#insightsCloseButton");
 const insightsModalTitle = document.querySelector("#insightsModalTitle");
 const insightsModalSubtitle = document.querySelector("#insightsModalSubtitle");
 const insightsModalBody = document.querySelector("#insightsModalBody");
+const shiftCodeReviewModal = document.querySelector("#shiftCodeReviewModal");
+const shiftCodeReviewCloseButton = document.querySelector("#shiftCodeReviewCloseButton");
+const shiftCodeReviewModalSubtitle = document.querySelector("#shiftCodeReviewModalSubtitle");
+const shiftCodeReviewModalBody = document.querySelector("#shiftCodeReviewModalBody");
 const loginBar = document.querySelector("#loginBar");
 const loginIdentity = document.querySelector("#loginIdentity");
 const logoutButton = document.querySelector("#logoutButton");
@@ -345,6 +349,7 @@ let globalUnresolvedShiftCodesLoading = false;
 let globalUnresolvedShiftCodesLoaded = false;
 let globalUnresolvedShiftCodesError = "";
 let globalUnresolvedShiftCodeRunId = 0;
+let shiftCodeReviewFilter = { query: "", source: "all" };
 let parserRuleSaveContext = { mode: "global", suggestionId: "", targetEmail: "" };
 let dismissedIssueFingerprints = new Set();
 let ignoredIssueFingerprints = new Set();
@@ -362,6 +367,7 @@ const overlayObserver = new MutationObserver(syncOverlayState);
   filesModal,
   accountsModal,
   insightsModal,
+  shiftCodeReviewModal,
   parserRuleModal,
   reviewModal,
   customEventModal,
@@ -513,6 +519,59 @@ insightsCloseButton.addEventListener("click", closeInsightsModal);
 insightsModal.addEventListener("click", (event) => {
   if (event.target.matches("[data-close-insights]")) closeInsightsModal();
 });
+shiftCodeReviewCloseButton?.addEventListener("click", closeShiftCodeReviewModal);
+shiftCodeReviewModal?.addEventListener("click", (event) => {
+  if (event.target.matches("[data-close-shift-code-review]")) closeShiftCodeReviewModal();
+});
+shiftCodeReviewModalBody?.addEventListener("input", (event) => {
+  const queryInput = event.target.closest("[data-shift-code-review-search]");
+  if (!queryInput) return;
+  shiftCodeReviewFilter = { ...shiftCodeReviewFilter, query: String(queryInput.value || "") };
+  renderShiftCodeReviewResults();
+});
+shiftCodeReviewModalBody?.addEventListener("change", (event) => {
+  const sourceFilter = event.target.closest("[data-shift-code-review-source]");
+  if (!sourceFilter) return;
+  shiftCodeReviewFilter = { ...shiftCodeReviewFilter, source: String(sourceFilter.value || "all") };
+  renderShiftCodeReviewResults();
+});
+shiftCodeReviewModalBody?.addEventListener("click", (event) => {
+  const addRosterShiftCodeButton = event.target.closest("[data-add-roster-shift-code]");
+  if (addRosterShiftCodeButton) {
+    openRosterShiftCodeRuleModal(
+      addRosterShiftCodeButton.dataset.addRosterShiftCode || "",
+      splitShiftCodeSeniorities(addRosterShiftCodeButton.dataset.shiftCodeSeniorities || ""),
+    );
+    return;
+  }
+  const ignoreRosterShiftCodeRuleButton = event.target.closest("[data-ignore-roster-shift-code]");
+  if (ignoreRosterShiftCodeRuleButton) {
+    openRosterShiftCodeRuleModal(
+      ignoreRosterShiftCodeRuleButton.dataset.ignoreRosterShiftCode || "",
+      splitShiftCodeSeniorities(ignoreRosterShiftCodeRuleButton.dataset.shiftCodeSeniorities || ""),
+      { ignore: true },
+    );
+    return;
+  }
+  const addShiftCodeButton = event.target.closest("[data-add-shift-code]");
+  if (addShiftCodeButton) {
+    openParserRuleModal(
+      addShiftCodeButton.dataset.addShiftCode || "",
+      addShiftCodeButton.dataset.errorId || "",
+      splitShiftCodeSeniorities(addShiftCodeButton.dataset.shiftCodeSeniorities || ""),
+    );
+    return;
+  }
+  const ignoreShiftCodeButton = event.target.closest("[data-ignore-shift-code]");
+  if (ignoreShiftCodeButton) {
+    openParserRuleModal(
+      ignoreShiftCodeButton.dataset.ignoreShiftCode || "",
+      ignoreShiftCodeButton.dataset.errorId || "",
+      splitShiftCodeSeniorities(ignoreShiftCodeButton.dataset.shiftCodeSeniorities || ""),
+      { ignore: true },
+    );
+  }
+});
 accountsBody.addEventListener("submit", (event) => {
   event.preventDefault();
   const createForm = event.target.closest("[data-create-account-form]");
@@ -560,6 +619,10 @@ accountsBody.addEventListener("click", (event) => {
     currentAdminTab = nextTab;
     renderAccountsModal();
     queueGlobalUnresolvedShiftCodeLoad();
+    return;
+  }
+  if (event.target.closest("[data-open-shift-code-review]")) {
+    openShiftCodeReviewModal();
     return;
   }
   const clearAdminErrorsButton = event.target.closest("[data-clear-admin-errors]");
@@ -1274,9 +1337,16 @@ reviewModal.addEventListener("click", (event) => {
 document.addEventListener("keydown", (event) => {
   if (handleHistoryShortcut(event)) return;
   if (event.key === "Escape") {
+    if (parserRuleModal && !parserRuleModal.classList.contains("hidden")) {
+      closeParserRuleModal();
+      return;
+    }
+    if (shiftCodeReviewModal && !shiftCodeReviewModal.classList.contains("hidden")) {
+      closeShiftCodeReviewModal();
+      return;
+    }
     closeReviewModal();
     closeCustomEventModal();
-    closeParserRuleModal();
     closeContextMenu();
     closeFilesModal();
     closeExportModal();
@@ -1968,6 +2038,7 @@ function syncOverlayState() {
     filesModal,
     accountsModal,
     insightsModal,
+    shiftCodeReviewModal,
     parserRuleModal,
     reviewModal,
     customEventModal,
@@ -7337,6 +7408,7 @@ function hasActiveExportFilters() {
 
 function closeAccountsModal() {
   adminConsoleOpen = false;
+  closeShiftCodeReviewModal();
   accountsModal.classList.add("hidden");
   accountsModal.setAttribute("aria-hidden", "true");
 }
@@ -7936,27 +8008,11 @@ function renderParserRulesCard() {
             <strong>Missing / unresolved shift codes</strong>
             <span>${unknownIssues.length ? `${unknownIssues.length} code${unknownIssues.length === 1 ? "" : "s"} needing review` : "No unresolved shift codes."}</span>
           </div>
+          <button type="button" class="button button-secondary button-small" data-open-shift-code-review ${unknownIssues.length ? "" : "disabled"}>Review</button>
           <button type="button" class="button button-secondary button-small" data-add-manual-shift-code>Add</button>
         </div>
         <div class="issues-list">
-          ${unknownIssues.length ? unknownIssues.map((item) => `
-            <article class="issue-card">
-              <div>
-                <strong>${escapeHtml(item.source)} · ${escapeHtml(item.code)}</strong>
-                <p>${escapeHtml(item.seniorityLabel)}</p>
-                <p>${escapeHtml(item.message || "Shift code not recognised.")}</p>
-                <p>${escapeHtml(item.sample)}${item.count > 1 ? ` · seen ${item.count} times` : ""}</p>
-              </div>
-              <div class="account-actions">
-                ${item.email
-                  ? `<button type="button" class="button button-secondary" data-add-shift-code="${escapeHtml(item.email)}" data-error-id="${escapeHtml(item.id)}" data-shift-code-seniorities="${escapeHtml(item.seniorities.join("|"))}">Edit shift code</button>`
-                  : `<button type="button" class="button button-secondary" data-add-roster-shift-code="${escapeHtml(item.id)}" data-shift-code-seniorities="${escapeHtml(item.seniorities.join("|"))}">Edit shift code</button>`}
-                ${item.email
-                  ? `<button type="button" class="button button-secondary" data-ignore-shift-code="${escapeHtml(item.email)}" data-error-id="${escapeHtml(item.id)}" data-shift-code-seniorities="${escapeHtml(item.seniorities.join("|"))}">Ignore</button>`
-                  : `<button type="button" class="button button-secondary" data-ignore-roster-shift-code="${escapeHtml(item.id)}" data-shift-code-seniorities="${escapeHtml(item.seniorities.join("|"))}">Ignore</button>`}
-              </div>
-            </article>
-          `).join("") : `<article class="issue-card"><p>No missing or unresolved shift codes need review.</p></article>`}
+          ${unknownIssues.length ? `<article class="issue-card"><p>Open the review list to triage grouped unrecognised shift codes.</p></article>` : `<article class="issue-card"><p>No missing or unresolved shift codes need review.</p></article>`}
           ${globalUnresolvedShiftCodesLoading ? `<article class="issue-card"><p>Checking roster database for unresolved shift codes...</p></article>` : ""}
           ${globalUnresolvedShiftCodesError ? `<article class="issue-card"><p>${escapeHtml(globalUnresolvedShiftCodesError)}</p></article>` : ""}
         </div>
@@ -8033,6 +8089,131 @@ function renderParserRulesCard() {
       </article>
     </div>
   `;
+}
+
+function openShiftCodeReviewModal() {
+  if (!shiftCodeReviewModal || !shiftCodeReviewModalBody) return;
+  renderShiftCodeReviewModal();
+  shiftCodeReviewModal.classList.remove("hidden");
+  shiftCodeReviewModal.setAttribute("aria-hidden", "false");
+  queueGlobalUnresolvedShiftCodeLoad();
+}
+
+function closeShiftCodeReviewModal() {
+  if (!shiftCodeReviewModal) return;
+  shiftCodeReviewModal.classList.add("hidden");
+  shiftCodeReviewModal.setAttribute("aria-hidden", "true");
+  if (shiftCodeReviewModalBody) shiftCodeReviewModalBody.innerHTML = "";
+}
+
+function renderShiftCodeReviewModal() {
+  if (!shiftCodeReviewModalBody) return;
+  const allItems = collectUnknownShiftIssues();
+  const sources = [...new Set(allItems.map((item) => item.source).filter(Boolean))]
+    .sort((left, right) => sourceSortRank(left) - sourceSortRank(right) || left.localeCompare(right));
+  shiftCodeReviewModalBody.innerHTML = `
+    <div class="shift-code-review-controls">
+      <label class="field">
+        <span>Search</span>
+        <input type="search" value="${escapeHtml(shiftCodeReviewFilter.query)}" data-shift-code-review-search placeholder="Code, doctor, seniority, raw value">
+      </label>
+      <label class="field">
+        <span>Hospital</span>
+        <select data-shift-code-review-source>
+          <option value="all" ${shiftCodeReviewFilter.source === "all" ? "selected" : ""}>All hospitals</option>
+          ${sources.map((source) => `<option value="${escapeHtml(source)}" ${shiftCodeReviewFilter.source === source ? "selected" : ""}>${escapeHtml(source)}</option>`).join("")}
+        </select>
+      </label>
+    </div>
+    <div id="shiftCodeReviewResults"></div>
+  `;
+  renderShiftCodeReviewResults();
+}
+
+function renderShiftCodeReviewResults() {
+  const results = document.querySelector("#shiftCodeReviewResults");
+  if (!results) return;
+  const allItems = collectUnknownShiftIssues();
+  const filteredItems = filterShiftCodeReviewItems(allItems);
+  if (shiftCodeReviewModalSubtitle) {
+    shiftCodeReviewModalSubtitle.textContent = `${filteredItems.length} of ${allItems.length} grouped code${allItems.length === 1 ? "" : "s"} shown.`;
+  }
+  results.innerHTML = renderShiftCodeReviewResultsMarkup(filteredItems);
+}
+
+function filterShiftCodeReviewItems(items) {
+  const query = String(shiftCodeReviewFilter.query || "").trim().toLowerCase();
+  const source = sanitizeIssueSource(shiftCodeReviewFilter.source);
+  return (items || []).filter((item) => {
+    if (source && item.source !== source) return false;
+    if (!query) return true;
+    return [
+      item.source,
+      item.code,
+      item.seniorityLabel,
+      item.message,
+      item.sample,
+      item.rawValue,
+    ].some((value) => String(value || "").toLowerCase().includes(query));
+  });
+}
+
+function renderShiftCodeReviewResultsMarkup(items) {
+  if (globalUnresolvedShiftCodesLoading) {
+    return `<article class="issue-card"><p>Checking roster database for unresolved shift codes...</p></article>`;
+  }
+  if (globalUnresolvedShiftCodesError) {
+    return `<article class="issue-card"><p>${escapeHtml(globalUnresolvedShiftCodesError)}</p></article>`;
+  }
+  if (!items.length) {
+    return `<article class="issue-card"><p>No unresolved shift codes match this filter.</p></article>`;
+  }
+  const bySource = new Map();
+  for (const item of items) {
+    if (!bySource.has(item.source)) bySource.set(item.source, []);
+    bySource.get(item.source).push(item);
+  }
+  return [...bySource.entries()]
+    .sort(([left], [right]) => sourceSortRank(left) - sourceSortRank(right) || left.localeCompare(right))
+    .map(([source, sourceItems]) => `
+      <details class="issue-card shift-code-review-source" open>
+        <summary><strong>${escapeHtml(source)}</strong> · ${sourceItems.length} code${sourceItems.length === 1 ? "" : "s"}</summary>
+        <div class="issues-list">
+          ${sourceItems.map((item) => `
+            <article class="issue-card shift-code-review-row">
+              <div>
+                <strong>${escapeHtml(item.code)}</strong>
+                <p>${escapeHtml(item.seniorityLabel)} · ${escapeHtml(item.message || "Shift code not recognised.")}</p>
+                <p>${escapeHtml(item.sample)}${item.count > 1 ? ` · seen ${item.count} times` : ""}</p>
+              </div>
+              <div class="account-actions">
+                ${renderShiftCodeReviewIssueActions(item)}
+              </div>
+            </article>
+          `).join("")}
+        </div>
+      </details>
+    `).join("");
+}
+
+function renderShiftCodeReviewIssueActions(item) {
+  const seniorities = escapeHtml((item.seniorities || []).join("|"));
+  if (item.email) {
+    return `
+      <button type="button" class="button button-secondary" data-add-shift-code="${escapeHtml(item.email)}" data-error-id="${escapeHtml(item.id)}" data-shift-code-seniorities="${seniorities}">Edit shift code</button>
+      <button type="button" class="button button-secondary" data-ignore-shift-code="${escapeHtml(item.email)}" data-error-id="${escapeHtml(item.id)}" data-shift-code-seniorities="${seniorities}">Ignore</button>
+    `;
+  }
+  return `
+    <button type="button" class="button button-secondary" data-add-roster-shift-code="${escapeHtml(item.id)}" data-shift-code-seniorities="${seniorities}">Edit shift code</button>
+    <button type="button" class="button button-secondary" data-ignore-roster-shift-code="${escapeHtml(item.id)}" data-shift-code-seniorities="${seniorities}">Ignore</button>
+  `;
+}
+
+function sourceSortRank(source) {
+  const order = ["MMC", "DDH", "Casey", "MCH"];
+  const index = order.indexOf(sanitizeIssueSource(source));
+  return index >= 0 ? index : order.length;
 }
 
 function visibleParserRules(rules = []) {
@@ -12813,6 +12994,7 @@ async function loadGlobalUnresolvedShiftCodes() {
   globalUnresolvedShiftCodesLoading = true;
   globalUnresolvedShiftCodesError = "";
   renderAccountsModal();
+  if (shiftCodeReviewModal && !shiftCodeReviewModal.classList.contains("hidden")) renderShiftCodeReviewResults();
   try {
     const data = await calendarStoreRequest("listUnresolvedShiftCodes");
     if (runId !== globalUnresolvedShiftCodeRunId) return;
@@ -12825,6 +13007,7 @@ async function loadGlobalUnresolvedShiftCodes() {
     if (runId === globalUnresolvedShiftCodeRunId) {
       globalUnresolvedShiftCodesLoading = false;
       if (accountsModal && !accountsModal.classList.contains("hidden") && currentAdminTab === "system") renderAccountsModal();
+      if (shiftCodeReviewModal && !shiftCodeReviewModal.classList.contains("hidden")) renderShiftCodeReviewModal();
     }
   }
 }
