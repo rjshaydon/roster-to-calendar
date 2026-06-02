@@ -3931,7 +3931,6 @@ async function runCoreDerivedRosterSave(context, job = {}) {
     let supersession = null;
     if (phase === "complete" || phase === "finish") {
       supersession = await reconcileRosterFileSupersession(db, filePayload, { uploaderEmail: job.email || "" });
-      await refreshCanonicalDoctors(db);
       const postSave = () => {
         const presence = phase === "finish" || Number(result?.events || 0) > 1200
           ? rebuildDailyPresenceForFile(db, fileId)
@@ -3940,6 +3939,7 @@ async function runCoreDerivedRosterSave(context, job = {}) {
             doctors: job.doctors || [],
           });
         return Promise.resolve(presence).then(() => {
+          deferCanonicalDoctorRefresh(context, job.reason || "saveDerivedCalendarFile");
           scheduleSnapshotWarmupForSourceTypes(context, [String(filePayload.sourceType || "").toLowerCase()].filter(Boolean), {
             reason: job.reason || "saveDerivedCalendarFile",
           });
