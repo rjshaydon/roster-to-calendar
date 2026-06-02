@@ -592,11 +592,32 @@ export async function setDerivedRosterFileActive(db, fileId, active) {
 export async function deleteDerivedRosterFile(db, fileId) {
   if (!db?.prepare || !fileId) return;
   await ensureCalendarSchema(db);
+  const file = await db.prepare("SELECT source_type FROM roster_files WHERE id = ?").bind(fileId).first();
+  const sourceType = normalizeSourceType(file?.source_type || "");
   await db.prepare("DELETE FROM roster_events WHERE file_id = ?").bind(fileId).run();
   await db.prepare("DELETE FROM roster_issues WHERE file_id = ?").bind(fileId).run();
   await db.prepare("DELETE FROM roster_file_doctors WHERE file_id = ?").bind(fileId).run();
+  if (sourceType) await deleteOrphanRosterDoctors(db, [sourceType]);
   await deleteDailyPresenceForFile(db, fileId);
   await db.prepare("DELETE FROM roster_files WHERE id = ?").bind(fileId).run();
+}
+
+export async function deleteOrphanRosterDoctors(db, sourceTypes = []) {
+  if (!db?.prepare) return;
+  await ensureCalendarSchema(db);
+  const safeSourceTypes = [...new Set((sourceTypes || []).map(normalizeSourceType).filter(Boolean))];
+  for (const sourceType of safeSourceTypes) {
+    await db.prepare(`
+      DELETE FROM roster_doctors
+      WHERE source_type = ?
+        AND NOT EXISTS (
+          SELECT 1
+          FROM roster_file_doctors
+          WHERE roster_file_doctors.source_type = roster_doctors.source_type
+            AND roster_file_doctors.doctor_key = roster_doctors.doctor_key
+        )
+    `).bind(sourceType).run();
+  }
 }
 
 export async function verifyRosterFilesPurged(db, fileIds = []) {

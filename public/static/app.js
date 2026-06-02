@@ -11899,9 +11899,7 @@ function applyCloudStateIdentity(data) {
 function applyAvailableRosterDoctorsFromData(data) {
   const incomingAvailableDoctors = sanitizeAvailableRosterDoctors(data.availableDoctors || []);
   if (!incomingAvailableDoctors.length && isCreatorAuthenticated()) return false;
-  availableRosterDoctors = isCreatorAuthenticated() && incomingAvailableDoctors.length
-    ? mergeAvailableRosterDoctors(availableRosterDoctors, incomingAvailableDoctors)
-    : incomingAvailableDoctors;
+  availableRosterDoctors = incomingAvailableDoctors;
   return incomingAvailableDoctors.length > 0;
 }
 
@@ -12633,10 +12631,9 @@ async function loadServerUsers() {
     });
     const data = await readJsonResponse(response, "Could not load users.");
     serverUsers = data.users || [];
-    availableRosterDoctors = mergeAvailableRosterDoctors(
-      availableRosterDoctors,
-      sanitizeAvailableRosterDoctors(data.availableDoctors || []),
-    );
+    if (Array.isArray(data.availableDoctors)) {
+      applyAuthoritativeAvailableDoctors(data.availableDoctors);
+    }
     applyIssueConfig(data.issueConfig);
     syncAccountsButton();
     queueCreatorSwitchTargetPrefetch();
@@ -12662,7 +12659,7 @@ async function refreshCalendarStoreStatus(options = {}) {
     calendarStoreStatus = { ...data, checkedAt: new Date().toISOString() };
     if (options.includeAvailableDoctors === true && Array.isArray(data.availableDoctors)) {
       const incomingDoctors = sanitizeAvailableRosterDoctors(data.availableDoctors);
-      const shouldMergeDoctors = options.mergeAvailableDoctors !== false;
+      const shouldMergeDoctors = options.mergeAvailableDoctors === true;
       availableRosterDoctors = shouldMergeDoctors
         ? mergeAvailableRosterDoctors(availableRosterDoctors, incomingDoctors)
         : incomingDoctors;

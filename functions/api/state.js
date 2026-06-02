@@ -608,7 +608,7 @@ export async function onRequestPost(context) {
         const sourceTypes = await querySourceTypesForFileIds(context.env.ROSTER_DB, [fileId]).catch(() => []);
         await deleteDerivedRosterFile(context.env.ROSTER_DB, fileId);
         await deleteRetainedRosterSource(context.env.ROSTER_DB, context.env.ROSTER_FILES, fileId);
-        deferCanonicalDoctorRefresh(context, "resetDerivedCalendarFile");
+        await refreshCanonicalDoctors(context.env.ROSTER_DB);
         scheduleSnapshotWarmupForSourceTypes(context, sourceTypes, { reason: "resetDerivedCalendarFile" });
       } catch (error) {
         return Response.json({ error: error?.message || "Could not reset roster file." }, { status: 503 });
@@ -3803,7 +3803,7 @@ async function syncRosterRepositoryToKeepFileIds(context, keepFileIds = [], opti
       await deleteDerivedRosterFile(db, id);
       await deleteRetainedRosterSource(db, context.env.ROSTER_FILES, id);
     }
-    deferCanonicalDoctorRefresh(context, options.reason || "syncRosterRepository");
+    await refreshCanonicalDoctors(db);
     scheduleSnapshotWarmupForSourceTypes(context, sourceTypes, { reason: options.reason || "syncRosterRepository" });
   }
   const verification = await verifyRosterFilesPurged(db, removedFileIds);
@@ -3931,6 +3931,7 @@ async function runCoreDerivedRosterSave(context, job = {}) {
     let supersession = null;
     if (phase === "complete" || phase === "finish") {
       supersession = await reconcileRosterFileSupersession(db, filePayload, { uploaderEmail: job.email || "" });
+      await refreshCanonicalDoctors(db);
       const postSave = () => {
         const presence = phase === "finish" || Number(result?.events || 0) > 1200
           ? rebuildDailyPresenceForFile(db, fileId)
@@ -3939,7 +3940,6 @@ async function runCoreDerivedRosterSave(context, job = {}) {
             doctors: job.doctors || [],
           });
         return Promise.resolve(presence).then(() => {
-          deferCanonicalDoctorRefresh(context, job.reason || "saveDerivedCalendarFile");
           scheduleSnapshotWarmupForSourceTypes(context, [String(filePayload.sourceType || "").toLowerCase()].filter(Boolean), {
             reason: job.reason || "saveDerivedCalendarFile",
           });
