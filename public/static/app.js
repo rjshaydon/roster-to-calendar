@@ -11158,7 +11158,7 @@ async function refreshCreatorSnapshotInBackground(options = {}) {
 async function refreshAvailableDoctorsAfterRosterChange(options = {}) {
   if (!isCreatorAuthenticated() || !cloudAvailable) return;
   const localOnly = options.localOnly === true;
-  const mergeAvailableDoctors = options.mergeAvailableDoctors ?? !localOnly;
+  const mergeAvailableDoctors = options.mergeAvailableDoctors === true;
   mergeSelectedFilesWithRosterStoreStatus(calendarStoreStatus, { force: true });
   try {
     await syncCreatorDoctorPickerWithRemainingRosters({ localOnly });
@@ -13024,7 +13024,11 @@ async function saveSelectedRosterFilesToD1(imports = selectedFiles, options = {}
       latestStatus = await calendarStoreRequest("calendarStoreStatus", {
         selectedDoctorKey: selectedDoctor()?.key || OWNER_DOCTOR_KEY,
         expectedFileIds,
+        includeAvailableDoctors: true,
       });
+      if (Array.isArray(latestStatus.availableDoctors)) {
+        applyAuthoritativeAvailableDoctors(latestStatus.availableDoctors);
+      }
       calendarStoreStatusError = "";
     } catch (error) {
       calendarStoreStatusError = error.message || "Could not check roster database status.";
