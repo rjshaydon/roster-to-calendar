@@ -856,6 +856,74 @@ export async function queryDoctorIssuesForFileDoctorPairs(db, pairs = [], option
   return (rows.results || []).map((row) => parseIssue(row.issue_json)).filter(Boolean);
 }
 
+export async function queryUnresolvedRosterShiftIssueRows(db, options = {}) {
+  if (!db?.prepare) return [];
+  await ensureCalendarSchema(db);
+  const limit = Math.min(Math.max(Number(options.limit || 5000), 1), 10000);
+  const rows = await db.prepare(`
+    SELECT
+      roster_issues.id AS id,
+      roster_issues.file_id AS file_id,
+      roster_issues.source_type AS source_type,
+      roster_issues.doctor_key AS doctor_key,
+      roster_issues.display_name AS display_name,
+      roster_issues.start_date AS start_date,
+      roster_issues.raw_value AS raw_value,
+      roster_issues.seniority AS seniority,
+      roster_issues.status AS status,
+      roster_issues.message AS message,
+      roster_issues.resolution_type AS resolution_type,
+      roster_issues.suggested_title AS suggested_title,
+      roster_issues.time_label AS time_label,
+      roster_issues.issue_json AS issue_json,
+      roster_files.name AS file_name
+    FROM roster_issues
+    INNER JOIN roster_files ON roster_files.id = roster_issues.file_id
+    WHERE roster_files.active = 1
+      AND roster_issues.raw_value <> ''
+      AND roster_issues.message <> ''
+      AND (
+        roster_issues.resolution_type = 'shift_code'
+        OR roster_issues.status = 'unknown'
+        OR LOWER(roster_issues.message) LIKE '%shift code not recognised%'
+        OR LOWER(roster_issues.message) LIKE '%shift label not recognised%'
+        OR LOWER(roster_issues.message) LIKE '%shift code not recognized%'
+        OR LOWER(roster_issues.message) LIKE '%shift label not recognized%'
+      )
+    ORDER BY roster_issues.start_date DESC, roster_issues.source_type, roster_issues.raw_value
+    LIMIT ?
+  `).bind(limit).all();
+  return (rows.results || []).map((row) => {
+    const issue = parseIssue(row.issue_json) || sanitizeIssue({
+      id: row.id,
+      source: row.source_type,
+      seniority: row.seniority,
+      startDay: row.start_date,
+      rawValue: row.raw_value,
+      status: row.status,
+      message: row.message,
+      resolutionType: row.resolution_type,
+      suggestedTitle: row.suggested_title,
+      timeLabel: row.time_label,
+    });
+    if (!issue) return null;
+    return {
+      ...issue,
+      fileId: String(row.file_id || ""),
+      fileName: String(row.file_name || ""),
+      doctorKey: String(row.doctor_key || ""),
+      displayName: String(row.display_name || ""),
+      startDay: issue.startDay || String(row.start_date || "").slice(0, 10),
+      rawValue: issue.rawValue || String(row.raw_value || ""),
+      seniority: issue.seniority || String(row.seniority || ""),
+      message: issue.message || String(row.message || ""),
+      resolutionType: issue.resolutionType || String(row.resolution_type || ""),
+      suggestedTitle: issue.suggestedTitle || String(row.suggested_title || ""),
+      timeLabel: issue.timeLabel || String(row.time_label || ""),
+    };
+  }).filter(Boolean);
+}
+
 export async function queryRosterFileDoctors(db) {
   if (!db?.prepare) return [];
   await ensureCalendarSchema(db);

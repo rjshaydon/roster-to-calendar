@@ -33,6 +33,7 @@ import {
   queryDoctorIssues,
   queryAccountCustomEvents,
   queryCanonicalDoctors,
+  queryUnresolvedRosterShiftIssueRows,
   queryActiveRosterFileRefs,
   queryCalendarRevision,
   queryDoctorSeniorities,
@@ -392,6 +393,19 @@ export async function onRequestPost(context) {
         users: await Promise.all(repairedUsers.map((record) => userSummaryFromRecord(record.email, record, { db: context.env.ROSTER_DB, globalParserExtensions }))),
         availableDoctors: await repositoryDoctorCandidates(null, null, context.env.ROSTER_DB, { hideZeroEventStandalone: true }),
         issueConfig: await buildIssueConfig(null, email, context.env.ROSTER_DB),
+      });
+    }
+
+    if (action === "listUnresolvedShiftCodes") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      if (!hasCalendarDb(context.env)) {
+        return Response.json({ ok: true, unavailable: true, unresolvedShiftCodes: [] });
+      }
+      return Response.json({
+        ok: true,
+        unresolvedShiftCodes: await listUnresolvedRosterShiftCodes(context.env.ROSTER_DB),
       });
     }
 
@@ -3155,6 +3169,67 @@ async function propagateDerivedShiftCodeIssues(db, doctors = [], issuesByDoctor 
   for (const record of updatesByEmail.values()) {
     await upsertAccountMirror(db, record);
   }
+}
+
+async function listUnresolvedRosterShiftCodes(db) {
+  const rows = await queryUnresolvedRosterShiftIssueRows(db, { limit: 5000 });
+  if (!rows.length) return [];
+  const globalRuleSets = sanitizeParserExtensionRules(await loadD1ParserExtensionRules(db));
+  const byKey = new Map();
+  for (const rawIssue of rows) {
+    const source = sanitizeIssueSource(rawIssue?.source);
+    const seniority = sanitizeRuleSeniority(rawIssue?.seniority);
+    const rawValue = String(rawIssue?.rawValue || "").trim();
+    const code = parserRuleCodeForIssue({ ...rawIssue, source, seniority, rawValue });
+    const message = String(rawIssue?.message || "").trim();
+    if (!source || !code || !rawValue || !message) continue;
+    const issue = sanitizeAdminIssues([{
+      id: rawIssue?.id || issueFingerprint(source, rawValue || code, seniority),
+      message,
+      source,
+      seniority,
+      date: rawIssue?.startDay || rawIssue?.date,
+      rawValue,
+      code,
+      timeLabel: rawIssue?.timeLabel,
+      suggestedTitle: rawIssue?.suggestedTitle,
+      fingerprint: issueFingerprint(source, rawValue || code, seniority),
+      firstSeenAt: rawIssue?.startDay || "",
+      lastSeenAt: rawIssue?.startDay || "",
+      count: 1,
+    }])[0];
+    if (!issue || !isShiftCodeAdminIssue({ ...issue, resolutionType: rawIssue?.resolutionType })) continue;
+    if (isKnownResolvedShiftCodeValue(source, rawValue || code)) continue;
+    if (isIssueResolvedByRuleSets(issue, globalRuleSets)) continue;
+    const key = `${source}|${seniority}|${code}|${rawValue}|${message}`;
+    const seenDate = String(rawIssue?.startDay || rawIssue?.date || "").slice(0, 10);
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.count += 1;
+      if (seenDate && (!existing.firstSeenAt || seenDate < existing.firstSeenAt)) existing.firstSeenAt = seenDate;
+      if (seenDate && (!existing.lastSeenAt || seenDate > existing.lastSeenAt)) existing.lastSeenAt = seenDate;
+      continue;
+    }
+    byKey.set(key, {
+      id: `roster::${issue.fingerprint}`,
+      origin: "roster",
+      source,
+      seniority,
+      code,
+      rawValue,
+      message,
+      sampleName: String(rawIssue?.displayName || rawIssue?.doctorKey || "Roster").trim(),
+      sampleDate: seenDate,
+      count: 1,
+      firstSeenAt: seenDate,
+      lastSeenAt: seenDate,
+    });
+  }
+  return [...byKey.values()].sort((left, right) => {
+    if (left.source !== right.source) return left.source.localeCompare(right.source);
+    if (left.code !== right.code) return left.code.localeCompare(right.code);
+    return left.seniority.localeCompare(right.seniority);
+  });
 }
 
 function adminIssueFromRosterDiagnostic(rawIssue, now = new Date().toISOString()) {

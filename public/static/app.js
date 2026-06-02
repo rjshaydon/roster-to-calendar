@@ -340,6 +340,11 @@ let parserExtensions = { mmc: [], ddh: [], casey: [], mch: [] };
 let globalParserExtensions = { mmc: [], ddh: [], casey: [], mch: [] };
 let localParserExtensions = { mmc: [], ddh: [], casey: [], mch: [] };
 let parserRuleSuggestions = [];
+let globalUnresolvedShiftCodes = [];
+let globalUnresolvedShiftCodesLoading = false;
+let globalUnresolvedShiftCodesLoaded = false;
+let globalUnresolvedShiftCodesError = "";
+let globalUnresolvedShiftCodeRunId = 0;
 let parserRuleSaveContext = { mode: "global", suggestionId: "", targetEmail: "" };
 let dismissedIssueFingerprints = new Set();
 let ignoredIssueFingerprints = new Set();
@@ -554,6 +559,7 @@ accountsBody.addEventListener("click", (event) => {
     }
     currentAdminTab = nextTab;
     renderAccountsModal();
+    queueGlobalUnresolvedShiftCodeLoad();
     return;
   }
   const clearAdminErrorsButton = event.target.closest("[data-clear-admin-errors]");
@@ -590,12 +596,29 @@ accountsBody.addEventListener("click", (event) => {
     );
     return;
   }
+  const addRosterShiftCodeButton = event.target.closest("[data-add-roster-shift-code]");
+  if (addRosterShiftCodeButton) {
+    openRosterShiftCodeRuleModal(
+      addRosterShiftCodeButton.dataset.addRosterShiftCode || "",
+      splitShiftCodeSeniorities(addRosterShiftCodeButton.dataset.shiftCodeSeniorities || ""),
+    );
+    return;
+  }
   const ignoreShiftCodeRuleButton = event.target.closest("[data-ignore-shift-code]");
   if (ignoreShiftCodeRuleButton) {
     openParserRuleModal(
       ignoreShiftCodeRuleButton.dataset.ignoreShiftCode || "",
       ignoreShiftCodeRuleButton.dataset.errorId || "",
       splitShiftCodeSeniorities(ignoreShiftCodeRuleButton.dataset.shiftCodeSeniorities || ""),
+      { ignore: true },
+    );
+    return;
+  }
+  const ignoreRosterShiftCodeRuleButton = event.target.closest("[data-ignore-roster-shift-code]");
+  if (ignoreRosterShiftCodeRuleButton) {
+    openRosterShiftCodeRuleModal(
+      ignoreRosterShiftCodeRuleButton.dataset.ignoreRosterShiftCode || "",
+      splitShiftCodeSeniorities(ignoreRosterShiftCodeRuleButton.dataset.shiftCodeSeniorities || ""),
       { ignore: true },
     );
     return;
@@ -1962,6 +1985,7 @@ async function openAccountsSurface(options = {}) {
   renderAccountsModal();
   accountsModal.classList.remove("hidden");
   accountsModal.setAttribute("aria-hidden", "false");
+  queueGlobalUnresolvedShiftCodeLoad();
   if (activeCalendarMode() === "doctor-profile" && activeDoctorProfile && cloudAvailable) {
     void refreshDoctorProfileFileRefs().then(() => {
       if (!accountsModal.classList.contains("hidden")) renderAccountsModal();
@@ -1969,7 +1993,10 @@ async function openAccountsSurface(options = {}) {
   }
   if (isViewingCreatorAccount()) {
     void loadServerUsers().then(() => {
-      if (!accountsModal.classList.contains("hidden")) renderAccountsModal();
+      if (!accountsModal.classList.contains("hidden")) {
+        renderAccountsModal();
+        queueGlobalUnresolvedShiftCodeLoad();
+      }
     });
     void refreshCalendarStoreStatus({ silent: true, syncSwitcher: false });
   }
@@ -3109,6 +3136,7 @@ function renderPreviewGrid(doctor, data) {
     pendingPreviewSnapToToday = false;
     requestAnimationFrame(() => snapPreviewToCurrentMonth(false));
   }
+  queueGlobalUnresolvedShiftCodeLoad();
 }
 
 function renderPreviewHeader(doctor, data) {
@@ -7920,11 +7948,17 @@ function renderParserRulesCard() {
                 <p>${escapeHtml(item.sample)}${item.count > 1 ? ` · seen ${item.count} times` : ""}</p>
               </div>
               <div class="account-actions">
-                <button type="button" class="button button-secondary" data-add-shift-code="${escapeHtml(item.email)}" data-error-id="${escapeHtml(item.id)}" data-shift-code-seniorities="${escapeHtml(item.seniorities.join("|"))}">Edit shift code</button>
-                <button type="button" class="button button-secondary" data-ignore-shift-code="${escapeHtml(item.email)}" data-error-id="${escapeHtml(item.id)}" data-shift-code-seniorities="${escapeHtml(item.seniorities.join("|"))}">Ignore</button>
+                ${item.email
+                  ? `<button type="button" class="button button-secondary" data-add-shift-code="${escapeHtml(item.email)}" data-error-id="${escapeHtml(item.id)}" data-shift-code-seniorities="${escapeHtml(item.seniorities.join("|"))}">Edit shift code</button>`
+                  : `<button type="button" class="button button-secondary" data-add-roster-shift-code="${escapeHtml(item.id)}" data-shift-code-seniorities="${escapeHtml(item.seniorities.join("|"))}">Edit shift code</button>`}
+                ${item.email
+                  ? `<button type="button" class="button button-secondary" data-ignore-shift-code="${escapeHtml(item.email)}" data-error-id="${escapeHtml(item.id)}" data-shift-code-seniorities="${escapeHtml(item.seniorities.join("|"))}">Ignore</button>`
+                  : `<button type="button" class="button button-secondary" data-ignore-roster-shift-code="${escapeHtml(item.id)}" data-shift-code-seniorities="${escapeHtml(item.seniorities.join("|"))}">Ignore</button>`}
               </div>
             </article>
           `).join("") : `<article class="issue-card"><p>No missing or unresolved shift codes need review.</p></article>`}
+          ${globalUnresolvedShiftCodesLoading ? `<article class="issue-card"><p>Checking roster database for unresolved shift codes...</p></article>` : ""}
+          ${globalUnresolvedShiftCodesError ? `<article class="issue-card"><p>${escapeHtml(globalUnresolvedShiftCodesError)}</p></article>` : ""}
         </div>
       </article>
       <article class="issue-card">
@@ -7943,7 +7977,9 @@ function renderParserRulesCard() {
                     <p>${escapeHtml(item.seniorityLabel)} · ${escapeHtml(item.message || "Shift code not recognised.")}</p>
                   </div>
                   <div class="account-actions">
-                    <button type="button" class="button button-secondary" data-add-shift-code="${escapeHtml(item.email)}" data-error-id="${escapeHtml(item.id)}" data-shift-code-seniorities="${escapeHtml(item.seniorities.join("|"))}">Edit shift code</button>
+                    ${item.email
+                      ? `<button type="button" class="button button-secondary" data-add-shift-code="${escapeHtml(item.email)}" data-error-id="${escapeHtml(item.id)}" data-shift-code-seniorities="${escapeHtml(item.seniorities.join("|"))}">Edit shift code</button>`
+                      : `<button type="button" class="button button-secondary" data-add-roster-shift-code="${escapeHtml(item.id)}" data-shift-code-seniorities="${escapeHtml(item.seniorities.join("|"))}">Edit shift code</button>`}
                   </div>
                 </article>
               `).join("")}
@@ -8017,34 +8053,79 @@ function collectUnknownShiftIssues() {
       if (!source || !code) continue;
       if (isKnownResolvedShiftCodeValue(source, issue.rawValue, issue.suggestedTitle)) continue;
       if (isShiftCodeResolvedByActiveRules({ source, seniority, code, rawValue: code })) continue;
-      const key = `${source}|${code}`;
-      const existing = byKey.get(key);
-      if (existing) {
-        existing.count += issue.count || 1;
-        existing.seniorities = addUniqueSeniority(existing.seniorities, seniority);
-        existing.seniorityLabel = formatShiftCodeSeniorities(existing.seniorities);
-        if ((issue.lastSeenAt || "") > (existing.lastSeenAt || "")) existing.lastSeenAt = issue.lastSeenAt || "";
-        continue;
-      }
-      const seniorities = addUniqueSeniority([], seniority);
-      byKey.set(key, {
+      addUnknownShiftIssueToMap(byKey, {
+        origin: "admin",
         source,
         seniority,
-        seniorities,
-        seniorityLabel: formatShiftCodeSeniorities(seniorities),
         code,
         id: issue.id || issue.fingerprint || "",
         email: user.email,
         message: issue.message || "",
+        rawValue: issue.rawValue || code,
         sample: `${user.realName || user.email} · ${formatDate(issue.startDay || issue.date || "")} · ${issue.rawValue || code}`,
         count: issue.count || 1,
         lastSeenAt: issue.lastSeenAt || "",
       });
     }
   }
+  for (const item of globalUnresolvedShiftCodes) {
+    const source = sanitizeIssueSource(item.source);
+    const seniority = sanitizeRuleSeniority(item.seniority);
+    const code = parserRuleCodeForIssue(item);
+    if (!source || !code) continue;
+    if (isKnownResolvedShiftCodeValue(source, item.rawValue)) continue;
+    if (isShiftCodeResolvedByGlobalRules({ source, seniority, code, rawValue: item.rawValue || code })) continue;
+    addUnknownShiftIssueToMap(byKey, {
+      origin: "roster",
+      source,
+      seniority,
+      code,
+      id: item.id,
+      email: "",
+      message: item.message || "",
+      rawValue: item.rawValue || code,
+      sample: `${item.sampleName || "Roster"} · ${formatDate(item.sampleDate || "")} · ${item.rawValue || code}`,
+      count: item.count || 1,
+      lastSeenAt: item.lastSeenAt || item.sampleDate || "",
+    });
+  }
   return [...byKey.values()].sort((left, right) => {
     if (left.source !== right.source) return left.source.localeCompare(right.source);
     return left.code.localeCompare(right.code);
+  });
+}
+
+function addUnknownShiftIssueToMap(byKey, item) {
+  const key = `${item.source}|${item.code}`;
+  const existing = byKey.get(key);
+  if (existing) {
+    existing.count += item.count || 1;
+    existing.seniorities = addUniqueSeniority(existing.seniorities, item.seniority);
+    existing.seniorityLabel = formatShiftCodeSeniorities(existing.seniorities);
+    if (!existing.email && item.email) {
+      existing.email = item.email;
+      existing.id = item.id || existing.id;
+    }
+    if (!existing.rawValue && item.rawValue) existing.rawValue = item.rawValue;
+    if (!existing.sample && item.sample) existing.sample = item.sample;
+    if ((item.lastSeenAt || "") > (existing.lastSeenAt || "")) existing.lastSeenAt = item.lastSeenAt || "";
+    return;
+  }
+  const seniorities = addUniqueSeniority([], item.seniority);
+  byKey.set(key, {
+    origin: item.origin || "",
+    source: item.source,
+    seniority: sanitizeRuleSeniority(item.seniority),
+    seniorities,
+    seniorityLabel: formatShiftCodeSeniorities(seniorities),
+    code: item.code,
+    id: item.id || "",
+    email: normalizeEmail(item.email || ""),
+    message: item.message || "",
+    rawValue: item.rawValue || item.code,
+    sample: item.sample || "",
+    count: item.count || 1,
+    lastSeenAt: item.lastSeenAt || "",
   });
 }
 
@@ -8312,6 +8393,7 @@ async function decideParserRuleSuggestion(suggestionId, decision, rule) {
     globalParserExtensions = sanitizeParserExtensions(data.parserExtensions || globalParserExtensions);
     parserRuleSuggestions = sanitizeParserRuleSuggestions(data.suggestions);
     setParserExtensions(parserExtensions);
+    if (decision === "approveGlobal") refreshGlobalUnresolvedShiftCodesAfterRuleChange();
     await loadServerUsers();
     renderAccountsModal();
     const labels = {
@@ -8329,6 +8411,25 @@ function findAdminIssue(email, errorId = "") {
   const user = serverUsers.map(normalizeServerUser).find((item) => item.email === normalizeEmail(email));
   if (!user) return null;
   return (user.adminIssues || []).find((issue) => issue.id === errorId || issue.fingerprint === errorId) || null;
+}
+
+function findGlobalUnresolvedShiftCodeIssue(issueId = "") {
+  const id = String(issueId || "").trim();
+  if (!id) return null;
+  const item = globalUnresolvedShiftCodes.find((issue) => issue.id === id);
+  if (!item) return null;
+  return {
+    id: item.id,
+    fingerprint: issueFingerprint(item.source, item.rawValue || item.code, item.seniority),
+    source: item.source,
+    seniority: item.seniority,
+    code: item.code,
+    rawValue: item.rawValue || item.code,
+    startDay: item.sampleDate || "",
+    message: item.message || "Shift code not recognised.",
+    suggestedTitle: item.suggestedTitle || "",
+    timeLabel: item.timeLabel || "",
+  };
 }
 
 function findParserExtensionRule(source, code) {
@@ -8364,6 +8465,19 @@ function isShiftCodeResolvedByActiveRules(issue) {
   const sourceKey = source.toLowerCase();
   return sanitizeParserExtensionRuleList(parserExtensions?.[sourceKey], source)
     .some((rule) => rule.code === code);
+}
+
+function isShiftCodeResolvedByGlobalRules(issue) {
+  const source = sanitizeIssueSource(issue?.source);
+  const seniority = sanitizeRuleSeniority(issue?.seniority);
+  const code = parserRuleCodeForIssue(issue);
+  if (!source || !code) return false;
+  const sourceKey = source.toLowerCase();
+  const rules = sanitizeParserExtensionRuleList(globalParserExtensions?.[sourceKey], source);
+  if (seniority !== "Unknown") {
+    return rules.some((rule) => rule.code === code && rule.seniority === seniority);
+  }
+  return rules.some((rule) => rule.code === code);
 }
 
 function isKnownResolvedShiftCodeValue(sourceValue, rawValue, normalizedTitle = "") {
@@ -8571,9 +8685,13 @@ function openParserRuleModalFromSyntheticIssue(issue, options = {}) {
     targetEmail: options.targetEmail || adminViewingEmail || currentUserEmail,
     replacementTargets: [],
   };
-  setParserRuleModalIssueFields({ ...issue, source, seniority, code }, [seniority], {
+  const selectedSeniorities = Array.isArray(options.selectedSeniorities)
+    ? options.selectedSeniorities.map(sanitizeRuleSeniority).filter(Boolean)
+    : [];
+  setParserRuleModalIssueFields({ ...issue, source, seniority, code }, selectedSeniorities.length ? selectedSeniorities : [seniority], {
     allowMultipleSeniorities: options.allowMultipleSeniorities,
     readonlySourceRaw: options.readonlySourceRaw,
+    ignore: options.ignore,
   });
   parserRuleModalTitle.textContent = options.title || "Add shift code";
   renderParserRulePreview();
@@ -8624,6 +8742,22 @@ function openParserRuleModal(email, errorId = "", selectedSeniorities = [], opti
   renderParserRulePreview();
   parserRuleModal.classList.remove("hidden");
   parserRuleModal.setAttribute("aria-hidden", "false");
+}
+
+function openRosterShiftCodeRuleModal(issueId = "", selectedSeniorities = [], options = {}) {
+  const issue = findGlobalUnresolvedShiftCodeIssue(issueId);
+  if (!issue) {
+    setStatus("Could not find that parser warning.", true);
+    return;
+  }
+  openParserRuleModalFromSyntheticIssue(issue, {
+    mode: "global",
+    targetEmail: "",
+    allowMultipleSeniorities: true,
+    selectedSeniorities,
+    ignore: options.ignore === true,
+    title: options.ignore === true ? "Ignore shift code" : "Edit shift code",
+  });
 }
 
 function openParserRuleModalFromPreviewIssue(issueId = "") {
@@ -8914,6 +9048,8 @@ async function saveParserRuleFromModal() {
     const data = await readJsonResponse(response, "Could not save the shift-code rule.");
     parserExtensions = sanitizeParserExtensions(data.parserExtensions);
     setParserExtensions(parserExtensions);
+    globalParserExtensions = sanitizeParserExtensions(data.parserExtensions);
+    refreshGlobalUnresolvedShiftCodesAfterRuleChange();
     pruneResolvedLatestPreviewIssues();
     if (fingerprint) ignoredIssueFingerprints.delete(fingerprint);
     closeParserRuleModal();
@@ -8984,6 +9120,8 @@ async function deleteParserRule(source, seniority, code) {
     const data = await readJsonResponse(response, "Could not delete the shift-code rule.");
     parserExtensions = sanitizeParserExtensions(data.parserExtensions);
     setParserExtensions(parserExtensions);
+    globalParserExtensions = sanitizeParserExtensions(data.parserExtensions);
+    refreshGlobalUnresolvedShiftCodesAfterRuleChange();
     await loadServerUsers();
     renderAccountsModal();
     if (selectedFiles.length) {
@@ -12641,6 +12779,85 @@ async function loadServerUsers() {
   } catch {
     // Keep the last available local list.
   }
+}
+
+function adminSystemSurfaceReadyForRosterIssueLoad() {
+  return isCreatorAuthenticated()
+    && isViewingCreatorAccount()
+    && cloudAvailable
+    && currentAdminTab === "system"
+    && accountsModal
+    && !accountsModal.classList.contains("hidden")
+    && Boolean(latestPreview || currentSnapshot);
+}
+
+function queueGlobalUnresolvedShiftCodeLoad(options = {}) {
+  if (!adminSystemSurfaceReadyForRosterIssueLoad()) return;
+  if (globalUnresolvedShiftCodesLoading) return;
+  if (globalUnresolvedShiftCodesLoaded && options.force !== true) return;
+  void loadGlobalUnresolvedShiftCodes(options);
+}
+
+function markGlobalUnresolvedShiftCodesStale() {
+  globalUnresolvedShiftCodesLoaded = false;
+}
+
+function refreshGlobalUnresolvedShiftCodesAfterRuleChange() {
+  markGlobalUnresolvedShiftCodesStale();
+  queueGlobalUnresolvedShiftCodeLoad({ force: true });
+}
+
+async function loadGlobalUnresolvedShiftCodes() {
+  if (!adminSystemSurfaceReadyForRosterIssueLoad()) return;
+  const runId = ++globalUnresolvedShiftCodeRunId;
+  globalUnresolvedShiftCodesLoading = true;
+  globalUnresolvedShiftCodesError = "";
+  renderAccountsModal();
+  try {
+    const data = await calendarStoreRequest("listUnresolvedShiftCodes");
+    if (runId !== globalUnresolvedShiftCodeRunId) return;
+    globalUnresolvedShiftCodes = sanitizeGlobalUnresolvedShiftCodes(data.unresolvedShiftCodes);
+    globalUnresolvedShiftCodesLoaded = true;
+  } catch (error) {
+    if (runId !== globalUnresolvedShiftCodeRunId) return;
+    globalUnresolvedShiftCodesError = error.message || "Could not load unresolved shift codes.";
+  } finally {
+    if (runId === globalUnresolvedShiftCodeRunId) {
+      globalUnresolvedShiftCodesLoading = false;
+      if (accountsModal && !accountsModal.classList.contains("hidden") && currentAdminTab === "system") renderAccountsModal();
+    }
+  }
+}
+
+function sanitizeGlobalUnresolvedShiftCodes(items) {
+  return (Array.isArray(items) ? items : [])
+    .map((item) => {
+      const source = sanitizeIssueSource(item?.source);
+      const seniority = sanitizeRuleSeniority(item?.seniority);
+      const rawValue = String(item?.rawValue || "").trim();
+      const code = parserRuleCodeForIssue({ ...item, source, rawValue });
+      const message = String(item?.message || "").trim();
+      if (!source || !code || !rawValue || !message) return null;
+      const sampleDate = String(item?.sampleDate || item?.date || item?.startDay || "").slice(0, 10);
+      const fingerprint = issueFingerprint(source, rawValue || code, seniority);
+      return {
+        id: String(item?.id || `roster::${fingerprint}`).trim(),
+        origin: "roster",
+        source,
+        seniority,
+        code,
+        rawValue,
+        message,
+        sampleName: String(item?.sampleName || "Roster").trim(),
+        sampleDate,
+        count: Math.max(1, Math.floor(Number(item?.count || 1))),
+        firstSeenAt: String(item?.firstSeenAt || sampleDate || ""),
+        lastSeenAt: String(item?.lastSeenAt || sampleDate || ""),
+        suggestedTitle: String(item?.suggestedTitle || "").trim(),
+        timeLabel: String(item?.timeLabel || "").trim(),
+      };
+    })
+    .filter(Boolean);
 }
 
 async function refreshCalendarStoreStatus(options = {}) {
