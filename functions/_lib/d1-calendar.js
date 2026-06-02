@@ -279,6 +279,7 @@ async function ensureCalendarSchemaUncached(db) {
   `).run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_daily_presence_doctor_date ON roster_daily_presence (doctor_key, date)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_daily_presence_date_source ON roster_daily_presence (date, source_type)").run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_daily_presence_event_id ON roster_daily_presence (event_id)").run();
   await db.prepare(`
     CREATE TABLE IF NOT EXISTS snapshot_registry (
       owner_type TEXT NOT NULL,
@@ -2039,10 +2040,12 @@ export async function queryOverlapDoctorsFromEvents(db, options = {}) {
 export async function deleteDailyPresenceForFile(db, fileId) {
   if (!db?.prepare || !fileId) return;
   await ensureCalendarSchema(db);
+  const lower = `${String(fileId)}:`;
+  const upper = `${String(fileId)};`;
   await db.prepare(`
     DELETE FROM roster_daily_presence
-    WHERE event_id LIKE ? ESCAPE '\\'
-  `).bind(`${escapeLike(fileId)}:%`).run();
+    WHERE event_id >= ? AND event_id < ?
+  `).bind(lower, upper).run();
 }
 
 export async function populateDailyPresenceForFile(db, fileId, eventsByDoctor = {}, options = {}) {

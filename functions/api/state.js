@@ -3812,8 +3812,23 @@ async function syncRosterRepositoryToKeepFileIds(context, keepFileIds = [], opti
     doctorKey: normalizeRosterName(options.doctorKey || OWNER_DOCTOR_KEY),
     expectedFileIds: keepIds,
     lightweight: options.lightweight !== false,
+  }).catch((error) => {
+    if (removedFileIds.length && allPurged) {
+      return {
+        statusUnavailable: true,
+        statusError: error?.message || "Could not refresh roster storage status after removal.",
+      };
+    }
+    throw error;
   });
-  const availableDoctors = await repositoryDoctorCandidates(null, null, db, { hideZeroEventStandalone: true });
+  const availableDoctors = await repositoryDoctorCandidates(null, null, db, { hideZeroEventStandalone: true }).catch((error) => {
+    if (removedFileIds.length && allPurged) {
+      status.availableDoctorsUnavailable = true;
+      status.availableDoctorsError = error?.message || "Could not refresh doctor list after removal.";
+      return [];
+    }
+    throw error;
+  });
   return {
     keptFileIds: keepIds,
     removedFileIds,
