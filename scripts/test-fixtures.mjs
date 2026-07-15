@@ -106,7 +106,7 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function enterUserAccount[\s\S]*?async function enterDoctorProfileView/)?.[0] || "",
-  /accountSwitchStartedAt[\s\S]*renderCachedCalendarSnapshotForContext\(targetContext[\s\S]*validateClaimedAccountCalendarInBackground\(targetContext/,
+  /accountSwitchStartedAt[\s\S]*renderCachedCalendarSnapshotForContextAsync\(targetContext[\s\S]*validateClaimedAccountCalendarInBackground\(targetContext/,
   "switched-account entry should render a cached target snapshot before background validation",
 );
 assert.match(appSource, /function markAccountSwitchPhase/, "account switching should expose debug timings separately from login timings");
@@ -170,7 +170,7 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function returnToCreatorAccount[\s\S]*?async function clearLocalWorkspace/)?.[0] || "",
-  /forceCreatorDoctorSession\(\);[\s\S]*renderCachedCalendarSnapshotForContext\(targetContext[\s\S]*validateClaimedAccountCalendarInBackground/,
+  /forceCreatorDoctorSession\(\);[\s\S]*renderCachedCalendarSnapshotForContextAsync\(targetContext[\s\S]*validateClaimedAccountCalendarInBackground/,
   "returning to the creator should render the cached creator calendar before calendar validation",
 );
 assert.match(
@@ -206,7 +206,7 @@ assert.match(
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
     .match(/if \(action === "login"\)[\s\S]*?const account = await verifyD1Account/)?.[0] || "",
-  /responseMode === "fast"[\s\S]*prepareFastLoginEnvelope\(loginRecord\)[\s\S]*loadFastAccountSnapshotPayload[\s\S]*snapshotStatus[\s\S]*snapshotSource[\s\S]*snapshotRevision[\s\S]*viewedAccountPayload/,
+  /responseMode === "fast"[\s\S]*prepareFastLoginEnvelope\(loginRecord,[\s\S]*loadFastAccountSnapshotPayload[\s\S]*snapshotStatus[\s\S]*snapshotSource[\s\S]*snapshotRevision[\s\S]*viewedAccountPayload/,
   "fast login should build a minimal account payload and use the lightweight snapshot path",
 );
 assert.match(
@@ -224,6 +224,16 @@ assert.match(
   stateSource.match(/async function loadSnapshotPayloadFromRegistry[\s\S]*?async function loadFastAccountSnapshotPayload/)?.[0] || "",
   /snapshotRegistryBuildInProgress[\s\S]*server-cache-building/,
   "recent building snapshot rows should suppress duplicate inline rebuilds",
+);
+assert.match(
+  stateSource.match(/async function loadSnapshotPayloadFromRegistry[\s\S]*?async function filterCachedSnapshotForReturn/)?.[0] || "",
+  /registry\?\.status === "ready"[\s\S]*registry\?\.builtRevision === calendarRevision[\s\S]*cachedRevision === calendarRevision && registryCurrent/,
+  "browser revisions should only be accepted after the matching server snapshot is ready",
+);
+assert.doesNotMatch(
+  stateSource.match(/async function prepareFastLoginEnvelope[\s\S]*?async function applySqlHospitalLocationSettings/)?.[0] || "",
+  /repositoryDoctorCandidates/,
+  "fast login should not build the expensive creator doctor list on the authentication request",
 );
 assert.match(
   stateSource.match(/function snapshotWarmupSourceTypeSet[\s\S]*?function scheduleSnapshotWarmupForAllAccounts/)?.[0] || "",
@@ -354,8 +364,8 @@ assert.match(
 );
 assert.match(
   stateSource.match(/async function syncRosterRepositoryToKeepFileIds[\s\S]*?async function purgeRosterImports/)?.[0] || "",
-  /querySourceTypesForFileIds[\s\S]*deleteDerivedRosterFile[\s\S]*deleteRetainedRosterSource[\s\S]*deferCanonicalDoctorRefresh[\s\S]*verifyRosterFilesPurged/,
-  "repository sync should purge orphans, verify removal, and defer canonical doctor refresh",
+  /querySourceTypesForFileIds[\s\S]*deleteDerivedRosterFile[\s\S]*deleteRetainedRosterSource[\s\S]*refreshCanonicalDoctors[\s\S]*verifyRosterFilesPurged/,
+  "repository sync should purge orphans, refresh canonical doctors, and verify removal",
 );
 assert.match(
   d1CalendarSource,
@@ -494,8 +504,8 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function importRosterFiles[\s\S]*?async function switchDoctorSelection/)?.[0] || "",
-  /showRosterImportOverlay[\s\S]*void refreshCreatorCalendarAfterFileChange/,
-  "roster imports should acknowledge uploads briefly while refresh continues in the background",
+  /showRosterImportOverlay[\s\S]*await refreshCreatorCalendarAfterFileChange/,
+  "roster imports should keep progress visible until the initial calendar refresh completes",
 );
 assert.match(
   appSource.match(/async function finishRosterImportOverlay[\s\S]*?async function importRosterFiles/)?.[0] || "",
@@ -509,7 +519,7 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function refreshAvailableDoctorsAfterRosterChange[\s\S]*?function normalizeSavedExportRange/)?.[0] || "",
-  /mergeAvailableDoctors = options\.mergeAvailableDoctors \?\? !localOnly[\s\S]*10000, 20000[\s\S]*mergeAvailableDoctors[\s\S]*syncCreatorDoctorPickerWithRemainingRosters\(\{ localOnly \}\)[\s\S]*renderDoctorState/,
+  /mergeAvailableDoctors = options\.mergeAvailableDoctors === true[\s\S]*10000, 20000[\s\S]*mergeAvailableDoctors[\s\S]*syncCreatorDoctorPickerWithRemainingRosters\(\{ localOnly \}\)[\s\S]*renderDoctorState/,
   "roster changes should poll repository doctors and optionally replace the local picker list on delete",
 );
 assert.match(
@@ -569,7 +579,7 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function refreshCalendarStoreStatus[\s\S]*?async function toggleAdminConsole/)?.[0] || "",
-  /mergeAvailableDoctors !== false[\s\S]*mergeAvailableRosterDoctors\(availableRosterDoctors, incomingDoctors\)/,
+  /mergeAvailableDoctors === true[\s\S]*mergeAvailableRosterDoctors\(availableRosterDoctors, incomingDoctors\)/,
   "roster status refreshes should merge repository doctors instead of replacing the local picker list",
 );
 assert.match(
@@ -731,6 +741,21 @@ assert.match(
   appSource.match(/async function refreshCreatorCalendarAfterFileChange[\s\S]*?async function refreshAvailableDoctorsAfterRosterChange/)?.[0] || "",
   /unsyncedLocalEntries[\s\S]*saveSelectedRosterFilesToD1[\s\S]*loadCloudCalendarEvents/,
   "creator roster changes should save unsynced local files then reload from D1",
+);
+assert.match(
+  appSource.match(/async function refreshCreatorCalendarAfterFileChange[\s\S]*?async function rosterDoctorsFromSelectedFiles/)?.[0] || "",
+  /cachedRevision: ""[\s\S]*loaded && currentSnapshot && !currentSnapshotStale[\s\S]*pollCalendarAfterRosterChange/,
+  "roster imports should keep polling until a genuinely current snapshot is returned",
+);
+assert.match(
+  stateSource.match(/async function runCoreDerivedRosterSave[\s\S]*?async function runDeferredDerivedRosterSave/)?.[0] || "",
+  /deferCanonicalDoctorRefresh[\s\S]*scheduleSnapshotWarmupForSourceTypes/,
+  "post-save snapshot warmup should wait for canonical doctor refresh",
+);
+assert.match(
+  appSource.match(/async function loadCloudCalendarEvents[\s\S]*?function cloudCalendarEventRange/)?.[0] || "",
+  /data\.snapshotStale !== true[\s\S]*if \(!currentSnapshotStale\)[\s\S]*saveCalendarSnapshotCacheForContext/,
+  "stale server snapshots should not be relabelled or persisted as current browser snapshots",
 );
 assert.match(
   appSource.match(/async function saveCloudStateNow[\s\S]*?async function replaceActiveRostersWithCurrentUploads/)?.[0] || "",
@@ -985,14 +1010,14 @@ assert.match(
   "Check status should refresh the creator switcher after a successful status check",
 );
 assert.match(
-  appSource.match(/function applyCloudStateContext[\s\S]*?async function applyCloudStateSnapshot/)?.[0] || "",
-  /isCreatorAuthenticated\(\) && incomingAvailableDoctors\.length[\s\S]*mergeAvailableRosterDoctors\(availableRosterDoctors, incomingAvailableDoctors\)/,
-  "creator login should merge server doctor lists instead of replacing locally known doctors",
+  appSource.match(/function applyAvailableRosterDoctorsFromData[\s\S]*?async function applyCloudStateSnapshot/)?.[0] || "",
+  /!incomingAvailableDoctors\.length && isCreatorAuthenticated\(\)[\s\S]*availableRosterDoctors = incomingAvailableDoctors/,
+  "creator hydration should preserve locally known doctors when a lightweight response omits the list",
 );
 assert.match(
   appSource.match(/async function loadServerUsers[\s\S]*?async function refreshCalendarStoreStatus/)?.[0] || "",
-  /mergeAvailableRosterDoctors\([\s\S]*availableRosterDoctors[\s\S]*sanitizeAvailableRosterDoctors\(data\.availableDoctors/,
-  "loading admin users should merge repository doctors into the creator switcher list",
+  /applyAuthoritativeAvailableDoctors\(data\.availableDoctors\)/,
+  "loading admin users should apply the authoritative repository doctor list",
 );
 assert.match(
   appSource.match(/async function bootstrapImports[\s\S]*?function snapshotHasUnresolvablePreviewEvents/)?.[0] || "",
@@ -1011,8 +1036,8 @@ assert.match(
 );
 assert.match(
   await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"),
-  /async function syncRosterRepositoryToKeepFileIds[\s\S]*deferCanonicalDoctorRefresh\(context, options\.reason/,
-  "repository sync should defer canonical doctor refresh to avoid CPU timeouts during deletion",
+  /async function syncRosterRepositoryToKeepFileIds[\s\S]*await refreshCanonicalDoctors\(db\)/,
+  "repository sync should refresh canonical doctors before warming replacement snapshots",
 );
 assert.match(
   await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"),
@@ -1077,7 +1102,7 @@ assert.match(appSource, /data-ignore-shift-code/, "missing shift-code queue shou
 assert.match(appSource, /Ignored shift codes/, "ignored shift codes should remain editable in hospital rule sections");
 assert.match(appSource, /parserRuleSeniorityAll/, "shift-code seniority picker should expose an All option");
 assert.match(appSource, /function normalizeParserRuleSenioritySelection/, "shift-code seniority picker should keep All and Unknown selections consistent");
-assert.match(appSource, /const key = `\$\{source\}\|\$\{code\}`/, "unresolved shift-code grouping should be by hospital and code");
+assert.match(appSource, /const key = `\$\{item\.source\}\|\$\{item\.code\}`/, "unresolved shift-code grouping should be by hospital and code");
 assert.match(appSource, /formatShiftCodeSeniorities/, "grouped unresolved shift-code rows should summarize detected seniorities");
 assert.match(styleSource, /#parserRuleForm[\s\S]*overflow-y: auto/, "shift-code editor form should scroll vertically when it exceeds available height");
 assert.match(appSource, /normalizeDdhParserRuleCodeText/, "DDH shift-code issues should use parser-equivalent label codes");
@@ -1930,6 +1955,18 @@ class MemoryD1Statement {
     }
     if (sql.startsWith("DELETE FROM raw_roster_files")) {
       this.db.rawFiles.delete(args[0]);
+      return { success: true };
+    }
+    if (sql.startsWith("DELETE FROM roster_doctors WHERE source_type = ?")) {
+      const sourceType = args[0];
+      const referencedKeys = new Set(
+        [...this.db.fileDoctors.values()]
+          .filter((doctor) => doctor.source_type === sourceType)
+          .map((doctor) => doctor.doctor_key),
+      );
+      for (const [key, doctor] of [...this.db.doctors.entries()]) {
+        if (doctor.source_type === sourceType && !referencedKeys.has(doctor.doctor_key)) this.db.doctors.delete(key);
+      }
       return { success: true };
     }
     if (sql.startsWith("INSERT INTO roster_doctors")) {
@@ -2920,6 +2957,10 @@ class MemoryD1Statement {
     if (sql.startsWith("SELECT id FROM roster_files WHERE id = ?")) {
       const file = this.db.files.get(args[0]);
       return file ? { id: file.id } : null;
+    }
+    if (sql.startsWith("SELECT source_type FROM roster_files WHERE id = ?")) {
+      const file = this.db.files.get(args[0]);
+      return file ? { source_type: file.source_type } : null;
     }
     throw new Error(`Unsupported MemoryD1 first SQL: ${sql}`);
   }

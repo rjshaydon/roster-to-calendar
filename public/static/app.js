@@ -162,7 +162,7 @@ const SHIFT_COLOUR_DEFAULTS = {
 const ACCOUNT_STATE_KEY = "roster-account-state";
 const SESSION_STATE_KEY = "roster-session-state-v1";
 const ACCOUNT_WORKSPACES_KEY = "roster-account-workspaces-v1";
-const CALENDAR_SNAPSHOT_CACHE_KEY = "roster-calendar-snapshot-cache-v1";
+const CALENDAR_SNAPSHOT_CACHE_KEY = "roster-calendar-snapshot-cache-v2";
 const MAX_MEMORY_SNAPSHOT_CACHE_ENTRIES = 160;
 const ROSTER_OVERLAP_DOCTOR_CACHE_KEY = "roster-overlap-doctor-cache-v1";
 const CURRENT_EMAIL_KEY = "roster-current-email";
@@ -5603,9 +5603,7 @@ async function importRosterFiles(files) {
   showRosterImportOverlay(accepted.length);
   try {
     await mergeFiles(accepted);
-    void refreshCreatorCalendarAfterFileChange().catch((error) => {
-      setStatus(error.message || "Could not refresh after roster import.", true);
-    });
+    await refreshCreatorCalendarAfterFileChange();
   } finally {
     await finishRosterImportOverlay(startedAt);
   }
@@ -11273,9 +11271,9 @@ async function refreshCreatorCalendarAfterFileChange(options = {}) {
         const loaded = await loadCloudCalendarEvents({
           preserveExistingSnapshot: !afterRosterRemoval,
           allowInlineBuild: afterRosterRemoval,
-          cachedRevision: afterRosterRemoval ? "" : (currentSnapshot?.calendarRevision || currentCalendarRevision || ""),
+          cachedRevision: "",
         });
-        if (loaded && currentSnapshot) {
+        if (loaded && currentSnapshot && !currentSnapshotStale) {
           renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
           mergeSelectedFilesWithRosterStoreStatus(calendarStoreStatus, { force: true });
           try {
@@ -11408,11 +11406,11 @@ async function pollCalendarAfterRosterChange() {
           const loaded = await loadCloudCalendarEvents({
             preserveExistingSnapshot: true,
             allowInlineBuild: false,
-            cachedRevision: currentSnapshot?.calendarRevision || currentCalendarRevision || "",
+            cachedRevision: currentSnapshotStale ? "" : (currentSnapshot?.calendarRevision || currentCalendarRevision || ""),
             doctorKey: OWNER_DOCTOR_KEY,
           });
           if (pollRunId !== calendarImportPollRunId) return;
-          if (loaded && currentSnapshot) {
+          if (loaded && currentSnapshot && !currentSnapshotStale) {
             renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
             mergeSelectedFilesWithRosterStoreStatus(calendarStoreStatus, { force: true });
             try {
@@ -12260,7 +12258,7 @@ async function applyCloudStateSnapshot(data, options = {}) {
     return;
   }
   currentSnapshot = sanitizeWorkspaceSnapshot(data.snapshot);
-  if (currentSnapshot && currentCalendarRevision) {
+  if (currentSnapshot && currentCalendarRevision && data.snapshotStale !== true) {
     currentSnapshot.calendarRevision = currentCalendarRevision;
     currentSnapshot.cacheKey = currentCalendarSnapshotCacheKey({ ownerEmail: viewedAccountEmail(), doctorKey: currentDefaultDoctorKey || currentSnapshot?.session?.doctorKey || "" });
   }
@@ -12275,7 +12273,7 @@ async function applyCloudStateSnapshot(data, options = {}) {
     session: restoredSessionState || {},
     snapshot: currentSnapshot,
   });
-  if (currentSnapshot) {
+  if (currentSnapshot && !currentSnapshotStale) {
     const cacheContext = {
       ownerEmail: viewedAccountEmail(),
       doctorKey: currentDefaultDoctorKey || currentSnapshot?.session?.doctorKey || "",
@@ -12355,7 +12353,7 @@ async function loadCloudCalendarEvents(options = {}) {
     return Boolean(currentSnapshot);
   }
   currentSnapshot = sanitizeWorkspaceSnapshot(clearCloudLoadedSnapshotFilters(data.snapshot));
-  if (currentSnapshot) {
+  if (currentSnapshot && data.snapshotStale !== true) {
     currentSnapshot.calendarRevision = currentCalendarRevision;
     currentSnapshot.cacheKey = currentCalendarSnapshotCacheKey({
       ownerEmail: adminTargetEmail || viewedAccountEmail(),
@@ -12372,10 +12370,12 @@ async function loadCloudCalendarEvents(options = {}) {
     session: restoredSessionState || {},
     snapshot: currentSnapshot,
   });
-  saveCalendarSnapshotCacheForContext(currentSnapshot, {
-    ownerEmail: adminTargetEmail || viewedAccountEmail(),
-    doctorKey: preferredDoctorKey || currentSnapshot.session?.doctorKey || "",
-  });
+  if (!currentSnapshotStale) {
+    saveCalendarSnapshotCacheForContext(currentSnapshot, {
+      ownerEmail: adminTargetEmail || viewedAccountEmail(),
+      doctorKey: preferredDoctorKey || currentSnapshot.session?.doctorKey || "",
+    });
+  }
   return true;
 }
 
@@ -14420,7 +14420,7 @@ function handleHistoryShortcut(event) {
 }
 
 const DB_NAME = "roster-converter";
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const IMPORT_STORE = "imports";
 const SNAPSHOT_STORE = "calendarSnapshots";
 const CONFLICT_SELECTIONS_KEY = "roster-conflict-selections";
@@ -14433,6 +14433,9 @@ async function openImportsDb() {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onupgradeneeded = () => {
       const db = request.result;
+      if (request.oldVersion < 3 && db.objectStoreNames.contains(SNAPSHOT_STORE)) {
+        db.deleteObjectStore(SNAPSHOT_STORE);
+      }
       if (!db.objectStoreNames.contains(IMPORT_STORE)) {
         db.createObjectStore(IMPORT_STORE, { keyPath: "id" });
       }

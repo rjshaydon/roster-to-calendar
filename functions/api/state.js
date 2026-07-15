@@ -1872,12 +1872,10 @@ async function prepareFastLoginEnvelope(rawRecord, options = {}) {
     state: lightweight.state,
     claims: lightweight.claims,
     nameMatches: [],
-    availableDoctors: role === "creator" || role === "owner"
-      ? await repositoryDoctorCandidates(null, null, options.db, {
-        hideZeroEventStandalone: true,
-        preferCanonical: true,
-      })
-      : [],
+    // The creator doctor list can be expensive on a large roster repository.
+    // The client hydrates it immediately after the fast login response, so it
+    // must not be allowed to turn authentication into a 503.
+    availableDoctors: [],
     subscription: null,
     insightsEnabled: insightsEnabledForRecord(record),
     adminIssues: [],
@@ -2225,7 +2223,12 @@ async function loadSnapshotPayloadFromRegistry(context, options = {}) {
   const calendarRevision = String(options.calendarRevision || "");
   const buildInProgress = snapshotRegistryBuildInProgress(registry);
   const canScheduleRebuild = shouldScheduleSnapshotRebuild(registry);
-  if (!options.bypassCache && cachedRevision && cachedRevision === calendarRevision) {
+  const registryCurrent = Boolean(
+    calendarRevision
+    && registry?.status === "ready"
+    && registry?.builtRevision === calendarRevision
+  );
+  if (!options.bypassCache && cachedRevision && cachedRevision === calendarRevision && registryCurrent) {
     return {
       ok: true,
       snapshot: null,
@@ -3939,8 +3942,9 @@ function deferCanonicalDoctorRefresh(context, reason = "roster-change") {
     });
   });
   if (typeof context.waitUntil === "function") {
-    context.waitUntil(run());
-    return;
+    const pending = run();
+    context.waitUntil(pending);
+    return pending;
   }
   return run();
 }
@@ -4013,12 +4017,13 @@ async function runCoreDerivedRosterSave(context, job = {}) {
             sourceType: String(filePayload.sourceType || "").toLowerCase(),
             doctors: job.doctors || [],
           });
-        return Promise.resolve(presence).then(() => {
-          deferCanonicalDoctorRefresh(context, job.reason || "saveDerivedCalendarFile");
-          scheduleSnapshotWarmupForSourceTypes(context, [String(filePayload.sourceType || "").toLowerCase()].filter(Boolean), {
-            reason: job.reason || "saveDerivedCalendarFile",
+        return Promise.resolve(presence)
+          .then(() => deferCanonicalDoctorRefresh(context, job.reason || "saveDerivedCalendarFile"))
+          .then(() => {
+            scheduleSnapshotWarmupForSourceTypes(context, [String(filePayload.sourceType || "").toLowerCase()].filter(Boolean), {
+              reason: job.reason || "saveDerivedCalendarFile",
+            });
           });
-        });
       };
       if (typeof context.waitUntil === "function") {
         context.waitUntil(postSave().catch((error) => {
