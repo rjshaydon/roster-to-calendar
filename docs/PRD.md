@@ -28,7 +28,6 @@ The app must move beyond per-browser local storage. Accounts, roster files, pars
 - Can claim roster-name variants detected from repository files.
 - Can see only their own generated roster.
 - Can dispute a roster-name claim owned by another user.
-- Can retain an active roster window of up to six months.
 
 ## Front Entrance
 

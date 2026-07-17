@@ -220,6 +220,11 @@ assert.match(
   "fast login should build a minimal account payload and use the lightweight snapshot path",
 );
 assert.match(
+  stateSource.match(/if \(action === "login"\)[\s\S]*?const account = await verifyD1Account/)?.[0] || "",
+  /loadFastAccountSnapshotPayload\(context, \{[\s\S]*cachedRevision: body\?\.cachedRevision/,
+  "fast login should pass the browser revision through to avoid returning an unchanged snapshot",
+);
+assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
     .match(/async function loadFastAccountSnapshotPayload[\s\S]*?function scheduleAccountSnapshotRebuild/)?.[0] || "",
   /queryCalendarRevision[\s\S]*allowInlineBuild: false[\s\S]*revisionSkipped: false/,
@@ -881,6 +886,21 @@ assert.match(
   appSource.match(/async function loginWithEmail[\s\S]*?async function restoreCloudState/)?.[0] || "",
   /restoreCloudState\(\{[\s\S]*deferContext: true[\s\S]*deferSnapshotPersistence: true[\s\S]*responseMode: "fast"/,
   "login should request the fast phased cloud-state response",
+);
+assert.match(
+  appSource.match(/async function bootstrapApp[\s\S]*?function setStatus/)?.[0] || "",
+  /renderCachedCalendarSnapshotForContextAsync[\s\S]*hideLoadingScreen\(\)[\s\S]*restoreCloudState\(\{[\s\S]*responseMode: "fast"[\s\S]*queuePostLoginHydration/,
+  "remembered sessions should paint the browser calendar before authentication refresh and workspace hydration",
+);
+assert.match(
+  appSource.match(/function compactCalendarSnapshotCacheStore[\s\S]*?function calendarSnapshotContext/)?.[0] || "",
+  /MAX_HOT_SNAPSHOT_CACHE_ENTRIES[\s\S]*localStorage\.setItem\(CALENDAR_SNAPSHOT_CACHE_KEY, JSON\.stringify\(compactStore\)\)/,
+  "the synchronous calendar hot cache should be proactively bounded",
+);
+assert.match(
+  appSource.match(/async function pruneStoredCalendarSnapshots[\s\S]*?function queueStoredCalendarSnapshotPersist/)?.[0] || "",
+  /MAX_STORED_SNAPSHOT_CACHE_AGE_MS[\s\S]*MAX_STORED_SNAPSHOT_CACHE_ENTRIES[\s\S]*requestIdleCallback/,
+  "the larger switcher cache should be pruned only through idle maintenance",
 );
 assert.match(
   appSource.match(/async function loginWithEmail[\s\S]*?async function restoreCloudState/)?.[0] || "",
@@ -3476,6 +3496,15 @@ const d1FastCachedLogin = await postState(d1StateStore, {
 assert.equal(d1FastCachedLogin.snapshotSource, "server-cache", "fast login should serve a ready server snapshot as current");
 assert.equal(d1FastCachedLogin.snapshotStale, false, "fast login should not mark revision-matched server cache stale");
 assert.equal(d1FastCachedLogin.snapshot?.preview?.derivedFromD1, true, "fast login should return the cached server snapshot");
+const d1FastBrowserRevisionLogin = await postState(d1StateStore, {
+  action: "login",
+  email: "d1-user@example.com",
+  password: "d1-password",
+  responseMode: "fast",
+  cachedRevision: d1FastCachedLogin.snapshotRevision,
+}, d1Store);
+assert.equal(d1FastBrowserRevisionLogin.snapshotCurrent, true, "fast login should accept a current browser revision");
+assert.equal(d1FastBrowserRevisionLogin.snapshot, null, "fast login should not resend an unchanged browser snapshot");
 const d1CurrentRevisionCheck = await postState(d1StateStore, {
   action: "loadCalendarEvents",
   email: "d1-user@example.com",

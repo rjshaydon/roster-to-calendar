@@ -123,11 +123,13 @@ export async function onRequestPost(context) {
         ? await loadFastAccountSnapshotPayload(context, {
             targetRecord: loginRecord,
             prepared,
+            cachedRevision: body?.cachedRevision,
             reason: "login",
           })
         : await loadAccountSnapshotPayload(context, {
             targetRecord: loginRecord,
             prepared,
+            cachedRevision: body?.cachedRevision,
             allowInlineBuild: true,
             reason: "login",
           });
@@ -142,6 +144,7 @@ export async function onRequestPost(context) {
         claims: prepared.claims,
         calendarRevision: snapshotPayload.calendarRevision,
         snapshot: snapshotPayload.snapshot,
+        snapshotCurrent: snapshotPayload.snapshotCurrent === true,
         snapshotAvailable: snapshotPayload.snapshotAvailable,
         snapshotStale: snapshotPayload.snapshotStale,
         snapshotBuiltAt: snapshotPayload.snapshotBuiltAt,

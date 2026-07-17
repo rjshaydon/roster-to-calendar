@@ -163,7 +163,11 @@ const ACCOUNT_STATE_KEY = "roster-account-state";
 const SESSION_STATE_KEY = "roster-session-state-v1";
 const ACCOUNT_WORKSPACES_KEY = "roster-account-workspaces-v1";
 const CALENDAR_SNAPSHOT_CACHE_KEY = "roster-calendar-snapshot-cache-v2";
+const LEGACY_CALENDAR_SNAPSHOT_CACHE_KEYS = ["roster-calendar-snapshot-cache-v1"];
+const MAX_HOT_SNAPSHOT_CACHE_ENTRIES = 3;
 const MAX_MEMORY_SNAPSHOT_CACHE_ENTRIES = 160;
+const MAX_STORED_SNAPSHOT_CACHE_ENTRIES = 240;
+const MAX_STORED_SNAPSHOT_CACHE_AGE_MS = 45 * 24 * 60 * 60 * 1000;
 const ROSTER_OVERLAP_DOCTOR_CACHE_KEY = "roster-overlap-doctor-cache-v1";
 const CURRENT_EMAIL_KEY = "roster-current-email";
 const CURRENT_PASSWORD_KEY = "roster-current-password";
@@ -329,6 +333,8 @@ let currentCalendarRevision = "";
 let snapshotRefreshPromise = null;
 let switchTargetPrefetchRunId = 0;
 let switchTargetPrefetchPromise = null;
+let storedSnapshotMaintenanceQueued = false;
+let storedSnapshotWritesSinceMaintenance = 0;
 let deferredBootstrapRunId = 0;
 let deferredBootstrapTimer = 0;
 let deferredAccountContextRunId = 0;
@@ -7750,7 +7756,7 @@ function renderAccountsModal() {
             <article class="issue-card account-user-card">
               <div>
                 <strong>${escapeHtml(user.realName || "Name not set")}</strong>
-                <p>${escapeHtml(user.email)} · ${user.role === "owner" ? "Creator" : "Standard user"} · ${formatUserSites(user)} · storage limit: latest 6 months active</p>
+                <p>${escapeHtml(user.email)} · ${user.role === "owner" ? "Creator" : "Standard user"} · ${formatUserSites(user)}</p>
                 ${renderLinkedRosterNames(user.claims || [], [], { compact: true, email: user.email })}
               </div>
               ${user.role === "owner" ? "" : `
@@ -11680,6 +11686,8 @@ async function loginWithEmail(email, password, options = {}) {
     }
     switchTargetPrefetchRunId += 1;
     switchTargetPrefetchPromise = null;
+    const loginCacheContext = accountCalendarContextForEmail(currentUserEmail);
+    const cachedBeforeAuthentication = loadCachedCalendarSnapshotForContext(loginCacheContext);
     const loginData = await restoreCloudState({
       ...options,
       deferHydration: true,
@@ -11687,6 +11695,8 @@ async function loginWithEmail(email, password, options = {}) {
       deferSnapshotPersistence: true,
       skipSnapshotCacheWriteIfCurrent: true,
       responseMode: "fast",
+      cachedRevision: cachedBeforeAuthentication?.calendarRevision || "",
+      preserveExistingSnapshot: true,
       loginStartedAt,
       transition,
     });
@@ -11702,7 +11712,7 @@ async function loginWithEmail(email, password, options = {}) {
     }
     const renderedCachedSnapshot = inlineSnapshotReady
       ? true
-      : renderCachedCalendarSnapshotForContext(accountCalendarContextForEmail(currentUserEmail), {
+      : await renderCachedCalendarSnapshotForContextAsync(loginCacheContext, {
           loginStartedAt,
           transition,
           expectedRevision: currentCalendarRevision,
@@ -11764,6 +11774,7 @@ async function restoreCloudState(options = {}) {
       deferContext: options.deferContext === true,
       deferSnapshotPersistence: options.deferSnapshotPersistence === true,
       skipSnapshotCacheWriteIfCurrent: options.skipSnapshotCacheWriteIfCurrent === true,
+      preserveExistingSnapshot: options.preserveExistingSnapshot === true,
       transition: options.transition,
     });
     if (!calendarTransitionStillCurrent(options.transition)) return null;
@@ -13854,6 +13865,24 @@ function isStorageQuotaError(error) {
     || error?.code === 1014;
 }
 
+function removeLegacyCalendarSnapshotCaches() {
+  for (const key of LEGACY_CALENDAR_SNAPSHOT_CACHE_KEYS) {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // Legacy cache cleanup must never delay calendar rendering.
+    }
+  }
+}
+
+function compactCalendarSnapshotCacheStore(store, limit = MAX_HOT_SNAPSHOT_CACHE_ENTRIES) {
+  const entries = Object.entries(store || {})
+    .filter(([, entry]) => (entry?.snapshot || entry)?.preview)
+    .sort((left, right) => String(right[1]?.cachedAt || right[1]?.snapshot?.cachedAt || "").localeCompare(String(left[1]?.cachedAt || left[1]?.snapshot?.cachedAt || "")))
+    .slice(0, Math.max(1, limit));
+  return Object.fromEntries(entries);
+}
+
 function loadCalendarSnapshotCacheStore() {
   try {
     const store = JSON.parse(localStorage.getItem(CALENDAR_SNAPSHOT_CACHE_KEY) || "{}");
@@ -13897,14 +13926,24 @@ function calendarSnapshotFromCacheEntry(entry, key = "") {
 }
 
 function saveCalendarSnapshotCacheStore(store) {
+  const compactStore = compactCalendarSnapshotCacheStore(store);
   try {
-    localStorage.setItem(CALENDAR_SNAPSHOT_CACHE_KEY, JSON.stringify(store || {}));
+    localStorage.setItem(CALENDAR_SNAPSHOT_CACHE_KEY, JSON.stringify(compactStore));
   } catch (error) {
     if (!isStorageQuotaError(error)) throw error;
-    const entries = Object.entries(store || {})
-      .sort((left, right) => String(right[1]?.cachedAt || "").localeCompare(String(left[1]?.cachedAt || "")))
-      .slice(0, 3);
-    localStorage.setItem(CALENDAR_SNAPSHOT_CACHE_KEY, JSON.stringify(Object.fromEntries(entries)));
+    removeLegacyCalendarSnapshotCaches();
+    const newestOnly = compactCalendarSnapshotCacheStore(compactStore, 1);
+    try {
+      localStorage.setItem(CALENDAR_SNAPSHOT_CACHE_KEY, JSON.stringify(newestOnly));
+    } catch (retryError) {
+      if (!isStorageQuotaError(retryError)) throw retryError;
+      // IndexedDB remains the durable cache if localStorage is unavailable.
+      try {
+        localStorage.removeItem(CALENDAR_SNAPSHOT_CACHE_KEY);
+      } catch {
+        // Ignore browser storage failures.
+      }
+    }
   }
 }
 
@@ -14495,9 +14534,62 @@ async function saveStoredCalendarSnapshotEntry(key, entry) {
   }
 }
 
+async function pruneStoredCalendarSnapshots() {
+  if (!("indexedDB" in window)) return;
+  const db = await openImportsDb();
+  try {
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(SNAPSHOT_STORE, "readwrite");
+      const store = tx.objectStore(SNAPSHOT_STORE);
+      const request = store.getAll();
+      request.onsuccess = () => {
+        const cutoff = Date.now() - MAX_STORED_SNAPSHOT_CACHE_AGE_MS;
+        const entries = (request.result || [])
+          .map((entry) => ({
+            entry,
+            cachedAtMs: Date.parse(entry?.cachedAt || entry?.snapshot?.cachedAt || "") || 0,
+          }))
+          .sort((left, right) => right.cachedAtMs - left.cachedAtMs);
+        entries.forEach(({ entry, cachedAtMs }, index) => {
+          if (index >= MAX_STORED_SNAPSHOT_CACHE_ENTRIES || (cachedAtMs > 0 && cachedAtMs < cutoff)) {
+            store.delete(entry.key);
+          }
+        });
+      };
+      request.onerror = () => reject(request.error || new Error("Could not inspect snapshot cache."));
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error || new Error("Could not prune snapshot cache."));
+    });
+  } finally {
+    db.close();
+  }
+}
+
+function queueStoredCalendarSnapshotMaintenance(options = {}) {
+  storedSnapshotWritesSinceMaintenance += options.afterWrite === true ? 1 : 0;
+  if (storedSnapshotMaintenanceQueued) return;
+  if (options.afterWrite === true && storedSnapshotWritesSinceMaintenance < 25) return;
+  storedSnapshotMaintenanceQueued = true;
+  const run = () => {
+    void pruneStoredCalendarSnapshots()
+      .catch(() => null)
+      .finally(() => {
+        storedSnapshotMaintenanceQueued = false;
+        storedSnapshotWritesSinceMaintenance = 0;
+      });
+  };
+  if (typeof requestIdleCallback === "function") {
+    requestIdleCallback(run, { timeout: 4000 });
+  } else {
+    window.setTimeout(run, 1500);
+  }
+}
+
 function queueStoredCalendarSnapshotPersist(key, entry) {
   const run = () => {
-    void saveStoredCalendarSnapshotEntry(key, entry).catch(() => null);
+    void saveStoredCalendarSnapshotEntry(key, entry)
+      .then(() => queueStoredCalendarSnapshotMaintenance({ afterWrite: true }))
+      .catch(() => null);
   };
   if (typeof requestIdleCallback === "function") {
     requestIdleCallback(run, { timeout: 1500 });
@@ -15090,15 +15182,66 @@ async function refreshSnapshotInBackground() {
 
 async function bootstrapApp() {
   try {
+    removeLegacyCalendarSnapshotCaches();
     renderLoginState();
     if (!currentUserEmail || !currentUserPassword) {
       openLoginModal();
       setStatus("Log in with an email address to load your roster workspace.");
+      queueStoredCalendarSnapshotMaintenance();
       return;
     }
-    await restoreCloudState();
+    const loginStartedAt = performance.now();
+    const transition = beginCalendarTransition();
+    forceConsoleSkin();
+    const cacheContext = accountCalendarContextForEmail(currentUserEmail);
+    const renderedCachedSnapshot = await renderCachedCalendarSnapshotForContextAsync(cacheContext, {
+      loginStartedAt,
+      transition,
+    });
+    if (renderedCachedSnapshot) {
+      renderLoginState();
+      hideLoadingScreen();
+      markLoginPhase("firstCalendarPaint", loginStartedAt);
+      setStatus("Checking calendar for updates...");
+    } else {
+      setStatus("Loading calendar...");
+    }
+    const loginData = await restoreCloudState({
+      mode: "login",
+      responseMode: "fast",
+      deferHydration: true,
+      deferContext: true,
+      deferSnapshotPersistence: true,
+      skipSnapshotCacheWriteIfCurrent: true,
+      cachedRevision: renderedCachedSnapshot ? currentSnapshot?.calendarRevision || "" : "",
+      preserveExistingSnapshot: renderedCachedSnapshot,
+      loginStartedAt,
+      transition,
+    });
+    if (!currentUserEmail || !calendarTransitionStillCurrent(transition)) return;
     renderLoginState();
-    await bootstrapImports();
+    const inlineSnapshotReady = loginSnapshotReadyForRender();
+    if (!renderedCachedSnapshot && inlineSnapshotReady) {
+      renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+      markLoginPhase("cachedCalendarRendered", loginStartedAt);
+      markLoginPhase("firstCalendarPaint", loginStartedAt);
+    }
+    if ((loginData?.responseMode || "full") === "fast") {
+      queueDeferredAccountContextLoad({
+        loginStartedAt,
+        targetEmail: "",
+        responseMode: loginData?.responseMode || "fast",
+        delayMs: 50,
+        transition,
+      });
+    }
+    queuePostLoginHydration({
+      includeBootstrap: true,
+      forceCalendarRefresh: renderedCachedSnapshot || inlineSnapshotReady,
+      allowInlineBuild: !(renderedCachedSnapshot || inlineSnapshotReady),
+      transition,
+    }, loginStartedAt);
+    queueStoredCalendarSnapshotMaintenance();
   } finally {
     hideLoadingScreen();
   }
