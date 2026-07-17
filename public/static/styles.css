@@ -2266,7 +2266,8 @@ body[data-skin="console"] #controlBar,
 body[data-skin="console"] #claimSection,
 body[data-skin="console"] #settingsPanel,
 body[data-skin="console"] #conflictsPanel,
-body[data-skin="console"] #issuesPanel {
+body[data-skin="console"] #issuesPanel,
+body[data-skin="console"] #status {
   grid-column: 1;
   margin: 0;
   border-width: 0 1px 1px 0;
@@ -2299,6 +2300,11 @@ body[data-skin="console"] #issuesPanel {
   grid-template-rows: auto minmax(0, 1fr);
   max-height: calc(100vh - 520px);
   min-height: 0;
+}
+
+body[data-skin="console"] #status {
+  padding: 16px 20px;
+  background: #ffffff;
 }
 
 body[data-skin="console"] #issuesPanel.hidden {
@@ -2928,6 +2934,7 @@ body[data-skin="console"] .panel {
   body[data-skin="console"] #settingsPanel,
   body[data-skin="console"] #conflictsPanel,
   body[data-skin="console"] #issuesPanel,
+  body[data-skin="console"] #status,
   body[data-skin="console"] #previewSection {
     grid-column: 1;
     grid-row: auto;
@@ -2946,6 +2953,10 @@ body[data-skin="console"] .panel {
     overflow: visible;
     width: 100%;
     max-width: 100%;
+  }
+
+  body[data-skin="console"] #status {
+    padding: 0 20px 190px;
   }
 
   body[data-skin="console"] .preview-head {

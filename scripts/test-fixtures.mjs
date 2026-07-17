@@ -84,6 +84,11 @@ const styleSource = await readFile(new URL("../public/static/styles.css", import
 const calendarMigrationSource = await readFile(new URL("../migrations/0001_calendar_store.sql", import.meta.url), "utf8");
 const insightIndexMigrationSource = await readFile(new URL("../migrations/0005_roster_insight_index.sql", import.meta.url), "utf8");
 const d1CalendarSource = await readFile(new URL("../functions/_lib/d1-calendar.js", import.meta.url), "utf8");
+const indexSource = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
+assert.ok(
+  indexSource.indexOf('id="status"') > indexSource.indexOf('id="previewSection"'),
+  "live status messages should render below the calendar so mobile updates cannot displace it",
+);
 assert.doesNotMatch(appSource, /import[^;]+from ["']xlsx["']/, "calendar startup must not eagerly load the spreadsheet engine");
 assert.doesNotMatch(rosterSource, /import[^;(]+from ["'](?:xlsx|fflate)["']/, "roster startup must not eagerly load parsing engines");
 assert.match(rosterSource, /spreadsheetDependencyPromise = import\("xlsx"\)/, "spreadsheet parsing should lazy-load its engine");
