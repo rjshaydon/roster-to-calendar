@@ -179,6 +179,16 @@ assert.match(
   "switched-user account surfaces should be driven by viewed identity rather than creator authentication",
 );
 assert.match(
+  appSource.match(/function canUseCreatorDoctorSwitcher[\s\S]*?function canReturnToCreator/)?.[0] || "",
+  /canUseDoctorPicker\(\)[\s\S]*activeCalendarMode\(\) === "doctor-profile"/,
+  "the global doctor switcher should be limited to the creator calendar and unclaimed doctor profiles",
+);
+assert.doesNotMatch(
+  appSource.match(/function canUseCreatorDoctorSwitcher[\s\S]*?function canReturnToCreator/)?.[0] || "",
+  /adminViewingEmail/,
+  "entering an unclaimed user account should show its roster-name chooser instead of the creator switcher",
+);
+assert.match(
   appSource.match(/function calendarFilesForActiveView[\s\S]*?function rosterDisplayFiles/)?.[0] || "",
   /activeCalendarMode\(\) === "doctor-profile"[\s\S]*activeDoctorProfile\.sourceTypes/,
   "doctor-profile account files should come from the viewed calendar snapshot rather than creator roster status",
@@ -3727,20 +3737,15 @@ const adminEnteredResolution = await postState(d1StateStore, {
   password: creatorPassword,
   targetEmail: "admin-enter-match@example.com",
 }, d1Store);
-assert.ok(
-  adminEnteredResolution.claims.some((claim) => claim.key === d1Doctor.key && claim.sourceType === "mmc"),
-  "creator-entered matching users should resolve and persist D1 roster claims",
-);
-const adminEnteredCalendar = await postState(d1StateStore, {
-  action: "loadCalendarEvents",
-  email: "rhaydon@gmail.com",
-  password: creatorPassword,
-  targetEmail: "admin-enter-match@example.com",
-}, d1Store);
 assert.equal(
-  adminEnteredCalendar.snapshot?.preview?.derivedFromD1,
-  true,
-  "creator-entered matching users should load calendars from D1 after claim resolution",
+  adminEnteredResolution.claims.some((claim) => claim.key === d1Doctor.key && claim.sourceType === "mmc"),
+  false,
+  "automatic matching must not give a second account an already-claimed clinician identity",
+);
+assert.equal(
+  adminEnteredResolution.availableDoctors.find((doctor) => doctor.key === d1Doctor.key)?.claimedBy,
+  "d1-user@example.com",
+  "an unclaimed account should see who already owns its matching roster identity",
 );
 for (const key of [...d1Store.accountClaims.keys()]) {
   if (key.startsWith("admin-enter-match@example.com|")) d1Store.accountClaims.delete(key);
@@ -5050,6 +5055,7 @@ seedD1Repository(identityStore.d1, [
       { key: "AARON BADWAL", displayName: "Aaron BADWAL", sourceType: "ddh" },
       { key: "ANDREA LIM", displayName: "Andrea LIM", sourceType: "ddh" },
       { key: "ABI THANIKASALAM", displayName: "Abi THANIKASALAM", sourceType: "ddh" },
+      { key: "JOSEPH VU", displayName: "Joseph VU", sourceType: "ddh" },
     ],
   }),
   repositoryFile("identity-mch", {
@@ -5065,6 +5071,27 @@ const abiAutoClaim = await postState(identityStore, {
   realName: "Abirama Thanikasalam",
 });
 assert.deepEqual(abiAutoClaim.claims.map((claim) => `${claim.sourceType}:${claim.key}`), ["ddh:ABI THANIKASALAM"]);
+const josephEmailAutoClaim = await postState(identityStore, {
+  action: "login",
+  email: "joseph.vu@monashhealth.org",
+  password: "joseph-password",
+  mode: "create",
+  realName: "jjj",
+});
+assert.deepEqual(
+  josephEmailAutoClaim.claims.map((claim) => `${claim.sourceType}:${claim.key}`),
+  ["ddh:JOSEPH VU"],
+  "an exact firstname.surname email should link the matching clinician even when the entered name is unrelated",
+);
+await seedUser(identityStore, "unrelated@example.com", "unrelated-password", "Unrelated Person");
+const duplicateJosephClaim = await postStateRaw(identityStore, {
+  action: "claimRosterName",
+  email: "unrelated@example.com",
+  password: "unrelated-password",
+  claim: { sourceType: "ddh", key: "JOSEPH VU" },
+});
+assert.equal(duplicateJosephClaim.response.status, 409);
+assert.equal(duplicateJosephClaim.body.conflict, true, "a second account must not be able to claim an existing clinician identity");
 const andreaLogin = await postState(identityStore, {
   action: "login",
   email: "andrea@example.com",

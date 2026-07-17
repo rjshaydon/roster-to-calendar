@@ -342,8 +342,16 @@ export async function onRequestPost(context) {
       if (!claim) {
         return Response.json({ error: "Roster name was not found." }, { status: 400 });
       }
+      const existingOwner = await resolveDoctorAccount(null, claim, context.env.ROSTER_DB);
+      if (existingOwner.mode === "claimed-account" && normalizeEmail(existingOwner.email) !== normalizeEmail(claimEmail)) {
+        return Response.json({
+          error: `${claim.displayName} is already linked to another account. Ask the administrator to resolve the conflict.`,
+          conflict: true,
+          claimedBy: existingOwner.email,
+        }, { status: 409 });
+      }
       const claims = mergeClaims(targetRecord.claims, [{ ...claim, matchedAt: new Date().toISOString() }]);
-      const updatedAdminIssues = claimMatchesAccountIdentity(claim, targetRecord.realName || "")
+      const updatedAdminIssues = claimMatchesAccountIdentity(claim, targetRecord.realName || "", targetRecord.email)
         ? targetRecord.adminIssues
         : mergeAdminIssues(targetRecord.adminIssues, [manualRosterClaimIssue(targetRecord, claim)]);
       const d1Refs = await d1RepositoryImportRefsForClaims(context.env.ROSTER_DB, claims);
@@ -1465,7 +1473,11 @@ async function listD1Users(db, options = {}) {
 async function autoClaimMatchedRosterNames(store, record, db = null) {
   const role = record?.role || roleForEmail(record?.email || "");
   if (!record?.email || role === "creator" || role === "owner") return record;
-  const matchedClaims = matchDoctorClaims(await loadSqlDoctorCandidates(db), record.realName || "");
+  const matchedClaims = await filterAvailableAutoClaims(
+    matchDoctorClaims(await loadSqlDoctorCandidates(db), record.realName || "", record.email),
+    record.email,
+    db,
+  );
   const claims = mergeClaims(sanitizeClaims(record.claims), matchedClaims);
   if (!claims.length || JSON.stringify(claims) === JSON.stringify(sanitizeClaims(record.claims))) return record;
   const d1Refs = await d1RepositoryImportRefsForClaims(db, claims);
@@ -1488,7 +1500,12 @@ async function autoClaimMatchedCanonicalDoctors(record, db = null) {
   if (!record?.email || role === "creator" || role === "owner") return record;
   const canonicalDoctors = await queryCanonicalDoctors(db).catch(() => []);
   const indexedDoctors = canonicalDoctors.length ? canonicalDoctors : await queryRosterDoctors(db).catch(() => []);
-  const claims = mergeClaims(sanitizeClaims(record.claims), matchDoctorClaims(indexedDoctors, record.realName || ""));
+  const matchedClaims = await filterAvailableAutoClaims(
+    matchDoctorClaims(indexedDoctors, record.realName || "", record.email),
+    record.email,
+    db,
+  );
+  const claims = mergeClaims(sanitizeClaims(record.claims), matchedClaims);
   if (!claims.length || JSON.stringify(claims) === JSON.stringify(sanitizeClaims(record.claims))) return record;
   return {
     ...record,
@@ -1940,7 +1957,11 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
 
   if (role !== "creator" && role !== "owner") {
     const originalClaims = claims;
-    const matchedClaims = matchDoctorClaims(await loadSqlDoctorCandidates(options.db), record.realName || "");
+    const matchedClaims = await filterAvailableAutoClaims(
+      matchDoctorClaims(await loadSqlDoctorCandidates(options.db), record.realName || "", record.email),
+      record.email,
+      options.db,
+    );
     nameMatches = matchedClaims.filter((claim) => !claims.some((existing) => sameClaim(existing, claim)));
     claims = mergeClaims(claims, matchedClaims);
     linkedProfiles = await linkedDoctorProfilesForClaims(store, claims, options.db);
@@ -3813,12 +3834,14 @@ function filterStoredRosterIssuesForPreview(issues, ruleSets = {}) {
     .filter((issue) => !isIssueResolvedByRuleSets(issue, ruleSets));
 }
 
-function matchDoctorClaims(doctors, realName) {
+function matchDoctorClaims(doctors, realName, email = "") {
   const claims = [];
-  const realIdentity = rosterIdentityKey(realName);
-  if (!realIdentity) return claims;
+  const identityCandidates = [realName, rosterNameFromEmail(email)]
+    .map((value) => String(value || "").trim())
+    .filter((value, index, values) => rosterIdentityKey(value) && values.indexOf(value) === index);
+  if (!identityCandidates.length) return claims;
   for (const doctor of doctors || []) {
-    if (!doctorMatchesRealName(doctor, realName)) continue;
+    if (!identityCandidates.some((identity) => doctorMatchesRealName(doctor, identity))) continue;
     const aliases = Array.isArray(doctor.aliases) && doctor.aliases.length ? doctor.aliases : [doctor];
     for (const alias of aliases) {
       claims.push({
@@ -3830,6 +3853,27 @@ function matchDoctorClaims(doctors, realName) {
     }
   }
   return mergeClaims([], claims);
+}
+
+function rosterNameFromEmail(email) {
+  const localPart = normalizeEmail(email).split("@")[0]?.split("+")[0] || "";
+  const tokens = localPart
+    .replace(/[._-]+/g, " ")
+    .replace(/[^a-z\s']/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .filter(Boolean);
+  return tokens.length >= 2 ? tokens.join(" ") : "";
+}
+
+async function filterAvailableAutoClaims(claims, email, db = null) {
+  const normalizedEmail = normalizeEmail(email);
+  const accountIndex = await loadClaimedAccountIndex(null, db).catch(() => []);
+  return sanitizeClaims(claims).filter((claim) => {
+    const resolved = resolveDoctorAccountFromIndex(accountIndex, claim);
+    return resolved.mode !== "claimed-account" || normalizeEmail(resolved.email) === normalizedEmail;
+  });
 }
 
 async function repositoryDoctorCandidates(store, index, db = null, options = {}) {
@@ -4424,12 +4468,14 @@ function sameClaim(left, right) {
   return left?.sourceType === right?.sourceType && left?.key === right?.key;
 }
 
-function claimMatchesAccountIdentity(claim, realName) {
-  if (!rosterIdentityKey(realName)) return true;
-  return doctorMatchesRealName({
+function claimMatchesAccountIdentity(claim, realName, email = "") {
+  const doctor = {
     key: normalizeRosterName(claim?.key || ""),
     displayName: String(claim?.displayName || claim?.key || "").trim(),
-  }, realName);
+  };
+  const identities = [realName, rosterNameFromEmail(email)].filter((value) => rosterIdentityKey(value));
+  if (!identities.length) return true;
+  return identities.some((identity) => doctorMatchesRealName(doctor, identity));
 }
 
 function doctorMatchesRealName(doctor, realName) {

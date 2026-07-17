@@ -5526,7 +5526,7 @@ function canUseDoctorPicker() {
 }
 
 function canUseCreatorDoctorSwitcher() {
-  return Boolean(isCreatorAuthenticated() && (canUseDoctorPicker() || adminViewingEmail || activeCalendarMode() === "doctor-profile"));
+  return Boolean(isCreatorAuthenticated() && (canUseDoctorPicker() || activeCalendarMode() === "doctor-profile"));
 }
 
 function canReturnToCreator() {
