@@ -85,6 +85,12 @@ const calendarMigrationSource = await readFile(new URL("../migrations/0001_calen
 const insightIndexMigrationSource = await readFile(new URL("../migrations/0005_roster_insight_index.sql", import.meta.url), "utf8");
 const d1CalendarSource = await readFile(new URL("../functions/_lib/d1-calendar.js", import.meta.url), "utf8");
 const indexSource = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
+assert.match(indexSource, /id="stayLoggedIn"[^>]*checked/, "Stay logged in should be selected by default");
+assert.match(
+  appSource.match(/function openLoginModal[\s\S]*?function closeLoginModal/)?.[0] || "",
+  /STAY_LOGGED_IN_PREFERENCE_KEY[\s\S]*stayLoggedInPreference === null \? true/,
+  "the login screen should default to staying logged in while preserving an explicit opt-out",
+);
 assert.ok(
   indexSource.indexOf('id="status"') > indexSource.indexOf('id="previewSection"'),
   "live status messages should render below the calendar so mobile updates cannot displace it",

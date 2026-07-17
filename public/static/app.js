@@ -171,6 +171,7 @@ const ROSTER_OVERLAP_DOCTOR_CACHE_KEY = "roster-overlap-doctor-cache-v1";
 const CURRENT_EMAIL_KEY = "roster-current-email";
 const CURRENT_PASSWORD_KEY = "roster-current-password";
 const PERSISTENT_PASSWORD_KEY = "roster-persistent-password";
+const STAY_LOGGED_IN_PREFERENCE_KEY = "roster-stay-logged-in-preference";
 const SETTINGS_FIELDS = [
   "showSourcePrefix",
   "showAmPm",
@@ -11607,7 +11608,8 @@ function openLoginModal(prefillEmail = currentUserEmail || "") {
   forceConsoleSkin();
   loginEmail.value = prefillEmail;
   loginPassword.value = "";
-  if (stayLoggedIn) stayLoggedIn.checked = Boolean(localStorage.getItem(PERSISTENT_PASSWORD_KEY));
+  const stayLoggedInPreference = localStorage.getItem(STAY_LOGGED_IN_PREFERENCE_KEY);
+  if (stayLoggedIn) stayLoggedIn.checked = stayLoggedInPreference === null ? true : stayLoggedInPreference === "true";
   entrancePage.classList.remove("hidden");
   appShell.classList.add("hidden");
   mobileActionBar.classList.add("hidden");
@@ -11717,6 +11719,9 @@ async function loginWithEmail(email, password, options = {}) {
     const transition = beginCalendarTransition();
     localStorage.setItem(CURRENT_EMAIL_KEY, currentUserEmail);
     sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
+    if (!options.adminTargetEmail) {
+      localStorage.setItem(STAY_LOGGED_IN_PREFERENCE_KEY, options.stayLoggedIn ? "true" : "false");
+    }
     if (options.stayLoggedIn) {
       localStorage.setItem(PERSISTENT_PASSWORD_KEY, currentUserPassword);
     } else if (!options.adminTargetEmail) {
