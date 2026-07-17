@@ -15,7 +15,6 @@ import {
   setParserExtensions,
   sourceNames,
 } from "./roster.js";
-import * as XLSX from "xlsx";
 
 const form = document.querySelector("#roster-form");
 const appShell = document.querySelector("#appShell");
@@ -6221,12 +6220,35 @@ function assignDoctorRole(index, doctorKey, source, role) {
 }
 
 function decodeSheetRange(sheet) {
-  return XLSX.utils.decode_range(sheet?.["!ref"] || "A1:A1");
+  const [startAddress, endAddress] = String(sheet?.["!ref"] || "A1:A1").split(":");
+  const start = decodeSheetCellAddress(startAddress);
+  return { s: start, e: decodeSheetCellAddress(endAddress || startAddress) };
 }
 
 function cleanSheetCell(sheet, row, col) {
-  const address = XLSX.utils.encode_cell({ r: row - 1, c: col - 1 });
+  const address = encodeSheetCellAddress({ r: row - 1, c: col - 1 });
   return String(sheet?.[address]?.v ?? "").trim();
+}
+
+function decodeSheetCellAddress(value) {
+  const match = String(value || "").toUpperCase().match(/^\$?([A-Z]+)\$?(\d+)$/);
+  if (!match) return { r: 0, c: 0 };
+  let column = 0;
+  for (const character of match[1]) {
+    column = column * 26 + character.charCodeAt(0) - 64;
+  }
+  return { r: Math.max(0, Number(match[2]) - 1), c: Math.max(0, column - 1) };
+}
+
+function encodeSheetCellAddress({ r, c }) {
+  let column = Math.max(0, Number(c) || 0) + 1;
+  let letters = "";
+  while (column > 0) {
+    const remainder = (column - 1) % 26;
+    letters = String.fromCharCode(65 + remainder) + letters;
+    column = Math.floor((column - 1) / 26);
+  }
+  return `${letters}${Math.max(0, Number(r) || 0) + 1}`;
 }
 
 function looksLikeRosterPerson(value) {

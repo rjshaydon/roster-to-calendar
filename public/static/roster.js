@@ -1,5 +1,40 @@
-import * as XLSX from "xlsx";
-import { decompressSync } from "fflate";
+let XLSX = null;
+let decompressSync = null;
+let spreadsheetDependencyPromise = null;
+let pdfDependencyPromise = null;
+
+async function ensureSpreadsheetDependency() {
+  if (XLSX) return XLSX;
+  if (!spreadsheetDependencyPromise) {
+    spreadsheetDependencyPromise = import("xlsx")
+      .then((module) => {
+        XLSX = module;
+        return XLSX;
+      })
+      .catch((error) => {
+        spreadsheetDependencyPromise = null;
+        throw error;
+      });
+  }
+  return spreadsheetDependencyPromise;
+}
+
+async function ensurePdfDependencies() {
+  await ensureSpreadsheetDependency();
+  if (decompressSync) return decompressSync;
+  if (!pdfDependencyPromise) {
+    pdfDependencyPromise = import("fflate")
+      .then((module) => {
+        decompressSync = module.decompressSync;
+        return decompressSync;
+      })
+      .catch((error) => {
+        pdfDependencyPromise = null;
+        throw error;
+      });
+  }
+  return pdfDependencyPromise;
+}
 
 const TIMEZONE = "Australia/Melbourne";
 
@@ -648,18 +683,22 @@ function chooseWinningImport(importEntries, selectedImportId) {
 async function readWorkbook(file) {
   const bytes = new Uint8Array(await file.arrayBuffer());
   if (isPdfFile(file.name, bytes)) {
+    await ensurePdfDependencies();
     return readPdfWorkbook(bytes, file.name);
   }
 
+  await ensureSpreadsheetDependency();
   return readSpreadsheetWorkbook(bytes, file.name);
 }
 
 async function readWorkbookDataUrl(dataUrl, filename) {
   const bytes = bytesFromDataUrl(dataUrl);
   if (isPdfFile(filename, bytes)) {
+    await ensurePdfDependencies();
     return readPdfWorkbook(bytes, filename);
   }
 
+  await ensureSpreadsheetDependency();
   return readSpreadsheetWorkbook(bytes, filename);
 }
 

@@ -78,11 +78,16 @@ const mchWorkbook = XLSX.readFile(fileURLToPath(new URL("../fixtures/Paeds_Term_
 const caseyBytes = await readFile(fileURLToPath(new URL("../fixtures/Casey_Term_2_2026_DRAFT.xlsm", import.meta.url)));
 const mchBytes = await readFile(fileURLToPath(new URL("../fixtures/Paeds_Term_2_2026.xlsx", import.meta.url)));
 const appSource = await readFile(new URL("../public/static/app.js", import.meta.url), "utf8");
+const rosterSource = await readFile(new URL("../public/static/roster.js", import.meta.url), "utf8");
 const stateSource = await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8");
 const styleSource = await readFile(new URL("../public/static/styles.css", import.meta.url), "utf8");
 const calendarMigrationSource = await readFile(new URL("../migrations/0001_calendar_store.sql", import.meta.url), "utf8");
 const insightIndexMigrationSource = await readFile(new URL("../migrations/0005_roster_insight_index.sql", import.meta.url), "utf8");
 const d1CalendarSource = await readFile(new URL("../functions/_lib/d1-calendar.js", import.meta.url), "utf8");
+assert.doesNotMatch(appSource, /import[^;]+from ["']xlsx["']/, "calendar startup must not eagerly load the spreadsheet engine");
+assert.doesNotMatch(rosterSource, /import[^;(]+from ["'](?:xlsx|fflate)["']/, "roster startup must not eagerly load parsing engines");
+assert.match(rosterSource, /spreadsheetDependencyPromise = import\("xlsx"\)/, "spreadsheet parsing should lazy-load its engine");
+assert.match(rosterSource, /pdfDependencyPromise = import\("fflate"\)/, "PDF parsing should lazy-load its decompression engine");
 assert.match(
   appSource,
   /function pasteCopiedEvent[\s\S]*openCustomEventModal\(previewEventToCustomEvent\(shifted\), targetDate, \{ draft: true \}\);/,
