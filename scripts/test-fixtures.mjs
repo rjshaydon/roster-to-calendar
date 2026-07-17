@@ -398,6 +398,16 @@ assert.match(
   "doctor directory responses should prefer live roster file doctors over stale canonical cache rows",
 );
 assert.match(
+  stateSource.match(/if \(action === "listUsers"\)[\s\S]*?if \(action === "calendarStoreStatus"\)/)?.[0] || "",
+  /repositoryDoctorCandidates[\s\S]*preferCanonical: true/,
+  "routine creator doctor-directory loading should use the refreshed canonical cache instead of rebuilding every identity",
+);
+assert.match(
+  stateSource.match(/if \(action === "loadAccountContext"\)[\s\S]*?if \(action === "claimRosterName"\)/)?.[0] || "",
+  /includeAvailableDoctors:[\s\S]*=== "creator"[\s\S]*=== "owner"/,
+  "deferred creator account context should hydrate the complete doctor switcher",
+);
+assert.match(
   stateSource.match(/if \(action === "resolveAccountClaims"\)[\s\S]*?if \(action === "adminLoadUser"\)/)?.[0] || "",
   /resolvedClaims[\s\S]*includeAvailableDoctors:[\s\S]*&& !resolvedClaims\.length/,
   "claim resolution should only load full doctor candidates while an account still has no claims",

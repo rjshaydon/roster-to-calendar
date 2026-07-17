@@ -114,7 +114,9 @@ export async function onRequestPost(context) {
         ? await prepareFastLoginEnvelope(loginRecord, { db: context.env.ROSTER_DB })
         : await prepareAccountResponse(null, loginRecord, {
             db: context.env.ROSTER_DB,
-            includeAvailableDoctors: (loginRecord.role || roleForEmail(loginRecord.email)) !== "creator" && (loginRecord.role || roleForEmail(loginRecord.email)) !== "owner" && !sanitizeClaims(loginRecord.claims).length,
+            includeAvailableDoctors: (loginRecord.role || roleForEmail(loginRecord.email)) === "creator"
+              || (loginRecord.role || roleForEmail(loginRecord.email)) === "owner"
+              || !sanitizeClaims(loginRecord.claims).length,
           });
       const prepareMs = Date.now() - prepareStartedAt;
       const snapshotPayload = responseMode === "fast"
@@ -315,9 +317,9 @@ export async function onRequestPost(context) {
       const targetClaims = sanitizeClaims(targetRecord.claims);
       const prepared = await prepareAccountResponse(null, targetRecord, {
         db: context.env.ROSTER_DB,
-        includeAvailableDoctors: (targetRecord.role || roleForEmail(targetRecord.email)) !== "creator"
-          && (targetRecord.role || roleForEmail(targetRecord.email)) !== "owner"
-          && !targetClaims.length,
+        includeAvailableDoctors: (targetRecord.role || roleForEmail(targetRecord.email)) === "creator"
+          || (targetRecord.role || roleForEmail(targetRecord.email)) === "owner"
+          || !targetClaims.length,
       });
       return Response.json({
         ok: true,
@@ -399,7 +401,10 @@ export async function onRequestPost(context) {
       return Response.json({
         ok: true,
         users: await Promise.all(repairedUsers.map((record) => userSummaryFromRecord(record.email, record, { db: context.env.ROSTER_DB, globalParserExtensions }))),
-        availableDoctors: await repositoryDoctorCandidates(null, null, context.env.ROSTER_DB, { hideZeroEventStandalone: true }),
+        availableDoctors: await repositoryDoctorCandidates(null, null, context.env.ROSTER_DB, {
+          hideZeroEventStandalone: true,
+          preferCanonical: true,
+        }),
         issueConfig: await buildIssueConfig(null, email, context.env.ROSTER_DB),
       });
     }
@@ -434,7 +439,10 @@ export async function onRequestPost(context) {
         response.accounts = await accountMirrorStatus(context.env.ROSTER_DB).catch(() => ({ unavailable: true, profiles: 0, claims: 0, states: 0 }));
       }
       if (body?.includeAvailableDoctors === true) {
-        response.availableDoctors = await repositoryDoctorCandidates(null, null, context.env.ROSTER_DB, { hideZeroEventStandalone: true });
+        response.availableDoctors = await repositoryDoctorCandidates(null, null, context.env.ROSTER_DB, {
+          hideZeroEventStandalone: true,
+          preferCanonical: true,
+        });
       }
       return Response.json(response);
     }
@@ -2030,7 +2038,9 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
     state,
     claims,
     nameMatches,
-    availableDoctors: options.includeAvailableDoctors === false ? [] : await repositoryDoctorCandidates(store, null, options.db),
+    availableDoctors: options.includeAvailableDoctors === false ? [] : await repositoryDoctorCandidates(store, null, options.db, {
+      preferCanonical: options.preferCanonicalDoctors !== false,
+    }),
     subscription: {
       token: String(record.subscriptionToken || ""),
       enabled: Boolean(record.subscriptionToken),
@@ -3943,7 +3953,10 @@ async function syncRosterRepositoryToKeepFileIds(context, keepFileIds = [], opti
     }
     throw error;
   });
-  const availableDoctors = await repositoryDoctorCandidates(null, null, db, { hideZeroEventStandalone: true }).catch((error) => {
+  const availableDoctors = await repositoryDoctorCandidates(null, null, db, {
+    hideZeroEventStandalone: true,
+    preferCanonical: true,
+  }).catch((error) => {
     if (removedFileIds.length && allPurged) {
       status.availableDoctorsUnavailable = true;
       status.availableDoctorsError = error?.message || "Could not refresh doctor list after removal.";
