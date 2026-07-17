@@ -7833,9 +7833,31 @@ function renderAccountsModal() {
 function renderSystemAdminCard() {
   return `
     <div class="issues-list">
+      ${renderLoginPerformanceCard()}
       ${renderCalendarStoreCard()}
       ${renderParserRulesCard()}
     </div>
+  `;
+}
+
+function renderLoginPerformanceCard() {
+  const client = lastLoginTimings || {};
+  const server = client.server || {};
+  const value = (milliseconds) => Number.isFinite(Number(milliseconds)) ? `${Math.round(Number(milliseconds))} ms` : "Not measured";
+  const source = String(server.snapshotSource || "unknown").replaceAll("-", " ");
+  return `
+    <article class="review-card">
+      <div class="review-top">
+        <div>
+          <strong>Latest login performance</strong>
+          <span>Calendar shown: ${escapeHtml(value(client.firstCalendarPaintCommitted || client.firstCalendarPaint))} · Server response: ${escapeHtml(value(server.serverTotalMs))}</span>
+        </div>
+      </div>
+      <div class="review-body system-admin-body">
+        <p>Authentication: ${escapeHtml(value(server.authMs))} · Registry: ${escapeHtml(value(server.registryLookupMs))} · R2: ${escapeHtml(value(server.r2ReadMs))}</p>
+        <p>Snapshot: ${escapeHtml(source)}${server.validationDeferred === true ? " · revision checked after display" : ""}</p>
+      </div>
+    </article>
   `;
 }
 
@@ -11749,6 +11771,7 @@ async function loginWithEmail(email, password, options = {}) {
       });
     }
     markLoginPhase(renderedCachedSnapshot ? "firstCalendarPaint" : "firstShellPaint", loginStartedAt);
+    if (renderedCachedSnapshot) markLoginPaintCommitted(loginStartedAt);
     setStatus(renderedCachedSnapshot ? "Checking calendar for updates..." : "Loading calendar...");
     queuePostLoginHydration({
       ...options,
@@ -11800,9 +11823,7 @@ async function restoreCloudState(options = {}) {
       transition: options.transition,
     });
     if (!calendarTransitionStillCurrent(options.transition)) return null;
-    if (currentUserEmail === OWNER_EMAIL && data?.diagnostics?.login) {
-      console.info("Login server timings", data.diagnostics.login);
-    }
+    recordLoginServerTimings(data?.diagnostics?.login, options.loginStartedAt);
     markLoginPhase("authenticated", options.loginStartedAt);
     markAccountSwitchPhase("adminLoadUser", options.accountSwitchStartedAt);
     if (!options.deferHydration) await hydrateAuthenticatedWorkspace({ ...options, includeBootstrap: false }, options.loginStartedAt);
@@ -11907,6 +11928,10 @@ async function hydrateAuthenticatedWorkspace(options = {}, loginStartedAt = 0) {
           transition: options.transition,
         });
         if (!calendarTransitionStillCurrent(options.transition)) return;
+        if (!lastLoginTimings?.firstCalendarPaint) {
+          markLoginPhase("firstCalendarPaint", loginStartedAt);
+          markLoginPaintCommitted(loginStartedAt);
+        }
         markLoginPhase("workspaceRendered", loginStartedAt);
         markAccountSwitchPhase("workspaceRendered", options.accountSwitchStartedAt);
       }
@@ -11930,6 +11955,13 @@ async function hydrateAuthenticatedWorkspace(options = {}, loginStartedAt = 0) {
         if (latestPreview) renderDoctorState();
         queueCreatorSwitchTargetPrefetch();
       }).catch(() => null);
+    }
+    if (currentSnapshotStale) {
+      queuePostLoginSnapshotRefresh({
+        loginStartedAt,
+        adminTargetEmail,
+        transition: options.transition,
+      });
     }
   } catch (error) {
     if (!calendarTransitionStillCurrent(options.transition)) return;
@@ -11955,6 +11987,30 @@ function queuePostLoginHydration(options = {}, loginStartedAt = 0) {
   }
 }
 
+function queuePostLoginSnapshotRefresh(options = {}) {
+  const expectedKey = activeCalendarTransitionKey();
+  void (async () => {
+    for (const delayMs of [750, 1500, 3000, 6000]) {
+      await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+      if (!calendarTransitionStillCurrent(options.transition) || activeCalendarTransitionKey() !== expectedKey) return;
+      const loaded = await loadCloudCalendarEvents({
+        adminTargetEmail: options.adminTargetEmail || "",
+        cachedRevision: "",
+        allowInlineBuild: false,
+        preserveExistingSnapshot: true,
+        transition: options.transition,
+      }).catch(() => false);
+      if (!calendarTransitionStillCurrent(options.transition) || activeCalendarTransitionKey() !== expectedKey) return;
+      if (loaded && currentSnapshot?.preview && !currentSnapshotStale) {
+        renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {}, { preserveScroll: true });
+        markLoginPhase("backgroundCalendarUpdated", options.loginStartedAt);
+        setStatus("Calendar refreshed.");
+        return;
+      }
+    }
+  })();
+}
+
 function markLoginPhase(phase, loginStartedAt = 0) {
   if (!loginStartedAt) return;
   if (!lastLoginTimings || lastLoginTimings.startedAt !== loginStartedAt) {
@@ -11965,6 +12021,23 @@ function markLoginPhase(phase, loginStartedAt = 0) {
   if (phase === "workspaceRendered") {
     console.info("Login timings", window.__rosterLoginTimings);
   }
+}
+
+function recordLoginServerTimings(timings, loginStartedAt = 0) {
+  if (!timings || typeof timings !== "object") return;
+  if (!lastLoginTimings || (loginStartedAt && lastLoginTimings.startedAt !== loginStartedAt)) {
+    lastLoginTimings = { startedAt: loginStartedAt || performance.now() };
+  }
+  lastLoginTimings.server = { ...timings };
+  window.__rosterLoginTimings = { ...lastLoginTimings };
+  console.info("Login server timings", timings);
+}
+
+function markLoginPaintCommitted(loginStartedAt = 0) {
+  if (!loginStartedAt || typeof requestAnimationFrame !== "function") return;
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => markLoginPhase("firstCalendarPaintCommitted", loginStartedAt));
+  });
 }
 
 function markAccountSwitchPhase(phase, accountSwitchStartedAt = 0) {
@@ -15145,7 +15218,13 @@ function snapshotHasUnresolvablePreviewEvents(snapshot) {
   return events.some((event) => event?.id && !reviewIds.has(event.id));
 }
 
-function renderWorkspaceFromSnapshot(snapshot, session = {}) {
+function renderWorkspaceFromSnapshot(snapshot, session = {}, options = {}) {
+  const preservedScroll = options.preserveScroll === true
+    ? {
+        pageY: window.scrollY || document.documentElement.scrollTop || 0,
+        previewY: previewSection?.scrollTop || 0,
+      }
+    : null;
   currentSnapshot = sanitizeWorkspaceSnapshot(snapshot);
   if (!currentSnapshot) return;
   latestPreview = JSON.parse(JSON.stringify(currentSnapshot.preview));
@@ -15159,7 +15238,7 @@ function renderWorkspaceFromSnapshot(snapshot, session = {}) {
   applySessionState(restoredSessionState, { inheritedSettings: rosterDefaultSettings() });
   reconcileMaterializedPreviewCustomEvents();
   hydrateInsightCacheFromSnapshot(currentSnapshot);
-  pendingPreviewSnapToToday = true;
+  pendingPreviewSnapToToday = options.preserveScroll !== true;
   renderSettings();
   renderFilesList();
   renderDoctorState();
@@ -15167,6 +15246,12 @@ function renderWorkspaceFromSnapshot(snapshot, session = {}) {
   rebuildClientPreview();
   scheduleInsightWarmup();
   saveCurrentWorkspace();
+  if (preservedScroll) {
+    requestAnimationFrame(() => {
+      if (isMobileLayout()) window.scrollTo({ top: preservedScroll.pageY, behavior: "auto" });
+      else if (previewSection) previewSection.scrollTop = preservedScroll.previewY;
+    });
+  }
 }
 
 async function ensureSelectedFilesLoaded() {
@@ -15224,6 +15309,7 @@ async function bootstrapApp() {
       renderLoginState();
       hideLoadingScreen();
       markLoginPhase("firstCalendarPaint", loginStartedAt);
+      markLoginPaintCommitted(loginStartedAt);
       setStatus("Checking calendar for updates...");
     } else {
       setStatus("Loading calendar...");
@@ -15247,6 +15333,7 @@ async function bootstrapApp() {
       renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
       markLoginPhase("cachedCalendarRendered", loginStartedAt);
       markLoginPhase("firstCalendarPaint", loginStartedAt);
+      markLoginPaintCommitted(loginStartedAt);
     }
     if ((loginData?.responseMode || "full") === "fast") {
       queueDeferredAccountContextLoad({

@@ -74,11 +74,26 @@ const SNAPSHOT_SCHEMA_VERSION = 5;
 const SNAPSHOT_BUILDING_RETRY_MS = 15 * 60 * 1000;
 const SNAPSHOT_GLOBAL_WARMUP_LIMIT = 25;
 
+function serverTimingHeader(timing = {}) {
+  return [
+    ["auth", timing.authMs],
+    ["prepare", timing.prepareMs],
+    ["revision", timing.revisionMs],
+    ["registry", timing.registryLookupMs],
+    ["r2", timing.r2ReadMs],
+    ["snapshot", timing.snapshotLookupMs],
+    ["total", timing.serverTotalMs],
+  ]
+    .map(([name, duration]) => `${name};dur=${Math.max(0, Number(duration || 0)).toFixed(1)}`)
+    .join(", ");
+}
+
 export async function onRequestGet(context) {
   return Response.json({ error: "Use POST for account requests." }, { status: 405 });
 }
 
 export async function onRequestPost(context) {
+  const requestStartedAt = Date.now();
   try {
     const body = await context.request.json().catch(() => null);
     const email = normalizeEmail(body?.email);
@@ -133,6 +148,22 @@ export async function onRequestPost(context) {
             allowInlineBuild: true,
             reason: "login",
           });
+      const loginTiming = {
+        authMs,
+        prepareMs,
+        revisionMs: Number(snapshotPayload.revisionMs || 0),
+        registryLookupMs: Number(snapshotPayload.registryLookupMs || 0),
+        r2ReadMs: Number(snapshotPayload.r2ReadMs || 0),
+        snapshotLookupMs: Number(snapshotPayload.snapshotLookupMs || 0),
+        snapshotBuildMs: Number(snapshotPayload.snapshotBuildMs || 0),
+        serverTotalMs: Date.now() - requestStartedAt,
+        snapshotBytes: Number(snapshotPayload.snapshotBytes || 0),
+        skippedRevision: snapshotPayload.revisionSkipped === true,
+        validationDeferred: snapshotPayload.validationDeferred === true,
+        skippedInlineBuild: responseMode === "fast",
+        snapshotSource: snapshotPayload.snapshotSource || "",
+        responseMode,
+      };
       const responsePayload = {
         ok: true,
         cloudAvailable: true,
@@ -167,22 +198,17 @@ export async function onRequestPost(context) {
         responsePayload.availableDoctors = prepared.availableDoctors;
         responsePayload.subscription = prepared.subscription;
         responsePayload.issueConfig = prepared.issueConfig;
-      } else if ((prepared.role === "creator" || prepared.role === "owner") && body?.diagnostics !== false) {
+      } else if (body?.diagnostics !== false) {
         responsePayload.diagnostics = {
-          login: {
-            authMs,
-            prepareMs,
-            revisionMs: Number(snapshotPayload.revisionMs || 0),
-            snapshotLookupMs: Number(snapshotPayload.snapshotLookupMs || 0),
-            snapshotBuildMs: Number(snapshotPayload.snapshotBuildMs || 0),
-            skippedRevision: snapshotPayload.revisionSkipped === true,
-            skippedInlineBuild: true,
-            snapshotSource: snapshotPayload.snapshotSource || "",
-            responseMode,
-          },
+          login: loginTiming,
         };
       }
-      return Response.json(responsePayload);
+      return Response.json(responsePayload, {
+        headers: {
+          "Server-Timing": serverTimingHeader(loginTiming),
+          "Timing-Allow-Origin": "*",
+        },
+      });
     }
 
     const account = await verifyD1Account(context.env.ROSTER_DB, email, password);
@@ -2452,6 +2478,7 @@ async function loadAccountSnapshotPayload(context, params = {}) {
 
 async function loadFastAccountSnapshotPayload(context, params = {}) {
   const db = context.env?.ROSTER_DB;
+  const cacheBucket = context.env?.ROSTER_CACHE;
   const targetRecord = params.targetRecord;
   const prepared = params.prepared;
   const requestedRange = boundedCalendarEventRange({
@@ -2466,38 +2493,115 @@ async function loadFastAccountSnapshotPayload(context, params = {}) {
     || ""
   );
   const descriptor = buildAccountSnapshotCacheDescriptor(targetRecord, prepared.role, doctorKey, requestedRange);
-  const revisionStartedAt = Date.now();
-  const calendarRevision = await queryCalendarRevision(db, targetRecord.email).catch(() => "");
-  const revisionMs = Date.now() - revisionStartedAt;
-  const payload = await loadSnapshotPayloadFromRegistry(context, {
+  const lookupStartedAt = Date.now();
+  const registryStartedAt = Date.now();
+  const registry = await loadSnapshotRegistryEntry(db, descriptor).catch(() => null);
+  const registryLookupMs = Date.now() - registryStartedAt;
+  const registryRevision = String(registry?.builtRevision || "");
+  const cachedRevision = String(params.cachedRevision || "");
+  const readyArtifact = Boolean(
+    cacheBucket?.get
+    && registry?.status === "ready"
+    && registry?.artifactKey
+    && registryRevision
+  );
+  const validationDeferred = scheduleFastAccountSnapshotValidation(context, {
+    targetRecord,
+    requestedRange,
+    doctorKey,
     descriptor,
-    calendarRevision,
-    cachedRevision: params.cachedRevision || "",
-    allowInlineBuild: false,
-    scheduleRebuild: () => scheduleFastAccountSnapshotRebuild(context, {
-      targetRecord,
-      requestedRange,
-      doctorKey,
-      descriptor,
-      revision: calendarRevision,
-    }),
-    filterSnapshot: (snapshot) => filterSnapshotPreviewIssuesForOwner(db, snapshot, targetRecord.email, targetRecord),
   });
+
+  if (readyArtifact && cachedRevision && cachedRevision === registryRevision) {
+    return {
+      ok: true,
+      snapshot: null,
+      snapshotCurrent: true,
+      snapshotAvailable: false,
+      snapshotStale: false,
+      snapshotBuiltAt: registry?.builtAt || "",
+      calendarRevision: registryRevision,
+      registryLookupMs,
+      r2ReadMs: 0,
+      snapshotLookupMs: Date.now() - lookupStartedAt,
+      snapshotBuildMs: 0,
+      snapshotBytes: Number(registry?.sizeBytes || 0),
+      revisionMs: 0,
+      revisionSkipped: true,
+      validationDeferred,
+      ...snapshotRegistryState("ready", {
+        snapshotSource: "browser",
+        snapshotRevision: registryRevision,
+      }),
+    };
+  }
+
+  if (readyArtifact) {
+    const r2StartedAt = Date.now();
+    const cachedSnapshot = await loadCachedSnapshot(cacheBucket, registry.artifactKey).catch(() => null);
+    const r2ReadMs = Date.now() - r2StartedAt;
+    if (cachedSnapshot) {
+      return {
+        ok: true,
+        snapshot: cachedSnapshot,
+        snapshotAvailable: true,
+        snapshotStale: false,
+        snapshotBuiltAt: registry.builtAt || cachedSnapshot?.builtAt || "",
+        calendarRevision: registryRevision,
+        registryLookupMs,
+        r2ReadMs,
+        snapshotLookupMs: Date.now() - lookupStartedAt,
+        snapshotBuildMs: 0,
+        snapshotBytes: Number(registry?.sizeBytes || JSON.stringify(cachedSnapshot).length),
+        revisionMs: 0,
+        revisionSkipped: true,
+        validationDeferred,
+        ...snapshotRegistryState("ready", {
+          snapshotSource: "server-cache",
+          snapshotRevision: registryRevision,
+        }),
+      };
+    }
+  }
+
   return {
-    ...payload,
-    revisionMs,
-    revisionSkipped: false,
-    snapshotLookupMs: Number(payload.snapshotLookupMs || 0),
-    snapshotBuildMs: Number(payload.snapshotBuildMs || 0),
+    ok: true,
+    snapshot: null,
+    snapshotAvailable: false,
+    snapshotStale: false,
+    snapshotBuiltAt: registry?.builtAt || "",
+    calendarRevision: registryRevision,
+    registryLookupMs,
+    r2ReadMs: 0,
+    snapshotLookupMs: Date.now() - lookupStartedAt,
+    snapshotBuildMs: 0,
+    snapshotBytes: 0,
+    revisionMs: 0,
+    revisionSkipped: true,
+    validationDeferred,
+    ...snapshotRegistryState(registry?.status || "missing", {
+      snapshotSource: snapshotRegistryBuildInProgress(registry) ? "server-cache-building" : "server-cache-miss",
+      snapshotRevision: registryRevision,
+    }),
   };
 }
 
-function scheduleFastAccountSnapshotRebuild(context, job = {}) {
-  if (typeof context.waitUntil !== "function") return;
+function scheduleFastAccountSnapshotValidation(context, job = {}) {
+  if (typeof context.waitUntil !== "function") return false;
   context.waitUntil((async () => {
     const db = context.env?.ROSTER_DB;
     const record = await loadAccountMirror(db, job.targetRecord?.email || "").catch(() => null) || job.targetRecord;
     if (!record) return;
+    const currentRevision = await queryCalendarRevision(db, record.email || "").catch(() => "");
+    const latestRegistry = await loadSnapshotRegistryEntry(db, job.descriptor || {}).catch(() => null);
+    if (
+      currentRevision
+      && latestRegistry?.status === "ready"
+      && latestRegistry?.builtRevision === currentRevision
+    ) {
+      return;
+    }
+    if (snapshotRegistryBuildInProgress(latestRegistry)) return;
     const role = record.role || roleForEmail(record.email);
     const prepared = await prepareAccountResponse(null, record, {
       db,
@@ -2509,16 +2613,17 @@ function scheduleFastAccountSnapshotRebuild(context, job = {}) {
       requestedRange: job.requestedRange,
       doctorKey: job.doctorKey || prepared.defaultDoctorKey || "",
       descriptor: job.descriptor || buildAccountSnapshotCacheDescriptor(record, role, job.doctorKey || prepared.defaultDoctorKey || "", job.requestedRange || defaultSnapshotRange()),
-      revision: job.revision || "",
-      reason: "fast-login-refresh",
+      revision: currentRevision,
+      reason: "fast-login-background-validation",
     });
   })().catch((error) => {
-    console.warn("Fast login snapshot refresh failed", {
+    console.warn("Fast login snapshot validation failed", {
       owner: job?.targetRecord?.email || job?.descriptor?.ownerId || "",
       doctorKey: job?.doctorKey || "",
       error: error?.message || String(error),
     });
   }));
+  return true;
 }
 
 function scheduleAccountSnapshotRebuild(context, job = {}) {

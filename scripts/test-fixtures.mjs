@@ -234,11 +234,17 @@ assert.match(
   /loadFastAccountSnapshotPayload\(context, \{[\s\S]*cachedRevision: body\?\.cachedRevision/,
   "fast login should pass the browser revision through to avoid returning an unchanged snapshot",
 );
+const fastSnapshotSource = stateSource.match(/async function loadFastAccountSnapshotPayload[\s\S]*?function scheduleFastAccountSnapshotValidation/)?.[0] || "";
+assert.doesNotMatch(fastSnapshotSource, /queryCalendarRevision/, "fast login should not block on live calendar revision validation");
 assert.match(
-  (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
-    .match(/async function loadFastAccountSnapshotPayload[\s\S]*?function scheduleAccountSnapshotRebuild/)?.[0] || "",
-  /queryCalendarRevision[\s\S]*allowInlineBuild: false[\s\S]*revisionSkipped: false/,
-  "fast login should validate server cache revisions without allowing inline snapshot builds",
+  fastSnapshotSource,
+  /loadSnapshotRegistryEntry[\s\S]*cachedRevision === registryRevision[\s\S]*loadCachedSnapshot[\s\S]*revisionSkipped: true/,
+  "fast login should return the ready browser or R2 snapshot using its built revision",
+);
+assert.match(
+  stateSource.match(/function scheduleFastAccountSnapshotValidation[\s\S]*?function scheduleAccountSnapshotRebuild/)?.[0] || "",
+  /context\.waitUntil[\s\S]*queryCalendarRevision[\s\S]*loadSnapshotRegistryEntry[\s\S]*buildAndStoreAccountSnapshot/,
+  "fast login should validate and rebuild stale snapshots after the response",
 );
 assert.match(
   stateSource.match(/async function loadSnapshotPayloadFromRegistry[\s\S]*?async function loadFastAccountSnapshotPayload/)?.[0] || "",
@@ -302,8 +308,8 @@ assert.match(
 );
 assert.match(
   stateSource.match(/async function loadFastAccountSnapshotPayload[\s\S]*?function scheduleAccountSnapshotRebuild/)?.[0] || "",
-  /queryCalendarRevision[\s\S]*allowInlineBuild: false[\s\S]*revisionSkipped: false/,
-  "fast login snapshots should use a lightweight revision check while keeping inline builds disabled",
+  /scheduleFastAccountSnapshotValidation[\s\S]*revisionSkipped: true[\s\S]*function scheduleFastAccountSnapshotValidation[\s\S]*queryCalendarRevision/,
+  "fast login snapshots should defer revision validation and keep snapshot rebuilding in background work",
 );
 assert.match(
   stateSource.match(/if \(action === "adminLoadUser"\)[\s\S]*?if \(action === "claimRosterName"\)/)?.[0] || "",
@@ -974,8 +980,33 @@ assert.doesNotMatch(
 );
 assert.match(
   appSource.match(/async function restoreCloudState[\s\S]*?async function hydrateAuthenticatedWorkspace/)?.[0] || "",
-  /applyCloudStateData\(data, \{[\s\S]*deferContext[\s\S]*deferSnapshotPersistence[\s\S]*skipSnapshotCacheWriteIfCurrent[\s\S]*\}\)[\s\S]*Login server timings/,
-  "restoreCloudState should support the fast-login phased apply path and creator diagnostics",
+  /applyCloudStateData\(data, \{[\s\S]*deferContext[\s\S]*deferSnapshotPersistence[\s\S]*skipSnapshotCacheWriteIfCurrent[\s\S]*\}\)[\s\S]*recordLoginServerTimings/,
+  "restoreCloudState should support the fast-login phased apply path and record server timings for every account",
+);
+assert.match(
+  stateSource.match(/if \(action === "login"\)[\s\S]*?const account = await verifyD1Account/)?.[0] || "",
+  /registryLookupMs[\s\S]*r2ReadMs[\s\S]*serverTotalMs[\s\S]*validationDeferred[\s\S]*Server-Timing/,
+  "fast login responses should expose server and R2 timing instrumentation",
+);
+assert.match(
+  appSource.match(/function markLoginPhase[\s\S]*?function markAccountSwitchPhase/)?.[0] || "",
+  /recordLoginServerTimings[\s\S]*firstCalendarPaintCommitted/,
+  "client timings should include server phases and a browser-committed calendar paint",
+);
+assert.match(
+  appSource.match(/function renderSystemAdminCard[\s\S]*?function renderAccountHospitalLocationsCard/)?.[0] || "",
+  /renderLoginPerformanceCard[\s\S]*firstCalendarPaintCommitted[\s\S]*serverTotalMs[\s\S]*registryLookupMs[\s\S]*r2ReadMs/,
+  "Admin System should present the latest client, server, registry, and R2 login timings",
+);
+assert.match(
+  appSource.match(/function queuePostLoginSnapshotRefresh[\s\S]*?function markLoginPhase/)?.[0] || "",
+  /allowInlineBuild: false[\s\S]*currentSnapshotStale[\s\S]*preserveScroll: true[\s\S]*backgroundCalendarUpdated/,
+  "stale-while-revalidate should replace a rebuilt calendar after paint without moving the visible calendar",
+);
+assert.match(
+  appSource.match(/function renderWorkspaceFromSnapshot[\s\S]*?async function ensureSelectedFilesLoaded/)?.[0] || "",
+  /preserveScroll[\s\S]*pageY[\s\S]*previewY[\s\S]*pendingPreviewSnapToToday = options\.preserveScroll !== true/,
+  "background calendar replacement should preserve mobile and desktop scroll positions",
 );
 assert.match(
   appSource.match(/function saveCalendarSnapshotCacheForContext[\s\S]*?function invalidateCalendarSnapshotCache/)?.[0] || "",
@@ -3154,9 +3185,10 @@ async function postState(store, payload, db = null) {
   return body;
 }
 
-async function postStateRaw(store, payload, db = null) {
+async function postStateRaw(store, payload, db = null, options = {}) {
   const rosterDb = db || store?.d1 || new MemoryD1();
-  const response = await handleStatePost({
+  const waitUntilPromises = [];
+  const requestContext = {
     request: new Request("http://fixture.test/api/state", {
       method: "POST",
       body: JSON.stringify(payload),
@@ -3167,9 +3199,13 @@ async function postStateRaw(store, payload, db = null) {
       ROSTER_FILES: store?.r2 || new MemoryR2(),
       ROSTER_CACHE: store?.cacheR2 || store?.r2 || new MemoryR2(),
     },
-  });
+  };
+  if (options.captureWaitUntil === true) {
+    requestContext.waitUntil = (promise) => waitUntilPromises.push(Promise.resolve(promise));
+  }
+  const response = await handleStatePost(requestContext);
   const body = await response.json();
-  return { response, body };
+  return { response, body, waitUntilPromises };
 }
 
 function memoryD1AccountRecord(db, email) {
@@ -3526,7 +3562,25 @@ assert.equal(d1CurrentRevisionCheck.snapshotCurrent, true, "cachedRevision shoul
 assert.equal(d1CurrentRevisionCheck.snapshot, null, "current-revision checks should not resend or replace the snapshot");
 const d1UserRegistryKey = [...d1Store.snapshotRegistry.keys()].find((key) => key.startsWith(`user-account|d1-user@example.com|${d1Doctor.key}|`));
 assert.ok(d1UserRegistryKey, "claimed D1 account should have a snapshot registry entry");
-const d1UserRegistry = d1Store.snapshotRegistry.get(d1UserRegistryKey);
+let d1UserRegistry = d1Store.snapshotRegistry.get(d1UserRegistryKey);
+const fastStaleRevision = "fast-stale-revision";
+d1UserRegistry.built_revision = fastStaleRevision;
+d1UserRegistry.status = "ready";
+const fastStaleWhileRevalidate = await postStateRaw(d1StateStore, {
+  action: "login",
+  email: "d1-user@example.com",
+  password: "d1-password",
+  responseMode: "fast",
+}, d1Store, { captureWaitUntil: true });
+assert.equal(fastStaleWhileRevalidate.response.ok, true);
+assert.equal(fastStaleWhileRevalidate.body.snapshotRevision, fastStaleRevision, "fast login should immediately serve the latest ready R2 revision");
+assert.equal(fastStaleWhileRevalidate.body.diagnostics.login.skippedRevision, true, "fast login should report deferred revision validation");
+assert.equal(fastStaleWhileRevalidate.body.diagnostics.login.validationDeferred, true, "fast login should expose background validation scheduling");
+assert.match(fastStaleWhileRevalidate.response.headers.get("server-timing") || "", /auth;dur=[\d.]+[\s\S]*r2;dur=[\d.]+/, "fast login should emit standard Server-Timing phases");
+assert.equal(fastStaleWhileRevalidate.waitUntilPromises.length, 1, "fast login should schedule exactly one background snapshot validation");
+await Promise.all(fastStaleWhileRevalidate.waitUntilPromises);
+assert.notEqual(d1Store.snapshotRegistry.get(d1UserRegistryKey)?.built_revision, fastStaleRevision, "background validation should rebuild a snapshot whose live revision changed");
+d1UserRegistry = d1Store.snapshotRegistry.get(d1UserRegistryKey);
 d1UserRegistry.built_revision = "outdated-revision";
 d1UserRegistry.status = "ready";
 const d1StaleServerCache = await postState(d1StateStore, {
