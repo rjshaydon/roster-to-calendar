@@ -37,6 +37,7 @@ const DDH_LABEL_MAP = {
   "PM FAST IC": "FAST PM",
   "Orange AM IC": "Orange AM",
   "Silver AM IC": "Silver AM",
+  "Silver PM IC": "Silver PM",
   "onsite CS": "CS onsite",
   "PHNW clinical": "PHNW",
   PHNW: "PHNW",
@@ -49,6 +50,7 @@ const KNOWN_DDH_DIRECT_LABELS = new Set([
   "Orange AM",
   "Orange PM",
   "Silver AM",
+  "Silver PM",
   "FAST PM",
   "AVAO AM",
   "AVAO PM",
@@ -1484,6 +1486,22 @@ function parseDdhEntry(day, label, timeText, seniority = UNKNOWN_SENIORITY) {
     });
   }
 
+  if (normalized.allDay !== true) {
+    const defaultTimes = normalized.defaultTimes || inferDdhDefaultTimes(normalized, seniority);
+    if (defaultTimes) {
+      return createTimedRecord("DDH", day, label, {
+        kind: normalized.kind,
+        titleParts: normalized.titleParts,
+        startHm: defaultTimes[0],
+        endHm: defaultTimes[1],
+        location,
+        status: normalized.status,
+        warning: normalized.warning,
+        seniority,
+      });
+    }
+  }
+
   return createAllDayRecord("DDH", day, label, {
     kind: normalized.kind,
     titleParts: normalized.titleParts,
@@ -1492,6 +1510,22 @@ function parseDdhEntry(day, label, timeText, seniority = UNKNOWN_SENIORITY) {
     warning: normalized.warning,
     seniority,
   });
+}
+
+function inferDdhDefaultTimes(normalized, seniority = UNKNOWN_SENIORITY) {
+  const base = String(normalized?.titleParts?.base || "").trim().toUpperCase();
+  const explicitPeriod = String(normalized?.titleParts?.period || "").trim().toUpperCase();
+  const period = explicitPeriod || (base === "SSU" ? "AM" : "");
+  if (period === "AM") {
+    if (base === "SSU") return [[7, 30], [17, 30]];
+    if (seniority === "SMS" && base === "AVAO") return [[7, 30], [17, 0]];
+    return [[8, 0], [18, 0]];
+  }
+  if (period === "PM") {
+    if (seniority === "SMS" && base !== "AVAO") return [[15, 0], [0, 0]];
+    return [[14, 30], [0, 0]];
+  }
+  return null;
 }
 
 function parseCaseyEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
@@ -2217,21 +2251,24 @@ function buildDefaultParserRules() {
   }
   for (const seniority of activeSeniorities) {
     const canWorkClinicalSupport = consultantSeniorities.includes(seniority);
+    const isSms = seniority === "SMS";
     add(rules.mmc, "MMC", "PHNW", seniority, "PHNW", "", "", true, "", "", "");
     if (canWorkClinicalSupport) {
       add(rules.ddh, "DDH", "CS", seniority, "CS", "", "", true, "", "", "");
       add(rules.ddh, "DDH", "CS ONSITE", seniority, "CS onsite", "", "", true, "", "", DDH_LOCATION);
     }
     add(rules.ddh, "DDH", "PHNW", seniority, "PHNW", "", "", true, "", "", "");
-    add(rules.ddh, "DDH", "SSU", seniority, "SSU", "", "", true, "", "", DDH_LOCATION);
-    add(rules.ddh, "DDH", "ORANGE AM", seniority, "Orange", "AM", "", true, "", "", DDH_LOCATION);
-    add(rules.ddh, "DDH", "ORANGE PM", seniority, "Orange", "PM", "", true, "", "", DDH_LOCATION);
-    add(rules.ddh, "DDH", "SILVER AM", seniority, "Silver", "AM", "", true, "", "", DDH_LOCATION);
-    add(rules.ddh, "DDH", "FAST PM", seniority, "FAST", "PM", "", true, "", "", DDH_LOCATION);
-    add(rules.ddh, "DDH", "AVAO AM", seniority, "AVAO", "AM", "", true, "", "", DDH_LOCATION);
-    add(rules.ddh, "DDH", "AVAO PM", seniority, "AVAO", "PM", "", true, "", "", DDH_LOCATION);
+    add(rules.ddh, "DDH", "SSU", seniority, "SSU", "", "", false, "07:30", "17:30", DDH_LOCATION);
+    add(rules.ddh, "DDH", "ORANGE AM", seniority, "Orange", "AM", "", false, "08:00", "18:00", DDH_LOCATION);
+    add(rules.ddh, "DDH", "ORANGE PM", seniority, "Orange", "PM", "", false, isSms ? "15:00" : "14:30", "00:00", DDH_LOCATION);
+    add(rules.ddh, "DDH", "SILVER AM", seniority, "Silver", "AM", "", false, "08:00", "18:00", DDH_LOCATION);
+    add(rules.ddh, "DDH", "SILVER PM", seniority, "Silver", "PM", "", false, isSms ? "15:00" : "14:30", "00:00", DDH_LOCATION);
+    if (!isSms) add(rules.ddh, "DDH", "FAST AM", seniority, "FAST", "AM", "", false, "08:00", "18:00", DDH_LOCATION);
+    add(rules.ddh, "DDH", "FAST PM", seniority, "FAST", "PM", "", false, isSms ? "15:00" : "14:30", "00:00", DDH_LOCATION);
+    add(rules.ddh, "DDH", "AVAO AM", seniority, "AVAO", "AM", "", false, isSms ? "07:30" : "08:00", isSms ? "17:00" : "18:00", DDH_LOCATION);
+    add(rules.ddh, "DDH", "AVAO PM", seniority, "AVAO", "PM", "", false, "14:30", "00:00", DDH_LOCATION);
     add(rules.ddh, "DDH", "ROVER AM", seniority, "Rover", "AM", "", false, "08:00", "18:00", DDH_LOCATION);
-    add(rules.ddh, "DDH", "ROVER PM", seniority, "Rover", "PM", "", false, "14:30", "00:00", DDH_LOCATION);
+    add(rules.ddh, "DDH", "ROVER PM", seniority, "Rover", "PM", "", false, isSms ? "15:00" : "14:30", "00:00", DDH_LOCATION);
     if (canWorkClinicalSupport) {
       add(rules.casey, "Casey", "CS", seniority, "CS", "", "", false, "08:00", "17:30", CASEY_LOCATION);
       add(rules.casey, "Casey", "CLIN SUPP", seniority, "CS", "", "", false, "08:00", "17:30", CASEY_LOCATION);
@@ -2434,11 +2471,25 @@ function iterateDdhWeekEntries(workbook) {
       for (let col = 2; col <= 8; col += 1) {
         times.push(supplementaryRow ? cleanText(getCellValue(sheet, supplementaryRow, col)) : "");
       }
-      entries.push({ rawName, weekDates, labels, times, seniority: currentSeniority });
+      const seniority = currentSeniority === UNKNOWN_SENIORITY
+        ? upcomingDdhSectionSeniority(sheet, row, nextDateRow, sectionMap)
+        : currentSeniority;
+      entries.push({ rawName, weekDates, labels, times, seniority });
       if (supplementaryRow) row = supplementaryRow;
     }
   }
   return entries;
+}
+
+function upcomingDdhSectionSeniority(sheet, row, nextDateRow, sectionMap) {
+  for (let candidateRow = row + 1; candidateRow < nextDateRow; candidateRow += 1) {
+    const rawName = cleanText(getCellValue(sheet, candidateRow, 1));
+    if (!rawName) continue;
+    const upperName = rawName.replace(/\s+/g, " ").trim().toUpperCase();
+    if (sectionMap.has(upperName)) return sectionMap.get(upperName);
+    if (isDdhSectionMarker(rawName) || looksLikePersonName(rawName)) break;
+  }
+  return UNKNOWN_SENIORITY;
 }
 
 function iterateMchWeekEntries(workbook) {
@@ -2679,6 +2730,10 @@ function ddhSeniorityMap() {
     ["CMO'S", "CMO"],
     ["CMOS", "CMO"],
     ["JUNIOR REGISTRARS", "Junior Registrar"],
+    ["ED HMO'S", "HMO"],
+    ["ED HMOS", "HMO"],
+    ["HMO'S", "HMO"],
+    ["HMOS", "HMO"],
     ["INTERNS", "Intern"],
     ["ENP", "ENP"],
     ["NURSE PRACTITIONERS", "ENP"],

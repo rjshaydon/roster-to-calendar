@@ -1739,6 +1739,43 @@ assert.ok(diFloodView.events.some((event) => event.title === "DDH: CS AM"));
 assert.ok(diFloodView.events.some((event) => event.title === "DDH: SSU" && event.start.includes("07:30:00")));
 assert.ok(diFloodView.events.some((event) => event.title === "DDH: HITH PM"));
 
+const ddhDefaultTimesWorkbook = XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(ddhDefaultTimesWorkbook, XLSX.utils.aoa_to_sheet([
+  ["", "Mon. Feb. 02, 2026", "Tue. Feb. 03, 2026", "Wed. Feb. 04, 2026", "Thu. Feb. 05, 2026", "Fri. Feb. 06, 2026", "Sat. Feb. 07, 2026", "Sun. Feb. 08, 2026"],
+  ["Richard Haydon", "Orange PM (on-call)", "AVAO PM", "Silver AM IC", "SSU SMS", "Rover AM", "Silver PM IC", ""],
+  ["SENIOR MEDICAL STAFF", "", "", "", "", "", "", ""],
+  ["HMOS", "", "", "", "", "", "", ""],
+  ["Default HMO", "INTERN SSU AM", "Orange AM4", "Orange PM4", "", "", "", ""],
+  ["Explicit HMO", "Orange PM4", "", "", "", "", "", ""],
+  ["", "16:00-23:00", "", "", "", "", "", ""],
+]), "Sheet1");
+
+const ddhDefaultDoctors = doctorOptions([], ddhDefaultTimesWorkbook);
+const promotedSms = ddhDefaultDoctors.find((doctor) => doctor.displayName.toLowerCase() === "richard haydon");
+const defaultHmo = ddhDefaultDoctors.find((doctor) => doctor.displayName.toLowerCase() === "default hmo");
+const explicitHmo = ddhDefaultDoctors.find((doctor) => doctor.displayName.toLowerCase() === "explicit hmo");
+assert.ok(promotedSms);
+assert.ok(defaultHmo);
+assert.ok(explicitHmo);
+
+const promotedSmsView = buildRosterView([], ddhDefaultTimesWorkbook, promotedSms.key);
+assert.ok(promotedSmsView.events.length > 0);
+assert.ok(promotedSmsView.events.every((event) => event.seniority === "SMS"));
+assert.ok(promotedSmsView.events.some((event) => event.title === "DDH: Orange PM" && event.start.includes("15:00:00") && event.end.includes("00:00:00")));
+assert.ok(promotedSmsView.events.some((event) => event.title === "DDH: AVAO PM" && event.start.includes("14:30:00") && event.end.includes("00:00:00")));
+assert.ok(promotedSmsView.events.some((event) => event.title === "DDH: Silver AM" && event.start.includes("08:00:00") && event.end.includes("18:00:00")));
+assert.ok(promotedSmsView.events.some((event) => event.title === "DDH: SSU" && event.start.includes("07:30:00") && event.end.includes("17:30:00")));
+assert.ok(promotedSmsView.events.some((event) => event.title === "DDH: Rover AM" && event.start.includes("08:00:00") && event.end.includes("18:00:00")));
+assert.ok(promotedSmsView.events.some((event) => event.title === "DDH: Silver PM" && event.start.includes("15:00:00") && event.end.includes("00:00:00")));
+
+const defaultHmoView = buildRosterView([], ddhDefaultTimesWorkbook, defaultHmo.key);
+assert.ok(defaultHmoView.events.some((event) => event.title === "DDH: SSU AM" && event.start.includes("07:30:00") && event.end.includes("17:30:00")));
+assert.ok(defaultHmoView.events.some((event) => event.title === "DDH: Orange AM" && event.start.includes("08:00:00") && event.end.includes("18:00:00")));
+assert.ok(defaultHmoView.events.some((event) => event.title === "DDH: Orange PM" && event.start.includes("14:30:00") && event.end.includes("00:00:00")));
+
+const explicitHmoView = buildRosterView([], ddhDefaultTimesWorkbook, explicitHmo.key);
+assert.ok(explicitHmoView.events.some((event) => event.title === "DDH: Orange PM" && event.start.includes("16:00:00") && event.end.includes("23:00:00")));
+
 const mmcPdfBytes = await readFile(fileURLToPath(new URL("../fixtures/AdultMMCTerm2.2026.Ver1.pdf", import.meta.url)));
 const formData = new FormData();
 formData.append("rosterFiles", new File([mmcPdfBytes], "AdultMMCTerm2.2026.Ver1.pdf", { type: "application/pdf" }));
