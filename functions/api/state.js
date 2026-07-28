@@ -1,4 +1,5 @@
 import { applyEventOverrides, customEventsToEvents, defaultSettings, inspectImportRecord, normalizeRosterName } from "../_lib/roster.js";
+import { AUTOMATION_SOURCES } from "../_lib/automation-import.js";
 import {
   buildPreviewFromDerivedEvents,
   accountMirrorStatus,
@@ -19,6 +20,8 @@ import {
   mergeHospitalLocationsIntoSettings,
   listAccountMirrors,
   listConsoleMessages,
+  listRosterSources,
+  listRosterSyncRuns,
   loadAccountMirror,
   loadAccountStateMirror,
   loadDoctorProfileMirror,
@@ -552,6 +555,9 @@ export async function onRequestPost(context) {
     }
 
     if (action === "saveDerivedCalendarFile") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required to import roster files." }, { status: 403 });
+      }
       if (!hasCalendarDb(context.env)) {
         return Response.json({ ok: false, unavailable: true });
       }
@@ -622,6 +628,9 @@ export async function onRequestPost(context) {
     }
 
     if (action === "uploadRawRosterFile") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required to retain roster files." }, { status: 403 });
+      }
       if (!hasCalendarDb(context.env)) return Response.json({ ok: false, unavailable: true });
       const file = body?.file || {};
       const dataUrl = String(body?.dataUrl || "");
@@ -1554,6 +1563,8 @@ async function autoClaimMatchedCanonicalDoctors(record, db = null) {
 async function calendarStoreStatus(store, db, options = {}) {
   const allD1Files = await queryRosterFiles(db, { includeInactive: true }).catch(() => []);
   const rawFiles = await queryRawRosterFiles(db).catch(() => []);
+  const rosterSources = await listRosterSources(db).catch(() => []);
+  const syncRuns = await listRosterSyncRuns(db, { limit: 100 }).catch(() => []);
   const derivedFileIds = new Set(allD1Files.map((file) => file.id));
   const retainedOnlyFiles = rawFiles
     .filter((file) => file.id && !derivedFileIds.has(file.id))
@@ -1583,12 +1594,26 @@ async function calendarStoreStatus(store, db, options = {}) {
   const selectedDoctorKey = normalizeRosterName(options.doctorKey || "");
   let selectedDoctorRows = [];
   const selectedCountsByFile = new Map();
+  const selectedDoctorByFile = new Map();
   if (!lightweight && selectedDoctorKey) {
     selectedDoctorRows = await resolveSelectedRosterFileDoctorRows(db, selectedDoctorKey);
     const selectedPairs = selectedDoctorRows.map((row) => ({ fileId: row.fileId, doctorKey: row.doctorKey }));
     const selectedCounts = await countDerivedEventsByFileDoctorPairs(db, selectedPairs);
-    for (const row of selectedDoctorRows) {
-      selectedCountsByFile.set(row.fileId, (selectedCountsByFile.get(row.fileId) || 0) + Number(selectedCounts.get(`${row.fileId}:${row.doctorKey}`) || 0));
+    const selectedShifts = await Promise.all(selectedDoctorRows.map(async (row) => ({
+      row,
+      shifts: (await queryDoctorEventsForFileDoctorPairs(db, [{ fileId: row.fileId, doctorKey: row.doctorKey }]))
+        .map(rosterFileShiftSummary),
+    })));
+    for (const { row, shifts } of selectedShifts) {
+      const count = Number(selectedCounts.get(`${row.fileId}:${row.doctorKey}`) || 0);
+      selectedCountsByFile.set(row.fileId, (selectedCountsByFile.get(row.fileId) || 0) + count);
+      selectedDoctorByFile.set(row.fileId, {
+        doctorKey: row.doctorKey,
+        displayName: row.displayName,
+        sourceType: row.sourceType,
+        eventCount: count,
+        shifts,
+      });
     }
   }
   const rawAvailability = new Map(rawFiles.map((file) => [file.id, true]));
@@ -1602,7 +1627,8 @@ async function calendarStoreStatus(store, db, options = {}) {
     expectedDoctors: Number(file.expectedDoctors || 0) || sanitizeRepositoryDoctors(file.doctors).length,
     indexedDoctors: Number(file.indexedDoctors || 0) || doctorCounts.get(file.id) || 0,
     eventCount: Number(file.eventCount || 0) || counts.get(file.id) || 0,
-    selectedDoctorEventCount: selectedCountsByFile.get(file.id) || 0,
+    selectedDoctorEventCount: lightweight ? null : (selectedCountsByFile.get(file.id) || 0),
+    selectedDoctor: lightweight ? null : (selectedDoctorByFile.get(file.id) || null),
     rawSourceAvailable: rawAvailability.get(file.id) === true,
     retainedSourceOnly: file.retainedSourceOnly === true,
   })).map((file) => ({
@@ -1625,12 +1651,94 @@ async function calendarStoreStatus(store, db, options = {}) {
     remaining: Math.max(0, files.length - populated),
     eventCount: files.reduce((total, file) => total + file.eventCount, 0),
     selectedDoctorKey,
-    selectedDoctorEventCount: files.reduce((total, file) => total + file.selectedDoctorEventCount, 0),
+    selectedDoctorEventCount: lightweight ? null : files.reduce((total, file) => total + Number(file.selectedDoctorEventCount || 0), 0),
     selectedDoctorFiles: selectedDoctorRows.map(rosterFileDoctorDiagnostic),
+    rosterSourceStatuses: rosterSourceStatuses(allD1Files, rosterSources, syncRuns),
     expectedFiles,
     nextFile: files.find((file) => file.status !== "populated") || null,
     files,
   };
+}
+
+function rosterFileShiftSummary(event = {}) {
+  return {
+    id: String(event.id || ""),
+    title: String(event.title || "Shift"),
+    start: String(event.start || ""),
+    end: String(event.end || event.start || ""),
+    allDay: event.allDay === true,
+    timeLabel: String(event.timeLabel || ""),
+    location: String(event.location || ""),
+    seniority: String(event.seniority || ""),
+  };
+}
+
+function rosterSourceStatuses(files = [], storedSources = [], syncRuns = []) {
+  const sourcesById = new Map((storedSources || []).map((source) => [source.id, source]));
+  const sourceFiles = new Map();
+  for (const file of files || []) {
+    const sourceId = String(file.sourceId || "").trim();
+    if (!sourceId) continue;
+    if (!sourceFiles.has(sourceId)) sourceFiles.set(sourceId, []);
+    sourceFiles.get(sourceId).push(file);
+  }
+  const latestRunBySource = new Map();
+  for (const run of syncRuns || []) {
+    if (run?.sourceId && !latestRunBySource.has(run.sourceId)) latestRunBySource.set(run.sourceId, run);
+  }
+  const automated = Object.entries(AUTOMATION_SOURCES).map(([id, definition]) => {
+    const source = sourcesById.get(id);
+    const activeFile = findActiveSourceFile(sourceFiles.get(id), source?.activeFileId);
+    const latestRun = latestRunBySource.get(id) || null;
+    const failed = Boolean(source?.lastError) && (!source?.lastSuccessAt || source.lastCheckedAt >= source.lastSuccessAt);
+    return {
+      id,
+      label: definition.label,
+      provider: definition.provider,
+      sourceType: definition.sourceType,
+      mode: "automated",
+      state: !source ? "not-configured" : failed ? "failed" : source.lastSuccessAt ? "received" : "waiting",
+      providerVersion: String(source?.providerVersion || latestRun?.providerVersion || ""),
+      providerModifiedAt: String(source?.providerModifiedAt || ""),
+      lastReceivedAt: String(source?.lastCheckedAt || ""),
+      lastSuccessAt: String(source?.lastSuccessAt || ""),
+      lastError: failed ? String(source?.lastError || latestRun?.message || "") : "",
+      activeFileId: String(source?.activeFileId || activeFile?.id || ""),
+      activeFileName: String(activeFile?.name || ""),
+      latestRun: latestRun ? {
+        status: latestRun.status,
+        completedAt: latestRun.completedAt,
+        doctorCount: latestRun.doctorCount,
+        eventCount: latestRun.eventCount,
+      } : null,
+    };
+  });
+  const caseyFiles = (files || []).filter((file) => file.sourceType === "casey" && file.active !== false);
+  const latestCasey = [...caseyFiles].sort((left, right) => String(right.uploadedAt || right.addedAt || "").localeCompare(String(left.uploadedAt || left.addedAt || "")))[0] || null;
+  return [...automated, {
+    id: "casey-manual",
+    label: "Casey",
+    provider: "manual",
+    sourceType: "casey",
+    mode: "manual",
+    state: latestCasey ? "manual-current" : "manual-missing",
+    providerVersion: "",
+    providerModifiedAt: "",
+    lastReceivedAt: "",
+    lastSuccessAt: String(latestCasey?.uploadedAt || latestCasey?.addedAt || ""),
+    lastError: "",
+    activeFileId: String(latestCasey?.id || ""),
+    activeFileName: String(latestCasey?.name || ""),
+    latestRun: null,
+  }];
+}
+
+function findActiveSourceFile(files = [], activeFileId = "") {
+  const activeId = String(activeFileId || "").trim();
+  const active = (files || []).filter((file) => file?.active !== false);
+  return active.find((file) => file.id === activeId)
+    || [...active].sort((left, right) => String(right.uploadedAt || right.addedAt || "").localeCompare(String(left.uploadedAt || left.addedAt || "")))[0]
+    || null;
 }
 
 function summarizeExpectedRosterFiles(allFiles = [], expectedFileIds = []) {
@@ -1657,14 +1765,19 @@ async function reconcileRosterFileSupersession(db, savedFile = {}, options = {})
   const files = (await queryRosterFileRanges(db, { includeInactive: false }).catch(() => []))
     .filter((file) => file.active && file.eventCount > 0 && file.startDate && file.endDate);
   const savedId = String(savedFile?.id || "").trim();
-  const affected = files.filter((file) => !savedId || file.id === savedId || file.sourceType === String(savedFile?.sourceType || "").toLowerCase());
+  const savedSourceType = String(savedFile?.sourceType || "").toLowerCase();
+  const savedSourceId = String(savedFile?.sourceId || "").trim();
+  const affected = files.filter((file) => !savedId || file.id === savedId || (
+    file.sourceType === savedSourceType
+    && (!savedSourceId || !file.sourceId || file.sourceId === savedSourceId)
+  ));
   const deactivated = [];
   const ambiguous = [];
   for (let leftIndex = 0; leftIndex < affected.length; leftIndex += 1) {
     for (let rightIndex = leftIndex + 1; rightIndex < affected.length; rightIndex += 1) {
       const left = affected[leftIndex];
       const right = affected[rightIndex];
-      if (left.sourceType !== right.sourceType || !dateRangesOverlap(left, right)) continue;
+      if (left.sourceType !== right.sourceType || !sameSupersessionSource(left, right) || !dateRangesOverlap(left, right)) continue;
       const winner = chooseLatestRosterFile(left, right);
       if (!winner) {
         ambiguous.push({ left, right });
@@ -1686,6 +1799,12 @@ async function reconcileRosterFileSupersession(db, savedFile = {}, options = {})
       files: [left, right].map((file) => ({ id: file.id, name: file.name, startDate: file.startDate, endDate: file.endDate })),
     })),
   };
+}
+
+function sameSupersessionSource(left, right) {
+  const leftId = String(left?.sourceId || "").trim();
+  const rightId = String(right?.sourceId || "").trim();
+  return !leftId || !rightId || leftId === rightId;
 }
 
 function dateRangesOverlap(left, right) {
@@ -4205,6 +4324,20 @@ async function runCoreDerivedRosterSave(context, job = {}) {
   } catch (error) {
     throw error;
   }
+}
+
+// Used by the token-protected automation ingress. Keeping this alongside the
+// interactive save path ensures automated imports receive the same validation,
+// supersession, presence-index and snapshot-warmup behaviour as creator uploads.
+export async function runAutomatedDerivedRosterSave(context, job = {}) {
+  const sourceId = String(job?.file?.sourceId || "").trim();
+  if (!sourceId) throw new Error("An automation source id is required.");
+  return runCoreDerivedRosterSave(context, {
+    ...job,
+    phase: "complete",
+    email: `automation:${sourceId}`,
+    reason: `automation:${sourceId}`,
+  });
 }
 
 async function runDeferredDerivedRosterSave(context, job = {}) {

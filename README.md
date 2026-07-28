@@ -10,6 +10,7 @@ Cloudflare Pages application for converting MMC, DDH, and Casey roster exports i
 - `functions/_lib/roster.js`: server fallback copy of roster parsing and `.ics` generation logic
 - `fixtures/`: sample MMC/DDH/Casey spreadsheets and MMC PDF exports for parser regression checks
 - `scripts/test-fixtures.mjs`: fixture smoke test
+- `docs/roster-automation.md`: secure SharePoint/Findmyshift automation setup
 - `docs/PRD.md`: consolidated product rules
 
 ## Local Development
@@ -78,5 +79,6 @@ npm run deploy
 - `rhaydon@gmail.com` is the Creator account and is bootstrapped on first D1-backed login.
 - Creator storage is unrestricted.
 - Cross-device persistence requires the `ROSTER_DB` D1 binding above.
+- Automated ingestion is configured with the `ROSTER_AUTOMATION_TOKEN` Pages secret; see [Roster automation setup](docs/roster-automation.md).
 - Accounts with saved roster data can expose a tokenized subscription feed at `/api/feed?token=...`, which Apple Calendar or Google Calendar can subscribe to as a read-only `.ics` URL.
 - The **When am I working with…?** insight excludes Clinical Support overlaps by default; tick **Include CS** in the modal Options to show them.

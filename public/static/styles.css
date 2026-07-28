@@ -560,6 +560,69 @@ input[type="color"] {
   word-break: break-word;
 }
 
+.file-doctor-shifts {
+  margin-top: 2px;
+  color: var(--ink);
+  font-size: 0.82rem;
+}
+
+.file-doctor-shifts summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.file-doctor-shifts ul {
+  display: grid;
+  gap: 5px;
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.roster-source-status {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.roster-source-card {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(246, 248, 252, 0.7);
+}
+
+.roster-source-card > span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.roster-source-card small {
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.roster-source-card.roster-source-received,
+.roster-source-card.roster-source-manual-current {
+  border-color: rgba(44, 124, 84, 0.38);
+}
+
+.roster-source-card.roster-source-failed,
+.roster-source-card.roster-source-not-configured,
+.roster-source-card.roster-source-manual-missing {
+  border-color: rgba(190, 97, 51, 0.38);
+}
+
+.roster-source-error {
+  color: var(--accent-strong) !important;
+}
+
 .file-remove {
   position: absolute;
   top: 10px;
