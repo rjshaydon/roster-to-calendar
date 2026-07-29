@@ -1,14 +1,13 @@
-import { buildAutomatedDerivedRosterPayload, automationSourceDefinition, sha256Hex } from "../../_lib/automation-import.js";
+import { automationSourceDefinition, sha256Hex } from "../../_lib/automation-import.js";
 import {
   createRosterSyncRun,
+  findQueuedRosterSyncByHash,
   findSuccessfulRosterSyncByHash,
-  finishRosterSyncRun,
   hasCalendarDb,
   loadRosterSource,
   upsertRawRosterFile,
   upsertRosterSource,
 } from "../../_lib/d1-calendar.js";
-import { runAutomatedDerivedRosterSave } from "../state.js";
 
 const MAX_ROSTER_BYTES = 15 * 1024 * 1024;
 
@@ -17,27 +16,21 @@ export async function onRequestPost(context) {
     return Response.json({ error: "Unauthorized." }, { status: 401 });
   }
   if (!hasCalendarDb(context.env)) return Response.json({ error: "Roster database is unavailable." }, { status: 503 });
-  let sourceId = "";
-  let source = null;
-  let sourceRecord = null;
-  let runId = "";
-  let providerVersion = "";
-  let providerModifiedAt = "";
-  let now = "";
   try {
     const upload = await readAutomationUpload(context.request);
-    sourceId = upload.sourceId;
-    source = automationSourceDefinition(sourceId);
+    const sourceId = upload.sourceId;
+    const source = automationSourceDefinition(sourceId);
     const file = upload.file;
-    providerVersion = upload.providerVersion;
-    providerModifiedAt = upload.providerModifiedAt;
+    const providerVersion = upload.providerVersion;
+    const providerModifiedAt = upload.providerModifiedAt;
     if (!source || !(file instanceof File)) return Response.json({ error: "A configured source and roster file are required." }, { status: 400 });
     if (!file.size || file.size > MAX_ROSTER_BYTES) return Response.json({ error: "Roster file is missing or too large." }, { status: 413 });
+    if (!context.env.ROSTER_FILES?.put) return Response.json({ error: "Roster file storage is unavailable." }, { status: 503 });
 
     const bytes = new Uint8Array(await file.arrayBuffer());
     const contentHash = await sha256Hex(bytes);
-    now = new Date().toISOString();
-    sourceRecord = await loadRosterSource(context.env.ROSTER_DB, sourceId);
+    const now = new Date().toISOString();
+    const sourceRecord = await loadRosterSource(context.env.ROSTER_DB, sourceId);
     await upsertRosterSource(context.env.ROSTER_DB, updatedSourceRecord(sourceRecord, source, {
       id: sourceId, providerVersion, providerModifiedAt, lastCheckedAt: now, lastError: "", updatedAt: now,
     }));
@@ -45,51 +38,41 @@ export async function onRequestPost(context) {
     if (prior) {
       return Response.json({ ok: true, status: "unchanged", sourceId, fileId: prior.fileId, runId: prior.id });
     }
-
-    runId = `sync:${sourceId}:${crypto.randomUUID()}`;
-    await createRosterSyncRun(context.env.ROSTER_DB, {
-      id: runId, sourceId, triggerType: "ingest", providerVersion, contentHash, startedAt: now,
-    });
-    const derived = await buildAutomatedDerivedRosterPayload({ file, sourceId, contentHash, providerVersion });
-    const objectKey = `automation/${sourceId}/${contentHash}`;
-    if (context.env.ROSTER_FILES?.put) {
-      await context.env.ROSTER_FILES.put(objectKey, bytes, { httpMetadata: { contentType: file.type || "application/octet-stream" } });
+    const queued = await findQueuedRosterSyncByHash(context.env.ROSTER_DB, sourceId, contentHash);
+    if (queued) {
+      return Response.json({ ok: true, status: queued.status, sourceId, fileId: queued.fileId, runId: queued.id }, { status: 202 });
     }
-    await upsertRawRosterFile(context.env.ROSTER_DB, derived.file, {
-      objectKey: context.env.ROSTER_FILES?.put ? objectKey : "",
-      dataUrl: "",
+
+    const runId = `sync:${sourceId}:${crypto.randomUUID()}`;
+    const fileId = `automation:${sourceId}:${contentHash.slice(0, 24)}`;
+    const objectKey = `automation/${sourceId}/${contentHash}`;
+    await context.env.ROSTER_FILES.put(objectKey, bytes, { httpMetadata: { contentType: file.type || "application/octet-stream" } });
+    await upsertRawRosterFile(context.env.ROSTER_DB, {
+      id: fileId,
+      name: file.name || `${sourceId}.xlsx`,
+      sourceType: source.sourceType,
+      size: file.size,
+      lastModified: file.lastModified,
+    }, {
+      objectKey,
       type: file.type || "application/octet-stream",
       uploadedAt: now,
     });
-    const saved = await runAutomatedDerivedRosterSave(context, derived);
-    const doctors = Number(saved?.result?.doctors || derived.doctors.length || 0);
-    const events = Number(saved?.result?.events || derived.eventCount || 0);
-    await finishRosterSyncRun(context.env.ROSTER_DB, runId, {
-      status: "success", fileId: derived.file.id, doctorCount: doctors, eventCount: events,
-      message: "Roster indexed.", completedAt: new Date().toISOString(),
+    await createRosterSyncRun(context.env.ROSTER_DB, {
+      id: runId,
+      sourceId,
+      triggerType: "sharepoint",
+      providerVersion,
+      contentHash,
+      fileId,
+      status: "queued",
+      message: "Queued for background processing.",
+      startedAt: now,
     });
-    await upsertRosterSource(context.env.ROSTER_DB, {
-      ...updatedSourceRecord(sourceRecord, source, {
-        id: sourceId, providerVersion, providerModifiedAt, lastCheckedAt: now,
-        lastSuccessAt: new Date().toISOString(), lastError: "", activeFileId: derived.file.id, updatedAt: new Date().toISOString(),
-      }),
-    });
-    return Response.json({ ok: true, status: "imported", sourceId, fileId: derived.file.id, runId, doctors, events });
+    return Response.json({ ok: true, status: "queued", sourceId, fileId, runId }, { status: 202 });
   } catch (error) {
-    console.error("Automated roster ingestion failed", error);
-    const failedAt = new Date().toISOString();
-    if (runId) {
-      await finishRosterSyncRun(context.env.ROSTER_DB, runId, {
-        status: "failed", message: "Roster ingestion failed.", completedAt: failedAt,
-      }).catch(() => null);
-    }
-    if (sourceId && source) {
-      await upsertRosterSource(context.env.ROSTER_DB, updatedSourceRecord(sourceRecord, source, {
-        id: sourceId, providerVersion, providerModifiedAt, lastCheckedAt: now || failedAt,
-        lastError: "Roster ingestion failed.", updatedAt: failedAt,
-      })).catch(() => null);
-    }
-    return Response.json({ error: "Roster ingestion failed." }, { status: 422 });
+    console.error("Automated roster queueing failed", error);
+    return Response.json({ error: "Roster could not be queued." }, { status: 422 });
   }
 }
 

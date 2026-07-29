@@ -1218,6 +1218,68 @@ export async function findSuccessfulRosterSyncByHash(db, sourceId, contentHash) 
   return rosterSyncRunFromRow(row);
 }
 
+export async function findQueuedRosterSyncByHash(db, sourceId, contentHash) {
+  if (!db?.prepare || !sourceId || !contentHash) return null;
+  await ensureCalendarSchema(db);
+  const row = await db.prepare(`
+    SELECT * FROM roster_sync_runs
+    WHERE source_id = ? AND content_hash = ? AND status IN ('queued', 'processing')
+    ORDER BY started_at DESC LIMIT 1
+  `).bind(String(sourceId), String(contentHash)).first();
+  return rosterSyncRunFromRow(row);
+}
+
+export async function loadRosterSyncRun(db, runId) {
+  if (!db?.prepare || !runId) return null;
+  await ensureCalendarSchema(db);
+  const row = await db.prepare("SELECT * FROM roster_sync_runs WHERE id = ?").bind(String(runId)).first();
+  return rosterSyncRunFromRow(row);
+}
+
+export async function listQueuedRosterSyncRuns(db, limit = 4) {
+  if (!db?.prepare) return [];
+  await ensureCalendarSchema(db);
+  const safeLimit = Math.min(Math.max(Number(limit || 4), 1), 20);
+  const rows = await db.prepare(`
+    SELECT
+      roster_sync_runs.*,
+      raw_roster_files.name AS file_name,
+      raw_roster_files.source_type AS file_source_type,
+      raw_roster_files.size AS file_size,
+      raw_roster_files.last_modified AS file_last_modified,
+      raw_roster_files.type AS file_type,
+      raw_roster_files.object_key AS object_key,
+      roster_sources.provider_modified_at AS provider_modified_at
+    FROM roster_sync_runs
+    INNER JOIN raw_roster_files ON raw_roster_files.file_id = roster_sync_runs.file_id
+    LEFT JOIN roster_sources ON roster_sources.id = roster_sync_runs.source_id
+    WHERE roster_sync_runs.status IN ('queued', 'processing')
+    ORDER BY roster_sync_runs.started_at ASC
+    LIMIT ?
+  `).bind(safeLimit).all();
+  return (rows.results || []).map((row) => ({
+    ...rosterSyncRunFromRow(row),
+    fileName: String(row.file_name || "roster.xlsx"),
+    sourceType: String(row.file_source_type || "").toLowerCase(),
+    size: Number(row.file_size || 0),
+    lastModified: Number(row.file_last_modified || 0),
+    contentType: String(row.file_type || "application/octet-stream"),
+    objectKey: String(row.object_key || ""),
+    providerModifiedAt: String(row.provider_modified_at || ""),
+  })).filter((run) => run.id && run.fileId && run.objectKey);
+}
+
+export async function markRosterSyncRunProcessing(db, runId) {
+  if (!db?.prepare || !runId) return { ok: false, reason: "missing-run-id" };
+  await ensureCalendarSchema(db);
+  await db.prepare(`
+    UPDATE roster_sync_runs
+    SET status = 'processing', message = ?, completed_at = ''
+    WHERE id = ?
+  `).bind("Background processing started.", String(runId)).run();
+  return { ok: true };
+}
+
 export async function createRosterSyncRun(db, run = {}) {
   if (!db?.prepare || !run?.id || !run?.sourceId) return { ok: false, reason: "missing-run-input" };
   await ensureCalendarSchema(db);
