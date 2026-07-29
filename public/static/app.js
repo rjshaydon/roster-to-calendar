@@ -6834,10 +6834,10 @@ function formatTimestamp(value) {
     day: "numeric",
     month: "short",
     year: "numeric",
-    hour: "2-digit",
+    hour: "numeric",
     minute: "2-digit",
   });
-  return formatted.replace(/,\s0(\d:\d{2}\s?pm)$/i, ", $1");
+  return formatted;
 }
 
 function formatIssueHeading(item) {
@@ -7252,8 +7252,7 @@ function formatEditorTime(value) {
   if (!parsed) return "";
   const suffix = parsed.hours >= 12 ? "pm" : "am";
   const hour12 = parsed.hours % 12 || 12;
-  const hourLabel = suffix === "am" && hour12 < 10 ? String(hour12).padStart(2, "0") : String(hour12);
-  return `${hourLabel}:${String(parsed.minutes).padStart(2, "0")} ${suffix}`;
+  return `${hour12}:${String(parsed.minutes).padStart(2, "0")} ${suffix}`;
 }
 
 function parseEditorTimeInput(value) {
@@ -8128,7 +8127,7 @@ function renderAdminConsoleMarkup() {
 
 function formatConsoleTimestamp(value) {
   const date = new Date(value || "");
-  return Number.isNaN(date.getTime()) ? "Unknown time" : date.toLocaleString();
+  return Number.isNaN(date.getTime()) ? "Unknown time" : formatTimestamp(date);
 }
 
 function renderParserRulesCard() {
