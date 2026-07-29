@@ -689,6 +689,14 @@ export async function onRequestPost(context) {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
+      if (String(body?.confirmation || "") !== "REBUILD") {
+        return Response.json({ error: "Advanced rebuild confirmation is required." }, { status: 400 });
+      }
+      const pendingAutomationRuns = (await listRosterSyncRuns(context.env.ROSTER_DB, { limit: 100 }))
+        .filter((run) => ["queued", "processing"].includes(run.status));
+      if (pendingAutomationRuns.length) {
+        return Response.json({ error: "Wait for queued roster updates to finish before rebuilding." }, { status: 409 });
+      }
       const keepFileIds = sanitizeRepositoryFileIds(body?.keepFileIds);
       if (!keepFileIds.length) {
         return Response.json({ error: "Rebuild requires at least one retained roster file." }, { status: 400 });
@@ -1567,7 +1575,7 @@ async function calendarStoreStatus(store, db, options = {}) {
   const syncRuns = await listRosterSyncRuns(db, { limit: 100 }).catch(() => []);
   const derivedFileIds = new Set(allD1Files.map((file) => file.id));
   const retainedOnlyFiles = rawFiles
-    .filter((file) => file.id && !derivedFileIds.has(file.id))
+    .filter((file) => file.id && !derivedFileIds.has(file.id) && !String(file.id).startsWith("automation:"))
     .map((file) => ({
       id: file.id,
       name: file.name,
@@ -1684,6 +1692,7 @@ function rosterSourceStatuses(files = [], storedSources = [], syncRuns = []) {
   }
   const latestRunBySource = new Map();
   for (const run of syncRuns || []) {
+    if (run?.status === "superseded") continue;
     if (run?.sourceId && !latestRunBySource.has(run.sourceId)) latestRunBySource.set(run.sourceId, run);
   }
   const automated = Object.entries(AUTOMATION_SOURCES).map(([id, definition]) => {
@@ -1691,14 +1700,16 @@ function rosterSourceStatuses(files = [], storedSources = [], syncRuns = []) {
     const activeFiles = activeSourceFiles(sourceFiles.get(id));
     const activeFile = findActiveSourceFile(activeFiles, source?.activeFileId);
     const latestRun = latestRunBySource.get(id) || null;
-    const failed = Boolean(source?.lastError) && (!source?.lastSuccessAt || source.lastCheckedAt >= source.lastSuccessAt);
+    const pendingState = ["queued", "processing"].includes(latestRun?.status) ? latestRun.status : "";
+    const failed = latestRun?.status === "failed"
+      && (!source?.lastSuccessAt || String(latestRun.completedAt || latestRun.startedAt) >= String(source.lastSuccessAt));
     return {
       id,
       label: definition.label,
       provider: definition.provider,
       sourceType: definition.sourceType,
       mode: "automated",
-      state: !source ? "not-configured" : failed ? "failed" : source.lastSuccessAt ? "received" : "waiting",
+      state: !source ? "not-configured" : pendingState || (failed ? "failed" : source.lastSuccessAt ? "received" : "waiting"),
       providerVersion: String(source?.providerVersion || latestRun?.providerVersion || ""),
       providerModifiedAt: String(source?.providerModifiedAt || ""),
       lastReceivedAt: String(source?.lastCheckedAt || ""),
@@ -1709,7 +1720,10 @@ function rosterSourceStatuses(files = [], storedSources = [], syncRuns = []) {
       activeFileNames: activeFiles.map((file) => String(file.name || "")).filter(Boolean),
       latestRun: latestRun ? {
         status: latestRun.status,
+        startedAt: latestRun.startedAt,
         completedAt: latestRun.completedAt,
+        fileId: latestRun.fileId,
+        message: latestRun.message,
         doctorCount: latestRun.doctorCount,
         eventCount: latestRun.eventCount,
       } : null,

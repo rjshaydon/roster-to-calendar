@@ -21,7 +21,7 @@ for (const run of runs) {
         runId: run.id,
         sourceId: run.sourceId,
         phase: "failed",
-        file: { id: run.fileId, sourceId: run.sourceId, sourceType: run.sourceType },
+        file: { id: run.fileId, name: run.fileName, sourceId: run.sourceId, sourceType: run.sourceType },
         message: "Background processor could not parse or save this roster.",
       },
     }).catch(() => null);

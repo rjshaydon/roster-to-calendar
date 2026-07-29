@@ -2,6 +2,7 @@ import { automationSourceDefinition, sha256Hex } from "../../_lib/automation-imp
 import {
   createRosterSyncRun,
   findQueuedRosterSyncByHash,
+  findRosterSyncByProviderVersion,
   findSuccessfulRosterSyncByHash,
   hasCalendarDb,
   loadRosterSource,
@@ -27,10 +28,35 @@ export async function onRequestPost(context) {
     if (!file.size || file.size > MAX_ROSTER_BYTES) return Response.json({ error: "Roster file is missing or too large." }, { status: 413 });
     if (!context.env.ROSTER_FILES?.put) return Response.json({ error: "Roster file storage is unavailable." }, { status: 503 });
 
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    const contentHash = await sha256Hex(bytes);
     const now = new Date().toISOString();
     const sourceRecord = await loadRosterSource(context.env.ROSTER_DB, sourceId);
+    const matchingVersion = providerVersion
+      ? await findRosterSyncByProviderVersion(context.env.ROSTER_DB, sourceId, providerVersion, file.name)
+      : null;
+    if (matchingVersion) {
+      await upsertRosterSource(context.env.ROSTER_DB, updatedSourceRecord(sourceRecord, source, {
+        id: sourceId,
+        providerVersion,
+        providerModifiedAt: sourceRecord?.providerModifiedAt || providerModifiedAt,
+        lastCheckedAt: now,
+        updatedAt: now,
+      }));
+      const status = matchingVersion.status === "success"
+        ? "unchanged"
+        : matchingVersion.status === "failed"
+          ? "unchanged-failed"
+          : matchingVersion.status;
+      return Response.json({
+        ok: true,
+        status,
+        sourceId,
+        fileId: matchingVersion.fileId,
+        runId: matchingVersion.id,
+      }, { status: ["queued", "processing"].includes(status) ? 202 : 200 });
+    }
+
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const contentHash = await sha256Hex(bytes);
     await upsertRosterSource(context.env.ROSTER_DB, updatedSourceRecord(sourceRecord, source, {
       id: sourceId, providerVersion, providerModifiedAt, lastCheckedAt: now, lastError: "", updatedAt: now,
     }));
@@ -84,13 +110,18 @@ async function readAutomationUpload(request) {
     if (!base64) return { sourceId: "", providerVersion: "", providerModifiedAt: "", file: null };
     const binary = atob(base64);
     const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const providerModifiedAt = String(body?.providerModifiedAt || body?.lastModified || "").trim();
+    const explicitLastModified = Number(body?.lastModified);
+    const providerLastModified = Date.parse(providerModifiedAt);
     return {
       sourceId: String(body?.sourceId || "").trim(),
       providerVersion: String(body?.providerVersion || "").trim(),
-      providerModifiedAt: String(body?.providerModifiedAt || body?.lastModified || "").trim(),
+      providerModifiedAt,
       file: new File([bytes], String(body?.fileName || "roster.xlsx"), {
         type: String(body?.contentType || "application/octet-stream"),
-        lastModified: Number(body?.lastModified || Date.now()),
+        lastModified: Number.isFinite(explicitLastModified) && explicitLastModified > 0
+          ? explicitLastModified
+          : Number.isFinite(providerLastModified) ? providerLastModified : Date.now(),
       }),
     };
   }

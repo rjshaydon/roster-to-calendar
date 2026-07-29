@@ -1229,6 +1229,30 @@ export async function findQueuedRosterSyncByHash(db, sourceId, contentHash) {
   return rosterSyncRunFromRow(row);
 }
 
+export async function findRosterSyncByProviderVersion(db, sourceId, providerVersion, fileName) {
+  if (!db?.prepare || !sourceId || !providerVersion || !fileName) return null;
+  await ensureCalendarSchema(db);
+  const row = await db.prepare(`
+    SELECT roster_sync_runs.*
+    FROM roster_sync_runs
+    INNER JOIN raw_roster_files ON raw_roster_files.file_id = roster_sync_runs.file_id
+    WHERE roster_sync_runs.source_id = ?
+      AND roster_sync_runs.provider_version = ?
+      AND LOWER(raw_roster_files.name) = LOWER(?)
+      AND roster_sync_runs.status IN ('success', 'queued', 'processing', 'failed')
+    ORDER BY
+      CASE roster_sync_runs.status
+        WHEN 'success' THEN 0
+        WHEN 'processing' THEN 1
+        WHEN 'queued' THEN 2
+        ELSE 3
+      END,
+      roster_sync_runs.started_at DESC
+    LIMIT 1
+  `).bind(String(sourceId), String(providerVersion), String(fileName)).first();
+  return rosterSyncRunFromRow(row);
+}
+
 export async function loadRosterSyncRun(db, runId) {
   if (!db?.prepare || !runId) return null;
   await ensureCalendarSchema(db);
@@ -1254,6 +1278,22 @@ export async function listQueuedRosterSyncRuns(db, limit = 4) {
     INNER JOIN raw_roster_files ON raw_roster_files.file_id = roster_sync_runs.file_id
     LEFT JOIN roster_sources ON roster_sources.id = roster_sync_runs.source_id
     WHERE roster_sync_runs.status IN ('queued', 'processing')
+      AND (
+        roster_sync_runs.provider_version = ''
+        OR NOT EXISTS (
+          SELECT 1
+          FROM roster_sync_runs AS earlier_run
+          INNER JOIN raw_roster_files AS earlier_file ON earlier_file.file_id = earlier_run.file_id
+          WHERE earlier_run.source_id = roster_sync_runs.source_id
+            AND earlier_run.provider_version = roster_sync_runs.provider_version
+            AND LOWER(earlier_file.name) = LOWER(raw_roster_files.name)
+            AND earlier_run.status IN ('queued', 'processing')
+            AND (
+              earlier_run.started_at < roster_sync_runs.started_at
+              OR (earlier_run.started_at = roster_sync_runs.started_at AND earlier_run.id < roster_sync_runs.id)
+            )
+        )
+      )
     ORDER BY roster_sync_runs.started_at ASC
     LIMIT ?
   `).bind(safeLimit).all();
@@ -1310,6 +1350,33 @@ export async function finishRosterSyncRun(db, runId, update = {}) {
     String(update.completedAt || new Date().toISOString()), String(runId),
   ).run();
   return { ok: true };
+}
+
+export async function supersedeDuplicateRosterSyncRuns(db, run = {}, fileName = "") {
+  if (!db?.prepare || !run?.id || !run?.sourceId || !run?.providerVersion || !fileName) {
+    return { ok: true, changes: 0 };
+  }
+  await ensureCalendarSchema(db);
+  const completedAt = new Date().toISOString();
+  const result = await db.prepare(`
+    UPDATE roster_sync_runs
+    SET status = 'superseded', message = ?, completed_at = ?
+    WHERE source_id = ?
+      AND provider_version = ?
+      AND id <> ?
+      AND status IN ('queued', 'processing')
+      AND file_id IN (
+        SELECT file_id FROM raw_roster_files WHERE LOWER(name) = LOWER(?)
+      )
+  `).bind(
+    "Duplicate provider version skipped after an identical source version was imported.",
+    completedAt,
+    String(run.sourceId),
+    String(run.providerVersion),
+    String(run.id),
+    String(fileName),
+  ).run();
+  return { ok: true, changes: Number(result?.meta?.changes || result?.changes || 0) };
 }
 
 function parseStoredJson(value, fallback = {}) {

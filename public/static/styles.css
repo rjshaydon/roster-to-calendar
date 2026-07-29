@@ -1638,8 +1638,26 @@ body[data-skin="console"] .preview-cell.is-weekend {
 }
 
 .system-admin-body > .modal-actions,
-.system-admin-body > .console-history {
+.system-admin-body > .console-history,
+.system-admin-body > .advanced-roster-recovery {
   grid-column: 1 / -1;
+}
+
+.advanced-roster-recovery {
+  padding: 12px 14px;
+  border: 1px solid rgba(20, 34, 42, 0.1);
+  border-radius: 14px;
+  color: var(--muted);
+}
+
+.advanced-roster-recovery summary {
+  cursor: pointer;
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.advanced-roster-recovery p {
+  margin: 10px 0;
 }
 
 .account-hospital-locations {
