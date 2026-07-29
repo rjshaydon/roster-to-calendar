@@ -1332,7 +1332,8 @@ assert.match(appSource, /function rosterSyncSummary/, "system card should expose
 assert.doesNotMatch(appSource, /function scheduleFailedRosterRetry/, "failed roster syncs should not schedule automatic retry storms");
 assert.match(appSource, /data-reparse-import/, "file cards should expose a visible reparse action");
 assert.match(appSource, /Reparse produced 0 events/, "zero-event reparses should remain visibly failed");
-assert.match(appSource, /formatted\.replace\(\/,\\s0\(\\d:\\d\{2\}\\s\?pm\)\$\/i, \", \$1\"\)/, "PM timestamps should drop their leading zero");
+assert.match(appSource, /hour: "numeric"/, "timestamps should use an unpadded 12-hour clock");
+assert.doesNotMatch(appSource, /hourLabel = suffix === "am"/, "editor times should not pad morning hours");
 assert.match(
   appSource.match(/accountsBody\.addEventListener\(\"click\"[\s\S]*?\n\}\);/)?.[0] || "",
   /data-reparse-import[\s\S]*reparseRosterFile/,
