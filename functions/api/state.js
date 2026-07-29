@@ -4332,9 +4332,11 @@ async function runCoreDerivedRosterSave(context, job = {}) {
 export async function runAutomatedDerivedRosterSave(context, job = {}) {
   const sourceId = String(job?.file?.sourceId || "").trim();
   if (!sourceId) throw new Error("An automation source id is required.");
+  const requestedPhase = String(job.phase || "complete").toLowerCase();
+  const phase = ["start", "events", "finish", "complete"].includes(requestedPhase) ? requestedPhase : "complete";
   return runCoreDerivedRosterSave(context, {
     ...job,
-    phase: "complete",
+    phase,
     email: `automation:${sourceId}`,
     reason: `automation:${sourceId}`,
   });

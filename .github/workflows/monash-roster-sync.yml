@@ -1,0 +1,30 @@
+name: Process Monash roster queue
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: monash-roster-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Parse and import queued rosters
+        run: node scripts/process-roster-queue.mjs
+        env:
+          ROSTER_AUTOMATION_BASE_URL: https://roster-to-calendar.pages.dev
+          ROSTER_AUTOMATION_TOKEN: ${{ secrets.ROSTER_AUTOMATION_TOKEN }}

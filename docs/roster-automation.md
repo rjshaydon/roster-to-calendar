@@ -6,7 +6,7 @@ The app now has a token-protected automation ingress at:
 POST https://<your-pages-domain>/api/automation/ingest
 ```
 
-It accepts the existing roster spreadsheets, parses them with the same code as a Creator upload, retains the original file in R2, and records the source, sync run, content hash, doctor count, and event count in D1. Sending the same file again is safe: it returns `unchanged` without replacing calendar data.
+It accepts the existing roster spreadsheets, retains the original file in R2, and queues it for the background processor. The scheduled GitHub Action parses the workbook with the same code as a Creator upload and sends the derived rows back to D1 in small batches. This keeps spreadsheet parsing outside the Cloudflare Pages Function CPU limit. Sending the same file again is safe: it returns `unchanged`, `queued`, or `processing` without duplicating calendar data.
 
 Admin → Files shows the last provider modification time supplied by the connector and the corresponding successful import time. An automated source is never labelled current before the first successful source update; it remains **Not connected** or **Waiting for first source update**.
 
@@ -27,6 +27,8 @@ Create a long random value and save it as a Pages secret named `ROSTER_AUTOMATIO
 ```bash
 npx wrangler pages secret put ROSTER_AUTOMATION_TOKEN
 ```
+
+Save the same value as the encrypted GitHub Actions repository secret `ROSTER_AUTOMATION_TOKEN`. The `Process Monash roster queue` workflow runs every 15 minutes and can also be dispatched manually. The Pages Function only authenticates and stores the incoming file; opening the website is not required.
 
 Apply the new D1 migration before deploying the Pages Function:
 
@@ -49,7 +51,7 @@ Create a Power Automate flow in the Monash tenant. The signed-in Monash account 
    - Adult roster: `sourceId` = `monash-adults`
    - Paediatric roster: `sourceId` = `monash-paeds`
 3. Use **Get file content** for the triggering file.
-4. Use the tenant-approved HTTP action to POST JSON to the ingress URL. This connector is often Premium and may be blocked by DLP; confirm that with the Monash Power Platform administrator before enabling it.
+4. Use the tenant-approved HTTP action to POST JSON to the ingress URL. A successful new upload returns HTTP `202` with `status: queued`. This connector is often Premium and may be blocked by DLP; confirm that with the Monash Power Platform administrator before enabling it.
 
 Use this JSON body (replace the dynamic-content fields with the corresponding Power Automate values):
 
