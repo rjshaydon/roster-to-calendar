@@ -2,7 +2,8 @@ name: Process Monash roster queue
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    # Avoid the start-of-hour load spike, when GitHub may delay or drop scheduled jobs.
+    - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
 
 concurrency:
@@ -17,13 +18,28 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - name: Check for changed roster files
+        id: queue
+        env:
+          ROSTER_AUTOMATION_TOKEN: ${{ secrets.ROSTER_AUTOMATION_TOKEN }}
+        run: |
+          count="$(curl --fail --silent --show-error \
+            --header "Authorization: Bearer ${ROSTER_AUTOMATION_TOKEN}" \
+            "https://roster-to-calendar.pages.dev/api/automation/pending?limit=1" \
+            | jq -r '.runs | length')"
+          echo "count=${count}" >> "$GITHUB_OUTPUT"
+          echo "Found ${count} changed roster file(s) waiting."
       - uses: actions/checkout@v4
+        if: steps.queue.outputs.count != '0'
       - uses: actions/setup-node@v4
+        if: steps.queue.outputs.count != '0'
         with:
           node-version: 22
           cache: npm
       - run: npm ci
+        if: steps.queue.outputs.count != '0'
       - name: Parse and import queued rosters
+        if: steps.queue.outputs.count != '0'
         run: node scripts/process-roster-queue.mjs
         env:
           ROSTER_AUTOMATION_BASE_URL: https://roster-to-calendar.pages.dev

@@ -2292,6 +2292,7 @@ function renderFilesMarkup({ canRemove = false, heading = "", description = "", 
           <article class="file-pill" data-file-id="${entry.id}">
             <span>${escapeHtml(String(entry.sourceType || "").toUpperCase())}${entry.addedAt ? ` · Imported ${escapeHtml(formatTimestamp(entry.addedAt))}` : " · Roster database"}</span>
             <strong>${escapeHtml(entry.name)}</strong>
+            ${Number(entry.lastModified || 0) > 0 ? `<span>Source modified ${escapeHtml(formatTimestamp(entry.lastModified))}</span>` : ""}
             ${rosterSyncLabel(entry) || (statusFiles.has(entry.id)
               ? statusFiles.get(entry.id)?.retainedSourceOnly
                 ? `<span>Retained in R2 · not yet synced to D1</span>`
@@ -2387,6 +2388,8 @@ function renderRosterSourceFileNames(source = {}) {
 function rosterSourceStateLabel(source = {}) {
   if (source.mode === "manual") return source.state === "manual-current" ? "Manual roster uploaded" : "Manual roster needed";
   if (source.state === "not-configured") return "Not connected";
+  if (source.state === "queued") return "Update queued for background processing";
+  if (source.state === "processing") return "Update is being imported";
   if (source.state === "failed") return "Latest update failed";
   if (source.state === "received") return "Latest source update imported";
   return "Waiting for first source update";
@@ -8081,9 +8084,15 @@ function renderCalendarStoreCard() {
         ` : ""}
         <div class="modal-actions">
           <button type="button" class="button button-secondary" data-refresh-calendar-store>Check status</button>
-          <button type="button" class="button button-secondary" data-replace-active-rosters>Rebuild from roster files</button>
           <button type="button" class="button button-secondary" data-view-console>${adminConsoleOpen ? "Hide console" : "View console"}</button>
         </div>
+        <details class="advanced-roster-recovery">
+          <summary>Advanced recovery</summary>
+          <p>Only rebuild when retained source files are known to be correct but the derived roster database is corrupted. Normal roster updates are automatic.</p>
+          ${hasPendingRosterAutomation()
+            ? `<p>Recovery is unavailable while roster updates are queued or processing.</p>`
+            : `<button type="button" class="button button-secondary" data-replace-active-rosters>Rebuild all retained rosters</button>`}
+        </details>
         ${adminConsoleOpen ? renderAdminConsoleMarkup() : ""}
       </div>
     </article>
@@ -11287,6 +11296,7 @@ function mergeRosterFileEntries(baseEntries, status = calendarStoreStatus, optio
 
   for (const entry of baseEntries || []) {
     if (!entry?.id || removedIds.has(entry.id)) continue;
+    if (String(entry.id).startsWith("automation:") && !storeIds.has(entry.id)) continue;
     if (options.removeMissingFromStore && storeIds.size && !storeIds.has(entry.id)) continue;
     byId.set(entry.id, entry);
   }
@@ -13017,9 +13027,21 @@ async function saveCloudStateNow(snapshot = null) {
 async function replaceActiveRostersWithCurrentUploads() {
   if (!isCreatorAuthenticated()) return;
   try {
+    await refreshCalendarStoreStatus({ silent: true });
+    if (hasPendingRosterAutomation()) {
+      throw new Error("Wait for queued roster updates to finish before using advanced recovery.");
+    }
+    const confirmed = window.confirm(
+      "Advanced recovery force-reparses every retained roster and replaces the active roster set. Continue only if the derived roster database is corrupted.",
+    );
+    if (!confirmed) return;
+    const confirmation = window.prompt('Type REBUILD to confirm this recovery operation.');
+    if (confirmation !== "REBUILD") {
+      setStatus("Roster rebuild cancelled.");
+      return;
+    }
     setStatus("Rebuilding roster database from roster files...");
-    if (!selectedFiles.length) await refreshCalendarStoreStatus({ silent: true });
-    const sourceEntries = selectedFiles.length ? selectedFiles : retainedRosterEntriesFromStatus();
+    const sourceEntries = retainedRosterEntriesFromStatus();
     if (!sourceEntries.length) {
       throw new Error("Rebuild requires at least one retained roster file. Re-upload the missing source files first if none are listed.");
     }
@@ -13038,6 +13060,7 @@ async function replaceActiveRostersWithCurrentUploads() {
     calendarStoreStatus = {
       ...await calendarStoreRequest("replaceActiveRosterFiles", {
         keepFileIds,
+        confirmation,
         selectedDoctorKey: selectedDoctor()?.key || OWNER_DOCTOR_KEY,
       }),
       checkedAt: new Date().toISOString(),
@@ -13051,6 +13074,11 @@ async function replaceActiveRostersWithCurrentUploads() {
   } catch (error) {
     setStatus(error.message || "Could not replace active rosters.", true);
   }
+}
+
+function hasPendingRosterAutomation() {
+  return (calendarStoreStatus?.rosterSourceStatuses || [])
+    .some((source) => ["queued", "processing"].includes(source?.state));
 }
 
 function retainedRosterEntriesFromStatus() {

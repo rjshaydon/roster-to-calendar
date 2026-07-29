@@ -5,7 +5,7 @@ import XLSX from "xlsx";
 
 import { onRequestPost as handleStatePost } from "../functions/api/state.js";
 import { onRequestGet as handleFeedGet } from "../functions/api/feed.js";
-import { buildPreviewFromDerivedEvents, storeCachedSnapshot } from "../functions/_lib/d1-calendar.js";
+import { buildPreviewFromDerivedEvents, findRosterSyncByProviderVersion, storeCachedSnapshot } from "../functions/_lib/d1-calendar.js";
 import { buildRosterView, doctorOptions, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
 
 function cloneWorkbook(workbook) {
@@ -84,8 +84,34 @@ const styleSource = await readFile(new URL("../public/static/styles.css", import
 const calendarMigrationSource = await readFile(new URL("../migrations/0001_calendar_store.sql", import.meta.url), "utf8");
 const insightIndexMigrationSource = await readFile(new URL("../migrations/0005_roster_insight_index.sql", import.meta.url), "utf8");
 const d1CalendarSource = await readFile(new URL("../functions/_lib/d1-calendar.js", import.meta.url), "utf8");
+const automationIngestSource = await readFile(new URL("../functions/api/automation/ingest.js", import.meta.url), "utf8");
+const automationWorkflowSource = await readFile(new URL("../.github/workflows/monash-roster-sync.yml", import.meta.url), "utf8");
 const indexSource = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
 assert.match(indexSource, /id="stayLoggedIn"[^>]*checked/, "Stay logged in should be selected by default");
+assert.ok(
+  automationIngestSource.indexOf("findRosterSyncByProviderVersion") < automationIngestSource.indexOf("file.arrayBuffer()"),
+  "automation ingress should reject an unchanged provider version before hashing or storing file bytes",
+);
+assert.match(
+  automationWorkflowSource,
+  /cron: "7,22,37,52 \* \* \* \*"[\s\S]*Check for changed roster files[\s\S]*steps\.queue\.outputs\.count != '0'/,
+  "scheduled roster processing should avoid the hour boundary and skip dependency setup when the queue is empty",
+);
+assert.match(
+  appSource.match(/function renderSystemAdminCard[\s\S]*?function renderAdminConsoleMarkup/)?.[0] || "",
+  /<details class="advanced-roster-recovery">[\s\S]*Rebuild all retained rosters/,
+  "full roster rebuild should be kept behind the advanced recovery disclosure",
+);
+assert.match(
+  appSource.match(/async function replaceActiveRostersWithCurrentUploads[\s\S]*?function retainedRosterEntriesFromStatus/)?.[0] || "",
+  /hasPendingRosterAutomation\(\)[\s\S]*window\.confirm[\s\S]*window\.prompt[\s\S]*confirmation/,
+  "advanced recovery should be blocked by pending automation and require explicit confirmation",
+);
+assert.match(
+  appSource.match(/function mergeRosterFileEntries[\s\S]*?function mergeSelectedFilesWithRosterStoreStatus/)?.[0] || "",
+  /startsWith\("automation:"\)[\s\S]*!storeIds\.has\(entry\.id\)/,
+  "obsolete queued or failed automation references should be removed from the creator's browser file list",
+);
 assert.match(
   appSource.match(/function openLoginModal[\s\S]*?function closeLoginModal/)?.[0] || "",
   /STAY_LOGGED_IN_PREFERENCE_KEY[\s\S]*stayLoggedInPreference === null \? true/,
@@ -1147,7 +1173,7 @@ assert.match(appSource, /data-replace-active-rosters/, "creator UI should expose
 assert.match(appSource, /<strong>Roster database<\/strong>/, "system card should use plain roster-database language");
 assert.match(appSource, /source file\$\{retainedSourceTotal === 1 \? \"\" : \"s\"\} retained/, "system card should report retained raw source coverage");
 assert.match(appSource, />Check status<\/button>/, "system card should expose a non-mutating status check");
-assert.match(appSource, />Rebuild from roster files<\/button>/, "system card should expose an explicit roster rebuild action");
+assert.match(appSource, />Rebuild all retained rosters<\/button>/, "advanced recovery should expose an explicit full rebuild action");
 assert.doesNotMatch(
   await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"),
   /loadRepositoryIndex|loadSnapshotRecord|persistSnapshotRecord|storeSnapshotForAccount|storeSnapshotForDoctorProfile/,
@@ -2075,6 +2101,23 @@ class MemoryD1Statement {
         doctor_count: args[8], event_count: args[9], started_at: args[10], completed_at: args[11],
       });
       return { success: true };
+    }
+    if (sql.startsWith("UPDATE roster_sync_runs") && sql.includes("status = 'processing'")) {
+      const run = this.db.rosterSyncRuns.get(args[1]);
+      if (run) Object.assign(run, { status: "processing", message: args[0], completed_at: "" });
+      return { success: true };
+    }
+    if (sql.startsWith("UPDATE roster_sync_runs") && sql.includes("status = 'superseded'")) {
+      let changes = 0;
+      for (const run of this.db.rosterSyncRuns.values()) {
+        const raw = this.db.rawFiles.get(run.file_id);
+        if (run.source_id !== args[2] || run.provider_version !== args[3] || run.id === args[4]) continue;
+        if (!["queued", "processing"].includes(run.status)) continue;
+        if (String(raw?.name || "").toLowerCase() !== String(args[5] || "").toLowerCase()) continue;
+        Object.assign(run, { status: "superseded", message: args[0], completed_at: args[1] });
+        changes += 1;
+      }
+      return { success: true, meta: { changes } };
     }
     if (sql.startsWith("UPDATE roster_sync_runs")) {
       const run = this.db.rosterSyncRuns.get(args[6]);
@@ -3029,10 +3072,21 @@ class MemoryD1Statement {
     if (sql.startsWith("SELECT * FROM roster_sources WHERE id = ?")) {
       return this.db.rosterSources.get(args[0]) || null;
     }
-    if (sql.includes("FROM roster_sync_runs") && sql.includes("WHERE source_id = ?")) {
+    if (sql.includes("FROM roster_sync_runs") && sql.includes("WHERE roster_sync_runs.source_id = ?") && sql.includes("provider_version = ?")) {
+      const statusOrder = new Map([["success", 0], ["processing", 1], ["queued", 2], ["failed", 3]]);
       return [...this.db.rosterSyncRuns.values()]
-        .filter((row) => row.source_id === args[0] && row.content_hash === args[1] && row.status === "success")
-        .sort((left, right) => String(right.completed_at).localeCompare(String(left.completed_at)))[0] || null;
+        .filter((row) => row.source_id === args[0] && row.provider_version === args[1])
+        .filter((row) => String(this.db.rawFiles.get(row.file_id)?.name || "").toLowerCase() === String(args[2] || "").toLowerCase())
+        .filter((row) => statusOrder.has(row.status))
+        .sort((left, right) => (statusOrder.get(left.status) - statusOrder.get(right.status))
+          || String(right.started_at).localeCompare(String(left.started_at)))[0] || null;
+    }
+    if (sql.includes("FROM roster_sync_runs") && sql.includes("WHERE source_id = ?")) {
+      let rows = [...this.db.rosterSyncRuns.values()]
+        .filter((row) => row.source_id === args[0] && row.content_hash === args[1]);
+      if (sql.includes("status = 'success'")) rows = rows.filter((row) => row.status === "success");
+      if (sql.includes("status IN ('queued', 'processing')")) rows = rows.filter((row) => ["queued", "processing"].includes(row.status));
+      return rows.sort((left, right) => String(right.completed_at || right.started_at).localeCompare(String(left.completed_at || left.started_at)))[0] || null;
     }
     if (sql.includes("COUNT(*) AS active_file_count") && sql.includes("FROM roster_files")) {
       const activeFiles = [...this.db.files.values()].filter((file) => file.active === 1);
@@ -4893,6 +4947,62 @@ assert.equal(sharedDdhStatus?.selectedDoctorEventCount, 1, "full roster status s
 assert.equal(sharedDdhStatus?.selectedDoctor?.displayName, "Shared User", "full roster status should report the matched roster identity");
 assert.equal(sharedDdhStatus?.selectedDoctor?.shifts?.[0]?.title, "Shared DDH Shift", "full roster status should return the selected doctor's shifts");
 assert.equal(detailedSharedStatus.rosterSourceStatuses?.find((source) => source.id === "monash-adults")?.state, "not-configured", "source status should distinguish an unconnected automation source");
+for (const [fileId, name] of [
+  ["automation:monash-paeds:failed", "Paeds - Term 1 2026.xlsx"],
+  ["automation:monash-adults:queued", "AdultTerm3.2026.xlsx"],
+]) {
+  sharedUploadDb.rawFiles.set(fileId, {
+    file_id: fileId,
+    name,
+    source_type: fileId.includes("paeds") ? "mch" : "mmc",
+    size: 100,
+    last_modified: 1,
+    object_key: `automation/${fileId}`,
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    data_url: "",
+    uploaded_at: "2026-07-29T03:00:00.000Z",
+  });
+}
+sharedUploadDb.rosterSyncRuns.set("failed-paeds", {
+  id: "failed-paeds", source_id: "monash-paeds", trigger_type: "sharepoint", provider_version: "4.0",
+  content_hash: "failed-hash", file_id: "automation:monash-paeds:failed", status: "failed", message: "Could not parse",
+  doctor_count: 0, event_count: 0, started_at: "2026-07-29T02:00:00.000Z", completed_at: "2026-07-29T02:01:00.000Z",
+});
+sharedUploadDb.rosterSyncRuns.set("queued-adults", {
+  id: "queued-adults", source_id: "monash-adults", trigger_type: "sharepoint", provider_version: "19.0",
+  content_hash: "queued-hash", file_id: "automation:monash-adults:queued", status: "queued", message: "Queued",
+  doctor_count: 0, event_count: 0, started_at: "2026-07-29T03:00:00.000Z", completed_at: "",
+});
+sharedUploadDb.rosterSources.set("monash-adults", {
+  id: "monash-adults", provider: "sharepoint", source_type: "mmc", label: "Monash Adults", enabled: 1,
+  config_json: "{}", cursor_json: "{}", provider_version: "19.0", provider_modified_at: "2026-07-29T02:59:00.000Z",
+  last_checked_at: "2026-07-29T03:00:00.000Z", last_success_at: "2026-07-29T02:30:00.000Z", last_error: "",
+  active_file_id: "", created_at: "2026-07-29T01:00:00.000Z", updated_at: "2026-07-29T03:00:00.000Z",
+});
+const matchingProviderVersion = await findRosterSyncByProviderVersion(
+  sharedUploadDb,
+  "monash-adults",
+  "19.0",
+  "AdultTerm3.2026.xlsx",
+);
+assert.equal(matchingProviderVersion?.id, "queued-adults", "the same SharePoint file version should resolve to its existing queue run");
+const automatedPendingStatus = await postState(sharedUploadStore, {
+  action: "calendarStoreStatus",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  selectedDoctorKey: "SHARED USER",
+  lightweight: false,
+}, sharedUploadDb);
+assert.equal(
+  automatedPendingStatus.files.some((file) => String(file.id).startsWith("automation:")),
+  false,
+  "queued and failed automation payloads should not inflate the active roster-file total",
+);
+assert.equal(
+  automatedPendingStatus.rosterSourceStatuses.find((source) => source.id === "monash-adults")?.state,
+  "queued",
+  "an update waiting for GitHub should be reported as queued even when an older version imported successfully",
+);
 for (const [fileId, name, lastModified, title] of [
   ["supersede-old", "MMC_Term2_2026_old.xlsx", 10, "Old MMC Shift"],
   ["supersede-new", "MMC_Term2_2026_new.xlsx", 30, "New MMC Shift"],
@@ -6067,6 +6177,7 @@ await postState(deletionStore, {
   email: "rhaydon@gmail.com",
   password: creatorPassword,
   keepFileIds: ["keep-roster"],
+  confirmation: "REBUILD",
 }, deletionStore.d1);
 assert.equal(deletionStore.d1.files.has("keep-roster"), true, "recovery should retain the requested current roster");
 assert.equal(deletionStore.d1.files.has("missing-from-save"), false, "recovery should remove active rosters outside the current upload set");
@@ -6076,6 +6187,7 @@ const emptyReplacement = await postStateRaw(deletionStore, {
   email: "rhaydon@gmail.com",
   password: creatorPassword,
   keepFileIds: [],
+  confirmation: "REBUILD",
 }, deletionStore.d1);
 assert.equal(emptyReplacement.response.status, 400, "rebuild-all must not accept an empty retained roster set");
 

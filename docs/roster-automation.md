@@ -6,7 +6,7 @@ The app now has a token-protected automation ingress at:
 POST https://<your-pages-domain>/api/automation/ingest
 ```
 
-It accepts the existing roster spreadsheets, retains the original file in R2, and queues it for the background processor. The scheduled GitHub Action parses the workbook with the same code as a Creator upload and sends the derived rows back to D1 in small batches. This keeps spreadsheet parsing outside the Cloudflare Pages Function CPU limit. Sending the same file again is safe: it returns `unchanged`, `queued`, or `processing` without duplicating calendar data.
+It accepts the existing roster spreadsheets, retains the original file in R2, and queues it for the background processor. The scheduled GitHub Action parses the workbook with the same code as a Creator upload and sends the derived rows back to D1 in small batches. This keeps spreadsheet parsing outside the Cloudflare Pages Function CPU limit. The SharePoint filename and provider version are checked before hashing or storing another copy, so an unchanged file is not reparsed even if Power Automate sends it again. Content hashes provide a fallback when a connector does not supply a provider version.
 
 Admin → Files shows the last provider modification time supplied by the connector and the corresponding successful import time. An automated source is never labelled current before the first successful source update; it remains **Not connected** or **Waiting for first source update**.
 
@@ -28,7 +28,7 @@ Create a long random value and save it as a Pages secret named `ROSTER_AUTOMATIO
 npx wrangler pages secret put ROSTER_AUTOMATION_TOKEN
 ```
 
-Save the same value as the encrypted GitHub Actions repository secret `ROSTER_AUTOMATION_TOKEN`. The `Process Monash roster queue` workflow runs every 15 minutes and can also be dispatched manually. The Pages Function only authenticates and stores the incoming file; opening the website is not required.
+Save the same value as the encrypted GitHub Actions repository secret `ROSTER_AUTOMATION_TOKEN`. The `Process Monash roster queue` workflow checks at minutes 7, 22, 37 and 52 and can also be dispatched manually. The offset avoids GitHub's start-of-hour scheduling peak. When no changed file is queued, the job exits before checking out the repository or installing dependencies. The Pages Function only authenticates and stores changed incoming files; opening the website is not required.
 
 Apply the new D1 migration before deploying the Pages Function:
 
@@ -67,6 +67,12 @@ Use this JSON body (replace the dynamic-content fields with the corresponding Po
 ```
 
 Set the request header `Authorization` to `Bearer <the Cloudflare secret>`. Limit the flow to roster-folder maintainers and turn on failure notifications. Test by updating a copy first; the ingress rejects a file whose detected roster type does not match its source id.
+
+The `providerVersion` value must be the SharePoint file ETag/version, not the flow run time. It must remain unchanged until that specific file changes. Filename plus provider version is the primary change identity, allowing different term files to have the same version number without being confused with one another.
+
+## Advanced roster recovery
+
+Normal source updates never require a full rebuild. In Admin → System, **Advanced recovery** is reserved for a confirmed corruption of the derived roster database while every retained source file is known to be correct. Recovery is blocked while an automated update is queued or processing and requires an explicit `REBUILD` confirmation. Prefer the per-file reparse control when only one roster is affected.
 
 ## Dandenong / Findmyshift
 

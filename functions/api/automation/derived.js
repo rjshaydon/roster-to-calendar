@@ -5,6 +5,7 @@ import {
   loadRosterSource,
   loadRosterSyncRun,
   markRosterSyncRunProcessing,
+  supersedeDuplicateRosterSyncRuns,
   upsertRosterSource,
 } from "../../_lib/d1-calendar.js";
 import { runAutomatedDerivedRosterSave } from "../state.js";
@@ -36,6 +37,7 @@ export async function onRequestPost(context) {
         message: String(body?.message || "Background roster processing failed.").slice(0, 300),
         completedAt: failedAt,
       });
+      await supersedeDuplicateRosterSyncRuns(context.env.ROSTER_DB, run, body?.file?.name || "");
       const existing = await loadRosterSource(context.env.ROSTER_DB, sourceId);
       await upsertRosterSource(context.env.ROSTER_DB, {
         ...(existing || {}),
@@ -68,6 +70,7 @@ export async function onRequestPost(context) {
         message: "Roster indexed by background processor.",
         completedAt,
       });
+      await supersedeDuplicateRosterSyncRuns(context.env.ROSTER_DB, run, body?.file?.name || "");
       const existing = await loadRosterSource(context.env.ROSTER_DB, sourceId);
       await upsertRosterSource(context.env.ROSTER_DB, {
         ...(existing || {}),
