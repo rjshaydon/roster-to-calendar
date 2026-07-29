@@ -1,5 +1,6 @@
 import { applyEventOverrides, customEventsToEvents, defaultSettings, inspectImportRecord, normalizeRosterName } from "../_lib/roster.js";
 import { AUTOMATION_SOURCES } from "../_lib/automation-import.js";
+import { requestQueuedRosterProcessing } from "../_lib/automation-dispatch.js";
 import {
   buildPreviewFromDerivedEvents,
   accountMirrorStatus,
@@ -22,6 +23,9 @@ import {
   listConsoleMessages,
   listRosterSources,
   listRosterSyncRuns,
+  listActiveRetainedRosterFiles,
+  createRosterSyncRun,
+  findQueuedRosterSyncByHash,
   loadLatestRosterDispatch,
   loadAccountMirror,
   loadAccountStateMirror,
@@ -979,7 +983,8 @@ export async function onRequestPost(context) {
         await saveD1ParserExtensionRule(context.env.ROSTER_DB, item);
         await clearIssuesResolvedByParserRule(context.env.ROSTER_DB, item);
       }
-      return Response.json({ ok: true, parserExtensions });
+      const reparse = await queueActiveParserRuleReparse(context.env, rules.map((item) => item.source));
+      return Response.json({ ok: true, parserExtensions, reparse });
     }
 
     if (action === "deleteParserExtensionRule") {
@@ -992,7 +997,8 @@ export async function onRequestPost(context) {
       }
       const parserExtensions = removeParserExtensionRuleByKey(await loadD1ParserExtensionRules(context.env.ROSTER_DB), target);
       await deleteD1ParserExtensionRule(context.env.ROSTER_DB, target);
-      return Response.json({ ok: true, parserExtensions });
+      const reparse = await queueActiveParserRuleReparse(context.env, [target.source]);
+      return Response.json({ ok: true, parserExtensions, reparse });
     }
 
     if (action === "saveLocalParserExtensionRule") {
@@ -5174,6 +5180,72 @@ function oldDefaultMmcRuleShape(code) {
     suffix: ssuMatch[2] === "R" ? "Float" : "",
     startTime: ssuMatch[1] === "A" ? "07:30" : "14:30",
     endTime: ssuMatch[1] === "A" ? "17:30" : "00:00",
+  };
+}
+
+async function queueActiveParserRuleReparse(env, sourceTypes = []) {
+  const wantedTypes = new Set((sourceTypes || []).map((value) => String(value || "").trim().toLowerCase()).filter(Boolean));
+  const files = (await listActiveRetainedRosterFiles(env.ROSTER_DB).catch(() => []))
+    .filter((file) => !wantedTypes.size || wantedTypes.has(file.sourceType));
+  const now = new Date().toISOString();
+  const queued = [];
+  for (const file of files) {
+    const sourceId = sourceIdForReparseFile(file);
+    if (!sourceId) continue;
+    // A parser-rule change is a new derived-data revision, never a source-file update.
+    // It reuses the retained R2/D1 raw file and is safe to retry or deduplicate.
+    const contentHash = `parser-reparse:${file.id}:${await parserRuleRevision(env.ROSTER_DB)}`;
+    const existing = await findQueuedRosterSyncByHash(env.ROSTER_DB, sourceId, contentHash);
+    if (existing) {
+      queued.push(existing.id);
+      continue;
+    }
+    const runId = `reparse:${file.id}:${crypto.randomUUID()}`;
+    await createRosterSyncRun(env.ROSTER_DB, {
+      id: runId,
+      sourceId,
+      triggerType: "parser-rule",
+      providerVersion: contentHash,
+      contentHash,
+      fileId: file.id,
+      status: "queued",
+      message: "Queued to apply updated shift-code rules to the retained roster file.",
+      startedAt: now,
+    });
+    queued.push(runId);
+  }
+  const dispatch = queued.length
+    ? await requestQueuedRosterProcessing(env, { reason: "parser-rule-change" })
+    : null;
+  return { queued: queued.length, runIds: queued, processorDispatch: publicDispatchStatus(dispatch) };
+}
+
+function sourceIdForReparseFile(file) {
+  const existing = String(file?.sourceId || "").trim();
+  if (AUTOMATION_SOURCES[existing]) return existing;
+  return {
+    mmc: "monash-adults",
+    mch: "monash-paeds",
+    ddh: "dandenong-findmyshift",
+    casey: "casey-manual",
+  }[String(file?.sourceType || "").toLowerCase()] || "";
+}
+
+async function parserRuleRevision(db) {
+  const rows = await db.prepare("SELECT id, updated_at, rule_json FROM parser_rules WHERE scope = 'global' ORDER BY id").all().catch(() => ({ results: [] }));
+  const material = (rows.results || []).map((row) => `${row.id}|${row.updated_at}|${row.rule_json}`).join("\n");
+  const bytes = new TextEncoder().encode(material || "default-parser-rules");
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("").slice(0, 20);
+}
+
+function publicDispatchStatus(result) {
+  if (!result) return null;
+  return {
+    dispatched: result.dispatched === true,
+    reason: String(result.reason || ""),
+    status: String(result.dispatch?.status || ""),
+    lastError: String(result.dispatch?.lastError || ""),
   };
 }
 

@@ -1097,6 +1097,29 @@ export async function queryRosterFiles(db, options = {}) {
   })).filter((file) => file.id && SOURCE_TYPES.includes(file.sourceType));
 }
 
+export async function listActiveRetainedRosterFiles(db) {
+  if (!db?.prepare) return [];
+  await ensureCalendarSchema(db);
+  const rows = await db.prepare(`
+    SELECT
+      roster_files.id AS id, roster_files.name AS name, roster_files.source_type AS source_type,
+      roster_files.source_id AS source_id, roster_files.size AS size,
+      roster_files.last_modified AS last_modified, raw_roster_files.object_key AS object_key,
+      raw_roster_files.data_url AS data_url, raw_roster_files.type AS type
+    FROM roster_files
+    INNER JOIN raw_roster_files ON raw_roster_files.file_id = roster_files.id
+    WHERE roster_files.active = 1
+      AND (raw_roster_files.object_key <> '' OR raw_roster_files.data_url <> '')
+    ORDER BY roster_files.added_at, roster_files.id
+  `).all();
+  return (rows.results || []).map((row) => ({
+    id: String(row.id || ""), name: String(row.name || "roster.xlsx"),
+    sourceType: String(row.source_type || "").toLowerCase(), sourceId: String(row.source_id || ""),
+    size: Number(row.size || 0), lastModified: Number(row.last_modified || 0),
+    objectKey: String(row.object_key || ""), dataUrl: String(row.data_url || ""), type: String(row.type || ""),
+  })).filter((file) => file.id && SOURCE_TYPES.includes(file.sourceType));
+}
+
 export async function querySourceTypesForFileIds(db, fileIds = []) {
   if (!db?.prepare) return [];
   const ids = [...new Set((Array.isArray(fileIds) ? fileIds : []).map((id) => String(id || "").trim()).filter(Boolean))];
@@ -2985,11 +3008,11 @@ function preferredLeaveTitle(leftTitle, rightTitle, rawValue = "") {
   const combined = `${leftTitle || ""} ${rightTitle || ""} ${rawValue || ""}`;
   if (/\b(conference|cme)\b/i.test(combined)) return "Conference Leave";
   if (/\bannual\b/i.test(combined)) return "Annual Leave";
-  if (/\bsick\b/i.test(combined)) return "Sick Leave";
+  if (/\b(?:sick|s\/l)\b/i.test(combined)) return "Sick leave";
   if (/\bpersonal\b/i.test(combined)) return "Personal Leave";
   if (/\bstudy\b/i.test(combined)) return "Study Leave";
   if (/\bexam\b/i.test(combined)) return "Exam Leave";
-  if (/\bsabbatical\b/i.test(combined)) return "Sabbatical Leave";
+  if (/\b(?:sabbatical|sab\/l)\b/i.test(combined)) return "Sabbatical";
   if (/\bparental\b/i.test(combined)) return "Parental Leave";
   if (/\blong service\b/i.test(combined)) return "Long Service Leave";
   return String(leftTitle || rightTitle || "Leave").trim();

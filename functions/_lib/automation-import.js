@@ -5,6 +5,7 @@ import {
   normalizeRosterName,
   parseUploadForm,
   serializeEvent,
+  setParserExtensions,
 } from "./roster.js";
 
 export const AUTOMATION_SOURCES = {
@@ -13,8 +14,12 @@ export const AUTOMATION_SOURCES = {
   "dandenong-findmyshift": { provider: "findmyshift", sourceType: "ddh", label: "Dandenong (Findmyshift)" },
 };
 
+const REPARSE_ONLY_SOURCES = {
+  "casey-manual": { provider: "manual", sourceType: "casey", label: "Casey" },
+};
+
 export function automationSourceDefinition(sourceId) {
-  return AUTOMATION_SOURCES[String(sourceId || "").trim()] || null;
+  return AUTOMATION_SOURCES[String(sourceId || "").trim()] || REPARSE_ONLY_SOURCES[String(sourceId || "").trim()] || null;
 }
 
 export async function sha256Hex(bytes) {
@@ -22,16 +27,20 @@ export async function sha256Hex(bytes) {
   return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
-export async function buildAutomatedDerivedRosterPayload({ file, sourceId, contentHash, providerVersion = "" }) {
+export async function buildAutomatedDerivedRosterPayload({ file, sourceId, contentHash, fileId = "", providerVersion = "", parserExtensions = null }) {
   const source = automationSourceDefinition(sourceId);
   if (!source) throw new Error("Unknown automation source.");
   if (!(file instanceof File)) throw new Error("A roster file is required.");
+  // Automated parsing must use the same global rules as an interactive upload.
+  // The worker supplies a fresh set for every run so rule changes take effect
+  // without relying on a long-lived Node process.
+  if (parserExtensions && typeof parserExtensions === "object") setParserExtensions(parserExtensions);
 
-  const fileId = `automation:${sourceId}:${String(contentHash || "").slice(0, 24)}`;
+  const resolvedFileId = String(fileId || `automation:${sourceId}:${String(contentHash || "").slice(0, 24)}`);
   const addedAt = new Date().toISOString();
   const formData = new FormData();
   formData.append("rosterFiles", file, file.name);
-  formData.append("rosterFileId", fileId);
+  formData.append("rosterFileId", resolvedFileId);
   formData.append("rosterFileAddedAt", addedAt);
   const parsed = await parseUploadForm(new Request("https://automation.invalid/import", {
     method: "POST",
@@ -93,7 +102,7 @@ export async function buildAutomatedDerivedRosterPayload({ file, sourceId, conte
   }
   return {
     file: {
-      id: fileId,
+      id: resolvedFileId,
       name: file.name || `${sourceId}.xlsx`,
       sourceType: source.sourceType,
       sourceId,

@@ -8,6 +8,10 @@ if (!token) throw new Error("ROSTER_AUTOMATION_TOKEN is required.");
 
 const pending = await automationRequest("/api/automation/pending?limit=4");
 const runs = Array.isArray(pending.runs) ? pending.runs : [];
+const parserConfig = await automationRequest("/api/automation/parser-config");
+const parserExtensions = parserConfig?.parserExtensions && typeof parserConfig.parserExtensions === "object"
+  ? parserConfig.parserExtensions
+  : {};
 console.log(`Found ${runs.length} queued roster file(s).`);
 const failures = [];
 
@@ -50,7 +54,9 @@ async function processRun(run) {
     file,
     sourceId: run.sourceId,
     contentHash: run.contentHash,
+    fileId: run.fileId,
     providerVersion: run.providerVersion,
+    parserExtensions,
   });
   payload.file = {
     ...payload.file,

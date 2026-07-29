@@ -1222,8 +1222,8 @@ assert.match(appSource, /data-ignore-shift-code/, "missing shift-code queue shou
 assert.match(appSource, /Ignored shift codes/, "ignored shift codes should remain editable in hospital rule sections");
 assert.match(appSource, /parserRuleSeniorityAll/, "shift-code seniority picker should expose an All option");
 assert.match(appSource, /function normalizeParserRuleSenioritySelection/, "shift-code seniority picker should keep All and Unknown selections consistent");
-assert.match(appSource, /const key = `\$\{item\.source\}\|\$\{item\.code\}`/, "unresolved shift-code grouping should be by hospital and code");
-assert.match(appSource, /formatShiftCodeSeniorities/, "grouped unresolved shift-code rows should summarize detected seniorities");
+assert.match(appSource, /const key = `\$\{item\.source\}\|\$\{sanitizeRuleSeniority\(item\.seniority\)\}\|\$\{item\.code\}`/, "unresolved shift-code grouping should be by hospital, seniority, and code");
+assert.match(appSource, /renderUnknownShiftCodeHierarchy/, "unresolved shift-code rows should render as a collapsible hospital and seniority hierarchy");
 assert.match(styleSource, /#parserRuleForm[\s\S]*overflow-y: auto/, "shift-code editor form should scroll vertically when it exceeds available height");
 assert.match(appSource, /normalizeDdhParserRuleCodeText/, "DDH shift-code issues should use parser-equivalent label codes");
 assert.match(appSource, /seniority !== "Unknown"[\s\S]*some\(\(rule\) => rule\.code === code\)/, "Unknown-seniority shift-code issues should resolve by source/code");
@@ -1732,7 +1732,7 @@ assert.ok(firasMchView.events.some((event) => event.title === "Annual Leave" && 
 
 const marianPanlilioMch = mchDoctors.find((doctor) => doctor.displayName === "Marian PANLILIO");
 const marianPanlilioMchView = buildRosterView([], [], marianPanlilioMch.key, undefined, {}, {}, [], [], mchWorkbook);
-assert.ok(marianPanlilioMchView.events.some((event) => event.title === "Sick Leave" && event.rawValue.trim() === "S/L PM" && event.allDay));
+assert.ok(marianPanlilioMchView.events.some((event) => event.title === "Sick leave" && event.rawValue.trim() === "S/L PM" && event.allDay));
 
 const houshmandMch = mchDoctors.find((doctor) => doctor.displayName === "Houshmand REFAEI");
 const houshmandMchView = buildRosterView([], [], houshmandMch.key, undefined, {}, {}, [], [], mchWorkbook);
@@ -1773,8 +1773,9 @@ const michaelAnnualOption = doctorOptions([], [], michaelAnnualWorkbook, mchWork
 assert.ok(michaelAnnualOption);
 assert.deepEqual(michaelAnnualOption.sourceTypes, ["casey", "mch"]);
 const michaelAnnualView = buildRosterView([], [], michaelAnnualOption.key, undefined, {}, {}, michaelAnnualOption.aliases, michaelAnnualWorkbook, mchWorkbook);
-const michaelAnnualEvents = michaelAnnualView.events.filter((event) => /leave/i.test(event.title));
-assert.equal(michaelAnnualEvents.length, 2);
+const michaelAnnualEvents = michaelAnnualView.events.filter((event) => ["Conference Leave", "Annual Leave"].includes(event.title));
+// Distinct leave categories must remain distinct even when their date ranges touch.
+assert.equal(michaelAnnualEvents.length, 3);
 assert.ok(michaelAnnualEvents.some((event) => event.title === "Conference Leave" && event.start === "2026-07-20" && event.end === "2026-07-27"));
 assert.ok(michaelAnnualEvents.some((event) => event.title === "Annual Leave" && event.start === "2026-07-27" && event.end === "2026-08-03"));
 assert.ok(michaelAnnualView.events.some((event) => event.source === "MCH"));
@@ -1809,7 +1810,7 @@ const caseyAnnual = doctorOptions([], [], annualSynonymWorkbook).find((doctor) =
 const paedsSick = doctorOptions([], [], annualSynonymWorkbook).find((doctor) => doctor.displayName === "Paeds SICK");
 assert.ok(buildRosterView([], [], paedsAnnual.key, undefined, {}, {}, paedsAnnual.aliases, annualSynonymWorkbook).events.some((event) => event.title === "Annual Leave" && event.rawValue === "Paeds AL"));
 assert.ok(buildRosterView([], [], caseyAnnual.key, undefined, {}, {}, caseyAnnual.aliases, annualSynonymWorkbook).events.some((event) => event.title === "Annual Leave" && event.rawValue === "Casey AL"));
-assert.ok(buildRosterView([], [], paedsSick.key, undefined, {}, {}, paedsSick.aliases, annualSynonymWorkbook).events.some((event) => event.title === "Sick Leave" && event.rawValue === "Paeds S/L"));
+assert.ok(buildRosterView([], [], paedsSick.key, undefined, {}, {}, paedsSick.aliases, annualSynonymWorkbook).events.some((event) => event.title === "Sick leave" && event.rawValue === "Paeds S/L"));
 
 const view = buildRosterView(mmcWorkbook, ddhWorkbook, richard.key);
 const summary = previewSummary(view.events);
@@ -1825,7 +1826,7 @@ assert.ok(view.events.some((event) => event.title === "Conference Leave" && even
 assert.ok(view.reviewItems.length >= view.events.length);
 assert.ok(view.events.some((event) => event.rawValue.includes("Annual leave")));
 assert.ok(view.events.some((event) => event.title === "DDH: Orange PM"));
-assert.ok(view.events.some((event) => event.title === "Sick Leave"));
+assert.ok(view.events.some((event) => event.title === "Sick leave"));
 
 const ddhFullWorkbook = XLSX.utils.book_new();
 const ddhFullSheet = XLSX.utils.aoa_to_sheet([

@@ -1633,8 +1633,6 @@ function parseMchEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
   const label = cleanText(raw).replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
   if (!label) return null;
   const upper = label.toUpperCase();
-  if (shouldIgnoreMch(label) || shouldIgnoreCommon(label)) return null;
-
   const leave = normalizeMchLeave(label);
   if (leave) {
     return createAllDayRecord("MCH", day, label, {
@@ -1644,6 +1642,7 @@ function parseMchEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
       seniority,
     });
   }
+  if (shouldIgnoreMch(label) || shouldIgnoreCommon(label)) return null;
 
   if (upper.includes("EDO")) return null;
 
@@ -1853,10 +1852,10 @@ function normalizeCaseyCode(label) {
 function normalizeMchLeave(label) {
   const upper = normalizedLeaveLabel(label);
   if (isAnnualLeaveLabel(upper)) return { kind: "annual_leave", title: "Annual Leave" };
-  if (/^S\/L(?:\s+(?:AM|PM))?$/.test(upper)) return { kind: "sick_leave", title: normalizeSickLeaveLabel(upper) };
+  if (/^(?:SICK(?:\s+LEAVE)?|S\/L)(?:\s+.*)?$/.test(upper)) return { kind: "sick_leave", title: "Sick leave" };
   if (upper === "EXAM" || upper === "ME/L") return { kind: "exam_leave", title: "Exam Leave" };
   if (isConferenceLeaveLabel(upper)) return { kind: "conference_leave", title: "Conference Leave" };
-  if (upper === "SAB/L") return { kind: "leave", title: "Sabbatical Leave" };
+  if (/^(?:SABBATICAL(?:\s+LEAVE)?|SAB\/L)(?:\s+.*)?$/.test(upper)) return { kind: "sabbatical_leave", title: "Sabbatical" };
   if (upper === "PAT/L") return { kind: "leave", title: "Parental Leave" };
   if (upper === "LSL") return { kind: "leave", title: "Long Service Leave" };
   return null;
@@ -3025,7 +3024,9 @@ function mergeContiguousLeaveEvents(events) {
   const ordered = [...leaveEvents].sort((left, right) => left.start.localeCompare(right.start) || left.end.localeCompare(right.end));
   for (const event of ordered) {
     const previous = merged.length ? merged[merged.length - 1] : null;
-    const overlaps = previous && event.start < previous.end;
+    const sameLeaveType = previous
+      && preferredLeaveTitle(previous.title, "", previous.rawValue) === preferredLeaveTitle(event.title, "", event.rawValue);
+    const overlaps = sameLeaveType && event.start < previous.end;
     const adjacentSameType = previous && event.start === previous.end
       && preferredLeaveTitle(previous.title, "", previous.rawValue) === preferredLeaveTitle(event.title, "", event.rawValue);
     if (previous && (overlaps || adjacentSameType)) {
@@ -3057,11 +3058,11 @@ function preferredLeaveTitle(leftTitle, rightTitle, rawValue = "") {
   const combined = `${leftTitle || ""} ${rightTitle || ""} ${rawValue || ""}`;
   if (/\b(conference|cme)\b/i.test(combined)) return "Conference Leave";
   if (/\bannual\b/i.test(combined)) return "Annual Leave";
-  if (/\bsick\b/i.test(combined)) return "Sick Leave";
+  if (/\b(?:sick|s\/l)\b/i.test(combined)) return "Sick leave";
   if (/\bpersonal\b/i.test(combined)) return "Personal Leave";
   if (/\bstudy\b/i.test(combined)) return "Study Leave";
   if (/\bexam\b/i.test(combined)) return "Exam Leave";
-  if (/\bsabbatical\b/i.test(combined)) return "Sabbatical Leave";
+  if (/\b(?:sabbatical|sab\/l)\b/i.test(combined)) return "Sabbatical";
   if (/\bparental\b/i.test(combined)) return "Parental Leave";
   if (/\blong service\b/i.test(combined)) return "Long Service Leave";
   return String(leftTitle || rightTitle || "Leave").trim();
@@ -3099,7 +3100,7 @@ function formatTitle(source, titleParts, settings, kind = "shift") {
   if (titleParts.suffix) titleBits.push(titleParts.suffix);
   const core = titleBits.join(" ").trim();
   if (!core) return "";
-  if (kind === "annual_leave" || kind === "conference_leave") {
+  if (["annual_leave", "conference_leave", "sick_leave", "sabbatical_leave", "exam_leave"].includes(kind)) {
     return core;
   }
   return settings.showSourcePrefix ? `${source}: ${core}` : core;

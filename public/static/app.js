@@ -8194,19 +8194,7 @@ function renderParserRulesCard() {
           <details class="issue-card" data-parser-rule-source-section="${escapeHtml(group.source)}">
             <summary><strong>${group.source}${unknownSources.has(group.source) ? " *" : ""}</strong> · ${visibleParserRules(group.rules).length} rule${visibleParserRules(group.rules).length === 1 ? "" : "s"}</summary>
             <div class="issues-list">
-              ${allUnknownIssues.filter((item) => item.source === group.source).map((item) => `
-                <article class="issue-card issue-unknown">
-                  <div>
-                    <strong>${escapeHtml(item.code)} · Unrecognised</strong>
-                    <p>${escapeHtml(item.seniorityLabel)} · ${escapeHtml(item.message || "Shift code not recognised.")}</p>
-                  </div>
-                  <div class="account-actions">
-                    ${item.email
-                      ? `<button type="button" class="button button-secondary" data-add-shift-code="${escapeHtml(item.email)}" data-error-id="${escapeHtml(item.id)}" data-shift-code-seniorities="${escapeHtml(item.seniorities.join("|"))}">Edit shift code</button>`
-                      : `<button type="button" class="button button-secondary" data-add-roster-shift-code="${escapeHtml(item.id)}" data-shift-code-seniorities="${escapeHtml(item.seniorities.join("|"))}">Edit shift code</button>`}
-                  </div>
-                </article>
-              `).join("")}
+              ${renderUnknownShiftCodeHierarchy(allUnknownIssues.filter((item) => item.source === group.source), { compact: true })}
               ${parserRuleSeniorityDisplayOrder().map((seniority) => {
                 const rules = visibleParserRules(group.rules).filter((rule) => rule.seniority === seniority);
                 if (!rules.length) return "";
@@ -8336,32 +8324,46 @@ function renderShiftCodeReviewResultsMarkup(items) {
   if (!items.length) {
     return `<article class="issue-card"><p>No unresolved shift codes match this filter.</p></article>`;
   }
+  return renderUnknownShiftCodeHierarchy(items);
+}
+
+function renderUnknownShiftCodeHierarchy(items, options = {}) {
   const bySource = new Map();
-  for (const item of items) {
-    if (!bySource.has(item.source)) bySource.set(item.source, []);
-    bySource.get(item.source).push(item);
+  for (const item of items || []) {
+    if (!bySource.has(item.source)) bySource.set(item.source, new Map());
+    const bySeniority = bySource.get(item.source);
+    if (!bySeniority.has(item.seniority)) bySeniority.set(item.seniority, []);
+    bySeniority.get(item.seniority).push(item);
   }
   return [...bySource.entries()]
     .sort(([left], [right]) => sourceSortRank(left) - sourceSortRank(right) || left.localeCompare(right))
-    .map(([source, sourceItems]) => `
-      <details class="issue-card shift-code-review-source" open>
-        <summary><strong>${escapeHtml(source)}</strong> · ${sourceItems.length} code${sourceItems.length === 1 ? "" : "s"}</summary>
+    .map(([source, bySeniority]) => {
+      const count = [...bySeniority.values()].flat().length;
+      return `<details class="issue-card shift-code-review-source" ${options.compact ? "" : "open"}>
+        <summary><strong>${escapeHtml(source)}</strong> · ${count} unrecognised code${count === 1 ? "" : "s"}</summary>
         <div class="issues-list">
-          ${sourceItems.map((item) => `
-            <article class="issue-card shift-code-review-row">
-              <div>
-                <strong>${escapeHtml(item.code)}</strong>
-                <p>${escapeHtml(item.seniorityLabel)} · ${escapeHtml(item.message || "Shift code not recognised.")}</p>
-                <p>${escapeHtml(item.sample)}${item.count > 1 ? ` · seen ${item.count} times` : ""}</p>
-              </div>
-              <div class="account-actions">
-                ${renderShiftCodeReviewIssueActions(item)}
-              </div>
-            </article>
-          `).join("")}
+          ${[...bySeniority.entries()]
+            .sort(([left], [right]) => senioritySortRank(left) - senioritySortRank(right) || left.localeCompare(right))
+            .map(([seniority, codes]) => `
+              <details class="issue-card shift-code-review-seniority" ${options.compact ? "" : "open"}>
+                <summary><strong>${escapeHtml(seniority || "Unknown seniority")}</strong> · ${codes.length} code${codes.length === 1 ? "" : "s"}</summary>
+                <div class="issues-list">
+                  ${codes.sort((left, right) => left.code.localeCompare(right.code)).map((item) => `
+                    <details class="issue-card shift-code-review-row">
+                      <summary><strong>${escapeHtml(item.code)}</strong>${item.count > 1 ? ` · seen ${item.count} times` : ""}</summary>
+                      <div>
+                        <p>${escapeHtml(item.message || "Shift code not recognised.")}</p>
+                        <p>${escapeHtml(item.sample)}</p>
+                      </div>
+                      <div class="account-actions">${renderShiftCodeReviewIssueActions(item)}</div>
+                    </details>
+                  `).join("")}
+                </div>
+              </details>
+            `).join("")}
         </div>
-      </details>
-    `).join("");
+      </details>`;
+    }).join("");
 }
 
 function renderShiftCodeReviewIssueActions(item) {
@@ -8445,7 +8447,7 @@ function collectUnknownShiftIssues() {
 }
 
 function addUnknownShiftIssueToMap(byKey, item) {
-  const key = `${item.source}|${item.code}`;
+  const key = `${item.source}|${sanitizeRuleSeniority(item.seniority)}|${item.code}`;
   const existing = byKey.get(key);
   if (existing) {
     existing.count += item.count || 1;
