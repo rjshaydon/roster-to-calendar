@@ -1852,6 +1852,11 @@ function chooseLatestRosterFile(left, right) {
   if (leftNamedDate && rightNamedDate && leftNamedDate !== rightNamedDate) {
     return leftNamedDate > rightNamedDate ? left : right;
   }
+  const leftImportedAt = String(left.uploadedAt || left.addedAt || "");
+  const rightImportedAt = String(right.uploadedAt || right.addedAt || "");
+  if (leftImportedAt && rightImportedAt && leftImportedAt !== rightImportedAt) {
+    return leftImportedAt > rightImportedAt ? left : right;
+  }
   return null;
 }
 
