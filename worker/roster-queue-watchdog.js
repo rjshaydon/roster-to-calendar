@@ -7,13 +7,13 @@ export default {
 
   async fetch(request, env) {
     if (new URL(request.url).pathname !== "/health") return new Response("Not found", { status: 404 });
-    return Response.json({ ok: true, service: "roster-queue-watchdog", configured: Boolean(String(env.ROSTER_AUTOMATION_TOKEN || "").trim()) });
+    return Response.json({ ok: true, service: "roster-queue-watchdog", configured: Boolean(String(env.ROSTER_WATCHDOG_TOKEN || "").trim()) });
   },
 };
 
 async function kickRosterProcessor(env) {
-  const token = String(env.ROSTER_AUTOMATION_TOKEN || "").trim();
-  if (!token) return { ok: false, error: "ROSTER_AUTOMATION_TOKEN is not configured." };
+  const token = String(env.ROSTER_WATCHDOG_TOKEN || "").trim();
+  if (!token) return { ok: false, error: "ROSTER_WATCHDOG_TOKEN is not configured." };
   const response = await fetch(String(env.ROSTER_AUTOMATION_URL || defaultAutomationUrl), {
     method: "POST",
     headers: {

@@ -2,7 +2,7 @@ import { hasCalendarDb } from "../../_lib/d1-calendar.js";
 import { recordRosterDispatchLifecycle, requestQueuedRosterProcessing } from "../../_lib/automation-dispatch.js";
 
 export async function onRequestPost(context) {
-  if (!hasValidAutomationToken(context.request, context.env.ROSTER_AUTOMATION_TOKEN)) {
+  if (!hasValidAutomationToken(context.request, context.env.ROSTER_AUTOMATION_TOKEN, context.env.ROSTER_WATCHDOG_TOKEN)) {
     return Response.json({ error: "Unauthorized." }, { status: 401 });
   }
   if (!hasCalendarDb(context.env)) return Response.json({ error: "Roster database is unavailable." }, { status: 503 });
@@ -24,11 +24,14 @@ export async function onRequestPost(context) {
   }
 }
 
-function hasValidAutomationToken(request, configuredToken) {
-  const token = String(configuredToken || "");
+function hasValidAutomationToken(request, ...configuredTokens) {
   const provided = String(request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
-  if (!token || !provided || token.length !== provided.length) return false;
-  let mismatch = 0;
-  for (let index = 0; index < token.length; index += 1) mismatch |= token.charCodeAt(index) ^ provided.charCodeAt(index);
-  return mismatch === 0;
+  if (!provided) return false;
+  return configuredTokens.some((configuredToken) => {
+    const token = String(configuredToken || "");
+    if (!token || token.length !== provided.length) return false;
+    let mismatch = 0;
+    for (let index = 0; index < token.length; index += 1) mismatch |= token.charCodeAt(index) ^ provided.charCodeAt(index);
+    return mismatch === 0;
+  });
 }

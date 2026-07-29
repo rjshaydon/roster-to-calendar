@@ -36,10 +36,11 @@ npx wrangler pages secret put GITHUB_ACTIONS_TOKEN --project-name roster-to-cale
 
 The Pages Function uses that token only to request `Process Monash roster queue` after a changed roster has been retained. It never returns the token to a client. When no changed file is queued, no GitHub workflow is requested.
 
-Deploy the independent Cloudflare watchdog after setting `ROSTER_AUTOMATION_TOKEN` on it as a secret. It runs every five minutes, makes one authenticated request to the Pages dispatch endpoint, and exits without starting GitHub when the queue is empty:
+Create a separate long random `ROSTER_WATCHDOG_TOKEN`, save it as an encrypted Pages secret, then save the same value on the independent Cloudflare watchdog. This avoids sharing the Power Automate ingress token with the watchdog. It runs every five minutes, makes one authenticated request to the Pages dispatch endpoint, and exits without starting GitHub when the queue is empty:
 
 ```bash
-npx wrangler secret put ROSTER_AUTOMATION_TOKEN --config wrangler.roster-watchdog.toml
+npx wrangler pages secret put ROSTER_WATCHDOG_TOKEN --project-name roster-to-calendar
+npx wrangler secret put ROSTER_WATCHDOG_TOKEN --config wrangler.roster-watchdog.toml
 npx wrangler deploy --config wrangler.roster-watchdog.toml
 ```
 

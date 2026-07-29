@@ -87,6 +87,7 @@ const insightIndexMigrationSource = await readFile(new URL("../migrations/0005_r
 const d1CalendarSource = await readFile(new URL("../functions/_lib/d1-calendar.js", import.meta.url), "utf8");
 const automationIngestSource = await readFile(new URL("../functions/api/automation/ingest.js", import.meta.url), "utf8");
 const automationDispatchSource = await readFile(new URL("../functions/_lib/automation-dispatch.js", import.meta.url), "utf8");
+const automationDispatchEndpointSource = await readFile(new URL("../functions/api/automation/dispatch.js", import.meta.url), "utf8");
 const automationWorkflowSource = await readFile(new URL("../.github/workflows/monash-roster-sync.yml", import.meta.url), "utf8");
 const indexSource = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
 assert.match(indexSource, /id="stayLoggedIn"[^>]*checked/, "Stay logged in should be selected by default");
@@ -102,6 +103,7 @@ assert.match(
 assert.doesNotMatch(automationWorkflowSource, /schedule:/, "GitHub cron must not be the roster processor trigger");
 assert.match(automationIngestSource, /requestQueuedRosterProcessing/, "a newly retained roster should request the processor immediately");
 assert.match(automationDispatchSource, /GITHUB_ACTIONS_TOKEN[\s\S]*actions\/workflows[\s\S]*\/dispatches/, "dispatches should use a server-side GitHub Actions token");
+assert.match(automationDispatchEndpointSource, /ROSTER_WATCHDOG_TOKEN/, "the watchdog should use a dedicated credential");
 assert.match(
   appSource.match(/function renderSystemAdminCard[\s\S]*?function renderAdminConsoleMarkup/)?.[0] || "",
   /<details class="advanced-roster-recovery">[\s\S]*Rebuild all retained rosters/,

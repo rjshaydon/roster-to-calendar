@@ -1869,10 +1869,18 @@ function chooseLatestRosterFile(left, right) {
   if (leftNamedDate && rightNamedDate && leftNamedDate !== rightNamedDate) {
     return leftNamedDate > rightNamedDate ? left : right;
   }
-  const leftImportedAt = String(left.uploadedAt || left.addedAt || "");
-  const rightImportedAt = String(right.uploadedAt || right.addedAt || "");
-  if (leftImportedAt && rightImportedAt && leftImportedAt !== rightImportedAt) {
-    return leftImportedAt > rightImportedAt ? left : right;
+  // An upload timestamp is only a trustworthy tie-breaker for two revisions
+  // from the same automated source. Manual uploads acquire a timestamp as they
+  // arrive, so using it would silently discard one of two otherwise identical
+  // rosters merely because it was saved a few milliseconds earlier.
+  const leftSourceId = String(left.sourceId || "").trim();
+  const rightSourceId = String(right.sourceId || "").trim();
+  if (leftSourceId && leftSourceId === rightSourceId) {
+    const leftImportedAt = String(left.uploadedAt || left.addedAt || "");
+    const rightImportedAt = String(right.uploadedAt || right.addedAt || "");
+    if (leftImportedAt && rightImportedAt && leftImportedAt !== rightImportedAt) {
+      return leftImportedAt > rightImportedAt ? left : right;
+    }
   }
   return null;
 }
