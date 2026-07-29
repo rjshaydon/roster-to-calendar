@@ -3105,7 +3105,7 @@ class MemoryD1Statement {
     }
     if (sql.startsWith("SELECT * FROM roster_dispatches WHERE status IN")) {
       return [...this.db.rosterDispatches.values()]
-        .filter((row) => ["requested", "accepted", "running"].includes(row.status) && String(row.retry_after || "") > String(args[0] || ""))
+        .filter((row) => ["requested", "accepted", "running", "failed"].includes(row.status) && String(row.retry_after || "") > String(args[0] || ""))
         .sort((left, right) => String(right.requested_at).localeCompare(String(left.requested_at)))[0] || null;
     }
     if (sql.startsWith("SELECT * FROM roster_dispatches WHERE id = ?")) {
@@ -3409,6 +3409,28 @@ const lifecycle = await recordRosterDispatchLifecycle({ ROSTER_DB: dispatchDb },
   dispatchId: dispatched.dispatch.id, event: "started", githubRunId: "12345",
 });
 assert.equal(lifecycle.dispatch.status, "running", "the workflow start callback should make dispatch state observable");
+globalThis.fetch = originalFetch;
+
+const rejectedDispatchDb = new MemoryD1();
+rejectedDispatchDb.rosterSyncRuns.set("rejected-dispatch", {
+  id: "rejected-dispatch", source_id: "monash-adults", trigger_type: "sharepoint", provider_version: "2.0",
+  content_hash: "rejected-hash", file_id: "rejected-file", status: "queued", message: "Queued", doctor_count: 0, event_count: 0,
+  started_at: "2026-07-29T04:00:00.000Z", completed_at: "",
+});
+let rejectedRequestCount = 0;
+globalThis.fetch = async () => {
+  rejectedRequestCount += 1;
+  return Response.json({ message: "Resource not accessible by personal access token" }, { status: 403 });
+};
+const rejectedDispatch = await requestQueuedRosterProcessing({ ROSTER_DB: rejectedDispatchDb, GITHUB_ACTIONS_TOKEN: "rejected-token" }, {
+  reason: "fixture-rejected", now: new Date("2026-07-29T04:01:00.000Z"),
+});
+assert.equal(rejectedDispatch.reason, "github-rejected", "a rejected GitHub token should be visible to the caller");
+const rejectedRetry = await requestQueuedRosterProcessing({ ROSTER_DB: rejectedDispatchDb, GITHUB_ACTIONS_TOKEN: "rejected-token" }, {
+  reason: "fixture-rejected-repeat", now: new Date("2026-07-29T04:02:00.000Z"),
+});
+assert.equal(rejectedRetry.dispatched, false, "a rejected token should honour its retry lease");
+assert.equal(rejectedRequestCount, 1, "a rejected GitHub token must not be retried for every watchdog tick");
 globalThis.fetch = originalFetch;
 
 const stateStore = new MemoryStore();
