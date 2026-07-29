@@ -1,10 +1,14 @@
 name: Process Monash roster queue
 
 on:
-  schedule:
-    # Avoid the start-of-hour load spike, when GitHub may delay or drop scheduled jobs.
-    - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
+    inputs:
+      dispatch_id:
+        description: "Cloudflare roster-dispatch identifier"
+        required: false
+        type: string
+
+run-name: "Roster queue ${{ inputs.dispatch_id || github.run_id }}"
 
 concurrency:
   group: monash-roster-sync
@@ -29,6 +33,19 @@ jobs:
             | jq -r '.runs | length')"
           echo "count=${count}" >> "$GITHUB_OUTPUT"
           echo "Found ${count} changed roster file(s) waiting."
+      - name: Record processor start
+        if: steps.queue.outputs.count != '0' && inputs.dispatch_id != ''
+        env:
+          ROSTER_AUTOMATION_TOKEN: ${{ secrets.ROSTER_AUTOMATION_TOKEN }}
+          DISPATCH_ID: ${{ inputs.dispatch_id }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: |
+          curl --fail --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer ${ROSTER_AUTOMATION_TOKEN}" \
+            --header "Content-Type: application/json" \
+            --data "{\"action\":\"lifecycle\",\"event\":\"started\",\"dispatchId\":\"${DISPATCH_ID}\",\"githubRunId\":\"${GITHUB_RUN_ID}\"}" \
+            "https://roster-to-calendar.pages.dev/api/automation/dispatch"
       - uses: actions/checkout@v4
         if: steps.queue.outputs.count != '0'
       - uses: actions/setup-node@v4
@@ -39,8 +56,29 @@ jobs:
       - run: npm ci
         if: steps.queue.outputs.count != '0'
       - name: Parse and import queued rosters
+        id: process
         if: steps.queue.outputs.count != '0'
         run: node scripts/process-roster-queue.mjs
         env:
           ROSTER_AUTOMATION_BASE_URL: https://roster-to-calendar.pages.dev
           ROSTER_AUTOMATION_TOKEN: ${{ secrets.ROSTER_AUTOMATION_TOKEN }}
+      - name: Record processor completion
+        if: always() && steps.queue.outputs.count != '0' && inputs.dispatch_id != ''
+        env:
+          ROSTER_AUTOMATION_TOKEN: ${{ secrets.ROSTER_AUTOMATION_TOKEN }}
+          DISPATCH_ID: ${{ inputs.dispatch_id }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          PROCESS_OUTCOME: ${{ steps.process.outcome }}
+        run: |
+          event=completed
+          message=""
+          if [ "${PROCESS_OUTCOME}" != "success" ]; then
+            event=failed
+            message=",\"message\":\"GitHub roster processor did not complete successfully.\""
+          fi
+          curl --fail --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer ${ROSTER_AUTOMATION_TOKEN}" \
+            --header "Content-Type: application/json" \
+            --data "{\"action\":\"lifecycle\",\"event\":\"${event}\",\"dispatchId\":\"${DISPATCH_ID}\",\"githubRunId\":\"${GITHUB_RUN_ID}\"${message}}" \
+            "https://roster-to-calendar.pages.dev/api/automation/dispatch"

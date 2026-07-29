@@ -6,7 +6,7 @@ The app now has a token-protected automation ingress at:
 POST https://<your-pages-domain>/api/automation/ingest
 ```
 
-It accepts the existing roster spreadsheets, retains the original file in R2, and queues it for the background processor. The scheduled GitHub Action parses the workbook with the same code as a Creator upload and sends the derived rows back to D1 in small batches. This keeps spreadsheet parsing outside the Cloudflare Pages Function CPU limit. The SharePoint filename and provider version are checked before hashing or storing another copy, so an unchanged file is not reparsed even if Power Automate sends it again. Content hashes provide a fallback when a connector does not supply a provider version.
+It accepts the existing roster spreadsheets, retains the original file in R2, and queues it for the background processor. A changed file immediately requests the GitHub Action, which parses the workbook with the same code as a Creator upload and sends the derived rows back to D1 in small batches. A tiny Cloudflare watchdog retries only if queued work remains without an active processor request. This keeps spreadsheet parsing outside the Cloudflare Pages Function CPU limit. The SharePoint filename and provider version are checked before hashing or storing another copy, so an unchanged file is not reparsed or dispatched even if Power Automate sends it again. Content hashes provide a fallback when a connector does not supply a provider version.
 
 Admin → Files shows the last provider modification time supplied by the connector and the corresponding successful import time. An automated source is never labelled current before the first successful source update; it remains **Not connected** or **Waiting for first source update**.
 
@@ -28,7 +28,22 @@ Create a long random value and save it as a Pages secret named `ROSTER_AUTOMATIO
 npx wrangler pages secret put ROSTER_AUTOMATION_TOKEN
 ```
 
-Save the same value as the encrypted GitHub Actions repository secret `ROSTER_AUTOMATION_TOKEN`. The `Process Monash roster queue` workflow checks at minutes 7, 22, 37 and 52 and can also be dispatched manually. The offset avoids GitHub's start-of-hour scheduling peak. When no changed file is queued, the job exits before checking out the repository or installing dependencies. The Pages Function only authenticates and stores changed incoming files; opening the website is not required.
+Save the same value as the encrypted GitHub Actions repository secret `ROSTER_AUTOMATION_TOKEN`. Create a **fine-grained GitHub personal access token** restricted to the `rjshaydon/roster-to-calendar` repository with **Actions: write** permission only, then store it as the encrypted Pages secret `GITHUB_ACTIONS_TOKEN`:
+
+```bash
+npx wrangler pages secret put GITHUB_ACTIONS_TOKEN --project-name roster-to-calendar
+```
+
+The Pages Function uses that token only to request `Process Monash roster queue` after a changed roster has been retained. It never returns the token to a client. When no changed file is queued, no GitHub workflow is requested.
+
+Deploy the independent Cloudflare watchdog after setting `ROSTER_AUTOMATION_TOKEN` on it as a secret. It runs every five minutes, makes one authenticated request to the Pages dispatch endpoint, and exits without starting GitHub when the queue is empty:
+
+```bash
+npx wrangler secret put ROSTER_AUTOMATION_TOKEN --config wrangler.roster-watchdog.toml
+npx wrangler deploy --config wrangler.roster-watchdog.toml
+```
+
+The workflow itself can still be dispatched manually for recovery. It reports its start and completion back to the app, so Admin → Files can distinguish a queued file from a rejected or active processor request.
 
 Apply the new D1 migration before deploying the Pages Function:
 

@@ -334,8 +334,24 @@ async function ensureCalendarSchemaUncached(db) {
       completed_at TEXT NOT NULL DEFAULT ''
     )
   `).run();
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS roster_dispatches (
+      id TEXT PRIMARY KEY,
+      status TEXT NOT NULL DEFAULT 'requested',
+      reason TEXT NOT NULL DEFAULT '',
+      github_run_id TEXT NOT NULL DEFAULT '',
+      requested_at TEXT NOT NULL DEFAULT '',
+      accepted_at TEXT NOT NULL DEFAULT '',
+      started_at TEXT NOT NULL DEFAULT '',
+      completed_at TEXT NOT NULL DEFAULT '',
+      retry_after TEXT NOT NULL DEFAULT '',
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT NOT NULL DEFAULT ''
+    )
+  `).run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_sync_runs_source_started ON roster_sync_runs (source_id, started_at DESC)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_sync_runs_source_hash ON roster_sync_runs (source_id, content_hash, status)").run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_dispatches_status_retry ON roster_dispatches (status, retry_after DESC)").run();
   await ensureColumn(db, "roster_files", "source_id", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn(db, "roster_sources", "provider_version", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn(db, "roster_sources", "provider_modified_at", "TEXT NOT NULL DEFAULT ''");
@@ -1263,6 +1279,7 @@ export async function loadRosterSyncRun(db, runId) {
 export async function listQueuedRosterSyncRuns(db, limit = 4) {
   if (!db?.prepare) return [];
   await ensureCalendarSchema(db);
+  await supersedeObsoleteQueuedRosterSyncRuns(db);
   const safeLimit = Math.min(Math.max(Number(limit || 4), 1), 20);
   const rows = await db.prepare(`
     SELECT
@@ -1294,6 +1311,18 @@ export async function listQueuedRosterSyncRuns(db, limit = 4) {
             )
         )
       )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM roster_sync_runs AS newer_run
+        INNER JOIN raw_roster_files AS newer_file ON newer_file.file_id = newer_run.file_id
+        WHERE newer_run.source_id = roster_sync_runs.source_id
+          AND LOWER(newer_file.name) = LOWER(raw_roster_files.name)
+          AND newer_run.status IN ('queued', 'processing')
+          AND (
+            newer_run.started_at > roster_sync_runs.started_at
+            OR (newer_run.started_at = roster_sync_runs.started_at AND newer_run.id > roster_sync_runs.id)
+          )
+      )
     ORDER BY roster_sync_runs.started_at ASC
     LIMIT ?
   `).bind(safeLimit).all();
@@ -1307,6 +1336,106 @@ export async function listQueuedRosterSyncRuns(db, limit = 4) {
     objectKey: String(row.object_key || ""),
     providerModifiedAt: String(row.provider_modified_at || ""),
   })).filter((run) => run.id && run.fileId && run.objectKey);
+}
+
+export async function supersedeObsoleteQueuedRosterSyncRuns(db) {
+  if (!db?.prepare) return { ok: false, reason: "missing-db" };
+  await ensureCalendarSchema(db);
+  const completedAt = new Date().toISOString();
+  const result = await db.prepare(`
+    UPDATE roster_sync_runs AS stale_run
+    SET status = 'superseded', message = ?, completed_at = ?
+    WHERE stale_run.status = 'queued'
+      AND EXISTS (
+        SELECT 1
+        FROM roster_sync_runs AS newer_run
+        INNER JOIN raw_roster_files AS stale_file ON stale_file.file_id = stale_run.file_id
+        INNER JOIN raw_roster_files AS newer_file ON newer_file.file_id = newer_run.file_id
+        WHERE newer_run.source_id = stale_run.source_id
+          AND LOWER(newer_file.name) = LOWER(stale_file.name)
+          AND newer_run.status IN ('queued', 'processing')
+          AND (
+            newer_run.started_at > stale_run.started_at
+            OR (newer_run.started_at = stale_run.started_at AND newer_run.id > stale_run.id)
+          )
+      )
+  `).bind(
+    "A newer version of this roster file is queued for processing.",
+    completedAt,
+  ).run();
+  return { ok: true, changes: Number(result?.meta?.changes || result?.changes || 0) };
+}
+
+export async function claimRosterDispatch(db, { reason = "", retryAfter = "", now = new Date().toISOString() } = {}) {
+  if (!db?.prepare) return { claimed: false, reason: "missing-db" };
+  await ensureCalendarSchema(db);
+  const pending = await db.prepare("SELECT id FROM roster_sync_runs WHERE status IN ('queued', 'processing') LIMIT 1").first();
+  if (!pending?.id) return { claimed: false, reason: "queue-empty" };
+  const active = await db.prepare(`
+    SELECT * FROM roster_dispatches
+    WHERE status IN ('requested', 'accepted', 'running')
+      AND retry_after > ?
+    ORDER BY requested_at DESC
+    LIMIT 1
+  `).bind(String(now)).first();
+  if (active?.id) return { claimed: false, reason: "already-dispatched", dispatch: rosterDispatchFromRow(active) };
+  const id = `dispatch:${crypto.randomUUID()}`;
+  await db.prepare(`
+    INSERT INTO roster_dispatches (
+      id, status, reason, requested_at, retry_after, attempt_count
+    ) VALUES (?, 'requested', ?, ?, ?, 1)
+  `).bind(id, String(reason || ""), String(now), String(retryAfter || now)).run();
+  return { claimed: true, dispatch: { id, status: "requested", reason: String(reason || ""), requestedAt: String(now), retryAfter: String(retryAfter || now), attemptCount: 1, lastError: "" } };
+}
+
+export async function updateRosterDispatch(db, dispatchId, update = {}) {
+  if (!db?.prepare || !dispatchId) return { ok: false, reason: "missing-input" };
+  await ensureCalendarSchema(db);
+  const existing = await db.prepare("SELECT * FROM roster_dispatches WHERE id = ?").bind(String(dispatchId)).first();
+  if (!existing) return { ok: false, reason: "not-found" };
+  const next = {
+    status: String(update.status || existing.status || "requested"),
+    githubRunId: String(update.githubRunId ?? existing.github_run_id ?? ""),
+    acceptedAt: String(update.acceptedAt ?? existing.accepted_at ?? ""),
+    startedAt: String(update.startedAt ?? existing.started_at ?? ""),
+    completedAt: String(update.completedAt ?? existing.completed_at ?? ""),
+    retryAfter: String(update.retryAfter ?? existing.retry_after ?? ""),
+    attemptCount: Number(update.attemptCount ?? existing.attempt_count ?? 0),
+    lastError: String(update.lastError ?? existing.last_error ?? ""),
+  };
+  await db.prepare(`
+    UPDATE roster_dispatches
+    SET status = ?, github_run_id = ?, accepted_at = ?, started_at = ?, completed_at = ?,
+      retry_after = ?, attempt_count = ?, last_error = ?
+    WHERE id = ?
+  `).bind(
+    next.status, next.githubRunId, next.acceptedAt, next.startedAt, next.completedAt,
+    next.retryAfter, next.attemptCount, next.lastError, String(dispatchId),
+  ).run();
+  return { ok: true, dispatch: { id: String(dispatchId), ...next } };
+}
+
+export async function loadLatestRosterDispatch(db) {
+  if (!db?.prepare) return null;
+  await ensureCalendarSchema(db);
+  const row = await db.prepare("SELECT * FROM roster_dispatches ORDER BY requested_at DESC LIMIT 1").first();
+  return row ? rosterDispatchFromRow(row) : null;
+}
+
+function rosterDispatchFromRow(row = {}) {
+  return {
+    id: String(row.id || ""),
+    status: String(row.status || ""),
+    reason: String(row.reason || ""),
+    githubRunId: String(row.github_run_id || ""),
+    requestedAt: String(row.requested_at || ""),
+    acceptedAt: String(row.accepted_at || ""),
+    startedAt: String(row.started_at || ""),
+    completedAt: String(row.completed_at || ""),
+    retryAfter: String(row.retry_after || ""),
+    attemptCount: Number(row.attempt_count || 0),
+    lastError: String(row.last_error || ""),
+  };
 }
 
 export async function markRosterSyncRunProcessing(db, runId) {
