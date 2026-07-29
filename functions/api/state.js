@@ -1688,7 +1688,8 @@ function rosterSourceStatuses(files = [], storedSources = [], syncRuns = []) {
   }
   const automated = Object.entries(AUTOMATION_SOURCES).map(([id, definition]) => {
     const source = sourcesById.get(id);
-    const activeFile = findActiveSourceFile(sourceFiles.get(id), source?.activeFileId);
+    const activeFiles = activeSourceFiles(sourceFiles.get(id));
+    const activeFile = findActiveSourceFile(activeFiles, source?.activeFileId);
     const latestRun = latestRunBySource.get(id) || null;
     const failed = Boolean(source?.lastError) && (!source?.lastSuccessAt || source.lastCheckedAt >= source.lastSuccessAt);
     return {
@@ -1705,6 +1706,7 @@ function rosterSourceStatuses(files = [], storedSources = [], syncRuns = []) {
       lastError: failed ? String(source?.lastError || latestRun?.message || "") : "",
       activeFileId: String(source?.activeFileId || activeFile?.id || ""),
       activeFileName: String(activeFile?.name || ""),
+      activeFileNames: activeFiles.map((file) => String(file.name || "")).filter(Boolean),
       latestRun: latestRun ? {
         status: latestRun.status,
         completedAt: latestRun.completedAt,
@@ -1739,6 +1741,17 @@ function findActiveSourceFile(files = [], activeFileId = "") {
   return active.find((file) => file.id === activeId)
     || [...active].sort((left, right) => String(right.uploadedAt || right.addedAt || "").localeCompare(String(left.uploadedAt || left.addedAt || "")))[0]
     || null;
+}
+
+function activeSourceFiles(files = []) {
+  return [...(files || [])]
+    .filter((file) => file?.active !== false)
+    .sort((left, right) => {
+      const leftNamedDate = rosterFileNameDate(left?.name);
+      const rightNamedDate = rosterFileNameDate(right?.name);
+      if (leftNamedDate !== rightNamedDate) return rightNamedDate.localeCompare(leftNamedDate);
+      return String(right?.uploadedAt || right?.addedAt || "").localeCompare(String(left?.uploadedAt || left?.addedAt || ""));
+    });
 }
 
 function summarizeExpectedRosterFiles(allFiles = [], expectedFileIds = []) {
@@ -1777,7 +1790,12 @@ async function reconcileRosterFileSupersession(db, savedFile = {}, options = {})
     for (let rightIndex = leftIndex + 1; rightIndex < affected.length; rightIndex += 1) {
       const left = affected[leftIndex];
       const right = affected[rightIndex];
-      if (left.sourceType !== right.sourceType || !sameSupersessionSource(left, right) || !dateRangesOverlap(left, right)) continue;
+      if (
+        left.sourceType !== right.sourceType
+        || !sameSupersessionSource(left, right)
+        || !sameRosterRevisionSlot(left, right)
+        || !dateRangesOverlap(left, right)
+      ) continue;
       const winner = chooseLatestRosterFile(left, right);
       if (!winner) {
         ambiguous.push({ left, right });
@@ -1805,6 +1823,18 @@ function sameSupersessionSource(left, right) {
   const leftId = String(left?.sourceId || "").trim();
   const rightId = String(right?.sourceId || "").trim();
   return !leftId || !rightId || leftId === rightId;
+}
+
+function sameRosterRevisionSlot(left, right) {
+  const leftTerm = rosterFileTermSlot(left?.name);
+  const rightTerm = rosterFileTermSlot(right?.name);
+  if (!leftTerm && !rightTerm) return true;
+  return Boolean(leftTerm && rightTerm && leftTerm === rightTerm);
+}
+
+function rosterFileTermSlot(name = "") {
+  const match = String(name || "").match(/term\s*([1-4])\D+(\d{4})/i);
+  return match ? `${match[2]}-term-${match[1]}` : "";
 }
 
 function dateRangesOverlap(left, right) {

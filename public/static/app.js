@@ -2367,12 +2367,21 @@ function renderRosterSourceStatusMarkup() {
           <span>${escapeHtml(rosterSourceStateLabel(source))}</span>
           ${source.providerModifiedAt ? `<small>Source modified ${escapeHtml(formatTimestamp(source.providerModifiedAt))}</small>` : ""}
           ${source.lastSuccessAt ? `<small>Imported ${escapeHtml(formatTimestamp(source.lastSuccessAt))}</small>` : ""}
-          ${source.activeFileName ? `<small>${escapeHtml(source.activeFileName)}</small>` : ""}
+          ${renderRosterSourceFileNames(source)}
           ${source.lastError ? `<small class="roster-source-error">${escapeHtml(source.lastError)}</small>` : ""}
         </article>
       `).join("")}
     </section>
   `;
+}
+
+function renderRosterSourceFileNames(source = {}) {
+  const names = [...new Set((Array.isArray(source.activeFileNames) ? source.activeFileNames : [source.activeFileName])
+    .map((name) => String(name || "").trim())
+    .filter(Boolean))];
+  if (!names.length) return "";
+  const label = names.length === 1 ? "Current file" : `${names.length} current files`;
+  return `<small>${escapeHtml(label)}: ${names.map(escapeHtml).join(", ")}</small>`;
 }
 
 function rosterSourceStateLabel(source = {}) {
