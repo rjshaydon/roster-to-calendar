@@ -22,6 +22,7 @@ import {
   listConsoleMessages,
   listRosterSources,
   listRosterSyncRuns,
+  loadLatestRosterDispatch,
   loadAccountMirror,
   loadAccountStateMirror,
   loadDoctorProfileMirror,
@@ -1573,6 +1574,7 @@ async function calendarStoreStatus(store, db, options = {}) {
   const rawFiles = await queryRawRosterFiles(db).catch(() => []);
   const rosterSources = await listRosterSources(db).catch(() => []);
   const syncRuns = await listRosterSyncRuns(db, { limit: 100 }).catch(() => []);
+  const latestDispatch = await loadLatestRosterDispatch(db).catch(() => null);
   const derivedFileIds = new Set(allD1Files.map((file) => file.id));
   const retainedOnlyFiles = rawFiles
     .filter((file) => file.id && !derivedFileIds.has(file.id) && !String(file.id).startsWith("automation:"))
@@ -1661,7 +1663,7 @@ async function calendarStoreStatus(store, db, options = {}) {
     selectedDoctorKey,
     selectedDoctorEventCount: lightweight ? null : files.reduce((total, file) => total + Number(file.selectedDoctorEventCount || 0), 0),
     selectedDoctorFiles: selectedDoctorRows.map(rosterFileDoctorDiagnostic),
-    rosterSourceStatuses: rosterSourceStatuses(allD1Files, rosterSources, syncRuns),
+    rosterSourceStatuses: rosterSourceStatuses(allD1Files, rosterSources, syncRuns, latestDispatch),
     expectedFiles,
     nextFile: files.find((file) => file.status !== "populated") || null,
     files,
@@ -1681,7 +1683,7 @@ function rosterFileShiftSummary(event = {}) {
   };
 }
 
-function rosterSourceStatuses(files = [], storedSources = [], syncRuns = []) {
+function rosterSourceStatuses(files = [], storedSources = [], syncRuns = [], latestDispatch = null) {
   const sourcesById = new Map((storedSources || []).map((source) => [source.id, source]));
   const sourceFiles = new Map();
   for (const file of files || []) {
@@ -1727,6 +1729,7 @@ function rosterSourceStatuses(files = [], storedSources = [], syncRuns = []) {
         doctorCount: latestRun.doctorCount,
         eventCount: latestRun.eventCount,
       } : null,
+      processorDispatch: pendingState ? latestDispatch : null,
     };
   });
   const caseyFiles = (files || []).filter((file) => file.sourceType === "casey" && file.active !== false);
@@ -1866,10 +1869,18 @@ function chooseLatestRosterFile(left, right) {
   if (leftNamedDate && rightNamedDate && leftNamedDate !== rightNamedDate) {
     return leftNamedDate > rightNamedDate ? left : right;
   }
-  const leftImportedAt = String(left.uploadedAt || left.addedAt || "");
-  const rightImportedAt = String(right.uploadedAt || right.addedAt || "");
-  if (leftImportedAt && rightImportedAt && leftImportedAt !== rightImportedAt) {
-    return leftImportedAt > rightImportedAt ? left : right;
+  // An upload timestamp is only a trustworthy tie-breaker for two revisions
+  // from the same automated source. Manual uploads acquire a timestamp as they
+  // arrive, so using it would silently discard one of two otherwise identical
+  // rosters merely because it was saved a few milliseconds earlier.
+  const leftSourceId = String(left.sourceId || "").trim();
+  const rightSourceId = String(right.sourceId || "").trim();
+  if (leftSourceId && leftSourceId === rightSourceId) {
+    const leftImportedAt = String(left.uploadedAt || left.addedAt || "");
+    const rightImportedAt = String(right.uploadedAt || right.addedAt || "");
+    if (leftImportedAt && rightImportedAt && leftImportedAt !== rightImportedAt) {
+      return leftImportedAt > rightImportedAt ? left : right;
+    }
   }
   return null;
 }

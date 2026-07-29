@@ -1,4 +1,5 @@
 import { automationSourceDefinition, sha256Hex } from "../../_lib/automation-import.js";
+import { requestQueuedRosterProcessing } from "../../_lib/automation-dispatch.js";
 import {
   createRosterSyncRun,
   findQueuedRosterSyncByHash,
@@ -46,12 +47,16 @@ export async function onRequestPost(context) {
         : matchingVersion.status === "failed"
           ? "unchanged-failed"
           : matchingVersion.status;
+      const dispatch = ["queued", "processing"].includes(status)
+        ? await requestQueuedRosterProcessing(context.env, { reason: "duplicate-queue-check" })
+        : null;
       return Response.json({
         ok: true,
         status,
         sourceId,
         fileId: matchingVersion.fileId,
         runId: matchingVersion.id,
+        processorDispatch: publicDispatchStatus(dispatch),
       }, { status: ["queued", "processing"].includes(status) ? 202 : 200 });
     }
 
@@ -66,7 +71,8 @@ export async function onRequestPost(context) {
     }
     const queued = await findQueuedRosterSyncByHash(context.env.ROSTER_DB, sourceId, contentHash);
     if (queued) {
-      return Response.json({ ok: true, status: queued.status, sourceId, fileId: queued.fileId, runId: queued.id }, { status: 202 });
+      const dispatch = await requestQueuedRosterProcessing(context.env, { reason: "duplicate-content-check" });
+      return Response.json({ ok: true, status: queued.status, sourceId, fileId: queued.fileId, runId: queued.id, processorDispatch: publicDispatchStatus(dispatch) }, { status: 202 });
     }
 
     const runId = `sync:${sourceId}:${crypto.randomUUID()}`;
@@ -95,11 +101,23 @@ export async function onRequestPost(context) {
       message: "Queued for background processing.",
       startedAt: now,
     });
-    return Response.json({ ok: true, status: "queued", sourceId, fileId, runId }, { status: 202 });
+    const dispatch = await requestQueuedRosterProcessing(context.env, { reason: "source-update" });
+    return Response.json({ ok: true, status: "queued", sourceId, fileId, runId, processorDispatch: publicDispatchStatus(dispatch) }, { status: 202 });
   } catch (error) {
     console.error("Automated roster queueing failed", error);
     return Response.json({ error: "Roster could not be queued." }, { status: 422 });
   }
+}
+
+function publicDispatchStatus(result) {
+  if (!result) return null;
+  return {
+    dispatched: result.dispatched === true,
+    reason: String(result.reason || ""),
+    status: String(result.dispatch?.status || ""),
+    requestedAt: String(result.dispatch?.requestedAt || ""),
+    lastError: String(result.dispatch?.lastError || ""),
+  };
 }
 
 async function readAutomationUpload(request) {

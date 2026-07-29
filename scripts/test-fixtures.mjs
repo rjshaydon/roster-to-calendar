@@ -6,6 +6,7 @@ import XLSX from "xlsx";
 import { onRequestPost as handleStatePost } from "../functions/api/state.js";
 import { onRequestGet as handleFeedGet } from "../functions/api/feed.js";
 import { buildPreviewFromDerivedEvents, findRosterSyncByProviderVersion, storeCachedSnapshot } from "../functions/_lib/d1-calendar.js";
+import { recordRosterDispatchLifecycle, requestQueuedRosterProcessing } from "../functions/_lib/automation-dispatch.js";
 import { buildRosterView, doctorOptions, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
 
 function cloneWorkbook(workbook) {
@@ -85,6 +86,8 @@ const calendarMigrationSource = await readFile(new URL("../migrations/0001_calen
 const insightIndexMigrationSource = await readFile(new URL("../migrations/0005_roster_insight_index.sql", import.meta.url), "utf8");
 const d1CalendarSource = await readFile(new URL("../functions/_lib/d1-calendar.js", import.meta.url), "utf8");
 const automationIngestSource = await readFile(new URL("../functions/api/automation/ingest.js", import.meta.url), "utf8");
+const automationDispatchSource = await readFile(new URL("../functions/_lib/automation-dispatch.js", import.meta.url), "utf8");
+const automationDispatchEndpointSource = await readFile(new URL("../functions/api/automation/dispatch.js", import.meta.url), "utf8");
 const automationWorkflowSource = await readFile(new URL("../.github/workflows/monash-roster-sync.yml", import.meta.url), "utf8");
 const indexSource = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
 assert.match(indexSource, /id="stayLoggedIn"[^>]*checked/, "Stay logged in should be selected by default");
@@ -94,9 +97,13 @@ assert.ok(
 );
 assert.match(
   automationWorkflowSource,
-  /cron: "7,22,37,52 \* \* \* \*"[\s\S]*Check for changed roster files[\s\S]*steps\.queue\.outputs\.count != '0'/,
-  "scheduled roster processing should avoid the hour boundary and skip dependency setup when the queue is empty",
+  /workflow_dispatch:[\s\S]*dispatch_id[\s\S]*Record processor start[\s\S]*Record processor completion/,
+  "the processor workflow should receive a dispatch id and report lifecycle state",
 );
+assert.doesNotMatch(automationWorkflowSource, /schedule:/, "GitHub cron must not be the roster processor trigger");
+assert.match(automationIngestSource, /requestQueuedRosterProcessing/, "a newly retained roster should request the processor immediately");
+assert.match(automationDispatchSource, /GITHUB_ACTIONS_TOKEN[\s\S]*actions\/workflows[\s\S]*\/dispatches/, "dispatches should use a server-side GitHub Actions token");
+assert.match(automationDispatchEndpointSource, /ROSTER_WATCHDOG_TOKEN/, "the watchdog should use a dedicated credential");
 assert.match(
   appSource.match(/function renderSystemAdminCard[\s\S]*?function renderAdminConsoleMarkup/)?.[0] || "",
   /<details class="advanced-roster-recovery">[\s\S]*Rebuild all retained rosters/,
@@ -1984,6 +1991,7 @@ class MemoryD1 {
     this.rawFiles = new Map();
     this.rosterSources = new Map();
     this.rosterSyncRuns = new Map();
+    this.rosterDispatches = new Map();
     this.accountProfiles = new Map();
     this.accountClaims = new Map();
     this.accountStates = new Map();
@@ -2015,6 +2023,7 @@ class MemoryD1 {
       "rawFiles",
       "rosterSources",
       "rosterSyncRuns",
+      "rosterDispatches",
       "accountProfiles",
       "accountClaims",
       "accountStates",
@@ -2102,12 +2111,28 @@ class MemoryD1Statement {
       });
       return { success: true };
     }
+    if (sql.startsWith("INSERT INTO roster_dispatches")) {
+      this.db.rosterDispatches.set(args[0], {
+        id: args[0], status: "requested", reason: args[1], github_run_id: "", requested_at: args[2],
+        accepted_at: "", started_at: "", completed_at: "", retry_after: args[3], attempt_count: args[4], last_error: "",
+      });
+      return { success: true };
+    }
+    if (sql.startsWith("UPDATE roster_dispatches")) {
+      const dispatch = this.db.rosterDispatches.get(args[8]);
+      if (dispatch) Object.assign(dispatch, {
+        status: args[0], github_run_id: args[1], accepted_at: args[2], started_at: args[3], completed_at: args[4],
+        retry_after: args[5], attempt_count: args[6], last_error: args[7],
+      });
+      return { success: true };
+    }
     if (sql.startsWith("UPDATE roster_sync_runs") && sql.includes("status = 'processing'")) {
       const run = this.db.rosterSyncRuns.get(args[1]);
       if (run) Object.assign(run, { status: "processing", message: args[0], completed_at: "" });
       return { success: true };
     }
     if (sql.startsWith("UPDATE roster_sync_runs") && sql.includes("status = 'superseded'")) {
+      if (sql.includes("AS stale_run")) return { success: true, meta: { changes: 0 } };
       let changes = 0;
       for (const run of this.db.rosterSyncRuns.values()) {
         const raw = this.db.rawFiles.get(run.file_id);
@@ -2525,6 +2550,9 @@ class MemoryD1Statement {
     }
     if (sql.startsWith("SELECT * FROM roster_sync_runs") && !sql.includes("WHERE source_id")) {
       return { results: [...this.db.rosterSyncRuns.values()].sort((left, right) => String(right.started_at).localeCompare(String(left.started_at)) || String(right.id).localeCompare(String(left.id))).slice(0, Number(args[0] || 50)) };
+    }
+    if (sql.startsWith("SELECT * FROM roster_dispatches ORDER BY")) {
+      return { results: [...this.db.rosterDispatches.values()].sort((left, right) => String(right.requested_at).localeCompare(String(left.requested_at))).slice(0, 1) };
     }
     if (sql.includes("FROM roster_file_doctors") && sql.includes("file_name") && sql.includes("event_count")) {
       const requestedKeys = sql.includes("roster_file_doctors.doctor_key IN") ? new Set(args) : null;
@@ -3072,6 +3100,20 @@ class MemoryD1Statement {
     if (sql.startsWith("SELECT * FROM roster_sources WHERE id = ?")) {
       return this.db.rosterSources.get(args[0]) || null;
     }
+    if (sql.startsWith("SELECT id FROM roster_sync_runs WHERE status IN")) {
+      return [...this.db.rosterSyncRuns.values()].find((row) => ["queued", "processing"].includes(row.status)) || null;
+    }
+    if (sql.startsWith("SELECT * FROM roster_dispatches WHERE status IN")) {
+      return [...this.db.rosterDispatches.values()]
+        .filter((row) => ["requested", "accepted", "running"].includes(row.status) && String(row.retry_after || "") > String(args[0] || ""))
+        .sort((left, right) => String(right.requested_at).localeCompare(String(left.requested_at)))[0] || null;
+    }
+    if (sql.startsWith("SELECT * FROM roster_dispatches WHERE id = ?")) {
+      return this.db.rosterDispatches.get(args[0]) || null;
+    }
+    if (sql.startsWith("SELECT * FROM roster_dispatches ORDER BY")) {
+      return [...this.db.rosterDispatches.values()].sort((left, right) => String(right.requested_at).localeCompare(String(left.requested_at)))[0] || null;
+    }
     if (sql.includes("FROM roster_sync_runs") && sql.includes("WHERE roster_sync_runs.source_id = ?") && sql.includes("provider_version = ?")) {
       const statusOrder = new Map([["success", 0], ["processing", 1], ["queued", 2], ["failed", 3]]);
       return [...this.db.rosterSyncRuns.values()]
@@ -3339,6 +3381,35 @@ function memoryD1AccountRecord(db, email) {
     })),
   };
 }
+
+const dispatchDb = new MemoryD1();
+dispatchDb.rosterSyncRuns.set("queued-dispatch", {
+  id: "queued-dispatch", source_id: "monash-adults", trigger_type: "sharepoint", provider_version: "1.0",
+  content_hash: "dispatch-hash", file_id: "dispatch-file", status: "queued", message: "Queued", doctor_count: 0, event_count: 0,
+  started_at: "2026-07-29T04:00:00.000Z", completed_at: "",
+});
+const originalFetch = globalThis.fetch;
+const dispatchRequests = [];
+globalThis.fetch = async (url, options = {}) => {
+  dispatchRequests.push({ url: String(url), options });
+  return new Response(null, { status: 204 });
+};
+const dispatched = await requestQueuedRosterProcessing({ ROSTER_DB: dispatchDb, GITHUB_ACTIONS_TOKEN: "fixture-token" }, {
+  reason: "fixture", now: new Date("2026-07-29T04:01:00.000Z"),
+});
+assert.equal(dispatched.dispatched, true, "a queued roster should immediately dispatch GitHub processing");
+assert.equal(dispatchRequests.length, 1, "a new queue should make one GitHub dispatch request");
+assert.match(dispatchRequests[0].url, /actions\/workflows\/monash-roster-sync\.yml\/dispatches$/, "dispatch should target the roster workflow");
+const duplicateDispatch = await requestQueuedRosterProcessing({ ROSTER_DB: dispatchDb, GITHUB_ACTIONS_TOKEN: "fixture-token" }, {
+  reason: "fixture-repeat", now: new Date("2026-07-29T04:02:00.000Z"),
+});
+assert.equal(duplicateDispatch.dispatched, false, "an accepted dispatch lease should prevent duplicate GitHub runs");
+assert.equal(dispatchRequests.length, 1, "the duplicate queue check should not call GitHub again");
+const lifecycle = await recordRosterDispatchLifecycle({ ROSTER_DB: dispatchDb }, {
+  dispatchId: dispatched.dispatch.id, event: "started", githubRunId: "12345",
+});
+assert.equal(lifecycle.dispatch.status, "running", "the workflow start callback should make dispatch state observable");
+globalThis.fetch = originalFetch;
 
 const stateStore = new MemoryStore();
 stateStore.d1 = new MemoryD1();

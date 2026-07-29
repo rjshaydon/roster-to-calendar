@@ -1,0 +1,12 @@
+name = "roster-queue-watchdog"
+main = "worker/roster-queue-watchdog.js"
+compatibility_date = "2026-07-29"
+
+[vars]
+ROSTER_AUTOMATION_URL = "https://roster-to-calendar.pages.dev/api/automation/dispatch"
+
+[triggers]
+crons = ["*/5 * * * *"]
+
+[observability]
+enabled = true

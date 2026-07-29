@@ -9,12 +9,15 @@ if (!token) throw new Error("ROSTER_AUTOMATION_TOKEN is required.");
 const pending = await automationRequest("/api/automation/pending?limit=4");
 const runs = Array.isArray(pending.runs) ? pending.runs : [];
 console.log(`Found ${runs.length} queued roster file(s).`);
+const failures = [];
 
 for (const run of runs) {
   try {
     await processRun(run);
   } catch (error) {
-    console.error(`Failed to process ${run.fileName || run.id}: ${error?.message || error}`);
+    const message = `Failed to process ${run.fileName || run.id}: ${error?.message || error}`;
+    console.error(message);
+    failures.push(message);
     await automationRequest("/api/automation/derived", {
       method: "POST",
       body: {
@@ -26,6 +29,10 @@ for (const run of runs) {
       },
     }).catch(() => null);
   }
+}
+
+if (failures.length) {
+  throw new Error(`${failures.length} roster file${failures.length === 1 ? "" : "s"} failed during background processing.`);
 }
 
 async function processRun(run) {

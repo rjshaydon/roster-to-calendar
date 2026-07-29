@@ -2368,6 +2368,7 @@ function renderRosterSourceStatusMarkup() {
           <span>${escapeHtml(rosterSourceStateLabel(source))}</span>
           ${source.providerModifiedAt ? `<small>Source modified ${escapeHtml(formatTimestamp(source.providerModifiedAt))}</small>` : ""}
           ${source.lastSuccessAt ? `<small>Imported ${escapeHtml(formatTimestamp(source.lastSuccessAt))}</small>` : ""}
+          ${renderRosterProcessorDispatch(source.processorDispatch)}
           ${renderRosterSourceFileNames(source)}
           ${source.lastError ? `<small class="roster-source-error">${escapeHtml(source.lastError)}</small>` : ""}
         </article>
@@ -2393,6 +2394,16 @@ function rosterSourceStateLabel(source = {}) {
   if (source.state === "failed") return "Latest update failed";
   if (source.state === "received") return "Latest source update imported";
   return "Waiting for first source update";
+}
+
+function renderRosterProcessorDispatch(dispatch = null) {
+  if (!dispatch?.status) return "";
+  const status = String(dispatch.status || "");
+  if (status === "accepted") return dispatch.acceptedAt ? `<small>Processor requested ${escapeHtml(formatTimestamp(dispatch.acceptedAt))}</small>` : "<small>Processor requested</small>";
+  if (status === "running") return dispatch.startedAt ? `<small>Processor running since ${escapeHtml(formatTimestamp(dispatch.startedAt))}</small>` : "<small>Processor running</small>";
+  if (status === "failed") return `<small class="roster-source-error">Processor dispatch failed${dispatch.lastError ? `: ${escapeHtml(dispatch.lastError)}` : ""}</small>`;
+  if (status === "requested") return dispatch.requestedAt ? `<small>Processor dispatch requested ${escapeHtml(formatTimestamp(dispatch.requestedAt))}</small>` : "<small>Processor dispatch requested</small>";
+  return "";
 }
 
 function renderFilesList() {
