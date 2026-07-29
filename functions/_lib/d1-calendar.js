@@ -38,6 +38,7 @@ async function ensureCalendarSchemaUncached(db) {
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       source_type TEXT NOT NULL,
+      source_id TEXT NOT NULL DEFAULT '',
       active INTEGER NOT NULL DEFAULT 1,
       size INTEGER NOT NULL DEFAULT 0,
       last_modified INTEGER NOT NULL DEFAULT 0,
@@ -298,6 +299,46 @@ async function ensureCalendarSchemaUncached(db) {
       PRIMARY KEY (owner_type, owner_id, doctor_key, range_key)
     )
   `).run();
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS roster_sources (
+      id TEXT PRIMARY KEY,
+      provider TEXT NOT NULL DEFAULT '',
+      source_type TEXT NOT NULL DEFAULT '',
+      label TEXT NOT NULL DEFAULT '',
+      enabled INTEGER NOT NULL DEFAULT 0,
+      config_json TEXT NOT NULL DEFAULT '{}',
+      cursor_json TEXT NOT NULL DEFAULT '{}',
+      provider_version TEXT NOT NULL DEFAULT '',
+      provider_modified_at TEXT NOT NULL DEFAULT '',
+      last_checked_at TEXT NOT NULL DEFAULT '',
+      last_success_at TEXT NOT NULL DEFAULT '',
+      last_error TEXT NOT NULL DEFAULT '',
+      active_file_id TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT ''
+    )
+  `).run();
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS roster_sync_runs (
+      id TEXT PRIMARY KEY,
+      source_id TEXT NOT NULL,
+      trigger_type TEXT NOT NULL DEFAULT '',
+      provider_version TEXT NOT NULL DEFAULT '',
+      content_hash TEXT NOT NULL DEFAULT '',
+      file_id TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'started',
+      message TEXT NOT NULL DEFAULT '',
+      doctor_count INTEGER NOT NULL DEFAULT 0,
+      event_count INTEGER NOT NULL DEFAULT 0,
+      started_at TEXT NOT NULL DEFAULT '',
+      completed_at TEXT NOT NULL DEFAULT ''
+    )
+  `).run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_sync_runs_source_started ON roster_sync_runs (source_id, started_at DESC)").run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_sync_runs_source_hash ON roster_sync_runs (source_id, content_hash, status)").run();
+  await ensureColumn(db, "roster_files", "source_id", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn(db, "roster_sources", "provider_version", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn(db, "roster_sources", "provider_modified_at", "TEXT NOT NULL DEFAULT ''");
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_snapshot_registry_owner ON snapshot_registry (owner_type, owner_id, updated_at DESC)").run();
   await ensureColumn(db, "raw_roster_files", "name", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn(db, "raw_roster_files", "source_type", "TEXT NOT NULL DEFAULT ''");
@@ -332,11 +373,12 @@ export async function upsertDerivedRosterFile(db, file, storedImport) {
   if (!doctors.length || totalEvents <= 0) return { ok: false, reason: "zero-events", doctors: doctors.length, events: totalEvents };
   const parsedAt = new Date().toISOString();
   await db.prepare(`
-    INSERT INTO roster_files (id, name, source_type, active, size, last_modified, added_at, uploaded_at, uploaded_by, parsed_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO roster_files (id, name, source_type, source_id, active, size, last_modified, added_at, uploaded_at, uploaded_by, parsed_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       name = excluded.name,
       source_type = excluded.source_type,
+      source_id = excluded.source_id,
       active = excluded.active,
       size = excluded.size,
       last_modified = excluded.last_modified,
@@ -348,6 +390,7 @@ export async function upsertDerivedRosterFile(db, file, storedImport) {
     file.id,
     file.name || storedImport.name || "roster.xlsx",
     sourceType,
+    String(file.sourceId || ""),
     file.active === false ? 0 : 1,
     Number(file.size || storedImport.size || 0),
     Number(file.lastModified || storedImport.lastModified || 0),
@@ -438,11 +481,12 @@ const D1_PRESENCE_BATCH_STATEMENTS = 80;
 
 function derivedRosterFileUpsertStatement(db, file, sourceType, parsedAt) {
   return db.prepare(`
-    INSERT INTO roster_files (id, name, source_type, active, size, last_modified, added_at, uploaded_at, uploaded_by, parsed_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO roster_files (id, name, source_type, source_id, active, size, last_modified, added_at, uploaded_at, uploaded_by, parsed_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       name = excluded.name,
       source_type = excluded.source_type,
+      source_id = excluded.source_id,
       active = excluded.active,
       size = excluded.size,
       last_modified = excluded.last_modified,
@@ -454,6 +498,7 @@ function derivedRosterFileUpsertStatement(db, file, sourceType, parsedAt) {
     file.id,
     file.name || "roster.xlsx",
     sourceType,
+    String(file.sourceId || ""),
     file.active === false ? 0 : 1,
     Number(file.size || 0),
     Number(file.lastModified || 0),
@@ -989,6 +1034,7 @@ export async function queryRosterFiles(db, options = {}) {
       roster_files.id AS id,
       roster_files.name AS name,
       roster_files.source_type AS source_type,
+      roster_files.source_id AS source_id,
       roster_files.active AS active,
       roster_files.size AS size,
       roster_files.last_modified AS last_modified,
@@ -1020,6 +1066,7 @@ export async function queryRosterFiles(db, options = {}) {
     id: String(row.id || "").trim(),
     name: String(row.name || "roster.xlsx"),
     sourceType: String(row.source_type || "").trim().toLowerCase(),
+    sourceId: String(row.source_id || "").trim(),
     active: row.active !== 0,
     size: Number(row.size || 0),
     lastModified: Number(row.last_modified || 0),
@@ -1059,6 +1106,7 @@ export async function queryRosterFileRanges(db, options = {}) {
       roster_files.id AS id,
       roster_files.name AS name,
       roster_files.source_type AS source_type,
+      roster_files.source_id AS source_id,
       roster_files.active AS active,
       roster_files.last_modified AS last_modified,
       roster_files.added_at AS added_at,
@@ -1077,6 +1125,7 @@ export async function queryRosterFileRanges(db, options = {}) {
     id: String(row.id || "").trim(),
     name: String(row.name || "roster.xlsx"),
     sourceType: String(row.source_type || "").trim().toLowerCase(),
+    sourceId: String(row.source_id || "").trim(),
     active: row.active !== 0,
     lastModified: Number(row.last_modified || 0),
     addedAt: String(row.added_at || ""),
@@ -1086,6 +1135,153 @@ export async function queryRosterFileRanges(db, options = {}) {
     endDate: String(row.end_date || ""),
     eventCount: Number(row.event_count || 0),
   })).filter((file) => file.id && SOURCE_TYPES.includes(file.sourceType));
+}
+
+export async function upsertRosterSource(db, source = {}) {
+  if (!db?.prepare || !String(source.id || "").trim()) return { ok: false, reason: "missing-source-id" };
+  await ensureCalendarSchema(db);
+  const now = new Date().toISOString();
+  const id = String(source.id).trim();
+  await db.prepare(`
+    INSERT INTO roster_sources (
+      id, provider, source_type, label, enabled, config_json, cursor_json, provider_version, provider_modified_at,
+      last_checked_at, last_success_at, last_error, active_file_id, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      provider = excluded.provider,
+      source_type = excluded.source_type,
+      label = excluded.label,
+      enabled = excluded.enabled,
+      config_json = excluded.config_json,
+      cursor_json = excluded.cursor_json,
+      provider_version = excluded.provider_version,
+      provider_modified_at = excluded.provider_modified_at,
+      last_checked_at = excluded.last_checked_at,
+      last_success_at = excluded.last_success_at,
+      last_error = excluded.last_error,
+      active_file_id = excluded.active_file_id,
+      updated_at = excluded.updated_at
+  `).bind(
+    id,
+    String(source.provider || ""),
+    normalizeSourceType(source.sourceType) || "",
+    String(source.label || id),
+    source.enabled === true ? 1 : 0,
+    JSON.stringify(source.config && typeof source.config === "object" ? source.config : {}),
+    JSON.stringify(source.cursor && typeof source.cursor === "object" ? source.cursor : {}),
+    String(source.providerVersion || ""),
+    String(source.providerModifiedAt || ""),
+    String(source.lastCheckedAt || ""),
+    String(source.lastSuccessAt || ""),
+    String(source.lastError || ""),
+    String(source.activeFileId || ""),
+    String(source.createdAt || now),
+    String(source.updatedAt || now),
+  ).run();
+  return { ok: true, id };
+}
+
+export async function loadRosterSource(db, sourceId) {
+  if (!db?.prepare || !String(sourceId || "").trim()) return null;
+  await ensureCalendarSchema(db);
+  const row = await db.prepare("SELECT * FROM roster_sources WHERE id = ?").bind(String(sourceId).trim()).first();
+  return rosterSourceFromRow(row);
+}
+
+export async function listRosterSources(db) {
+  if (!db?.prepare) return [];
+  await ensureCalendarSchema(db);
+  const rows = await db.prepare("SELECT * FROM roster_sources ORDER BY label, id").all();
+  return (rows.results || []).map(rosterSourceFromRow).filter(Boolean);
+}
+
+export async function listRosterSyncRuns(db, options = {}) {
+  if (!db?.prepare) return [];
+  await ensureCalendarSchema(db);
+  const limit = Math.min(Math.max(Number(options.limit || 50), 1), 250);
+  const rows = await db.prepare(`
+    SELECT * FROM roster_sync_runs
+    ORDER BY started_at DESC, id DESC
+    LIMIT ?
+  `).bind(limit).all();
+  return (rows.results || []).map(rosterSyncRunFromRow).filter(Boolean);
+}
+
+export async function findSuccessfulRosterSyncByHash(db, sourceId, contentHash) {
+  if (!db?.prepare || !sourceId || !contentHash) return null;
+  await ensureCalendarSchema(db);
+  const row = await db.prepare(`
+    SELECT * FROM roster_sync_runs
+    WHERE source_id = ? AND content_hash = ? AND status = 'success'
+    ORDER BY completed_at DESC LIMIT 1
+  `).bind(String(sourceId), String(contentHash)).first();
+  return rosterSyncRunFromRow(row);
+}
+
+export async function createRosterSyncRun(db, run = {}) {
+  if (!db?.prepare || !run?.id || !run?.sourceId) return { ok: false, reason: "missing-run-input" };
+  await ensureCalendarSchema(db);
+  await db.prepare(`
+    INSERT INTO roster_sync_runs (
+      id, source_id, trigger_type, provider_version, content_hash, file_id, status,
+      message, doctor_count, event_count, started_at, completed_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    String(run.id), String(run.sourceId), String(run.triggerType || "manual"),
+    String(run.providerVersion || ""), String(run.contentHash || ""), String(run.fileId || ""),
+    String(run.status || "started"), String(run.message || ""), Number(run.doctorCount || 0),
+    Number(run.eventCount || 0), String(run.startedAt || new Date().toISOString()), String(run.completedAt || ""),
+  ).run();
+  return { ok: true, id: String(run.id) };
+}
+
+export async function finishRosterSyncRun(db, runId, update = {}) {
+  if (!db?.prepare || !runId) return { ok: false, reason: "missing-run-id" };
+  await ensureCalendarSchema(db);
+  await db.prepare(`
+    UPDATE roster_sync_runs
+    SET status = ?, message = ?, file_id = ?, doctor_count = ?, event_count = ?, completed_at = ?
+    WHERE id = ?
+  `).bind(
+    String(update.status || "failed"), String(update.message || ""), String(update.fileId || ""),
+    Number(update.doctorCount || 0), Number(update.eventCount || 0),
+    String(update.completedAt || new Date().toISOString()), String(runId),
+  ).run();
+  return { ok: true };
+}
+
+function parseStoredJson(value, fallback = {}) {
+  try {
+    const parsed = JSON.parse(String(value || ""));
+    return parsed && typeof parsed === "object" ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function rosterSourceFromRow(row) {
+  if (!row?.id) return null;
+  return {
+    id: String(row.id), provider: String(row.provider || ""),
+    sourceType: String(row.source_type || "").toLowerCase(), label: String(row.label || row.id),
+    enabled: Number(row.enabled || 0) === 1, config: parseStoredJson(row.config_json),
+    cursor: parseStoredJson(row.cursor_json), providerVersion: String(row.provider_version || ""),
+    providerModifiedAt: String(row.provider_modified_at || ""), lastCheckedAt: String(row.last_checked_at || ""),
+    lastSuccessAt: String(row.last_success_at || ""), lastError: String(row.last_error || ""),
+    activeFileId: String(row.active_file_id || ""), createdAt: String(row.created_at || ""),
+    updatedAt: String(row.updated_at || ""),
+  };
+}
+
+function rosterSyncRunFromRow(row) {
+  if (!row?.id) return null;
+  return {
+    id: String(row.id), sourceId: String(row.source_id || ""), status: String(row.status || ""),
+    providerVersion: String(row.provider_version || ""), contentHash: String(row.content_hash || ""), fileId: String(row.file_id || ""),
+    message: String(row.message || ""), doctorCount: Number(row.doctor_count || 0),
+    eventCount: Number(row.event_count || 0), startedAt: String(row.started_at || ""),
+    completedAt: String(row.completed_at || ""),
+  };
 }
 
 export async function queryRosterFileRefsForDoctors(db, doctorKeys = []) {

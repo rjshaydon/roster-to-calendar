@@ -1956,6 +1956,8 @@ class MemoryD1 {
     this.dailyPresence = new Map();
     this.issues = new Map();
     this.rawFiles = new Map();
+    this.rosterSources = new Map();
+    this.rosterSyncRuns = new Map();
     this.accountProfiles = new Map();
     this.accountClaims = new Map();
     this.accountStates = new Map();
@@ -1985,6 +1987,8 @@ class MemoryD1 {
       "dailyPresence",
       "issues",
       "rawFiles",
+      "rosterSources",
+      "rosterSyncRuns",
       "accountProfiles",
       "accountClaims",
       "accountStates",
@@ -2030,13 +2034,14 @@ class MemoryD1Statement {
         id: args[0],
         name: args[1],
         source_type: args[2],
-        active: args[3],
-        size: args[4],
-        last_modified: args[5],
-        added_at: args[6],
-        uploaded_at: args[7],
-        uploaded_by: args[8],
-        parsed_at: args[9],
+        source_id: args[3],
+        active: args[4],
+        size: args[5],
+        last_modified: args[6],
+        added_at: args[7],
+        uploaded_at: args[8],
+        uploaded_by: args[9],
+        parsed_at: args[10],
       });
       return { success: true };
     }
@@ -2051,6 +2056,30 @@ class MemoryD1Statement {
         type: args[6],
         data_url: args[7],
         uploaded_at: args[8],
+      });
+      return { success: true };
+    }
+    if (sql.startsWith("INSERT INTO roster_sources")) {
+      this.db.rosterSources.set(args[0], {
+        id: args[0], provider: args[1], source_type: args[2], label: args[3], enabled: args[4],
+        config_json: args[5], cursor_json: args[6], provider_version: args[7], provider_modified_at: args[8],
+        last_checked_at: args[9], last_success_at: args[10], last_error: args[11], active_file_id: args[12],
+        created_at: args[13], updated_at: args[14],
+      });
+      return { success: true };
+    }
+    if (sql.startsWith("INSERT INTO roster_sync_runs")) {
+      this.db.rosterSyncRuns.set(args[0], {
+        id: args[0], source_id: args[1], trigger_type: args[2], provider_version: args[3],
+        content_hash: args[4], file_id: args[5], status: args[6], message: args[7],
+        doctor_count: args[8], event_count: args[9], started_at: args[10], completed_at: args[11],
+      });
+      return { success: true };
+    }
+    if (sql.startsWith("UPDATE roster_sync_runs")) {
+      const run = this.db.rosterSyncRuns.get(args[6]);
+      if (run) Object.assign(run, {
+        status: args[0], message: args[1], file_id: args[2], doctor_count: args[3], event_count: args[4], completed_at: args[5],
       });
       return { success: true };
     }
@@ -2396,6 +2425,16 @@ class MemoryD1Statement {
   async all() {
     const sql = this.sql;
     const args = this.args;
+    if (sql.startsWith("PRAGMA table_info(roster_files)")) {
+      return {
+        results: ["id", "name", "source_type", "source_id", "active", "size", "last_modified", "added_at", "uploaded_at", "uploaded_by", "parsed_at"].map((name) => ({ name })),
+      };
+    }
+    if (sql.startsWith("PRAGMA table_info(roster_sources)")) {
+      return {
+        results: ["id", "provider", "source_type", "label", "enabled", "config_json", "cursor_json", "provider_version", "provider_modified_at", "last_checked_at", "last_success_at", "last_error", "active_file_id", "created_at", "updated_at"].map((name) => ({ name })),
+      };
+    }
     if (sql.startsWith("PRAGMA table_info(account_profiles)")) {
       return {
         results: [
@@ -2437,6 +2476,12 @@ class MemoryD1Statement {
           "issue_json",
         ].map((name) => ({ name })),
       };
+    }
+    if (sql.startsWith("SELECT * FROM roster_sources ORDER BY")) {
+      return { results: [...this.db.rosterSources.values()].sort((left, right) => String(left.label).localeCompare(String(right.label)) || String(left.id).localeCompare(String(right.id))) };
+    }
+    if (sql.startsWith("SELECT * FROM roster_sync_runs") && !sql.includes("WHERE source_id")) {
+      return { results: [...this.db.rosterSyncRuns.values()].sort((left, right) => String(right.started_at).localeCompare(String(left.started_at)) || String(right.id).localeCompare(String(left.id))).slice(0, Number(args[0] || 50)) };
     }
     if (sql.includes("FROM roster_file_doctors") && sql.includes("file_name") && sql.includes("event_count")) {
       const requestedKeys = sql.includes("roster_file_doctors.doctor_key IN") ? new Set(args) : null;
@@ -2793,6 +2838,7 @@ class MemoryD1Statement {
             id: file.id,
             name: file.name,
             source_type: file.source_type,
+            source_id: file.source_id,
             active: file.active,
             size: file.size,
             last_modified: file.last_modified,
@@ -2819,9 +2865,10 @@ class MemoryD1Statement {
             const starts = events.map((event) => event.start_date).filter(Boolean).sort();
             const ends = events.map((event) => event.end_date).filter(Boolean).sort();
             return {
-              id: file.id,
-              name: file.name,
-              source_type: file.source_type,
+            id: file.id,
+            name: file.name,
+            source_type: file.source_type,
+            source_id: file.source_id,
               active: file.active,
               last_modified: file.last_modified,
               added_at: file.added_at,
@@ -2979,6 +3026,14 @@ class MemoryD1Statement {
   async first() {
     const sql = this.sql;
     const args = this.args;
+    if (sql.startsWith("SELECT * FROM roster_sources WHERE id = ?")) {
+      return this.db.rosterSources.get(args[0]) || null;
+    }
+    if (sql.includes("FROM roster_sync_runs") && sql.includes("WHERE source_id = ?")) {
+      return [...this.db.rosterSyncRuns.values()]
+        .filter((row) => row.source_id === args[0] && row.content_hash === args[1] && row.status === "success")
+        .sort((left, right) => String(right.completed_at).localeCompare(String(left.completed_at)))[0] || null;
+    }
     if (sql.includes("COUNT(*) AS active_file_count") && sql.includes("FROM roster_files")) {
       const activeFiles = [...this.db.files.values()].filter((file) => file.active === 1);
       return {
@@ -4784,7 +4839,7 @@ await postState(sharedUploadStore, {
   password: creatorPassword,
 }, sharedUploadDb);
 await seedUser(sharedUploadStore, "shared-user@example.com", "shared-password", "Shared User", sharedUploadDb);
-const sharedUserSave = await postState(sharedUploadStore, {
+const sharedUserSave = await postStateRaw(sharedUploadStore, {
   action: "saveDerivedCalendarFile",
   email: "shared-user@example.com",
   password: "shared-password",
@@ -4803,8 +4858,22 @@ const sharedUserSave = await postState(sharedUploadStore, {
     }],
   },
 }, sharedUploadDb);
-assert.equal(sharedUserSave.ok, true, "non-creator users should be able to add roster files to D1");
-assert.equal(sharedUploadDb.files.get("shared-ddh")?.uploaded_by, "shared-user@example.com");
+assert.equal(sharedUserSave.response.status, 403, "non-creator users must not add roster files to D1");
+assert.equal(sharedUploadDb.files.has("shared-ddh"), false);
+await postState(sharedUploadStore, {
+  action: "saveDerivedCalendarFile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  file: { id: "shared-ddh", name: "Shared_DDH_04-05-2026_to_02-08-2026.xlsx", sourceType: "ddh", active: true, lastModified: 20 },
+  doctors: [{ key: "SHARED USER", displayName: "Shared User", sourceType: "ddh" }],
+  eventsByDoctor: {
+    "SHARED USER": [{
+      id: "shared-ddh-shift", source: "DDH", title: "Shared DDH Shift", allDay: true,
+      start: "2026-05-06", end: "2026-05-06", rawValue: "Shared DDH Shift", monthKey: "2026-05",
+    }],
+  },
+}, sharedUploadDb);
+assert.equal(sharedUploadDb.files.get("shared-ddh")?.uploaded_by, "rhaydon@gmail.com");
 const sharedUserReset = await postStateRaw(sharedUploadStore, {
   action: "resetDerivedCalendarFile",
   email: "shared-user@example.com",
@@ -4812,14 +4881,26 @@ const sharedUserReset = await postStateRaw(sharedUploadStore, {
   fileId: "shared-ddh",
 }, sharedUploadDb);
 assert.equal(sharedUserReset.response.status, 403, "non-creator users must not remove D1 roster files");
+const detailedSharedStatus = await postState(sharedUploadStore, {
+  action: "calendarStoreStatus",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  selectedDoctorKey: "SHARED USER",
+  lightweight: false,
+}, sharedUploadDb);
+const sharedDdhStatus = detailedSharedStatus.files.find((file) => file.id === "shared-ddh");
+assert.equal(sharedDdhStatus?.selectedDoctorEventCount, 1, "full roster status should count the selected doctor's events per file");
+assert.equal(sharedDdhStatus?.selectedDoctor?.displayName, "Shared User", "full roster status should report the matched roster identity");
+assert.equal(sharedDdhStatus?.selectedDoctor?.shifts?.[0]?.title, "Shared DDH Shift", "full roster status should return the selected doctor's shifts");
+assert.equal(detailedSharedStatus.rosterSourceStatuses?.find((source) => source.id === "monash-adults")?.state, "not-configured", "source status should distinguish an unconnected automation source");
 for (const [fileId, name, lastModified, title] of [
   ["supersede-old", "MMC_Term2_2026_old.xlsx", 10, "Old MMC Shift"],
   ["supersede-new", "MMC_Term2_2026_new.xlsx", 30, "New MMC Shift"],
 ]) {
   await postState(sharedUploadStore, {
     action: "saveDerivedCalendarFile",
-    email: "shared-user@example.com",
-    password: "shared-password",
+    email: "rhaydon@gmail.com",
+    password: creatorPassword,
     file: { id: fileId, name, sourceType: "mmc", active: true, lastModified },
     doctors: [{ key: "SHARED USER", displayName: "Shared User", sourceType: "mmc" }],
     eventsByDoctor: {
@@ -4844,8 +4925,8 @@ for (const [fileId, name, lastModified, start, end] of [
 ]) {
   await postState(sharedUploadStore, {
     action: "saveDerivedCalendarFile",
-    email: "shared-user@example.com",
-    password: "shared-password",
+    email: "rhaydon@gmail.com",
+    password: creatorPassword,
     file: { id: fileId, name, sourceType: "mmc", active: true, lastModified },
     doctors: [{ key: "ADJACENT DOCTOR", displayName: "Adjacent Doctor", sourceType: "mmc" }],
     eventsByDoctor: {
@@ -4875,8 +4956,8 @@ assert.equal(sharedUploadDb.files.get("adjacent-term-1")?.active, 1, "adjacent t
 assert.equal(sharedUploadDb.files.get("adjacent-term-2")?.active, 1, "adjacent next-term roster should remain active");
 await postState(sharedUploadStore, {
   action: "saveDerivedCalendarFile",
-  email: "shared-user@example.com",
-  password: "shared-password",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
   file: { id: "ambiguous-left", name: "Ambiguous_Left.xlsx", sourceType: "mch", active: true, lastModified: 0 },
   doctors: [{ key: "SHARED USER", displayName: "Shared User", sourceType: "mch" }],
   eventsByDoctor: {
@@ -4885,8 +4966,8 @@ await postState(sharedUploadStore, {
 }, sharedUploadDb);
 await postState(sharedUploadStore, {
   action: "saveDerivedCalendarFile",
-  email: "shared-user@example.com",
-  password: "shared-password",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
   file: { id: "ambiguous-right", name: "Ambiguous_Right.xlsx", sourceType: "mch", active: true, lastModified: 0 },
   doctors: [{ key: "SHARED USER", displayName: "Shared User", sourceType: "mch" }],
   eventsByDoctor: {
