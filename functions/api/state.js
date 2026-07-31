@@ -1,6 +1,7 @@
 import { applyEventOverrides, customEventsToEvents, defaultSettings, inspectImportRecord, normalizeRosterName } from "../_lib/roster.js";
 import { AUTOMATION_SOURCES } from "../_lib/automation-import.js";
 import { requestQueuedRosterProcessing } from "../_lib/automation-dispatch.js";
+import { findmyshiftLastModified } from "../_lib/findmyshift.js";
 import {
   buildPreviewFromDerivedEvents,
   accountMirrorStatus,
@@ -220,6 +221,23 @@ export async function onRequestPost(context) {
     }
 
     const account = await verifyD1Account(context.env.ROSTER_DB, email, password);
+    if (action === "testFindmyshiftConnection") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      const apiKey = String(context.env.FINDMYSHIFT_API_KEY || "").trim();
+      const teamId = String(context.env.FINDMYSHIFT_TEAM_ID || "").trim();
+      if (!apiKey || !teamId) {
+        return Response.json({ error: "FindMyShift API key or team ID is not configured." }, { status: 422 });
+      }
+      try {
+        const providerModifiedAt = await findmyshiftLastModified(apiKey, teamId);
+        return Response.json({ ok: true, connected: true, providerModifiedAt });
+      } catch (error) {
+        console.error("FindMyShift connection test failed", error);
+        return Response.json({ error: "FindMyShift connection test failed. Check the API key and team ID." }, { status: 422 });
+      }
+    }
     if (action === "adminCreateUser") {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });

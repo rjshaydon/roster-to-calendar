@@ -654,6 +654,10 @@ accountsBody.addEventListener("click", (event) => {
     void refreshCalendarStoreStatus({ silent: false, syncSwitcher: true });
     return;
   }
+  if (event.target.closest("[data-test-findmyshift]")) {
+    void testFindmyshiftConnection();
+    return;
+  }
   const replaceActiveRostersButton = event.target.closest("[data-replace-active-rosters]");
   if (replaceActiveRostersButton) {
     void replaceActiveRostersWithCurrentUploads();
@@ -2371,6 +2375,9 @@ function renderRosterSourceStatusMarkup() {
           ${renderRosterProcessorDispatch(source.processorDispatch)}
           ${renderRosterSourceFileNames(source)}
           ${source.lastError ? `<small class="roster-source-error">${escapeHtml(source.lastError)}</small>` : ""}
+          ${source.id === "dandenong-findmyshift" && isCreatorAuthenticated()
+            ? `<button type="button" class="button button-secondary" data-test-findmyshift>Test connection</button>`
+            : ""}
         </article>
       `).join("")}
     </section>
@@ -13337,6 +13344,28 @@ async function refreshCalendarStoreStatus(options = {}) {
     }
   }
   renderFileSurfaces();
+}
+
+async function testFindmyshiftConnection() {
+  if (!isCreatorAuthenticated() || !cloudAvailable) return;
+  setStatus("Testing FindMyShift connection...");
+  try {
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "testFindmyshiftConnection",
+        email: authUserEmail || currentUserEmail,
+        password: authUserPassword || currentUserPassword,
+      }),
+    });
+    const data = await readJsonResponse(response, "Could not test the FindMyShift connection.");
+    if (!data.ok || !data.connected) throw new Error(data.error || "FindMyShift connection test failed.");
+    setStatus(`FindMyShift connected. Source last modified ${formatTimestamp(data.providerModifiedAt)}.`);
+    await refreshCalendarStoreStatus({ silent: true, syncSwitcher: true });
+  } catch (error) {
+    setStatus(error.message || "Could not test the FindMyShift connection.", true);
+  }
 }
 
 async function toggleAdminConsole() {
