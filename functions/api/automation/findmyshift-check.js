@@ -2,6 +2,10 @@ import { findmyshiftConfiguredRosterRange, findmyshiftLastModified, findmyshiftR
 import { hasCalendarDb, loadRosterSource, upsertRosterSource } from "../../_lib/d1-calendar.js";
 
 const SOURCE_ID = "dandenong-findmyshift";
+// Changing the generated-workbook format must create a fresh retained source,
+// even if FindMyShift itself has not changed its modification version. This
+// prevents an earlier parser's derived file from masking a corrected parser.
+const IMPORT_FORMAT = "stream-paired-v1";
 
 export async function onRequestPost(context) {
   if (!hasValidToken(context.request, context.env)) return Response.json({ error: "Unauthorized." }, { status: 401 });
@@ -39,7 +43,7 @@ export async function onRequestPost(context) {
       headers: { Authorization: `Bearer ${String(context.env.ROSTER_AUTOMATION_TOKEN || "")}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         sourceId: SOURCE_ID,
-        fileName: `Dandenong-FindMyShift-${range.from}-to-${range.to}.xlsx`,
+        fileName: `Dandenong-FindMyShift-${IMPORT_FORMAT}-${range.from}-to-${range.to}.xlsx`,
         contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         contentBase64: bytesToBase64(new Uint8Array(workbook)),
         providerVersion,
