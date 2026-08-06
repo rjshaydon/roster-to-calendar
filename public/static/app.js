@@ -639,14 +639,6 @@ accountsBody.addEventListener("click", (event) => {
     void refreshCalendarStoreStatus({ silent: false, syncSwitcher: true });
     return;
   }
-  if (event.target.closest("[data-sync-findmyshift]")) {
-    void syncFindmyshiftRoster();
-    return;
-  }
-  if (event.target.closest("[data-download-findmyshift-exceptions]")) {
-    void downloadFindmyshiftExceptions();
-    return;
-  }
   const replaceActiveRostersButton = event.target.closest("[data-replace-active-rosters]");
   if (replaceActiveRostersButton) {
     void replaceActiveRostersWithCurrentUploads();
@@ -2428,9 +2420,6 @@ function renderAdminAutoSyncRow(source, files, terms) {
         ${nextFile ? renderAdminAutoTermDetail("Next term", nextFile) : ""}
       </dl>
       ${operationalNote}
-      ${source.id === "dandenong-findmyshift" && isCreatorAuthenticated()
-        ? `<div class="admin-auto-sync-actions"><button type="button" class="button button-secondary" data-sync-findmyshift>Run controlled sync</button><button type="button" class="button button-secondary" data-download-findmyshift-exceptions>Download exception review</button></div>`
-        : ""}
     </article>
   `;
 }
@@ -13519,69 +13508,6 @@ async function refreshCalendarStoreStatus(options = {}) {
     }
   }
   renderFileSurfaces();
-}
-
-async function syncFindmyshiftRoster() {
-  if (!isCreatorAuthenticated() || !cloudAvailable) return;
-  if (!window.confirm("Download the full available FindMyShift roster and queue it for background processing? This will retain and import roster data.")) return;
-  setStatus("Downloading the full FindMyShift roster and queuing secure background processing...");
-  try {
-    const response = await fetch("/api/state", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        action: "syncFindmyshift",
-        confirmation: "sync-findmyshift",
-        email: authUserEmail || currentUserEmail,
-        password: authUserPassword || currentUserPassword,
-      }),
-    });
-    const data = await readJsonResponse(response, "Could not start the FindMyShift sync.");
-    if (!data.ok) throw new Error(data.error || "FindMyShift sync could not be queued.");
-    const providerTime = data.providerModifiedAt ? ` Source modified ${formatTimestamp(data.providerModifiedAt)}.` : "";
-    const queue = data.queue || {};
-    const outcome = data.status === "unchanged"
-      ? "FindMyShift is unchanged; no roster was downloaded or queued."
-      : data.status === "incomplete"
-        ? "FindMyShift is unchanged but does not include the stream details required for a safe Dandenong import."
-      : queue.dispatched
-        ? "FindMyShift roster retained and queued. GitHub background processing has been requested."
-        : "FindMyShift roster retained and queued; background processing is awaiting dispatch.";
-    setStatus(`${outcome}${providerTime}`);
-    await refreshCalendarStoreStatus({ silent: true, syncSwitcher: true });
-  } catch (error) {
-    setStatus(error.message || "Could not start the FindMyShift sync.", true);
-  }
-}
-
-async function downloadFindmyshiftExceptions() {
-  if (!isCreatorAuthenticated() || !cloudAvailable) return;
-  setStatus("Preparing the creator-only FindMyShift exception review...");
-  try {
-    const response = await fetch("/api/state", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        action: "downloadFindmyshiftExceptions",
-        email: authUserEmail || currentUserEmail,
-        password: authUserPassword || currentUserPassword,
-      }),
-    });
-    const data = await readJsonResponse(response, "Could not prepare the FindMyShift exception review.");
-    if (!data.ok || !data.csv) throw new Error(data.error || "Could not prepare the FindMyShift exception review.");
-    const blob = new Blob([String(data.csv)], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const download = document.createElement("a");
-    download.href = url;
-    download.download = String(data.fileName || "FindMyShift-Dandenong-exceptions.csv");
-    document.body.append(download);
-    download.click();
-    download.remove();
-    URL.revokeObjectURL(url);
-    setStatus(`Downloaded ${Number(data.exceptionCount || 0)} FindMyShift exceptions for review.`);
-  } catch (error) {
-    setStatus(error.message || "Could not prepare the FindMyShift exception review.", true);
-  }
 }
 
 async function toggleAdminConsole() {

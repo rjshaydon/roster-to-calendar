@@ -220,8 +220,8 @@ const automationWorkflowSource = await readFile(new URL("../.github/workflows/mo
 const indexSource = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
 assert.match(indexSource, /id="stayLoggedIn"[^>]*checked/, "Stay logged in should be selected by default");
 assert.equal((appSource.match(/data-test-findmyshift/g) || []).length, 0, "FindMyShift diagnostics should not remain exposed as a UI control");
-assert.equal((appSource.match(/data-sync-findmyshift/g) || []).length, 2, "FindMyShift should render one controlled sync control and one click handler");
-assert.equal((appSource.match(/data-download-findmyshift-exceptions/g) || []).length, 2, "FindMyShift should render one creator-only exception download control and one click handler");
+assert.equal((appSource.match(/data-sync-findmyshift/g) || []).length, 0, "FindMyShift is automated and should not expose a manual sync control");
+assert.equal((appSource.match(/data-download-findmyshift-exceptions/g) || []).length, 0, "FindMyShift exception review is no longer exposed as a UI control");
 assert.match(stateSource, /action === "downloadFindmyshiftExceptions"[\s\S]*findmyshiftDandenongAssignmentExceptions[\s\S]*findmyshiftExceptionCsv/, "FindMyShift exception downloads must be creator-only server-side report reads");
 assert.doesNotMatch(
   stateSource.match(/if \(action === "testFindmyshiftConnection"\)[\s\S]*?if \(action === "adminCreateUser"\)/)?.[0] || "",
