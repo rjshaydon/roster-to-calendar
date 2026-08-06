@@ -1,5 +1,6 @@
 import { automationSourceDefinition } from "../../_lib/automation-import.js";
 import {
+  deleteDerivedRosterFile,
   finishRosterSyncRun,
   hasCalendarDb,
   loadRosterSource,
@@ -31,6 +32,10 @@ export async function onRequestPost(context) {
     }
     if (phase === "failed") {
       const failedAt = new Date().toISOString();
+      // An interrupted chunked import may have saved only some events.  Those
+      // rows must never become an active calendar source; retain the original
+      // workbook in R2 for retry, but remove the incomplete derived copy.
+      await deleteDerivedRosterFile(context.env.ROSTER_DB, run.fileId);
       await finishRosterSyncRun(context.env.ROSTER_DB, runId, {
         status: "failed",
         fileId: run.fileId,
@@ -91,6 +96,7 @@ export async function onRequestPost(context) {
     const sourceId = String(body?.sourceId || body?.file?.sourceId || "").trim();
     const failedAt = new Date().toISOString();
     if (runId) {
+      await deleteDerivedRosterFile(context.env.ROSTER_DB, String(body?.file?.id || "")).catch(() => null);
       await finishRosterSyncRun(context.env.ROSTER_DB, runId, {
         status: "failed",
         fileId: String(body?.file?.id || ""),
