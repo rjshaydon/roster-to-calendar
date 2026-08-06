@@ -73,12 +73,7 @@ export async function findmyshiftRosterWorkbook(apiKey, teamId, range) {
 // replace a more precise manual roster with incorrect calendar entries.
 export function findmyshiftDandenongAssignmentDiagnostics(rows = []) {
   const shifts = Array.isArray(rows) ? rows : [];
-  const ambiguousRows = shifts.filter((row) => (
-    String(row?.label || "").trim().toUpperCase() === "SHIFT"
-    && String(row?.start || "").trim()
-    && String(row?.end || "").trim()
-    && !String(row?.facility || "").trim()
-  ));
+  const ambiguousRows = shifts.filter(isAmbiguousFindmyshiftTimedRow);
   const ambiguousTimedByLayout = {};
   for (const row of ambiguousRows) {
     const layout = String(row?.pairingIssue || "time-without-named-stream");
@@ -91,6 +86,28 @@ export function findmyshiftDandenongAssignmentDiagnostics(rows = []) {
     ambiguousTimedByLayout,
     complete: ambiguousRows.length === 0,
   };
+}
+
+// This is intentionally limited to the creator-only review export.  It
+// exposes the minimum information needed to reconcile a time-only row against
+// the source roster: staff member, date, time range and structural reason.
+export function findmyshiftDandenongAssignmentExceptions(rows = []) {
+  return (Array.isArray(rows) ? rows : [])
+    .filter(isAmbiguousFindmyshiftTimedRow)
+    .map((row) => ({
+      staffName: String(row.name || "").trim(),
+      date: String(row.date || "").trim(),
+      start: String(row.start || "").trim(),
+      end: String(row.end || "").trim(),
+      reason: String(row.pairingIssue || "time-without-named-stream").replace(/-/g, " "),
+    }));
+}
+
+function isAmbiguousFindmyshiftTimedRow(row) {
+  return String(row?.label || "").trim().toUpperCase() === "SHIFT"
+    && String(row?.start || "").trim()
+    && String(row?.end || "").trim()
+    && !String(row?.facility || "").trim();
 }
 
 export function assertFindmyshiftDandenongAssignments(rows = []) {

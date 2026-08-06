@@ -5,7 +5,7 @@ import XLSX from "xlsx";
 
 import { onRequestPost as handleStatePost } from "../functions/api/state.js";
 import { onRequestGet as handleFeedGet } from "../functions/api/feed.js";
-import { assertFindmyshiftDandenongAssignments, extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentDiagnostics, findmyshiftRowsWorkbook } from "../functions/_lib/findmyshift.js";
+import { assertFindmyshiftDandenongAssignments, extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentDiagnostics, findmyshiftDandenongAssignmentExceptions, findmyshiftRowsWorkbook } from "../functions/_lib/findmyshift.js";
 import { buildAutomatedDerivedRosterPayload } from "../functions/_lib/automation-import.js";
 import { buildPreviewFromDerivedEvents, findRosterSyncByProviderVersion, storeCachedSnapshot } from "../functions/_lib/d1-calendar.js";
 import { recordRosterDispatchLifecycle, requestQueuedRosterProcessing } from "../functions/_lib/automation-dispatch.js";
@@ -119,6 +119,11 @@ assert.deepEqual(
   "FindMyShift pairing diagnostics should describe only the safe structural cause of an incomplete timed row",
 );
 assert.deepEqual(
+  findmyshiftDandenongAssignmentExceptions([{ name: "Example Doctor", date: "2026-08-06", label: "Shift", start: "14:30", end: "00:00", facility: "", pairingIssue: "time-without-named-stream" }]),
+  [{ staffName: "Example Doctor", date: "2026-08-06", start: "14:30", end: "00:00", reason: "time without named stream" }],
+  "creator exception exports should contain only the fields needed to cross-check ambiguous time rows",
+);
+assert.deepEqual(
   findmyshiftRows.map((row) => ({ date: row.date, label: row.label, start: row.start, end: row.end, facility: row.facility, seniority: row.seniority, comment: row.comment })),
   [
     { date: "2026-08-03", label: "North AM", start: "07:00", end: "15:00", facility: "North Campus", seniority: "Senior", comment: "" },
@@ -204,6 +209,8 @@ const indexSource = await readFile(new URL("../public/index.html", import.meta.u
 assert.match(indexSource, /id="stayLoggedIn"[^>]*checked/, "Stay logged in should be selected by default");
 assert.equal((appSource.match(/data-test-findmyshift/g) || []).length, 0, "FindMyShift diagnostics should not remain exposed as a UI control");
 assert.equal((appSource.match(/data-sync-findmyshift/g) || []).length, 2, "FindMyShift should render one controlled sync control and one click handler");
+assert.equal((appSource.match(/data-download-findmyshift-exceptions/g) || []).length, 2, "FindMyShift should render one creator-only exception download control and one click handler");
+assert.match(stateSource, /action === "downloadFindmyshiftExceptions"[\s\S]*findmyshiftDandenongAssignmentExceptions[\s\S]*findmyshiftExceptionCsv/, "FindMyShift exception downloads must be creator-only server-side report reads");
 assert.doesNotMatch(
   stateSource.match(/if \(action === "testFindmyshiftConnection"\)[\s\S]*?if \(action === "adminCreateUser"\)/)?.[0] || "",
   /Promise\.all/,

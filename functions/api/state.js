@@ -1,7 +1,7 @@
 import { applyEventOverrides, customEventsToEvents, defaultSettings, inspectImportRecord, normalizeRosterName } from "../_lib/roster.js";
 import { AUTOMATION_SOURCES } from "../_lib/automation-import.js";
 import { requestQueuedRosterProcessing } from "../_lib/automation-dispatch.js";
-import { findmyshiftLastModified, findmyshiftReportDiagnostics, findmyshiftShiftReport } from "../_lib/findmyshift.js";
+import { extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentExceptions, findmyshiftLastModified, findmyshiftReportDiagnostics, findmyshiftShiftReport } from "../_lib/findmyshift.js";
 import {
   buildPreviewFromDerivedEvents,
   accountMirrorStatus,
@@ -302,6 +302,34 @@ export async function onRequestPost(context) {
           ? { runId: String(result.queue.runId || ""), dispatched: result.queue.dispatched === true }
           : null,
       });
+    }
+    if (action === "downloadFindmyshiftExceptions") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      const apiKey = String(context.env.FINDMYSHIFT_API_KEY || "").trim();
+      const teamId = String(context.env.FINDMYSHIFT_TEAM_ID || "").trim();
+      if (!apiKey || !teamId) {
+        return Response.json({ error: "FindMyShift API key or team ID is not configured." }, { status: 422 });
+      }
+      try {
+        const range = findmyshiftConfiguredRosterRange(context.env);
+        const report = await findmyshiftShiftReport(apiKey, teamId, range);
+        const exceptions = findmyshiftDandenongAssignmentExceptions(extractShiftRows(report));
+        return Response.json({
+          ok: true,
+          fileName: `FindMyShift-Dandenong-exceptions-${range.from}-to-${range.to}.csv`,
+          csv: findmyshiftExceptionCsv(exceptions),
+          exceptionCount: exceptions.length,
+        });
+      } catch (error) {
+        const diagnostic = safeFindmyshiftFailureDiagnostic(error);
+        return Response.json({
+          error: diagnostic.status === 429
+            ? "FindMyShift is rate-limiting report requests. Please wait and try the exception download again."
+            : "FindMyShift exception review could not be generated.",
+        }, { status: diagnostic.status === 429 ? 429 : 422 });
+      }
     }
     if (action === "adminCreateUser") {
       if (account.role !== "creator" && account.role !== "owner") {
@@ -5339,6 +5367,14 @@ function sourceIdForReparseFile(file) {
     ddh: "dandenong-findmyshift",
     casey: "casey-manual",
   }[String(file?.sourceType || "").toLowerCase()] || "";
+}
+
+function findmyshiftExceptionCsv(exceptions = []) {
+  const escape = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+  return [
+    ["Staff member", "Date", "Start", "End", "Reason"],
+    ...exceptions.map((entry) => [entry.staffName, entry.date, entry.start, entry.end, entry.reason]),
+  ].map((row) => row.map(escape).join(",")).join("\r\n");
 }
 
 function findmyshiftDiagnosticTermRange(env) {

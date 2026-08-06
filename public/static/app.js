@@ -643,6 +643,10 @@ accountsBody.addEventListener("click", (event) => {
     void syncFindmyshiftRoster();
     return;
   }
+  if (event.target.closest("[data-download-findmyshift-exceptions]")) {
+    void downloadFindmyshiftExceptions();
+    return;
+  }
   const replaceActiveRostersButton = event.target.closest("[data-replace-active-rosters]");
   if (replaceActiveRostersButton) {
     void replaceActiveRostersWithCurrentUploads();
@@ -2425,7 +2429,7 @@ function renderAdminAutoSyncRow(source, files, terms) {
       </dl>
       ${operationalNote}
       ${source.id === "dandenong-findmyshift" && isCreatorAuthenticated()
-        ? `<button type="button" class="button button-secondary" data-sync-findmyshift>Run controlled sync</button>`
+        ? `<div class="admin-auto-sync-actions"><button type="button" class="button button-secondary" data-sync-findmyshift>Run controlled sync</button><button type="button" class="button button-secondary" data-download-findmyshift-exceptions>Download exception review</button></div>`
         : ""}
     </article>
   `;
@@ -13547,6 +13551,36 @@ async function syncFindmyshiftRoster() {
     await refreshCalendarStoreStatus({ silent: true, syncSwitcher: true });
   } catch (error) {
     setStatus(error.message || "Could not start the FindMyShift sync.", true);
+  }
+}
+
+async function downloadFindmyshiftExceptions() {
+  if (!isCreatorAuthenticated() || !cloudAvailable) return;
+  setStatus("Preparing the creator-only FindMyShift exception review...");
+  try {
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "downloadFindmyshiftExceptions",
+        email: authUserEmail || currentUserEmail,
+        password: authUserPassword || currentUserPassword,
+      }),
+    });
+    const data = await readJsonResponse(response, "Could not prepare the FindMyShift exception review.");
+    if (!data.ok || !data.csv) throw new Error(data.error || "Could not prepare the FindMyShift exception review.");
+    const blob = new Blob([String(data.csv)], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const download = document.createElement("a");
+    download.href = url;
+    download.download = String(data.fileName || "FindMyShift-Dandenong-exceptions.csv");
+    document.body.append(download);
+    download.click();
+    download.remove();
+    URL.revokeObjectURL(url);
+    setStatus(`Downloaded ${Number(data.exceptionCount || 0)} FindMyShift exceptions for review.`);
+  } catch (error) {
+    setStatus(error.message || "Could not prepare the FindMyShift exception review.", true);
   }
 }
 
