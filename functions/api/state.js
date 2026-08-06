@@ -4445,6 +4445,12 @@ async function runCoreDerivedRosterSave(context, job = {}) {
     let supersession = null;
     if (phase === "complete" || phase === "finish") {
       supersession = await reconcileRosterFileSupersession(db, filePayload, { uploaderEmail: job.email || "" });
+      // A replacement is now safely active.  Keep its original source in R2,
+      // but remove only the superseded derived D1 rows so obsolete revisions
+      // cannot grow the calendar database indefinitely.
+      for (const superseded of supersession.deactivated || []) {
+        await deleteDerivedRosterFile(db, superseded.id);
+      }
       const postSave = () => {
         const presence = phase === "finish" || Number(result?.events || 0) > 1200
           ? rebuildDailyPresenceForFile(db, fileId)

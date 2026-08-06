@@ -87,6 +87,7 @@ async function ensureCalendarSchemaUncached(db) {
     )
   `).run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_events_doctor_range ON roster_events (doctor_key, start_date, end_date)").run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_events_file_doctor ON roster_events (file_id, doctor_key)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_events_date_source ON roster_events (start_date, source_type)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_events_source_range ON roster_events (source_type, start_date, end_date)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_events_file ON roster_events (file_id)").run();
@@ -1066,6 +1067,7 @@ export async function queryRosterFiles(db, options = {}) {
   const doctorRows = await db.prepare(`
     SELECT file_id, source_type, doctor_key, display_name
     FROM roster_file_doctors
+    ${includeInactive ? "" : "WHERE file_id IN (SELECT id FROM roster_files WHERE active = 1)"}
     ORDER BY display_name, source_type
   `).all();
   const doctorsByFile = new Map();

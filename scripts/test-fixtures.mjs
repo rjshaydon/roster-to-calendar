@@ -5217,7 +5217,12 @@ for (const [fileId, name, lastModified, title] of [
     },
   }, sharedUploadDb);
 }
-assert.equal(sharedUploadDb.files.get("supersede-old")?.active, 0, "older overlapping same-source roster should be deactivated");
+assert.equal(sharedUploadDb.files.has("supersede-old"), false, "older overlapping same-source roster should be removed after its replacement completes");
+assert.equal(
+  [...sharedUploadDb.events.values()].some((event) => event.file_id === "supersede-old"),
+  false,
+  "superseded roster events should be removed with their inactive derived file",
+);
 assert.equal(sharedUploadDb.files.get("supersede-new")?.active, 1, "latest overlapping same-source roster should remain active");
 for (const [fileId, name, lastModified, start, end] of [
   ["adjacent-term-1", "MMC_Term1_2026.xlsx", 10, "2026-05-03", "2026-05-04"],
