@@ -83,9 +83,11 @@ export function findmyshiftDandenongAssignmentDiagnostics(rows = []) {
 export function assertFindmyshiftDandenongAssignments(rows = []) {
   const diagnostics = findmyshiftDandenongAssignmentDiagnostics(rows);
   if (diagnostics.complete) return diagnostics;
-  throw new Error(
+  const error = new Error(
     `FindMyShift did not include a stream or facility for ${diagnostics.ambiguousTimed} timed roster entries. Automatic import was stopped so ambiguous Dandenong shifts cannot replace the detailed manual roster.`,
   );
+  error.code = "findmyshift-incomplete-ddh-assignment";
+  throw error;
 }
 
 export async function findmyshiftShiftReport(apiKey, teamId, range) {

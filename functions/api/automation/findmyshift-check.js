@@ -25,6 +25,13 @@ export async function onRequestPost(context) {
       await saveSource(context, current, { lastCheckedAt: now, lastError: "" });
       return Response.json({ ok: true, status: "unchanged", providerModifiedAt: providerVersion });
     }
+    // If this exact provider version has already been proved incomplete, do
+    // not re-download the full report on every watchdog tick. A future source
+    // modification is retried in case the provider starts exposing the stream.
+    if (current?.providerVersion === providerVersion && isIncompleteDandenongAssignmentError(current.lastError)) {
+      await saveSource(context, current, { lastCheckedAt: now });
+      return Response.json({ ok: true, status: "incomplete", providerModifiedAt: providerVersion });
+    }
     const range = findmyshiftConfiguredRosterRange(context.env);
     const workbook = await findmyshiftRosterWorkbook(apiKey, teamId, range);
     const response = await fetch(new URL("/api/automation/ingest", context.request.url), {
@@ -44,8 +51,19 @@ export async function onRequestPost(context) {
     return Response.json({ ok: true, status: String(result.status || "queued"), providerModifiedAt: providerVersion, queue: { runId: String(result.runId || ""), dispatched: result.processorDispatch?.dispatched === true } });
   } catch (error) {
     await saveSource(context, current, { lastCheckedAt: now, lastError: String(error?.message || error).slice(0, 300) });
-    return Response.json({ ok: false, status: "failed", error: "FindMyShift roster check failed." }, { status: 502 });
+    const incomplete = error?.code === "findmyshift-incomplete-ddh-assignment" || isIncompleteDandenongAssignmentError(error?.message);
+    return Response.json({
+      ok: false,
+      status: incomplete ? "incomplete" : "failed",
+      error: incomplete
+        ? "FindMyShift did not provide Dandenong stream details for every timed shift, so no ambiguous roster was imported."
+        : "FindMyShift roster check failed.",
+    }, { status: 502 });
   }
+}
+
+function isIncompleteDandenongAssignmentError(value) {
+  return /did not include a stream or facility/i.test(String(value || ""));
 }
 
 async function saveSource(context, existing, update) {

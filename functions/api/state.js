@@ -289,7 +289,10 @@ export async function onRequestPost(context) {
       });
       const result = await response.json().catch(() => ({}));
       if (!response.ok || !result?.ok) {
-        return Response.json({ error: "Controlled FindMyShift sync could not be queued.", status: String(result?.status || "failed") }, { status: 422 });
+        return Response.json({
+          error: String(result?.error || "Controlled FindMyShift sync could not be queued."),
+          status: String(result?.status || "failed"),
+        }, { status: 422 });
       }
       return Response.json({
         ok: true,

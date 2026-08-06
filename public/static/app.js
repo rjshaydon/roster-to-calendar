@@ -13538,6 +13538,8 @@ async function syncFindmyshiftRoster() {
     const queue = data.queue || {};
     const outcome = data.status === "unchanged"
       ? "FindMyShift is unchanged; no roster was downloaded or queued."
+      : data.status === "incomplete"
+        ? "FindMyShift is unchanged but does not include the stream details required for a safe Dandenong import."
       : queue.dispatched
         ? "FindMyShift roster retained and queued. GitHub background processing has been requested."
         : "FindMyShift roster retained and queued; background processing is awaiting dispatch.";
