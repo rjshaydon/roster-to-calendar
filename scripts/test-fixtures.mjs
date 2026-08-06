@@ -80,8 +80,13 @@ assert.deepEqual(
 );
 assert.deepEqual(
   findmyshiftConfiguredRosterRange({ FINDMYSHIFT_DIAGNOSTIC_FROM: "2026-08-03", FINDMYSHIFT_DIAGNOSTIC_TO: "2026-11-01" }, new Date("2026-08-06T00:00:00Z")),
-  { from: "2026-01-01", to: "2027-12-31" },
-  "FindMyShift automation must not inherit a deliberately narrow diagnostic range",
+  { from: "2026-08-03", to: "2026-11-01" },
+  "FindMyShift automation should use the configured provider-compatible published roster window",
+);
+assert.deepEqual(
+  findmyshiftConfiguredRosterRange({}, new Date("2026-08-06T00:00:00Z")),
+  { from: "2026-08-03", to: "2026-11-01" },
+  "FindMyShift automation should default to the current provider-compatible roster term",
 );
 const findmyshiftRows = extractShiftRows(findmyshiftFixture.report, {
   staff: findmyshiftFixture.staff,

@@ -3,15 +3,41 @@ import * as XLSX from "xlsx";
 const API_BASE = "https://www.findmyshift.com/api/1.4";
 
 export function findmyshiftConfiguredRosterRange(env = {}, now = new Date()) {
-  const year = now.getUTCFullYear();
-  // A report returns only shifts actually available in FindMyShift. Ask for a
-  // generously complete current window rather than coupling automation to the
-  // smaller, read-only diagnostic range. Optional explicit bounds are useful
-  // for a provider that has a known archival or future publication limit.
+  // FindMyShift accepts the complete published roster window, but rejects an
+  // open-ended multi-year request (HTTP 470).  The Diagnostic bounds are the
+  // administrator-configurable published range; without them use the current
+  // roster term, which is the provider-compatible full available window.
   return {
-    from: validDateKey(env.FINDMYSHIFT_FROM) || `${year}-01-01`,
-    to: validDateKey(env.FINDMYSHIFT_TO) || `${year + 1}-12-31`,
+    from: validDateKey(env.FINDMYSHIFT_FROM) || validDateKey(env.FINDMYSHIFT_DIAGNOSTIC_FROM) || findmyshiftTermWindow(now).from,
+    to: validDateKey(env.FINDMYSHIFT_TO) || validDateKey(env.FINDMYSHIFT_DIAGNOSTIC_TO) || findmyshiftTermWindow(now).to,
   };
+}
+
+function findmyshiftTermWindow(now) {
+  const date = now instanceof Date && !Number.isNaN(now.getTime()) ? now : new Date();
+  const today = date.toISOString().slice(0, 10);
+  const terms = [];
+  for (const year of [date.getUTCFullYear() - 1, date.getUTCFullYear(), date.getUTCFullYear() + 1]) {
+    for (const monthIndex of [1, 4, 7, 10]) {
+      const from = firstMondayDateKey(year, monthIndex);
+      terms.push({ from, to: addDateKeyDays(from, 90) });
+    }
+  }
+  return terms.filter((term) => term.from <= today).sort((left, right) => right.from.localeCompare(left.from))[0]
+    || { from: firstMondayDateKey(date.getUTCFullYear(), 1), to: addDateKeyDays(firstMondayDateKey(date.getUTCFullYear(), 1), 90) };
+}
+
+function firstMondayDateKey(year, monthIndex) {
+  const date = new Date(Date.UTC(year, monthIndex, 1));
+  const day = date.getUTCDay();
+  date.setUTCDate(date.getUTCDate() + (day === 0 ? 1 : day === 1 ? 0 : 8 - day));
+  return date.toISOString().slice(0, 10);
+}
+
+function addDateKeyDays(value, days) {
+  const date = new Date(`${value}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
 }
 
 export async function findmyshiftLastModified(apiKey, teamId) {
