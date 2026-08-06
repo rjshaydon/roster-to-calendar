@@ -560,6 +560,170 @@ input[type="color"] {
   word-break: break-word;
 }
 
+.file-doctor-shifts {
+  margin-top: 2px;
+  color: var(--ink);
+  font-size: 0.82rem;
+}
+
+.file-doctor-shifts summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.file-doctor-shifts ul {
+  display: grid;
+  gap: 5px;
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.roster-source-status {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.roster-source-card {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(246, 248, 252, 0.7);
+}
+
+.roster-source-card > span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.roster-source-card small {
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.roster-source-card.roster-source-received,
+.roster-source-card.roster-source-manual-current {
+  border-color: rgba(44, 124, 84, 0.38);
+}
+
+.roster-source-card.roster-source-failed,
+.roster-source-card.roster-source-not-configured,
+.roster-source-card.roster-source-manual-missing {
+  border-color: rgba(190, 97, 51, 0.38);
+}
+
+.roster-source-error {
+  color: var(--accent-strong) !important;
+}
+
+.admin-files-card {
+  display: grid;
+  gap: 24px;
+}
+
+.admin-file-section {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-file-section h3 {
+  margin: 0;
+  font-size: 0.98rem;
+}
+
+.admin-file-list {
+  display: grid;
+  gap: 10px;
+}
+
+.admin-file-row {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px;
+  border: 1px solid rgba(24, 35, 28, 0.1);
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(248, 243, 235, 0.9));
+}
+
+.admin-auto-sync-row {
+  border-color: rgba(44, 124, 84, 0.3);
+}
+
+.admin-auto-sync-row.roster-source-failed,
+.admin-auto-sync-row.roster-source-not-configured,
+.admin-auto-sync-row.roster-source-waiting {
+  border-color: rgba(190, 97, 51, 0.38);
+}
+
+.admin-file-details {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 20px;
+  margin: 0;
+}
+
+.admin-file-details div {
+  min-width: 0;
+}
+
+.admin-file-details dt,
+.admin-file-kicker {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.admin-file-details dd {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 0.88rem;
+  line-height: 1.35;
+}
+
+.admin-auto-sync-state,
+.admin-file-meta,
+.admin-file-status {
+  color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.admin-manual-file-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.admin-file-row-main {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.admin-file-row-main strong {
+  overflow-wrap: anywhere;
+}
+
+.admin-file-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.admin-file-actions .file-remove,
+.admin-file-actions .file-reparse {
+  position: static;
+  flex: 0 0 auto;
+}
+
 .file-remove {
   position: absolute;
   top: 10px;
@@ -1575,8 +1739,26 @@ body[data-skin="console"] .preview-cell.is-weekend {
 }
 
 .system-admin-body > .modal-actions,
-.system-admin-body > .console-history {
+.system-admin-body > .console-history,
+.system-admin-body > .advanced-roster-recovery {
   grid-column: 1 / -1;
+}
+
+.advanced-roster-recovery {
+  padding: 12px 14px;
+  border: 1px solid rgba(20, 34, 42, 0.1);
+  border-radius: 14px;
+  color: var(--muted);
+}
+
+.advanced-roster-recovery summary {
+  cursor: pointer;
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.advanced-roster-recovery p {
+  margin: 10px 0;
 }
 
 .account-hospital-locations {
@@ -2644,6 +2826,19 @@ body[data-skin="console"] .panel {
 
   .file-summary {
     grid-template-columns: 1fr;
+  }
+
+  .admin-file-details {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .admin-manual-file-row {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-file-actions {
+    justify-content: flex-end;
   }
 
   .preview-grid {

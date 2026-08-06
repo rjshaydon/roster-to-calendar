@@ -37,6 +37,7 @@ const DDH_LABEL_MAP = {
   "PM FAST IC": "FAST PM",
   "Orange AM IC": "Orange AM",
   "Silver AM IC": "Silver AM",
+  "Silver PM IC": "Silver PM",
   "onsite CS": "CS onsite",
   "PHNW clinical": "PHNW",
   PHNW: "PHNW",
@@ -49,6 +50,7 @@ const KNOWN_DDH_DIRECT_LABELS = new Set([
   "Orange AM",
   "Orange PM",
   "Silver AM",
+  "Silver PM",
   "FAST PM",
   "AVAO AM",
   "AVAO PM",
@@ -738,6 +740,10 @@ function detectSourceType(workbook, filename) {
 }
 
 function validateRosterDatesWithinSingleTerm(workbook, sourceType, filename) {
+  // FindMyShift reports are deliberately retained as one current, available
+  // roster range.  Unlike a manually uploaded term workbook, that range can
+  // cross a Victorian term boundary and must remain one coherent source.
+  if (sourceType === "ddh" && isFindmyshiftDdhWorkbook(workbook)) return;
   const evidence = collectRosterDateEvidence(workbook, sourceType);
   if (!evidence.length) return;
   const groups = new Map();
@@ -766,6 +772,12 @@ function validateRosterDatesWithinSingleTerm(workbook, sourceType, filename) {
   const shown = conflicts.slice(0, 3).map((item) => `${item.sheetName ? `${item.sheetName} ` : ""}${item.cell ? `cell ${item.cell} ` : ""}is ${item.date} (${item.termLabel})`);
   const remaining = conflicts.length > shown.length ? `, plus ${conflicts.length - shown.length} more conflicting date${conflicts.length - shown.length === 1 ? "" : "s"}` : "";
   throw new Error(`${filename} has dates from multiple terms. Most dates are ${dominant.label}, but ${shown.join("; ")}${remaining}. Fix the conflicting worksheet/date and upload again.`);
+}
+
+function isFindmyshiftDdhWorkbook(workbook) {
+  const sheetName = workbook?.SheetNames?.[0] || "";
+  const sheet = workbook?.Sheets?.[sheetName];
+  return Boolean(sheet) && cleanText(getCellValue(sheet, 1, 1)) === "FindMyShift roster format";
 }
 
 function collectRosterDateEvidence(workbook, sourceType) {
@@ -1351,6 +1363,8 @@ function parseMmcRecords(workbook, doctorKey) {
 }
 
 function parseDdhRecords(workbook, doctorKey) {
+  const findmyshiftRecords = parseFindmyshiftDdhRecords(workbook, doctorKey);
+  if (findmyshiftRecords) return findmyshiftRecords;
   const records = [];
   for (const entry of iterateDdhWeekEntries(workbook)) {
     if (normalizeName(entry.rawName) !== doctorKey) continue;
@@ -1365,6 +1379,69 @@ function parseDdhRecords(workbook, doctorKey) {
     });
   }
   return records;
+}
+
+// The generated grid keeps FindMyShift compatible with the established DDH
+// worksheet parser, while this structured audit sheet remains the source of
+// truth for an automated import. It prevents facility and comment information
+// from being flattened away before events are built.
+function parseFindmyshiftDdhRecords(workbook, doctorKey) {
+  if (!isFindmyshiftDdhWorkbook(workbook)) return null;
+  const sheet = workbook?.Sheets?.["FindMyShift details"];
+  if (!sheet) return null;
+  const headers = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false })?.[0] || [];
+  const expected = ["Staff ID", "Staff name", "Seniority/job title", "Date", "Shift label", "Start", "End", "Facility", "Comment"];
+  if (expected.some((header, index) => cleanText(headers[index]) !== header)) return null;
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false }).slice(1);
+  const records = [];
+  const seen = new Set();
+  for (const values of rows) {
+    const [, rawName, rawSeniority, rawDate, rawLabel, rawStart, rawEnd, rawFacility, rawComment] = values;
+    if (normalizeName(rawName) !== doctorKey) continue;
+    const day = parseFindmyshiftDate(rawDate);
+    const label = cleanText(rawLabel);
+    const startHm = parseFindmyshiftTime(rawStart);
+    const endHm = parseFindmyshiftTime(rawEnd);
+    if (!day || !label) continue;
+    const seniority = cleanText(rawSeniority) || UNKNOWN_SENIORITY;
+    const facility = cleanText(rawFacility);
+    const comment = cleanText(rawComment);
+    let record;
+    if (startHm && endHm) {
+      const titleParts = label.toUpperCase() === "SHIFT"
+        ? genericTimeOnlyShiftTitleParts(startHm, "DDH")
+        : { base: label, period: "", suffix: "" };
+      record = createTimedRecord("DDH", day, label, {
+        kind: "shift",
+        titleParts,
+        startHm,
+        endHm,
+        location: facility || DDH_LOCATION,
+        seniority,
+      });
+    } else {
+      record = parseDdhEntry(day, label, "", seniority);
+      if (!record) continue;
+      record = { ...record, location: facility || record.location || DDH_LOCATION };
+    }
+    const key = [record.kind, record.start, record.end, record.normalizedTitle, record.location].join("|");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    records.push({ ...record, comment, findmyshift: true });
+  }
+  return records;
+}
+
+function parseFindmyshiftTime(value) {
+  const match = cleanText(value).match(/^(\d{1,2}):(\d{2})$/);
+  if (!match || Number(match[1]) > 23 || Number(match[2]) > 59) return null;
+  return [Number(match[1]), Number(match[2])];
+}
+
+function parseFindmyshiftDate(value) {
+  const date = cleanText(value);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(date)) return date;
+  return coerceDate(value);
 }
 
 function parseCaseyRecords(workbook, doctorKey) {
@@ -1505,6 +1582,22 @@ function parseDdhEntry(day, label, timeText, seniority = UNKNOWN_SENIORITY) {
     });
   }
 
+  if (normalized.allDay !== true) {
+    const defaultTimes = normalized.defaultTimes || inferDdhDefaultTimes(normalized, seniority);
+    if (defaultTimes) {
+      return createTimedRecord("DDH", day, label, {
+        kind: normalized.kind,
+        titleParts: normalized.titleParts,
+        startHm: defaultTimes[0],
+        endHm: defaultTimes[1],
+        location,
+        status: normalized.status,
+        warning: normalized.warning,
+        seniority,
+      });
+    }
+  }
+
   return createAllDayRecord("DDH", day, label, {
     kind: normalized.kind,
     titleParts: normalized.titleParts,
@@ -1513,6 +1606,18 @@ function parseDdhEntry(day, label, timeText, seniority = UNKNOWN_SENIORITY) {
     warning: normalized.warning,
     seniority,
   });
+}
+
+function inferDdhDefaultTimes(normalized, seniority = UNKNOWN_SENIORITY) {
+  const base = String(normalized?.titleParts?.base || "").trim().toUpperCase();
+  const period = String(normalized?.titleParts?.period || "").trim().toUpperCase() || (base === "SSU" ? "AM" : "");
+  if (period === "AM") {
+    if (base === "SSU") return [[7, 30], [17, 30]];
+    if (seniority === "SMS" && base === "AVAO") return [[7, 30], [17, 0]];
+    return [[8, 0], [18, 0]];
+  }
+  if (period === "PM") return [[seniority === "SMS" && base !== "AVAO" ? 15 : 14, seniority === "SMS" && base !== "AVAO" ? 0 : 30], [0, 0]];
+  return null;
 }
 
 function parseCaseyEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
@@ -1581,8 +1686,6 @@ function parseMchEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
   const label = cleanText(raw).replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
   if (!label) return null;
   const upper = label.toUpperCase();
-  if (shouldIgnoreMch(label) || shouldIgnoreCommon(label)) return null;
-
   const leave = normalizeMchLeave(label);
   if (leave) {
     return createAllDayRecord("MCH", day, label, {
@@ -1592,6 +1695,7 @@ function parseMchEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
       seniority,
     });
   }
+  if (shouldIgnoreMch(label) || shouldIgnoreCommon(label)) return null;
 
   if (upper.includes("EDO")) return null;
 
@@ -1803,10 +1907,10 @@ function normalizeCaseyCode(label) {
 function normalizeMchLeave(label) {
   const upper = normalizedLeaveLabel(label);
   if (isAnnualLeaveLabel(upper)) return { kind: "annual_leave", title: "Annual Leave" };
-  if (/^S\/L(?:\s+(?:AM|PM))?$/.test(upper)) return { kind: "sick_leave", title: normalizeSickLeaveLabel(upper) };
+  if (/^(?:SICK(?:\s+LEAVE)?|S\/L)(?:\s+.*)?$/.test(upper)) return { kind: "sick_leave", title: "Sick leave" };
   if (upper === "EXAM" || upper === "ME/L") return { kind: "exam_leave", title: "Exam Leave" };
   if (isConferenceLeaveLabel(upper)) return { kind: "conference_leave", title: "Conference Leave" };
-  if (upper === "SAB/L") return { kind: "leave", title: "Sabbatical Leave" };
+  if (/^(?:SABBATICAL(?:\s+LEAVE)?|SAB\/L)(?:\s+.*)?$/.test(upper)) return { kind: "sabbatical_leave", title: "Sabbatical" };
   if (upper === "PAT/L") return { kind: "leave", title: "Parental Leave" };
   if (upper === "LSL") return { kind: "leave", title: "Long Service Leave" };
   return null;
@@ -2240,21 +2344,24 @@ function buildDefaultParserRules() {
   }
   for (const seniority of activeSeniorities) {
     const canWorkClinicalSupport = consultantSeniorities.includes(seniority);
+    const isSms = seniority === "SMS";
     add(rules.mmc, "MMC", "PHNW", seniority, "PHNW", "", "", true, "", "", "");
     if (canWorkClinicalSupport) {
       add(rules.ddh, "DDH", "CS", seniority, "CS", "", "", true, "", "", "");
       add(rules.ddh, "DDH", "CS ONSITE", seniority, "CS onsite", "", "", true, "", "", DDH_LOCATION);
     }
     add(rules.ddh, "DDH", "PHNW", seniority, "PHNW", "", "", true, "", "", "");
-    add(rules.ddh, "DDH", "SSU", seniority, "SSU", "", "", true, "", "", DDH_LOCATION);
-    add(rules.ddh, "DDH", "ORANGE AM", seniority, "Orange", "AM", "", true, "", "", DDH_LOCATION);
-    add(rules.ddh, "DDH", "ORANGE PM", seniority, "Orange", "PM", "", true, "", "", DDH_LOCATION);
-    add(rules.ddh, "DDH", "SILVER AM", seniority, "Silver", "AM", "", true, "", "", DDH_LOCATION);
-    add(rules.ddh, "DDH", "FAST PM", seniority, "FAST", "PM", "", true, "", "", DDH_LOCATION);
-    add(rules.ddh, "DDH", "AVAO AM", seniority, "AVAO", "AM", "", true, "", "", DDH_LOCATION);
-    add(rules.ddh, "DDH", "AVAO PM", seniority, "AVAO", "PM", "", true, "", "", DDH_LOCATION);
+    add(rules.ddh, "DDH", "SSU", seniority, "SSU", "", "", false, "07:30", "17:30", DDH_LOCATION);
+    add(rules.ddh, "DDH", "ORANGE AM", seniority, "Orange", "AM", "", false, "08:00", "18:00", DDH_LOCATION);
+    add(rules.ddh, "DDH", "ORANGE PM", seniority, "Orange", "PM", "", false, isSms ? "15:00" : "14:30", "00:00", DDH_LOCATION);
+    add(rules.ddh, "DDH", "SILVER AM", seniority, "Silver", "AM", "", false, "08:00", "18:00", DDH_LOCATION);
+    add(rules.ddh, "DDH", "SILVER PM", seniority, "Silver", "PM", "", false, isSms ? "15:00" : "14:30", "00:00", DDH_LOCATION);
+    if (!isSms) add(rules.ddh, "DDH", "FAST AM", seniority, "FAST", "AM", "", false, "08:00", "18:00", DDH_LOCATION);
+    add(rules.ddh, "DDH", "FAST PM", seniority, "FAST", "PM", "", false, isSms ? "15:00" : "14:30", "00:00", DDH_LOCATION);
+    add(rules.ddh, "DDH", "AVAO AM", seniority, "AVAO", "AM", "", false, isSms ? "07:30" : "08:00", isSms ? "17:00" : "18:00", DDH_LOCATION);
+    add(rules.ddh, "DDH", "AVAO PM", seniority, "AVAO", "PM", "", false, "14:30", "00:00", DDH_LOCATION);
     add(rules.ddh, "DDH", "ROVER AM", seniority, "Rover", "AM", "", false, "08:00", "18:00", DDH_LOCATION);
-    add(rules.ddh, "DDH", "ROVER PM", seniority, "Rover", "PM", "", false, "14:30", "00:00", DDH_LOCATION);
+    add(rules.ddh, "DDH", "ROVER PM", seniority, "Rover", "PM", "", false, isSms ? "15:00" : "14:30", "00:00", DDH_LOCATION);
     if (canWorkClinicalSupport) {
       add(rules.casey, "Casey", "CS", seniority, "CS", "", "", false, "08:00", "17:30", CASEY_LOCATION);
       add(rules.casey, "Casey", "CLIN SUPP", seniority, "CS", "", "", false, "08:00", "17:30", CASEY_LOCATION);
@@ -2415,6 +2522,7 @@ function shouldIgnoreMch(value) {
 
 function iterateDdhWeekEntries(workbook) {
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const findmyshiftFormat = cleanText(getCellValue(sheet, 1, 1)) === "FindMyShift roster format";
   const range = XLSX.utils.decode_range(sheet["!ref"] || "A1:A1");
   const dateRows = [];
   for (let row = 1; row <= range.e.r + 1; row += 1) {
@@ -2457,7 +2565,7 @@ function iterateDdhWeekEntries(workbook) {
       for (let col = 2; col <= 8; col += 1) {
         times.push(supplementaryRow ? cleanText(getCellValue(sheet, supplementaryRow, col)) : "");
       }
-      entries.push({ rawName, weekDates, labels, times, seniority: currentSeniority });
+      entries.push({ rawName, weekDates, labels, times, seniority: currentSeniority, findmyshiftFormat });
       if (supplementaryRow) row = supplementaryRow;
     }
   }
@@ -2954,7 +3062,9 @@ function mergeContiguousLeaveEvents(events) {
   const ordered = [...leaveEvents].sort((left, right) => left.start.localeCompare(right.start) || left.end.localeCompare(right.end));
   for (const event of ordered) {
     const previous = merged.length ? merged[merged.length - 1] : null;
-    const overlaps = previous && event.start < previous.end;
+    const sameLeaveType = previous
+      && preferredLeaveTitle(previous.title, "", previous.rawValue) === preferredLeaveTitle(event.title, "", event.rawValue);
+    const overlaps = sameLeaveType && event.start < previous.end;
     const adjacentSameType = previous && event.start === previous.end
       && preferredLeaveTitle(previous.title, "", previous.rawValue) === preferredLeaveTitle(event.title, "", event.rawValue);
     if (previous && (overlaps || adjacentSameType)) {
@@ -2986,11 +3096,11 @@ function preferredLeaveTitle(leftTitle, rightTitle, rawValue = "") {
   const combined = `${leftTitle || ""} ${rightTitle || ""} ${rawValue || ""}`;
   if (/\b(conference|cme)\b/i.test(combined)) return "Conference Leave";
   if (/\bannual\b/i.test(combined)) return "Annual Leave";
-  if (/\bsick\b/i.test(combined)) return "Sick Leave";
+  if (/\b(?:sick|s\/l)\b/i.test(combined)) return "Sick leave";
   if (/\bpersonal\b/i.test(combined)) return "Personal Leave";
   if (/\bstudy\b/i.test(combined)) return "Study Leave";
   if (/\bexam\b/i.test(combined)) return "Exam Leave";
-  if (/\bsabbatical\b/i.test(combined)) return "Sabbatical Leave";
+  if (/\b(?:sabbatical|sab\/l)\b/i.test(combined)) return "Sabbatical";
   if (/\bparental\b/i.test(combined)) return "Parental Leave";
   if (/\blong service\b/i.test(combined)) return "Long Service Leave";
   return String(leftTitle || rightTitle || "Leave").trim();
@@ -3028,7 +3138,7 @@ function formatTitle(source, titleParts, settings, kind = "shift") {
   if (titleParts.suffix) titleBits.push(titleParts.suffix);
   const core = titleBits.join(" ").trim();
   if (!core) return "";
-  if (kind === "annual_leave" || kind === "conference_leave") {
+  if (["annual_leave", "conference_leave", "sick_leave", "sabbatical_leave", "exam_leave"].includes(kind)) {
     return core;
   }
   return settings.showSourcePrefix ? `${source}: ${core}` : core;

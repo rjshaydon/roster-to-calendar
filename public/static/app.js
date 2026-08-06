@@ -304,15 +304,6 @@ let pendingExportRange = defaultExportRangeState();
 let pendingExportHospitals = [];
 let currentAdminTab = "system";
 let adminUserSeniorityFilter = "";
-let adminFilesSortOrder = "hospital-term";
-const ADMIN_FILES_SORT_OPTIONS = [
-  { value: "hospital-term", label: "Hospital & Term" },
-  { value: "hospital", label: "Hospital" },
-  { value: "term", label: "Term" },
-  { value: "alphabet", label: "Alphabet" },
-  { value: "date-added", label: "Date added" },
-  { value: "date-modified", label: "Date modified" },
-];
 const ROSTER_HOSPITAL_SORT_RANK = { mmc: 0, ddh: 1, casey: 2, mch: 3 };
 let calendarStoreStatus = null;
 let calendarStoreStatusError = "";
@@ -396,10 +387,18 @@ setEntranceTab("login");
 
 addRosterFilesButton.addEventListener("click", (event) => {
   event.preventDefault();
+  if (!canUploadRosters()) {
+    setStatus("Roster imports are managed by the Creator account.");
+    return;
+  }
   fileInput.click();
 });
 
 fileInput.addEventListener("change", async () => {
+  if (!canUploadRosters()) {
+    fileInput.value = "";
+    return;
+  }
   await importRosterFiles([...fileInput.files]);
   fileInput.value = "";
 });
@@ -452,7 +451,7 @@ window.addEventListener("drop", async (event) => {
   event.preventDefault();
   const wasAborted = rosterDragAborted;
   clearRosterDragState();
-  if (wasAborted) return;
+  if (wasAborted || !canUploadRosters()) return;
   await importRosterFiles([...event.dataTransfer.files]);
 });
 
@@ -605,12 +604,6 @@ accountsBody.addEventListener("change", (event) => {
     renderAccountsModal();
     return;
   }
-  const adminFilesSort = event.target.closest("[data-admin-files-sort]");
-  if (adminFilesSort) {
-    adminFilesSortOrder = normalizeAdminFilesSortOrder(adminFilesSort.value);
-    renderAccountsModal();
-    return;
-  }
   const insightsToggle = event.target.closest("[data-toggle-user-insights]");
   if (!insightsToggle) return;
   void setUserInsightsEnabled(insightsToggle.dataset.toggleUserInsights || "", insightsToggle.checked);
@@ -644,6 +637,10 @@ accountsBody.addEventListener("click", (event) => {
   const refreshCalendarStoreButton = event.target.closest("[data-refresh-calendar-store]");
   if (refreshCalendarStoreButton) {
     void refreshCalendarStoreStatus({ silent: false, syncSwitcher: true });
+    return;
+  }
+  if (event.target.closest("[data-sync-findmyshift]")) {
+    void syncFindmyshiftRoster();
     return;
   }
   const replaceActiveRostersButton = event.target.closest("[data-replace-active-rosters]");
@@ -2068,14 +2065,14 @@ async function openAccountsSurface(options = {}) {
       if (!accountsModal.classList.contains("hidden")) renderAccountsModal();
     }).catch(() => null);
   }
-  if (isViewingCreatorAccount()) {
+  if (isCreatorAuthenticated()) {
     void loadServerUsers().then(() => {
       if (!accountsModal.classList.contains("hidden")) {
         renderAccountsModal();
         queueGlobalUnresolvedShiftCodeLoad();
       }
     });
-    void refreshCalendarStoreStatus({ silent: true, syncSwitcher: false });
+    void refreshCalendarStoreStatus({ silent: true, syncSwitcher: false, lightweight: false });
   }
 }
 
@@ -2187,7 +2184,16 @@ function enrichRosterFileEntry(entry, statusFile = null) {
   if (!entry) return entry;
   const addedAt = entry.addedAt || statusFile?.uploadedAt || statusFile?.addedAt || "";
   const lastModified = Number(entry.lastModified || statusFile?.lastModified || 0);
-  return { ...entry, addedAt, lastModified };
+  return {
+    ...statusFile,
+    ...entry,
+    addedAt,
+    lastModified,
+    sourceId: entry.sourceId || statusFile?.sourceId || "",
+    startDate: entry.startDate || statusFile?.startDate || "",
+    coverageEndDate: entry.coverageEndDate || statusFile?.coverageEndDate || "",
+    endDate: entry.endDate || statusFile?.endDate || "",
+  };
 }
 
 function sortRosterFileEntries(files = [], sortOrder = "hospital-term") {
@@ -2237,12 +2243,12 @@ function renderAdminFilesSortControl(sortOrder = "hospital-term") {
   `;
 }
 
-function renderFilesMarkup({ canRemove = false, heading = "", description = "", canAdd = false, sortOrder = "", showSortControl = false } = {}) {
+function renderFilesMarkup({ canRemove = false, heading = "", description = "", canAdd = false, sortOrder = "", showSortControl = false, showSourceStatus = false } = {}) {
   const profileView = activeCalendarMode() === "doctor-profile";
-  const hasUsableStatus = !profileView && Boolean(calendarStoreStatus && calendarStoreStatus.unavailable !== true && !calendarStoreStatusError);
+  const hasUsableStatus = Boolean(calendarStoreStatus && calendarStoreStatus.unavailable !== true && !calendarStoreStatusError);
   const statusFiles = new Map((calendarStoreStatus?.files || []).map((file) => [file.id, file]));
   const populatedSelectedFileIds = new Set(calendarStoreStatus?.expectedFiles?.populatedFileIds || []);
-  const statusOnlyEntries = hasUsableStatus
+  const statusOnlyEntries = hasUsableStatus && !profileView
     ? (calendarStoreStatus?.files || [])
       .filter((file) => file?.id)
       .map((file) => ({
@@ -2269,6 +2275,7 @@ function renderFilesMarkup({ canRemove = false, heading = "", description = "", 
       <article class="review-card">
         ${heading ? `<div class="review-top"><div><strong>${escapeHtml(heading)}</strong>${description ? `<span>${escapeHtml(description)}</span>` : ""}</div>${canAdd ? `<button type="button" class="button button-secondary" data-open-file-picker>Add files</button>` : ""}</div>` : ""}
         ${showSortControl ? renderAdminFilesSortControl(sortOrder) : ""}
+        ${showSourceStatus ? renderRosterSourceStatusMarkup() : ""}
         <article class="issue-card"><strong>No files imported yet.</strong><p>${escapeHtml(emptyMessage)}</p></article>
       </article>
     `;
@@ -2277,15 +2284,17 @@ function renderFilesMarkup({ canRemove = false, heading = "", description = "", 
     <article class="review-card">
       ${heading ? `<div class="review-top"><div><strong>${escapeHtml(heading)}</strong>${description ? `<span>${escapeHtml(description)}</span>` : ""}</div>${canAdd ? `<button type="button" class="button button-secondary" data-open-file-picker>Add files</button>` : ""}</div>` : ""}
       ${showSortControl ? renderAdminFilesSortControl(sortOrder) : ""}
+      ${showSourceStatus ? renderRosterSourceStatusMarkup() : ""}
       <div class="file-summary">
         ${displayFiles.map((entry) => `
           <article class="file-pill" data-file-id="${entry.id}">
             <span>${escapeHtml(String(entry.sourceType || "").toUpperCase())}${entry.addedAt ? ` · Imported ${escapeHtml(formatTimestamp(entry.addedAt))}` : " · Roster database"}</span>
             <strong>${escapeHtml(entry.name)}</strong>
+            ${Number(entry.lastModified || 0) > 0 ? `<span>Source modified ${escapeHtml(formatTimestamp(entry.lastModified))}</span>` : ""}
             ${rosterSyncLabel(entry) || (statusFiles.has(entry.id)
               ? statusFiles.get(entry.id)?.retainedSourceOnly
                 ? `<span>Retained in R2 · not yet synced to D1</span>`
-                : `<span>${Number(statusFiles.get(entry.id)?.eventCount || 0)} events · ${Number(statusFiles.get(entry.id)?.selectedDoctorEventCount || 0)} for selected doctor</span>`
+                : renderRosterFileDoctorStatus(statusFiles.get(entry.id))
               : populatedSelectedFileIds.has(entry.id) ? `<span>Saved in D1 · inactive</span>`
               : entry.file && hasUsableStatus ? `<span>Not yet confirmed in D1</span>`
               : entry.file ? `<span>Roster database status not checked</span>` : "")}
@@ -2301,9 +2310,272 @@ function renderFilesMarkup({ canRemove = false, heading = "", description = "", 
   `;
 }
 
+function renderAdminFilesMarkup({ canRemove = false, canAdd = false } = {}) {
+  const profileView = activeCalendarMode() === "doctor-profile";
+  const hasUsableStatus = Boolean(calendarStoreStatus && calendarStoreStatus.unavailable !== true && !calendarStoreStatusError);
+  const statusFiles = new Map((calendarStoreStatus?.files || []).map((file) => [file.id, file]));
+  const populatedSelectedFileIds = new Set(calendarStoreStatus?.expectedFiles?.populatedFileIds || []);
+  const statusOnlyEntries = hasUsableStatus && !profileView
+    ? (calendarStoreStatus?.files || []).filter((file) => file?.id).map((file) => rosterStoreFileToClientEntry(file))
+    : calendarFilesForActiveView();
+  const displayFiles = rosterDisplayFiles(hasUsableStatus, statusOnlyEntries)
+    .filter((entry) => !pendingRemovedImportIds.has(entry.id))
+    .map((entry) => enrichRosterFileEntry(entry, statusFiles.get(entry.id)));
+  const sourceStatuses = (calendarStoreStatus?.rosterSourceStatuses || []).filter((source) => source?.mode === "automated");
+  const automatedSourceIds = new Set(sourceStatuses.map((source) => source.id));
+  const isAutomatedFile = (file) => automatedSourceIds.has(String(file?.sourceId || "")) || String(file?.id || "").startsWith("automation:");
+  const terms = adminRosterTerms();
+  const manualFiles = displayFiles.filter((file) => !isAutomatedFile(file));
+  const classifiedManualFiles = manualFiles.map((file) => ({ file, slot: adminRosterTermSlot(file, terms) }));
+  const currentAndNextManualFiles = classifiedManualFiles
+    .filter((item) => item.slot === "current" || item.slot === "next")
+    .sort((left, right) => adminRosterFileCompare(left.file, right.file, terms));
+  const previousManualFiles = classifiedManualFiles
+    .filter((item) => item.slot !== "current" && item.slot !== "next")
+    .sort((left, right) => adminPreviousRosterFileCompare(left.file, right.file));
+
+  return `
+    <article class="review-card admin-files-card">
+      <div class="review-top"><div><strong>Files</strong><span>Roster files currently used to generate the creator calendar.</span></div>${canAdd ? `<button type="button" class="button button-secondary" data-open-file-picker>Add files</button>` : ""}</div>
+      <section class="admin-file-section" aria-labelledby="admin-auto-sync-heading">
+        <h3 id="admin-auto-sync-heading">Auto-sync</h3>
+        <div class="admin-file-list admin-auto-sync-list">
+          ${sourceStatuses.map((source) => renderAdminAutoSyncRow(source, displayFiles, terms)).join("") || `<article class="issue-card"><p>No automated roster sources are configured.</p></article>`}
+        </div>
+      </section>
+      <section class="admin-file-section" aria-labelledby="admin-manual-imports-heading">
+        <h3 id="admin-manual-imports-heading">Manual imports</h3>
+        <div class="admin-file-list">
+          ${currentAndNextManualFiles.length
+            ? currentAndNextManualFiles.map(({ file, slot }) => renderAdminManualFileRow(file, slot, { canRemove, hasUsableStatus, statusFiles, populatedSelectedFileIds })).join("")
+            : `<article class="issue-card"><p>No manual roster files for the current or next term.</p></article>`}
+        </div>
+      </section>
+      <section class="admin-file-section" aria-labelledby="admin-previous-imports-heading">
+        <h3 id="admin-previous-imports-heading">Previously imported files</h3>
+        <div class="admin-file-list">
+          ${previousManualFiles.length
+            ? previousManualFiles.map(({ file, slot }) => renderAdminManualFileRow(file, slot, { canRemove, hasUsableStatus, statusFiles, populatedSelectedFileIds })).join("")
+            : `<article class="issue-card"><p>No earlier manual roster files.</p></article>`}
+        </div>
+      </section>
+    </article>
+  `;
+}
+
+function adminRosterTerms() {
+  const current = australianTermForDate(new Date());
+  return { current, next: nextAustralianTerm(current) };
+}
+
+function adminRosterTermSlot(file, terms) {
+  if (adminRosterFileOverlapsTerm(file, terms.current)) return "current";
+  if (adminRosterFileOverlapsTerm(file, terms.next)) return "next";
+  const fileTerm = rosterFileTermSortKey(file?.name || "");
+  if (fileTerm === adminTermSortKey(terms.current)) return "current";
+  if (fileTerm === adminTermSortKey(terms.next)) return "next";
+  return "previous";
+}
+
+function adminRosterFileOverlapsTerm(file, term) {
+  const start = String(file?.startDate || "").slice(0, 10);
+  const end = String(file?.coverageEndDate || file?.endDate || start).slice(0, 10);
+  if (!start || !end) return false;
+  const termStart = formatDateKey(term.start);
+  const termEnd = formatDateKey(addDays(term.end, -1));
+  return start <= termEnd && end >= termStart;
+}
+
+function adminTermSortKey(term) {
+  return `${term.year}-${String(term.termNumber).padStart(2, "0")}`;
+}
+
+function adminRosterFileCompare(left, right, terms) {
+  const leftSlot = adminRosterTermSlot(left, terms);
+  const rightSlot = adminRosterTermSlot(right, terms);
+  const slotRank = { current: 0, next: 1, previous: 2 };
+  return (slotRank[leftSlot] - slotRank[rightSlot])
+    || rosterHospitalSortKey(left.sourceType).localeCompare(rosterHospitalSortKey(right.sourceType))
+    || String(left.name || "").localeCompare(String(right.name || ""));
+}
+
+function adminPreviousRosterFileCompare(left, right) {
+  return rosterFileTermSortKey(right.name).localeCompare(rosterFileTermSortKey(left.name))
+    || String(right.addedAt || "").localeCompare(String(left.addedAt || ""))
+    || String(left.name || "").localeCompare(String(right.name || ""));
+}
+
+function renderAdminAutoSyncRow(source, files, terms) {
+  const sourceFiles = files.filter((file) => String(file?.sourceId || "") === String(source.id || ""));
+  const fallbackNames = new Set((source.activeFileNames || [source.activeFileName]).filter(Boolean));
+  const matchingFiles = sourceFiles.length ? sourceFiles : files.filter((file) => fallbackNames.has(file?.name));
+  const currentFile = adminLatestTermFile(matchingFiles, terms.current);
+  const nextFile = adminLatestTermFile(matchingFiles, terms.next);
+  const operationalNote = ["received", "manual-current"].includes(source.state)
+    ? ""
+    : `<span class="admin-auto-sync-state${source.lastError ? " roster-source-error" : ""}">${escapeHtml(rosterSourceStateLabel(source))}${source.lastError ? ` · ${escapeHtml(source.lastError)}` : ""}</span>`;
+  return `
+    <article class="admin-file-row admin-auto-sync-row roster-source-${escapeHtml(source.state || "unknown")}">
+      <strong>${escapeHtml(source.label)}</strong>
+      <dl class="admin-file-details">
+        <div><dt>Source modified</dt><dd>${source.providerModifiedAt ? escapeHtml(formatTimestamp(source.providerModifiedAt)) : "Not checked yet"}</dd></div>
+        <div><dt>Successfully imported</dt><dd>${source.lastSuccessAt ? escapeHtml(formatTimestamp(source.lastSuccessAt)) : "Not yet imported"}</dd></div>
+        ${renderAdminAutoTermDetail("Current term", currentFile)}
+        ${nextFile ? renderAdminAutoTermDetail("Next term", nextFile) : ""}
+      </dl>
+      ${operationalNote}
+      ${source.id === "dandenong-findmyshift" && isCreatorAuthenticated()
+        ? `<button type="button" class="button button-secondary" data-sync-findmyshift>Run controlled sync</button>`
+        : ""}
+    </article>
+  `;
+}
+
+function adminLatestTermFile(files, term) {
+  return files.filter((file) => adminRosterFileOverlapsTerm(file, term) || rosterFileTermSortKey(file?.name || "") === adminTermSortKey(term))
+    .sort((left, right) => String(right.addedAt || "").localeCompare(String(left.addedAt || "")))[0] || null;
+}
+
+function renderAdminAutoTermDetail(label, file) {
+  return `<div><dt>${escapeHtml(label)}</dt><dd>${file ? escapeHtml(file.name) : "Not available"}</dd></div>`;
+}
+
+function renderAdminManualFileRow(entry, slot, options = {}) {
+  const sourceLabel = { mmc: "Monash Adults", mch: "Monash Paediatrics", ddh: "Dandenong", casey: "Casey" }[String(entry.sourceType || "").toLowerCase()] || String(entry.sourceType || "Roster").toUpperCase();
+  const termLabel = slot === "current" ? "Current term" : slot === "next" ? "Next term" : adminRosterFileTermLabel(entry);
+  const statusFile = options.statusFiles?.get(entry.id);
+  const status = rosterSyncLabel(entry) || (statusFile?.retainedSourceOnly
+    ? "Retained in R2 · not yet synced to D1"
+    : statusFile ? rosterAdminFileStoreStatus(statusFile)
+      : options.populatedSelectedFileIds?.has(entry.id) ? "Saved in D1 · inactive"
+        : entry.file && options.hasUsableStatus ? "Not yet confirmed in D1"
+        : entry.file ? "Roster database status not checked" : "");
+  const canReparse = options.canRemove && (!entry.fromRosterDatabase || statusFile?.rawSourceAvailable === true);
+  return `
+    <article class="admin-file-row admin-manual-file-row" data-file-id="${escapeHtml(entry.id)}">
+      <div class="admin-file-row-main">
+        <span class="admin-file-kicker">${escapeHtml(sourceLabel)} · ${escapeHtml(termLabel)}</span>
+        <strong>${escapeHtml(entry.name)}</strong>
+        <span class="admin-file-meta">${entry.addedAt ? `Imported ${escapeHtml(formatTimestamp(entry.addedAt))}` : "Imported roster"}${Number(entry.lastModified || 0) > 0 ? ` · Source modified ${escapeHtml(formatTimestamp(entry.lastModified))}` : ""}</span>
+        ${status ? `<span class="admin-file-status">${status}</span>` : ""}
+        ${statusFile?.rawSourceAvailable === false ? `<span class="admin-file-status">Source file not retained · re-upload once to enable reparse</span>` : ""}
+      </div>
+      ${options.canRemove ? `<div class="admin-file-actions">${canReparse ? `<button type="button" class="file-reparse file-reparse-visible" aria-label="Reparse roster file" title="Reparse roster file" data-reparse-import="${escapeHtml(entry.id)}">↻</button>` : ""}<button type="button" class="file-remove file-remove-visible" aria-label="Remove file" title="Remove file" data-remove-import="${escapeHtml(entry.id)}">🗑</button></div>` : ""}
+    </article>
+  `;
+}
+
+function rosterAdminFileStoreStatus(file) {
+  if (file.status === "populated") return "Saved in D1";
+  if (file.status === "partial") return "Partially saved in D1";
+  if (file.status === "retained") return "Retained in R2 · not yet synced to D1";
+  return "No parsed shifts saved in D1";
+}
+
+function adminRosterFileTermLabel(file) {
+  const start = String(file?.startDate || "").slice(0, 10);
+  if (start) return formatAustralianTermLabel(australianTermForDate(parseDateOnly(start)));
+  const term = rosterFileTermSortKey(file?.name || "");
+  return term === "9999-99" ? "Earlier import" : `Term ${Number(term.slice(5))} ${term.slice(0, 4)}`;
+}
+
+function rosterStatusDoctorLabel() {
+  return activeDoctorProfile?.displayName
+    || selectedDoctor()?.displayName
+    || selectedDoctor()?.key
+    || "selected doctor";
+}
+
+function rosterStatusDoctorKey() {
+  if (activeDoctorProfile?.doctorKey) return normalizeRosterName(activeDoctorProfile.doctorKey);
+  if (activeCalendarMode() === "claimed-account") {
+    return normalizeRosterName(currentDefaultDoctorKey || currentRosterClaims[0]?.key || selectedDoctor()?.key || "");
+  }
+  return normalizeRosterName(selectedDoctor()?.key || OWNER_DOCTOR_KEY);
+}
+
+function renderRosterFileDoctorStatus(file = {}) {
+  if (file.selectedDoctorEventCount === null || file.selectedDoctor === null && calendarStoreStatus?.selectedDoctorEventCount === null) {
+    return `<span>Checking shifts for ${escapeHtml(rosterStatusDoctorLabel())}…</span>`;
+  }
+  const doctor = file.selectedDoctor;
+  if (!doctor) return `<span>No roster match for ${escapeHtml(rosterStatusDoctorLabel())}</span>`;
+  const count = Number(doctor.eventCount || 0);
+  if (!count) return `<span>${escapeHtml(doctor.displayName)} · no shifts in this roster</span>`;
+  return `
+    <span>${escapeHtml(doctor.displayName)} · ${count} shift${count === 1 ? "" : "s"}</span>
+    <details class="file-doctor-shifts">
+      <summary>Show shifts</summary>
+      <ul>${(doctor.shifts || []).map((shift) => `<li>${escapeHtml(formatRosterFileShift(shift))}</li>`).join("")}</ul>
+    </details>
+  `;
+}
+
+function formatRosterFileShift(shift = {}) {
+  const date = String(shift.start || "").slice(0, 10);
+  const time = shift.allDay ? "All day" : shift.timeLabel || rosterTimestampTime(shift.start, shift.end);
+  const location = shift.location ? ` · ${shift.location}` : "";
+  return `${formatDate(date)} · ${time} · ${shift.title || "Shift"}${location}`;
+}
+
+function rosterTimestampTime(start, end) {
+  const startTime = String(start || "").slice(11, 16);
+  const endTime = String(end || "").slice(11, 16);
+  return startTime && endTime ? `${startTime}–${endTime}` : startTime || endTime || "Time not recorded";
+}
+
+function renderRosterSourceStatusMarkup() {
+  const sources = calendarStoreStatus?.rosterSourceStatuses || [];
+  if (!sources.length) return "";
+  return `
+    <section class="roster-source-status" aria-label="Roster update status">
+      ${sources.map((source) => `
+        <article class="roster-source-card roster-source-${escapeHtml(source.state || "unknown")}">
+          <strong>${escapeHtml(source.label)}</strong>
+          <span>${escapeHtml(rosterSourceStateLabel(source))}</span>
+          ${source.providerModifiedAt ? `<small>Source modified ${escapeHtml(formatTimestamp(source.providerModifiedAt))}</small>` : ""}
+          ${source.lastSuccessAt ? `<small>Imported ${escapeHtml(formatTimestamp(source.lastSuccessAt))}</small>` : ""}
+          ${renderRosterProcessorDispatch(source.processorDispatch)}
+          ${renderRosterSourceFileNames(source)}
+          ${source.lastError ? `<small class="roster-source-error">${escapeHtml(source.lastError)}</small>` : ""}
+        </article>
+      `).join("")}
+    </section>
+  `;
+}
+
+function renderRosterSourceFileNames(source = {}) {
+  const names = [...new Set((Array.isArray(source.activeFileNames) ? source.activeFileNames : [source.activeFileName])
+    .map((name) => String(name || "").trim())
+    .filter(Boolean))];
+  if (!names.length) return "";
+  const label = names.length === 1 ? "Current file" : `${names.length} current files`;
+  return `<small>${escapeHtml(label)}: ${names.map(escapeHtml).join(", ")}</small>`;
+}
+
+function rosterSourceStateLabel(source = {}) {
+  if (source.mode === "manual") return source.state === "manual-current" ? "Manual roster uploaded" : "Manual roster needed";
+  if (source.state === "not-configured") return "Not connected";
+  if (source.state === "queued") return "Update queued for background processing";
+  if (source.state === "processing") return "Update is being imported";
+  if (source.state === "failed") return "Latest update failed";
+  if (source.state === "received") return "Latest source update imported";
+  return "Waiting for first source update";
+}
+
+function renderRosterProcessorDispatch(dispatch = null) {
+  if (!dispatch?.status) return "";
+  const status = String(dispatch.status || "");
+  if (status === "accepted") return dispatch.acceptedAt ? `<small>Processor requested ${escapeHtml(formatTimestamp(dispatch.acceptedAt))}</small>` : "<small>Processor requested</small>";
+  if (status === "running") return dispatch.startedAt ? `<small>Processor running since ${escapeHtml(formatTimestamp(dispatch.startedAt))}</small>` : "<small>Processor running</small>";
+  if (status === "failed") return `<small class="roster-source-error">Processor dispatch failed${dispatch.lastError ? `: ${escapeHtml(dispatch.lastError)}` : ""}</small>`;
+  if (status === "requested") return dispatch.requestedAt ? `<small>Processor dispatch requested ${escapeHtml(formatTimestamp(dispatch.requestedAt))}</small>` : "<small>Processor dispatch requested</small>";
+  return "";
+}
+
 function renderFilesList() {
   if (!filesList) return;
-  filesList.innerHTML = renderFilesMarkup({ canRemove: canRemoveImports(), canAdd: true });
+  filesList.innerHTML = renderFilesMarkup({ canRemove: canRemoveImports(), canAdd: canUploadRosters() });
 }
 
 function renderFileSurfaces() {
@@ -6723,14 +6995,20 @@ function firstMondayOfMonth(year, monthIndex) {
 
 function formatTimestamp(value) {
   if (!value) return "-";
-  const formatted = new Date(value).toLocaleString("en-AU", {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  const parts = new Intl.DateTimeFormat("en-AU", {
+    timeZone: "Australia/Melbourne",
     day: "numeric",
     month: "short",
     year: "numeric",
-    hour: "2-digit",
+    hour: "numeric",
     minute: "2-digit",
-  });
-  return formatted.replace(/,\s0(\d:\d{2}\s?pm)$/i, ", $1");
+    hour12: true,
+  }).formatToParts(date);
+  const valueFor = (type) => parts.find((part) => part.type === type)?.value || "";
+  const dayPeriod = valueFor("dayPeriod").toLowerCase();
+  return `${valueFor("day")} ${valueFor("month")} ${valueFor("year")} at ${valueFor("hour")}:${valueFor("minute")}${dayPeriod ? ` ${dayPeriod}` : ""}`;
 }
 
 function formatIssueHeading(item) {
@@ -7644,12 +7922,17 @@ function canRemoveImports() {
   return isViewingCreatorAccount();
 }
 
+function canUploadRosters() {
+  return isViewingCreatorAccount();
+}
+
 function isCreatorAuthenticated() {
   return normalizeEmail(authUserEmail || currentUserEmail) === OWNER_EMAIL && Boolean(authUserPassword || currentUserPassword);
 }
 
 function syncAccountsButton() {
   const ownerView = isViewingCreatorAccount();
+  if (addRosterFilesButton) addRosterFilesButton.classList.toggle("hidden", !canUploadRosters());
   const issueCount = ownerView ? adminIssueCount() : 0;
   accountsButton.innerHTML = ownerView
     ? `Admin${issueCount ? `<span class="notification-badge">${issueCount}</span>` : ""}`
@@ -7809,13 +8092,9 @@ function renderAccountsModal() {
     ` : "";
   const errorsCard = ownerView ? renderAdminErrorsCard(serverOtherUsers) : "";
   const systemCard = ownerView ? renderSystemAdminCard() : "";
-  const filesCard = ownerView ? renderFilesMarkup({
+  const filesCard = ownerView ? renderAdminFilesMarkup({
     canRemove: canRemoveImports(),
     canAdd: true,
-    heading: "Files",
-    description: "Files currently used to generate the creator calendar.",
-    sortOrder: adminFilesSortOrder,
-    showSortControl: true,
   }) : "";
   const adminBody = ownerView
     ? (currentAdminTab === "errors"
@@ -7982,9 +8261,15 @@ function renderCalendarStoreCard() {
         ` : ""}
         <div class="modal-actions">
           <button type="button" class="button button-secondary" data-refresh-calendar-store>Check status</button>
-          <button type="button" class="button button-secondary" data-replace-active-rosters>Rebuild from roster files</button>
           <button type="button" class="button button-secondary" data-view-console>${adminConsoleOpen ? "Hide console" : "View console"}</button>
         </div>
+        <details class="advanced-roster-recovery">
+          <summary>Advanced recovery</summary>
+          <p>Only rebuild when retained source files are known to be correct but the derived roster database is corrupted. Normal roster updates are automatic.</p>
+          ${hasPendingRosterAutomation()
+            ? `<p>Recovery is unavailable while roster updates are queued or processing.</p>`
+            : `<button type="button" class="button button-secondary" data-replace-active-rosters>Rebuild all retained rosters</button>`}
+        </details>
         ${adminConsoleOpen ? renderAdminConsoleMarkup() : ""}
       </div>
     </article>
@@ -8075,19 +8360,7 @@ function renderParserRulesCard() {
           <details class="issue-card" data-parser-rule-source-section="${escapeHtml(group.source)}">
             <summary><strong>${group.source}${unknownSources.has(group.source) ? " *" : ""}</strong> · ${visibleParserRules(group.rules).length} rule${visibleParserRules(group.rules).length === 1 ? "" : "s"}</summary>
             <div class="issues-list">
-              ${allUnknownIssues.filter((item) => item.source === group.source).map((item) => `
-                <article class="issue-card issue-unknown">
-                  <div>
-                    <strong>${escapeHtml(item.code)} · Unrecognised</strong>
-                    <p>${escapeHtml(item.seniorityLabel)} · ${escapeHtml(item.message || "Shift code not recognised.")}</p>
-                  </div>
-                  <div class="account-actions">
-                    ${item.email
-                      ? `<button type="button" class="button button-secondary" data-add-shift-code="${escapeHtml(item.email)}" data-error-id="${escapeHtml(item.id)}" data-shift-code-seniorities="${escapeHtml(item.seniorities.join("|"))}">Edit shift code</button>`
-                      : `<button type="button" class="button button-secondary" data-add-roster-shift-code="${escapeHtml(item.id)}" data-shift-code-seniorities="${escapeHtml(item.seniorities.join("|"))}">Edit shift code</button>`}
-                  </div>
-                </article>
-              `).join("")}
+              ${renderUnknownShiftCodeHierarchy(allUnknownIssues.filter((item) => item.source === group.source), { compact: true })}
               ${parserRuleSeniorityDisplayOrder().map((seniority) => {
                 const rules = visibleParserRules(group.rules).filter((rule) => rule.seniority === seniority);
                 if (!rules.length) return "";
@@ -8217,32 +8490,46 @@ function renderShiftCodeReviewResultsMarkup(items) {
   if (!items.length) {
     return `<article class="issue-card"><p>No unresolved shift codes match this filter.</p></article>`;
   }
+  return renderUnknownShiftCodeHierarchy(items);
+}
+
+function renderUnknownShiftCodeHierarchy(items, options = {}) {
   const bySource = new Map();
-  for (const item of items) {
-    if (!bySource.has(item.source)) bySource.set(item.source, []);
-    bySource.get(item.source).push(item);
+  for (const item of items || []) {
+    if (!bySource.has(item.source)) bySource.set(item.source, new Map());
+    const bySeniority = bySource.get(item.source);
+    if (!bySeniority.has(item.seniority)) bySeniority.set(item.seniority, []);
+    bySeniority.get(item.seniority).push(item);
   }
   return [...bySource.entries()]
     .sort(([left], [right]) => sourceSortRank(left) - sourceSortRank(right) || left.localeCompare(right))
-    .map(([source, sourceItems]) => `
-      <details class="issue-card shift-code-review-source" open>
-        <summary><strong>${escapeHtml(source)}</strong> · ${sourceItems.length} code${sourceItems.length === 1 ? "" : "s"}</summary>
+    .map(([source, bySeniority]) => {
+      const count = [...bySeniority.values()].flat().length;
+      return `<details class="issue-card shift-code-review-source" ${options.compact ? "" : "open"}>
+        <summary><strong>${escapeHtml(source)}</strong> · ${count} unrecognised code${count === 1 ? "" : "s"}</summary>
         <div class="issues-list">
-          ${sourceItems.map((item) => `
-            <article class="issue-card shift-code-review-row">
-              <div>
-                <strong>${escapeHtml(item.code)}</strong>
-                <p>${escapeHtml(item.seniorityLabel)} · ${escapeHtml(item.message || "Shift code not recognised.")}</p>
-                <p>${escapeHtml(item.sample)}${item.count > 1 ? ` · seen ${item.count} times` : ""}</p>
-              </div>
-              <div class="account-actions">
-                ${renderShiftCodeReviewIssueActions(item)}
-              </div>
-            </article>
-          `).join("")}
+          ${[...bySeniority.entries()]
+            .sort(([left], [right]) => senioritySortRank(left) - senioritySortRank(right) || left.localeCompare(right))
+            .map(([seniority, codes]) => `
+              <details class="issue-card shift-code-review-seniority" ${options.compact ? "" : "open"}>
+                <summary><strong>${escapeHtml(seniority || "Unknown seniority")}</strong> · ${codes.length} code${codes.length === 1 ? "" : "s"}</summary>
+                <div class="issues-list">
+                  ${codes.sort((left, right) => left.code.localeCompare(right.code)).map((item) => `
+                    <details class="issue-card shift-code-review-row">
+                      <summary><strong>${escapeHtml(item.code)}</strong>${item.count > 1 ? ` · seen ${item.count} times` : ""}</summary>
+                      <div>
+                        <p>${escapeHtml(item.message || "Shift code not recognised.")}</p>
+                        <p>${escapeHtml(item.sample)}</p>
+                      </div>
+                      <div class="account-actions">${renderShiftCodeReviewIssueActions(item)}</div>
+                    </details>
+                  `).join("")}
+                </div>
+              </details>
+            `).join("")}
         </div>
-      </details>
-    `).join("");
+      </details>`;
+    }).join("");
 }
 
 function renderShiftCodeReviewIssueActions(item) {
@@ -8326,7 +8613,7 @@ function collectUnknownShiftIssues() {
 }
 
 function addUnknownShiftIssueToMap(byKey, item) {
-  const key = `${item.source}|${item.code}`;
+  const key = `${item.source}|${sanitizeRuleSeniority(item.seniority)}|${item.code}`;
   const existing = byKey.get(key);
   if (existing) {
     existing.count += item.count || 1;
@@ -11171,6 +11458,10 @@ function rosterStoreFileToClientEntry(file) {
     size: Number(file.size || 0),
     lastModified: Number(file.lastModified || 0),
     addedAt: file.uploadedAt || "",
+    sourceId: String(file.sourceId || ""),
+    startDate: String(file.startDate || ""),
+    coverageEndDate: String(file.coverageEndDate || ""),
+    endDate: String(file.endDate || ""),
     fromRosterDatabase: true,
   };
 }
@@ -11188,6 +11479,7 @@ function mergeRosterFileEntries(baseEntries, status = calendarStoreStatus, optio
 
   for (const entry of baseEntries || []) {
     if (!entry?.id || removedIds.has(entry.id)) continue;
+    if (String(entry.id).startsWith("automation:") && !storeIds.has(entry.id)) continue;
     if (options.removeMissingFromStore && storeIds.size && !storeIds.has(entry.id)) continue;
     byId.set(entry.id, entry);
   }
@@ -12918,9 +13210,21 @@ async function saveCloudStateNow(snapshot = null) {
 async function replaceActiveRostersWithCurrentUploads() {
   if (!isCreatorAuthenticated()) return;
   try {
+    await refreshCalendarStoreStatus({ silent: true });
+    if (hasPendingRosterAutomation()) {
+      throw new Error("Wait for queued roster updates to finish before using advanced recovery.");
+    }
+    const confirmed = window.confirm(
+      "Advanced recovery force-reparses every retained roster and replaces the active roster set. Continue only if the derived roster database is corrupted.",
+    );
+    if (!confirmed) return;
+    const confirmation = window.prompt('Type REBUILD to confirm this recovery operation.');
+    if (confirmation !== "REBUILD") {
+      setStatus("Roster rebuild cancelled.");
+      return;
+    }
     setStatus("Rebuilding roster database from roster files...");
-    if (!selectedFiles.length) await refreshCalendarStoreStatus({ silent: true });
-    const sourceEntries = selectedFiles.length ? selectedFiles : retainedRosterEntriesFromStatus();
+    const sourceEntries = retainedRosterEntriesFromStatus();
     if (!sourceEntries.length) {
       throw new Error("Rebuild requires at least one retained roster file. Re-upload the missing source files first if none are listed.");
     }
@@ -12939,6 +13243,7 @@ async function replaceActiveRostersWithCurrentUploads() {
     calendarStoreStatus = {
       ...await calendarStoreRequest("replaceActiveRosterFiles", {
         keepFileIds,
+        confirmation,
         selectedDoctorKey: selectedDoctor()?.key || OWNER_DOCTOR_KEY,
       }),
       checkedAt: new Date().toISOString(),
@@ -12952,6 +13257,11 @@ async function replaceActiveRostersWithCurrentUploads() {
   } catch (error) {
     setStatus(error.message || "Could not replace active rosters.", true);
   }
+}
+
+function hasPendingRosterAutomation() {
+  return (calendarStoreStatus?.rosterSourceStatuses || [])
+    .some((source) => ["queued", "processing"].includes(source?.state));
 }
 
 function retainedRosterEntriesFromStatus() {
@@ -13157,7 +13467,7 @@ function sanitizeGlobalUnresolvedShiftCodes(items) {
 async function refreshCalendarStoreStatus(options = {}) {
   if (!isCreatorAuthenticated() || !cloudAvailable) return;
   const statusPayload = {
-    selectedDoctorKey: selectedDoctor()?.key || OWNER_DOCTOR_KEY,
+    selectedDoctorKey: rosterStatusDoctorKey(),
     expectedFileIds: selectedFiles.map((entry) => entry.id),
     ...(options.includeAvailableDoctors ? { includeAvailableDoctors: true } : {}),
     ...(options.lightweight !== false ? { lightweight: true } : {}),
@@ -13197,6 +13507,37 @@ async function refreshCalendarStoreStatus(options = {}) {
     }
   }
   renderFileSurfaces();
+}
+
+async function syncFindmyshiftRoster() {
+  if (!isCreatorAuthenticated() || !cloudAvailable) return;
+  if (!window.confirm("Download the full available FindMyShift roster and queue it for background processing? This will retain and import roster data.")) return;
+  setStatus("Downloading the full FindMyShift roster and queuing secure background processing...");
+  try {
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "syncFindmyshift",
+        confirmation: "sync-findmyshift",
+        email: authUserEmail || currentUserEmail,
+        password: authUserPassword || currentUserPassword,
+      }),
+    });
+    const data = await readJsonResponse(response, "Could not start the FindMyShift sync.");
+    if (!data.ok) throw new Error(data.error || "FindMyShift sync could not be queued.");
+    const providerTime = data.providerModifiedAt ? ` Source modified ${formatTimestamp(data.providerModifiedAt)}.` : "";
+    const queue = data.queue || {};
+    const outcome = data.status === "unchanged"
+      ? "FindMyShift is unchanged; no roster was downloaded or queued."
+      : queue.dispatched
+        ? "FindMyShift roster retained and queued. GitHub background processing has been requested."
+        : "FindMyShift roster retained and queued; background processing is awaiting dispatch.";
+    setStatus(`${outcome}${providerTime}`);
+    await refreshCalendarStoreStatus({ silent: true, syncSwitcher: true });
+  } catch (error) {
+    setStatus(error.message || "Could not start the FindMyShift sync.", true);
+  }
 }
 
 async function toggleAdminConsole() {

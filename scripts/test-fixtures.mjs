@@ -5,7 +5,10 @@ import XLSX from "xlsx";
 
 import { onRequestPost as handleStatePost } from "../functions/api/state.js";
 import { onRequestGet as handleFeedGet } from "../functions/api/feed.js";
-import { buildPreviewFromDerivedEvents, storeCachedSnapshot } from "../functions/_lib/d1-calendar.js";
+import { extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftRowsWorkbook } from "../functions/_lib/findmyshift.js";
+import { buildAutomatedDerivedRosterPayload } from "../functions/_lib/automation-import.js";
+import { buildPreviewFromDerivedEvents, findRosterSyncByProviderVersion, storeCachedSnapshot } from "../functions/_lib/d1-calendar.js";
+import { recordRosterDispatchLifecycle, requestQueuedRosterProcessing } from "../functions/_lib/automation-dispatch.js";
 import { buildRosterView, doctorOptions, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
 
 function cloneWorkbook(workbook) {
@@ -69,6 +72,74 @@ const mmcWorkbook = XLSX.readFile(fileURLToPath(new URL("../fixtures/AdultTerm1.
 const ddhWorkbook = XLSX.readFile(fileURLToPath(new URL("../fixtures/Dandenong_Emergency_Doctors_Roster_02-02-2026_to_03-05-2026.xlsx", import.meta.url)), {
   cellDates: true,
 });
+const findmyshiftFixture = JSON.parse(await readFile(new URL("../fixtures/findmyshift-reports-shifts.sanitised.json", import.meta.url), "utf8"));
+assert.deepEqual(
+  findmyshiftConfiguredRosterRange({ FINDMYSHIFT_FROM: "2026-08-03", FINDMYSHIFT_TO: "2026-11-01" }, new Date("2026-08-06T00:00:00Z")),
+  { from: "2026-08-03", to: "2026-11-01" },
+  "FindMyShift automation should use the configured full available roster range",
+);
+assert.deepEqual(
+  findmyshiftConfiguredRosterRange({ FINDMYSHIFT_DIAGNOSTIC_FROM: "2026-08-03", FINDMYSHIFT_DIAGNOSTIC_TO: "2026-11-01" }, new Date("2026-08-06T00:00:00Z")),
+  { from: "2026-01-01", to: "2027-12-31" },
+  "FindMyShift automation must not inherit a deliberately narrow diagnostic range",
+);
+const findmyshiftRows = extractShiftRows(findmyshiftFixture.report, {
+  staff: findmyshiftFixture.staff,
+  facilities: findmyshiftFixture.facilities,
+});
+assert.equal(findmyshiftRows.length, 3, "FindMyShift duplicate and malformed rows should not generate extra events");
+assert.deepEqual(
+  findmyshiftRows.map((row) => ({ date: row.date, label: row.label, start: row.start, end: row.end, facility: row.facility, seniority: row.seniority, comment: row.comment })),
+  [
+    { date: "2026-08-03", label: "Shift", start: "07:00", end: "15:00", facility: "North Campus", seniority: "Senior", comment: "" },
+    { date: "2026-08-04", label: "Shift", start: "19:00", end: "07:00", facility: "South Campus", seniority: "Senior", comment: "" },
+    { date: "2026-08-05", label: "Annual leave", start: "", end: "", facility: "", seniority: "Registrar", comment: "Approved leave" },
+  ],
+  "FindMyShift parser should preserve timed, overnight, all-day, multi-facility, comment and seniority data",
+);
+const findmyshiftWorkbook = XLSX.read(findmyshiftRowsWorkbook(findmyshiftRows), { type: "array", cellDates: true });
+const findmyshiftDetails = XLSX.utils.sheet_to_json(findmyshiftWorkbook.Sheets["FindMyShift details"], { header: 1, blankrows: false });
+assert.deepEqual(
+  findmyshiftDetails[0],
+  ["Staff ID", "Staff name", "Seniority/job title", "Date", "Shift label", "Start", "End", "Facility", "Comment"],
+  "FindMyShift retained workbook should include its complete structured audit sheet",
+);
+assert.equal(findmyshiftDetails.length, 4, "FindMyShift audit sheet should retain each valid unique source row");
+assert.equal(findmyshiftDetails[2][7], "South Campus", "FindMyShift audit sheet should preserve the resolved facility");
+assert.equal(findmyshiftDetails[3][8], "Approved leave", "FindMyShift audit sheet should preserve comments when the API supplies them");
+const findmyshiftFormData = new FormData();
+findmyshiftFormData.append("rosterFiles", workbookFile(findmyshiftWorkbook, "Dandenong-FindMyShift-fixture.xlsx"));
+const findmyshiftUpload = await parseUploadForm(new Request("http://fixture.test/api/analyze", { method: "POST", body: findmyshiftFormData }));
+const findmyshiftSource = findmyshiftUpload.sources.ddh[0];
+const findmyshiftCrossTermRows = extractShiftRows([
+  ...findmyshiftFixture.report,
+  { "staffId": "staff-001", "facilityId": "facility-north", "date": "2026-10-05", "firstName": "Alex", "lastName": "Example", "payrollId": null, "occurrences": 1, "shift": "07:00-15:00" },
+], { staff: findmyshiftFixture.staff, facilities: findmyshiftFixture.facilities });
+const findmyshiftCrossTermFormData = new FormData();
+findmyshiftCrossTermFormData.append("rosterFiles", workbookFile(XLSX.read(findmyshiftRowsWorkbook(findmyshiftCrossTermRows), { type: "array", cellDates: true }), "Dandenong-FindMyShift-full-range.xlsx"));
+const findmyshiftCrossTermUpload = await parseUploadForm(new Request("http://fixture.test/api/analyze", { method: "POST", body: findmyshiftCrossTermFormData }));
+assert.equal(findmyshiftCrossTermUpload.sources.ddh.length, 1, "a FindMyShift full available roster may safely cross term boundaries");
+const findmyshiftDoctors = doctorOptions([], [findmyshiftSource]);
+const findmyshiftAlex = findmyshiftDoctors.find((doctor) => doctor.key === "ALEX EXAMPLE");
+assert.ok(findmyshiftAlex, "FindMyShift workbook should expose its doctor names to the DDH parser");
+const findmyshiftAlexEvents = buildRosterView([], [findmyshiftSource], findmyshiftAlex.key).events;
+assert.ok(findmyshiftAlexEvents.some((event) => event.start === "2026-08-03T07:00:00+10:00" && event.end === "2026-08-03T15:00:00+10:00"), "FindMyShift timed shifts should reach the DDH calendar parser");
+assert.ok(findmyshiftAlexEvents.some((event) => event.start === "2026-08-04T19:00:00+10:00" && event.end === "2026-08-05T07:00:00+10:00"), "FindMyShift overnight shifts should retain their next-day end time");
+const findmyshiftBlair = findmyshiftDoctors.find((doctor) => doctor.key === "BLAIR EXAMPLE");
+const findmyshiftBlairEvents = buildRosterView([], [findmyshiftSource], findmyshiftBlair.key).events;
+assert.ok(findmyshiftBlairEvents.some((event) => event.title === "Annual Leave" && event.start === "2026-08-05" && event.end === "2026-08-06"), "FindMyShift one-day leave must not expand to the whole week");
+assert.ok(findmyshiftAlexEvents.some((event) => event.location === "North Campus"), "FindMyShift facilities should reach the calendar event location");
+const findmyshiftAutomatedPayload = await buildAutomatedDerivedRosterPayload({
+  file: workbookFile(findmyshiftWorkbook, "Dandenong-FindMyShift-fixture.xlsx"),
+  sourceId: "dandenong-findmyshift",
+  contentHash: "findmyshift-fixture-content-hash",
+  providerVersion: "2026-08-06T06:39:00.000Z",
+});
+assert.equal(findmyshiftAutomatedPayload.eventCount, 3, "automated FindMyShift processing should use the structured Dandenong parser");
+assert.ok(
+  Object.values(findmyshiftAutomatedPayload.eventsByDoctor).flat().some((event) => event.location === "South Campus"),
+  "automated FindMyShift processing should retain facility-specific calendar locations",
+);
 const caseyWorkbook = XLSX.readFile(fileURLToPath(new URL("../fixtures/Casey_Term_2_2026_DRAFT.xlsm", import.meta.url)), {
   cellDates: true,
 });
@@ -80,12 +151,57 @@ const mchBytes = await readFile(fileURLToPath(new URL("../fixtures/Paeds_Term_2_
 const appSource = await readFile(new URL("../public/static/app.js", import.meta.url), "utf8");
 const rosterSource = await readFile(new URL("../public/static/roster.js", import.meta.url), "utf8");
 const stateSource = await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8");
+const findmyshiftModuleSource = await readFile(new URL("../functions/_lib/findmyshift.js", import.meta.url), "utf8");
 const styleSource = await readFile(new URL("../public/static/styles.css", import.meta.url), "utf8");
 const calendarMigrationSource = await readFile(new URL("../migrations/0001_calendar_store.sql", import.meta.url), "utf8");
 const insightIndexMigrationSource = await readFile(new URL("../migrations/0005_roster_insight_index.sql", import.meta.url), "utf8");
 const d1CalendarSource = await readFile(new URL("../functions/_lib/d1-calendar.js", import.meta.url), "utf8");
+const automationIngestSource = await readFile(new URL("../functions/api/automation/ingest.js", import.meta.url), "utf8");
+const automationDispatchSource = await readFile(new URL("../functions/_lib/automation-dispatch.js", import.meta.url), "utf8");
+const automationDispatchEndpointSource = await readFile(new URL("../functions/api/automation/dispatch.js", import.meta.url), "utf8");
+const automationWorkflowSource = await readFile(new URL("../.github/workflows/monash-roster-sync.yml", import.meta.url), "utf8");
 const indexSource = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
 assert.match(indexSource, /id="stayLoggedIn"[^>]*checked/, "Stay logged in should be selected by default");
+assert.equal((appSource.match(/data-test-findmyshift/g) || []).length, 0, "FindMyShift diagnostics should not remain exposed as a UI control");
+assert.equal((appSource.match(/data-sync-findmyshift/g) || []).length, 2, "FindMyShift should render one controlled sync control and one click handler");
+assert.doesNotMatch(
+  stateSource.match(/if \(action === "testFindmyshiftConnection"\)[\s\S]*?if \(action === "adminCreateUser"\)/)?.[0] || "",
+  /Promise\.all/,
+  "FindMyShift diagnostics must not make concurrent API requests",
+);
+assert.doesNotMatch(
+  findmyshiftModuleSource.match(/export async function findmyshiftRosterWorkbook[\s\S]*?export async function findmyshiftShiftReport/)?.[0] || "",
+  /Promise\.all/,
+  "FindMyShift import preparation must not make concurrent API requests",
+);
+assert.ok(
+  automationIngestSource.indexOf("findRosterSyncByProviderVersion") < automationIngestSource.indexOf("file.arrayBuffer()"),
+  "automation ingress should reject an unchanged provider version before hashing or storing file bytes",
+);
+assert.match(
+  automationWorkflowSource,
+  /workflow_dispatch:[\s\S]*dispatch_id[\s\S]*Record processor start[\s\S]*Record processor completion/,
+  "the processor workflow should receive a dispatch id and report lifecycle state",
+);
+assert.doesNotMatch(automationWorkflowSource, /schedule:/, "GitHub cron must not be the roster processor trigger");
+assert.match(automationIngestSource, /requestQueuedRosterProcessing/, "a newly retained roster should request the processor immediately");
+assert.match(automationDispatchSource, /GITHUB_ACTIONS_TOKEN[\s\S]*actions\/workflows[\s\S]*\/dispatches/, "dispatches should use a server-side GitHub Actions token");
+assert.match(automationDispatchEndpointSource, /ROSTER_WATCHDOG_TOKEN/, "the watchdog should use a dedicated credential");
+assert.match(
+  appSource.match(/function renderSystemAdminCard[\s\S]*?function renderAdminConsoleMarkup/)?.[0] || "",
+  /<details class="advanced-roster-recovery">[\s\S]*Rebuild all retained rosters/,
+  "full roster rebuild should be kept behind the advanced recovery disclosure",
+);
+assert.match(
+  appSource.match(/async function replaceActiveRostersWithCurrentUploads[\s\S]*?function retainedRosterEntriesFromStatus/)?.[0] || "",
+  /hasPendingRosterAutomation\(\)[\s\S]*window\.confirm[\s\S]*window\.prompt[\s\S]*confirmation/,
+  "advanced recovery should be blocked by pending automation and require explicit confirmation",
+);
+assert.match(
+  appSource.match(/function mergeRosterFileEntries[\s\S]*?function mergeSelectedFilesWithRosterStoreStatus/)?.[0] || "",
+  /startsWith\("automation:"\)[\s\S]*!storeIds\.has\(entry\.id\)/,
+  "obsolete queued or failed automation references should be removed from the creator's browser file list",
+);
 assert.match(
   appSource.match(/function openLoginModal[\s\S]*?function closeLoginModal/)?.[0] || "",
   /STAY_LOGGED_IN_PREFERENCE_KEY[\s\S]*stayLoggedInPreference === null \? true/,
@@ -1055,21 +1171,20 @@ assert.match(
   "System-card sync issues should compare server counts rather than empty local file handles",
 );
 assert.match(appSource, /data-admin-user-seniority-filter/, "admin users should expose a seniority filter");
-assert.match(appSource, /data-admin-files-sort/, "admin files tab should expose a roster file sort control");
 assert.match(
-  appSource,
-  /adminFilesSortOrder = "hospital-term"[\s\S]*function sortRosterFileEntries/,
-  "admin files should default to hospital and term sorting",
+  appSource.match(/function renderAdminFilesMarkup[\s\S]*?function adminRosterTerms/)?.[0] || "",
+  /Auto-sync[\s\S]*Manual imports[\s\S]*Previously imported files/,
+  "admin files should group automated and manual roster files into the new sections",
 );
 assert.match(
-  appSource.match(/function sortRosterFileEntries[\s\S]*?function renderAdminFilesSortControl/)?.[0] || "",
-  /order === "hospital-term"/,
-  "admin files sort should support hospital then term ordering",
+  appSource.match(/function renderAdminAutoSyncRow[\s\S]*?function adminLatestTermFile/)?.[0] || "",
+  /Current term[\s\S]*Next term/,
+  "automated roster rows should report only current and available next-term files",
 );
 assert.match(
   stateSource.match(/async function calendarStoreStatus[\s\S]*?function summarizeExpectedRosterFiles/)?.[0] || "",
-  /lastModified: Number\(file\.lastModified/,
-  "calendar store status should expose roster file modified timestamps",
+  /sourceId: String\(file\.sourceId[\s\S]*startDate: String\(file\.startDate/,
+  "calendar store status should expose roster source and coverage metadata for Admin grouping",
 );
 assert.doesNotMatch(
   appSource.match(/async function deleteAccount[\s\S]*?function deleteLocalAccountData/)?.[0] || "",
@@ -1147,7 +1262,7 @@ assert.match(appSource, /data-replace-active-rosters/, "creator UI should expose
 assert.match(appSource, /<strong>Roster database<\/strong>/, "system card should use plain roster-database language");
 assert.match(appSource, /source file\$\{retainedSourceTotal === 1 \? \"\" : \"s\"\} retained/, "system card should report retained raw source coverage");
 assert.match(appSource, />Check status<\/button>/, "system card should expose a non-mutating status check");
-assert.match(appSource, />Rebuild from roster files<\/button>/, "system card should expose an explicit roster rebuild action");
+assert.match(appSource, />Rebuild all retained rosters<\/button>/, "advanced recovery should expose an explicit full rebuild action");
 assert.doesNotMatch(
   await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"),
   /loadRepositoryIndex|loadSnapshotRecord|persistSnapshotRecord|storeSnapshotForAccount|storeSnapshotForDoctorProfile/,
@@ -1189,8 +1304,8 @@ assert.match(appSource, /data-ignore-shift-code/, "missing shift-code queue shou
 assert.match(appSource, /Ignored shift codes/, "ignored shift codes should remain editable in hospital rule sections");
 assert.match(appSource, /parserRuleSeniorityAll/, "shift-code seniority picker should expose an All option");
 assert.match(appSource, /function normalizeParserRuleSenioritySelection/, "shift-code seniority picker should keep All and Unknown selections consistent");
-assert.match(appSource, /const key = `\$\{item\.source\}\|\$\{item\.code\}`/, "unresolved shift-code grouping should be by hospital and code");
-assert.match(appSource, /formatShiftCodeSeniorities/, "grouped unresolved shift-code rows should summarize detected seniorities");
+assert.match(appSource, /const key = `\$\{item\.source\}\|\$\{sanitizeRuleSeniority\(item\.seniority\)\}\|\$\{item\.code\}`/, "unresolved shift-code grouping should be by hospital, seniority, and code");
+assert.match(appSource, /renderUnknownShiftCodeHierarchy/, "unresolved shift-code rows should render as a collapsible hospital and seniority hierarchy");
 assert.match(styleSource, /#parserRuleForm[\s\S]*overflow-y: auto/, "shift-code editor form should scroll vertically when it exceeds available height");
 assert.match(appSource, /normalizeDdhParserRuleCodeText/, "DDH shift-code issues should use parser-equivalent label codes");
 assert.match(appSource, /seniority !== "Unknown"[\s\S]*some\(\(rule\) => rule\.code === code\)/, "Unknown-seniority shift-code issues should resolve by source/code");
@@ -1306,7 +1421,11 @@ assert.match(appSource, /function rosterSyncSummary/, "system card should expose
 assert.doesNotMatch(appSource, /function scheduleFailedRosterRetry/, "failed roster syncs should not schedule automatic retry storms");
 assert.match(appSource, /data-reparse-import/, "file cards should expose a visible reparse action");
 assert.match(appSource, /Reparse produced 0 events/, "zero-event reparses should remain visibly failed");
-assert.match(appSource, /formatted\.replace\(\/,\\s0\(\\d:\\d\{2\}\\s\?pm\)\$\/i, \", \$1\"\)/, "PM timestamps should drop their leading zero");
+assert.match(
+  appSource.match(/function formatTimestamp\([\s\S]*?function formatIssueHeading/)?.[0] || "",
+  /timeZone: "Australia\/Melbourne"[\s\S]*hour: "numeric"[\s\S]*hour12: true[\s\S]*formatToParts/,
+  "timestamps should use Australian 12-hour formatting without a leading zero",
+);
 assert.match(
   appSource.match(/accountsBody\.addEventListener\(\"click\"[\s\S]*?\n\}\);/)?.[0] || "",
   /data-reparse-import[\s\S]*reparseRosterFile/,
@@ -1699,7 +1818,7 @@ assert.ok(firasMchView.events.some((event) => event.title === "Annual Leave" && 
 
 const marianPanlilioMch = mchDoctors.find((doctor) => doctor.displayName === "Marian PANLILIO");
 const marianPanlilioMchView = buildRosterView([], [], marianPanlilioMch.key, undefined, {}, {}, [], [], mchWorkbook);
-assert.ok(marianPanlilioMchView.events.some((event) => event.title === "Sick Leave" && event.rawValue.trim() === "S/L PM" && event.allDay));
+assert.ok(marianPanlilioMchView.events.some((event) => event.title === "Sick leave" && event.rawValue.trim() === "S/L PM" && event.allDay));
 
 const houshmandMch = mchDoctors.find((doctor) => doctor.displayName === "Houshmand REFAEI");
 const houshmandMchView = buildRosterView([], [], houshmandMch.key, undefined, {}, {}, [], [], mchWorkbook);
@@ -1740,8 +1859,9 @@ const michaelAnnualOption = doctorOptions([], [], michaelAnnualWorkbook, mchWork
 assert.ok(michaelAnnualOption);
 assert.deepEqual(michaelAnnualOption.sourceTypes, ["casey", "mch"]);
 const michaelAnnualView = buildRosterView([], [], michaelAnnualOption.key, undefined, {}, {}, michaelAnnualOption.aliases, michaelAnnualWorkbook, mchWorkbook);
-const michaelAnnualEvents = michaelAnnualView.events.filter((event) => /leave/i.test(event.title));
-assert.equal(michaelAnnualEvents.length, 2);
+const michaelAnnualEvents = michaelAnnualView.events.filter((event) => ["Conference Leave", "Annual Leave"].includes(event.title));
+// Distinct leave categories must remain distinct even when their date ranges touch.
+assert.equal(michaelAnnualEvents.length, 3);
 assert.ok(michaelAnnualEvents.some((event) => event.title === "Conference Leave" && event.start === "2026-07-20" && event.end === "2026-07-27"));
 assert.ok(michaelAnnualEvents.some((event) => event.title === "Annual Leave" && event.start === "2026-07-27" && event.end === "2026-08-03"));
 assert.ok(michaelAnnualView.events.some((event) => event.source === "MCH"));
@@ -1776,7 +1896,7 @@ const caseyAnnual = doctorOptions([], [], annualSynonymWorkbook).find((doctor) =
 const paedsSick = doctorOptions([], [], annualSynonymWorkbook).find((doctor) => doctor.displayName === "Paeds SICK");
 assert.ok(buildRosterView([], [], paedsAnnual.key, undefined, {}, {}, paedsAnnual.aliases, annualSynonymWorkbook).events.some((event) => event.title === "Annual Leave" && event.rawValue === "Paeds AL"));
 assert.ok(buildRosterView([], [], caseyAnnual.key, undefined, {}, {}, caseyAnnual.aliases, annualSynonymWorkbook).events.some((event) => event.title === "Annual Leave" && event.rawValue === "Casey AL"));
-assert.ok(buildRosterView([], [], paedsSick.key, undefined, {}, {}, paedsSick.aliases, annualSynonymWorkbook).events.some((event) => event.title === "Sick Leave" && event.rawValue === "Paeds S/L"));
+assert.ok(buildRosterView([], [], paedsSick.key, undefined, {}, {}, paedsSick.aliases, annualSynonymWorkbook).events.some((event) => event.title === "Sick leave" && event.rawValue === "Paeds S/L"));
 
 const view = buildRosterView(mmcWorkbook, ddhWorkbook, richard.key);
 const summary = previewSummary(view.events);
@@ -1792,7 +1912,7 @@ assert.ok(view.events.some((event) => event.title === "Conference Leave" && even
 assert.ok(view.reviewItems.length >= view.events.length);
 assert.ok(view.events.some((event) => event.rawValue.includes("Annual leave")));
 assert.ok(view.events.some((event) => event.title === "DDH: Orange PM"));
-assert.ok(view.events.some((event) => event.title === "Sick Leave"));
+assert.ok(view.events.some((event) => event.title === "Sick leave"));
 
 const ddhFullWorkbook = XLSX.utils.book_new();
 const ddhFullSheet = XLSX.utils.aoa_to_sheet([
@@ -1956,6 +2076,9 @@ class MemoryD1 {
     this.dailyPresence = new Map();
     this.issues = new Map();
     this.rawFiles = new Map();
+    this.rosterSources = new Map();
+    this.rosterSyncRuns = new Map();
+    this.rosterDispatches = new Map();
     this.accountProfiles = new Map();
     this.accountClaims = new Map();
     this.accountStates = new Map();
@@ -1985,6 +2108,9 @@ class MemoryD1 {
       "dailyPresence",
       "issues",
       "rawFiles",
+      "rosterSources",
+      "rosterSyncRuns",
+      "rosterDispatches",
       "accountProfiles",
       "accountClaims",
       "accountStates",
@@ -2030,13 +2156,14 @@ class MemoryD1Statement {
         id: args[0],
         name: args[1],
         source_type: args[2],
-        active: args[3],
-        size: args[4],
-        last_modified: args[5],
-        added_at: args[6],
-        uploaded_at: args[7],
-        uploaded_by: args[8],
-        parsed_at: args[9],
+        source_id: args[3],
+        active: args[4],
+        size: args[5],
+        last_modified: args[6],
+        added_at: args[7],
+        uploaded_at: args[8],
+        uploaded_by: args[9],
+        parsed_at: args[10],
       });
       return { success: true };
     }
@@ -2051,6 +2178,63 @@ class MemoryD1Statement {
         type: args[6],
         data_url: args[7],
         uploaded_at: args[8],
+      });
+      return { success: true };
+    }
+    if (sql.startsWith("INSERT INTO roster_sources")) {
+      this.db.rosterSources.set(args[0], {
+        id: args[0], provider: args[1], source_type: args[2], label: args[3], enabled: args[4],
+        config_json: args[5], cursor_json: args[6], provider_version: args[7], provider_modified_at: args[8],
+        last_checked_at: args[9], last_success_at: args[10], last_error: args[11], active_file_id: args[12],
+        created_at: args[13], updated_at: args[14],
+      });
+      return { success: true };
+    }
+    if (sql.startsWith("INSERT INTO roster_sync_runs")) {
+      this.db.rosterSyncRuns.set(args[0], {
+        id: args[0], source_id: args[1], trigger_type: args[2], provider_version: args[3],
+        content_hash: args[4], file_id: args[5], status: args[6], message: args[7],
+        doctor_count: args[8], event_count: args[9], started_at: args[10], completed_at: args[11],
+      });
+      return { success: true };
+    }
+    if (sql.startsWith("INSERT INTO roster_dispatches")) {
+      this.db.rosterDispatches.set(args[0], {
+        id: args[0], status: "requested", reason: args[1], github_run_id: "", requested_at: args[2],
+        accepted_at: "", started_at: "", completed_at: "", retry_after: args[3], attempt_count: args[4], last_error: "",
+      });
+      return { success: true };
+    }
+    if (sql.startsWith("UPDATE roster_dispatches")) {
+      const dispatch = this.db.rosterDispatches.get(args[8]);
+      if (dispatch) Object.assign(dispatch, {
+        status: args[0], github_run_id: args[1], accepted_at: args[2], started_at: args[3], completed_at: args[4],
+        retry_after: args[5], attempt_count: args[6], last_error: args[7],
+      });
+      return { success: true };
+    }
+    if (sql.startsWith("UPDATE roster_sync_runs") && sql.includes("status = 'processing'")) {
+      const run = this.db.rosterSyncRuns.get(args[1]);
+      if (run) Object.assign(run, { status: "processing", message: args[0], completed_at: "" });
+      return { success: true };
+    }
+    if (sql.startsWith("UPDATE roster_sync_runs") && sql.includes("status = 'superseded'")) {
+      if (sql.includes("AS stale_run")) return { success: true, meta: { changes: 0 } };
+      let changes = 0;
+      for (const run of this.db.rosterSyncRuns.values()) {
+        const raw = this.db.rawFiles.get(run.file_id);
+        if (run.source_id !== args[2] || run.provider_version !== args[3] || run.id === args[4]) continue;
+        if (!["queued", "processing"].includes(run.status)) continue;
+        if (String(raw?.name || "").toLowerCase() !== String(args[5] || "").toLowerCase()) continue;
+        Object.assign(run, { status: "superseded", message: args[0], completed_at: args[1] });
+        changes += 1;
+      }
+      return { success: true, meta: { changes } };
+    }
+    if (sql.startsWith("UPDATE roster_sync_runs")) {
+      const run = this.db.rosterSyncRuns.get(args[6]);
+      if (run) Object.assign(run, {
+        status: args[0], message: args[1], file_id: args[2], doctor_count: args[3], event_count: args[4], completed_at: args[5],
       });
       return { success: true };
     }
@@ -2396,6 +2580,16 @@ class MemoryD1Statement {
   async all() {
     const sql = this.sql;
     const args = this.args;
+    if (sql.startsWith("PRAGMA table_info(roster_files)")) {
+      return {
+        results: ["id", "name", "source_type", "source_id", "active", "size", "last_modified", "added_at", "uploaded_at", "uploaded_by", "parsed_at"].map((name) => ({ name })),
+      };
+    }
+    if (sql.startsWith("PRAGMA table_info(roster_sources)")) {
+      return {
+        results: ["id", "provider", "source_type", "label", "enabled", "config_json", "cursor_json", "provider_version", "provider_modified_at", "last_checked_at", "last_success_at", "last_error", "active_file_id", "created_at", "updated_at"].map((name) => ({ name })),
+      };
+    }
     if (sql.startsWith("PRAGMA table_info(account_profiles)")) {
       return {
         results: [
@@ -2437,6 +2631,15 @@ class MemoryD1Statement {
           "issue_json",
         ].map((name) => ({ name })),
       };
+    }
+    if (sql.startsWith("SELECT * FROM roster_sources ORDER BY")) {
+      return { results: [...this.db.rosterSources.values()].sort((left, right) => String(left.label).localeCompare(String(right.label)) || String(left.id).localeCompare(String(right.id))) };
+    }
+    if (sql.startsWith("SELECT * FROM roster_sync_runs") && !sql.includes("WHERE source_id")) {
+      return { results: [...this.db.rosterSyncRuns.values()].sort((left, right) => String(right.started_at).localeCompare(String(left.started_at)) || String(right.id).localeCompare(String(left.id))).slice(0, Number(args[0] || 50)) };
+    }
+    if (sql.startsWith("SELECT * FROM roster_dispatches ORDER BY")) {
+      return { results: [...this.db.rosterDispatches.values()].sort((left, right) => String(right.requested_at).localeCompare(String(left.requested_at))).slice(0, 1) };
     }
     if (sql.includes("FROM roster_file_doctors") && sql.includes("file_name") && sql.includes("event_count")) {
       const requestedKeys = sql.includes("roster_file_doctors.doctor_key IN") ? new Set(args) : null;
@@ -2793,6 +2996,7 @@ class MemoryD1Statement {
             id: file.id,
             name: file.name,
             source_type: file.source_type,
+            source_id: file.source_id,
             active: file.active,
             size: file.size,
             last_modified: file.last_modified,
@@ -2819,9 +3023,10 @@ class MemoryD1Statement {
             const starts = events.map((event) => event.start_date).filter(Boolean).sort();
             const ends = events.map((event) => event.end_date).filter(Boolean).sort();
             return {
-              id: file.id,
-              name: file.name,
-              source_type: file.source_type,
+            id: file.id,
+            name: file.name,
+            source_type: file.source_type,
+            source_id: file.source_id,
               active: file.active,
               last_modified: file.last_modified,
               added_at: file.added_at,
@@ -2979,6 +3184,39 @@ class MemoryD1Statement {
   async first() {
     const sql = this.sql;
     const args = this.args;
+    if (sql.startsWith("SELECT * FROM roster_sources WHERE id = ?")) {
+      return this.db.rosterSources.get(args[0]) || null;
+    }
+    if (sql.startsWith("SELECT id FROM roster_sync_runs WHERE status IN")) {
+      return [...this.db.rosterSyncRuns.values()].find((row) => ["queued", "processing"].includes(row.status)) || null;
+    }
+    if (sql.startsWith("SELECT * FROM roster_dispatches WHERE status IN")) {
+      return [...this.db.rosterDispatches.values()]
+        .filter((row) => ["requested", "accepted", "running", "failed"].includes(row.status) && String(row.retry_after || "") > String(args[0] || ""))
+        .sort((left, right) => String(right.requested_at).localeCompare(String(left.requested_at)))[0] || null;
+    }
+    if (sql.startsWith("SELECT * FROM roster_dispatches WHERE id = ?")) {
+      return this.db.rosterDispatches.get(args[0]) || null;
+    }
+    if (sql.startsWith("SELECT * FROM roster_dispatches ORDER BY")) {
+      return [...this.db.rosterDispatches.values()].sort((left, right) => String(right.requested_at).localeCompare(String(left.requested_at)))[0] || null;
+    }
+    if (sql.includes("FROM roster_sync_runs") && sql.includes("WHERE roster_sync_runs.source_id = ?") && sql.includes("provider_version = ?")) {
+      const statusOrder = new Map([["success", 0], ["processing", 1], ["queued", 2], ["failed", 3]]);
+      return [...this.db.rosterSyncRuns.values()]
+        .filter((row) => row.source_id === args[0] && row.provider_version === args[1])
+        .filter((row) => String(this.db.rawFiles.get(row.file_id)?.name || "").toLowerCase() === String(args[2] || "").toLowerCase())
+        .filter((row) => statusOrder.has(row.status))
+        .sort((left, right) => (statusOrder.get(left.status) - statusOrder.get(right.status))
+          || String(right.started_at).localeCompare(String(left.started_at)))[0] || null;
+    }
+    if (sql.includes("FROM roster_sync_runs") && sql.includes("WHERE source_id = ?")) {
+      let rows = [...this.db.rosterSyncRuns.values()]
+        .filter((row) => row.source_id === args[0] && row.content_hash === args[1]);
+      if (sql.includes("status = 'success'")) rows = rows.filter((row) => row.status === "success");
+      if (sql.includes("status IN ('queued', 'processing')")) rows = rows.filter((row) => ["queued", "processing"].includes(row.status));
+      return rows.sort((left, right) => String(right.completed_at || right.started_at).localeCompare(String(left.completed_at || left.started_at)))[0] || null;
+    }
     if (sql.includes("COUNT(*) AS active_file_count") && sql.includes("FROM roster_files")) {
       const activeFiles = [...this.db.files.values()].filter((file) => file.active === 1);
       return {
@@ -3230,6 +3468,57 @@ function memoryD1AccountRecord(db, email) {
     })),
   };
 }
+
+const dispatchDb = new MemoryD1();
+dispatchDb.rosterSyncRuns.set("queued-dispatch", {
+  id: "queued-dispatch", source_id: "monash-adults", trigger_type: "sharepoint", provider_version: "1.0",
+  content_hash: "dispatch-hash", file_id: "dispatch-file", status: "queued", message: "Queued", doctor_count: 0, event_count: 0,
+  started_at: "2026-07-29T04:00:00.000Z", completed_at: "",
+});
+const originalFetch = globalThis.fetch;
+const dispatchRequests = [];
+globalThis.fetch = async (url, options = {}) => {
+  dispatchRequests.push({ url: String(url), options });
+  return new Response(null, { status: 204 });
+};
+const dispatched = await requestQueuedRosterProcessing({ ROSTER_DB: dispatchDb, GITHUB_ACTIONS_TOKEN: "fixture-token" }, {
+  reason: "fixture", now: new Date("2026-07-29T04:01:00.000Z"),
+});
+assert.equal(dispatched.dispatched, true, "a queued roster should immediately dispatch GitHub processing");
+assert.equal(dispatchRequests.length, 1, "a new queue should make one GitHub dispatch request");
+assert.match(dispatchRequests[0].url, /actions\/workflows\/monash-roster-sync\.yml\/dispatches$/, "dispatch should target the roster workflow");
+const duplicateDispatch = await requestQueuedRosterProcessing({ ROSTER_DB: dispatchDb, GITHUB_ACTIONS_TOKEN: "fixture-token" }, {
+  reason: "fixture-repeat", now: new Date("2026-07-29T04:02:00.000Z"),
+});
+assert.equal(duplicateDispatch.dispatched, false, "an accepted dispatch lease should prevent duplicate GitHub runs");
+assert.equal(dispatchRequests.length, 1, "the duplicate queue check should not call GitHub again");
+const lifecycle = await recordRosterDispatchLifecycle({ ROSTER_DB: dispatchDb }, {
+  dispatchId: dispatched.dispatch.id, event: "started", githubRunId: "12345",
+});
+assert.equal(lifecycle.dispatch.status, "running", "the workflow start callback should make dispatch state observable");
+globalThis.fetch = originalFetch;
+
+const rejectedDispatchDb = new MemoryD1();
+rejectedDispatchDb.rosterSyncRuns.set("rejected-dispatch", {
+  id: "rejected-dispatch", source_id: "monash-adults", trigger_type: "sharepoint", provider_version: "2.0",
+  content_hash: "rejected-hash", file_id: "rejected-file", status: "queued", message: "Queued", doctor_count: 0, event_count: 0,
+  started_at: "2026-07-29T04:00:00.000Z", completed_at: "",
+});
+let rejectedRequestCount = 0;
+globalThis.fetch = async () => {
+  rejectedRequestCount += 1;
+  return Response.json({ message: "Resource not accessible by personal access token" }, { status: 403 });
+};
+const rejectedDispatch = await requestQueuedRosterProcessing({ ROSTER_DB: rejectedDispatchDb, GITHUB_ACTIONS_TOKEN: "rejected-token" }, {
+  reason: "fixture-rejected", now: new Date("2026-07-29T04:01:00.000Z"),
+});
+assert.equal(rejectedDispatch.reason, "github-rejected", "a rejected GitHub token should be visible to the caller");
+const rejectedRetry = await requestQueuedRosterProcessing({ ROSTER_DB: rejectedDispatchDb, GITHUB_ACTIONS_TOKEN: "rejected-token" }, {
+  reason: "fixture-rejected-repeat", now: new Date("2026-07-29T04:02:00.000Z"),
+});
+assert.equal(rejectedRetry.dispatched, false, "a rejected token should honour its retry lease");
+assert.equal(rejectedRequestCount, 1, "a rejected GitHub token must not be retried for every watchdog tick");
+globalThis.fetch = originalFetch;
 
 const stateStore = new MemoryStore();
 stateStore.d1 = new MemoryD1();
@@ -4784,7 +5073,7 @@ await postState(sharedUploadStore, {
   password: creatorPassword,
 }, sharedUploadDb);
 await seedUser(sharedUploadStore, "shared-user@example.com", "shared-password", "Shared User", sharedUploadDb);
-const sharedUserSave = await postState(sharedUploadStore, {
+const sharedUserSave = await postStateRaw(sharedUploadStore, {
   action: "saveDerivedCalendarFile",
   email: "shared-user@example.com",
   password: "shared-password",
@@ -4803,8 +5092,22 @@ const sharedUserSave = await postState(sharedUploadStore, {
     }],
   },
 }, sharedUploadDb);
-assert.equal(sharedUserSave.ok, true, "non-creator users should be able to add roster files to D1");
-assert.equal(sharedUploadDb.files.get("shared-ddh")?.uploaded_by, "shared-user@example.com");
+assert.equal(sharedUserSave.response.status, 403, "non-creator users must not add roster files to D1");
+assert.equal(sharedUploadDb.files.has("shared-ddh"), false);
+await postState(sharedUploadStore, {
+  action: "saveDerivedCalendarFile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  file: { id: "shared-ddh", name: "Shared_DDH_04-05-2026_to_02-08-2026.xlsx", sourceType: "ddh", active: true, lastModified: 20 },
+  doctors: [{ key: "SHARED USER", displayName: "Shared User", sourceType: "ddh" }],
+  eventsByDoctor: {
+    "SHARED USER": [{
+      id: "shared-ddh-shift", source: "DDH", title: "Shared DDH Shift", allDay: true,
+      start: "2026-05-06", end: "2026-05-06", rawValue: "Shared DDH Shift", monthKey: "2026-05",
+    }],
+  },
+}, sharedUploadDb);
+assert.equal(sharedUploadDb.files.get("shared-ddh")?.uploaded_by, "rhaydon@gmail.com");
 const sharedUserReset = await postStateRaw(sharedUploadStore, {
   action: "resetDerivedCalendarFile",
   email: "shared-user@example.com",
@@ -4812,14 +5115,82 @@ const sharedUserReset = await postStateRaw(sharedUploadStore, {
   fileId: "shared-ddh",
 }, sharedUploadDb);
 assert.equal(sharedUserReset.response.status, 403, "non-creator users must not remove D1 roster files");
+const detailedSharedStatus = await postState(sharedUploadStore, {
+  action: "calendarStoreStatus",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  selectedDoctorKey: "SHARED USER",
+  lightweight: false,
+}, sharedUploadDb);
+const sharedDdhStatus = detailedSharedStatus.files.find((file) => file.id === "shared-ddh");
+assert.equal(sharedDdhStatus?.selectedDoctorEventCount, 1, "full roster status should count the selected doctor's events per file");
+assert.equal(sharedDdhStatus?.selectedDoctor?.displayName, "Shared User", "full roster status should report the matched roster identity");
+assert.equal(sharedDdhStatus?.selectedDoctor?.shifts?.[0]?.title, "Shared DDH Shift", "full roster status should return the selected doctor's shifts");
+assert.equal(detailedSharedStatus.rosterSourceStatuses?.find((source) => source.id === "monash-adults")?.state, "not-configured", "source status should distinguish an unconnected automation source");
+for (const [fileId, name] of [
+  ["automation:monash-paeds:failed", "Paeds - Term 1 2026.xlsx"],
+  ["automation:monash-adults:queued", "AdultTerm3.2026.xlsx"],
+]) {
+  sharedUploadDb.rawFiles.set(fileId, {
+    file_id: fileId,
+    name,
+    source_type: fileId.includes("paeds") ? "mch" : "mmc",
+    size: 100,
+    last_modified: 1,
+    object_key: `automation/${fileId}`,
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    data_url: "",
+    uploaded_at: "2026-07-29T03:00:00.000Z",
+  });
+}
+sharedUploadDb.rosterSyncRuns.set("failed-paeds", {
+  id: "failed-paeds", source_id: "monash-paeds", trigger_type: "sharepoint", provider_version: "4.0",
+  content_hash: "failed-hash", file_id: "automation:monash-paeds:failed", status: "failed", message: "Could not parse",
+  doctor_count: 0, event_count: 0, started_at: "2026-07-29T02:00:00.000Z", completed_at: "2026-07-29T02:01:00.000Z",
+});
+sharedUploadDb.rosterSyncRuns.set("queued-adults", {
+  id: "queued-adults", source_id: "monash-adults", trigger_type: "sharepoint", provider_version: "19.0",
+  content_hash: "queued-hash", file_id: "automation:monash-adults:queued", status: "queued", message: "Queued",
+  doctor_count: 0, event_count: 0, started_at: "2026-07-29T03:00:00.000Z", completed_at: "",
+});
+sharedUploadDb.rosterSources.set("monash-adults", {
+  id: "monash-adults", provider: "sharepoint", source_type: "mmc", label: "Monash Adults", enabled: 1,
+  config_json: "{}", cursor_json: "{}", provider_version: "19.0", provider_modified_at: "2026-07-29T02:59:00.000Z",
+  last_checked_at: "2026-07-29T03:00:00.000Z", last_success_at: "2026-07-29T02:30:00.000Z", last_error: "",
+  active_file_id: "", created_at: "2026-07-29T01:00:00.000Z", updated_at: "2026-07-29T03:00:00.000Z",
+});
+const matchingProviderVersion = await findRosterSyncByProviderVersion(
+  sharedUploadDb,
+  "monash-adults",
+  "19.0",
+  "AdultTerm3.2026.xlsx",
+);
+assert.equal(matchingProviderVersion?.id, "queued-adults", "the same SharePoint file version should resolve to its existing queue run");
+const automatedPendingStatus = await postState(sharedUploadStore, {
+  action: "calendarStoreStatus",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  selectedDoctorKey: "SHARED USER",
+  lightweight: false,
+}, sharedUploadDb);
+assert.equal(
+  automatedPendingStatus.files.some((file) => String(file.id).startsWith("automation:")),
+  false,
+  "queued and failed automation payloads should not inflate the active roster-file total",
+);
+assert.equal(
+  automatedPendingStatus.rosterSourceStatuses.find((source) => source.id === "monash-adults")?.state,
+  "queued",
+  "an update waiting for GitHub should be reported as queued even when an older version imported successfully",
+);
 for (const [fileId, name, lastModified, title] of [
   ["supersede-old", "MMC_Term2_2026_old.xlsx", 10, "Old MMC Shift"],
   ["supersede-new", "MMC_Term2_2026_new.xlsx", 30, "New MMC Shift"],
 ]) {
   await postState(sharedUploadStore, {
     action: "saveDerivedCalendarFile",
-    email: "shared-user@example.com",
-    password: "shared-password",
+    email: "rhaydon@gmail.com",
+    password: creatorPassword,
     file: { id: fileId, name, sourceType: "mmc", active: true, lastModified },
     doctors: [{ key: "SHARED USER", displayName: "Shared User", sourceType: "mmc" }],
     eventsByDoctor: {
@@ -4844,8 +5215,8 @@ for (const [fileId, name, lastModified, start, end] of [
 ]) {
   await postState(sharedUploadStore, {
     action: "saveDerivedCalendarFile",
-    email: "shared-user@example.com",
-    password: "shared-password",
+    email: "rhaydon@gmail.com",
+    password: creatorPassword,
     file: { id: fileId, name, sourceType: "mmc", active: true, lastModified },
     doctors: [{ key: "ADJACENT DOCTOR", displayName: "Adjacent Doctor", sourceType: "mmc" }],
     eventsByDoctor: {
@@ -4875,8 +5246,8 @@ assert.equal(sharedUploadDb.files.get("adjacent-term-1")?.active, 1, "adjacent t
 assert.equal(sharedUploadDb.files.get("adjacent-term-2")?.active, 1, "adjacent next-term roster should remain active");
 await postState(sharedUploadStore, {
   action: "saveDerivedCalendarFile",
-  email: "shared-user@example.com",
-  password: "shared-password",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
   file: { id: "ambiguous-left", name: "Ambiguous_Left.xlsx", sourceType: "mch", active: true, lastModified: 0 },
   doctors: [{ key: "SHARED USER", displayName: "Shared User", sourceType: "mch" }],
   eventsByDoctor: {
@@ -4885,8 +5256,8 @@ await postState(sharedUploadStore, {
 }, sharedUploadDb);
 await postState(sharedUploadStore, {
   action: "saveDerivedCalendarFile",
-  email: "shared-user@example.com",
-  password: "shared-password",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
   file: { id: "ambiguous-right", name: "Ambiguous_Right.xlsx", sourceType: "mch", active: true, lastModified: 0 },
   doctors: [{ key: "SHARED USER", displayName: "Shared User", sourceType: "mch" }],
   eventsByDoctor: {
@@ -5986,6 +6357,7 @@ await postState(deletionStore, {
   email: "rhaydon@gmail.com",
   password: creatorPassword,
   keepFileIds: ["keep-roster"],
+  confirmation: "REBUILD",
 }, deletionStore.d1);
 assert.equal(deletionStore.d1.files.has("keep-roster"), true, "recovery should retain the requested current roster");
 assert.equal(deletionStore.d1.files.has("missing-from-save"), false, "recovery should remove active rosters outside the current upload set");
@@ -5995,6 +6367,7 @@ const emptyReplacement = await postStateRaw(deletionStore, {
   email: "rhaydon@gmail.com",
   password: creatorPassword,
   keepFileIds: [],
+  confirmation: "REBUILD",
 }, deletionStore.d1);
 assert.equal(emptyReplacement.response.status, 400, "rebuild-all must not accept an empty retained roster set");
 

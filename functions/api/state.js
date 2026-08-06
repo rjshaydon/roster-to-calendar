@@ -1,4 +1,7 @@
 import { applyEventOverrides, customEventsToEvents, defaultSettings, inspectImportRecord, normalizeRosterName } from "../_lib/roster.js";
+import { AUTOMATION_SOURCES } from "../_lib/automation-import.js";
+import { requestQueuedRosterProcessing } from "../_lib/automation-dispatch.js";
+import { findmyshiftLastModified, findmyshiftReportDiagnostics, findmyshiftShiftReport } from "../_lib/findmyshift.js";
 import {
   buildPreviewFromDerivedEvents,
   accountMirrorStatus,
@@ -19,6 +22,12 @@ import {
   mergeHospitalLocationsIntoSettings,
   listAccountMirrors,
   listConsoleMessages,
+  listRosterSources,
+  listRosterSyncRuns,
+  listActiveRetainedRosterFiles,
+  createRosterSyncRun,
+  findQueuedRosterSyncByHash,
+  loadLatestRosterDispatch,
   loadAccountMirror,
   loadAccountStateMirror,
   loadDoctorProfileMirror,
@@ -212,6 +221,85 @@ export async function onRequestPost(context) {
     }
 
     const account = await verifyD1Account(context.env.ROSTER_DB, email, password);
+    if (action === "testFindmyshiftConnection") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      const apiKey = String(context.env.FINDMYSHIFT_API_KEY || "").trim();
+      const teamId = String(context.env.FINDMYSHIFT_TEAM_ID || "").trim();
+      if (!apiKey || !teamId) {
+        return Response.json({ error: "FindMyShift API key or team ID is not configured." }, { status: 422 });
+      }
+      try {
+        const providerModifiedAt = await findmyshiftLastModified(apiKey, teamId);
+        const range = findmyshiftDiagnosticTermRange(context.env);
+        // The report itself has names and the roster rows.  Keep this
+        // read-only diagnostic to two serial API calls; staff/facility detail
+        // lookups are needed only when a real import has been authorised.
+        const report = await findmyshiftShiftReport(apiKey, teamId, range);
+        const diagnostics = findmyshiftReportDiagnostics(report, range);
+        console.log("FindMyShift report read-only diagnostic succeeded", JSON.stringify({
+          responseFormat: diagnostics.responseFormat,
+          recognisedShiftCount: diagnostics.recognisedShiftCount,
+          staffCount: diagnostics.staffCount,
+          dateRange: diagnostics.dateRange,
+          recognisedFields: diagnostics.recognisedFields,
+          flatShiftRows: diagnostics.flatShiftRows,
+          responseShape: diagnostics.responseShape,
+        }));
+        return Response.json({ ok: true, connected: true, providerModifiedAt, report: diagnostics });
+      } catch (error) {
+        const diagnostic = safeFindmyshiftFailureDiagnostic(error);
+        console.error("FindMyShift report read-only diagnostic failed", JSON.stringify(diagnostic));
+        return Response.json({
+          error: `FindMyShift report diagnostic failed (${diagnostic.code}${diagnostic.status ? `, HTTP ${diagnostic.status}` : ""}${diagnostic.contentType ? `, ${diagnostic.contentType}` : ""}${diagnostic.responseBytes ? `, ${diagnostic.responseBytes} bytes` : ""}).`,
+          diagnostic,
+        }, { status: diagnostic.status === 429 ? 429 : 422 });
+      }
+    }
+    if (action === "syncFindmyshift") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      if (body?.confirmation !== "sync-findmyshift") {
+        return Response.json({ error: "Explicit sync confirmation is required." }, { status: 400 });
+      }
+      const processorTarget = String(context.env.ROSTER_AUTOMATION_WORKFLOW_TARGET || "production").trim().toLowerCase();
+      const required = [
+        "FINDMYSHIFT_API_KEY",
+        "FINDMYSHIFT_TEAM_ID",
+        "ROSTER_AUTOMATION_TOKEN",
+        "GITHUB_ACTIONS_TOKEN",
+      ].filter((name) => !String(context.env[name] || "").trim());
+      if (processorTarget === "preview") {
+        required.push(...[
+          "ROSTER_AUTOMATION_BASE_URL",
+          "ROSTER_GITHUB_WORKFLOW_REF",
+        ].filter((name) => !String(context.env[name] || "").trim()));
+      }
+      if (required.length) {
+        return Response.json({ error: `Controlled FindMyShift sync is not configured: ${required.join(", ")}.` }, { status: 422 });
+      }
+      if (processorTarget !== "preview" && processorTarget !== "production") {
+        return Response.json({ error: "Controlled FindMyShift sync has an invalid processor target." }, { status: 422 });
+      }
+      const response = await fetch(new URL("/api/automation/findmyshift-check", context.request.url), {
+        method: "POST",
+        headers: { Authorization: `Bearer ${String(context.env.ROSTER_AUTOMATION_TOKEN).trim()}` },
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result?.ok) {
+        return Response.json({ error: "Controlled FindMyShift sync could not be queued.", status: String(result?.status || "failed") }, { status: 422 });
+      }
+      return Response.json({
+        ok: true,
+        status: String(result.status || "queued"),
+        providerModifiedAt: String(result.providerModifiedAt || ""),
+        queue: result.queue && typeof result.queue === "object"
+          ? { runId: String(result.queue.runId || ""), dispatched: result.queue.dispatched === true }
+          : null,
+      });
+    }
     if (action === "adminCreateUser") {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
@@ -552,6 +640,9 @@ export async function onRequestPost(context) {
     }
 
     if (action === "saveDerivedCalendarFile") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required to import roster files." }, { status: 403 });
+      }
       if (!hasCalendarDb(context.env)) {
         return Response.json({ ok: false, unavailable: true });
       }
@@ -622,6 +713,9 @@ export async function onRequestPost(context) {
     }
 
     if (action === "uploadRawRosterFile") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required to retain roster files." }, { status: 403 });
+      }
       if (!hasCalendarDb(context.env)) return Response.json({ ok: false, unavailable: true });
       const file = body?.file || {};
       const dataUrl = String(body?.dataUrl || "");
@@ -679,6 +773,14 @@ export async function onRequestPost(context) {
     if (action === "replaceActiveRosterFiles") {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      if (String(body?.confirmation || "") !== "REBUILD") {
+        return Response.json({ error: "Advanced rebuild confirmation is required." }, { status: 400 });
+      }
+      const pendingAutomationRuns = (await listRosterSyncRuns(context.env.ROSTER_DB, { limit: 100 }))
+        .filter((run) => ["queued", "processing"].includes(run.status));
+      if (pendingAutomationRuns.length) {
+        return Response.json({ error: "Wait for queued roster updates to finish before rebuilding." }, { status: 409 });
       }
       const keepFileIds = sanitizeRepositoryFileIds(body?.keepFileIds);
       if (!keepFileIds.length) {
@@ -961,7 +1063,8 @@ export async function onRequestPost(context) {
         await saveD1ParserExtensionRule(context.env.ROSTER_DB, item);
         await clearIssuesResolvedByParserRule(context.env.ROSTER_DB, item);
       }
-      return Response.json({ ok: true, parserExtensions });
+      const reparse = await queueActiveParserRuleReparse(context.env, rules.map((item) => item.source));
+      return Response.json({ ok: true, parserExtensions, reparse });
     }
 
     if (action === "deleteParserExtensionRule") {
@@ -974,7 +1077,8 @@ export async function onRequestPost(context) {
       }
       const parserExtensions = removeParserExtensionRuleByKey(await loadD1ParserExtensionRules(context.env.ROSTER_DB), target);
       await deleteD1ParserExtensionRule(context.env.ROSTER_DB, target);
-      return Response.json({ ok: true, parserExtensions });
+      const reparse = await queueActiveParserRuleReparse(context.env, [target.source]);
+      return Response.json({ ok: true, parserExtensions, reparse });
     }
 
     if (action === "saveLocalParserExtensionRule") {
@@ -1554,9 +1658,12 @@ async function autoClaimMatchedCanonicalDoctors(record, db = null) {
 async function calendarStoreStatus(store, db, options = {}) {
   const allD1Files = await queryRosterFiles(db, { includeInactive: true }).catch(() => []);
   const rawFiles = await queryRawRosterFiles(db).catch(() => []);
+  const rosterSources = await listRosterSources(db).catch(() => []);
+  const syncRuns = await listRosterSyncRuns(db, { limit: 100 }).catch(() => []);
+  const latestDispatch = await loadLatestRosterDispatch(db).catch(() => null);
   const derivedFileIds = new Set(allD1Files.map((file) => file.id));
   const retainedOnlyFiles = rawFiles
-    .filter((file) => file.id && !derivedFileIds.has(file.id))
+    .filter((file) => file.id && !derivedFileIds.has(file.id) && !String(file.id).startsWith("automation:"))
     .map((file) => ({
       id: file.id,
       name: file.name,
@@ -1583,12 +1690,26 @@ async function calendarStoreStatus(store, db, options = {}) {
   const selectedDoctorKey = normalizeRosterName(options.doctorKey || "");
   let selectedDoctorRows = [];
   const selectedCountsByFile = new Map();
+  const selectedDoctorByFile = new Map();
   if (!lightweight && selectedDoctorKey) {
     selectedDoctorRows = await resolveSelectedRosterFileDoctorRows(db, selectedDoctorKey);
     const selectedPairs = selectedDoctorRows.map((row) => ({ fileId: row.fileId, doctorKey: row.doctorKey }));
     const selectedCounts = await countDerivedEventsByFileDoctorPairs(db, selectedPairs);
-    for (const row of selectedDoctorRows) {
-      selectedCountsByFile.set(row.fileId, (selectedCountsByFile.get(row.fileId) || 0) + Number(selectedCounts.get(`${row.fileId}:${row.doctorKey}`) || 0));
+    const selectedShifts = await Promise.all(selectedDoctorRows.map(async (row) => ({
+      row,
+      shifts: (await queryDoctorEventsForFileDoctorPairs(db, [{ fileId: row.fileId, doctorKey: row.doctorKey }]))
+        .map(rosterFileShiftSummary),
+    })));
+    for (const { row, shifts } of selectedShifts) {
+      const count = Number(selectedCounts.get(`${row.fileId}:${row.doctorKey}`) || 0);
+      selectedCountsByFile.set(row.fileId, (selectedCountsByFile.get(row.fileId) || 0) + count);
+      selectedDoctorByFile.set(row.fileId, {
+        doctorKey: row.doctorKey,
+        displayName: row.displayName,
+        sourceType: row.sourceType,
+        eventCount: count,
+        shifts,
+      });
     }
   }
   const rawAvailability = new Map(rawFiles.map((file) => [file.id, true]));
@@ -1596,13 +1717,19 @@ async function calendarStoreStatus(store, db, options = {}) {
     id: file.id,
     name: file.name,
     sourceType: file.sourceType,
+    sourceId: String(file.sourceId || ""),
+    active: file.active !== false,
     lastModified: Number(file.lastModified || 0),
     addedAt: String(file.addedAt || file.uploadedAt || ""),
     uploadedAt: String(file.uploadedAt || file.addedAt || ""),
+    startDate: String(file.startDate || ""),
+    coverageEndDate: String(file.coverageEndDate || ""),
+    endDate: String(file.endDate || ""),
     expectedDoctors: Number(file.expectedDoctors || 0) || sanitizeRepositoryDoctors(file.doctors).length,
     indexedDoctors: Number(file.indexedDoctors || 0) || doctorCounts.get(file.id) || 0,
     eventCount: Number(file.eventCount || 0) || counts.get(file.id) || 0,
-    selectedDoctorEventCount: selectedCountsByFile.get(file.id) || 0,
+    selectedDoctorEventCount: lightweight ? null : (selectedCountsByFile.get(file.id) || 0),
+    selectedDoctor: lightweight ? null : (selectedDoctorByFile.get(file.id) || null),
     rawSourceAvailable: rawAvailability.get(file.id) === true,
     retainedSourceOnly: file.retainedSourceOnly === true,
   })).map((file) => ({
@@ -1625,12 +1752,114 @@ async function calendarStoreStatus(store, db, options = {}) {
     remaining: Math.max(0, files.length - populated),
     eventCount: files.reduce((total, file) => total + file.eventCount, 0),
     selectedDoctorKey,
-    selectedDoctorEventCount: files.reduce((total, file) => total + file.selectedDoctorEventCount, 0),
+    selectedDoctorEventCount: lightweight ? null : files.reduce((total, file) => total + Number(file.selectedDoctorEventCount || 0), 0),
     selectedDoctorFiles: selectedDoctorRows.map(rosterFileDoctorDiagnostic),
+    rosterSourceStatuses: rosterSourceStatuses(allD1Files, rosterSources, syncRuns, latestDispatch),
     expectedFiles,
     nextFile: files.find((file) => file.status !== "populated") || null,
     files,
   };
+}
+
+function rosterFileShiftSummary(event = {}) {
+  return {
+    id: String(event.id || ""),
+    title: String(event.title || "Shift"),
+    start: String(event.start || ""),
+    end: String(event.end || event.start || ""),
+    allDay: event.allDay === true,
+    timeLabel: String(event.timeLabel || ""),
+    location: String(event.location || ""),
+    seniority: String(event.seniority || ""),
+  };
+}
+
+function rosterSourceStatuses(files = [], storedSources = [], syncRuns = [], latestDispatch = null) {
+  const sourcesById = new Map((storedSources || []).map((source) => [source.id, source]));
+  const sourceFiles = new Map();
+  for (const file of files || []) {
+    const sourceId = String(file.sourceId || "").trim();
+    if (!sourceId) continue;
+    if (!sourceFiles.has(sourceId)) sourceFiles.set(sourceId, []);
+    sourceFiles.get(sourceId).push(file);
+  }
+  const latestRunBySource = new Map();
+  for (const run of syncRuns || []) {
+    if (run?.status === "superseded") continue;
+    if (run?.sourceId && !latestRunBySource.has(run.sourceId)) latestRunBySource.set(run.sourceId, run);
+  }
+  const automated = Object.entries(AUTOMATION_SOURCES).map(([id, definition]) => {
+    const source = sourcesById.get(id);
+    const activeFiles = activeSourceFiles(sourceFiles.get(id));
+    const activeFile = findActiveSourceFile(activeFiles, source?.activeFileId);
+    const latestRun = latestRunBySource.get(id) || null;
+    const pendingState = ["queued", "processing"].includes(latestRun?.status) ? latestRun.status : "";
+    const failed = latestRun?.status === "failed"
+      && (!source?.lastSuccessAt || String(latestRun.completedAt || latestRun.startedAt) >= String(source.lastSuccessAt));
+    return {
+      id,
+      label: definition.label,
+      provider: definition.provider,
+      sourceType: definition.sourceType,
+      mode: "automated",
+      state: !source ? "not-configured" : pendingState || (failed ? "failed" : source.lastSuccessAt ? "received" : "waiting"),
+      providerVersion: String(source?.providerVersion || latestRun?.providerVersion || ""),
+      providerModifiedAt: String(source?.providerModifiedAt || ""),
+      lastReceivedAt: String(source?.lastCheckedAt || ""),
+      lastSuccessAt: String(source?.lastSuccessAt || ""),
+      lastError: failed ? String(source?.lastError || latestRun?.message || "") : "",
+      activeFileId: String(source?.activeFileId || activeFile?.id || ""),
+      activeFileName: String(activeFile?.name || ""),
+      activeFileNames: activeFiles.map((file) => String(file.name || "")).filter(Boolean),
+      latestRun: latestRun ? {
+        status: latestRun.status,
+        startedAt: latestRun.startedAt,
+        completedAt: latestRun.completedAt,
+        fileId: latestRun.fileId,
+        message: latestRun.message,
+        doctorCount: latestRun.doctorCount,
+        eventCount: latestRun.eventCount,
+      } : null,
+      processorDispatch: pendingState ? latestDispatch : null,
+    };
+  });
+  const caseyFiles = (files || []).filter((file) => file.sourceType === "casey" && file.active !== false);
+  const latestCasey = [...caseyFiles].sort((left, right) => String(right.uploadedAt || right.addedAt || "").localeCompare(String(left.uploadedAt || left.addedAt || "")))[0] || null;
+  return [...automated, {
+    id: "casey-manual",
+    label: "Casey",
+    provider: "manual",
+    sourceType: "casey",
+    mode: "manual",
+    state: latestCasey ? "manual-current" : "manual-missing",
+    providerVersion: "",
+    providerModifiedAt: "",
+    lastReceivedAt: "",
+    lastSuccessAt: String(latestCasey?.uploadedAt || latestCasey?.addedAt || ""),
+    lastError: "",
+    activeFileId: String(latestCasey?.id || ""),
+    activeFileName: String(latestCasey?.name || ""),
+    latestRun: null,
+  }];
+}
+
+function findActiveSourceFile(files = [], activeFileId = "") {
+  const activeId = String(activeFileId || "").trim();
+  const active = (files || []).filter((file) => file?.active !== false);
+  return active.find((file) => file.id === activeId)
+    || [...active].sort((left, right) => String(right.uploadedAt || right.addedAt || "").localeCompare(String(left.uploadedAt || left.addedAt || "")))[0]
+    || null;
+}
+
+function activeSourceFiles(files = []) {
+  return [...(files || [])]
+    .filter((file) => file?.active !== false)
+    .sort((left, right) => {
+      const leftNamedDate = rosterFileNameDate(left?.name);
+      const rightNamedDate = rosterFileNameDate(right?.name);
+      if (leftNamedDate !== rightNamedDate) return rightNamedDate.localeCompare(leftNamedDate);
+      return String(right?.uploadedAt || right?.addedAt || "").localeCompare(String(left?.uploadedAt || left?.addedAt || ""));
+    });
 }
 
 function summarizeExpectedRosterFiles(allFiles = [], expectedFileIds = []) {
@@ -1657,14 +1886,24 @@ async function reconcileRosterFileSupersession(db, savedFile = {}, options = {})
   const files = (await queryRosterFileRanges(db, { includeInactive: false }).catch(() => []))
     .filter((file) => file.active && file.eventCount > 0 && file.startDate && file.endDate);
   const savedId = String(savedFile?.id || "").trim();
-  const affected = files.filter((file) => !savedId || file.id === savedId || file.sourceType === String(savedFile?.sourceType || "").toLowerCase());
+  const savedSourceType = String(savedFile?.sourceType || "").toLowerCase();
+  const savedSourceId = String(savedFile?.sourceId || "").trim();
+  const affected = files.filter((file) => !savedId || file.id === savedId || (
+    file.sourceType === savedSourceType
+    && (!savedSourceId || !file.sourceId || file.sourceId === savedSourceId)
+  ));
   const deactivated = [];
   const ambiguous = [];
   for (let leftIndex = 0; leftIndex < affected.length; leftIndex += 1) {
     for (let rightIndex = leftIndex + 1; rightIndex < affected.length; rightIndex += 1) {
       const left = affected[leftIndex];
       const right = affected[rightIndex];
-      if (left.sourceType !== right.sourceType || !dateRangesOverlap(left, right)) continue;
+      if (
+        left.sourceType !== right.sourceType
+        || !sameSupersessionSource(left, right)
+        || !sameRosterRevisionSlot(left, right)
+        || !dateRangesOverlap(left, right)
+      ) continue;
       const winner = chooseLatestRosterFile(left, right);
       if (!winner) {
         ambiguous.push({ left, right });
@@ -1688,6 +1927,24 @@ async function reconcileRosterFileSupersession(db, savedFile = {}, options = {})
   };
 }
 
+function sameSupersessionSource(left, right) {
+  const leftId = String(left?.sourceId || "").trim();
+  const rightId = String(right?.sourceId || "").trim();
+  return !leftId || !rightId || leftId === rightId;
+}
+
+function sameRosterRevisionSlot(left, right) {
+  const leftTerm = rosterFileTermSlot(left?.name);
+  const rightTerm = rosterFileTermSlot(right?.name);
+  if (!leftTerm && !rightTerm) return true;
+  return Boolean(leftTerm && rightTerm && leftTerm === rightTerm);
+}
+
+function rosterFileTermSlot(name = "") {
+  const match = String(name || "").match(/term\s*([1-4])\D+(\d{4})/i);
+  return match ? `${match[2]}-term-${match[1]}` : "";
+}
+
 function dateRangesOverlap(left, right) {
   const leftEnd = String(left.coverageEndDate || left.endDate || "");
   const rightEnd = String(right.coverageEndDate || right.endDate || "");
@@ -1702,6 +1959,19 @@ function chooseLatestRosterFile(left, right) {
   const rightNamedDate = rosterFileNameDate(right.name);
   if (leftNamedDate && rightNamedDate && leftNamedDate !== rightNamedDate) {
     return leftNamedDate > rightNamedDate ? left : right;
+  }
+  // An upload timestamp is only a trustworthy tie-breaker for two revisions
+  // from the same automated source. Manual uploads acquire a timestamp as they
+  // arrive, so using it would silently discard one of two otherwise identical
+  // rosters merely because it was saved a few milliseconds earlier.
+  const leftSourceId = String(left.sourceId || "").trim();
+  const rightSourceId = String(right.sourceId || "").trim();
+  if (leftSourceId && leftSourceId === rightSourceId) {
+    const leftImportedAt = String(left.uploadedAt || left.addedAt || "");
+    const rightImportedAt = String(right.uploadedAt || right.addedAt || "");
+    if (leftImportedAt && rightImportedAt && leftImportedAt !== rightImportedAt) {
+      return leftImportedAt > rightImportedAt ? left : right;
+    }
   }
   return null;
 }
@@ -4207,6 +4477,22 @@ async function runCoreDerivedRosterSave(context, job = {}) {
   }
 }
 
+// Used by the token-protected automation ingress. Keeping this alongside the
+// interactive save path ensures automated imports receive the same validation,
+// supersession, presence-index and snapshot-warmup behaviour as creator uploads.
+export async function runAutomatedDerivedRosterSave(context, job = {}) {
+  const sourceId = String(job?.file?.sourceId || "").trim();
+  if (!sourceId) throw new Error("An automation source id is required.");
+  const requestedPhase = String(job.phase || "complete").toLowerCase();
+  const phase = ["start", "events", "finish", "complete"].includes(requestedPhase) ? requestedPhase : "complete";
+  return runCoreDerivedRosterSave(context, {
+    ...job,
+    phase,
+    email: `automation:${sourceId}`,
+    reason: `automation:${sourceId}`,
+  });
+}
+
 async function runDeferredDerivedRosterSave(context, job = {}) {
   return runCoreDerivedRosterSave(context, job);
 }
@@ -4979,6 +5265,124 @@ function oldDefaultMmcRuleShape(code) {
     suffix: ssuMatch[2] === "R" ? "Float" : "",
     startTime: ssuMatch[1] === "A" ? "07:30" : "14:30",
     endTime: ssuMatch[1] === "A" ? "17:30" : "00:00",
+  };
+}
+
+async function queueActiveParserRuleReparse(env, sourceTypes = []) {
+  const wantedTypes = new Set((sourceTypes || []).map((value) => String(value || "").trim().toLowerCase()).filter(Boolean));
+  const files = (await listActiveRetainedRosterFiles(env.ROSTER_DB).catch(() => []))
+    .filter((file) => !wantedTypes.size || wantedTypes.has(file.sourceType));
+  const now = new Date().toISOString();
+  const queued = [];
+  for (const file of files) {
+    const sourceId = sourceIdForReparseFile(file);
+    if (!sourceId) continue;
+    // A parser-rule change is a new derived-data revision, never a source-file update.
+    // It reuses the retained R2/D1 raw file and is safe to retry or deduplicate.
+    const contentHash = `parser-reparse:${file.id}:${await parserRuleRevision(env.ROSTER_DB)}`;
+    const existing = await findQueuedRosterSyncByHash(env.ROSTER_DB, sourceId, contentHash);
+    if (existing) {
+      queued.push(existing.id);
+      continue;
+    }
+    const runId = `reparse:${file.id}:${crypto.randomUUID()}`;
+    await createRosterSyncRun(env.ROSTER_DB, {
+      id: runId,
+      sourceId,
+      triggerType: "parser-rule",
+      providerVersion: contentHash,
+      contentHash,
+      fileId: file.id,
+      status: "queued",
+      message: "Queued to apply updated shift-code rules to the retained roster file.",
+      startedAt: now,
+    });
+    queued.push(runId);
+  }
+  const dispatch = queued.length
+    ? await requestQueuedRosterProcessing(env, { reason: "parser-rule-change" })
+    : null;
+  return { queued: queued.length, runIds: queued, processorDispatch: publicDispatchStatus(dispatch) };
+}
+
+function sourceIdForReparseFile(file) {
+  const existing = String(file?.sourceId || "").trim();
+  if (AUTOMATION_SOURCES[existing]) return existing;
+  return {
+    mmc: "monash-adults",
+    mch: "monash-paeds",
+    ddh: "dandenong-findmyshift",
+    casey: "casey-manual",
+  }[String(file?.sourceType || "").toLowerCase()] || "";
+}
+
+function findmyshiftDiagnosticTermRange(env) {
+  const today = australianDateKey();
+  const year = Number(today.slice(0, 4));
+  const terms = [];
+  for (const candidateYear of [year - 1, year, year + 1]) {
+    for (let termNumber = 1; termNumber <= 4; termNumber += 1) {
+      const from = firstMondayDateKey(candidateYear, [1, 4, 7, 10][termNumber - 1]);
+      terms.push({
+        from,
+        to: isoDateKey(addUtcDays(from, 90)),
+        label: `Term ${termNumber} ${candidateYear}`,
+      });
+    }
+  }
+  const current = terms.filter((term) => term.from <= today).sort((left, right) => right.from.localeCompare(left.from))[0];
+  return {
+    from: String(env?.FINDMYSHIFT_DIAGNOSTIC_FROM || current.from),
+    to: String(env?.FINDMYSHIFT_DIAGNOSTIC_TO || current.to),
+    label: String(env?.FINDMYSHIFT_DIAGNOSTIC_LABEL || current.label),
+  };
+}
+
+function australianDateKey(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Australia/Melbourne",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function firstMondayDateKey(year, monthIndex) {
+  const date = new Date(Date.UTC(year, monthIndex, 1));
+  const day = date.getUTCDay();
+  date.setUTCDate(date.getUTCDate() + (day === 0 ? 1 : day === 1 ? 0 : 8 - day));
+  return date.toISOString().slice(0, 10);
+}
+
+function safeFindmyshiftFailureDiagnostic(error) {
+  const source = error?.findmyshiftDiagnostic && typeof error.findmyshiftDiagnostic === "object"
+    ? error.findmyshiftDiagnostic
+    : {};
+  return {
+    code: String(source.code || (/supported|indexed reliably/i.test(String(error?.message || "")) ? "workbook-parser-rejected" : "request-failed")).slice(0, 40),
+    status: Number(source.status || 0),
+    contentType: String(source.contentType || "").slice(0, 80),
+    responseBytes: Number(source.responseBytes || 0),
+  };
+}
+
+async function parserRuleRevision(db) {
+  const rows = await db.prepare("SELECT id, updated_at, rule_json FROM parser_rules WHERE scope = 'global' ORDER BY id").all().catch(() => ({ results: [] }));
+  const material = (rows.results || []).map((row) => `${row.id}|${row.updated_at}|${row.rule_json}`).join("\n");
+  const bytes = new TextEncoder().encode(material || "default-parser-rules");
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("").slice(0, 20);
+}
+
+function publicDispatchStatus(result) {
+  if (!result) return null;
+  return {
+    dispatched: result.dispatched === true,
+    reason: String(result.reason || ""),
+    status: String(result.dispatch?.status || ""),
+    lastError: String(result.dispatch?.lastError || ""),
   };
 }
 
