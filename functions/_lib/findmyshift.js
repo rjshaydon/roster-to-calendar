@@ -61,18 +61,13 @@ export async function findmyshiftRosterWorkbook(apiKey, teamId, range) {
 export async function findmyshiftShiftReport(apiKey, teamId, range) {
   // This is deliberately an unfiltered team report. In particular, do not send
   // `filters` or a facility id: doctors can be rostered across all facilities.
+  // Keep it identical to the documented Developer API request which was
+  // verified against this team. The returned flat rows already contain the
+  // fields used by the importer; display/grouping options are not needed.
   return findmyshiftRequest("reports/shifts", apiKey, {
     teamId,
     from: range.from,
     to: range.to,
-    publishedShifts: "yes",
-    timesheetData: "no",
-    daysToInclude: "0123456",
-    comments: "yes",
-    times: "yes",
-    facilities: "yes",
-    groupingInterval: "day",
-    groupByStaff: "yes",
   });
 }
 

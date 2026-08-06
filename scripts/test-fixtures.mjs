@@ -179,6 +179,11 @@ assert.doesNotMatch(
   /Promise\.all/,
   "FindMyShift import preparation must not make concurrent API requests",
 );
+assert.doesNotMatch(
+  findmyshiftModuleSource.match(/export async function findmyshiftShiftReport[\s\S]*?export async function findmyshiftStaffList/)?.[0] || "",
+  /publishedShifts|timesheetData|daysToInclude|groupingInterval|groupByStaff/,
+  "FindMyShift report import should use the verified minimal Developer API request",
+);
 assert.ok(
   automationIngestSource.indexOf("findRosterSyncByProviderVersion") < automationIngestSource.indexOf("file.arrayBuffer()"),
   "automation ingress should reject an unchanged provider version before hashing or storing file bytes",
