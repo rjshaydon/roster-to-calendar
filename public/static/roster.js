@@ -758,6 +758,10 @@ function detectSourceType(workbook, filename) {
 }
 
 function validateRosterDatesWithinSingleTerm(workbook, sourceType, filename) {
+  // FindMyShift reports are deliberately retained as one current, available
+  // roster range.  Unlike a manually uploaded term workbook, that range can
+  // cross a Victorian term boundary and must remain one coherent source.
+  if (sourceType === "ddh" && isFindmyshiftDdhWorkbook(workbook)) return;
   const evidence = collectRosterDateEvidence(workbook, sourceType);
   if (!evidence.length) return;
   const groups = new Map();
@@ -786,6 +790,12 @@ function validateRosterDatesWithinSingleTerm(workbook, sourceType, filename) {
   const shown = conflicts.slice(0, 3).map((item) => `${item.sheetName ? `${item.sheetName} ` : ""}${item.cell ? `cell ${item.cell} ` : ""}is ${item.date} (${item.termLabel})`);
   const remaining = conflicts.length > shown.length ? `, plus ${conflicts.length - shown.length} more conflicting date${conflicts.length - shown.length === 1 ? "" : "s"}` : "";
   throw new Error(`${filename} has dates from multiple terms. Most dates are ${dominant.label}, but ${shown.join("; ")}${remaining}. Fix the conflicting worksheet/date and upload again.`);
+}
+
+function isFindmyshiftDdhWorkbook(workbook) {
+  const sheetName = workbook?.SheetNames?.[0] || "";
+  const sheet = workbook?.Sheets?.[sheetName];
+  return Boolean(sheet) && cleanText(getCellValue(sheet, 1, 1)) === "FindMyShift roster format";
 }
 
 function collectRosterDateEvidence(workbook, sourceType) {
@@ -1371,10 +1381,12 @@ function parseMmcRecords(workbook, doctorKey) {
 }
 
 function parseDdhRecords(workbook, doctorKey) {
+  const findmyshiftRecords = parseFindmyshiftDdhRecords(workbook, doctorKey);
+  if (findmyshiftRecords) return findmyshiftRecords;
   const records = [];
   for (const entry of iterateDdhWeekEntries(workbook)) {
     if (normalizeName(entry.rawName) !== doctorKey) continue;
-    const weeklyLeave = firstWeeklyLeave(entry.labels);
+    const weeklyLeave = entry.findmyshiftFormat ? null : firstWeeklyLeave(entry.labels);
     if (weeklyLeave) {
       records.push(createWeeklyLeaveRecord("DDH", entry.weekDates[0], weeklyLeave, entry.seniority));
       continue;
@@ -1385,6 +1397,69 @@ function parseDdhRecords(workbook, doctorKey) {
     });
   }
   return records;
+}
+
+// The generated grid keeps FindMyShift compatible with the established DDH
+// worksheet parser, while this structured audit sheet remains the source of
+// truth for an automated import.  It prevents facility and comment information
+// from being flattened away before events are built.
+function parseFindmyshiftDdhRecords(workbook, doctorKey) {
+  if (!isFindmyshiftDdhWorkbook(workbook)) return null;
+  const sheet = workbook?.Sheets?.["FindMyShift details"];
+  if (!sheet) return null;
+  const headers = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false })?.[0] || [];
+  const expected = ["Staff ID", "Staff name", "Seniority/job title", "Date", "Shift label", "Start", "End", "Facility", "Comment"];
+  if (expected.some((header, index) => cleanText(headers[index]) !== header)) return null;
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false }).slice(1);
+  const records = [];
+  const seen = new Set();
+  for (const values of rows) {
+    const [, rawName, rawSeniority, rawDate, rawLabel, rawStart, rawEnd, rawFacility, rawComment] = values;
+    if (normalizeName(rawName) !== doctorKey) continue;
+    const day = parseFindmyshiftDate(rawDate);
+    const label = cleanText(rawLabel);
+    const startHm = parseFindmyshiftTime(rawStart);
+    const endHm = parseFindmyshiftTime(rawEnd);
+    if (!day || !label) continue;
+    const seniority = cleanText(rawSeniority) || UNKNOWN_SENIORITY;
+    const facility = cleanText(rawFacility);
+    const comment = cleanText(rawComment);
+    let record;
+    if (startHm && endHm) {
+      const titleParts = label.toUpperCase() === "SHIFT"
+        ? genericTimeOnlyShiftTitleParts(startHm, "DDH")
+        : { base: label, period: "", suffix: "" };
+      record = createTimedRecord("DDH", day, label, {
+        kind: "shift",
+        titleParts,
+        startHm,
+        endHm,
+        location: facility || DDH_LOCATION,
+        seniority,
+      });
+    } else {
+      record = parseDdhEntry(day, label, "", seniority);
+      if (!record) continue;
+      record = { ...record, location: facility || record.location || DDH_LOCATION };
+    }
+    const key = [record.kind, record.start, record.end, record.normalizedTitle, record.location].join("|");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    records.push({ ...record, comment, findmyshift: true });
+  }
+  return records;
+}
+
+function parseFindmyshiftTime(value) {
+  const match = cleanText(value).match(/^(\d{1,2}):(\d{2})$/);
+  if (!match || Number(match[1]) > 23 || Number(match[2]) > 59) return null;
+  return [Number(match[1]), Number(match[2])];
+}
+
+function parseFindmyshiftDate(value) {
+  const date = cleanText(value);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(date)) return date;
+  return coerceDate(value);
 }
 
 function parseCaseyRecords(workbook, doctorKey) {
@@ -2467,6 +2542,7 @@ function shouldIgnoreMch(value) {
 
 function iterateDdhWeekEntries(workbook) {
   const sheet = workbook.Sheets[workbook.SheetNames[0]];
+  const findmyshiftFormat = cleanText(getCellValue(sheet, 1, 1)) === "FindMyShift roster format";
   const range = XLSX.utils.decode_range(sheet["!ref"] || "A1:A1");
   const dateRows = [];
   for (let row = 1; row <= range.e.r + 1; row += 1) {
@@ -2512,7 +2588,7 @@ function iterateDdhWeekEntries(workbook) {
       const seniority = currentSeniority === UNKNOWN_SENIORITY
         ? upcomingDdhSectionSeniority(sheet, row, nextDateRow, sectionMap)
         : currentSeniority;
-      entries.push({ rawName, weekDates, labels, times, seniority });
+      entries.push({ rawName, weekDates, labels, times, seniority, findmyshiftFormat });
       if (supplementaryRow) row = supplementaryRow;
     }
   }

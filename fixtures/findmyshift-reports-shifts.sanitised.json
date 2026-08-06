@@ -1,0 +1,18 @@
+{
+  "staff": [
+    { "staffId": "staff-001", "firstName": "Alex", "lastName": "Example", "jobTitle": "Senior" },
+    { "staffId": "staff-002", "firstName": "Blair", "lastName": "Example", "department": "Registrar" }
+  ],
+  "facilities": [
+    { "facilityId": "facility-north", "name": "North Campus" },
+    { "facilityId": "facility-south", "name": "South Campus" }
+  ],
+  "report": [
+    { "staffId": "staff-001", "facilityId": "facility-north", "date": "2026-08-03", "firstName": "Alex", "lastName": "Example", "payrollId": null, "occurrences": 1, "shift": "07:00-15:00" },
+    { "staffId": "staff-001", "facilityId": "facility-south", "date": "2026-08-04", "firstName": "Alex", "lastName": "Example", "payrollId": null, "occurrences": 1, "shift": "19:00-07:00" },
+    { "staffId": "staff-002", "facilityId": null, "date": "2026-08-05", "firstName": "Blair", "lastName": "Example", "payrollId": null, "occurrences": 1, "shift": "Annual leave", "comments": "Approved leave" },
+    { "staffId": "staff-001", "facilityId": "facility-north", "date": "2026-08-03", "firstName": "Alex", "lastName": "Example", "payrollId": null, "occurrences": 1, "shift": "07:00-15:00" },
+    { "staffId": "staff-002", "facilityId": "facility-south", "date": "invalid-date", "firstName": "Blair", "lastName": "Example", "payrollId": null, "occurrences": 1, "shift": "08:00-16:00" },
+    { "staffId": "staff-003", "facilityId": "facility-south", "date": "2026-08-06", "firstName": "", "lastName": "", "payrollId": null, "occurrences": 1, "shift": "" }
+  ]
+}

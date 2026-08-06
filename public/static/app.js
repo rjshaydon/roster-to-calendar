@@ -304,15 +304,6 @@ let pendingExportRange = defaultExportRangeState();
 let pendingExportHospitals = [];
 let currentAdminTab = "system";
 let adminUserSeniorityFilter = "";
-let adminFilesSortOrder = "hospital-term";
-const ADMIN_FILES_SORT_OPTIONS = [
-  { value: "hospital-term", label: "Hospital & Term" },
-  { value: "hospital", label: "Hospital" },
-  { value: "term", label: "Term" },
-  { value: "alphabet", label: "Alphabet" },
-  { value: "date-added", label: "Date added" },
-  { value: "date-modified", label: "Date modified" },
-];
 const ROSTER_HOSPITAL_SORT_RANK = { mmc: 0, ddh: 1, casey: 2, mch: 3 };
 let calendarStoreStatus = null;
 let calendarStoreStatusError = "";
@@ -613,12 +604,6 @@ accountsBody.addEventListener("change", (event) => {
     renderAccountsModal();
     return;
   }
-  const adminFilesSort = event.target.closest("[data-admin-files-sort]");
-  if (adminFilesSort) {
-    adminFilesSortOrder = normalizeAdminFilesSortOrder(adminFilesSort.value);
-    renderAccountsModal();
-    return;
-  }
   const insightsToggle = event.target.closest("[data-toggle-user-insights]");
   if (!insightsToggle) return;
   void setUserInsightsEnabled(insightsToggle.dataset.toggleUserInsights || "", insightsToggle.checked);
@@ -654,8 +639,8 @@ accountsBody.addEventListener("click", (event) => {
     void refreshCalendarStoreStatus({ silent: false, syncSwitcher: true });
     return;
   }
-  if (event.target.closest("[data-test-findmyshift]")) {
-    void testFindmyshiftConnection();
+  if (event.target.closest("[data-sync-findmyshift]")) {
+    void syncFindmyshiftRoster();
     return;
   }
   const replaceActiveRostersButton = event.target.closest("[data-replace-active-rosters]");
@@ -2199,7 +2184,16 @@ function enrichRosterFileEntry(entry, statusFile = null) {
   if (!entry) return entry;
   const addedAt = entry.addedAt || statusFile?.uploadedAt || statusFile?.addedAt || "";
   const lastModified = Number(entry.lastModified || statusFile?.lastModified || 0);
-  return { ...entry, addedAt, lastModified };
+  return {
+    ...statusFile,
+    ...entry,
+    addedAt,
+    lastModified,
+    sourceId: entry.sourceId || statusFile?.sourceId || "",
+    startDate: entry.startDate || statusFile?.startDate || "",
+    coverageEndDate: entry.coverageEndDate || statusFile?.coverageEndDate || "",
+    endDate: entry.endDate || statusFile?.endDate || "",
+  };
 }
 
 function sortRosterFileEntries(files = [], sortOrder = "hospital-term") {
@@ -2316,6 +2310,175 @@ function renderFilesMarkup({ canRemove = false, heading = "", description = "", 
   `;
 }
 
+function renderAdminFilesMarkup({ canRemove = false, canAdd = false } = {}) {
+  const profileView = activeCalendarMode() === "doctor-profile";
+  const hasUsableStatus = Boolean(calendarStoreStatus && calendarStoreStatus.unavailable !== true && !calendarStoreStatusError);
+  const statusFiles = new Map((calendarStoreStatus?.files || []).map((file) => [file.id, file]));
+  const populatedSelectedFileIds = new Set(calendarStoreStatus?.expectedFiles?.populatedFileIds || []);
+  const statusOnlyEntries = hasUsableStatus && !profileView
+    ? (calendarStoreStatus?.files || []).filter((file) => file?.id).map((file) => rosterStoreFileToClientEntry(file))
+    : calendarFilesForActiveView();
+  const displayFiles = rosterDisplayFiles(hasUsableStatus, statusOnlyEntries)
+    .filter((entry) => !pendingRemovedImportIds.has(entry.id))
+    .map((entry) => enrichRosterFileEntry(entry, statusFiles.get(entry.id)));
+  const sourceStatuses = (calendarStoreStatus?.rosterSourceStatuses || []).filter((source) => source?.mode === "automated");
+  const automatedSourceIds = new Set(sourceStatuses.map((source) => source.id));
+  const isAutomatedFile = (file) => automatedSourceIds.has(String(file?.sourceId || "")) || String(file?.id || "").startsWith("automation:");
+  const terms = adminRosterTerms();
+  const manualFiles = displayFiles.filter((file) => !isAutomatedFile(file));
+  const classifiedManualFiles = manualFiles.map((file) => ({ file, slot: adminRosterTermSlot(file, terms) }));
+  const currentAndNextManualFiles = classifiedManualFiles
+    .filter((item) => item.slot === "current" || item.slot === "next")
+    .sort((left, right) => adminRosterFileCompare(left.file, right.file, terms));
+  const previousManualFiles = classifiedManualFiles
+    .filter((item) => item.slot !== "current" && item.slot !== "next")
+    .sort((left, right) => adminPreviousRosterFileCompare(left.file, right.file));
+
+  return `
+    <article class="review-card admin-files-card">
+      <div class="review-top"><div><strong>Files</strong><span>Roster files currently used to generate the creator calendar.</span></div>${canAdd ? `<button type="button" class="button button-secondary" data-open-file-picker>Add files</button>` : ""}</div>
+      <section class="admin-file-section" aria-labelledby="admin-auto-sync-heading">
+        <h3 id="admin-auto-sync-heading">Auto-sync</h3>
+        <div class="admin-file-list admin-auto-sync-list">
+          ${sourceStatuses.map((source) => renderAdminAutoSyncRow(source, displayFiles, terms)).join("") || `<article class="issue-card"><p>No automated roster sources are configured.</p></article>`}
+        </div>
+      </section>
+      <section class="admin-file-section" aria-labelledby="admin-manual-imports-heading">
+        <h3 id="admin-manual-imports-heading">Manual imports</h3>
+        <div class="admin-file-list">
+          ${currentAndNextManualFiles.length
+            ? currentAndNextManualFiles.map(({ file, slot }) => renderAdminManualFileRow(file, slot, { canRemove, hasUsableStatus, statusFiles, populatedSelectedFileIds })).join("")
+            : `<article class="issue-card"><p>No manual roster files for the current or next term.</p></article>`}
+        </div>
+      </section>
+      <section class="admin-file-section" aria-labelledby="admin-previous-imports-heading">
+        <h3 id="admin-previous-imports-heading">Previously imported files</h3>
+        <div class="admin-file-list">
+          ${previousManualFiles.length
+            ? previousManualFiles.map(({ file, slot }) => renderAdminManualFileRow(file, slot, { canRemove, hasUsableStatus, statusFiles, populatedSelectedFileIds })).join("")
+            : `<article class="issue-card"><p>No earlier manual roster files.</p></article>`}
+        </div>
+      </section>
+    </article>
+  `;
+}
+
+function adminRosterTerms() {
+  const current = australianTermForDate(new Date());
+  return { current, next: nextAustralianTerm(current) };
+}
+
+function adminRosterTermSlot(file, terms) {
+  if (adminRosterFileOverlapsTerm(file, terms.current)) return "current";
+  if (adminRosterFileOverlapsTerm(file, terms.next)) return "next";
+  const fileTerm = rosterFileTermSortKey(file?.name || "");
+  if (fileTerm === adminTermSortKey(terms.current)) return "current";
+  if (fileTerm === adminTermSortKey(terms.next)) return "next";
+  return "previous";
+}
+
+function adminRosterFileOverlapsTerm(file, term) {
+  const start = String(file?.startDate || "").slice(0, 10);
+  const end = String(file?.coverageEndDate || file?.endDate || start).slice(0, 10);
+  if (!start || !end) return false;
+  const termStart = formatDateKey(term.start);
+  const termEnd = formatDateKey(addDays(term.end, -1));
+  return start <= termEnd && end >= termStart;
+}
+
+function adminTermSortKey(term) {
+  return `${term.year}-${String(term.termNumber).padStart(2, "0")}`;
+}
+
+function adminRosterFileCompare(left, right, terms) {
+  const leftSlot = adminRosterTermSlot(left, terms);
+  const rightSlot = adminRosterTermSlot(right, terms);
+  const slotRank = { current: 0, next: 1, previous: 2 };
+  return (slotRank[leftSlot] - slotRank[rightSlot])
+    || rosterHospitalSortKey(left.sourceType).localeCompare(rosterHospitalSortKey(right.sourceType))
+    || String(left.name || "").localeCompare(String(right.name || ""));
+}
+
+function adminPreviousRosterFileCompare(left, right) {
+  return rosterFileTermSortKey(right.name).localeCompare(rosterFileTermSortKey(left.name))
+    || String(right.addedAt || "").localeCompare(String(left.addedAt || ""))
+    || String(left.name || "").localeCompare(String(right.name || ""));
+}
+
+function renderAdminAutoSyncRow(source, files, terms) {
+  const sourceFiles = files.filter((file) => String(file?.sourceId || "") === String(source.id || ""));
+  const fallbackNames = new Set((source.activeFileNames || [source.activeFileName]).filter(Boolean));
+  const matchingFiles = sourceFiles.length ? sourceFiles : files.filter((file) => fallbackNames.has(file?.name));
+  const currentFile = adminLatestTermFile(matchingFiles, terms.current);
+  const nextFile = adminLatestTermFile(matchingFiles, terms.next);
+  const operationalNote = ["received", "manual-current"].includes(source.state)
+    ? ""
+    : `<span class="admin-auto-sync-state${source.lastError ? " roster-source-error" : ""}">${escapeHtml(rosterSourceStateLabel(source))}${source.lastError ? ` · ${escapeHtml(source.lastError)}` : ""}</span>`;
+  return `
+    <article class="admin-file-row admin-auto-sync-row roster-source-${escapeHtml(source.state || "unknown")}">
+      <strong>${escapeHtml(source.label)}</strong>
+      <dl class="admin-file-details">
+        <div><dt>Source modified</dt><dd>${source.providerModifiedAt ? escapeHtml(formatTimestamp(source.providerModifiedAt)) : "Not checked yet"}</dd></div>
+        <div><dt>Successfully imported</dt><dd>${source.lastSuccessAt ? escapeHtml(formatTimestamp(source.lastSuccessAt)) : "Not yet imported"}</dd></div>
+        ${renderAdminAutoTermDetail("Current term", currentFile)}
+        ${nextFile ? renderAdminAutoTermDetail("Next term", nextFile) : ""}
+      </dl>
+      ${operationalNote}
+      ${source.id === "dandenong-findmyshift" && isCreatorAuthenticated()
+        ? `<button type="button" class="button button-secondary" data-sync-findmyshift>Run controlled sync</button>`
+        : ""}
+    </article>
+  `;
+}
+
+function adminLatestTermFile(files, term) {
+  return files.filter((file) => adminRosterFileOverlapsTerm(file, term) || rosterFileTermSortKey(file?.name || "") === adminTermSortKey(term))
+    .sort((left, right) => String(right.addedAt || "").localeCompare(String(left.addedAt || "")))[0] || null;
+}
+
+function renderAdminAutoTermDetail(label, file) {
+  return `<div><dt>${escapeHtml(label)}</dt><dd>${file ? escapeHtml(file.name) : "Not available"}</dd></div>`;
+}
+
+function renderAdminManualFileRow(entry, slot, options = {}) {
+  const sourceLabel = { mmc: "Monash Adults", mch: "Monash Paediatrics", ddh: "Dandenong", casey: "Casey" }[String(entry.sourceType || "").toLowerCase()] || String(entry.sourceType || "Roster").toUpperCase();
+  const termLabel = slot === "current" ? "Current term" : slot === "next" ? "Next term" : adminRosterFileTermLabel(entry);
+  const statusFile = options.statusFiles?.get(entry.id);
+  const status = rosterSyncLabel(entry) || (statusFile?.retainedSourceOnly
+    ? "Retained in R2 · not yet synced to D1"
+    : statusFile ? rosterAdminFileStoreStatus(statusFile)
+      : options.populatedSelectedFileIds?.has(entry.id) ? "Saved in D1 · inactive"
+        : entry.file && options.hasUsableStatus ? "Not yet confirmed in D1"
+        : entry.file ? "Roster database status not checked" : "");
+  const canReparse = options.canRemove && (!entry.fromRosterDatabase || statusFile?.rawSourceAvailable === true);
+  return `
+    <article class="admin-file-row admin-manual-file-row" data-file-id="${escapeHtml(entry.id)}">
+      <div class="admin-file-row-main">
+        <span class="admin-file-kicker">${escapeHtml(sourceLabel)} · ${escapeHtml(termLabel)}</span>
+        <strong>${escapeHtml(entry.name)}</strong>
+        <span class="admin-file-meta">${entry.addedAt ? `Imported ${escapeHtml(formatTimestamp(entry.addedAt))}` : "Imported roster"}${Number(entry.lastModified || 0) > 0 ? ` · Source modified ${escapeHtml(formatTimestamp(entry.lastModified))}` : ""}</span>
+        ${status ? `<span class="admin-file-status">${status}</span>` : ""}
+        ${statusFile?.rawSourceAvailable === false ? `<span class="admin-file-status">Source file not retained · re-upload once to enable reparse</span>` : ""}
+      </div>
+      ${options.canRemove ? `<div class="admin-file-actions">${canReparse ? `<button type="button" class="file-reparse file-reparse-visible" aria-label="Reparse roster file" title="Reparse roster file" data-reparse-import="${escapeHtml(entry.id)}">↻</button>` : ""}<button type="button" class="file-remove file-remove-visible" aria-label="Remove file" title="Remove file" data-remove-import="${escapeHtml(entry.id)}">🗑</button></div>` : ""}
+    </article>
+  `;
+}
+
+function rosterAdminFileStoreStatus(file) {
+  if (file.status === "populated") return "Saved in D1";
+  if (file.status === "partial") return "Partially saved in D1";
+  if (file.status === "retained") return "Retained in R2 · not yet synced to D1";
+  return "No parsed shifts saved in D1";
+}
+
+function adminRosterFileTermLabel(file) {
+  const start = String(file?.startDate || "").slice(0, 10);
+  if (start) return formatAustralianTermLabel(australianTermForDate(parseDateOnly(start)));
+  const term = rosterFileTermSortKey(file?.name || "");
+  return term === "9999-99" ? "Earlier import" : `Term ${Number(term.slice(5))} ${term.slice(0, 4)}`;
+}
+
 function rosterStatusDoctorLabel() {
   return activeDoctorProfile?.displayName
     || selectedDoctor()?.displayName
@@ -2375,9 +2538,6 @@ function renderRosterSourceStatusMarkup() {
           ${renderRosterProcessorDispatch(source.processorDispatch)}
           ${renderRosterSourceFileNames(source)}
           ${source.lastError ? `<small class="roster-source-error">${escapeHtml(source.lastError)}</small>` : ""}
-          ${source.id === "dandenong-findmyshift" && isCreatorAuthenticated()
-            ? `<button type="button" class="button button-secondary" data-test-findmyshift>Test connection</button>`
-            : ""}
         </article>
       `).join("")}
     </section>
@@ -6837,14 +6997,18 @@ function formatTimestamp(value) {
   if (!value) return "-";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
-  const formatted = date.toLocaleString("en-AU", {
+  const parts = new Intl.DateTimeFormat("en-AU", {
+    timeZone: "Australia/Melbourne",
     day: "numeric",
     month: "short",
     year: "numeric",
-    hour: "2-digit",
+    hour: "numeric",
     minute: "2-digit",
-  });
-  return formatted.replace(/,\s0(\d:\d{2}\s?pm)$/i, ", $1");
+    hour12: true,
+  }).formatToParts(date);
+  const valueFor = (type) => parts.find((part) => part.type === type)?.value || "";
+  const dayPeriod = valueFor("dayPeriod").toLowerCase();
+  return `${valueFor("day")} ${valueFor("month")} ${valueFor("year")} at ${valueFor("hour")}:${valueFor("minute")}${dayPeriod ? ` ${dayPeriod}` : ""}`;
 }
 
 function formatIssueHeading(item) {
@@ -7928,14 +8092,9 @@ function renderAccountsModal() {
     ` : "";
   const errorsCard = ownerView ? renderAdminErrorsCard(serverOtherUsers) : "";
   const systemCard = ownerView ? renderSystemAdminCard() : "";
-  const filesCard = ownerView ? renderFilesMarkup({
+  const filesCard = ownerView ? renderAdminFilesMarkup({
     canRemove: canRemoveImports(),
     canAdd: true,
-    heading: "Files",
-    description: "Files currently used to generate the creator calendar.",
-    sortOrder: adminFilesSortOrder,
-    showSortControl: true,
-    showSourceStatus: true,
   }) : "";
   const adminBody = ownerView
     ? (currentAdminTab === "errors"
@@ -11299,6 +11458,10 @@ function rosterStoreFileToClientEntry(file) {
     size: Number(file.size || 0),
     lastModified: Number(file.lastModified || 0),
     addedAt: file.uploadedAt || "",
+    sourceId: String(file.sourceId || ""),
+    startDate: String(file.startDate || ""),
+    coverageEndDate: String(file.coverageEndDate || ""),
+    endDate: String(file.endDate || ""),
     fromRosterDatabase: true,
   };
 }
@@ -13346,25 +13509,34 @@ async function refreshCalendarStoreStatus(options = {}) {
   renderFileSurfaces();
 }
 
-async function testFindmyshiftConnection() {
+async function syncFindmyshiftRoster() {
   if (!isCreatorAuthenticated() || !cloudAvailable) return;
-  setStatus("Testing FindMyShift connection...");
+  if (!window.confirm("Download the full available FindMyShift roster and queue it for background processing? This will retain and import roster data.")) return;
+  setStatus("Downloading the full FindMyShift roster and queuing secure background processing...");
   try {
     const response = await fetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        action: "testFindmyshiftConnection",
+        action: "syncFindmyshift",
+        confirmation: "sync-findmyshift",
         email: authUserEmail || currentUserEmail,
         password: authUserPassword || currentUserPassword,
       }),
     });
-    const data = await readJsonResponse(response, "Could not test the FindMyShift connection.");
-    if (!data.ok || !data.connected) throw new Error(data.error || "FindMyShift connection test failed.");
-    setStatus(`FindMyShift connected. Source last modified ${formatTimestamp(data.providerModifiedAt)}.`);
+    const data = await readJsonResponse(response, "Could not start the FindMyShift sync.");
+    if (!data.ok) throw new Error(data.error || "FindMyShift sync could not be queued.");
+    const providerTime = data.providerModifiedAt ? ` Source modified ${formatTimestamp(data.providerModifiedAt)}.` : "";
+    const queue = data.queue || {};
+    const outcome = data.status === "unchanged"
+      ? "FindMyShift is unchanged; no roster was downloaded or queued."
+      : queue.dispatched
+        ? "FindMyShift roster retained and queued. GitHub background processing has been requested."
+        : "FindMyShift roster retained and queued; background processing is awaiting dispatch.";
+    setStatus(`${outcome}${providerTime}`);
     await refreshCalendarStoreStatus({ silent: true, syncSwitcher: true });
   } catch (error) {
-    setStatus(error.message || "Could not test the FindMyShift connection.", true);
+    setStatus(error.message || "Could not start the FindMyShift sync.", true);
   }
 }
 

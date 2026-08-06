@@ -6,6 +6,7 @@ import {
 
 const GITHUB_WORKFLOW = "monash-roster-sync.yml";
 const GITHUB_REPOSITORY = "rjshaydon/roster-to-calendar";
+const PRODUCTION_AUTOMATION_BASE_URL = "https://roster-to-calendar.pages.dev";
 const REQUEST_LEASE_MS = 2 * 60 * 1000;
 const ACCEPTED_LEASE_MS = 20 * 60 * 1000;
 const TRANSIENT_RETRY_MS = 5 * 60 * 1000;
@@ -27,6 +28,9 @@ export async function requestQueuedRosterProcessing(env, { reason = "source-upda
   }
 
   try {
+    const automationBaseUrl = String(env?.ROSTER_AUTOMATION_BASE_URL || PRODUCTION_AUTOMATION_BASE_URL).replace(/\/$/, "");
+    const workflowTarget = String(env?.ROSTER_AUTOMATION_WORKFLOW_TARGET || "production").trim().toLowerCase() === "preview" ? "preview" : "production";
+    const workflowRef = String(env?.ROSTER_GITHUB_WORKFLOW_REF || "main").trim() || "main";
     const response = await fetch(`https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/${GITHUB_WORKFLOW}/dispatches`, {
       method: "POST",
       headers: {
@@ -36,7 +40,14 @@ export async function requestQueuedRosterProcessing(env, { reason = "source-upda
         "X-GitHub-Api-Version": "2022-11-28",
         "User-Agent": "roster-to-calendar-dispatcher",
       },
-      body: JSON.stringify({ ref: "main", inputs: { dispatch_id: claim.dispatch.id } }),
+      body: JSON.stringify({
+        ref: workflowRef,
+        inputs: {
+          dispatch_id: claim.dispatch.id,
+          automation_base_url: automationBaseUrl,
+          target: workflowTarget,
+        },
+      }),
     });
     if (response.status === 204) {
       const acceptedAt = new Date().toISOString();

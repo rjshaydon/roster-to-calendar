@@ -1,7 +1,7 @@
 import { applyEventOverrides, customEventsToEvents, defaultSettings, inspectImportRecord, normalizeRosterName } from "../_lib/roster.js";
 import { AUTOMATION_SOURCES } from "../_lib/automation-import.js";
 import { requestQueuedRosterProcessing } from "../_lib/automation-dispatch.js";
-import { findmyshiftLastModified } from "../_lib/findmyshift.js";
+import { findmyshiftLastModified, findmyshiftReportDiagnostics, findmyshiftShiftReport } from "../_lib/findmyshift.js";
 import {
   buildPreviewFromDerivedEvents,
   accountMirrorStatus,
@@ -232,11 +232,73 @@ export async function onRequestPost(context) {
       }
       try {
         const providerModifiedAt = await findmyshiftLastModified(apiKey, teamId);
-        return Response.json({ ok: true, connected: true, providerModifiedAt });
+        const range = findmyshiftDiagnosticTermRange(context.env);
+        // The report itself has names and the roster rows.  Keep this
+        // read-only diagnostic to two serial API calls; staff/facility detail
+        // lookups are needed only when a real import has been authorised.
+        const report = await findmyshiftShiftReport(apiKey, teamId, range);
+        const diagnostics = findmyshiftReportDiagnostics(report, range);
+        console.log("FindMyShift report read-only diagnostic succeeded", JSON.stringify({
+          responseFormat: diagnostics.responseFormat,
+          recognisedShiftCount: diagnostics.recognisedShiftCount,
+          staffCount: diagnostics.staffCount,
+          dateRange: diagnostics.dateRange,
+          recognisedFields: diagnostics.recognisedFields,
+          flatShiftRows: diagnostics.flatShiftRows,
+          responseShape: diagnostics.responseShape,
+        }));
+        return Response.json({ ok: true, connected: true, providerModifiedAt, report: diagnostics });
       } catch (error) {
-        console.error("FindMyShift connection test failed", error);
-        return Response.json({ error: "FindMyShift connection test failed. Check the API key and team ID." }, { status: 422 });
+        const diagnostic = safeFindmyshiftFailureDiagnostic(error);
+        console.error("FindMyShift report read-only diagnostic failed", JSON.stringify(diagnostic));
+        return Response.json({
+          error: `FindMyShift report diagnostic failed (${diagnostic.code}${diagnostic.status ? `, HTTP ${diagnostic.status}` : ""}${diagnostic.contentType ? `, ${diagnostic.contentType}` : ""}${diagnostic.responseBytes ? `, ${diagnostic.responseBytes} bytes` : ""}).`,
+          diagnostic,
+        }, { status: diagnostic.status === 429 ? 429 : 422 });
       }
+    }
+    if (action === "syncFindmyshift") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      if (body?.confirmation !== "sync-findmyshift") {
+        return Response.json({ error: "Explicit sync confirmation is required." }, { status: 400 });
+      }
+      const processorTarget = String(context.env.ROSTER_AUTOMATION_WORKFLOW_TARGET || "production").trim().toLowerCase();
+      const required = [
+        "FINDMYSHIFT_API_KEY",
+        "FINDMYSHIFT_TEAM_ID",
+        "ROSTER_AUTOMATION_TOKEN",
+        "GITHUB_ACTIONS_TOKEN",
+      ].filter((name) => !String(context.env[name] || "").trim());
+      if (processorTarget === "preview") {
+        required.push(...[
+          "ROSTER_AUTOMATION_BASE_URL",
+          "ROSTER_GITHUB_WORKFLOW_REF",
+        ].filter((name) => !String(context.env[name] || "").trim()));
+      }
+      if (required.length) {
+        return Response.json({ error: `Controlled FindMyShift sync is not configured: ${required.join(", ")}.` }, { status: 422 });
+      }
+      if (processorTarget !== "preview" && processorTarget !== "production") {
+        return Response.json({ error: "Controlled FindMyShift sync has an invalid processor target." }, { status: 422 });
+      }
+      const response = await fetch(new URL("/api/automation/findmyshift-check", context.request.url), {
+        method: "POST",
+        headers: { Authorization: `Bearer ${String(context.env.ROSTER_AUTOMATION_TOKEN).trim()}` },
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result?.ok) {
+        return Response.json({ error: "Controlled FindMyShift sync could not be queued.", status: String(result?.status || "failed") }, { status: 422 });
+      }
+      return Response.json({
+        ok: true,
+        status: String(result.status || "queued"),
+        providerModifiedAt: String(result.providerModifiedAt || ""),
+        queue: result.queue && typeof result.queue === "object"
+          ? { runId: String(result.queue.runId || ""), dispatched: result.queue.dispatched === true }
+          : null,
+      });
     }
     if (action === "adminCreateUser") {
       if (account.role !== "creator" && account.role !== "owner") {
@@ -1655,9 +1717,14 @@ async function calendarStoreStatus(store, db, options = {}) {
     id: file.id,
     name: file.name,
     sourceType: file.sourceType,
+    sourceId: String(file.sourceId || ""),
+    active: file.active !== false,
     lastModified: Number(file.lastModified || 0),
     addedAt: String(file.addedAt || file.uploadedAt || ""),
     uploadedAt: String(file.uploadedAt || file.addedAt || ""),
+    startDate: String(file.startDate || ""),
+    coverageEndDate: String(file.coverageEndDate || ""),
+    endDate: String(file.endDate || ""),
     expectedDoctors: Number(file.expectedDoctors || 0) || sanitizeRepositoryDoctors(file.doctors).length,
     indexedDoctors: Number(file.indexedDoctors || 0) || doctorCounts.get(file.id) || 0,
     eventCount: Number(file.eventCount || 0) || counts.get(file.id) || 0,
@@ -5247,6 +5314,58 @@ function sourceIdForReparseFile(file) {
     ddh: "dandenong-findmyshift",
     casey: "casey-manual",
   }[String(file?.sourceType || "").toLowerCase()] || "";
+}
+
+function findmyshiftDiagnosticTermRange(env) {
+  const today = australianDateKey();
+  const year = Number(today.slice(0, 4));
+  const terms = [];
+  for (const candidateYear of [year - 1, year, year + 1]) {
+    for (let termNumber = 1; termNumber <= 4; termNumber += 1) {
+      const from = firstMondayDateKey(candidateYear, [1, 4, 7, 10][termNumber - 1]);
+      terms.push({
+        from,
+        to: isoDateKey(addUtcDays(from, 90)),
+        label: `Term ${termNumber} ${candidateYear}`,
+      });
+    }
+  }
+  const current = terms.filter((term) => term.from <= today).sort((left, right) => right.from.localeCompare(left.from))[0];
+  return {
+    from: String(env?.FINDMYSHIFT_DIAGNOSTIC_FROM || current.from),
+    to: String(env?.FINDMYSHIFT_DIAGNOSTIC_TO || current.to),
+    label: String(env?.FINDMYSHIFT_DIAGNOSTIC_LABEL || current.label),
+  };
+}
+
+function australianDateKey(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Australia/Melbourne",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function firstMondayDateKey(year, monthIndex) {
+  const date = new Date(Date.UTC(year, monthIndex, 1));
+  const day = date.getUTCDay();
+  date.setUTCDate(date.getUTCDate() + (day === 0 ? 1 : day === 1 ? 0 : 8 - day));
+  return date.toISOString().slice(0, 10);
+}
+
+function safeFindmyshiftFailureDiagnostic(error) {
+  const source = error?.findmyshiftDiagnostic && typeof error.findmyshiftDiagnostic === "object"
+    ? error.findmyshiftDiagnostic
+    : {};
+  return {
+    code: String(source.code || (/supported|indexed reliably/i.test(String(error?.message || "")) ? "workbook-parser-rejected" : "request-failed")).slice(0, 40),
+    status: Number(source.status || 0),
+    contentType: String(source.contentType || "").slice(0, 80),
+    responseBytes: Number(source.responseBytes || 0),
+  };
 }
 
 async function parserRuleRevision(db) {

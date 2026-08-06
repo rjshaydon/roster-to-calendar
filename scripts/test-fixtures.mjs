@@ -5,6 +5,8 @@ import XLSX from "xlsx";
 
 import { onRequestPost as handleStatePost } from "../functions/api/state.js";
 import { onRequestGet as handleFeedGet } from "../functions/api/feed.js";
+import { extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftRowsWorkbook } from "../functions/_lib/findmyshift.js";
+import { buildAutomatedDerivedRosterPayload } from "../functions/_lib/automation-import.js";
 import { buildPreviewFromDerivedEvents, findRosterSyncByProviderVersion, storeCachedSnapshot } from "../functions/_lib/d1-calendar.js";
 import { recordRosterDispatchLifecycle, requestQueuedRosterProcessing } from "../functions/_lib/automation-dispatch.js";
 import { buildRosterView, doctorOptions, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
@@ -70,6 +72,74 @@ const mmcWorkbook = XLSX.readFile(fileURLToPath(new URL("../fixtures/AdultTerm1.
 const ddhWorkbook = XLSX.readFile(fileURLToPath(new URL("../fixtures/Dandenong_Emergency_Doctors_Roster_02-02-2026_to_03-05-2026.xlsx", import.meta.url)), {
   cellDates: true,
 });
+const findmyshiftFixture = JSON.parse(await readFile(new URL("../fixtures/findmyshift-reports-shifts.sanitised.json", import.meta.url), "utf8"));
+assert.deepEqual(
+  findmyshiftConfiguredRosterRange({ FINDMYSHIFT_FROM: "2026-08-03", FINDMYSHIFT_TO: "2026-11-01" }, new Date("2026-08-06T00:00:00Z")),
+  { from: "2026-08-03", to: "2026-11-01" },
+  "FindMyShift automation should use the configured full available roster range",
+);
+assert.deepEqual(
+  findmyshiftConfiguredRosterRange({ FINDMYSHIFT_DIAGNOSTIC_FROM: "2026-08-03", FINDMYSHIFT_DIAGNOSTIC_TO: "2026-11-01" }, new Date("2026-08-06T00:00:00Z")),
+  { from: "2026-01-01", to: "2027-12-31" },
+  "FindMyShift automation must not inherit a deliberately narrow diagnostic range",
+);
+const findmyshiftRows = extractShiftRows(findmyshiftFixture.report, {
+  staff: findmyshiftFixture.staff,
+  facilities: findmyshiftFixture.facilities,
+});
+assert.equal(findmyshiftRows.length, 3, "FindMyShift duplicate and malformed rows should not generate extra events");
+assert.deepEqual(
+  findmyshiftRows.map((row) => ({ date: row.date, label: row.label, start: row.start, end: row.end, facility: row.facility, seniority: row.seniority, comment: row.comment })),
+  [
+    { date: "2026-08-03", label: "Shift", start: "07:00", end: "15:00", facility: "North Campus", seniority: "Senior", comment: "" },
+    { date: "2026-08-04", label: "Shift", start: "19:00", end: "07:00", facility: "South Campus", seniority: "Senior", comment: "" },
+    { date: "2026-08-05", label: "Annual leave", start: "", end: "", facility: "", seniority: "Registrar", comment: "Approved leave" },
+  ],
+  "FindMyShift parser should preserve timed, overnight, all-day, multi-facility, comment and seniority data",
+);
+const findmyshiftWorkbook = XLSX.read(findmyshiftRowsWorkbook(findmyshiftRows), { type: "array", cellDates: true });
+const findmyshiftDetails = XLSX.utils.sheet_to_json(findmyshiftWorkbook.Sheets["FindMyShift details"], { header: 1, blankrows: false });
+assert.deepEqual(
+  findmyshiftDetails[0],
+  ["Staff ID", "Staff name", "Seniority/job title", "Date", "Shift label", "Start", "End", "Facility", "Comment"],
+  "FindMyShift retained workbook should include its complete structured audit sheet",
+);
+assert.equal(findmyshiftDetails.length, 4, "FindMyShift audit sheet should retain each valid unique source row");
+assert.equal(findmyshiftDetails[2][7], "South Campus", "FindMyShift audit sheet should preserve the resolved facility");
+assert.equal(findmyshiftDetails[3][8], "Approved leave", "FindMyShift audit sheet should preserve comments when the API supplies them");
+const findmyshiftFormData = new FormData();
+findmyshiftFormData.append("rosterFiles", workbookFile(findmyshiftWorkbook, "Dandenong-FindMyShift-fixture.xlsx"));
+const findmyshiftUpload = await parseUploadForm(new Request("http://fixture.test/api/analyze", { method: "POST", body: findmyshiftFormData }));
+const findmyshiftSource = findmyshiftUpload.sources.ddh[0];
+const findmyshiftCrossTermRows = extractShiftRows([
+  ...findmyshiftFixture.report,
+  { "staffId": "staff-001", "facilityId": "facility-north", "date": "2026-10-05", "firstName": "Alex", "lastName": "Example", "payrollId": null, "occurrences": 1, "shift": "07:00-15:00" },
+], { staff: findmyshiftFixture.staff, facilities: findmyshiftFixture.facilities });
+const findmyshiftCrossTermFormData = new FormData();
+findmyshiftCrossTermFormData.append("rosterFiles", workbookFile(XLSX.read(findmyshiftRowsWorkbook(findmyshiftCrossTermRows), { type: "array", cellDates: true }), "Dandenong-FindMyShift-full-range.xlsx"));
+const findmyshiftCrossTermUpload = await parseUploadForm(new Request("http://fixture.test/api/analyze", { method: "POST", body: findmyshiftCrossTermFormData }));
+assert.equal(findmyshiftCrossTermUpload.sources.ddh.length, 1, "a FindMyShift full available roster may safely cross term boundaries");
+const findmyshiftDoctors = doctorOptions([], [findmyshiftSource]);
+const findmyshiftAlex = findmyshiftDoctors.find((doctor) => doctor.key === "ALEX EXAMPLE");
+assert.ok(findmyshiftAlex, "FindMyShift workbook should expose its doctor names to the DDH parser");
+const findmyshiftAlexEvents = buildRosterView([], [findmyshiftSource], findmyshiftAlex.key).events;
+assert.ok(findmyshiftAlexEvents.some((event) => event.start === "2026-08-03T07:00:00+10:00" && event.end === "2026-08-03T15:00:00+10:00"), "FindMyShift timed shifts should reach the DDH calendar parser");
+assert.ok(findmyshiftAlexEvents.some((event) => event.start === "2026-08-04T19:00:00+10:00" && event.end === "2026-08-05T07:00:00+10:00"), "FindMyShift overnight shifts should retain their next-day end time");
+const findmyshiftBlair = findmyshiftDoctors.find((doctor) => doctor.key === "BLAIR EXAMPLE");
+const findmyshiftBlairEvents = buildRosterView([], [findmyshiftSource], findmyshiftBlair.key).events;
+assert.ok(findmyshiftBlairEvents.some((event) => event.title === "Annual Leave" && event.start === "2026-08-05" && event.end === "2026-08-06"), "FindMyShift one-day leave must not expand to the whole week");
+assert.ok(findmyshiftAlexEvents.some((event) => event.location === "North Campus"), "FindMyShift facilities should reach the calendar event location");
+const findmyshiftAutomatedPayload = await buildAutomatedDerivedRosterPayload({
+  file: workbookFile(findmyshiftWorkbook, "Dandenong-FindMyShift-fixture.xlsx"),
+  sourceId: "dandenong-findmyshift",
+  contentHash: "findmyshift-fixture-content-hash",
+  providerVersion: "2026-08-06T06:39:00.000Z",
+});
+assert.equal(findmyshiftAutomatedPayload.eventCount, 3, "automated FindMyShift processing should use the structured Dandenong parser");
+assert.ok(
+  Object.values(findmyshiftAutomatedPayload.eventsByDoctor).flat().some((event) => event.location === "South Campus"),
+  "automated FindMyShift processing should retain facility-specific calendar locations",
+);
 const caseyWorkbook = XLSX.readFile(fileURLToPath(new URL("../fixtures/Casey_Term_2_2026_DRAFT.xlsm", import.meta.url)), {
   cellDates: true,
 });
@@ -81,6 +151,7 @@ const mchBytes = await readFile(fileURLToPath(new URL("../fixtures/Paeds_Term_2_
 const appSource = await readFile(new URL("../public/static/app.js", import.meta.url), "utf8");
 const rosterSource = await readFile(new URL("../public/static/roster.js", import.meta.url), "utf8");
 const stateSource = await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8");
+const findmyshiftModuleSource = await readFile(new URL("../functions/_lib/findmyshift.js", import.meta.url), "utf8");
 const styleSource = await readFile(new URL("../public/static/styles.css", import.meta.url), "utf8");
 const calendarMigrationSource = await readFile(new URL("../migrations/0001_calendar_store.sql", import.meta.url), "utf8");
 const insightIndexMigrationSource = await readFile(new URL("../migrations/0005_roster_insight_index.sql", import.meta.url), "utf8");
@@ -91,6 +162,18 @@ const automationDispatchEndpointSource = await readFile(new URL("../functions/ap
 const automationWorkflowSource = await readFile(new URL("../.github/workflows/monash-roster-sync.yml", import.meta.url), "utf8");
 const indexSource = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
 assert.match(indexSource, /id="stayLoggedIn"[^>]*checked/, "Stay logged in should be selected by default");
+assert.equal((appSource.match(/data-test-findmyshift/g) || []).length, 0, "FindMyShift diagnostics should not remain exposed as a UI control");
+assert.equal((appSource.match(/data-sync-findmyshift/g) || []).length, 2, "FindMyShift should render one controlled sync control and one click handler");
+assert.doesNotMatch(
+  stateSource.match(/if \(action === "testFindmyshiftConnection"\)[\s\S]*?if \(action === "adminCreateUser"\)/)?.[0] || "",
+  /Promise\.all/,
+  "FindMyShift diagnostics must not make concurrent API requests",
+);
+assert.doesNotMatch(
+  findmyshiftModuleSource.match(/export async function findmyshiftRosterWorkbook[\s\S]*?export async function findmyshiftShiftReport/)?.[0] || "",
+  /Promise\.all/,
+  "FindMyShift import preparation must not make concurrent API requests",
+);
 assert.ok(
   automationIngestSource.indexOf("findRosterSyncByProviderVersion") < automationIngestSource.indexOf("file.arrayBuffer()"),
   "automation ingress should reject an unchanged provider version before hashing or storing file bytes",
@@ -1088,21 +1171,20 @@ assert.match(
   "System-card sync issues should compare server counts rather than empty local file handles",
 );
 assert.match(appSource, /data-admin-user-seniority-filter/, "admin users should expose a seniority filter");
-assert.match(appSource, /data-admin-files-sort/, "admin files tab should expose a roster file sort control");
 assert.match(
-  appSource,
-  /adminFilesSortOrder = "hospital-term"[\s\S]*function sortRosterFileEntries/,
-  "admin files should default to hospital and term sorting",
+  appSource.match(/function renderAdminFilesMarkup[\s\S]*?function adminRosterTerms/)?.[0] || "",
+  /Auto-sync[\s\S]*Manual imports[\s\S]*Previously imported files/,
+  "admin files should group automated and manual roster files into the new sections",
 );
 assert.match(
-  appSource.match(/function sortRosterFileEntries[\s\S]*?function renderAdminFilesSortControl/)?.[0] || "",
-  /order === "hospital-term"/,
-  "admin files sort should support hospital then term ordering",
+  appSource.match(/function renderAdminAutoSyncRow[\s\S]*?function adminLatestTermFile/)?.[0] || "",
+  /Current term[\s\S]*Next term/,
+  "automated roster rows should report only current and available next-term files",
 );
 assert.match(
   stateSource.match(/async function calendarStoreStatus[\s\S]*?function summarizeExpectedRosterFiles/)?.[0] || "",
-  /lastModified: Number\(file\.lastModified/,
-  "calendar store status should expose roster file modified timestamps",
+  /sourceId: String\(file\.sourceId[\s\S]*startDate: String\(file\.startDate/,
+  "calendar store status should expose roster source and coverage metadata for Admin grouping",
 );
 assert.doesNotMatch(
   appSource.match(/async function deleteAccount[\s\S]*?function deleteLocalAccountData/)?.[0] || "",
@@ -1339,7 +1421,11 @@ assert.match(appSource, /function rosterSyncSummary/, "system card should expose
 assert.doesNotMatch(appSource, /function scheduleFailedRosterRetry/, "failed roster syncs should not schedule automatic retry storms");
 assert.match(appSource, /data-reparse-import/, "file cards should expose a visible reparse action");
 assert.match(appSource, /Reparse produced 0 events/, "zero-event reparses should remain visibly failed");
-assert.match(appSource, /formatted\.replace\(\/,\\s0\(\\d:\\d\{2\}\\s\?pm\)\$\/i, \", \$1\"\)/, "PM timestamps should drop their leading zero");
+assert.match(
+  appSource.match(/function formatTimestamp\([\s\S]*?function formatIssueHeading/)?.[0] || "",
+  /timeZone: "Australia\/Melbourne"[\s\S]*hour: "numeric"[\s\S]*hour12: true[\s\S]*formatToParts/,
+  "timestamps should use Australian 12-hour formatting without a leading zero",
+);
 assert.match(
   appSource.match(/accountsBody\.addEventListener\(\"click\"[\s\S]*?\n\}\);/)?.[0] || "",
   /data-reparse-import[\s\S]*reparseRosterFile/,

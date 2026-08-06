@@ -1,4 +1,4 @@
-import { findmyshiftLastModified, findmyshiftRosterWorkbook } from "../../_lib/findmyshift.js";
+import { findmyshiftConfiguredRosterRange, findmyshiftLastModified, findmyshiftRosterWorkbook } from "../../_lib/findmyshift.js";
 import { hasCalendarDb, loadRosterSource, upsertRosterSource } from "../../_lib/d1-calendar.js";
 
 const SOURCE_ID = "dandenong-findmyshift";
@@ -18,7 +18,7 @@ export async function onRequestPost(context) {
       await saveSource(context, current, { lastCheckedAt: now, lastError: "" });
       return Response.json({ ok: true, status: "unchanged", providerModifiedAt: providerVersion });
     }
-    const range = rosterRange(context.env);
+    const range = findmyshiftConfiguredRosterRange(context.env);
     const workbook = await findmyshiftRosterWorkbook(apiKey, teamId, range);
     const response = await fetch(new URL("/api/automation/ingest", context.request.url), {
       method: "POST",
@@ -39,11 +39,6 @@ export async function onRequestPost(context) {
     await saveSource(context, current, { lastCheckedAt: now, lastError: String(error?.message || error).slice(0, 300) });
     return Response.json({ ok: false, status: "failed", error: "FindMyShift roster check failed." }, { status: 502 });
   }
-}
-
-function rosterRange(env) {
-  const year = new Date().getUTCFullYear();
-  return { from: String(env.FINDMYSHIFT_FROM || `${year - 1}-01-01`), to: String(env.FINDMYSHIFT_TO || `${year + 1}-12-31`) };
 }
 
 async function saveSource(context, existing, update) {

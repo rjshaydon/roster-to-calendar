@@ -7,6 +7,18 @@ on:
         description: "Cloudflare roster-dispatch identifier"
         required: false
         type: string
+      automation_base_url:
+        description: "Pages base URL to process"
+        required: false
+        type: string
+      target:
+        description: "Production or Preview automation credentials"
+        required: false
+        default: production
+        type: choice
+        options:
+          - production
+          - preview
 
 run-name: "Roster queue ${{ inputs.dispatch_id || github.run_id }}"
 
@@ -21,22 +33,22 @@ jobs:
   process:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      ROSTER_AUTOMATION_BASE_URL: ${{ inputs.automation_base_url || 'https://roster-to-calendar.pages.dev' }}
+      ROSTER_AUTOMATION_TOKEN: ${{ inputs.target == 'preview' && secrets.ROSTER_PREVIEW_AUTOMATION_TOKEN || secrets.ROSTER_AUTOMATION_TOKEN }}
     steps:
       - name: Check for changed roster files
         id: queue
-        env:
-          ROSTER_AUTOMATION_TOKEN: ${{ secrets.ROSTER_AUTOMATION_TOKEN }}
         run: |
           count="$(curl --fail --silent --show-error \
             --header "Authorization: Bearer ${ROSTER_AUTOMATION_TOKEN}" \
-            "https://roster-to-calendar.pages.dev/api/automation/pending?limit=1" \
+            "${ROSTER_AUTOMATION_BASE_URL}/api/automation/pending?limit=1" \
             | jq -r '.runs | length')"
           echo "count=${count}" >> "$GITHUB_OUTPUT"
           echo "Found ${count} changed roster file(s) waiting."
       - name: Record processor start
         if: steps.queue.outputs.count != '0' && inputs.dispatch_id != ''
         env:
-          ROSTER_AUTOMATION_TOKEN: ${{ secrets.ROSTER_AUTOMATION_TOKEN }}
           DISPATCH_ID: ${{ inputs.dispatch_id }}
           GITHUB_RUN_ID: ${{ github.run_id }}
         run: |
@@ -45,7 +57,7 @@ jobs:
             --header "Authorization: Bearer ${ROSTER_AUTOMATION_TOKEN}" \
             --header "Content-Type: application/json" \
             --data "{\"action\":\"lifecycle\",\"event\":\"started\",\"dispatchId\":\"${DISPATCH_ID}\",\"githubRunId\":\"${GITHUB_RUN_ID}\"}" \
-            "https://roster-to-calendar.pages.dev/api/automation/dispatch"
+            "${ROSTER_AUTOMATION_BASE_URL}/api/automation/dispatch"
       - uses: actions/checkout@v4
         if: steps.queue.outputs.count != '0'
       - uses: actions/setup-node@v4
@@ -60,12 +72,10 @@ jobs:
         if: steps.queue.outputs.count != '0'
         run: node scripts/process-roster-queue.mjs
         env:
-          ROSTER_AUTOMATION_BASE_URL: https://roster-to-calendar.pages.dev
-          ROSTER_AUTOMATION_TOKEN: ${{ secrets.ROSTER_AUTOMATION_TOKEN }}
+          ROSTER_AUTOMATION_BASE_URL: ${{ env.ROSTER_AUTOMATION_BASE_URL }}
       - name: Record processor completion
         if: always() && steps.queue.outputs.count != '0' && inputs.dispatch_id != ''
         env:
-          ROSTER_AUTOMATION_TOKEN: ${{ secrets.ROSTER_AUTOMATION_TOKEN }}
           DISPATCH_ID: ${{ inputs.dispatch_id }}
           GITHUB_RUN_ID: ${{ github.run_id }}
           PROCESS_OUTCOME: ${{ steps.process.outcome }}
@@ -81,4 +91,4 @@ jobs:
             --header "Authorization: Bearer ${ROSTER_AUTOMATION_TOKEN}" \
             --header "Content-Type: application/json" \
             --data "{\"action\":\"lifecycle\",\"event\":\"${event}\",\"dispatchId\":\"${DISPATCH_ID}\",\"githubRunId\":\"${GITHUB_RUN_ID}\"${message}}" \
-            "https://roster-to-calendar.pages.dev/api/automation/dispatch"
+            "${ROSTER_AUTOMATION_BASE_URL}/api/automation/dispatch"
