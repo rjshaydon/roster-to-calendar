@@ -25,7 +25,7 @@ export async function onRequestPost(context) {
     if (current?.providerVersion
       && current.providerVersion === providerVersion
       && current.lastSuccessAt
-      && !current.lastError) {
+      && (!current.lastError || isTransientFindmyshiftRateLimitError(current.lastError))) {
       await saveSource(context, current, { lastCheckedAt: now, lastError: "" });
       return Response.json({ ok: true, status: "unchanged", providerModifiedAt: providerVersion });
     }
@@ -68,6 +68,10 @@ export async function onRequestPost(context) {
 
 function isIncompleteDandenongAssignmentError(value) {
   return /did not include a stream or facility/i.test(String(value || ""));
+}
+
+function isTransientFindmyshiftRateLimitError(value) {
+  return /FindMyShift .* returned HTTP 429\./i.test(String(value || ""));
 }
 
 async function saveSource(context, existing, update) {
