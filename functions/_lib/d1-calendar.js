@@ -1644,9 +1644,14 @@ export async function queryCalendarRevision(db, ownerEmail = "") {
       COUNT(*) AS active_file_count,
       COALESCE(MAX(parsed_at), '') AS max_parsed_at,
       COALESCE(MAX(uploaded_at), '') AS max_uploaded_at,
-      COALESCE(MAX(last_modified), 0) AS max_last_modified
-    FROM roster_files
-    WHERE active = 1
+      COALESCE(MAX(last_modified), 0) AS max_last_modified,
+      COALESCE(GROUP_CONCAT(id || ':' || source_id || ':' || parsed_at, '|'), '') AS active_file_fingerprint
+    FROM (
+      SELECT id, source_id, parsed_at, uploaded_at, last_modified
+      FROM roster_files
+      WHERE active = 1
+      ORDER BY id
+    )
   `).first();
   const accountContext = email
     ? await db.prepare(`
@@ -1687,6 +1692,7 @@ export async function queryCalendarRevision(db, ownerEmail = "") {
     String(roster?.max_parsed_at || ""),
     String(roster?.max_uploaded_at || ""),
     Number(roster?.max_last_modified || 0),
+    String(roster?.active_file_fingerprint || ""),
     stableJsonStringify(materializedSession),
     Number(parserRules?.count || 0),
     String(parserRules?.max_updated_at || ""),

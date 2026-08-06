@@ -5,7 +5,7 @@ import XLSX from "xlsx";
 
 import { onRequestPost as handleStatePost } from "../functions/api/state.js";
 import { onRequestGet as handleFeedGet } from "../functions/api/feed.js";
-import { extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftRowsWorkbook } from "../functions/_lib/findmyshift.js";
+import { assertFindmyshiftDandenongAssignments, extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentDiagnostics, findmyshiftRowsWorkbook } from "../functions/_lib/findmyshift.js";
 import { buildAutomatedDerivedRosterPayload } from "../functions/_lib/automation-import.js";
 import { buildPreviewFromDerivedEvents, findRosterSyncByProviderVersion, storeCachedSnapshot } from "../functions/_lib/d1-calendar.js";
 import { recordRosterDispatchLifecycle, requestQueuedRosterProcessing } from "../functions/_lib/automation-dispatch.js";
@@ -94,6 +94,20 @@ const findmyshiftRows = extractShiftRows(findmyshiftFixture.report, {
 });
 assert.equal(findmyshiftRows.length, 3, "FindMyShift duplicate and malformed rows should not generate extra events");
 assert.deepEqual(
+  findmyshiftDandenongAssignmentDiagnostics(findmyshiftRows),
+  { rows: 3, timedRows: 2, ambiguousTimed: 0, complete: true },
+  "FindMyShift rows with a resolved facility may be imported with a meaningful DDH assignment",
+);
+assert.doesNotThrow(
+  () => assertFindmyshiftDandenongAssignments(findmyshiftRows),
+  "FindMyShift rows that retain a facility must remain importable",
+);
+assert.throws(
+  () => assertFindmyshiftDandenongAssignments([{ label: "Shift", start: "14:30", end: "00:00", facility: "" }]),
+  /did not include a stream or facility/i,
+  "FindMyShift rows without a stream or facility must be rejected rather than guessed",
+);
+assert.deepEqual(
   findmyshiftRows.map((row) => ({ date: row.date, label: row.label, start: row.start, end: row.end, facility: row.facility, seniority: row.seniority, comment: row.comment })),
   [
     { date: "2026-08-03", label: "Shift", start: "07:00", end: "15:00", facility: "North Campus", seniority: "Senior", comment: "" },
@@ -134,6 +148,7 @@ const findmyshiftBlair = findmyshiftDoctors.find((doctor) => doctor.key === "BLA
 const findmyshiftBlairEvents = buildRosterView([], [findmyshiftSource], findmyshiftBlair.key).events;
 assert.ok(findmyshiftBlairEvents.some((event) => event.title === "Annual Leave" && event.start === "2026-08-05" && event.end === "2026-08-06"), "FindMyShift one-day leave must not expand to the whole week");
 assert.ok(findmyshiftAlexEvents.some((event) => event.location === "North Campus"), "FindMyShift facilities should reach the calendar event location");
+assert.ok(findmyshiftAlexEvents.some((event) => event.title.includes("North Campus") && event.title.includes("AM")), "FindMyShift timed rows should preserve a supplied assignment in the title");
 const findmyshiftAutomatedPayload = await buildAutomatedDerivedRosterPayload({
   file: workbookFile(findmyshiftWorkbook, "Dandenong-FindMyShift-fixture.xlsx"),
   sourceId: "dandenong-findmyshift",

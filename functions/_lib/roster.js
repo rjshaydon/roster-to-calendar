@@ -1409,7 +1409,7 @@ function parseFindmyshiftDdhRecords(workbook, doctorKey) {
     let record;
     if (startHm && endHm) {
       const titleParts = label.toUpperCase() === "SHIFT"
-        ? genericTimeOnlyShiftTitleParts(startHm, "DDH")
+        ? findmyshiftTimedShiftTitleParts(facility, startHm)
         : { base: label, period: "", suffix: "" };
       record = createTimedRecord("DDH", day, label, {
         kind: "shift",
@@ -1430,6 +1430,17 @@ function parseFindmyshiftDdhRecords(workbook, doctorKey) {
     records.push({ ...record, comment, findmyshift: true });
   }
   return records;
+}
+
+function findmyshiftTimedShiftTitleParts(facility, startHm) {
+  const value = cleanText(facility);
+  if (!value) return genericTimeOnlyShiftTitleParts(startHm, "DDH");
+  const normalized = normalizeDdhLabel(value) || normalizeGenericDdhLabel(value);
+  if (normalized?.titleParts?.base) {
+    const parts = normalized.titleParts;
+    return parts.period ? parts : { ...parts, period: inferGenericTimeOnlyShiftPeriod(startHm, "DDH") };
+  }
+  return { base: value, period: inferGenericTimeOnlyShiftPeriod(startHm, "DDH"), suffix: "" };
 }
 
 function parseFindmyshiftTime(value) {

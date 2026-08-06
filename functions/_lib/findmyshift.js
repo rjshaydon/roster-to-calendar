@@ -55,7 +55,37 @@ export async function findmyshiftRosterWorkbook(apiKey, teamId, range) {
   const facilities = await findmyshiftFacilityList(apiKey, teamId);
   const shifts = extractShiftRows(report, { staff, facilities });
   if (!shifts.length) throw new Error("FindMyShift returned no usable roster shifts for the configured date range.");
+  assertFindmyshiftDandenongAssignments(shifts);
   return findmyshiftRowsWorkbook(shifts);
+}
+
+// A DDH shift must carry its stream in either its label or a facility value.
+// The report API sometimes returns only a time range (for example 14:30-00:00)
+// with no facility.  There is no reliable way to infer which DDH stream that
+// represents, so importing it as a generic AM/PM/Night shift would silently
+// replace a more precise manual roster with incorrect calendar entries.
+export function findmyshiftDandenongAssignmentDiagnostics(rows = []) {
+  const shifts = Array.isArray(rows) ? rows : [];
+  const ambiguousTimed = shifts.filter((row) => (
+    String(row?.label || "").trim().toUpperCase() === "SHIFT"
+    && String(row?.start || "").trim()
+    && String(row?.end || "").trim()
+    && !String(row?.facility || "").trim()
+  )).length;
+  return {
+    rows: shifts.length,
+    timedRows: shifts.filter((row) => String(row?.start || "").trim() && String(row?.end || "").trim()).length,
+    ambiguousTimed,
+    complete: ambiguousTimed === 0,
+  };
+}
+
+export function assertFindmyshiftDandenongAssignments(rows = []) {
+  const diagnostics = findmyshiftDandenongAssignmentDiagnostics(rows);
+  if (diagnostics.complete) return diagnostics;
+  throw new Error(
+    `FindMyShift did not include a stream or facility for ${diagnostics.ambiguousTimed} timed roster entries. Automatic import was stopped so ambiguous Dandenong shifts cannot replace the detailed manual roster.`,
+  );
 }
 
 export async function findmyshiftShiftReport(apiKey, teamId, range) {

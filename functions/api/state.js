@@ -1656,7 +1656,18 @@ async function autoClaimMatchedCanonicalDoctors(record, db = null) {
 }
 
 async function calendarStoreStatus(store, db, options = {}) {
-  const allD1Files = await queryRosterFiles(db, { includeInactive: true }).catch(() => []);
+  const storedFiles = await queryRosterFiles(db, { includeInactive: true }).catch(() => []);
+  const storedFileRanges = await queryRosterFileRanges(db, { includeInactive: true }).catch(() => []);
+  const rangesById = new Map(storedFileRanges.map((file) => [file.id, file]));
+  const allD1Files = storedFiles.map((file) => {
+    const range = rangesById.get(file.id);
+    return range ? {
+      ...file,
+      startDate: range.startDate,
+      coverageEndDate: range.coverageEndDate,
+      endDate: range.endDate,
+    } : file;
+  });
   const rawFiles = await queryRawRosterFiles(db).catch(() => []);
   const rosterSources = await listRosterSources(db).catch(() => []);
   const syncRuns = await listRosterSyncRuns(db, { limit: 100 }).catch(() => []);
