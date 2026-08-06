@@ -1808,8 +1808,13 @@ function rosterSourceStatuses(files = [], storedSources = [], syncRuns = [], lat
     const activeFile = findActiveSourceFile(activeFiles, source?.activeFileId);
     const latestRun = latestRunBySource.get(id) || null;
     const pendingState = ["queued", "processing"].includes(latestRun?.status) ? latestRun.status : "";
-    const failed = latestRun?.status === "failed"
-      && (!source?.lastSuccessAt || String(latestRun.completedAt || latestRun.startedAt) >= String(source.lastSuccessAt));
+    // A source-level failure can occur before a sync run exists (for example,
+    // when a provider report is rejected as ambiguous).  It must remain
+    // visible to creators even if the most recent historical queue run was a
+    // success whose derived data has since been removed.
+    const failed = Boolean(String(source?.lastError || "").trim())
+      && (!source?.lastSuccessAt || latestRun?.status === "failed"
+        && String(latestRun.completedAt || latestRun.startedAt) >= String(source.lastSuccessAt));
     return {
       id,
       label: definition.label,
