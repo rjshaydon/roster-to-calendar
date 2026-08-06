@@ -93,16 +93,16 @@ const findmyshiftRows = extractShiftRows(findmyshiftFixture.report, {
   facilities: findmyshiftFixture.facilities,
 });
 const findmyshiftPreliminaryRows = extractShiftRows(findmyshiftFixture.report);
-assert.equal(findmyshiftRows.length, 3, "FindMyShift duplicate and malformed rows should not generate extra events");
+assert.equal(findmyshiftRows.length, 5, "FindMyShift time/stream pairs should become one timed event while extra named entries are preserved");
 assert.deepEqual(
   findmyshiftDandenongAssignmentDiagnostics(findmyshiftPreliminaryRows),
-  { rows: 3, timedRows: 2, ambiguousTimed: 0, complete: true },
-  "FindMyShift report rows can be quality-checked before optional staff and facility lookups",
+  { rows: 5, timedRows: 3, ambiguousTimed: 0, complete: true },
+  "FindMyShift paired time/stream rows can be quality-checked before optional staff and facility lookups",
 );
 assert.deepEqual(
   findmyshiftDandenongAssignmentDiagnostics(findmyshiftRows),
-  { rows: 3, timedRows: 2, ambiguousTimed: 0, complete: true },
-  "FindMyShift rows with a resolved facility may be imported with a meaningful DDH assignment",
+  { rows: 5, timedRows: 3, ambiguousTimed: 0, complete: true },
+  "FindMyShift paired time/stream rows may be imported with meaningful DDH assignments",
 );
 assert.doesNotThrow(
   () => assertFindmyshiftDandenongAssignments(findmyshiftRows),
@@ -116,11 +116,18 @@ assert.throws(
 assert.deepEqual(
   findmyshiftRows.map((row) => ({ date: row.date, label: row.label, start: row.start, end: row.end, facility: row.facility, seniority: row.seniority, comment: row.comment })),
   [
-    { date: "2026-08-03", label: "Shift", start: "07:00", end: "15:00", facility: "North Campus", seniority: "Senior", comment: "" },
-    { date: "2026-08-04", label: "Shift", start: "19:00", end: "07:00", facility: "South Campus", seniority: "Senior", comment: "" },
+    { date: "2026-08-03", label: "North AM", start: "07:00", end: "15:00", facility: "North Campus", seniority: "Senior", comment: "" },
+    { date: "2026-08-04", label: "South Night", start: "19:00", end: "07:00", facility: "South Campus", seniority: "Senior", comment: "" },
     { date: "2026-08-05", label: "Annual leave", start: "", end: "", facility: "", seniority: "Registrar", comment: "Approved leave" },
+    { date: "2026-08-06", label: "North CS", start: "08:00", end: "16:00", facility: "North Campus", seniority: "Senior", comment: "" },
+    { date: "2026-08-06", label: "CS", start: "", end: "", facility: "", seniority: "Senior", comment: "" },
   ],
-  "FindMyShift parser should preserve timed, overnight, all-day, multi-facility, comment and seniority data",
+  "FindMyShift parser should pair timed stream rows and preserve overnight, all-day, multi-facility, comment and seniority data",
+);
+assert.equal(
+  findmyshiftRows.filter((row) => row.label === "Shift" && row.start && row.end).length,
+  0,
+  "a paired FindMyShift stream must not leave a duplicate generic timed event behind",
 );
 const findmyshiftWorkbook = XLSX.read(findmyshiftRowsWorkbook(findmyshiftRows), { type: "array", cellDates: true });
 const findmyshiftDetails = XLSX.utils.sheet_to_json(findmyshiftWorkbook.Sheets["FindMyShift details"], { header: 1, blankrows: false });
@@ -129,7 +136,7 @@ assert.deepEqual(
   ["Staff ID", "Staff name", "Seniority/job title", "Date", "Shift label", "Start", "End", "Facility", "Comment"],
   "FindMyShift retained workbook should include its complete structured audit sheet",
 );
-assert.equal(findmyshiftDetails.length, 4, "FindMyShift audit sheet should retain each valid unique source row");
+assert.equal(findmyshiftDetails.length, 6, "FindMyShift audit sheet should retain each valid unique paired source entry");
 assert.equal(findmyshiftDetails[2][7], "South Campus", "FindMyShift audit sheet should preserve the resolved facility");
 assert.equal(findmyshiftDetails[3][8], "Approved leave", "FindMyShift audit sheet should preserve comments when the API supplies them");
 const findmyshiftFormData = new FormData();
@@ -150,18 +157,19 @@ assert.ok(findmyshiftAlex, "FindMyShift workbook should expose its doctor names 
 const findmyshiftAlexEvents = buildRosterView([], [findmyshiftSource], findmyshiftAlex.key).events;
 assert.ok(findmyshiftAlexEvents.some((event) => event.start === "2026-08-03T07:00:00+10:00" && event.end === "2026-08-03T15:00:00+10:00"), "FindMyShift timed shifts should reach the DDH calendar parser");
 assert.ok(findmyshiftAlexEvents.some((event) => event.start === "2026-08-04T19:00:00+10:00" && event.end === "2026-08-05T07:00:00+10:00"), "FindMyShift overnight shifts should retain their next-day end time");
+assert.ok(findmyshiftAlexEvents.some((event) => event.allDay && event.title === "DDH: CS"), "an unstreamed CS row should remain one all-day DDH event");
 const findmyshiftBlair = findmyshiftDoctors.find((doctor) => doctor.key === "BLAIR EXAMPLE");
 const findmyshiftBlairEvents = buildRosterView([], [findmyshiftSource], findmyshiftBlair.key).events;
 assert.ok(findmyshiftBlairEvents.some((event) => event.title === "Annual Leave" && event.start === "2026-08-05" && event.end === "2026-08-06"), "FindMyShift one-day leave must not expand to the whole week");
 assert.ok(findmyshiftAlexEvents.some((event) => event.location === "North Campus"), "FindMyShift facilities should reach the calendar event location");
-assert.ok(findmyshiftAlexEvents.some((event) => event.title.includes("North Campus") && event.title.includes("AM")), "FindMyShift timed rows should preserve a supplied assignment in the title");
+assert.ok(findmyshiftAlexEvents.some((event) => event.title.includes("North AM")), "FindMyShift timed rows should preserve the paired stream in the title");
 const findmyshiftAutomatedPayload = await buildAutomatedDerivedRosterPayload({
   file: workbookFile(findmyshiftWorkbook, "Dandenong-FindMyShift-fixture.xlsx"),
   sourceId: "dandenong-findmyshift",
   contentHash: "findmyshift-fixture-content-hash",
   providerVersion: "2026-08-06T06:39:00.000Z",
 });
-assert.equal(findmyshiftAutomatedPayload.eventCount, 3, "automated FindMyShift processing should use the structured Dandenong parser");
+assert.equal(findmyshiftAutomatedPayload.eventCount, 5, "automated FindMyShift processing should use the structured Dandenong parser");
 assert.ok(
   Object.values(findmyshiftAutomatedPayload.eventsByDoctor).flat().some((event) => event.location === "South Campus"),
   "automated FindMyShift processing should retain facility-specific calendar locations",

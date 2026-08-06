@@ -395,7 +395,7 @@ function extractFindmyshiftFlatRows(report, options) {
   if (!reportRows.length || !reportRows.every((entry) => Object.hasOwn(entry, "staffId") && Object.hasOwn(entry, "date") && Object.hasOwn(entry, "shift"))) return null;
   const staffById = indexFindmyshiftStaff(options.staff);
   const facilitiesById = indexFindmyshiftFacilities(options.facilities);
-  const rows = [];
+  const sourceRows = [];
   for (const entry of reportRows) {
     const staffId = String(entry.staffId || "").trim();
     const person = staffById.get(staffId) || {};
@@ -405,7 +405,7 @@ function extractFindmyshiftFlatRows(report, options) {
     if (!name || !date || !shiftText) continue;
     const time = timeRangeFromShiftText(shiftText);
     const facilityId = String(entry.facilityId || "").trim();
-    rows.push({
+    sourceRows.push({
       sourceStaffId: staffId,
       name,
       seniority: String(person.jobTitle || person.department || entry.jobTitle || entry.department || "Unknown").trim() || "Unknown",
@@ -417,7 +417,67 @@ function extractFindmyshiftFlatRows(report, options) {
       comment: String(entry.comment || entry.comments || entry.notes || "").trim(),
     });
   }
-  return rows;
+  return pairFindmyshiftTimeAndStreamRows(sourceRows);
+}
+
+// The FindMyShift shifts report represents a rostered shift as consecutive
+// rows for the same person and day: a plain time range followed by its named
+// stream.  The time row itself usually has no facility.  Treating those rows
+// independently produces a generic AM/PM event plus a second all-day stream
+// event, rather than the one stream-labelled timed shift shown in FindMyShift.
+//
+// Keep any extra named rows: they are genuine additional/all-day entries, not
+// safe to discard just because they share a staff member and date.
+function pairFindmyshiftTimeAndStreamRows(rows) {
+  const paired = [];
+  for (let index = 0; index < rows.length;) {
+    const first = rows[index];
+    const group = [first];
+    index += 1;
+    while (index < rows.length && sameFindmyshiftStaffDay(first, rows[index])) {
+      group.push(rows[index]);
+      index += 1;
+    }
+    paired.push(...pairFindmyshiftStaffDayRows(group));
+  }
+  return paired;
+}
+
+function sameFindmyshiftStaffDay(left, right) {
+  return String(left?.sourceStaffId || left?.name || "") === String(right?.sourceStaffId || right?.name || "")
+    && String(left?.date || "") === String(right?.date || "");
+}
+
+function pairFindmyshiftStaffDayRows(group) {
+  const timedIndexes = group.map((row, index) => row.start && row.end ? index : -1).filter((index) => index >= 0);
+  // The actual report's paired representation is strictly time first. Leave
+  // unexpected layouts untouched so the safety check can reject an ambiguous
+  // timed row rather than incorrectly attaching an unrelated named entry.
+  if (timedIndexes.length !== 1 || timedIndexes[0] !== 0) return group;
+  const namedIndexes = group.map((row, index) => !row.start && !row.end && row.label ? index : -1).filter((index) => index >= 0);
+  if (!namedIndexes.length) return group;
+
+  // When a staff/day has another named entry as well, the real report places
+  // the stream/facility row last. Prefer a named row with a facility, then the
+  // final named row, and preserve the other named row as its own entry.
+  const assignmentIndex = namedIndexes.findLast((index) => String(group[index]?.facility || "").trim())
+    ?? namedIndexes.at(-1);
+  const timed = group[0];
+  const assignment = group[assignmentIndex];
+  const merged = {
+    ...timed,
+    label: assignment.label,
+    facility: assignment.facility || timed.facility,
+    comment: combineFindmyshiftComments(timed.comment, assignment.comment),
+  };
+  return group.flatMap((row, index) => {
+    if (index === 0) return [merged];
+    return index === assignmentIndex ? [] : [row];
+  });
+}
+
+function combineFindmyshiftComments(...values) {
+  return [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))].join("\n");
 }
 
 function indexFindmyshiftStaff(staff) {
