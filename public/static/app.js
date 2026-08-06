@@ -2293,7 +2293,7 @@ function renderFilesMarkup({ canRemove = false, heading = "", description = "", 
             ${Number(entry.lastModified || 0) > 0 ? `<span>Source modified ${escapeHtml(formatTimestamp(entry.lastModified))}</span>` : ""}
             ${rosterSyncLabel(entry) || (statusFiles.has(entry.id)
               ? statusFiles.get(entry.id)?.retainedSourceOnly
-                ? `<span>Retained in R2 · not yet synced to D1</span>`
+                ? `<span>Archived retained source · not used in calendar</span>`
                 : renderRosterFileDoctorStatus(statusFiles.get(entry.id))
               : populatedSelectedFileIds.has(entry.id) ? `<span>Saved in D1 · inactive</span>`
               : entry.file && hasUsableStatus ? `<span>Not yet confirmed in D1</span>`
@@ -2445,7 +2445,7 @@ function renderAdminManualFileRow(entry, slot, options = {}) {
   const termLabel = slot === "current" ? "Current term" : slot === "next" ? "Next term" : adminRosterFileTermLabel(entry);
   const statusFile = options.statusFiles?.get(entry.id);
   const status = rosterSyncLabel(entry) || (statusFile?.retainedSourceOnly
-    ? "Retained in R2 · not yet synced to D1"
+    ? "Archived retained source · not used in calendar"
     : statusFile ? rosterAdminFileStoreStatus(statusFile)
       : options.populatedSelectedFileIds?.has(entry.id) ? "Saved in D1 · inactive"
         : entry.file && options.hasUsableStatus ? "Not yet confirmed in D1"
@@ -2468,7 +2468,7 @@ function renderAdminManualFileRow(entry, slot, options = {}) {
 function rosterAdminFileStoreStatus(file) {
   if (file.status === "populated") return "Saved in D1";
   if (file.status === "partial") return "Partially saved in D1";
-  if (file.status === "retained") return "Retained in R2 · not yet synced to D1";
+  if (file.status === "retained") return "Archived retained source · not used in calendar";
   return "No parsed shifts saved in D1";
 }
 
@@ -11476,9 +11476,16 @@ function mergeRosterFileEntries(baseEntries, status = calendarStoreStatus, optio
     ...pendingRemovedImportIds,
   ]);
   const byId = new Map();
+  const includeRetainedSourceEntries = options.includeRetainedSourceEntries === true;
+  const retainedSourceIsBeingImported = (file) => {
+    const syncState = rosterSyncStates.get(file?.id);
+    return Boolean(syncState && ["pending", "uploading-source", "parsing", "saving"].includes(syncState.status));
+  };
 
   for (const entry of baseEntries || []) {
     if (!entry?.id || removedIds.has(entry.id)) continue;
+    const storeFile = status.files.find((file) => file?.id === entry.id);
+    if (storeFile?.retainedSourceOnly && !includeRetainedSourceEntries && !retainedSourceIsBeingImported(storeFile)) continue;
     if (String(entry.id).startsWith("automation:") && !storeIds.has(entry.id)) continue;
     if (options.removeMissingFromStore && storeIds.size && !storeIds.has(entry.id)) continue;
     byId.set(entry.id, entry);
@@ -11486,6 +11493,7 @@ function mergeRosterFileEntries(baseEntries, status = calendarStoreStatus, optio
 
   for (const file of status.files) {
     if (!file?.id || removedIds.has(file.id)) continue;
+    if (file.retainedSourceOnly && !includeRetainedSourceEntries && !retainedSourceIsBeingImported(file)) continue;
     const storeEntry = rosterStoreFileToClientEntry(file);
     if (!storeEntry) continue;
     const existing = byId.get(file.id);
@@ -11535,7 +11543,7 @@ function rosterDisplayFiles(hasUsableStatus, statusOnlyEntries = []) {
     return calendarFilesForActiveView();
   }
   if (isViewingCreatorAccount() && hasUsableStatus && (calendarStoreStatus?.files || []).length) {
-    return mergeRosterFileEntries(selectedFiles, calendarStoreStatus)
+    return mergeRosterFileEntries(selectedFiles, calendarStoreStatus, { includeRetainedSourceEntries: true })
       .filter((entry) => !pendingRemovedImportIds.has(entry.id));
   }
   return (selectedFiles.length ? selectedFiles : statusOnlyEntries)
