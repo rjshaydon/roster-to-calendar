@@ -92,7 +92,13 @@ const findmyshiftRows = extractShiftRows(findmyshiftFixture.report, {
   staff: findmyshiftFixture.staff,
   facilities: findmyshiftFixture.facilities,
 });
+const findmyshiftPreliminaryRows = extractShiftRows(findmyshiftFixture.report);
 assert.equal(findmyshiftRows.length, 3, "FindMyShift duplicate and malformed rows should not generate extra events");
+assert.deepEqual(
+  findmyshiftDandenongAssignmentDiagnostics(findmyshiftPreliminaryRows),
+  { rows: 3, timedRows: 2, ambiguousTimed: 0, complete: true },
+  "FindMyShift report rows can be quality-checked before optional staff and facility lookups",
+);
 assert.deepEqual(
   findmyshiftDandenongAssignmentDiagnostics(findmyshiftRows),
   { rows: 3, timedRows: 2, ambiguousTimed: 0, complete: true },

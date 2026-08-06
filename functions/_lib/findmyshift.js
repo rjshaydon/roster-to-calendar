@@ -51,6 +51,13 @@ export async function findmyshiftRosterWorkbook(apiKey, teamId, range) {
   // FindMyShift allows only one concurrent request per API key.  Keep these
   // dependent lookups serial even though they are otherwise independent.
   const report = await findmyshiftShiftReport(apiKey, teamId, range);
+  // The report includes names and facility ids itself. Check for the known
+  // DDH stream-information gap before the optional lookups, so an incomplete
+  // report does not consume requests (or trigger a 429) merely to discover
+  // that it cannot safely be imported.
+  const preliminaryShifts = extractShiftRows(report);
+  if (!preliminaryShifts.length) throw new Error("FindMyShift returned no usable roster shifts for the configured date range.");
+  assertFindmyshiftDandenongAssignments(preliminaryShifts);
   const staff = await findmyshiftStaffList(apiKey, teamId);
   const facilities = await findmyshiftFacilityList(apiKey, teamId);
   const shifts = extractShiftRows(report, { staff, facilities });
