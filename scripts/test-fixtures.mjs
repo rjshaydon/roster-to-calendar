@@ -123,6 +123,18 @@ assert.deepEqual(
   [{ staffName: "Example Doctor", date: "2026-08-06", start: "14:30", end: "00:00", reason: "time without named stream" }],
   "creator exception exports should contain only the fields needed to cross-check ambiguous time rows",
 );
+const kimOfficeRows = extractShiftRows([
+  { staffId: "office-worker", facilityId: null, date: "2026-08-06", firstName: "Kim", lastName: "Whelan", payrollId: null, occurrences: 1, shift: "08:00-17:30" },
+]);
+assert.deepEqual(
+  kimOfficeRows.map((row) => ({ label: row.label, start: row.start, end: row.end, facility: row.facility })),
+  [{ label: "CS", start: "08:00", end: "17:30", facility: "" }],
+  "Kim Whelan's verified time-only office shifts should be classified as CS",
+);
+assert.doesNotThrow(
+  () => assertFindmyshiftDandenongAssignments(kimOfficeRows),
+  "Kim Whelan's verified CS rule should resolve his time-only FindMyShift rows",
+);
 assert.deepEqual(
   findmyshiftRows.map((row) => ({ date: row.date, label: row.label, start: row.start, end: row.end, facility: row.facility, seniority: row.seniority, comment: row.comment })),
   [

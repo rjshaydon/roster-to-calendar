@@ -467,7 +467,21 @@ function pairFindmyshiftTimeAndStreamRows(rows) {
     }
     paired.push(...pairFindmyshiftStaffDayRows(group));
   }
-  return paired;
+  return paired.map(applyKnownDandenongFindmyshiftAssignment);
+}
+
+// Kim Whelan is the Dandenong office worker. FindMyShift records his office
+// shifts as time-only rows (the spreadsheet uses LSL for his non-working
+// entries), so the one verified site-specific rule is that an otherwise
+// unassigned timed row for him is Clinical Support. Keep the rule narrow: it
+// never alters a named entry or any other staff member.
+function applyKnownDandenongFindmyshiftAssignment(row) {
+  if (!isAmbiguousFindmyshiftTimedRow(row) || normalizeFindmyshiftStaffName(row?.name) !== "KIM WHELAN") return row;
+  return { ...row, label: "CS", pairingIssue: "" };
+}
+
+function normalizeFindmyshiftStaffName(value) {
+  return String(value || "").trim().replace(/\s+/g, " ").toUpperCase();
 }
 
 function sameFindmyshiftStaffDay(left, right) {
