@@ -54,7 +54,12 @@ export async function onRequestPost(context) {
     if (!response.ok) throw new Error(String(result.error || `Roster queue returned HTTP ${response.status}.`));
     return Response.json({ ok: true, status: String(result.status || "queued"), providerModifiedAt: providerVersion, queue: { runId: String(result.runId || ""), dispatched: result.processorDispatch?.dispatched === true } });
   } catch (error) {
-    await saveSource(context, current, { lastCheckedAt: now, lastError: String(error?.message || error).slice(0, 300) });
+    const errorMessage = String(error?.message || error).slice(0, 300);
+    // A completed source remains current when the provider merely throttles a
+    // metadata poll. The next scheduled check will retry it; do not make the
+    // Files card look like the successfully imported roster has failed.
+    const lastError = isTransientFindmyshiftRateLimitError(errorMessage) && current?.lastSuccessAt ? "" : errorMessage;
+    await saveSource(context, current, { lastCheckedAt: now, lastError });
     const incomplete = error?.code === "findmyshift-incomplete-ddh-assignment" || isIncompleteDandenongAssignmentError(error?.message);
     return Response.json({
       ok: false,
