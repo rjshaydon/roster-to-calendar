@@ -58,11 +58,13 @@ async function processRun(run) {
     providerVersion: run.providerVersion,
     parserExtensions,
   });
+  console.log(`Parsed ${file.name}: ${payload.doctors.length} doctors, ${payload.eventCount} calendar events.`);
   payload.file = {
     ...payload.file,
     lastModified: Number(run.lastModified || payload.file.lastModified || Date.now()),
   };
   await postDerived(run, payload, "start", payload.doctors, {}, {});
+  console.log("Created the derived roster record.");
   const doctorKeys = payload.doctors.map((doctor) => doctor.key).filter(Boolean);
   for (let index = 0; index < doctorKeys.length; index += doctorChunkSize) {
     const keys = doctorKeys.slice(index, index + doctorChunkSize);
@@ -74,6 +76,7 @@ async function processRun(run) {
       Object.fromEntries(keys.map((key) => [key, payload.eventsByDoctor[key] || []])),
       Object.fromEntries(keys.map((key) => [key, payload.issuesByDoctor[key] || []])),
     );
+    console.log(`Saved calendar event batch ${Math.floor(index / doctorChunkSize) + 1} of ${Math.ceil(doctorKeys.length / doctorChunkSize)}.`);
   }
   const finished = await postDerived(run, payload, "finish", payload.doctors, {}, {});
   console.log(`Indexed ${file.name}: ${finished.doctorCount} doctors, ${finished.eventCount} shifts.`);
@@ -107,7 +110,8 @@ async function automationRequest(path, options = {}) {
       const text = await response.text();
       const result = text ? JSON.parse(text) : {};
       if (response.ok) return result;
-      lastError = new Error(result.error || `HTTP ${response.status}`);
+      const diagnostic = String(result.code || result.phase || "").trim();
+      lastError = new Error(`${result.error || `HTTP ${response.status}`}${diagnostic ? ` (${diagnostic})` : ""}`);
       if (![408, 429, 500, 502, 503, 504].includes(response.status)) break;
     } catch (error) {
       lastError = error;

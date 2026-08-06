@@ -34,7 +34,10 @@ export async function onRequestPost(context) {
     const matchingVersion = providerVersion
       ? await findRosterSyncByProviderVersion(context.env.ROSTER_DB, sourceId, providerVersion, file.name)
       : null;
-    if (matchingVersion) {
+    // A failed version is deliberately re-queued.  It may have been retained
+    // successfully while a transient background save failed; treating it as
+    // unchanged would otherwise leave that retained roster stranded forever.
+    if (matchingVersion && matchingVersion.status !== "failed") {
       await upsertRosterSource(context.env.ROSTER_DB, updatedSourceRecord(sourceRecord, source, {
         id: sourceId,
         providerVersion,

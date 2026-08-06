@@ -14,7 +14,14 @@ export async function onRequestPost(context) {
   const current = await loadRosterSource(context.env.ROSTER_DB, SOURCE_ID);
   try {
     const providerVersion = await findmyshiftLastModified(apiKey, teamId);
-    if (current?.providerVersion && current.providerVersion === providerVersion) {
+    // A provider version is current only after it has completed the whole
+    // retained-source → background-parser → active-calendar lifecycle.  A
+    // failed import must be retried even when FindMyShift has not changed the
+    // roster since the failed attempt.
+    if (current?.providerVersion
+      && current.providerVersion === providerVersion
+      && current.lastSuccessAt
+      && !current.lastError) {
       await saveSource(context, current, { lastCheckedAt: now, lastError: "" });
       return Response.json({ ok: true, status: "unchanged", providerModifiedAt: providerVersion });
     }

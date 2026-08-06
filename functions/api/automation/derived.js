@@ -113,9 +113,19 @@ export async function onRequestPost(context) {
         }).catch(() => null);
       }
     }
-    console.error("Derived roster processing failed", error);
-    return Response.json({ error: "Background roster processing failed." }, { status: 422 });
+    const code = safeDerivedFailureCode(error);
+    console.error("Derived roster processing failed", { code, message: String(error?.message || error).slice(0, 300) });
+    return Response.json({ error: "Background roster processing failed.", code }, { status: 422 });
   }
+}
+
+function safeDerivedFailureCode(error) {
+  const message = String(error?.message || error || "").toLowerCase();
+  if (message.includes("d1") || message.includes("sqlite") || message.includes("database")) return "database-save";
+  if (message.includes("event") || message.includes("roster save")) return "event-save";
+  if (message.includes("supersession")) return "supersession";
+  if (message.includes("timeout") || message.includes("timed out")) return "timeout";
+  return "derived-save";
 }
 
 function hasValidAutomationToken(request, configuredToken) {
