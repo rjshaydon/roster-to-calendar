@@ -96,12 +96,12 @@ const findmyshiftPreliminaryRows = extractShiftRows(findmyshiftFixture.report);
 assert.equal(findmyshiftRows.length, 5, "FindMyShift time/stream pairs should become one timed event while extra named entries are preserved");
 assert.deepEqual(
   findmyshiftDandenongAssignmentDiagnostics(findmyshiftPreliminaryRows),
-  { rows: 5, timedRows: 3, ambiguousTimed: 0, complete: true },
+  { rows: 5, timedRows: 3, ambiguousTimed: 0, ambiguousTimedByLayout: {}, complete: true },
   "FindMyShift paired time/stream rows can be quality-checked before optional staff and facility lookups",
 );
 assert.deepEqual(
   findmyshiftDandenongAssignmentDiagnostics(findmyshiftRows),
-  { rows: 5, timedRows: 3, ambiguousTimed: 0, complete: true },
+  { rows: 5, timedRows: 3, ambiguousTimed: 0, ambiguousTimedByLayout: {}, complete: true },
   "FindMyShift paired time/stream rows may be imported with meaningful DDH assignments",
 );
 assert.doesNotThrow(
@@ -112,6 +112,11 @@ assert.throws(
   () => assertFindmyshiftDandenongAssignments([{ label: "Shift", start: "14:30", end: "00:00", facility: "" }]),
   /did not include a stream or facility/i,
   "FindMyShift rows without a stream or facility must be rejected rather than guessed",
+);
+assert.deepEqual(
+  findmyshiftDandenongAssignmentDiagnostics([{ label: "Shift", start: "14:30", end: "00:00", facility: "", pairingIssue: "named-stream-before-time" }]),
+  { rows: 1, timedRows: 1, ambiguousTimed: 1, ambiguousTimedByLayout: { "named-stream-before-time": 1 }, complete: false },
+  "FindMyShift pairing diagnostics should describe only the safe structural cause of an incomplete timed row",
 );
 assert.deepEqual(
   findmyshiftRows.map((row) => ({ date: row.date, label: row.label, start: row.start, end: row.end, facility: row.facility, seniority: row.seniority, comment: row.comment })),

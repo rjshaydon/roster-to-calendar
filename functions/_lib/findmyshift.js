@@ -73,25 +73,35 @@ export async function findmyshiftRosterWorkbook(apiKey, teamId, range) {
 // replace a more precise manual roster with incorrect calendar entries.
 export function findmyshiftDandenongAssignmentDiagnostics(rows = []) {
   const shifts = Array.isArray(rows) ? rows : [];
-  const ambiguousTimed = shifts.filter((row) => (
+  const ambiguousRows = shifts.filter((row) => (
     String(row?.label || "").trim().toUpperCase() === "SHIFT"
     && String(row?.start || "").trim()
     && String(row?.end || "").trim()
     && !String(row?.facility || "").trim()
-  )).length;
+  ));
+  const ambiguousTimedByLayout = {};
+  for (const row of ambiguousRows) {
+    const layout = String(row?.pairingIssue || "time-without-named-stream");
+    ambiguousTimedByLayout[layout] = Number(ambiguousTimedByLayout[layout] || 0) + 1;
+  }
   return {
     rows: shifts.length,
     timedRows: shifts.filter((row) => String(row?.start || "").trim() && String(row?.end || "").trim()).length,
-    ambiguousTimed,
-    complete: ambiguousTimed === 0,
+    ambiguousTimed: ambiguousRows.length,
+    ambiguousTimedByLayout,
+    complete: ambiguousRows.length === 0,
   };
 }
 
 export function assertFindmyshiftDandenongAssignments(rows = []) {
   const diagnostics = findmyshiftDandenongAssignmentDiagnostics(rows);
   if (diagnostics.complete) return diagnostics;
+  const layouts = Object.entries(diagnostics.ambiguousTimedByLayout)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([layout, count]) => `${count} ${layout.replace(/-/g, " ")}`)
+    .join(", ");
   const error = new Error(
-    `FindMyShift did not include a stream or facility for ${diagnostics.ambiguousTimed} timed roster entries. Automatic import was stopped so ambiguous Dandenong shifts cannot replace the detailed manual roster.`,
+    `FindMyShift did not include a stream or facility for ${diagnostics.ambiguousTimed} timed roster entries${layouts ? ` (${layouts})` : ""}. Automatic import was stopped so ambiguous Dandenong shifts cannot replace the detailed manual roster.`,
   );
   error.code = "findmyshift-incomplete-ddh-assignment";
   throw error;
@@ -453,9 +463,11 @@ function pairFindmyshiftStaffDayRows(group) {
   // The actual report's paired representation is strictly time first. Leave
   // unexpected layouts untouched so the safety check can reject an ambiguous
   // timed row rather than incorrectly attaching an unrelated named entry.
-  if (timedIndexes.length !== 1 || timedIndexes[0] !== 0) return group;
   const namedIndexes = group.map((row, index) => !row.start && !row.end && row.label ? index : -1).filter((index) => index >= 0);
-  if (!namedIndexes.length) return group;
+  if (timedIndexes.length !== 1 || timedIndexes[0] !== 0 || !namedIndexes.length) {
+    const pairingIssue = findmyshiftPairingIssue(timedIndexes, namedIndexes);
+    return group.map((row) => row.start && row.end ? { ...row, pairingIssue } : row);
+  }
 
   // When a staff/day has another named entry as well, the real report places
   // the stream/facility row last. Prefer a named row with a facility, then the
@@ -474,6 +486,12 @@ function pairFindmyshiftStaffDayRows(group) {
     if (index === 0) return [merged];
     return index === assignmentIndex ? [] : [row];
   });
+}
+
+function findmyshiftPairingIssue(timedIndexes, namedIndexes) {
+  if (timedIndexes.length > 1) return "multiple-time-rows";
+  if (timedIndexes[0] > 0 && namedIndexes.length) return "named-stream-before-time";
+  return "time-without-named-stream";
 }
 
 function combineFindmyshiftComments(...values) {
