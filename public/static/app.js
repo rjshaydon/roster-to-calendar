@@ -145,6 +145,7 @@ const ROSTER_IMPORT_OVERLAY_MAX_MS = 1500;
 const DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const OWNER_EMAIL = "rhaydon@gmail.com";
 const OWNER_DOCTOR_KEY = "RICHARD HAYDON";
+const MOBILE_RETURN_TO_CREATOR_VALUE = "__return_to_creator__";
 const DEFAULT_MMC_LOCATION = "MMC Car Park, Tarella Road, Clayton VIC 3168, Australia";
 const DEFAULT_DDH_LOCATION = "DDH Car Park, 135 David St, Dandenong VIC 3175, Australia";
 const DEFAULT_CASEY_LOCATION = "Casey Hospital, 62-70 Kangan Drive, Berwick VIC 3806, Australia";
@@ -844,6 +845,16 @@ mobileLogoutButton?.addEventListener("click", () => {
 });
 mobileDoctorSelect?.addEventListener("change", async () => {
   if (mobileDoctorSelect.disabled) return;
+  if (mobileDoctorSelect.value === MOBILE_RETURN_TO_CREATOR_VALUE && canReturnToCreator()) {
+    closeSettingsPanel();
+    try {
+      showSwitchOverlay("Returning to creator...", "Restoring the creator calendar.");
+      await returnToCreatorCalendar();
+    } finally {
+      hideSwitchOverlay();
+    }
+    return;
+  }
   await switchDoctorSelection(mobileDoctorSelect.value, { resetRange: true });
 });
 mobileDoctorSelect?.addEventListener("pointerdown", () => queueCreatorSwitchTargetPrefetch());
@@ -2108,8 +2119,15 @@ function syncMobileSettingsControls() {
   if (mobileDoctorSelect) {
     const pickerOptions = doctorPickerOptions();
     const selected = selectedDoctor();
-    if (pickerOptions.length > 1) {
-      mobileDoctorSelect.innerHTML = pickerOptions.map((doctor) => `
+    const returnToCreatorOption = canReturnToCreator()
+      ? [{
+          key: MOBILE_RETURN_TO_CREATOR_VALUE,
+          displayName: `Creator · ${formatRosterDisplayName(OWNER_DOCTOR_KEY)}`,
+        }]
+      : [];
+    const mobilePickerOptions = [...returnToCreatorOption, ...pickerOptions];
+    if (mobilePickerOptions.length > 1) {
+      mobileDoctorSelect.innerHTML = mobilePickerOptions.map((doctor) => `
         <option value="${escapeHtml(doctor.key)}" ${doctor.key === selected?.key ? "selected" : ""}>
           ${escapeHtml(doctor.displayName)}
         </option>
@@ -3085,12 +3103,16 @@ function buildFilteredPreviewEvents(baseData, filterSettings, defaultRange = der
 
 function buildResolvedPreviewEvents(baseData) {
   const activeCustomEventIds = new Set(customEventsForActiveCalendar().map((event) => event.id));
+  const rosterEvents = (baseData.events || []).filter((event) => !isCustomPreviewEvent(event));
+  const visibleCustomEventIds = new Set(
+    customEventsToEvents(customEventsForActiveCalendar(), settings, rosterEvents).map((event) => event.id),
+  );
   const baseEvents = new Map(
     (baseData.events || [])
       .filter((event) => !(
         baseData.customEventsMaterialized === true
         && isCustomPreviewEvent(event)
-        && !activeCustomEventIds.has(event.id)
+        && (!activeCustomEventIds.has(event.id) || !visibleCustomEventIds.has(event.id))
       ))
       .map((event) => [event.id, { ...event }]),
   );
@@ -3110,6 +3132,7 @@ function buildResolvedPreviewEvents(baseData) {
       .filter(Boolean),
   );
   for (const event of customEventsForActiveCalendar()) {
+    if (!visibleCustomEventIds.has(event.id)) continue;
     if (baseData.customEventsMaterialized === true && previewCustomEventIds.has(event.id)) continue;
     events.push(customEventToPreviewEvent(event));
   }

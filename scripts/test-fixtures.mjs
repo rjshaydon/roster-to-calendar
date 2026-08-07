@@ -9,7 +9,8 @@ import { assertFindmyshiftDandenongAssignments, extractShiftRows, findmyshiftCon
 import { buildAutomatedDerivedRosterPayload } from "../functions/_lib/automation-import.js";
 import { buildPreviewFromDerivedEvents, findRosterSyncByProviderVersion, storeCachedSnapshot } from "../functions/_lib/d1-calendar.js";
 import { recordRosterDispatchLifecycle, requestQueuedRosterProcessing } from "../functions/_lib/automation-dispatch.js";
-import { buildRosterView, doctorOptions, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
+import { buildRosterView, customEventsToEvents, doctorOptions, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
+import { customEventsToEvents as serverCustomEventsToEvents } from "../functions/_lib/roster.js";
 
 function cloneWorkbook(workbook) {
   return XLSX.read(XLSX.write(workbook, { type: "array", bookType: "xlsx" }), { type: "array", cellDates: true });
@@ -43,6 +44,33 @@ function sharedEventDate(left, right, start, end) {
   const rightDates = new Set(eventDates(right).filter((date) => date >= start && date <= end));
   return eventDates(left).some((date) => date >= start && date <= end && rightDates.has(date));
 }
+
+const syncedAnnualLeave = [{
+  id: "synced-annual-leave",
+  source: "DDH",
+  title: "Annual Leave",
+  rawValue: "Annual leave",
+  allDay: true,
+  start: "2026-08-03",
+  end: "2026-08-10",
+}];
+const customLeaveFallbacks = [
+  { id: "covered-manual-leave", title: "A/L", startDate: "2026-08-03", endDate: "2026-08-09", allDay: true, startTime: "", endTime: "", location: "", include: true },
+  { id: "partially-covered-manual-leave", title: "Annual Leave", startDate: "2026-08-03", endDate: "2026-08-12", allDay: true, startTime: "", endTime: "", location: "", include: true },
+  { id: "single-day-manual-leave", title: "S/L", startDate: "2026-08-04", endDate: "2026-08-04", allDay: true, startTime: "", endTime: "", location: "", include: true },
+  { id: "multi-day-custom-nonleave", title: "Personal reminder", startDate: "2026-08-03", endDate: "2026-08-09", allDay: true, startTime: "", endTime: "", location: "", include: true },
+];
+const expectedVisibleCustomFallbackIds = ["partially-covered-manual-leave", "single-day-manual-leave", "multi-day-custom-nonleave"];
+assert.deepEqual(
+  customEventsToEvents(customLeaveFallbacks, undefined, syncedAnnualLeave).map((event) => event.id),
+  expectedVisibleCustomFallbackIds,
+  "a synced leave should suppress only a fully covered multi-day manual leave fallback",
+);
+assert.deepEqual(
+  serverCustomEventsToEvents(customLeaveFallbacks, undefined, syncedAnnualLeave).map((event) => event.id),
+  expectedVisibleCustomFallbackIds,
+  "subscription and export leave precedence must match the browser preview",
+);
 
 function withWorkbookCell(workbook, sheetName, cell, value) {
   const copy = cloneWorkbook(workbook);
@@ -182,6 +210,35 @@ const unknownInternDoctor = doctorOptions([], unknownInternUpload.sources.ddh).f
 assert.ok(unknownInternDoctor, "FindMyShift fixture should expose the unknown-seniority intern");
 const unknownInternEvent = buildRosterView([], unknownInternUpload.sources.ddh, unknownInternDoctor.key).events[0];
 assert.equal(unknownInternEvent.seniority, "Intern", "FindMyShift labels should supply seniority when staff metadata says Unknown");
+const findmyshiftLeaveWorkbook = XLSX.read(findmyshiftRowsWorkbook([
+  { sourceStaffId: "leave-doctor", name: "Ananth Sundaralingam", seniority: "SMS", date: "2026-08-10", label: "SL MMC", start: "", end: "", facility: "", comment: "" },
+  { sourceStaffId: "leave-doctor", name: "Ananth Sundaralingam", seniority: "SMS", date: "2026-08-11", label: "S/L", start: "", end: "", facility: "", comment: "" },
+  { sourceStaffId: "leave-doctor", name: "Ananth Sundaralingam", seniority: "SMS", date: "2026-08-12", label: "Annual leave 19hrs", start: "", end: "", facility: "", comment: "" },
+]), { type: "array", cellDates: true });
+const findmyshiftLeaveFormData = new FormData();
+findmyshiftLeaveFormData.append("rosterFiles", workbookFile(findmyshiftLeaveWorkbook, "Dandenong-FindMyShift-leave.xlsx"));
+const findmyshiftLeaveUpload = await parseUploadForm(new Request("http://fixture.test/api/analyze", { method: "POST", body: findmyshiftLeaveFormData }));
+const findmyshiftLeaveEvents = buildRosterView([], findmyshiftLeaveUpload.sources.ddh, "ANANTH SUNDARALINGAM").events;
+assert.deepEqual(
+  findmyshiftLeaveEvents.map((event) => [event.title, event.start, event.end]),
+  [
+    ["Sabbatical", "2026-08-10", "2026-08-11"],
+    ["Sick leave", "2026-08-11", "2026-08-12"],
+    ["Annual Leave", "2026-08-12", "2026-08-13"],
+  ],
+  "structured FindMyShift imports must preserve SL sabbatical, S/L sick leave, and annotated annual leave as distinct one-day entries",
+);
+const findmyshiftLeaveAutomatedPayload = await buildAutomatedDerivedRosterPayload({
+  file: workbookFile(findmyshiftLeaveWorkbook, "Dandenong-FindMyShift-leave.xlsx"),
+  sourceId: "dandenong-findmyshift",
+  contentHash: "findmyshift-leave-content-hash",
+  providerVersion: "2026-08-12T00:00:00.000Z",
+});
+assert.deepEqual(
+  findmyshiftLeaveAutomatedPayload.eventsByDoctor["ANANTH SUNDARALINGAM"].map((event) => event.title),
+  ["Sabbatical", "Sick leave", "Annual Leave"],
+  "automated server-side parsing must use the same leave labels as manual/browser parsing",
+);
 const findmyshiftCrossTermRows = extractShiftRows([
   ...findmyshiftFixture.report,
   { "staffId": "staff-001", "facilityId": "facility-north", "date": "2026-10-05", "firstName": "Alex", "lastName": "Example", "payrollId": null, "occurrences": 1, "shift": "07:00-15:00" },
@@ -1719,6 +1776,21 @@ assert.ok(doctors.find((doctor) => doctor.displayName === "Brianna Dawn MURPHY")
 assert.ok(doctors.find((doctor) => doctor.displayName === "Patrick TAN"));
 assert.equal(doctors.find((doctor) => doctor.displayName === "Aarushi Pathania"), undefined);
 assert.equal(doctors.find((doctor) => doctor.displayName === "HMO MUST BE"), undefined);
+
+const ananthMmc = doctors.find((doctor) => doctor.displayName === "Ananth SUNDARALINGAM");
+assert.ok(ananthMmc);
+const ananthMmcSabbatical = buildRosterView(mmcWorkbook, [], ananthMmc.key).events.find((event) => event.rawValue === "Sabbatical leave");
+assert.ok(ananthMmcSabbatical);
+assert.equal(ananthMmcSabbatical.title, "Sabbatical");
+assert.equal(ananthMmcSabbatical.end, "2026-02-16", "MMC weekly sabbatical markers should cover the full roster week");
+const harmeenKaur = doctors.find((doctor) => doctor.displayName === "Harmeen KAUR");
+assert.ok(buildRosterView(mmcWorkbook, [], harmeenKaur.key).events.some((event) => event.rawValue === "SL PM" && event.title === "Sabbatical"), "SL without a slash must be sabbatical leave");
+const scottJosey = doctors.find((doctor) => doctor.displayName === "Scott JOSEY");
+const scottLeaveEvents = buildRosterView(mmcWorkbook, [], scottJosey.key).events.filter((event) => event.title === "Annual Leave");
+assert.ok(scottLeaveEvents.some((event) => event.rawValue.includes("AL 9.5hrs")));
+assert.ok(scottLeaveEvents.some((event) => event.rawValue.includes("Annual leave 19hrs")));
+const ericaChan = doctors.find((doctor) => doctor.displayName === "Erica CHAN");
+assert.ok(buildRosterView(mmcWorkbook, [], ericaChan.key).events.some((event) => event.rawValue === "CME leave - 38hrs" && event.title === "Conference Leave"));
 
 const michaelMerged = doctorOptions(mmcWorkbook, [], [], mchWorkbook).filter((doctor) => doctor.displayName.toUpperCase().includes("MICHAEL COMAN"));
 assert.equal(michaelMerged.length, 1);

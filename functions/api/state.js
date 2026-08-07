@@ -3388,12 +3388,16 @@ async function buildDerivedAccountSnapshot(db, context) {
   }
   const d1CustomEvents = await queryAccountCustomEvents(db, context.record.email).catch(() => []);
   const hospitalLocations = await loadAccountHospitalLocations(db, context.record.email, normalizedSession).catch(() => null);
+  const resolvedRosterEvents = applyEventOverrides(
+    applyAccountHospitalLocations(rosterEvents, hospitalLocations || {}, { includeLocations: settings.includeLocations !== false }),
+    normalizedSession.overrides || {},
+  );
   const events = [
-    ...applyEventOverrides(applyAccountHospitalLocations(rosterEvents, hospitalLocations || {}, { includeLocations: settings.includeLocations !== false }), normalizedSession.overrides || {}),
+    ...resolvedRosterEvents,
     ...customEventsToEvents(latestCustomEventsByIdentity([
       ...sanitizeSnapshotCustomEvents(normalizedSession.customEvents, context.record.email),
       ...d1CustomEvents,
-    ]), settings),
+    ]), settings, resolvedRosterEvents),
   ];
   if (!events.length) return null;
   const stateFileRefs = sanitizeSnapshotFileRefs(state.imports);
@@ -4317,18 +4321,19 @@ async function buildDerivedDoctorProfileSnapshot(store, db, profile, ownerEmail 
   const rosterIssues = doctorPairs.length
     ? await queryDoctorIssuesForFileDoctorPairs(db, doctorPairs)
     : await queryDoctorIssues(db, doctorKeys);
-  const events = [
-    ...applyEventOverrides(
-      applyAccountHospitalLocations(
-        doctorPairs.length
-          ? await queryDoctorEventsForFileDoctorPairs(db, doctorPairs)
-          : await queryDoctorEvents(db, doctorKeys),
-        hospitalLocations || {},
-        { includeLocations: settings.includeLocations !== false },
-      ),
-      session.overrides || {},
+  const resolvedRosterEvents = applyEventOverrides(
+    applyAccountHospitalLocations(
+      doctorPairs.length
+        ? await queryDoctorEventsForFileDoctorPairs(db, doctorPairs)
+        : await queryDoctorEvents(db, doctorKeys),
+      hospitalLocations || {},
+      { includeLocations: settings.includeLocations !== false },
     ),
-    ...customEventsToEvents(sanitizeSnapshotCustomEvents(session.customEvents, ""), settings),
+    session.overrides || {},
+  );
+  const events = [
+    ...resolvedRosterEvents,
+    ...customEventsToEvents(sanitizeSnapshotCustomEvents(session.customEvents, ""), settings, resolvedRosterEvents),
   ];
   if (!events.length) return null;
   const refs = await repositoryImportRefsForDoctorProfile(store, profile, db, doctorDiagnostics);

@@ -57,7 +57,7 @@ async function buildD1SubscriptionFeed(db, record, view) {
   const customEvents = customEventsToEvents(latestCustomEventsByIdentity([
     ...sanitizeCustomEvents(session.customEvents, record.email),
     ...sanitizeCustomEvents(d1CustomEvents, record.email),
-  ]), settings);
+  ]), settings, rosterEvents);
   const events = [...rosterEvents, ...customEvents]
     .filter((event) => range.mode !== "range" || eventInRange(event, range))
     .sort(compareEvents);

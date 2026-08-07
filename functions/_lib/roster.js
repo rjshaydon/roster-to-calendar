@@ -1931,13 +1931,25 @@ function normalizeCaseyCode(label) {
 
 function normalizeMchLeave(label) {
   const upper = normalizedLeaveLabel(label);
+  if (upper === "ANNUAL & PARENTAL LEAVE") return { kind: "annual_parental_leave", title: "Annual & Parental Leave" };
   if (isAnnualLeaveLabel(upper)) return { kind: "annual_leave", title: "Annual Leave" };
   if (/^(?:SICK(?:\s+LEAVE)?|S\/L)(?:\s+.*)?$/.test(upper)) return { kind: "sick_leave", title: "Sick leave" };
-  if (upper === "EXAM" || upper === "ME/L") return { kind: "exam_leave", title: "Exam Leave" };
+  if (upper === "EXAM" || upper === "EXAM LEAVE" || upper === "ME/L") return { kind: "exam_leave", title: "Exam Leave" };
+  if (upper === "EXAM/CONF LEAVE") return { kind: "exam_leave", title: "Exam / Conference Leave" };
   if (isConferenceLeaveLabel(upper)) return { kind: "conference_leave", title: "Conference Leave" };
-  if (/^(?:SABBATICAL(?:\s+LEAVE)?|SAB\/L)(?:\s+.*)?$/.test(upper)) return { kind: "sabbatical_leave", title: "Sabbatical" };
-  if (upper === "PAT/L") return { kind: "leave", title: "Parental Leave" };
-  if (upper === "LSL") return { kind: "leave", title: "Long Service Leave" };
+  // DDH/MMC roster writers use SL (often with a second-site suffix such as
+  // "SL MMC") for sabbatical leave. Keep this deliberately separate from
+  // S/L, which is sick leave throughout the supported rosters.
+  if (/^(?:SABBATICAL(?:\s+LEAVE)?|SAB\/L)(?:\s+.*)?$/.test(upper)
+    || /^SL(?:\s+(?:MMC|DDH|CASEY|MCH|PAEDS|AM|PM|NIGHT|NS|SW))?$/.test(upper)) {
+    return { kind: "sabbatical_leave", title: "Sabbatical" };
+  }
+  if (upper === "PAT/L" || upper === "PARENTAL LEAVE" || upper === "PATERNITY LEAVE") return { kind: "parental_leave", title: "Parental Leave" };
+  if (upper === "LSL" || upper === "LONG SERVICE LEAVE") return { kind: "long_service_leave", title: "Long Service Leave" };
+  if (/^CARER'?S LEAVE$/.test(upper) || upper === "CARERS LEAVE") return { kind: "carers_leave", title: "Carer's Leave" };
+  if (upper === "FAM LEAVE" || upper === "FAMILY LEAVE") return { kind: "family_leave", title: "Family Leave" };
+  if (upper === "OTHER - MILITARY LEAVE" || upper === "MILITARY LEAVE") return { kind: "military_leave", title: "Military Leave" };
+  if (upper === "LEAVE") return { kind: "leave", title: "Leave" };
   return null;
 }
 
@@ -1972,19 +1984,14 @@ function normalizedLeaveLabel(value) {
 
 function isConferenceLeaveLabel(value) {
   const upper = String(value || "").replace(/\s+/g, " ").trim().toUpperCase();
-  return upper === "CONFERENCE LEAVE"
-    || upper === "CONFERENCE"
-    || upper === "CONF"
-    || upper === "CONF LEAVE"
-    || upper === "C/L"
-    || upper === "CL"
-    || upper === "CME LEAVE"
-    || upper === "CME/L";
+  return /^(?:CONFERENCE(?:\s+LEAVE)?|CONF(?:\s+LEAVE)?|CME\s+LEAVE)(?:\s+(?:-|X)?\s*\d+(?:\.\d+)?\s*(?:HRS?|HOURS?|SHIFTS?))?$/.test(upper)
+    || /^(?:C\/L|CL|CME\/L)(?:\s+\d+(?:\.\d+)?\s*(?:HRS?|HOURS?))?$/.test(upper);
 }
 
 function isAnnualLeaveLabel(value) {
   const upper = cleanText(value).replace(/\s+/g, " ").trim().toUpperCase();
-  return upper === "ANNUAL LEAVE" || /^(?:A\/L|(?:[A-Z][A-Z0-9/&-]*\s+)*AL)(?:\s+0\.5)?$/.test(upper);
+  if (/^ANNUAL(?:\s+LEAVE)?(?:\s+(?:-|X)?\s*\d+(?:\.\d+)?\s*(?:HRS?|HOURS?|SHIFTS?))?$/.test(upper)) return true;
+  return /^(?:A\/L|AL)(?:\s+(?:0\.5|\d+(?:\.\d+)?\s*(?:HRS?|HOURS?)|MMC|DDH|CASEY|MCH|PAEDS))?$/.test(upper);
 }
 
 function normalizeMchTimedLabel(label) {
@@ -2914,8 +2921,9 @@ function createAllDayRecord(source, day, rawValue, details) {
 }
 
 function createWeeklyLeaveRecord(source, monday, rawValue, seniority = UNKNOWN_SENIORITY) {
-  const kind = normalizeRecognizedLeave(rawValue)?.kind === "conference_leave" ? "conference_leave" : "annual_leave";
-  const normalizedTitle = kind === "conference_leave" ? "Conference Leave" : "Annual Leave";
+  const leave = normalizeRecognizedLeave(rawValue) || { kind: "annual_leave", title: "Annual Leave" };
+  const { kind } = leave;
+  const normalizedTitle = leave.title;
   return {
     id: hashString(`${source}|${monday}|${rawValue}|week-leave`),
     source,
@@ -3119,6 +3127,7 @@ function leaveTextMatches(value) {
 
 function preferredLeaveTitle(leftTitle, rightTitle, rawValue = "") {
   const combined = `${leftTitle || ""} ${rightTitle || ""} ${rawValue || ""}`;
+  if (/\bannual\s*&\s*parental\b/i.test(combined)) return "Annual & Parental Leave";
   if (/\b(conference|cme)\b/i.test(combined)) return "Conference Leave";
   if (/\bannual\b/i.test(combined)) return "Annual Leave";
   if (/\b(?:sick|s\/l)\b/i.test(combined)) return "Sick leave";
@@ -3128,6 +3137,9 @@ function preferredLeaveTitle(leftTitle, rightTitle, rawValue = "") {
   if (/\b(?:sabbatical|sab\/l)\b/i.test(combined)) return "Sabbatical";
   if (/\bparental\b/i.test(combined)) return "Parental Leave";
   if (/\blong service\b/i.test(combined)) return "Long Service Leave";
+  if (/\bcarer'?s?\b/i.test(combined)) return "Carer's Leave";
+  if (/\b(?:fam|family)\b/i.test(combined)) return "Family Leave";
+  if (/\bmilitary\b/i.test(combined)) return "Military Leave";
   return String(leftTitle || rightTitle || "Leave").trim();
 }
 
@@ -3163,7 +3175,11 @@ function formatTitle(source, titleParts, settings, kind = "shift") {
   if (titleParts.suffix) titleBits.push(titleParts.suffix);
   const core = titleBits.join(" ").trim();
   if (!core) return "";
-  if (["annual_leave", "conference_leave", "sick_leave", "sabbatical_leave", "exam_leave"].includes(kind)) {
+  if ([
+    "leave", "annual_leave", "annual_parental_leave", "conference_leave", "sick_leave",
+    "sabbatical_leave", "long_service_leave", "parental_leave", "carers_leave",
+    "family_leave", "military_leave", "exam_leave",
+  ].includes(kind)) {
     return core;
   }
   return settings.showSourcePrefix ? `${source}: ${core}` : core;
@@ -3173,8 +3189,8 @@ function formatTitlePeriod(value) {
   return String(value || "").trim().toUpperCase() === "NIGHT" ? "Night" : value;
 }
 
-export function customEventsToEvents(customEvents, settings = DEFAULT_SETTINGS) {
-  return customEvents
+export function customEventsToEvents(customEvents, settings = DEFAULT_SETTINGS, rosterEvents = []) {
+  const events = customEvents
     .filter((item) => item.include !== false)
     .map((item) => {
       if (item.allDay) {
@@ -3211,6 +3227,53 @@ export function customEventsToEvents(customEvents, settings = DEFAULT_SETTINGS) 
         monthKey: item.startDate.slice(0, 7),
       };
     });
+  return suppressCoveredCustomLeaveEvents(events, rosterEvents);
+}
+
+// Manual leave is a fallback for a roster source that has not supplied it.
+// When a synced roster later covers every day of that manual multi-day leave,
+// prefer the roster data without deleting the custom event. If the source is
+// subsequently corrected or removed, the saved manual fallback reappears.
+function suppressCoveredCustomLeaveEvents(customEvents, rosterEvents) {
+  const rosterLeaveEvents = (rosterEvents || []).filter(isSyncedAllDayLeaveEvent);
+  if (!rosterLeaveEvents.length) return customEvents;
+  return (customEvents || []).filter((event) => {
+    if (!isMultiDayCustomLeaveEvent(event)) return true;
+    return !isEveryCustomLeaveDayCovered(event, rosterLeaveEvents);
+  });
+}
+
+function isMultiDayCustomLeaveEvent(event) {
+  if (event?.allDay !== true || String(event?.source || "").toLowerCase() !== "custom") return false;
+  if (!isManualLeaveLabel(event.title)) return false;
+  const start = String(event.start || "").slice(0, 10);
+  const end = String(event.end || "").slice(0, 10);
+  return Boolean(start && end && end > addDays(start, 1));
+}
+
+function isSyncedAllDayLeaveEvent(event) {
+  if (event?.allDay !== true || String(event?.source || "").toLowerCase() === "custom") return false;
+  return isManualLeaveLabel(`${event?.title || ""} ${event?.rawValue || ""}`);
+}
+
+function isManualLeaveLabel(value) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  return /\bleave\b/i.test(text)
+    || /(?:^|\s)(?:A\/L|AL|C\/L|CL|CME\/L|S\/L|SL|SAB\/L|LSL|PAT\/L|ME\/L|FAM)(?:\s|$)/i.test(text);
+}
+
+function isEveryCustomLeaveDayCovered(event, rosterLeaveEvents) {
+  const end = String(event.end || "").slice(0, 10);
+  let day = String(event.start || "").slice(0, 10);
+  while (day && day < end) {
+    if (!rosterLeaveEvents.some((rosterEvent) => {
+      const start = String(rosterEvent.start || "").slice(0, 10);
+      const finish = String(rosterEvent.end || "").slice(0, 10);
+      return start <= day && day < finish;
+    })) return false;
+    day = addDays(day, 1);
+  }
+  return true;
 }
 
 export function applyEventOverrides(events, overrides) {
@@ -3351,7 +3414,8 @@ function extractTimeWithLabel(value, options = {}) {
 function firstWeeklyLeave(values) {
   for (const value of values) {
     const leave = normalizeRecognizedLeave(value);
-    if (leave?.kind === "annual_leave" || leave?.kind === "conference_leave") return value;
+    if (["annual_leave", "annual_parental_leave", "conference_leave", "long_service_leave", "parental_leave"].includes(leave?.kind)) return value;
+    if (leave?.kind === "sabbatical_leave" && !/\b(?:AM|PM|NIGHT|NS|SW)\b/i.test(String(value || ""))) return value;
   }
   return null;
 }
