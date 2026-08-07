@@ -1,5 +1,6 @@
 import { findmyshiftConfiguredRosterRange, findmyshiftLastModified, findmyshiftRosterWorkbook } from "../../_lib/findmyshift.js";
 import { hasCalendarDb, loadRosterSource, upsertRosterSource } from "../../_lib/d1-calendar.js";
+import { reconcileRosterFileSupersessionAndRefresh } from "../state.js";
 
 const SOURCE_ID = "dandenong-findmyshift";
 // Changing the generated-workbook format must create a fresh retained source,
@@ -26,6 +27,7 @@ export async function onRequestPost(context) {
       && current.providerVersion === providerVersion
       && current.lastSuccessAt
       && (!current.lastError || isTransientFindmyshiftRateLimitError(current.lastError))) {
+      await reconcileCurrentFindmyshiftRoster(context, current);
       await saveSource(context, current, { lastCheckedAt: now, lastError: "" });
       return Response.json({ ok: true, status: "unchanged", providerModifiedAt: providerVersion });
     }
@@ -77,6 +79,16 @@ function isIncompleteDandenongAssignmentError(value) {
 
 function isTransientFindmyshiftRateLimitError(value) {
   return /FindMyShift .* returned HTTP 429\./i.test(String(value || ""));
+}
+
+async function reconcileCurrentFindmyshiftRoster(context, current) {
+  const activeFileId = String(current?.activeFileId || "").trim();
+  if (!activeFileId) return;
+  await reconcileRosterFileSupersessionAndRefresh(context, {
+    id: activeFileId,
+    sourceType: "ddh",
+    sourceId: SOURCE_ID,
+  }, { reason: "findmyshift-unchanged-reconciliation" });
 }
 
 async function saveSource(context, existing, update) {

@@ -4589,7 +4589,7 @@ function isWhoTeamRole(team) {
 
 function groupWhoAssignments(assignments) {
   const periods = new Map();
-  for (const assignment of assignments) {
+  for (const assignment of coalesceWhoAssignments(assignments)) {
     if (!periods.has(assignment.period)) periods.set(assignment.period, []);
     periods.get(assignment.period).push(assignment);
   }
@@ -4599,6 +4599,29 @@ function groupWhoAssignments(assignments) {
       teams: groupWhoTeams(items),
     }))
     .sort((left, right) => whoPeriodRank(left.period) - whoPeriodRank(right.period));
+}
+
+function coalesceWhoAssignments(assignments = []) {
+  const byShift = new Map();
+  for (const assignment of assignments) {
+    const key = [
+      normalizeRosterName(assignment.doctorKey || assignment.doctorName),
+      assignment.date,
+      assignment.source,
+      assignment.period,
+      assignment.team,
+      assignment.timeLabel,
+    ].join("|");
+    const existing = byShift.get(key);
+    if (!existing) {
+      byShift.set(key, assignment);
+      continue;
+    }
+    const existingHasRole = Boolean(normalizeWhoRole(existing.role));
+    const incomingHasRole = Boolean(normalizeWhoRole(assignment.role));
+    if (!existingHasRole && incomingHasRole) byShift.set(key, assignment);
+  }
+  return [...byShift.values()];
 }
 
 function groupWhoTeams(assignments) {
@@ -10134,12 +10157,18 @@ async function validateDoctorProfileCalendarInBackground(doctor, previousState, 
     renderLoginState();
     return;
   }
-  const result = await loadUnclaimedDoctorCalendar(doctor, previousState, {
+  let result = await loadUnclaimedDoctorCalendar(doctor, previousState, {
     profile: options.profile,
     cachedRevision: options.renderedCachedSnapshot ? (options.cachedRevision || currentSnapshot?.calendarRevision || "") : "",
     allowInlineBuild: false,
     transition: options.transition,
   });
+  if (!result && !calendarSnapshotMatchesActiveContext(currentSnapshot)) {
+    result = await waitForDoctorProfileCalendarBuild(doctor, previousState, {
+      profile: options.profile,
+      transition: options.transition,
+    });
+  }
   if (!calendarTransitionStillCurrent(options.transition)) return;
   if (result) {
     await commitCalendarLoad(result, { saveInBackground: true, transition: options.transition });
@@ -10149,6 +10178,21 @@ async function validateDoctorProfileCalendarInBackground(doctor, previousState, 
   } else {
     throw new Error(`${doctor.displayName} calendar is not ready yet. Try again in a moment.`);
   }
+}
+
+async function waitForDoctorProfileCalendarBuild(doctor, previousState, options = {}) {
+  const retryDelays = [250, 500, 1000, 1500];
+  for (const delayMs of retryDelays) {
+    await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+    if (!calendarTransitionStillCurrent(options.transition)) return null;
+    const result = await loadUnclaimedDoctorCalendar(doctor, previousState, {
+      profile: options.profile,
+      allowInlineBuild: false,
+      transition: options.transition,
+    });
+    if (result || calendarSnapshotMatchesActiveContext(currentSnapshot)) return result;
+  }
+  return null;
 }
 
 async function enterUserAccount(email) {

@@ -67,6 +67,7 @@ import {
   snapshotArtifactKey,
   snapshotRegistryRangeKey,
   storeCachedSnapshot,
+  trimDerivedRosterFileOverlap,
   upsertSnapshotRegistryEntry,
   upsertAccountHospitalLocations,
   setDerivedRosterFileActive,
@@ -1928,13 +1929,37 @@ function summarizeExpectedRosterFiles(allFiles = [], expectedFileIds = []) {
   };
 }
 
-async function reconcileRosterFileSupersession(db, savedFile = {}, options = {}) {
+export async function reconcileRosterFileSupersession(db, savedFile = {}, options = {}) {
   if (!db?.prepare) return { deactivated: [], ambiguous: [] };
   const files = (await queryRosterFileRanges(db, { includeInactive: false }).catch(() => []))
     .filter((file) => file.active && file.eventCount > 0 && file.startDate && file.endDate);
   const savedId = String(savedFile?.id || "").trim();
   const savedSourceType = String(savedFile?.sourceType || "").toLowerCase();
   const savedSourceId = String(savedFile?.sourceId || "").trim();
+  const saved = files.find((file) => file.id === savedId) || null;
+  if (saved && savedSourceId) {
+    return await reconcileAuthoritativeAutomatedRoster(db, saved, files);
+  }
+  if (saved && !savedSourceId) {
+    const automatedOverlaps = files.filter((file) => (
+      file.id !== saved.id
+      && file.sourceType === saved.sourceType
+      && file.sourceId
+      && dateRangesOverlap(file, saved)
+    ));
+    if (automatedOverlaps.length) {
+      const reconciled = [];
+      let savedTrimmed = false;
+      for (const automatic of automatedOverlaps) {
+        const automaticRange = authoritativeRosterRange(automatic);
+        const trimmed = await trimDerivedRosterFileOverlap(db, saved.id, automaticRange.startDate, automaticRange.endDate);
+        savedTrimmed = savedTrimmed || trimmed.removedEvents > 0;
+        reconciled.push(authoritativeReconciliationSummary(saved, automatic, trimmed));
+        if (trimmed.deleted) break;
+      }
+      return { deactivated: [], ambiguous: [], reconciled, savedTrimmed };
+    }
+  }
   const affected = files.filter((file) => !savedId || file.id === savedId || (
     file.sourceType === savedSourceType
     && (!savedSourceId || !file.sourceId || file.sourceId === savedSourceId)
@@ -1974,6 +1999,72 @@ async function reconcileRosterFileSupersession(db, savedFile = {}, options = {})
   };
 }
 
+export async function reconcileRosterFileSupersessionAndRefresh(context, savedFile = {}, options = {}) {
+  const result = await reconcileRosterFileSupersession(context?.env?.ROSTER_DB, savedFile, options);
+  const changed = Boolean(
+    result?.deactivated?.length
+    || result?.reconciled?.some((entry) => entry?.deleted || Number(entry?.removedEvents || 0) > 0)
+  );
+  if (changed) {
+    await refreshCanonicalDoctors(context.env.ROSTER_DB);
+    scheduleSnapshotWarmupForSourceTypes(
+      context,
+      [String(savedFile?.sourceType || "").toLowerCase()].filter(Boolean),
+      { reason: options.reason || "reconcileRosterFileSupersession" },
+    );
+  }
+  return result;
+}
+
+async function reconcileAuthoritativeAutomatedRoster(db, saved, files = []) {
+  const reconciled = [];
+  let savedTrimmed = false;
+  for (const candidate of files) {
+    if (
+      candidate.id === saved.id
+      || candidate.sourceType !== saved.sourceType
+      || !dateRangesOverlap(candidate, saved)
+      || (candidate.sourceId && candidate.sourceId !== saved.sourceId)
+    ) continue;
+    if (!candidate.sourceId) {
+      await deleteDerivedRosterFile(db, candidate.id);
+      reconciled.push({
+        deprecatedFileId: candidate.id,
+        authoritativeFileId: saved.id,
+        removedEvents: candidate.eventCount,
+        remainingEvents: 0,
+        deleted: true,
+        reason: "automated-source-replaced-manual-roster",
+      });
+      continue;
+    }
+    const winner = chooseLatestRosterFile(saved, candidate) || saved;
+    const loser = winner.id === saved.id ? candidate : saved;
+    const winnerRange = authoritativeRosterRange(winner);
+    const trimmed = await trimDerivedRosterFileOverlap(
+      db,
+      loser.id,
+      winnerRange.startDate,
+      winnerRange.endDate,
+    );
+    savedTrimmed = savedTrimmed || (loser.id === saved.id && trimmed.removedEvents > 0);
+    reconciled.push(authoritativeReconciliationSummary(loser, winner, trimmed));
+    if (loser.id === saved.id) break;
+  }
+  return { deactivated: [], ambiguous: [], reconciled, savedTrimmed };
+}
+
+function authoritativeReconciliationSummary(deprecated, authoritative, trimmed) {
+  return {
+    deprecatedFileId: deprecated.id,
+    authoritativeFileId: authoritative.id,
+    removedEvents: Number(trimmed?.removedEvents || 0),
+    remainingEvents: Number(trimmed?.remainingEvents || 0),
+    deleted: trimmed?.deleted === true,
+    reason: "automated-source-replaced-overlap",
+  };
+}
+
 function sameSupersessionSource(left, right) {
   const leftId = String(left?.sourceId || "").trim();
   const rightId = String(right?.sourceId || "").trim();
@@ -1993,9 +2084,9 @@ function rosterFileTermSlot(name = "") {
 }
 
 function dateRangesOverlap(left, right) {
-  const leftEnd = String(left.coverageEndDate || left.endDate || "");
-  const rightEnd = String(right.coverageEndDate || right.endDate || "");
-  return String(left.startDate || "") <= rightEnd && String(right.startDate || "") <= leftEnd;
+  const leftRange = authoritativeRosterRange(left);
+  const rightRange = authoritativeRosterRange(right);
+  return leftRange.startDate <= rightRange.endDate && rightRange.startDate <= leftRange.endDate;
 }
 
 function chooseLatestRosterFile(left, right) {
@@ -2013,6 +2104,9 @@ function chooseLatestRosterFile(left, right) {
   // rosters merely because it was saved a few milliseconds earlier.
   const leftSourceId = String(left.sourceId || "").trim();
   const rightSourceId = String(right.sourceId || "").trim();
+  if (leftSourceId !== rightSourceId && Boolean(leftSourceId) !== Boolean(rightSourceId) && sameRosterCoverage(left, right)) {
+    return leftSourceId ? left : right;
+  }
   if (leftSourceId && leftSourceId === rightSourceId) {
     const leftImportedAt = String(left.uploadedAt || left.addedAt || "");
     const rightImportedAt = String(right.uploadedAt || right.addedAt || "");
@@ -2023,13 +2117,45 @@ function chooseLatestRosterFile(left, right) {
   return null;
 }
 
+function sameRosterCoverage(left, right) {
+  const leftRange = authoritativeRosterRange(left);
+  const rightRange = authoritativeRosterRange(right);
+  return leftRange.startDate === rightRange.startDate && leftRange.endDate === rightRange.endDate;
+}
+
 function rosterFileNameDate(name = "") {
+  const range = rosterFileNameRange(name);
+  if (range) return range.endDate;
   const value = String(name || "");
-  const rangeMatch = value.match(/(\d{2})[-_](\d{2})[-_](\d{4}).*?(?:to|_to_).*?(\d{2})[-_](\d{2})[-_](\d{4})/i);
-  if (rangeMatch) return `${rangeMatch[6]}-${rangeMatch[5]}-${rangeMatch[4]}`;
   const termMatch = value.match(/term\s*([1-4])\D+(\d{4})/i);
   if (termMatch) return `${termMatch[2]}-${String(Number(termMatch[1]) * 3).padStart(2, "0")}-01`;
   return "";
+}
+
+function authoritativeRosterRange(file = {}) {
+  return rosterFileNameRange(file.name) || {
+    startDate: String(file.startDate || ""),
+    endDate: String(file.coverageEndDate || file.endDate || ""),
+  };
+}
+
+function rosterFileNameRange(name = "") {
+  const value = String(name || "");
+  const australian = value.match(/(\d{2})[-_](\d{2})[-_](\d{4}).*?(?:to|_to_).*?(\d{2})[-_](\d{2})[-_](\d{4})/i);
+  if (australian) {
+    return {
+      startDate: `${australian[3]}-${australian[2]}-${australian[1]}`,
+      endDate: `${australian[6]}-${australian[5]}-${australian[4]}`,
+    };
+  }
+  const iso = value.match(/(20\d{2})[-_](\d{2})[-_](\d{2}).*?(?:to|_to_).*?(20\d{2})[-_](\d{2})[-_](\d{2})/i);
+  if (iso) {
+    return {
+      startDate: `${iso[1]}-${iso[2]}-${iso[3]}`,
+      endDate: `${iso[4]}-${iso[5]}-${iso[6]}`,
+    };
+  }
+  return null;
 }
 
 async function reportSupersessionAmbiguity(db, ambiguousPairs = [], uploaderEmail = "") {
@@ -4499,12 +4625,14 @@ async function runCoreDerivedRosterSave(context, job = {}) {
         await deleteDerivedRosterFile(db, superseded.id);
       }
       const postSave = () => {
-        const presence = phase === "finish" || Number(result?.events || 0) > 1200
-          ? rebuildDailyPresenceForFile(db, fileId)
-          : populateDailyPresenceForFile(db, fileId, job.eventsByDoctor || {}, {
-            sourceType: String(filePayload.sourceType || "").toLowerCase(),
-            doctors: job.doctors || [],
-          });
+        const presence = supersession?.savedTrimmed
+          ? Promise.resolve()
+          : phase === "finish" || Number(result?.events || 0) > 1200
+            ? rebuildDailyPresenceForFile(db, fileId)
+            : populateDailyPresenceForFile(db, fileId, job.eventsByDoctor || {}, {
+              sourceType: String(filePayload.sourceType || "").toLowerCase(),
+              doctors: job.doctors || [],
+            });
         return Promise.resolve(presence)
           .then(() => deferCanonicalDoctorRefresh(context, job.reason || "saveDerivedCalendarFile"))
           .then(() => {

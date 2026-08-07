@@ -165,6 +165,23 @@ const findmyshiftFormData = new FormData();
 findmyshiftFormData.append("rosterFiles", workbookFile(findmyshiftWorkbook, "Dandenong-FindMyShift-fixture.xlsx"));
 const findmyshiftUpload = await parseUploadForm(new Request("http://fixture.test/api/analyze", { method: "POST", body: findmyshiftFormData }));
 const findmyshiftSource = findmyshiftUpload.sources.ddh[0];
+const unknownInternWorkbook = XLSX.read(findmyshiftRowsWorkbook([{
+  name: "Pranay Pius",
+  seniority: "Unknown",
+  date: "2026-08-07",
+  label: "INTERN SSU AM",
+  start: "07:30",
+  end: "17:00",
+  facility: "INTERN SSU AM",
+  comment: "",
+}]), { type: "array", cellDates: true });
+const unknownInternFormData = new FormData();
+unknownInternFormData.append("rosterFiles", workbookFile(unknownInternWorkbook, "Dandenong-FindMyShift-unknown-intern.xlsx"));
+const unknownInternUpload = await parseUploadForm(new Request("http://fixture.test/api/analyze", { method: "POST", body: unknownInternFormData }));
+const unknownInternDoctor = doctorOptions([], unknownInternUpload.sources.ddh).find((doctor) => doctor.key === "PRANAY PIUS");
+assert.ok(unknownInternDoctor, "FindMyShift fixture should expose the unknown-seniority intern");
+const unknownInternEvent = buildRosterView([], unknownInternUpload.sources.ddh, unknownInternDoctor.key).events[0];
+assert.equal(unknownInternEvent.seniority, "Intern", "FindMyShift labels should supply seniority when staff metadata says Unknown");
 const findmyshiftCrossTermRows = extractShiftRows([
   ...findmyshiftFixture.report,
   { "staffId": "staff-001", "facilityId": "facility-north", "date": "2026-10-05", "firstName": "Alex", "lastName": "Example", "payrollId": null, "occurrences": 1, "shift": "07:00-15:00" },
@@ -224,6 +241,11 @@ assert.equal((appSource.match(/data-sync-findmyshift/g) || []).length, 0, "FindM
 assert.equal((appSource.match(/data-download-findmyshift-exceptions/g) || []).length, 0, "FindMyShift exception review is no longer exposed as a UI control");
 assert.match(stateSource, /action === "downloadFindmyshiftExceptions"[\s\S]*findmyshiftDandenongAssignmentExceptions[\s\S]*findmyshiftExceptionCsv/, "FindMyShift exception downloads must be creator-only server-side report reads");
 assert.match(findmyshiftCheckSource, /isTransientFindmyshiftRateLimitError[\s\S]*current\?\.lastSuccessAt[\s\S]*returned HTTP 429/, "a transient FindMyShift rate limit should neither mark a successful source failed nor cause it to be downloaded again");
+assert.match(
+  findmyshiftCheckSource,
+  /current\.lastSuccessAt[\s\S]*reconcileCurrentFindmyshiftRoster[\s\S]*reconcileRosterFileSupersession/,
+  "an unchanged FindMyShift check should still reconcile previously imported duplicate roster rows",
+);
 assert.doesNotMatch(
   stateSource.match(/if \(action === "testFindmyshiftConnection"\)[\s\S]*?if \(action === "adminCreateUser"\)/)?.[0] || "",
   /Promise\.all/,
@@ -480,8 +502,13 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function validateDoctorProfileCalendarInBackground[\s\S]*?async function enterUserAccount/)?.[0] || "",
-  /renderedCachedSnapshot && visibleSnapshotIsCurrent\(\{ requireNotStale: true \}\)[\s\S]*allowInlineBuild: false/,
-  "doctor profile background validation should skip network work when the browser cache is current and never inline-build on switch",
+  /renderedCachedSnapshot && visibleSnapshotIsCurrent\(\{ requireNotStale: true \}\)[\s\S]*allowInlineBuild: false[\s\S]*waitForDoctorProfileCalendarBuild/,
+  "doctor profile switching should keep builds off the request path and wait for a newly scheduled snapshot",
+);
+assert.match(
+  appSource.match(/function groupWhoAssignments[\s\S]*?function groupWhoTeams/)?.[0] || "",
+  /coalesceWhoAssignments[\s\S]*normalizeWhoRole\(existing\.role\)[\s\S]*normalizeWhoRole\(assignment\.role\)/,
+  "who-is-working groups should merge duplicate same-person shifts and retain the row with seniority",
 );
 assert.match(
   appSource.match(/function loginSnapshotReadyForRender[\s\S]*?function visibleSnapshotIsCurrent/)?.[0] || "",
@@ -2309,15 +2336,27 @@ class MemoryD1Statement {
       return { success: true };
     }
     if (sql.startsWith("DELETE FROM roster_file_doctors")) {
-      for (const key of [...this.db.fileDoctors.keys()]) if (key.startsWith(`${args[0]}|`)) this.db.fileDoctors.delete(key);
+      for (const [key, doctor] of [...this.db.fileDoctors.entries()]) {
+        if (!key.startsWith(`${args[0]}|`)) continue;
+        if (sql.includes("NOT EXISTS") && [...this.db.events.values()].some((event) => event.file_id === doctor.file_id && event.doctor_key === doctor.doctor_key)) continue;
+        this.db.fileDoctors.delete(key);
+      }
       return { success: true };
     }
     if (sql.startsWith("DELETE FROM roster_events")) {
-      for (const [key, value] of [...this.db.events.entries()]) if (value.file_id === args[0]) this.db.events.delete(key);
+      for (const [key, value] of [...this.db.events.entries()]) {
+        if (value.file_id !== args[0]) continue;
+        if (sql.includes("start_date <= ?") && !(value.start_date <= args[1] && value.end_date >= args[2])) continue;
+        this.db.events.delete(key);
+      }
       return { success: true };
     }
     if (sql.startsWith("DELETE FROM roster_issues")) {
-      for (const [key, value] of [...this.db.issues.entries()]) if (value.file_id === args[0]) this.db.issues.delete(key);
+      for (const [key, value] of [...this.db.issues.entries()]) {
+        if (value.file_id !== args[0]) continue;
+        if (sql.includes("start_date >= ?") && !(value.start_date >= args[1] && value.start_date <= args[2])) continue;
+        this.db.issues.delete(key);
+      }
       return { success: true };
     }
     if (sql.startsWith("DELETE FROM roster_daily_presence")) {
@@ -5284,6 +5323,75 @@ assert.equal(
   "superseded roster events should be removed with their inactive derived file",
 );
 assert.equal(sharedUploadDb.files.get("supersede-new")?.active, 1, "latest overlapping same-source roster should remain active");
+for (const [fileId, name, sourceId, title] of [
+  ["ddh-manual-term", "Dandenong_Emergency_Doctors_Roster_03-08-2026_to_01-11-2026.xlsx", "", "Manual DDH"],
+  ["ddh-findmyshift-term", "Dandenong-FindMyShift-stream-paired-v1-2026-08-03-to-2026-11-01.xlsx", "dandenong-findmyshift", "Automated DDH"],
+]) {
+  await postState(sharedUploadStore, {
+    action: "saveDerivedCalendarFile",
+    email: "rhaydon@gmail.com",
+    password: creatorPassword,
+    file: { id: fileId, name, sourceType: "ddh", sourceId, active: true },
+    doctors: [{ key: "DDH DOCTOR", displayName: "DDH Doctor", sourceType: "ddh" }],
+    eventsByDoctor: {
+      "DDH DOCTOR": [{
+        id: `${fileId}-shift`,
+        source: "DDH",
+        title,
+        allDay: false,
+        start: "2026-08-03T08:00:00+10:00",
+        end: "2026-11-01T17:00:00+11:00",
+        rawValue: title,
+        monthKey: "2026-08",
+      }],
+    },
+  }, sharedUploadDb);
+}
+assert.equal(sharedUploadDb.files.has("ddh-manual-term"), false, "a FindMyShift source should replace a manual DDH file with identical term coverage");
+assert.equal(sharedUploadDb.files.get("ddh-findmyshift-term")?.active, 1, "the automated DDH replacement should remain active");
+await postState(sharedUploadStore, {
+  action: "saveDerivedCalendarFile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  file: {
+    id: "findmyshift-window-old",
+    name: "Dandenong-FindMyShift-2026-07-01-to-2026-08-07.xlsx",
+    sourceType: "ddh",
+    sourceId: "dandenong-findmyshift-window",
+    active: true,
+    uploadedAt: "2026-08-07T00:00:00.000Z",
+  },
+  doctors: [{ key: "WINDOW DOCTOR", displayName: "Window Doctor", sourceType: "ddh" }],
+  eventsByDoctor: {
+    "WINDOW DOCTOR": [
+      { id: "window-history", source: "DDH", title: "Historical truth", allDay: false, start: "2026-07-01T08:00:00+10:00", end: "2026-07-01T17:00:00+10:00", rawValue: "Historical truth", monthKey: "2026-07" },
+      { id: "window-old-overlap", source: "DDH", title: "Old overlapping value", allDay: false, start: "2026-08-07T08:00:00+10:00", end: "2026-08-07T17:00:00+10:00", rawValue: "Old overlapping value", monthKey: "2026-08" },
+      { id: "window-old-now-absent", source: "DDH", title: "Old row absent from new truth", allDay: false, start: "2026-09-01T08:00:00+10:00", end: "2026-09-01T17:00:00+10:00", rawValue: "Old row absent from new truth", monthKey: "2026-09" },
+    ],
+  },
+}, sharedUploadDb);
+await postState(sharedUploadStore, {
+  action: "saveDerivedCalendarFile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  file: {
+    id: "findmyshift-window-new",
+    name: "Dandenong-FindMyShift-2026-08-07-to-2026-11-01.xlsx",
+    sourceType: "ddh",
+    sourceId: "dandenong-findmyshift-window",
+    active: true,
+    uploadedAt: "2026-08-08T00:00:00.000Z",
+  },
+  doctors: [{ key: "WINDOW DOCTOR", displayName: "Window Doctor", sourceType: "ddh" }],
+  eventsByDoctor: {
+    "WINDOW DOCTOR": [{ id: "window-new-overlap", source: "DDH", title: "New authoritative value", allDay: false, start: "2026-08-07T08:00:00+10:00", end: "2026-08-07T17:00:00+10:00", rawValue: "New authoritative value", monthKey: "2026-08" }],
+  },
+}, sharedUploadDb);
+const rollingWindowEvents = [...sharedUploadDb.events.values()].filter((event) => event.doctor_key === "WINDOW DOCTOR");
+assert.ok(rollingWindowEvents.some((event) => event.title === "Historical truth"), "older automated rows outside the new provider window should remain durable truth");
+assert.equal(rollingWindowEvents.some((event) => event.title === "Old overlapping value"), false, "a newer automatic snapshot should remove overlapping rows from the older snapshot");
+assert.equal(rollingWindowEvents.some((event) => event.title === "Old row absent from new truth"), false, "the declared provider window should remove stale old rows even when the new report has no replacement shift on that date");
+assert.equal(rollingWindowEvents.filter((event) => event.start_date === "2026-08-07").length, 1, "rolling automatic snapshots should leave exactly one authoritative row per covered shift");
 for (const [fileId, name, lastModified, start, end] of [
   ["adjacent-term-1", "MMC_Term1_2026.xlsx", 10, "2026-05-03", "2026-05-04"],
   ["adjacent-term-2", "MMC_Term2_2026.xlsx", 30, "2026-05-04", "2026-05-04"],

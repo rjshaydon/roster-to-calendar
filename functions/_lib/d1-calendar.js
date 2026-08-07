@@ -664,6 +664,50 @@ export async function deleteDerivedRosterFile(db, fileId) {
   await db.prepare("DELETE FROM roster_files WHERE id = ?").bind(fileId).run();
 }
 
+export async function trimDerivedRosterFileOverlap(db, fileId, startDate, endDate) {
+  if (!db?.prepare || !fileId || !startDate || !endDate) return { removedEvents: 0, remainingEvents: 0, deleted: false };
+  await ensureCalendarSchema(db);
+  const before = await db.prepare("SELECT COUNT(*) AS count FROM roster_events WHERE file_id = ?").bind(fileId).first();
+  await runTransactionalBatch(db, [
+    db.prepare(`
+      DELETE FROM roster_events
+      WHERE file_id = ?
+        AND start_date <= ?
+        AND end_date >= ?
+    `).bind(fileId, endDate, startDate),
+    db.prepare(`
+      DELETE FROM roster_issues
+      WHERE file_id = ?
+        AND start_date >= ?
+        AND start_date <= ?
+    `).bind(fileId, startDate, endDate),
+    db.prepare(`
+      DELETE FROM roster_file_doctors
+      WHERE file_id = ?
+        AND NOT EXISTS (
+          SELECT 1
+          FROM roster_events
+          WHERE roster_events.file_id = roster_file_doctors.file_id
+            AND roster_events.doctor_key = roster_file_doctors.doctor_key
+        )
+    `).bind(fileId),
+  ]);
+  const after = await db.prepare("SELECT COUNT(*) AS count FROM roster_events WHERE file_id = ?").bind(fileId).first();
+  const beforeCount = Number(before?.count || 0);
+  const remainingEvents = Number(after?.count || 0);
+  if (!remainingEvents) {
+    await deleteDerivedRosterFile(db, fileId);
+    return { removedEvents: beforeCount, remainingEvents: 0, deleted: true };
+  }
+  await deleteDailyPresenceForFile(db, fileId);
+  await rebuildDailyPresenceForFile(db, fileId);
+  return {
+    removedEvents: Math.max(0, beforeCount - remainingEvents),
+    remainingEvents,
+    deleted: false,
+  };
+}
+
 export async function deleteOrphanRosterDoctors(db, sourceTypes = []) {
   if (!db?.prepare) return;
   await ensureCalendarSchema(db);
