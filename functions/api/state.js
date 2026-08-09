@@ -37,6 +37,9 @@ import {
   queryCoworkerEventsFromEvents,
   queryFacilityOverviewOnShift,
   queryFacilityOverviewStaff,
+  setFacilityStaffDesignation,
+  clearFacilityStaffDesignation,
+  reconcileFacilityStaffDesignationsForRosterFile,
   queryOverlapDoctorsFromEvents,
   queryClaimedAccounts,
   queryDoctorProfileMirrors,
@@ -1417,6 +1420,43 @@ export async function onRequestPost(context) {
       return Response.json({ ok: true, repaired, queryMs: Date.now() - startedAt });
     }
 
+    if (action === "setFacilityStaffDesignation") {
+      if ((account.role !== "creator" && account.role !== "owner") || targetEmail) {
+        return Response.json({ error: "Creator access on the Creator profile is required." }, { status: 403 });
+      }
+      try {
+        const termStart = String(body?.termStart || "").slice(0, 10);
+        const termEnd = String(body?.termEnd || "").slice(0, 10);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(termStart) || !/^\d{4}-\d{2}-\d{2}$/.test(termEnd) || termEnd < termStart) {
+          return Response.json({ error: "A valid medical term is required." }, { status: 400 });
+        }
+        const designation = await setFacilityStaffDesignation(context.env.ROSTER_DB, {
+          sourceType: body?.facilityKey,
+          doctorKey: normalizeRosterName(body?.doctorKey || ""),
+          displayName: body?.displayName,
+          seniority: body?.seniority,
+          designation: body?.designation,
+          termStart,
+          termEnd,
+          createdBy: account.record?.email || email,
+        });
+        scheduleSnapshotWarmupForSourceTypes(context, [designation?.sourceType].filter(Boolean), { reason: "facilityStaffDesignation" });
+        return Response.json({ ok: true, designation });
+      } catch (error) {
+        return Response.json({ error: error?.message || "Could not save the staff designation." }, { status: 400 });
+      }
+    }
+
+    if (action === "clearFacilityStaffDesignation") {
+      if ((account.role !== "creator" && account.role !== "owner") || targetEmail) {
+        return Response.json({ error: "Creator access on the Creator profile is required." }, { status: 403 });
+      }
+      const designation = await clearFacilityStaffDesignation(context.env.ROSTER_DB, body?.designationId, { reason: "creator-undo" });
+      if (!designation) return Response.json({ error: "Staff designation was not found." }, { status: 404 });
+      scheduleSnapshotWarmupForSourceTypes(context, [designation.sourceType].filter(Boolean), { reason: "clearFacilityStaffDesignation" });
+      return Response.json({ ok: true, designation });
+    }
+
     if (action === "queryFacilityOverviewOnShift") {
       if (!facilityOverviewEnabledForRecord({ ...account.record, role: account.role })) {
         return Response.json({ ok: false, unavailable: true, events: [] }, { status: 403 });
@@ -1444,7 +1484,7 @@ export async function onRequestPost(context) {
 
     if (action === "queryFacilityOverviewStaff") {
       if (!facilityOverviewEnabledForRecord({ ...account.record, role: account.role })) {
-        return Response.json({ ok: false, unavailable: true, members: [], events: [], coverage: [] }, { status: 403 });
+        return Response.json({ ok: false, unavailable: true, members: [], events: [], coverage: [], designations: [] }, { status: 403 });
       }
       const termStart = String(body?.termStart || "").slice(0, 10);
       const termEnd = String(body?.termEnd || "").slice(0, 10);
@@ -1457,7 +1497,7 @@ export async function onRequestPost(context) {
         return Response.json({ ok: true, termStart, termEnd, facilityKey: facilityKey || "all", ...result });
       } catch (error) {
         console.error("queryFacilityOverviewStaff failed", { termStart, termEnd, facilityKey, error: error?.message || String(error) });
-        return Response.json({ ok: false, unavailable: true, members: [], events: [], coverage: [] }, { status: 503 });
+        return Response.json({ ok: false, unavailable: true, members: [], events: [], coverage: [], designations: [] }, { status: 503 });
       }
     }
 
@@ -4762,6 +4802,7 @@ async function runCoreDerivedRosterSave(context, job = {}) {
               doctors: job.doctors || [],
             });
         return Promise.resolve(presence)
+          .then(() => reconcileFacilityStaffDesignationsForRosterFile(db, fileId))
           .then(() => deferCanonicalDoctorRefresh(context, job.reason || "saveDerivedCalendarFile"))
           .then(() => {
             scheduleSnapshotWarmupForSourceTypes(context, [String(filePayload.sourceType || "").toLowerCase()].filter(Boolean), {

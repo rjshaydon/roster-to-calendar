@@ -924,6 +924,25 @@ input[type="color"] {
   gap: 10px;
 }
 
+.facility-overview-ddh-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.facility-overview-ddh-column-1 {
+  grid-column: 1;
+}
+
+.facility-overview-ddh-column-2 {
+  grid-column: 2;
+}
+
+.facility-overview-ddh-column-3 {
+  grid-column: 3;
+}
+
 .facility-overview-staff-card {
   gap: 3px;
   padding: 11px 12px;
@@ -963,6 +982,11 @@ input[type="color"] {
 .facility-overview-staff-search {
   flex-basis: 190px !important;
   width: 190px !important;
+}
+
+.facility-overview-staff-term-control {
+  flex-basis: 150px !important;
+  width: 150px !important;
 }
 
 .facility-overview-ed-panel,
@@ -1006,6 +1030,8 @@ input[type="color"] {
 }
 
 .facility-overview-staff-section-toggle {
+  display: grid;
+  grid-template-columns: minmax(0, var(--facility-overview-seniority-label-width, max-content)) 4ch minmax(0, 1fr);
   width: 100%;
   padding: 11px 12px;
   border: 0;
@@ -1017,12 +1043,16 @@ input[type="color"] {
   cursor: pointer;
 }
 
-.facility-overview-staff-section-toggle::after {
-  content: "⌄";
-  margin-left: 2px;
+.facility-overview-staff-section-count {
+  text-align: left;
 }
 
-.facility-overview-staff-section-toggle[aria-expanded="true"]::after {
+.facility-overview-staff-section-chevron::after {
+  content: "⌄";
+  justify-self: end;
+}
+
+.facility-overview-staff-section-toggle[aria-expanded="true"] .facility-overview-staff-section-chevron::after {
   transform: rotate(180deg);
 }
 
@@ -1040,6 +1070,14 @@ input[type="color"] {
 .facility-overview-staff-member span {
   color: var(--muted);
   font-size: 0.84rem;
+}
+
+.facility-overview-previous-staff-section {
+  border-color: rgba(138, 82, 0, 0.22);
+}
+
+.facility-overview-previous-staff-section .facility-overview-staff-section-toggle {
+  background: rgba(138, 82, 0, 0.06);
 }
 
 .facility-overview-staff-calendar-link {
@@ -1099,6 +1137,64 @@ input[type="color"] {
 .facility-overview-staff-action-menu button:focus-visible {
   background: var(--accent-soft);
   color: var(--accent-strong);
+}
+
+.facility-overview-staff-designation-action {
+  position: relative;
+  margin-left: auto;
+}
+
+.facility-overview-staff-designation-trigger {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.84rem;
+  text-align: right;
+  cursor: context-menu;
+}
+
+.facility-overview-staff-designation-trigger:hover,
+.facility-overview-staff-designation-trigger:focus-visible {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.facility-overview-stream-card {
+  gap: 9px;
+}
+
+.facility-overview-stream-card-title {
+  font-size: 0.94rem;
+}
+
+.facility-overview-stream-seniority {
+  display: grid;
+  gap: 4px;
+}
+
+.facility-overview-stream-seniority > span,
+.facility-overview-unstreamed-card > strong {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.facility-overview-on-shift-names {
+  display: grid;
+  gap: 4px;
+}
+
+.facility-overview-on-shift-names > div {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.facility-overview-on-shift-names small {
+  color: var(--muted);
+  font-size: 0.74rem;
 }
 
 .facility-overview-seniority-link {
@@ -1483,8 +1579,15 @@ input[type="color"] {
 }
 
 @media (max-width: 900px) {
-  .facility-overview-staff-grid {
+  .facility-overview-staff-grid,
+  .facility-overview-ddh-row {
     grid-template-columns: 1fr;
+  }
+
+  .facility-overview-ddh-column-1,
+  .facility-overview-ddh-column-2,
+  .facility-overview-ddh-column-3 {
+    grid-column: 1;
   }
 
   .facility-overview-together-builder,
@@ -3862,6 +3965,10 @@ body[data-skin="console"] .panel {
     min-height: 52px;
     height: 52px;
     max-height: 52px;
+  }
+
+  .facility-overview-staff-term-control {
+    display: none;
   }
 
   .mobile-login-access {

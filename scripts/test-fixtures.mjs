@@ -315,8 +315,8 @@ assert.match(appSource, /facilityOverviewButton\.textContent = open \? "My calen
 assert.match(appSource, /addEventListener\("input"[\s\S]*?refreshFacilityOverviewStaffContent\(\);[\s\S]*?renderFacilityOverviewStaffBody\(\);/, "ED staff search should refresh results without replacing its focused input");
 assert.match(
   appSource.match(/function renderFacilityOverviewOnShiftResults[\s\S]*?async function loadFacilityOverviewStaff/)?.[0] || "",
-  /canUseFacilityOverview\(\)[\s\S]*renderFacilityOverviewStaffName\(person[\s\S]*renderFacilityOverviewSeniorityLink\(person\.seniority/,
-  "On shift should offer staff actions to At a glance users and seniority drill-throughs",
+  /buildWhoAssignment[\s\S]*renderFacilityOverviewOnShiftPeriod[\s\S]*facilityOverviewIsMeaningfulStream[\s\S]*renderFacilityOverviewStreamCard[\s\S]*renderFacilityOverviewSeniorityLink[\s\S]*renderFacilityOverviewStaffName/,
+  "On shift should group recognised streams with seniority subgroups and fall back to seniority for unstreamed staff",
 );
 assert.match(
   appSource.match(/function renderFacilityOverviewTogetherMatchCards[\s\S]*?function facilityOverviewFormatOverlap/)?.[0] || "",
@@ -330,8 +330,8 @@ assert.match(
 );
 assert.match(
   appSource.match(/addEventListener\("contextmenu"[\s\S]*?addEventListener\("change"/)?.[0] || "",
-  /data-facility-overview-staff-menu[\s\S]*isViewingCreatorAccount\(\)[\s\S]*preventDefault\(\)[\s\S]*refreshFacilityOverviewStaffActionContent\(\)/,
-  "Only the active Creator profile should receive a custom staff context menu",
+  /data-facility-overview-staff-designation-menu[\s\S]*isViewingCreatorAccount\(\)[\s\S]*data-facility-overview-staff-menu[\s\S]*preventDefault\(\)[\s\S]*refreshFacilityOverviewStaffActionContent\(\)/,
+  "Only the active Creator profile should receive staff and no-shift designation context menus",
 );
 assert.match(
   appSource.match(/document\.addEventListener\("pointerdown"[\s\S]*?facilityOverviewSection\?\.addEventListener\("scroll"/)?.[0] || "",
@@ -360,6 +360,12 @@ assert.match(
 );
 assert.match(styleSource, /\.facility-overview-seniority-link[\s\S]*text-decoration: underline;/, "Clickable seniority labels should have a visible link treatment");
 assert.match(styleSource, /\.facility-overview-staff-section \{[\s\S]*?overflow: visible;/, "ED staff accordions should not clip open staff action menus");
+assert.match(appSource, /facility-overview-staff-term-control[\s\S]*data-facility-overview-staff-term/, "ED staff should expose a synchronized desktop term selector beside Find staff");
+assert.match(appSource, /previous_staff[\s\S]*Previous staff[\s\S]*Restore to current staff/, "SMS previous staff should remain visible and be restorable");
+assert.match(appSource, /long_service_leave[\s\S]*sabbatical_leave[\s\S]*sick_leave[\s\S]*personal_leave/, "No-shift staff menu should offer the approved leave designations");
+assert.match(styleSource, /facility-overview-seniority-label-width[\s\S]*facility-overview-staff-section-count/, "ED staff counts should use a shared invisible alignment column");
+assert.match(stateSource, /action === "setFacilityStaffDesignation"[\s\S]*Creator access on the Creator profile is required[\s\S]*action === "clearFacilityStaffDesignation"/, "Staff designation changes must be Creator-only server actions");
+assert.match(d1CalendarSource, /facility_staff_designations[\s\S]*reconcileFacilityStaffDesignationsForRosterFile[\s\S]*queryFacilityDesignationLeaveEvents/, "Designations should persist, surface as calendar leave, and reconcile on newer rosters");
 assert.match(styleSource, /#facilityOverviewBody \{[\s\S]*?height: 100%;[\s\S]*?max-height: 100%;[\s\S]*?overflow-y: auto;/, "Working together content should scroll within the bounded overview body");
 assert.match(styleSource, /#facilityOverviewBody\.is-working-together > \.facility-overview-together \{[\s\S]*?height: 100%;[\s\S]*?overflow-y: auto;/, "Working together should use an explicit full-height tab scroller");
 assert.match(stateSource, /action === "downloadFindmyshiftExceptions"[\s\S]*findmyshiftDandenongAssignmentExceptions[\s\S]*findmyshiftExceptionCsv/, "FindMyShift exception downloads must be creator-only server-side report reads");
@@ -2332,6 +2338,7 @@ class MemoryD1 {
     this.files = new Map();
     this.doctors = new Map();
     this.fileDoctors = new Map();
+    this.facilityStaffDesignations = new Map();
     this.events = new Map();
     this.dailyPresence = new Map();
     this.issues = new Map();
@@ -2364,6 +2371,7 @@ class MemoryD1 {
       "files",
       "doctors",
       "fileDoctors",
+      "facilityStaffDesignations",
       "events",
       "dailyPresence",
       "issues",
@@ -2850,6 +2858,9 @@ class MemoryD1Statement {
       if (file) file.active = args[0];
       return { success: true };
     }
+    if (sql.startsWith("UPDATE facility_staff_designations")) {
+      return { success: true, meta: { changes: 0 } };
+    }
     throw new Error(`Unsupported MemoryD1 run SQL: ${sql}`);
   }
 
@@ -2914,6 +2925,9 @@ class MemoryD1Statement {
     }
     if (sql.startsWith("SELECT * FROM roster_sources ORDER BY")) {
       return { results: [...this.db.rosterSources.values()].sort((left, right) => String(left.label).localeCompare(String(right.label)) || String(left.id).localeCompare(String(right.id))) };
+    }
+    if (sql.includes("FROM facility_staff_designations")) {
+      return { results: [] };
     }
     if (sql.startsWith("SELECT * FROM roster_sync_runs") && !sql.includes("WHERE source_id")) {
       return { results: [...this.db.rosterSyncRuns.values()].sort((left, right) => String(right.started_at).localeCompare(String(left.started_at)) || String(right.id).localeCompare(String(left.id))).slice(0, Number(args[0] || 50)) };
@@ -3507,6 +3521,18 @@ class MemoryD1Statement {
         max_uploaded_at: activeFiles.map((file) => String(file.uploaded_at || "")).sort().at(-1) || "",
         max_last_modified: Math.max(0, ...activeFiles.map((file) => Number(file.last_modified || 0))),
       };
+    }
+    if (sql.startsWith("SELECT id, source_type, parsed_at FROM roster_files WHERE id = ? AND active = 1")) {
+      const file = this.db.files.get(args[0]);
+      return file?.active === 1 ? { id: file.id, source_type: file.source_type, parsed_at: file.parsed_at } : null;
+    }
+    if (sql.startsWith("SELECT MIN(start_date) AS start_date, MAX(start_date) AS end_date FROM roster_events WHERE file_id = ?")) {
+      const rows = [...this.db.events.values()].filter((event) => event.file_id === args[0]);
+      return { start_date: rows.map((event) => event.start_date).sort()[0] || null, end_date: rows.map((event) => event.start_date).sort().at(-1) || null };
+    }
+    if (sql.includes("FROM facility_staff_designations") && sql.includes("COUNT(*) AS count")) {
+      const rows = [...this.db.facilityStaffDesignations.values()];
+      return { count: rows.length, max_updated_at: rows.map((row) => String(row.updated_at || "")).sort().at(-1) || "" };
     }
     if (sql.includes("FROM custom_events") && sql.includes("COUNT(*) AS count")) {
       const rows = [...this.db.customEvents.values()].filter((event) => event.owner_email === args[0]);
