@@ -329,6 +329,16 @@ assert.match(
   "At a glance staff names should present the contextual calendar and Working together actions",
 );
 assert.match(
+  appSource.match(/const staffActionToggle[\s\S]*?const staffCalendar/)?.[0] || "",
+  /staffActionMenu[\s\S]*refreshFacilityOverviewStaffActionContent\(\)[\s\S]*renderFacilityOverview\(\)/,
+  "Opening a staff action menu should rebuild cached On shift or ED staff result markup before rendering",
+);
+assert.match(
+  appSource.match(/function refreshFacilityOverviewStaffActionContent[\s\S]*?async function loadFacilityOverviewStaff/)?.[0] || "",
+  /onShiftData[\s\S]*renderFacilityOverviewOnShiftResults[\s\S]*refreshFacilityOverviewStaffContent/,
+  "Staff action menus should re-render from loaded data on both On shift and ED staff",
+);
+assert.match(
   appSource.match(/function openFacilityOverviewWorkingTogether[\s\S]*?function focusFacilityOverviewStaffActionMenu/)?.[0] || "",
   /facilityOverviewState\.tab = "together"[\s\S]*togetherStaffKeys = \[selectedPerson\.identity, viewer\.identity\]/,
   "Working together should prefill the clicked staff member and the active viewer",
@@ -344,6 +354,7 @@ assert.match(
   "At a glance calendar links should resolve roster aliases through the Creator switcher",
 );
 assert.match(styleSource, /\.facility-overview-seniority-link[\s\S]*text-decoration: underline;/, "Clickable seniority labels should have a visible link treatment");
+assert.match(styleSource, /\.facility-overview-staff-section \{[\s\S]*?overflow: visible;/, "ED staff accordions should not clip open staff action menus");
 assert.match(styleSource, /#facilityOverviewBody \{[\s\S]*?height: 100%;[\s\S]*?max-height: 100%;[\s\S]*?overflow-y: auto;/, "Working together content should scroll within the bounded overview body");
 assert.match(styleSource, /#facilityOverviewBody\.is-working-together > \.facility-overview-together \{[\s\S]*?height: 100%;[\s\S]*?overflow-y: auto;/, "Working together should use an explicit full-height tab scroller");
 assert.match(stateSource, /action === "downloadFindmyshiftExceptions"[\s\S]*findmyshiftDandenongAssignmentExceptions[\s\S]*findmyshiftExceptionCsv/, "FindMyShift exception downloads must be creator-only server-side report reads");

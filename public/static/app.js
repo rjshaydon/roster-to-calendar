@@ -303,7 +303,7 @@ let currentSubscription = null;
 let currentInsightsEnabled = currentUserRole === "creator";
 let currentFacilityOverviewEnabled = currentUserRole === "creator";
 let facilityOverviewState = {
-  tab: "on-shift", date: formatDateKey(new Date()), facilityKey: "", includeClinicalSupport: false, requestId: 0,
+  tab: "on-shift", date: formatDateKey(new Date()), facilityKey: "", includeClinicalSupport: false, requestId: 0, onShiftData: null,
   staffTermStart: formatDateKey(australianTermForDate(new Date()).start), staffTerms: [], staffContent: "", staffData: null, staffQuery: "", staffExpanded: new Set(), staffFocusSection: "", staffActionMenu: "",
   togetherStaffKeys: ["", ""], togetherRangeMode: "term",
   togetherTermStart: formatDateKey(australianTermForDate(new Date()).start),
@@ -572,6 +572,7 @@ facilityOverviewSection?.addEventListener("click", (event) => {
   if (staffActionToggle) {
     const key = staffActionToggle.dataset.facilityOverviewStaffActions || "";
     facilityOverviewState.staffActionMenu = facilityOverviewState.staffActionMenu === key ? "" : key;
+    refreshFacilityOverviewStaffActionContent();
     renderFacilityOverview();
     if (facilityOverviewState.staffActionMenu) focusFacilityOverviewStaffActionMenu();
     return;
@@ -8702,6 +8703,7 @@ async function loadFacilityOverviewOnShift() {
   const requestId = facilityOverviewState.requestId + 1;
   facilityOverviewState.requestId = requestId;
   facilityOverviewState.staffData = null;
+  facilityOverviewState.onShiftData = null;
   facilityOverviewState.content = `<article class="issue-card"><p>Loading rostered staff…</p></article>`;
   renderFacilityOverview();
   try {
@@ -8719,7 +8721,8 @@ async function loadFacilityOverviewOnShift() {
     });
     const data = await readJsonResponse(response, "Could not load the ED overview.");
     if (facilityOverviewState.requestId !== requestId || facilityOverviewState.tab !== "on-shift") return;
-    facilityOverviewState.content = renderFacilityOverviewOnShiftResults(data.events || []);
+    facilityOverviewState.onShiftData = data.events || [];
+    facilityOverviewState.content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData);
   } catch (error) {
     if (facilityOverviewState.requestId !== requestId) return;
     facilityOverviewState.content = `<article class="issue-card"><p>${escapeHtml(error.message || "The ED overview is unavailable right now.")}</p></article>`;
@@ -8779,6 +8782,14 @@ function renderFacilityOverviewOnShiftResults(rows) {
       </article>
     `).join("")}</div></section>
   `).join("")}`;
+}
+
+function refreshFacilityOverviewStaffActionContent() {
+  if (facilityOverviewState.tab === "on-shift" && Array.isArray(facilityOverviewState.onShiftData)) {
+    facilityOverviewState.content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData);
+  } else if (facilityOverviewState.tab === "staff") {
+    refreshFacilityOverviewStaffContent();
+  }
 }
 
 async function loadFacilityOverviewStaff() {
