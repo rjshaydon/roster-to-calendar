@@ -296,6 +296,25 @@ assert.match(indexSource, /id="stayLoggedIn"[^>]*checked/, "Stay logged in shoul
 assert.equal((appSource.match(/data-test-findmyshift/g) || []).length, 0, "FindMyShift diagnostics should not remain exposed as a UI control");
 assert.equal((appSource.match(/data-sync-findmyshift/g) || []).length, 0, "FindMyShift is automated and should not expose a manual sync control");
 assert.equal((appSource.match(/data-download-findmyshift-exceptions/g) || []).length, 0, "FindMyShift exception review is no longer exposed as a UI control");
+assert.match(
+  appSource.match(/function renderFacilityOverviewTogetherResults[\s\S]*?function facilityOverviewFormatOverlap/)?.[0] || "",
+  /eventSourceCode[\s\S]*nextStart >= nextEnd[\s\S]*facilityOverviewSubtractIntervals/,
+  "Working together should match true same-hospital shift intervals and remove all-staff time from pair-only matches",
+);
+assert.match(
+  appSource.match(/function renderFacilityOverviewTogetherResults[\s\S]*?function facilityOverviewFormatOverlap/)?.[0] || "",
+  /selectedDoctors\.length === 2[\s\S]*showGroups[\s\S]*All selected staff[\s\S]*Two-person overlaps/,
+  "Working together should only add all-staff and pair headings when they are relevant to a selection of three or more",
+);
+assert.doesNotMatch(appSource, /data-facility-overview-together-edit-staff/, "Working together should not render a redundant Edit staff control");
+assert.match(styleSource, /#facilityOverviewSection\.is-compact[\s\S]*\.facility-overview-tabs/, "At a glance tabs should compact after scrolling");
+assert.match(styleSource, /#facilityOverviewSection \{[\s\S]*?grid-template-rows: auto auto auto minmax\(0, 1fr\);[\s\S]*?overflow: hidden;/, "At a glance should keep its header stack outside the scroll container");
+assert.match(styleSource, /#facilityOverviewBody \{[\s\S]*?overflow-y: auto;/, "At a glance results should be the sole desktop scroll container");
+assert.match(appSource, /facilityOverviewSection\?\.addEventListener\("scroll"[\s\S]*?scroller\.scrollTop > 28/, "At a glance should compact its persistent header from results scrolling");
+assert.match(appSource, /facilityOverviewButton\.textContent = open \? "My calendar" : "At a glance"/, "The sidebar At a glance control should become My calendar while the overview is open");
+assert.match(appSource, /addEventListener\("input"[\s\S]*?refreshFacilityOverviewStaffContent\(\);[\s\S]*?renderFacilityOverviewStaffBody\(\);/, "ED staff search should refresh results without replacing its focused input");
+assert.match(styleSource, /#facilityOverviewBody \{[\s\S]*?height: 100%;[\s\S]*?max-height: 100%;[\s\S]*?overflow-y: auto;/, "Working together content should scroll within the bounded overview body");
+assert.match(styleSource, /#facilityOverviewBody\.is-working-together > \.facility-overview-together \{[\s\S]*?height: 100%;[\s\S]*?overflow-y: auto;/, "Working together should use an explicit full-height tab scroller");
 assert.match(stateSource, /action === "downloadFindmyshiftExceptions"[\s\S]*findmyshiftDandenongAssignmentExceptions[\s\S]*findmyshiftExceptionCsv/, "FindMyShift exception downloads must be creator-only server-side report reads");
 assert.match(findmyshiftCheckSource, /isTransientFindmyshiftRateLimitError[\s\S]*current\?\.lastSuccessAt[\s\S]*returned HTTP 429/, "a transient FindMyShift rate limit should neither mark a successful source failed nor cause it to be downloaded again");
 assert.match(
@@ -561,6 +580,31 @@ assert.match(
   appSource.match(/async function validateDoctorProfileCalendarInBackground[\s\S]*?async function enterUserAccount/)?.[0] || "",
   /renderedCachedSnapshot && visibleSnapshotIsCurrent\(\{ requireNotStale: true \}\)[\s\S]*allowInlineBuild: false[\s\S]*waitForDoctorProfileCalendarBuild/,
   "doctor profile switching should keep builds off the request path and wait for a newly scheduled snapshot",
+);
+assert.match(
+  appSource.match(/async function waitForDoctorProfileCalendarBuild[\s\S]*?async function enterUserAccount/)?.[0] || "",
+  /while \(calendarTransitionStillCurrent\(options\.transition\)\)[\s\S]*retryDelays\[Math\.min\(attempt, retryDelays\.length - 1\)\]/,
+  "doctor profile switching should keep polling a scheduled snapshot until the transition changes",
+);
+assert.doesNotMatch(
+  appSource.match(/async function loadUnclaimedDoctorCalendar[\s\S]*?function hasDoctorProfileImportCandidates/)?.[0] || "",
+  /calendar is not ready yet\. Try again in a moment/,
+  "a cache miss while opening a doctor profile should remain a loading state rather than rejecting the switch",
+);
+assert.match(
+  await readFile(new URL("../public/index.html", import.meta.url), "utf8"),
+  /id="switchOverlayCancelButton"[\s\S]*Cancel and return to Creator/,
+  "calendar switch overlay should let the Creator cancel a slow target load",
+);
+assert.match(
+  appSource.match(/function showSwitchOverlay[\s\S]*?function showRosterImportOverlay/)?.[0] || "",
+  /activeSwitchOverlayCancel[\s\S]*switchOverlayRunId/,
+  "switch overlay ownership should stop stale switch completions from hiding a newer overlay",
+);
+assert.match(
+  appSource.match(/async function cancelCreatorCalendarSwitch[\s\S]*?function showRosterImportOverlay/)?.[0] || "",
+  /returnToCreatorCalendar\(\{ skipOutgoingSave: true, restoreOnFailure: false \}\)/,
+  "cancelling a target switch should return without saving the incomplete target workspace",
 );
 assert.match(
   appSource.match(/function groupWhoAssignments[\s\S]*?function groupWhoTeams/)?.[0] || "",
@@ -2470,12 +2514,15 @@ class MemoryD1Statement {
       return { success: true };
     }
     if (sql.startsWith("INSERT INTO roster_file_doctors")) {
-      for (let index = 0; index < args.length; index += 4) {
+      const width = sql.includes("membership_source") ? 6 : 4;
+      for (let index = 0; index < args.length; index += width) {
         this.db.fileDoctors.set(`${args[index]}|${args[index + 1]}|${args[index + 2]}`, {
           file_id: args[index],
           source_type: args[index + 1],
           doctor_key: args[index + 2],
           display_name: args[index + 3],
+          seniority: args[index + 4] || "",
+          membership_source: args[index + 5] || "roster",
         });
       }
       return { success: true };
@@ -2550,13 +2597,14 @@ class MemoryD1Statement {
         real_name: args[1],
         role: args[2],
         insights_enabled: args[3],
-        subscription_token: args[4],
-        password_salt: args[5] || previous.password_salt || "",
-        password_hash: args[6] || previous.password_hash || "",
-        admin_issues_json: args[7] || "[]",
-        local_parser_extensions_json: args[8] || "[]",
-        created_at: args[9] || previous.created_at || "",
-        updated_at: args[10] || args[5],
+        facility_overview_enabled: args[4],
+        subscription_token: args[5],
+        password_salt: args[6] || previous.password_salt || "",
+        password_hash: args[7] || previous.password_hash || "",
+        admin_issues_json: args[8] || "[]",
+        local_parser_extensions_json: args[9] || "[]",
+        created_at: args[10] || previous.created_at || "",
+        updated_at: args[11] || args[6],
       });
       return { success: true };
     }
@@ -2766,6 +2814,9 @@ class MemoryD1Statement {
         results: ["id", "name", "source_type", "source_id", "active", "size", "last_modified", "added_at", "uploaded_at", "uploaded_by", "parsed_at"].map((name) => ({ name })),
       };
     }
+    if (sql.startsWith("PRAGMA table_info(roster_file_doctors)")) {
+      return { results: ["file_id", "source_type", "doctor_key", "display_name", "seniority", "membership_source"].map((name) => ({ name })) };
+    }
     if (sql.startsWith("PRAGMA table_info(roster_sources)")) {
       return {
         results: ["id", "provider", "source_type", "label", "enabled", "config_json", "cursor_json", "provider_version", "provider_modified_at", "last_checked_at", "last_success_at", "last_error", "active_file_id", "created_at", "updated_at"].map((name) => ({ name })),
@@ -2778,6 +2829,7 @@ class MemoryD1Statement {
           "real_name",
           "role",
           "insights_enabled",
+          "facility_overview_enabled",
           "subscription_token",
           "password_salt",
           "password_hash",
@@ -3268,6 +3320,7 @@ class MemoryD1Statement {
             real_name: profile.real_name,
             role: profile.role,
             insights_enabled: profile.insights_enabled,
+            facility_overview_enabled: profile.facility_overview_enabled,
             subscription_token: profile.subscription_token,
             password_salt: profile.password_salt,
             password_hash: profile.password_hash,
@@ -3289,6 +3342,7 @@ class MemoryD1Statement {
             real_name: profile.real_name,
             role: profile.role,
             insights_enabled: profile.insights_enabled,
+            facility_overview_enabled: profile.facility_overview_enabled,
             subscription_token: profile.subscription_token,
             password_salt: profile.password_salt,
             password_hash: profile.password_hash,

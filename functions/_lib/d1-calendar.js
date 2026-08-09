@@ -63,9 +63,14 @@ async function ensureCalendarSchemaUncached(db) {
       source_type TEXT NOT NULL,
       doctor_key TEXT NOT NULL,
       display_name TEXT NOT NULL,
+      seniority TEXT NOT NULL DEFAULT '',
+      membership_source TEXT NOT NULL DEFAULT 'roster',
       PRIMARY KEY (file_id, source_type, doctor_key)
     )
   `).run();
+  await ensureColumn(db, "roster_file_doctors", "seniority", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn(db, "roster_file_doctors", "membership_source", "TEXT NOT NULL DEFAULT 'roster'");
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_file_doctors_source_file ON roster_file_doctors (source_type, file_id)").run();
   await db.prepare(`
     CREATE TABLE IF NOT EXISTS roster_events (
       id TEXT PRIMARY KEY,
@@ -117,6 +122,7 @@ async function ensureCalendarSchemaUncached(db) {
       real_name TEXT NOT NULL DEFAULT '',
       role TEXT NOT NULL DEFAULT 'user',
       insights_enabled INTEGER NOT NULL DEFAULT 0,
+      facility_overview_enabled INTEGER NOT NULL DEFAULT 0,
       subscription_token TEXT NOT NULL DEFAULT '',
       password_salt TEXT NOT NULL DEFAULT '',
       password_hash TEXT NOT NULL DEFAULT '',
@@ -126,6 +132,7 @@ async function ensureCalendarSchemaUncached(db) {
       updated_at TEXT NOT NULL DEFAULT ''
     )
   `).run();
+  await ensureColumn(db, "account_profiles", "facility_overview_enabled", "INTEGER NOT NULL DEFAULT 0");
   await ensureColumn(db, "account_profiles", "password_salt", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn(db, "account_profiles", "password_hash", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn(db, "account_profiles", "admin_issues_json", "TEXT NOT NULL DEFAULT '[]'");
@@ -428,10 +435,13 @@ export async function upsertDerivedRosterFile(db, file, storedImport) {
         updated_at = excluded.updated_at
     `).bind(sourceType, doctor.key, doctor.displayName, parsedAt).run();
     await db.prepare(`
-      INSERT INTO roster_file_doctors (file_id, source_type, doctor_key, display_name)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT(file_id, source_type, doctor_key) DO UPDATE SET display_name = excluded.display_name
-    `).bind(file.id, sourceType, doctor.key, doctor.displayName).run();
+      INSERT INTO roster_file_doctors (file_id, source_type, doctor_key, display_name, seniority, membership_source)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(file_id, source_type, doctor_key) DO UPDATE SET
+        display_name = excluded.display_name,
+        seniority = excluded.seniority,
+        membership_source = excluded.membership_source
+    `).bind(file.id, sourceType, doctor.key, doctor.displayName, doctor.seniority || "", doctor.membershipSource || "roster").run();
     for (const event of events) {
       await db.prepare(`
         INSERT INTO roster_events (
@@ -1760,14 +1770,15 @@ export async function upsertAccountMirror(db, record, options = {}) {
   const updatedAt = new Date().toISOString();
   await db.prepare(`
     INSERT INTO account_profiles (
-      email, real_name, role, insights_enabled, subscription_token, password_salt, password_hash,
+      email, real_name, role, insights_enabled, facility_overview_enabled, subscription_token, password_salt, password_hash,
       admin_issues_json, local_parser_extensions_json, created_at, updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(email) DO UPDATE SET
       real_name = excluded.real_name,
       role = excluded.role,
       insights_enabled = excluded.insights_enabled,
+      facility_overview_enabled = excluded.facility_overview_enabled,
       subscription_token = excluded.subscription_token,
       password_salt = CASE WHEN excluded.password_salt <> '' THEN excluded.password_salt ELSE account_profiles.password_salt END,
       password_hash = CASE WHEN excluded.password_hash <> '' THEN excluded.password_hash ELSE account_profiles.password_hash END,
@@ -1779,6 +1790,7 @@ export async function upsertAccountMirror(db, record, options = {}) {
     String(record.realName || ""),
     role,
     record.insightsEnabled === true ? 1 : 0,
+    record.facilityOverviewEnabled === true ? 1 : 0,
     String(record.subscriptionToken || ""),
     String(record.passwordSalt || ""),
     String(record.passwordHash || ""),
@@ -2002,6 +2014,7 @@ export async function loadAccountMirrorBySubscriptionToken(db, token) {
       account_profiles.real_name AS real_name,
       account_profiles.role AS role,
       account_profiles.insights_enabled AS insights_enabled,
+      account_profiles.facility_overview_enabled AS facility_overview_enabled,
       account_profiles.subscription_token AS subscription_token,
       account_claims.source_type AS source_type,
       account_claims.doctor_key AS doctor_key,
@@ -2038,6 +2051,7 @@ export async function loadAccountMirrorBySubscriptionToken(db, token) {
     realName: String(first.real_name || "").trim(),
     role: String(first.role || "user"),
     insightsEnabled: first.insights_enabled === 1,
+    facilityOverviewEnabled: first.facility_overview_enabled === 1,
     subscriptionToken: String(first.subscription_token || ""),
     claims,
     state: {
@@ -2058,6 +2072,7 @@ export async function loadAccountMirror(db, email) {
       account_profiles.real_name AS real_name,
       account_profiles.role AS role,
       account_profiles.insights_enabled AS insights_enabled,
+      account_profiles.facility_overview_enabled AS facility_overview_enabled,
       account_profiles.subscription_token AS subscription_token,
       account_profiles.password_salt AS password_salt,
       account_profiles.password_hash AS password_hash,
@@ -2088,6 +2103,7 @@ export async function listAccountMirrors(db) {
       account_profiles.real_name AS real_name,
       account_profiles.role AS role,
       account_profiles.insights_enabled AS insights_enabled,
+      account_profiles.facility_overview_enabled AS facility_overview_enabled,
       account_profiles.subscription_token AS subscription_token,
       account_profiles.password_salt AS password_salt,
       account_profiles.password_hash AS password_hash,
@@ -2154,6 +2170,7 @@ function accountMirrorFromRows(rows) {
     realName: String(first.real_name || "").trim(),
     role: String(first.role || "user"),
     insightsEnabled: first.insights_enabled === 1,
+    facilityOverviewEnabled: first.facility_overview_enabled === 1,
     subscriptionToken: String(first.subscription_token || ""),
     passwordSalt: String(first.password_salt || ""),
     passwordHash: String(first.password_hash || ""),
@@ -2578,6 +2595,94 @@ function rowsToCoworkerEvents(rows) {
     .filter((row) => row.event);
 }
 
+export async function queryFacilityOverviewOnShift(db, options = {}) {
+  if (!db?.prepare) return [];
+  await ensureCalendarSchema(db);
+  const date = String(options.date || "").slice(0, 10);
+  const facilityKey = normalizeSourceType(options.facilityKey || options.sourceType || "");
+  if (!date || !facilityKey) return [];
+  const rows = await db.prepare(`
+    SELECT
+      roster_events.doctor_key,
+      roster_events.display_name,
+      roster_events.source_type,
+      roster_events.seniority,
+      roster_events.event_json
+    FROM roster_events
+    INNER JOIN roster_files ON roster_files.id = roster_events.file_id
+    WHERE roster_files.active = 1
+      AND lower(roster_events.source_type) = ?
+      -- At a glance is the roster for this day, rather than everyone whose
+      -- shift happens to cross into it.  This excludes the preceding day's
+      -- PM shifts that finish at midnight.
+      AND roster_events.start_date = ?
+    ORDER BY roster_events.start_ts, roster_events.display_name, roster_events.title
+  `).bind(facilityKey, date).all();
+  return (rows.results || [])
+    .map((row) => ({
+      doctorKey: String(row.doctor_key || "").trim(),
+      displayName: String(row.display_name || "").trim(),
+      sourceType: normalizeSourceType(row.source_type),
+      seniority: String(row.seniority || "").trim(),
+      event: parseEvent(row.event_json),
+    }))
+    .filter((row) => row.doctorKey && row.displayName && row.event);
+}
+
+export async function queryFacilityOverviewStaff(db, options = {}) {
+  if (!db?.prepare) return { members: [], events: [], coverage: [] };
+  await ensureCalendarSchema(db);
+  const termStart = String(options.termStart || "").slice(0, 10);
+  const termEnd = String(options.termEnd || "").slice(0, 10);
+  const facilityKey = normalizeSourceType(options.facilityKey || options.sourceType || "");
+  if (!termStart || !termEnd) return { members: [], events: [], coverage: [] };
+  const facilitySql = facilityKey ? "AND roster_files.source_type = ?" : "";
+  const bindings = facilityKey ? [facilityKey, termEnd, termStart] : [termEnd, termStart];
+  const members = await db.prepare(`
+    WITH file_coverage AS (
+      SELECT file_id, MIN(start_date) AS coverage_start, MAX(start_date) AS coverage_end
+      FROM roster_events GROUP BY file_id
+    )
+    SELECT roster_file_doctors.doctor_key, roster_file_doctors.display_name,
+      roster_file_doctors.source_type, roster_file_doctors.seniority AS membership_seniority,
+      roster_file_doctors.membership_source, file_coverage.coverage_start, file_coverage.coverage_end
+    FROM roster_file_doctors
+    INNER JOIN roster_files ON roster_files.id = roster_file_doctors.file_id
+    INNER JOIN file_coverage ON file_coverage.file_id = roster_file_doctors.file_id
+    WHERE roster_files.active = 1 ${facilitySql}
+      AND file_coverage.coverage_start <= ? AND file_coverage.coverage_end >= ?
+    ORDER BY roster_file_doctors.source_type, roster_file_doctors.display_name
+  `).bind(...bindings).all();
+  const eventBindings = facilityKey ? [facilityKey, termEnd, termStart] : [termEnd, termStart];
+  const events = await db.prepare(`
+    SELECT roster_events.doctor_key, roster_events.display_name, roster_events.source_type,
+      roster_events.seniority, roster_events.event_json
+    FROM roster_events INNER JOIN roster_files ON roster_files.id = roster_events.file_id
+    WHERE roster_files.active = 1 ${facilityKey ? "AND roster_events.source_type = ?" : ""}
+      AND roster_events.start_date <= ? AND roster_events.end_date >= ?
+    ORDER BY roster_events.source_type, roster_events.display_name, roster_events.start_ts
+  `).bind(...eventBindings).all();
+  const coverage = await db.prepare(`
+    SELECT roster_events.source_type, MIN(roster_events.start_date) AS start_date,
+      MAX(roster_events.start_date) AS end_date
+    FROM roster_events INNER JOIN roster_files ON roster_files.id = roster_events.file_id
+    WHERE roster_files.active = 1 ${facilityKey ? "AND roster_events.source_type = ?" : ""}
+    GROUP BY roster_events.source_type
+  `).bind(...(facilityKey ? [facilityKey] : [])).all();
+  return {
+    members: (members.results || []).map((row) => ({
+      doctorKey: String(row.doctor_key || "").trim(), displayName: String(row.display_name || "").trim(),
+      sourceType: normalizeSourceType(row.source_type), seniority: String(row.membership_seniority || "").trim(),
+      membershipSource: String(row.membership_source || "roster"), coverageStart: String(row.coverage_start || ""), coverageEnd: String(row.coverage_end || ""),
+    })).filter((row) => row.doctorKey && row.displayName),
+    events: (events.results || []).map((row) => ({
+      doctorKey: String(row.doctor_key || "").trim(), displayName: String(row.display_name || "").trim(),
+      sourceType: normalizeSourceType(row.source_type), seniority: String(row.seniority || "").trim(), event: parseEvent(row.event_json),
+    })).filter((row) => row.doctorKey && row.event),
+    coverage: (coverage.results || []).map((row) => ({ sourceType: normalizeSourceType(row.source_type), startDate: String(row.start_date || ""), endDate: String(row.end_date || "") })),
+  };
+}
+
 export async function queryOverlapDoctors(db, options = {}) {
   if (!db?.prepare) return [];
   await ensureCalendarSchema(db);
@@ -2876,6 +2981,8 @@ function sanitizeFileDoctors(doctors, fallbackSourceType) {
       key: String(doctor?.key || "").trim(),
       displayName: String(doctor?.displayName || doctor?.key || "").trim(),
       sourceType: normalizeSourceType(doctor?.sourceType || fallbackSourceType),
+      seniority: String(doctor?.seniority || "").trim(),
+      membershipSource: String(doctor?.membershipSource || doctor?.membership_source || "roster").trim() || "roster",
     }))
     .filter((doctor) => doctor.key && doctor.displayName && doctor.sourceType);
 }
@@ -3111,12 +3218,15 @@ async function bulkInsertFileDoctors(db, fileId, sourceType, doctors) {
 }
 
 function bulkInsertFileDoctorStatements(db, fileId, sourceType, doctors) {
-  return chunkRowsForBindLimit(doctors.map((doctor) => [fileId, sourceType, doctor.key, doctor.displayName]), 4, D1_MAX_BIND_PARAMS)
+  return chunkRowsForBindLimit(doctors.map((doctor) => [fileId, sourceType, doctor.key, doctor.displayName, doctor.seniority || "", doctor.membershipSource || "roster"]), 6, D1_MAX_BIND_PARAMS)
     .filter((chunk) => chunk.length)
     .map((chunk) => db.prepare(`
-      INSERT INTO roster_file_doctors (file_id, source_type, doctor_key, display_name)
-      VALUES ${chunk.map(() => "(?, ?, ?, ?)").join(", ")}
-      ON CONFLICT(file_id, source_type, doctor_key) DO UPDATE SET display_name = excluded.display_name
+      INSERT INTO roster_file_doctors (file_id, source_type, doctor_key, display_name, seniority, membership_source)
+      VALUES ${chunk.map(() => "(?, ?, ?, ?, ?, ?)").join(", ")}
+      ON CONFLICT(file_id, source_type, doctor_key) DO UPDATE SET
+        display_name = excluded.display_name,
+        seniority = excluded.seniority,
+        membership_source = excluded.membership_source
     `).bind(...chunk.flat()));
 }
 

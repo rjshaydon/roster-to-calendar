@@ -393,13 +393,58 @@ export async function inspectImportRecord(record) {
     },
     workbook,
   };
-  const doctors = doctorOptions(sourceType === "mmc" ? [entry] : [], sourceType === "ddh" ? [entry] : [], sourceType === "casey" ? [entry] : [], sourceType === "mch" ? [entry] : [])
+  const rosterDoctors = doctorOptions(sourceType === "mmc" ? [entry] : [], sourceType === "ddh" ? [entry] : [], sourceType === "casey" ? [entry] : [], sourceType === "mch" ? [entry] : [])
     .map((doctor) => ({
       key: doctor.key,
       displayName: doctor.displayName,
       sourceType,
     }));
-  return { sourceType, doctors };
+  const providerDoctors = sourceType === "ddh" ? findmyshiftProviderStaffOptions([entry]) : [];
+  return { sourceType, doctors: mergeMembershipDoctors(rosterDoctors, providerDoctors) };
+}
+
+export function findmyshiftProviderStaffOptions(entries = []) {
+  const doctors = [];
+  for (const entry of entries) {
+    const sheet = entry?.workbook?.Sheets?.["FindMyShift staff"];
+    if (!sheet) continue;
+    const range = XLSX.utils.decode_range(sheet["!ref"] || "A1:C1");
+    for (let row = 1; row <= range.e.r; row += 1) {
+      const name = cleanText(getCellValue(sheet, row + 1, 2));
+      if (!name) continue;
+      doctors.push({
+        key: normalizeName(name),
+        displayName: name,
+        sourceType: "ddh",
+        seniority: canonicalFindmyshiftProviderSeniority(getCellValue(sheet, row + 1, 3)),
+        membershipSource: "provider",
+      });
+    }
+  }
+  return mergeMembershipDoctors([], doctors);
+}
+
+function canonicalFindmyshiftProviderSeniority(value) {
+  const supplied = cleanText(value);
+  if (/\b(?:SMS|SENIOR\s+MEDICAL|CONSULTANT|SPECIALIST)\b/i.test(supplied)) return "SMS";
+  return sanitizeRuleSeniority(findmyshiftDdhSeniority(supplied, ""));
+}
+
+export function mergeMembershipDoctors(rosterDoctors = [], providerDoctors = []) {
+  const byKey = new Map();
+  for (const doctor of [...rosterDoctors, ...providerDoctors]) {
+    const key = normalizeName(doctor?.key || doctor?.displayName || "");
+    if (!key) continue;
+    const previous = byKey.get(key);
+    byKey.set(key, {
+      key,
+      displayName: String(doctor?.displayName || previous?.displayName || key).trim(),
+      sourceType: String(doctor?.sourceType || previous?.sourceType || "").toLowerCase(),
+      seniority: sanitizeRuleSeniority(doctor?.seniority || previous?.seniority || UNKNOWN_SENIORITY),
+      membershipSource: doctor?.membershipSource === "provider" || previous?.membershipSource === "provider" ? "provider" : "roster",
+    });
+  }
+  return [...byKey.values()];
 }
 
 export async function buildRosterViewFromStoredImports(imports, doctorKey, settings = DEFAULT_SETTINGS, overrides = {}, conflictSelections = {}, doctorAliases = []) {

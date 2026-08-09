@@ -4,11 +4,13 @@ import {
   customEventsToEvents,
   defaultSettings as rosterDefaultSettings,
   doctorOptions as rosterDoctorOptions,
+  findmyshiftProviderStaffOptions,
   exportIcs,
   parseUploadForm,
   parserRuleDefaults,
   parserRuleSeniorities,
   previewSummary,
+  mergeMembershipDoctors,
   serializeConflict,
   serializeEvent,
   serializeReviewItem,
@@ -83,6 +85,13 @@ const createEmail = document.querySelector("#createEmail");
 const createPassword = document.querySelector("#createPassword");
 const currentDayPreview = document.querySelector("#currentDayPreview");
 const exportButton = document.querySelector("#exportButton");
+const facilityOverviewButton = document.querySelector("#facilityOverviewButton");
+const facilityOverviewSection = document.querySelector("#facilityOverviewSection");
+const facilityOverviewHeader = document.querySelector("#facilityOverviewHeader");
+const facilityOverviewControls = document.querySelector("#facilityOverviewControls");
+const facilityOverviewBody = document.querySelector("#facilityOverviewBody");
+const facilityOverviewBackButton = document.querySelector("#facilityOverviewBackButton");
+const mobileFacilityOverviewButton = document.querySelector("#mobileFacilityOverviewButton");
 const mobileTodayButton = document.querySelector("#mobileTodayButton");
 const mobileExportButton = document.querySelector("#mobileExportButton");
 const mobileSettingsButton = document.querySelector("#mobileSettingsButton");
@@ -138,6 +147,7 @@ const contextMenu = document.querySelector("#contextMenu");
 const switchOverlay = document.querySelector("#switchOverlay");
 const switchOverlayTitle = document.querySelector("#switchOverlayTitle");
 const switchOverlayMessage = document.querySelector("#switchOverlayMessage");
+const switchOverlayCancelButton = document.querySelector("#switchOverlayCancelButton");
 const rosterImportOverlay = document.querySelector("#rosterImportOverlay");
 const rosterImportOverlayTitle = document.querySelector("#rosterImportOverlayTitle");
 const ROSTER_IMPORT_OVERLAY_MAX_MS = 1500;
@@ -169,6 +179,7 @@ const MAX_MEMORY_SNAPSHOT_CACHE_ENTRIES = 160;
 const MAX_STORED_SNAPSHOT_CACHE_ENTRIES = 240;
 const MAX_STORED_SNAPSHOT_CACHE_AGE_MS = 45 * 24 * 60 * 60 * 1000;
 const ROSTER_OVERLAP_DOCTOR_CACHE_KEY = "roster-overlap-doctor-cache-v1";
+const FACILITY_OVERVIEW_SENIORITY_ORDER = ["SMS", "CMO", "Senior Registrar", "Transitional/Intermediate Registrar", "Junior Registrar", "HMO", "ENP", "AMP", "Intern", "Unknown"];
 const CURRENT_EMAIL_KEY = "roster-current-email";
 const CURRENT_PASSWORD_KEY = "roster-current-password";
 const PERSISTENT_PASSWORD_KEY = "roster-persistent-password";
@@ -290,6 +301,16 @@ let calendarImportPollPromise = null;
 let calendarImportPollRunId = 0;
 let currentSubscription = null;
 let currentInsightsEnabled = currentUserRole === "creator";
+let currentFacilityOverviewEnabled = currentUserRole === "creator";
+let facilityOverviewState = {
+  tab: "on-shift", date: formatDateKey(new Date()), facilityKey: "", includeClinicalSupport: false, requestId: 0,
+  staffTermStart: formatDateKey(australianTermForDate(new Date()).start), staffTerms: [], staffContent: "", staffData: null, staffQuery: "", staffExpanded: new Set(),
+  togetherStaffKeys: ["", ""], togetherRangeMode: "term",
+  togetherTermStart: formatDateKey(australianTermForDate(new Date()).start),
+  togetherFrom: formatDateKey(australianTermForDate(new Date()).start),
+  togetherTo: formatDateKey(addDays(australianTermForDate(new Date()).end, -1)),
+  togetherFacilityKey: "ALL", togetherContent: "", togetherHasSearched: false,
+};
 let creatorCalendarSourceFileRefs = [];
 let insightsState = null;
 let doctorAnalysisCacheKey = "";
@@ -325,6 +346,8 @@ let currentCalendarRevision = "";
 let snapshotRefreshPromise = null;
 let switchTargetPrefetchRunId = 0;
 let switchTargetPrefetchPromise = null;
+let switchOverlayRunId = 0;
+let activeSwitchOverlayCancel = null;
 let storedSnapshotMaintenanceQueued = false;
 let storedSnapshotWritesSinceMaintenance = 0;
 let deferredBootstrapRunId = 0;
@@ -462,6 +485,184 @@ filesModal?.addEventListener("click", (event) => {
   if (event.target.matches("[data-close-files]")) closeFilesModal();
 });
 exportButton.addEventListener("click", openExportModal);
+facilityOverviewButton?.addEventListener("click", () => {
+  if (isFacilityOverviewOpen()) closeFacilityOverview();
+  else void openFacilityOverview();
+});
+mobileFacilityOverviewButton?.addEventListener("click", () => {
+  if (isFacilityOverviewOpen()) closeFacilityOverview();
+  else void openFacilityOverview();
+});
+facilityOverviewBackButton?.addEventListener("click", closeFacilityOverview);
+facilityOverviewSection?.addEventListener("scroll", (event) => {
+  const scroller = event.target;
+  if (scroller !== facilityOverviewBody && !scroller?.matches?.(".facility-overview-together")) return;
+  facilityOverviewSection.classList.toggle("is-compact", scroller.scrollTop > 28);
+}, { capture: true, passive: true });
+facilityOverviewSection?.addEventListener("click", (event) => {
+  if (event.target.closest("[data-facility-overview-logout]")) {
+    void logoutCurrentUser();
+    return;
+  }
+  if (event.target.closest("[data-facility-overview-today]")) {
+    if (facilityOverviewState.tab === "staff") return;
+    facilityOverviewState.tab = "on-shift";
+    facilityOverviewState.date = formatDateKey(new Date());
+    void loadFacilityOverviewOnShift();
+    return;
+  }
+  const tab = event.target.closest("[data-facility-overview-tab]");
+  if (tab) {
+    facilityOverviewState.tab = tab.dataset.facilityOverviewTab || "on-shift";
+    resetFacilityOverviewScroll();
+    if (facilityOverviewState.tab === "staff") {
+      facilityOverviewState.staffTermStart = formatDateKey(australianTermForDate(new Date()).start);
+      void loadFacilityOverviewStaff();
+    } else {
+      if (facilityOverviewState.tab === "together") initializeFacilityOverviewTogetherState();
+      renderFacilityOverview();
+    }
+    return;
+  }
+  if (event.target.closest("[data-facility-overview-together-add]")) {
+    facilityOverviewState.togetherStaffKeys.push("");
+    facilityOverviewState.togetherHasSearched = false;
+    facilityOverviewState.togetherContent = "";
+    renderFacilityOverview();
+    return;
+  }
+  const removeTogetherStaff = event.target.closest("[data-facility-overview-together-remove]");
+  if (removeTogetherStaff) {
+    const index = Number(removeTogetherStaff.dataset.facilityOverviewTogetherRemove);
+    if (Number.isInteger(index) && facilityOverviewState.togetherStaffKeys.length > 2) {
+      facilityOverviewState.togetherStaffKeys.splice(index, 1);
+      facilityOverviewState.togetherHasSearched = false;
+      facilityOverviewState.togetherContent = "";
+      if (facilityOverviewState.togetherStaffKeys.filter(Boolean).length >= 2) void loadFacilityOverviewTogether();
+      else renderFacilityOverview();
+    }
+    return;
+  }
+  const dateStep = event.target.closest("[data-facility-overview-date-step]");
+  if (dateStep) {
+    const date = parseDateOnly(facilityOverviewState.date);
+    date.setDate(date.getDate() + Number(dateStep.dataset.facilityOverviewDateStep || 0));
+    facilityOverviewState.date = formatDateKey(date);
+    void loadFacilityOverviewOnShift();
+  }
+  const termStep = event.target.closest("[data-facility-overview-staff-term-step]");
+  if (termStep) {
+    const step = Number(termStep.dataset.facilityOverviewStaffTermStep || 0);
+    const current = australianTermForDate(parseDateOnly(facilityOverviewState.staffTermStart));
+    const termNumber = current.termNumber + step;
+    const next = termNumber < 1
+      ? buildAustralianTerm(current.year - 1, 4, startMonthIndexForTerm(4))
+      : termNumber > 4
+        ? buildAustralianTerm(current.year + 1, 1, startMonthIndexForTerm(1))
+        : buildAustralianTerm(current.year, termNumber, startMonthIndexForTerm(termNumber));
+    const value = formatDateKey(next.start);
+    if (facilityOverviewState.staffTerms.some((term) => term.value === value)) {
+      facilityOverviewState.staffTermStart = value;
+      facilityOverviewState.staffExpanded.clear();
+      void loadFacilityOverviewStaff();
+    }
+  }
+  const staffCalendar = event.target.closest("[data-facility-overview-open-staff-calendar]");
+  if (staffCalendar) {
+    void openFacilityOverviewStaffCalendar(staffCalendar.dataset.facilityOverviewOpenStaffCalendar || "");
+    return;
+  }
+  const staffSection = event.target.closest("[data-facility-overview-staff-section]");
+  if (staffSection) {
+    const key = staffSection.dataset.facilityOverviewStaffSection;
+    if (facilityOverviewState.staffExpanded.has(key)) facilityOverviewState.staffExpanded.delete(key);
+    else facilityOverviewState.staffExpanded.add(key);
+    refreshFacilityOverviewStaffContent();
+    renderFacilityOverview();
+  }
+});
+facilityOverviewSection?.addEventListener("change", (event) => {
+  const togetherStaff = event.target.closest("[data-facility-overview-together-staff]");
+  if (togetherStaff) {
+    const index = Number(togetherStaff.dataset.facilityOverviewTogetherStaff);
+    const value = String(togetherStaff.value || "");
+    const duplicate = facilityOverviewState.togetherStaffKeys.some((key, keyIndex) => keyIndex !== index && key === value && value);
+    if (duplicate) {
+      togetherStaff.value = facilityOverviewState.togetherStaffKeys[index] || "";
+      facilityOverviewState.togetherContent = `<article class="issue-card"><p>Choose each staff member only once.</p></article>`;
+      facilityOverviewState.togetherHasSearched = false;
+      renderFacilityOverview();
+      return;
+    }
+    facilityOverviewState.togetherStaffKeys[index] = value;
+    facilityOverviewState.togetherContent = "";
+    facilityOverviewState.togetherHasSearched = false;
+    const selectedCount = facilityOverviewState.togetherStaffKeys.filter(Boolean).length;
+    if (value && selectedCount >= 2) {
+      void loadFacilityOverviewTogether();
+    } else {
+      renderFacilityOverview();
+    }
+    return;
+  }
+  const togetherRangeMode = event.target.closest("[data-facility-overview-together-range-mode]");
+  if (togetherRangeMode) {
+    facilityOverviewState.togetherRangeMode = togetherRangeMode.value === "dates" ? "dates" : "term";
+    refreshFacilityOverviewTogetherAfterFilterChange();
+    return;
+  }
+  const togetherTerm = event.target.closest("[data-facility-overview-together-term]");
+  if (togetherTerm) {
+    facilityOverviewState.togetherTermStart = String(togetherTerm.value || "").slice(0, 10);
+    refreshFacilityOverviewTogetherAfterFilterChange();
+    return;
+  }
+  const togetherDate = event.target.closest("[data-facility-overview-together-date]");
+  if (togetherDate) {
+    const field = togetherDate.dataset.facilityOverviewTogetherDate;
+    if (field === "from") facilityOverviewState.togetherFrom = String(togetherDate.value || "").slice(0, 10);
+    if (field === "to") facilityOverviewState.togetherTo = String(togetherDate.value || "").slice(0, 10);
+    refreshFacilityOverviewTogetherAfterFilterChange();
+    return;
+  }
+  const togetherFacility = event.target.closest("[data-facility-overview-together-facility]");
+  if (togetherFacility) {
+    facilityOverviewState.togetherFacilityKey = String(togetherFacility.value || "ALL").toUpperCase();
+    refreshFacilityOverviewTogetherAfterFilterChange();
+    return;
+  }
+  const facility = event.target.closest("[data-facility-overview-facility]");
+  if (facility) {
+    facilityOverviewState.facilityKey = String(facility.value || "").toUpperCase();
+    if (facilityOverviewState.tab === "staff") void loadFacilityOverviewStaff();
+    else void loadFacilityOverviewOnShift();
+    return;
+  }
+  const date = event.target.closest("[data-facility-overview-date]");
+  if (date) {
+    facilityOverviewState.date = String(date.value || "").slice(0, 10);
+    void loadFacilityOverviewOnShift();
+    return;
+  }
+  const includeCs = event.target.closest("[data-facility-overview-include-cs]");
+  if (includeCs) {
+    facilityOverviewState.includeClinicalSupport = includeCs.checked;
+    void loadFacilityOverviewOnShift();
+  }
+  const term = event.target.closest("[data-facility-overview-staff-term]");
+  if (term) {
+    facilityOverviewState.staffTermStart = String(term.value || "").slice(0, 10);
+    facilityOverviewState.staffExpanded.clear();
+    void loadFacilityOverviewStaff();
+  }
+});
+facilityOverviewSection?.addEventListener("input", (event) => {
+  const search = event.target.closest("[data-facility-overview-staff-search]");
+  if (!search) return;
+  facilityOverviewState.staffQuery = String(search.value || "");
+  refreshFacilityOverviewStaffContent();
+  renderFacilityOverviewStaffBody();
+});
 mobileExportButton.addEventListener("click", openMobileExportModal);
 mobileTodayButton?.addEventListener("click", () => {
   snapPreviewToCurrentMonth();
@@ -606,8 +807,12 @@ accountsBody.addEventListener("change", (event) => {
     return;
   }
   const insightsToggle = event.target.closest("[data-toggle-user-insights]");
-  if (!insightsToggle) return;
-  void setUserInsightsEnabled(insightsToggle.dataset.toggleUserInsights || "", insightsToggle.checked);
+  if (insightsToggle) {
+    void setUserInsightsEnabled(insightsToggle.dataset.toggleUserInsights || "", insightsToggle.checked);
+    return;
+  }
+  const overviewToggle = event.target.closest("[data-toggle-user-facility-overview]");
+  if (overviewToggle) void setUserFacilityOverviewEnabled(overviewToggle.dataset.toggleUserFacilityOverview || "", overviewToggle.checked);
 });
 accountsBody.addEventListener("click", (event) => {
   const adminTab = event.target.closest("[data-admin-tab]");
@@ -816,6 +1021,14 @@ doctorSelect.addEventListener("change", async () => {
 });
 doctorSelect.addEventListener("pointerdown", () => queueCreatorSwitchTargetPrefetch());
 doctorSelect.addEventListener("focus", () => queueCreatorSwitchTargetPrefetch());
+switchOverlayCancelButton?.addEventListener("click", () => {
+  const cancel = activeSwitchOverlayCancel;
+  if (!cancel || switchOverlayCancelButton.disabled) return;
+  switchOverlayCancelButton.disabled = true;
+  void Promise.resolve(cancel()).catch((error) => {
+    setStatus(error.message || "Could not return to the Creator calendar.", true);
+  });
+});
 
 claimDoctorSelect.addEventListener("change", () => {
   claimDoctorButton.disabled = !claimDoctorSelect.value;
@@ -5877,18 +6090,41 @@ function rememberCreatorCalendarSourceRefs() {
   if (refs.length) creatorCalendarSourceFileRefs = refs;
 }
 
-function showSwitchOverlay(title, message) {
-  if (!switchOverlay) return;
+function showSwitchOverlay(title, message, options = {}) {
+  const runId = ++switchOverlayRunId;
+  activeSwitchOverlayCancel = typeof options.onCancel === "function" ? options.onCancel : null;
   switchOverlayTitle.textContent = title || "Switching…";
   switchOverlayMessage.textContent = message || "Loading calendar…";
+  if (switchOverlayCancelButton) {
+    switchOverlayCancelButton.classList.toggle("hidden", !activeSwitchOverlayCancel);
+    switchOverlayCancelButton.disabled = false;
+  }
+  if (!switchOverlay) return runId;
   switchOverlay.classList.remove("hidden");
   switchOverlay.setAttribute("aria-hidden", "false");
+  return runId;
 }
 
-function hideSwitchOverlay() {
+function hideSwitchOverlay(runId = null) {
+  if (runId !== null && runId !== switchOverlayRunId) return;
+  activeSwitchOverlayCancel = null;
+  if (switchOverlayCancelButton) {
+    switchOverlayCancelButton.classList.add("hidden");
+    switchOverlayCancelButton.disabled = false;
+  }
   if (!switchOverlay) return;
   switchOverlay.classList.add("hidden");
   switchOverlay.setAttribute("aria-hidden", "true");
+}
+
+async function cancelCreatorCalendarSwitch() {
+  const runId = showSwitchOverlay("Returning to Creator…", "Restoring the Creator calendar.");
+  try {
+    await returnToCreatorCalendar({ skipOutgoingSave: true, restoreOnFailure: false });
+    setStatus("Returned to the Creator calendar.");
+  } finally {
+    hideSwitchOverlay(runId);
+  }
 }
 
 function showRosterImportOverlay(fileCount = 1) {
@@ -5958,6 +6194,7 @@ async function switchDoctorSelection(selectedKey, options = {}) {
     }
   }
   const claimedEmail = normalizeEmail(resolvedAccount?.email || selectedOption?.accountEmail || claimedEmailForDoctorKey(selectedKey, selectedOption?.displayName || ""));
+  let switchOverlayId = null;
   if (canSwitchAsCreator && selectedOption) {
     const switchProfile = doctorProfileForDoctor(selectedOption);
     const targetContext = resolvedAccount?.mode === "claimed-account" && claimedEmail
@@ -5973,9 +6210,10 @@ async function switchDoctorSelection(selectedKey, options = {}) {
       ? Boolean(await loadCachedCalendarSnapshotForContextAsync(targetContext))
       : false;
     if (!targetContext || !targetSnapshotReady) {
-      showSwitchOverlay(
+      switchOverlayId = showSwitchOverlay(
         `Switching to ${selectedOption.displayName}…`,
         resolvedAccount?.mode === "claimed-account" ? "Opening the linked account calendar." : "Opening the roster calendar and loading saved doctor-profile edits.",
+        { onCancel: cancelCreatorCalendarSwitch },
       );
     }
   }
@@ -5989,7 +6227,7 @@ async function switchDoctorSelection(selectedKey, options = {}) {
         await enterDoctorProfileView(selectedOption);
       }
     } finally {
-      hideSwitchOverlay();
+      hideSwitchOverlay(switchOverlayId);
     }
     return;
   }
@@ -7933,6 +8171,720 @@ function canUseRosterInsights() {
   return currentInsightsEnabled === true;
 }
 
+function canUseFacilityOverview() {
+  if (activeCalendarMode() === "doctor-profile") return isCreatorAuthenticated();
+  if (currentUserRole === "creator" && !adminViewingEmail) return true;
+  return currentFacilityOverviewEnabled === true;
+}
+
+function syncFacilityOverviewAccess() {
+  const enabled = canUseFacilityOverview();
+  facilityOverviewButton?.classList.toggle("hidden", !enabled);
+  mobileFacilityOverviewButton?.classList.toggle("hidden", !enabled);
+  if (!enabled && facilityOverviewSection && !facilityOverviewSection.classList.contains("hidden")) closeFacilityOverview();
+  syncFacilityOverviewNavigationState();
+}
+
+function isFacilityOverviewOpen() {
+  return Boolean(facilityOverviewSection && !facilityOverviewSection.classList.contains("hidden"));
+}
+
+function syncFacilityOverviewNavigationState() {
+  const open = isFacilityOverviewOpen();
+  if (facilityOverviewButton) {
+    facilityOverviewButton.textContent = open ? "My calendar" : "At a glance";
+    facilityOverviewButton.setAttribute("aria-label", open ? "Return to my calendar" : "Open At a glance");
+  }
+  if (mobileFacilityOverviewButton) {
+    mobileFacilityOverviewButton.setAttribute("aria-label", open ? "Return to my calendar" : "At a glance ED overview");
+    const shortLabel = mobileFacilityOverviewButton.querySelector("[aria-hidden='true']");
+    const accessibleLabel = mobileFacilityOverviewButton.querySelector(".sr-only");
+    if (shortLabel) shortLabel.textContent = open ? "Cal" : "ED";
+    if (accessibleLabel) accessibleLabel.textContent = open ? "My calendar" : "At a glance";
+  }
+}
+
+function resetFacilityOverviewScroll() {
+  facilityOverviewSection?.classList.remove("is-compact");
+  if (facilityOverviewBody) facilityOverviewBody.scrollTop = 0;
+  const togetherScroller = facilityOverviewBody?.querySelector(".facility-overview-together");
+  if (togetherScroller) togetherScroller.scrollTop = 0;
+}
+
+function facilityOverviewFacilityOptions() {
+  const values = new Set();
+  for (const code of latestPreview?.hospitals || []) values.add(String(code || "").toUpperCase());
+  for (const doctor of availableRosterDoctors || []) {
+    for (const source of doctor?.sourceTypes || [doctor?.sourceType]) values.add(String(source || "").toUpperCase());
+  }
+  return [...values].filter((value) => ["MMC", "DDH", "CASEY", "MCH"].includes(value)).sort((left, right) => {
+    const order = { MMC: 0, DDH: 1, CASEY: 2, MCH: 3 };
+    return (order[left] ?? 99) - (order[right] ?? 99);
+  });
+}
+
+async function openFacilityOverview() {
+  if (!canUseFacilityOverview()) return;
+  const facilities = facilityOverviewFacilityOptions();
+  if (!facilityOverviewState.facilityKey || !facilities.includes(facilityOverviewState.facilityKey)) {
+    facilityOverviewState.facilityKey = facilities[0] || "MMC";
+  }
+  form?.classList.add("is-facility-overview-active");
+  previewSection?.classList.add("hidden");
+  facilityOverviewSection?.classList.remove("hidden");
+  resetFacilityOverviewScroll();
+  syncFacilityOverviewNavigationState();
+  if (facilityOverviewState.tab === "staff") facilityOverviewState.staffTermStart = formatDateKey(australianTermForDate(new Date()).start);
+  renderFacilityOverview();
+  if (facilityOverviewState.tab === "staff") await loadFacilityOverviewStaff();
+  else await loadFacilityOverviewOnShift();
+}
+
+function closeFacilityOverview() {
+  facilityOverviewState.requestId += 1;
+  form?.classList.remove("is-facility-overview-active");
+  resetFacilityOverviewScroll();
+  facilityOverviewSection?.classList.add("hidden");
+  if (latestPreview) previewSection?.classList.remove("hidden");
+  syncFacilityOverviewNavigationState();
+}
+
+function renderFacilityOverview() {
+  if (!facilityOverviewBody || !facilityOverviewControls) return;
+  if (facilityOverviewHeader) facilityOverviewHeader.innerHTML = renderFacilityOverviewHeader();
+  const activeTab = facilityOverviewState.tab || "on-shift";
+  facilityOverviewBody.classList.toggle("is-working-together", activeTab === "together");
+  facilityOverviewSection?.querySelectorAll("[data-facility-overview-tab]").forEach((button) => {
+    const selected = button.dataset.facilityOverviewTab === activeTab;
+    button.classList.toggle("is-active", selected);
+    button.setAttribute("aria-selected", String(selected));
+  });
+  if (activeTab === "staff") {
+    const facilities = facilityOverviewFacilityOptions();
+    const selected = facilityOverviewState.facilityKey === "ALL" || facilities.includes(facilityOverviewState.facilityKey)
+      ? facilityOverviewState.facilityKey : "ALL";
+    facilityOverviewState.facilityKey = selected || "ALL";
+    facilityOverviewControls.innerHTML = `
+      <label class="field"><span>ED</span><select data-facility-overview-facility><option value="ALL" ${facilityOverviewState.facilityKey === "ALL" ? "selected" : ""}>All EDs</option>${facilities.map((facility) => `<option value="${escapeHtml(facility)}" ${facility === facilityOverviewState.facilityKey ? "selected" : ""}>${escapeHtml(displaySourceCode(facility))}</option>`).join("")}</select></label>
+      <label class="field facility-overview-staff-search"><span>Find staff</span><input type="search" value="${escapeHtml(facilityOverviewState.staffQuery)}" placeholder="Name" data-facility-overview-staff-search></label>
+    `;
+    renderFacilityOverviewStaffBody();
+    return;
+  }
+  if (activeTab === "together") {
+    initializeFacilityOverviewTogetherState();
+    facilityOverviewControls.innerHTML = "";
+    facilityOverviewBody.innerHTML = renderFacilityOverviewTogetherProposal();
+    return;
+  }
+  const facilities = facilityOverviewFacilityOptions();
+  const selected = facilities.includes(facilityOverviewState.facilityKey) ? facilityOverviewState.facilityKey : facilities[0] || "MMC";
+  facilityOverviewState.facilityKey = selected;
+  const content = facilityOverviewState.content || `<article class="issue-card"><p>Choose an ED and date to load rostered staff.</p></article>`;
+  facilityOverviewControls.innerHTML = `
+    <label class="field"><span>ED</span><select data-facility-overview-facility>${facilities.map((facility) => `<option value="${escapeHtml(facility)}" ${facility === selected ? "selected" : ""}>${escapeHtml(displaySourceCode(facility))}</option>`).join("")}</select></label>
+    <label class="field"><span>Date</span><input type="date" value="${escapeHtml(facilityOverviewState.date)}" data-facility-overview-date></label>
+    <div class="facility-overview-date-actions"><button type="button" class="button button-secondary" data-facility-overview-date-step="-1">Previous day</button><button type="button" class="button button-secondary" data-facility-overview-date-step="1">Next day</button></div>
+    <label class="toggle facility-overview-cs-toggle">CS <input type="checkbox" data-facility-overview-include-cs ${facilityOverviewState.includeClinicalSupport ? "checked" : ""}></label>
+  `;
+  facilityOverviewBody.innerHTML = `<div class="facility-overview-results">${content}</div>`;
+}
+
+function renderFacilityOverviewStaffBody() {
+  if (!facilityOverviewBody || facilityOverviewState.tab !== "staff") return;
+  facilityOverviewBody.innerHTML = `<div class="facility-overview-results">${facilityOverviewState.staffContent || `<article class="issue-card"><p>Loading ED staff…</p></article>`}</div>`;
+}
+
+function renderFacilityOverviewHeader() {
+  const doctor = selectedDoctor();
+  const displayName = doctor?.displayName || currentAccount().realName || "Selected doctor";
+  const start = latestPreview?.previewStart || settings.dateFrom || "";
+  const end = latestPreview?.previewEnd || settings.dateTo || "";
+  const staffView = facilityOverviewState.tab === "staff";
+  const togetherView = facilityOverviewState.tab === "together";
+  const selectedTerm = australianTermForDate(parseDateOnly(facilityOverviewState.staffTermStart || formatDateKey(new Date())));
+  const terms = facilityOverviewState.staffTerms.length ? facilityOverviewState.staffTerms : [{ value: formatDateKey(selectedTerm.start), label: formatAustralianTermLabel(selectedTerm) }];
+  const previousTerm = selectedTerm.termNumber === 1
+    ? buildAustralianTerm(selectedTerm.year - 1, 4, startMonthIndexForTerm(4))
+    : buildAustralianTerm(selectedTerm.year, selectedTerm.termNumber - 1, startMonthIndexForTerm(selectedTerm.termNumber - 1));
+  const nextTerm = nextAustralianTerm(selectedTerm);
+  const hasPrevious = terms.some((term) => term.value === formatDateKey(previousTerm.start));
+  const hasNext = terms.some((term) => term.value === formatDateKey(nextTerm.start));
+  return `
+    <div class="preview-head facility-overview-preview-head">
+      <div class="preview-doctor-control">
+        <span>Doctor</span>
+        <strong>${escapeHtml(displayName)}</strong>
+      </div>
+      <div class="preview-toolbar">
+        <div class="preview-range-controls facility-overview-range-controls" aria-label="Calendar range; unavailable in At a glance">
+          ${staffView ? `
+            <button type="button" class="button button-secondary preview-today-button" data-facility-overview-today disabled aria-disabled="true">Today</button>
+            ${hasPrevious ? `<button type="button" class="button button-secondary" data-facility-overview-staff-term-step="-1" aria-label="Previous term">‹</button>` : ""}
+            <label class="preview-term-start-control"><span class="preview-range-label">Term</span>
+              <select class="preview-range-button preview-term-start-select" data-facility-overview-staff-term>
+                ${terms.map((term) => `<option value="${escapeHtml(term.value)}" ${term.value === facilityOverviewState.staffTermStart ? "selected" : ""}>${escapeHtml(term.label)}</option>`).join("")}
+              </select>
+            </label>
+            ${hasNext ? `<button type="button" class="button button-secondary" data-facility-overview-staff-term-step="1" aria-label="Next term">›</button>` : ""}
+          ` : togetherView ? `<span class="facility-overview-header-note">Compare staff rosters</span>` : `
+            <span class="preview-range-label">From</span><button type="button" class="preview-range-button" disabled>${escapeHtml(start ? formatDate(start) : "Set date")}</button>
+            <span class="preview-range-label">To</span><button type="button" class="preview-range-button" disabled>${escapeHtml(end ? formatDate(end) : "Set date")}</button>
+            <button type="button" class="button button-secondary preview-today-button" data-facility-overview-today>Today</button>
+          `}
+        </div>
+        <button type="button" class="button button-secondary preview-logout-button" data-facility-overview-logout>Log out</button>
+      </div>
+    </div>
+  `;
+}
+
+function facilityOverviewTogetherStaffOptions() {
+  return dedupeDoctorOptions(availableRosterDoctors || [])
+    .map((doctor) => ({ ...doctor, identity: doctorIdentityKey(doctor) }))
+    .filter((doctor) => doctor.identity)
+    .sort((left, right) => left.displayName.localeCompare(right.displayName));
+}
+
+function initializeFacilityOverviewTogetherState() {
+  if (!Array.isArray(facilityOverviewState.togetherStaffKeys)) facilityOverviewState.togetherStaffKeys = ["", ""];
+  while (facilityOverviewState.togetherStaffKeys.length < 2) facilityOverviewState.togetherStaffKeys.push("");
+  const options = facilityOverviewTogetherStaffOptions();
+  const identities = new Set(options.map((doctor) => doctor.identity));
+  facilityOverviewState.togetherStaffKeys = facilityOverviewState.togetherStaffKeys.map((key) => identities.has(key) ? key : "");
+  if (!facilityOverviewState.togetherStaffKeys[0]) {
+    const currentIdentity = doctorIdentityKey(selectedDoctor());
+    if (identities.has(currentIdentity)) facilityOverviewState.togetherStaffKeys[0] = currentIdentity;
+  }
+}
+
+function facilityOverviewTogetherTermOptions() {
+  const current = australianTermForDate(new Date());
+  const terms = new Map();
+  const add = (term) => terms.set(formatDateKey(term.start), { value: formatDateKey(term.start), label: formatAustralianTermLabel(term) });
+  for (let year = current.year - 1; year <= current.year + 1; year += 1) {
+    for (let termNumber = 1; termNumber <= 4; termNumber += 1) add(buildAustralianTerm(year, termNumber, startMonthIndexForTerm(termNumber)));
+  }
+  for (const term of facilityOverviewState.staffTerms || []) terms.set(term.value, term);
+  return [...terms.values()].sort((left, right) => right.value.localeCompare(left.value));
+}
+
+function renderFacilityOverviewTogetherProposal() {
+  const options = facilityOverviewTogetherStaffOptions();
+  const selected = new Set(facilityOverviewState.togetherStaffKeys.filter(Boolean));
+  const facilities = facilityOverviewFacilityOptions();
+  const rangeMode = facilityOverviewState.togetherRangeMode === "dates" ? "dates" : "term";
+  const terms = facilityOverviewTogetherTermOptions();
+  return `
+    <section class="facility-overview-together" aria-label="Working together search">
+      <div class="facility-overview-together-intro">
+        <h3>Select two or more people, then search by a date range or term. Site can be combined with either option.</h3>
+      </div>
+      <div class="facility-overview-together-builder">
+        <fieldset class="facility-overview-together-section">
+          <legend><span>1</span> Staff</legend>
+          <div class="facility-overview-together-staff-list">
+            ${facilityOverviewState.togetherStaffKeys.map((key, index) => `
+              <div class="facility-overview-together-staff-row">
+                <label class="field"><span>Staff member ${index + 1}</span>
+                  <select data-facility-overview-together-staff="${index}">
+                    <option value="">Choose staff…</option>
+                    ${options.map((doctor) => {
+                      const sourceLabel = normalizedDoctorSourceTypes(doctor).map((source) => displaySourceCode(source)).join(", ");
+                      const disabled = selected.has(doctor.identity) && doctor.identity !== key;
+                      return `<option value="${escapeHtml(doctor.identity)}" ${doctor.identity === key ? "selected" : ""} ${disabled ? "disabled" : ""}>${escapeHtml(doctor.displayName)}${sourceLabel ? ` — ${escapeHtml(sourceLabel)}` : ""}</option>`;
+                    }).join("")}
+                  </select>
+                </label>
+                ${facilityOverviewState.togetherStaffKeys.length > 2 ? `<button type="button" class="facility-overview-remove-staff" data-facility-overview-together-remove="${index}" aria-label="Remove staff member ${index + 1}">Remove</button>` : ""}
+              </div>
+            `).join("")}
+          </div>
+          <button type="button" class="facility-overview-add-staff" data-facility-overview-together-add><span aria-hidden="true">+</span> Add another staff member</button>
+        </fieldset>
+        <fieldset class="facility-overview-together-section">
+          <legend><span>2</span> When</legend>
+          <div class="facility-overview-segmented" role="radiogroup" aria-label="Search period">
+            <label><input type="radio" name="facility-overview-together-range" value="term" data-facility-overview-together-range-mode ${rangeMode === "term" ? "checked" : ""}><span>Term</span></label>
+            <label><input type="radio" name="facility-overview-together-range" value="dates" data-facility-overview-together-range-mode ${rangeMode === "dates" ? "checked" : ""}><span>Date range</span></label>
+          </div>
+          ${rangeMode === "term" ? `
+            <label class="field"><span>Term</span><select data-facility-overview-together-term>${terms.map((term) => `<option value="${escapeHtml(term.value)}" ${term.value === facilityOverviewState.togetherTermStart ? "selected" : ""}>${escapeHtml(term.label)}</option>`).join("")}</select></label>
+          ` : `
+            <div class="facility-overview-together-dates">
+              <label class="field"><span>From</span><input type="date" value="${escapeHtml(facilityOverviewState.togetherFrom)}" data-facility-overview-together-date="from"></label>
+              <label class="field"><span>To</span><input type="date" value="${escapeHtml(facilityOverviewState.togetherTo)}" data-facility-overview-together-date="to"></label>
+            </div>
+          `}
+        </fieldset>
+        <fieldset class="facility-overview-together-section">
+          <legend><span>3</span> Site <small>Optional</small></legend>
+          <label class="field"><span>ED site</span><select data-facility-overview-together-facility><option value="ALL">All EDs</option>${facilities.map((facility) => `<option value="${escapeHtml(facility)}" ${facility === facilityOverviewState.togetherFacilityKey ? "selected" : ""}>${escapeHtml(displaySourceCode(facility))}</option>`).join("")}</select></label>
+          <p class="facility-overview-filter-hint">This narrows either the selected term or date range.</p>
+        </fieldset>
+      </div>
+      <div class="facility-overview-together-output" aria-live="polite">
+        ${facilityOverviewState.togetherContent || (facilityOverviewState.togetherHasSearched ? "" : renderFacilityOverviewTogetherEmptyState())}
+      </div>
+    </section>
+  `;
+}
+
+function renderFacilityOverviewTogetherEmptyState() {
+  const count = facilityOverviewState.togetherStaffKeys.filter(Boolean).length;
+  if (count === 1) {
+    return `<div class="facility-overview-empty-state"><span aria-hidden="true">↗</span><strong>Choose one more staff member</strong><p>The shared roster days search will run as soon as a second person is selected.</p></div>`;
+  }
+  return `<div class="facility-overview-empty-state"><span aria-hidden="true">↗</span><strong>Shared roster days will appear here</strong><p>Choose at least two staff members and set the search scope above.</p></div>`;
+}
+
+function facilityOverviewTogetherDateRange() {
+  if (facilityOverviewState.togetherRangeMode === "dates") {
+    return { startDate: facilityOverviewState.togetherFrom, endDate: facilityOverviewState.togetherTo };
+  }
+  const term = australianTermForDate(parseDateOnly(facilityOverviewState.togetherTermStart));
+  return { startDate: formatDateKey(term.start), endDate: formatDateKey(addDays(term.end, -1)) };
+}
+
+function refreshFacilityOverviewTogetherAfterFilterChange() {
+  facilityOverviewState.togetherHasSearched = false;
+  facilityOverviewState.togetherContent = "";
+  if (facilityOverviewState.togetherStaffKeys.filter(Boolean).length >= 2) void loadFacilityOverviewTogether();
+  else renderFacilityOverview();
+}
+
+function facilityOverviewTogetherDoctorKeys(doctor) {
+  return [...new Set([
+    doctor?.key,
+    ...(doctor?.aliases || []).map((alias) => alias.key),
+  ].map(normalizeRosterName).filter(Boolean))];
+}
+
+async function loadFacilityOverviewTogether() {
+  if (!canUseFacilityOverview() || facilityOverviewState.tab !== "together") return;
+  const options = facilityOverviewTogetherStaffOptions();
+  const selectedDoctors = facilityOverviewState.togetherStaffKeys
+    .map((identity) => options.find((doctor) => doctor.identity === identity))
+    .filter(Boolean);
+  if (selectedDoctors.length < 2) {
+    facilityOverviewState.togetherHasSearched = false;
+    facilityOverviewState.togetherContent = `<article class="issue-card"><p>Choose at least two staff members to find shared roster days.</p></article>`;
+    renderFacilityOverview();
+    return;
+  }
+  const { startDate, endDate } = facilityOverviewTogetherDateRange();
+  if (!startDate || !endDate || endDate < startDate) {
+    facilityOverviewState.togetherHasSearched = false;
+    facilityOverviewState.togetherContent = `<article class="issue-card"><p>Choose a valid date range with the end date on or after the start date.</p></article>`;
+    renderFacilityOverview();
+    return;
+  }
+  const requestId = facilityOverviewState.requestId + 1;
+  facilityOverviewState.requestId = requestId;
+  facilityOverviewState.togetherHasSearched = true;
+  facilityOverviewState.togetherContent = `<article class="issue-card"><p>Finding shared roster days…</p></article>`;
+  renderFacilityOverview();
+  try {
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "queryFacilityOverviewWorkingTogether",
+        email: authUserEmail || currentUserEmail,
+        password: authUserPassword || currentUserPassword,
+        startDate,
+        endDate,
+        doctorKeys: [...new Set(selectedDoctors.flatMap(facilityOverviewTogetherDoctorKeys))],
+        sourceTypes: facilityOverviewState.togetherFacilityKey === "ALL" ? [] : [facilityOverviewState.togetherFacilityKey],
+      }),
+    });
+    const data = await readJsonResponse(response, "Could not search shared roster days.");
+    if (facilityOverviewState.requestId !== requestId || facilityOverviewState.tab !== "together") return;
+    facilityOverviewState.togetherContent = renderFacilityOverviewTogetherResults(data.events || [], selectedDoctors, { startDate, endDate });
+  } catch (error) {
+    if (facilityOverviewState.requestId !== requestId) return;
+    facilityOverviewState.togetherContent = `<article class="issue-card"><p>${escapeHtml(error.message || "Shared roster days are unavailable right now.")}</p></article>`;
+  }
+  renderFacilityOverview();
+}
+
+function renderFacilityOverviewTogetherResults(rows, selectedDoctors, range) {
+  const ownerByRosterKey = new Map();
+  for (const doctor of selectedDoctors) {
+    for (const key of facilityOverviewTogetherDoctorKeys(doctor)) ownerByRosterKey.set(key, doctor.identity);
+  }
+  const eventsByDoctor = new Map(selectedDoctors.map((doctor) => [doctor.identity, []]));
+  for (const row of rows || []) {
+    const identity = ownerByRosterKey.get(normalizeRosterName(row?.doctorKey || ""));
+    if (!identity || !row?.event || !isRosterShiftEvent(row.event)) continue;
+    eventsByDoctor.get(identity).push(serializeEvent(row.event));
+  }
+  const indexed = selectedDoctors.map((doctor) => ({
+    doctor,
+    intervals: facilityOverviewWorkingIntervals(eventsByDoctor.get(doctor.identity) || [], range),
+  }));
+  const allMatches = facilityOverviewIntervalMatches(indexed, range);
+  const allIntervalsByFacility = facilityOverviewUnionIntervalsByFacility(allMatches);
+  const pairMatches = facilityOverviewTogetherPairs(indexed)
+    .flatMap((pair) => facilityOverviewIntervalMatches(pair, range).flatMap((match) => (
+      facilityOverviewSubtractIntervals(match, allIntervalsByFacility.get(match.facility) || [])
+        .map((interval) => ({ ...match, ...interval, pairLabel: pair.map((entry) => entry.doctor.displayName).join(" + ") }))
+    )));
+  const uniqueAllMatches = facilityOverviewDedupeMatches(allMatches);
+  const uniquePairMatches = facilityOverviewDedupeMatches(pairMatches);
+  if (!uniqueAllMatches.length && !uniquePairMatches.length) {
+    return `<article class="facility-overview-no-match"><span aria-hidden="true">○</span><strong>No roster overlaps found</strong><p>${escapeHtml(selectedDoctors.map((doctor) => doctor.displayName).join(", "))} were not working at the same hospital at the same time during this period. Try a wider range or all EDs.</p></article>`;
+  }
+  if (selectedDoctors.length === 2) return renderFacilityOverviewTogetherMatchCards(uniqueAllMatches);
+  const showGroups = uniqueAllMatches.length && uniquePairMatches.length;
+  return `
+    ${uniqueAllMatches.length ? `${showGroups ? `<section class="facility-overview-match-group facility-overview-match-group-all"><div class="facility-overview-match-group-head"><h4>All selected staff</h4></div>` : ""}${renderFacilityOverviewTogetherMatchCards(uniqueAllMatches)}${showGroups ? "</section>" : ""}` : ""}
+    ${uniquePairMatches.length ? `${showGroups ? `<section class="facility-overview-match-group"><div class="facility-overview-match-group-head"><h4>Two-person overlaps</h4></div>` : ""}${renderFacilityOverviewTogetherMatchCards(uniquePairMatches, { showPair: true })}${showGroups ? "</section>" : ""}` : ""}
+  `;
+}
+
+function facilityOverviewWorkingIntervals(events, range) {
+  const rangeStart = new Date(`${range.startDate}T00:00:00`);
+  const rangeEnd = new Date(`${range.endDate}T00:00:00`);
+  rangeEnd.setDate(rangeEnd.getDate() + 1);
+  return (events || []).flatMap((event) => {
+    const facility = eventSourceCode(event);
+    const start = new Date(event.start);
+    let end = new Date(event.end);
+    if (!facility || event.allDay || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return [];
+    if (end <= start && extractTimePortion(event.end) === "00:00") end = addDays(end, 1);
+    if (end <= start || end <= rangeStart || start >= rangeEnd) return [];
+    return [{ facility, start, end, event }];
+  });
+}
+
+function facilityOverviewTogetherPairs(indexed) {
+  const pairs = [];
+  for (let left = 0; left < indexed.length - 1; left += 1) {
+    for (let right = left + 1; right < indexed.length; right += 1) pairs.push([indexed[left], indexed[right]]);
+  }
+  return pairs;
+}
+
+function facilityOverviewIntervalMatches(indexed, range) {
+  if (!indexed.length || indexed.some((entry) => !entry.intervals.length)) return [];
+  const rangeStart = new Date(`${range.startDate}T00:00:00`);
+  const rangeEnd = new Date(`${range.endDate}T00:00:00`);
+  rangeEnd.setDate(rangeEnd.getDate() + 1);
+  const matches = [];
+  const visit = (index, facility, start, end, people) => {
+    if (index === indexed.length) {
+      if (start < end) matches.push({ facility, start, end, people });
+      return;
+    }
+    for (const interval of indexed[index].intervals) {
+      if (facility && interval.facility !== facility) continue;
+      const nextStart = start && start > interval.start ? start : interval.start;
+      const nextEnd = end && end < interval.end ? end : interval.end;
+      if (nextStart >= nextEnd || nextEnd <= rangeStart || nextStart >= rangeEnd) continue;
+      visit(index + 1, facility || interval.facility, nextStart, nextEnd, [...people, { doctor: indexed[index].doctor, event: interval.event }]);
+    }
+  };
+  visit(0, "", null, null, []);
+  return matches.sort(facilityOverviewCompareMatches);
+}
+
+function facilityOverviewUnionIntervalsByFacility(matches) {
+  const grouped = new Map();
+  for (const match of matches || []) {
+    if (!grouped.has(match.facility)) grouped.set(match.facility, []);
+    grouped.get(match.facility).push({ start: match.start, end: match.end });
+  }
+  for (const [facility, intervals] of grouped) {
+    const merged = [];
+    for (const interval of intervals.sort((left, right) => left.start - right.start)) {
+      const previous = merged[merged.length - 1];
+      if (previous && interval.start <= previous.end) previous.end = new Date(Math.max(previous.end, interval.end));
+      else merged.push({ ...interval });
+    }
+    grouped.set(facility, merged);
+  }
+  return grouped;
+}
+
+function facilityOverviewSubtractIntervals(match, exclusions) {
+  let segments = [{ start: match.start, end: match.end }];
+  for (const exclusion of exclusions || []) {
+    segments = segments.flatMap((segment) => {
+      if (exclusion.end <= segment.start || exclusion.start >= segment.end) return [segment];
+      const remaining = [];
+      if (exclusion.start > segment.start) remaining.push({ start: segment.start, end: new Date(Math.min(segment.end, exclusion.start)) });
+      if (exclusion.end < segment.end) remaining.push({ start: new Date(Math.max(segment.start, exclusion.end)), end: segment.end });
+      return remaining.filter((item) => item.start < item.end);
+    });
+  }
+  return segments;
+}
+
+function facilityOverviewDedupeMatches(matches) {
+  const unique = new Map();
+  for (const match of matches || []) {
+    const key = [match.facility, match.start.toISOString(), match.end.toISOString(), match.people.map((person) => person.doctor.identity).join("|"), match.pairLabel || ""].join("~");
+    if (!unique.has(key)) unique.set(key, match);
+  }
+  return [...unique.values()].sort(facilityOverviewCompareMatches);
+}
+
+function facilityOverviewCompareMatches(left, right) {
+  return left.start - right.start || left.facility.localeCompare(right.facility) || left.end - right.end;
+}
+
+function renderFacilityOverviewTogetherMatchCards(matches, options = {}) {
+  return `<div class="facility-overview-together-match-list">${matches.map((match) => `
+    <article class="facility-overview-together-match">
+      ${options.showPair ? `<strong class="facility-overview-match-pair">${escapeHtml(match.pairLabel)}</strong>` : ""}
+      <div class="facility-overview-together-match-date"><time datetime="${escapeHtml(formatDateKey(match.start))}"><strong>${escapeHtml(new Intl.DateTimeFormat("en-AU", { weekday: "short" }).format(match.start))}</strong><span>${escapeHtml(formatDate(formatDateKey(match.start)))}</span></time><span class="facility-overview-site-pill">${escapeHtml(displaySourceCode(match.facility))}</span></div>
+      <span class="facility-overview-overlap-time">Overlap ${escapeHtml(facilityOverviewFormatOverlap(match.start, match.end))}</span>
+      <div class="facility-overview-together-match-people">${match.people.map((person) => `<div><strong>${escapeHtml(person.doctor.displayName)}</strong><span>${escapeHtml(renderFacilityOverviewStream([person.event], { includeTimes: true }) || "Rostered shift")}</span></div>`).join("")}</div>
+    </article>
+  `).join("")}</div>`;
+}
+
+function facilityOverviewFormatOverlap(start, end) {
+  const format = (value) => new Intl.DateTimeFormat("en-AU", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(value);
+  const startsAndEndsSameDay = formatDateKey(start) === formatDateKey(end);
+  return `${format(start)} – ${startsAndEndsSameDay ? format(end) : `${formatDate(formatDateKey(end))} ${format(end)}`}`;
+}
+
+async function loadFacilityOverviewOnShift() {
+  if (!canUseFacilityOverview() || facilityOverviewState.tab !== "on-shift") return;
+  const requestId = facilityOverviewState.requestId + 1;
+  facilityOverviewState.requestId = requestId;
+  facilityOverviewState.staffData = null;
+  facilityOverviewState.content = `<article class="issue-card"><p>Loading rostered staff…</p></article>`;
+  renderFacilityOverview();
+  try {
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "queryFacilityOverviewOnShift",
+        email: authUserEmail || currentUserEmail,
+        password: authUserPassword || currentUserPassword,
+        facilityKey: facilityOverviewState.facilityKey,
+        date: facilityOverviewState.date,
+        includeClinicalSupport: facilityOverviewState.includeClinicalSupport === true,
+      }),
+    });
+    const data = await readJsonResponse(response, "Could not load the ED overview.");
+    if (facilityOverviewState.requestId !== requestId || facilityOverviewState.tab !== "on-shift") return;
+    facilityOverviewState.content = renderFacilityOverviewOnShiftResults(data.events || []);
+  } catch (error) {
+    if (facilityOverviewState.requestId !== requestId) return;
+    facilityOverviewState.content = `<article class="issue-card"><p>${escapeHtml(error.message || "The ED overview is unavailable right now.")}</p></article>`;
+  }
+  renderFacilityOverview();
+}
+
+function renderFacilityOverviewOnShiftResults(rows) {
+  const people = new Map();
+  for (const row of rows) {
+    const event = row?.event;
+    if (!event || !isRosterShiftEvent(event)) continue;
+    const key = String(row.doctorKey || "").trim();
+    if (!key) continue;
+    const entry = people.get(key) || { displayName: String(row.displayName || key), seniority: String(row.seniority || "Unknown"), events: [], markers: new Set() };
+    const marker = `${event.title}|${event.start}|${event.end}|${event.rawValue || ""}`;
+    if (!entry.markers.has(marker)) {
+      entry.markers.add(marker);
+      entry.events.push(event);
+    }
+    people.set(key, entry);
+  }
+  const sorted = [...people.values()].sort((left, right) => {
+    const period = insightShiftPeriodRank(left.events) - insightShiftPeriodRank(right.events);
+    return period || facilityOverviewSeniorityRank(left.seniority) - facilityOverviewSeniorityRank(right.seniority) || left.displayName.localeCompare(right.displayName);
+  });
+  if (!sorted.length) return `<article class="issue-card"><p>No recognised working shifts were found for this ED and date.</p></article>`;
+  const groups = new Map();
+  for (const person of sorted) {
+    const period = whoPeriodLabel(person.events[0]);
+    if (!groups.has(period)) groups.set(period, []);
+    groups.get(period).push(person);
+  }
+  for (const peopleInPeriod of groups.values()) {
+    const starts = peopleInPeriod.flatMap((person) => person.events.map(facilityOverviewEventStartMinutes)).filter(Number.isFinite);
+    const usualStart = starts.length ? Math.min(...starts) : null;
+    for (const person of peopleInPeriod) {
+      person.isSwing = person.events.some((event) => /\bswing\b/i.test(`${event?.title || ""} ${event?.rawValue || ""}`))
+        || (usualStart !== null && person.events.some((event) => facilityOverviewEventStartMinutes(event) >= usualStart + 60));
+    }
+    peopleInPeriod.sort((left, right) => {
+      const swing = Number(left.isSwing) - Number(right.isSwing);
+      return swing || facilityOverviewSeniorityRank(left.seniority) - facilityOverviewSeniorityRank(right.seniority) || left.displayName.localeCompare(right.displayName);
+    });
+  }
+  return `${["AM", "PM", "Night"].filter((period) => groups.has(period)).map((period) => `
+    <section class="facility-overview-period"><h3>${period}</h3><div class="facility-overview-staff-grid">${groups.get(period).map((person) => `
+      <article class="issue-card facility-overview-staff-card${person.isSwing ? " is-swing" : ""}">
+        <strong>${escapeHtml(person.displayName)}</strong>
+        <span class="facility-overview-seniority">${escapeHtml(person.seniority || "Unknown")}</span>
+        <span class="facility-overview-stream">${escapeHtml(renderFacilityOverviewStream(person.events, { includeTimes: person.isSwing }))}</span>
+      </article>
+    `).join("")}</div></section>
+  `).join("")}`;
+}
+
+async function loadFacilityOverviewStaff() {
+  if (!canUseFacilityOverview() || facilityOverviewState.tab !== "staff") return;
+  const term = australianTermForDate(parseDateOnly(facilityOverviewState.staffTermStart || formatDateKey(new Date())));
+  facilityOverviewState.staffTermStart = formatDateKey(term.start);
+  const requestId = facilityOverviewState.requestId + 1;
+  facilityOverviewState.requestId = requestId;
+  facilityOverviewState.staffContent = `<article class="issue-card"><p>Loading ED staff…</p></article>`;
+  renderFacilityOverview();
+  try {
+    const response = await fetch("/api/state", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "queryFacilityOverviewStaff", email: authUserEmail || currentUserEmail, password: authUserPassword || currentUserPassword,
+        facilityKey: facilityOverviewState.facilityKey === "ALL" ? "all" : facilityOverviewState.facilityKey,
+        termStart: facilityOverviewState.staffTermStart, termEnd: formatDateKey(addDays(term.end, -1)),
+      }),
+    });
+    const data = await readJsonResponse(response, "Could not load ED staff.");
+    if (facilityOverviewState.requestId !== requestId || facilityOverviewState.tab !== "staff") return;
+    facilityOverviewState.staffTerms = facilityOverviewTermsFromCoverage(data.coverage || []);
+    facilityOverviewState.staffData = data;
+    facilityOverviewState.staffContent = renderFacilityOverviewStaffResults(data, term);
+  } catch (error) {
+    if (facilityOverviewState.requestId !== requestId) return;
+    facilityOverviewState.staffContent = `<article class="issue-card"><p>${escapeHtml(error.message || "The ED staff list is unavailable right now.")}</p></article>`;
+  }
+  renderFacilityOverview();
+}
+
+function refreshFacilityOverviewStaffContent() {
+  if (!facilityOverviewState.staffData) return;
+  const term = australianTermForDate(parseDateOnly(facilityOverviewState.staffTermStart || formatDateKey(new Date())));
+  facilityOverviewState.staffContent = renderFacilityOverviewStaffResults(facilityOverviewState.staffData, term);
+}
+
+function facilityOverviewTermsFromCoverage(coverage) {
+  const terms = new Map();
+  const add = (term) => terms.set(formatDateKey(term.start), { value: formatDateKey(term.start), label: formatAustralianTermLabel(term) });
+  add(australianTermForDate(new Date()));
+  for (const item of coverage || []) {
+    const start = String(item?.startDate || "").slice(0, 10);
+    const end = String(item?.endDate || "").slice(0, 10);
+    if (!start || !end) continue;
+    let term = australianTermForDate(parseDateOnly(start));
+    const last = australianTermForDate(parseDateOnly(end));
+    while (term.year < last.year || (term.year === last.year && term.termNumber <= last.termNumber)) {
+      add(term);
+      term = nextAustralianTerm(term);
+    }
+  }
+  return [...terms.values()].sort((left, right) => right.value.localeCompare(left.value));
+}
+
+function renderFacilityOverviewStaffResults(data, term) {
+  const canOpenStaffCalendars = isViewingCreatorAccount();
+  const byPerson = new Map();
+  for (const member of data.members || []) {
+    const key = `${member.sourceType}|${member.doctorKey}`;
+    const entry = byPerson.get(key) || {
+      sourceType: member.sourceType, doctorKey: member.doctorKey, displayName: member.displayName,
+      seniorities: new Set(), events: [], eventMarkers: new Set(), coverageStarts: [], coverageEnds: [], membershipSources: new Set(),
+    };
+    if (member.seniority) entry.seniorities.add(member.seniority);
+    if (member.coverageStart) entry.coverageStarts.push(member.coverageStart);
+    if (member.coverageEnd) entry.coverageEnds.push(member.coverageEnd);
+    entry.membershipSources.add(member.membershipSource || "roster");
+    byPerson.set(key, entry);
+  }
+  for (const row of data.events || []) {
+    const key = `${row.sourceType}|${row.doctorKey}`;
+    const entry = byPerson.get(key) || { sourceType: row.sourceType, doctorKey: row.doctorKey, displayName: row.displayName, seniorities: new Set(), events: [], eventMarkers: new Set(), coverageStarts: [], coverageEnds: [], membershipSources: new Set(["event"]) };
+    if (row.seniority) entry.seniorities.add(row.seniority);
+    const marker = `${row.event?.title || ""}|${row.event?.start || ""}|${row.event?.end || ""}|${row.event?.rawValue || ""}`;
+    if (row.event && isRosterShiftEvent(row.event) && !isClinicalSupportEvent(row.event) && !entry.eventMarkers.has(marker)) {
+      entry.eventMarkers.add(marker);
+      entry.events.push(row.event);
+    }
+    byPerson.set(key, entry);
+  }
+  const query = facilityOverviewState.staffQuery.trim().toLocaleLowerCase();
+  const panels = new Map();
+  for (const person of byPerson.values()) {
+    if (query && !person.displayName.toLocaleLowerCase().includes(query)) continue;
+    const grades = [...person.seniorities].filter(Boolean);
+    person.seniority = grades.sort((left, right) => facilityOverviewSeniorityRank(left) - facilityOverviewSeniorityRank(right))[0] || "Unknown";
+    person.multipleGrades = new Set(grades).size > 1;
+    if (!panels.has(person.sourceType)) panels.set(person.sourceType, []);
+    panels.get(person.sourceType).push(person);
+  }
+  if (!panels.size) return `<article class="issue-card"><p>No ED staff are recorded for ${escapeHtml(formatAustralianTermLabel(term))}${query ? " matching that name" : ""}.</p></article>`;
+  const selectedFacilities = (facilityOverviewState.facilityKey === "ALL" ? facilityOverviewFacilityOptions() : [facilityOverviewState.facilityKey])
+    .map((facility) => String(facility || "").toLowerCase());
+  return selectedFacilities.filter((source) => panels.has(source)).map((source) => {
+    const people = panels.get(source);
+    const partial = people.some((person) => person.coverageStarts.some((date) => date > formatDateKey(term.start)) || person.coverageEnds.some((date) => date < formatDateKey(addDays(term.end, -1))));
+    const groups = new Map();
+    for (const person of people) {
+      if (!groups.has(person.seniority)) groups.set(person.seniority, []);
+      groups.get(person.seniority).push(person);
+    }
+    return `<section class="facility-overview-ed-panel">
+      <div class="facility-overview-ed-heading"><h3>${escapeHtml(displaySourceCode(source))}</h3>${partial ? `<span class="facility-overview-coverage-warning">Partial roster coverage</span>` : ""}</div>
+      <div class="facility-overview-staff-sections">${[...groups.entries()].sort(([left], [right]) => facilityOverviewSeniorityRank(left) - facilityOverviewSeniorityRank(right)).map(([grade, staff]) => {
+        const key = `${source}:${grade}`;
+        const expanded = query || facilityOverviewState.staffExpanded.has(key);
+        return `<section class="facility-overview-staff-section">
+          <button type="button" class="facility-overview-staff-section-toggle" aria-expanded="${expanded}" data-facility-overview-staff-section="${escapeHtml(key)}"><span>${escapeHtml(grade)}</span><span>${staff.length}</span></button>
+          ${expanded ? `<div class="facility-overview-staff-list">${staff.sort((left, right) => left.displayName.localeCompare(right.displayName)).map((person) => {
+            const dates = person.events.map((event) => String(event.start || "").slice(0, 10)).filter(Boolean).sort();
+            const activity = dates.length ? `${formatDate(dates[0])}${dates.length > 1 ? ` – ${formatDate(dates[dates.length - 1])}` : ""} · ${dates.length} shift${dates.length === 1 ? "" : "s"}` : "No working shifts recorded this term";
+            const name = canOpenStaffCalendars
+              ? `<button type="button" class="facility-overview-staff-calendar-link" data-facility-overview-open-staff-calendar="${escapeHtml(person.doctorKey)}" aria-label="Open ${escapeHtml(person.displayName)}'s calendar">${escapeHtml(person.displayName)}</button>`
+              : `<strong>${escapeHtml(person.displayName)}</strong>`;
+            return `<article class="facility-overview-staff-member">${name}<span>${escapeHtml(activity)}</span>${person.multipleGrades ? `<small>Multiple grades recorded</small>` : ""}</article>`;
+          }).join("")}</div>` : ""}
+        </section>`;
+      }).join("")}</div>
+    </section>`;
+  }).join("") || `<article class="issue-card"><p>No ED staff are recorded for this selection.</p></article>`;
+}
+
+async function openFacilityOverviewStaffCalendar(doctorKey) {
+  if (!isViewingCreatorAccount()) return;
+  const normalizedKey = normalizeRosterName(doctorKey);
+  const doctor = doctorPickerOptions().find((option) => option.key === normalizedKey);
+  if (!doctor) {
+    setStatus("That staff member's calendar profile is not available yet.", true);
+    return;
+  }
+  closeFacilityOverview();
+  await switchDoctorSelection(doctor.key, { resetRange: true });
+}
+
+function facilityOverviewEventStartMinutes(event) {
+  const match = String(event?.timeLabel || "").match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return Number.NaN;
+  return Number(match[1]) * 60 + Number(match[2]);
+}
+
+function renderFacilityOverviewStream(events, options = {}) {
+  return [...events]
+    .sort(compareInsightEvents)
+    .map((event) => {
+      const stream = String(event?.title || "").replace(/^[^:]+:\s*/, "").trim();
+      return options.includeTimes && event?.timeLabel ? `${stream} (${event.timeLabel})` : stream;
+    })
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function facilityOverviewSeniorityRank(value) {
+  const index = FACILITY_OVERVIEW_SENIORITY_ORDER.indexOf(String(value || "Unknown").trim());
+  return index >= 0 ? index : FACILITY_OVERVIEW_SENIORITY_ORDER.length;
+}
+
 function knownInsightsAccessForEmail(email) {
   const targetEmail = normalizeEmail(email);
   if (!targetEmail) return false;
@@ -7976,6 +8928,7 @@ function syncAccountsButton() {
   accountsButton.innerHTML = ownerView
     ? `Admin${issueCount ? `<span class="notification-badge">${issueCount}</span>` : ""}`
     : "Account";
+  syncFacilityOverviewAccess();
 }
 
 function renderAccountsModal() {
@@ -8108,6 +9061,10 @@ function renderAccountsModal() {
                 <label class="toggle review-toggle">
                   <input type="checkbox" ${user.insightsEnabled ? "checked" : ""} data-toggle-user-insights="${escapeHtml(user.email)}">
                   Allow “Who/When am I working with?” tools
+                </label>
+                <label class="toggle review-toggle">
+                  <input type="checkbox" ${user.facilityOverviewEnabled ? "checked" : ""} data-toggle-user-facility-overview="${escapeHtml(user.email)}">
+                  Allow “At a glance” ED overview
                 </label>
               `}
               <div class="account-actions">
@@ -9849,6 +10806,47 @@ async function setUserInsightsEnabled(email, enabled) {
   }
 }
 
+async function setUserFacilityOverviewEnabled(email, enabled) {
+  const targetEmail = normalizeEmail(email);
+  if (!targetEmail || !isCreatorAuthenticated()) return;
+  const previousUsers = serverUsers.map((user) => ({ ...normalizeServerUser(user) }));
+  serverUsers = serverUsers.map((user) => {
+    const normalized = normalizeServerUser(user);
+    return normalized.email === targetEmail ? { ...normalized, facilityOverviewEnabled: enabled === true } : normalized;
+  });
+  renderAccountsModal();
+  try {
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "setUserFacilityOverviewEnabled",
+        email: authUserEmail || currentUserEmail,
+        password: authUserPassword || currentUserPassword,
+        targetEmail,
+        facilityOverviewEnabled: enabled === true,
+      }),
+    });
+    const data = await readJsonResponse(response, "Could not update user feature access.");
+    if (data.user) {
+      serverUsers = [
+        ...serverUsers.filter((user) => normalizeServerUser(user).email !== targetEmail),
+        data.user,
+      ].sort((left, right) => normalizeServerUser(left).email.localeCompare(normalizeServerUser(right).email));
+      renderAccountsModal();
+    }
+    if (targetEmail === currentUserEmail) {
+      currentFacilityOverviewEnabled = enabled === true;
+      syncFacilityOverviewAccess();
+    }
+    setStatus(enabled ? "At a glance ED overview enabled for that user." : "At a glance ED overview disabled for that user.");
+  } catch (error) {
+    serverUsers = previousUsers;
+    renderAccountsModal();
+    setStatus(error.message || "Could not update user feature access.", true);
+  }
+}
+
 async function confirmSuggestedClaim(index) {
   const claim = currentSuggestedClaims[index];
   if (!claim) return;
@@ -10204,8 +11202,11 @@ async function validateDoctorProfileCalendarInBackground(doctor, previousState, 
 }
 
 async function waitForDoctorProfileCalendarBuild(doctor, previousState, options = {}) {
-  const retryDelays = [250, 500, 1000, 1500];
-  for (const delayMs of retryDelays) {
+  const retryDelays = [250, 500, 1000, 1500, 2500, 4000, 5000];
+  let attempt = 0;
+  while (calendarTransitionStillCurrent(options.transition)) {
+    const delayMs = retryDelays[Math.min(attempt, retryDelays.length - 1)];
+    attempt += 1;
     await new Promise((resolve) => window.setTimeout(resolve, delayMs));
     if (!calendarTransitionStillCurrent(options.transition)) return null;
     const result = await loadUnclaimedDoctorCalendar(doctor, previousState, {
@@ -10427,11 +11428,8 @@ async function loadUnclaimedDoctorCalendar(doctor, sourceContext, options = {}) 
   if (options.allowInlineBuild === false && calendarSnapshotMatchesActiveContext(currentSnapshot)) return null;
   if (options.allowInlineBuild === false) {
     const building = profileData.snapshotSource === "server-cache-building" || profileData.snapshotStatus === "building";
-    if (building) {
-      setStatus(`${doctor.displayName} calendar is building...`);
-      return null;
-    }
-    throw new Error(`${doctor.displayName} calendar is not ready yet. Try again in a moment.`);
+    setStatus(`${doctor.displayName} calendar is ${building ? "building" : "preparing"}...`);
+    return null;
   }
 
   const cached = buildUnclaimedPreviewFromSnapshotCache(doctor, profile, sourceContext, profileData.profile?.state?.session || {});
@@ -10795,18 +11793,20 @@ async function exitDoctorProfileView() {
   renderLoginState();
 }
 
-async function returnToCreatorCalendar() {
-  await returnToCreatorAccount();
+async function returnToCreatorCalendar(options = {}) {
+  await returnToCreatorAccount(options);
 }
 
-async function returnToCreatorAccount() {
+async function returnToCreatorAccount(options = {}) {
   const previousState = captureCalendarViewState();
   const accountSwitchStartedAt = performance.now();
   const creatorEmail = authUserEmail || OWNER_EMAIL;
   const creatorPassword = authUserPassword || currentUserPassword;
   cancelScheduledCloudStateSave();
-  const outgoingSave = capturePendingCloudStateSave() || outgoingSnapshotSavePayload(previousState);
-  if (outgoingSave) queueBackgroundCloudStateSave(outgoingSave, { delayMs: 1500 });
+  if (options.skipOutgoingSave !== true) {
+    const outgoingSave = capturePendingCloudStateSave() || outgoingSnapshotSavePayload(previousState);
+    if (outgoingSave) queueBackgroundCloudStateSave(outgoingSave, { delayMs: 1500 });
+  }
   adminViewingEmail = "";
   viewedAccountId = normalizeEmail(creatorEmail);
   viewedAccountType = "creator";
@@ -10893,7 +11893,7 @@ async function returnToCreatorAccount() {
       await validateCreator();
     } catch (error) {
       if (!calendarTransitionStillCurrent(transition)) return;
-      restoreCalendarViewState(previousState);
+      if (options.restoreOnFailure !== false) restoreCalendarViewState(previousState);
       renderLoginState();
       setStatus(normalizeAuthMessage(error.message || "Could not return to creator account."), true);
     }
@@ -11930,6 +12930,7 @@ function normalizeServerUser(value) {
       claims: [],
       defaultDoctorKey: "",
       insightsEnabled: false,
+      facilityOverviewEnabled: false,
       adminIssues: [],
       issuesCount: 0,
     };
@@ -11945,6 +12946,7 @@ function normalizeServerUser(value) {
     claims: sanitizeRosterClaims(value?.claims || []),
     defaultDoctorKey: normalizeRosterName(value?.defaultDoctorKey || ""),
     insightsEnabled: role === "owner" || role === "creator" || value?.insightsEnabled === true,
+    facilityOverviewEnabled: role === "owner" || role === "creator" || value?.facilityOverviewEnabled === true,
     adminIssues: Array.isArray(value?.adminIssues) ? value.adminIssues : [],
     issuesCount: Number(value?.issuesCount || 0),
   };
@@ -12013,6 +13015,8 @@ async function logoutCurrentUser() {
   availableRosterDoctors = [];
   currentSubscription = null;
   currentInsightsEnabled = false;
+  currentFacilityOverviewEnabled = false;
+  closeFacilityOverview();
   currentSuggestedClaims = [];
   selectedFiles = [];
   switchTargetPrefetchRunId += 1;
@@ -12207,6 +13211,8 @@ async function restoreCloudState(options = {}) {
     cloudAvailable = false;
     currentSubscription = null;
     currentInsightsEnabled = false;
+    currentFacilityOverviewEnabled = false;
+    closeFacilityOverview();
     localStorage.removeItem(CURRENT_EMAIL_KEY);
     sessionStorage.removeItem(CURRENT_PASSWORD_KEY);
     localStorage.removeItem(PERSISTENT_PASSWORD_KEY);
@@ -12681,6 +13687,10 @@ function applyCloudStateIdentity(data) {
   if (typeof data.insightsEnabled === "boolean") {
     primeInsightsAccessForCurrentView({ insightsEnabled: data.insightsEnabled });
   }
+  if (typeof data.facilityOverviewEnabled === "boolean") {
+    currentFacilityOverviewEnabled = currentUserRole === "creator" || data.facilityOverviewEnabled === true;
+  }
+  syncFacilityOverviewAccess();
   if (data.realName) saveLocalAccountIdentity(data.realName);
 }
 
@@ -12694,12 +13704,14 @@ function applyAvailableRosterDoctorsFromData(data) {
 function applyCloudStateContext(data) {
   const previousInsightsEnabled = currentInsightsEnabled;
   currentInsightsEnabled = currentUserRole === "creator" || data.insightsEnabled === true;
+  currentFacilityOverviewEnabled = currentUserRole === "creator" || data.facilityOverviewEnabled === true;
   currentSuggestedClaims = sanitizeRosterClaims(data.suggestedClaims || data.nameMatches || []);
   latestNameMatches = currentSuggestedClaims;
   applyAvailableRosterDoctorsFromData(data);
   currentSubscription = sanitizeSubscription(data.subscription);
   applyIssueConfig(data.issueConfig);
   if (previousInsightsEnabled !== currentInsightsEnabled && latestPreview) rebuildClientPreview();
+  syncFacilityOverviewAccess();
 }
 
 async function applyCloudStateSnapshot(data, options = {}) {
@@ -13648,9 +14660,11 @@ async function buildDerivedCalendarFilePayload(importEntry, statusFile = {}) {
         sourceType,
       }));
     });
+  const providerDoctors = sourceType === "ddh" ? findmyshiftProviderStaffOptions(sourceEntries.ddh) : [];
+  const membershipDoctors = mergeMembershipDoctors(doctors, providerDoctors);
   const uniqueDoctors = [];
   const seenDoctors = new Set();
-  for (const doctor of doctors) {
+  for (const doctor of membershipDoctors) {
     const marker = `${doctor.sourceType}:${doctor.key}`;
     if (seenDoctors.has(marker)) continue;
     seenDoctors.add(marker);
