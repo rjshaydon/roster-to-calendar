@@ -8181,6 +8181,7 @@ function syncFacilityOverviewAccess() {
   const enabled = canUseFacilityOverview();
   facilityOverviewButton?.classList.toggle("hidden", !enabled);
   mobileFacilityOverviewButton?.classList.toggle("hidden", !enabled);
+  mobileActionBar?.classList.toggle("has-facility-overview", enabled);
   if (!enabled && facilityOverviewSection && !facilityOverviewSection.classList.contains("hidden")) closeFacilityOverview();
   syncFacilityOverviewNavigationState();
 }
