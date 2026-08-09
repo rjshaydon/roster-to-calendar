@@ -1144,6 +1144,10 @@ input[type="color"] {
   margin-left: auto;
 }
 
+.facility-overview-staff-seniority-action {
+  position: relative;
+}
+
 .facility-overview-staff-designation-trigger {
   padding: 0;
   border: 0;
@@ -1157,6 +1161,27 @@ input[type="color"] {
 
 .facility-overview-staff-designation-trigger:hover,
 .facility-overview-staff-designation-trigger:focus-visible {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.facility-overview-staff-seniority-trigger,
+.facility-overview-on-shift-seniority-trigger {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 700;
+  cursor: context-menu;
+}
+
+.facility-overview-staff-seniority-trigger:hover,
+.facility-overview-staff-seniority-trigger:focus-visible,
+.facility-overview-on-shift-seniority-trigger:hover,
+.facility-overview-on-shift-seniority-trigger:focus-visible {
   color: var(--accent);
   text-decoration: underline;
   text-underline-offset: 3px;
@@ -1190,6 +1215,13 @@ input[type="color"] {
   display: flex;
   align-items: baseline;
   gap: 6px;
+}
+
+.facility-overview-on-shift-seniority {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .facility-overview-on-shift-names small {

@@ -179,7 +179,7 @@ const MAX_MEMORY_SNAPSHOT_CACHE_ENTRIES = 160;
 const MAX_STORED_SNAPSHOT_CACHE_ENTRIES = 240;
 const MAX_STORED_SNAPSHOT_CACHE_AGE_MS = 45 * 24 * 60 * 60 * 1000;
 const ROSTER_OVERLAP_DOCTOR_CACHE_KEY = "roster-overlap-doctor-cache-v1";
-const FACILITY_OVERVIEW_SENIORITY_ORDER = ["SMS", "CMO", "Senior Registrar", "Transitional/Intermediate Registrar", "Junior Registrar", "HMO", "ENP", "AMP", "Intern", "Unknown"];
+const FACILITY_OVERVIEW_SENIORITY_ORDER = ["SMS", "CMO", "Senior Registrar", "Transitional/Intermediate Registrar", "Junior Registrar", "HMO", "Intern", "NP", "Physio", "Unknown"];
 const CURRENT_EMAIL_KEY = "roster-current-email";
 const CURRENT_PASSWORD_KEY = "roster-current-password";
 const PERSISTENT_PASSWORD_KEY = "roster-persistent-password";
@@ -304,7 +304,7 @@ let currentInsightsEnabled = currentUserRole === "creator";
 let currentFacilityOverviewEnabled = currentUserRole === "creator";
 let facilityOverviewState = {
   tab: "on-shift", date: formatDateKey(new Date()), facilityKey: "", includeClinicalSupport: false, requestId: 0, onShiftData: null,
-  staffTermStart: formatDateKey(australianTermForDate(new Date()).start), staffTerms: [], staffContent: "", staffData: null, staffQuery: "", staffExpanded: new Set(), staffFocusSection: "", staffActionMenu: null, staffDesignationMenu: null,
+  staffTermStart: formatDateKey(australianTermForDate(new Date()).start), staffTerms: [], staffContent: "", staffData: null, staffQuery: "", staffExpanded: new Set(), staffFocusSection: "", staffActionMenu: null, staffDesignationMenu: null, staffSeniorityMenu: null,
   togetherStaffKeys: ["", ""], togetherRangeMode: "term",
   togetherTermStart: formatDateKey(australianTermForDate(new Date()).start),
   togetherFrom: formatDateKey(australianTermForDate(new Date()).start),
@@ -509,12 +509,19 @@ document.addEventListener("pointerdown", (event) => {
     const trigger = target.closest("[data-facility-overview-staff-designation-menu]");
     if (!insideMenu && trigger?.dataset.facilityOverviewStaffDesignationMenu !== designationMenu.key) closeFacilityOverviewStaffDesignationMenu();
   }
+  const seniorityMenu = facilityOverviewState.staffSeniorityMenu;
+  if (seniorityMenu) {
+    const insideMenu = target.closest("[data-facility-overview-staff-seniority-action-menu]");
+    const trigger = target.closest("[data-facility-overview-staff-seniority-menu]");
+    if (!insideMenu && trigger?.dataset.facilityOverviewStaffSeniorityMenu !== seniorityMenu.key) closeFacilityOverviewStaffSeniorityMenu();
+  }
 }, true);
 document.addEventListener("keydown", (event) => {
-  if (event.key !== "Escape" || (!facilityOverviewState.staffActionMenu && !facilityOverviewState.staffDesignationMenu)) return;
+  if (event.key !== "Escape" || (!facilityOverviewState.staffActionMenu && !facilityOverviewState.staffDesignationMenu && !facilityOverviewState.staffSeniorityMenu)) return;
   event.preventDefault();
   closeFacilityOverviewStaffActionMenu();
   closeFacilityOverviewStaffDesignationMenu();
+  closeFacilityOverviewStaffSeniorityMenu();
 });
 facilityOverviewSection?.addEventListener("scroll", (event) => {
   const scroller = event.target;
@@ -537,6 +544,7 @@ facilityOverviewSection?.addEventListener("click", (event) => {
   if (tab) {
     facilityOverviewState.staffActionMenu = null;
     facilityOverviewState.staffDesignationMenu = null;
+    facilityOverviewState.staffSeniorityMenu = null;
     facilityOverviewState.tab = tab.dataset.facilityOverviewTab || "on-shift";
     resetFacilityOverviewScroll();
     if (facilityOverviewState.tab === "staff") {
@@ -617,6 +625,31 @@ facilityOverviewSection?.addEventListener("click", (event) => {
     void clearFacilityOverviewStaffDesignation(clearDesignation.dataset.facilityOverviewClearStaffDesignation || "");
     return;
   }
+  const editSeniority = event.target.closest("[data-facility-overview-edit-staff-seniority]");
+  if (editSeniority) {
+    facilityOverviewState.staffActionMenu = null;
+    facilityOverviewState.staffDesignationMenu = null;
+    facilityOverviewState.staffSeniorityMenu = {
+      key: editSeniority.dataset.facilityOverviewStaffSeniorityMenu || "",
+      x: Math.max(8, Math.round(Number(editSeniority.dataset.facilityOverviewMenuX) || 8)),
+      y: Math.max(8, Math.round(Number(editSeniority.dataset.facilityOverviewMenuY) || 8)),
+    };
+    refreshFacilityOverviewStaffActionContent();
+    renderFacilityOverview();
+    return;
+  }
+  const setSeniority = event.target.closest("[data-facility-overview-set-staff-seniority]");
+  if (setSeniority) {
+    void setFacilityOverviewStaffSeniorityOverride({
+      sourceType: setSeniority.dataset.facilityOverviewStaffSource || "",
+      doctorKey: setSeniority.dataset.facilityOverviewStaffKey || "",
+      displayName: setSeniority.dataset.facilityOverviewStaffDisplayName || "",
+      seniority: setSeniority.dataset.facilityOverviewSetStaffSeniority || "",
+      useRosterSeniority: setSeniority.dataset.facilityOverviewUseRosterSeniority === "true",
+      termStart: setSeniority.dataset.facilityOverviewStaffTermStart || "",
+    });
+    return;
+  }
   const workingTogether = event.target.closest("[data-facility-overview-open-working-together]");
   if (workingTogether) {
     openFacilityOverviewWorkingTogether({
@@ -658,10 +691,24 @@ facilityOverviewSection?.addEventListener("contextmenu", (event) => {
     renderFacilityOverview();
     return;
   }
+  const seniorityTrigger = event.target.closest("[data-facility-overview-staff-seniority-menu]");
+  if (seniorityTrigger && isViewingCreatorAccount()) {
+    event.preventDefault();
+    facilityOverviewState.staffActionMenu = null;
+    facilityOverviewState.staffDesignationMenu = null;
+    facilityOverviewState.staffSeniorityMenu = {
+      key: seniorityTrigger.dataset.facilityOverviewStaffSeniorityMenu || "",
+      x: Math.max(8, Math.round(event.clientX || 0)), y: Math.max(8, Math.round(event.clientY || 0)),
+    };
+    refreshFacilityOverviewStaffActionContent();
+    renderFacilityOverview();
+    return;
+  }
   const staffMenu = event.target.closest("[data-facility-overview-staff-menu]");
   if (!staffMenu || !isViewingCreatorAccount()) return;
   event.preventDefault();
   facilityOverviewState.staffDesignationMenu = null;
+  facilityOverviewState.staffSeniorityMenu = null;
   facilityOverviewState.staffActionMenu = {
     key: staffMenu.dataset.facilityOverviewStaffMenu || "",
     x: Math.max(8, Math.round(event.clientX || 0)),
@@ -673,14 +720,19 @@ facilityOverviewSection?.addEventListener("contextmenu", (event) => {
 facilityOverviewSection?.addEventListener("keydown", (event) => {
   if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
   const trigger = event.target.closest?.("[data-facility-overview-staff-designation-menu]");
-  if (!trigger || !isViewingCreatorAccount()) return;
+  const seniorityTrigger = event.target.closest?.("[data-facility-overview-staff-seniority-menu]");
+  const target = seniorityTrigger || trigger;
+  if (!target || !isViewingCreatorAccount()) return;
   event.preventDefault();
-  const rect = trigger.getBoundingClientRect();
+  const rect = target.getBoundingClientRect();
   facilityOverviewState.staffActionMenu = null;
-  facilityOverviewState.staffDesignationMenu = {
-    key: trigger.dataset.facilityOverviewStaffDesignationMenu || "",
-    x: Math.max(8, Math.round(rect.left)), y: Math.max(8, Math.round(rect.bottom)),
-  };
+  if (seniorityTrigger) {
+    facilityOverviewState.staffDesignationMenu = null;
+    facilityOverviewState.staffSeniorityMenu = { key: seniorityTrigger.dataset.facilityOverviewStaffSeniorityMenu || "", x: Math.max(8, Math.round(rect.left)), y: Math.max(8, Math.round(rect.bottom)) };
+  } else {
+    facilityOverviewState.staffSeniorityMenu = null;
+    facilityOverviewState.staffDesignationMenu = { key: trigger.dataset.facilityOverviewStaffDesignationMenu || "", x: Math.max(8, Math.round(rect.left)), y: Math.max(8, Math.round(rect.bottom)) };
+  }
   refreshFacilityOverviewStaffActionContent();
   renderFacilityOverview();
 });
@@ -4871,7 +4923,7 @@ function buildWhoAssignment(doctor, metadata, event) {
   const rawTeam = activeRule?.base ? activeRule.base : whoTeamLabel(eventForGrouping);
   const isNightSsu = period === "Night" && rawTeam === "SSU";
   const isNightIc = isWhoNightIcShift({ event, period, rawTeam, rule: activeRule, ruleTitle });
-  const team = whoDisplayTeamLabel({ period, rawTeam, isNightIc });
+  const team = ["NP", "Physio"].includes(whoRoleDisplayLabel(role)) ? "Fast Track" : whoDisplayTeamLabel({ period, rawTeam, isNightIc });
   return {
     doctorKey: doctor.key,
     doctorName: doctor.displayName,
@@ -5229,6 +5281,7 @@ function whoPeriodRank(period) {
 
 function whoTeamLabel(event) {
   const text = `${event?.title || ""} ${event?.rawValue || ""}`.toLowerCase();
+  if (text.includes("physiotherapist") || /\bphysio\b/.test(text) || text.includes("nurse practitioner") || /\b(?:enp|np|d1)\b/.test(text)) return "Fast Track";
   if (text.includes("avao")) return "AVAO";
   if (text.includes("green")) return "Green";
   if (text.includes("orange")) return "Orange";
@@ -5273,8 +5326,8 @@ function whoRoleRank(role) {
     JR: 4,
     HMO: 5,
     I: 6,
-    ENP: 7,
-    AMP: 8,
+    NP: 7,
+    Physio: 8,
   };
   return Object.prototype.hasOwnProperty.call(ranks, normalized) ? ranks[normalized] : 99;
 }
@@ -5290,8 +5343,8 @@ function normalizeWhoRole(role) {
   if (upper === "JR" || upper.includes("JUNIOR REGISTRAR") || upper.includes("JUNIOR REG")) return "JR";
   if (upper === "H" || upper === "HMO" || upper.includes("HMO")) return "HMO";
   if (upper === "I" || upper.includes("INTERN")) return "I";
-  if (upper === "ENP" || upper.includes("NURSE PRACTITIONER")) return "ENP";
-  if (upper === "AMP" || upper.includes("PHYSIOTHERAPIST")) return "AMP";
+  if (upper === "ENP" || upper === "NP" || upper.includes("NURSE PRACTITIONER")) return "NP";
+  if (upper === "AMP" || upper === "PHYSIO" || upper.includes("PHYSIOTHERAPIST")) return "Physio";
   return upper;
 }
 
@@ -8361,6 +8414,7 @@ function closeFacilityOverview() {
   facilityOverviewState.requestId += 1;
   facilityOverviewState.staffActionMenu = null;
   facilityOverviewState.staffDesignationMenu = null;
+  facilityOverviewState.staffSeniorityMenu = null;
   form?.classList.remove("is-facility-overview-active");
   resetFacilityOverviewScroll();
   facilityOverviewSection?.classList.add("hidden");
@@ -8822,20 +8876,23 @@ async function loadFacilityOverviewOnShift() {
 
 function renderFacilityOverviewOnShiftResults(rows) {
   const canUseStaffActions = canUseFacilityOverview();
+  const termStart = formatDateKey(australianTermForDate(parseDateOnly(facilityOverviewState.date)).start);
   const people = new Map();
   for (const row of rows) {
     const event = row?.event;
     if (!event || !isRosterShiftEvent(event)) continue;
     const key = String(row.doctorKey || "").trim();
     if (!key) continue;
+    const seniority = facilityOverviewDetectedSeniority(event, row.seniority || "Unknown");
     const entry = people.get(key) || {
       doctorKey: key, displayName: String(row.displayName || key), sourceType: String(row.sourceType || facilityOverviewState.facilityKey || "").toLowerCase(),
-      seniority: String(row.seniority || "Unknown"), events: [], markers: new Set(),
+      seniority, events: [], markers: new Set(),
     };
+    if (entry.seniority === "Unknown" && seniority !== "Unknown") entry.seniority = seniority;
     const marker = `${event.title}|${event.start}|${event.end}|${event.rawValue || ""}`;
     if (!entry.markers.has(marker)) {
       entry.markers.add(marker);
-      entry.events.push(event);
+      entry.events.push({ ...event, seniority: seniority === "Unknown" ? entry.seniority : seniority });
     }
     people.set(key, entry);
   }
@@ -8850,7 +8907,7 @@ function renderFacilityOverviewOnShiftResults(rows) {
     periods.get(assignment.period).push(assignment);
   }
   return ["AM", "PM", "Night"].filter((period) => periods.has(period)).map((period) => `
-    <section class="facility-overview-period"><h3>${period}</h3><div class="facility-overview-staff-grid">${renderFacilityOverviewOnShiftPeriod(periods.get(period), { canUseStaffActions })}</div></section>
+    <section class="facility-overview-period"><h3>${period}</h3><div class="facility-overview-staff-grid">${renderFacilityOverviewOnShiftPeriod(periods.get(period), { canUseStaffActions, termStart })}</div></section>
   `).join("");
 }
 
@@ -8923,17 +8980,9 @@ function facilityOverviewIsMeaningfulStream(team) {
 }
 
 function renderFacilityOverviewStreamCard(stream, assignments, options = {}) {
-  const bySeniority = new Map();
-  for (const assignment of assignments || []) {
-    const seniority = String(assignment.person?.seniority || assignment.role || "Unknown");
-    if (!bySeniority.has(seniority)) bySeniority.set(seniority, []);
-    bySeniority.get(seniority).push(assignment);
-  }
   return `<article class="issue-card facility-overview-staff-card facility-overview-stream-card${options.cardClass ? ` ${options.cardClass}` : ""}">
     <strong class="facility-overview-stream-card-title">${escapeHtml(stream)}</strong>
-    ${[...bySeniority.entries()].sort(([left], [right]) => facilityOverviewSeniorityRank(left) - facilityOverviewSeniorityRank(right)).map(([seniority, items]) => `
-      <section class="facility-overview-stream-seniority"><span>${renderFacilityOverviewSeniorityLink(seniority, { sourceType: items[0]?.person?.sourceType, date: facilityOverviewState.date }) || escapeHtml(seniority)}</span>${renderFacilityOverviewOnShiftNames(items, options)}</section>
-    `).join("")}
+    ${renderFacilityOverviewOnShiftNames(assignments, options)}
   </article>`;
 }
 
@@ -8954,8 +9003,17 @@ function renderFacilityOverviewOnShiftNames(assignments, options = {}) {
     byPerson.set(person.doctorKey, existing);
   }
   return `<div class="facility-overview-on-shift-names">${[...byPerson.values()].sort((left, right) => left.person.displayName.localeCompare(right.person.displayName)).map(({ person, specialTimes }) => `
-    <div>${renderFacilityOverviewStaffName(person, options)}${specialTimes.size ? `<small>${escapeHtml([...specialTimes].join(" · "))}</small>` : ""}</div>
+    <div>${renderFacilityOverviewStaffName(person, { ...options, seniority: person.seniority })}${renderFacilityOverviewOnShiftSeniority(person, options)}${specialTimes.size ? `<small>${escapeHtml([...specialTimes].join(" · "))}</small>` : ""}</div>
   `).join("")}</div>`;
+}
+
+function renderFacilityOverviewOnShiftSeniority(person, options = {}) {
+  const label = facilityOverviewCompactSeniorityLabel(person?.seniority);
+  if (!label) return "";
+  const target = { ...person, seniority: person.seniority, termStart: options.termStart };
+  if (!isViewingCreatorAccount()) return `<span class="facility-overview-on-shift-seniority">${escapeHtml(label)}</span>`;
+  const key = facilityOverviewStaffActionMenuKey(target);
+  return `<button type="button" class="facility-overview-on-shift-seniority facility-overview-on-shift-seniority-trigger" data-facility-overview-staff-menu="${escapeHtml(key)}" data-facility-overview-staff-source="${escapeHtml(person.sourceType)}" data-facility-overview-staff-key="${escapeHtml(person.doctorKey)}" data-facility-overview-staff-display-name="${escapeHtml(person.displayName)}" data-facility-overview-staff-seniority="${escapeHtml(person.seniority)}" data-facility-overview-staff-term-start="${escapeHtml(options.termStart || "")}" aria-label="Edit ${escapeHtml(person.displayName)}'s designation">${escapeHtml(label)}</button>`;
 }
 
 function refreshFacilityOverviewStaffActionContent() {
@@ -9023,13 +9081,14 @@ function facilityOverviewTermsFromCoverage(coverage) {
 function renderFacilityOverviewStaffResults(data, term) {
   const canUseStaffActions = canUseFacilityOverview();
   const designations = new Map((data.designations || []).map((designation) => [`${designation.sourceType}|${designation.doctorKey}`, designation]));
+  const seniorityOverrides = new Map((data.seniorityOverrides || []).map((override) => [`${override.sourceType}|${override.doctorKey}`, override]));
   const byPerson = new Map();
   for (const designation of data.designations || []) {
     const key = `${designation.sourceType}|${designation.doctorKey}`;
     if (!designation?.doctorKey || byPerson.has(key)) continue;
     byPerson.set(key, {
       sourceType: designation.sourceType, doctorKey: designation.doctorKey, displayName: designation.displayName || designation.doctorKey,
-      seniorities: new Set([designation.seniority || "Unknown"]), events: [], eventMarkers: new Set(), coverageStarts: [], coverageEnds: [], membershipSources: new Set(["designation"]),
+      seniorities: new Set([facilityOverviewNormalizeSeniority(designation.seniority || "Unknown")]), events: [], eventMarkers: new Set(), coverageStarts: [], coverageEnds: [], membershipSources: new Set(["designation"]),
     });
   }
   for (const member of data.members || []) {
@@ -9038,7 +9097,7 @@ function renderFacilityOverviewStaffResults(data, term) {
       sourceType: member.sourceType, doctorKey: member.doctorKey, displayName: member.displayName,
       seniorities: new Set(), events: [], eventMarkers: new Set(), coverageStarts: [], coverageEnds: [], membershipSources: new Set(),
     };
-    if (member.seniority) entry.seniorities.add(member.seniority);
+    if (member.seniority) entry.seniorities.add(facilityOverviewNormalizeSeniority(member.seniority));
     if (member.coverageStart) entry.coverageStarts.push(member.coverageStart);
     if (member.coverageEnd && member.membershipSource !== "sms-continuity") entry.coverageEnds.push(member.coverageEnd);
     entry.membershipSources.add(member.membershipSource || "roster");
@@ -9047,7 +9106,7 @@ function renderFacilityOverviewStaffResults(data, term) {
   for (const row of data.events || []) {
     const key = `${row.sourceType}|${row.doctorKey}`;
     const entry = byPerson.get(key) || { sourceType: row.sourceType, doctorKey: row.doctorKey, displayName: row.displayName, seniorities: new Set(), events: [], eventMarkers: new Set(), coverageStarts: [], coverageEnds: [], membershipSources: new Set(["event"]) };
-    if (row.seniority) entry.seniorities.add(row.seniority);
+    if (row.seniority) entry.seniorities.add(facilityOverviewDetectedSeniority(row.event, row.seniority));
     const marker = `${row.event?.title || ""}|${row.event?.start || ""}|${row.event?.end || ""}|${row.event?.rawValue || ""}`;
     if (row.event && isRosterShiftEvent(row.event) && !isClinicalSupportEvent(row.event) && !entry.eventMarkers.has(marker)) {
       entry.eventMarkers.add(marker);
@@ -9059,10 +9118,15 @@ function renderFacilityOverviewStaffResults(data, term) {
   const panels = new Map();
   for (const person of byPerson.values()) {
     if (query && !person.displayName.toLocaleLowerCase().includes(query)) continue;
-    const grades = [...person.seniorities].filter(Boolean);
+    const grades = [...person.seniorities].map(facilityOverviewNormalizeSeniority).filter(Boolean);
     person.seniority = grades.sort((left, right) => facilityOverviewSeniorityRank(left) - facilityOverviewSeniorityRank(right))[0] || "Unknown";
     person.multipleGrades = new Set(grades).size > 1;
     person.designation = designations.get(`${person.sourceType}|${person.doctorKey}`) || null;
+    person.seniorityOverride = seniorityOverrides.get(`${person.sourceType}|${person.doctorKey}`) || null;
+    if (person.seniorityOverride && !person.seniorityOverride.useRosterSeniority) {
+      person.seniority = facilityOverviewNormalizeSeniority(person.seniorityOverride.seniority);
+      person.multipleGrades = false;
+    }
     if (!panels.has(person.sourceType)) panels.set(person.sourceType, []);
     panels.get(person.sourceType).push(person);
   }
@@ -9093,8 +9157,8 @@ function renderFacilityOverviewStaffResults(data, term) {
           ${expanded ? `<div class="facility-overview-staff-list">${staff.sort((left, right) => left.displayName.localeCompare(right.displayName)).map((person) => {
             const dates = person.events.map((event) => String(event.start || "").slice(0, 10)).filter(Boolean).sort();
             const activity = dates.length ? `${formatDate(dates[0])}${dates.length > 1 ? ` – ${formatDate(dates[dates.length - 1])}` : ""} · ${dates.length} shift${dates.length === 1 ? "" : "s"}` : "No working shifts recorded this term";
-            const name = renderFacilityOverviewStaffName(person, { canUseStaffActions, designation: person.designation });
-            return `<article class="facility-overview-staff-member">${name}${renderFacilityOverviewStaffActivity(person, activity)}${person.multipleGrades ? `<small>Multiple grades recorded</small>` : ""}</article>`;
+            const name = renderFacilityOverviewStaffName(person, { canUseStaffActions, designation: person.designation, seniority: person.seniority, termStart: formatDateKey(term.start) });
+            return `<article class="facility-overview-staff-member">${name}${renderFacilityOverviewStaffActivity(person, activity)}${renderFacilityOverviewStaffSeniorityStatus(person, term)}</article>`;
           }).join("")}</div>` : ""}
         </section>`;
       }).join("")}${previousStaff.length ? renderFacilityOverviewPreviousStaffSection(source, previousStaff, query, canUseStaffActions) : ""}</div>
@@ -9117,13 +9181,13 @@ function renderFacilityOverviewPreviousStaffSection(source, staff, query, canUse
   const expanded = query || facilityOverviewState.staffExpanded.has(key);
   return `<section class="facility-overview-staff-section facility-overview-previous-staff-section">
     <button type="button" class="facility-overview-staff-section-toggle" aria-expanded="${expanded}" data-facility-overview-staff-section="${escapeHtml(key)}"><span class="facility-overview-staff-section-title">Previous staff</span><span class="facility-overview-staff-section-count">(${staff.length})</span><span class="facility-overview-staff-section-chevron" aria-hidden="true"></span></button>
-    ${expanded ? `<div class="facility-overview-staff-list">${staff.sort((left, right) => left.displayName.localeCompare(right.displayName)).map((person) => `<article class="facility-overview-staff-member">${renderFacilityOverviewStaffName(person, { canUseStaffActions, designation: person.designation })}<span>No longer works for this ED</span></article>`).join("")}</div>` : ""}
+    ${expanded ? `<div class="facility-overview-staff-list">${staff.sort((left, right) => left.displayName.localeCompare(right.displayName)).map((person) => `<article class="facility-overview-staff-member">${renderFacilityOverviewStaffName(person, { canUseStaffActions, designation: person.designation, seniority: person.seniority, termStart: facilityOverviewState.staffTermStart })}<span>No longer works for this ED</span></article>`).join("")}</div>` : ""}
   </section>`;
 }
 
 function renderFacilityOverviewStaffName(person, options = {}) {
   const displayName = String(person?.displayName || person?.doctorKey || "Staff member");
-  const target = { doctorKey: person?.doctorKey || person?.key || "", displayName, sourceType: person?.sourceType || "" };
+  const target = { doctorKey: person?.doctorKey || person?.key || "", displayName, sourceType: person?.sourceType || "", seniority: facilityOverviewNormalizeSeniority(options.seniority || person?.seniority || "Unknown"), termStart: options.termStart || "" };
   if (options.directCalendar && canUseCreatorDoctorSwitcher()) {
     return `<button type="button" class="facility-overview-staff-calendar-link" data-facility-overview-open-staff-calendar="${escapeHtml(target.doctorKey)}" data-facility-overview-staff-display-name="${escapeHtml(displayName)}" data-facility-overview-staff-source="${escapeHtml(target.sourceType)}" aria-label="Open ${escapeHtml(displayName)}'s calendar">${escapeHtml(displayName)}</button>`;
   }
@@ -9131,7 +9195,10 @@ function renderFacilityOverviewStaffName(person, options = {}) {
   const menuKey = facilityOverviewStaffActionMenuKey(target);
   const menu = facilityOverviewState.staffActionMenu;
   const expanded = isViewingCreatorAccount() && menu?.key === menuKey;
-  return `<div class="facility-overview-staff-action"><button type="button" class="facility-overview-staff-calendar-link" data-facility-overview-open-working-together="${escapeHtml(target.doctorKey)}" data-facility-overview-staff-display-name="${escapeHtml(displayName)}" data-facility-overview-staff-source="${escapeHtml(target.sourceType)}" data-facility-overview-staff-menu="${escapeHtml(menuKey)}" data-facility-overview-staff-designation-id="${escapeHtml(options.designation?.id || "")}" aria-expanded="${expanded}" aria-haspopup="${isViewingCreatorAccount() ? "menu" : "false"}" aria-label="Find times working with ${escapeHtml(displayName)}">${escapeHtml(displayName)}</button>${expanded ? renderFacilityOverviewStaffActionMenu({ ...target, designation: options.designation }, menu) : ""}</div>`;
+  const seniorityMenuKey = facilityOverviewStaffSeniorityMenuKey(target);
+  const seniorityMenu = facilityOverviewState.staffSeniorityMenu;
+  const seniorityExpanded = isViewingCreatorAccount() && seniorityMenu?.key === seniorityMenuKey;
+  return `<div class="facility-overview-staff-action"><button type="button" class="facility-overview-staff-calendar-link" data-facility-overview-open-working-together="${escapeHtml(target.doctorKey)}" data-facility-overview-staff-display-name="${escapeHtml(displayName)}" data-facility-overview-staff-source="${escapeHtml(target.sourceType)}" data-facility-overview-staff-menu="${escapeHtml(menuKey)}" data-facility-overview-staff-key="${escapeHtml(target.doctorKey)}" data-facility-overview-staff-seniority="${escapeHtml(target.seniority)}" data-facility-overview-staff-term-start="${escapeHtml(target.termStart)}" data-facility-overview-staff-designation-id="${escapeHtml(options.designation?.id || "")}" aria-expanded="${expanded}" aria-haspopup="${isViewingCreatorAccount() ? "menu" : "false"}" aria-label="Find times working with ${escapeHtml(displayName)}">${escapeHtml(displayName)}</button>${expanded ? renderFacilityOverviewStaffActionMenu({ ...target, designation: options.designation }, menu) : ""}${seniorityExpanded ? renderFacilityOverviewStaffSeniorityMenu(target, seniorityMenu) : ""}</div>`;
 }
 
 function facilityOverviewStaffActionMenuKey({ doctorKey = "", displayName = "", sourceType = "" } = {}) {
@@ -9139,14 +9206,41 @@ function facilityOverviewStaffActionMenuKey({ doctorKey = "", displayName = "", 
 }
 
 function renderFacilityOverviewStaffActionMenu(target, menu) {
-  const attributes = `data-facility-overview-staff-display-name="${escapeHtml(target.displayName)}" data-facility-overview-staff-source="${escapeHtml(target.sourceType)}"`;
+  const attributes = `data-facility-overview-staff-display-name="${escapeHtml(target.displayName)}" data-facility-overview-staff-source="${escapeHtml(target.sourceType)}" data-facility-overview-staff-key="${escapeHtml(target.doctorKey)}" data-facility-overview-staff-seniority="${escapeHtml(target.seniority || "Unknown")}" data-facility-overview-staff-term-start="${escapeHtml(target.termStart || "")}"`;
   const left = Math.max(8, Number(menu?.x) || 8);
   const top = Math.max(8, Number(menu?.y) || 8);
   return `<div class="facility-overview-staff-action-menu" role="menu" data-facility-overview-staff-action-menu="${escapeHtml(menu?.key || "")}" style="--facility-overview-menu-left: ${left}px; --facility-overview-menu-top: ${top}px">
     <button type="button" role="menuitem" data-facility-overview-open-staff-calendar="${escapeHtml(target.doctorKey)}" ${attributes}>Person's calendar</button>
     <button type="button" role="menuitem" data-facility-overview-open-working-together="${escapeHtml(target.doctorKey)}" ${attributes}>When working together</button>
+    ${isViewingCreatorAccount() ? `<button type="button" role="menuitem" data-facility-overview-edit-staff-seniority data-facility-overview-staff-seniority-menu="${escapeHtml(facilityOverviewStaffSeniorityMenuKey(target))}" data-facility-overview-menu-x="${left}" data-facility-overview-menu-y="${top}" ${attributes}>Edit designation</button>` : ""}
     ${target.designation?.designation === "previous_staff" ? `<button type="button" role="menuitem" data-facility-overview-clear-staff-designation="${escapeHtml(target.designation.id)}">Restore to current staff</button>` : ""}
   </div>`;
+}
+
+function facilityOverviewStaffSeniorityMenuKey(person) {
+  return `${facilityOverviewStaffActionMenuKey(person)}|seniority|${String(person?.termStart || facilityOverviewState.staffTermStart || "")}`;
+}
+
+function renderFacilityOverviewStaffSeniorityMenu(person, menu) {
+  const attributes = `data-facility-overview-staff-source="${escapeHtml(person.sourceType)}" data-facility-overview-staff-key="${escapeHtml(person.doctorKey)}" data-facility-overview-staff-display-name="${escapeHtml(person.displayName)}" data-facility-overview-staff-term-start="${escapeHtml(person.termStart || facilityOverviewState.staffTermStart || "")}"`;
+  const left = Math.max(8, Number(menu?.x) || 8);
+  const top = Math.max(8, Number(menu?.y) || 8);
+  const choices = ["SMS", "CMO", "Senior Registrar", "Transitional/Intermediate Registrar", "Junior Registrar", "HMO", "Intern", "NP", "Physio", "Unknown"];
+  return `<div class="facility-overview-staff-action-menu" role="menu" data-facility-overview-staff-seniority-action-menu="${escapeHtml(menu?.key || "")}" style="--facility-overview-menu-left: ${left}px; --facility-overview-menu-top: ${top}px">${choices.map((seniority) => `<button type="button" role="menuitem" data-facility-overview-set-staff-seniority="${escapeHtml(seniority)}" ${attributes}>${escapeHtml(seniority)}</button>`).join("")}<button type="button" role="menuitem" data-facility-overview-set-staff-seniority="" data-facility-overview-use-roster-seniority="true" ${attributes}>Use roster designation</button></div>`;
+}
+
+function renderFacilityOverviewStaffSeniorityStatus(person, term) {
+  const label = person.multipleGrades
+    ? "Multiple grades recorded"
+    : person.seniorityOverride && !person.seniorityOverride.useRosterSeniority
+      ? `Creator-set ${facilityOverviewCompactSeniorityLabel(person.seniority)}`
+      : facilityOverviewCompactSeniorityLabel(person.seniority);
+  if (!isViewingCreatorAccount()) return person.multipleGrades || person.seniorityOverride ? `<small>${escapeHtml(label)}</small>` : "";
+  const target = { ...person, termStart: formatDateKey(term.start) };
+  const key = facilityOverviewStaffSeniorityMenuKey(target);
+  const menu = facilityOverviewState.staffSeniorityMenu;
+  const expanded = menu?.key === key;
+  return `<div class="facility-overview-staff-seniority-action"><button type="button" class="facility-overview-staff-seniority-trigger" data-facility-overview-staff-seniority-menu="${escapeHtml(key)}" data-facility-overview-staff-source="${escapeHtml(person.sourceType)}" data-facility-overview-staff-key="${escapeHtml(person.doctorKey)}" data-facility-overview-staff-display-name="${escapeHtml(person.displayName)}" data-facility-overview-staff-seniority="${escapeHtml(person.seniority)}" data-facility-overview-staff-term-start="${escapeHtml(formatDateKey(term.start))}" aria-haspopup="menu" aria-expanded="${expanded}">${escapeHtml(label)}</button>${expanded ? renderFacilityOverviewStaffSeniorityMenu(target, menu) : ""}</div>`;
 }
 
 function facilityOverviewStaffDesignationMenuKey(person, designation = null) {
@@ -9280,6 +9374,13 @@ function closeFacilityOverviewStaffDesignationMenu() {
   renderFacilityOverview();
 }
 
+function closeFacilityOverviewStaffSeniorityMenu() {
+  if (!facilityOverviewState.staffSeniorityMenu) return;
+  facilityOverviewState.staffSeniorityMenu = null;
+  refreshFacilityOverviewStaffActionContent();
+  renderFacilityOverview();
+}
+
 async function setFacilityOverviewStaffDesignation({ designation = "", sourceType = "", doctorKey = "", displayName = "", seniority = "" } = {}) {
   if (!isViewingCreatorAccount() || !designation || !sourceType || !doctorKey) return;
   const term = australianTermForDate(parseDateOnly(facilityOverviewState.staffTermStart || formatDateKey(new Date())));
@@ -9318,6 +9419,28 @@ async function clearFacilityOverviewStaffDesignation(designationId) {
     await loadFacilityOverviewStaff();
   } catch (error) {
     setStatus(error.message || "Could not remove the staff designation.", true);
+  }
+}
+
+async function setFacilityOverviewStaffSeniorityOverride({ sourceType = "", doctorKey = "", displayName = "", seniority = "", useRosterSeniority = false, termStart = "" } = {}) {
+  if (!isViewingCreatorAccount() || !sourceType || !doctorKey) return;
+  const effectiveTermStart = termStart || formatDateKey(australianTermForDate(parseDateOnly(facilityOverviewState.tab === "on-shift" ? facilityOverviewState.date : facilityOverviewState.staffTermStart)).start);
+  closeFacilityOverviewStaffActionMenu();
+  closeFacilityOverviewStaffSeniorityMenu();
+  try {
+    const response = await fetch("/api/state", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "setFacilityStaffSeniorityOverride", email: authUserEmail || currentUserEmail, password: authUserPassword || currentUserPassword,
+        facilityKey: sourceType, doctorKey, displayName, seniority, useRosterSeniority, termStart: effectiveTermStart,
+      }),
+    });
+    await readJsonResponse(response, "Could not save the staff designation.");
+    setStatus(useRosterSeniority ? `${displayName} will use the roster designation from this term.` : `${displayName} is now designated ${seniority} from this term.`);
+    if (facilityOverviewState.tab === "on-shift") await loadFacilityOverviewOnShift();
+    else await loadFacilityOverviewStaff();
+  } catch (error) {
+    setStatus(error.message || "Could not save the staff designation.", true);
   }
 }
 
@@ -9370,8 +9493,37 @@ function renderFacilityOverviewStream(events, options = {}) {
 }
 
 function facilityOverviewSeniorityRank(value) {
-  const index = FACILITY_OVERVIEW_SENIORITY_ORDER.indexOf(String(value || "Unknown").trim());
+  const index = FACILITY_OVERVIEW_SENIORITY_ORDER.indexOf(facilityOverviewNormalizeSeniority(value));
   return index >= 0 ? index : FACILITY_OVERVIEW_SENIORITY_ORDER.length;
+}
+
+function facilityOverviewNormalizeSeniority(value) {
+  const seniority = String(value || "").trim();
+  const normalized = seniority.toLowerCase();
+  if (normalized === "sr" || normalized.includes("senior registrar")) return "Senior Registrar";
+  if (normalized === "tr" || normalized === "ir" || normalized.includes("transitional") || normalized.includes("intermediate")) return "Transitional/Intermediate Registrar";
+  if (normalized === "jr" || normalized.includes("junior registrar")) return "Junior Registrar";
+  if (normalized === "enp" || normalized === "np" || normalized.includes("nurse practitioner")) return "NP";
+  if (normalized === "amp" || normalized === "physio" || normalized.includes("physiotherapist")) return "Physio";
+  if (normalized === "sms" || normalized === "cmo" || normalized === "hmo") return normalized.toUpperCase();
+  if (normalized === "intern" || normalized === "i") return "Intern";
+  if (!seniority || normalized === "unknown") return "Unknown";
+  return seniority;
+}
+
+function facilityOverviewDetectedSeniority(event, seniority = "") {
+  const text = `${event?.title || ""} ${event?.rawValue || ""} ${event?.seniority || ""} ${seniority || ""}`.toLowerCase();
+  if (text.includes("physiotherapist") || /\bphysio\b/.test(text)) return "Physio";
+  if (text.includes("nurse practitioner") || /\b(?:enp|np|d1)\b/.test(text)) return "NP";
+  return facilityOverviewNormalizeSeniority(seniority || event?.seniority || "Unknown");
+}
+
+function facilityOverviewCompactSeniorityLabel(value) {
+  const seniority = facilityOverviewNormalizeSeniority(value);
+  if (seniority === "Senior Registrar") return "SR";
+  if (seniority === "Transitional/Intermediate Registrar") return "TR";
+  if (seniority === "Junior Registrar") return "JR";
+  return seniority;
 }
 
 function knownInsightsAccessForEmail(email) {

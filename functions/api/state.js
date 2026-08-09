@@ -39,6 +39,7 @@ import {
   queryFacilityOverviewStaff,
   setFacilityStaffDesignation,
   clearFacilityStaffDesignation,
+  setFacilityStaffSeniorityOverride,
   reconcileFacilityStaffDesignationsForRosterFile,
   queryOverlapDoctorsFromEvents,
   queryClaimedAccounts,
@@ -1455,6 +1456,29 @@ export async function onRequestPost(context) {
       if (!designation) return Response.json({ error: "Staff designation was not found." }, { status: 404 });
       scheduleSnapshotWarmupForSourceTypes(context, [designation.sourceType].filter(Boolean), { reason: "clearFacilityStaffDesignation" });
       return Response.json({ ok: true, designation });
+    }
+
+    if (action === "setFacilityStaffSeniorityOverride") {
+      if ((account.role !== "creator" && account.role !== "owner") || targetEmail) {
+        return Response.json({ error: "Creator access on the Creator profile is required." }, { status: 403 });
+      }
+      try {
+        const termStart = String(body?.termStart || "").slice(0, 10);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(termStart)) return Response.json({ error: "A valid medical term is required." }, { status: 400 });
+        const override = await setFacilityStaffSeniorityOverride(context.env.ROSTER_DB, {
+          sourceType: body?.facilityKey,
+          doctorKey: normalizeRosterName(body?.doctorKey || ""),
+          displayName: body?.displayName,
+          seniority: body?.seniority,
+          useRosterSeniority: body?.useRosterSeniority === true,
+          termStart,
+          createdBy: account.record?.email || email,
+        });
+        scheduleSnapshotWarmupForSourceTypes(context, [override?.sourceType].filter(Boolean), { reason: "facilityStaffSeniorityOverride" });
+        return Response.json({ ok: true, override });
+      } catch (error) {
+        return Response.json({ error: error?.message || "Could not save the staff designation." }, { status: 400 });
+      }
     }
 
     if (action === "queryFacilityOverviewOnShift") {

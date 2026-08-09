@@ -92,6 +92,24 @@ async function ensureCalendarSchemaUncached(db) {
   `).run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_facility_staff_designations_active ON facility_staff_designations (source_type, doctor_key, active, term_start)").run();
   await db.prepare(`
+    CREATE TABLE IF NOT EXISTS facility_staff_seniority_overrides (
+      id TEXT PRIMARY KEY,
+      source_type TEXT NOT NULL,
+      doctor_key TEXT NOT NULL,
+      display_name TEXT NOT NULL DEFAULT '',
+      seniority TEXT NOT NULL DEFAULT '',
+      use_roster_seniority INTEGER NOT NULL DEFAULT 0,
+      term_start TEXT NOT NULL,
+      active INTEGER NOT NULL DEFAULT 1,
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT '',
+      cleared_at TEXT NOT NULL DEFAULT '',
+      cleared_reason TEXT NOT NULL DEFAULT ''
+    )
+  `).run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_facility_staff_seniority_overrides_active ON facility_staff_seniority_overrides (source_type, doctor_key, active, term_start)").run();
+  await db.prepare(`
     CREATE TABLE IF NOT EXISTS roster_events (
       id TEXT PRIMARY KEY,
       file_id TEXT NOT NULL,
@@ -903,6 +921,121 @@ const FACILITY_STAFF_DESIGNATION_LABELS = {
   personal_leave: "Personal Leave",
   previous_staff: "No longer works for this ED",
 };
+
+const FACILITY_STAFF_SENIORITIES = new Set([
+  "SMS",
+  "CMO",
+  "Senior Registrar",
+  "Transitional/Intermediate Registrar",
+  "Junior Registrar",
+  "HMO",
+  "Intern",
+  "NP",
+  "Physio",
+  "Unknown",
+]);
+
+export async function setFacilityStaffSeniorityOverride(db, input = {}) {
+  if (!db?.prepare) throw new Error("Roster database is unavailable.");
+  await ensureCalendarSchema(db);
+  const sourceType = normalizeSourceType(input.sourceType || input.facilityKey);
+  const doctorKey = String(input.doctorKey || "").trim();
+  const termStart = datePart(input.termStart);
+  const useRosterSeniority = input.useRosterSeniority === true;
+  const seniority = useRosterSeniority ? "" : normalizeFacilityStaffSeniority(input.seniority);
+  if (!sourceType || !doctorKey || !termStart || (!useRosterSeniority && !FACILITY_STAFF_SENIORITIES.has(seniority))) {
+    throw new Error("A valid ED staff seniority is required.");
+  }
+  const id = facilityStaffSeniorityOverrideId(sourceType, doctorKey, termStart);
+  const now = new Date().toISOString();
+  await db.prepare(`
+    INSERT INTO facility_staff_seniority_overrides (
+      id, source_type, doctor_key, display_name, seniority, use_roster_seniority,
+      term_start, active, created_by, created_at, updated_at, cleared_at, cleared_reason
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, '', '')
+    ON CONFLICT(id) DO UPDATE SET
+      display_name = excluded.display_name,
+      seniority = excluded.seniority,
+      use_roster_seniority = excluded.use_roster_seniority,
+      active = 1,
+      created_by = excluded.created_by,
+      created_at = excluded.created_at,
+      updated_at = excluded.updated_at,
+      cleared_at = '',
+      cleared_reason = ''
+  `).bind(
+    id,
+    sourceType,
+    doctorKey,
+    String(input.displayName || "").trim(),
+    seniority,
+    useRosterSeniority ? 1 : 0,
+    termStart,
+    normalizeEmail(input.createdBy),
+    now,
+    now,
+  ).run();
+  return loadFacilityStaffSeniorityOverride(db, id);
+}
+
+export async function queryFacilityStaffSeniorityOverrides(db, options = {}) {
+  if (!db?.prepare) return [];
+  await ensureCalendarSchema(db);
+  const sourceType = normalizeSourceType(options.sourceType || options.facilityKey || "");
+  const termStart = datePart(options.termStart);
+  if (!termStart) return [];
+  const sourceSql = sourceType ? "AND source_type = ?" : "";
+  const bindings = sourceType ? [termStart, sourceType] : [termStart];
+  const rows = await db.prepare(`
+    SELECT *
+    FROM facility_staff_seniority_overrides
+    WHERE active = 1 AND term_start <= ? ${sourceSql}
+    ORDER BY source_type, doctor_key, term_start DESC
+  `).bind(...bindings).all();
+  const latest = new Map();
+  for (const row of rows.results || []) {
+    const override = facilityStaffSeniorityOverrideFromRow(row);
+    const key = `${override?.sourceType || ""}|${override?.doctorKey || ""}`;
+    if (override && !latest.has(key)) latest.set(key, override);
+  }
+  return [...latest.values()];
+}
+
+async function loadFacilityStaffSeniorityOverride(db, id) {
+  const row = await db.prepare("SELECT * FROM facility_staff_seniority_overrides WHERE id = ?").bind(String(id || "")).first();
+  return facilityStaffSeniorityOverrideFromRow(row);
+}
+
+function facilityStaffSeniorityOverrideId(sourceType, doctorKey, termStart) {
+  return `facility-seniority:${sourceType}:${String(doctorKey).trim()}:${termStart}`;
+}
+
+function facilityStaffSeniorityOverrideFromRow(row) {
+  if (!row?.id) return null;
+  const useRosterSeniority = Number(row.use_roster_seniority || 0) === 1;
+  const seniority = normalizeFacilityStaffSeniority(row.seniority);
+  if (!useRosterSeniority && !FACILITY_STAFF_SENIORITIES.has(seniority)) return null;
+  return {
+    id: String(row.id), sourceType: normalizeSourceType(row.source_type), doctorKey: String(row.doctor_key || "").trim(),
+    displayName: String(row.display_name || "").trim(), seniority, useRosterSeniority,
+    termStart: datePart(row.term_start), active: Number(row.active || 0) === 1,
+    createdAt: String(row.created_at || ""), updatedAt: String(row.updated_at || ""),
+  };
+}
+
+function normalizeFacilityStaffSeniority(value) {
+  const seniority = String(value || "").trim();
+  const normalized = seniority.toLowerCase();
+  if (normalized === "sr" || normalized.includes("senior registrar")) return "Senior Registrar";
+  if (normalized === "tr" || normalized === "ir" || normalized.includes("transitional") || normalized.includes("intermediate")) return "Transitional/Intermediate Registrar";
+  if (normalized === "jr" || normalized.includes("junior registrar")) return "Junior Registrar";
+  if (normalized === "enp" || normalized === "np" || normalized.includes("nurse practitioner")) return "NP";
+  if (normalized === "amp" || normalized === "physio" || normalized.includes("physiotherapist")) return "Physio";
+  if (normalized === "sms" || normalized === "cmo" || normalized === "hmo") return normalized.toUpperCase();
+  if (normalized === "intern" || normalized === "i") return "Intern";
+  if (normalized === "unknown") return "Unknown";
+  return seniority;
+}
 
 export async function setFacilityStaffDesignation(db, input = {}) {
   if (!db?.prepare) throw new Error("Roster database is unavailable.");
@@ -2877,6 +3010,10 @@ export async function queryFacilityOverviewOnShift(db, options = {}) {
       AND roster_events.start_date = ?
     ORDER BY roster_events.start_ts, roster_events.display_name, roster_events.title
   `).bind(facilityKey, date).all();
+  const seniorityOverrides = new Map((await queryFacilityStaffSeniorityOverrides(db, {
+    sourceType: facilityKey,
+    termStart: australianTermStartForDate(date),
+  })).map((override) => [`${override.sourceType}|${override.doctorKey}`, override]));
   return (rows.results || [])
     .map((row) => ({
       doctorKey: String(row.doctor_key || "").trim(),
@@ -2885,6 +3022,11 @@ export async function queryFacilityOverviewOnShift(db, options = {}) {
       seniority: String(row.seniority || "").trim(),
       event: parseEvent(row.event_json),
     }))
+    .map((row) => {
+      const override = seniorityOverrides.get(`${row.sourceType}|${row.doctorKey}`);
+      if (!override || override.useRosterSeniority) return row;
+      return { ...row, seniority: override.seniority, seniorityOverride: override, event: { ...row.event, seniority: override.seniority } };
+    })
     .filter((row) => row.doctorKey && row.displayName && row.event);
 }
 
@@ -2960,6 +3102,7 @@ export async function queryFacilityOverviewStaff(db, options = {}) {
     if (entry.doctorKey && entry.displayName && !currentMembership.has(`${entry.sourceType}|${entry.doctorKey}`)) memberRows.push(entry);
   }
   const designations = await queryFacilityStaffDesignations(db, { sourceType: facilityKey, termStart, termEnd });
+  const seniorityOverrides = await queryFacilityStaffSeniorityOverrides(db, { sourceType: facilityKey, termStart });
   return {
     members: memberRows,
     events: (events.results || []).map((row) => ({
@@ -2968,6 +3111,7 @@ export async function queryFacilityOverviewStaff(db, options = {}) {
     })).filter((row) => row.doctorKey && row.event),
     coverage: (coverage.results || []).map((row) => ({ sourceType: normalizeSourceType(row.source_type), startDate: String(row.start_date || ""), endDate: String(row.end_date || "") })),
     designations,
+    seniorityOverrides,
   };
 }
 
@@ -3386,6 +3530,22 @@ function normalizeEmail(value) {
 
 function datePart(value) {
   return String(value || "").slice(0, 10);
+}
+
+function australianTermStartForDate(value) {
+  const date = new Date(`${datePart(value)}T12:00:00Z`);
+  if (Number.isNaN(date.getTime())) return "";
+  const year = date.getUTCFullYear();
+  const candidates = [[year, 0], [year, 3], [year, 6], [year, 9], [year - 1, 9]];
+  for (const [candidateYear, month] of candidates) {
+    const start = new Date(Date.UTC(candidateYear, month, 1, 12, 0, 0));
+    const day = start.getUTCDay();
+    start.setUTCDate(start.getUTCDate() + (day === 0 ? 1 : day === 1 ? 0 : 8 - day));
+    const end = new Date(start);
+    end.setUTCDate(end.getUTCDate() + 91);
+    if (date >= start && date < end) return start.toISOString().slice(0, 10);
+  }
+  return "";
 }
 
 function parseEvent(value) {
