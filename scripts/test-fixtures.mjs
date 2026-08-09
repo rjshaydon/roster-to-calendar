@@ -313,6 +313,27 @@ assert.match(styleSource, /#facilityOverviewBody \{[\s\S]*?overflow-y: auto;/, "
 assert.match(appSource, /facilityOverviewSection\?\.addEventListener\("scroll"[\s\S]*?scroller\.scrollTop > 28/, "At a glance should compact its persistent header from results scrolling");
 assert.match(appSource, /facilityOverviewButton\.textContent = open \? "My calendar" : "At a glance"/, "The sidebar At a glance control should become My calendar while the overview is open");
 assert.match(appSource, /addEventListener\("input"[\s\S]*?refreshFacilityOverviewStaffContent\(\);[\s\S]*?renderFacilityOverviewStaffBody\(\);/, "ED staff search should refresh results without replacing its focused input");
+assert.match(
+  appSource.match(/function renderFacilityOverviewOnShiftResults[\s\S]*?async function loadFacilityOverviewStaff/)?.[0] || "",
+  /canUseCreatorDoctorSwitcher\(\)[\s\S]*renderFacilityOverviewStaffName\(person[\s\S]*renderFacilityOverviewSeniorityLink\(person\.seniority/,
+  "On shift should offer Creator calendar links and seniority drill-throughs",
+);
+assert.match(
+  appSource.match(/function renderFacilityOverviewTogetherMatchCards[\s\S]*?function facilityOverviewFormatOverlap/)?.[0] || "",
+  /renderFacilityOverviewStaffName[\s\S]*renderFacilityOverviewSeniorityLink\(person\.event\?\.seniority/,
+  "Working together results should offer individual calendar links and seniority drill-throughs",
+);
+assert.match(
+  appSource.match(/async function openFacilityOverviewStaffSection[\s\S]*?function focusFacilityOverviewStaffSection/)?.[0] || "",
+  /facilityOverviewState\.tab = "staff"[\s\S]*facilityOverviewState\.facilityKey = source[\s\S]*staffExpanded = new Set\(\[sectionKey\]\)[\s\S]*openFacilityOverview\(\{ preserveStaffTerm: true \}\)/,
+  "A seniority link should preserve its ED and term while opening the requested ED staff accordion",
+);
+assert.match(
+  appSource.match(/function facilityOverviewDoctorOptionFor[\s\S]*?async function openFacilityOverviewStaffSection/)?.[0] || "",
+  /doctor\?\.aliases[\s\S]*normalizedDoctorSourceTypes[\s\S]*switchDoctorSelection\(doctor\.key/,
+  "At a glance calendar links should resolve roster aliases through the Creator switcher",
+);
+assert.match(styleSource, /\.facility-overview-seniority-link[\s\S]*text-decoration: underline;/, "Clickable seniority labels should have a visible link treatment");
 assert.match(styleSource, /#facilityOverviewBody \{[\s\S]*?height: 100%;[\s\S]*?max-height: 100%;[\s\S]*?overflow-y: auto;/, "Working together content should scroll within the bounded overview body");
 assert.match(styleSource, /#facilityOverviewBody\.is-working-together > \.facility-overview-together \{[\s\S]*?height: 100%;[\s\S]*?overflow-y: auto;/, "Working together should use an explicit full-height tab scroller");
 assert.match(stateSource, /action === "downloadFindmyshiftExceptions"[\s\S]*findmyshiftDandenongAssignmentExceptions[\s\S]*findmyshiftExceptionCsv/, "FindMyShift exception downloads must be creator-only server-side report reads");

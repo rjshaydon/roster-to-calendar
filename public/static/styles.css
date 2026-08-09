@@ -929,7 +929,8 @@ input[type="color"] {
   padding: 11px 12px;
 }
 
-.facility-overview-staff-card strong {
+.facility-overview-staff-card strong,
+.facility-overview-staff-card .facility-overview-staff-calendar-link {
   font-size: 0.92rem;
   line-height: 1.2;
 }
@@ -1057,6 +1058,25 @@ input[type="color"] {
 
 .facility-overview-staff-calendar-link:hover,
 .facility-overview-staff-calendar-link:focus-visible {
+  color: var(--accent);
+  text-decoration-color: currentColor;
+}
+
+.facility-overview-seniority-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: rgba(20, 34, 42, 0.3);
+  text-underline-offset: 3px;
+}
+
+.facility-overview-seniority-link:hover,
+.facility-overview-seniority-link:focus-visible {
   color: var(--accent);
   text-decoration-color: currentColor;
 }
@@ -1383,6 +1403,10 @@ input[type="color"] {
 
 .facility-overview-match-pair {
   color: var(--accent-strong, #4b3bd1);
+}
+
+.facility-overview-match-pair .facility-overview-staff-calendar-link {
+  color: inherit;
 }
 
 .facility-overview-overlap-time {
