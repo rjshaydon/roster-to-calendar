@@ -315,13 +315,23 @@ assert.match(appSource, /facilityOverviewButton\.textContent = open \? "My calen
 assert.match(appSource, /addEventListener\("input"[\s\S]*?refreshFacilityOverviewStaffContent\(\);[\s\S]*?renderFacilityOverviewStaffBody\(\);/, "ED staff search should refresh results without replacing its focused input");
 assert.match(
   appSource.match(/function renderFacilityOverviewOnShiftResults[\s\S]*?async function loadFacilityOverviewStaff/)?.[0] || "",
-  /canUseCreatorDoctorSwitcher\(\)[\s\S]*renderFacilityOverviewStaffName\(person[\s\S]*renderFacilityOverviewSeniorityLink\(person\.seniority/,
-  "On shift should offer Creator calendar links and seniority drill-throughs",
+  /canUseFacilityOverview\(\)[\s\S]*renderFacilityOverviewStaffName\(person[\s\S]*renderFacilityOverviewSeniorityLink\(person\.seniority/,
+  "On shift should offer staff actions to At a glance users and seniority drill-throughs",
 );
 assert.match(
   appSource.match(/function renderFacilityOverviewTogetherMatchCards[\s\S]*?function facilityOverviewFormatOverlap/)?.[0] || "",
-  /renderFacilityOverviewStaffName[\s\S]*renderFacilityOverviewSeniorityLink\(person\.event\?\.seniority/,
-  "Working together results should offer individual calendar links and seniority drill-throughs",
+  /canUseCreatorDoctorSwitcher\(\)[\s\S]*directCalendar: canOpenStaffCalendars[\s\S]*renderFacilityOverviewSeniorityLink\(person\.event\?\.seniority/,
+  "Working together results should retain direct Creator calendar links and seniority drill-throughs",
+);
+assert.match(
+  appSource.match(/function renderFacilityOverviewStaffName[\s\S]*?function renderFacilityOverviewSeniorityLink/)?.[0] || "",
+  /data-facility-overview-staff-actions[\s\S]*renderFacilityOverviewStaffActionMenu[\s\S]*Person's calendar[\s\S]*When working together/,
+  "At a glance staff names should present the contextual calendar and Working together actions",
+);
+assert.match(
+  appSource.match(/function openFacilityOverviewWorkingTogether[\s\S]*?function focusFacilityOverviewStaffActionMenu/)?.[0] || "",
+  /facilityOverviewState\.tab = "together"[\s\S]*togetherStaffKeys = \[selectedPerson\.identity, viewer\.identity\]/,
+  "Working together should prefill the clicked staff member and the active viewer",
 );
 assert.match(
   appSource.match(/async function openFacilityOverviewStaffSection[\s\S]*?function focusFacilityOverviewStaffSection/)?.[0] || "",

@@ -1062,6 +1062,45 @@ input[type="color"] {
   text-decoration-color: currentColor;
 }
 
+.facility-overview-staff-action {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+}
+
+.facility-overview-staff-action-menu {
+  position: absolute;
+  z-index: 4;
+  top: calc(100% + 6px);
+  left: 0;
+  display: grid;
+  min-width: 190px;
+  padding: 6px;
+  border: 1px solid rgba(20, 34, 42, 0.16);
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 12px 28px rgba(20, 34, 42, 0.18);
+}
+
+.facility-overview-staff-action-menu button {
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.facility-overview-staff-action-menu button:hover,
+.facility-overview-staff-action-menu button:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
 .facility-overview-seniority-link {
   padding: 0;
   border: 0;

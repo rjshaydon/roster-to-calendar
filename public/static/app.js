@@ -304,7 +304,7 @@ let currentInsightsEnabled = currentUserRole === "creator";
 let currentFacilityOverviewEnabled = currentUserRole === "creator";
 let facilityOverviewState = {
   tab: "on-shift", date: formatDateKey(new Date()), facilityKey: "", includeClinicalSupport: false, requestId: 0,
-  staffTermStart: formatDateKey(australianTermForDate(new Date()).start), staffTerms: [], staffContent: "", staffData: null, staffQuery: "", staffExpanded: new Set(), staffFocusSection: "",
+  staffTermStart: formatDateKey(australianTermForDate(new Date()).start), staffTerms: [], staffContent: "", staffData: null, staffQuery: "", staffExpanded: new Set(), staffFocusSection: "", staffActionMenu: "",
   togetherStaffKeys: ["", ""], togetherRangeMode: "term",
   togetherTermStart: formatDateKey(australianTermForDate(new Date()).start),
   togetherFrom: formatDateKey(australianTermForDate(new Date()).start),
@@ -568,12 +568,29 @@ facilityOverviewSection?.addEventListener("click", (event) => {
       void loadFacilityOverviewStaff();
     }
   }
+  const staffActionToggle = event.target.closest("[data-facility-overview-staff-actions]");
+  if (staffActionToggle) {
+    const key = staffActionToggle.dataset.facilityOverviewStaffActions || "";
+    facilityOverviewState.staffActionMenu = facilityOverviewState.staffActionMenu === key ? "" : key;
+    renderFacilityOverview();
+    if (facilityOverviewState.staffActionMenu) focusFacilityOverviewStaffActionMenu();
+    return;
+  }
   const staffCalendar = event.target.closest("[data-facility-overview-open-staff-calendar]");
   if (staffCalendar) {
     void openFacilityOverviewStaffCalendar({
       doctorKey: staffCalendar.dataset.facilityOverviewOpenStaffCalendar || "",
       displayName: staffCalendar.dataset.facilityOverviewStaffDisplayName || "",
       sourceType: staffCalendar.dataset.facilityOverviewStaffSource || "",
+    });
+    return;
+  }
+  const workingTogether = event.target.closest("[data-facility-overview-open-working-together]");
+  if (workingTogether) {
+    openFacilityOverviewWorkingTogether({
+      doctorKey: workingTogether.dataset.facilityOverviewOpenWorkingTogether || "",
+      displayName: workingTogether.dataset.facilityOverviewStaffDisplayName || "",
+      sourceType: workingTogether.dataset.facilityOverviewStaffSource || "",
     });
     return;
   }
@@ -8666,10 +8683,10 @@ function renderFacilityOverviewTogetherMatchCards(matches, options = {}) {
   const canOpenStaffCalendars = canUseCreatorDoctorSwitcher();
   return `<div class="facility-overview-together-match-list">${matches.map((match) => `
     <article class="facility-overview-together-match">
-      ${options.showPair ? `<div class="facility-overview-match-pair">${match.people.map((person, index) => `${index ? `<span aria-hidden="true"> + </span>` : ""}${renderFacilityOverviewStaffName({ ...person.doctor, sourceType: match.facility }, { canOpenCalendar: canOpenStaffCalendars })}`).join("")}</div>` : ""}
+      ${options.showPair ? `<div class="facility-overview-match-pair">${match.people.map((person, index) => `${index ? `<span aria-hidden="true"> + </span>` : ""}${renderFacilityOverviewStaffName({ ...person.doctor, sourceType: match.facility }, { directCalendar: canOpenStaffCalendars })}`).join("")}</div>` : ""}
       <div class="facility-overview-together-match-date"><time datetime="${escapeHtml(formatDateKey(match.start))}"><strong>${escapeHtml(new Intl.DateTimeFormat("en-AU", { weekday: "short" }).format(match.start))}</strong><span>${escapeHtml(formatDate(formatDateKey(match.start)))}</span></time><span class="facility-overview-site-pill">${escapeHtml(displaySourceCode(match.facility))}</span></div>
       <span class="facility-overview-overlap-time">Overlap ${escapeHtml(facilityOverviewFormatOverlap(match.start, match.end))}</span>
-      <div class="facility-overview-together-match-people">${match.people.map((person) => `<div>${renderFacilityOverviewStaffName({ ...person.doctor, sourceType: match.facility }, { canOpenCalendar: canOpenStaffCalendars })}<span>${escapeHtml(renderFacilityOverviewStream([person.event], { includeTimes: true }) || "Rostered shift")}${renderFacilityOverviewSeniorityLink(person.event?.seniority, { sourceType: match.facility, date: formatDateKey(match.start) })}</span></div>`).join("")}</div>
+      <div class="facility-overview-together-match-people">${match.people.map((person) => `<div>${renderFacilityOverviewStaffName({ ...person.doctor, sourceType: match.facility }, { directCalendar: canOpenStaffCalendars })}<span>${escapeHtml(renderFacilityOverviewStream([person.event], { includeTimes: true }) || "Rostered shift")}${renderFacilityOverviewSeniorityLink(person.event?.seniority, { sourceType: match.facility, date: formatDateKey(match.start) })}</span></div>`).join("")}</div>
     </article>
   `).join("")}</div>`;
 }
@@ -8711,7 +8728,7 @@ async function loadFacilityOverviewOnShift() {
 }
 
 function renderFacilityOverviewOnShiftResults(rows) {
-  const canOpenStaffCalendars = canUseCreatorDoctorSwitcher();
+  const canUseStaffActions = canUseFacilityOverview();
   const people = new Map();
   for (const row of rows) {
     const event = row?.event;
@@ -8755,7 +8772,7 @@ function renderFacilityOverviewOnShiftResults(rows) {
   return `${["AM", "PM", "Night"].filter((period) => groups.has(period)).map((period) => `
     <section class="facility-overview-period"><h3>${period}</h3><div class="facility-overview-staff-grid">${groups.get(period).map((person) => `
       <article class="issue-card facility-overview-staff-card${person.isSwing ? " is-swing" : ""}">
-        ${renderFacilityOverviewStaffName(person, { canOpenCalendar: canOpenStaffCalendars })}
+        ${renderFacilityOverviewStaffName(person, { canUseStaffActions })}
         <span class="facility-overview-shift-detail">
           <span class="facility-overview-stream">${escapeHtml(renderFacilityOverviewStream(person.events, { includeTimes: person.isSwing }))}</span>${renderFacilityOverviewSeniorityLink(person.seniority, { sourceType: person.sourceType, date: facilityOverviewState.date })}
         </span>
@@ -8819,7 +8836,7 @@ function facilityOverviewTermsFromCoverage(coverage) {
 }
 
 function renderFacilityOverviewStaffResults(data, term) {
-  const canOpenStaffCalendars = canUseCreatorDoctorSwitcher();
+  const canUseStaffActions = canUseFacilityOverview();
   const byPerson = new Map();
   for (const member of data.members || []) {
     const key = `${member.sourceType}|${member.doctorKey}`;
@@ -8875,7 +8892,7 @@ function renderFacilityOverviewStaffResults(data, term) {
           ${expanded ? `<div class="facility-overview-staff-list">${staff.sort((left, right) => left.displayName.localeCompare(right.displayName)).map((person) => {
             const dates = person.events.map((event) => String(event.start || "").slice(0, 10)).filter(Boolean).sort();
             const activity = dates.length ? `${formatDate(dates[0])}${dates.length > 1 ? ` – ${formatDate(dates[dates.length - 1])}` : ""} · ${dates.length} shift${dates.length === 1 ? "" : "s"}` : "No working shifts recorded this term";
-            const name = renderFacilityOverviewStaffName(person, { canOpenCalendar: canOpenStaffCalendars });
+            const name = renderFacilityOverviewStaffName(person, { canUseStaffActions });
             return `<article class="facility-overview-staff-member">${name}<span>${escapeHtml(activity)}</span>${person.multipleGrades ? `<small>Multiple grades recorded</small>` : ""}</article>`;
           }).join("")}</div>` : ""}
         </section>`;
@@ -8886,8 +8903,26 @@ function renderFacilityOverviewStaffResults(data, term) {
 
 function renderFacilityOverviewStaffName(person, options = {}) {
   const displayName = String(person?.displayName || person?.doctorKey || "Staff member");
-  if (!options.canOpenCalendar) return `<strong>${escapeHtml(displayName)}</strong>`;
-  return `<button type="button" class="facility-overview-staff-calendar-link" data-facility-overview-open-staff-calendar="${escapeHtml(person?.doctorKey || person?.key || "")}" data-facility-overview-staff-display-name="${escapeHtml(displayName)}" data-facility-overview-staff-source="${escapeHtml(person?.sourceType || "")}" aria-label="Open ${escapeHtml(displayName)}'s calendar">${escapeHtml(displayName)}</button>`;
+  const target = { doctorKey: person?.doctorKey || person?.key || "", displayName, sourceType: person?.sourceType || "" };
+  if (options.directCalendar && canUseCreatorDoctorSwitcher()) {
+    return `<button type="button" class="facility-overview-staff-calendar-link" data-facility-overview-open-staff-calendar="${escapeHtml(target.doctorKey)}" data-facility-overview-staff-display-name="${escapeHtml(displayName)}" data-facility-overview-staff-source="${escapeHtml(target.sourceType)}" aria-label="Open ${escapeHtml(displayName)}'s calendar">${escapeHtml(displayName)}</button>`;
+  }
+  if (!options.canUseStaffActions) return `<strong>${escapeHtml(displayName)}</strong>`;
+  const menuKey = facilityOverviewStaffActionMenuKey(target);
+  const expanded = facilityOverviewState.staffActionMenu === menuKey;
+  return `<div class="facility-overview-staff-action"><button type="button" class="facility-overview-staff-calendar-link" data-facility-overview-staff-actions="${escapeHtml(menuKey)}" aria-expanded="${expanded}" aria-haspopup="menu" aria-label="Actions for ${escapeHtml(displayName)}">${escapeHtml(displayName)}</button>${expanded ? renderFacilityOverviewStaffActionMenu(target, menuKey) : ""}</div>`;
+}
+
+function facilityOverviewStaffActionMenuKey({ doctorKey = "", displayName = "", sourceType = "" } = {}) {
+  return `${String(sourceType || "").toLowerCase()}|${normalizeRosterName(doctorKey)}|${rosterIdentityKey(displayName || doctorKey)}`;
+}
+
+function renderFacilityOverviewStaffActionMenu(target, menuKey) {
+  const attributes = `data-facility-overview-staff-display-name="${escapeHtml(target.displayName)}" data-facility-overview-staff-source="${escapeHtml(target.sourceType)}"`;
+  return `<div class="facility-overview-staff-action-menu" role="menu" data-facility-overview-staff-action-menu="${escapeHtml(menuKey)}">
+    ${canUseCreatorDoctorSwitcher() ? `<button type="button" role="menuitem" data-facility-overview-open-staff-calendar="${escapeHtml(target.doctorKey)}" ${attributes}>Person's calendar</button>` : ""}
+    <button type="button" role="menuitem" data-facility-overview-open-working-together="${escapeHtml(target.doctorKey)}" ${attributes}>When working together</button>
+  </div>`;
 }
 
 function renderFacilityOverviewSeniorityLink(seniority, options = {}) {
@@ -8923,6 +8958,49 @@ async function openFacilityOverviewStaffCalendar(target) {
   }
   closeFacilityOverview();
   await switchDoctorSelection(doctor.key, { resetRange: true });
+}
+
+function facilityOverviewTogetherOptionFor({ doctorKey = "", displayName = "", sourceType = "" } = {}) {
+  const normalizedKey = normalizeRosterName(doctorKey);
+  const identity = rosterIdentityKey(displayName || doctorKey);
+  const source = String(sourceType || "").trim().toLowerCase();
+  const hasKey = (doctor) => facilityOverviewTogetherDoctorKeys(doctor).includes(normalizedKey);
+  const hasSource = (doctor) => normalizedDoctorSourceTypes(doctor).includes(source)
+    || (doctor?.aliases || []).some((alias) => String(alias?.sourceType || "").toLowerCase() === source);
+  const options = facilityOverviewTogetherStaffOptions();
+  return options.find((doctor) => normalizedKey && hasKey(doctor) && (!source || hasSource(doctor)))
+    || options.find((doctor) => normalizedKey && hasKey(doctor))
+    || options.find((doctor) => identity && doctorIdentityKey(doctor) === identity && (!source || hasSource(doctor)))
+    || options.find((doctor) => identity && doctorIdentityKey(doctor) === identity)
+    || null;
+}
+
+function openFacilityOverviewWorkingTogether(target) {
+  if (!canUseFacilityOverview()) return;
+  const selectedPerson = facilityOverviewTogetherOptionFor(target);
+  const viewer = facilityOverviewTogetherOptionFor(selectedDoctor());
+  if (!selectedPerson || !viewer) {
+    setStatus("That staff member or your current calendar profile is not available for Working together yet.", true);
+    return;
+  }
+  facilityOverviewState.tab = "together";
+  facilityOverviewState.staffActionMenu = "";
+  facilityOverviewState.togetherStaffKeys = [selectedPerson.identity, viewer.identity];
+  facilityOverviewState.togetherContent = selectedPerson.identity === viewer.identity
+    ? `<article class="issue-card"><p>Choose another staff member to compare with your own roster.</p></article>`
+    : "";
+  facilityOverviewState.togetherHasSearched = false;
+  resetFacilityOverviewScroll();
+  renderFacilityOverview();
+}
+
+function focusFacilityOverviewStaffActionMenu() {
+  const key = facilityOverviewState.staffActionMenu;
+  if (!key) return;
+  const menu = [...(facilityOverviewBody?.querySelectorAll("[data-facility-overview-staff-action-menu]") || [])]
+    .find((candidate) => candidate.dataset.facilityOverviewStaffActionMenu === key);
+  const firstAction = menu?.querySelector("button");
+  if (firstAction) window.requestAnimationFrame(() => firstAction.focus());
 }
 
 async function openFacilityOverviewStaffSection({ sourceType = "", seniority = "", date = "" } = {}) {
