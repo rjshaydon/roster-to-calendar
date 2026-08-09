@@ -871,10 +871,21 @@ input[type="color"] {
 }
 
 .facility-overview-controls .field > select,
-.facility-overview-controls .field > input[type="date"] {
+.facility-overview-controls .field > input[type="date"],
+.facility-overview-controls .field > input[type="search"] {
   box-sizing: border-box;
   inline-size: 100%;
+  min-height: 52px;
   height: 52px;
+}
+
+.facility-overview-controls .field > input[type="search"] {
+  padding: 12px 14px;
+  border: 1px solid rgba(24, 35, 28, 0.15);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--ink);
+  font: inherit;
 }
 
 .facility-overview-controls .toggle {
