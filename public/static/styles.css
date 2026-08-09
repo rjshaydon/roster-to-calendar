@@ -3281,8 +3281,11 @@ body[data-skin="console"] #facilityOverviewSection.is-compact .facility-overview
 }
 
 body[data-skin="console"] #facilityOverviewSection.is-compact .facility-overview-controls .field > select,
-body[data-skin="console"] #facilityOverviewSection.is-compact .facility-overview-controls .field > input[type="date"] {
+body[data-skin="console"] #facilityOverviewSection.is-compact .facility-overview-controls .field > input[type="date"],
+body[data-skin="console"] #facilityOverviewSection.is-compact .facility-overview-controls .field > input[type="search"] {
+  min-height: 42px;
   height: 42px;
+  max-height: 42px;
 }
 
 body[data-skin="console"] #facilityOverviewSection.is-compact .facility-overview-cs-toggle {
@@ -3777,6 +3780,18 @@ body[data-skin="console"] .panel {
   .mobile-action-bar .button {
     min-height: 44px;
     font-size: 0.88rem;
+  }
+
+  /* iOS keeps date and search inputs in native control chrome, which ignores
+     the shared 52px sizing used by the ED selector. */
+  .facility-overview-controls .field > input[type="date"],
+  .facility-overview-controls .field > input[type="search"] {
+    -webkit-appearance: none;
+    appearance: none;
+    display: block;
+    min-height: 52px;
+    height: 52px;
+    max-height: 52px;
   }
 
   .mobile-login-access {
