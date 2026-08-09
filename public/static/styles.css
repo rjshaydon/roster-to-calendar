@@ -941,6 +941,13 @@ input[type="color"] {
   color: var(--muted);
 }
 
+.facility-overview-staff-card .facility-overview-shift-detail {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 .facility-overview-staff-card .facility-overview-stream {
   font-size: 0.84rem;
   line-height: 1.25;

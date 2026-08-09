@@ -8214,11 +8214,21 @@ function resetFacilityOverviewScroll() {
 
 function facilityOverviewFacilityOptions() {
   const values = new Set();
+  for (const source of ["mmc", "ddh", "casey", "mch"]) {
+    if (Array.isArray(latestPreview?.sources?.[source]) && latestPreview.sources[source].length) values.add(source);
+  }
+  for (const code of availablePreviewHospitals) values.add(String(code || "").toUpperCase());
   for (const code of latestPreview?.hospitals || []) values.add(String(code || "").toUpperCase());
+  for (const code of availableHospitalsForPreview(latestPreview?.events || [])) values.add(String(code || "").toUpperCase());
+  for (const file of selectedFiles) values.add(String(file?.sourceType || "").toUpperCase());
   for (const doctor of availableRosterDoctors || []) {
     for (const source of doctor?.sourceTypes || [doctor?.sourceType]) values.add(String(source || "").toUpperCase());
   }
-  return [...values].filter((value) => ["MMC", "DDH", "CASEY", "MCH"].includes(value)).sort((left, right) => {
+  const facilities = [...values].filter((value) => ["MMC", "DDH", "CASEY", "MCH"].includes(value));
+  if (!facilities.length && ["MMC", "DDH", "CASEY", "MCH"].includes(facilityOverviewState.facilityKey)) {
+    facilities.push(facilityOverviewState.facilityKey);
+  }
+  return facilities.sort((left, right) => {
     const order = { MMC: 0, DDH: 1, CASEY: 2, MCH: 3 };
     return (order[left] ?? 99) - (order[right] ?? 99);
   });
@@ -8724,8 +8734,9 @@ function renderFacilityOverviewOnShiftResults(rows) {
     <section class="facility-overview-period"><h3>${period}</h3><div class="facility-overview-staff-grid">${groups.get(period).map((person) => `
       <article class="issue-card facility-overview-staff-card${person.isSwing ? " is-swing" : ""}">
         <strong>${escapeHtml(person.displayName)}</strong>
-        <span class="facility-overview-seniority">${escapeHtml(person.seniority || "Unknown")}</span>
-        <span class="facility-overview-stream">${escapeHtml(renderFacilityOverviewStream(person.events, { includeTimes: person.isSwing }))}</span>
+        <span class="facility-overview-shift-detail">
+          <span class="facility-overview-stream">${escapeHtml(renderFacilityOverviewStream(person.events, { includeTimes: person.isSwing }))}</span>${person.seniority && person.seniority !== "Unknown" ? ` <span class="facility-overview-seniority">${escapeHtml(person.seniority)}</span>` : ""}
+        </span>
       </article>
     `).join("")}</div></section>
   `).join("")}`;
