@@ -372,6 +372,10 @@ assert.match(appSource, /Senior Registrar"\) return "SR"[\s\S]*Transitional\/Int
 assert.match(appSource, /Edit designation[\s\S]*data-facility-overview-set-staff-seniority[\s\S]*Use roster designation/, "Creator staff menus should provide effective seniority editing and a roster reset");
 assert.match(stateSource, /action === "setFacilityStaffSeniorityOverride"[\s\S]*Creator access on the Creator profile is required/, "Seniority corrections must be Creator-only server actions");
 assert.match(d1CalendarSource, /facility_staff_seniority_overrides[\s\S]*term_start <= \?[\s\S]*use_roster_seniority/, "Seniority overrides should be effective-dated and support returning to roster data");
+assert.match(appSource, /sourceCode === "MMC"[\s\S]*"am shift"[\s\S]*"pm shift"[\s\S]*return false/, "MMC generic AM and PM shift labels should fall back to seniority grouping");
+assert.match(appSource, /queueFacilityOverviewMenuPositioning[\s\S]*maxHeight[\s\S]*window\.innerHeight - rect\.height - margin/, "At a glance menus should clamp themselves inside the visible viewport");
+assert.match(appSource, /refreshFacilityOverviewAfterStaffChange[\s\S]*onShiftData = null[\s\S]*staffData = null[\s\S]*loadFacilityOverviewOnShift[\s\S]*loadFacilityOverviewStaff/, "Staff changes should invalidate and refresh both At a glance data views");
+assert.match(d1CalendarSource, /facility_sms_memberships[\s\S]*recordFacilitySmsMembershipsForRosterFile[\s\S]*first_seen_date <= \?/, "SMS membership should persist independently of roster-file supersession and carry into later terms");
 assert.match(styleSource, /#facilityOverviewBody \{[\s\S]*?height: 100%;[\s\S]*?max-height: 100%;[\s\S]*?overflow-y: auto;/, "Working together content should scroll within the bounded overview body");
 assert.match(styleSource, /#facilityOverviewBody\.is-working-together > \.facility-overview-together \{[\s\S]*?height: 100%;[\s\S]*?overflow-y: auto;/, "Working together should use an explicit full-height tab scroller");
 assert.match(stateSource, /action === "downloadFindmyshiftExceptions"[\s\S]*findmyshiftDandenongAssignmentExceptions[\s\S]*findmyshiftExceptionCsv/, "FindMyShift exception downloads must be creator-only server-side report reads");
@@ -2345,6 +2349,7 @@ class MemoryD1 {
     this.doctors = new Map();
     this.fileDoctors = new Map();
     this.facilityStaffDesignations = new Map();
+    this.facilitySmsMemberships = new Map();
     this.events = new Map();
     this.dailyPresence = new Map();
     this.issues = new Map();
@@ -2378,6 +2383,7 @@ class MemoryD1 {
       "doctors",
       "fileDoctors",
       "facilityStaffDesignations",
+      "facilitySmsMemberships",
       "events",
       "dailyPresence",
       "issues",
@@ -2584,6 +2590,28 @@ class MemoryD1Statement {
           display_name: args[index + 3],
           seniority: args[index + 4] || "",
           membership_source: args[index + 5] || "roster",
+        });
+      }
+      return { success: true };
+    }
+    if (sql.includes("INSERT INTO facility_sms_memberships")) {
+      const fileId = sql.startsWith("WITH file_coverage") ? args[0] : "";
+      const matchingDoctors = [...this.db.fileDoctors.values()]
+        .filter((doctor) => !fileId || doctor.file_id === fileId)
+        .filter((doctor) => String(doctor.seniority || "").toUpperCase() === "SMS");
+      for (const doctor of matchingDoctors) {
+        const dates = [...this.db.events.values()]
+          .filter((event) => event.file_id === doctor.file_id && event.doctor_key === doctor.doctor_key)
+          .map((event) => event.start_date)
+          .filter(Boolean)
+          .sort();
+        if (!dates.length) continue;
+        const key = `${doctor.source_type}|${doctor.doctor_key}`;
+        const existing = this.db.facilitySmsMemberships.get(key);
+        this.db.facilitySmsMemberships.set(key, {
+          source_type: doctor.source_type, doctor_key: doctor.doctor_key, display_name: doctor.display_name,
+          first_seen_date: existing ? [existing.first_seen_date, dates[0]].sort()[0] : dates[0],
+          last_seen_date: existing ? [existing.last_seen_date, dates.at(-1)].sort().at(-1) : dates.at(-1),
         });
       }
       return { success: true };
@@ -2934,6 +2962,13 @@ class MemoryD1Statement {
     }
     if (sql.includes("FROM facility_staff_designations")) {
       return { results: [] };
+    }
+    if (sql.includes("FROM facility_sms_memberships")) {
+      const termEnd = args[0] || "9999-12-31";
+      const sourceType = args.length > 1 ? args[1] : "";
+      return { results: [...this.db.facilitySmsMemberships.values()]
+        .filter((row) => row.first_seen_date <= termEnd)
+        .filter((row) => !sourceType || row.source_type === sourceType) };
     }
     if (sql.startsWith("SELECT * FROM roster_sync_runs") && !sql.includes("WHERE source_id")) {
       return { results: [...this.db.rosterSyncRuns.values()].sort((left, right) => String(right.started_at).localeCompare(String(left.started_at)) || String(right.id).localeCompare(String(left.id))).slice(0, Number(args[0] || 50)) };
@@ -3536,8 +3571,18 @@ class MemoryD1Statement {
       const rows = [...this.db.events.values()].filter((event) => event.file_id === args[0]);
       return { start_date: rows.map((event) => event.start_date).sort()[0] || null, end_date: rows.map((event) => event.start_date).sort().at(-1) || null };
     }
+    if (sql.includes("FROM facility_sms_memberships") && sql.includes("WHERE source_type = ? AND doctor_key = ?")) {
+      return this.db.facilitySmsMemberships.get(`${args[0]}|${args[1]}`) || null;
+    }
     if (sql.includes("FROM facility_staff_designations") && sql.includes("COUNT(*) AS count")) {
       const rows = [...this.db.facilityStaffDesignations.values()];
+      return { count: rows.length, max_updated_at: rows.map((row) => String(row.updated_at || "")).sort().at(-1) || "" };
+    }
+    if (sql.includes("FROM facility_staff_seniority_overrides") && sql.includes("COUNT(*) AS count")) {
+      return { count: 0, max_updated_at: "" };
+    }
+    if (sql.includes("FROM facility_sms_memberships") && sql.includes("COUNT(*) AS count")) {
+      const rows = [...this.db.facilitySmsMemberships.values()];
       return { count: rows.length, max_updated_at: rows.map((row) => String(row.updated_at || "")).sort().at(-1) || "" };
     }
     if (sql.includes("FROM custom_events") && sql.includes("COUNT(*) AS count")) {

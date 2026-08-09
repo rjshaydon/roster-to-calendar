@@ -479,6 +479,8 @@ window.addEventListener("drop", async (event) => {
   await importRosterFiles([...event.dataTransfer.files]);
 });
 
+window.addEventListener("resize", queueFacilityOverviewMenuPositioning, { passive: true });
+
 filesButton?.addEventListener("click", openFilesModal);
 filesCloseButton?.addEventListener("click", closeFilesModal);
 filesModal?.addEventListener("click", (event) => {
@@ -8445,12 +8447,14 @@ function renderFacilityOverview() {
       <label class="field facility-overview-staff-term-control"><span>Term</span><select data-facility-overview-staff-term>${terms.map((term) => `<option value="${escapeHtml(term.value)}" ${term.value === facilityOverviewState.staffTermStart ? "selected" : ""}>${escapeHtml(term.label)}</option>`).join("")}</select></label>
     `;
     renderFacilityOverviewStaffBody();
+    queueFacilityOverviewMenuPositioning();
     return;
   }
   if (activeTab === "together") {
     initializeFacilityOverviewTogetherState();
     facilityOverviewControls.innerHTML = "";
     facilityOverviewBody.innerHTML = renderFacilityOverviewTogetherProposal();
+    queueFacilityOverviewMenuPositioning();
     return;
   }
   const facilities = facilityOverviewFacilityOptions();
@@ -8464,11 +8468,30 @@ function renderFacilityOverview() {
     <label class="toggle facility-overview-cs-toggle">CS <input type="checkbox" data-facility-overview-include-cs ${facilityOverviewState.includeClinicalSupport ? "checked" : ""}></label>
   `;
   facilityOverviewBody.innerHTML = `<div class="facility-overview-results">${content}</div>`;
+  queueFacilityOverviewMenuPositioning();
 }
 
 function renderFacilityOverviewStaffBody() {
   if (!facilityOverviewBody || facilityOverviewState.tab !== "staff") return;
   facilityOverviewBody.innerHTML = `<div class="facility-overview-results">${facilityOverviewState.staffContent || `<article class="issue-card"><p>Loading ED staff…</p></article>`}</div>`;
+  queueFacilityOverviewMenuPositioning();
+}
+
+function queueFacilityOverviewMenuPositioning() {
+  window.requestAnimationFrame(() => {
+    const margin = 8;
+    for (const menu of document.querySelectorAll(".facility-overview-staff-action-menu")) {
+      const requestedLeft = Number.parseFloat(menu.style.getPropertyValue("--facility-overview-menu-left")) || margin;
+      const requestedTop = Number.parseFloat(menu.style.getPropertyValue("--facility-overview-menu-top")) || margin;
+      menu.style.maxHeight = `${Math.max(120, window.innerHeight - margin * 2)}px`;
+      menu.style.overflowY = "auto";
+      const rect = menu.getBoundingClientRect();
+      const left = Math.min(Math.max(margin, requestedLeft), Math.max(margin, window.innerWidth - rect.width - margin));
+      const top = Math.min(Math.max(margin, requestedTop), Math.max(margin, window.innerHeight - rect.height - margin));
+      menu.style.left = `${left}px`;
+      menu.style.top = `${top}px`;
+    }
+  });
 }
 
 function renderFacilityOverviewHeader() {
@@ -8956,7 +8979,7 @@ function renderFacilityOverviewGenericOnShiftPeriod(assignments, options = {}) {
   const unstreamed = new Map();
   for (const assignment of assignments || []) {
     const team = String(assignment.team || "").trim();
-    const isStreamed = facilityOverviewIsMeaningfulStream(team);
+    const isStreamed = facilityOverviewIsMeaningfulStream(team, assignment.source || assignment.person?.sourceType);
     const target = isStreamed ? streamed : unstreamed;
     const key = isStreamed ? team : String(assignment.person?.seniority || assignment.role || "Unknown");
     if (!target.has(key)) target.set(key, []);
@@ -8971,8 +8994,10 @@ function renderFacilityOverviewGenericOnShiftPeriod(assignments, options = {}) {
   return [...streamCards, ...seniorityCards].join("");
 }
 
-function facilityOverviewIsMeaningfulStream(team) {
+function facilityOverviewIsMeaningfulStream(team, source = "") {
   const value = String(team || "").trim().toLowerCase();
+  const sourceCode = String(source || "").trim().toUpperCase();
+  if (sourceCode === "MMC" && ["am", "pm", "am shift", "pm shift", "night", "night shift", "shift"].includes(value)) return false;
   return Boolean(value && ![
     "other", "float", "rover", "shift", "clinical support", "cs", "cso", "sms", "cmo", "senior registrar",
     "transitional/intermediate registrar", "junior registrar", "hmo", "intern", "unknown",
@@ -9396,7 +9421,7 @@ async function setFacilityOverviewStaffDesignation({ designation = "", sourceTyp
     });
     await readJsonResponse(response, "Could not save the staff designation.");
     setStatus(designation === "previous_staff" ? `${displayName} moved to Previous staff.` : `${displayName} marked as ${designation.replaceAll("_", " ")}.`);
-    await loadFacilityOverviewStaff();
+    await refreshFacilityOverviewAfterStaffChange();
   } catch (error) {
     setStatus(error.message || "Could not save the staff designation.", true);
   }
@@ -9416,7 +9441,7 @@ async function clearFacilityOverviewStaffDesignation(designationId) {
     });
     await readJsonResponse(response, "Could not remove the staff designation.");
     setStatus("Staff designation removed.");
-    await loadFacilityOverviewStaff();
+    await refreshFacilityOverviewAfterStaffChange();
   } catch (error) {
     setStatus(error.message || "Could not remove the staff designation.", true);
   }
@@ -9437,11 +9462,17 @@ async function setFacilityOverviewStaffSeniorityOverride({ sourceType = "", doct
     });
     await readJsonResponse(response, "Could not save the staff designation.");
     setStatus(useRosterSeniority ? `${displayName} will use the roster designation from this term.` : `${displayName} is now designated ${seniority} from this term.`);
-    if (facilityOverviewState.tab === "on-shift") await loadFacilityOverviewOnShift();
-    else await loadFacilityOverviewStaff();
+    await refreshFacilityOverviewAfterStaffChange();
   } catch (error) {
     setStatus(error.message || "Could not save the staff designation.", true);
   }
+}
+
+async function refreshFacilityOverviewAfterStaffChange() {
+  facilityOverviewState.onShiftData = null;
+  facilityOverviewState.staffData = null;
+  if (facilityOverviewState.tab === "on-shift") await loadFacilityOverviewOnShift();
+  else if (facilityOverviewState.tab === "staff") await loadFacilityOverviewStaff();
 }
 
 async function openFacilityOverviewStaffSection({ sourceType = "", seniority = "", date = "" } = {}) {

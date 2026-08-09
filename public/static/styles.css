@@ -1113,6 +1113,7 @@ input[type="color"] {
   left: var(--facility-overview-menu-left, 8px);
   display: grid;
   min-width: 190px;
+  max-width: calc(100vw - 16px);
   padding: 6px;
   border: 1px solid rgba(20, 34, 42, 0.16);
   border-radius: 10px;

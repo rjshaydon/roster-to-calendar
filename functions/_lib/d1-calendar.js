@@ -110,6 +110,19 @@ async function ensureCalendarSchemaUncached(db) {
   `).run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_facility_staff_seniority_overrides_active ON facility_staff_seniority_overrides (source_type, doctor_key, active, term_start)").run();
   await db.prepare(`
+    CREATE TABLE IF NOT EXISTS facility_sms_memberships (
+      source_type TEXT NOT NULL,
+      doctor_key TEXT NOT NULL,
+      display_name TEXT NOT NULL DEFAULT '',
+      first_seen_date TEXT NOT NULL DEFAULT '',
+      last_seen_date TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT '',
+      PRIMARY KEY (source_type, doctor_key)
+    )
+  `).run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_facility_sms_memberships_first_seen ON facility_sms_memberships (source_type, first_seen_date)").run();
+  await db.prepare(`
     CREATE TABLE IF NOT EXISTS roster_events (
       id TEXT PRIMARY KEY,
       file_id TEXT NOT NULL,
@@ -134,6 +147,7 @@ async function ensureCalendarSchemaUncached(db) {
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_events_date_source ON roster_events (start_date, source_type)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_events_source_range ON roster_events (source_type, start_date, end_date)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_events_file ON roster_events (file_id)").run();
+  await backfillFacilitySmsMemberships(db);
   await db.prepare(`
     CREATE TABLE IF NOT EXISTS roster_issues (
       id TEXT PRIMARY KEY,
@@ -537,6 +551,7 @@ export async function upsertDerivedRosterFile(db, file, storedImport) {
     sourceType,
     doctors,
   });
+  await recordFacilitySmsMembershipsForRosterFile(db, file.id);
   return { ok: true, doctors: doctors.length, events: totalEvents };
 }
 
@@ -656,6 +671,7 @@ export async function appendDerivedRosterFileEvents(db, file, doctors, eventsByD
     ...bulkInsertIssueStatements(db, issueRows),
   ];
   if (statements.length) await runTransactionalBatch(db, statements);
+  await recordFacilitySmsMembershipsForRosterFile(db, file.id);
   return { ok: true, doctors: safeDoctors.length, events: eventRows.length, issues: issueRows.length };
 }
 
@@ -679,6 +695,7 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
   ];
   await deleteDailyPresenceForFile(db, file.id);
   await runTransactionalBatch(db, statements);
+  await recordFacilitySmsMembershipsForRosterFile(db, file.id);
   if (options.deferDailyPresence !== true) {
     await populateDailyPresenceForFile(db, file.id, eventsByDoctor, {
       sourceType,
@@ -935,6 +952,58 @@ const FACILITY_STAFF_SENIORITIES = new Set([
   "Unknown",
 ]);
 
+async function backfillFacilitySmsMemberships(db) {
+  const now = new Date().toISOString();
+  await db.prepare(`
+    INSERT INTO facility_sms_memberships (
+      source_type, doctor_key, display_name, first_seen_date, last_seen_date, created_at, updated_at
+    )
+    SELECT roster_file_doctors.source_type, roster_file_doctors.doctor_key,
+      MAX(roster_file_doctors.display_name), MIN(roster_events.start_date), MAX(roster_events.start_date), ?, ?
+    FROM roster_file_doctors
+    INNER JOIN roster_events ON roster_events.file_id = roster_file_doctors.file_id
+      AND roster_events.doctor_key = roster_file_doctors.doctor_key
+    WHERE UPPER(roster_file_doctors.seniority) = 'SMS'
+    GROUP BY roster_file_doctors.source_type, roster_file_doctors.doctor_key
+    ON CONFLICT(source_type, doctor_key) DO UPDATE SET
+      display_name = excluded.display_name,
+      first_seen_date = MIN(facility_sms_memberships.first_seen_date, excluded.first_seen_date),
+      last_seen_date = MAX(facility_sms_memberships.last_seen_date, excluded.last_seen_date),
+      updated_at = excluded.updated_at
+    WHERE facility_sms_memberships.display_name <> excluded.display_name
+      OR facility_sms_memberships.first_seen_date > excluded.first_seen_date
+      OR facility_sms_memberships.last_seen_date < excluded.last_seen_date
+  `).bind(now, now).run();
+}
+
+async function recordFacilitySmsMembershipsForRosterFile(db, fileId) {
+  const now = new Date().toISOString();
+  await db.prepare(`
+    WITH file_coverage AS (
+      SELECT MIN(start_date) AS start_date, MAX(start_date) AS end_date
+      FROM roster_events WHERE file_id = ?
+    )
+    INSERT INTO facility_sms_memberships (
+      source_type, doctor_key, display_name, first_seen_date, last_seen_date, created_at, updated_at
+    )
+    SELECT roster_file_doctors.source_type, roster_file_doctors.doctor_key, roster_file_doctors.display_name,
+      file_coverage.start_date, file_coverage.end_date, ?, ?
+    FROM roster_file_doctors
+    CROSS JOIN file_coverage
+    WHERE roster_file_doctors.file_id = ?
+      AND UPPER(roster_file_doctors.seniority) = 'SMS'
+      AND file_coverage.start_date IS NOT NULL
+    ON CONFLICT(source_type, doctor_key) DO UPDATE SET
+      display_name = excluded.display_name,
+      first_seen_date = MIN(facility_sms_memberships.first_seen_date, excluded.first_seen_date),
+      last_seen_date = MAX(facility_sms_memberships.last_seen_date, excluded.last_seen_date),
+      updated_at = excluded.updated_at
+    WHERE facility_sms_memberships.display_name <> excluded.display_name
+      OR facility_sms_memberships.first_seen_date > excluded.first_seen_date
+      OR facility_sms_memberships.last_seen_date < excluded.last_seen_date
+  `).bind(fileId, now, now, fileId).run();
+}
+
 export async function setFacilityStaffSeniorityOverride(db, input = {}) {
   if (!db?.prepare) throw new Error("Roster database is unavailable.");
   await ensureCalendarSchema(db);
@@ -1051,6 +1120,11 @@ export async function setFacilityStaffDesignation(db, input = {}) {
   const seniority = String(input.seniority || "").trim() || "Unknown";
   if (designation === "previous_staff") {
     const smsRecord = await db.prepare(`
+      SELECT 1 AS found
+      FROM facility_sms_memberships
+      WHERE source_type = ? AND doctor_key = ?
+      LIMIT 1
+    `).bind(sourceType, doctorKey).first() || await db.prepare(`
       SELECT 1 AS found
       FROM roster_file_doctors
       INNER JOIN roster_files ON roster_files.id = roster_file_doctors.file_id
@@ -2115,6 +2189,8 @@ export async function queryCalendarRevision(db, ownerEmail = "") {
     ? await db.prepare("SELECT COUNT(*) AS count, COALESCE(MAX(updated_at), '') AS max_updated_at FROM custom_events WHERE owner_email = ?").bind(email).first()
     : null;
   const facilityDesignations = await db.prepare("SELECT COUNT(*) AS count, COALESCE(MAX(updated_at), '') AS max_updated_at FROM facility_staff_designations").first();
+  const facilitySeniorityOverrides = await db.prepare("SELECT COUNT(*) AS count, COALESCE(MAX(updated_at), '') AS max_updated_at FROM facility_staff_seniority_overrides").first();
+  const facilitySmsMemberships = await db.prepare("SELECT COUNT(*) AS count, COALESCE(MAX(updated_at), '') AS max_updated_at FROM facility_sms_memberships").first();
   const claims = email
     ? await db.prepare("SELECT COUNT(*) AS count, COALESCE(MAX(updated_at), '') AS max_updated_at FROM account_claims WHERE email = ?").bind(email).first()
     : null;
@@ -2149,6 +2225,10 @@ export async function queryCalendarRevision(db, ownerEmail = "") {
     String(customEvents?.max_updated_at || ""),
     Number(facilityDesignations?.count || 0),
     String(facilityDesignations?.max_updated_at || ""),
+    Number(facilitySeniorityOverrides?.count || 0),
+    String(facilitySeniorityOverrides?.max_updated_at || ""),
+    Number(facilitySmsMemberships?.count || 0),
+    String(facilitySmsMemberships?.max_updated_at || ""),
     Number(profiles?.count || 0),
     String(profiles?.max_updated_at || ""),
   ].join("|");
@@ -3055,22 +3135,11 @@ export async function queryFacilityOverviewStaff(db, options = {}) {
     ORDER BY roster_file_doctors.source_type, roster_file_doctors.display_name
   `).bind(...bindings).all();
   const continuingSms = await db.prepare(`
-    WITH file_coverage AS (
-      SELECT file_id, MIN(start_date) AS coverage_start, MAX(start_date) AS coverage_end
-      FROM roster_events GROUP BY file_id
-    )
-    SELECT roster_file_doctors.doctor_key, roster_file_doctors.display_name,
-      roster_file_doctors.source_type, roster_file_doctors.seniority AS membership_seniority,
-      MAX(file_coverage.coverage_end) AS coverage_end
-    FROM roster_file_doctors
-    INNER JOIN roster_files ON roster_files.id = roster_file_doctors.file_id
-    INNER JOIN file_coverage ON file_coverage.file_id = roster_file_doctors.file_id
-    WHERE roster_files.active = 1 ${facilitySql}
-      AND roster_file_doctors.seniority = 'SMS'
-      AND file_coverage.coverage_start <= ?
-    GROUP BY roster_file_doctors.source_type, roster_file_doctors.doctor_key
-    ORDER BY roster_file_doctors.source_type, roster_file_doctors.display_name
-  `).bind(...(facilityKey ? [facilityKey, termEnd] : [termEnd])).all();
+    SELECT doctor_key, display_name, source_type, last_seen_date AS coverage_end
+    FROM facility_sms_memberships
+    WHERE first_seen_date <= ? ${facilityKey ? "AND source_type = ?" : ""}
+    ORDER BY source_type, display_name
+  `).bind(...(facilityKey ? [termEnd, facilityKey] : [termEnd])).all();
   const eventBindings = facilityKey ? [facilityKey, termEnd, termStart] : [termEnd, termStart];
   const events = await db.prepare(`
     SELECT roster_events.doctor_key, roster_events.display_name, roster_events.source_type,
@@ -3096,7 +3165,7 @@ export async function queryFacilityOverviewStaff(db, options = {}) {
   for (const row of continuingSms.results || []) {
     const entry = {
       doctorKey: String(row.doctor_key || "").trim(), displayName: String(row.display_name || "").trim(),
-      sourceType: normalizeSourceType(row.source_type), seniority: String(row.membership_seniority || "SMS").trim() || "SMS",
+      sourceType: normalizeSourceType(row.source_type), seniority: "SMS",
       membershipSource: "sms-continuity", coverageStart: "", coverageEnd: String(row.coverage_end || ""),
     };
     if (entry.doctorKey && entry.displayName && !currentMembership.has(`${entry.sourceType}|${entry.doctorKey}`)) memberRows.push(entry);
