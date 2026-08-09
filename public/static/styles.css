@@ -1069,10 +1069,10 @@ input[type="color"] {
 }
 
 .facility-overview-staff-action-menu {
-  position: absolute;
-  z-index: 4;
-  top: calc(100% + 6px);
-  left: 0;
+  position: fixed;
+  z-index: 50;
+  top: var(--facility-overview-menu-top, 8px);
+  left: var(--facility-overview-menu-left, 8px);
   display: grid;
   min-width: 190px;
   padding: 6px;

@@ -304,12 +304,12 @@ let currentInsightsEnabled = currentUserRole === "creator";
 let currentFacilityOverviewEnabled = currentUserRole === "creator";
 let facilityOverviewState = {
   tab: "on-shift", date: formatDateKey(new Date()), facilityKey: "", includeClinicalSupport: false, requestId: 0, onShiftData: null,
-  staffTermStart: formatDateKey(australianTermForDate(new Date()).start), staffTerms: [], staffContent: "", staffData: null, staffQuery: "", staffExpanded: new Set(), staffFocusSection: "", staffActionMenu: "",
+  staffTermStart: formatDateKey(australianTermForDate(new Date()).start), staffTerms: [], staffContent: "", staffData: null, staffQuery: "", staffExpanded: new Set(), staffFocusSection: "", staffActionMenu: null,
   togetherStaffKeys: ["", ""], togetherRangeMode: "term",
   togetherTermStart: formatDateKey(australianTermForDate(new Date()).start),
   togetherFrom: formatDateKey(australianTermForDate(new Date()).start),
   togetherTo: formatDateKey(addDays(australianTermForDate(new Date()).end, -1)),
-  togetherFacilityKey: "ALL", togetherContent: "", togetherHasSearched: false,
+  togetherFacilityKey: "ALL", togetherContent: "", togetherHasSearched: false, togetherPinnedDoctors: [],
 };
 let creatorCalendarSourceFileRefs = [];
 let insightsState = null;
@@ -494,6 +494,21 @@ mobileFacilityOverviewButton?.addEventListener("click", () => {
   else void openFacilityOverview();
 });
 facilityOverviewBackButton?.addEventListener("click", closeFacilityOverview);
+document.addEventListener("pointerdown", (event) => {
+  const menu = facilityOverviewState.staffActionMenu;
+  if (!menu) return;
+  const target = event.target;
+  if (!(target instanceof Element)) return;
+  const insideMenu = target.closest("[data-facility-overview-staff-action-menu]");
+  const trigger = target.closest("[data-facility-overview-staff-menu]");
+  if (insideMenu || trigger?.dataset.facilityOverviewStaffMenu === menu.key) return;
+  closeFacilityOverviewStaffActionMenu();
+}, true);
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || !facilityOverviewState.staffActionMenu) return;
+  event.preventDefault();
+  closeFacilityOverviewStaffActionMenu();
+});
 facilityOverviewSection?.addEventListener("scroll", (event) => {
   const scroller = event.target;
   if (scroller !== facilityOverviewBody && !scroller?.matches?.(".facility-overview-together")) return;
@@ -513,6 +528,7 @@ facilityOverviewSection?.addEventListener("click", (event) => {
   }
   const tab = event.target.closest("[data-facility-overview-tab]");
   if (tab) {
+    facilityOverviewState.staffActionMenu = null;
     facilityOverviewState.tab = tab.dataset.facilityOverviewTab || "on-shift";
     resetFacilityOverviewScroll();
     if (facilityOverviewState.tab === "staff") {
@@ -568,15 +584,6 @@ facilityOverviewSection?.addEventListener("click", (event) => {
       void loadFacilityOverviewStaff();
     }
   }
-  const staffActionToggle = event.target.closest("[data-facility-overview-staff-actions]");
-  if (staffActionToggle) {
-    const key = staffActionToggle.dataset.facilityOverviewStaffActions || "";
-    facilityOverviewState.staffActionMenu = facilityOverviewState.staffActionMenu === key ? "" : key;
-    refreshFacilityOverviewStaffActionContent();
-    renderFacilityOverview();
-    if (facilityOverviewState.staffActionMenu) focusFacilityOverviewStaffActionMenu();
-    return;
-  }
   const staffCalendar = event.target.closest("[data-facility-overview-open-staff-calendar]");
   if (staffCalendar) {
     void openFacilityOverviewStaffCalendar({
@@ -612,6 +619,18 @@ facilityOverviewSection?.addEventListener("click", (event) => {
     refreshFacilityOverviewStaffContent();
     renderFacilityOverview();
   }
+});
+facilityOverviewSection?.addEventListener("contextmenu", (event) => {
+  const staffMenu = event.target.closest("[data-facility-overview-staff-menu]");
+  if (!staffMenu || !isViewingCreatorAccount()) return;
+  event.preventDefault();
+  facilityOverviewState.staffActionMenu = {
+    key: staffMenu.dataset.facilityOverviewStaffMenu || "",
+    x: Math.max(8, Math.round(event.clientX || 0)),
+    y: Math.max(8, Math.round(event.clientY || 0)),
+  };
+  refreshFacilityOverviewStaffActionContent();
+  renderFacilityOverview();
 });
 facilityOverviewSection?.addEventListener("change", (event) => {
   const togetherStaff = event.target.closest("[data-facility-overview-together-staff]");
@@ -8288,6 +8307,7 @@ async function openFacilityOverview(options = {}) {
 
 function closeFacilityOverview() {
   facilityOverviewState.requestId += 1;
+  facilityOverviewState.staffActionMenu = null;
   form?.classList.remove("is-facility-overview-active");
   resetFacilityOverviewScroll();
   facilityOverviewSection?.classList.add("hidden");
@@ -8386,7 +8406,21 @@ function renderFacilityOverviewHeader() {
 }
 
 function facilityOverviewTogetherStaffOptions() {
-  return dedupeDoctorOptions(availableRosterDoctors || [])
+  const activeDoctor = selectedDoctor();
+  const activeClaims = currentRosterClaims.map((claim) => ({
+    key: claim.key,
+    displayName: claim.displayName,
+    sourceType: claim.sourceType,
+  }));
+  const activeViewer = activeDoctor?.key ? [{
+    ...activeDoctor,
+    displayName: activeDoctor.displayName || currentAccount().realName || activeDoctor.key,
+    aliases: Array.isArray(activeDoctor.aliases) && activeDoctor.aliases.length ? activeDoctor.aliases : activeClaims,
+    sourceTypes: normalizedDoctorSourceTypes(activeDoctor).length
+      ? normalizedDoctorSourceTypes(activeDoctor)
+      : [...new Set(activeClaims.map((claim) => claim.sourceType))],
+  }] : [];
+  return dedupeDoctorOptions([...(availableRosterDoctors || []), ...doctorPickerOptions(), ...activeViewer, ...(facilityOverviewState.togetherPinnedDoctors || [])])
     .map((doctor) => ({ ...doctor, identity: doctorIdentityKey(doctor) }))
     .filter((doctor) => doctor.identity)
     .sort((left, right) => left.displayName.localeCompare(right.displayName));
@@ -8920,18 +8954,21 @@ function renderFacilityOverviewStaffName(person, options = {}) {
   }
   if (!options.canUseStaffActions) return `<strong>${escapeHtml(displayName)}</strong>`;
   const menuKey = facilityOverviewStaffActionMenuKey(target);
-  const expanded = facilityOverviewState.staffActionMenu === menuKey;
-  return `<div class="facility-overview-staff-action"><button type="button" class="facility-overview-staff-calendar-link" data-facility-overview-staff-actions="${escapeHtml(menuKey)}" aria-expanded="${expanded}" aria-haspopup="menu" aria-label="Actions for ${escapeHtml(displayName)}">${escapeHtml(displayName)}</button>${expanded ? renderFacilityOverviewStaffActionMenu(target, menuKey) : ""}</div>`;
+  const menu = facilityOverviewState.staffActionMenu;
+  const expanded = isViewingCreatorAccount() && menu?.key === menuKey;
+  return `<div class="facility-overview-staff-action"><button type="button" class="facility-overview-staff-calendar-link" data-facility-overview-open-working-together="${escapeHtml(target.doctorKey)}" data-facility-overview-staff-display-name="${escapeHtml(displayName)}" data-facility-overview-staff-source="${escapeHtml(target.sourceType)}" data-facility-overview-staff-menu="${escapeHtml(menuKey)}" aria-expanded="${expanded}" aria-haspopup="${isViewingCreatorAccount() ? "menu" : "false"}" aria-label="Find times working with ${escapeHtml(displayName)}">${escapeHtml(displayName)}</button>${expanded ? renderFacilityOverviewStaffActionMenu(target, menu) : ""}</div>`;
 }
 
 function facilityOverviewStaffActionMenuKey({ doctorKey = "", displayName = "", sourceType = "" } = {}) {
   return `${String(sourceType || "").toLowerCase()}|${normalizeRosterName(doctorKey)}|${rosterIdentityKey(displayName || doctorKey)}`;
 }
 
-function renderFacilityOverviewStaffActionMenu(target, menuKey) {
+function renderFacilityOverviewStaffActionMenu(target, menu) {
   const attributes = `data-facility-overview-staff-display-name="${escapeHtml(target.displayName)}" data-facility-overview-staff-source="${escapeHtml(target.sourceType)}"`;
-  return `<div class="facility-overview-staff-action-menu" role="menu" data-facility-overview-staff-action-menu="${escapeHtml(menuKey)}">
-    ${canUseCreatorDoctorSwitcher() ? `<button type="button" role="menuitem" data-facility-overview-open-staff-calendar="${escapeHtml(target.doctorKey)}" ${attributes}>Person's calendar</button>` : ""}
+  const left = Math.max(8, Number(menu?.x) || 8);
+  const top = Math.max(8, Number(menu?.y) || 8);
+  return `<div class="facility-overview-staff-action-menu" role="menu" data-facility-overview-staff-action-menu="${escapeHtml(menu?.key || "")}" style="--facility-overview-menu-left: ${left}px; --facility-overview-menu-top: ${top}px">
+    <button type="button" role="menuitem" data-facility-overview-open-staff-calendar="${escapeHtml(target.doctorKey)}" ${attributes}>Person's calendar</button>
     <button type="button" role="menuitem" data-facility-overview-open-working-together="${escapeHtml(target.doctorKey)}" ${attributes}>When working together</button>
   </div>`;
 }
@@ -8986,32 +9023,57 @@ function facilityOverviewTogetherOptionFor({ doctorKey = "", displayName = "", s
     || null;
 }
 
+function facilityOverviewTogetherFallbackOption({ doctorKey = "", displayName = "", sourceType = "", aliases = [], sourceTypes = [] } = {}) {
+  const key = normalizeRosterName(doctorKey);
+  if (!key) return null;
+  const normalizedSource = String(sourceType || "").trim().toLowerCase();
+  const normalizedAliases = Array.isArray(aliases) ? aliases.filter((alias) => alias?.key) : [];
+  const option = {
+    key,
+    displayName: String(displayName || key),
+    sourceType: normalizedSource,
+    sourceTypes: [...new Set([normalizedSource, ...(sourceTypes || [])].map((item) => String(item || "").toLowerCase()).filter(Boolean))],
+    aliases: normalizedAliases,
+  };
+  return { ...option, identity: doctorIdentityKey(option) };
+}
+
 function openFacilityOverviewWorkingTogether(target) {
   if (!canUseFacilityOverview()) return;
-  const selectedPerson = facilityOverviewTogetherOptionFor(target);
-  const viewer = facilityOverviewTogetherOptionFor(selectedDoctor());
+  const activeDoctor = selectedDoctor();
+  const selectedPerson = facilityOverviewTogetherOptionFor(target) || facilityOverviewTogetherFallbackOption(target);
+  const viewer = facilityOverviewTogetherOptionFor(activeDoctor)
+    || facilityOverviewTogetherFallbackOption({
+      doctorKey: activeDoctor?.key || currentRosterClaims[0]?.key || "",
+      displayName: activeDoctor?.displayName || currentAccount().realName || currentRosterClaims[0]?.displayName || "",
+      sourceType: activeDoctor?.sourceType || currentRosterClaims[0]?.sourceType || "",
+      sourceTypes: normalizedDoctorSourceTypes(activeDoctor),
+      aliases: Array.isArray(activeDoctor?.aliases) && activeDoctor.aliases.length ? activeDoctor.aliases : currentRosterClaims,
+    });
   if (!selectedPerson || !viewer) {
     setStatus("That staff member or your current calendar profile is not available for Working together yet.", true);
     return;
   }
   facilityOverviewState.tab = "together";
-  facilityOverviewState.staffActionMenu = "";
-  facilityOverviewState.togetherStaffKeys = [selectedPerson.identity, viewer.identity];
+  facilityOverviewState.staffActionMenu = null;
+  facilityOverviewState.togetherPinnedDoctors = [selectedPerson, viewer];
+  facilityOverviewState.togetherStaffKeys = selectedPerson.identity === viewer.identity
+    ? [selectedPerson.identity, ""]
+    : [selectedPerson.identity, viewer.identity];
   facilityOverviewState.togetherContent = selectedPerson.identity === viewer.identity
     ? `<article class="issue-card"><p>Choose another staff member to compare with your own roster.</p></article>`
     : "";
   facilityOverviewState.togetherHasSearched = false;
   resetFacilityOverviewScroll();
   renderFacilityOverview();
+  if (selectedPerson.identity !== viewer.identity) void loadFacilityOverviewTogether();
 }
 
-function focusFacilityOverviewStaffActionMenu() {
-  const key = facilityOverviewState.staffActionMenu;
-  if (!key) return;
-  const menu = [...(facilityOverviewBody?.querySelectorAll("[data-facility-overview-staff-action-menu]") || [])]
-    .find((candidate) => candidate.dataset.facilityOverviewStaffActionMenu === key);
-  const firstAction = menu?.querySelector("button");
-  if (firstAction) window.requestAnimationFrame(() => firstAction.focus());
+function closeFacilityOverviewStaffActionMenu() {
+  if (!facilityOverviewState.staffActionMenu) return;
+  facilityOverviewState.staffActionMenu = null;
+  refreshFacilityOverviewStaffActionContent();
+  renderFacilityOverview();
 }
 
 async function openFacilityOverviewStaffSection({ sourceType = "", seniority = "", date = "" } = {}) {

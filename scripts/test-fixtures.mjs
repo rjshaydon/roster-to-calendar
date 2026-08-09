@@ -325,23 +325,28 @@ assert.match(
 );
 assert.match(
   appSource.match(/function renderFacilityOverviewStaffName[\s\S]*?function renderFacilityOverviewSeniorityLink/)?.[0] || "",
-  /data-facility-overview-staff-actions[\s\S]*renderFacilityOverviewStaffActionMenu[\s\S]*Person's calendar[\s\S]*When working together/,
-  "At a glance staff names should present the contextual calendar and Working together actions",
+  /data-facility-overview-open-working-together[\s\S]*data-facility-overview-staff-menu[\s\S]*renderFacilityOverviewStaffActionMenu[\s\S]*Person's calendar[\s\S]*When working together/,
+  "At a glance staff names should left-click into Working together and retain a Creator-only context menu",
 );
 assert.match(
-  appSource.match(/const staffActionToggle[\s\S]*?const staffCalendar/)?.[0] || "",
-  /staffActionMenu[\s\S]*refreshFacilityOverviewStaffActionContent\(\)[\s\S]*renderFacilityOverview\(\)/,
-  "Opening a staff action menu should rebuild cached On shift or ED staff result markup before rendering",
+  appSource.match(/addEventListener\("contextmenu"[\s\S]*?addEventListener\("change"/)?.[0] || "",
+  /data-facility-overview-staff-menu[\s\S]*isViewingCreatorAccount\(\)[\s\S]*preventDefault\(\)[\s\S]*refreshFacilityOverviewStaffActionContent\(\)/,
+  "Only the active Creator profile should receive a custom staff context menu",
 );
 assert.match(
-  appSource.match(/function refreshFacilityOverviewStaffActionContent[\s\S]*?async function loadFacilityOverviewStaff/)?.[0] || "",
-  /onShiftData[\s\S]*renderFacilityOverviewOnShiftResults[\s\S]*refreshFacilityOverviewStaffContent/,
-  "Staff action menus should re-render from loaded data on both On shift and ED staff",
+  appSource.match(/document\.addEventListener\("pointerdown"[\s\S]*?facilityOverviewSection\?\.addEventListener\("scroll"/)?.[0] || "",
+  /closeFacilityOverviewStaffActionMenu\(\)[\s\S]*event\.key !== "Escape"[\s\S]*closeFacilityOverviewStaffActionMenu\(\)/,
+  "Outside clicks and Escape should dismiss a staff context menu",
 );
 assert.match(
-  appSource.match(/function openFacilityOverviewWorkingTogether[\s\S]*?function focusFacilityOverviewStaffActionMenu/)?.[0] || "",
-  /facilityOverviewState\.tab = "together"[\s\S]*togetherStaffKeys = \[selectedPerson\.identity, viewer\.identity\]/,
-  "Working together should prefill the clicked staff member and the active viewer",
+  appSource.match(/function facilityOverviewTogetherStaffOptions[\s\S]*?function initializeFacilityOverviewTogetherState/)?.[0] || "",
+  /availableRosterDoctors[\s\S]*doctorPickerOptions\(\)[\s\S]*activeViewer[\s\S]*togetherPinnedDoctors/,
+  "Working together options should include roster staff, the active viewer, and pinned roster results",
+);
+assert.match(
+  appSource.match(/function facilityOverviewTogetherFallbackOption[\s\S]*?function closeFacilityOverviewStaffActionMenu/)?.[0] || "",
+  /facilityOverviewTogetherFallbackOption\(target\)[\s\S]*togetherPinnedDoctors = \[selectedPerson, viewer\][\s\S]*\[selectedPerson\.identity, viewer\.identity\][\s\S]*void loadFacilityOverviewTogether\(\)/,
+  "Working together should resolve or pin both people, prefill them, and load their shared shifts",
 );
 assert.match(
   appSource.match(/async function openFacilityOverviewStaffSection[\s\S]*?function focusFacilityOverviewStaffSection/)?.[0] || "",
