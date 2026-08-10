@@ -1493,7 +1493,10 @@ export async function onRequestPost(context) {
       const startedAt = Date.now();
       try {
         const events = (await queryFacilityOverviewOnShift(context.env.ROSTER_DB, { date, facilityKey }))
-          .filter((row) => isFacilityOverviewWorkingEvent(row.event, { includeClinicalSupport: body?.includeClinicalSupport === true }));
+          .filter((row) => isFacilityOverviewWorkingEvent(row.event, {
+            facilityKey,
+            includeClinicalSupport: body?.includeClinicalSupport === true,
+          }));
         return Response.json({ ok: true, date, facilityKey, events, queryMs: Date.now() - startedAt });
       } catch (error) {
         console.error("queryFacilityOverviewOnShift failed", {
@@ -2466,6 +2469,7 @@ function isFacilityOverviewWorkingEvent(event, options = {}) {
   const text = `${event?.title || ""} ${event?.rawValue || ""}`.toLowerCase();
   if (/\b(?:leave|conference|cme|annual|sick|personal|study|exam|sabbatical|parental|long service)\b/.test(text)) return false;
   if (text.includes("phnw") || text.includes("public holiday")) return false;
+  if (String(options.facilityKey || "").toUpperCase() === "DDH" && /\b(?:hith|vhh)\b/.test(text)) return false;
   if (options.includeClinicalSupport !== true && (text.includes("clinical support") || /\bcs\b/.test(text) || /\bcso\b/.test(text))) return false;
   return true;
 }

@@ -8956,6 +8956,7 @@ function renderFacilityOverviewOnShiftResults(rows) {
 
 function renderFacilityOverviewOnShiftPeriod(assignments, options = {}) {
   if (facilityOverviewIsDdhPeriod(assignments)) return renderFacilityOverviewDdhOnShiftPeriod(assignments, options);
+  if (facilityOverviewIsMmcNightPeriod(assignments, options)) return renderFacilityOverviewMmcNightPeriod(assignments, options);
   return renderFacilityOverviewGenericOnShiftPeriod(assignments, options);
 }
 
@@ -8963,7 +8964,13 @@ function facilityOverviewIsDdhPeriod(assignments) {
   return (assignments || []).some((assignment) => String(assignment.source || assignment.person?.sourceType || "").trim().toUpperCase() === "DDH");
 }
 
+function facilityOverviewIsMmcNightPeriod(assignments, options = {}) {
+  return options.period === "Night"
+    && (assignments || []).some((assignment) => String(assignment.source || assignment.person?.sourceType || "").trim().toUpperCase() === "MMC");
+}
+
 function renderFacilityOverviewDdhOnShiftPeriod(assignments, options = {}) {
+  if (options.period === "Night") return renderFacilityOverviewDdhNightPeriod(assignments, options);
   const handled = new Set();
   const teamAssignments = (team) => (assignments || []).filter((assignment) => String(assignment.team || "").trim().toLowerCase() === team);
   const orange = teamAssignments("orange");
@@ -8997,6 +9004,40 @@ function renderFacilityOverviewDdhOnShiftPeriod(assignments, options = {}) {
   return `${mainRow ? `<div class="facility-overview-ddh-row facility-overview-ddh-main-row">${mainRow}</div>` : ""}
     ${supportRow ? `<div class="facility-overview-ddh-row facility-overview-ddh-support-row">${supportRow}</div>` : ""}
     ${remaining.length ? renderFacilityOverviewGenericOnShiftPeriod(remaining, options) : ""}`;
+}
+
+function renderFacilityOverviewDdhNightPeriod(assignments, options = {}) {
+  const isSsu = (assignment) => ["ssu", "night ssu"].includes(String(assignment.team || "").trim().toLowerCase());
+  const ssu = (assignments || []).filter(isSsu);
+  const nonSsu = (assignments || []).filter((assignment) => !isSsu(assignment));
+  const seniorRegistrars = nonSsu.filter((assignment) => normalizeWhoRole(assignment.role) === "SR");
+  const mainTeam = nonSsu.filter((assignment) => !seniorRegistrars.includes(assignment));
+  return [
+    ["Night SR", seniorRegistrars],
+    ["Main team", mainTeam],
+    ["SSU team", ssu],
+  ].filter(([, items]) => items.length)
+    .map(([label, items]) => renderFacilityOverviewStreamCard(label, items, options))
+    .join("");
+}
+
+function renderFacilityOverviewMmcNightPeriod(assignments, options = {}) {
+  const isTeam = (assignment, labels) => labels.includes(String(assignment.team || "").trim().toLowerCase());
+  const hub = (assignments || []).filter((assignment) => isTeam(assignment, ["hub", "night hub"]));
+  const ssu = (assignments || []).filter((assignment) => isTeam(assignment, ["ssu", "night ssu"]));
+  const assignedToDedicatedTeam = new Set([...hub, ...ssu]);
+  const remaining = (assignments || []).filter((assignment) => !assignedToDedicatedTeam.has(assignment));
+  const seniorRegistrars = remaining.filter((assignment) => normalizeWhoRole(assignment.role) === "SR");
+  const mainTeam = remaining.filter((assignment) => !seniorRegistrars.includes(assignment));
+  const cardOptions = { ...options, showSpecialTimes: false };
+  return [
+    ["Night SR", seniorRegistrars],
+    ["Hub", hub],
+    ["SSU", ssu],
+    ["Main team", mainTeam],
+  ].filter(([, items]) => items.length)
+    .map(([label, items]) => renderFacilityOverviewStreamCard(label, items, cardOptions))
+    .join("");
 }
 
 function renderFacilityOverviewGenericOnShiftPeriod(assignments, options = {}) {
@@ -9053,7 +9094,7 @@ function renderFacilityOverviewOnShiftNames(assignments, options = {}) {
     byPerson.set(person.doctorKey, existing);
   }
   return `<div class="facility-overview-on-shift-names">${[...byPerson.values()].sort((left, right) => left.person.displayName.localeCompare(right.person.displayName)).map(({ person, specialTimes }) => `
-    <div>${renderFacilityOverviewStaffName(person, { ...options, seniority: person.seniority })}${renderFacilityOverviewOnShiftSeniority(person, options)}${specialTimes.size ? `<small>${escapeHtml([...specialTimes].join(" · "))}</small>` : ""}</div>
+    <div>${renderFacilityOverviewStaffName(person, { ...options, seniority: person.seniority })}${renderFacilityOverviewOnShiftSeniority(person, options)}${options.showSpecialTimes !== false && specialTimes.size ? `<small>${escapeHtml([...specialTimes].join(" · "))}</small>` : ""}</div>
   `).join("")}</div>`;
 }
 
