@@ -305,7 +305,7 @@ let currentFacilityOverviewEnabled = currentUserRole === "creator";
 let facilityOverviewCompactReleaseTimer = null;
 let facilityOverviewState = {
   tab: "on-shift", date: formatDateKey(new Date()), facilityKey: "", includeClinicalSupport: false, requestId: 0, onShiftData: null,
-  staffTermStart: formatDateKey(australianTermForDate(new Date()).start), staffTerms: [], staffContent: "", staffData: null, staffQuery: "", staffExpanded: new Set(), staffFocusSection: "", staffActionMenu: null, staffDesignationMenu: null, staffSeniorityMenu: null,
+  staffTermStart: formatDateKey(australianTermForDate(new Date()).start), staffTerms: [], staffContent: "", staffData: null, staffQuery: "", staffExpanded: new Set(), staffFocusSection: "", staffActionMenu: null, staffDesignationMenu: null, staffSeniorityMenu: null, staffMultiSelectSection: "", staffMultiSelectMembers: new Map(), staffBulkSeniorityMenu: null, staffMultiSelectSaving: false,
   togetherStaffKeys: ["", ""], togetherRangeMode: "term",
   togetherTermStart: formatDateKey(australianTermForDate(new Date()).start),
   togetherFrom: formatDateKey(australianTermForDate(new Date()).start),
@@ -518,13 +518,19 @@ document.addEventListener("pointerdown", (event) => {
     const trigger = target.closest("[data-facility-overview-staff-seniority-menu]");
     if (!insideMenu && trigger?.dataset.facilityOverviewStaffSeniorityMenu !== seniorityMenu.key) closeFacilityOverviewStaffSeniorityMenu();
   }
+  const bulkMenu = facilityOverviewState.staffBulkSeniorityMenu;
+  if (bulkMenu) {
+    const insideMenu = target.closest("[data-facility-overview-staff-bulk-seniority-action-menu]");
+    if (!insideMenu) closeFacilityOverviewStaffBulkSeniorityMenu();
+  }
 }, true);
 document.addEventListener("keydown", (event) => {
-  if (event.key !== "Escape" || (!facilityOverviewState.staffActionMenu && !facilityOverviewState.staffDesignationMenu && !facilityOverviewState.staffSeniorityMenu)) return;
+  if (event.key !== "Escape" || (!facilityOverviewState.staffActionMenu && !facilityOverviewState.staffDesignationMenu && !facilityOverviewState.staffSeniorityMenu && !facilityOverviewState.staffBulkSeniorityMenu)) return;
   event.preventDefault();
   closeFacilityOverviewStaffActionMenu();
   closeFacilityOverviewStaffDesignationMenu();
   closeFacilityOverviewStaffSeniorityMenu();
+  closeFacilityOverviewStaffBulkSeniorityMenu();
 });
 facilityOverviewSection?.addEventListener("scroll", (event) => {
   const scroller = event.target;
@@ -553,6 +559,7 @@ facilityOverviewSection?.addEventListener("click", (event) => {
   }
   if (event.target.closest("[data-facility-overview-today]")) {
     if (facilityOverviewState.tab === "staff") return;
+    clearFacilityOverviewStaffMultiSelect({ render: false });
     facilityOverviewState.tab = "on-shift";
     facilityOverviewState.date = formatDateKey(new Date());
     void loadFacilityOverviewOnShift();
@@ -563,6 +570,7 @@ facilityOverviewSection?.addEventListener("click", (event) => {
     facilityOverviewState.staffActionMenu = null;
     facilityOverviewState.staffDesignationMenu = null;
     facilityOverviewState.staffSeniorityMenu = null;
+    clearFacilityOverviewStaffMultiSelect({ render: false });
     facilityOverviewState.tab = tab.dataset.facilityOverviewTab || "on-shift";
     resetFacilityOverviewScroll();
     if (facilityOverviewState.tab === "staff") {
@@ -612,6 +620,7 @@ facilityOverviewSection?.addEventListener("click", (event) => {
         : buildAustralianTerm(current.year, termNumber, startMonthIndexForTerm(termNumber));
     const value = formatDateKey(next.start);
     if (facilityOverviewState.staffTerms.some((term) => term.value === value)) {
+      clearFacilityOverviewStaffMultiSelect({ render: false });
       facilityOverviewState.staffTermStart = value;
       facilityOverviewState.staffExpanded.clear();
       facilityOverviewState.staffFocusSection = "";
@@ -624,6 +633,25 @@ facilityOverviewSection?.addEventListener("click", (event) => {
       doctorKey: staffCalendar.dataset.facilityOverviewOpenStaffCalendar || "",
       displayName: staffCalendar.dataset.facilityOverviewStaffDisplayName || "",
       sourceType: staffCalendar.dataset.facilityOverviewStaffSource || "",
+    });
+    return;
+  }
+  const multiSelectName = event.target.closest("[data-facility-overview-staff-multi-select-name]");
+  if (multiSelectName && facilityOverviewStaffMultiSelectIsActive(multiSelectName.dataset.facilityOverviewStaffMultiSelectSection || "")) {
+    event.preventDefault();
+    toggleFacilityOverviewStaffMultiSelectMember({
+      sectionKey: multiSelectName.dataset.facilityOverviewStaffMultiSelectSection || "",
+      sourceType: multiSelectName.dataset.facilityOverviewStaffSource || "",
+      doctorKey: multiSelectName.dataset.facilityOverviewStaffKey || "",
+      displayName: multiSelectName.dataset.facilityOverviewStaffDisplayName || "",
+    });
+    return;
+  }
+  const setBulkSeniority = event.target.closest("[data-facility-overview-set-bulk-staff-seniority]");
+  if (setBulkSeniority) {
+    void setFacilityOverviewStaffSeniorityOverrides({
+      seniority: setBulkSeniority.dataset.facilityOverviewSetBulkStaffSeniority || "",
+      useRosterSeniority: setBulkSeniority.dataset.facilityOverviewUseRosterSeniority === "true",
     });
     return;
   }
@@ -689,13 +717,34 @@ facilityOverviewSection?.addEventListener("click", (event) => {
   const staffSection = event.target.closest("[data-facility-overview-staff-section]");
   if (staffSection) {
     const key = staffSection.dataset.facilityOverviewStaffSection;
-    if (facilityOverviewState.staffExpanded.has(key)) facilityOverviewState.staffExpanded.delete(key);
-    else facilityOverviewState.staffExpanded.add(key);
+    if (facilityOverviewState.staffExpanded.has(key)) {
+      facilityOverviewState.staffExpanded.delete(key);
+      if (facilityOverviewStaffMultiSelectIsActive(key)) clearFacilityOverviewStaffMultiSelect({ render: false });
+    } else facilityOverviewState.staffExpanded.add(key);
     refreshFacilityOverviewStaffContent();
     renderFacilityOverview();
   }
 });
 facilityOverviewSection?.addEventListener("contextmenu", (event) => {
+  const multiSelectName = event.target.closest("[data-facility-overview-staff-multi-select-name]");
+  if (multiSelectName && isViewingCreatorAccount() && facilityOverviewStaffMultiSelectIsSelected({
+    sectionKey: multiSelectName.dataset.facilityOverviewStaffMultiSelectSection || "",
+    sourceType: multiSelectName.dataset.facilityOverviewStaffSource || "",
+    doctorKey: multiSelectName.dataset.facilityOverviewStaffKey || "",
+  })) {
+    event.preventDefault();
+    facilityOverviewState.staffActionMenu = null;
+    facilityOverviewState.staffDesignationMenu = null;
+    facilityOverviewState.staffSeniorityMenu = null;
+    facilityOverviewState.staffBulkSeniorityMenu = {
+      sectionKey: multiSelectName.dataset.facilityOverviewStaffMultiSelectSection || "",
+      x: Math.max(8, Math.round(event.clientX || 0)),
+      y: Math.max(8, Math.round(event.clientY || 0)),
+    };
+    refreshFacilityOverviewStaffContent();
+    renderFacilityOverviewStaffBodyPreservingViewport();
+    return;
+  }
   const designationTrigger = event.target.closest("[data-facility-overview-staff-designation-menu]");
   if (designationTrigger && isViewingCreatorAccount()) {
     event.preventDefault();
@@ -737,6 +786,26 @@ facilityOverviewSection?.addEventListener("contextmenu", (event) => {
 });
 facilityOverviewSection?.addEventListener("keydown", (event) => {
   if (event.key !== "ContextMenu" && !(event.shiftKey && event.key === "F10")) return;
+  const multiSelectName = event.target.closest?.("[data-facility-overview-staff-multi-select-name]");
+  if (multiSelectName && isViewingCreatorAccount() && facilityOverviewStaffMultiSelectIsSelected({
+    sectionKey: multiSelectName.dataset.facilityOverviewStaffMultiSelectSection || "",
+    sourceType: multiSelectName.dataset.facilityOverviewStaffSource || "",
+    doctorKey: multiSelectName.dataset.facilityOverviewStaffKey || "",
+  })) {
+    event.preventDefault();
+    const rect = multiSelectName.getBoundingClientRect();
+    facilityOverviewState.staffActionMenu = null;
+    facilityOverviewState.staffDesignationMenu = null;
+    facilityOverviewState.staffSeniorityMenu = null;
+    facilityOverviewState.staffBulkSeniorityMenu = {
+      sectionKey: multiSelectName.dataset.facilityOverviewStaffMultiSelectSection || "",
+      x: Math.max(8, Math.round(rect.left)),
+      y: Math.max(8, Math.round(rect.bottom)),
+    };
+    refreshFacilityOverviewStaffContent();
+    renderFacilityOverviewStaffBodyPreservingViewport();
+    return;
+  }
   const trigger = event.target.closest?.("[data-facility-overview-staff-designation-menu]");
   const seniorityTrigger = event.target.closest?.("[data-facility-overview-staff-seniority-menu]");
   const target = seniorityTrigger || trigger;
@@ -755,6 +824,13 @@ facilityOverviewSection?.addEventListener("keydown", (event) => {
   renderFacilityOverview();
 });
 facilityOverviewSection?.addEventListener("change", (event) => {
+  const multiSelectToggle = event.target.closest("[data-facility-overview-staff-multi-select]");
+  if (multiSelectToggle) {
+    const sectionKey = multiSelectToggle.dataset.facilityOverviewStaffMultiSelect || "";
+    if (multiSelectToggle.checked) activateFacilityOverviewStaffMultiSelect(sectionKey);
+    else clearFacilityOverviewStaffMultiSelect();
+    return;
+  }
   const togetherStaff = event.target.closest("[data-facility-overview-together-staff]");
   if (togetherStaff) {
     const index = Number(togetherStaff.dataset.facilityOverviewTogetherStaff);
@@ -806,6 +882,7 @@ facilityOverviewSection?.addEventListener("change", (event) => {
   }
   const facility = event.target.closest("[data-facility-overview-facility]");
   if (facility) {
+    clearFacilityOverviewStaffMultiSelect();
     facilityOverviewState.facilityKey = String(facility.value || "").toUpperCase();
     if (facilityOverviewState.tab === "staff") void loadFacilityOverviewStaff();
     else void loadFacilityOverviewOnShift();
@@ -824,6 +901,7 @@ facilityOverviewSection?.addEventListener("change", (event) => {
   }
   const term = event.target.closest("[data-facility-overview-staff-term]");
   if (term) {
+    clearFacilityOverviewStaffMultiSelect();
     facilityOverviewState.staffTermStart = String(term.value || "").slice(0, 10);
     facilityOverviewState.staffExpanded.clear();
     facilityOverviewState.staffFocusSection = "";
@@ -834,6 +912,7 @@ facilityOverviewSection?.addEventListener("input", (event) => {
   const search = event.target.closest("[data-facility-overview-staff-search]");
   if (!search) return;
   facilityOverviewState.staffQuery = String(search.value || "");
+  clearFacilityOverviewStaffMultiSelect({ render: false });
   refreshFacilityOverviewStaffContent();
   renderFacilityOverviewStaffBody();
 });
@@ -8437,6 +8516,7 @@ function closeFacilityOverview() {
   facilityOverviewState.staffActionMenu = null;
   facilityOverviewState.staffDesignationMenu = null;
   facilityOverviewState.staffSeniorityMenu = null;
+  clearFacilityOverviewStaffMultiSelect({ render: false });
   form?.classList.remove("is-facility-overview-active");
   resetFacilityOverviewScroll();
   facilityOverviewSection?.classList.add("hidden");
@@ -9151,6 +9231,95 @@ function refreshFacilityOverviewStaffContent() {
   facilityOverviewState.staffContent = renderFacilityOverviewStaffResults(facilityOverviewState.staffData, term);
 }
 
+function facilityOverviewStaffMultiSelectMemberKey({ sourceType = "", doctorKey = "" } = {}) {
+  return `${String(sourceType || "").toLowerCase()}|${normalizeRosterName(doctorKey)}`;
+}
+
+function facilityOverviewStaffMultiSelectIsActive(sectionKey) {
+  return Boolean(sectionKey) && facilityOverviewState.staffMultiSelectSection === sectionKey;
+}
+
+function facilityOverviewStaffMultiSelectIsSelected({ sectionKey = "", sourceType = "", doctorKey = "" } = {}) {
+  return facilityOverviewStaffMultiSelectIsActive(sectionKey)
+    && facilityOverviewState.staffMultiSelectMembers.has(facilityOverviewStaffMultiSelectMemberKey({ sourceType, doctorKey }));
+}
+
+function activateFacilityOverviewStaffMultiSelect(sectionKey) {
+  if (!sectionKey || !isViewingCreatorAccount()) return;
+  facilityOverviewState.staffMultiSelectSection = sectionKey;
+  facilityOverviewState.staffMultiSelectMembers = new Map();
+  facilityOverviewState.staffBulkSeniorityMenu = null;
+  refreshFacilityOverviewStaffContent();
+  renderFacilityOverviewStaffBodyPreservingViewport(sectionKey);
+}
+
+function clearFacilityOverviewStaffMultiSelect(options = {}) {
+  const wasActive = Boolean(facilityOverviewState.staffMultiSelectSection || facilityOverviewState.staffMultiSelectMembers.size || facilityOverviewState.staffBulkSeniorityMenu);
+  facilityOverviewState.staffMultiSelectSection = "";
+  facilityOverviewState.staffMultiSelectMembers = new Map();
+  facilityOverviewState.staffBulkSeniorityMenu = null;
+  facilityOverviewState.staffMultiSelectSaving = false;
+  if (wasActive && options.render !== false && facilityOverviewState.tab === "staff") {
+    refreshFacilityOverviewStaffContent();
+    renderFacilityOverviewStaffBodyPreservingViewport(options.sectionKey || "");
+  }
+}
+
+function toggleFacilityOverviewStaffMultiSelectMember({ sectionKey = "", sourceType = "", doctorKey = "", displayName = "" } = {}) {
+  if (!facilityOverviewStaffMultiSelectIsActive(sectionKey) || !sourceType || !doctorKey || facilityOverviewState.staffMultiSelectSaving) return;
+  const key = facilityOverviewStaffMultiSelectMemberKey({ sourceType, doctorKey });
+  if (facilityOverviewState.staffMultiSelectMembers.has(key)) facilityOverviewState.staffMultiSelectMembers.delete(key);
+  else facilityOverviewState.staffMultiSelectMembers.set(key, { sourceType, doctorKey, displayName });
+  facilityOverviewState.staffBulkSeniorityMenu = null;
+  refreshFacilityOverviewStaffContent();
+  renderFacilityOverviewStaffBodyPreservingViewport(sectionKey);
+}
+
+function renderFacilityOverviewStaffBodyPreservingViewport(sectionKey = "") {
+  if (!facilityOverviewBody || facilityOverviewState.tab !== "staff") return;
+  const scrollTop = facilityOverviewBody.scrollTop;
+  const previousAnchor = sectionKey
+    ? [...facilityOverviewBody.querySelectorAll("[data-facility-overview-staff-section]")].find((element) => element.dataset.facilityOverviewStaffSection === sectionKey)
+    : null;
+  const bodyTop = facilityOverviewBody.getBoundingClientRect().top;
+  const anchorOffset = previousAnchor ? previousAnchor.getBoundingClientRect().top - bodyTop : null;
+  renderFacilityOverviewStaffBody();
+  window.requestAnimationFrame(() => {
+    if (!facilityOverviewBody) return;
+    const nextAnchor = sectionKey
+      ? [...facilityOverviewBody.querySelectorAll("[data-facility-overview-staff-section]")].find((element) => element.dataset.facilityOverviewStaffSection === sectionKey)
+      : null;
+    if (nextAnchor && anchorOffset !== null) {
+      facilityOverviewBody.scrollTop += nextAnchor.getBoundingClientRect().top - facilityOverviewBody.getBoundingClientRect().top - anchorOffset;
+    } else {
+      facilityOverviewBody.scrollTop = scrollTop;
+    }
+  });
+}
+
+function applyFacilityOverviewStaffSeniorityOverrides(overrides) {
+  if (!facilityOverviewState.staffData || !Array.isArray(overrides) || !overrides.length) return;
+  const byPerson = new Map((facilityOverviewState.staffData.seniorityOverrides || []).map((override) => [`${override.sourceType}|${override.doctorKey}`, override]));
+  for (const override of overrides) {
+    if (!override?.sourceType || !override?.doctorKey) continue;
+    byPerson.set(`${override.sourceType}|${override.doctorKey}`, override);
+  }
+  facilityOverviewState.staffData.seniorityOverrides = [...byPerson.values()];
+  refreshFacilityOverviewStaffContent();
+  renderFacilityOverviewStaffBodyPreservingViewport(facilityOverviewState.staffMultiSelectSection);
+}
+
+function applyFacilityOverviewStaffDesignation(designation, { clear = false } = {}) {
+  if (!facilityOverviewState.staffData || !designation?.sourceType || !designation?.doctorKey) return;
+  const current = facilityOverviewState.staffData.designations || [];
+  const key = `${designation.sourceType}|${designation.doctorKey}`;
+  facilityOverviewState.staffData.designations = clear
+    ? current.filter((entry) => `${entry.sourceType}|${entry.doctorKey}` !== key)
+    : [...current.filter((entry) => `${entry.sourceType}|${entry.doctorKey}` !== key), designation];
+  refreshFacilityOverviewStaffContent();
+  renderFacilityOverviewStaffBodyPreservingViewport();
+}
+
 function facilityOverviewTermsFromCoverage(coverage) {
   const terms = new Map();
   const add = (term) => terms.set(formatDateKey(term.start), { value: formatDateKey(term.start), label: formatAustralianTermLabel(term) });
@@ -9243,14 +9412,18 @@ function renderFacilityOverviewStaffResults(data, term) {
       <div class="facility-overview-staff-sections" style="--facility-overview-seniority-label-width: ${countColumnLabelWidth}ch">${[...groups.entries()].sort(([left], [right]) => facilityOverviewSeniorityRank(left) - facilityOverviewSeniorityRank(right)).map(([grade, staff]) => {
         const key = `${source}:${grade}`;
         const expanded = query || facilityOverviewState.staffExpanded.has(key);
+        const canMultiSelect = grade === "Unknown" && expanded && isViewingCreatorAccount();
+        const multiSelectActive = facilityOverviewStaffMultiSelectIsActive(key);
+        const selectedCount = multiSelectActive ? facilityOverviewState.staffMultiSelectMembers.size : 0;
         return `<section class="facility-overview-staff-section">
-          <button type="button" class="facility-overview-staff-section-toggle" aria-expanded="${expanded}" data-facility-overview-staff-section="${escapeHtml(key)}"><span class="facility-overview-staff-section-title">${escapeHtml(grade)}</span><span class="facility-overview-staff-section-count">(${staff.length})</span><span class="facility-overview-staff-section-chevron" aria-hidden="true"></span></button>
+          <div class="facility-overview-staff-section-banner"><button type="button" class="facility-overview-staff-section-toggle" aria-expanded="${expanded}" data-facility-overview-staff-section="${escapeHtml(key)}"><span class="facility-overview-staff-section-title">${escapeHtml(grade)}</span><span class="facility-overview-staff-section-count">(${staff.length})</span><span class="facility-overview-staff-section-chevron" aria-hidden="true"></span></button>${canMultiSelect ? `<label class="facility-overview-staff-multi-select"><input type="checkbox" data-facility-overview-staff-multi-select="${escapeHtml(key)}" ${multiSelectActive ? "checked" : ""} ${facilityOverviewState.staffMultiSelectSaving ? "disabled" : ""}><span>Multi-select${multiSelectActive ? ` (${selectedCount})` : ""}</span></label>` : ""}</div>
           ${expanded ? `<div class="facility-overview-staff-list">${staff.sort((left, right) => left.displayName.localeCompare(right.displayName)).map((person) => {
             const dates = person.events.map((event) => String(event.start || "").slice(0, 10)).filter(Boolean).sort();
             const activity = dates.length ? `${formatDate(dates[0])}${dates.length > 1 ? ` – ${formatDate(dates[dates.length - 1])}` : ""} · ${dates.length} shift${dates.length === 1 ? "" : "s"}` : "No working shifts recorded this term";
-            const name = renderFacilityOverviewStaffName(person, { canUseStaffActions, designation: person.designation, seniority: person.seniority, termStart: formatDateKey(term.start) });
-            return `<article class="facility-overview-staff-member">${name}${renderFacilityOverviewStaffActivity(person, activity)}${renderFacilityOverviewStaffSeniorityStatus(person, term)}</article>`;
-          }).join("")}</div>` : ""}
+            const selected = facilityOverviewStaffMultiSelectIsSelected({ sectionKey: key, sourceType: person.sourceType, doctorKey: person.doctorKey });
+            const name = renderFacilityOverviewStaffName(person, { canUseStaffActions, designation: person.designation, seniority: person.seniority, termStart: formatDateKey(term.start), multiSelectSectionKey: grade === "Unknown" ? key : "", multiSelected: selected });
+            return `<article class="facility-overview-staff-member${selected ? " is-multi-selected" : ""}">${name}${renderFacilityOverviewStaffActivity(person, activity)}${renderFacilityOverviewStaffSeniorityStatus(person, term)}</article>`;
+          }).join("")}</div>${multiSelectActive && facilityOverviewState.staffBulkSeniorityMenu?.sectionKey === key ? renderFacilityOverviewStaffBulkSeniorityMenu(facilityOverviewState.staffBulkSeniorityMenu, selectedCount) : ""}` : ""}
         </section>`;
       }).join("")}${previousStaff.length ? renderFacilityOverviewPreviousStaffSection(source, previousStaff, query, canUseStaffActions) : ""}</div>
     </section>`;
@@ -9286,10 +9459,13 @@ function renderFacilityOverviewStaffName(person, options = {}) {
   const menuKey = facilityOverviewStaffActionMenuKey(target);
   const menu = facilityOverviewState.staffActionMenu;
   const expanded = isViewingCreatorAccount() && menu?.key === menuKey;
+  const multiSelectSectionKey = String(options.multiSelectSectionKey || "");
+  const multiSelectActive = facilityOverviewStaffMultiSelectIsActive(multiSelectSectionKey);
+  const multiSelectAttributes = multiSelectSectionKey ? ` data-facility-overview-staff-multi-select-name data-facility-overview-staff-multi-select-section="${escapeHtml(multiSelectSectionKey)}"${multiSelectActive ? ` aria-pressed="${options.multiSelected ? "true" : "false"}"` : ""}` : "";
   const seniorityMenuKey = facilityOverviewStaffSeniorityMenuKey(target);
   const seniorityMenu = facilityOverviewState.staffSeniorityMenu;
   const seniorityExpanded = isViewingCreatorAccount() && seniorityMenu?.key === seniorityMenuKey;
-  return `<div class="facility-overview-staff-action"><button type="button" class="facility-overview-staff-calendar-link" data-facility-overview-open-working-together="${escapeHtml(target.doctorKey)}" data-facility-overview-staff-display-name="${escapeHtml(displayName)}" data-facility-overview-staff-source="${escapeHtml(target.sourceType)}" data-facility-overview-staff-menu="${escapeHtml(menuKey)}" data-facility-overview-staff-key="${escapeHtml(target.doctorKey)}" data-facility-overview-staff-seniority="${escapeHtml(target.seniority)}" data-facility-overview-staff-term-start="${escapeHtml(target.termStart)}" data-facility-overview-staff-designation-id="${escapeHtml(options.designation?.id || "")}" aria-expanded="${expanded}" aria-haspopup="${isViewingCreatorAccount() ? "menu" : "false"}" aria-label="Find times working with ${escapeHtml(displayName)}">${escapeHtml(displayName)}</button>${expanded ? renderFacilityOverviewStaffActionMenu({ ...target, designation: options.designation }, menu) : ""}${seniorityExpanded ? renderFacilityOverviewStaffSeniorityMenu(target, seniorityMenu) : ""}</div>`;
+  return `<div class="facility-overview-staff-action"><button type="button" class="facility-overview-staff-calendar-link" data-facility-overview-open-working-together="${escapeHtml(target.doctorKey)}" data-facility-overview-staff-display-name="${escapeHtml(displayName)}" data-facility-overview-staff-source="${escapeHtml(target.sourceType)}" data-facility-overview-staff-menu="${escapeHtml(menuKey)}" data-facility-overview-staff-key="${escapeHtml(target.doctorKey)}" data-facility-overview-staff-seniority="${escapeHtml(target.seniority)}" data-facility-overview-staff-term-start="${escapeHtml(target.termStart)}" data-facility-overview-staff-designation-id="${escapeHtml(options.designation?.id || "")}" aria-expanded="${expanded}" aria-haspopup="${isViewingCreatorAccount() ? "menu" : "false"}" aria-label="${multiSelectActive ? `${options.multiSelected ? "Deselect" : "Select"} ${escapeHtml(displayName)}` : `Find times working with ${escapeHtml(displayName)}`}"${multiSelectAttributes}>${escapeHtml(displayName)}</button>${expanded ? renderFacilityOverviewStaffActionMenu({ ...target, designation: options.designation }, menu) : ""}${seniorityExpanded ? renderFacilityOverviewStaffSeniorityMenu(target, seniorityMenu) : ""}</div>`;
 }
 
 function facilityOverviewStaffActionMenuKey({ doctorKey = "", displayName = "", sourceType = "" } = {}) {
@@ -9318,6 +9494,14 @@ function renderFacilityOverviewStaffSeniorityMenu(person, menu) {
   const top = Math.max(8, Number(menu?.y) || 8);
   const choices = ["SMS", "CMO", "Senior Registrar", "Transitional/Intermediate Registrar", "Junior Registrar", "HMO", "Intern", "NP", "Physio", "Unknown"];
   return `<div class="facility-overview-staff-action-menu" role="menu" data-facility-overview-staff-seniority-action-menu="${escapeHtml(menu?.key || "")}" style="--facility-overview-menu-left: ${left}px; --facility-overview-menu-top: ${top}px">${choices.map((seniority) => `<button type="button" role="menuitem" data-facility-overview-set-staff-seniority="${escapeHtml(seniority)}" ${attributes}>${escapeHtml(seniority)}</button>`).join("")}<button type="button" role="menuitem" data-facility-overview-set-staff-seniority="" data-facility-overview-use-roster-seniority="true" ${attributes}>Use roster designation</button></div>`;
+}
+
+function renderFacilityOverviewStaffBulkSeniorityMenu(menu, selectedCount) {
+  const left = Math.max(8, Number(menu?.x) || 8);
+  const top = Math.max(8, Number(menu?.y) || 8);
+  const choices = ["SMS", "CMO", "Senior Registrar", "Transitional/Intermediate Registrar", "Junior Registrar", "HMO", "Intern", "NP", "Physio", "Unknown"];
+  const countLabel = `${selectedCount} selected staff member${selectedCount === 1 ? "" : "s"}`;
+  return `<div class="facility-overview-staff-action-menu" role="menu" aria-label="Change designation for ${escapeHtml(countLabel)}" data-facility-overview-staff-bulk-seniority-action-menu style="--facility-overview-menu-left: ${left}px; --facility-overview-menu-top: ${top}px"><span class="facility-overview-staff-bulk-menu-label">Change designation for ${escapeHtml(countLabel)}</span>${choices.map((seniority) => `<button type="button" role="menuitem" data-facility-overview-set-bulk-staff-seniority="${escapeHtml(seniority)}" ${facilityOverviewState.staffMultiSelectSaving ? "disabled" : ""}>${escapeHtml(seniority)}</button>`).join("")}<button type="button" role="menuitem" data-facility-overview-set-bulk-staff-seniority="" data-facility-overview-use-roster-seniority="true" ${facilityOverviewState.staffMultiSelectSaving ? "disabled" : ""}>Use roster designation</button></div>`;
 }
 
 function renderFacilityOverviewStaffSeniorityStatus(person, term) {
@@ -9454,22 +9638,32 @@ function openFacilityOverviewWorkingTogether(target) {
 function closeFacilityOverviewStaffActionMenu() {
   if (!facilityOverviewState.staffActionMenu) return;
   facilityOverviewState.staffActionMenu = null;
-  refreshFacilityOverviewStaffActionContent();
-  renderFacilityOverview();
+  refreshFacilityOverviewStaffMenuContent();
 }
 
 function closeFacilityOverviewStaffDesignationMenu() {
   if (!facilityOverviewState.staffDesignationMenu) return;
   facilityOverviewState.staffDesignationMenu = null;
-  refreshFacilityOverviewStaffActionContent();
-  renderFacilityOverview();
+  refreshFacilityOverviewStaffMenuContent();
 }
 
 function closeFacilityOverviewStaffSeniorityMenu() {
   if (!facilityOverviewState.staffSeniorityMenu) return;
   facilityOverviewState.staffSeniorityMenu = null;
+  refreshFacilityOverviewStaffMenuContent();
+}
+
+function refreshFacilityOverviewStaffMenuContent() {
   refreshFacilityOverviewStaffActionContent();
-  renderFacilityOverview();
+  if (facilityOverviewState.tab === "staff") renderFacilityOverviewStaffBodyPreservingViewport();
+  else renderFacilityOverview();
+}
+
+function closeFacilityOverviewStaffBulkSeniorityMenu() {
+  if (!facilityOverviewState.staffBulkSeniorityMenu) return;
+  facilityOverviewState.staffBulkSeniorityMenu = null;
+  refreshFacilityOverviewStaffContent();
+  renderFacilityOverviewStaffBodyPreservingViewport(facilityOverviewState.staffMultiSelectSection);
 }
 
 async function setFacilityOverviewStaffDesignation({ designation = "", sourceType = "", doctorKey = "", displayName = "", seniority = "" } = {}) {
@@ -9485,9 +9679,10 @@ async function setFacilityOverviewStaffDesignation({ designation = "", sourceTyp
         termStart: formatDateKey(term.start), termEnd: formatDateKey(addDays(term.end, -1)),
       }),
     });
-    await readJsonResponse(response, "Could not save the staff designation.");
+    const data = await readJsonResponse(response, "Could not save the staff designation.");
     setStatus(designation === "previous_staff" ? `${displayName} moved to Previous staff.` : `${displayName} marked as ${designation.replaceAll("_", " ")}.`);
-    await refreshFacilityOverviewAfterStaffChange();
+    facilityOverviewState.onShiftData = null;
+    applyFacilityOverviewStaffDesignation(data.designation);
   } catch (error) {
     setStatus(error.message || "Could not save the staff designation.", true);
   }
@@ -9505,9 +9700,10 @@ async function clearFacilityOverviewStaffDesignation(designationId) {
         designationId,
       }),
     });
-    await readJsonResponse(response, "Could not remove the staff designation.");
+    const data = await readJsonResponse(response, "Could not remove the staff designation.");
     setStatus("Staff designation removed.");
-    await refreshFacilityOverviewAfterStaffChange();
+    facilityOverviewState.onShiftData = null;
+    applyFacilityOverviewStaffDesignation(data.designation, { clear: true });
   } catch (error) {
     setStatus(error.message || "Could not remove the staff designation.", true);
   }
@@ -9526,19 +9722,46 @@ async function setFacilityOverviewStaffSeniorityOverride({ sourceType = "", doct
         facilityKey: sourceType, doctorKey, displayName, seniority, useRosterSeniority, termStart: effectiveTermStart,
       }),
     });
-    await readJsonResponse(response, "Could not save the staff designation.");
+    const data = await readJsonResponse(response, "Could not save the staff designation.");
     setStatus(useRosterSeniority ? `${displayName} will use the roster designation from this term.` : `${displayName} is now designated ${seniority} from this term.`);
-    await refreshFacilityOverviewAfterStaffChange();
+    facilityOverviewState.onShiftData = null;
+    applyFacilityOverviewStaffSeniorityOverrides([data.override]);
   } catch (error) {
     setStatus(error.message || "Could not save the staff designation.", true);
   }
 }
 
-async function refreshFacilityOverviewAfterStaffChange() {
-  facilityOverviewState.onShiftData = null;
-  facilityOverviewState.staffData = null;
-  if (facilityOverviewState.tab === "on-shift") await loadFacilityOverviewOnShift();
-  else if (facilityOverviewState.tab === "staff") await loadFacilityOverviewStaff();
+async function setFacilityOverviewStaffSeniorityOverrides({ seniority = "", useRosterSeniority = false } = {}) {
+  const sectionKey = facilityOverviewState.staffMultiSelectSection;
+  const selectedStaff = [...facilityOverviewState.staffMultiSelectMembers.values()];
+  const sourceType = String(sectionKey || "").split(":")[0];
+  if (!isViewingCreatorAccount() || !sectionKey || !sourceType || !selectedStaff.length || facilityOverviewState.staffMultiSelectSaving) return;
+  const termStart = formatDateKey(australianTermForDate(parseDateOnly(facilityOverviewState.staffTermStart || formatDateKey(new Date()))).start);
+  facilityOverviewState.staffMultiSelectSaving = true;
+  facilityOverviewState.staffBulkSeniorityMenu = null;
+  refreshFacilityOverviewStaffContent();
+  renderFacilityOverviewStaffBodyPreservingViewport(sectionKey);
+  try {
+    const response = await fetch("/api/state", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "setFacilityStaffSeniorityOverrides", email: authUserEmail || currentUserEmail, password: authUserPassword || currentUserPassword,
+        facilityKey: sourceType, staff: selectedStaff, seniority, useRosterSeniority, termStart,
+      }),
+    });
+    const data = await readJsonResponse(response, "Could not save the staff designations.");
+    facilityOverviewState.onShiftData = null;
+    facilityOverviewState.staffMultiSelectSaving = false;
+    clearFacilityOverviewStaffMultiSelect({ render: false });
+    applyFacilityOverviewStaffSeniorityOverrides(data.overrides || []);
+    const verb = useRosterSeniority ? "will use the roster designation" : `are now designated ${seniority}`;
+    setStatus(`${selectedStaff.length} staff member${selectedStaff.length === 1 ? "" : "s"} ${verb}.`);
+  } catch (error) {
+    facilityOverviewState.staffMultiSelectSaving = false;
+    refreshFacilityOverviewStaffContent();
+    renderFacilityOverviewStaffBodyPreservingViewport(sectionKey);
+    setStatus(error.message || "Could not save the staff designations.", true);
+  }
 }
 
 async function openFacilityOverviewStaffSection({ sourceType = "", seniority = "", date = "" } = {}) {
@@ -9549,6 +9772,7 @@ async function openFacilityOverviewStaffSection({ sourceType = "", seniority = "
   if (!source || !grade || grade === "Unknown" || !/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return;
   const term = australianTermForDate(parseDateOnly(dateKey));
   const sectionKey = `${source.toLowerCase()}:${grade}`;
+  clearFacilityOverviewStaffMultiSelect({ render: false });
   facilityOverviewState.tab = "staff";
   facilityOverviewState.facilityKey = source;
   facilityOverviewState.staffTermStart = formatDateKey(term.start);

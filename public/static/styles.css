@@ -1029,18 +1029,54 @@ input[type="color"] {
   border-radius: 10px;
 }
 
+.facility-overview-staff-section-banner {
+  display: flex;
+  align-items: stretch;
+  background: rgba(20, 34, 42, 0.035);
+  border-radius: 9px 9px 0 0;
+}
+
 .facility-overview-staff-section-toggle {
   display: grid;
   grid-template-columns: minmax(0, var(--facility-overview-seniority-label-width, max-content)) 4ch minmax(0, 1fr);
   width: 100%;
   padding: 11px 12px;
   border: 0;
-  background: rgba(20, 34, 42, 0.035);
+  background: transparent;
   color: var(--ink);
   font: inherit;
   font-weight: 700;
   text-align: left;
   cursor: pointer;
+}
+
+.facility-overview-staff-section-banner .facility-overview-staff-section-toggle {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.facility-overview-staff-section > .facility-overview-staff-section-toggle {
+  background: rgba(20, 34, 42, 0.035);
+}
+
+.facility-overview-staff-multi-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  margin: 0 12px 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.facility-overview-staff-multi-select input {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  accent-color: var(--accent);
 }
 
 .facility-overview-staff-section-count {
@@ -1065,6 +1101,17 @@ input[type="color"] {
   flex-wrap: wrap;
   padding: 9px 0;
   border-top: 1px solid rgba(20, 34, 42, 0.08);
+}
+
+.facility-overview-staff-member.is-multi-selected {
+  margin: 0 -6px;
+  padding: 9px 6px;
+  border-radius: 7px;
+  background: var(--accent-soft);
+}
+
+.facility-overview-staff-member.is-multi-selected .facility-overview-staff-calendar-link {
+  color: var(--accent-strong);
 }
 
 .facility-overview-staff-member span {
@@ -1138,6 +1185,13 @@ input[type="color"] {
 .facility-overview-staff-action-menu button:focus-visible {
   background: var(--accent-soft);
   color: var(--accent-strong);
+}
+
+.facility-overview-staff-bulk-menu-label {
+  padding: 5px 10px 7px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
 }
 
 .facility-overview-staff-designation-action {

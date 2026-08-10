@@ -1047,6 +1047,62 @@ export async function setFacilityStaffSeniorityOverride(db, input = {}) {
   return loadFacilityStaffSeniorityOverride(db, id);
 }
 
+export async function setFacilityStaffSeniorityOverrides(db, input = {}) {
+  if (!db?.prepare) throw new Error("Roster database is unavailable.");
+  await ensureCalendarSchema(db);
+  const sourceType = normalizeSourceType(input.sourceType || input.facilityKey);
+  const termStart = datePart(input.termStart);
+  const useRosterSeniority = input.useRosterSeniority === true;
+  const seniority = useRosterSeniority ? "" : normalizeFacilityStaffSeniority(input.seniority);
+  const suppliedStaff = Array.isArray(input.staff) ? input.staff : [];
+  if (!sourceType || !termStart || (!useRosterSeniority && !FACILITY_STAFF_SENIORITIES.has(seniority))) {
+    throw new Error("A valid ED staff seniority is required.");
+  }
+  const staff = [];
+  const seen = new Set();
+  for (const person of suppliedStaff) {
+    const doctorKey = String(person?.doctorKey || "").trim();
+    if (!doctorKey) throw new Error("Each selected staff member must be valid.");
+    if (seen.has(doctorKey)) continue;
+    seen.add(doctorKey);
+    staff.push({ doctorKey, displayName: String(person?.displayName || "").trim() });
+  }
+  if (!staff.length) throw new Error("Choose at least one staff member.");
+
+  const now = new Date().toISOString();
+  const createdBy = normalizeEmail(input.createdBy);
+  const statements = staff.map((person) => db.prepare(`
+    INSERT INTO facility_staff_seniority_overrides (
+      id, source_type, doctor_key, display_name, seniority, use_roster_seniority,
+      term_start, active, created_by, created_at, updated_at, cleared_at, cleared_reason
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, '', '')
+    ON CONFLICT(id) DO UPDATE SET
+      display_name = excluded.display_name,
+      seniority = excluded.seniority,
+      use_roster_seniority = excluded.use_roster_seniority,
+      active = 1,
+      created_by = excluded.created_by,
+      created_at = excluded.created_at,
+      updated_at = excluded.updated_at,
+      cleared_at = '',
+      cleared_reason = ''
+  `).bind(
+    facilityStaffSeniorityOverrideId(sourceType, person.doctorKey, termStart),
+    sourceType,
+    person.doctorKey,
+    person.displayName,
+    seniority,
+    useRosterSeniority ? 1 : 0,
+    termStart,
+    createdBy,
+    now,
+    now,
+  ));
+  if (typeof db.batch === "function") await db.batch(statements);
+  else await Promise.all(statements.map((statement) => statement.run()));
+  return Promise.all(staff.map((person) => loadFacilityStaffSeniorityOverride(db, facilityStaffSeniorityOverrideId(sourceType, person.doctorKey, termStart))));
+}
+
 export async function queryFacilityStaffSeniorityOverrides(db, options = {}) {
   if (!db?.prepare) return [];
   await ensureCalendarSchema(db);

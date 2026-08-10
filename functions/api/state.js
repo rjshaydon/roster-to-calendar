@@ -40,6 +40,7 @@ import {
   setFacilityStaffDesignation,
   clearFacilityStaffDesignation,
   setFacilityStaffSeniorityOverride,
+  setFacilityStaffSeniorityOverrides,
   reconcileFacilityStaffDesignationsForRosterFile,
   queryOverlapDoctorsFromEvents,
   queryClaimedAccounts,
@@ -1478,6 +1479,30 @@ export async function onRequestPost(context) {
         return Response.json({ ok: true, override });
       } catch (error) {
         return Response.json({ error: error?.message || "Could not save the staff designation." }, { status: 400 });
+      }
+    }
+
+    if (action === "setFacilityStaffSeniorityOverrides") {
+      if ((account.role !== "creator" && account.role !== "owner") || targetEmail) {
+        return Response.json({ error: "Creator access on the Creator profile is required." }, { status: 403 });
+      }
+      try {
+        const termStart = String(body?.termStart || "").slice(0, 10);
+        const staff = Array.isArray(body?.staff) ? body.staff : [];
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(termStart)) return Response.json({ error: "A valid medical term is required." }, { status: 400 });
+        if (!staff.length || staff.length > 100) return Response.json({ error: "Choose between 1 and 100 staff members." }, { status: 400 });
+        const overrides = await setFacilityStaffSeniorityOverrides(context.env.ROSTER_DB, {
+          sourceType: body?.facilityKey,
+          staff: staff.map((person) => ({ ...person, doctorKey: normalizeRosterName(person?.doctorKey || "") })),
+          seniority: body?.seniority,
+          useRosterSeniority: body?.useRosterSeniority === true,
+          termStart,
+          createdBy: account.record?.email || email,
+        });
+        scheduleSnapshotWarmupForSourceTypes(context, [...new Set(overrides.map((override) => override?.sourceType).filter(Boolean))], { reason: "facilityStaffSeniorityOverrides" });
+        return Response.json({ ok: true, overrides });
+      } catch (error) {
+        return Response.json({ error: error?.message || "Could not save the staff designations." }, { status: 400 });
       }
     }
 
