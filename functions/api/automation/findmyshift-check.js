@@ -17,14 +17,25 @@ export async function onRequestPost(context) {
 
   const now = new Date().toISOString();
   const current = await loadRosterSource(context.env.ROSTER_DB, SOURCE_ID);
+  const range = findmyshiftConfiguredRosterRange(context.env);
+  let providerVersion = "";
   try {
-    const providerVersion = await findmyshiftLastModified(apiKey, teamId);
+    providerVersion = await findmyshiftLastModified(apiKey, teamId);
+    const rangeState = findmyshiftRangeState(current?.cursor, range, providerVersion);
+    // An unpublished upcoming term is checked once per FindMyShift version,
+    // then left alone until the provider changes.
+    if (current?.providerVersion === providerVersion && rangeState.waiting) {
+      await saveSource(context, current, { lastCheckedAt: now, lastError: "" });
+      return Response.json({ ok: true, status: "waiting-for-publication", providerModifiedAt: providerVersion });
+    }
     // A provider version is current only after it has completed the whole
     // retained-source → background-parser → active-calendar lifecycle.  A
     // failed import must be retried even when FindMyShift has not changed the
-    // roster since the failed attempt.
+    // roster since the failed attempt. A term-window change deliberately
+    // bypasses this shortcut so the next term appears four weeks early.
     if (current?.providerVersion
       && current.providerVersion === providerVersion
+      && rangeState.requested
       && current.lastSuccessAt
       && (!current.lastError || isTransientFindmyshiftRateLimitError(current.lastError))) {
       await reconcileCurrentFindmyshiftRoster(context, current);
@@ -38,7 +49,6 @@ export async function onRequestPost(context) {
       await saveSource(context, current, { lastCheckedAt: now });
       return Response.json({ ok: true, status: "incomplete", providerModifiedAt: providerVersion });
     }
-    const range = findmyshiftConfiguredRosterRange(context.env);
     const workbook = await findmyshiftRosterWorkbook(apiKey, teamId, range);
     const response = await fetch(new URL("/api/automation/ingest", context.request.url), {
       method: "POST",
@@ -54,9 +64,30 @@ export async function onRequestPost(context) {
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(String(result.error || `Roster queue returned HTTP ${response.status}.`));
+    await saveSource(context, current, {
+      providerVersion,
+      providerModifiedAt: providerVersion,
+      lastCheckedAt: now,
+      lastError: "",
+      cursor: withFindmyshiftRangeState(current?.cursor, range, providerVersion, "queued"),
+    });
     return Response.json({ ok: true, status: String(result.status || "queued"), providerModifiedAt: providerVersion, queue: { runId: String(result.runId || ""), dispatched: result.processorDispatch?.dispatched === true } });
   } catch (error) {
     const errorMessage = String(error?.message || error).slice(0, 300);
+    if (error?.code === "findmyshift-no-shifts") {
+      await saveSource(context, current, {
+        providerVersion: providerVersion || current?.providerVersion || "",
+        providerModifiedAt: providerVersion || current?.providerModifiedAt || "",
+        lastCheckedAt: now,
+        lastError: "",
+        cursor: withFindmyshiftRangeState(current?.cursor, range, providerVersion, "waiting"),
+      });
+      return Response.json({
+        ok: true,
+        status: "waiting-for-publication",
+        providerModifiedAt: providerVersion,
+      });
+    }
     // A completed source remains current when the provider merely throttles a
     // metadata poll. The next scheduled check will retry it; do not make the
     // Files card look like the successfully imported roster has failed.
@@ -81,6 +112,26 @@ function isTransientFindmyshiftRateLimitError(value) {
   return /FindMyShift .* returned HTTP 429\./i.test(String(value || ""));
 }
 
+function findmyshiftRangeState(cursor, range, providerVersion) {
+  const saved = cursor && typeof cursor === "object" ? cursor.findmyshiftRange : null;
+  const requested = String(saved?.from || "") === String(range?.from || "")
+    && String(saved?.to || "") === String(range?.to || "")
+    && String(saved?.providerVersion || "") === String(providerVersion || "");
+  return { requested, waiting: requested && saved?.status === "waiting" };
+}
+
+function withFindmyshiftRangeState(cursor, range, providerVersion, status) {
+  return {
+    ...(cursor && typeof cursor === "object" ? cursor : {}),
+    findmyshiftRange: {
+      from: String(range?.from || ""),
+      to: String(range?.to || ""),
+      providerVersion: String(providerVersion || ""),
+      status: String(status || ""),
+    },
+  };
+}
+
 async function reconcileCurrentFindmyshiftRoster(context, current) {
   const activeFileId = String(current?.activeFileId || "").trim();
   if (!activeFileId) return;
@@ -93,9 +144,13 @@ async function reconcileCurrentFindmyshiftRoster(context, current) {
 
 async function saveSource(context, existing, update) {
   const now = new Date().toISOString();
+  // Re-read so a just-finished background import cannot have its active-file
+  // and success metadata overwritten by this lightweight watchdog update.
+  const current = await loadRosterSource(context.env.ROSTER_DB, SOURCE_ID).catch(() => null);
+  const base = current || existing || {};
   await upsertRosterSource(context.env.ROSTER_DB, {
-    ...(existing || {}), id: SOURCE_ID, provider: "findmyshift", sourceType: "ddh", label: "Dandenong (Findmyshift)", enabled: true,
-    config: existing?.config || {}, cursor: existing?.cursor || {}, createdAt: existing?.createdAt || now, updatedAt: now, ...update,
+    ...base, id: SOURCE_ID, provider: "findmyshift", sourceType: "ddh", label: "Dandenong (Findmyshift)", enabled: true,
+    config: base.config || {}, cursor: base.cursor || {}, createdAt: base.createdAt || now, updatedAt: now, ...update,
   });
 }
 

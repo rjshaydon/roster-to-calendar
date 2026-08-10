@@ -1,19 +1,22 @@
 import * as XLSX from "xlsx";
 
 const API_BASE = "https://www.findmyshift.com/api/1.4";
+const NEXT_TERM_LOOKAHEAD_DAYS = 28;
 
 export function findmyshiftConfiguredRosterRange(env = {}, now = new Date()) {
   // FindMyShift accepts the complete published roster window, but rejects an
   // open-ended multi-year request (HTTP 470).  The Diagnostic bounds are the
   // administrator-configurable published range; without them use the current
-  // roster term, which is the provider-compatible full available window.
+  // term until the next term is four weeks away. At that point, import the
+  // upcoming term as its own source so it can appear in calendars before the
+  // current term ends.
   return {
-    from: validDateKey(env.FINDMYSHIFT_FROM) || validDateKey(env.FINDMYSHIFT_DIAGNOSTIC_FROM) || findmyshiftTermWindow(now).from,
-    to: validDateKey(env.FINDMYSHIFT_TO) || validDateKey(env.FINDMYSHIFT_DIAGNOSTIC_TO) || findmyshiftTermWindow(now).to,
+    from: validDateKey(env.FINDMYSHIFT_FROM) || validDateKey(env.FINDMYSHIFT_DIAGNOSTIC_FROM) || findmyshiftPublicationWindow(now).from,
+    to: validDateKey(env.FINDMYSHIFT_TO) || validDateKey(env.FINDMYSHIFT_DIAGNOSTIC_TO) || findmyshiftPublicationWindow(now).to,
   };
 }
 
-function findmyshiftTermWindow(now) {
+function findmyshiftPublicationWindow(now) {
   const date = now instanceof Date && !Number.isNaN(now.getTime()) ? now : new Date();
   const today = date.toISOString().slice(0, 10);
   const terms = [];
@@ -23,8 +26,11 @@ function findmyshiftTermWindow(now) {
       terms.push({ from, to: addDateKeyDays(from, 90) });
     }
   }
-  return terms.filter((term) => term.from <= today).sort((left, right) => right.from.localeCompare(left.from))[0]
+  const sorted = terms.sort((left, right) => left.from.localeCompare(right.from));
+  const current = sorted.filter((term) => term.from <= today).at(-1)
     || { from: firstMondayDateKey(date.getUTCFullYear(), 1), to: addDateKeyDays(firstMondayDateKey(date.getUTCFullYear(), 1), 90) };
+  const next = sorted.find((term) => term.from > today);
+  return next && today >= addDateKeyDays(next.from, -NEXT_TERM_LOOKAHEAD_DAYS) ? next : current;
 }
 
 function firstMondayDateKey(year, monthIndex) {
@@ -56,14 +62,20 @@ export async function findmyshiftRosterWorkbook(apiKey, teamId, range) {
   // report does not consume requests (or trigger a 429) merely to discover
   // that it cannot safely be imported.
   const preliminaryShifts = extractShiftRows(report);
-  if (!preliminaryShifts.length) throw new Error("FindMyShift returned no usable roster shifts for the configured date range.");
+  if (!preliminaryShifts.length) throw noUsableFindmyshiftShiftsError();
   assertFindmyshiftDandenongAssignments(preliminaryShifts);
   const staff = await findmyshiftStaffList(apiKey, teamId);
   const facilities = await findmyshiftFacilityList(apiKey, teamId);
   const shifts = extractShiftRows(report, { staff, facilities });
-  if (!shifts.length) throw new Error("FindMyShift returned no usable roster shifts for the configured date range.");
+  if (!shifts.length) throw noUsableFindmyshiftShiftsError();
   assertFindmyshiftDandenongAssignments(shifts);
   return findmyshiftRowsWorkbook(shifts, staff);
+}
+
+function noUsableFindmyshiftShiftsError() {
+  const error = new Error("FindMyShift returned no usable roster shifts for the configured date range.");
+  error.code = "findmyshift-no-shifts";
+  return error;
 }
 
 // A DDH shift must carry its stream in either its label or a facility value.

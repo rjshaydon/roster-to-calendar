@@ -92,7 +92,7 @@ Normal source updates never require a full rebuild. In Admin → System, **Advan
 
 ## Dandenong / Findmyshift
 
-The scheduled watchdog checks Findmyshift every 15 minutes using the lightweight `teams/last-modified` endpoint. It fetches the full shifts report only when that provider version changes, and the existing content hash check prevents a reparse if the report itself is unchanged. The report is converted to the same retained DDH workbook format used by manual exports, then processed by the normal GitHub queue.
+The scheduled watchdog checks Findmyshift every 15 minutes using the lightweight `teams/last-modified` endpoint. It imports the current term until the next term is four weeks away, then imports that next term as a separate retained roster so its shifts can appear before the rollover. A changed provider version refreshes the selected term; an unpublished upcoming term is recorded as waiting and retried only after Findmyshift changes. The report is converted to the same retained DDH workbook format used by manual exports, then processed by the normal GitHub queue.
 
 Save the Findmyshift API key and team ID only as Pages secrets:
 
@@ -101,7 +101,7 @@ npx wrangler pages secret put FINDMYSHIFT_API_KEY --project-name roster-to-calen
 npx wrangler pages secret put FINDMYSHIFT_TEAM_ID --project-name roster-to-calendar
 ```
 
-Optional `FINDMYSHIFT_FROM` and `FINDMYSHIFT_TO` secrets constrain the report range. The default covers the previous, current, and next calendar year. The key and team ID are never returned to the browser, stored in D1/R2, logged, or committed. Before enabling the scheduler, verify that the API report includes every Dandenong staff stream, leave entry, and required horizon.
+Optional `FINDMYSHIFT_FROM` and `FINDMYSHIFT_TO` secrets set a fixed report range instead of the automatic term window. The key and team ID are never returned to the browser, stored in D1/R2, logged, or committed. Before enabling the scheduler, verify that the API report includes every Dandenong staff stream, leave entry, and required horizon.
 
 ## Manual access policy
 

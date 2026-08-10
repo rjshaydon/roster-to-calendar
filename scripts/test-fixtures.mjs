@@ -116,6 +116,21 @@ assert.deepEqual(
   { from: "2026-08-03", to: "2026-11-01" },
   "FindMyShift automation should default to the current provider-compatible roster term",
 );
+assert.deepEqual(
+  findmyshiftConfiguredRosterRange({}, new Date("2026-10-04T00:00:00Z")),
+  { from: "2026-08-03", to: "2026-11-01" },
+  "FindMyShift should retain the current term until the four-week publication window opens",
+);
+assert.deepEqual(
+  findmyshiftConfiguredRosterRange({}, new Date("2026-10-05T00:00:00Z")),
+  { from: "2026-11-02", to: "2027-01-31" },
+  "FindMyShift should begin importing Term 4 four weeks before it starts",
+);
+assert.deepEqual(
+  findmyshiftConfiguredRosterRange({}, new Date("2027-01-04T00:00:00Z")),
+  { from: "2027-02-01", to: "2027-05-02" },
+  "FindMyShift should roll into the following year using the same four-week lead time",
+);
 const findmyshiftRows = extractShiftRows(findmyshiftFixture.report, {
   staff: findmyshiftFixture.staff,
   facilities: findmyshiftFixture.facilities,
@@ -393,6 +408,9 @@ assert.match(styleSource, /#facilityOverviewBody \{[\s\S]*?height: 100%;[\s\S]*?
 assert.match(styleSource, /#facilityOverviewBody\.is-working-together > \.facility-overview-together \{[\s\S]*?height: 100%;[\s\S]*?overflow-y: auto;/, "Working together should use an explicit full-height tab scroller");
 assert.match(stateSource, /action === "downloadFindmyshiftExceptions"[\s\S]*findmyshiftDandenongAssignmentExceptions[\s\S]*findmyshiftExceptionCsv/, "FindMyShift exception downloads must be creator-only server-side report reads");
 assert.match(findmyshiftCheckSource, /isTransientFindmyshiftRateLimitError[\s\S]*current\?\.lastSuccessAt[\s\S]*returned HTTP 429/, "a transient FindMyShift rate limit should neither mark a successful source failed nor cause it to be downloaded again");
+assert.match(findmyshiftModuleSource, /NEXT_TERM_LOOKAHEAD_DAYS = 28[\s\S]*findmyshiftPublicationWindow/, "FindMyShift should use a four-week early-publication window for the next term");
+assert.match(findmyshiftCheckSource, /term-window change deliberately[\s\S]*rangeState\.requested[\s\S]*withFindmyshiftRangeState/, "a new FindMyShift term window should bypass an unchanged provider version and persist its requested range");
+assert.match(findmyshiftCheckSource, /findmyshift-no-shifts[\s\S]*waiting-for-publication/, "an unpublished upcoming FindMyShift term should wait for a provider update instead of surfacing as an import failure");
 assert.match(
   findmyshiftCheckSource,
   /current\.lastSuccessAt[\s\S]*reconcileCurrentFindmyshiftRoster[\s\S]*reconcileRosterFileSupersession/,
