@@ -174,7 +174,7 @@ async function ensureCalendarSchemaUncached(db) {
       real_name TEXT NOT NULL DEFAULT '',
       role TEXT NOT NULL DEFAULT 'user',
       insights_enabled INTEGER NOT NULL DEFAULT 0,
-      facility_overview_enabled INTEGER NOT NULL DEFAULT 1,
+      facility_overview_enabled INTEGER NOT NULL DEFAULT 0,
       subscription_token TEXT NOT NULL DEFAULT '',
       password_salt TEXT NOT NULL DEFAULT '',
       password_hash TEXT NOT NULL DEFAULT '',
@@ -184,7 +184,7 @@ async function ensureCalendarSchemaUncached(db) {
       updated_at TEXT NOT NULL DEFAULT ''
     )
   `).run();
-  await ensureColumn(db, "account_profiles", "facility_overview_enabled", "INTEGER NOT NULL DEFAULT 1");
+  await ensureColumn(db, "account_profiles", "facility_overview_enabled", "INTEGER NOT NULL DEFAULT 0");
   await ensureColumn(db, "account_profiles", "password_salt", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn(db, "account_profiles", "password_hash", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn(db, "account_profiles", "admin_issues_json", "TEXT NOT NULL DEFAULT '[]'");

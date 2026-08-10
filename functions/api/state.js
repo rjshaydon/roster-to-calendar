@@ -1761,7 +1761,7 @@ async function loadOrCreateD1Account(db, email, password, options = {}) {
       claims: [],
       adminIssues: [],
       localParserExtensions: [],
-      facilityOverviewEnabled: true,
+      facilityOverviewEnabled: roleForEmail(email) === "creator",
       subscriptionToken: randomSubscriptionToken(),
       createdAt: now,
       updatedAt: now,

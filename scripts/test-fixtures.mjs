@@ -285,6 +285,8 @@ const findmyshiftModuleSource = await readFile(new URL("../functions/_lib/findmy
 const styleSource = await readFile(new URL("../public/static/styles.css", import.meta.url), "utf8");
 const calendarMigrationSource = await readFile(new URL("../migrations/0001_calendar_store.sql", import.meta.url), "utf8");
 const insightIndexMigrationSource = await readFile(new URL("../migrations/0005_roster_insight_index.sql", import.meta.url), "utf8");
+const facilityAccessMigrationSource = await readFile(new URL("../migrations/0011_facility_overview_access.sql", import.meta.url), "utf8");
+const facilityOptInRepairMigrationSource = await readFile(new URL("../migrations/0017_restore_facility_overview_opt_in.sql", import.meta.url), "utf8");
 const d1CalendarSource = await readFile(new URL("../functions/_lib/d1-calendar.js", import.meta.url), "utf8");
 const automationIngestSource = await readFile(new URL("../functions/api/automation/ingest.js", import.meta.url), "utf8");
 const findmyshiftCheckSource = await readFile(new URL("../functions/api/automation/findmyshift-check.js", import.meta.url), "utf8");
@@ -296,6 +298,8 @@ assert.match(indexSource, /id="stayLoggedIn"[^>]*checked/, "Stay logged in shoul
 assert.equal((appSource.match(/data-test-findmyshift/g) || []).length, 0, "FindMyShift diagnostics should not remain exposed as a UI control");
 assert.equal((appSource.match(/data-sync-findmyshift/g) || []).length, 0, "FindMyShift is automated and should not expose a manual sync control");
 assert.equal((appSource.match(/data-download-findmyshift-exceptions/g) || []).length, 0, "FindMyShift exception review is no longer exposed as a UI control");
+assert.match(facilityAccessMigrationSource, /facility_overview_enabled INTEGER NOT NULL DEFAULT 0/, "At a glance database access should default to opt-in");
+assert.match(facilityOptInRepairMigrationSource, /WHEN role IN \('creator', 'owner'\) THEN 1[\s\S]*ELSE 0/, "the At a glance repair should retain Creator access and revoke unintended standard-user access");
 assert.match(
   appSource.match(/function renderFacilityOverviewTogetherResults[\s\S]*?function facilityOverviewFormatOverlap/)?.[0] || "",
   /eventSourceCode[\s\S]*nextStart >= nextEnd[\s\S]*facilityOverviewSubtractIntervals/,
@@ -4158,6 +4162,7 @@ assert.deepEqual(
   ["Original"],
   "failed derived-file refresh should preserve the previous events transactionally",
 );
+d1Store.accountProfiles.get("rhaydon@gmail.com").facility_overview_enabled = 0;
 const d1CreatorLogin = await postState(d1StateStore, {
   action: "login",
   email: "rhaydon@gmail.com",
@@ -4166,8 +4171,17 @@ const d1CreatorLogin = await postState(d1StateStore, {
 assert.equal(d1CreatorLogin.snapshot?.preview?.derivedFromD1, true, "creator login should return an inline D1-derived snapshot");
 assert.equal(d1CreatorLogin.viewedAccountType, "creator", "creator login should identify the viewed account as the creator context");
 assert.equal(d1CreatorLogin.isImpersonating, false, "creator login should not impersonate another account");
+assert.equal(d1CreatorLogin.facilityOverviewEnabled, true, "Creator At a glance access should remain unconditional even if its stored flag is false");
 assert.equal(d1CreatorLogin.state.session.doctorKey, d1Doctor.key, "creator login should keep selected doctor metadata");
 assert.equal(d1CreatorLogin.subscription.enabled, true, "creator account should expose subscription URL capability");
+const d1DisableCreatorFacilityOverview = await postStateRaw(d1StateStore, {
+  action: "setUserFacilityOverviewEnabled",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  targetEmail: "rhaydon@gmail.com",
+  facilityOverviewEnabled: false,
+}, d1Store);
+assert.equal(d1DisableCreatorFacilityOverview.response.status, 400, "Creator At a glance access should not be disableable");
 const d1CreatorCalendar = await postState(d1StateStore, {
   action: "loadCalendarEvents",
   email: "rhaydon@gmail.com",
@@ -4190,7 +4204,7 @@ const d1CreatedUser = await postState(d1StateStore, {
   targetPassword: "d1-password",
 }, d1Store);
 assert.ok(d1CreatedUser.user.claims.length > 0, "admin-created account should immediately claim exact roster matches");
-assert.equal(d1CreatedUser.user.facilityOverviewEnabled, true, "new standard accounts should receive At a glance by default");
+assert.equal(d1CreatedUser.user.facilityOverviewEnabled, false, "new standard accounts should require an explicit At a glance grant");
 const d1DirectLogin = await postState(d1StateStore, {
   action: "login",
   email: "d1-user@example.com",
@@ -4200,7 +4214,37 @@ assert.equal(d1DirectLogin.snapshot?.preview?.derivedFromD1, true, "claimed logi
 assert.equal(d1DirectLogin.viewedAccountType, "claimed-user", "claimed direct login should identify the viewed account type");
 assert.equal(d1DirectLogin.isImpersonating, false, "claimed direct login should not be marked as creator impersonation");
 assert.equal(d1DirectLogin.state.session.doctorKey, d1Doctor.key, "claimed login should default to the claimed doctor");
-assert.equal(d1DirectLogin.facilityOverviewEnabled, true, "full login should retain standard-user At a glance access");
+assert.equal(d1DirectLogin.facilityOverviewEnabled, false, "full login should deny At a glance until the Creator grants access");
+const d1SelfGrantFacilityOverview = await postStateRaw(d1StateStore, {
+  action: "setUserFacilityOverviewEnabled",
+  email: "d1-user@example.com",
+  password: "d1-password",
+  targetEmail: "d1-user@example.com",
+  facilityOverviewEnabled: true,
+}, d1Store);
+assert.equal(d1SelfGrantFacilityOverview.response.status, 403, "standard users should not be able to grant themselves At a glance access");
+const d1DeniedFacilityOverview = await postStateRaw(d1StateStore, {
+  action: "queryFacilityOverviewOnShift",
+  email: "d1-user@example.com",
+  password: "d1-password",
+  facilityKey: "mmc",
+  date: "2026-02-03",
+}, d1Store);
+assert.equal(d1DeniedFacilityOverview.response.status, 403, "At a glance API data should be denied without a per-user grant");
+const d1GrantedFacilityOverview = await postState(d1StateStore, {
+  action: "setUserFacilityOverviewEnabled",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  targetEmail: "d1-user@example.com",
+  facilityOverviewEnabled: true,
+}, d1Store);
+assert.equal(d1GrantedFacilityOverview.user.facilityOverviewEnabled, true, "the Creator should be able to grant At a glance per user");
+const d1GrantedUserLogin = await postState(d1StateStore, {
+  action: "login",
+  email: "d1-user@example.com",
+  password: "d1-password",
+}, d1Store);
+assert.equal(d1GrantedUserLogin.facilityOverviewEnabled, true, "an explicit At a glance grant should persist across login");
 const d1FastCachedLogin = await postState(d1StateStore, {
   action: "login",
   email: "d1-user@example.com",
