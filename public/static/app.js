@@ -4216,8 +4216,6 @@ function mobilePreviewTitleParts(event) {
       .replace(/\bClinical Support\b/gi, "CS")
       .replace(/\bFast Track\b/gi, "Fast")
       .replace(/\bFAST\b/g, "Fast")
-      .replace(/\bAM\b/gi, "")
-      .replace(/\bPM\b/gi, "")
       .replace(/\bshift\b/gi, "")
       .replace(/\s+/g, " ")
       .trim();
