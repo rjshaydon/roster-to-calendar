@@ -302,6 +302,7 @@ let calendarImportPollRunId = 0;
 let currentSubscription = null;
 let currentInsightsEnabled = currentUserRole === "creator";
 let currentFacilityOverviewEnabled = currentUserRole === "creator";
+let facilityOverviewCompactReleaseTimer = null;
 let facilityOverviewState = {
   tab: "on-shift", date: formatDateKey(new Date()), facilityKey: "", includeClinicalSupport: false, requestId: 0, onShiftData: null,
   staffTermStart: formatDateKey(australianTermForDate(new Date()).start), staffTerms: [], staffContent: "", staffData: null, staffQuery: "", staffExpanded: new Set(), staffFocusSection: "", staffActionMenu: null, staffDesignationMenu: null, staffSeniorityMenu: null,
@@ -528,7 +529,22 @@ document.addEventListener("keydown", (event) => {
 facilityOverviewSection?.addEventListener("scroll", (event) => {
   const scroller = event.target;
   if (scroller !== facilityOverviewBody && !scroller?.matches?.(".facility-overview-together")) return;
-  facilityOverviewSection.classList.toggle("is-compact", scroller.scrollTop > 28);
+  const shouldCompact = scroller.scrollTop > 28;
+  if (facilityOverviewCompactReleaseTimer) {
+    window.clearTimeout(facilityOverviewCompactReleaseTimer);
+    facilityOverviewCompactReleaseTimer = null;
+  }
+  if (shouldCompact) {
+    facilityOverviewSection.classList.add("is-compact");
+    return;
+  }
+  // Expanding the header changes the height of its scroll container. Keep it
+  // compact until scrolling has stopped so that layout change cannot pull the
+  // content back under the threshold while the wheel is still moving.
+  facilityOverviewCompactReleaseTimer = window.setTimeout(() => {
+    facilityOverviewCompactReleaseTimer = null;
+    if (scroller.scrollTop <= 28) facilityOverviewSection.classList.remove("is-compact");
+  }, 180);
 }, { capture: true, passive: true });
 facilityOverviewSection?.addEventListener("click", (event) => {
   if (event.target.closest("[data-facility-overview-logout]")) {
@@ -8365,6 +8381,10 @@ function syncFacilityOverviewNavigationState() {
 }
 
 function resetFacilityOverviewScroll() {
+  if (facilityOverviewCompactReleaseTimer) {
+    window.clearTimeout(facilityOverviewCompactReleaseTimer);
+    facilityOverviewCompactReleaseTimer = null;
+  }
   facilityOverviewSection?.classList.remove("is-compact");
   if (facilityOverviewBody) facilityOverviewBody.scrollTop = 0;
   const togetherScroller = facilityOverviewBody?.querySelector(".facility-overview-together");
@@ -8930,7 +8950,7 @@ function renderFacilityOverviewOnShiftResults(rows) {
     periods.get(assignment.period).push(assignment);
   }
   return ["AM", "PM", "Night"].filter((period) => periods.has(period)).map((period) => `
-    <section class="facility-overview-period"><h3>${period}</h3><div class="facility-overview-staff-grid">${renderFacilityOverviewOnShiftPeriod(periods.get(period), { canUseStaffActions, termStart })}</div></section>
+    <section class="facility-overview-period"><h3>${period}</h3><div class="facility-overview-staff-grid">${renderFacilityOverviewOnShiftPeriod(periods.get(period), { canUseStaffActions, termStart, period })}</div></section>
   `).join("");
 }
 
@@ -8963,11 +8983,16 @@ function renderFacilityOverviewDdhOnShiftPeriod(assignments, options = {}) {
     renderPlacedCard("Silver", silver, 2),
     renderPlacedCard("Fast Track", fastTrack, 3),
   ].join("");
-  const supportRow = [
-    renderPlacedCard("AVAO", avao, 1),
-    renderPlacedCard("SSU", ssuSms, 2),
-    renderPlacedCard("SSU", ssuInternHmo, ssuSms.length ? 3 : 2),
-  ].join("");
+  const supportRow = options.period === "AM"
+    ? [
+      renderPlacedCard("AVAO", avao, 1),
+      renderPlacedCard("SSU", ssu, 2),
+    ].join("")
+    : [
+      renderPlacedCard("AVAO", avao, 1),
+      renderPlacedCard("SSU", ssuSms, 2),
+      renderPlacedCard("SSU", ssuInternHmo, ssuSms.length ? 3 : 2),
+    ].join("");
   const remaining = (assignments || []).filter((assignment) => !handled.has(assignment));
   return `${mainRow ? `<div class="facility-overview-ddh-row facility-overview-ddh-main-row">${mainRow}</div>` : ""}
     ${supportRow ? `<div class="facility-overview-ddh-row facility-overview-ddh-support-row">${supportRow}</div>` : ""}
