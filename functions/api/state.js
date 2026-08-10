@@ -1761,6 +1761,7 @@ async function loadOrCreateD1Account(db, email, password, options = {}) {
       claims: [],
       adminIssues: [],
       localParserExtensions: [],
+      facilityOverviewEnabled: true,
       subscriptionToken: randomSubscriptionToken(),
       createdAt: now,
       updatedAt: now,
@@ -2225,15 +2226,14 @@ async function reconcileAuthoritativeAutomatedRoster(db, saved, files = []) {
       || (candidate.sourceId && candidate.sourceId !== saved.sourceId)
     ) continue;
     if (!candidate.sourceId) {
-      await deleteDerivedRosterFile(db, candidate.id);
-      reconciled.push({
-        deprecatedFileId: candidate.id,
-        authoritativeFileId: saved.id,
-        removedEvents: candidate.eventCount,
-        remainingEvents: 0,
-        deleted: true,
-        reason: "automated-source-replaced-manual-roster",
-      });
+      const savedRange = authoritativeRosterRange(saved);
+      const trimmed = await trimDerivedRosterFileOverlap(
+        db,
+        candidate.id,
+        savedRange.startDate,
+        savedRange.endDate,
+      );
+      reconciled.push(authoritativeReconciliationSummary(candidate, saved, trimmed));
       continue;
     }
     const winner = chooseLatestRosterFile(saved, candidate) || saved;
@@ -2734,6 +2734,7 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
       enabled: Boolean(record.subscriptionToken),
     },
     insightsEnabled: insightsEnabledForRecord(record),
+    facilityOverviewEnabled: facilityOverviewEnabledForRecord(record),
     adminIssues: sanitizeAdminIssues(record.adminIssues),
     issueConfig,
     defaultDoctorKey,

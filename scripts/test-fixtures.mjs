@@ -4190,6 +4190,7 @@ const d1CreatedUser = await postState(d1StateStore, {
   targetPassword: "d1-password",
 }, d1Store);
 assert.ok(d1CreatedUser.user.claims.length > 0, "admin-created account should immediately claim exact roster matches");
+assert.equal(d1CreatedUser.user.facilityOverviewEnabled, true, "new standard accounts should receive At a glance by default");
 const d1DirectLogin = await postState(d1StateStore, {
   action: "login",
   email: "d1-user@example.com",
@@ -4199,6 +4200,7 @@ assert.equal(d1DirectLogin.snapshot?.preview?.derivedFromD1, true, "claimed logi
 assert.equal(d1DirectLogin.viewedAccountType, "claimed-user", "claimed direct login should identify the viewed account type");
 assert.equal(d1DirectLogin.isImpersonating, false, "claimed direct login should not be marked as creator impersonation");
 assert.equal(d1DirectLogin.state.session.doctorKey, d1Doctor.key, "claimed login should default to the claimed doctor");
+assert.equal(d1DirectLogin.facilityOverviewEnabled, true, "full login should retain standard-user At a glance access");
 const d1FastCachedLogin = await postState(d1StateStore, {
   action: "login",
   email: "d1-user@example.com",
@@ -5611,6 +5613,44 @@ for (const [fileId, name, sourceId, title] of [
 }
 assert.equal(sharedUploadDb.files.has("ddh-manual-term"), false, "a FindMyShift source should replace a manual DDH file with identical term coverage");
 assert.equal(sharedUploadDb.files.get("ddh-findmyshift-term")?.active, 1, "the automated DDH replacement should remain active");
+sharedUploadDb.customEvents.set("history@example.com|historical-note", {
+  owner_email: "history@example.com",
+  id: "historical-note",
+  title: "Historical custom note",
+  start_date: "2028-01-10",
+  end_date: "2028-01-10",
+  all_day: 1,
+});
+await postState(sharedUploadStore, {
+  action: "saveDerivedCalendarFile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  file: { id: "ddh-partial-manual", name: "Dandenong-manual-2028-01-01-to-2028-02-28.xlsx", sourceType: "ddh", active: true },
+  doctors: [{ key: "PARTIAL HISTORY DOCTOR", displayName: "Partial History Doctor", sourceType: "ddh" }],
+  eventsByDoctor: {
+    "PARTIAL HISTORY DOCTOR": [
+      { id: "partial-history", source: "DDH", title: "Historical manual shift", allDay: false, start: "2028-01-10T08:00:00+11:00", end: "2028-01-10T17:00:00+11:00", rawValue: "Historical manual shift", monthKey: "2028-01" },
+      { id: "partial-overlap", source: "DDH", title: "Superseded manual shift", allDay: false, start: "2028-02-10T08:00:00+11:00", end: "2028-02-10T17:00:00+11:00", rawValue: "Superseded manual shift", monthKey: "2028-02" },
+    ],
+  },
+}, sharedUploadDb);
+await postState(sharedUploadStore, {
+  action: "saveDerivedCalendarFile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  file: { id: "ddh-partial-automatic", name: "Dandenong-FindMyShift-2028-02-01-to-2028-02-28.xlsx", sourceType: "ddh", sourceId: "dandenong-findmyshift-partial", active: true },
+  doctors: [{ key: "PARTIAL HISTORY DOCTOR", displayName: "Partial History Doctor", sourceType: "ddh" }],
+  eventsByDoctor: {
+    "PARTIAL HISTORY DOCTOR": [
+      { id: "partial-authoritative", source: "DDH", title: "Latest synced shift", allDay: false, start: "2028-02-10T09:00:00+11:00", end: "2028-02-10T18:00:00+11:00", rawValue: "Latest synced shift", monthKey: "2028-02" },
+    ],
+  },
+}, sharedUploadDb);
+assert.equal(sharedUploadDb.files.has("ddh-partial-manual"), true, "a partially overlapping manual roster should remain as historical storage");
+assert.ok([...sharedUploadDb.events.values()].some((event) => event.title === "Historical manual shift"), "manual events before the synced window should remain historical");
+assert.equal([...sharedUploadDb.events.values()].some((event) => event.title === "Superseded manual shift"), false, "the latest synced window should replace overlapping manual shifts");
+assert.ok([...sharedUploadDb.events.values()].some((event) => event.title === "Latest synced shift"), "the latest synced roster should remain authoritative inside its window");
+assert.equal(sharedUploadDb.customEvents.has("history@example.com|historical-note"), true, "roster supersession must not remove account-owned custom events");
 await postState(sharedUploadStore, {
   action: "saveDerivedCalendarFile",
   email: "rhaydon@gmail.com",
