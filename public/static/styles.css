@@ -3787,6 +3787,13 @@ body[data-skin="console"] .panel {
 }
 
 @media (max-width: 760px) {
+  .facility-overview-staff-designation-trigger,
+  .facility-overview-staff-seniority-trigger {
+    min-height: 32px;
+    padding-block: 5px;
+    touch-action: manipulation;
+  }
+
   .shift-code-review-controls,
   .shift-code-review-row {
     grid-template-columns: 1fr;

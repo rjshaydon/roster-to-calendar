@@ -647,6 +647,33 @@ facilityOverviewSection?.addEventListener("click", (event) => {
     });
     return;
   }
+  const mobileDesignationTrigger = event.target.closest("[data-facility-overview-staff-designation-menu], [data-facility-overview-staff-seniority-menu]");
+  if (mobileDesignationTrigger && isMobileLayout() && isViewingCreatorAccount()) {
+    event.preventDefault();
+    const rect = mobileDesignationTrigger.getBoundingClientRect();
+    const multiSelectSectionKey = facilityOverviewStaffMultiSelectSectionForControl(mobileDesignationTrigger);
+    if (multiSelectSectionKey) {
+      openFacilityOverviewStaffBulkSeniorityMenu({ sectionKey: multiSelectSectionKey, x: rect.left, y: rect.bottom });
+      return;
+    }
+    facilityOverviewState.staffActionMenu = null;
+    if (mobileDesignationTrigger.matches("[data-facility-overview-staff-seniority-menu]")) {
+      facilityOverviewState.staffDesignationMenu = null;
+      facilityOverviewState.staffSeniorityMenu = {
+        key: mobileDesignationTrigger.dataset.facilityOverviewStaffSeniorityMenu || "",
+        x: Math.max(8, Math.round(rect.left)), y: Math.max(8, Math.round(rect.bottom)),
+      };
+    } else {
+      facilityOverviewState.staffSeniorityMenu = null;
+      facilityOverviewState.staffDesignationMenu = {
+        key: mobileDesignationTrigger.dataset.facilityOverviewStaffDesignationMenu || "",
+        x: Math.max(8, Math.round(rect.left)), y: Math.max(8, Math.round(rect.bottom)),
+      };
+    }
+    refreshFacilityOverviewStaffContent();
+    renderFacilityOverviewStaffBodyPreservingViewport();
+    return;
+  }
   const setBulkSeniority = event.target.closest("[data-facility-overview-set-bulk-staff-seniority]");
   if (setBulkSeniority) {
     void setFacilityOverviewStaffSeniorityOverrides({
