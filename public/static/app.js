@@ -745,6 +745,13 @@ facilityOverviewSection?.addEventListener("contextmenu", (event) => {
     renderFacilityOverviewStaffBodyPreservingViewport();
     return;
   }
+  const designationOrSeniorityTrigger = event.target.closest("[data-facility-overview-staff-designation-menu], [data-facility-overview-staff-seniority-menu]");
+  const multiSelectSectionKey = isViewingCreatorAccount() ? facilityOverviewStaffMultiSelectSectionForControl(designationOrSeniorityTrigger) : "";
+  if (multiSelectSectionKey) {
+    event.preventDefault();
+    openFacilityOverviewStaffBulkSeniorityMenu({ sectionKey: multiSelectSectionKey, x: event.clientX, y: event.clientY });
+    return;
+  }
   const designationTrigger = event.target.closest("[data-facility-overview-staff-designation-menu]");
   if (designationTrigger && isViewingCreatorAccount()) {
     event.preventDefault();
@@ -804,6 +811,14 @@ facilityOverviewSection?.addEventListener("keydown", (event) => {
     };
     refreshFacilityOverviewStaffContent();
     renderFacilityOverviewStaffBodyPreservingViewport();
+    return;
+  }
+  const designationOrSeniorityTrigger = event.target.closest?.("[data-facility-overview-staff-designation-menu], [data-facility-overview-staff-seniority-menu]");
+  const multiSelectSectionKey = isViewingCreatorAccount() ? facilityOverviewStaffMultiSelectSectionForControl(designationOrSeniorityTrigger) : "";
+  if (multiSelectSectionKey) {
+    event.preventDefault();
+    const rect = designationOrSeniorityTrigger.getBoundingClientRect();
+    openFacilityOverviewStaffBulkSeniorityMenu({ sectionKey: multiSelectSectionKey, x: rect.left, y: rect.bottom });
     return;
   }
   const trigger = event.target.closest?.("[data-facility-overview-staff-designation-menu]");
@@ -9242,6 +9257,23 @@ function facilityOverviewStaffMultiSelectIsActive(sectionKey) {
 function facilityOverviewStaffMultiSelectIsSelected({ sectionKey = "", sourceType = "", doctorKey = "" } = {}) {
   return facilityOverviewStaffMultiSelectIsActive(sectionKey)
     && facilityOverviewState.staffMultiSelectMembers.has(facilityOverviewStaffMultiSelectMemberKey({ sourceType, doctorKey }));
+}
+
+function facilityOverviewStaffMultiSelectSectionForControl(control) {
+  const sourceType = String(control?.dataset?.facilityOverviewStaffSource || "").toLowerCase();
+  const doctorKey = control?.dataset?.facilityOverviewStaffKey || "";
+  const sectionKey = sourceType ? `${sourceType}:Unknown` : "";
+  return facilityOverviewStaffMultiSelectIsSelected({ sectionKey, sourceType, doctorKey }) ? sectionKey : "";
+}
+
+function openFacilityOverviewStaffBulkSeniorityMenu({ sectionKey = "", x = 8, y = 8 } = {}) {
+  if (!sectionKey) return;
+  facilityOverviewState.staffActionMenu = null;
+  facilityOverviewState.staffDesignationMenu = null;
+  facilityOverviewState.staffSeniorityMenu = null;
+  facilityOverviewState.staffBulkSeniorityMenu = { sectionKey, x: Math.max(8, Math.round(x || 0)), y: Math.max(8, Math.round(y || 0)) };
+  refreshFacilityOverviewStaffContent();
+  renderFacilityOverviewStaffBodyPreservingViewport(sectionKey);
 }
 
 function activateFacilityOverviewStaffMultiSelect(sectionKey) {
