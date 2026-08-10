@@ -9,7 +9,8 @@ import { assertFindmyshiftDandenongAssignments, extractShiftRows, findmyshiftCon
 import { buildAutomatedDerivedRosterPayload } from "../functions/_lib/automation-import.js";
 import { buildPreviewFromDerivedEvents, findRosterSyncByProviderVersion, storeCachedSnapshot } from "../functions/_lib/d1-calendar.js";
 import { recordRosterDispatchLifecycle, requestQueuedRosterProcessing } from "../functions/_lib/automation-dispatch.js";
-import { buildRosterView, doctorOptions, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
+import { buildRosterView, customEventsToEvents, doctorOptions, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
+import { customEventsToEvents as serverCustomEventsToEvents } from "../functions/_lib/roster.js";
 
 function cloneWorkbook(workbook) {
   return XLSX.read(XLSX.write(workbook, { type: "array", bookType: "xlsx" }), { type: "array", cellDates: true });
@@ -43,6 +44,33 @@ function sharedEventDate(left, right, start, end) {
   const rightDates = new Set(eventDates(right).filter((date) => date >= start && date <= end));
   return eventDates(left).some((date) => date >= start && date <= end && rightDates.has(date));
 }
+
+const syncedAnnualLeave = [{
+  id: "synced-annual-leave",
+  source: "DDH",
+  title: "Annual Leave",
+  rawValue: "Annual leave",
+  allDay: true,
+  start: "2026-08-03",
+  end: "2026-08-10",
+}];
+const customLeaveFallbacks = [
+  { id: "covered-manual-leave", title: "A/L", startDate: "2026-08-03", endDate: "2026-08-09", allDay: true, startTime: "", endTime: "", location: "", include: true },
+  { id: "partially-covered-manual-leave", title: "Annual Leave", startDate: "2026-08-03", endDate: "2026-08-12", allDay: true, startTime: "", endTime: "", location: "", include: true },
+  { id: "single-day-manual-leave", title: "S/L", startDate: "2026-08-04", endDate: "2026-08-04", allDay: true, startTime: "", endTime: "", location: "", include: true },
+  { id: "multi-day-custom-nonleave", title: "Personal reminder", startDate: "2026-08-03", endDate: "2026-08-09", allDay: true, startTime: "", endTime: "", location: "", include: true },
+];
+const expectedVisibleCustomFallbackIds = ["partially-covered-manual-leave", "single-day-manual-leave", "multi-day-custom-nonleave"];
+assert.deepEqual(
+  customEventsToEvents(customLeaveFallbacks, undefined, syncedAnnualLeave).map((event) => event.id),
+  expectedVisibleCustomFallbackIds,
+  "a synced leave should suppress only a fully covered multi-day manual leave fallback",
+);
+assert.deepEqual(
+  serverCustomEventsToEvents(customLeaveFallbacks, undefined, syncedAnnualLeave).map((event) => event.id),
+  expectedVisibleCustomFallbackIds,
+  "subscription and export leave precedence must match the browser preview",
+);
 
 function withWorkbookCell(workbook, sheetName, cell, value) {
   const copy = cloneWorkbook(workbook);
@@ -182,6 +210,35 @@ const unknownInternDoctor = doctorOptions([], unknownInternUpload.sources.ddh).f
 assert.ok(unknownInternDoctor, "FindMyShift fixture should expose the unknown-seniority intern");
 const unknownInternEvent = buildRosterView([], unknownInternUpload.sources.ddh, unknownInternDoctor.key).events[0];
 assert.equal(unknownInternEvent.seniority, "Intern", "FindMyShift labels should supply seniority when staff metadata says Unknown");
+const findmyshiftLeaveWorkbook = XLSX.read(findmyshiftRowsWorkbook([
+  { sourceStaffId: "leave-doctor", name: "Ananth Sundaralingam", seniority: "SMS", date: "2026-08-10", label: "SL MMC", start: "", end: "", facility: "", comment: "" },
+  { sourceStaffId: "leave-doctor", name: "Ananth Sundaralingam", seniority: "SMS", date: "2026-08-11", label: "S/L", start: "", end: "", facility: "", comment: "" },
+  { sourceStaffId: "leave-doctor", name: "Ananth Sundaralingam", seniority: "SMS", date: "2026-08-12", label: "Annual leave 19hrs", start: "", end: "", facility: "", comment: "" },
+]), { type: "array", cellDates: true });
+const findmyshiftLeaveFormData = new FormData();
+findmyshiftLeaveFormData.append("rosterFiles", workbookFile(findmyshiftLeaveWorkbook, "Dandenong-FindMyShift-leave.xlsx"));
+const findmyshiftLeaveUpload = await parseUploadForm(new Request("http://fixture.test/api/analyze", { method: "POST", body: findmyshiftLeaveFormData }));
+const findmyshiftLeaveEvents = buildRosterView([], findmyshiftLeaveUpload.sources.ddh, "ANANTH SUNDARALINGAM").events;
+assert.deepEqual(
+  findmyshiftLeaveEvents.map((event) => [event.title, event.start, event.end]),
+  [
+    ["Sabbatical", "2026-08-10", "2026-08-11"],
+    ["Sick leave", "2026-08-11", "2026-08-12"],
+    ["Annual Leave", "2026-08-12", "2026-08-13"],
+  ],
+  "structured FindMyShift imports must preserve SL sabbatical, S/L sick leave, and annotated annual leave as distinct one-day entries",
+);
+const findmyshiftLeaveAutomatedPayload = await buildAutomatedDerivedRosterPayload({
+  file: workbookFile(findmyshiftLeaveWorkbook, "Dandenong-FindMyShift-leave.xlsx"),
+  sourceId: "dandenong-findmyshift",
+  contentHash: "findmyshift-leave-content-hash",
+  providerVersion: "2026-08-12T00:00:00.000Z",
+});
+assert.deepEqual(
+  findmyshiftLeaveAutomatedPayload.eventsByDoctor["ANANTH SUNDARALINGAM"].map((event) => event.title),
+  ["Sabbatical", "Sick leave", "Annual Leave"],
+  "automated server-side parsing must use the same leave labels as manual/browser parsing",
+);
 const findmyshiftCrossTermRows = extractShiftRows([
   ...findmyshiftFixture.report,
   { "staffId": "staff-001", "facilityId": "facility-north", "date": "2026-10-05", "firstName": "Alex", "lastName": "Example", "payrollId": null, "occurrences": 1, "shift": "07:00-15:00" },
@@ -239,6 +296,97 @@ assert.match(indexSource, /id="stayLoggedIn"[^>]*checked/, "Stay logged in shoul
 assert.equal((appSource.match(/data-test-findmyshift/g) || []).length, 0, "FindMyShift diagnostics should not remain exposed as a UI control");
 assert.equal((appSource.match(/data-sync-findmyshift/g) || []).length, 0, "FindMyShift is automated and should not expose a manual sync control");
 assert.equal((appSource.match(/data-download-findmyshift-exceptions/g) || []).length, 0, "FindMyShift exception review is no longer exposed as a UI control");
+assert.match(
+  appSource.match(/function renderFacilityOverviewTogetherResults[\s\S]*?function facilityOverviewFormatOverlap/)?.[0] || "",
+  /eventSourceCode[\s\S]*nextStart >= nextEnd[\s\S]*facilityOverviewSubtractIntervals/,
+  "Working together should match true same-hospital shift intervals and remove all-staff time from pair-only matches",
+);
+assert.match(
+  appSource.match(/function renderFacilityOverviewTogetherResults[\s\S]*?function facilityOverviewFormatOverlap/)?.[0] || "",
+  /selectedDoctors\.length === 2[\s\S]*showGroups[\s\S]*All selected staff[\s\S]*Two-person overlaps/,
+  "Working together should only add all-staff and pair headings when they are relevant to a selection of three or more",
+);
+assert.doesNotMatch(appSource, /data-facility-overview-together-edit-staff/, "Working together should not render a redundant Edit staff control");
+assert.match(styleSource, /#facilityOverviewSection\.is-compact[\s\S]*\.facility-overview-tabs/, "At a glance tabs should compact after scrolling");
+assert.match(styleSource, /#facilityOverviewSection \{[\s\S]*?grid-template-rows: auto auto auto minmax\(0, 1fr\);[\s\S]*?overflow: hidden;/, "At a glance should keep its header stack outside the scroll container");
+assert.match(styleSource, /#facilityOverviewBody \{[\s\S]*?overflow-y: auto;/, "At a glance results should be the sole desktop scroll container");
+assert.match(appSource, /facilityOverviewSection\?\.addEventListener\("scroll"[\s\S]*?scroller\.scrollTop > 28/, "At a glance should compact its persistent header from results scrolling");
+assert.match(appSource, /facilityOverviewButton\.textContent = open \? "My calendar" : "At a glance"/, "The sidebar At a glance control should become My calendar while the overview is open");
+assert.match(appSource, /addEventListener\("input"[\s\S]*?refreshFacilityOverviewStaffContent\(\);[\s\S]*?renderFacilityOverviewStaffBody\(\);/, "ED staff search should refresh results without replacing its focused input");
+assert.match(
+  appSource.match(/function renderFacilityOverviewOnShiftResults[\s\S]*?async function loadFacilityOverviewStaff/)?.[0] || "",
+  /buildWhoAssignment[\s\S]*renderFacilityOverviewOnShiftPeriod[\s\S]*facilityOverviewIsMeaningfulStream[\s\S]*renderFacilityOverviewStreamCard[\s\S]*renderFacilityOverviewSeniorityLink[\s\S]*renderFacilityOverviewStaffName/,
+  "On shift should group recognised streams with seniority subgroups and fall back to seniority for unstreamed staff",
+);
+assert.match(
+  appSource.match(/function renderFacilityOverviewTogetherMatchCards[\s\S]*?function facilityOverviewFormatOverlap/)?.[0] || "",
+  /canUseCreatorDoctorSwitcher\(\)[\s\S]*directCalendar: canOpenStaffCalendars[\s\S]*renderFacilityOverviewSeniorityLink\(person\.event\?\.seniority/,
+  "Working together results should retain direct Creator calendar links and seniority drill-throughs",
+);
+assert.match(
+  appSource.match(/function renderFacilityOverviewStaffName[\s\S]*?function renderFacilityOverviewSeniorityLink/)?.[0] || "",
+  /data-facility-overview-open-working-together[\s\S]*data-facility-overview-staff-menu[\s\S]*renderFacilityOverviewStaffActionMenu[\s\S]*Person's calendar[\s\S]*When working together/,
+  "At a glance staff names should left-click into Working together and retain a Creator-only context menu",
+);
+assert.match(
+  appSource.match(/addEventListener\("contextmenu"[\s\S]*?addEventListener\("change"/)?.[0] || "",
+  /data-facility-overview-staff-designation-menu[\s\S]*isViewingCreatorAccount\(\)[\s\S]*data-facility-overview-staff-menu[\s\S]*preventDefault\(\)[\s\S]*refreshFacilityOverviewStaffActionContent\(\)/,
+  "Only the active Creator profile should receive staff and no-shift designation context menus",
+);
+assert.match(
+  appSource.match(/document\.addEventListener\("pointerdown"[\s\S]*?facilityOverviewSection\?\.addEventListener\("scroll"/)?.[0] || "",
+  /closeFacilityOverviewStaffActionMenu\(\)[\s\S]*event\.key !== "Escape"[\s\S]*closeFacilityOverviewStaffActionMenu\(\)/,
+  "Outside clicks and Escape should dismiss a staff context menu",
+);
+assert.match(
+  appSource.match(/function facilityOverviewTogetherStaffOptions[\s\S]*?function initializeFacilityOverviewTogetherState/)?.[0] || "",
+  /availableRosterDoctors[\s\S]*doctorPickerOptions\(\)[\s\S]*activeViewer[\s\S]*togetherPinnedDoctors/,
+  "Working together options should include roster staff, the active viewer, and pinned roster results",
+);
+assert.match(
+  appSource.match(/function facilityOverviewTogetherFallbackOption[\s\S]*?function closeFacilityOverviewStaffActionMenu/)?.[0] || "",
+  /facilityOverviewTogetherFallbackOption\(target\)[\s\S]*togetherPinnedDoctors = \[selectedPerson, viewer\][\s\S]*\[selectedPerson\.identity, viewer\.identity\][\s\S]*void loadFacilityOverviewTogether\(\)/,
+  "Working together should resolve or pin both people, prefill them, and load their shared shifts",
+);
+assert.match(
+  appSource.match(/async function openFacilityOverviewStaffSection[\s\S]*?function focusFacilityOverviewStaffSection/)?.[0] || "",
+  /facilityOverviewState\.tab = "staff"[\s\S]*facilityOverviewState\.facilityKey = source[\s\S]*staffExpanded = new Set\(\[sectionKey\]\)[\s\S]*openFacilityOverview\(\{ preserveStaffTerm: true \}\)/,
+  "A seniority link should preserve its ED and term while opening the requested ED staff accordion",
+);
+assert.match(
+  appSource.match(/function facilityOverviewDoctorOptionFor[\s\S]*?async function openFacilityOverviewStaffSection/)?.[0] || "",
+  /doctor\?\.aliases[\s\S]*normalizedDoctorSourceTypes[\s\S]*switchDoctorSelection\(doctor\.key/,
+  "At a glance calendar links should resolve roster aliases through the Creator switcher",
+);
+assert.match(styleSource, /\.facility-overview-seniority-link[\s\S]*text-decoration: underline;/, "Clickable seniority labels should have a visible link treatment");
+assert.match(styleSource, /\.facility-overview-staff-section \{[\s\S]*?overflow: visible;/, "ED staff accordions should not clip open staff action menus");
+assert.match(appSource, /facility-overview-staff-term-control[\s\S]*data-facility-overview-staff-term/, "ED staff should expose a synchronized desktop term selector beside Find staff");
+assert.match(appSource, /previous_staff[\s\S]*Previous staff[\s\S]*Restore to current staff/, "SMS previous staff should remain visible and be restorable");
+assert.match(appSource, /long_service_leave[\s\S]*sabbatical_leave[\s\S]*sick_leave[\s\S]*personal_leave/, "No-shift staff menu should offer the approved leave designations");
+assert.match(styleSource, /facility-overview-seniority-label-width[\s\S]*facility-overview-staff-section-count/, "ED staff counts should use a shared invisible alignment column");
+assert.match(stateSource, /action === "setFacilityStaffDesignation"[\s\S]*Creator access on the Creator profile is required[\s\S]*action === "clearFacilityStaffDesignation"/, "Staff designation changes must be Creator-only server actions");
+assert.match(d1CalendarSource, /facility_staff_designations[\s\S]*reconcileFacilityStaffDesignationsForRosterFile[\s\S]*queryFacilityDesignationLeaveEvents/, "Designations should persist, surface as calendar leave, and reconcile on newer rosters");
+assert.match(appSource, /renderFacilityOverviewOnShiftNames[\s\S]*renderFacilityOverviewOnShiftSeniority[\s\S]*facilityOverviewCompactSeniorityLabel/, "On shift cards should show a compact seniority beside each staff name");
+assert.match(appSource, /physiotherapist[\s\S]*nurse practitioner[\s\S]*Fast Track[\s\S]*facilityOverviewDetectedSeniority/, "Physios and nurse practitioners should be identified and placed in Fast Track");
+assert.match(appSource, /Senior Registrar"\) return "SR"[\s\S]*Transitional\/Intermediate Registrar"\) return "TR"[\s\S]*Junior Registrar"\) return "JR"/, "On shift should abbreviate registrar seniorities");
+assert.match(appSource, /Edit designation[\s\S]*data-facility-overview-set-staff-seniority[\s\S]*Use roster designation/, "Creator staff menus should provide effective seniority editing and a roster reset");
+assert.match(stateSource, /action === "setFacilityStaffSeniorityOverride"[\s\S]*Creator access on the Creator profile is required/, "Seniority corrections must be Creator-only server actions");
+assert.match(d1CalendarSource, /facility_staff_seniority_overrides[\s\S]*term_start <= \?[\s\S]*use_roster_seniority/, "Seniority overrides should be effective-dated and support returning to roster data");
+assert.match(appSource, /sourceCode === "MMC"[\s\S]*"am shift"[\s\S]*"pm shift"[\s\S]*return false/, "MMC generic AM and PM shift labels should fall back to seniority grouping");
+assert.match(appSource, /queueFacilityOverviewMenuPositioning[\s\S]*maxHeight[\s\S]*window\.innerHeight - rect\.height - margin/, "At a glance menus should clamp themselves inside the visible viewport");
+assert.match(appSource, /applyFacilityOverviewStaffSeniorityOverrides[\s\S]*staffData\.seniorityOverrides[\s\S]*renderFacilityOverviewStaffBodyPreservingViewport/, "Staff designation changes should update the cached ED staff data in place");
+assert.doesNotMatch(appSource, /async function refreshFacilityOverviewAfterStaffChange/, "Staff designation changes should not reload the complete ED staff list");
+assert.match(appSource, /renderFacilityOverviewStaffBodyPreservingViewport[\s\S]*scrollTop[\s\S]*requestAnimationFrame/, "In-place ED staff updates should preserve the current viewport");
+assert.match(appSource, /grade === "Unknown"[\s\S]*data-facility-overview-staff-multi-select[\s\S]*Multi-select/, "Expanded Unknown staff sections should offer multi-select mode");
+assert.match(appSource, /data-facility-overview-staff-multi-select-name[\s\S]*toggleFacilityOverviewStaffMultiSelectMember/, "Multi-select mode should toggle names instead of opening the normal staff action");
+assert.match(appSource, /data-facility-overview-staff-designation-menu], \[data-facility-overview-staff-seniority-menu][\s\S]*facilityOverviewStaffMultiSelectSectionForControl[\s\S]*openFacilityOverviewStaffBulkSeniorityMenu/, "Selected staff designation controls should open the bulk context menu");
+assert.match(appSource, /mobileDesignationTrigger[\s\S]*isMobileLayout\(\)[\s\S]*data-facility-overview-staff-seniority-menu[\s\S]*renderFacilityOverviewStaffBodyPreservingViewport/, "Mobile taps on staff designation controls should open their edit menu");
+assert.match(appSource, /data-facility-overview-staff-bulk-seniority-action-menu[\s\S]*data-facility-overview-set-bulk-staff-seniority[\s\S]*Use roster designation/, "Selected Unknown staff should have a bulk designation context menu");
+assert.match(stateSource, /action === "setFacilityStaffSeniorityOverrides"[\s\S]*staff\.length > 100[\s\S]*setFacilityStaffSeniorityOverrides/, "Bulk staff designation changes should be Creator-only and bounded");
+assert.match(d1CalendarSource, /export async function setFacilityStaffSeniorityOverrides[\s\S]*db\.batch[\s\S]*loadFacilityStaffSeniorityOverride/, "Bulk designation changes should be persisted together and return their overrides");
+assert.match(d1CalendarSource, /facility_sms_memberships[\s\S]*recordFacilitySmsMembershipsForRosterFile[\s\S]*first_seen_date <= \?/, "SMS membership should persist independently of roster-file supersession and carry into later terms");
+assert.match(styleSource, /#facilityOverviewBody \{[\s\S]*?height: 100%;[\s\S]*?max-height: 100%;[\s\S]*?overflow-y: auto;/, "Working together content should scroll within the bounded overview body");
+assert.match(styleSource, /#facilityOverviewBody\.is-working-together > \.facility-overview-together \{[\s\S]*?height: 100%;[\s\S]*?overflow-y: auto;/, "Working together should use an explicit full-height tab scroller");
 assert.match(stateSource, /action === "downloadFindmyshiftExceptions"[\s\S]*findmyshiftDandenongAssignmentExceptions[\s\S]*findmyshiftExceptionCsv/, "FindMyShift exception downloads must be creator-only server-side report reads");
 assert.match(findmyshiftCheckSource, /isTransientFindmyshiftRateLimitError[\s\S]*current\?\.lastSuccessAt[\s\S]*returned HTTP 429/, "a transient FindMyShift rate limit should neither mark a successful source failed nor cause it to be downloaded again");
 assert.match(
@@ -504,6 +652,31 @@ assert.match(
   appSource.match(/async function validateDoctorProfileCalendarInBackground[\s\S]*?async function enterUserAccount/)?.[0] || "",
   /renderedCachedSnapshot && visibleSnapshotIsCurrent\(\{ requireNotStale: true \}\)[\s\S]*allowInlineBuild: false[\s\S]*waitForDoctorProfileCalendarBuild/,
   "doctor profile switching should keep builds off the request path and wait for a newly scheduled snapshot",
+);
+assert.match(
+  appSource.match(/async function waitForDoctorProfileCalendarBuild[\s\S]*?async function enterUserAccount/)?.[0] || "",
+  /while \(calendarTransitionStillCurrent\(options\.transition\)\)[\s\S]*retryDelays\[Math\.min\(attempt, retryDelays\.length - 1\)\]/,
+  "doctor profile switching should keep polling a scheduled snapshot until the transition changes",
+);
+assert.doesNotMatch(
+  appSource.match(/async function loadUnclaimedDoctorCalendar[\s\S]*?function hasDoctorProfileImportCandidates/)?.[0] || "",
+  /calendar is not ready yet\. Try again in a moment/,
+  "a cache miss while opening a doctor profile should remain a loading state rather than rejecting the switch",
+);
+assert.match(
+  await readFile(new URL("../public/index.html", import.meta.url), "utf8"),
+  /id="switchOverlayCancelButton"[\s\S]*Cancel and return to Creator/,
+  "calendar switch overlay should let the Creator cancel a slow target load",
+);
+assert.match(
+  appSource.match(/function showSwitchOverlay[\s\S]*?function showRosterImportOverlay/)?.[0] || "",
+  /activeSwitchOverlayCancel[\s\S]*switchOverlayRunId/,
+  "switch overlay ownership should stop stale switch completions from hiding a newer overlay",
+);
+assert.match(
+  appSource.match(/async function cancelCreatorCalendarSwitch[\s\S]*?function showRosterImportOverlay/)?.[0] || "",
+  /returnToCreatorCalendar\(\{ skipOutgoingSave: true, restoreOnFailure: false \}\)/,
+  "cancelling a target switch should return without saving the incomplete target workspace",
 );
 assert.match(
   appSource.match(/function groupWhoAssignments[\s\S]*?function groupWhoTeams/)?.[0] || "",
@@ -1394,6 +1567,9 @@ assert.match(appSource, /isWhoNightIcShift[\s\S]*nightIcRank/, "Night IC shifts 
 assert.match(appSource, /function whoDisplayTeamLabel[\s\S]*Night main team[\s\S]*Night Hub[\s\S]*Night SSU/, "Night teams should use explicit main, hub, and SSU labels");
 assert.match(appSource, /night main team", "night hub", "night ssu"/, "Night Hub should sort between Night main team and Night SSU");
 assert.match(appSource, /Night Hub/, "Hub night shift-code rules should preview as Night Hub");
+assert.match(stateSource, /facilityKey,[\s\S]*isFacilityOverviewWorkingEvent[\s\S]*facilityKey[\s\S]*DDH[\s\S]*hith\|vhh/, "DDH HITH and VHH roster notes should be excluded from the On shift response only");
+assert.match(appSource, /function renderFacilityOverviewDdhNightPeriod[\s\S]*Night SR[\s\S]*Main team[\s\S]*SSU team/, "DDH nights should render senior registrar, main-team, and SSU blocks in order");
+assert.match(appSource, /function renderFacilityOverviewMmcNightPeriod[\s\S]*showSpecialTimes: false[\s\S]*Night SR[\s\S]*Hub[\s\S]*SSU[\s\S]*Main team/, "MMC nights should render ordered SR, Hub, SSU, and main-team blocks without times");
 assert.match(appSource, /refreshActiveWhoInsightSurfaces/, "saving shift-code rules should refresh active Who insight panels");
 assert.match(appSource, /function synthesizeIncompleteShiftCodeIssues/, "derived code-only shift titles should synthesize unresolved shift-code issues");
 assert.match(appSource, /parserRuleIgnore/, "shift-code editor should expose persistent ignore mode");
@@ -1719,6 +1895,21 @@ assert.ok(doctors.find((doctor) => doctor.displayName === "Brianna Dawn MURPHY")
 assert.ok(doctors.find((doctor) => doctor.displayName === "Patrick TAN"));
 assert.equal(doctors.find((doctor) => doctor.displayName === "Aarushi Pathania"), undefined);
 assert.equal(doctors.find((doctor) => doctor.displayName === "HMO MUST BE"), undefined);
+
+const ananthMmc = doctors.find((doctor) => doctor.displayName === "Ananth SUNDARALINGAM");
+assert.ok(ananthMmc);
+const ananthMmcSabbatical = buildRosterView(mmcWorkbook, [], ananthMmc.key).events.find((event) => event.rawValue === "Sabbatical leave");
+assert.ok(ananthMmcSabbatical);
+assert.equal(ananthMmcSabbatical.title, "Sabbatical");
+assert.equal(ananthMmcSabbatical.end, "2026-02-16", "MMC weekly sabbatical markers should cover the full roster week");
+const harmeenKaur = doctors.find((doctor) => doctor.displayName === "Harmeen KAUR");
+assert.ok(buildRosterView(mmcWorkbook, [], harmeenKaur.key).events.some((event) => event.rawValue === "SL PM" && event.title === "Sabbatical"), "SL without a slash must be sabbatical leave");
+const scottJosey = doctors.find((doctor) => doctor.displayName === "Scott JOSEY");
+const scottLeaveEvents = buildRosterView(mmcWorkbook, [], scottJosey.key).events.filter((event) => event.title === "Annual Leave");
+assert.ok(scottLeaveEvents.some((event) => event.rawValue.includes("AL 9.5hrs")));
+assert.ok(scottLeaveEvents.some((event) => event.rawValue.includes("Annual leave 19hrs")));
+const ericaChan = doctors.find((doctor) => doctor.displayName === "Erica CHAN");
+assert.ok(buildRosterView(mmcWorkbook, [], ericaChan.key).events.some((event) => event.rawValue === "CME leave - 38hrs" && event.title === "Conference Leave"));
 
 const michaelMerged = doctorOptions(mmcWorkbook, [], [], mchWorkbook).filter((doctor) => doctor.displayName.toUpperCase().includes("MICHAEL COMAN"));
 assert.equal(michaelMerged.length, 1);
@@ -2169,6 +2360,8 @@ class MemoryD1 {
     this.files = new Map();
     this.doctors = new Map();
     this.fileDoctors = new Map();
+    this.facilityStaffDesignations = new Map();
+    this.facilitySmsMemberships = new Map();
     this.events = new Map();
     this.dailyPresence = new Map();
     this.issues = new Map();
@@ -2201,6 +2394,8 @@ class MemoryD1 {
       "files",
       "doctors",
       "fileDoctors",
+      "facilityStaffDesignations",
+      "facilitySmsMemberships",
       "events",
       "dailyPresence",
       "issues",
@@ -2398,12 +2593,37 @@ class MemoryD1Statement {
       return { success: true };
     }
     if (sql.startsWith("INSERT INTO roster_file_doctors")) {
-      for (let index = 0; index < args.length; index += 4) {
+      const width = sql.includes("membership_source") ? 6 : 4;
+      for (let index = 0; index < args.length; index += width) {
         this.db.fileDoctors.set(`${args[index]}|${args[index + 1]}|${args[index + 2]}`, {
           file_id: args[index],
           source_type: args[index + 1],
           doctor_key: args[index + 2],
           display_name: args[index + 3],
+          seniority: args[index + 4] || "",
+          membership_source: args[index + 5] || "roster",
+        });
+      }
+      return { success: true };
+    }
+    if (sql.includes("INSERT INTO facility_sms_memberships")) {
+      const fileId = sql.startsWith("WITH file_coverage") ? args[0] : "";
+      const matchingDoctors = [...this.db.fileDoctors.values()]
+        .filter((doctor) => !fileId || doctor.file_id === fileId)
+        .filter((doctor) => String(doctor.seniority || "").toUpperCase() === "SMS");
+      for (const doctor of matchingDoctors) {
+        const dates = [...this.db.events.values()]
+          .filter((event) => event.file_id === doctor.file_id && event.doctor_key === doctor.doctor_key)
+          .map((event) => event.start_date)
+          .filter(Boolean)
+          .sort();
+        if (!dates.length) continue;
+        const key = `${doctor.source_type}|${doctor.doctor_key}`;
+        const existing = this.db.facilitySmsMemberships.get(key);
+        this.db.facilitySmsMemberships.set(key, {
+          source_type: doctor.source_type, doctor_key: doctor.doctor_key, display_name: doctor.display_name,
+          first_seen_date: existing ? [existing.first_seen_date, dates[0]].sort()[0] : dates[0],
+          last_seen_date: existing ? [existing.last_seen_date, dates.at(-1)].sort().at(-1) : dates.at(-1),
         });
       }
       return { success: true };
@@ -2478,13 +2698,14 @@ class MemoryD1Statement {
         real_name: args[1],
         role: args[2],
         insights_enabled: args[3],
-        subscription_token: args[4],
-        password_salt: args[5] || previous.password_salt || "",
-        password_hash: args[6] || previous.password_hash || "",
-        admin_issues_json: args[7] || "[]",
-        local_parser_extensions_json: args[8] || "[]",
-        created_at: args[9] || previous.created_at || "",
-        updated_at: args[10] || args[5],
+        facility_overview_enabled: args[4],
+        subscription_token: args[5],
+        password_salt: args[6] || previous.password_salt || "",
+        password_hash: args[7] || previous.password_hash || "",
+        admin_issues_json: args[8] || "[]",
+        local_parser_extensions_json: args[9] || "[]",
+        created_at: args[10] || previous.created_at || "",
+        updated_at: args[11] || args[6],
       });
       return { success: true };
     }
@@ -2683,6 +2904,9 @@ class MemoryD1Statement {
       if (file) file.active = args[0];
       return { success: true };
     }
+    if (sql.startsWith("UPDATE facility_staff_designations")) {
+      return { success: true, meta: { changes: 0 } };
+    }
     throw new Error(`Unsupported MemoryD1 run SQL: ${sql}`);
   }
 
@@ -2693,6 +2917,9 @@ class MemoryD1Statement {
       return {
         results: ["id", "name", "source_type", "source_id", "active", "size", "last_modified", "added_at", "uploaded_at", "uploaded_by", "parsed_at"].map((name) => ({ name })),
       };
+    }
+    if (sql.startsWith("PRAGMA table_info(roster_file_doctors)")) {
+      return { results: ["file_id", "source_type", "doctor_key", "display_name", "seniority", "membership_source"].map((name) => ({ name })) };
     }
     if (sql.startsWith("PRAGMA table_info(roster_sources)")) {
       return {
@@ -2706,6 +2933,7 @@ class MemoryD1Statement {
           "real_name",
           "role",
           "insights_enabled",
+          "facility_overview_enabled",
           "subscription_token",
           "password_salt",
           "password_hash",
@@ -2743,6 +2971,16 @@ class MemoryD1Statement {
     }
     if (sql.startsWith("SELECT * FROM roster_sources ORDER BY")) {
       return { results: [...this.db.rosterSources.values()].sort((left, right) => String(left.label).localeCompare(String(right.label)) || String(left.id).localeCompare(String(right.id))) };
+    }
+    if (sql.includes("FROM facility_staff_designations")) {
+      return { results: [] };
+    }
+    if (sql.includes("FROM facility_sms_memberships")) {
+      const termEnd = args[0] || "9999-12-31";
+      const sourceType = args.length > 1 ? args[1] : "";
+      return { results: [...this.db.facilitySmsMemberships.values()]
+        .filter((row) => row.first_seen_date <= termEnd)
+        .filter((row) => !sourceType || row.source_type === sourceType) };
     }
     if (sql.startsWith("SELECT * FROM roster_sync_runs") && !sql.includes("WHERE source_id")) {
       return { results: [...this.db.rosterSyncRuns.values()].sort((left, right) => String(right.started_at).localeCompare(String(left.started_at)) || String(right.id).localeCompare(String(left.id))).slice(0, Number(args[0] || 50)) };
@@ -3196,6 +3434,7 @@ class MemoryD1Statement {
             real_name: profile.real_name,
             role: profile.role,
             insights_enabled: profile.insights_enabled,
+            facility_overview_enabled: profile.facility_overview_enabled,
             subscription_token: profile.subscription_token,
             password_salt: profile.password_salt,
             password_hash: profile.password_hash,
@@ -3217,6 +3456,7 @@ class MemoryD1Statement {
             real_name: profile.real_name,
             role: profile.role,
             insights_enabled: profile.insights_enabled,
+            facility_overview_enabled: profile.facility_overview_enabled,
             subscription_token: profile.subscription_token,
             password_salt: profile.password_salt,
             password_hash: profile.password_hash,
@@ -3334,6 +3574,28 @@ class MemoryD1Statement {
         max_uploaded_at: activeFiles.map((file) => String(file.uploaded_at || "")).sort().at(-1) || "",
         max_last_modified: Math.max(0, ...activeFiles.map((file) => Number(file.last_modified || 0))),
       };
+    }
+    if (sql.startsWith("SELECT id, source_type, parsed_at FROM roster_files WHERE id = ? AND active = 1")) {
+      const file = this.db.files.get(args[0]);
+      return file?.active === 1 ? { id: file.id, source_type: file.source_type, parsed_at: file.parsed_at } : null;
+    }
+    if (sql.startsWith("SELECT MIN(start_date) AS start_date, MAX(start_date) AS end_date FROM roster_events WHERE file_id = ?")) {
+      const rows = [...this.db.events.values()].filter((event) => event.file_id === args[0]);
+      return { start_date: rows.map((event) => event.start_date).sort()[0] || null, end_date: rows.map((event) => event.start_date).sort().at(-1) || null };
+    }
+    if (sql.includes("FROM facility_sms_memberships") && sql.includes("WHERE source_type = ? AND doctor_key = ?")) {
+      return this.db.facilitySmsMemberships.get(`${args[0]}|${args[1]}`) || null;
+    }
+    if (sql.includes("FROM facility_staff_designations") && sql.includes("COUNT(*) AS count")) {
+      const rows = [...this.db.facilityStaffDesignations.values()];
+      return { count: rows.length, max_updated_at: rows.map((row) => String(row.updated_at || "")).sort().at(-1) || "" };
+    }
+    if (sql.includes("FROM facility_staff_seniority_overrides") && sql.includes("COUNT(*) AS count")) {
+      return { count: 0, max_updated_at: "" };
+    }
+    if (sql.includes("FROM facility_sms_memberships") && sql.includes("COUNT(*) AS count")) {
+      const rows = [...this.db.facilitySmsMemberships.values()];
+      return { count: rows.length, max_updated_at: rows.map((row) => String(row.updated_at || "")).sort().at(-1) || "" };
     }
     if (sql.includes("FROM custom_events") && sql.includes("COUNT(*) AS count")) {
       const rows = [...this.db.customEvents.values()].filter((event) => event.owner_email === args[0]);
@@ -3928,6 +4190,7 @@ const d1CreatedUser = await postState(d1StateStore, {
   targetPassword: "d1-password",
 }, d1Store);
 assert.ok(d1CreatedUser.user.claims.length > 0, "admin-created account should immediately claim exact roster matches");
+assert.equal(d1CreatedUser.user.facilityOverviewEnabled, true, "new standard accounts should receive At a glance by default");
 const d1DirectLogin = await postState(d1StateStore, {
   action: "login",
   email: "d1-user@example.com",
@@ -3937,6 +4200,7 @@ assert.equal(d1DirectLogin.snapshot?.preview?.derivedFromD1, true, "claimed logi
 assert.equal(d1DirectLogin.viewedAccountType, "claimed-user", "claimed direct login should identify the viewed account type");
 assert.equal(d1DirectLogin.isImpersonating, false, "claimed direct login should not be marked as creator impersonation");
 assert.equal(d1DirectLogin.state.session.doctorKey, d1Doctor.key, "claimed login should default to the claimed doctor");
+assert.equal(d1DirectLogin.facilityOverviewEnabled, true, "full login should retain standard-user At a glance access");
 const d1FastCachedLogin = await postState(d1StateStore, {
   action: "login",
   email: "d1-user@example.com",
@@ -5349,6 +5613,44 @@ for (const [fileId, name, sourceId, title] of [
 }
 assert.equal(sharedUploadDb.files.has("ddh-manual-term"), false, "a FindMyShift source should replace a manual DDH file with identical term coverage");
 assert.equal(sharedUploadDb.files.get("ddh-findmyshift-term")?.active, 1, "the automated DDH replacement should remain active");
+sharedUploadDb.customEvents.set("history@example.com|historical-note", {
+  owner_email: "history@example.com",
+  id: "historical-note",
+  title: "Historical custom note",
+  start_date: "2028-01-10",
+  end_date: "2028-01-10",
+  all_day: 1,
+});
+await postState(sharedUploadStore, {
+  action: "saveDerivedCalendarFile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  file: { id: "ddh-partial-manual", name: "Dandenong-manual-2028-01-01-to-2028-02-28.xlsx", sourceType: "ddh", active: true },
+  doctors: [{ key: "PARTIAL HISTORY DOCTOR", displayName: "Partial History Doctor", sourceType: "ddh" }],
+  eventsByDoctor: {
+    "PARTIAL HISTORY DOCTOR": [
+      { id: "partial-history", source: "DDH", title: "Historical manual shift", allDay: false, start: "2028-01-10T08:00:00+11:00", end: "2028-01-10T17:00:00+11:00", rawValue: "Historical manual shift", monthKey: "2028-01" },
+      { id: "partial-overlap", source: "DDH", title: "Superseded manual shift", allDay: false, start: "2028-02-10T08:00:00+11:00", end: "2028-02-10T17:00:00+11:00", rawValue: "Superseded manual shift", monthKey: "2028-02" },
+    ],
+  },
+}, sharedUploadDb);
+await postState(sharedUploadStore, {
+  action: "saveDerivedCalendarFile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  file: { id: "ddh-partial-automatic", name: "Dandenong-FindMyShift-2028-02-01-to-2028-02-28.xlsx", sourceType: "ddh", sourceId: "dandenong-findmyshift-partial", active: true },
+  doctors: [{ key: "PARTIAL HISTORY DOCTOR", displayName: "Partial History Doctor", sourceType: "ddh" }],
+  eventsByDoctor: {
+    "PARTIAL HISTORY DOCTOR": [
+      { id: "partial-authoritative", source: "DDH", title: "Latest synced shift", allDay: false, start: "2028-02-10T09:00:00+11:00", end: "2028-02-10T18:00:00+11:00", rawValue: "Latest synced shift", monthKey: "2028-02" },
+    ],
+  },
+}, sharedUploadDb);
+assert.equal(sharedUploadDb.files.has("ddh-partial-manual"), true, "a partially overlapping manual roster should remain as historical storage");
+assert.ok([...sharedUploadDb.events.values()].some((event) => event.title === "Historical manual shift"), "manual events before the synced window should remain historical");
+assert.equal([...sharedUploadDb.events.values()].some((event) => event.title === "Superseded manual shift"), false, "the latest synced window should replace overlapping manual shifts");
+assert.ok([...sharedUploadDb.events.values()].some((event) => event.title === "Latest synced shift"), "the latest synced roster should remain authoritative inside its window");
+assert.equal(sharedUploadDb.customEvents.has("history@example.com|historical-note"), true, "roster supersession must not remove account-owned custom events");
 await postState(sharedUploadStore, {
   action: "saveDerivedCalendarFile",
   email: "rhaydon@gmail.com",

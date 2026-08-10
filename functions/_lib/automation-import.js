@@ -2,6 +2,8 @@ import {
   buildRosterView,
   defaultSettings,
   doctorOptions,
+  findmyshiftProviderStaffOptions,
+  mergeMembershipDoctors,
   normalizeRosterName,
   parseUploadForm,
   serializeEvent,
@@ -69,7 +71,8 @@ export async function buildAutomatedDerivedRosterPayload({ file, sourceId, conte
         sourceType: source.sourceType,
       }));
     });
-  const uniqueDoctors = uniqueRosterDoctors(doctors);
+  const providerDoctors = source.sourceType === "ddh" ? findmyshiftProviderStaffOptions(sourceEntries.ddh) : [];
+  const uniqueDoctors = uniqueRosterDoctors(mergeMembershipDoctors(doctors, providerDoctors));
   const settings = {
     ...defaultSettings(),
     hospitalFilter: "all",
@@ -97,7 +100,7 @@ export async function buildAutomatedDerivedRosterPayload({ file, sourceId, conte
     issuesByDoctor[doctor.key] = (view.issues || []).map(serializeIssue);
     eventCount += events.length;
   }
-  if (!uniqueDoctors.length || !eventCount || eventCount < uniqueDoctors.length) {
+  if (!uniqueDoctors.length || !eventCount) {
     throw new Error(`${source.label} could not be indexed reliably (${uniqueDoctors.length} doctors, ${eventCount} events).`);
   }
   return {

@@ -63,7 +63,7 @@ export async function findmyshiftRosterWorkbook(apiKey, teamId, range) {
   const shifts = extractShiftRows(report, { staff, facilities });
   if (!shifts.length) throw new Error("FindMyShift returned no usable roster shifts for the configured date range.");
   assertFindmyshiftDandenongAssignments(shifts);
-  return findmyshiftRowsWorkbook(shifts);
+  return findmyshiftRowsWorkbook(shifts, staff);
 }
 
 // A DDH shift must carry its stream in either its label or a facility value.
@@ -621,7 +621,7 @@ function timeFrom(value, keys) {
   return "";
 }
 
-export function findmyshiftRowsWorkbook(rows) {
+export function findmyshiftRowsWorkbook(rows, staff = []) {
   const byWeek = new Map();
   for (const row of rows) {
     const monday = mondayFor(row.date);
@@ -665,6 +665,18 @@ export function findmyshiftRowsWorkbook(rows) {
     details.push([row.sourceStaffId || "", row.name, row.seniority, row.date, row.label, row.start, row.end, row.facility, row.comment]);
   }
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(details), "FindMyShift details");
+  const staffRows = [["Staff ID", "Staff name", "Seniority/job title"]];
+  const seenStaff = new Set();
+  for (const person of Array.isArray(staff) ? staff : []) {
+    const id = String(person?.staffId || person?.id || "").trim();
+    const name = nameFrom(person);
+    if (!name) continue;
+    const marker = id || name.toUpperCase();
+    if (seenStaff.has(marker)) continue;
+    seenStaff.add(marker);
+    staffRows.push([id, name, String(person?.jobTitle || person?.department || "Unknown").trim() || "Unknown"]);
+  }
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(staffRows), "FindMyShift staff");
   return XLSX.write(workbook, { type: "array", bookType: "xlsx" });
 }
 

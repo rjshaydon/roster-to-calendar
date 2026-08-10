@@ -9,12 +9,14 @@ cpu_ms = 30_000
 binding = "ROSTER_DB"
 database_name = "roster-converter-calendar"
 database_id = "237d0d52-3a7c-4e02-8648-9f4dedbc1cb0"
-preview_database_id = "237d0d52-3a7c-4e02-8648-9f4dedbc1cb0"
+preview_database_id = "541d7779-a43a-4603-a4ab-c95e9b4b015d"
 
 [[r2_buckets]]
 binding = "ROSTER_FILES"
 bucket_name = "roster-converter-source-files"
+preview_bucket_name = "roster-converter-source-files-preview"
 
 [[r2_buckets]]
 binding = "ROSTER_CACHE"
 bucket_name = "roster-converter-cache"
+preview_bucket_name = "roster-converter-cache-preview"

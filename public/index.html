@@ -104,6 +104,7 @@
           <div id="controlBar" class="control-bar hidden">
             <div class="control-bar-main">
               <button id="exportButton" type="button" class="button button-primary" disabled>Export options</button>
+              <button id="facilityOverviewButton" type="button" class="button button-secondary hidden">At a glance</button>
               <button id="addRosterFilesButton" type="button" class="button button-secondary">Add Roster Files</button>
               <span class="control-bar-spacer" aria-hidden="true"></span>
               <button id="accountsButton" type="button" class="button button-secondary">Accounts</button>
@@ -335,6 +336,26 @@
             <div id="preview" class="preview hidden"></div>
           </section>
 
+          <section id="facilityOverviewSection" class="facility-overview hidden" aria-label="At a glance ED overview">
+            <div id="facilityOverviewHeader"></div>
+            <div class="facility-overview-head">
+              <div class="section-head">
+                <h2>At a glance</h2>
+                <p>See rostered staff across EDs.</p>
+              </div>
+              <button id="facilityOverviewBackButton" type="button" class="button button-secondary">My calendar</button>
+            </div>
+            <div class="facility-overview-toolbar">
+              <div class="facility-overview-tabs" role="tablist" aria-label="At a glance views">
+                <button type="button" class="entrance-tab is-active" role="tab" aria-selected="true" data-facility-overview-tab="on-shift">On shift</button>
+                <button type="button" class="entrance-tab" role="tab" aria-selected="false" data-facility-overview-tab="staff">ED staff</button>
+                <button type="button" class="entrance-tab" role="tab" aria-selected="false" data-facility-overview-tab="together">Working together</button>
+              </div>
+              <div id="facilityOverviewControls" class="facility-overview-controls"></div>
+            </div>
+            <div id="facilityOverviewBody" class="facility-overview-body" aria-live="polite"></div>
+          </section>
+
           <div id="status" class="status-list" aria-live="polite" aria-relevant="additions removals"></div>
 
           <section id="issuesPanel" class="issues-panel hidden" aria-label="Warnings">
@@ -361,6 +382,10 @@
           <path d="M6 10.8v7.1c0 .9.7 1.6 1.6 1.6h8.8c.9 0 1.6-.7 1.6-1.6v-7.1" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.9"/>
         </svg>
         <span class="sr-only">Share</span>
+      </button>
+      <button id="mobileFacilityOverviewButton" type="button" class="button button-secondary mobile-bar-button hidden" aria-label="At a glance ED overview">
+        <span aria-hidden="true">ED</span>
+        <span class="sr-only">At a glance</span>
       </button>
       <button id="mobileAccountButton" type="button" class="button button-secondary mobile-bar-button" aria-label="Account">
         <svg id="mobileAccountButtonGlyph" class="mobile-bar-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -595,6 +620,7 @@
         <div class="switch-overlay-progress" aria-hidden="true">
           <span class="switch-overlay-bar"></span>
         </div>
+        <button id="switchOverlayCancelButton" type="button" class="button button-secondary hidden">Cancel and return to Creator</button>
       </section>
     </div>
 

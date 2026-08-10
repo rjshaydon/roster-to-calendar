@@ -818,6 +818,872 @@ input[type="color"] {
   border: 1px solid rgba(20, 34, 42, 0.07);
 }
 
+.facility-overview {
+  display: grid;
+  gap: 18px;
+  align-content: start;
+  padding: 18px 20px;
+  border-radius: 18px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.64), rgba(255, 255, 255, 0.38)),
+    rgba(20, 34, 42, 0.03);
+  border: 1px solid rgba(20, 34, 42, 0.07);
+}
+
+.facility-overview-head,
+.facility-overview-toolbar,
+.facility-overview-controls,
+.facility-overview-date-actions {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.facility-overview-head {
+  justify-content: space-between;
+}
+
+.facility-overview-head .section-head {
+  margin-bottom: 0;
+}
+
+.facility-overview-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.facility-overview-toolbar {
+  align-items: end;
+  border-bottom: 1px solid rgba(20, 34, 42, 0.1);
+  padding-bottom: 12px;
+}
+
+.facility-overview-controls {
+  display: contents;
+}
+
+.facility-overview-controls .field {
+  flex: 0 0 120px;
+  width: 120px;
+  min-width: 0;
+}
+
+.facility-overview-controls .field > select,
+.facility-overview-controls .field > input[type="date"],
+.facility-overview-controls .field > input[type="search"] {
+  box-sizing: border-box;
+  inline-size: 100%;
+  min-height: 52px;
+  height: 52px;
+}
+
+.facility-overview-controls .field > input[type="search"] {
+  padding: 12px 14px;
+  border: 1px solid rgba(24, 35, 28, 0.15);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--ink);
+  font: inherit;
+}
+
+.facility-overview-controls .toggle {
+  min-height: 42px;
+}
+
+.facility-overview-cs-toggle {
+  display: inline-flex;
+  align-items: center;
+  align-self: end;
+  gap: 10px;
+  min-height: 52px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.facility-overview-cs-toggle input {
+  margin: 0;
+}
+
+.facility-overview-body,
+.facility-overview-results,
+.facility-overview-period {
+  display: grid;
+  gap: 12px;
+}
+
+.facility-overview-period h3 {
+  margin: 8px 0 0;
+  font-size: 0.94rem;
+}
+
+.facility-overview-staff-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.facility-overview-ddh-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.facility-overview-ddh-column-1 {
+  grid-column: 1;
+}
+
+.facility-overview-ddh-column-2 {
+  grid-column: 2;
+}
+
+.facility-overview-ddh-column-3 {
+  grid-column: 3;
+}
+
+.facility-overview-staff-card {
+  gap: 3px;
+  padding: 11px 12px;
+}
+
+.facility-overview-staff-card strong,
+.facility-overview-staff-card .facility-overview-staff-calendar-link {
+  font-size: 0.92rem;
+  line-height: 1.2;
+}
+
+.facility-overview-staff-card .facility-overview-seniority {
+  font-size: 0.76rem;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--muted);
+}
+
+.facility-overview-staff-card .facility-overview-shift-detail {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.facility-overview-staff-card .facility-overview-stream {
+  font-size: 0.84rem;
+  line-height: 1.25;
+  color: var(--ink);
+}
+
+.facility-overview-staff-card.is-swing {
+  border-color: rgba(111, 97, 246, 0.34);
+  background: linear-gradient(180deg, rgba(111, 97, 246, 0.07), #ffffff);
+}
+
+.facility-overview-staff-search {
+  flex-basis: 190px !important;
+  width: 190px !important;
+}
+
+.facility-overview-staff-term-control {
+  flex-basis: 150px !important;
+  width: 150px !important;
+}
+
+.facility-overview-ed-panel,
+.facility-overview-staff-sections,
+.facility-overview-staff-list {
+  display: grid;
+  gap: 10px;
+}
+
+.facility-overview-ed-panel {
+  padding: 14px;
+  border: 1px solid rgba(20, 34, 42, 0.1);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.facility-overview-ed-heading,
+.facility-overview-staff-section-toggle,
+.facility-overview-staff-member {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.facility-overview-ed-heading h3 {
+  margin: 0;
+}
+
+.facility-overview-coverage-warning,
+.facility-overview-staff-member small {
+  color: #8a5200;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.facility-overview-staff-section {
+  overflow: visible;
+  border: 1px solid rgba(20, 34, 42, 0.1);
+  border-radius: 10px;
+}
+
+.facility-overview-staff-section-banner {
+  display: flex;
+  align-items: stretch;
+  background: rgba(20, 34, 42, 0.035);
+  border-radius: 9px 9px 0 0;
+}
+
+.facility-overview-staff-section-toggle {
+  display: grid;
+  grid-template-columns: minmax(0, var(--facility-overview-seniority-label-width, max-content)) 4ch minmax(0, 1fr);
+  width: 100%;
+  padding: 11px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.facility-overview-staff-section-banner .facility-overview-staff-section-toggle {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.facility-overview-staff-section > .facility-overview-staff-section-toggle {
+  background: rgba(20, 34, 42, 0.035);
+}
+
+.facility-overview-staff-multi-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  margin: 0 12px 0 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.facility-overview-staff-multi-select input {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.facility-overview-staff-section-count {
+  text-align: left;
+}
+
+.facility-overview-staff-section-chevron::after {
+  content: "⌄";
+  justify-self: end;
+}
+
+.facility-overview-staff-section-toggle[aria-expanded="true"] .facility-overview-staff-section-chevron::after {
+  transform: rotate(180deg);
+}
+
+.facility-overview-staff-list {
+  padding: 5px 12px 12px;
+}
+
+.facility-overview-staff-member {
+  align-items: start;
+  flex-wrap: wrap;
+  padding: 9px 0;
+  border-top: 1px solid rgba(20, 34, 42, 0.08);
+}
+
+.facility-overview-staff-member.is-multi-selected {
+  margin: 0 -6px;
+  padding: 9px 6px;
+  border-radius: 7px;
+  background: var(--accent-soft);
+}
+
+.facility-overview-staff-member.is-multi-selected .facility-overview-staff-calendar-link {
+  color: var(--accent-strong);
+}
+
+.facility-overview-staff-member span {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.facility-overview-previous-staff-section {
+  border-color: rgba(138, 82, 0, 0.22);
+}
+
+.facility-overview-previous-staff-section .facility-overview-staff-section-toggle {
+  background: rgba(138, 82, 0, 0.06);
+}
+
+.facility-overview-staff-calendar-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: rgba(20, 34, 42, 0.3);
+  text-underline-offset: 3px;
+}
+
+.facility-overview-staff-calendar-link:hover,
+.facility-overview-staff-calendar-link:focus-visible {
+  color: var(--accent);
+  text-decoration-color: currentColor;
+}
+
+.facility-overview-staff-action {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+}
+
+.facility-overview-staff-action-menu {
+  position: fixed;
+  z-index: 50;
+  top: var(--facility-overview-menu-top, 8px);
+  left: var(--facility-overview-menu-left, 8px);
+  display: grid;
+  min-width: 190px;
+  max-width: calc(100vw - 16px);
+  padding: 6px;
+  border: 1px solid rgba(20, 34, 42, 0.16);
+  border-radius: 10px;
+  background: #ffffff;
+  box-shadow: 0 12px 28px rgba(20, 34, 42, 0.18);
+}
+
+.facility-overview-staff-action-menu button {
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.84rem;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.facility-overview-staff-action-menu button:hover,
+.facility-overview-staff-action-menu button:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.facility-overview-staff-bulk-menu-label {
+  padding: 5px 10px 7px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.facility-overview-staff-designation-action {
+  position: relative;
+  margin-left: auto;
+}
+
+.facility-overview-staff-seniority-action {
+  position: relative;
+}
+
+.facility-overview-staff-designation-trigger {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.84rem;
+  text-align: right;
+  cursor: context-menu;
+}
+
+.facility-overview-staff-designation-trigger:hover,
+.facility-overview-staff-designation-trigger:focus-visible {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.facility-overview-staff-seniority-trigger,
+.facility-overview-on-shift-seniority-trigger {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 700;
+  cursor: context-menu;
+}
+
+.facility-overview-staff-seniority-trigger:hover,
+.facility-overview-staff-seniority-trigger:focus-visible,
+.facility-overview-on-shift-seniority-trigger:hover,
+.facility-overview-on-shift-seniority-trigger:focus-visible {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.facility-overview-stream-card {
+  gap: 9px;
+}
+
+.facility-overview-stream-card-title {
+  font-size: 0.94rem;
+}
+
+.facility-overview-stream-seniority {
+  display: grid;
+  gap: 4px;
+}
+
+.facility-overview-stream-seniority > span,
+.facility-overview-unstreamed-card > strong {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.facility-overview-on-shift-names {
+  display: grid;
+  gap: 4px;
+}
+
+.facility-overview-on-shift-names > div {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.facility-overview-on-shift-seniority {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.facility-overview-on-shift-names small {
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.facility-overview-seniority-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: rgba(20, 34, 42, 0.3);
+  text-underline-offset: 3px;
+}
+
+.facility-overview-seniority-link:hover,
+.facility-overview-seniority-link:focus-visible {
+  color: var(--accent);
+  text-decoration-color: currentColor;
+}
+
+.facility-overview-header-note {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.facility-overview-together {
+  display: grid;
+  gap: 14px;
+}
+
+.facility-overview-together {
+  overflow: hidden;
+  border: 1px solid rgba(111, 97, 246, 0.18);
+  border-radius: 18px;
+  background: linear-gradient(145deg, rgba(111, 97, 246, 0.055), rgba(255, 255, 255, 0.94) 42%);
+}
+
+.facility-overview-together-intro,
+.facility-overview-together-match-date {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.facility-overview-together-intro {
+  padding: 16px 22px 0;
+  align-items: start;
+}
+
+.facility-overview-together-intro h3,
+.facility-overview-results-head h3 {
+  margin: 2px 0 4px;
+  font-size: 1.16rem;
+}
+
+.facility-overview-together-intro h3 {
+  font-size: 0.94rem;
+  line-height: 1.42;
+}
+
+.facility-overview-together-intro p,
+.facility-overview-filter-hint,
+.facility-overview-empty-state p,
+.facility-overview-no-match p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.facility-overview-eyebrow {
+  color: var(--accent-strong, #4b3bd1);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.facility-overview-proposal-badge,
+.facility-overview-site-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.facility-overview-proposal-badge {
+  background: rgba(111, 97, 246, 0.12);
+  color: var(--accent-strong, #4b3bd1);
+}
+
+.facility-overview-together-builder {
+  display: grid;
+  grid-template-columns: minmax(310px, 1.35fr) minmax(220px, 0.9fr) minmax(180px, 0.72fr);
+  gap: 12px;
+  padding: 0 22px;
+}
+
+.facility-overview-together-section {
+  min-width: 0;
+  margin: 0;
+  padding: 15px;
+  border: 1px solid rgba(20, 34, 42, 0.09);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.facility-overview-together-section legend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px;
+  color: var(--ink);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.facility-overview-together-section legend > span {
+  display: inline-grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(111, 97, 246, 0.12);
+  color: var(--accent-strong, #4b3bd1);
+  font-size: 0.7rem;
+}
+
+.facility-overview-together-section legend small {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.facility-overview-together-section .field {
+  width: 100%;
+}
+
+.facility-overview-together-section .field > select,
+.facility-overview-together-section .field > input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 44px;
+}
+
+.facility-overview-together-staff-list {
+  display: grid;
+  gap: 9px;
+}
+
+.facility-overview-together-staff-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.facility-overview-remove-staff,
+.facility-overview-add-staff {
+  border: 0;
+  background: transparent;
+  color: var(--accent-strong, #4b3bd1);
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.facility-overview-remove-staff {
+  min-height: 44px;
+  padding: 0 4px;
+  color: #a13b4b;
+}
+
+.facility-overview-add-staff {
+  margin-top: 11px;
+  padding: 4px 0;
+}
+
+.facility-overview-add-staff span {
+  display: inline-grid;
+  width: 20px;
+  height: 20px;
+  margin-right: 4px;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(111, 97, 246, 0.12);
+}
+
+.facility-overview-segmented {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  margin-bottom: 13px;
+  padding: 3px;
+  border-radius: 10px;
+  background: rgba(20, 34, 42, 0.055);
+}
+
+.facility-overview-segmented input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.facility-overview-segmented span {
+  display: block;
+  padding: 8px 9px;
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-align: center;
+  cursor: pointer;
+}
+
+.facility-overview-segmented input:checked + span {
+  background: #fff;
+  color: var(--ink);
+  box-shadow: 0 2px 8px rgba(20, 34, 42, 0.08);
+}
+
+.facility-overview-segmented input:focus-visible + span {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.facility-overview-together-dates {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.facility-overview-filter-hint {
+  margin-top: 10px;
+}
+
+.facility-overview-together-output {
+  display: grid;
+  gap: 12px;
+  padding: 2px 22px 22px;
+  border-top: 1px solid rgba(20, 34, 42, 0.09);
+}
+
+.facility-overview-empty-state,
+.facility-overview-no-match {
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+  padding: 28px 20px;
+  border: 1px dashed rgba(20, 34, 42, 0.16);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.48);
+  text-align: center;
+}
+
+.facility-overview-empty-state > span,
+.facility-overview-no-match > span {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  margin-bottom: 3px;
+  place-items: center;
+  border-radius: 50%;
+  background: rgba(111, 97, 246, 0.1);
+  color: var(--accent-strong, #4b3bd1);
+  font-size: 1rem;
+}
+
+.facility-overview-match-group {
+  display: grid;
+  gap: 10px;
+}
+
+.facility-overview-match-group {
+  padding: 14px;
+  border: 1px solid rgba(20, 34, 42, 0.14);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.94);
+}
+
+.facility-overview-match-group-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.facility-overview-match-group-head h4 {
+  margin: 3px 0 0;
+  color: var(--ink);
+}
+
+.facility-overview-match-group-head h4 {
+  font-size: 0.9rem;
+}
+
+.facility-overview-together-match-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.facility-overview-together-match {
+  display: grid;
+  gap: 11px;
+  padding: 14px;
+  border: 1px solid rgba(20, 34, 42, 0.14);
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 8px 22px rgba(20, 34, 42, 0.06);
+}
+
+.facility-overview-together-match-date time {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.facility-overview-together-match-date time strong {
+  font-size: 0.86rem;
+}
+
+.facility-overview-together-match-date time span {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.facility-overview-match-pair,
+.facility-overview-overlap-time {
+  font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.facility-overview-match-pair {
+  color: var(--accent-strong, #4b3bd1);
+}
+
+.facility-overview-match-pair .facility-overview-staff-calendar-link {
+  color: inherit;
+}
+
+.facility-overview-overlap-time {
+  margin-top: -5px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.facility-overview-site-pill {
+  background: rgba(24, 166, 118, 0.11);
+  color: #087554;
+}
+
+.facility-overview-together-match-people {
+  display: grid;
+  gap: 7px;
+}
+
+.facility-overview-together-match-people > div {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.8fr) minmax(0, 1.2fr);
+  gap: 8px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(20, 34, 42, 0.07);
+}
+
+.facility-overview-together-match-people strong,
+.facility-overview-together-match-people span {
+  font-size: 0.77rem;
+  line-height: 1.35;
+}
+
+.facility-overview-together-match-people span {
+  color: var(--muted);
+}
+
+@media (max-width: 900px) {
+  .facility-overview-staff-grid,
+  .facility-overview-ddh-row {
+    grid-template-columns: 1fr;
+  }
+
+  .facility-overview-ddh-column-1,
+  .facility-overview-ddh-column-2,
+  .facility-overview-ddh-column-3 {
+    grid-column: 1;
+  }
+
+  .facility-overview-together-builder,
+  .facility-overview-together-match-list {
+    grid-template-columns: 1fr;
+  }
+
+}
+
 .settings-head,
 .section-head {
   display: grid;
@@ -1414,6 +2280,19 @@ input[type="color"] {
   background: rgba(217, 95, 52, 0.1);
   outline: none;
   transform: translateY(-1px);
+}
+
+.preview-range-button:disabled {
+  cursor: default;
+  opacity: 0.48;
+  transform: none;
+}
+
+.preview-range-button:disabled:hover,
+.preview-range-button:disabled:focus-visible {
+  border-color: rgba(20, 34, 42, 0.12);
+  background: rgba(255, 255, 255, 0.82);
+  transform: none;
 }
 
 .preview-range-input {
@@ -2550,6 +3429,147 @@ body[data-skin="console"] #previewSection {
   overflow-x: hidden;
 }
 
+body[data-skin="console"] #facilityOverviewSection {
+  grid-column: 2;
+  grid-row: 1 / span 8;
+  min-width: 0;
+  height: 100vh;
+  margin: 0;
+  padding: calc(var(--console-header-height) + 8px) 24px 18px;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  overflow: hidden;
+  transition: gap 160ms ease;
+}
+
+body[data-skin="console"] #facilityOverviewBody {
+  box-sizing: border-box;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  align-content: start;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+  padding: 0 4px 24px 0;
+}
+
+body[data-skin="console"] #facilityOverviewBody > * {
+  min-height: min-content;
+}
+
+body[data-skin="console"] #facilityOverviewBody.is-working-together {
+  overflow: hidden;
+  padding-bottom: 0;
+}
+
+body[data-skin="console"] #facilityOverviewBody.is-working-together > .facility-overview-together {
+  box-sizing: border-box;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* The heading, tabs and filters are outside the roster-result scroller, so
+   the selected ED and date stay visible while moving through the staff list. */
+body[data-skin="console"] .facility-overview-head,
+body[data-skin="console"] .facility-overview-toolbar,
+body[data-skin="console"] #facilityOverviewControls {
+  position: relative;
+  z-index: 1;
+}
+
+body[data-skin="console"] .facility-overview-toolbar {
+  transition: gap 160ms ease, padding 160ms ease;
+}
+
+body[data-skin="console"] .facility-overview-head,
+body[data-skin="console"] .facility-overview-head .section-head,
+body[data-skin="console"] .facility-overview-head h2,
+body[data-skin="console"] .facility-overview-head p,
+body[data-skin="console"] .facility-overview-head .button,
+body[data-skin="console"] .facility-overview-controls .field > select,
+body[data-skin="console"] .facility-overview-controls .field > input[type="date"] {
+  transition: gap 160ms ease, margin 160ms ease, padding 160ms ease, min-height 160ms ease, height 160ms ease, font-size 160ms ease;
+}
+
+body[data-skin="console"] #facilityOverviewSection.is-compact {
+  gap: 8px;
+}
+
+body[data-skin="console"] #facilityOverviewSection.is-compact .facility-overview-head {
+  align-items: center;
+}
+
+body[data-skin="console"] #facilityOverviewSection.is-compact .facility-overview-head .section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+body[data-skin="console"] #facilityOverviewSection.is-compact .facility-overview-head h2 {
+  font-size: 1.08rem;
+}
+
+body[data-skin="console"] #facilityOverviewSection.is-compact .facility-overview-head p {
+  font-size: 0.76rem;
+}
+
+body[data-skin="console"] #facilityOverviewSection.is-compact .facility-overview-head .button {
+  min-height: 36px;
+  padding: 8px 14px;
+  font-size: 0.8rem;
+}
+
+body[data-skin="console"] #facilityOverviewSection.is-compact .facility-overview-tabs {
+  gap: 5px;
+}
+
+body[data-skin="console"] #facilityOverviewSection.is-compact .facility-overview-tabs .entrance-tab {
+  min-height: 38px;
+  padding: 8px 13px;
+  font-size: 0.82rem;
+}
+
+body[data-skin="console"] #facilityOverviewSection.is-compact .facility-overview-toolbar {
+  gap: 8px;
+  padding-bottom: 7px;
+}
+
+body[data-skin="console"] #facilityOverviewSection.is-compact .facility-overview-controls .field > select,
+body[data-skin="console"] #facilityOverviewSection.is-compact .facility-overview-controls .field > input[type="date"],
+body[data-skin="console"] #facilityOverviewSection.is-compact .facility-overview-controls .field > input[type="search"] {
+  min-height: 42px;
+  height: 42px;
+  max-height: 42px;
+}
+
+body[data-skin="console"] #facilityOverviewSection.is-compact .facility-overview-cs-toggle {
+  min-height: 42px;
+}
+
+body[data-skin="console"] #facilityOverviewSection.is-compact .facility-overview-date-actions .button {
+  padding: 9px 14px;
+  font-size: 0.82rem;
+}
+
+/* The two panes share a grid cell.  Keep the calendar out of the paint tree
+   while the facility overview is open, including during nested scrolling. */
+body[data-skin="console"] #roster-form.is-facility-overview-active #previewSection {
+  display: none !important;
+}
+
+body[data-skin="console"] #roster-form.is-facility-overview-active #facilityOverviewSection {
+  display: grid;
+  position: relative;
+  z-index: 10;
+  background: #ffffff;
+}
+
 body[data-skin="console"] .preview {
   padding: 0;
   border: 0;
@@ -2767,6 +3787,13 @@ body[data-skin="console"] .panel {
 }
 
 @media (max-width: 760px) {
+  .facility-overview-staff-designation-trigger,
+  .facility-overview-staff-seniority-trigger {
+    min-height: 32px;
+    padding-block: 5px;
+    touch-action: manipulation;
+  }
+
   .shift-code-review-controls,
   .shift-code-review-row {
     grid-template-columns: 1fr;
@@ -2801,6 +3828,7 @@ body[data-skin="console"] .panel {
   .panel,
   #roster-form,
   #previewSection,
+  #facilityOverviewSection,
   .preview,
   .preview-term {
     width: 100%;
@@ -3012,9 +4040,29 @@ body[data-skin="console"] .panel {
     gap: 8px;
   }
 
+  .mobile-action-bar.has-facility-overview {
+    grid-template-columns: minmax(0, 1.15fr) repeat(4, minmax(0, 1fr));
+  }
+
   .mobile-action-bar .button {
     min-height: 44px;
     font-size: 0.88rem;
+  }
+
+  /* iOS keeps date and search inputs in native control chrome, which ignores
+     the shared 52px sizing used by the ED selector. */
+  .facility-overview-controls .field > input[type="date"],
+  .facility-overview-controls .field > input[type="search"] {
+    -webkit-appearance: none;
+    appearance: none;
+    display: block;
+    min-height: 52px;
+    height: 52px;
+    max-height: 52px;
+  }
+
+  .facility-overview-staff-term-control {
+    display: none;
   }
 
   .mobile-login-access {
@@ -3130,7 +4178,8 @@ body[data-skin="console"] .panel {
   body[data-skin="console"] #conflictsPanel,
   body[data-skin="console"] #issuesPanel,
   body[data-skin="console"] #status,
-  body[data-skin="console"] #previewSection {
+  body[data-skin="console"] #previewSection,
+  body[data-skin="console"] #facilityOverviewSection {
     grid-column: 1;
     grid-row: auto;
     border-right-width: 0;
@@ -3148,6 +4197,26 @@ body[data-skin="console"] .panel {
     overflow: visible;
     width: 100%;
     max-width: 100%;
+  }
+
+  body[data-skin="console"] #facilityOverviewSection {
+    padding: 12px 16px 190px;
+    height: auto;
+    overflow: visible;
+    width: 100%;
+    max-width: 100%;
+  }
+
+  body[data-skin="console"] #facilityOverviewBody {
+    height: auto;
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
+  }
+
+  body[data-skin="console"] #facilityOverviewBody.is-working-together > .facility-overview-together {
+    height: auto;
+    overflow: hidden;
   }
 
   body[data-skin="console"] #status {

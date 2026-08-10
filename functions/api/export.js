@@ -16,7 +16,7 @@ export async function onRequestPost(context) {
       buildRosterView(sources.mmc, sources.ddh, doctorKey, settings, overrides, conflictSelections, doctorAliases, sources.casey, sources.mch).events,
       overrides,
     );
-    const events = [...rosterEvents, ...customEventsToEvents(customEvents, settings)].sort((left, right) => {
+    const events = [...rosterEvents, ...customEventsToEvents(customEvents, settings, rosterEvents)].sort((left, right) => {
       const leftDate = left.start.slice(0, 10);
       const rightDate = right.start.slice(0, 10);
       if (leftDate !== rightDate) return leftDate.localeCompare(rightDate);

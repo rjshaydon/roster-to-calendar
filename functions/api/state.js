@@ -35,6 +35,13 @@ import {
   listSnapshotRegistryWarmupCandidates,
   loadRawRosterFile,
   queryCoworkerEventsFromEvents,
+  queryFacilityOverviewOnShift,
+  queryFacilityOverviewStaff,
+  setFacilityStaffDesignation,
+  clearFacilityStaffDesignation,
+  setFacilityStaffSeniorityOverride,
+  setFacilityStaffSeniorityOverrides,
+  reconcileFacilityStaffDesignationsForRosterFile,
   queryOverlapDoctorsFromEvents,
   queryClaimedAccounts,
   queryDoctorProfileMirrors,
@@ -196,6 +203,7 @@ export async function onRequestPost(context) {
         ...viewedAccountPayload(loginRecord, loginRecord, prepared),
         defaultDoctorKey: prepared.defaultDoctorKey || "",
         insightsEnabled: prepared.insightsEnabled,
+        facilityOverviewEnabled: prepared.facilityOverviewEnabled,
         snapshotOwnerType: snapshotPayload.snapshot?.ownerType || snapshotOwnerTypeForRecord(loginRecord, prepared.role),
         snapshotOwnerId: snapshotPayload.snapshot?.ownerId || normalizeEmail(loginRecord.email),
       };
@@ -369,6 +377,7 @@ export async function onRequestPost(context) {
           claims: createdClaims,
           suggestedClaims: [],
           insightsEnabled: insightsEnabledForRecord({ ...createdRecord, role: createdRole }),
+          facilityOverviewEnabled: facilityOverviewEnabledForRecord({ ...createdRecord, role: createdRole }),
           createdAt: created.record.createdAt || "",
           updatedAt: created.record.updatedAt || "",
         },
@@ -398,6 +407,7 @@ export async function onRequestPost(context) {
         availableDoctors: prepared.availableDoctors,
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
+        facilityOverviewEnabled: prepared.facilityOverviewEnabled,
         ...viewedAccountPayload(account.record, targetRecord, prepared),
         defaultDoctorKey: prepared.defaultDoctorKey || "",
         snapshotOwnerType: snapshotOwnerTypeForRecord(targetRecord, prepared.role),
@@ -441,6 +451,7 @@ export async function onRequestPost(context) {
         availableDoctors: prepared.availableDoctors,
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
+        facilityOverviewEnabled: prepared.facilityOverviewEnabled,
         calendarRevision: snapshotPayload.calendarRevision,
         snapshot: snapshotPayload.snapshot,
         snapshotAvailable: snapshotPayload.snapshotAvailable,
@@ -477,6 +488,7 @@ export async function onRequestPost(context) {
         realName: prepared.realName,
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
+        facilityOverviewEnabled: prepared.facilityOverviewEnabled,
         nameMatches: prepared.nameMatches,
         suggestedClaims: prepared.nameMatches,
         availableDoctors: prepared.availableDoctors,
@@ -978,6 +990,31 @@ export async function onRequestPost(context) {
       });
     }
 
+    if (action === "setUserFacilityOverviewEnabled") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      if (!targetEmail) {
+        return Response.json({ error: "Target account is required." }, { status: 400 });
+      }
+      const targetRecord = await loadAccountMirror(context.env.ROSTER_DB, targetEmail);
+      if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
+      const targetRole = targetRecord.role || roleForEmail(targetEmail);
+      if (targetRole === "creator" || targetRole === "owner") {
+        return Response.json({ error: "Creator overview access cannot be disabled." }, { status: 400 });
+      }
+      const updated = {
+        ...targetRecord,
+        facilityOverviewEnabled: body?.facilityOverviewEnabled === true,
+        updatedAt: new Date().toISOString(),
+      };
+      await upsertAccountMirror(context.env.ROSTER_DB, updated);
+      return Response.json({
+        ok: true,
+        user: await userSummaryFromRecord(targetEmail, updated, { db: context.env.ROSTER_DB }),
+      });
+    }
+
     if (action === "reportUserError") {
       const reportEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
       const targetRecord = reportEmail === email ? account.record : await loadAccountMirror(context.env.ROSTER_DB, reportEmail);
@@ -1385,6 +1422,167 @@ export async function onRequestPost(context) {
       return Response.json({ ok: true, repaired, queryMs: Date.now() - startedAt });
     }
 
+    if (action === "setFacilityStaffDesignation") {
+      if ((account.role !== "creator" && account.role !== "owner") || targetEmail) {
+        return Response.json({ error: "Creator access on the Creator profile is required." }, { status: 403 });
+      }
+      try {
+        const termStart = String(body?.termStart || "").slice(0, 10);
+        const termEnd = String(body?.termEnd || "").slice(0, 10);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(termStart) || !/^\d{4}-\d{2}-\d{2}$/.test(termEnd) || termEnd < termStart) {
+          return Response.json({ error: "A valid medical term is required." }, { status: 400 });
+        }
+        const designation = await setFacilityStaffDesignation(context.env.ROSTER_DB, {
+          sourceType: body?.facilityKey,
+          doctorKey: normalizeRosterName(body?.doctorKey || ""),
+          displayName: body?.displayName,
+          seniority: body?.seniority,
+          designation: body?.designation,
+          termStart,
+          termEnd,
+          createdBy: account.record?.email || email,
+        });
+        scheduleSnapshotWarmupForSourceTypes(context, [designation?.sourceType].filter(Boolean), { reason: "facilityStaffDesignation" });
+        return Response.json({ ok: true, designation });
+      } catch (error) {
+        return Response.json({ error: error?.message || "Could not save the staff designation." }, { status: 400 });
+      }
+    }
+
+    if (action === "clearFacilityStaffDesignation") {
+      if ((account.role !== "creator" && account.role !== "owner") || targetEmail) {
+        return Response.json({ error: "Creator access on the Creator profile is required." }, { status: 403 });
+      }
+      const designation = await clearFacilityStaffDesignation(context.env.ROSTER_DB, body?.designationId, { reason: "creator-undo" });
+      if (!designation) return Response.json({ error: "Staff designation was not found." }, { status: 404 });
+      scheduleSnapshotWarmupForSourceTypes(context, [designation.sourceType].filter(Boolean), { reason: "clearFacilityStaffDesignation" });
+      return Response.json({ ok: true, designation });
+    }
+
+    if (action === "setFacilityStaffSeniorityOverride") {
+      if ((account.role !== "creator" && account.role !== "owner") || targetEmail) {
+        return Response.json({ error: "Creator access on the Creator profile is required." }, { status: 403 });
+      }
+      try {
+        const termStart = String(body?.termStart || "").slice(0, 10);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(termStart)) return Response.json({ error: "A valid medical term is required." }, { status: 400 });
+        const override = await setFacilityStaffSeniorityOverride(context.env.ROSTER_DB, {
+          sourceType: body?.facilityKey,
+          doctorKey: normalizeRosterName(body?.doctorKey || ""),
+          displayName: body?.displayName,
+          seniority: body?.seniority,
+          useRosterSeniority: body?.useRosterSeniority === true,
+          termStart,
+          createdBy: account.record?.email || email,
+        });
+        scheduleSnapshotWarmupForSourceTypes(context, [override?.sourceType].filter(Boolean), { reason: "facilityStaffSeniorityOverride" });
+        return Response.json({ ok: true, override });
+      } catch (error) {
+        return Response.json({ error: error?.message || "Could not save the staff designation." }, { status: 400 });
+      }
+    }
+
+    if (action === "setFacilityStaffSeniorityOverrides") {
+      if ((account.role !== "creator" && account.role !== "owner") || targetEmail) {
+        return Response.json({ error: "Creator access on the Creator profile is required." }, { status: 403 });
+      }
+      try {
+        const termStart = String(body?.termStart || "").slice(0, 10);
+        const staff = Array.isArray(body?.staff) ? body.staff : [];
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(termStart)) return Response.json({ error: "A valid medical term is required." }, { status: 400 });
+        if (!staff.length || staff.length > 100) return Response.json({ error: "Choose between 1 and 100 staff members." }, { status: 400 });
+        const overrides = await setFacilityStaffSeniorityOverrides(context.env.ROSTER_DB, {
+          sourceType: body?.facilityKey,
+          staff: staff.map((person) => ({ ...person, doctorKey: normalizeRosterName(person?.doctorKey || "") })),
+          seniority: body?.seniority,
+          useRosterSeniority: body?.useRosterSeniority === true,
+          termStart,
+          createdBy: account.record?.email || email,
+        });
+        scheduleSnapshotWarmupForSourceTypes(context, [...new Set(overrides.map((override) => override?.sourceType).filter(Boolean))], { reason: "facilityStaffSeniorityOverrides" });
+        return Response.json({ ok: true, overrides });
+      } catch (error) {
+        return Response.json({ error: error?.message || "Could not save the staff designations." }, { status: 400 });
+      }
+    }
+
+    if (action === "queryFacilityOverviewOnShift") {
+      if (!facilityOverviewEnabledForRecord({ ...account.record, role: account.role })) {
+        return Response.json({ ok: false, unavailable: true, events: [] }, { status: 403 });
+      }
+      const date = String(body?.date || "").slice(0, 10);
+      const facilityKey = sanitizeSourceTypes([body?.facilityKey])[0] || "";
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !facilityKey) {
+        return Response.json({ error: "A valid ED and date are required." }, { status: 400 });
+      }
+      const startedAt = Date.now();
+      try {
+        const events = (await queryFacilityOverviewOnShift(context.env.ROSTER_DB, { date, facilityKey }))
+          .filter((row) => isFacilityOverviewWorkingEvent(row.event, {
+            facilityKey,
+            includeClinicalSupport: body?.includeClinicalSupport === true,
+          }));
+        return Response.json({ ok: true, date, facilityKey, events, queryMs: Date.now() - startedAt });
+      } catch (error) {
+        console.error("queryFacilityOverviewOnShift failed", {
+          date,
+          facilityKey,
+          queryMs: Date.now() - startedAt,
+          error: error?.message || String(error),
+        });
+        return Response.json({ ok: false, unavailable: true, events: [] }, { status: 503 });
+      }
+    }
+
+    if (action === "queryFacilityOverviewStaff") {
+      if (!facilityOverviewEnabledForRecord({ ...account.record, role: account.role })) {
+        return Response.json({ ok: false, unavailable: true, members: [], events: [], coverage: [], designations: [] }, { status: 403 });
+      }
+      const termStart = String(body?.termStart || "").slice(0, 10);
+      const termEnd = String(body?.termEnd || "").slice(0, 10);
+      const facilityKey = body?.facilityKey === "all" ? "" : sanitizeSourceTypes([body?.facilityKey])[0] || "";
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(termStart) || !/^\d{4}-\d{2}-\d{2}$/.test(termEnd) || termEnd < termStart) {
+        return Response.json({ error: "A valid term is required." }, { status: 400 });
+      }
+      try {
+        const result = await queryFacilityOverviewStaff(context.env.ROSTER_DB, { termStart, termEnd, facilityKey });
+        return Response.json({ ok: true, termStart, termEnd, facilityKey: facilityKey || "all", ...result });
+      } catch (error) {
+        console.error("queryFacilityOverviewStaff failed", { termStart, termEnd, facilityKey, error: error?.message || String(error) });
+        return Response.json({ ok: false, unavailable: true, members: [], events: [], coverage: [], designations: [] }, { status: 503 });
+      }
+    }
+
+    if (action === "queryFacilityOverviewWorkingTogether") {
+      if (!facilityOverviewEnabledForRecord({ ...account.record, role: account.role })) {
+        return Response.json({ ok: false, unavailable: true, events: [] }, { status: 403 });
+      }
+      const startDate = String(body?.startDate || "").slice(0, 10);
+      const endDate = String(body?.endDate || "").slice(0, 10);
+      const doctorKeys = [...new Set((Array.isArray(body?.doctorKeys) ? body.doctorKeys : [])
+        .map((key) => normalizeRosterName(key))
+        .filter(Boolean))].slice(0, 40);
+      const sourceTypes = sanitizeSourceTypes(body?.sourceTypes || []);
+      const start = new Date(`${startDate}T00:00:00Z`);
+      const end = new Date(`${endDate}T00:00:00Z`);
+      const rangeDays = Math.round((end.getTime() - start.getTime()) / 86400000);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) || !Number.isFinite(rangeDays) || rangeDays < 0 || rangeDays > 370 || doctorKeys.length < 2) {
+        return Response.json({ error: "Choose at least two staff members and a date range of up to one year." }, { status: 400 });
+      }
+      const startedAt = Date.now();
+      try {
+        const events = (await queryCoworkerEventsFromEvents(context.env.ROSTER_DB, { startDate, endDate, sourceTypes, doctorKeys }))
+          .filter((row) => isFacilityOverviewWorkingEvent(row.event));
+        return Response.json({ ok: true, startDate, endDate, sourceTypes, events, queryMs: Date.now() - startedAt });
+      } catch (error) {
+        console.error("queryFacilityOverviewWorkingTogether failed", {
+          startDate, endDate, sourceTypes, doctorKeyCount: doctorKeys.length,
+          queryMs: Date.now() - startedAt, error: error?.message || String(error),
+        });
+        return Response.json({ ok: false, unavailable: true, events: [] }, { status: 503 });
+      }
+    }
+
     if (action === "queryRosterInsights") {
       if (!hasCalendarDb(context.env)) {
         return Response.json({ ok: false, unavailable: true, coworkers: [] });
@@ -1563,6 +1761,7 @@ async function loadOrCreateD1Account(db, email, password, options = {}) {
       claims: [],
       adminIssues: [],
       localParserExtensions: [],
+      facilityOverviewEnabled: true,
       subscriptionToken: randomSubscriptionToken(),
       createdAt: now,
       updatedAt: now,
@@ -2027,15 +2226,14 @@ async function reconcileAuthoritativeAutomatedRoster(db, saved, files = []) {
       || (candidate.sourceId && candidate.sourceId !== saved.sourceId)
     ) continue;
     if (!candidate.sourceId) {
-      await deleteDerivedRosterFile(db, candidate.id);
-      reconciled.push({
-        deprecatedFileId: candidate.id,
-        authoritativeFileId: saved.id,
-        removedEvents: candidate.eventCount,
-        remainingEvents: 0,
-        deleted: true,
-        reason: "automated-source-replaced-manual-roster",
-      });
+      const savedRange = authoritativeRosterRange(saved);
+      const trimmed = await trimDerivedRosterFileOverlap(
+        db,
+        candidate.id,
+        savedRange.startDate,
+        savedRange.endDate,
+      );
+      reconciled.push(authoritativeReconciliationSummary(candidate, saved, trimmed));
       continue;
     }
     const winner = chooseLatestRosterFile(saved, candidate) || saved;
@@ -2217,6 +2415,7 @@ async function userSummaryFromRecord(email, record, options = {}) {
     seniorities,
     claims,
     insightsEnabled: insightsEnabledForRecord(record),
+    facilityOverviewEnabled: facilityOverviewEnabledForRecord(record),
     adminIssues,
     issuesCount: adminIssues.length,
     defaultDoctorKey,
@@ -2285,6 +2484,21 @@ function insightsEnabledForRecord(record) {
   return record?.insightsEnabled === true;
 }
 
+function facilityOverviewEnabledForRecord(record) {
+  const role = record?.role || roleForEmail(normalizeEmail(record?.email));
+  if (role === "creator" || role === "owner") return true;
+  return record?.facilityOverviewEnabled === true;
+}
+
+function isFacilityOverviewWorkingEvent(event, options = {}) {
+  const text = `${event?.title || ""} ${event?.rawValue || ""}`.toLowerCase();
+  if (/\b(?:leave|conference|cme|annual|sick|personal|study|exam|sabbatical|parental|long service)\b/.test(text)) return false;
+  if (text.includes("phnw") || text.includes("public holiday")) return false;
+  if (String(options.facilityKey || "").toUpperCase() === "DDH" && /\b(?:hith|vhh)\b/.test(text)) return false;
+  if (options.includeClinicalSupport !== true && (text.includes("clinical support") || /\bcs\b/.test(text) || /\bcso\b/.test(text))) return false;
+  return true;
+}
+
 async function prepareLightweightAccountResponse(rawRecord, options = {}) {
   const record = rawRecord;
   const role = record.role || roleForEmail(record.email);
@@ -2344,6 +2558,7 @@ async function prepareLightweightAccountResponse(rawRecord, options = {}) {
       enabled: Boolean(record.subscriptionToken),
     },
     insightsEnabled: insightsEnabledForRecord(record),
+    facilityOverviewEnabled: facilityOverviewEnabledForRecord(record),
   };
 }
 
@@ -2375,6 +2590,7 @@ async function prepareFastLoginEnvelope(rawRecord, options = {}) {
     availableDoctors: [],
     subscription: null,
     insightsEnabled: insightsEnabledForRecord(record),
+    facilityOverviewEnabled: facilityOverviewEnabledForRecord(record),
     adminIssues: [],
     issueConfig: null,
     defaultDoctorKey: lightweight.defaultDoctorKey || "",
@@ -2518,6 +2734,7 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
       enabled: Boolean(record.subscriptionToken),
     },
     insightsEnabled: insightsEnabledForRecord(record),
+    facilityOverviewEnabled: facilityOverviewEnabledForRecord(record),
     adminIssues: sanitizeAdminIssues(record.adminIssues),
     issueConfig,
     defaultDoctorKey,
@@ -3388,12 +3605,16 @@ async function buildDerivedAccountSnapshot(db, context) {
   }
   const d1CustomEvents = await queryAccountCustomEvents(db, context.record.email).catch(() => []);
   const hospitalLocations = await loadAccountHospitalLocations(db, context.record.email, normalizedSession).catch(() => null);
+  const resolvedRosterEvents = applyEventOverrides(
+    applyAccountHospitalLocations(rosterEvents, hospitalLocations || {}, { includeLocations: settings.includeLocations !== false }),
+    normalizedSession.overrides || {},
+  );
   const events = [
-    ...applyEventOverrides(applyAccountHospitalLocations(rosterEvents, hospitalLocations || {}, { includeLocations: settings.includeLocations !== false }), normalizedSession.overrides || {}),
+    ...resolvedRosterEvents,
     ...customEventsToEvents(latestCustomEventsByIdentity([
       ...sanitizeSnapshotCustomEvents(normalizedSession.customEvents, context.record.email),
       ...d1CustomEvents,
-    ]), settings),
+    ]), settings, resolvedRosterEvents),
   ];
   if (!events.length) return null;
   const stateFileRefs = sanitizeSnapshotFileRefs(state.imports);
@@ -4317,18 +4538,19 @@ async function buildDerivedDoctorProfileSnapshot(store, db, profile, ownerEmail 
   const rosterIssues = doctorPairs.length
     ? await queryDoctorIssuesForFileDoctorPairs(db, doctorPairs)
     : await queryDoctorIssues(db, doctorKeys);
-  const events = [
-    ...applyEventOverrides(
-      applyAccountHospitalLocations(
-        doctorPairs.length
-          ? await queryDoctorEventsForFileDoctorPairs(db, doctorPairs)
-          : await queryDoctorEvents(db, doctorKeys),
-        hospitalLocations || {},
-        { includeLocations: settings.includeLocations !== false },
-      ),
-      session.overrides || {},
+  const resolvedRosterEvents = applyEventOverrides(
+    applyAccountHospitalLocations(
+      doctorPairs.length
+        ? await queryDoctorEventsForFileDoctorPairs(db, doctorPairs)
+        : await queryDoctorEvents(db, doctorKeys),
+      hospitalLocations || {},
+      { includeLocations: settings.includeLocations !== false },
     ),
-    ...customEventsToEvents(sanitizeSnapshotCustomEvents(session.customEvents, ""), settings),
+    session.overrides || {},
+  );
+  const events = [
+    ...resolvedRosterEvents,
+    ...customEventsToEvents(sanitizeSnapshotCustomEvents(session.customEvents, ""), settings, resolvedRosterEvents),
   ];
   if (!events.length) return null;
   const refs = await repositoryImportRefsForDoctorProfile(store, profile, db, doctorDiagnostics);
@@ -4634,6 +4856,7 @@ async function runCoreDerivedRosterSave(context, job = {}) {
               doctors: job.doctors || [],
             });
         return Promise.resolve(presence)
+          .then(() => reconcileFacilityStaffDesignationsForRosterFile(db, fileId))
           .then(() => deferCanonicalDoctorRefresh(context, job.reason || "saveDerivedCalendarFile"))
           .then(() => {
             scheduleSnapshotWarmupForSourceTypes(context, [String(filePayload.sourceType || "").toLowerCase()].filter(Boolean), {
