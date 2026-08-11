@@ -1,5 +1,6 @@
 import { findmyshiftConfiguredRosterRange, findmyshiftLastModified, findmyshiftRosterWorkbook } from "../../_lib/findmyshift.js";
-import { findRosterSyncByProviderVersion, hasCalendarDb, loadRosterSource, upsertRosterSource } from "../../_lib/d1-calendar.js";
+import { createRosterSyncRun, findQueuedRosterSyncByHash, findRosterSyncByProviderVersion, hasCalendarDb, listActiveRetainedRosterFiles, loadRosterSource, upsertRosterSource } from "../../_lib/d1-calendar.js";
+import { requestQueuedRosterProcessing } from "../../_lib/automation-dispatch.js";
 import { reconcileRosterFileSupersessionAndRefresh } from "../state.js";
 
 const SOURCE_ID = "dandenong-findmyshift";
@@ -17,6 +18,8 @@ export async function onRequestPost(context) {
   if (!apiKey || !teamId) return Response.json({ ok: false, status: "not-configured", error: "FindMyShift API key or team ID is not configured." });
 
   const now = new Date().toISOString();
+  const requestBody = await context.request.json().catch(() => ({}));
+  const force = requestBody?.force === true;
   const current = await loadRosterSource(context.env.ROSTER_DB, SOURCE_ID);
   const range = findmyshiftConfiguredRosterRange(context.env);
   let providerVersion = "";
@@ -42,6 +45,12 @@ export async function onRequestPost(context) {
       && current.lastSuccessAt
       && currentFormatRun?.status === "success"
       && (!current.lastError || isTransientFindmyshiftRateLimitError(current.lastError))) {
+      if (force) {
+        const queue = await queueCurrentFindmyshiftReprocess(context.env, providerVersion, now);
+        if (!queue.runIds.length) throw new Error("No retained FindMyShift roster file is available to reprocess.");
+        await saveSource(context, current, { lastCheckedAt: now, lastError: "" });
+        return Response.json({ ok: true, status: "reprocess-queued", providerModifiedAt: providerVersion, queue });
+      }
       await reconcileCurrentFindmyshiftRoster(context, current);
       await saveSource(context, current, { lastCheckedAt: now, lastError: "" });
       return Response.json({ ok: true, status: "unchanged", providerModifiedAt: providerVersion });
@@ -106,6 +115,40 @@ export async function onRequestPost(context) {
         : "FindMyShift roster check failed.",
     }, { status: 502 });
   }
+}
+
+async function queueCurrentFindmyshiftReprocess(env, providerVersion, now) {
+  const files = (await listActiveRetainedRosterFiles(env.ROSTER_DB).catch(() => []))
+    .filter((file) => String(file.sourceId || "").trim() === SOURCE_ID);
+  const runIds = [];
+  for (const file of files) {
+    const contentHash = `creator-reprocess:${file.id}:${providerVersion}:${IMPORT_FORMAT}`;
+    const existing = await findQueuedRosterSyncByHash(env.ROSTER_DB, SOURCE_ID, contentHash);
+    if (existing) {
+      runIds.push(existing.id);
+      continue;
+    }
+    const runId = `reprocess:${file.id}:${crypto.randomUUID()}`;
+    await createRosterSyncRun(env.ROSTER_DB, {
+      id: runId,
+      sourceId: SOURCE_ID,
+      triggerType: "creator-reprocess",
+      providerVersion: contentHash,
+      contentHash,
+      fileId: file.id,
+      status: "queued",
+      message: "Queued to reprocess the retained FindMyShift roster file.",
+      startedAt: now,
+    });
+    runIds.push(runId);
+  }
+  const dispatch = runIds.length
+    ? await requestQueuedRosterProcessing(env, { reason: "creator-findmyshift-reprocess" })
+    : null;
+  return {
+    runIds,
+    dispatched: dispatch?.dispatched === true,
+  };
 }
 
 function isIncompleteDandenongAssignmentError(value) {

@@ -1290,6 +1290,12 @@ accountsBody.addEventListener("click", (event) => {
     void reparseRosterFile(reparseImportButton.dataset.reparseImport);
     return;
   }
+  const refreshAutomatedSourceButton = event.target.closest("[data-refresh-automated-source]");
+  if (refreshAutomatedSourceButton) {
+    if (!canRemoveImports()) return;
+    void refreshAutomatedRosterSource(refreshAutomatedSourceButton.dataset.refreshAutomatedSource);
+    return;
+  }
   const openFilePickerButton = event.target.closest("[data-open-file-picker]");
   if (openFilePickerButton) {
     fileInput.click();
@@ -3016,9 +3022,12 @@ function renderAdminAutoSyncRow(source, files, terms) {
   const operationalNote = ["received", "manual-current"].includes(source.state)
     ? ""
     : `<span class="admin-auto-sync-state${source.lastError ? " roster-source-error" : ""}">${escapeHtml(rosterSourceStateLabel(source))}${source.lastError ? ` · ${escapeHtml(source.lastError)}` : ""}</span>`;
+  const refreshTitle = source.provider === "findmyshift"
+    ? "Check FindMyShift for a newer roster, then reprocess"
+    : "Reprocess the retained roster file";
   return `
     <article class="admin-file-row admin-auto-sync-row roster-source-${escapeHtml(source.state || "unknown")}">
-      <strong>${escapeHtml(source.label)}</strong>
+      <div class="admin-auto-sync-heading"><strong>${escapeHtml(source.label)}</strong><button type="button" class="file-reparse file-reparse-visible" aria-label="${escapeHtml(refreshTitle)}" title="${escapeHtml(refreshTitle)}" data-refresh-automated-source="${escapeHtml(source.id)}">↻</button></div>
       <dl class="admin-file-details">
         <div><dt>Source modified</dt><dd>${source.providerModifiedAt ? escapeHtml(formatTimestamp(source.providerModifiedAt)) : "Not checked yet"}</dd></div>
         <div><dt>Successfully imported</dt><dd>${source.lastSuccessAt ? escapeHtml(formatTimestamp(source.lastSuccessAt)) : "Not yet imported"}</dd></div>
@@ -16020,6 +16029,29 @@ async function reparseRosterFile(id) {
     setStatus(`${entry.name} reparsed.`);
   } catch (error) {
     setStatus(error.message || `Could not reparse ${entry.name}.`, true);
+  }
+}
+
+async function refreshAutomatedRosterSource(sourceId) {
+  const source = (calendarStoreStatus?.rosterSourceStatuses || []).find((item) => item?.id === sourceId);
+  const label = String(source?.label || "Automated roster");
+  const canCheckProvider = source?.provider === "findmyshift";
+  try {
+    setStatus(canCheckProvider ? `Checking ${label} for a newer roster...` : `Queueing ${label} to reprocess...`);
+    const result = await calendarStoreRequest("refreshAutomatedRosterSource", { sourceId });
+    await refreshCalendarStoreStatus({ silent: true });
+    const status = String(result?.status || "queued");
+    if (status === "reprocess-queued") {
+      setStatus(`${label} reprocessing has been queued.`);
+    } else if (status === "queued") {
+      setStatus(`${label} has changed online and the latest roster has been queued for processing.`);
+    } else if (status === "processing") {
+      setStatus(`${label} is already being processed.`);
+    } else {
+      setStatus(`${label} refresh is ${status.replace(/-/g, " ")}.`);
+    }
+  } catch (error) {
+    setStatus(error.message || `Could not refresh ${label}.`, true);
   }
 }
 

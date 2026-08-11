@@ -377,7 +377,9 @@ assert.match(appSource, /function openFacilityOverviewByStream[\s\S]*Loading ava
 assert.match(stateSource, /action === "queryFacilityOverviewMetadata"[\s\S]*const catalog = await queryFacilityOverviewRange[\s\S]*action === "queryFacilityOverviewByStream"/, "The metadata API should fetch only the lazy By stream catalogue");
 assert.match(findmyshiftCheckSource, /const fileName = `Dandenong-FindMyShift-\$\{IMPORT_FORMAT\}[\s\S]*currentFormatRun\?\.status === "success"/, "FindMyShift should only call an import unchanged after this parser-format file has succeeded");
 assert.match(automationIngestSource, /findSuccessfulRosterSyncByHash\([^\n]*file\.name\)[\s\S]*findQueuedRosterSyncByHash\([^\n]*file\.name\)/, "automation ingestion should include the retained filename when deduplicating an identical workbook");
-assert.match(automationDerivedSource, /run\.triggerType === "parser-rule"[\s\S]*activeFileId: preserveActiveFile \? existing\.activeFileId : run\.fileId/, "historical parser reparses should not replace an automated source's active-file pointer");
+assert.match(automationDerivedSource, /\["parser-rule", "creator-reprocess"\]\.includes\(run\.triggerType\)[\s\S]*activeFileId: preserveActiveFile \? existing\.activeFileId : run\.fileId/, "historical and creator-requested reparses should not replace an automated source's active-file pointer");
+assert.match(findmyshiftCheckSource, /requestBody[\s\S]*force[\s\S]*queueCurrentFindmyshiftReprocess[\s\S]*status: "reprocess-queued"/, "a creator refresh should reprocess the retained FindMyShift file when its provider version is unchanged");
+assert.match(stateSource, /action === "refreshAutomatedRosterSource"[\s\S]*source\.provider === "findmyshift"[\s\S]*force: true[\s\S]*queueAutomatedSourceReprocess/, "the auto-sync refresh action should check FindMyShift remotely and reprocess retained push-only sources");
 const facilityOverviewEventHelpers = appSource.match(/function eventRosterDateKey[\s\S]*?(?=\nfunction filterWhenInsightEvents)/)?.[0] || "";
 const facilityOverviewDateHelpers = appSource.match(/function parseDateOnly[\s\S]*?(?=\nfunction formatLongDate)/)?.[0] || "";
 const facilityOverviewPreferredHelper = appSource.match(/function facilityOverviewMelbourneClock[\s\S]*?(?=\nfunction refreshFacilityOverviewPreferredFacility)/)?.[0] || "";
@@ -1597,8 +1599,8 @@ assert.match(
 );
 assert.match(
   appSource.match(/function renderAdminAutoSyncRow[\s\S]*?function adminLatestTermFile/)?.[0] || "",
-  /Current term[\s\S]*Next term/,
-  "automated roster rows should report only current and available next-term files",
+  /data-refresh-automated-source[\s\S]*Current term[\s\S]*Next term/,
+  "automated roster rows should report current/next term files and expose a refresh control",
 );
 assert.match(
   stateSource.match(/async function calendarStoreStatus[\s\S]*?function summarizeExpectedRosterFiles/)?.[0] || "",
@@ -1850,8 +1852,8 @@ assert.match(
 );
 assert.match(
   appSource.match(/accountsBody\.addEventListener\(\"click\"[\s\S]*?\n\}\);/)?.[0] || "",
-  /data-reparse-import[\s\S]*reparseRosterFile/,
-  "admin file reparse buttons should invoke the single-file reparse path",
+  /data-reparse-import[\s\S]*reparseRosterFile[\s\S]*data-refresh-automated-source[\s\S]*refreshAutomatedRosterSource/,
+  "admin file controls should invoke their respective manual and auto-sync reparse paths",
 );
 assert.doesNotMatch(
   appSource.match(/async function renderWhoInsight[\s\S]*?async function renderWhenInsight/)?.[0] || "",

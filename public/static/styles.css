@@ -656,6 +656,18 @@ input[type="color"] {
   border-color: rgba(44, 124, 84, 0.3);
 }
 
+.admin-auto-sync-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-auto-sync-heading .file-reparse {
+  position: static;
+  flex: 0 0 auto;
+}
+
 .admin-auto-sync-row.roster-source-failed,
 .admin-auto-sync-row.roster-source-not-configured,
 .admin-auto-sync-row.roster-source-waiting {

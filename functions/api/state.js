@@ -314,6 +314,49 @@ export async function onRequestPost(context) {
           : null,
       });
     }
+    if (action === "refreshAutomatedRosterSource") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      const sourceId = String(body?.sourceId || "").trim();
+      const source = AUTOMATION_SOURCES[sourceId];
+      if (!source) return Response.json({ error: "Unknown automated roster source." }, { status: 422 });
+
+      // FindMyShift is the only source whose provider credentials live in
+      // Pages, so it can check the remote version before deciding whether to
+      // download or reuse the retained workbook.  SharePoint remains
+      // push-only: its Microsoft 365 credentials stay in Power Automate.
+      if (source.provider === "findmyshift") {
+        const response = await fetch(new URL("/api/automation/findmyshift-check", context.request.url), {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${String(context.env.ROSTER_AUTOMATION_TOKEN || "").trim()}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ force: true }),
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || !result?.ok) {
+          return Response.json({
+            error: String(result?.error || "FindMyShift could not be refreshed."),
+            status: String(result?.status || "failed"),
+          }, { status: 422 });
+        }
+        return Response.json({
+          ok: true,
+          sourceId,
+          status: String(result.status || "queued"),
+          providerModifiedAt: String(result.providerModifiedAt || ""),
+          queue: result.queue && typeof result.queue === "object" ? result.queue : null,
+        });
+      }
+
+      const reprocess = await queueAutomatedSourceReprocess(context.env, sourceId);
+      if (!reprocess.queued) {
+        return Response.json({ error: "No retained roster file is available to reprocess." }, { status: 422 });
+      }
+      return Response.json({ ok: true, sourceId, status: "reprocess-queued", queue: reprocess });
+    }
     if (action === "downloadFindmyshiftExceptions") {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
@@ -5787,6 +5830,43 @@ async function queueActiveParserRuleReparse(env, sourceTypes = []) {
     ? await requestQueuedRosterProcessing(env, { reason: "parser-rule-change" })
     : null;
   return { queued: queued.length, runIds: queued, processorDispatch: publicDispatchStatus(dispatch) };
+}
+
+async function queueAutomatedSourceReprocess(env, sourceId) {
+  const files = (await listActiveRetainedRosterFiles(env.ROSTER_DB).catch(() => []))
+    .filter((file) => String(file.sourceId || "").trim() === sourceId);
+  if (!files.length) return { queued: 0, runIds: [], processorDispatch: null };
+
+  const revision = await parserRuleRevision(env.ROSTER_DB);
+  const now = new Date().toISOString();
+  const runIds = [];
+  for (const file of files) {
+    // Keep duplicate clicks from creating concurrent parser jobs, but allow a
+    // later explicit refresh to run again after this job has completed.
+    const contentHash = `creator-reprocess:${file.id}:${revision}`;
+    const existing = await findQueuedRosterSyncByHash(env.ROSTER_DB, sourceId, contentHash);
+    if (existing) {
+      runIds.push(existing.id);
+      continue;
+    }
+    const runId = `reprocess:${file.id}:${crypto.randomUUID()}`;
+    await createRosterSyncRun(env.ROSTER_DB, {
+      id: runId,
+      sourceId,
+      triggerType: "creator-reprocess",
+      providerVersion: contentHash,
+      contentHash,
+      fileId: file.id,
+      status: "queued",
+      message: "Queued to reprocess the retained auto-sync roster file.",
+      startedAt: now,
+    });
+    runIds.push(runId);
+  }
+  const dispatch = runIds.length
+    ? await requestQueuedRosterProcessing(env, { reason: "creator-auto-sync-reprocess" })
+    : null;
+  return { queued: runIds.length, runIds, processorDispatch: publicDispatchStatus(dispatch) };
 }
 
 function sourceIdForReparseFile(file) {
