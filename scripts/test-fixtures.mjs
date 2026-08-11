@@ -1828,6 +1828,27 @@ mmcUpload.append("rosterFiles", workbookFile(mmcWorkbook, "AdultTerm1.2026.xlsx"
 const parsedMmcUpload = await parseUploadForm(new Request("http://fixture.test/api/analyze", { method: "POST", body: mmcUpload }));
 assert.equal(parsedMmcUpload.sources.mmc.length, 1);
 
+const shiftedMmcHeaderWorkbook = XLSX.utils.book_new();
+const shiftedMmcHeaderRows = Array.from({ length: 8 }, () => []);
+shiftedMmcHeaderRows[2] = ["Role", "Pager No (uploaded)", "", "Cost Centre", "Name (Not Used)", "Emp No", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+shiftedMmcHeaderRows[3] = ["Date", "", "", "", "", "", new Date("2026-08-10T00:00:00Z"), new Date("2026-08-11T00:00:00Z"), new Date("2026-08-12T00:00:00Z"), new Date("2026-08-13T00:00:00Z"), new Date("2026-08-14T00:00:00Z"), new Date("2026-08-15T00:00:00Z"), new Date("2026-08-16T00:00:00Z")];
+shiftedMmcHeaderRows[5] = ["", "", "", "SMS", "SMS"];
+shiftedMmcHeaderRows[6] = ["", "", "", "SHIFTED SMS", "Shifted COLUMNS", "", "0800-1730 CS", "1430-0000 PGC"];
+XLSX.utils.book_append_sheet(shiftedMmcHeaderWorkbook, XLSX.utils.aoa_to_sheet([[]]), "Whole thing");
+XLSX.utils.book_append_sheet(shiftedMmcHeaderWorkbook, XLSX.utils.aoa_to_sheet(shiftedMmcHeaderRows, { cellDates: true }), "Week 2");
+const shiftedMmcUpload = new FormData();
+shiftedMmcUpload.append("rosterFiles", workbookFile(shiftedMmcHeaderWorkbook, "AdultTerm3.2026.xlsx"));
+const parsedShiftedMmcUpload = await parseUploadForm(new Request("http://fixture.test/api/analyze", { method: "POST", body: shiftedMmcUpload }));
+const shiftedMmcDoctor = doctorOptions(parsedShiftedMmcUpload.sources.mmc, []).find((doctor) => doctor.displayName === "Shifted COLUMNS");
+assert.ok(shiftedMmcDoctor, "MMC doctor extraction should follow a shifted Name header");
+const shiftedMmcEvents = buildRosterView(parsedShiftedMmcUpload.sources.mmc, [], shiftedMmcDoctor.key).events;
+assert.deepEqual(
+  shiftedMmcEvents.map((event) => event.start.slice(0, 10)),
+  ["2026-08-10", "2026-08-11"],
+  "MMC parsing should follow shifted weekday headers instead of fixed column positions",
+);
+assert.ok(shiftedMmcEvents.every((event) => event.seniority === "SMS"), "MMC parsing should follow the shifted Cost Centre seniority marker");
+
 await assertRejectsMixedTermUpload(
   "MMC date typo should identify the worksheet and cell",
   withWorkbookDate(mmcWorkbook, "Week 1", "H4", new Date("2025-02-17T00:00:00")),
