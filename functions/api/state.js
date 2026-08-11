@@ -1590,7 +1590,7 @@ export async function onRequestPost(context) {
         id: String(selection?.id || `selection-${index + 1}`).slice(0, 80),
         facilityKey: sanitizeSourceTypes([selection?.facilityKey])[0] || "",
         streamKey: String(selection?.streamKey || "").trim().toLowerCase().slice(0, 80),
-        seniority: String(selection?.seniority || "SMS").trim().slice(0, 80),
+        seniority: String(selection?.seniority || "ALL").trim().slice(0, 80),
       })).filter((selection) => selection.facilityKey && selection.streamKey && selection.seniority);
       const uniqueSelections = [];
       const selectionKeys = new Set();

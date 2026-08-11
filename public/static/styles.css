@@ -1371,6 +1371,7 @@ input[type="color"] {
 .facility-overview-by-stream-lane-head strong,
 .facility-overview-by-stream-lane-head span,
 .facility-overview-by-stream-day h4,
+.facility-overview-by-stream-shift h5,
 .facility-overview-by-stream-comparison-head strong,
 .facility-overview-by-stream-comparison-head span,
 .facility-overview-by-stream-comparison-day h4 {
@@ -1556,6 +1557,24 @@ input[type="color"] {
   gap: 8px;
 }
 
+.facility-overview-by-stream-shifts {
+  display: grid;
+  gap: 14px;
+}
+
+.facility-overview-by-stream-shift {
+  display: grid;
+  gap: 7px;
+}
+
+.facility-overview-by-stream-shift h5 {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .facility-overview-by-stream-person,
 .facility-overview-by-stream-day-empty {
   display: grid;
@@ -1568,6 +1587,23 @@ input[type="color"] {
 .facility-overview-by-stream-person small {
   color: var(--muted);
   font-size: 0.84rem;
+}
+
+.facility-overview-by-stream-person-name {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.facility-overview-by-stream-person-name strong {
+  min-width: 0;
+}
+
+.facility-overview-by-stream-person-name .facility-overview-by-stream-grade {
+  flex: 0 0 auto;
+  color: var(--ink);
+  font-size: 0.75rem;
+  font-weight: 750;
 }
 
 .facility-overview-by-stream-day-empty {

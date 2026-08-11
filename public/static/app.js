@@ -983,12 +983,12 @@ facilityOverviewSection?.addEventListener("change", (event) => {
     if (field === "facility") {
       row.facilityKey = String(byStreamRow.value || "").toUpperCase();
       row.streamKey = facilityOverviewPreferredStreamKey(row.facilityKey);
-      row.seniority = "SMS";
+      row.seniority = "ALL";
     } else if (field === "stream") {
       row.streamKey = String(byStreamRow.value || "");
-      row.seniority = "SMS";
+      row.seniority = "ALL";
     } else if (field === "seniority") {
-      row.seniority = String(byStreamRow.value || "SMS");
+      row.seniority = String(byStreamRow.value || "ALL");
     }
     row.isPrefilled = false;
     reconcileFacilityOverviewByStreamDuplicates(row);
@@ -8809,7 +8809,7 @@ function newFacilityOverviewByStreamRow(options = {}) {
     id: `stream-${facilityOverviewState.byStreamRowId}`,
     facilityKey,
     streamKey,
-    seniority: options.seniority || "SMS",
+    seniority: options.seniority || "ALL",
     isPrefilled: Boolean(options.id),
     duplicateOfId: "",
   };
@@ -8822,7 +8822,7 @@ function initializeFacilityOverviewByStreamState() {
   for (const row of facilityOverviewState.byStreamRows) {
     const streams = facilityOverviewStreamsForFacility(row.facilityKey);
     if (streams.length && !streams.some((stream) => stream.streamKey === row.streamKey)) row.streamKey = streams[0].streamKey;
-    if (!row.seniority) row.seniority = "SMS";
+    if (!row.seniority) row.seniority = "ALL";
     if (typeof row.isPrefilled !== "boolean") row.isPrefilled = false;
     if (typeof row.duplicateOfId !== "string") row.duplicateOfId = "";
   }
@@ -9206,7 +9206,7 @@ function facilityOverviewByStreamContentFromData(data) {
   };
   const dayMarkup = (row, date, className = "facility-overview-by-stream-day") => {
     const matching = (bySelection.get(row.id) || []).filter((assignment) => assignment.date === date)
-      .sort(row.seniority === "ALL" ? compareFacilityOverviewAssignmentsBySeniority : compareFacilityOverviewAssignmentsByStart);
+      .sort(compareFacilityOverviewAssignmentsByStart);
     const covered = facilityOverviewByStreamCoverageFor(row.facilityKey, date);
     const streamObserved = observedByStreamDate.has(`${row.facilityKey}|${row.streamKey}|${date}`);
     let empty = "";
@@ -9214,9 +9214,10 @@ function facilityOverviewByStreamContentFromData(data) {
     else if (!streamObserved) empty = `<p class="facility-overview-by-stream-empty">This stream was not observed on this date.</p>`;
     else empty = `<p class="facility-overview-by-stream-empty">No ${escapeHtml(row.seniority === "ALL" ? "team" : row.seniority)} assignment was found.</p>`;
     const dayLabel = parseDateOnly(date).toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short" });
+    const shiftBlocks = facilityOverviewByStreamShiftBlocks(matching);
     return `<section class="${className}">
       <h4><time datetime="${escapeHtml(date)}">${escapeHtml(dayLabel)}</time></h4>
-      ${matching.length ? `<div class="facility-overview-by-stream-people">${matching.map((assignment) => `<article class="facility-overview-by-stream-person"><strong>${escapeHtml(assignment.displayName)}</strong>${row.seniority === "ALL" ? `<span>${escapeHtml(assignment.seniority)}</span>` : ""}<small>${escapeHtml(assignment.timeLabel || summarizeEventTimes(assignment.event?.start || "", assignment.event?.end || "", assignment.event?.allDay === true))}${assignment.roleNote ? ` · ${escapeHtml(assignment.roleNote)}` : ""}</small></article>`).join("")}</div>` : `<div class="facility-overview-by-stream-day-empty">${empty}</div>`}
+      ${matching.length ? `<div class="facility-overview-by-stream-shifts">${shiftBlocks.map((block) => `<section class="facility-overview-by-stream-shift"><h5>${escapeHtml(block.label)}</h5><div class="facility-overview-by-stream-people">${block.assignments.map((assignment) => `<article class="facility-overview-by-stream-person"><div class="facility-overview-by-stream-person-name"><strong>${escapeHtml(assignment.displayName)}</strong><span class="facility-overview-by-stream-grade">${escapeHtml(facilityOverviewSeniorityAbbreviation(assignment.seniority))}</span></div>${assignment.roleNote ? `<small>${escapeHtml(assignment.roleNote)}</small>` : ""}</article>`).join("")}</div></section>`).join("")}</div>` : `<div class="facility-overview-by-stream-day-empty">${empty}</div>`}
     </section>`;
   };
   if (!visibleDates.length) return `<article class="issue-card"><p>No selected stream assignments were found in this date range.${hiddenCount ? " Turn off “Hide dates without assignments” to inspect covered dates." : ""}</p></article>`;
@@ -10488,7 +10489,42 @@ function compareFacilityOverviewAssignmentsByStart(left, right) {
 
 function compareFacilityOverviewAssignmentsBySeniority(left, right) {
   return compareFacilityOverviewSeniorities(left?.seniority, right?.seniority)
-    || compareFacilityOverviewAssignmentsByStart(left, right);
+    || String(left?.displayName || "").localeCompare(String(right?.displayName || ""));
+}
+
+function facilityOverviewSeniorityAbbreviation(value) {
+  const seniority = facilityOverviewNormalizeSeniority(value);
+  const abbreviations = {
+    "Senior Registrar": "SR",
+    "Transitional/Intermediate Registrar": "TR",
+    "Junior Registrar": "JR",
+    Intern: "I",
+  };
+  return abbreviations[seniority] || seniority;
+}
+
+function facilityOverviewByStreamShiftBlocks(assignments = []) {
+  const normalStartMinutes = { AM: 8 * 60, PM: 14 * 60 + 30, Night: 23 * 60 };
+  const blocks = new Map();
+  for (const assignment of assignments) {
+    const start = extractTimePortion(assignment?.event?.start || "");
+    const [hours = "0", minutes = "0"] = start.split(":");
+    let startMinutes = Number(hours) * 60 + Number(minutes);
+    if (assignment.period === "Night" && startMinutes < 6 * 60) startMinutes += 24 * 60;
+    const isExceptional = Boolean(assignment.specialTime && start);
+    const key = isExceptional ? `time:${start}` : `period:${assignment.period}`;
+    const block = blocks.get(key) || {
+      key,
+      label: isExceptional ? start : assignment.period,
+      sortMinutes: isExceptional ? startMinutes : (normalStartMinutes[assignment.period] ?? startMinutes),
+      assignments: [],
+    };
+    block.assignments.push(assignment);
+    blocks.set(key, block);
+  }
+  return [...blocks.values()]
+    .sort((left, right) => left.sortMinutes - right.sortMinutes || left.label.localeCompare(right.label))
+    .map((block) => ({ ...block, assignments: block.assignments.sort(compareFacilityOverviewAssignmentsBySeniority) }));
 }
 
 function facilityOverviewNormalizeSeniority(value) {
