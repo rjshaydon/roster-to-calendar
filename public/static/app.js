@@ -8951,7 +8951,7 @@ function renderFacilityOverviewByStream() {
         <button type="button" class="facility-overview-add-staff" data-facility-overview-by-stream-add ${rows.length >= 6 ? "disabled" : ""}>${rows.length >= 6 ? "Maximum of six streams" : "+ Add another stream"}</button>
         <label class="toggle facility-overview-by-stream-hide-empty"><input type="checkbox" data-facility-overview-by-stream-row="options" data-facility-overview-by-stream-field="hide-empty" ${facilityOverviewState.byStreamHideEmptyDates ? "checked" : ""}> Hide dates without assignments</label>
       </aside>
-      <div class="facility-overview-by-stream-results" aria-live="polite">${facilityOverviewState.byStreamContent || `<article class="issue-card"><p>Choose an ED and stream to view coverage.</p></article>`}</div>
+      <div class="facility-overview-by-stream-results ${rows.length > 1 ? "is-multi-lane" : "is-single-lane"}" aria-live="polite">${facilityOverviewState.byStreamContent || `<article class="issue-card"><p>Choose an ED and stream to view coverage.</p></article>`}</div>
     </section>
   `;
 }
@@ -9012,31 +9012,45 @@ function facilityOverviewByStreamContentFromData(data) {
   }
   const dates = facilityOverviewByStreamDates();
   let hiddenCount = 0;
-  const lanes = selected.map((row) => {
+  const visibleDates = dates.filter((date) => {
+    const hasMatch = selected.some((row) => (bySelection.get(row.id) || []).some((assignment) => assignment.date === date));
+    const hasUncovered = selected.some((row) => !facilityOverviewByStreamCoverageFor(row.facilityKey, date));
+    if (facilityOverviewState.byStreamHideEmptyDates && !hasMatch && !hasUncovered) {
+      hiddenCount += 1;
+      return false;
+    }
+    return true;
+  });
+  const laneHeading = (row, className = "facility-overview-by-stream-lane-head") => {
     const stream = facilityOverviewStreamsForFacility(row.facilityKey).find((entry) => entry.streamKey === row.streamKey);
-    const days = dates.map((date) => {
-      const matching = (bySelection.get(row.id) || []).filter((assignment) => assignment.date === date)
-        .sort(row.seniority === "ALL" ? compareFacilityOverviewAssignmentsBySeniority : compareFacilityOverviewAssignmentsByStart);
-      const covered = facilityOverviewByStreamCoverageFor(row.facilityKey, date);
-      const streamObserved = observedByStreamDate.has(`${row.facilityKey}|${row.streamKey}|${date}`);
-      let empty = "";
-      if (!covered) empty = `<p class="facility-overview-by-stream-empty">No active roster covers this ED on this date.</p>`;
-      else if (!streamObserved) empty = `<p class="facility-overview-by-stream-empty">This stream was not observed on this date.</p>`;
-      else empty = `<p class="facility-overview-by-stream-empty">No ${escapeHtml(row.seniority === "ALL" ? "team" : row.seniority)} assignment was found.</p>`;
-      if (facilityOverviewState.byStreamHideEmptyDates && !matching.length && covered) {
-        hiddenCount += 1;
-        return "";
-      }
-      const dayLabel = parseDateOnly(date).toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short" });
-      return `<section class="facility-overview-by-stream-day">
-        <h4><time datetime="${escapeHtml(date)}">${escapeHtml(dayLabel)}</time></h4>
-        ${matching.length ? `<div class="facility-overview-by-stream-people">${matching.map((assignment) => `<article class="facility-overview-by-stream-person"><strong>${escapeHtml(assignment.displayName)}</strong>${row.seniority === "ALL" ? `<span>${escapeHtml(assignment.seniority)}</span>` : ""}<small>${escapeHtml(assignment.timeLabel || summarizeEventTimes(assignment.event?.start || "", assignment.event?.end || "", assignment.event?.allDay === true))}${assignment.roleNote ? ` · ${escapeHtml(assignment.roleNote)}` : ""}</small></article>`).join("")}</div>` : `<div class="facility-overview-by-stream-day-empty">${empty}</div>`}
-      </section>`;
-    }).filter(Boolean);
-    if (!days.length) return "";
+    return `<header class="${className}"><strong>${escapeHtml(stream?.label || row.streamKey || "Stream")} · ${escapeHtml(row.seniority === "ALL" ? "All team" : row.seniority)}</strong><span>${escapeHtml(displaySourceCode(row.facilityKey))} · ${escapeHtml(facilityOverviewByStreamRangeLabel())}</span></header>`;
+  };
+  const dayMarkup = (row, date, className = "facility-overview-by-stream-day") => {
+    const matching = (bySelection.get(row.id) || []).filter((assignment) => assignment.date === date)
+      .sort(row.seniority === "ALL" ? compareFacilityOverviewAssignmentsBySeniority : compareFacilityOverviewAssignmentsByStart);
+    const covered = facilityOverviewByStreamCoverageFor(row.facilityKey, date);
+    const streamObserved = observedByStreamDate.has(`${row.facilityKey}|${row.streamKey}|${date}`);
+    let empty = "";
+    if (!covered) empty = `<p class="facility-overview-by-stream-empty">No active roster covers this ED on this date.</p>`;
+    else if (!streamObserved) empty = `<p class="facility-overview-by-stream-empty">This stream was not observed on this date.</p>`;
+    else empty = `<p class="facility-overview-by-stream-empty">No ${escapeHtml(row.seniority === "ALL" ? "team" : row.seniority)} assignment was found.</p>`;
+    const dayLabel = parseDateOnly(date).toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short" });
+    return `<section class="${className}">
+      <h4><time datetime="${escapeHtml(date)}">${escapeHtml(dayLabel)}</time></h4>
+      ${matching.length ? `<div class="facility-overview-by-stream-people">${matching.map((assignment) => `<article class="facility-overview-by-stream-person"><strong>${escapeHtml(assignment.displayName)}</strong>${row.seniority === "ALL" ? `<span>${escapeHtml(assignment.seniority)}</span>` : ""}<small>${escapeHtml(assignment.timeLabel || summarizeEventTimes(assignment.event?.start || "", assignment.event?.end || "", assignment.event?.allDay === true))}${assignment.roleNote ? ` · ${escapeHtml(assignment.roleNote)}` : ""}</small></article>`).join("")}</div>` : `<div class="facility-overview-by-stream-day-empty">${empty}</div>`}
+    </section>`;
+  };
+  if (!visibleDates.length) return `<article class="issue-card"><p>No selected stream assignments were found in this date range.${hiddenCount ? " Turn off “Hide dates without assignments” to inspect covered dates." : ""}</p></article>`;
+  if (selected.length > 1) {
+    const headers = selected.map((row) => laneHeading(row, "facility-overview-by-stream-comparison-head")).join("");
+    const dateRows = visibleDates.map((date) => `<section class="facility-overview-by-stream-comparison-date"><div class="facility-overview-by-stream-comparison-day-grid">${selected.map((row) => dayMarkup(row, date, "facility-overview-by-stream-comparison-day")).join("")}</div></section>`).join("");
+    return `${hiddenCount ? `<p class="facility-overview-by-stream-summary">${escapeHtml(`${hiddenCount} date${hiddenCount === 1 ? "" : "s"} without an assignment hidden`)}</p>` : ""}<section class="facility-overview-by-stream-comparison"><div class="facility-overview-by-stream-comparison-head-grid">${headers}</div>${dateRows}</section>`;
+  }
+  const lanes = selected.map((row) => {
+    const days = visibleDates.map((date) => dayMarkup(row, date)).join("");
     return `<section class="facility-overview-by-stream-lane">
-      <header class="facility-overview-by-stream-lane-head"><strong>${escapeHtml(stream?.label || row.streamKey || "Stream")} · ${escapeHtml(row.seniority === "ALL" ? "All team" : row.seniority)}</strong><span>${escapeHtml(displaySourceCode(row.facilityKey))} · ${escapeHtml(facilityOverviewByStreamRangeLabel())}</span></header>
-      <div class="facility-overview-by-stream-day-grid">${days.join("")}</div>
+      ${laneHeading(row)}
+      <div class="facility-overview-by-stream-day-grid">${days}</div>
     </section>`;
   }).filter(Boolean);
   if (!lanes.length) return `<article class="issue-card"><p>No selected stream assignments were found in this date range.${hiddenCount ? " Turn off “Hide dates without assignments” to inspect covered dates." : ""}</p></article>`;
