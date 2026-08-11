@@ -1564,16 +1564,23 @@ export async function onRequestPost(context) {
         streamKey: String(selection?.streamKey || "").trim().toLowerCase().slice(0, 80),
         seniority: String(selection?.seniority || "SMS").trim().slice(0, 80),
       })).filter((selection) => selection.facilityKey && selection.streamKey && selection.seniority);
-      const uniqueSelections = new Set(normalizedSelections.map((selection) => `${selection.facilityKey}|${selection.streamKey}|${selection.seniority}`));
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) || !Number.isFinite(rangeDays) || rangeDays < 0 || rangeDays > 370 || rawSelections.length > 8 || !normalizedSelections.length || uniqueSelections.size !== normalizedSelections.length || normalizedSelections.some((selection) => !FACILITY_OVERVIEW_STREAM_SENIORITIES.has(selection.seniority))) {
+      const uniqueSelections = [];
+      const selectionKeys = new Set();
+      for (const selection of normalizedSelections) {
+        const key = `${selection.facilityKey}|${selection.streamKey}|${selection.seniority}`;
+        if (selectionKeys.has(key)) continue;
+        selectionKeys.add(key);
+        uniqueSelections.push(selection);
+      }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) || !Number.isFinite(rangeDays) || rangeDays < 0 || rangeDays > 370 || rawSelections.length > 8 || !uniqueSelections.length || uniqueSelections.some((selection) => !FACILITY_OVERVIEW_STREAM_SENIORITIES.has(selection.seniority))) {
         return Response.json({ error: "Choose between 1 and 6 different streams and a valid date range of up to one year." }, { status: 400 });
       }
       const startedAt = Date.now();
       try {
-        const sourceTypes = [...new Set(normalizedSelections.map((selection) => selection.facilityKey))];
+        const sourceTypes = [...new Set(uniqueSelections.map((selection) => selection.facilityKey))];
         const result = await queryFacilityOverviewRange(context.env.ROSTER_DB, { startDate, endDate, sourceTypes });
         const events = (result.events || []).filter((row) => isFacilityOverviewWorkingEvent(row.event, { facilityKey: row.sourceType, includeClinicalSupport: true }));
-        return Response.json({ ok: true, startDate, endDate, selections: normalizedSelections, events, coverage: result.coverage || [], queryMs: Date.now() - startedAt });
+        return Response.json({ ok: true, startDate, endDate, selections: uniqueSelections, events, coverage: result.coverage || [], queryMs: Date.now() - startedAt });
       } catch (error) {
         console.error("queryFacilityOverviewByStream failed", { startDate, endDate, error: error?.message || String(error) });
         return Response.json({ ok: false, unavailable: true, events: [], coverage: [] }, { status: 503 });

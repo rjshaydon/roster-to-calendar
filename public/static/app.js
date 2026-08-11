@@ -977,6 +977,10 @@ facilityOverviewSection?.addEventListener("change", (event) => {
       row.seniority = String(byStreamRow.value || "SMS");
     }
     if (facilityOverviewByStreamRowIsDuplicate(row)) {
+      // A duplicate stays editable, but must not let an older request replace
+      // the valid result lanes with a now-irrelevant response.
+      facilityOverviewState.byStreamRequestId += 1;
+      facilityOverviewState.byStreamLoading = false;
       if (facilityOverviewState.byStreamData) facilityOverviewState.byStreamContent = facilityOverviewByStreamContentFromData(facilityOverviewState.byStreamData);
       renderFacilityOverview();
       return;
@@ -8724,9 +8728,20 @@ function initializeFacilityOverviewByStreamState() {
 }
 
 function facilityOverviewByStreamRowIsDuplicate(row) {
-  const key = `${row?.facilityKey}|${row?.streamKey}|${row?.seniority}`;
-  return (facilityOverviewState.byStreamRows || []).some((candidate) => candidate.id !== row?.id
-    && `${candidate.facilityKey}|${candidate.streamKey}|${candidate.seniority}` === key);
+  return facilityOverviewByStreamDuplicateRows().some((duplicate) => duplicate.row.id === row?.id);
+}
+
+function facilityOverviewByStreamDuplicateRows(rows = facilityOverviewState.byStreamRows) {
+  const firstByKey = new Map();
+  const duplicates = [];
+  for (const [index, row] of (rows || []).entries()) {
+    if (!row?.facilityKey || !row?.streamKey || !row?.seniority) continue;
+    const key = `${row.facilityKey}|${row.streamKey}|${row.seniority}`;
+    const first = firstByKey.get(key);
+    if (first) duplicates.push({ row, index, first });
+    else firstByKey.set(key, { row, index });
+  }
+  return duplicates;
 }
 
 function facilityOverviewByStreamDistinctRows(rows = facilityOverviewState.byStreamRows) {
@@ -8945,18 +8960,22 @@ function renderFacilityOverviewByStream() {
   const facilities = facilityOverviewFacilityOptions();
   const rows = facilityOverviewState.byStreamRows || [];
   const resultRows = facilityOverviewByStreamDistinctRows(rows);
+  const duplicateRows = facilityOverviewByStreamDuplicateRows(rows);
+  const duplicatesById = new Map(duplicateRows.map((duplicate) => [duplicate.row.id, duplicate]));
   return `
     <section class="facility-overview-by-stream" aria-label="By stream comparison">
       <aside class="facility-overview-by-stream-selectors">
-        <div class="facility-overview-by-stream-selector-head"><h3>Streams to compare</h3><p>Each row is one result lane.</p></div>
+        <div class="facility-overview-by-stream-selector-head"><h3>Streams to compare</h3><p>Each row is one result lane.</p>${duplicateRows.length ? `<p class="facility-overview-by-stream-duplicate-warning" role="status">Choose each ED, stream, and seniority combination only once. Duplicate selections are shown once.</p>` : ""}</div>
         <div class="facility-overview-by-stream-row-list">
           ${rows.map((row, index) => {
             const streams = facilityOverviewStreamsForFacility(row.facilityKey);
             const seniorities = facilityOverviewByStreamSeniorityOptions(row);
-            return `<fieldset class="facility-overview-by-stream-row"><legend>Stream selection ${index + 1}</legend>
+            const duplicate = duplicatesById.get(row.id);
+            return `<fieldset class="facility-overview-by-stream-row${duplicate ? " is-duplicate" : ""}"${duplicate ? ` aria-describedby="facility-overview-by-stream-duplicate-${escapeHtml(row.id)}"` : ""}><legend>Stream selection ${index + 1}</legend>
               <label class="field facility-overview-by-stream-field-ed"><span>ED</span><select data-facility-overview-by-stream-row="${escapeHtml(row.id)}" data-facility-overview-by-stream-field="facility">${facilities.map((facility) => `<option value="${escapeHtml(facility)}" ${facility === row.facilityKey ? "selected" : ""}>${escapeHtml(displaySourceCode(facility))}</option>`).join("")}</select></label>
               <label class="field facility-overview-by-stream-field-stream"><span>Stream</span><select data-facility-overview-by-stream-row="${escapeHtml(row.id)}" data-facility-overview-by-stream-field="stream" ${streams.length ? "" : "disabled"}><option value="">Choose stream…</option>${streams.map((stream) => `<option value="${escapeHtml(stream.streamKey)}" ${stream.streamKey === row.streamKey ? "selected" : ""}>${escapeHtml(stream.label)}</option>`).join("")}</select></label>
               <label class="field facility-overview-by-stream-field-seniority"><span>Seniority</span><select data-facility-overview-by-stream-row="${escapeHtml(row.id)}" data-facility-overview-by-stream-field="seniority"><option value="ALL" ${row.seniority === "ALL" ? "selected" : ""}>All team</option>${seniorities.map((seniority) => `<option value="${escapeHtml(seniority)}" ${seniority === row.seniority ? "selected" : ""}>${escapeHtml(seniority)}</option>`).join("")}</select></label>
+              ${duplicate ? `<p id="facility-overview-by-stream-duplicate-${escapeHtml(row.id)}" class="facility-overview-by-stream-row-duplicate">Duplicates stream selection ${duplicate.first.index + 1}; it is shown once in the results.</p>` : ""}
               ${rows.length > 1 ? `<button type="button" class="facility-overview-by-stream-remove" data-facility-overview-by-stream-remove="${escapeHtml(row.id)}" aria-label="Remove stream selection ${index + 1}">Remove</button>` : ""}
             </fieldset>`;
           }).join("")}

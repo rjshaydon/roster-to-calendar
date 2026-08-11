@@ -1357,6 +1357,14 @@ input[type="color"] {
   font-size: 0.8rem;
 }
 
+.facility-overview-by-stream-duplicate-warning,
+.facility-overview-by-stream-row-duplicate {
+  margin: 0;
+  color: #9a4f00;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
 .facility-overview-by-stream-row-list,
 .facility-overview-by-stream-people {
   display: grid;
@@ -1374,6 +1382,11 @@ input[type="color"] {
   border-radius: 11px;
 }
 
+.facility-overview-by-stream-row.is-duplicate {
+  border-color: rgba(154, 79, 0, 0.5);
+  background: rgba(255, 246, 235, 0.72);
+}
+
 .facility-overview-by-stream-row legend {
   grid-column: 1 / -1;
   padding: 0 4px;
@@ -1387,7 +1400,8 @@ input[type="color"] {
 }
 
 .facility-overview-by-stream-field-seniority,
-.facility-overview-by-stream-remove {
+.facility-overview-by-stream-remove,
+.facility-overview-by-stream-row-duplicate {
   grid-column: 1 / -1;
 }
 
