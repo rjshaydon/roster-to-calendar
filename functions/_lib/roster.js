@@ -838,12 +838,67 @@ function collectMmcDateEvidence(workbook) {
   for (const sheetName of workbook.SheetNames || []) {
     if (!sheetName.startsWith("Week ")) continue;
     const sheet = workbook.Sheets[sheetName];
-    for (let col = 6; col <= 12; col += 1) {
-      const date = coerceDate(getCellValue(sheet, 4, col));
-      if (date) evidence.push(dateEvidence(sheetName, 4, col, date));
-    }
+    const layout = mmcWeekLayout(sheet);
+    if (!layout) continue;
+    layout.weekDates.forEach((date, index) => {
+      evidence.push(dateEvidence(sheetName, layout.dateRow, layout.dayColumns[index], date));
+    });
   }
   return evidence;
+}
+
+const MMC_WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+
+function mmcWeekLayout(sheet) {
+  const range = XLSX.utils.decode_range(sheet?.["!ref"] || "A1:A1");
+  const lastRow = range.e.r + 1;
+  const lastColumn = range.e.c + 1;
+
+  // MMC occasionally inserts administrative columns (for example Pager No).
+  // Locate the weekday and person headers instead of assuming their positions.
+  for (let headerRow = 1; headerRow <= Math.min(lastRow, 12); headerRow += 1) {
+    for (let firstDayColumn = 1; firstDayColumn <= lastColumn - 6; firstDayColumn += 1) {
+      const dayColumns = MMC_WEEKDAYS.map((_, index) => firstDayColumn + index);
+      if (!dayColumns.every((column, index) => mmcHeaderText(getCellValue(sheet, headerRow, column)) === MMC_WEEKDAYS[index])) continue;
+      const markerColumn = mmcColumnWithHeader(sheet, headerRow, "cost centre")
+        || mmcColumnWithHeader(sheet, headerRow, "cost center")
+        || mmcColumnWithHeader(sheet, headerRow, "seniority")
+        || mmcColumnWithHeader(sheet, headerRow, "role");
+      const nameColumn = mmcColumnWithHeader(sheet, headerRow, "name");
+      if (!nameColumn) continue;
+      for (let dateRow = headerRow + 1; dateRow <= Math.min(lastRow, headerRow + 4); dateRow += 1) {
+        const weekDates = dayColumns.map((column) => coerceDate(getCellValue(sheet, dateRow, column)));
+        if (weekDates.every(Boolean)) return { dateRow, dayColumns, weekDates, markerColumn, nameColumn };
+      }
+    }
+  }
+
+  // Preserve compatibility with older MMC exports that predate column headings.
+  // New and changed layouts always use the header-based path above.
+  const legacyDates = [];
+  for (let column = 6; column <= 12; column += 1) {
+    const date = coerceDate(getCellValue(sheet, 4, column));
+    if (!date) return null;
+    legacyDates.push(date);
+  }
+  return { dateRow: 4, dayColumns: [6, 7, 8, 9, 10, 11, 12], weekDates: legacyDates, markerColumn: 3, nameColumn: 4 };
+}
+
+function mmcColumnWithHeader(sheet, row, header) {
+  const range = XLSX.utils.decode_range(sheet?.["!ref"] || "A1:A1");
+  for (let column = 1; column <= range.e.c + 1; column += 1) {
+    const value = mmcHeaderText(getCellValue(sheet, row, column));
+    if (value === header || value.startsWith(`${header} `)) return column;
+  }
+  return 0;
+}
+
+function mmcHeaderText(value) {
+  return cleanText(value)
+    .toLowerCase()
+    .replace(/\([^)]*\)/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
 }
 
 function collectDdhDateEvidence(workbook) {
@@ -1366,31 +1421,21 @@ function parseMmcRecords(workbook, doctorKey) {
   for (const sheetName of workbook.SheetNames) {
     if (!sheetName.startsWith("Week ")) continue;
     const sheet = workbook.Sheets[sheetName];
-    const weekDates = [];
-    for (let col = 6; col <= 12; col += 1) {
-      const value = coerceDate(getCellValue(sheet, 4, col));
-      if (!value) {
-        weekDates.length = 0;
-        break;
-      }
-      weekDates.push(value);
-    }
-    if (!weekDates.length) continue;
+    const layout = mmcWeekLayout(sheet);
+    if (!layout) continue;
+    const { weekDates } = layout;
 
     let currentSeniority = "SMS";
     const roleMap = mmcSeniorityMap();
     const range = XLSX.utils.decode_range(sheet["!ref"] || "A1:A1");
     for (let row = 1; row <= range.e.r + 1; row += 1) {
-      const marker = cleanText(getCellValue(sheet, row, 3)).replace(/\s+/g, " ").trim().toUpperCase();
+      const marker = layout.markerColumn ? cleanText(getCellValue(sheet, row, layout.markerColumn)).replace(/\s+/g, " ").trim().toUpperCase() : "";
       if (isMmcStopSection(marker)) break;
       if (roleMap.has(marker)) currentSeniority = roleMap.get(marker);
-      const name = cleanMmcRosterName(getCellValue(sheet, row, 4));
+      const name = cleanMmcRosterName(getCellValue(sheet, row, layout.nameColumn));
       if (!looksLikePersonName(name)) continue;
       if (normalizeName(name) !== doctorKey) continue;
-      const weekValues = [];
-      for (let col = 6; col <= 12; col += 1) {
-        weekValues.push(cleanText(getCellValue(sheet, row, col)));
-      }
+      const weekValues = layout.dayColumns.map((column) => cleanText(getCellValue(sheet, row, column)));
       const weeklyLeave = firstWeeklyLeave(weekValues);
       if (weeklyLeave) {
         records.push(createWeeklyLeaveRecord("MMC", weekDates[0], weeklyLeave, currentSeniority));
@@ -3360,12 +3405,14 @@ function matchesDateFilter(record, settings) {
 }
 
 function iterateMmcRosterPeople(sheet) {
+  const layout = mmcWeekLayout(sheet);
+  if (!layout) return [];
   const range = XLSX.utils.decode_range(sheet["!ref"] || "A1:A1");
   const entries = [];
-  for (let row = 7; row <= range.e.r + 1; row += 1) {
-    const marker = cleanText(getCellValue(sheet, row, 3));
+  for (let row = layout.dateRow + 1; row <= range.e.r + 1; row += 1) {
+    const marker = layout.markerColumn ? cleanText(getCellValue(sheet, row, layout.markerColumn)) : "";
     if (isMmcStopSection(marker)) break;
-    const name = cleanMmcRosterName(getCellValue(sheet, row, 4));
+    const name = cleanMmcRosterName(getCellValue(sheet, row, layout.nameColumn));
     if (name && looksLikePersonName(name) && !isMmcSectionMarker(name)) {
       entries.push({ row, name });
     }
