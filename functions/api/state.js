@@ -36,6 +36,7 @@ import {
   loadRawRosterFile,
   queryCoworkerEventsFromEvents,
   queryFacilityOverviewOnShift,
+  queryFacilityOverviewRange,
   queryFacilityOverviewStaff,
   setFacilityStaffDesignation,
   clearFacilityStaffDesignation,
@@ -90,6 +91,7 @@ const OWNER_DOCTOR_KEY = "RICHARD HAYDON";
 const SNAPSHOT_SCHEMA_VERSION = 5;
 const SNAPSHOT_BUILDING_RETRY_MS = 15 * 60 * 1000;
 const SNAPSHOT_GLOBAL_WARMUP_LIMIT = 25;
+const FACILITY_OVERVIEW_STREAM_SENIORITIES = new Set(["SMS", "CMO", "Senior Registrar", "Transitional/Intermediate Registrar", "Junior Registrar", "HMO", "Intern", "NP", "Physio", "Unknown", "ALL"]);
 
 function serverTimingHeader(timing = {}) {
   return [
@@ -1506,6 +1508,78 @@ export async function onRequestPost(context) {
       }
     }
 
+    if (action === "queryFacilityOverviewMetadata") {
+      if (!facilityOverviewEnabledForRecord({ ...account.record, role: account.role })) {
+        return Response.json({ ok: false, unavailable: true, preferredFacility: null, facilities: [], catalogEvents: [] }, { status: 403 });
+      }
+      const doctorKeys = [...new Set((Array.isArray(body?.doctorKeys) ? body.doctorKeys : [])
+        .map((key) => normalizeRosterName(key))
+        .filter(Boolean))].slice(0, 20);
+      const linkedSourceTypes = sanitizeSourceTypes(body?.sourceTypes || []);
+      const today = australianDateKey();
+      const term = facilityOverviewTermRange(today);
+      const catalogSources = linkedSourceTypes.length ? linkedSourceTypes : ["mmc", "ddh", "casey", "mch"];
+      try {
+        const [doctorEvents, catalog, staff] = await Promise.all([
+          queryDoctorEvents(context.env.ROSTER_DB, doctorKeys, { startDate: isoDateKey(addUtcDays(term.startDate, -1)), endDate: term.endDate }),
+          queryFacilityOverviewRange(context.env.ROSTER_DB, { startDate: term.startDate, endDate: term.endDate, sourceTypes: catalogSources }),
+          queryFacilityOverviewStaff(context.env.ROSTER_DB, { termStart: term.startDate, termEnd: term.endDate }),
+        ]);
+        const preferredFacility = resolveFacilityOverviewPreferredFacility({
+          events: doctorEvents.filter((event) => isFacilityOverviewWorkingEvent(event, { includeClinicalSupport: true })),
+          members: (staff.members || []).filter((member) => doctorKeys.includes(normalizeRosterName(member.doctorKey))),
+          linkedSourceTypes,
+          today,
+          now: new Date(),
+        });
+        return Response.json({
+          ok: true,
+          today,
+          termStart: term.startDate,
+          termEnd: term.endDate,
+          preferredFacility,
+          facilities: catalog.coverage || [],
+          catalogEvents: (catalog.events || []).filter((row) => isFacilityOverviewWorkingEvent(row.event, { facilityKey: row.sourceType, includeClinicalSupport: true })),
+        });
+      } catch (error) {
+        console.error("queryFacilityOverviewMetadata failed", { error: error?.message || String(error) });
+        return Response.json({ ok: false, unavailable: true, preferredFacility: null, facilities: [], catalogEvents: [] }, { status: 503 });
+      }
+    }
+
+    if (action === "queryFacilityOverviewByStream") {
+      if (!facilityOverviewEnabledForRecord({ ...account.record, role: account.role })) {
+        return Response.json({ ok: false, unavailable: true, events: [], coverage: [] }, { status: 403 });
+      }
+      const startDate = String(body?.startDate || "").slice(0, 10);
+      const endDate = String(body?.endDate || "").slice(0, 10);
+      const rawSelections = Array.isArray(body?.selections) ? body.selections : [];
+      const selections = rawSelections.slice(0, 8);
+      const start = new Date(`${startDate}T00:00:00Z`);
+      const end = new Date(`${endDate}T00:00:00Z`);
+      const rangeDays = Math.round((end.getTime() - start.getTime()) / 86400000);
+      const normalizedSelections = selections.map((selection, index) => ({
+        id: String(selection?.id || `selection-${index + 1}`).slice(0, 80),
+        facilityKey: sanitizeSourceTypes([selection?.facilityKey])[0] || "",
+        streamKey: String(selection?.streamKey || "").trim().toLowerCase().slice(0, 80),
+        seniority: String(selection?.seniority || "SMS").trim().slice(0, 80),
+      })).filter((selection) => selection.facilityKey && selection.streamKey && selection.seniority);
+      const uniqueSelections = new Set(normalizedSelections.map((selection) => `${selection.facilityKey}|${selection.streamKey}|${selection.seniority}`));
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) || !Number.isFinite(rangeDays) || rangeDays < 0 || rangeDays > 370 || rawSelections.length > 8 || !normalizedSelections.length || uniqueSelections.size !== normalizedSelections.length || normalizedSelections.some((selection) => !FACILITY_OVERVIEW_STREAM_SENIORITIES.has(selection.seniority))) {
+        return Response.json({ error: "Choose between 1 and 6 different streams and a valid date range of up to one year." }, { status: 400 });
+      }
+      const startedAt = Date.now();
+      try {
+        const sourceTypes = [...new Set(normalizedSelections.map((selection) => selection.facilityKey))];
+        const result = await queryFacilityOverviewRange(context.env.ROSTER_DB, { startDate, endDate, sourceTypes });
+        const events = (result.events || []).filter((row) => isFacilityOverviewWorkingEvent(row.event, { facilityKey: row.sourceType, includeClinicalSupport: true }));
+        return Response.json({ ok: true, startDate, endDate, selections: normalizedSelections, events, coverage: result.coverage || [], queryMs: Date.now() - startedAt });
+      } catch (error) {
+        console.error("queryFacilityOverviewByStream failed", { startDate, endDate, error: error?.message || String(error) });
+        return Response.json({ ok: false, unavailable: true, events: [], coverage: [] }, { status: 503 });
+      }
+    }
+
     if (action === "queryFacilityOverviewOnShift") {
       if (!facilityOverviewEnabledForRecord({ ...account.record, role: account.role })) {
         return Response.json({ ok: false, unavailable: true, events: [] }, { status: 403 });
@@ -2492,11 +2566,91 @@ function facilityOverviewEnabledForRecord(record) {
 
 function isFacilityOverviewWorkingEvent(event, options = {}) {
   const text = `${event?.title || ""} ${event?.rawValue || ""}`.toLowerCase();
+  if (String(event?.status || "").toLowerCase() === "unknown" || String(event?.kind || "").toLowerCase() === "unknown") return false;
   if (/\b(?:leave|conference|cme|annual|sick|personal|study|exam|sabbatical|parental|long service)\b/.test(text)) return false;
   if (text.includes("phnw") || text.includes("public holiday")) return false;
   if (String(options.facilityKey || "").toUpperCase() === "DDH" && /\b(?:hith|vhh)\b/.test(text)) return false;
   if (options.includeClinicalSupport !== true && (text.includes("clinical support") || /\bcs\b/.test(text) || /\bcso\b/.test(text))) return false;
   return true;
+}
+
+function facilityOverviewTermRange(today) {
+  const year = Number(String(today || "").slice(0, 4));
+  const candidates = [];
+  for (const candidateYear of [year - 1, year, year + 1]) {
+    for (const monthIndex of [1, 4, 7, 10]) {
+      const startDate = firstMondayDateKey(candidateYear, monthIndex);
+      candidates.push({ startDate, endDate: isoDateKey(addUtcDays(startDate, 90)) });
+    }
+  }
+  return candidates.find((term) => term.startDate <= today && term.endDate >= today)
+    || { startDate: firstMondayDateKey(year, 1), endDate: isoDateKey(addUtcDays(firstMondayDateKey(year, 1), 90)) };
+}
+
+function facilityOverviewEventSource(event) {
+  const values = Array.isArray(event?.sources) ? event.sources : [event?.source];
+  const fromValue = sanitizeSourceTypes(values)[0];
+  if (fromValue) return fromValue;
+  const prefix = String(event?.title || "").match(/^(MMC|DDH|Casey|MCH):/i)?.[1] || "";
+  return sanitizeSourceTypes([prefix])[0] || "";
+}
+
+function facilityOverviewMelbourneTimeKey(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Australia/Melbourne", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(now);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.hour || "00"}:${values.minute || "00"}`;
+}
+
+function facilityOverviewRosterDate(event) {
+  return String(event?.start || "").slice(0, 10);
+}
+
+function resolveFacilityOverviewPreferredFacility({ events = [], members = [], linkedSourceTypes = [], today = "", now = new Date() } = {}) {
+  const term = facilityOverviewTermRange(today);
+  const sourceOrder = ["mmc", "ddh", "casey", "mch"];
+  const sourceRank = (source) => {
+    const index = sourceOrder.indexOf(source);
+    return index >= 0 ? index : 99;
+  };
+  const allRows = (events || []).map((event) => ({ event, sourceType: facilityOverviewEventSource(event), date: facilityOverviewRosterDate(event) }))
+    .filter((row) => row.sourceType)
+    .sort((left, right) => String(left.event?.start || "").localeCompare(String(right.event?.start || "")) || sourceRank(left.sourceType) - sourceRank(right.sourceType));
+  const rows = allRows.filter((row) => row.date >= term.startDate && row.date <= term.endDate);
+  const result = (sourceType, reason, evidenceDate = "") => sourceType ? ({ facilityKey: sourceType, reason, evidenceDate }) : null;
+  const uniqueSources = (items) => [...new Set(items.map((item) => item.sourceType))];
+  const termSources = uniqueSources(rows);
+  if (termSources.length === 1) return result(termSources[0], "sole-current-term-facility", rows[0]?.date || today);
+  const weekday = new Date(`${today}T12:00:00Z`).getUTCDay();
+  const mondayOffset = weekday === 0 ? -6 : 1 - weekday;
+  const weekStart = isoDateKey(addUtcDays(today, mondayOffset));
+  const weekEnd = isoDateKey(addUtcDays(weekStart, 6));
+  const weekRows = rows.filter((row) => row.date >= weekStart && row.date <= weekEnd);
+  const weekSources = uniqueSources(weekRows);
+  if (weekSources.length === 1) return result(weekSources[0], "sole-current-week-facility", weekRows[0]?.date || today);
+  const nowKey = `${today}T${facilityOverviewMelbourneTimeKey(now)}`;
+  const active = allRows.filter((row) => {
+    const start = String(row.event?.start || "").slice(0, 16);
+    const end = String(row.event?.end || "").slice(0, 16);
+    return start && end && start <= nowKey && nowKey < end;
+  });
+  if (active.length) return result(active[0].sourceType, "active-shift", active[0].date);
+  const todayRows = rows.filter((row) => row.date === today);
+  const nextToday = todayRows.filter((row) => String(row.event?.start || "").slice(0, 16) > nowKey);
+  if (nextToday.length) return result(nextToday[0].sourceType, "today-next-shift", today);
+  const completedToday = todayRows.filter((row) => String(row.event?.end || "").slice(0, 16) <= nowKey).sort((left, right) => String(right.event?.end || "").localeCompare(String(left.event?.end || "")) || sourceRank(left.sourceType) - sourceRank(right.sourceType));
+  if (completedToday.length) return result(completedToday[0].sourceType, "today-last-shift", today);
+  const next = rows.find((row) => String(row.event?.start || "").slice(0, 16) > nowKey);
+  if (next) return result(next.sourceType, "next-term-shift", next.date);
+  const last = [...rows].reverse().find((row) => String(row.event?.end || "").slice(0, 16) <= nowKey);
+  if (last) return result(last.sourceType, "last-term-shift", last.date);
+  const membershipSources = [...new Set((members || []).map((member) => sanitizeSourceTypes([member?.sourceType])[0]).filter(Boolean))];
+  if (membershipSources.length === 1) return result(membershipSources[0], "sole-term-membership", today);
+  if (linkedSourceTypes.length === 1) return result(linkedSourceTypes[0], "sole-linked-facility", today);
+  const fallback = [...linkedSourceTypes].sort((left, right) => sourceRank(left) - sourceRank(right))[0]
+    || membershipSources.sort((left, right) => sourceRank(left) - sourceRank(right))[0];
+  return result(fallback, "first-covered-linked-facility", today);
 }
 
 async function prepareLightweightAccountResponse(rawRecord, options = {}) {

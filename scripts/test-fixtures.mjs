@@ -315,6 +315,15 @@ assert.equal((appSource.match(/data-sync-findmyshift/g) || []).length, 0, "FindM
 assert.equal((appSource.match(/data-download-findmyshift-exceptions/g) || []).length, 0, "FindMyShift exception review is no longer exposed as a UI control");
 assert.match(facilityAccessMigrationSource, /facility_overview_enabled INTEGER NOT NULL DEFAULT 0/, "At a glance database access should default to opt-in");
 assert.match(facilityOptInRepairMigrationSource, /WHEN role IN \('creator', 'owner'\) THEN 1[\s\S]*ELSE 0/, "the At a glance repair should retain Creator access and revoke unintended standard-user access");
+assert.match(indexSource, /data-facility-overview-tab="on-shift">On shift[\s\S]*data-facility-overview-tab="by-stream">By stream[\s\S]*data-facility-overview-tab="staff">ED staff/, "By stream should sit between On shift and ED staff");
+assert.match(appSource, /activeTab === "by-stream"[\s\S]*From[\s\S]*To[\s\S]*function renderFacilityOverviewByStream[\s\S]*Add another stream[\s\S]*Hide dates without assignments/, "By stream should render date controls, selectable stream rows, and the sparse-range control");
+assert.match(appSource, /facilityOverviewState\.byStreamFrom = today;[\s\S]*facilityOverviewState\.byStreamTo = today;[\s\S]*loadFacilityOverviewByStream/, "By stream Today should reset both range bounds and refresh once");
+assert.match(appSource, /function facilityOverviewAssignmentForRangeRow[\s\S]*buildWhoAssignment[\s\S]*facilityOverviewIsMeaningfulStream/, "By stream should reuse the On shift assignment and stream classifier");
+assert.match(appSource, /function facilityOverviewPreferredStreamKey[\s\S]*buildWhoAssignments[\s\S]*active[\s\S]*next/, "By stream should prefer the viewer's active or next stream before a catalogue fallback");
+assert.match(appSource, /function loadFacilityOverviewMetadata[\s\S]*queryFacilityOverviewMetadata[\s\S]*preferredFacilityKey/, "At a glance entry should load the preferred ED metadata");
+assert.match(stateSource, /action === "queryFacilityOverviewMetadata"[\s\S]*resolveFacilityOverviewPreferredFacility[\s\S]*action === "queryFacilityOverviewByStream"/, "The state API should provide preferred-ED metadata and a bounded By stream query");
+assert.match(d1CalendarSource, /export async function queryFacilityOverviewRange[\s\S]*roster_events\.source_type IN[\s\S]*roster_events\.start_date >= \?/, "By stream should query the requested EDs and date range in one database operation");
+assert.match(styleSource, /\.facility-overview-by-stream \{[\s\S]*grid-template-columns:[\s\S]*\.facility-overview-by-stream-selectors \{[\s\S]*position: sticky[\s\S]*@media \(max-width: 900px\)[\s\S]*\.facility-overview-by-stream \{[\s\S]*grid-template-columns: 1fr/, "By stream should use a desktop selector rail and stack it on narrow screens");
 assert.match(
   appSource.match(/function renderFacilityOverviewTogetherResults[\s\S]*?function facilityOverviewFormatOverlap/)?.[0] || "",
   /eventSourceCode[\s\S]*nextStart >= nextEnd[\s\S]*facilityOverviewSubtractIntervals/,

@@ -3166,6 +3166,71 @@ export async function queryFacilityOverviewOnShift(db, options = {}) {
     .filter((row) => row.doctorKey && row.displayName && row.event);
 }
 
+// This intentionally returns the roster events rather than a second server-side
+// stream classification. The browser already owns the parser-rule-aware Who/On
+// shift classifier, so using the same records keeps the two views in agreement.
+export async function queryFacilityOverviewRange(db, options = {}) {
+  if (!db?.prepare) return { events: [], coverage: [] };
+  await ensureCalendarSchema(db);
+  const startDate = String(options.startDate || "").slice(0, 10);
+  const endDate = String(options.endDate || "").slice(0, 10);
+  const sourceTypes = sanitizeSourceTypes(options.sourceTypes || []);
+  if (!startDate || !endDate || endDate < startDate || !sourceTypes.length) return { events: [], coverage: [] };
+  const placeholders = sourceTypes.map(() => "?").join(", ");
+  const rows = await db.prepare(`
+    SELECT roster_events.doctor_key, roster_events.display_name, roster_events.source_type,
+      roster_events.seniority, roster_events.start_date, roster_events.event_json
+    FROM roster_events
+    INNER JOIN roster_files ON roster_files.id = roster_events.file_id
+    WHERE roster_files.active = 1
+      AND roster_events.source_type IN (${placeholders})
+      AND roster_events.start_date >= ? AND roster_events.start_date <= ?
+    ORDER BY roster_events.start_date, roster_events.source_type, roster_events.start_ts, roster_events.display_name
+  `).bind(...sourceTypes, startDate, endDate).all();
+  const coverageRows = await db.prepare(`
+    SELECT roster_events.source_type, roster_events.file_id,
+      MIN(roster_events.start_date) AS start_date, MAX(roster_events.start_date) AS end_date
+    FROM roster_events
+    INNER JOIN roster_files ON roster_files.id = roster_events.file_id
+    WHERE roster_files.active = 1
+      AND roster_events.source_type IN (${placeholders})
+    GROUP BY roster_events.source_type, roster_events.file_id
+  `).bind(...sourceTypes).all();
+  const overrideCache = new Map();
+  const events = [];
+  for (const row of rows.results || []) {
+    const sourceType = normalizeSourceType(row.source_type);
+    const date = String(row.start_date || "").slice(0, 10);
+    const doctorKey = String(row.doctor_key || "").trim();
+    const termStart = australianTermStartForDate(date);
+    const overrideKey = `${sourceType}|${termStart}`;
+    if (!overrideCache.has(overrideKey)) {
+      const overrides = await queryFacilityStaffSeniorityOverrides(db, { sourceType, termStart });
+      overrideCache.set(overrideKey, new Map(overrides.map((override) => [`${override.sourceType}|${override.doctorKey}`, override])));
+    }
+    const override = overrideCache.get(overrideKey).get(`${sourceType}|${doctorKey}`);
+    const seniority = override && !override.useRosterSeniority ? override.seniority : String(row.seniority || "").trim();
+    const event = parseEvent(row.event_json);
+    if (!doctorKey || !event) continue;
+    events.push({
+      doctorKey,
+      displayName: String(row.display_name || "").trim() || doctorKey,
+      sourceType,
+      seniority,
+      date,
+      event: override && !override.useRosterSeniority ? { ...event, seniority } : event,
+    });
+  }
+  return {
+    events,
+    coverage: (coverageRows.results || []).map((row) => ({
+      sourceType: normalizeSourceType(row.source_type),
+      startDate: String(row.start_date || "").slice(0, 10),
+      endDate: String(row.end_date || "").slice(0, 10),
+    })).filter((row) => row.sourceType && row.startDate && row.endDate),
+  };
+}
+
 export async function queryFacilityOverviewStaff(db, options = {}) {
   if (!db?.prepare) return { members: [], events: [], coverage: [], designations: [] };
   await ensureCalendarSchema(db);

@@ -306,6 +306,7 @@ let facilityOverviewCompactReleaseTimer = null;
 let facilityOverviewState = {
   tab: "on-shift", date: formatDateKey(new Date()), facilityKey: "", includeClinicalSupport: false, requestId: 0, onShiftData: null,
   staffTermStart: formatDateKey(australianTermForDate(new Date()).start), staffTerms: [], staffContent: "", staffData: null, staffQuery: "", staffExpanded: new Set(), staffFocusSection: "", staffActionMenu: null, staffDesignationMenu: null, staffSeniorityMenu: null, staffMultiSelectSection: "", staffMultiSelectMembers: new Map(), staffBulkSeniorityMenu: null, staffMultiSelectSaving: false,
+  preferredFacilityKey: "", byStreamFrom: formatDateKey(new Date()), byStreamTo: formatDateKey(new Date()), byStreamRows: [], byStreamCatalog: [], byStreamCoverage: [], byStreamContent: "", byStreamData: null, byStreamLoading: false, byStreamRequestId: 0, byStreamHideEmptyDates: true, byStreamRowId: 0,
   togetherStaffKeys: ["", ""], togetherRangeMode: "term",
   togetherTermStart: formatDateKey(australianTermForDate(new Date()).start),
   togetherFrom: formatDateKey(australianTermForDate(new Date()).start),
@@ -559,6 +560,13 @@ facilityOverviewSection?.addEventListener("click", (event) => {
   }
   if (event.target.closest("[data-facility-overview-today]")) {
     if (facilityOverviewState.tab === "staff") return;
+    if (facilityOverviewState.tab === "by-stream") {
+      const today = formatDateKey(new Date());
+      facilityOverviewState.byStreamFrom = today;
+      facilityOverviewState.byStreamTo = today;
+      void loadFacilityOverviewByStream();
+      return;
+    }
     clearFacilityOverviewStaffMultiSelect({ render: false });
     facilityOverviewState.tab = "on-shift";
     facilityOverviewState.date = formatDateKey(new Date());
@@ -574,11 +582,29 @@ facilityOverviewSection?.addEventListener("click", (event) => {
     facilityOverviewState.tab = tab.dataset.facilityOverviewTab || "on-shift";
     resetFacilityOverviewScroll();
     if (facilityOverviewState.tab === "staff") {
-      facilityOverviewState.staffTermStart = formatDateKey(australianTermForDate(new Date()).start);
       void loadFacilityOverviewStaff();
+    } else if (facilityOverviewState.tab === "by-stream") {
+      initializeFacilityOverviewByStreamState();
+      void loadFacilityOverviewByStream();
     } else {
       if (facilityOverviewState.tab === "together") initializeFacilityOverviewTogetherState();
       renderFacilityOverview();
+    }
+    return;
+  }
+  if (event.target.closest("[data-facility-overview-by-stream-add]")) {
+    if (facilityOverviewState.byStreamRows.length < 6) {
+      facilityOverviewState.byStreamRows.push(newFacilityOverviewByStreamRow());
+      renderFacilityOverview();
+    }
+    return;
+  }
+  const removeByStream = event.target.closest("[data-facility-overview-by-stream-remove]");
+  if (removeByStream) {
+    const id = removeByStream.dataset.facilityOverviewByStreamRemove || "";
+    if (facilityOverviewState.byStreamRows.length > 1) {
+      facilityOverviewState.byStreamRows = facilityOverviewState.byStreamRows.filter((row) => row.id !== id);
+      void loadFacilityOverviewByStream();
     }
     return;
   }
@@ -920,6 +946,50 @@ facilityOverviewSection?.addEventListener("change", (event) => {
   if (togetherFacility) {
     facilityOverviewState.togetherFacilityKey = String(togetherFacility.value || "ALL").toUpperCase();
     refreshFacilityOverviewTogetherAfterFilterChange();
+    return;
+  }
+  const byStreamDate = event.target.closest("[data-facility-overview-by-stream-date]");
+  if (byStreamDate) {
+    const field = byStreamDate.dataset.facilityOverviewByStreamDate;
+    const value = String(byStreamDate.value || "").slice(0, 10);
+    if (field === "from") {
+      facilityOverviewState.byStreamFrom = value;
+      if (facilityOverviewState.byStreamTo && facilityOverviewState.byStreamTo < value) facilityOverviewState.byStreamTo = value;
+    } else if (field === "to") {
+      facilityOverviewState.byStreamTo = value;
+      if (facilityOverviewState.byStreamFrom && facilityOverviewState.byStreamFrom > value) facilityOverviewState.byStreamFrom = value;
+    }
+    void loadFacilityOverviewByStream();
+    return;
+  }
+  const byStreamRow = event.target.closest("[data-facility-overview-by-stream-row]");
+  if (byStreamRow) {
+    const id = byStreamRow.dataset.facilityOverviewByStreamRow || "";
+    const field = byStreamRow.dataset.facilityOverviewByStreamField || "";
+    if (field === "hide-empty") {
+      facilityOverviewState.byStreamHideEmptyDates = byStreamRow.checked;
+      if (facilityOverviewState.byStreamData) facilityOverviewState.byStreamContent = facilityOverviewByStreamContentFromData(facilityOverviewState.byStreamData);
+      renderFacilityOverview();
+      return;
+    }
+    const row = facilityOverviewState.byStreamRows.find((candidate) => candidate.id === id);
+    if (!row) return;
+    if (field === "facility") {
+      row.facilityKey = String(byStreamRow.value || "").toUpperCase();
+      row.streamKey = facilityOverviewPreferredStreamKey(row.facilityKey);
+      row.seniority = "SMS";
+    } else if (field === "stream") {
+      row.streamKey = String(byStreamRow.value || "");
+      row.seniority = "SMS";
+    } else if (field === "seniority") {
+      row.seniority = String(byStreamRow.value || "SMS");
+    }
+    if (facilityOverviewByStreamHasDuplicateRows()) {
+      facilityOverviewState.byStreamContent = `<article class="issue-card"><p>Choose each ED, stream, and seniority combination only once.</p></article>`;
+      renderFacilityOverview();
+      return;
+    }
+    void loadFacilityOverviewByStream();
     return;
   }
   const facility = event.target.closest("[data-facility-overview-facility]");
@@ -8522,6 +8592,8 @@ function facilityOverviewFacilityOptions() {
   for (const doctor of availableRosterDoctors || []) {
     for (const source of doctor?.sourceTypes || [doctor?.sourceType]) values.add(String(source || "").toUpperCase());
   }
+  for (const coverage of facilityOverviewState.byStreamCoverage || []) values.add(String(coverage?.sourceType || "").toUpperCase());
+  for (const stream of facilityOverviewState.byStreamCatalog || []) values.add(String(stream?.facilityKey || "").toUpperCase());
   const facilities = [...values].filter((value) => ["MMC", "DDH", "CASEY", "MCH"].includes(value));
   if (!facilities.length && ["MMC", "DDH", "CASEY", "MCH"].includes(facilityOverviewState.facilityKey)) {
     facilities.push(facilityOverviewState.facilityKey);
@@ -8532,8 +8604,154 @@ function facilityOverviewFacilityOptions() {
   });
 }
 
+function facilityOverviewDoctorKeys(doctor = selectedDoctor()) {
+  const direct = [
+    doctor?.key,
+    ...(doctor?.aliases || []).map((alias) => alias?.key),
+  ].map(normalizeRosterName).filter(Boolean);
+  return [...new Set(direct.length ? direct : currentRosterClaims.map((claim) => normalizeRosterName(claim?.key)).filter(Boolean))];
+}
+
+async function loadFacilityOverviewMetadata() {
+  if (!canUseFacilityOverview()) return null;
+  const doctor = selectedDoctor();
+  try {
+    const response = await fetch("/api/state", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "queryFacilityOverviewMetadata",
+        email: authUserEmail || currentUserEmail,
+        password: authUserPassword || currentUserPassword,
+        doctorKeys: facilityOverviewDoctorKeys(doctor),
+        sourceTypes: normalizedDoctorSourceTypes(doctor),
+      }),
+    });
+    const data = await readJsonResponse(response, "Could not determine the preferred ED.");
+    facilityOverviewState.preferredFacilityKey = String(data?.preferredFacility?.facilityKey || "").toUpperCase();
+    facilityOverviewState.byStreamCoverage = data?.facilities || [];
+    facilityOverviewState.byStreamCatalog = facilityOverviewBuildStreamCatalog(data?.catalogEvents || []);
+    return data;
+  } catch (error) {
+    console.warn("Could not load At a glance metadata", error);
+    return null;
+  }
+}
+
+function facilityOverviewStreamKey(value) {
+  return String(value || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+function facilityOverviewAssignmentForRangeRow(row) {
+  const event = row?.event;
+  if (!event || !isRosterShiftEvent(event)) return null;
+  const person = { key: String(row.doctorKey || ""), displayName: String(row.displayName || row.doctorKey || "") };
+  const assignment = buildWhoAssignment(person, {}, { ...event, seniority: row.seniority || event.seniority || "Unknown" });
+  if (!assignment || !facilityOverviewIsMeaningfulStream(assignment.team, row.sourceType || assignment.source)) return null;
+  const streamKey = facilityOverviewStreamKey(assignment.team);
+  if (!streamKey) return null;
+  return {
+    ...assignment,
+    sourceType: String(row.sourceType || assignment.source || "").toUpperCase(),
+    streamKey,
+    streamLabel: assignment.team,
+    seniority: facilityOverviewDetectedSeniority(event, row.seniority || event.seniority || "Unknown"),
+    date: String(row.date || eventRosterDateKey(event)).slice(0, 10),
+    event,
+    doctorKey: String(row.doctorKey || person.key),
+    displayName: String(row.displayName || person.displayName),
+  };
+}
+
+function facilityOverviewBuildStreamCatalog(rows = []) {
+  const entries = new Map();
+  for (const row of rows || []) {
+    const assignment = facilityOverviewAssignmentForRangeRow(row);
+    if (!assignment) continue;
+    const key = `${assignment.sourceType}|${assignment.streamKey}`;
+    const existing = entries.get(key) || {
+      facilityKey: assignment.sourceType,
+      streamKey: assignment.streamKey,
+      label: assignment.streamLabel,
+      seniorities: new Set(),
+      firstSeenDate: assignment.date,
+      lastSeenDate: assignment.date,
+      rank: whoTeamRank(assignment.streamLabel, assignment.sourceType),
+    };
+    existing.seniorities.add(assignment.seniority);
+    if (assignment.date < existing.firstSeenDate) existing.firstSeenDate = assignment.date;
+    if (assignment.date > existing.lastSeenDate) existing.lastSeenDate = assignment.date;
+    entries.set(key, existing);
+  }
+  return [...entries.values()].map((entry) => ({
+    ...entry,
+    seniorities: [...entry.seniorities].sort((left, right) => facilityOverviewSeniorityRank(left) - facilityOverviewSeniorityRank(right) || left.localeCompare(right)),
+  })).sort((left, right) => left.facilityKey.localeCompare(right.facilityKey) || left.rank - right.rank || left.label.localeCompare(right.label));
+}
+
+function facilityOverviewStreamsForFacility(facilityKey) {
+  const key = String(facilityKey || "").toUpperCase();
+  return (facilityOverviewState.byStreamCatalog || []).filter((entry) => entry.facilityKey === key);
+}
+
+function facilityOverviewFirstStreamKey(facilityKey) {
+  return facilityOverviewStreamsForFacility(facilityKey)[0]?.streamKey || "";
+}
+
+function facilityOverviewPreferredStreamKey(facilityKey) {
+  const facility = String(facilityKey || "").toUpperCase();
+  const now = new Date();
+  const assignments = buildWhoAssignments(selectedDoctor(), latestPreview?.events || [])
+    .filter((assignment) => String(assignment.source || "").toUpperCase() === facility)
+    .filter((assignment) => facilityOverviewIsMeaningfulStream(assignment.team, assignment.source))
+    .sort((left, right) => String(left.event?.start || "").localeCompare(String(right.event?.start || "")));
+  const active = assignments.find((assignment) => {
+    const start = new Date(assignment.event?.start || "");
+    const end = new Date(assignment.event?.end || "");
+    return !assignment.event?.allDay && start <= now && now < end;
+  });
+  const next = assignments.find((assignment) => new Date(assignment.event?.start || "") > now);
+  return facilityOverviewStreamKey((active || next)?.team || "") || facilityOverviewFirstStreamKey(facility);
+}
+
+function newFacilityOverviewByStreamRow(options = {}) {
+  const facilityKey = String(options.facilityKey || facilityOverviewState.preferredFacilityKey || facilityOverviewState.facilityKey || facilityOverviewFacilityOptions()[0] || "MMC").toUpperCase();
+  const streamKey = String(options.streamKey || facilityOverviewPreferredStreamKey(facilityKey));
+  facilityOverviewState.byStreamRowId += 1;
+  return { id: `stream-${facilityOverviewState.byStreamRowId}`, facilityKey, streamKey, seniority: options.seniority || "SMS" };
+}
+
+function initializeFacilityOverviewByStreamState() {
+  if (!Array.isArray(facilityOverviewState.byStreamRows) || !facilityOverviewState.byStreamRows.length) {
+    facilityOverviewState.byStreamRows = [newFacilityOverviewByStreamRow()];
+  }
+  for (const row of facilityOverviewState.byStreamRows) {
+    const streams = facilityOverviewStreamsForFacility(row.facilityKey);
+    if (streams.length && !streams.some((stream) => stream.streamKey === row.streamKey)) row.streamKey = streams[0].streamKey;
+    if (!row.seniority) row.seniority = "SMS";
+  }
+}
+
+function facilityOverviewByStreamHasDuplicateRows() {
+  const values = facilityOverviewState.byStreamRows.map((row) => `${row.facilityKey}|${row.streamKey}|${row.seniority}`);
+  return new Set(values).size !== values.length;
+}
+
 async function openFacilityOverview(options = {}) {
   if (!canUseFacilityOverview()) return;
+  if (options.preserveFacility !== true && options.preserveStaffTerm !== true) {
+    await loadFacilityOverviewMetadata();
+    const preferred = String(facilityOverviewState.preferredFacilityKey || "").toUpperCase();
+    if (preferred) facilityOverviewState.facilityKey = preferred;
+    if (!options.preserveDate) facilityOverviewState.date = formatDateKey(new Date());
+    if (!options.preserveByStreamRange) {
+      const today = formatDateKey(new Date());
+      facilityOverviewState.byStreamFrom = today;
+      facilityOverviewState.byStreamTo = today;
+      facilityOverviewState.byStreamRows = [];
+      facilityOverviewState.byStreamData = null;
+      facilityOverviewState.byStreamContent = "";
+    }
+  }
   const facilities = facilityOverviewFacilityOptions();
   if (!facilityOverviewState.facilityKey || !facilities.includes(facilityOverviewState.facilityKey)) {
     facilityOverviewState.facilityKey = facilities[0] || "MMC";
@@ -8546,13 +8764,17 @@ async function openFacilityOverview(options = {}) {
   if (facilityOverviewState.tab === "staff" && !options.preserveStaffTerm) {
     facilityOverviewState.staffTermStart = formatDateKey(australianTermForDate(new Date()).start);
   }
+  if (facilityOverviewState.tab === "by-stream") initializeFacilityOverviewByStreamState();
   renderFacilityOverview();
   if (facilityOverviewState.tab === "staff") await loadFacilityOverviewStaff();
+  else if (facilityOverviewState.tab === "by-stream") await loadFacilityOverviewByStream();
+  else if (facilityOverviewState.tab === "together") initializeFacilityOverviewTogetherState();
   else await loadFacilityOverviewOnShift();
 }
 
 function closeFacilityOverview() {
   facilityOverviewState.requestId += 1;
+  facilityOverviewState.byStreamRequestId += 1;
   facilityOverviewState.staffActionMenu = null;
   facilityOverviewState.staffDesignationMenu = null;
   facilityOverviewState.staffSeniorityMenu = null;
@@ -8594,6 +8816,17 @@ function renderFacilityOverview() {
     initializeFacilityOverviewTogetherState();
     facilityOverviewControls.innerHTML = "";
     facilityOverviewBody.innerHTML = renderFacilityOverviewTogetherProposal();
+    queueFacilityOverviewMenuPositioning();
+    return;
+  }
+  if (activeTab === "by-stream") {
+    initializeFacilityOverviewByStreamState();
+    facilityOverviewControls.innerHTML = `
+      <label class="field"><span>From</span><input type="date" value="${escapeHtml(facilityOverviewState.byStreamFrom)}" data-facility-overview-by-stream-date="from"></label>
+      <label class="field"><span>To</span><input type="date" value="${escapeHtml(facilityOverviewState.byStreamTo)}" data-facility-overview-by-stream-date="to"></label>
+      <button type="button" class="button button-secondary facility-overview-by-stream-today" data-facility-overview-today>Today</button>
+    `;
+    facilityOverviewBody.innerHTML = renderFacilityOverviewByStream();
     queueFacilityOverviewMenuPositioning();
     return;
   }
@@ -8641,6 +8874,7 @@ function renderFacilityOverviewHeader() {
   const end = latestPreview?.previewEnd || settings.dateTo || "";
   const staffView = facilityOverviewState.tab === "staff";
   const togetherView = facilityOverviewState.tab === "together";
+  const byStreamView = facilityOverviewState.tab === "by-stream";
   const selectedTerm = australianTermForDate(parseDateOnly(facilityOverviewState.staffTermStart || formatDateKey(new Date())));
   const terms = facilityOverviewState.staffTerms.length ? facilityOverviewState.staffTerms : [{ value: formatDateKey(selectedTerm.start), label: formatAustralianTermLabel(selectedTerm) }];
   const previousTerm = selectedTerm.termNumber === 1
@@ -8666,7 +8900,7 @@ function renderFacilityOverviewHeader() {
               </select>
             </label>
             ${hasNext ? `<button type="button" class="button button-secondary" data-facility-overview-staff-term-step="1" aria-label="Next term">›</button>` : ""}
-          ` : togetherView ? `<span class="facility-overview-header-note">Compare staff rosters</span>` : `
+          ` : togetherView ? `<span class="facility-overview-header-note">Compare staff rosters</span>` : byStreamView ? `<span class="facility-overview-header-note">Compare stream coverage</span>` : `
             <span class="preview-range-label">From</span><button type="button" class="preview-range-button" disabled>${escapeHtml(start ? formatDate(start) : "Set date")}</button>
             <span class="preview-range-label">To</span><button type="button" class="preview-range-button" disabled>${escapeHtml(end ? formatDate(end) : "Set date")}</button>
             <button type="button" class="button button-secondary preview-today-button" data-facility-overview-today>Today</button>
@@ -8676,6 +8910,150 @@ function renderFacilityOverviewHeader() {
       </div>
     </div>
   `;
+}
+
+function facilityOverviewMergeStreamCatalog(next = []) {
+  const merged = new Map();
+  for (const entry of [...(facilityOverviewState.byStreamCatalog || []), ...(next || [])]) {
+    const key = `${entry.facilityKey}|${entry.streamKey}`;
+    const existing = merged.get(key) || { ...entry, seniorities: new Set(), firstSeenDate: entry.firstSeenDate, lastSeenDate: entry.lastSeenDate };
+    for (const seniority of entry.seniorities || []) existing.seniorities.add(seniority);
+    if (entry.firstSeenDate && (!existing.firstSeenDate || entry.firstSeenDate < existing.firstSeenDate)) existing.firstSeenDate = entry.firstSeenDate;
+    if (entry.lastSeenDate && (!existing.lastSeenDate || entry.lastSeenDate > existing.lastSeenDate)) existing.lastSeenDate = entry.lastSeenDate;
+    merged.set(key, existing);
+  }
+  facilityOverviewState.byStreamCatalog = [...merged.values()].map((entry) => ({
+    ...entry,
+    seniorities: [...entry.seniorities].sort((left, right) => facilityOverviewSeniorityRank(left) - facilityOverviewSeniorityRank(right) || left.localeCompare(right)),
+  })).sort((left, right) => left.facilityKey.localeCompare(right.facilityKey) || left.rank - right.rank || left.label.localeCompare(right.label));
+}
+
+function facilityOverviewByStreamSeniorityOptions(row) {
+  const stream = facilityOverviewStreamsForFacility(row.facilityKey).find((entry) => entry.streamKey === row.streamKey);
+  const values = new Set(["SMS", ...(stream?.seniorities || [])]);
+  return [...values].sort((left, right) => facilityOverviewSeniorityRank(left) - facilityOverviewSeniorityRank(right) || left.localeCompare(right));
+}
+
+function renderFacilityOverviewByStream() {
+  const facilities = facilityOverviewFacilityOptions();
+  const rows = facilityOverviewState.byStreamRows || [];
+  return `
+    <section class="facility-overview-by-stream" aria-label="By stream comparison">
+      <aside class="facility-overview-by-stream-selectors">
+        <div class="facility-overview-by-stream-selector-head"><h3>Streams to compare</h3><p>Each selection appears on every matching date.</p></div>
+        <div class="facility-overview-by-stream-row-list">
+          ${rows.map((row, index) => {
+            const streams = facilityOverviewStreamsForFacility(row.facilityKey);
+            const seniorities = facilityOverviewByStreamSeniorityOptions(row);
+            return `<fieldset class="facility-overview-by-stream-row"><legend>Stream selection ${index + 1}</legend>
+              <label class="field"><span>ED</span><select data-facility-overview-by-stream-row="${escapeHtml(row.id)}" data-facility-overview-by-stream-field="facility">${facilities.map((facility) => `<option value="${escapeHtml(facility)}" ${facility === row.facilityKey ? "selected" : ""}>${escapeHtml(displaySourceCode(facility))}</option>`).join("")}</select></label>
+              <label class="field"><span>Stream</span><select data-facility-overview-by-stream-row="${escapeHtml(row.id)}" data-facility-overview-by-stream-field="stream" ${streams.length ? "" : "disabled"}><option value="">Choose stream…</option>${streams.map((stream) => `<option value="${escapeHtml(stream.streamKey)}" ${stream.streamKey === row.streamKey ? "selected" : ""}>${escapeHtml(stream.label)}</option>`).join("")}</select></label>
+              <label class="field"><span>Seniority</span><select data-facility-overview-by-stream-row="${escapeHtml(row.id)}" data-facility-overview-by-stream-field="seniority"><option value="ALL" ${row.seniority === "ALL" ? "selected" : ""}>All team</option>${seniorities.map((seniority) => `<option value="${escapeHtml(seniority)}" ${seniority === row.seniority ? "selected" : ""}>${escapeHtml(seniority)}</option>`).join("")}</select></label>
+              ${rows.length > 1 ? `<button type="button" class="facility-overview-by-stream-remove" data-facility-overview-by-stream-remove="${escapeHtml(row.id)}" aria-label="Remove stream selection ${index + 1}">Remove</button>` : ""}
+            </fieldset>`;
+          }).join("")}
+        </div>
+        <button type="button" class="facility-overview-add-staff" data-facility-overview-by-stream-add ${rows.length >= 6 ? "disabled" : ""}>${rows.length >= 6 ? "Maximum of six streams" : "+ Add another stream"}</button>
+        <label class="toggle facility-overview-by-stream-hide-empty"><input type="checkbox" data-facility-overview-by-stream-row="options" data-facility-overview-by-stream-field="hide-empty" ${facilityOverviewState.byStreamHideEmptyDates ? "checked" : ""}> Hide dates without assignments</label>
+      </aside>
+      <div class="facility-overview-by-stream-results" aria-live="polite">${facilityOverviewState.byStreamContent || `<article class="issue-card"><p>Choose an ED and stream to view coverage.</p></article>`}</div>
+    </section>
+  `;
+}
+
+function facilityOverviewByStreamCoverageFor(facilityKey, date) {
+  const source = String(facilityKey || "").toLowerCase();
+  return (facilityOverviewState.byStreamCoverage || []).some((coverage) => String(coverage.sourceType || "").toLowerCase() === source && coverage.startDate <= date && coverage.endDate >= date);
+}
+
+function facilityOverviewByStreamDates() {
+  const start = facilityOverviewState.byStreamFrom;
+  const end = facilityOverviewState.byStreamTo;
+  const dates = [];
+  if (!start || !end || end < start) return dates;
+  for (let date = parseDateOnly(start); formatDateKey(date) <= end; date = addDays(date, 1)) dates.push(formatDateKey(date));
+  return dates;
+}
+
+function facilityOverviewByStreamContentFromData(data) {
+  const selected = facilityOverviewState.byStreamRows || [];
+  const assignments = (data?.events || []).map(facilityOverviewAssignmentForRangeRow).filter(Boolean);
+  const bySelection = new Map(selected.map((row) => [row.id, []]));
+  const observedByStreamDate = new Set();
+  for (const assignment of assignments) {
+    observedByStreamDate.add(`${assignment.sourceType}|${assignment.streamKey}|${assignment.date}`);
+    for (const row of selected) {
+      if (assignment.sourceType !== row.facilityKey || assignment.streamKey !== row.streamKey) continue;
+      if (row.seniority !== "ALL" && facilityOverviewNormalizeSeniority(assignment.seniority) !== facilityOverviewNormalizeSeniority(row.seniority)) continue;
+      bySelection.get(row.id).push(assignment);
+    }
+  }
+  const dates = facilityOverviewByStreamDates();
+  let hiddenCount = 0;
+  const sections = dates.map((date) => {
+    const cards = selected.map((row) => {
+      const stream = facilityOverviewStreamsForFacility(row.facilityKey).find((entry) => entry.streamKey === row.streamKey);
+      const matching = (bySelection.get(row.id) || []).filter((assignment) => assignment.date === date)
+        .sort((left, right) => String(left.event?.start || "").localeCompare(String(right.event?.start || "")) || facilityOverviewSeniorityRank(left.seniority) - facilityOverviewSeniorityRank(right.seniority) || left.displayName.localeCompare(right.displayName));
+      const covered = facilityOverviewByStreamCoverageFor(row.facilityKey, date);
+      const streamObserved = observedByStreamDate.has(`${row.facilityKey}|${row.streamKey}|${date}`);
+      let empty = "";
+      if (!covered) empty = `<p class="facility-overview-by-stream-empty">No active roster covers this ED on this date.</p>`;
+      else if (!streamObserved) empty = `<p class="facility-overview-by-stream-empty">This stream was not observed on this date.</p>`;
+      else empty = `<p class="facility-overview-by-stream-empty">No ${escapeHtml(row.seniority === "ALL" ? "team" : row.seniority)} assignment was found.</p>`;
+      return `<article class="issue-card facility-overview-by-stream-card ${matching.length ? "" : "is-empty"}">
+        <div class="facility-overview-by-stream-card-head"><strong>${escapeHtml(displaySourceCode(row.facilityKey))} · ${escapeHtml(stream?.label || row.streamKey || "Stream")}</strong><span>${escapeHtml(row.seniority === "ALL" ? "All team" : row.seniority)}</span></div>
+        ${matching.length ? `<div class="facility-overview-by-stream-people">${matching.map((assignment) => `<div><strong>${escapeHtml(assignment.displayName)}</strong>${row.seniority === "ALL" ? `<span>${escapeHtml(assignment.seniority)}</span>` : ""}<small>${escapeHtml(assignment.timeLabel || summarizeEventTimes(assignment.event?.start || "", assignment.event?.end || "", assignment.event?.allDay === true))}${assignment.roleNote ? ` · ${escapeHtml(assignment.roleNote)}` : ""}</small></div>`).join("")}</div>` : empty}
+      </article>`;
+    }).join("");
+    const hasMatch = selected.some((row) => (bySelection.get(row.id) || []).some((assignment) => assignment.date === date));
+    const hasUncovered = selected.some((row) => !facilityOverviewByStreamCoverageFor(row.facilityKey, date));
+    if (facilityOverviewState.byStreamHideEmptyDates && !hasMatch && !hasUncovered) {
+      hiddenCount += 1;
+      return "";
+    }
+    return `<section class="facility-overview-by-stream-date"><h3><time datetime="${escapeHtml(date)}">${escapeHtml(formatDate(date))}</time></h3><div class="facility-overview-by-stream-card-grid">${cards}</div></section>`;
+  }).filter(Boolean);
+  if (!sections.length) return `<article class="issue-card"><p>No selected stream assignments were found in this date range.${hiddenCount ? " Turn off “Hide dates without assignments” to inspect covered dates." : ""}</p></article>`;
+  return `${hiddenCount ? `<p class="facility-overview-by-stream-summary">${escapeHtml(`${sections.length} date${sections.length === 1 ? "" : "s"} shown · ${hiddenCount} date${hiddenCount === 1 ? "" : "s"} without a match hidden`)}</p>` : ""}${sections.join("")}`;
+}
+
+async function loadFacilityOverviewByStream() {
+  if (!canUseFacilityOverview() || facilityOverviewState.tab !== "by-stream") return;
+  initializeFacilityOverviewByStreamState();
+  const startDate = facilityOverviewState.byStreamFrom;
+  const endDate = facilityOverviewState.byStreamTo;
+  const rows = facilityOverviewState.byStreamRows.filter((row) => row.facilityKey && row.streamKey && row.seniority);
+  if (!startDate || !endDate || endDate < startDate || !rows.length || facilityOverviewByStreamHasDuplicateRows()) {
+    facilityOverviewState.byStreamContent = `<article class="issue-card"><p>Choose a valid date range and different ED, stream, and seniority selections.</p></article>`;
+    renderFacilityOverview();
+    return;
+  }
+  const requestId = facilityOverviewState.byStreamRequestId + 1;
+  facilityOverviewState.byStreamRequestId = requestId;
+  facilityOverviewState.byStreamLoading = true;
+  facilityOverviewState.byStreamContent = `<article class="issue-card"><p>Loading stream coverage…</p></article>`;
+  renderFacilityOverview();
+  try {
+    const response = await fetch("/api/state", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "queryFacilityOverviewByStream", email: authUserEmail || currentUserEmail, password: authUserPassword || currentUserPassword,
+        startDate, endDate, selections: rows,
+      }),
+    });
+    const data = await readJsonResponse(response, "Could not load stream coverage.");
+    if (facilityOverviewState.byStreamRequestId !== requestId || facilityOverviewState.tab !== "by-stream") return;
+    facilityOverviewState.byStreamData = data;
+    facilityOverviewState.byStreamCoverage = data.coverage || [];
+    facilityOverviewMergeStreamCatalog(facilityOverviewBuildStreamCatalog(data.events || []));
+    facilityOverviewState.byStreamContent = facilityOverviewByStreamContentFromData(data);
+  } catch (error) {
+    if (facilityOverviewState.byStreamRequestId !== requestId) return;
+    facilityOverviewState.byStreamContent = `<article class="issue-card"><p>${escapeHtml(error.message || "Stream coverage is unavailable right now.")}</p></article>`;
+  }
+  facilityOverviewState.byStreamLoading = false;
+  renderFacilityOverview();
 }
 
 function facilityOverviewTogetherStaffOptions() {
