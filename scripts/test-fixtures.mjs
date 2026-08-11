@@ -476,7 +476,7 @@ assert.match(styleSource, /#facilityOverviewBody\.is-working-together > \.facili
 assert.match(stateSource, /action === "downloadFindmyshiftExceptions"[\s\S]*findmyshiftDandenongAssignmentExceptions[\s\S]*findmyshiftExceptionCsv/, "FindMyShift exception downloads must be creator-only server-side report reads");
 assert.match(findmyshiftCheckSource, /isTransientFindmyshiftRateLimitError[\s\S]*current\?\.lastSuccessAt[\s\S]*returned HTTP 429/, "a transient FindMyShift rate limit should neither mark a successful source failed nor cause it to be downloaded again");
 assert.match(findmyshiftModuleSource, /NEXT_TERM_LOOKAHEAD_DAYS = 28[\s\S]*findmyshiftPublicationWindow/, "FindMyShift should use a four-week early-publication window for the next term");
-assert.match(findmyshiftCheckSource, /term-window change deliberately[\s\S]*rangeState\.requested[\s\S]*withFindmyshiftRangeState/, "a new FindMyShift term window should bypass an unchanged provider version and persist its requested range");
+assert.match(findmyshiftCheckSource, /IMPORT_FORMAT = "stream-paired-v2"[\s\S]*term-window change deliberately[\s\S]*rangeState\.requested[\s\S]*importFormat: IMPORT_FORMAT/, "a new FindMyShift parser revision or term window should bypass an unchanged provider version and persist its requested range");
 assert.match(findmyshiftCheckSource, /findmyshift-no-shifts[\s\S]*waiting-for-publication/, "an unpublished upcoming FindMyShift term should wait for a provider update instead of surfacing as an import failure");
 assert.match(
   findmyshiftCheckSource,
@@ -511,8 +511,8 @@ assert.doesNotMatch(automationWorkflowSource, /schedule:/, "GitHub cron must not
 assert.match(automationIngestSource, /requestQueuedRosterProcessing/, "a newly retained roster should request the processor immediately");
 assert.match(
   findmyshiftCheckSource,
-  /IMPORT_FORMAT = "stream-paired-v1"[\s\S]*Dandenong-FindMyShift-\$\{IMPORT_FORMAT\}/,
-  "a corrected FindMyShift parser should retain a new generated source rather than treating an older parser output as unchanged",
+  /IMPORT_FORMAT = "stream-paired-v2"[\s\S]*Dandenong-FindMyShift-\$\{IMPORT_FORMAT\}[\s\S]*saved\?\.importFormat[\s\S]*importFormat: IMPORT_FORMAT/,
+  "a corrected FindMyShift parser should retain a fresh generated source and bypass an older parser revision",
 );
 assert.match(automationDispatchSource, /GITHUB_ACTIONS_TOKEN[\s\S]*actions\/workflows[\s\S]*\/dispatches/, "dispatches should use a server-side GitHub Actions token");
 assert.match(automationDispatchEndpointSource, /ROSTER_WATCHDOG_TOKEN/, "the watchdog should use a dedicated credential");

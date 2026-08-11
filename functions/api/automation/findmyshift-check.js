@@ -3,10 +3,11 @@ import { hasCalendarDb, loadRosterSource, upsertRosterSource } from "../../_lib/
 import { reconcileRosterFileSupersessionAndRefresh } from "../state.js";
 
 const SOURCE_ID = "dandenong-findmyshift";
-// Changing the generated-workbook format must create a fresh retained source,
-// even if FindMyShift itself has not changed its modification version. This
-// prevents an earlier parser's derived file from masking a corrected parser.
-const IMPORT_FORMAT = "stream-paired-v1";
+// This version is both part of the retained workbook name and the source
+// cursor. Bump it whenever FindMyShift parsing changes, so an unchanged
+// provider roster is imported once more with the corrected parser rather than
+// leaving its earlier derived events active indefinitely.
+const IMPORT_FORMAT = "stream-paired-v2";
 
 export async function onRequestPost(context) {
   if (!hasValidToken(context.request, context.env)) return Response.json({ error: "Unauthorized." }, { status: 401 });
@@ -116,7 +117,8 @@ function findmyshiftRangeState(cursor, range, providerVersion) {
   const saved = cursor && typeof cursor === "object" ? cursor.findmyshiftRange : null;
   const requested = String(saved?.from || "") === String(range?.from || "")
     && String(saved?.to || "") === String(range?.to || "")
-    && String(saved?.providerVersion || "") === String(providerVersion || "");
+    && String(saved?.providerVersion || "") === String(providerVersion || "")
+    && String(saved?.importFormat || "") === IMPORT_FORMAT;
   return { requested, waiting: requested && saved?.status === "waiting" };
 }
 
@@ -127,6 +129,7 @@ function withFindmyshiftRangeState(cursor, range, providerVersion, status) {
       from: String(range?.from || ""),
       to: String(range?.to || ""),
       providerVersion: String(providerVersion || ""),
+      importFormat: IMPORT_FORMAT,
       status: String(status || ""),
     },
   };
