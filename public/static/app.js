@@ -307,7 +307,6 @@ let facilityOverviewCompactState = {
   scroller: null,
   lastScrollTop: 0,
   userDirection: 0,
-  pointerScroller: null,
   touchScroller: null,
   touchY: 0,
 };
@@ -634,18 +633,6 @@ facilityOverviewSection?.addEventListener("touchcancel", () => {
   facilityOverviewCompactState.touchY = 0;
 }, { capture: true, passive: true });
 
-facilityOverviewSection?.addEventListener("pointerdown", (event) => {
-  facilityOverviewCompactState.pointerScroller = facilityOverviewScrollerForTarget(event.target);
-}, { capture: true, passive: true });
-
-document.addEventListener("pointerup", () => {
-  facilityOverviewCompactState.pointerScroller = null;
-}, { passive: true });
-
-document.addEventListener("pointercancel", () => {
-  facilityOverviewCompactState.pointerScroller = null;
-}, { passive: true });
-
 facilityOverviewSection?.addEventListener("keydown", (event) => {
   if (event.target instanceof Element && event.target.closest("input, select, textarea, button, [contenteditable='true']")) return;
   const scroller = facilityOverviewScrollerForTarget(event.target) || facilityOverviewCompactState.scroller;
@@ -660,18 +647,16 @@ facilityOverviewSection?.addEventListener("scroll", (event) => {
   const movement = Math.sign(scroller.scrollTop - previousTop);
   facilityOverviewCompactState.scroller = scroller;
   facilityOverviewCompactState.lastScrollTop = scroller.scrollTop;
-  if (facilityOverviewCompactState.pointerScroller === scroller && movement) {
-    setFacilityOverviewScrollDirection(scroller, movement);
-  }
   if (!facilityOverviewCompactState.latched) {
     if (facilityOverviewShouldCompact(scroller, { userDirection: facilityOverviewCompactState.userDirection, movement })) {
       setFacilityOverviewCompactMode(scroller, true);
     }
     return;
   }
-  // A compact header makes this scrollport taller.  The browser can therefore
+  // A compact header makes this scrollport taller. The browser can therefore
   // clamp scrollTop back to zero even though the user is still scrolling down.
-  // Only an explicit upward input may release the compact mode.
+  // Never infer intent from that movement: only wheel, touch, or keyboard input
+  // may set an upward direction and release the compact mode.
   if (
     facilityOverviewShouldReleaseCompact(scroller, facilityOverviewCompactState.userDirection)
   ) setFacilityOverviewCompactMode(scroller, false);
@@ -8779,7 +8764,6 @@ function resetFacilityOverviewScroll() {
   facilityOverviewCompactState.scroller = null;
   facilityOverviewCompactState.lastScrollTop = 0;
   facilityOverviewCompactState.userDirection = 0;
-  facilityOverviewCompactState.pointerScroller = null;
   facilityOverviewCompactState.touchScroller = null;
   facilityOverviewCompactState.touchY = 0;
   facilityOverviewSection?.classList.remove("is-compact");
