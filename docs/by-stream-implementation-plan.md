@@ -2,23 +2,28 @@
 
 ## Status
 
-Planning is complete for implementation on `codex/by-stream-at-a-glance`.
+The initial feature is implemented on `codex/implement-by-stream`. A post-implementation polish pass is pending for the shared banner date controls, multi-stream comparison layout, and canonical seniority ordering. The coding handover for that pass is `docs/by-stream-polish-handover.md`.
 
 This handoff adds a fourth At a glance view, **By stream**, between **On shift** and **ED staff**. It also replaces the current first-available/last-used ED behaviour with a shared, deterministic preferred-ED resolver when At a glance is entered from **My calendar**.
 
-No feature code is included in this planning change.
+This document now records both the original feature decisions and the approved polish requirements.
 
 ## Confirmed product decisions
 
 - Tab order: **On shift**, **By stream**, **ED staff**, **Working together**.
 - By stream defaults to a one-day range where both bounds are today in `Australia/Melbourne`.
 - The **Today** button sets both range bounds to today in one action.
-- Date controls sit across the top of the view.
+- By stream replicates the On shift banner structure: doctor identity, **From**, **To**, **Today**, and **Log out**.
+- By stream retains its lower **From**, **To**, and **Today** options. The banner and lower controls are two views of the same date-range state and must update one another immediately.
+- Either Today button sets both By stream range bounds to today in one action and causes one data refresh.
 - Stream-selection rows are vertically stacked in a right-hand rail on desktop.
 - On narrow layouts, the selector rail moves above the results.
 - A selector row contains **ED**, **Stream**, and **Seniority**.
 - Seniority defaults to **SMS** and offers **All team** plus the canonical seniorities observed for that ED/stream.
 - Users can add, remove, and compare multiple selector rows.
+- One selected stream retains the Sol layout with dates running horizontally. With multiple selections, stream result lanes sit beside one another when space permits; dates align vertically within those comparison lanes.
+- Aim for three to four result lanes across on a wide desktop and two across on a normal mobile viewport. Additional lanes wrap; exceptionally narrow screens may use one column.
+- Seniority is hierarchical everywhere in At a glance: **SMS → SR → CMO → TR → JR → HMO → NP → Physio → Intern → Unknown**.
 - New user-facing code should say **ED**, following the existing At a glance terminology, even where the product discussion used “hospital”.
 - Stream and seniority choices must be derived from active roster data and the same normalisation rules used by **On shift**. Do not maintain a separate hard-coded universal stream list.
 
@@ -168,6 +173,10 @@ Seniority remains SMS even when there is no SMS match in the initial date range.
 - Use two native date inputs labelled **From** and **To**.
 - Both default to the Melbourne date for today.
 - **Today** sets both bounds to today and triggers one refresh.
+- Render the same From, To, and Today actions in both the At a glance banner and the lower By stream options.
+- Bind both surfaces directly to `facilityOverviewState.byStreamFrom` and `facilityOverviewState.byStreamTo`; do not copy values into a second banner-only state object and do not use `latestPreview.previewStart`/`previewEnd` for By stream.
+- Route edits from either surface through one range mutation helper. The helper validates/clamps the range, commits state once, rerenders both surfaces, and starts one By stream load.
+- The banner Today button and lower Today button must call the same mutation path.
 - Editing From past To moves To forward to match From.
 - Editing To before From moves From backward to match To.
 - Submit only complete valid ranges.
@@ -178,18 +187,21 @@ Seniority remains SMS even when there is no SMS match in the initial date range.
 
 ### Desktop
 
-- Top toolbar: From, To, Today.
+- Banner and lower toolbar: synchronised From, To, Today controls.
 - Main area: `minmax(0, 1fr)` results plus a roughly 260–320 px selector rail.
 - Keep the selector rail visible with sticky positioning only when the containing workspace can do so without nested-scroll or clipping problems.
-- Results are date-first. Each date section contains one result card per selector row in selector order.
-- With one selector, use the available width rather than rendering a narrow column.
-- With multiple selectors, use a responsive grid; do not force horizontal timeline scrolling for long date ranges.
+- With one selector, retain a full-width Sol result lane with dates running horizontally.
+- With two or more selectors, each selection is one result lane and lanes use a responsive grid in selector order.
+- In multi-lane mode, dates run vertically inside each lane and the same visible dates occupy corresponding rows across lanes.
+- Use auto-fitting lane widths that allow three to four lanes on a wide desktop. Fifth and sixth lanes wrap to the next row.
+- Do not give every lane its own horizontal scrollbar. A comparison must remain visually aligned.
 
 ### Narrow screens
 
 - Move selectors above results.
 - Keep date controls above selectors.
-- Stack result cards within each date.
+- Show two result lanes beside one another when the available content width safely supports readable assignment cards; fall back to one column only on exceptionally narrow screens.
+- In multi-lane mode, keep dates vertically aligned across the two visible lanes.
 - Avoid a permanently sticky selector region on mobile.
 
 ### Assignment content
@@ -204,7 +216,9 @@ Each result card shows:
 - Relevant in-charge/IC marker already derived by the assignment classifier
 - Multiple non-duplicate assignments when responsibility changes during the day
 
-Sort people by shift start, seniority rank, then display name. Deduplicate equivalent active-roster events before rendering.
+For a single-seniority selection, sort people by shift start and then display name. For **All team**, sort by canonical seniority rank, shift start, then display name. Deduplicate equivalent active-roster events before rendering.
+
+Use one shared seniority normaliser, rank function, and comparator across all hospitals and all At a glance views. Inside On shift stream tiles, sort by seniority rank and then display name rather than name alone. Unknown or unrecognised seniority must always sort last.
 
 `Hide dates without assignments` defaults on for multi-day ranges. When off, retain dates with explicit empty or uncovered states. Even when hidden, show a summary such as `8 dates shown · 5 dates without a match hidden`.
 
@@ -376,6 +390,9 @@ Avoid the current pattern where every non-staff tab can fall through to On shift
 
 - Tab appears in the required order and remains permission-gated.
 - Initial dates are both today; Today resets both after either is changed.
+- The banner shows usable By stream From/To inputs rather than the `Compare stream coverage` placeholder.
+- Editing either banner date immediately updates the matching lower option, and editing either lower option immediately updates the banner.
+- Today from either surface resets both surfaces to today and sends one request.
 - Initial ED comes from the shared resolver.
 - Initial stream follows current/next assignment, then canonical first-stream fallback.
 - Seniority defaults to SMS.
@@ -388,7 +405,10 @@ Avoid the current pattern where every non-staff tab can fall through to On shift
 - Empty match and missing coverage render differently.
 - Hide-empty-dates summary is accurate.
 - MMC, DDH, Casey, and MCH stream labels match On shift for the same fixtures.
+- One stream retains the full-width horizontal-date lane; multiple streams render beside one another with aligned dates.
+- A wide desktop fits three to four result lanes; a normal mobile viewport fits two; fifth/sixth lanes and exceptionally narrow screens wrap without page overflow.
 - Mobile layout places selectors above results with no horizontal page overflow.
+- Deliberately shuffled staff at MMC, DDH, Casey, and MCH render as SMS, SR, CMO, TR, JR, HMO, NP, Physio, Intern, Unknown.
 
 Run at minimum:
 
@@ -399,16 +419,16 @@ npm run test:fixtures
 
 Then smoke-test the feature against active representative data for all four ED sources.
 
-## Suggested implementation sequence for Terra
+## Suggested polish implementation sequence for Terra
 
-1. Extract/test shared working-event, seniority, and stream canonicalisation without changing existing output.
-2. Implement the preferred-ED resolver and apply it on normal At a glance entry.
-3. Add the By stream tab, state, and static responsive shell.
-4. Add metadata/catalogue loading and initial selector resolution.
-5. Add the bounded range action/query and render real results.
-6. Add coverage/empty/error states and hide-empty-dates behaviour.
-7. Complete accessibility, stale-request protection, validation, and mobile refinement.
-8. Run syntax/fixture tests and perform four-source smoke testing.
+Follow `docs/by-stream-polish-handover.md` as the coding source of truth:
+
+1. Centralise the canonical seniority order and comparators, then add shuffled multi-hospital regression fixtures.
+2. Introduce one By stream range mutation helper and render the shared range controls in the banner and lower toolbar.
+3. Refactor By stream results into single-lane and aligned multi-lane modes.
+4. Add responsive layout rules for three to four desktop lanes, two mobile lanes, and safe one-column fallback.
+5. Complete keyboard, live-region, request-count, overflow, and representative-data smoke tests.
+6. Commit, push, and deploy each independently testable round to the existing branch preview.
 
 ## Non-goals for this change
 
