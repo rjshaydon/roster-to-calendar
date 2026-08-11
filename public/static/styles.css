@@ -3901,8 +3901,23 @@ body[data-skin="console"] #facilityOverviewSection.is-compact .facility-overview
   font-size: 0.82rem;
 }
 
+/* Keep date navigation in the At a glance toolbar as well as the top banner.
+   The toolbar uses text while there is room, then retains compact chevrons
+   alongside Today as its available horizontal space tightens. */
 body[data-skin="console"] #facilityOverviewSection .facility-overview-controls .facility-overview-date-actions {
-  display: none;
+  display: inline-flex;
+}
+
+@media (max-width: 1200px) {
+  body[data-skin="console"] #facilityOverviewSection .facility-overview-controls .facility-overview-date-navigation-label {
+    display: none;
+  }
+
+  body[data-skin="console"] #facilityOverviewSection .facility-overview-controls .facility-overview-date-navigation-chevron {
+    display: inline;
+    font-size: 1.25rem;
+    line-height: 1;
+  }
 }
 
 /* The two panes share a grid cell.  Keep the calendar out of the paint tree
