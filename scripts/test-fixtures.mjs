@@ -324,6 +324,8 @@ assert.match(appSource, /function loadFacilityOverviewMetadata[\s\S]*queryFacili
 assert.match(stateSource, /action === "queryFacilityOverviewMetadata"[\s\S]*resolveFacilityOverviewPreferredFacility[\s\S]*action === "queryFacilityOverviewByStream"/, "The state API should provide preferred-ED metadata and a bounded By stream query");
 assert.match(d1CalendarSource, /export async function queryFacilityOverviewRange[\s\S]*roster_events\.source_type IN[\s\S]*roster_events\.start_date >= \?/, "By stream should query the requested EDs and date range in one database operation");
 assert.match(styleSource, /\.facility-overview-by-stream \{[\s\S]*grid-template-columns:[\s\S]*\.facility-overview-by-stream-selectors \{[\s\S]*position: sticky[\s\S]*@media \(max-width: 900px\)[\s\S]*\.facility-overview-by-stream \{[\s\S]*grid-template-columns: 1fr/, "By stream should use a desktop selector rail and stack it on narrow screens");
+assert.match(appSource, /Each row is one result lane[\s\S]*facility-overview-by-stream-lane[\s\S]*facility-overview-by-stream-day-grid/, "By stream should render one horizontal result lane per selected stream");
+assert.match(styleSource, /grid-template-areas: "results selectors"[\s\S]*facility-overview-by-stream-selectors \{[\s\S]*grid-area: selectors[\s\S]*facility-overview-by-stream-results \{[\s\S]*grid-area: results/, "By stream results should appear left of the selector rail on desktop");
 assert.match(
   appSource.match(/function renderFacilityOverviewTogetherResults[\s\S]*?function facilityOverviewFormatOverlap/)?.[0] || "",
   /eventSourceCode[\s\S]*nextStart >= nextEnd[\s\S]*facilityOverviewSubtractIntervals/,
