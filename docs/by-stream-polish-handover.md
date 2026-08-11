@@ -1,5 +1,13 @@
 # At a glance — By stream polish handover for Terra
 
+## Status
+
+Completed on `codex/implement-by-stream`:
+
+1. `76a38f7 Standardize At a glance seniority order`
+2. `8b9407e Synchronize By stream banner dates`
+3. `153c027 Polish responsive By stream comparison`
+
 ## Purpose
 
 Polish the existing By stream implementation on branch `codex/implement-by-stream` without redesigning its data API. This pass has three product outcomes:

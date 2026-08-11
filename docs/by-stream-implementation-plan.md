@@ -2,7 +2,7 @@
 
 ## Status
 
-The initial feature is implemented on `codex/implement-by-stream`. A post-implementation polish pass is pending for the shared banner date controls, multi-stream comparison layout, and canonical seniority ordering. The coding handover for that pass is `docs/by-stream-polish-handover.md`.
+The initial feature and post-implementation polish are implemented on `codex/implement-by-stream`. The polish delivered canonical seniority ordering (`76a38f7`), synchronised banner/lower By stream date controls (`8b9407e`), and responsive aligned multi-stream comparison lanes (`153c027`). The completed coding handover is `docs/by-stream-polish-handover.md`.
 
 This handoff adds a fourth At a glance view, **By stream**, between **On shift** and **ED staff**. It also replaces the current first-available/last-used ED behaviour with a shared, deterministic preferred-ED resolver when At a glance is entered from **My calendar**.
 
