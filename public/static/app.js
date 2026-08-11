@@ -603,6 +603,7 @@ facilityOverviewSection?.addEventListener("click", (event) => {
     const id = removeByStream.dataset.facilityOverviewByStreamRemove || "";
     if (facilityOverviewState.byStreamRows.length > 1) {
       facilityOverviewState.byStreamRows = facilityOverviewState.byStreamRows.filter((row) => row.id !== id);
+      reconcileFacilityOverviewByStreamDuplicates();
       void loadFacilityOverviewByStream();
     }
     return;
@@ -628,10 +629,18 @@ facilityOverviewSection?.addEventListener("click", (event) => {
   }
   const dateStep = event.target.closest("[data-facility-overview-date-step]");
   if (dateStep) {
-    const date = parseDateOnly(facilityOverviewState.date);
-    date.setDate(date.getDate() + Number(dateStep.dataset.facilityOverviewDateStep || 0));
-    facilityOverviewState.date = formatDateKey(date);
-    void loadFacilityOverviewOnShift();
+    const step = Number(dateStep.dataset.facilityOverviewDateStep || 0);
+    if (facilityOverviewState.tab === "by-stream") {
+      const from = addDays(parseDateOnly(facilityOverviewState.byStreamFrom), step);
+      const to = addDays(parseDateOnly(facilityOverviewState.byStreamTo), step);
+      void setFacilityOverviewByStreamRange({ from: formatDateKey(from), to: formatDateKey(to) });
+    } else {
+      const date = parseDateOnly(facilityOverviewState.date);
+      date.setDate(date.getDate() + step);
+      facilityOverviewState.date = formatDateKey(date);
+      void loadFacilityOverviewOnShift();
+    }
+    return;
   }
   const termStep = event.target.closest("[data-facility-overview-staff-term-step]");
   if (termStep) {
@@ -976,6 +985,8 @@ facilityOverviewSection?.addEventListener("change", (event) => {
     } else if (field === "seniority") {
       row.seniority = String(byStreamRow.value || "SMS");
     }
+    row.isPrefilled = false;
+    reconcileFacilityOverviewByStreamDuplicates(row);
     if (facilityOverviewByStreamRowIsDuplicate(row)) {
       // A duplicate stays editable, but must not let an older request replace
       // the valid result lanes with a now-irrelevant response.
@@ -8713,7 +8724,14 @@ function newFacilityOverviewByStreamRow(options = {}) {
   const facilityKey = String(options.facilityKey || facilityOverviewState.preferredFacilityKey || facilityOverviewState.facilityKey || facilityOverviewFacilityOptions()[0] || "MMC").toUpperCase();
   const streamKey = String(options.streamKey || facilityOverviewPreferredStreamKey(facilityKey));
   facilityOverviewState.byStreamRowId += 1;
-  return { id: `stream-${facilityOverviewState.byStreamRowId}`, facilityKey, streamKey, seniority: options.seniority || "SMS" };
+  return {
+    id: `stream-${facilityOverviewState.byStreamRowId}`,
+    facilityKey,
+    streamKey,
+    seniority: options.seniority || "SMS",
+    isPrefilled: Boolean(options.id),
+    duplicateOfId: "",
+  };
 }
 
 function initializeFacilityOverviewByStreamState() {
@@ -8724,22 +8742,45 @@ function initializeFacilityOverviewByStreamState() {
     const streams = facilityOverviewStreamsForFacility(row.facilityKey);
     if (streams.length && !streams.some((stream) => stream.streamKey === row.streamKey)) row.streamKey = streams[0].streamKey;
     if (!row.seniority) row.seniority = "SMS";
+    if (typeof row.isPrefilled !== "boolean") row.isPrefilled = false;
+    if (typeof row.duplicateOfId !== "string") row.duplicateOfId = "";
   }
+  reconcileFacilityOverviewByStreamDuplicates();
 }
 
 function facilityOverviewByStreamRowIsDuplicate(row) {
   return facilityOverviewByStreamDuplicateRows().some((duplicate) => duplicate.row.id === row?.id);
 }
 
+function facilityOverviewByStreamSelectionKey(row) {
+  return row?.facilityKey && row?.streamKey && row?.seniority
+    ? `${row.facilityKey}|${row.streamKey}|${row.seniority}`
+    : "";
+}
+
+function reconcileFacilityOverviewByStreamDuplicates(changedRow = null) {
+  const rows = facilityOverviewState.byStreamRows || [];
+  const rowsById = new Map(rows.map((row) => [row.id, row]));
+  for (const row of rows) {
+    const original = rowsById.get(row.duplicateOfId);
+    if (!original || facilityOverviewByStreamSelectionKey(row) !== facilityOverviewByStreamSelectionKey(original)) {
+      row.duplicateOfId = "";
+    }
+  }
+  if (!changedRow) return;
+  const key = facilityOverviewByStreamSelectionKey(changedRow);
+  const original = rows.find((row) => row.id !== changedRow.id && !row.isPrefilled && facilityOverviewByStreamSelectionKey(row) === key);
+  changedRow.duplicateOfId = original?.id || "";
+}
+
 function facilityOverviewByStreamDuplicateRows(rows = facilityOverviewState.byStreamRows) {
-  const firstByKey = new Map();
+  const rowsById = new Map((rows || []).map((row, index) => [row.id, { row, index }]));
   const duplicates = [];
   for (const [index, row] of (rows || []).entries()) {
-    if (!row?.facilityKey || !row?.streamKey || !row?.seniority) continue;
-    const key = `${row.facilityKey}|${row.streamKey}|${row.seniority}`;
-    const first = firstByKey.get(key);
-    if (first) duplicates.push({ row, index, first });
-    else firstByKey.set(key, { row, index });
+    const original = rowsById.get(row?.duplicateOfId);
+    if (original && facilityOverviewByStreamSelectionKey(row) === facilityOverviewByStreamSelectionKey(original.row)) {
+      duplicates.push({ row, index, first: original });
+    }
   }
   return duplicates;
 }
@@ -8747,7 +8788,7 @@ function facilityOverviewByStreamDuplicateRows(rows = facilityOverviewState.bySt
 function facilityOverviewByStreamDistinctRows(rows = facilityOverviewState.byStreamRows) {
   const seen = new Set();
   return (rows || []).filter((row) => {
-    const key = `${row.facilityKey}|${row.streamKey}|${row.seniority}`;
+    const key = facilityOverviewByStreamSelectionKey(row);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -8843,6 +8884,7 @@ function renderFacilityOverview() {
       <label class="field"><span>From</span><input type="date" value="${escapeHtml(facilityOverviewState.byStreamFrom)}" data-facility-overview-by-stream-date="from"></label>
       <label class="field"><span>To</span><input type="date" value="${escapeHtml(facilityOverviewState.byStreamTo)}" data-facility-overview-by-stream-date="to"></label>
       <button type="button" class="button button-secondary facility-overview-by-stream-today" data-facility-overview-today>Today</button>
+      ${renderFacilityOverviewDateNavigation("range")}
     `;
     facilityOverviewBody.innerHTML = renderFacilityOverviewByStream();
     queueFacilityOverviewMenuPositioning();
@@ -8855,7 +8897,7 @@ function renderFacilityOverview() {
   facilityOverviewControls.innerHTML = `
     <label class="field"><span>ED</span><select data-facility-overview-facility>${facilities.map((facility) => `<option value="${escapeHtml(facility)}" ${facility === selected ? "selected" : ""}>${escapeHtml(displaySourceCode(facility))}</option>`).join("")}</select></label>
     <label class="field"><span>Date</span><input type="date" value="${escapeHtml(facilityOverviewState.date)}" data-facility-overview-date></label>
-    <div class="facility-overview-date-actions"><button type="button" class="button button-secondary" data-facility-overview-date-step="-1">Previous day</button><button type="button" class="button button-secondary" data-facility-overview-date-step="1">Next day</button></div>
+    ${renderFacilityOverviewDateNavigation("day")}
     <label class="toggle facility-overview-cs-toggle">CS <input type="checkbox" data-facility-overview-include-cs ${facilityOverviewState.includeClinicalSupport ? "checked" : ""}></label>
   `;
   facilityOverviewBody.innerHTML = `<div class="facility-overview-results">${content}</div>`;
@@ -8922,16 +8964,29 @@ function renderFacilityOverviewHeader() {
             <label class="preview-range-input-control"><span class="preview-range-label">From</span><input type="date" class="preview-range-button preview-range-date-input" value="${escapeHtml(facilityOverviewState.byStreamFrom)}" data-facility-overview-by-stream-date="from"></label>
             <label class="preview-range-input-control"><span class="preview-range-label">To</span><input type="date" class="preview-range-button preview-range-date-input" value="${escapeHtml(facilityOverviewState.byStreamTo)}" data-facility-overview-by-stream-date="to"></label>
             <button type="button" class="button button-secondary preview-today-button" data-facility-overview-today>Today</button>
+            ${renderFacilityOverviewDateNavigation("range", { header: true })}
           ` : `
             <span class="preview-range-label">From</span><button type="button" class="preview-range-button" disabled>${escapeHtml(start ? formatDate(start) : "Set date")}</button>
             <span class="preview-range-label">To</span><button type="button" class="preview-range-button" disabled>${escapeHtml(end ? formatDate(end) : "Set date")}</button>
             <button type="button" class="button button-secondary preview-today-button" data-facility-overview-today>Today</button>
+            ${renderFacilityOverviewDateNavigation("day", { header: true })}
           `}
         </div>
         <button type="button" class="button button-secondary preview-logout-button" data-facility-overview-logout>Log out</button>
       </div>
     </div>
   `;
+}
+
+function renderFacilityOverviewDateNavigation(kind, { header = false } = {}) {
+  const range = kind === "range";
+  const previous = range ? "Previous date range" : "Previous day";
+  const next = range ? "Next date range" : "Next day";
+  const className = header ? "facility-overview-header-date-navigation" : "facility-overview-date-actions";
+  return `<div class="${className}" aria-label="${range ? "Move date range" : "Move date"}">
+    <button type="button" class="button button-secondary" data-facility-overview-date-step="-1" aria-label="${previous}"><span class="facility-overview-date-navigation-label">Previous</span><span class="facility-overview-date-navigation-chevron" aria-hidden="true">‹</span></button>
+    <button type="button" class="button button-secondary" data-facility-overview-date-step="1" aria-label="${next}"><span class="facility-overview-date-navigation-label">Next</span><span class="facility-overview-date-navigation-chevron" aria-hidden="true">›</span></button>
+  </div>`;
 }
 
 function facilityOverviewMergeStreamCatalog(next = []) {

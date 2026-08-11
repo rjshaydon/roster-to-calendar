@@ -2485,6 +2485,31 @@ input[type="color"] {
   min-width: 0;
   margin-right: auto;
   position: relative;
+  container-type: inline-size;
+}
+
+.facility-overview-header-date-navigation,
+.facility-overview-date-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+
+.facility-overview-date-navigation-chevron {
+  display: none;
+}
+
+@container (max-width: 680px) {
+  .facility-overview-header-date-navigation .facility-overview-date-navigation-label {
+    display: none;
+  }
+
+  .facility-overview-header-date-navigation .facility-overview-date-navigation-chevron {
+    display: inline;
+    font-size: 1.25rem;
+    line-height: 1;
+  }
 }
 
 .preview-range-label {
@@ -3811,6 +3836,10 @@ body[data-skin="console"] #facilityOverviewSection.is-compact .facility-overview
   font-size: 0.82rem;
 }
 
+body[data-skin="console"] #facilityOverviewSection .facility-overview-controls .facility-overview-date-actions {
+  display: none;
+}
+
 /* The two panes share a grid cell.  Keep the calendar out of the paint tree
    while the facility overview is open, including during nested scrolling. */
 body[data-skin="console"] #roster-form.is-facility-overview-active #previewSection {
@@ -4499,6 +4528,10 @@ body[data-skin="console"] .panel {
 
   body[data-skin="console"] .preview-toolbar {
     display: none;
+  }
+
+  body[data-skin="console"] #facilityOverviewSection .facility-overview-controls .facility-overview-date-actions {
+    display: inline-flex;
   }
 
   body[data-skin="console"] .preview-range-controls {
