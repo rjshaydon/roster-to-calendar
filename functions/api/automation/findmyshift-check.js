@@ -1,5 +1,5 @@
 import { findmyshiftConfiguredRosterRange, findmyshiftLastModified, findmyshiftRosterWorkbook } from "../../_lib/findmyshift.js";
-import { hasCalendarDb, loadRosterSource, upsertRosterSource } from "../../_lib/d1-calendar.js";
+import { findRosterSyncByProviderVersion, hasCalendarDb, loadRosterSource, upsertRosterSource } from "../../_lib/d1-calendar.js";
 import { reconcileRosterFileSupersessionAndRefresh } from "../state.js";
 
 const SOURCE_ID = "dandenong-findmyshift";
@@ -23,6 +23,8 @@ export async function onRequestPost(context) {
   try {
     providerVersion = await findmyshiftLastModified(apiKey, teamId);
     const rangeState = findmyshiftRangeState(current?.cursor, range, providerVersion);
+    const fileName = `Dandenong-FindMyShift-${IMPORT_FORMAT}-${range.from}-to-${range.to}.xlsx`;
+    const currentFormatRun = await findRosterSyncByProviderVersion(context.env.ROSTER_DB, SOURCE_ID, providerVersion, fileName);
     // An unpublished upcoming term is checked once per FindMyShift version,
     // then left alone until the provider changes.
     if (current?.providerVersion === providerVersion && rangeState.waiting) {
@@ -38,6 +40,7 @@ export async function onRequestPost(context) {
       && current.providerVersion === providerVersion
       && rangeState.requested
       && current.lastSuccessAt
+      && currentFormatRun?.status === "success"
       && (!current.lastError || isTransientFindmyshiftRateLimitError(current.lastError))) {
       await reconcileCurrentFindmyshiftRoster(context, current);
       await saveSource(context, current, { lastCheckedAt: now, lastError: "" });
@@ -56,7 +59,7 @@ export async function onRequestPost(context) {
       headers: { Authorization: `Bearer ${String(context.env.ROSTER_AUTOMATION_TOKEN || "")}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         sourceId: SOURCE_ID,
-        fileName: `Dandenong-FindMyShift-${IMPORT_FORMAT}-${range.from}-to-${range.to}.xlsx`,
+        fileName,
         contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         contentBase64: bytesToBase64(new Uint8Array(workbook)),
         providerVersion,

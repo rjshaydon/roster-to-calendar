@@ -347,6 +347,7 @@ const facilityAccessMigrationSource = await readFile(new URL("../migrations/0011
 const facilityOptInRepairMigrationSource = await readFile(new URL("../migrations/0017_restore_facility_overview_opt_in.sql", import.meta.url), "utf8");
 const d1CalendarSource = await readFile(new URL("../functions/_lib/d1-calendar.js", import.meta.url), "utf8");
 const automationIngestSource = await readFile(new URL("../functions/api/automation/ingest.js", import.meta.url), "utf8");
+const automationDerivedSource = await readFile(new URL("../functions/api/automation/derived.js", import.meta.url), "utf8");
 const findmyshiftCheckSource = await readFile(new URL("../functions/api/automation/findmyshift-check.js", import.meta.url), "utf8");
 const automationDispatchSource = await readFile(new URL("../functions/_lib/automation-dispatch.js", import.meta.url), "utf8");
 const automationDispatchEndpointSource = await readFile(new URL("../functions/api/automation/dispatch.js", import.meta.url), "utf8");
@@ -374,6 +375,9 @@ assert.match(appSource, /function openFacilityOverview[\s\S]*refreshFacilityOver
 assert.match(appSource, /function toggleFacilityOverview[\s\S]*facilityOverviewNavigationLocked[\s\S]*openFacilityOverview/, "At a glance navigation should ignore duplicate opening clicks");
 assert.match(appSource, /function openFacilityOverviewByStream[\s\S]*Loading available streams[\s\S]*loadFacilityOverviewMetadata[\s\S]*loadFacilityOverviewByStream/, "By stream should fetch its catalogue only when that tab is opened");
 assert.match(stateSource, /action === "queryFacilityOverviewMetadata"[\s\S]*const catalog = await queryFacilityOverviewRange[\s\S]*action === "queryFacilityOverviewByStream"/, "The metadata API should fetch only the lazy By stream catalogue");
+assert.match(findmyshiftCheckSource, /const fileName = `Dandenong-FindMyShift-\$\{IMPORT_FORMAT\}[\s\S]*currentFormatRun\?\.status === "success"/, "FindMyShift should only call an import unchanged after this parser-format file has succeeded");
+assert.match(automationIngestSource, /findSuccessfulRosterSyncByHash\([^\n]*file\.name\)[\s\S]*findQueuedRosterSyncByHash\([^\n]*file\.name\)/, "automation ingestion should include the retained filename when deduplicating an identical workbook");
+assert.match(automationDerivedSource, /run\.triggerType === "parser-rule"[\s\S]*activeFileId: preserveActiveFile \? existing\.activeFileId : run\.fileId/, "historical parser reparses should not replace an automated source's active-file pointer");
 const facilityOverviewEventHelpers = appSource.match(/function eventRosterDateKey[\s\S]*?(?=\nfunction filterWhenInsightEvents)/)?.[0] || "";
 const facilityOverviewDateHelpers = appSource.match(/function parseDateOnly[\s\S]*?(?=\nfunction formatLongDate)/)?.[0] || "";
 const facilityOverviewPreferredHelper = appSource.match(/function facilityOverviewMelbourneClock[\s\S]*?(?=\nfunction refreshFacilityOverviewPreferredFacility)/)?.[0] || "";

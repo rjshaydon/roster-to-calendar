@@ -44,6 +44,12 @@ export async function onRequestPost(context) {
       });
       await supersedeDuplicateRosterSyncRuns(context.env.ROSTER_DB, run, body?.file?.name || "");
       const existing = await loadRosterSource(context.env.ROSTER_DB, sourceId);
+      // A parser-rule reparse can process several historical retained files.
+      // It must not move an automated source's current-file pointer to the
+      // last historical file that happened to finish.
+      const preserveActiveFile = run.triggerType === "parser-rule"
+        && existing?.activeFileId
+        && existing.activeFileId !== run.fileId;
       await upsertRosterSource(context.env.ROSTER_DB, {
         ...(existing || {}),
         ...source,
@@ -84,7 +90,7 @@ export async function onRequestPost(context) {
         enabled: true,
         lastSuccessAt: completedAt,
         lastError: "",
-        activeFileId: run.fileId,
+        activeFileId: preserveActiveFile ? existing.activeFileId : run.fileId,
         updatedAt: completedAt,
         createdAt: existing?.createdAt || completedAt,
       });

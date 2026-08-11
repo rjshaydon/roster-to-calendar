@@ -1821,25 +1821,49 @@ export async function listRosterSyncRuns(db, options = {}) {
   return (rows.results || []).map(rosterSyncRunFromRow).filter(Boolean);
 }
 
-export async function findSuccessfulRosterSyncByHash(db, sourceId, contentHash) {
+export async function findSuccessfulRosterSyncByHash(db, sourceId, contentHash, fileName = "") {
   if (!db?.prepare || !sourceId || !contentHash) return null;
   await ensureCalendarSchema(db);
-  const row = await db.prepare(`
+  const hasFileName = Boolean(String(fileName || "").trim());
+  const row = await db.prepare(hasFileName ? `
+    SELECT roster_sync_runs.*
+    FROM roster_sync_runs
+    INNER JOIN raw_roster_files ON raw_roster_files.file_id = roster_sync_runs.file_id
+    WHERE roster_sync_runs.source_id = ?
+      AND roster_sync_runs.content_hash = ?
+      AND roster_sync_runs.status = 'success'
+      AND LOWER(raw_roster_files.name) = LOWER(?)
+    ORDER BY roster_sync_runs.completed_at DESC LIMIT 1
+  ` : `
     SELECT * FROM roster_sync_runs
     WHERE source_id = ? AND content_hash = ? AND status = 'success'
     ORDER BY completed_at DESC LIMIT 1
-  `).bind(String(sourceId), String(contentHash)).first();
+  `).bind(...(hasFileName
+    ? [String(sourceId), String(contentHash), String(fileName)]
+    : [String(sourceId), String(contentHash)])).first();
   return rosterSyncRunFromRow(row);
 }
 
-export async function findQueuedRosterSyncByHash(db, sourceId, contentHash) {
+export async function findQueuedRosterSyncByHash(db, sourceId, contentHash, fileName = "") {
   if (!db?.prepare || !sourceId || !contentHash) return null;
   await ensureCalendarSchema(db);
-  const row = await db.prepare(`
+  const hasFileName = Boolean(String(fileName || "").trim());
+  const row = await db.prepare(hasFileName ? `
+    SELECT roster_sync_runs.*
+    FROM roster_sync_runs
+    INNER JOIN raw_roster_files ON raw_roster_files.file_id = roster_sync_runs.file_id
+    WHERE roster_sync_runs.source_id = ?
+      AND roster_sync_runs.content_hash = ?
+      AND roster_sync_runs.status IN ('queued', 'processing')
+      AND LOWER(raw_roster_files.name) = LOWER(?)
+    ORDER BY roster_sync_runs.started_at DESC LIMIT 1
+  ` : `
     SELECT * FROM roster_sync_runs
     WHERE source_id = ? AND content_hash = ? AND status IN ('queued', 'processing')
     ORDER BY started_at DESC LIMIT 1
-  `).bind(String(sourceId), String(contentHash)).first();
+  `).bind(...(hasFileName
+    ? [String(sourceId), String(contentHash), String(fileName)]
+    : [String(sourceId), String(contentHash)])).first();
   return rosterSyncRunFromRow(row);
 }
 
@@ -2132,7 +2156,7 @@ function rosterSourceFromRow(row) {
 function rosterSyncRunFromRow(row) {
   if (!row?.id) return null;
   return {
-    id: String(row.id), sourceId: String(row.source_id || ""), status: String(row.status || ""),
+    id: String(row.id), sourceId: String(row.source_id || ""), triggerType: String(row.trigger_type || ""), status: String(row.status || ""),
     providerVersion: String(row.provider_version || ""), contentHash: String(row.content_hash || ""), fileId: String(row.file_id || ""),
     message: String(row.message || ""), doctorCount: Number(row.doctor_count || 0),
     eventCount: Number(row.event_count || 0), startedAt: String(row.started_at || ""),

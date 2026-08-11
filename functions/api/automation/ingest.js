@@ -68,11 +68,15 @@ export async function onRequestPost(context) {
     await upsertRosterSource(context.env.ROSTER_DB, updatedSourceRecord(sourceRecord, source, {
       id: sourceId, providerVersion, providerModifiedAt, lastCheckedAt: now, lastError: "", updatedAt: now,
     }));
-    const prior = await findSuccessfulRosterSyncByHash(context.env.ROSTER_DB, sourceId, contentHash);
+    // The parser/import format is part of the retained filename. Identical
+    // workbook bytes must be processed again when that filename changes for a
+    // parser revision; otherwise a corrected parser can never replace old
+    // derived events until the roster provider changes the workbook itself.
+    const prior = await findSuccessfulRosterSyncByHash(context.env.ROSTER_DB, sourceId, contentHash, file.name);
     if (prior) {
       return Response.json({ ok: true, status: "unchanged", sourceId, fileId: prior.fileId, runId: prior.id });
     }
-    const queued = await findQueuedRosterSyncByHash(context.env.ROSTER_DB, sourceId, contentHash);
+    const queued = await findQueuedRosterSyncByHash(context.env.ROSTER_DB, sourceId, contentHash, file.name);
     if (queued) {
       const dispatch = await requestQueuedRosterProcessing(context.env, { reason: "duplicate-content-check" });
       return Response.json({ ok: true, status: queued.status, sourceId, fileId: queued.fileId, runId: queued.id, processorDispatch: publicDispatchStatus(dispatch) }, { status: 202 });
