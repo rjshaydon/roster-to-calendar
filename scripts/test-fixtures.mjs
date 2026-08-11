@@ -1844,6 +1844,8 @@ assert.match(
 assert.match(appSource, /function rosterSyncSummary/, "system card should expose aggregate roster sync progress");
 assert.doesNotMatch(appSource, /function scheduleFailedRosterRetry/, "failed roster syncs should not schedule automatic retry storms");
 assert.match(appSource, /data-reparse-import/, "file cards should expose a visible reparse action");
+assert.match(appSource, /activeManualReparseIds[\s\S]*is-processing[\s\S]*activeAutomatedSourceRefreshIds[\s\S]*waitForAutomatedRosterSourceRefresh/, "manual and auto-sync reparse controls should retain an in-progress state until their work completes");
+assert.match(styleSource, /\.file-reparse\.is-processing[\s\S]*roster-refresh-spin[\s\S]*prefers-reduced-motion/, "an in-progress reparse control should rotate while respecting reduced-motion preferences");
 assert.match(appSource, /Reparse produced 0 events/, "zero-event reparses should remain visibly failed");
 assert.match(
   appSource.match(/function formatTimestamp\([\s\S]*?function formatIssueHeading/)?.[0] || "",

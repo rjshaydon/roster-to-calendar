@@ -802,6 +802,23 @@ input[type="color"] {
   transform: scale(1);
 }
 
+.file-reparse.is-processing,
+.file-reparse:disabled.is-processing {
+  cursor: wait;
+  animation: roster-refresh-spin 800ms linear infinite;
+}
+
+@keyframes roster-refresh-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .file-reparse.is-processing,
+  .file-reparse:disabled.is-processing {
+    animation: none;
+  }
+}
+
 .control-bar {
   display: grid;
   gap: 10px;

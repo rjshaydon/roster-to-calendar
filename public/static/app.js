@@ -333,6 +333,8 @@ const ROSTER_HOSPITAL_SORT_RANK = { mmc: 0, ddh: 1, casey: 2, mch: 3 };
 let calendarStoreStatus = null;
 let calendarStoreStatusError = "";
 let rosterSyncStates = new Map();
+const activeManualReparseIds = new Set();
+const activeAutomatedSourceRefreshIds = new Set();
 const pendingRemovedImportIds = new Set();
 let rosterRemovalRetryRunId = 0;
 let rosterSyncRefreshTimer = 0;
@@ -3025,9 +3027,10 @@ function renderAdminAutoSyncRow(source, files, terms) {
   const refreshTitle = source.provider === "findmyshift"
     ? "Check FindMyShift for a newer roster, then reprocess"
     : "Reprocess the retained roster file";
+  const refreshInProgress = activeAutomatedSourceRefreshIds.has(String(source.id || ""));
   return `
     <article class="admin-file-row admin-auto-sync-row roster-source-${escapeHtml(source.state || "unknown")}">
-      <div class="admin-auto-sync-heading"><strong>${escapeHtml(source.label)}</strong><button type="button" class="file-reparse file-reparse-visible" aria-label="${escapeHtml(refreshTitle)}" title="${escapeHtml(refreshTitle)}" data-refresh-automated-source="${escapeHtml(source.id)}">↻</button></div>
+      <div class="admin-auto-sync-heading"><strong>${escapeHtml(source.label)}</strong><button type="button" class="file-reparse file-reparse-visible${refreshInProgress ? " is-processing" : ""}" aria-label="${escapeHtml(refreshTitle)}" title="${escapeHtml(refreshInProgress ? "Refresh in progress" : refreshTitle)}" aria-busy="${refreshInProgress}" data-refresh-automated-source="${escapeHtml(source.id)}"${refreshInProgress ? " disabled" : ""}>↻</button></div>
       <dl class="admin-file-details">
         <div><dt>Source modified</dt><dd>${source.providerModifiedAt ? escapeHtml(formatTimestamp(source.providerModifiedAt)) : "Not checked yet"}</dd></div>
         <div><dt>Successfully imported</dt><dd>${source.lastSuccessAt ? escapeHtml(formatTimestamp(source.lastSuccessAt)) : "Not yet imported"}</dd></div>
@@ -3059,6 +3062,7 @@ function renderAdminManualFileRow(entry, slot, options = {}) {
         : entry.file && options.hasUsableStatus ? "Not yet confirmed in D1"
         : entry.file ? "Roster database status not checked" : "");
   const canReparse = options.canRemove && (!entry.fromRosterDatabase || statusFile?.rawSourceAvailable === true);
+  const reparseInProgress = activeManualReparseIds.has(String(entry.id || ""));
   return `
     <article class="admin-file-row admin-manual-file-row" data-file-id="${escapeHtml(entry.id)}">
       <div class="admin-file-row-main">
@@ -3068,7 +3072,7 @@ function renderAdminManualFileRow(entry, slot, options = {}) {
         ${status ? `<span class="admin-file-status">${status}</span>` : ""}
         ${statusFile?.rawSourceAvailable === false ? `<span class="admin-file-status">Source file not retained · re-upload once to enable reparse</span>` : ""}
       </div>
-      ${options.canRemove ? `<div class="admin-file-actions">${canReparse ? `<button type="button" class="file-reparse file-reparse-visible" aria-label="Reparse roster file" title="Reparse roster file" data-reparse-import="${escapeHtml(entry.id)}">↻</button>` : ""}<button type="button" class="file-remove file-remove-visible" aria-label="Remove file" title="Remove file" data-remove-import="${escapeHtml(entry.id)}">🗑</button></div>` : ""}
+      ${options.canRemove ? `<div class="admin-file-actions">${canReparse ? `<button type="button" class="file-reparse file-reparse-visible${reparseInProgress ? " is-processing" : ""}" aria-label="Reparse roster file" title="${reparseInProgress ? "Reparse in progress" : "Reparse roster file"}" aria-busy="${reparseInProgress}" data-reparse-import="${escapeHtml(entry.id)}"${reparseInProgress ? " disabled" : ""}>↻</button>` : ""}<button type="button" class="file-remove file-remove-visible" aria-label="Remove file" title="Remove file" data-remove-import="${escapeHtml(entry.id)}">🗑</button></div>` : ""}
     </article>
   `;
 }
@@ -15991,6 +15995,8 @@ function retainedRosterEntriesFromStatus() {
 }
 
 async function reparseRosterFile(id) {
+  const fileId = String(id || "");
+  if (!fileId || activeManualReparseIds.has(fileId)) return;
   const statusEntry = (calendarStoreStatus?.files || []).find((file) => file.id === id);
   const entry = selectedFiles.find((item) => item.id === id) || (statusEntry ? {
     id: statusEntry.id,
@@ -16000,6 +16006,8 @@ async function reparseRosterFile(id) {
     addedAt: "",
   } : null);
   if (!entry) return;
+  activeManualReparseIds.add(fileId);
+  renderFileSurfaces();
   try {
     const activeState = rosterSyncStates.get(entry.id);
     if (activeState && ["pending", "uploading-source", "parsing", "saving"].includes(activeState.status)) {
@@ -16029,16 +16037,24 @@ async function reparseRosterFile(id) {
     setStatus(`${entry.name} reparsed.`);
   } catch (error) {
     setStatus(error.message || `Could not reparse ${entry.name}.`, true);
+  } finally {
+    activeManualReparseIds.delete(fileId);
+    renderFileSurfaces();
   }
 }
 
 async function refreshAutomatedRosterSource(sourceId) {
+  const id = String(sourceId || "");
+  if (!id || activeAutomatedSourceRefreshIds.has(id)) return;
   const source = (calendarStoreStatus?.rosterSourceStatuses || []).find((item) => item?.id === sourceId);
   const label = String(source?.label || "Automated roster");
   const canCheckProvider = source?.provider === "findmyshift";
+  const previousSuccessAt = String(source?.lastSuccessAt || "");
+  activeAutomatedSourceRefreshIds.add(id);
+  renderFileSurfaces();
   try {
     setStatus(canCheckProvider ? `Checking ${label} for a newer roster...` : `Queueing ${label} to reprocess...`);
-    const result = await calendarStoreRequest("refreshAutomatedRosterSource", { sourceId });
+    const result = await calendarStoreRequest("refreshAutomatedRosterSource", { sourceId: id });
     await refreshCalendarStoreStatus({ silent: true });
     const status = String(result?.status || "queued");
     if (status === "reprocess-queued") {
@@ -16050,8 +16066,31 @@ async function refreshAutomatedRosterSource(sourceId) {
     } else {
       setStatus(`${label} refresh is ${status.replace(/-/g, " ")}.`);
     }
+    if (["queued", "processing", "reprocess-queued"].includes(status)) {
+      await waitForAutomatedRosterSourceRefresh(id, label, previousSuccessAt);
+    }
   } catch (error) {
     setStatus(error.message || `Could not refresh ${label}.`, true);
+  } finally {
+    activeAutomatedSourceRefreshIds.delete(id);
+    renderFileSurfaces();
+  }
+}
+
+async function waitForAutomatedRosterSourceRefresh(sourceId, label, previousSuccessAt = "") {
+  let sawPendingState = false;
+  for (;;) {
+    const source = (calendarStoreStatus?.rosterSourceStatuses || []).find((item) => item?.id === sourceId);
+    if (["queued", "processing"].includes(source?.state)) sawPendingState = true;
+    if (source?.state === "received" && (sawPendingState || String(source.lastSuccessAt || "") !== previousSuccessAt)) {
+      await loadCloudCalendarEvents();
+      if (currentSnapshot) renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+      setStatus(`${label} imported.`);
+      return;
+    }
+    if (source?.state === "failed") throw new Error(source.lastError || `${label} update failed.`);
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    await refreshCalendarStoreStatus({ silent: true });
   }
 }
 
