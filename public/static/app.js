@@ -592,7 +592,8 @@ facilityOverviewSection?.addEventListener("click", (event) => {
   }
   if (event.target.closest("[data-facility-overview-by-stream-add]")) {
     if (facilityOverviewState.byStreamRows.length < 6) {
-      facilityOverviewState.byStreamRows.push(newFacilityOverviewByStreamRow());
+      const previous = facilityOverviewState.byStreamRows.at(-1);
+      facilityOverviewState.byStreamRows.push(newFacilityOverviewByStreamRow(previous));
       renderFacilityOverview();
     }
     return;
@@ -975,8 +976,8 @@ facilityOverviewSection?.addEventListener("change", (event) => {
     } else if (field === "seniority") {
       row.seniority = String(byStreamRow.value || "SMS");
     }
-    if (facilityOverviewByStreamHasDuplicateRows()) {
-      facilityOverviewState.byStreamContent = `<article class="issue-card"><p>Choose each ED, stream, and seniority combination only once.</p></article>`;
+    if (facilityOverviewByStreamRowIsDuplicate(row)) {
+      if (facilityOverviewState.byStreamData) facilityOverviewState.byStreamContent = facilityOverviewByStreamContentFromData(facilityOverviewState.byStreamData);
       renderFacilityOverview();
       return;
     }
@@ -8722,9 +8723,20 @@ function initializeFacilityOverviewByStreamState() {
   }
 }
 
-function facilityOverviewByStreamHasDuplicateRows() {
-  const values = facilityOverviewState.byStreamRows.map((row) => `${row.facilityKey}|${row.streamKey}|${row.seniority}`);
-  return new Set(values).size !== values.length;
+function facilityOverviewByStreamRowIsDuplicate(row) {
+  const key = `${row?.facilityKey}|${row?.streamKey}|${row?.seniority}`;
+  return (facilityOverviewState.byStreamRows || []).some((candidate) => candidate.id !== row?.id
+    && `${candidate.facilityKey}|${candidate.streamKey}|${candidate.seniority}` === key);
+}
+
+function facilityOverviewByStreamDistinctRows(rows = facilityOverviewState.byStreamRows) {
+  const seen = new Set();
+  return (rows || []).filter((row) => {
+    const key = `${row.facilityKey}|${row.streamKey}|${row.seniority}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 async function openFacilityOverview(options = {}) {
@@ -8932,6 +8944,7 @@ function facilityOverviewByStreamSeniorityOptions(row) {
 function renderFacilityOverviewByStream() {
   const facilities = facilityOverviewFacilityOptions();
   const rows = facilityOverviewState.byStreamRows || [];
+  const resultRows = facilityOverviewByStreamDistinctRows(rows);
   return `
     <section class="facility-overview-by-stream" aria-label="By stream comparison">
       <aside class="facility-overview-by-stream-selectors">
@@ -8951,7 +8964,7 @@ function renderFacilityOverviewByStream() {
         <button type="button" class="facility-overview-add-staff" data-facility-overview-by-stream-add ${rows.length >= 6 ? "disabled" : ""}>${rows.length >= 6 ? "Maximum of six streams" : "+ Add another stream"}</button>
         <label class="toggle facility-overview-by-stream-hide-empty"><input type="checkbox" data-facility-overview-by-stream-row="options" data-facility-overview-by-stream-field="hide-empty" ${facilityOverviewState.byStreamHideEmptyDates ? "checked" : ""}> Hide dates without assignments</label>
       </aside>
-      <div class="facility-overview-by-stream-results ${rows.length > 1 ? "is-multi-lane" : "is-single-lane"}" aria-live="polite">${facilityOverviewState.byStreamContent || `<article class="issue-card"><p>Choose an ED and stream to view coverage.</p></article>`}</div>
+      <div class="facility-overview-by-stream-results ${resultRows.length > 1 ? "is-multi-lane" : "is-single-lane"}" aria-live="polite">${facilityOverviewState.byStreamContent || `<article class="issue-card"><p>Choose an ED and stream to view coverage.</p></article>`}</div>
     </section>
   `;
 }
@@ -8998,7 +9011,7 @@ function facilityOverviewByStreamRangeLabel() {
 }
 
 function facilityOverviewByStreamContentFromData(data) {
-  const selected = facilityOverviewState.byStreamRows || [];
+  const selected = facilityOverviewByStreamDistinctRows();
   const assignments = (data?.events || []).map(facilityOverviewAssignmentForRangeRow).filter(Boolean);
   const bySelection = new Map(selected.map((row) => [row.id, []]));
   const observedByStreamDate = new Set();
@@ -9062,9 +9075,9 @@ async function loadFacilityOverviewByStream() {
   initializeFacilityOverviewByStreamState();
   const startDate = facilityOverviewState.byStreamFrom;
   const endDate = facilityOverviewState.byStreamTo;
-  const rows = facilityOverviewState.byStreamRows.filter((row) => row.facilityKey && row.streamKey && row.seniority);
-  if (!startDate || !endDate || endDate < startDate || !rows.length || facilityOverviewByStreamHasDuplicateRows()) {
-    facilityOverviewState.byStreamContent = `<article class="issue-card"><p>Choose a valid date range and different ED, stream, and seniority selections.</p></article>`;
+  const rows = facilityOverviewByStreamDistinctRows().filter((row) => row.facilityKey && row.streamKey && row.seniority);
+  if (!startDate || !endDate || endDate < startDate || !rows.length) {
+    facilityOverviewState.byStreamContent = `<article class="issue-card"><p>Choose a valid date range and stream selection.</p></article>`;
     renderFacilityOverview();
     return;
   }
