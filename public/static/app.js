@@ -302,7 +302,15 @@ let calendarImportPollRunId = 0;
 let currentSubscription = null;
 let currentInsightsEnabled = currentUserRole === "creator";
 let currentFacilityOverviewEnabled = currentUserRole === "creator";
-let facilityOverviewCompactReleaseTimer = null;
+let facilityOverviewCompactState = {
+  latched: false,
+  scroller: null,
+  lastScrollTop: 0,
+  userDirection: 0,
+  pointerScroller: null,
+  touchScroller: null,
+  touchY: 0,
+};
 let facilityOverviewState = {
   tab: "on-shift", date: formatDateKey(new Date()), facilityKey: "", includeClinicalSupport: false, requestId: 0, onShiftData: null,
   staffTermStart: formatDateKey(australianTermForDate(new Date()).start), staffTerms: [], staffContent: "", staffData: null, staffQuery: "", staffExpanded: new Set(), staffFocusSection: "", staffActionMenu: null, staffDesignationMenu: null, staffSeniorityMenu: null, staffMultiSelectSection: "", staffMultiSelectMembers: new Map(), staffBulkSeniorityMenu: null, staffMultiSelectSaving: false,
@@ -313,6 +321,8 @@ let facilityOverviewState = {
   togetherTo: formatDateKey(addDays(australianTermForDate(new Date()).end, -1)),
   togetherFacilityKey: "ALL", togetherContent: "", togetherHasSearched: false, togetherPinnedDoctors: [],
 };
+const FACILITY_OVERVIEW_COMPACT_SCROLL_THRESHOLD = 28;
+const FACILITY_OVERVIEW_SCROLL_TOLERANCE = 0;
 let facilityOverviewNavigationLocked = false;
 let creatorCalendarSourceFileRefs = [];
 let insightsState = null;
@@ -539,25 +549,132 @@ document.addEventListener("keydown", (event) => {
   closeFacilityOverviewStaffSeniorityMenu();
   closeFacilityOverviewStaffBulkSeniorityMenu();
 });
+
+function facilityOverviewIsScroller(element) {
+  return element === facilityOverviewBody || Boolean(element?.matches?.(".facility-overview-together"));
+}
+
+function facilityOverviewScrollerForTarget(target) {
+  if (!(target instanceof Element) || !facilityOverviewBody?.contains(target)) return null;
+  return target.closest(".facility-overview-together") || facilityOverviewBody;
+}
+
+function facilityOverviewScrollerHasOverflow(scroller) {
+  return scroller.scrollHeight > scroller.clientHeight + FACILITY_OVERVIEW_SCROLL_TOLERANCE;
+}
+
+function facilityOverviewShouldCompact(scroller, { userDirection = 0, movement = 0 } = {}) {
+  return facilityOverviewScrollerHasOverflow(scroller)
+    && scroller.scrollTop > FACILITY_OVERVIEW_COMPACT_SCROLL_THRESHOLD
+    && (userDirection > 0 || movement > 0);
+}
+
+function facilityOverviewShouldReleaseCompact(scroller, userDirection) {
+  return userDirection < 0 && scroller.scrollTop <= FACILITY_OVERVIEW_COMPACT_SCROLL_THRESHOLD;
+}
+
+function setFacilityOverviewCompactMode(scroller, compact) {
+  facilityOverviewCompactState.latched = compact;
+  facilityOverviewCompactState.scroller = compact ? scroller : null;
+  facilityOverviewCompactState.lastScrollTop = compact ? scroller.scrollTop : 0;
+  facilityOverviewSection?.classList.toggle("is-compact", compact);
+}
+
+function setFacilityOverviewScrollDirection(scroller, direction) {
+  if (!direction || !facilityOverviewIsScroller(scroller)) return;
+  facilityOverviewCompactState.userDirection = direction;
+  if (
+    direction < 0
+    && facilityOverviewCompactState.latched
+    && facilityOverviewCompactState.scroller === scroller
+    && facilityOverviewShouldReleaseCompact(scroller, direction)
+  ) {
+    setFacilityOverviewCompactMode(scroller, false);
+  }
+}
+
+function facilityOverviewKeyboardScrollDirection(event) {
+  if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return 0;
+  if (["ArrowUp", "PageUp", "Home"].includes(event.key)) return -1;
+  if (["ArrowDown", "PageDown", "End"].includes(event.key)) return 1;
+  if (event.key === " " || event.key === "Spacebar") return event.shiftKey ? -1 : 1;
+  return 0;
+}
+
+facilityOverviewSection?.addEventListener("wheel", (event) => {
+  const scroller = facilityOverviewScrollerForTarget(event.target);
+  setFacilityOverviewScrollDirection(scroller, Math.sign(event.deltaY));
+}, { capture: true, passive: true });
+
+facilityOverviewSection?.addEventListener("touchstart", (event) => {
+  const scroller = facilityOverviewScrollerForTarget(event.target);
+  const touch = event.touches[0];
+  if (!scroller || !touch) return;
+  facilityOverviewCompactState.touchScroller = scroller;
+  facilityOverviewCompactState.touchY = touch.clientY;
+}, { capture: true, passive: true });
+
+facilityOverviewSection?.addEventListener("touchmove", (event) => {
+  const scroller = facilityOverviewCompactState.touchScroller;
+  const touch = event.touches[0];
+  if (!scroller || !touch) return;
+  const movement = facilityOverviewCompactState.touchY - touch.clientY;
+  if (Math.abs(movement) < 1) return;
+  facilityOverviewCompactState.touchY = touch.clientY;
+  setFacilityOverviewScrollDirection(scroller, Math.sign(movement));
+}, { capture: true, passive: true });
+
+facilityOverviewSection?.addEventListener("touchend", () => {
+  facilityOverviewCompactState.touchScroller = null;
+  facilityOverviewCompactState.touchY = 0;
+}, { capture: true, passive: true });
+
+facilityOverviewSection?.addEventListener("touchcancel", () => {
+  facilityOverviewCompactState.touchScroller = null;
+  facilityOverviewCompactState.touchY = 0;
+}, { capture: true, passive: true });
+
+facilityOverviewSection?.addEventListener("pointerdown", (event) => {
+  facilityOverviewCompactState.pointerScroller = facilityOverviewScrollerForTarget(event.target);
+}, { capture: true, passive: true });
+
+document.addEventListener("pointerup", () => {
+  facilityOverviewCompactState.pointerScroller = null;
+}, { passive: true });
+
+document.addEventListener("pointercancel", () => {
+  facilityOverviewCompactState.pointerScroller = null;
+}, { passive: true });
+
+facilityOverviewSection?.addEventListener("keydown", (event) => {
+  if (event.target instanceof Element && event.target.closest("input, select, textarea, button, [contenteditable='true']")) return;
+  const scroller = facilityOverviewScrollerForTarget(event.target) || facilityOverviewCompactState.scroller;
+  setFacilityOverviewScrollDirection(scroller, facilityOverviewKeyboardScrollDirection(event));
+}, { capture: true });
+
 facilityOverviewSection?.addEventListener("scroll", (event) => {
   const scroller = event.target;
-  if (scroller !== facilityOverviewBody && !scroller?.matches?.(".facility-overview-together")) return;
-  const shouldCompact = scroller.scrollTop > 28;
-  if (facilityOverviewCompactReleaseTimer) {
-    window.clearTimeout(facilityOverviewCompactReleaseTimer);
-    facilityOverviewCompactReleaseTimer = null;
+  if (!facilityOverviewIsScroller(scroller)) return;
+  const previousScroller = facilityOverviewCompactState.scroller;
+  const previousTop = previousScroller === scroller ? facilityOverviewCompactState.lastScrollTop : 0;
+  const movement = Math.sign(scroller.scrollTop - previousTop);
+  facilityOverviewCompactState.scroller = scroller;
+  facilityOverviewCompactState.lastScrollTop = scroller.scrollTop;
+  if (facilityOverviewCompactState.pointerScroller === scroller && movement) {
+    setFacilityOverviewScrollDirection(scroller, movement);
   }
-  if (shouldCompact) {
-    facilityOverviewSection.classList.add("is-compact");
+  if (!facilityOverviewCompactState.latched) {
+    if (facilityOverviewShouldCompact(scroller, { userDirection: facilityOverviewCompactState.userDirection, movement })) {
+      setFacilityOverviewCompactMode(scroller, true);
+    }
     return;
   }
-  // Expanding the header changes the height of its scroll container. Keep it
-  // compact until scrolling has stopped so that layout change cannot pull the
-  // content back under the threshold while the wheel is still moving.
-  facilityOverviewCompactReleaseTimer = window.setTimeout(() => {
-    facilityOverviewCompactReleaseTimer = null;
-    if (scroller.scrollTop <= 28) facilityOverviewSection.classList.remove("is-compact");
-  }, 180);
+  // A compact header makes this scrollport taller.  The browser can therefore
+  // clamp scrollTop back to zero even though the user is still scrolling down.
+  // Only an explicit upward input may release the compact mode.
+  if (
+    facilityOverviewShouldReleaseCompact(scroller, facilityOverviewCompactState.userDirection)
+  ) setFacilityOverviewCompactMode(scroller, false);
 }, { capture: true, passive: true });
 facilityOverviewSection?.addEventListener("click", (event) => {
   if (event.target.closest("[data-facility-overview-logout]")) {
@@ -8658,10 +8775,13 @@ function syncFacilityOverviewNavigationState() {
 }
 
 function resetFacilityOverviewScroll() {
-  if (facilityOverviewCompactReleaseTimer) {
-    window.clearTimeout(facilityOverviewCompactReleaseTimer);
-    facilityOverviewCompactReleaseTimer = null;
-  }
+  facilityOverviewCompactState.latched = false;
+  facilityOverviewCompactState.scroller = null;
+  facilityOverviewCompactState.lastScrollTop = 0;
+  facilityOverviewCompactState.userDirection = 0;
+  facilityOverviewCompactState.pointerScroller = null;
+  facilityOverviewCompactState.touchScroller = null;
+  facilityOverviewCompactState.touchY = 0;
   facilityOverviewSection?.classList.remove("is-compact");
   if (facilityOverviewBody) facilityOverviewBody.scrollTop = 0;
   const togetherScroller = facilityOverviewBody?.querySelector(".facility-overview-together");

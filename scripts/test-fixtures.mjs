@@ -387,6 +387,34 @@ const facilityOverviewDateHelpers = appSource.match(/function parseDateOnly[\s\S
 const facilityOverviewPreferredHelper = appSource.match(/function facilityOverviewMelbourneClock[\s\S]*?(?=\nfunction refreshFacilityOverviewPreferredFacility)/)?.[0] || "";
 assert.ok(facilityOverviewEventHelpers && facilityOverviewDateHelpers && facilityOverviewPreferredHelper, "At a glance preferred-ED helper dependencies should be available for behavioural tests");
 const resolvePreferredFacility = new Function(`${facilityOverviewEventHelpers}\n${facilityOverviewDateHelpers}\n${facilityOverviewPreferredHelper}\nreturn facilityOverviewPreferredFacilityFromEvents;`)();
+const facilityOverviewScrollLatchHelpers = appSource.match(/function facilityOverviewScrollerHasOverflow[\s\S]*?(?=\nfunction setFacilityOverviewCompactMode)/)?.[0] || "";
+assert.ok(facilityOverviewScrollLatchHelpers, "At a glance scroll-latch helpers should be available for behavioural tests");
+const { facilityOverviewShouldCompact, facilityOverviewShouldReleaseCompact } = new Function(`const FACILITY_OVERVIEW_COMPACT_SCROLL_THRESHOLD = 28; const FACILITY_OVERVIEW_SCROLL_TOLERANCE = 0;\n${facilityOverviewScrollLatchHelpers}\nreturn { facilityOverviewShouldCompact, facilityOverviewShouldReleaseCompact };`)();
+assert.equal(
+  facilityOverviewShouldCompact({ scrollHeight: 100, clientHeight: 100, scrollTop: 40 }, { userDirection: 1 }),
+  false,
+  "results that fit in the expanded viewport should not compact the header",
+);
+assert.equal(
+  facilityOverviewShouldCompact({ scrollHeight: 101, clientHeight: 100, scrollTop: 40 }, { userDirection: 1 }),
+  true,
+  "any genuine expanded-viewport overflow should allow downward scrolling to compact the header",
+);
+assert.equal(
+  facilityOverviewShouldCompact({ scrollHeight: 200, clientHeight: 100, scrollTop: 20 }, { userDirection: 1 }),
+  false,
+  "the compact header should retain its scroll activation threshold",
+);
+assert.equal(
+  facilityOverviewShouldReleaseCompact({ scrollTop: 0 }, 1),
+  false,
+  "a layout-driven reset to the top after a downward scroll should remain latched compact",
+);
+assert.equal(
+  facilityOverviewShouldReleaseCompact({ scrollTop: 0 }, -1),
+  true,
+  "an explicit upward action at the top should release the compact header",
+);
 const preferredShift = (source, start, end, title = `${source}: Shift`) => ({ source, title, start, end });
 const preferredNow = new Date("2026-08-10T00:00:00Z"); // Monday 10:00 in Melbourne.
 assert.deepEqual(
@@ -460,7 +488,8 @@ assert.doesNotMatch(appSource, /data-facility-overview-together-edit-staff/, "Wo
 assert.match(styleSource, /#facilityOverviewSection\.is-compact[\s\S]*\.facility-overview-tabs/, "At a glance tabs should compact after scrolling");
 assert.match(styleSource, /#facilityOverviewSection \{[\s\S]*?grid-template-rows: auto auto auto minmax\(0, 1fr\);[\s\S]*?overflow: hidden;/, "At a glance should keep its header stack outside the scroll container");
 assert.match(styleSource, /#facilityOverviewBody \{[\s\S]*?overflow-y: auto;/, "At a glance results should be the sole desktop scroll container");
-assert.match(appSource, /facilityOverviewSection\?\.addEventListener\("scroll"[\s\S]*?scroller\.scrollTop > 28/, "At a glance should compact its persistent header from results scrolling");
+assert.match(appSource, /FACILITY_OVERVIEW_COMPACT_SCROLL_THRESHOLD = 28[\s\S]*?function facilityOverviewScrollerHasOverflow[\s\S]*?scrollHeight > scroller\.clientHeight[\s\S]*?function facilityOverviewShouldReleaseCompact[\s\S]*?userDirection < 0/, "At a glance should latch header compaction only for overflowing results and release it on explicit upward input");
+assert.doesNotMatch(appSource, /facilityOverviewCompactReleaseTimer/, "At a glance should not use a delayed scroll-position release that can rebound after compaction");
 assert.match(appSource, /facilityOverviewButton\.textContent = open \? "My calendar" : "At a glance"/, "The sidebar At a glance control should become My calendar while the overview is open");
 assert.match(appSource, /addEventListener\("input"[\s\S]*?refreshFacilityOverviewStaffContent\(\);[\s\S]*?renderFacilityOverviewStaffBody\(\);/, "ED staff search should refresh results without replacing its focused input");
 assert.match(
