@@ -179,7 +179,7 @@ const MAX_MEMORY_SNAPSHOT_CACHE_ENTRIES = 160;
 const MAX_STORED_SNAPSHOT_CACHE_ENTRIES = 240;
 const MAX_STORED_SNAPSHOT_CACHE_AGE_MS = 45 * 24 * 60 * 60 * 1000;
 const ROSTER_OVERLAP_DOCTOR_CACHE_KEY = "roster-overlap-doctor-cache-v1";
-const FACILITY_OVERVIEW_SENIORITY_ORDER = ["SMS", "CMO", "Senior Registrar", "Transitional/Intermediate Registrar", "Junior Registrar", "HMO", "Intern", "NP", "Physio", "Unknown"];
+const FACILITY_OVERVIEW_SENIORITY_ORDER = ["SMS", "Senior Registrar", "CMO", "Transitional/Intermediate Registrar", "Junior Registrar", "HMO", "NP", "Physio", "Intern", "Unknown"];
 const CURRENT_EMAIL_KEY = "roster-current-email";
 const CURRENT_PASSWORD_KEY = "roster-current-password";
 const PERSISTENT_PASSWORD_KEY = "roster-persistent-password";
@@ -8684,7 +8684,7 @@ function facilityOverviewBuildStreamCatalog(rows = []) {
   }
   return [...entries.values()].map((entry) => ({
     ...entry,
-    seniorities: [...entry.seniorities].sort((left, right) => facilityOverviewSeniorityRank(left) - facilityOverviewSeniorityRank(right) || left.localeCompare(right)),
+    seniorities: [...entry.seniorities].sort(compareFacilityOverviewSeniorities),
   })).sort((left, right) => left.facilityKey.localeCompare(right.facilityKey) || left.rank - right.rank || left.label.localeCompare(right.label));
 }
 
@@ -8924,14 +8924,14 @@ function facilityOverviewMergeStreamCatalog(next = []) {
   }
   facilityOverviewState.byStreamCatalog = [...merged.values()].map((entry) => ({
     ...entry,
-    seniorities: [...entry.seniorities].sort((left, right) => facilityOverviewSeniorityRank(left) - facilityOverviewSeniorityRank(right) || left.localeCompare(right)),
+    seniorities: [...entry.seniorities].sort(compareFacilityOverviewSeniorities),
   })).sort((left, right) => left.facilityKey.localeCompare(right.facilityKey) || left.rank - right.rank || left.label.localeCompare(right.label));
 }
 
 function facilityOverviewByStreamSeniorityOptions(row) {
   const stream = facilityOverviewStreamsForFacility(row.facilityKey).find((entry) => entry.streamKey === row.streamKey);
   const values = new Set(["SMS", ...(stream?.seniorities || [])]);
-  return [...values].sort((left, right) => facilityOverviewSeniorityRank(left) - facilityOverviewSeniorityRank(right) || left.localeCompare(right));
+  return [...values].sort(compareFacilityOverviewSeniorities);
 }
 
 function renderFacilityOverviewByStream() {
@@ -9009,7 +9009,7 @@ function facilityOverviewByStreamContentFromData(data) {
     const stream = facilityOverviewStreamsForFacility(row.facilityKey).find((entry) => entry.streamKey === row.streamKey);
     const days = dates.map((date) => {
       const matching = (bySelection.get(row.id) || []).filter((assignment) => assignment.date === date)
-        .sort((left, right) => String(left.event?.start || "").localeCompare(String(right.event?.start || "")) || facilityOverviewSeniorityRank(left.seniority) - facilityOverviewSeniorityRank(right.seniority) || left.displayName.localeCompare(right.displayName));
+        .sort(row.seniority === "ALL" ? compareFacilityOverviewAssignmentsBySeniority : compareFacilityOverviewAssignmentsByStart);
       const covered = facilityOverviewByStreamCoverageFor(row.facilityKey, date);
       const streamObserved = observedByStreamDate.has(`${row.facilityKey}|${row.streamKey}|${date}`);
       let empty = "";
@@ -9571,7 +9571,7 @@ function renderFacilityOverviewGenericOnShiftPeriod(assignments, options = {}) {
     .sort(([left, itemsLeft], [right, itemsRight]) => whoTeamRank(left, itemsLeft[0]?.source || "") - whoTeamRank(right, itemsRight[0]?.source || "") || left.localeCompare(right))
     .map(([stream, items]) => renderFacilityOverviewStreamCard(stream, items, options));
   const seniorityCards = [...unstreamed.entries()]
-    .sort(([left], [right]) => facilityOverviewSeniorityRank(left) - facilityOverviewSeniorityRank(right) || left.localeCompare(right))
+    .sort(([left], [right]) => compareFacilityOverviewSeniorities(left, right))
     .map(([seniority, items]) => renderFacilityOverviewUnstreamedCard(seniority, items, options));
   return [...streamCards, ...seniorityCards].join("");
 }
@@ -9609,7 +9609,7 @@ function renderFacilityOverviewOnShiftNames(assignments, options = {}) {
     if (assignment.specialTime) existing.specialTimes.add(assignment.specialTime);
     byPerson.set(person.doctorKey, existing);
   }
-  return `<div class="facility-overview-on-shift-names">${[...byPerson.values()].sort((left, right) => left.person.displayName.localeCompare(right.person.displayName)).map(({ person, specialTimes }) => `
+  return `<div class="facility-overview-on-shift-names">${[...byPerson.values()].sort((left, right) => compareFacilityOverviewPeople(left.person, right.person)).map(({ person, specialTimes }) => `
     <div>${renderFacilityOverviewStaffName(person, { ...options, seniority: person.seniority })}${renderFacilityOverviewOnShiftSeniority(person, options)}${options.showSpecialTimes !== false && specialTimes.size ? `<small>${escapeHtml([...specialTimes].join(" · "))}</small>` : ""}</div>
   `).join("")}</div>`;
 }
@@ -10267,8 +10267,28 @@ function renderFacilityOverviewStream(events, options = {}) {
 }
 
 function facilityOverviewSeniorityRank(value) {
-  const index = FACILITY_OVERVIEW_SENIORITY_ORDER.indexOf(facilityOverviewNormalizeSeniority(value));
-  return index >= 0 ? index : FACILITY_OVERVIEW_SENIORITY_ORDER.length;
+  return FACILITY_OVERVIEW_SENIORITY_ORDER.indexOf(facilityOverviewNormalizeSeniority(value));
+}
+
+function compareFacilityOverviewSeniorities(left, right) {
+  const rankDifference = facilityOverviewSeniorityRank(left) - facilityOverviewSeniorityRank(right);
+  if (rankDifference) return rankDifference;
+  return facilityOverviewNormalizeSeniority(left).localeCompare(facilityOverviewNormalizeSeniority(right));
+}
+
+function compareFacilityOverviewPeople(left, right) {
+  return compareFacilityOverviewSeniorities(left?.seniority, right?.seniority)
+    || String(left?.displayName || "").localeCompare(String(right?.displayName || ""));
+}
+
+function compareFacilityOverviewAssignmentsByStart(left, right) {
+  return String(left?.event?.start || "").localeCompare(String(right?.event?.start || ""))
+    || String(left?.displayName || "").localeCompare(String(right?.displayName || ""));
+}
+
+function compareFacilityOverviewAssignmentsBySeniority(left, right) {
+  return compareFacilityOverviewSeniorities(left?.seniority, right?.seniority)
+    || compareFacilityOverviewAssignmentsByStart(left, right);
 }
 
 function facilityOverviewNormalizeSeniority(value) {
@@ -10282,7 +10302,7 @@ function facilityOverviewNormalizeSeniority(value) {
   if (normalized === "sms" || normalized === "cmo" || normalized === "hmo") return normalized.toUpperCase();
   if (normalized === "intern" || normalized === "i") return "Intern";
   if (!seniority || normalized === "unknown") return "Unknown";
-  return seniority;
+  return "Unknown";
 }
 
 function facilityOverviewDetectedSeniority(event, seniority = "") {
