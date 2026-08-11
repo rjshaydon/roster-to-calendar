@@ -1512,38 +1512,23 @@ export async function onRequestPost(context) {
       if (!facilityOverviewEnabledForRecord({ ...account.record, role: account.role })) {
         return Response.json({ ok: false, unavailable: true, preferredFacility: null, facilities: [], catalogEvents: [] }, { status: 403 });
       }
-      const doctorKeys = [...new Set((Array.isArray(body?.doctorKeys) ? body.doctorKeys : [])
-        .map((key) => normalizeRosterName(key))
-        .filter(Boolean))].slice(0, 20);
       const linkedSourceTypes = sanitizeSourceTypes(body?.sourceTypes || []);
       const today = australianDateKey();
       const term = facilityOverviewTermRange(today);
       const catalogSources = linkedSourceTypes.length ? linkedSourceTypes : ["mmc", "ddh", "casey", "mch"];
       try {
-        const [doctorEvents, catalog, staff] = await Promise.all([
-          queryDoctorEvents(context.env.ROSTER_DB, doctorKeys, { startDate: isoDateKey(addUtcDays(term.startDate, -1)), endDate: term.endDate }),
-          queryFacilityOverviewRange(context.env.ROSTER_DB, { startDate: term.startDate, endDate: term.endDate, sourceTypes: catalogSources }),
-          queryFacilityOverviewStaff(context.env.ROSTER_DB, { termStart: term.startDate, termEnd: term.endDate }),
-        ]);
-        const preferredFacility = resolveFacilityOverviewPreferredFacility({
-          events: doctorEvents.filter((event) => isFacilityOverviewWorkingEvent(event, { includeClinicalSupport: true })),
-          members: (staff.members || []).filter((member) => doctorKeys.includes(normalizeRosterName(member.doctorKey))),
-          linkedSourceTypes,
-          today,
-          now: new Date(),
-        });
+        const catalog = await queryFacilityOverviewRange(context.env.ROSTER_DB, { startDate: term.startDate, endDate: term.endDate, sourceTypes: catalogSources });
         return Response.json({
           ok: true,
           today,
           termStart: term.startDate,
           termEnd: term.endDate,
-          preferredFacility,
           facilities: catalog.coverage || [],
           catalogEvents: (catalog.events || []).filter((row) => isFacilityOverviewWorkingEvent(row.event, { facilityKey: row.sourceType, includeClinicalSupport: true })),
         });
       } catch (error) {
         console.error("queryFacilityOverviewMetadata failed", { error: error?.message || String(error) });
-        return Response.json({ ok: false, unavailable: true, preferredFacility: null, facilities: [], catalogEvents: [] }, { status: 503 });
+        return Response.json({ ok: false, unavailable: true, facilities: [], catalogEvents: [] }, { status: 503 });
       }
     }
 
@@ -2592,72 +2577,6 @@ function facilityOverviewTermRange(today) {
   }
   return candidates.find((term) => term.startDate <= today && term.endDate >= today)
     || { startDate: firstMondayDateKey(year, 1), endDate: isoDateKey(addUtcDays(firstMondayDateKey(year, 1), 90)) };
-}
-
-function facilityOverviewEventSource(event) {
-  const values = Array.isArray(event?.sources) ? event.sources : [event?.source];
-  const fromValue = sanitizeSourceTypes(values)[0];
-  if (fromValue) return fromValue;
-  const prefix = String(event?.title || "").match(/^(MMC|DDH|Casey|MCH):/i)?.[1] || "";
-  return sanitizeSourceTypes([prefix])[0] || "";
-}
-
-function facilityOverviewMelbourneTimeKey(now = new Date()) {
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Australia/Melbourne", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
-  }).formatToParts(now);
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-  return `${values.hour || "00"}:${values.minute || "00"}`;
-}
-
-function facilityOverviewRosterDate(event) {
-  return String(event?.start || "").slice(0, 10);
-}
-
-function resolveFacilityOverviewPreferredFacility({ events = [], members = [], linkedSourceTypes = [], today = "", now = new Date() } = {}) {
-  const term = facilityOverviewTermRange(today);
-  const sourceOrder = ["mmc", "ddh", "casey", "mch"];
-  const sourceRank = (source) => {
-    const index = sourceOrder.indexOf(source);
-    return index >= 0 ? index : 99;
-  };
-  const allRows = (events || []).map((event) => ({ event, sourceType: facilityOverviewEventSource(event), date: facilityOverviewRosterDate(event) }))
-    .filter((row) => row.sourceType)
-    .sort((left, right) => String(left.event?.start || "").localeCompare(String(right.event?.start || "")) || sourceRank(left.sourceType) - sourceRank(right.sourceType));
-  const rows = allRows.filter((row) => row.date >= term.startDate && row.date <= term.endDate);
-  const result = (sourceType, reason, evidenceDate = "") => sourceType ? ({ facilityKey: sourceType, reason, evidenceDate }) : null;
-  const uniqueSources = (items) => [...new Set(items.map((item) => item.sourceType))];
-  const termSources = uniqueSources(rows);
-  if (termSources.length === 1) return result(termSources[0], "sole-current-term-facility", rows[0]?.date || today);
-  const weekday = new Date(`${today}T12:00:00Z`).getUTCDay();
-  const mondayOffset = weekday === 0 ? -6 : 1 - weekday;
-  const weekStart = isoDateKey(addUtcDays(today, mondayOffset));
-  const weekEnd = isoDateKey(addUtcDays(weekStart, 6));
-  const weekRows = rows.filter((row) => row.date >= weekStart && row.date <= weekEnd);
-  const weekSources = uniqueSources(weekRows);
-  if (weekSources.length === 1) return result(weekSources[0], "sole-current-week-facility", weekRows[0]?.date || today);
-  const nowKey = `${today}T${facilityOverviewMelbourneTimeKey(now)}`;
-  const active = allRows.filter((row) => {
-    const start = String(row.event?.start || "").slice(0, 16);
-    const end = String(row.event?.end || "").slice(0, 16);
-    return start && end && start <= nowKey && nowKey < end;
-  });
-  if (active.length) return result(active[0].sourceType, "active-shift", active[0].date);
-  const todayRows = rows.filter((row) => row.date === today);
-  const nextToday = todayRows.filter((row) => String(row.event?.start || "").slice(0, 16) > nowKey);
-  if (nextToday.length) return result(nextToday[0].sourceType, "today-next-shift", today);
-  const completedToday = todayRows.filter((row) => String(row.event?.end || "").slice(0, 16) <= nowKey).sort((left, right) => String(right.event?.end || "").localeCompare(String(left.event?.end || "")) || sourceRank(left.sourceType) - sourceRank(right.sourceType));
-  if (completedToday.length) return result(completedToday[0].sourceType, "today-last-shift", today);
-  const next = rows.find((row) => String(row.event?.start || "").slice(0, 16) > nowKey);
-  if (next) return result(next.sourceType, "next-term-shift", next.date);
-  const last = [...rows].reverse().find((row) => String(row.event?.end || "").slice(0, 16) <= nowKey);
-  if (last) return result(last.sourceType, "last-term-shift", last.date);
-  const membershipSources = [...new Set((members || []).map((member) => sanitizeSourceTypes([member?.sourceType])[0]).filter(Boolean))];
-  if (membershipSources.length === 1) return result(membershipSources[0], "sole-term-membership", today);
-  if (linkedSourceTypes.length === 1) return result(linkedSourceTypes[0], "sole-linked-facility", today);
-  const fallback = [...linkedSourceTypes].sort((left, right) => sourceRank(left) - sourceRank(right))[0]
-    || membershipSources.sort((left, right) => sourceRank(left) - sourceRank(right))[0];
-  return result(fallback, "first-covered-linked-facility", today);
 }
 
 async function prepareLightweightAccountResponse(rawRecord, options = {}) {

@@ -306,13 +306,14 @@ let facilityOverviewCompactReleaseTimer = null;
 let facilityOverviewState = {
   tab: "on-shift", date: formatDateKey(new Date()), facilityKey: "", includeClinicalSupport: false, requestId: 0, onShiftData: null,
   staffTermStart: formatDateKey(australianTermForDate(new Date()).start), staffTerms: [], staffContent: "", staffData: null, staffQuery: "", staffExpanded: new Set(), staffFocusSection: "", staffActionMenu: null, staffDesignationMenu: null, staffSeniorityMenu: null, staffMultiSelectSection: "", staffMultiSelectMembers: new Map(), staffBulkSeniorityMenu: null, staffMultiSelectSaving: false,
-  preferredFacilityKey: "", byStreamFrom: formatDateKey(new Date()), byStreamTo: formatDateKey(new Date()), byStreamRows: [], byStreamCatalog: [], byStreamCoverage: [], byStreamContent: "", byStreamData: null, byStreamLoading: false, byStreamRequestId: 0, byStreamHideEmptyDates: true, byStreamRowId: 0,
+  preferredFacilityKey: "", preferredFacilityReason: "", preferredFacilityEvidenceDate: "", byStreamFrom: formatDateKey(new Date()), byStreamTo: formatDateKey(new Date()), byStreamRows: [], byStreamCatalog: [], byStreamCoverage: [], byStreamContent: "", byStreamData: null, byStreamLoading: false, byStreamMetadataLoading: false, byStreamMetadataKey: "", byStreamMetadataPromise: null, byStreamRequestId: 0, byStreamHideEmptyDates: true, byStreamRowId: 0,
   togetherStaffKeys: ["", ""], togetherRangeMode: "term",
   togetherTermStart: formatDateKey(australianTermForDate(new Date()).start),
   togetherFrom: formatDateKey(australianTermForDate(new Date()).start),
   togetherTo: formatDateKey(addDays(australianTermForDate(new Date()).end, -1)),
   togetherFacilityKey: "ALL", togetherContent: "", togetherHasSearched: false, togetherPinnedDoctors: [],
 };
+let facilityOverviewNavigationLocked = false;
 let creatorCalendarSourceFileRefs = [];
 let insightsState = null;
 let doctorAnalysisCacheKey = "";
@@ -489,14 +490,17 @@ filesModal?.addEventListener("click", (event) => {
   if (event.target.matches("[data-close-files]")) closeFilesModal();
 });
 exportButton.addEventListener("click", openExportModal);
-facilityOverviewButton?.addEventListener("click", () => {
+function toggleFacilityOverview() {
+  if (facilityOverviewNavigationLocked) return;
   if (isFacilityOverviewOpen()) closeFacilityOverview();
-  else void openFacilityOverview();
-});
-mobileFacilityOverviewButton?.addEventListener("click", () => {
-  if (isFacilityOverviewOpen()) closeFacilityOverview();
-  else void openFacilityOverview();
-});
+  else {
+    facilityOverviewNavigationLocked = true;
+    void openFacilityOverview();
+    window.setTimeout(() => { facilityOverviewNavigationLocked = false; }, 350);
+  }
+}
+facilityOverviewButton?.addEventListener("click", toggleFacilityOverview);
+mobileFacilityOverviewButton?.addEventListener("click", toggleFacilityOverview);
 facilityOverviewBackButton?.addEventListener("click", closeFacilityOverview);
 document.addEventListener("pointerdown", (event) => {
   const menu = facilityOverviewState.staffActionMenu;
@@ -582,8 +586,7 @@ facilityOverviewSection?.addEventListener("click", (event) => {
     if (facilityOverviewState.tab === "staff") {
       void loadFacilityOverviewStaff();
     } else if (facilityOverviewState.tab === "by-stream") {
-      initializeFacilityOverviewByStreamState();
-      void loadFacilityOverviewByStream();
+      void openFacilityOverviewByStream();
     } else {
       if (facilityOverviewState.tab === "together") initializeFacilityOverviewTogetherState();
       renderFacilityOverview();
@@ -8557,6 +8560,71 @@ function syncFacilityOverviewAccess() {
   syncFacilityOverviewNavigationState();
 }
 
+function facilityOverviewMelbourneClock(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Australia/Melbourne", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(now);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return {
+    today: `${values.year}-${values.month}-${values.day}`,
+    time: `${values.hour || "00"}:${values.minute || "00"}`,
+  };
+}
+
+function facilityOverviewPreferredFacilityFromEvents(events = [], options = {}) {
+  const clock = facilityOverviewMelbourneClock(options.now || new Date());
+  const today = String(options.today || clock.today).slice(0, 10);
+  const nowKey = `${today}T${clock.time}`;
+  const sourceOrder = ["MMC", "DDH", "CASEY", "MCH"];
+  const sourceRank = (source) => {
+    const index = sourceOrder.indexOf(source);
+    return index >= 0 ? index : 99;
+  };
+  const rows = (events || []).map((event) => ({ event, sourceType: eventSourceCode(event), date: eventRosterDateKey(event) }))
+    .filter((row) => row.sourceType && row.date && isRosterShiftEvent(row.event) && String(row.event?.status || "").toLowerCase() !== "unknown" && String(row.event?.kind || "").toLowerCase() !== "unknown")
+    .filter((row) => !(row.sourceType === "DDH" && /\b(?:hith|vhh)\b/i.test(`${row.event?.title || ""} ${row.event?.rawValue || ""}`)))
+    .sort((left, right) => String(left.event?.start || "").localeCompare(String(right.event?.start || "")) || sourceRank(left.sourceType) - sourceRank(right.sourceType));
+  const weekday = parseDateOnly(today).getDay();
+  const weekStart = formatDateKey(addDays(parseDateOnly(today), weekday === 0 ? -6 : 1 - weekday));
+  const weekEnd = formatDateKey(addDays(parseDateOnly(weekStart), 6));
+  const weekRows = rows.filter((row) => row.date >= weekStart && row.date <= weekEnd);
+  const result = (row, reason) => row ? ({ facilityKey: row.sourceType, reason, evidenceDate: row.date }) : null;
+  const uniqueSources = [...new Set(weekRows.map((row) => row.sourceType))];
+  if (uniqueSources.length === 1) return result(weekRows[0], "sole-current-week-facility");
+  if (uniqueSources.length > 1) {
+    const active = weekRows.find((row) => {
+      const start = String(row.event?.start || "").slice(0, 16);
+      const end = String(row.event?.end || "").slice(0, 16);
+      return start && end && start <= nowKey && nowKey < end;
+    });
+    if (active) return result(active, "active-shift");
+    const todayRows = weekRows.filter((row) => row.date === today);
+    const nextToday = todayRows.find((row) => String(row.event?.start || "").slice(0, 16) > nowKey);
+    if (nextToday) return result(nextToday, "today-next-shift");
+    const completedToday = [...todayRows].filter((row) => String(row.event?.end || "").slice(0, 16) <= nowKey)
+      .sort((left, right) => String(right.event?.end || "").localeCompare(String(left.event?.end || "")) || sourceRank(left.sourceType) - sourceRank(right.sourceType))[0];
+    if (completedToday) return result(completedToday, "today-last-shift");
+  }
+  const next = rows.find((row) => String(row.event?.start || "").slice(0, 16) > nowKey);
+  if (next) return result(next, "next-shift");
+  const linkedSources = [...new Set((options.linkedSourceTypes || []).map(normalizeEventSourceCode).filter(Boolean))]
+    .sort((left, right) => sourceRank(left) - sourceRank(right));
+  return linkedSources[0] ? { facilityKey: linkedSources[0], reason: "sole-or-first-linked-facility", evidenceDate: today } : null;
+}
+
+function refreshFacilityOverviewPreferredFacility() {
+  if (!canUseFacilityOverview()) return;
+  const doctor = selectedDoctor();
+  const clock = facilityOverviewMelbourneClock();
+  const preferred = facilityOverviewPreferredFacilityFromEvents(currentSnapshot?.preview?.events || latestPreview?.events || [], {
+    today: clock.today,
+    linkedSourceTypes: normalizedDoctorSourceTypes(doctor),
+  });
+  facilityOverviewState.preferredFacilityKey = preferred?.facilityKey || "";
+  facilityOverviewState.preferredFacilityReason = preferred?.reason || "";
+  facilityOverviewState.preferredFacilityEvidenceDate = preferred?.evidenceDate || "";
+}
+
 function isFacilityOverviewOpen() {
   return Boolean(facilityOverviewSection && !facilityOverviewSection.classList.contains("hidden"));
 }
@@ -8611,37 +8679,37 @@ function facilityOverviewFacilityOptions() {
   });
 }
 
-function facilityOverviewDoctorKeys(doctor = selectedDoctor()) {
-  const direct = [
-    doctor?.key,
-    ...(doctor?.aliases || []).map((alias) => alias?.key),
-  ].map(normalizeRosterName).filter(Boolean);
-  return [...new Set(direct.length ? direct : currentRosterClaims.map((claim) => normalizeRosterName(claim?.key)).filter(Boolean))];
-}
-
 async function loadFacilityOverviewMetadata() {
   if (!canUseFacilityOverview()) return null;
-  const doctor = selectedDoctor();
-  try {
+  const metadataKey = [currentSnapshot?.calendarRevision || currentCalendarRevision || "", formatDateKey(australianTermForDate(new Date()).start), normalizedDoctorSourceTypes(selectedDoctor()).sort().join(",")].join("|");
+  if (facilityOverviewState.byStreamMetadataKey === metadataKey) return { ok: true };
+  if (facilityOverviewState.byStreamMetadataPromise) return facilityOverviewState.byStreamMetadataPromise;
+  facilityOverviewState.byStreamMetadataLoading = true;
+  facilityOverviewState.byStreamMetadataPromise = (async () => {
+    try {
     const response = await fetch("/api/state", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({
         action: "queryFacilityOverviewMetadata",
         email: authUserEmail || currentUserEmail,
         password: authUserPassword || currentUserPassword,
-        doctorKeys: facilityOverviewDoctorKeys(doctor),
-        sourceTypes: normalizedDoctorSourceTypes(doctor),
+        sourceTypes: normalizedDoctorSourceTypes(selectedDoctor()),
       }),
     });
-    const data = await readJsonResponse(response, "Could not determine the preferred ED.");
-    facilityOverviewState.preferredFacilityKey = String(data?.preferredFacility?.facilityKey || "").toUpperCase();
+    const data = await readJsonResponse(response, "Could not load available streams.");
     facilityOverviewState.byStreamCoverage = data?.facilities || [];
     facilityOverviewState.byStreamCatalog = facilityOverviewBuildStreamCatalog(data?.catalogEvents || []);
+    facilityOverviewState.byStreamMetadataKey = metadataKey;
     return data;
-  } catch (error) {
-    console.warn("Could not load At a glance metadata", error);
-    return null;
-  }
+    } catch (error) {
+      console.warn("Could not load At a glance stream metadata", error);
+      return null;
+    } finally {
+      facilityOverviewState.byStreamMetadataLoading = false;
+      facilityOverviewState.byStreamMetadataPromise = null;
+    }
+  })();
+  return facilityOverviewState.byStreamMetadataPromise;
 }
 
 function facilityOverviewStreamKey(value) {
@@ -8797,8 +8865,8 @@ function facilityOverviewByStreamDistinctRows(rows = facilityOverviewState.byStr
 
 async function openFacilityOverview(options = {}) {
   if (!canUseFacilityOverview()) return;
+  refreshFacilityOverviewPreferredFacility();
   if (options.preserveFacility !== true && options.preserveStaffTerm !== true) {
-    await loadFacilityOverviewMetadata();
     const preferred = String(facilityOverviewState.preferredFacilityKey || "").toUpperCase();
     if (preferred) facilityOverviewState.facilityKey = preferred;
     if (!options.preserveDate) facilityOverviewState.date = formatDateKey(new Date());
@@ -8823,15 +8891,26 @@ async function openFacilityOverview(options = {}) {
   if (facilityOverviewState.tab === "staff" && !options.preserveStaffTerm) {
     facilityOverviewState.staffTermStart = formatDateKey(australianTermForDate(new Date()).start);
   }
-  if (facilityOverviewState.tab === "by-stream") initializeFacilityOverviewByStreamState();
   renderFacilityOverview();
   if (facilityOverviewState.tab === "staff") await loadFacilityOverviewStaff();
-  else if (facilityOverviewState.tab === "by-stream") await loadFacilityOverviewByStream();
+  else if (facilityOverviewState.tab === "by-stream") await openFacilityOverviewByStream();
   else if (facilityOverviewState.tab === "together") initializeFacilityOverviewTogetherState();
   else await loadFacilityOverviewOnShift();
 }
 
+async function openFacilityOverviewByStream() {
+  if (!canUseFacilityOverview() || facilityOverviewState.tab !== "by-stream") return;
+  facilityOverviewState.byStreamContent = `<article class="issue-card"><p>Loading available streams…</p></article>`;
+  renderFacilityOverview();
+  await loadFacilityOverviewMetadata();
+  if (facilityOverviewState.tab !== "by-stream") return;
+  initializeFacilityOverviewByStreamState();
+  renderFacilityOverview();
+  await loadFacilityOverviewByStream();
+}
+
 function closeFacilityOverview() {
+  facilityOverviewNavigationLocked = false;
   facilityOverviewState.requestId += 1;
   facilityOverviewState.byStreamRequestId += 1;
   facilityOverviewState.staffActionMenu = null;
@@ -13229,6 +13308,7 @@ async function commitCalendarLoad(result, options = {}) {
   if (doctorOptions.length > 1 && result.doctor?.key) doctorSelect.value = result.doctor.key;
   indexReviewItems(latestPreview.review || []);
   rebuildClientPreview();
+  refreshFacilityOverviewPreferredFacility();
   scheduleInsightWarmup();
   cacheCurrentSnapshot(buildActiveSessionState());
   saveCalendarSnapshotCacheForContext(currentSnapshot, {
@@ -18184,6 +18264,7 @@ function renderWorkspaceFromSnapshot(snapshot, session = {}, options = {}) {
   renderDoctorState();
   indexReviewItems(latestPreview.review || []);
   rebuildClientPreview();
+  refreshFacilityOverviewPreferredFacility();
   scheduleInsightWarmup();
   saveCurrentWorkspace();
   if (preservedScroll) {

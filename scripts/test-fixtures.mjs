@@ -369,8 +369,64 @@ assert.match(appSource, /renderFacilityOverviewOnShiftNames[\s\S]*compareFacilit
 assert.match(appSource, /row\.seniority === "ALL" \? compareFacilityOverviewAssignmentsBySeniority : compareFacilityOverviewAssignmentsByStart/, "By stream All team should sort by hierarchy while a filtered seniority sorts by time");
 assert.match(appSource, /function facilityOverviewAssignmentForRangeRow[\s\S]*buildWhoAssignment[\s\S]*facilityOverviewIsMeaningfulStream/, "By stream should reuse the On shift assignment and stream classifier");
 assert.match(appSource, /function facilityOverviewPreferredStreamKey[\s\S]*buildWhoAssignments[\s\S]*active[\s\S]*next/, "By stream should prefer the viewer's active or next stream before a catalogue fallback");
-assert.match(appSource, /function loadFacilityOverviewMetadata[\s\S]*queryFacilityOverviewMetadata[\s\S]*preferredFacilityKey/, "At a glance entry should load the preferred ED metadata");
-assert.match(stateSource, /action === "queryFacilityOverviewMetadata"[\s\S]*resolveFacilityOverviewPreferredFacility[\s\S]*action === "queryFacilityOverviewByStream"/, "The state API should provide preferred-ED metadata and a bounded By stream query");
+assert.match(appSource, /function facilityOverviewPreferredFacilityFromEvents[\s\S]*sole-current-week-facility[\s\S]*active-shift[\s\S]*today-next-shift[\s\S]*next-shift/, "At a glance should choose the preferred ED from the already-loaded calendar events");
+assert.match(appSource, /function openFacilityOverview[\s\S]*refreshFacilityOverviewPreferredFacility[\s\S]*facilityOverviewSection\?\.classList\.remove\("hidden"\)[\s\S]*loadFacilityOverviewOnShift/, "At a glance should render before loading its On shift request");
+assert.match(appSource, /function toggleFacilityOverview[\s\S]*facilityOverviewNavigationLocked[\s\S]*openFacilityOverview/, "At a glance navigation should ignore duplicate opening clicks");
+assert.match(appSource, /function openFacilityOverviewByStream[\s\S]*Loading available streams[\s\S]*loadFacilityOverviewMetadata[\s\S]*loadFacilityOverviewByStream/, "By stream should fetch its catalogue only when that tab is opened");
+assert.match(stateSource, /action === "queryFacilityOverviewMetadata"[\s\S]*const catalog = await queryFacilityOverviewRange[\s\S]*action === "queryFacilityOverviewByStream"/, "The metadata API should fetch only the lazy By stream catalogue");
+const facilityOverviewEventHelpers = appSource.match(/function eventRosterDateKey[\s\S]*?(?=\nfunction filterWhenInsightEvents)/)?.[0] || "";
+const facilityOverviewDateHelpers = appSource.match(/function parseDateOnly[\s\S]*?(?=\nfunction formatLongDate)/)?.[0] || "";
+const facilityOverviewPreferredHelper = appSource.match(/function facilityOverviewMelbourneClock[\s\S]*?(?=\nfunction refreshFacilityOverviewPreferredFacility)/)?.[0] || "";
+assert.ok(facilityOverviewEventHelpers && facilityOverviewDateHelpers && facilityOverviewPreferredHelper, "At a glance preferred-ED helper dependencies should be available for behavioural tests");
+const resolvePreferredFacility = new Function(`${facilityOverviewEventHelpers}\n${facilityOverviewDateHelpers}\n${facilityOverviewPreferredHelper}\nreturn facilityOverviewPreferredFacilityFromEvents;`)();
+const preferredShift = (source, start, end, title = `${source}: Shift`) => ({ source, title, start, end });
+const preferredNow = new Date("2026-08-10T00:00:00Z"); // Monday 10:00 in Melbourne.
+assert.deepEqual(
+  resolvePreferredFacility([
+    preferredShift("ddh", "2026-08-11T07:30:00", "2026-08-11T15:30:00"),
+    preferredShift("ddh", "2026-08-13T07:30:00", "2026-08-13T15:30:00"),
+  ], { today: "2026-08-10", now: preferredNow }),
+  { facilityKey: "DDH", reason: "sole-current-week-facility", evidenceDate: "2026-08-11" },
+  "one current-week facility should be selected without querying metadata",
+);
+assert.deepEqual(
+  resolvePreferredFacility([
+    preferredShift("mmc", "2026-08-11T07:30:00", "2026-08-11T15:30:00"),
+    preferredShift("ddh", "2026-08-12T07:30:00", "2026-08-12T15:30:00"),
+  ], { today: "2026-08-11", now: preferredNow }),
+  { facilityKey: "MMC", reason: "active-shift", evidenceDate: "2026-08-11" },
+  "an active shift should win when more than one ED is rostered this week",
+);
+assert.deepEqual(
+  resolvePreferredFacility([
+    preferredShift("mmc", "2026-08-10T15:00:00", "2026-08-10T23:00:00"),
+    preferredShift("ddh", "2026-08-11T07:30:00", "2026-08-11T15:30:00"),
+  ], { today: "2026-08-10", now: preferredNow }),
+  { facilityKey: "MMC", reason: "today-next-shift", evidenceDate: "2026-08-10" },
+  "a later shift today should win over a later shift this week",
+);
+assert.deepEqual(
+  resolvePreferredFacility([
+    preferredShift("ddh", "2026-08-12T07:30:00", "2026-08-12T15:30:00"),
+    preferredShift("mmc", "2026-08-13T07:30:00", "2026-08-13T15:30:00"),
+  ], { today: "2026-08-10", now: preferredNow }),
+  { facilityKey: "DDH", reason: "next-shift", evidenceDate: "2026-08-12" },
+  "the next shift should be selected when there is no rostered shift today",
+);
+assert.deepEqual(
+  resolvePreferredFacility([
+    preferredShift("ddh", "2026-08-17T07:30:00", "2026-08-17T15:30:00"),
+  ], { today: "2026-08-10", now: preferredNow }),
+  { facilityKey: "DDH", reason: "next-shift", evidenceDate: "2026-08-17" },
+  "the next shift should be used when no shift occurs in the current week",
+);
+assert.deepEqual(
+  resolvePreferredFacility([
+    preferredShift("ddh", "2026-08-11T07:30:00", "2026-08-11T15:30:00", "DDH: Annual leave"),
+  ], { today: "2026-08-10", now: preferredNow, linkedSourceTypes: ["mch"] }),
+  { facilityKey: "MCH", reason: "sole-or-first-linked-facility", evidenceDate: "2026-08-10" },
+  "leave should not determine the preferred ED",
+);
 assert.match(d1CalendarSource, /export async function queryFacilityOverviewRange[\s\S]*roster_events\.source_type IN[\s\S]*roster_events\.start_date >= \?/, "By stream should query the requested EDs and date range in one database operation");
 assert.match(styleSource, /\.facility-overview-by-stream \{[\s\S]*grid-template-columns:[\s\S]*\.facility-overview-by-stream-selectors \{[\s\S]*position: sticky[\s\S]*@media \(max-width: 900px\)[\s\S]*\.facility-overview-by-stream \{[\s\S]*grid-template-columns: 1fr/, "By stream should use a desktop selector rail and stack it on narrow screens");
 assert.match(appSource, /Each row is one result lane[\s\S]*selected\.length > 1[\s\S]*facility-overview-by-stream-comparison-day-grid[\s\S]*facility-overview-by-stream-comparison-head-grid/, "By stream should render aligned comparison lanes for multiple selected streams");
