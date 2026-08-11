@@ -208,6 +208,49 @@ const findmyshiftFormData = new FormData();
 findmyshiftFormData.append("rosterFiles", workbookFile(findmyshiftWorkbook, "Dandenong-FindMyShift-fixture.xlsx"));
 const findmyshiftUpload = await parseUploadForm(new Request("http://fixture.test/api/analyze", { method: "POST", body: findmyshiftFormData }));
 const findmyshiftSource = findmyshiftUpload.sources.ddh[0];
+const ddhCanonicalLabels = ["Orange PM (on-call)", "SSU SMS", "Orange IC", "Silver IC", "PM FAST IC"];
+const ddhCanonicalTitles = ["DDH: Orange PM", "DDH: SSU", "DDH: Orange", "DDH: Silver", "DDH: FAST PM"];
+const ddhCanonicalManualWorkbook = XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(ddhCanonicalManualWorkbook, XLSX.utils.aoa_to_sheet([
+  ["", "Mon. Aug. 03, 2026", "Tue. Aug. 04, 2026", "Wed. Aug. 05, 2026", "Thu. Aug. 06, 2026", "Fri. Aug. 07, 2026", "Sat. Aug. 08, 2026", "Sun. Aug. 09, 2026"],
+  ["SENIOR MEDICAL STAFF", "", "", "", "", "", "", ""],
+  ["Canonical DDH Doctor", ...ddhCanonicalLabels, "", ""],
+  ["", "08:00-17:00", "08:00-17:00", "08:00-17:00", "08:00-17:00", "08:00-17:00", "", ""],
+]), "Sheet1");
+const ddhCanonicalAutoWorkbook = XLSX.read(findmyshiftRowsWorkbook(ddhCanonicalLabels.map((label, index) => ({
+  name: "Canonical DDH Doctor",
+  seniority: "SMS",
+  date: `2026-08-0${index + 3}`,
+  label,
+  start: "08:00",
+  end: "17:00",
+  facility: "",
+  comment: "",
+}))), { type: "array", cellDates: true });
+const ddhCanonicalAutoFormData = new FormData();
+ddhCanonicalAutoFormData.append("rosterFiles", workbookFile(ddhCanonicalAutoWorkbook, "Dandenong-FindMyShift-canonical-labels.xlsx"));
+const ddhCanonicalAutoUpload = await parseUploadForm(new Request("http://fixture.test/api/analyze", { method: "POST", body: ddhCanonicalAutoFormData }));
+assert.deepEqual(
+  buildRosterView([], ddhCanonicalManualWorkbook, "CANONICAL DDH DOCTOR").events.map((event) => event.title),
+  ddhCanonicalTitles,
+  "manual DDH shift-code normalization should retain the approved canonical labels",
+);
+assert.deepEqual(
+  buildRosterView([], ddhCanonicalAutoUpload.sources.ddh, "CANONICAL DDH DOCTOR").events.map((event) => event.title),
+  ddhCanonicalTitles,
+  "timed FindMyShift shifts should use the same DDH shift-code normalization as manual rosters",
+);
+const ddhCanonicalAutomatedPayload = await buildAutomatedDerivedRosterPayload({
+  file: workbookFile(ddhCanonicalAutoWorkbook, "Dandenong-FindMyShift-canonical-labels.xlsx"),
+  sourceId: "dandenong-findmyshift",
+  contentHash: "findmyshift-canonical-labels-content-hash",
+  providerVersion: "2026-08-11T00:00:00.000Z",
+});
+assert.deepEqual(
+  ddhCanonicalAutomatedPayload.eventsByDoctor["CANONICAL DDH DOCTOR"].map((event) => event.title),
+  ddhCanonicalTitles,
+  "automated FindMyShift processing should retain the canonical DDH shift-code labels",
+);
 const unknownInternWorkbook = XLSX.read(findmyshiftRowsWorkbook([{
   name: "Pranay Pius",
   seniority: "Unknown",

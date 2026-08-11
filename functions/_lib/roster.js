@@ -1498,15 +1498,19 @@ function parseFindmyshiftDdhRecords(workbook, doctorKey) {
     const comment = cleanText(rawComment);
     let record;
     if (startHm && endHm) {
+      const resolved = label.toUpperCase() === "SHIFT" ? null : resolveDdhShiftLabel(label, seniority);
+      if (resolved?.normalized?.includeAsShift === false) continue;
       const titleParts = label.toUpperCase() === "SHIFT"
-        ? findmyshiftTimedShiftTitleParts(facility, startHm)
-        : { base: label, period: "", suffix: "" };
+        ? findmyshiftTimedShiftTitleParts(facility, startHm, seniority)
+        : resolved?.normalized?.titleParts || { base: label, period: "", suffix: "" };
       record = createTimedRecord("DDH", day, label, {
-        kind: "shift",
+        kind: resolved?.normalized?.kind || "shift",
         titleParts,
         startHm,
         endHm,
         location: facility || DDH_LOCATION,
+        status: resolved?.normalized?.status,
+        warning: resolved?.normalized?.warning,
         seniority,
       });
     } else {
@@ -1536,13 +1540,12 @@ function findmyshiftDdhSeniority(rawSeniority, label) {
   return supplied;
 }
 
-function findmyshiftTimedShiftTitleParts(facility, startHm) {
+function findmyshiftTimedShiftTitleParts(facility, startHm, seniority) {
   const value = cleanText(facility);
   if (!value) return genericTimeOnlyShiftTitleParts(startHm, "DDH");
-  const normalized = normalizeDdhLabel(value) || normalizeGenericDdhLabel(value);
+  const normalized = resolveDdhShiftLabel(value, seniority)?.normalized;
   if (normalized?.titleParts?.base) {
-    const parts = normalized.titleParts;
-    return parts.period ? parts : { ...parts, period: inferGenericTimeOnlyShiftPeriod(startHm, "DDH") };
+    return normalized.titleParts;
   }
   return { base: value, period: inferGenericTimeOnlyShiftPeriod(startHm, "DDH"), suffix: "" };
 }
@@ -1673,8 +1676,8 @@ function parseDdhEntry(day, label, timeText, seniority = UNKNOWN_SENIORITY) {
   }
   if (shouldIgnoreDdh(label) || shouldIgnoreCommon(label)) return null;
 
-  const mapped = DDH_LABEL_MAP[label] || label;
-  const normalized = findManualParserRule("DDH", seniority, mapped) || normalizeDdhLabel(mapped) || normalizeGenericDdhLabel(mapped);
+  const resolved = resolveDdhShiftLabel(label, seniority);
+  const { mapped, normalized } = resolved;
   if (!normalized) {
     return createUnknownRecord("DDH", day, label, "DDH shift label not recognised.", seniority);
   }
@@ -2523,6 +2526,12 @@ function inferMmcTimeOnlyShiftLabel(startHm) {
   if (hour >= 22 || hour < 6) return "Night";
   if (hour >= 14) return "PM";
   return "AM";
+}
+
+function resolveDdhShiftLabel(label, seniority = UNKNOWN_SENIORITY) {
+  const mapped = DDH_LABEL_MAP[label] || label;
+  const normalized = findManualParserRule("DDH", seniority, mapped) || normalizeDdhLabel(mapped) || normalizeGenericDdhLabel(mapped);
+  return { mapped, normalized };
 }
 
 function normalizeDdhLabel(label) {
