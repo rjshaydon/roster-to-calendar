@@ -562,9 +562,7 @@ facilityOverviewSection?.addEventListener("click", (event) => {
     if (facilityOverviewState.tab === "staff") return;
     if (facilityOverviewState.tab === "by-stream") {
       const today = formatDateKey(new Date());
-      facilityOverviewState.byStreamFrom = today;
-      facilityOverviewState.byStreamTo = today;
-      void loadFacilityOverviewByStream();
+      void setFacilityOverviewByStreamRange({ from: today, to: today });
       return;
     }
     clearFacilityOverviewStaffMultiSelect({ render: false });
@@ -952,14 +950,7 @@ facilityOverviewSection?.addEventListener("change", (event) => {
   if (byStreamDate) {
     const field = byStreamDate.dataset.facilityOverviewByStreamDate;
     const value = String(byStreamDate.value || "").slice(0, 10);
-    if (field === "from") {
-      facilityOverviewState.byStreamFrom = value;
-      if (facilityOverviewState.byStreamTo && facilityOverviewState.byStreamTo < value) facilityOverviewState.byStreamTo = value;
-    } else if (field === "to") {
-      facilityOverviewState.byStreamTo = value;
-      if (facilityOverviewState.byStreamFrom && facilityOverviewState.byStreamFrom > value) facilityOverviewState.byStreamFrom = value;
-    }
-    void loadFacilityOverviewByStream();
+    void setFacilityOverviewByStreamRange(field === "from" ? { from: value } : { to: value });
     return;
   }
   const byStreamRow = event.target.closest("[data-facility-overview-by-stream-row]");
@@ -8890,7 +8881,7 @@ function renderFacilityOverviewHeader() {
         <strong>${escapeHtml(displayName)}</strong>
       </div>
       <div class="preview-toolbar">
-        <div class="preview-range-controls facility-overview-range-controls" aria-label="Calendar range; unavailable in At a glance">
+        <div class="preview-range-controls facility-overview-range-controls" aria-label="${byStreamView ? "By stream date range" : "Calendar range; unavailable in At a glance"}">
           ${staffView ? `
             <button type="button" class="button button-secondary preview-today-button" data-facility-overview-today disabled aria-disabled="true">Today</button>
             ${hasPrevious ? `<button type="button" class="button button-secondary" data-facility-overview-staff-term-step="-1" aria-label="Previous term">‹</button>` : ""}
@@ -8900,7 +8891,11 @@ function renderFacilityOverviewHeader() {
               </select>
             </label>
             ${hasNext ? `<button type="button" class="button button-secondary" data-facility-overview-staff-term-step="1" aria-label="Next term">›</button>` : ""}
-          ` : togetherView ? `<span class="facility-overview-header-note">Compare staff rosters</span>` : byStreamView ? `<span class="facility-overview-header-note">Compare stream coverage</span>` : `
+          ` : togetherView ? `<span class="facility-overview-header-note">Compare staff rosters</span>` : byStreamView ? `
+            <label class="preview-range-input-control"><span class="preview-range-label">From</span><input type="date" class="preview-range-button preview-range-date-input" value="${escapeHtml(facilityOverviewState.byStreamFrom)}" data-facility-overview-by-stream-date="from"></label>
+            <label class="preview-range-input-control"><span class="preview-range-label">To</span><input type="date" class="preview-range-button preview-range-date-input" value="${escapeHtml(facilityOverviewState.byStreamTo)}" data-facility-overview-by-stream-date="to"></label>
+            <button type="button" class="button button-secondary preview-today-button" data-facility-overview-today>Today</button>
+          ` : `
             <span class="preview-range-label">From</span><button type="button" class="preview-range-button" disabled>${escapeHtml(start ? formatDate(start) : "Set date")}</button>
             <span class="preview-range-label">To</span><button type="button" class="preview-range-button" disabled>${escapeHtml(end ? formatDate(end) : "Set date")}</button>
             <button type="button" class="button button-secondary preview-today-button" data-facility-overview-today>Today</button>
@@ -8973,6 +8968,18 @@ function facilityOverviewByStreamDates() {
   if (!start || !end || end < start) return dates;
   for (let date = parseDateOnly(start); formatDateKey(date) <= end; date = addDays(date, 1)) dates.push(formatDateKey(date));
   return dates;
+}
+
+function setFacilityOverviewByStreamRange({ from, to } = {}) {
+  let nextFrom = String(from ?? facilityOverviewState.byStreamFrom ?? "").slice(0, 10);
+  let nextTo = String(to ?? facilityOverviewState.byStreamTo ?? "").slice(0, 10);
+  if (nextFrom && nextTo && nextFrom > nextTo) {
+    if (from != null) nextTo = nextFrom;
+    else nextFrom = nextTo;
+  }
+  facilityOverviewState.byStreamFrom = nextFrom;
+  facilityOverviewState.byStreamTo = nextTo;
+  return loadFacilityOverviewByStream();
 }
 
 function facilityOverviewByStreamRangeLabel() {

@@ -2449,8 +2449,20 @@ input[type="color"] {
   gap: 8px;
 }
 
+.preview-range-input-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .preview-term-start-select {
   padding-right: 30px;
+}
+
+.preview-range-date-input {
+  appearance: auto;
+  min-width: 142px;
+  cursor: pointer;
 }
 
 .preview-range-button:hover,
