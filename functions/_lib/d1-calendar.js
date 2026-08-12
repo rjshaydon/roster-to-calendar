@@ -6,6 +6,7 @@ import {
 } from "./roster.js";
 
 const SOURCE_TYPES = ["mmc", "ddh", "casey", "mch"];
+export const ROSTER_PARSER_VERSION = "manual-core-v1";
 const ensuredCalendarDbs = new WeakSet();
 const pendingCalendarSchemaEnsures = new WeakMap();
 
@@ -434,6 +435,7 @@ async function ensureCalendarSchemaUncached(db) {
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_sync_runs_source_hash ON roster_sync_runs (source_id, content_hash, status)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_dispatches_status_retry ON roster_dispatches (status, retry_after DESC)").run();
   await ensureColumn(db, "roster_files", "source_id", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn(db, "roster_files", "parser_version", `TEXT NOT NULL DEFAULT '${ROSTER_PARSER_VERSION}'`);
   await ensureColumn(db, "roster_sources", "provider_version", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn(db, "roster_sources", "provider_modified_at", "TEXT NOT NULL DEFAULT ''");
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_snapshot_registry_owner ON snapshot_registry (owner_type, owner_id, updated_at DESC)").run();

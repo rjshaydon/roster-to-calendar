@@ -34,3 +34,5 @@ CREATE TABLE IF NOT EXISTS account_people (
   FOREIGN KEY (person_id) REFERENCES roster_people(person_id)
 );
 CREATE INDEX IF NOT EXISTS idx_account_people_person ON account_people (person_id);
+
+ALTER TABLE roster_files ADD COLUMN parser_version TEXT NOT NULL DEFAULT 'manual-core-v1';

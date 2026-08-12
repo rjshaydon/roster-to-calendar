@@ -3161,7 +3161,7 @@ class MemoryD1Statement {
     const args = this.args;
     if (sql.startsWith("PRAGMA table_info(roster_files)")) {
       return {
-        results: ["id", "name", "source_type", "source_id", "active", "size", "last_modified", "added_at", "uploaded_at", "uploaded_by", "parsed_at"].map((name) => ({ name })),
+        results: ["id", "name", "source_type", "source_id", "active", "size", "last_modified", "added_at", "uploaded_at", "uploaded_by", "parsed_at", "parser_version"].map((name) => ({ name })),
       };
     }
     if (sql.startsWith("PRAGMA table_info(roster_file_doctors)")) {

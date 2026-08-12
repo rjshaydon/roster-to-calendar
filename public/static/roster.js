@@ -302,6 +302,25 @@ export async function parseUploadForm(request) {
   };
 }
 
+// Server-side retained-source rebuilding uses the same parser. This remains a
+// thin transport adapter: roster interpretation stays in this module.
+export async function buildRosterViewFromStoredImports(imports, doctorKey, settings = DEFAULT_SETTINGS, overrides = {}, conflictSelections = {}, doctorAliases = []) {
+  const sources = { mmc: [], ddh: [], casey: [], mch: [] };
+  for (const item of Array.isArray(imports) ? imports : []) {
+    if (!item?.dataUrl) continue;
+    const workbook = await readWorkbookDataUrl(item.dataUrl, item.name || "roster.xlsx");
+    const sourceType = String(item.sourceType || detectSourceType(workbook, item.name || "roster.xlsx")).toLowerCase();
+    if (!isRosterSourceType(sourceType)) continue;
+    sources[sourceType].push({
+      id: String(item.id || item.repoId || hashString(`${item.name || "import"}|${item.lastModified || 0}`)),
+      addedAt: String(item.addedAt || ""),
+      file: { name: String(item.name || "roster.xlsx"), size: Number(item.size || 0), lastModified: Number(item.lastModified || 0) },
+      workbook,
+    });
+  }
+  return buildRosterView(sources.mmc, sources.ddh, doctorKey, settings, overrides, conflictSelections, doctorAliases, sources.casey, sources.mch);
+}
+
 export function doctorOptions(mmcSources, ddhSources, caseySources = [], mchSources = []) {
   const mmcEntries = normalizeSourceEntries(mmcSources);
   const ddhEntries = normalizeSourceEntries(ddhSources);
