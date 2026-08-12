@@ -47,6 +47,7 @@ import {
   queryClaimedAccounts,
   queryDoctorProfileMirrors,
   queryDoctorEvents,
+  dedupeEventsByIdentity,
   queryDoctorIssues,
   queryAccountCustomEvents,
   queryCanonicalDoctors,
@@ -3680,17 +3681,27 @@ async function buildDerivedAccountSnapshot(db, context) {
     selectedSourceTypes = doctor?.sourceTypes || [doctor?.sourceType].filter(Boolean);
   } else {
     if (!claims.length) return null;
-    const groupedClaims = buildCreatorDoctorOptions(claims.map((claim) => ({
+    const requestedKey = normalizeRosterName(context.doctorKey || state.session?.doctorKey || "");
+    // Claims are account-owned aliases, not mutually exclusive doctor-picker
+    // choices.  A spelling variant at another site must therefore contribute
+    // to the same calendar even when canonical cache grouping is stale.
+    const aliases = claims.map((claim) => ({
       key: claim.key,
       displayName: claim.displayName,
       sourceType: claim.sourceType,
-    })));
-    const requestedKey = normalizeRosterName(context.doctorKey || state.session?.doctorKey || "");
-    const selectedClaimOption = findDoctorOptionByKey(groupedClaims, requestedKey) || groupedClaims[0];
-    selectedKey = selectedClaimOption?.key || claims[0].key;
-    doctorKeys = doctorKeysForOption(selectedClaimOption);
-    doctorOptions = groupedClaims;
-    selectedSourceTypes = selectedClaimOption?.sourceTypes || [selectedClaimOption?.sourceType].filter(Boolean);
+    }));
+    const selectedClaim = aliases.find((claim) => normalizeRosterName(claim.key) === requestedKey) || aliases[0];
+    selectedKey = selectedClaim?.key || claims[0].key;
+    doctorKeys = [...new Set(claims.map((claim) => normalizeRosterName(claim.key)).filter(Boolean))];
+    doctorOptions = [{
+      key: selectedKey,
+      displayName: String(context.record?.realName || selectedClaim?.displayName || selectedKey).trim(),
+      sourceType: selectedClaim?.sourceType || "",
+      sourceTypes: [...new Set(aliases.map((alias) => alias.sourceType))],
+      aliases,
+      hasEvents: true,
+    }];
+    selectedSourceTypes = doctorOptions[0].sourceTypes;
   }
   const session = state.session && typeof state.session === "object" ? state.session : {};
   const normalizedSession = {
@@ -3733,13 +3744,16 @@ async function buildDerivedAccountSnapshot(db, context) {
     normalizedSession.overrides || {},
   );
   const events = [
-    ...resolvedRosterEvents,
+    ...dedupeEventsByIdentity(resolvedRosterEvents),
     ...customEventsToEvents(latestCustomEventsByIdentity([
       ...sanitizeSnapshotCustomEvents(normalizedSession.customEvents, context.record.email),
       ...d1CustomEvents,
     ]), settings, resolvedRosterEvents),
   ];
-  if (!events.length) return null;
+  // An empty claimed account is still a D1 account calendar. Returning an
+  // empty snapshot avoids the browser incorrectly asking it to re-upload
+  // server-retained roster files.
+  if (!events.length && (role === "creator" || role === "owner")) return null;
   const stateFileRefs = sanitizeSnapshotFileRefs(state.imports);
   const snapshotFileRefs = role === "creator" || role === "owner"
     ? stateFileRefs

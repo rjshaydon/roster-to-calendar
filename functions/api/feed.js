@@ -1,5 +1,5 @@
 import { applyEventOverrides, customEventsToEvents, defaultSettings, exportIcs } from "../_lib/roster.js";
-import { applyAccountHospitalLocations, hasCalendarDb, loadAccountHospitalLocations, loadAccountMirrorBySubscriptionToken, queryAccountCustomEvents, queryDoctorEvents } from "../_lib/d1-calendar.js";
+import { applyAccountHospitalLocations, dedupeEventsByIdentity, hasCalendarDb, loadAccountHospitalLocations, loadAccountMirrorBySubscriptionToken, queryAccountCustomEvents, queryDoctorEvents } from "../_lib/d1-calendar.js";
 import { normalizeEmail } from "./state.js";
 
 export async function onRequestGet(context) {
@@ -36,9 +36,9 @@ async function buildD1SubscriptionFeed(db, record, view) {
   const role = record?.role || "";
   const claims = sanitizeClaims(record.claims);
   const session = record?.state?.session && typeof record.state.session === "object" ? record.state.session : {};
-  const doctorKeys = (role === "creator" || role === "owner")
+  const doctorKeys = [...new Set((role === "creator" || role === "owner")
     ? [String(session.doctorKey || "").trim()].filter(Boolean)
-    : claims.map((claim) => claim.key);
+    : claims.map((claim) => claim.key))];
   if (!doctorKeys.length) return null;
   const settings = {
     ...defaultSettings(),
@@ -49,10 +49,10 @@ async function buildD1SubscriptionFeed(db, record, view) {
     ? { startDate: range.startDate, endDate: range.allFuture ? "9999-12-31" : range.endDate || range.startDate }
     : {};
   const hospitalLocations = await loadAccountHospitalLocations(db, record.email, session).catch(() => null);
-  const rosterEvents = applyEventOverrides(
+  const rosterEvents = dedupeEventsByIdentity(applyEventOverrides(
     applyAccountHospitalLocations(await queryDoctorEvents(db, doctorKeys, queryOptions), hospitalLocations || {}, { includeLocations: settings.includeLocations !== false }),
     session.overrides || {},
-  );
+  ));
   const d1CustomEvents = await queryAccountCustomEvents(db, record.email).catch(() => []);
   const customEvents = customEventsToEvents(latestCustomEventsByIdentity([
     ...sanitizeCustomEvents(session.customEvents, record.email),
