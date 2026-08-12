@@ -2598,6 +2598,9 @@ class MemoryD1 {
     this.rosterDispatches = new Map();
     this.accountProfiles = new Map();
     this.accountClaims = new Map();
+    this.rosterPeople = new Map();
+    this.rosterPersonAliases = new Map();
+    this.accountPeople = new Map();
     this.accountStates = new Map();
     this.accountHospitalLocations = new Map();
     this.canonicalDoctors = new Map();
@@ -2632,6 +2635,9 @@ class MemoryD1 {
       "rosterDispatches",
       "accountProfiles",
       "accountClaims",
+      "rosterPeople",
+      "rosterPersonAliases",
+      "accountPeople",
       "accountStates",
       "accountHospitalLocations",
       "canonicalDoctors",
@@ -3002,6 +3008,19 @@ class MemoryD1Statement {
           updated_at: args[index + 5],
         });
       }
+      return { success: true };
+    }
+    if (sql.startsWith("INSERT INTO roster_people")) {
+      const previous = this.db.rosterPeople.get(args[0]) || {};
+      this.db.rosterPeople.set(args[0], { ...previous, person_id: args[0], preferred_display_name: args[1] || previous.preferred_display_name || "", updated_at: args[3] });
+      return { success: true };
+    }
+    if (sql.startsWith("INSERT INTO account_people")) {
+      this.db.accountPeople.set(args[0], { email: args[0], person_id: args[1], created_at: args[2], updated_at: args[3] });
+      return { success: true };
+    }
+    if (sql.startsWith("INSERT INTO roster_person_aliases")) {
+      this.db.rosterPersonAliases.set(`${args[0]}|${args[1]}`, { source_type: args[0], doctor_key: args[1], display_name: args[2], person_id: args[3], updated_at: args[5] });
       return { success: true };
     }
     if (sql.startsWith("INSERT INTO account_states")) {
@@ -3760,6 +3779,9 @@ class MemoryD1Statement {
   async first() {
     const sql = this.sql;
     const args = this.args;
+    if (sql.startsWith("SELECT person_id FROM roster_person_aliases")) {
+      return this.db.rosterPersonAliases.get(`${args[0]}|${args[1]}`) || null;
+    }
     if (sql.startsWith("SELECT * FROM roster_sources WHERE id = ?")) {
       return this.db.rosterSources.get(args[0]) || null;
     }

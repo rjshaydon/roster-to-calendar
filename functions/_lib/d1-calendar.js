@@ -203,6 +203,27 @@ async function ensureCalendarSchemaUncached(db) {
   `).run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_account_claims_doctor ON account_claims (source_type, doctor_key)").run();
   await db.prepare(`
+    CREATE TABLE IF NOT EXISTS roster_people (
+      person_id TEXT PRIMARY KEY, preferred_display_name TEXT NOT NULL DEFAULT '',
+      provenance TEXT NOT NULL DEFAULT 'automatic', review_state TEXT NOT NULL DEFAULT 'approved',
+      created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT '', approved_by TEXT NOT NULL DEFAULT ''
+    )
+  `).run();
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS roster_person_aliases (
+      source_type TEXT NOT NULL, doctor_key TEXT NOT NULL, display_name TEXT NOT NULL DEFAULT '', person_id TEXT NOT NULL,
+      provenance TEXT NOT NULL DEFAULT 'automatic', confidence TEXT NOT NULL DEFAULT 'high', review_state TEXT NOT NULL DEFAULT 'approved',
+      created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT '', approved_by TEXT NOT NULL DEFAULT '',
+      PRIMARY KEY (source_type, doctor_key)
+    )
+  `).run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_person_aliases_person ON roster_person_aliases (person_id)").run();
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS account_people (
+      email TEXT PRIMARY KEY, person_id TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT ''
+    )
+  `).run();
+  await db.prepare(`
     CREATE TABLE IF NOT EXISTS account_states (
       email TEXT PRIMARY KEY,
       session_json TEXT NOT NULL DEFAULT '{}',
@@ -2377,6 +2398,9 @@ export async function upsertAccountMirror(db, record, options = {}) {
     `).bind(String(record.subscriptionToken || ""), email, String(record.createdAt || updatedAt), updatedAt).run();
   }
   const claims = sanitizeAccountClaims(record.claims);
+  // A claimed account is a reviewed identity boundary. Seed only its explicit
+  // source/key claims; ambiguous names are never inferred here.
+  await ensureAccountPersonAliases(db, email, record.realName, claims);
   for (const chunk of chunkRowsForBindLimit(claims.map((claim) => [
     email,
     claim.sourceType,
@@ -2411,6 +2435,56 @@ export async function upsertAccountMirror(db, record, options = {}) {
   }
   await upsertAccountHospitalLocations(db, email, hospitalLocationsFromSession(record?.state?.session), { preserveExisting: preserveExistingState });
   return true;
+}
+
+export async function ensureAccountPersonAliases(db, email, preferredDisplayName, claims = []) {
+  if (!db?.prepare || !email) return null;
+  let personId = `account:${normalizeEmail(email)}`;
+  const now = new Date().toISOString();
+  // Legacy records may already contain the same approved claim on more than
+  // one account. Keep those records readable by joining their existing person;
+  // new conflicting claims continue to be rejected by the claim endpoint.
+  for (const claim of sanitizeAccountClaims(claims)) {
+    const existing = await db.prepare("SELECT person_id FROM roster_person_aliases WHERE source_type = ? AND doctor_key = ?").bind(claim.sourceType, claim.key).first();
+    if (existing?.person_id) {
+      personId = String(existing.person_id);
+      break;
+    }
+  }
+  await db.prepare(`
+    INSERT INTO roster_people (person_id, preferred_display_name, provenance, review_state, created_at, updated_at)
+    VALUES (?, ?, 'automatic', 'approved', ?, ?)
+    ON CONFLICT(person_id) DO UPDATE SET preferred_display_name = CASE WHEN excluded.preferred_display_name <> '' THEN excluded.preferred_display_name ELSE roster_people.preferred_display_name END, updated_at = excluded.updated_at
+  `).bind(personId, String(preferredDisplayName || ""), now, now).run();
+  await db.prepare(`
+    INSERT INTO account_people (email, person_id, created_at, updated_at)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(email) DO UPDATE SET person_id = excluded.person_id, updated_at = excluded.updated_at
+  `).bind(normalizeEmail(email), personId, now, now).run();
+  for (const claim of sanitizeAccountClaims(claims)) {
+    const existing = await db.prepare("SELECT person_id FROM roster_person_aliases WHERE source_type = ? AND doctor_key = ?").bind(claim.sourceType, claim.key).first();
+    if (existing?.person_id && existing.person_id !== personId) continue;
+    await db.prepare(`
+      INSERT INTO roster_person_aliases (source_type, doctor_key, display_name, person_id, provenance, confidence, review_state, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 'automatic', 'high', 'approved', ?, ?)
+      ON CONFLICT(source_type, doctor_key) DO UPDATE SET display_name = excluded.display_name, updated_at = excluded.updated_at
+    `).bind(claim.sourceType, claim.key, claim.displayName, personId, now, now).run();
+  }
+  return personId;
+}
+
+export async function queryPersonAliasesForAccount(db, email) {
+  if (!db?.prepare || !email) return [];
+  await ensureCalendarSchema(db);
+  const rows = await db.prepare(`
+    SELECT aliases.source_type, aliases.doctor_key, aliases.display_name, aliases.provenance, aliases.confidence, aliases.review_state, aliases.updated_at
+    FROM account_people accounts INNER JOIN roster_person_aliases aliases ON aliases.person_id = accounts.person_id
+    WHERE accounts.email = ? ORDER BY aliases.source_type, aliases.display_name
+  `).bind(normalizeEmail(email)).all();
+  return (rows.results || []).map((row) => ({
+    sourceType: String(row.source_type || ""), key: String(row.doctor_key || ""), displayName: String(row.display_name || ""),
+    provenance: String(row.provenance || ""), confidence: String(row.confidence || ""), reviewState: String(row.review_state || ""), updatedAt: String(row.updated_at || ""),
+  }));
 }
 
 export async function deleteAccountMirror(db, email) {
