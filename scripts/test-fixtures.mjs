@@ -2524,6 +2524,47 @@ assert.ok(defaultHmoView.events.some((event) => event.title === "DDH: Orange PM"
 const explicitHmoView = buildRosterView([], ddhDefaultTimesWorkbook, explicitHmo.key);
 assert.ok(explicitHmoView.events.some((event) => event.title === "DDH: Orange PM" && event.start.includes("16:00:00") && event.end.includes("23:00:00")));
 
+const ddhAccuracyWorkbook = XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(ddhAccuracyWorkbook, XLSX.utils.aoa_to_sheet([
+  ["", "Mon. Feb. 02, 2026", "Tue. Feb. 03, 2026", "Wed. Feb. 04, 2026", "Thu. Feb. 05, 2026", "Fri. Feb. 06, 2026", "Sat. Feb. 07, 2026", "Sun. Feb. 08, 2026"],
+  ["HMOS", "", "", "", "", "", "", ""],
+  ["Accuracy Doctor", "Night4", "Orange AM2", "Silver PM3", "AM Fast (1)", "HMO SSU PM", "Orientation 11-13", ""],
+  ["", "", "", "", "", "", "", ""],
+  ["Crisis Locum Doctor", "Crisis Locum", "OFF", "Sun", "", "", "", ""],
+  ["Sick Leave Doctor", "S\\L AM", "OFF", "Sun", "", "", "", ""],
+  ["Conference Leave Doctor", "CME 19hrs", "", "", "", "", "", ""],
+]), "Sheet1");
+const ddhAccuracyDoctors = doctorOptions([], ddhAccuracyWorkbook);
+const ddhAccuracyDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "ACCURACY DOCTOR");
+const crisisLocumDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "CRISIS LOCUM DOCTOR");
+const sickLeaveDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "SICK LEAVE DOCTOR");
+const conferenceLeaveDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "CONFERENCE LEAVE DOCTOR");
+assert.ok(ddhAccuracyDoctor && crisisLocumDoctor && sickLeaveDoctor && conferenceLeaveDoctor, "DDH accuracy fixtures should expose their rostered doctors");
+const ddhAccuracyView = buildRosterView([], ddhAccuracyWorkbook, ddhAccuracyDoctor.key);
+assert.deepEqual(
+  ddhAccuracyView.events.map((event) => [event.title, event.rawValue, event.timeLabel]),
+  [
+    ["DDH: Night", "Night4", "23:00-08:30"],
+    ["DDH: Orange AM", "Orange AM2", "08:00-18:00"],
+    ["DDH: Silver PM", "Silver PM3", "14:30-00:00"],
+    ["DDH: FAST AM", "AM Fast (1)", "08:00-18:00"],
+    ["DDH: SSU PM", "HMO SSU PM", "14:30-00:00"],
+    ["DDH: Orientation", "Orientation 11-13", "11:00-13:00"],
+  ],
+  "numbered DDH roster slots should be recognised and orientation should retain its times",
+);
+assert.equal(ddhAccuracyView.issues.length, 0, "recognised DDH slot variants should not remain unresolved");
+const crisisLocumView = buildRosterView([], ddhAccuracyWorkbook, crisisLocumDoctor.key);
+assert.deepEqual(
+  crisisLocumView.events.map((event) => [event.title, event.rawValue, event.allDay]),
+  [
+    ["DDH: Crisis Locum", "Crisis Locum", true],
+  ],
+  "Crisis Locum should be a conservative all-day shift while OFF and weekday annotations remain hidden",
+);
+assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, sickLeaveDoctor.key).events.map((event) => event.title), ["Sick leave"], "backslash sick-leave notation should be recognised");
+assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, conferenceLeaveDoctor.key).events.map((event) => event.title), ["Conference Leave"], "CME hour annotations should be recognised as conference leave");
+
 const mmcPdfBytes = await readFile(fileURLToPath(new URL("../fixtures/AdultMMCTerm2.2026.Ver1.pdf", import.meta.url)));
 const formData = new FormData();
 formData.append("rosterFiles", new File([mmcPdfBytes], "AdultMMCTerm2.2026.Ver1.pdf", { type: "application/pdf" }));

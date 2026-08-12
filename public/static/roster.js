@@ -96,6 +96,7 @@ const WEEKDAY_PREFIXES = ["Mon.", "Tue.", "Wed.", "Thu.", "Fri.", "Sat.", "Sun."
 const WEEKLY_LEAVE_LABELS = new Set(["ANNUAL LEAVE", "CONFERENCE LEAVE", "CME LEAVE", "CME/L"]);
 const IGNORED_EXACT = new Set([
   "",
+  "OFF",
   "AL",
   "A/L",
   "EXAM",
@@ -1631,6 +1632,8 @@ function parseMmcEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
   const upper = raw.toUpperCase();
   const leaveRecord = createRecognizedLeaveRecord("MMC", day, raw, seniority);
   if (leaveRecord) return leaveRecord;
+  const orientation = createOrientationRecord("MMC", day, raw, seniority);
+  if (orientation) return orientation;
   if (shouldIgnoreMmc(raw)) return null;
   if (upper === "PHNW") {
     return createAllDayRecord("MMC", day, raw, {
@@ -1702,6 +1705,8 @@ function parseDdhEntry(day, label, timeText, seniority = UNKNOWN_SENIORITY) {
   const upper = label.toUpperCase();
   const leaveRecord = createRecognizedLeaveRecord("DDH", day, label, seniority);
   if (leaveRecord) return leaveRecord;
+  const orientation = createOrientationRecord("DDH", day, label, seniority);
+  if (orientation) return orientation;
   if (upper === "AM" || upper === "PM") return null;
   if (upper === "PHNW" || upper === "PHNW CLINICAL") {
     return createAllDayRecord("DDH", day, label, {
@@ -1712,6 +1717,26 @@ function parseDdhEntry(day, label, timeText, seniority = UNKNOWN_SENIORITY) {
     });
   }
   if (shouldIgnoreDdh(label) || shouldIgnoreCommon(label)) return null;
+
+  if (/\bCRISIS\s+LOCUM\b/i.test(label)) {
+    const parsedTime = parseDdhTimeRow(timeText);
+    if (parsedTime) {
+      return createTimedRecord("DDH", day, label, {
+        kind: "shift",
+        titleParts: { base: "Crisis Locum", period: "", suffix: "" },
+        startHm: parsedTime[0],
+        endHm: parsedTime[1],
+        location: DDH_LOCATION,
+        seniority,
+      });
+    }
+    return createAllDayRecord("DDH", day, label, {
+      kind: "shift",
+      titleParts: { base: "Crisis Locum", period: "", suffix: "" },
+      location: DDH_LOCATION,
+      seniority,
+    });
+  }
 
   const resolved = resolveDdhShiftLabel(label, seniority);
   const { mapped, normalized } = resolved;
@@ -1767,6 +1792,7 @@ function inferDdhDefaultTimes(normalized, seniority = UNKNOWN_SENIORITY) {
   const base = String(normalized?.titleParts?.base || "").trim().toUpperCase();
   const explicitPeriod = String(normalized?.titleParts?.period || "").trim().toUpperCase();
   const period = explicitPeriod || (base === "SSU" ? "AM" : "");
+  if (base === "NIGHT" || base === "NIGHT SSU") return [[23, 0], [8, 30]];
   if (period === "AM") {
     if (base === "SSU") return [[7, 30], [17, 30]];
     if (seniority === "SMS" && base === "AVAO") return [[7, 30], [17, 0]];
@@ -1787,6 +1813,8 @@ function parseCaseyEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
   const upper = label.toUpperCase();
   const leaveRecord = createRecognizedLeaveRecord("Casey", day, label, seniority);
   if (leaveRecord) return leaveRecord;
+  const orientation = createOrientationRecord("Casey", day, label, seniority);
+  if (orientation) return orientation;
   if (upper === "PHNW") {
     return createAllDayRecord("Casey", day, label, {
       kind: "public_holiday",
@@ -1854,6 +1882,8 @@ function parseMchEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
       seniority,
     });
   }
+  const orientation = createOrientationRecord("MCH", day, label, seniority);
+  if (orientation) return orientation;
   if (shouldIgnoreMch(label) || shouldIgnoreCommon(label)) return null;
 
   if (upper.includes("EDO")) return null;
@@ -2111,12 +2141,16 @@ function leaveLabelCandidates(value) {
 }
 
 function normalizedLeaveLabel(value) {
-  return cleanText(value).replace(/\s+/g, " ").trim().toUpperCase();
+  return cleanText(value)
+    .replace(/S\s*[\\/.]\s*L/gi, "S/L")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toUpperCase();
 }
 
 function isConferenceLeaveLabel(value) {
   const upper = String(value || "").replace(/\s+/g, " ").trim().toUpperCase();
-  return /^(?:CONFERENCE(?:\s+LEAVE)?|CONF(?:\s+LEAVE)?|CME\s+LEAVE)(?:\s+(?:-|X)?\s*\d+(?:\.\d+)?\s*(?:HRS?|HOURS?|SHIFTS?))?$/.test(upper)
+  return /^(?:CONFERENCE(?:\s+LEAVE)?|CONF(?:\s+LEAVE)?|CME(?:\s+LEAVE)?)(?:\s+(?:-|X)?\s*\d+(?:\.\d+)?\s*(?:HRS?|HOURS?|SHIFTS?))?$/.test(upper)
     || /^(?:C\/L|CL|CME\/L)(?:\s+\d+(?:\.\d+)?\s*(?:HRS?|HOURS?))?$/.test(upper);
 }
 
@@ -2604,6 +2638,8 @@ function normalizeDdhLabel(label) {
 function normalizeGenericDdhLabel(label) {
   const cleaned = cleanDdhLabel(label);
   if (!cleaned) return null;
+  const recognisedSlot = normalizeDdhRosterSlotLabel(cleaned);
+  if (recognisedSlot) return recognisedSlot;
   const period = extractDdhPeriod(cleaned);
   const upper = cleaned.toUpperCase();
 
@@ -2629,6 +2665,52 @@ function normalizeGenericDdhLabel(label) {
   return null;
 }
 
+// DDH grids use a trailing number for parallel positions (for example,
+// "Orange AM2" or "Night4") and sometimes prefix the role. Those markers do
+// not alter the shift itself. Treat only these deliberately narrow forms as
+// known shifts; free-text notes remain visible as unresolved review items.
+function normalizeDdhRosterSlotLabel(value) {
+  const cleaned = String(value || "").replace(/\s+/g, " ").trim();
+  const upper = cleaned.toUpperCase();
+  if (!upper) return null;
+  if (/^NIGHT(?:\s+SSU)?$/.test(upper)) {
+    return {
+      kind: "shift",
+      titleParts: { base: upper.includes("SSU") ? "Night SSU" : "Night", period: "", suffix: "" },
+      status: "ok",
+      warning: "",
+    };
+  }
+  const period = extractDdhPeriod(upper);
+  const baseMatch = upper.match(/\b(ORANGE|SILVER|FAST|AVAO|ROVER|SSU)\b/);
+  if (baseMatch && (period || baseMatch[1] === "SSU")) {
+    const baseNames = {
+      ORANGE: "Orange",
+      SILVER: "Silver",
+      FAST: "FAST",
+      AVAO: "AVAO",
+      ROVER: "Rover",
+      SSU: "SSU",
+    };
+    return {
+      kind: "shift",
+      titleParts: { base: baseNames[baseMatch[1]], period, suffix: "" },
+      status: "ok",
+      warning: "",
+    };
+  }
+  const extra = upper.match(/^EXTRA(?:\s+(AVAO))?\s+(AM|PM)$/);
+  if (extra) {
+    return {
+      kind: "shift",
+      titleParts: { base: extra[1] ? "Extra AVAO" : "Extra", period: extra[2], suffix: "" },
+      status: "ok",
+      warning: "",
+    };
+  }
+  return null;
+}
+
 function genericUnknownDdhShift(titleParts) {
   return {
     kind: "shift",
@@ -2644,6 +2726,29 @@ function normalizeDdhLocation(label, normalized) {
   if (upper.includes("OFFSITE") || upper.includes("NOT ONSITE") || upper.includes("CS/OFF")) return "";
   if (normalized.titleParts.base === "CS onsite") return DDH_LOCATION;
   return DDH_LOCATION;
+}
+
+function createOrientationRecord(source, day, rawValue, seniority = UNKNOWN_SENIORITY) {
+  const label = String(rawValue || "").trim();
+  if (!/^ORIENTATION\b/i.test(label)) return null;
+  const range = label.match(/\b(\d{1,2})(?::?(\d{2}))?\s*(?:-|–|—|TO)\s*(\d{1,2})(?::?(\d{2}))?\b/i);
+  const location = source === "MMC" ? MMC_LOCATION
+    : source === "DDH" ? DDH_LOCATION
+      : source === "Casey" ? CASEY_LOCATION
+        : MCH_LOCATION;
+  const details = {
+    kind: "shift",
+    titleParts: { base: "Orientation", period: "", suffix: "" },
+    location,
+    seniority,
+  };
+  if (!range) return createAllDayRecord(source, day, rawValue, details);
+  const startHm = [Number(range[1]), Number(range[2] || 0)];
+  const endHm = [Number(range[3]), Number(range[4] || 0)];
+  if (startHm[0] > 23 || endHm[0] > 23 || startHm[1] > 59 || endHm[1] > 59) {
+    return createAllDayRecord(source, day, rawValue, details);
+  }
+  return createTimedRecord(source, day, rawValue, { ...details, startHm, endHm });
 }
 
 function cleanDdhLabel(label) {
