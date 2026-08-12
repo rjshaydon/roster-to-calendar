@@ -11,6 +11,25 @@ import { buildPreviewFromDerivedEvents, findRosterSyncByProviderVersion, storeCa
 import { recordRosterDispatchLifecycle, requestQueuedRosterProcessing } from "../functions/_lib/automation-dispatch.js";
 import { buildRosterView, customEventsToEvents, doctorOptions, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
 import { customEventsToEvents as serverCustomEventsToEvents } from "../functions/_lib/roster.js";
+import { parserResultDelta, unresolvedCodeSummary } from "./parser-parity.mjs";
+
+assert.deepEqual(
+  parserResultDelta(
+    { events: [{ title: "DDH" }], issues: [{ status: "unknown", source: "DDH", seniority: "HMO", rawValue: "X" }] },
+    { events: [{ title: "DDH" }], issues: [{ status: "unknown", source: "DDH", seniority: "HMO", rawValue: "X" }] },
+  ),
+  {},
+  "parser comparison helpers should report no delta for equivalent normalized output",
+);
+assert.deepEqual(
+  unresolvedCodeSummary([
+    { status: "unknown", source: "DDH", seniority: "HMO", rawValue: "X" },
+    { status: "unknown", source: "DDH", seniority: "HMO", rawValue: "X" },
+    { status: "resolved", source: "DDH", seniority: "HMO", rawValue: "Y" },
+  ]),
+  { occurrences: 2, distinctCodes: 1 },
+  "unknown-code reporting must distinguish occurrences from distinct codes",
+);
 
 function cloneWorkbook(workbook) {
   return XLSX.read(XLSX.write(workbook, { type: "array", bookType: "xlsx" }), { type: "array", cellDates: true });
