@@ -6,7 +6,9 @@ import {
 } from "./roster.js";
 
 const SOURCE_TYPES = ["mmc", "ddh", "casey", "mch"];
-export const ROSTER_PARSER_VERSION = "manual-core-v1";
+// Only a successfully activated parse may carry this version. Older rows are
+// deliberately marked legacy-unverified by migration 0019.
+export const ROSTER_PARSER_VERSION = "shared-core-v2";
 const ensuredCalendarDbs = new WeakSet();
 const pendingCalendarSchemaEnsures = new WeakMap();
 
@@ -408,6 +410,7 @@ async function ensureCalendarSchemaUncached(db) {
       provider_version TEXT NOT NULL DEFAULT '',
       content_hash TEXT NOT NULL DEFAULT '',
       file_id TEXT NOT NULL DEFAULT '',
+      source_file_id TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'started',
       message TEXT NOT NULL DEFAULT '',
       doctor_count INTEGER NOT NULL DEFAULT 0,
@@ -435,7 +438,8 @@ async function ensureCalendarSchemaUncached(db) {
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_sync_runs_source_hash ON roster_sync_runs (source_id, content_hash, status)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_dispatches_status_retry ON roster_dispatches (status, retry_after DESC)").run();
   await ensureColumn(db, "roster_files", "source_id", "TEXT NOT NULL DEFAULT ''");
-  await ensureColumn(db, "roster_files", "parser_version", `TEXT NOT NULL DEFAULT '${ROSTER_PARSER_VERSION}'`);
+  await ensureColumn(db, "roster_files", "parser_version", "TEXT NOT NULL DEFAULT 'legacy-unverified'");
+  await ensureColumn(db, "roster_sync_runs", "source_file_id", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn(db, "roster_sources", "provider_version", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn(db, "roster_sources", "provider_modified_at", "TEXT NOT NULL DEFAULT ''");
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_snapshot_registry_owner ON snapshot_registry (owner_type, owner_id, updated_at DESC)").run();
@@ -584,8 +588,8 @@ const D1_PRESENCE_BATCH_STATEMENTS = 80;
 
 function derivedRosterFileUpsertStatement(db, file, sourceType, parsedAt) {
   return db.prepare(`
-    INSERT INTO roster_files (id, name, source_type, source_id, active, size, last_modified, added_at, uploaded_at, uploaded_by, parsed_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO roster_files (id, name, source_type, source_id, active, size, last_modified, added_at, uploaded_at, uploaded_by, parsed_at, parser_version)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       name = excluded.name,
       source_type = excluded.source_type,
@@ -596,7 +600,8 @@ function derivedRosterFileUpsertStatement(db, file, sourceType, parsedAt) {
       added_at = excluded.added_at,
       uploaded_at = excluded.uploaded_at,
       uploaded_by = excluded.uploaded_by,
-      parsed_at = excluded.parsed_at
+      parsed_at = excluded.parsed_at,
+      parser_version = excluded.parser_version
   `).bind(
     file.id,
     file.name || "roster.xlsx",
@@ -609,6 +614,7 @@ function derivedRosterFileUpsertStatement(db, file, sourceType, parsedAt) {
     String(file.uploadedAt || ""),
     String(file.uploadedBy || ""),
     parsedAt,
+    String(file.parserVersion || ROSTER_PARSER_VERSION),
   );
 }
 
@@ -737,6 +743,89 @@ export async function setDerivedRosterFileActive(db, fileId, active) {
     return;
   }
   await rebuildDailyPresenceForFile(db, fileId);
+}
+
+export async function activateDerivedRosterFile(db, fileId, parserVersion = ROSTER_PARSER_VERSION) {
+  if (!db?.prepare || !fileId) return { ok: false, reason: "missing-input" };
+  await ensureCalendarSchema(db);
+  await db.prepare("UPDATE roster_files SET active = 1, parser_version = ? WHERE id = ?")
+    .bind(String(parserVersion || ROSTER_PARSER_VERSION), String(fileId)).run();
+  await rebuildDailyPresenceForFile(db, fileId);
+  return { ok: true, fileId: String(fileId) };
+}
+
+// Compare the persisted source occurrence, not title/time heuristics. The
+// parser's occurrence id is unique only within one doctor, so doctor_key is
+// part of the safety identity.
+export async function compareDerivedRosterFiles(db, baselineFileId, candidateFileId, options = {}) {
+  if (!db?.prepare || !baselineFileId || !candidateFileId) return { ok: false, reason: "missing-input" };
+  await ensureCalendarSchema(db);
+  const rows = await db.prepare(`
+    SELECT file_id, doctor_key, event_json
+    FROM roster_events
+    WHERE file_id IN (?, ?)
+  `).bind(String(baselineFileId), String(candidateFileId)).all();
+  const limit = Math.max(1, Math.min(Number(options.limit || 50), 500));
+  const eventsByFile = new Map([[String(baselineFileId), new Map()], [String(candidateFileId), new Map()]]);
+  for (const row of rows.results || []) {
+    const event = parseEvent(row.event_json);
+    const fileEvents = eventsByFile.get(String(row.file_id || ""));
+    if (!event || !fileEvents) continue;
+    const identity = `${String(row.doctor_key || "")}|${String(event.id || "")}`;
+    if (identity.endsWith("|")) continue;
+    fileEvents.set(identity, { doctorKey: String(row.doctor_key || ""), ...event });
+  }
+  const baseline = eventsByFile.get(String(baselineFileId)) || new Map();
+  const candidate = eventsByFile.get(String(candidateFileId)) || new Map();
+  const removed = [...baseline].filter(([identity]) => !candidate.has(identity)).map(([, event]) => event);
+  const added = [...candidate].filter(([identity]) => !baseline.has(identity)).map(([, event]) => event);
+  return {
+    ok: true,
+    baselineEvents: baseline.size,
+    candidateEvents: candidate.size,
+    removedCount: removed.length,
+    addedCount: added.length,
+    removed: removed.slice(0, limit),
+    added: added.slice(0, limit),
+  };
+}
+
+// A retained-file reparse is written under a staging id. This method performs
+// the final replacement only after the caller has reviewed the comparison.
+// The calendar continues to read the old active rows until this batch commits.
+export async function promoteVerifiedStagedRosterFile(db, stagingFileId, targetFileId, options = {}) {
+  if (!db?.prepare || !stagingFileId || !targetFileId) return { ok: false, reason: "missing-input" };
+  await ensureCalendarSchema(db);
+  const parserVersion = String(options.parserVersion || ROSTER_PARSER_VERSION);
+  const comparison = await compareDerivedRosterFiles(db, targetFileId, stagingFileId, { limit: 50 });
+  if (!comparison.ok) return comparison;
+  if (comparison.removedCount > 0 && options.allowRemoved !== true) {
+    return { ok: false, reason: "unreviewed-removals", comparison };
+  }
+  const staged = await db.prepare("SELECT name, source_type, source_id, size, last_modified, added_at, uploaded_at, uploaded_by, parsed_at FROM roster_files WHERE id = ? AND active = 0")
+    .bind(String(stagingFileId)).first();
+  const target = await db.prepare("SELECT id FROM roster_files WHERE id = ? AND active = 1").bind(String(targetFileId)).first();
+  if (!staged || !target) return { ok: false, reason: "staging-or-target-not-active", comparison };
+  const now = new Date().toISOString();
+  const statements = [
+    db.prepare("DELETE FROM roster_file_doctors WHERE file_id = ?").bind(String(targetFileId)),
+    db.prepare("DELETE FROM roster_events WHERE file_id = ?").bind(String(targetFileId)),
+    db.prepare("DELETE FROM roster_issues WHERE file_id = ?").bind(String(targetFileId)),
+    db.prepare("UPDATE roster_file_doctors SET file_id = ? WHERE file_id = ?").bind(String(targetFileId), String(stagingFileId)),
+    db.prepare("UPDATE roster_events SET id = REPLACE(id, ?, ?), file_id = ? WHERE file_id = ?").bind(`${stagingFileId}:`, `${targetFileId}:`, String(targetFileId), String(stagingFileId)),
+    db.prepare("UPDATE roster_issues SET id = REPLACE(id, ?, ?), file_id = ? WHERE file_id = ?").bind(`${stagingFileId}:`, `${targetFileId}:`, String(targetFileId), String(stagingFileId)),
+    db.prepare(`
+      UPDATE roster_files
+      SET name = ?, source_type = ?, source_id = ?, active = 1, size = ?, last_modified = ?,
+          added_at = ?, uploaded_at = ?, uploaded_by = ?, parsed_at = ?, parser_version = ?
+      WHERE id = ?
+    `).bind(staged.name, staged.source_type, staged.source_id, staged.size, staged.last_modified, staged.added_at, staged.uploaded_at, staged.uploaded_by, now, parserVersion, String(targetFileId)),
+    db.prepare("DELETE FROM roster_files WHERE id = ?").bind(String(stagingFileId)),
+  ];
+  await runTransactionalBatch(db, statements);
+  await deleteDailyPresenceForFile(db, targetFileId);
+  await rebuildDailyPresenceForFile(db, targetFileId);
+  return { ok: true, fileId: String(targetFileId), comparison };
 }
 
 export async function deleteDerivedRosterFile(db, fileId) {
@@ -1865,7 +1954,7 @@ export async function findSuccessfulRosterSyncByHash(db, sourceId, contentHash, 
   const row = await db.prepare(hasFileName ? `
     SELECT roster_sync_runs.*
     FROM roster_sync_runs
-    INNER JOIN raw_roster_files ON raw_roster_files.file_id = roster_sync_runs.file_id
+    INNER JOIN raw_roster_files ON raw_roster_files.file_id = COALESCE(NULLIF(roster_sync_runs.source_file_id, ''), roster_sync_runs.file_id)
     WHERE roster_sync_runs.source_id = ?
       AND roster_sync_runs.content_hash = ?
       AND roster_sync_runs.status = 'success'
@@ -1888,7 +1977,7 @@ export async function findQueuedRosterSyncByHash(db, sourceId, contentHash, file
   const row = await db.prepare(hasFileName ? `
     SELECT roster_sync_runs.*
     FROM roster_sync_runs
-    INNER JOIN raw_roster_files ON raw_roster_files.file_id = roster_sync_runs.file_id
+    INNER JOIN raw_roster_files ON raw_roster_files.file_id = COALESCE(NULLIF(roster_sync_runs.source_file_id, ''), roster_sync_runs.file_id)
     WHERE roster_sync_runs.source_id = ?
       AND roster_sync_runs.content_hash = ?
       AND roster_sync_runs.status IN ('queued', 'processing')
@@ -1910,7 +1999,7 @@ export async function findRosterSyncByProviderVersion(db, sourceId, providerVers
   const row = await db.prepare(`
     SELECT roster_sync_runs.*
     FROM roster_sync_runs
-    INNER JOIN raw_roster_files ON raw_roster_files.file_id = roster_sync_runs.file_id
+    INNER JOIN raw_roster_files ON raw_roster_files.file_id = COALESCE(NULLIF(roster_sync_runs.source_file_id, ''), roster_sync_runs.file_id)
     WHERE roster_sync_runs.source_id = ?
       AND roster_sync_runs.provider_version = ?
       AND LOWER(raw_roster_files.name) = LOWER(?)
@@ -1951,7 +2040,7 @@ export async function listQueuedRosterSyncRuns(db, limit = 4) {
       raw_roster_files.object_key AS object_key,
       roster_sources.provider_modified_at AS provider_modified_at
     FROM roster_sync_runs
-    INNER JOIN raw_roster_files ON raw_roster_files.file_id = roster_sync_runs.file_id
+    INNER JOIN raw_roster_files ON raw_roster_files.file_id = COALESCE(NULLIF(roster_sync_runs.source_file_id, ''), roster_sync_runs.file_id)
     LEFT JOIN roster_sources ON roster_sources.id = roster_sync_runs.source_id
     WHERE roster_sync_runs.status IN ('queued', 'processing')
       AND (
@@ -1959,7 +2048,7 @@ export async function listQueuedRosterSyncRuns(db, limit = 4) {
         OR NOT EXISTS (
           SELECT 1
           FROM roster_sync_runs AS earlier_run
-          INNER JOIN raw_roster_files AS earlier_file ON earlier_file.file_id = earlier_run.file_id
+          INNER JOIN raw_roster_files AS earlier_file ON earlier_file.file_id = COALESCE(NULLIF(earlier_run.source_file_id, ''), earlier_run.file_id)
           WHERE earlier_run.source_id = roster_sync_runs.source_id
             AND earlier_run.provider_version = roster_sync_runs.provider_version
             AND LOWER(earlier_file.name) = LOWER(raw_roster_files.name)
@@ -1973,7 +2062,7 @@ export async function listQueuedRosterSyncRuns(db, limit = 4) {
       AND NOT EXISTS (
         SELECT 1
         FROM roster_sync_runs AS newer_run
-        INNER JOIN raw_roster_files AS newer_file ON newer_file.file_id = newer_run.file_id
+        INNER JOIN raw_roster_files AS newer_file ON newer_file.file_id = COALESCE(NULLIF(newer_run.source_file_id, ''), newer_run.file_id)
         WHERE newer_run.source_id = roster_sync_runs.source_id
           AND LOWER(newer_file.name) = LOWER(raw_roster_files.name)
           AND newer_run.status IN ('queued', 'processing')
@@ -2008,8 +2097,8 @@ export async function supersedeObsoleteQueuedRosterSyncRuns(db) {
       AND EXISTS (
         SELECT 1
         FROM roster_sync_runs AS newer_run
-        INNER JOIN raw_roster_files AS stale_file ON stale_file.file_id = stale_run.file_id
-        INNER JOIN raw_roster_files AS newer_file ON newer_file.file_id = newer_run.file_id
+        INNER JOIN raw_roster_files AS stale_file ON stale_file.file_id = COALESCE(NULLIF(stale_run.source_file_id, ''), stale_run.file_id)
+        INNER JOIN raw_roster_files AS newer_file ON newer_file.file_id = COALESCE(NULLIF(newer_run.source_file_id, ''), newer_run.file_id)
         WHERE newer_run.source_id = stale_run.source_id
           AND LOWER(newer_file.name) = LOWER(stale_file.name)
           AND newer_run.status IN ('queued', 'processing')
@@ -2113,12 +2202,12 @@ export async function createRosterSyncRun(db, run = {}) {
   await ensureCalendarSchema(db);
   await db.prepare(`
     INSERT INTO roster_sync_runs (
-      id, source_id, trigger_type, provider_version, content_hash, file_id, status,
+      id, source_id, trigger_type, provider_version, content_hash, file_id, source_file_id, status,
       message, doctor_count, event_count, started_at, completed_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
     String(run.id), String(run.sourceId), String(run.triggerType || "manual"),
-    String(run.providerVersion || ""), String(run.contentHash || ""), String(run.fileId || ""),
+    String(run.providerVersion || ""), String(run.contentHash || ""), String(run.fileId || ""), String(run.sourceFileId || run.fileId || ""),
     String(run.status || "started"), String(run.message || ""), Number(run.doctorCount || 0),
     Number(run.eventCount || 0), String(run.startedAt || new Date().toISOString()), String(run.completedAt || ""),
   ).run();
@@ -2194,7 +2283,7 @@ function rosterSyncRunFromRow(row) {
   if (!row?.id) return null;
   return {
     id: String(row.id), sourceId: String(row.source_id || ""), triggerType: String(row.trigger_type || ""), status: String(row.status || ""),
-    providerVersion: String(row.provider_version || ""), contentHash: String(row.content_hash || ""), fileId: String(row.file_id || ""),
+    providerVersion: String(row.provider_version || ""), contentHash: String(row.content_hash || ""), fileId: String(row.file_id || ""), sourceFileId: String(row.source_file_id || row.file_id || ""),
     message: String(row.message || ""), doctorCount: Number(row.doctor_count || 0),
     eventCount: Number(row.event_count || 0), startedAt: String(row.started_at || ""),
     completedAt: String(row.completed_at || ""),

@@ -129,13 +129,15 @@ async function queueCurrentFindmyshiftReprocess(env, providerVersion, now) {
       continue;
     }
     const runId = `reprocess:${file.id}:${crypto.randomUUID()}`;
+    const stagingFileId = `staged:${file.id}:${crypto.randomUUID()}`;
     await createRosterSyncRun(env.ROSTER_DB, {
       id: runId,
       sourceId: SOURCE_ID,
       triggerType: "creator-reprocess",
       providerVersion: contentHash,
       contentHash,
-      fileId: file.id,
+      fileId: stagingFileId,
+      sourceFileId: file.id,
       status: "queued",
       message: "Queued to reprocess the retained FindMyShift roster file.",
       startedAt: now,

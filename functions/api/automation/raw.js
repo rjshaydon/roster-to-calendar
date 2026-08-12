@@ -10,7 +10,9 @@ export async function onRequestGet(context) {
   const runId = String(new URL(context.request.url).searchParams.get("runId") || "").trim();
   const run = await loadRosterSyncRun(context.env.ROSTER_DB, runId);
   if (!run?.fileId) return Response.json({ error: "Queued roster was not found." }, { status: 404 });
-  const raw = await loadRawRosterFile(context.env.ROSTER_DB, run.fileId);
+  // A retained-file reparse writes to a staging id, while the source workbook
+  // remains under its original id in R2/D1.
+  const raw = await loadRawRosterFile(context.env.ROSTER_DB, run.sourceFileId || run.fileId);
   let body = null;
   let size = raw.size;
   let contentType = raw.type || "application/octet-stream";

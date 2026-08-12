@@ -364,6 +364,7 @@ const calendarMigrationSource = await readFile(new URL("../migrations/0001_calen
 const insightIndexMigrationSource = await readFile(new URL("../migrations/0005_roster_insight_index.sql", import.meta.url), "utf8");
 const facilityAccessMigrationSource = await readFile(new URL("../migrations/0011_facility_overview_access.sql", import.meta.url), "utf8");
 const facilityOptInRepairMigrationSource = await readFile(new URL("../migrations/0017_restore_facility_overview_opt_in.sql", import.meta.url), "utf8");
+const safeStagedActivationMigrationSource = await readFile(new URL("../migrations/0019_safe_staged_roster_activation.sql", import.meta.url), "utf8");
 const d1CalendarSource = await readFile(new URL("../functions/_lib/d1-calendar.js", import.meta.url), "utf8");
 const automationIngestSource = await readFile(new URL("../functions/api/automation/ingest.js", import.meta.url), "utf8");
 const automationDerivedSource = await readFile(new URL("../functions/api/automation/derived.js", import.meta.url), "utf8");
@@ -1478,6 +1479,31 @@ assert.match(
   d1CalendarSource.match(/export async function startDerivedRosterFileSave[\s\S]*?export async function appendDerivedRosterFileEvents/)?.[0] || "",
   /startDerivedRosterFileSave/,
   "large roster saves should support phased D1 writes",
+);
+assert.match(
+  d1CalendarSource.match(/export async function compareDerivedRosterFiles[\s\S]*?export async function promoteVerifiedStagedRosterFile/)?.[0] || "",
+  /doctor_key[\s\S]*?removedCount/,
+  "reparse comparison must identify events by both doctor and parser occurrence id",
+);
+assert.match(
+  d1CalendarSource.match(/export async function promoteVerifiedStagedRosterFile[\s\S]*?export async function deleteDerivedRosterFile/)?.[0] || "",
+  /comparison\.removedCount > 0[\s\S]*?reason: "unreviewed-removals"/,
+  "a retained-file reparse must refuse activation when it would remove events",
+);
+assert.match(
+  automationDerivedSource,
+  /active: false,[\s\S]*?staged: true,[\s\S]*?replacesFileId:/,
+  "automation writes must remain staged until their finish phase",
+);
+assert.match(
+  stateSource.match(/async function queueActiveParserRuleReparse[\s\S]*?async function queueAutomatedSourceReprocess/)?.[0] || "",
+  /stagingFileId[\s\S]*?fileId: stagingFileId,[\s\S]*?sourceFileId: file\.id/,
+  "parser-rule reparses must retain an immutable source file and use a staging destination",
+);
+assert.match(
+  safeStagedActivationMigrationSource,
+  /parser_version = 'legacy-unverified'/,
+  "pre-shared-parser roster rows must be marked legacy rather than current",
 );
 assert.match(
   appSource.match(/async function saveDerivedCalendarFilePayload[\s\S]*?async function saveSelectedRosterFilesToD1/)?.[0] || "",
@@ -2689,6 +2715,7 @@ class MemoryD1Statement {
         uploaded_at: args[8],
         uploaded_by: args[9],
         parsed_at: args[10],
+        parser_version: args[11] || "",
       });
       return { success: true };
     }
@@ -2718,8 +2745,8 @@ class MemoryD1Statement {
     if (sql.startsWith("INSERT INTO roster_sync_runs")) {
       this.db.rosterSyncRuns.set(args[0], {
         id: args[0], source_id: args[1], trigger_type: args[2], provider_version: args[3],
-        content_hash: args[4], file_id: args[5], status: args[6], message: args[7],
-        doctor_count: args[8], event_count: args[9], started_at: args[10], completed_at: args[11],
+        content_hash: args[4], file_id: args[5], source_file_id: args[6], status: args[7], message: args[8],
+        doctor_count: args[9], event_count: args[10], started_at: args[11], completed_at: args[12],
       });
       return { success: true };
     }
@@ -2747,7 +2774,7 @@ class MemoryD1Statement {
       if (sql.includes("AS stale_run")) return { success: true, meta: { changes: 0 } };
       let changes = 0;
       for (const run of this.db.rosterSyncRuns.values()) {
-        const raw = this.db.rawFiles.get(run.file_id);
+        const raw = this.db.rawFiles.get(run.source_file_id || run.file_id);
         if (run.source_id !== args[2] || run.provider_version !== args[3] || run.id === args[4]) continue;
         if (!["queued", "processing"].includes(run.status)) continue;
         if (String(raw?.name || "").toLowerCase() !== String(args[5] || "").toLowerCase()) continue;
@@ -3147,7 +3174,10 @@ class MemoryD1Statement {
     }
     if (sql.startsWith("UPDATE roster_files SET active")) {
       const file = this.db.files.get(args[1]);
-      if (file) file.active = args[0];
+      if (file) {
+        file.active = sql.includes("active = 1") ? 1 : args[0];
+        if (sql.includes("parser_version")) file.parser_version = args[0];
+      }
       return { success: true };
     }
     if (sql.startsWith("UPDATE facility_staff_designations")) {
@@ -3162,6 +3192,11 @@ class MemoryD1Statement {
     if (sql.startsWith("PRAGMA table_info(roster_files)")) {
       return {
         results: ["id", "name", "source_type", "source_id", "active", "size", "last_modified", "added_at", "uploaded_at", "uploaded_by", "parsed_at", "parser_version"].map((name) => ({ name })),
+      };
+    }
+    if (sql.startsWith("PRAGMA table_info(roster_sync_runs)")) {
+      return {
+        results: ["id", "source_id", "trigger_type", "provider_version", "content_hash", "file_id", "source_file_id", "status", "message", "doctor_count", "event_count", "started_at", "completed_at"].map((name) => ({ name })),
       };
     }
     if (sql.startsWith("PRAGMA table_info(roster_file_doctors)")) {
@@ -3803,7 +3838,7 @@ class MemoryD1Statement {
       const statusOrder = new Map([["success", 0], ["processing", 1], ["queued", 2], ["failed", 3]]);
       return [...this.db.rosterSyncRuns.values()]
         .filter((row) => row.source_id === args[0] && row.provider_version === args[1])
-        .filter((row) => String(this.db.rawFiles.get(row.file_id)?.name || "").toLowerCase() === String(args[2] || "").toLowerCase())
+        .filter((row) => String(this.db.rawFiles.get(row.source_file_id || row.file_id)?.name || "").toLowerCase() === String(args[2] || "").toLowerCase())
         .filter((row) => statusOrder.has(row.status))
         .sort((left, right) => (statusOrder.get(left.status) - statusOrder.get(right.status))
           || String(right.started_at).localeCompare(String(left.started_at)))[0] || null;

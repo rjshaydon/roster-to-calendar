@@ -68,6 +68,8 @@ import {
   replaceDerivedRosterFile,
   startDerivedRosterFileSave,
   appendDerivedRosterFileEvents,
+  activateDerivedRosterFile,
+  promoteVerifiedStagedRosterFile,
   rebuildDailyPresenceForFile,
   populateDailyPresenceForFile,
   rebuildDailyPresenceForActiveFiles,
@@ -4974,26 +4976,49 @@ async function runCoreDerivedRosterSave(context, job = {}) {
       );
       await propagateDerivedShiftCodeIssues(db, job.doctors || [], job.issuesByDoctor || {});
     }
+    let effectiveFilePayload = filePayload;
+    if (phase === "finish" && filePayload.staged === true) {
+      const replacesFileId = String(filePayload.replacesFileId || "").trim();
+      if (replacesFileId) {
+        const promotion = await promoteVerifiedStagedRosterFile(db, fileId, replacesFileId);
+        if (!promotion.ok) {
+          const detail = promotion.comparison?.removedCount
+            ? ` (${promotion.comparison.removedCount} event removal${promotion.comparison.removedCount === 1 ? "" : "s"} require review)`
+            : "";
+          throw new Error(`Staged roster was not activated: ${promotion.reason || "promotion failed"}${detail}.`);
+        }
+        effectiveFilePayload = { ...filePayload, id: replacesFileId, active: true };
+        result = { ...result, events: Number(promotion.comparison?.candidateEvents || result?.events || 0) };
+      } else {
+        await activateDerivedRosterFile(db, fileId);
+        effectiveFilePayload = { ...filePayload, active: true };
+      }
+    }
     let supersession = null;
     if (phase === "complete" || phase === "finish") {
-      supersession = await reconcileRosterFileSupersession(db, filePayload, { uploaderEmail: job.email || "" });
-      // A replacement is now safely active.  Keep its original source in R2,
-      // but remove only the superseded derived D1 rows so obsolete revisions
-      // cannot grow the calendar database indefinitely.
+      // A retained-file reparse has already atomically replaced its original
+      // rows. It must not run generic supersession against its temporary id.
+      supersession = String(filePayload.replacesFileId || "").trim()
+        ? { deactivated: [], ambiguous: [] }
+        : await reconcileRosterFileSupersession(db, effectiveFilePayload, { uploaderEmail: job.email || "" });
+      // This only applies to an independently uploaded replacement roster.
+      // Reprocessing a retained file takes the guarded staging path above and
+      // never reaches this deletion loop.
       for (const superseded of supersession.deactivated || []) {
         await deleteDerivedRosterFile(db, superseded.id);
       }
+      const effectiveFileId = String(effectiveFilePayload.id || fileId);
       const postSave = () => {
         const presence = supersession?.savedTrimmed
           ? Promise.resolve()
           : phase === "finish" || Number(result?.events || 0) > 1200
-            ? rebuildDailyPresenceForFile(db, fileId)
-            : populateDailyPresenceForFile(db, fileId, job.eventsByDoctor || {}, {
+            ? rebuildDailyPresenceForFile(db, effectiveFileId)
+            : populateDailyPresenceForFile(db, effectiveFileId, job.eventsByDoctor || {}, {
               sourceType: String(filePayload.sourceType || "").toLowerCase(),
               doctors: job.doctors || [],
             });
         return Promise.resolve(presence)
-          .then(() => reconcileFacilityStaffDesignationsForRosterFile(db, fileId))
+          .then(() => reconcileFacilityStaffDesignationsForRosterFile(db, effectiveFileId))
           .then(() => deferCanonicalDoctorRefresh(context, job.reason || "saveDerivedCalendarFile"))
           .then(() => {
             scheduleSnapshotWarmupForSourceTypes(context, [String(filePayload.sourceType || "").toLowerCase()].filter(Boolean), {
@@ -5827,13 +5852,15 @@ async function queueActiveParserRuleReparse(env, sourceTypes = []) {
       continue;
     }
     const runId = `reparse:${file.id}:${crypto.randomUUID()}`;
+    const stagingFileId = `staged:${file.id}:${crypto.randomUUID()}`;
     await createRosterSyncRun(env.ROSTER_DB, {
       id: runId,
       sourceId,
       triggerType: "parser-rule",
       providerVersion: contentHash,
       contentHash,
-      fileId: file.id,
+      fileId: stagingFileId,
+      sourceFileId: file.id,
       status: "queued",
       message: "Queued to apply updated shift-code rules to the retained roster file.",
       startedAt: now,
@@ -5864,13 +5891,15 @@ async function queueAutomatedSourceReprocess(env, sourceId) {
       continue;
     }
     const runId = `reprocess:${file.id}:${crypto.randomUUID()}`;
+    const stagingFileId = `staged:${file.id}:${crypto.randomUUID()}`;
     await createRosterSyncRun(env.ROSTER_DB, {
       id: runId,
       sourceId,
       triggerType: "creator-reprocess",
       providerVersion: contentHash,
       contentHash,
-      fileId: file.id,
+      fileId: stagingFileId,
+      sourceFileId: file.id,
       status: "queued",
       message: "Queued to reprocess the retained auto-sync roster file.",
       startedAt: now,

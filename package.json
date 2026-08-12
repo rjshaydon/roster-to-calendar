@@ -6,7 +6,8 @@
     "dev": "wrangler pages dev public",
     "deploy": "wrangler pages deploy public",
     "check": "node --check public/static/app.js",
-    "test:fixtures": "node scripts/test-fixtures.mjs"
+    "test:fixtures": "node scripts/test-fixtures.mjs",
+    "shadow:active": "node scripts/shadow-active-rosters.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.84.1",

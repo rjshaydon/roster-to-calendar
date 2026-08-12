@@ -58,7 +58,17 @@ export async function onRequestPost(context) {
     if (phase === "start") await markRosterSyncRunProcessing(context.env.ROSTER_DB, runId);
     const saved = await runAutomatedDerivedRosterSave(context, {
       phase,
-      file: { ...body.file, sourceId, sourceType: source.sourceType },
+      // A queued source is invisible to calendars until its final phase. A
+      // retained-file reparse uses a distinct staging id and names the active
+      // source it may replace only after its event comparison passes.
+      file: {
+        ...body.file,
+        sourceId,
+        sourceType: source.sourceType,
+        active: false,
+        staged: true,
+        replacesFileId: run.sourceFileId && run.sourceFileId !== run.fileId ? run.sourceFileId : "",
+      },
       doctors: Array.isArray(body.doctors) ? body.doctors : [],
       eventsByDoctor: body.eventsByDoctor && typeof body.eventsByDoctor === "object" ? body.eventsByDoctor : {},
       issuesByDoctor: body.issuesByDoctor && typeof body.issuesByDoctor === "object" ? body.issuesByDoctor : {},
