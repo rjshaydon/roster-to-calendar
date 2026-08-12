@@ -2346,6 +2346,12 @@ assert.ok(adamWestMchWeek6.some((event) => event.title === "MCH: PHNW"));
 const noSpacePhnwMchWorkbook = withWorkbookCell(mchWorkbook, "Week 6", "F21", { t: "s", v: "0800-1730PHNW", w: "0800-1730PHNW" });
 const noSpacePhnwMchView = buildRosterView([], [], adamWestMch.key, undefined, {}, {}, [], [], noSpacePhnwMchWorkbook);
 assert.ok(noSpacePhnwMchView.events.some((event) => event.title === "MCH: PHNW" && event.rawValue === "0800-1730PHNW"));
+const bareNightMchWorkbook = withWorkbookCell(mchWorkbook, "Week 6", "F21", { t: "s", v: "NIGHT", w: "NIGHT" });
+const bareNightMchView = buildRosterView([], [], adamWestMch.key, undefined, {}, {}, [], [], bareNightMchWorkbook);
+assert.ok(bareNightMchView.events.some((event) => event.title === "MCH: Night shift" && event.rawValue === "NIGHT" && event.timeLabel === "23:00-08:30"), "bare NIGHT should be a timed MCH night shift");
+const simDayMchWorkbook = withWorkbookCell(mchWorkbook, "Week 6", "G21", { t: "s", v: "(SIM day) 0800-1730", w: "(SIM day) 0800-1730" });
+const simDayMchView = buildRosterView([], [], adamWestMch.key, undefined, {}, {}, [], [], simDayMchWorkbook);
+assert.ok(simDayMchView.events.some((event) => event.title === "MCH: SIM day" && event.rawValue === "(SIM day) 0800-1730" && event.timeLabel === "08:00-17:30"), "timed SIM day should remain a timed teaching shift");
 
 const markLimMch = mchDoctors.find((doctor) => doctor.displayName === "Mark LIM");
 const markLimMchView = buildRosterView([], [], markLimMch.key, undefined, {}, {}, [], [], mchWorkbook);
@@ -2485,7 +2491,7 @@ const diFlood = ddhFullDoctors.find((doctor) => doctor.displayName === "Di FLOOD
 const diFloodView = buildRosterView([], ddhFullWorkbook, diFlood.key);
 assert.ok(diFloodView.events.some((event) => event.title === "DDH: CS AM"));
 assert.ok(diFloodView.events.some((event) => event.title === "DDH: SSU" && event.start.includes("07:30:00")));
-assert.ok(diFloodView.events.some((event) => event.title === "DDH: HITH PM"));
+assert.equal(diFloodView.events.some((event) => event.rawValue === "HITH PM"), false, "other-hospital annotations must not become DDH calendar events");
 
 const ddhDefaultTimesWorkbook = XLSX.utils.book_new();
 XLSX.utils.book_append_sheet(ddhDefaultTimesWorkbook, XLSX.utils.aoa_to_sheet([
@@ -2533,13 +2539,27 @@ XLSX.utils.book_append_sheet(ddhAccuracyWorkbook, XLSX.utils.aoa_to_sheet([
   ["Crisis Locum Doctor", "Crisis Locum", "OFF", "Sun", "", "", "", ""],
   ["Sick Leave Doctor", "S\\L AM", "OFF", "Sun", "", "", "", ""],
   ["Conference Leave Doctor", "CME 19hrs", "", "", "", "", "", ""],
+  ["Family Leave Doctor", "F/L", "", "", "", "", "", ""],
+  ["Parental Leave Doctor", "Parental/L", "", "", "", "", "", ""],
+  ["Special Leave Doctor", "Special leave", "", "", "", "", "", ""],
+  ["Exam Leave Doctor", "EL", "", "", "", "", "", ""],
+  ["Annual Leave Doctor", "AL 0.75", "", "", "", "", "", ""],
+  ["Annotation Doctor", "MMC AM", "Casey PM", "HITH AM", "Tox CS", "VHH PM", "ARV AM", "Swing PM"],
+  ["GED Doctor", "GED Junior", "", "", "", "", "", ""],
 ]), "Sheet1");
 const ddhAccuracyDoctors = doctorOptions([], ddhAccuracyWorkbook);
 const ddhAccuracyDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "ACCURACY DOCTOR");
 const crisisLocumDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "CRISIS LOCUM DOCTOR");
 const sickLeaveDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "SICK LEAVE DOCTOR");
 const conferenceLeaveDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "CONFERENCE LEAVE DOCTOR");
-assert.ok(ddhAccuracyDoctor && crisisLocumDoctor && sickLeaveDoctor && conferenceLeaveDoctor, "DDH accuracy fixtures should expose their rostered doctors");
+const ddhFamilyLeaveDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "FAMILY LEAVE DOCTOR");
+const ddhParentalLeaveDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "PARENTAL LEAVE DOCTOR");
+const ddhSpecialLeaveDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "SPECIAL LEAVE DOCTOR");
+const ddhExamLeaveDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "EXAM LEAVE DOCTOR");
+const ddhAnnualLeaveDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "ANNUAL LEAVE DOCTOR");
+const ddhAnnotationDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "ANNOTATION DOCTOR");
+const ddhGedDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "GED DOCTOR");
+assert.ok(ddhAccuracyDoctor && crisisLocumDoctor && sickLeaveDoctor && conferenceLeaveDoctor && ddhFamilyLeaveDoctor && ddhParentalLeaveDoctor && ddhSpecialLeaveDoctor && ddhExamLeaveDoctor && ddhAnnualLeaveDoctor && ddhAnnotationDoctor && ddhGedDoctor, "DDH accuracy fixtures should expose their rostered doctors");
 const ddhAccuracyView = buildRosterView([], ddhAccuracyWorkbook, ddhAccuracyDoctor.key);
 assert.deepEqual(
   ddhAccuracyView.events.map((event) => [event.title, event.rawValue, event.timeLabel]),
@@ -2564,6 +2584,13 @@ assert.deepEqual(
 );
 assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, sickLeaveDoctor.key).events.map((event) => event.title), ["Sick leave"], "backslash sick-leave notation should be recognised");
 assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, conferenceLeaveDoctor.key).events.map((event) => event.title), ["Conference Leave"], "CME hour annotations should be recognised as conference leave");
+assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhFamilyLeaveDoctor.key).events.map((event) => event.title), ["Family Leave"], "F/L should be recognised as family leave");
+assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhParentalLeaveDoctor.key).events.map((event) => event.title), ["Parental Leave"], "Parental/L should be recognised as parental leave");
+assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhSpecialLeaveDoctor.key).events.map((event) => event.title), ["Special Leave"], "Special leave should be recognised");
+assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhExamLeaveDoctor.key).events.map((event) => event.title), ["Exam Leave"], "EL should be recognised as exam leave");
+assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhAnnualLeaveDoctor.key).events.map((event) => event.title), ["Annual Leave"], "fractional AL should be recognised as annual leave");
+assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhAnnotationDoctor.key).events.map((event) => event.title), ["DDH: Swing PM"], "other-hospital safety annotations should not become DDH calendar events while a genuine swing shift remains visible");
+assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhGedDoctor.key).events.map((event) => event.title), ["DDH: GED shift"], "GED Junior should be a recognised GED shift");
 
 const mmcPdfBytes = await readFile(fileURLToPath(new URL("../fixtures/AdultMMCTerm2.2026.Ver1.pdf", import.meta.url)));
 const formData = new FormData();

@@ -1634,6 +1634,7 @@ function parseMmcEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
   if (leaveRecord) return leaveRecord;
   const orientation = createOrientationRecord("MMC", day, raw, seniority);
   if (orientation) return orientation;
+  if (isOtherHospitalReference("MMC", raw)) return null;
   if (shouldIgnoreMmc(raw)) return null;
   if (upper === "PHNW") {
     return createAllDayRecord("MMC", day, raw, {
@@ -1699,7 +1700,7 @@ function parseDdhEntry(day, label, timeText, seniority = UNKNOWN_SENIORITY) {
       seniority,
     });
   }
-  if (parseDdhTimeRow(timeText) && shouldIgnoreDdh(label)) {
+  if (parseDdhTimeRow(timeText) && (isOtherHospitalReference("DDH", label) || shouldIgnoreDdh(label))) {
     return null;
   }
   const upper = label.toUpperCase();
@@ -1707,6 +1708,7 @@ function parseDdhEntry(day, label, timeText, seniority = UNKNOWN_SENIORITY) {
   if (leaveRecord) return leaveRecord;
   const orientation = createOrientationRecord("DDH", day, label, seniority);
   if (orientation) return orientation;
+  if (isOtherHospitalReference("DDH", label)) return null;
   if (upper === "AM" || upper === "PM") return null;
   if (upper === "PHNW" || upper === "PHNW CLINICAL") {
     return createAllDayRecord("DDH", day, label, {
@@ -1815,6 +1817,7 @@ function parseCaseyEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
   if (leaveRecord) return leaveRecord;
   const orientation = createOrientationRecord("Casey", day, label, seniority);
   if (orientation) return orientation;
+  if (isOtherHospitalReference("Casey", shiftLabel)) return null;
   if (upper === "PHNW") {
     return createAllDayRecord("Casey", day, label, {
       kind: "public_holiday",
@@ -1884,11 +1887,32 @@ function parseMchEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
   }
   const orientation = createOrientationRecord("MCH", day, label, seniority);
   if (orientation) return orientation;
+  if (isOtherHospitalReference("MCH", label)) return null;
   if (shouldIgnoreMch(label) || shouldIgnoreCommon(label)) return null;
 
   if (upper.includes("EDO")) return null;
 
   const explicit = extractTimeWithLabel(label);
+  if (/^NIGHT$/i.test(label)) {
+    return createTimedRecord("MCH", day, label, {
+      kind: "shift",
+      titleParts: { base: "Night shift", period: "", suffix: "" },
+      startHm: [23, 0],
+      endHm: [8, 30],
+      location: MCH_LOCATION,
+      seniority,
+    });
+  }
+  if (/\bSIM\s+DAY\b/i.test(label) && explicit) {
+    return createTimedRecord("MCH", day, label, {
+      kind: "shift",
+      titleParts: { base: "SIM day", period: "", suffix: "" },
+      startHm: explicit.start,
+      endHm: explicit.end,
+      location: MCH_LOCATION,
+      seniority,
+    });
+  }
   const manual = findManualParserRule("MCH", seniority, label, explicit);
   if (manual) {
     if (manual.includeAsShift === false) {
@@ -2096,7 +2120,7 @@ function normalizeMchLeave(label) {
   if (upper === "ANNUAL & PARENTAL LEAVE") return { kind: "annual_parental_leave", title: "Annual & Parental Leave" };
   if (isAnnualLeaveLabel(upper)) return { kind: "annual_leave", title: "Annual Leave" };
   if (/^(?:SICK(?:\s+LEAVE)?|S\/L)(?:\s+.*)?$/.test(upper)) return { kind: "sick_leave", title: "Sick leave" };
-  if (upper === "EXAM" || upper === "EXAM LEAVE" || upper === "ME/L") return { kind: "exam_leave", title: "Exam Leave" };
+  if (upper === "EXAM" || upper === "EXAM LEAVE" || upper === "ME/L" || upper === "EL") return { kind: "exam_leave", title: "Exam Leave" };
   if (upper === "EXAM/CONF LEAVE") return { kind: "exam_leave", title: "Exam / Conference Leave" };
   if (isConferenceLeaveLabel(upper)) return { kind: "conference_leave", title: "Conference Leave" };
   // DDH/MMC roster writers use SL (often with a second-site suffix such as
@@ -2106,10 +2130,11 @@ function normalizeMchLeave(label) {
     || /^SL(?:\s+(?:MMC|DDH|CASEY|MCH|PAEDS|AM|PM|NIGHT|NS|SW))?$/.test(upper)) {
     return { kind: "sabbatical_leave", title: "Sabbatical" };
   }
-  if (upper === "PAT/L" || upper === "PARENTAL LEAVE" || upper === "PATERNITY LEAVE") return { kind: "parental_leave", title: "Parental Leave" };
+  if (upper === "PAT/L" || upper === "PARENTAL/L" || upper === "PARENTAL LEAVE" || upper === "PATERNITY LEAVE") return { kind: "parental_leave", title: "Parental Leave" };
   if (upper === "LSL" || upper === "LONG SERVICE LEAVE") return { kind: "long_service_leave", title: "Long Service Leave" };
   if (/^CARER'?S LEAVE$/.test(upper) || upper === "CARERS LEAVE") return { kind: "carers_leave", title: "Carer's Leave" };
-  if (upper === "FAM LEAVE" || upper === "FAMILY LEAVE") return { kind: "family_leave", title: "Family Leave" };
+  if (upper === "F/L" || upper === "FAM LEAVE" || upper === "FAMILY LEAVE") return { kind: "family_leave", title: "Family Leave" };
+  if (upper === "SPECIAL LEAVE") return { kind: "special_leave", title: "Special Leave" };
   if (upper === "OTHER - MILITARY LEAVE" || upper === "MILITARY LEAVE") return { kind: "military_leave", title: "Military Leave" };
   if (upper === "LEAVE") return { kind: "leave", title: "Leave" };
   return null;
@@ -2157,7 +2182,7 @@ function isConferenceLeaveLabel(value) {
 function isAnnualLeaveLabel(value) {
   const upper = cleanText(value).replace(/\s+/g, " ").trim().toUpperCase();
   if (/^ANNUAL(?:\s+LEAVE)?(?:\s+(?:-|X)?\s*\d+(?:\.\d+)?\s*(?:HRS?|HOURS?|SHIFTS?))?$/.test(upper)) return true;
-  return /^(?:A\/L|AL)(?:\s+(?:0\.5|\d+(?:\.\d+)?\s*(?:HRS?|HOURS?)|MMC|DDH|CASEY|MCH|PAEDS))?$/.test(upper);
+  return /^(?:A\/L|AL)(?:\s+(?:\d+(?:\.\d+)?(?:\s*(?:HRS?|HOURS?))?|MMC|DDH|CASEY|MCH|PAEDS))?$/.test(upper);
 }
 
 function normalizeMchTimedLabel(label) {
@@ -2532,8 +2557,6 @@ function buildDefaultParserRules() {
     }
   }
   for (const seniority of nonConsultantMmcSeniorities) {
-    add(rules.mmc, "MMC", "SWA", seniority, "Swing", "AM", "", false, "08:00", "17:30", MMC_LOCATION);
-    add(rules.mmc, "MMC", "SWP", seniority, "Swing", "PM", "", false, "14:30", "00:00", MMC_LOCATION);
     add(rules.mmc, "MMC", "AHJ", seniority, "Hub", "AM", "", false, "08:00", "17:30", MMC_LOCATION);
     add(rules.mmc, "MMC", "PHJ", seniority, "Hub", "PM", "", false, "14:30", "00:00", MMC_LOCATION);
     add(rules.mmc, "MMC", "ASSJ", seniority, "SSU", "AM", "", false, "07:30", "17:30", MMC_LOCATION);
@@ -2543,6 +2566,8 @@ function buildDefaultParserRules() {
   for (const seniority of activeSeniorities) {
     const canWorkClinicalSupport = consultantSeniorities.includes(seniority);
     const isSms = seniority === "SMS";
+    add(rules.mmc, "MMC", "SWA", seniority, "Swing", "AM", "", false, "08:00", "17:30", MMC_LOCATION);
+    add(rules.mmc, "MMC", "SWP", seniority, "Swing", "PM", "", false, "14:30", "00:00", MMC_LOCATION);
     add(rules.mmc, "MMC", "PHNW", seniority, "PHNW", "", "", true, "", "", "");
     if (canWorkClinicalSupport) {
       add(rules.ddh, "DDH", "CS", seniority, "CS", "", "", true, "", "", "");
@@ -2560,6 +2585,8 @@ function buildDefaultParserRules() {
     add(rules.ddh, "DDH", "AVAO PM", seniority, "AVAO", "PM", "", false, "14:30", "00:00", DDH_LOCATION);
     add(rules.ddh, "DDH", "ROVER AM", seniority, "Rover", "AM", "", false, "08:00", "18:00", DDH_LOCATION);
     add(rules.ddh, "DDH", "ROVER PM", seniority, "Rover", "PM", "", false, isSms ? "15:00" : "14:30", "00:00", DDH_LOCATION);
+    add(rules.ddh, "DDH", "SWING AM", seniority, "Swing", "AM", "", false, "08:00", "18:00", DDH_LOCATION);
+    add(rules.ddh, "DDH", "SWING PM", seniority, "Swing", "PM", "", false, isSms ? "15:00" : "14:30", "00:00", DDH_LOCATION);
     if (canWorkClinicalSupport) {
       add(rules.casey, "Casey", "CS", seniority, "CS", "", "", false, "08:00", "17:30", CASEY_LOCATION);
       add(rules.casey, "Casey", "CLIN SUPP", seniority, "CS", "", "", false, "08:00", "17:30", CASEY_LOCATION);
@@ -2580,6 +2607,8 @@ function buildDefaultParserRules() {
     add(rules.casey, "Casey", "PM PAEDS", seniority, "PAEDS", "PM", "", false, "14:30", "00:00", CASEY_LOCATION);
     add(rules.casey, "Casey", "AM PAEDS", seniority, "PAEDS", "AM", "", false, "07:30", "17:00", CASEY_LOCATION);
     add(rules.casey, "Casey", "AM SSU", seniority, "SSU", "AM", "", false, "07:30", "17:00", CASEY_LOCATION);
+    add(rules.casey, "Casey", "AM SWING", seniority, "Swing", "AM", "", false, "08:00", "17:30", CASEY_LOCATION);
+    add(rules.casey, "Casey", "PM SWING", seniority, "Swing", "PM", "", false, "14:30", "00:00", CASEY_LOCATION);
   }
   return rules;
 }
@@ -2681,8 +2710,16 @@ function normalizeDdhRosterSlotLabel(value) {
       warning: "",
     };
   }
+  if (/^GED(?:\s+JUNIOR)?$/.test(upper)) {
+    return {
+      kind: "shift",
+      titleParts: { base: "GED shift", period: "", suffix: "" },
+      status: "ok",
+      warning: "",
+    };
+  }
   const period = extractDdhPeriod(upper);
-  const baseMatch = upper.match(/\b(ORANGE|SILVER|FAST|AVAO|ROVER|SSU)\b/);
+  const baseMatch = upper.match(/\b(ORANGE|SILVER|FAST|AVAO|ROVER|SSU|SWING)\b/);
   if (baseMatch && (period || baseMatch[1] === "SSU")) {
     const baseNames = {
       ORANGE: "Orange",
@@ -2691,6 +2728,7 @@ function normalizeDdhRosterSlotLabel(value) {
       AVAO: "AVAO",
       ROVER: "Rover",
       SSU: "SSU",
+      SWING: "Swing",
     };
     return {
       kind: "shift",
@@ -3439,7 +3477,7 @@ function formatTitle(source, titleParts, settings, kind = "shift") {
   if ([
     "leave", "annual_leave", "annual_parental_leave", "conference_leave", "sick_leave",
     "sabbatical_leave", "long_service_leave", "parental_leave", "carers_leave",
-    "family_leave", "military_leave", "exam_leave",
+    "family_leave", "military_leave", "exam_leave", "special_leave",
   ].includes(kind)) {
     return core;
   }
@@ -3687,6 +3725,17 @@ function shouldIgnoreMmc(value) {
   const upper = value.trim().toUpperCase();
   if (upper.startsWith("DANDENONG")) return true;
   return shouldIgnoreCommon(value);
+}
+
+// Roster writers use references to another hospital as a safety annotation
+// (for example, "PM MMC" on a DDH roster), not as a shift at this facility.
+// Keep these labels out of calendars before any generic shift fallback sees them.
+function isOtherHospitalReference(source, value) {
+  const upper = cleanText(value).replace(/\s+/g, " ").trim().toUpperCase();
+  if (/\b(?:TOX|HITH|VHH|ARV)\b/.test(upper)) return true;
+  if ((source === "DDH" || source === "MMC") && /\bCASEY\b/.test(upper)) return true;
+  if ((source === "DDH" || source === "Casey") && /\bMMC\b/.test(upper)) return true;
+  return false;
 }
 
 function shouldIgnoreCommon(value) {
