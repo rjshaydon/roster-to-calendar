@@ -2750,7 +2750,7 @@ function normalizeGenericDdhLabel(label) {
   if (/^(?:TOX\s+)?(?:SEC|SECOND(?:\s+ON[- ]?CALL)?)$/.test(upper)) {
     return {
       kind: "shift",
-      titleParts: { base: "TOX Second on call", period: "", suffix: "" },
+      titleParts: { base: "TOX SEC", period: "", suffix: "" },
       allDay: true,
       status: "ok",
       warning: "",
