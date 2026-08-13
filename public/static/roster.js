@@ -1724,7 +1724,7 @@ function parseDdhEntry(day, label, timeText, seniority = UNKNOWN_SENIORITY) {
       seniority,
     });
   }
-  if (shouldIgnoreDdh(label, seniority) || shouldIgnoreCommon(label)) return null;
+  if (!isDdhClinicalSupportExam(label) && (shouldIgnoreDdh(label, seniority) || shouldIgnoreCommon(label))) return null;
 
   if (/\bCRISIS\s+LOCUM\b/i.test(label)) {
     const parsedTime = parseDdhTimeRow(timeText);
@@ -2611,7 +2611,11 @@ function buildDefaultParserRules() {
     add(rules.mmc, "MMC", "PHNW", seniority, "PHNW", "", "", true, "", "", "");
     if (canWorkClinicalSupport) {
       add(rules.ddh, "DDH", "CS", seniority, "CS", "", "", true, "", "", "");
+      // A Monday CS AM entry is paired with an external HITH PM allocation;
+      // the DDH calendar should show the local Clinical Support component only.
+      add(rules.ddh, "DDH", "CS AM", seniority, "CS", "", "", true, "", "", "");
       add(rules.ddh, "DDH", "CS ONSITE", seniority, "CS onsite", "", "", true, "", "", DDH_LOCATION);
+      add(rules.ddh, "DDH", "CLINICAL SUPPORT ACEM OSCE", seniority, "CS Exam", "", "", false, "08:00", "17:30", DDH_LOCATION);
     }
     add(rules.ddh, "DDH", "PHNW", seniority, "PHNW", "", "", true, "", "", "");
     add(rules.ddh, "DDH", "SSU", seniority, "SSU", "", "", false, "07:30", "17:30", DDH_LOCATION);
@@ -2650,6 +2654,11 @@ function buildDefaultParserRules() {
     add(rules.casey, "Casey", "AM SWING", seniority, "Swing", "AM", "", false, "08:00", "17:30", CASEY_LOCATION);
     add(rules.casey, "Casey", "PM SWING", seniority, "Swing", "PM", "", false, "14:30", "00:00", CASEY_LOCATION);
   }
+  // Some legacy DDH worksheet layouts do not retain the section seniority on
+  // a staff row. Keep these two unambiguous Clinical Support labels usable in
+  // those files as well.
+  add(rules.ddh, "DDH", "CS AM", UNKNOWN_SENIORITY, "CS", "", "", true, "", "", "");
+  add(rules.ddh, "DDH", "CLINICAL SUPPORT ACEM OSCE", UNKNOWN_SENIORITY, "CS Exam", "", "", false, "08:00", "17:30", DDH_LOCATION);
   add(rules.mmc, "MMC", "CSM", "SMS", "CSM", "", "", false, "08:00", "17:30", MMC_LOCATION);
   add(rules.mmc, "MMC", "CS EXAM", "SMS", "CS Exam", "", "", false, "08:00", "17:30", MMC_LOCATION);
   return rules;
@@ -2869,9 +2878,14 @@ function extractDdhPeriod(label) {
 function shouldIgnoreDdh(value, seniority = UNKNOWN_SENIORITY) {
   const upper = String(value || "").trim().toUpperCase();
   if (!upper) return true;
+  if (isDdhClinicalSupportExam(upper)) return false;
   if (isDdhStructuralAnnotation(upper, seniority)) return true;
   if (DDH_IGNORE_PREFIXES.some((prefix) => upper.startsWith(prefix))) return true;
   return DDH_IGNORE_CONTAINS.some((fragment) => upper.includes(fragment));
+}
+
+function isDdhClinicalSupportExam(value) {
+  return /^CLINICAL\s+SUPPORT\s+ACEM\s+OSCE$/i.test(String(value || "").trim());
 }
 
 // FindMyShift carries staff headings, availability, and free-text rostering

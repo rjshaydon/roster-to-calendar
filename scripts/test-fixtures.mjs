@@ -2484,7 +2484,7 @@ const ddhFullSheet = XLSX.utils.aoa_to_sheet([
   ["", "07:30-17:00", "", "15:00-00:00", "14:30-00:00", "", "", ""],
   ["Caroline BOLT", "Orange PM (on-call)", "", "AVAO AM", "", "Orange AM IC", "", ""],
   ["", "15:00-00:00", "", "07:30-17:00", "", "08:00-18:00", "", ""],
-  ["Di FLOOD", "CS AM", "SSU SMS", "Clinical Support", "", "HITH PM", "", ""],
+  ["Di FLOOD", "CS AM", "SSU SMS", "Clinical Support ACEM OSCE", "", "HITH PM", "", ""],
   ["", "", "07:30-17:30", "", "", "", "", ""],
 ]);
 XLSX.utils.book_append_sheet(ddhFullWorkbook, ddhFullSheet, "Sheet1");
@@ -2503,8 +2503,9 @@ assert.ok(jimView.events.some((event) => event.title === "DDH: CS"));
 
 const diFlood = ddhFullDoctors.find((doctor) => doctor.displayName === "Di FLOOD");
 const diFloodView = buildRosterView([], ddhFullWorkbook, diFlood.key);
-assert.ok(diFloodView.events.some((event) => event.title === "DDH: CS AM"));
+assert.ok(diFloodView.events.some((event) => event.title === "DDH: CS" && event.rawValue === "CS AM"));
 assert.ok(diFloodView.events.some((event) => event.title === "DDH: SSU" && event.start.includes("07:30:00")));
+assert.ok(diFloodView.events.some((event) => event.title === "DDH: CS Exam" && event.rawValue === "Clinical Support ACEM OSCE" && event.start.includes("08:00:00")), "DDH Clinical Support ACEM OSCE should be a timed CS Exam shift");
 assert.equal(diFloodView.events.some((event) => event.rawValue === "HITH PM"), false, "other-hospital annotations must not become DDH calendar events");
 
 const ddhDefaultTimesWorkbook = XLSX.utils.book_new();
