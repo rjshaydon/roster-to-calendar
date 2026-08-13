@@ -387,6 +387,7 @@ let globalUnresolvedShiftCodeRunId = 0;
 let shiftCodeReviewFilter = { query: "", source: "all" };
 let previewIssueFocusTimer = 0;
 let shiftCodeReviewReturnContext = null;
+let pendingUnresolvedIssueFocusDate = "";
 let parserRuleSaveContext = { mode: "global", suggestionId: "", targetEmail: "" };
 let dismissedIssueFingerprints = new Set();
 let ignoredIssueFingerprints = new Set();
@@ -4215,7 +4216,11 @@ function renderPreviewGrid(doctor, data) {
   syncMobileChrome();
   if (pendingPreviewSnapToToday) {
     pendingPreviewSnapToToday = false;
-    requestAnimationFrame(() => snapPreviewToCurrentMonth(false));
+    // Normal account/profile switches should still open at the current month.
+    // A shift-code review jump deliberately keeps its historical roster date in view.
+    if (!pendingUnresolvedIssueFocusDate) {
+      requestAnimationFrame(() => snapPreviewToCurrentMonth(false));
+    }
   }
   queueGlobalUnresolvedShiftCodeLoad();
 }
@@ -7647,6 +7652,7 @@ async function openUnresolvedShiftIssueEvent(issueId) {
 
   closeShiftCodeReviewModal();
   shiftCodeReviewReturnContext = { id: String(issue.id || ""), code: String(issue.code || ""), source: String(issue.source || "") };
+  pendingUnresolvedIssueFocusDate = date;
   setStatus(`Opening ${doctor.displayName || issue.displayName || doctorKey} on ${formatDate(date)}…`);
   await switchDoctorSelection(doctor.key, { resetRange: false });
   for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -7654,6 +7660,7 @@ async function openUnresolvedShiftIssueEvent(issueId) {
     await new Promise((resolve) => window.setTimeout(resolve, 100));
   }
   if (!latestPreview?.events?.length || normalizeRosterName(selectedDoctor()?.key) !== doctorKey) {
+    pendingUnresolvedIssueFocusDate = "";
     setStatus("The calendar is still loading. Select the same review item again in a moment.", true);
     return;
   }
@@ -7672,6 +7679,7 @@ async function openUnresolvedShiftIssueEvent(issueId) {
 function focusPreviewIssueDate(date) {
   const cell = preview.querySelector(`[data-add-date="${CSS.escape(date)}"]`);
   if (!cell) return;
+  pendingUnresolvedIssueFocusDate = "";
   if (previewIssueFocusTimer) window.clearTimeout(previewIssueFocusTimer);
   preview.querySelectorAll(".is-unresolved-issue-focus").forEach((item) => item.classList.remove("is-unresolved-issue-focus"));
   cell.classList.add("is-unresolved-issue-focus");
