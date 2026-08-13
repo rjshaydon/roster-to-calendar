@@ -777,17 +777,79 @@ export async function compareDerivedRosterFiles(db, baselineFileId, candidateFil
   }
   const baseline = eventsByFile.get(String(baselineFileId)) || new Map();
   const candidate = eventsByFile.get(String(candidateFileId)) || new Map();
-  const removed = [...baseline].filter(([identity]) => !candidate.has(identity)).map(([, event]) => event);
-  const added = [...candidate].filter(([identity]) => !baseline.has(identity)).map(([, event]) => event);
+  const strictRemoved = [...baseline].filter(([identity]) => !candidate.has(identity)).map(([, event]) => event);
+  const strictAdded = [...candidate].filter(([identity]) => !baseline.has(identity)).map(([, event]) => event);
+  const unmatchedCandidate = new Set(candidate.keys());
+  const omitted = [];
+  for (const event of baseline.values()) {
+    const matchedIdentity = [...unmatchedCandidate].find((identity) => sameRosterOccurrence(event, candidate.get(identity)));
+    if (matchedIdentity) {
+      unmatchedCandidate.delete(matchedIdentity);
+    } else {
+      omitted.push(event);
+    }
+  }
+  const approvedOmissions = omitted.filter(isApprovedReparseOmission);
+  const removed = omitted.filter((event) => !isApprovedReparseOmission(event));
+  const added = [...unmatchedCandidate].map((identity) => candidate.get(identity));
   return {
     ok: true,
     baselineEvents: baseline.size,
     candidateEvents: candidate.size,
+    // Parser event ids change when a valid correction changes title or time.
+    // Preserve them as diagnostics, but gate activation on source occurrences.
+    strictRemovedCount: strictRemoved.length,
+    strictAddedCount: strictAdded.length,
+    omittedCount: omitted.length,
+    approvedOmissionCount: approvedOmissions.length,
     removedCount: removed.length,
     addedCount: added.length,
     removed: removed.slice(0, limit),
     added: added.slice(0, limit),
+    approvedOmissions: approvedOmissions.slice(0, limit),
   };
+}
+
+function sameRosterOccurrence(baseline, candidate) {
+  if (!baseline || !candidate) return false;
+  if (String(baseline.doctorKey || "") !== String(candidate.doctorKey || "")) return false;
+  if (String(baseline.source || "") !== String(candidate.source || "")) return false;
+  const day = String(baseline.start || "").slice(0, 10);
+  if (!day || !eventCoversDay(candidate, day)) return false;
+  const baselineRaw = normalizeRosterRawValue(baseline.rawValue);
+  const candidateValues = String(candidate.rawValue || "")
+    .split(" / ")
+    .map(normalizeRosterRawValue)
+    .filter(Boolean);
+  return Boolean(baselineRaw && candidateValues.includes(baselineRaw));
+}
+
+function eventCoversDay(event, day) {
+  const startDay = String(event?.start || "").slice(0, 10);
+  const endDay = String(event?.end || "").slice(0, 10);
+  if (!startDay || !endDay) return false;
+  // All-day end dates are exclusive; timed events ending overnight have an
+  // end date on the next day, which is also safe for this source-day check.
+  return startDay <= day && day < endDay;
+}
+
+function normalizeRosterRawValue(value) {
+  return String(value || "").replace(/\s+/g, " ").trim().toUpperCase();
+}
+
+function isApprovedReparseOmission(event) {
+  if (String(event?.source || "").toUpperCase() !== "DDH") return false;
+  const raw = normalizeRosterRawValue(event.rawValue);
+  // These are references made by a DDH roster writer to another service, not
+  // DDH work. They are explicitly excluded from calendars by product policy.
+  if (/\b(?:TOX|HITH|VHH|ARV|WARRAGUL|MMC|CASEY|AED|PED)\b/.test(raw)
+    || /\b(?:HITH|VHH)(?:AM|PM)\b/.test(raw)) return true;
+  if (!raw.startsWith("EXTRA")) return false;
+  // A generic Extra entry is a payroll annotation. Explicitly timed and
+  // period-labelled Extras remain rostered calendar shifts.
+  const hasPeriodOrSwing = /\b(?:AM|PM|SWING)\b/.test(raw);
+  const hasExplicitTime = /\b\d{1,2}(?::?\d{2})\s*(?:-|–|TO)\s*\d{1,2}(?::?\d{2})\b/.test(raw);
+  return !hasPeriodOrSwing && !hasExplicitTime;
 }
 
 // A retained-file reparse is written under a staging id. This method performs

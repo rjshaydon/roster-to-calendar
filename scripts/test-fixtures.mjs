@@ -1482,8 +1482,8 @@ assert.match(
 );
 assert.match(
   d1CalendarSource.match(/export async function compareDerivedRosterFiles[\s\S]*?export async function promoteVerifiedStagedRosterFile/)?.[0] || "",
-  /doctor_key[\s\S]*?removedCount/,
-  "reparse comparison must identify events by both doctor and parser occurrence id",
+  /doctor_key[\s\S]*?sameRosterOccurrence[\s\S]*?approvedOmissionCount/,
+  "reparse comparison must distinguish source occurrences from corrected parser event ids",
 );
 assert.match(
   d1CalendarSource.match(/export async function promoteVerifiedStagedRosterFile[\s\S]*?export async function deleteDerivedRosterFile/)?.[0] || "",
