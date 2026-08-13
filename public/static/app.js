@@ -2290,7 +2290,7 @@ async function mergeFiles(files) {
 
 function validateIncomingFiles(files) {
   if (files.some((file) => !file.name.match(/\.(xlsx|xlsm|xltx|xltm|pdf)$/i))) {
-    setStatus("Only Excel or PDF roster files in .xlsx, .xlsm, .xltx, .xltm, or .pdf format are supported.", true);
+    setStatus("That is not a valid roster file. Please drop an Excel or PDF roster file (.xlsx, .xlsm, .xltx, .xltm, or .pdf).", true);
     return [];
   }
   return files;
@@ -2345,7 +2345,11 @@ async function validateFreshRosterUploads(files) {
     }));
     return true;
   } catch (error) {
-    setStatus(error.message || "Could not validate roster dates.", true);
+    const reason = String(error?.message || "").trim();
+    setStatus(
+      `That file is not a valid roster file. Please drop an Excel or PDF roster file (.xlsx, .xlsm, .xltx, .xltm, or .pdf)${reason ? `: ${reason}` : "."}`,
+      true,
+    );
     return false;
   }
 }

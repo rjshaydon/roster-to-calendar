@@ -790,6 +790,11 @@ assert.doesNotMatch(
   "roster drag overlay should not expire while a file remains held over the page",
 );
 assert.match(
+  appSource.match(/function validateIncomingFiles[\s\S]*?async function analyzeFiles/)?.[0] || "",
+  /not a valid roster file[\s\S]*Please drop an Excel or PDF roster file/,
+  "invalid dropped files should give a clear valid-roster-file message",
+);
+assert.match(
   appSource.match(/document\.addEventListener\(\"keydown\"[\s\S]*?window\.addEventListener\(\"drop\"/)?.[0] || "",
   /Escape[\s\S]*abortRosterFileDrag/,
   "escape should abort an active roster file drag",
