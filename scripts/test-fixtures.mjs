@@ -2231,7 +2231,7 @@ const patrickCaseyEvents = patrickTanView.events.filter((event) => event.source 
 assert.ok(patrickCaseyEvents.length > 40);
 assert.equal(patrickCaseyEvents.some((event) => event.start.startsWith("2025")), false);
 assert.ok(patrickCaseyEvents.some((event) => event.title === "Casey: MIC PM"));
-assert.ok(patrickCaseyEvents.some((event) => event.title === "Casey: AM shift" && event.rawValue === "Orient 0800-1730" && event.start.includes("08:00:00") && event.end.includes("17:30:00")));
+assert.ok(patrickCaseyEvents.some((event) => event.title === "Casey: Orientation" && event.rawValue === "Orient 0800-1730" && event.start.includes("08:00:00") && event.end.includes("17:30:00")));
 const patrickMergedLeave = patrickCaseyEvents.find((event) => event.title === "Annual Leave" && event.start === "2026-07-27");
 assert.ok(patrickMergedLeave);
 assert.equal(patrickMergedLeave.end, "2026-08-03");

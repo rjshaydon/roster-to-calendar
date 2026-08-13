@@ -2768,7 +2768,9 @@ function normalizeDdhLocation(label, normalized) {
 
 function createOrientationRecord(source, day, rawValue, seniority = UNKNOWN_SENIORITY) {
   const label = String(rawValue || "").trim();
-  if (!/^ORIENTATION\b/i.test(label)) return null;
+  // Casey uses the abbreviated form "Orient 09-1730". It is a real,
+  // timed orientation shift, not metadata to be stripped from a roster cell.
+  if (!/^(?:ORIENTATION|ORIENT)\b/i.test(label)) return null;
   const range = label.match(/\b(\d{1,2})(?::?(\d{2}))?\s*(?:-|–|—|TO)\s*(\d{1,2})(?::?(\d{2}))?\b/i);
   const location = source === "MMC" ? MMC_LOCATION
     : source === "DDH" ? DDH_LOCATION
@@ -3735,6 +3737,9 @@ function isOtherHospitalReference(source, value) {
   if (/\b(?:TOX|HITH|VHH|ARV)\b/.test(upper)) return true;
   if ((source === "DDH" || source === "MMC") && /\bCASEY\b/.test(upper)) return true;
   if ((source === "DDH" || source === "Casey") && /\bMMC\b/.test(upper)) return true;
+  // In an MMC roster, DH means Dandenong Hospital. These are allocation
+  // annotations for the DDH roster, including explicit-time variants.
+  if (source === "MMC" && /^(?:(?:\d{4})-(?:\d{4})\s+)?(?:CS\s+DH|DH\s+CS)$/i.test(upper)) return true;
   return false;
 }
 
