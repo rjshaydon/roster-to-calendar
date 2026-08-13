@@ -2573,6 +2573,7 @@ XLSX.utils.book_append_sheet(ddhAccuracyWorkbook, XLSX.utils.aoa_to_sheet([
   ["Untimed Swing Doctor", "Extra Swing", "", "", "", "", "", ""],
   ["Timed Swing Doctor", "Extra Swing", "Extra Swing", "", "", "", "", ""],
   ["", "13:00-22:00", "16:00-01:00", "", "", "", "", ""],
+  ["Frank Annotation Doctor", "MDC", "NA", "MDC NA", "Comm", "NA PM", "Comm for safety", ""],
   ["AMP", "", "", "", "", "", "", ""],
   ["AMP Roster Doctor", "Physiotherapist", "Jane Example", "Swing PM", "", "", "", ""],
   ["Orientation Variant Doctor", "Orienation 0800-1000", "", "", "", "", "", ""],
@@ -2600,9 +2601,10 @@ const ddhExtraNoteDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "E
 const ddhExtraShiftDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "EXTRA SHIFT DOCTOR");
 const ddhUntimedSwingDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "UNTIMED SWING DOCTOR");
 const ddhTimedSwingDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "TIMED SWING DOCTOR");
+const ddhFrankAnnotationDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "FRANK ANNOTATION DOCTOR");
 const ddhAmpRosterDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "AMP ROSTER DOCTOR");
 const ddhOrientationVariantDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "ORIENTATION VARIANT DOCTOR");
-assert.ok(ddhAccuracyDoctor && crisisLocumDoctor && sickLeaveDoctor && conferenceLeaveDoctor && ddhFamilyLeaveDoctor && ddhParentalLeaveDoctor && ddhParentalVariantDoctor && ddhSpecialLeaveDoctor && ddhExamLeaveDoctor && ddhAnnualLeaveDoctor && ddhAnnotationDoctor && ddhGedDoctor && ddhNotesDoctor && ddhAedDoctor && ddhPedDoctor && ddhWarragulDoctor && ddhAvailabilityDoctor && ddhLeaveWithoutPayDoctor && ddhExtraNoteDoctor && ddhExtraShiftDoctor && ddhUntimedSwingDoctor && ddhTimedSwingDoctor && ddhAmpRosterDoctor && ddhOrientationVariantDoctor, "DDH accuracy fixtures should expose their rostered doctors");
+assert.ok(ddhAccuracyDoctor && crisisLocumDoctor && sickLeaveDoctor && conferenceLeaveDoctor && ddhFamilyLeaveDoctor && ddhParentalLeaveDoctor && ddhParentalVariantDoctor && ddhSpecialLeaveDoctor && ddhExamLeaveDoctor && ddhAnnualLeaveDoctor && ddhAnnotationDoctor && ddhGedDoctor && ddhNotesDoctor && ddhAedDoctor && ddhPedDoctor && ddhWarragulDoctor && ddhAvailabilityDoctor && ddhLeaveWithoutPayDoctor && ddhExtraNoteDoctor && ddhExtraShiftDoctor && ddhUntimedSwingDoctor && ddhTimedSwingDoctor && ddhFrankAnnotationDoctor && ddhAmpRosterDoctor && ddhOrientationVariantDoctor, "DDH accuracy fixtures should expose their rostered doctors");
 const ddhAccuracyView = buildRosterView([], ddhAccuracyWorkbook, ddhAccuracyDoctor.key);
 assert.deepEqual(
   ddhAccuracyView.events.map((event) => [event.title, event.rawValue, event.timeLabel]),
@@ -2647,6 +2649,8 @@ assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhExtraNoteDoctor.key
 assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhExtraShiftDoctor.key).events.map((event) => [event.title, event.timeLabel]), [["DDH: Extra AM", "08:00-18:00"], ["DDH: Extra PM", "16:00-01:00"]], "period-labelled or explicitly timed Extra entries should remain calendar shifts");
 assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhUntimedSwingDoctor.key).events.map((event) => [event.title, event.allDay]), [["DDH: Swing shift", true]], "untimed Swing entries should remain visible as all-day Swing shifts");
 assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhTimedSwingDoctor.key).events.map((event) => [event.title, event.timeLabel]), [["DDH: Swing AM", "13:00-22:00"], ["DDH: Swing PM", "16:00-01:00"]], "timed Swing entries should classify AM before 14:00 and PM after 15:00");
+assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhFrankAnnotationDoctor.key).events, [], "Frank's DDH MDC, NA, and communication annotations should not become calendar events");
+assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhFrankAnnotationDoctor.key).issues, [], "Frank's DDH MDC, NA, and communication annotations should not become unresolved shift codes");
 assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhAmpRosterDoctor.key).events.map((event) => event.title), ["DDH: Swing PM"], "AMP supervision headings and names should not become calendar events while genuine AMP shifts remain visible");
 assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhAmpRosterDoctor.key).issues, [], "AMP supervision headings and names should not become unresolved shift codes");
 assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhOrientationVariantDoctor.key).events.map((event) => [event.title, event.timeLabel]), [["DDH: Orientation", "08:00-10:00"]], "orientation spelling variants should standardise to a timed Orientation shift");

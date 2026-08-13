@@ -2879,7 +2879,11 @@ function shouldIgnoreDdh(value, seniority = UNKNOWN_SENIORITY) {
 // or unresolved shift-code diagnostics.
 function isDdhStructuralAnnotation(value, seniority = UNKNOWN_SENIORITY) {
   const upper = String(value || "").trim().toUpperCase();
-  if (["INTERN", "INTERNS", "UNAVAILABLE", "UNAVAILABE", "-", "--", "SEC", "N", "Y", "W"].includes(upper)) return true;
+  if ([
+    "INTERN", "INTERNS", "UNAVAILABLE", "UNAVAILABE", "-", "--", "SEC", "N", "Y", "W",
+    // Frank Soden's DDH cells are roster-writer annotations, not shifts.
+    "MDC", "NA", "MDC NA", "NA PM", "COMM", "COMM FOR SAFETY",
+  ].includes(upper)) return true;
   // The AMP section contains supervision and free-text notes (including
   // physiotherapist headings and staff names), not rostered AMP shifts.
   // Restrict this exclusion to AMP so identically shaped labels elsewhere
