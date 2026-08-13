@@ -947,6 +947,10 @@ export function isApprovedReparseOmission(event, baselineFileId = "") {
   // exact so that real CS, CS onsite, and every other removal still block a
   // staged promotion for review.
   if (source === "DDH" && /^CS\s+NOT\s+ONSITE\s+PLS?$/.test(raw)) return true;
+  // Product-approved on 2026-08-14: these exact DDH free-text requests are
+  // roster-writer messages, not allocations. Their removal is intentional
+  // when the shared parser stops emitting them as calendar events.
+  if (source === "DDH" && isApprovedDdhRosterWriterMessageOmission(raw)) return true;
   // Product-approved: these are DDH clinical-support references entered into
   // MMC rosters to avoid unsafe late/early allocations, not MMC work.
   if (source === "MMC" && /(?:^|\s)CS\s*DH$/.test(raw)) return true;
@@ -982,6 +986,15 @@ export function isApprovedReparseOmission(event, baselineFileId = "") {
   const hasPeriodOrSwing = /\b(?:AM|PM|SWING)\b/.test(raw);
   const hasExplicitTime = /\b\d{1,2}(?::?\d{2})\s*(?:-|–|TO)\s*\d{1,2}(?::?\d{2})\b/.test(raw);
   return !hasPeriodOrSwing && !hasExplicitTime;
+}
+
+function isApprovedDdhRosterWriterMessageOmission(raw) {
+  if (/^(?:AM|PM)\s*\(\s*AVOID IF POSSIBLE\s*\)$/.test(raw)) return true;
+  if (/^AM\s+OK$/.test(raw)) return true;
+  if (/^C\/S\s+FOR\s+\d{1,2}\/\d{1,2}(?:\/\d{2,4})?$/.test(raw)) return true;
+  if (/^CAN\s+WORK(?:\s+\d+\s+EXTRA\s+THIS\s+WEEK)?$/.test(raw)) return true;
+  if (/^CAN['’]?T\s+DO\s+THIS\s+WEEKEND(?:,?\s+SORRY!?)?$/.test(raw)) return true;
+  return /\b\d+\s+SHIFTS?\s+THIS\s+WEEK\b.*\b(?:MAKE\s+UP|NEXT\s+WEEK)\b/.test(raw);
 }
 
 // A retained-file reparse is written under a staging id. This method performs

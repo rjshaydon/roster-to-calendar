@@ -72,6 +72,20 @@ assert.equal(
   false,
   "an unsupported legacy leave omission must not apply to another source file",
 );
+assert.equal(
+  isApprovedReparseOmission({
+    doctorKey: "FRANK SODEN", source: "DDH", title: "DDH: CAN WORK 1 EXTRA THIS WEEK", start: "2026-04-06", rawValue: "Can work 1 extra this week",
+  }),
+  true,
+  "a reviewed DDH roster-writer request should be safely omitted on reparse",
+);
+assert.equal(
+  isApprovedReparseOmission({
+    doctorKey: "FRANK SODEN", source: "DDH", title: "DDH: Can work", start: "2026-04-06", rawValue: "Can work extra AM",
+  }),
+  false,
+  "a different DDH message-like value must not receive a broad reparse-removal approval",
+);
 assert.deepEqual(
   unresolvedCodeSummary([
     { status: "unknown", source: "DDH", seniority: "HMO", rawValue: "X" },
