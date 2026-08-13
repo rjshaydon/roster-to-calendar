@@ -125,6 +125,11 @@ body.is-roster-dragging #addRosterFilesButton {
   box-shadow: 0 22px 70px rgba(20, 34, 42, 0.24);
 }
 
+/* Temporarily keep roster importing available through drag-and-drop only. */
+#addRosterFilesButton {
+  display: none !important;
+}
+
 .roster-drop-overlay {
   position: fixed;
   inset: 0;
