@@ -791,7 +791,7 @@ assert.doesNotMatch(
 );
 assert.match(
   appSource.match(/function validateIncomingFiles[\s\S]*?async function analyzeFiles/)?.[0] || "",
-  /showRosterImportError[\s\S]*Please drop an Excel or PDF roster file[\s\S]*window\.setTimeout[\s\S]*3000/,
+  /showRosterImportError[\s\S]*Please drop an Excel or PDF roster file[\s\S]*window\.setTimeout[\s\S]*5000/,
   "invalid dropped files should show a temporary dismissible valid-roster-file modal instead of a console error",
 );
 assert.match(

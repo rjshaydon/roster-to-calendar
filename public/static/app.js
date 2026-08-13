@@ -2319,7 +2319,7 @@ function showRosterImportError(message) {
   rosterImportErrorModal.setAttribute("aria-hidden", "false");
   rosterImportErrorTimer = window.setTimeout(() => {
     if (runId === rosterImportErrorRunId) dismissRosterImportError();
-  }, 3000);
+  }, 5000);
 }
 
 function dismissRosterImportError() {
