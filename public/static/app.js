@@ -13067,13 +13067,16 @@ async function validateClaimedAccountCalendarInBackground(context = {}, options 
 }
 
 async function validateDoctorProfileCalendarInBackground(doctor, previousState, options = {}) {
-  if (options.renderedCachedSnapshot && visibleSnapshotIsCurrent({ requireNotStale: true })) {
-    renderLoginState();
-    return;
-  }
+  // A browser profile cache can be complete enough to render immediately, but
+  // it is never authoritative. In particular, its revision may have been
+  // copied from a different calendar context before this profile's snapshot
+  // was refreshed. Always obtain this profile's full server snapshot before
+  // declaring the visible calendar current. Do not send cachedRevision here:
+  // the profile endpoint intentionally treats it as a validation-only request
+  // and may therefore omit the snapshot body we need to replace stale events.
   let result = await loadUnclaimedDoctorCalendar(doctor, previousState, {
     profile: options.profile,
-    cachedRevision: options.renderedCachedSnapshot ? (options.cachedRevision || currentSnapshot?.calendarRevision || "") : "",
+    cachedRevision: "",
     allowInlineBuild: false,
     transition: options.transition,
   });

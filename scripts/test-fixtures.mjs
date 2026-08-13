@@ -903,8 +903,8 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function validateDoctorProfileCalendarInBackground[\s\S]*?async function enterUserAccount/)?.[0] || "",
-  /renderedCachedSnapshot && visibleSnapshotIsCurrent\(\{ requireNotStale: true \}\)[\s\S]*allowInlineBuild: false[\s\S]*waitForDoctorProfileCalendarBuild/,
-  "doctor profile switching should keep builds off the request path and wait for a newly scheduled snapshot",
+  /browser profile cache can be complete enough to render immediately[\s\S]*cachedRevision: ""[\s\S]*allowInlineBuild: false[\s\S]*waitForDoctorProfileCalendarBuild/,
+  "doctor profile switching should replace a browser cache with the profile's authoritative server snapshot",
 );
 assert.match(
   appSource.match(/async function waitForDoctorProfileCalendarBuild[\s\S]*?async function enterUserAccount/)?.[0] || "",
