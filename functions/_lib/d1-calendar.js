@@ -925,12 +925,36 @@ const APPROVED_DDH_WEEKLY_LEAVE_REPLACEMENTS = new Set([
   "Dandenong_Emergency_Doctors'_Roster_04-05-2026_to_02-08-2026.xlsx:137815:1778982385007|STEVE GUASTALEGNAME|Annual Leave|2026-07-27|2026-08-03|AL",
 ]);
 
+// Product-approved on 2026-08-13 after direct roster review. These rows exist
+// only in the legacy derived calendar and have no corresponding retained MMC
+// roster entry. The source-file scope makes this a one-off correction, not a
+// general permission to remove leave.
+const APPROVED_MMC_LEGACY_UNSUPPORTED_LEAVE = new Set([
+  "automation:monash-adults:ac7f9d2e29c6bbb35e8a86df|MICKEY FERGUSON|A/L",
+  "automation:monash-adults:ac7f9d2e29c6bbb35e8a86df|HELEN PSIHOGIOS|A/L / ANNUAL LEAVE",
+  "automation:monash-adults:ac7f9d2e29c6bbb35e8a86df|MICHELLE BERTOLUCCI|AL 9.5HRS",
+  "automation:monash-adults:75a99896fe1c2e6d1bc33db8|HEATHER LACEY|AL 10HRS",
+  "AdultTerm1.2026.xlsx:641068:1776812908257|JOSEPH VU|C/L",
+]);
+
 export function isApprovedReparseOmission(event, baselineFileId = "") {
   const source = String(event?.source || "").toUpperCase();
   const raw = normalizeRosterRawValue(event.rawValue);
   // Product-approved: these are DDH clinical-support references entered into
   // MMC rosters to avoid unsafe late/early allocations, not MMC work.
   if (source === "MMC" && /(?:^|\s)CS\s*DH$/.test(raw)) return true;
+  // Non-SMS clinicians do not have Conference Leave allocations. If an old
+  // calendar row conflicts with an actual shift, the source-faithful shift
+  // wins on reparse.
+  const seniority = String(event?.seniority || "").trim();
+  if (source === "MMC" && seniority && seniority.toUpperCase() !== "SMS"
+    && /^CONFERENCE LEAVE$/i.test(String(event?.title || "").trim())) return true;
+  const legacyMmcLeaveKey = [
+    String(baselineFileId || ""),
+    String(event?.doctorKey || "").toUpperCase(),
+    raw,
+  ].join("|");
+  if (APPROVED_MMC_LEGACY_UNSUPPORTED_LEAVE.has(legacyMmcLeaveKey)) return true;
   if (source !== "DDH") return false;
   const exactLeaveReplacement = [
     String(baselineFileId || ""),

@@ -58,6 +58,20 @@ assert.equal(
   true,
   "a DDH clinical-support reference recorded in an MMC roster is an approved omission",
 );
+assert.equal(
+  isApprovedReparseOmission({
+    doctorKey: "MICKEY FERGUSON", source: "MMC", title: "Annual Leave", start: "2026-07-13", rawValue: "A/L",
+  }, "automation:monash-adults:ac7f9d2e29c6bbb35e8a86df"),
+  true,
+  "the directly reviewed legacy MMC leave omission must be limited to its retained source",
+);
+assert.equal(
+  isApprovedReparseOmission({
+    doctorKey: "MICKEY FERGUSON", source: "MMC", title: "Annual Leave", start: "2026-07-13", rawValue: "A/L",
+  }, "different-retained-file"),
+  false,
+  "an unsupported legacy leave omission must not apply to another source file",
+);
 assert.deepEqual(
   unresolvedCodeSummary([
     { status: "unknown", source: "DDH", seniority: "HMO", rawValue: "X" },
