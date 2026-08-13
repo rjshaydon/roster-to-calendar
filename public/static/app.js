@@ -386,6 +386,7 @@ let globalUnresolvedShiftCodesError = "";
 let globalUnresolvedShiftCodeRunId = 0;
 let shiftCodeReviewFilter = { query: "", source: "all" };
 let previewIssueFocusTimer = 0;
+let shiftCodeReviewReturnContext = null;
 let parserRuleSaveContext = { mode: "global", suggestionId: "", targetEmail: "" };
 let dismissedIssueFingerprints = new Set();
 let ignoredIssueFingerprints = new Set();
@@ -1812,6 +1813,11 @@ preview.addEventListener("click", (event) => {
   const backTrigger = event.target.closest("[data-preview-back-to-creator]");
   if (backTrigger) {
     void returnToCreatorCalendar();
+    return;
+  }
+  const backToShiftCodesTrigger = event.target.closest("[data-preview-back-to-shift-codes]");
+  if (backToShiftCodesTrigger) {
+    void returnToShiftCodeReview();
     return;
   }
   const rangeTrigger = event.target.closest("[data-range-trigger]");
@@ -4223,6 +4229,9 @@ function renderPreviewHeader(doctor, data) {
         <span class="preview-event-count">${data.count} events</span>
         ${canReturnToCreator()
           ? `<button type="button" class="button button-secondary preview-back-button" data-preview-back-to-creator>Back to creator</button>`
+          : ""}
+        ${shiftCodeReviewReturnContext && canReturnToCreator()
+          ? `<button type="button" class="button button-secondary preview-back-button" data-preview-back-to-shift-codes>Back to shift codes</button>`
           : ""}
         <button type="button" class="button button-secondary preview-logout-button" data-preview-logout>Log out</button>
       </div>
@@ -7637,6 +7646,7 @@ async function openUnresolvedShiftIssueEvent(issueId) {
   }
 
   closeShiftCodeReviewModal();
+  shiftCodeReviewReturnContext = { id: String(issue.id || ""), code: String(issue.code || ""), source: String(issue.source || "") };
   setStatus(`Opening ${doctor.displayName || issue.displayName || doctorKey} on ${formatDate(date)}…`);
   await switchDoctorSelection(doctor.key, { resetRange: false });
   for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -7670,6 +7680,26 @@ function focusPreviewIssueDate(date) {
     cell.classList.remove("is-unresolved-issue-focus");
     previewIssueFocusTimer = 0;
   }, 6000);
+}
+
+async function returnToShiftCodeReview() {
+  const context = shiftCodeReviewReturnContext;
+  if (!context) {
+    await returnToCreatorCalendar();
+    return;
+  }
+  await returnToCreatorCalendar();
+  await openAccountsSurface({ defaultAdminTab: "system" });
+  shiftCodeReviewFilter = { query: context.code, source: context.source || "all" };
+  openShiftCodeReviewModal();
+  requestAnimationFrame(() => {
+    const row = shiftCodeReviewModalBody?.querySelector(`[data-shift-code-review-id="${CSS.escape(context.id)}"]`);
+    if (!row) return;
+    row.open = true;
+    row.scrollIntoView({ block: "center", behavior: "smooth" });
+  });
+  shiftCodeReviewReturnContext = null;
+  setStatus("Returned to the selected shift-code review.");
 }
 
 function applyPreviewTermStart(value) {
@@ -11349,7 +11379,7 @@ function renderUnknownShiftCodeHierarchy(items, options = {}) {
                 <summary><strong>${escapeHtml(seniority || "Unknown seniority")}</strong> · ${codes.length} code${codes.length === 1 ? "" : "s"}</summary>
                 <div class="issues-list">
                   ${codes.sort((left, right) => left.code.localeCompare(right.code)).map((item) => `
-                    <details class="issue-card shift-code-review-row">
+                    <details class="issue-card shift-code-review-row" data-shift-code-review-id="${escapeHtml(item.id)}">
                       <summary><strong>${escapeHtml(item.code)}</strong>${item.count > 1 ? ` · seen ${item.count} times` : ""}</summary>
                       <div>
                         <p>${escapeHtml(item.message || "Shift code not recognised.")}</p>
