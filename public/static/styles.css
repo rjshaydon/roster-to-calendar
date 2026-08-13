@@ -817,10 +817,11 @@ input[type="color"] {
   to { transform: rotate(360deg); }
 }
 
+/* This is an explicit import-status indicator requested by the creator. */
 @media (prefers-reduced-motion: reduce) {
   .file-reparse.is-processing .file-reparse-icon,
   .file-reparse:disabled.is-processing .file-reparse-icon {
-    animation: none;
+    animation: roster-refresh-spin 800ms linear infinite;
   }
 }
 
