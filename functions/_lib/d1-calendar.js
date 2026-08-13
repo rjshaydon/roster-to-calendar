@@ -821,7 +821,34 @@ export function sameRosterOccurrence(baseline, candidate) {
     .split(" / ")
     .map(normalizeRosterRawValue)
     .filter(Boolean);
-  return Boolean(baselineRaw && candidateValues.includes(baselineRaw));
+  if (baselineRaw && candidateValues.includes(baselineRaw)) return true;
+  // Contiguous leave is intentionally consolidated by the current parser.
+  // Its combined raw annotation may therefore differ from a previous
+  // single-day row, even though the same leave category still covers that
+  // source day. Treat only that narrow case as the same occurrence; a leave
+  // changing into a shift, a different leave category, or an absent date is
+  // still a hard promotion blocker.
+  const baselineLeave = leaveOccurrenceCategory(baseline);
+  return Boolean(baselineLeave && baselineLeave === leaveOccurrenceCategory(candidate));
+}
+
+function leaveOccurrenceCategory(event) {
+  if (event?.allDay !== true) return "";
+  const text = normalizeRosterRawValue(`${event.title || ""} ${event.rawValue || ""}`);
+  if (/\bANNUAL\b/.test(text) && /\bPARENTAL\b/.test(text)) return "annual-parental";
+  if (/\b(?:CONFERENCE|CME)\b/.test(text)) return "conference";
+  if (/\bANNUAL\b|\bA\/L\b/.test(text)) return "annual";
+  if (/\b(?:SICK|S\/L)\b/.test(text)) return "sick";
+  if (/\b(?:FAMILY|F\/L)\b/.test(text)) return "family";
+  if (/\bPERSONAL\b/.test(text)) return "personal";
+  if (/\bSTUDY\b/.test(text)) return "study";
+  if (/\bEXAM\b/.test(text)) return "exam";
+  if (/\b(?:SABBATICAL|SAB\/L)\b/.test(text)) return "sabbatical";
+  if (/\bPARENTAL\b/.test(text)) return "parental";
+  if (/\bLONG SERVICE\b|\bLSL\b/.test(text)) return "long-service";
+  if (/\b(?:LEAVE WITHOUT PAY|LWOP|LWP)\b/.test(text)) return "without-pay";
+  if (/\bSPECIAL LEAVE\b/.test(text)) return "special";
+  return "";
 }
 
 function eventCoversDay(event, day) {
