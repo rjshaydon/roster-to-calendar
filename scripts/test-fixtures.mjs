@@ -415,6 +415,51 @@ assert.ok(
   Object.values(findmyshiftAutomatedPayload.eventsByDoctor).flat().some((event) => event.location === "South Campus"),
   "automated FindMyShift processing should retain facility-specific calendar locations",
 );
+
+const mmcTypoWorkbook = XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(mmcTypoWorkbook, XLSX.utils.aoa_to_sheet([
+  ["Seniority", "Name", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+  ["", "", new Date("2026-03-23T00:00:00"), new Date("2026-03-24T00:00:00"), new Date("2026-03-25T00:00:00"), new Date("2026-03-26T00:00:00"), new Date("2026-03-27T00:00:00"), new Date("2026-03-28T00:00:00"), new Date("2026-03-29T00:00:00")],
+  ["SMS", "MMC Typo Doctor", "1000-17300 SWA", "1430-0000 SWP PH", "1500-0000 PH", "", "", "", ""],
+  ["SMS", "Christina Hatton", "", "", "", "i", "", "", ""],
+], { cellDates: true }), "Week 1");
+XLSX.utils.book_append_sheet(mmcTypoWorkbook, XLSX.utils.aoa_to_sheet([["MMC test roster"]]), "Whole thing");
+const mmcTypoFormData = new FormData();
+mmcTypoFormData.append("rosterFiles", workbookFile(mmcTypoWorkbook, "AdultTerm1.2026.xlsx"));
+const mmcTypoSource = (await parseUploadForm(new Request("http://fixture.test/api/analyze", { method: "POST", body: mmcTypoFormData }))).sources.mmc;
+const mmcTypoDoctor = doctorOptions(mmcTypoSource, []).find((doctor) => doctor.key === "MMC TYPO DOCTOR");
+const christinaHatton = doctorOptions(mmcTypoSource, []).find((doctor) => doctor.key === "CHRISTINA HATTON");
+assert.ok(mmcTypoDoctor && christinaHatton, "MMC typo fixtures should expose both clinicians");
+assert.deepEqual(
+  buildRosterView(mmcTypoSource, [], mmcTypoDoctor.key).events.map((event) => [event.title, event.rawValue, event.timeLabel]),
+  [
+    ["MMC: Swing AM", "1000-17300 SWA", "10:00-17:30"],
+    ["MMC: Swing PM Hub", "1430-0000 SWP PH", "14:30-00:00"],
+    ["MMC: Hub PM", "1500-0000 PH", "15:00-00:00"],
+  ],
+  "MMC swing and Hub typo variants should retain their supplied times and normalised titles",
+);
+assert.deepEqual(buildRosterView(mmcTypoSource, [], christinaHatton.key).events, [], "a stray MMC i annotation should not become an event");
+assert.deepEqual(buildRosterView(mmcTypoSource, [], christinaHatton.key).issues, [], "a stray MMC i annotation should not remain unresolved");
+
+const ddhMessageWorkbook = XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(ddhMessageWorkbook, XLSX.utils.aoa_to_sheet([
+  ["", "Mon. Sep. 14, 2026", "Tue. Sep. 15, 2026", "Wed. Sep. 16, 2026", "Thu. Sep. 17, 2026", "Fri. Sep. 18, 2026", "Sat. Sep. 19, 2026", "Sun. Sep. 20, 2026"],
+  ["Shawn Test", "", "", "", "", "", "08H00", "08H00"],
+  ["", "", "", "", "", "", "VHH", "VHH"],
+  ["Message Test", "AM (AVOID IF POSSIBLE)", "AM OK", "C/S for 27/4", "Can work", "Can work 1 extra this week", "Cant do this weekend, sorry!", "4 shifts this week to make up for next week pls"],
+]), "Sheet1");
+const ddhMessageFormData = new FormData();
+ddhMessageFormData.append("rosterFiles", workbookFile(ddhMessageWorkbook, "Dandenong messages.xlsx"));
+const ddhMessageSource = (await parseUploadForm(new Request("http://fixture.test/api/analyze", { method: "POST", body: ddhMessageFormData }))).sources.ddh;
+const shawnTest = doctorOptions([], ddhMessageSource).find((doctor) => doctor.key === "SHAWN TEST");
+const messageTest = doctorOptions([], ddhMessageSource).find((doctor) => doctor.key === "MESSAGE TEST");
+assert.ok(shawnTest && messageTest, "DDH annotation fixtures should expose their clinicians");
+assert.deepEqual(buildRosterView([], ddhMessageSource, shawnTest.key).events, [], "two-line 08H00/VHH late–early warnings should not become DDH shifts");
+assert.deepEqual(buildRosterView([], ddhMessageSource, shawnTest.key).issues, [], "two-line 08H00/VHH late–early warnings should not remain unresolved");
+assert.deepEqual(buildRosterView([], ddhMessageSource, messageTest.key).events, [], "DDH roster-writer messages should not become calendar shifts");
+assert.deepEqual(buildRosterView([], ddhMessageSource, messageTest.key).issues, [], "DDH roster-writer messages should not remain unresolved");
+
 const caseyWorkbook = XLSX.readFile(fileURLToPath(new URL("../fixtures/Casey_Term_2_2026_DRAFT.xlsm", import.meta.url)), {
   cellDates: true,
 });
@@ -446,6 +491,7 @@ assert.match(indexSource, /id="stayLoggedIn"[^>]*checked/, "Stay logged in shoul
 assert.equal((appSource.match(/data-test-findmyshift/g) || []).length, 0, "FindMyShift diagnostics should not remain exposed as a UI control");
 assert.equal((appSource.match(/data-sync-findmyshift/g) || []).length, 0, "FindMyShift is automated and should not expose a manual sync control");
 assert.equal((appSource.match(/data-download-findmyshift-exceptions/g) || []).length, 0, "FindMyShift exception review is no longer exposed as a UI control");
+assert.match(findmyshiftModuleSource, /findmyshiftRequest\("reports\/shifts",[\s\S]*comments:\s*"no"/, "FindMyShift imports should request comments=no so roster-writer comments are excluded upstream");
 assert.match(facilityAccessMigrationSource, /facility_overview_enabled INTEGER NOT NULL DEFAULT 0/, "At a glance database access should default to opt-in");
 assert.match(facilityOptInRepairMigrationSource, /WHEN role IN \('creator', 'owner'\) THEN 1[\s\S]*ELSE 0/, "the At a glance repair should retain Creator access and revoke unintended standard-user access");
 assert.match(indexSource, /data-facility-overview-tab="on-shift">On shift[\s\S]*data-facility-overview-tab="by-stream">By stream[\s\S]*data-facility-overview-tab="staff">ED staff/, "By stream should sit between On shift and ED staff");

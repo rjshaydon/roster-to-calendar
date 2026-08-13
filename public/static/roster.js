@@ -1651,7 +1651,9 @@ function parseMmcEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
 
   const explicit = extractMmcExplicitTime(raw);
   const label = explicit ? explicit.label : raw.trim();
-  const normalized = findManualParserRule("MMC", seniority, label, explicit) || normalizeGenericMmcTimedLabel(label, explicit);
+  const normalized = normalizeMmcExplicitKnownTypo(label, explicit)
+    || findManualParserRule("MMC", seniority, label, explicit)
+    || normalizeGenericMmcTimedLabel(label, explicit);
   if (!normalized) {
     return createUnknownRecord("MMC", day, raw, "MMC shift code not recognised.", seniority);
   }
@@ -1695,6 +1697,10 @@ function parseMmcEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
 
 function parseDdhEntry(day, label, timeText, seniority = UNKNOWN_SENIORITY) {
   if (!label) return null;
+  // Legacy DDH sheets sometimes split a late–early warning across two lines:
+  // 08H00 on the staff row and VHH on the supplementary row. It is an
+  // external-hospital safety annotation, never a DDH shift.
+  if (isDdhLateEarlyExternalReference(label, timeText)) return null;
   if (isDdhStructuralAnnotation(label, seniority)) return null;
   const labelTime = parseDdhTimeRow(label);
   if (labelTime) {
@@ -2074,7 +2080,37 @@ function normalizeGenericMmcTimedLabel(label, explicit) {
 }
 
 function extractMmcExplicitTime(value) {
-  return extractTimeWithLabel(value);
+  // A recurring MMC roster typo adds one trailing zero to the end time
+  // (for example, 1000-17300 SWA instead of 1000-1730 SWA).
+  const corrected = String(value || "").replace(/\b(\d{4})-(\d{4})0(?=\s|$)/g, "$1-$2");
+  return extractTimeWithLabel(corrected);
+}
+
+function normalizeMmcExplicitKnownTypo(label, explicit) {
+  if (!explicit) return null;
+  const code = String(label || "").replace(/\s+/g, " ").trim().toUpperCase();
+  // PH is only meaningful as a timed MMC entry: it is a dropped J from PHJ.
+  if (code === "PH") {
+    return {
+      kind: "shift",
+      titleParts: { base: "Hub", period: "PM", suffix: "" },
+      location: MMC_LOCATION,
+      allDay: false,
+      defaultTimes: null,
+    };
+  }
+  // SWP PH(J) records a Swing PM Hub allocation. Preserve the supplied time
+  // because it is a swing shift rather than imposing standard Hub hours.
+  if (code === "SWP PH" || code === "SWP PHJ") {
+    return {
+      kind: "shift",
+      titleParts: { base: "Swing", period: "PM", suffix: "Hub" },
+      location: MMC_LOCATION,
+      allDay: false,
+      defaultTimes: null,
+    };
+  }
+  return null;
 }
 
 function normalizeCaseyLabel(label, explicit = null) {
@@ -2922,10 +2958,28 @@ function shouldIgnoreDdh(value, seniority = UNKNOWN_SENIORITY) {
   if (!upper) return true;
   if (isDdhClinicalSupportExam(upper)) return false;
   if (isDdhStructuralAnnotation(upper, seniority)) return true;
+  if (isDdhRosterWriterMessage(upper)) return true;
   if (upper === "DAY OFF IN LIEU") return true;
   if (/^CS\s+NOT\s+ONSITE\s+PLS?\b/.test(upper)) return true;
   if (DDH_IGNORE_PREFIXES.some((prefix) => upper.startsWith(prefix))) return true;
   return DDH_IGNORE_CONTAINS.some((fragment) => upper.includes(fragment));
+}
+
+function isDdhRosterWriterMessage(value) {
+  const upper = String(value || "").replace(/\s+/g, " ").trim().toUpperCase();
+  if (!upper) return false;
+  if (/^(?:AM|PM)\s*\(\s*AVOID IF POSSIBLE\s*\)$/.test(upper)) return true;
+  if (/^AM\s+OK$/.test(upper)) return true;
+  if (/^C\/S\s+FOR\s+\d{1,2}\/\d{1,2}(?:\/\d{2,4})?$/.test(upper)) return true;
+  if (/^CAN\s+WORK(?:\s+\d+\s+EXTRA\s+THIS\s+WEEK)?$/.test(upper)) return true;
+  if (/^CAN['’]?T\s+DO\s+THIS\s+WEEKEND(?:,?\s+SORRY!?)?$/.test(upper)) return true;
+  return /\b\d+\s+SHIFTS?\s+THIS\s+WEEK\b.*\b(?:MAKE\s+UP|NEXT\s+WEEK)\b/.test(upper);
+}
+
+function isDdhLateEarlyExternalReference(label, supplementaryValue) {
+  const time = String(label || "").replace(/\s+/g, "").toUpperCase();
+  const reference = cleanText(supplementaryValue).replace(/\s+/g, " ").trim().toUpperCase();
+  return /^0?8(?:H|:)?00$/.test(time) && /\bVHH\b/.test(reference);
 }
 
 function isDdhClinicalSupportExam(value) {
@@ -3892,6 +3946,7 @@ function hasNonLeaveDdhEntry(values, seniority = UNKNOWN_SENIORITY) {
 
 function shouldIgnoreMmc(value) {
   const upper = value.trim().toUpperCase();
+  if (upper === "I") return true;
   if (upper.startsWith("DANDENONG")) return true;
   // "Exam" is normally a roster annotation, except for the explicit MMC
   // Clinical Support Exam allocation which is a real, timed shift.

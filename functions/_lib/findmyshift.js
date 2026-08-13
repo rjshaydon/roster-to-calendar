@@ -146,6 +146,10 @@ export async function findmyshiftShiftReport(apiKey, teamId, range) {
     teamId,
     from: range.from,
     to: range.to,
+    // Exclude roster-writer comments at the provider boundary. They are not
+    // rostered assignments and are retained neither as calendar events nor
+    // unresolved shift-code candidates.
+    comments: "no",
   });
 }
 
