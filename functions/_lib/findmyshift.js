@@ -146,6 +146,9 @@ export async function findmyshiftShiftReport(apiKey, teamId, range) {
     teamId,
     from: range.from,
     to: range.to,
+    // FindMyShift uses this to suppress free-text/availability rows while
+    // retaining rostered time-and-stream assignment rows.
+    comments: "no",
   });
 }
 
@@ -485,11 +488,16 @@ function pairFindmyshiftTimeAndStreamRows(rows) {
 // Kim Whelan is the Dandenong office worker. FindMyShift records his office
 // shifts as time-only rows (the spreadsheet uses LSL for his non-working
 // entries), so the one verified site-specific rule is that an otherwise
-// unassigned timed row for him is Clinical Support. Keep the rule narrow: it
-// never alters a named entry or any other staff member.
+// unassigned timed row for him is Clinical Support. Shankar Thapaliya's
+// corresponding entries are supported shifts: the second line names the
+// clinician she is paired with, not a stream. Keep both rules narrow: neither
+// alters a named DDH stream nor guesses one from the paired clinician.
 function applyKnownDandenongFindmyshiftAssignment(row) {
-  if (!isAmbiguousFindmyshiftTimedRow(row) || normalizeFindmyshiftStaffName(row?.name) !== "KIM WHELAN") return row;
-  return { ...row, label: "CS", pairingIssue: "" };
+  if (!isAmbiguousFindmyshiftTimedRow(row)) return row;
+  const name = normalizeFindmyshiftStaffName(row?.name);
+  if (name === "KIM WHELAN") return { ...row, label: "CS", pairingIssue: "" };
+  if (name === "SHANKAR THAPALIYA") return { ...row, label: "Paired AM", pairingIssue: "" };
+  return row;
 }
 
 function normalizeFindmyshiftStaffName(value) {

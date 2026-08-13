@@ -262,6 +262,18 @@ assert.doesNotThrow(
   () => assertFindmyshiftDandenongAssignments(kimOfficeRows),
   "Kim Whelan's verified CS rule should resolve his time-only FindMyShift rows",
 );
+const shankarSupportedRows = extractShiftRows([
+  { staffId: "supported-worker", facilityId: null, date: "2026-08-12", firstName: "Shankar", lastName: "Thapaliya", payrollId: null, occurrences: 1, shift: "08:00-17:30" },
+]);
+assert.deepEqual(
+  shankarSupportedRows.map((row) => ({ label: row.label, start: row.start, end: row.end, facility: row.facility })),
+  [{ label: "Paired AM", start: "08:00", end: "17:30", facility: "" }],
+  "Shankar Thapaliya's paired time-only shifts should not be assigned to the paired clinician's stream",
+);
+assert.doesNotThrow(
+  () => assertFindmyshiftDandenongAssignments(shankarSupportedRows),
+  "Shankar Thapaliya's verified paired AM allocation should resolve without guessing a DDH stream",
+);
 assert.deepEqual(
   findmyshiftRows.map((row) => ({ date: row.date, label: row.label, start: row.start, end: row.end, facility: row.facility, seniority: row.seniority, comment: row.comment })),
   [
@@ -505,7 +517,7 @@ assert.match(indexSource, /id="stayLoggedIn"[^>]*checked/, "Stay logged in shoul
 assert.equal((appSource.match(/data-test-findmyshift/g) || []).length, 0, "FindMyShift diagnostics should not remain exposed as a UI control");
 assert.equal((appSource.match(/data-sync-findmyshift/g) || []).length, 0, "FindMyShift is automated and should not expose a manual sync control");
 assert.equal((appSource.match(/data-download-findmyshift-exceptions/g) || []).length, 0, "FindMyShift exception review is no longer exposed as a UI control");
-assert.doesNotMatch(findmyshiftModuleSource, /comments:\s*"no"/, "FindMyShift comments=no must not be requested because it can remove the paired stream row needed to validate timed DDH shifts");
+assert.match(findmyshiftModuleSource, /findmyshiftRequest\("reports\/shifts",[\s\S]*comments:\s*"no"/, "FindMyShift imports should request comments=no so free-text roster comments are excluded upstream");
 assert.match(findmyshiftCheckSource, /!force && current\?\.providerVersion === providerVersion && isIncompleteDandenongAssignmentError/, "a creator-forced FindMyShift refresh must retry a cached incomplete provider response");
 assert.match(facilityAccessMigrationSource, /facility_overview_enabled INTEGER NOT NULL DEFAULT 0/, "At a glance database access should default to opt-in");
 assert.match(facilityOptInRepairMigrationSource, /WHEN role IN \('creator', 'owner'\) THEN 1[\s\S]*ELSE 0/, "the At a glance repair should retain Creator access and revoke unintended standard-user access");

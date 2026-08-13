@@ -75,6 +75,7 @@ const DDH_LABEL_MAP = {
   "Silver AM IC": "Silver AM",
   "Silver PM IC": "Silver PM",
   "onsite CS": "CS onsite",
+  "Paired AM": "Paired AM",
   "PHNW clinical": "PHNW",
   PHNW: "PHNW",
 };
@@ -90,6 +91,7 @@ const KNOWN_DDH_DIRECT_LABELS = new Set([
   "FAST PM",
   "AVAO AM",
   "AVAO PM",
+  "Paired AM",
   "PHNW",
 ]);
 
