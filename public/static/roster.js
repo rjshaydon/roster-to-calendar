@@ -2567,9 +2567,11 @@ function buildDefaultParserRules() {
   };
   for (const seniority of consultantSeniorities) {
     add(rules.mmc, "MMC", "CS", seniority, "CS", "", "", true, "", "", "");
+    add(rules.mmc, "MMC", "CS 0.5", seniority, "CS", "", "", true, "", "", "");
     add(rules.mmc, "MMC", "CSO", seniority, "CSO", "", "", true, "", "", MMC_LOCATION);
     add(rules.mmc, "MMC", "CS OS", seniority, "CS OS", "", "", false, "08:00", "17:30", MMC_LOCATION);
   }
+  add(rules.mmc, "MMC", "N1", "SMS", "Night shift", "", "", false, "23:00", "08:30", MMC_LOCATION);
   for (const seniority of actingConsultantSeniorities) {
     for (const periodPrefix of ["A", "P"]) {
       for (const [teamCode, teamName] of Object.entries(MMC_TEAM_MAP)) {

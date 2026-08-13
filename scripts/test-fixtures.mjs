@@ -7013,6 +7013,8 @@ XLSX.utils.book_append_sheet(srN1Workbook, srN1Sheet, "Week 1");
 const srN1View = buildRosterView([{ id: "sr-n1", workbook: srN1Workbook, file: { name: "AdultTerm.xlsx", size: 1, lastModified: 1 } }], [], "PATRICK TAN");
 assert.ok(srN1View.events.some((event) => event.rawValue === "2300-0900 N1" && event.title === "MMC: SR IC Night" && event.start.includes("23:00:00") && event.end.includes("09:00:00")), "Senior Registrar N1 explicit-time rules must render with the saved rule title");
 assert.equal(srN1View.issues.some((issue) => issue.rawValue === "2300-0900 N1"), false);
+assert.match(rosterSource, /add\(rules\.mmc, "MMC", "CS 0\.5", seniority, "CS", "", "", true/, "MMC CS 0.5 should resolve to an all-day CS event");
+assert.match(rosterSource, /add\(rules\.mmc, "MMC", "N1", "SMS", "Night shift", "", "", false, "23:00", "08:30"/, "SMS N1 should resolve to a timed Night shift");
 assert.equal(memoryD1AccountRecord(stateStore.d1, "patrick@example.com").adminIssues.length, 0, "global parser rule should keep direct-user warning evidence cleared");
 assert.equal(memoryD1AccountRecord(stateStore.d1, "senior@example.com").adminIssues.length, 0, "global parser rule should clear matching switch-user warning evidence");
 const staleReport = await postState(stateStore, {
