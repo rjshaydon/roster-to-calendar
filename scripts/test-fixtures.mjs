@@ -1813,6 +1813,7 @@ assert.match(appSource, /data-go-to-unresolved-event/, "unresolved shift-code ro
 assert.match(appSource, /function openUnresolvedShiftIssueEvent[\s\S]*focusPreviewIssueDate/, "unresolved shift-code jumps should switch doctor and focus the relevant calendar date");
 assert.match(appSource, /doctorKey: item\.doctorKey[\s\S]*sampleDate: item\.sampleDate/, "grouped unresolved shift-code rows should retain their sampled doctor and date for the calendar jump");
 assert.match(appSource, /data-preview-back-to-shift-codes[\s\S]*function returnToShiftCodeReview/, "a calendar opened from shift-code review should return to the selected code row");
+assert.match(appSource, /function closeShiftCodeReviewModal[\s\S]*shiftCodeReviewFilter = \{ query: "", source: "all" \}/, "closing a focused shift-code review should restore the full unfiltered list");
 assert.match(styleSource, /is-unresolved-issue-focus[\s\S]*border: 3px solid #c83232/, "the focused unresolved event date should receive a red ring");
 assert.match(styleSource, /#parserRuleForm[\s\S]*overflow-y: auto/, "shift-code editor form should scroll vertically when it exceeds available height");
 assert.match(appSource, /normalizeDdhParserRuleCodeText/, "DDH shift-code issues should use parser-equivalent label codes");

@@ -11290,6 +11290,9 @@ function closeShiftCodeReviewModal() {
   shiftCodeReviewModal.classList.add("hidden");
   shiftCodeReviewModal.setAttribute("aria-hidden", "true");
   if (shiftCodeReviewModalBody) shiftCodeReviewModalBody.innerHTML = "";
+  // Returning from a calendar briefly filters to the code just reviewed.
+  // That focus must not leak into a later, ordinary Creator review session.
+  shiftCodeReviewFilter = { query: "", source: "all" };
 }
 
 function renderShiftCodeReviewModal() {
