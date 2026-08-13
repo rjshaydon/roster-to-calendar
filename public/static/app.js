@@ -172,8 +172,11 @@ const SHIFT_COLOUR_DEFAULTS = {
 const ACCOUNT_STATE_KEY = "roster-account-state";
 const SESSION_STATE_KEY = "roster-session-state-v1";
 const ACCOUNT_WORKSPACES_KEY = "roster-account-workspaces-v1";
-const CALENDAR_SNAPSHOT_CACHE_KEY = "roster-calendar-snapshot-cache-v2";
-const LEGACY_CALENDAR_SNAPSHOT_CACHE_KEYS = ["roster-calendar-snapshot-cache-v1"];
+// Versioned separately from the snapshot schema. Bumping this discards only
+// browser-held rendering caches after a client cache correctness repair; it
+// never affects D1 roster data, server snapshots, or subscription feeds.
+const CALENDAR_SNAPSHOT_CACHE_KEY = "roster-calendar-snapshot-cache-v3";
+const LEGACY_CALENDAR_SNAPSHOT_CACHE_KEYS = ["roster-calendar-snapshot-cache-v1", "roster-calendar-snapshot-cache-v2"];
 const MAX_HOT_SNAPSHOT_CACHE_ENTRIES = 3;
 const MAX_MEMORY_SNAPSHOT_CACHE_ENTRIES = 160;
 const MAX_STORED_SNAPSHOT_CACHE_ENTRIES = 240;
