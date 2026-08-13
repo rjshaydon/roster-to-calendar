@@ -839,6 +839,7 @@ function leaveOccurrenceCategory(event) {
   if (/\b(?:CONFERENCE|CME)\b/.test(text)) return "conference";
   if (/\bANNUAL\b|\bA\/L\b/.test(text)) return "annual";
   if (/\b(?:SICK|S\/L)\b/.test(text)) return "sick";
+  if (/\b(?:CARER'?S|C\/L)\b/.test(text)) return "carers";
   if (/\b(?:FAMILY|F\/L)\b/.test(text)) return "family";
   if (/\bPERSONAL\b/.test(text)) return "personal";
   if (/\bSTUDY\b/.test(text)) return "study";

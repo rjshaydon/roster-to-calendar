@@ -2174,7 +2174,7 @@ function normalizeMchLeave(label) {
   if (upper === "PAT/L" || upper === "PARENTAL/L" || upper === "PARENTAL LEAVE" || upper === "PATERNITY LEAVE" || /\bPARENTAL\b/.test(upper)) return { kind: "parental_leave", title: "Parental Leave" };
   if (/\b(?:LWP|LWOP)\b/.test(upper) || /\bLEAVE\s+WITHOUT\s+PAY\b/.test(upper)) return { kind: "leave", title: "Leave without pay" };
   if (upper === "LSL" || upper === "LONG SERVICE LEAVE") return { kind: "long_service_leave", title: "Long Service Leave" };
-  if (/^CARER'?S LEAVE$/.test(upper) || upper === "CARERS LEAVE") return { kind: "carers_leave", title: "Carer's Leave" };
+  if (upper === "C/L" || /^CARER'?S LEAVE$/.test(upper) || upper === "CARERS LEAVE") return { kind: "carers_leave", title: "Carer's Leave" };
   if (/^F\/L(?:\s+(?:AM|PM))?$/.test(upper) || upper === "FAM LEAVE" || upper === "FAMILY LEAVE") return { kind: "family_leave", title: "Family Leave" };
   if (upper === "SPECIAL LEAVE") return { kind: "special_leave", title: "Special Leave" };
   if (upper === "OTHER - MILITARY LEAVE" || upper === "MILITARY LEAVE") return { kind: "military_leave", title: "Military Leave" };
