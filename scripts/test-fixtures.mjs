@@ -765,9 +765,9 @@ assert.match(
 assert.match(appSource, /function validateDoctorProfileCalendarInBackground/, "doctor-profile switching should validate cached snapshots in the background");
 assert.match(appSource, /function queueCreatorSwitchTargetPrefetch\(\)/, "creator login should prefetch switch targets into browser snapshot cache");
 assert.match(
-  appSource.match(/function syncRosterDragState[\s\S]*?function isSupportedRosterDrag/)?.[0] || "",
-  /shouldShowRosterDragOverlay\(dataTransfer\)/,
-  "roster drag overlay should use supported-only logic with macOS ambiguity fallback",
+  appSource.match(/function hasFileDrag[\s\S]*?function abortRosterFileDrag/)?.[0] || "",
+  /public\.file-url[\s\S]*application\/x-moz-file[\s\S]*const active = hasFileDrag\(dataTransfer\)/,
+  "roster drag overlay should recognise native file drags without requiring file metadata before drop",
 );
 assert.match(
   appSource.match(/window\.addEventListener\(\"dragleave\"[\s\S]*?window\.addEventListener\(\"dragend\"/)?.[0] || "",
@@ -780,7 +780,7 @@ assert.match(
   "roster drag overlay should spotlight the add roster files button",
 );
 assert.match(
-  appSource.match(/function clearRosterDragState[\s\S]*?function shouldShowRosterDragOverlay/)?.[0] || "",
+  appSource.match(/function clearRosterDragState[\s\S]*?async function validateFreshRosterUploads/)?.[0] || "",
   /rosterDragDepth = 0;[\s\S]*clearRosterDragVisualState\(\)/,
   "roster drag overlay should clear only through an explicit drag-end, leave, drop, or cancellation path",
 );

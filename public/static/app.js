@@ -2297,12 +2297,21 @@ function validateIncomingFiles(files) {
 }
 
 function hasFileDrag(dataTransfer) {
-  return Boolean(dataTransfer?.types && [...dataTransfer.types].includes("Files"));
+  // Finder does not consistently expose item names, MIME types, or even the
+  // standard `Files` token until a file is dropped.  Treat its file-url token
+  // as a file drag too; validation remains at the drop boundary.
+  const types = [...(dataTransfer?.types || [])].map((type) => String(type || "").trim().toLowerCase());
+  return types.includes("files")
+    || types.includes("public.file-url")
+    || types.includes("application/x-moz-file");
 }
 
 function syncRosterDragState(dataTransfer) {
   if (rosterDragAborted) return;
-  const active = shouldShowRosterDragOverlay(dataTransfer);
+  // During a drag, browser security deliberately withholds the file's name in
+  // some macOS browsers. Show the import affordance for every file drag, then
+  // validate Excel/PDF files after the user actually drops them.
+  const active = hasFileDrag(dataTransfer);
   document.body.classList.toggle("is-roster-dragging", active);
   rosterDropOverlay.classList.toggle("hidden", !active);
   rosterDropOverlay.setAttribute("aria-hidden", active ? "false" : "true");
@@ -2324,52 +2333,6 @@ function clearRosterDragState() {
   rosterDragDepth = 0;
   rosterDragAborted = false;
   clearRosterDragVisualState();
-}
-
-function shouldShowRosterDragOverlay(dataTransfer) {
-  if (!hasFileDrag(dataTransfer)) return false;
-
-  const files = [...(dataTransfer?.files || [])];
-  if (files.length) return files.every(isSupportedRosterFile);
-
-  const fileItems = [...(dataTransfer?.items || [])].filter((item) => item.kind === "file");
-  if (!fileItems.length) return false;
-
-  const itemFiles = fileItems.map((item) => item.getAsFile?.()).filter(Boolean);
-  if (itemFiles.length === fileItems.length) return itemFiles.every(isSupportedRosterFile);
-
-  const itemsWithTypes = fileItems.filter((item) => String(item.type || "").trim());
-  if (itemsWithTypes.length) {
-    if (itemsWithTypes.some((item) => !isSupportedRosterMimeType(item.type))) return false;
-    if (itemsWithTypes.length === fileItems.length) return true;
-  }
-
-  return true;
-}
-
-function isSupportedRosterDrag(dataTransfer) {
-  const files = [...(dataTransfer?.files || [])];
-  if (files.length) return files.every(isSupportedRosterFile);
-
-  const fileItems = [...(dataTransfer?.items || [])].filter((item) => item.kind === "file");
-  if (!fileItems.length) return false;
-  const itemFiles = fileItems.map((item) => item.getAsFile?.()).filter(Boolean);
-  if (itemFiles.length === fileItems.length) return itemFiles.every(isSupportedRosterFile);
-  return fileItems.every((item) => isSupportedRosterMimeType(item.type));
-}
-
-function isSupportedRosterFile(file) {
-  return Boolean(file?.name?.match(/\.(xlsx|xlsm|xltx|xltm|pdf)$/i));
-}
-
-function isSupportedRosterMimeType(type) {
-  return [
-    "application/pdf",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "application/vnd.ms-excel.sheet.macroenabled.12",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.template",
-    "application/vnd.ms-excel.template.macroenabled.12",
-  ].includes(String(type || "").toLowerCase());
 }
 
 async function validateFreshRosterUploads(files) {
