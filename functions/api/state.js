@@ -1369,25 +1369,10 @@ export async function onRequestPost(context) {
         ...profile,
         aliases: requestedAliases,
       }, email).catch(() => "");
-      if (calendarRevision && String(body?.cachedRevision || "") === calendarRevision) {
-        const fileRefs = await doctorProfileImportRefs(context.env.ROSTER_DB, {
-          ...profile,
-          aliases: requestedAliases,
-        }).catch(() => []);
-        return Response.json({
-          ok: true,
-          cloudAvailable: true,
-          profile,
-          snapshot: null,
-          snapshotCurrent: true,
-          snapshotAvailable: false,
-          snapshotStale: false,
-          snapshotBuiltAt: "",
-          calendarRevision,
-          fileRefs,
-          issueConfig: await buildIssueConfig(null, ""),
-        });
-      }
+      // Do not treat a matching browser-wide revision as sufficient here.
+      // A doctor-profile snapshot has its own cache record and can predate a
+      // retained-file reparse even when the browser has a current revision
+      // from another profile. loadSnapshotPayloadFromRegistry verifies both.
       const snapshotInfo = await loadDoctorProfileSnapshotPayload(context, {
         ...profile,
         aliases: requestedAliases,

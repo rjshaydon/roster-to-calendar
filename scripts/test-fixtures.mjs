@@ -413,6 +413,7 @@ const facilityAccessMigrationSource = await readFile(new URL("../migrations/0011
 const facilityOptInRepairMigrationSource = await readFile(new URL("../migrations/0017_restore_facility_overview_opt_in.sql", import.meta.url), "utf8");
 const safeStagedActivationMigrationSource = await readFile(new URL("../migrations/0019_safe_staged_roster_activation.sql", import.meta.url), "utf8");
 const d1CalendarSource = await readFile(new URL("../functions/_lib/d1-calendar.js", import.meta.url), "utf8");
+const stateApiSource = await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8");
 const automationIngestSource = await readFile(new URL("../functions/api/automation/ingest.js", import.meta.url), "utf8");
 const automationDerivedSource = await readFile(new URL("../functions/api/automation/derived.js", import.meta.url), "utf8");
 const findmyshiftCheckSource = await readFile(new URL("../functions/api/automation/findmyshift-check.js", import.meta.url), "utf8");
@@ -1003,8 +1004,8 @@ assert.doesNotMatch(
 );
 assert.match(
   stateSource.match(/if \(action === "loadDoctorProfile"\)[\s\S]*?if \(action === "saveDoctorProfile"\)/)?.[0] || "",
-  /cachedRevision[\s\S]*snapshotCurrent[\s\S]*loadDoctorProfileSnapshotPayload[\s\S]*snapshotStatus[\s\S]*snapshotSource[\s\S]*calendarRevision/,
-  "doctor profile loads should support cached-revision validation without rebuilding the snapshot",
+  /loadDoctorProfileSnapshotPayload[\s\S]*cachedRevision[\s\S]*snapshotStatus[\s\S]*snapshotSource[\s\S]*calendarRevision/,
+  "doctor profile loads should delegate cached-revision validation to the profile snapshot registry",
 );
 assert.match(
   stateSource,
@@ -4856,6 +4857,11 @@ const d1ParserRevisionCheck = await postState(d1StateStore, {
 }, d1Store);
 assert.notEqual(d1ParserRevisionCheck.snapshotCurrent, true, "parser-rule changes should invalidate cachedRevision checks");
 assert.equal(d1ParserRevisionCheck.snapshotSource, "stale-server-cache", "parser-rule revision changes may reuse stale server cache without inline build");
+assert.doesNotMatch(
+  stateApiSource,
+  /if \(calendarRevision && String\(body\?\.cachedRevision \|\| ""\) === calendarRevision\) \{[\s\S]{0,1000}?snapshotCurrent: true/,
+  "doctor-profile cache validation must verify its own snapshot registry rather than accepting a browser-wide revision alone",
+);
 assert.equal(
   d1ParserRevisionCheck.snapshot.preview.issues.some((issue) => issue.rawValue === "PHNW CS"),
   false,
@@ -5487,9 +5493,11 @@ const d1DoctorProfileCurrent = await postState(d1StateStore, {
   cachedRevision: d1DoctorProfileServerCache.snapshotRevision,
   allowInlineBuild: false,
 }, d1Store);
-assert.equal(d1DoctorProfileCurrent.snapshotCurrent, true, "doctor-profile cachedRevision should validate without replacing the displayed profile");
-assert.equal(d1DoctorProfileCurrent.snapshot, null);
-assert.ok(d1DoctorProfileCurrent.fileRefs.some((ref) => ref.id === d1RepositoryFile), "doctor-profile revision checks should still return current file refs");
+assert.notEqual(d1DoctorProfileCurrent.snapshotCurrent, true, "doctor-profile cachedRevision must not bypass its own snapshot-registry validation");
+assert.ok(
+  !d1DoctorProfileCurrent.snapshot || d1DoctorProfileCurrent.snapshot.preview?.derivedFromD1,
+  "doctor-profile cachedRevision must never substitute another profile's calendar data",
+);
 const d1RepositoryDoctors = [...d1Store.fileDoctors.values()].map((doctor) => ({
   key: doctor.doctor_key,
   displayName: doctor.display_name,
