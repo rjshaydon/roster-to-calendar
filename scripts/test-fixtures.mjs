@@ -2561,6 +2561,8 @@ XLSX.utils.book_append_sheet(ddhAccuracyWorkbook, XLSX.utils.aoa_to_sheet([
   ["Annotation Doctor", "MMC AM", "Casey PM", "HITH AM", "Tox CS", "VHH PM", "ARV AM", "Swing PM"],
   ["GED Doctor", "GED Junior", "", "", "", "", "", ""],
   ["DDH Notes Doctor", "Intern", "unavailable", "--", "pm>am", "sec", "(2 ED shifts this week)", ""],
+  ["AMP", "", "", "", "", "", "", ""],
+  ["AMP Roster Doctor", "Physiotherapist", "Jane Example", "Swing PM", "", "", "", ""],
   ["Orientation Variant Doctor", "Orienation 0800-1000", "", "", "", "", "", ""],
 ]), "Sheet1");
 const ddhAccuracyDoctors = doctorOptions([], ddhAccuracyWorkbook);
@@ -2576,8 +2578,9 @@ const ddhAnnualLeaveDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === 
 const ddhAnnotationDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "ANNOTATION DOCTOR");
 const ddhGedDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "GED DOCTOR");
 const ddhNotesDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "DDH NOTES DOCTOR");
+const ddhAmpRosterDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "AMP ROSTER DOCTOR");
 const ddhOrientationVariantDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "ORIENTATION VARIANT DOCTOR");
-assert.ok(ddhAccuracyDoctor && crisisLocumDoctor && sickLeaveDoctor && conferenceLeaveDoctor && ddhFamilyLeaveDoctor && ddhParentalLeaveDoctor && ddhSpecialLeaveDoctor && ddhExamLeaveDoctor && ddhAnnualLeaveDoctor && ddhAnnotationDoctor && ddhGedDoctor && ddhNotesDoctor && ddhOrientationVariantDoctor, "DDH accuracy fixtures should expose their rostered doctors");
+assert.ok(ddhAccuracyDoctor && crisisLocumDoctor && sickLeaveDoctor && conferenceLeaveDoctor && ddhFamilyLeaveDoctor && ddhParentalLeaveDoctor && ddhSpecialLeaveDoctor && ddhExamLeaveDoctor && ddhAnnualLeaveDoctor && ddhAnnotationDoctor && ddhGedDoctor && ddhNotesDoctor && ddhAmpRosterDoctor && ddhOrientationVariantDoctor, "DDH accuracy fixtures should expose their rostered doctors");
 const ddhAccuracyView = buildRosterView([], ddhAccuracyWorkbook, ddhAccuracyDoctor.key);
 assert.deepEqual(
   ddhAccuracyView.events.map((event) => [event.title, event.rawValue, event.timeLabel]),
@@ -2611,6 +2614,8 @@ assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhAnnotationDoctor.ke
 assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhGedDoctor.key).events.map((event) => event.title), ["DDH: GED shift"], "GED Junior should be a recognised GED shift");
 assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhNotesDoctor.key).events, [], "DDH headings and availability notes should not become calendar events");
 assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhNotesDoctor.key).issues, [], "DDH headings and availability notes should not become unresolved shift codes");
+assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhAmpRosterDoctor.key).events.map((event) => event.title), ["DDH: Swing PM"], "AMP supervision headings and names should not become calendar events while genuine AMP shifts remain visible");
+assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhAmpRosterDoctor.key).issues, [], "AMP supervision headings and names should not become unresolved shift codes");
 assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhOrientationVariantDoctor.key).events.map((event) => [event.title, event.timeLabel]), [["DDH: Orientation", "08:00-10:00"]], "orientation spelling variants should standardise to a timed Orientation shift");
 
 const mmcPdfBytes = await readFile(fileURLToPath(new URL("../fixtures/AdultMMCTerm2.2026.Ver1.pdf", import.meta.url)));

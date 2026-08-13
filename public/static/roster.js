@@ -1530,9 +1530,8 @@ function parseFindmyshiftDdhRecords(workbook, doctorKey) {
     const label = cleanText(rawLabel);
     const startHm = parseFindmyshiftTime(rawStart);
     const endHm = parseFindmyshiftTime(rawEnd);
-    if (!day || !label) continue;
-    if (isDdhStructuralAnnotation(label)) continue;
     const seniority = findmyshiftDdhSeniority(rawSeniority, label);
+    if (!day || !label || isDdhStructuralAnnotation(label, seniority)) continue;
     const facility = cleanText(rawFacility);
     const comment = cleanText(rawComment);
     let record;
@@ -1692,6 +1691,7 @@ function parseMmcEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
 
 function parseDdhEntry(day, label, timeText, seniority = UNKNOWN_SENIORITY) {
   if (!label) return null;
+  if (isDdhStructuralAnnotation(label, seniority)) return null;
   const labelTime = parseDdhTimeRow(label);
   if (labelTime) {
     if (timeText) return parseDdhEntry(day, timeText, label, seniority);
@@ -1704,7 +1704,7 @@ function parseDdhEntry(day, label, timeText, seniority = UNKNOWN_SENIORITY) {
       seniority,
     });
   }
-  if (parseDdhTimeRow(timeText) && (isOtherHospitalReference("DDH", label) || shouldIgnoreDdh(label))) {
+  if (parseDdhTimeRow(timeText) && (isOtherHospitalReference("DDH", label) || shouldIgnoreDdh(label, seniority))) {
     return null;
   }
   const upper = label.toUpperCase();
@@ -1722,7 +1722,7 @@ function parseDdhEntry(day, label, timeText, seniority = UNKNOWN_SENIORITY) {
       seniority,
     });
   }
-  if (shouldIgnoreDdh(label) || shouldIgnoreCommon(label)) return null;
+  if (shouldIgnoreDdh(label, seniority) || shouldIgnoreCommon(label)) return null;
 
   if (/\bCRISIS\s+LOCUM\b/i.test(label)) {
     const parsedTime = parseDdhTimeRow(timeText);
@@ -2814,10 +2814,10 @@ function extractDdhPeriod(label) {
   return "";
 }
 
-function shouldIgnoreDdh(value) {
+function shouldIgnoreDdh(value, seniority = UNKNOWN_SENIORITY) {
   const upper = String(value || "").trim().toUpperCase();
   if (!upper) return true;
-  if (isDdhStructuralAnnotation(upper)) return true;
+  if (isDdhStructuralAnnotation(upper, seniority)) return true;
   if (DDH_IGNORE_PREFIXES.some((prefix) => upper.startsWith(prefix))) return true;
   return DDH_IGNORE_CONTAINS.some((fragment) => upper.includes(fragment));
 }
@@ -2825,9 +2825,16 @@ function shouldIgnoreDdh(value) {
 // FindMyShift carries staff headings, availability, and free-text rostering
 // notes in the same Shift label column. These must not become calendar shifts
 // or unresolved shift-code diagnostics.
-function isDdhStructuralAnnotation(value) {
+function isDdhStructuralAnnotation(value, seniority = UNKNOWN_SENIORITY) {
   const upper = String(value || "").trim().toUpperCase();
   if (["INTERN", "INTERNS", "UNAVAILABLE", "UNAVAILABE", "-", "--", "SEC"].includes(upper)) return true;
+  // The AMP section contains supervision and free-text notes (including
+  // physiotherapist headings and staff names), not rostered AMP shifts.
+  // Restrict this exclusion to AMP so identically shaped labels elsewhere
+  // remain available for normal shift parsing.
+  const ampSupervisionName = looksLikePersonName(value)
+    && !/\b(?:AM|PM|NIGHT|SWING|FAST|SSU|ORANGE|SILVER|AVAO|ROVER|GED|ORIENTATION|ORIENATION|ORIENT)\b/.test(upper);
+  if (sanitizeRuleSeniority(seniority) === "AMP" && (upper === "PHYSIOTHERAPIST" || upper === "PHYSIOTHERAPISTS" || ampSupervisionName)) return true;
   if (/^(?:AM|PM)\s*>\s*(?:AM|PM)$/.test(upper)) return true;
   if (/^\(?\d+\s+ED\s+SHIFTS?\s+THIS\s+WEEK\)?$/.test(upper)) return true;
   return false;
