@@ -11486,6 +11486,7 @@ function collectUnknownShiftIssues() {
   const byKey = new Map();
   for (const user of serverUsers.map(normalizeServerUser)) {
     for (const issue of user.adminIssues || []) {
+      if (isSystemRosterReviewNotice(issue)) continue;
       const source = sanitizeIssueSource(issue.source);
       const seniority = sanitizeRuleSeniority(issue.seniority);
       const code = parserRuleCodeForIssue(issue);
@@ -11508,6 +11509,7 @@ function collectUnknownShiftIssues() {
     }
   }
   for (const item of globalUnresolvedShiftCodes) {
+    if (isSystemRosterReviewNotice(item)) continue;
     const source = sanitizeIssueSource(item.source);
     const seniority = sanitizeRuleSeniority(item.seniority);
     const code = parserRuleCodeForIssue(item);
@@ -11939,11 +11941,15 @@ function isKnownResolvedShiftCodeValue(sourceValue, rawValue, normalizedTitle = 
   if (code === "PHNW") return true;
   if (source === "MCH" && ["CS", "OCS", "0CS", "CSOS"].includes(code)) return true;
   if (source === "DDH") {
-    if (["CS", "CS ONSITE", "SSU"].includes(code)) return true;
+    if (["CS", "CS ONSITE", "SSU", "DAY OFF IN LIEU"].includes(code)) return true;
     if (/^(ORANGE|SILVER|FAST|AVAO|ROVER)\s+(AM|PM)$/.test(code)) return true;
   }
   const titleCode = incompleteShiftCodeFromTitle(source, normalizedTitle);
   return Boolean(titleCode && isShiftCodeResolvedByActiveRules({ source, seniority: "Unknown", code: titleCode }));
+}
+
+function isSystemRosterReviewNotice(issue) {
+  return /^roster\s+supersession\s+review\s*:/i.test(String(issue?.rawValue || "").trim());
 }
 
 function previewIssueWithReviewContext(issue) {

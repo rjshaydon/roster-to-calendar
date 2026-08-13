@@ -2922,6 +2922,7 @@ function shouldIgnoreDdh(value, seniority = UNKNOWN_SENIORITY) {
   if (!upper) return true;
   if (isDdhClinicalSupportExam(upper)) return false;
   if (isDdhStructuralAnnotation(upper, seniority)) return true;
+  if (upper === "DAY OFF IN LIEU") return true;
   if (/^CS\s+NOT\s+ONSITE\s+PLS?\b/.test(upper)) return true;
   if (DDH_IGNORE_PREFIXES.some((prefix) => upper.startsWith(prefix))) return true;
   return DDH_IGNORE_CONTAINS.some((fragment) => upper.includes(fragment));

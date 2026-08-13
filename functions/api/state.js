@@ -2568,7 +2568,13 @@ function filterResolvedAdminIssuesForSummary(record, globalParserExtensions = {}
     sanitizeParserExtensionRules(globalParserExtensions),
     sanitizeParserExtensionRules(record?.localParserExtensions),
   );
-  return existingIssues.filter((issue) => !isIssueResolvedByRuleSets(issue, ruleSets));
+  return existingIssues.filter((issue) => !isSystemRosterReviewNotice(issue) && !isIssueResolvedByRuleSets(issue, ruleSets));
+}
+
+// Supersession notices are system-level diagnostics. They must never be
+// presented as a clinical shift-code error or offered for parser-rule edits.
+function isSystemRosterReviewNotice(issue) {
+  return /^roster\s+supersession\s+review\s*:/i.test(String(issue?.rawValue || "").trim());
 }
 
 function isIssueResolvedByRuleSets(issue, ruleSets = {}) {
@@ -4311,7 +4317,7 @@ function isKnownResolvedShiftCodeValue(sourceValue, rawValue) {
   if (code === "PHNW") return true;
   if (source === "MCH" && ["CS", "OCS", "0CS", "CSOS"].includes(code)) return true;
   if (source === "DDH") {
-    if (["CS", "CS ONSITE", "SSU"].includes(code)) return true;
+    if (["CS", "CS ONSITE", "SSU", "DAY OFF IN LIEU"].includes(code)) return true;
     if (/^(ORANGE|SILVER|FAST|AVAO|ROVER)\s+(AM|PM)$/.test(code)) return true;
   }
   return false;
