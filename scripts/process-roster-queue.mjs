@@ -100,7 +100,7 @@ async function postDerived(run, payload, phase, doctors, eventsByDoctor, issuesB
 async function automationRequest(path, options = {}) {
   const headers = { ...authorizationHeaders(), ...(options.body ? { "Content-Type": "application/json" } : {}) };
   let lastError = null;
-  for (let attempt = 1; attempt <= 4; attempt += 1) {
+  for (let attempt = 1; attempt <= 6; attempt += 1) {
     try {
       const response = await fetch(`${baseUrl}${path}`, {
         method: options.method || "GET",
@@ -108,7 +108,20 @@ async function automationRequest(path, options = {}) {
         body: options.body ? JSON.stringify(options.body) : undefined,
       });
       const text = await response.text();
-      const result = text ? JSON.parse(text) : {};
+      let result = {};
+      try {
+        result = text ? JSON.parse(text) : {};
+      } catch {
+        // A Pages/Cloudflare error page is transient infrastructure output,
+        // not a roster parser response. Treat it like a retryable 5xx rather
+        // than failing the retained-file reparse immediately.
+        lastError = new Error(`Automation endpoint returned non-JSON HTTP ${response.status || 502}.`);
+        if (attempt < 6) {
+          await new Promise((resolve) => setTimeout(resolve, attempt * 2000));
+          continue;
+        }
+        break;
+      }
       if (response.ok) return result;
       const diagnostic = String(result.code || result.phase || "").trim();
       lastError = new Error(`${result.error || `HTTP ${response.status}`}${diagnostic ? ` (${diagnostic})` : ""}`);
@@ -116,7 +129,7 @@ async function automationRequest(path, options = {}) {
     } catch (error) {
       lastError = error;
     }
-    await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
+    await new Promise((resolve) => setTimeout(resolve, attempt * 2000));
   }
   throw lastError || new Error("Automation request failed.");
 }

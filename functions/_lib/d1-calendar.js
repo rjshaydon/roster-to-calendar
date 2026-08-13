@@ -933,6 +933,8 @@ const APPROVED_MMC_LEGACY_UNSUPPORTED_LEAVE = new Set([
   "automation:monash-adults:ac7f9d2e29c6bbb35e8a86df|MICKEY FERGUSON|A/L",
   "automation:monash-adults:ac7f9d2e29c6bbb35e8a86df|HELEN PSIHOGIOS|A/L / ANNUAL LEAVE",
   "automation:monash-adults:ac7f9d2e29c6bbb35e8a86df|MICHELLE BERTOLUCCI|AL 9.5HRS",
+  "automation:monash-adults:ac7f9d2e29c6bbb35e8a86df|SAM HAIFI|A/L",
+  "automation:monash-adults:ac7f9d2e29c6bbb35e8a86df|STEVE TROUPAKIS|A/L / ANNUAL LEAVE",
   "automation:monash-adults:75a99896fe1c2e6d1bc33db8|HEATHER LACEY|AL 10HRS",
   "AdultTerm1.2026.xlsx:641068:1776812908257|JOSEPH VU|C/L",
 ]);
