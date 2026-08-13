@@ -2132,6 +2132,14 @@ function rosterSourceStatuses(files = [], storedSources = [], syncRuns = [], lat
     const activeFiles = activeSourceFiles(sourceFiles.get(id));
     const activeFile = findActiveSourceFile(activeFiles, source?.activeFileId);
     const latestRun = latestRunBySource.get(id) || null;
+    const recentRuns = (syncRuns || [])
+      .filter((run) => run?.sourceId === id && run?.status !== "superseded")
+      .slice(0, 24)
+      .map((run) => ({
+        id: String(run.id || ""),
+        status: String(run.status || ""),
+        message: String(run.message || ""),
+      }));
     const pendingState = ["queued", "processing"].includes(latestRun?.status) ? latestRun.status : "";
     // A source-level failure can occur before a sync run exists (for example,
     // when a provider report is rejected as ambiguous).  It must remain
@@ -2164,6 +2172,7 @@ function rosterSourceStatuses(files = [], storedSources = [], syncRuns = [], lat
         doctorCount: latestRun.doctorCount,
         eventCount: latestRun.eventCount,
       } : null,
+      recentRuns,
       processorDispatch: pendingState ? latestDispatch : null,
     };
   });

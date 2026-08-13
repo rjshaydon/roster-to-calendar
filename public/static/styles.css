@@ -805,6 +805,11 @@ input[type="color"] {
 .file-reparse.is-processing,
 .file-reparse:disabled.is-processing {
   cursor: wait;
+}
+
+.file-reparse.is-processing .file-reparse-icon,
+.file-reparse:disabled.is-processing .file-reparse-icon {
+  display: block;
   animation: roster-refresh-spin 800ms linear infinite;
 }
 
@@ -813,8 +818,8 @@ input[type="color"] {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .file-reparse.is-processing,
-  .file-reparse:disabled.is-processing {
+  .file-reparse.is-processing .file-reparse-icon,
+  .file-reparse:disabled.is-processing .file-reparse-icon {
     animation: none;
   }
 }

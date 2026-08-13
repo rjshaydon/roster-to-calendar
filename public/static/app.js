@@ -3151,10 +3151,11 @@ function renderAdminAutoSyncRow(source, files, terms) {
   const refreshTitle = source.provider === "findmyshift"
     ? "Check FindMyShift for a newer roster, then reprocess"
     : "Reprocess the retained roster file";
-  const refreshInProgress = activeAutomatedSourceRefreshIds.has(String(source.id || ""));
+  const refreshInProgress = activeAutomatedSourceRefreshIds.has(String(source.id || ""))
+    || ["queued", "processing"].includes(String(source.state || ""));
   return `
     <article class="admin-file-row admin-auto-sync-row roster-source-${escapeHtml(source.state || "unknown")}">
-      <div class="admin-auto-sync-heading"><strong>${escapeHtml(source.label)}</strong><button type="button" class="file-reparse file-reparse-visible${refreshInProgress ? " is-processing" : ""}" aria-label="${escapeHtml(refreshTitle)}" title="${escapeHtml(refreshInProgress ? "Refresh in progress" : refreshTitle)}" aria-busy="${refreshInProgress}" data-refresh-automated-source="${escapeHtml(source.id)}"${refreshInProgress ? " disabled" : ""}>↻</button></div>
+      <div class="admin-auto-sync-heading"><strong>${escapeHtml(source.label)}</strong><button type="button" class="file-reparse file-reparse-visible${refreshInProgress ? " is-processing" : ""}" aria-label="${escapeHtml(refreshTitle)}" title="${escapeHtml(refreshInProgress ? "Refresh in progress" : refreshTitle)}" aria-busy="${refreshInProgress}" data-refresh-automated-source="${escapeHtml(source.id)}"${refreshInProgress ? " disabled" : ""}><span class="file-reparse-icon" aria-hidden="true">↻</span></button></div>
       <dl class="admin-file-details">
         <div><dt>Source modified</dt><dd>${source.providerModifiedAt ? escapeHtml(formatTimestamp(source.providerModifiedAt)) : "Not checked yet"}</dd></div>
         <div><dt>Successfully imported</dt><dd>${source.lastSuccessAt ? escapeHtml(formatTimestamp(source.lastSuccessAt)) : "Not yet imported"}</dd></div>
@@ -16381,7 +16382,7 @@ async function refreshAutomatedRosterSource(sourceId) {
       setStatus(`${label} refresh is ${status.replace(/-/g, " ")}.`);
     }
     if (["queued", "processing", "reprocess-queued"].includes(status)) {
-      await waitForAutomatedRosterSourceRefresh(id, label, previousSuccessAt);
+      await waitForAutomatedRosterSourceRefresh(id, label, previousSuccessAt, result?.queue?.runIds);
     }
   } catch (error) {
     setStatus(error.message || `Could not refresh ${label}.`, true);
@@ -16391,11 +16392,28 @@ async function refreshAutomatedRosterSource(sourceId) {
   }
 }
 
-async function waitForAutomatedRosterSourceRefresh(sourceId, label, previousSuccessAt = "") {
+async function waitForAutomatedRosterSourceRefresh(sourceId, label, previousSuccessAt = "", expectedRunIds = []) {
   let sawPendingState = false;
+  const trackedRunIds = new Set((Array.isArray(expectedRunIds) ? expectedRunIds : []).map((id) => String(id || "")).filter(Boolean));
   for (;;) {
     const source = (calendarStoreStatus?.rosterSourceStatuses || []).find((item) => item?.id === sourceId);
     if (["queued", "processing"].includes(source?.state)) sawPendingState = true;
+    const runsById = new Map((Array.isArray(source?.recentRuns) ? source.recentRuns : []).map((run) => [String(run?.id || ""), run]));
+    const trackedRuns = [...trackedRunIds].map((id) => runsById.get(id)).filter(Boolean);
+    const failedRun = trackedRuns.find((run) => run.status === "failed");
+    if (failedRun) throw new Error(failedRun.message || `${label} update failed.`);
+    if (trackedRunIds.size && trackedRuns.length === trackedRunIds.size && trackedRuns.every((run) => run.status === "success")) {
+      await loadCloudCalendarEvents();
+      if (currentSnapshot) renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+      setStatus(`${label} imported.`);
+      return;
+    }
+    if (trackedRunIds.size && trackedRuns.length < trackedRunIds.size) sawPendingState = true;
+    if (trackedRunIds.size) {
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      await refreshCalendarStoreStatus({ silent: true });
+      continue;
+    }
     if (source?.state === "received" && (sawPendingState || String(source.lastSuccessAt || "") !== previousSuccessAt)) {
       await loadCloudCalendarEvents();
       if (currentSnapshot) renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
