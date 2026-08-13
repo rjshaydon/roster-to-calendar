@@ -789,8 +789,8 @@ export async function compareDerivedRosterFiles(db, baselineFileId, candidateFil
       omitted.push(event);
     }
   }
-  const approvedOmissions = omitted.filter(isApprovedReparseOmission);
-  const removed = omitted.filter((event) => !isApprovedReparseOmission(event));
+  const approvedOmissions = omitted.filter((event) => isApprovedReparseOmission(event, baselineFileId));
+  const removed = omitted.filter((event) => !isApprovedReparseOmission(event, baselineFileId));
   const added = [...unmatchedCandidate].map((identity) => candidate.get(identity));
   return {
     ok: true,
@@ -840,8 +840,47 @@ function normalizeRosterRawValue(value) {
   return String(value || "").replace(/\s+/g, " ").trim().toUpperCase();
 }
 
-function isApprovedReparseOmission(event) {
+// Product-approved on 2026-08-13: these historic DDH calendar rows were
+// created by the former "leave anywhere in the week" inference. They are
+// replaced by the source-faithful entries parsed under the Monday-only rule.
+// Keep this as an exact source-file/event allow-list: it is not a general
+// permission to remove leave, and is self-retiring once each file is promoted.
+const APPROVED_DDH_WEEKLY_LEAVE_REPLACEMENTS = new Set([
+  "Dandenong_Emergency_Doctors'_Roster_02-02-2026_to_03-05-2026.xlsx:146512:1777464564005|LEE ROBBINS|Annual Leave|2026-03-30|2026-04-13|JMS AL",
+  "Dandenong_Emergency_Doctors'_Roster_02-02-2026_to_03-05-2026.xlsx:146512:1777464564005|MARIAN ISAAC|Annual Leave|2026-04-06|2026-04-13|JMS AL",
+  "Dandenong_Emergency_Doctors'_Roster_02-02-2026_to_03-05-2026.xlsx:146512:1777464564005|PETER VAN KOOY|Annual Leave|2026-02-23|2026-03-02|JMS AL",
+  "Dandenong_Emergency_Doctors'_Roster_02-02-2026_to_03-05-2026.xlsx:146512:1777464564005|PETER VAN KOOY|Annual Leave|2026-03-30|2026-04-13|JMS AL",
+  "Dandenong_Emergency_Doctors'_Roster_02-02-2026_to_03-05-2026.xlsx:146512:1777464564005|SARA HUSSAIN|Conference Leave|2026-03-23|2026-03-30|JMS Conf",
+  "Dandenong_Emergency_Doctors'_Roster_02-02-2026_to_03-05-2026.xlsx:146512:1777464564005|STEVE GUASTALEGNAME|Annual Leave|2026-02-02|2026-04-06|AL",
+  "Dandenong_Emergency_Doctors'_Roster_02-02-2026_to_03-05-2026.xlsx:146512:1777464564005|STEVE GUASTALEGNAME|Annual Leave|2026-04-20|2026-05-04|AL",
+  "Dandenong_Emergency_Doctors'_Roster_02-02-2026_to_03-05-2026.xlsx:146512:1777464564005|YEE ANN SOO|Annual Leave|2026-02-16|2026-03-02|JMS AL",
+  "Dandenong_Emergency_Doctors'_Roster_04-05-2026_to_02-08-2026.xlsx:137815:1778982385007|HWEE MIN LEE|Annual Leave|2026-05-04|2026-05-11|AL",
+  "Dandenong_Emergency_Doctors'_Roster_04-05-2026_to_02-08-2026.xlsx:137815:1778982385007|HWEE MIN LEE|Annual Leave|2026-06-01|2026-06-08|AL",
+  "Dandenong_Emergency_Doctors'_Roster_04-05-2026_to_02-08-2026.xlsx:137815:1778982385007|HWEE MIN LEE|Annual Leave|2026-06-15|2026-06-22|AL",
+  "Dandenong_Emergency_Doctors'_Roster_04-05-2026_to_02-08-2026.xlsx:137815:1778982385007|HWEE MIN LEE|Annual Leave|2026-06-29|2026-07-06|AL",
+  "Dandenong_Emergency_Doctors'_Roster_04-05-2026_to_02-08-2026.xlsx:137815:1778982385007|HWEE MIN LEE|Annual Leave|2026-07-13|2026-07-20|AL",
+  "Dandenong_Emergency_Doctors'_Roster_04-05-2026_to_02-08-2026.xlsx:137815:1778982385007|KEN HII|Annual Leave|2026-05-04|2026-05-11|AL",
+  "Dandenong_Emergency_Doctors'_Roster_04-05-2026_to_02-08-2026.xlsx:137815:1778982385007|KEN HII|Annual Leave|2026-05-18|2026-05-25|AL",
+  "Dandenong_Emergency_Doctors'_Roster_04-05-2026_to_02-08-2026.xlsx:137815:1778982385007|KEN HII|Annual Leave|2026-06-01|2026-06-08|AL",
+  "Dandenong_Emergency_Doctors'_Roster_04-05-2026_to_02-08-2026.xlsx:137815:1778982385007|KEN HII|Annual Leave|2026-06-15|2026-06-22|AL",
+  "Dandenong_Emergency_Doctors'_Roster_04-05-2026_to_02-08-2026.xlsx:137815:1778982385007|KEN HII|Annual Leave|2026-06-29|2026-07-06|AL",
+  "Dandenong_Emergency_Doctors'_Roster_04-05-2026_to_02-08-2026.xlsx:137815:1778982385007|KEN HII|Annual Leave|2026-07-13|2026-07-20|AL",
+  "Dandenong_Emergency_Doctors'_Roster_04-05-2026_to_02-08-2026.xlsx:137815:1778982385007|KEN HII|Annual Leave|2026-07-27|2026-08-03|AL",
+  "Dandenong_Emergency_Doctors'_Roster_04-05-2026_to_02-08-2026.xlsx:137815:1778982385007|STEVE GUASTALEGNAME|Annual Leave|2026-05-11|2026-05-18|AL",
+  "Dandenong_Emergency_Doctors'_Roster_04-05-2026_to_02-08-2026.xlsx:137815:1778982385007|STEVE GUASTALEGNAME|Annual Leave|2026-07-27|2026-08-03|AL",
+]);
+
+export function isApprovedReparseOmission(event, baselineFileId = "") {
   if (String(event?.source || "").toUpperCase() !== "DDH") return false;
+  const exactLeaveReplacement = [
+    String(baselineFileId || ""),
+    String(event.doctorKey || ""),
+    String(event.title || ""),
+    String(event.start || "").slice(0, 10),
+    String(event.end || "").slice(0, 10),
+    String(event.rawValue || "").trim(),
+  ].join("|");
+  if (APPROVED_DDH_WEEKLY_LEAVE_REPLACEMENTS.has(exactLeaveReplacement)) return true;
   const raw = normalizeRosterRawValue(event.rawValue);
   // These are references made by a DDH roster writer to another service, not
   // DDH work. They are explicitly excluded from calendars by product policy.

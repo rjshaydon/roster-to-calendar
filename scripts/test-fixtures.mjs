@@ -7,7 +7,7 @@ import { onRequestPost as handleStatePost } from "../functions/api/state.js";
 import { onRequestGet as handleFeedGet } from "../functions/api/feed.js";
 import { assertFindmyshiftDandenongAssignments, extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentDiagnostics, findmyshiftDandenongAssignmentExceptions, findmyshiftRowsWorkbook } from "../functions/_lib/findmyshift.js";
 import { buildAutomatedDerivedRosterPayload } from "../functions/_lib/automation-import.js";
-import { buildPreviewFromDerivedEvents, findRosterSyncByProviderVersion, sameRosterOccurrence, storeCachedSnapshot } from "../functions/_lib/d1-calendar.js";
+import { buildPreviewFromDerivedEvents, findRosterSyncByProviderVersion, isApprovedReparseOmission, sameRosterOccurrence, storeCachedSnapshot } from "../functions/_lib/d1-calendar.js";
 import { recordRosterDispatchLifecycle, requestQueuedRosterProcessing } from "../functions/_lib/automation-dispatch.js";
 import { buildRosterView, customEventsToEvents, doctorOptions, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
 import { customEventsToEvents as serverCustomEventsToEvents } from "../functions/_lib/roster.js";
@@ -36,6 +36,20 @@ assert.equal(
   ),
   true,
   "a merged all-day leave event must preserve each source-day occurrence",
+);
+assert.equal(
+  isApprovedReparseOmission({
+    doctorKey: "HWEE MIN LEE", source: "DDH", title: "Annual Leave", start: "2026-05-04", end: "2026-05-11", rawValue: "AL",
+  }, "Dandenong_Emergency_Doctors'_Roster_04-05-2026_to_02-08-2026.xlsx:137815:1778982385007"),
+  true,
+  "the approved DDH weekly-leave replacement must be scoped to its exact retained source event",
+);
+assert.equal(
+  isApprovedReparseOmission({
+    doctorKey: "HWEE MIN LEE", source: "DDH", title: "Annual Leave", start: "2026-05-04", end: "2026-05-12", rawValue: "AL",
+  }, "Dandenong_Emergency_Doctors'_Roster_04-05-2026_to_02-08-2026.xlsx:137815:1778982385007"),
+  false,
+  "a changed leave range must not inherit the one-off migration approval",
 );
 assert.deepEqual(
   unresolvedCodeSummary([
