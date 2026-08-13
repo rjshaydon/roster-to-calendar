@@ -1713,6 +1713,8 @@ function parseDdhEntry(day, label, timeText, seniority = UNKNOWN_SENIORITY) {
   const orientation = createOrientationRecord("DDH", day, label, seniority);
   if (orientation) return orientation;
   if (isOtherHospitalReference("DDH", label)) return null;
+  const extraRecord = createDdhExtraRecord(day, label, timeText, seniority);
+  if (extraRecord !== undefined) return extraRecord;
   if (upper === "AM" || upper === "PM") return null;
   if (upper === "PHNW" || upper === "PHNW CLINICAL") {
     return createAllDayRecord("DDH", day, label, {
@@ -1756,9 +1758,10 @@ function parseDdhEntry(day, label, timeText, seniority = UNKNOWN_SENIORITY) {
 
   const parsedTime = parseDdhTimeRow(timeText);
   if (parsedTime) {
+    const titleParts = ddhSwingTitlePartsForStart(label, parsedTime[0], normalized.titleParts);
     return createTimedRecord("DDH", day, label, {
       kind: normalized.kind,
-      titleParts: normalized.titleParts,
+      titleParts,
       startHm: parsedTime[0],
       endHm: parsedTime[1],
       location,
@@ -1792,6 +1795,37 @@ function parseDdhEntry(day, label, timeText, seniority = UNKNOWN_SENIORITY) {
     warning: normalized.warning,
     seniority,
   });
+}
+
+// DDH "Extra" annotations usually reconcile payment for a shift worked in a
+// different week. They are not a shift on the displayed roster day unless the
+// writer supplies a period or an explicit time. Extra Swing remains a genuine
+// Swing allocation and is handled by the normal Swing rules below.
+function createDdhExtraRecord(day, label, timeText, seniority) {
+  const upper = String(label || "").replace(/\s+/g, " ").trim().toUpperCase();
+  if (!/^EXTRA\b/.test(upper) || /^EXTRA\s+SWING$/.test(upper)) return undefined;
+  const inlineTime = String(label || "").match(/\b(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})\b/);
+  const parsedTime = parseDdhTimeRow(timeText) || (inlineTime
+    ? [[Number(inlineTime[1]), Number(inlineTime[2])], [Number(inlineTime[3]), Number(inlineTime[4])]]
+    : null);
+  const explicitPeriod = extractDdhPeriod(upper);
+  if (!parsedTime && !explicitPeriod) return null;
+  const period = explicitPeriod || (Number(parsedTime[0][0]) < 14 ? "AM" : "PM");
+  const titleParts = { base: "Extra", period, suffix: "" };
+  if (parsedTime) {
+    return createTimedRecord("DDH", day, label, {
+      kind: "shift",
+      titleParts,
+      startHm: parsedTime[0],
+      endHm: parsedTime[1],
+      location: DDH_LOCATION,
+      seniority,
+    });
+  }
+  const defaultTimes = inferDdhDefaultTimes({ titleParts }, seniority);
+  return defaultTimes
+    ? createTimedRecord("DDH", day, label, { kind: "shift", titleParts, startHm: defaultTimes[0], endHm: defaultTimes[1], location: DDH_LOCATION, seniority })
+    : createAllDayRecord("DDH", day, label, { kind: "shift", titleParts, location: DDH_LOCATION, seniority });
 }
 
 function inferDdhDefaultTimes(normalized, seniority = UNKNOWN_SENIORITY) {
@@ -2134,7 +2168,8 @@ function normalizeMchLeave(label) {
     || /^SL(?:\s+(?:MMC|DDH|CASEY|MCH|PAEDS|AM|PM|NIGHT|NS|SW))?$/.test(upper)) {
     return { kind: "sabbatical_leave", title: "Sabbatical" };
   }
-  if (upper === "PAT/L" || upper === "PARENTAL/L" || upper === "PARENTAL LEAVE" || upper === "PATERNITY LEAVE") return { kind: "parental_leave", title: "Parental Leave" };
+  if (upper === "PAT/L" || upper === "PARENTAL/L" || upper === "PARENTAL LEAVE" || upper === "PATERNITY LEAVE" || /\bPARENTAL\b/.test(upper)) return { kind: "parental_leave", title: "Parental Leave" };
+  if (/\bLWP\b/.test(upper) || /\bLEAVE\s+WITHOUT\s+PAY\b/.test(upper)) return { kind: "leave", title: "Leave without pay" };
   if (upper === "LSL" || upper === "LONG SERVICE LEAVE") return { kind: "long_service_leave", title: "Long Service Leave" };
   if (/^CARER'?S LEAVE$/.test(upper) || upper === "CARERS LEAVE") return { kind: "carers_leave", title: "Carer's Leave" };
   if (upper === "F/L" || upper === "FAM LEAVE" || upper === "FAMILY LEAVE") return { kind: "family_leave", title: "Family Leave" };
@@ -2725,6 +2760,15 @@ function normalizeDdhRosterSlotLabel(value) {
       warning: "",
     };
   }
+  if (/^(?:EXTRA\s+)?SWING$/.test(upper)) {
+    return {
+      kind: "shift",
+      titleParts: { base: "Swing shift", period: "", suffix: "" },
+      allDay: true,
+      status: "ok",
+      warning: "",
+    };
+  }
   const period = extractDdhPeriod(upper);
   const baseMatch = upper.match(/\b(ORANGE|SILVER|FAST|AVAO|ROVER|SSU|SWING)\b/);
   if (baseMatch && (period || baseMatch[1] === "SSU")) {
@@ -2754,6 +2798,14 @@ function normalizeDdhRosterSlotLabel(value) {
     };
   }
   return null;
+}
+
+function ddhSwingTitlePartsForStart(label, startHm, fallback) {
+  if (!/^(?:EXTRA\s+)?SWING$/i.test(String(label || "").trim()) || !Array.isArray(startHm)) return fallback;
+  const minutes = Number(startHm[0]) * 60 + Number(startHm[1]);
+  if (minutes < 14 * 60) return { base: "Swing", period: "AM", suffix: "" };
+  if (minutes > 15 * 60) return { base: "Swing", period: "PM", suffix: "" };
+  return { base: "Swing shift", period: "", suffix: "" };
 }
 
 function genericUnknownDdhShift(titleParts) {
@@ -2827,7 +2879,7 @@ function shouldIgnoreDdh(value, seniority = UNKNOWN_SENIORITY) {
 // or unresolved shift-code diagnostics.
 function isDdhStructuralAnnotation(value, seniority = UNKNOWN_SENIORITY) {
   const upper = String(value || "").trim().toUpperCase();
-  if (["INTERN", "INTERNS", "UNAVAILABLE", "UNAVAILABE", "-", "--", "SEC"].includes(upper)) return true;
+  if (["INTERN", "INTERNS", "UNAVAILABLE", "UNAVAILABE", "-", "--", "SEC", "N", "Y", "W"].includes(upper)) return true;
   // The AMP section contains supervision and free-text notes (including
   // physiotherapist headings and staff names), not rostered AMP shifts.
   // Restrict this exclusion to AMP so identically shaped labels elsewhere
@@ -3791,7 +3843,8 @@ function isMmcClinicalSupportExam(value) {
 // Keep these labels out of calendars before any generic shift fallback sees them.
 function isOtherHospitalReference(source, value) {
   const upper = cleanText(value).replace(/\s+/g, " ").trim().toUpperCase();
-  if (/\b(?:TOX|HITH|VHH|ARV)\b/.test(upper)) return true;
+  if (/\b(?:TOX|HITH|VHH|ARV|WARRAGUL)\b/.test(upper)) return true;
+  if (source === "DDH" && /\b(?:AED|PED)\b/.test(upper)) return true;
   if ((source === "DDH" || source === "MMC") && /\bCASEY\b/.test(upper)) return true;
   if ((source === "DDH" || source === "Casey") && /\bMMC\b/.test(upper)) return true;
   // In an MMC roster, DH means Dandenong Hospital. These are allocation
