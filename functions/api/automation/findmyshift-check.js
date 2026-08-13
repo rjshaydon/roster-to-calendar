@@ -58,7 +58,7 @@ export async function onRequestPost(context) {
     // If this exact provider version has already been proved incomplete, do
     // not re-download the full report on every watchdog tick. A future source
     // modification is retried in case the provider starts exposing the stream.
-    if (current?.providerVersion === providerVersion && isIncompleteDandenongAssignmentError(current.lastError)) {
+    if (!force && current?.providerVersion === providerVersion && isIncompleteDandenongAssignmentError(current.lastError)) {
       await saveSource(context, current, { lastCheckedAt: now });
       return Response.json({ ok: true, status: "incomplete", providerModifiedAt: providerVersion });
     }

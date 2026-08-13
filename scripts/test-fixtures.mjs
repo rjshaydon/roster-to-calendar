@@ -505,7 +505,8 @@ assert.match(indexSource, /id="stayLoggedIn"[^>]*checked/, "Stay logged in shoul
 assert.equal((appSource.match(/data-test-findmyshift/g) || []).length, 0, "FindMyShift diagnostics should not remain exposed as a UI control");
 assert.equal((appSource.match(/data-sync-findmyshift/g) || []).length, 0, "FindMyShift is automated and should not expose a manual sync control");
 assert.equal((appSource.match(/data-download-findmyshift-exceptions/g) || []).length, 0, "FindMyShift exception review is no longer exposed as a UI control");
-assert.match(findmyshiftModuleSource, /findmyshiftRequest\("reports\/shifts",[\s\S]*comments:\s*"no"/, "FindMyShift imports should request comments=no so roster-writer comments are excluded upstream");
+assert.doesNotMatch(findmyshiftModuleSource, /comments:\s*"no"/, "FindMyShift comments=no must not be requested because it can remove the paired stream row needed to validate timed DDH shifts");
+assert.match(findmyshiftCheckSource, /!force && current\?\.providerVersion === providerVersion && isIncompleteDandenongAssignmentError/, "a creator-forced FindMyShift refresh must retry a cached incomplete provider response");
 assert.match(facilityAccessMigrationSource, /facility_overview_enabled INTEGER NOT NULL DEFAULT 0/, "At a glance database access should default to opt-in");
 assert.match(facilityOptInRepairMigrationSource, /WHEN role IN \('creator', 'owner'\) THEN 1[\s\S]*ELSE 0/, "the At a glance repair should retain Creator access and revoke unintended standard-user access");
 assert.match(indexSource, /data-facility-overview-tab="on-shift">On shift[\s\S]*data-facility-overview-tab="by-stream">By stream[\s\S]*data-facility-overview-tab="staff">ED staff/, "By stream should sit between On shift and ED staff");
