@@ -939,26 +939,14 @@ const APPROVED_MMC_LEGACY_UNSUPPORTED_LEAVE = new Set([
   "AdultTerm1.2026.xlsx:641068:1776812908257|JOSEPH VU|C/L",
 ]);
 
-// Product-approved on 2026-08-13 after direct roster review. These three DDH
-// entries are a roster-writer request ("CS not onsite please"), not clinical
-// support shifts. The upstream source identifier changes when DDH publishes a
-// revised file, so the exact clinician, raw entry, and date scope keeps the
-// promotion gate intact for every other removal.
-const APPROVED_DDH_CS_NOT_ONSITE_REQUEST_OMISSIONS = new Set([
-  "MALINDA WEERASINGHE|CS NOT ONSITE PL|2026-09-17",
-  "MALINDA WEERASINGHE|CS NOT ONSITE PL|2026-09-24",
-  "MALINDA WEERASINGHE|CS NOT ONSITE PL|2026-10-15",
-]);
-
 export function isApprovedReparseOmission(event, baselineFileId = "") {
   const source = String(event?.source || "").toUpperCase();
   const raw = normalizeRosterRawValue(event.rawValue);
-  const approvedDdhRequestKey = [
-    String(event?.doctorKey || "").toUpperCase(),
-    raw,
-    String(event?.start || "").slice(0, 10),
-  ].join("|");
-  if (source === "DDH" && APPROVED_DDH_CS_NOT_ONSITE_REQUEST_OMISSIONS.has(approvedDdhRequestKey)) return true;
+  // Product-approved on 2026-08-13: this is a DDH roster-writer request
+  // ("CS not onsite please"), not Clinical Support work. It is deliberately
+  // exact so that real CS, CS onsite, and every other removal still block a
+  // staged promotion for review.
+  if (source === "DDH" && /^CS\s+NOT\s+ONSITE\s+PLS?$/.test(raw)) return true;
   // Product-approved: these are DDH clinical-support references entered into
   // MMC rosters to avoid unsafe late/early allocations, not MMC work.
   if (source === "MMC" && /(?:^|\s)CS\s*DH$/.test(raw)) return true;
