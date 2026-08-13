@@ -2032,7 +2032,7 @@ const shiftedMmcHeaderRows = Array.from({ length: 8 }, () => []);
 shiftedMmcHeaderRows[2] = ["Role", "Pager No (uploaded)", "", "Cost Centre", "Name (Not Used)", "Emp No", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 shiftedMmcHeaderRows[3] = ["Date", "", "", "", "", "", new Date("2026-08-10T00:00:00Z"), new Date("2026-08-11T00:00:00Z"), new Date("2026-08-12T00:00:00Z"), new Date("2026-08-13T00:00:00Z"), new Date("2026-08-14T00:00:00Z"), new Date("2026-08-15T00:00:00Z"), new Date("2026-08-16T00:00:00Z")];
 shiftedMmcHeaderRows[5] = ["", "", "", "SMS", "SMS"];
-shiftedMmcHeaderRows[6] = ["", "", "", "SHIFTED SMS", "Shifted COLUMNS", "", "0800-1730 CS", "1430-0000 PGC", "0800-1730 D C"];
+shiftedMmcHeaderRows[6] = ["", "", "", "SHIFTED SMS", "Shifted COLUMNS", "", "0800-1730 CS", "1430-0000 PGC", "0800-1730 D C", "0800-1730 CSM", "0800-1730 CS OS", "0800-1730 CS Exam"];
 XLSX.utils.book_append_sheet(shiftedMmcHeaderWorkbook, XLSX.utils.aoa_to_sheet([[]]), "Whole thing");
 XLSX.utils.book_append_sheet(shiftedMmcHeaderWorkbook, XLSX.utils.aoa_to_sheet(shiftedMmcHeaderRows, { cellDates: true }), "Week 2");
 const shiftedMmcUpload = new FormData();
@@ -2043,10 +2043,13 @@ assert.ok(shiftedMmcDoctor, "MMC doctor extraction should follow a shifted Name 
 const shiftedMmcEvents = buildRosterView(parsedShiftedMmcUpload.sources.mmc, [], shiftedMmcDoctor.key).events;
 assert.deepEqual(
   shiftedMmcEvents.map((event) => event.start.slice(0, 10)),
-  ["2026-08-10", "2026-08-11"],
-  "MMC parsing should follow shifted weekday headers and hide a Dandenong allocation annotation",
+  ["2026-08-10", "2026-08-11", "2026-08-13", "2026-08-14", "2026-08-15"],
+  "MMC parsing should follow shifted weekday headers, recognise confirmed CS variants, and hide a Dandenong allocation annotation",
 );
 assert.ok(shiftedMmcEvents.every((event) => event.seniority === "SMS"), "MMC parsing should follow the shifted Cost Centre seniority marker");
+assert.ok(shiftedMmcEvents.some((event) => event.title === "MMC: CSM" && event.rawValue === "0800-1730 CSM"), "CSM should be a recognised MMC shift");
+assert.ok(shiftedMmcEvents.some((event) => event.title === "MMC: CS OS" && event.rawValue === "0800-1730 CS OS"), "CS OS should be a recognised MMC shift");
+assert.ok(shiftedMmcEvents.some((event) => event.title === "MMC: CS Exam" && event.rawValue === "0800-1730 CS Exam"), "CS Exam should be a recognised MMC shift");
 
 await assertRejectsMixedTermUpload(
   "MMC date typo should identify the worksheet and cell",
@@ -2553,6 +2556,8 @@ XLSX.utils.book_append_sheet(ddhAccuracyWorkbook, XLSX.utils.aoa_to_sheet([
   ["Annual Leave Doctor", "AL 0.75", "", "", "", "", "", ""],
   ["Annotation Doctor", "MMC AM", "Casey PM", "HITH AM", "Tox CS", "VHH PM", "ARV AM", "Swing PM"],
   ["GED Doctor", "GED Junior", "", "", "", "", "", ""],
+  ["DDH Notes Doctor", "Intern", "unavailable", "--", "pm>am", "sec", "(2 ED shifts this week)", ""],
+  ["Orientation Variant Doctor", "Orienation 0800-1000", "", "", "", "", "", ""],
 ]), "Sheet1");
 const ddhAccuracyDoctors = doctorOptions([], ddhAccuracyWorkbook);
 const ddhAccuracyDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "ACCURACY DOCTOR");
@@ -2566,7 +2571,9 @@ const ddhExamLeaveDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "E
 const ddhAnnualLeaveDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "ANNUAL LEAVE DOCTOR");
 const ddhAnnotationDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "ANNOTATION DOCTOR");
 const ddhGedDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "GED DOCTOR");
-assert.ok(ddhAccuracyDoctor && crisisLocumDoctor && sickLeaveDoctor && conferenceLeaveDoctor && ddhFamilyLeaveDoctor && ddhParentalLeaveDoctor && ddhSpecialLeaveDoctor && ddhExamLeaveDoctor && ddhAnnualLeaveDoctor && ddhAnnotationDoctor && ddhGedDoctor, "DDH accuracy fixtures should expose their rostered doctors");
+const ddhNotesDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "DDH NOTES DOCTOR");
+const ddhOrientationVariantDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "ORIENTATION VARIANT DOCTOR");
+assert.ok(ddhAccuracyDoctor && crisisLocumDoctor && sickLeaveDoctor && conferenceLeaveDoctor && ddhFamilyLeaveDoctor && ddhParentalLeaveDoctor && ddhSpecialLeaveDoctor && ddhExamLeaveDoctor && ddhAnnualLeaveDoctor && ddhAnnotationDoctor && ddhGedDoctor && ddhNotesDoctor && ddhOrientationVariantDoctor, "DDH accuracy fixtures should expose their rostered doctors");
 const ddhAccuracyView = buildRosterView([], ddhAccuracyWorkbook, ddhAccuracyDoctor.key);
 assert.deepEqual(
   ddhAccuracyView.events.map((event) => [event.title, event.rawValue, event.timeLabel]),
@@ -2598,6 +2605,9 @@ assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhExamLeaveDoctor.key
 assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhAnnualLeaveDoctor.key).events.map((event) => event.title), ["Annual Leave"], "fractional AL should be recognised as annual leave");
 assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhAnnotationDoctor.key).events.map((event) => event.title), ["DDH: Swing PM"], "other-hospital safety annotations should not become DDH calendar events while a genuine swing shift remains visible");
 assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhGedDoctor.key).events.map((event) => event.title), ["DDH: GED shift"], "GED Junior should be a recognised GED shift");
+assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhNotesDoctor.key).events, [], "DDH headings and availability notes should not become calendar events");
+assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhNotesDoctor.key).issues, [], "DDH headings and availability notes should not become unresolved shift codes");
+assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhOrientationVariantDoctor.key).events.map((event) => [event.title, event.timeLabel]), [["DDH: Orientation", "08:00-10:00"]], "orientation spelling variants should standardise to a timed Orientation shift");
 
 const mmcPdfBytes = await readFile(fileURLToPath(new URL("../fixtures/AdultMMCTerm2.2026.Ver1.pdf", import.meta.url)));
 const formData = new FormData();

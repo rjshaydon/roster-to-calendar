@@ -1531,6 +1531,7 @@ function parseFindmyshiftDdhRecords(workbook, doctorKey) {
     const startHm = parseFindmyshiftTime(rawStart);
     const endHm = parseFindmyshiftTime(rawEnd);
     if (!day || !label) continue;
+    if (isDdhStructuralAnnotation(label)) continue;
     const seniority = findmyshiftDdhSeniority(rawSeniority, label);
     const facility = cleanText(rawFacility);
     const comment = cleanText(rawComment);
@@ -1630,7 +1631,10 @@ function parseMchRecords(workbook, doctorKey) {
 
 function parseMmcEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
   const upper = raw.toUpperCase();
-  const leaveRecord = createRecognizedLeaveRecord("MMC", day, raw, seniority);
+  // This is a clinical-support allocation, not exam leave.  It must be
+  // checked before the generic leave matcher, which deliberately accepts
+  // a trailing "Exam" in other roster annotations.
+  const leaveRecord = isMmcClinicalSupportExam(raw) ? null : createRecognizedLeaveRecord("MMC", day, raw, seniority);
   if (leaveRecord) return leaveRecord;
   const orientation = createOrientationRecord("MMC", day, raw, seniority);
   if (orientation) return orientation;
@@ -2519,6 +2523,7 @@ function buildDefaultParserRules() {
   for (const seniority of consultantSeniorities) {
     add(rules.mmc, "MMC", "CS", seniority, "CS", "", "", true, "", "", "");
     add(rules.mmc, "MMC", "CSO", seniority, "CSO", "", "", true, "", "", MMC_LOCATION);
+    add(rules.mmc, "MMC", "CS OS", seniority, "CS OS", "", "", false, "08:00", "17:30", MMC_LOCATION);
   }
   for (const seniority of consultantSeniorities) {
     for (const periodPrefix of ["A", "P"]) {
@@ -2610,6 +2615,8 @@ function buildDefaultParserRules() {
     add(rules.casey, "Casey", "AM SWING", seniority, "Swing", "AM", "", false, "08:00", "17:30", CASEY_LOCATION);
     add(rules.casey, "Casey", "PM SWING", seniority, "Swing", "PM", "", false, "14:30", "00:00", CASEY_LOCATION);
   }
+  add(rules.mmc, "MMC", "CSM", "SMS", "CSM", "", "", false, "08:00", "17:30", MMC_LOCATION);
+  add(rules.mmc, "MMC", "CS EXAM", "SMS", "CS Exam", "", "", false, "08:00", "17:30", MMC_LOCATION);
   return rules;
 }
 
@@ -2770,7 +2777,7 @@ function createOrientationRecord(source, day, rawValue, seniority = UNKNOWN_SENI
   const label = String(rawValue || "").trim();
   // Casey uses the abbreviated form "Orient 09-1730". It is a real,
   // timed orientation shift, not metadata to be stripped from a roster cell.
-  if (!/^(?:ORIENTATION|ORIENT)\b/i.test(label)) return null;
+  if (!/^(?:ORIENTATION|ORIENATION|ORIENT)\b/i.test(label)) return null;
   const range = label.match(/\b(\d{1,2})(?::?(\d{2}))?\s*(?:-|–|—|TO)\s*(\d{1,2})(?::?(\d{2}))?\b/i);
   const location = source === "MMC" ? MMC_LOCATION
     : source === "DDH" ? DDH_LOCATION
@@ -2810,8 +2817,20 @@ function extractDdhPeriod(label) {
 function shouldIgnoreDdh(value) {
   const upper = String(value || "").trim().toUpperCase();
   if (!upper) return true;
+  if (isDdhStructuralAnnotation(upper)) return true;
   if (DDH_IGNORE_PREFIXES.some((prefix) => upper.startsWith(prefix))) return true;
   return DDH_IGNORE_CONTAINS.some((fragment) => upper.includes(fragment));
+}
+
+// FindMyShift carries staff headings, availability, and free-text rostering
+// notes in the same Shift label column. These must not become calendar shifts
+// or unresolved shift-code diagnostics.
+function isDdhStructuralAnnotation(value) {
+  const upper = String(value || "").trim().toUpperCase();
+  if (["INTERN", "INTERNS", "UNAVAILABLE", "UNAVAILABE", "-", "--", "SEC"].includes(upper)) return true;
+  if (/^(?:AM|PM)\s*>\s*(?:AM|PM)$/.test(upper)) return true;
+  if (/^\(?\d+\s+ED\s+SHIFTS?\s+THIS\s+WEEK\)?$/.test(upper)) return true;
+  return false;
 }
 
 function shouldIgnoreCasey(value) {
@@ -3726,7 +3745,14 @@ function firstWeeklyLeave(values) {
 function shouldIgnoreMmc(value) {
   const upper = value.trim().toUpperCase();
   if (upper.startsWith("DANDENONG")) return true;
+  // "Exam" is normally a roster annotation, except for the explicit MMC
+  // Clinical Support Exam allocation which is a real, timed shift.
+  if (isMmcClinicalSupportExam(upper)) return false;
   return shouldIgnoreCommon(value);
+}
+
+function isMmcClinicalSupportExam(value) {
+  return /^(?:(?:\d{4})-(?:\d{4})\s+)?CS\s+EXAM$/i.test(String(value || "").trim());
 }
 
 // Roster writers use references to another hospital as a safety annotation
