@@ -2156,8 +2156,12 @@ function normalizeCaseyCode(label) {
     .toUpperCase();
 }
 
-function normalizeMchLeave(label) {
+function normalizeMchLeave(label, seniority = "") {
   const upper = normalizedLeaveLabel(label);
+  // Conference leave is an SMS allocation. In non-SMS rosters C/L means
+  // Carer's Leave; resolving this before the legacy conference abbreviation
+  // keeps the two meanings distinct without changing SMS history.
+  if (upper === "C/L" && seniority && seniority !== "SMS") return { kind: "carers_leave", title: "Carer's Leave" };
   if (upper === "ANNUAL & PARENTAL LEAVE") return { kind: "annual_parental_leave", title: "Annual & Parental Leave" };
   if (isAnnualLeaveLabel(upper)) return { kind: "annual_leave", title: "Annual Leave" };
   if (/^(?:SICK(?:\s+LEAVE)?|S\/L)(?:\s+.*)?$/.test(upper)) return { kind: "sick_leave", title: "Sick leave" };
@@ -2183,7 +2187,7 @@ function normalizeMchLeave(label) {
 }
 
 function createRecognizedLeaveRecord(source, day, rawValue, seniority = UNKNOWN_SENIORITY) {
-  const leave = normalizeRecognizedLeave(rawValue);
+  const leave = normalizeRecognizedLeave(rawValue, seniority);
   if (!leave) return null;
   return createAllDayRecord(source, day, rawValue, {
     kind: leave.kind,
@@ -2193,9 +2197,9 @@ function createRecognizedLeaveRecord(source, day, rawValue, seniority = UNKNOWN_
   });
 }
 
-function normalizeRecognizedLeave(value) {
+function normalizeRecognizedLeave(value, seniority = UNKNOWN_SENIORITY) {
   for (const candidate of leaveLabelCandidates(value)) {
-    const leave = normalizeMchLeave(candidate);
+    const leave = normalizeMchLeave(candidate, seniority);
     if (leave) return leave;
     if (candidate === "ANNUAL") return { kind: "annual_leave", title: "Annual Leave" };
   }
