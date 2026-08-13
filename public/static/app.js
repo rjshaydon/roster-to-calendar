@@ -11443,6 +11443,7 @@ function collectUnknownShiftIssues() {
       sample: `${item.sampleName || "Roster"} · ${formatDate(item.sampleDate || "")} · ${item.rawValue || code}`,
       doctorKey: item.doctorKey || "",
       displayName: item.displayName || item.sampleName || "",
+      sampleDate: item.sampleDate || "",
       count: item.count || 1,
       lastSeenAt: item.lastSeenAt || item.sampleDate || "",
     });
@@ -11468,6 +11469,7 @@ function addUnknownShiftIssueToMap(byKey, item) {
     if (!existing.sample && item.sample) existing.sample = item.sample;
     if (!existing.doctorKey && item.doctorKey) existing.doctorKey = item.doctorKey;
     if (!existing.displayName && item.displayName) existing.displayName = item.displayName;
+    if (!existing.sampleDate && item.sampleDate) existing.sampleDate = item.sampleDate;
     if ((item.lastSeenAt || "") > (existing.lastSeenAt || "")) existing.lastSeenAt = item.lastSeenAt || "";
     return;
   }
@@ -11486,6 +11488,7 @@ function addUnknownShiftIssueToMap(byKey, item) {
     sample: item.sample || "",
     doctorKey: normalizeRosterName(item.doctorKey || ""),
     displayName: String(item.displayName || "").trim(),
+    sampleDate: String(item.sampleDate || "").slice(0, 10),
     count: item.count || 1,
     lastSeenAt: item.lastSeenAt || "",
   });

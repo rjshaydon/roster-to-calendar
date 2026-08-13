@@ -1811,6 +1811,7 @@ assert.match(appSource, /const key = `\$\{item\.source\}\|\$\{sanitizeRuleSenior
 assert.match(appSource, /renderUnknownShiftCodeHierarchy/, "unresolved shift-code rows should render as a collapsible hospital and seniority hierarchy");
 assert.match(appSource, /data-go-to-unresolved-event/, "unresolved shift-code rows should offer a direct calendar jump for their sampled roster event");
 assert.match(appSource, /function openUnresolvedShiftIssueEvent[\s\S]*focusPreviewIssueDate/, "unresolved shift-code jumps should switch doctor and focus the relevant calendar date");
+assert.match(appSource, /doctorKey: item\.doctorKey[\s\S]*sampleDate: item\.sampleDate/, "grouped unresolved shift-code rows should retain their sampled doctor and date for the calendar jump");
 assert.match(styleSource, /is-unresolved-issue-focus[\s\S]*border: 3px solid #c83232/, "the focused unresolved event date should receive a red ring");
 assert.match(styleSource, /#parserRuleForm[\s\S]*overflow-y: auto/, "shift-code editor form should scroll vertically when it exceeds available height");
 assert.match(appSource, /normalizeDdhParserRuleCodeText/, "DDH shift-code issues should use parser-equivalent label codes");
