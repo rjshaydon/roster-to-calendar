@@ -385,6 +385,7 @@ let globalUnresolvedShiftCodesLoaded = false;
 let globalUnresolvedShiftCodesError = "";
 let globalUnresolvedShiftCodeRunId = 0;
 let shiftCodeReviewFilter = { query: "", source: "all" };
+let previewIssueFocusTimer = 0;
 let parserRuleSaveContext = { mode: "global", suggestionId: "", targetEmail: "" };
 let dismissedIssueFingerprints = new Set();
 let ignoredIssueFingerprints = new Set();
@@ -1222,6 +1223,12 @@ shiftCodeReviewModalBody?.addEventListener("change", (event) => {
   renderShiftCodeReviewResults();
 });
 shiftCodeReviewModalBody?.addEventListener("click", (event) => {
+  const goToEventButton = event.target.closest("[data-go-to-unresolved-event]");
+  if (goToEventButton) {
+    event.preventDefault();
+    void openUnresolvedShiftIssueEvent(goToEventButton.dataset.goToUnresolvedEvent || "");
+    return;
+  }
   const addRosterShiftCodeButton = event.target.closest("[data-add-roster-shift-code]");
   if (addRosterShiftCodeButton) {
     openRosterShiftCodeRuleModal(
@@ -7609,6 +7616,62 @@ function applyPreviewRangeChange(which, value) {
   setStatus("Preview range updated.");
 }
 
+async function openUnresolvedShiftIssueEvent(issueId) {
+  const issue = globalUnresolvedShiftCodes.find((item) => item.id === String(issueId || ""));
+  const doctorKey = normalizeRosterName(issue?.doctorKey || "");
+  const date = String(issue?.sampleDate || "").slice(0, 10);
+  if (!doctorKey || !date) {
+    setStatus("This unresolved code does not have a specific roster person and date to open.", true);
+    return;
+  }
+  const source = String(issue.source || "").toLowerCase();
+  const candidates = dedupeDoctorOptions([
+    ...(availableRosterDoctors || []),
+    ...(doctorOptions || []),
+  ]);
+  const doctor = candidates.find((item) => normalizeRosterName(item.key) === doctorKey && (!source || normalizedDoctorSourceTypes(item).includes(source)))
+    || candidates.find((item) => normalizeRosterName(item.key) === doctorKey);
+  if (!doctor) {
+    setStatus(`Could not find ${issue.displayName || doctorKey} in the available roster calendars.`, true);
+    return;
+  }
+
+  closeShiftCodeReviewModal();
+  setStatus(`Opening ${doctor.displayName || issue.displayName || doctorKey} on ${formatDate(date)}…`);
+  await switchDoctorSelection(doctor.key, { resetRange: false });
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (latestPreview?.events?.length && normalizeRosterName(selectedDoctor()?.key) === doctorKey) break;
+    await new Promise((resolve) => window.setTimeout(resolve, 100));
+  }
+  if (!latestPreview?.events?.length || normalizeRosterName(selectedDoctor()?.key) !== doctorKey) {
+    setStatus("The calendar is still loading. Select the same review item again in a moment.", true);
+    return;
+  }
+
+  const term = australianTermForDate(parseDateOnly(date));
+  settings.dateFrom = formatDateKey(term.start);
+  settings.dateTo = formatDateKey(addDays(term.end, -1));
+  if (settingsInputs.dateFrom) settingsInputs.dateFrom.value = settings.dateFrom;
+  if (settingsInputs.dateTo) settingsInputs.dateTo.value = settings.dateTo;
+  rebuildClientPreview();
+  saveCurrentSessionState();
+  requestAnimationFrame(() => focusPreviewIssueDate(date));
+  setStatus(`Opened ${doctor.displayName || issue.displayName || doctorKey} on ${formatDate(date)}.`);
+}
+
+function focusPreviewIssueDate(date) {
+  const cell = preview.querySelector(`[data-add-date="${CSS.escape(date)}"]`);
+  if (!cell) return;
+  if (previewIssueFocusTimer) window.clearTimeout(previewIssueFocusTimer);
+  preview.querySelectorAll(".is-unresolved-issue-focus").forEach((item) => item.classList.remove("is-unresolved-issue-focus"));
+  cell.classList.add("is-unresolved-issue-focus");
+  cell.scrollIntoView({ block: "center", behavior: "smooth" });
+  previewIssueFocusTimer = window.setTimeout(() => {
+    cell.classList.remove("is-unresolved-issue-focus");
+    previewIssueFocusTimer = 0;
+  }, 6000);
+}
+
 function applyPreviewTermStart(value) {
   if (!value) return;
   settings.dateFrom = value;
@@ -11305,13 +11368,18 @@ function renderUnknownShiftCodeHierarchy(items, options = {}) {
 
 function renderShiftCodeReviewIssueActions(item) {
   const seniorities = escapeHtml((item.seniorities || []).join("|"));
+  const goToEvent = item.doctorKey && item.sampleDate
+    ? `<button type="button" class="button button-secondary" data-go-to-unresolved-event="${escapeHtml(item.id)}">Go to event</button>`
+    : "";
   if (item.email) {
     return `
+      ${goToEvent}
       <button type="button" class="button button-secondary" data-add-shift-code="${escapeHtml(item.email)}" data-error-id="${escapeHtml(item.id)}" data-shift-code-seniorities="${seniorities}">Edit shift code</button>
       <button type="button" class="button button-secondary" data-ignore-shift-code="${escapeHtml(item.email)}" data-error-id="${escapeHtml(item.id)}" data-shift-code-seniorities="${seniorities}">Ignore</button>
     `;
   }
   return `
+    ${goToEvent}
     <button type="button" class="button button-secondary" data-add-roster-shift-code="${escapeHtml(item.id)}" data-shift-code-seniorities="${seniorities}">Edit shift code</button>
     <button type="button" class="button button-secondary" data-ignore-roster-shift-code="${escapeHtml(item.id)}" data-shift-code-seniorities="${seniorities}">Ignore</button>
   `;
@@ -11373,6 +11441,8 @@ function collectUnknownShiftIssues() {
       message: item.message || "",
       rawValue: item.rawValue || code,
       sample: `${item.sampleName || "Roster"} · ${formatDate(item.sampleDate || "")} · ${item.rawValue || code}`,
+      doctorKey: item.doctorKey || "",
+      displayName: item.displayName || item.sampleName || "",
       count: item.count || 1,
       lastSeenAt: item.lastSeenAt || item.sampleDate || "",
     });
@@ -11396,6 +11466,8 @@ function addUnknownShiftIssueToMap(byKey, item) {
     }
     if (!existing.rawValue && item.rawValue) existing.rawValue = item.rawValue;
     if (!existing.sample && item.sample) existing.sample = item.sample;
+    if (!existing.doctorKey && item.doctorKey) existing.doctorKey = item.doctorKey;
+    if (!existing.displayName && item.displayName) existing.displayName = item.displayName;
     if ((item.lastSeenAt || "") > (existing.lastSeenAt || "")) existing.lastSeenAt = item.lastSeenAt || "";
     return;
   }
@@ -11412,6 +11484,8 @@ function addUnknownShiftIssueToMap(byKey, item) {
     message: item.message || "",
     rawValue: item.rawValue || item.code,
     sample: item.sample || "",
+    doctorKey: normalizeRosterName(item.doctorKey || ""),
+    displayName: String(item.displayName || "").trim(),
     count: item.count || 1,
     lastSeenAt: item.lastSeenAt || "",
   });
@@ -16367,6 +16441,8 @@ function sanitizeGlobalUnresolvedShiftCodes(items) {
         rawValue,
         message,
         sampleName: String(item?.sampleName || "Roster").trim(),
+        doctorKey: normalizeRosterName(item?.doctorKey || ""),
+        displayName: String(item?.displayName || item?.sampleName || "").trim(),
         sampleDate,
         count: Math.max(1, Math.floor(Number(item?.count || 1))),
         firstSeenAt: String(item?.firstSeenAt || sampleDate || ""),

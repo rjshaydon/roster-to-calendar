@@ -4163,6 +4163,8 @@ async function listUnresolvedRosterShiftCodes(db) {
       code,
       rawValue,
       message,
+      doctorKey: String(rawIssue?.doctorKey || "").trim(),
+      displayName: String(rawIssue?.displayName || rawIssue?.doctorKey || "").trim(),
       sampleName: String(rawIssue?.displayName || rawIssue?.doctorKey || "Roster").trim(),
       sampleDate: seenDate,
       count: 1,

@@ -3739,7 +3739,7 @@ function isOtherHospitalReference(source, value) {
   if ((source === "DDH" || source === "Casey") && /\bMMC\b/.test(upper)) return true;
   // In an MMC roster, DH means Dandenong Hospital. These are allocation
   // annotations for the DDH roster, including explicit-time variants.
-  if (source === "MMC" && /^(?:(?:\d{4})-(?:\d{4})\s+)?(?:CS\s+DH|DH\s+CS)$/i.test(upper)) return true;
+  if (source === "MMC" && /^(?:(?:\d{4})-(?:\d{4})\s+)?(?:CS\s+DH|DH\s+CS|D\s+C|D\s+CS|DDH\s+CS)$/i.test(upper)) return true;
   return false;
 }
 

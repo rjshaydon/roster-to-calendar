@@ -1809,6 +1809,9 @@ assert.match(appSource, /parserRuleSeniorityAll/, "shift-code seniority picker s
 assert.match(appSource, /function normalizeParserRuleSenioritySelection/, "shift-code seniority picker should keep All and Unknown selections consistent");
 assert.match(appSource, /const key = `\$\{item\.source\}\|\$\{sanitizeRuleSeniority\(item\.seniority\)\}\|\$\{item\.code\}`/, "unresolved shift-code grouping should be by hospital, seniority, and code");
 assert.match(appSource, /renderUnknownShiftCodeHierarchy/, "unresolved shift-code rows should render as a collapsible hospital and seniority hierarchy");
+assert.match(appSource, /data-go-to-unresolved-event/, "unresolved shift-code rows should offer a direct calendar jump for their sampled roster event");
+assert.match(appSource, /function openUnresolvedShiftIssueEvent[\s\S]*focusPreviewIssueDate/, "unresolved shift-code jumps should switch doctor and focus the relevant calendar date");
+assert.match(styleSource, /is-unresolved-issue-focus[\s\S]*border: 3px solid #c83232/, "the focused unresolved event date should receive a red ring");
 assert.match(styleSource, /#parserRuleForm[\s\S]*overflow-y: auto/, "shift-code editor form should scroll vertically when it exceeds available height");
 assert.match(appSource, /normalizeDdhParserRuleCodeText/, "DDH shift-code issues should use parser-equivalent label codes");
 assert.match(appSource, /seniority !== "Unknown"[\s\S]*some\(\(rule\) => rule\.code === code\)/, "Unknown-seniority shift-code issues should resolve by source/code");
@@ -2025,7 +2028,7 @@ const shiftedMmcHeaderRows = Array.from({ length: 8 }, () => []);
 shiftedMmcHeaderRows[2] = ["Role", "Pager No (uploaded)", "", "Cost Centre", "Name (Not Used)", "Emp No", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 shiftedMmcHeaderRows[3] = ["Date", "", "", "", "", "", new Date("2026-08-10T00:00:00Z"), new Date("2026-08-11T00:00:00Z"), new Date("2026-08-12T00:00:00Z"), new Date("2026-08-13T00:00:00Z"), new Date("2026-08-14T00:00:00Z"), new Date("2026-08-15T00:00:00Z"), new Date("2026-08-16T00:00:00Z")];
 shiftedMmcHeaderRows[5] = ["", "", "", "SMS", "SMS"];
-shiftedMmcHeaderRows[6] = ["", "", "", "SHIFTED SMS", "Shifted COLUMNS", "", "0800-1730 CS", "1430-0000 PGC"];
+shiftedMmcHeaderRows[6] = ["", "", "", "SHIFTED SMS", "Shifted COLUMNS", "", "0800-1730 CS", "1430-0000 PGC", "0800-1730 D C"];
 XLSX.utils.book_append_sheet(shiftedMmcHeaderWorkbook, XLSX.utils.aoa_to_sheet([[]]), "Whole thing");
 XLSX.utils.book_append_sheet(shiftedMmcHeaderWorkbook, XLSX.utils.aoa_to_sheet(shiftedMmcHeaderRows, { cellDates: true }), "Week 2");
 const shiftedMmcUpload = new FormData();
@@ -2037,7 +2040,7 @@ const shiftedMmcEvents = buildRosterView(parsedShiftedMmcUpload.sources.mmc, [],
 assert.deepEqual(
   shiftedMmcEvents.map((event) => event.start.slice(0, 10)),
   ["2026-08-10", "2026-08-11"],
-  "MMC parsing should follow shifted weekday headers instead of fixed column positions",
+  "MMC parsing should follow shifted weekday headers and hide a Dandenong allocation annotation",
 );
 assert.ok(shiftedMmcEvents.every((event) => event.seniority === "SMS"), "MMC parsing should follow the shifted Cost Centre seniority marker");
 
