@@ -7,7 +7,7 @@ import { onRequestPost as handleStatePost } from "../functions/api/state.js";
 import { onRequestGet as handleFeedGet } from "../functions/api/feed.js";
 import { assertFindmyshiftDandenongAssignments, extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentDiagnostics, findmyshiftDandenongAssignmentExceptions, findmyshiftRowsWorkbook } from "../functions/_lib/findmyshift.js";
 import { buildAutomatedDerivedRosterPayload } from "../functions/_lib/automation-import.js";
-import { buildPreviewFromDerivedEvents, findRosterSyncByProviderVersion, storeCachedSnapshot } from "../functions/_lib/d1-calendar.js";
+import { buildPreviewFromDerivedEvents, findRosterSyncByProviderVersion, sameRosterOccurrence, storeCachedSnapshot } from "../functions/_lib/d1-calendar.js";
 import { recordRosterDispatchLifecycle, requestQueuedRosterProcessing } from "../functions/_lib/automation-dispatch.js";
 import { buildRosterView, customEventsToEvents, doctorOptions, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
 import { customEventsToEvents as serverCustomEventsToEvents } from "../functions/_lib/roster.js";
@@ -20,6 +20,22 @@ assert.deepEqual(
   ),
   {},
   "parser comparison helpers should report no delta for equivalent normalized output",
+);
+assert.equal(
+  sameRosterOccurrence(
+    { doctorKey: "EXAMPLE", source: "DDH", start: "2026-08-10T08:00:00+10:00", rawValue: "Orange AM" },
+    { doctorKey: "EXAMPLE", source: "DDH", start: "2026-08-10T07:30:00+10:00", end: "2026-08-10T17:30:00+10:00", rawValue: "Orange AM" },
+  ),
+  true,
+  "a corrected timed event must preserve its roster occurrence on the same date",
+);
+assert.equal(
+  sameRosterOccurrence(
+    { doctorKey: "EXAMPLE", source: "DDH", start: "2026-08-11", rawValue: "AL" },
+    { doctorKey: "EXAMPLE", source: "DDH", start: "2026-08-10", end: "2026-08-13", allDay: true, rawValue: "AL / AL / AL" },
+  ),
+  true,
+  "a merged all-day leave event must preserve each source-day occurrence",
 );
 assert.deepEqual(
   unresolvedCodeSummary([

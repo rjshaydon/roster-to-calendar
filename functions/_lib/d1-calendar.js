@@ -810,7 +810,7 @@ export async function compareDerivedRosterFiles(db, baselineFileId, candidateFil
   };
 }
 
-function sameRosterOccurrence(baseline, candidate) {
+export function sameRosterOccurrence(baseline, candidate) {
   if (!baseline || !candidate) return false;
   if (String(baseline.doctorKey || "") !== String(candidate.doctorKey || "")) return false;
   if (String(baseline.source || "") !== String(candidate.source || "")) return false;
@@ -828,9 +828,12 @@ function eventCoversDay(event, day) {
   const startDay = String(event?.start || "").slice(0, 10);
   const endDay = String(event?.end || "").slice(0, 10);
   if (!startDay || !endDay) return false;
-  // All-day end dates are exclusive; timed events ending overnight have an
-  // end date on the next day, which is also safe for this source-day check.
-  return startDay <= day && day < endDay;
+  // A timed event commonly begins and ends on the same calendar date, so its
+  // end date cannot be used as an exclusive day boundary. A roster occurrence
+  // always belongs to its start date. Only all-day merged leave entries may
+  // validly cover later source dates.
+  if (startDay === day) return true;
+  return event?.allDay === true && startDay < day && day < endDay;
 }
 
 function normalizeRosterRawValue(value) {
