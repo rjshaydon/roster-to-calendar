@@ -1474,7 +1474,7 @@ function parseMmcRecords(workbook, doctorKey) {
       if (!looksLikePersonName(name)) continue;
       if (normalizeName(name) !== doctorKey) continue;
       const weekValues = layout.dayColumns.map((column) => cleanText(getCellValue(sheet, row, column)));
-      const weeklyLeave = firstWeeklyLeave(weekValues);
+      const weeklyLeave = mondayWeeklyLeave(weekValues);
       if (weeklyLeave && !hasNonLeaveMmcEntry(weekValues)) {
         records.push(createWeeklyLeaveRecord("MMC", weekDates[0], weeklyLeave, currentSeniority));
       } else {
@@ -1496,7 +1496,7 @@ function parseDdhRecords(workbook, doctorKey) {
   const records = [];
   for (const entry of iterateDdhWeekEntries(workbook)) {
     if (normalizeName(entry.rawName) !== doctorKey) continue;
-    const weeklyLeave = entry.findmyshiftFormat ? null : firstWeeklyLeave(entry.labels);
+    const weeklyLeave = entry.findmyshiftFormat ? null : mondayWeeklyLeave(entry.labels);
     if (weeklyLeave && !hasNonLeaveDdhEntry(entry.labels)) {
       records.push(createWeeklyLeaveRecord("DDH", entry.weekDates[0], weeklyLeave, entry.seniority));
       continue;
@@ -3816,19 +3816,19 @@ function extractTimeWithLabel(value, options = {}) {
   };
 }
 
-function firstWeeklyLeave(values) {
-  for (const value of values) {
-    const leave = normalizeRecognizedLeave(value);
-    if (["annual_leave", "annual_parental_leave", "conference_leave", "long_service_leave", "parental_leave"].includes(leave?.kind)) return value;
-    if (leave?.kind === "sabbatical_leave" && !/\b(?:AM|PM|NIGHT|NS|SW)\b/i.test(String(value || ""))) return value;
-  }
+function mondayWeeklyLeave(values) {
+  const value = values?.[0];
+  const leave = normalizeRecognizedLeave(value);
+  if (["annual_leave", "annual_parental_leave", "conference_leave", "long_service_leave", "parental_leave"].includes(leave?.kind)) return value;
+  if (leave?.kind === "sabbatical_leave" && !/\b(?:AM|PM|NIGHT|NS|SW)\b/i.test(String(value || ""))) return value;
   return null;
 }
 
-// A weekly leave marker means the whole roster week only when it is the sole
-// substantive allocation.  Some rows legitimately combine leave with a later
-// shift (for example Scott's CME leave and Friday PCC).  Do not let the leave
-// marker suppress that real shift.
+// A weekly leave marker means the whole roster week only when it is recorded
+// on Monday and there is no substantive allocation anywhere in that week.
+// A leave entry on any other day remains a single-day event. Some rows
+// legitimately combine Monday leave with a later shift (for example Scott's
+// CME leave and Friday PCC); do not let the leave marker suppress that shift.
 function hasNonLeaveMmcEntry(values) {
   return (values || []).some((value) => {
     const text = cleanText(value);

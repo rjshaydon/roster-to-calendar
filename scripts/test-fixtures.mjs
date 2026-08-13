@@ -275,6 +275,23 @@ assert.deepEqual(
   ddhCanonicalTitles,
   "timed FindMyShift shifts should use the same DDH shift-code normalization as manual rosters",
 );
+const ddhWeeklyLeaveWorkbook = XLSX.utils.book_new();
+XLSX.utils.book_append_sheet(ddhWeeklyLeaveWorkbook, XLSX.utils.aoa_to_sheet([
+  ["", "Mon. Aug. 03, 2026", "Tue. Aug. 04, 2026", "Wed. Aug. 05, 2026", "Thu. Aug. 06, 2026", "Fri. Aug. 07, 2026", "Sat. Aug. 08, 2026", "Sun. Aug. 09, 2026"],
+  ["SENIOR MEDICAL STAFF", "", "", "", "", "", "", ""],
+  ["Monday Leave Doctor", "Annual Leave", "", "", "", "", "", ""],
+  ["Friday Leave Doctor", "", "", "", "", "Annual Leave", "", ""],
+  ["Mixed Leave Doctor", "Annual Leave", "", "CS", "", "", "", ""],
+]), "Sheet1");
+const mondayLeaveEvent = buildRosterView([], ddhWeeklyLeaveWorkbook, "MONDAY LEAVE DOCTOR").events.find((event) => event.title === "Annual Leave");
+assert.ok(mondayLeaveEvent);
+assert.deepEqual([mondayLeaveEvent.start, mondayLeaveEvent.end], ["2026-08-03", "2026-08-10"], "a Monday-only leave marker should cover the full roster week");
+const fridayLeaveEvent = buildRosterView([], ddhWeeklyLeaveWorkbook, "FRIDAY LEAVE DOCTOR").events.find((event) => event.title === "Annual Leave");
+assert.ok(fridayLeaveEvent);
+assert.deepEqual([fridayLeaveEvent.start, fridayLeaveEvent.end], ["2026-08-07", "2026-08-08"], "a non-Monday leave marker must remain a one-day event");
+const mixedLeaveEvents = buildRosterView([], ddhWeeklyLeaveWorkbook, "MIXED LEAVE DOCTOR").events;
+assert.ok(mixedLeaveEvents.some((event) => event.title === "Annual Leave" && event.start === "2026-08-03" && event.end === "2026-08-04"), "Monday leave with another shift must remain a one-day event");
+assert.ok(mixedLeaveEvents.some((event) => event.title === "DDH: CS" && event.start === "2026-08-05"), "a substantive allocation must remain alongside Monday leave");
 const ddhCanonicalAutomatedPayload = await buildAutomatedDerivedRosterPayload({
   file: workbookFile(ddhCanonicalAutoWorkbook, "Dandenong-FindMyShift-canonical-labels.xlsx"),
   sourceId: "dandenong-findmyshift",
