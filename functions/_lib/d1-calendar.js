@@ -799,7 +799,14 @@ export async function promoteVerifiedStagedRosterFile(db, stagingFileId, targetF
   const parserVersion = String(options.parserVersion || ROSTER_PARSER_VERSION);
   const comparison = await compareDerivedRosterFiles(db, targetFileId, stagingFileId, { limit: 50 });
   if (!comparison.ok) return comparison;
-  if (comparison.removedCount > 0 && options.allowRemoved !== true) {
+  const approvedRemovedEventIdentities = new Set(Array.isArray(options.approvedRemovedEventIdentities)
+    ? options.approvedRemovedEventIdentities.map((identity) => String(identity || "")).filter(Boolean)
+    : []);
+  const hasOnlyApprovedRemovals = comparison.removedCount > 0
+    && comparison.removed.length === comparison.removedCount
+    && comparison.removedCount === approvedRemovedEventIdentities.size
+    && comparison.removed.every((event) => approvedRemovedEventIdentities.has(`${String(event.doctorKey || "")}|${String(event.id || "")}`));
+  if (comparison.removedCount > 0 && options.allowRemoved !== true && !hasOnlyApprovedRemovals) {
     return { ok: false, reason: "unreviewed-removals", comparison };
   }
   const staged = await db.prepare("SELECT name, source_type, source_id, size, last_modified, added_at, uploaded_at, uploaded_by, parsed_at FROM roster_files WHERE id = ? AND active = 0")

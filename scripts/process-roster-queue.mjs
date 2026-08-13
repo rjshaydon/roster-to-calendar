@@ -29,7 +29,7 @@ for (const run of runs) {
         sourceId: run.sourceId,
         phase: "failed",
         file: { id: run.fileId, name: run.fileName, sourceId: run.sourceId, sourceType: run.sourceType },
-        message: "Background processor could not parse or save this roster.",
+        message: String(error?.message || "Background processor could not parse or save this roster.").slice(0, 300),
       },
     }).catch(() => null);
   }

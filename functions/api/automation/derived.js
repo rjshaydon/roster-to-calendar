@@ -111,12 +111,13 @@ export async function onRequestPost(context) {
     const runId = String(body?.runId || "").trim();
     const sourceId = String(body?.sourceId || body?.file?.sourceId || "").trim();
     const failedAt = new Date().toISOString();
+    const diagnostic = String(error?.message || "Background roster processing failed.").slice(0, 300);
     if (runId) {
       await deleteDerivedRosterFile(context.env.ROSTER_DB, String(body?.file?.id || "")).catch(() => null);
       await finishRosterSyncRun(context.env.ROSTER_DB, runId, {
         status: "failed",
         fileId: String(body?.file?.id || ""),
-        message: "Background roster processing failed.",
+        message: diagnostic,
         completedAt: failedAt,
       }).catch(() => null);
     }
@@ -129,15 +130,15 @@ export async function onRequestPost(context) {
           ...definition,
           id: sourceId,
           enabled: true,
-          lastError: "Background roster processing failed.",
+          lastError: diagnostic,
           updatedAt: failedAt,
           createdAt: existing?.createdAt || failedAt,
         }).catch(() => null);
       }
     }
     const code = safeDerivedFailureCode(error);
-    console.error("Derived roster processing failed", { code, message: String(error?.message || error).slice(0, 300) });
-    return Response.json({ error: "Background roster processing failed.", code }, { status: 422 });
+    console.error("Derived roster processing failed", { code, message: diagnostic });
+    return Response.json({ error: diagnostic, code }, { status: 422 });
   }
 }
 

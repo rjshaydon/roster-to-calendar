@@ -4982,7 +4982,9 @@ async function runCoreDerivedRosterSave(context, job = {}) {
     if (phase === "finish" && filePayload.staged === true) {
       const replacesFileId = String(filePayload.replacesFileId || "").trim();
       if (replacesFileId) {
-        const promotion = await promoteVerifiedStagedRosterFile(db, fileId, replacesFileId);
+        const promotion = await promoteVerifiedStagedRosterFile(db, fileId, replacesFileId, {
+          approvedRemovedEventIdentities: approvedHistoricalReparseRemovals(replacesFileId),
+        });
         if (!promotion.ok) {
           const detail = promotion.comparison?.removedCount
             ? ` (${promotion.comparison.removedCount} event removal${promotion.comparison.removedCount === 1 ? "" : "s"} require review)`
@@ -5834,6 +5836,30 @@ function oldDefaultMmcRuleShape(code) {
     startTime: ssuMatch[1] === "A" ? "07:30" : "14:30",
     endTime: ssuMatch[1] === "A" ? "17:30" : "00:00",
   };
+}
+
+// 2026-08-13 creator-approved historical MMC migration. This is deliberately
+// an exact old-event identity allow-list tied to one retained source file. It
+// is not a general permission to remove events: any additional removal still
+// leaves the staged roster inactive for review.
+function approvedHistoricalReparseRemovals(fileId) {
+  if (String(fileId || "") !== "AdultTerm1.2026.xlsx:641068:1776812908257") return [];
+  return [
+    "AARON BADWAL|e2499e11",
+    "ADITYA MEHTA|920207b5",
+    "AMY LEUTHAUSER|89ea1269",
+    "AMY LEUTHAUSER|eb7de62d",
+    "AMY LEUTHAUSER|abb449cf",
+    "AMY ROSE|120d5157",
+    "BRENDAN CHONG|cc3663ca",
+    "GIOVANA MENDES TELES|4c1ec078",
+    "JESSICA MCQUILLAN|920207b5",
+    "LISA MCCARTHY|e25993d0",
+    "PAT FINN|b4a38e37",
+    "PATRICK TAN|baccc250",
+    "SCOTT JOSEY|f0bcdf0",
+    "SCOTT JOSEY|380e43b0",
+  ];
 }
 
 async function queueActiveParserRuleReparse(env, sourceTypes = []) {
