@@ -2738,6 +2738,33 @@ function normalizeGenericDdhLabel(label) {
   const period = extractDdhPeriod(cleaned);
   const upper = cleaned.toUpperCase();
 
+  if (/^TOX(?:\s+(?:CLINICAL\s+SUPPORT|CS))?$/.test(upper)) {
+    return {
+      kind: "shift",
+      titleParts: { base: upper === "TOX" ? "TOX" : "TOX Clinical Support", period: "", suffix: "" },
+      allDay: true,
+      status: "ok",
+      warning: "",
+    };
+  }
+  if (/^(?:TOX\s+)?(?:SEC|SECOND(?:\s+ON[- ]?CALL)?)$/.test(upper)) {
+    return {
+      kind: "shift",
+      titleParts: { base: "TOX Second on call", period: "", suffix: "" },
+      allDay: true,
+      status: "ok",
+      warning: "",
+    };
+  }
+  if (/^TOX\s+SECONDMENT$/.test(upper)) {
+    return {
+      kind: "shift",
+      titleParts: { base: "TOX", period: "", suffix: "" },
+      allDay: true,
+      status: "ok",
+      warning: "",
+    };
+  }
   if (upper.includes("CLINICAL SUPPORT") || /^CS\b/.test(upper) || upper.includes(" OCS")) {
     const onsite = upper.includes("ONSITE");
     return genericUnknownDdhShift({ base: onsite ? "CS onsite" : "CS", period, suffix: "" });
@@ -2910,7 +2937,7 @@ function isDdhClinicalSupportExam(value) {
 function isDdhStructuralAnnotation(value, seniority = UNKNOWN_SENIORITY) {
   const upper = String(value || "").trim().toUpperCase();
   if ([
-    "INTERN", "INTERNS", "UNAVAILABLE", "UNAVAILABE", "-", "--", "SEC", "N", "Y", "W",
+    "INTERN", "INTERNS", "UNAVAILABLE", "UNAVAILABE", "-", "--", "N", "Y", "W",
     // Frank Soden's DDH cells are roster-writer annotations, not shifts.
     "MDC", "NA", "MDC NA", "NA PM", "COMM", "COMM FOR SAFETY",
   ].includes(upper)) return true;
@@ -3880,7 +3907,8 @@ function isMmcClinicalSupportExam(value) {
 // Keep these labels out of calendars before any generic shift fallback sees them.
 function isOtherHospitalReference(source, value) {
   const upper = cleanText(value).replace(/\s+/g, " ").trim().toUpperCase();
-  if (/\b(?:TOX|HITH|VHH|ARV|WARRAGUL)\b/.test(upper)) return true;
+  if (/\b(?:HITH|VHH|ARV|WARRAGUL)\b/.test(upper)) return true;
+  if (source !== "DDH" && /\bTOX\b/.test(upper)) return true;
   if (source !== "MCH" && /\bPAEDS\b/.test(upper)) return true;
   if (source === "DDH" && /\b(?:AED|PED)\b/.test(upper)) return true;
   if ((source === "DDH" || source === "MMC") && /\bCASEY\b/.test(upper)) return true;

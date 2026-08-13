@@ -2717,9 +2717,9 @@ assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhParentalVariantDoct
 assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhSpecialLeaveDoctor.key).events.map((event) => event.title), ["Special Leave"], "Special leave should be recognised");
 assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhExamLeaveDoctor.key).events.map((event) => event.title), ["Exam Leave"], "EL should be recognised as exam leave");
 assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhAnnualLeaveDoctor.key).events.map((event) => event.title), ["Annual Leave"], "fractional AL should be recognised as annual leave");
-assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhAnnotationDoctor.key).events.map((event) => event.title), ["DDH: Swing PM"], "other-hospital safety annotations should not become DDH calendar events while a genuine swing shift remains visible");
+assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhAnnotationDoctor.key).events.map((event) => event.title), ["DDH: TOX Clinical Support", "DDH: Swing PM"], "DDH TOX Clinical Support should remain visible while other-hospital safety annotations stay hidden");
 assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhGedDoctor.key).events.map((event) => event.title), ["DDH: GED shift"], "GED Junior should be a recognised GED shift");
-assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhNotesDoctor.key).events, [], "DDH headings and availability notes should not become calendar events");
+assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhNotesDoctor.key).events.map((event) => event.title), ["DDH: TOX Second on call"], "a standalone SMS SEC allocation should resolve to TOX Second on call");
 assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhNotesDoctor.key).issues, [], "DDH headings and availability notes should not become unresolved shift codes");
 assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhCsRequestDoctor.key).events.map((event) => event.title), ["DDH: CS"], "C/S should resolve to Clinical Support while CS not onsite PLS remains a hidden request");
 assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhAedDoctor.key).events, [], "AED is an MMC allocation annotation, not a DDH calendar shift");
