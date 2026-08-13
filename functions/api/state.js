@@ -5046,6 +5046,8 @@ async function runCoreDerivedRosterSave(context, job = {}) {
 // surfaced in its GitHub Actions log; the active roster remains untouched.
 function stagedPromotionBlockerDetail(comparison) {
   const removed = Array.isArray(comparison?.removed) ? comparison.removed : [];
+  const nearestByEventId = new Map((Array.isArray(comparison?.nearestCandidates) ? comparison.nearestCandidates : [])
+    .map((entry) => [String(entry?.event?.id || ""), entry?.candidate || null]));
   const count = Number(comparison?.removedCount || 0);
   if (!count) return "";
   const grouped = new Map();
@@ -5054,13 +5056,20 @@ function stagedPromotionBlockerDetail(comparison) {
     const entry = grouped.get(raw) || {
       count: 0,
       example: `${String(event?.doctorKey || "Unknown clinician")} ${String(event?.start || "").slice(0, 10)}`.trim(),
+      nearest: nearestByEventId.get(String(event?.id || "")),
     };
     entry.count += 1;
     grouped.set(raw, entry);
   }
   const summary = [...grouped.entries()]
     .sort((left, right) => right[1].count - left[1].count || left[0].localeCompare(right[0]))
-    .map(([raw, entry]) => `${raw} ×${entry.count} (${entry.example})`)
+    .map(([raw, entry]) => {
+      const candidate = entry.nearest;
+      const candidateText = candidate
+        ? `${String(candidate.title || candidate.rawValue || "event")} ${String(candidate.rawValue || "").trim()}`.trim()
+        : "none";
+      return `${raw} ×${entry.count} (${entry.example}; candidate: ${candidateText})`;
+    })
     .join("; ");
   return ` (${count} event removal${count === 1 ? "" : "s"} require review: ${summary})`;
 }

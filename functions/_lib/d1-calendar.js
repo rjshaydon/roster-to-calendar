@@ -796,6 +796,10 @@ export async function compareDerivedRosterFiles(db, baselineFileId, candidateFil
   }
   const approvedOmissions = omitted.filter((event) => isApprovedReparseOmission(event, baselineFileId));
   const removed = omitted.filter((event) => !isApprovedReparseOmission(event, baselineFileId));
+  const nearestCandidates = removed.map((event) => ({
+    event,
+    candidate: [...candidate.values()].find((candidateEvent) => sameDoctorSourceDay(event, candidateEvent)) || null,
+  }));
   const added = [...unmatchedCandidate].map((identity) => candidate.get(identity));
   return {
     ok: true,
@@ -810,6 +814,7 @@ export async function compareDerivedRosterFiles(db, baselineFileId, candidateFil
     removedCount: removed.length,
     addedCount: added.length,
     removed: removed.slice(0, limit),
+    nearestCandidates: nearestCandidates.slice(0, limit),
     added: added.slice(0, limit),
     approvedOmissions: approvedOmissions.slice(0, limit),
   };
@@ -863,6 +868,14 @@ function reusableMergedLeaveOccurrence(baseline, candidate) {
   if (String(baseline?.doctorKey || "") !== String(candidate?.doctorKey || "")) return false;
   if (String(baseline?.source || "") !== String(candidate?.source || "")) return false;
   const day = String(baseline?.start || "").slice(0, 10);
+  return Boolean(day && eventCoversDay(candidate, day));
+}
+
+function sameDoctorSourceDay(baseline, candidate) {
+  if (!baseline || !candidate) return false;
+  if (String(baseline.doctorKey || "") !== String(candidate.doctorKey || "")) return false;
+  if (String(baseline.source || "") !== String(candidate.source || "")) return false;
+  const day = String(baseline.start || "").slice(0, 10);
   return Boolean(day && eventCoversDay(candidate, day));
 }
 
