@@ -3159,6 +3159,19 @@ body[data-skin="console"] .preview-cell.is-weekend {
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
+.shift-code-review-examples {
+  margin-top: 10px;
+}
+
+.shift-code-review-examples > summary,
+.shift-code-review-example-person > summary {
+  cursor: pointer;
+}
+
+.shift-code-review-example-dates {
+  margin: 8px 0 0 22px;
+}
+
 .export-variant-picker {
   display: flex;
   flex-wrap: wrap;

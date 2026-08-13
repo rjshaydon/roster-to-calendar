@@ -4133,11 +4133,21 @@ async function listUnresolvedRosterShiftCodes(db) {
     if (isIssueResolvedByRuleSets(issue, globalRuleSets)) continue;
     const key = `${source}|${seniority}|${code}|${rawValue}|${message}`;
     const seenDate = String(rawIssue?.startDay || rawIssue?.date || "").slice(0, 10);
+    const example = {
+      id: String(rawIssue?.id || ""),
+      doctorKey: String(rawIssue?.doctorKey || "").trim(),
+      displayName: String(rawIssue?.displayName || rawIssue?.doctorKey || "Roster").trim(),
+      date: seenDate,
+      rawValue,
+      timeLabel: String(rawIssue?.timeLabel || "").trim(),
+      fileName: String(rawIssue?.fileName || "").trim(),
+    };
     const existing = byKey.get(key);
     if (existing) {
       existing.count += 1;
       if (seenDate && (!existing.firstSeenAt || seenDate < existing.firstSeenAt)) existing.firstSeenAt = seenDate;
       if (seenDate && (!existing.lastSeenAt || seenDate > existing.lastSeenAt)) existing.lastSeenAt = seenDate;
+      existing.examples.push(example);
       continue;
     }
     byKey.set(key, {
@@ -4155,6 +4165,7 @@ async function listUnresolvedRosterShiftCodes(db) {
       count: 1,
       firstSeenAt: seenDate,
       lastSeenAt: seenDate,
+      examples: [example],
     });
   }
   return [...byKey.values()].sort((left, right) => {

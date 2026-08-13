@@ -2172,10 +2172,10 @@ function normalizeMchLeave(label) {
     return { kind: "sabbatical_leave", title: "Sabbatical" };
   }
   if (upper === "PAT/L" || upper === "PARENTAL/L" || upper === "PARENTAL LEAVE" || upper === "PATERNITY LEAVE" || /\bPARENTAL\b/.test(upper)) return { kind: "parental_leave", title: "Parental Leave" };
-  if (/\bLWP\b/.test(upper) || /\bLEAVE\s+WITHOUT\s+PAY\b/.test(upper)) return { kind: "leave", title: "Leave without pay" };
+  if (/\b(?:LWP|LWOP)\b/.test(upper) || /\bLEAVE\s+WITHOUT\s+PAY\b/.test(upper)) return { kind: "leave", title: "Leave without pay" };
   if (upper === "LSL" || upper === "LONG SERVICE LEAVE") return { kind: "long_service_leave", title: "Long Service Leave" };
   if (/^CARER'?S LEAVE$/.test(upper) || upper === "CARERS LEAVE") return { kind: "carers_leave", title: "Carer's Leave" };
-  if (upper === "F/L" || upper === "FAM LEAVE" || upper === "FAMILY LEAVE") return { kind: "family_leave", title: "Family Leave" };
+  if (/^F\/L(?:\s+(?:AM|PM))?$/.test(upper) || upper === "FAM LEAVE" || upper === "FAMILY LEAVE") return { kind: "family_leave", title: "Family Leave" };
   if (upper === "SPECIAL LEAVE") return { kind: "special_leave", title: "Special Leave" };
   if (upper === "OTHER - MILITARY LEAVE" || upper === "MILITARY LEAVE") return { kind: "military_leave", title: "Military Leave" };
   if (upper === "LEAVE") return { kind: "leave", title: "Leave" };
@@ -2209,7 +2209,7 @@ function leaveLabelCandidates(value) {
 
 function normalizedLeaveLabel(value) {
   return cleanText(value)
-    .replace(/S\s*[\\/.]\s*L/gi, "S/L")
+    .replace(/S\s*[\\/.]+\s*L/gi, "S/L")
     .replace(/\s+/g, " ")
     .trim()
     .toUpperCase();
@@ -2541,6 +2541,9 @@ function buildDefaultParserRules() {
   const rules = { mmc: [], ddh: [], casey: [], mch: [] };
   const activeSeniorities = SENIORITY_LABELS.filter((item) => item !== UNKNOWN_SENIORITY);
   const consultantSeniorities = ["SMS", "CMO"];
+  // Senior Registrars can be rostered acting-up consultant allocations. A
+  // consultant-coded MMC shift means the same work and hours for them.
+  const actingConsultantSeniorities = [...consultantSeniorities, "Senior Registrar"];
   const nonConsultantMmcSeniorities = ["Senior Registrar", "Transitional/Intermediate Registrar", "Junior Registrar", "HMO", "Intern"];
   const add = (bucket, source, code, seniority, base, period, suffix, allDay, startTime, endTime, location = defaultParserRuleLocation(source)) => {
     bucket.push({
@@ -2563,7 +2566,7 @@ function buildDefaultParserRules() {
     add(rules.mmc, "MMC", "CSO", seniority, "CSO", "", "", true, "", "", MMC_LOCATION);
     add(rules.mmc, "MMC", "CS OS", seniority, "CS OS", "", "", false, "08:00", "17:30", MMC_LOCATION);
   }
-  for (const seniority of consultantSeniorities) {
+  for (const seniority of actingConsultantSeniorities) {
     for (const periodPrefix of ["A", "P"]) {
       for (const [teamCode, teamName] of Object.entries(MMC_TEAM_MAP)) {
         for (const suffixCode of ["C", "R"]) {
@@ -2662,7 +2665,9 @@ function buildDefaultParserRules() {
   // those files as well.
   add(rules.ddh, "DDH", "CS AM", UNKNOWN_SENIORITY, "CS", "", "", true, "", "", "");
   add(rules.ddh, "DDH", "CLINICAL SUPPORT ACEM OSCE", UNKNOWN_SENIORITY, "CS Exam", "", "", true, "", "", DDH_LOCATION);
-  add(rules.mmc, "MMC", "CSM", "SMS", "CSM", "", "", false, "08:00", "17:30", MMC_LOCATION);
+  for (const seniority of activeSeniorities) {
+    add(rules.mmc, "MMC", "CSM", seniority, "CSM", "", "", false, "08:00", "17:30", MMC_LOCATION);
+  }
   add(rules.mmc, "MMC", "CS EXAM", "SMS", "CS Exam", "", "", true, "", "", MMC_LOCATION);
   return rules;
 }
@@ -3798,7 +3803,7 @@ function extractTimePrefix(value) {
 
 function extractTimeWithLabel(value, options = {}) {
   const text = String(value || "").trim();
-  const match = text.match(/^\s*(\d{2})(\d{2})-(\d{2})(\d{2})(?:\s*(.+?))?\s*$/);
+  const match = text.match(/^\s*(\d{1,2}):?(\d{2})-(\d{1,2}):?(\d{2})(?:\s*(.+?))?\s*$/);
   if (match) {
     return {
       start: [Number(match[1]), Number(match[2])],
@@ -3868,17 +3873,20 @@ function isMmcClinicalSupportExam(value) {
 function isOtherHospitalReference(source, value) {
   const upper = cleanText(value).replace(/\s+/g, " ").trim().toUpperCase();
   if (/\b(?:TOX|HITH|VHH|ARV|WARRAGUL)\b/.test(upper)) return true;
+  if (source !== "MCH" && /\bPAEDS\b/.test(upper)) return true;
   if (source === "DDH" && /\b(?:AED|PED)\b/.test(upper)) return true;
   if ((source === "DDH" || source === "MMC") && /\bCASEY\b/.test(upper)) return true;
   if ((source === "DDH" || source === "Casey") && /\bMMC\b/.test(upper)) return true;
   // In an MMC roster, DH means Dandenong Hospital. These are allocation
   // annotations for the DDH roster, including explicit-time variants.
-  if (source === "MMC" && /^(?:(?:\d{4})-(?:\d{4})\s+)?(?:CS\s+DH|DH\s+CS|D\s+C|D\s+CS|DDH\s+CS)$/i.test(upper)) return true;
+  if (source === "MMC" && /(?:\bCS\s+(?:DH|DDH)\b|\b(?:DH|DDH)\s+CS\b|\bD\s+C(?:S)?\b|^D\s+\d{4}-\d{4}\s+CS$)/i.test(upper)) return true;
   return false;
 }
 
 function shouldIgnoreCommon(value) {
   const upper = value.trim().toUpperCase();
+  if (upper === "OTHER" || /^V\s+[SC]$/.test(upper)) return true;
+  if (upper.includes("SHIFTS MOVED TO FOLLOWING FORTNIGHT") || upper.includes("SWAPPED FOR SUNDAY NIGHT")) return true;
   if (IGNORED_EXACT.has(upper)) return true;
   return IGNORED_CONTAINS.some((fragment) => upper.includes(fragment));
 }

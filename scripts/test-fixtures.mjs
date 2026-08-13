@@ -2147,9 +2147,9 @@ assert.ok(hasMmcRule("SMS", "AGC"));
 assert.ok(hasMmcRule("CMO", "AGC"));
 assert.ok(hasMmcRule("SMS", "CS"));
 assert.ok(hasMmcRule("CMO", "CSO"));
-assert.equal(hasMmcRule("Senior Registrar", "AGC"), false);
+assert.ok(hasMmcRule("Senior Registrar", "AGC"), "Senior Registrars can be rostered acting-up consultant allocations");
 assert.equal(hasMmcRule("HMO", "AGC"), false);
-assert.equal(hasMmcRule("Senior Registrar", "CS"), false);
+assert.equal(hasMmcRule("Senior Registrar", "CS"), false, "acting-up consultant rules should not broaden generic Clinical Support allocations");
 assert.equal(hasMmcRule("HMO", "CSO"), false);
 assert.equal(hasMmcRule("SMS", "ACR"), false);
 assert.equal(hasMmcRule("SMS", "ARR"), false);
@@ -2357,7 +2357,7 @@ const andrewCaseyView = buildRosterView([], [], andrewDyallCasey.key, undefined,
 assert.ok(andrewCaseyView.events.some((event) => event.title === "Casey: TL AM"));
 assert.ok(andrewCaseyView.events.some((event) => event.title === "Casey: UFD PM"));
 assert.ok(andrewCaseyView.events.some((event) => event.title === "Casey: MIC AM"));
-assert.ok(andrewCaseyView.events.some((event) => event.title === "Casey: PAEDS PM"));
+assert.equal(andrewCaseyView.events.some((event) => /PAEDS/i.test(event.title)), false, "Paediatrics references outside the MCH roster are not local Casey shifts");
 assert.ok(andrewCaseyView.events.some((event) => event.title === "Casey: CS" && event.start.includes("08:00:00") && event.end.includes("17:30:00")));
 
 const bashirCasey = caseyDoctors.find((doctor) => doctor.displayName === "Bashir GONDAL");

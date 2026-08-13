@@ -11398,6 +11398,7 @@ function renderUnknownShiftCodeHierarchy(items, options = {}) {
                       <div>
                         <p>${escapeHtml(item.message || "Shift code not recognised.")}</p>
                         <p>${escapeHtml(item.sample)}</p>
+                        ${renderShiftCodeReviewExamples(item)}
                       </div>
                       <div class="account-actions">${renderShiftCodeReviewIssueActions(item)}</div>
                     </details>
@@ -11408,6 +11409,45 @@ function renderUnknownShiftCodeHierarchy(items, options = {}) {
         </div>
       </details>`;
     }).join("");
+}
+
+function renderShiftCodeReviewExamples(item) {
+  const examples = (Array.isArray(item?.examples) ? item.examples : [])
+    .filter((example) => example && (example.displayName || example.doctorKey || example.date));
+  if (examples.length < 2) return "";
+  const byPerson = new Map();
+  for (const example of examples) {
+    const doctorKey = normalizeRosterName(example.doctorKey || example.displayName || "");
+    const key = doctorKey || `${example.displayName || "Roster"}|${example.date || ""}`;
+    const person = byPerson.get(key) || {
+      displayName: String(example.displayName || example.doctorKey || "Roster").trim(),
+      dates: [],
+    };
+    const date = String(example.date || "").slice(0, 10);
+    if (date && !person.dates.some((entry) => entry.date === date && entry.rawValue === example.rawValue)) {
+      person.dates.push({ date, rawValue: String(example.rawValue || "").trim(), timeLabel: String(example.timeLabel || "").trim() });
+    }
+    byPerson.set(key, person);
+  }
+  const people = [...byPerson.values()]
+    .sort((left, right) => left.displayName.localeCompare(right.displayName));
+  return `
+    <details class="shift-code-review-examples">
+      <summary>More examples · ${people.length} ${people.length === 1 ? "person" : "people"} · ${examples.length} occurrences</summary>
+      <div class="issues-list">
+        ${people.map((person) => `
+          <details class="shift-code-review-example-person">
+            <summary>${escapeHtml(person.displayName || "Roster")} · ${person.dates.length} ${person.dates.length === 1 ? "date" : "dates"}</summary>
+            <ul class="shift-code-review-example-dates">
+              ${person.dates.sort((left, right) => left.date.localeCompare(right.date)).map((entry) => `
+                <li>${escapeHtml(formatDate(entry.date))}${entry.timeLabel ? ` · ${escapeHtml(entry.timeLabel)}` : ""}${entry.rawValue && entry.rawValue !== item.rawValue ? ` · ${escapeHtml(entry.rawValue)}` : ""}</li>
+              `).join("")}
+            </ul>
+          </details>
+        `).join("")}
+      </div>
+    </details>
+  `;
 }
 
 function renderShiftCodeReviewIssueActions(item) {
@@ -11490,6 +11530,7 @@ function collectUnknownShiftIssues() {
       sampleDate: item.sampleDate || "",
       count: item.count || 1,
       lastSeenAt: item.lastSeenAt || item.sampleDate || "",
+      examples: item.examples || [],
     });
   }
   return [...byKey.values()].sort((left, right) => {
@@ -11515,6 +11556,7 @@ function addUnknownShiftIssueToMap(byKey, item) {
     if (!existing.displayName && item.displayName) existing.displayName = item.displayName;
     if (!existing.sampleDate && item.sampleDate) existing.sampleDate = item.sampleDate;
     if ((item.lastSeenAt || "") > (existing.lastSeenAt || "")) existing.lastSeenAt = item.lastSeenAt || "";
+    existing.examples = [...(existing.examples || []), ...(item.examples || [])];
     return;
   }
   const seniorities = addUniqueSeniority([], item.seniority);
@@ -11535,6 +11577,7 @@ function addUnknownShiftIssueToMap(byKey, item) {
     sampleDate: String(item.sampleDate || "").slice(0, 10),
     count: item.count || 1,
     lastSeenAt: item.lastSeenAt || "",
+    examples: Array.isArray(item.examples) ? item.examples : [],
   });
 }
 
@@ -16499,6 +16542,17 @@ function sanitizeGlobalUnresolvedShiftCodes(items) {
         lastSeenAt: String(item?.lastSeenAt || sampleDate || ""),
         suggestedTitle: String(item?.suggestedTitle || "").trim(),
         timeLabel: String(item?.timeLabel || "").trim(),
+        examples: (Array.isArray(item?.examples) ? item.examples : [])
+          .map((example) => ({
+            id: String(example?.id || "").trim(),
+            doctorKey: normalizeRosterName(example?.doctorKey || ""),
+            displayName: String(example?.displayName || example?.doctorKey || "").trim(),
+            date: String(example?.date || example?.startDay || "").slice(0, 10),
+            rawValue: String(example?.rawValue || rawValue).trim(),
+            timeLabel: String(example?.timeLabel || "").trim(),
+            fileName: String(example?.fileName || "").trim(),
+          }))
+          .filter((example) => example.displayName || example.doctorKey || example.date),
       };
     })
     .filter(Boolean);
