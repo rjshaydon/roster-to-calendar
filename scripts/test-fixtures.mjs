@@ -770,9 +770,9 @@ assert.match(
   "roster drag overlay should recognise native file drags without requiring file metadata before drop",
 );
 assert.match(
-  appSource.match(/window\.addEventListener\(\"dragleave\"[\s\S]*?window\.addEventListener\(\"dragend\"/)?.[0] || "",
-  /relatedTarget[\s\S]*document\.documentElement\.contains\(related\)/,
-  "roster drag overlay should ignore dragleave events that stay inside the page",
+  appSource.match(/window\.addEventListener\(\"dragleave\"[\s\S]*?document\.addEventListener\(\"keydown\"/)?.[0] || "",
+  /is-roster-dragging[\s\S]*relatedTarget[\s\S]*document\.documentElement\.contains\(related\)[\s\S]*clearRosterDragState\(\)[\s\S]*window\.addEventListener\(\"blur\", clearRosterDragState\)/,
+  "roster drag overlay should clear promptly when a native drag exits or is cancelled, even if drag metadata disappears",
 );
 assert.match(
   styleSource,
@@ -791,8 +791,8 @@ assert.doesNotMatch(
 );
 assert.match(
   appSource.match(/function validateIncomingFiles[\s\S]*?async function analyzeFiles/)?.[0] || "",
-  /not a valid roster file[\s\S]*Please drop an Excel or PDF roster file/,
-  "invalid dropped files should give a clear valid-roster-file message",
+  /showRosterImportError[\s\S]*Please drop an Excel or PDF roster file[\s\S]*window\.setTimeout[\s\S]*3000/,
+  "invalid dropped files should show a temporary dismissible valid-roster-file modal instead of a console error",
 );
 assert.match(
   appSource.match(/document\.addEventListener\(\"keydown\"[\s\S]*?window\.addEventListener\(\"drop\"/)?.[0] || "",

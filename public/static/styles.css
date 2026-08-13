@@ -149,6 +149,52 @@ body.is-roster-dragging #addRosterFilesButton {
   font-size: clamp(1.2rem, 2vw, 1.6rem);
 }
 
+.roster-import-error-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(20, 34, 42, 0.34);
+  backdrop-filter: blur(4px);
+  cursor: pointer;
+  opacity: 1;
+  transition: opacity 180ms ease;
+}
+
+.roster-import-error-modal.is-closing {
+  opacity: 0;
+}
+
+.roster-import-error-card {
+  display: grid;
+  gap: 10px;
+  width: min(460px, 100%);
+  padding: 26px 28px;
+  border: 1px solid rgba(170, 56, 45, 0.24);
+  border-radius: 24px;
+  background: rgba(255, 251, 247, 0.98);
+  box-shadow: 0 30px 90px rgba(20, 34, 42, 0.26);
+  color: var(--ink);
+  text-align: center;
+}
+
+.roster-import-error-card strong {
+  color: #a8382d;
+  font-size: 1.2rem;
+}
+
+.roster-import-error-card p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.roster-import-error-card span {
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
 .loading-screen {
   position: fixed;
   inset: 0;

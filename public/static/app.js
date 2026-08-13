@@ -28,6 +28,8 @@ const entrancePanels = [...document.querySelectorAll("[data-entrance-panel]")];
 const fileInput = document.querySelector("#rosterFiles");
 const addRosterFilesButton = document.querySelector("#addRosterFilesButton");
 const rosterDropOverlay = document.querySelector("#rosterDropOverlay");
+const rosterImportErrorModal = document.querySelector("#rosterImportErrorModal");
+const rosterImportErrorMessage = document.querySelector("#rosterImportErrorMessage");
 const filesButton = document.querySelector("#filesButton");
 const accountsButton = document.querySelector("#accountsButton");
 const filesModal = document.querySelector("#filesModal");
@@ -449,6 +451,8 @@ fileInput.addEventListener("change", async () => {
 
 let rosterDragDepth = 0;
 let rosterDragAborted = false;
+let rosterImportErrorRunId = 0;
+let rosterImportErrorTimer = 0;
 
 function handleRosterDragOver(event) {
   if (!hasFileDrag(event.dataTransfer)) return;
@@ -470,17 +474,25 @@ for (const eventName of ["dragenter", "dragover"]) {
 }
 
 window.addEventListener("dragleave", (event) => {
-  if (!hasFileDrag(event.dataTransfer)) return;
+  if (!document.body.classList.contains("is-roster-dragging") && !rosterDragAborted) return;
   event.preventDefault();
   const related = event.relatedTarget;
   if (related && document.documentElement.contains(related)) return;
-  if (!rosterDragAborted) rosterDragDepth = Math.max(0, rosterDragDepth - 1);
-  if (rosterDragDepth === 0 || rosterDragAborted) clearRosterDragState();
+  clearRosterDragState();
 });
 
 window.addEventListener("dragend", clearRosterDragState);
+window.addEventListener("blur", clearRosterDragState);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") clearRosterDragState();
+});
 
 document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !rosterImportErrorModal?.classList.contains("hidden")) {
+    event.preventDefault();
+    dismissRosterImportError();
+    return;
+  }
   if (event.key !== "Escape") return;
   if (!document.body.classList.contains("is-roster-dragging") && !rosterDragAborted) return;
   event.preventDefault();
@@ -497,6 +509,8 @@ window.addEventListener("drop", async (event) => {
 });
 
 window.addEventListener("resize", queueFacilityOverviewMenuPositioning, { passive: true });
+
+rosterImportErrorModal?.addEventListener("click", dismissRosterImportError);
 
 filesButton?.addEventListener("click", openFilesModal);
 filesCloseButton?.addEventListener("click", closeFilesModal);
@@ -2290,10 +2304,36 @@ async function mergeFiles(files) {
 
 function validateIncomingFiles(files) {
   if (files.some((file) => !file.name.match(/\.(xlsx|xlsm|xltx|xltm|pdf)$/i))) {
-    setStatus("That is not a valid roster file. Please drop an Excel or PDF roster file (.xlsx, .xlsm, .xltx, .xltm, or .pdf).", true);
+    showRosterImportError("Please drop an Excel or PDF roster file (.xlsx, .xlsm, .xltx, .xltm, or .pdf).");
     return [];
   }
   return files;
+}
+
+function showRosterImportError(message) {
+  if (!rosterImportErrorModal || !rosterImportErrorMessage) return;
+  const runId = ++rosterImportErrorRunId;
+  clearTimeout(rosterImportErrorTimer);
+  rosterImportErrorMessage.textContent = String(message || "Please drop a valid roster file.").trim();
+  rosterImportErrorModal.classList.remove("hidden", "is-closing");
+  rosterImportErrorModal.setAttribute("aria-hidden", "false");
+  rosterImportErrorTimer = window.setTimeout(() => {
+    if (runId === rosterImportErrorRunId) dismissRosterImportError();
+  }, 3000);
+}
+
+function dismissRosterImportError() {
+  if (!rosterImportErrorModal || rosterImportErrorModal.classList.contains("hidden")) return;
+  const runId = ++rosterImportErrorRunId;
+  clearTimeout(rosterImportErrorTimer);
+  rosterImportErrorTimer = 0;
+  rosterImportErrorModal.classList.add("is-closing");
+  rosterImportErrorModal.setAttribute("aria-hidden", "true");
+  window.setTimeout(() => {
+    if (runId !== rosterImportErrorRunId) return;
+    rosterImportErrorModal.classList.add("hidden");
+    rosterImportErrorModal.classList.remove("is-closing");
+  }, 180);
 }
 
 function hasFileDrag(dataTransfer) {
@@ -2346,10 +2386,7 @@ async function validateFreshRosterUploads(files) {
     return true;
   } catch (error) {
     const reason = String(error?.message || "").trim();
-    setStatus(
-      `That file is not a valid roster file. Please drop an Excel or PDF roster file (.xlsx, .xlsm, .xltx, .xltm, or .pdf)${reason ? `: ${reason}` : "."}`,
-      true,
-    );
+    showRosterImportError(`Please drop an Excel or PDF roster file (.xlsx, .xlsm, .xltx, .xltm, or .pdf)${reason ? `: ${reason}` : "."}`);
     return false;
   }
 }
