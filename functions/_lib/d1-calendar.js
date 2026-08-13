@@ -941,24 +941,24 @@ const APPROVED_MMC_LEGACY_UNSUPPORTED_LEAVE = new Set([
 
 // Product-approved on 2026-08-13 after direct roster review. These three DDH
 // entries are a roster-writer request ("CS not onsite please"), not clinical
-// support shifts. The exact source, clinician, raw entry, and date scope keeps
-// the promotion gate intact for every other removal.
+// support shifts. The upstream source identifier changes when DDH publishes a
+// revised file, so the exact clinician, raw entry, and date scope keeps the
+// promotion gate intact for every other removal.
 const APPROVED_DDH_CS_NOT_ONSITE_REQUEST_OMISSIONS = new Set([
-  "automation:dandenong-findmyshift:9fb0b644a3a34f3ba305c591|MALINDA WEERASINGHE|CS NOT ONSITE PL|2026-09-17",
-  "automation:dandenong-findmyshift:9fb0b644a3a34f3ba305c591|MALINDA WEERASINGHE|CS NOT ONSITE PL|2026-09-24",
-  "automation:dandenong-findmyshift:9fb0b644a3a34f3ba305c591|MALINDA WEERASINGHE|CS NOT ONSITE PL|2026-10-15",
+  "MALINDA WEERASINGHE|CS NOT ONSITE PL|2026-09-17",
+  "MALINDA WEERASINGHE|CS NOT ONSITE PL|2026-09-24",
+  "MALINDA WEERASINGHE|CS NOT ONSITE PL|2026-10-15",
 ]);
 
 export function isApprovedReparseOmission(event, baselineFileId = "") {
   const source = String(event?.source || "").toUpperCase();
   const raw = normalizeRosterRawValue(event.rawValue);
   const approvedDdhRequestKey = [
-    String(baselineFileId || ""),
     String(event?.doctorKey || "").toUpperCase(),
     raw,
     String(event?.start || "").slice(0, 10),
   ].join("|");
-  if (APPROVED_DDH_CS_NOT_ONSITE_REQUEST_OMISSIONS.has(approvedDdhRequestKey)) return true;
+  if (source === "DDH" && APPROVED_DDH_CS_NOT_ONSITE_REQUEST_OMISSIONS.has(approvedDdhRequestKey)) return true;
   // Product-approved: these are DDH clinical-support references entered into
   // MMC rosters to avoid unsafe late/early allocations, not MMC work.
   if (source === "MMC" && /(?:^|\s)CS\s*DH$/.test(raw)) return true;
