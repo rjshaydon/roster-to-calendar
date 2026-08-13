@@ -1231,7 +1231,12 @@ shiftCodeReviewModalBody?.addEventListener("click", (event) => {
   const goToEventButton = event.target.closest("[data-go-to-unresolved-event]");
   if (goToEventButton) {
     event.preventDefault();
-    void openUnresolvedShiftIssueEvent(goToEventButton.dataset.goToUnresolvedEvent || "");
+    void openUnresolvedShiftIssueEvent(goToEventButton.dataset.goToUnresolvedEvent || "", {
+      doctorKey: goToEventButton.dataset.unresolvedDoctorKey || "",
+      displayName: goToEventButton.dataset.unresolvedDisplayName || "",
+      date: goToEventButton.dataset.unresolvedDate || "",
+      source: goToEventButton.dataset.unresolvedSource || "",
+    });
     return;
   }
   const addRosterShiftCodeButton = event.target.closest("[data-add-roster-shift-code]");
@@ -7633,15 +7638,16 @@ function applyPreviewRangeChange(which, value) {
   setStatus("Preview range updated.");
 }
 
-async function openUnresolvedShiftIssueEvent(issueId) {
+async function openUnresolvedShiftIssueEvent(issueId, focus = {}) {
   const issue = globalUnresolvedShiftCodes.find((item) => item.id === String(issueId || ""));
-  const doctorKey = normalizeRosterName(issue?.doctorKey || "");
-  const date = String(issue?.sampleDate || "").slice(0, 10);
+  const doctorKey = normalizeRosterName(focus.doctorKey || issue?.doctorKey || "");
+  const displayName = String(focus.displayName || issue?.displayName || doctorKey).trim();
+  const date = String(focus.date || issue?.sampleDate || "").slice(0, 10);
   if (!doctorKey || !date) {
     setStatus("This unresolved code does not have a specific roster person and date to open.", true);
     return;
   }
-  const source = String(issue.source || "").toLowerCase();
+  const source = String(focus.source || issue?.source || "").toLowerCase();
   const candidates = dedupeDoctorOptions([
     ...(availableRosterDoctors || []),
     ...(doctorOptions || []),
@@ -7649,14 +7655,14 @@ async function openUnresolvedShiftIssueEvent(issueId) {
   const doctor = candidates.find((item) => normalizeRosterName(item.key) === doctorKey && (!source || normalizedDoctorSourceTypes(item).includes(source)))
     || candidates.find((item) => normalizeRosterName(item.key) === doctorKey);
   if (!doctor) {
-    setStatus(`Could not find ${issue.displayName || doctorKey} in the available roster calendars.`, true);
+    setStatus(`Could not find ${displayName || doctorKey} in the available roster calendars.`, true);
     return;
   }
 
   closeShiftCodeReviewModal();
   shiftCodeReviewReturnContext = { id: String(issue.id || ""), code: String(issue.code || ""), source: String(issue.source || "") };
   pendingUnresolvedIssueFocusDate = date;
-  setStatus(`Opening ${doctor.displayName || issue.displayName || doctorKey} on ${formatDate(date)}…`);
+  setStatus(`Opening ${doctor.displayName || displayName || doctorKey} on ${formatDate(date)}…`);
   await switchDoctorSelection(doctor.key, { resetRange: false });
   for (let attempt = 0; attempt < 20; attempt += 1) {
     if (latestPreview?.events?.length && normalizeRosterName(selectedDoctor()?.key) === doctorKey) break;
@@ -7676,7 +7682,7 @@ async function openUnresolvedShiftIssueEvent(issueId) {
   rebuildClientPreview();
   saveCurrentSessionState();
   requestAnimationFrame(() => focusPreviewIssueDate(date));
-  setStatus(`Opened ${doctor.displayName || issue.displayName || doctorKey} on ${formatDate(date)}.`);
+  setStatus(`Opened ${doctor.displayName || displayName || doctorKey} on ${formatDate(date)}.`);
 }
 
 function focusPreviewIssueDate(date) {
@@ -11421,6 +11427,7 @@ function renderShiftCodeReviewExamples(item) {
     const key = doctorKey || `${example.displayName || "Roster"}|${example.date || ""}`;
     const person = byPerson.get(key) || {
       displayName: String(example.displayName || example.doctorKey || "Roster").trim(),
+      doctorKey: String(example.doctorKey || example.displayName || "").trim(),
       dates: [],
     };
     const date = String(example.date || "").slice(0, 10);
@@ -11440,7 +11447,7 @@ function renderShiftCodeReviewExamples(item) {
             <summary>${escapeHtml(person.displayName || "Roster")} · ${person.dates.length} ${person.dates.length === 1 ? "date" : "dates"}</summary>
             <ul class="shift-code-review-example-dates">
               ${person.dates.sort((left, right) => left.date.localeCompare(right.date)).map((entry) => `
-                <li>${escapeHtml(formatDate(entry.date))}${entry.timeLabel ? ` · ${escapeHtml(entry.timeLabel)}` : ""}${entry.rawValue && entry.rawValue !== item.rawValue ? ` · ${escapeHtml(entry.rawValue)}` : ""}</li>
+                <li><button type="button" class="button button-secondary" data-go-to-unresolved-event="${escapeHtml(item.id)}" data-unresolved-doctor-key="${escapeHtml(person.doctorKey)}" data-unresolved-display-name="${escapeHtml(person.displayName)}" data-unresolved-date="${escapeHtml(entry.date)}" data-unresolved-source="${escapeHtml(item.source)}">${escapeHtml(formatDate(entry.date))}${entry.timeLabel ? ` · ${escapeHtml(entry.timeLabel)}` : ""}${entry.rawValue && entry.rawValue !== item.rawValue ? ` · ${escapeHtml(entry.rawValue)}` : ""}</button></li>
               `).join("")}
             </ul>
           </details>
