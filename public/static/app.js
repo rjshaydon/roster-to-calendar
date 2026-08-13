@@ -3151,8 +3151,10 @@ function renderAdminAutoSyncRow(source, files, terms) {
   const refreshTitle = source.provider === "findmyshift"
     ? "Check FindMyShift for a newer roster, then reprocess"
     : "Reprocess the retained roster file";
-  const refreshInProgress = activeAutomatedSourceRefreshIds.has(String(source.id || ""))
-    || ["queued", "processing"].includes(String(source.state || ""));
+  // This indicator belongs to the refresh the creator clicked. Source-level
+  // status can remain stale while a background worker reports its final
+  // result, so it must not keep the icon spinning after success or failure.
+  const refreshInProgress = activeAutomatedSourceRefreshIds.has(String(source.id || ""));
   return `
     <article class="admin-file-row admin-auto-sync-row roster-source-${escapeHtml(source.state || "unknown")}">
       <div class="admin-auto-sync-heading"><strong>${escapeHtml(source.label)}</strong><button type="button" class="file-reparse file-reparse-visible${refreshInProgress ? " is-processing" : ""}" aria-label="${escapeHtml(refreshTitle)}" title="${escapeHtml(refreshInProgress ? "Refresh in progress" : refreshTitle)}" aria-busy="${refreshInProgress}" data-refresh-automated-source="${escapeHtml(source.id)}"${refreshInProgress ? " disabled" : ""}><span class="file-reparse-icon" aria-hidden="true">↻</span></button></div>
