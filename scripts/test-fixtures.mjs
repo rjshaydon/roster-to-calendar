@@ -2647,6 +2647,7 @@ XLSX.utils.book_append_sheet(ddhAccuracyWorkbook, XLSX.utils.aoa_to_sheet([
   ["PED Doctor", "PED", "", "", "", "", "", ""],
   ["Warragul Doctor", "Warragul", "", "", "", "", "", ""],
   ["Availability Doctor", "N", "Y", "W", "", "", "", ""],
+  ["CS Request Doctor", "C/S", "CS not onsite PLS", "", "", "", "", ""],
   ["Leave Without Pay Doctor", "JMS LWP", "", "", "", "", "", ""],
   ["Extra Note Doctor", "Extra N/D", "Extra 10/4/26", "", "", "", "", ""],
   ["Extra Shift Doctor", "Extra AM", "Extra 16:00-01:00", "", "", "", "", ""],
@@ -2676,6 +2677,7 @@ const ddhAedDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "AED DOC
 const ddhPedDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "PED DOCTOR");
 const ddhWarragulDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "WARRAGUL DOCTOR");
 const ddhAvailabilityDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "AVAILABILITY DOCTOR");
+const ddhCsRequestDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "CS REQUEST DOCTOR");
 const ddhLeaveWithoutPayDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "LEAVE WITHOUT PAY DOCTOR");
 const ddhExtraNoteDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "EXTRA NOTE DOCTOR");
 const ddhExtraShiftDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "EXTRA SHIFT DOCTOR");
@@ -2684,7 +2686,7 @@ const ddhTimedSwingDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "
 const ddhFrankAnnotationDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "FRANK ANNOTATION DOCTOR");
 const ddhAmpRosterDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "AMP ROSTER DOCTOR");
 const ddhOrientationVariantDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "ORIENTATION VARIANT DOCTOR");
-assert.ok(ddhAccuracyDoctor && crisisLocumDoctor && sickLeaveDoctor && conferenceLeaveDoctor && ddhFamilyLeaveDoctor && ddhParentalLeaveDoctor && ddhParentalVariantDoctor && ddhSpecialLeaveDoctor && ddhExamLeaveDoctor && ddhAnnualLeaveDoctor && ddhAnnotationDoctor && ddhGedDoctor && ddhNotesDoctor && ddhAedDoctor && ddhPedDoctor && ddhWarragulDoctor && ddhAvailabilityDoctor && ddhLeaveWithoutPayDoctor && ddhExtraNoteDoctor && ddhExtraShiftDoctor && ddhUntimedSwingDoctor && ddhTimedSwingDoctor && ddhFrankAnnotationDoctor && ddhAmpRosterDoctor && ddhOrientationVariantDoctor, "DDH accuracy fixtures should expose their rostered doctors");
+assert.ok(ddhAccuracyDoctor && crisisLocumDoctor && sickLeaveDoctor && conferenceLeaveDoctor && ddhFamilyLeaveDoctor && ddhParentalLeaveDoctor && ddhParentalVariantDoctor && ddhSpecialLeaveDoctor && ddhExamLeaveDoctor && ddhAnnualLeaveDoctor && ddhAnnotationDoctor && ddhGedDoctor && ddhNotesDoctor && ddhAedDoctor && ddhPedDoctor && ddhWarragulDoctor && ddhAvailabilityDoctor && ddhCsRequestDoctor && ddhLeaveWithoutPayDoctor && ddhExtraNoteDoctor && ddhExtraShiftDoctor && ddhUntimedSwingDoctor && ddhTimedSwingDoctor && ddhFrankAnnotationDoctor && ddhAmpRosterDoctor && ddhOrientationVariantDoctor, "DDH accuracy fixtures should expose their rostered doctors");
 const ddhAccuracyView = buildRosterView([], ddhAccuracyWorkbook, ddhAccuracyDoctor.key);
 assert.deepEqual(
   ddhAccuracyView.events.map((event) => [event.title, event.rawValue, event.timeLabel]),
@@ -2719,6 +2721,7 @@ assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhAnnotationDoctor.ke
 assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhGedDoctor.key).events.map((event) => event.title), ["DDH: GED shift"], "GED Junior should be a recognised GED shift");
 assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhNotesDoctor.key).events, [], "DDH headings and availability notes should not become calendar events");
 assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhNotesDoctor.key).issues, [], "DDH headings and availability notes should not become unresolved shift codes");
+assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhCsRequestDoctor.key).events.map((event) => event.title), ["DDH: CS"], "C/S should resolve to Clinical Support while CS not onsite PLS remains a hidden request");
 assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhAedDoctor.key).events, [], "AED is an MMC allocation annotation, not a DDH calendar shift");
 assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhPedDoctor.key).events, [], "PED is an MMC allocation annotation, not a DDH calendar shift");
 assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhAedDoctor.key).issues, [], "AED should not remain unresolved once hidden as an MMC allocation annotation");

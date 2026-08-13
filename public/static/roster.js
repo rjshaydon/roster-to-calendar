@@ -64,6 +64,7 @@ const MMC_TEAM_MAP = {
 };
 
 const DDH_LABEL_MAP = {
+  "C/S": "CS",
   "Clinical Support": "CS",
   "SSU SMS": "SSU",
   "Orange PM (on-call)": "Orange PM",
@@ -2894,6 +2895,7 @@ function shouldIgnoreDdh(value, seniority = UNKNOWN_SENIORITY) {
   if (!upper) return true;
   if (isDdhClinicalSupportExam(upper)) return false;
   if (isDdhStructuralAnnotation(upper, seniority)) return true;
+  if (/^CS\s+NOT\s+ONSITE\s+PLS?\b/.test(upper)) return true;
   if (DDH_IGNORE_PREFIXES.some((prefix) => upper.startsWith(prefix))) return true;
   return DDH_IGNORE_CONTAINS.some((fragment) => upper.includes(fragment));
 }
