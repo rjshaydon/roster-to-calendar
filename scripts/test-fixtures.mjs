@@ -2171,6 +2171,10 @@ const scottJosey = doctors.find((doctor) => doctor.displayName === "Scott JOSEY"
 const scottLeaveEvents = buildRosterView(mmcWorkbook, [], scottJosey.key).events.filter((event) => event.title === "Annual Leave");
 assert.ok(scottLeaveEvents.some((event) => event.rawValue.includes("AL 9.5hrs")));
 assert.ok(scottLeaveEvents.some((event) => event.rawValue.includes("Annual leave 19hrs")));
+assert.ok(
+  buildRosterView(mmcWorkbook, [], scottJosey.key).events.some((event) => event.rawValue === "1430-0000 PCC" && event.start.startsWith("2026-04-17T14:30:00")),
+  "a weekly leave marker must not suppress Scott's Friday PCC shift",
+);
 const ericaChan = doctors.find((doctor) => doctor.displayName === "Erica CHAN");
 assert.ok(buildRosterView(mmcWorkbook, [], ericaChan.key).events.some((event) => event.rawValue === "CME leave - 38hrs" && event.title === "Conference Leave"));
 

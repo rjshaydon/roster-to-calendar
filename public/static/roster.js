@@ -1475,7 +1475,7 @@ function parseMmcRecords(workbook, doctorKey) {
       if (normalizeName(name) !== doctorKey) continue;
       const weekValues = layout.dayColumns.map((column) => cleanText(getCellValue(sheet, row, column)));
       const weeklyLeave = firstWeeklyLeave(weekValues);
-      if (weeklyLeave) {
+      if (weeklyLeave && !hasNonLeaveMmcEntry(weekValues)) {
         records.push(createWeeklyLeaveRecord("MMC", weekDates[0], weeklyLeave, currentSeniority));
       } else {
         weekValues.forEach((raw, index) => {
@@ -1497,7 +1497,7 @@ function parseDdhRecords(workbook, doctorKey) {
   for (const entry of iterateDdhWeekEntries(workbook)) {
     if (normalizeName(entry.rawName) !== doctorKey) continue;
     const weeklyLeave = entry.findmyshiftFormat ? null : firstWeeklyLeave(entry.labels);
-    if (weeklyLeave) {
+    if (weeklyLeave && !hasNonLeaveDdhEntry(entry.labels)) {
       records.push(createWeeklyLeaveRecord("DDH", entry.weekDates[0], weeklyLeave, entry.seniority));
       continue;
     }
@@ -3740,6 +3740,30 @@ function firstWeeklyLeave(values) {
     if (leave?.kind === "sabbatical_leave" && !/\b(?:AM|PM|NIGHT|NS|SW)\b/i.test(String(value || ""))) return value;
   }
   return null;
+}
+
+// A weekly leave marker means the whole roster week only when it is the sole
+// substantive allocation.  Some rows legitimately combine leave with a later
+// shift (for example Scott's CME leave and Friday PCC).  Do not let the leave
+// marker suppress that real shift.
+function hasNonLeaveMmcEntry(values) {
+  return (values || []).some((value) => {
+    const text = cleanText(value);
+    return text
+      && !normalizeRecognizedLeave(text)
+      && !shouldIgnoreMmc(text)
+      && !isOtherHospitalReference("MMC", text);
+  });
+}
+
+function hasNonLeaveDdhEntry(values) {
+  return (values || []).some((value) => {
+    const text = cleanText(value);
+    return text
+      && !normalizeRecognizedLeave(text)
+      && !shouldIgnoreDdh(text)
+      && !isOtherHospitalReference("DDH", text);
+  });
 }
 
 function shouldIgnoreMmc(value) {
