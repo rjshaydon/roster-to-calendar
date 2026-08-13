@@ -51,6 +51,13 @@ assert.equal(
   false,
   "a changed leave range must not inherit the one-off migration approval",
 );
+assert.equal(
+  isApprovedReparseOmission({
+    doctorKey: "AMY LEUTHAUSER", source: "MMC", title: "MMC: CS", start: "2026-05-28", end: "2026-05-28", rawValue: "0800-1730 CS DH",
+  }),
+  true,
+  "a DDH clinical-support reference recorded in an MMC roster is an approved omission",
+);
 assert.deepEqual(
   unresolvedCodeSummary([
     { status: "unknown", source: "DDH", seniority: "HMO", rawValue: "X" },

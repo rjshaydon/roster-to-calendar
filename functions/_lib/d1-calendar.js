@@ -785,6 +785,11 @@ export async function compareDerivedRosterFiles(db, baselineFileId, candidateFil
     const matchedIdentity = [...unmatchedCandidate].find((identity) => sameRosterOccurrence(event, candidate.get(identity)));
     if (matchedIdentity) {
       unmatchedCandidate.delete(matchedIdentity);
+    } else if ([...candidate.values()].some((candidateEvent) => reusableMergedLeaveOccurrence(event, candidateEvent))) {
+      // A current parser may consolidate several formerly separate leave days
+      // into a single all-day span. The span can correctly account for more
+      // than one original source occurrence, so do not consume it after the
+      // first matching day.
     } else {
       omitted.push(event);
     }
@@ -852,6 +857,15 @@ function leaveOccurrenceCategory(event) {
   return "";
 }
 
+function reusableMergedLeaveOccurrence(baseline, candidate) {
+  const category = leaveOccurrenceCategory(baseline);
+  if (!category || category !== leaveOccurrenceCategory(candidate)) return false;
+  if (String(baseline?.doctorKey || "") !== String(candidate?.doctorKey || "")) return false;
+  if (String(baseline?.source || "") !== String(candidate?.source || "")) return false;
+  const day = String(baseline?.start || "").slice(0, 10);
+  return Boolean(day && eventCoversDay(candidate, day));
+}
+
 function eventCoversDay(event, day) {
   const startDay = String(event?.start || "").slice(0, 10);
   const endDay = String(event?.end || "").slice(0, 10);
@@ -899,7 +913,12 @@ const APPROVED_DDH_WEEKLY_LEAVE_REPLACEMENTS = new Set([
 ]);
 
 export function isApprovedReparseOmission(event, baselineFileId = "") {
-  if (String(event?.source || "").toUpperCase() !== "DDH") return false;
+  const source = String(event?.source || "").toUpperCase();
+  const raw = normalizeRosterRawValue(event.rawValue);
+  // Product-approved: these are DDH clinical-support references entered into
+  // MMC rosters to avoid unsafe late/early allocations, not MMC work.
+  if (source === "MMC" && /(?:^|\s)CS\s*DH$/.test(raw)) return true;
+  if (source !== "DDH") return false;
   const exactLeaveReplacement = [
     String(baselineFileId || ""),
     String(event.doctorKey || ""),
@@ -909,7 +928,6 @@ export function isApprovedReparseOmission(event, baselineFileId = "") {
     String(event.rawValue || "").trim(),
   ].join("|");
   if (APPROVED_DDH_WEEKLY_LEAVE_REPLACEMENTS.has(exactLeaveReplacement)) return true;
-  const raw = normalizeRosterRawValue(event.rawValue);
   // These are references made by a DDH roster writer to another service, not
   // DDH work. They are explicitly excluded from calendars by product policy.
   if (/\b(?:TOX|HITH|VHH|ARV|WARRAGUL|MMC|CASEY|AED|PED)\b/.test(raw)
