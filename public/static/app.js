@@ -448,7 +448,6 @@ fileInput.addEventListener("change", async () => {
 });
 
 let rosterDragDepth = 0;
-let rosterDragStaleTimer = 0;
 let rosterDragAborted = false;
 
 function handleRosterDragOver(event) {
@@ -456,11 +455,9 @@ function handleRosterDragOver(event) {
   event.preventDefault();
   if (rosterDragAborted) {
     event.dataTransfer.dropEffect = "none";
-    touchRosterDragActivity();
     return;
   }
   syncRosterDragState(event.dataTransfer);
-  touchRosterDragActivity();
 }
 
 for (const eventName of ["dragenter", "dragover"]) {
@@ -2309,19 +2306,15 @@ function syncRosterDragState(dataTransfer) {
   document.body.classList.toggle("is-roster-dragging", active);
   rosterDropOverlay.classList.toggle("hidden", !active);
   rosterDropOverlay.setAttribute("aria-hidden", active ? "false" : "true");
-  if (active) touchRosterDragActivity();
 }
 
 function abortRosterFileDrag() {
   rosterDragAborted = true;
   rosterDragDepth = 0;
   clearRosterDragVisualState();
-  touchRosterDragActivity();
 }
 
 function clearRosterDragVisualState() {
-  clearTimeout(rosterDragStaleTimer);
-  rosterDragStaleTimer = 0;
   document.body.classList.remove("is-roster-dragging");
   rosterDropOverlay.classList.add("hidden");
   rosterDropOverlay.setAttribute("aria-hidden", "true");
@@ -2331,14 +2324,6 @@ function clearRosterDragState() {
   rosterDragDepth = 0;
   rosterDragAborted = false;
   clearRosterDragVisualState();
-}
-
-function touchRosterDragActivity() {
-  clearTimeout(rosterDragStaleTimer);
-  rosterDragStaleTimer = window.setTimeout(() => {
-    rosterDragStaleTimer = 0;
-    if (rosterDragAborted || document.body.classList.contains("is-roster-dragging")) clearRosterDragState();
-  }, 250);
 }
 
 function shouldShowRosterDragOverlay(dataTransfer) {

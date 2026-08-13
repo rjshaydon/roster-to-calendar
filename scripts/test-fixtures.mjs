@@ -781,8 +781,13 @@ assert.match(
 );
 assert.match(
   appSource.match(/function clearRosterDragState[\s\S]*?function shouldShowRosterDragOverlay/)?.[0] || "",
-  /touchRosterDragActivity/,
-  "roster drag overlay should clear when the drag leaves the page without a drop",
+  /rosterDragDepth = 0;[\s\S]*clearRosterDragVisualState\(\)/,
+  "roster drag overlay should clear only through an explicit drag-end, leave, drop, or cancellation path",
+);
+assert.doesNotMatch(
+  appSource,
+  /rosterDragStaleTimer|touchRosterDragActivity/,
+  "roster drag overlay should not expire while a file remains held over the page",
 );
 assert.match(
   appSource.match(/document\.addEventListener\(\"keydown\"[\s\S]*?window\.addEventListener\(\"drop\"/)?.[0] || "",
