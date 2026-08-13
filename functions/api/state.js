@@ -4982,9 +4982,7 @@ async function runCoreDerivedRosterSave(context, job = {}) {
           approvedRemovedEventIdentities: approvedHistoricalReparseRemovals(replacesFileId),
         });
         if (!promotion.ok) {
-          const detail = promotion.comparison?.removedCount
-            ? ` (${promotion.comparison.removedCount} event removal${promotion.comparison.removedCount === 1 ? "" : "s"} require review)`
-            : "";
+          const detail = stagedPromotionBlockerDetail(promotion.comparison);
           throw new Error(`Staged roster was not activated: ${promotion.reason || "promotion failed"}${detail}.`);
         }
         effectiveFilePayload = { ...filePayload, id: replacesFileId, active: true };
@@ -5041,6 +5039,30 @@ async function runCoreDerivedRosterSave(context, job = {}) {
   } catch (error) {
     throw error;
   }
+}
+
+// A rejected staging run must be actionable without giving the background
+// processor permission to replace live events.  This compact diagnostic is
+// surfaced in its GitHub Actions log; the active roster remains untouched.
+function stagedPromotionBlockerDetail(comparison) {
+  const removed = Array.isArray(comparison?.removed) ? comparison.removed : [];
+  const count = Number(comparison?.removedCount || 0);
+  if (!count) return "";
+  const grouped = new Map();
+  for (const event of removed) {
+    const raw = String(event?.rawValue || "(blank)").trim() || "(blank)";
+    const entry = grouped.get(raw) || {
+      count: 0,
+      example: `${String(event?.doctorKey || "Unknown clinician")} ${String(event?.start || "").slice(0, 10)}`.trim(),
+    };
+    entry.count += 1;
+    grouped.set(raw, entry);
+  }
+  const summary = [...grouped.entries()]
+    .sort((left, right) => right[1].count - left[1].count || left[0].localeCompare(right[0]))
+    .map(([raw, entry]) => `${raw} ×${entry.count} (${entry.example})`)
+    .join("; ");
+  return ` (${count} event removal${count === 1 ? "" : "s"} require review: ${summary})`;
 }
 
 // Used by the token-protected automation ingress. Keeping this alongside the
