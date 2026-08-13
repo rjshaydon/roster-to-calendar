@@ -1658,6 +1658,17 @@ function parseMmcEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
     return createHiddenRecord("MMC", day, raw, normalized, seniority);
   }
 
+  // Explicit roster-column hours describe the allocation column, but exam
+  // events are intentionally represented as all-day calendar entries.
+  if (normalized.allDay) {
+    return createAllDayRecord("MMC", day, raw, {
+      kind: normalized.kind,
+      titleParts: normalized.titleParts,
+      location: normalized.location || "",
+      seniority,
+    });
+  }
+
   if (explicit) {
     return createTimedRecord("MMC", day, raw, {
       kind: normalized.kind,
@@ -1668,14 +1679,6 @@ function parseMmcEntry(day, raw, seniority = UNKNOWN_SENIORITY) {
       ambiguous: normalized.ambiguous,
       status: normalized.status,
       warning: normalized.warning,
-      seniority,
-    });
-  }
-  if (normalized.allDay) {
-    return createAllDayRecord("MMC", day, raw, {
-      kind: normalized.kind,
-      titleParts: normalized.titleParts,
-      location: normalized.location || "",
       seniority,
     });
   }
@@ -2615,7 +2618,7 @@ function buildDefaultParserRules() {
       // the DDH calendar should show the local Clinical Support component only.
       add(rules.ddh, "DDH", "CS AM", seniority, "CS", "", "", true, "", "", "");
       add(rules.ddh, "DDH", "CS ONSITE", seniority, "CS onsite", "", "", true, "", "", DDH_LOCATION);
-      add(rules.ddh, "DDH", "CLINICAL SUPPORT ACEM OSCE", seniority, "CS Exam", "", "", false, "08:00", "17:30", DDH_LOCATION);
+      add(rules.ddh, "DDH", "CLINICAL SUPPORT ACEM OSCE", seniority, "CS Exam", "", "", true, "", "", DDH_LOCATION);
     }
     add(rules.ddh, "DDH", "PHNW", seniority, "PHNW", "", "", true, "", "", "");
     add(rules.ddh, "DDH", "SSU", seniority, "SSU", "", "", false, "07:30", "17:30", DDH_LOCATION);
@@ -2658,9 +2661,9 @@ function buildDefaultParserRules() {
   // a staff row. Keep these two unambiguous Clinical Support labels usable in
   // those files as well.
   add(rules.ddh, "DDH", "CS AM", UNKNOWN_SENIORITY, "CS", "", "", true, "", "", "");
-  add(rules.ddh, "DDH", "CLINICAL SUPPORT ACEM OSCE", UNKNOWN_SENIORITY, "CS Exam", "", "", false, "08:00", "17:30", DDH_LOCATION);
+  add(rules.ddh, "DDH", "CLINICAL SUPPORT ACEM OSCE", UNKNOWN_SENIORITY, "CS Exam", "", "", true, "", "", DDH_LOCATION);
   add(rules.mmc, "MMC", "CSM", "SMS", "CSM", "", "", false, "08:00", "17:30", MMC_LOCATION);
-  add(rules.mmc, "MMC", "CS EXAM", "SMS", "CS Exam", "", "", false, "08:00", "17:30", MMC_LOCATION);
+  add(rules.mmc, "MMC", "CS EXAM", "SMS", "CS Exam", "", "", true, "", "", MMC_LOCATION);
   return rules;
 }
 
@@ -3519,7 +3522,10 @@ function isMergeableLeaveEvent(event) {
 }
 
 function leaveTextMatches(value) {
-  return /\b(leave|conference|cme|study|annual|sick|personal|exam|sabbatical|parental|long service)\b/i.test(String(value || ""));
+  const text = String(value || "");
+  // Clinical Support Exam is an all-day professional allocation, not leave.
+  if (/\bCS\s+EXAM\b/i.test(text)) return false;
+  return /\b(leave|conference|cme|study|annual|sick|personal|exam|sabbatical|parental|long service)\b/i.test(text);
 }
 
 function preferredLeaveTitle(leftTitle, rightTitle, rawValue = "") {

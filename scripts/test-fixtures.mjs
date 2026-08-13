@@ -2049,7 +2049,7 @@ assert.deepEqual(
 assert.ok(shiftedMmcEvents.every((event) => event.seniority === "SMS"), "MMC parsing should follow the shifted Cost Centre seniority marker");
 assert.ok(shiftedMmcEvents.some((event) => event.title === "MMC: CSM" && event.rawValue === "0800-1730 CSM"), "CSM should be a recognised MMC shift");
 assert.ok(shiftedMmcEvents.some((event) => event.title === "MMC: CS OS" && event.rawValue === "0800-1730 CS OS"), "CS OS should be a recognised MMC shift");
-assert.ok(shiftedMmcEvents.some((event) => event.title === "MMC: CS Exam" && event.rawValue === "0800-1730 CS Exam"), "CS Exam should be a recognised MMC shift");
+assert.ok(shiftedMmcEvents.some((event) => event.title === "MMC: CS Exam" && event.rawValue === "0800-1730 CS Exam" && event.allDay), "CS Exam should be a recognised all-day MMC event");
 
 await assertRejectsMixedTermUpload(
   "MMC date typo should identify the worksheet and cell",
@@ -2505,7 +2505,7 @@ const diFlood = ddhFullDoctors.find((doctor) => doctor.displayName === "Di FLOOD
 const diFloodView = buildRosterView([], ddhFullWorkbook, diFlood.key);
 assert.ok(diFloodView.events.some((event) => event.title === "DDH: CS" && event.rawValue === "CS AM"));
 assert.ok(diFloodView.events.some((event) => event.title === "DDH: SSU" && event.start.includes("07:30:00")));
-assert.ok(diFloodView.events.some((event) => event.title === "DDH: CS Exam" && event.rawValue === "Clinical Support ACEM OSCE" && event.start.includes("08:00:00")), "DDH Clinical Support ACEM OSCE should be a timed CS Exam shift");
+assert.ok(diFloodView.events.some((event) => event.title === "DDH: CS Exam" && event.rawValue === "Clinical Support ACEM OSCE" && event.allDay), "DDH Clinical Support ACEM OSCE should be an all-day CS Exam event");
 assert.equal(diFloodView.events.some((event) => event.rawValue === "HITH PM"), false, "other-hospital annotations must not become DDH calendar events");
 
 const ddhDefaultTimesWorkbook = XLSX.utils.book_new();
