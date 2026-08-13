@@ -509,6 +509,32 @@ export function normalizeRosterName(value) {
   return normalizeName(value);
 }
 
+// Retained roster files can contain diagnostics produced before a later parser
+// rule learnt that a value was merely a roster-writer note. The admin review
+// must apply the same exclusion decision as a fresh parse, otherwise it keeps
+// offering old comments as unresolved clinical shift codes.
+export function isIgnoredRosterIssueValue(sourceValue, value, seniority = UNKNOWN_SENIORITY) {
+  const source = String(sourceValue || "").trim().toUpperCase();
+  const text = cleanText(value);
+  if (!text) return true;
+  if (source === "DDH") {
+    // FindMyShift's "Shift report" rows are staff-management notes, not an
+    // allocation for the staff member named in the row.
+    if (/^SHIFT\s+REPORT$/i.test(text)) return true;
+    return isOtherHospitalReference("DDH", text)
+      || shouldIgnoreDdh(text, seniority)
+      || shouldIgnoreCommon(text);
+  }
+  if (source === "MMC") {
+    return isOtherHospitalReference("MMC", text)
+      || shouldIgnoreMmc(text)
+      || shouldIgnoreCommon(text);
+  }
+  if (source === "CASEY") return shouldIgnoreCasey(text) || shouldIgnoreCommon(text);
+  if (source === "MCH") return shouldIgnoreMch(text) || shouldIgnoreCommon(text);
+  return false;
+}
+
 export function previewSummary(events) {
   if (!events.length) {
     return { count: 0, date_range: "No events found" };

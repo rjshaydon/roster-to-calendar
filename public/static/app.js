@@ -6,6 +6,7 @@ import {
   doctorOptions as rosterDoctorOptions,
   findmyshiftProviderStaffOptions,
   exportIcs,
+  isIgnoredRosterIssueValue,
   parseUploadForm,
   parserRuleDefaults,
   parserRuleSeniorities,
@@ -11937,6 +11938,7 @@ function isKnownResolvedShiftCodeValue(sourceValue, rawValue, normalizedTitle = 
   const source = sanitizeIssueSource(sourceValue);
   const code = parserRuleCodeFromRawValue(source, rawValue);
   if (!source || !code) return false;
+  if (isIgnoredRosterIssueValue(source, rawValue || code)) return true;
   if (["AM", "PM", "NIGHT"].includes(code)) return true;
   if (code === "PHNW") return true;
   if (source === "MCH" && ["CS", "OCS", "0CS", "CSOS"].includes(code)) return true;

@@ -1,4 +1,4 @@
-import { applyEventOverrides, customEventsToEvents, defaultSettings, inspectImportRecord, normalizeRosterName } from "../_lib/roster.js";
+import { applyEventOverrides, customEventsToEvents, defaultSettings, inspectImportRecord, isIgnoredRosterIssueValue, normalizeRosterName } from "../_lib/roster.js";
 import { AUTOMATION_SOURCES } from "../_lib/automation-import.js";
 import { requestQueuedRosterProcessing } from "../_lib/automation-dispatch.js";
 import { extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentExceptions, findmyshiftLastModified, findmyshiftReportDiagnostics, findmyshiftShiftReport } from "../_lib/findmyshift.js";
@@ -2582,6 +2582,7 @@ function isIssueResolvedByRuleSets(issue, ruleSets = {}) {
   const seniority = sanitizeRuleSeniority(issue?.seniority);
   const code = parserRuleCodeForIssue(issue);
   if (!source || !code) return false;
+  if (isIgnoredRosterIssueValue(source, issue?.rawValue || code, seniority)) return true;
   if (isKnownResolvedShiftCodeValue(source, issue?.rawValue || code)) return true;
   const sourceRules = ruleSets[source.toLowerCase()] || [];
   if (seniority === "Unknown") {
@@ -4144,6 +4145,7 @@ async function listUnresolvedRosterShiftCodes(db) {
       count: 1,
     }])[0];
     if (!issue || !isShiftCodeAdminIssue({ ...issue, resolutionType: rawIssue?.resolutionType })) continue;
+    if (isIgnoredRosterIssueValue(source, rawValue || code, seniority)) continue;
     if (isKnownResolvedShiftCodeValue(source, rawValue || code)) continue;
     if (isIssueResolvedByRuleSets(issue, globalRuleSets)) continue;
     const key = `${source}|${seniority}|${code}|${rawValue}|${message}`;
@@ -4225,6 +4227,7 @@ async function isIssueResolvedByParserRules(store, email, issue, db = null) {
   const seniority = sanitizeRuleSeniority(issue?.seniority);
   const code = parserRuleCodeForIssue(issue);
   if (!source || !code) return false;
+  if (isIgnoredRosterIssueValue(source, issue?.rawValue || code, seniority)) return true;
   if (isKnownResolvedShiftCodeValue(source, issue?.rawValue || code)) return true;
   const config = await buildIssueConfig(store, email, db);
   const rules = sanitizeParserExtensionRules(config.parserExtensions);
