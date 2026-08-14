@@ -86,6 +86,9 @@ assert.equal(
   false,
   "a different DDH message-like value must not receive a broad reparse-removal approval",
 );
+assert.equal(isApprovedReparseOmission({ source: "DDH", rawValue: "CS - not onsite (standard setting)" }), true, "approved DDH Clinical Support requests should not block a safe reparse");
+assert.equal(isApprovedReparseOmission({ source: "DDH", rawValue: "08H00" }), true, "a DDH VHH late-early time fragment omitted by the contextual parser should not block a safe reparse");
+assert.equal(isApprovedReparseOmission({ source: "DDH", rawValue: "Shift in lieu" }), true, "approved DDH compensatory annotations should not block a safe reparse");
 assert.deepEqual(
   unresolvedCodeSummary([
     { status: "unknown", source: "DDH", seniority: "HMO", rawValue: "X" },
@@ -2731,6 +2734,11 @@ XLSX.utils.book_append_sheet(ddhAccuracyWorkbook, XLSX.utils.aoa_to_sheet([
   ["AMP", "", "", "", "", "", "", ""],
   ["AMP Roster Doctor", "Physiotherapist", "Jane Example", "Swing PM", "", "", "", ""],
   ["Orientation Variant Doctor", "Orienation 0800-1000", "", "", "", "", "", ""],
+  ["Senior Medical Staff", "", "", "", "", "", "", ""],
+  ["DDH Cleanup Doctor", "CS Tox", "clinical support", "clinical", "OSCE", "Swing FT", "CS -On-site", "CS not onsite pls"],
+  ["DDH VHH Warning Doctor", "08H00", "10H00", "14H30", "", "", "", ""],
+  ["", "VHH", "VHH", "VHH", "", "", "", ""],
+  ["DDH Request Doctor", "Moved to Sat 11/4", "PM Austin instead of AM", "See Amy", "working 22/2", "pm onlu", "y but not 0730", "wweeeewe"],
 ]), "Sheet1");
 const ddhAccuracyDoctors = doctorOptions([], ddhAccuracyWorkbook);
 const ddhAccuracyDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "ACCURACY DOCTOR");
@@ -2759,7 +2767,10 @@ const ddhTimedSwingDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "
 const ddhFrankAnnotationDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "FRANK ANNOTATION DOCTOR");
 const ddhAmpRosterDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "AMP ROSTER DOCTOR");
 const ddhOrientationVariantDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "ORIENTATION VARIANT DOCTOR");
-assert.ok(ddhAccuracyDoctor && crisisLocumDoctor && sickLeaveDoctor && conferenceLeaveDoctor && ddhFamilyLeaveDoctor && ddhParentalLeaveDoctor && ddhParentalVariantDoctor && ddhSpecialLeaveDoctor && ddhExamLeaveDoctor && ddhAnnualLeaveDoctor && ddhAnnotationDoctor && ddhGedDoctor && ddhNotesDoctor && ddhAedDoctor && ddhPedDoctor && ddhWarragulDoctor && ddhAvailabilityDoctor && ddhCsRequestDoctor && ddhLeaveWithoutPayDoctor && ddhExtraNoteDoctor && ddhExtraShiftDoctor && ddhUntimedSwingDoctor && ddhTimedSwingDoctor && ddhFrankAnnotationDoctor && ddhAmpRosterDoctor && ddhOrientationVariantDoctor, "DDH accuracy fixtures should expose their rostered doctors");
+const ddhSmsCleanupDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "DDH CLEANUP DOCTOR");
+const ddhVhhWarningDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "DDH VHH WARNING DOCTOR");
+const ddhRequestDoctor = ddhAccuracyDoctors.find((doctor) => doctor.key === "DDH REQUEST DOCTOR");
+assert.ok(ddhAccuracyDoctor && crisisLocumDoctor && sickLeaveDoctor && conferenceLeaveDoctor && ddhFamilyLeaveDoctor && ddhParentalLeaveDoctor && ddhParentalVariantDoctor && ddhSpecialLeaveDoctor && ddhExamLeaveDoctor && ddhAnnualLeaveDoctor && ddhAnnotationDoctor && ddhGedDoctor && ddhNotesDoctor && ddhAedDoctor && ddhPedDoctor && ddhWarragulDoctor && ddhAvailabilityDoctor && ddhCsRequestDoctor && ddhLeaveWithoutPayDoctor && ddhExtraNoteDoctor && ddhExtraShiftDoctor && ddhUntimedSwingDoctor && ddhTimedSwingDoctor && ddhFrankAnnotationDoctor && ddhAmpRosterDoctor && ddhOrientationVariantDoctor && ddhSmsCleanupDoctor && ddhVhhWarningDoctor && ddhRequestDoctor, "DDH accuracy fixtures should expose their rostered doctors");
 const ddhAccuracyView = buildRosterView([], ddhAccuracyWorkbook, ddhAccuracyDoctor.key);
 assert.deepEqual(
   ddhAccuracyView.events.map((event) => [event.title, event.rawValue, event.timeLabel]),
@@ -2810,6 +2821,16 @@ assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhFrankAnnotationDoct
 assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhAmpRosterDoctor.key).events.map((event) => event.title), ["DDH: Swing PM"], "AMP supervision headings and names should not become calendar events while genuine AMP shifts remain visible");
 assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhAmpRosterDoctor.key).issues, [], "AMP supervision headings and names should not become unresolved shift codes");
 assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhOrientationVariantDoctor.key).events.map((event) => [event.title, event.timeLabel]), [["DDH: Orientation", "08:00-10:00"]], "orientation spelling variants should standardise to a timed Orientation shift");
+assert.deepEqual(
+  buildRosterView([], ddhAccuracyWorkbook, ddhSmsCleanupDoctor.key).events.map((event) => [event.title, event.allDay]),
+  [["DDH: CS Tox", true], ["DDH: CS", true], ["DDH: Clinical", true], ["DDH: CS Exam", true], ["DDH: Swing shift", true], ["DDH: CS onsite", true]],
+  "approved DDH SMS aliases should create calendar shifts while not-onsite requests remain hidden",
+);
+assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhSmsCleanupDoctor.key).issues, [], "approved DDH SMS aliases should not remain unresolved");
+assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhVhhWarningDoctor.key).events, [], "VHH late-early warning time fragments should stay off DDH calendars");
+assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhVhhWarningDoctor.key).issues, [], "VHH late-early warning time fragments should not remain unresolved");
+assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhRequestDoctor.key).events, [], "DDH roster-writer requests and annotations should stay off calendars");
+assert.deepEqual(buildRosterView([], ddhAccuracyWorkbook, ddhRequestDoctor.key).issues, [], "DDH roster-writer requests and annotations should not remain unresolved");
 
 const mmcPdfBytes = await readFile(fileURLToPath(new URL("../fixtures/AdultMMCTerm2.2026.Ver1.pdf", import.meta.url)));
 const formData = new FormData();

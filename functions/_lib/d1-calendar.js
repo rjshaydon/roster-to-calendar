@@ -946,7 +946,7 @@ export function isApprovedReparseOmission(event, baselineFileId = "") {
   // ("CS not onsite please"), not Clinical Support work. It is deliberately
   // exact so that real CS, CS onsite, and every other removal still block a
   // staged promotion for review.
-  if (source === "DDH" && /^CS\s+NOT\s+ONSITE\s+PLS?$/.test(raw)) return true;
+  if (source === "DDH" && isApprovedDdhClinicalSupportRequestOmission(raw)) return true;
   // Product-approved on 2026-08-14: these exact DDH free-text requests are
   // roster-writer messages, not allocations. Their removal is intentional
   // when the shared parser stops emitting them as calendar events.
@@ -978,8 +978,9 @@ export function isApprovedReparseOmission(event, baselineFileId = "") {
   if (APPROVED_DDH_WEEKLY_LEAVE_REPLACEMENTS.has(exactLeaveReplacement)) return true;
   // These are references made by a DDH roster writer to another service, not
   // DDH work. They are explicitly excluded from calendars by product policy.
-  if (/\b(?:TOX|HITH|VHH|ARV|WARRAGUL|MMC|CASEY|AED|PED)\b/.test(raw)
-    || /\b(?:HITH|VHH)(?:AM|PM)\b/.test(raw)) return true;
+  if (/\b(?:TOX|HITH|HTIH|VHH|ARV|WARRAGUL|MMC|CASEY|AED|PED)\b/.test(raw)
+    || /\b(?:HITH|HTIH|VHH)(?:AM|PM)\b/.test(raw)
+    || /^(?:08|10|14)H?(?:00|30)$/.test(raw)) return true;
   if (!raw.startsWith("EXTRA")) return false;
   // A generic Extra entry is a payroll annotation. Explicitly timed and
   // period-labelled Extras remain rostered calendar shifts.
@@ -994,7 +995,15 @@ function isApprovedDdhRosterWriterMessageOmission(raw) {
   if (/^C\/S\s+FOR\s+\d{1,2}\/\d{1,2}(?:\/\d{2,4})?$/.test(raw)) return true;
   if (/^CAN\s+WORK(?:\s+\d+\s+EXTRA\s+THIS\s+WEEK)?$/.test(raw)) return true;
   if (/^CAN['’]?T\s+DO\s+THIS\s+WEEKEND(?:,?\s+SORRY!?)?$/.test(raw)) return true;
-  return /\b\d+\s+SHIFTS?\s+THIS\s+WEEK\b.*\b(?:MAKE\s+UP|NEXT\s+WEEK)\b/.test(raw);
+  if (/\b\d+\s+SHIFTS?\s+THIS\s+WEEK\b.*\b(?:MAKE\s+UP|NEXT\s+WEEK)\b/.test(raw)) return true;
+  if (/^(?:\(\s*PREFERRED\s*\)|SEE\s+\S+|WORK(?:ING|DED)\s+\d{1,2}\/\d{1,2}|MOVED\s+TO\s+(?:SAT|SUN)\b|CLINICAL\s+SHIFT\s+MOVED\b)/.test(raw)) return true;
+  if (/^(?:SUN|SA|SAT|=|L|WWEEEEWE)$/.test(raw)) return true;
+  return /^(?:DAY\s+OFF|SHIFT)\s+IN\s+LIEU\b|^IN\s+LL?IEU\b|^PH\s+NOT\s+WORKED$|^PM\s+AUSTIN\s+INSTEAD\s+OF\s+AM$|^MON\s+UNI$|^PM\s+ONLU$|^Y\s+BUT\s+NOT\s+0730$/.test(raw);
+}
+
+function isApprovedDdhClinicalSupportRequestOmission(raw) {
+  if (!/^CS\b/.test(raw)) return false;
+  return /\bNOT\s+ON[- ]?SITE\b|\bPLS?\b|\bWORKED\s+\d{1,2}\/\d{1,2}\b|\/OFF\b|\bONLY\b|\(MONDAY\)|PVUS\s+WORKSHOP|WBA\s+COORDINATOR/.test(raw);
 }
 
 // A retained-file reparse is written under a staging id. This method performs

@@ -2802,6 +2802,15 @@ function normalizeGenericDdhLabel(label) {
   const period = extractDdhPeriod(cleaned);
   const upper = cleaned.toUpperCase();
 
+  if (/^CS\s+TOX$/.test(upper)) {
+    return {
+      kind: "shift",
+      titleParts: { base: "CS Tox", period: "", suffix: "" },
+      allDay: true,
+      status: "ok",
+      warning: "",
+    };
+  }
   if (/^TOX(?:\s+(?:CLINICAL\s+SUPPORT|CS))?$/.test(upper)) {
     return {
       kind: "shift",
@@ -2824,6 +2833,49 @@ function normalizeGenericDdhLabel(label) {
     return {
       kind: "shift",
       titleParts: { base: "TOX", period: "", suffix: "" },
+      allDay: true,
+      status: "ok",
+      warning: "",
+    };
+  }
+  // These are DDH Clinical Support labels, written in a mixture of long
+  // form, shorthand, and recurring spelling mistakes. They are all-day
+  // allocations; a paired external-service note is deliberately handled
+  // separately and never becomes a DDH event.
+  if (/^(?:CLINICAL\s+SUPPORT(?:\s+AM)?|CS\s*AM|CSAM|(?:CLIICAL|CLIINCAL|CLINCAIL|CLINCIAL)\s+SUPPORT)$/.test(upper)) {
+    return {
+      kind: "shift",
+      titleParts: { base: "CS", period: "", suffix: "" },
+      allDay: true,
+      status: "ok",
+      warning: "",
+    };
+  }
+  // A small number of cells use the standalone word "clinical" after an
+  // adjacent Annual Leave marker. Preserve it as the roster writer entered
+  // it rather than treating it as an unresolved code.
+  if (upper === "CLINICAL") {
+    return {
+      kind: "shift",
+      titleParts: { base: "Clinical", period: "", suffix: "" },
+      allDay: true,
+      status: "ok",
+      warning: "",
+    };
+  }
+  if (/^CS\s*-?\s*ON[- ]?SITE$/.test(upper)) {
+    return {
+      kind: "shift",
+      titleParts: { base: "CS onsite", period: "", suffix: "" },
+      allDay: true,
+      status: "ok",
+      warning: "",
+    };
+  }
+  if (upper === "OSCE") {
+    return {
+      kind: "shift",
+      titleParts: { base: "CS Exam", period: "", suffix: "" },
       allDay: true,
       status: "ok",
       warning: "",
@@ -2875,7 +2927,7 @@ function normalizeDdhRosterSlotLabel(value) {
       warning: "",
     };
   }
-  if (/^(?:EXTRA\s+)?SWING$/.test(upper)) {
+  if (/^(?:EXTRA\s+)?SWING(?:\s+FT)?$/.test(upper)) {
     return {
       kind: "shift",
       titleParts: { base: "Swing shift", period: "", suffix: "" },
@@ -2987,8 +3039,8 @@ function shouldIgnoreDdh(value, seniority = UNKNOWN_SENIORITY) {
   if (isDdhClinicalSupportExam(upper)) return false;
   if (isDdhStructuralAnnotation(upper, seniority)) return true;
   if (isDdhRosterWriterMessage(upper)) return true;
-  if (upper === "DAY OFF IN LIEU") return true;
-  if (/^CS\s+NOT\s+ONSITE\s+PLS?\b/.test(upper)) return true;
+  if (/^(?:DAY\s+OFF|SHIFT)\s+IN\s+LIEU\b/.test(upper) || /^IN\s+LL?IEU\b/.test(upper)) return true;
+  if (isDdhClinicalSupportRequest(upper)) return true;
   if (DDH_IGNORE_PREFIXES.some((prefix) => upper.startsWith(prefix))) return true;
   return DDH_IGNORE_CONTAINS.some((fragment) => upper.includes(fragment));
 }
@@ -3001,13 +3053,23 @@ function isDdhRosterWriterMessage(value) {
   if (/^C\/S\s+FOR\s+\d{1,2}\/\d{1,2}(?:\/\d{2,4})?$/.test(upper)) return true;
   if (/^CAN\s+WORK(?:\s+\d+\s+EXTRA\s+THIS\s+WEEK)?$/.test(upper)) return true;
   if (/^CAN['’]?T\s+DO\s+THIS\s+WEEKEND(?:,?\s+SORRY!?)?$/.test(upper)) return true;
-  return /\b\d+\s+SHIFTS?\s+THIS\s+WEEK\b.*\b(?:MAKE\s+UP|NEXT\s+WEEK)\b/.test(upper);
+  if (/\b\d+\s+SHIFTS?\s+THIS\s+WEEK\b.*\b(?:MAKE\s+UP|NEXT\s+WEEK)\b/.test(upper)) return true;
+  if (/^(?:\(\s*PREFERRED\s*\)|SEE\s+\S+|WORK(?:ING|DED)\s+\d{1,2}\/\d{1,2}|MOVED\s+TO\s+(?:SAT|SUN)\b|CLINICAL\s+SHIFT\s+MOVED\b)/.test(upper)) return true;
+  if (/^(?:SUN|SA|SAT|=|L|WWEEEEWE)$/.test(upper)) return true;
+  if (/^(?:PH\s+NOT\s+WORKED|PM\s+AUSTIN\s+INSTEAD\s+OF\s+AM|MON\s+UNI|PM\s+ONLU|Y\s+BUT\s+NOT\s+0730)$/.test(upper)) return true;
+  return false;
+}
+
+function isDdhClinicalSupportRequest(value) {
+  const upper = String(value || "").replace(/\s+/g, " ").trim().toUpperCase();
+  if (!/^CS\b/.test(upper)) return false;
+  return /\bNOT\s+ON[- ]?SITE\b|\bPLS?\b|\bWORKED\s+\d{1,2}\/\d{1,2}\b|\/OFF\b|\bONLY\b|\(MONDAY\)|PVUS\s+WORKSHOP|WBA\s+COORDINATOR/.test(upper);
 }
 
 function isDdhLateEarlyExternalReference(label, supplementaryValue) {
   const time = String(label || "").replace(/\s+/g, "").toUpperCase();
   const reference = cleanText(supplementaryValue).replace(/\s+/g, " ").trim().toUpperCase();
-  return /^0?8(?:H|:)?00$/.test(time) && /\bVHH\b/.test(reference);
+  return /^(?:0?8(?:H|:)?00|10(?:H|:)?00|14(?:H|:)?30)$/.test(time) && /\bVHH\b/.test(reference);
 }
 
 function isDdhClinicalSupportExam(value) {
@@ -3991,7 +4053,7 @@ function isMmcClinicalSupportExam(value) {
 // Keep these labels out of calendars before any generic shift fallback sees them.
 function isOtherHospitalReference(source, value) {
   const upper = cleanText(value).replace(/\s+/g, " ").trim().toUpperCase();
-  if (/\b(?:HITH|VHH|ARV|WARRAGUL)\b/.test(upper)) return true;
+  if (/\b(?:HITH|HTIH)(?:AM|PM)?\b|\b(?:VHH|ARV|WARRAGUL)\b/.test(upper)) return true;
   if (source !== "DDH" && /\bTOX\b/.test(upper)) return true;
   if (source !== "MCH" && /\bPAEDS\b/.test(upper)) return true;
   if (source === "DDH" && /\b(?:AED|PED)\b/.test(upper)) return true;
