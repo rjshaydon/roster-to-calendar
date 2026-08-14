@@ -330,13 +330,17 @@ export async function onRequestPost(context) {
       // download or reuse the retained workbook.  SharePoint remains
       // push-only: its Microsoft 365 credentials stay in Power Automate.
       if (source.provider === "findmyshift") {
+        const historicalRange = sanitizeFindmyshiftHistoricalRange(body?.range);
+        if (body?.range && !historicalRange) {
+          return Response.json({ error: "A historical FindMyShift range must be valid and no longer than one term." }, { status: 422 });
+        }
         const response = await fetch(new URL("/api/automation/findmyshift-check", context.request.url), {
           method: "POST",
           headers: {
             Authorization: `Bearer ${String(context.env.ROSTER_AUTOMATION_TOKEN || "").trim()}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ force: true }),
+          body: JSON.stringify({ force: true, ...(historicalRange ? { range: historicalRange } : {}) }),
         });
         const result = await response.json().catch(() => ({}));
         if (!response.ok || !result?.ok) {
@@ -1801,6 +1805,15 @@ export async function onRequestPost(context) {
     const status = message === "Incorrect password." || message.startsWith("Account not found") ? 401 : 400;
     return Response.json({ error: message }, { status });
   }
+}
+
+function sanitizeFindmyshiftHistoricalRange(value) {
+  if (!value || typeof value !== "object") return null;
+  const from = String(value.from || "").trim();
+  const to = String(value.to || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) return null;
+  const durationDays = Math.round((new Date(`${to}T00:00:00Z`).getTime() - new Date(`${from}T00:00:00Z`).getTime()) / 86_400_000) + 1;
+  return durationDays > 0 && durationDays <= 100 ? { from, to } : null;
 }
 
 function validateDerivedCalendarPayload(doctors, eventsByDoctor, options = {}) {

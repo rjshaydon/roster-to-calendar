@@ -1426,7 +1426,10 @@ accountsBody.addEventListener("click", (event) => {
   const refreshAutomatedSourceButton = event.target.closest("[data-refresh-automated-source]");
   if (refreshAutomatedSourceButton) {
     if (!canRemoveImports()) return;
-    void refreshAutomatedRosterSource(refreshAutomatedSourceButton.dataset.refreshAutomatedSource);
+    void refreshAutomatedRosterSource(refreshAutomatedSourceButton.dataset.refreshAutomatedSource, {
+      from: refreshAutomatedSourceButton.dataset.findmyshiftRangeFrom || "",
+      to: refreshAutomatedSourceButton.dataset.findmyshiftRangeTo || "",
+    });
     return;
   }
   const openFilePickerButton = event.target.closest("[data-open-file-picker]");
@@ -3064,7 +3067,7 @@ function renderAdminFilesMarkup({ canRemove = false, canAdd = false } = {}) {
       <section class="admin-file-section" aria-labelledby="admin-auto-sync-heading">
         <h3 id="admin-auto-sync-heading">Auto-sync</h3>
         <div class="admin-file-list admin-auto-sync-list">
-          ${sourceStatuses.map((source) => renderAdminAutoSyncRow(source, displayFiles, terms)).join("") || `<article class="issue-card"><p>No automated roster sources are configured.</p></article>`}
+          ${sourceStatuses.map((source) => renderAdminAutoSyncRow(source, displayFiles, terms, { allowHistoricBackfill: canRemove })).join("") || `<article class="issue-card"><p>No automated roster sources are configured.</p></article>`}
         </div>
       </section>
       <section class="admin-file-section" aria-labelledby="admin-manual-imports-heading">
@@ -3129,7 +3132,7 @@ function adminPreviousRosterFileCompare(left, right) {
     || String(left.name || "").localeCompare(String(right.name || ""));
 }
 
-function renderAdminAutoSyncRow(source, files, terms) {
+function renderAdminAutoSyncRow(source, files, terms, { allowHistoricBackfill = false } = {}) {
   const sourceFiles = files.filter((file) => String(file?.sourceId || "") === String(source.id || ""));
   const fallbackNames = new Set((source.activeFileNames || [source.activeFileName]).filter(Boolean));
   const matchingFiles = sourceFiles.length ? sourceFiles : files.filter((file) => fallbackNames.has(file?.name));
@@ -3145,6 +3148,9 @@ function renderAdminAutoSyncRow(source, files, terms) {
   // status can remain stale while a background worker reports its final
   // result, so it must not keep the icon spinning after success or failure.
   const refreshInProgress = activeAutomatedSourceRefreshIds.has(String(source.id || ""));
+  const historicBackfill = allowHistoricBackfill && source.id === "dandenong-findmyshift"
+    ? `<div class="admin-auto-sync-history"><span>Historic recovery</span><button type="button" class="button button-secondary" data-refresh-automated-source="${escapeHtml(source.id)}" data-findmyshift-range-from="2026-02-02" data-findmyshift-range-to="2026-05-03"${refreshInProgress ? " disabled" : ""}>Sync DDH Term 1</button><button type="button" class="button button-secondary" data-refresh-automated-source="${escapeHtml(source.id)}" data-findmyshift-range-from="2026-05-04" data-findmyshift-range-to="2026-08-02"${refreshInProgress ? " disabled" : ""}>Sync DDH Term 2</button></div>`
+    : "";
   return `
     <article class="admin-file-row admin-auto-sync-row roster-source-${escapeHtml(source.state || "unknown")}">
       <div class="admin-auto-sync-heading"><strong>${escapeHtml(source.label)}</strong><button type="button" class="file-reparse file-reparse-visible${refreshInProgress ? " is-processing" : ""}" aria-label="${escapeHtml(refreshTitle)}" title="${escapeHtml(refreshInProgress ? "Refresh in progress" : refreshTitle)}" aria-busy="${refreshInProgress}" data-refresh-automated-source="${escapeHtml(source.id)}"${refreshInProgress ? " disabled" : ""}><span class="file-reparse-icon" aria-hidden="true">↻</span></button></div>
@@ -3155,6 +3161,7 @@ function renderAdminAutoSyncRow(source, files, terms) {
         ${nextFile ? renderAdminAutoTermDetail("Next term", nextFile) : ""}
       </dl>
       ${operationalNote}
+      ${historicBackfill}
     </article>
   `;
 }
@@ -16357,31 +16364,35 @@ async function reparseRosterFile(id) {
   }
 }
 
-async function refreshAutomatedRosterSource(sourceId) {
+async function refreshAutomatedRosterSource(sourceId, historicalRange = null) {
   const id = String(sourceId || "");
   if (!id || activeAutomatedSourceRefreshIds.has(id)) return;
   const source = (calendarStoreStatus?.rosterSourceStatuses || []).find((item) => item?.id === sourceId);
   const label = String(source?.label || "Automated roster");
   const canCheckProvider = source?.provider === "findmyshift";
+  const range = /^\d{4}-\d{2}-\d{2}$/.test(String(historicalRange?.from || "")) && /^\d{4}-\d{2}-\d{2}$/.test(String(historicalRange?.to || ""))
+    ? { from: historicalRange.from, to: historicalRange.to }
+    : null;
+  const operationLabel = range ? `${label} (${range.from} to ${range.to})` : label;
   const previousSuccessAt = String(source?.lastSuccessAt || "");
   activeAutomatedSourceRefreshIds.add(id);
   renderFileSurfaces();
   try {
-    setStatus(canCheckProvider ? `Checking ${label} for a newer roster...` : `Queueing ${label} to reprocess...`);
-    const result = await calendarStoreRequest("refreshAutomatedRosterSource", { sourceId: id });
+    setStatus(range ? `Queueing ${operationLabel} for historical recovery...` : canCheckProvider ? `Checking ${label} for a newer roster...` : `Queueing ${label} to reprocess...`);
+    const result = await calendarStoreRequest("refreshAutomatedRosterSource", { sourceId: id, ...(range ? { range } : {}) });
     await refreshCalendarStoreStatus({ silent: true });
     const status = String(result?.status || "queued");
     if (status === "reprocess-queued") {
-      setStatus(`${label} reprocessing has been queued.`);
+      setStatus(`${operationLabel} reprocessing has been queued.`);
     } else if (status === "queued") {
-      setStatus(`${label} has changed online and the latest roster has been queued for processing.`);
+      setStatus(`${operationLabel} has been queued for processing.`);
     } else if (status === "processing") {
       setStatus(`${label} is already being processed.`);
     } else {
-      setStatus(`${label} refresh is ${status.replace(/-/g, " ")}.`);
+      setStatus(`${operationLabel} refresh is ${status.replace(/-/g, " ")}.`);
     }
     if (["queued", "processing", "reprocess-queued"].includes(status)) {
-      await waitForAutomatedRosterSourceRefresh(id, label, previousSuccessAt, result?.queue?.runIds);
+      await waitForAutomatedRosterSourceRefresh(id, operationLabel, previousSuccessAt, result?.queue?.runIds);
     }
   } catch (error) {
     setStatus(error.message || `Could not refresh ${label}.`, true);

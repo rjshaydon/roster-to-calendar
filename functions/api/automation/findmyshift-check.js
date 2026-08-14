@@ -21,7 +21,11 @@ export async function onRequestPost(context) {
   const requestBody = await context.request.json().catch(() => ({}));
   const force = requestBody?.force === true;
   const current = await loadRosterSource(context.env.ROSTER_DB, SOURCE_ID);
-  const range = findmyshiftConfiguredRosterRange(context.env);
+  const requestedRange = findmyshiftRequestedRosterRange(requestBody?.range);
+  if (requestBody?.range && !requestedRange) {
+    return Response.json({ ok: false, status: "invalid-range", error: "A historical FindMyShift range must have valid dates no longer than one term." }, { status: 422 });
+  }
+  const range = requestedRange || findmyshiftConfiguredRosterRange(context.env);
   let providerVersion = "";
   try {
     providerVersion = await findmyshiftLastModified(apiKey, teamId);
@@ -115,6 +119,17 @@ export async function onRequestPost(context) {
         : "FindMyShift roster check failed.",
     }, { status: 502 });
   }
+}
+
+function findmyshiftRequestedRosterRange(value) {
+  if (!value || typeof value !== "object") return null;
+  const from = String(value.from || "").trim();
+  const to = String(value.to || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) return null;
+  const fromDate = new Date(`${from}T00:00:00Z`);
+  const toDate = new Date(`${to}T00:00:00Z`);
+  const durationDays = Math.round((toDate.getTime() - fromDate.getTime()) / 86_400_000) + 1;
+  return durationDays > 0 && durationDays <= 100 ? { from, to } : null;
 }
 
 async function queueCurrentFindmyshiftReprocess(env, providerVersion, now) {
