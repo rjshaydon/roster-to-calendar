@@ -140,8 +140,9 @@ const MMC_SECTION_MARKERS = new Set([
   "INTERN",
   "LOCUM",
 ]);
+// Intern is a populated MMC roster section. Locum is the first non-rostered
+// section after it, so only Locum ends the normal clinician scan.
 const MMC_STOP_SECTIONS = new Set([
-  "INTERN",
   "LOCUM",
 ]);
 const DDH_SECTION_MARKERS = new Set([

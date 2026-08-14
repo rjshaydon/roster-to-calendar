@@ -2228,6 +2228,27 @@ assert.ok(shiftedMmcEvents.some((event) => event.title === "MMC: CSM" && event.r
 assert.ok(shiftedMmcEvents.some((event) => event.title === "MMC: CS OS" && event.rawValue === "0800-1730 CS OS"), "CS OS should be a recognised MMC shift");
 assert.ok(shiftedMmcEvents.some((event) => event.title === "MMC: CS Exam" && event.rawValue === "0800-1730 CS Exam" && event.allDay), "CS Exam should be a recognised all-day MMC event");
 
+const mmcInternWorkbook = XLSX.utils.book_new();
+const mmcInternRows = Array.from({ length: 10 }, () => []);
+mmcInternRows[2] = ["Role", "Pager No", "", "Cost Centre", "Name (Not Used)", "Emp No", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+mmcInternRows[3] = ["Date", "", "", "", "", "", new Date("2026-08-10T00:00:00Z"), new Date("2026-08-11T00:00:00Z"), new Date("2026-08-12T00:00:00Z"), new Date("2026-08-13T00:00:00Z"), new Date("2026-08-14T00:00:00Z"), new Date("2026-08-15T00:00:00Z"), new Date("2026-08-16T00:00:00Z")];
+mmcInternRows[5] = ["", "", "", "INTERN"];
+mmcInternRows[6] = ["", "", "", "", "Aaron Mahoney", "703292", "0900-1300", "1230-1800 SWA", "1430-0000 SWA", "1430-0000", "1430-0000", "", ""];
+mmcInternRows[7] = ["", "", "", "LOCUM"];
+mmcInternRows[8] = ["", "", "", "", "Must Not Parse", "", "0800-1730", "", "", "", "", "", ""];
+XLSX.utils.book_append_sheet(mmcInternWorkbook, XLSX.utils.aoa_to_sheet([[]]), "Whole thing");
+XLSX.utils.book_append_sheet(mmcInternWorkbook, XLSX.utils.aoa_to_sheet(mmcInternRows, { cellDates: true }), "Week 2");
+const mmcInternUpload = new FormData();
+mmcInternUpload.append("rosterFiles", workbookFile(mmcInternWorkbook, "AdultTerm3.2026.xlsx"));
+const parsedMmcInternUpload = await parseUploadForm(new Request("http://fixture.test/api/analyze", { method: "POST", body: mmcInternUpload }));
+const aaronIntern = doctorOptions(parsedMmcInternUpload.sources.mmc, []).find((doctor) => doctor.key === "AARON MAHONEY");
+assert.ok(aaronIntern, "MMC parsing should retain clinicians below the INTERN section heading");
+assert.equal(doctorOptions(parsedMmcInternUpload.sources.mmc, []).some((doctor) => doctor.key === "MUST NOT PARSE"), false, "MMC parsing should still stop at the LOCUM section");
+const aaronInternEvents = buildRosterView(parsedMmcInternUpload.sources.mmc, [], aaronIntern.key).events;
+assert.equal(aaronInternEvents.length, 5, "MMC Intern rows should produce every rostered shift");
+assert.ok(aaronInternEvents.every((event) => event.seniority === "Intern"), "MMC Intern rows should retain Intern seniority");
+assert.ok(aaronInternEvents.some((event) => event.title === "MMC: Swing AM" && event.start.includes("12:30:00")), "MMC Intern swing allocations should use the normal MMC shift rules");
+
 await assertRejectsMixedTermUpload(
   "MMC date typo should identify the worksheet and cell",
   withWorkbookDate(mmcWorkbook, "Week 1", "H4", new Date("2025-02-17T00:00:00")),
