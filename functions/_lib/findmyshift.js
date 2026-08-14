@@ -491,11 +491,26 @@ function pairFindmyshiftTimeAndStreamRows(rows) {
 // entries), so the one verified site-specific rule is that an otherwise
 // unassigned timed row for him is Clinical Support. Shankar Thapaliya's
 // corresponding entries are supported shifts: the second line names the
-// clinician she is paired with, not a stream. Keep both rules narrow: neither
-// alters a named DDH stream nor guesses one from the paired clinician.
+// clinician she is paired with, not a stream. The date-scoped entries below
+// are separately verified corrections for the published Term 3 roster. Keep
+// every rule narrow: none alters a named DDH stream nor guesses one from the
+// paired clinician.
 function applyKnownDandenongFindmyshiftAssignment(row) {
   if (!isAmbiguousFindmyshiftTimedRow(row)) return row;
   const name = normalizeFindmyshiftStaffName(row?.name);
+  const key = `${name}|${String(row?.date || "").slice(0, 10)}`;
+  const approvedLabels = {
+    "LISETH JALABE|2026-08-04": "Paired AM",
+    "LISETH JALABE|2026-08-05": "Paired AM",
+    "LISETH JALABE|2026-08-06": "Paired AM",
+    "LISETH JALABE|2026-08-07": "Paired AM",
+    "STELLA TRAN|2026-08-04": "Paired AM",
+    "STELLA TRAN|2026-08-05": "Paired AM",
+    "STELLA TRAN|2026-08-06": "Paired AM",
+    "STELLA TRAN|2026-08-07": "Paired AM",
+    "DI FLOOD|2026-08-13": "S/L",
+  };
+  if (approvedLabels[key]) return { ...row, label: approvedLabels[key], pairingIssue: "" };
   if (name === "KIM WHELAN") return { ...row, label: "CS", pairingIssue: "" };
   if (name === "SHANKAR THAPALIYA") return { ...row, label: "Paired AM", pairingIssue: "" };
   return row;

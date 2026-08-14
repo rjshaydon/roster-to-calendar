@@ -1564,6 +1564,14 @@ function parseFindmyshiftDdhRecords(workbook, doctorKey) {
     const facility = cleanText(rawFacility);
     const comment = cleanText(rawComment);
     let record;
+    // FindMyShift occasionally attaches the source time range to leave. Leave
+    // remains an all-day absence, so resolve it before turning timed rows into
+    // rostered shifts (for example Di Flood's verified S/L entry).
+    const leaveRecord = createRecognizedLeaveRecord("DDH", day, label, seniority);
+    if (leaveRecord) {
+      records.push(leaveRecord);
+      continue;
+    }
     if (startHm && endHm) {
       const resolved = label.toUpperCase() === "SHIFT" ? null : resolveDdhShiftLabel(label, seniority);
       if (resolved?.normalized?.includeAsShift === false) continue;
@@ -2932,6 +2940,15 @@ function normalizeDdhRosterSlotLabel(value) {
       kind: "shift",
       titleParts: { base: "Swing shift", period: "", suffix: "" },
       allDay: true,
+      status: "ok",
+      warning: "",
+    };
+  }
+  if (/^PAIRED\s+(AM|PM)$/.test(upper)) {
+    const [, period] = upper.match(/^PAIRED\s+(AM|PM)$/);
+    return {
+      kind: "shift",
+      titleParts: { base: "Paired", period, suffix: "" },
       status: "ok",
       warning: "",
     };

@@ -3067,7 +3067,7 @@ function renderAdminFilesMarkup({ canRemove = false, canAdd = false } = {}) {
       <section class="admin-file-section" aria-labelledby="admin-auto-sync-heading">
         <h3 id="admin-auto-sync-heading">Auto-sync</h3>
         <div class="admin-file-list admin-auto-sync-list">
-          ${sourceStatuses.map((source) => renderAdminAutoSyncRow(source, displayFiles, terms, { allowHistoricBackfill: canRemove })).join("") || `<article class="issue-card"><p>No automated roster sources are configured.</p></article>`}
+          ${sourceStatuses.map((source) => renderAdminAutoSyncRow(source, displayFiles, terms)).join("") || `<article class="issue-card"><p>No automated roster sources are configured.</p></article>`}
         </div>
       </section>
       <section class="admin-file-section" aria-labelledby="admin-manual-imports-heading">
@@ -3132,7 +3132,7 @@ function adminPreviousRosterFileCompare(left, right) {
     || String(left.name || "").localeCompare(String(right.name || ""));
 }
 
-function renderAdminAutoSyncRow(source, files, terms, { allowHistoricBackfill = false } = {}) {
+function renderAdminAutoSyncRow(source, files, terms) {
   const sourceFiles = files.filter((file) => String(file?.sourceId || "") === String(source.id || ""));
   const fallbackNames = new Set((source.activeFileNames || [source.activeFileName]).filter(Boolean));
   const matchingFiles = sourceFiles.length ? sourceFiles : files.filter((file) => fallbackNames.has(file?.name));
@@ -3148,9 +3148,6 @@ function renderAdminAutoSyncRow(source, files, terms, { allowHistoricBackfill = 
   // status can remain stale while a background worker reports its final
   // result, so it must not keep the icon spinning after success or failure.
   const refreshInProgress = activeAutomatedSourceRefreshIds.has(String(source.id || ""));
-  const historicBackfill = allowHistoricBackfill && source.id === "dandenong-findmyshift"
-    ? `<div class="admin-auto-sync-history"><span>Historic recovery</span><button type="button" class="button button-secondary" data-refresh-automated-source="${escapeHtml(source.id)}" data-findmyshift-range-from="2026-02-02" data-findmyshift-range-to="2026-05-03"${refreshInProgress ? " disabled" : ""}>Sync DDH Term 1</button><button type="button" class="button button-secondary" data-refresh-automated-source="${escapeHtml(source.id)}" data-findmyshift-range-from="2026-05-04" data-findmyshift-range-to="2026-08-02"${refreshInProgress ? " disabled" : ""}>Sync DDH Term 2</button></div>`
-    : "";
   return `
     <article class="admin-file-row admin-auto-sync-row roster-source-${escapeHtml(source.state || "unknown")}">
       <div class="admin-auto-sync-heading"><strong>${escapeHtml(source.label)}</strong><button type="button" class="file-reparse file-reparse-visible${refreshInProgress ? " is-processing" : ""}" aria-label="${escapeHtml(refreshTitle)}" title="${escapeHtml(refreshInProgress ? "Refresh in progress" : refreshTitle)}" aria-busy="${refreshInProgress}" data-refresh-automated-source="${escapeHtml(source.id)}"${refreshInProgress ? " disabled" : ""}><span class="file-reparse-icon" aria-hidden="true">↻</span></button></div>
@@ -3161,7 +3158,6 @@ function renderAdminAutoSyncRow(source, files, terms, { allowHistoricBackfill = 
         ${nextFile ? renderAdminAutoTermDetail("Next term", nextFile) : ""}
       </dl>
       ${operationalNote}
-      ${historicBackfill}
     </article>
   `;
 }

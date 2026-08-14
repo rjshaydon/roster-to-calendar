@@ -281,6 +281,24 @@ assert.doesNotThrow(
   () => assertFindmyshiftDandenongAssignments(shankarSupportedRows),
   "Shankar Thapaliya's verified paired AM allocation should resolve without guessing a DDH stream",
 );
+const approvedDdhExceptionRows = extractShiftRows([
+  { staffId: "liseth", facilityId: null, date: "2026-08-04", firstName: "Liseth", lastName: "Jalabe", payrollId: null, occurrences: 1, shift: "08:00-17:30" },
+  { staffId: "stella", facilityId: null, date: "2026-08-07", firstName: "Stella", lastName: "Tran", payrollId: null, occurrences: 1, shift: "08:00-17:30" },
+  { staffId: "di", facilityId: null, date: "2026-08-13", firstName: "Di", lastName: "Flood", payrollId: null, occurrences: 1, shift: "14:30-00:00" },
+]);
+assert.deepEqual(
+  approvedDdhExceptionRows.map((row) => ({ name: row.name, date: row.date, label: row.label, start: row.start, end: row.end, facility: row.facility })),
+  [
+    { name: "Liseth Jalabe", date: "2026-08-04", label: "Paired AM", start: "08:00", end: "17:30", facility: "" },
+    { name: "Stella Tran", date: "2026-08-07", label: "Paired AM", start: "08:00", end: "17:30", facility: "" },
+    { name: "Di Flood", date: "2026-08-13", label: "S/L", start: "14:30", end: "00:00", facility: "" },
+  ],
+  "approved date-scoped DDH exceptions should resolve without widening the stream-assignment rule",
+);
+assert.doesNotThrow(
+  () => assertFindmyshiftDandenongAssignments(approvedDdhExceptionRows),
+  "approved date-scoped DDH exceptions should satisfy the stream-completeness gate",
+);
 assert.deepEqual(
   findmyshiftRows.map((row) => ({ date: row.date, label: row.label, start: row.start, end: row.end, facility: row.facility, seniority: row.seniority, comment: row.comment })),
   [
@@ -311,8 +329,8 @@ const findmyshiftFormData = new FormData();
 findmyshiftFormData.append("rosterFiles", workbookFile(findmyshiftWorkbook, "Dandenong-FindMyShift-fixture.xlsx"));
 const findmyshiftUpload = await parseUploadForm(new Request("http://fixture.test/api/analyze", { method: "POST", body: findmyshiftFormData }));
 const findmyshiftSource = findmyshiftUpload.sources.ddh[0];
-const ddhCanonicalLabels = ["Orange PM (on-call)", "SSU SMS", "Orange IC", "Silver IC", "PM FAST IC"];
-const ddhCanonicalTitles = ["DDH: Orange PM", "DDH: SSU", "DDH: Orange", "DDH: Silver", "DDH: FAST PM"];
+const ddhCanonicalLabels = ["Orange PM (on-call)", "SSU SMS", "Orange IC", "Silver IC", "PM FAST IC", "Paired AM"];
+const ddhCanonicalTitles = ["DDH: Orange PM", "DDH: SSU", "DDH: Orange", "DDH: Silver", "DDH: FAST PM", "DDH: Paired AM"];
 const ddhCanonicalManualWorkbook = XLSX.utils.book_new();
 XLSX.utils.book_append_sheet(ddhCanonicalManualWorkbook, XLSX.utils.aoa_to_sheet([
   ["", "Mon. Aug. 03, 2026", "Tue. Aug. 04, 2026", "Wed. Aug. 05, 2026", "Thu. Aug. 06, 2026", "Fri. Aug. 07, 2026", "Sat. Aug. 08, 2026", "Sun. Aug. 09, 2026"],
@@ -390,7 +408,7 @@ const unknownInternEvent = buildRosterView([], unknownInternUpload.sources.ddh, 
 assert.equal(unknownInternEvent.seniority, "Intern", "FindMyShift labels should supply seniority when staff metadata says Unknown");
 const findmyshiftLeaveWorkbook = XLSX.read(findmyshiftRowsWorkbook([
   { sourceStaffId: "leave-doctor", name: "Ananth Sundaralingam", seniority: "SMS", date: "2026-08-10", label: "SL MMC", start: "", end: "", facility: "", comment: "" },
-  { sourceStaffId: "leave-doctor", name: "Ananth Sundaralingam", seniority: "SMS", date: "2026-08-11", label: "S/L", start: "", end: "", facility: "", comment: "" },
+  { sourceStaffId: "leave-doctor", name: "Ananth Sundaralingam", seniority: "SMS", date: "2026-08-11", label: "S/L", start: "14:30", end: "00:00", facility: "", comment: "" },
   { sourceStaffId: "leave-doctor", name: "Ananth Sundaralingam", seniority: "SMS", date: "2026-08-12", label: "Annual leave 19hrs", start: "", end: "", facility: "", comment: "" },
 ]), { type: "array", cellDates: true });
 const findmyshiftLeaveFormData = new FormData();
@@ -404,7 +422,7 @@ assert.deepEqual(
     ["Sick leave", "2026-08-11", "2026-08-12"],
     ["Annual Leave", "2026-08-12", "2026-08-13"],
   ],
-  "structured FindMyShift imports must preserve SL sabbatical, S/L sick leave, and annotated annual leave as distinct one-day entries",
+  "structured FindMyShift imports must preserve SL sabbatical, timed S/L sick leave, and annotated annual leave as distinct one-day entries",
 );
 const findmyshiftLeaveAutomatedPayload = await buildAutomatedDerivedRosterPayload({
   file: workbookFile(findmyshiftLeaveWorkbook, "Dandenong-FindMyShift-leave.xlsx"),
