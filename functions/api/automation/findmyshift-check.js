@@ -111,14 +111,29 @@ export async function onRequestPost(context) {
     const lastError = isTransientFindmyshiftRateLimitError(errorMessage) && current?.lastSuccessAt ? "" : errorMessage;
     await saveSource(context, current, { lastCheckedAt: now, lastError });
     const incomplete = error?.code === "findmyshift-incomplete-ddh-assignment" || isIncompleteDandenongAssignmentError(error?.message);
+    const exceptions = Array.isArray(error?.findmyshiftAssignmentExceptions)
+      ? error.findmyshiftAssignmentExceptions.slice(0, 20)
+      : [];
     return Response.json({
       ok: false,
       status: incomplete ? "incomplete" : "failed",
       error: incomplete
-        ? "FindMyShift did not provide Dandenong stream details for every timed shift, so no ambiguous roster was imported."
+        ? incompleteFindmyshiftAssignmentMessage(exceptions)
         : "FindMyShift roster check failed.",
+      ...(incomplete ? { exceptionCount: exceptions.length, exceptions } : {}),
     }, { status: 502 });
   }
+}
+
+function incompleteFindmyshiftAssignmentMessage(exceptions = []) {
+  const details = exceptions.map((entry) => {
+    const name = String(entry?.staffName || "Unknown clinician").trim();
+    const date = String(entry?.date || "unknown date").trim();
+    const time = [entry?.start, entry?.end].filter(Boolean).join("-") || "unknown time";
+    return `${name} ${date} ${time}`;
+  }).filter(Boolean);
+  const preview = details.length ? ` Review: ${details.join("; ")}.` : "";
+  return `FindMyShift did not provide Dandenong stream details for every timed shift, so no ambiguous roster was imported.${preview}`;
 }
 
 function findmyshiftRequestedRosterRange(value) {

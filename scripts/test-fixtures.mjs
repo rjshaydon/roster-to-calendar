@@ -239,9 +239,13 @@ assert.doesNotThrow(
   "FindMyShift rows that retain a facility must remain importable",
 );
 assert.throws(
-  () => assertFindmyshiftDandenongAssignments([{ label: "Shift", start: "14:30", end: "00:00", facility: "" }]),
-  /did not include a stream or facility/i,
-  "FindMyShift rows without a stream or facility must be rejected rather than guessed",
+  () => assertFindmyshiftDandenongAssignments([{ name: "Example Doctor", date: "2026-08-06", label: "Shift", start: "14:30", end: "00:00", facility: "" }]),
+  (error) => {
+    assert.match(error.message, /did not include a stream or facility/i);
+    assert.deepEqual(error.findmyshiftAssignmentExceptions, [{ staffName: "Example Doctor", date: "2026-08-06", start: "14:30", end: "00:00", reason: "time without named stream" }]);
+    return true;
+  },
+  "FindMyShift rows without a stream or facility must be rejected rather than guessed and identify the rows for review",
 );
 assert.deepEqual(
   findmyshiftDandenongAssignmentDiagnostics([{ label: "Shift", start: "14:30", end: "00:00", facility: "", pairingIssue: "named-stream-before-time" }]),

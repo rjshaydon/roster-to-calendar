@@ -133,6 +133,7 @@ export function assertFindmyshiftDandenongAssignments(rows = []) {
     `FindMyShift did not include a stream or facility for ${diagnostics.ambiguousTimed} timed roster entries${layouts ? ` (${layouts})` : ""}. Automatic import was stopped so ambiguous Dandenong shifts cannot replace the detailed manual roster.`,
   );
   error.code = "findmyshift-incomplete-ddh-assignment";
+  error.findmyshiftAssignmentExceptions = findmyshiftDandenongAssignmentExceptions(rows);
   throw error;
 }
 
