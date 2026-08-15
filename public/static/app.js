@@ -1325,7 +1325,7 @@ accountsBody.addEventListener("change", (event) => {
 accountsBody.addEventListener("click", (event) => {
   const adminTab = event.target.closest("[data-admin-tab]");
   if (adminTab) {
-    const nextTab = adminTab.dataset.adminTab || "errors";
+    const nextTab = adminTab.dataset.adminTab || "parser";
     if (nextTab === "system" || currentAdminTab === "system") {
       adminConsoleOpen = false;
     }
@@ -10834,15 +10834,15 @@ function renderAccountsModal() {
     ? otherUsers.filter((user) => normalizeServerUser(user).seniorities.includes(adminUserSeniorityFilter))
     : otherUsers;
   const linkedNames = renderLinkedRosterNames(currentRosterClaims, currentSuggestedClaims);
-  if (ownerView && !["errors", "system", "users", "files", "owner"].includes(currentAdminTab)) currentAdminTab = "system";
+  if (ownerView && !["parser", "system", "users", "files", "owner"].includes(currentAdminTab)) currentAdminTab = "system";
   const issueCount = adminIssueCount();
   const adminTabs = ownerView ? `
     <div class="admin-tabs" role="tablist" aria-label="Admin sections">
-      <button type="button" class="entrance-tab ${currentAdminTab === "system" ? "is-active" : ""}" data-admin-tab="system">System</button>
-      <button type="button" class="entrance-tab ${currentAdminTab === "errors" ? "is-active" : ""}" data-admin-tab="errors">Errors${issueCount ? `<span class="notification-badge">${issueCount}</span>` : ""}</button>
       <button type="button" class="entrance-tab ${currentAdminTab === "users" ? "is-active" : ""}" data-admin-tab="users">Users</button>
       <button type="button" class="entrance-tab ${currentAdminTab === "files" ? "is-active" : ""}" data-admin-tab="files">Files</button>
       <button type="button" class="entrance-tab ${currentAdminTab === "owner" ? "is-active" : ""}" data-admin-tab="owner">Account</button>
+      <button type="button" class="entrance-tab ${currentAdminTab === "parser" ? "is-active" : ""}" data-admin-tab="parser">Parser${issueCount ? `<span class="notification-badge">${issueCount}</span>` : ""}</button>
+      <button type="button" class="entrance-tab ${currentAdminTab === "system" ? "is-active" : ""}" data-admin-tab="system">System</button>
     </div>
   ` : "";
   const ownerCard = `
@@ -10967,15 +10967,15 @@ function renderAccountsModal() {
         </div>
       </article>
     ` : "";
-  const errorsCard = ownerView ? renderAdminErrorsCard(serverOtherUsers) : "";
+  const parserCard = ownerView ? renderParserAdminCard(serverOtherUsers) : "";
   const systemCard = ownerView ? renderSystemAdminCard() : "";
   const filesCard = ownerView ? renderAdminFilesMarkup({
     canRemove: canRemoveImports(),
     canAdd: true,
   }) : "";
   const adminBody = ownerView
-    ? (currentAdminTab === "errors"
-        ? errorsCard
+    ? (currentAdminTab === "parser"
+        ? parserCard
         : currentAdminTab === "system"
           ? systemCard
           : currentAdminTab === "users"
@@ -10992,7 +10992,6 @@ function renderSystemAdminCard() {
     <div class="issues-list">
       ${renderLoginPerformanceCard()}
       ${renderCalendarStoreCard()}
-      ${renderParserRulesCard()}
     </div>
   `;
 }
@@ -11286,6 +11285,15 @@ function renderParserRulesCard() {
           </details>
         `).join("")}
       </article>
+    </div>
+  `;
+}
+
+function renderParserAdminCard(users) {
+  return `
+    <div class="issues-list">
+      ${renderParserRulesCard()}
+      ${renderAdminErrorsCard(users)}
     </div>
   `;
 }
@@ -12617,7 +12625,7 @@ async function reportAccountError(issue, errorId = "") {
     if (isCreatorAuthenticated()) {
       await loadServerUsers();
       syncAccountsButton();
-      if (!accountsModal.classList.contains("hidden") && currentAdminTab === "errors") renderAccountsModal();
+      if (!accountsModal.classList.contains("hidden") && currentAdminTab === "parser") renderAccountsModal();
     }
   } catch {
     // Keep UI responsive if error reporting fails.
@@ -16495,18 +16503,18 @@ async function loadServerUsers() {
   }
 }
 
-function adminSystemSurfaceReadyForRosterIssueLoad() {
+function adminParserSurfaceReadyForRosterIssueLoad() {
   return isCreatorAuthenticated()
     && isViewingCreatorAccount()
     && cloudAvailable
-    && currentAdminTab === "system"
+    && currentAdminTab === "parser"
     && accountsModal
     && !accountsModal.classList.contains("hidden")
     && Boolean(latestPreview || currentSnapshot);
 }
 
 function queueGlobalUnresolvedShiftCodeLoad(options = {}) {
-  if (!adminSystemSurfaceReadyForRosterIssueLoad()) return;
+  if (!adminParserSurfaceReadyForRosterIssueLoad()) return;
   if (globalUnresolvedShiftCodesLoading) return;
   if (globalUnresolvedShiftCodesLoaded && options.force !== true) return;
   void loadGlobalUnresolvedShiftCodes(options);
@@ -16522,7 +16530,7 @@ function refreshGlobalUnresolvedShiftCodesAfterRuleChange() {
 }
 
 async function loadGlobalUnresolvedShiftCodes() {
-  if (!adminSystemSurfaceReadyForRosterIssueLoad()) return;
+  if (!adminParserSurfaceReadyForRosterIssueLoad()) return;
   const runId = ++globalUnresolvedShiftCodeRunId;
   globalUnresolvedShiftCodesLoading = true;
   globalUnresolvedShiftCodesError = "";
@@ -16539,7 +16547,7 @@ async function loadGlobalUnresolvedShiftCodes() {
   } finally {
     if (runId === globalUnresolvedShiftCodeRunId) {
       globalUnresolvedShiftCodesLoading = false;
-      if (accountsModal && !accountsModal.classList.contains("hidden") && currentAdminTab === "system") renderAccountsModal();
+      if (accountsModal && !accountsModal.classList.contains("hidden") && currentAdminTab === "parser") renderAccountsModal();
       if (shiftCodeReviewModal && !shiftCodeReviewModal.classList.contains("hidden")) renderShiftCodeReviewModal();
     }
   }
