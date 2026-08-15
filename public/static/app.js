@@ -10958,7 +10958,7 @@ function renderAccountsModal() {
       <details class="review-card other-users-card" data-other-users-section ${otherUsersExpanded ? "open" : ""}>
         <summary class="review-top admin-users-header">
           <div class="admin-users-summary">
-            <strong>Other users</strong>
+            <strong>Current users</strong>
             <span>${filteredOtherUsers.length ? `${filteredOtherUsers.length} account${filteredOtherUsers.length === 1 ? "" : "s"}` : otherUsers.length ? "No matching users." : "No other users have logged in yet."}</span>
           </div>
           <label class="field admin-user-filter admin-user-search-filter">
@@ -11035,6 +11035,11 @@ function renderAccountsModal() {
               : ownerCard)
     : ownerCard;
   accountsBody.innerHTML = `${adminTabs}${adminBody}`;
+  if (ownerView && currentAdminTab === "users") {
+    const currentUsersCard = accountsBody.querySelector(".other-users-card");
+    const createUserCard = accountsBody.querySelector(".create-user-card");
+    if (currentUsersCard && createUserCard) accountsBody.insertBefore(currentUsersCard, createUserCard);
+  }
 }
 
 function renderSystemAdminCard() {
