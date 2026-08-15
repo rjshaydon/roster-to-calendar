@@ -3023,6 +3023,15 @@ body[data-skin="console"] .preview-cell.is-weekend {
   color: var(--muted);
 }
 
+.create-user-card > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.create-user-card > summary::-webkit-details-marker {
+  display: none;
+}
+
 .review-body {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -3596,13 +3605,19 @@ body[data-skin="console"] .preview-cell.is-weekend {
 
 .account-user-permissions {
   display: grid;
-  gap: 8px;
+  gap: 4px;
   justify-items: start;
 }
 
-.account-user-card > .account-actions {
-  grid-column: 1 / -1;
-  justify-self: end;
+.account-user-controls {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+}
+
+.account-user-controls .account-actions {
+  gap: 6px;
+  justify-content: flex-start;
 }
 
 .account-claim-editor {
@@ -4285,7 +4300,7 @@ body[data-skin="console"] .panel {
     grid-template-columns: 1fr;
   }
 
-  .account-user-card > .account-actions,
+  .account-user-controls,
   .account-claim-editor {
     grid-column: auto;
   }

@@ -1520,7 +1520,7 @@ createAccountForm.addEventListener("submit", async (event) => {
   const email = normalizeEmail(createEmail.value);
   const password = createPassword.value;
   if (!realName || !email || !password) {
-    setEntranceStatus("Real name, email address, and password are required.", true);
+    setEntranceStatus("Full name on roster, email address, and password are required.", true);
     return;
   }
   await loginWithEmail(email, password, { mode: "create", realName });
@@ -10891,16 +10891,16 @@ function renderAccountsModal() {
     </article>
   `;
   const usersCard = ownerView ? `
-      <article class="review-card">
-        <div class="review-top">
+      <details class="review-card create-user-card">
+        <summary class="review-top">
           <div>
             <strong>Create user account</strong>
             <span>Create an account and enter it immediately for setup or testing.</span>
           </div>
-        </div>
+        </summary>
         <form class="review-body" data-create-account-form>
           <label class="field">
-            <span>Real name</span>
+            <span>Full name on roster</span>
             <input type="text" data-create-real-name placeholder="Name shown to the user" autocomplete="name">
           </label>
           <label class="field">
@@ -10915,7 +10915,7 @@ function renderAccountsModal() {
             <button type="submit" class="button button-primary">Create and enter account</button>
           </div>
         </form>
-      </article>
+      </details>
       <article class="review-card">
         <div class="review-top">
           <div>
@@ -10938,7 +10938,8 @@ function renderAccountsModal() {
                 <p class="account-user-email">${escapeHtml(user.email)}</p>
                 ${renderAdminUserClaims(user)}
               </div>
-              ${user.role === "owner" ? "" : `
+              <div class="account-user-controls">
+                ${user.role === "owner" ? "" : `
                 <div class="account-user-permissions">
                   <label class="toggle review-toggle">
                     <input type="checkbox" ${user.insightsEnabled ? "checked" : ""} data-toggle-user-insights="${escapeHtml(user.email)}">
@@ -10950,10 +10951,11 @@ function renderAccountsModal() {
                   </label>
                 </div>
               `}
-              <div class="account-actions">
-                <button type="button" class="button button-secondary button-small" data-enter-account="${escapeHtml(user.email)}">Enter account</button>
-                ${user.role === "owner" ? "" : `<button type="button" class="button button-secondary button-small" data-edit-roster-claims="${escapeHtml(user.email)}">Edit</button>`}
-                ${user.email !== OWNER_EMAIL ? `<button type="button" class="button button-danger button-small" data-delete-account="${escapeHtml(user.email)}">Delete</button>` : ""}
+                <div class="account-actions">
+                  <button type="button" class="button button-secondary button-small" data-enter-account="${escapeHtml(user.email)}">Enter account</button>
+                  ${user.role === "owner" ? "" : `<button type="button" class="button button-secondary button-small" data-edit-roster-claims="${escapeHtml(user.email)}">Edit</button>`}
+                  ${user.email !== OWNER_EMAIL ? `<button type="button" class="button button-danger button-small" data-delete-account="${escapeHtml(user.email)}">Delete</button>` : ""}
+                </div>
               </div>
               ${user.role === "owner" ? "" : `
                 <div class="account-claim-editor hidden" data-claim-editor="${escapeHtml(user.email)}">
