@@ -347,6 +347,7 @@ let adminUserSeniorityFilter = "";
 let adminUserSearchQuery = "";
 let createUserAccountExpanded = false;
 let otherUsersExpanded = false;
+let otherUsersExpandedBySearch = false;
 const ROSTER_HOSPITAL_SORT_RANK = { mmc: 0, ddh: 1, casey: 2, mch: 3 };
 let calendarStoreStatus = null;
 let calendarStoreStatusError = "";
@@ -1329,6 +1330,13 @@ accountsBody.addEventListener("input", (event) => {
   const searchInput = event.target.closest("[data-admin-user-search]");
   if (!searchInput) return;
   adminUserSearchQuery = String(searchInput.value || "");
+  if (adminUserSearchQuery && !otherUsersExpanded) {
+    otherUsersExpanded = true;
+    otherUsersExpandedBySearch = true;
+  } else if (!adminUserSearchQuery && otherUsersExpandedBySearch) {
+    otherUsersExpanded = false;
+    otherUsersExpandedBySearch = false;
+  }
   renderAccountsModal();
   const replacement = accountsBody.querySelector("[data-admin-user-search]");
   if (!replacement) return;
@@ -1339,7 +1347,10 @@ accountsBody.addEventListener("toggle", (event) => {
   const section = event.target;
   if (!(section instanceof HTMLDetailsElement)) return;
   if (section.matches("[data-create-user-account-section]")) createUserAccountExpanded = section.open;
-  if (section.matches("[data-other-users-section]")) otherUsersExpanded = section.open;
+  if (section.matches("[data-other-users-section]")) {
+    otherUsersExpanded = section.open;
+    if (!section.open) otherUsersExpandedBySearch = false;
+  }
 }, true);
 accountsBody.addEventListener("click", (event) => {
   const adminTab = event.target.closest("[data-admin-tab]");
