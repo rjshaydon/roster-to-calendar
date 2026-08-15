@@ -342,7 +342,7 @@ let lastHistorySignature = "";
 let pendingExportMode = "full";
 let pendingExportRange = defaultExportRangeState();
 let pendingExportHospitals = [];
-let currentAdminTab = "system";
+let currentAdminTab = "users";
 let adminUserSeniorityFilter = "";
 const ROSTER_HOSPITAL_SORT_RANK = { mmc: 0, ddh: 1, casey: 2, mch: 3 };
 let calendarStoreStatus = null;
@@ -1207,13 +1207,13 @@ filesList.addEventListener("click", async (event) => {
   await removeStoredImport(removeButton.dataset.removeImport);
 });
 accountsButton.addEventListener("click", async () => {
-  await openAccountsSurface({ defaultAdminTab: "system" });
+  await openAccountsSurface({ defaultAdminTab: "users" });
 });
 mobileAccountButton?.addEventListener("click", async () => {
-  await openAccountsSurface({ defaultAdminTab: "system" });
+  await openAccountsSurface({ defaultAdminTab: "users" });
 });
 mobileAccountAccessButton?.addEventListener("click", async () => {
-  await openAccountsSurface({ defaultAdminTab: "system" });
+  await openAccountsSurface({ defaultAdminTab: "users" });
 });
 accountsCloseButton.addEventListener("click", closeAccountsModal);
 accountsModal.addEventListener("click", (event) => {
@@ -10834,7 +10834,7 @@ function renderAccountsModal() {
     ? otherUsers.filter((user) => normalizeServerUser(user).seniorities.includes(adminUserSeniorityFilter))
     : otherUsers;
   const linkedNames = renderLinkedRosterNames(currentRosterClaims, currentSuggestedClaims);
-  if (ownerView && !["parser", "system", "users", "files", "owner"].includes(currentAdminTab)) currentAdminTab = "system";
+  if (ownerView && !["parser", "system", "users", "files", "owner"].includes(currentAdminTab)) currentAdminTab = "users";
   const issueCount = adminIssueCount();
   const adminTabs = ownerView ? `
     <div class="admin-tabs" role="tablist" aria-label="Admin sections">
@@ -10933,20 +10933,21 @@ function renderAccountsModal() {
         <div class="issues-list">
           ${filteredOtherUsers.length ? filteredOtherUsers.map((user) => `
             <article class="issue-card account-user-card">
-              <div>
-                <strong>${escapeHtml(user.realName || "Name not set")}</strong>
-                <p>${escapeHtml(user.email)} · ${user.role === "owner" ? "Creator" : "Standard user"} · ${formatUserSites(user)}</p>
-                ${renderLinkedRosterNames(user.claims || [], [], { compact: true, email: user.email })}
+              <div class="account-user-summary">
+                <p class="account-user-email">${escapeHtml(user.email)}</p>
+                ${renderAdminUserClaims(user)}
               </div>
               ${user.role === "owner" ? "" : `
-                <label class="toggle review-toggle">
-                  <input type="checkbox" ${user.insightsEnabled ? "checked" : ""} data-toggle-user-insights="${escapeHtml(user.email)}">
-                  Allow “Who/When am I working with?” tools
-                </label>
-                <label class="toggle review-toggle">
-                  <input type="checkbox" ${user.facilityOverviewEnabled ? "checked" : ""} data-toggle-user-facility-overview="${escapeHtml(user.email)}">
-                  Allow “At a glance” ED overview
-                </label>
+                <div class="account-user-permissions">
+                  <label class="toggle review-toggle">
+                    <input type="checkbox" ${user.insightsEnabled ? "checked" : ""} data-toggle-user-insights="${escapeHtml(user.email)}">
+                    Who/When?
+                  </label>
+                  <label class="toggle review-toggle">
+                    <input type="checkbox" ${user.facilityOverviewEnabled ? "checked" : ""} data-toggle-user-facility-overview="${escapeHtml(user.email)}">
+                    At a glance
+                  </label>
+                </div>
               `}
               <div class="account-actions">
                 <button type="button" class="button button-secondary" data-enter-account="${escapeHtml(user.email)}">Enter account</button>
@@ -11654,6 +11655,22 @@ function renderLinkedRosterNames(claims, suggestedClaims = [], options = {}) {
         </article>
       `).join("")}
       ${!options.compact ? `<button type="button" class="button button-secondary" data-report-roster-identity>Report roster name problem</button>` : ""}
+    </div>
+  `;
+}
+
+function renderAdminUserClaims(user) {
+  const correctName = String(user?.realName || "").trim();
+  const normalizedCorrectName = correctName.replace(/\s+/g, " ").toLocaleLowerCase();
+  const claims = sanitizeRosterClaims(user?.claims || []);
+  if (!claims.length) return `<p class="status account-user-claims-empty">No roster names linked.</p>`;
+  return `
+    <div class="account-user-claims">
+      ${claims.map((claim) => {
+        const normalizedClaimName = claim.displayName.replace(/\s+/g, " ").toLocaleLowerCase();
+        const showVariation = !normalizedCorrectName || normalizedClaimName !== normalizedCorrectName;
+        return `<div class="account-user-claim"><strong>${escapeHtml(claim.sourceType.toUpperCase())}</strong>${showVariation ? ` <span>"${escapeHtml(claim.displayName)}"</span>` : ""}</div>`;
+      }).join("")}
     </div>
   `;
 }
