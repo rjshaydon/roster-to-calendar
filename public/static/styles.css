@@ -3576,19 +3576,22 @@ body[data-skin="console"] .preview-cell.is-weekend {
 }
 
 .admin-users-header {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: flex-end;
-}
-
-.admin-user-filters {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  justify-content: flex-end;
-  gap: 8px;
+  gap: 20px;
 }
 
 .admin-user-filter {
-  min-width: 150px;
+  min-width: 0;
+}
+
+.admin-user-filter > input[type="search"],
+.admin-user-filter > select {
+  box-sizing: border-box;
+  block-size: 52px;
+  min-block-size: 52px;
+  max-block-size: 52px;
 }
 
 .admin-user-filter span {
@@ -4322,11 +4325,12 @@ body[data-skin="console"] .panel {
   }
 
   .admin-users-header {
+    display: flex;
     align-items: stretch;
   }
 
-  .admin-user-filters {
-    justify-content: flex-start;
+  .admin-users-summary {
+    flex-basis: 100%;
   }
 
   .admin-user-filter {

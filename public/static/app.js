@@ -10937,23 +10937,21 @@ function renderAccountsModal() {
       </details>
       <article class="review-card">
         <div class="review-top admin-users-header">
-          <div>
+          <div class="admin-users-summary">
             <strong>Other users</strong>
             <span>${filteredOtherUsers.length ? `${filteredOtherUsers.length} account${filteredOtherUsers.length === 1 ? "" : "s"}` : otherUsers.length ? "No matching users." : "No other users have logged in yet."}</span>
           </div>
-          <div class="admin-user-filters">
-            <label class="field admin-user-filter">
-              <span>Search users</span>
-              <input type="search" value="${escapeHtml(adminUserSearchQuery)}" data-admin-user-search placeholder="Name or email">
-            </label>
-            <label class="field admin-user-filter">
-              <span>Filter by seniority</span>
-              <select data-admin-user-seniority-filter>
-                <option value="">All seniorities</option>
-                ${availableUserSeniorities.map((seniority) => `<option value="${escapeHtml(seniority)}" ${seniority === adminUserSeniorityFilter ? "selected" : ""}>${escapeHtml(seniority)}</option>`).join("")}
-              </select>
-            </label>
-          </div>
+          <label class="field admin-user-filter admin-user-search-filter">
+            <span>Search users</span>
+            <input type="search" value="${escapeHtml(adminUserSearchQuery)}" data-admin-user-search placeholder="Name or email">
+          </label>
+          <label class="field admin-user-filter">
+            <span>Filter by seniority</span>
+            <select data-admin-user-seniority-filter>
+              <option value="">All seniorities</option>
+              ${availableUserSeniorities.map((seniority) => `<option value="${escapeHtml(seniority)}" ${seniority === adminUserSeniorityFilter ? "selected" : ""}>${escapeHtml(seniority)}</option>`).join("")}
+            </select>
+          </label>
         </div>
         <div class="issues-list">
           ${filteredOtherUsers.length ? filteredOtherUsers.map((user) => `
