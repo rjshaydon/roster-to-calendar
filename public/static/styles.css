@@ -3621,13 +3621,12 @@ body[data-skin="console"] .preview-cell.is-weekend {
   font-size: 0.78rem;
 }
 
-.admin-user-expanded-controls {
-  display: flex;
-  justify-content: flex-end;
+.other-users-card:not([open]) .admin-user-seniority-filter {
+  display: none;
 }
 
-.admin-user-expanded-controls .admin-user-filter {
-  width: calc((100% - 40px) / 3);
+.other-users-card[open] > .issues-list {
+  margin-top: 12px;
 }
 
 .account-user-summary {
@@ -4367,14 +4366,6 @@ body[data-skin="console"] .panel {
 
   .admin-user-filter {
     flex: 1 1 150px;
-  }
-
-  .admin-user-expanded-controls {
-    justify-content: stretch;
-  }
-
-  .admin-user-expanded-controls .admin-user-filter {
-    width: 100%;
   }
 
   .account-user-controls,

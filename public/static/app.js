@@ -10965,17 +10965,15 @@ function renderAccountsModal() {
             <span>Search users</span>
             <input type="search" value="${escapeHtml(adminUserSearchQuery)}" data-admin-user-search placeholder="Name or email">
           </label>
-          <span class="collapsible-chevron" aria-hidden="true">⌄</span>
-        </summary>
-        <div class="admin-user-expanded-controls">
-          <label class="field admin-user-filter">
+          <label class="field admin-user-filter admin-user-seniority-filter">
             <span>Filter by seniority</span>
             <select data-admin-user-seniority-filter>
               <option value="">All seniorities</option>
               ${availableUserSeniorities.map((seniority) => `<option value="${escapeHtml(seniority)}" ${seniority === adminUserSeniorityFilter ? "selected" : ""}>${escapeHtml(seniority)}</option>`).join("")}
             </select>
           </label>
-        </div>
+          <span class="collapsible-chevron" aria-hidden="true">⌄</span>
+        </summary>
         <div class="issues-list">
           ${filteredOtherUsers.length ? filteredOtherUsers.map((user) => `
             <article class="issue-card account-user-card">
