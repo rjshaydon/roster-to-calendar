@@ -3569,6 +3569,10 @@ body[data-skin="console"] .preview-cell.is-weekend {
   min-width: 0;
 }
 
+.account-user-name {
+  display: block;
+}
+
 .account-user-email {
   margin: 0 0 8px;
 }

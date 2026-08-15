@@ -7702,7 +7702,7 @@ async function returnToShiftCodeReview() {
     return;
   }
   await returnToCreatorCalendar();
-  await openAccountsSurface({ defaultAdminTab: "system" });
+  await openAccountsSurface({ defaultAdminTab: "parser" });
   shiftCodeReviewFilter = { query: context.code, source: context.source || "all" };
   openShiftCodeReviewModal();
   requestAnimationFrame(() => {
@@ -10934,6 +10934,7 @@ function renderAccountsModal() {
           ${filteredOtherUsers.length ? filteredOtherUsers.map((user) => `
             <article class="issue-card account-user-card">
               <div class="account-user-summary">
+                <strong class="account-user-name">${escapeHtml(user.realName || "Name not set")}</strong>
                 <p class="account-user-email">${escapeHtml(user.email)}</p>
                 ${renderAdminUserClaims(user)}
               </div>
@@ -10950,9 +10951,9 @@ function renderAccountsModal() {
                 </div>
               `}
               <div class="account-actions">
-                <button type="button" class="button button-secondary" data-enter-account="${escapeHtml(user.email)}">Enter account</button>
+                <button type="button" class="button button-secondary button-small" data-enter-account="${escapeHtml(user.email)}">Enter account</button>
                 ${user.role === "owner" ? "" : `<button type="button" class="button button-secondary button-small" data-edit-roster-claims="${escapeHtml(user.email)}">Edit</button>`}
-                ${user.email !== OWNER_EMAIL ? `<button type="button" class="button button-danger" data-delete-account="${escapeHtml(user.email)}">Delete</button>` : ""}
+                ${user.email !== OWNER_EMAIL ? `<button type="button" class="button button-danger button-small" data-delete-account="${escapeHtml(user.email)}">Delete</button>` : ""}
               </div>
               ${user.role === "owner" ? "" : `
                 <div class="account-claim-editor hidden" data-claim-editor="${escapeHtml(user.email)}">
