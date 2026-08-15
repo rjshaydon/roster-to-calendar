@@ -3024,12 +3024,31 @@ body[data-skin="console"] .preview-cell.is-weekend {
   color: var(--muted);
 }
 
-.create-user-card > summary {
+.create-user-card > summary,
+.other-users-card > summary {
+  position: relative;
+  padding-right: 32px;
   cursor: pointer;
   list-style: none;
 }
 
-.create-user-card > summary::-webkit-details-marker {
+.create-user-card > summary::-webkit-details-marker,
+.other-users-card > summary::-webkit-details-marker {
+  display: none;
+}
+
+.collapsible-chevron {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
+  color: var(--muted);
+  font-size: 1.35rem;
+  line-height: 1;
+}
+
+.create-user-card[open] > summary .collapsible-chevron,
+.other-users-card[open] > summary .collapsible-chevron {
   display: none;
 }
 
@@ -3582,6 +3601,10 @@ body[data-skin="console"] .preview-cell.is-weekend {
   gap: 20px;
 }
 
+.other-users-card {
+  margin-top: 12px;
+}
+
 .admin-user-filter {
   min-width: 0;
 }
@@ -3596,6 +3619,15 @@ body[data-skin="console"] .preview-cell.is-weekend {
 
 .admin-user-filter span {
   font-size: 0.78rem;
+}
+
+.admin-user-expanded-controls {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.admin-user-expanded-controls .admin-user-filter {
+  width: calc((100% - 40px) / 3);
 }
 
 .account-user-summary {
@@ -4335,6 +4367,14 @@ body[data-skin="console"] .panel {
 
   .admin-user-filter {
     flex: 1 1 150px;
+  }
+
+  .admin-user-expanded-controls {
+    justify-content: stretch;
+  }
+
+  .admin-user-expanded-controls .admin-user-filter {
+    width: 100%;
   }
 
   .account-user-controls,

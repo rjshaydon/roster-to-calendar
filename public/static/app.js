@@ -345,6 +345,8 @@ let pendingExportHospitals = [];
 let currentAdminTab = "users";
 let adminUserSeniorityFilter = "";
 let adminUserSearchQuery = "";
+let createUserAccountExpanded = false;
+let otherUsersExpanded = false;
 const ROSTER_HOSPITAL_SORT_RANK = { mmc: 0, ddh: 1, casey: 2, mch: 3 };
 let calendarStoreStatus = null;
 let calendarStoreStatusError = "";
@@ -1333,6 +1335,12 @@ accountsBody.addEventListener("input", (event) => {
   replacement.focus();
   replacement.setSelectionRange(adminUserSearchQuery.length, adminUserSearchQuery.length);
 });
+accountsBody.addEventListener("toggle", (event) => {
+  const section = event.target;
+  if (!(section instanceof HTMLDetailsElement)) return;
+  if (section.matches("[data-create-user-account-section]")) createUserAccountExpanded = section.open;
+  if (section.matches("[data-other-users-section]")) otherUsersExpanded = section.open;
+}, true);
 accountsBody.addEventListener("click", (event) => {
   const adminTab = event.target.closest("[data-admin-tab]");
   if (adminTab) {
@@ -10910,12 +10918,13 @@ function renderAccountsModal() {
     </article>
   `;
   const usersCard = ownerView ? `
-      <details class="review-card create-user-card">
+      <details class="review-card create-user-card" data-create-user-account-section ${createUserAccountExpanded ? "open" : ""}>
         <summary class="review-top">
           <div>
             <strong>Create user account</strong>
             <span>Create an account and enter it immediately for setup or testing.</span>
           </div>
+          <span class="collapsible-chevron" aria-hidden="true">⌄</span>
         </summary>
         <form class="review-body" data-create-account-form>
           <label class="field">
@@ -10935,8 +10944,8 @@ function renderAccountsModal() {
           </div>
         </form>
       </details>
-      <article class="review-card">
-        <div class="review-top admin-users-header">
+      <details class="review-card other-users-card" data-other-users-section ${otherUsersExpanded ? "open" : ""}>
+        <summary class="review-top admin-users-header">
           <div class="admin-users-summary">
             <strong>Other users</strong>
             <span>${filteredOtherUsers.length ? `${filteredOtherUsers.length} account${filteredOtherUsers.length === 1 ? "" : "s"}` : otherUsers.length ? "No matching users." : "No other users have logged in yet."}</span>
@@ -10945,6 +10954,9 @@ function renderAccountsModal() {
             <span>Search users</span>
             <input type="search" value="${escapeHtml(adminUserSearchQuery)}" data-admin-user-search placeholder="Name or email">
           </label>
+          <span class="collapsible-chevron" aria-hidden="true">⌄</span>
+        </summary>
+        <div class="admin-user-expanded-controls">
           <label class="field admin-user-filter">
             <span>Filter by seniority</span>
             <select data-admin-user-seniority-filter>
@@ -10992,7 +11004,7 @@ function renderAccountsModal() {
             </article>
           `).join("") : `<article class="issue-card"><p>${otherUsers.length ? "No users match this seniority." : "No additional users yet."}</p></article>`}
         </div>
-      </article>
+      </details>
     ` : "";
   const parserCard = ownerView ? renderParserAdminCard(serverOtherUsers) : "";
   const systemCard = ownerView ? renderSystemAdminCard() : "";
