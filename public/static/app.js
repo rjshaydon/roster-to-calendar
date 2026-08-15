@@ -344,6 +344,7 @@ let pendingExportRange = defaultExportRangeState();
 let pendingExportHospitals = [];
 let currentAdminTab = "users";
 let adminUserSeniorityFilter = "";
+let adminUserSearchQuery = "";
 const ROSTER_HOSPITAL_SORT_RANK = { mmc: 0, ddh: 1, casey: 2, mch: 3 };
 let calendarStoreStatus = null;
 let calendarStoreStatusError = "";
@@ -1321,6 +1322,16 @@ accountsBody.addEventListener("change", (event) => {
   }
   const overviewToggle = event.target.closest("[data-toggle-user-facility-overview]");
   if (overviewToggle) void setUserFacilityOverviewEnabled(overviewToggle.dataset.toggleUserFacilityOverview || "", overviewToggle.checked);
+});
+accountsBody.addEventListener("input", (event) => {
+  const searchInput = event.target.closest("[data-admin-user-search]");
+  if (!searchInput) return;
+  adminUserSearchQuery = String(searchInput.value || "");
+  renderAccountsModal();
+  const replacement = accountsBody.querySelector("[data-admin-user-search]");
+  if (!replacement) return;
+  replacement.focus();
+  replacement.setSelectionRange(adminUserSearchQuery.length, adminUserSearchQuery.length);
 });
 accountsBody.addEventListener("click", (event) => {
   const adminTab = event.target.closest("[data-admin-tab]");
@@ -10830,9 +10841,17 @@ function renderAccountsModal() {
   const otherUsers = serverOtherUsers.length ? serverOtherUsers : localOtherUsers;
   const availableUserSeniorities = [...new Set(otherUsers.flatMap((user) => normalizeServerUser(user).seniorities || []))].sort();
   if (adminUserSeniorityFilter && !availableUserSeniorities.includes(adminUserSeniorityFilter)) adminUserSeniorityFilter = "";
-  const filteredOtherUsers = adminUserSeniorityFilter
+  const seniorityFilteredUsers = adminUserSeniorityFilter
     ? otherUsers.filter((user) => normalizeServerUser(user).seniorities.includes(adminUserSeniorityFilter))
     : otherUsers;
+  const normalizedUserSearchQuery = adminUserSearchQuery.trim().toLocaleLowerCase();
+  const filteredOtherUsers = normalizedUserSearchQuery
+    ? seniorityFilteredUsers.filter((user) => [
+        user.realName,
+        user.email,
+        ...sanitizeRosterClaims(user.claims || []).flatMap((claim) => [claim.displayName, claim.sourceType]),
+      ].some((value) => String(value || "").toLocaleLowerCase().includes(normalizedUserSearchQuery)))
+    : seniorityFilteredUsers;
   const linkedNames = renderLinkedRosterNames(currentRosterClaims, currentSuggestedClaims);
   if (ownerView && !["parser", "system", "users", "files", "owner"].includes(currentAdminTab)) currentAdminTab = "users";
   const issueCount = adminIssueCount();
@@ -10917,19 +10936,25 @@ function renderAccountsModal() {
         </form>
       </details>
       <article class="review-card">
-        <div class="review-top">
+        <div class="review-top admin-users-header">
           <div>
             <strong>Other users</strong>
             <span>${filteredOtherUsers.length ? `${filteredOtherUsers.length} account${filteredOtherUsers.length === 1 ? "" : "s"}` : otherUsers.length ? "No matching users." : "No other users have logged in yet."}</span>
           </div>
+          <div class="admin-user-filters">
+            <label class="field admin-user-filter">
+              <span>Search users</span>
+              <input type="search" value="${escapeHtml(adminUserSearchQuery)}" data-admin-user-search placeholder="Name or email">
+            </label>
+            <label class="field admin-user-filter">
+              <span>Filter by seniority</span>
+              <select data-admin-user-seniority-filter>
+                <option value="">All seniorities</option>
+                ${availableUserSeniorities.map((seniority) => `<option value="${escapeHtml(seniority)}" ${seniority === adminUserSeniorityFilter ? "selected" : ""}>${escapeHtml(seniority)}</option>`).join("")}
+              </select>
+            </label>
+          </div>
         </div>
-        <label class="field">
-          <span>Filter by seniority</span>
-          <select data-admin-user-seniority-filter>
-            <option value="">All seniorities</option>
-            ${availableUserSeniorities.map((seniority) => `<option value="${escapeHtml(seniority)}" ${seniority === adminUserSeniorityFilter ? "selected" : ""}>${escapeHtml(seniority)}</option>`).join("")}
-          </select>
-        </label>
         <div class="issues-list">
           ${filteredOtherUsers.length ? filteredOtherUsers.map((user) => `
             <article class="issue-card account-user-card">
