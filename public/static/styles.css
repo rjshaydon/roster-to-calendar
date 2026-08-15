@@ -545,6 +545,7 @@ select,
 input[type="date"],
 input[type="email"],
 input[type="password"],
+input[type="search"],
 input[type="text"],
 input[type="time"] {
   width: 100%;
