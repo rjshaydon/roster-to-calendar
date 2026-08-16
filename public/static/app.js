@@ -1353,6 +1353,16 @@ accountsBody.addEventListener("toggle", (event) => {
   }
 }, true);
 accountsBody.addEventListener("click", (event) => {
+  const currentUsersSummary = event.target.closest("[data-other-users-section] > summary");
+  const currentUsersControl = event.target.closest(".admin-user-search-filter, .admin-user-seniority-filter");
+  if (currentUsersSummary && !currentUsersControl && adminUserSearchQuery.trim()) {
+    event.preventDefault();
+    adminUserSearchQuery = "";
+    otherUsersExpanded = false;
+    otherUsersExpandedBySearch = false;
+    renderAccountsModal();
+    return;
+  }
   const adminTab = event.target.closest("[data-admin-tab]");
   if (adminTab) {
     const nextTab = adminTab.dataset.adminTab || "parser";
