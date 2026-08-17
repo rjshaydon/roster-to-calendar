@@ -3929,6 +3929,9 @@ class MemoryD1Statement {
           .sort((left, right) => left.display_name.localeCompare(right.display_name) || left.start_ts.localeCompare(right.start_ts)),
       };
     }
+    if (sql.includes("FROM facility_staff_seniority_overrides")) {
+      return { results: [] };
+    }
     if (sql.includes("FROM roster_file_doctors") && sql.includes("roster_file_doctors.file_id AS file_id")) {
       const hasKeyFilter = sql.includes("roster_file_doctors.doctor_key IN");
       const keys = new Set(args);

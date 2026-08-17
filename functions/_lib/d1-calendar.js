@@ -3455,7 +3455,7 @@ export async function queryCoworkerEvents(db, options = {}) {
         ${excludeDoctorSql}
       ORDER BY p.display_name, ev.start_ts
     `).bind(...overlapKeys, start, end, start, end, ...sourceTypes, ...includeKeys, ...excludeKeys).all();
-    return rowsToCoworkerEvents(rows);
+    return applyFacilityStaffSeniorityOverridesToCoworkerEvents(db, rowsToCoworkerEvents(rows));
   }
   const rows = await db.prepare(`
     SELECT DISTINCT
@@ -3496,6 +3496,7 @@ export async function queryCoworkerEventsFromEvents(db, options = {}) {
         other_events.doctor_key,
         other_events.display_name,
         other_events.source_type,
+        other_events.seniority,
         other_events.event_json,
         other_events.start_ts
       FROM roster_events AS mine
@@ -3524,6 +3525,7 @@ export async function queryCoworkerEventsFromEvents(db, options = {}) {
       roster_events.doctor_key,
       roster_events.display_name,
       roster_events.source_type,
+      roster_events.seniority,
       roster_events.event_json
     FROM roster_events
     INNER JOIN roster_files ON roster_files.id = roster_events.file_id
@@ -3535,7 +3537,7 @@ export async function queryCoworkerEventsFromEvents(db, options = {}) {
       ${excludeDoctorSql}
     ORDER BY roster_events.display_name, roster_events.start_ts
   `).bind(end, start, ...sourceTypes, ...includeKeys, ...excludeKeys).all();
-  return rowsToCoworkerEvents(rows);
+  return applyFacilityStaffSeniorityOverridesToCoworkerEvents(db, rowsToCoworkerEvents(rows));
 }
 
 function rowsToCoworkerEvents(rows) {
@@ -3544,9 +3546,27 @@ function rowsToCoworkerEvents(rows) {
       doctorKey: row.doctor_key,
       displayName: row.display_name,
       sourceType: row.source_type,
+      seniority: row.seniority,
       event: parseEvent(row.event_json),
     }))
     .filter((row) => row.event);
+}
+
+async function applyFacilityStaffSeniorityOverridesToCoworkerEvents(db, rows) {
+  const overridesByTerm = new Map();
+  return Promise.all((rows || []).map(async (row) => {
+    const sourceType = normalizeSourceType(row.sourceType);
+    const date = String(row.event?.start || "").slice(0, 10);
+    const termStart = australianTermStartForDate(date);
+    const cacheKey = `${sourceType}|${termStart}`;
+    if (!overridesByTerm.has(cacheKey)) {
+      const overrides = await queryFacilityStaffSeniorityOverrides(db, { sourceType, termStart });
+      overridesByTerm.set(cacheKey, new Map(overrides.map((override) => [`${override.sourceType}|${override.doctorKey}`, override])));
+    }
+    const override = overridesByTerm.get(cacheKey).get(`${sourceType}|${row.doctorKey}`);
+    if (!override || override.useRosterSeniority) return row;
+    return { ...row, seniority: override.seniority, event: { ...row.event, seniority: override.seniority } };
+  }));
 }
 
 export async function queryFacilityOverviewOnShift(db, options = {}) {
