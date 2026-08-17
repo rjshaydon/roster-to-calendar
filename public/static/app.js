@@ -5333,8 +5333,8 @@ function buildWhoAssignments(doctor, events) {
 
 function buildWhoAssignment(doctor, metadata, event) {
   const source = eventSourceCode(event);
-  const overrideRole = event?.facilitySeniorityOverride === true ? eventSeniorityRoleCode(event) : "";
-  const role = overrideRole || metadata[source]?.role || metadata.any?.role || eventSeniorityRoleCode(event) || inferredWhoRoleForDoctor(doctor) || "";
+  const eventRole = eventSeniorityRoleCode(event);
+  const role = eventRole || metadata[source]?.role || metadata.any?.role || inferredWhoRoleForDoctor(doctor) || "";
   const activeRule = parserRuleForWhoEvent(event, source, role);
   const ruleTitle = activeRule ? parserRulePreviewTitle(activeRule) : "";
   const eventForGrouping = ruleTitle ? { ...event, title: ruleTitle } : event;
