@@ -4168,11 +4168,14 @@ function datePart(value) {
   return String(value || "").slice(0, 10);
 }
 
-function australianTermStartForDate(value) {
+// Keep this calendar in step with the browser and state API: Victorian medical
+// terms start on the first Monday of February, May, August and November.
+// These are JavaScript month indexes (zero based), not month numbers.
+export function australianTermStartForDate(value) {
   const date = new Date(`${datePart(value)}T12:00:00Z`);
   if (Number.isNaN(date.getTime())) return "";
   const year = date.getUTCFullYear();
-  const candidates = [[year, 0], [year, 3], [year, 6], [year, 9], [year - 1, 9]];
+  const candidates = [[year, 1], [year, 4], [year, 7], [year, 10], [year - 1, 10]];
   for (const [candidateYear, month] of candidates) {
     const start = new Date(Date.UTC(candidateYear, month, 1, 12, 0, 0));
     const day = start.getUTCDay();
