@@ -3565,7 +3565,7 @@ async function applyFacilityStaffSeniorityOverridesToCoworkerEvents(db, rows) {
     }
     const override = overridesByTerm.get(cacheKey).get(`${sourceType}|${row.doctorKey}`);
     if (!override || override.useRosterSeniority) return row;
-    return { ...row, seniority: override.seniority, event: { ...row.event, seniority: override.seniority } };
+    return { ...row, seniority: override.seniority, event: { ...row.event, seniority: override.seniority, facilitySeniorityOverride: true } };
   }));
 }
 
@@ -3607,7 +3607,7 @@ export async function queryFacilityOverviewOnShift(db, options = {}) {
     .map((row) => {
       const override = seniorityOverrides.get(`${row.sourceType}|${row.doctorKey}`);
       if (!override || override.useRosterSeniority) return row;
-      return { ...row, seniority: override.seniority, seniorityOverride: override, event: { ...row.event, seniority: override.seniority } };
+      return { ...row, seniority: override.seniority, seniorityOverride: override, event: { ...row.event, seniority: override.seniority, facilitySeniorityOverride: true } };
     })
     .filter((row) => row.doctorKey && row.displayName && row.event);
 }

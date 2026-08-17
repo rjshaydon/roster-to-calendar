@@ -5333,7 +5333,8 @@ function buildWhoAssignments(doctor, events) {
 
 function buildWhoAssignment(doctor, metadata, event) {
   const source = eventSourceCode(event);
-  const role = metadata[source]?.role || metadata.any?.role || eventSeniorityRoleCode(event) || inferredWhoRoleForDoctor(doctor) || "";
+  const overrideRole = event?.facilitySeniorityOverride === true ? eventSeniorityRoleCode(event) : "";
+  const role = overrideRole || metadata[source]?.role || metadata.any?.role || eventSeniorityRoleCode(event) || inferredWhoRoleForDoctor(doctor) || "";
   const activeRule = parserRuleForWhoEvent(event, source, role);
   const ruleTitle = activeRule ? parserRulePreviewTitle(activeRule) : "";
   const eventForGrouping = ruleTitle ? { ...event, title: ruleTitle } : event;
@@ -10324,7 +10325,7 @@ function applyFacilityOverviewStaffSeniorityOverrides(overrides) {
     facilityOverviewState.onShiftData = facilityOverviewState.onShiftData.map((row) => {
       const override = byKey.get(`${row.sourceType}|${row.doctorKey}`);
       if (!override || override.useRosterSeniority) return row;
-      return { ...row, seniority: override.seniority, seniorityOverride: override, event: { ...row.event, seniority: override.seniority } };
+      return { ...row, seniority: override.seniority, seniorityOverride: override, event: { ...row.event, seniority: override.seniority, facilitySeniorityOverride: true } };
     });
     if (facilityOverviewState.tab === "on-shift") {
       facilityOverviewState.content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData);

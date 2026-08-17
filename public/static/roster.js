@@ -593,6 +593,7 @@ export function serializeEvent(event) {
     source: event.source,
     sources: Array.isArray(event.sources) ? event.sources : undefined,
     seniority: event.seniority || "",
+    facilitySeniorityOverride: event.facilitySeniorityOverride === true,
     title: event.title,
     allDay: event.allDay,
     start: event.start,
