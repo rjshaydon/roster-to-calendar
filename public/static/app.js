@@ -5578,8 +5578,8 @@ function renderWhoTeamPerson(item, doctorAttribute) {
     <div class="who-team-person">
       <div class="facility-overview-staff-action"><button type="button" class="who-team-name" ${doctorAttribute}="${escapeHtml(item.doctorKey || "")}" data-who-staff-menu="${escapeHtml(menuKey)}" data-facility-overview-staff-source="${escapeHtml(target.sourceType)}" data-facility-overview-staff-key="${escapeHtml(target.doctorKey)}" data-facility-overview-staff-display-name="${escapeHtml(target.displayName)}" data-facility-overview-staff-seniority="${escapeHtml(target.seniority)}" data-facility-overview-staff-term-start="${escapeHtml(target.termStart)}" title="Show future shifts with ${escapeHtml(item.doctorName)}">${escapeHtml(item.doctorName)}</button>${actionMenuOpen ? renderFacilityOverviewStaffActionMenu(target, whoStaffActionMenu) : ""}${seniorityMenuOpen ? renderFacilityOverviewStaffSeniorityMenu(target, whoStaffSeniorityMenu) : ""}</div>
       <span class="who-team-meta">
-        ${roleParts.length ? `<span class="who-team-role">${escapeHtml(roleParts.join(" · "))}</span>` : ""}
         ${item.specialTime ? `<span class="who-team-time">${escapeHtml(item.specialTime)}</span>` : ""}
+        ${roleParts.length ? `<span class="who-team-role">${escapeHtml(roleParts.join(" · "))}</span>` : ""}
       </span>
     </div>
   `;
