@@ -3656,9 +3656,7 @@ export async function queryFacilityOverviewOnShift(db, options = {}) {
       return { ...row, seniority: override.seniority, seniorityOverride: override, event: { ...row.event, seniority: override.seniority, facilitySeniorityOverride: true } };
     })
     .filter((row) => row.doctorKey && row.displayName && row.event);
-  // Keep At a glance consistent with Who and ED staff: a placeholder on this
-  // particular shift must not hide a known grade already recorded this term.
-  return applyFacilityStaffSeniorityOverridesToCoworkerEvents(db, events);
+  return events;
 }
 
 // This intentionally returns the roster events rather than a second server-side
@@ -3763,7 +3761,7 @@ export async function queryFacilityOverviewStaff(db, options = {}) {
   const eventBindings = facilityKey ? [facilityKey, termEnd, termStart] : [termEnd, termStart];
   const events = await db.prepare(`
     SELECT roster_events.doctor_key, roster_events.display_name, roster_events.source_type,
-      roster_events.seniority, roster_events.event_json
+      roster_events.seniority, roster_events.start_date
     FROM roster_events INNER JOIN roster_files ON roster_files.id = roster_events.file_id
     WHERE roster_files.active = 1 ${facilityKey ? "AND roster_events.source_type = ?" : ""}
       AND roster_events.start_date <= ? AND roster_events.end_date >= ?
@@ -3796,8 +3794,8 @@ export async function queryFacilityOverviewStaff(db, options = {}) {
     members: memberRows,
     events: (events.results || []).map((row) => ({
       doctorKey: String(row.doctor_key || "").trim(), displayName: String(row.display_name || "").trim(),
-      sourceType: normalizeSourceType(row.source_type), seniority: String(row.seniority || "").trim(), event: parseEvent(row.event_json),
-    })).filter((row) => row.doctorKey && row.event),
+      sourceType: normalizeSourceType(row.source_type), seniority: String(row.seniority || "").trim(), event: { start: String(row.start_date || "") },
+    })).filter((row) => row.doctorKey && row.event.start),
     coverage: (coverage.results || []).map((row) => ({ sourceType: normalizeSourceType(row.source_type), startDate: String(row.start_date || ""), endDate: String(row.end_date || "") })),
     designations,
     seniorityOverrides,
