@@ -1,4 +1,5 @@
 import {
+  applyRosterEventSeniorities,
   buildRosterView,
   defaultSettings,
   doctorOptions,
@@ -116,7 +117,7 @@ export async function buildAutomatedDerivedRosterPayload({ file, sourceId, conte
       uploadedBy: `automation:${sourceId}`,
       providerVersion: String(providerVersion || ""),
     },
-    doctors: uniqueDoctors,
+    doctors: applyRosterEventSeniorities(uniqueDoctors, eventsByDoctor),
     eventsByDoctor,
     issuesByDoctor,
     eventCount,

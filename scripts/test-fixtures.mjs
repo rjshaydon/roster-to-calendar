@@ -9,7 +9,7 @@ import { assertFindmyshiftDandenongAssignments, extractShiftRows, findmyshiftCon
 import { buildAutomatedDerivedRosterPayload } from "../functions/_lib/automation-import.js";
 import { australianTermStartForDate, buildPreviewFromDerivedEvents, findRosterSyncByProviderVersion, isApprovedReparseOmission, sameRosterOccurrence, storeCachedSnapshot } from "../functions/_lib/d1-calendar.js";
 import { recordRosterDispatchLifecycle, requestQueuedRosterProcessing } from "../functions/_lib/automation-dispatch.js";
-import { buildRosterView, customEventsToEvents, doctorOptions, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
+import { applyRosterEventSeniorities, buildRosterView, customEventsToEvents, doctorOptions, mergeMembershipDoctors, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
 import { customEventsToEvents as serverCustomEventsToEvents } from "../functions/_lib/roster.js";
 import { parserResultDelta, unresolvedCodeSummary } from "./parser-parity.mjs";
 
@@ -33,6 +33,25 @@ assert.equal(
   australianTermStartForDate("2026-08-17"),
   "2026-08-03",
   "effective staff seniorities should use the same Term 3 boundary as the At a glance editor",
+);
+assert.deepEqual(
+  mergeMembershipDoctors(
+    [{ key: "ROSTERED DOCTOR", displayName: "Rostered Doctor", sourceType: "ddh", seniority: "Unknown" }],
+    [
+      { key: "ROSTERED DOCTOR", displayName: "Rostered Doctor", sourceType: "ddh", seniority: "HMO", membershipSource: "provider" },
+      { key: "DIRECTORY ONLY", displayName: "Directory Only", sourceType: "ddh", seniority: "Unknown", membershipSource: "provider" },
+    ],
+  ),
+  [{ key: "ROSTERED DOCTOR", displayName: "Rostered Doctor", sourceType: "ddh", seniority: "HMO", membershipSource: "roster" }],
+  "FindMyShift directory records must enrich rostered people without creating provider-only ED staff",
+);
+assert.deepEqual(
+  applyRosterEventSeniorities(
+    [{ key: "PROGRESSION", seniority: "Intern" }],
+    { PROGRESSION: [{ seniority: "Intern", start: "2026-08-03" }, { seniority: "HMO", start: "2026-08-17" }, { seniority: "Unknown", start: "2026-08-24" }] },
+  ),
+  [{ key: "PROGRESSION", seniority: "HMO" }],
+  "the most recent known rostered grade should become the persisted membership grade",
 );
 assert.equal(
   sameRosterOccurrence(
@@ -525,6 +544,7 @@ const mchWorkbook = XLSX.readFile(fileURLToPath(new URL("../fixtures/Paeds_Term_
 const caseyBytes = await readFile(fileURLToPath(new URL("../fixtures/Casey_Term_2_2026_DRAFT.xlsm", import.meta.url)));
 const mchBytes = await readFile(fileURLToPath(new URL("../fixtures/Paeds_Term_2_2026.xlsx", import.meta.url)));
 const appSource = await readFile(new URL("../public/static/app.js", import.meta.url), "utf8");
+assert.doesNotMatch(appSource, /Multiple grades recorded/, "ED staff should show one effective grade rather than exposing conflicting source grades");
 const rosterSource = await readFile(new URL("../public/static/roster.js", import.meta.url), "utf8");
 const stateSource = await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8");
 const findmyshiftModuleSource = await readFile(new URL("../functions/_lib/findmyshift.js", import.meta.url), "utf8");

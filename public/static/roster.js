@@ -491,7 +491,7 @@ function canonicalFindmyshiftProviderSeniority(value) {
 
 export function mergeMembershipDoctors(rosterDoctors = [], providerDoctors = []) {
   const byKey = new Map();
-  for (const doctor of [...rosterDoctors, ...providerDoctors]) {
+  for (const doctor of rosterDoctors) {
     const key = normalizeName(doctor?.key || doctor?.displayName || "");
     if (!key) continue;
     const previous = byKey.get(key);
@@ -500,10 +500,39 @@ export function mergeMembershipDoctors(rosterDoctors = [], providerDoctors = [])
       displayName: String(doctor?.displayName || previous?.displayName || key).trim(),
       sourceType: String(doctor?.sourceType || previous?.sourceType || "").toLowerCase(),
       seniority: sanitizeRuleSeniority(doctor?.seniority || previous?.seniority || UNKNOWN_SENIORITY),
-      membershipSource: doctor?.membershipSource === "provider" || previous?.membershipSource === "provider" ? "provider" : "roster",
+      membershipSource: "roster",
     });
   }
+  // FindMyShift's staff endpoint is a team directory, not a roster. It can
+  // include people with no shift in the imported period, so it must enrich
+  // roster members rather than create ED-staff membership by itself.
+  for (const provider of providerDoctors) {
+    const key = normalizeName(provider?.key || provider?.displayName || "");
+    const rosterDoctor = byKey.get(key);
+    if (!key || !rosterDoctor) continue;
+    const providerSeniority = sanitizeRuleSeniority(provider?.seniority || UNKNOWN_SENIORITY);
+    const rosterSeniority = sanitizeRuleSeniority(rosterDoctor.seniority || UNKNOWN_SENIORITY);
+    if (rosterSeniority === UNKNOWN_SENIORITY && providerSeniority !== UNKNOWN_SENIORITY) {
+      byKey.set(key, { ...rosterDoctor, seniority: providerSeniority });
+    }
+  }
   return [...byKey.values()];
+}
+
+// Persist the grade supported by the most recent known roster event. This
+// keeps file membership useful on its own while still allowing later creator
+// overrides. Unknown events never overwrite a known grade.
+export function applyRosterEventSeniorities(doctors = [], eventsByDoctor = {}) {
+  return (Array.isArray(doctors) ? doctors : []).map((doctor) => {
+    const latestKnown = (Array.isArray(eventsByDoctor?.[doctor?.key]) ? eventsByDoctor[doctor.key] : [])
+      .map((event) => ({
+        seniority: sanitizeRuleSeniority(event?.seniority || UNKNOWN_SENIORITY),
+        date: String(event?.start || "").slice(0, 10),
+      }))
+      .filter((event) => event.seniority !== UNKNOWN_SENIORITY)
+      .sort((left, right) => right.date.localeCompare(left.date))[0];
+    return latestKnown ? { ...doctor, seniority: latestKnown.seniority } : doctor;
+  });
 }
 
 export function normalizeRosterName(value) {

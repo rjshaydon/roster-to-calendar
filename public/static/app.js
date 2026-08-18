@@ -5,6 +5,7 @@ import {
   defaultSettings as rosterDefaultSettings,
   doctorOptions as rosterDoctorOptions,
   findmyshiftProviderStaffOptions,
+  applyRosterEventSeniorities,
   exportIcs,
   isIgnoredRosterIssueValue,
   parseUploadForm,
@@ -10373,16 +10374,16 @@ function renderFacilityOverviewStaffResults(data, term) {
     if (!designation?.doctorKey || byPerson.has(key)) continue;
     byPerson.set(key, {
       sourceType: designation.sourceType, doctorKey: designation.doctorKey, displayName: designation.displayName || designation.doctorKey,
-      seniorities: new Set([facilityOverviewNormalizeSeniority(designation.seniority || "Unknown")]), events: [], eventMarkers: new Set(), coverageStarts: [], coverageEnds: [], membershipSources: new Set(["designation"]),
+      membershipGrades: new Set([facilityOverviewNormalizeSeniority(designation.seniority || "Unknown")]), eventGrades: [], events: [], eventMarkers: new Set(), coverageStarts: [], coverageEnds: [], membershipSources: new Set(["designation"]),
     });
   }
   for (const member of data.members || []) {
     const key = `${member.sourceType}|${member.doctorKey}`;
     const entry = byPerson.get(key) || {
       sourceType: member.sourceType, doctorKey: member.doctorKey, displayName: member.displayName,
-      seniorities: new Set(), events: [], eventMarkers: new Set(), coverageStarts: [], coverageEnds: [], membershipSources: new Set(),
+      membershipGrades: new Set(), eventGrades: [], events: [], eventMarkers: new Set(), coverageStarts: [], coverageEnds: [], membershipSources: new Set(),
     };
-    if (member.seniority) entry.seniorities.add(facilityOverviewNormalizeSeniority(member.seniority));
+    if (member.seniority) entry.membershipGrades.add(facilityOverviewNormalizeSeniority(member.seniority));
     if (member.coverageStart) entry.coverageStarts.push(member.coverageStart);
     if (member.coverageEnd && member.membershipSource !== "sms-continuity") entry.coverageEnds.push(member.coverageEnd);
     entry.membershipSources.add(member.membershipSource || "roster");
@@ -10390,8 +10391,8 @@ function renderFacilityOverviewStaffResults(data, term) {
   }
   for (const row of data.events || []) {
     const key = `${row.sourceType}|${row.doctorKey}`;
-    const entry = byPerson.get(key) || { sourceType: row.sourceType, doctorKey: row.doctorKey, displayName: row.displayName, seniorities: new Set(), events: [], eventMarkers: new Set(), coverageStarts: [], coverageEnds: [], membershipSources: new Set(["event"]) };
-    if (row.seniority) entry.seniorities.add(facilityOverviewDetectedSeniority(row.event, row.seniority));
+    const entry = byPerson.get(key) || { sourceType: row.sourceType, doctorKey: row.doctorKey, displayName: row.displayName, membershipGrades: new Set(), eventGrades: [], events: [], eventMarkers: new Set(), coverageStarts: [], coverageEnds: [], membershipSources: new Set(["event"]) };
+    if (row.seniority) entry.eventGrades.push({ grade: facilityOverviewDetectedSeniority(row.event, row.seniority), date: String(row.event?.start || "").slice(0, 10) });
     const marker = `${row.event?.title || ""}|${row.event?.start || ""}|${row.event?.end || ""}|${row.event?.rawValue || ""}`;
     if (row.event && isRosterShiftEvent(row.event) && !isClinicalSupportEvent(row.event) && !entry.eventMarkers.has(marker)) {
       entry.eventMarkers.add(marker);
@@ -10403,9 +10404,17 @@ function renderFacilityOverviewStaffResults(data, term) {
   const panels = new Map();
   for (const person of byPerson.values()) {
     if (query && !person.displayName.toLocaleLowerCase().includes(query)) continue;
-    const grades = [...person.seniorities].map(facilityOverviewNormalizeSeniority).filter(Boolean);
-    person.seniority = grades.sort((left, right) => facilityOverviewSeniorityRank(left) - facilityOverviewSeniorityRank(right))[0] || "Unknown";
-    person.multipleGrades = new Set(grades).size > 1;
+    const latestKnownEventGrade = person.eventGrades
+      .map((entry) => ({ ...entry, grade: facilityOverviewNormalizeSeniority(entry.grade) }))
+      .filter((entry) => entry.grade && entry.grade !== "Unknown")
+      .sort((left, right) => right.date.localeCompare(left.date))[0]?.grade;
+    const knownMembershipGrade = [...person.membershipGrades]
+      .map(facilityOverviewNormalizeSeniority)
+      .find((grade) => grade && grade !== "Unknown");
+    // Dated roster evidence is more reliable than membership metadata. Unknown
+    // is a fallback, not a second grade to show to the user.
+    person.seniority = latestKnownEventGrade || knownMembershipGrade || "Unknown";
+    person.multipleGrades = false;
     person.designation = designations.get(`${person.sourceType}|${person.doctorKey}`) || null;
     person.seniorityOverride = seniorityOverrides.get(`${person.sourceType}|${person.doctorKey}`) || null;
     if (person.seniorityOverride && !person.seniorityOverride.useRosterSeniority) {
@@ -10530,12 +10539,10 @@ function renderFacilityOverviewStaffBulkSeniorityMenu(menu, selectedCount) {
 }
 
 function renderFacilityOverviewStaffSeniorityStatus(person, term) {
-  const label = person.multipleGrades
-    ? "Multiple grades recorded"
-    : person.seniorityOverride && !person.seniorityOverride.useRosterSeniority
-      ? `Creator-set ${facilityOverviewCompactSeniorityLabel(person.seniority)}`
-      : facilityOverviewCompactSeniorityLabel(person.seniority);
-  if (!isViewingCreatorAccount()) return person.multipleGrades || person.seniorityOverride ? `<small>${escapeHtml(label)}</small>` : "";
+  const label = person.seniorityOverride && !person.seniorityOverride.useRosterSeniority
+    ? `Creator-set ${facilityOverviewCompactSeniorityLabel(person.seniority)}`
+    : facilityOverviewCompactSeniorityLabel(person.seniority);
+  if (!isViewingCreatorAccount()) return person.seniorityOverride ? `<small>${escapeHtml(label)}</small>` : "";
   const target = { ...person, termStart: formatDateKey(term.start) };
   const key = facilityOverviewStaffSeniorityMenuKey(target);
   const menu = facilityOverviewState.staffSeniorityMenu;
@@ -16971,7 +16978,7 @@ async function buildDerivedCalendarFilePayload(importEntry, statusFile = {}) {
       sourceType,
     },
     selectedDoctorKey: selectedDoctor()?.key || OWNER_DOCTOR_KEY,
-    doctors: uniqueDoctors,
+    doctors: applyRosterEventSeniorities(uniqueDoctors, eventsByDoctor),
     eventsByDoctor,
     issuesByDoctor,
     eventCount,

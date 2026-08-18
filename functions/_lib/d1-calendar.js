@@ -150,7 +150,6 @@ async function ensureCalendarSchemaUncached(db) {
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_events_date_source ON roster_events (start_date, source_type)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_events_source_range ON roster_events (source_type, start_date, end_date)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_events_file ON roster_events (file_id)").run();
-  await backfillFacilitySmsMemberships(db);
   await db.prepare(`
     CREATE TABLE IF NOT EXISTS roster_issues (
       id TEXT PRIMARY KEY,
@@ -1286,30 +1285,6 @@ const FACILITY_STAFF_SENIORITIES = new Set([
   "Physio",
   "Unknown",
 ]);
-
-async function backfillFacilitySmsMemberships(db) {
-  const now = new Date().toISOString();
-  await db.prepare(`
-    INSERT INTO facility_sms_memberships (
-      source_type, doctor_key, display_name, first_seen_date, last_seen_date, created_at, updated_at
-    )
-    SELECT roster_file_doctors.source_type, roster_file_doctors.doctor_key,
-      MAX(roster_file_doctors.display_name), MIN(roster_events.start_date), MAX(roster_events.start_date), ?, ?
-    FROM roster_file_doctors
-    INNER JOIN roster_events ON roster_events.file_id = roster_file_doctors.file_id
-      AND roster_events.doctor_key = roster_file_doctors.doctor_key
-    WHERE UPPER(roster_file_doctors.seniority) = 'SMS'
-    GROUP BY roster_file_doctors.source_type, roster_file_doctors.doctor_key
-    ON CONFLICT(source_type, doctor_key) DO UPDATE SET
-      display_name = excluded.display_name,
-      first_seen_date = MIN(facility_sms_memberships.first_seen_date, excluded.first_seen_date),
-      last_seen_date = MAX(facility_sms_memberships.last_seen_date, excluded.last_seen_date),
-      updated_at = excluded.updated_at
-    WHERE facility_sms_memberships.display_name <> excluded.display_name
-      OR facility_sms_memberships.first_seen_date > excluded.first_seen_date
-      OR facility_sms_memberships.last_seen_date < excluded.last_seen_date
-  `).bind(now, now).run();
-}
 
 async function recordFacilitySmsMembershipsForRosterFile(db, fileId) {
   const now = new Date().toISOString();
@@ -3684,12 +3659,16 @@ export async function queryFacilityOverviewStaff(db, options = {}) {
   const termEnd = String(options.termEnd || "").slice(0, 10);
   const facilityKey = normalizeSourceType(options.facilityKey || options.sourceType || "");
   if (!termStart || !termEnd) return { members: [], events: [], coverage: [], designations: [] };
-  const facilitySql = facilityKey ? "AND roster_files.source_type = ?" : "";
+  const selectedFilesSql = facilityKey ? "AND source_type = ?" : "";
   const bindings = facilityKey ? [facilityKey, termEnd, termStart] : [termEnd, termStart];
   const members = await db.prepare(`
-    WITH file_coverage AS (
-      SELECT file_id, MIN(start_date) AS coverage_start, MAX(start_date) AS coverage_end
-      FROM roster_events GROUP BY file_id
+    WITH selected_files AS (
+      SELECT id FROM roster_files WHERE active = 1 ${selectedFilesSql}
+    ), file_coverage AS (
+      SELECT roster_events.file_id, MIN(roster_events.start_date) AS coverage_start, MAX(roster_events.start_date) AS coverage_end
+      FROM roster_events
+      INNER JOIN selected_files ON selected_files.id = roster_events.file_id
+      GROUP BY roster_events.file_id
     )
     SELECT roster_file_doctors.doctor_key, roster_file_doctors.display_name,
       roster_file_doctors.source_type, roster_file_doctors.seniority AS membership_seniority,
@@ -3697,7 +3676,7 @@ export async function queryFacilityOverviewStaff(db, options = {}) {
     FROM roster_file_doctors
     INNER JOIN roster_files ON roster_files.id = roster_file_doctors.file_id
     INNER JOIN file_coverage ON file_coverage.file_id = roster_file_doctors.file_id
-    WHERE roster_files.active = 1 ${facilitySql}
+    WHERE roster_files.active = 1
       AND file_coverage.coverage_start <= ? AND file_coverage.coverage_end >= ?
     ORDER BY roster_file_doctors.source_type, roster_file_doctors.display_name
   `).bind(...bindings).all();
