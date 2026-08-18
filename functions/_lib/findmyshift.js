@@ -66,10 +66,15 @@ export async function findmyshiftRosterWorkbook(apiKey, teamId, range) {
   assertFindmyshiftDandenongAssignments(preliminaryShifts);
   const staff = await findmyshiftStaffList(apiKey, teamId);
   const facilities = await findmyshiftFacilityList(apiKey, teamId);
-  const shifts = extractShiftRows(report, { staff, facilities });
+  // FindMyShift's staff endpoint encodes DDH grades in ordered roster groups
+  // (for example, "ED HMO's" followed by the doctors), rather than in each
+  // person's jobTitle field. Preserve that source classification in both the
+  // event rows and the retained staff sheet.
+  const staffSeniorities = findmyshiftStaffSeniorityById(staff);
+  const shifts = extractShiftRows(report, { staff, facilities, staffSeniorities });
   if (!shifts.length) throw noUsableFindmyshiftShiftsError();
   assertFindmyshiftDandenongAssignments(shifts);
-  return findmyshiftRowsWorkbook(shifts, staff);
+  return findmyshiftRowsWorkbook(shifts, staff, { staffSeniorities });
 }
 
 function noUsableFindmyshiftShiftsError() {
@@ -437,6 +442,9 @@ function extractFindmyshiftFlatRows(report, options) {
   const reportRows = report.filter((entry) => entry && typeof entry === "object" && !Array.isArray(entry));
   if (!reportRows.length || !reportRows.every((entry) => Object.hasOwn(entry, "staffId") && Object.hasOwn(entry, "date") && Object.hasOwn(entry, "shift"))) return null;
   const staffById = indexFindmyshiftStaff(options.staff);
+  const staffSeniorities = options.staffSeniorities instanceof Map
+    ? options.staffSeniorities
+    : findmyshiftStaffSeniorityById(options.staff);
   const facilitiesById = indexFindmyshiftFacilities(options.facilities);
   const sourceRows = [];
   for (const entry of reportRows) {
@@ -451,7 +459,7 @@ function extractFindmyshiftFlatRows(report, options) {
     sourceRows.push({
       sourceStaffId: staffId,
       name,
-      seniority: String(person.jobTitle || person.department || entry.jobTitle || entry.department || "Unknown").trim() || "Unknown",
+      seniority: findmyshiftSeniorityForStaff(person, entry, staffSeniorities.get(staffId)),
       date,
       label: time ? (shiftText === time.source ? "Shift" : shiftText) : shiftText,
       start: time?.start || "",
@@ -575,6 +583,80 @@ function indexFindmyshiftStaff(staff) {
   return index;
 }
 
+// The staff/list response is also the roster's ordered people list. DDH does
+// not populate jobTitle for many clinicians, but places a coloured heading
+// immediately before each grade's members. This is the authoritative, fully
+// automatic source for those grades; do not turn it into a manual override.
+export function findmyshiftStaffSeniorityById(staff) {
+  const entries = (Array.isArray(staff) ? staff : [])
+    .filter((entry) => entry && typeof entry === "object")
+    .map((entry, index) => ({ entry, index }))
+    .sort((left, right) => {
+      const leftOrder = Number(left.entry.order);
+      const rightOrder = Number(right.entry.order);
+      const leftValid = Number.isFinite(leftOrder);
+      const rightValid = Number.isFinite(rightOrder);
+      if (leftValid && rightValid && leftOrder !== rightOrder) return leftOrder - rightOrder;
+      if (leftValid !== rightValid) return leftValid ? -1 : 1;
+      return left.index - right.index;
+    });
+  const grades = new Map();
+  let currentGrade = "";
+  for (const { entry } of entries) {
+    const name = nameFrom(entry);
+    const headingGrade = findmyshiftRosterGroupSeniority(name);
+    if (headingGrade) {
+      currentGrade = headingGrade;
+      continue;
+    }
+    const id = String(entry.staffId || entry.id || "").trim();
+    if (!id) continue;
+    const directGrade = recognisedFindmyshiftStaffSeniority(entry.jobTitle || entry.department);
+    if (directGrade) grades.set(id, directGrade);
+    else if (currentGrade) grades.set(id, currentGrade);
+  }
+  return grades;
+}
+
+function findmyshiftSeniorityForStaff(person, entry, groupedGrade) {
+  const direct = recognisedFindmyshiftStaffSeniority(
+    person?.jobTitle || person?.department || entry?.jobTitle || entry?.department,
+  );
+  if (direct) return direct;
+  if (groupedGrade) return groupedGrade;
+  return String(person?.jobTitle || person?.department || entry?.jobTitle || entry?.department || "Unknown").trim() || "Unknown";
+}
+
+function findmyshiftRosterGroupSeniority(value) {
+  const upper = normaliseFindmyshiftSeniorityText(value);
+  if (/^(?:SENIOR MEDICAL STAFF|SMS)$/i.test(upper)) return "SMS";
+  if (/^SENIOR REGISTRARS?$/i.test(upper)) return "Senior Registrar";
+  if (/^(?:TRANSITIONAL|INTERMEDIATE) REGISTRARS?$/i.test(upper)) return "Transitional/Intermediate Registrar";
+  if (/^JUNIOR REGISTRARS?$/i.test(upper)) return "Junior Registrar";
+  if (/^(?:(?:ED|CRIT CARE) )?HMOS?$/i.test(upper)) return "HMO";
+  if (/^CMOS?$/i.test(upper)) return "CMO";
+  if (/^INTERNS?$/i.test(upper)) return "Intern";
+  if (/^(?:AMPS?|ALLIED MEDICAL PRACTITIONERS?)$/i.test(upper)) return "AMP";
+  return "";
+}
+
+function recognisedFindmyshiftStaffSeniority(value) {
+  const upper = normaliseFindmyshiftSeniorityText(value);
+  if (/\bINTERN\b/.test(upper)) return "Intern";
+  if (/\b(?:ED |CRIT CARE )?HMOS?\b/.test(upper)) return "HMO";
+  if (/\b(?:AMP|PHYSIO(?:THERAPIST)?|ALLIED MEDICAL PRACTITIONER)\b/.test(upper)) return "AMP";
+  if (/\bSMS\b/.test(upper)) return "SMS";
+  if (/\bCMO\b/.test(upper)) return "CMO";
+  if (/\b(?:SENIOR REGISTRAR|SENIOR REG|SR)\b/.test(upper)) return "Senior Registrar";
+  if (/\b(?:TRANSITIONAL|INTERMEDIATE|IR|TR)\b/.test(upper)) return "Transitional/Intermediate Registrar";
+  if (/\b(?:JUNIOR REGISTRAR|JUNIOR REG|JR)\b/.test(upper)) return "Junior Registrar";
+  return "";
+}
+
+function normaliseFindmyshiftSeniorityText(value) {
+  return String(value || "").replace(/[’']/g, "").replace(/\s+/g, " ").trim().toUpperCase();
+}
+
 function indexFindmyshiftFacilities(facilities) {
   const index = new Map();
   for (const entry of Array.isArray(facilities) ? facilities : []) {
@@ -657,7 +739,7 @@ function timeFrom(value, keys) {
   return "";
 }
 
-export function findmyshiftRowsWorkbook(rows, staff = []) {
+export function findmyshiftRowsWorkbook(rows, staff = [], options = {}) {
   const byWeek = new Map();
   for (const row of rows) {
     const monday = mondayFor(row.date);
@@ -702,15 +784,19 @@ export function findmyshiftRowsWorkbook(rows, staff = []) {
   }
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(details), "FindMyShift details");
   const staffRows = [["Staff ID", "Staff name", "Seniority/job title"]];
+  const staffSeniorities = options.staffSeniorities instanceof Map
+    ? options.staffSeniorities
+    : findmyshiftStaffSeniorityById(staff);
   const seenStaff = new Set();
   for (const person of Array.isArray(staff) ? staff : []) {
     const id = String(person?.staffId || person?.id || "").trim();
     const name = nameFrom(person);
     if (!name) continue;
+    if (findmyshiftRosterGroupSeniority(name)) continue;
     const marker = id || name.toUpperCase();
     if (seenStaff.has(marker)) continue;
     seenStaff.add(marker);
-    staffRows.push([id, name, String(person?.jobTitle || person?.department || "Unknown").trim() || "Unknown"]);
+    staffRows.push([id, name, findmyshiftSeniorityForStaff(person, {}, staffSeniorities.get(id))]);
   }
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(staffRows), "FindMyShift staff");
   return XLSX.write(workbook, { type: "array", bookType: "xlsx" });

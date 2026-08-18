@@ -5,7 +5,7 @@ import XLSX from "xlsx";
 
 import { onRequestPost as handleStatePost } from "../functions/api/state.js";
 import { onRequestGet as handleFeedGet } from "../functions/api/feed.js";
-import { assertFindmyshiftDandenongAssignments, extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentDiagnostics, findmyshiftDandenongAssignmentExceptions, findmyshiftRowsWorkbook } from "../functions/_lib/findmyshift.js";
+import { assertFindmyshiftDandenongAssignments, extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentDiagnostics, findmyshiftDandenongAssignmentExceptions, findmyshiftRowsWorkbook, findmyshiftStaffSeniorityById } from "../functions/_lib/findmyshift.js";
 import { buildAutomatedDerivedRosterPayload } from "../functions/_lib/automation-import.js";
 import { australianTermStartForDate, buildPreviewFromDerivedEvents, findRosterSyncByProviderVersion, isApprovedReparseOmission, sameRosterOccurrence, storeCachedSnapshot } from "../functions/_lib/d1-calendar.js";
 import { recordRosterDispatchLifecycle, requestQueuedRosterProcessing } from "../functions/_lib/automation-dispatch.js";
@@ -247,6 +247,30 @@ const findmyshiftRows = extractShiftRows(findmyshiftFixture.report, {
   facilities: findmyshiftFixture.facilities,
 });
 const findmyshiftPreliminaryRows = extractShiftRows(findmyshiftFixture.report);
+const groupedFindmyshiftStaff = [
+  { staffId: "sms-heading", displayName: "SENIOR MEDICAL STAFF", order: 3 },
+  { staffId: "hmo-heading", displayName: "ED HMO's", order: 840 },
+  { staffId: "gideo", firstName: "Gideon", lastName: "Charin", order: 923, jobTitle: null, department: null },
+  { staffId: "hmo-heading-two", displayName: "HMO's", order: 937 },
+  { staffId: "tea", firstName: "Tea", lastName: "Gunasena", order: 1211, jobTitle: null, department: null },
+  { staffId: "amp-heading", displayName: "AMP's", order: 1899 },
+  { staffId: "physio", firstName: "Pat", lastName: "Physio", order: 1900, jobTitle: null, department: null },
+];
+const groupedFindmyshiftSeniorities = findmyshiftStaffSeniorityById(groupedFindmyshiftStaff);
+assert.deepEqual(
+  Object.fromEntries(groupedFindmyshiftSeniorities),
+  { gideo: "HMO", tea: "HMO", physio: "AMP" },
+  "FindMyShift ordered roster headings should classify DDH staff without job titles",
+);
+const groupedFindmyshiftRows = extractShiftRows([
+  { staffId: "gideo", date: "2026-08-03", firstName: "Gideon", lastName: "Charin", shift: "ED AM" },
+  { staffId: "physio", date: "2026-08-03", firstName: "Pat", lastName: "Physio", shift: "Physiotherapist" },
+], { staff: groupedFindmyshiftStaff });
+assert.deepEqual(
+  groupedFindmyshiftRows.map((row) => row.seniority),
+  ["HMO", "AMP"],
+  "FindMyShift shift rows should retain grades derived from their ordered staff groups",
+);
 assert.equal(findmyshiftRows.length, 5, "FindMyShift time/stream pairs should become one timed event while extra named entries are preserved");
 assert.deepEqual(
   findmyshiftDandenongAssignmentDiagnostics(findmyshiftPreliminaryRows),
@@ -804,7 +828,7 @@ assert.match(styleSource, /#facilityOverviewBody\.is-working-together > \.facili
 assert.match(stateSource, /action === "downloadFindmyshiftExceptions"[\s\S]*findmyshiftDandenongAssignmentExceptions[\s\S]*findmyshiftExceptionCsv/, "FindMyShift exception downloads must be creator-only server-side report reads");
 assert.match(findmyshiftCheckSource, /isTransientFindmyshiftRateLimitError[\s\S]*current\?\.lastSuccessAt[\s\S]*returned HTTP 429/, "a transient FindMyShift rate limit should neither mark a successful source failed nor cause it to be downloaded again");
 assert.match(findmyshiftModuleSource, /NEXT_TERM_LOOKAHEAD_DAYS = 28[\s\S]*findmyshiftPublicationWindow/, "FindMyShift should use a four-week early-publication window for the next term");
-assert.match(findmyshiftCheckSource, /IMPORT_FORMAT = "stream-paired-v3"[\s\S]*term-window change deliberately[\s\S]*rangeState\.requested[\s\S]*importFormat: IMPORT_FORMAT/, "a new FindMyShift parser revision or term window should bypass an unchanged provider version and persist its requested range");
+assert.match(findmyshiftCheckSource, /IMPORT_FORMAT = "stream-paired-v4"[\s\S]*term-window change deliberately[\s\S]*rangeState\.requested[\s\S]*importFormat: IMPORT_FORMAT/, "a new FindMyShift parser revision or term window should bypass an unchanged provider version and persist its requested range");
 assert.match(findmyshiftCheckSource, /findmyshift-no-shifts[\s\S]*waiting-for-publication/, "an unpublished upcoming FindMyShift term should wait for a provider update instead of surfacing as an import failure");
 assert.match(
   findmyshiftCheckSource,
@@ -839,7 +863,7 @@ assert.doesNotMatch(automationWorkflowSource, /schedule:/, "GitHub cron must not
 assert.match(automationIngestSource, /requestQueuedRosterProcessing/, "a newly retained roster should request the processor immediately");
 assert.match(
   findmyshiftCheckSource,
-  /IMPORT_FORMAT = "stream-paired-v3"[\s\S]*Dandenong-FindMyShift-\$\{IMPORT_FORMAT\}[\s\S]*saved\?\.importFormat[\s\S]*importFormat: IMPORT_FORMAT/,
+  /IMPORT_FORMAT = "stream-paired-v4"[\s\S]*Dandenong-FindMyShift-\$\{IMPORT_FORMAT\}[\s\S]*saved\?\.importFormat[\s\S]*importFormat: IMPORT_FORMAT/,
   "a corrected FindMyShift parser should retain a fresh generated source and bypass an older parser revision",
 );
 assert.match(automationDispatchSource, /GITHUB_ACTIONS_TOKEN[\s\S]*actions\/workflows[\s\S]*\/dispatches/, "dispatches should use a server-side GitHub Actions token");

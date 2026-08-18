@@ -1644,6 +1644,7 @@ function recognisedFindmyshiftDdhSeniority(value) {
   const upper = cleanText(value).replace(/[’']/g, "").replace(/\s+/g, " ").trim().toUpperCase();
   if (/\bINTERN\b/.test(upper)) return "Intern";
   if (/\b(?:ED\s+)?HMOS?\b/.test(upper)) return "HMO";
+  if (/\b(?:AMP|PHYSIO(?:THERAPIST)?|ALLIED MEDICAL PRACTITIONER)\b/.test(upper)) return "AMP";
   if (/\bSMS\b/.test(upper)) return "SMS";
   if (/\bCMO\b/.test(upper)) return "CMO";
   if (/\b(?:SENIOR REGISTRAR|SENIOR REG|SR)\b/.test(upper)) return "Senior Registrar";
