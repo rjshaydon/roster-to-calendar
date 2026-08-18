@@ -3529,19 +3529,28 @@ function rowsToCoworkerEvents(rows) {
 
 async function applyFacilityStaffSeniorityOverridesToCoworkerEvents(db, rows) {
   const overridesByTerm = new Map();
-  const overriddenRows = await Promise.all((rows || []).map(async (row) => {
+  const overrideTerms = new Map();
+  for (const row of rows || []) {
     const sourceType = normalizeSourceType(row.sourceType);
     const date = String(row.event?.start || "").slice(0, 10);
     const termStart = australianTermStartForDate(date);
     const cacheKey = `${sourceType}|${termStart}`;
-    if (!overridesByTerm.has(cacheKey)) {
-      const overrides = await queryFacilityStaffSeniorityOverrides(db, { sourceType, termStart });
-      overridesByTerm.set(cacheKey, new Map(overrides.map((override) => [`${override.sourceType}|${override.doctorKey}`, override])));
-    }
-    const override = overridesByTerm.get(cacheKey).get(`${sourceType}|${row.doctorKey}`);
+    if (sourceType && termStart) overrideTerms.set(cacheKey, { sourceType, termStart });
+  }
+  await Promise.all([...overrideTerms.entries()].map(async ([cacheKey, { sourceType, termStart }]) => {
+    const overrides = await queryFacilityStaffSeniorityOverrides(db, { sourceType, termStart });
+    overridesByTerm.set(cacheKey, new Map(overrides.map((override) => [`${override.sourceType}|${override.doctorKey}`, override])));
+  }));
+  const overriddenRows = (rows || []).map((row) => {
+    const sourceType = normalizeSourceType(row.sourceType);
+    const date = String(row.event?.start || "").slice(0, 10);
+    const termStart = australianTermStartForDate(date);
+    const cacheKey = `${sourceType}|${termStart}`;
+    const overrides = overridesByTerm.get(cacheKey) || new Map();
+    const override = overrides.get(`${sourceType}|${row.doctorKey}`);
     if (!override || override.useRosterSeniority) return row;
     return { ...row, seniority: override.seniority, event: { ...row.event, seniority: override.seniority, facilitySeniorityOverride: true } };
-  }));
+  });
   const unknownRows = overriddenRows.filter((row) => !hasKnownCoworkerSeniority(row?.seniority));
   if (!unknownRows.length) return overriddenRows;
   const sourceTypes = [...new Set(unknownRows.map((row) => normalizeSourceType(row.sourceType)).filter(Boolean))];
