@@ -3529,7 +3529,7 @@ function rowsToCoworkerEvents(rows) {
 
 async function applyFacilityStaffSeniorityOverridesToCoworkerEvents(db, rows) {
   const overridesByTerm = new Map();
-  return Promise.all((rows || []).map(async (row) => {
+  const overriddenRows = await Promise.all((rows || []).map(async (row) => {
     const sourceType = normalizeSourceType(row.sourceType);
     const date = String(row.event?.start || "").slice(0, 10);
     const termStart = australianTermStartForDate(date);
@@ -3542,6 +3542,47 @@ async function applyFacilityStaffSeniorityOverridesToCoworkerEvents(db, rows) {
     if (!override || override.useRosterSeniority) return row;
     return { ...row, seniority: override.seniority, event: { ...row.event, seniority: override.seniority, facilitySeniorityOverride: true } };
   }));
+  const unknownRows = overriddenRows.filter((row) => !hasKnownCoworkerSeniority(row?.seniority));
+  if (!unknownRows.length) return overriddenRows;
+  const sourceTypes = [...new Set(unknownRows.map((row) => normalizeSourceType(row.sourceType)).filter(Boolean))];
+  const doctorKeys = [...new Set(unknownRows.map((row) => String(row.doctorKey || "").trim()).filter(Boolean))];
+  const dates = unknownRows.map((row) => String(row.event?.start || "").slice(0, 10)).filter(Boolean);
+  if (!sourceTypes.length || !doctorKeys.length || !dates.length) return overriddenRows;
+  const earliestTermStart = dates.map(australianTermStartForDate).filter(Boolean).sort()[0];
+  const latestDate = [...dates].sort().at(-1);
+  if (!earliestTermStart || !latestDate) return overriddenRows;
+  const candidates = await db.prepare(`
+    SELECT roster_events.source_type, roster_events.doctor_key, roster_events.seniority, roster_events.start_date
+    FROM roster_events
+    INNER JOIN roster_files ON roster_files.id = roster_events.file_id
+    WHERE roster_files.active = 1
+      AND roster_events.source_type IN (${sourceTypes.map(() => "?").join(", ")})
+      AND roster_events.doctor_key IN (${doctorKeys.map(() => "?").join(", ")})
+      AND roster_events.start_date >= ? AND roster_events.start_date <= ?
+      AND TRIM(roster_events.seniority) <> ''
+      AND LOWER(TRIM(roster_events.seniority)) <> 'unknown'
+    ORDER BY roster_events.source_type, roster_events.doctor_key, roster_events.start_date DESC
+  `).bind(...sourceTypes, ...doctorKeys, earliestTermStart, latestDate).all();
+  const gradesByPerson = new Map();
+  for (const candidate of candidates.results || []) {
+    const key = `${normalizeSourceType(candidate.source_type)}|${String(candidate.doctor_key || "").trim()}`;
+    if (!gradesByPerson.has(key)) gradesByPerson.set(key, []);
+    gradesByPerson.get(key).push({ seniority: String(candidate.seniority || "").trim(), date: String(candidate.start_date || "").slice(0, 10) });
+  }
+  return overriddenRows.map((row) => {
+    if (hasKnownCoworkerSeniority(row?.seniority)) return row;
+    const date = String(row.event?.start || "").slice(0, 10);
+    const termStart = australianTermStartForDate(date);
+    const key = `${normalizeSourceType(row.sourceType)}|${String(row.doctorKey || "").trim()}`;
+    const effective = (gradesByPerson.get(key) || []).find((candidate) => candidate.date <= date && candidate.date >= termStart);
+    if (!effective) return row;
+    return { ...row, seniority: effective.seniority, event: { ...row.event, seniority: effective.seniority, facilitySeniorityDerived: true } };
+  });
+}
+
+function hasKnownCoworkerSeniority(value) {
+  const seniority = String(value || "").trim();
+  return Boolean(seniority) && seniority.toLowerCase() !== "unknown";
 }
 
 export async function queryFacilityOverviewOnShift(db, options = {}) {

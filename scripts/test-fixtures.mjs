@@ -545,6 +545,7 @@ const caseyBytes = await readFile(fileURLToPath(new URL("../fixtures/Casey_Term_
 const mchBytes = await readFile(fileURLToPath(new URL("../fixtures/Paeds_Term_2_2026.xlsx", import.meta.url)));
 const appSource = await readFile(new URL("../public/static/app.js", import.meta.url), "utf8");
 assert.doesNotMatch(appSource, /Multiple grades recorded/, "ED staff should show one effective grade rather than exposing conflicting source grades");
+assert.match(appSource, /eventSeniorityRoleCode\(event\)[\s\S]*facilityOverviewDetectedSeniority/, "Who should infer a staff grade from an explicit roster title when the provider omits seniority");
 const rosterSource = await readFile(new URL("../public/static/roster.js", import.meta.url), "utf8");
 const stateSource = await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8");
 const findmyshiftModuleSource = await readFile(new URL("../functions/_lib/findmyshift.js", import.meta.url), "utf8");

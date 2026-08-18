@@ -5334,7 +5334,11 @@ function buildWhoAssignments(doctor, events) {
 
 function buildWhoAssignment(doctor, metadata, event) {
   const source = eventSourceCode(event);
-  const eventRole = eventSeniorityRoleCode(event);
+  // Some provider shifts omit the staff grade but retain it in the title (for
+  // example "Physiotherapist"). Use the same recognised-grade detection as
+  // At a glance before falling back to stored doctor metadata.
+  const eventRole = eventSeniorityRoleCode(event)
+    || normalizeWhoRole(facilityOverviewDetectedSeniority(event, event?.seniority || ""));
   const role = eventRole || metadata[source]?.role || metadata.any?.role || inferredWhoRoleForDoctor(doctor) || "";
   const activeRule = parserRuleForWhoEvent(event, source, role);
   const ruleTitle = activeRule ? parserRulePreviewTitle(activeRule) : "";
