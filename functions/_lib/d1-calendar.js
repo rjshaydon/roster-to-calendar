@@ -3612,7 +3612,7 @@ export async function queryFacilityOverviewOnShift(db, options = {}) {
     sourceType: facilityKey,
     termStart: australianTermStartForDate(date),
   })).map((override) => [`${override.sourceType}|${override.doctorKey}`, override]));
-  return (rows.results || [])
+  const events = (rows.results || [])
     .map((row) => ({
       doctorKey: String(row.doctor_key || "").trim(),
       displayName: String(row.display_name || "").trim(),
@@ -3626,6 +3626,9 @@ export async function queryFacilityOverviewOnShift(db, options = {}) {
       return { ...row, seniority: override.seniority, seniorityOverride: override, event: { ...row.event, seniority: override.seniority, facilitySeniorityOverride: true } };
     })
     .filter((row) => row.doctorKey && row.displayName && row.event);
+  // Keep At a glance consistent with Who and ED staff: a placeholder on this
+  // particular shift must not hide a known grade already recorded this term.
+  return applyFacilityStaffSeniorityOverridesToCoworkerEvents(db, events);
 }
 
 // This intentionally returns the roster events rather than a second server-side
