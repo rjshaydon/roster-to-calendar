@@ -1634,16 +1634,22 @@ function parseFindmyshiftDdhRecords(workbook, doctorKey) {
 
 function findmyshiftDdhSeniority(rawSeniority, label) {
   const supplied = cleanText(rawSeniority) || UNKNOWN_SENIORITY;
+  const suppliedGrade = recognisedFindmyshiftDdhSeniority(supplied);
+  if (suppliedGrade) return suppliedGrade;
   if (supplied.toUpperCase() !== UNKNOWN_SENIORITY.toUpperCase()) return supplied;
-  const upper = cleanText(label).replace(/\s+/g, " ").trim().toUpperCase();
+  return recognisedFindmyshiftDdhSeniority(label) || supplied;
+}
+
+function recognisedFindmyshiftDdhSeniority(value) {
+  const upper = cleanText(value).replace(/[’']/g, "").replace(/\s+/g, " ").trim().toUpperCase();
   if (/\bINTERN\b/.test(upper)) return "Intern";
-  if (/\bHMO\b/.test(upper)) return "HMO";
+  if (/\b(?:ED\s+)?HMOS?\b/.test(upper)) return "HMO";
   if (/\bSMS\b/.test(upper)) return "SMS";
   if (/\bCMO\b/.test(upper)) return "CMO";
   if (/\b(?:SENIOR REGISTRAR|SENIOR REG|SR)\b/.test(upper)) return "Senior Registrar";
   if (/\b(?:TRANSITIONAL|INTERMEDIATE|IR|TR)\b/.test(upper)) return "Transitional/Intermediate Registrar";
   if (/\b(?:JUNIOR REGISTRAR|JUNIOR REG|JR)\b/.test(upper)) return "Junior Registrar";
-  return supplied;
+  return "";
 }
 
 function findmyshiftTimedShiftTitleParts(facility, startHm, seniority) {

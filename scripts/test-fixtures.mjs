@@ -430,6 +430,21 @@ const unknownInternDoctor = doctorOptions([], unknownInternUpload.sources.ddh).f
 assert.ok(unknownInternDoctor, "FindMyShift fixture should expose the unknown-seniority intern");
 const unknownInternEvent = buildRosterView([], unknownInternUpload.sources.ddh, unknownInternDoctor.key).events[0];
 assert.equal(unknownInternEvent.seniority, "Intern", "FindMyShift labels should supply seniority when staff metadata says Unknown");
+const edHmosWorkbook = XLSX.read(findmyshiftRowsWorkbook([{
+  name: "Gideon Charin",
+  seniority: "ED HMO's",
+  date: "2026-08-18",
+  label: "Night",
+  start: "22:00",
+  end: "08:00",
+  facility: "Night",
+  comment: "",
+}]), { type: "array", cellDates: true });
+const edHmosFormData = new FormData();
+edHmosFormData.append("rosterFiles", workbookFile(edHmosWorkbook, "Dandenong-FindMyShift-ed-hmos.xlsx"));
+const edHmosUpload = await parseUploadForm(new Request("http://fixture.test/api/analyze", { method: "POST", body: edHmosFormData }));
+const edHmosEvent = buildRosterView([], edHmosUpload.sources.ddh, "GIDEON CHARIN").events[0];
+assert.equal(edHmosEvent.seniority, "HMO", "FindMyShift ED HMO's and HMO's roster group labels should normalise to HMO");
 const findmyshiftLeaveWorkbook = XLSX.read(findmyshiftRowsWorkbook([
   { sourceStaffId: "leave-doctor", name: "Ananth Sundaralingam", seniority: "SMS", date: "2026-08-10", label: "SL MMC", start: "", end: "", facility: "", comment: "" },
   { sourceStaffId: "leave-doctor", name: "Ananth Sundaralingam", seniority: "SMS", date: "2026-08-11", label: "S/L", start: "14:30", end: "00:00", facility: "", comment: "" },
@@ -787,7 +802,7 @@ assert.match(styleSource, /#facilityOverviewBody\.is-working-together > \.facili
 assert.match(stateSource, /action === "downloadFindmyshiftExceptions"[\s\S]*findmyshiftDandenongAssignmentExceptions[\s\S]*findmyshiftExceptionCsv/, "FindMyShift exception downloads must be creator-only server-side report reads");
 assert.match(findmyshiftCheckSource, /isTransientFindmyshiftRateLimitError[\s\S]*current\?\.lastSuccessAt[\s\S]*returned HTTP 429/, "a transient FindMyShift rate limit should neither mark a successful source failed nor cause it to be downloaded again");
 assert.match(findmyshiftModuleSource, /NEXT_TERM_LOOKAHEAD_DAYS = 28[\s\S]*findmyshiftPublicationWindow/, "FindMyShift should use a four-week early-publication window for the next term");
-assert.match(findmyshiftCheckSource, /IMPORT_FORMAT = "stream-paired-v2"[\s\S]*term-window change deliberately[\s\S]*rangeState\.requested[\s\S]*importFormat: IMPORT_FORMAT/, "a new FindMyShift parser revision or term window should bypass an unchanged provider version and persist its requested range");
+assert.match(findmyshiftCheckSource, /IMPORT_FORMAT = "stream-paired-v3"[\s\S]*term-window change deliberately[\s\S]*rangeState\.requested[\s\S]*importFormat: IMPORT_FORMAT/, "a new FindMyShift parser revision or term window should bypass an unchanged provider version and persist its requested range");
 assert.match(findmyshiftCheckSource, /findmyshift-no-shifts[\s\S]*waiting-for-publication/, "an unpublished upcoming FindMyShift term should wait for a provider update instead of surfacing as an import failure");
 assert.match(
   findmyshiftCheckSource,
@@ -822,7 +837,7 @@ assert.doesNotMatch(automationWorkflowSource, /schedule:/, "GitHub cron must not
 assert.match(automationIngestSource, /requestQueuedRosterProcessing/, "a newly retained roster should request the processor immediately");
 assert.match(
   findmyshiftCheckSource,
-  /IMPORT_FORMAT = "stream-paired-v2"[\s\S]*Dandenong-FindMyShift-\$\{IMPORT_FORMAT\}[\s\S]*saved\?\.importFormat[\s\S]*importFormat: IMPORT_FORMAT/,
+  /IMPORT_FORMAT = "stream-paired-v3"[\s\S]*Dandenong-FindMyShift-\$\{IMPORT_FORMAT\}[\s\S]*saved\?\.importFormat[\s\S]*importFormat: IMPORT_FORMAT/,
   "a corrected FindMyShift parser should retain a fresh generated source and bypass an older parser revision",
 );
 assert.match(automationDispatchSource, /GITHUB_ACTIONS_TOKEN[\s\S]*actions\/workflows[\s\S]*\/dispatches/, "dispatches should use a server-side GitHub Actions token");
