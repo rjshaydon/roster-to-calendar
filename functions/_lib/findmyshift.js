@@ -2,6 +2,7 @@ import * as XLSX from "xlsx";
 
 const API_BASE = "https://www.findmyshift.com/api/1.4";
 const NEXT_TERM_LOOKAHEAD_DAYS = 28;
+const FINDMYSHIFT_MAX_RATE_LIMIT_RETRIES = 2;
 
 export function findmyshiftConfiguredRosterRange(env = {}, now = new Date()) {
   // FindMyShift accepts the complete published roster window, but rejects an
@@ -327,13 +328,22 @@ function findmyshiftReportShape(report) {
 }
 
 async function findmyshiftRequest(path, apiKey, params) {
-  const body = new URLSearchParams({ apiKey: String(apiKey), ...Object.fromEntries(Object.entries(params).map(([key, value]) => [key, String(value)])) });
-  const response = await fetch(`${API_BASE}/${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
-    body,
-  });
-  const text = await response.text();
+  const body = new URLSearchParams({ apiKey: String(apiKey), ...Object.fromEntries(Object.entries(params).map(([key, value]) => [key, String(value)])) }).toString();
+  let response;
+  let text = "";
+  for (let attempt = 0; attempt <= FINDMYSHIFT_MAX_RATE_LIMIT_RETRIES; attempt += 1) {
+    response = await fetch(`${API_BASE}/${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+      body,
+    });
+    text = await response.text();
+    if (response.status !== 429 || attempt === FINDMYSHIFT_MAX_RATE_LIMIT_RETRIES) break;
+    // FindMyShift permits only one request per key at a time. A manual Files
+    // refresh can overlap the watchdog, so wait briefly and retry rather than
+    // rejecting a perfectly valid automatic roster import.
+    await waitFindmyshiftRetry(response.headers.get("retry-after"), attempt);
+  }
   if (!response.ok) {
     throw findmyshiftRequestError(`FindMyShift ${path} returned HTTP ${response.status}.`, {
       code: "http-error",
@@ -364,6 +374,14 @@ async function findmyshiftRequest(path, apiKey, params) {
     }
     throw error;
   }
+}
+
+async function waitFindmyshiftRetry(retryAfter, attempt) {
+  const seconds = Number(retryAfter);
+  const milliseconds = Number.isFinite(seconds) && seconds > 0
+    ? Math.min(Math.round(seconds * 1000), 5_000)
+    : 500 * (attempt + 1);
+  await new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function findmyshiftRequestError(message, details = {}) {
