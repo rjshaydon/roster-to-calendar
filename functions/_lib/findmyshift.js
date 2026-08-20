@@ -700,8 +700,9 @@ function findmyshiftStaffListHeading(value) {
   if (seniority) return { seniority, supported: true };
   // These are staff-list section rows, not people. They deliberately clear
   // group inheritance while keeping unsupported roles out of ED membership.
-  if (/^CLINICAL ASSISTANTS?$/.test(upper)) return { seniority: "", supported: false, assignment: "Paired AM" };
-  if (/^NURSE EDUCATORS?$/.test(upper)) return { seniority: "", supported: false };
+  if (/^(?:CLINICAL ASSISTANTS?|NURSE EDUCATORS?)$/.test(upper)) {
+    return { seniority: "", supported: false, assignment: "Paired AM" };
+  }
   return null;
 }
 

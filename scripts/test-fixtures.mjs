@@ -282,6 +282,8 @@ const authoritativeFindmyshiftStaff = [
   { staffId: "amp-person", firstName: "Amp", lastName: "Person", order: 41 },
   { staffId: "clinical-heading", displayName: "CLINICAL ASSISTANTS", order: 50 },
   { staffId: "clinical-person", firstName: "Clinical", lastName: "Person", order: 51 },
+  { staffId: "educator-heading", displayName: "NURSE EDUCATORS", order: 60 },
+  { staffId: "educator-person", firstName: "Fathima", lastName: "Support", order: 61 },
   { staffId: "synthetic", displayName: "HMO 1", order: 52 },
 ];
 const authoritativeGrades = findmyshiftStaffSeniorityById(authoritativeFindmyshiftStaff);
@@ -292,16 +294,20 @@ assert.deepEqual(
 );
 assert.deepEqual(
   Object.fromEntries(findmyshiftStaffAssignmentById(authoritativeFindmyshiftStaff)),
-  { "clinical-person": "Paired AM" },
-  "the Clinical Assistants staff-list group must safely classify its time-only support shifts",
+  { "clinical-person": "Paired AM", "educator-person": "Paired AM" },
+  "source-defined DDH support groups must safely classify their time-only support shifts",
 );
 const clinicalAssistantRows = extractShiftRows([
   { staffId: "clinical-person", facilityId: null, date: "2026-08-24", firstName: "Clinical", lastName: "Person", shift: "08:00-17:30" },
+  { staffId: "educator-person", facilityId: null, date: "2026-08-24", firstName: "Fathima", lastName: "Support", shift: "08:00-17:30" },
 ], { staff: authoritativeFindmyshiftStaff });
 assert.deepEqual(
   clinicalAssistantRows.map((row) => ({ label: row.label, start: row.start, end: row.end, facility: row.facility, seniority: row.seniority })),
-  [{ label: "Paired AM", start: "08:00", end: "17:30", facility: "", seniority: "Unknown" }],
-  "Clinical Assistant time-only rows must use their source-defined support assignment rather than a guessed stream",
+  [
+    { label: "Paired AM", start: "08:00", end: "17:30", facility: "", seniority: "Unknown" },
+    { label: "Paired AM", start: "08:00", end: "17:30", facility: "", seniority: "Unknown" },
+  ],
+  "support-role time-only rows must use their source-defined assignment rather than a guessed stream",
 );
 assert.doesNotThrow(
   () => assertFindmyshiftDandenongAssignments(clinicalAssistantRows),
@@ -321,6 +327,7 @@ assert.deepEqual(
   [
     { key: "AMP PERSON", seniority: "AMP", providerStaffId: "amp-person" },
     { key: "CLINICAL PERSON", seniority: "Unknown", providerStaffId: "clinical-person" },
+    { key: "FATHIMA SUPPORT", seniority: "Unknown", providerStaffId: "educator-person" },
     { key: "HMO PERSON", seniority: "HMO", providerStaffId: "hmo-person" },
     { key: "NURSE CANDIDATE", seniority: "ENP", providerStaffId: "candidate" },
     { key: "NURSE PRACTITIONER", seniority: "ENP", providerStaffId: "np-person" },
