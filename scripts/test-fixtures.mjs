@@ -9,7 +9,7 @@ import { assertFindmyshiftDandenongAssignments, extractShiftRows, findmyshiftCon
 import { buildAutomatedDerivedRosterPayload } from "../functions/_lib/automation-import.js";
 import { australianTermStartForDate, buildPreviewFromDerivedEvents, findRosterSyncByProviderVersion, isApprovedReparseOmission, sameRosterOccurrence, storeCachedSnapshot } from "../functions/_lib/d1-calendar.js";
 import { recordRosterDispatchLifecycle, requestQueuedRosterProcessing } from "../functions/_lib/automation-dispatch.js";
-import { applyRosterEventSeniorities, buildRosterView, customEventsToEvents, doctorOptions, findmyshiftProviderStaffOptions, mergeMembershipDoctors, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
+import { applyRosterEventSeniorities, attachFindmyshiftStaffIds, buildRosterView, customEventsToEvents, doctorOptions, findmyshiftProviderStaffOptions, findmyshiftRosteredStaffOptions, mergeMembershipDoctors, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
 import { customEventsToEvents as serverCustomEventsToEvents } from "../functions/_lib/roster.js";
 import { parserResultDelta, unresolvedCodeSummary } from "./parser-parity.mjs";
 
@@ -298,6 +298,7 @@ const authoritativeFormData = new FormData();
 authoritativeFormData.append("rosterFiles", workbookFile(authoritativeWorkbook, "Dandenong-FindMyShift-authoritative.xlsx"));
 const authoritativeUpload = await parseUploadForm(new Request("http://fixture.test/api/analyze", { method: "POST", body: authoritativeFormData }));
 const authoritativeProviders = findmyshiftProviderStaffOptions(authoritativeUpload.sources.ddh);
+const authoritativeRosteredStaff = findmyshiftRosteredStaffOptions(authoritativeUpload.sources.ddh);
 assert.deepEqual(
   authoritativeProviders.map((person) => ({ key: person.key, seniority: person.seniority, providerStaffId: person.providerStaffId })).sort((left, right) => left.key.localeCompare(right.key)),
   [
@@ -310,7 +311,7 @@ assert.deepEqual(
   "the staff directory must return grade evidence by FindMyShift staff ID while excluding headings and synthetic slots",
 );
 assert.deepEqual(
-  mergeMembershipDoctors([{ key: "AMP PERSON", displayName: "Amp Person", sourceType: "ddh", seniority: "Unknown" }], authoritativeProviders),
+  mergeMembershipDoctors(attachFindmyshiftStaffIds([{ key: "AMP PERSON", displayName: "Amp Person", sourceType: "ddh", seniority: "Unknown" }], authoritativeRosteredStaff), authoritativeProviders),
   [{ key: "AMP PERSON", displayName: "Amp Person", sourceType: "ddh", seniority: "AMP", membershipSource: "roster", providerStaffId: "amp-person" }],
   "only rostered staff should receive provider grades; directory-only people must not become ED members",
 );

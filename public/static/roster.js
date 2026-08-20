@@ -458,8 +458,9 @@ export async function inspectImportRecord(record) {
       displayName: doctor.displayName,
       sourceType,
     }));
+  const rosteredProviderStaff = sourceType === "ddh" ? findmyshiftRosteredStaffOptions([entry]) : [];
   const providerDoctors = sourceType === "ddh" ? findmyshiftProviderStaffOptions([entry]) : [];
-  return { sourceType, doctors: mergeMembershipDoctors(rosterDoctors, providerDoctors) };
+  return { sourceType, doctors: mergeMembershipDoctors(attachFindmyshiftStaffIds(rosterDoctors, rosteredProviderStaff), providerDoctors) };
 }
 
 export function findmyshiftProviderStaffOptions(entries = []) {
@@ -491,6 +492,33 @@ export function findmyshiftProviderStaffOptions(entries = []) {
   return [...doctors.values()];
 }
 
+// The structured audit sheet is the roster-side half of the staffId join.
+// It contains only people represented in reports/shifts, unlike staff/list.
+export function findmyshiftRosteredStaffOptions(entries = []) {
+  const people = new Map();
+  for (const entry of entries) {
+    const sheet = entry?.workbook?.Sheets?.["FindMyShift details"];
+    if (!sheet) continue;
+    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false }).slice(1);
+    for (const values of rows) {
+      const providerStaffId = cleanText(values?.[0]);
+      const name = cleanText(values?.[1]);
+      if (!providerStaffId || !name || isFindmyshiftSyntheticProviderName(name)) continue;
+      const key = normalizeName(name);
+      if (key && !people.has(key)) people.set(key, { key, displayName: name, providerStaffId });
+    }
+  }
+  return [...people.values()];
+}
+
+export function attachFindmyshiftStaffIds(rosterDoctors = [], rosteredProviderStaff = []) {
+  const idsByKey = new Map((rosteredProviderStaff || []).map((person) => [normalizeName(person?.key || person?.displayName || ""), cleanText(person?.providerStaffId)]));
+  return (rosterDoctors || []).map((doctor) => {
+    const providerStaffId = idsByKey.get(normalizeName(doctor?.key || doctor?.displayName || ""));
+    return providerStaffId ? { ...doctor, providerStaffId } : doctor;
+  });
+}
+
 function isFindmyshiftSyntheticProviderName(value) {
   const upper = cleanText(value).replace(/[’']/g, "").replace(/\s+/g, " ").trim().toUpperCase();
   return /^(?:SENIOR MEDICAL STAFF|SENIOR REGISTRARS?|(?:TRANSITIONAL|INTERMEDIATE) REGISTRARS?|JUNIOR REGISTRARS?|(?:(?:ED|CRIT CARE) )?HMOS?|CMOS?|INTERNS?|NURSE PRACTITIONERS|NURSE PRAC\. CANDIDATES|AMPS?|CLINICAL ASSISTANTS?|NURSE EDUCATORS?)$/.test(upper)
@@ -518,11 +546,17 @@ export function mergeMembershipDoctors(rosterDoctors = [], providerDoctors = [])
       membershipSource: "roster",
     });
   }
+  const rosterKeysByProviderStaffId = new Map(
+    [...byKey.values()]
+      .filter((doctor) => doctor.providerStaffId)
+      .map((doctor) => [String(doctor.providerStaffId), doctor.key]),
+  );
   // FindMyShift's staff endpoint is a team directory, not a roster. It can
   // include people with no shift in the imported period, so it must enrich
   // roster members rather than create ED-staff membership by itself.
   for (const provider of providerDoctors) {
-    const key = normalizeName(provider?.key || provider?.displayName || "");
+    const key = rosterKeysByProviderStaffId.get(String(provider?.providerStaffId || ""))
+      || normalizeName(provider?.key || provider?.displayName || "");
     const rosterDoctor = byKey.get(key);
     if (!key || !rosterDoctor) continue;
     const providerSeniority = sanitizeRuleSeniority(provider?.seniority || UNKNOWN_SENIORITY);

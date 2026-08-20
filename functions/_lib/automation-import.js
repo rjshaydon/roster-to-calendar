@@ -3,7 +3,9 @@ import {
   buildRosterView,
   defaultSettings,
   doctorOptions,
+  attachFindmyshiftStaffIds,
   findmyshiftProviderStaffOptions,
+  findmyshiftRosteredStaffOptions,
   mergeMembershipDoctors,
   normalizeRosterName,
   parseUploadForm,
@@ -72,8 +74,9 @@ export async function buildAutomatedDerivedRosterPayload({ file, sourceId, conte
         sourceType: source.sourceType,
       }));
     });
+  const rosteredProviderStaff = source.sourceType === "ddh" ? findmyshiftRosteredStaffOptions(sourceEntries.ddh) : [];
   const providerDoctors = source.sourceType === "ddh" ? findmyshiftProviderStaffOptions(sourceEntries.ddh) : [];
-  const uniqueDoctors = uniqueRosterDoctors(mergeMembershipDoctors(doctors, providerDoctors));
+  const uniqueDoctors = uniqueRosterDoctors(mergeMembershipDoctors(attachFindmyshiftStaffIds(doctors, rosteredProviderStaff), providerDoctors));
   const settings = {
     ...defaultSettings(),
     hospitalFilter: "all",
