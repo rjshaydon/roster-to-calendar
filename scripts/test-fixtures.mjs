@@ -313,6 +313,18 @@ assert.doesNotThrow(
   () => assertFindmyshiftDandenongAssignments(clinicalAssistantRows),
   "source-defined Clinical Assistant support shifts should not block the automatic import",
 );
+const registrarHeadingWorkbook = XLSX.read(findmyshiftRowsWorkbook([
+  { sourceStaffId: "junior-person", name: "Junior Person", seniority: "Junior Registrar", date: "2026-08-03", label: "Orange AM", start: "08:00", end: "17:30", facility: "Orange AM", comment: "" },
+  { sourceStaffId: "senior-person", name: "Senior Person", seniority: "Senior Registrar", date: "2026-08-03", label: "Orange PM", start: "14:30", end: "00:00", facility: "Orange PM", comment: "" },
+]), { type: "array", cellDates: true });
+const registrarHeadingFormData = new FormData();
+registrarHeadingFormData.append("rosterFiles", workbookFile(registrarHeadingWorkbook, "Dandenong-FindMyShift-registrar-headings.xlsx"));
+const registrarHeadingUpload = await parseUploadForm(new Request("http://fixture.test/api/analyze", { method: "POST", body: registrarHeadingFormData }));
+assert.deepEqual(
+  doctorOptions([], registrarHeadingUpload.sources.ddh).map((doctor) => doctor.key).sort(),
+  ["JUNIOR PERSON", "SENIOR PERSON"],
+  "singular FindMyShift Junior and Senior Registrar group headings must never become DDH staff",
+);
 const authoritativeWorkbook = XLSX.read(findmyshiftRowsWorkbook([
   { sourceStaffId: "hmo-person", name: "Hmo Person", seniority: "HMO", date: "2026-08-03", label: "Orange AM", start: "07:30", end: "17:00", facility: "Orange AM", comment: "" },
   { sourceStaffId: "amp-person", name: "Amp Person", seniority: "AMP", date: "2026-08-03", label: "Physiotherapist", start: "09:30", end: "18:00", facility: "", comment: "" },

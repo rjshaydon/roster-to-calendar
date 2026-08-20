@@ -148,6 +148,10 @@ const MMC_STOP_SECTIONS = new Set([
 const DDH_SECTION_MARKERS = new Set([
   "SENIOR MEDICAL STAFF",
   "JUNIOR MEDICAL STAFF",
+  "SENIOR REGISTRAR",
+  "SENIOR REGISTRARS",
+  "JUNIOR REGISTRAR",
+  "JUNIOR REGISTRARS",
   "REGISTRAR",
   "REGISTRARS",
   "HMO",
@@ -3533,11 +3537,13 @@ function mmcSeniorityMap() {
 function ddhSeniorityMap() {
   return new Map([
     ["SENIOR MEDICAL STAFF", "SMS"],
+    ["SENIOR REGISTRAR", "Senior Registrar"],
     ["SENIOR REGISTRARS", "Senior Registrar"],
     ["REGISTRAR", "Senior Registrar"],
     ["REGISTRARS", "Senior Registrar"],
     ["CMO'S", "CMO"],
     ["CMOS", "CMO"],
+    ["JUNIOR REGISTRAR", "Junior Registrar"],
     ["JUNIOR REGISTRARS", "Junior Registrar"],
     ["ED HMO'S", "HMO"],
     ["ED HMOS", "HMO"],
