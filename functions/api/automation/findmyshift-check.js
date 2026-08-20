@@ -8,7 +8,7 @@ const SOURCE_ID = "dandenong-findmyshift";
 // cursor. Bump it whenever FindMyShift parsing changes, so an unchanged
 // provider roster is imported once more with the corrected parser rather than
 // leaving its earlier derived events active indefinitely.
-const IMPORT_FORMAT = "stream-paired-v5";
+const IMPORT_FORMAT = "stream-paired-v6";
 
 export async function onRequestPost(context) {
   if (!hasValidToken(context.request, context.env)) return Response.json({ error: "Unauthorized." }, { status: 401 });

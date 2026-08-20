@@ -5,7 +5,7 @@ import XLSX from "xlsx";
 
 import { onRequestPost as handleStatePost } from "../functions/api/state.js";
 import { onRequestGet as handleFeedGet } from "../functions/api/feed.js";
-import { assertFindmyshiftDandenongAssignments, extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentDiagnostics, findmyshiftDandenongAssignmentExceptions, findmyshiftRowsWorkbook, findmyshiftStaffSeniorityById } from "../functions/_lib/findmyshift.js";
+import { assertFindmyshiftDandenongAssignments, extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentDiagnostics, findmyshiftDandenongAssignmentExceptions, findmyshiftRowsWorkbook, findmyshiftStaffAssignmentById, findmyshiftStaffSeniorityById } from "../functions/_lib/findmyshift.js";
 import { buildAutomatedDerivedRosterPayload } from "../functions/_lib/automation-import.js";
 import { australianTermStartForDate, buildPreviewFromDerivedEvents, findRosterSyncByProviderVersion, isApprovedReparseOmission, sameRosterOccurrence, storeCachedSnapshot } from "../functions/_lib/d1-calendar.js";
 import { recordRosterDispatchLifecycle, requestQueuedRosterProcessing } from "../functions/_lib/automation-dispatch.js";
@@ -289,6 +289,23 @@ assert.deepEqual(
   Object.fromEntries(authoritativeGrades),
   { "hmo-person": "HMO", "np-person": "ENP", candidate: "ENP", "amp-person": "AMP" },
   "FindMyShift groups must include NPs and stop at unsupported headings rather than leaking the preceding grade",
+);
+assert.deepEqual(
+  Object.fromEntries(findmyshiftStaffAssignmentById(authoritativeFindmyshiftStaff)),
+  { "clinical-person": "Paired AM" },
+  "the Clinical Assistants staff-list group must safely classify its time-only support shifts",
+);
+const clinicalAssistantRows = extractShiftRows([
+  { staffId: "clinical-person", facilityId: null, date: "2026-08-24", firstName: "Clinical", lastName: "Person", shift: "08:00-17:30" },
+], { staff: authoritativeFindmyshiftStaff });
+assert.deepEqual(
+  clinicalAssistantRows.map((row) => ({ label: row.label, start: row.start, end: row.end, facility: row.facility, seniority: row.seniority })),
+  [{ label: "Paired AM", start: "08:00", end: "17:30", facility: "", seniority: "Unknown" }],
+  "Clinical Assistant time-only rows must use their source-defined support assignment rather than a guessed stream",
+);
+assert.doesNotThrow(
+  () => assertFindmyshiftDandenongAssignments(clinicalAssistantRows),
+  "source-defined Clinical Assistant support shifts should not block the automatic import",
 );
 const authoritativeWorkbook = XLSX.read(findmyshiftRowsWorkbook([
   { sourceStaffId: "hmo-person", name: "Hmo Person", seniority: "HMO", date: "2026-08-03", label: "Orange AM", start: "07:30", end: "17:00", facility: "Orange AM", comment: "" },

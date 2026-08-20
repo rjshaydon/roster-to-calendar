@@ -57,13 +57,6 @@ export async function findmyshiftRosterWorkbook(apiKey, teamId, range) {
   // FindMyShift allows only one concurrent request per API key.  Keep these
   // dependent lookups serial even though they are otherwise independent.
   const report = await findmyshiftShiftReport(apiKey, teamId, range);
-  // The report includes names and facility ids itself. Check for the known
-  // DDH stream-information gap before the optional lookups, so an incomplete
-  // report does not consume requests (or trigger a 429) merely to discover
-  // that it cannot safely be imported.
-  const preliminaryShifts = extractShiftRows(report);
-  if (!preliminaryShifts.length) throw noUsableFindmyshiftShiftsError();
-  assertFindmyshiftDandenongAssignments(preliminaryShifts);
   const staff = await findmyshiftStaffList(apiKey, teamId);
   const facilities = await findmyshiftFacilityList(apiKey, teamId);
   // FindMyShift's staff endpoint encodes DDH grades in ordered roster groups
@@ -71,7 +64,8 @@ export async function findmyshiftRosterWorkbook(apiKey, teamId, range) {
   // person's jobTitle field. Preserve that source classification in both the
   // event rows and the retained staff sheet.
   const staffSeniorities = findmyshiftStaffSeniorityById(staff);
-  const shifts = extractShiftRows(report, { staff, facilities, staffSeniorities });
+  const staffAssignments = findmyshiftStaffAssignmentById(staff);
+  const shifts = extractShiftRows(report, { staff, facilities, staffSeniorities, staffAssignments });
   if (!shifts.length) throw noUsableFindmyshiftShiftsError();
   assertFindmyshiftDandenongAssignments(shifts);
   return findmyshiftRowsWorkbook(shifts, staff, { staffSeniorities });
@@ -445,6 +439,9 @@ function extractFindmyshiftFlatRows(report, options) {
   const staffSeniorities = options.staffSeniorities instanceof Map
     ? options.staffSeniorities
     : findmyshiftStaffSeniorityById(options.staff);
+  const staffAssignments = options.staffAssignments instanceof Map
+    ? options.staffAssignments
+    : findmyshiftStaffAssignmentById(options.staff);
   const facilitiesById = indexFindmyshiftFacilities(options.facilities);
   const sourceRows = [];
   for (const entry of reportRows) {
@@ -466,6 +463,7 @@ function extractFindmyshiftFlatRows(report, options) {
       end: time?.end || "",
       facility: facilitiesById.get(facilityId) || String(entry.facilityName || entry.facility || entry.location || facilityId || "").trim(),
       comment: String(entry.comment || entry.comments || entry.notes || "").trim(),
+      sourceAssignment: staffAssignments.get(staffId) || "",
     });
   }
   return pairFindmyshiftTimeAndStreamRows(sourceRows);
@@ -505,6 +503,10 @@ function pairFindmyshiftTimeAndStreamRows(rows) {
 // paired clinician.
 function applyKnownDandenongFindmyshiftAssignment(row) {
   if (!isAmbiguousFindmyshiftTimedRow(row)) return row;
+  // FindMyShift represents Clinical Assistant shifts as a time range without
+  // a stream. The authoritative ordered staff list identifies that role, so
+  // preserve it as support work without guessing a clinical stream.
+  if (row?.sourceAssignment) return { ...row, label: row.sourceAssignment, pairingIssue: "" };
   const name = normalizeFindmyshiftStaffName(row?.name);
   const key = `${name}|${String(row?.date || "").slice(0, 10)}`;
   const approvedLabels = {
@@ -620,6 +622,42 @@ export function findmyshiftStaffSeniorityById(staff) {
   return grades;
 }
 
+// Some DDH support roles are rostered against a time only, not a clinical
+// stream. Their ordered FindMyShift group is still sufficient to identify the
+// work safely. Keep this distinct from seniority: it is an event assignment,
+// not a grade and must never be inferred from a person's name or shift time.
+export function findmyshiftStaffAssignmentById(staff) {
+  const entries = findmyshiftOrderedStaffEntries(staff);
+  const assignments = new Map();
+  let currentAssignment = "";
+  for (const { entry } of entries) {
+    const name = nameFrom(entry);
+    const heading = findmyshiftStaffListHeading(name);
+    if (heading) {
+      currentAssignment = heading.assignment || "";
+      continue;
+    }
+    const id = String(entry.staffId || entry.id || "").trim();
+    if (id && !isFindmyshiftSyntheticStaffName(name) && currentAssignment) assignments.set(id, currentAssignment);
+  }
+  return assignments;
+}
+
+function findmyshiftOrderedStaffEntries(staff) {
+  return (Array.isArray(staff) ? staff : [])
+    .filter((entry) => entry && typeof entry === "object")
+    .map((entry, index) => ({ entry, index }))
+    .sort((left, right) => {
+      const leftOrder = Number(left.entry.order);
+      const rightOrder = Number(right.entry.order);
+      const leftValid = Number.isFinite(leftOrder);
+      const rightValid = Number.isFinite(rightOrder);
+      if (leftValid && rightValid && leftOrder !== rightOrder) return leftOrder - rightOrder;
+      if (leftValid !== rightValid) return leftValid ? -1 : 1;
+      return left.index - right.index;
+    });
+}
+
 function findmyshiftSeniorityForStaff(person, entry, groupedGrade) {
   const direct = recognisedFindmyshiftStaffSeniority(
     person?.jobTitle || person?.department || entry?.jobTitle || entry?.department,
@@ -644,7 +682,8 @@ function findmyshiftStaffListHeading(value) {
   if (seniority) return { seniority, supported: true };
   // These are staff-list section rows, not people. They deliberately clear
   // group inheritance while keeping unsupported roles out of ED membership.
-  if (/^(?:CLINICAL ASSISTANTS?|NURSE EDUCATORS?)$/.test(upper)) return { seniority: "", supported: false };
+  if (/^CLINICAL ASSISTANTS?$/.test(upper)) return { seniority: "", supported: false, assignment: "Paired AM" };
+  if (/^NURSE EDUCATORS?$/.test(upper)) return { seniority: "", supported: false };
   return null;
 }
 
