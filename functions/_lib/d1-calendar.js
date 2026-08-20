@@ -73,6 +73,7 @@ async function ensureCalendarSchemaUncached(db) {
   `).run();
   await ensureColumn(db, "roster_file_doctors", "seniority", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn(db, "roster_file_doctors", "membership_source", "TEXT NOT NULL DEFAULT 'roster'");
+  await ensureColumn(db, "roster_file_doctors", "provider_staff_id", "TEXT NOT NULL DEFAULT ''");
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_file_doctors_source_file ON roster_file_doctors (source_type, file_id)").run();
   await db.prepare(`
     CREATE TABLE IF NOT EXISTS facility_staff_designations (
@@ -139,12 +140,14 @@ async function ensureCalendarSchemaUncached(db) {
       title TEXT NOT NULL,
       raw_value TEXT NOT NULL DEFAULT '',
       seniority TEXT NOT NULL DEFAULT '',
+      provider_staff_id TEXT NOT NULL DEFAULT '',
       location TEXT NOT NULL DEFAULT '',
       all_day INTEGER NOT NULL DEFAULT 0,
       time_label TEXT NOT NULL DEFAULT '',
       event_json TEXT NOT NULL
     )
   `).run();
+  await ensureColumn(db, "roster_events", "provider_staff_id", "TEXT NOT NULL DEFAULT ''");
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_events_doctor_range ON roster_events (doctor_key, start_date, end_date)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_events_file_doctor ON roster_events (file_id, doctor_key)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_events_date_source ON roster_events (start_date, source_type)").run();
@@ -513,19 +516,20 @@ export async function upsertDerivedRosterFile(db, file, storedImport) {
         updated_at = excluded.updated_at
     `).bind(sourceType, doctor.key, doctor.displayName, parsedAt).run();
     await db.prepare(`
-      INSERT INTO roster_file_doctors (file_id, source_type, doctor_key, display_name, seniority, membership_source)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO roster_file_doctors (file_id, source_type, doctor_key, display_name, seniority, membership_source, provider_staff_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(file_id, source_type, doctor_key) DO UPDATE SET
         display_name = excluded.display_name,
         seniority = excluded.seniority,
-        membership_source = excluded.membership_source
-    `).bind(file.id, sourceType, doctor.key, doctor.displayName, doctor.seniority || "", doctor.membershipSource || "roster").run();
+        membership_source = excluded.membership_source,
+        provider_staff_id = excluded.provider_staff_id
+    `).bind(file.id, sourceType, doctor.key, doctor.displayName, doctor.seniority || "", doctor.membershipSource || "roster", doctor.providerStaffId || "").run();
     for (const event of events) {
       await db.prepare(`
         INSERT INTO roster_events (
           id, file_id, source_type, doctor_key, display_name, start_date, end_date, start_ts, end_ts,
-          title, raw_value, seniority, location, all_day, time_label, event_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          title, raw_value, seniority, provider_staff_id, location, all_day, time_label, event_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).bind(
         `${file.id}:${doctor.key}:${event.id}`,
         file.id,
@@ -539,6 +543,7 @@ export async function upsertDerivedRosterFile(db, file, storedImport) {
         String(event.title || ""),
         String(event.rawValue || ""),
         String(event.seniority || ""),
+        String(event.providerStaffId || doctor.providerStaffId || ""),
         String(event.location || ""),
         event.allDay === true ? 1 : 0,
         String(event.timeLabel || ""),
@@ -1856,7 +1861,7 @@ export async function queryUnresolvedRosterShiftIssueRows(db, options = {}) {
     const issue = parseIssue(row.issue_json) || sanitizeIssue({
       id: row.id,
       source: row.source_type,
-      seniority: row.seniority,
+      seniority: row.effective_seniority || row.seniority,
       startDay: row.start_date,
       rawValue: row.raw_value,
       status: row.status,
@@ -3500,7 +3505,19 @@ export async function queryCoworkerEventsFromEvents(db, options = {}) {
       roster_events.doctor_key,
       roster_events.display_name,
       roster_events.source_type,
-      roster_events.seniority,
+      CASE
+        WHEN TRIM(roster_events.seniority) <> '' AND LOWER(TRIM(roster_events.seniority)) <> 'unknown' THEN roster_events.seniority
+        ELSE COALESCE((
+          SELECT roster_file_doctors.seniority
+          FROM roster_file_doctors
+          WHERE roster_file_doctors.file_id = roster_events.file_id
+            AND roster_file_doctors.source_type = roster_events.source_type
+            AND roster_file_doctors.doctor_key = roster_events.doctor_key
+            AND TRIM(roster_file_doctors.seniority) <> ''
+            AND LOWER(TRIM(roster_file_doctors.seniority)) <> 'unknown'
+          LIMIT 1
+        ), roster_events.seniority)
+      END AS effective_seniority,
       roster_events.event_json
     FROM roster_events
     INNER JOIN roster_files ON roster_files.id = roster_events.file_id
@@ -3626,7 +3643,19 @@ export async function queryFacilityOverviewOnShift(db, options = {}) {
       roster_events.doctor_key,
       roster_events.display_name,
       roster_events.source_type,
-      roster_events.seniority,
+      CASE
+        WHEN TRIM(roster_events.seniority) <> '' AND LOWER(TRIM(roster_events.seniority)) <> 'unknown' THEN roster_events.seniority
+        ELSE COALESCE((
+          SELECT roster_file_doctors.seniority
+          FROM roster_file_doctors
+          WHERE roster_file_doctors.file_id = roster_events.file_id
+            AND roster_file_doctors.source_type = roster_events.source_type
+            AND roster_file_doctors.doctor_key = roster_events.doctor_key
+            AND TRIM(roster_file_doctors.seniority) <> ''
+            AND LOWER(TRIM(roster_file_doctors.seniority)) <> 'unknown'
+          LIMIT 1
+        ), roster_events.seniority)
+      END AS effective_seniority,
       roster_events.event_json
     FROM roster_events
     INNER JOIN roster_files ON roster_files.id = roster_events.file_id
@@ -3647,7 +3676,7 @@ export async function queryFacilityOverviewOnShift(db, options = {}) {
       doctorKey: String(row.doctor_key || "").trim(),
       displayName: String(row.display_name || "").trim(),
       sourceType: normalizeSourceType(row.source_type),
-      seniority: String(row.seniority || "").trim(),
+      seniority: String(row.effective_seniority || row.seniority || "").trim(),
       event: parseEvent(row.event_json),
     }))
     .map((row) => {

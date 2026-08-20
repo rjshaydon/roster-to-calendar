@@ -10415,9 +10415,10 @@ function renderFacilityOverviewStaffResults(data, term) {
     const knownMembershipGrade = [...person.membershipGrades]
       .map(facilityOverviewNormalizeSeniority)
       .find((grade) => grade && grade !== "Unknown");
-    // Dated roster evidence is more reliable than membership metadata. Unknown
-    // is a fallback, not a second grade to show to the user.
-    person.seniority = latestKnownEventGrade || knownMembershipGrade || "Unknown";
+    // FindMyShift staff-list groups describe the clinician's current grade.
+    // Use that term membership before a dated shift label so ED Staff, On
+    // shift and Who all report the same current designation.
+    person.seniority = knownMembershipGrade || latestKnownEventGrade || "Unknown";
     person.multipleGrades = false;
     person.designation = designations.get(`${person.sourceType}|${person.doctorKey}`) || null;
     person.seniorityOverride = seniorityOverrides.get(`${person.sourceType}|${person.doctorKey}`) || null;

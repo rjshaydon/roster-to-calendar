@@ -604,13 +604,15 @@ export function findmyshiftStaffSeniorityById(staff) {
   let currentGrade = "";
   for (const { entry } of entries) {
     const name = nameFrom(entry);
-    const headingGrade = findmyshiftRosterGroupSeniority(name);
-    if (headingGrade) {
-      currentGrade = headingGrade;
+    const heading = findmyshiftStaffListHeading(name);
+    if (heading) {
+      // An unsupported section is still a boundary. Never let the preceding
+      // grade bleed into a different FindMyShift staff group.
+      currentGrade = heading.seniority;
       continue;
     }
     const id = String(entry.staffId || entry.id || "").trim();
-    if (!id) continue;
+    if (!id || isFindmyshiftSyntheticStaffName(name)) continue;
     const directGrade = recognisedFindmyshiftStaffSeniority(entry.jobTitle || entry.department);
     if (directGrade) grades.set(id, directGrade);
     else if (currentGrade) grades.set(id, currentGrade);
@@ -627,23 +629,41 @@ function findmyshiftSeniorityForStaff(person, entry, groupedGrade) {
   return String(person?.jobTitle || person?.department || entry?.jobTitle || entry?.department || "Unknown").trim() || "Unknown";
 }
 
-function findmyshiftRosterGroupSeniority(value) {
+function findmyshiftStaffListHeading(value) {
   const upper = normaliseFindmyshiftSeniorityText(value);
-  if (/^(?:SENIOR MEDICAL STAFF|SMS)$/i.test(upper)) return "SMS";
-  if (/^SENIOR REGISTRARS?$/i.test(upper)) return "Senior Registrar";
-  if (/^(?:TRANSITIONAL|INTERMEDIATE) REGISTRARS?$/i.test(upper)) return "Transitional/Intermediate Registrar";
-  if (/^JUNIOR REGISTRARS?$/i.test(upper)) return "Junior Registrar";
-  if (/^(?:(?:ED|CRIT CARE) )?HMOS?$/i.test(upper)) return "HMO";
-  if (/^CMOS?$/i.test(upper)) return "CMO";
-  if (/^INTERNS?$/i.test(upper)) return "Intern";
-  if (/^(?:AMPS?|ALLIED MEDICAL PRACTITIONERS?)$/i.test(upper)) return "AMP";
-  return "";
+  const seniority = /^(?:SENIOR MEDICAL STAFF|SMS)$/.test(upper) ? "SMS"
+    : /^SENIOR REGISTRARS?$/.test(upper) ? "Senior Registrar"
+      : /^(?:TRANSITIONAL|INTERMEDIATE) REGISTRARS?$/.test(upper) ? "Transitional/Intermediate Registrar"
+        : /^JUNIOR REGISTRARS?$/.test(upper) ? "Junior Registrar"
+          : /^(?:(?:ED|CRIT CARE) )?HMOS?$/.test(upper) ? "HMO"
+            : /^CMOS?$/.test(upper) ? "CMO"
+              : /^INTERNS?$/.test(upper) ? "Intern"
+                : /^(?:NURSE PRACTITIONERS|NURSE PRAC\. CANDIDATES)$/.test(upper) ? "ENP"
+                  : /^(?:AMPS?|ALLIED MEDICAL PRACTITIONERS?)$/.test(upper) ? "AMP"
+                    : "";
+  if (seniority) return { seniority, supported: true };
+  // These are staff-list section rows, not people. They deliberately clear
+  // group inheritance while keeping unsupported roles out of ED membership.
+  if (/^(?:CLINICAL ASSISTANTS?|NURSE EDUCATORS?)$/.test(upper)) return { seniority: "", supported: false };
+  return null;
+}
+
+function findmyshiftRosterGroupSeniority(value) {
+  return findmyshiftStaffListHeading(value)?.seniority || "";
+}
+
+function isFindmyshiftSyntheticStaffName(value) {
+  const upper = normaliseFindmyshiftSeniorityText(value);
+  if (findmyshiftStaffListHeading(upper)) return true;
+  return /^(?:(?:ED|SSU|CRIT CARE) )?(?:HMO|INTERN|SMS|CMO)(?: \d+)?$/.test(upper)
+    || /^(?:(?:SENIOR|JUNIOR|TRANSITIONAL|INTERMEDIATE) )?REGISTRAR(?: \d+)?$/.test(upper);
 }
 
 function recognisedFindmyshiftStaffSeniority(value) {
   const upper = normaliseFindmyshiftSeniorityText(value);
   if (/\bINTERN\b/.test(upper)) return "Intern";
   if (/\b(?:ED |CRIT CARE )?HMOS?\b/.test(upper)) return "HMO";
+  if (/\b(?:ENP|NP|NPC|NURSE PRACTITIONER)\b/.test(upper)) return "ENP";
   if (/\b(?:AMP|PHYSIO(?:THERAPIST)?|ALLIED MEDICAL PRACTITIONER)\b/.test(upper)) return "AMP";
   if (/\bSMS\b/.test(upper)) return "SMS";
   if (/\bCMO\b/.test(upper)) return "CMO";
@@ -792,7 +812,7 @@ export function findmyshiftRowsWorkbook(rows, staff = [], options = {}) {
     const id = String(person?.staffId || person?.id || "").trim();
     const name = nameFrom(person);
     if (!name) continue;
-    if (findmyshiftRosterGroupSeniority(name)) continue;
+    if (findmyshiftRosterGroupSeniority(name) || isFindmyshiftSyntheticStaffName(name)) continue;
     const marker = id || name.toUpperCase();
     if (seenStaff.has(marker)) continue;
     seenStaff.add(marker);

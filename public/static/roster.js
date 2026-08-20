@@ -463,24 +463,39 @@ export async function inspectImportRecord(record) {
 }
 
 export function findmyshiftProviderStaffOptions(entries = []) {
-  const doctors = [];
+  const doctors = new Map();
   for (const entry of entries) {
     const sheet = entry?.workbook?.Sheets?.["FindMyShift staff"];
     if (!sheet) continue;
     const range = XLSX.utils.decode_range(sheet["!ref"] || "A1:C1");
     for (let row = 1; row <= range.e.r; row += 1) {
+      const providerStaffId = cleanText(getCellValue(sheet, row + 1, 1));
       const name = cleanText(getCellValue(sheet, row + 1, 2));
-      if (!name) continue;
-      doctors.push({
+      if (!name || isFindmyshiftSyntheticProviderName(name)) continue;
+      const key = normalizeName(name);
+      if (!key) continue;
+      const candidate = {
         key: normalizeName(name),
         displayName: name,
         sourceType: "ddh",
         seniority: canonicalFindmyshiftProviderSeniority(getCellValue(sheet, row + 1, 3)),
         membershipSource: "provider",
-      });
+        providerStaffId,
+      };
+      const previous = doctors.get(key);
+      if (!previous || previous.seniority === UNKNOWN_SENIORITY && candidate.seniority !== UNKNOWN_SENIORITY) doctors.set(key, candidate);
     }
   }
-  return mergeMembershipDoctors([], doctors);
+  // This is a grade directory, not membership. Callers merge it only with
+  // people present in reports/shifts; returning it directly is essential.
+  return [...doctors.values()];
+}
+
+function isFindmyshiftSyntheticProviderName(value) {
+  const upper = cleanText(value).replace(/[’']/g, "").replace(/\s+/g, " ").trim().toUpperCase();
+  return /^(?:SENIOR MEDICAL STAFF|SENIOR REGISTRARS?|(?:TRANSITIONAL|INTERMEDIATE) REGISTRARS?|JUNIOR REGISTRARS?|(?:(?:ED|CRIT CARE) )?HMOS?|CMOS?|INTERNS?|NURSE PRACTITIONERS|NURSE PRAC\. CANDIDATES|AMPS?|CLINICAL ASSISTANTS?|NURSE EDUCATORS?)$/.test(upper)
+    || /^(?:(?:ED|SSU|CRIT CARE) )?(?:HMO|INTERN|SMS|CMO)(?: \d+)?$/.test(upper)
+    || /^(?:(?:SENIOR|JUNIOR|TRANSITIONAL|INTERMEDIATE) )?REGISTRAR(?: \d+)?$/.test(upper);
 }
 
 function canonicalFindmyshiftProviderSeniority(value) {
@@ -513,7 +528,9 @@ export function mergeMembershipDoctors(rosterDoctors = [], providerDoctors = [])
     const providerSeniority = sanitizeRuleSeniority(provider?.seniority || UNKNOWN_SENIORITY);
     const rosterSeniority = sanitizeRuleSeniority(rosterDoctor.seniority || UNKNOWN_SENIORITY);
     if (rosterSeniority === UNKNOWN_SENIORITY && providerSeniority !== UNKNOWN_SENIORITY) {
-      byKey.set(key, { ...rosterDoctor, seniority: providerSeniority });
+      byKey.set(key, { ...rosterDoctor, seniority: providerSeniority, ...(provider.providerStaffId || rosterDoctor.providerStaffId ? { providerStaffId: provider.providerStaffId || rosterDoctor.providerStaffId } : {}) });
+    } else if (provider.providerStaffId && !rosterDoctor.providerStaffId) {
+      byKey.set(key, { ...rosterDoctor, providerStaffId: provider.providerStaffId });
     }
   }
   return [...byKey.values()];
@@ -524,6 +541,10 @@ export function mergeMembershipDoctors(rosterDoctors = [], providerDoctors = [])
 // overrides. Unknown events never overwrite a known grade.
 export function applyRosterEventSeniorities(doctors = [], eventsByDoctor = {}) {
   return (Array.isArray(doctors) ? doctors : []).map((doctor) => {
+    // A FindMyShift staff-list grade is the current source designation. Keep
+    // it instead of replacing it with an older shift-label grade; other
+    // sources retain their existing latest-event behaviour.
+    if (doctor?.providerStaffId && sanitizeRuleSeniority(doctor?.seniority || UNKNOWN_SENIORITY) !== UNKNOWN_SENIORITY) return doctor;
     const latestKnown = (Array.isArray(eventsByDoctor?.[doctor?.key]) ? eventsByDoctor[doctor.key] : [])
       .map((event) => ({
         seniority: sanitizeRuleSeniority(event?.seniority || UNKNOWN_SENIORITY),
@@ -622,6 +643,7 @@ export function serializeEvent(event) {
     source: event.source,
     sources: Array.isArray(event.sources) ? event.sources : undefined,
     seniority: event.seniority || "",
+    providerStaffId: event.providerStaffId || "",
     facilitySeniorityOverride: event.facilitySeniorityOverride === true,
     title: event.title,
     allDay: event.allDay,
@@ -1584,14 +1606,18 @@ function parseFindmyshiftDdhRecords(workbook, doctorKey) {
   const records = [];
   const seen = new Set();
   for (const values of rows) {
-    const [, rawName, rawSeniority, rawDate, rawLabel, rawStart, rawEnd, rawFacility, rawComment] = values;
+    const [providerStaffId, rawName, rawSeniority, rawDate, rawLabel, rawStart, rawEnd, rawFacility, rawComment] = values;
     if (normalizeName(rawName) !== doctorKey) continue;
     const day = parseFindmyshiftDate(rawDate);
     const label = cleanText(rawLabel);
     const startHm = parseFindmyshiftTime(rawStart);
     const endHm = parseFindmyshiftTime(rawEnd);
     const seniority = findmyshiftDdhSeniority(rawSeniority, label);
-    if (!day || !label || isDdhStructuralAnnotation(label, seniority)) continue;
+    // In the structured FindMyShift audit sheet, a timed Physiotherapist row
+    // is a real AMP allocation. The legacy grid parser rightly ignores the
+    // same text when it is merely an AMP section annotation.
+    const structural = isDdhStructuralAnnotation(label, seniority);
+    if (!day || !label || (structural && !(startHm && endHm && /^PHYSIOTHERAPISTS?$/i.test(label)))) continue;
     const facility = cleanText(rawFacility);
     const comment = cleanText(rawComment);
     let record;
@@ -1600,7 +1626,7 @@ function parseFindmyshiftDdhRecords(workbook, doctorKey) {
     // rostered shifts (for example Di Flood's verified S/L entry).
     const leaveRecord = createRecognizedLeaveRecord("DDH", day, label, seniority);
     if (leaveRecord) {
-      records.push(leaveRecord);
+      records.push({ ...leaveRecord, providerStaffId: cleanText(providerStaffId) });
       continue;
     }
     if (startHm && endHm) {
@@ -1627,7 +1653,7 @@ function parseFindmyshiftDdhRecords(workbook, doctorKey) {
     const key = [record.kind, record.start, record.end, record.normalizedTitle, record.location].join("|");
     if (seen.has(key)) continue;
     seen.add(key);
-    records.push({ ...record, comment, findmyshift: true });
+    records.push({ ...record, comment, findmyshift: true, providerStaffId: cleanText(providerStaffId) });
   }
   return records;
 }
@@ -1644,6 +1670,7 @@ function recognisedFindmyshiftDdhSeniority(value) {
   const upper = cleanText(value).replace(/[’']/g, "").replace(/\s+/g, " ").trim().toUpperCase();
   if (/\bINTERN\b/.test(upper)) return "Intern";
   if (/\b(?:ED\s+)?HMOS?\b/.test(upper)) return "HMO";
+  if (/\b(?:ENP|NP|NPC|NURSE PRACTITIONER)\b/.test(upper)) return "ENP";
   if (/\b(?:AMP|PHYSIO(?:THERAPIST)?|ALLIED MEDICAL PRACTITIONER)\b/.test(upper)) return "AMP";
   if (/\bSMS\b/.test(upper)) return "SMS";
   if (/\bCMO\b/.test(upper)) return "CMO";

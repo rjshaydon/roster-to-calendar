@@ -9,7 +9,7 @@ import { assertFindmyshiftDandenongAssignments, extractShiftRows, findmyshiftCon
 import { buildAutomatedDerivedRosterPayload } from "../functions/_lib/automation-import.js";
 import { australianTermStartForDate, buildPreviewFromDerivedEvents, findRosterSyncByProviderVersion, isApprovedReparseOmission, sameRosterOccurrence, storeCachedSnapshot } from "../functions/_lib/d1-calendar.js";
 import { recordRosterDispatchLifecycle, requestQueuedRosterProcessing } from "../functions/_lib/automation-dispatch.js";
-import { applyRosterEventSeniorities, buildRosterView, customEventsToEvents, doctorOptions, mergeMembershipDoctors, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
+import { applyRosterEventSeniorities, buildRosterView, customEventsToEvents, doctorOptions, findmyshiftProviderStaffOptions, mergeMembershipDoctors, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
 import { customEventsToEvents as serverCustomEventsToEvents } from "../functions/_lib/roster.js";
 import { parserResultDelta, unresolvedCodeSummary } from "./parser-parity.mjs";
 
@@ -270,6 +270,54 @@ assert.deepEqual(
   groupedFindmyshiftRows.map((row) => row.seniority),
   ["HMO", "AMP"],
   "FindMyShift shift rows should retain grades derived from their ordered staff groups",
+);
+const authoritativeFindmyshiftStaff = [
+  { staffId: "hmo-heading", displayName: "ED HMO's", order: 10 },
+  { staffId: "hmo-person", firstName: "Hmo", lastName: "Person", order: 11 },
+  { staffId: "np-heading", displayName: "NURSE PRACTITIONERS", order: 20 },
+  { staffId: "np-person", firstName: "Nurse", lastName: "Practitioner", order: 21, jobTitle: "NP" },
+  { staffId: "candidate-heading", displayName: "NURSE PRAC. CANDIDATES", order: 30 },
+  { staffId: "candidate", firstName: "Nurse", lastName: "Candidate", order: 31 },
+  { staffId: "amp-heading", displayName: "AMP's", order: 40 },
+  { staffId: "amp-person", firstName: "Amp", lastName: "Person", order: 41 },
+  { staffId: "clinical-heading", displayName: "CLINICAL ASSISTANTS", order: 50 },
+  { staffId: "clinical-person", firstName: "Clinical", lastName: "Person", order: 51 },
+  { staffId: "synthetic", displayName: "HMO 1", order: 52 },
+];
+const authoritativeGrades = findmyshiftStaffSeniorityById(authoritativeFindmyshiftStaff);
+assert.deepEqual(
+  Object.fromEntries(authoritativeGrades),
+  { "hmo-person": "HMO", "np-person": "ENP", candidate: "ENP", "amp-person": "AMP" },
+  "FindMyShift groups must include NPs and stop at unsupported headings rather than leaking the preceding grade",
+);
+const authoritativeWorkbook = XLSX.read(findmyshiftRowsWorkbook([
+  { sourceStaffId: "hmo-person", name: "Hmo Person", seniority: "HMO", date: "2026-08-03", label: "Orange AM", start: "07:30", end: "17:00", facility: "Orange AM", comment: "" },
+  { sourceStaffId: "amp-person", name: "Amp Person", seniority: "AMP", date: "2026-08-03", label: "Physiotherapist", start: "09:30", end: "18:00", facility: "", comment: "" },
+], authoritativeFindmyshiftStaff), { type: "array", cellDates: true });
+const authoritativeFormData = new FormData();
+authoritativeFormData.append("rosterFiles", workbookFile(authoritativeWorkbook, "Dandenong-FindMyShift-authoritative.xlsx"));
+const authoritativeUpload = await parseUploadForm(new Request("http://fixture.test/api/analyze", { method: "POST", body: authoritativeFormData }));
+const authoritativeProviders = findmyshiftProviderStaffOptions(authoritativeUpload.sources.ddh);
+assert.deepEqual(
+  authoritativeProviders.map((person) => ({ key: person.key, seniority: person.seniority, providerStaffId: person.providerStaffId })).sort((left, right) => left.key.localeCompare(right.key)),
+  [
+    { key: "AMP PERSON", seniority: "AMP", providerStaffId: "amp-person" },
+    { key: "CLINICAL PERSON", seniority: "Unknown", providerStaffId: "clinical-person" },
+    { key: "HMO PERSON", seniority: "HMO", providerStaffId: "hmo-person" },
+    { key: "NURSE CANDIDATE", seniority: "ENP", providerStaffId: "candidate" },
+    { key: "NURSE PRACTITIONER", seniority: "ENP", providerStaffId: "np-person" },
+  ],
+  "the staff directory must return grade evidence by FindMyShift staff ID while excluding headings and synthetic slots",
+);
+assert.deepEqual(
+  mergeMembershipDoctors([{ key: "AMP PERSON", displayName: "Amp Person", sourceType: "ddh", seniority: "Unknown" }], authoritativeProviders),
+  [{ key: "AMP PERSON", displayName: "Amp Person", sourceType: "ddh", seniority: "AMP", membershipSource: "roster", providerStaffId: "amp-person" }],
+  "only rostered staff should receive provider grades; directory-only people must not become ED members",
+);
+assert.equal(
+  buildRosterView([], authoritativeUpload.sources.ddh, "AMP PERSON").events[0]?.seniority,
+  "AMP",
+  "a timed FindMyShift Physiotherapist assignment must remain a real AMP shift",
 );
 assert.equal(findmyshiftRows.length, 5, "FindMyShift time/stream pairs should become one timed event while extra named entries are preserved");
 assert.deepEqual(
@@ -828,7 +876,7 @@ assert.match(styleSource, /#facilityOverviewBody\.is-working-together > \.facili
 assert.match(stateSource, /action === "downloadFindmyshiftExceptions"[\s\S]*findmyshiftDandenongAssignmentExceptions[\s\S]*findmyshiftExceptionCsv/, "FindMyShift exception downloads must be creator-only server-side report reads");
 assert.match(findmyshiftCheckSource, /isTransientFindmyshiftRateLimitError[\s\S]*current\?\.lastSuccessAt[\s\S]*returned HTTP 429/, "a transient FindMyShift rate limit should neither mark a successful source failed nor cause it to be downloaded again");
 assert.match(findmyshiftModuleSource, /NEXT_TERM_LOOKAHEAD_DAYS = 28[\s\S]*findmyshiftPublicationWindow/, "FindMyShift should use a four-week early-publication window for the next term");
-assert.match(findmyshiftCheckSource, /IMPORT_FORMAT = "stream-paired-v4"[\s\S]*term-window change deliberately[\s\S]*rangeState\.requested[\s\S]*importFormat: IMPORT_FORMAT/, "a new FindMyShift parser revision or term window should bypass an unchanged provider version and persist its requested range");
+assert.match(findmyshiftCheckSource, /IMPORT_FORMAT = "stream-paired-v5"[\s\S]*term-window change deliberately[\s\S]*rangeState\.requested[\s\S]*importFormat: IMPORT_FORMAT/, "a new FindMyShift parser revision or term window should bypass an unchanged provider version and persist its requested range");
 assert.match(findmyshiftCheckSource, /findmyshift-no-shifts[\s\S]*waiting-for-publication/, "an unpublished upcoming FindMyShift term should wait for a provider update instead of surfacing as an import failure");
 assert.match(
   findmyshiftCheckSource,
@@ -863,7 +911,7 @@ assert.doesNotMatch(automationWorkflowSource, /schedule:/, "GitHub cron must not
 assert.match(automationIngestSource, /requestQueuedRosterProcessing/, "a newly retained roster should request the processor immediately");
 assert.match(
   findmyshiftCheckSource,
-  /IMPORT_FORMAT = "stream-paired-v4"[\s\S]*Dandenong-FindMyShift-\$\{IMPORT_FORMAT\}[\s\S]*saved\?\.importFormat[\s\S]*importFormat: IMPORT_FORMAT/,
+  /IMPORT_FORMAT = "stream-paired-v5"[\s\S]*Dandenong-FindMyShift-\$\{IMPORT_FORMAT\}[\s\S]*saved\?\.importFormat[\s\S]*importFormat: IMPORT_FORMAT/,
   "a corrected FindMyShift parser should retain a fresh generated source and bypass an older parser revision",
 );
 assert.match(automationDispatchSource, /GITHUB_ACTIONS_TOKEN[\s\S]*actions\/workflows[\s\S]*\/dispatches/, "dispatches should use a server-side GitHub Actions token");
@@ -3620,7 +3668,10 @@ class MemoryD1Statement {
       };
     }
     if (sql.startsWith("PRAGMA table_info(roster_file_doctors)")) {
-      return { results: ["file_id", "source_type", "doctor_key", "display_name", "seniority", "membership_source"].map((name) => ({ name })) };
+      return { results: ["file_id", "source_type", "doctor_key", "display_name", "seniority", "membership_source", "provider_staff_id"].map((name) => ({ name })) };
+    }
+    if (sql.startsWith("PRAGMA table_info(roster_events)")) {
+      return { results: ["id", "file_id", "source_type", "doctor_key", "display_name", "start_date", "end_date", "start_ts", "end_ts", "title", "raw_value", "seniority", "provider_staff_id", "location", "all_day", "time_label", "event_json"].map((name) => ({ name })) };
     }
     if (sql.startsWith("PRAGMA table_info(roster_sources)")) {
       return {
