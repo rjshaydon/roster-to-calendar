@@ -3660,8 +3660,16 @@ body[data-skin="console"] .preview-cell.is-weekend {
 
 .account-user-permissions {
   display: grid;
-  gap: 4px;
+  grid-template-columns: repeat(3, max-content);
+  gap: 4px 14px;
   justify-items: start;
+}
+
+.create-user-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  align-items: center;
 }
 
 .account-user-controls {
@@ -4371,6 +4379,10 @@ body[data-skin="console"] .panel {
   .account-user-controls,
   .account-claim-editor {
     grid-column: auto;
+  }
+
+  .account-user-permissions {
+    grid-template-columns: repeat(2, max-content);
   }
 
   .custom-event-grid {

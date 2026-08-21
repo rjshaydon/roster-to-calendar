@@ -3464,13 +3464,15 @@ class MemoryD1Statement {
         role: args[2],
         insights_enabled: args[3],
         facility_overview_enabled: args[4],
-        subscription_token: args[5],
-        password_salt: args[6] || previous.password_salt || "",
-        password_hash: args[7] || previous.password_hash || "",
-        admin_issues_json: args[8] || "[]",
-        local_parser_extensions_json: args[9] || "[]",
-        created_at: args[10] || previous.created_at || "",
-        updated_at: args[11] || args[6],
+        non_clinical: args[5],
+        director_view_enabled: args[6],
+        subscription_token: args[7],
+        password_salt: args[8] || previous.password_salt || "",
+        password_hash: args[9] || previous.password_hash || "",
+        admin_issues_json: args[10] || "[]",
+        local_parser_extensions_json: args[11] || "[]",
+        created_at: args[12] || previous.created_at || "",
+        updated_at: args[13] || args[8],
       });
       return { success: true };
     }
@@ -3723,6 +3725,8 @@ class MemoryD1Statement {
           "role",
           "insights_enabled",
           "facility_overview_enabled",
+          "non_clinical",
+          "director_view_enabled",
           "subscription_token",
           "password_salt",
           "password_hash",
@@ -4227,6 +4231,8 @@ class MemoryD1Statement {
             role: profile.role,
             insights_enabled: profile.insights_enabled,
             facility_overview_enabled: profile.facility_overview_enabled,
+            non_clinical: profile.non_clinical,
+            director_view_enabled: profile.director_view_enabled,
             subscription_token: profile.subscription_token,
             password_salt: profile.password_salt,
             password_hash: profile.password_hash,
@@ -4249,6 +4255,8 @@ class MemoryD1Statement {
             role: profile.role,
             insights_enabled: profile.insights_enabled,
             facility_overview_enabled: profile.facility_overview_enabled,
+            non_clinical: profile.non_clinical,
+            director_view_enabled: profile.director_view_enabled,
             subscription_token: profile.subscription_token,
             password_salt: profile.password_salt,
             password_hash: profile.password_hash,
@@ -4996,6 +5004,43 @@ const d1CreatedUser = await postState(d1StateStore, {
 }, d1Store);
 assert.ok(d1CreatedUser.user.claims.length > 0, "admin-created account should immediately claim exact roster matches");
 assert.equal(d1CreatedUser.user.facilityOverviewEnabled, false, "new standard accounts should require an explicit At a glance grant");
+const d1NonClinicalDirector = await postState(d1StateStore, {
+  action: "adminCreateUser",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  targetEmail: "director@example.com",
+  targetRealName: d1Doctor.displayName,
+  targetPassword: "director-password",
+  nonClinical: true,
+  directorViewEnabled: true,
+}, d1Store);
+assert.equal(d1NonClinicalDirector.user.nonClinical, true, "Creator should be able to create a non-clinical account");
+assert.equal(d1NonClinicalDirector.user.directorViewEnabled, true, "Creator should be able to grant Director access on creation");
+assert.equal(d1NonClinicalDirector.user.claims.length, 0, "non-clinical accounts must not auto-claim a matching clinician");
+const d1NonClinicalDirectorLogin = await postState(d1StateStore, {
+  action: "login",
+  email: "director@example.com",
+  password: "director-password",
+}, d1Store);
+assert.equal(d1NonClinicalDirectorLogin.nonClinical, true, "non-clinical classification should persist on login");
+assert.equal(d1NonClinicalDirectorLogin.directorViewEnabled, true, "Director access should persist on login");
+assert.equal(d1NonClinicalDirectorLogin.claims.length, 0, "non-clinical login must remain claim-free");
+const d1SelfGrantDirector = await postStateRaw(d1StateStore, {
+  action: "setUserDirectorViewEnabled",
+  email: "director@example.com",
+  password: "director-password",
+  targetEmail: "director@example.com",
+  directorViewEnabled: false,
+}, d1Store);
+assert.equal(d1SelfGrantDirector.response.status, 403, "standard users should not be able to change Director access");
+const d1RevokedDirector = await postState(d1StateStore, {
+  action: "setUserDirectorViewEnabled",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  targetEmail: "director@example.com",
+  directorViewEnabled: false,
+}, d1Store);
+assert.equal(d1RevokedDirector.user.directorViewEnabled, false, "Creator should be able to revoke Director access");
 const d1DirectLogin = await postState(d1StateStore, {
   action: "login",
   email: "d1-user@example.com",

@@ -137,10 +137,10 @@ export async function onRequestPost(context) {
     if (action === "login") {
       const authStartedAt = Date.now();
       const account = await loadOrCreateD1Account(context.env.ROSTER_DB, email, password, { mode, realName });
-      let loginRecord = account.created
+      let loginRecord = account.created && account.record.nonClinical !== true
         ? await autoClaimMatchedCanonicalDoctors(account.record, context.env.ROSTER_DB)
         : account.record;
-      if ((loginRecord.role || roleForEmail(loginRecord.email)) !== "creator" && (loginRecord.role || roleForEmail(loginRecord.email)) !== "owner" && !sanitizeClaims(loginRecord.claims).length) {
+      if (loginRecord.nonClinical !== true && (loginRecord.role || roleForEmail(loginRecord.email)) !== "creator" && (loginRecord.role || roleForEmail(loginRecord.email)) !== "owner" && !sanitizeClaims(loginRecord.claims).length) {
         loginRecord = await autoClaimMatchedRosterNames(null, loginRecord, context.env.ROSTER_DB);
       }
       loginRecord = await repairAccountClaimsIfNeeded(context.env.ROSTER_DB, loginRecord, { reason: "login" });
@@ -209,6 +209,8 @@ export async function onRequestPost(context) {
         defaultDoctorKey: prepared.defaultDoctorKey || "",
         insightsEnabled: prepared.insightsEnabled,
         facilityOverviewEnabled: prepared.facilityOverviewEnabled,
+        nonClinical: prepared.nonClinical,
+        directorViewEnabled: prepared.directorViewEnabled,
         snapshotOwnerType: snapshotPayload.snapshot?.ownerType || snapshotOwnerTypeForRecord(loginRecord, prepared.role),
         snapshotOwnerId: snapshotPayload.snapshot?.ownerId || normalizeEmail(loginRecord.email),
       };
@@ -398,6 +400,8 @@ export async function onRequestPost(context) {
       }
       const targetPassword = String(body?.targetPassword || "");
       const targetRealName = String(body?.targetRealName || body?.realName || "").trim();
+      const nonClinical = body?.nonClinical === true;
+      const directorViewEnabled = body?.directorViewEnabled === true;
       if (!targetEmail) {
         return Response.json({ error: "New account email is required." }, { status: 400 });
       }
@@ -410,8 +414,12 @@ export async function onRequestPost(context) {
       const created = await loadOrCreateD1Account(context.env.ROSTER_DB, targetEmail, targetPassword, {
         mode: "create",
         realName: targetRealName,
+        nonClinical,
+        directorViewEnabled,
       });
-      const createdRecord = await autoClaimMatchedCanonicalDoctors(created.record, context.env.ROSTER_DB);
+      const createdRecord = nonClinical
+        ? created.record
+        : await autoClaimMatchedCanonicalDoctors(created.record, context.env.ROSTER_DB);
       await upsertAccountMirror(context.env.ROSTER_DB, createdRecord);
       const createdClaims = sanitizeClaims(createdRecord.claims);
       const createdRole = createdRecord.role || roleForEmail(targetEmail);
@@ -430,6 +438,8 @@ export async function onRequestPost(context) {
           suggestedClaims: [],
           insightsEnabled: insightsEnabledForRecord({ ...createdRecord, role: createdRole }),
           facilityOverviewEnabled: facilityOverviewEnabledForRecord({ ...createdRecord, role: createdRole }),
+          nonClinical: createdRecord.nonClinical === true,
+          directorViewEnabled: createdRecord.directorViewEnabled === true,
           createdAt: created.record.createdAt || "",
           updatedAt: created.record.updatedAt || "",
         },
@@ -441,7 +451,9 @@ export async function onRequestPost(context) {
         ? await loadAccountMirror(context.env.ROSTER_DB, targetEmail)
         : account.record;
       if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
-      const resolved = await autoClaimMatchedRosterNames(null, targetRecord, context.env.ROSTER_DB);
+      const resolved = targetRecord.nonClinical === true
+        ? targetRecord
+        : await autoClaimMatchedRosterNames(null, targetRecord, context.env.ROSTER_DB);
       const resolvedClaims = sanitizeClaims(resolved.claims);
       const prepared = await prepareAccountResponse(null, resolved, {
         db: context.env.ROSTER_DB,
@@ -460,6 +472,8 @@ export async function onRequestPost(context) {
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
         facilityOverviewEnabled: prepared.facilityOverviewEnabled,
+        nonClinical: prepared.nonClinical,
+        directorViewEnabled: prepared.directorViewEnabled,
         ...viewedAccountPayload(account.record, targetRecord, prepared),
         defaultDoctorKey: prepared.defaultDoctorKey || "",
         snapshotOwnerType: snapshotOwnerTypeForRecord(targetRecord, prepared.role),
@@ -474,7 +488,7 @@ export async function onRequestPost(context) {
       }
       let target = await loadAccountMirror(context.env.ROSTER_DB, targetEmail);
       if (!target) return Response.json({ error: "Account not found." }, { status: 404 });
-      if (!sanitizeClaims(target.claims).length) {
+      if (target.nonClinical !== true && !sanitizeClaims(target.claims).length) {
         target = await autoClaimMatchedRosterNames(null, target, context.env.ROSTER_DB);
         await upsertAccountMirror(context.env.ROSTER_DB, target).catch(() => null);
       }
@@ -504,6 +518,8 @@ export async function onRequestPost(context) {
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
         facilityOverviewEnabled: prepared.facilityOverviewEnabled,
+        nonClinical: prepared.nonClinical,
+        directorViewEnabled: prepared.directorViewEnabled,
         calendarRevision: snapshotPayload.calendarRevision,
         snapshot: snapshotPayload.snapshot,
         snapshotAvailable: snapshotPayload.snapshotAvailable,
@@ -541,6 +557,8 @@ export async function onRequestPost(context) {
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
         facilityOverviewEnabled: prepared.facilityOverviewEnabled,
+        nonClinical: prepared.nonClinical,
+        directorViewEnabled: prepared.directorViewEnabled,
         nameMatches: prepared.nameMatches,
         suggestedClaims: prepared.nameMatches,
         availableDoctors: prepared.availableDoctors,
@@ -597,6 +615,9 @@ export async function onRequestPost(context) {
         availableDoctors: prepared.availableDoctors,
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
+        facilityOverviewEnabled: prepared.facilityOverviewEnabled,
+        nonClinical: prepared.nonClinical,
+        directorViewEnabled: prepared.directorViewEnabled,
         ...viewedAccountPayload(account.record, updated, prepared),
         issueConfig: prepared.issueConfig,
       });
@@ -1058,6 +1079,31 @@ export async function onRequestPost(context) {
       const updated = {
         ...targetRecord,
         facilityOverviewEnabled: body?.facilityOverviewEnabled === true,
+        updatedAt: new Date().toISOString(),
+      };
+      await upsertAccountMirror(context.env.ROSTER_DB, updated);
+      return Response.json({
+        ok: true,
+        user: await userSummaryFromRecord(targetEmail, updated, { db: context.env.ROSTER_DB }),
+      });
+    }
+
+    if (action === "setUserDirectorViewEnabled") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      if (!targetEmail) {
+        return Response.json({ error: "Target account is required." }, { status: 400 });
+      }
+      const targetRecord = await loadAccountMirror(context.env.ROSTER_DB, targetEmail);
+      if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
+      const targetRole = targetRecord.role || roleForEmail(targetEmail);
+      if (targetRole === "creator" || targetRole === "owner") {
+        return Response.json({ error: "Creator Director access is always enabled." }, { status: 400 });
+      }
+      const updated = {
+        ...targetRecord,
+        directorViewEnabled: body?.directorViewEnabled === true,
         updatedAt: new Date().toISOString(),
       };
       await upsertAccountMirror(context.env.ROSTER_DB, updated);
@@ -1872,6 +1918,8 @@ async function loadOrCreateD1Account(db, email, password, options = {}) {
       adminIssues: [],
       localParserExtensions: [],
       facilityOverviewEnabled: roleForEmail(email) === "creator",
+      nonClinical: options.nonClinical === true,
+      directorViewEnabled: options.directorViewEnabled === true,
       subscriptionToken: randomSubscriptionToken(),
       createdAt: now,
       updatedAt: now,
@@ -1954,7 +2002,7 @@ async function listD1Users(db, options = {}) {
 
 async function autoClaimMatchedRosterNames(store, record, db = null) {
   const role = record?.role || roleForEmail(record?.email || "");
-  if (!record?.email || role === "creator" || role === "owner") return record;
+  if (!record?.email || record.nonClinical === true || role === "creator" || role === "owner") return record;
   const matchedClaims = await filterAvailableAutoClaims(
     matchDoctorClaims(await loadSqlDoctorCandidates(db), record.realName || "", record.email),
     record.email,
@@ -1979,7 +2027,7 @@ async function autoClaimMatchedRosterNames(store, record, db = null) {
 
 async function autoClaimMatchedCanonicalDoctors(record, db = null) {
   const role = record?.role || roleForEmail(record?.email || "");
-  if (!record?.email || role === "creator" || role === "owner") return record;
+  if (!record?.email || record.nonClinical === true || role === "creator" || role === "owner") return record;
   const canonicalDoctors = await queryCanonicalDoctors(db).catch(() => []);
   const indexedDoctors = canonicalDoctors.length ? canonicalDoctors : await queryRosterDoctors(db).catch(() => []);
   const matchedClaims = await filterAvailableAutoClaims(
@@ -2535,6 +2583,8 @@ async function userSummaryFromRecord(email, record, options = {}) {
     claims,
     insightsEnabled: insightsEnabledForRecord(record),
     facilityOverviewEnabled: facilityOverviewEnabledForRecord(record),
+    nonClinical: record.nonClinical === true,
+    directorViewEnabled: directorViewEnabledForRecord(record),
     adminIssues,
     issuesCount: adminIssues.length,
     defaultDoctorKey,
@@ -2614,6 +2664,12 @@ function facilityOverviewEnabledForRecord(record) {
   const role = record?.role || roleForEmail(normalizeEmail(record?.email));
   if (role === "creator" || role === "owner") return true;
   return record?.facilityOverviewEnabled === true;
+}
+
+function directorViewEnabledForRecord(record) {
+  const role = record?.role || roleForEmail(normalizeEmail(record?.email));
+  if (role === "creator" || role === "owner") return true;
+  return record?.directorViewEnabled === true;
 }
 
 function isFacilityOverviewWorkingEvent(event, options = {}) {
@@ -2699,6 +2755,8 @@ async function prepareLightweightAccountResponse(rawRecord, options = {}) {
     },
     insightsEnabled: insightsEnabledForRecord(record),
     facilityOverviewEnabled: facilityOverviewEnabledForRecord(record),
+    nonClinical: record.nonClinical === true,
+    directorViewEnabled: directorViewEnabledForRecord(record),
   };
 }
 
@@ -2731,6 +2789,8 @@ async function prepareFastLoginEnvelope(rawRecord, options = {}) {
     subscription: null,
     insightsEnabled: insightsEnabledForRecord(record),
     facilityOverviewEnabled: facilityOverviewEnabledForRecord(record),
+    nonClinical: record.nonClinical === true,
+    directorViewEnabled: directorViewEnabledForRecord(record),
     adminIssues: [],
     issueConfig: null,
     defaultDoctorKey: lightweight.defaultDoctorKey || "",
@@ -2875,6 +2935,8 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
     },
     insightsEnabled: insightsEnabledForRecord(record),
     facilityOverviewEnabled: facilityOverviewEnabledForRecord(record),
+    nonClinical: record.nonClinical === true,
+    directorViewEnabled: directorViewEnabledForRecord(record),
     adminIssues: sanitizeAdminIssues(record.adminIssues),
     issueConfig,
     defaultDoctorKey,

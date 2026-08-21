@@ -180,6 +180,8 @@ async function ensureCalendarSchemaUncached(db) {
       role TEXT NOT NULL DEFAULT 'user',
       insights_enabled INTEGER NOT NULL DEFAULT 0,
       facility_overview_enabled INTEGER NOT NULL DEFAULT 0,
+      non_clinical INTEGER NOT NULL DEFAULT 0,
+      director_view_enabled INTEGER NOT NULL DEFAULT 0,
       subscription_token TEXT NOT NULL DEFAULT '',
       password_salt TEXT NOT NULL DEFAULT '',
       password_hash TEXT NOT NULL DEFAULT '',
@@ -190,6 +192,8 @@ async function ensureCalendarSchemaUncached(db) {
     )
   `).run();
   await ensureColumn(db, "account_profiles", "facility_overview_enabled", "INTEGER NOT NULL DEFAULT 0");
+  await ensureColumn(db, "account_profiles", "non_clinical", "INTEGER NOT NULL DEFAULT 0");
+  await ensureColumn(db, "account_profiles", "director_view_enabled", "INTEGER NOT NULL DEFAULT 0");
   await ensureColumn(db, "account_profiles", "password_salt", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn(db, "account_profiles", "password_hash", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn(db, "account_profiles", "admin_issues_json", "TEXT NOT NULL DEFAULT '[]'");
@@ -2651,15 +2655,17 @@ export async function upsertAccountMirror(db, record, options = {}) {
   const updatedAt = new Date().toISOString();
   await db.prepare(`
     INSERT INTO account_profiles (
-      email, real_name, role, insights_enabled, facility_overview_enabled, subscription_token, password_salt, password_hash,
+      email, real_name, role, insights_enabled, facility_overview_enabled, non_clinical, director_view_enabled, subscription_token, password_salt, password_hash,
       admin_issues_json, local_parser_extensions_json, created_at, updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(email) DO UPDATE SET
       real_name = excluded.real_name,
       role = excluded.role,
       insights_enabled = excluded.insights_enabled,
       facility_overview_enabled = excluded.facility_overview_enabled,
+      non_clinical = excluded.non_clinical,
+      director_view_enabled = excluded.director_view_enabled,
       subscription_token = excluded.subscription_token,
       password_salt = CASE WHEN excluded.password_salt <> '' THEN excluded.password_salt ELSE account_profiles.password_salt END,
       password_hash = CASE WHEN excluded.password_hash <> '' THEN excluded.password_hash ELSE account_profiles.password_hash END,
@@ -2672,6 +2678,8 @@ export async function upsertAccountMirror(db, record, options = {}) {
     role,
     record.insightsEnabled === true ? 1 : 0,
     record.facilityOverviewEnabled === true ? 1 : 0,
+    record.nonClinical === true ? 1 : 0,
+    record.directorViewEnabled === true ? 1 : 0,
     String(record.subscriptionToken || ""),
     String(record.passwordSalt || ""),
     String(record.passwordHash || ""),
@@ -2949,6 +2957,8 @@ export async function loadAccountMirrorBySubscriptionToken(db, token) {
       account_profiles.role AS role,
       account_profiles.insights_enabled AS insights_enabled,
       account_profiles.facility_overview_enabled AS facility_overview_enabled,
+      account_profiles.non_clinical AS non_clinical,
+      account_profiles.director_view_enabled AS director_view_enabled,
       account_profiles.subscription_token AS subscription_token,
       account_claims.source_type AS source_type,
       account_claims.doctor_key AS doctor_key,
@@ -2986,6 +2996,8 @@ export async function loadAccountMirrorBySubscriptionToken(db, token) {
     role: String(first.role || "user"),
     insightsEnabled: first.insights_enabled === 1,
     facilityOverviewEnabled: first.facility_overview_enabled === 1,
+    nonClinical: first.non_clinical === 1,
+    directorViewEnabled: first.director_view_enabled === 1,
     subscriptionToken: String(first.subscription_token || ""),
     claims,
     state: {
@@ -3007,6 +3019,8 @@ export async function loadAccountMirror(db, email) {
       account_profiles.role AS role,
       account_profiles.insights_enabled AS insights_enabled,
       account_profiles.facility_overview_enabled AS facility_overview_enabled,
+      account_profiles.non_clinical AS non_clinical,
+      account_profiles.director_view_enabled AS director_view_enabled,
       account_profiles.subscription_token AS subscription_token,
       account_profiles.password_salt AS password_salt,
       account_profiles.password_hash AS password_hash,
@@ -3038,6 +3052,8 @@ export async function listAccountMirrors(db) {
       account_profiles.role AS role,
       account_profiles.insights_enabled AS insights_enabled,
       account_profiles.facility_overview_enabled AS facility_overview_enabled,
+      account_profiles.non_clinical AS non_clinical,
+      account_profiles.director_view_enabled AS director_view_enabled,
       account_profiles.subscription_token AS subscription_token,
       account_profiles.password_salt AS password_salt,
       account_profiles.password_hash AS password_hash,
@@ -3105,6 +3121,8 @@ function accountMirrorFromRows(rows) {
     role: String(first.role || "user"),
     insightsEnabled: first.insights_enabled === 1,
     facilityOverviewEnabled: first.facility_overview_enabled === 1,
+    nonClinical: first.non_clinical === 1,
+    directorViewEnabled: first.director_view_enabled === 1,
     subscriptionToken: String(first.subscription_token || ""),
     passwordSalt: String(first.password_salt || ""),
     passwordHash: String(first.password_hash || ""),

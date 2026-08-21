@@ -309,6 +309,8 @@ let calendarImportPollRunId = 0;
 let currentSubscription = null;
 let currentInsightsEnabled = currentUserRole === "creator";
 let currentFacilityOverviewEnabled = currentUserRole === "creator";
+let currentNonClinical = false;
+let currentDirectorViewEnabled = currentUserRole === "creator";
 let facilityOverviewCompactState = {
   latched: false,
   scroller: null,
@@ -1346,7 +1348,12 @@ accountsBody.addEventListener("change", (event) => {
     return;
   }
   const overviewToggle = event.target.closest("[data-toggle-user-facility-overview]");
-  if (overviewToggle) void setUserFacilityOverviewEnabled(overviewToggle.dataset.toggleUserFacilityOverview || "", overviewToggle.checked);
+  if (overviewToggle) {
+    void setUserFacilityOverviewEnabled(overviewToggle.dataset.toggleUserFacilityOverview || "", overviewToggle.checked);
+    return;
+  }
+  const directorToggle = event.target.closest("[data-toggle-user-director-view]");
+  if (directorToggle) void setUserDirectorViewEnabled(directorToggle.dataset.toggleUserDirectorView || "", directorToggle.checked);
 });
 accountsBody.addEventListener("input", (event) => {
   const searchInput = event.target.closest("[data-admin-user-search]");
@@ -3602,7 +3609,7 @@ function renderDoctorState() {
 
 function renderClaimSection() {
   if (!claimSection) return;
-  const shouldShow = !canUseDoctorPicker() && !doctorOptions.length && availableRosterDoctors.length;
+  const shouldShow = !currentNonClinical && !canUseDoctorPicker() && !doctorOptions.length && availableRosterDoctors.length;
   claimSection.classList.toggle("hidden", !shouldShow);
   if (!shouldShow) return;
 
@@ -11095,6 +11102,16 @@ function renderAccountsModal() {
             <span>Temporary password</span>
             <input type="password" data-create-password placeholder="Temporary password" autocomplete="new-password">
           </label>
+          <div class="create-user-options" aria-label="Account access options">
+            <label class="toggle review-toggle">
+              <input type="checkbox" data-create-non-clinical>
+              Non-clinical
+            </label>
+            <label class="toggle review-toggle">
+              <input type="checkbox" data-create-director-view>
+              Director view
+            </label>
+          </div>
           <div class="modal-actions">
             <button type="submit" class="button button-primary">Create and enter account</button>
           </div>
@@ -11137,6 +11154,10 @@ function renderAccountsModal() {
                   <label class="toggle review-toggle">
                     <input type="checkbox" ${user.facilityOverviewEnabled ? "checked" : ""} data-toggle-user-facility-overview="${escapeHtml(user.email)}">
                     At a glance
+                  </label>
+                  <label class="toggle review-toggle">
+                    <input type="checkbox" ${user.directorViewEnabled ? "checked" : ""} data-toggle-user-director-view="${escapeHtml(user.email)}">
+                    Director
                   </label>
                 </div>
               `}
@@ -12898,6 +12919,8 @@ async function createAccountFromOwner(formElement) {
   const realName = formElement.querySelector("[data-create-real-name]")?.value.trim() || "";
   const email = normalizeEmail(formElement.querySelector("[data-create-email]")?.value || "");
   const password = formElement.querySelector("[data-create-password]")?.value || "";
+  const nonClinical = formElement.querySelector("[data-create-non-clinical]")?.checked === true;
+  const directorViewEnabled = formElement.querySelector("[data-create-director-view]")?.checked === true;
   if (!realName || !email || !password) {
     setStatus("Enter a real name, email address, and temporary password.", true);
     return;
@@ -12915,6 +12938,8 @@ async function createAccountFromOwner(formElement) {
         targetEmail: email,
         targetRealName: realName,
         targetPassword: password,
+        nonClinical,
+        directorViewEnabled,
       }),
     });
     const data = await readJsonResponse(response, "Could not create account.");
@@ -13015,6 +13040,44 @@ async function setUserFacilityOverviewEnabled(email, enabled) {
     serverUsers = previousUsers;
     renderAccountsModal();
     setStatus(error.message || "Could not update user feature access.", true);
+  }
+}
+
+async function setUserDirectorViewEnabled(email, enabled) {
+  const targetEmail = normalizeEmail(email);
+  if (!targetEmail || !isCreatorAuthenticated()) return;
+  const previousUsers = serverUsers.map((user) => ({ ...normalizeServerUser(user) }));
+  serverUsers = serverUsers.map((user) => {
+    const normalized = normalizeServerUser(user);
+    return normalized.email === targetEmail ? { ...normalized, directorViewEnabled: enabled === true } : normalized;
+  });
+  renderAccountsModal();
+  try {
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "setUserDirectorViewEnabled",
+        email: authUserEmail || currentUserEmail,
+        password: authUserPassword || currentUserPassword,
+        targetEmail,
+        directorViewEnabled: enabled === true,
+      }),
+    });
+    const data = await readJsonResponse(response, "Could not update Director access.");
+    if (data.user) {
+      serverUsers = [
+        ...serverUsers.filter((user) => normalizeServerUser(user).email !== targetEmail),
+        data.user,
+      ].sort((left, right) => normalizeServerUser(left).email.localeCompare(normalizeServerUser(right).email));
+      renderAccountsModal();
+    }
+    if (targetEmail === currentUserEmail) currentDirectorViewEnabled = enabled === true;
+    setStatus(enabled ? "Director access enabled for that user." : "Director access disabled for that user.");
+  } catch (error) {
+    serverUsers = previousUsers;
+    renderAccountsModal();
+    setStatus(error.message || "Could not update Director access.", true);
   }
 }
 
@@ -15106,6 +15169,8 @@ function normalizeServerUser(value) {
       defaultDoctorKey: "",
       insightsEnabled: false,
       facilityOverviewEnabled: false,
+      nonClinical: false,
+      directorViewEnabled: false,
       adminIssues: [],
       issuesCount: 0,
     };
@@ -15122,6 +15187,8 @@ function normalizeServerUser(value) {
     defaultDoctorKey: normalizeRosterName(value?.defaultDoctorKey || ""),
     insightsEnabled: role === "owner" || role === "creator" || value?.insightsEnabled === true,
     facilityOverviewEnabled: role === "owner" || role === "creator" || value?.facilityOverviewEnabled === true,
+    nonClinical: value?.nonClinical === true,
+    directorViewEnabled: role === "owner" || role === "creator" || value?.directorViewEnabled === true,
     adminIssues: Array.isArray(value?.adminIssues) ? value.adminIssues : [],
     issuesCount: Number(value?.issuesCount || 0),
   };
@@ -15191,6 +15258,8 @@ async function logoutCurrentUser() {
   currentSubscription = null;
   currentInsightsEnabled = false;
   currentFacilityOverviewEnabled = false;
+  currentNonClinical = false;
+  currentDirectorViewEnabled = false;
   closeFacilityOverview();
   currentSuggestedClaims = [];
   selectedFiles = [];
@@ -15387,6 +15456,8 @@ async function restoreCloudState(options = {}) {
     currentSubscription = null;
     currentInsightsEnabled = false;
     currentFacilityOverviewEnabled = false;
+    currentNonClinical = false;
+    currentDirectorViewEnabled = false;
     closeFacilityOverview();
     localStorage.removeItem(CURRENT_EMAIL_KEY);
     sessionStorage.removeItem(CURRENT_PASSWORD_KEY);
@@ -15417,7 +15488,7 @@ async function hydrateAuthenticatedWorkspace(options = {}, loginStartedAt = 0) {
     if (adminTargetEmail && adminTargetEmail !== OWNER_EMAIL && !currentRosterClaims.length) {
       accountClaimResolutionTransition = options.transition;
       try {
-        await resolveCurrentAccountClaims(adminTargetEmail);
+        if (!currentNonClinical) await resolveCurrentAccountClaims(adminTargetEmail);
       } finally {
         accountClaimResolutionTransition = null;
       }
@@ -15427,7 +15498,7 @@ async function hydrateAuthenticatedWorkspace(options = {}, loginStartedAt = 0) {
     } else if (!adminTargetEmail && currentUserEmail !== OWNER_EMAIL && !currentRosterClaims.length) {
       accountClaimResolutionTransition = options.transition;
       try {
-        await resolveCurrentAccountClaims();
+        if (!currentNonClinical) await resolveCurrentAccountClaims();
       } finally {
         accountClaimResolutionTransition = null;
       }
@@ -15859,6 +15930,8 @@ function applyCloudStateIdentity(data) {
   returnToCreatorAvailable = data.returnToCreatorAvailable === true || Boolean(isImpersonating);
   adminViewingEmail = isImpersonating ? viewedAccountId : "";
   currentRosterClaims = sanitizeRosterClaims(data.claims || []);
+  currentNonClinical = data.nonClinical === true;
+  currentDirectorViewEnabled = currentUserRole === "creator" || data.directorViewEnabled === true;
   if (typeof data.insightsEnabled === "boolean") {
     primeInsightsAccessForCurrentView({ insightsEnabled: data.insightsEnabled });
   }
@@ -15880,6 +15953,8 @@ function applyCloudStateContext(data) {
   const previousInsightsEnabled = currentInsightsEnabled;
   currentInsightsEnabled = currentUserRole === "creator" || data.insightsEnabled === true;
   currentFacilityOverviewEnabled = currentUserRole === "creator" || data.facilityOverviewEnabled === true;
+  currentNonClinical = data.nonClinical === true;
+  currentDirectorViewEnabled = currentUserRole === "creator" || data.directorViewEnabled === true;
   currentSuggestedClaims = sanitizeRosterClaims(data.suggestedClaims || data.nameMatches || []);
   latestNameMatches = currentSuggestedClaims;
   applyAvailableRosterDoctorsFromData(data);
@@ -18861,9 +18936,11 @@ async function bootstrapImports(options = {}) {
     } else {
       renderClaimSection();
       syncActionState();
-      setStatus(availableRosterDoctors.length && !currentRosterClaims.length
-        ? "Choose your roster name, or upload a roster if your name is not listed."
-        : "Add a roster file to begin.");
+      setStatus(currentNonClinical
+        ? "This non-clinical account is ready. No roster name or clinical shifts are linked."
+        : availableRosterDoctors.length && !currentRosterClaims.length
+          ? "Choose your roster name, or upload a roster if your name is not listed."
+          : "Add a roster file to begin.");
     }
   } catch (error) {
     if (currentSnapshot?.preview) {
