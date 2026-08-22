@@ -3135,6 +3135,10 @@ body[data-skin="console"] .preview-cell.is-weekend {
   overflow: hidden;
 }
 
+#appDialog {
+  z-index: 100;
+}
+
 .context-menu {
   position: fixed;
   z-index: 40;

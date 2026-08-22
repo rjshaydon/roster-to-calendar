@@ -12989,7 +12989,10 @@ async function createAccountFromOwner(formElement) {
     return;
   }
   if (!realName || !password) {
-    setStatus("Enter a real name, email address, and temporary password.", true);
+    await showAppDialog({
+      title: "Account details required",
+      message: !realName ? "Please enter a real name" : "Please enter a temporary password",
+    });
     return;
   }
 
@@ -13039,7 +13042,7 @@ async function sendAccountInvite(formElement) {
     return;
   }
   if (!realName) {
-    setStatus("Enter a real name before sending an invitation.", true);
+    await showAppDialog({ title: "Account details required", message: "Please enter a real name" });
     return;
   }
   const confirmed = await showAppDialog({
