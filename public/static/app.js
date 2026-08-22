@@ -4390,6 +4390,20 @@ function renderPreviewGrid(doctor, data) {
   queueGlobalUnresolvedShiftCodeLoad();
 }
 
+function renderNonClinicalDirectorCalendar() {
+  if (!preview || !previewSection) return;
+  document.body.classList.add("has-calendar-preview");
+  preview.innerHTML = `
+    <div class="preview-head">
+      <div><p class="eyebrow">My calendar</p><h2>Calendar</h2></div>
+    </div>
+    <div class="preview-empty">No clinical shifts are linked to this non-clinical Director account.</div>
+  `;
+  preview.classList.remove("hidden");
+  previewSection.classList.remove("hidden");
+  syncMobileChrome();
+}
+
 function renderPreviewHeader(doctor, data) {
   return `
     <div class="preview-head">
@@ -9394,7 +9408,7 @@ function closeFacilityOverview() {
   form?.classList.remove("is-facility-overview-active");
   resetFacilityOverviewScroll();
   facilityOverviewSection?.classList.add("hidden");
-  if (latestPreview) previewSection?.classList.remove("hidden");
+  if (latestPreview || (currentNonClinical && currentDirectorViewEnabled)) previewSection?.classList.remove("hidden");
   syncFacilityOverviewNavigationState();
 }
 
@@ -15733,6 +15747,9 @@ async function hydrateAuthenticatedWorkspace(options = {}, loginStartedAt = 0) {
         transition: options.transition,
       });
     }
+    if (currentDirectorViewEnabled && canUseFacilityOverview() && !isFacilityOverviewOpen()) {
+      await openFacilityOverview();
+    }
   } catch (error) {
     if (!calendarTransitionStillCurrent(options.transition)) return;
     const message = normalizeAuthMessage(error.message || "Workspace hydration failed.");
@@ -19087,6 +19104,7 @@ async function bootstrapImports(options = {}) {
     if (selectedFiles.length) {
       await analyzeFiles();
     } else {
+      if (currentNonClinical && currentDirectorViewEnabled) renderNonClinicalDirectorCalendar();
       renderClaimSection();
       syncActionState();
       setStatus(currentNonClinical

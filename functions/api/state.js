@@ -441,9 +441,10 @@ export async function onRequestPost(context) {
         nonClinical,
         directorViewEnabled,
       });
-      const createdRecord = nonClinical
+      let createdRecord = nonClinical
         ? created.record
         : await autoClaimMatchedCanonicalDoctors(created.record, context.env.ROSTER_DB);
+      if (directorViewEnabled) createdRecord = { ...createdRecord, facilityOverviewEnabled: true };
       await upsertAccountMirror(context.env.ROSTER_DB, createdRecord);
       const createdClaims = sanitizeClaims(createdRecord.claims);
       const createdRole = createdRecord.role || roleForEmail(targetEmail);
@@ -480,13 +481,16 @@ export async function onRequestPost(context) {
       if (!targetEmail || !targetRealName) {
         return Response.json({ error: "An invited user's name and email are required." }, { status: 400 });
       }
-      const existing = await loadAccountMirror(context.env.ROSTER_DB, targetEmail);
+      let existing = await loadAccountMirror(context.env.ROSTER_DB, targetEmail);
       if (!existing) {
         const passwordRecord = await hashPassword(randomInviteToken());
         await upsertAccountMirror(context.env.ROSTER_DB, {
           email: targetEmail, realName: targetRealName, role: "user", claims: [],
-          nonClinical, directorViewEnabled, ...passwordRecord,
+          nonClinical, directorViewEnabled, facilityOverviewEnabled: directorViewEnabled, ...passwordRecord,
         });
+      } else if (directorViewEnabled && !existing.facilityOverviewEnabled) {
+        existing = { ...existing, directorViewEnabled: true, facilityOverviewEnabled: true };
+        await upsertAccountMirror(context.env.ROSTER_DB, existing);
       }
       const token = randomInviteToken();
       const tokenHash = await sha256(token);
@@ -1180,6 +1184,7 @@ export async function onRequestPost(context) {
       const updated = {
         ...targetRecord,
         directorViewEnabled: body?.directorViewEnabled === true,
+        facilityOverviewEnabled: body?.directorViewEnabled === true ? true : targetRecord.facilityOverviewEnabled === true,
         updatedAt: new Date().toISOString(),
       };
       await upsertAccountMirror(context.env.ROSTER_DB, updated);
@@ -2739,7 +2744,7 @@ function insightsEnabledForRecord(record) {
 function facilityOverviewEnabledForRecord(record) {
   const role = record?.role || roleForEmail(normalizeEmail(record?.email));
   if (role === "creator" || role === "owner") return true;
-  return record?.facilityOverviewEnabled === true;
+  return record?.facilityOverviewEnabled === true || record?.directorViewEnabled === true;
 }
 
 function directorViewEnabledForRecord(record) {
