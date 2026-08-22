@@ -1686,6 +1686,7 @@ createTabButton?.addEventListener("click", () => {
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) hideVisiblePasswords();
 });
+window.addEventListener("blur", hideVisiblePasswords);
 window.addEventListener("pagehide", hideVisiblePasswords);
 logoutButton.addEventListener("click", () => {
   logoutCurrentUser();
