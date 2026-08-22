@@ -2950,9 +2950,7 @@ async function openAccountsSurface(options = {}) {
   renderAccountsModal();
   accountsModal.classList.remove("hidden");
   accountsModal.setAttribute("aria-hidden", "false");
-  // Do not select a name, email, or password field on entry. This avoids an
-  // accidental edit when a Director opens their Account screen to review it.
-  accountsCloseButton?.focus({ preventScroll: true });
+  focusAccountsModalChrome();
   queueGlobalUnresolvedShiftCodeLoad();
   if (activeCalendarMode() === "doctor-profile" && activeDoctorProfile && cloudAvailable) {
     void refreshDoctorProfileFileRefs().then(() => {
@@ -2968,6 +2966,19 @@ async function openAccountsSurface(options = {}) {
     });
     void refreshCalendarStoreStatus({ silent: true, syncSwitcher: false, lightweight: false });
   }
+}
+
+function focusAccountsModalChrome() {
+  // Safari can focus the first input while a newly-visible modal is being
+  // painted. Run after that paint and keep focus on a non-editable control.
+  window.requestAnimationFrame(() => {
+    if (accountsModal?.classList.contains("hidden")) return;
+    const active = document.activeElement;
+    if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement || active instanceof HTMLSelectElement) {
+      active.blur();
+    }
+    accountsCloseButton?.focus({ preventScroll: true });
+  });
 }
 
 async function refreshDoctorProfileFileRefs() {
