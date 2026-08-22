@@ -1666,8 +1666,27 @@ document.querySelectorAll("[data-password-visibility-toggle]").forEach((button) 
     button.setAttribute("aria-pressed", visible ? "false" : "true");
   });
 });
-loginTabButton?.addEventListener("click", () => setEntranceTab("login"));
-createTabButton?.addEventListener("click", () => setEntranceTab("create"));
+function hideVisiblePasswords() {
+  document.querySelectorAll("[data-password-visibility-toggle]").forEach((button) => {
+    const input = document.querySelector(`#${button.dataset.passwordVisibilityToggle}`);
+    if (input instanceof HTMLInputElement && input.type === "text") input.type = "password";
+    button.setAttribute("aria-label", "Show password");
+    button.setAttribute("aria-pressed", "false");
+  });
+}
+
+loginTabButton?.addEventListener("click", () => {
+  hideVisiblePasswords();
+  setEntranceTab("login");
+});
+createTabButton?.addEventListener("click", () => {
+  hideVisiblePasswords();
+  setEntranceTab("create");
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) hideVisiblePasswords();
+});
+window.addEventListener("pagehide", hideVisiblePasswords);
 logoutButton.addEventListener("click", () => {
   logoutCurrentUser();
 });
