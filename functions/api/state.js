@@ -498,7 +498,7 @@ export async function onRequestPost(context) {
       await context.env.ROSTER_DB.prepare(`
         INSERT INTO account_invites (token_hash, email, created_by, expires_at, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?)
-      `).bind(tokenHash, targetEmail, account.email, expiresAt, now.toISOString(), now.toISOString()).run();
+      `).bind(tokenHash, targetEmail, account.record.email, expiresAt, now.toISOString(), now.toISOString()).run();
       const postmarkToken = String(context.env.POSTMARK_API_TOKEN || "").trim();
       if (!postmarkToken) return Response.json({ error: "Postmark is not configured." }, { status: 422 });
       const inviteUrl = `${new URL(context.request.url).origin}/?invite=${encodeURIComponent(token)}`;
