@@ -95,7 +95,6 @@ const SNAPSHOT_SCHEMA_VERSION = 5;
 const SNAPSHOT_BUILDING_RETRY_MS = 15 * 60 * 1000;
 const SNAPSHOT_GLOBAL_WARMUP_LIMIT = 25;
 const FACILITY_OVERVIEW_STREAM_SENIORITIES = new Set(["SMS", "CMO", "Senior Registrar", "Transitional/Intermediate Registrar", "Junior Registrar", "HMO", "Intern", "NP", "Physio", "Unknown", "ALL"]);
-const INVITE_APP_URL = "https://rtc.curiousmind.app";
 
 function serverTimingHeader(timing = {}) {
   return [
@@ -502,7 +501,7 @@ export async function onRequestPost(context) {
       `).bind(tokenHash, targetEmail, account.email, expiresAt, now.toISOString(), now.toISOString()).run();
       const postmarkToken = String(context.env.POSTMARK_API_TOKEN || "").trim();
       if (!postmarkToken) return Response.json({ error: "Postmark is not configured." }, { status: 422 });
-      const inviteUrl = `${INVITE_APP_URL}/?invite=${encodeURIComponent(token)}`;
+      const inviteUrl = `${new URL(context.request.url).origin}/?invite=${encodeURIComponent(token)}`;
       const send = await fetch("https://api.postmarkapp.com/email", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Postmark-Server-Token": postmarkToken },
