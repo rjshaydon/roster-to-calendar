@@ -15428,6 +15428,12 @@ async function logoutCurrentUser() {
 
 function renderLoginState() {
   const loggedIn = Boolean(currentUserEmail && currentUserPassword);
+  // Non-clinical Directors have no personal calendar. Their workspace has its
+  // own polished header, so do not leave the technical account-status strip
+  // floating over the top of it.
+  document.body.classList.toggle("is-non-clinical-director", Boolean(
+    loggedIn && currentNonClinical && currentDirectorViewEnabled,
+  ));
   loginBar.classList.toggle("hidden", !loggedIn);
   appShell.classList.toggle("hidden", !loggedIn);
   entrancePage.classList.toggle("hidden", loggedIn);

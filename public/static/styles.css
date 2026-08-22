@@ -4248,6 +4248,12 @@ body[data-skin="console"].has-calendar-preview .login-bar {
   display: none;
 }
 
+/* The Director dashboard supplies its own account, date and log-out header.
+   Hide the technical account-sync strip so it cannot obscure that interface. */
+body[data-skin="console"].is-non-clinical-director .login-bar {
+  display: none;
+}
+
 body[data-skin="console"].has-calendar-preview #controlBar {
   padding-top: calc(var(--console-header-height) + 20px);
 }
