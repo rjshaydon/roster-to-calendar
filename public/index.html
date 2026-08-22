@@ -71,6 +71,17 @@
             </label>
             <button type="submit" class="button button-secondary">Create account</button>
           </form>
+          <form id="inviteAccountForm" class="entrance-form hidden" aria-label="Accept invitation">
+            <div class="section-head">
+              <h2>Set up your account</h2>
+              <p>Choose a password to accept your Roster Converter invitation.</p>
+            </div>
+            <label class="field">
+              <span>New password</span>
+              <input id="invitePassword" type="password" autocomplete="new-password" required placeholder="Choose password">
+            </label>
+            <button type="submit" class="button button-primary">Activate account</button>
+          </form>
         </div>
         <p id="entranceStatus" class="status" aria-live="polite"></p>
       </div>

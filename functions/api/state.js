@@ -95,6 +95,7 @@ const SNAPSHOT_SCHEMA_VERSION = 5;
 const SNAPSHOT_BUILDING_RETRY_MS = 15 * 60 * 1000;
 const SNAPSHOT_GLOBAL_WARMUP_LIMIT = 25;
 const FACILITY_OVERVIEW_STREAM_SENIORITIES = new Set(["SMS", "CMO", "Senior Registrar", "Transitional/Intermediate Registrar", "Junior Registrar", "HMO", "Intern", "NP", "Physio", "Unknown", "ALL"]);
+const INVITE_APP_URL = "https://rtc.curiousmind.app";
 
 function serverTimingHeader(timing = {}) {
   return [
@@ -125,11 +126,35 @@ export async function onRequestPost(context) {
     const responseMode = String(body?.responseMode || "full").trim().toLowerCase() === "fast" ? "fast" : "full";
     const realName = String(body?.realName || "").trim();
     const targetEmail = normalizeEmail(body?.targetEmail);
-    if (!email) {
+    if (!email && action !== "acceptInvite") {
       return Response.json({ error: "Email address is required." }, { status: 400 });
     }
     if (!hasCalendarDb(context.env)) {
       return Response.json({ error: "D1 database is not configured." }, { status: 503 });
+    }
+    if (action === "acceptInvite") {
+      const inviteToken = String(body?.inviteToken || "").trim();
+      const invitePassword = String(body?.newPassword || "");
+      if (!inviteToken || !invitePassword) {
+        return Response.json({ error: "Your invitation link and a new password are required." }, { status: 400 });
+      }
+      await ensureInviteSchema(context.env.ROSTER_DB);
+      const now = new Date().toISOString();
+      const invite = await context.env.ROSTER_DB.prepare(`
+        SELECT email, expires_at FROM account_invites
+        WHERE token_hash = ? AND accepted_at = '' AND revoked_at = ''
+      `).bind(await sha256(inviteToken)).first();
+      if (!invite || String(invite.expires_at || "") <= now) {
+        return Response.json({ error: "This invitation link has expired or has already been used." }, { status: 400 });
+      }
+      const invitedEmail = normalizeEmail(invite.email);
+      const existing = await loadAccountMirror(context.env.ROSTER_DB, invitedEmail);
+      if (!existing) return Response.json({ error: "The invited account could not be found." }, { status: 404 });
+      const passwordRecord = await hashPassword(invitePassword);
+      await upsertAccountMirror(context.env.ROSTER_DB, { ...existing, ...passwordRecord, updatedAt: now });
+      await context.env.ROSTER_DB.prepare("UPDATE account_invites SET accepted_at = ?, updated_at = ? WHERE token_hash = ?")
+        .bind(now, now, await sha256(inviteToken)).run();
+      return Response.json({ ok: true, email: invitedEmail });
     }
     if (!password) {
       return Response.json({ error: "Password is required." }, { status: 400 });
@@ -444,6 +469,58 @@ export async function onRequestPost(context) {
           updatedAt: created.record.updatedAt || "",
         },
       });
+    }
+
+    if (action === "adminSendInvite") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      const targetRealName = String(body?.targetRealName || "").trim();
+      const nonClinical = body?.nonClinical === true;
+      const directorViewEnabled = body?.directorViewEnabled === true;
+      if (!targetEmail || !targetRealName) {
+        return Response.json({ error: "An invited user's name and email are required." }, { status: 400 });
+      }
+      const existing = await loadAccountMirror(context.env.ROSTER_DB, targetEmail);
+      if (!existing) {
+        const passwordRecord = await hashPassword(randomInviteToken());
+        await upsertAccountMirror(context.env.ROSTER_DB, {
+          email: targetEmail, realName: targetRealName, role: "user", claims: [],
+          nonClinical, directorViewEnabled, ...passwordRecord,
+        });
+      }
+      const token = randomInviteToken();
+      const tokenHash = await sha256(token);
+      const now = new Date();
+      const expiresAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
+      await ensureInviteSchema(context.env.ROSTER_DB);
+      await context.env.ROSTER_DB.prepare("UPDATE account_invites SET revoked_at = ?, updated_at = ? WHERE email = ? AND accepted_at = '' AND revoked_at = ''")
+        .bind(now.toISOString(), now.toISOString(), targetEmail).run();
+      await context.env.ROSTER_DB.prepare(`
+        INSERT INTO account_invites (token_hash, email, created_by, expires_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).bind(tokenHash, targetEmail, account.email, expiresAt, now.toISOString(), now.toISOString()).run();
+      const postmarkToken = String(context.env.POSTMARK_API_TOKEN || "").trim();
+      if (!postmarkToken) return Response.json({ error: "Postmark is not configured." }, { status: 422 });
+      const inviteUrl = `${INVITE_APP_URL}/?invite=${encodeURIComponent(token)}`;
+      const send = await fetch("https://api.postmarkapp.com/email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Postmark-Server-Token": postmarkToken },
+        body: JSON.stringify({
+          From: "Roster Converter <invites@curiousmind.app>", To: targetEmail,
+          Subject: "You have been invited to Roster Converter",
+          TextBody: `Hello ${targetRealName},\n\nYou have been invited to Roster Converter. Use this one-time link to choose your password and activate your account:\n${inviteUrl}\n\nThis link expires in seven days.`,
+          HtmlBody: `<p>Hello ${escapeHtml(targetRealName)},</p><p>You have been invited to Roster Converter.</p><p><a href="${inviteUrl}">Choose your password and activate your account</a></p><p>This one-time link expires in seven days.</p>`,
+          MessageStream: "outbound",
+        }),
+      });
+      if (!send.ok) {
+        const message = await send.text();
+        console.error("Postmark invite failed", send.status, message);
+        return Response.json({ error: "Postmark could not send this invitation." }, { status: 502 });
+      }
+      const user = await loadAccountMirror(context.env.ROSTER_DB, targetEmail);
+      return Response.json({ ok: true, user: await userSummaryFromRecord(targetEmail, user, { db: context.env.ROSTER_DB }) });
     }
 
     if (action === "resolveAccountClaims") {
@@ -5651,6 +5728,27 @@ function randomSubscriptionToken() {
   const values = new Uint8Array(24);
   crypto.getRandomValues(values);
   return [...values].map((value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+function randomInviteToken() {
+  const values = new Uint8Array(32);
+  crypto.getRandomValues(values);
+  return [...values].map((value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+function escapeHtml(value) {
+  return String(value || "").replace(/[&<>'"]/g, (character) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;",
+  }[character]));
+}
+
+async function ensureInviteSchema(db) {
+  await db.prepare(`CREATE TABLE IF NOT EXISTS account_invites (
+    token_hash TEXT PRIMARY KEY, email TEXT NOT NULL, created_by TEXT NOT NULL DEFAULT '',
+    expires_at TEXT NOT NULL, accepted_at TEXT NOT NULL DEFAULT '', revoked_at TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+  )`).run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_account_invites_email ON account_invites (email)").run();
 }
 
 async function ensureAccountSubscriptionToken(store, record) {

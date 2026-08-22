@@ -87,6 +87,8 @@ const createAccountForm = document.querySelector("#createAccountForm");
 const createRealName = document.querySelector("#createRealName");
 const createEmail = document.querySelector("#createEmail");
 const createPassword = document.querySelector("#createPassword");
+const inviteAccountForm = document.querySelector("#inviteAccountForm");
+const invitePassword = document.querySelector("#invitePassword");
 const currentDayPreview = document.querySelector("#currentDayPreview");
 const exportButton = document.querySelector("#exportButton");
 const facilityOverviewButton = document.querySelector("#facilityOverviewButton");
@@ -1382,6 +1384,12 @@ accountsBody.addEventListener("toggle", (event) => {
   }
 }, true);
 accountsBody.addEventListener("click", (event) => {
+  const sendInviteButton = event.target.closest("[data-send-account-invite]");
+  if (sendInviteButton) {
+    const inviteForm = sendInviteButton.closest("[data-create-account-form]");
+    if (inviteForm) void sendAccountInvite(inviteForm);
+    return;
+  }
   const currentUsersSummary = event.target.closest("[data-other-users-section] > summary");
   const currentUsersControl = event.target.closest(".admin-user-search-filter, .admin-user-seniority-filter");
   if (currentUsersSummary && !currentUsersControl && adminUserSearchQuery.trim()) {
@@ -1593,6 +1601,24 @@ createAccountForm.addEventListener("submit", async (event) => {
     return;
   }
   await loginWithEmail(email, password, { mode: "create", realName });
+});
+inviteAccountForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const inviteToken = new URLSearchParams(window.location.search).get("invite") || "";
+  const password = invitePassword?.value || "";
+  if (!inviteToken || !password) return;
+  setEntranceStatus("Activating your account...");
+  try {
+    const response = await fetch("/api/state", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "acceptInvite", inviteToken, newPassword: password }),
+    });
+    const data = await readJsonResponse(response, "Could not activate account.");
+    window.history.replaceState({}, "", window.location.pathname);
+    await loginWithEmail(data.email, password, { mode: "login", stayLoggedIn: true });
+  } catch (error) {
+    setEntranceStatus(error.message || "Could not activate account.", true);
+  }
 });
 loginTabButton?.addEventListener("click", () => setEntranceTab("login"));
 createTabButton?.addEventListener("click", () => setEntranceTab("create"));
@@ -11099,8 +11125,8 @@ function renderAccountsModal() {
             <input type="email" data-create-email placeholder="doctor@example.com" autocomplete="email">
           </label>
           <label class="field">
-            <span>Temporary password</span>
-            <input type="password" data-create-password placeholder="Temporary password" autocomplete="new-password">
+            <span>Temporary password (manual setup only)</span>
+            <input type="password" data-create-password placeholder="Not needed when sending an invite" autocomplete="new-password">
           </label>
           <div class="create-user-options" aria-label="Account access options">
             <label class="toggle review-toggle">
@@ -11114,6 +11140,7 @@ function renderAccountsModal() {
           </div>
           <div class="modal-actions">
             <button type="submit" class="button button-primary">Create and enter account</button>
+            <button type="button" class="button button-secondary" data-send-account-invite>Send invite</button>
           </div>
         </form>
       </details>
@@ -12958,6 +12985,45 @@ async function createAccountFromOwner(formElement) {
       return;
     }
     setStatus(error.message || "Could not create account.", true);
+  }
+}
+
+async function sendAccountInvite(formElement) {
+  if (!isCreatorAuthenticated()) return;
+  const realName = formElement.querySelector("[data-create-real-name]")?.value.trim() || "";
+  const email = normalizeEmail(formElement.querySelector("[data-create-email]")?.value || "");
+  const nonClinical = formElement.querySelector("[data-create-non-clinical]")?.checked === true;
+  const directorViewEnabled = formElement.querySelector("[data-create-director-view]")?.checked === true;
+  if (!realName || !email) {
+    setStatus("Enter a real name and email address before sending an invitation.", true);
+    return;
+  }
+  setStatus(`Sending invitation to ${email}...`);
+  try {
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "adminSendInvite",
+        email: authUserEmail || currentUserEmail,
+        password: authUserPassword || currentUserPassword,
+        targetEmail: email,
+        targetRealName: realName,
+        nonClinical,
+        directorViewEnabled,
+      }),
+    });
+    const data = await readJsonResponse(response, "Could not send invitation.");
+    if (data.user) {
+      serverUsers = [...serverUsers.filter((user) => normalizeServerUser(user).email !== email), data.user]
+        .sort((left, right) => normalizeServerUser(left).email.localeCompare(normalizeServerUser(right).email));
+    }
+    formElement.reset();
+    await loadServerUsers();
+    renderAccountsModal();
+    setStatus(`Invitation sent to ${email}. It expires in seven days.`);
+  } catch (error) {
+    setStatus(error.message || "Could not send invitation.", true);
   }
 }
 
@@ -19032,6 +19098,17 @@ async function refreshSnapshotInBackground() {
 async function bootstrapApp() {
   try {
     removeLegacyCalendarSnapshotCaches();
+    if (new URLSearchParams(window.location.search).get("invite")) {
+      entrancePage.classList.remove("hidden");
+      appShell.classList.add("hidden");
+      loginForm.classList.add("hidden");
+      createAccountForm.classList.add("hidden");
+      inviteAccountForm?.classList.remove("hidden");
+      loginTabButton?.classList.add("hidden");
+      createTabButton?.classList.add("hidden");
+      hideLoadingScreen();
+      return;
+    }
     renderLoginState();
     if (!currentUserEmail || !currentUserPassword) {
       openLoginModal();
