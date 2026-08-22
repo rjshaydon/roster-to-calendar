@@ -2950,6 +2950,9 @@ async function openAccountsSurface(options = {}) {
   renderAccountsModal();
   accountsModal.classList.remove("hidden");
   accountsModal.setAttribute("aria-hidden", "false");
+  // Do not select a name, email, or password field on entry. This avoids an
+  // accidental edit when a Director opens their Account screen to review it.
+  accountsCloseButton?.focus({ preventScroll: true });
   queueGlobalUnresolvedShiftCodeLoad();
   if (activeCalendarMode() === "doctor-profile" && activeDoctorProfile && cloudAvailable) {
     void refreshDoctorProfileFileRefs().then(() => {
@@ -11193,8 +11196,8 @@ function renderAccountsModal() {
       </form>
       `}
       ${renderAccountHospitalLocationsCard({ directorPreference: currentNonClinical && currentDirectorViewEnabled && !doctorProfileView })}
-      ${linkedNames}
-      ${ownerView ? "" : renderFilesMarkup({
+      ${currentNonClinical && currentDirectorViewEnabled ? "" : linkedNames}
+      ${ownerView || (currentNonClinical && currentDirectorViewEnabled) ? "" : renderFilesMarkup({
         canRemove: false,
         canAdd: !doctorProfileView,
         heading: "Files used to generate your calendar...",
