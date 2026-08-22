@@ -4390,20 +4390,6 @@ function renderPreviewGrid(doctor, data) {
   queueGlobalUnresolvedShiftCodeLoad();
 }
 
-function renderNonClinicalDirectorCalendar() {
-  if (!preview || !previewSection) return;
-  document.body.classList.add("has-calendar-preview");
-  preview.innerHTML = `
-    <div class="preview-head">
-      <div><p class="eyebrow">My calendar</p><h2>Calendar</h2></div>
-    </div>
-    <div class="preview-empty">No clinical shifts are linked to this non-clinical Director account.</div>
-  `;
-  preview.classList.remove("hidden");
-  previewSection.classList.remove("hidden");
-  syncMobileChrome();
-}
-
 function renderPreviewHeader(doctor, data) {
   return `
     <div class="preview-head">
@@ -9039,8 +9025,10 @@ function canUseFacilityOverview() {
 
 function syncFacilityOverviewAccess() {
   const enabled = canUseFacilityOverview();
-  facilityOverviewButton?.classList.toggle("hidden", !enabled);
-  mobileFacilityOverviewButton?.classList.toggle("hidden", !enabled);
+  const calendarAvailable = !(currentNonClinical && currentDirectorViewEnabled);
+  facilityOverviewButton?.classList.toggle("hidden", !enabled || !calendarAvailable);
+  mobileFacilityOverviewButton?.classList.toggle("hidden", !enabled || !calendarAvailable);
+  facilityOverviewBackButton?.classList.toggle("hidden", !calendarAvailable);
   mobileActionBar?.classList.toggle("has-facility-overview", enabled);
   if (!enabled && facilityOverviewSection && !facilityOverviewSection.classList.contains("hidden")) closeFacilityOverview();
   syncFacilityOverviewNavigationState();
@@ -9408,7 +9396,7 @@ function closeFacilityOverview() {
   form?.classList.remove("is-facility-overview-active");
   resetFacilityOverviewScroll();
   facilityOverviewSection?.classList.add("hidden");
-  if (latestPreview || (currentNonClinical && currentDirectorViewEnabled)) previewSection?.classList.remove("hidden");
+  if (latestPreview) previewSection?.classList.remove("hidden");
   syncFacilityOverviewNavigationState();
 }
 
@@ -19104,7 +19092,6 @@ async function bootstrapImports(options = {}) {
     if (selectedFiles.length) {
       await analyzeFiles();
     } else {
-      if (currentNonClinical && currentDirectorViewEnabled) renderNonClinicalDirectorCalendar();
       renderClaimSection();
       syncActionState();
       setStatus(currentNonClinical
