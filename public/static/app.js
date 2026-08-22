@@ -716,6 +716,10 @@ facilityOverviewSection?.addEventListener("scroll", (event) => {
   ) setFacilityOverviewCompactMode(scroller, false);
 }, { capture: true, passive: true });
 facilityOverviewSection?.addEventListener("click", (event) => {
+  if (event.target.closest("[data-facility-overview-account]")) {
+    void openAccountsSurface({ defaultAdminTab: "users" });
+    return;
+  }
   if (event.target.closest("[data-facility-overview-logout]")) {
     void logoutCurrentUser();
     return;
@@ -9527,6 +9531,9 @@ function renderFacilityOverviewHeader() {
             ${renderFacilityOverviewDateNavigation("day", { header: true })}
           `}
         </div>
+        ${currentDirectorViewEnabled
+          ? `<button type="button" class="button button-secondary" data-facility-overview-account>Account</button>`
+          : ""}
         <button type="button" class="button button-secondary preview-logout-button" data-facility-overview-logout>Log out</button>
       </div>
     </div>

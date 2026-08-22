@@ -4254,6 +4254,12 @@ body[data-skin="console"].is-non-clinical-director .login-bar {
   display: none;
 }
 
+/* Non-clinical Directors do not have a personal calendar, so there is
+   nothing to export. Their Account action lives in the dashboard header. */
+body[data-skin="console"].is-non-clinical-director #exportButton {
+  display: none;
+}
+
 body[data-skin="console"].has-calendar-preview #controlBar {
   padding-top: calc(var(--console-header-height) + 20px);
 }
