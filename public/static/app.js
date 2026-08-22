@@ -1373,6 +1373,11 @@ accountsBody.addEventListener("submit", (event) => {
   void updateAccountDetails(email, { password, realName });
 });
 accountsBody.addEventListener("change", (event) => {
+  const directorHospitalSelect = event.target.closest("[data-director-hospital-preference]");
+  if (directorHospitalSelect) {
+    updateDirectorHospitalPreference(directorHospitalSelect.value);
+    return;
+  }
   const accountLocationInput = event.target.closest("[data-account-location-key]");
   if (accountLocationInput) {
     updateDefaultLocationSetting(accountLocationInput.dataset.accountLocationKey || "", accountLocationInput.value);
@@ -2434,6 +2439,7 @@ function defaultSettings() {
     defaultLocationDdh: DEFAULT_DDH_LOCATION,
     defaultLocationCasey: DEFAULT_CASEY_LOCATION,
     defaultLocationMch: DEFAULT_MCH_LOCATION,
+    directorHospitalPreference: "ALL",
     hospitalFilter: "all",
     dateFrom: "",
     dateTo: "",
@@ -9092,6 +9098,13 @@ function facilityOverviewPreferredFacilityFromEvents(events = [], options = {}) 
 
 function refreshFacilityOverviewPreferredFacility() {
   if (!canUseFacilityOverview()) return;
+  const directorPreference = currentNonClinical && currentDirectorViewEnabled ? directorHospitalPreference() : "";
+  if (directorPreference && directorPreference !== "ALL") {
+    facilityOverviewState.preferredFacilityKey = directorPreference;
+    facilityOverviewState.preferredFacilityReason = "director-hospital-preference";
+    facilityOverviewState.preferredFacilityEvidenceDate = "";
+    return;
+  }
   const doctor = selectedDoctor();
   const clock = facilityOverviewMelbourneClock();
   const preferred = facilityOverviewPreferredFacilityFromEvents(currentSnapshot?.preview?.events || latestPreview?.events || [], {
@@ -9269,7 +9282,8 @@ function facilityOverviewPreferredStreamKey(facilityKey) {
 }
 
 function newFacilityOverviewByStreamRow(options = {}) {
-  const facilityKey = String(options.facilityKey || facilityOverviewState.preferredFacilityKey || facilityOverviewState.facilityKey || facilityOverviewFacilityOptions()[0] || "MMC").toUpperCase();
+  const currentFacility = String(facilityOverviewState.facilityKey || "").toUpperCase();
+  const facilityKey = String(options.facilityKey || facilityOverviewState.preferredFacilityKey || (currentFacility === "ALL" ? "" : currentFacility) || facilityOverviewFacilityOptions()[0] || "MMC").toUpperCase();
   const streamKey = String(options.streamKey || facilityOverviewPreferredStreamKey(facilityKey));
   facilityOverviewState.byStreamRowId += 1;
   return {
@@ -9347,8 +9361,14 @@ async function openFacilityOverview(options = {}) {
   if (!canUseFacilityOverview()) return;
   refreshFacilityOverviewPreferredFacility();
   if (options.preserveFacility !== true && options.preserveStaffTerm !== true) {
+    const directorPreference = currentNonClinical && currentDirectorViewEnabled ? directorHospitalPreference() : "";
     const preferred = String(facilityOverviewState.preferredFacilityKey || "").toUpperCase();
-    if (preferred) facilityOverviewState.facilityKey = preferred;
+    if (directorPreference) {
+      facilityOverviewState.facilityKey = directorPreference;
+      facilityOverviewState.togetherFacilityKey = directorPreference;
+    } else if (preferred) {
+      facilityOverviewState.facilityKey = preferred;
+    }
     if (!options.preserveDate) facilityOverviewState.date = formatDateKey(new Date());
     if (!options.preserveByStreamRange) {
       const today = formatDateKey(new Date());
@@ -9360,7 +9380,7 @@ async function openFacilityOverview(options = {}) {
     }
   }
   const facilities = facilityOverviewFacilityOptions();
-  if (!facilityOverviewState.facilityKey || !facilities.includes(facilityOverviewState.facilityKey)) {
+  if (!facilityOverviewState.facilityKey || (facilityOverviewState.facilityKey !== "ALL" && !facilities.includes(facilityOverviewState.facilityKey))) {
     facilityOverviewState.facilityKey = facilities[0] || "MMC";
   }
   form?.classList.add("is-facility-overview-active");
@@ -9450,11 +9470,12 @@ function renderFacilityOverview() {
     return;
   }
   const facilities = facilityOverviewFacilityOptions();
-  const selected = facilities.includes(facilityOverviewState.facilityKey) ? facilityOverviewState.facilityKey : facilities[0] || "MMC";
+  const selected = facilityOverviewState.facilityKey === "ALL" || facilities.includes(facilityOverviewState.facilityKey)
+    ? facilityOverviewState.facilityKey : facilities[0] || "MMC";
   facilityOverviewState.facilityKey = selected;
   const content = facilityOverviewState.content || `<article class="issue-card"><p>Choose an ED and date to load rostered staff.</p></article>`;
   facilityOverviewControls.innerHTML = `
-    <label class="field"><span>ED</span><select data-facility-overview-facility>${facilities.map((facility) => `<option value="${escapeHtml(facility)}" ${facility === selected ? "selected" : ""}>${escapeHtml(displaySourceCode(facility))}</option>`).join("")}</select></label>
+    <label class="field"><span>ED</span><select data-facility-overview-facility><option value="ALL" ${selected === "ALL" ? "selected" : ""}>All EDs</option>${facilities.map((facility) => `<option value="${escapeHtml(facility)}" ${facility === selected ? "selected" : ""}>${escapeHtml(displaySourceCode(facility))}</option>`).join("")}</select></label>
     <label class="field"><span>Date</span><input type="date" value="${escapeHtml(facilityOverviewState.date)}" data-facility-overview-date></label>
     ${renderFacilityOverviewDateNavigation("day")}
     <label class="toggle facility-overview-cs-toggle">CS <input type="checkbox" data-facility-overview-include-cs ${facilityOverviewState.includeClinicalSupport ? "checked" : ""}></label>
@@ -10111,7 +10132,7 @@ function renderFacilityOverviewOnShiftResults(rows) {
   for (const row of rows) {
     const event = row?.event;
     if (!event || !isRosterShiftEvent(event)) continue;
-    const key = String(row.doctorKey || "").trim();
+    const key = `${String(row.sourceType || facilityOverviewState.facilityKey || "").toUpperCase()}|${String(row.doctorKey || "").trim()}`;
     if (!key) continue;
     const seniority = facilityOverviewDetectedSeniority(event, row.seniority || "Unknown");
     const entry = people.get(key) || {
@@ -11171,7 +11192,7 @@ function renderAccountsModal() {
         </div>
       </form>
       `}
-      ${renderAccountHospitalLocationsCard()}
+      ${renderAccountHospitalLocationsCard({ directorPreference: currentNonClinical && currentDirectorViewEnabled && !doctorProfileView })}
       ${linkedNames}
       ${ownerView ? "" : renderFilesMarkup({
         canRemove: false,
@@ -11338,7 +11359,25 @@ function renderLoginPerformanceCard() {
   `;
 }
 
-function renderAccountHospitalLocationsCard() {
+function renderAccountHospitalLocationsCard({ directorPreference = false } = {}) {
+  if (directorPreference) {
+    const selected = directorHospitalPreference();
+    return `
+      <section class="review-body account-hospital-locations">
+        <div class="section-head">
+          <h4>Your hospital(s)</h4>
+          <p>Choose the ED to show first throughout At a glance. Select All EDs for the Program Director view.</p>
+        </div>
+        <label class="field">
+          <span>Director preference</span>
+          <select data-director-hospital-preference>
+            <option value="ALL" ${selected === "ALL" ? "selected" : ""}>All EDs</option>
+            ${DIRECTOR_HOSPITAL_OPTIONS.map((facility) => `<option value="${facility.key}" ${selected === facility.key ? "selected" : ""}>${escapeHtml(facility.label)}</option>`).join("")}
+          </select>
+        </label>
+      </section>
+    `;
+  }
   const sourceTypes = recognizedHospitalTypesForActiveAccount();
   const rows = sourceTypes.map((sourceType) => {
     const config = hospitalLocationConfig(sourceType);
@@ -11358,6 +11397,33 @@ function renderAccountHospitalLocationsCard() {
       ${rows || `<article class="issue-card"><p>Link a roster identity to expose hospital defaults here.</p></article>`}
     </section>
   `;
+}
+
+const DIRECTOR_HOSPITAL_OPTIONS = [
+  { key: "MMC", label: "Monash Medical Centre (MMC)" },
+  { key: "DDH", label: "Dandenong Hospital (DDH)" },
+  { key: "CASEY", label: "Casey Hospital" },
+  { key: "MCH", label: "Monash Children's Hospital (MCH)" },
+];
+
+function directorHospitalPreference() {
+  const preference = String(settings.directorHospitalPreference || "ALL").toUpperCase();
+  return preference === "ALL" || DIRECTOR_HOSPITAL_OPTIONS.some((facility) => facility.key === preference)
+    ? preference : "ALL";
+}
+
+function updateDirectorHospitalPreference(value) {
+  const preference = String(value || "ALL").toUpperCase();
+  settings.directorHospitalPreference = DIRECTOR_HOSPITAL_OPTIONS.some((facility) => facility.key === preference)
+    ? preference : "ALL";
+  facilityOverviewState.facilityKey = settings.directorHospitalPreference;
+  facilityOverviewState.togetherFacilityKey = settings.directorHospitalPreference;
+  facilityOverviewState.byStreamRows = [];
+  refreshFacilityOverviewPreferredFacility();
+  saveCurrentSessionState();
+  renderAccountsModal();
+  if (isFacilityOverviewOpen()) void openFacilityOverview({ preserveFacility: true, preserveStaffTerm: true, preserveDate: true });
+  setStatus("Director hospital preference updated.");
 }
 
 const ACCOUNT_HOSPITAL_LOCATION_ORDER = ["mmc", "ddh", "mch", "casey"];

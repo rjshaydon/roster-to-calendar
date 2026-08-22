@@ -1739,22 +1739,24 @@ export async function onRequestPost(context) {
         return Response.json({ ok: false, unavailable: true, events: [] }, { status: 403 });
       }
       const date = String(body?.date || "").slice(0, 10);
-      const facilityKey = sanitizeSourceTypes([body?.facilityKey])[0] || "";
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !facilityKey) {
+      const requestedFacility = String(body?.facilityKey || "").trim().toUpperCase();
+      const facilityKeys = requestedFacility === "ALL" ? ["mmc", "ddh", "casey", "mch"] : sanitizeSourceTypes([requestedFacility]);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !facilityKeys.length) {
         return Response.json({ error: "A valid ED and date are required." }, { status: 400 });
       }
       const startedAt = Date.now();
       try {
-        const events = (await queryFacilityOverviewOnShift(context.env.ROSTER_DB, { date, facilityKey }))
+        const events = (await Promise.all(facilityKeys.map((facilityKey) => queryFacilityOverviewOnShift(context.env.ROSTER_DB, { date, facilityKey }))))
+          .flat()
           .filter((row) => isFacilityOverviewWorkingEvent(row.event, {
-            facilityKey,
+            facilityKey: row.sourceType,
             includeClinicalSupport: body?.includeClinicalSupport === true,
           }));
-        return Response.json({ ok: true, date, facilityKey, events, queryMs: Date.now() - startedAt });
+        return Response.json({ ok: true, date, facilityKey: requestedFacility === "ALL" ? "ALL" : facilityKeys[0], events, queryMs: Date.now() - startedAt });
       } catch (error) {
         console.error("queryFacilityOverviewOnShift failed", {
           date,
-          facilityKey,
+          facilityKey: requestedFacility,
           queryMs: Date.now() - startedAt,
           error: error?.message || String(error),
         });
