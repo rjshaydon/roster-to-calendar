@@ -46,7 +46,10 @@
             </label>
             <label class="field">
               <span>Password</span>
-              <input id="loginPassword" type="password" autocomplete="current-password" required placeholder="Enter password">
+              <span class="password-input-wrap">
+                <input id="loginPassword" type="password" autocomplete="current-password" required placeholder="Enter password">
+                <button type="button" class="password-reveal" data-password-visibility-toggle="loginPassword" aria-label="Show password" aria-pressed="false">👁</button>
+              </span>
             </label>
             <label class="toggle mobile-stay-login"><input id="stayLoggedIn" type="checkbox" checked> Stay logged in?</label>
             <button type="submit" class="button button-primary">Log in</button>
@@ -67,7 +70,10 @@
             </label>
             <label class="field">
               <span>Password</span>
-              <input id="createPassword" type="password" autocomplete="new-password" required placeholder="Choose password">
+              <span class="password-input-wrap">
+                <input id="createPassword" type="password" autocomplete="new-password" required placeholder="Choose password">
+                <button type="button" class="password-reveal" data-password-visibility-toggle="createPassword" aria-label="Show password" aria-pressed="false">👁</button>
+              </span>
             </label>
             <button type="submit" class="button button-secondary">Create account</button>
           </form>
@@ -80,7 +86,7 @@
               <span>New password</span>
               <span class="password-input-wrap">
                 <input id="invitePassword" type="password" autocomplete="new-password" required placeholder="Choose password">
-                <button id="toggleInvitePasswordButton" type="button" class="password-reveal" aria-label="Show password" aria-pressed="false">👁</button>
+                <button type="button" class="password-reveal" data-password-visibility-toggle="invitePassword" aria-label="Show password" aria-pressed="false">👁</button>
               </span>
             </label>
             <button type="submit" class="button button-primary">Activate account</button>
