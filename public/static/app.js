@@ -9380,6 +9380,7 @@ async function openFacilityOverview(options = {}) {
     if (directorPreference) {
       facilityOverviewState.facilityKey = directorPreference;
       facilityOverviewState.togetherFacilityKey = directorPreference;
+      facilityOverviewState.tab = directorPreference === "ALL" ? "staff" : "on-shift";
     } else if (preferred) {
       facilityOverviewState.facilityKey = preferred;
     }
@@ -9441,6 +9442,7 @@ function closeFacilityOverview() {
 function renderFacilityOverview() {
   if (!facilityOverviewBody || !facilityOverviewControls) return;
   if (facilityOverviewHeader) facilityOverviewHeader.innerHTML = renderFacilityOverviewHeader();
+  syncFacilityOverviewTabOrder();
   const activeTab = facilityOverviewState.tab || "on-shift";
   facilityOverviewBody.classList.toggle("is-working-together", activeTab === "together");
   facilityOverviewSection?.querySelectorAll("[data-facility-overview-tab]").forEach((button) => {
@@ -9496,6 +9498,18 @@ function renderFacilityOverview() {
   `;
   facilityOverviewBody.innerHTML = `<div class="facility-overview-results">${content}</div>`;
   queueFacilityOverviewMenuPositioning();
+}
+
+function syncFacilityOverviewTabOrder() {
+  const tabs = facilityOverviewSection?.querySelector(".facility-overview-tabs");
+  if (!tabs) return;
+  const order = currentNonClinical && currentDirectorViewEnabled && directorHospitalPreference() === "ALL"
+    ? ["staff", "on-shift", "together", "by-stream"]
+    : ["on-shift", "staff", "together", "by-stream"];
+  for (const tabName of order) {
+    const button = tabs.querySelector(`[data-facility-overview-tab="${tabName}"]`);
+    if (button) tabs.append(button);
+  }
 }
 
 function renderFacilityOverviewStaffBody() {
@@ -11432,6 +11446,7 @@ function updateDirectorHospitalPreference(value) {
     ? preference : "ALL";
   facilityOverviewState.facilityKey = settings.directorHospitalPreference;
   facilityOverviewState.togetherFacilityKey = settings.directorHospitalPreference;
+  facilityOverviewState.tab = settings.directorHospitalPreference === "ALL" ? "staff" : "on-shift";
   facilityOverviewState.byStreamRows = [];
   refreshFacilityOverviewPreferredFacility();
   saveCurrentSessionState();
