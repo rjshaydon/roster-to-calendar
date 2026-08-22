@@ -569,6 +569,34 @@ input[type="color"] {
   cursor: pointer;
 }
 
+.password-input-wrap {
+  position: relative;
+  display: block;
+}
+
+.password-input-wrap input {
+  padding-right: 50px;
+}
+
+.password-reveal {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.password-reveal:hover,
+.password-reveal:focus-visible {
+  background: rgba(24, 35, 28, 0.08);
+}
+
 .doctor-name {
   margin: 0;
   font-weight: 700;

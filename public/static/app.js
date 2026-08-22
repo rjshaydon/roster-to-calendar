@@ -95,6 +95,7 @@ const createEmail = document.querySelector("#createEmail");
 const createPassword = document.querySelector("#createPassword");
 const inviteAccountForm = document.querySelector("#inviteAccountForm");
 const invitePassword = document.querySelector("#invitePassword");
+const toggleInvitePasswordButton = document.querySelector("#toggleInvitePasswordButton");
 const currentDayPreview = document.querySelector("#currentDayPreview");
 const exportButton = document.querySelector("#exportButton");
 const facilityOverviewButton = document.querySelector("#facilityOverviewButton");
@@ -1655,6 +1656,12 @@ inviteAccountForm?.addEventListener("submit", async (event) => {
   } catch (error) {
     setEntranceStatus(error.message || "Could not activate account.", true);
   }
+});
+toggleInvitePasswordButton?.addEventListener("click", () => {
+  const visible = invitePassword?.type === "text";
+  invitePassword.type = visible ? "password" : "text";
+  toggleInvitePasswordButton.setAttribute("aria-label", visible ? "Show password" : "Hide password");
+  toggleInvitePasswordButton.setAttribute("aria-pressed", visible ? "false" : "true");
 });
 loginTabButton?.addEventListener("click", () => setEntranceTab("login"));
 createTabButton?.addEventListener("click", () => setEntranceTab("create"));

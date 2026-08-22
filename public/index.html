@@ -78,7 +78,10 @@
             </div>
             <label class="field">
               <span>New password</span>
-              <input id="invitePassword" type="password" autocomplete="new-password" required placeholder="Choose password">
+              <span class="password-input-wrap">
+                <input id="invitePassword" type="password" autocomplete="new-password" required placeholder="Choose password">
+                <button id="toggleInvitePasswordButton" type="button" class="password-reveal" aria-label="Show password" aria-pressed="false">👁</button>
+              </span>
             </label>
             <button type="submit" class="button button-primary">Activate account</button>
           </form>
