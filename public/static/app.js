@@ -42,6 +42,12 @@ const accountsCloseButton = document.querySelector("#accountsCloseButton");
 const accountsBody = document.querySelector("#accountsBody");
 const accountsModalTitle = document.querySelector("#accountsModalTitle");
 const accountsModalSubtitle = document.querySelector("#accountsModalSubtitle");
+const appDialog = document.querySelector("#appDialog");
+const appDialogTitle = document.querySelector("#appDialogTitle");
+const appDialogMessage = document.querySelector("#appDialogMessage");
+const appDialogCloseButton = document.querySelector("#appDialogCloseButton");
+const appDialogCancelButton = document.querySelector("#appDialogCancelButton");
+const appDialogConfirmButton = document.querySelector("#appDialogConfirmButton");
 const parserRuleModal = document.querySelector("#parserRuleModal");
 const parserRuleModalTitle = document.querySelector("#parserRuleModalTitle");
 const parserRuleCloseButton = document.querySelector("#parserRuleCloseButton");
@@ -1317,6 +1323,36 @@ shiftCodeReviewModalBody?.addEventListener("click", (event) => {
     );
   }
 });
+let appDialogResolve = null;
+
+function closeAppDialog(result = false) {
+  if (!appDialog || appDialog.classList.contains("hidden")) return;
+  appDialog.classList.add("hidden");
+  appDialog.setAttribute("aria-hidden", "true");
+  const resolve = appDialogResolve;
+  appDialogResolve = null;
+  resolve?.(result);
+}
+
+function showAppDialog({ title, message, confirmLabel = "" }) {
+  if (!appDialog) return Promise.resolve(false);
+  appDialogTitle.textContent = title;
+  appDialogMessage.textContent = message;
+  appDialogConfirmButton.textContent = confirmLabel || "Confirm";
+  appDialogConfirmButton.classList.toggle("hidden", !confirmLabel);
+  appDialog.classList.remove("hidden");
+  appDialog.setAttribute("aria-hidden", "false");
+  appDialogCancelButton.focus();
+  return new Promise((resolve) => { appDialogResolve = resolve; });
+}
+
+appDialogCloseButton?.addEventListener("click", () => closeAppDialog(false));
+appDialogCancelButton?.addEventListener("click", () => closeAppDialog(false));
+appDialogConfirmButton?.addEventListener("click", () => closeAppDialog(true));
+appDialog?.addEventListener("click", (event) => {
+  if (event.target.closest("[data-close-app-dialog]")) closeAppDialog(false);
+});
+
 accountsBody.addEventListener("submit", (event) => {
   event.preventDefault();
   const createForm = event.target.closest("[data-create-account-form]");
@@ -11115,14 +11151,14 @@ function renderAccountsModal() {
           </div>
           <span class="collapsible-chevron" aria-hidden="true">⌄</span>
         </summary>
-        <form class="review-body" data-create-account-form>
+        <form class="review-body" data-create-account-form novalidate>
           <label class="field">
             <span>Full name on roster</span>
             <input type="text" data-create-real-name placeholder="Name shown to the user" autocomplete="name">
           </label>
           <label class="field">
             <span>Email address</span>
-            <input type="email" data-create-email placeholder="doctor@example.com" autocomplete="email">
+            <input type="text" inputmode="email" data-create-email placeholder="doctor@example.com" autocomplete="email">
           </label>
           <label class="field">
             <span>Temporary password (manual setup only)</span>
@@ -12948,7 +12984,11 @@ async function createAccountFromOwner(formElement) {
   const password = formElement.querySelector("[data-create-password]")?.value || "";
   const nonClinical = formElement.querySelector("[data-create-non-clinical]")?.checked === true;
   const directorViewEnabled = formElement.querySelector("[data-create-director-view]")?.checked === true;
-  if (!realName || !email || !password) {
+  if (!isValidEmailAddress(email)) {
+    await showAppDialog({ title: "Invalid email address", message: "Please enter a valid email address" });
+    return;
+  }
+  if (!realName || !password) {
     setStatus("Enter a real name, email address, and temporary password.", true);
     return;
   }
@@ -12994,10 +13034,20 @@ async function sendAccountInvite(formElement) {
   const email = normalizeEmail(formElement.querySelector("[data-create-email]")?.value || "");
   const nonClinical = formElement.querySelector("[data-create-non-clinical]")?.checked === true;
   const directorViewEnabled = formElement.querySelector("[data-create-director-view]")?.checked === true;
-  if (!realName || !email) {
-    setStatus("Enter a real name and email address before sending an invitation.", true);
+  if (!isValidEmailAddress(email)) {
+    await showAppDialog({ title: "Invalid email address", message: "Please enter a valid email address" });
     return;
   }
+  if (!realName) {
+    setStatus("Enter a real name before sending an invitation.", true);
+    return;
+  }
+  const confirmed = await showAppDialog({
+    title: "Confirm invitation email",
+    message: `Send the account invitation to ${email}?`,
+    confirmLabel: "Send invite",
+  });
+  if (!confirmed) return;
   setStatus(`Sending invitation to ${email}...`);
   try {
     const response = await fetch("/api/state", {
@@ -13025,6 +13075,10 @@ async function sendAccountInvite(formElement) {
   } catch (error) {
     setStatus(error.message || "Could not send invitation.", true);
   }
+}
+
+function isValidEmailAddress(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || ""));
 }
 
 async function setUserInsightsEnabled(email, enabled) {

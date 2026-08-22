@@ -425,6 +425,19 @@
       </button>
     </div>
 
+    <div id="appDialog" class="modal hidden" aria-hidden="true">
+      <div class="modal-backdrop" data-close-app-dialog></div>
+      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="appDialogTitle">
+        <button type="button" class="modal-close" id="appDialogCloseButton" aria-label="Close dialog">×</button>
+        <div class="modal-head"><h2 id="appDialogTitle">Confirm</h2></div>
+        <div class="modal-body"><p id="appDialogMessage"></p></div>
+        <div class="modal-actions">
+          <button type="button" class="button button-secondary" id="appDialogCancelButton">Cancel</button>
+          <button type="button" class="button button-primary hidden" id="appDialogConfirmButton">Confirm</button>
+        </div>
+      </section>
+    </div>
+
     <div id="exportModal" class="modal hidden" aria-hidden="true">
       <div class="modal-backdrop" data-close-export></div>
       <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="exportModalTitle">
