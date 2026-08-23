@@ -36,6 +36,10 @@ export async function ensureCalendarSchema(db) {
 }
 
 async function ensureCalendarSchemaUncached(db) {
+  // Pages may start a new Worker isolate for a read-only Director request.
+  // Do not spend that request recreating every table, index and column when
+  // the sequential D1 migrations have already created the current schema.
+  if (await calendarSchemaIsCurrent(db)) return true;
   await db.prepare(`
     CREATE TABLE IF NOT EXISTS roster_files (
       id TEXT PRIMARY KEY,
@@ -456,6 +460,26 @@ async function ensureCalendarSchemaUncached(db) {
   await ensureColumn(db, "raw_roster_files", "type", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn(db, "raw_roster_files", "data_url", "TEXT NOT NULL DEFAULT ''");
   return true;
+}
+
+async function calendarSchemaIsCurrent(db) {
+  try {
+    // account_invites is the latest schema migration; the other two are used
+    // by the Director views. Their presence means the preceding migrations
+    // have run as well, so the expensive compatibility setup is unnecessary.
+    const row = await db.prepare(`
+      SELECT
+        EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'account_invites') AS has_account_invites,
+        EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'facility_staff_seniority_overrides') AS has_staff_overrides,
+        EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'roster_dispatches') AS has_roster_dispatches
+    `).first();
+    return Number(row?.has_account_invites) === 1
+      && Number(row?.has_staff_overrides) === 1
+      && Number(row?.has_roster_dispatches) === 1;
+  } catch {
+    // New databases and the local test double fall back to the full setup.
+    return false;
+  }
 }
 
 async function ensureColumn(db, table, column, definition) {
@@ -3678,7 +3702,7 @@ export async function queryFacilityOverviewOnShift(db, options = {}) {
     FROM roster_events
     INNER JOIN roster_files ON roster_files.id = roster_events.file_id
     WHERE roster_files.active = 1
-      AND lower(roster_events.source_type) = ?
+      AND roster_events.source_type = ?
       -- At a glance is the roster for this day, rather than everyone whose
       -- shift happens to cross into it.  This excludes the preceding day's
       -- PM shifts that finish at midnight.
