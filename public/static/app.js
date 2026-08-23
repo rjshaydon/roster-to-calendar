@@ -16200,6 +16200,11 @@ function applyCloudStateIdentity(data) {
   cloudAvailable = data.cloudAvailable === true;
   currentCalendarRevision = String(data.snapshotRevision || data.calendarRevision || currentCalendarRevision || "");
   currentUserRole = data.role || currentUserRole;
+  // The fast login envelope already includes these two display permissions.
+  // Apply them before the shell is first painted so non-clinical Directors do
+  // not briefly see the ordinary calendar controls while their overview loads.
+  currentNonClinical = data.nonClinical === true;
+  currentDirectorViewEnabled = currentUserRole === "creator" || data.directorViewEnabled === true;
   currentDefaultDoctorKey = normalizeRosterName(data.defaultDoctorKey || currentDefaultDoctorKey || "");
   currentSnapshotOwnerType = String(data.snapshotOwnerType || currentSnapshotOwnerType || "");
   currentSnapshotOwnerId = String(data.snapshotOwnerId || currentSnapshotOwnerId || "").trim();
@@ -16210,8 +16215,6 @@ function applyCloudStateIdentity(data) {
   returnToCreatorAvailable = data.returnToCreatorAvailable === true || Boolean(isImpersonating);
   adminViewingEmail = isImpersonating ? viewedAccountId : "";
   currentRosterClaims = sanitizeRosterClaims(data.claims || []);
-  currentNonClinical = data.nonClinical === true;
-  currentDirectorViewEnabled = currentUserRole === "creator" || data.directorViewEnabled === true;
   if (typeof data.insightsEnabled === "boolean") {
     primeInsightsAccessForCurrentView({ insightsEnabled: data.insightsEnabled });
   }

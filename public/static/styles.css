@@ -4260,6 +4260,12 @@ body[data-skin="console"].is-non-clinical-director #exportButton {
   display: none;
 }
 
+/* These are calendar-only controls. The Director overview provides its own
+   Account action, so keep this rail hidden from the first Director paint. */
+body[data-skin="console"].is-non-clinical-director #controlBar {
+  display: none !important;
+}
+
 /* A non-clinical Director has no calendar controls in the left rail. Let the
    Director overview use that otherwise-empty space, while retaining the
    dedicated dashboard header above it. */
