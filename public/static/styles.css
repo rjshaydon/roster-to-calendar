@@ -3650,6 +3650,43 @@ body[data-skin="console"] .preview-cell.is-weekend {
   margin-top: 12px;
 }
 
+.creator-qr-card {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  margin-top: 12px;
+}
+
+.creator-qr-code {
+  display: block;
+  width: 124px;
+  height: 124px;
+  padding: 8px;
+  border: 1px solid rgba(20, 34, 42, 0.1);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.creator-qr-copy {
+  display: grid;
+  gap: 5px;
+}
+
+.creator-qr-copy strong,
+.creator-qr-copy span,
+.creator-qr-copy a {
+  display: block;
+}
+
+.creator-qr-copy span {
+  color: var(--muted);
+}
+
+.creator-qr-copy a {
+  color: var(--accent);
+  font-weight: 750;
+  overflow-wrap: anywhere;
+}
+
 .admin-user-filter {
   min-width: 0;
 }
@@ -4429,6 +4466,15 @@ body[data-skin="console"] .panel {
 
   .review-body {
     grid-template-columns: 1fr;
+  }
+
+  .creator-qr-card {
+    grid-template-columns: 1fr;
+  }
+
+  .creator-qr-code {
+    width: 112px;
+    height: 112px;
   }
 
   .account-user-card {

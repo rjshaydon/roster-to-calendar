@@ -11380,6 +11380,14 @@ function renderAccountsModal() {
           </div>
         </form>
       </details>
+      <article class="review-card creator-qr-card" aria-labelledby="creator-qr-title">
+        <img class="creator-qr-code" src="/static/rtc-curiousmind-qr.svg" alt="QR code that opens rtc.curiousmind.app">
+        <div class="creator-qr-copy">
+          <strong id="creator-qr-title">Open Roster to Calendar</strong>
+          <span>Scan this code with a phone to open the app.</span>
+          <a href="https://rtc.curiousmind.app" target="_blank" rel="noopener noreferrer">rtc.curiousmind.app</a>
+        </div>
+      </article>
       <details class="review-card other-users-card" data-other-users-section ${otherUsersExpanded ? "open" : ""}>
         <summary class="review-top admin-users-header">
           <div class="admin-users-summary">
