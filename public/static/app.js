@@ -194,6 +194,7 @@ const MAX_MEMORY_SNAPSHOT_CACHE_ENTRIES = 160;
 const MAX_STORED_SNAPSHOT_CACHE_ENTRIES = 240;
 const MAX_STORED_SNAPSHOT_CACHE_AGE_MS = 45 * 24 * 60 * 60 * 1000;
 const ROSTER_OVERLAP_DOCTOR_CACHE_KEY = "roster-overlap-doctor-cache-v1";
+const FACILITY_OVERVIEW_TAB_PREFERENCES_KEY = "roster-facility-overview-tabs-v1";
 const FACILITY_OVERVIEW_SENIORITY_ORDER = ["SMS", "Senior Registrar", "CMO", "Transitional/Intermediate Registrar", "Junior Registrar", "HMO", "NP", "Physio", "Intern", "Unknown"];
 const CURRENT_EMAIL_KEY = "roster-current-email";
 const CURRENT_PASSWORD_KEY = "roster-current-password";
@@ -343,6 +344,7 @@ let whoStaffMenuContext = null;
 const FACILITY_OVERVIEW_COMPACT_SCROLL_THRESHOLD = 28;
 const FACILITY_OVERVIEW_SCROLL_TOLERANCE = 0;
 let facilityOverviewNavigationLocked = false;
+let facilityOverviewSessionNeedsInitialization = true;
 let creatorCalendarSourceFileRefs = [];
 let insightsState = null;
 let doctorAnalysisCacheKey = "";
@@ -9388,16 +9390,104 @@ function facilityOverviewByStreamDistinctRows(rows = facilityOverviewState.byStr
   });
 }
 
+function facilityOverviewAccountKey() {
+  return normalizeEmail(viewedAccountEmail() || currentUserEmail);
+}
+
+function savedFacilityOverviewTabs() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(FACILITY_OVERVIEW_TAB_PREFERENCES_KEY) || "{}");
+    return stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
+  } catch {
+    return {};
+  }
+}
+
+function savedFacilityOverviewTabForCurrentAccount() {
+  const tab = String(savedFacilityOverviewTabs()[facilityOverviewAccountKey()] || "");
+  return ["on-shift", "staff", "together", "by-stream"].includes(tab) ? tab : "";
+}
+
+function rememberFacilityOverviewTabForCurrentAccount() {
+  const accountKey = facilityOverviewAccountKey();
+  const tab = String(facilityOverviewState.tab || "");
+  if (!accountKey || !["on-shift", "staff", "together", "by-stream"].includes(tab)) return;
+  try {
+    const stored = savedFacilityOverviewTabs();
+    if (stored[accountKey] === tab) return;
+    localStorage.setItem(FACILITY_OVERVIEW_TAB_PREFERENCES_KEY, JSON.stringify({ ...stored, [accountKey]: tab }));
+  } catch {
+    // The overview still works if browser storage is unavailable.
+  }
+}
+
+function beginFacilityOverviewAccountSession() {
+  rememberFacilityOverviewTabForCurrentAccount();
+  facilityOverviewSessionNeedsInitialization = true;
+}
+
+function resetFacilityOverviewSessionState() {
+  const today = formatDateKey(new Date());
+  const currentTerm = australianTermForDate(new Date());
+  const currentTermStart = formatDateKey(currentTerm.start);
+  const currentTermEnd = formatDateKey(addDays(currentTerm.end, -1));
+  const directorPreference = currentNonClinical && currentDirectorViewEnabled ? directorHospitalPreference() : "";
+  const defaultTab = directorPreference === "ALL" ? "staff" : "on-shift";
+  facilityOverviewState.tab = savedFacilityOverviewTabForCurrentAccount() || defaultTab;
+  facilityOverviewState.date = today;
+  facilityOverviewState.facilityKey = directorPreference || "";
+  facilityOverviewState.includeClinicalSupport = false;
+  facilityOverviewState.onShiftData = null;
+  facilityOverviewState.content = "";
+  facilityOverviewState.staffTermStart = currentTermStart;
+  facilityOverviewState.staffTerms = [];
+  facilityOverviewState.staffContent = "";
+  facilityOverviewState.staffData = null;
+  facilityOverviewState.staffQuery = "";
+  facilityOverviewState.staffExpanded = new Set();
+  facilityOverviewState.staffFocusSection = "";
+  facilityOverviewState.staffActionMenu = null;
+  facilityOverviewState.staffDesignationMenu = null;
+  facilityOverviewState.staffSeniorityMenu = null;
+  facilityOverviewState.staffMultiSelectSection = "";
+  facilityOverviewState.staffMultiSelectMembers = new Map();
+  facilityOverviewState.staffBulkSeniorityMenu = null;
+  facilityOverviewState.staffMultiSelectSaving = false;
+  facilityOverviewState.byStreamFrom = today;
+  facilityOverviewState.byStreamTo = today;
+  facilityOverviewState.byStreamRows = [];
+  facilityOverviewState.byStreamCatalog = [];
+  facilityOverviewState.byStreamCoverage = [];
+  facilityOverviewState.byStreamContent = "";
+  facilityOverviewState.byStreamData = null;
+  facilityOverviewState.byStreamLoading = false;
+  facilityOverviewState.byStreamMetadataLoading = false;
+  facilityOverviewState.byStreamMetadataKey = "";
+  facilityOverviewState.byStreamMetadataPromise = null;
+  facilityOverviewState.byStreamHideEmptyDates = true;
+  facilityOverviewState.togetherStaffKeys = [""];
+  facilityOverviewState.togetherRangeMode = "term";
+  facilityOverviewState.togetherTermStart = currentTermStart;
+  facilityOverviewState.togetherFrom = currentTermStart;
+  facilityOverviewState.togetherTo = currentTermEnd;
+  facilityOverviewState.togetherFacilityKey = "ALL";
+  facilityOverviewState.togetherContent = "";
+  facilityOverviewState.togetherHasSearched = false;
+  facilityOverviewState.togetherPinnedDoctors = [];
+  facilityOverviewState.togetherUserClearedAll = true;
+  facilityOverviewSessionNeedsInitialization = false;
+}
+
 async function openFacilityOverview(options = {}) {
   if (!canUseFacilityOverview()) return;
   refreshFacilityOverviewPreferredFacility();
+  if (facilityOverviewSessionNeedsInitialization) resetFacilityOverviewSessionState();
   if (options.preserveFacility !== true && options.preserveStaffTerm !== true) {
     const directorPreference = currentNonClinical && currentDirectorViewEnabled ? directorHospitalPreference() : "";
     const preferred = String(facilityOverviewState.preferredFacilityKey || "").toUpperCase();
     if (directorPreference) {
       facilityOverviewState.facilityKey = directorPreference;
       facilityOverviewState.togetherFacilityKey = directorPreference;
-      facilityOverviewState.tab = directorPreference === "ALL" ? "staff" : "on-shift";
     } else if (preferred) {
       facilityOverviewState.facilityKey = preferred;
     }
@@ -9458,6 +9548,7 @@ function closeFacilityOverview() {
 
 function renderFacilityOverview() {
   if (!facilityOverviewBody || !facilityOverviewControls) return;
+  if (!facilityOverviewSessionNeedsInitialization) rememberFacilityOverviewTabForCurrentAccount();
   if (facilityOverviewHeader) facilityOverviewHeader.innerHTML = renderFacilityOverviewHeader();
   syncFacilityOverviewTabOrder();
   const activeTab = facilityOverviewState.tab || "on-shift";
@@ -13738,6 +13829,7 @@ async function enterUserAccount(email) {
   const targetEmail = normalizeEmail(email);
   if (!targetEmail || (!isOwnerAccount() && !isCreatorAuthenticated())) return;
   const previousState = captureCalendarViewState();
+  beginFacilityOverviewAccountSession();
   const accountSwitchStartedAt = performance.now();
   const creatorEmail = authUserEmail || currentUserEmail;
   const creatorPassword = authUserPassword || currentUserPassword;
@@ -13805,6 +13897,7 @@ async function enterDoctorProfileView(doctor) {
   if (!isOwnerAccount() && !isCreatorAuthenticated()) return;
   rememberCreatorCalendarSourceRefs();
   const previousState = captureCalendarViewState();
+  beginFacilityOverviewAccountSession();
   const creatorEmail = authUserEmail || currentUserEmail;
   const creatorPassword = authUserPassword || currentUserPassword;
   cancelScheduledCloudStateSave();
@@ -14238,6 +14331,7 @@ function captureCalendarViewState() {
     currentSnapshot: currentSnapshot ? JSON.parse(JSON.stringify(currentSnapshot)) : null,
     currentSnapshotStale,
     currentSnapshotBuiltAt,
+    facilityOverviewSessionNeedsInitialization,
     restoredSessionState: restoredSessionState ? JSON.parse(JSON.stringify(restoredSessionState)) : null,
     doctorOptions: doctorOptions.map((doctor) => ({ ...doctor })),
     detectedSources: JSON.parse(JSON.stringify(detectedSources || {})),
@@ -14265,6 +14359,7 @@ function restoreCalendarViewState(state) {
   currentSnapshot = state.currentSnapshot;
   currentSnapshotStale = state.currentSnapshotStale;
   currentSnapshotBuiltAt = state.currentSnapshotBuiltAt;
+  facilityOverviewSessionNeedsInitialization = state.facilityOverviewSessionNeedsInitialization === true;
   restoredSessionState = state.restoredSessionState;
   doctorOptions = state.doctorOptions || [];
   detectedSources = state.detectedSources || {};
@@ -14315,6 +14410,7 @@ async function returnToCreatorCalendar(options = {}) {
 
 async function returnToCreatorAccount(options = {}) {
   const previousState = captureCalendarViewState();
+  beginFacilityOverviewAccountSession();
   const accountSwitchStartedAt = performance.now();
   const creatorEmail = authUserEmail || OWNER_EMAIL;
   const creatorPassword = authUserPassword || currentUserPassword;
@@ -15504,6 +15600,7 @@ function closeLoginModal() {
 }
 
 async function logoutCurrentUser() {
+  beginFacilityOverviewAccountSession();
   try {
     await flushCloudStateSave();
   } catch {
@@ -15588,6 +15685,7 @@ async function loginWithEmail(email, password, options = {}) {
   const previousEmail = currentUserEmail;
   const loginStartedAt = performance.now();
   try {
+    beginFacilityOverviewAccountSession();
     await flushCloudStateSave().catch(() => {});
     cancelScheduledCloudStateSave();
     clearActiveViewedAccountState();

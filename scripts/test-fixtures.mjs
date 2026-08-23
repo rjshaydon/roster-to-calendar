@@ -887,6 +887,16 @@ assert.match(
 );
 assert.match(appSource, /currentNonClinical && currentDirectorViewEnabled && canUseFacilityOverview\(\) && !isFacilityOverviewOpen\(\)/, "Only non-clinical Directors should open directly into Director overview; clinical accounts should retain their calendar");
 assert.match(
+  appSource.match(/function facilityOverviewAccountKey[\s\S]*?async function openFacilityOverview/)?.[0] || "",
+  /FACILITY_OVERVIEW_TAB_PREFERENCES_KEY[\s\S]*savedFacilityOverviewTabForCurrentAccount[\s\S]*rememberFacilityOverviewTabForCurrentAccount[\s\S]*resetFacilityOverviewSessionState/,
+  "Director overview should remember only the active tab separately for each account",
+);
+assert.match(
+  appSource.match(/function resetFacilityOverviewSessionState[\s\S]*?async function openFacilityOverview/)?.[0] || "",
+  /date = today[\s\S]*staffExpanded = new Set\(\)[\s\S]*byStreamFrom = today[\s\S]*byStreamTo = today[\s\S]*togetherStaffKeys = \[""\]/,
+  "A new account session should reset On shift, ED staff, Working together, and By stream state while retaining the saved tab",
+);
+assert.match(
   appSource.match(/async function openFacilityOverviewStaffSection[\s\S]*?function focusFacilityOverviewStaffSection/)?.[0] || "",
   /facilityOverviewState\.tab = "staff"[\s\S]*facilityOverviewState\.facilityKey = source[\s\S]*staffExpanded = new Set\(\[sectionKey\]\)[\s\S]*openFacilityOverview\(\{ preserveStaffTerm: true \}\)/,
   "A seniority link should preserve its ED and term while opening the requested ED staff accordion",
