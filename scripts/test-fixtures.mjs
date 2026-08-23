@@ -2240,6 +2240,9 @@ assert.match(
 assert.match(appSource, /function exportHospitalOptions/, "one-off exports should expose hospital options");
 assert.match(appSource, /Recognised hospitals &amp; default locations/, "account modal should expose recognised hospital locations");
 assert.match(appSource, /data-account-location-key/, "account modal locations should bind to shared settings keys");
+assert.match(appSource, /data-admin-user-real-name/, "creator Current users editing should expose the account holder's name");
+assert.match(appSource, /async function saveAdminUserName[\s\S]*action: "updateAccount"[\s\S]*targetEmail/, "creator name edits should persist to the selected account");
+assert.match(appSource, /data-facility-overview-back-to-creator/, "the non-clinical dashboard header should expose Back to creator during impersonation");
 assert.match(appSource, /ACCOUNT_HOSPITAL_LOCATION_ORDER = \["mmc", "ddh", "mch", "casey"\]/, "account modal should keep hospital locations in the expected vertical order");
 assert.match(d1CalendarSource, /CREATE TABLE IF NOT EXISTS account_hospital_locations/, "D1 should store account hospital locations relationally");
 assert.match(d1CalendarSource, /function applyAccountHospitalLocations/, "SQL-first roster reads should apply account hospital defaults");
@@ -5569,6 +5572,15 @@ assert.equal(d1AdminLoad.viewedAccountType, "claimed-user", "creator switch shou
 assert.equal(d1AdminLoad.isImpersonating, true, "creator switch should explicitly enter impersonation mode");
 assert.equal(d1AdminLoad.returnToCreatorAvailable, true, "creator switch should advertise the Back to creator affordance");
 assert.equal(d1AdminLoad.snapshot.ownerType, d1DirectLogin.snapshot.ownerType, "creator switch and direct login should reuse the same canonical snapshot ownership");
+const d1AdminRename = await postState(d1StateStore, {
+  action: "updateAccount",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  targetEmail: "d1-user@example.com",
+  realName: "Corrected User Name",
+}, d1Store);
+assert.equal(d1AdminRename.realName, "Corrected User Name", "creator should be able to correct another account's real name");
+assert.equal(d1AdminRename.user.realName, "Corrected User Name", "admin name updates should return a refreshed Current users summary");
 const d1AdminCalendar = await postState(d1StateStore, {
   action: "loadCalendarEvents",
   email: "rhaydon@gmail.com",

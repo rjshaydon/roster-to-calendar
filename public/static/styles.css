@@ -3779,6 +3779,14 @@ body[data-skin="console"] .preview-cell.is-weekend {
   align-items: center;
 }
 
+.admin-user-name-form {
+  flex: 1 1 100%;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
 .account-claim-editor.hidden {
   display: none;
 }
@@ -4502,6 +4510,10 @@ body[data-skin="console"] .panel {
   .account-user-controls,
   .account-claim-editor {
     grid-column: auto;
+  }
+
+  .admin-user-name-form {
+    grid-template-columns: 1fr;
   }
 
   .account-user-permissions {

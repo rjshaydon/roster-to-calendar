@@ -718,6 +718,10 @@ facilityOverviewSection?.addEventListener("scroll", (event) => {
   ) setFacilityOverviewCompactMode(scroller, false);
 }, { capture: true, passive: true });
 facilityOverviewSection?.addEventListener("click", (event) => {
+  if (event.target.closest("[data-facility-overview-back-to-creator]")) {
+    void returnToCreatorCalendar();
+    return;
+  }
   if (event.target.closest("[data-facility-overview-account]")) {
     void openAccountsSurface({ defaultAdminTab: "users" });
     return;
@@ -1367,6 +1371,13 @@ accountsBody.addEventListener("submit", (event) => {
   const createForm = event.target.closest("[data-create-account-form]");
   if (createForm) {
     createAccountFromOwner(createForm);
+    return;
+  }
+  const adminUserForm = event.target.closest("[data-admin-user-form]");
+  if (adminUserForm) {
+    const email = adminUserForm.dataset.adminUserForm || "";
+    const realName = adminUserForm.querySelector("[data-admin-user-real-name]")?.value.trim() || "";
+    void saveAdminUserName(email, realName);
     return;
   }
   const formElement = event.target.closest("[data-account-form]");
@@ -9691,6 +9702,9 @@ function renderFacilityOverviewHeader() {
         ${currentDirectorViewEnabled
           ? `<button type="button" class="button button-secondary" data-facility-overview-account>Account</button>`
           : ""}
+        ${canReturnToCreator()
+          ? `<button type="button" class="button button-secondary" data-facility-overview-back-to-creator>Back to creator</button>`
+          : ""}
         <button type="button" class="button button-secondary preview-logout-button" data-facility-overview-logout>Log out</button>
       </div>
     </div>
@@ -11440,6 +11454,13 @@ function renderAccountsModal() {
               </div>
               ${user.role === "owner" ? "" : `
                 <div class="account-claim-editor hidden" data-claim-editor="${escapeHtml(user.email)}">
+                  <form class="admin-user-name-form" data-admin-user-form="${escapeHtml(user.email)}">
+                    <label class="field">
+                      <span>User name</span>
+                      <input type="text" value="${escapeHtml(user.realName || "")}" data-admin-user-real-name required autocomplete="name" placeholder="Name shown in the user's profile">
+                    </label>
+                    <button type="submit" class="button button-primary">Save name</button>
+                  </form>
                   <select data-admin-claim-select="${escapeHtml(user.email)}">
                     <option value="">Add roster name...</option>
                     ${availableRosterDoctors.map((doctor, index) => `<option value="${index}">${escapeHtml(`${doctor.displayName} (${doctor.sourceType.toUpperCase()})${doctor.claimedBy && doctor.claimedBy !== user.email ? ` - claimed by ${doctor.claimedBy}` : ""}`)}</option>`).join("")}
@@ -13206,6 +13227,13 @@ async function updateAccountDetails(email, patch) {
         }),
       });
       const data = await readJsonResponse(response, "Could not update account.");
+      if (data.user) {
+        const updatedEmail = normalizeServerUser(data.user).email;
+        serverUsers = [
+          ...serverUsers.filter((user) => normalizeServerUser(user).email !== updatedEmail),
+          data.user,
+        ].sort((left, right) => normalizeServerUser(left).email.localeCompare(normalizeServerUser(right).email));
+      }
       currentRosterClaims = sanitizeRosterClaims(data.claims || currentRosterClaims);
       currentSuggestedClaims = sanitizeRosterClaims(data.suggestedClaims || data.nameMatches || currentSuggestedClaims);
       currentSnapshot = null;
@@ -13560,7 +13588,8 @@ function toggleAdminRosterClaimControls(email) {
     .find((item) => normalizeEmail(item.dataset.adminClaimSelect) === targetEmail);
   if (editor) {
     const isHidden = editor.classList.toggle("hidden");
-    if (!isHidden && select) select.focus();
+    const nameInput = editor.querySelector("[data-admin-user-real-name]");
+    if (!isHidden && nameInput) nameInput.focus();
     return;
   }
   if (select) {
@@ -13594,6 +13623,44 @@ async function saveAdminRosterClaims(email, claims) {
     setStatus("Roster names updated.");
   } catch (error) {
     setStatus(error.message || "Could not update roster names.", true);
+  }
+}
+
+async function saveAdminUserName(email, realName) {
+  const targetEmail = normalizeEmail(email);
+  const nextRealName = String(realName || "").trim();
+  if (!targetEmail || !isCreatorAuthenticated()) return;
+  if (!nextRealName) {
+    setStatus("Enter a user name before saving.", true);
+    return;
+  }
+  try {
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "updateAccount",
+        email: authUserEmail || currentUserEmail,
+        password: authUserPassword || currentUserPassword,
+        targetEmail,
+        realName: nextRealName,
+      }),
+    });
+    const data = await readJsonResponse(response, "Could not update the user name.");
+    if (data.user) {
+      serverUsers = [
+        ...serverUsers.filter((user) => normalizeServerUser(user).email !== targetEmail),
+        data.user,
+      ].sort((left, right) => normalizeServerUser(left).email.localeCompare(normalizeServerUser(right).email));
+    }
+    accountState.users = accountState.users.map((user) => normalizeEmail(user.email) === targetEmail
+      ? { ...user, realName: nextRealName }
+      : user);
+    saveAccountState();
+    renderAccountsModal();
+    setStatus(`Updated ${nextRealName}.`);
+  } catch (error) {
+    setStatus(error.message || "Could not update the user name.", true);
   }
 }
 
