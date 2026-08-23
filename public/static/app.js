@@ -10184,11 +10184,12 @@ function renderFacilityOverviewOnShiftResults(rows) {
   for (const row of rows) {
     const event = row?.event;
     if (!event || !isRosterShiftEvent(event)) continue;
-    const key = `${String(row.sourceType || facilityOverviewState.facilityKey || "").toUpperCase()}|${String(row.doctorKey || "").trim()}`;
-    if (!key) continue;
+    const doctorKey = String(row.doctorKey || "").trim();
+    const groupKey = `${String(row.sourceType || facilityOverviewState.facilityKey || "").toUpperCase()}|${doctorKey}`;
+    if (!doctorKey) continue;
     const seniority = facilityOverviewDetectedSeniority(event, row.seniority || "Unknown");
-    const entry = people.get(key) || {
-      doctorKey: key, displayName: String(row.displayName || key), sourceType: String(row.sourceType || facilityOverviewState.facilityKey || "").toLowerCase(),
+    const entry = people.get(groupKey) || {
+      doctorKey, displayName: String(row.displayName || doctorKey), sourceType: String(row.sourceType || facilityOverviewState.facilityKey || "").toLowerCase(),
       seniority, events: [], markers: new Set(),
     };
     if (entry.seniority === "Unknown" && seniority !== "Unknown") entry.seniority = seniority;
@@ -10197,7 +10198,7 @@ function renderFacilityOverviewOnShiftResults(rows) {
       entry.markers.add(marker);
       entry.events.push({ ...event, seniority: seniority === "Unknown" ? entry.seniority : seniority });
     }
-    people.set(key, entry);
+    people.set(groupKey, entry);
   }
   const assignments = [...people.values()].flatMap((person) => person.events.map((event) => {
     const base = buildWhoAssignment({ key: person.doctorKey, displayName: person.displayName }, {}, event);
@@ -10824,17 +10825,17 @@ function facilityOverviewTogetherFallbackOption({ doctorKey = "", displayName = 
 
 function openFacilityOverviewWorkingTogether(target) {
   if (!canUseFacilityOverview()) return;
-  const activeDoctor = selectedDoctor();
   const selectedPerson = facilityOverviewTogetherOptionFor(target) || facilityOverviewTogetherFallbackOption(target);
-  const viewer = facilityOverviewTogetherOptionFor(activeDoctor)
-    || facilityOverviewTogetherFallbackOption({
-      doctorKey: activeDoctor?.key || currentRosterClaims[0]?.key || "",
-      displayName: activeDoctor?.displayName || currentAccount().realName || currentRosterClaims[0]?.displayName || "",
-      sourceType: activeDoctor?.sourceType || currentRosterClaims[0]?.sourceType || "",
-      sourceTypes: normalizedDoctorSourceTypes(activeDoctor),
-      aliases: Array.isArray(activeDoctor?.aliases) && activeDoctor.aliases.length ? activeDoctor.aliases : currentRosterClaims,
-    });
   if (!selectedPerson) return;
+  const activeDoctor = currentNonClinical ? null : selectedDoctor();
+  const viewer = activeDoctor && (facilityOverviewTogetherOptionFor(activeDoctor)
+    || facilityOverviewTogetherFallbackOption({
+      doctorKey: activeDoctor.key || currentRosterClaims[0]?.key || "",
+      displayName: activeDoctor.displayName || currentAccount().realName || currentRosterClaims[0]?.displayName || "",
+      sourceType: activeDoctor.sourceType || currentRosterClaims[0]?.sourceType || "",
+      sourceTypes: normalizedDoctorSourceTypes(activeDoctor),
+      aliases: Array.isArray(activeDoctor.aliases) && activeDoctor.aliases.length ? activeDoctor.aliases : currentRosterClaims,
+    }));
   facilityOverviewState.tab = "together";
   facilityOverviewState.staffActionMenu = null;
   facilityOverviewState.togetherPinnedDoctors = viewer ? [selectedPerson, viewer] : [selectedPerson];

@@ -846,6 +846,10 @@ assert.match(
   /buildWhoAssignment[\s\S]*renderFacilityOverviewOnShiftPeriod[\s\S]*facilityOverviewIsMeaningfulStream[\s\S]*renderFacilityOverviewStreamCard[\s\S]*renderFacilityOverviewSeniorityLink[\s\S]*renderFacilityOverviewStaffName/,
   "On shift should group recognised streams with seniority subgroups and fall back to seniority for unstreamed staff",
 );
+const onShiftResultsSource = appSource.match(/function renderFacilityOverviewOnShiftResults[\s\S]*?function renderFacilityOverviewOnShiftPeriod/)?.[0] || "";
+assert.match(onShiftResultsSource, /const doctorKey = String\(row\.doctorKey \|\| ""\)\.trim\(\);/, "On shift should retain each person's raw roster key for staff actions");
+assert.match(onShiftResultsSource, /const groupKey = `\$\{String\(row\.sourceType/, "On shift may group matching names by source without changing the roster key");
+assert.match(onShiftResultsSource, /people\.get\(groupKey\)[\s\S]*doctorKey,[\s\S]*people\.set\(groupKey, entry\);/, "On shift source grouping must not be passed into Working together as a doctor key");
 assert.match(
   appSource.match(/function renderFacilityOverviewTogetherMatchCards[\s\S]*?function facilityOverviewFormatOverlap/)?.[0] || "",
   /canUseCreatorDoctorSwitcher\(\)[\s\S]*directCalendar: canOpenStaffCalendars[\s\S]*renderFacilityOverviewSeniorityLink\(person\.event\?\.seniority/,
@@ -875,6 +879,11 @@ assert.match(
   appSource.match(/function facilityOverviewTogetherFallbackOption[\s\S]*?function closeFacilityOverviewStaffActionMenu/)?.[0] || "",
   /facilityOverviewTogetherFallbackOption\(target\)[\s\S]*if \(!selectedPerson\) return;[\s\S]*togetherPinnedDoctors = viewer \? \[selectedPerson, viewer\] : \[selectedPerson\];[\s\S]*void loadFacilityOverviewTogether\(\)/,
   "Working together should always open for an authorised staff selection, prefill the clinical viewer when available, and load the relevant shifts",
+);
+assert.match(
+  appSource.match(/function openFacilityOverviewWorkingTogether[\s\S]*?function closeFacilityOverviewStaffActionMenu/)?.[0] || "",
+  /const activeDoctor = currentNonClinical \? null : selectedDoctor\(\);[\s\S]*const viewer = activeDoctor &&[\s\S]*togetherPinnedDoctors = viewer \? \[selectedPerson, viewer\] : \[selectedPerson\];/,
+  "Non-clinical Directors should open Working together without requiring a personal calendar profile",
 );
 assert.match(appSource, /currentNonClinical && currentDirectorViewEnabled && canUseFacilityOverview\(\) && !isFacilityOverviewOpen\(\)/, "Only non-clinical Directors should open directly into Director overview; clinical accounts should retain their calendar");
 assert.match(
