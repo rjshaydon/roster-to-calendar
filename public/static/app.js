@@ -10824,23 +10824,20 @@ function openFacilityOverviewWorkingTogether(target) {
       sourceTypes: normalizedDoctorSourceTypes(activeDoctor),
       aliases: Array.isArray(activeDoctor?.aliases) && activeDoctor.aliases.length ? activeDoctor.aliases : currentRosterClaims,
     });
-  if (!selectedPerson || !viewer) {
-    setStatus("That staff member or your current calendar profile is not available for Working together yet.", true);
-    return;
-  }
+  if (!selectedPerson) return;
   facilityOverviewState.tab = "together";
   facilityOverviewState.staffActionMenu = null;
-  facilityOverviewState.togetherPinnedDoctors = [selectedPerson, viewer];
-  facilityOverviewState.togetherStaffKeys = selectedPerson.identity === viewer.identity
+  facilityOverviewState.togetherPinnedDoctors = viewer ? [selectedPerson, viewer] : [selectedPerson];
+  facilityOverviewState.togetherStaffKeys = !viewer || selectedPerson.identity === viewer.identity
     ? [selectedPerson.identity, ""]
     : [selectedPerson.identity, viewer.identity];
-  facilityOverviewState.togetherContent = selectedPerson.identity === viewer.identity
+  facilityOverviewState.togetherContent = !viewer || selectedPerson.identity === viewer.identity
     ? `<article class="issue-card"><p>Choose another staff member to compare with your own roster.</p></article>`
     : "";
   facilityOverviewState.togetherHasSearched = false;
   resetFacilityOverviewScroll();
   renderFacilityOverview();
-  if (selectedPerson.identity !== viewer.identity) void loadFacilityOverviewTogether();
+  if (viewer && selectedPerson.identity !== viewer.identity) void loadFacilityOverviewTogether();
 }
 
 function closeFacilityOverviewStaffActionMenu() {
@@ -15857,7 +15854,10 @@ async function hydrateAuthenticatedWorkspace(options = {}, loginStartedAt = 0) {
         transition: options.transition,
       });
     }
-    if (currentDirectorViewEnabled && canUseFacilityOverview() && !isFacilityOverviewOpen()) {
+    // A non-clinical Director has no personal calendar to land on. Clinical
+    // users, including Directors who still work shifts, retain their calendar
+    // until they explicitly choose the Director overview.
+    if (currentNonClinical && currentDirectorViewEnabled && canUseFacilityOverview() && !isFacilityOverviewOpen()) {
       await openFacilityOverview();
     }
   } catch (error) {

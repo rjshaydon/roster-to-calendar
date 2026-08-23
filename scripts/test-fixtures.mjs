@@ -865,9 +865,10 @@ assert.match(
 );
 assert.match(
   appSource.match(/function facilityOverviewTogetherFallbackOption[\s\S]*?function closeFacilityOverviewStaffActionMenu/)?.[0] || "",
-  /facilityOverviewTogetherFallbackOption\(target\)[\s\S]*togetherPinnedDoctors = \[selectedPerson, viewer\][\s\S]*\[selectedPerson\.identity, viewer\.identity\][\s\S]*void loadFacilityOverviewTogether\(\)/,
-  "Working together should resolve or pin both people, prefill them, and load their shared shifts",
+  /facilityOverviewTogetherFallbackOption\(target\)[\s\S]*if \(!selectedPerson\) return;[\s\S]*togetherPinnedDoctors = viewer \? \[selectedPerson, viewer\] : \[selectedPerson\];[\s\S]*if \(viewer && selectedPerson\.identity !== viewer\.identity\) void loadFacilityOverviewTogether\(\)/,
+  "Working together should always open for an authorised staff selection, prefill both people when available, and load shared shifts",
 );
+assert.match(appSource, /currentNonClinical && currentDirectorViewEnabled && canUseFacilityOverview\(\) && !isFacilityOverviewOpen\(\)/, "Only non-clinical Directors should open directly into Director overview; clinical accounts should retain their calendar");
 assert.match(
   appSource.match(/async function openFacilityOverviewStaffSection[\s\S]*?function focusFacilityOverviewStaffSection/)?.[0] || "",
   /facilityOverviewState\.tab = "staff"[\s\S]*facilityOverviewState\.facilityKey = source[\s\S]*staffExpanded = new Set\(\[sectionKey\]\)[\s\S]*openFacilityOverview\(\{ preserveStaffTerm: true \}\)/,
