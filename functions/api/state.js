@@ -1796,8 +1796,8 @@ export async function onRequestPost(context) {
       const start = new Date(`${startDate}T00:00:00Z`);
       const end = new Date(`${endDate}T00:00:00Z`);
       const rangeDays = Math.round((end.getTime() - start.getTime()) / 86400000);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) || !Number.isFinite(rangeDays) || rangeDays < 0 || rangeDays > 370 || doctorKeys.length < 2) {
-        return Response.json({ error: "Choose at least two staff members and a date range of up to one year." }, { status: 400 });
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) || !Number.isFinite(rangeDays) || rangeDays < 0 || rangeDays > 370 || doctorKeys.length < 1) {
+        return Response.json({ error: "Choose at least one staff member and a date range of up to one year." }, { status: 400 });
       }
       const startedAt = Date.now();
       try {

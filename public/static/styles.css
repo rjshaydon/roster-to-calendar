@@ -1851,9 +1851,22 @@ input[type="color"] {
 }
 
 .facility-overview-remove-staff {
-  min-height: 44px;
-  padding: 0 4px;
+  display: inline-grid;
+  width: 38px;
+  min-height: 38px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid rgba(161, 59, 75, 0.28);
+  border-radius: 9px;
+  background: #fff;
   color: #a13b4b;
+  font-size: 1rem;
+}
+
+.facility-overview-remove-staff:hover,
+.facility-overview-remove-staff:focus-visible {
+  border-color: rgba(161, 59, 75, 0.5);
+  background: #fff4f5;
 }
 
 .facility-overview-add-staff {

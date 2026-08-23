@@ -335,7 +335,7 @@ let facilityOverviewState = {
   togetherTermStart: formatDateKey(australianTermForDate(new Date()).start),
   togetherFrom: formatDateKey(australianTermForDate(new Date()).start),
   togetherTo: formatDateKey(addDays(australianTermForDate(new Date()).end, -1)),
-  togetherFacilityKey: "ALL", togetherContent: "", togetherHasSearched: false, togetherPinnedDoctors: [],
+  togetherFacilityKey: "ALL", togetherContent: "", togetherHasSearched: false, togetherPinnedDoctors: [], togetherUserClearedAll: false,
 };
 let whoStaffActionMenu = null;
 let whoStaffSeniorityMenu = null;
@@ -783,11 +783,13 @@ facilityOverviewSection?.addEventListener("click", (event) => {
   const removeTogetherStaff = event.target.closest("[data-facility-overview-together-remove]");
   if (removeTogetherStaff) {
     const index = Number(removeTogetherStaff.dataset.facilityOverviewTogetherRemove);
-    if (Number.isInteger(index) && facilityOverviewState.togetherStaffKeys.length > 2) {
+    if (Number.isInteger(index) && index >= 0 && index < facilityOverviewState.togetherStaffKeys.length) {
       facilityOverviewState.togetherStaffKeys.splice(index, 1);
+      if (!facilityOverviewState.togetherStaffKeys.length) facilityOverviewState.togetherStaffKeys = [""];
+      facilityOverviewState.togetherUserClearedAll = !facilityOverviewState.togetherStaffKeys.some(Boolean);
       facilityOverviewState.togetherHasSearched = false;
       facilityOverviewState.togetherContent = "";
-      if (facilityOverviewState.togetherStaffKeys.filter(Boolean).length >= 2) void loadFacilityOverviewTogether();
+      if (facilityOverviewState.togetherStaffKeys.some(Boolean)) void loadFacilityOverviewTogether();
       else renderFacilityOverview();
     }
     return;
@@ -1085,10 +1087,11 @@ facilityOverviewSection?.addEventListener("change", (event) => {
       return;
     }
     facilityOverviewState.togetherStaffKeys[index] = value;
+    if (value) facilityOverviewState.togetherUserClearedAll = false;
     facilityOverviewState.togetherContent = "";
     facilityOverviewState.togetherHasSearched = false;
     const selectedCount = facilityOverviewState.togetherStaffKeys.filter(Boolean).length;
-    if (value && selectedCount >= 2) {
+    if (value && selectedCount >= 1) {
       void loadFacilityOverviewTogether();
     } else {
       renderFacilityOverview();
@@ -9831,11 +9834,11 @@ function facilityOverviewTogetherStaffOptions() {
 
 function initializeFacilityOverviewTogetherState() {
   if (!Array.isArray(facilityOverviewState.togetherStaffKeys)) facilityOverviewState.togetherStaffKeys = ["", ""];
-  while (facilityOverviewState.togetherStaffKeys.length < 2) facilityOverviewState.togetherStaffKeys.push("");
+  if (!facilityOverviewState.togetherStaffKeys.length) facilityOverviewState.togetherStaffKeys = [""];
   const options = facilityOverviewTogetherStaffOptions();
   const identities = new Set(options.map((doctor) => doctor.identity));
   facilityOverviewState.togetherStaffKeys = facilityOverviewState.togetherStaffKeys.map((key) => identities.has(key) ? key : "");
-  if (!facilityOverviewState.togetherStaffKeys[0]) {
+  if (!facilityOverviewState.togetherStaffKeys[0] && !facilityOverviewState.togetherUserClearedAll) {
     const currentIdentity = doctorIdentityKey(selectedDoctor());
     if (identities.has(currentIdentity)) facilityOverviewState.togetherStaffKeys[0] = currentIdentity;
   }
@@ -9861,7 +9864,7 @@ function renderFacilityOverviewTogetherProposal() {
   return `
     <section class="facility-overview-together" aria-label="Working together search">
       <div class="facility-overview-together-intro">
-        <h3>Select two or more people, then search by a date range or term. Site can be combined with either option.</h3>
+        <h3>Select one person to view shifts, or two or more people to find shared shifts. Site can be combined with either option.</h3>
       </div>
       <div class="facility-overview-together-builder">
         <fieldset class="facility-overview-together-section">
@@ -9879,7 +9882,7 @@ function renderFacilityOverviewTogetherProposal() {
                     }).join("")}
                   </select>
                 </label>
-                ${facilityOverviewState.togetherStaffKeys.length > 2 ? `<button type="button" class="facility-overview-remove-staff" data-facility-overview-together-remove="${index}" aria-label="Remove staff member ${index + 1}">Remove</button>` : ""}
+                <button type="button" class="facility-overview-remove-staff" data-facility-overview-together-remove="${index}" aria-label="Remove staff member ${index + 1}"><span aria-hidden="true">🗑</span><span class="sr-only">Remove staff member ${index + 1}</span></button>
               </div>
             `).join("")}
           </div>
@@ -9916,9 +9919,9 @@ function renderFacilityOverviewTogetherProposal() {
 function renderFacilityOverviewTogetherEmptyState() {
   const count = facilityOverviewState.togetherStaffKeys.filter(Boolean).length;
   if (count === 1) {
-    return `<div class="facility-overview-empty-state"><span aria-hidden="true">↗</span><strong>Choose one more staff member</strong><p>The shared roster days search will run as soon as a second person is selected.</p></div>`;
+    return `<div class="facility-overview-empty-state"><span aria-hidden="true">↗</span><strong>Loading rostered shifts</strong><p>Add another staff member at any time to find shifts they share.</p></div>`;
   }
-  return `<div class="facility-overview-empty-state"><span aria-hidden="true">↗</span><strong>Shared roster days will appear here</strong><p>Choose at least two staff members and set the search scope above.</p></div>`;
+  return `<div class="facility-overview-empty-state"><span aria-hidden="true">↗</span><strong>Rostered shifts will appear here</strong><p>Choose a staff member and set the search scope above.</p></div>`;
 }
 
 function facilityOverviewTogetherDateRange() {
@@ -9932,7 +9935,7 @@ function facilityOverviewTogetherDateRange() {
 function refreshFacilityOverviewTogetherAfterFilterChange() {
   facilityOverviewState.togetherHasSearched = false;
   facilityOverviewState.togetherContent = "";
-  if (facilityOverviewState.togetherStaffKeys.filter(Boolean).length >= 2) void loadFacilityOverviewTogether();
+  if (facilityOverviewState.togetherStaffKeys.some(Boolean)) void loadFacilityOverviewTogether();
   else renderFacilityOverview();
 }
 
@@ -9949,9 +9952,9 @@ async function loadFacilityOverviewTogether() {
   const selectedDoctors = facilityOverviewState.togetherStaffKeys
     .map((identity) => options.find((doctor) => doctor.identity === identity))
     .filter(Boolean);
-  if (selectedDoctors.length < 2) {
+  if (!selectedDoctors.length) {
     facilityOverviewState.togetherHasSearched = false;
-    facilityOverviewState.togetherContent = `<article class="issue-card"><p>Choose at least two staff members to find shared roster days.</p></article>`;
+    facilityOverviewState.togetherContent = `<article class="issue-card"><p>Choose at least one staff member to view rostered shifts.</p></article>`;
     renderFacilityOverview();
     return;
   }
@@ -9965,7 +9968,7 @@ async function loadFacilityOverviewTogether() {
   const requestId = facilityOverviewState.requestId + 1;
   facilityOverviewState.requestId = requestId;
   facilityOverviewState.togetherHasSearched = true;
-  facilityOverviewState.togetherContent = `<article class="issue-card"><p>Finding shared roster days…</p></article>`;
+  facilityOverviewState.togetherContent = `<article class="issue-card"><p>${selectedDoctors.length === 1 ? "Finding rostered shifts…" : "Finding shared roster days…"}</p></article>`;
   renderFacilityOverview();
   try {
     const response = await fetch("/api/state", {
@@ -10006,6 +10009,13 @@ function renderFacilityOverviewTogetherResults(rows, selectedDoctors, range) {
     doctor,
     intervals: facilityOverviewWorkingIntervals(eventsByDoctor.get(doctor.identity) || [], range),
   }));
+  if (selectedDoctors.length === 1) {
+    const matches = facilityOverviewDedupeMatches(facilityOverviewIntervalMatches(indexed, range));
+    if (!matches.length) {
+      return `<article class="facility-overview-no-match"><span aria-hidden="true">○</span><strong>No rostered shifts found</strong><p>${escapeHtml(selectedDoctors[0].displayName)} has no rostered shifts during this period. Try a wider range or all EDs.</p></article>`;
+    }
+    return `<section class="facility-overview-match-group"><div class="facility-overview-match-group-head"><h4>${escapeHtml(selectedDoctors[0].displayName)}’s shifts</h4></div>${renderFacilityOverviewTogetherMatchCards(matches, { singlePerson: true })}</section>`;
+  }
   const allMatches = facilityOverviewIntervalMatches(indexed, range);
   const allIntervalsByFacility = facilityOverviewUnionIntervalsByFacility(allMatches);
   const pairMatches = facilityOverviewTogetherPairs(indexed)
@@ -10123,7 +10133,7 @@ function renderFacilityOverviewTogetherMatchCards(matches, options = {}) {
     <article class="facility-overview-together-match">
       ${options.showPair ? `<div class="facility-overview-match-pair">${match.people.map((person, index) => `${index ? `<span aria-hidden="true"> + </span>` : ""}${renderFacilityOverviewStaffName({ ...person.doctor, sourceType: match.facility }, { directCalendar: canOpenStaffCalendars })}`).join("")}</div>` : ""}
       <div class="facility-overview-together-match-date"><time datetime="${escapeHtml(formatDateKey(match.start))}"><strong>${escapeHtml(new Intl.DateTimeFormat("en-AU", { weekday: "short" }).format(match.start))}</strong><span>${escapeHtml(formatDate(formatDateKey(match.start)))}</span></time><span class="facility-overview-site-pill">${escapeHtml(displaySourceCode(match.facility))}</span></div>
-      <span class="facility-overview-overlap-time">Overlap ${escapeHtml(facilityOverviewFormatOverlap(match.start, match.end))}</span>
+      <span class="facility-overview-overlap-time">${options.singlePerson ? "Shift" : "Overlap"} ${escapeHtml(facilityOverviewFormatOverlap(match.start, match.end))}</span>
       <div class="facility-overview-together-match-people">${match.people.map((person) => `<div>${renderFacilityOverviewStaffName({ ...person.doctor, sourceType: match.facility }, { directCalendar: canOpenStaffCalendars })}<span>${escapeHtml(renderFacilityOverviewStream([person.event], { includeTimes: true }) || "Rostered shift")}${renderFacilityOverviewSeniorityLink(person.event?.seniority, { sourceType: match.facility, date: formatDateKey(match.start) })}</span></div>`).join("")}</div>
     </article>
   `).join("")}</div>`;
@@ -10831,13 +10841,12 @@ function openFacilityOverviewWorkingTogether(target) {
   facilityOverviewState.togetherStaffKeys = !viewer || selectedPerson.identity === viewer.identity
     ? [selectedPerson.identity, ""]
     : [selectedPerson.identity, viewer.identity];
-  facilityOverviewState.togetherContent = !viewer || selectedPerson.identity === viewer.identity
-    ? `<article class="issue-card"><p>Choose another staff member to compare with your own roster.</p></article>`
-    : "";
+  facilityOverviewState.togetherUserClearedAll = false;
+  facilityOverviewState.togetherContent = "";
   facilityOverviewState.togetherHasSearched = false;
   resetFacilityOverviewScroll();
   renderFacilityOverview();
-  if (viewer && selectedPerson.identity !== viewer.identity) void loadFacilityOverviewTogether();
+  void loadFacilityOverviewTogether();
 }
 
 function closeFacilityOverviewStaffActionMenu() {

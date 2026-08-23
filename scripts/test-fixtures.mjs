@@ -823,6 +823,14 @@ assert.match(
   /selectedDoctors\.length === 2[\s\S]*showGroups[\s\S]*All selected staff[\s\S]*Two-person overlaps/,
   "Working together should only add all-staff and pair headings when they are relevant to a selection of three or more",
 );
+assert.match(
+  appSource.match(/function renderFacilityOverviewTogetherResults[\s\S]*?function facilityOverviewWorkingIntervals/)?.[0] || "",
+  /selectedDoctors\.length === 1[\s\S]*No rostered shifts found[\s\S]*singlePerson: true/,
+  "Working together should show a selected person's own shifts when only one staff member is chosen",
+);
+assert.match(appSource, /data-facility-overview-together-remove="\$\{index\}"[\s\S]*🗑/, "Every Working together staff row should have a compact remove control");
+assert.match(appSource, /selectedCount >= 1[\s\S]*loadFacilityOverviewTogether/, "Choosing one Working together staff member should load their shifts");
+assert.match(stateSource, /doctorKeys\.length < 1[\s\S]*Choose at least one staff member/, "The Working together API should allow a single staff member");
 assert.doesNotMatch(appSource, /data-facility-overview-together-edit-staff/, "Working together should not render a redundant Edit staff control");
 assert.match(styleSource, /#facilityOverviewSection\.is-compact[\s\S]*\.facility-overview-tabs/, "At a glance tabs should compact after scrolling");
 assert.match(styleSource, /#facilityOverviewSection \{[\s\S]*?grid-template-rows: auto auto auto minmax\(0, 1fr\);[\s\S]*?overflow: hidden;/, "At a glance should keep its header stack outside the scroll container");
@@ -865,8 +873,8 @@ assert.match(
 );
 assert.match(
   appSource.match(/function facilityOverviewTogetherFallbackOption[\s\S]*?function closeFacilityOverviewStaffActionMenu/)?.[0] || "",
-  /facilityOverviewTogetherFallbackOption\(target\)[\s\S]*if \(!selectedPerson\) return;[\s\S]*togetherPinnedDoctors = viewer \? \[selectedPerson, viewer\] : \[selectedPerson\];[\s\S]*if \(viewer && selectedPerson\.identity !== viewer\.identity\) void loadFacilityOverviewTogether\(\)/,
-  "Working together should always open for an authorised staff selection, prefill both people when available, and load shared shifts",
+  /facilityOverviewTogetherFallbackOption\(target\)[\s\S]*if \(!selectedPerson\) return;[\s\S]*togetherPinnedDoctors = viewer \? \[selectedPerson, viewer\] : \[selectedPerson\];[\s\S]*void loadFacilityOverviewTogether\(\)/,
+  "Working together should always open for an authorised staff selection, prefill the clinical viewer when available, and load the relevant shifts",
 );
 assert.match(appSource, /currentNonClinical && currentDirectorViewEnabled && canUseFacilityOverview\(\) && !isFacilityOverviewOpen\(\)/, "Only non-clinical Directors should open directly into Director overview; clinical accounts should retain their calendar");
 assert.match(
