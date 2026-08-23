@@ -3257,6 +3257,11 @@ body[data-skin="console"] .preview-cell.is-weekend {
   padding-right: 4px;
 }
 
+#accountsBody {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .modal-panel > .issues-list,
 .modal-panel > .custom-event-form {
   overflow: auto;
