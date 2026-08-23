@@ -4260,6 +4260,15 @@ body[data-skin="console"].is-non-clinical-director #exportButton {
   display: none;
 }
 
+/* A non-clinical Director has no calendar controls in the left rail. Let the
+   Director overview use that otherwise-empty space, while retaining the
+   dedicated dashboard header above it. */
+body[data-skin="console"].is-non-clinical-director #roster-form.is-facility-overview-active #facilityOverviewSection {
+  grid-column: 1 / -1;
+  padding-left: clamp(24px, 5vw, 80px);
+  padding-right: clamp(24px, 5vw, 80px);
+}
+
 body[data-skin="console"].has-calendar-preview #controlBar {
   padding-top: calc(var(--console-header-height) + 20px);
 }

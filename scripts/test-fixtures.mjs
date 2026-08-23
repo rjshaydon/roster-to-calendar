@@ -830,7 +830,8 @@ assert.match(styleSource, /#facilityOverviewBody \{[\s\S]*?overflow-y: auto;/, "
 assert.match(appSource, /FACILITY_OVERVIEW_COMPACT_SCROLL_THRESHOLD = 28[\s\S]*?function facilityOverviewScrollerHasOverflow[\s\S]*?scrollHeight > scroller\.clientHeight[\s\S]*?function facilityOverviewShouldReleaseCompact[\s\S]*?userDirection < 0/, "At a glance should latch header compaction only for overflowing results and release it on explicit upward input");
 assert.doesNotMatch(appSource, /facilityOverviewCompactReleaseTimer/, "At a glance should not use a delayed scroll-position release that can rebound after compaction");
 assert.doesNotMatch(appSource, /pointerScroller|setFacilityOverviewScrollDirection\(scroller, movement\)/, "layout-driven scroll movement should never be mistaken for explicit upward input");
-assert.match(appSource, /facilityOverviewButton\.textContent = open \? "My calendar" : "At a glance"/, "The sidebar At a glance control should become My calendar while the overview is open");
+assert.match(appSource, /function facilityOverviewLabel\(\)[\s\S]*?\? "Director overview"[\s\S]*?: "At a glance"/, "Director accounts should call the shared overview Director overview while other accounts retain At a glance");
+assert.match(appSource, /facilityOverviewButton\.textContent = open \? "My calendar" : label/, "The sidebar overview control should become My calendar while the overview is open");
 assert.match(appSource, /addEventListener\("input"[\s\S]*?refreshFacilityOverviewStaffContent\(\);[\s\S]*?renderFacilityOverviewStaffBody\(\);/, "ED staff search should refresh results without replacing its focused input");
 assert.match(
   appSource.match(/function renderFacilityOverviewOnShiftResults[\s\S]*?async function loadFacilityOverviewStaff/)?.[0] || "",

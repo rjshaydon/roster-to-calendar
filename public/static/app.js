@@ -9134,18 +9134,32 @@ function isFacilityOverviewOpen() {
   return Boolean(facilityOverviewSection && !facilityOverviewSection.classList.contains("hidden"));
 }
 
+function facilityOverviewLabel() {
+  // Creators can use the same tools, but this is a Director-facing label only
+  // when the viewed account has explicitly been granted Director access.
+  return currentDirectorViewEnabled && currentUserRole !== "creator"
+    ? "Director overview"
+    : "At a glance";
+}
+
 function syncFacilityOverviewNavigationState() {
   const open = isFacilityOverviewOpen();
+  const label = facilityOverviewLabel();
+  const heading = facilityOverviewSection?.querySelector(".facility-overview-head h2");
+  const tabList = facilityOverviewSection?.querySelector(".facility-overview-tabs");
+  if (heading) heading.textContent = label;
+  if (facilityOverviewSection) facilityOverviewSection.setAttribute("aria-label", `${label} ED overview`);
+  if (tabList) tabList.setAttribute("aria-label", `${label} views`);
   if (facilityOverviewButton) {
-    facilityOverviewButton.textContent = open ? "My calendar" : "At a glance";
-    facilityOverviewButton.setAttribute("aria-label", open ? "Return to my calendar" : "Open At a glance");
+    facilityOverviewButton.textContent = open ? "My calendar" : label;
+    facilityOverviewButton.setAttribute("aria-label", open ? "Return to my calendar" : `Open ${label}`);
   }
   if (mobileFacilityOverviewButton) {
-    mobileFacilityOverviewButton.setAttribute("aria-label", open ? "Return to my calendar" : "At a glance ED overview");
+    mobileFacilityOverviewButton.setAttribute("aria-label", open ? "Return to my calendar" : `${label} ED overview`);
     const shortLabel = mobileFacilityOverviewButton.querySelector("[aria-hidden='true']");
     const accessibleLabel = mobileFacilityOverviewButton.querySelector(".sr-only");
     if (shortLabel) shortLabel.textContent = open ? "Cal" : "ED";
-    if (accessibleLabel) accessibleLabel.textContent = open ? "My calendar" : "At a glance";
+    if (accessibleLabel) accessibleLabel.textContent = open ? "My calendar" : label;
   }
 }
 
