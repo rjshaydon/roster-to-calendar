@@ -15681,6 +15681,28 @@ function renderLoginState() {
   syncMobileChrome();
 }
 
+function isNonClinicalDirectorWorkspace() {
+  return currentNonClinical && currentDirectorViewEnabled && canUseFacilityOverview();
+}
+
+function launchNonClinicalDirectorWorkspace(options = {}, loginStartedAt = 0) {
+  if (!isNonClinicalDirectorWorkspace() || !calendarTransitionStillCurrent(options.transition)) return false;
+  setStatus("Loading Director overview...");
+  // Open the Director UI synchronously, then let its selected data view fetch
+  // in the background. Non-clinical Directors do not have a personal calendar,
+  // so waiting for calendar hydration here only leaves them at a blank screen.
+  void openFacilityOverview().then(() => {
+    if (calendarTransitionStillCurrent(options.transition)) {
+      markLoginPhase("directorOverviewLoaded", loginStartedAt);
+    }
+  }).catch((error) => {
+    if (!calendarTransitionStillCurrent(options.transition)) return;
+    setStatus(normalizeAuthMessage(error?.message || "Could not load Director overview."), true);
+  });
+  markLoginPhase("directorOverviewOpened", loginStartedAt);
+  return true;
+}
+
 async function loginWithEmail(email, password, options = {}) {
   const previousEmail = currentUserEmail;
   const loginStartedAt = performance.now();
@@ -15744,6 +15766,20 @@ async function loginWithEmail(email, password, options = {}) {
     closeLoginModal();
     setEntranceStatus("");
     markLoginPhase("shellRendered", loginStartedAt);
+    if (isNonClinicalDirectorWorkspace()) {
+      if ((loginData?.responseMode || "full") === "fast") {
+        queueDeferredAccountContextLoad({
+          loginStartedAt,
+          targetEmail: "",
+          responseMode: loginData?.responseMode || "fast",
+          delayMs: 50,
+          transition,
+        });
+      }
+      launchNonClinicalDirectorWorkspace({ transition }, loginStartedAt);
+      queueStoredCalendarSnapshotMaintenance();
+      return;
+    }
     const inlineSnapshotReady = loginSnapshotReadyForRender();
     if (inlineSnapshotReady) {
       renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
@@ -19472,6 +19508,20 @@ async function bootstrapApp() {
     });
     if (!currentUserEmail || !calendarTransitionStillCurrent(transition)) return;
     renderLoginState();
+    if (isNonClinicalDirectorWorkspace()) {
+      if ((loginData?.responseMode || "full") === "fast") {
+        queueDeferredAccountContextLoad({
+          loginStartedAt,
+          targetEmail: "",
+          responseMode: loginData?.responseMode || "fast",
+          delayMs: 50,
+          transition,
+        });
+      }
+      launchNonClinicalDirectorWorkspace({ transition }, loginStartedAt);
+      queueStoredCalendarSnapshotMaintenance();
+      return;
+    }
     const inlineSnapshotReady = loginSnapshotReadyForRender();
     if (!renderedCachedSnapshot && inlineSnapshotReady) {
       renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
