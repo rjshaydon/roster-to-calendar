@@ -131,6 +131,9 @@ export async function onRequestPost(context) {
     if (!hasCalendarDb(context.env)) {
       return Response.json({ error: "D1 database is not configured." }, { status: 503 });
     }
+    // Invited accounts have no user-selected password until the invite is accepted.
+    // Remove any that have passed their activation window on the next API request.
+    await cleanupExpiredInvitedAccounts(context.env.ROSTER_DB);
     if (action === "acceptInvite") {
       const inviteToken = String(body?.inviteToken || "").trim();
       const invitePassword = String(body?.newPassword || "");
@@ -482,6 +485,14 @@ export async function onRequestPost(context) {
         return Response.json({ error: "An invited user's name and email are required." }, { status: 400 });
       }
       let existing = await loadAccountMirror(context.env.ROSTER_DB, targetEmail);
+      const pendingProvisionedInvite = existing
+        ? await context.env.ROSTER_DB.prepare(`
+          SELECT 1 FROM account_invites
+          WHERE email = ? AND created_account = 1 AND accepted_at = '' AND revoked_at = ''
+          LIMIT 1
+        `).bind(targetEmail).first()
+        : null;
+      const createdAccount = !existing || Boolean(pendingProvisionedInvite);
       if (!existing) {
         const passwordRecord = await hashPassword(randomInviteToken());
         await upsertAccountMirror(context.env.ROSTER_DB, {
@@ -500,9 +511,9 @@ export async function onRequestPost(context) {
       await context.env.ROSTER_DB.prepare("UPDATE account_invites SET revoked_at = ?, updated_at = ? WHERE email = ? AND accepted_at = '' AND revoked_at = ''")
         .bind(now.toISOString(), now.toISOString(), targetEmail).run();
       await context.env.ROSTER_DB.prepare(`
-        INSERT INTO account_invites (token_hash, email, created_by, expires_at, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).bind(tokenHash, targetEmail, account.record.email, expiresAt, now.toISOString(), now.toISOString()).run();
+        INSERT INTO account_invites (token_hash, email, created_by, created_account, expires_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).bind(tokenHash, targetEmail, account.record.email, createdAccount ? 1 : 0, expiresAt, now.toISOString(), now.toISOString()).run();
       const postmarkToken = String(context.env.POSTMARK_API_TOKEN || "").trim();
       if (!postmarkToken) return Response.json({ error: "Postmark is not configured." }, { status: 422 });
       const inviteUrl = `${new URL(context.request.url).origin}/?invite=${encodeURIComponent(token)}`;
@@ -5751,10 +5762,25 @@ function escapeHtml(value) {
 async function ensureInviteSchema(db) {
   await db.prepare(`CREATE TABLE IF NOT EXISTS account_invites (
     token_hash TEXT PRIMARY KEY, email TEXT NOT NULL, created_by TEXT NOT NULL DEFAULT '',
+    created_account INTEGER NOT NULL DEFAULT 0,
     expires_at TEXT NOT NULL, accepted_at TEXT NOT NULL DEFAULT '', revoked_at TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL
   )`).run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_account_invites_email ON account_invites (email)").run();
+}
+
+async function cleanupExpiredInvitedAccounts(db) {
+  await ensureInviteSchema(db);
+  const now = new Date().toISOString();
+  const expired = await db.prepare(`
+    SELECT token_hash, email FROM account_invites
+    WHERE created_account = 1 AND accepted_at = '' AND revoked_at = '' AND expires_at <= ?
+  `).bind(now).all();
+  for (const invite of expired.results || []) {
+    const email = normalizeEmail(invite.email);
+    await deleteAccountMirror(db, email);
+    await db.prepare("DELETE FROM account_invites WHERE token_hash = ?").bind(invite.token_hash).run();
+  }
 }
 
 async function ensureAccountSubscriptionToken(store, record) {
