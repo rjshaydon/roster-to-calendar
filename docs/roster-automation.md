@@ -86,6 +86,27 @@ Set the request header `Authorization` to `Bearer <the Cloudflare secret>`. Limi
 
 The `providerVersion` value must be the SharePoint file ETag/version, not the flow run time. It must remain unchanged until that specific file changes. Filename plus provider version is the primary change identity, allowing different term files to have the same version number without being confused with one another.
 
+## MMC shift allocations contact list
+
+The MMC contact list uses the same approved Power Automate SharePoint connection and the existing `ROSTER_AUTOMATION_TOKEN`; it does **not** require a Codex, Graph, or separate SharePoint app approval. Add a separate flow (or branch) that watches `Contact lists/shift allocation/SHIFT ALLOCATIONS.xlsx`, gets its file content, and sends this JSON to:
+
+```text
+POST https://<your-pages-domain>/api/automation/contact-list
+```
+
+```json
+{
+  "sourceId": "mmc-shift-allocations",
+  "fileName": "@{triggerOutputs()?['body/{FilenameWithExtension}']}",
+  "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "contentBase64": "@{body('Get_file_content')?['$content']}",
+  "providerModifiedAt": "@{triggerOutputs()?['body/Modified']}",
+  "providerVersion": "@{triggerOutputs()?['body/ETag']}"
+}
+```
+
+Set `Authorization` to `Bearer <the existing ROSTER_AUTOMATION_TOKEN>`. The endpoint accepts only that source and exact workbook name, deduplicates identical provider versions/content, and stores the raw workbook privately. It deliberately does not parse or expose contact data until the contact-list feature adds its own access controls.
+
 ## Advanced roster recovery
 
 Normal source updates never require a full rebuild. In Admin → System, **Advanced recovery** is reserved for a confirmed corruption of the derived roster database while every retained source file is known to be correct. Recovery is blocked while an automated update is queued or processing and requires an explicit `REBUILD` confirmation. Prefer the per-file reparse control when only one roster is affected.

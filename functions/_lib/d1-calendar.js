@@ -447,6 +447,23 @@ async function ensureCalendarSchemaUncached(db) {
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_sync_runs_source_started ON roster_sync_runs (source_id, started_at DESC)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_sync_runs_source_hash ON roster_sync_runs (source_id, content_hash, status)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_dispatches_status_retry ON roster_dispatches (status, retry_after DESC)").run();
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS contact_list_files (
+      id TEXT PRIMARY KEY,
+      source_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      size INTEGER NOT NULL DEFAULT 0,
+      last_modified INTEGER NOT NULL DEFAULT 0,
+      object_key TEXT NOT NULL,
+      content_type TEXT NOT NULL DEFAULT '',
+      content_hash TEXT NOT NULL,
+      provider_version TEXT NOT NULL DEFAULT '',
+      provider_modified_at TEXT NOT NULL DEFAULT '',
+      received_at TEXT NOT NULL DEFAULT ''
+    )
+  `).run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_contact_list_files_source_version ON contact_list_files (source_id, provider_version, name)").run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_contact_list_files_source_hash ON contact_list_files (source_id, content_hash, name)").run();
   await ensureColumn(db, "roster_files", "source_id", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn(db, "roster_files", "parser_version", "TEXT NOT NULL DEFAULT 'legacy-unverified'");
   await ensureColumn(db, "roster_sync_runs", "source_file_id", "TEXT NOT NULL DEFAULT ''");
@@ -464,18 +481,20 @@ async function ensureCalendarSchemaUncached(db) {
 
 async function calendarSchemaIsCurrent(db) {
   try {
-    // account_invites is the latest schema migration; the other two are used
+    // contact_list_files is the latest schema migration; the other tables are used
     // by the Director views. Their presence means the preceding migrations
     // have run as well, so the expensive compatibility setup is unnecessary.
     const row = await db.prepare(`
       SELECT
         EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'account_invites') AS has_account_invites,
         EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'facility_staff_seniority_overrides') AS has_staff_overrides,
-        EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'roster_dispatches') AS has_roster_dispatches
+        EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'roster_dispatches') AS has_roster_dispatches,
+        EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'contact_list_files') AS has_contact_list_files
     `).first();
     return Number(row?.has_account_invites) === 1
       && Number(row?.has_staff_overrides) === 1
-      && Number(row?.has_roster_dispatches) === 1;
+      && Number(row?.has_roster_dispatches) === 1
+      && Number(row?.has_contact_list_files) === 1;
   } catch {
     // New databases and the local test double fall back to the full setup.
     return false;
