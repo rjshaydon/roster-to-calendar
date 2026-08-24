@@ -8339,7 +8339,7 @@ function openReviewModal(id, selectedDay = "") {
       </div>
       <div class="review-body">
         <label class="field">
-          <span>Display as</span>
+          <span>Display as…</span>
           <input
             type="text"
             value="${overrideValue}"
