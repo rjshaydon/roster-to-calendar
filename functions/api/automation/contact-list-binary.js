@@ -2,11 +2,12 @@ import { ensureCalendarSchema, hasCalendarDb } from "../../_lib/d1-calendar.js";
 
 const SOURCE_ID = "mmc-shift-allocations";
 const EXPECTED_FILE_NAME = "shift allocations.xlsx";
-const MAX_CONTACT_LIST_BYTES = 50 * 1024 * 1024;
+// Power Automate can expand this 28 MB workbook substantially on the wire.
+// Keep safely below the 100 MB ingress ceiling while allowing that connector.
+const MAX_CONTACT_LIST_BYTES = 80 * 1024 * 1024;
 
-// SHIFT ALLOCATIONS.xlsx is 28 MB. Encoding it as JSON Base64 causes the
-// Pages Function to buffer far more than the file itself. This ingress takes
-// the binary body and streams it directly into R2 instead.
+// SHIFT ALLOCATIONS.xlsx is approximately 28 MB. Power Automate transports it
+// as Base64, which is decoded incrementally before it is retained in R2.
 export async function onRequestPost(context) {
   if (!hasValidAutomationToken(context.request, context.env.ROSTER_AUTOMATION_TOKEN)) {
     return Response.json({ error: "Unauthorized." }, { status: 401 });
@@ -25,13 +26,30 @@ export async function onRequestPost(context) {
   if (normaliseFileName(fileName) !== EXPECTED_FILE_NAME) {
     return Response.json({ error: "This source only accepts SHIFT ALLOCATIONS.xlsx." }, { status: 400 });
   }
-  if (!context.request.body || (Number.isFinite(contentLength) && contentLength > MAX_CONTACT_LIST_BYTES)) {
-    return Response.json({ error: "Contact-list workbook is missing or too large." }, { status: 413 });
+  if (!context.request.body) {
+    return Response.json({ error: "Contact-list workbook is missing." }, { status: 413 });
+  }
+  if (Number.isFinite(contentLength) && contentLength > MAX_CONTACT_LIST_BYTES) {
+    return Response.json({
+      error: "Contact-list workbook is too large.",
+      contentLength,
+      maxBytes: MAX_CONTACT_LIST_BYTES,
+    }, { status: 413 });
+  }
+  if (!Number.isFinite(contentLength) || contentLength <= 0) {
+    return Response.json({ error: "Contact-list workbook length is missing." }, { status: 411 });
+  }
+  const contentEncoding = String(context.request.headers.get("x-roster-content-encoding") || "").toLowerCase();
+  const contentType = String(context.request.headers.get("content-type") || "").toLowerCase();
+  if (contentEncoding === "base64" || contentType.startsWith("text/plain")) {
+    return storeBase64Workbook(context, { sourceId, fileName, providerVersion, providerModifiedAt });
   }
 
+  let stage = "schema";
   try {
     const db = context.env.ROSTER_DB;
     await ensureCalendarSchema(db);
+    stage = "duplicate-check";
     if (providerVersion) {
       const matchingVersion = await db.prepare(`
         SELECT id FROM contact_list_files
@@ -55,12 +73,20 @@ export async function onRequestPost(context) {
     const fileId = `contact:${SOURCE_ID}:${nonce}`;
     const objectKey = `contact-lists/${SOURCE_ID}/${nonce}`;
     const contentType = String(context.request.headers.get("content-type") || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
-    await context.env.ROSTER_FILES.put(objectKey, measuredBody, { httpMetadata: { contentType } });
+    stage = "r2-put";
+    // R2 requires the exact stream length. TransformStream removes that
+    // information, so retain Power Automate's Content-Length explicitly.
+    const fixedLength = new FixedLengthStream(contentLength);
+    await Promise.all([
+      context.env.ROSTER_FILES.put(objectKey, fixedLength.readable, { httpMetadata: { contentType } }),
+      measuredBody.pipeTo(fixedLength.writable),
+    ]);
     if (!size) {
       await context.env.ROSTER_FILES.delete(objectKey);
       return Response.json({ error: "Contact-list workbook is missing or too large." }, { status: 413 });
     }
 
+    stage = "d1-insert";
     const now = new Date().toISOString();
     await db.prepare(`
       INSERT INTO contact_list_files (
@@ -74,8 +100,88 @@ export async function onRequestPost(context) {
     return Response.json({ ok: true, status: "stored", sourceId: SOURCE_ID, fileId, receivedAt: now }, { status: 202 });
   } catch (error) {
     console.error("Contact-list binary ingestion failed", error);
+    return Response.json({
+      error: "Contact-list workbook could not be stored.",
+      stage,
+      diagnostic: String(error?.message || error).slice(0, 500),
+    }, { status: 422 });
+  }
+}
+
+async function storeBase64Workbook(context, metadata) {
+  try {
+    const workbook = await decodeBase64Workbook(context.request.body);
+    if (!workbook.size || workbook.size > MAX_CONTACT_LIST_BYTES) {
+      return Response.json({ error: "Contact-list workbook is missing or too large." }, { status: 413 });
+    }
+
+    const db = context.env.ROSTER_DB;
+    await ensureCalendarSchema(db);
+    if (metadata.providerVersion) {
+      const matchingVersion = await db.prepare(`
+        SELECT id FROM contact_list_files
+        WHERE source_id = ? AND provider_version = ? AND LOWER(name) = LOWER(?)
+        ORDER BY received_at DESC LIMIT 1
+      `).bind(SOURCE_ID, metadata.providerVersion, metadata.fileName).first();
+      if (matchingVersion?.id) {
+        return Response.json({ ok: true, status: "unchanged", sourceId: SOURCE_ID, fileId: String(matchingVersion.id) });
+      }
+    }
+
+    const nonce = crypto.randomUUID();
+    const fileId = `contact:${SOURCE_ID}:${nonce}`;
+    const objectKey = `contact-lists/${SOURCE_ID}/${nonce}`;
+    const now = new Date().toISOString();
+    const contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    await context.env.ROSTER_FILES.put(objectKey, workbook, { httpMetadata: { contentType } });
+    await db.prepare(`
+      INSERT INTO contact_list_files (
+        id, source_id, name, size, last_modified, object_key, content_type,
+        content_hash, provider_version, provider_modified_at, received_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      fileId, SOURCE_ID, metadata.fileName, workbook.size, Date.parse(metadata.providerModifiedAt) || Date.now(),
+      objectKey, contentType, `base64:${nonce}`, metadata.providerVersion, metadata.providerModifiedAt, now,
+    ).run();
+    return Response.json({ ok: true, status: "stored", sourceId: SOURCE_ID, fileId, receivedAt: now }, { status: 202 });
+  } catch (error) {
+    console.error("Contact-list Base64 ingestion failed", error);
     return Response.json({ error: "Contact-list workbook could not be stored." }, { status: 422 });
   }
+}
+
+async function decodeBase64Workbook(body) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  const chunks = [];
+  let pending = "";
+  let size = 0;
+
+  const decode = (encoded) => {
+    if (!encoded) return;
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) {
+      throw new Error("Contact-list workbook is not valid Base64.");
+    }
+    const binary = atob(encoded);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+    size += bytes.byteLength;
+    if (size > MAX_CONTACT_LIST_BYTES) throw new Error("Contact-list workbook is too large.");
+    chunks.push(bytes);
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    pending += decoder.decode(value, { stream: true });
+    const readyLength = pending.length - (pending.length % 4);
+    decode(pending.slice(0, readyLength));
+    pending = pending.slice(readyLength);
+  }
+  pending += decoder.decode();
+  if (pending.length % 4 !== 0) throw new Error("Contact-list workbook is not valid Base64.");
+  decode(pending);
+  return new Blob(chunks, { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
 }
 
 function normaliseFileName(value) {
