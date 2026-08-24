@@ -88,24 +88,13 @@ The `providerVersion` value must be the SharePoint file ETag/version, not the fl
 
 ## MMC shift allocations contact list
 
-The MMC contact list uses the same approved Power Automate SharePoint connection and the existing `ROSTER_AUTOMATION_TOKEN`; it does **not** require a Codex, Graph, or separate SharePoint app approval. Add a separate flow (or branch) that watches `Contact lists/shift allocation/SHIFT ALLOCATIONS.xlsx`, gets its file content, and sends this JSON to:
+The MMC contact list uses the same approved Power Automate SharePoint connection and the existing `ROSTER_AUTOMATION_TOKEN`; it does **not** require a Codex, Graph, or separate SharePoint app approval. Because the workbook is currently 28 MB, send its binary content rather than a Base64 JSON document:
 
 ```text
-POST https://<your-pages-domain>/api/automation/contact-list
+POST https://<your-pages-domain>/api/automation/contact-list-binary
 ```
 
-```json
-{
-  "sourceId": "mmc-shift-allocations",
-  "fileName": "@{triggerOutputs()?['body/{FilenameWithExtension}']}",
-  "contentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  "contentBase64": "@{body('Get_file_content')?['$content']}",
-  "providerModifiedAt": "@{triggerOutputs()?['body/Modified']}",
-  "providerVersion": "@{triggerOutputs()?['body/ETag']}"
-}
-```
-
-Set `Authorization` to `Bearer <the existing ROSTER_AUTOMATION_TOKEN>`. The endpoint accepts only that source and exact workbook name, deduplicates identical provider versions/content, and stores the raw workbook privately. It deliberately does not parse or expose contact data until the contact-list feature adds its own access controls.
+Set the HTTP body to `base64ToBinary(body('Get_file_content')?['$content'])` and set these headers: `Authorization: Bearer <the existing ROSTER_AUTOMATION_TOKEN>`, `Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`, `x-roster-source-id: mmc-shift-allocations`, `x-roster-file-name`, `x-roster-provider-modified-at`, and `x-roster-provider-version` (from SharePoint). The endpoint validates the source and filename, deduplicates matching provider versions, and streams the raw workbook privately into R2. It deliberately does not parse or expose contact data until the contact-list feature adds its own access controls.
 
 ## Advanced roster recovery
 
