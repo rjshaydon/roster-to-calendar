@@ -1394,6 +1394,42 @@ input[type="color"] {
   white-space: nowrap;
 }
 
+.facility-overview-contact-number {
+  color: var(--accent-strong);
+  font-size: 0.78rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.facility-overview-contact-number.is-empty {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.facility-overview-contact-status {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.facility-overview-contact-review {
+  color: var(--muted);
+  text-align: right;
+}
+
+.facility-overview-contact-review summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.facility-overview-contact-review div {
+  margin-top: 4px;
+}
+
 .facility-overview-on-shift-names small {
   color: var(--muted);
   font-size: 0.74rem;

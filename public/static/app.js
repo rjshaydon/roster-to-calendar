@@ -19,6 +19,7 @@ import {
   setParserExtensions,
   sourceNames,
 } from "./roster.js";
+import { attachContactAllocations } from "./contact-allocations.js";
 
 const form = document.querySelector("#roster-form");
 const appShell = document.querySelector("#appShell");
@@ -329,7 +330,7 @@ let facilityOverviewCompactState = {
   touchY: 0,
 };
 let facilityOverviewState = {
-  tab: "on-shift", date: formatDateKey(new Date()), facilityKey: "", includeClinicalSupport: false, requestId: 0, onShiftData: null,
+  tab: "on-shift", date: formatDateKey(new Date()), facilityKey: "", includeClinicalSupport: false, requestId: 0, onShiftData: null, contactList: null,
   staffTermStart: formatDateKey(australianTermForDate(new Date()).start), staffTerms: [], staffContent: "", staffData: null, staffQuery: "", staffExpanded: new Set(), staffFocusSection: "", staffActionMenu: null, staffDesignationMenu: null, staffSeniorityMenu: null, staffMultiSelectSection: "", staffMultiSelectMembers: new Map(), staffBulkSeniorityMenu: null, staffMultiSelectSaving: false,
   preferredFacilityKey: "", preferredFacilityReason: "", preferredFacilityEvidenceDate: "", byStreamFrom: formatDateKey(new Date()), byStreamTo: formatDateKey(new Date()), byStreamRows: [], byStreamCatalog: [], byStreamCoverage: [], byStreamContent: "", byStreamData: null, byStreamLoading: false, byStreamMetadataLoading: false, byStreamMetadataKey: "", byStreamMetadataPromise: null, byStreamRequestId: 0, byStreamHideEmptyDates: true, byStreamRowId: 0,
   togetherStaffKeys: ["", ""], togetherRangeMode: "term",
@@ -10256,6 +10257,7 @@ async function loadFacilityOverviewOnShift() {
   facilityOverviewState.requestId = requestId;
   facilityOverviewState.staffData = null;
   facilityOverviewState.onShiftData = null;
+  facilityOverviewState.contactList = null;
   facilityOverviewState.content = `<article class="issue-card"><p>Loading rostered staff…</p></article>`;
   renderFacilityOverview();
   try {
@@ -10274,6 +10276,7 @@ async function loadFacilityOverviewOnShift() {
     const data = await readJsonResponse(response, "Could not load the ED overview.");
     if (facilityOverviewState.requestId !== requestId || facilityOverviewState.tab !== "on-shift") return;
     facilityOverviewState.onShiftData = data.events || [];
+    facilityOverviewState.contactList = data.contactList || null;
     facilityOverviewState.content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData);
   } catch (error) {
     if (facilityOverviewState.requestId !== requestId) return;
@@ -10310,14 +10313,15 @@ function renderFacilityOverviewOnShiftResults(rows) {
     return base ? { ...base, person, event } : null;
   })).filter(Boolean);
   if (!assignments.length) return `<article class="issue-card"><p>No recognised working shifts were found for this ED and date.</p></article>`;
+  const contactMatches = attachContactAllocations(assignments, facilityOverviewState.contactList?.contacts || []);
   const periods = new Map();
-  for (const assignment of assignments) {
+  for (const assignment of contactMatches.assignments) {
     if (!periods.has(assignment.period)) periods.set(assignment.period, []);
     periods.get(assignment.period).push(assignment);
   }
-  return ["AM", "PM", "Night"].filter((period) => periods.has(period)).map((period) => `
+  return `${renderFacilityOverviewContactListStatus(contactMatches)}${["AM", "PM", "Night"].filter((period) => periods.has(period)).map((period) => `
     <section class="facility-overview-period"><h3>${period}</h3><div class="facility-overview-staff-grid">${renderFacilityOverviewOnShiftPeriod(periods.get(period), { canUseStaffActions, termStart, period })}</div></section>
-  `).join("");
+  `).join("")}`;
 }
 
 function renderFacilityOverviewOnShiftPeriod(assignments, options = {}) {
@@ -10459,9 +10463,38 @@ function renderFacilityOverviewOnShiftNames(assignments, options = {}) {
     if (assignment.specialTime) existing.specialTimes.add(assignment.specialTime);
     byPerson.set(person.doctorKey, existing);
   }
-  return `<div class="facility-overview-on-shift-names">${[...byPerson.values()].sort((left, right) => compareFacilityOverviewPeople(left.person, right.person)).map(({ person, specialTimes }) => `
-    <div>${renderFacilityOverviewStaffName(person, { ...options, seniority: person.seniority })}${renderFacilityOverviewOnShiftSeniority(person, options)}${options.showSpecialTimes !== false && specialTimes.size ? `<small>${escapeHtml([...specialTimes].join(" · "))}</small>` : ""}</div>
-  `).join("")}</div>`;
+  return `<div class="facility-overview-on-shift-names">${[...byPerson.values()].sort((left, right) => compareFacilityOverviewPeople(left.person, right.person)).map(({ person, specialTimes }) => {
+    const allocation = (assignments || []).find((assignment) => assignment.person?.doctorKey === person.doctorKey)?.contactAllocation;
+    return `<div>${renderFacilityOverviewStaffName(person, { ...options, seniority: person.seniority })}${renderFacilityOverviewOnShiftSeniority(person, options)}${allocation ? renderFacilityOverviewContactAllocation(allocation) : ""}${options.showSpecialTimes !== false && specialTimes.size ? `<small>${escapeHtml([...specialTimes].join(" · "))}</small>` : ""}</div>`;
+  }).join("")}</div>`;
+}
+
+function renderFacilityOverviewContactAllocation(allocation) {
+  const phone = String(allocation?.phone || "").trim();
+  if (!phone) return `<span class="facility-overview-contact-number is-empty">No phone recorded</span>`;
+  const dial = phone.replace(/[^0-9+]/g, "");
+  return `<a class="facility-overview-contact-number" href="tel:${escapeHtml(dial)}" title="Allocated contact number">${escapeHtml(phone)}</a>`;
+}
+
+function renderFacilityOverviewContactListStatus(matches) {
+  const contactList = facilityOverviewState.contactList;
+  if (!contactList?.status || contactList.status === "unavailable") return "";
+  if (contactList.status !== "available") return `<p class="facility-overview-contact-status">Live contact allocation is not available for this date.</p>`;
+  const received = contactList.providerModifiedAt || contactList.receivedAt || "";
+  const freshness = received ? ` · updated ${formatFacilityOverviewContactTime(received)}` : "";
+  const unresolved = matches.unmatched || [];
+  const review = unresolved.length
+    ? isViewingCreatorAccount()
+      ? `<details class="facility-overview-contact-review"><summary>${unresolved.length} allocation${unresolved.length === 1 ? "" : "s"} need review</summary>${unresolved.map((contact) => `<div>${escapeHtml(contact.role)} · ${escapeHtml(contact.name)}${contact.phone ? ` · ${escapeHtml(contact.phone)}` : ""}</div>`).join("")}</details>`
+      : `<span> · ${unresolved.length} allocation${unresolved.length === 1 ? "" : "s"} need review</span>`
+    : "";
+  return `<div class="facility-overview-contact-status"><span>Live contact allocations for ${escapeHtml(contactList.sourceDate)}${freshness} · ${matches.matchedCount} matched</span>${review}</div>`;
+}
+
+function formatFacilityOverviewContactTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) return String(value);
+  return new Intl.DateTimeFormat("en-AU", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(date);
 }
 
 function renderFacilityOverviewOnShiftSeniority(person, options = {}) {

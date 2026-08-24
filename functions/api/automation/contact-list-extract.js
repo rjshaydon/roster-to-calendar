@@ -1,9 +1,9 @@
 import { ensureCalendarSchema, hasCalendarDb } from "../../_lib/d1-calendar.js";
 import { sha256Hex } from "../../_lib/automation-import.js";
+import { MMC_CONTACT_LIST_SOURCE_ID, normaliseContactListExtract } from "../../../public/static/contact-allocations.js";
 
-const SOURCE_ID = "mmc-shift-allocations";
+const SOURCE_ID = MMC_CONTACT_LIST_SOURCE_ID;
 const FILE_NAME = "SHIFT ALLOCATIONS doctors.json";
-const MAX_CONTACTS = 160;
 const MAX_BODY_BYTES = 512 * 1024;
 
 // Receives the small, doctors-only result from the Excel Office Script. This
@@ -22,7 +22,7 @@ export async function onRequestPost(context) {
       return Response.json({ error: "Contact-list extract is too large." }, { status: 413 });
     }
     const payload = await context.request.json();
-    const extract = normaliseExtract(payload);
+    const extract = normaliseContactListExtract(payload);
     if (!extract) return Response.json({ error: "Invalid doctor contact extract." }, { status: 400 });
 
     const bytes = new TextEncoder().encode(JSON.stringify(extract));
@@ -87,30 +87,6 @@ export async function onRequestPost(context) {
     console.error("Contact-list extract ingestion failed", error);
     return Response.json({ error: "Contact-list extract could not be stored." }, { status: 422 });
   }
-}
-
-function normaliseExtract(payload) {
-  if (String(payload?.sourceId || "").trim() !== SOURCE_ID || !Array.isArray(payload?.contacts)) return null;
-  if (payload.contacts.length > MAX_CONTACTS) return null;
-  const contacts = payload.contacts.map((entry) => ({
-    area: String(entry?.area || "").trim(),
-    shift: String(entry?.shift || "").trim(),
-    role: String(entry?.role || "").trim(),
-    name: String(entry?.name || "").trim(),
-    phone: String(entry?.phone || "").trim(),
-    isPopulated: Boolean(entry?.isPopulated),
-  }));
-  if (contacts.some((entry) => !["Adult Emergency", "Paediatric Emergency"].includes(entry.area)
-    || !["AM", "PM", "Night"].includes(entry.shift)
-    || !entry.role
-    || /\bnic\b|nurs|(^|\W)(rn|en)(\W|$)/i.test(entry.role))) return null;
-  return {
-    sourceId: SOURCE_ID,
-    fileName: FILE_NAME,
-    sourceDate: String(payload?.sourceDate || "").trim(),
-    providerModifiedAt: String(payload?.providerModifiedAt || "").trim(),
-    contacts,
-  };
 }
 
 function hasValidAutomationToken(request, configuredToken) {

@@ -1,5 +1,6 @@
 import { applyEventOverrides, customEventsToEvents, defaultSettings, inspectImportRecord, isIgnoredRosterIssueValue, normalizeRosterName } from "../_lib/roster.js";
 import { AUTOMATION_SOURCES } from "../_lib/automation-import.js";
+import { MMC_CONTACT_LIST_SOURCE_ID, contactAreaForSource, contactExtractStatus, normaliseContactListExtract } from "../../public/static/contact-allocations.js";
 import { requestQueuedRosterProcessing } from "../_lib/automation-dispatch.js";
 import { extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentExceptions, findmyshiftLastModified, findmyshiftReportDiagnostics, findmyshiftShiftReport } from "../_lib/findmyshift.js";
 import {
@@ -1763,7 +1764,8 @@ export async function onRequestPost(context) {
             facilityKey: row.sourceType,
             includeClinicalSupport: body?.includeClinicalSupport === true,
           }));
-        return Response.json({ ok: true, date, facilityKey: requestedFacility === "ALL" ? "ALL" : facilityKeys[0], events, queryMs: Date.now() - startedAt });
+        const contactList = await loadLiveContactListForOnShift(context, { date, facilityKeys });
+        return Response.json({ ok: true, date, facilityKey: requestedFacility === "ALL" ? "ALL" : facilityKeys[0], events, contactList, queryMs: Date.now() - startedAt });
       } catch (error) {
         console.error("queryFacilityOverviewOnShift failed", {
           date,
@@ -1944,6 +1946,41 @@ export async function onRequestPost(context) {
     const message = error.message || "Account request failed.";
     const status = message === "Incorrect password." || message.startsWith("Account not found") ? 401 : 400;
     return Response.json({ error: message }, { status });
+  }
+}
+
+async function loadLiveContactListForOnShift(context, { date, facilityKeys = [] } = {}) {
+  if (!context.env.ROSTER_DB?.prepare || !context.env.ROSTER_FILES?.get) return { status: "unavailable" };
+  try {
+    const row = await context.env.ROSTER_DB.prepare(`
+      SELECT id, object_key, provider_modified_at, received_at
+      FROM contact_list_files
+      WHERE source_id = ?
+      ORDER BY received_at DESC
+      LIMIT 1
+    `).bind(MMC_CONTACT_LIST_SOURCE_ID).first();
+    if (!row?.object_key) return { status: "unavailable" };
+    const object = await context.env.ROSTER_FILES.get(String(row.object_key));
+    if (!object) return { status: "unavailable" };
+    const extract = normaliseContactListExtract(JSON.parse(await object.text()));
+    if (!extract) return { status: "unavailable" };
+    const status = contactExtractStatus(extract, { date });
+    if (status === "expired") {
+      await context.env.ROSTER_FILES.delete(String(row.object_key));
+      await context.env.ROSTER_DB.prepare("DELETE FROM contact_list_files WHERE id = ?").bind(String(row.id)).run();
+      return { status };
+    }
+    const allowedAreas = new Set(facilityKeys.map(contactAreaForSource).filter(Boolean));
+    return {
+      status,
+      sourceDate: extract.sourceDate,
+      providerModifiedAt: extract.providerModifiedAt || String(row.provider_modified_at || ""),
+      receivedAt: String(row.received_at || ""),
+      contacts: status === "available" ? extract.contacts.filter((contact) => allowedAreas.has(contact.area)) : [],
+    };
+  } catch (error) {
+    console.warn("MMC contact allocation is unavailable", error);
+    return { status: "unavailable" };
   }
 }
 
