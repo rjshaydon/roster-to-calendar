@@ -7,6 +7,8 @@ const NAME_ALIASES = new Map([
   ["patrick", new Set(["pat", "patrick"])],
   ["jacqui", new Set(["jacqui", "jacqueline"])],
   ["jacqueline", new Set(["jacqui", "jacqueline"])],
+  ["steve", new Set(["steve", "stephen"])],
+  ["stephen", new Set(["steve", "stephen"])],
 ]);
 
 export function normaliseContactListExtract(payload) {
@@ -64,18 +66,47 @@ export function attachContactAllocations(assignments = [], contacts = []) {
     .map((contact, index) => ({ ...contact, contactKey: `${contact.area}|${contact.shift}|${contact.role}|${contact.name}|${contact.phone}|${index}` }));
   const used = new Set();
   const enriched = assignments.map((assignment) => ({ ...assignment }));
-  const orderedContacts = [...available].sort((left, right) => contactSpecificity(right) - contactSpecificity(left));
+  const orderedContacts = [...available].sort((left, right) => contactSpecificity(right) - contactSpecificity(left)
+    || String(left.name).localeCompare(String(right.name)));
+  const unmatchedReasons = new Map();
 
   for (const contact of orderedContacts) {
-    const candidates = enriched.filter((assignment, index) => !used.has(index) && assignmentMatchesContactContext(assignment, contact));
-    const named = candidates
-      .map((assignment) => ({ assignment, method: personMatchMethod(contact.name, assignment?.person?.displayName || assignment?.doctorName || "") }))
-      .filter((candidate) => candidate.method);
-    if (named.length !== 1) continue;
+    const contextCandidates = enriched
+      .map((assignment, index) => ({ assignment, index }))
+      .filter(({ assignment, index }) => !used.has(index) && assignmentMatchesContactContext(assignment, contact));
+    if (!contextCandidates.length) {
+      unmatchedReasons.set(contact.contactKey, "No roster candidate in this period");
+      continue;
+    }
+    const named = contextCandidates
+      .map(({ assignment, index }) => {
+        const nameMatch = personMatch(contact.name, assignment?.person?.displayName || assignment?.doctorName || "");
+        return nameMatch ? {
+          assignment,
+          index,
+          ...nameMatch,
+          streamAligned: Boolean(contactStreamKey(contact.role)) && contactStreamKey(contact.role) === assignmentStreamKey(assignment),
+        } : null;
+      })
+      .filter(Boolean)
+      .sort((left, right) => right.score - left.score || Number(right.streamAligned) - Number(left.streamAligned));
+    if (!named.length) {
+      unmatchedReasons.set(contact.contactKey, "No safe name match");
+      continue;
+    }
     const candidate = named[0];
-    const index = enriched.indexOf(candidate.assignment);
-    if (index < 0) continue;
+    // One-word entries are deliberately conservative.  A clerk's "Pat",
+    // "Qing" or "Tara" can only be resolved after other specific entries
+    // have consumed every other plausible roster candidate.
+    if ((nameTokens(contact.name).length === 1 && named.length > 1)
+      || (named.length > 1 && named[1].score === candidate.score && named[1].streamAligned === candidate.streamAligned)) {
+      unmatchedReasons.set(contact.contactKey, "Ambiguous name");
+      continue;
+    }
+    const index = candidate.index;
     used.add(index);
+    const stream = contactStream(contact.role);
+    const rosterStreamKey = assignmentStreamKey(candidate.assignment);
     enriched[index] = {
       ...candidate.assignment,
       contactAllocation: {
@@ -84,41 +115,55 @@ export function attachContactAllocations(assignments = [], contacts = []) {
         sourceName: contact.name,
         contactKey: contact.contactKey,
         matchMethod: candidate.method,
+        streamKey: stream.key,
+        streamLabel: stream.label,
+        rosterStreamKey,
+        isStreamOverride: Boolean(stream.key && stream.key !== rosterStreamKey),
       },
     };
   }
 
+  markContactListDiscrepancies(enriched);
   const matchedContacts = new Set(enriched.map((assignment) => assignment.contactAllocation?.contactKey).filter(Boolean));
   return {
     assignments: enriched,
     matchedCount: enriched.filter((assignment) => assignment.contactAllocation).length,
-    unmatched: available.filter((contact) => !matchedContacts.has(contact.contactKey)),
+    unmatched: available.filter((contact) => !matchedContacts.has(contact.contactKey)).map((contact) => ({
+      ...contact,
+      reviewReason: unmatchedReasons.get(contact.contactKey) || "Not matched",
+    })),
   };
 }
 
 function assignmentMatchesContactContext(assignment, contact) {
   const source = String(assignment?.source || assignment?.person?.sourceType || "").trim().toUpperCase();
-  if (contact.area !== contactAreaForSource(source) || String(assignment?.period || "") !== contact.shift) return false;
-  const contactStream = contactStreamKey(contact.role);
-  return !contactStream || contactStream === assignmentStreamKey(assignment);
+  return contact.area === contactAreaForSource(source) && String(assignment?.period || "") === contact.shift;
 }
 
 function contactSpecificity(contact) {
-  return contactStreamKey(contact?.role) ? 1 : 0;
+  const tokens = nameTokens(contact?.name);
+  // A surname initial (for example "Tara K") must be resolved before the
+  // generic first name that follows it (for example "Tara").
+  const hasSurnameInitial = tokens.length > 1 && tokens[tokens.length - 1].length === 1;
+  return tokens.length * 10 + (hasSurnameInitial ? 5 : 0) + (contactStreamKey(contact?.role) ? 1 : 0);
+}
+
+export function contactStream(role) {
+  const text = simplify(role);
+  if (/\bgreen\b/.test(text)) return { key: "green", label: "Green" };
+  if (/\bamber\b/.test(text)) return { key: "amber", label: "Amber" };
+  if (/\bresus\b/.test(text)) return { key: "resus", label: "Resus" };
+  if (/\bclinic\b/.test(text)) return { key: "clinic", label: "Clinic" };
+  if (/\bhub\b/.test(text)) return { key: "hub", label: "Hub" };
+  if (/\bssu\b/.test(text)) return { key: "ssu", label: "SSU" };
+  if (/\bsepsis\b/.test(text)) return { key: "sepsis", label: "Sepsis" };
+  if (/\bgeriatric/.test(text)) return { key: "geriatrics", label: "Geriatrics" };
+  if (/\bcart\b/.test(text)) return { key: "cart", label: "CART" };
+  return { key: "", label: "" };
 }
 
 function contactStreamKey(role) {
-  const text = simplify(role);
-  if (/\bgreen\b/.test(text)) return "green";
-  if (/\bamber\b/.test(text)) return "amber";
-  if (/\bresus\b/.test(text)) return "resus";
-  if (/\bclinic\b/.test(text)) return "clinic";
-  if (/\bhub\b/.test(text)) return "hub";
-  if (/\bssu\b/.test(text)) return "ssu";
-  if (/\bsepsis\b/.test(text)) return "sepsis";
-  if (/\bgeriatric/.test(text)) return "geriatrics";
-  if (/\bcart\b/.test(text)) return "cart";
-  return "";
+  return contactStream(role).key;
 }
 
 function assignmentStreamKey(assignment) {
@@ -135,14 +180,52 @@ function assignmentStreamKey(assignment) {
   return "";
 }
 
-function personMatchMethod(contactName, rosterName) {
+function personMatch(contactName, rosterName) {
   const contact = nameTokens(contactName);
   const roster = nameTokens(rosterName);
-  if (!contact.length || !roster.length) return "";
-  if (contact.join(" ") === roster.join(" ")) return "exact";
-  if (contact[0] === roster[0]) return "first-name";
-  if (NAME_ALIASES.get(contact[0])?.has(roster[0]) || NAME_ALIASES.get(roster[0])?.has(contact[0])) return "alias";
+  if (!contact.length || !roster.length) return null;
+  if (contact.join(" ") === roster.join(" ")) return { method: "exact", score: 100 };
+
+  const firstNamesMatch = namesMatch(contact[0], roster[0]);
+  const surnameInitial = contact.length > 1 ? contact[contact.length - 1] : "";
+  if (firstNamesMatch && surnameInitial.length === 1 && roster.some((token) => token.startsWith(surnameInitial))) {
+    return { method: firstNamesMatch === "alias" ? "alias-surname-initial" : "surname-initial", score: 90 };
+  }
+  if (contact[0] === roster[0]) return { method: "first-name", score: 70 };
+  if (firstNamesMatch === "alias") return { method: "alias", score: 65 };
+  if (contact[0].length >= 4 && roster[0].startsWith(contact[0])) return { method: "first-name-prefix", score: 60 };
+  if (contact.length === 1 && roster.slice(1).includes(contact[0])) return { method: "internal-given-name", score: 55 };
+  return null;
+}
+
+function namesMatch(left, right) {
+  if (left === right) return "exact";
+  if (NAME_ALIASES.get(left)?.has(right) || NAME_ALIASES.get(right)?.has(left)) return "alias";
   return "";
+}
+
+function markContactListDiscrepancies(assignments) {
+  const liveByStream = new Map();
+  for (const assignment of assignments) {
+    const allocation = assignment.contactAllocation;
+    if (!allocation?.streamKey) continue;
+    const key = liveStreamContextKey(assignment, allocation.streamKey);
+    if (!liveByStream.has(key)) liveByStream.set(key, []);
+    liveByStream.get(key).push(assignment);
+  }
+  for (const assignment of assignments) {
+    if (assignment.contactAllocation) continue;
+    const rosterStream = assignmentStreamKey(assignment);
+    if (!rosterStream) continue;
+    const live = liveByStream.get(liveStreamContextKey(assignment, rosterStream)) || [];
+    if (!live.length) continue;
+    assignment.contactDisplacedBy = live.map((entry) => entry.contactAllocation?.contactKey).filter(Boolean);
+  }
+}
+
+function liveStreamContextKey(assignment, streamKey) {
+  const source = String(assignment?.source || assignment?.person?.sourceType || "").trim().toUpperCase();
+  return `${source}|${String(assignment?.period || "")}|${streamKey}`;
 }
 
 function nameTokens(value) {

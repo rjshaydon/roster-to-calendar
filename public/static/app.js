@@ -10325,9 +10325,14 @@ function renderFacilityOverviewOnShiftResults(rows) {
 }
 
 function renderFacilityOverviewOnShiftPeriod(assignments, options = {}) {
-  if (facilityOverviewIsDdhPeriod(assignments)) return renderFacilityOverviewDdhOnShiftPeriod(assignments, options);
-  if (facilityOverviewIsMmcNightPeriod(assignments, options)) return renderFacilityOverviewMmcNightPeriod(assignments, options);
-  return renderFacilityOverviewGenericOnShiftPeriod(assignments, options);
+  const active = (assignments || []).filter((assignment) => !assignment.contactDisplacedBy?.length);
+  const rosterOnly = (assignments || []).filter((assignment) => assignment.contactDisplacedBy?.length);
+  const content = facilityOverviewIsDdhPeriod(active)
+    ? renderFacilityOverviewDdhOnShiftPeriod(active, options)
+    : facilityOverviewIsMmcNightPeriod(active, options)
+      ? renderFacilityOverviewMmcNightPeriod(active, options)
+      : renderFacilityOverviewGenericOnShiftPeriod(active, options);
+  return `${content}${rosterOnly.length ? renderFacilityOverviewRosterOnlyCard(rosterOnly, options) : ""}`;
 }
 
 function facilityOverviewIsDdhPeriod(assignments) {
@@ -10392,7 +10397,7 @@ function renderFacilityOverviewDdhNightPeriod(assignments, options = {}) {
 }
 
 function renderFacilityOverviewMmcNightPeriod(assignments, options = {}) {
-  const isTeam = (assignment, labels) => labels.includes(String(assignment.team || "").trim().toLowerCase());
+  const isTeam = (assignment, labels) => labels.includes(String(facilityOverviewEffectiveTeam(assignment) || "").trim().toLowerCase());
   const hub = (assignments || []).filter((assignment) => isTeam(assignment, ["hub", "night hub"]));
   const ssu = (assignments || []).filter((assignment) => isTeam(assignment, ["ssu", "night ssu"]));
   const assignedToDedicatedTeam = new Set([...hub, ...ssu]);
@@ -10414,7 +10419,7 @@ function renderFacilityOverviewGenericOnShiftPeriod(assignments, options = {}) {
   const streamed = new Map();
   const unstreamed = new Map();
   for (const assignment of assignments || []) {
-    const team = String(assignment.team || "").trim();
+    const team = facilityOverviewEffectiveTeam(assignment);
     const isStreamed = facilityOverviewIsMeaningfulStream(team, assignment.source || assignment.person?.sourceType);
     const target = isStreamed ? streamed : unstreamed;
     const key = isStreamed ? team : String(assignment.person?.seniority || assignment.role || "Unknown");
@@ -10428,6 +10433,17 @@ function renderFacilityOverviewGenericOnShiftPeriod(assignments, options = {}) {
     .sort(([left], [right]) => compareFacilityOverviewSeniorities(left, right))
     .map(([seniority, items]) => renderFacilityOverviewUnstreamedCard(seniority, items, options));
   return [...streamCards, ...seniorityCards].join("");
+}
+
+function facilityOverviewEffectiveTeam(assignment) {
+  return String(assignment?.contactAllocation?.streamLabel || assignment?.team || "").trim();
+}
+
+function renderFacilityOverviewRosterOnlyCard(assignments, options = {}) {
+  return `<article class="issue-card facility-overview-staff-card facility-overview-roster-only-card">
+    <strong>Roster only</strong>
+    ${renderFacilityOverviewOnShiftNames(assignments, { ...options, showContactDiscrepancy: true })}
+  </article>`;
 }
 
 function facilityOverviewIsMeaningfulStream(team, source = "") {
@@ -10464,8 +10480,11 @@ function renderFacilityOverviewOnShiftNames(assignments, options = {}) {
     byPerson.set(person.doctorKey, existing);
   }
   return `<div class="facility-overview-on-shift-names">${[...byPerson.values()].sort((left, right) => compareFacilityOverviewPeople(left.person, right.person)).map(({ person, specialTimes }) => {
-    const allocation = (assignments || []).find((assignment) => assignment.person?.doctorKey === person.doctorKey)?.contactAllocation;
-    return `<div>${renderFacilityOverviewStaffName(person, { ...options, seniority: person.seniority })}${renderFacilityOverviewOnShiftSeniority(person, options)}${allocation ? renderFacilityOverviewContactAllocation(allocation) : ""}${options.showSpecialTimes !== false && specialTimes.size ? `<small>${escapeHtml([...specialTimes].join(" · "))}</small>` : ""}</div>`;
+    const sourceAssignment = (assignments || []).find((assignment) => assignment.person?.doctorKey === person.doctorKey);
+    const allocation = sourceAssignment?.contactAllocation;
+    const discrepancy = options.showContactDiscrepancy && sourceAssignment?.contactDisplacedBy?.length
+      ? `<small class="facility-overview-contact-discrepancy">Not on live allocation</small>` : "";
+    return `<div>${renderFacilityOverviewStaffName(person, { ...options, seniority: person.seniority })}${renderFacilityOverviewOnShiftSeniority(person, options)}${allocation ? renderFacilityOverviewContactAllocation(allocation) : ""}${discrepancy}${options.showSpecialTimes !== false && specialTimes.size ? `<small>${escapeHtml([...specialTimes].join(" · "))}</small>` : ""}</div>`;
   }).join("")}</div>`;
 }
 
@@ -10485,7 +10504,7 @@ function renderFacilityOverviewContactListStatus(matches) {
   const unresolved = matches.unmatched || [];
   const review = unresolved.length
     ? isViewingCreatorAccount()
-      ? `<details class="facility-overview-contact-review"><summary>${unresolved.length} allocation${unresolved.length === 1 ? "" : "s"} need review</summary>${unresolved.map((contact) => `<div>${escapeHtml(contact.role)} · ${escapeHtml(contact.name)}${contact.phone ? ` · ${escapeHtml(contact.phone)}` : ""}</div>`).join("")}</details>`
+      ? `<details class="facility-overview-contact-review"><summary>${unresolved.length} allocation${unresolved.length === 1 ? "" : "s"} need review</summary>${unresolved.map((contact) => `<div>${escapeHtml(contact.shift)} · ${escapeHtml(contact.role)} · ${escapeHtml(contact.name)}${contact.phone ? ` · ${escapeHtml(contact.phone)}` : ""}${contact.reviewReason ? ` · ${escapeHtml(contact.reviewReason)}` : ""}</div>`).join("")}</details>`
       : `<span> · ${unresolved.length} allocation${unresolved.length === 1 ? "" : "s"} need review</span>`
     : "";
   return `<div class="facility-overview-contact-status"><span>Live contact allocations for ${escapeHtml(contactList.sourceDate)}${freshness} · ${matches.matchedCount} matched</span>${review}</div>`;

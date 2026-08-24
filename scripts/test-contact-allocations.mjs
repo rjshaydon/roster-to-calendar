@@ -44,6 +44,57 @@ const ambiguous = attachContactAllocations([
 ], [extract.contacts[1]]);
 assert.equal(ambiguous.matchedCount, 0, "an ambiguous short name must not receive a phone allocation");
 
+const dailyAllocation = attachContactAllocations([
+  assignment("MMC", "AM", "Amber", "Tara KAMATH", "SMS"),
+  assignment("MMC", "AM", "Float", "Tara JOHANSSON", "SMS"),
+  assignment("MMC", "AM", "SSU", "Qingyang CHEN", "SMS"),
+  assignment("MMC", "AM", "Junior Registrar", "Sophie HE", "Junior Registrar"),
+  assignment("MMC", "AM", "Junior Registrar", "Yee Ann SOO", "Junior Registrar"),
+  assignment("MMC", "AM", "Clinic", "Stephen GILDFIND", "SMS"),
+  assignment("MMC", "AM", "HMO", "Arnav MEHTA", "HMO"),
+], [
+  contact("AMBER (SMS/SR) 25168", "Tara K", "25168"),
+  contact("CLINIC (SMS/SR) 25138", "Tara", "25138"),
+  contact("SSU (SMS/SR) 25143", "Qing", "25143"),
+  contact("SEPSIS DR MUST CARRY SEPSIS #25192", "Sophie", "25192"),
+  contact("Dr", "Ann", "25179"),
+  contact("RESUS (SMS/SR) 25140", "Steve G", "25140"),
+  contact("Dr", "Ama", "25721"),
+]);
+assert.equal(dailyAllocation.matchedCount, 6, "safe live names should match despite a changed roster stream");
+assert.equal(allocationFor(dailyAllocation, "Tara KAMATH").phone, "25168");
+assert.equal(allocationFor(dailyAllocation, "Tara KAMATH").streamLabel, "Amber");
+assert.equal(allocationFor(dailyAllocation, "Tara JOHANSSON").phone, "25138");
+assert.equal(allocationFor(dailyAllocation, "Tara JOHANSSON").streamLabel, "Clinic");
+assert.equal(allocationFor(dailyAllocation, "Tara JOHANSSON").isStreamOverride, true, "a confirmed contact allocation should override Float");
+assert.equal(allocationFor(dailyAllocation, "Qingyang CHEN").matchMethod, "first-name-prefix");
+assert.equal(allocationFor(dailyAllocation, "Sophie HE").streamLabel, "Sepsis");
+assert.equal(allocationFor(dailyAllocation, "Yee Ann SOO").matchMethod, "internal-given-name");
+assert.equal(allocationFor(dailyAllocation, "Stephen GILDFIND").matchMethod, "alias-surname-initial");
+assert.equal(dailyAllocation.assignments.find((entry) => entry.person.displayName === "Arnav MEHTA").contactAllocation, undefined, "Ama must never be guessed as Arnav");
+assert.equal(dailyAllocation.unmatched.length, 1);
+assert.equal(dailyAllocation.unmatched[0].name, "Ama");
+assert.equal(dailyAllocation.unmatched[0].reviewReason, "No safe name match");
+
+const rosterReplacement = attachContactAllocations([
+  assignment("MMC", "AM", "Float", "Tara JOHANSSON", "SMS"),
+  assignment("MMC", "AM", "Clinic", "Stephen GILDFIND", "SMS"),
+], [contact("CLINIC (SMS/SR) 25138", "Tara", "25138")]);
+assert.equal(allocationFor(rosterReplacement, "Tara JOHANSSON").streamLabel, "Clinic");
+assert.ok(rosterReplacement.assignments.find((entry) => entry.person.displayName === "Stephen GILDFIND").contactDisplacedBy?.length,
+  "the rostered Clinic doctor should be marked roster-only when a confirmed live allocation replaces them");
+
+const duplicateQing = attachContactAllocations([
+  assignment("MMC", "AM", "SSU", "Qingyang CHEN", "SMS"),
+  assignment("MMC", "AM", "SSU", "Qing LI", "SMS"),
+], [contact("SSU (SMS/SR) 25143", "Qing", "25143")]);
+assert.equal(duplicateQing.matchedCount, 0, "a short name remains unresolved where two roster candidates are equally safe");
+
+const crossPeriod = attachContactAllocations([
+  assignment("MMC", "PM", "SSU", "Qingyang CHEN", "SMS"),
+], [contact("SSU (SMS/SR) 25143", "Qing", "25143")]);
+assert.equal(crossPeriod.matchedCount, 0, "a contact allocation cannot cross periods");
+
 console.log("Contact allocation matching fixtures passed.");
 
 function assignment(source, period, team, displayName, seniority) {
@@ -55,4 +106,14 @@ function assignment(source, period, team, displayName, seniority) {
     person: { doctorKey: displayName.toLowerCase().replaceAll(" ", "-"), displayName, sourceType: source.toLowerCase(), seniority },
     event: { title: `${source}: ${team} ${period}` },
   };
+}
+
+function contact(role, name, phone) {
+  return { area: "Adult Emergency", shift: "AM", role, name, phone, isPopulated: true };
+}
+
+function allocationFor(matches, displayName) {
+  const allocation = matches.assignments.find((entry) => entry.person.displayName === displayName)?.contactAllocation;
+  assert.ok(allocation, `${displayName} should have a contact allocation`);
+  return allocation;
 }
