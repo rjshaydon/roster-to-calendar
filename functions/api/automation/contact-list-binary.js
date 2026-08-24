@@ -1,4 +1,7 @@
 import { ensureCalendarSchema, hasCalendarDb } from "../../_lib/d1-calendar.js";
+import { sha256Hex } from "../../_lib/automation-import.js";
+import { extractMmcDoctorContactsFromWorkbook } from "../../_lib/contact-list-workbook.js";
+import { normaliseContactListExtract } from "../../../public/static/contact-allocations.js";
 
 const SOURCE_ID = "mmc-shift-allocations";
 const EXPECTED_FILE_NAME = "shift allocations.xlsx";
@@ -115,38 +118,71 @@ async function storeBase64Workbook(context, metadata) {
       return Response.json({ error: "Contact-list workbook is missing or too large." }, { status: 413 });
     }
 
+    const parsed = await extractMmcDoctorContactsFromWorkbook(new Uint8Array(await workbook.arrayBuffer()), {
+      providerModifiedAt: metadata.providerModifiedAt,
+    });
+    const extract = normaliseContactListExtract(parsed);
+    if (!extract) throw new Error("Doctor contacts could not be extracted from the workbook.");
+    const bytes = new TextEncoder().encode(JSON.stringify(extract));
+    const contentHash = await sha256Hex(bytes);
+
     const db = context.env.ROSTER_DB;
     await ensureCalendarSchema(db);
-    if (metadata.providerVersion) {
-      const matchingVersion = await db.prepare(`
-        SELECT id FROM contact_list_files
-        WHERE source_id = ? AND provider_version = ? AND LOWER(name) = LOWER(?)
-        ORDER BY received_at DESC LIMIT 1
-      `).bind(SOURCE_ID, metadata.providerVersion, metadata.fileName).first();
-      if (matchingVersion?.id) {
-        return Response.json({ ok: true, status: "unchanged", sourceId: SOURCE_ID, fileId: String(matchingVersion.id) });
-      }
+    const existing = await db.prepare(`
+      SELECT id, object_key, content_hash
+      FROM contact_list_files
+      WHERE source_id = ?
+      ORDER BY received_at DESC
+    `).bind(SOURCE_ID).all();
+    const matchingExtract = existing.results.find((entry) => String(entry.content_hash || "") === contentHash);
+    if (matchingExtract?.id) {
+      await deleteOtherVersions(context, existing.results, String(matchingExtract.id));
+      return Response.json({
+        ok: true,
+        status: "unchanged",
+        sourceId: SOURCE_ID,
+        sourceDate: extract.sourceDate,
+        contactCount: extract.contacts.filter((contact) => contact.isPopulated).length,
+        fileId: String(matchingExtract.id),
+      });
     }
 
-    const nonce = crypto.randomUUID();
-    const fileId = `contact:${SOURCE_ID}:${nonce}`;
-    const objectKey = `contact-lists/${SOURCE_ID}/${nonce}`;
+    const fileId = `contact:${SOURCE_ID}:${contentHash.slice(0, 24)}`;
+    const objectKey = `contact-lists/${SOURCE_ID}/${contentHash}.json`;
     const now = new Date().toISOString();
-    const contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-    await context.env.ROSTER_FILES.put(objectKey, workbook, { httpMetadata: { contentType } });
+    const contentType = "application/json; charset=utf-8";
+    await context.env.ROSTER_FILES.put(objectKey, bytes, { httpMetadata: { contentType } });
     await db.prepare(`
       INSERT INTO contact_list_files (
         id, source_id, name, size, last_modified, object_key, content_type,
         content_hash, provider_version, provider_modified_at, received_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
-      fileId, SOURCE_ID, metadata.fileName, workbook.size, Date.parse(metadata.providerModifiedAt) || Date.now(),
-      objectKey, contentType, `base64:${nonce}`, metadata.providerVersion, metadata.providerModifiedAt, now,
+      fileId, SOURCE_ID, "SHIFT ALLOCATIONS doctors.json", bytes.byteLength,
+      Date.parse(metadata.providerModifiedAt) || Date.now(), objectKey, contentType,
+      contentHash, metadata.providerVersion, metadata.providerModifiedAt, now,
     ).run();
-    return Response.json({ ok: true, status: "stored", sourceId: SOURCE_ID, fileId, receivedAt: now }, { status: 202 });
+    await deleteOtherVersions(context, existing.results, "");
+    return Response.json({
+      ok: true,
+      status: "stored",
+      sourceId: SOURCE_ID,
+      sourceDate: extract.sourceDate,
+      contactCount: extract.contacts.filter((contact) => contact.isPopulated).length,
+      fileId,
+      receivedAt: now,
+    }, { status: 202 });
   } catch (error) {
     console.error("Contact-list Base64 ingestion failed", error);
     return Response.json({ error: "Contact-list workbook could not be stored." }, { status: 422 });
+  }
+}
+
+async function deleteOtherVersions(context, entries, keepId) {
+  for (const entry of entries) {
+    if (keepId && String(entry.id) === keepId) continue;
+    if (entry.object_key) await context.env.ROSTER_FILES.delete(String(entry.object_key));
+    await context.env.ROSTER_DB.prepare("DELETE FROM contact_list_files WHERE id = ?").bind(String(entry.id)).run();
   }
 }
 
