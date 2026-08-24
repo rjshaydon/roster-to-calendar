@@ -1,17 +1,15 @@
 import { ensureCalendarSchema, hasCalendarDb } from "../../_lib/d1-calendar.js";
 import { sha256Hex } from "../../_lib/automation-import.js";
+import { extractMmcDoctorContactsFromWorkbook } from "../../_lib/contact-list-workbook.js";
+import { normaliseContactListExtract } from "../../../public/static/contact-allocations.js";
 
 const SOURCE_ID = "mmc-shift-allocations";
 const EXPECTED_FILE_NAME = "shift allocations.xlsx";
-// SHIFT ALLOCATIONS.xlsx is currently about 28 MB. Power Automate sends its
-// contents as Base64, so leave practical room for future revisions while
-// retaining a bounded upload size at the ingress.
+const OUTPUT_FILE_NAME = "SHIFT ALLOCATIONS doctors.json";
 const MAX_CONTACT_LIST_BYTES = 50 * 1024 * 1024;
 
-// This endpoint is intentionally separate from roster ingestion.  It accepts
-// the approved Power Automate delivery of the MMC shift-allocation workbook,
-// but does not parse or expose its contact data until a dedicated parser and
-// access-controlled consumer are added.
+// Accept the existing Power Automate full-workbook delivery, extract only the
+// doctor rows from SHIFT ALLOCATIONS, then retain only the small JSON result.
 export async function onRequestPost(context) {
   if (!hasValidAutomationToken(context.request, context.env.ROSTER_AUTOMATION_TOKEN)) {
     return Response.json({ error: "Unauthorized." }, { status: 401 });
@@ -31,48 +29,76 @@ export async function onRequestPost(context) {
       return Response.json({ error: "Contact-list workbook is missing or too large." }, { status: 413 });
     }
 
+    const workbookBytes = new Uint8Array(await upload.file.arrayBuffer());
+    const parsed = await extractMmcDoctorContactsFromWorkbook(workbookBytes, {
+      providerModifiedAt: upload.providerModifiedAt,
+    });
+    const extract = normaliseContactListExtract(parsed);
+    if (!extract) return Response.json({ error: "Doctor contacts could not be extracted from the workbook." }, { status: 422 });
+    const bytes = new TextEncoder().encode(JSON.stringify(extract));
+    const contentHash = await sha256Hex(bytes);
+
     const db = context.env.ROSTER_DB;
     await ensureCalendarSchema(db);
+    const existing = await db.prepare(`
+      SELECT id, object_key, content_hash, provider_version, name
+      FROM contact_list_files
+      WHERE source_id = ?
+      ORDER BY received_at DESC
+    `).bind(SOURCE_ID).all();
+    const match = existing.results.find((entry) => String(entry.content_hash || "") === contentHash
+      || (upload.providerVersion && String(entry.provider_version || "") === upload.providerVersion
+        && String(entry.name || "").toLowerCase() === OUTPUT_FILE_NAME.toLowerCase()));
+    if (match?.id) {
+      await deleteOtherVersions(context, existing.results, String(match.id));
+      return Response.json({
+        ok: true,
+        status: "unchanged",
+        sourceId: SOURCE_ID,
+        sourceDate: extract.sourceDate,
+        contactCount: extract.contacts.filter((contact) => contact.isPopulated).length,
+        fileId: String(match.id),
+      });
+    }
+
     const now = new Date().toISOString();
-    const matchingVersion = upload.providerVersion
-      ? await db.prepare(`
-        SELECT id FROM contact_list_files
-        WHERE source_id = ? AND provider_version = ? AND LOWER(name) = LOWER(?)
-        ORDER BY received_at DESC LIMIT 1
-      `).bind(SOURCE_ID, upload.providerVersion, upload.file.name).first()
-      : null;
-    if (matchingVersion?.id) {
-      return Response.json({ ok: true, status: "unchanged", sourceId: SOURCE_ID, fileId: String(matchingVersion.id) });
-    }
-
-    const bytes = new Uint8Array(await upload.file.arrayBuffer());
-    const contentHash = await sha256Hex(bytes);
-    const matchingHash = await db.prepare(`
-      SELECT id FROM contact_list_files
-      WHERE source_id = ? AND content_hash = ? AND LOWER(name) = LOWER(?)
-      ORDER BY received_at DESC LIMIT 1
-    `).bind(SOURCE_ID, contentHash, upload.file.name).first();
-    if (matchingHash?.id) {
-      return Response.json({ ok: true, status: "unchanged", sourceId: SOURCE_ID, fileId: String(matchingHash.id) });
-    }
-
     const fileId = `contact:${SOURCE_ID}:${contentHash.slice(0, 24)}`;
-    const objectKey = `contact-lists/${SOURCE_ID}/${contentHash}`;
-    const contentType = upload.file.type || "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-    await context.env.ROSTER_FILES.put(objectKey, bytes, { httpMetadata: { contentType } });
+    const objectKey = `contact-lists/${SOURCE_ID}/${contentHash}.json`;
+    await context.env.ROSTER_FILES.put(objectKey, bytes, {
+      httpMetadata: { contentType: "application/json; charset=utf-8" },
+    });
     await db.prepare(`
       INSERT INTO contact_list_files (
         id, source_id, name, size, last_modified, object_key, content_type,
         content_hash, provider_version, provider_modified_at, received_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
-      fileId, SOURCE_ID, upload.file.name, upload.file.size, upload.file.lastModified,
-      objectKey, contentType, contentHash, upload.providerVersion, upload.providerModifiedAt, now,
+      fileId, SOURCE_ID, OUTPUT_FILE_NAME, bytes.byteLength,
+      Date.parse(upload.providerModifiedAt) || upload.file.lastModified || Date.now(),
+      objectKey, "application/json; charset=utf-8", contentHash,
+      upload.providerVersion, upload.providerModifiedAt, now,
     ).run();
-    return Response.json({ ok: true, status: "stored", sourceId: SOURCE_ID, fileId, receivedAt: now }, { status: 202 });
+    await deleteOtherVersions(context, existing.results, "");
+    return Response.json({
+      ok: true,
+      status: "stored",
+      sourceId: SOURCE_ID,
+      sourceDate: extract.sourceDate,
+      contactCount: extract.contacts.filter((contact) => contact.isPopulated).length,
+      fileId,
+      receivedAt: now,
+    }, { status: 202 });
   } catch (error) {
     console.error("Contact-list ingestion failed", error);
-    return Response.json({ error: "Contact-list workbook could not be stored." }, { status: 422 });
+    return Response.json({ error: "Contact-list workbook could not be processed." }, { status: 422 });
+  }
+}
+
+async function deleteOtherVersions(context, entries, keepId) {
+  for (const entry of entries) {
+    if (keepId && String(entry.id) === keepId) continue;
+    if (entry.object_key) await context.env.ROSTER_FILES.delete(String(entry.object_key));
+    await context.env.ROSTER_DB.prepare("DELETE FROM contact_list_files WHERE id = ?").bind(String(entry.id)).run();
   }
 }
 
