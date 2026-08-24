@@ -3,7 +3,10 @@ import { sha256Hex } from "../../_lib/automation-import.js";
 
 const SOURCE_ID = "mmc-shift-allocations";
 const EXPECTED_FILE_NAME = "shift allocations.xlsx";
-const MAX_CONTACT_LIST_BYTES = 15 * 1024 * 1024;
+// SHIFT ALLOCATIONS.xlsx is currently about 28 MB. Power Automate sends its
+// contents as Base64, so leave practical room for future revisions while
+// retaining a bounded upload size at the ingress.
+const MAX_CONTACT_LIST_BYTES = 50 * 1024 * 1024;
 
 // This endpoint is intentionally separate from roster ingestion.  It accepts
 // the approved Power Automate delivery of the MMC shift-allocation workbook,
