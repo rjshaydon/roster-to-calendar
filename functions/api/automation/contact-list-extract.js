@@ -29,6 +29,10 @@ export async function onRequestPost(context) {
       return Response.json({ error: "Contact-list extract is too large." }, { status: 413 });
     }
     let payload = await context.request.json();
+    if (String(payload?.sourceId || "") === "mmc-shift-allocations") {
+      const sourceDate = automationSourceDate(payload?.sourceDate);
+      if (sourceDate) payload = { ...payload, sourceDate };
+    }
     if (String(payload?.sourceId || "") === DDH_CONTACT_LIST_SOURCE_ID) {
       const operationalDate = contactOperationalDate(new Date(String(payload?.providerModifiedAt || "")));
       if (operationalDate) payload = { ...payload, sourceDate: operationalDate };
@@ -99,6 +103,19 @@ export async function onRequestPost(context) {
     console.error("Contact-list extract ingestion failed", error);
     return Response.json({ error: "Contact-list extract could not be stored." }, { status: 422 });
   }
+}
+
+export function automationSourceDate(value) {
+  const input = String(value || "").trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(input)) return input;
+  const match = input.match(/(\d{1,2})(?:st|nd|rd|th)?\s+([a-z]+)\s+(\d{4})/i);
+  if (!match) return "";
+  const months = {
+    january: "01", february: "02", march: "03", april: "04", may: "05", june: "06",
+    july: "07", august: "08", september: "09", october: "10", november: "11", december: "12",
+  };
+  const month = months[match[2].toLowerCase()];
+  return month ? `${match[3]}-${month}-${match[1].padStart(2, "0")}` : "";
 }
 
 async function pruneStoredContactExtracts(context, entries, { keepId = "", replaceDate = "" } = {}) {

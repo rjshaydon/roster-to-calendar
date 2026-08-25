@@ -3,6 +3,10 @@ import { readFile } from "node:fs/promises";
 
 import { onRequestPost as rejectBinaryContactUpload } from "../functions/api/automation/contact-list-binary.js";
 import { onRequestPost as rejectLegacyContactUpload } from "../functions/api/automation/contact-list.js";
+import { automationSourceDate } from "../functions/api/automation/contact-list-extract.js";
+
+assert.equal(automationSourceDate("Tuesday 25th AUGUST 2026"), "2026-08-25");
+assert.equal(automationSourceDate("2026-08-25"), "2026-08-25");
 
 const authorized = await rejectBinaryContactUpload({
   request: new Request("https://example.test/api/automation/contact-list-binary", {
@@ -38,6 +42,8 @@ assert.doesNotMatch(contactExtractSource, /WHERE source_id = \? AND provider_ver
   "a repeated provider version must not hide changed JSON contacts");
 assert.match(contactExtractSource, /const contentHash = await sha256Hex\(bytes\)[\s\S]*matchingHash/,
   "MMC JSON ingestion should deduplicate only identical extracts");
+assert.match(contactExtractSource, /automationSourceDate[\s\S]*st\|nd\|rd\|th/,
+  "the JSON boundary should normalize the date label emitted by the existing MMC Office Script");
 assert.match(contactExtractSource, /pruneStoredContactExtracts[\s\S]*contactExtractHasExpired/,
   "the previous operational day's JSON should be retained until its 09:00 expiry");
 assert.match(stateSource, /action === "queryFacilityOverviewContactList"[\s\S]*loadLiveContactListForOnShift/,
