@@ -73,5 +73,8 @@ assert.match(appSource, /contactReviewOpen: false[\s\S]*addEventListener\("toggl
 assert.match(appSource.match(/function closeFacilityOverview[\s\S]*?function renderFacilityOverview/)?.[0] || "", /collapseFacilityOverviewContactReview\(\)/, "returning to the calendar should collapse contact allocations needing review");
 assert.match(appSource.match(/async function loadFacilityOverviewOnShift[\s\S]*?function renderFacilityOverviewOnShiftResults/)?.[0] || "", /collapseFacilityOverviewContactReview\(\)/, "entering or reloading On shift should begin with contact review collapsed");
 assert.match(appSource, /window\.addEventListener\("pagehide", \(\) => collapseFacilityOverviewContactReview\(\)\)/, "closing or navigating away from the app should reset contact review disclosure state");
+assert.match(appSource, /serviceContacts:[\s\S]*ED Care-Co[\s\S]*GAP \/ Geriatric AH[\s\S]*Geriatrician[\s\S]*CART clinician/, "the requested service contacts should be carried into their period renderers");
+assert.match(appSource, /renderFacilityOverviewStandaloneServiceCard/, "unrostered explicit service contacts should render in dedicated cards");
+assert.match(appSource.match(/async function loadCloudCalendarEvents[\s\S]*?function cloudCalendarEventRange/)?.[0] || "", /response\.status === 503[\s\S]*allowInlineBuild: false/, "a resource-limit calendar response should retry once without synchronous rebuilding");
 
 console.log("Facility overview access tests passed.");

@@ -195,8 +195,12 @@ assert.equal(ordinaryEmptyPhone.matchedCount, 0, "ordinary fixed phones must rem
 
 const unrosteredFixedService = attachContactAllocations([], [
   { area: "Adult Emergency", shift: "AM", role: "GERIATRICIAN", name: "", phone: "25768", isPopulated: false },
+  { area: "Adult Emergency", shift: "AM", role: "CART Clinician", name: "Ben G", phone: "0417 489 358", isPopulated: true },
+  { area: "Dandenong Emergency", shift: "AM", role: "ED Care-Co", name: "", phone: "49754", isPopulated: false },
 ]);
 assert.equal(unrosteredFixedService.unmatched.length, 0, "an unrostered fixed service phone should not create a review item");
+assert.deepEqual(unrosteredFixedService.serviceContacts.map((entry) => entry.role), ["GERIATRICIAN", "CART Clinician", "ED Care-Co"],
+  "explicit services should remain available for dedicated cards when they are not doctor-roster allocations");
 
 console.log("Contact allocation matching fixtures passed.");
 

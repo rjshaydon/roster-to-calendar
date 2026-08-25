@@ -19,7 +19,7 @@ import {
   setParserExtensions,
   sourceNames,
 } from "./roster.js";
-import { attachContactAllocations } from "./contact-allocations.js";
+import { attachContactAllocations, contactStream } from "./contact-allocations.js";
 
 const form = document.querySelector("#roster-form");
 const appShell = document.querySelector("#appShell");
@@ -10400,7 +10400,7 @@ function renderFacilityOverviewOnShiftResults(rows) {
     periods.get(assignment.period).push(assignment);
   }
   return `${renderFacilityOverviewContactListStatus(contactMatches, contactMatches.assignments)}${["AM", "PM", "Night"].filter((period) => periods.has(period)).map((period) => `
-    <section class="facility-overview-period"><h3>${period}</h3><div class="facility-overview-staff-grid">${renderFacilityOverviewOnShiftPeriod(periods.get(period), { canUseStaffActions, termStart, period })}</div></section>
+    <section class="facility-overview-period"><h3>${period}</h3><div class="facility-overview-staff-grid">${renderFacilityOverviewOnShiftPeriod(periods.get(period), { canUseStaffActions, termStart, period, serviceContacts: (contactMatches.serviceContacts || []).filter((contact) => contact.shift === period) })}</div></section>
   `).join("")}`;
 }
 
@@ -10457,10 +10457,12 @@ function renderFacilityOverviewDdhOnShiftPeriod(assignments, options = {}) {
     ].join("");
   const remaining = workingAssignments.filter((assignment) => !handled.has(assignment));
   const serviceCards = [
-    ["ED Care-Co", careCo],
-    ["GAP / Geriatric AH", gap],
-  ].filter(([, items]) => items.length)
-    .map(([label, items]) => renderFacilityOverviewStreamCard(label, items, options))
+    ["ED Care-Co", "care-co", careCo],
+    ["GAP / Geriatric AH", "gap", gap],
+  ].filter(([, key, items]) => items.length || facilityOverviewStandaloneServiceContacts(options, key).length)
+    .map(([label, key, items]) => items.length
+      ? renderFacilityOverviewStreamCard(label, items, options)
+      : renderFacilityOverviewStandaloneServiceCard(label, facilityOverviewStandaloneServiceContacts(options, key)))
     .join("");
   return `${mainRow ? `<div class="facility-overview-ddh-row facility-overview-ddh-main-row">${mainRow}</div>` : ""}
     ${supportRow ? `<div class="facility-overview-ddh-row facility-overview-ddh-support-row">${supportRow}</div>` : ""}
@@ -10494,10 +10496,12 @@ function renderFacilityOverviewMmcOnShiftPeriod(assignments, options = {}) {
     ? renderFacilityOverviewMmcNightPeriod(regular, options)
     : renderFacilityOverviewGenericOnShiftPeriod(regular, options);
   const serviceCards = [
-    ["Geriatrician", geriatrician],
-    ["CART clinician", cart],
-  ].filter(([, items]) => items.length)
-    .map(([label, items]) => renderFacilityOverviewStreamCard(label, items, options))
+    ["Geriatrician", "geriatrics", geriatrician],
+    ["CART clinician", "cart", cart],
+  ].filter(([, key, items]) => items.length || facilityOverviewStandaloneServiceContacts(options, key).length)
+    .map(([label, key, items]) => items.length
+      ? renderFacilityOverviewStreamCard(label, items, options)
+      : renderFacilityOverviewStandaloneServiceCard(label, facilityOverviewStandaloneServiceContacts(options, key)))
     .join("");
   return `${regularCards}${serviceCards}${renderFacilityOverviewClinicalSupportCard(clinicalSupport, options)}`;
 }
@@ -10592,6 +10596,17 @@ function renderFacilityOverviewStreamCard(stream, assignments, options = {}) {
   return `<article class="issue-card facility-overview-staff-card facility-overview-stream-card${options.cardClass ? ` ${options.cardClass}` : ""}">
     <strong class="facility-overview-stream-card-title">${escapeHtml(stream)}</strong>
     ${renderFacilityOverviewOnShiftNames(assignments, options)}
+  </article>`;
+}
+
+function facilityOverviewStandaloneServiceContacts(options, streamKey) {
+  return (options?.serviceContacts || []).filter((contact) => contactStream(contact?.role).key === streamKey);
+}
+
+function renderFacilityOverviewStandaloneServiceCard(label, contacts) {
+  return `<article class="issue-card facility-overview-staff-card facility-overview-stream-card">
+    <strong class="facility-overview-stream-card-title">${escapeHtml(label)}</strong>
+    <div class="facility-overview-on-shift-names">${(contacts || []).map((contact) => `<div class="facility-overview-on-shift-person"><div class="facility-overview-on-shift-identity">${contact.name ? `<span class="facility-overview-staff-name">${escapeHtml(contact.name)}</span>` : ""}</div><div class="facility-overview-on-shift-details"><span class="facility-overview-contact-number" title="Service telephone number">${escapeHtml(contact.phone)}</span></div></div>`).join("")}</div>
   </article>`;
 }
 
@@ -16826,21 +16841,32 @@ async function loadCloudCalendarEvents(options = {}) {
     || "",
   );
   const range = cloudCalendarEventRange();
-  const response = await fetch("/api/state", {
+  const requestBody = {
+    action: "loadCalendarEvents",
+    email: requestEmail,
+    password: requestPassword,
+    targetEmail: adminTargetEmail,
+    doctorKey: preferredDoctorKey,
+    startDate: range.startDate,
+    endDate: range.endDate,
+    cachedRevision: options.cachedRevision || "",
+    allowInlineBuild: options.allowInlineBuild !== false,
+  };
+  let response = await fetch("/api/state", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      action: "loadCalendarEvents",
-      email: requestEmail,
-      password: requestPassword,
-      targetEmail: adminTargetEmail,
-      doctorKey: preferredDoctorKey,
-      startDate: range.startDate,
-      endDate: range.endDate,
-      cachedRevision: options.cachedRevision || "",
-      allowInlineBuild: options.allowInlineBuild !== false,
-    }),
+    body: JSON.stringify(requestBody),
   });
+  // A Worker resource-limit response is normally transient. Retry only that
+  // failure and forbid an inline rebuild so the recovery request remains a
+  // cheap registry/R2 read and cannot repeat the expensive work.
+  if (response.status === 503) {
+    response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...requestBody, allowInlineBuild: false }),
+    });
+  }
   const data = await readJsonResponse(response, "Calendar load failed.");
   if (!calendarTransitionStillCurrent(options.transition)) return false;
   if (activeCalendarTransitionKey() !== expectedKey) return false;

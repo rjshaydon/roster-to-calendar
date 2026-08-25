@@ -218,14 +218,19 @@ export function attachContactAllocations(assignments = [], contacts = [], resolu
   }
 
   const matchedContacts = matchedContactsForAssignments(enriched);
+  const serviceContacts = available.filter((contact) => !matchedContacts.has(contact.contactKey)
+    && isStandaloneServiceContact(contact));
+  const standaloneServiceKeys = new Set(serviceContacts.map((contact) => contact.contactKey));
   return {
     assignments: enriched,
     matchedCount: enriched.filter((assignment) => assignment.contactAllocation).length,
     unmatched: available.filter((contact) => !matchedContacts.has(contact.contactKey)
+      && !standaloneServiceKeys.has(contact.contactKey)
       && (!isRoleOnlyServiceContact(contact) || unmatchedReasons.get(contact.contactKey) === "Ambiguous service allocation")).map((contact) => ({
       ...contact,
       reviewReason: unmatchedReasons.get(contact.contactKey) || "Not matched",
     })),
+    serviceContacts,
   };
 }
 
@@ -251,6 +256,15 @@ function isRoleOnlyServiceContact(contact) {
   const key = contactStreamKey(contact?.role);
   if (contact?.area === "Adult Emergency") return ["sepsis", "geriatrics", "cart"].includes(key);
   if (contact?.area === "Dandenong Emergency") return ["care-co", "gap", "clinical-support-onsite"].includes(key);
+  return false;
+}
+
+function isStandaloneServiceContact(contact) {
+  const key = contactStreamKey(contact?.role);
+  const phoneDigits = String(contact?.phone || "").replace(/\D/g, "");
+  if (phoneDigits.length < 5 || phoneDigits.length > 10) return false;
+  if (contact?.area === "Adult Emergency") return ["geriatrics", "cart"].includes(key);
+  if (contact?.area === "Dandenong Emergency") return ["care-co", "gap"].includes(key);
   return false;
 }
 
