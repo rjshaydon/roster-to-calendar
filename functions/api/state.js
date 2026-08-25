@@ -1,6 +1,6 @@
 import { applyEventOverrides, customEventsToEvents, defaultSettings, inspectImportRecord, isIgnoredRosterIssueValue, normalizeRosterName } from "../_lib/roster.js";
 import { AUTOMATION_SOURCES } from "../_lib/automation-import.js";
-import { MMC_CONTACT_LIST_SOURCE_ID, contactAreaForSource, contactExtractStatus, normaliseContactListExtract } from "../../public/static/contact-allocations.js";
+import { DDH_CONTACT_LIST_SOURCE_ID, MMC_CONTACT_LIST_SOURCE_ID, contactAreaForSource, contactExtractStatus, normaliseContactListExtract } from "../../public/static/contact-allocations.js";
 import { requestQueuedRosterProcessing } from "../_lib/automation-dispatch.js";
 import { extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentExceptions, findmyshiftLastModified, findmyshiftReportDiagnostics, findmyshiftShiftReport } from "../_lib/findmyshift.js";
 import {
@@ -1952,13 +1952,21 @@ export async function onRequestPost(context) {
 async function loadLiveContactListForOnShift(context, { date, facilityKeys = [] } = {}) {
   if (!context.env.ROSTER_DB?.prepare || !context.env.ROSTER_FILES?.get) return { status: "unavailable" };
   try {
+    const sourceIds = new Set(facilityKeys.map((facility) => {
+      const code = String(facility || "").trim().toUpperCase();
+      if (code === "DDH") return DDH_CONTACT_LIST_SOURCE_ID;
+      if (code === "MMC" || code === "MCH") return MMC_CONTACT_LIST_SOURCE_ID;
+      return "";
+    }).filter(Boolean));
+    if (sourceIds.size !== 1) return { status: "unavailable" };
+    const sourceId = [...sourceIds][0];
     const row = await context.env.ROSTER_DB.prepare(`
       SELECT id, object_key, provider_modified_at, received_at
       FROM contact_list_files
       WHERE source_id = ?
       ORDER BY received_at DESC
       LIMIT 1
-    `).bind(MMC_CONTACT_LIST_SOURCE_ID).first();
+    `).bind(sourceId).first();
     if (!row?.object_key) return { status: "unavailable" };
     const object = await context.env.ROSTER_FILES.get(String(row.object_key));
     if (!object) return { status: "unavailable" };

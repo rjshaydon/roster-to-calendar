@@ -95,6 +95,25 @@ const crossPeriod = attachContactAllocations([
 ], [contact("SSU (SMS/SR) 25143", "Qing", "25143")]);
 assert.equal(crossPeriod.matchedCount, 0, "a contact allocation cannot cross periods");
 
+const ddhExtract = normaliseContactListExtract({
+  sourceId: "ddh-daily-contact-sheet",
+  sourceDate: "2026-08-25",
+  providerModifiedAt: "2026-08-25T03:00:00Z",
+  contacts: [
+    { area: "Dandenong Emergency", shift: "AM", role: "Orange Dr IC", name: "Alex", phone: "49900", isPopulated: true },
+    { area: "Dandenong Emergency", shift: "PM", role: "Silver Dr 1", name: "Pat", phone: "49903", isPopulated: true },
+    { area: "Dandenong Emergency", shift: "Night", role: "FT Clinician ND IC", name: "Chris", phone: "49742", isPopulated: true },
+  ],
+});
+assert.ok(ddhExtract, "a DDH clinicians extract should normalise independently from MMC");
+const ddhMatches = attachContactAllocations([
+  assignment("DDH", "AM", "Orange", "Alex EXAMPLE", "SMS"),
+  assignment("DDH", "PM", "Silver", "Patrick EXAMPLE", "SMS"),
+  assignment("DDH", "Night", "Fast Track", "Chris EXAMPLE", "HMO"),
+], ddhExtract.contacts);
+assert.equal(ddhMatches.matchedCount, 3, "DDH Orange, Silver and Fast Track contacts should match their roster streams");
+assert.deepEqual(ddhMatches.assignments.map((entry) => entry.contactAllocation?.phone), ["49900", "49903", "49742"]);
+
 console.log("Contact allocation matching fixtures passed.");
 
 function assignment(source, period, team, displayName, seniority) {

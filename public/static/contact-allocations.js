@@ -1,6 +1,14 @@
 export const MMC_CONTACT_LIST_SOURCE_ID = "mmc-shift-allocations";
+export const DDH_CONTACT_LIST_SOURCE_ID = "ddh-daily-contact-sheet";
 
-const VALID_AREAS = new Set(["Adult Emergency", "Paediatric Emergency"]);
+const SOURCE_AREAS = new Map([
+  [MMC_CONTACT_LIST_SOURCE_ID, new Set(["Adult Emergency", "Paediatric Emergency"])],
+  [DDH_CONTACT_LIST_SOURCE_ID, new Set(["Dandenong Emergency"])],
+]);
+const SOURCE_FILE_NAMES = new Map([
+  [MMC_CONTACT_LIST_SOURCE_ID, "SHIFT ALLOCATIONS doctors.json"],
+  [DDH_CONTACT_LIST_SOURCE_ID, "Daily Contact Sheet clinicians.json"],
+]);
 const VALID_SHIFTS = new Set(["AM", "PM", "Night"]);
 const NAME_ALIASES = new Map([
   ["pat", new Set(["pat", "patrick", "patricia"])],
@@ -12,9 +20,11 @@ const NAME_ALIASES = new Map([
 ]);
 
 export function normaliseContactListExtract(payload) {
-  if (String(payload?.sourceId || "").trim() !== MMC_CONTACT_LIST_SOURCE_ID || !Array.isArray(payload?.contacts)) return null;
+  const sourceId = String(payload?.sourceId || "").trim();
+  const validAreas = SOURCE_AREAS.get(sourceId);
+  if (!validAreas || !Array.isArray(payload?.contacts)) return null;
   const sourceDate = String(payload?.sourceDate || "").trim();
-  if (!isIsoDate(sourceDate) || payload.contacts.length > 160) return null;
+  if (!isIsoDate(sourceDate) || payload.contacts.length > 240) return null;
   const contacts = payload.contacts.map((entry) => {
     const name = String(entry?.name || "").trim();
     return {
@@ -27,13 +37,13 @@ export function normaliseContactListExtract(payload) {
       isPopulated: Boolean(entry?.isPopulated) && Boolean(name),
     };
   });
-  if (contacts.some((entry) => !VALID_AREAS.has(entry.area)
+  if (contacts.some((entry) => !validAreas.has(entry.area)
     || !VALID_SHIFTS.has(entry.shift)
     || !entry.role
     || /\bnic\b|nurs|(^|\W)(rn|en)(\W|$)/i.test(entry.role))) return null;
   return {
-    sourceId: MMC_CONTACT_LIST_SOURCE_ID,
-    fileName: "SHIFT ALLOCATIONS doctors.json",
+    sourceId,
+    fileName: SOURCE_FILE_NAMES.get(sourceId),
     sourceDate,
     providerModifiedAt: String(payload?.providerModifiedAt || "").trim(),
     contacts,
@@ -57,6 +67,7 @@ export function contactAreaForSource(source) {
   const code = String(source || "").trim().toUpperCase();
   if (code === "MMC") return "Adult Emergency";
   if (code === "MCH") return "Paediatric Emergency";
+  if (code === "DDH") return "Dandenong Emergency";
   return "";
 }
 
@@ -150,6 +161,8 @@ function contactSpecificity(contact) {
 
 export function contactStream(role) {
   const text = simplify(role);
+  if (/\borange\b/.test(text)) return { key: "orange", label: "Orange" };
+  if (/\bsilver\b/.test(text)) return { key: "silver", label: "Silver" };
   if (/\bgreen\b/.test(text)) return { key: "green", label: "Green" };
   if (/\bamber\b/.test(text)) return { key: "amber", label: "Amber" };
   if (/\bresus\b/.test(text)) return { key: "resus", label: "Resus" };
@@ -159,6 +172,8 @@ export function contactStream(role) {
   if (/\bsepsis\b/.test(text)) return { key: "sepsis", label: "Sepsis" };
   if (/\bgeriatric/.test(text)) return { key: "geriatrics", label: "Geriatrics" };
   if (/\bcart\b/.test(text)) return { key: "cart", label: "CART" };
+  if (/\bavao\b/.test(text)) return { key: "avao", label: "AVAO" };
+  if (/\bfast track\b|\bft\b/.test(text)) return { key: "fast track", label: "Fast Track" };
   return { key: "", label: "" };
 }
 
@@ -168,6 +183,8 @@ function contactStreamKey(role) {
 
 function assignmentStreamKey(assignment) {
   const text = simplify(`${assignment?.team || ""} ${assignment?.suggestedTitle || ""} ${assignment?.event?.title || ""}`);
+  if (/\borange\b/.test(text)) return "orange";
+  if (/\bsilver\b/.test(text)) return "silver";
   if (/\bgreen\b/.test(text)) return "green";
   if (/\bamber\b/.test(text)) return "amber";
   if (/\bresus\b/.test(text)) return "resus";
@@ -177,6 +194,8 @@ function assignmentStreamKey(assignment) {
   if (/\bsepsis\b/.test(text)) return "sepsis";
   if (/\bgeriatric/.test(text)) return "geriatrics";
   if (/\bcart\b/.test(text)) return "cart";
+  if (/\bavao\b/.test(text)) return "avao";
+  if (/\bfast track\b|\bft\b/.test(text)) return "fast track";
   return "";
 }
 

@@ -1,11 +1,20 @@
 import { ensureCalendarSchema, hasCalendarDb } from "../../_lib/d1-calendar.js";
 import { sha256Hex } from "../../_lib/automation-import.js";
-import { extractMmcDoctorContactsFromWorkbook } from "../../_lib/contact-list-workbook.js";
+import { extractDdhClinicianContactsFromWorkbook, extractMmcDoctorContactsFromWorkbook } from "../../_lib/contact-list-workbook.js";
 import { normaliseContactListExtract } from "../../../public/static/contact-allocations.js";
 
-const SOURCE_ID = "mmc-shift-allocations";
-const EXPECTED_FILE_NAME = "shift allocations.xlsx";
-const OUTPUT_FILE_NAME = "SHIFT ALLOCATIONS doctors.json";
+const SOURCES = new Map([
+  ["mmc-shift-allocations", {
+    expectedFileName: "shift allocations.xlsx",
+    outputFileName: "SHIFT ALLOCATIONS doctors.json",
+    extract: extractMmcDoctorContactsFromWorkbook,
+  }],
+  ["ddh-daily-contact-sheet", {
+    expectedFileName: "daily contact sheet.xlsx",
+    outputFileName: "Daily Contact Sheet clinicians.json",
+    extract: extractDdhClinicianContactsFromWorkbook,
+  }],
+]);
 const MAX_CONTACT_LIST_BYTES = 50 * 1024 * 1024;
 
 // Accept the existing Power Automate full-workbook delivery, extract only the
@@ -21,16 +30,17 @@ export async function onRequestPost(context) {
   try {
     const upload = await readUpload(context.request);
     if (!(upload.file instanceof File)) return Response.json({ error: "A contact-list workbook is required." }, { status: 400 });
-    if (upload.sourceId !== SOURCE_ID) return Response.json({ error: "Unknown contact-list source." }, { status: 400 });
-    if (normaliseFileName(upload.file.name) !== EXPECTED_FILE_NAME) {
-      return Response.json({ error: "This source only accepts SHIFT ALLOCATIONS.xlsx." }, { status: 400 });
+    const source = SOURCES.get(upload.sourceId);
+    if (!source) return Response.json({ error: "Unknown contact-list source." }, { status: 400 });
+    if (normaliseFileName(upload.file.name) !== source.expectedFileName) {
+      return Response.json({ error: "The uploaded filename does not match this contact-list source." }, { status: 400 });
     }
     if (!upload.file.size || upload.file.size > MAX_CONTACT_LIST_BYTES) {
       return Response.json({ error: "Contact-list workbook is missing or too large." }, { status: 413 });
     }
 
     const workbookBytes = new Uint8Array(await upload.file.arrayBuffer());
-    const parsed = await extractMmcDoctorContactsFromWorkbook(workbookBytes, {
+    const parsed = await source.extract(workbookBytes, {
       providerModifiedAt: upload.providerModifiedAt,
     });
     const extract = normaliseContactListExtract(parsed);
@@ -45,16 +55,16 @@ export async function onRequestPost(context) {
       FROM contact_list_files
       WHERE source_id = ?
       ORDER BY received_at DESC
-    `).bind(SOURCE_ID).all();
+    `).bind(upload.sourceId).all();
     const match = existing.results.find((entry) => String(entry.content_hash || "") === contentHash
       || (upload.providerVersion && String(entry.provider_version || "") === upload.providerVersion
-        && String(entry.name || "").toLowerCase() === OUTPUT_FILE_NAME.toLowerCase()));
+        && String(entry.name || "").toLowerCase() === source.outputFileName.toLowerCase()));
     if (match?.id) {
       await deleteOtherVersions(context, existing.results, String(match.id));
       return Response.json({
         ok: true,
         status: "unchanged",
-        sourceId: SOURCE_ID,
+        sourceId: upload.sourceId,
         sourceDate: extract.sourceDate,
         contactCount: extract.contacts.filter((contact) => contact.isPopulated).length,
         fileId: String(match.id),
@@ -62,8 +72,8 @@ export async function onRequestPost(context) {
     }
 
     const now = new Date().toISOString();
-    const fileId = `contact:${SOURCE_ID}:${contentHash.slice(0, 24)}`;
-    const objectKey = `contact-lists/${SOURCE_ID}/${contentHash}.json`;
+    const fileId = `contact:${upload.sourceId}:${contentHash.slice(0, 24)}`;
+    const objectKey = `contact-lists/${upload.sourceId}/${contentHash}.json`;
     await context.env.ROSTER_FILES.put(objectKey, bytes, {
       httpMetadata: { contentType: "application/json; charset=utf-8" },
     });
@@ -73,7 +83,7 @@ export async function onRequestPost(context) {
         content_hash, provider_version, provider_modified_at, received_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
-      fileId, SOURCE_ID, OUTPUT_FILE_NAME, bytes.byteLength,
+      fileId, upload.sourceId, source.outputFileName, bytes.byteLength,
       Date.parse(upload.providerModifiedAt) || upload.file.lastModified || Date.now(),
       objectKey, "application/json; charset=utf-8", contentHash,
       upload.providerVersion, upload.providerModifiedAt, now,
@@ -82,7 +92,7 @@ export async function onRequestPost(context) {
     return Response.json({
       ok: true,
       status: "stored",
-      sourceId: SOURCE_ID,
+      sourceId: upload.sourceId,
       sourceDate: extract.sourceDate,
       contactCount: extract.contacts.filter((contact) => contact.isPopulated).length,
       fileId,

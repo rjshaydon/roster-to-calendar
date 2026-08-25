@@ -1,5 +1,7 @@
-const SOURCE_ID = "mmc-shift-allocations";
-const TARGET_SHEET = "SHIFT ALLOCATIONS";
+const MMC_SOURCE_ID = "mmc-shift-allocations";
+const DDH_SOURCE_ID = "ddh-daily-contact-sheet";
+const MMC_TARGET_SHEET = "SHIFT ALLOCATIONS";
+const DDH_TARGET_SHEET = "ED Clinicians";
 const SECTIONS = [
   ["Adult Emergency", 6, 27],
   ["Paediatric Emergency", 31, 42],
@@ -7,7 +9,7 @@ const SECTIONS = [
 const SHIFTS = ["AM", "PM", "Night"];
 
 export async function extractMmcDoctorContactsFromWorkbook(bytes, { providerModifiedAt = "" } = {}) {
-  const values = await readTargetCells(bytes);
+  const values = await readTargetCells(bytes, { sheetName: MMC_TARGET_SHEET, maxRow: 42, maxColumn: 8 });
   const sourceDate = sourceDateFromLabel(values?.[1]?.[3]);
   if (!sourceDate) throw new Error("The date in SHIFT ALLOCATIONS!D2 could not be read.");
 
@@ -32,26 +34,63 @@ export async function extractMmcDoctorContactsFromWorkbook(bytes, { providerModi
     }
   }
   return {
-    sourceId: SOURCE_ID,
+    sourceId: MMC_SOURCE_ID,
     sourceDate,
     providerModifiedAt: String(providerModifiedAt || "").trim(),
     contacts,
   };
 }
 
-async function readTargetCells(input) {
+export async function extractDdhClinicianContactsFromWorkbook(bytes, { providerModifiedAt = "" } = {}) {
+  const values = await readTargetCells(bytes, { sheetName: DDH_TARGET_SHEET, maxRow: 120, maxColumn: 13 });
+  const sourceDate = melbourneDateFromTimestamp(providerModifiedAt);
+  if (!sourceDate) throw new Error("The SharePoint modification date could not be read.");
+
+  const contacts = [];
+  const blocks = [
+    ["AM", 0],
+    ["PM", 5],
+    ["Night", 10],
+  ];
+  for (const [shift, firstColumn] of blocks) {
+    for (let row = 1; row <= values.length; row += 1) {
+      const cells = values[row - 1] || [];
+      const role = text(cells[firstColumn]);
+      if (!role || isDdhHeading(role) || isExcludedRole(role)) continue;
+      const rawName = text(cells[firstColumn + 1]);
+      const phone = text(cells[firstColumn + 3]);
+      const name = clinicianName(rawName);
+      contacts.push({
+        area: "Dandenong Emergency",
+        shift,
+        role,
+        name,
+        phone,
+        isPopulated: Boolean(name && /[a-z]/i.test(name)),
+      });
+    }
+  }
+  return {
+    sourceId: DDH_SOURCE_ID,
+    sourceDate,
+    providerModifiedAt: String(providerModifiedAt || "").trim(),
+    contacts,
+  };
+}
+
+async function readTargetCells(input, { sheetName, maxRow, maxColumn }) {
   const bytes = input instanceof Uint8Array ? input : new Uint8Array(input);
   const entries = readZipDirectory(bytes);
   const workbookXml = await readZipText(bytes, requiredEntry(entries, "xl/workbook.xml"));
-  const relationshipId = workbookRelationshipId(workbookXml, TARGET_SHEET);
+  const relationshipId = workbookRelationshipId(workbookXml, sheetName);
   const relationshipsXml = await readZipText(bytes, requiredEntry(entries, "xl/_rels/workbook.xml.rels"));
   const worksheetPath = worksheetPathForRelationship(relationshipsXml, relationshipId);
   const sharedStringsEntry = entries.get("xl/sharedStrings.xml");
   const sharedStrings = sharedStringsEntry
     ? parseSharedStrings(await readZipText(bytes, sharedStringsEntry))
     : [];
-  const worksheetXml = await readZipText(bytes, requiredEntry(entries, worksheetPath), { stopBeforeRow: 43 });
-  return parseWorksheetCells(worksheetXml, sharedStrings);
+  const worksheetXml = await readZipText(bytes, requiredEntry(entries, worksheetPath), { stopBeforeRow: maxRow + 1 });
+  return parseWorksheetCells(worksheetXml, sharedStrings, { maxRow, maxColumn });
 }
 
 function readZipDirectory(bytes) {
@@ -144,15 +183,15 @@ function parseSharedStrings(xml) {
   return values;
 }
 
-function parseWorksheetCells(xml, sharedStrings) {
-  const values = Array.from({ length: 42 }, () => Array(9).fill(""));
+function parseWorksheetCells(xml, sharedStrings, { maxRow, maxColumn }) {
+  const values = Array.from({ length: maxRow }, () => Array(maxColumn + 1).fill(""));
   for (const match of xml.matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/gi)) {
     const attributes = match[1];
     const reference = xmlAttribute(attributes, "r").match(/^([A-Z]+)(\d+)$/i);
     if (!reference) continue;
     const column = columnIndex(reference[1]);
     const row = Number(reference[2]);
-    if (row < 1 || row > 42 || column < 0 || column > 8) continue;
+    if (row < 1 || row > maxRow || column < 0 || column > maxColumn) continue;
     const type = xmlAttribute(attributes, "t");
     const content = match[2] || "";
     const valueMatch = content.match(/<v\b[^>]*>([\s\S]*?)<\/v>/i);
@@ -186,6 +225,21 @@ function text(value) {
   return String(value ?? "").trim();
 }
 
+function clinicianName(value) {
+  return text(value)
+    .replace(/\s*[-–—]?\s*(?:\+?61\s*\d(?:[\s-]*\d){7,}|0\d(?:[\s-]*\d){7,}|\d{5})\s*$/i, "")
+    .trim();
+}
+
+function melbourneDateFromTimestamp(value) {
+  const date = new Date(String(value || ""));
+  if (Number.isNaN(date.valueOf())) return "";
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-AU", {
+    timeZone: "Australia/Melbourne", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(date).filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
 function sourceDateFromLabel(value) {
   const match = text(value).match(/(\d{1,2})(?:st|nd|rd|th)?\s+([a-z]+)\s+(\d{4})/i);
   if (!match) return "";
@@ -199,4 +253,8 @@ function sourceDateFromLabel(value) {
 
 function isExcludedRole(role) {
   return /\bnic\b|nurs|(^|\W)(rn|en)(\W|$)/i.test(role);
+}
+
+function isDdhHeading(role) {
+  return /^(?:ed clinician phones?|role|am|pm|nd|night)$/i.test(text(role));
 }
