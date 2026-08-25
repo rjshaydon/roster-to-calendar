@@ -33,8 +33,9 @@ function main(
     for (const cells of values) {
       const role = String(cells[firstColumn] || "").trim();
       if (!role || isHeading(role) || isExcludedRole(role)) continue;
-      const name = clinicianName(String(cells[firstColumn + 1] || ""));
-      const phone = String(cells[firstColumn + 3] || "").trim();
+      const rawName = String(cells[firstColumn + 1] || "");
+      const name = clinicianName(rawName);
+      const phone = clinicianPhone(String(cells[firstColumn + 3] || ""), rawName, String(cells[firstColumn + 2] || ""));
       contacts.push({
         area: "Dandenong Emergency",
         shift,
@@ -60,6 +61,17 @@ function clinicianName(value: string) {
     .trim()
     .replace(/\s*[-–—]?\s*(?:\+?61\s*\d(?:[\s-]*\d){7,}|0\d(?:[\s-]*\d){7,}|\d{5})\s*$/i, "")
     .trim();
+}
+
+function clinicianPhone(standardPhone: string, rawName: string, emr: string) {
+  const standard = String(standardPhone || "").trim();
+  if (standard) return standard;
+  return fiveDigitExtension(rawName) || fiveDigitExtension(emr);
+}
+
+function fiveDigitExtension(value: string) {
+  const match = String(value || "").trim().match(/(?:^|\D)(\d{5})(?!\d)/);
+  return match ? match[1] : "";
 }
 
 function isExcludedRole(role: string) {

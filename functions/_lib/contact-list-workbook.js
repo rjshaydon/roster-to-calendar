@@ -58,7 +58,8 @@ export async function extractDdhClinicianContactsFromWorkbook(bytes, { providerM
       const role = text(cells[firstColumn]);
       if (!role || isDdhHeading(role) || isExcludedRole(role)) continue;
       const rawName = text(cells[firstColumn + 1]);
-      const phone = text(cells[firstColumn + 3]);
+      const emr = text(cells[firstColumn + 2]);
+      const phone = ddhClinicianPhone({ standardPhone: cells[firstColumn + 3], rawName, emr });
       const name = clinicianName(rawName);
       contacts.push({
         area: "Dandenong Emergency",
@@ -229,6 +230,16 @@ function clinicianName(value) {
   return text(value)
     .replace(/\s*[-–—]?\s*(?:\+?61\s*\d(?:[\s-]*\d){7,}|0\d(?:[\s-]*\d){7,}|\d{5})\s*$/i, "")
     .trim();
+}
+
+function ddhClinicianPhone({ standardPhone, rawName, emr } = {}) {
+  const standard = text(standardPhone);
+  if (standard) return standard;
+  return fiveDigitExtension(rawName) || fiveDigitExtension(emr);
+}
+
+function fiveDigitExtension(value) {
+  return (text(value).match(/(?:^|\D)(\d{5})(?!\d)/) || [])[1] || "";
 }
 
 function melbourneDateFromTimestamp(value) {
