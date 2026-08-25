@@ -67,19 +67,31 @@ function main(
 }
 
 function clinicianName(value: string) {
-  return String(value || "")
-    .trim()
-    .replace(/\s*[-–—]?\s*(?:\+?61\s*\d(?:[\s-]*\d){7,}|0\d(?:[\s-]*\d){7,}|\d{5})\s*$/i, "")
-    .trim();
+  const raw = String(value || "").trim();
+  const phone = telephoneMatch(raw);
+  if (!phone || raw.slice(phone.index + phone.text.length).trim()) return raw;
+  return raw.slice(0, phone.index).replace(/\s*[-–—]?\s*$/, "").trim();
 }
 
 function clinicianPhone(standardPhone: string, rawName: string, emr: string) {
-  return fiveDigitExtension(standardPhone) || fiveDigitExtension(rawName) || fiveDigitExtension(emr);
+  return telephoneNumber(standardPhone) || telephoneNumber(rawName) || telephoneNumber(emr);
 }
 
-function fiveDigitExtension(value: string) {
-  const match = String(value || "").trim().match(/(?:^|\D)(\d{5})(?!\d)/);
-  return match ? match[1] : "";
+function telephoneNumber(value: string) {
+  const match = telephoneMatch(value);
+  return match ? match.text : "";
+}
+
+function telephoneMatch(value: string) {
+  const raw = String(value || "").trim();
+  const pattern = /\(?\d(?:[\d ()-]*\d)?/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(raw))) {
+    const candidate = String(match[0] || "").trim();
+    const digitCount = candidate.replace(/\D/g, "").length;
+    if (digitCount >= 5 && digitCount <= 10) return { text: candidate, index: match.index };
+  }
+  return null;
 }
 
 function isExcludedRole(role: string) {
@@ -95,5 +107,5 @@ function isContinuationStreamRole(role: string) {
 }
 
 function isStructuredRole(role: string) {
-  return /^(?:doctor\s+in\s+charge\b|avao\b|orange\b|silver\b|(?:ft|fast\s+track)\b|ssu\b|geriatrician\b|cart\b|miprep\b|resus\b)/i.test(String(role || "").trim());
+  return /^(?:doctor\s+in\s+charge\b|avao\b|orange\b|silver\b|(?:ft|fast\s+track)\b|ssu\b|geriatrician\b|cart\b|miprep\b|resus\b|ed\s+care[\s-]*co\b|gap\b|clinical\s+support\b)/i.test(String(role || "").trim());
 }

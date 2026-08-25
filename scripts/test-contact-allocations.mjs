@@ -157,6 +157,47 @@ const ddhAlternatePhone = attachContactAllocations([
 assert.equal(allocationFor(ddhAlternatePhone, "Alex LIN").phone, "49981",
   "a five-digit extension from a DDH continuation row should attach to the rostered clinician");
 
+const fixedServiceAllocations = attachContactAllocations([
+  assignment("MMC", "AM", "Sepsis", "Sophie SEPSIS", "HMO"),
+  assignment("MMC", "AM", "Geriatrician", "Georgia GERIATRICIAN", "SMS"),
+  assignment("MMC", "AM", "CART clinician", "Casey CART", "NP"),
+  assignment("DDH", "AM", "ED Care-Co", "Eddie CARECO", "HMO"),
+  assignment("DDH", "AM", "GAP", "Grace GAP", "SMS"),
+  assignment("DDH", "AM", "CS onsite", "Sally SUPPORT", "SMS"),
+], [
+  { area: "Adult Emergency", shift: "AM", role: "SEPSIS DR MUST CARRY SEPSIS #", name: "", phone: "25192", isPopulated: false },
+  { area: "Adult Emergency", shift: "AM", role: "GERIATRICIAN", name: "", phone: "25768", isPopulated: false },
+  { area: "Adult Emergency", shift: "AM", role: "CART Clinician", name: "", phone: "0417 489 358", isPopulated: false },
+  { area: "Dandenong Emergency", shift: "AM", role: "ED Care-Co", name: "", phone: "49754", isPopulated: false },
+  { area: "Dandenong Emergency", shift: "AM", role: "GAP (Geriatric AH)", name: "", phone: "0488 762 079", isPopulated: false },
+  { area: "Dandenong Emergency", shift: "AM", role: "Clinical Support on site", name: "", phone: "03 95549098", isPopulated: false },
+]);
+assert.equal(fixedServiceAllocations.matchedCount, 6, "approved empty-name service rows should attach by unique roster service");
+assert.equal(allocationFor(fixedServiceAllocations, "Sophie SEPSIS").phone, "25192");
+assert.equal(allocationFor(fixedServiceAllocations, "Georgia GERIATRICIAN").phone, "25768");
+assert.equal(allocationFor(fixedServiceAllocations, "Casey CART").phone, "0417 489 358");
+assert.equal(allocationFor(fixedServiceAllocations, "Eddie CARECO").phone, "49754");
+assert.equal(allocationFor(fixedServiceAllocations, "Grace GAP").phone, "0488 762 079");
+assert.equal(allocationFor(fixedServiceAllocations, "Sally SUPPORT").phone, "03 95549098");
+
+const fixedServicePriority = attachContactAllocations([
+  assignment("MMC", "AM", "Sepsis", "Sophie SEPSIS", "HMO"),
+], [
+  { area: "Adult Emergency", shift: "AM", role: "Dr", name: "Sophie", phone: "25179", isPopulated: true },
+  { area: "Adult Emergency", shift: "AM", role: "SEPSIS DR MUST CARRY SEPSIS #", name: "", phone: "25192", isPopulated: false },
+]);
+assert.equal(allocationFor(fixedServicePriority, "Sophie SEPSIS").phone, "25192", "the dedicated service phone should take priority over a generic named row");
+
+const ordinaryEmptyPhone = attachContactAllocations([
+  assignment("MMC", "AM", "Green", "Greta GREEN", "SMS"),
+], [{ area: "Adult Emergency", shift: "AM", role: "GREEN (CIC/AO)", name: "", phone: "25134", isPopulated: false }]);
+assert.equal(ordinaryEmptyPhone.matchedCount, 0, "ordinary fixed phones must remain ignored when their rows have no name");
+
+const unrosteredFixedService = attachContactAllocations([], [
+  { area: "Adult Emergency", shift: "AM", role: "GERIATRICIAN", name: "", phone: "25768", isPopulated: false },
+]);
+assert.equal(unrosteredFixedService.unmatched.length, 0, "an unrostered fixed service phone should not create a review item");
+
 console.log("Contact allocation matching fixtures passed.");
 
 function assignment(source, period, team, displayName, seniority) {

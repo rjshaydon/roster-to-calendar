@@ -20,7 +20,7 @@ export async function extractMmcDoctorContactsFromWorkbook(bytes, { providerModi
         const cells = values[row - 1] || [];
         const role = text(cells[shiftIndex * 3]);
         const name = text(cells[shiftIndex * 3 + 1]);
-        const phone = text(cells[shiftIndex * 3 + 2]);
+        const phone = telephoneNumber(cells[shiftIndex * 3 + 2]);
         if (!role || isExcludedRole(role)) continue;
         contacts.push({
           area,
@@ -71,8 +71,8 @@ export async function extractDdhClinicianContactsFromWorkbook(bytes, { providerM
       const name = clinicianName(rawName);
       // Orange, Silver and Fast Track have several spare rows beneath their
       // labelled allocations. Scan the entire stream block: handwritten names
-      // may be separated from the labels by any number of blank or mobile-only
-      // rows, and a five-digit extension may be in either adjacent text cell.
+      // may be separated from the labels by any number of otherwise unused
+      // rows, and a telephone number may be in either adjacent text cell.
       const role = suppliedRole || (name && phone ? continuationRole : "");
       if (!role) continue;
       contacts.push({
@@ -241,17 +241,30 @@ function text(value) {
 }
 
 function clinicianName(value) {
-  return text(value)
-    .replace(/\s*[-–—]?\s*(?:\+?61\s*\d(?:[\s-]*\d){7,}|0\d(?:[\s-]*\d){7,}|\d{5})\s*$/i, "")
-    .trim();
+  const raw = text(value);
+  const phone = telephoneMatch(raw);
+  if (!phone || raw.slice(phone.index + phone.text.length).trim()) return raw;
+  return raw.slice(0, phone.index).replace(/\s*[-–—]?\s*$/, "").trim();
 }
 
 function ddhClinicianPhone({ standardPhone, rawName, emr } = {}) {
-  return fiveDigitExtension(standardPhone) || fiveDigitExtension(rawName) || fiveDigitExtension(emr);
+  return telephoneNumber(standardPhone) || telephoneNumber(rawName) || telephoneNumber(emr);
 }
 
-function fiveDigitExtension(value) {
-  return (text(value).match(/(?:^|\D)(\d{5})(?!\d)/) || [])[1] || "";
+function telephoneNumber(value) {
+  return telephoneMatch(value)?.text || "";
+}
+
+function telephoneMatch(value) {
+  const raw = text(value);
+  const pattern = /\(?\d(?:[\d ()-]*\d)?/g;
+  let match;
+  while ((match = pattern.exec(raw))) {
+    const candidate = match[0].trim();
+    const digitCount = candidate.replace(/\D/g, "").length;
+    if (digitCount >= 5 && digitCount <= 10) return { text: candidate, index: match.index };
+  }
+  return null;
 }
 
 function melbourneDateFromTimestamp(value) {
@@ -288,5 +301,5 @@ function isDdhContinuationStreamRole(role) {
 }
 
 function isDdhStructuredRole(role) {
-  return /^(?:doctor\s+in\s+charge\b|avao\b|orange\b|silver\b|(?:ft|fast\s+track)\b|ssu\b|geriatrician\b|cart\b|miprep\b|resus\b)/i.test(text(role));
+  return /^(?:doctor\s+in\s+charge\b|avao\b|orange\b|silver\b|(?:ft|fast\s+track)\b|ssu\b|geriatrician\b|cart\b|miprep\b|resus\b|ed\s+care[\s-]*co\b|gap\b|clinical\s+support\b)/i.test(text(role));
 }

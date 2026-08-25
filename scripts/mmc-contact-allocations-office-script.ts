@@ -27,7 +27,7 @@ function main(workbook: ExcelScript.Workbook) {
         const cells = values[row - 1];
         const role = cells[shiftIndex * 3].trim();
         const name = cells[shiftIndex * 3 + 1].trim();
-        const phone = cells[shiftIndex * 3 + 2].trim();
+        const phone = telephoneNumber(cells[shiftIndex * 3 + 2]);
         if (!role || isExcludedRole(role)) continue;
         contacts.push({
           area,
@@ -43,6 +43,18 @@ function main(workbook: ExcelScript.Workbook) {
     }
   }
   return { sourceId: "mmc-shift-allocations", sourceDate, contacts };
+}
+
+function telephoneNumber(value: string) {
+  const raw = String(value || "").trim();
+  const pattern = /\(?\d(?:[\d ()-]*\d)?/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(raw))) {
+    const candidate = String(match[0] || "").trim();
+    const digitCount = candidate.replace(/\D/g, "").length;
+    if (digitCount >= 5 && digitCount <= 10) return candidate;
+  }
+  return "";
 }
 
 function isExcludedRole(role: string) {

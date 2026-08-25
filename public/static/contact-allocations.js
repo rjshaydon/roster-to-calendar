@@ -107,11 +107,12 @@ export function contactsAfterShiftChange(contacts = [], { date = "", now = new D
 
 export function attachContactAllocations(assignments = [], contacts = [], resolutions = []) {
   const available = (contacts || [])
-    .filter((contact) => contact?.isPopulated && contact.name)
+    .filter((contact) => (contact?.isPopulated && contact.name) || isRoleOnlyServiceContact(contact))
     .map((contact, index) => ({ ...contact, contactKey: String(contact.contactKey || contactResolutionKey("legacy", "", contact, index)) }));
   const used = new Set();
   const enriched = assignments.map((assignment) => ({ ...assignment }));
-  const orderedContacts = [...available].sort((left, right) => contactSpecificity(right) - contactSpecificity(left)
+  const orderedContacts = [...available].sort((left, right) => Number(isRoleOnlyServiceContact(right)) - Number(isRoleOnlyServiceContact(left))
+    || contactSpecificity(right) - contactSpecificity(left)
     || String(left.name).localeCompare(String(right.name)));
   const unmatchedReasons = new Map();
 
@@ -121,6 +122,31 @@ export function attachContactAllocations(assignments = [], contacts = [], resolu
       .filter(({ assignment, index }) => !used.has(index) && assignmentMatchesContactContext(assignment, contact));
     if (!contextCandidates.length) {
       unmatchedReasons.set(contact.contactKey, "No roster candidate in this period");
+      continue;
+    }
+    const roleOnlyServiceKey = !contact.name && isRoleOnlyServiceContact(contact) ? contactStreamKey(contact.role) : "";
+    if (roleOnlyServiceKey) {
+      const serviceCandidates = contextCandidates.filter(({ assignment }) => assignmentStreamKey(assignment) === roleOnlyServiceKey);
+      if (serviceCandidates.length !== 1) {
+        unmatchedReasons.set(contact.contactKey, serviceCandidates.length ? "Ambiguous service allocation" : "No rostered service allocation");
+        continue;
+      }
+      const candidate = serviceCandidates[0];
+      used.add(candidate.index);
+      const stream = contactStream(contact.role);
+      enriched[candidate.index] = {
+        ...candidate.assignment,
+        contactAllocation: {
+          role: contact.role,
+          phone: contact.phone,
+          sourceName: "",
+          contactKey: contact.contactKey,
+          matchMethod: "service-role",
+          streamKey: stream.key,
+          streamLabel: stream.label,
+          rosterStreamKey: assignmentStreamKey(candidate.assignment),
+        },
+      };
       continue;
     }
     const named = contextCandidates
@@ -195,7 +221,8 @@ export function attachContactAllocations(assignments = [], contacts = [], resolu
   return {
     assignments: enriched,
     matchedCount: enriched.filter((assignment) => assignment.contactAllocation).length,
-    unmatched: available.filter((contact) => !matchedContacts.has(contact.contactKey)).map((contact) => ({
+    unmatched: available.filter((contact) => !matchedContacts.has(contact.contactKey)
+      && (!isRoleOnlyServiceContact(contact) || unmatchedReasons.get(contact.contactKey) === "Ambiguous service allocation")).map((contact) => ({
       ...contact,
       reviewReason: unmatchedReasons.get(contact.contactKey) || "Not matched",
     })),
@@ -218,6 +245,15 @@ function isTemporarilyExcludedContactRole(sourceId, contact) {
   return role.startsWith("geriatrician in ed") || role.startsWith("cart np npc") || role.startsWith("miprep hmo");
 }
 
+function isRoleOnlyServiceContact(contact) {
+  const phoneDigits = String(contact?.phone || "").replace(/\D/g, "");
+  if (phoneDigits.length < 5 || phoneDigits.length > 10 || contact?.name) return false;
+  const key = contactStreamKey(contact?.role);
+  if (contact?.area === "Adult Emergency") return ["sepsis", "geriatrics", "cart"].includes(key);
+  if (contact?.area === "Dandenong Emergency") return ["care-co", "gap", "clinical-support-onsite"].includes(key);
+  return false;
+}
+
 function assignmentMatchesContactContext(assignment, contact) {
   const source = String(assignment?.source || assignment?.person?.sourceType || "").trim().toUpperCase();
   return contact.area === contactAreaForSource(source) && String(assignment?.period || "") === contact.shift;
@@ -233,6 +269,9 @@ function contactSpecificity(contact) {
 
 export function contactStream(role) {
   const text = simplify(role);
+  if (/\bclinical support on site\b|\bclinical support onsite\b/.test(text)) return { key: "clinical-support-onsite", label: "Clinical Support on-site" };
+  if (/\bed care co\b/.test(text)) return { key: "care-co", label: "ED Care-Co" };
+  if (/\bgap\b|\bgeriatric ah\b/.test(text)) return { key: "gap", label: "GAP / Geriatric AH" };
   if (/\borange\b/.test(text)) return { key: "orange", label: "Orange" };
   if (/\bsilver\b/.test(text)) return { key: "silver", label: "Silver" };
   if (/\bgreen\b/.test(text)) return { key: "green", label: "Green" };
@@ -254,7 +293,11 @@ function contactStreamKey(role) {
 }
 
 function assignmentStreamKey(assignment) {
-  const text = simplify(`${assignment?.team || ""} ${assignment?.suggestedTitle || ""} ${assignment?.event?.title || ""}`);
+  const text = simplify(`${assignment?.team || ""} ${assignment?.suggestedTitle || ""} ${assignment?.rawValue || ""} ${assignment?.event?.title || ""} ${assignment?.event?.rawValue || ""}`);
+  if (/\bclinical support on site\b|\bclinical support onsite\b|\bcs onsite\b|\bonsite cs\b/.test(text)
+    && !/\bnot onsite\b/.test(text)) return "clinical-support-onsite";
+  if (/\bed care co\b/.test(text)) return "care-co";
+  if (/\bgap\b|\bgeriatric ah\b/.test(text)) return "gap";
   if (/\borange\b/.test(text)) return "orange";
   if (/\bsilver\b/.test(text)) return "silver";
   if (/\bgreen\b/.test(text)) return "green";

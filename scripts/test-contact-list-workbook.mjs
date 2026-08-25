@@ -1,7 +1,27 @@
 import assert from "node:assert/strict";
 import XLSX from "xlsx";
 
-import { extractDdhClinicianContactsFromWorkbook } from "../functions/_lib/contact-list-workbook.js";
+import { extractDdhClinicianContactsFromWorkbook, extractMmcDoctorContactsFromWorkbook } from "../functions/_lib/contact-list-workbook.js";
+
+const mmcWorkbook = XLSX.utils.book_new();
+const mmcRows = Array.from({ length: 42 }, () => Array(9).fill(""));
+mmcRows[1][3] = "25th August 2026";
+mmcRows[5][0] = "CART Clinician";
+mmcRows[5][1] = "Casey";
+mmcRows[5][2] = "0417 489 358";
+mmcRows[6][3] = "SEPSIS DR";
+mmcRows[6][4] = "Sophie";
+mmcRows[6][5] = "25192";
+mmcRows[7][6] = "ADULT SMS ON CALL";
+mmcRows[7][7] = "Switch";
+mmcRows[7][8] = "Call Switch - 92";
+XLSX.utils.book_append_sheet(mmcWorkbook, XLSX.utils.aoa_to_sheet(mmcRows), "SHIFT ALLOCATIONS");
+const mmcExtract = await extractMmcDoctorContactsFromWorkbook(XLSX.write(mmcWorkbook, { type: "array", bookType: "xlsx" }));
+assert.deepEqual(mmcExtract.contacts.map(({ shift, role, name, phone }) => [shift, role, name, phone]), [
+  ["AM", "CART Clinician", "Casey", "0417 489 358"],
+  ["PM", "SEPSIS DR", "Sophie", "25192"],
+  ["Night", "ADULT SMS ON CALL", "Switch", ""],
+], "MMC should retain 5-10 digit telephone numbers and reject shorter instructions");
 
 const workbook = XLSX.utils.book_new();
 XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([
@@ -33,6 +53,9 @@ clinicianRows[16][1] = "Alex LIN";
 clinicianRows[16][2] = "49981";
 clinicianRows[18][1] = "Morgan TEST";
 clinicianRows[18][2] = "49888";
+clinicianRows[19][0] = "Clinical Support on site";
+clinicianRows[19][1] = "Shawn SUPPORT";
+clinicianRows[19][3] = "03 95549098";
 clinicianRows[21][5] = "Silver Dr IC";
 clinicianRows[21][6] = "Pat";
 clinicianRows[21][7] = "PF";
@@ -62,12 +85,14 @@ assert.deepEqual(extract.contacts.map(({ shift, role, name, phone, isPopulated }
   ["AM", "Doctor In Charge / AVAO", "Di", "49900", true],
   ["AM", "Orange Dr IC", "Shilpa", "49970", true],
   ["AM", "Orange Dr IC", "Mina NESSIM", "49948", true],
+  ["AM", "Orange Dr IC", "Clare", "0422067042", true],
   ["AM", "Orange Dr IC", "Albert EXAMPLE", "49981", true],
   ["AM", "Silver Dr 8", "", "49985", false],
   ["AM", "Silver Dr 8", "Sehrish EXAMPLE", "49771", true],
   ["AM", "FT Clinician 3", "", "49937", false],
   ["AM", "FT Clinician 3", "Alex LIN", "49981", true],
   ["AM", "FT Clinician 3", "Morgan TEST", "49888", true],
+  ["AM", "Clinical Support on site", "Shawn SUPPORT", "03 95549098", true],
   ["PM", "Silver Dr IC", "Pat", "49903", true],
   ["PM", "Silver Dr IC", "PM Silver EXTRA", "49887", true],
   ["PM", "Orange Dr 8", "", "49905", false],

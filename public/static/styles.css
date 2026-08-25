@@ -959,6 +959,12 @@ input[type="color"] {
   justify-content: space-between;
 }
 
+.facility-overview-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .facility-overview-head .section-head {
   margin-bottom: 0;
 }
@@ -1028,7 +1034,6 @@ input[type="color"] {
   align-self: end;
   gap: 10px;
   min-height: 52px;
-  margin-left: auto;
   white-space: nowrap;
 }
 
@@ -1434,6 +1439,14 @@ input[type="color"] {
   color: var(--accent-strong);
   font-size: 0.78rem;
   font-weight: 800;
+  white-space: nowrap;
+}
+
+.facility-overview-contact-service-label,
+.facility-overview-onsite-label {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
   white-space: nowrap;
 }
 
@@ -4284,6 +4297,11 @@ body[data-skin="console"] #facilityOverviewSection.is-compact .facility-overview
 body[data-skin="console"] #facilityOverviewSection.is-compact .facility-overview-head .button {
   min-height: 36px;
   padding: 8px 14px;
+  font-size: 0.8rem;
+}
+
+body[data-skin="console"] #facilityOverviewSection.is-compact .facility-overview-cs-toggle {
+  min-height: 36px;
   font-size: 0.8rem;
 }
 
