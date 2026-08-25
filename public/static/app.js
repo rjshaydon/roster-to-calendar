@@ -4722,7 +4722,7 @@ function daysBetween(start, end) {
 
 function isClinicalSupportEvent(event) {
   const text = `${event?.title || ""} ${event?.rawValue || ""}`.toLowerCase();
-  return text.includes("clinical support") || /\bcs\b/.test(text) || /\bcso\b/.test(text);
+  return text.includes("clinical support") || /\bcs(?:o|m)?\b/.test(text);
 }
 
 function eventTone(event) {
@@ -10456,18 +10456,15 @@ function renderFacilityOverviewDdhOnShiftPeriod(assignments, options = {}) {
       renderPlacedCard("SSU", ssuInternHmo, ssuSms.length ? 3 : 2),
     ].join("");
   const remaining = workingAssignments.filter((assignment) => !handled.has(assignment));
-  const serviceCards = [
+  const serviceGroups = [
     ["ED Care-Co", "care-co", careCo],
     ["GAP / Geriatric AH", "gap", gap],
-  ].filter(([, key, items]) => items.length || facilityOverviewStandaloneServiceContacts(options, key).length)
-    .map(([label, key, items]) => items.length
-      ? renderFacilityOverviewStreamCard(label, items, options)
-      : renderFacilityOverviewStandaloneServiceCard(label, facilityOverviewStandaloneServiceContacts(options, key)))
-    .join("");
+  ];
+  const serviceCard = renderFacilityOverviewGroupedServiceCard("ED Care-Co / GAP", serviceGroups, options);
   return `${mainRow ? `<div class="facility-overview-ddh-row facility-overview-ddh-main-row">${mainRow}</div>` : ""}
     ${supportRow ? `<div class="facility-overview-ddh-row facility-overview-ddh-support-row">${supportRow}</div>` : ""}
     ${remaining.length ? renderFacilityOverviewGenericOnShiftPeriod(remaining, options) : ""}
-    ${serviceCards}${renderFacilityOverviewClinicalSupportCard(clinicalSupport, options)}`;
+    ${serviceCard}${renderFacilityOverviewClinicalSupportCard(clinicalSupport, options)}`;
 }
 
 function renderFacilityOverviewDdhNightPeriod(assignments, options = {}) {
@@ -10495,15 +10492,12 @@ function renderFacilityOverviewMmcOnShiftPeriod(assignments, options = {}) {
   const regularCards = options.period === "Night"
     ? renderFacilityOverviewMmcNightPeriod(regular, options)
     : renderFacilityOverviewGenericOnShiftPeriod(regular, options);
-  const serviceCards = [
+  const serviceGroups = [
     ["Geriatrician", "geriatrics", geriatrician],
     ["CART clinician", "cart", cart],
-  ].filter(([, key, items]) => items.length || facilityOverviewStandaloneServiceContacts(options, key).length)
-    .map(([label, key, items]) => items.length
-      ? renderFacilityOverviewStreamCard(label, items, options)
-      : renderFacilityOverviewStandaloneServiceCard(label, facilityOverviewStandaloneServiceContacts(options, key)))
-    .join("");
-  return `${regularCards}${serviceCards}${renderFacilityOverviewClinicalSupportCard(clinicalSupport, options)}`;
+  ];
+  const serviceCard = renderFacilityOverviewGroupedServiceCard("Geriatrician / CART", serviceGroups, options);
+  return `${regularCards}${serviceCard}${renderFacilityOverviewClinicalSupportCard(clinicalSupport, options)}`;
 }
 
 function renderFacilityOverviewMmcNightPeriod(assignments, options = {}) {
@@ -10603,10 +10597,16 @@ function facilityOverviewStandaloneServiceContacts(options, streamKey) {
   return (options?.serviceContacts || []).filter((contact) => contactStream(contact?.role).key === streamKey);
 }
 
-function renderFacilityOverviewStandaloneServiceCard(label, contacts) {
+function renderFacilityOverviewGroupedServiceCard(title, groups, options = {}) {
+  const populated = (groups || []).map(([label, key, assignments]) => ({
+    label,
+    assignments,
+    contacts: facilityOverviewStandaloneServiceContacts(options, key),
+  })).filter((group) => group.assignments.length || group.contacts.length);
+  if (!populated.length) return "";
   return `<article class="issue-card facility-overview-staff-card facility-overview-stream-card">
-    <strong class="facility-overview-stream-card-title">${escapeHtml(label)}</strong>
-    <div class="facility-overview-on-shift-names">${(contacts || []).map((contact) => `<div class="facility-overview-on-shift-person"><div class="facility-overview-on-shift-identity">${contact.name ? `<span class="facility-overview-staff-name">${escapeHtml(contact.name)}</span>` : ""}</div><div class="facility-overview-on-shift-details"><span class="facility-overview-contact-number" title="Service telephone number">${escapeHtml(contact.phone)}</span></div></div>`).join("")}</div>
+    <strong class="facility-overview-stream-card-title">${escapeHtml(title)}</strong>
+    ${populated.map((group) => `<div class="facility-overview-stream-seniority"><span>${escapeHtml(group.label)}</span>${group.assignments.length ? renderFacilityOverviewOnShiftNames(group.assignments, options) : `<div class="facility-overview-on-shift-names">${group.contacts.map((contact) => `<div class="facility-overview-on-shift-person"><div class="facility-overview-on-shift-identity">${contact.name ? `<span class="facility-overview-staff-name">${escapeHtml(contact.name)}</span>` : ""}</div><div class="facility-overview-on-shift-details"><span class="facility-overview-contact-number" title="Service telephone number">${escapeHtml(contact.phone)}</span></div></div>`).join("")}</div>`}</div>`).join("")}
   </article>`;
 }
 
