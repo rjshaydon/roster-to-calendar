@@ -615,6 +615,67 @@ assert.ok(
   "automated FindMyShift processing should retain facility-specific calendar locations",
 );
 
+const ddhVariableLineStaff = [
+  ["shemma", "Shemma", "Hasanovic", "SMS"],
+  ["rajan", "Rajan", "Kailainathan", "SMS"],
+  ["nagendran", "Nagendran", "Mathavan", "SMS"],
+  ["mina", "Mina", "Nessim", "SMS"],
+  ["igor", "Igor", "Tulchinsky", "SMS"],
+  ["aditya", "Aditya", "Mehta", "Junior Registrar"],
+  ["buthpitiya", "Buthpitiya", "Buthpitiya", "Intern"],
+  ["khue", "Khue Dong Huynh", "Le", "Intern"],
+].map(([staffId, firstName, lastName, jobTitle], order) => ({ staffId, firstName, lastName, jobTitle, order }));
+const ddhVariableLineRows = [
+  ["shemma", "Shemma Hasanovic", "SMS", "Orange AM IC", "08:00", "18:00"],
+  ["rajan", "Rajan Kailainathan", "SMS", "SSU SMS", "07:30", "17:30"],
+  ["nagendran", "Nagendran Mathavan", "SMS", "Silver AM IC", "08:00", "18:00"],
+  ["mina", "Mina Nessim", "SMS", "Rover AM", "08:00", "18:00"],
+  ["igor", "Igor Tulchinsky", "SMS", "AM Fast (3)", "10:00", "17:00"],
+  ["aditya", "Aditya Mehta", "Junior Registrar", "AM Fast IC", "08:00", "17:30"],
+  ["buthpitiya", "Buthpitiya Buthpitiya", "Intern", "INTERN SSU AM", "07:30", "17:00"],
+  ["khue", "Khue Dong Huynh Le", "Intern", "Orange AM4", "08:00", "17:30"],
+].map(([sourceStaffId, name, seniority, label, start, end]) => ({
+  sourceStaffId,
+  name,
+  seniority,
+  date: "2026-08-25",
+  label,
+  start,
+  end,
+  facility: label,
+  comment: "",
+}));
+const ddhVariableLineWorkbook = XLSX.read(findmyshiftRowsWorkbook(ddhVariableLineRows, ddhVariableLineStaff), { type: "array", cellDates: true });
+const ddhVariableLinePayload = await buildAutomatedDerivedRosterPayload({
+  file: workbookFile(ddhVariableLineWorkbook, "Dandenong-FindMyShift-variable-lines.xlsx"),
+  sourceId: "dandenong-findmyshift",
+  contentHash: "findmyshift-variable-lines-content-hash",
+  providerVersion: "2026-08-25T00:00:00.000Z",
+  parserExtensions: { mmc: [], ddh: [], casey: [], mch: [] },
+});
+assert.deepEqual(
+  ddhVariableLineRows.map((expected) => {
+    const key = expected.name.toUpperCase();
+    const doctor = ddhVariableLinePayload.doctors.find((candidate) => candidate.key === key);
+    const event = ddhVariableLinePayload.eventsByDoctor[key]?.find((candidate) => candidate.start.startsWith("2026-08-25"));
+    return {
+      name: expected.name,
+      seniority: doctor?.seniority,
+      eventSeniority: event?.seniority,
+      providerStaffId: doctor?.providerStaffId,
+      allocation: event?.rawValue,
+    };
+  }),
+  ddhVariableLineRows.map((expected) => ({
+    name: expected.name,
+    seniority: expected.seniority,
+    eventSeniority: expected.seniority,
+    providerStaffId: expected.sourceStaffId,
+    allocation: expected.label,
+  })),
+  "structured FindMyShift details must preserve DDH grades and allocations when the visual roster uses variable one-, two-, and three-line cells",
+);
+
 const mmcTypoWorkbook = XLSX.utils.book_new();
 XLSX.utils.book_append_sheet(mmcTypoWorkbook, XLSX.utils.aoa_to_sheet([
   ["Seniority", "Name", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
@@ -920,6 +981,16 @@ assert.match(styleSource, /\.facility-overview-staff-card \{[\s\S]*align-content
 assert.match(appSource, /renderFacilityOverviewContactListStatus[\s\S]*contact\.shift[\s\S]*contact\.reviewReason/, "Creator review should identify the period and reason for any unresolved contact allocation");
 assert.match(d1CalendarSource, /export async function queryFacilityOverviewOnShift[\s\S]*\.filter\(\(row\) => row\.doctorKey && row\.displayName && row\.event\);[\s\S]*return events;/, "On shift should return its compact daily roster without a term-wide grade-resolution scan");
 assert.match(d1CalendarSource, /applyFacilityStaffSeniorityOverridesToCoworkerEvents[\s\S]*FROM roster_file_doctors[\s\S]*membershipGradesByPerson/, "Effective-grade resolution should use a known active membership grade when a shift is Unknown");
+assert.match(
+  d1CalendarSource,
+  /function sanitizeFileDoctors[\s\S]*providerStaffId:[\s\S]*function bulkInsertFileDoctorStatements[\s\S]*provider_staff_id/,
+  "chunked roster saves must preserve FindMyShift staff IDs on DDH membership rows",
+);
+assert.match(
+  d1CalendarSource,
+  /function collectDerivedEventAndIssueRows[\s\S]*event\.providerStaffId \|\| doctor\.providerStaffId[\s\S]*function bulkInsertEventStatements[\s\S]*provider_staff_id/,
+  "chunked roster saves must preserve FindMyShift staff IDs on DDH event rows",
+);
 assert.match(d1CalendarSource, /const overrideTerms = new Map\(\)[\s\S]*Promise\.all\(\[\.\.\.overrideTerms\.entries\(\)\]/, "Effective-grade resolution should load overrides once per facility and term, rather than once per staff row");
 assert.match(d1CalendarSource, /export async function queryFacilityOverviewStaff[\s\S]*roster_events\.start_date[\s\S]*event: \{ start: String\(row\.start_date/, "ED staff should return lightweight dated grade records rather than full calendar-event JSON");
 assert.match(appSource, /physiotherapist[\s\S]*nurse practitioner[\s\S]*Fast Track[\s\S]*facilityOverviewDetectedSeniority/, "Physios and nurse practitioners should be identified and placed in Fast Track");
@@ -945,7 +1016,7 @@ assert.match(styleSource, /#facilityOverviewBody\.is-working-together > \.facili
 assert.match(stateSource, /action === "downloadFindmyshiftExceptions"[\s\S]*findmyshiftDandenongAssignmentExceptions[\s\S]*findmyshiftExceptionCsv/, "FindMyShift exception downloads must be creator-only server-side report reads");
 assert.match(findmyshiftCheckSource, /isTransientFindmyshiftRateLimitError[\s\S]*current\?\.lastSuccessAt[\s\S]*returned HTTP 429/, "a transient FindMyShift rate limit should neither mark a successful source failed nor cause it to be downloaded again");
 assert.match(findmyshiftModuleSource, /NEXT_TERM_LOOKAHEAD_DAYS = 28[\s\S]*findmyshiftPublicationWindow/, "FindMyShift should use a four-week early-publication window for the next term");
-assert.match(findmyshiftCheckSource, /IMPORT_FORMAT = "stream-paired-v6"[\s\S]*term-window change deliberately[\s\S]*rangeState\.requested[\s\S]*importFormat: IMPORT_FORMAT/, "a new FindMyShift parser revision or term window should bypass an unchanged provider version and persist its requested range");
+assert.match(findmyshiftCheckSource, /IMPORT_FORMAT = "stream-paired-v7"[\s\S]*term-window change deliberately[\s\S]*rangeState\.requested[\s\S]*importFormat: IMPORT_FORMAT/, "a new FindMyShift parser revision or term window should bypass an unchanged provider version and persist its requested range");
 assert.match(findmyshiftCheckSource, /findmyshift-no-shifts[\s\S]*waiting-for-publication/, "an unpublished upcoming FindMyShift term should wait for a provider update instead of surfacing as an import failure");
 assert.match(
   findmyshiftCheckSource,
@@ -1830,7 +1901,7 @@ assert.match(
 );
 assert.match(
   d1CalendarSource.match(/function bulkInsertEventStatements[\s\S]*?function bulkInsertIssueStatements/)?.[0] || "",
-  /chunkRowsForBindLimit\(rows, 16, D1_MAX_BIND_PARAMS\)/,
+  /chunkRowsForBindLimit\(rows, 17, D1_MAX_BIND_PARAMS\)/,
   "D1 roster event inserts should batch multiple rows per statement",
 );
 assert.match(

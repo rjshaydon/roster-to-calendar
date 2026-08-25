@@ -688,6 +688,7 @@ function collectDerivedEventAndIssueRows(file, sourceType, safeDoctors, eventsBy
         String(event.title || ""),
         String(event.rawValue || ""),
         String(event.seniority || ""),
+        String(event.providerStaffId || doctor.providerStaffId || ""),
         String(event.location || ""),
         event.allDay === true ? 1 : 0,
         String(event.timeLabel || ""),
@@ -4192,6 +4193,7 @@ function sanitizeFileDoctors(doctors, fallbackSourceType) {
       sourceType: normalizeSourceType(doctor?.sourceType || fallbackSourceType),
       seniority: String(doctor?.seniority || "").trim(),
       membershipSource: String(doctor?.membershipSource || doctor?.membership_source || "roster").trim() || "roster",
+      providerStaffId: String(doctor?.providerStaffId || doctor?.provider_staff_id || "").trim(),
     }))
     .filter((doctor) => doctor.key && doctor.displayName && doctor.sourceType);
 }
@@ -4446,15 +4448,16 @@ async function bulkInsertFileDoctors(db, fileId, sourceType, doctors) {
 }
 
 function bulkInsertFileDoctorStatements(db, fileId, sourceType, doctors) {
-  return chunkRowsForBindLimit(doctors.map((doctor) => [fileId, sourceType, doctor.key, doctor.displayName, doctor.seniority || "", doctor.membershipSource || "roster"]), 6, D1_MAX_BIND_PARAMS)
+  return chunkRowsForBindLimit(doctors.map((doctor) => [fileId, sourceType, doctor.key, doctor.displayName, doctor.seniority || "", doctor.membershipSource || "roster", doctor.providerStaffId || ""]), 7, D1_MAX_BIND_PARAMS)
     .filter((chunk) => chunk.length)
     .map((chunk) => db.prepare(`
-      INSERT INTO roster_file_doctors (file_id, source_type, doctor_key, display_name, seniority, membership_source)
-      VALUES ${chunk.map(() => "(?, ?, ?, ?, ?, ?)").join(", ")}
+      INSERT INTO roster_file_doctors (file_id, source_type, doctor_key, display_name, seniority, membership_source, provider_staff_id)
+      VALUES ${chunk.map(() => "(?, ?, ?, ?, ?, ?, ?)").join(", ")}
       ON CONFLICT(file_id, source_type, doctor_key) DO UPDATE SET
         display_name = excluded.display_name,
         seniority = excluded.seniority,
-        membership_source = excluded.membership_source
+        membership_source = excluded.membership_source,
+        provider_staff_id = excluded.provider_staff_id
     `).bind(...chunk.flat()));
 }
 
@@ -4465,13 +4468,13 @@ async function bulkInsertEvents(db, rows) {
 }
 
 function bulkInsertEventStatements(db, rows) {
-  return chunkRowsForBindLimit(rows, 16, D1_MAX_BIND_PARAMS)
+  return chunkRowsForBindLimit(rows, 17, D1_MAX_BIND_PARAMS)
     .filter((chunk) => chunk.length)
     .map((chunk) => db.prepare(`
       INSERT INTO roster_events (
         id, file_id, source_type, doctor_key, display_name, start_date, end_date, start_ts, end_ts,
-        title, raw_value, seniority, location, all_day, time_label, event_json
-      ) VALUES ${chunk.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ")}
+        title, raw_value, seniority, provider_staff_id, location, all_day, time_label, event_json
+      ) VALUES ${chunk.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ")}
     `).bind(...chunk.flat()));
 }
 
@@ -4736,6 +4739,7 @@ function sanitizeEvent(value) {
     source: String(value.source || ""),
     sources: Array.isArray(value.sources) ? value.sources.map((item) => String(item || "")).filter(Boolean) : undefined,
     seniority: String(value.seniority || ""),
+    providerStaffId: String(value.providerStaffId || value.provider_staff_id || ""),
     title: String(value.title || ""),
     allDay: value.allDay === true,
     start: String(value.start || ""),
