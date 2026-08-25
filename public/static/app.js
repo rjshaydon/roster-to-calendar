@@ -6895,7 +6895,11 @@ function canUseDoctorPicker() {
 }
 
 function canUseCreatorDoctorSwitcher() {
-  return Boolean(isCreatorAuthenticated() && (canUseDoctorPicker() || activeCalendarMode() === "doctor-profile"));
+  return Boolean(isCreatorAuthenticated() && (
+    canUseDoctorPicker()
+    || activeCalendarMode() === "doctor-profile"
+    || (activeCalendarMode() === "claimed-account" && isImpersonating)
+  ));
 }
 
 function canReturnToCreator() {
@@ -14133,7 +14137,10 @@ async function validateDoctorProfileCalendarInBackground(doctor, previousState, 
   let result = await loadUnclaimedDoctorCalendar(doctor, previousState, {
     profile: options.profile,
     cachedRevision: "",
-    allowInlineBuild: false,
+    // This is an explicit Creator troubleshooting action, not a user login.
+    // A single inline profile build avoids several seconds of polling while
+    // leaving the resource-limited fast-login path unchanged.
+    allowInlineBuild: true,
     transition: options.transition,
   });
   if (!result && !calendarSnapshotMatchesActiveContext(currentSnapshot)) {
@@ -14481,22 +14488,30 @@ function reviewItemForCachedEvent(event) {
 }
 
 async function fetchDoctorProfileState(profile, options = {}) {
-  const response = await fetch("/api/state", {
+  const requestBody = {
+    action: "loadDoctorProfile",
+    email: authUserEmail || currentUserEmail,
+    password: authUserPassword || currentUserPassword,
+    profileId: profile.id,
+    doctorKey: profile.doctorKey,
+    displayName: profile.displayName,
+    sourceTypes: profile.sourceTypes,
+    aliases: profile.aliases,
+    cachedRevision: options.cachedRevision || "",
+    allowInlineBuild: options.allowInlineBuild !== false,
+  };
+  let response = await fetch("/api/state", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      action: "loadDoctorProfile",
-      email: authUserEmail || currentUserEmail,
-      password: authUserPassword || currentUserPassword,
-      profileId: profile.id,
-      doctorKey: profile.doctorKey,
-      displayName: profile.displayName,
-      sourceTypes: profile.sourceTypes,
-      aliases: profile.aliases,
-      cachedRevision: options.cachedRevision || "",
-      allowInlineBuild: options.allowInlineBuild !== false,
-    }),
+    body: JSON.stringify(requestBody),
   });
+  if (response.status === 503 && requestBody.allowInlineBuild) {
+    response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...requestBody, allowInlineBuild: false }),
+    });
+  }
   const data = await readJsonResponse(response, "Doctor profile load failed.");
   applyIssueConfig(data.issueConfig);
   return data;
@@ -18771,6 +18786,7 @@ function renderCachedCalendarSnapshotForContext(context = {}, options = {}) {
   if (!calendarTransitionStillCurrent(options.transition)) return false;
   const cached = loadCachedCalendarSnapshotForContext(context);
   if (!cached?.preview) return false;
+  if (!calendarSnapshotMatchesActiveContext(cached)) return false;
   return applyCachedCalendarSnapshot(cached, options);
 }
 
@@ -18780,6 +18796,7 @@ async function renderCachedCalendarSnapshotForContextAsync(context = {}, options
   const cached = await loadCachedCalendarSnapshotForContextAsync(context);
   if (!cached?.preview) return false;
   if (!calendarTransitionStillCurrent(options.transition)) return false;
+  if (!calendarSnapshotMatchesActiveContext(cached)) return false;
   return applyCachedCalendarSnapshot(cached, options);
 }
 

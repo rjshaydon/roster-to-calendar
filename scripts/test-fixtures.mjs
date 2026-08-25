@@ -1054,7 +1054,7 @@ assert.doesNotMatch(automationWorkflowSource, /schedule:/, "GitHub cron must not
 assert.match(automationIngestSource, /requestQueuedRosterProcessing/, "a newly retained roster should request the processor immediately");
 assert.match(
   findmyshiftCheckSource,
-  /IMPORT_FORMAT = "stream-paired-v6"[\s\S]*Dandenong-FindMyShift-\$\{IMPORT_FORMAT\}[\s\S]*saved\?\.importFormat[\s\S]*importFormat: IMPORT_FORMAT/,
+  /IMPORT_FORMAT = "stream-paired-v7"[\s\S]*Dandenong-FindMyShift-\$\{IMPORT_FORMAT\}[\s\S]*saved\?\.importFormat[\s\S]*importFormat: IMPORT_FORMAT/,
   "a corrected FindMyShift parser should retain a fresh generated source and bypass an older parser revision",
 );
 assert.match(automationDispatchSource, /GITHUB_ACTIONS_TOKEN[\s\S]*actions\/workflows[\s\S]*\/dispatches/, "dispatches should use a server-side GitHub Actions token");
@@ -1194,13 +1194,13 @@ assert.match(
 );
 assert.match(
   appSource.match(/function canUseCreatorDoctorSwitcher[\s\S]*?function canReturnToCreator/)?.[0] || "",
-  /canUseDoctorPicker\(\)[\s\S]*activeCalendarMode\(\) === "doctor-profile"/,
-  "the global doctor switcher should be limited to the creator calendar and unclaimed doctor profiles",
+  /canUseDoctorPicker\(\)[\s\S]*activeCalendarMode\(\) === "doctor-profile"[\s\S]*activeCalendarMode\(\) === "claimed-account" && isImpersonating/,
+  "the global doctor switcher should remain available while the authenticated Creator views claimed or unclaimed calendars",
 );
 assert.doesNotMatch(
   appSource.match(/function canUseCreatorDoctorSwitcher[\s\S]*?function canReturnToCreator/)?.[0] || "",
   /adminViewingEmail/,
-  "entering an unclaimed user account should show its roster-name chooser instead of the creator switcher",
+  "Creator switcher access should use explicit impersonation state rather than the viewed email alone",
 );
 assert.match(
   appSource.match(/function calendarFilesForActiveView[\s\S]*?function rosterDisplayFiles/)?.[0] || "",
@@ -1245,10 +1245,10 @@ assert.match(
   /loadSnapshotRegistryEntry[\s\S]*cachedRevision === registryRevision[\s\S]*loadCachedSnapshot[\s\S]*revisionSkipped: true/,
   "fast login should return the ready browser or R2 snapshot using its built revision",
 );
-assert.match(
+assert.doesNotMatch(
   stateSource.match(/function scheduleFastAccountSnapshotValidation[\s\S]*?function scheduleAccountSnapshotRebuild/)?.[0] || "",
-  /context\.waitUntil[\s\S]*queryCalendarRevision[\s\S]*loadSnapshotRegistryEntry[\s\S]*buildAndStoreAccountSnapshot/,
-  "fast login should validate and rebuild stale snapshots after the response",
+  /context\.waitUntil|queryCalendarRevision|buildAndStoreAccountSnapshot/,
+  "fast login should not attach an expensive snapshot rebuild to authentication",
 );
 assert.match(
   stateSource.match(/async function loadSnapshotPayloadFromRegistry[\s\S]*?async function loadFastAccountSnapshotPayload/)?.[0] || "",
@@ -1292,8 +1292,8 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function validateDoctorProfileCalendarInBackground[\s\S]*?async function enterUserAccount/)?.[0] || "",
-  /browser profile cache can be complete enough to render immediately[\s\S]*cachedRevision: ""[\s\S]*allowInlineBuild: false[\s\S]*waitForDoctorProfileCalendarBuild/,
-  "doctor profile switching should replace a browser cache with the profile's authoritative server snapshot",
+  /browser profile cache can be complete enough to render immediately[\s\S]*cachedRevision: ""[\s\S]*allowInlineBuild: true[\s\S]*waitForDoctorProfileCalendarBuild/,
+  "explicit Creator profile switching should obtain the profile's authoritative server snapshot without login-path polling",
 );
 assert.match(
   appSource.match(/async function waitForDoctorProfileCalendarBuild[\s\S]*?async function enterUserAccount/)?.[0] || "",
@@ -1342,8 +1342,8 @@ assert.match(
 );
 assert.match(
   stateSource.match(/async function loadFastAccountSnapshotPayload[\s\S]*?function scheduleAccountSnapshotRebuild/)?.[0] || "",
-  /scheduleFastAccountSnapshotValidation[\s\S]*revisionSkipped: true[\s\S]*function scheduleFastAccountSnapshotValidation[\s\S]*queryCalendarRevision/,
-  "fast login snapshots should defer revision validation and keep snapshot rebuilding in background work",
+  /scheduleFastAccountSnapshotValidation[\s\S]*revisionSkipped: true[\s\S]*function scheduleFastAccountSnapshotValidation[\s\S]*return false/,
+  "fast login snapshots should defer revision validation without attaching snapshot rebuilding to authentication",
 );
 assert.match(
   stateSource.match(/if \(action === "adminLoadUser"\)[\s\S]*?if \(action === "claimRosterName"\)/)?.[0] || "",
@@ -2185,14 +2185,14 @@ assert.match(
 );
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
-    .match(/async function buildDerivedDoctorProfileSnapshot[\s\S]*?function matchDoctorClaims/)?.[0] || "",
-  /queryRosterFileDoctorsForKeys\(db, doctorKeysForOption\(profile\)\)/,
-  "doctor profile load should resolve only the requested doctor instead of rebuilding every canonical option",
+    .match(/async function canonicalDoctorOptionForProfile[\s\S]*?async function doctorProfileImportRefs/)?.[0] || "",
+  /queryCanonicalDoctors[\s\S]*queryRosterFileDoctorsForKeys\(db, requestedKeys\)/,
+  "doctor profile load should expand the requested canonical identity and query only its roster keys",
 );
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
-    .match(/async function buildDerivedDoctorProfileSnapshot[\s\S]*?function matchDoctorClaims/)?.[0] || "",
-  /if \(!doctorDiagnostics\.length\)[\s\S]*queryRosterFileDoctors\(db\)[\s\S]*resolveCanonicalDoctorOptionForKey/,
+    .match(/async function doctorProfileDiagnostics[\s\S]*?async function doctorProfileImportRefs/)?.[0] || "",
+  /if \(!diagnostics\.length\)[\s\S]*queryRosterFileDoctors\(db\)[\s\S]*resolveCanonicalDoctorOptionForKey/,
   "doctor profile load should reserve full canonical rebuilds for the rare targeted-lookup miss path",
 );
 assert.match(appSource, /data-replace-active-rosters/, "creator UI should expose a roster recovery action");
@@ -4398,6 +4398,9 @@ class MemoryD1Statement {
           .map((suggestion) => ({ suggestion_json: suggestion.suggestion_json })),
       };
     }
+    if (sql.startsWith("SELECT token_hash, email FROM account_invites")) {
+      return { results: [] };
+    }
     if (sql.startsWith("SELECT * FROM doctor_profiles ORDER BY")) {
       return {
         results: [...this.db.doctorProfiles.values()]
@@ -5232,11 +5235,11 @@ const fastStaleWhileRevalidate = await postStateRaw(d1StateStore, {
 assert.equal(fastStaleWhileRevalidate.response.ok, true);
 assert.equal(fastStaleWhileRevalidate.body.snapshotRevision, fastStaleRevision, "fast login should immediately serve the latest ready R2 revision");
 assert.equal(fastStaleWhileRevalidate.body.diagnostics.login.skippedRevision, true, "fast login should report deferred revision validation");
-assert.equal(fastStaleWhileRevalidate.body.diagnostics.login.validationDeferred, true, "fast login should expose background validation scheduling");
+assert.equal(fastStaleWhileRevalidate.body.diagnostics.login.validationDeferred, false, "fast login should leave snapshot validation to the calendar load request");
 assert.match(fastStaleWhileRevalidate.response.headers.get("server-timing") || "", /auth;dur=[\d.]+[\s\S]*r2;dur=[\d.]+/, "fast login should emit standard Server-Timing phases");
-assert.equal(fastStaleWhileRevalidate.waitUntilPromises.length, 1, "fast login should schedule exactly one background snapshot validation");
+assert.equal(fastStaleWhileRevalidate.waitUntilPromises.length, 0, "fast login should not schedule background snapshot work");
 await Promise.all(fastStaleWhileRevalidate.waitUntilPromises);
-assert.notEqual(d1Store.snapshotRegistry.get(d1UserRegistryKey)?.built_revision, fastStaleRevision, "background validation should rebuild a snapshot whose live revision changed");
+assert.equal(d1Store.snapshotRegistry.get(d1UserRegistryKey)?.built_revision, fastStaleRevision, "fast login should leave the ready snapshot untouched until calendar validation");
 d1UserRegistry = d1Store.snapshotRegistry.get(d1UserRegistryKey);
 d1UserRegistry.built_revision = "outdated-revision";
 d1UserRegistry.status = "ready";
@@ -6996,6 +6999,20 @@ assert.deepEqual(
   michaelDoctorProfile.snapshot.fileRefs.map((ref) => ref.id).sort(),
   ["michael-mch", "michael-mmc"],
   "doctor profile snapshots should include every roster file matched by alias keys",
+);
+const michaelDoctorProfileWithoutBrowserAliases = await postState(michaelStateStore, {
+  action: "loadDoctorProfile",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  profileId: "MICHAEL COMAN::mch+mmc",
+  doctorKey: "MICHAEL COMAN",
+  displayName: "Michael COMAN",
+  sourceTypes: ["mmc", "mch"],
+});
+assert.deepEqual(
+  [...new Set(michaelDoctorProfileWithoutBrowserAliases.snapshot.preview.events.map((event) => event.source))].sort(),
+  ["mch", "mmc"],
+  "doctor profile snapshots should expand canonical roster aliases even when the browser omits them",
 );
 await seedUser(michaelStateStore, "michael@example.com", "michael-password-2", "Michael COMAN");
 const michaelRecreatedResolution = await postState(michaelStateStore, {

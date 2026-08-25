@@ -96,6 +96,7 @@ import {
 const CREATOR_EMAIL = "rhaydon@gmail.com";
 const OWNER_DOCTOR_KEY = "RICHARD HAYDON";
 const SNAPSHOT_SCHEMA_VERSION = 5;
+const DOCTOR_PROFILE_SNAPSHOT_VERSION = 2;
 const SNAPSHOT_BUILDING_RETRY_MS = 15 * 60 * 1000;
 const SNAPSHOT_GLOBAL_WARMUP_LIMIT = 25;
 const FACILITY_OVERVIEW_STREAM_SENIORITIES = new Set(["SMS", "CMO", "Senior Registrar", "Transitional/Intermediate Registrar", "Junior Registrar", "HMO", "Intern", "NP", "Physio", "Unknown", "ALL"]);
@@ -4909,18 +4910,33 @@ function mergeProfileSessionIntoState(state, profiles, ownerEmail = "") {
   };
 }
 
-async function doctorProfileImportRefs(db, profile) {
-  let doctorDiagnostics = await queryRosterFileDoctorsForKeys(db, doctorKeysForOption({
-    key: profile?.doctorKey,
-    aliases: profile?.aliases || [],
-  })).catch(() => []);
-  if (!doctorDiagnostics.length) {
+async function canonicalDoctorOptionForProfile(db, profile) {
+  const canonicalDoctors = await queryCanonicalDoctors(db).catch(() => []);
+  const requestedKeys = doctorKeysForOption(profile);
+  return requestedKeys.map((key) => findDoctorOptionByKey(canonicalDoctors, key)).find(Boolean)
+    || canonicalDoctors.find((doctor) => rosterIdentityKey(doctor?.displayName || doctor?.key) === rosterIdentityKey(profile?.displayName || profile?.doctorKey))
+    || null;
+}
+
+async function doctorProfileDiagnostics(db, profile) {
+  const canonicalDoctor = await canonicalDoctorOptionForProfile(db, profile);
+  const requestedKeys = [...new Set([
+    ...doctorKeysForOption(profile),
+    ...doctorKeysForOption(canonicalDoctor),
+  ])];
+  let diagnostics = await queryRosterFileDoctorsForKeys(db, requestedKeys).catch(() => []);
+  if (!diagnostics.length) {
     const doctorRows = await queryRosterFileDoctors(db).catch(() => []);
-    const fallbackDoctor = doctorRows.length ? await resolveCanonicalDoctorOptionForKey(db, doctorRows, profile.doctorKey) : null;
-    doctorDiagnostics = fallbackDoctor
+    const fallbackDoctor = doctorRows.length ? await resolveCanonicalDoctorOptionForKey(db, doctorRows, profile?.doctorKey) : null;
+    diagnostics = fallbackDoctor
       ? doctorRows.filter((row) => doctorKeysForOption(fallbackDoctor).includes(normalizeRosterName(row.doctorKey)))
       : [];
   }
+  return diagnostics;
+}
+
+async function doctorProfileImportRefs(db, profile) {
+  const doctorDiagnostics = await doctorProfileDiagnostics(db, profile);
   return repositoryImportRefsForDoctorProfile(null, profile, db, doctorDiagnostics);
 }
 
@@ -4951,11 +4967,18 @@ async function loadDoctorProfileSnapshotInfo(store, profile, db = null, ownerEma
 async function queryDoctorProfileCalendarRevision(db, profile, ownerEmail = "") {
   if (!hasCalendarDb({ ROSTER_DB: db })) return "";
   const rosterRevision = await queryCalendarRevision(db, ownerEmail).catch(() => "");
+  const canonicalDoctor = await canonicalDoctorOptionForProfile(db, profile);
+  const aliasKeys = [...new Set([
+    ...doctorKeysForOption(profile),
+    ...doctorKeysForOption(canonicalDoctor),
+  ])].sort();
   return [
+    `doctor-profile-v${DOCTOR_PROFILE_SNAPSHOT_VERSION}`,
     rosterRevision,
     String(profile?.profileId || ""),
     String(profile?.doctorKey || ""),
     sanitizeSourceTypes(profile?.sourceTypes).join(","),
+    aliasKeys.join(","),
     stableJsonStringify(sortObjectKeys(profile?.state?.session || {})),
     String(profile?.updatedAt || ""),
   ].join("|");
@@ -5053,14 +5076,7 @@ async function buildDerivedDoctorProfileSnapshot(store, db, profile, ownerEmail 
     ...defaultSettings(),
     ...(session.settings || {}),
   };
-  let doctorDiagnostics = await queryRosterFileDoctorsForKeys(db, doctorKeysForOption(profile));
-  if (!doctorDiagnostics.length) {
-    const doctorRows = await queryRosterFileDoctors(db).catch(() => []);
-    const fallbackDoctor = doctorRows.length ? await resolveCanonicalDoctorOptionForKey(db, doctorRows, profile.doctorKey) : null;
-    doctorDiagnostics = fallbackDoctor
-      ? doctorRows.filter((row) => doctorKeysForOption(fallbackDoctor).includes(normalizeRosterName(row.doctorKey)))
-      : [];
-  }
+  const doctorDiagnostics = await doctorProfileDiagnostics(db, profile);
   const doctorKeys = doctorDiagnostics.length
     ? [...new Set(doctorDiagnostics.map((row) => normalizeRosterName(row.doctorKey)).filter(Boolean))]
     : doctorKeysForOption(profile);
