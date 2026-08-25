@@ -1385,6 +1385,7 @@ input[type="color"] {
 .facility-overview-on-shift-names > div {
   display: flex;
   align-items: baseline;
+  width: 100%;
   gap: 6px;
 }
 
@@ -1396,6 +1397,7 @@ input[type="color"] {
 }
 
 .facility-overview-contact-number {
+  margin-left: auto;
   color: var(--accent-strong);
   font-size: 0.78rem;
   font-weight: 800;
