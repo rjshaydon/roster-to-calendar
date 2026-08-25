@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   attachContactAllocations,
+  contactsAfterShiftChange,
   contactExtractHasExpired,
   contactExtractStatus,
   normaliseContactListExtract,
@@ -24,6 +25,18 @@ assert.equal(contactExtractStatus(extract, { date: "2026-08-24", now: new Date("
 assert.equal(contactExtractStatus(extract, { date: "2026-08-25", now: new Date("2026-08-24T01:00:00Z") }), "not-current");
 assert.equal(contactExtractHasExpired("2026-08-24", new Date("2026-08-24T23:59:00Z")), false, "retain through the Night shift");
 assert.equal(contactExtractHasExpired("2026-08-24", new Date("2026-08-25T00:00:00Z")), true, "expire at 10:00 Melbourne the following day");
+
+const shiftChangeContacts = [
+  contact("Orange Dr 1", "Alex", "49901"),
+  { ...contact("Orange Dr 7", "Pat", "49905"), shift: "PM" },
+  { ...contact("Orange DR 1", "Chris", "49726"), shift: "Night" },
+];
+assert.deepEqual(contactsAfterShiftChange(shiftChangeContacts, { date: "2026-08-25", now: new Date("2026-08-25T00:30:00Z") }).map((entry) => entry.shift), ["AM"],
+  "at 10:30 Melbourne, future PM and Night contact entries must remain hidden");
+assert.deepEqual(contactsAfterShiftChange(shiftChangeContacts, { date: "2026-08-25", now: new Date("2026-08-25T05:00:00Z") }).map((entry) => entry.shift), ["AM", "PM"],
+  "the PM contacts should become available after 15:00 Melbourne");
+assert.deepEqual(contactsAfterShiftChange(shiftChangeContacts, { date: "2026-08-25", now: new Date("2026-08-25T13:00:00Z") }).map((entry) => entry.shift), ["AM", "PM", "Night"],
+  "the Night contacts should become available after 23:00 Melbourne");
 
 const assignments = [
   assignment("MMC", "PM", "Green", "Pat FINN", "SMS"),
@@ -137,6 +150,12 @@ const ddhMatches = attachContactAllocations([
 ], ddhExtract.contacts);
 assert.equal(ddhMatches.matchedCount, 3, "DDH Orange, Silver and Fast Track contacts should match their roster streams");
 assert.deepEqual(ddhMatches.assignments.map((entry) => entry.contactAllocation?.phone), ["49900", "49903", "49742"]);
+
+const ddhAlternatePhone = attachContactAllocations([
+  assignment("DDH", "AM", "Fast Track", "Alex LIN", "HMO"),
+], [{ area: "Dandenong Emergency", shift: "AM", role: "FT Clinician 3", name: "Alex LIN", phone: "49981", isPopulated: true }]);
+assert.equal(allocationFor(ddhAlternatePhone, "Alex LIN").phone, "49981",
+  "a five-digit extension from a DDH continuation row should attach to the rostered clinician");
 
 console.log("Contact allocation matching fixtures passed.");
 

@@ -82,6 +82,29 @@ export function contactAreaForSource(source) {
   return "";
 }
 
+// Contact sheets are commonly populated in advance with the team that is
+// still carrying the phones. For today's roster, expose a period only after
+// the latest normal handover time so an outgoing team cannot be attached to
+// the incoming roster. Past dates remain complete; future dates remain hidden.
+export function contactPeriodsAfterShiftChange(date, now = new Date()) {
+  const selectedDate = String(date || "").trim();
+  if (!isIsoDate(selectedDate)) return new Set();
+  const melbourne = melbourneDateTime(now);
+  if (selectedDate < melbourne.date) return new Set(VALID_SHIFTS);
+  if (selectedDate > melbourne.date) return new Set();
+  const minuteOfDay = melbourne.hour * 60 + melbourne.minute;
+  const periods = new Set();
+  if (minuteOfDay >= 8 * 60) periods.add("AM");
+  if (minuteOfDay >= 15 * 60) periods.add("PM");
+  if (minuteOfDay >= 23 * 60) periods.add("Night");
+  return periods;
+}
+
+export function contactsAfterShiftChange(contacts = [], { date = "", now = new Date() } = {}) {
+  const periods = contactPeriodsAfterShiftChange(date, now);
+  return (contacts || []).filter((contact) => periods.has(String(contact?.shift || "")));
+}
+
 export function attachContactAllocations(assignments = [], contacts = [], resolutions = []) {
   const available = (contacts || [])
     .filter((contact) => contact?.isPopulated && contact.name)
@@ -296,7 +319,7 @@ function isIsoDate(value) {
 
 function melbourneDateTime(now) {
   const values = Object.fromEntries(new Intl.DateTimeFormat("en-AU", {
-    timeZone: "Australia/Melbourne", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hourCycle: "h23",
+    timeZone: "Australia/Melbourne", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
   }).formatToParts(now).filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
-  return { date: `${values.year}-${values.month}-${values.day}`, hour: Number(values.hour) };
+  return { date: `${values.year}-${values.month}-${values.day}`, hour: Number(values.hour), minute: Number(values.minute) };
 }

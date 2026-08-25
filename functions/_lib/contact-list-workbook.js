@@ -53,14 +53,24 @@ export async function extractDdhClinicianContactsFromWorkbook(bytes, { providerM
     ["Night", 10],
   ];
   for (const [shift, firstColumn] of blocks) {
+    let precedingRole = "";
     for (let row = 1; row <= values.length; row += 1) {
       const cells = values[row - 1] || [];
-      const role = text(cells[firstColumn]);
-      if (!role || isDdhHeading(role) || isExcludedRole(role)) continue;
+      const suppliedRole = text(cells[firstColumn]);
+      if (isDdhHeading(suppliedRole) || isExcludedRole(suppliedRole)) {
+        precedingRole = "";
+        continue;
+      }
+      if (suppliedRole) precedingRole = suppliedRole;
       const rawName = text(cells[firstColumn + 1]);
       const emr = text(cells[firstColumn + 2]);
       const phone = ddhClinicianPhone({ standardPhone: cells[firstColumn + 3], rawName, emr });
       const name = clinicianName(rawName);
+      // Staff carrying a non-standard phone are sometimes added on the next
+      // otherwise-unlabelled row. Preserve the preceding clinical role so the
+      // contact can still be matched to the roster (or offered for review).
+      const role = suppliedRole || (name && phone ? precedingRole : "");
+      if (!role) continue;
       contacts.push({
         area: "Dandenong Emergency",
         shift,
@@ -233,9 +243,7 @@ function clinicianName(value) {
 }
 
 function ddhClinicianPhone({ standardPhone, rawName, emr } = {}) {
-  const standard = text(standardPhone);
-  if (standard) return standard;
-  return fiveDigitExtension(rawName) || fiveDigitExtension(emr);
+  return fiveDigitExtension(standardPhone) || fiveDigitExtension(rawName) || fiveDigitExtension(emr);
 }
 
 function fiveDigitExtension(value) {

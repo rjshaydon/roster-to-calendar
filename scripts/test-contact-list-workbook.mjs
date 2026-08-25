@@ -21,11 +21,13 @@ clinicianRows[5][0] = "Orange Dr IC";
 clinicianRows[5][1] = "Shilpa 0406370706";
 clinicianRows[5][2] = "ST";
 clinicianRows[5][3] = "49970";
-clinicianRows[7][0] = "Fast Track HMO";
-clinicianRows[7][1] = "Alex LIN 49981";
-clinicianRows[8][0] = "Fast Track HMO";
-clinicianRows[8][1] = "Morgan TEST";
-clinicianRows[8][2] = "49888";
+clinicianRows[7][0] = "FT Clinician 3";
+clinicianRows[7][3] = "49937";
+clinicianRows[8][1] = "Alex LIN";
+clinicianRows[8][2] = "49981";
+clinicianRows[9][0] = "Fast Track HMO";
+clinicianRows[9][1] = "Morgan TEST";
+clinicianRows[9][2] = "49888";
 clinicianRows[21][5] = "Silver Dr IC";
 clinicianRows[21][6] = "Pat";
 clinicianRows[21][7] = "PF";
@@ -46,7 +48,8 @@ assert.equal(extract.sourceDate, "2026-08-25", "the source date should use Melbo
 assert.deepEqual(extract.contacts.map(({ shift, role, name, phone, isPopulated }) => [shift, role, name, phone, isPopulated]), [
   ["AM", "Doctor In Charge / AVAO", "Di", "49900", true],
   ["AM", "Orange Dr IC", "Shilpa", "49970", true],
-  ["AM", "Fast Track HMO", "Alex LIN", "49981", true],
+  ["AM", "FT Clinician 3", "", "49937", false],
+  ["AM", "FT Clinician 3", "Alex LIN", "49981", true],
   ["AM", "Fast Track HMO", "Morgan TEST", "49888", true],
   ["PM", "Silver Dr IC", "Pat", "49903", true],
   ["Night", "FT Clinician ND IC", "Alex", "49742", true],

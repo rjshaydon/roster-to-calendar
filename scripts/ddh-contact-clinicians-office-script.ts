@@ -30,12 +30,19 @@ function main(
   }> = [];
 
   for (const [shift, firstColumn] of blocks) {
+    let precedingRole = "";
     for (const cells of values) {
-      const role = String(cells[firstColumn] || "").trim();
-      if (!role || isHeading(role) || isExcludedRole(role)) continue;
+      const suppliedRole = String(cells[firstColumn] || "").trim();
+      if (isHeading(suppliedRole) || isExcludedRole(suppliedRole)) {
+        precedingRole = "";
+        continue;
+      }
+      if (suppliedRole) precedingRole = suppliedRole;
       const rawName = String(cells[firstColumn + 1] || "");
       const name = clinicianName(rawName);
       const phone = clinicianPhone(String(cells[firstColumn + 3] || ""), rawName, String(cells[firstColumn + 2] || ""));
+      const role = suppliedRole || (name && phone ? precedingRole : "");
+      if (!role) continue;
       contacts.push({
         area: "Dandenong Emergency",
         shift,
@@ -64,9 +71,7 @@ function clinicianName(value: string) {
 }
 
 function clinicianPhone(standardPhone: string, rawName: string, emr: string) {
-  const standard = String(standardPhone || "").trim();
-  if (standard) return standard;
-  return fiveDigitExtension(rawName) || fiveDigitExtension(emr);
+  return fiveDigitExtension(standardPhone) || fiveDigitExtension(rawName) || fiveDigitExtension(emr);
 }
 
 function fiveDigitExtension(value: string) {

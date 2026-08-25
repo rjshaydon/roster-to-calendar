@@ -1,6 +1,6 @@
 import { applyEventOverrides, customEventsToEvents, defaultSettings, inspectImportRecord, isIgnoredRosterIssueValue, normalizeRosterName } from "../_lib/roster.js";
 import { AUTOMATION_SOURCES } from "../_lib/automation-import.js";
-import { DDH_CONTACT_LIST_SOURCE_ID, MMC_CONTACT_LIST_SOURCE_ID, attachContactAllocations, contactAreaForSource, contactExtractStatus, normaliseContactListExtract } from "../../public/static/contact-allocations.js";
+import { DDH_CONTACT_LIST_SOURCE_ID, MMC_CONTACT_LIST_SOURCE_ID, attachContactAllocations, contactAreaForSource, contactExtractStatus, contactsAfterShiftChange, normaliseContactListExtract } from "../../public/static/contact-allocations.js";
 import { requestQueuedRosterProcessing } from "../_lib/automation-dispatch.js";
 import { extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentExceptions, findmyshiftLastModified, findmyshiftReportDiagnostics, findmyshiftShiftReport } from "../_lib/findmyshift.js";
 import {
@@ -2077,7 +2077,9 @@ async function loadLiveContactListForOnShift(context, { date, facilityKeys = [] 
       sourceDate: extract.sourceDate,
       providerModifiedAt: extract.providerModifiedAt || String(row.provider_modified_at || ""),
       receivedAt: String(row.received_at || ""),
-      contacts: status === "available" ? extract.contacts.filter((contact) => allowedAreas.has(contact.area)) : [],
+      contacts: status === "available"
+        ? contactsAfterShiftChange(extract.contacts.filter((contact) => allowedAreas.has(contact.area)), { date })
+        : [],
       resolutions: status === "available" ? resolutions : [],
     };
   } catch (error) {
