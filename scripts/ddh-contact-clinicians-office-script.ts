@@ -30,18 +30,21 @@ function main(
   }> = [];
 
   for (const [shift, firstColumn] of blocks) {
-    let precedingRole = "";
+    let continuationRole = "";
     for (const cells of values) {
       const suppliedRole = String(cells[firstColumn] || "").trim();
       if (isHeading(suppliedRole) || isExcludedRole(suppliedRole)) {
-        precedingRole = "";
+        continuationRole = "";
         continue;
       }
-      if (suppliedRole) precedingRole = suppliedRole;
+      if (suppliedRole && shift !== "Night") {
+        if (isContinuationStreamRole(suppliedRole)) continuationRole = suppliedRole;
+        else if (isStructuredRole(suppliedRole)) continuationRole = "";
+      }
       const rawName = String(cells[firstColumn + 1] || "");
       const name = clinicianName(rawName);
       const phone = clinicianPhone(String(cells[firstColumn + 3] || ""), rawName, String(cells[firstColumn + 2] || ""));
-      const role = suppliedRole || (name && phone ? precedingRole : "");
+      const role = suppliedRole || (name && phone ? continuationRole : "");
       if (!role) continue;
       contacts.push({
         area: "Dandenong Emergency",
@@ -85,4 +88,12 @@ function isExcludedRole(role: string) {
 
 function isHeading(role: string) {
   return /^(?:ed clinician phones?|role|am|pm|nd|night)$/i.test(String(role || "").trim());
+}
+
+function isContinuationStreamRole(role: string) {
+  return /^(?:orange\s+(?:dr|doctor)\b|silver\s+(?:dr|doctor)\b|(?:ft|fast\s+track)\b)/i.test(String(role || "").trim());
+}
+
+function isStructuredRole(role: string) {
+  return /^(?:doctor\s+in\s+charge\b|avao\b|orange\b|silver\b|(?:ft|fast\s+track)\b|ssu\b|geriatrician\b|cart\b|miprep\b|resus\b)/i.test(String(role || "").trim());
 }

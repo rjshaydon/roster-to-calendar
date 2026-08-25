@@ -53,23 +53,27 @@ export async function extractDdhClinicianContactsFromWorkbook(bytes, { providerM
     ["Night", 10],
   ];
   for (const [shift, firstColumn] of blocks) {
-    let precedingRole = "";
+    let continuationRole = "";
     for (let row = 1; row <= values.length; row += 1) {
       const cells = values[row - 1] || [];
       const suppliedRole = text(cells[firstColumn]);
       if (isDdhHeading(suppliedRole) || isExcludedRole(suppliedRole)) {
-        precedingRole = "";
+        continuationRole = "";
         continue;
       }
-      if (suppliedRole) precedingRole = suppliedRole;
+      if (suppliedRole && shift !== "Night") {
+        if (isDdhContinuationStreamRole(suppliedRole)) continuationRole = suppliedRole;
+        else if (isDdhStructuredRole(suppliedRole)) continuationRole = "";
+      }
       const rawName = text(cells[firstColumn + 1]);
       const emr = text(cells[firstColumn + 2]);
       const phone = ddhClinicianPhone({ standardPhone: cells[firstColumn + 3], rawName, emr });
       const name = clinicianName(rawName);
-      // Staff carrying a non-standard phone are sometimes added on the next
-      // otherwise-unlabelled row. Preserve the preceding clinical role so the
-      // contact can still be matched to the roster (or offered for review).
-      const role = suppliedRole || (name && phone ? precedingRole : "");
+      // Orange, Silver and Fast Track have several spare rows beneath their
+      // labelled allocations. Scan the entire stream block: handwritten names
+      // may be separated from the labels by any number of blank or mobile-only
+      // rows, and a five-digit extension may be in either adjacent text cell.
+      const role = suppliedRole || (name && phone ? continuationRole : "");
       if (!role) continue;
       contacts.push({
         area: "Dandenong Emergency",
@@ -276,4 +280,13 @@ function isExcludedRole(role) {
 
 function isDdhHeading(role) {
   return /^(?:ed clinician phones?|role|am|pm|nd|night)$/i.test(text(role));
+}
+
+function isDdhContinuationStreamRole(role) {
+  const value = text(role);
+  return /^(?:orange\s+(?:dr|doctor)\b|silver\s+(?:dr|doctor)\b|(?:ft|fast\s+track)\b)/i.test(value);
+}
+
+function isDdhStructuredRole(role) {
+  return /^(?:doctor\s+in\s+charge\b|avao\b|orange\b|silver\b|(?:ft|fast\s+track)\b|ssu\b|geriatrician\b|cart\b|miprep\b|resus\b)/i.test(text(role));
 }
