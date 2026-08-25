@@ -5185,6 +5185,15 @@ const d1DeniedFacilityOverview = await postStateRaw(d1StateStore, {
   date: "2026-02-03",
 }, d1Store);
 assert.equal(d1DeniedFacilityOverview.response.status, 403, "At a glance API data should be denied without a per-user grant");
+const d1CreatorImpersonatingDeniedFacilityOverview = await postStateRaw(d1StateStore, {
+  action: "queryFacilityOverviewOnShift",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  targetEmail: "d1-user@example.com",
+  facilityKey: "mmc",
+  date: "2026-02-03",
+}, d1Store);
+assert.equal(d1CreatorImpersonatingDeniedFacilityOverview.response.status, 403, "Creator account switching must retain the entered user's blocked At a glance access");
 const d1GrantedFacilityOverview = await postState(d1StateStore, {
   action: "setUserFacilityOverviewEnabled",
   email: "rhaydon@gmail.com",
@@ -5973,6 +5982,18 @@ assert.equal(d1DoctorProfile.snapshot?.preview?.derivedFromD1, true);
 assert.equal(d1DoctorProfile.snapshotStale, false);
 assert.ok(d1DoctorProfile.snapshot.preview.events.length > 0);
 assert.ok(d1DoctorProfile.snapshot.fileRefs.some((ref) => ref.id === d1RepositoryFile), "D1 doctor profile should derive file refs without KV repository index");
+const d1DoctorProfileFacilityOverviewAccess = await postState(d1StateStore, {
+  action: "queryDoctorProfileFacilityOverviewAccess",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  profileId: `${d1Doctor.key}::mmc`,
+  doctorKey: d1Doctor.key,
+  displayName: d1Doctor.displayName,
+  sourceTypes: ["mmc"],
+}, d1Store);
+assert.equal(d1DoctorProfileFacilityOverviewAccess.facilityOverviewAccountEmail, "d1-user@example.com", "a doctor profile should resolve its linked account for At a glance simulation");
+assert.equal(d1DoctorProfileFacilityOverviewAccess.facilityOverviewEnabled, true, "a linked doctor profile should expose its account's At a glance grant");
+assert.equal(d1DoctorProfileFacilityOverviewAccess.facilityOverviewAccess.mode, d1GrantedUserLogin.facilityOverviewAccess.mode, "a doctor profile should use its linked account's At a glance scope");
 const d1DoctorProfileServerCache = await postState(d1StateStore, {
   action: "loadDoctorProfile",
   email: "rhaydon@gmail.com",

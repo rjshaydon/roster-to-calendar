@@ -9096,7 +9096,11 @@ function canUseRosterInsights() {
 }
 
 function canUseFacilityOverview() {
-  if (activeCalendarMode() === "doctor-profile") return isCreatorAuthenticated();
+  // A Creator entering somebody else's account/profile should see precisely
+  // that person's entitlement, not the Creator's unrestricted entitlement.
+  if (activeCalendarMode() === "doctor-profile") {
+    return currentFacilityOverviewEnabled === true && currentFacilityOverviewAccess.mode !== "denied";
+  }
   if (currentUserRole === "creator" && !adminViewingEmail) return true;
   return currentFacilityOverviewEnabled === true && currentFacilityOverviewAccess.mode !== "denied";
 }
@@ -9294,6 +9298,7 @@ async function loadFacilityOverviewMetadata() {
         action: "queryFacilityOverviewMetadata",
         email: authUserEmail || currentUserEmail,
         password: authUserPassword || currentUserPassword,
+        targetEmail: facilityOverviewTargetEmail(),
         sourceTypes: normalizedDoctorSourceTypes(selectedDoctor()),
       }),
     });
@@ -9561,6 +9566,27 @@ function applyFacilityOverviewSiteScope() {
   facilityOverviewState.togetherFacilityKey = facilityKey;
   facilityOverviewState.byStreamRows = (facilityOverviewState.byStreamRows || []).map((row) => ({ ...row, facilityKey }));
   facilityOverviewState.byStreamCatalog = (facilityOverviewState.byStreamCatalog || []).filter((entry) => entry.facilityKey === facilityKey);
+}
+
+function resetFacilityOverviewAccessForEnteredUser() {
+  currentFacilityOverviewEnabled = false;
+  currentFacilityOverviewAccess = {
+    mode: "denied",
+    isSms: false,
+    workingToday: false,
+    facilityKey: "",
+    preferredFacilityKey: "",
+    today: formatDateKey(new Date()),
+  };
+  closeFacilityOverview();
+  syncFacilityOverviewAccess();
+}
+
+function facilityOverviewTargetEmail() {
+  if (activeCalendarMode() === "doctor-profile") {
+    return normalizeEmail(activeDoctorProfile?.facilityOverviewAccountEmail || linkedAccountEmailForDoctorProfile(activeDoctorProfile));
+  }
+  return normalizeEmail(adminViewingEmail);
 }
 
 async function openFacilityOverview(options = {}) {
@@ -9980,6 +10006,7 @@ async function loadFacilityOverviewByStream() {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({
         action: "queryFacilityOverviewByStream", email: authUserEmail || currentUserEmail, password: authUserPassword || currentUserPassword,
+        targetEmail: facilityOverviewTargetEmail(),
         startDate, endDate, selections: rows,
       }),
     });
@@ -10167,6 +10194,7 @@ async function loadFacilityOverviewTogether() {
         action: "queryFacilityOverviewWorkingTogether",
         email: authUserEmail || currentUserEmail,
         password: authUserPassword || currentUserPassword,
+        targetEmail: facilityOverviewTargetEmail(),
         startDate,
         endDate,
         doctorKeys: [...new Set(selectedDoctors.flatMap(facilityOverviewTogetherDoctorKeys))],
@@ -10352,6 +10380,7 @@ async function loadFacilityOverviewOnShift() {
         action: "queryFacilityOverviewOnShift",
         email: authUserEmail || currentUserEmail,
         password: authUserPassword || currentUserPassword,
+        targetEmail: facilityOverviewTargetEmail(),
         facilityKey: facilityOverviewState.facilityKey,
         date: facilityOverviewState.date,
         includeClinicalSupport: facilityOverviewState.includeClinicalSupport === true,
@@ -10712,6 +10741,7 @@ async function saveFacilityOverviewContactResolution(doctorKey) {
     const response = await fetch("/api/state", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ action: "setContactAllocationResolution", email: authUserEmail || currentUserEmail, password: authUserPassword || currentUserPassword,
+        targetEmail: facilityOverviewTargetEmail(),
         facilityKey: facilityOverviewState.facilityKey, date: facilityOverviewState.date, contactKey, doctorKey, expectedRevision: Number(existing?.revision || 0) }),
     });
     const data = await readJsonResponse(response, "Could not save the temporary contact allocation.");
@@ -10769,6 +10799,7 @@ async function loadFacilityOverviewStaff() {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({
         action: "queryFacilityOverviewStaff", email: authUserEmail || currentUserEmail, password: authUserPassword || currentUserPassword,
+        targetEmail: facilityOverviewTargetEmail(),
         facilityKey: facilityOverviewState.facilityKey === "ALL" ? "all" : facilityOverviewState.facilityKey,
         termStart: facilityOverviewState.staffTermStart, termEnd: formatDateKey(addDays(term.end, -1)),
       }),
@@ -14097,7 +14128,10 @@ async function validateClaimedAccountCalendarInBackground(context = {}, options 
     deferHydration: true,
     responseMode: "fast",
     cachedRevision,
-    allowInlineBuild: !cachedSnapshot?.preview,
+    // A switched account must not synchronously build a large snapshot in the
+    // request that opens the account. The server schedules it and the normal
+    // refresh path picks it up once ready.
+    allowInlineBuild: false,
     preserveExistingSnapshot: Boolean(cachedSnapshot?.preview),
     accountSwitchStartedAt: options.accountSwitchStartedAt,
     transition: options.transition,
@@ -14119,7 +14153,7 @@ async function validateClaimedAccountCalendarInBackground(context = {}, options 
     accountSwitchStartedAt: options.accountSwitchStartedAt,
     doctorKey: context.doctorKey || "",
     cachedRevision,
-    allowInlineBuild: !cachedSnapshot?.preview,
+    allowInlineBuild: false,
     transition: options.transition,
   }, 0);
   if (!calendarTransitionStillCurrent(options.transition)) return;
@@ -14137,10 +14171,10 @@ async function validateDoctorProfileCalendarInBackground(doctor, previousState, 
   let result = await loadUnclaimedDoctorCalendar(doctor, previousState, {
     profile: options.profile,
     cachedRevision: "",
-    // This is an explicit Creator troubleshooting action, not a user login.
-    // A single inline profile build avoids several seconds of polling while
-    // leaving the resource-limited fast-login path unchanged.
-    allowInlineBuild: true,
+    // Do not build a profile snapshot inside the interactive Worker request.
+    // Large profiles can exceed Cloudflare's CPU budget; the registry warm-up
+    // and the bounded poll below complete it without failing the switch.
+    allowInlineBuild: false,
     transition: options.transition,
   });
   if (!result && !calendarSnapshotMatchesActiveContext(currentSnapshot)) {
@@ -14157,6 +14191,9 @@ async function validateDoctorProfileCalendarInBackground(doctor, previousState, 
     setStatus("Calendar is up to date.");
   } else {
     throw new Error(`${doctor.displayName} calendar is not ready yet. Try again in a moment.`);
+  }
+  if (calendarTransitionStillCurrent(options.transition) && activeDoctorProfile?.id === options.profile?.id) {
+    void loadDoctorProfileFacilityOverviewAccess(activeDoctorProfile);
   }
 }
 
@@ -14183,6 +14220,7 @@ async function enterUserAccount(email) {
   if (!targetEmail || (!isOwnerAccount() && !isCreatorAuthenticated())) return;
   const previousState = captureCalendarViewState();
   beginFacilityOverviewAccountSession();
+  resetFacilityOverviewAccessForEnteredUser();
   const accountSwitchStartedAt = performance.now();
   const creatorEmail = authUserEmail || currentUserEmail;
   const creatorPassword = authUserPassword || currentUserPassword;
@@ -14251,6 +14289,7 @@ async function enterDoctorProfileView(doctor) {
   rememberCreatorCalendarSourceRefs();
   const previousState = captureCalendarViewState();
   beginFacilityOverviewAccountSession();
+  resetFacilityOverviewAccessForEnteredUser();
   const creatorEmail = authUserEmail || currentUserEmail;
   const creatorPassword = authUserPassword || currentUserPassword;
   cancelScheduledCloudStateSave();
@@ -14515,6 +14554,37 @@ async function fetchDoctorProfileState(profile, options = {}) {
   const data = await readJsonResponse(response, "Doctor profile load failed.");
   applyIssueConfig(data.issueConfig);
   return data;
+}
+
+async function loadDoctorProfileFacilityOverviewAccess(profile) {
+  if (!profile?.id || !isCreatorAuthenticated()) return;
+  try {
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "queryDoctorProfileFacilityOverviewAccess",
+        email: authUserEmail || currentUserEmail,
+        password: authUserPassword || currentUserPassword,
+        profileId: profile.id,
+        doctorKey: profile.doctorKey,
+        displayName: profile.displayName,
+        sourceTypes: profile.sourceTypes,
+        aliases: profile.aliases,
+      }),
+    });
+    const data = await readJsonResponse(response, "Could not load this profile's At a glance access.");
+    if (activeCalendarMode() !== "doctor-profile" || activeDoctorProfile?.id !== profile.id) return;
+    activeDoctorProfile = { ...activeDoctorProfile, facilityOverviewAccountEmail: normalizeEmail(data.facilityOverviewAccountEmail) };
+    currentFacilityOverviewEnabled = data.facilityOverviewEnabled === true;
+    currentFacilityOverviewAccess = sanitizeFacilityOverviewAccess(data.facilityOverviewAccess);
+    applyFacilityOverviewSiteScope();
+    syncFacilityOverviewAccess();
+  } catch (error) {
+    // Keep the feature safely unavailable if its independent access check is
+    // temporarily unavailable; do not fail the calendar/profile switch.
+    console.warn("Could not load doctor profile At a glance access", error);
+  }
 }
 
 async function loadUnclaimedSourceImports(doctor, sourceContext, profile) {
@@ -16372,7 +16442,7 @@ async function hydrateAuthenticatedWorkspace(options = {}, loginStartedAt = 0) {
         queueCreatorSwitchTargetPrefetch();
       }).catch(() => null);
     }
-    if (currentSnapshotStale) {
+    if (currentSnapshotStale || !currentSnapshot?.preview) {
       queuePostLoginSnapshotRefresh({
         loginStartedAt,
         adminTargetEmail,

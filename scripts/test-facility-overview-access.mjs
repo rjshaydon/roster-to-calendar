@@ -61,7 +61,14 @@ assert.match(d1Source.match(/async function calendarSchemaIsCurrent[\s\S]*?async
 
 const appSource = await readFile(new URL("../public/static/app.js", import.meta.url), "utf8");
 assert.match(stateSource, /facilityOverviewAccess: prepared\.facilityOverviewAccess/, "fast login must carry access context in its existing response");
+assert.match(stateSource, /facilityOverviewSubject[\s\S]*targetEmail[\s\S]*facilityOverviewEnabled/, "Creator-entered accounts must be authorised using the entered user's At a glance entitlement");
+assert.match(stateSource.match(/if \(action === "adminLoadUser"\)[\s\S]*?if \(action === "loadAccountContext"\)/)?.[0] || "", /responseMode === "fast"[\s\S]*prepareFastLoginEnvelope[\s\S]*loadFastAccountSnapshotPayload/, "Creator account switching must not build a full account snapshot in its fast response");
+assert.match(stateSource.match(/if \(action === "queryDoctorProfileFacilityOverviewAccess"\)[\s\S]*?if \(action === "saveDoctorProfile"\)/)?.[0] || "", /resolveDoctorAccount[\s\S]*facilityOverviewAccountEmail[\s\S]*facilityOverviewAccess/, "doctor profiles must resolve their linked user's At a glance scope separately from calendar loading");
 assert.match(appSource, /launchClinicalOnShiftWorkspace[\s\S]*workingToday[\s\S]*facilityOverviewState\.tab = "on-shift"/, "a working clinician must land on On shift without calendar hydration");
+assert.match(appSource.match(/function canUseFacilityOverview\(\)[\s\S]*?function sanitizeFacilityOverviewAccess/)?.[0] || "", /doctor-profile[\s\S]*currentFacilityOverviewEnabled[\s\S]*currentFacilityOverviewAccess\.mode !== "denied"/, "doctor-profile views must not inherit Creator At a glance access");
+assert.match(appSource, /resetFacilityOverviewAccessForEnteredUser\(\)[\s\S]*enterUserAccount[\s\S]*resetFacilityOverviewAccessForEnteredUser\(\)[\s\S]*enterDoctorProfileView/, "account and profile switches must clear Creator access before the entered user's access is loaded");
+assert.match(appSource, /targetEmail: facilityOverviewTargetEmail\(\)/, "At a glance queries must send the entered account as their access subject");
+assert.match(appSource, /validateDoctorProfileCalendarInBackground[\s\S]*allowInlineBuild: false[\s\S]*loadDoctorProfileFacilityOverviewAccess/, "profile switching must avoid inline snapshot builds and load At a glance access independently");
 assert.match(appSource, /facilityOverviewIsSiteScoped\(\)[\s\S]*facility-overview-fixed-facility/, "non-SMS site scope must render as a fixed label");
 assert.match(appSource, /data-facility-overview-contact-resolution[\s\S]*data-facility-overview-contact-resolution-target[\s\S]*setContactAllocationResolution/, "On shift review rows must offer an editable temporary-assignment selector");
 assert.match(appSource, /is-manual[\s\S]*<sup aria-hidden="true">\*<\/sup>/, "a manually assigned number should use only a small adjacent asterisk");

@@ -272,10 +272,30 @@ export async function onRequestPost(context) {
     }
 
     const account = await verifyD1Account(context.env.ROSTER_DB, email, password);
+    // A Creator may enter another account from the switcher.  At a glance
+    // requests must then be authorised as that entered account, rather than
+    // inheriting the Creator's all-site access.
+    let facilityOverviewSubject = account;
+    if (targetEmail && targetEmail !== normalizeEmail(account.record?.email)) {
+      if (account.role !== "creator" && account.role !== "owner") {
+        facilityOverviewSubject = null;
+      } else {
+        const targetRecord = await loadAccountMirror(context.env.ROSTER_DB, targetEmail);
+        facilityOverviewSubject = targetRecord
+          ? { record: targetRecord, role: targetRecord.role || roleForEmail(targetRecord.email) }
+          : null;
+      }
+    }
+    const facilityOverviewEnabled = () => Boolean(
+      facilityOverviewSubject
+      && facilityOverviewEnabledForRecord({ ...facilityOverviewSubject.record, role: facilityOverviewSubject.role }),
+    );
     let facilityOverviewAccessPromise = null;
     const facilityOverviewAccess = () => {
       if (!facilityOverviewAccessPromise) {
-        facilityOverviewAccessPromise = resolveFacilityOverviewAccess(context.env.ROSTER_DB, { ...account.record, role: account.role });
+        facilityOverviewAccessPromise = facilityOverviewSubject
+          ? resolveFacilityOverviewAccess(context.env.ROSTER_DB, { ...facilityOverviewSubject.record, role: facilityOverviewSubject.role })
+          : Promise.resolve({ mode: "denied", isSms: false, workingToday: false, facilityKey: "", today: australianDateKey() });
       }
       return facilityOverviewAccessPromise;
     };
@@ -601,17 +621,28 @@ export async function onRequestPost(context) {
       }
       target = await repairAccountClaimsIfNeeded(context.env.ROSTER_DB, target, { reason: "adminLoadUser" });
       const targetClaims = sanitizeClaims(target.claims);
-      const prepared = await prepareAccountResponse(null, target, {
-        db: context.env.ROSTER_DB,
-        includeAvailableDoctors: !targetClaims.length,
-      });
-      const snapshotPayload = await loadAccountSnapshotPayload(context, {
-        targetRecord: target,
-        prepared,
-        cachedRevision: body?.cachedRevision || "",
-        allowInlineBuild: responseMode === "fast" ? false : body?.allowInlineBuild !== false,
-        reason: "adminLoadUser",
-      });
+      // The switcher uses the fast envelope first.  Building the full account
+      // response (and a snapshot) here can traverse a large roster twice and
+      // exceed a Worker request's CPU budget before the calendar is shown.
+      const prepared = responseMode === "fast"
+        ? await prepareFastLoginEnvelope(target, { db: context.env.ROSTER_DB })
+        : await prepareAccountResponse(null, target, {
+            db: context.env.ROSTER_DB,
+            includeAvailableDoctors: !targetClaims.length,
+          });
+      const snapshotPayload = responseMode === "fast"
+        ? await loadFastAccountSnapshotPayload(context, {
+            targetRecord: target,
+            prepared,
+            cachedRevision: body?.cachedRevision || "",
+          })
+        : await loadAccountSnapshotPayload(context, {
+            targetRecord: target,
+            prepared,
+            cachedRevision: body?.cachedRevision || "",
+            allowInlineBuild: body?.allowInlineBuild !== false,
+            reason: "adminLoadUser",
+          });
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -1559,6 +1590,37 @@ export async function onRequestPost(context) {
       });
     }
 
+    if (action === "queryDoctorProfileFacilityOverviewAccess") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      const profile = sanitizeDoctorProfile({
+        profileId: body?.profileId,
+        doctorKey: body?.doctorKey,
+        displayName: body?.displayName,
+        sourceTypes: body?.sourceTypes,
+      });
+      if (!profile?.doctorKey) return Response.json({ error: "Doctor profile is required." }, { status: 400 });
+      const aliases = sanitizeDoctorAccountResolutionInput({ aliases: body?.aliases }).aliases;
+      const resolvedAccount = await resolveDoctorAccount(null, { ...profile, aliases }, context.env.ROSTER_DB);
+      const profileAccount = resolvedAccount.mode === "claimed-account"
+        ? await loadAccountMirror(context.env.ROSTER_DB, resolvedAccount.email)
+        : null;
+      const profileRole = profileAccount?.role || roleForEmail(profileAccount?.email || "");
+      const facilityOverviewEnabled = Boolean(
+        profileAccount && facilityOverviewEnabledForRecord({ ...profileAccount, role: profileRole }),
+      );
+      const facilityOverviewAccess = facilityOverviewEnabled
+        ? await resolveFacilityOverviewAccess(context.env.ROSTER_DB, { ...profileAccount, role: profileRole })
+        : { mode: "denied", isSms: false, workingToday: false, facilityKey: "", today: australianDateKey() };
+      return Response.json({
+        ok: true,
+        facilityOverviewAccountEmail: normalizeEmail(profileAccount?.email),
+        facilityOverviewEnabled,
+        facilityOverviewAccess,
+      });
+    }
+
     if (action === "saveDoctorProfile") {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
@@ -1701,7 +1763,7 @@ export async function onRequestPost(context) {
     }
 
     if (action === "queryFacilityOverviewMetadata") {
-      if (!facilityOverviewEnabledForRecord({ ...account.record, role: account.role })) {
+      if (!facilityOverviewEnabled()) {
         return Response.json({ ok: false, unavailable: true, preferredFacility: null, facilities: [], catalogEvents: [] }, { status: 403 });
       }
       const access = await facilityOverviewAccess();
@@ -1727,7 +1789,7 @@ export async function onRequestPost(context) {
     }
 
     if (action === "queryFacilityOverviewByStream") {
-      if (!facilityOverviewEnabledForRecord({ ...account.record, role: account.role })) {
+      if (!facilityOverviewEnabled()) {
         return Response.json({ ok: false, unavailable: true, events: [], coverage: [] }, { status: 403 });
       }
       const startDate = String(body?.startDate || "").slice(0, 10);
@@ -1771,7 +1833,7 @@ export async function onRequestPost(context) {
     }
 
     if (action === "queryFacilityOverviewOnShift") {
-      if (!facilityOverviewEnabledForRecord({ ...account.record, role: account.role })) {
+      if (!facilityOverviewEnabled()) {
         return Response.json({ ok: false, unavailable: true, events: [] }, { status: 403 });
       }
       const date = String(body?.date || "").slice(0, 10);
@@ -1809,7 +1871,7 @@ export async function onRequestPost(context) {
     }
 
     if (action === "setContactAllocationResolution") {
-      if (!facilityOverviewEnabledForRecord({ ...account.record, role: account.role })) return facilityOverviewAccessDeniedResponse();
+      if (!facilityOverviewEnabled()) return facilityOverviewAccessDeniedResponse();
       const date = String(body?.date || "").slice(0, 10);
       const requestedFacility = String(body?.facilityKey || "").trim().toUpperCase();
       const contactKey = String(body?.contactKey || "").trim();
@@ -1858,7 +1920,7 @@ export async function onRequestPost(context) {
     }
 
     if (action === "queryFacilityOverviewStaff") {
-      if (!facilityOverviewEnabledForRecord({ ...account.record, role: account.role })) {
+      if (!facilityOverviewEnabled()) {
         return Response.json({ ok: false, unavailable: true, members: [], events: [], coverage: [], designations: [] }, { status: 403 });
       }
       const termStart = String(body?.termStart || "").slice(0, 10);
@@ -1881,7 +1943,7 @@ export async function onRequestPost(context) {
     }
 
     if (action === "queryFacilityOverviewWorkingTogether") {
-      if (!facilityOverviewEnabledForRecord({ ...account.record, role: account.role })) {
+      if (!facilityOverviewEnabled()) {
         return Response.json({ ok: false, unavailable: true, events: [] }, { status: 403 });
       }
       const startDate = String(body?.startDate || "").slice(0, 10);
