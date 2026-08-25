@@ -1413,15 +1413,19 @@ input[type="color"] {
 
 .facility-overview-on-shift-names {
   display: grid;
-  gap: 4px;
+  /* Names can wrap in the narrower third-column cards.  Give each person a
+     little vertical room so a wrapped surname can never visually run into
+     the next clinician. */
+  gap: 8px;
 }
 
 .facility-overview-on-shift-person {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: baseline;
+  align-items: start;
   width: 100%;
   column-gap: 12px;
+  padding-block: 2px;
 }
 
 .facility-overview-on-shift-identity,
@@ -1434,6 +1438,12 @@ input[type="color"] {
   min-width: 0;
   flex-wrap: wrap;
   column-gap: 6px;
+  row-gap: 4px;
+  line-height: 1.25;
+}
+
+.facility-overview-on-shift-identity .facility-overview-staff-action {
+  min-width: 0;
 }
 
 .facility-overview-on-shift-details {
