@@ -10442,7 +10442,7 @@ function facilityOverviewEffectiveTeam(assignment) {
 function renderFacilityOverviewRosterOnlyCard(assignments, options = {}) {
   return `<article class="issue-card facility-overview-staff-card facility-overview-roster-only-card">
     <strong>Roster only</strong>
-    ${renderFacilityOverviewOnShiftNames(assignments, { ...options, showContactDiscrepancy: true })}
+    ${renderFacilityOverviewOnShiftNames(assignments, options)}
   </article>`;
 }
 
@@ -10482,9 +10482,7 @@ function renderFacilityOverviewOnShiftNames(assignments, options = {}) {
   return `<div class="facility-overview-on-shift-names">${[...byPerson.values()].sort((left, right) => compareFacilityOverviewPeople(left.person, right.person)).map(({ person, specialTimes }) => {
     const sourceAssignment = (assignments || []).find((assignment) => assignment.person?.doctorKey === person.doctorKey);
     const allocation = sourceAssignment?.contactAllocation;
-    const discrepancy = options.showContactDiscrepancy && sourceAssignment?.contactDisplacedBy?.length
-      ? `<small class="facility-overview-contact-discrepancy">Not on live allocation</small>` : "";
-    return `<div>${renderFacilityOverviewStaffName(person, { ...options, seniority: person.seniority })}${renderFacilityOverviewOnShiftSeniority(person, options)}${allocation ? renderFacilityOverviewContactAllocation(allocation) : ""}${discrepancy}${options.showSpecialTimes !== false && specialTimes.size ? `<small>${escapeHtml([...specialTimes].join(" · "))}</small>` : ""}</div>`;
+    return `<div>${renderFacilityOverviewStaffName(person, { ...options, seniority: person.seniority })}${renderFacilityOverviewOnShiftSeniority(person, options)}${allocation ? renderFacilityOverviewContactAllocation(allocation) : ""}${options.showSpecialTimes !== false && specialTimes.size ? `<small>${escapeHtml([...specialTimes].join(" · "))}</small>` : ""}</div>`;
   }).join("")}</div>`;
 }
 

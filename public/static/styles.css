@@ -1061,6 +1061,7 @@ input[type="color"] {
 .facility-overview-staff-card {
   gap: 3px;
   padding: 11px 12px;
+  align-content: start;
 }
 
 .facility-overview-staff-card strong,
@@ -1409,11 +1410,6 @@ input[type="color"] {
 .facility-overview-roster-only-card {
   border-color: rgba(85, 94, 112, 0.28);
   background: linear-gradient(180deg, rgba(85, 94, 112, 0.05), #ffffff);
-}
-
-.facility-overview-contact-discrepancy {
-  color: var(--muted);
-  font-size: 0.74rem;
 }
 
 .facility-overview-contact-status {
