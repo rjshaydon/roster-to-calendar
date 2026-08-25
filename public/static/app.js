@@ -319,6 +319,7 @@ let calendarImportPollRunId = 0;
 let currentSubscription = null;
 let currentInsightsEnabled = currentUserRole === "creator";
 let currentFacilityOverviewEnabled = currentUserRole === "creator";
+let currentFacilityOverviewAccess = { mode: currentUserRole === "creator" ? "all" : "denied", isSms: currentUserRole === "creator", workingToday: false, facilityKey: "", today: "" };
 let currentNonClinical = false;
 let currentDirectorViewEnabled = currentUserRole === "creator";
 let facilityOverviewCompactState = {
@@ -9061,7 +9062,32 @@ function canUseRosterInsights() {
 function canUseFacilityOverview() {
   if (activeCalendarMode() === "doctor-profile") return isCreatorAuthenticated();
   if (currentUserRole === "creator" && !adminViewingEmail) return true;
-  return currentFacilityOverviewEnabled === true;
+  return currentFacilityOverviewEnabled === true && currentFacilityOverviewAccess.mode !== "denied";
+}
+
+function sanitizeFacilityOverviewAccess(value) {
+  const mode = value?.mode === "all" ? "all" : value?.mode === "site" ? "site" : "denied";
+  const facilityKey = mode === "site" ? String(value?.facilityKey || "").trim().toUpperCase() : "";
+  return {
+    mode: mode === "site" && !facilityKey ? "denied" : mode,
+    isSms: value?.isSms === true,
+    workingToday: value?.workingToday === true,
+    facilityKey,
+    preferredFacilityKey: String(value?.preferredFacilityKey || "").trim().toUpperCase(),
+    today: String(value?.today || "").slice(0, 10),
+  };
+}
+
+function facilityOverviewIsSiteScoped() {
+  return currentFacilityOverviewAccess.mode === "site" && Boolean(currentFacilityOverviewAccess.facilityKey);
+}
+
+function renderFacilityOverviewFacilityControl(selected, facilities, options = {}) {
+  if (facilityOverviewIsSiteScoped()) {
+    return `<label class="field"><span>ED</span><output class="facility-overview-fixed-facility">${escapeHtml(displaySourceCode(currentFacilityOverviewAccess.facilityKey))}</output></label>`;
+  }
+  const allValue = options.allValue || "ALL";
+  return `<label class="field"><span>ED</span><select data-facility-overview-facility><option value="${allValue}" ${selected === allValue ? "selected" : ""}>All EDs</option>${facilities.map((facility) => `<option value="${escapeHtml(facility)}" ${facility === selected ? "selected" : ""}>${escapeHtml(displaySourceCode(facility))}</option>`).join("")}</select></label>`;
 }
 
 function syncFacilityOverviewAccess() {
@@ -9194,6 +9220,7 @@ function resetFacilityOverviewScroll() {
 }
 
 function facilityOverviewFacilityOptions() {
+  if (facilityOverviewIsSiteScoped()) return [currentFacilityOverviewAccess.facilityKey];
   const values = new Set();
   for (const source of ["mmc", "ddh", "casey", "mch"]) {
     if (Array.isArray(latestPreview?.sources?.[source]) && latestPreview.sources[source].length) values.add(source);
@@ -9490,6 +9517,16 @@ function resetFacilityOverviewSessionState() {
   facilityOverviewSessionNeedsInitialization = false;
 }
 
+function applyFacilityOverviewSiteScope() {
+  if (!facilityOverviewIsSiteScoped()) return;
+  const facilityKey = currentFacilityOverviewAccess.facilityKey;
+  facilityOverviewState.facilityKey = facilityKey;
+  facilityOverviewState.preferredFacilityKey = facilityKey;
+  facilityOverviewState.togetherFacilityKey = facilityKey;
+  facilityOverviewState.byStreamRows = (facilityOverviewState.byStreamRows || []).map((row) => ({ ...row, facilityKey }));
+  facilityOverviewState.byStreamCatalog = (facilityOverviewState.byStreamCatalog || []).filter((entry) => entry.facilityKey === facilityKey);
+}
+
 async function openFacilityOverview(options = {}) {
   if (!canUseFacilityOverview()) return;
   refreshFacilityOverviewPreferredFacility();
@@ -9559,6 +9596,7 @@ function closeFacilityOverview() {
 }
 
 function renderFacilityOverview() {
+  applyFacilityOverviewSiteScope();
   if (!facilityOverviewBody || !facilityOverviewControls) return;
   if (!facilityOverviewSessionNeedsInitialization) rememberFacilityOverviewTabForCurrentAccount();
   if (facilityOverviewHeader) facilityOverviewHeader.innerHTML = renderFacilityOverviewHeader();
@@ -9578,7 +9616,7 @@ function renderFacilityOverview() {
     const selectedTerm = australianTermForDate(parseDateOnly(facilityOverviewState.staffTermStart || formatDateKey(new Date())));
     const terms = facilityOverviewState.staffTerms.length ? facilityOverviewState.staffTerms : [{ value: formatDateKey(selectedTerm.start), label: formatAustralianTermLabel(selectedTerm) }];
     facilityOverviewControls.innerHTML = `
-      <label class="field"><span>ED</span><select data-facility-overview-facility><option value="ALL" ${facilityOverviewState.facilityKey === "ALL" ? "selected" : ""}>All EDs</option>${facilities.map((facility) => `<option value="${escapeHtml(facility)}" ${facility === facilityOverviewState.facilityKey ? "selected" : ""}>${escapeHtml(displaySourceCode(facility))}</option>`).join("")}</select></label>
+      ${renderFacilityOverviewFacilityControl(facilityOverviewState.facilityKey, facilities)}
       <label class="field facility-overview-staff-search"><span>Find staff</span><input type="search" value="${escapeHtml(facilityOverviewState.staffQuery)}" placeholder="Name" data-facility-overview-staff-search></label>
       <label class="field facility-overview-staff-term-control"><span>Term</span><select data-facility-overview-staff-term>${terms.map((term) => `<option value="${escapeHtml(term.value)}" ${term.value === facilityOverviewState.staffTermStart ? "selected" : ""}>${escapeHtml(term.label)}</option>`).join("")}</select></label>
     `;
@@ -9611,7 +9649,7 @@ function renderFacilityOverview() {
   facilityOverviewState.facilityKey = selected;
   const content = facilityOverviewState.content || `<article class="issue-card"><p>Choose an ED and date to load rostered staff.</p></article>`;
   facilityOverviewControls.innerHTML = `
-    <label class="field"><span>ED</span><select data-facility-overview-facility><option value="ALL" ${selected === "ALL" ? "selected" : ""}>All EDs</option>${facilities.map((facility) => `<option value="${escapeHtml(facility)}" ${facility === selected ? "selected" : ""}>${escapeHtml(displaySourceCode(facility))}</option>`).join("")}</select></label>
+    ${renderFacilityOverviewFacilityControl(selected, facilities)}
     <label class="field"><span>Date</span><input type="date" value="${escapeHtml(facilityOverviewState.date)}" data-facility-overview-date></label>
     ${renderFacilityOverviewDateNavigation("day")}
     <label class="toggle facility-overview-cs-toggle">CS <input type="checkbox" data-facility-overview-include-cs ${facilityOverviewState.includeClinicalSupport ? "checked" : ""}></label>
@@ -9761,7 +9799,9 @@ function renderFacilityOverviewByStream() {
             const seniorities = facilityOverviewByStreamSeniorityOptions(row);
             const duplicate = duplicatesById.get(row.id);
             return `<fieldset class="facility-overview-by-stream-row${duplicate ? " is-duplicate" : ""}"${duplicate ? ` aria-describedby="facility-overview-by-stream-duplicate-${escapeHtml(row.id)}"` : ""}><legend>Stream selection ${index + 1}</legend>
-              <label class="field facility-overview-by-stream-field-ed"><span>ED</span><select data-facility-overview-by-stream-row="${escapeHtml(row.id)}" data-facility-overview-by-stream-field="facility">${facilities.map((facility) => `<option value="${escapeHtml(facility)}" ${facility === row.facilityKey ? "selected" : ""}>${escapeHtml(displaySourceCode(facility))}</option>`).join("")}</select></label>
+              ${facilityOverviewIsSiteScoped()
+                ? `<label class="field facility-overview-by-stream-field-ed"><span>ED</span><output class="facility-overview-fixed-facility">${escapeHtml(displaySourceCode(currentFacilityOverviewAccess.facilityKey))}</output></label>`
+                : `<label class="field facility-overview-by-stream-field-ed"><span>ED</span><select data-facility-overview-by-stream-row="${escapeHtml(row.id)}" data-facility-overview-by-stream-field="facility">${facilities.map((facility) => `<option value="${escapeHtml(facility)}" ${facility === row.facilityKey ? "selected" : ""}>${escapeHtml(displaySourceCode(facility))}</option>`).join("")}</select></label>`}
               <label class="field facility-overview-by-stream-field-stream"><span>Stream</span><select data-facility-overview-by-stream-row="${escapeHtml(row.id)}" data-facility-overview-by-stream-field="stream" ${streams.length ? "" : "disabled"}><option value="">Choose stream…</option>${streams.map((stream) => `<option value="${escapeHtml(stream.streamKey)}" ${stream.streamKey === row.streamKey ? "selected" : ""}>${escapeHtml(stream.label)}</option>`).join("")}</select></label>
               <label class="field facility-overview-by-stream-field-seniority"><span>Seniority</span><select data-facility-overview-by-stream-row="${escapeHtml(row.id)}" data-facility-overview-by-stream-field="seniority"><option value="ALL" ${row.seniority === "ALL" ? "selected" : ""}>All team</option>${seniorities.map((seniority) => `<option value="${escapeHtml(seniority)}" ${seniority === row.seniority ? "selected" : ""}>${escapeHtml(seniority)}</option>`).join("")}</select></label>
               ${duplicate ? `<p id="facility-overview-by-stream-duplicate-${escapeHtml(row.id)}" class="facility-overview-by-stream-row-duplicate">Duplicates stream selection ${duplicate.first.index + 1}; it is shown once in the results.</p>` : ""}
@@ -9933,6 +9973,7 @@ function facilityOverviewTogetherStaffOptions() {
       : [...new Set(activeClaims.map((claim) => claim.sourceType))],
   }] : [];
   return dedupeDoctorOptions([...(availableRosterDoctors || []), ...doctorPickerOptions(), ...activeViewer, ...(facilityOverviewState.togetherPinnedDoctors || [])])
+    .filter((doctor) => !facilityOverviewIsSiteScoped() || normalizedDoctorSourceTypes(doctor).includes(currentFacilityOverviewAccess.facilityKey.toLowerCase()))
     .map((doctor) => ({ ...doctor, identity: doctorIdentityKey(doctor) }))
     .filter((doctor) => doctor.identity)
     .sort((left, right) => left.displayName.localeCompare(right.displayName));
@@ -10011,7 +10052,9 @@ function renderFacilityOverviewTogetherProposal() {
         </fieldset>
         <fieldset class="facility-overview-together-section">
           <legend><span>3</span> Site <small>Optional</small></legend>
-          <label class="field"><span>ED site</span><select data-facility-overview-together-facility><option value="ALL">All EDs</option>${facilities.map((facility) => `<option value="${escapeHtml(facility)}" ${facility === facilityOverviewState.togetherFacilityKey ? "selected" : ""}>${escapeHtml(displaySourceCode(facility))}</option>`).join("")}</select></label>
+          ${facilityOverviewIsSiteScoped()
+            ? `<label class="field"><span>ED site</span><output class="facility-overview-fixed-facility">${escapeHtml(displaySourceCode(currentFacilityOverviewAccess.facilityKey))}</output></label>`
+            : `<label class="field"><span>ED site</span><select data-facility-overview-together-facility><option value="ALL">All EDs</option>${facilities.map((facility) => `<option value="${escapeHtml(facility)}" ${facility === facilityOverviewState.togetherFacilityKey ? "selected" : ""}>${escapeHtml(displaySourceCode(facility))}</option>`).join("")}</select></label>`}
           <p class="facility-overview-filter-hint">This narrows either the selected term or date range.</p>
         </fieldset>
       </div>
@@ -15818,6 +15861,25 @@ function launchNonClinicalDirectorWorkspace(options = {}, loginStartedAt = 0) {
   return true;
 }
 
+function launchClinicalOnShiftWorkspace(options = {}, loginStartedAt = 0) {
+  if (currentNonClinical || !canUseFacilityOverview() || !currentFacilityOverviewAccess.workingToday || !calendarTransitionStillCurrent(options.transition)) return false;
+  if (facilityOverviewSessionNeedsInitialization) resetFacilityOverviewSessionState();
+  facilityOverviewState.tab = "on-shift";
+  facilityOverviewState.date = currentFacilityOverviewAccess.today || formatDateKey(new Date());
+  if (!facilityOverviewIsSiteScoped() && currentFacilityOverviewAccess.preferredFacilityKey) {
+    facilityOverviewState.facilityKey = currentFacilityOverviewAccess.preferredFacilityKey;
+    facilityOverviewState.preferredFacilityKey = currentFacilityOverviewAccess.preferredFacilityKey;
+  }
+  applyFacilityOverviewSiteScope();
+  void openFacilityOverview({ preserveDate: true, preserveFacility: true }).then(() => {
+    if (calendarTransitionStillCurrent(options.transition)) markLoginPhase("onShiftOverviewLoaded", loginStartedAt);
+  }).catch((error) => {
+    if (calendarTransitionStillCurrent(options.transition)) setStatus(normalizeAuthMessage(error?.message || "Could not load On shift."), true);
+  });
+  markLoginPhase("onShiftOverviewOpened", loginStartedAt);
+  return true;
+}
+
 async function loginWithEmail(email, password, options = {}) {
   const previousEmail = currentUserEmail;
   const loginStartedAt = performance.now();
@@ -15895,8 +15957,9 @@ async function loginWithEmail(email, password, options = {}) {
       queueStoredCalendarSnapshotMaintenance();
       return;
     }
+    const openedOnShift = launchClinicalOnShiftWorkspace({ transition }, loginStartedAt);
     const inlineSnapshotReady = loginSnapshotReadyForRender();
-    if (inlineSnapshotReady) {
+    if (inlineSnapshotReady && !openedOnShift) {
       renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
       markLoginPhase("cachedCalendarRendered", loginStartedAt);
     }
@@ -16480,6 +16543,8 @@ function applyCloudStateIdentity(data) {
   if (typeof data.facilityOverviewEnabled === "boolean") {
     currentFacilityOverviewEnabled = currentUserRole === "creator" || data.facilityOverviewEnabled === true;
   }
+  if (data.facilityOverviewAccess) currentFacilityOverviewAccess = sanitizeFacilityOverviewAccess(data.facilityOverviewAccess);
+  applyFacilityOverviewSiteScope();
   syncFacilityOverviewAccess();
   if (data.realName) saveLocalAccountIdentity(data.realName);
 }
@@ -16497,6 +16562,8 @@ function applyCloudStateContext(data) {
   currentFacilityOverviewEnabled = currentUserRole === "creator" || data.facilityOverviewEnabled === true;
   currentNonClinical = data.nonClinical === true;
   currentDirectorViewEnabled = currentUserRole === "creator" || data.directorViewEnabled === true;
+  if (data.facilityOverviewAccess) currentFacilityOverviewAccess = sanitizeFacilityOverviewAccess(data.facilityOverviewAccess);
+  applyFacilityOverviewSiteScope();
   currentSuggestedClaims = sanitizeRosterClaims(data.suggestedClaims || data.nameMatches || []);
   latestNameMatches = currentSuggestedClaims;
   applyAvailableRosterDoctorsFromData(data);

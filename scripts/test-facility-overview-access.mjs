@@ -1,0 +1,60 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { resolveFacilityOverviewAccess } from "../functions/api/state.js";
+
+const claim = (sourceType, key = "TEST DOCTOR") => ({ sourceType, key, displayName: "Test Doctor" });
+const shift = (sourceType, start, seniority = "HMO", key = "TEST DOCTOR") => ({
+  id: `${sourceType}-${start}-${seniority}`,
+  sourceType,
+  doctorKey: key,
+  start: `${start}T08:00:00+10:00`,
+  end: `${start}T17:00:00+10:00`,
+  title: "Clinical shift",
+  rawValue: "AM",
+  seniority,
+});
+const account = (claims) => ({ email: "doctor@example.com", role: "user", facilityOverviewEnabled: true, claims });
+
+const movedSite = await resolveFacilityOverviewAccess(null, account([claim("ddh"), claim("mmc")]), {
+  today: "2026-08-25",
+  events: [shift("ddh", "2026-05-20"), shift("mmc", "2026-08-25")],
+});
+assert.equal(movedSite.mode, "site");
+assert.equal(movedSite.facilityKey, "MMC", "current work must supersede an old-site claim at term changeover");
+assert.equal(movedSite.workingToday, true);
+
+const sms = await resolveFacilityOverviewAccess(null, account([claim("mmc")]), {
+  today: "2026-08-25",
+  events: [shift("mmc", "2026-08-25", "SMS")],
+});
+assert.equal(sms.mode, "all", "current-term SMS must retain the All EDs selector");
+assert.equal(sms.isSms, true);
+assert.equal(sms.workingToday, true);
+
+const dayOff = await resolveFacilityOverviewAccess(null, account([claim("ddh")]), {
+  today: "2026-08-25",
+  events: [shift("ddh", "2026-08-27", "Junior Registrar")],
+});
+assert.equal(dayOff.mode, "site");
+assert.equal(dayOff.facilityKey, "DDH");
+assert.equal(dayOff.workingToday, false, "a day off must not trigger the On shift landing view");
+
+const ambiguous = await resolveFacilityOverviewAccess(null, account([claim("ddh"), claim("mmc")]), {
+  today: "2026-08-25",
+  events: [shift("ddh", "2026-08-25"), shift("mmc", "2026-08-25")],
+});
+assert.equal(ambiguous.mode, "denied", "ambiguous non-SMS site evidence must fail closed");
+
+const stateSource = await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8");
+for (const action of ["Metadata", "ByStream", "OnShift", "Staff", "WorkingTogether"]) {
+  const block = stateSource.match(new RegExp(`action === "queryFacilityOverview${action}"[\\s\\S]*?(?=\\n    if \\(action ===|\\n    const account =|$)`))?.[0] || "";
+  assert.match(block, /facilityOverviewAccess\(\)/, `${action} must resolve server-side site access`);
+  assert.match(block, /facilityOverviewAccessDeniedResponse|constrainFacilityOverviewSourceTypes/, `${action} must enforce or constrain the authenticated site`);
+}
+
+const appSource = await readFile(new URL("../public/static/app.js", import.meta.url), "utf8");
+assert.match(stateSource, /facilityOverviewAccess: prepared\.facilityOverviewAccess/, "fast login must carry access context in its existing response");
+assert.match(appSource, /launchClinicalOnShiftWorkspace[\s\S]*workingToday[\s\S]*facilityOverviewState\.tab = "on-shift"/, "a working clinician must land on On shift without calendar hydration");
+assert.match(appSource, /facilityOverviewIsSiteScoped\(\)[\s\S]*facility-overview-fixed-facility/, "non-SMS site scope must render as a fixed label");
+
+console.log("Facility overview access tests passed.");

@@ -37,6 +37,7 @@ import {
   loadRawRosterFile,
   queryCoworkerEventsFromEvents,
   queryFacilityOverviewOnShift,
+  queryFacilityOverviewAccessEvents,
   queryFacilityOverviewRange,
   queryFacilityOverviewStaff,
   setFacilityStaffDesignation,
@@ -101,6 +102,7 @@ function serverTimingHeader(timing = {}) {
   return [
     ["auth", timing.authMs],
     ["prepare", timing.prepareMs],
+    ["facility-access", timing.facilityAccessMs],
     ["revision", timing.revisionMs],
     ["registry", timing.registryLookupMs],
     ["r2", timing.r2ReadMs],
@@ -201,6 +203,7 @@ export async function onRequestPost(context) {
       const loginTiming = {
         authMs,
         prepareMs,
+        facilityAccessMs: Number(prepared.facilityOverviewAccess?.lookupMs || 0),
         revisionMs: Number(snapshotPayload.revisionMs || 0),
         registryLookupMs: Number(snapshotPayload.registryLookupMs || 0),
         r2ReadMs: Number(snapshotPayload.r2ReadMs || 0),
@@ -237,6 +240,7 @@ export async function onRequestPost(context) {
         defaultDoctorKey: prepared.defaultDoctorKey || "",
         insightsEnabled: prepared.insightsEnabled,
         facilityOverviewEnabled: prepared.facilityOverviewEnabled,
+        facilityOverviewAccess: prepared.facilityOverviewAccess,
         nonClinical: prepared.nonClinical,
         directorViewEnabled: prepared.directorViewEnabled,
         snapshotOwnerType: snapshotPayload.snapshot?.ownerType || snapshotOwnerTypeForRecord(loginRecord, prepared.role),
@@ -265,6 +269,13 @@ export async function onRequestPost(context) {
     }
 
     const account = await verifyD1Account(context.env.ROSTER_DB, email, password);
+    let facilityOverviewAccessPromise = null;
+    const facilityOverviewAccess = () => {
+      if (!facilityOverviewAccessPromise) {
+        facilityOverviewAccessPromise = resolveFacilityOverviewAccess(context.env.ROSTER_DB, { ...account.record, role: account.role });
+      }
+      return facilityOverviewAccessPromise;
+    };
     if (action === "testFindmyshiftConnection") {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
@@ -564,6 +575,7 @@ export async function onRequestPost(context) {
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
         facilityOverviewEnabled: prepared.facilityOverviewEnabled,
+        facilityOverviewAccess: prepared.facilityOverviewAccess,
         nonClinical: prepared.nonClinical,
         directorViewEnabled: prepared.directorViewEnabled,
         ...viewedAccountPayload(account.record, targetRecord, prepared),
@@ -610,6 +622,7 @@ export async function onRequestPost(context) {
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
         facilityOverviewEnabled: prepared.facilityOverviewEnabled,
+        facilityOverviewAccess: prepared.facilityOverviewAccess,
         nonClinical: prepared.nonClinical,
         directorViewEnabled: prepared.directorViewEnabled,
         calendarRevision: snapshotPayload.calendarRevision,
@@ -649,6 +662,7 @@ export async function onRequestPost(context) {
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
         facilityOverviewEnabled: prepared.facilityOverviewEnabled,
+        facilityOverviewAccess: prepared.facilityOverviewAccess,
         nonClinical: prepared.nonClinical,
         directorViewEnabled: prepared.directorViewEnabled,
         nameMatches: prepared.nameMatches,
@@ -708,6 +722,7 @@ export async function onRequestPost(context) {
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
         facilityOverviewEnabled: prepared.facilityOverviewEnabled,
+        facilityOverviewAccess: prepared.facilityOverviewAccess,
         nonClinical: prepared.nonClinical,
         directorViewEnabled: prepared.directorViewEnabled,
         ...viewedAccountPayload(account.record, updated, prepared),
@@ -1686,7 +1701,9 @@ export async function onRequestPost(context) {
       if (!facilityOverviewEnabledForRecord({ ...account.record, role: account.role })) {
         return Response.json({ ok: false, unavailable: true, preferredFacility: null, facilities: [], catalogEvents: [] }, { status: 403 });
       }
-      const linkedSourceTypes = sanitizeSourceTypes(body?.sourceTypes || []);
+      const access = await facilityOverviewAccess();
+      if (access.mode === "denied") return facilityOverviewAccessDeniedResponse();
+      const linkedSourceTypes = constrainFacilityOverviewSourceTypes(access, body?.sourceTypes || []);
       const today = australianDateKey();
       const term = facilityOverviewTermRange(today);
       const catalogSources = linkedSourceTypes.length ? linkedSourceTypes : ["mmc", "ddh", "casey", "mch"];
@@ -1731,6 +1748,10 @@ export async function onRequestPost(context) {
         selectionKeys.add(key);
         uniqueSelections.push(selection);
       }
+      const access = await facilityOverviewAccess();
+      if (access.mode === "denied" || (access.mode === "site" && uniqueSelections.some((selection) => selection.facilityKey !== access.facilityKey.toLowerCase()))) {
+        return facilityOverviewAccessDeniedResponse();
+      }
       if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) || !Number.isFinite(rangeDays) || rangeDays < 0 || rangeDays > 370 || rawSelections.length > 8 || !uniqueSelections.length || uniqueSelections.some((selection) => !FACILITY_OVERVIEW_STREAM_SENIORITIES.has(selection.seniority))) {
         return Response.json({ error: "Choose between 1 and 6 different streams and a valid date range of up to one year." }, { status: 400 });
       }
@@ -1752,6 +1773,10 @@ export async function onRequestPost(context) {
       }
       const date = String(body?.date || "").slice(0, 10);
       const requestedFacility = String(body?.facilityKey || "").trim().toUpperCase();
+      const access = await facilityOverviewAccess();
+      if (access.mode === "denied" || (access.mode === "site" && requestedFacility !== access.facilityKey)) {
+        return facilityOverviewAccessDeniedResponse();
+      }
       const facilityKeys = requestedFacility === "ALL" ? ["mmc", "ddh", "casey", "mch"] : sanitizeSourceTypes([requestedFacility]);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !facilityKeys.length) {
         return Response.json({ error: "A valid ED and date are required." }, { status: 400 });
@@ -1784,6 +1809,10 @@ export async function onRequestPost(context) {
       const termStart = String(body?.termStart || "").slice(0, 10);
       const termEnd = String(body?.termEnd || "").slice(0, 10);
       const facilityKey = body?.facilityKey === "all" ? "" : sanitizeSourceTypes([body?.facilityKey])[0] || "";
+      const access = await facilityOverviewAccess();
+      if (access.mode === "denied" || (access.mode === "site" && facilityKey !== access.facilityKey.toLowerCase())) {
+        return facilityOverviewAccessDeniedResponse();
+      }
       if (!/^\d{4}-\d{2}-\d{2}$/.test(termStart) || !/^\d{4}-\d{2}-\d{2}$/.test(termEnd) || termEnd < termStart) {
         return Response.json({ error: "A valid term is required." }, { status: 400 });
       }
@@ -1805,7 +1834,13 @@ export async function onRequestPost(context) {
       const doctorKeys = [...new Set((Array.isArray(body?.doctorKeys) ? body.doctorKeys : [])
         .map((key) => normalizeRosterName(key))
         .filter(Boolean))].slice(0, 40);
-      const sourceTypes = sanitizeSourceTypes(body?.sourceTypes || []);
+      const access = await facilityOverviewAccess();
+      if (access.mode === "denied") return facilityOverviewAccessDeniedResponse();
+      const requestedSourceTypes = sanitizeSourceTypes(body?.sourceTypes || []);
+      if (access.mode === "site" && requestedSourceTypes.some((sourceType) => sourceType !== access.facilityKey.toLowerCase())) {
+        return facilityOverviewAccessDeniedResponse();
+      }
+      const sourceTypes = constrainFacilityOverviewSourceTypes(access, requestedSourceTypes);
       const start = new Date(`${startDate}T00:00:00Z`);
       const end = new Date(`${endDate}T00:00:00Z`);
       const rangeDays = Math.round((end.getTime() - start.getTime()) / 86400000);
@@ -2805,6 +2840,89 @@ function facilityOverviewEnabledForRecord(record) {
   return record?.facilityOverviewEnabled === true || record?.directorViewEnabled === true;
 }
 
+function facilityOverviewAccessDeniedResponse() {
+  return Response.json({ error: "At a glance is not available for this site." }, { status: 403 });
+}
+
+function constrainFacilityOverviewSourceTypes(access, requested = []) {
+  if (access?.mode === "site") return [String(access.facilityKey || "").toLowerCase()].filter(Boolean);
+  return sanitizeSourceTypes(requested);
+}
+
+function facilityOverviewEventSource(event) {
+  return sanitizeSourceTypes([event?.sourceType || event?.source || event?.facilityKey])[0] || "";
+}
+
+function facilityOverviewEventDoctorKey(event) {
+  return normalizeRosterName(event?.doctorKey || event?.doctor?.key || event?.doctor || "");
+}
+
+function facilityOverviewEventSeniority(event) {
+  const value = String(event?.seniority || "").trim().toLowerCase();
+  return value === "sms" ? "SMS" : value;
+}
+
+export async function resolveFacilityOverviewAccess(db, record, options = {}) {
+  const startedAt = Date.now();
+  const role = record?.role || roleForEmail(normalizeEmail(record?.email));
+  const today = String(options.today || australianDateKey()).slice(0, 10);
+  if (!facilityOverviewEnabledForRecord({ ...record, role })) {
+    return { mode: "denied", isSms: false, workingToday: false, facilityKey: "", today, lookupMs: Date.now() - startedAt };
+  }
+  if (role === "creator" || role === "owner" || record?.nonClinical === true) {
+    return { mode: "all", isSms: true, workingToday: false, facilityKey: "", today, lookupMs: Date.now() - startedAt };
+  }
+  const claims = sanitizeClaims(record?.claims);
+  if (!claims.length) return { mode: "denied", isSms: false, workingToday: false, facilityKey: "", today, lookupMs: Date.now() - startedAt };
+  const term = facilityOverviewTermRange(today);
+  const claimPairs = new Set(claims.map((claim) => `${claim.sourceType}|${normalizeRosterName(claim.key)}`));
+  const accessEvents = Array.isArray(options.events)
+    ? options.events
+    : await queryFacilityOverviewAccessEvents(db, claims.map((claim) => claim.key), { startDate: term.startDate, endDate: term.endDate });
+  const events = accessEvents
+    .filter((event) => {
+      const sourceType = facilityOverviewEventSource(event);
+      return claimPairs.has(`${sourceType}|${facilityOverviewEventDoctorKey(event)}`)
+        && isFacilityOverviewWorkingEvent(event, { facilityKey: sourceType, includeClinicalSupport: true });
+    });
+  const occursOnDate = (event, date) => {
+    const startDate = String(event?.start || "").slice(0, 10);
+    const endDate = String(event?.end || event?.start || "").slice(0, 10);
+    return Boolean(startDate && startDate <= date && (!endDate || endDate >= date));
+  };
+  const eventDate = (event) => String(event?.start || event?.end || "").slice(0, 10);
+  const sitesFor = (items) => [...new Set(items.map(facilityOverviewEventSource).filter(Boolean))];
+  const todayEvents = events.filter((event) => occursOnDate(event, today));
+  const workingToday = todayEvents.length > 0;
+  let preferredSites = sitesFor(todayEvents);
+  if (preferredSites.length !== 1) {
+    const weekStart = isoDateKey(addUtcDays(today, -((new Date(`${today}T00:00:00Z`).getUTCDay() + 6) % 7)));
+    const weekEnd = isoDateKey(addUtcDays(weekStart, 6));
+    preferredSites = sitesFor(events.filter((event) => eventDate(event) >= weekStart && eventDate(event) <= weekEnd));
+  }
+  if (preferredSites.length !== 1) {
+    const nextDate = events.map(eventDate).filter((date) => date >= today).sort()[0] || "";
+    preferredSites = nextDate ? sitesFor(events.filter((event) => eventDate(event) === nextDate)) : [];
+  }
+  const preferredFacilityKey = preferredSites.length === 1 ? preferredSites[0].toUpperCase() : "";
+  const isSms = events.some((event) => facilityOverviewEventSeniority(event) === "SMS");
+  if (isSms) return { mode: "all", isSms: true, workingToday, facilityKey: "", preferredFacilityKey, today, lookupMs: Date.now() - startedAt };
+
+  let sites = preferredSites;
+  if (sites.length !== 1) sites = sitesFor(events);
+  const facilityKey = sites.length === 1 ? sites[0].toUpperCase() : "";
+  return {
+    mode: facilityKey ? "site" : "denied",
+    isSms: false,
+    workingToday,
+    facilityKey,
+    today,
+    termStart: term.startDate,
+    termEnd: term.endDate,
+    lookupMs: Date.now() - startedAt,
+  };
+}
+
 function directorViewEnabledForRecord(record) {
   const role = record?.role || roleForEmail(normalizeEmail(record?.email));
   if (role === "creator" || role === "owner") return true;
@@ -2882,6 +3000,7 @@ async function prepareLightweightAccountResponse(rawRecord, options = {}) {
     };
   }
   const defaultDoctorKey = canonicalDefaultDoctorKeyForAccount({ role, claims, state });
+  const facilityOverviewAccess = await resolveFacilityOverviewAccess(options.db, { ...record, role });
   return {
     role,
     realName: record.realName || "",
@@ -2894,6 +3013,7 @@ async function prepareLightweightAccountResponse(rawRecord, options = {}) {
     },
     insightsEnabled: insightsEnabledForRecord(record),
     facilityOverviewEnabled: facilityOverviewEnabledForRecord(record),
+    facilityOverviewAccess,
     nonClinical: record.nonClinical === true,
     directorViewEnabled: directorViewEnabledForRecord(record),
   };
@@ -2908,6 +3028,7 @@ async function prepareFastLoginEnvelope(rawRecord, options = {}) {
     imports: [],
   });
   const defaultDoctorKey = canonicalDefaultDoctorKeyForAccount({ role, claims, state });
+  const facilityOverviewAccess = await resolveFacilityOverviewAccess(options.db, { ...record, role });
   const lightweight = {
     role,
     realName: record.realName || "",
@@ -2928,6 +3049,7 @@ async function prepareFastLoginEnvelope(rawRecord, options = {}) {
     subscription: null,
     insightsEnabled: insightsEnabledForRecord(record),
     facilityOverviewEnabled: facilityOverviewEnabledForRecord(record),
+    facilityOverviewAccess,
     nonClinical: record.nonClinical === true,
     directorViewEnabled: directorViewEnabledForRecord(record),
     adminIssues: [],
@@ -3058,6 +3180,7 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
   const snapshotAvailable = false;
   const snapshotStale = false;
   const issueConfig = await buildIssueConfig(store, record.email, options.db);
+  const facilityOverviewAccess = await resolveFacilityOverviewAccess(options.db, { ...record, role });
 
   return {
     role,
@@ -3074,6 +3197,7 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
     },
     insightsEnabled: insightsEnabledForRecord(record),
     facilityOverviewEnabled: facilityOverviewEnabledForRecord(record),
+    facilityOverviewAccess,
     nonClinical: record.nonClinical === true,
     directorViewEnabled: directorViewEnabledForRecord(record),
     adminIssues: sanitizeAdminIssues(record.adminIssues),

@@ -994,6 +994,21 @@ input[type="color"] {
   height: 52px;
 }
 
+.facility-overview-fixed-facility {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  inline-size: 100%;
+  min-height: 52px;
+  padding: 12px 14px;
+  border: 1px solid rgba(24, 35, 28, 0.15);
+  border-radius: 14px;
+  background: rgba(245, 247, 250, 0.92);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 700;
+}
+
 .facility-overview-controls .field > input[type="search"] {
   padding: 12px 14px;
   border: 1px solid rgba(24, 35, 28, 0.15);
