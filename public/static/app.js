@@ -10547,7 +10547,7 @@ function renderFacilityOverviewContactAllocation(allocation) {
   const phone = String(allocation?.phone || "").trim();
   if (!phone) return `<span class="facility-overview-contact-number is-empty">No phone recorded</span>`;
   if (allocation?.matchMethod === "manual") {
-    return `<button type="button" class="facility-overview-contact-number is-manual" data-facility-overview-contact-resolution="${escapeHtml(allocation.contactKey || "")}" aria-label="Edit temporary allocation of ${escapeHtml(phone)}"><span>${escapeHtml(phone)}</span><small>Manual</small></button>`;
+    return `<button type="button" class="facility-overview-contact-number is-manual" data-facility-overview-contact-resolution="${escapeHtml(allocation.contactKey || "")}" aria-label="Edit temporary allocation of ${escapeHtml(phone)}"><span>${escapeHtml(phone)}</span><sup aria-hidden="true">*</sup></button>`;
   }
   return `<span class="facility-overview-contact-number" title="Allocated internal extension">${escapeHtml(phone)}</span>`;
 }
@@ -10560,10 +10560,15 @@ function renderFacilityOverviewContactListStatus(matches, assignments = []) {
   const freshness = received ? ` · updated ${formatFacilityOverviewContactTime(received)}` : "";
   const unresolved = matches.unmatched || [];
   const menuKey = facilityOverviewState.contactResolutionMenu;
+  const selectedContact = menuKey ? (contactList.contacts || []).find((contact) => contact.contactKey === menuKey) : null;
+  const selectedIsUnresolved = unresolved.some((contact) => contact.contactKey === menuKey);
   const review = unresolved.length
     ? `<details class="facility-overview-contact-review" open><summary>${unresolved.length} allocation${unresolved.length === 1 ? "" : "s"} need review</summary>${unresolved.map((contact) => renderFacilityOverviewContactReviewRow(contact, assignments, menuKey === contact.contactKey)).join("")}</details>`
     : "";
-  return `<div class="facility-overview-contact-status"><span>Live contact allocations for ${escapeHtml(contactList.sourceDate)}${freshness} · ${matches.matchedCount} matched</span>${review}</div>`;
+  const resolvedEditor = selectedContact && !selectedIsUnresolved
+    ? `<div class="facility-overview-contact-resolution-editor">${renderFacilityOverviewContactResolutionMenu(selectedContact, assignments)}</div>`
+    : "";
+  return `<div class="facility-overview-contact-status"><span>Live contact allocations for ${escapeHtml(contactList.sourceDate)}${freshness} · ${matches.matchedCount} matched</span>${review}${resolvedEditor}</div>`;
 }
 
 function renderFacilityOverviewContactReviewRow(contact, assignments, open) {
@@ -10577,7 +10582,8 @@ function renderFacilityOverviewContactResolutionMenu(contact, assignments) {
   const candidates = (assignments || []).filter((assignment) => String(assignment.period) === String(contact.shift)
     && !assignment.contactAllocation && String(assignment.source || assignment.person?.sourceType || "").toUpperCase() === String(facilityOverviewState.facilityKey || "").toUpperCase())
     .sort((left, right) => String(left.team || "").localeCompare(String(right.team || "")) || String(left.person?.displayName || "").localeCompare(String(right.person?.displayName || "")));
-  return `<div class="facility-overview-contact-resolution-menu" role="group" aria-label="Assign ${escapeHtml(contact.phone || contact.name)}">${candidates.length ? candidates.map((assignment) => `<button type="button" data-facility-overview-contact-resolution-target="${escapeHtml(assignment.person?.doctorKey || "")}" ${facilityOverviewState.contactResolutionSaving ? "disabled" : ""}><strong>${escapeHtml(assignment.person?.displayName || "")}</strong><small>${escapeHtml([assignment.person?.seniority, assignment.team, assignment.specialTime].filter(Boolean).join(" · ") || "Rostered")}</small></button>`).join("") : `<p>No unmatched rostered clinicians are available in this period.</p>`}${existing ? `<button type="button" class="button button-secondary" data-facility-overview-contact-resolution-clear ${facilityOverviewState.contactResolutionSaving ? "disabled" : ""}>Remove temporary assignment</button>` : ""}<button type="button" class="button button-secondary" data-facility-overview-contact-resolution-cancel>Cancel</button></div>`;
+  const resetLabel = existing ? `${existing.displayName || "Current assignment"} · ${contact.phone || "No number"}` : "";
+  return `<div class="facility-overview-contact-resolution-menu" role="group" aria-label="Assign ${escapeHtml(contact.phone || contact.name)}">${candidates.length ? candidates.map((assignment) => `<button type="button" data-facility-overview-contact-resolution-target="${escapeHtml(assignment.person?.doctorKey || "")}" ${facilityOverviewState.contactResolutionSaving ? "disabled" : ""}><strong>${escapeHtml(assignment.person?.displayName || "")}</strong><small>${escapeHtml([assignment.person?.seniority, assignment.team, assignment.specialTime].filter(Boolean).join(" · ") || "Rostered")}</small></button>`).join("") : `<p>No unmatched rostered clinicians are available in this period.</p>`}${existing ? `<button type="button" class="button button-secondary facility-overview-contact-resolution-reset" data-facility-overview-contact-resolution-clear ${facilityOverviewState.contactResolutionSaving ? "disabled" : ""}><span>Reset assignment</span><s>${escapeHtml(resetLabel)}</s></button>` : ""}<button type="button" class="button button-secondary" data-facility-overview-contact-resolution-cancel>Cancel</button></div>`;
 }
 
 async function saveFacilityOverviewContactResolution(doctorKey) {
