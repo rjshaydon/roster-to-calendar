@@ -67,6 +67,7 @@ assert.match(appSource, /data-facility-overview-contact-resolution[\s\S]*data-fa
 assert.match(appSource, /is-manual[\s\S]*<sup aria-hidden="true">\*<\/sup>/, "a manually assigned number should use only a small adjacent asterisk");
 assert.doesNotMatch(appSource.match(/function renderFacilityOverviewContactAllocation[\s\S]*?function renderFacilityOverviewContactListStatus/)?.[0] || "", />Manual</, "manual phone allocations should not display a Manual text label");
 assert.match(appSource, /selectedContact && !selectedIsUnresolved[\s\S]*renderFacilityOverviewContactResolutionMenu/, "clicking a resolved manual number must still render its reassignment selector");
-assert.match(appSource, /Reset assignment[\s\S]*<s>\$\{escapeHtml\(resetLabel\)\}<\/s>/, "resetting a manual association should strike through its current name and number");
+assert.doesNotMatch(appSource, /Reset assignment/, "the cancellation row should not use a separate Reset assignment label");
+assert.match(appSource, /const resetOption = existing[\s\S]*data-facility-overview-contact-resolution-clear[\s\S]*<strong><s>\$\{escapeHtml\(existing\.displayName[\s\S]*return `<div class="facility-overview-contact-resolution-menu"[\s\S]*\$\{resetOption\}\$\{candidates/, "the struck-through current person should be the first standard option in the selector");
 
 console.log("Facility overview access tests passed.");

@@ -1518,18 +1518,6 @@ input[type="color"] {
   color: var(--muted);
 }
 
-.facility-overview-contact-resolution-reset {
-  display: grid;
-  gap: 2px;
-  justify-items: start;
-  text-align: left;
-}
-
-.facility-overview-contact-resolution-reset s {
-  color: var(--muted);
-  font-size: 0.78rem;
-}
-
 .facility-overview-on-shift-names small {
   color: var(--muted);
   font-size: 0.74rem;
