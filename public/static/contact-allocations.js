@@ -93,6 +93,18 @@ export function contactOperationalDate(now = new Date()) {
     : melbourne.date;
 }
 
+// Once the operational day turns over at 07:30, retain the preceding
+// Night handset allocations until 09:00. This also lets the server use the
+// last Night extract when a new morning extract has not arrived yet.
+export function shouldCarryPreviousNightContacts(sourceDate, requestedDate, now = new Date()) {
+  const melbourne = melbourneDateTime(now);
+  if (!melbourne.date || requestedDate !== melbourne.date) return false;
+  const minuteOfDay = melbourne.hour * 60 + melbourne.minute;
+  return minuteOfDay >= 7 * 60 + 30
+    && minuteOfDay < 9 * 60
+    && sourceDate === addDays(requestedDate, -1);
+}
+
 export function contactAreaForSource(source) {
   const code = String(source || "").trim().toUpperCase();
   if (code === "MMC") return "Adult Emergency";
@@ -114,6 +126,9 @@ export function contactPeriodsAfterShiftChange(date, now = new Date()) {
   const minuteOfDay = melbourne.hour * 60 + melbourne.minute;
   const periods = new Set();
   if (minuteOfDay >= 7 * 60 + 30) periods.add("AM");
+  // The new operational day starts at 07:30, but the outgoing Night team
+  // remains responsible for its handsets until 09:00.
+  if (minuteOfDay >= 7 * 60 + 30 && minuteOfDay < 9 * 60) periods.add("Night");
   if (minuteOfDay >= 15 * 60) periods.add("PM");
   if (minuteOfDay >= 23 * 60) periods.add("Night");
   return periods;

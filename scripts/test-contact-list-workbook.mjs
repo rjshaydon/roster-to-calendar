@@ -72,6 +72,18 @@ clinicianRows[40][10] = "FT Clinician ND IC";
 clinicianRows[40][11] = "Alex";
 clinicianRows[40][12] = "AX";
 clinicianRows[40][13] = "49742";
+clinicianRows[44][10] = "Dr IC";
+clinicianRows[44][11] = "Tinnie";
+clinicianRows[44][12] = "TC";
+clinicianRows[44][13] = "49900";
+clinicianRows[45][10] = "Orange Dr 1";
+clinicianRows[45][11] = "Jonathan (49931)";
+clinicianRows[45][12] = "JW";
+clinicianRows[45][13] = "49726";
+clinicianRows[46][10] = "Orange Dr 2";
+clinicianRows[46][11] = "Jaz";
+clinicianRows[46][12] = "49971";
+clinicianRows[46][13] = "49741";
 XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(clinicianRows), "ED Clinicians");
 
 const bytes = XLSX.write(workbook, { type: "array", bookType: "xlsx" });
@@ -86,6 +98,12 @@ const earlyMorningExtract = await extractDdhClinicianContactsFromWorkbook(bytes,
 });
 assert.equal(earlyMorningExtract.sourceDate, "2026-08-25",
   "a DDH update before 07:30 Wednesday should remain attached to Tuesday's Night shift");
+assert.deepEqual(extract.contacts.filter(({ shift, role }) => shift === "Night" && /^(?:Dr IC|Orange Dr [12])$/.test(role))
+  .map(({ role, name, phone }) => [role, name, phone]), [
+  ["Dr IC", "Tinnie", "49900"],
+  ["Orange Dr 1", "Jonathan", "49931"],
+  ["Orange Dr 2", "Jaz", "49971"],
+], "DDH Night contacts should prefer a phone with the name, then EMR, then the normal Number column");
 assert.deepEqual(extract.contacts.map(({ shift, role, name, phone, isPopulated }) => [shift, role, name, phone, isPopulated]), [
   ["AM", "Doctor In Charge / AVAO", "Di", "49900", true],
   ["AM", "Orange Dr IC", "Shilpa", "49970", true],
@@ -105,6 +123,9 @@ assert.deepEqual(extract.contacts.map(({ shift, role, name, phone, isPopulated }
   ["PM", "FT Clinician 3", "", "49937", false],
   ["PM", "FT Clinician 3", "PM Fast EXTRA", "49891", true],
   ["Night", "FT Clinician ND IC", "Alex", "49742", true],
+  ["Night", "Dr IC", "Tinnie", "49900", true],
+  ["Night", "Orange Dr 1", "Jonathan", "49931", true],
+  ["Night", "Orange Dr 2", "Jaz", "49971", true],
 ]);
 
 console.log("DDH contact workbook extraction fixtures passed.");

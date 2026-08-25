@@ -67,7 +67,7 @@ export async function extractDdhClinicianContactsFromWorkbook(bytes, { providerM
       }
       const rawName = text(cells[firstColumn + 1]);
       const emr = text(cells[firstColumn + 2]);
-      const phone = ddhClinicianPhone({ standardPhone: cells[firstColumn + 3], rawName, emr });
+      const phone = ddhClinicianPhone({ standardPhone: cells[firstColumn + 3], rawName, emr, shift });
       const name = clinicianName(rawName);
       // Orange, Silver and Fast Track have several spare rows beneath their
       // labelled allocations. Scan the entire stream block: handwritten names
@@ -243,12 +243,17 @@ function text(value) {
 function clinicianName(value) {
   const raw = text(value);
   const phone = telephoneMatch(raw);
-  if (!phone || raw.slice(phone.index + phone.text.length).trim()) return raw;
-  return raw.slice(0, phone.index).replace(/\s*[-–—]?\s*$/, "").trim();
+  if (!phone) return raw;
+  const trailing = raw.slice(phone.index + phone.text.length).replace(/[\s)\]}.,;:-]+/g, "");
+  if (trailing) return raw;
+  return raw.slice(0, phone.index).replace(/\s*[([{-]?\s*$/, "").trim();
 }
 
-function ddhClinicianPhone({ standardPhone, rawName, emr } = {}) {
-  return telephoneNumber(standardPhone) || telephoneNumber(rawName) || telephoneNumber(emr);
+function ddhClinicianPhone({ standardPhone, rawName, emr, shift } = {}) {
+  const candidates = shift === "Night"
+    ? [rawName, emr, standardPhone]
+    : [standardPhone, rawName, emr];
+  return candidates.map(telephoneNumber).find(Boolean) || "";
 }
 
 function telephoneNumber(value) {
@@ -262,7 +267,10 @@ function telephoneMatch(value) {
   while ((match = pattern.exec(raw))) {
     const candidate = match[0].trim();
     const digitCount = candidate.replace(/\D/g, "").length;
-    if (digitCount >= 5 && digitCount <= 10) return { text: candidate, index: match.index };
+    if (digitCount >= 5 && digitCount <= 10) {
+      const text = candidate.startsWith("(") && !candidate.includes(")") ? candidate.slice(1) : candidate;
+      return { text, index: match.index + (text === candidate ? 0 : 1) };
+    }
   }
   return null;
 }

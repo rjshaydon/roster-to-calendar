@@ -6,6 +6,7 @@ import {
   contactExtractStatus,
   contactOperationalDate,
   normaliseContactListExtract,
+  shouldCarryPreviousNightContacts,
 } from "../public/static/contact-allocations.js";
 
 const extract = normaliseContactListExtract({
@@ -36,8 +37,16 @@ const shiftChangeContacts = [
 ];
 assert.deepEqual(contactsAfterShiftChange(shiftChangeContacts, { date: "2026-08-25", now: new Date("2026-08-24T21:29:00Z") }).map((entry) => entry.shift), [],
   "the morning contacts must remain hidden before the 07:30 handover");
-assert.deepEqual(contactsAfterShiftChange(shiftChangeContacts, { date: "2026-08-25", now: new Date("2026-08-24T21:30:00Z") }).map((entry) => entry.shift), ["AM"],
-  "the morning contacts should become available at the 07:30 handover");
+assert.deepEqual(contactsAfterShiftChange(shiftChangeContacts, { date: "2026-08-25", now: new Date("2026-08-24T21:30:00Z") }).map((entry) => entry.shift), ["AM", "Night"],
+  "the previous Night contacts should remain at the 07:30 handover");
+assert.deepEqual(contactsAfterShiftChange(shiftChangeContacts, { date: "2026-08-25", now: new Date("2026-08-24T22:59:00Z") }).map((entry) => entry.shift), ["AM", "Night"],
+  "the previous Night contacts should remain until 09:00");
+assert.deepEqual(contactsAfterShiftChange(shiftChangeContacts, { date: "2026-08-25", now: new Date("2026-08-24T23:00:00Z") }).map((entry) => entry.shift), ["AM"],
+  "Night contacts should clear at 09:00");
+assert.equal(shouldCarryPreviousNightContacts("2026-08-24", "2026-08-25", new Date("2026-08-24T22:59:00Z")), true,
+  "the previous extract should remain usable for Night contacts until 09:00");
+assert.equal(shouldCarryPreviousNightContacts("2026-08-24", "2026-08-25", new Date("2026-08-24T23:00:00Z")), false,
+  "the previous extract should stop being usable at 09:00");
 assert.deepEqual(contactsAfterShiftChange(shiftChangeContacts, { date: "2026-08-25", now: new Date("2026-08-25T00:30:00Z") }).map((entry) => entry.shift), ["AM"],
   "at 10:30 Melbourne, future PM and Night contact entries must remain hidden");
 assert.deepEqual(contactsAfterShiftChange(shiftChangeContacts, { date: "2026-08-25", now: new Date("2026-08-25T05:00:00Z") }).map((entry) => entry.shift), ["AM", "PM"],
