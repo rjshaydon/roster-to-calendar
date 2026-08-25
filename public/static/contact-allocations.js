@@ -11,12 +11,18 @@ const SOURCE_FILE_NAMES = new Map([
 ]);
 const VALID_SHIFTS = new Set(["AM", "PM", "Night"]);
 const NAME_ALIASES = new Map([
+  ["ian", new Set(["ian", "yiran"])],
   ["pat", new Set(["pat", "patrick", "patricia"])],
   ["patrick", new Set(["pat", "patrick"])],
+  ["mel", new Set(["mel", "melanie"])],
+  ["melanie", new Set(["mel", "melanie"])],
+  ["michael", new Set(["michael", "mickey"])],
+  ["mickey", new Set(["michael", "mickey"])],
   ["jacqui", new Set(["jacqui", "jacqueline"])],
   ["jacqueline", new Set(["jacqui", "jacqueline"])],
   ["steve", new Set(["steve", "stephen"])],
   ["stephen", new Set(["steve", "stephen"])],
+  ["yiran", new Set(["ian", "yiran"])],
 ]);
 
 export function normaliseContactListExtract(payload) {

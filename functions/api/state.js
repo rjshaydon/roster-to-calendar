@@ -1870,6 +1870,22 @@ export async function onRequestPost(context) {
       }
     }
 
+    if (action === "queryFacilityOverviewContactList") {
+      if (!facilityOverviewEnabled()) return facilityOverviewAccessDeniedResponse();
+      const date = String(body?.date || "").slice(0, 10);
+      const requestedFacility = String(body?.facilityKey || "").trim().toUpperCase();
+      const access = await facilityOverviewAccess();
+      if (access.mode === "denied" || (access.mode === "site" && requestedFacility !== access.facilityKey)) {
+        return facilityOverviewAccessDeniedResponse();
+      }
+      const facilityKeys = sanitizeSourceTypes([requestedFacility]);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || facilityKeys.length !== 1) {
+        return Response.json({ error: "A single ED and valid date are required." }, { status: 400 });
+      }
+      const contactList = await loadLiveContactListForOnShift(context, { date, facilityKeys });
+      return Response.json({ ok: true, date, facilityKey: facilityKeys[0], contactList });
+    }
+
     if (action === "setContactAllocationResolution") {
       if (!facilityOverviewEnabled()) return facilityOverviewAccessDeniedResponse();
       const date = String(body?.date || "").slice(0, 10);
@@ -2102,7 +2118,9 @@ export async function onRequestPost(context) {
 }
 
 async function loadLiveContactListForOnShift(context, { date, facilityKeys = [] } = {}) {
-  if (!context.env.ROSTER_DB?.prepare || !context.env.ROSTER_FILES?.get) return { status: "unavailable" };
+  if (!context.env.ROSTER_DB?.prepare || !context.env.ROSTER_FILES?.get) {
+    return { status: "unavailable", reason: "storage-unavailable" };
+  }
   try {
     const sourceIds = new Set(facilityKeys.map((facility) => {
       const code = String(facility || "").trim().toUpperCase();
@@ -2110,23 +2128,34 @@ async function loadLiveContactListForOnShift(context, { date, facilityKeys = [] 
       if (code === "MMC" || code === "MCH") return MMC_CONTACT_LIST_SOURCE_ID;
       return "";
     }).filter(Boolean));
-    if (sourceIds.size !== 1) return { status: "unavailable" };
+    if (sourceIds.size !== 1) return { status: "unavailable", reason: "multiple-sources" };
     const sourceId = [...sourceIds][0];
     const row = await context.env.ROSTER_DB.prepare(`
-      SELECT id, object_key, provider_modified_at, received_at
+      SELECT id, name, object_key, content_type, provider_modified_at, received_at
       FROM contact_list_files
       WHERE source_id = ?
       ORDER BY received_at DESC
       LIMIT 1
     `).bind(sourceId).first();
-    if (!row?.object_key) return { status: "unavailable" };
+    if (!row?.object_key) return { status: "unavailable", reason: "no-extract" };
+    const objectName = String(row.name || "").toLowerCase();
+    const contentType = String(row.content_type || "").toLowerCase();
+    if (!objectName.endsWith(".json") && !contentType.includes("json")) {
+      return {
+        status: "unavailable",
+        reason: "legacy-workbook",
+        revision: String(row.id || ""),
+        providerModifiedAt: String(row.provider_modified_at || ""),
+        receivedAt: String(row.received_at || ""),
+      };
+    }
     const [object, resolutions] = await Promise.all([
       context.env.ROSTER_FILES.get(String(row.object_key)),
       queryContactAllocationResolutions(context.env.ROSTER_DB, { sourceId, sourceDate: date, includeInactive: true }).catch(() => []),
     ]);
-    if (!object) return { status: "unavailable" };
+    if (!object) return { status: "unavailable", reason: "object-missing" };
     const extract = normaliseContactListExtract(JSON.parse(await object.text()));
-    if (!extract) return { status: "unavailable" };
+    if (!extract) return { status: "unavailable", reason: "invalid-extract" };
     const status = contactExtractStatus(extract, { date });
     if (status === "expired") {
       await context.env.ROSTER_FILES.delete(String(row.object_key));
@@ -2136,6 +2165,7 @@ async function loadLiveContactListForOnShift(context, { date, facilityKeys = [] 
     const allowedAreas = new Set(facilityKeys.map(contactAreaForSource).filter(Boolean));
     return {
       status,
+      revision: String(row.id || ""),
       sourceId,
       sourceDate: extract.sourceDate,
       providerModifiedAt: extract.providerModifiedAt || String(row.provider_modified_at || ""),
@@ -2147,7 +2177,7 @@ async function loadLiveContactListForOnShift(context, { date, facilityKeys = [] 
     };
   } catch (error) {
     console.warn("MMC contact allocation is unavailable", error);
-    return { status: "unavailable" };
+    return { status: "unavailable", reason: "load-error" };
   }
 }
 

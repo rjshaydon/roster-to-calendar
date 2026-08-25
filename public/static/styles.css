@@ -1489,6 +1489,11 @@ input[type="color"] {
   font-size: 0.78rem;
 }
 
+.facility-overview-contact-status.is-unavailable {
+  color: var(--danger);
+  font-weight: 700;
+}
+
 .facility-overview-contact-review {
   color: var(--muted);
   text-align: right;

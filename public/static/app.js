@@ -253,6 +253,7 @@ const PREVIEW_DISPLAY_FIELDS = ["showTimes", "showRawValues", "showNormalizedTit
 const STATUS_MESSAGE_LIMIT = 5;
 const STATUS_MESSAGE_LIFETIME_MS = 5000;
 const STATUS_MESSAGE_FADE_MS = 240;
+const FACILITY_OVERVIEW_CONTACT_REFRESH_MS = 10_000;
 const STATUS_SUPERSEDED_MESSAGES = new Map([
   ["Calendar loaded.", ["Loading calendar...", "Refreshing calendar..."]],
   ["Calendar refreshed.", ["Refreshing calendar..."]],
@@ -347,6 +348,8 @@ const FACILITY_OVERVIEW_COMPACT_SCROLL_THRESHOLD = 28;
 const FACILITY_OVERVIEW_SCROLL_TOLERANCE = 0;
 let facilityOverviewNavigationLocked = false;
 let facilityOverviewSessionNeedsInitialization = true;
+let facilityOverviewContactRefreshTimer = 0;
+let facilityOverviewContactRefreshInFlight = false;
 let creatorCalendarSourceFileRefs = [];
 let insightsState = null;
 let doctorAnalysisCacheKey = "";
@@ -723,7 +726,12 @@ facilityOverviewSection?.addEventListener("toggle", (event) => {
   const review = event.target.closest?.("[data-facility-overview-contact-review]");
   if (review) facilityOverviewState.contactReviewOpen = review.open === true;
 }, { capture: true });
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) stopFacilityOverviewContactRefresh();
+  else scheduleFacilityOverviewContactRefresh(0);
+});
 window.addEventListener("pagehide", () => collapseFacilityOverviewContactReview());
+window.addEventListener("pagehide", stopFacilityOverviewContactRefresh);
 facilityOverviewSection?.addEventListener("click", (event) => {
   const contactResolution = event.target.closest("[data-facility-overview-contact-resolution]");
   if (contactResolution) {
@@ -784,6 +792,7 @@ facilityOverviewSection?.addEventListener("click", (event) => {
     facilityOverviewState.staffSeniorityMenu = null;
     clearFacilityOverviewStaffMultiSelect({ render: false });
     facilityOverviewState.tab = tab.dataset.facilityOverviewTab || "on-shift";
+    if (facilityOverviewState.tab !== "on-shift") stopFacilityOverviewContactRefresh();
     resetFacilityOverviewScroll();
     if (facilityOverviewState.tab === "staff") {
       void loadFacilityOverviewStaff();
@@ -9644,6 +9653,7 @@ async function openFacilityOverviewByStream() {
 
 function closeFacilityOverview() {
   collapseFacilityOverviewContactReview();
+  stopFacilityOverviewContactRefresh();
   facilityOverviewNavigationLocked = false;
   facilityOverviewState.requestId += 1;
   facilityOverviewState.byStreamRequestId += 1;
@@ -10364,6 +10374,7 @@ function facilityOverviewFormatOverlap(start, end) {
 
 async function loadFacilityOverviewOnShift() {
   if (!canUseFacilityOverview() || facilityOverviewState.tab !== "on-shift") return;
+  stopFacilityOverviewContactRefresh();
   collapseFacilityOverviewContactReview();
   const requestId = facilityOverviewState.requestId + 1;
   facilityOverviewState.requestId = requestId;
@@ -10396,6 +10407,81 @@ async function loadFacilityOverviewOnShift() {
     facilityOverviewState.content = `<article class="issue-card"><p>${escapeHtml(error.message || "The ED overview is unavailable right now.")}</p></article>`;
   }
   renderFacilityOverview();
+  scheduleFacilityOverviewContactRefresh();
+}
+
+function facilityOverviewContactRefreshIsActive() {
+  return canUseFacilityOverview()
+    && isFacilityOverviewOpen()
+    && facilityOverviewState.tab === "on-shift"
+    && Array.isArray(facilityOverviewState.onShiftData)
+    && ["MMC", "MCH", "DDH"].includes(String(facilityOverviewState.facilityKey || "").toUpperCase())
+    && !facilityOverviewState.contactResolutionSaving
+    && !document.hidden;
+}
+
+function stopFacilityOverviewContactRefresh() {
+  if (facilityOverviewContactRefreshTimer) window.clearTimeout(facilityOverviewContactRefreshTimer);
+  facilityOverviewContactRefreshTimer = 0;
+}
+
+function scheduleFacilityOverviewContactRefresh(delay = FACILITY_OVERVIEW_CONTACT_REFRESH_MS) {
+  stopFacilityOverviewContactRefresh();
+  if (!facilityOverviewContactRefreshIsActive()) return;
+  facilityOverviewContactRefreshTimer = window.setTimeout(() => {
+    facilityOverviewContactRefreshTimer = 0;
+    void refreshFacilityOverviewContactList();
+  }, Math.max(0, delay));
+}
+
+async function refreshFacilityOverviewContactList() {
+  if (!facilityOverviewContactRefreshIsActive() || facilityOverviewContactRefreshInFlight) {
+    scheduleFacilityOverviewContactRefresh();
+    return;
+  }
+  facilityOverviewContactRefreshInFlight = true;
+  const requestId = facilityOverviewState.requestId;
+  const date = facilityOverviewState.date;
+  const facilityKey = facilityOverviewState.facilityKey;
+  try {
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "queryFacilityOverviewContactList",
+        email: authUserEmail || currentUserEmail,
+        password: authUserPassword || currentUserPassword,
+        targetEmail: facilityOverviewTargetEmail(),
+        facilityKey,
+        date,
+      }),
+    });
+    const data = await readJsonResponse(response, "Could not refresh live contact allocations.");
+    if (facilityOverviewState.requestId !== requestId
+      || facilityOverviewState.tab !== "on-shift"
+      || facilityOverviewState.date !== date
+      || facilityOverviewState.facilityKey !== facilityKey) return;
+    const nextContactList = data.contactList || { status: "unavailable", reason: "no-extract" };
+    if (JSON.stringify(nextContactList) !== JSON.stringify(facilityOverviewState.contactList)) {
+      collapseFacilityOverviewContactReview();
+      facilityOverviewState.contactList = nextContactList;
+      facilityOverviewState.content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData || []);
+      renderFacilityOverviewOnShiftPreservingViewport();
+    }
+  } catch (error) {
+    console.warn("Live contact allocation refresh failed", error);
+  } finally {
+    facilityOverviewContactRefreshInFlight = false;
+    scheduleFacilityOverviewContactRefresh();
+  }
+}
+
+function renderFacilityOverviewOnShiftPreservingViewport() {
+  const scrollTop = facilityOverviewBody?.scrollTop || 0;
+  renderFacilityOverview();
+  requestAnimationFrame(() => {
+    if (facilityOverviewBody && facilityOverviewState.tab === "on-shift") facilityOverviewBody.scrollTop = scrollTop;
+  });
 }
 
 function renderFacilityOverviewOnShiftResults(rows) {
@@ -10690,7 +10776,15 @@ function renderFacilityOverviewContactAllocation(allocation) {
 
 function renderFacilityOverviewContactListStatus(matches, assignments = []) {
   const contactList = facilityOverviewState.contactList;
-  if (!contactList?.status || contactList.status === "unavailable") return "";
+  if (!contactList?.status) return "";
+  if (contactList.status === "unavailable") {
+    const message = contactList.reason === "legacy-workbook"
+      ? "MMC live contact sync received a full Excel workbook instead of the doctors-only JSON extract."
+      : contactList.reason === "no-extract"
+        ? "No live contact allocation JSON has been received for this ED."
+        : "Live contact allocations are temporarily unavailable.";
+    return `<p class="facility-overview-contact-status is-unavailable" role="status">${escapeHtml(message)}</p>`;
+  }
   if (contactList.status !== "available") return `<p class="facility-overview-contact-status">Live contact allocation is not available for this date.</p>`;
   const received = contactList.providerModifiedAt || contactList.receivedAt || "";
   const freshness = received ? ` · updated ${formatFacilityOverviewContactTime(received)}` : "";
@@ -10760,6 +10854,7 @@ async function saveFacilityOverviewContactResolution(doctorKey) {
     facilityOverviewState.contactResolutionSaving = false;
     facilityOverviewState.content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData || []);
     renderFacilityOverview();
+    scheduleFacilityOverviewContactRefresh();
   }
 }
 

@@ -110,6 +110,18 @@ const crossPeriod = attachContactAllocations([
 ], [contact("SSU (SMS/SR) 25143", "Qing", "25143")]);
 assert.equal(crossPeriod.matchedCount, 0, "a contact allocation cannot cross periods");
 
+const mmcNightAliases = attachContactAllocations([
+  assignment("MMC", "Night", "SSU", "Melanie ENGEL", "Transitional/Intermediate Registrar"),
+  assignment("MMC", "Night", "SSU", "Michael FERGUSON", "HMO"),
+  assignment("MMC", "Night", "Main team", "Yiran WANG", "Intern"),
+], [
+  { ...contact("SSU (SMS/SR) 25143", "Mel", "25143"), shift: "Night" },
+  { ...contact("SSU Dr 25144", "Mickey", "25144"), shift: "Night" },
+  { ...contact("Dr", "Ian", "25721"), shift: "Night" },
+]);
+assert.equal(mmcNightAliases.matchedCount, 3, "approved MMC first-name aliases should attach the Night phones");
+assert.deepEqual(mmcNightAliases.assignments.map((entry) => entry.contactAllocation?.phone), ["25143", "25144", "25721"]);
+
 const temporaryContact = contact("Dr", "Ama", "25721");
 const temporaryAssignments = [
   assignment("MMC", "AM", "Fast Track", "Arnav MEHTA", "HMO"),
