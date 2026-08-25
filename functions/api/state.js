@@ -1,6 +1,6 @@
 import { applyEventOverrides, customEventsToEvents, defaultSettings, inspectImportRecord, isIgnoredRosterIssueValue, normalizeRosterName } from "../_lib/roster.js";
 import { AUTOMATION_SOURCES } from "../_lib/automation-import.js";
-import { DDH_CONTACT_LIST_SOURCE_ID, MMC_CONTACT_LIST_SOURCE_ID, attachContactAllocations, contactAreaForSource, contactExtractHasExpired, contactOperationalDate, contactsAfterShiftChange, normaliseContactListExtract, shouldCarryPreviousNightContacts } from "../../public/static/contact-allocations.js";
+import { DDH_CONTACT_LIST_SOURCE_ID, MMC_CONTACT_LIST_SOURCE_ID, attachContactAllocations, contactAreaForSource, contactExtractHasExpired, contactOperationalDate, contactsAfterShiftChange, normaliseContactListExtract, shouldCarryPreviousNightContacts, shouldUseCurrentExtractForPreviousNight } from "../../public/static/contact-allocations.js";
 import { requestQueuedRosterProcessing } from "../_lib/automation-dispatch.js";
 import { extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentExceptions, findmyshiftLastModified, findmyshiftReportDiagnostics, findmyshiftShiftReport } from "../_lib/findmyshift.js";
 import {
@@ -2140,6 +2140,7 @@ async function loadLiveContactListForOnShift(context, { date, facilityKeys = [] 
     if (!rows.results?.length) return { status: "unavailable", reason: "no-extract" };
     let selected = null;
     let nightCarryover = null;
+    let currentExtractNight = null;
     let fallback = null;
     let legacy = null;
     let missingObject = false;
@@ -2183,8 +2184,11 @@ async function loadLiveContactListForOnShift(context, { date, facilityKeys = [] 
       if (!nightCarryover && shouldCarryPreviousNightContacts(extract.sourceDate, date)) {
         nightCarryover = candidate;
       }
+      if (!currentExtractNight && shouldUseCurrentExtractForPreviousNight(extract.sourceDate, date)) {
+        currentExtractNight = candidate;
+      }
     }
-    selected ||= nightCarryover;
+    selected ||= currentExtractNight || nightCarryover;
     if (!selected) {
       if (fallback) return {
         status: "not-current",
@@ -2204,19 +2208,22 @@ async function loadLiveContactListForOnShift(context, { date, facilityKeys = [] 
     }
     const { row, extract } = selected;
     const isNightCarryover = extract.sourceDate !== date;
-    const resolutions = await queryContactAllocationResolutions(context.env.ROSTER_DB, { sourceId, sourceDate: extract.sourceDate, includeInactive: true }).catch(() => []);
+    const datedExtract = isNightCarryover ? normaliseContactListExtract({
+      ...extract,
+      sourceDate: date,
+      contacts: extract.contacts.filter((contact) => contact.shift === "Night"),
+    }) : extract;
+    const resolutions = await queryContactAllocationResolutions(context.env.ROSTER_DB, { sourceId, sourceDate: datedExtract.sourceDate, includeInactive: true }).catch(() => []);
     const allowedAreas = new Set(facilityKeys.map(contactAreaForSource).filter(Boolean));
-    const areaContacts = extract.contacts.filter((contact) => allowedAreas.has(contact.area));
+    const areaContacts = datedExtract.contacts.filter((contact) => allowedAreas.has(contact.area));
     return {
       status: "available",
       revision: String(row.id || ""),
       sourceId,
-      sourceDate: extract.sourceDate,
+      sourceDate: datedExtract.sourceDate,
       providerModifiedAt: extract.providerModifiedAt || String(row.provider_modified_at || ""),
       receivedAt: String(row.received_at || ""),
-      contacts: isNightCarryover
-        ? areaContacts.filter((contact) => contact.shift === "Night")
-        : contactsAfterShiftChange(areaContacts, { date }),
+      contacts: isNightCarryover ? areaContacts : contactsAfterShiftChange(areaContacts, { date }),
       resolutions,
     };
   } catch (error) {

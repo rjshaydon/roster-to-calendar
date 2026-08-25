@@ -7,6 +7,7 @@ import {
   contactOperationalDate,
   normaliseContactListExtract,
   shouldCarryPreviousNightContacts,
+  shouldUseCurrentExtractForPreviousNight,
 } from "../public/static/contact-allocations.js";
 
 const extract = normaliseContactListExtract({
@@ -47,6 +48,10 @@ assert.equal(shouldCarryPreviousNightContacts("2026-08-24", "2026-08-25", new Da
   "the previous extract should remain usable for Night contacts until 10:00 during testing");
 assert.equal(shouldCarryPreviousNightContacts("2026-08-24", "2026-08-25", new Date("2026-08-25T00:00:00Z")), false,
   "the previous extract should stop being usable at 10:00 during testing");
+assert.equal(shouldUseCurrentExtractForPreviousNight("2026-08-25", "2026-08-24", new Date("2026-08-24T23:59:00Z")), true,
+  "a post-handover extract should expose its Night rows on the Night shift's start date during testing");
+assert.equal(shouldUseCurrentExtractForPreviousNight("2026-08-25", "2026-08-24", new Date("2026-08-25T00:00:00Z")), false,
+  "a post-handover extract should stop exposing yesterday's Night rows at 10:00 during testing");
 assert.deepEqual(contactsAfterShiftChange(shiftChangeContacts, { date: "2026-08-25", now: new Date("2026-08-25T00:30:00Z") }).map((entry) => entry.shift), ["AM"],
   "at 10:30 Melbourne, future PM and Night contact entries must remain hidden");
 assert.deepEqual(contactsAfterShiftChange(shiftChangeContacts, { date: "2026-08-25", now: new Date("2026-08-25T05:00:00Z") }).map((entry) => entry.shift), ["AM", "PM"],

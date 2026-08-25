@@ -105,6 +105,18 @@ export function shouldCarryPreviousNightContacts(sourceDate, requestedDate, now 
     && sourceDate === addDays(requestedDate, -1);
 }
 
+// A DDH workbook refreshed after the 07:30 rollover is dated today, although
+// its Night rows still belong to yesterday's shift. Allow those Night rows to
+// be viewed against their actual start date during the carryover window.
+export function shouldUseCurrentExtractForPreviousNight(sourceDate, requestedDate, now = new Date()) {
+  const melbourne = melbourneDateTime(now);
+  if (!melbourne.date || sourceDate !== melbourne.date) return false;
+  const minuteOfDay = melbourne.hour * 60 + melbourne.minute;
+  return minuteOfDay >= 7 * 60 + 30
+    && minuteOfDay < 10 * 60
+    && requestedDate === addDays(melbourne.date, -1);
+}
+
 export function contactAreaForSource(source) {
   const code = String(source || "").trim().toUpperCase();
   if (code === "MMC") return "Adult Emergency";
