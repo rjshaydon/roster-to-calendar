@@ -45,7 +45,7 @@ assert.match(contactExtractSource, /const contentHash = await sha256Hex\(bytes\)
 assert.match(contactExtractSource, /automationSourceDate[\s\S]*st\|nd\|rd\|th/,
   "the JSON boundary should normalize the date label emitted by the existing MMC Office Script");
 assert.match(contactExtractSource, /pruneStoredContactExtracts[\s\S]*contactExtractHasExpired/,
-  "the previous operational day's JSON should be retained until its 09:00 expiry");
+  "the previous operational day's JSON should be retained until its testing-window expiry");
 assert.match(stateSource, /action === "queryFacilityOverviewContactList"[\s\S]*loadLiveContactListForOnShift/,
   "the UI should have a lightweight contact-only refresh action");
 assert.match(stateSource, /content_type[\s\S]*reason: "legacy-workbook"/,
