@@ -515,7 +515,7 @@ async function ensureCalendarSchemaUncached(db) {
 
 async function calendarSchemaIsCurrent(db) {
   try {
-    // contact_list_files is the latest schema migration; the other tables are used
+    // contact_allocation_resolutions is the latest schema migration; the other tables are used
     // by the Director views. Their presence means the preceding migrations
     // have run as well, so the expensive compatibility setup is unnecessary.
     const row = await db.prepare(`
@@ -523,12 +523,16 @@ async function calendarSchemaIsCurrent(db) {
         EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'account_invites') AS has_account_invites,
         EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'facility_staff_seniority_overrides') AS has_staff_overrides,
         EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'roster_dispatches') AS has_roster_dispatches,
-        EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'contact_list_files') AS has_contact_list_files
+        EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'contact_list_files') AS has_contact_list_files,
+        EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'contact_allocation_resolutions') AS has_contact_resolutions,
+        EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'contact_allocation_resolution_history') AS has_contact_resolution_history
     `).first();
     return Number(row?.has_account_invites) === 1
       && Number(row?.has_staff_overrides) === 1
       && Number(row?.has_roster_dispatches) === 1
-      && Number(row?.has_contact_list_files) === 1;
+      && Number(row?.has_contact_list_files) === 1
+      && Number(row?.has_contact_resolutions) === 1
+      && Number(row?.has_contact_resolution_history) === 1;
   } catch {
     // New databases and the local test double fall back to the full setup.
     return false;

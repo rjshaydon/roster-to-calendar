@@ -46,6 +46,7 @@ const ambiguous = await resolveFacilityOverviewAccess(null, account([claim("ddh"
 assert.equal(ambiguous.mode, "denied", "ambiguous non-SMS site evidence must fail closed");
 
 const stateSource = await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8");
+const d1Source = await readFile(new URL("../functions/_lib/d1-calendar.js", import.meta.url), "utf8");
 for (const action of ["Metadata", "ByStream", "OnShift", "Staff", "WorkingTogether"]) {
   const block = stateSource.match(new RegExp(`action === "queryFacilityOverview${action}"[\\s\\S]*?(?=\\n    if \\(action ===|\\n    const account =|$)`))?.[0] || "";
   assert.match(block, /facilityOverviewAccess\(\)/, `${action} must resolve server-side site access`);
@@ -56,6 +57,7 @@ assert.match(contactResolutionBlock, /facilityOverviewAccess\(\)[\s\S]*requested
 assert.match(contactResolutionBlock, /queryFacilityOverviewOnShift[\s\S]*facilityOverviewEventPeriod/, "a contact correction must target a rostered clinician in the same period");
 assert.match(contactResolutionBlock, /attachContactAllocations[\s\S]*safe automatic match/, "safe automatic allocations must remain non-editable");
 assert.match(stateSource, /queryContactAllocationResolutions[\s\S]*loadLiveContactListForOnShift/, "On shift should return temporary resolutions in its existing request");
+assert.match(d1Source.match(/async function calendarSchemaIsCurrent[\s\S]*?async function ensureColumn/)?.[0] || "", /contact_allocation_resolutions[\s\S]*contact_allocation_resolution_history[\s\S]*has_contact_resolutions[\s\S]*has_contact_resolution_history/, "the schema fast path must not skip temporary contact-resolution tables");
 
 const appSource = await readFile(new URL("../public/static/app.js", import.meta.url), "utf8");
 assert.match(stateSource, /facilityOverviewAccess: prepared\.facilityOverviewAccess/, "fast login must carry access context in its existing response");
