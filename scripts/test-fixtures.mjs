@@ -1202,6 +1202,11 @@ assert.doesNotMatch(
   /adminViewingEmail/,
   "Creator switcher access should use explicit impersonation state rather than the viewed email alone",
 );
+assert.doesNotMatch(
+  appSource,
+  /currentSnapshot\.session/,
+  "asynchronous account transitions should never dereference a snapshot that another transition may have cleared",
+);
 assert.match(
   appSource.match(/function calendarFilesForActiveView[\s\S]*?function rosterDisplayFiles/)?.[0] || "",
   /activeCalendarMode\(\) === "doctor-profile"[\s\S]*activeDoctorProfile\.sourceTypes/,

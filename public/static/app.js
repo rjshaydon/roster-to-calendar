@@ -14109,7 +14109,7 @@ async function validateClaimedAccountCalendarInBackground(context = {}, options 
     currentSnapshotBuiltAt = cachedSnapshot.cachedAt || cachedSnapshot.preview?.lastParsed || "";
   }
   if (!cachedSnapshot?.preview && currentSnapshot?.preview) {
-    renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+    renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot?.session || {});
     setStatus(currentSnapshotStale ? "Refreshing calendar..." : "Calendar loaded.");
     renderLoginState();
   }
@@ -14814,11 +14814,11 @@ async function returnToCreatorAccount(options = {}) {
     if (!calendarTransitionStillCurrent(transition)) return;
     forceCreatorDoctorSession();
     if (currentSnapshot) {
-      const snapshotDoctorKey = normalizeRosterName(currentSnapshot.session?.doctorKey || "");
+      const snapshotDoctorKey = normalizeRosterName(currentSnapshot?.session?.doctorKey || "");
       currentSnapshot = sanitizeWorkspaceSnapshot({
         ...currentSnapshot,
         session: {
-          ...(currentSnapshot.session || {}),
+          ...(currentSnapshot?.session || {}),
           doctorKey: OWNER_DOCTOR_KEY,
         },
       });
@@ -14842,7 +14842,7 @@ async function returnToCreatorAccount(options = {}) {
             transition,
           });
           if (loaded && currentSnapshot) {
-            renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+            renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot?.session || {});
           }
         }
       } else {
@@ -15658,7 +15658,7 @@ async function refreshCreatorCalendarAfterFileChange(options = {}) {
           cachedRevision: "",
         });
         if (loaded && currentSnapshot && !currentSnapshotStale) {
-          renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+          renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot?.session || {});
           mergeSelectedFilesWithRosterStoreStatus(calendarStoreStatus, { force: true });
           try {
             await syncCreatorDoctorPickerWithRemainingRosters({ localOnly: afterRosterRemoval });
@@ -15795,7 +15795,7 @@ async function pollCalendarAfterRosterChange() {
           });
           if (pollRunId !== calendarImportPollRunId) return;
           if (loaded && currentSnapshot && !currentSnapshotStale) {
-            renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+            renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot?.session || {});
             mergeSelectedFilesWithRosterStoreStatus(calendarStoreStatus, { force: true });
             try {
               await syncCreatorDoctorPickerWithRemainingRosters();
@@ -15834,7 +15834,7 @@ async function refreshCreatorSnapshotInBackground(options = {}) {
     });
     if (!calendarTransitionStillCurrent(options.transition)) return false;
     if (loaded && currentSnapshot?.preview) {
-      renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+      renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot?.session || {});
       currentSnapshotStale = false;
       currentSnapshotBuiltAt = new Date().toISOString();
       void syncCreatorFileListFromStore().catch(() => null);
@@ -16163,7 +16163,7 @@ async function loginWithEmail(email, password, options = {}) {
     const openedOnShift = launchClinicalOnShiftWorkspace({ transition }, loginStartedAt);
     const inlineSnapshotReady = loginSnapshotReadyForRender();
     if (inlineSnapshotReady && !openedOnShift) {
-      renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+      renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot?.session || {});
       markLoginPhase("cachedCalendarRendered", loginStartedAt);
     }
     const renderedCachedSnapshot = inlineSnapshotReady
@@ -16424,7 +16424,7 @@ function queuePostLoginSnapshotRefresh(options = {}) {
       }).catch(() => false);
       if (!calendarTransitionStillCurrent(options.transition) || activeCalendarTransitionKey() !== expectedKey) return;
       if (loaded && currentSnapshot?.preview && !currentSnapshotStale) {
-        renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {}, { preserveScroll: true });
+        renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot?.session || {}, { preserveScroll: true });
         markLoginPhase("backgroundCalendarUpdated", options.loginStartedAt);
         setStatus("Calendar refreshed.");
         return;
@@ -16898,7 +16898,7 @@ async function loadCloudCalendarEvents(options = {}) {
     if (currentSnapshot) {
       saveCalendarSnapshotCacheForContext(currentSnapshot, {
         ownerEmail: adminTargetEmail || viewedAccountEmail(),
-        doctorKey: preferredDoctorKey || currentSnapshot.session?.doctorKey || "",
+        doctorKey: preferredDoctorKey || currentSnapshot?.session?.doctorKey || "",
       });
     }
     return Boolean(currentSnapshot);
@@ -16913,14 +16913,14 @@ async function loadCloudCalendarEvents(options = {}) {
     currentSnapshot.calendarRevision = currentCalendarRevision;
     currentSnapshot.cacheKey = currentCalendarSnapshotCacheKey({
       ownerEmail: adminTargetEmail || viewedAccountEmail(),
-      doctorKey: preferredDoctorKey || currentSnapshot.session?.doctorKey || "",
+      doctorKey: preferredDoctorKey || currentSnapshot?.session?.doctorKey || "",
     });
   }
   currentSnapshotStale = data.snapshotStale === true;
   currentSnapshotBuiltAt = String(data.snapshotBuiltAt || "");
   if (!currentSnapshot) return false;
   applyLoadedCalendarFileRefs(currentSnapshot);
-  restoredSessionState = currentSnapshot.session || clearCloudLoadedSessionFilters(restoredSessionState || {});
+  restoredSessionState = currentSnapshot?.session || clearCloudLoadedSessionFilters(restoredSessionState || {});
   saveWorkspaceSnapshotForEmail(activeWorkspaceOwnerKey(), {
     fileRefs: selectedFiles.map(importRefForWorkspace),
     session: restoredSessionState || {},
@@ -16929,7 +16929,7 @@ async function loadCloudCalendarEvents(options = {}) {
   if (!currentSnapshotStale) {
     saveCalendarSnapshotCacheForContext(currentSnapshot, {
       ownerEmail: adminTargetEmail || viewedAccountEmail(),
-      doctorKey: preferredDoctorKey || currentSnapshot.session?.doctorKey || "",
+      doctorKey: preferredDoctorKey || currentSnapshot?.session?.doctorKey || "",
     });
   }
   return true;
@@ -17126,7 +17126,7 @@ function forceCreatorDoctorSession() {
     currentSnapshot = sanitizeWorkspaceSnapshot({
       ...currentSnapshot,
       session: {
-        ...(currentSnapshot.session || {}),
+        ...(currentSnapshot?.session || {}),
         doctorKey: OWNER_DOCTOR_KEY,
       },
     });
@@ -17404,7 +17404,7 @@ async function replaceActiveRostersWithCurrentUploads() {
     calendarStoreStatusError = "";
     replaceActiveCalendarCustomEvents(customEventsForActiveCalendar());
     await loadCloudCalendarEvents();
-    if (currentSnapshot) renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+    if (currentSnapshot) renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot?.session || {});
     renderFileSurfaces();
     setStatus(`Roster database rebuilt from ${keepFileIds.length} roster file${keepFileIds.length === 1 ? "" : "s"}.`);
   } catch (error) {
@@ -17452,7 +17452,7 @@ async function reparseRosterFile(id) {
       await waitForRosterFilePersistence(entry, selectedFiles.map((item) => item.id));
       await refreshCalendarStoreStatus({ silent: true });
       await loadCloudCalendarEvents();
-      if (currentSnapshot) renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+      if (currentSnapshot) renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot?.session || {});
       renderFileSurfaces();
       setStatus(`${entry.name} confirmed in roster database.`);
       return;
@@ -17469,7 +17469,7 @@ async function reparseRosterFile(id) {
       throw new Error(`${entry.name} reparse produced 0 events.`);
     }
     await loadCloudCalendarEvents();
-    if (currentSnapshot) renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+    if (currentSnapshot) renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot?.session || {});
     renderFileSurfaces();
     setStatus(`${entry.name} reparsed.`);
   } catch (error) {
@@ -17530,7 +17530,7 @@ async function waitForAutomatedRosterSourceRefresh(sourceId, label, previousSucc
     if (failedRun) throw new Error(failedRun.message || `${label} update failed.`);
     if (trackedRunIds.size && trackedRuns.length === trackedRunIds.size && trackedRuns.every((run) => run.status === "success")) {
       await loadCloudCalendarEvents();
-      if (currentSnapshot) renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+      if (currentSnapshot) renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot?.session || {});
       setStatus(`${label} imported.`);
       return;
     }
@@ -17542,7 +17542,7 @@ async function waitForAutomatedRosterSourceRefresh(sourceId, label, previousSucc
     }
     if (source?.state === "received" && (sawPendingState || String(source.lastSuccessAt || "") !== previousSuccessAt)) {
       await loadCloudCalendarEvents();
-      if (currentSnapshot) renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+      if (currentSnapshot) renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot?.session || {});
       setStatus(`${label} imported.`);
       return;
     }
@@ -19542,7 +19542,7 @@ async function completeRosterRemovalAfterSync(id, removedEntry, removedName) {
   });
   if (loaded && currentSnapshot) {
     currentSnapshot = filterSnapshotDoctorsAfterRemoval(currentSnapshot, removedEntry);
-    renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+    renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot?.session || {});
   } else if (!loaded) {
     throw new Error("Could not reload calendar after roster removal.");
   }
@@ -19696,7 +19696,7 @@ async function bootstrapImports(options = {}) {
           // Keep the last merged doctor list.
         }
       }
-      renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+      renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot?.session || {});
       scheduleInsightWarmup();
       if (currentSnapshotStale || snapshotInvalid) {
         setStatus("Refreshing calendar...");
@@ -19720,7 +19720,7 @@ async function bootstrapImports(options = {}) {
                 setStatus("Calendar loaded. Checking for updates...");
                 return;
               }
-              renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+              renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot?.session || {});
               currentSnapshotStale = false;
               currentSnapshotBuiltAt = new Date().toISOString();
               setStatus("Calendar refreshed.");
@@ -19746,7 +19746,7 @@ async function bootstrapImports(options = {}) {
       });
       if (!calendarTransitionStillCurrent(options.transition)) return;
       if (loadedCalendar) {
-        renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+        renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot?.session || {});
         scheduleInsightWarmup();
         setStatus("Calendar loaded.");
         return;
@@ -19769,7 +19769,7 @@ async function bootstrapImports(options = {}) {
     }
   } catch (error) {
     if (currentSnapshot?.preview) {
-      renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+      renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot?.session || {});
     }
     renderFilesList();
     setStatus(error.message || "Could not restore browser-stored roster files.", true);
@@ -19922,7 +19922,7 @@ async function bootstrapApp() {
     }
     const inlineSnapshotReady = loginSnapshotReadyForRender();
     if (!renderedCachedSnapshot && inlineSnapshotReady) {
-      renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot.session || {});
+      renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot?.session || {});
       markLoginPhase("cachedCalendarRendered", loginStartedAt);
       markLoginPhase("firstCalendarPaint", loginStartedAt);
       markLoginPaintCommitted(loginStartedAt);
