@@ -10325,14 +10325,9 @@ function renderFacilityOverviewOnShiftResults(rows) {
 }
 
 function renderFacilityOverviewOnShiftPeriod(assignments, options = {}) {
-  const active = (assignments || []).filter((assignment) => !assignment.contactDisplacedBy?.length);
-  const rosterOnly = (assignments || []).filter((assignment) => assignment.contactDisplacedBy?.length);
-  const content = facilityOverviewIsDdhPeriod(active)
-    ? renderFacilityOverviewDdhOnShiftPeriod(active, options)
-    : facilityOverviewIsMmcNightPeriod(active, options)
-      ? renderFacilityOverviewMmcNightPeriod(active, options)
-      : renderFacilityOverviewGenericOnShiftPeriod(active, options);
-  return `${content}${rosterOnly.length ? renderFacilityOverviewRosterOnlyCard(rosterOnly, options) : ""}`;
+  if (facilityOverviewIsDdhPeriod(assignments)) return renderFacilityOverviewDdhOnShiftPeriod(assignments, options);
+  if (facilityOverviewIsMmcNightPeriod(assignments, options)) return renderFacilityOverviewMmcNightPeriod(assignments, options);
+  return renderFacilityOverviewGenericOnShiftPeriod(assignments, options);
 }
 
 function facilityOverviewIsDdhPeriod(assignments) {
@@ -10436,14 +10431,7 @@ function renderFacilityOverviewGenericOnShiftPeriod(assignments, options = {}) {
 }
 
 function facilityOverviewEffectiveTeam(assignment) {
-  return String(assignment?.contactAllocation?.streamLabel || assignment?.team || "").trim();
-}
-
-function renderFacilityOverviewRosterOnlyCard(assignments, options = {}) {
-  return `<article class="issue-card facility-overview-staff-card facility-overview-roster-only-card">
-    <strong>Roster only</strong>
-    ${renderFacilityOverviewOnShiftNames(assignments, options)}
-  </article>`;
+  return String(assignment?.team || "").trim();
 }
 
 function facilityOverviewIsMeaningfulStream(team, source = "") {

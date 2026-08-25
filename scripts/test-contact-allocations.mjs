@@ -66,7 +66,7 @@ assert.equal(allocationFor(dailyAllocation, "Tara KAMATH").phone, "25168");
 assert.equal(allocationFor(dailyAllocation, "Tara KAMATH").streamLabel, "Amber");
 assert.equal(allocationFor(dailyAllocation, "Tara JOHANSSON").phone, "25138");
 assert.equal(allocationFor(dailyAllocation, "Tara JOHANSSON").streamLabel, "Clinic");
-assert.equal(allocationFor(dailyAllocation, "Tara JOHANSSON").isStreamOverride, true, "a confirmed contact allocation should override Float");
+assert.equal(dailyAllocation.assignments.find((entry) => entry.person.displayName === "Tara JOHANSSON").team, "Float", "a confirmed contact allocation must not override the roster stream");
 assert.equal(allocationFor(dailyAllocation, "Qingyang CHEN").matchMethod, "first-name-prefix");
 assert.equal(allocationFor(dailyAllocation, "Sophie HE").streamLabel, "Sepsis");
 assert.equal(allocationFor(dailyAllocation, "Yee Ann SOO").matchMethod, "internal-given-name");
@@ -76,13 +76,15 @@ assert.equal(dailyAllocation.unmatched.length, 1);
 assert.equal(dailyAllocation.unmatched[0].name, "Ama");
 assert.equal(dailyAllocation.unmatched[0].reviewReason, "No safe name match");
 
-const rosterReplacement = attachContactAllocations([
+const rosterAuthoritative = attachContactAllocations([
   assignment("MMC", "AM", "Float", "Tara JOHANSSON", "SMS"),
   assignment("MMC", "AM", "Clinic", "Stephen GILDFIND", "SMS"),
 ], [contact("CLINIC (SMS/SR) 25138", "Tara", "25138")]);
-assert.equal(allocationFor(rosterReplacement, "Tara JOHANSSON").streamLabel, "Clinic");
-assert.ok(rosterReplacement.assignments.find((entry) => entry.person.displayName === "Stephen GILDFIND").contactDisplacedBy?.length,
-  "the rostered Clinic doctor should be marked roster-only when a confirmed live allocation replaces them");
+assert.equal(allocationFor(rosterAuthoritative, "Tara JOHANSSON").phone, "25138");
+assert.equal(rosterAuthoritative.assignments.find((entry) => entry.person.displayName === "Tara JOHANSSON").team, "Float",
+  "a contact role only supplies a phone number; the roster remains the source of the stream");
+assert.equal(rosterAuthoritative.assignments.find((entry) => entry.person.displayName === "Stephen GILDFIND").contactDisplacedBy, undefined,
+  "a contact match must not displace another rostered clinician");
 
 const duplicateQing = attachContactAllocations([
   assignment("MMC", "AM", "SSU", "Qingyang CHEN", "SMS"),

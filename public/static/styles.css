@@ -1407,11 +1407,6 @@ input[type="color"] {
   font-weight: 600;
 }
 
-.facility-overview-roster-only-card {
-  border-color: rgba(85, 94, 112, 0.28);
-  background: linear-gradient(180deg, rgba(85, 94, 112, 0.05), #ffffff);
-}
-
 .facility-overview-contact-status {
   display: flex;
   align-items: baseline;

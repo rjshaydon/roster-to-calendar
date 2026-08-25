@@ -129,12 +129,10 @@ export function attachContactAllocations(assignments = [], contacts = []) {
         streamKey: stream.key,
         streamLabel: stream.label,
         rosterStreamKey,
-        isStreamOverride: Boolean(stream.key && stream.key !== rosterStreamKey),
       },
     };
   }
 
-  markContactListDiscrepancies(enriched);
   const matchedContacts = new Set(enriched.map((assignment) => assignment.contactAllocation?.contactKey).filter(Boolean));
   return {
     assignments: enriched,
@@ -221,30 +219,6 @@ function namesMatch(left, right) {
   if (left === right) return "exact";
   if (NAME_ALIASES.get(left)?.has(right) || NAME_ALIASES.get(right)?.has(left)) return "alias";
   return "";
-}
-
-function markContactListDiscrepancies(assignments) {
-  const liveByStream = new Map();
-  for (const assignment of assignments) {
-    const allocation = assignment.contactAllocation;
-    if (!allocation?.streamKey) continue;
-    const key = liveStreamContextKey(assignment, allocation.streamKey);
-    if (!liveByStream.has(key)) liveByStream.set(key, []);
-    liveByStream.get(key).push(assignment);
-  }
-  for (const assignment of assignments) {
-    if (assignment.contactAllocation) continue;
-    const rosterStream = assignmentStreamKey(assignment);
-    if (!rosterStream) continue;
-    const live = liveByStream.get(liveStreamContextKey(assignment, rosterStream)) || [];
-    if (!live.length) continue;
-    assignment.contactDisplacedBy = live.map((entry) => entry.contactAllocation?.contactKey).filter(Boolean);
-  }
-}
-
-function liveStreamContextKey(assignment, streamKey) {
-  const source = String(assignment?.source || assignment?.person?.sourceType || "").trim().toUpperCase();
-  return `${source}|${String(assignment?.period || "")}|${streamKey}`;
 }
 
 function nameTokens(value) {
