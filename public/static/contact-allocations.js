@@ -77,7 +77,20 @@ export function contactExtractHasExpired(sourceDate, now = new Date()) {
   const nextDate = addDays(sourceDate, 1);
   if (!nextDate) return true;
   const melbourne = melbourneDateTime(now);
-  return melbourne.date > nextDate || (melbourne.date === nextDate && melbourne.hour >= 10);
+  if (!melbourne.date) return true;
+  return melbourne.date > nextDate
+    || (melbourne.date === nextDate && (melbourne.hour * 60 + melbourne.minute) >= 9 * 60);
+}
+
+// The clinical operational day rolls over at the first morning handover,
+// rather than at midnight. A Tuesday Night allocation therefore remains on
+// Tuesday until 07:30 on Wednesday.
+export function contactOperationalDate(now = new Date()) {
+  const melbourne = melbourneDateTime(now);
+  if (!melbourne.date) return "";
+  return (melbourne.hour * 60 + melbourne.minute) < (7 * 60 + 30)
+    ? addDays(melbourne.date, -1)
+    : melbourne.date;
 }
 
 export function contactAreaForSource(source) {
@@ -100,7 +113,7 @@ export function contactPeriodsAfterShiftChange(date, now = new Date()) {
   if (selectedDate > melbourne.date) return new Set();
   const minuteOfDay = melbourne.hour * 60 + melbourne.minute;
   const periods = new Set();
-  if (minuteOfDay >= 8 * 60) periods.add("AM");
+  if (minuteOfDay >= 7 * 60 + 30) periods.add("AM");
   if (minuteOfDay >= 15 * 60) periods.add("PM");
   if (minuteOfDay >= 23 * 60) periods.add("Night");
   return periods;
@@ -381,8 +394,10 @@ function isIsoDate(value) {
 }
 
 function melbourneDateTime(now) {
+  const date = now instanceof Date ? now : new Date(now);
+  if (Number.isNaN(date.valueOf())) return { date: "", hour: 0, minute: 0 };
   const values = Object.fromEntries(new Intl.DateTimeFormat("en-AU", {
     timeZone: "Australia/Melbourne", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
-  }).formatToParts(now).filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
+  }).formatToParts(date).filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
   return { date: `${values.year}-${values.month}-${values.day}`, hour: Number(values.hour), minute: Number(values.minute) };
 }

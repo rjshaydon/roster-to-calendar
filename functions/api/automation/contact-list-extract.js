@@ -1,6 +1,11 @@
 import { ensureCalendarSchema, hasCalendarDb } from "../../_lib/d1-calendar.js";
 import { sha256Hex } from "../../_lib/automation-import.js";
-import { normaliseContactListExtract } from "../../../public/static/contact-allocations.js";
+import {
+  DDH_CONTACT_LIST_SOURCE_ID,
+  contactExtractHasExpired,
+  contactOperationalDate,
+  normaliseContactListExtract,
+} from "../../../public/static/contact-allocations.js";
 
 const MAX_BODY_BYTES = 512 * 1024;
 
@@ -23,7 +28,11 @@ export async function onRequestPost(context) {
     if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) {
       return Response.json({ error: "Contact-list extract is too large." }, { status: 413 });
     }
-    const payload = await context.request.json();
+    let payload = await context.request.json();
+    if (String(payload?.sourceId || "") === DDH_CONTACT_LIST_SOURCE_ID) {
+      const operationalDate = contactOperationalDate(new Date(String(payload?.providerModifiedAt || "")));
+      if (operationalDate) payload = { ...payload, sourceDate: operationalDate };
+    }
     const extract = normaliseContactListExtract(payload);
     if (!extract) return Response.json({ error: "Invalid doctor contact extract." }, { status: 400 });
     const sourceId = extract.sourceId;
@@ -45,11 +54,9 @@ export async function onRequestPost(context) {
     `).bind(sourceId).all();
     const matchingHash = existing.results.find((entry) => String(entry.content_hash || "") === contentHash);
     if (matchingHash?.id) {
-      for (const entry of existing.results) {
-        if (String(entry.id) === String(matchingHash.id)) continue;
-        await context.env.ROSTER_FILES.delete(String(entry.object_key));
-        await db.prepare("DELETE FROM contact_list_files WHERE id = ?").bind(String(entry.id)).run();
-      }
+      await pruneStoredContactExtracts(context, existing.results, {
+        keepId: String(matchingHash.id), replaceDate: extract.sourceDate,
+      });
       return Response.json({
         ok: true,
         status: "unchanged",
@@ -78,10 +85,7 @@ export async function onRequestPost(context) {
       extract.providerModifiedAt, now,
     ).run();
 
-    for (const entry of existing.results) {
-      await context.env.ROSTER_FILES.delete(String(entry.object_key));
-      await db.prepare("DELETE FROM contact_list_files WHERE id = ?").bind(String(entry.id)).run();
-    }
+    await pruneStoredContactExtracts(context, existing.results, { replaceDate: extract.sourceDate });
     return Response.json({
       ok: true,
       status: "stored",
@@ -94,6 +98,24 @@ export async function onRequestPost(context) {
   } catch (error) {
     console.error("Contact-list extract ingestion failed", error);
     return Response.json({ error: "Contact-list extract could not be stored." }, { status: 422 });
+  }
+}
+
+async function pruneStoredContactExtracts(context, entries, { keepId = "", replaceDate = "" } = {}) {
+  for (const entry of entries || []) {
+    if (keepId && String(entry.id) === keepId) continue;
+    let remove = true;
+    try {
+      const object = entry.object_key ? await context.env.ROSTER_FILES.get(String(entry.object_key)) : null;
+      const stored = object ? normaliseContactListExtract(JSON.parse(await object.text())) : null;
+      // Keep a different operational day's small JSON while it is still valid.
+      remove = !stored || stored.sourceDate === replaceDate || contactExtractHasExpired(stored.sourceDate);
+    } catch {
+      remove = true;
+    }
+    if (!remove) continue;
+    if (entry.object_key) await context.env.ROSTER_FILES.delete(String(entry.object_key));
+    await context.env.ROSTER_DB.prepare("DELETE FROM contact_list_files WHERE id = ?").bind(String(entry.id)).run();
   }
 }
 

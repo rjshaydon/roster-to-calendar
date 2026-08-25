@@ -1,6 +1,6 @@
 import { applyEventOverrides, customEventsToEvents, defaultSettings, inspectImportRecord, isIgnoredRosterIssueValue, normalizeRosterName } from "../_lib/roster.js";
 import { AUTOMATION_SOURCES } from "../_lib/automation-import.js";
-import { DDH_CONTACT_LIST_SOURCE_ID, MMC_CONTACT_LIST_SOURCE_ID, attachContactAllocations, contactAreaForSource, contactExtractStatus, contactsAfterShiftChange, normaliseContactListExtract } from "../../public/static/contact-allocations.js";
+import { DDH_CONTACT_LIST_SOURCE_ID, MMC_CONTACT_LIST_SOURCE_ID, attachContactAllocations, contactAreaForSource, contactExtractHasExpired, contactOperationalDate, contactsAfterShiftChange, normaliseContactListExtract } from "../../public/static/contact-allocations.js";
 import { requestQueuedRosterProcessing } from "../_lib/automation-dispatch.js";
 import { extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentExceptions, findmyshiftLastModified, findmyshiftReportDiagnostics, findmyshiftShiftReport } from "../_lib/findmyshift.js";
 import {
@@ -2130,50 +2130,85 @@ async function loadLiveContactListForOnShift(context, { date, facilityKeys = [] 
     }).filter(Boolean));
     if (sourceIds.size !== 1) return { status: "unavailable", reason: "multiple-sources" };
     const sourceId = [...sourceIds][0];
-    const row = await context.env.ROSTER_DB.prepare(`
+    const rows = await context.env.ROSTER_DB.prepare(`
       SELECT id, name, object_key, content_type, provider_modified_at, received_at
       FROM contact_list_files
       WHERE source_id = ?
       ORDER BY received_at DESC
-      LIMIT 1
-    `).bind(sourceId).first();
-    if (!row?.object_key) return { status: "unavailable", reason: "no-extract" };
-    const objectName = String(row.name || "").toLowerCase();
-    const contentType = String(row.content_type || "").toLowerCase();
-    if (!objectName.endsWith(".json") && !contentType.includes("json")) {
-      return {
-        status: "unavailable",
-        reason: "legacy-workbook",
-        revision: String(row.id || ""),
-        providerModifiedAt: String(row.provider_modified_at || ""),
-        receivedAt: String(row.received_at || ""),
+      LIMIT 8
+    `).bind(sourceId).all();
+    if (!rows.results?.length) return { status: "unavailable", reason: "no-extract" };
+    let selected = null;
+    let fallback = null;
+    let legacy = null;
+    let missingObject = false;
+    let invalidExtract = false;
+    for (const row of rows.results) {
+      const objectName = String(row.name || "").toLowerCase();
+      const contentType = String(row.content_type || "").toLowerCase();
+      if (!objectName.endsWith(".json") && !contentType.includes("json")) {
+        legacy ||= row;
+        continue;
+      }
+      const object = row.object_key ? await context.env.ROSTER_FILES.get(String(row.object_key)) : null;
+      if (!object) {
+        missingObject = true;
+        continue;
+      }
+      let extract = normaliseContactListExtract(JSON.parse(await object.text()));
+      if (!extract) {
+        invalidExtract = true;
+        continue;
+      }
+      // Older DDH flow runs used midnight as the date boundary. Correct those
+      // already-stored JSON extracts as well as new ingestion.
+      if (sourceId === DDH_CONTACT_LIST_SOURCE_ID) {
+        const correctedDate = contactOperationalDate(new Date(extract.providerModifiedAt || String(row.provider_modified_at || "")));
+        if (correctedDate && correctedDate !== extract.sourceDate) {
+          extract = normaliseContactListExtract({ ...extract, sourceDate: correctedDate });
+        }
+      }
+      if (contactExtractHasExpired(extract.sourceDate)) {
+        await context.env.ROSTER_FILES.delete(String(row.object_key));
+        await context.env.ROSTER_DB.prepare("DELETE FROM contact_list_files WHERE id = ?").bind(String(row.id)).run();
+        continue;
+      }
+      const candidate = { row, extract };
+      fallback ||= candidate;
+      if (extract.sourceDate === date) {
+        selected = candidate;
+        break;
+      }
+    }
+    if (!selected) {
+      if (fallback) return {
+        status: "not-current",
+        revision: String(fallback.row.id || ""),
+        sourceId,
+        sourceDate: fallback.extract.sourceDate,
+        providerModifiedAt: fallback.extract.providerModifiedAt || String(fallback.row.provider_modified_at || ""),
+        receivedAt: String(fallback.row.received_at || ""),
+        contacts: [],
+        resolutions: [],
       };
+      if (legacy) return {
+        status: "unavailable", reason: "legacy-workbook", revision: String(legacy.id || ""),
+        providerModifiedAt: String(legacy.provider_modified_at || ""), receivedAt: String(legacy.received_at || ""),
+      };
+      return { status: "unavailable", reason: missingObject ? "object-missing" : invalidExtract ? "invalid-extract" : "no-extract" };
     }
-    const [object, resolutions] = await Promise.all([
-      context.env.ROSTER_FILES.get(String(row.object_key)),
-      queryContactAllocationResolutions(context.env.ROSTER_DB, { sourceId, sourceDate: date, includeInactive: true }).catch(() => []),
-    ]);
-    if (!object) return { status: "unavailable", reason: "object-missing" };
-    const extract = normaliseContactListExtract(JSON.parse(await object.text()));
-    if (!extract) return { status: "unavailable", reason: "invalid-extract" };
-    const status = contactExtractStatus(extract, { date });
-    if (status === "expired") {
-      await context.env.ROSTER_FILES.delete(String(row.object_key));
-      await context.env.ROSTER_DB.prepare("DELETE FROM contact_list_files WHERE id = ?").bind(String(row.id)).run();
-      return { status };
-    }
+    const { row, extract } = selected;
+    const resolutions = await queryContactAllocationResolutions(context.env.ROSTER_DB, { sourceId, sourceDate: date, includeInactive: true }).catch(() => []);
     const allowedAreas = new Set(facilityKeys.map(contactAreaForSource).filter(Boolean));
     return {
-      status,
+      status: "available",
       revision: String(row.id || ""),
       sourceId,
       sourceDate: extract.sourceDate,
       providerModifiedAt: extract.providerModifiedAt || String(row.provider_modified_at || ""),
       receivedAt: String(row.received_at || ""),
-      contacts: status === "available"
-        ? contactsAfterShiftChange(extract.contacts.filter((contact) => allowedAreas.has(contact.area)), { date })
-        : [],
-      resolutions: status === "available" ? resolutions : [],
+      contacts: contactsAfterShiftChange(extract.contacts.filter((contact) => allowedAreas.has(contact.area)), { date }),
+      resolutions,
     };
   } catch (error) {
     console.warn("MMC contact allocation is unavailable", error);

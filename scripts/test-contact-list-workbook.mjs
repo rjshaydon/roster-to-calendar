@@ -81,6 +81,11 @@ const extract = await extractDdhClinicianContactsFromWorkbook(bytes, {
 
 assert.equal(extract.sourceId, "ddh-daily-contact-sheet");
 assert.equal(extract.sourceDate, "2026-08-25", "the source date should use Melbourne time");
+const earlyMorningExtract = await extractDdhClinicianContactsFromWorkbook(bytes, {
+  providerModifiedAt: "2026-08-25T20:00:00Z",
+});
+assert.equal(earlyMorningExtract.sourceDate, "2026-08-25",
+  "a DDH update before 07:30 Wednesday should remain attached to Tuesday's Night shift");
 assert.deepEqual(extract.contacts.map(({ shift, role, name, phone, isPopulated }) => [shift, role, name, phone, isPopulated]), [
   ["AM", "Doctor In Charge / AVAO", "Di", "49900", true],
   ["AM", "Orange Dr IC", "Shilpa", "49970", true],

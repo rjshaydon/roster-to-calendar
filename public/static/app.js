@@ -19,7 +19,7 @@ import {
   setParserExtensions,
   sourceNames,
 } from "./roster.js";
-import { attachContactAllocations, contactStream } from "./contact-allocations.js";
+import { attachContactAllocations, contactOperationalDate, contactStream } from "./contact-allocations.js";
 
 const form = document.querySelector("#roster-form");
 const appShell = document.querySelector("#appShell");
@@ -332,7 +332,7 @@ let facilityOverviewCompactState = {
   touchY: 0,
 };
 let facilityOverviewState = {
-  tab: "on-shift", date: formatDateKey(new Date()), facilityKey: "", includeClinicalSupport: false, requestId: 0, onShiftData: null, contactList: null, contactReviewOpen: false, contactResolutionMenu: null, contactResolutionSaving: false,
+  tab: "on-shift", date: contactOperationalDate(), followOperationalDate: true, facilityKey: "", includeClinicalSupport: false, requestId: 0, onShiftData: null, contactList: null, contactReviewOpen: false, contactResolutionMenu: null, contactResolutionSaving: false,
   staffTermStart: formatDateKey(australianTermForDate(new Date()).start), staffTerms: [], staffContent: "", staffData: null, staffQuery: "", staffExpanded: new Set(), staffFocusSection: "", staffActionMenu: null, staffDesignationMenu: null, staffSeniorityMenu: null, staffMultiSelectSection: "", staffMultiSelectMembers: new Map(), staffBulkSeniorityMenu: null, staffMultiSelectSaving: false,
   preferredFacilityKey: "", preferredFacilityReason: "", preferredFacilityEvidenceDate: "", byStreamFrom: formatDateKey(new Date()), byStreamTo: formatDateKey(new Date()), byStreamRows: [], byStreamCatalog: [], byStreamCoverage: [], byStreamContent: "", byStreamData: null, byStreamLoading: false, byStreamMetadataLoading: false, byStreamMetadataKey: "", byStreamMetadataPromise: null, byStreamRequestId: 0, byStreamHideEmptyDates: true, byStreamRowId: 0,
   togetherStaffKeys: ["", ""], togetherRangeMode: "term",
@@ -780,7 +780,8 @@ facilityOverviewSection?.addEventListener("click", (event) => {
     }
     clearFacilityOverviewStaffMultiSelect({ render: false });
     facilityOverviewState.tab = "on-shift";
-    facilityOverviewState.date = formatDateKey(new Date());
+    facilityOverviewState.followOperationalDate = true;
+    facilityOverviewState.date = contactOperationalDate();
     void loadFacilityOverviewOnShift();
     return;
   }
@@ -853,6 +854,7 @@ facilityOverviewSection?.addEventListener("click", (event) => {
     } else {
       const date = parseDateOnly(facilityOverviewState.date);
       date.setDate(date.getDate() + step);
+      facilityOverviewState.followOperationalDate = false;
       facilityOverviewState.date = formatDateKey(date);
       void loadFacilityOverviewOnShift();
     }
@@ -1226,6 +1228,7 @@ facilityOverviewSection?.addEventListener("change", (event) => {
   }
   const date = event.target.closest("[data-facility-overview-date]");
   if (date) {
+    facilityOverviewState.followOperationalDate = false;
     facilityOverviewState.date = String(date.value || "").slice(0, 10);
     void loadFacilityOverviewOnShift();
     return;
@@ -9523,7 +9526,8 @@ function resetFacilityOverviewSessionState() {
   const directorPreference = currentNonClinical && currentDirectorViewEnabled ? directorHospitalPreference() : "";
   const defaultTab = directorPreference === "ALL" ? "staff" : "on-shift";
   facilityOverviewState.tab = savedFacilityOverviewTabForCurrentAccount() || defaultTab;
-  facilityOverviewState.date = today;
+  facilityOverviewState.date = contactOperationalDate();
+  facilityOverviewState.followOperationalDate = true;
   facilityOverviewState.facilityKey = directorPreference || "";
   facilityOverviewState.includeClinicalSupport = false;
   facilityOverviewState.onShiftData = null;
@@ -9611,7 +9615,10 @@ async function openFacilityOverview(options = {}) {
     } else if (preferred) {
       facilityOverviewState.facilityKey = preferred;
     }
-    if (!options.preserveDate) facilityOverviewState.date = formatDateKey(new Date());
+    if (!options.preserveDate) {
+      facilityOverviewState.followOperationalDate = true;
+      facilityOverviewState.date = contactOperationalDate();
+    }
     if (!options.preserveByStreamRange) {
       const today = formatDateKey(new Date());
       facilityOverviewState.byStreamFrom = today;
@@ -10437,6 +10444,12 @@ function scheduleFacilityOverviewContactRefresh(delay = FACILITY_OVERVIEW_CONTAC
 async function refreshFacilityOverviewContactList() {
   if (!facilityOverviewContactRefreshIsActive() || facilityOverviewContactRefreshInFlight) {
     scheduleFacilityOverviewContactRefresh();
+    return;
+  }
+  const operationalDate = contactOperationalDate();
+  if (facilityOverviewState.followOperationalDate && operationalDate && facilityOverviewState.date !== operationalDate) {
+    facilityOverviewState.date = operationalDate;
+    await loadFacilityOverviewOnShift();
     return;
   }
   facilityOverviewContactRefreshInFlight = true;
@@ -16233,7 +16246,8 @@ function launchClinicalOnShiftWorkspace(options = {}, loginStartedAt = 0) {
   if (currentNonClinical || !canUseFacilityOverview() || !currentFacilityOverviewAccess.workingToday || !calendarTransitionStillCurrent(options.transition)) return false;
   if (facilityOverviewSessionNeedsInitialization) resetFacilityOverviewSessionState();
   facilityOverviewState.tab = "on-shift";
-  facilityOverviewState.date = currentFacilityOverviewAccess.today || formatDateKey(new Date());
+  facilityOverviewState.followOperationalDate = true;
+  facilityOverviewState.date = contactOperationalDate();
   if (!facilityOverviewIsSiteScoped() && currentFacilityOverviewAccess.preferredFacilityKey) {
     facilityOverviewState.facilityKey = currentFacilityOverviewAccess.preferredFacilityKey;
     facilityOverviewState.preferredFacilityKey = currentFacilityOverviewAccess.preferredFacilityKey;

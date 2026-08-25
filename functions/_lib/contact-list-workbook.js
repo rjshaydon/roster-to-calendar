@@ -272,8 +272,14 @@ function melbourneDateFromTimestamp(value) {
   if (Number.isNaN(date.valueOf())) return "";
   const parts = Object.fromEntries(new Intl.DateTimeFormat("en-AU", {
     timeZone: "Australia/Melbourne", year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
   }).formatToParts(date).filter((part) => part.type !== "literal").map((part) => [part.type, part.value]));
-  return `${parts.year}-${parts.month}-${parts.day}`;
+  const calendarDate = `${parts.year}-${parts.month}-${parts.day}`;
+  const minuteOfDay = Number(parts.hour) * 60 + Number(parts.minute);
+  if (minuteOfDay >= 7 * 60 + 30) return calendarDate;
+  const previous = new Date(`${calendarDate}T12:00:00Z`);
+  previous.setUTCDate(previous.getUTCDate() - 1);
+  return previous.toISOString().slice(0, 10);
 }
 
 function sourceDateFromLabel(value) {
