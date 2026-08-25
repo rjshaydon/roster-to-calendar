@@ -10489,8 +10489,7 @@ function renderFacilityOverviewOnShiftNames(assignments, options = {}) {
 function renderFacilityOverviewContactAllocation(allocation) {
   const phone = String(allocation?.phone || "").trim();
   if (!phone) return `<span class="facility-overview-contact-number is-empty">No phone recorded</span>`;
-  const dial = phone.replace(/[^0-9+]/g, "");
-  return `<a class="facility-overview-contact-number" href="tel:${escapeHtml(dial)}" title="Allocated contact number">${escapeHtml(phone)}</a>`;
+  return `<span class="facility-overview-contact-number" title="Allocated internal extension">${escapeHtml(phone)}</span>`;
 }
 
 function renderFacilityOverviewContactListStatus(matches) {
