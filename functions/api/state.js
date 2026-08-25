@@ -3781,43 +3781,12 @@ async function loadFastAccountSnapshotPayload(context, params = {}) {
 }
 
 function scheduleFastAccountSnapshotValidation(context, job = {}) {
-  if (typeof context.waitUntil !== "function") return false;
-  context.waitUntil((async () => {
-    const db = context.env?.ROSTER_DB;
-    const record = await loadAccountMirror(db, job.targetRecord?.email || "").catch(() => null) || job.targetRecord;
-    if (!record) return;
-    const currentRevision = await queryCalendarRevision(db, record.email || "").catch(() => "");
-    const latestRegistry = await loadSnapshotRegistryEntry(db, job.descriptor || {}).catch(() => null);
-    if (
-      currentRevision
-      && latestRegistry?.status === "ready"
-      && latestRegistry?.builtRevision === currentRevision
-    ) {
-      return;
-    }
-    if (snapshotRegistryBuildInProgress(latestRegistry)) return;
-    const role = record.role || roleForEmail(record.email);
-    const prepared = await prepareAccountResponse(null, record, {
-      db,
-      includeAvailableDoctors: false,
-    });
-    await buildAndStoreAccountSnapshot(context, {
-      targetRecord: record,
-      prepared,
-      requestedRange: job.requestedRange,
-      doctorKey: job.doctorKey || prepared.defaultDoctorKey || "",
-      descriptor: job.descriptor || buildAccountSnapshotCacheDescriptor(record, role, job.doctorKey || prepared.defaultDoctorKey || "", job.requestedRange || defaultSnapshotRange()),
-      revision: currentRevision,
-      reason: "fast-login-background-validation",
-    });
-  })().catch((error) => {
-    console.warn("Fast login snapshot validation failed", {
-      owner: job?.targetRecord?.email || job?.descriptor?.ownerId || "",
-      doctorKey: job?.doctorKey || "",
-      error: error?.message || String(error),
-    });
-  }));
-  return true;
+  // Authentication must stay bounded. A snapshot rebuild can traverse a
+  // large roster and Cloudflare accounts `waitUntil` CPU to this login
+  // request, turning an otherwise successful authentication into a 503.
+  // Calendar loading handles a stale cache separately after the shell is
+  // available, so never rebuild it from the fast-login path.
+  return false;
 }
 
 function scheduleAccountSnapshotRebuild(context, job = {}) {
