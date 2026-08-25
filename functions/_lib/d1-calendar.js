@@ -464,6 +464,40 @@ async function ensureCalendarSchemaUncached(db) {
   `).run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_contact_list_files_source_version ON contact_list_files (source_id, provider_version, name)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_contact_list_files_source_hash ON contact_list_files (source_id, content_hash, name)").run();
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS contact_allocation_resolutions (
+      id TEXT PRIMARY KEY,
+      source_id TEXT NOT NULL,
+      source_date TEXT NOT NULL,
+      contact_key TEXT NOT NULL,
+      source_type TEXT NOT NULL DEFAULT '',
+      doctor_key TEXT NOT NULL DEFAULT '',
+      display_name TEXT NOT NULL DEFAULT '',
+      active INTEGER NOT NULL DEFAULT 1,
+      revision INTEGER NOT NULL DEFAULT 0,
+      created_by TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT '',
+      updated_by TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT '',
+      cleared_by TEXT NOT NULL DEFAULT '',
+      cleared_at TEXT NOT NULL DEFAULT '',
+      UNIQUE(source_id, source_date, contact_key)
+    )
+  `).run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_contact_allocation_resolutions_lookup ON contact_allocation_resolutions (source_id, source_date, active)").run();
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS contact_allocation_resolution_history (
+      id TEXT PRIMARY KEY,
+      resolution_id TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      doctor_key TEXT NOT NULL DEFAULT '',
+      display_name TEXT NOT NULL DEFAULT '',
+      actor_email TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT ''
+    )
+  `).run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_contact_allocation_resolution_history_resolution ON contact_allocation_resolution_history (resolution_id, revision)").run();
   await ensureColumn(db, "roster_files", "source_id", "TEXT NOT NULL DEFAULT ''");
   await ensureColumn(db, "roster_files", "parser_version", "TEXT NOT NULL DEFAULT 'legacy-unverified'");
   await ensureColumn(db, "roster_sync_runs", "source_file_id", "TEXT NOT NULL DEFAULT ''");
@@ -3780,6 +3814,78 @@ export async function queryFacilityOverviewOnShift(db, options = {}) {
     })
     .filter((row) => row.doctorKey && row.displayName && row.event);
   return events;
+}
+
+export async function queryContactAllocationResolutions(db, options = {}) {
+  if (!db?.prepare) return [];
+  await ensureCalendarSchema(db);
+  const sourceId = String(options.sourceId || "").trim();
+  const sourceDate = String(options.sourceDate || "").slice(0, 10);
+  if (!sourceId || !/^\d{4}-\d{2}-\d{2}$/.test(sourceDate)) return [];
+  const includeInactive = options.includeInactive === true;
+  const rows = await db.prepare(`
+    SELECT id, contact_key, source_type, doctor_key, display_name, active, revision, updated_at
+    FROM contact_allocation_resolutions
+    WHERE source_id = ? AND source_date = ? ${includeInactive ? "" : "AND active = 1"}
+  `).bind(sourceId, sourceDate).all();
+  return (rows.results || []).map((row) => ({
+    id: String(row.id || ""), contactKey: String(row.contact_key || ""), sourceType: String(row.source_type || ""),
+    doctorKey: String(row.doctor_key || ""), displayName: String(row.display_name || ""), active: Number(row.active || 0) === 1,
+    revision: Number(row.revision || 0), updatedAt: String(row.updated_at || ""),
+  }));
+}
+
+export async function saveContactAllocationResolution(db, options = {}) {
+  if (!db?.prepare) throw new Error("Contact allocation storage is unavailable.");
+  await ensureCalendarSchema(db);
+  const sourceId = String(options.sourceId || "").trim();
+  const sourceDate = String(options.sourceDate || "").slice(0, 10);
+  const contactKey = String(options.contactKey || "").trim();
+  const expectedRevision = Math.max(0, Number(options.expectedRevision || 0));
+  if (!sourceId || !/^\d{4}-\d{2}-\d{2}$/.test(sourceDate) || !contactKey) throw new Error("A current contact allocation is required.");
+  const existing = await db.prepare(`
+    SELECT id, revision FROM contact_allocation_resolutions
+    WHERE source_id = ? AND source_date = ? AND contact_key = ?
+  `).bind(sourceId, sourceDate, contactKey).first();
+  const currentRevision = Number(existing?.revision || 0);
+  if ((existing && currentRevision !== expectedRevision) || (!existing && expectedRevision !== 0)) {
+    const conflict = existing ? await queryContactAllocationResolutions(db, { sourceId, sourceDate }) : [];
+    const error = new Error("This allocation was changed while you were reviewing it.");
+    error.code = "contact-allocation-conflict";
+    error.resolutions = conflict;
+    throw error;
+  }
+  const now = String(options.updatedAt || new Date().toISOString());
+  const actor = String(options.actorEmail || "").trim().toLowerCase();
+  const doctorKey = String(options.doctorKey || "").trim();
+  const active = doctorKey ? 1 : 0;
+  const id = String(existing?.id || `contact-resolution:${sourceId}:${sourceDate}:${contactKey}`);
+  const revision = currentRevision + 1;
+  const displayName = String(options.displayName || "").trim();
+  const write = await db.prepare(`
+      INSERT INTO contact_allocation_resolutions (
+        id, source_id, source_date, contact_key, source_type, doctor_key, display_name,
+        active, revision, created_by, created_at, updated_by, updated_at, cleared_by, cleared_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(source_id, source_date, contact_key) DO UPDATE SET
+        source_type = excluded.source_type, doctor_key = excluded.doctor_key, display_name = excluded.display_name,
+        active = excluded.active, revision = excluded.revision, updated_by = excluded.updated_by,
+        updated_at = excluded.updated_at, cleared_by = excluded.cleared_by, cleared_at = excluded.cleared_at
+      WHERE contact_allocation_resolutions.revision = ?
+    `).bind(id, sourceId, sourceDate, contactKey, String(options.sourceType || "").trim(), doctorKey, displayName,
+      active, revision, actor, now, actor, now, active ? "" : actor, active ? "" : now, expectedRevision).run();
+  if (existing && Number(write?.meta?.changes || 0) !== 1) {
+    const conflict = await queryContactAllocationResolutions(db, { sourceId, sourceDate });
+    const error = new Error("This allocation was changed while you were reviewing it.");
+    error.code = "contact-allocation-conflict";
+    error.resolutions = conflict;
+    throw error;
+  }
+  await db.prepare(`
+      INSERT INTO contact_allocation_resolution_history (id, resolution_id, revision, action, doctor_key, display_name, actor_email, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(`contact-resolution-history:${id}:${revision}`, id, revision, active ? (existing ? "reassigned" : "assigned") : "cleared", doctorKey, displayName, actor, now).run();
+  return { id, contactKey, sourceType: String(options.sourceType || ""), doctorKey, displayName, active: active === 1, revision, updatedAt: now };
 }
 
 // This intentionally returns the roster events rather than a second server-side

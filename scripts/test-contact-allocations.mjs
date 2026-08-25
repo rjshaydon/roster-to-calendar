@@ -97,6 +97,28 @@ const crossPeriod = attachContactAllocations([
 ], [contact("SSU (SMS/SR) 25143", "Qing", "25143")]);
 assert.equal(crossPeriod.matchedCount, 0, "a contact allocation cannot cross periods");
 
+const temporaryContact = contact("Dr", "Ama", "25721");
+const temporaryAssignments = [
+  assignment("MMC", "AM", "Fast Track", "Arnav MEHTA", "HMO"),
+  assignment("MMC", "AM", "Fast Track", "Other DOCTOR", "HMO"),
+];
+const unresolvedTemporary = attachContactAllocations(temporaryAssignments, [temporaryContact]);
+const temporaryKey = unresolvedTemporary.unmatched[0].contactKey;
+const resolvedTemporary = attachContactAllocations(temporaryAssignments, [temporaryContact], [{ id: "resolution-1", contactKey: temporaryKey, doctorKey: temporaryAssignments[0].person.doctorKey, revision: 1, active: true }]);
+assert.equal(allocationFor(resolvedTemporary, "Arnav MEHTA").phone, "25721", "a temporary correction should attach only the daily phone allocation");
+assert.equal(allocationFor(resolvedTemporary, "Arnav MEHTA").matchMethod, "manual");
+assert.equal(resolvedTemporary.unmatched.length, 0, "a resolved allocation should leave the review list");
+
+const ddhExcluded = normaliseContactListExtract({
+  sourceId: "ddh-daily-contact-sheet", sourceDate: "2026-08-25", contacts: [
+    { area: "Dandenong Emergency", shift: "AM", role: "Geriatrician in ED consultant", name: "A", phone: "49901", isPopulated: true },
+    { area: "Dandenong Emergency", shift: "AM", role: "CART NP/NPC", name: "B", phone: "49902", isPopulated: true },
+    { area: "Dandenong Emergency", shift: "AM", role: "Miprep HMO", name: "C", phone: "49903", isPopulated: true },
+    { area: "Dandenong Emergency", shift: "PM", role: "Miprep HMO", name: "D", phone: "49904", isPopulated: true },
+  ],
+});
+assert.deepEqual(ddhExcluded.contacts.map((entry) => entry.name), ["D"], "only the three requested DDH AM contact-review rows should be excluded");
+
 const ddhExtract = normaliseContactListExtract({
   sourceId: "ddh-daily-contact-sheet",
   sourceDate: "2026-08-25",

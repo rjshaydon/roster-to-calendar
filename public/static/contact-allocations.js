@@ -36,18 +36,29 @@ export function normaliseContactListExtract(payload) {
       // A fixed phone left in an empty row must not be treated as an allocation.
       isPopulated: Boolean(entry?.isPopulated) && Boolean(name),
     };
-  });
+  }).filter((entry) => !isTemporarilyExcludedContactRole(sourceId, entry));
   if (contacts.some((entry) => !validAreas.has(entry.area)
     || !VALID_SHIFTS.has(entry.shift)
     || !entry.role
     || /\bnic\b|nurs|(^|\W)(rn|en)(\W|$)/i.test(entry.role))) return null;
+  const occurrences = new Map();
+  const keyedContacts = contacts.map((contact) => {
+    const base = contactKeyBase(sourceId, sourceDate, contact);
+    const occurrence = occurrences.get(base) || 0;
+    occurrences.set(base, occurrence + 1);
+    return { ...contact, contactKey: `${base}|${occurrence}` };
+  });
   return {
     sourceId,
     fileName: SOURCE_FILE_NAMES.get(sourceId),
     sourceDate,
     providerModifiedAt: String(payload?.providerModifiedAt || "").trim(),
-    contacts,
+    contacts: keyedContacts,
   };
+}
+
+export function contactResolutionKey(sourceId, sourceDate, contact, occurrence = 0) {
+  return `${contactKeyBase(sourceId, sourceDate, contact)}|${Math.max(0, Number(occurrence) || 0)}`;
 }
 
 export function contactExtractStatus(extract, { date = "", now = new Date() } = {}) {
@@ -71,10 +82,10 @@ export function contactAreaForSource(source) {
   return "";
 }
 
-export function attachContactAllocations(assignments = [], contacts = []) {
+export function attachContactAllocations(assignments = [], contacts = [], resolutions = []) {
   const available = (contacts || [])
     .filter((contact) => contact?.isPopulated && contact.name)
-    .map((contact, index) => ({ ...contact, contactKey: `${contact.area}|${contact.shift}|${contact.role}|${contact.name}|${contact.phone}|${index}` }));
+    .map((contact, index) => ({ ...contact, contactKey: String(contact.contactKey || contactResolutionKey("legacy", "", contact, index)) }));
   const used = new Set();
   const enriched = assignments.map((assignment) => ({ ...assignment }));
   const orderedContacts = [...available].sort((left, right) => contactSpecificity(right) - contactSpecificity(left)
@@ -133,7 +144,31 @@ export function attachContactAllocations(assignments = [], contacts = []) {
     };
   }
 
-  const matchedContacts = new Set(enriched.map((assignment) => assignment.contactAllocation?.contactKey).filter(Boolean));
+  // A temporary resolution is deliberately applied only after the conservative
+  // automatic matcher. It can connect a review row to one rostered person but
+  // must never displace a safe automatic allocation or alter roster streams.
+  const unresolvedKeys = new Set(available.filter((contact) => !matchedContactsForAssignments(enriched).has(contact.contactKey)).map((contact) => contact.contactKey));
+  const manualTargets = new Set();
+  for (const resolution of resolutions || []) {
+    if (resolution?.active === false || !unresolvedKeys.has(String(resolution?.contactKey || ""))) continue;
+    const contact = available.find((item) => item.contactKey === String(resolution.contactKey));
+    const targetIndex = enriched.findIndex((assignment) => assignmentMatchesContactContext(assignment, contact)
+      && String(assignment?.person?.doctorKey || "") === String(resolution?.doctorKey || "")
+      && !assignment.contactAllocation);
+    if (!contact || targetIndex < 0 || manualTargets.has(targetIndex)) continue;
+    manualTargets.add(targetIndex);
+    enriched[targetIndex] = {
+      ...enriched[targetIndex],
+      contactAllocation: {
+        role: contact.role, phone: contact.phone, sourceName: contact.name,
+        contactKey: contact.contactKey, matchMethod: "manual", streamKey: contactStream(contact.role).key,
+        streamLabel: contactStream(contact.role).label, rosterStreamKey: assignmentStreamKey(enriched[targetIndex]),
+        resolutionId: String(resolution.id || ""), resolutionRevision: Number(resolution.revision || 0),
+      },
+    };
+  }
+
+  const matchedContacts = matchedContactsForAssignments(enriched);
   return {
     assignments: enriched,
     matchedCount: enriched.filter((assignment) => assignment.contactAllocation).length,
@@ -142,6 +177,22 @@ export function attachContactAllocations(assignments = [], contacts = []) {
       reviewReason: unmatchedReasons.get(contact.contactKey) || "Not matched",
     })),
   };
+}
+
+function matchedContactsForAssignments(assignments) {
+  return new Set((assignments || []).map((assignment) => assignment.contactAllocation?.contactKey).filter(Boolean));
+}
+
+function contactKeyBase(sourceId, sourceDate, contact) {
+  return [sourceId, sourceDate, contact?.area, contact?.shift, contact?.role, contact?.name, contact?.phone]
+    .map((value) => encodeURIComponent(String(value || "").trim().toLowerCase()))
+    .join("|");
+}
+
+function isTemporarilyExcludedContactRole(sourceId, contact) {
+  if (sourceId !== DDH_CONTACT_LIST_SOURCE_ID || String(contact?.shift || "") !== "AM") return false;
+  const role = String(contact?.role || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return role.startsWith("geriatrician in ed") || role.startsWith("cart np npc") || role.startsWith("miprep hmo");
 }
 
 function assignmentMatchesContactContext(assignment, contact) {

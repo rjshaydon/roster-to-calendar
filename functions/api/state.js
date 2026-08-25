@@ -1,6 +1,6 @@
 import { applyEventOverrides, customEventsToEvents, defaultSettings, inspectImportRecord, isIgnoredRosterIssueValue, normalizeRosterName } from "../_lib/roster.js";
 import { AUTOMATION_SOURCES } from "../_lib/automation-import.js";
-import { DDH_CONTACT_LIST_SOURCE_ID, MMC_CONTACT_LIST_SOURCE_ID, contactAreaForSource, contactExtractStatus, normaliseContactListExtract } from "../../public/static/contact-allocations.js";
+import { DDH_CONTACT_LIST_SOURCE_ID, MMC_CONTACT_LIST_SOURCE_ID, attachContactAllocations, contactAreaForSource, contactExtractStatus, normaliseContactListExtract } from "../../public/static/contact-allocations.js";
 import { requestQueuedRosterProcessing } from "../_lib/automation-dispatch.js";
 import { extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentExceptions, findmyshiftLastModified, findmyshiftReportDiagnostics, findmyshiftShiftReport } from "../_lib/findmyshift.js";
 import {
@@ -40,6 +40,8 @@ import {
   queryFacilityOverviewAccessEvents,
   queryFacilityOverviewRange,
   queryFacilityOverviewStaff,
+  queryContactAllocationResolutions,
+  saveContactAllocationResolution,
   setFacilityStaffDesignation,
   clearFacilityStaffDesignation,
   setFacilityStaffSeniorityOverride,
@@ -1783,13 +1785,16 @@ export async function onRequestPost(context) {
       }
       const startedAt = Date.now();
       try {
-        const events = (await Promise.all(facilityKeys.map((facilityKey) => queryFacilityOverviewOnShift(context.env.ROSTER_DB, { date, facilityKey }))))
+        const [eventGroups, contactList] = await Promise.all([
+          Promise.all(facilityKeys.map((facilityKey) => queryFacilityOverviewOnShift(context.env.ROSTER_DB, { date, facilityKey }))),
+          loadLiveContactListForOnShift(context, { date, facilityKeys }),
+        ]);
+        const events = eventGroups
           .flat()
           .filter((row) => isFacilityOverviewWorkingEvent(row.event, {
             facilityKey: row.sourceType,
             includeClinicalSupport: body?.includeClinicalSupport === true,
           }));
-        const contactList = await loadLiveContactListForOnShift(context, { date, facilityKeys });
         return Response.json({ ok: true, date, facilityKey: requestedFacility === "ALL" ? "ALL" : facilityKeys[0], events, contactList, queryMs: Date.now() - startedAt });
       } catch (error) {
         console.error("queryFacilityOverviewOnShift failed", {
@@ -1799,6 +1804,55 @@ export async function onRequestPost(context) {
           error: error?.message || String(error),
         });
         return Response.json({ ok: false, unavailable: true, events: [] }, { status: 503 });
+      }
+    }
+
+    if (action === "setContactAllocationResolution") {
+      if (!facilityOverviewEnabledForRecord({ ...account.record, role: account.role })) return facilityOverviewAccessDeniedResponse();
+      const date = String(body?.date || "").slice(0, 10);
+      const requestedFacility = String(body?.facilityKey || "").trim().toUpperCase();
+      const contactKey = String(body?.contactKey || "").trim();
+      const doctorKey = normalizeRosterName(body?.doctorKey || "");
+      const expectedRevision = Math.max(0, Number(body?.expectedRevision || 0));
+      const access = await facilityOverviewAccess();
+      if (access.mode === "denied" || (access.mode === "site" && requestedFacility !== access.facilityKey)) return facilityOverviewAccessDeniedResponse();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !sanitizeSourceTypes([requestedFacility]).length || !contactKey) {
+        return Response.json({ error: "A current contact allocation is required." }, { status: 400 });
+      }
+      const contactList = await loadLiveContactListForOnShift(context, { date, facilityKeys: [requestedFacility] });
+      const contact = (contactList.contacts || []).find((item) => String(item.contactKey || "") === contactKey);
+      if (contactList.status !== "available" || !contact) return Response.json({ error: "This contact allocation is no longer current." }, { status: 409 });
+      let target = null;
+      if (doctorKey) {
+        const roster = await queryFacilityOverviewOnShift(context.env.ROSTER_DB, { date, facilityKey: requestedFacility });
+        target = roster.find((row) => normalizeRosterName(row.doctorKey) === doctorKey && facilityOverviewEventPeriod(row.event) === String(contact.shift));
+        if (!target) return Response.json({ error: "Choose a clinician rostered in the same ED and shift period." }, { status: 400 });
+        const automatic = attachContactAllocations(roster.map((row) => ({
+          source: String(row.sourceType || requestedFacility).toUpperCase(), period: facilityOverviewEventPeriod(row.event),
+          team: String(row.event?.title || ""), suggestedTitle: String(row.event?.title || ""), event: row.event,
+          person: { doctorKey: row.doctorKey, displayName: row.displayName, sourceType: row.sourceType, seniority: row.seniority },
+        })), contactList.contacts || []);
+        if (automatic.assignments.some((assignment) => assignment.contactAllocation?.contactKey === contactKey)) {
+          return Response.json({ error: "This number already has a safe automatic match." }, { status: 409 });
+        }
+        if (automatic.assignments.some((assignment) => normalizeRosterName(assignment.person?.doctorKey) === doctorKey && assignment.contactAllocation)) {
+          return Response.json({ error: "That clinician already has a contact allocation." }, { status: 409 });
+        }
+        const active = await queryContactAllocationResolutions(context.env.ROSTER_DB, { sourceId: contactList.sourceId, sourceDate: contactList.sourceDate });
+        if (active.some((resolution) => resolution.doctorKey === doctorKey && resolution.contactKey !== contactKey)) {
+          return Response.json({ error: "That clinician already has a temporary contact allocation." }, { status: 409 });
+        }
+      }
+      try {
+        const resolution = await saveContactAllocationResolution(context.env.ROSTER_DB, {
+          sourceId: contactList.sourceId, sourceDate: contactList.sourceDate, contactKey,
+          sourceType: requestedFacility.toLowerCase(), doctorKey, displayName: target?.displayName || "",
+          expectedRevision, actorEmail: account.record?.email || email,
+        });
+        return Response.json({ ok: true, resolution });
+      } catch (error) {
+        if (error?.code === "contact-allocation-conflict") return Response.json({ error: error.message, conflict: true, resolutions: error.resolutions || [] }, { status: 409 });
+        return Response.json({ error: error?.message || "Could not save the temporary contact allocation." }, { status: 400 });
       }
     }
 
@@ -2003,7 +2057,10 @@ async function loadLiveContactListForOnShift(context, { date, facilityKeys = [] 
       LIMIT 1
     `).bind(sourceId).first();
     if (!row?.object_key) return { status: "unavailable" };
-    const object = await context.env.ROSTER_FILES.get(String(row.object_key));
+    const [object, resolutions] = await Promise.all([
+      context.env.ROSTER_FILES.get(String(row.object_key)),
+      queryContactAllocationResolutions(context.env.ROSTER_DB, { sourceId, sourceDate: date, includeInactive: true }).catch(() => []),
+    ]);
     if (!object) return { status: "unavailable" };
     const extract = normaliseContactListExtract(JSON.parse(await object.text()));
     if (!extract) return { status: "unavailable" };
@@ -2016,10 +2073,12 @@ async function loadLiveContactListForOnShift(context, { date, facilityKeys = [] 
     const allowedAreas = new Set(facilityKeys.map(contactAreaForSource).filter(Boolean));
     return {
       status,
+      sourceId,
       sourceDate: extract.sourceDate,
       providerModifiedAt: extract.providerModifiedAt || String(row.provider_modified_at || ""),
       receivedAt: String(row.received_at || ""),
       contacts: status === "available" ? extract.contacts.filter((contact) => allowedAreas.has(contact.area)) : [],
+      resolutions: status === "available" ? resolutions : [],
     };
   } catch (error) {
     console.warn("MMC contact allocation is unavailable", error);
@@ -2937,6 +2996,14 @@ function isFacilityOverviewWorkingEvent(event, options = {}) {
   if (String(options.facilityKey || "").toUpperCase() === "DDH" && /\b(?:hith|vhh)\b/.test(text)) return false;
   if (options.includeClinicalSupport !== true && (text.includes("clinical support") || /\bcs\b/.test(text) || /\bcso\b/.test(text))) return false;
   return true;
+}
+
+function facilityOverviewEventPeriod(event) {
+  const hour = Number((String(event?.start || "").match(/T(\d{2}):/) || [])[1]);
+  if (!Number.isFinite(hour)) return "";
+  if (hour < 14) return "AM";
+  if (hour < 21) return "PM";
+  return "Night";
 }
 
 function facilityOverviewTermRange(today) {

@@ -1466,6 +1466,53 @@ input[type="color"] {
   margin-top: 4px;
 }
 
+.facility-overview-contact-review-row > span > button,
+.facility-overview-contact-number.is-manual {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.facility-overview-contact-number.is-manual small {
+  margin-left: 4px;
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-decoration: none;
+}
+
+.facility-overview-contact-resolution-menu {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 4px;
+  padding: 8px;
+  border: 1px solid rgba(24, 35, 28, 0.16);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.94);
+}
+
+.facility-overview-contact-resolution-menu > button:not(.button) {
+  display: grid;
+  gap: 1px;
+  padding: 8px 10px;
+  border: 1px solid rgba(24, 35, 28, 0.13);
+  border-radius: 8px;
+  color: var(--ink);
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+}
+
+.facility-overview-contact-resolution-menu small {
+  color: var(--muted);
+}
+
 .facility-overview-on-shift-names small {
   color: var(--muted);
   font-size: 0.74rem;

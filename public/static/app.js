@@ -331,7 +331,7 @@ let facilityOverviewCompactState = {
   touchY: 0,
 };
 let facilityOverviewState = {
-  tab: "on-shift", date: formatDateKey(new Date()), facilityKey: "", includeClinicalSupport: false, requestId: 0, onShiftData: null, contactList: null,
+  tab: "on-shift", date: formatDateKey(new Date()), facilityKey: "", includeClinicalSupport: false, requestId: 0, onShiftData: null, contactList: null, contactResolutionMenu: null, contactResolutionSaving: false,
   staffTermStart: formatDateKey(australianTermForDate(new Date()).start), staffTerms: [], staffContent: "", staffData: null, staffQuery: "", staffExpanded: new Set(), staffFocusSection: "", staffActionMenu: null, staffDesignationMenu: null, staffSeniorityMenu: null, staffMultiSelectSection: "", staffMultiSelectMembers: new Map(), staffBulkSeniorityMenu: null, staffMultiSelectSaving: false,
   preferredFacilityKey: "", preferredFacilityReason: "", preferredFacilityEvidenceDate: "", byStreamFrom: formatDateKey(new Date()), byStreamTo: formatDateKey(new Date()), byStreamRows: [], byStreamCatalog: [], byStreamCoverage: [], byStreamContent: "", byStreamData: null, byStreamLoading: false, byStreamMetadataLoading: false, byStreamMetadataKey: "", byStreamMetadataPromise: null, byStreamRequestId: 0, byStreamHideEmptyDates: true, byStreamRowId: 0,
   togetherStaffKeys: ["", ""], togetherRangeMode: "term",
@@ -720,6 +720,29 @@ facilityOverviewSection?.addEventListener("scroll", (event) => {
   ) setFacilityOverviewCompactMode(scroller, false);
 }, { capture: true, passive: true });
 facilityOverviewSection?.addEventListener("click", (event) => {
+  const contactResolution = event.target.closest("[data-facility-overview-contact-resolution]");
+  if (contactResolution) {
+    facilityOverviewState.contactResolutionMenu = String(contactResolution.dataset.facilityOverviewContactResolution || "");
+    facilityOverviewState.contactResolutionSaving = false;
+    facilityOverviewState.content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData || []);
+    renderFacilityOverview();
+    return;
+  }
+  const contactResolutionTarget = event.target.closest("[data-facility-overview-contact-resolution-target]");
+  if (contactResolutionTarget) {
+    void saveFacilityOverviewContactResolution(String(contactResolutionTarget.dataset.facilityOverviewContactResolutionTarget || ""));
+    return;
+  }
+  if (event.target.closest("[data-facility-overview-contact-resolution-clear]")) {
+    void saveFacilityOverviewContactResolution("");
+    return;
+  }
+  if (event.target.closest("[data-facility-overview-contact-resolution-cancel]")) {
+    facilityOverviewState.contactResolutionMenu = null;
+    facilityOverviewState.content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData || []);
+    renderFacilityOverview();
+    return;
+  }
   if (event.target.closest("[data-facility-overview-back-to-creator]")) {
     void returnToCreatorCalendar();
     return;
@@ -10356,13 +10379,13 @@ function renderFacilityOverviewOnShiftResults(rows) {
     return base ? { ...base, person, event } : null;
   })).filter(Boolean);
   if (!assignments.length) return `<article class="issue-card"><p>No recognised working shifts were found for this ED and date.</p></article>`;
-  const contactMatches = attachContactAllocations(assignments, facilityOverviewState.contactList?.contacts || []);
+  const contactMatches = attachContactAllocations(assignments, facilityOverviewState.contactList?.contacts || [], facilityOverviewState.contactList?.resolutions || []);
   const periods = new Map();
   for (const assignment of contactMatches.assignments) {
     if (!periods.has(assignment.period)) periods.set(assignment.period, []);
     periods.get(assignment.period).push(assignment);
   }
-  return `${renderFacilityOverviewContactListStatus(contactMatches)}${["AM", "PM", "Night"].filter((period) => periods.has(period)).map((period) => `
+  return `${renderFacilityOverviewContactListStatus(contactMatches, contactMatches.assignments)}${["AM", "PM", "Night"].filter((period) => periods.has(period)).map((period) => `
     <section class="facility-overview-period"><h3>${period}</h3><div class="facility-overview-staff-grid">${renderFacilityOverviewOnShiftPeriod(periods.get(period), { canUseStaffActions, termStart, period })}</div></section>
   `).join("")}`;
 }
@@ -10523,22 +10546,71 @@ function renderFacilityOverviewOnShiftNames(assignments, options = {}) {
 function renderFacilityOverviewContactAllocation(allocation) {
   const phone = String(allocation?.phone || "").trim();
   if (!phone) return `<span class="facility-overview-contact-number is-empty">No phone recorded</span>`;
+  if (allocation?.matchMethod === "manual") {
+    return `<button type="button" class="facility-overview-contact-number is-manual" data-facility-overview-contact-resolution="${escapeHtml(allocation.contactKey || "")}" aria-label="Edit temporary allocation of ${escapeHtml(phone)}"><span>${escapeHtml(phone)}</span><small>Manual</small></button>`;
+  }
   return `<span class="facility-overview-contact-number" title="Allocated internal extension">${escapeHtml(phone)}</span>`;
 }
 
-function renderFacilityOverviewContactListStatus(matches) {
+function renderFacilityOverviewContactListStatus(matches, assignments = []) {
   const contactList = facilityOverviewState.contactList;
   if (!contactList?.status || contactList.status === "unavailable") return "";
   if (contactList.status !== "available") return `<p class="facility-overview-contact-status">Live contact allocation is not available for this date.</p>`;
   const received = contactList.providerModifiedAt || contactList.receivedAt || "";
   const freshness = received ? ` · updated ${formatFacilityOverviewContactTime(received)}` : "";
   const unresolved = matches.unmatched || [];
+  const menuKey = facilityOverviewState.contactResolutionMenu;
   const review = unresolved.length
-    ? isViewingCreatorAccount()
-      ? `<details class="facility-overview-contact-review"><summary>${unresolved.length} allocation${unresolved.length === 1 ? "" : "s"} need review</summary>${unresolved.map((contact) => `<div>${escapeHtml(contact.shift)} · ${escapeHtml(contact.role)} · ${escapeHtml(contact.name)}${contact.phone ? ` · ${escapeHtml(contact.phone)}` : ""}${contact.reviewReason ? ` · ${escapeHtml(contact.reviewReason)}` : ""}</div>`).join("")}</details>`
-      : `<span> · ${unresolved.length} allocation${unresolved.length === 1 ? "" : "s"} need review</span>`
+    ? `<details class="facility-overview-contact-review" open><summary>${unresolved.length} allocation${unresolved.length === 1 ? "" : "s"} need review</summary>${unresolved.map((contact) => renderFacilityOverviewContactReviewRow(contact, assignments, menuKey === contact.contactKey)).join("")}</details>`
     : "";
   return `<div class="facility-overview-contact-status"><span>Live contact allocations for ${escapeHtml(contactList.sourceDate)}${freshness} · ${matches.matchedCount} matched</span>${review}</div>`;
+}
+
+function renderFacilityOverviewContactReviewRow(contact, assignments, open) {
+  const key = String(contact?.contactKey || "");
+  const label = `${contact.shift} · ${contact.role}`;
+  return `<div class="facility-overview-contact-review-row"><span>${escapeHtml(label)} · <button type="button" data-facility-overview-contact-resolution="${escapeHtml(key)}">${escapeHtml(contact.name)}</button>${contact.phone ? ` · <button type="button" data-facility-overview-contact-resolution="${escapeHtml(key)}">${escapeHtml(contact.phone)}</button>` : ""}${contact.reviewReason ? ` · ${escapeHtml(contact.reviewReason)}` : ""}</span>${open ? renderFacilityOverviewContactResolutionMenu(contact, assignments) : ""}</div>`;
+}
+
+function renderFacilityOverviewContactResolutionMenu(contact, assignments) {
+  const existing = (facilityOverviewState.contactList?.resolutions || []).find((resolution) => resolution.contactKey === contact.contactKey && resolution.active !== false) || null;
+  const candidates = (assignments || []).filter((assignment) => String(assignment.period) === String(contact.shift)
+    && !assignment.contactAllocation && String(assignment.source || assignment.person?.sourceType || "").toUpperCase() === String(facilityOverviewState.facilityKey || "").toUpperCase())
+    .sort((left, right) => String(left.team || "").localeCompare(String(right.team || "")) || String(left.person?.displayName || "").localeCompare(String(right.person?.displayName || "")));
+  return `<div class="facility-overview-contact-resolution-menu" role="group" aria-label="Assign ${escapeHtml(contact.phone || contact.name)}">${candidates.length ? candidates.map((assignment) => `<button type="button" data-facility-overview-contact-resolution-target="${escapeHtml(assignment.person?.doctorKey || "")}" ${facilityOverviewState.contactResolutionSaving ? "disabled" : ""}><strong>${escapeHtml(assignment.person?.displayName || "")}</strong><small>${escapeHtml([assignment.person?.seniority, assignment.team, assignment.specialTime].filter(Boolean).join(" · ") || "Rostered")}</small></button>`).join("") : `<p>No unmatched rostered clinicians are available in this period.</p>`}${existing ? `<button type="button" class="button button-secondary" data-facility-overview-contact-resolution-clear ${facilityOverviewState.contactResolutionSaving ? "disabled" : ""}>Remove temporary assignment</button>` : ""}<button type="button" class="button button-secondary" data-facility-overview-contact-resolution-cancel>Cancel</button></div>`;
+}
+
+async function saveFacilityOverviewContactResolution(doctorKey) {
+  const contactKey = String(facilityOverviewState.contactResolutionMenu || "");
+  const contact = (facilityOverviewState.contactList?.contacts || []).find((item) => item.contactKey === contactKey);
+  if (!contact || facilityOverviewState.contactResolutionSaving) return;
+  const existing = (facilityOverviewState.contactList?.resolutions || []).find((resolution) => resolution.contactKey === contactKey);
+  facilityOverviewState.contactResolutionSaving = true;
+  facilityOverviewState.content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData || []);
+  renderFacilityOverview();
+  try {
+    const response = await fetch("/api/state", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "setContactAllocationResolution", email: authUserEmail || currentUserEmail, password: authUserPassword || currentUserPassword,
+        facilityKey: facilityOverviewState.facilityKey, date: facilityOverviewState.date, contactKey, doctorKey, expectedRevision: Number(existing?.revision || 0) }),
+    });
+    const data = await readJsonResponse(response, "Could not save the temporary contact allocation.");
+    const resolutions = (facilityOverviewState.contactList?.resolutions || []).filter((resolution) => resolution.contactKey !== contactKey);
+    if (data.resolution) resolutions.push(data.resolution);
+    facilityOverviewState.contactList = { ...facilityOverviewState.contactList, resolutions };
+    facilityOverviewState.contactResolutionMenu = null;
+  } catch (error) {
+    if (/changed while you were reviewing/i.test(error.message || "")) {
+      facilityOverviewState.contactResolutionMenu = null;
+      void loadFacilityOverviewOnShift();
+      return;
+    }
+    setStatus(error.message || "Could not save the temporary contact allocation.", true);
+  } finally {
+    facilityOverviewState.contactResolutionSaving = false;
+    facilityOverviewState.content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData || []);
+    renderFacilityOverview();
+  }
 }
 
 function formatFacilityOverviewContactTime(value) {

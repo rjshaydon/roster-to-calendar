@@ -51,10 +51,16 @@ for (const action of ["Metadata", "ByStream", "OnShift", "Staff", "WorkingTogeth
   assert.match(block, /facilityOverviewAccess\(\)/, `${action} must resolve server-side site access`);
   assert.match(block, /facilityOverviewAccessDeniedResponse|constrainFacilityOverviewSourceTypes/, `${action} must enforce or constrain the authenticated site`);
 }
+const contactResolutionBlock = stateSource.match(/action === "setContactAllocationResolution"[\s\S]*?(?=\n    if \(action ===|$)/)?.[0] || "";
+assert.match(contactResolutionBlock, /facilityOverviewAccess\(\)[\s\S]*requestedFacility !== access\.facilityKey/, "temporary contact corrections must retain non-SMS site enforcement");
+assert.match(contactResolutionBlock, /queryFacilityOverviewOnShift[\s\S]*facilityOverviewEventPeriod/, "a contact correction must target a rostered clinician in the same period");
+assert.match(contactResolutionBlock, /attachContactAllocations[\s\S]*safe automatic match/, "safe automatic allocations must remain non-editable");
+assert.match(stateSource, /queryContactAllocationResolutions[\s\S]*loadLiveContactListForOnShift/, "On shift should return temporary resolutions in its existing request");
 
 const appSource = await readFile(new URL("../public/static/app.js", import.meta.url), "utf8");
 assert.match(stateSource, /facilityOverviewAccess: prepared\.facilityOverviewAccess/, "fast login must carry access context in its existing response");
 assert.match(appSource, /launchClinicalOnShiftWorkspace[\s\S]*workingToday[\s\S]*facilityOverviewState\.tab = "on-shift"/, "a working clinician must land on On shift without calendar hydration");
 assert.match(appSource, /facilityOverviewIsSiteScoped\(\)[\s\S]*facility-overview-fixed-facility/, "non-SMS site scope must render as a fixed label");
+assert.match(appSource, /data-facility-overview-contact-resolution[\s\S]*data-facility-overview-contact-resolution-target[\s\S]*setContactAllocationResolution/, "On shift review rows must offer an editable temporary-assignment selector");
 
 console.log("Facility overview access tests passed.");
