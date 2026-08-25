@@ -1397,6 +1397,20 @@ input[type="color"] {
   font-size: 0.78rem;
 }
 
+.facility-overview-grouped-service-card,
+.facility-overview-grouped-service-row {
+  gap: 4px;
+}
+
+.facility-overview-grouped-service-row {
+  display: grid;
+}
+
+.facility-overview-grouped-service-label {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
 .facility-overview-on-shift-names {
   display: grid;
   gap: 4px;

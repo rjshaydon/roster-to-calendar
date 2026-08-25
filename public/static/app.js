@@ -10604,9 +10604,16 @@ function renderFacilityOverviewGroupedServiceCard(title, groups, options = {}) {
     contacts: facilityOverviewStandaloneServiceContacts(options, key),
   })).filter((group) => group.assignments.length || group.contacts.length);
   if (!populated.length) return "";
-  return `<article class="issue-card facility-overview-staff-card facility-overview-stream-card">
+  return `<article class="issue-card facility-overview-staff-card facility-overview-stream-card facility-overview-grouped-service-card">
     <strong class="facility-overview-stream-card-title">${escapeHtml(title)}</strong>
-    ${populated.map((group) => `<div class="facility-overview-stream-seniority"><span>${escapeHtml(group.label)}</span>${group.assignments.length ? renderFacilityOverviewOnShiftNames(group.assignments, options) : `<div class="facility-overview-on-shift-names">${group.contacts.map((contact) => `<div class="facility-overview-on-shift-person"><div class="facility-overview-on-shift-identity">${contact.name ? `<span class="facility-overview-staff-name">${escapeHtml(contact.name)}</span>` : ""}</div><div class="facility-overview-on-shift-details"><span class="facility-overview-contact-number" title="Service telephone number">${escapeHtml(contact.phone)}</span></div></div>`).join("")}</div>`}</div>`).join("")}
+    ${populated.map((group) => {
+      const phones = [...new Set([
+        ...group.assignments.map((assignment) => String(assignment?.contactAllocation?.phone || "").trim()),
+        ...group.contacts.map((contact) => String(contact?.phone || "").trim()),
+      ].filter(Boolean))];
+      const contactNames = group.contacts.filter((contact) => contact.name).map((contact) => `<div class="facility-overview-on-shift-person"><div class="facility-overview-on-shift-identity"><span class="facility-overview-staff-name">${escapeHtml(contact.name)}</span></div></div>`).join("");
+      return `<div class="facility-overview-grouped-service-row"><div class="facility-overview-on-shift-person"><div class="facility-overview-on-shift-identity"><span class="facility-overview-grouped-service-label">${escapeHtml(group.label)}</span></div><div class="facility-overview-on-shift-details">${phones.map((phone) => `<span class="facility-overview-contact-number" title="Service telephone number">${escapeHtml(phone)}</span>`).join("")}</div></div>${group.assignments.length ? renderFacilityOverviewOnShiftNames(group.assignments, { ...options, hideContactAllocation: true }) : contactNames ? `<div class="facility-overview-on-shift-names">${contactNames}</div>` : ""}</div>`;
+    }).join("")}
   </article>`;
 }
 
@@ -10629,7 +10636,7 @@ function renderFacilityOverviewOnShiftNames(assignments, options = {}) {
   }
   return `<div class="facility-overview-on-shift-names">${[...byPerson.values()].sort((left, right) => Number(right.onsite) - Number(left.onsite) || compareFacilityOverviewPeople(left.person, right.person)).map(({ person, specialTimes, onsite }) => {
     const sourceAssignment = (assignments || []).find((assignment) => assignment.person?.doctorKey === person.doctorKey);
-    const allocation = sourceAssignment?.contactAllocation;
+    const allocation = options.hideContactAllocation ? null : sourceAssignment?.contactAllocation;
     const specialTime = options.showSpecialTimes !== false && specialTimes.size
       ? `<small>${escapeHtml([...specialTimes].join(" · "))}</small>`
       : "";
