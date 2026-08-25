@@ -10470,7 +10470,10 @@ function renderFacilityOverviewOnShiftNames(assignments, options = {}) {
   return `<div class="facility-overview-on-shift-names">${[...byPerson.values()].sort((left, right) => compareFacilityOverviewPeople(left.person, right.person)).map(({ person, specialTimes }) => {
     const sourceAssignment = (assignments || []).find((assignment) => assignment.person?.doctorKey === person.doctorKey);
     const allocation = sourceAssignment?.contactAllocation;
-    return `<div>${renderFacilityOverviewStaffName(person, { ...options, seniority: person.seniority })}${renderFacilityOverviewOnShiftSeniority(person, options)}${allocation ? renderFacilityOverviewContactAllocation(allocation) : ""}${options.showSpecialTimes !== false && specialTimes.size ? `<small>${escapeHtml([...specialTimes].join(" · "))}</small>` : ""}</div>`;
+    const specialTime = options.showSpecialTimes !== false && specialTimes.size
+      ? `<small>${escapeHtml([...specialTimes].join(" · "))}</small>`
+      : "";
+    return `<div class="facility-overview-on-shift-person"><div class="facility-overview-on-shift-identity">${renderFacilityOverviewStaffName(person, { ...options, seniority: person.seniority })}${renderFacilityOverviewOnShiftSeniority(person, options)}</div>${specialTime || allocation ? `<div class="facility-overview-on-shift-details">${specialTime}${allocation ? renderFacilityOverviewContactAllocation(allocation) : ""}</div>` : ""}</div>`;
   }).join("")}</div>`;
 }
 

@@ -1382,11 +1382,30 @@ input[type="color"] {
   gap: 4px;
 }
 
-.facility-overview-on-shift-names > div {
-  display: flex;
+.facility-overview-on-shift-person {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: baseline;
   width: 100%;
-  gap: 6px;
+  column-gap: 12px;
+}
+
+.facility-overview-on-shift-identity,
+.facility-overview-on-shift-details {
+  display: flex;
+  align-items: baseline;
+}
+
+.facility-overview-on-shift-identity {
+  min-width: 0;
+  flex-wrap: wrap;
+  column-gap: 6px;
+}
+
+.facility-overview-on-shift-details {
+  justify-content: flex-end;
+  gap: 8px;
+  white-space: nowrap;
 }
 
 .facility-overview-on-shift-seniority {
@@ -1397,7 +1416,6 @@ input[type="color"] {
 }
 
 .facility-overview-contact-number {
-  margin-left: auto;
   color: var(--accent-strong);
   font-size: 0.78rem;
   font-weight: 800;
