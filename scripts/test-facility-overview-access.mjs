@@ -69,5 +69,9 @@ assert.doesNotMatch(appSource.match(/function renderFacilityOverviewContactAlloc
 assert.match(appSource, /selectedContact && !selectedIsUnresolved[\s\S]*renderFacilityOverviewContactResolutionMenu/, "clicking a resolved manual number must still render its reassignment selector");
 assert.doesNotMatch(appSource, /Reset assignment/, "the cancellation row should not use a separate Reset assignment label");
 assert.match(appSource, /const resetOption = existing[\s\S]*data-facility-overview-contact-resolution-clear[\s\S]*<strong><s>\$\{escapeHtml\(existing\.displayName[\s\S]*return `<div class="facility-overview-contact-resolution-menu"[\s\S]*\$\{resetOption\}\$\{candidates/, "the struck-through current person should be the first standard option in the selector");
+assert.match(appSource, /contactReviewOpen: false[\s\S]*addEventListener\("toggle"[\s\S]*contactReviewOpen = review\.open === true/, "the review disclosure should preserve its state only while On shift remains active");
+assert.match(appSource.match(/function closeFacilityOverview[\s\S]*?function renderFacilityOverview/)?.[0] || "", /collapseFacilityOverviewContactReview\(\)/, "returning to the calendar should collapse contact allocations needing review");
+assert.match(appSource.match(/async function loadFacilityOverviewOnShift[\s\S]*?function renderFacilityOverviewOnShiftResults/)?.[0] || "", /collapseFacilityOverviewContactReview\(\)/, "entering or reloading On shift should begin with contact review collapsed");
+assert.match(appSource, /window\.addEventListener\("pagehide", \(\) => collapseFacilityOverviewContactReview\(\)\)/, "closing or navigating away from the app should reset contact review disclosure state");
 
 console.log("Facility overview access tests passed.");

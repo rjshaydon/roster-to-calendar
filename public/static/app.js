@@ -331,7 +331,7 @@ let facilityOverviewCompactState = {
   touchY: 0,
 };
 let facilityOverviewState = {
-  tab: "on-shift", date: formatDateKey(new Date()), facilityKey: "", includeClinicalSupport: false, requestId: 0, onShiftData: null, contactList: null, contactResolutionMenu: null, contactResolutionSaving: false,
+  tab: "on-shift", date: formatDateKey(new Date()), facilityKey: "", includeClinicalSupport: false, requestId: 0, onShiftData: null, contactList: null, contactReviewOpen: false, contactResolutionMenu: null, contactResolutionSaving: false,
   staffTermStart: formatDateKey(australianTermForDate(new Date()).start), staffTerms: [], staffContent: "", staffData: null, staffQuery: "", staffExpanded: new Set(), staffFocusSection: "", staffActionMenu: null, staffDesignationMenu: null, staffSeniorityMenu: null, staffMultiSelectSection: "", staffMultiSelectMembers: new Map(), staffBulkSeniorityMenu: null, staffMultiSelectSaving: false,
   preferredFacilityKey: "", preferredFacilityReason: "", preferredFacilityEvidenceDate: "", byStreamFrom: formatDateKey(new Date()), byStreamTo: formatDateKey(new Date()), byStreamRows: [], byStreamCatalog: [], byStreamCoverage: [], byStreamContent: "", byStreamData: null, byStreamLoading: false, byStreamMetadataLoading: false, byStreamMetadataKey: "", byStreamMetadataPromise: null, byStreamRequestId: 0, byStreamHideEmptyDates: true, byStreamRowId: 0,
   togetherStaffKeys: ["", ""], togetherRangeMode: "term",
@@ -719,6 +719,11 @@ facilityOverviewSection?.addEventListener("scroll", (event) => {
     facilityOverviewShouldReleaseCompact(scroller, facilityOverviewCompactState.userDirection)
   ) setFacilityOverviewCompactMode(scroller, false);
 }, { capture: true, passive: true });
+facilityOverviewSection?.addEventListener("toggle", (event) => {
+  const review = event.target.closest?.("[data-facility-overview-contact-review]");
+  if (review) facilityOverviewState.contactReviewOpen = review.open === true;
+}, { capture: true });
+window.addEventListener("pagehide", () => collapseFacilityOverviewContactReview());
 facilityOverviewSection?.addEventListener("click", (event) => {
   const contactResolution = event.target.closest("[data-facility-overview-contact-resolution]");
   if (contactResolution) {
@@ -744,14 +749,17 @@ facilityOverviewSection?.addEventListener("click", (event) => {
     return;
   }
   if (event.target.closest("[data-facility-overview-back-to-creator]")) {
+    collapseFacilityOverviewContactReview();
     void returnToCreatorCalendar();
     return;
   }
   if (event.target.closest("[data-facility-overview-account]")) {
+    collapseFacilityOverviewContactReview();
     void openAccountsSurface({ defaultAdminTab: "users" });
     return;
   }
   if (event.target.closest("[data-facility-overview-logout]")) {
+    collapseFacilityOverviewContactReview();
     void logoutCurrentUser();
     return;
   }
@@ -770,6 +778,7 @@ facilityOverviewSection?.addEventListener("click", (event) => {
   }
   const tab = event.target.closest("[data-facility-overview-tab]");
   if (tab) {
+    collapseFacilityOverviewContactReview();
     facilityOverviewState.staffActionMenu = null;
     facilityOverviewState.staffDesignationMenu = null;
     facilityOverviewState.staffSeniorityMenu = null;
@@ -9604,6 +9613,7 @@ async function openFacilityOverviewByStream() {
 }
 
 function closeFacilityOverview() {
+  collapseFacilityOverviewContactReview();
   facilityOverviewNavigationLocked = false;
   facilityOverviewState.requestId += 1;
   facilityOverviewState.byStreamRequestId += 1;
@@ -10319,6 +10329,7 @@ function facilityOverviewFormatOverlap(start, end) {
 
 async function loadFacilityOverviewOnShift() {
   if (!canUseFacilityOverview() || facilityOverviewState.tab !== "on-shift") return;
+  collapseFacilityOverviewContactReview();
   const requestId = facilityOverviewState.requestId + 1;
   facilityOverviewState.requestId = requestId;
   facilityOverviewState.staffData = null;
@@ -10563,12 +10574,17 @@ function renderFacilityOverviewContactListStatus(matches, assignments = []) {
   const selectedContact = menuKey ? (contactList.contacts || []).find((contact) => contact.contactKey === menuKey) : null;
   const selectedIsUnresolved = unresolved.some((contact) => contact.contactKey === menuKey);
   const review = unresolved.length
-    ? `<details class="facility-overview-contact-review" open><summary>${unresolved.length} allocation${unresolved.length === 1 ? "" : "s"} need review</summary>${unresolved.map((contact) => renderFacilityOverviewContactReviewRow(contact, assignments, menuKey === contact.contactKey)).join("")}</details>`
+    ? `<details class="facility-overview-contact-review" data-facility-overview-contact-review ${facilityOverviewState.contactReviewOpen ? "open" : ""}><summary>${unresolved.length} allocation${unresolved.length === 1 ? "" : "s"} need review</summary>${unresolved.map((contact) => renderFacilityOverviewContactReviewRow(contact, assignments, menuKey === contact.contactKey)).join("")}</details>`
     : "";
   const resolvedEditor = selectedContact && !selectedIsUnresolved
     ? `<div class="facility-overview-contact-resolution-editor">${renderFacilityOverviewContactResolutionMenu(selectedContact, assignments)}</div>`
     : "";
   return `<div class="facility-overview-contact-status"><span>Live contact allocations for ${escapeHtml(contactList.sourceDate)}${freshness} · ${matches.matchedCount} matched</span>${review}${resolvedEditor}</div>`;
+}
+
+function collapseFacilityOverviewContactReview() {
+  facilityOverviewState.contactReviewOpen = false;
+  facilityOverviewState.contactResolutionMenu = null;
 }
 
 function renderFacilityOverviewContactReviewRow(contact, assignments, open) {
