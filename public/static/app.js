@@ -173,6 +173,7 @@ const DEFAULT_MMC_LOCATION = "MMC Car Park, Tarella Road, Clayton VIC 3168, Aust
 const DEFAULT_DDH_LOCATION = "DDH Car Park, 135 David St, Dandenong VIC 3175, Australia";
 const DEFAULT_CASEY_LOCATION = "Casey Hospital, 62-70 Kangan Drive, Berwick VIC 3806, Australia";
 const DEFAULT_MCH_LOCATION = "Monash Children's Hospital, 246 Clayton Road, Clayton VIC 3168, Australia";
+const DEFAULT_VHH_LOCATION = "Victorian Heart Hospital, 631 Blackburn Road, Clayton VIC 3168, Australia";
 const SHIFT_COLOUR_DEFAULTS = {
   day: "#0b8f6a",
   evening: "#c96d14",
@@ -233,6 +234,7 @@ const SETTINGS_FIELDS = [
   "defaultLocationDdh",
   "defaultLocationCasey",
   "defaultLocationMch",
+  "defaultLocationVhh",
   "hospitalFilter",
   "dateFrom",
   "dateTo",
@@ -369,7 +371,7 @@ let adminUserSearchQuery = "";
 let createUserAccountExpanded = false;
 let otherUsersExpanded = false;
 let otherUsersExpandedBySearch = false;
-const ROSTER_HOSPITAL_SORT_RANK = { mmc: 0, ddh: 1, casey: 2, mch: 3 };
+const ROSTER_HOSPITAL_SORT_RANK = { mmc: 0, ddh: 1, casey: 2, mch: 3, vhh: 4 };
 let calendarStoreStatus = null;
 let calendarStoreStatusError = "";
 let rosterSyncStates = new Map();
@@ -406,9 +408,9 @@ let insightWarmupPromise = null;
 let visibleInsightWarmCache = new Map();
 let visibleInsightWarmKey = "";
 let insightsRenderRunId = 0;
-let parserExtensions = { mmc: [], ddh: [], casey: [], mch: [] };
-let globalParserExtensions = { mmc: [], ddh: [], casey: [], mch: [] };
-let localParserExtensions = { mmc: [], ddh: [], casey: [], mch: [] };
+let parserExtensions = { mmc: [], ddh: [], casey: [], mch: [], vhh: [] };
+let globalParserExtensions = { mmc: [], ddh: [], casey: [], mch: [], vhh: [] };
+let localParserExtensions = { mmc: [], ddh: [], casey: [], mch: [], vhh: [] };
 let parserRuleSuggestions = [];
 let globalUnresolvedShiftCodes = [];
 let globalUnresolvedShiftCodesLoading = false;
@@ -1886,7 +1888,7 @@ for (const [key, input] of Object.entries(settingsInputs)) {
       setStatus("Preview display updated.");
       return;
     }
-    if (["includeLocations", "defaultLocationMmc", "defaultLocationDdh", "defaultLocationCasey", "defaultLocationMch"].includes(key)) {
+    if (["includeLocations", "defaultLocationMmc", "defaultLocationDdh", "defaultLocationCasey", "defaultLocationMch", "defaultLocationVhh"].includes(key)) {
       setStatus(
         key === "includeLocations"
           ? "Location export setting updated."
@@ -2501,6 +2503,7 @@ function defaultSettings() {
     defaultLocationDdh: DEFAULT_DDH_LOCATION,
     defaultLocationCasey: DEFAULT_CASEY_LOCATION,
     defaultLocationMch: DEFAULT_MCH_LOCATION,
+    defaultLocationVhh: DEFAULT_VHH_LOCATION,
     directorHospitalPreference: "ALL",
     hospitalFilter: "all",
     dateFrom: "",
@@ -4138,11 +4141,11 @@ function availableHospitalsForPreview(events) {
   const codes = new Set();
   for (const event of events || []) {
     if (event.source) codes.add(displaySourceCode(event.source));
-    const titlePrefix = String(event.title || "").match(/^(MMC|DDH|Casey|MCH):/i)?.[1];
+    const titlePrefix = String(event.title || "").match(/^(MMC|DDH|Casey|MCH|VHH):/i)?.[1];
     if (titlePrefix) codes.add(displaySourceCode(titlePrefix));
   }
   return [...codes]
-    .filter((code) => code === "MMC" || code === "DDH" || code === "Casey" || code === "MCH")
+    .filter((code) => code === "MMC" || code === "DDH" || code === "Casey" || code === "MCH" || code === "VHH")
     .sort();
 }
 
@@ -4176,7 +4179,7 @@ function selectedPreviewTermValue(terms, previewStart) {
 function displaySourceCode(value) {
   const source = String(value || "").trim().toUpperCase();
   if (source === "CASEY") return "Casey";
-  if (source === "MMC" || source === "DDH" || source === "MCH") return source;
+  if (source === "MMC" || source === "DDH" || source === "MCH" || source === "VHH") return source;
   return String(value || "").trim();
 }
 
@@ -6089,14 +6092,14 @@ function eventSourceCodes(event) {
     .map((item) => normalizeEventSourceCode(item))
     .filter(Boolean);
   if (explicit.length) return [...new Set(explicit)];
-  const titlePrefix = String(event?.title || "").match(/^(MMC|DDH|Casey|MCH):/i)?.[1];
+  const titlePrefix = String(event?.title || "").match(/^(MMC|DDH|Casey|MCH|VHH):/i)?.[1];
   const titleCode = normalizeEventSourceCode(titlePrefix);
   return titleCode ? [titleCode] : [];
 }
 
 function normalizeEventSourceCode(value) {
   const code = String(value || "").trim().toUpperCase();
-  if (code === "MMC" || code === "DDH" || code === "MCH") return code;
+  if (code === "MMC" || code === "DDH" || code === "MCH" || code === "VHH") return code;
   if (code === "CASEY") return "CASEY";
   return "";
 }
@@ -8511,6 +8514,7 @@ function buildLocationOptionMarkup(selectedMode = "", source = "") {
   if (detectedSources.ddh?.length || sourceTypes.has("ddh")) options.push({ value: "ddh", label: "DDH Car Park" });
   if (detectedSources.casey?.length || sourceTypes.has("casey")) options.push({ value: "casey", label: "Casey Hospital" });
   if (detectedSources.mch?.length || sourceTypes.has("mch")) options.push({ value: "mch", label: "MCH" });
+  if (detectedSources.vhh?.length || sourceTypes.has("vhh")) options.push({ value: "vhh", label: "VHH" });
   options.push({ value: "offsite", label: "Off-site" });
   options.push({ value: "custom", label: "Custom location" });
   return options.map((option) => `<option value="${option.value}" ${option.value === selectedMode ? "selected" : ""}>${option.label}</option>`).join("");
@@ -8518,7 +8522,7 @@ function buildLocationOptionMarkup(selectedMode = "", source = "") {
 
 function locationOptionSourceTypes(source = "") {
   const explicit = String(source || "").trim().toLowerCase();
-  if (["mmc", "ddh", "casey", "mch"].includes(explicit)) return [explicit];
+  if (["mmc", "ddh", "casey", "mch", "vhh"].includes(explicit)) return [explicit];
   return recognizedHospitalTypesForActiveAccount();
 }
 
@@ -8528,6 +8532,7 @@ function detectLocationPreset(location) {
   if (location === settings.defaultLocationDdh || location === DEFAULT_DDH_LOCATION) return { mode: "ddh", customValue: "" };
   if (location === settings.defaultLocationCasey || location === DEFAULT_CASEY_LOCATION) return { mode: "casey", customValue: "" };
   if (location === settings.defaultLocationMch || location === DEFAULT_MCH_LOCATION) return { mode: "mch", customValue: "" };
+  if (location === settings.defaultLocationVhh || location === DEFAULT_VHH_LOCATION) return { mode: "vhh", customValue: "" };
   return { mode: "custom", customValue: location };
 }
 
@@ -8577,6 +8582,7 @@ function resolveCustomEventLocation() {
   if (customEventLocationMode.value === "ddh") return settings.defaultLocationDdh || DEFAULT_DDH_LOCATION;
   if (customEventLocationMode.value === "casey") return settings.defaultLocationCasey || DEFAULT_CASEY_LOCATION;
   if (customEventLocationMode.value === "mch") return settings.defaultLocationMch || DEFAULT_MCH_LOCATION;
+  if (customEventLocationMode.value === "vhh") return settings.defaultLocationVhh || DEFAULT_VHH_LOCATION;
   if (customEventLocationMode.value === "custom") return customEventCustomLocation.value.trim();
   return "";
 }
@@ -8620,6 +8626,7 @@ function resolveImportedLocation(id) {
   if (mode === "ddh") return settings.defaultLocationDdh || DEFAULT_DDH_LOCATION;
   if (mode === "casey") return settings.defaultLocationCasey || DEFAULT_CASEY_LOCATION;
   if (mode === "mch") return settings.defaultLocationMch || DEFAULT_MCH_LOCATION;
+  if (mode === "vhh") return settings.defaultLocationVhh || DEFAULT_VHH_LOCATION;
   if (mode === "custom") {
     return reviewModalBody.querySelector(`[data-override-custom-location="${id}"]`)?.value.trim() || "";
   }
@@ -9168,7 +9175,7 @@ function facilityOverviewPreferredFacilityFromEvents(events = [], options = {}) 
   const clock = facilityOverviewMelbourneClock(options.now || new Date());
   const today = String(options.today || clock.today).slice(0, 10);
   const nowKey = `${today}T${clock.time}`;
-  const sourceOrder = ["MMC", "DDH", "CASEY", "MCH"];
+  const sourceOrder = ["MMC", "DDH", "CASEY", "MCH", "VHH"];
   const sourceRank = (source) => {
     const index = sourceOrder.indexOf(source);
     return index >= 0 ? index : 99;
@@ -9274,7 +9281,7 @@ function resetFacilityOverviewScroll() {
 function facilityOverviewFacilityOptions() {
   if (facilityOverviewIsSiteScoped()) return [currentFacilityOverviewAccess.facilityKey];
   const values = new Set();
-  for (const source of ["mmc", "ddh", "casey", "mch"]) {
+  for (const source of ["mmc", "ddh", "casey", "mch", "vhh"]) {
     if (Array.isArray(latestPreview?.sources?.[source]) && latestPreview.sources[source].length) values.add(source);
   }
   for (const code of availablePreviewHospitals) values.add(String(code || "").toUpperCase());
@@ -9286,12 +9293,12 @@ function facilityOverviewFacilityOptions() {
   }
   for (const coverage of facilityOverviewState.byStreamCoverage || []) values.add(String(coverage?.sourceType || "").toUpperCase());
   for (const stream of facilityOverviewState.byStreamCatalog || []) values.add(String(stream?.facilityKey || "").toUpperCase());
-  const facilities = [...values].filter((value) => ["MMC", "DDH", "CASEY", "MCH"].includes(value));
-  if (!facilities.length && ["MMC", "DDH", "CASEY", "MCH"].includes(facilityOverviewState.facilityKey)) {
+  const facilities = [...values].filter((value) => ["MMC", "DDH", "CASEY", "MCH", "VHH"].includes(value));
+  if (!facilities.length && ["MMC", "DDH", "CASEY", "MCH", "VHH"].includes(facilityOverviewState.facilityKey)) {
     facilities.push(facilityOverviewState.facilityKey);
   }
   return facilities.sort((left, right) => {
-    const order = { MMC: 0, DDH: 1, CASEY: 2, MCH: 3 };
+    const order = { MMC: 0, DDH: 1, CASEY: 2, MCH: 3, VHH: 4 };
     return (order[left] ?? 99) - (order[right] ?? 99);
   });
 }
@@ -11987,6 +11994,7 @@ const DIRECTOR_HOSPITAL_OPTIONS = [
   { key: "DDH", label: "Dandenong Hospital (DDH)" },
   { key: "CASEY", label: "Casey Hospital" },
   { key: "MCH", label: "Monash Children's Hospital (MCH)" },
+  { key: "VHH", label: "Victorian Heart Hospital (VHH)" },
 ];
 
 function directorHospitalPreference() {
@@ -12010,7 +12018,7 @@ function updateDirectorHospitalPreference(value) {
   setStatus("Director hospital preference updated.");
 }
 
-const ACCOUNT_HOSPITAL_LOCATION_ORDER = ["mmc", "ddh", "mch", "casey"];
+const ACCOUNT_HOSPITAL_LOCATION_ORDER = ["mmc", "ddh", "mch", "casey", "vhh"];
 
 function recognizedHospitalTypesForActiveAccount() {
   if (isViewingCreatorAccount()) {
@@ -12032,11 +12040,12 @@ function hospitalLocationConfig(sourceType) {
     ddh: { label: "DDH", settingKey: "defaultLocationDdh", defaultValue: DEFAULT_DDH_LOCATION },
     casey: { label: "Casey", settingKey: "defaultLocationCasey", defaultValue: DEFAULT_CASEY_LOCATION },
     mch: { label: "MCH", settingKey: "defaultLocationMch", defaultValue: DEFAULT_MCH_LOCATION },
+    vhh: { label: "VHH", settingKey: "defaultLocationVhh", defaultValue: DEFAULT_VHH_LOCATION },
   }[sourceType];
 }
 
 function updateDefaultLocationSetting(settingKey, value) {
-  if (!["defaultLocationMmc", "defaultLocationDdh", "defaultLocationCasey", "defaultLocationMch"].includes(settingKey)) return;
+  if (!["defaultLocationMmc", "defaultLocationDdh", "defaultLocationCasey", "defaultLocationMch", "defaultLocationVhh"].includes(settingKey)) return;
   settings[settingKey] = String(value || "").trim() || defaultSettings()[settingKey];
   renderSettings();
   saveCurrentSessionState();
@@ -18889,7 +18898,7 @@ function queueDeferredSnapshotCachePersist(snapshot = currentSnapshot, context =
 }
 
 function invalidateCalendarSnapshotCache() {
-  invalidateCalendarSnapshotCachesForSourceTypes(["mmc", "ddh", "casey", "mch"], { includeCreator: true, includeAllProfiles: true });
+  invalidateCalendarSnapshotCachesForSourceTypes(["mmc", "ddh", "casey", "mch", "vhh"], { includeCreator: true, includeAllProfiles: true });
 }
 
 function sourceTypesFromCalendarSnapshotCacheKey(key = "", entry = null) {
@@ -18897,10 +18906,10 @@ function sourceTypesFromCalendarSnapshotCacheKey(key = "", entry = null) {
   if (mode === "doctor-profile") {
     const profileId = ownerId.startsWith("doctor-profile:") ? ownerId.slice("doctor-profile:".length) : ownerId;
     const sourceText = profileId.includes("::") ? profileId.split("::").slice(1).join("::") : "";
-    return sourceText.split("+").map((item) => String(item || "").toLowerCase()).filter((item) => item === "mmc" || item === "ddh" || item === "casey" || item === "mch");
+    return sourceText.split("+").map((item) => String(item || "").toLowerCase()).filter((item) => item === "mmc" || item === "ddh" || item === "casey" || item === "mch" || item === "vhh");
   }
   if (mode === "creator-account") {
-    return ["mmc", "ddh", "casey", "mch"];
+    return ["mmc", "ddh", "casey", "mch", "vhh"];
   }
   const snapshot = entry?.snapshot || loadCalendarSnapshotCacheStore()[key]?.snapshot;
   const doctor = Array.isArray(snapshot?.doctorOptions)

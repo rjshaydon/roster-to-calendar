@@ -17,6 +17,7 @@ export const AUTOMATION_SOURCES = {
   "monash-adults": { provider: "sharepoint", sourceType: "mmc", label: "Monash Adults" },
   "monash-paeds": { provider: "sharepoint", sourceType: "mch", label: "Monash Paediatrics" },
   "dandenong-findmyshift": { provider: "findmyshift", sourceType: "ddh", label: "Dandenong (Findmyshift)" },
+  "vhh-active-medical-roster": { provider: "sharepoint-json", sourceType: "vhh", label: "VHH Active Medical Roster" },
 };
 
 const REPARSE_ONLY_SOURCES = {

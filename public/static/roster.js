@@ -249,6 +249,7 @@ const DEFAULT_SETTINGS = {
   defaultLocationDdh: "DDH Car Park, 135 David St, Dandenong VIC 3175, Australia",
   defaultLocationCasey: "Casey Hospital, 62-70 Kangan Drive, Berwick VIC 3806, Australia",
   defaultLocationMch: "Monash Children's Hospital, 246 Clayton Road, Clayton VIC 3168, Australia",
+  defaultLocationVhh: "Victorian Heart Hospital, 631 Blackburn Road, Clayton VIC 3168, Australia",
   hospitalFilter: "all",
   dateFrom: "",
   dateTo: "",
@@ -748,7 +749,7 @@ function normalizeSourceEntries(value) {
 
 function isRosterSourceType(value) {
   const source = String(value || "").toLowerCase();
-  return source === "mmc" || source === "ddh" || source === "casey" || source === "mch";
+  return source === "mmc" || source === "ddh" || source === "casey" || source === "mch" || source === "vhh";
 }
 
 function attachImportMeta(records, entry) {
@@ -1465,6 +1466,7 @@ function sanitizeSettings(raw) {
     defaultLocationDdh: sanitizeLocationSetting(input.defaultLocationDdh, DEFAULT_SETTINGS.defaultLocationDdh),
     defaultLocationCasey: sanitizeLocationSetting(input.defaultLocationCasey, DEFAULT_SETTINGS.defaultLocationCasey),
     defaultLocationMch: sanitizeLocationSetting(input.defaultLocationMch, DEFAULT_SETTINGS.defaultLocationMch),
+    defaultLocationVhh: sanitizeLocationSetting(input.defaultLocationVhh, DEFAULT_SETTINGS.defaultLocationVhh),
     hospitalFilter: isRosterSourceType(input.hospitalFilter) ? input.hospitalFilter : "all",
     dateFrom: isDateString(input.dateFrom) ? input.dateFrom : "",
     dateTo: isDateString(input.dateTo) ? input.dateTo : "",

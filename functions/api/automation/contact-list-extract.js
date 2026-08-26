@@ -126,7 +126,7 @@ async function pruneStoredContactExtracts(context, entries, { keepId = "", repla
       const object = entry.object_key ? await context.env.ROSTER_FILES.get(String(entry.object_key)) : null;
       const stored = object ? normaliseContactListExtract(JSON.parse(await object.text())) : null;
       // Keep a different operational day's small JSON while it is still valid.
-      remove = !stored || stored.sourceDate === replaceDate || contactExtractHasExpired(stored.sourceDate);
+      remove = !stored || stored.sourceDate === replaceDate || contactExtractHasExpired(stored.sourceDate, new Date(), stored.sourceId);
     } catch {
       remove = true;
     }

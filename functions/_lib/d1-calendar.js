@@ -5,7 +5,7 @@ import {
   serializeEvent,
 } from "./roster.js";
 
-const SOURCE_TYPES = ["mmc", "ddh", "casey", "mch"];
+const SOURCE_TYPES = ["mmc", "ddh", "casey", "mch", "vhh"];
 // Only a successfully activated parse may carry this version. Older rows are
 // deliberately marked legacy-unverified by migration 0019.
 export const ROSTER_PARSER_VERSION = "shared-core-v2";
@@ -3323,6 +3323,7 @@ export function hospitalLocationsFromSession(session = null) {
     ddh: settings.defaultLocationDdh,
     casey: settings.defaultLocationCasey,
     mch: settings.defaultLocationMch,
+    vhh: settings.defaultLocationVhh,
   });
 }
 
@@ -3334,6 +3335,7 @@ export function mergeHospitalLocationsIntoSettings(settings = {}, locations = {}
     defaultLocationDdh: normalized.ddh,
     defaultLocationCasey: normalized.casey,
     defaultLocationMch: normalized.mch,
+    defaultLocationVhh: normalized.vhh,
   };
 }
 
@@ -3355,6 +3357,7 @@ function normalizeHospitalLocationMap(value = {}) {
     ddh: String(value.ddh || value.defaultLocationDdh || defaults.defaultLocationDdh).trim() || defaults.defaultLocationDdh,
     casey: String(value.casey || value.defaultLocationCasey || defaults.defaultLocationCasey).trim() || defaults.defaultLocationCasey,
     mch: String(value.mch || value.defaultLocationMch || defaults.defaultLocationMch).trim() || defaults.defaultLocationMch,
+    vhh: String(value.vhh || value.defaultLocationVhh || defaults.defaultLocationVhh).trim() || defaults.defaultLocationVhh,
   };
 }
 
@@ -4426,6 +4429,7 @@ function inferSourceTypeFromRosterFileName(name) {
   if (text.includes("dandenong") || text.includes("ddh")) return "ddh";
   if (text.includes("casey")) return "casey";
   if (text.includes("paeds") || text.includes("mch") || text.includes("children")) return "mch";
+  if (text.includes("vhh") || text.includes("active medical roster")) return "vhh";
   if (text.includes("adult") || text.includes("mmc") || text.includes("monash")) return "mmc";
   return "";
 }
@@ -4561,7 +4565,7 @@ function mergeSources(leftSources, rightSources, leftSource, rightSource) {
   const values = [leftSources, rightSources, leftSource, rightSource]
     .flatMap((item) => Array.isArray(item) ? item : [item])
     .map((item) => String(item || "").trim())
-    .filter((item) => /^(MMC|DDH|Casey|MCH)$/i.test(item));
+    .filter((item) => /^(MMC|DDH|Casey|MCH|VHH)$/i.test(item));
   return [...new Set(values.map((item) => item.toUpperCase() === "CASEY" ? "Casey" : item.toUpperCase()))];
 }
 

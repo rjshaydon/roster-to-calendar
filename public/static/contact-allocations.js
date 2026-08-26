@@ -1,13 +1,16 @@
 export const MMC_CONTACT_LIST_SOURCE_ID = "mmc-shift-allocations";
 export const DDH_CONTACT_LIST_SOURCE_ID = "ddh-daily-contact-sheet";
+export const VHH_CONTACT_LIST_SOURCE_ID = "vhh-shift-phone-allocations";
 
 const SOURCE_AREAS = new Map([
   [MMC_CONTACT_LIST_SOURCE_ID, new Set(["Adult Emergency", "Paediatric Emergency"])],
   [DDH_CONTACT_LIST_SOURCE_ID, new Set(["Dandenong Emergency"])],
+  [VHH_CONTACT_LIST_SOURCE_ID, new Set(["VHH Emergency"])],
 ]);
 const SOURCE_FILE_NAMES = new Map([
   [MMC_CONTACT_LIST_SOURCE_ID, "SHIFT ALLOCATIONS doctors.json"],
   [DDH_CONTACT_LIST_SOURCE_ID, "Daily Contact Sheet clinicians.json"],
+  [VHH_CONTACT_LIST_SOURCE_ID, "Shift Phone Allocations VHH directory.json"],
 ]);
 const VALID_SHIFTS = new Set(["AM", "PM", "Night"]);
 const NAME_ALIASES = new Map([
@@ -28,6 +31,7 @@ const NAME_ALIASES = new Map([
 export function normaliseContactListExtract(payload) {
   const sourceId = String(payload?.sourceId || "").trim();
   const validAreas = SOURCE_AREAS.get(sourceId);
+  if (sourceId === VHH_CONTACT_LIST_SOURCE_ID) return normaliseVhhContactDirectory(payload);
   if (!validAreas || !Array.isArray(payload?.contacts)) return null;
   const sourceDate = String(payload?.sourceDate || "").trim();
   if (!isIsoDate(sourceDate) || payload.contacts.length > 240) return null;
@@ -63,6 +67,33 @@ export function normaliseContactListExtract(payload) {
   };
 }
 
+// VHH is intentionally stored as a directory extract rather than pretending
+// that fixed Zebra handsets are roster allocations. The subsequent matching
+// phase can map these fields to VHH roster roles without losing the source
+// layout or manufacturing an AM/PM/Night assignment.
+function normaliseVhhContactDirectory(payload) {
+  const sourceDate = String(payload?.sourceDate || "").trim();
+  if (!isIsoDate(sourceDate)) return null;
+  const cic = {
+    phone: String(payload?.cic?.phone || "").trim(),
+    name: String(payload?.cic?.name || "").trim(),
+  };
+  const doctors = (Array.isArray(payload?.doctors) ? payload.doctors : []).map((doctor) => ({
+    role: String(doctor?.role || "").trim(),
+    phone: String(doctor?.phone || "").trim(),
+    name: String(doctor?.name || "").trim(),
+  }));
+  if (!cic.phone || !cic.name || !doctors.length || doctors.length > 40 || doctors.some((doctor) => !doctor.role || !doctor.phone)) return null;
+  return {
+    sourceId: VHH_CONTACT_LIST_SOURCE_ID,
+    fileName: SOURCE_FILE_NAMES.get(VHH_CONTACT_LIST_SOURCE_ID),
+    sourceDate,
+    providerModifiedAt: String(payload?.providerModifiedAt || "").trim(),
+    contacts: [],
+    directory: { cic, doctors },
+  };
+}
+
 export function contactResolutionKey(sourceId, sourceDate, contact, occurrence = 0) {
   return `${contactKeyBase(sourceId, sourceDate, contact)}|${Math.max(0, Number(occurrence) || 0)}`;
 }
@@ -73,7 +104,10 @@ export function contactExtractStatus(extract, { date = "", now = new Date() } = 
   return extract.sourceDate === date ? "available" : "not-current";
 }
 
-export function contactExtractHasExpired(sourceDate, now = new Date()) {
+export function contactExtractHasExpired(sourceDate, now = new Date(), sourceId = "") {
+  // The VHH extract is a standing phone directory, not a day-specific handset
+  // allocation. Keep the latest version until its source workbook changes.
+  if (String(sourceId || "").trim() === VHH_CONTACT_LIST_SOURCE_ID) return false;
   const nextDate = addDays(sourceDate, 1);
   if (!nextDate) return true;
   const melbourne = melbourneDateTime(now);

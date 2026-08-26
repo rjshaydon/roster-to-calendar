@@ -1,4 +1,5 @@
 import { buildAutomatedDerivedRosterPayload } from "../functions/_lib/automation-import.js";
+import { buildVhhDerivedRosterPayload, VHH_ROSTER_SOURCE_ID } from "../functions/_lib/vhh-roster.js";
 
 const baseUrl = String(process.env.ROSTER_AUTOMATION_BASE_URL || "https://roster-to-calendar.pages.dev").replace(/\/$/, "");
 const token = String(process.env.ROSTER_AUTOMATION_TOKEN || "");
@@ -44,21 +45,33 @@ async function processRun(run) {
     headers: authorizationHeaders(),
   });
   if (!response.ok) throw new Error(`Roster download returned HTTP ${response.status}.`);
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  const file = new File([bytes], run.fileName || "roster.xlsx", {
-    type: run.contentType || "application/octet-stream",
-    lastModified: Number(run.lastModified || Date.now()),
-  });
-  console.log(`Parsing ${file.name} (${file.size} bytes).`);
-  const payload = await buildAutomatedDerivedRosterPayload({
-    file,
-    sourceId: run.sourceId,
-    contentHash: run.contentHash,
-    fileId: run.fileId,
-    providerVersion: run.providerVersion,
-    parserExtensions,
-  });
-  console.log(`Parsed ${file.name}: ${payload.doctors.length} doctors, ${payload.eventCount} calendar events.`);
+  let payload;
+  if (run.sourceId === VHH_ROSTER_SOURCE_ID) {
+    const extract = await response.json();
+    console.log(`Parsing ${run.fileName || "VHH roster JSON"}.`);
+    payload = buildVhhDerivedRosterPayload({
+      extract,
+      contentHash: run.contentHash,
+      fileId: run.fileId,
+      providerVersion: run.providerVersion,
+    });
+  } else {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const file = new File([bytes], run.fileName || "roster.xlsx", {
+      type: run.contentType || "application/octet-stream",
+      lastModified: Number(run.lastModified || Date.now()),
+    });
+    console.log(`Parsing ${file.name} (${file.size} bytes).`);
+    payload = await buildAutomatedDerivedRosterPayload({
+      file,
+      sourceId: run.sourceId,
+      contentHash: run.contentHash,
+      fileId: run.fileId,
+      providerVersion: run.providerVersion,
+      parserExtensions,
+    });
+  }
+  console.log(`Parsed ${payload.file.name}: ${payload.doctors.length} doctors, ${payload.eventCount} calendar events.`);
   payload.file = {
     ...payload.file,
     lastModified: Number(run.lastModified || payload.file.lastModified || Date.now()),

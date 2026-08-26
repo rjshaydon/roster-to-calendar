@@ -1771,7 +1771,7 @@ export async function onRequestPost(context) {
       const linkedSourceTypes = constrainFacilityOverviewSourceTypes(access, body?.sourceTypes || []);
       const today = australianDateKey();
       const term = facilityOverviewTermRange(today);
-      const catalogSources = linkedSourceTypes.length ? linkedSourceTypes : ["mmc", "ddh", "casey", "mch"];
+      const catalogSources = linkedSourceTypes.length ? linkedSourceTypes : ["mmc", "ddh", "casey", "mch", "vhh"];
       try {
         const catalog = await queryFacilityOverviewRange(context.env.ROSTER_DB, { startDate: term.startDate, endDate: term.endDate, sourceTypes: catalogSources });
         return Response.json({
@@ -1842,7 +1842,7 @@ export async function onRequestPost(context) {
       if (access.mode === "denied" || (access.mode === "site" && requestedFacility !== access.facilityKey)) {
         return facilityOverviewAccessDeniedResponse();
       }
-      const facilityKeys = requestedFacility === "ALL" ? ["mmc", "ddh", "casey", "mch"] : sanitizeSourceTypes([requestedFacility]);
+      const facilityKeys = requestedFacility === "ALL" ? ["mmc", "ddh", "casey", "mch", "vhh"] : sanitizeSourceTypes([requestedFacility]);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !facilityKeys.length) {
         return Response.json({ error: "A valid ED and date are required." }, { status: 400 });
       }
@@ -3140,6 +3140,7 @@ function isFacilityOverviewWorkingEvent(event, options = {}) {
   if (/\b(?:leave|conference|cme|annual|sick|personal|study|exam|sabbatical|parental|long service)\b/.test(text)) return false;
   if (text.includes("phnw") || text.includes("public holiday")) return false;
   if (String(options.facilityKey || "").toUpperCase() === "DDH" && /\b(?:hith|vhh)\b/.test(text)) return false;
+  if (String(options.facilityKey || "").toUpperCase() === "VHH" && event?.allDay === true) return false;
   if (options.includeClinicalSupport !== true && (text.includes("clinical support") || /\bcs(?:o|m)?\b/.test(text))) return false;
   return true;
 }
@@ -4083,7 +4084,7 @@ function doctorProfileFromSnapshotRegistryEntry(entry) {
 
 function snapshotWarmupSourceTypeSet(sourceTypes = []) {
   const normalized = sanitizeSourceTypes(sourceTypes);
-  return new Set((normalized.length ? normalized : ["mmc", "ddh", "casey", "mch"]).map((item) => String(item).toLowerCase()));
+  return new Set((normalized.length ? normalized : ["mmc", "ddh", "casey", "mch", "vhh"]).map((item) => String(item).toLowerCase()));
 }
 
 function accountWarmupAffectedBySourceTypes(prepared, changedSourceTypes = []) {
@@ -4171,7 +4172,7 @@ function scheduleSnapshotWarmupForSourceTypes(context, sourceTypes = [], options
 }
 
 function scheduleSnapshotWarmupForAllAccounts(context, options = {}) {
-  scheduleSnapshotWarmupForSourceTypes(context, ["mmc", "ddh", "casey", "mch"], options);
+  scheduleSnapshotWarmupForSourceTypes(context, ["mmc", "ddh", "casey", "mch", "vhh"], options);
 }
 
 async function buildDerivedAccountSnapshot(db, context) {
@@ -5831,7 +5832,7 @@ function doctorProfileCoverage(rows, doctor, sourceTypes) {
 }
 
 function sourcePriority(sourceType) {
-  return { mmc: 0, ddh: 1, casey: 2, mch: 3 }[sourceType] ?? 99;
+  return { mmc: 0, ddh: 1, casey: 2, mch: 3, vhh: 4 }[sourceType] ?? 99;
 }
 
 function sanitizeDoctorAccountResolutionInput(value) {
@@ -5983,7 +5984,7 @@ function sanitizeSourceTypes(items) {
 
 function isRosterSourceType(value) {
   const source = String(value || "").toLowerCase();
-  return source === "mmc" || source === "ddh" || source === "casey" || source === "mch";
+  return source === "mmc" || source === "ddh" || source === "casey" || source === "mch" || source === "vhh";
 }
 
 function sanitizeDoctorProfile(value) {
