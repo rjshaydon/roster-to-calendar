@@ -72,7 +72,10 @@ function clinicianName(value: string) {
   if (!phone) return raw;
   const trailing = raw.slice(phone.index + phone.text.length).replace(/[\s)\]}.,;:-]+/g, "");
   if (trailing) return raw;
-  return raw.slice(0, phone.index).replace(/\s*[([{-]?\s*$/, "").trim();
+  return raw.slice(0, phone.index)
+    .replace(/\s*[([{-]\s*(?:ph(?:one)?\s*)?$/i, "")
+    .replace(/\s+ph(?:one)?\s*$/i, "")
+    .trim();
 }
 
 function clinicianPhone(standardPhone: string, rawName: string, emr: string, shift: string) {

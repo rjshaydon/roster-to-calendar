@@ -246,7 +246,10 @@ function clinicianName(value) {
   if (!phone) return raw;
   const trailing = raw.slice(phone.index + phone.text.length).replace(/[\s)\]}.,;:-]+/g, "");
   if (trailing) return raw;
-  return raw.slice(0, phone.index).replace(/\s*[([{-]?\s*$/, "").trim();
+  return raw.slice(0, phone.index)
+    .replace(/\s*[([{-]\s*(?:ph(?:one)?\s*)?$/i, "")
+    .replace(/\s+ph(?:one)?\s*$/i, "")
+    .trim();
 }
 
 function ddhClinicianPhone({ standardPhone, rawName, emr, shift } = {}) {

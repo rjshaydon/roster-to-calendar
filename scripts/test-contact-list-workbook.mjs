@@ -84,6 +84,22 @@ clinicianRows[46][10] = "Orange Dr 2";
 clinicianRows[46][11] = "Jaz";
 clinicianRows[46][12] = "49971";
 clinicianRows[46][13] = "49741";
+clinicianRows[47][10] = "Orange Dr 3";
+clinicianRows[47][11] = "Titus";
+clinicianRows[47][12] = "TH";
+clinicianRows[47][13] = "12345";
+clinicianRows[48][10] = "Orange Dr 4";
+clinicianRows[48][11] = "Titus";
+clinicianRows[48][12] = "54321";
+clinicianRows[48][13] = "12345";
+clinicianRows[49][10] = "Orange Dr 5";
+clinicianRows[49][11] = "Titus (ph24680)";
+clinicianRows[49][12] = "12345";
+clinicianRows[49][13] = "12345";
+clinicianRows[50][10] = "Orange Dr 6";
+clinicianRows[50][11] = "Titus 1";
+clinicianRows[50][12] = "TH";
+clinicianRows[50][13] = "12345";
 XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(clinicianRows), "ED Clinicians");
 
 const bytes = XLSX.write(workbook, { type: "array", bookType: "xlsx" });
@@ -104,6 +120,13 @@ assert.deepEqual(extract.contacts.filter(({ shift, role }) => shift === "Night" 
   ["Orange Dr 1", "Jonathan", "49931"],
   ["Orange Dr 2", "Jaz", "49971"],
 ], "DDH Night contacts should prefer a phone with the name, then EMR, then the normal Number column");
+assert.deepEqual(extract.contacts.filter(({ shift, role }) => shift === "Night" && /^Orange Dr [3-6]$/.test(role))
+  .map(({ role, phone }) => [role, phone]), [
+  ["Orange Dr 3", "12345"],
+  ["Orange Dr 4", "54321"],
+  ["Orange Dr 5", "24680"],
+  ["Orange Dr 6", "12345"],
+], "DDH Night phone precedence should cover plain names, EMR phones, embedded phones, and non-phone name suffixes");
 assert.deepEqual(extract.contacts.map(({ shift, role, name, phone, isPopulated }) => [shift, role, name, phone, isPopulated]), [
   ["AM", "Doctor In Charge / AVAO", "Di", "49900", true],
   ["AM", "Orange Dr IC", "Shilpa", "49970", true],
@@ -126,6 +149,10 @@ assert.deepEqual(extract.contacts.map(({ shift, role, name, phone, isPopulated }
   ["Night", "Dr IC", "Tinnie", "49900", true],
   ["Night", "Orange Dr 1", "Jonathan", "49931", true],
   ["Night", "Orange Dr 2", "Jaz", "49971", true],
+  ["Night", "Orange Dr 3", "Titus", "12345", true],
+  ["Night", "Orange Dr 4", "Titus", "54321", true],
+  ["Night", "Orange Dr 5", "Titus", "24680", true],
+  ["Night", "Orange Dr 6", "Titus 1", "12345", true],
 ]);
 
 console.log("DDH contact workbook extraction fixtures passed.");
