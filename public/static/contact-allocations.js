@@ -79,7 +79,7 @@ export function contactExtractHasExpired(sourceDate, now = new Date()) {
   const melbourne = melbourneDateTime(now);
   if (!melbourne.date) return true;
   return melbourne.date > nextDate
-    || (melbourne.date === nextDate && (melbourne.hour * 60 + melbourne.minute) >= 10 * 60);
+    || (melbourne.date === nextDate && (melbourne.hour * 60 + melbourne.minute) >= 17 * 60);
 }
 
 // The clinical operational day rolls over at the first morning handover,
@@ -94,14 +94,14 @@ export function contactOperationalDate(now = new Date()) {
 }
 
 // Once the operational day turns over at 07:30, retain the preceding
-// Night handset allocations until 10:00 during live testing. This also lets the server use the
+// Night handset allocations until 17:00 during live testing. This also lets the server use the
 // last Night extract when a new morning extract has not arrived yet.
 export function shouldCarryPreviousNightContacts(sourceDate, requestedDate, now = new Date()) {
   const melbourne = melbourneDateTime(now);
   if (!melbourne.date || requestedDate !== melbourne.date) return false;
   const minuteOfDay = melbourne.hour * 60 + melbourne.minute;
   return minuteOfDay >= 7 * 60 + 30
-    && minuteOfDay < 10 * 60
+    && minuteOfDay < 17 * 60
     && sourceDate === addDays(requestedDate, -1);
 }
 
@@ -113,7 +113,7 @@ export function shouldUseCurrentExtractForPreviousNight(sourceDate, requestedDat
   if (!melbourne.date || sourceDate !== melbourne.date) return false;
   const minuteOfDay = melbourne.hour * 60 + melbourne.minute;
   return minuteOfDay >= 7 * 60 + 30
-    && minuteOfDay < 10 * 60
+    && minuteOfDay < 17 * 60
     && requestedDate === addDays(melbourne.date, -1);
 }
 
@@ -139,8 +139,8 @@ export function contactPeriodsAfterShiftChange(date, now = new Date()) {
   const periods = new Set();
   if (minuteOfDay >= 7 * 60 + 30) periods.add("AM");
   // The new operational day starts at 07:30, but the outgoing Night team
-  // remains responsible for its handsets until 10:00 during live testing.
-  if (minuteOfDay >= 7 * 60 + 30 && minuteOfDay < 10 * 60) periods.add("Night");
+  // remains responsible for its handsets until 17:00 during live testing.
+  if (minuteOfDay >= 7 * 60 + 30 && minuteOfDay < 17 * 60) periods.add("Night");
   if (minuteOfDay >= 15 * 60) periods.add("PM");
   if (minuteOfDay >= 23 * 60) periods.add("Night");
   return periods;
