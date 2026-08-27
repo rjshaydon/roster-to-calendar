@@ -2,6 +2,7 @@ import { ensureCalendarSchema, hasCalendarDb } from "../../_lib/d1-calendar.js";
 import { sha256Hex } from "../../_lib/automation-import.js";
 import {
   DDH_CONTACT_LIST_SOURCE_ID,
+  VHH_CONTACT_LIST_SOURCE_ID,
   contactExtractHasExpired,
   contactOperationalDate,
   normaliseContactListExtract,
@@ -35,6 +36,11 @@ export async function onRequestPost(context) {
     }
     if (String(payload?.sourceId || "") === DDH_CONTACT_LIST_SOURCE_ID) {
       const operationalDate = contactOperationalDate(new Date(String(payload?.providerModifiedAt || "")));
+      if (operationalDate) payload = { ...payload, sourceDate: operationalDate };
+    }
+    if (String(payload?.sourceId || "") === VHH_CONTACT_LIST_SOURCE_ID && !String(payload?.sourceDate || "").trim()) {
+      const modifiedAt = String(payload?.providerModifiedAt || "").trim();
+      const operationalDate = contactOperationalDate(modifiedAt ? new Date(modifiedAt) : new Date());
       if (operationalDate) payload = { ...payload, sourceDate: operationalDate };
     }
     const extract = normaliseContactListExtract(payload);
