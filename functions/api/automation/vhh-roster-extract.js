@@ -17,7 +17,7 @@ const MAX_BODY_BYTES = 1024 * 1024;
 // Receives only the Office Script roster extract. The SharePoint workbook is
 // never uploaded, altered, or retained by this application.
 export async function onRequestPost(context) {
-  if (!hasValidAutomationToken(context.request, context.env.ROSTER_AUTOMATION_TOKEN)) return Response.json({ error: "Unauthorized." }, { status: 401 });
+  if (!hasValidAutomationToken(context.request, context.env.ROSTER_AUTOMATION_TOKEN, context.env.VHH_AUTOMATION_TOKEN)) return Response.json({ error: "Unauthorized." }, { status: 401 });
   if (!hasCalendarDb(context.env) || !context.env.ROSTER_FILES?.put) return Response.json({ error: "Roster storage is unavailable." }, { status: 503 });
   try {
     const contentLength = Number(context.request.headers.get("content-length") || "0");
@@ -74,11 +74,14 @@ function updatedSourceRecord(existing, definition, update = {}) {
   return { ...(existing || {}), ...definition, ...update, enabled: true, config: existing?.config || {}, cursor: existing?.cursor || {}, createdAt: existing?.createdAt || new Date().toISOString() };
 }
 
-function hasValidAutomationToken(request, configuredToken) {
-  const token = String(configuredToken || "");
+function hasValidAutomationToken(request, ...configuredTokens) {
   const provided = String(request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
-  if (!token || !provided || token.length !== provided.length) return false;
-  let mismatch = 0;
-  for (let index = 0; index < token.length; index += 1) mismatch |= token.charCodeAt(index) ^ provided.charCodeAt(index);
-  return mismatch === 0;
+  if (!provided) return false;
+  return configuredTokens.some((configuredToken) => {
+    const token = String(configuredToken || "");
+    if (!token || token.length !== provided.length) return false;
+    let mismatch = 0;
+    for (let index = 0; index < token.length; index += 1) mismatch |= token.charCodeAt(index) ^ provided.charCodeAt(index);
+    return mismatch === 0;
+  });
 }

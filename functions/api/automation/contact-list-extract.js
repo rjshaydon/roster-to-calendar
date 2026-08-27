@@ -17,6 +17,7 @@ export async function onRequestPost(context) {
     context.request,
     context.env.ROSTER_AUTOMATION_TOKEN,
     context.env.DDH_CONTACT_AUTOMATION_TOKEN,
+    context.env.VHH_AUTOMATION_TOKEN,
   )) {
     return Response.json({ error: "Unauthorized." }, { status: 401 });
   }
