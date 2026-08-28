@@ -4,11 +4,29 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_BLOCKS = 24;
 const MAX_ROWS_PER_BLOCK = 80;
 const MAX_ASSIGNMENTS_PER_ROW = 14;
+const VHH_LOCATION = "Victorian Heart Hospital, 631 Blackburn Road, Clayton VIC 3168, Australia";
+const COMMA_NAME = /([A-Za-z][A-Za-z'’.-]*(?:[ \t]+[A-Za-z][A-Za-z'’.-]*)*),[ \t]*([A-Za-z][A-Za-z'’.-]*(?:[ \t]+[A-Za-z][A-Za-z'’.-]*)*)/g;
 
-// This is deliberately a JSON-to-calendar adapter rather than an Excel
-// reader. SharePoint remains the authority for the workbook; Office Script
-// extracts only the roster region and the GitHub worker converts that retained
-// JSON to the ordinary D1 roster payload.
+const SHIFT_DEFINITIONS = new Map([
+  ["CST", shift("Clinical Support", "SMS", "", "", false)],
+  ["T", shift("Clinical Support", "SMS", "", "", false)],
+  ["AM SMS", shift("AM SMS", "SMS", "08:00", "17:30")],
+  ["AM REG", shift("AM Reg", "Junior Registrar", "08:00", "17:30")],
+  ["SSU HMO (8-4)", shift("SSU HMO", "HMO", "08:00", "16:00")],
+  ["AM JMS", shift("AM JMS", "Junior Registrar", "08:00", "17:30")],
+  ["SWING", shift("Swing SMS 1000", "SMS", "10:00", "19:30")],
+  ["SWING 1230PM", shift("Swing SMS 1230", "SMS", "12:30", "22:00")],
+  ["PM SMS", shift("PM SMS", "SMS", "14:30", "00:00")],
+  ["PM REG", shift("PM Reg", "Junior Registrar", "14:30", "00:00")],
+  ["PM JMS", shift("PM JMS", "Junior Registrar", "14:30", "00:00")],
+  ["ON REG", shift("Night Reg", "Junior Registrar", "23:00", "08:30")],
+  ["ON JMS", shift("Night JMS", "Junior Registrar", "23:00", "08:30")],
+]);
+const IGNORED_SHIFT_LABELS = new Set(["MED STUDENT"]);
+
+// SharePoint remains authoritative for the workbook. The background worker
+// extracts the roster structure, then this adapter applies the VHH-specific
+// designation, timing, location and term-wide seniority rules.
 export function normaliseVhhRosterExtract(payload) {
   if (!payload || typeof payload !== "object" || String(payload.sourceId || "").trim() !== VHH_ROSTER_SOURCE_ID) return null;
   const blocks = Array.isArray(payload.blocks) ? payload.blocks : [];
@@ -32,32 +50,41 @@ export function buildVhhDerivedRosterPayload({ extract, contentHash, fileId = ""
   const addedAt = new Date().toISOString();
   const doctorsByKey = new Map();
   const eventsByDoctor = {};
+  const termSeniorities = buildTermSeniorities(roster.blocks);
+  const unknownLabels = new Set();
 
   for (const block of roster.blocks) {
     for (const row of block.rows) {
+      const definition = shiftDefinition(row.shiftLabel);
+      if (!definition) {
+        if (!isIgnoredShift(row.shiftLabel) && row.assignments.some((assignment) => vhhPeopleFromCell(assignment.namesText).length)) {
+          unknownLabels.add(row.shiftLabel);
+        }
+        continue;
+      }
+      if (!block.visible) continue;
       for (const assignment of row.assignments) {
         const people = vhhPeopleFromCell(assignment.namesText);
-        if (!people.length) continue;
-        const timings = vhhTimingRanges(assignment.namesText);
         for (const person of people) {
+          const seniority = termSeniorities.get(person.key) || definition.seniority;
           if (!doctorsByKey.has(person.key)) {
             doctorsByKey.set(person.key, {
               key: person.key,
               displayName: person.displayName,
               sourceType: "vhh",
-              seniority: seniorityForShift(row.shiftLabel),
+              seniority,
               membershipSource: "roster",
             });
           }
           const events = eventsByDoctor[person.key] || (eventsByDoctor[person.key] = []);
-          const ranges = timings.length ? timings : [null];
-          ranges.forEach((timing, timingIndex) => {
-            const event = vhhEvent({ person, block, row, assignment, timing, timingIndex });
-            events.push(event);
-          });
+          events.push(vhhEvent({ person, block, row, assignment, definition, seniority }));
         }
       }
     }
+  }
+
+  if (unknownLabels.size) {
+    throw new Error(`Unsupported VHH shift designation${unknownLabels.size === 1 ? "" : "s"}: ${[...unknownLabels].sort().join(", ")}.`);
   }
 
   const doctors = [...doctorsByKey.values()].sort((left, right) => left.displayName.localeCompare(right.displayName));
@@ -121,8 +148,10 @@ function normaliseBlock(value) {
   return {
     sheetName: text(value.sheetName) || "VHH roster",
     blockIndex: Math.max(1, Number(value.blockIndex || 1)),
+    visible: value.visible !== false,
     headerRow: Math.max(1, Number(value.headerRow || 1)),
-    teachingTimetableRow: Math.max(1, Number(value.teachingTimetableRow || 1)),
+    teachingTimetableRow: Math.max(0, Number(value.teachingTimetableRow || 0)),
+    teachingTimetableEndRow: Math.max(0, Number(value.teachingTimetableEndRow || 0)),
     dates,
     rows,
   };
@@ -130,29 +159,27 @@ function normaliseBlock(value) {
 
 function vhhPeopleFromCell(value) {
   const raw = text(value);
-  if (!raw || /^(?:-|tba|vacant|leave|annual leave|sick leave)$/i.test(raw)) return [];
-  const people = [];
-  const seen = new Set();
-  // Keep a line break as a person boundary. A VHH cell can contain several
-  // Last, First names on separate lines.
-  const commaName = /([A-Za-z][A-Za-z'’.-]*(?:[ \t]+[A-Za-z][A-Za-z'’.-]*)*),[ \t]*([A-Za-z][A-Za-z'’.-]*(?:[ \t]+[A-Za-z][A-Za-z'’.-]*)*)/g;
-  let match;
-  while ((match = commaName.exec(raw))) addPerson(people, seen, `${match[2]} ${match[1]}`);
-  if (!people.length) {
-    for (const line of raw.split(/[\r\n;]+/)) {
-      const candidate = line.replace(/\([^)]*\)/g, "").trim();
-      if (/^[A-Za-z][A-Za-z'’.-]+(?:\s+[A-Za-z][A-Za-z'’.-]+){1,3}$/.test(candidate)) addPerson(people, seen, candidate);
+  if (!raw || isNonPersonValue(raw)) return [];
+  const byKey = new Map();
+  for (const line of raw.split(/[\r\n;]+/)) {
+    const timings = vhhTimingRanges(line);
+    COMMA_NAME.lastIndex = 0;
+    let match;
+    while ((match = COMMA_NAME.exec(line))) {
+      const person = personFromName(`${match[2]} ${match[1]}`);
+      if (!person) continue;
+      const timing = timings.length === 1 ? timings[0] : null;
+      const existing = byKey.get(person.key);
+      if (!existing || (!existing.timing && timing)) byKey.set(person.key, { ...person, timing });
     }
   }
-  return people;
+  return [...byKey.values()];
 }
 
-function addPerson(people, seen, value) {
+function personFromName(value) {
   const displayName = titleCase(text(value).replace(/\s+/g, " "));
   const key = displayName.toUpperCase().replace(/[^A-Z0-9]+/g, " ").trim();
-  if (!key || seen.has(key)) return;
-  seen.add(key);
-  people.push({ key, displayName });
+  return key ? { key, displayName } : null;
 }
 
 function vhhTimingRanges(value) {
@@ -167,33 +194,75 @@ function vhhTimingRanges(value) {
   return ranges;
 }
 
-function vhhEvent({ person, block, row, assignment, timing, timingIndex }) {
+function vhhEvent({ person, block, row, assignment, definition, seniority }) {
   const date = assignment.date;
+  const timing = person.timing || definition.timing;
   const allDay = !timing;
   const endDate = timing && timing.endTime <= timing.startTime ? addDays(date, 1) : date;
   const start = allDay ? date : `${date}T${timing.startTime}:00`;
   const end = allDay ? addDays(date, 1) : `${endDate}T${timing.endTime}:00`;
   return {
-    id: `vhh:${safeId(block.sheetName)}:${block.blockIndex}:${row.sourceRow}:${safeId(assignment.sourceCell)}:${person.key}:${timingIndex}`,
+    id: `vhh:${safeId(block.sheetName)}:${block.blockIndex}:${row.sourceRow}:${safeId(assignment.sourceCell)}:${person.key}`,
     source: "VHH",
-    seniority: seniorityForShift(row.shiftLabel),
-    title: `VHH: ${row.shiftLabel}`,
+    seniority,
+    title: `VHH: ${definition.title}`,
     allDay,
     start,
     end,
-    location: "Victorian Heart Hospital, 631 Blackburn Road, Clayton VIC 3168, Australia",
+    location: definition.hasLocation ? VHH_LOCATION : "",
     rawValue: assignment.namesText,
-    timeLabel: allDay ? "All day (time not specified in roster)" : `${timing.startTime}-${timing.endTime}`,
+    timeLabel: allDay ? "All day" : `${timing.startTime}-${timing.endTime}`,
     monthKey: date.slice(0, 7),
   };
 }
 
-function seniorityForShift(label) {
-  const shift = String(label || "").toUpperCase();
-  if (/\b(?:CST|SMS)\b/.test(shift)) return "SMS";
-  if (/\bHMO\b/.test(shift)) return "HMO";
-  if (/\bJMS\b/.test(shift)) return "Junior Registrar";
-  return "Unknown";
+function buildTermSeniorities(blocks) {
+  const evidence = new Map();
+  for (const block of blocks) {
+    for (const row of block.rows) {
+      const definition = shiftDefinition(row.shiftLabel);
+      if (!definition) continue;
+      for (const assignment of row.assignments) {
+        for (const person of vhhPeopleFromCell(assignment.namesText)) {
+          const current = evidence.get(person.key) || "Unknown";
+          if (seniorityRank(definition.seniority) > seniorityRank(current)) evidence.set(person.key, definition.seniority);
+        }
+      }
+    }
+  }
+  return evidence;
+}
+
+function shift(title, seniority, startTime, endTime, hasLocation = true) {
+  return {
+    title,
+    seniority,
+    timing: startTime && endTime ? { startTime, endTime } : null,
+    hasLocation,
+  };
+}
+
+function shiftDefinition(label) {
+  return SHIFT_DEFINITIONS.get(normaliseShiftLabel(label)) || null;
+}
+
+function isIgnoredShift(label) {
+  return IGNORED_SHIFT_LABELS.has(normaliseShiftLabel(label));
+}
+
+function normaliseShiftLabel(label) {
+  return text(label).toUpperCase().replace(/\s+/g, " ");
+}
+
+function seniorityRank(value) {
+  if (value === "HMO") return 3;
+  if (value === "SMS") return 2;
+  if (value === "Junior Registrar") return 1;
+  return 0;
+}
+
+function isNonPersonValue(value) {
+  return /^(?:-|–|—|tba|vacant|leave|annual leave|sick leave|public holiday)$/i.test(text(value));
 }
 
 function clock(value) {

@@ -16,10 +16,10 @@ export async function extractVhhRosterWorkbook(file, metadata = {}) {
   const visibility = new Map((workbook.Workbook?.Sheets || []).map((sheet) => [sheet.name, Number(sheet.Hidden || 0)]));
   const blocks = [];
   for (const sheetName of workbook.SheetNames || []) {
-    if ((visibility.get(sheetName) || 0) !== 0) continue;
     const sheet = workbook.Sheets[sheetName];
     if (!sheet?.["!ref"]) continue;
     const range = XLSX.utils.decode_range(sheet["!ref"]);
+    const visible = (visibility.get(sheetName) || 0) === 0;
     let blockIndex = 0;
     for (let header = 0; header <= range.e.r; header += 1) {
       if (!isShiftLabel(cellText(sheet, header, 0))) continue;
@@ -30,18 +30,26 @@ export async function extractVhhRosterWorkbook(file, metadata = {}) {
       }
       if (!dates.length) continue;
 
-      let timetable = range.e.r + 1;
+      let blockEnd = range.e.r + 1;
       for (let row = header + 1; row <= range.e.r; row += 1) {
-        const label = cellText(sheet, row, 0);
-        if (/^JMS\s+TEACHING\s+TIMETABLE$/i.test(label) || isShiftLabel(label)) {
-          timetable = row;
+        if (isShiftLabel(cellText(sheet, row, 0))) {
+          blockEnd = row;
           break;
         }
+      }
+      const teachingStart = findRow(sheet, header + 1, blockEnd, /^JMS\s+TEACHING\s+TIMETABLE$/i);
+      const teachingEnd = findRow(sheet, header + 1, blockEnd, /^ULTRASOUND\s+TEACHING\s+SESSIONS\s+ARE\s+AVAILABLE\s+FOR\s+BOOKING\s+VIA\b/i);
+      if ((teachingStart >= 0) !== (teachingEnd >= 0) || (teachingStart >= 0 && teachingEnd < teachingStart)) {
+        throw new Error(`VHH teaching timetable boundaries are incomplete on ${sheetName}, roster row ${header + 1}.`);
       }
 
       const rows = [];
       let inheritedShiftLabel = "";
-      for (let row = header + 1; row < timetable; row += 1) {
+      for (let row = header + 1; row < blockEnd; row += 1) {
+        if (teachingStart >= 0 && row >= teachingStart && row <= teachingEnd) {
+          inheritedShiftLabel = "";
+          continue;
+        }
         const sourceShiftLabel = cellText(sheet, row, 0);
         if (sourceShiftLabel) inheritedShiftLabel = sourceShiftLabel;
         if (!inheritedShiftLabel) continue;
@@ -60,8 +68,10 @@ export async function extractVhhRosterWorkbook(file, metadata = {}) {
       if (rows.length) blocks.push({
         sheetName,
         blockIndex: ++blockIndex,
+        visible,
         headerRow: header + 1,
-        teachingTimetableRow: timetable + 1,
+        teachingTimetableRow: teachingStart >= 0 ? teachingStart + 1 : 0,
+        teachingTimetableEndRow: teachingEnd >= 0 ? teachingEnd + 1 : 0,
         dates,
         rows,
       });
@@ -114,4 +124,13 @@ function cellIsoDate(sheet, row, column) {
 
 function isShiftLabel(value) {
   return /^SHIFT\s+LABEL$/i.test(String(value || "").trim());
+}
+
+function findRow(sheet, startRow, endRow, expression) {
+  for (let row = startRow; row < endRow; row += 1) {
+    for (let column = 0; column < MAX_COLUMNS; column += 1) {
+      if (expression.test(cellText(sheet, row, column))) return row;
+    }
+  }
+  return -1;
 }
