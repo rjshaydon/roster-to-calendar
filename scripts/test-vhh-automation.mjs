@@ -35,7 +35,7 @@ assert.equal(derived.doctors.some((doctor) => doctor.key === "IMPORT NEVER"), fa
 
 const workbook = XLSX.utils.book_new();
 const activeSheet = XLSX.utils.aoa_to_sheet([
-  ["SHIFT LABEL", new Date("2026-08-24T00:00:00Z"), new Date("2026-08-25T00:00:00Z")],
+  ["Shift Label", "Mon 24/08/2026", "Tue 25/08/2026"],
   ["AM REG", "Haydon, Richard (0800-1530)", ""],
   ["", "", "Smith, Alex"],
   ["JMS Teaching Timetable", "Never, Import", ""],

@@ -22,7 +22,7 @@ export async function extractVhhRosterWorkbook(file, metadata = {}) {
     const range = XLSX.utils.decode_range(sheet["!ref"]);
     let blockIndex = 0;
     for (let header = 0; header <= range.e.r; header += 1) {
-      if (cellText(sheet, header, 0) !== "SHIFT LABEL") continue;
+      if (!isShiftLabel(cellText(sheet, header, 0))) continue;
       const dates = [];
       for (let column = 1; column < MAX_COLUMNS; column += 1) {
         const date = cellIsoDate(sheet, header, column);
@@ -33,7 +33,7 @@ export async function extractVhhRosterWorkbook(file, metadata = {}) {
       let timetable = range.e.r + 1;
       for (let row = header + 1; row <= range.e.r; row += 1) {
         const label = cellText(sheet, row, 0);
-        if (/^JMS\s+TEACHING\s+TIMETABLE$/i.test(label) || label === "SHIFT LABEL") {
+        if (/^JMS\s+TEACHING\s+TIMETABLE$/i.test(label) || isShiftLabel(label)) {
           timetable = row;
           break;
         }
@@ -89,7 +89,8 @@ function cellText(sheet, row, column) {
 }
 
 function cellIsoDate(sheet, row, column) {
-  const value = cell(sheet, row, column)?.v;
+  const sourceCell = cell(sheet, row, column);
+  const value = sourceCell?.v;
   if (value instanceof Date && Number.isFinite(value.getTime())) return value.toISOString().slice(0, 10);
   if (typeof value === "number" && Number.isFinite(value)) {
     const parsed = XLSX.SSF.parse_date_code(value);
@@ -97,5 +98,20 @@ function cellIsoDate(sheet, row, column) {
       return `${String(parsed.y).padStart(4, "0")}-${String(parsed.m).padStart(2, "0")}-${String(parsed.d).padStart(2, "0")}`;
     }
   }
+  const displayed = String(sourceCell?.w ?? value ?? "").trim();
+  const match = displayed.match(/(?:^|\s)(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})(?:$|\s)/);
+  if (match) {
+    const day = Number(match[1]);
+    const month = Number(match[2]);
+    const year = Number(match[3]);
+    const candidate = new Date(Date.UTC(year, month - 1, day));
+    if (candidate.getUTCFullYear() === year && candidate.getUTCMonth() === month - 1 && candidate.getUTCDate() === day) {
+      return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    }
+  }
   return "";
+}
+
+function isShiftLabel(value) {
+  return /^SHIFT\s+LABEL$/i.test(String(value || "").trim());
 }
