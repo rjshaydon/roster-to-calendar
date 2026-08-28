@@ -642,15 +642,20 @@ export function filterDuplicateDdhRosterEvents(events = []) {
 }
 
 export function filterCalendarRosterEvents(events = []) {
-  return filterDuplicateDdhRosterEvents(filterCrossFacilityVhhRosterEvents(events));
+  return applyPhnwCalendarPrecedence(
+    filterDuplicateDdhRosterEvents(filterCrossFacilityVhhRosterEvents(events)),
+  );
 }
 
 function duplicateDdhRosterOccurrenceKey(event) {
   const source = String(event?.source || event?.sourceType || "").trim().toUpperCase();
   const title = cleanText(event?.title || "").replace(/\s+/g, " ").trim().toUpperCase();
-  const doctor = normalizeName(event?.doctorKey || event?.displayName || "");
+  // A preview contains one selected clinician, but legacy serialized events
+  // do not always retain doctorKey/displayName. Use the calendar owner as the
+  // safe fallback instead of declining to deduplicate those live rows.
+  const doctor = normalizeName(event?.doctorKey || event?.displayName || "") || "CALENDAR OWNER";
   const day = String(event?.start || "").slice(0, 10);
-  if (source !== "DDH" || !title.startsWith("DDH:") || !doctor || !day) return "";
+  if (source !== "DDH" || !title.startsWith("DDH:") || !day) return "";
   const timing = event?.allDay === true
     ? "ALL-DAY"
     : `${String(event?.start || "")}|${String(event?.end || "")}`;
@@ -664,6 +669,55 @@ function ddhDuplicateEventPreference(event) {
   if (/^(?:CS|C\/S|CLINICAL SUPPORT)$/i.test(rawValue)) score += 2;
   if (String(event?.status || "").toLowerCase() !== "unknown") score += 1;
   return score;
+}
+
+// PHNW is a 24-hour allocation and takes precedence over every other
+// hospital-roster shift on its date. Keep its source metadata for hospital
+// filtering, but remove the hospital prefix from the user-facing title.
+function applyPhnwCalendarPrecedence(events = []) {
+  const phnwByDay = new Map();
+  for (const event of events) {
+    if (!isHospitalRosterEvent(event) || !isPhnwRosterEvent(event)) continue;
+    const day = String(event?.start || "").slice(0, 10);
+    if (day && !phnwByDay.has(day)) phnwByDay.set(day, event);
+  }
+  if (!phnwByDay.size) return events;
+  const retainedPhnwDays = new Set();
+  const filtered = [];
+  for (const event of events) {
+    const day = String(event?.start || "").slice(0, 10);
+    if (!day || !phnwByDay.has(day) || !isHospitalRosterEvent(event)) {
+      filtered.push(event);
+      continue;
+    }
+    if (retainedPhnwDays.has(day) || event !== phnwByDay.get(day)) continue;
+    retainedPhnwDays.add(day);
+    filtered.push(normalizePhnwCalendarEvent(event, day));
+  }
+  return filtered;
+}
+
+function isHospitalRosterEvent(event) {
+  return ["MMC", "DDH", "CASEY", "MCH", "VHH"].includes(
+    String(event?.source || event?.sourceType || "").trim().toUpperCase(),
+  );
+}
+
+function isPhnwRosterEvent(event) {
+  return /\bPHNW\b/i.test(`${event?.title || ""} ${event?.rawValue || ""}`);
+}
+
+function normalizePhnwCalendarEvent(event, day) {
+  return {
+    ...event,
+    title: "PHNW",
+    kind: "public_holiday",
+    start: day,
+    end: addDays(day, 1),
+    allDay: true,
+    timeLabel: "",
+    location: "",
+  };
 }
 
 // Retained roster files can contain diagnostics produced before a later parser

@@ -15556,14 +15556,28 @@ function sanitizeWorkspaceSnapshot(value) {
   };
   const existingEvents = Array.isArray(snapshot.preview?.events) ? snapshot.preview.events : [];
   const events = filterCalendarRosterEvents(existingEvents);
-  if (events.length !== existingEvents.length) {
+  const eventsChanged = events.length !== existingEvents.length
+    || events.some((event, index) => event !== existingEvents[index]);
+  if (eventsChanged) {
     const eventIds = new Set(events.map((event) => String(event?.id || "")).filter(Boolean));
+    const eventsById = new Map(events.map((event) => [String(event?.id || ""), event]).filter(([id]) => id));
     snapshot.preview = {
       ...snapshot.preview,
       ...previewSummary(events),
       events,
       review: (Array.isArray(snapshot.preview.review) ? snapshot.preview.review : [])
-        .filter((item) => !item?.id || eventIds.has(String(item.id))),
+        .filter((item) => !item?.id || eventIds.has(String(item.id)))
+        .map((item) => {
+          const event = eventsById.get(String(item?.id || ""));
+          return event ? {
+            ...item,
+            normalizedTitle: event.title,
+            suggestedTitle: event.title,
+            location: event.location || "",
+            allDay: event.allDay === true,
+            timeLabel: event.timeLabel || "",
+          } : item;
+        }),
     };
   }
   snapshot.calendarRevision = String(value.calendarRevision || "");

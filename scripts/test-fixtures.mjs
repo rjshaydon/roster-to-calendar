@@ -49,13 +49,23 @@ assert.deepEqual(
 );
 assert.deepEqual(
   filterCalendarRosterEvents([
-    { id: "ddh-cs-note", source: "DDH", doctorKey: "JAY CASH", title: "DDH: CS", rawValue: "CS WBA coordinator workshop", start: "2026-09-23", end: "2026-09-24", allDay: true, seniority: "SMS" },
-    { id: "ddh-cs", source: "DDH", doctorKey: "JAY CASH", title: "DDH: CS", rawValue: "Clinical Support", start: "2026-09-23", end: "2026-09-24", allDay: true, seniority: "SMS" },
+    { id: "ddh-cs-note", source: "DDH", title: "DDH: CS", rawValue: "CS WBA coordinator workshop", start: "2026-09-23", end: "2026-09-24", allDay: true, seniority: "SMS" },
+    { id: "ddh-cs", source: "DDH", title: "DDH: CS", rawValue: "Clinical Support", start: "2026-09-23", end: "2026-09-24", allDay: true, seniority: "SMS" },
     { id: "ddh-cs-other-doctor", source: "DDH", doctorKey: "OTHER DOCTOR", title: "DDH: CS", rawValue: "Clinical Support", start: "2026-09-23", end: "2026-09-24", allDay: true, seniority: "SMS" },
     { id: "ddh-cs-timed", source: "DDH", doctorKey: "JAY CASH", title: "DDH: CS", rawValue: "Clinical Support", start: "2026-09-23T08:00:00+10:00", end: "2026-09-23T17:30:00+10:00", allDay: false, seniority: "SMS" },
   ]).map((event) => event.id),
   ["ddh-cs", "ddh-cs-other-doctor", "ddh-cs-timed"],
   "equivalent DDH shifts should collapse per clinician and day while distinct clinicians or timings remain",
+);
+assert.deepEqual(
+  filterCalendarRosterEvents([
+    { id: "ddh-cs", source: "DDH", title: "DDH: CS", rawValue: "Clinical Support", start: "2026-09-25", end: "2026-09-26", allDay: true },
+    { id: "ddh-phnw", source: "DDH", title: "DDH: PHNW", rawValue: "PHNW", start: "2026-09-25", end: "2026-09-26", allDay: true, location: "DDH" },
+    { id: "vhh-shift", source: "VHH", title: "VHH: AM SMS", rawValue: "AM", start: "2026-09-25T08:00:00+10:00", end: "2026-09-25T17:30:00+10:00", allDay: false },
+    { id: "custom", source: "custom", title: "Personal reminder", start: "2026-09-25", end: "2026-09-26", allDay: true },
+  ]).map((event) => [event.id, event.title, event.start, event.end, event.allDay, event.location || ""]),
+  [["ddh-phnw", "PHNW", "2026-09-25", "2026-09-26", true, ""], ["custom", "Personal reminder", "2026-09-25", "2026-09-26", true, ""]],
+  "PHNW should become one hospital-neutral all-day event and suppress every other hospital-roster shift that day",
 );
 assert.deepEqual(
   mergeMembershipDoctors(

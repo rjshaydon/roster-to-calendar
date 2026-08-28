@@ -5304,8 +5304,11 @@ async function filterCachedCalendarSnapshot(db, snapshot, ownerEmail = "", recor
 function filterSnapshotCalendarEvents(snapshot) {
   const existingEvents = Array.isArray(snapshot?.preview?.events) ? snapshot.preview.events : [];
   const events = filterCalendarRosterEvents(existingEvents);
-  if (events.length === existingEvents.length) return snapshot;
+  const eventsChanged = events.length !== existingEvents.length
+    || events.some((event, index) => event !== existingEvents[index]);
+  if (!eventsChanged) return snapshot;
   const eventIds = new Set(events.map((event) => String(event?.id || "")).filter(Boolean));
+  const eventsById = new Map(events.map((event) => [String(event?.id || ""), event]).filter(([id]) => id));
   return {
     ...snapshot,
     preview: {
@@ -5313,7 +5316,18 @@ function filterSnapshotCalendarEvents(snapshot) {
       ...previewSummary(events),
       events,
       review: (Array.isArray(snapshot.preview.review) ? snapshot.preview.review : [])
-        .filter((item) => !item?.id || eventIds.has(String(item.id))),
+        .filter((item) => !item?.id || eventIds.has(String(item.id)))
+        .map((item) => {
+          const event = eventsById.get(String(item?.id || ""));
+          return event ? {
+            ...item,
+            normalizedTitle: event.title,
+            suggestedTitle: event.title,
+            location: event.location || "",
+            allDay: event.allDay === true,
+            timeLabel: event.timeLabel || "",
+          } : item;
+        }),
     },
   };
 }
