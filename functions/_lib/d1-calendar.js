@@ -1039,6 +1039,7 @@ export function isApprovedReparseOmission(event, baselineFileId = "") {
     // clinician names. Keep genuine plain "First Last" roster names outside
     // this approval so an accidental removal still blocks promotion.
     if (/^VHH:\s*MED STUDENT$/i.test(String(event?.title || "").trim())) return true;
+    if (/^PUBLIC HOLIDAY$/i.test(String(event?.rawValue || "").trim())) return true;
     const plainName = String(event?.rawValue || "").replace(/\([^)]*\)/g, "").trim();
     const genuinePlainName = /^[A-Z][A-Za-z'’.-]+\s+[A-Z][A-Za-z'’.-]+$/.test(plainName)
       && !/^SWING CONSULTANTS$/i.test(plainName);
