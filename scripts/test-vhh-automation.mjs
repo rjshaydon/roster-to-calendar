@@ -17,6 +17,7 @@ const rosterExtract = {
     rows: [
       { sourceRow: 7, sourceShiftLabel: "AM REG", shiftLabel: "AM REG", assignments: [{ date: "2026-08-24", displayedDate: "24-Aug", namesText: "Haydon, Richard (0800-1530)", sourceCell: "B7" }] },
       { sourceRow: 14, sourceShiftLabel: "PM SMS", shiftLabel: "PM SMS", assignments: [{ date: "2026-08-24", displayedDate: "24-Aug", namesText: "Smith, Alex\nJones, Sam", sourceCell: "B14" }] },
+      { sourceRow: 15, sourceShiftLabel: "ON JMS", shiftLabel: "ON JMS", assignments: [{ date: "2026-08-24", displayedDate: "24-Aug", namesText: "Samantha Young", sourceCell: "B15" }] },
       { sourceRow: 23, sourceShiftLabel: "JMS Teaching Timetable", shiftLabel: "JMS Teaching Timetable", assignments: [{ date: "2026-08-24", displayedDate: "24-Aug", namesText: "Never, Import", sourceCell: "B23" }] },
     ],
   }],
@@ -24,7 +25,7 @@ const rosterExtract = {
 
 const normalisedRoster = normaliseVhhRosterExtract(rosterExtract);
 assert.ok(normalisedRoster, "valid VHH roster JSON should normalise");
-assert.equal(normalisedRoster.blocks[0].rows.length, 2, "JMS Teaching Timetable must be excluded at the JSON boundary");
+assert.equal(normalisedRoster.blocks[0].rows.length, 3, "JMS Teaching Timetable must be excluded at the JSON boundary");
 const derived = buildVhhDerivedRosterPayload({ extract: rosterExtract, contentHash: "vhh-test-content-hash", fileId: "vhh-test-file" });
 assert.equal(derived.file.sourceType, "vhh");
 assert.equal(derived.doctors.find((doctor) => doctor.key === "RICHARD HAYDON")?.displayName, "Richard Haydon", "VHH Last, First names must normalise to First Last");
@@ -33,6 +34,7 @@ assert.equal(derived.eventsByDoctor["RICHARD HAYDON"][0].end, "2026-08-24T15:30:
 assert.equal(derived.eventsByDoctor["ALEX SMITH"][0].start, "2026-08-24T14:30:00", "designation timings must be used when a cell has no override");
 assert.equal(derived.eventsByDoctor["ALEX SMITH"][0].end, "2026-08-25T00:00:00", "midnight shifts must finish on the following day");
 assert.equal(derived.eventsByDoctor["ALEX SMITH"][0].title, "VHH: PM SMS");
+assert.equal(derived.eventsByDoctor["SAMANTHA YOUNG"][0].title, "VHH: Night JMS", "a strict First Last value in a recognised row must remain a clinician shift");
 assert.equal(derived.doctors.some((doctor) => doctor.key === "IMPORT NEVER"), false, "timetable names must not become staff records");
 
 const designationCases = [

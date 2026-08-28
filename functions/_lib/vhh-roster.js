@@ -165,12 +165,30 @@ function vhhPeopleFromCell(value) {
     const timings = vhhTimingRanges(line);
     COMMA_NAME.lastIndex = 0;
     let match;
+    let foundCommaName = false;
     while ((match = COMMA_NAME.exec(line))) {
+      foundCommaName = true;
       const person = personFromName(`${match[2]} ${match[1]}`);
       if (!person) continue;
       const timing = timings.length === 1 ? timings[0] : null;
       const existing = byKey.get(person.key);
       if (!existing || (!existing.timing && timing)) byKey.set(person.key, { ...person, timing });
+    }
+    // One live VHH cell uses "First Last" instead of the workbook's usual
+    // "Last, First" convention. Accept a strict two-word name only within a
+    // recognised roster row; timetable prose is removed before this point.
+    if (!foundCommaName) {
+      const candidate = line.replace(/\([^)]*\)/g, "").trim();
+      if (/^[A-Z][A-Za-z'’.-]+\s+[A-Z][A-Za-z'’.-]+$/.test(candidate)
+        && !isNonPersonValue(candidate)
+        && !/^SWING CONSULTANTS$/i.test(candidate)) {
+        const person = personFromName(candidate);
+        if (person) {
+          const timing = timings.length === 1 ? timings[0] : null;
+          const existing = byKey.get(person.key);
+          if (!existing || (!existing.timing && timing)) byKey.set(person.key, { ...person, timing });
+        }
+      }
     }
   }
   return [...byKey.values()];

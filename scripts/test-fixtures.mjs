@@ -113,6 +113,9 @@ assert.equal(
 assert.equal(isApprovedReparseOmission({ source: "DDH", rawValue: "CS - not onsite (standard setting)" }), true, "approved DDH Clinical Support requests should not block a safe reparse");
 assert.equal(isApprovedReparseOmission({ source: "DDH", rawValue: "08H00" }), true, "a DDH VHH late-early time fragment omitted by the contextual parser should not block a safe reparse");
 assert.equal(isApprovedReparseOmission({ source: "DDH", rawValue: "Shift in lieu" }), true, "approved DDH compensatory annotations should not block a safe reparse");
+assert.equal(isApprovedReparseOmission({ source: "VHH", title: "VHH: ON JMS", rawValue: "1230-1330 Mandatory HMO Training\nVHH Meeting Room 1.1" }), true, "legacy VHH timetable prose should not block its instructed removal");
+assert.equal(isApprovedReparseOmission({ source: "VHH", title: "VHH: MED STUDENT", rawValue: "Student, Medical" }), true, "VHH medical-student rows are intentionally omitted");
+assert.equal(isApprovedReparseOmission({ source: "VHH", title: "VHH: Night JMS", rawValue: "Samantha Young" }), false, "a genuine plain-name VHH shift must still block accidental removal");
 assert.deepEqual(
   unresolvedCodeSummary([
     { status: "unknown", source: "DDH", seniority: "HMO", rawValue: "X" },

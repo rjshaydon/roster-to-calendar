@@ -1032,6 +1032,19 @@ const APPROVED_MMC_LEGACY_UNSUPPORTED_LEAVE = new Set([
 export function isApprovedReparseOmission(event, baselineFileId = "") {
   const source = String(event?.source || "").toUpperCase();
   const raw = normalizeRosterRawValue(event.rawValue);
+  if (source === "VHH") {
+    // Product-approved on 2026-08-28: MED STUDENT and the complete JMS
+    // teaching-timetable region are intentionally absent from VHH calendars.
+    // The legacy parser mistook multi-line, no-comma timetable prose for
+    // clinician names. Keep genuine plain "First Last" roster names outside
+    // this approval so an accidental removal still blocks promotion.
+    if (/^VHH:\s*MED STUDENT$/i.test(String(event?.title || "").trim())) return true;
+    const plainName = String(event?.rawValue || "").replace(/\([^)]*\)/g, "").trim();
+    const genuinePlainName = /^[A-Z][A-Za-z'’.-]+\s+[A-Z][A-Za-z'’.-]+$/.test(plainName)
+      && !/^SWING CONSULTANTS$/i.test(plainName);
+    return !String(event?.rawValue || "").includes(",")
+      && !genuinePlainName;
+  }
   // Product-approved on 2026-08-13: this is a DDH roster-writer request
   // ("CS not onsite please"), not Clinical Support work. It is deliberately
   // exact so that real CS, CS onsite, and every other removal still block a
