@@ -1,5 +1,6 @@
 import { buildAutomatedDerivedRosterPayload } from "../functions/_lib/automation-import.js";
 import { buildVhhDerivedRosterPayload, VHH_ROSTER_SOURCE_ID } from "../functions/_lib/vhh-roster.js";
+import { extractVhhRosterWorkbook } from "./vhh-roster-workbook.mjs";
 
 const baseUrl = String(process.env.ROSTER_AUTOMATION_BASE_URL || "https://roster-to-calendar.pages.dev").replace(/\/$/, "");
 const token = String(process.env.ROSTER_AUTOMATION_TOKEN || "");
@@ -46,14 +47,28 @@ async function processRun(run) {
   });
   if (!response.ok) throw new Error(`Roster download returned HTTP ${response.status}.`);
   let payload;
+  let processedFileName = run.fileName || "roster.xlsx";
   if (run.sourceId === VHH_ROSTER_SOURCE_ID) {
-    const extract = await response.json();
-    console.log(`Parsing ${run.fileName || "VHH roster JSON"}.`);
+    const isLegacyJson = /json/i.test(run.contentType || "") || /\.json$/i.test(processedFileName);
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const file = new File([bytes], processedFileName, {
+      type: run.contentType || (isLegacyJson ? "application/json" : "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+      lastModified: Number(run.lastModified || Date.now()),
+    });
+    console.log(`Parsing ${file.name} (${file.size} bytes).`);
+    const extract = isLegacyJson
+      ? JSON.parse(new TextDecoder().decode(bytes))
+      : await extractVhhRosterWorkbook(file, {
+          providerModifiedAt: new Date(file.lastModified).toISOString(),
+          providerVersion: run.providerVersion,
+        });
     payload = buildVhhDerivedRosterPayload({
       extract,
       contentHash: run.contentHash,
       fileId: run.fileId,
       providerVersion: run.providerVersion,
+      fileSize: file.size,
+      lastModified: file.lastModified,
     });
   } else {
     const bytes = new Uint8Array(await response.arrayBuffer());
@@ -92,7 +107,7 @@ async function processRun(run) {
     console.log(`Saved calendar event batch ${Math.floor(index / doctorChunkSize) + 1} of ${Math.ceil(doctorKeys.length / doctorChunkSize)}.`);
   }
   const finished = await postDerived(run, payload, "finish", payload.doctors, {}, {});
-  console.log(`Indexed ${file.name}: ${finished.doctorCount} doctors, ${finished.eventCount} shifts.`);
+  console.log(`Indexed ${processedFileName}: ${finished.doctorCount} doctors, ${finished.eventCount} shifts.`);
 }
 
 async function postDerived(run, payload, phase, doctors, eventsByDoctor, issuesByDoctor) {

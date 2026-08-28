@@ -18,14 +18,14 @@ export function normaliseVhhRosterExtract(payload) {
   return {
     schemaVersion: 1,
     sourceId: VHH_ROSTER_SOURCE_ID,
-    fileName: "Active Medical Roster.json",
+    fileName: safeRosterFileName(payload.fileName),
     providerModifiedAt: String(payload.providerModifiedAt || "").trim(),
     providerVersion: String(payload.providerVersion || "").trim(),
     blocks: normalisedBlocks,
   };
 }
 
-export function buildVhhDerivedRosterPayload({ extract, contentHash, fileId = "", providerVersion = "" } = {}) {
+export function buildVhhDerivedRosterPayload({ extract, contentHash, fileId = "", providerVersion = "", fileSize = 0, lastModified = 0 } = {}) {
   const roster = normaliseVhhRosterExtract(extract);
   if (!roster) throw new Error("VHH roster JSON is invalid.");
   const resolvedFileId = String(fileId || `automation:${VHH_ROSTER_SOURCE_ID}:${String(contentHash || "").slice(0, 24)}`);
@@ -69,8 +69,8 @@ export function buildVhhDerivedRosterPayload({ extract, contentHash, fileId = ""
       name: roster.fileName,
       sourceType: "vhh",
       sourceId: VHH_ROSTER_SOURCE_ID,
-      size: new TextEncoder().encode(JSON.stringify(roster)).byteLength,
-      lastModified: Date.parse(roster.providerModifiedAt) || Date.now(),
+      size: Number(fileSize) > 0 ? Number(fileSize) : new TextEncoder().encode(JSON.stringify(roster)).byteLength,
+      lastModified: Number(lastModified) > 0 ? Number(lastModified) : Date.parse(roster.providerModifiedAt) || Date.now(),
       addedAt,
       uploadedAt: addedAt,
       uploadedBy: `automation:${VHH_ROSTER_SOURCE_ID}`,
@@ -81,6 +81,11 @@ export function buildVhhDerivedRosterPayload({ extract, contentHash, fileId = ""
     issuesByDoctor: Object.fromEntries(doctors.map((doctor) => [doctor.key, []])),
     eventCount,
   };
+}
+
+function safeRosterFileName(value) {
+  const name = String(value || "").trim().split(/[\\/]/).pop();
+  return name && /\.(?:xlsx|json)$/i.test(name) ? name : "Active Medical Roster.json";
 }
 
 function normaliseBlock(value) {

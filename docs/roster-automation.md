@@ -17,6 +17,7 @@ Supported `sourceId` values are:
 | Monash Adults | `monash-adults` | MMC |
 | Monash Paediatrics | `monash-paeds` | MCH |
 | Dandenong Findmyshift | `dandenong-findmyshift` | DDH |
+| VHH Active Medical Roster | `vhh-active-medical-roster` | VHH |
 
 Casey deliberately has no automated source. It remains a Creator-only manual upload.
 
@@ -83,6 +84,14 @@ Use this JSON body (replace the dynamic-content fields with the corresponding Po
 ```
 
 Set the request header `Authorization` to `Bearer <the Cloudflare secret>`. Limit the flow to roster-folder maintainers and turn on failure notifications. Test by updating a copy first; the ingress rejects a file whose detected roster type does not match its source id.
+
+The VHH roster uses the same raw-workbook envelope with `sourceId` set to
+`vhh-active-medical-roster`. Its automatic flow is restricted to
+`Shared Documents/Medical/Rosters/Active Medical Roster.xlsx`; its manual flow
+retrieves metadata and content for that same path. The original workbook is
+retained in R2 and the background processor extracts the visible `SHIFT LABEL`
+blocks before applying the VHH event adapter. The earlier Office Script JSON
+endpoint remains available only as a temporary rollback path.
 
 The `providerVersion` value must be the SharePoint file ETag/version, not the flow run time. It must remain unchanged until that specific file changes. Filename plus provider version is the primary change identity, allowing different term files to have the same version number without being confused with one another.
 
