@@ -25,3 +25,16 @@ preview_bucket_name = "roster-converter-cache-preview"
 ROSTER_AUTOMATION_BASE_URL = "https://vhh.roster-to-calendar.pages.dev"
 ROSTER_AUTOMATION_WORKFLOW_TARGET = "preview"
 ROSTER_GITHUB_WORKFLOW_REF = "VHH"
+
+[[env.preview.d1_databases]]
+binding = "ROSTER_DB"
+database_name = "roster-converter-calendar-preview"
+database_id = "541d7779-a43a-4603-a4ab-c95e9b4b015d"
+
+[[env.preview.r2_buckets]]
+binding = "ROSTER_FILES"
+bucket_name = "roster-converter-source-files-preview"
+
+[[env.preview.r2_buckets]]
+binding = "ROSTER_CACHE"
+bucket_name = "roster-converter-cache-preview"
