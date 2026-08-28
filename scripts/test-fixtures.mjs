@@ -9,7 +9,7 @@ import { assertFindmyshiftDandenongAssignments, extractShiftRows, findmyshiftCon
 import { buildAutomatedDerivedRosterPayload } from "../functions/_lib/automation-import.js";
 import { australianTermStartForDate, buildPreviewFromDerivedEvents, findRosterSyncByProviderVersion, isApprovedReparseOmission, sameRosterOccurrence, storeCachedSnapshot } from "../functions/_lib/d1-calendar.js";
 import { recordRosterDispatchLifecycle, requestQueuedRosterProcessing } from "../functions/_lib/automation-dispatch.js";
-import { applyRosterEventSeniorities, attachFindmyshiftStaffIds, buildRosterView, customEventsToEvents, doctorOptions, filterCrossFacilityVhhRosterEvents, findmyshiftProviderStaffOptions, findmyshiftRosteredStaffOptions, isCrossFacilityVhhRosterEvent, mergeMembershipDoctors, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
+import { applyRosterEventSeniorities, attachFindmyshiftStaffIds, buildRosterView, customEventsToEvents, doctorOptions, filterCalendarRosterEvents, filterCrossFacilityVhhRosterEvents, findmyshiftProviderStaffOptions, findmyshiftRosteredStaffOptions, isCrossFacilityVhhRosterEvent, mergeMembershipDoctors, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
 import { customEventsToEvents as serverCustomEventsToEvents } from "../functions/_lib/roster.js";
 import { parserResultDelta, unresolvedCodeSummary } from "./parser-parity.mjs";
 
@@ -46,6 +46,16 @@ assert.deepEqual(
   ]).map((event) => event.id),
   ["vhh", "ddh", "custom"],
   "calendar filtering should remove only VHH allocations sourced from a different roster",
+);
+assert.deepEqual(
+  filterCalendarRosterEvents([
+    { id: "ddh-cs-note", source: "DDH", doctorKey: "JAY CASH", title: "DDH: CS", rawValue: "CS WBA coordinator workshop", start: "2026-09-23", end: "2026-09-24", allDay: true, seniority: "SMS" },
+    { id: "ddh-cs", source: "DDH", doctorKey: "JAY CASH", title: "DDH: CS", rawValue: "Clinical Support", start: "2026-09-23", end: "2026-09-24", allDay: true, seniority: "SMS" },
+    { id: "ddh-cs-other-doctor", source: "DDH", doctorKey: "OTHER DOCTOR", title: "DDH: CS", rawValue: "Clinical Support", start: "2026-09-23", end: "2026-09-24", allDay: true, seniority: "SMS" },
+    { id: "ddh-cs-timed", source: "DDH", doctorKey: "JAY CASH", title: "DDH: CS", rawValue: "Clinical Support", start: "2026-09-23T08:00:00+10:00", end: "2026-09-23T17:30:00+10:00", allDay: false, seniority: "SMS" },
+  ]).map((event) => event.id),
+  ["ddh-cs", "ddh-cs-other-doctor", "ddh-cs-timed"],
+  "equivalent DDH shifts should collapse per clinician and day while distinct clinicians or timings remain",
 );
 assert.deepEqual(
   mergeMembershipDoctors(

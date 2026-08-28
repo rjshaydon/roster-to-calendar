@@ -618,6 +618,54 @@ export function filterCrossFacilityVhhRosterEvents(events = []) {
   return (Array.isArray(events) ? events : []).filter((event) => !isCrossFacilityVhhRosterEvent(event));
 }
 
+// FindMyShift can publish more than one descriptive row for the same DDH
+// allocation. For example, "CS WBA coordinator workshop" followed by
+// "Clinical Support" historically produced two identical all-day DDH: CS
+// events. Collapse only equivalent DDH shifts for the same clinician, date,
+// normalized title and timing; differently timed or titled shifts remain.
+export function filterDuplicateDdhRosterEvents(events = []) {
+  const filtered = [];
+  const indexByOccurrence = new Map();
+  for (const event of Array.isArray(events) ? events : []) {
+    const occurrence = duplicateDdhRosterOccurrenceKey(event);
+    if (!occurrence || !indexByOccurrence.has(occurrence)) {
+      if (occurrence) indexByOccurrence.set(occurrence, filtered.length);
+      filtered.push(event);
+      continue;
+    }
+    const existingIndex = indexByOccurrence.get(occurrence);
+    if (ddhDuplicateEventPreference(event) > ddhDuplicateEventPreference(filtered[existingIndex])) {
+      filtered[existingIndex] = event;
+    }
+  }
+  return filtered;
+}
+
+export function filterCalendarRosterEvents(events = []) {
+  return filterDuplicateDdhRosterEvents(filterCrossFacilityVhhRosterEvents(events));
+}
+
+function duplicateDdhRosterOccurrenceKey(event) {
+  const source = String(event?.source || event?.sourceType || "").trim().toUpperCase();
+  const title = cleanText(event?.title || "").replace(/\s+/g, " ").trim().toUpperCase();
+  const doctor = normalizeName(event?.doctorKey || event?.displayName || "");
+  const day = String(event?.start || "").slice(0, 10);
+  if (source !== "DDH" || !title.startsWith("DDH:") || !doctor || !day) return "";
+  const timing = event?.allDay === true
+    ? "ALL-DAY"
+    : `${String(event?.start || "")}|${String(event?.end || "")}`;
+  return `${doctor}|${day}|${title}|${timing}`;
+}
+
+function ddhDuplicateEventPreference(event) {
+  const rawValue = cleanText(event?.rawValue || "");
+  let score = 0;
+  if (!isIgnoredRosterIssueValue("DDH", rawValue, event?.seniority || UNKNOWN_SENIORITY)) score += 10;
+  if (/^(?:CS|C\/S|CLINICAL SUPPORT)$/i.test(rawValue)) score += 2;
+  if (String(event?.status || "").toLowerCase() !== "unknown") score += 1;
+  return score;
+}
+
 // Retained roster files can contain diagnostics produced before a later parser
 // rule learnt that a value was merely a roster-writer note. The admin review
 // must apply the same exclusion decision as a fresh parse, otherwise it keeps

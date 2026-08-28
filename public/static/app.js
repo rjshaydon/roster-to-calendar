@@ -7,7 +7,7 @@ import {
   findmyshiftProviderStaffOptions,
   applyRosterEventSeniorities,
   exportIcs,
-  filterCrossFacilityVhhRosterEvents,
+  filterCalendarRosterEvents,
   isIgnoredRosterIssueValue,
   parseUploadForm,
   parserRuleDefaults,
@@ -15555,7 +15555,7 @@ function sanitizeWorkspaceSnapshot(value) {
     profileCoverage: value.profileCoverage && typeof value.profileCoverage === "object" ? JSON.parse(JSON.stringify(value.profileCoverage)) : null,
   };
   const existingEvents = Array.isArray(snapshot.preview?.events) ? snapshot.preview.events : [];
-  const events = filterCrossFacilityVhhRosterEvents(existingEvents);
+  const events = filterCalendarRosterEvents(existingEvents);
   if (events.length !== existingEvents.length) {
     const eventIds = new Set(events.map((event) => String(event?.id || "")).filter(Boolean));
     snapshot.preview = {

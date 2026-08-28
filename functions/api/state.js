@@ -1,4 +1,4 @@
-import { applyEventOverrides, customEventsToEvents, defaultSettings, filterCrossFacilityVhhRosterEvents, inspectImportRecord, isIgnoredRosterIssueValue, normalizeRosterName, previewSummary } from "../_lib/roster.js";
+import { applyEventOverrides, customEventsToEvents, defaultSettings, filterCalendarRosterEvents, inspectImportRecord, isIgnoredRosterIssueValue, normalizeRosterName, previewSummary } from "../_lib/roster.js";
 import { AUTOMATION_SOURCES } from "../_lib/automation-import.js";
 import { DDH_CONTACT_LIST_SOURCE_ID, MMC_CONTACT_LIST_SOURCE_ID, attachContactAllocations, contactAreaForSource, contactExtractHasExpired, contactOperationalDate, contactsAfterShiftChange, normaliseContactListExtract, shouldCarryPreviousNightContacts, shouldUseCurrentExtractForPreviousNight } from "../../public/static/contact-allocations.js";
 import { requestQueuedRosterProcessing } from "../_lib/automation-dispatch.js";
@@ -3880,7 +3880,7 @@ async function loadFastAccountSnapshotPayload(context, params = {}) {
     const cachedSnapshot = await loadCachedSnapshot(cacheBucket, registry.artifactKey).catch(() => null);
     const r2ReadMs = Date.now() - r2StartedAt;
     if (cachedSnapshot) {
-      const returnedSnapshot = filterSnapshotCrossFacilityVhhEvents(cachedSnapshot);
+      const returnedSnapshot = filterSnapshotCalendarEvents(cachedSnapshot);
       return {
         ok: true,
         snapshot: returnedSnapshot,
@@ -5296,14 +5296,14 @@ async function filterSnapshotPreviewIssuesForOwner(db, snapshot, ownerEmail = ""
 }
 
 async function filterCachedCalendarSnapshot(db, snapshot, ownerEmail = "", record = null) {
-  return filterSnapshotCrossFacilityVhhEvents(
+  return filterSnapshotCalendarEvents(
     await filterSnapshotPreviewIssuesForOwner(db, snapshot, ownerEmail, record),
   );
 }
 
-function filterSnapshotCrossFacilityVhhEvents(snapshot) {
+function filterSnapshotCalendarEvents(snapshot) {
   const existingEvents = Array.isArray(snapshot?.preview?.events) ? snapshot.preview.events : [];
-  const events = filterCrossFacilityVhhRosterEvents(existingEvents);
+  const events = filterCalendarRosterEvents(existingEvents);
   if (events.length === existingEvents.length) return snapshot;
   const eventIds = new Set(events.map((event) => String(event?.id || "")).filter(Boolean));
   return {
