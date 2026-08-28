@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { buildVhhDerivedRosterPayload, normaliseVhhRosterExtract, VHH_ROSTER_SOURCE_ID } from "../functions/_lib/vhh-roster.js";
 import { normaliseContactListExtract, VHH_CONTACT_LIST_SOURCE_ID } from "../public/static/contact-allocations.js";
 import * as XLSX from "xlsx";
@@ -6,6 +7,8 @@ import { extractVhhRosterWorkbook } from "./vhh-roster-workbook.mjs";
 import { automationSourceDefinition } from "../functions/_lib/automation-import.js";
 
 assert.equal(automationSourceDefinition(VHH_ROSTER_SOURCE_ID)?.provider, "sharepoint", "VHH must use the raw SharePoint workbook ingress");
+const appSource = await readFile(new URL("../public/static/app.js", import.meta.url), "utf8");
+assert.match(appSource, /function normalizedDoctorSourceTypes[\s\S]*?item === "vhh"/, "VHH must remain a valid source when opening an individual roster calendar");
 
 const rosterExtract = {
   sourceId: VHH_ROSTER_SOURCE_ID,

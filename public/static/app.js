@@ -7209,7 +7209,7 @@ function buildDoctorProfileId(doctor) {
 function normalizedDoctorSourceTypes(doctor) {
   const values = Array.isArray(doctor?.sourceTypes) ? doctor.sourceTypes : [];
   if (doctor?.sourceType) values.push(doctor.sourceType);
-  return [...new Set(values.map((item) => String(item || "").toLowerCase()).filter((item) => item === "mmc" || item === "ddh" || item === "casey" || item === "mch"))];
+  return [...new Set(values.map((item) => String(item || "").toLowerCase()).filter((item) => item === "mmc" || item === "ddh" || item === "casey" || item === "mch" || item === "vhh"))];
 }
 
 function doctorProfileSourceTypes(doctor) {
