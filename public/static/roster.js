@@ -599,6 +599,25 @@ export function normalizeRosterName(value) {
   return normalizeName(value);
 }
 
+// Some non-VHH rosters repeat a VHH allocation as a safety/availability
+// annotation. The VHH roster is authoritative for that work, so these
+// cross-facility rows must never become a second calendar event. Keep this
+// guard at the calendar boundary as well as in the individual parsers so
+// legacy D1 rows and cached snapshots are corrected without a re-upload.
+export function isCrossFacilityVhhRosterEvent(event) {
+  const source = String(event?.source || event?.sourceType || "").trim().toUpperCase();
+  if (!source || source === "VHH" || !["MMC", "DDH", "CASEY", "MCH"].includes(source)) return false;
+  const text = cleanText(`${event?.title || ""} ${event?.rawValue || ""}`)
+    .replace(/\s+/g, " ")
+    .trim()
+    .toUpperCase();
+  return /\bVHH\b|\bVHH(?:AM|PM|CS)\b/.test(text);
+}
+
+export function filterCrossFacilityVhhRosterEvents(events = []) {
+  return (Array.isArray(events) ? events : []).filter((event) => !isCrossFacilityVhhRosterEvent(event));
+}
+
 // Retained roster files can contain diagnostics produced before a later parser
 // rule learnt that a value was merely a roster-writer note. The admin review
 // must apply the same exclusion decision as a fresh parse, otherwise it keeps

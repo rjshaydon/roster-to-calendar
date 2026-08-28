@@ -1,6 +1,7 @@
 import {
   buildRosterViewFromStoredImports,
   defaultSettings,
+  filterCrossFacilityVhhRosterEvents,
   previewSummary,
   serializeEvent,
 } from "./roster.js";
@@ -1806,10 +1807,10 @@ export async function queryDoctorEvents(db, doctorKeys, options = {}) {
     ORDER BY roster_events.start_ts, roster_events.source_type, roster_events.title
   `).bind(...keys, end, start).all();
   const designationEvents = await queryFacilityDesignationLeaveEvents(db, keys, { startDate: start, endDate: end });
-  return mergeDuplicateLeaveEvents([
+  return filterCrossFacilityVhhRosterEvents(mergeDuplicateLeaveEvents([
     ...(rows.results || []).map((row) => parseEvent(row.event_json)).filter(Boolean),
     ...designationEvents,
-  ]);
+  ]));
 }
 
 // Login and At-a-glance authorization need only the signed-in clinician's
@@ -1903,10 +1904,10 @@ export async function queryDoctorEventsForFileDoctorPairs(db, pairs = [], option
       endDate: end,
     },
   );
-  return mergeDuplicateLeaveEvents([
+  return filterCrossFacilityVhhRosterEvents(mergeDuplicateLeaveEvents([
     ...(rows.results || []).map((row) => parseEvent(row.event_json)).filter(Boolean),
     ...designationEvents,
-  ]);
+  ]));
 }
 
 export async function queryDoctorIssues(db, doctorKeys, options = {}) {
@@ -4285,7 +4286,7 @@ function escapeLike(value) {
 }
 
 export function buildPreviewFromDerivedEvents(events, options = {}) {
-  const safeEvents = mergeDuplicateLeaveEvents(events || []).map((event) => ({ ...event }));
+  const safeEvents = filterCrossFacilityVhhRosterEvents(mergeDuplicateLeaveEvents(events || [])).map((event) => ({ ...event }));
   const issues = (Array.isArray(options.issues) ? options.issues : []).map(sanitizeIssue).filter(Boolean);
   return {
     ...previewSummary(safeEvents),

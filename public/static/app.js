@@ -7,6 +7,7 @@ import {
   findmyshiftProviderStaffOptions,
   applyRosterEventSeniorities,
   exportIcs,
+  filterCrossFacilityVhhRosterEvents,
   isIgnoredRosterIssueValue,
   parseUploadForm,
   parserRuleDefaults,
@@ -15553,6 +15554,18 @@ function sanitizeWorkspaceSnapshot(value) {
     insightCache: sanitizeInsightCache(value.insightCache),
     profileCoverage: value.profileCoverage && typeof value.profileCoverage === "object" ? JSON.parse(JSON.stringify(value.profileCoverage)) : null,
   };
+  const existingEvents = Array.isArray(snapshot.preview?.events) ? snapshot.preview.events : [];
+  const events = filterCrossFacilityVhhRosterEvents(existingEvents);
+  if (events.length !== existingEvents.length) {
+    const eventIds = new Set(events.map((event) => String(event?.id || "")).filter(Boolean));
+    snapshot.preview = {
+      ...snapshot.preview,
+      ...previewSummary(events),
+      events,
+      review: (Array.isArray(snapshot.preview.review) ? snapshot.preview.review : [])
+        .filter((item) => !item?.id || eventIds.has(String(item.id))),
+    };
+  }
   snapshot.calendarRevision = String(value.calendarRevision || "");
   snapshot.cacheKey = String(value.cacheKey || "");
   snapshot.cachedAt = String(value.cachedAt || "");

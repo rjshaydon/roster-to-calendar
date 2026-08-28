@@ -1,4 +1,4 @@
-import { applyEventOverrides, customEventsToEvents, defaultSettings, inspectImportRecord, isIgnoredRosterIssueValue, normalizeRosterName } from "../_lib/roster.js";
+import { applyEventOverrides, customEventsToEvents, defaultSettings, filterCrossFacilityVhhRosterEvents, inspectImportRecord, isIgnoredRosterIssueValue, normalizeRosterName, previewSummary } from "../_lib/roster.js";
 import { AUTOMATION_SOURCES } from "../_lib/automation-import.js";
 import { DDH_CONTACT_LIST_SOURCE_ID, MMC_CONTACT_LIST_SOURCE_ID, attachContactAllocations, contactAreaForSource, contactExtractHasExpired, contactOperationalDate, contactsAfterShiftChange, normaliseContactListExtract, shouldCarryPreviousNightContacts, shouldUseCurrentExtractForPreviousNight } from "../../public/static/contact-allocations.js";
 import { requestQueuedRosterProcessing } from "../_lib/automation-dispatch.js";
@@ -3795,7 +3795,7 @@ async function loadAccountSnapshotPayload(context, params = {}) {
       revision: calendarRevision,
       reason: "stale-read",
     }),
-    filterSnapshot: (snapshot) => filterSnapshotPreviewIssuesForOwner(db, snapshot, targetRecord.email, targetRecord),
+    filterSnapshot: (snapshot) => filterCachedCalendarSnapshot(db, snapshot, targetRecord.email, targetRecord),
     buildInline: () => buildAndStoreAccountSnapshot(context, {
       targetRecord,
       prepared,
@@ -3880,18 +3880,19 @@ async function loadFastAccountSnapshotPayload(context, params = {}) {
     const cachedSnapshot = await loadCachedSnapshot(cacheBucket, registry.artifactKey).catch(() => null);
     const r2ReadMs = Date.now() - r2StartedAt;
     if (cachedSnapshot) {
+      const returnedSnapshot = filterSnapshotCrossFacilityVhhEvents(cachedSnapshot);
       return {
         ok: true,
-        snapshot: cachedSnapshot,
+        snapshot: returnedSnapshot,
         snapshotAvailable: true,
         snapshotStale: false,
-        snapshotBuiltAt: registry.builtAt || cachedSnapshot?.builtAt || "",
+        snapshotBuiltAt: registry.builtAt || returnedSnapshot?.builtAt || "",
         calendarRevision: registryRevision,
         registryLookupMs,
         r2ReadMs,
         snapshotLookupMs: Date.now() - lookupStartedAt,
         snapshotBuildMs: 0,
-        snapshotBytes: Number(registry?.sizeBytes || JSON.stringify(cachedSnapshot).length),
+        snapshotBytes: Number(registry?.sizeBytes || JSON.stringify(returnedSnapshot).length),
         revisionMs: 0,
         revisionSkipped: true,
         validationDeferred,
@@ -5142,7 +5143,7 @@ async function loadDoctorProfileSnapshotPayload(context, profile, ownerEmail = "
     cachedRevision: options.cachedRevision,
     allowInlineBuild: options.allowInlineBuild !== false,
     scheduleRebuild: options.skipRebuild === true ? null : () => scheduleDoctorProfileSnapshotWarmup(context, profile, ownerEmail, { reason: "stale-read" }),
-    filterSnapshot: (snapshot) => filterSnapshotPreviewIssuesForOwner(db, snapshot, ownerEmail),
+    filterSnapshot: (snapshot) => filterCachedCalendarSnapshot(db, snapshot, ownerEmail),
     buildInline: () => buildAndStoreDoctorProfileSnapshot(context, {
       profile,
       ownerEmail,
@@ -5290,6 +5291,29 @@ async function filterSnapshotPreviewIssuesForOwner(db, snapshot, ownerEmail = ""
     preview: {
       ...snapshot.preview,
       issues,
+    },
+  };
+}
+
+async function filterCachedCalendarSnapshot(db, snapshot, ownerEmail = "", record = null) {
+  return filterSnapshotCrossFacilityVhhEvents(
+    await filterSnapshotPreviewIssuesForOwner(db, snapshot, ownerEmail, record),
+  );
+}
+
+function filterSnapshotCrossFacilityVhhEvents(snapshot) {
+  const existingEvents = Array.isArray(snapshot?.preview?.events) ? snapshot.preview.events : [];
+  const events = filterCrossFacilityVhhRosterEvents(existingEvents);
+  if (events.length === existingEvents.length) return snapshot;
+  const eventIds = new Set(events.map((event) => String(event?.id || "")).filter(Boolean));
+  return {
+    ...snapshot,
+    preview: {
+      ...snapshot.preview,
+      ...previewSummary(events),
+      events,
+      review: (Array.isArray(snapshot.preview.review) ? snapshot.preview.review : [])
+        .filter((item) => !item?.id || eventIds.has(String(item.id))),
     },
   };
 }

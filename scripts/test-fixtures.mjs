@@ -9,7 +9,7 @@ import { assertFindmyshiftDandenongAssignments, extractShiftRows, findmyshiftCon
 import { buildAutomatedDerivedRosterPayload } from "../functions/_lib/automation-import.js";
 import { australianTermStartForDate, buildPreviewFromDerivedEvents, findRosterSyncByProviderVersion, isApprovedReparseOmission, sameRosterOccurrence, storeCachedSnapshot } from "../functions/_lib/d1-calendar.js";
 import { recordRosterDispatchLifecycle, requestQueuedRosterProcessing } from "../functions/_lib/automation-dispatch.js";
-import { applyRosterEventSeniorities, attachFindmyshiftStaffIds, buildRosterView, customEventsToEvents, doctorOptions, findmyshiftProviderStaffOptions, findmyshiftRosteredStaffOptions, mergeMembershipDoctors, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
+import { applyRosterEventSeniorities, attachFindmyshiftStaffIds, buildRosterView, customEventsToEvents, doctorOptions, filterCrossFacilityVhhRosterEvents, findmyshiftProviderStaffOptions, findmyshiftRosteredStaffOptions, isCrossFacilityVhhRosterEvent, mergeMembershipDoctors, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
 import { customEventsToEvents as serverCustomEventsToEvents } from "../functions/_lib/roster.js";
 import { parserResultDelta, unresolvedCodeSummary } from "./parser-parity.mjs";
 
@@ -33,6 +33,19 @@ assert.equal(
   australianTermStartForDate("2026-08-17"),
   "2026-08-03",
   "effective staff seniorities should use the same Term 3 boundary as the At a glance editor",
+);
+assert.equal(isCrossFacilityVhhRosterEvent({ source: "DDH", title: "DDH: VHH AM", rawValue: "VHH AM" }), true, "a VHH AM allocation repeated on the DDH roster must be excluded");
+assert.equal(isCrossFacilityVhhRosterEvent({ source: "DDH", title: "DDH: VHH CS", rawValue: "VHH CS" }), true, "a VHH Clinical Support allocation repeated on the DDH roster must be excluded");
+assert.equal(isCrossFacilityVhhRosterEvent({ source: "VHH", title: "VHH: AM SMS", rawValue: "AM" }), false, "the authoritative VHH event must remain in the calendar");
+assert.deepEqual(
+  filterCrossFacilityVhhRosterEvents([
+    { id: "ddh-vhh", source: "DDH", title: "DDH: VHH AM", rawValue: "VHH AM" },
+    { id: "vhh", source: "VHH", title: "VHH: AM SMS", rawValue: "AM" },
+    { id: "ddh", source: "DDH", title: "DDH: Orange AM", rawValue: "Orange AM" },
+    { id: "custom", source: "custom", title: "VHH appointment", rawValue: "" },
+  ]).map((event) => event.id),
+  ["vhh", "ddh", "custom"],
+  "calendar filtering should remove only VHH allocations sourced from a different roster",
 );
 assert.deepEqual(
   mergeMembershipDoctors(
