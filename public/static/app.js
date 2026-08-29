@@ -8,6 +8,7 @@ import {
   applyRosterEventSeniorities,
   exportIcs,
   filterCalendarRosterEvents,
+  clinicalSupportRosterMode,
   isIgnoredRosterIssueValue,
   parseUploadForm,
   parserRuleDefaults,
@@ -4737,8 +4738,7 @@ function daysBetween(start, end) {
 }
 
 function isClinicalSupportEvent(event) {
-  const text = `${event?.title || ""} ${event?.rawValue || ""}`.toLowerCase();
-  return text.includes("clinical support") || /\bcs(?:o|m)?\b/.test(text);
+  return Boolean(clinicalSupportRosterMode(event));
 }
 
 function eventTone(event) {
@@ -10545,9 +10545,12 @@ function renderFacilityOverviewOnShiftResults(rows) {
 }
 
 function renderFacilityOverviewOnShiftPeriod(assignments, options = {}) {
-  if (facilityOverviewIsDdhPeriod(assignments)) return renderFacilityOverviewDdhOnShiftPeriod(assignments, options);
-  if (facilityOverviewIsMmcPeriod(assignments)) return renderFacilityOverviewMmcOnShiftPeriod(assignments, options);
-  return renderFacilityOverviewGenericOnShiftPeriod(assignments, options);
+  const clinicalSupport = (assignments || []).filter(facilityOverviewIsClinicalSupportAssignment);
+  const workingAssignments = (assignments || []).filter((assignment) => !clinicalSupport.includes(assignment));
+  const clinicalSupportCard = renderFacilityOverviewClinicalSupportCard(clinicalSupport, options);
+  if (facilityOverviewIsDdhPeriod(assignments)) return `${clinicalSupportCard}${renderFacilityOverviewDdhOnShiftPeriod(workingAssignments, options)}`;
+  if (facilityOverviewIsMmcPeriod(assignments)) return `${clinicalSupportCard}${renderFacilityOverviewMmcOnShiftPeriod(workingAssignments, options)}`;
+  return `${clinicalSupportCard}${renderFacilityOverviewGenericOnShiftPeriod(workingAssignments, options)}`;
 }
 
 function facilityOverviewIsDdhPeriod(assignments) {
@@ -10559,13 +10562,11 @@ function facilityOverviewIsMmcPeriod(assignments) {
 }
 
 function renderFacilityOverviewDdhOnShiftPeriod(assignments, options = {}) {
-  const clinicalSupport = (assignments || []).filter(facilityOverviewIsClinicalSupportAssignment);
-  const workingAssignments = (assignments || []).filter((assignment) => !clinicalSupport.includes(assignment));
   if (options.period === "Night") {
-    return `${renderFacilityOverviewDdhNightPeriod(workingAssignments, options)}${renderFacilityOverviewClinicalSupportCard(clinicalSupport, options)}`;
+    return renderFacilityOverviewDdhNightPeriod(assignments, options);
   }
   const handled = new Set();
-  const teamAssignments = (team) => workingAssignments.filter((assignment) => String(assignment.team || "").trim().toLowerCase() === team);
+  const teamAssignments = (team) => assignments.filter((assignment) => String(assignment.team || "").trim().toLowerCase() === team);
   const orange = teamAssignments("orange");
   const silver = teamAssignments("silver");
   const fastTrack = teamAssignments("fast track");
@@ -10573,8 +10574,8 @@ function renderFacilityOverviewDdhOnShiftPeriod(assignments, options = {}) {
   const ssu = teamAssignments("ssu");
   const ssuSms = ssu.filter((assignment) => String(assignment.person?.seniority || assignment.role || "").trim().toUpperCase() === "SMS");
   const ssuInternHmo = ssu.filter((assignment) => !ssuSms.includes(assignment));
-  const careCo = workingAssignments.filter((assignment) => facilityOverviewServiceKey(assignment) === "care-co");
-  const gap = workingAssignments.filter((assignment) => facilityOverviewServiceKey(assignment) === "gap");
+  const careCo = assignments.filter((assignment) => facilityOverviewServiceKey(assignment) === "care-co");
+  const gap = assignments.filter((assignment) => facilityOverviewServiceKey(assignment) === "gap");
   for (const assignment of [...orange, ...silver, ...fastTrack, ...avao, ...ssu, ...careCo, ...gap]) handled.add(assignment);
 
   const renderPlacedCard = (stream, items, column) => items.length
@@ -10595,7 +10596,7 @@ function renderFacilityOverviewDdhOnShiftPeriod(assignments, options = {}) {
       renderPlacedCard("SSU", ssuSms, 2),
       renderPlacedCard("SSU", ssuInternHmo, ssuSms.length ? 3 : 2),
     ].join("");
-  const remaining = workingAssignments.filter((assignment) => !handled.has(assignment));
+  const remaining = assignments.filter((assignment) => !handled.has(assignment));
   const serviceGroups = [
     ["ED Care-Co", "care-co", careCo],
     ["GAP / Geriatric AH", "gap", gap],
@@ -10604,7 +10605,7 @@ function renderFacilityOverviewDdhOnShiftPeriod(assignments, options = {}) {
   return `${mainRow ? `<div class="facility-overview-ddh-row facility-overview-ddh-main-row">${mainRow}</div>` : ""}
     ${supportRow ? `<div class="facility-overview-ddh-row facility-overview-ddh-support-row">${supportRow}</div>` : ""}
     ${remaining.length ? renderFacilityOverviewGenericOnShiftPeriod(remaining, options) : ""}
-    ${serviceCard}${renderFacilityOverviewClinicalSupportCard(clinicalSupport, options)}`;
+    ${serviceCard}`;
 }
 
 function renderFacilityOverviewDdhNightPeriod(assignments, options = {}) {
@@ -10623,12 +10624,10 @@ function renderFacilityOverviewDdhNightPeriod(assignments, options = {}) {
 }
 
 function renderFacilityOverviewMmcOnShiftPeriod(assignments, options = {}) {
-  const clinicalSupport = (assignments || []).filter(facilityOverviewIsClinicalSupportAssignment);
-  const workingAssignments = (assignments || []).filter((assignment) => !clinicalSupport.includes(assignment));
-  const geriatrician = workingAssignments.filter((assignment) => facilityOverviewServiceKey(assignment) === "geriatrics");
-  const cart = workingAssignments.filter((assignment) => facilityOverviewServiceKey(assignment) === "cart");
+  const geriatrician = assignments.filter((assignment) => facilityOverviewServiceKey(assignment) === "geriatrics");
+  const cart = assignments.filter((assignment) => facilityOverviewServiceKey(assignment) === "cart");
   const services = new Set([...geriatrician, ...cart]);
-  const regular = workingAssignments.filter((assignment) => !services.has(assignment));
+  const regular = assignments.filter((assignment) => !services.has(assignment));
   const regularCards = options.period === "Night"
     ? renderFacilityOverviewMmcNightPeriod(regular, options)
     : renderFacilityOverviewGenericOnShiftPeriod(regular, options);
@@ -10637,7 +10636,7 @@ function renderFacilityOverviewMmcOnShiftPeriod(assignments, options = {}) {
     ["CART clinician", "cart", cart],
   ];
   const serviceCard = renderFacilityOverviewGroupedServiceCard("Geriatrician / CART", serviceGroups, options);
-  return `${regularCards}${serviceCard}${renderFacilityOverviewClinicalSupportCard(clinicalSupport, options)}`;
+  return `${regularCards}${serviceCard}`;
 }
 
 function renderFacilityOverviewMmcNightPeriod(assignments, options = {}) {
@@ -10664,14 +10663,11 @@ function facilityOverviewAssignmentText(assignment) {
 }
 
 function facilityOverviewIsClinicalSupportAssignment(assignment) {
-  const text = facilityOverviewAssignmentText(assignment);
-  return text.includes("clinical support") || /\bcs(?:o|m)?\b/.test(text);
+  return Boolean(clinicalSupportRosterMode(assignment));
 }
 
 function facilityOverviewIsOnsiteClinicalSupportAssignment(assignment) {
-  if (!facilityOverviewIsClinicalSupportAssignment(assignment)) return false;
-  const text = facilityOverviewAssignmentText(assignment).replace(/on[\s-]*site/g, "onsite");
-  return !/\bnot\s+onsite\b/.test(text) && /\bonsite\b/.test(text);
+  return clinicalSupportRosterMode(assignment) === "onsite";
 }
 
 function facilityOverviewServiceKey(assignment) {
@@ -10769,20 +10765,32 @@ function renderFacilityOverviewOnShiftNames(assignments, options = {}) {
   for (const assignment of assignments || []) {
     const person = assignment.person;
     if (!person) continue;
-    const existing = byPerson.get(person.doctorKey) || { person, specialTimes: new Set(), onsite: false };
+    const existing = byPerson.get(person.doctorKey) || { person, specialTimes: new Set(), clinicalSupportMode: "" };
     if (assignment.specialTime) existing.specialTimes.add(assignment.specialTime);
-    if (facilityOverviewIsOnsiteClinicalSupportAssignment(assignment)) existing.onsite = true;
+    const clinicalSupportMode = clinicalSupportRosterMode(assignment);
+    if (clinicalSupportModeRank(clinicalSupportMode) < clinicalSupportModeRank(existing.clinicalSupportMode)) existing.clinicalSupportMode = clinicalSupportMode;
     byPerson.set(person.doctorKey, existing);
   }
-  return `<div class="facility-overview-on-shift-names">${[...byPerson.values()].sort((left, right) => Number(right.onsite) - Number(left.onsite) || compareFacilityOverviewPeople(left.person, right.person)).map(({ person, specialTimes, onsite }) => {
+  return `<div class="facility-overview-on-shift-names">${[...byPerson.values()].sort((left, right) => clinicalSupportModeRank(left.clinicalSupportMode) - clinicalSupportModeRank(right.clinicalSupportMode) || compareFacilityOverviewPeople(left.person, right.person)).map(({ person, specialTimes, clinicalSupportMode }) => {
     const sourceAssignment = (assignments || []).find((assignment) => assignment.person?.doctorKey === person.doctorKey);
     const allocation = options.hideContactAllocation ? null : sourceAssignment?.contactAllocation;
     const specialTime = options.showSpecialTimes !== false && specialTimes.size
       ? `<small>${escapeHtml([...specialTimes].join(" · "))}</small>`
       : "";
-    const onsiteLabel = options.clinicalSupport && onsite ? `<small class="facility-overview-onsite-label">(On-site)</small>` : "";
-    return `<div class="facility-overview-on-shift-person"><div class="facility-overview-on-shift-identity">${renderFacilityOverviewStaffName(person, { ...options, seniority: person.seniority })}${onsiteLabel}${options.hideSeniority ? "" : renderFacilityOverviewOnShiftSeniority(person, options)}</div>${specialTime || allocation ? `<div class="facility-overview-on-shift-details">${specialTime}${allocation ? renderFacilityOverviewContactAllocation(allocation) : ""}</div>` : ""}</div>`;
+    const clinicalSupportLabel = options.clinicalSupport && clinicalSupportMode === "onsite"
+      ? `<small class="facility-overview-onsite-label">(On-site)</small>`
+      : options.clinicalSupport && clinicalSupportMode === "office"
+        ? `<small class="facility-overview-onsite-label">(Office)</small>`
+        : "";
+    return `<div class="facility-overview-on-shift-person"><div class="facility-overview-on-shift-identity">${renderFacilityOverviewStaffName(person, { ...options, seniority: person.seniority })}${clinicalSupportLabel}${options.hideSeniority ? "" : renderFacilityOverviewOnShiftSeniority(person, options)}</div>${specialTime || allocation ? `<div class="facility-overview-on-shift-details">${specialTime}${allocation ? renderFacilityOverviewContactAllocation(allocation) : ""}</div>` : ""}</div>`;
   }).join("")}</div>`;
+}
+
+function clinicalSupportModeRank(mode) {
+  if (mode === "office") return 0;
+  if (mode === "onsite") return 1;
+  if (mode === "clinical-support") return 2;
+  return 3;
 }
 
 function renderFacilityOverviewContactAllocation(allocation) {
@@ -15548,6 +15556,7 @@ function sanitizeWorkspaceSnapshot(value) {
       ddh: Array.isArray(value.detectedSources?.ddh) ? value.detectedSources.ddh.map((item) => String(item || "")).filter(Boolean) : [],
       casey: Array.isArray(value.detectedSources?.casey) ? value.detectedSources.casey.map((item) => String(item || "")).filter(Boolean) : [],
       mch: Array.isArray(value.detectedSources?.mch) ? value.detectedSources.mch.map((item) => String(item || "")).filter(Boolean) : [],
+      vhh: Array.isArray(value.detectedSources?.vhh) ? value.detectedSources.vhh.map((item) => String(item || "")).filter(Boolean) : [],
     },
     fileRefs: Array.isArray(value.fileRefs) ? value.fileRefs.map(importRefForWorkspace).filter((item) => item.id) : [],
     subscriptionFeeds: value.subscriptionFeeds && typeof value.subscriptionFeeds === "object" ? JSON.parse(JSON.stringify(value.subscriptionFeeds)) : {},

@@ -84,7 +84,14 @@ assert.match(appSource, /serviceContacts:[\s\S]*ED Care-Co[\s\S]*GAP \/ Geriatri
 assert.match(appSource, /renderFacilityOverviewGroupedServiceCard\("ED Care-Co \/ GAP"[\s\S]*renderFacilityOverviewGroupedServiceCard\("Geriatrician \/ CART"/, "each site's two explicit services should share one grouped stream card");
 assert.match(appSource.match(/function renderFacilityOverviewGroupedServiceCard[\s\S]*?function renderFacilityOverviewUnstreamedCard/)?.[0] || "", /group\.label[\s\S]*facility-overview-contact-number[\s\S]*hideContactAllocation: true/, "a grouped service row should place its phone beside the service label and any name on the following line");
 assert.match(appSource.match(/async function loadCloudCalendarEvents[\s\S]*?function cloudCalendarEventRange/)?.[0] || "", /response\.status === 503[\s\S]*allowInlineBuild: false/, "a resource-limit calendar response should retry once without synchronous rebuilding");
-assert.match(stateSource.match(/function isFacilityOverviewWorkingEvent[\s\S]*?function facilityOverviewEventPeriod/)?.[0] || "", /cs\(\?:o\|m\)\?/, "CSM must be hidden by the server when Include CS is off");
-assert.match(appSource.match(/function facilityOverviewIsClinicalSupportAssignment[\s\S]*?function facilityOverviewIsOnsiteClinicalSupportAssignment/)?.[0] || "", /cs\(\?:o\|m\)\?/, "CSM must be grouped with Clinical Support in On shift");
+const workingEventSource = stateSource.match(/function isFacilityOverviewWorkingEvent[\s\S]*?function facilityOverviewEventPeriod/)?.[0] || "";
+assert.match(workingEventSource, /includeClinicalSupport !== true && isClinicalSupportRosterEvent\(event\)/, "all recognised CS variants must be hidden by the server when Include CS is off");
+assert.doesNotMatch(workingEventSource, /facilityKey[^\n]+VHH[^\n]+allDay/, "all-day VHH Clinical Support must not be discarded before the Include CS rule is applied");
+assert.match(appSource.match(/function facilityOverviewIsClinicalSupportAssignment[\s\S]*?function facilityOverviewIsOnsiteClinicalSupportAssignment/)?.[0] || "", /clinicalSupportRosterMode\(assignment\)/, "the browser must use the shared Clinical Support classifier");
+const onShiftPeriodSource = appSource.match(/function renderFacilityOverviewOnShiftPeriod[\s\S]*?function facilityOverviewIsDdhPeriod/)?.[0] || "";
+assert.match(onShiftPeriodSource, /clinicalSupportCard[\s\S]*return `\$\{clinicalSupportCard\}\$\{renderFacilityOverview/, "Clinical Support must render before ordinary stream cards for every hospital");
+assert.match(appSource, /clinicalSupportMode === "onsite"[\s\S]*\(On-site\)[\s\S]*clinicalSupportMode === "office"[\s\S]*\(Office\)/, "On Shift must label on-site and office Clinical Support clinicians explicitly");
+assert.match(stateSource, /function sanitizeDetectedSources[\s\S]*vhh: Array\.isArray\(input\.vhh\)[\s\S]*function detectedSourcesForSnapshot[\s\S]*sourceType === "vhh"/, "server snapshots must preserve VHH as a detected source");
+assert.match(appSource.match(/function sanitizeWorkspaceSnapshot[\s\S]*?function sanitizeInsightCache/)?.[0] || "", /vhh: Array\.isArray\(value\.detectedSources\?\.vhh\)/, "browser snapshot caching must preserve VHH as a detected source");
 
 console.log("Facility overview access tests passed.");

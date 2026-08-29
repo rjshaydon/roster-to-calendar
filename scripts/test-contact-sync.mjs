@@ -3,10 +3,20 @@ import { readFile } from "node:fs/promises";
 
 import { onRequestPost as rejectBinaryContactUpload } from "../functions/api/automation/contact-list-binary.js";
 import { onRequestPost as rejectLegacyContactUpload } from "../functions/api/automation/contact-list.js";
-import { automationSourceDate } from "../functions/api/automation/contact-list-extract.js";
+import { automationSourceDate, onRequestPost as acceptContactExtract } from "../functions/api/automation/contact-list-extract.js";
 
 assert.equal(automationSourceDate("Tuesday 25th AUGUST 2026"), "2026-08-25");
 assert.equal(automationSourceDate("2026-08-25"), "2026-08-25");
+
+const vhhCredential = await acceptContactExtract({
+  request: new Request("https://example.test/api/automation/contact-list-extract", {
+    method: "POST",
+    headers: { authorization: "Bearer vhh-only-token", "content-type": "application/json" },
+    body: JSON.stringify({ sourceId: "mmc-shift-allocations", sourceDate: "2026-08-25", contacts: [] }),
+  }),
+  env: { ROSTER_AUTOMATION_TOKEN: "roster-token", DDH_CONTACT_AUTOMATION_TOKEN: "ddh-token", VHH_AUTOMATION_TOKEN: "vhh-only-token" },
+});
+assert.equal(vhhCredential.status, 401, "the VHH roster credential must not authorize any contact-list submission");
 
 const authorized = await rejectBinaryContactUpload({
   request: new Request("https://example.test/api/automation/contact-list-binary", {
@@ -46,6 +56,8 @@ assert.match(contactExtractSource, /automationSourceDate[\s\S]*st\|nd\|rd\|th/,
   "the JSON boundary should normalize the date label emitted by the existing MMC Office Script");
 assert.match(contactExtractSource, /pruneStoredContactExtracts[\s\S]*contactExtractHasExpired/,
   "the previous operational day's JSON should be retained until its testing-window expiry");
+assert.doesNotMatch(contactExtractSource, /VHH_AUTOMATION_TOKEN|VHH_CONTACT_LIST_SOURCE_ID/,
+  "VHH roster credentials and contact payloads must remain outside contact ingestion until VHH contacts are approved");
 assert.match(stateSource, /action === "queryFacilityOverviewContactList"[\s\S]*loadLiveContactListForOnShift/,
   "the UI should have a lightweight contact-only refresh action");
 assert.match(stateSource, /content_type[\s\S]*reason: "legacy-workbook"/,

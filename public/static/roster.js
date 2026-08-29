@@ -599,6 +599,36 @@ export function normalizeRosterName(value) {
   return normalizeName(value);
 }
 
+// Keep Clinical Support recognition consistent between the server-side
+// On Shift query and the browser renderer. Some retained MCH rows predate the
+// normalised "CS Office" title and still carry only OCS/0CS/CSOS in rawValue;
+// MMC similarly distinguishes CSO (office) from CS OS (on-site).
+export function clinicalSupportRosterMode(value = {}) {
+  const event = value?.event && typeof value.event === "object" ? value.event : {};
+  const text = cleanText([
+    value?.title,
+    value?.suggestedTitle,
+    value?.team,
+    value?.rawValue,
+    value?.ruleCode,
+    event?.title,
+    event?.rawValue,
+  ].filter(Boolean).join(" "))
+    .replace(/on[\s-]*site/gi, "onsite")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toUpperCase();
+  if (!text) return "";
+  if (/\b(?:OCS|0CS|CSO|CSOS)\b|\bCS\s+OFFICE\b/.test(text)) return "office";
+  if (/\bCS\s+OS\b|\bCS\s+ONSITE\b|\bCLINICAL\s+SUPPORT\s+ONSITE\b/.test(text)) return "onsite";
+  if (/\bCLINICAL\s+SUPPORT\b|\bCS(?:M)?\b/.test(text)) return "clinical-support";
+  return "";
+}
+
+export function isClinicalSupportRosterEvent(value = {}) {
+  return Boolean(clinicalSupportRosterMode(value));
+}
+
 // Some non-VHH rosters repeat a VHH allocation as a safety/availability
 // annotation. The VHH roster is authoritative for that work, so these
 // cross-facility rows must never become a second calendar event. Keep this

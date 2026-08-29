@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { buildVhhDerivedRosterPayload, normaliseVhhRosterExtract, VHH_ROSTER_SOURCE_ID } from "../functions/_lib/vhh-roster.js";
-import { normaliseContactListExtract, VHH_CONTACT_LIST_SOURCE_ID } from "../public/static/contact-allocations.js";
 import * as XLSX from "xlsx";
 import { extractVhhRosterWorkbook } from "./vhh-roster-workbook.mjs";
 import { automationSourceDefinition } from "../functions/_lib/automation-import.js";
@@ -155,20 +154,5 @@ await assert.rejects(
   extractVhhRosterWorkbook(new File([incompleteTeachingBytes], "Incomplete.xlsx")),
   /teaching timetable boundaries are incomplete/,
 );
-
-const contactDirectory = normaliseContactListExtract({
-  sourceId: VHH_CONTACT_LIST_SOURCE_ID,
-  sourceDate: "2026-08-26",
-  providerModifiedAt: "2026-08-26T01:00:00Z",
-  cic: { phone: "90000", name: "CIC Doctor" },
-  doctors: [
-    { role: "AM SMS", phone: "90001", name: "First Doctor" },
-    { role: "PM REG", phone: "90002", name: "" },
-  ],
-});
-assert.ok(contactDirectory, "VHH CIC and doctor directory should normalise");
-assert.deepEqual(contactDirectory.contacts, [], "VHH directory must not masquerade as shift-matched contacts before mapping is approved");
-assert.equal(contactDirectory.directory.cic.phone, "90000");
-assert.equal(contactDirectory.directory.doctors.length, 2);
 
 console.log("VHH automation fixtures passed.");

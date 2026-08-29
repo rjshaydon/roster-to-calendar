@@ -22,6 +22,13 @@ const extract = normaliseContactListExtract({
   ],
 });
 
+assert.equal(normaliseContactListExtract({
+  sourceId: "vhh-shift-phone-allocations",
+  sourceDate: "2026-08-24",
+  cic: { phone: "90000", name: "CIC Doctor" },
+  doctors: [{ role: "AM SMS", phone: "90001", name: "Doctor" }],
+}), null, "VHH contacts must remain disabled until their On Shift mapping is approved");
+
 assert.ok(extract, "valid contact list should normalise");
 assert.equal(extract.contacts[0].isPopulated, false, "a phone without a named doctor must not be live");
 assert.equal(contactExtractStatus(extract, { date: "2026-08-24", now: new Date("2026-08-24T01:00:00Z") }), "available");

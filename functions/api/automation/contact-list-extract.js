@@ -2,7 +2,6 @@ import { ensureCalendarSchema, hasCalendarDb } from "../../_lib/d1-calendar.js";
 import { sha256Hex } from "../../_lib/automation-import.js";
 import {
   DDH_CONTACT_LIST_SOURCE_ID,
-  VHH_CONTACT_LIST_SOURCE_ID,
   contactExtractHasExpired,
   contactOperationalDate,
   normaliseContactListExtract,
@@ -17,7 +16,6 @@ export async function onRequestPost(context) {
     context.request,
     context.env.ROSTER_AUTOMATION_TOKEN,
     context.env.DDH_CONTACT_AUTOMATION_TOKEN,
-    context.env.VHH_AUTOMATION_TOKEN,
   )) {
     return Response.json({ error: "Unauthorized." }, { status: 401 });
   }
@@ -37,11 +35,6 @@ export async function onRequestPost(context) {
     }
     if (String(payload?.sourceId || "") === DDH_CONTACT_LIST_SOURCE_ID) {
       const operationalDate = contactOperationalDate(new Date(String(payload?.providerModifiedAt || "")));
-      if (operationalDate) payload = { ...payload, sourceDate: operationalDate };
-    }
-    if (String(payload?.sourceId || "") === VHH_CONTACT_LIST_SOURCE_ID && !String(payload?.sourceDate || "").trim()) {
-      const modifiedAt = String(payload?.providerModifiedAt || "").trim();
-      const operationalDate = contactOperationalDate(modifiedAt ? new Date(modifiedAt) : new Date());
       if (operationalDate) payload = { ...payload, sourceDate: operationalDate };
     }
     const extract = normaliseContactListExtract(payload);
@@ -133,7 +126,7 @@ async function pruneStoredContactExtracts(context, entries, { keepId = "", repla
       const object = entry.object_key ? await context.env.ROSTER_FILES.get(String(entry.object_key)) : null;
       const stored = object ? normaliseContactListExtract(JSON.parse(await object.text())) : null;
       // Keep a different operational day's small JSON while it is still valid.
-      remove = !stored || stored.sourceDate === replaceDate || contactExtractHasExpired(stored.sourceDate, new Date(), stored.sourceId);
+      remove = !stored || stored.sourceDate === replaceDate || contactExtractHasExpired(stored.sourceDate);
     } catch {
       remove = true;
     }

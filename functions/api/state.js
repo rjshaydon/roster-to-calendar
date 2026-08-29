@@ -1,4 +1,4 @@
-import { applyEventOverrides, customEventsToEvents, defaultSettings, filterCalendarRosterEvents, inspectImportRecord, isIgnoredRosterIssueValue, normalizeRosterName, previewSummary } from "../_lib/roster.js";
+import { applyEventOverrides, customEventsToEvents, defaultSettings, filterCalendarRosterEvents, inspectImportRecord, isClinicalSupportRosterEvent, isIgnoredRosterIssueValue, normalizeRosterName, previewSummary } from "../_lib/roster.js";
 import { AUTOMATION_SOURCES } from "../_lib/automation-import.js";
 import { DDH_CONTACT_LIST_SOURCE_ID, MMC_CONTACT_LIST_SOURCE_ID, attachContactAllocations, contactAreaForSource, contactExtractHasExpired, contactOperationalDate, contactsAfterShiftChange, normaliseContactListExtract, shouldCarryPreviousNightContacts, shouldUseCurrentExtractForPreviousNight } from "../../public/static/contact-allocations.js";
 import { requestQueuedRosterProcessing } from "../_lib/automation-dispatch.js";
@@ -3140,8 +3140,7 @@ function isFacilityOverviewWorkingEvent(event, options = {}) {
   if (/\b(?:leave|conference|cme|annual|sick|personal|study|exam|sabbatical|parental|long service)\b/.test(text)) return false;
   if (text.includes("phnw") || text.includes("public holiday")) return false;
   if (String(options.facilityKey || "").toUpperCase() === "DDH" && /\b(?:hith|vhh)\b/.test(text)) return false;
-  if (String(options.facilityKey || "").toUpperCase() === "VHH" && event?.allDay === true) return false;
-  if (options.includeClinicalSupport !== true && (text.includes("clinical support") || /\bcs(?:o|m)?\b/.test(text))) return false;
+  if (options.includeClinicalSupport !== true && isClinicalSupportRosterEvent(event)) return false;
   return true;
 }
 
@@ -4931,6 +4930,7 @@ function sanitizeDetectedSources(value) {
     ddh: Array.isArray(input.ddh) ? input.ddh.map((item) => String(item || "")).filter(Boolean) : [],
     casey: Array.isArray(input.casey) ? input.casey.map((item) => String(item || "")).filter(Boolean) : [],
     mch: Array.isArray(input.mch) ? input.mch.map((item) => String(item || "")).filter(Boolean) : [],
+    vhh: Array.isArray(input.vhh) ? input.vhh.map((item) => String(item || "")).filter(Boolean) : [],
   };
 }
 
@@ -4943,6 +4943,7 @@ function detectedSourcesForSnapshot(value) {
     ddh: imports.filter((item) => item.sourceType === "ddh").map((item) => String(item.name || item.sourceType || "ddh")),
     casey: imports.filter((item) => item.sourceType === "casey").map((item) => String(item.name || item.sourceType || "casey")),
     mch: imports.filter((item) => item.sourceType === "mch").map((item) => String(item.name || item.sourceType || "mch")),
+    vhh: imports.filter((item) => item.sourceType === "vhh").map((item) => String(item.name || item.sourceType || "vhh")),
   };
 }
 

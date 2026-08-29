@@ -9,7 +9,7 @@ import { assertFindmyshiftDandenongAssignments, extractShiftRows, findmyshiftCon
 import { buildAutomatedDerivedRosterPayload } from "../functions/_lib/automation-import.js";
 import { australianTermStartForDate, buildPreviewFromDerivedEvents, findRosterSyncByProviderVersion, isApprovedReparseOmission, sameRosterOccurrence, storeCachedSnapshot } from "../functions/_lib/d1-calendar.js";
 import { recordRosterDispatchLifecycle, requestQueuedRosterProcessing } from "../functions/_lib/automation-dispatch.js";
-import { applyRosterEventSeniorities, attachFindmyshiftStaffIds, buildRosterView, customEventsToEvents, doctorOptions, filterCalendarRosterEvents, filterCrossFacilityVhhRosterEvents, findmyshiftProviderStaffOptions, findmyshiftRosteredStaffOptions, isCrossFacilityVhhRosterEvent, mergeMembershipDoctors, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
+import { applyRosterEventSeniorities, attachFindmyshiftStaffIds, buildRosterView, clinicalSupportRosterMode, customEventsToEvents, doctorOptions, filterCalendarRosterEvents, filterCrossFacilityVhhRosterEvents, findmyshiftProviderStaffOptions, findmyshiftRosteredStaffOptions, isCrossFacilityVhhRosterEvent, mergeMembershipDoctors, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
 import { customEventsToEvents as serverCustomEventsToEvents } from "../functions/_lib/roster.js";
 import { parserResultDelta, unresolvedCodeSummary } from "./parser-parity.mjs";
 
@@ -37,6 +37,11 @@ assert.equal(
 assert.equal(isCrossFacilityVhhRosterEvent({ source: "DDH", title: "DDH: VHH AM", rawValue: "VHH AM" }), true, "a VHH AM allocation repeated on the DDH roster must be excluded");
 assert.equal(isCrossFacilityVhhRosterEvent({ source: "DDH", title: "DDH: VHH CS", rawValue: "VHH CS" }), true, "a VHH Clinical Support allocation repeated on the DDH roster must be excluded");
 assert.equal(isCrossFacilityVhhRosterEvent({ source: "VHH", title: "VHH: AM SMS", rawValue: "AM" }), false, "the authoritative VHH event must remain in the calendar");
+assert.equal(clinicalSupportRosterMode({ source: "MCH", title: "MCH: SMS", rawValue: "0800-1730 OCS" }), "office", "legacy MCH OCS rows must remain Clinical Support Office even when their stored title says SMS");
+assert.equal(clinicalSupportRosterMode({ source: "MMC", title: "MMC: CSO", rawValue: "CSO" }), "office", "MMC CSO must be labelled as office Clinical Support");
+assert.equal(clinicalSupportRosterMode({ source: "MMC", title: "MMC: CS OS", rawValue: "0800-1730 CS OS" }), "onsite", "MMC CS OS must be labelled as on-site Clinical Support");
+assert.equal(clinicalSupportRosterMode({ source: "VHH", title: "VHH: Clinical Support", rawValue: "Doctor, Example" }), "clinical-support", "VHH Clinical Support must use the same shared classification");
+assert.equal(clinicalSupportRosterMode({ source: "MCH", title: "MCH: AM SMS", rawValue: "0800-1730 SMS" }), "", "an ordinary MCH SMS shift must not be classified as Clinical Support");
 assert.deepEqual(
   filterCrossFacilityVhhRosterEvents([
     { id: "ddh-vhh", source: "DDH", title: "DDH: VHH AM", rawValue: "VHH AM" },
