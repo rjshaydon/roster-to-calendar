@@ -991,7 +991,7 @@ assert.match(
 );
 assert.match(
   appSource.match(/function resetFacilityOverviewSessionState[\s\S]*?async function openFacilityOverview/)?.[0] || "",
-  /date = today[\s\S]*staffExpanded = new Set\(\)[\s\S]*byStreamFrom = today[\s\S]*byStreamTo = today[\s\S]*togetherStaffKeys = \[""\]/,
+  /date = contactOperationalDate\(\)[\s\S]*staffExpanded = new Set\(\)[\s\S]*byStreamFrom = today[\s\S]*byStreamTo = today[\s\S]*togetherStaffKeys = \[""\]/,
   "A new account session should reset On shift, ED staff, Working together, and By stream state while retaining the saved tab",
 );
 assert.match(
@@ -1335,7 +1335,7 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function validateDoctorProfileCalendarInBackground[\s\S]*?async function enterUserAccount/)?.[0] || "",
-  /browser profile cache can be complete enough to render immediately[\s\S]*cachedRevision: ""[\s\S]*allowInlineBuild: true[\s\S]*waitForDoctorProfileCalendarBuild/,
+  /browser profile cache can be complete enough to render immediately[\s\S]*cachedRevision: ""[\s\S]*allowInlineBuild: false[\s\S]*waitForDoctorProfileCalendarBuild/,
   "explicit Creator profile switching should obtain the profile's authoritative server snapshot without login-path polling",
 );
 assert.match(
@@ -2363,7 +2363,7 @@ assert.match(appSource, /data-account-location-key/, "account modal locations sh
 assert.match(appSource, /data-admin-user-real-name/, "creator Current users editing should expose the account holder's name");
 assert.match(appSource, /async function saveAdminUserName[\s\S]*action: "updateAccount"[\s\S]*targetEmail/, "creator name edits should persist to the selected account");
 assert.match(appSource, /data-facility-overview-back-to-creator/, "the non-clinical dashboard header should expose Back to creator during impersonation");
-assert.match(appSource, /ACCOUNT_HOSPITAL_LOCATION_ORDER = \["mmc", "ddh", "mch", "casey"\]/, "account modal should keep hospital locations in the expected vertical order");
+assert.match(appSource, /ACCOUNT_HOSPITAL_LOCATION_ORDER = \["mmc", "ddh", "mch", "casey", "vhh"\]/, "account modal should keep hospital locations in the expected vertical order");
 assert.match(d1CalendarSource, /CREATE TABLE IF NOT EXISTS account_hospital_locations/, "D1 should store account hospital locations relationally");
 assert.match(d1CalendarSource, /function applyAccountHospitalLocations/, "SQL-first roster reads should apply account hospital defaults");
 assert.match(
@@ -3510,7 +3510,7 @@ class MemoryD1Statement {
       return { success: true };
     }
     if (sql.startsWith("INSERT INTO roster_file_doctors")) {
-      const width = sql.includes("membership_source") ? 6 : 4;
+      const width = sql.includes("provider_staff_id") ? 7 : sql.includes("membership_source") ? 6 : 4;
       for (let index = 0; index < args.length; index += width) {
         this.db.fileDoctors.set(`${args[index]}|${args[index + 1]}|${args[index + 2]}`, {
           file_id: args[index],
@@ -3519,6 +3519,7 @@ class MemoryD1Statement {
           display_name: args[index + 3],
           seniority: args[index + 4] || "",
           membership_source: args[index + 5] || "roster",
+          provider_staff_id: args[index + 6] || "",
         });
       }
       return { success: true };
@@ -3550,7 +3551,9 @@ class MemoryD1Statement {
         this.db.failNextEventInsert = false;
         throw new Error("Injected event insert failure.");
       }
-      for (let index = 0; index < args.length; index += 16) {
+      const width = sql.includes("provider_staff_id") ? 17 : 16;
+      for (let index = 0; index < args.length; index += width) {
+        const providerOffset = width === 17 ? 1 : 0;
         this.db.events.set(args[index], {
           id: args[index],
           file_id: args[index + 1],
@@ -3564,10 +3567,11 @@ class MemoryD1Statement {
           title: args[index + 9],
           raw_value: args[index + 10],
           seniority: args[index + 11],
-          location: args[index + 12],
-          all_day: args[index + 13],
-          time_label: args[index + 14],
-          event_json: args[index + 15],
+          provider_staff_id: providerOffset ? args[index + 12] : "",
+          location: args[index + 12 + providerOffset],
+          all_day: args[index + 13 + providerOffset],
+          time_label: args[index + 14 + providerOffset],
+          event_json: args[index + 15 + providerOffset],
         });
       }
       return { success: true };
@@ -7046,6 +7050,17 @@ assert.equal(michaelDeletedResolution.mode, "doctor-profile");
 assert.equal(michaelDeletedResolution.email, "");
 seedMinimalD1DoctorEvent(michaelStateStore.d1, "michael-mmc", "MICHAEL COMAN", "mmc", "Michael COMAN");
 seedMinimalD1DoctorEvent(michaelStateStore.d1, "michael-mch", "DR MICHAEL COMAN", "mch", "Dr Michael Coman");
+michaelStateStore.d1.canonicalDoctors.set("MICHAEL COMAN", {
+  canonical_key: "MICHAEL COMAN",
+  display_name: "Michael COMAN",
+  source_type: "mmc",
+  source_types_json: JSON.stringify(["mmc", "mch"]),
+  aliases_json: JSON.stringify([
+    { sourceType: "mmc", key: "MICHAEL COMAN", displayName: "Michael COMAN" },
+    { sourceType: "mch", key: "DR MICHAEL COMAN", displayName: "Dr Michael Coman" },
+  ]),
+  has_events: 1,
+});
 const michaelDoctorProfile = await postState(michaelStateStore, {
   action: "loadDoctorProfile",
   email: "rhaydon@gmail.com",
@@ -7075,7 +7090,7 @@ const michaelDoctorProfileWithoutBrowserAliases = await postState(michaelStateSt
 });
 assert.deepEqual(
   [...new Set(michaelDoctorProfileWithoutBrowserAliases.snapshot.preview.events.map((event) => event.source))].sort(),
-  ["mch", "mmc"],
+  ["MCH", "MMC"],
   "doctor profile snapshots should expand canonical roster aliases even when the browser omits them",
 );
 await seedUser(michaelStateStore, "michael@example.com", "michael-password-2", "Michael COMAN");

@@ -52,6 +52,13 @@ assert.match(stateSource, /content_type[\s\S]*reason: "legacy-workbook"/,
   "stored full workbooks must produce an explicit legacy-feed status");
 assert.match(stateSource, /LIMIT 8[\s\S]*extract\.sourceDate === date/,
   "On shift should select the retained JSON extract for the requested operational date");
+assert.match(stateSource, /code === "DDH"[\s\S]*DDH_CONTACT_LIST_SOURCE_ID[\s\S]*code === "MMC" \|\| code === "MCH"[\s\S]*MMC_CONTACT_LIST_SOURCE_ID/,
+  "MMC, MCH and DDH must retain their established contact-feed mappings");
+assert.doesNotMatch(
+  stateSource.match(/async function loadLiveContactListForOnShift[\s\S]*?function sanitizeFindmyshiftHistoricalRange/)?.[0] || "",
+  /code === "VHH"/,
+  "VHH must not expose contact details in On shift until its mapping is explicitly approved",
+);
 assert.match(appSource, /FACILITY_OVERVIEW_CONTACT_REFRESH_MS = 10_000[\s\S]*refreshFacilityOverviewContactList[\s\S]*queryFacilityOverviewContactList/,
   "an open On shift view should poll the small JSON contact feed");
 assert.match(appSource, /legacy-workbook[\s\S]*full Excel workbook instead of the doctors-only JSON extract/,

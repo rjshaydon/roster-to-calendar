@@ -24,7 +24,7 @@ export async function onRequestPost(context) {
     const phase = String(body?.phase || "").toLowerCase();
     const source = automationSourceDefinition(sourceId);
     const run = await loadRosterSyncRun(context.env.ROSTER_DB, runId);
-    if (!source || !run || run.sourceId !== sourceId || run.fileId !== String(body?.file?.id || "")) {
+    if (!run || run.sourceId !== sourceId || run.fileId !== String(body?.file?.id || "")) {
       return Response.json({ error: "Queued roster job does not match the derived payload." }, { status: 400 });
     }
     if (!["start", "events", "finish", "failed"].includes(phase)) {
@@ -43,17 +43,25 @@ export async function onRequestPost(context) {
         completedAt: failedAt,
       });
       await supersedeDuplicateRosterSyncRuns(context.env.ROSTER_DB, run, body?.file?.name || "");
-      const existing = await loadRosterSource(context.env.ROSTER_DB, sourceId);
-      await upsertRosterSource(context.env.ROSTER_DB, {
-        ...(existing || {}),
-        ...source,
-        id: sourceId,
-        enabled: true,
-        lastError: "Background roster processing failed.",
-        updatedAt: failedAt,
-        createdAt: existing?.createdAt || failedAt,
-      });
+      // Failure reporting must remain available even when the deployed
+      // processor does not yet recognise a newly queued source. Otherwise the
+      // run remains queued and the watchdog dispatches it forever.
+      if (source) {
+        const existing = await loadRosterSource(context.env.ROSTER_DB, sourceId);
+        await upsertRosterSource(context.env.ROSTER_DB, {
+          ...(existing || {}),
+          ...source,
+          id: sourceId,
+          enabled: true,
+          lastError: "Background roster processing failed.",
+          updatedAt: failedAt,
+          createdAt: existing?.createdAt || failedAt,
+        });
+      }
       return Response.json({ ok: true, phase, runId, fileId: run.fileId });
+    }
+    if (!source) {
+      return Response.json({ error: "Unknown automation source." }, { status: 400 });
     }
     if (phase === "start") await markRosterSyncRunProcessing(context.env.ROSTER_DB, runId);
     const saved = await runAutomatedDerivedRosterSave(context, {

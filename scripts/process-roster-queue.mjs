@@ -24,16 +24,22 @@ for (const run of runs) {
     const message = `Failed to process ${run.fileName || run.id}: ${error?.message || error}`;
     console.error(message);
     failures.push(message);
-    await automationRequest("/api/automation/derived", {
-      method: "POST",
-      body: {
-        runId: run.id,
-        sourceId: run.sourceId,
-        phase: "failed",
-        file: { id: run.fileId, name: run.fileName, sourceId: run.sourceId, sourceType: run.sourceType },
-        message: String(error?.message || "Background processor could not parse or save this roster.").slice(0, 300),
-      },
-    }).catch(() => null);
+    try {
+      await automationRequest("/api/automation/derived", {
+        method: "POST",
+        body: {
+          runId: run.id,
+          sourceId: run.sourceId,
+          phase: "failed",
+          file: { id: run.fileId, name: run.fileName, sourceId: run.sourceId, sourceType: run.sourceType },
+          message: String(error?.message || "Background processor could not parse or save this roster.").slice(0, 300),
+        },
+      });
+    } catch (reportError) {
+      const reportingMessage = `Could not mark ${run.fileName || run.id} failed: ${reportError?.message || reportError}`;
+      console.error(reportingMessage);
+      failures.push(reportingMessage);
+    }
   }
 }
 

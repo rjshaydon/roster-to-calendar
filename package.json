@@ -9,6 +9,7 @@
     "test:contact-allocations": "node scripts/test-contact-allocations.mjs",
     "test:contact-sync": "node scripts/test-contact-sync.mjs",
     "test:vhh-automation": "node scripts/test-vhh-automation.mjs",
+    "test:queue-failure": "node scripts/test-roster-queue-failure.mjs",
     "test:contact-workbook": "node scripts/test-contact-list-workbook.mjs",
     "test:fixtures": "node scripts/test-fixtures.mjs",
     "test:facility-access": "node scripts/test-facility-overview-access.mjs",
