@@ -7,7 +7,7 @@ import { onRequestPost as handleStatePost } from "../functions/api/state.js";
 import { onRequestGet as handleFeedGet } from "../functions/api/feed.js";
 import { assertFindmyshiftDandenongAssignments, extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentDiagnostics, findmyshiftDandenongAssignmentExceptions, findmyshiftRowsWorkbook, findmyshiftStaffAssignmentById, findmyshiftStaffSeniorityById } from "../functions/_lib/findmyshift.js";
 import { buildAutomatedDerivedRosterPayload } from "../functions/_lib/automation-import.js";
-import { australianTermStartForDate, buildPreviewFromDerivedEvents, findRosterSyncByProviderVersion, isApprovedReparseOmission, sameRosterOccurrence, storeCachedSnapshot } from "../functions/_lib/d1-calendar.js";
+import { australianTermStartForDate, buildPreviewFromDerivedEvents, findRosterSyncByProviderVersion, isApprovedReparseOmission, queryCalendarRevision, sameRosterOccurrence, storeCachedSnapshot } from "../functions/_lib/d1-calendar.js";
 import { recordRosterDispatchLifecycle, requestQueuedRosterProcessing } from "../functions/_lib/automation-dispatch.js";
 import { applyRosterEventSeniorities, attachFindmyshiftStaffIds, buildRosterView, clinicalSupportRosterMode, customEventsToEvents, doctorOptions, filterCalendarRosterEvents, filterCrossFacilityVhhRosterEvents, findmyshiftProviderStaffOptions, findmyshiftRosteredStaffOptions, isCrossFacilityVhhRosterEvent, mergeMembershipDoctors, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
 import { customEventsToEvents as serverCustomEventsToEvents } from "../functions/_lib/roster.js";
@@ -1207,8 +1207,18 @@ assert.match(
 );
 assert.match(
   d1CalendarSource.match(/export async function queryCalendarRevision[\s\S]*?export async function upsertAccountMirror/)?.[0] || "",
-  /FROM parser_rules[\s\S]*local_parser_extensions_json/,
+  /source_type IN[\s\S]*FROM parser_rules[\s\S]*local_parser_extensions_json[\s\S]*roster-scope:/,
   "calendar revisions should include parser-rule state so resolved warnings invalidate stale snapshots",
+);
+assert.match(
+  stateSource.match(/function accountSnapshotRevisionSourceTypes[\s\S]*?function snapshotRegistryState/)?.[0] || "",
+  /creator[\s\S]*return null[\s\S]*sanitizeSourceTypes\(prepared\?\.claims[\s\S]*sourceTypes === null \? \{\} : \{ sourceTypes \}[\s\S]*queryCalendarRevision\(db/,
+  "claimed-account revisions should follow all claimed hospitals while creator revisions retain the global roster scope",
+);
+assert.match(
+  stateSource.match(/async function queryDoctorProfileCalendarRevision[\s\S]*?async function loadDoctorProfileSnapshotPayload/)?.[0] || "",
+  /queryCalendarRevision\(db, ownerEmail, \{[\s\S]*sourceTypes: sanitizeSourceTypes\(profile\?\.sourceTypes\)/,
+  "doctor-profile revisions should only follow the profile's hospitals",
 );
 assert.match(
   stateSource,
@@ -4534,12 +4544,19 @@ class MemoryD1Statement {
       return rows.sort((left, right) => String(right.completed_at || right.started_at).localeCompare(String(left.completed_at || left.started_at)))[0] || null;
     }
     if (sql.includes("COUNT(*) AS active_file_count") && sql.includes("FROM roster_files")) {
-      const activeFiles = [...this.db.files.values()].filter((file) => file.active === 1);
+      const sourceTypes = sql.includes("source_type IN") ? new Set(args) : null;
+      const activeFiles = [...this.db.files.values()]
+        .filter((file) => file.active === 1)
+        .filter((file) => !sourceTypes || sourceTypes.has(file.source_type));
       return {
         active_file_count: activeFiles.length,
         max_parsed_at: activeFiles.map((file) => String(file.parsed_at || "")).sort().at(-1) || "",
         max_uploaded_at: activeFiles.map((file) => String(file.uploaded_at || "")).sort().at(-1) || "",
         max_last_modified: Math.max(0, ...activeFiles.map((file) => Number(file.last_modified || 0))),
+        active_file_fingerprint: activeFiles
+          .sort((left, right) => String(left.id || "").localeCompare(String(right.id || "")))
+          .map((file) => `${file.id}:${file.source_id || ""}:${file.parsed_at || ""}`)
+          .join("|"),
       };
     }
     if (sql.startsWith("SELECT id, source_type, parsed_at FROM roster_files WHERE id = ? AND active = 1")) {
@@ -4665,6 +4682,40 @@ class MemoryD1Statement {
     throw new Error(`Unsupported MemoryD1 first SQL: ${sql}`);
   }
 }
+
+const scopedRevisionDb = new MemoryD1();
+scopedRevisionDb.files.set("mmc-active", {
+  id: "mmc-active",
+  source_id: "monash-adults",
+  source_type: "mmc",
+  active: 1,
+  parsed_at: "2026-08-28T10:00:00.000Z",
+  uploaded_at: "2026-08-28T09:59:00.000Z",
+  last_modified: 100,
+});
+const mmcRevisionBeforeVhh = await queryCalendarRevision(scopedRevisionDb, "", { sourceTypes: ["mmc"] });
+scopedRevisionDb.files.set("vhh-active", {
+  id: "vhh-active",
+  source_id: "vhh-active-medical-roster",
+  source_type: "vhh",
+  active: 1,
+  parsed_at: "2026-08-28T20:00:00.000Z",
+  uploaded_at: "2026-08-28T19:59:00.000Z",
+  last_modified: 200,
+});
+const mmcRevisionAfterVhh = await queryCalendarRevision(scopedRevisionDb, "", { sourceTypes: ["mmc"] });
+const vhhRevisionBeforeUpdate = await queryCalendarRevision(scopedRevisionDb, "", { sourceTypes: ["vhh"] });
+const multiHospitalRevisionBeforeUpdate = await queryCalendarRevision(scopedRevisionDb, "", { sourceTypes: ["vhh", "mmc"] });
+const globalRevisionWithVhh = await queryCalendarRevision(scopedRevisionDb);
+scopedRevisionDb.files.get("vhh-active").parsed_at = "2026-08-29T20:00:00.000Z";
+const vhhRevisionAfterUpdate = await queryCalendarRevision(scopedRevisionDb, "", { sourceTypes: ["vhh"] });
+const multiHospitalRevisionAfterUpdate = await queryCalendarRevision(scopedRevisionDb, "", { sourceTypes: ["mmc", "vhh"] });
+assert.equal(mmcRevisionAfterVhh, mmcRevisionBeforeVhh, "adding or updating VHH must not invalidate an MMC-only snapshot revision");
+assert.notEqual(vhhRevisionAfterUpdate, vhhRevisionBeforeUpdate, "updating VHH must invalidate a VHH snapshot revision");
+assert.notEqual(multiHospitalRevisionAfterUpdate, multiHospitalRevisionBeforeUpdate, "updating VHH must invalidate an MMC+VHH snapshot revision");
+assert.match(multiHospitalRevisionAfterUpdate, /^roster-scope:mmc,vhh\|/, "multi-hospital revision scopes should be stable regardless of input order");
+assert.notEqual(globalRevisionWithVhh, mmcRevisionAfterVhh, "creator revisions must retain the all-hospital roster scope");
+assert.match(vhhRevisionAfterUpdate, /^roster-scope:vhh\|/, "hospital-scoped revisions should identify their source scope");
 
 function repositoryFile(id, overrides = {}) {
   return {

@@ -2694,11 +2694,20 @@ export async function queryActiveRosterFileRefs(db) {
   })).filter((file) => file.id && SOURCE_TYPES.includes(file.sourceType));
 }
 
-export async function queryCalendarRevision(db, ownerEmail = "") {
+export async function queryCalendarRevision(db, ownerEmail = "", options = {}) {
   if (!db?.prepare) return "";
   await ensureCalendarSchema(db);
   const email = normalizeEmail(ownerEmail);
-  const roster = await db.prepare(`
+  const hasRosterScope = Object.prototype.hasOwnProperty.call(options || {}, "sourceTypes");
+  const rosterSourceTypes = [...new Set((Array.isArray(options?.sourceTypes) ? options.sourceTypes : [])
+    .map((value) => normalizeSourceType(value))
+    .filter((value) => SOURCE_TYPES.includes(value)))].sort();
+  const rosterScopeSql = !hasRosterScope
+    ? ""
+    : rosterSourceTypes.length
+      ? `AND source_type IN (${rosterSourceTypes.map(() => "?").join(", ")})`
+      : "AND 0 = 1";
+  const rosterStatement = db.prepare(`
     SELECT
       COUNT(*) AS active_file_count,
       COALESCE(MAX(parsed_at), '') AS max_parsed_at,
@@ -2709,9 +2718,11 @@ export async function queryCalendarRevision(db, ownerEmail = "") {
       SELECT id, source_id, parsed_at, uploaded_at, last_modified
       FROM roster_files
       WHERE active = 1
+        ${rosterScopeSql}
       ORDER BY id
     )
-  `).first();
+  `);
+  const roster = await (rosterSourceTypes.length ? rosterStatement.bind(...rosterSourceTypes) : rosterStatement).first();
   const accountContext = email
     ? await db.prepare(`
       SELECT
@@ -2750,6 +2761,7 @@ export async function queryCalendarRevision(db, ownerEmail = "") {
   const materializedSession = materializedSessionStateForRevision(parseJsonObject(accountContext?.session_json, {}));
   const localParserExtensions = parseJsonObject(accountContext?.local_parser_extensions_json, {});
   return [
+    `roster-scope:${hasRosterScope ? rosterSourceTypes.join(",") || "none" : "all"}`,
     Number(roster?.active_file_count || 0),
     String(roster?.max_parsed_at || ""),
     String(roster?.max_uploaded_at || ""),

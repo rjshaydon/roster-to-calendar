@@ -1532,7 +1532,10 @@ export async function onRequestPost(context) {
         updatedAt: new Date().toISOString(),
       };
       await upsertAccountMirror(context.env.ROSTER_DB, updatedRecord);
-      const calendarRevision = await queryCalendarRevision(context.env.ROSTER_DB, saveEmail).catch(() => "");
+      const calendarRevision = await queryAccountCalendarRevision(context.env.ROSTER_DB, updatedRecord, {
+        role: targetRole,
+        claims,
+      }).catch(() => "");
       if (removedImportIds.length) {
         scheduleSnapshotWarmupForSourceTypes(context, removedRosterSourceTypes, { reason: "save-removeImports" });
       } else {
@@ -3577,6 +3580,18 @@ function buildDoctorProfileSnapshotCacheDescriptor(profile, range) {
   });
 }
 
+function accountSnapshotRevisionSourceTypes(record, prepared = {}) {
+  const role = prepared?.role || record?.role || roleForEmail(record?.email || "");
+  if (role === "creator" || role === "owner") return null;
+  return sanitizeSourceTypes(prepared?.claims || record?.claims || []);
+}
+
+async function queryAccountCalendarRevision(db, record, prepared = {}) {
+  const sourceTypes = accountSnapshotRevisionSourceTypes(record, prepared);
+  const options = sourceTypes === null ? {} : { sourceTypes };
+  return await queryCalendarRevision(db, record?.email || "", options);
+}
+
 function snapshotRegistryState(status = "missing", cache = {}) {
   return {
     snapshotStatus: status,
@@ -3776,7 +3791,7 @@ async function loadAccountSnapshotPayload(context, params = {}) {
     || ""
   );
   const revisionStartedAt = Date.now();
-  const calendarRevision = await queryCalendarRevision(db, targetRecord.email).catch(() => "");
+  const calendarRevision = await queryAccountCalendarRevision(db, targetRecord, prepared).catch(() => "");
   const revisionMs = Date.now() - revisionStartedAt;
   const descriptor = buildAccountSnapshotCacheDescriptor(targetRecord, prepared.role, doctorKey, requestedRange);
   const payload = await loadSnapshotPayloadFromRegistry(context, {
@@ -3952,7 +3967,7 @@ async function buildAndStoreAccountSnapshot(context, job = {}) {
   const db = context.env?.ROSTER_DB;
   const cacheBucket = context.env?.ROSTER_CACHE;
   const descriptor = job.descriptor || buildAccountSnapshotCacheDescriptor(job.targetRecord, job.prepared?.role, job.doctorKey, job.requestedRange || defaultSnapshotRange());
-  const revision = String(job.revision || await queryCalendarRevision(db, job.targetRecord?.email || "").catch(() => ""));
+  const revision = String(job.revision || await queryAccountCalendarRevision(db, job.targetRecord, job.prepared).catch(() => ""));
   const startedAt = Date.now();
   await upsertSnapshotRegistryEntry(db, {
     ...descriptor,
@@ -5112,7 +5127,9 @@ async function loadDoctorProfileSnapshotInfo(store, profile, db = null, ownerEma
 
 async function queryDoctorProfileCalendarRevision(db, profile, ownerEmail = "") {
   if (!hasCalendarDb({ ROSTER_DB: db })) return "";
-  const rosterRevision = await queryCalendarRevision(db, ownerEmail).catch(() => "");
+  const rosterRevision = await queryCalendarRevision(db, ownerEmail, {
+    sourceTypes: sanitizeSourceTypes(profile?.sourceTypes),
+  }).catch(() => "");
   const canonicalDoctor = await canonicalDoctorOptionForProfile(db, profile);
   const aliasKeys = [...new Set([
     ...doctorKeysForOption(profile),
