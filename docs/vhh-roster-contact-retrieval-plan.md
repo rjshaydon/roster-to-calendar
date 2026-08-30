@@ -1,69 +1,61 @@
-# Terra execution plan: VHH roster and contact-list JSON integration
+# VHH roster integration and historical contact-list discovery plan
 
 ## Current implementation scope
 
-This document originally described a discovery-only exercise. That restriction
-is now superseded for the **VHH branch and Cloudflare Preview environment**.
-Implement the VHH JSON pipeline below; do not deploy, configure, or write any
-VHH data to Production.
+This document originally described a discovery-only exercise. The current
+implementation scope is the **VHH roster only** on the VHH branch and in the
+Cloudflare Preview environment. VHH contact ingestion is deliberately paused:
+the application does not accept or display VHH contact-list data. Do not enable
+a VHH contact flow or send VHH contact data to an application endpoint.
 
-The SharePoint workbooks are read-only source material. Do not edit, save,
-rename, copy, move, upload, or replace either workbook. Power Automate may use
-the SharePoint modified-file trigger and Excel **Run script from SharePoint
-library** only. Both Office Scripts are read-only and must have no write calls.
+The SharePoint roster workbook is read-only source material. Do not edit, save,
+rename, move, upload, or replace it. Power Automate may retrieve the approved
+workbook for roster ingestion or use Excel **Run script from SharePoint
+library** for the legacy JSON rollback path. Both approaches must remain
+read-only at the SharePoint source.
 
 ### Required live path
 
 ```text
-VHH SharePoint workbook → Power Automate → VHH Office Script → Preview HTTPS ingress
-  → Preview R2 retained JSON → Preview D1 queued run → GitHub Actions parser → Preview D1 calendar
+VHH SharePoint workbook → Power Automate → Preview roster ingress
+  → Preview R2 retained workbook → Preview D1 queued run
+  → GitHub Actions VHH extractor/parser → Preview D1 calendar
 ```
 
-Use the repository artifacts already created for this path:
+Use the repository artifacts already created for the roster path:
 
 - `scripts/vhh-roster-office-script.ts` extracts every visible `Shift Label`
   block in `Active Medical Roster`, stops before `JMS Teaching Timetable`, and
   retains only dates, shift labels, and exact roster-cell text.
-- `scripts/vhh-contact-allocations-office-script.ts` extracts only CIC from
-  `Zebra Allocations!D4:E4` and the rows strictly between `DOCTORS` and
-  `CLERICAL` from columns C:E.
 - `functions/api/automation/vhh-roster-extract.js` is the JSON-only roster
-  ingress. It stores no workbook bytes.
-- `/api/automation/contact-list-extract` stores the VHH CIC/doctor directory
-  JSON alongside MMC/DDH extracts, without yet representing it as an On shift
-  allocation.
+  rollback ingress. It stores no workbook bytes.
+- The normal VHH roster path uses the approved raw-workbook envelope and the
+  background queue, matching the other automated roster sources.
+- `/api/automation/contact-list-extract` accepts only the existing MMC/MCH and
+  DDH contact sources; VHH submissions are rejected.
 
 ### Power Automate configuration
 
-Create two VHH-only flows in the Monash tenant after the Preview deployment is
-available. Start each manually, verify its response, then enable its file
-modified trigger. Set trigger concurrency to one and use the SharePoint
-filename and ETag/version, not the flow-run time, as the change identity.
+Maintain one VHH roster flow in the Monash tenant. Start it manually, verify its
+response, then enable its file-modified trigger. Set trigger concurrency to one
+and use the SharePoint filename and ETag/version, not the flow-run time, as the
+change identity. Do not create or enable a VHH contact flow.
 
 1. **VHH Active Medical Roster → Preview**
    - Trigger: SharePoint **When a file is created or modified (properties
      only)** for the VHH Cardiac Emergency / Medical channel library/folder.
    - Guard: filename exactly `Active Medical Roster.xlsx`.
-   - Action: **Run script from SharePoint library** against the triggering
-     workbook, using `vhh-roster-office-script.ts`.
-   - HTTP POST: `https://<VHH Preview Pages URL>/api/automation/vhh-roster-extract`.
+   - Action: retrieve the triggering workbook content without modifying it.
+   - HTTP POST: `https://<VHH Preview Pages URL>/api/automation/ingest`.
    - Header: `Authorization: Bearer <Preview ROSTER_AUTOMATION_TOKEN>` and
      `Content-Type: application/json`.
-   - Body: the script `blocks`, plus `sourceId` `vhh-active-medical-roster`,
-     SharePoint `Modified`, and SharePoint ETag/version. Do not send file
-     content, Base64, or an Excel attachment.
+   - Body: the approved raw-workbook envelope with `sourceId`
+     `vhh-active-medical-roster`, filename, workbook content type, Base64 file
+     content, SharePoint `Modified`, and SharePoint ETag/version.
 
-2. **VHH Shift Phone Allocations → Preview**
-   - Trigger: SharePoint **When a file is created or modified (properties
-     only)** for the VHH Cardiac Emergency / General channel library/folder.
-   - Guard: filename exactly `Shift Phone Allocations.xlsx`.
-   - Action: **Run script from SharePoint library** against the triggering
-     workbook, using `vhh-contact-allocations-office-script.ts`.
-   - HTTP POST: `https://<VHH Preview Pages URL>/api/automation/contact-list-extract`.
-   - Header: as above.
-   - Body: script result `cic` and `doctors`, `sourceId`
-     `vhh-shift-phone-allocations`, SharePoint `Modified` converted to a
-     Melbourne `YYYY-MM-DD` `sourceDate`, and SharePoint ETag/version.
+The read-only `vhh-roster-office-script.ts` and
+`/api/automation/vhh-roster-extract` JSON path remain available only as a
+temporary rollback mechanism; they are not the normal production path.
 
 ### Roster interpretation rules implemented now
 
@@ -72,9 +64,9 @@ filename and ETag/version, not the flow-run time, as the change identity.
   remains on the event for audit.
 - Explicit time ranges such as `0800-1530` or `08:00-15:30` become timed
   calendar events. A multi-range cell creates one event for each stated range.
-- A cell without stated hours remains an all-day calendar entry; it is excluded
-  from VHH **On shift** until the default timings are confirmed. No times are
-  invented from a shift label.
+- A cell without stated hours remains an all-day calendar entry. It remains
+  eligible for VHH **On shift**; Clinical Support entries are shown only when
+  **Include CS** is selected. No times are invented from a shift label.
 - `JMS Teaching Timetable` is never extracted or converted to an event. Roster
   rows named `AM JMS`, `PM JMS`, or `ON JMS` remain roster shifts.
 
@@ -86,9 +78,8 @@ filename and ETag/version, not the flow-run time, as the change identity.
    workflow, and reports a successful D1 derived-save run.
 3. Compare Preview doctor count, date range, and representative events against
    the supplied roster. Verify name order and all explicit time ranges.
-4. Confirm the VHH contact extract stored in Preview R2/D1 contains only CIC
-   and the requested doctor rows. Do not match those contacts to staff or
-   expose them in On shift yet.
+4. Confirm a VHH contact submission is rejected and that existing MMC/MCH and
+   DDH contact extraction remains unchanged.
 5. Stop before any Production deployment, Production token, Production R2/D1
    write, or Production Power Automate endpoint is used.
 
