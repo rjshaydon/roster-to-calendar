@@ -393,8 +393,6 @@ let currentSnapshotStale = false;
 let currentSnapshotBuiltAt = "";
 let currentCalendarRevision = "";
 let snapshotRefreshPromise = null;
-let switchTargetPrefetchRunId = 0;
-let switchTargetPrefetchPromise = null;
 let switchOverlayRunId = 0;
 let activeSwitchOverlayCancel = null;
 let storedSnapshotMaintenanceQueued = false;
@@ -1775,8 +1773,6 @@ backToCreatorButton.addEventListener("click", () => {
 doctorSelect.addEventListener("change", async () => {
   await switchDoctorSelection(doctorSelect.value, { resetRange: true });
 });
-doctorSelect.addEventListener("pointerdown", () => queueCreatorSwitchTargetPrefetch());
-doctorSelect.addEventListener("focus", () => queueCreatorSwitchTargetPrefetch());
 switchOverlayCancelButton?.addEventListener("click", () => {
   const cancel = activeSwitchOverlayCancel;
   if (!cancel || switchOverlayCancelButton.disabled) return;
@@ -1826,8 +1822,6 @@ mobileDoctorSelect?.addEventListener("change", async () => {
   }
   await switchDoctorSelection(mobileDoctorSelect.value, { resetRange: true });
 });
-mobileDoctorSelect?.addEventListener("pointerdown", () => queueCreatorSwitchTargetPrefetch());
-mobileDoctorSelect?.addEventListener("focus", () => queueCreatorSwitchTargetPrefetch());
 mobileDateFrom?.addEventListener("change", () => {
   applyPreviewRangeChange("from", mobileDateFrom.value);
   syncMobileSettingsControls();
@@ -2115,9 +2109,6 @@ preview.addEventListener("click", (event) => {
   openCustomEventModal(null, cell.dataset.addDate);
 });
 preview.addEventListener("pointerdown", (event) => {
-  if (event.target.closest("[data-preview-doctor-select]")) {
-    queueCreatorSwitchTargetPrefetch();
-  }
   const chip = event.target.closest("[data-review-id]");
   if (!chip || event.button !== 0) return;
   if (isMobileLayout()) {
@@ -2125,11 +2116,6 @@ preview.addEventListener("pointerdown", (event) => {
     return;
   }
   startPreviewGesture(event, chip);
-});
-preview.addEventListener("focusin", (event) => {
-  if (event.target.closest("[data-preview-doctor-select]")) {
-    queueCreatorSwitchTargetPrefetch();
-  }
 });
 preview.addEventListener("change", (event) => {
   const doctorPicker = event.target.closest("[data-preview-doctor-select]");
@@ -7050,6 +7036,7 @@ async function switchDoctorSelection(selectedKey, options = {}) {
       try {
         resolvedAccount = await resolveDoctorAccountForSwitch(selectedOption);
       } catch (error) {
+        renderDoctorState();
         setStatus(error.message || "Could not check whether that calendar is claimed.", true);
         return;
       }
@@ -7090,6 +7077,9 @@ async function switchDoctorSelection(selectedKey, options = {}) {
       }
     } finally {
       hideSwitchOverlay(switchOverlayId);
+      // If entry failed, its transaction restored the previous calendar.
+      // Derive the picker value from that active context as well.
+      renderDoctorState();
     }
     return;
   }
@@ -14376,7 +14366,9 @@ async function validateDoctorProfileCalendarInBackground(doctor, previousState, 
   }
   if (!calendarTransitionStillCurrent(options.transition)) return;
   if (result) {
-    await commitCalendarLoad(result, { saveInBackground: true, transition: options.transition });
+    // Loading a server snapshot is read-only. Saving it straight back would
+    // unnecessarily invalidate and rebuild the same profile snapshot.
+    await commitCalendarLoad(result, { transition: options.transition });
   } else if (calendarSnapshotMatchesActiveContext(currentSnapshot)) {
     renderLoginState();
     setStatus("Calendar is up to date.");
@@ -14933,9 +14925,9 @@ async function commitCalendarLoad(result, options = {}) {
     doctorKey: result.profile?.doctorKey,
   });
   saveCurrentWorkspace();
-  if (options.saveInBackground) {
+  if (options.saveInBackground === true) {
     queueBackgroundCloudStateSave(snapshotCloudSavePayload());
-  } else {
+  } else if (options.save === true) {
     await saveCloudState();
   }
   if (!calendarTransitionStillCurrent(options.transition)) return;
@@ -16295,8 +16287,6 @@ async function logoutCurrentUser() {
   closeFacilityOverview();
   currentSuggestedClaims = [];
   selectedFiles = [];
-  switchTargetPrefetchRunId += 1;
-  switchTargetPrefetchPromise = null;
   resetDerivedState();
   renderLoginState();
   openLoginModal();
@@ -16422,8 +16412,6 @@ async function loginWithEmail(email, password, options = {}) {
     if (previousEmail !== currentUserEmail) {
       await clearLocalWorkspace();
     }
-    switchTargetPrefetchRunId += 1;
-    switchTargetPrefetchPromise = null;
     const loginCacheContext = accountCalendarContextForEmail(currentUserEmail);
     const cachedBeforeAuthentication = loadCachedCalendarSnapshotForContext(loginCacheContext);
     const loginData = await restoreCloudState({
@@ -16486,7 +16474,10 @@ async function loginWithEmail(email, password, options = {}) {
       ...options,
       includeBootstrap: true,
       forceCalendarRefresh: renderedCachedSnapshot,
-      allowInlineBuild: !renderedCachedSnapshot,
+      // Login is a cache read. Building a multi-hospital creator snapshot in
+      // this request can exhaust the Pages Worker before the shell settles.
+      allowInlineBuild: false,
+      skipRebuild: true,
       transition,
     }, loginStartedAt);
   } catch (error) {
@@ -16617,6 +16608,7 @@ async function hydrateAuthenticatedWorkspace(options = {}, loginStartedAt = 0) {
           doctorKey: options.doctorKey || "",
           cachedRevision,
           allowInlineBuild: options.allowInlineBuild !== false,
+          skipRebuild: options.skipRebuild === true,
           preserveExistingSnapshot: true,
           transition: options.transition,
         })
@@ -16666,7 +16658,6 @@ async function hydrateAuthenticatedWorkspace(options = {}, loginStartedAt = 0) {
           // Keep the last merged doctor list.
         }
         if (latestPreview) renderDoctorState();
-        queueCreatorSwitchTargetPrefetch();
       }).catch(() => null);
     }
     if (currentSnapshotStale || !currentSnapshot?.preview) {
@@ -16716,6 +16707,7 @@ function queuePostLoginSnapshotRefresh(options = {}) {
         adminTargetEmail: options.adminTargetEmail || "",
         cachedRevision: "",
         allowInlineBuild: false,
+        skipRebuild: true,
         preserveExistingSnapshot: true,
         transition: options.transition,
       }).catch(() => false);
@@ -17170,6 +17162,7 @@ async function loadCloudCalendarEvents(options = {}) {
     endDate: range.endDate,
     cachedRevision: options.cachedRevision || "",
     allowInlineBuild: options.allowInlineBuild !== false,
+    skipRebuild: options.skipRebuild === true,
   };
   let response = await fetch("/api/state", {
     method: "POST",
@@ -17468,115 +17461,6 @@ function snapshotMatchesDoctorProfile(snapshot, profile) {
     || "",
   );
   return snapshotDoctorKey === normalizeRosterName(profile.doctorKey);
-}
-
-function creatorSwitchTargetsForPrefetch() {
-  if (!isViewingCreatorAccount()) return [];
-  const seen = new Set();
-  const targets = [];
-  for (const doctor of doctorPickerOptions()) {
-    const accountEmail = currentClaimedAccountEmail(doctor.accountEmail || doctor.claimedBy || "");
-    if (normalizeRosterName(doctor.key) === OWNER_DOCTOR_KEY) continue;
-    const profile = accountEmail ? null : doctorProfileForDoctor(doctor);
-    if (!accountEmail && !profile?.id) continue;
-    const context = accountEmail
-      ? accountCalendarContextForEmail(accountEmail)
-      : calendarSnapshotContext({
-          mode: "doctor-profile",
-          ownerId: profile.ownerId,
-          doctorKey: profile.doctorKey,
-        });
-    const key = calendarSnapshotCacheKeyForContext(context);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    targets.push(accountEmail
-      ? { kind: "account", email: accountEmail, context }
-      : { kind: "doctor-profile", profile, context });
-  }
-  for (const user of serverUsers.map(normalizeServerUser)) {
-    if (!user?.email || user.email === OWNER_EMAIL) continue;
-    const context = accountCalendarContextForEmail(user.email);
-    const key = calendarSnapshotCacheKeyForContext(context);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    targets.push({
-      kind: "account",
-      email: user.email,
-      context,
-    });
-  }
-  return targets;
-}
-
-async function prefetchCreatorSwitchTarget(target) {
-  if (!isViewingCreatorAccount() || !cloudAvailable) return;
-  if ((await loadCachedCalendarSnapshotForContextAsync(target.context))?.preview) return;
-  const requestEmail = authUserEmail || currentUserEmail;
-  const requestPassword = authUserPassword || currentUserPassword;
-  if (!requestEmail || !requestPassword) return;
-  let response;
-  if (target.kind === "account") {
-    response = await fetch("/api/state", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        action: "loadCalendarEvents",
-        email: requestEmail,
-        password: requestPassword,
-        targetEmail: target.email,
-        doctorKey: target.context?.doctorKey || "",
-        startDate: target.context?.range?.startDate || "",
-        endDate: target.context?.range?.endDate || "",
-        allowInlineBuild: false,
-        skipRebuild: true,
-      }),
-    });
-  } else if (target.kind === "doctor-profile") {
-    response = await fetch("/api/state", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        action: "loadDoctorProfile",
-        email: requestEmail,
-        password: requestPassword,
-        profileId: target.profile.id,
-        doctorKey: target.profile.doctorKey,
-        displayName: target.profile.displayName,
-        sourceTypes: target.profile.sourceTypes,
-        aliases: target.profile.aliases,
-        allowInlineBuild: false,
-        skipRebuild: true,
-      }),
-    });
-  } else {
-    return;
-  }
-  const data = await readJsonResponse(response, "Could not prefetch account snapshot.");
-  const snapshot = sanitizeWorkspaceSnapshot(data.snapshot);
-  if (!snapshot?.preview) return;
-  snapshot.calendarRevision = String(data.snapshotRevision || data.calendarRevision || snapshot.calendarRevision || "");
-  saveCalendarSnapshotCacheForContext(snapshot, target.context);
-}
-
-function queueCreatorSwitchTargetPrefetch() {
-  if (!isViewingCreatorAccount() || !cloudAvailable || !isCreatorAuthenticated()) return;
-  if (switchTargetPrefetchPromise) return;
-  const runId = ++switchTargetPrefetchRunId;
-  switchTargetPrefetchPromise = (async () => {
-    const targets = creatorSwitchTargetsForPrefetch();
-    let nextIndex = 0;
-    const workerCount = Math.min(4, targets.length);
-    await Promise.all(Array.from({ length: workerCount }, async () => {
-      while (nextIndex < targets.length) {
-        const target = targets[nextIndex];
-        nextIndex += 1;
-        if (runId !== switchTargetPrefetchRunId || !isViewingCreatorAccount()) return;
-        await prefetchCreatorSwitchTarget(target).catch(() => null);
-      }
-    }));
-  })().finally(() => {
-    if (runId === switchTargetPrefetchRunId) switchTargetPrefetchPromise = null;
-  });
 }
 
 async function saveCloudStateNow(snapshot = null) {
@@ -17905,7 +17789,6 @@ async function loadServerUsers() {
     }
     applyIssueConfig(data.issueConfig);
     syncAccountsButton();
-    queueCreatorSwitchTargetPrefetch();
     if (isViewingCreatorAccount() && latestPreview) renderDoctorState();
   } catch {
     // Keep the last available local list.
@@ -20236,7 +20119,8 @@ async function bootstrapApp() {
     queuePostLoginHydration({
       includeBootstrap: true,
       forceCalendarRefresh: renderedCachedSnapshot || inlineSnapshotReady,
-      allowInlineBuild: !(renderedCachedSnapshot || inlineSnapshotReady),
+      allowInlineBuild: false,
+      skipRebuild: true,
       transition,
     }, loginStartedAt);
     queueStoredCalendarSnapshotMaintenance();

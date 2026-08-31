@@ -1182,7 +1182,11 @@ assert.match(
   "browser snapshot rendering should reject stale local cache when the server supplied a current revision",
 );
 assert.match(appSource, /function validateDoctorProfileCalendarInBackground/, "doctor-profile switching should validate cached snapshots in the background");
-assert.match(appSource, /function queueCreatorSwitchTargetPrefetch\(\)/, "creator login should prefetch switch targets into browser snapshot cache");
+assert.doesNotMatch(
+  appSource,
+  /queueCreatorSwitchTargetPrefetch|prefetchCreatorSwitchTarget/,
+  "opening the creator switcher must not fan out authenticated requests for every doctor",
+);
 assert.match(
   appSource.match(/function hasFileDrag[\s\S]*?function abortRosterFileDrag/)?.[0] || "",
   /public\.file-url[\s\S]*application\/x-moz-file[\s\S]*const active = hasFileDrag\(dataTransfer\)/,
@@ -1412,9 +1416,14 @@ assert.match(
   "claimed account background validation should skip network work when the browser cache is current",
 );
 assert.match(
-  appSource.match(/async function prefetchCreatorSwitchTarget[\s\S]*?function queueCreatorSwitchTargetPrefetch/)?.[0] || "",
-  /allowInlineBuild: false[\s\S]*skipRebuild: true/,
-  "creator switch-target prefetch should not build missing snapshots in the background",
+  appSource.match(/async function loginWithEmail[\s\S]*?async function restoreCloudState/)?.[0] || "",
+  /queuePostLoginHydration\([\s\S]*?allowInlineBuild: false[\s\S]*?skipRebuild: true/,
+  "post-login hydration must not build the creator snapshot inside an interactive request",
+);
+assert.match(
+  appSource.match(/async function switchDoctorSelection[\s\S]*?async function resolveDoctorAccountForSwitch/)?.[0] || "",
+  /catch \(error\) \{[\s\S]*?renderDoctorState\(\)[\s\S]*?Could not check whether that calendar is claimed/,
+  "a failed switch resolution should restore the picker label to the active calendar",
 );
 assert.match(
   stateSource.match(/async function loadFastAccountSnapshotPayload[\s\S]*?function scheduleAccountSnapshotRebuild/)?.[0] || "",
@@ -2055,7 +2064,7 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function loginWithEmail[\s\S]*?async function restoreCloudState/)?.[0] || "",
-  /renderLoginState\(\);\s*closeLoginModal\(\);[\s\S]*queueDeferredAccountContextLoad[\s\S]*queuePostLoginHydration\(\{[\s\S]*includeBootstrap: true[\s\S]*allowInlineBuild: !renderedCachedSnapshot/,
+  /renderLoginState\(\);\s*closeLoginModal\(\);[\s\S]*queueDeferredAccountContextLoad[\s\S]*queuePostLoginHydration\(\{[\s\S]*includeBootstrap: true[\s\S]*allowInlineBuild: false/,
   "successful login should reveal the shell before background workspace hydration completes",
 );
 assert.match(
