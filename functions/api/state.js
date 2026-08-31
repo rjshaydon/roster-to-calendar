@@ -4536,7 +4536,7 @@ async function creatorDoctorOptionsForD1(db, index) {
     const options = await buildCanonicalDoctorOptionsFromRows(db, doctorRows, { includeZeroEventStandalone: true });
     return await mergeDoctorOptionsWithApprovedPeople(db, options);
   }
-  return [];
+  return await mergeDoctorOptionsWithApprovedPeople(db, []);
 }
 
 async function mergeDoctorOptionsWithApprovedPeople(db, options = []) {
@@ -4549,7 +4549,6 @@ async function mergeDoctorOptionsWithApprovedPeople(db, options = []) {
   for (const person of people) {
     const personMarkers = new Set((person.aliases || []).map((alias) => `${alias.sourceType}:${normalizeRosterName(alias.key)}`));
     const matched = options.filter((option) => [...optionMarkers(option)].some((marker) => personMarkers.has(marker)));
-    if (!matched.length) continue;
     matched.forEach((option) => consumed.add(option));
     const aliasByMarker = new Map();
     for (const alias of [...matched.flatMap(optionAliases), ...(person.aliases || [])]) {
@@ -4582,7 +4581,7 @@ async function loadSqlDoctorCandidates(db) {
   if (rosterDoctors.length) return rosterDoctors;
   const doctorRows = await queryRosterFileDoctors(db).catch(() => []);
   if (doctorRows.length) return await buildCanonicalDoctorOptionsFromRows(db, doctorRows, { includeZeroEventStandalone: true });
-  return [];
+  return await mergeDoctorOptionsWithApprovedPeople(db, []);
 }
 
 async function resolveSelectedRosterFileDoctorRows(db, doctorKey) {
@@ -5252,7 +5251,18 @@ function mergeProfileSessionIntoState(state, profiles, ownerEmail = "") {
 async function canonicalDoctorOptionForProfile(db, profile) {
   const canonicalDoctors = await creatorDoctorOptionsForD1(db).catch(() => []);
   const requestedKeys = doctorKeysForOption(profile);
-  return requestedKeys.map((key) => findDoctorOptionByKey(canonicalDoctors, key)).find(Boolean)
+  const durablePeople = await queryApprovedRosterPeople(db).catch(() => []);
+  const durablePerson = durablePeople.find((person) => (person.aliases || []).some((alias) => requestedKeys.includes(normalizeRosterName(alias.key))));
+  const durableOption = durablePerson?.aliases?.length ? {
+    key: normalizeRosterName(durablePerson.aliases[0].key),
+    displayName: durablePerson.preferredDisplayName || durablePerson.aliases[0].displayName,
+    sourceType: durablePerson.aliases[0].sourceType,
+    sourceTypes: [...new Set(durablePerson.aliases.map((alias) => alias.sourceType))],
+    aliases: durablePerson.aliases,
+    personId: durablePerson.personId,
+  } : null;
+  return durableOption
+    || requestedKeys.map((key) => findDoctorOptionByKey(canonicalDoctors, key)).find(Boolean)
     || canonicalDoctors.find((doctor) => rosterIdentityKey(doctor?.displayName || doctor?.key) === rosterIdentityKey(profile?.displayName || profile?.doctorKey))
     || null;
 }
@@ -5308,8 +5318,14 @@ async function loadDoctorProfileSnapshotInfo(store, profile, db = null, ownerEma
 async function queryDoctorProfileCalendarRevision(db, profile, ownerEmail = "") {
   if (!hasCalendarDb({ ROSTER_DB: db })) return "";
   const canonicalDoctor = await canonicalDoctorOptionForProfile(db, profile);
+  const requestedKeys = new Set(doctorKeysForOption(profile));
+  const durablePeople = await queryApprovedRosterPeople(db).catch(() => []);
+  const durableSourceTypes = durablePeople
+    .filter((person) => (person.aliases || []).some((alias) => requestedKeys.has(normalizeRosterName(alias.key))))
+    .flatMap((person) => person.aliases || [])
+    .map((alias) => alias.sourceType);
   const rosterRevision = await queryCalendarRevision(db, ownerEmail, {
-    sourceTypes: sanitizeSourceTypes([...(profile?.sourceTypes || []), ...(canonicalDoctor?.sourceTypes || [])]),
+    sourceTypes: sanitizeSourceTypes([...(profile?.sourceTypes || []), ...(canonicalDoctor?.sourceTypes || []), ...durableSourceTypes]),
   }).catch(() => "");
   const aliasKeys = [...new Set([
     ...doctorKeysForOption(profile),
