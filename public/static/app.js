@@ -336,7 +336,7 @@ let facilityOverviewCompactState = {
   touchY: 0,
 };
 let facilityOverviewState = {
-  tab: "on-shift", date: contactOperationalDate(), followOperationalDate: true, facilityKey: "", includeClinicalSupport: false, requestId: 0, onShiftData: null, contactList: null, contactReviewOpen: false, contactResolutionMenu: null, contactResolutionSaving: false,
+  tab: "on-shift", date: contactOperationalDate(), followOperationalDate: true, facilityKey: "", includeClinicalSupport: false, requestId: 0, requestController: null, onShiftData: null, contactList: null, contactReviewOpen: false, contactResolutionMenu: null, contactResolutionSaving: false,
   staffTermStart: formatDateKey(australianTermForDate(new Date()).start), staffTerms: [], staffContent: "", staffData: null, staffQuery: "", staffExpanded: new Set(), staffFocusSection: "", staffActionMenu: null, staffDesignationMenu: null, staffSeniorityMenu: null, staffMultiSelectSection: "", staffMultiSelectMembers: new Map(), staffBulkSeniorityMenu: null, staffMultiSelectSaving: false,
   preferredFacilityKey: "", preferredFacilityReason: "", preferredFacilityEvidenceDate: "", byStreamFrom: formatDateKey(new Date()), byStreamTo: formatDateKey(new Date()), byStreamRows: [], byStreamCatalog: [], byStreamCoverage: [], byStreamContent: "", byStreamData: null, byStreamLoading: false, byStreamMetadataLoading: false, byStreamMetadataKey: "", byStreamMetadataPromise: null, byStreamRequestId: 0, byStreamHideEmptyDates: true, byStreamRowId: 0,
   togetherStaffKeys: ["", ""], togetherRangeMode: "term",
@@ -791,6 +791,9 @@ facilityOverviewSection?.addEventListener("click", (event) => {
   }
   const tab = event.target.closest("[data-facility-overview-tab]");
   if (tab) {
+    cancelFacilityOverviewDataRequest();
+    facilityOverviewState.requestId += 1;
+    facilityOverviewState.byStreamRequestId += 1;
     collapseFacilityOverviewContactReview();
     facilityOverviewState.staffActionMenu = null;
     facilityOverviewState.staffDesignationMenu = null;
@@ -9311,9 +9314,11 @@ async function loadFacilityOverviewMetadata() {
   if (facilityOverviewState.byStreamMetadataPromise) return facilityOverviewState.byStreamMetadataPromise;
   facilityOverviewState.byStreamMetadataLoading = true;
   facilityOverviewState.byStreamMetadataPromise = (async () => {
+    const controller = beginFacilityOverviewDataRequest();
     try {
     const response = await fetch("/api/state", {
       method: "POST", headers: { "content-type": "application/json" },
+      signal: controller.signal,
       body: JSON.stringify({
         action: "queryFacilityOverviewMetadata",
         email: authUserEmail || currentUserEmail,
@@ -9328,9 +9333,11 @@ async function loadFacilityOverviewMetadata() {
     facilityOverviewState.byStreamMetadataKey = metadataKey;
     return data;
     } catch (error) {
+      if (facilityOverviewRequestWasCancelled(error)) return null;
       console.warn("Could not load At a glance stream metadata", error);
       return null;
     } finally {
+      finishFacilityOverviewDataRequest(controller);
       facilityOverviewState.byStreamMetadataLoading = false;
       facilityOverviewState.byStreamMetadataPromise = null;
     }
@@ -9527,6 +9534,7 @@ function beginFacilityOverviewAccountSession() {
 }
 
 function resetFacilityOverviewSessionState() {
+  cancelFacilityOverviewDataRequest();
   const today = formatDateKey(new Date());
   const currentTerm = australianTermForDate(new Date());
   const currentTermStart = formatDateKey(currentTerm.start);
@@ -9657,16 +9665,25 @@ async function openFacilityOverview(options = {}) {
 
 async function openFacilityOverviewByStream() {
   if (!canUseFacilityOverview() || facilityOverviewState.tab !== "by-stream") return;
+  const navigationId = facilityOverviewState.byStreamRequestId;
   facilityOverviewState.byStreamContent = `<article class="issue-card"><p>Loading available streams…</p></article>`;
   renderFacilityOverview();
-  await loadFacilityOverviewMetadata();
-  if (facilityOverviewState.tab !== "by-stream") return;
+  let metadata = await loadFacilityOverviewMetadata();
+  if (facilityOverviewState.tab !== "by-stream" || facilityOverviewState.byStreamRequestId !== navigationId) return;
+  if (!metadata) metadata = await loadFacilityOverviewMetadata();
+  if (facilityOverviewState.tab !== "by-stream" || facilityOverviewState.byStreamRequestId !== navigationId) return;
+  if (!metadata) {
+    facilityOverviewState.byStreamContent = `<article class="issue-card"><p>Available streams could not be loaded right now.</p></article>`;
+    renderFacilityOverview();
+    return;
+  }
   initializeFacilityOverviewByStreamState();
   renderFacilityOverview();
   await loadFacilityOverviewByStream();
 }
 
 function closeFacilityOverview() {
+  cancelFacilityOverviewDataRequest();
   collapseFacilityOverviewContactReview();
   stopFacilityOverviewContactRefresh();
   facilityOverviewNavigationLocked = false;
@@ -9681,6 +9698,26 @@ function closeFacilityOverview() {
   facilityOverviewSection?.classList.add("hidden");
   if (latestPreview) previewSection?.classList.remove("hidden");
   syncFacilityOverviewNavigationState();
+}
+
+function cancelFacilityOverviewDataRequest() {
+  if (facilityOverviewState.requestController) facilityOverviewState.requestController.abort();
+  facilityOverviewState.requestController = null;
+}
+
+function beginFacilityOverviewDataRequest() {
+  cancelFacilityOverviewDataRequest();
+  const controller = new AbortController();
+  facilityOverviewState.requestController = controller;
+  return controller;
+}
+
+function finishFacilityOverviewDataRequest(controller) {
+  if (facilityOverviewState.requestController === controller) facilityOverviewState.requestController = null;
+}
+
+function facilityOverviewRequestWasCancelled(error) {
+  return error?.name === "AbortError";
 }
 
 function renderFacilityOverview() {
@@ -10026,9 +10063,11 @@ async function loadFacilityOverviewByStream() {
   facilityOverviewState.byStreamLoading = true;
   facilityOverviewState.byStreamContent = `<article class="issue-card"><p>Loading stream coverage…</p></article>`;
   renderFacilityOverview();
+  const controller = beginFacilityOverviewDataRequest();
   try {
     const response = await fetch("/api/state", {
       method: "POST", headers: { "content-type": "application/json" },
+      signal: controller.signal,
       body: JSON.stringify({
         action: "queryFacilityOverviewByStream", email: authUserEmail || currentUserEmail, password: authUserPassword || currentUserPassword,
         targetEmail: facilityOverviewTargetEmail(),
@@ -10042,11 +10081,16 @@ async function loadFacilityOverviewByStream() {
     facilityOverviewMergeStreamCatalog(facilityOverviewBuildStreamCatalog(data.events || []));
     facilityOverviewState.byStreamContent = facilityOverviewByStreamContentFromData(data);
   } catch (error) {
+    if (facilityOverviewRequestWasCancelled(error)) return;
     if (facilityOverviewState.byStreamRequestId !== requestId) return;
     facilityOverviewState.byStreamContent = `<article class="issue-card"><p>${escapeHtml(error.message || "Stream coverage is unavailable right now.")}</p></article>`;
+  } finally {
+    finishFacilityOverviewDataRequest(controller);
+    if (facilityOverviewState.byStreamRequestId === requestId) {
+      facilityOverviewState.byStreamLoading = false;
+      renderFacilityOverview();
+    }
   }
-  facilityOverviewState.byStreamLoading = false;
-  renderFacilityOverview();
 }
 
 function facilityOverviewTogetherStaffOptions() {
@@ -10211,10 +10255,12 @@ async function loadFacilityOverviewTogether() {
   facilityOverviewState.togetherHasSearched = true;
   facilityOverviewState.togetherContent = `<article class="issue-card"><p>${selectedDoctors.length === 1 ? "Finding rostered shifts…" : "Finding shared roster days…"}</p></article>`;
   renderFacilityOverview();
+  const controller = beginFacilityOverviewDataRequest();
   try {
     const response = await fetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
+      signal: controller.signal,
       body: JSON.stringify({
         action: "queryFacilityOverviewWorkingTogether",
         email: authUserEmail || currentUserEmail,
@@ -10230,8 +10276,11 @@ async function loadFacilityOverviewTogether() {
     if (facilityOverviewState.requestId !== requestId || facilityOverviewState.tab !== "together") return;
     facilityOverviewState.togetherContent = renderFacilityOverviewTogetherResults(data.events || [], selectedDoctors, { startDate, endDate });
   } catch (error) {
+    if (facilityOverviewRequestWasCancelled(error)) return;
     if (facilityOverviewState.requestId !== requestId) return;
     facilityOverviewState.togetherContent = `<article class="issue-card"><p>${escapeHtml(error.message || "Shared roster days are unavailable right now.")}</p></article>`;
+  } finally {
+    finishFacilityOverviewDataRequest(controller);
   }
   renderFacilityOverview();
 }
@@ -10398,10 +10447,12 @@ async function loadFacilityOverviewOnShift() {
   facilityOverviewState.contactList = null;
   facilityOverviewState.content = `<article class="issue-card"><p>Loading rostered staff…</p></article>`;
   renderFacilityOverview();
+  const controller = beginFacilityOverviewDataRequest();
   try {
     const response = await fetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
+      signal: controller.signal,
       body: JSON.stringify({
         action: "queryFacilityOverviewOnShift",
         email: authUserEmail || currentUserEmail,
@@ -10418,8 +10469,11 @@ async function loadFacilityOverviewOnShift() {
     facilityOverviewState.contactList = data.contactList || null;
     facilityOverviewState.content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData);
   } catch (error) {
+    if (facilityOverviewRequestWasCancelled(error)) return;
     if (facilityOverviewState.requestId !== requestId) return;
     facilityOverviewState.content = `<article class="issue-card"><p>${escapeHtml(error.message || "The ED overview is unavailable right now.")}</p></article>`;
+  } finally {
+    finishFacilityOverviewDataRequest(controller);
   }
   renderFacilityOverview();
   scheduleFacilityOverviewContactRefresh();
@@ -10918,9 +10972,11 @@ async function loadFacilityOverviewStaff() {
   facilityOverviewState.requestId = requestId;
   facilityOverviewState.staffContent = `<article class="issue-card"><p>Loading ED staff…</p></article>`;
   renderFacilityOverview();
+  const controller = beginFacilityOverviewDataRequest();
   try {
     const response = await fetch("/api/state", {
       method: "POST", headers: { "content-type": "application/json" },
+      signal: controller.signal,
       body: JSON.stringify({
         action: "queryFacilityOverviewStaff", email: authUserEmail || currentUserEmail, password: authUserPassword || currentUserPassword,
         targetEmail: facilityOverviewTargetEmail(),
@@ -10934,8 +10990,11 @@ async function loadFacilityOverviewStaff() {
     facilityOverviewState.staffData = data;
     facilityOverviewState.staffContent = renderFacilityOverviewStaffResults(data, term);
   } catch (error) {
+    if (facilityOverviewRequestWasCancelled(error)) return;
     if (facilityOverviewState.requestId !== requestId) return;
     facilityOverviewState.staffContent = `<article class="issue-card"><p>${escapeHtml(error.message || "The ED staff list is unavailable right now.")}</p></article>`;
+  } finally {
+    finishFacilityOverviewDataRequest(controller);
   }
   renderFacilityOverview();
   focusFacilityOverviewStaffSection();

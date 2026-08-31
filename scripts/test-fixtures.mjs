@@ -1038,7 +1038,20 @@ assert.match(
   "chunked roster saves must preserve FindMyShift staff IDs on DDH event rows",
 );
 assert.match(d1CalendarSource, /const overrideTerms = new Map\(\)[\s\S]*Promise\.all\(\[\.\.\.overrideTerms\.entries\(\)\]/, "Effective-grade resolution should load overrides once per facility and term, rather than once per staff row");
-assert.match(d1CalendarSource, /export async function queryFacilityOverviewStaff[\s\S]*roster_events\.start_date[\s\S]*event: \{ start: String\(row\.start_date/, "ED staff should return lightweight dated grade records rather than full calendar-event JSON");
+const facilityStaffQuerySource = d1CalendarSource.match(/export async function queryFacilityOverviewStaff[\s\S]*?export async function queryOverlapDoctors/)?.[0] || "";
+assert.match(facilityStaffQuerySource, /SELECT DISTINCT roster_file_doctors[\s\S]*EXISTS \([\s\S]*roster_events\.file_id = roster_files\.id[\s\S]*GROUP BY roster_events\.doctor_key[\s\S]*coverageBySource/, "ED staff should use an overlap existence check, collapse same-day grade rows, and reuse source coverage");
+assert.doesNotMatch(facilityStaffQuerySource, /WITH selected_files|file_coverage/, "ED staff must not aggregate every event once per active roster file before loading a term");
+assert.match(facilityStaffQuerySource, /event: \{ start: String\(row\.start_date/, "ED staff should return lightweight dated grade records rather than full calendar-event JSON");
+assert.match(
+  appSource.match(/function cancelFacilityOverviewDataRequest[\s\S]*?function renderFacilityOverview/)?.[0] || "",
+  /requestController\.abort\(\)[\s\S]*new AbortController\(\)[\s\S]*AbortError/,
+  "At a glance should cancel superseded server requests when the user changes views",
+);
+assert.match(
+  appSource.match(/async function loadFacilityOverviewStaff[\s\S]*?function refreshFacilityOverviewStaffContent/)?.[0] || "",
+  /beginFacilityOverviewDataRequest\(\)[\s\S]*signal: controller\.signal[\s\S]*facilityOverviewRequestWasCancelled/,
+  "ED staff requests should participate in At a glance cancellation",
+);
 assert.match(appSource, /physiotherapist[\s\S]*nurse practitioner[\s\S]*Fast Track[\s\S]*facilityOverviewDetectedSeniority/, "Physios and nurse practitioners should be identified and placed in Fast Track");
 assert.match(appSource, /Senior Registrar"\) return "SR"[\s\S]*Transitional\/Intermediate Registrar"\) return "TR"[\s\S]*Junior Registrar"\) return "JR"/, "On shift should abbreviate registrar seniorities");
 assert.match(appSource, /Edit designation[\s\S]*data-facility-overview-set-staff-seniority[\s\S]*Use roster designation/, "Creator staff menus should provide effective seniority editing and a roster reset");

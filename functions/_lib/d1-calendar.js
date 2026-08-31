@@ -3994,25 +3994,23 @@ export async function queryFacilityOverviewStaff(db, options = {}) {
   const termEnd = String(options.termEnd || "").slice(0, 10);
   const facilityKey = normalizeSourceType(options.facilityKey || options.sourceType || "");
   if (!termStart || !termEnd) return { members: [], events: [], coverage: [], designations: [] };
-  const selectedFilesSql = facilityKey ? "AND source_type = ?" : "";
+  const selectedFilesSql = facilityKey ? "AND roster_files.source_type = ?" : "";
   const bindings = facilityKey ? [facilityKey, termEnd, termStart] : [termEnd, termStart];
   const members = await db.prepare(`
-    WITH selected_files AS (
-      SELECT id FROM roster_files WHERE active = 1 ${selectedFilesSql}
-    ), file_coverage AS (
-      SELECT roster_events.file_id, MIN(roster_events.start_date) AS coverage_start, MAX(roster_events.start_date) AS coverage_end
-      FROM roster_events
-      INNER JOIN selected_files ON selected_files.id = roster_events.file_id
-      GROUP BY roster_events.file_id
-    )
-    SELECT roster_file_doctors.doctor_key, roster_file_doctors.display_name,
+    SELECT DISTINCT roster_file_doctors.doctor_key, roster_file_doctors.display_name,
       roster_file_doctors.source_type, roster_file_doctors.seniority AS membership_seniority,
-      roster_file_doctors.membership_source, file_coverage.coverage_start, file_coverage.coverage_end
+      roster_file_doctors.membership_source
     FROM roster_file_doctors
     INNER JOIN roster_files ON roster_files.id = roster_file_doctors.file_id
-    INNER JOIN file_coverage ON file_coverage.file_id = roster_file_doctors.file_id
     WHERE roster_files.active = 1
-      AND file_coverage.coverage_start <= ? AND file_coverage.coverage_end >= ?
+      ${selectedFilesSql}
+      AND EXISTS (
+        SELECT 1
+        FROM roster_events
+        WHERE roster_events.file_id = roster_files.id
+          AND roster_events.start_date <= ? AND roster_events.end_date >= ?
+        LIMIT 1
+      )
     ORDER BY roster_file_doctors.source_type, roster_file_doctors.display_name
   `).bind(...bindings).all();
   const continuingSms = await db.prepare(`
@@ -4028,7 +4026,9 @@ export async function queryFacilityOverviewStaff(db, options = {}) {
     FROM roster_events INNER JOIN roster_files ON roster_files.id = roster_events.file_id
     WHERE roster_files.active = 1 ${facilityKey ? "AND roster_events.source_type = ?" : ""}
       AND roster_events.start_date <= ? AND roster_events.end_date >= ?
-    ORDER BY roster_events.source_type, roster_events.display_name, roster_events.start_ts
+    GROUP BY roster_events.doctor_key, roster_events.display_name, roster_events.source_type,
+      roster_events.seniority, roster_events.start_date
+    ORDER BY roster_events.source_type, roster_events.display_name, roster_events.start_date
   `).bind(...eventBindings).all();
   const coverage = await db.prepare(`
     SELECT roster_events.source_type, MIN(roster_events.start_date) AS start_date,
@@ -4037,11 +4037,20 @@ export async function queryFacilityOverviewStaff(db, options = {}) {
     WHERE roster_files.active = 1 ${facilityKey ? "AND roster_events.source_type = ?" : ""}
     GROUP BY roster_events.source_type
   `).bind(...(facilityKey ? [facilityKey] : [])).all();
-  const memberRows = (members.results || []).map((row) => ({
+  const coverageRows = (coverage.results || []).map((row) => ({
+    sourceType: normalizeSourceType(row.source_type), startDate: String(row.start_date || ""), endDate: String(row.end_date || ""),
+  }));
+  const coverageBySource = new Map(coverageRows.map((row) => [row.sourceType, row]));
+  const memberRows = (members.results || []).map((row) => {
+    const sourceType = normalizeSourceType(row.source_type);
+    const sourceCoverage = coverageBySource.get(sourceType);
+    return {
       doctorKey: String(row.doctor_key || "").trim(), displayName: String(row.display_name || "").trim(),
-      sourceType: normalizeSourceType(row.source_type), seniority: String(row.membership_seniority || "").trim(),
-      membershipSource: String(row.membership_source || "roster"), coverageStart: String(row.coverage_start || ""), coverageEnd: String(row.coverage_end || ""),
-    })).filter((row) => row.doctorKey && row.displayName);
+      sourceType, seniority: String(row.membership_seniority || "").trim(),
+      membershipSource: String(row.membership_source || "roster"),
+      coverageStart: sourceCoverage?.startDate || "", coverageEnd: sourceCoverage?.endDate || "",
+    };
+  }).filter((row) => row.doctorKey && row.displayName);
   const currentMembership = new Set(memberRows.map((row) => `${row.sourceType}|${row.doctorKey}`));
   for (const row of continuingSms.results || []) {
     const entry = {
@@ -4059,7 +4068,7 @@ export async function queryFacilityOverviewStaff(db, options = {}) {
       doctorKey: String(row.doctor_key || "").trim(), displayName: String(row.display_name || "").trim(),
       sourceType: normalizeSourceType(row.source_type), seniority: String(row.seniority || "").trim(), event: { start: String(row.start_date || "") },
     })).filter((row) => row.doctorKey && row.event.start),
-    coverage: (coverage.results || []).map((row) => ({ sourceType: normalizeSourceType(row.source_type), startDate: String(row.start_date || ""), endDate: String(row.end_date || "") })),
+    coverage: coverageRows,
     designations,
     seniorityOverrides,
   };
