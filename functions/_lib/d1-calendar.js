@@ -3925,6 +3925,91 @@ export async function saveContactAllocationResolution(db, options = {}) {
 // This intentionally returns the roster events rather than a second server-side
 // stream classification. The browser already owns the parser-rule-aware Who/On
 // shift classifier, so using the same records keeps the two views in agreement.
+function facilityOverviewEventFromRow(row, options = {}) {
+  const sourceType = normalizeSourceType(row.source_type);
+  const date = String(options.date || row.start_date || "").slice(0, 10);
+  const startTime = String(options.startTime ?? "").trim();
+  const endTime = String(options.endTime ?? "").trim();
+  const start = startTime ? `${date}T${startTime}` : String(row.start_ts || date);
+  const end = endTime ? `${date}T${endTime}` : String(row.end_ts || row.end_date || start);
+  return {
+    id: String(options.id || row.id || ""),
+    title: String(row.title || ""),
+    rawValue: String(row.raw_value || ""),
+    source: sourceType,
+    sources: sourceType ? [sourceType] : [],
+    seniority: String(row.seniority || "").trim(),
+    start,
+    end,
+    allDay: Number(row.all_day || 0) === 1,
+    timeLabel: String(row.time_label || ""),
+    location: String(row.location || ""),
+  };
+}
+
+export async function queryFacilityOverviewCatalog(db, options = {}) {
+  if (!db?.prepare) return { events: [], coverage: [] };
+  await ensureCalendarSchema(db);
+  const startDate = String(options.startDate || "").slice(0, 10);
+  const endDate = String(options.endDate || "").slice(0, 10);
+  const sourceTypes = sanitizeSourceTypes(options.sourceTypes || []);
+  if (!startDate || !endDate || endDate < startDate || !sourceTypes.length) return { events: [], coverage: [] };
+  const placeholders = sourceTypes.map(() => "?").join(", ");
+  const rows = await db.prepare(`
+    SELECT roster_events.source_type, roster_events.seniority, roster_events.title,
+      roster_events.raw_value, roster_events.location, roster_events.all_day,
+      roster_events.time_label, SUBSTR(roster_events.start_ts, 12, 8) AS start_time,
+      SUBSTR(roster_events.end_ts, 12, 8) AS end_time,
+      MIN(roster_events.start_date) AS first_date, MAX(roster_events.start_date) AS last_date
+    FROM roster_events
+    INNER JOIN roster_files ON roster_files.id = roster_events.file_id
+    WHERE roster_files.active = 1
+      AND roster_events.source_type IN (${placeholders})
+      AND roster_events.start_date >= ? AND roster_events.start_date <= ?
+    GROUP BY roster_events.source_type, roster_events.seniority, roster_events.title,
+      roster_events.raw_value, roster_events.location, roster_events.all_day,
+      roster_events.time_label, start_time, end_time
+    ORDER BY roster_events.source_type, roster_events.title, roster_events.seniority
+  `).bind(...sourceTypes, startDate, endDate).all();
+  const coverageRows = await db.prepare(`
+    SELECT roster_events.source_type, roster_events.file_id,
+      MIN(roster_events.start_date) AS start_date, MAX(roster_events.start_date) AS end_date
+    FROM roster_events
+    INNER JOIN roster_files ON roster_files.id = roster_events.file_id
+    WHERE roster_files.active = 1
+      AND roster_events.source_type IN (${placeholders})
+    GROUP BY roster_events.source_type, roster_events.file_id
+  `).bind(...sourceTypes).all();
+  const events = [];
+  for (const [index, row] of (rows.results || []).entries()) {
+    const dates = [...new Set([String(row.first_date || "").slice(0, 10), String(row.last_date || "").slice(0, 10)].filter(Boolean))];
+    for (const date of dates) {
+      const event = facilityOverviewEventFromRow(row, {
+        date,
+        startTime: Number(row.all_day || 0) === 1 ? "" : row.start_time,
+        endTime: Number(row.all_day || 0) === 1 ? "" : row.end_time,
+        id: `facility-overview-catalog:${index}:${date}`,
+      });
+      events.push({
+        doctorKey: `FACILITY_OVERVIEW_CATALOG_${index}`,
+        displayName: "Roster catalogue",
+        sourceType: normalizeSourceType(row.source_type),
+        seniority: String(row.seniority || "").trim(),
+        date,
+        event,
+      });
+    }
+  }
+  return {
+    events,
+    coverage: (coverageRows.results || []).map((row) => ({
+      sourceType: normalizeSourceType(row.source_type),
+      startDate: String(row.start_date || "").slice(0, 10),
+      endDate: String(row.end_date || "").slice(0, 10),
+    })).filter((row) => row.sourceType && row.startDate && row.endDate),
+  };
+}
+
 export async function queryFacilityOverviewRange(db, options = {}) {
   if (!db?.prepare) return { events: [], coverage: [] };
   await ensureCalendarSchema(db);
@@ -3934,8 +4019,11 @@ export async function queryFacilityOverviewRange(db, options = {}) {
   if (!startDate || !endDate || endDate < startDate || !sourceTypes.length) return { events: [], coverage: [] };
   const placeholders = sourceTypes.map(() => "?").join(", ");
   const rows = await db.prepare(`
-    SELECT roster_events.doctor_key, roster_events.display_name, roster_events.source_type,
-      roster_events.seniority, roster_events.start_date, roster_events.event_json
+    SELECT roster_events.id, roster_events.doctor_key, roster_events.display_name,
+      roster_events.source_type, roster_events.seniority, roster_events.start_date,
+      roster_events.end_date, roster_events.start_ts, roster_events.end_ts,
+      roster_events.title, roster_events.raw_value, roster_events.location,
+      roster_events.all_day, roster_events.time_label
     FROM roster_events
     INNER JOIN roster_files ON roster_files.id = roster_events.file_id
     WHERE roster_files.active = 1
@@ -3966,8 +4054,8 @@ export async function queryFacilityOverviewRange(db, options = {}) {
     }
     const override = overrideCache.get(overrideKey).get(`${sourceType}|${doctorKey}`);
     const seniority = override && !override.useRosterSeniority ? override.seniority : String(row.seniority || "").trim();
-    const event = parseEvent(row.event_json);
-    if (!doctorKey || !event) continue;
+    const event = facilityOverviewEventFromRow(row);
+    if (!doctorKey) continue;
     events.push({
       doctorKey,
       displayName: String(row.display_name || "").trim() || doctorKey,

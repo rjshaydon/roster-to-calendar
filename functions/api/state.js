@@ -38,6 +38,7 @@ import {
   queryCoworkerEventsFromEvents,
   queryFacilityOverviewOnShift,
   queryFacilityOverviewAccessEvents,
+  queryFacilityOverviewCatalog,
   queryFacilityOverviewRange,
   queryFacilityOverviewStaff,
   queryContactAllocationResolutions,
@@ -1776,7 +1777,7 @@ export async function onRequestPost(context) {
       const term = facilityOverviewTermRange(today);
       const catalogSources = linkedSourceTypes.length ? linkedSourceTypes : ["mmc", "ddh", "casey", "mch", "vhh"];
       try {
-        const catalog = await queryFacilityOverviewRange(context.env.ROSTER_DB, { startDate: term.startDate, endDate: term.endDate, sourceTypes: catalogSources });
+        const catalog = await queryFacilityOverviewCatalog(context.env.ROSTER_DB, { startDate: term.startDate, endDate: term.endDate, sourceTypes: catalogSources });
         return Response.json({
           ok: true,
           today,
