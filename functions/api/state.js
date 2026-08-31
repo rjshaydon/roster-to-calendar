@@ -99,6 +99,7 @@ const OWNER_DOCTOR_KEY = "RICHARD HAYDON";
 const SNAPSHOT_SCHEMA_VERSION = 5;
 const DOCTOR_PROFILE_SNAPSHOT_VERSION = 2;
 const SNAPSHOT_BUILDING_RETRY_MS = 15 * 60 * 1000;
+const DOCTOR_PROFILE_SNAPSHOT_BUILDING_RETRY_MS = 2 * 60 * 1000;
 const SNAPSHOT_GLOBAL_WARMUP_LIMIT = 25;
 const FACILITY_OVERVIEW_STREAM_SENIORITIES = new Set(["SMS", "CMO", "Senior Registrar", "Transitional/Intermediate Registrar", "Junior Registrar", "HMO", "Intern", "NP", "Physio", "Unknown", "ALL"]);
 
@@ -3602,14 +3603,14 @@ function snapshotRegistryState(status = "missing", cache = {}) {
   };
 }
 
-function snapshotRegistryBuildInProgress(registry) {
+function snapshotRegistryBuildInProgress(registry, retryMs = SNAPSHOT_BUILDING_RETRY_MS) {
   if (registry?.status !== "building") return false;
   const updatedAt = Date.parse(registry.updatedAt || "");
-  return Number.isFinite(updatedAt) && Date.now() - updatedAt < SNAPSHOT_BUILDING_RETRY_MS;
+  return Number.isFinite(updatedAt) && Date.now() - updatedAt < retryMs;
 }
 
-function shouldScheduleSnapshotRebuild(registry) {
-  return !snapshotRegistryBuildInProgress(registry);
+function shouldScheduleSnapshotRebuild(registry, retryMs = SNAPSHOT_BUILDING_RETRY_MS) {
+  return !snapshotRegistryBuildInProgress(registry, retryMs);
 }
 
 function viewedAccountPayload(authRecord, targetRecord, prepared = {}) {
@@ -3635,8 +3636,9 @@ async function loadSnapshotPayloadFromRegistry(context, options = {}) {
   const registry = await loadSnapshotRegistryEntry(db, descriptor).catch(() => null);
   const cachedRevision = String(options.cachedRevision || "");
   const calendarRevision = String(options.calendarRevision || "");
-  const buildInProgress = snapshotRegistryBuildInProgress(registry);
-  const canScheduleRebuild = shouldScheduleSnapshotRebuild(registry);
+  const buildingRetryMs = Math.max(1, Number(options.buildingRetryMs || SNAPSHOT_BUILDING_RETRY_MS));
+  const buildInProgress = snapshotRegistryBuildInProgress(registry, buildingRetryMs);
+  const canScheduleRebuild = shouldScheduleSnapshotRebuild(registry, buildingRetryMs);
   const registryCurrent = Boolean(
     calendarRevision
     && registry?.status === "ready"
@@ -5116,7 +5118,9 @@ async function repositoryImportRefsForDoctorProfile(store, profile, db = null, d
 }
 
 async function loadDoctorProfileSnapshotInfo(store, profile, db = null, ownerEmail = "") {
-  const derivedSnapshot = await buildDerivedDoctorProfileSnapshot(store, db, profile, ownerEmail);
+  const derivedSnapshot = await buildDerivedDoctorProfileSnapshot(store, db, profile, ownerEmail, {
+    requestedRange: defaultSnapshotRange(),
+  });
   return {
     snapshot: derivedSnapshot,
     snapshotAvailable: Boolean(derivedSnapshot),
@@ -5159,6 +5163,7 @@ async function loadDoctorProfileSnapshotPayload(context, profile, ownerEmail = "
   return await loadSnapshotPayloadFromRegistry(context, {
     descriptor,
     calendarRevision,
+    buildingRetryMs: DOCTOR_PROFILE_SNAPSHOT_BUILDING_RETRY_MS,
     cachedRevision: options.cachedRevision,
     allowInlineBuild: options.allowInlineBuild !== false,
     scheduleRebuild: options.skipRebuild === true ? null : () => scheduleDoctorProfileSnapshotWarmup(context, profile, ownerEmail, { reason: "stale-read" }),
@@ -5193,7 +5198,9 @@ async function buildAndStoreDoctorProfileSnapshot(context, job = {}) {
     lastError: "",
   }).catch(() => null);
   try {
-    const snapshot = await buildDerivedDoctorProfileSnapshot(null, db, job.profile, job.ownerEmail || "");
+    const snapshot = await buildDerivedDoctorProfileSnapshot(null, db, job.profile, job.ownerEmail || "", {
+      requestedRange,
+    });
     const buildMs = Date.now() - startedAt;
     const sizeBytes = snapshot ? JSON.stringify(snapshot).length : 0;
     if (snapshot && cacheBucket?.put) {
@@ -5233,8 +5240,9 @@ async function buildAndStoreDoctorProfileSnapshot(context, job = {}) {
   }
 }
 
-async function buildDerivedDoctorProfileSnapshot(store, db, profile, ownerEmail = "") {
+async function buildDerivedDoctorProfileSnapshot(store, db, profile, ownerEmail = "", options = {}) {
   if (!hasCalendarDb({ ROSTER_DB: db }) || !profile?.profileId || !profile?.doctorKey) return null;
+  const requestedRange = boundedCalendarEventRange(options.requestedRange || {});
   const session = profile.state?.session && typeof profile.state.session === "object" ? profile.state.session : {};
   const settings = {
     ...defaultSettings(),
@@ -5247,21 +5255,24 @@ async function buildDerivedDoctorProfileSnapshot(store, db, profile, ownerEmail 
   const doctorPairs = doctorDiagnostics.map((row) => ({ fileId: row.fileId, doctorKey: row.doctorKey }));
   const hospitalLocations = await loadAccountHospitalLocations(db, ownerEmail, session).catch(() => null);
   const rosterIssues = doctorPairs.length
-    ? await queryDoctorIssuesForFileDoctorPairs(db, doctorPairs)
-    : await queryDoctorIssues(db, doctorKeys);
+    ? await queryDoctorIssuesForFileDoctorPairs(db, doctorPairs, requestedRange)
+    : await queryDoctorIssues(db, doctorKeys, requestedRange);
   const resolvedRosterEvents = applyEventOverrides(
     applyAccountHospitalLocations(
       doctorPairs.length
-        ? await queryDoctorEventsForFileDoctorPairs(db, doctorPairs)
-        : await queryDoctorEvents(db, doctorKeys),
+        ? await queryDoctorEventsForFileDoctorPairs(db, doctorPairs, requestedRange)
+        : await queryDoctorEvents(db, doctorKeys, requestedRange),
       hospitalLocations || {},
       { includeLocations: settings.includeLocations !== false },
     ),
     session.overrides || {},
   );
+  const customEvents = customEventsToEvents(sanitizeSnapshotCustomEvents(session.customEvents, ""), settings, resolvedRosterEvents)
+    .filter((event) => String(event?.start || "").slice(0, 10) <= requestedRange.endDate
+      && String(event?.end || event?.start || "").slice(0, 10) >= requestedRange.startDate);
   const events = [
     ...resolvedRosterEvents,
-    ...customEventsToEvents(sanitizeSnapshotCustomEvents(session.customEvents, ""), settings, resolvedRosterEvents),
+    ...customEvents,
   ];
   if (!events.length) return null;
   const refs = await repositoryImportRefsForDoctorProfile(store, profile, db, doctorDiagnostics);

@@ -908,6 +908,9 @@ assert.deepEqual(
 assert.match(d1CalendarSource, /export async function queryFacilityOverviewRange[\s\S]*roster_events\.source_type IN[\s\S]*roster_events\.start_date >= \?/, "By stream should query the requested EDs and date range in one database operation");
 assert.match(d1CalendarSource, /export async function queryFacilityOverviewCatalog[\s\S]*GROUP BY roster_events\.source_type[\s\S]*first_date[\s\S]*last_date/, "By stream metadata should collapse repeated roster events into a compact stream catalogue");
 assert.doesNotMatch(d1CalendarSource.match(/export async function queryFacilityOverviewRange[\s\S]*?export async function queryFacilityOverviewStaff/)?.[0] || "", /event_json|parseEvent\(/, "By stream should build lightweight events from indexed columns rather than parse full stored event JSON");
+assert.match(stateSource, /buildDerivedDoctorProfileSnapshot\(null, db, job\.profile, job\.ownerEmail \|\| "", \{[\s\S]*requestedRange[\s\S]*queryDoctorIssuesForFileDoctorPairs\(db, doctorPairs, requestedRange\)[\s\S]*queryDoctorEventsForFileDoctorPairs\(db, doctorPairs, requestedRange\)/, "Doctor profile snapshots should query only their bounded cache range");
+assert.match(stateSource, /DOCTOR_PROFILE_SNAPSHOT_BUILDING_RETRY_MS = 2 \* 60 \* 1000[\s\S]*buildingRetryMs: DOCTOR_PROFILE_SNAPSHOT_BUILDING_RETRY_MS/, "Interrupted doctor profile snapshot builds should recover without blocking the switcher for fifteen minutes");
+assert.match(appSource, /function doctorProfileLoadIsTransient[\s\S]*502\|503\|CPU\|memory[\s\S]*attempt < retryDelays\.length[\s\S]*if \(!doctorProfileLoadIsTransient\(error\)\) throw error/, "Doctor profile switching should tolerate transient Worker overload while a bounded snapshot is being prepared");
 assert.match(styleSource, /\.facility-overview-by-stream \{[\s\S]*grid-template-columns:[\s\S]*\.facility-overview-by-stream-selectors \{[\s\S]*position: sticky[\s\S]*@media \(max-width: 900px\)[\s\S]*\.facility-overview-by-stream \{[\s\S]*grid-template-columns: 1fr/, "By stream should use a desktop selector rail and stack it on narrow screens");
 assert.match(appSource, /Each row is one result lane[\s\S]*selected\.length > 1[\s\S]*facility-overview-by-stream-comparison-day-grid[\s\S]*facility-overview-by-stream-comparison-head-grid/, "By stream should render aligned comparison lanes for multiple selected streams");
 assert.match(appSource, /const previous = facilityOverviewState\.byStreamRows\.at\(-1\);[\s\S]*newFacilityOverviewByStreamRow\(previous\)/, "adding a By stream selection should copy the most recent selection");
@@ -1370,8 +1373,8 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function waitForDoctorProfileCalendarBuild[\s\S]*?async function enterUserAccount/)?.[0] || "",
-  /while \(calendarTransitionStillCurrent\(options\.transition\)\)[\s\S]*retryDelays\[Math\.min\(attempt, retryDelays\.length - 1\)\]/,
-  "doctor profile switching should keep polling a scheduled snapshot until the transition changes",
+  /while \(calendarTransitionStillCurrent\(options\.transition\) && attempt < retryDelays\.length\)[\s\S]*retryDelays\[Math\.min\(attempt, retryDelays\.length - 1\)\]/,
+  "doctor profile switching should poll a scheduled snapshot within a bounded interactive wait",
 );
 assert.doesNotMatch(
   appSource.match(/async function loadUnclaimedDoctorCalendar[\s\S]*?function hasDoctorProfileImportCandidates/)?.[0] || "",

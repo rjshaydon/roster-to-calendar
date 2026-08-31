@@ -14353,15 +14353,21 @@ async function validateDoctorProfileCalendarInBackground(doctor, previousState, 
   // declaring the visible calendar current. Do not send cachedRevision here:
   // the profile endpoint intentionally treats it as a validation-only request
   // and may therefore omit the snapshot body we need to replace stale events.
-  let result = await loadUnclaimedDoctorCalendar(doctor, previousState, {
-    profile: options.profile,
-    cachedRevision: "",
-    // Do not build a profile snapshot inside the interactive Worker request.
-    // Large profiles can exceed Cloudflare's CPU budget; the registry warm-up
-    // and the bounded poll below complete it without failing the switch.
-    allowInlineBuild: false,
-    transition: options.transition,
-  });
+  let result = null;
+  try {
+    result = await loadUnclaimedDoctorCalendar(doctor, previousState, {
+      profile: options.profile,
+      cachedRevision: "",
+      // Do not build a profile snapshot inside the interactive Worker request.
+      // Large profiles can exceed Cloudflare's CPU budget; the registry warm-up
+      // and the bounded poll below complete it without failing the switch.
+      allowInlineBuild: false,
+      transition: options.transition,
+    });
+  } catch (error) {
+    if (!doctorProfileLoadIsTransient(error)) throw error;
+    setStatus(`${doctor.displayName} calendar is preparing...`);
+  }
   if (!result && !calendarSnapshotMatchesActiveContext(currentSnapshot)) {
     result = await waitForDoctorProfileCalendarBuild(doctor, previousState, {
       profile: options.profile,
@@ -14382,20 +14388,28 @@ async function validateDoctorProfileCalendarInBackground(doctor, previousState, 
   }
 }
 
+function doctorProfileLoadIsTransient(error) {
+  return /(?:502|503|CPU|memory|overload|Bad Gateway)/i.test(String(error?.message || error || ""));
+}
+
 async function waitForDoctorProfileCalendarBuild(doctor, previousState, options = {}) {
   const retryDelays = [250, 500, 1000, 1500, 2500, 4000, 5000];
   let attempt = 0;
-  while (calendarTransitionStillCurrent(options.transition)) {
+  while (calendarTransitionStillCurrent(options.transition) && attempt < retryDelays.length) {
     const delayMs = retryDelays[Math.min(attempt, retryDelays.length - 1)];
     attempt += 1;
     await new Promise((resolve) => window.setTimeout(resolve, delayMs));
     if (!calendarTransitionStillCurrent(options.transition)) return null;
-    const result = await loadUnclaimedDoctorCalendar(doctor, previousState, {
-      profile: options.profile,
-      allowInlineBuild: false,
-      transition: options.transition,
-    });
-    if (result || calendarSnapshotMatchesActiveContext(currentSnapshot)) return result;
+    try {
+      const result = await loadUnclaimedDoctorCalendar(doctor, previousState, {
+        profile: options.profile,
+        allowInlineBuild: false,
+        transition: options.transition,
+      });
+      if (result || calendarSnapshotMatchesActiveContext(currentSnapshot)) return result;
+    } catch (error) {
+      if (!doctorProfileLoadIsTransient(error)) throw error;
+    }
   }
   return null;
 }
