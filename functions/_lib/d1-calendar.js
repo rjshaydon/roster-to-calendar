@@ -233,6 +233,14 @@ async function ensureCalendarSchemaUncached(db) {
   `).run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_person_aliases_person ON roster_person_aliases (person_id)").run();
   await db.prepare(`
+    CREATE TABLE IF NOT EXISTS roster_person_alias_audit (
+      audit_id TEXT PRIMARY KEY, person_id TEXT NOT NULL, source_type TEXT NOT NULL, doctor_key TEXT NOT NULL,
+      display_name TEXT NOT NULL DEFAULT '', action TEXT NOT NULL, provenance TEXT NOT NULL,
+      approved_by TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT '', details_json TEXT NOT NULL DEFAULT '{}'
+    )
+  `).run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_person_alias_audit_person ON roster_person_alias_audit (person_id, created_at DESC)").run();
+  await db.prepare(`
     CREATE TABLE IF NOT EXISTS account_people (
       email TEXT PRIMARY KEY, person_id TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT ''
     )
@@ -2843,7 +2851,9 @@ export async function upsertAccountMirror(db, record, options = {}) {
   const claims = sanitizeAccountClaims(record.claims);
   // A claimed account is a reviewed identity boundary. Seed only its explicit
   // source/key claims; ambiguous names are never inferred here.
-  await ensureAccountPersonAliases(db, email, record.realName, claims);
+  await ensureAccountPersonAliases(db, email, record.realName, claims, {
+    approvedBy: options.identityApprovedBy || "",
+  });
   for (const chunk of chunkRowsForBindLimit(claims.map((claim) => [
     email,
     claim.sourceType,
@@ -2880,7 +2890,7 @@ export async function upsertAccountMirror(db, record, options = {}) {
   return true;
 }
 
-export async function ensureAccountPersonAliases(db, email, preferredDisplayName, claims = []) {
+export async function ensureAccountPersonAliases(db, email, preferredDisplayName, claims = [], options = {}) {
   if (!db?.prepare || !email) return null;
   let personId = `account:${normalizeEmail(email)}`;
   const now = new Date().toISOString();
@@ -2905,13 +2915,21 @@ export async function ensureAccountPersonAliases(db, email, preferredDisplayName
     ON CONFLICT(email) DO UPDATE SET person_id = excluded.person_id, updated_at = excluded.updated_at
   `).bind(normalizeEmail(email), personId, now, now).run();
   for (const claim of sanitizeAccountClaims(claims)) {
+    const automatic = isHarmlessRosterNameVariant(preferredDisplayName, claim.displayName || claim.key);
+    const approvedBy = String(options.approvedBy || "").trim();
+    if (!automatic && !approvedBy) continue;
     const existing = await db.prepare("SELECT person_id FROM roster_person_aliases WHERE source_type = ? AND doctor_key = ?").bind(claim.sourceType, claim.key).first();
     if (existing?.person_id && existing.person_id !== personId) continue;
     await db.prepare(`
-      INSERT INTO roster_person_aliases (source_type, doctor_key, display_name, person_id, provenance, confidence, review_state, created_at, updated_at)
-      VALUES (?, ?, ?, ?, 'automatic', 'high', 'approved', ?, ?)
+      INSERT INTO roster_person_aliases (source_type, doctor_key, display_name, person_id, provenance, confidence, review_state, created_at, updated_at, approved_by)
+      VALUES (?, ?, ?, ?, ?, ?, 'approved', ?, ?, ?)
       ON CONFLICT(source_type, doctor_key) DO UPDATE SET display_name = excluded.display_name, updated_at = excluded.updated_at
-    `).bind(claim.sourceType, claim.key, claim.displayName, personId, now, now).run();
+    `).bind(
+      claim.sourceType, claim.key, claim.displayName, personId,
+      automatic ? "automatic" : "admin-approved",
+      automatic ? "exact-normalized" : "confirmed",
+      now, now, automatic ? "" : approvedBy,
+    ).run();
   }
   return personId;
 }
@@ -2928,6 +2946,159 @@ export async function queryPersonAliasesForAccount(db, email) {
     sourceType: String(row.source_type || ""), key: String(row.doctor_key || ""), displayName: String(row.display_name || ""),
     provenance: String(row.provenance || ""), confidence: String(row.confidence || ""), reviewState: String(row.review_state || ""), updatedAt: String(row.updated_at || ""),
   }));
+}
+
+export function harmlessRosterIdentityKey(value) {
+  const raw = String(value || "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+  const untitled = raw
+    .trim()
+    .toUpperCase()
+    .replace(/^(DR|DOCTOR|MR|MRS|MS|MISS|PROF|PROFESSOR|A PROF|ASSOC PROF)[\s.]+/, "");
+  const parts = untitled.split(/\s*,\s*/).filter(Boolean);
+  const ordered = parts.length === 2 ? `${parts[1]} ${parts[0]}` : untitled;
+  return ordered.replace(/[^A-Z0-9]+/g, "");
+}
+
+export function isHarmlessRosterNameVariant(left, right) {
+  const leftKey = harmlessRosterIdentityKey(left);
+  const rightKey = harmlessRosterIdentityKey(right);
+  return Boolean(leftKey && rightKey && leftKey === rightKey);
+}
+
+export async function queryApprovedRosterPeople(db) {
+  if (!db?.prepare) return [];
+  await ensureCalendarSchema(db);
+  const rows = await db.prepare(`
+    SELECT people.person_id, people.preferred_display_name,
+      aliases.source_type, aliases.doctor_key, aliases.display_name,
+      aliases.provenance, aliases.confidence, aliases.review_state,
+      aliases.approved_by, aliases.updated_at
+    FROM roster_people people
+    INNER JOIN roster_person_aliases aliases ON aliases.person_id = people.person_id
+    WHERE people.review_state = 'approved' AND aliases.review_state = 'approved'
+    ORDER BY people.preferred_display_name, aliases.source_type, aliases.display_name
+  `).all();
+  const people = new Map();
+  for (const row of rows.results || []) {
+    const personId = String(row.person_id || "");
+    if (!people.has(personId)) people.set(personId, {
+      personId,
+      preferredDisplayName: String(row.preferred_display_name || ""),
+      aliases: [],
+    });
+    people.get(personId).aliases.push({
+      sourceType: String(row.source_type || ""), key: String(row.doctor_key || ""),
+      displayName: String(row.display_name || ""), provenance: String(row.provenance || ""),
+      confidence: String(row.confidence || ""), reviewState: String(row.review_state || ""),
+      approvedBy: String(row.approved_by || ""), updatedAt: String(row.updated_at || ""),
+    });
+  }
+  return [...people.values()];
+}
+
+export async function queryRosterPersonById(db, personId) {
+  if (!db?.prepare || !personId) return null;
+  const people = await queryApprovedRosterPeople(db);
+  const person = people.find((entry) => entry.personId === String(personId)) || null;
+  if (!person) return null;
+  const accounts = await db.prepare("SELECT email FROM account_people WHERE person_id = ? ORDER BY email").bind(person.personId).all();
+  return { ...person, accountEmails: (accounts.results || []).map((row) => normalizeEmail(row.email)).filter(Boolean) };
+}
+
+export async function approveRosterPersonAlias(db, input = {}) {
+  if (!db?.prepare) throw new Error("D1 database is not configured.");
+  await ensureCalendarSchema(db);
+  const canonical = sanitizeRosterPersonAlias(input.canonical);
+  const alias = sanitizeRosterPersonAlias(input.alias);
+  const approvedBy = normalizeEmail(input.approvedBy);
+  if (!canonical || !alias || !approvedBy) throw new Error("Canonical identity, alias, and approving administrator are required.");
+  const automatic = isHarmlessRosterNameVariant(canonical.displayName, alias.displayName);
+  const [canonicalOwner, aliasOwner] = await Promise.all([
+    db.prepare("SELECT person_id FROM roster_person_aliases WHERE source_type = ? AND doctor_key = ?").bind(canonical.sourceType, canonical.key).first(),
+    db.prepare("SELECT person_id FROM roster_person_aliases WHERE source_type = ? AND doctor_key = ?").bind(alias.sourceType, alias.key).first(),
+  ]);
+  const personId = String(canonicalOwner?.person_id || aliasOwner?.person_id || `person:${canonical.sourceType}:${canonical.key.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`);
+  const sourcePersonId = String(aliasOwner?.person_id || "");
+  if (sourcePersonId && sourcePersonId !== personId) {
+    const owners = await db.prepare("SELECT email, person_id FROM account_people WHERE person_id IN (?, ?) ORDER BY email").bind(personId, sourcePersonId).all();
+    const distinctAccounts = [...new Set((owners.results || []).map((row) => normalizeEmail(row.email)).filter(Boolean))];
+    if (distinctAccounts.length > 1) {
+      const error = new Error("These identities belong to different claimed accounts and cannot be merged automatically.");
+      error.code = "ALIAS_ACCOUNT_CONFLICT";
+      throw error;
+    }
+  }
+  const now = new Date().toISOString();
+  await db.prepare(`
+    INSERT INTO roster_people (person_id, preferred_display_name, provenance, review_state, created_at, updated_at, approved_by)
+    VALUES (?, ?, ?, 'approved', ?, ?, ?)
+    ON CONFLICT(person_id) DO UPDATE SET preferred_display_name = excluded.preferred_display_name,
+      provenance = excluded.provenance, review_state = 'approved', updated_at = excluded.updated_at, approved_by = excluded.approved_by
+  `).bind(personId, canonical.displayName, automatic ? "automatic" : "admin-approved", now, now, automatic ? "" : approvedBy).run();
+  if (sourcePersonId && sourcePersonId !== personId) {
+    await db.prepare("UPDATE account_people SET person_id = ?, updated_at = ? WHERE person_id = ?").bind(personId, now, sourcePersonId).run();
+    await db.prepare("UPDATE roster_person_aliases SET person_id = ?, updated_at = ? WHERE person_id = ?").bind(personId, now, sourcePersonId).run();
+  }
+  for (const entry of [canonical, alias]) {
+    await db.prepare(`
+      INSERT INTO roster_person_aliases (source_type, doctor_key, display_name, person_id, provenance, confidence, review_state, created_at, updated_at, approved_by)
+      VALUES (?, ?, ?, ?, ?, ?, 'approved', ?, ?, ?)
+      ON CONFLICT(source_type, doctor_key) DO UPDATE SET display_name = excluded.display_name, person_id = excluded.person_id,
+        provenance = excluded.provenance, confidence = excluded.confidence, review_state = 'approved',
+        updated_at = excluded.updated_at, approved_by = excluded.approved_by
+    `).bind(
+      entry.sourceType, entry.key, entry.displayName, personId,
+      automatic ? "automatic" : "admin-approved", automatic ? "exact-normalized" : "confirmed",
+      now, now, automatic ? "" : approvedBy,
+    ).run();
+    await db.prepare(`
+      INSERT INTO roster_person_alias_audit (audit_id, person_id, source_type, doctor_key, display_name, action, provenance, approved_by, created_at, details_json)
+      VALUES (?, ?, ?, ?, ?, 'link', ?, ?, ?, ?)
+    `).bind(
+      `alias:${Date.now()}:${entry.sourceType}:${entry.key}:${Math.random().toString(36).slice(2, 8)}`,
+      personId, entry.sourceType, entry.key, entry.displayName,
+      automatic ? "automatic" : "admin-approved", automatic ? "" : approvedBy, now,
+      JSON.stringify({ canonicalSourceType: canonical.sourceType, canonicalDoctorKey: canonical.key }),
+    ).run();
+  }
+  return await queryRosterPersonById(db, personId);
+}
+
+export async function unlinkRosterPersonAlias(db, input = {}) {
+  if (!db?.prepare) throw new Error("D1 database is not configured.");
+  await ensureCalendarSchema(db);
+  const alias = sanitizeRosterPersonAlias(input.alias);
+  const approvedBy = normalizeEmail(input.approvedBy);
+  if (!alias || !approvedBy) throw new Error("Alias and approving administrator are required.");
+  const existing = await db.prepare("SELECT person_id, display_name FROM roster_person_aliases WHERE source_type = ? AND doctor_key = ?").bind(alias.sourceType, alias.key).first();
+  if (!existing?.person_id) throw new Error("Roster alias was not found.");
+  const previousPersonId = String(existing.person_id);
+  const personId = `person:${alias.sourceType}:${alias.key.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+  const now = new Date().toISOString();
+  await db.prepare(`
+    INSERT INTO roster_people (person_id, preferred_display_name, provenance, review_state, created_at, updated_at, approved_by)
+    VALUES (?, ?, 'admin-approved', 'approved', ?, ?, ?)
+    ON CONFLICT(person_id) DO UPDATE SET updated_at = excluded.updated_at, approved_by = excluded.approved_by
+  `).bind(personId, alias.displayName || existing.display_name, now, now, approvedBy).run();
+  await db.prepare(`
+    UPDATE roster_person_aliases SET person_id = ?, provenance = 'admin-approved', confidence = 'confirmed',
+      review_state = 'approved', updated_at = ?, approved_by = ? WHERE source_type = ? AND doctor_key = ?
+  `).bind(personId, now, approvedBy, alias.sourceType, alias.key).run();
+  await db.prepare(`
+    INSERT INTO roster_person_alias_audit (audit_id, person_id, source_type, doctor_key, display_name, action, provenance, approved_by, created_at, details_json)
+    VALUES (?, ?, ?, ?, ?, 'unlink', 'admin-approved', ?, ?, ?)
+  `).bind(
+    `alias:${Date.now()}:${alias.sourceType}:${alias.key}:unlink`, personId, alias.sourceType, alias.key,
+    alias.displayName || existing.display_name, approvedBy, now, JSON.stringify({ previousPersonId }),
+  ).run();
+  return { previousPersonId, person: await queryRosterPersonById(db, personId) };
+}
+
+function sanitizeRosterPersonAlias(value) {
+  const sourceType = String(value?.sourceType || "").trim().toLowerCase();
+  const key = String(value?.key || value?.doctorKey || "").trim().toUpperCase().replace(/\s+/g, " ");
+  const displayName = String(value?.displayName || value?.key || value?.doctorKey || "").trim().replace(/\s+/g, " ");
+  return sourceType && key && displayName ? { sourceType, key, displayName } : null;
 }
 
 export async function deleteAccountMirror(db, email) {

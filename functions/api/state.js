@@ -7,6 +7,7 @@ import {
   buildPreviewFromDerivedEvents,
   accountMirrorStatus,
   appendConsoleMessage,
+  approveRosterPersonAlias,
   countDerivedDoctorsByFile,
   countDerivedEventsByFile,
   countDerivedEventsByFileDoctorPairs,
@@ -17,6 +18,8 @@ import {
   deleteCachedSnapshotsForOwner,
   deleteSnapshotRegistryEntriesForOwner,
   hasCalendarDb,
+  harmlessRosterIdentityKey,
+  isHarmlessRosterNameVariant,
   applyAccountHospitalLocations,
   loadAccountHospitalLocations,
   loadCachedSnapshot,
@@ -49,6 +52,7 @@ import {
   setFacilityStaffSeniorityOverrides,
   reconcileFacilityStaffDesignationsForRosterFile,
   queryOverlapDoctorsFromEvents,
+  queryApprovedRosterPeople,
   queryClaimedAccounts,
   queryDoctorProfileMirrors,
   queryDoctorEvents,
@@ -59,6 +63,8 @@ import {
   queryUnresolvedRosterShiftIssueRows,
   queryActiveRosterFileRefs,
   queryCalendarRevision,
+  queryPersonAliasesForAccount,
+  queryRosterPersonById,
   queryDoctorSeniorities,
   queryDoctorEventsForFileDoctorPairs,
   queryDoctorIssuesForFileDoctorPairs,
@@ -84,6 +90,7 @@ import {
   snapshotRegistryRangeKey,
   storeCachedSnapshot,
   trimDerivedRosterFileOverlap,
+  unlinkRosterPersonAlias,
   upsertSnapshotRegistryEntry,
   upsertAccountHospitalLocations,
   setDerivedRosterFileActive,
@@ -725,6 +732,13 @@ export async function onRequestPost(context) {
           claimedBy: existingOwner.email,
         }, { status: 409 });
       }
+      const creatorApproved = account.role === "creator" || account.role === "owner";
+      if (!creatorApproved && !claimMatchesAccountIdentity(claim, targetRecord.realName || "", targetRecord.email)) {
+        return Response.json({
+          error: `${claim.displayName} needs administrator approval before it can be linked to this account.`,
+          approvalRequired: true,
+        }, { status: 409 });
+      }
       const claims = mergeClaims(targetRecord.claims, [{ ...claim, matchedAt: new Date().toISOString() }]);
       const updatedAdminIssues = claimMatchesAccountIdentity(claim, targetRecord.realName || "", targetRecord.email)
         ? targetRecord.adminIssues
@@ -742,7 +756,9 @@ export async function onRequestPost(context) {
         state,
         updatedAt: new Date().toISOString(),
       };
-      await upsertAccountMirror(context.env.ROSTER_DB, updated);
+      await upsertAccountMirror(context.env.ROSTER_DB, updated, {
+        identityApprovedBy: creatorApproved ? email : "",
+      });
       scheduleSnapshotWarmupForAccount(context, claimEmail, { reason: "claimRosterName" });
       const prepared = await prepareAccountResponse(null, updated, { db: context.env.ROSTER_DB });
       return Response.json({
@@ -1111,7 +1127,7 @@ export async function onRequestPost(context) {
         state,
         updatedAt: new Date().toISOString(),
       };
-      await upsertAccountMirror(context.env.ROSTER_DB, updated);
+      await upsertAccountMirror(context.env.ROSTER_DB, updated, { identityApprovedBy: email });
       scheduleSnapshotWarmupForAccount(context, targetEmail, { reason: "setAccountRosterClaims" });
       return Response.json({
         ok: true,
@@ -1179,6 +1195,48 @@ export async function onRequestPost(context) {
         ok: true,
         ...resolution,
       });
+    }
+
+    if (action === "listRosterPersonAliases") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      return Response.json({ ok: true, people: await queryApprovedRosterPeople(context.env.ROSTER_DB) });
+    }
+
+    if (action === "adminApproveRosterIdentityAlias") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      try {
+        const person = await approveRosterPersonAlias(context.env.ROSTER_DB, {
+          canonical: body?.canonical,
+          alias: body?.alias,
+          approvedBy: email,
+        });
+        scheduleSnapshotWarmupForPerson(context, person?.personId, { reason: "approved-identity-alias" });
+        return Response.json({ ok: true, person });
+      } catch (error) {
+        const conflict = error?.code === "ALIAS_ACCOUNT_CONFLICT";
+        return Response.json({ error: error?.message || "Could not approve roster identity alias.", conflict }, { status: conflict ? 409 : 400 });
+      }
+    }
+
+    if (action === "adminUnlinkRosterIdentityAlias") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      try {
+        const result = await unlinkRosterPersonAlias(context.env.ROSTER_DB, {
+          alias: body?.alias,
+          approvedBy: email,
+        });
+        scheduleSnapshotWarmupForPerson(context, result.previousPersonId, { reason: "unlinked-identity-alias" });
+        scheduleSnapshotWarmupForPerson(context, result.person?.personId, { reason: "unlinked-identity-alias" });
+        return Response.json({ ok: true, ...result });
+      } catch (error) {
+        return Response.json({ error: error?.message || "Could not unlink roster identity alias." }, { status: 400 });
+      }
     }
 
     if (action === "setUserInsightsEnabled") {
@@ -3582,16 +3640,24 @@ function buildDoctorProfileSnapshotCacheDescriptor(profile, range) {
   });
 }
 
-function accountSnapshotRevisionSourceTypes(record, prepared = {}) {
+function accountSnapshotRevisionSourceTypes(record, prepared = {}, aliases = []) {
   const role = prepared?.role || record?.role || roleForEmail(record?.email || "");
   if (role === "creator" || role === "owner") return null;
-  return sanitizeSourceTypes(prepared?.claims || record?.claims || []);
+  const claimSourceTypes = sanitizeSourceTypes(prepared?.claims || record?.claims || []);
+  return sanitizeSourceTypes([...claimSourceTypes, ...aliases]);
 }
 
 async function queryAccountCalendarRevision(db, record, prepared = {}) {
-  const sourceTypes = accountSnapshotRevisionSourceTypes(record, prepared);
+  const aliases = await queryPersonAliasesForAccount(db, record?.email || "").catch(() => []);
+  const sourceTypes = accountSnapshotRevisionSourceTypes(record, prepared, aliases);
   const options = sourceTypes === null ? {} : { sourceTypes };
-  return await queryCalendarRevision(db, record?.email || "", options);
+  const calendarRevision = await queryCalendarRevision(db, record?.email || "", options);
+  const identityRevision = aliases
+    .filter((alias) => alias.reviewState === "approved")
+    .map((alias) => `${alias.sourceType}:${alias.key}:${alias.updatedAt}`)
+    .sort()
+    .join(",");
+  return `${calendarRevision}|identity:${identityRevision}`;
 }
 
 function snapshotRegistryState(status = "missing", cache = {}) {
@@ -4068,6 +4134,66 @@ function scheduleSnapshotWarmupForAccount(context, email, options = {}) {
   }));
 }
 
+function scheduleSnapshotWarmupForPerson(context, personId, options = {}) {
+  if (typeof context.waitUntil !== "function" || !personId) return;
+  context.waitUntil((async () => {
+    const person = await queryRosterPersonById(context.env.ROSTER_DB, personId).catch(() => null);
+    if (!person) return;
+    const requestedRange = defaultSnapshotRange();
+    for (const accountEmail of person.accountEmails || []) {
+      const record = await loadAccountMirror(context.env.ROSTER_DB, accountEmail).catch(() => null);
+      if (!record) continue;
+      const prepared = await prepareAccountResponse(null, record, {
+        db: context.env.ROSTER_DB,
+        includeAvailableDoctors: false,
+      });
+      const doctorKey = normalizeRosterName(prepared.claims?.[0]?.key || person.aliases?.[0]?.key || "");
+      await buildAndStoreAccountSnapshot(context, {
+        targetRecord: record,
+        prepared,
+        requestedRange,
+        doctorKey,
+        descriptor: buildAccountSnapshotCacheDescriptor(record, prepared.role, doctorKey, requestedRange),
+        reason: options.reason || "person-identity-change",
+      });
+    }
+    const aliasMarkers = new Set((person.aliases || []).map((alias) => `${alias.sourceType}:${normalizeRosterName(alias.key)}`));
+    const candidates = await listSnapshotRegistryWarmupCandidates(context.env.ROSTER_DB, {
+      ownerTypes: ["doctor-profile"],
+      statuses: ["ready", "error", "missing"],
+      rangeKey: snapshotRegistryRangeKey(requestedRange),
+      limit: 100,
+    }).catch(() => []);
+    for (const candidate of candidates) {
+      const profile = await loadDoctorProfileState(null, context.env.ROSTER_DB, candidate.ownerId).catch(() => null)
+        || doctorProfileFromSnapshotRegistryEntry(candidate);
+      const profileAliases = Array.isArray(profile?.aliases) && profile.aliases.length
+        ? profile.aliases
+        : sanitizeSourceTypes(profile?.sourceTypes).map((sourceType) => ({ sourceType, key: profile?.doctorKey }));
+      if (!profileAliases.some((alias) => aliasMarkers.has(`${String(alias?.sourceType || "").toLowerCase()}:${normalizeRosterName(alias?.key || profile?.doctorKey || "")}`))) continue;
+      const mergedProfile = {
+        ...profile,
+        displayName: person.preferredDisplayName || profile.displayName,
+        sourceTypes: [...new Set((person.aliases || []).map((alias) => alias.sourceType))],
+        aliases: person.aliases,
+      };
+      await buildAndStoreDoctorProfileSnapshot(context, {
+        profile: mergedProfile,
+        ownerEmail: CREATOR_EMAIL,
+        requestedRange,
+        descriptor: buildDoctorProfileSnapshotCacheDescriptor(mergedProfile, requestedRange),
+        reason: options.reason || "person-identity-change",
+      });
+    }
+  })().catch((error) => {
+    console.warn("Person snapshot warmup failed", {
+      personId,
+      reason: options.reason || "person-identity-change",
+      error: error?.message || String(error),
+    });
+  }));
+}
+
 function scheduleDoctorProfileSnapshotWarmup(context, profile, ownerEmail = "", options = {}) {
   if (typeof context.waitUntil !== "function" || !profile?.profileId) return;
   context.waitUntil((async () => {
@@ -4227,14 +4353,25 @@ async function buildDerivedAccountSnapshot(db, context) {
     // Claims are account-owned aliases, not mutually exclusive doctor-picker
     // choices.  A spelling variant at another site must therefore contribute
     // to the same calendar even when canonical cache grouping is stale.
-    const aliases = claims.map((claim) => ({
-      key: claim.key,
-      displayName: claim.displayName,
-      sourceType: claim.sourceType,
-    }));
+    const durableAliases = await queryPersonAliasesForAccount(db, context.record?.email || "").catch(() => []);
+    const aliases = [];
+    const seenAliases = new Set();
+    for (const alias of [...claims, ...durableAliases.filter((alias) => alias.reviewState === "approved")]) {
+      const normalized = {
+        key: normalizeRosterName(alias.key),
+        displayName: String(alias.displayName || alias.key || "").trim(),
+        sourceType: String(alias.sourceType || "").toLowerCase(),
+        provenance: String(alias.provenance || (claims.includes(alias) ? "claim" : "")),
+        reviewState: String(alias.reviewState || "approved"),
+      };
+      const marker = `${normalized.sourceType}:${normalized.key}`;
+      if (!normalized.sourceType || !normalized.key || seenAliases.has(marker)) continue;
+      seenAliases.add(marker);
+      aliases.push(normalized);
+    }
     const selectedClaim = aliases.find((claim) => normalizeRosterName(claim.key) === requestedKey) || aliases[0];
     selectedKey = selectedClaim?.key || claims[0].key;
-    doctorKeys = [...new Set(claims.map((claim) => normalizeRosterName(claim.key)).filter(Boolean))];
+    doctorKeys = [...new Set(aliases.map((alias) => alias.key).filter(Boolean))];
     doctorOptions = [{
       key: selectedKey,
       displayName: String(context.record?.realName || selectedClaim?.displayName || selectedKey).trim(),
@@ -4393,15 +4530,54 @@ function doctorKeysForOption(doctor) {
 
 async function creatorDoctorOptionsForD1(db, index) {
   const canonicalDoctors = await queryCanonicalDoctors(db).catch(() => []);
-  if (canonicalDoctors.length) return canonicalDoctors;
+  if (canonicalDoctors.length) return await mergeDoctorOptionsWithApprovedPeople(db, canonicalDoctors);
   const doctorRows = await queryRosterFileDoctors(db).catch(() => []);
-  if (doctorRows.length) return await buildCanonicalDoctorOptionsFromRows(db, doctorRows, { includeZeroEventStandalone: true });
+  if (doctorRows.length) {
+    const options = await buildCanonicalDoctorOptionsFromRows(db, doctorRows, { includeZeroEventStandalone: true });
+    return await mergeDoctorOptionsWithApprovedPeople(db, options);
+  }
   return [];
+}
+
+async function mergeDoctorOptionsWithApprovedPeople(db, options = []) {
+  const people = await queryApprovedRosterPeople(db).catch(() => []);
+  if (!people.length) return options;
+  const optionAliases = (option) => Array.isArray(option?.aliases) && option.aliases.length ? option.aliases : [option];
+  const optionMarkers = (option) => new Set(optionAliases(option).map((alias) => `${String(alias?.sourceType || option?.sourceType || "").toLowerCase()}:${normalizeRosterName(alias?.key || option?.key || "")}`));
+  const consumed = new Set();
+  const merged = [];
+  for (const person of people) {
+    const personMarkers = new Set((person.aliases || []).map((alias) => `${alias.sourceType}:${normalizeRosterName(alias.key)}`));
+    const matched = options.filter((option) => [...optionMarkers(option)].some((marker) => personMarkers.has(marker)));
+    if (!matched.length) continue;
+    matched.forEach((option) => consumed.add(option));
+    const aliasByMarker = new Map();
+    for (const alias of [...matched.flatMap(optionAliases), ...(person.aliases || [])]) {
+      const sourceType = String(alias?.sourceType || "").toLowerCase();
+      const key = normalizeRosterName(alias?.key || "");
+      if (!sourceType || !key) continue;
+      const marker = `${sourceType}:${key}`;
+      aliasByMarker.set(marker, { ...alias, sourceType, key, displayName: String(alias?.displayName || key).trim() });
+    }
+    const aliases = [...aliasByMarker.values()].sort((left, right) => sourcePriority(left.sourceType) - sourcePriority(right.sourceType) || left.displayName.localeCompare(right.displayName));
+    const primary = aliases[0];
+    merged.push({
+      key: primary.key,
+      displayName: person.preferredDisplayName || primary.displayName,
+      sourceType: primary.sourceType,
+      sourceTypes: [...new Set(aliases.map((alias) => alias.sourceType))],
+      aliases,
+      personId: person.personId,
+      hasEvents: matched.some((option) => option.hasEvents !== false),
+    });
+  }
+  return [...merged, ...options.filter((option) => !consumed.has(option))]
+    .sort((left, right) => left.displayName.localeCompare(right.displayName));
 }
 
 async function loadSqlDoctorCandidates(db) {
   const canonicalDoctors = await queryCanonicalDoctors(db).catch(() => []);
-  if (canonicalDoctors.length) return canonicalDoctors;
+  if (canonicalDoctors.length) return await mergeDoctorOptionsWithApprovedPeople(db, canonicalDoctors);
   const rosterDoctors = await queryRosterDoctors(db).catch(() => []);
   if (rosterDoctors.length) return rosterDoctors;
   const doctorRows = await queryRosterFileDoctors(db).catch(() => []);
@@ -4427,20 +4603,19 @@ async function resolveRosterFileDoctorRows(db, options = {}) {
   const selectedOption = findDoctorOptionByKey(options.doctorOptions || [], requestedKey);
   const candidateKeys = new Set([requestedKey, ...doctorKeysForOption(selectedOption)]);
   const candidateIdentities = new Set([
-    rosterIdentityKey(options.doctorKey || ""),
-    rosterIdentityKey(selectedOption?.displayName || ""),
+    harmlessRosterIdentityKey(options.doctorKey || ""),
+    harmlessRosterIdentityKey(selectedOption?.displayName || ""),
     ...(selectedOption?.aliases || []).flatMap((alias) => [
-      rosterIdentityKey(alias.displayName || ""),
-      rosterIdentityKey(alias.key || ""),
+      harmlessRosterIdentityKey(alias.displayName || ""),
+      harmlessRosterIdentityKey(alias.key || ""),
     ]),
   ].filter(Boolean));
   const matched = [];
   for (const row of doctorRows) {
     const rowKey = normalizeRosterName(row.doctorKey || "");
-    const rowIdentity = rosterIdentityKey(row.displayName || row.doctorKey || "");
+    const rowIdentity = harmlessRosterIdentityKey(row.displayName || row.doctorKey || "");
     const directMatch = candidateKeys.has(rowKey) || candidateIdentities.has(rowIdentity);
-    const fuzzyMatch = [...candidateIdentities].some((identity) => identity && (nameTokenMatch(identity, rowIdentity) || likelySameRosterName(identity, rowIdentity)));
-    if (!directMatch && !fuzzyMatch) continue;
+    if (!directMatch) continue;
     const existing = matched.find((item) => item.fileId === row.fileId);
     if (existing && existing.eventCount >= row.eventCount) continue;
     if (existing) {
@@ -5075,7 +5250,7 @@ function mergeProfileSessionIntoState(state, profiles, ownerEmail = "") {
 }
 
 async function canonicalDoctorOptionForProfile(db, profile) {
-  const canonicalDoctors = await queryCanonicalDoctors(db).catch(() => []);
+  const canonicalDoctors = await creatorDoctorOptionsForD1(db).catch(() => []);
   const requestedKeys = doctorKeysForOption(profile);
   return requestedKeys.map((key) => findDoctorOptionByKey(canonicalDoctors, key)).find(Boolean)
     || canonicalDoctors.find((doctor) => rosterIdentityKey(doctor?.displayName || doctor?.key) === rosterIdentityKey(profile?.displayName || profile?.doctorKey))
@@ -5132,10 +5307,10 @@ async function loadDoctorProfileSnapshotInfo(store, profile, db = null, ownerEma
 
 async function queryDoctorProfileCalendarRevision(db, profile, ownerEmail = "") {
   if (!hasCalendarDb({ ROSTER_DB: db })) return "";
-  const rosterRevision = await queryCalendarRevision(db, ownerEmail, {
-    sourceTypes: sanitizeSourceTypes(profile?.sourceTypes),
-  }).catch(() => "");
   const canonicalDoctor = await canonicalDoctorOptionForProfile(db, profile);
+  const rosterRevision = await queryCalendarRevision(db, ownerEmail, {
+    sourceTypes: sanitizeSourceTypes([...(profile?.sourceTypes || []), ...(canonicalDoctor?.sourceTypes || [])]),
+  }).catch(() => "");
   const aliasKeys = [...new Set([
     ...doctorKeysForOption(profile),
     ...doctorKeysForOption(canonicalDoctor),
@@ -5747,7 +5922,7 @@ function attachClaimedAccountMetadata(doctors, accountIndex) {
 function buildCreatorDoctorOptions(doctors) {
   const groups = new Map();
   for (const doctor of doctors || []) {
-    const identity = rosterIdentityKey(doctor.displayName || doctor.key);
+    const identity = harmlessRosterIdentityKey(doctor.displayName || doctor.key);
     if (!identity) continue;
     if (!groups.has(identity)) groups.set(identity, []);
     groups.get(identity).push({
@@ -5774,31 +5949,12 @@ function buildCreatorDoctorOptions(doctors) {
 async function buildCanonicalDoctorOptionsFromRows(db, rows, options = {}) {
   const exactGroups = new Map();
   for (const row of rows || []) {
-    const identity = rosterIdentityKey(row.displayName || row.doctorKey);
+    const identity = harmlessRosterIdentityKey(row.displayName || row.doctorKey);
     if (!identity) continue;
     if (!exactGroups.has(identity)) exactGroups.set(identity, []);
     exactGroups.get(identity).push(row);
   }
-  const groups = [...exactGroups.values()];
-  const eventCache = new Map();
-  const groupEvents = async (group) => {
-    const key = group.map((row) => row.doctorKey).sort().join("|");
-    if (!eventCache.has(key)) eventCache.set(key, queryDoctorEvents(db, [...new Set(group.map((row) => row.doctorKey))]));
-    return await eventCache.get(key);
-  };
-  for (let leftIndex = 0; leftIndex < groups.length; leftIndex += 1) {
-    for (let rightIndex = leftIndex + 1; rightIndex < groups.length; rightIndex += 1) {
-      const left = groups[leftIndex];
-      const right = groups[rightIndex];
-      if (!isConservativeDoctorVariant(left, right)) continue;
-      if (groupsShareFile(left, right)) continue;
-      if (await groupsHaveConflictingWorkingEvents(await groupEvents(left), await groupEvents(right))) continue;
-      left.push(...right);
-      groups.splice(rightIndex, 1);
-      rightIndex -= 1;
-    }
-  }
-  return groups
+  return [...exactGroups.values()]
     .filter((aliases) => options.includeZeroEventStandalone === true || aliases.some((alias) => Number(alias.eventCount || 0) > 0))
     .map(buildDoctorOptionFromRows)
     .sort((left, right) => left.displayName.localeCompare(right.displayName));
@@ -5807,19 +5963,10 @@ async function buildCanonicalDoctorOptionsFromRows(db, rows, options = {}) {
 async function resolveCanonicalDoctorOptionForKey(db, rows, doctorKey) {
   const normalizedKey = normalizeRosterName(doctorKey || "");
   if (!normalizedKey) return null;
-  const group = (rows || []).filter((row) => normalizeRosterName(row.doctorKey) === normalizedKey);
-  if (!group.length) return null;
-  const seen = new Set(group.map((row) => `${row.fileId}:${row.doctorKey}`));
-  let existingEvents = await queryDoctorEvents(db, [...new Set(group.map((row) => row.doctorKey))]);
-  for (const row of rows || []) {
-    const marker = `${row.fileId}:${row.doctorKey}`;
-    if (seen.has(marker) || !isConservativeDoctorVariant(group, [row]) || groupsShareFile(group, [row])) continue;
-    const candidateEvents = await queryDoctorEvents(db, [row.doctorKey]);
-    if (await groupsHaveConflictingWorkingEvents(existingEvents, candidateEvents)) continue;
-    group.push(row);
-    existingEvents = [...existingEvents, ...candidateEvents];
-    seen.add(marker);
-  }
+  const requested = (rows || []).find((row) => normalizeRosterName(row.doctorKey) === normalizedKey);
+  if (!requested) return null;
+  const identity = harmlessRosterIdentityKey(requested.displayName || requested.doctorKey);
+  const group = (rows || []).filter((row) => harmlessRosterIdentityKey(row.displayName || row.doctorKey) === identity);
   return buildDoctorOptionFromRows(group);
 }
 
@@ -5841,50 +5988,6 @@ function buildDoctorOptionFromRows(aliases) {
     })),
     hasEvents: aliases.some((alias) => Number(alias.eventCount || 0) > 0),
   };
-}
-
-function isConservativeDoctorVariant(leftRows, rightRows) {
-  const left = rosterNameTokens(leftRows[0]?.displayName || leftRows[0]?.doctorKey || "");
-  const right = rosterNameTokens(rightRows[0]?.displayName || rightRows[0]?.doctorKey || "");
-  if (left.length < 2 || right.length < 2 || left.length !== right.length) return false;
-  const leftGiven = left.slice(0, -1).join(" ");
-  const rightGiven = right.slice(0, -1).join(" ");
-  if (leftGiven !== rightGiven) return false;
-  return levenshteinDistance(left.at(-1), right.at(-1)) === 1;
-}
-
-function groupsShareFile(left, right) {
-  const files = new Set(left.map((row) => row.fileId));
-  return right.some((row) => files.has(row.fileId));
-}
-
-async function groupsHaveConflictingWorkingEvents(leftEvents, rightEvents) {
-  return leftEvents.some((left) => isWorkingRosterEvent(left) && rightEvents.some((right) => (
-    isWorkingRosterEvent(right)
-    && String(left.start || "") < String(right.end || right.start || "")
-    && String(right.start || "") < String(left.end || left.start || "")
-  )));
-}
-
-function isWorkingRosterEvent(event) {
-  const title = String(event?.title || "").toLowerCase();
-  return !["annual leave", "conference leave", "sick leave", "phnw", "public holiday"].some((label) => title.includes(label));
-}
-
-function levenshteinDistance(left, right) {
-  const a = String(left || "");
-  const b = String(right || "");
-  const table = Array.from({ length: a.length + 1 }, (_, row) => Array.from({ length: b.length + 1 }, (_, col) => row ? (col ? 0 : row) : col));
-  for (let row = 1; row <= a.length; row += 1) {
-    for (let col = 1; col <= b.length; col += 1) {
-      table[row][col] = Math.min(
-        table[row - 1][col] + 1,
-        table[row][col - 1] + 1,
-        table[row - 1][col - 1] + (a[row - 1] === b[col - 1] ? 0 : 1),
-      );
-    }
-  }
-  return table[a.length][b.length];
 }
 
 function doctorProfileCoverage(rows, doctor, sourceTypes) {
@@ -6111,8 +6214,7 @@ function doctorMatchesRealName(doctor, realName) {
   if (!realKey) return false;
   if (doctor.key === realKey) return true;
   if (realIdentityKey && doctorIdentityKey && realIdentityKey === doctorIdentityKey) return true;
-  if (nameTokenMatch(realName, doctor.displayName)) return true;
-  return likelySameRosterName(realName, doctor.displayName);
+  return isHarmlessRosterNameVariant(realName, doctor.displayName || doctor.key);
 }
 
 function nameTokenMatch(left, right) {

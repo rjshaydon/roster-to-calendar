@@ -7,11 +7,16 @@ import { onRequestPost as handleStatePost } from "../functions/api/state.js";
 import { onRequestGet as handleFeedGet } from "../functions/api/feed.js";
 import { assertFindmyshiftDandenongAssignments, extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentDiagnostics, findmyshiftDandenongAssignmentExceptions, findmyshiftRowsWorkbook, findmyshiftStaffAssignmentById, findmyshiftStaffSeniorityById } from "../functions/_lib/findmyshift.js";
 import { buildAutomatedDerivedRosterPayload } from "../functions/_lib/automation-import.js";
-import { australianTermStartForDate, buildPreviewFromDerivedEvents, findRosterSyncByProviderVersion, isApprovedReparseOmission, queryCalendarRevision, sameRosterOccurrence, storeCachedSnapshot } from "../functions/_lib/d1-calendar.js";
+import { australianTermStartForDate, buildPreviewFromDerivedEvents, findRosterSyncByProviderVersion, harmlessRosterIdentityKey, isApprovedReparseOmission, isHarmlessRosterNameVariant, queryCalendarRevision, sameRosterOccurrence, storeCachedSnapshot } from "../functions/_lib/d1-calendar.js";
 import { recordRosterDispatchLifecycle, requestQueuedRosterProcessing } from "../functions/_lib/automation-dispatch.js";
 import { applyRosterEventSeniorities, attachFindmyshiftStaffIds, buildRosterView, clinicalSupportRosterMode, customEventsToEvents, doctorOptions, filterCalendarRosterEvents, filterCrossFacilityVhhRosterEvents, findmyshiftProviderStaffOptions, findmyshiftRosteredStaffOptions, isCrossFacilityVhhRosterEvent, mergeMembershipDoctors, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
 import { customEventsToEvents as serverCustomEventsToEvents } from "../functions/_lib/roster.js";
 import { parserResultDelta, unresolvedCodeSummary } from "./parser-parity.mjs";
+
+assert.equal(harmlessRosterIdentityKey("Toby O BRIEN"), harmlessRosterIdentityKey("Toby O’Brien"), "spacing and apostrophe variants should normalize automatically");
+assert.equal(isHarmlessRosterNameVariant("Toby OBRIEN", "Toby O’Brien"), true, "harmless punctuation variants should not need review");
+assert.equal(isHarmlessRosterNameVariant("Aeshan KULARATNE", "Aeshan KULURATNE"), false, "a surname misspelling must require admin approval");
+assert.equal(isHarmlessRosterNameVariant("Jay WEERARATNE", "Jayantha WEERARATNE"), false, "nickname and full-name variants must require admin approval");
 
 assert.deepEqual(
   parserResultDelta(
@@ -782,8 +787,10 @@ const insightIndexMigrationSource = await readFile(new URL("../migrations/0005_r
 const facilityAccessMigrationSource = await readFile(new URL("../migrations/0011_facility_overview_access.sql", import.meta.url), "utf8");
 const facilityOptInRepairMigrationSource = await readFile(new URL("../migrations/0017_restore_facility_overview_opt_in.sql", import.meta.url), "utf8");
 const safeStagedActivationMigrationSource = await readFile(new URL("../migrations/0019_safe_staged_roster_activation.sql", import.meta.url), "utf8");
+const approvedIdentityMigrationSource = await readFile(new URL("../migrations/0025_approved_doctor_identity_aliases.sql", import.meta.url), "utf8");
 const d1CalendarSource = await readFile(new URL("../functions/_lib/d1-calendar.js", import.meta.url), "utf8");
 const stateApiSource = await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8");
+const feedSource = await readFile(new URL("../functions/api/feed.js", import.meta.url), "utf8");
 const automationIngestSource = await readFile(new URL("../functions/api/automation/ingest.js", import.meta.url), "utf8");
 const automationDerivedSource = await readFile(new URL("../functions/api/automation/derived.js", import.meta.url), "utf8");
 const findmyshiftCheckSource = await readFile(new URL("../functions/api/automation/findmyshift-check.js", import.meta.url), "utf8");
@@ -795,6 +802,12 @@ assert.match(indexSource, /id="stayLoggedIn"[^>]*checked/, "Stay logged in shoul
 assert.equal((appSource.match(/data-test-findmyshift/g) || []).length, 0, "FindMyShift diagnostics should not remain exposed as a UI control");
 assert.equal((appSource.match(/data-sync-findmyshift/g) || []).length, 0, "FindMyShift is automated and should not expose a manual sync control");
 assert.equal((appSource.match(/data-download-findmyshift-exceptions/g) || []).length, 0, "FindMyShift exception review is no longer exposed as a UI control");
+assert.match(approvedIdentityMigrationSource, /Jay WEERARATNE[\s\S]*Jayantha WEERARATNE[\s\S]*admin-approved[\s\S]*roster_person_alias_audit/, "the confirmed VHH/DDH mapping should be durable, approved, and audited");
+assert.doesNotMatch(stateSource, /isConservativeDoctorVariant|levenshteinDistance/, "one-character misspellings must not be merged automatically");
+assert.match(stateSource, /action === "adminApproveRosterIdentityAlias"[\s\S]*approveRosterPersonAlias[\s\S]*scheduleSnapshotWarmupForPerson/, "admin-approved aliases should trigger person-specific snapshot rebuilding");
+assert.match(stateSource, /action === "adminUnlinkRosterIdentityAlias"[\s\S]*unlinkRosterPersonAlias/, "administrators should be able to unlink an alias without deleting roster events");
+assert.match(feedSource, /queryPersonAliasesForAccount[\s\S]*durableAliases[\s\S]*reviewState === "approved"/, "subscription feeds should expand only approved durable aliases");
+assert.match(appSource, /function waitForDoctorProfileCalendarBuild[\s\S]*skipRebuild: true/, "cold profile polling must not schedule duplicate snapshot rebuilds");
 assert.match(findmyshiftModuleSource, /findmyshiftRequest\("reports\/shifts",[\s\S]*comments:\s*"no"/, "FindMyShift imports should request comments=no so free-text roster comments are excluded upstream");
 assert.match(findmyshiftCheckSource, /!force && current\?\.providerVersion === providerVersion && isIncompleteDandenongAssignmentError/, "a creator-forced FindMyShift refresh must retry a cached incomplete provider response");
 assert.match(facilityAccessMigrationSource, /facility_overview_enabled INTEGER NOT NULL DEFAULT 0/, "At a glance database access should default to opt-in");
@@ -1239,8 +1252,8 @@ assert.match(
 );
 assert.match(
   stateSource.match(/async function queryDoctorProfileCalendarRevision[\s\S]*?async function loadDoctorProfileSnapshotPayload/)?.[0] || "",
-  /queryCalendarRevision\(db, ownerEmail, \{[\s\S]*sourceTypes: sanitizeSourceTypes\(profile\?\.sourceTypes\)/,
-  "doctor-profile revisions should only follow the profile's hospitals",
+  /queryCalendarRevision\(db, ownerEmail, \{[\s\S]*sourceTypes: sanitizeSourceTypes\(\[\.\.\.\(profile\?\.sourceTypes[\s\S]*canonicalDoctor\?\.sourceTypes/,
+  "doctor-profile revisions should follow the profile's approved person aliases without becoming globally scoped",
 );
 assert.match(
   stateSource,
@@ -2271,7 +2284,7 @@ assert.match(
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
     .match(/async function canonicalDoctorOptionForProfile[\s\S]*?async function doctorProfileImportRefs/)?.[0] || "",
-  /queryCanonicalDoctors[\s\S]*queryRosterFileDoctorsForKeys\(db, requestedKeys\)/,
+  /creatorDoctorOptionsForD1[\s\S]*queryRosterFileDoctorsForKeys\(db, requestedKeys\)/,
   "doctor profile load should expand the requested canonical identity and query only its roster keys",
 );
 assert.match(
@@ -6369,7 +6382,7 @@ const typoDoctors = await postState(typoAliasStore, {
 }, typoAliasDb);
 const aeshanOption = typoDoctors.availableDoctors.find((doctor) => doctor.displayName === "Aeshan KULARATNE");
 assert.ok(aeshanOption, "event-backed typo variants should keep the event-backed display name");
-assert.deepEqual(aeshanOption.aliases.map((alias) => alias.key).sort(), ["AESHAN KULARATNE", "AESHAN KULURATNE"]);
+assert.deepEqual(aeshanOption.aliases.map((alias) => alias.key).sort(), ["AESHAN KULARATNE"], "misspellings must stay separate until an administrator approves the alias");
 assert.equal(typoDoctors.availableDoctors.some((doctor) => doctor.key === "ZERO PERSON"), false, "zero-event standalone identities should be hidden from the picker");
 const typoProfile = await postState(typoAliasStore, {
   action: "loadDoctorProfile",
@@ -6381,8 +6394,8 @@ const typoProfile = await postState(typoAliasStore, {
   sourceTypes: ["ddh", "mch"],
 }, typoAliasDb);
 assert.deepEqual(typoProfile.snapshot.preview.events.map((event) => event.title), ["MCH Shift"]);
-assert.equal(typoProfile.snapshot.profileCoverage.zeroEventAliases.length, 1);
-assert.deepEqual(typoProfile.snapshot.profileCoverage.absentSources, []);
+assert.equal(typoProfile.snapshot.profileCoverage.zeroEventAliases.length, 0);
+assert.deepEqual(typoProfile.snapshot.profileCoverage.absentSources, ["ddh"]);
 const conflictingAliasDb = new MemoryD1();
 const conflictingAliasStore = new MemoryStore();
 await postState(conflictingAliasStore, { action: "login", email: "rhaydon@gmail.com", password: creatorPassword }, conflictingAliasDb);
@@ -7219,7 +7232,7 @@ const abiAutoClaim = await postState(identityStore, {
   mode: "create",
   realName: "Abirama Thanikasalam",
 });
-assert.deepEqual(abiAutoClaim.claims.map((claim) => `${claim.sourceType}:${claim.key}`), ["ddh:ABI THANIKASALAM"]);
+assert.deepEqual(abiAutoClaim.claims, [], "shortened/full-name variants must wait for administrator approval");
 const josephEmailAutoClaim = await postState(identityStore, {
   action: "login",
   email: "joseph.vu@monashhealth.org",
@@ -7298,16 +7311,14 @@ const barryAfterBadClaimEnriched = await postState(identityStore, {
 });
 assert.deepEqual(barryAfterBadClaim.claims.map((claim) => `${claim.sourceType}:${claim.key}`), ["ddh:AARON BADWAL"]);
 assert.deepEqual(barryAfterBadClaimEnriched.state.imports.map((item) => item.repoId), ["identity-ddh"]);
-await postState(identityStore, {
+const barryUnapprovedClaim = await postStateRaw(identityStore, {
   action: "claimRosterName",
   email: "barry@example.com",
   password: "barry-password",
   claim: { sourceType: "ddh", key: "AARON BADWAL" },
 });
-assert.ok(
-  memoryD1AccountRecord(identityStore.d1, "barry@example.com").adminIssues.some((issue) => issue.rawValue.includes("Manual roster claim review")),
-  "mismatched manual claims should create a Creator review issue",
-);
+assert.equal(barryUnapprovedClaim.response.status, 409);
+assert.equal(barryUnapprovedClaim.body.approvalRequired, true, "mismatched manual claims must be blocked pending Creator approval");
 await postState(identityStore, {
   action: "setAccountRosterClaims",
   email: "rhaydon@gmail.com",

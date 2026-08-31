@@ -1,5 +1,5 @@
 import { applyEventOverrides, customEventsToEvents, defaultSettings, exportIcs } from "../_lib/roster.js";
-import { applyAccountHospitalLocations, dedupeEventsByIdentity, hasCalendarDb, loadAccountHospitalLocations, loadAccountMirrorBySubscriptionToken, queryAccountCustomEvents, queryDoctorEvents } from "../_lib/d1-calendar.js";
+import { applyAccountHospitalLocations, dedupeEventsByIdentity, hasCalendarDb, loadAccountHospitalLocations, loadAccountMirrorBySubscriptionToken, queryAccountCustomEvents, queryDoctorEvents, queryPersonAliasesForAccount } from "../_lib/d1-calendar.js";
 import { normalizeEmail } from "./state.js";
 
 export async function onRequestGet(context) {
@@ -35,10 +35,13 @@ async function buildD1SubscriptionFeed(db, record, view) {
   if (!hasCalendarDb({ ROSTER_DB: db })) return null;
   const role = record?.role || "";
   const claims = sanitizeClaims(record.claims);
+  const durableAliases = role === "creator" || role === "owner"
+    ? []
+    : await queryPersonAliasesForAccount(db, record.email).catch(() => []);
   const session = record?.state?.session && typeof record.state.session === "object" ? record.state.session : {};
   const doctorKeys = [...new Set((role === "creator" || role === "owner")
     ? [String(session.doctorKey || "").trim()].filter(Boolean)
-    : claims.map((claim) => claim.key))];
+    : [...claims.map((claim) => claim.key), ...durableAliases.filter((alias) => alias.reviewState === "approved").map((alias) => alias.key)])];
   if (!doctorKeys.length) return null;
   const settings = {
     ...defaultSettings(),

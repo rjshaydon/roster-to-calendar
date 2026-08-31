@@ -6883,10 +6883,7 @@ function claimedEmailForDoctorKey(doctorKey, displayName = "") {
   if (normalizedDisplayName) {
     for (const user of serverUsers) {
       const claims = sanitizeRosterClaims(user?.claims || []);
-      if (claims.some((claim) => likelySameRosterName(claim.displayName, normalizedDisplayName))) {
-        return currentClaimedAccountEmail(user.email);
-      }
-      if (likelySameRosterName(user?.realName || "", normalizedDisplayName)) {
+      if (claims.some((claim) => harmlessRosterIdentityKey(claim.displayName) === harmlessRosterIdentityKey(normalizedDisplayName))) {
         return currentClaimedAccountEmail(user.email);
       }
     }
@@ -7347,7 +7344,7 @@ function doctorMatchesCurrentAccount(doctor) {
   const claimIdentityKeys = new Set(currentRosterClaims.flatMap((claim) => [rosterIdentityKey(claim.displayName), rosterIdentityKey(claim.key)]).filter(Boolean));
   if (claimKeys.has(doctor.key)) return true;
   if (claimIdentityKeys.has(rosterIdentityKey(doctor.displayName || doctor.key))) return true;
-  return likelySameRosterName(currentAccount().realName, doctor.displayName);
+  return harmlessRosterIdentityKey(currentAccount().realName) === harmlessRosterIdentityKey(doctor.displayName);
 }
 
 function doctorMatchesRosterClaim(doctor, claim) {
@@ -7423,6 +7420,17 @@ function rosterIdentityKey(value) {
     .replace(/^(DR|DOCTOR|MR|MRS|MS|MISS|PROF|PROFESSOR|A PROF|ASSOC PROF)\s+/, "");
   const parts = stripped.split(/\s*,\s*/).filter(Boolean);
   return parts.length === 2 ? `${parts[1]} ${parts[0]}`.trim() : stripped.replace(/,/g, "");
+}
+
+function harmlessRosterIdentityKey(value) {
+  const raw = String(value || "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+  const untitled = raw
+    .trim()
+    .toUpperCase()
+    .replace(/^(DR|DOCTOR|MR|MRS|MS|MISS|PROF|PROFESSOR|A PROF|ASSOC PROF)[\s.]+/, "");
+  const parts = untitled.split(/\s*,\s*/).filter(Boolean);
+  const ordered = parts.length === 2 ? `${parts[1]} ${parts[0]}` : untitled;
+  return ordered.replace(/[^A-Z0-9]+/g, "");
 }
 
 function formatRosterDisplayName(value) {
@@ -14396,6 +14404,9 @@ async function waitForDoctorProfileCalendarBuild(doctor, previousState, options 
       const result = await loadUnclaimedDoctorCalendar(doctor, previousState, {
         profile: options.profile,
         allowInlineBuild: false,
+        // The initial switch request owns the one rebuild schedule. Polls are
+        // cache reads only, including when the initial Worker returned 503.
+        skipRebuild: true,
         transition: options.transition,
       });
       if (result || calendarSnapshotMatchesActiveContext(currentSnapshot)) return result;
@@ -14573,6 +14584,7 @@ async function loadUnclaimedDoctorCalendar(doctor, sourceContext, options = {}) 
   const profileData = await fetchDoctorProfileState(profile, {
     cachedRevision: options.cachedRevision || "",
     allowInlineBuild: options.allowInlineBuild !== false,
+    skipRebuild: options.skipRebuild === true,
   });
   if (!calendarTransitionStillCurrent(options.transition)) return null;
   if (profileData.snapshotCurrent === true && calendarSnapshotMatchesActiveContext(currentSnapshot)) {
@@ -14729,6 +14741,7 @@ async function fetchDoctorProfileState(profile, options = {}) {
     aliases: profile.aliases,
     cachedRevision: options.cachedRevision || "",
     allowInlineBuild: options.allowInlineBuild !== false,
+    skipRebuild: options.skipRebuild === true,
   };
   let response = await fetch("/api/state", {
     method: "POST",
@@ -14739,7 +14752,10 @@ async function fetchDoctorProfileState(profile, options = {}) {
     response = await fetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ...requestBody, allowInlineBuild: false }),
+      // The first request is allowed to schedule the cold snapshot. A 503
+      // retry must be read-only so profile switching cannot fan out duplicate
+      // person rebuilds while that first build is still registering.
+      body: JSON.stringify({ ...requestBody, allowInlineBuild: false, skipRebuild: true }),
     });
   }
   const data = await readJsonResponse(response, "Doctor profile load failed.");
