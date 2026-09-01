@@ -65,6 +65,21 @@ import {
   queryCalendarRevision,
   queryPersonAliasesForAccount,
   queryRosterPersonById,
+  queryRosterPersonHistory,
+  queryIdentityCandidates,
+  queryIdentityAuditRun,
+  previewRosterPersonMerge,
+  previewIdentityOperationReversal,
+  adminMergeRosterPeople,
+  adminReverseIdentityOperation,
+  adminUpdateRosterPersonName,
+  adminChangeRosterPersonId,
+  adminMoveRosterPersonAlias,
+  startIdentityAudit,
+  runIdentityAuditBatch,
+  reviewIdentityCandidate,
+  confirmRosterPersonAliasForAccount,
+  scoreRosterIdentityCandidate,
   queryDoctorSeniorities,
   queryDoctorEventsForFileDoctorPairs,
   queryDoctorIssuesForFileDoctorPairs,
@@ -715,6 +730,44 @@ export async function onRequestPost(context) {
       });
     }
 
+    if (action === "claimOwnRosterIdentityAlias") {
+      // This endpoint never accepts targetEmail. A clinician can attest that
+      // an unclaimed spelling is theirs, but cannot merge people or accounts.
+      if (account.role === "creator" || account.role === "owner") {
+        return Response.json({ error: "Use Creator Identity review to edit aliases." }, { status: 403 });
+      }
+      if (body?.selfConfirmed !== true) {
+        return Response.json({ error: "Confirm that both roster spellings are yours before linking them." }, { status: 400 });
+      }
+      const doctorCandidates = await loadSqlDoctorCandidates(context.env.ROSTER_DB);
+      const claim = findDoctorClaimCandidate(doctorCandidates, body?.claim);
+      if (!claim) return Response.json({ error: "Roster name was not found." }, { status: 400 });
+      const existingOwner = await resolveDoctorAccount(null, claim, context.env.ROSTER_DB);
+      if (existingOwner.mode === "claimed-account" && normalizeEmail(existingOwner.email) !== email) {
+        return Response.json({ error: `${claim.displayName} is already linked to another account.`, conflict: true }, { status: 409 });
+      }
+      const existingClaims = sanitizeClaims(account.record.claims);
+      if (!existingClaims.length || !isSelfServiceAliasCandidate(existingClaims, claim)) {
+        return Response.json({ error: "This spelling is not a safe potential match for your existing roster identity. Ask the Creator to review it." }, { status: 409 });
+      }
+      try {
+        const person = await confirmRosterPersonAliasForAccount(context.env.ROSTER_DB, {
+          email, alias: claim, selfConfirmed: true,
+        });
+        const claims = mergeClaims(existingClaims, [{ ...claim, matchedAt: new Date().toISOString() }]);
+        const d1Refs = await d1RepositoryImportRefsForClaims(context.env.ROSTER_DB, claims);
+        const updated = { ...account.record, claims, state: { ...sanitizeState(account.record.state), imports: d1Refs }, updatedAt: new Date().toISOString() };
+        await upsertAccountMirror(context.env.ROSTER_DB, updated);
+        scheduleSnapshotWarmupForAccount(context, email, { reason: "self-confirmed-roster-alias" });
+        scheduleSnapshotWarmupForPerson(context, person?.personId, { reason: "self-confirmed-roster-alias" });
+        const prepared = await prepareAccountResponse(null, updated, { db: context.env.ROSTER_DB });
+        return Response.json({ ok: true, claims: prepared.claims, suggestedClaims: prepared.nameMatches, person });
+      } catch (error) {
+        const conflict = error?.code === "SELF_ALIAS_OWNED";
+        return Response.json({ error: error?.message || "Could not link this roster spelling.", conflict }, { status: conflict ? 409 : 400 });
+      }
+    }
+
     if (action === "claimRosterName") {
       const claimEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
       const targetRecord = claimEmail === email ? account.record : await loadAccountMirror(context.env.ROSTER_DB, claimEmail);
@@ -1202,6 +1255,51 @@ export async function onRequestPost(context) {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
       return Response.json({ ok: true, people: await queryApprovedRosterPeople(context.env.ROSTER_DB) });
+    }
+
+    // Identity review is deliberately creator-only. Password verification above
+    // provides recent authentication for every state-changing request here.
+    if (["queryIdentityCandidates", "startIdentityAudit", "queryIdentityAuditRun", "previewRosterPersonMerge", "adminMergeRosterPeople", "previewIdentityOperationReversal", "adminReverseIdentityOperation", "adminUpdateRosterPersonName", "adminChangeRosterPersonId", "adminMoveRosterPersonAlias", "queryRosterPersonHistory", "reviewIdentityCandidate"].includes(action)) {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      try {
+        if (action === "queryIdentityCandidates") return Response.json({ ok: true, candidates: await queryIdentityCandidates(context.env.ROSTER_DB, body) });
+        if (action === "queryIdentityAuditRun") return Response.json({ ok: true, run: await queryIdentityAuditRun(context.env.ROSTER_DB, body?.auditRunId) });
+        if (action === "queryRosterPersonHistory") return Response.json({ ok: true, history: await queryRosterPersonHistory(context.env.ROSTER_DB, body?.personId) });
+        if (action === "previewRosterPersonMerge") return Response.json({ ok: true, preview: await previewRosterPersonMerge(context.env.ROSTER_DB, body) });
+        if (action === "previewIdentityOperationReversal") return Response.json({ ok: true, preview: await previewIdentityOperationReversal(context.env.ROSTER_DB, body?.operationId) });
+        if (action === "startIdentityAudit") {
+          const run = await startIdentityAudit(context.env.ROSTER_DB, { triggerType: "manual", scope: body?.scope, createdBy: email });
+          if (typeof context.waitUntil === "function") {
+            context.waitUntil(runIdentityAuditBatch(context.env.ROSTER_DB, run.auditRunId).catch((error) => {
+              console.warn("Identity audit batch failed", { auditRunId: run.auditRunId, error: error?.message || String(error) });
+            }));
+          }
+          return Response.json({ ok: true, run });
+        }
+        if (action === "reviewIdentityCandidate") {
+          return Response.json({ ok: true, candidate: await reviewIdentityCandidate(context.env.ROSTER_DB, { ...body, reviewedBy: email }) });
+        }
+        const input = { ...body, approvedBy: email };
+        const result = action === "adminMergeRosterPeople"
+          ? await adminMergeRosterPeople(context.env.ROSTER_DB, input)
+          : action === "adminReverseIdentityOperation"
+            ? await adminReverseIdentityOperation(context.env.ROSTER_DB, input)
+            : action === "adminUpdateRosterPersonName"
+              ? await adminUpdateRosterPersonName(context.env.ROSTER_DB, input)
+              : action === "adminChangeRosterPersonId"
+                ? await adminChangeRosterPersonId(context.env.ROSTER_DB, input)
+                : await adminMoveRosterPersonAlias(context.env.ROSTER_DB, input);
+        for (const personId of result.affectedPersonIds || []) {
+          scheduleSnapshotWarmupForPerson(context, personId, { reason: `identity-operation:${result.operationId}` });
+        }
+        return Response.json({ ok: true, operation: result, rebuildQueued: true });
+      } catch (error) {
+        const code = error?.code || "";
+        const conflict = ["IDENTITY_ACCOUNT_CONFLICT", "IDENTITY_STALE_PREVIEW", "IDENTITY_REVERSAL_DEPENDENCY"].includes(code);
+        return Response.json({ error: error?.message || "Could not complete the identity operation.", code, dependencies: error?.dependencies || [], conflict }, { status: conflict ? 409 : 400 });
+      }
     }
 
     if (action === "adminApproveRosterIdentityAlias") {
@@ -6221,6 +6319,14 @@ function claimMatchesAccountIdentity(claim, realName, email = "") {
   const identities = [realName, rosterNameFromEmail(email)].filter((value) => rosterIdentityKey(value));
   if (!identities.length) return true;
   return identities.some((identity) => doctorMatchesRealName(doctor, identity));
+}
+
+function isSelfServiceAliasCandidate(existingClaims, candidate) {
+  return sanitizeClaims(existingClaims).some((claim) => {
+    if (claim.sourceType === candidate.sourceType && claim.key === candidate.key) return true;
+    if (isHarmlessRosterNameVariant(claim.displayName || claim.key, candidate.displayName || candidate.key)) return true;
+    return Boolean(scoreRosterIdentityCandidate(claim, candidate));
+  });
 }
 
 function doctorMatchesRealName(doctor, realName) {

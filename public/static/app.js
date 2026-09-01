@@ -386,6 +386,11 @@ let lastRosterPersistence = null;
 let adminConsoleOpen = false;
 let adminConsoleLoading = false;
 let adminConsoleMessages = [];
+let adminIdentityLoading = false;
+let adminIdentityPeople = [];
+let adminIdentityCandidates = [];
+let adminIdentityHistory = [];
+let adminIdentityNotice = "";
 let creatorSwitcherAnnouncementBaseline = null;
 let reportedIssueFingerprints = new Set();
 let currentSnapshot = null;
@@ -1419,6 +1424,11 @@ appDialog?.addEventListener("click", (event) => {
 
 accountsBody.addEventListener("submit", (event) => {
   event.preventDefault();
+  const identityMergeForm = event.target.closest("[data-identity-merge-form]");
+  if (identityMergeForm) {
+    void previewIdentityMergeFromForm(identityMergeForm);
+    return;
+  }
   const createForm = event.target.closest("[data-create-account-form]");
   if (createForm) {
     createAccountFromOwner(createForm);
@@ -1520,7 +1530,41 @@ accountsBody.addEventListener("click", (event) => {
     }
     currentAdminTab = nextTab;
     renderAccountsModal();
+    if (nextTab === "identity") void ensureIdentityReviewData();
     queueGlobalUnresolvedShiftCodeLoad();
+    return;
+  }
+  if (event.target.closest("[data-start-identity-audit]")) {
+    void startManualIdentityAudit();
+    return;
+  }
+  if (event.target.closest("[data-refresh-identity-review]")) {
+    void ensureIdentityReviewData({ force: true });
+    return;
+  }
+  const identityReject = event.target.closest("[data-identity-reject]");
+  if (identityReject) {
+    void reviewIdentitySuggestion(identityReject.dataset.identityReject || "", "rejected");
+    return;
+  }
+  const identityLater = event.target.closest("[data-identity-review-later]");
+  if (identityLater) {
+    void reviewIdentitySuggestion(identityLater.dataset.identityReviewLater || "", "deferred");
+    return;
+  }
+  const identityReverse = event.target.closest("[data-identity-reverse]");
+  if (identityReverse) {
+    void previewIdentityReversal(identityReverse.dataset.identityReverse || "");
+    return;
+  }
+  if (event.target.closest("[data-confirm-self-alias]")) {
+    const select = accountsBody.querySelector("[data-self-alias-select]");
+    const option = select?.selectedOptions?.[0];
+    if (option?.dataset?.sourceType && option?.dataset?.doctorKey) {
+      void confirmSelfRosterAlias({ sourceType: option.dataset.sourceType, key: option.dataset.doctorKey, displayName: option.dataset.displayName || option.textContent || "" });
+    } else {
+      setStatus("Choose the roster spelling you want to link.", true);
+    }
     return;
   }
   if (event.target.closest("[data-open-shift-code-review]")) {
@@ -11786,8 +11830,8 @@ function renderAccountsModal() {
         ...sanitizeRosterClaims(user.claims || []).flatMap((claim) => [claim.displayName, claim.sourceType]),
       ].some((value) => String(value || "").toLocaleLowerCase().includes(normalizedUserSearchQuery)))
     : seniorityFilteredUsers;
-  const linkedNames = renderLinkedRosterNames(currentRosterClaims, currentSuggestedClaims);
-  if (ownerView && !["parser", "system", "users", "files", "owner"].includes(currentAdminTab)) currentAdminTab = "users";
+  const linkedNames = renderLinkedRosterNames(currentRosterClaims, currentSuggestedClaims, { creatorTools: ownerView });
+  if (ownerView && !["parser", "system", "users", "files", "owner", "identity"].includes(currentAdminTab)) currentAdminTab = "users";
   const issueCount = adminIssueCount();
   const adminTabs = ownerView ? `
     <div class="admin-tabs" role="tablist" aria-label="Admin sections">
@@ -11795,6 +11839,7 @@ function renderAccountsModal() {
       <button type="button" class="entrance-tab ${currentAdminTab === "files" ? "is-active" : ""}" data-admin-tab="files">Files</button>
       <button type="button" class="entrance-tab ${currentAdminTab === "owner" ? "is-active" : ""}" data-admin-tab="owner">Account</button>
       <button type="button" class="entrance-tab ${currentAdminTab === "parser" ? "is-active" : ""}" data-admin-tab="parser">Parser${issueCount ? `<span class="notification-badge">${issueCount}</span>` : ""}</button>
+      <button type="button" class="entrance-tab ${currentAdminTab === "identity" ? "is-active" : ""}" data-admin-tab="identity">Identity review</button>
       <button type="button" class="entrance-tab ${currentAdminTab === "system" ? "is-active" : ""}" data-admin-tab="system">System</button>
     </div>
   ` : "";
@@ -11961,6 +12006,7 @@ function renderAccountsModal() {
       </details>
     ` : "";
   const parserCard = ownerView ? renderParserAdminCard(serverOtherUsers) : "";
+  const identityCard = ownerView ? renderIdentityReviewCard() : "";
   const systemCard = ownerView ? renderSystemAdminCard() : "";
   const filesCard = ownerView ? renderAdminFilesMarkup({
     canRemove: canRemoveImports(),
@@ -11969,6 +12015,8 @@ function renderAccountsModal() {
   const adminBody = ownerView
     ? (currentAdminTab === "parser"
         ? parserCard
+        : currentAdminTab === "identity"
+          ? identityCard
         : currentAdminTab === "system"
           ? systemCard
           : currentAdminTab === "users"
@@ -11982,6 +12030,168 @@ function renderAccountsModal() {
     const currentUsersCard = accountsBody.querySelector(".other-users-card");
     const createUserCard = accountsBody.querySelector(".create-user-card");
     if (currentUsersCard && createUserCard) accountsBody.insertBefore(currentUsersCard, createUserCard);
+  }
+}
+
+function renderIdentityReviewCard() {
+  const people = Array.isArray(adminIdentityPeople) ? adminIdentityPeople : [];
+  const candidates = Array.isArray(adminIdentityCandidates) ? adminIdentityCandidates : [];
+  const history = Array.isArray(adminIdentityHistory) ? adminIdentityHistory : [];
+  return `
+    <div class="issues-list identity-review-workspace">
+      <article class="review-card">
+        <div class="review-top"><div><strong>Identity review</strong><span>Suggestions never merge people automatically. Source roster names and historical events remain unchanged.</span></div></div>
+        <div class="review-body">
+          <div class="modal-actions">
+            <button type="button" class="button button-secondary" data-start-identity-audit ${adminIdentityLoading ? "disabled" : ""}>Find possible duplicates</button>
+            <button type="button" class="button button-secondary" data-refresh-identity-review ${adminIdentityLoading ? "disabled" : ""}>Refresh</button>
+          </div>
+          ${adminIdentityNotice ? `<p class="status-line">${escapeHtml(adminIdentityNotice)}</p>` : ""}
+        </div>
+      </article>
+      <article class="review-card">
+        <div class="review-top"><div><strong>Suggestions</strong><span>${candidates.length ? `${candidates.length} current suggestion${candidates.length === 1 ? "" : "s"}` : "No suggestions loaded."}</span></div></div>
+        <div class="issues-list">
+          ${candidates.length ? candidates.map((candidate) => `<article class="issue-card">
+            <strong>${escapeHtml(candidate.leftAlias?.displayName || candidate.leftPersonId)} ↔ ${escapeHtml(candidate.rightAlias?.displayName || candidate.rightPersonId)}</strong>
+            <p>${escapeHtml((candidate.leftAlias?.sourceType || "").toUpperCase())} · ${escapeHtml((candidate.rightAlias?.sourceType || "").toUpperCase())} · score ${escapeHtml(String(Math.round(candidate.score || 0)))} · ${escapeHtml((candidate.reasons || []).join(", "))}</p>
+            ${candidate.warnings?.length ? `<p>Warning: ${escapeHtml(candidate.warnings.join(", "))}</p>` : ""}
+            <div class="account-actions"><button type="button" class="button button-secondary button-small" data-identity-review-later="${escapeHtml(candidate.candidateId)}">Review later</button><button type="button" class="button button-danger button-small" data-identity-reject="${escapeHtml(candidate.candidateId)}">Reject</button></div>
+          </article>`).join("") : `<article class="issue-card"><p>Run a narrow audit or refresh after an audit completes.</p></article>`}
+        </div>
+      </article>
+      <article class="review-card">
+        <div class="review-top"><div><strong>Merge wizard</strong><span>Enter the source and chosen target IDs, inspect the server preview, then explicitly approve.</span></div></div>
+        <form class="review-body" data-identity-merge-form>
+          <label class="field"><span>Source person IDs (comma-separated)</span><input required data-identity-source-ids placeholder="person:source-one, person:source-two"></label>
+          <label class="field"><span>Existing target ID (optional)</span><input data-identity-target-id placeholder="person:kularatne-aeshan"></label>
+          <label class="field"><span>Preferred full name</span><input required data-identity-preferred-name placeholder="Aeshan KULARATNE"></label>
+          <label class="field"><span>New canonical ID (only when creating a target)</span><input data-identity-proposed-id placeholder="person:kularatne-aeshan"></label>
+          <label class="field"><span>Aliases to move (optional, comma-separated SOURCE:ROSTER KEY)</span><input data-identity-aliases placeholder="ddh:AESHAN KULURATNE, vhh:AESHAN KULARATNE"></label>
+          <label class="field"><span>Accounts to move (optional, comma-separated)</span><input data-identity-accounts placeholder="doctor@example.com"></label>
+          <label class="field"><span>Reason (optional)</span><input data-identity-reason placeholder="Confirmed after review"></label>
+          <div class="modal-actions"><button type="submit" class="button button-primary">Preview merge</button></div>
+        </form>
+      </article>
+      <article class="review-card">
+        <div class="review-top"><div><strong>People</strong><span>${people.length} active canonical people loaded.</span></div></div>
+        <div class="issues-list">${people.slice(0, 50).map((person) => `<article class="issue-card"><strong>${escapeHtml(person.preferredDisplayName || person.personId)}</strong><p>${escapeHtml(person.personId)} · ${(person.aliases || []).map((alias) => escapeHtml(`${alias.sourceType.toUpperCase()}: ${alias.displayName}`)).join("; ")}</p></article>`).join("") || `<article class="issue-card"><p>No people loaded.</p></article>`}</div>
+      </article>
+      <article class="review-card">
+        <div class="review-top"><div><strong>History</strong><span>Committed changes are retained, including reversals.</span></div></div>
+        <div class="issues-list">${history.slice(0, 25).map((operation) => `<article class="issue-card"><strong>${escapeHtml(operation.operationType)} · ${escapeHtml(operation.targetPersonId)}</strong><p>${escapeHtml(operation.administratorEmail)} · ${escapeHtml(operation.createdAt)}${operation.reason ? ` · ${escapeHtml(operation.reason)}` : ""}</p>${operation.status === "committed" ? `<button type="button" class="button button-secondary button-small" data-identity-reverse="${escapeHtml(operation.operationId)}">Preview reversal</button>` : ""}</article>`).join("") || `<article class="issue-card"><p>No identity operations yet.</p></article>`}</div>
+      </article>
+    </div>
+  `;
+}
+
+async function ensureIdentityReviewData({ force = false } = {}) {
+  if (!isViewingCreatorAccount() || adminIdentityLoading) return;
+  if (!force && adminIdentityPeople.length && adminIdentityCandidates.length) return;
+  adminIdentityLoading = true;
+  if (!adminIdentityNotice) adminIdentityNotice = "Loading identity review…";
+  if (!accountsModal.classList.contains("hidden") && currentAdminTab === "identity") renderAccountsModal();
+  try {
+    const [peopleResult, candidateResult, historyResult] = await Promise.all([
+      calendarStoreRequest("listRosterPersonAliases"),
+      calendarStoreRequest("queryIdentityCandidates", { limit: 100 }),
+      calendarStoreRequest("queryRosterPersonHistory"),
+    ]);
+    adminIdentityPeople = Array.isArray(peopleResult?.people) ? peopleResult.people : [];
+    adminIdentityCandidates = Array.isArray(candidateResult?.candidates) ? candidateResult.candidates : [];
+    adminIdentityHistory = Array.isArray(historyResult?.history) ? historyResult.history : [];
+    adminIdentityNotice = "";
+  } catch (error) {
+    adminIdentityNotice = error?.message || "Could not load identity review.";
+  } finally {
+    adminIdentityLoading = false;
+    if (!accountsModal.classList.contains("hidden") && currentAdminTab === "identity") renderAccountsModal();
+  }
+}
+
+async function startManualIdentityAudit() {
+  adminIdentityLoading = true;
+  adminIdentityNotice = "Starting a bounded identity audit…";
+  renderAccountsModal();
+  try {
+    const result = await calendarStoreRequest("startIdentityAudit", { scope: {} });
+    adminIdentityNotice = result?.run?.auditRunId ? "Audit started. Refresh shortly to see saved suggestions." : "Audit started.";
+  } catch (error) {
+    adminIdentityNotice = error?.message || "Could not start the identity audit.";
+  } finally {
+    adminIdentityLoading = false;
+    renderAccountsModal();
+  }
+}
+
+async function reviewIdentitySuggestion(candidateId, status) {
+  if (!candidateId) return;
+  try {
+    await calendarStoreRequest("reviewIdentityCandidate", { candidateId, status });
+    adminIdentityNotice = status === "rejected" ? "Suggestion rejected. It stays suppressed unless evidence changes." : "Suggestion marked for later review.";
+    await ensureIdentityReviewData({ force: true });
+  } catch (error) {
+    adminIdentityNotice = error?.message || "Could not update the identity suggestion.";
+    renderAccountsModal();
+  }
+}
+
+async function previewIdentityMergeFromForm(form) {
+  const sourcePersonIds = String(form.querySelector("[data-identity-source-ids]")?.value || "").split(",").map((value) => value.trim()).filter(Boolean);
+  const aliases = String(form.querySelector("[data-identity-aliases]")?.value || "").split(",").map((value) => value.trim()).filter(Boolean).map((value) => {
+    const separator = value.indexOf(":");
+    return separator > 0 ? { sourceType: value.slice(0, separator).trim(), key: value.slice(separator + 1).trim(), displayName: value.slice(separator + 1).trim() } : null;
+  }).filter(Boolean);
+  const accountEmails = String(form.querySelector("[data-identity-accounts]")?.value || "").split(",").map((value) => value.trim()).filter(Boolean);
+  const payload = {
+    sourcePersonIds,
+    targetPersonId: form.querySelector("[data-identity-target-id]")?.value.trim() || "",
+    preferredDisplayName: form.querySelector("[data-identity-preferred-name]")?.value.trim() || "",
+    proposedPersonId: form.querySelector("[data-identity-proposed-id]")?.value.trim() || "",
+    ...(aliases.length ? { aliases } : {}),
+    ...(accountEmails.length ? { accountEmails } : {}),
+    reason: form.querySelector("[data-identity-reason]")?.value.trim() || "",
+  };
+  try {
+    const result = await calendarStoreRequest("previewRosterPersonMerge", payload);
+    const preview = result?.preview;
+    if (!preview) throw new Error("The server did not return a merge preview.");
+    const accountWarning = preview.accountConflict ? `\n\nThis joins claimed accounts: ${preview.conflictAccounts.join(", ")}.` : "";
+    const confirmed = await showAppDialog({ title: "Approve identity merge?", message: `Target: ${preview.preferredDisplayName} (${preview.targetPersonId})\nAliases to move: ${(preview.aliases || []).map((alias) => `${alias.sourceType.toUpperCase()}: ${alias.displayName}`).join(", ") || "none"}.${accountWarning}\n\nRoster source names and events will not be changed. Scoped rebuilds will be queued after commit.`, confirmLabel: "Approve merge" });
+    if (!confirmed) return;
+    if (preview.accountConflict) {
+      const accountsConfirmed = await showAppDialog({ title: "Confirm account association", message: `This merge will associate these accounts with ${preview.targetPersonId}: ${preview.conflictAccounts.join(", ")}. Confirm this specific account association to continue.`, confirmLabel: "Confirm accounts" });
+      if (!accountsConfirmed) return;
+    }
+    const committed = await calendarStoreRequest("adminMergeRosterPeople", {
+      ...payload, previewToken: preview.previewToken, expectedVersions: preview.expectedVersions,
+      confirmedAccountEmails: preview.conflictAccounts || [],
+    });
+    adminIdentityNotice = `Merge committed (${committed?.operation?.operationId || "identity operation"}). Scoped rebuilds were queued.`;
+    await ensureIdentityReviewData({ force: true });
+  } catch (error) {
+    adminIdentityNotice = error?.message || "Could not merge these identities.";
+    renderAccountsModal();
+  }
+}
+
+async function previewIdentityReversal(operationId) {
+  try {
+    const result = await calendarStoreRequest("previewIdentityOperationReversal", { operationId });
+    const preview = result?.preview;
+    if (!preview?.canReverse) {
+      adminIdentityNotice = `This operation has ${preview?.dependencies?.length || 0} later dependent change(s); reverse or reassign those first.`;
+      renderAccountsModal();
+      return;
+    }
+    const confirmed = await showAppDialog({ title: "Reverse identity operation?", message: `This restores the complete recorded before-state for ${preview.operation.operationType}. Source roster records are unchanged. Scoped rebuilds will be queued.`, confirmLabel: "Reverse operation" });
+    if (!confirmed) return;
+    const reversed = await calendarStoreRequest("adminReverseIdentityOperation", { operationId, reason: "Reversed from Identity review" });
+    adminIdentityNotice = `Reversal committed (${reversed?.operation?.operationId || "identity operation"}).`;
+    await ensureIdentityReviewData({ force: true });
+  } catch (error) {
+    adminIdentityNotice = error?.message || "Could not reverse the identity operation.";
+    renderAccountsModal();
   }
 }
 
@@ -12673,6 +12883,9 @@ function parserRuleSeniorityDisplayOrder() {
 function renderLinkedRosterNames(claims, suggestedClaims = [], options = {}) {
   const items = sanitizeRosterClaims(claims);
   const suggestions = sanitizeRosterClaims(suggestedClaims);
+  const selfAliasCandidates = !options.creatorTools && items.length
+    ? availableRosterDoctors.filter((doctor) => !doctor.claimedBy && !items.some((claim) => claim.sourceType === doctor.sourceType && claim.key === doctor.key)).slice(0, 200)
+    : [];
   if (!items.length && !suggestions.length) {
     return `<p class="status">No roster names are linked to this account yet.</p>`;
   }
@@ -12699,6 +12912,14 @@ function renderLinkedRosterNames(claims, suggestedClaims = [], options = {}) {
           </div>
         </article>
       `).join("")}
+      ${selfAliasCandidates.length ? `
+        <article class="issue-card account-claim-card">
+          <div><strong>Link another roster spelling</strong><p>Only choose a potential spelling of your own name. Names linked to other accounts are excluded.</p></div>
+          <div class="account-actions">
+            <select data-self-alias-select><option value="">Choose a roster spelling…</option>${selfAliasCandidates.map((claim) => `<option value="${escapeHtml(`${claim.sourceType}:${claim.key}`)}" data-source-type="${escapeHtml(claim.sourceType)}" data-doctor-key="${escapeHtml(claim.key)}" data-display-name="${escapeHtml(claim.displayName)}">${escapeHtml(`${claim.sourceType.toUpperCase()}: ${claim.displayName}`)}</option>`).join("")}</select>
+            <button type="button" class="button button-secondary button-small" data-confirm-self-alias>Link my spelling</button>
+          </div>
+        </article>` : ""}
       ${!options.compact ? `<button type="button" class="button button-secondary" data-report-roster-identity>Report roster name problem</button>` : ""}
     </div>
   `;
@@ -13979,6 +14200,39 @@ async function confirmSuggestedClaim(index) {
   const claim = currentSuggestedClaims[index];
   if (!claim) return;
   await claimSelectedRosterName(claim);
+}
+
+async function confirmSelfRosterAlias(claim) {
+  if (!claim?.sourceType || !claim?.key || isCreatorAuthenticated()) return;
+  const confirmed = await showAppDialog({
+    title: "Link this roster spelling?",
+    message: `Confirm that ${claim.displayName} (${String(claim.sourceType).toUpperCase()}) is also you. This cannot link another account or merge anyone else.`,
+    confirmLabel: "Yes, this is me",
+  });
+  if (!confirmed) return;
+  try {
+    const response = await fetch("/api/state", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        action: "claimOwnRosterIdentityAlias",
+        email: currentUserEmail,
+        password: currentUserPassword,
+        claim,
+        selfConfirmed: true,
+      }),
+    });
+    const data = await readJsonResponse(response, "Could not link this roster spelling.");
+    currentRosterClaims = sanitizeRosterClaims(data.claims || currentRosterClaims);
+    currentSuggestedClaims = sanitizeRosterClaims(data.suggestedClaims || currentSuggestedClaims);
+    currentSnapshot = null;
+    await bootstrapImports();
+    renderAccountsModal();
+    renderLoginState();
+    setStatus(`Linked ${claim.displayName} as another spelling of your roster identity.`);
+  } catch (error) {
+    setStatus(error.message || "Could not link this roster spelling.", true);
+  }
 }
 
 async function rejectSuggestedClaim(index) {

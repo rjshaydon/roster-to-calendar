@@ -13,6 +13,7 @@
     "test:contact-workbook": "node scripts/test-contact-list-workbook.mjs",
     "test:fixtures": "node scripts/test-fixtures.mjs",
     "test:facility-access": "node scripts/test-facility-overview-access.mjs",
+    "test:doctor-identity": "node scripts/test-doctor-identity.mjs",
     "shadow:active": "node scripts/shadow-active-rosters.mjs"
   },
   "devDependencies": {

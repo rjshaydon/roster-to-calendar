@@ -1,0 +1,15 @@
+name = "roster-identity-audit"
+main = "worker/identity-audit.js"
+compatibility_date = "2026-09-01"
+
+[[d1_databases]]
+binding = "ROSTER_DB"
+database_name = "roster-converter-calendar"
+database_id = "237d0d52-3a7c-4e02-8648-9f4dedbc1cb0"
+preview_database_id = "541d7779-a43a-4603-a4ab-c95e9b4b015d"
+
+[triggers]
+crons = ["30 * * * *"]
+
+[observability]
+enabled = true
