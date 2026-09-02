@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS roster_source_identities (
 );
 CREATE INDEX IF NOT EXISTS idx_roster_source_identities_person ON roster_source_identities (person_id, active);
 CREATE INDEX IF NOT EXISTS idx_roster_source_identities_updated ON roster_source_identities (updated_at, source_type, doctor_key);
+CREATE INDEX IF NOT EXISTS idx_roster_source_identities_audit ON roster_source_identities (source_type, active, updated_at, doctor_key);
 
 INSERT OR IGNORE INTO roster_source_identities (
   source_type, doctor_key, display_name, first_seen_date, last_seen_date,

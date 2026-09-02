@@ -1277,7 +1277,7 @@ export async function onRequestPost(context) {
         if (action === "startIdentityAudit") {
           const run = await startIdentityAudit(context.env.ROSTER_DB, { triggerType: "manual", scope: body?.scope, createdBy: email });
           if (typeof context.waitUntil === "function") {
-            context.waitUntil(runIdentityAuditBatch(context.env.ROSTER_DB, run.auditRunId).catch((error) => {
+            context.waitUntil(runIdentityAuditBatch(context.env.ROSTER_DB, run.auditRunId, { maxRows: 10, maxCandidates: 20, maxMs: 2000 }).catch((error) => {
               console.warn("Identity audit batch failed", { auditRunId: run.auditRunId, error: error?.message || String(error) });
             }));
           }

@@ -1,13 +1,9 @@
-import { runScheduledIdentityAudit } from "../functions/_lib/d1-calendar.js";
-
 export default {
-  async scheduled(controller, env, ctx) {
-    const scheduledAt = new Date(controller.scheduledTime || Date.now());
-    ctx.waitUntil(runScheduledIdentityAudit(env.ROSTER_DB, {
-      now: scheduledAt.toISOString(),
-      owner: `scheduled:${controller.scheduledTime || Date.now()}`,
-      allowNew: isMelbourneWeeklyAuditWindow(scheduledAt),
-    }).then((result) => console.log(JSON.stringify({ event: "identity-audit", ...result }))));
+  async scheduled(controller) {
+    // Deliberately inert: the first implementation resumed paused scans every
+    // hour and could exhaust the Free-tier D1 read allowance. Scheduled audits
+    // stay off until separately approved with measured row-read budgets.
+    console.log(JSON.stringify({ event: "identity-audit", status: "disabled", scheduledAt: controller.scheduledTime || Date.now() }));
   },
 
   async fetch(request) {

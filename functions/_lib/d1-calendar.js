@@ -318,6 +318,7 @@ async function ensureCalendarSchemaUncached(db) {
   `).run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_source_identities_person ON roster_source_identities (person_id, active)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_source_identities_updated ON roster_source_identities (updated_at, source_type, doctor_key)").run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_source_identities_audit ON roster_source_identities (source_type, active, updated_at, doctor_key)").run();
   await db.prepare(`
     CREATE TABLE IF NOT EXISTS roster_person_references (
       person_reference TEXT PRIMARY KEY, person_id TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'current', operation_id TEXT NOT NULL DEFAULT '',
@@ -3108,9 +3109,10 @@ export function isHarmlessRosterNameVariant(left, right) {
   return Boolean(leftKey && rightKey && leftKey === rightKey);
 }
 
-export async function queryApprovedRosterPeople(db) {
+export async function queryApprovedRosterPeople(db, options = {}) {
   if (!db?.prepare) return [];
   await ensureCalendarSchema(db);
+  const limit = Math.max(0, Math.min(250, Number(options.limit || 0)));
   const rows = await db.prepare(`
     SELECT people.person_id, people.preferred_display_name,
       aliases.source_type, aliases.doctor_key, aliases.display_name,
@@ -3120,7 +3122,8 @@ export async function queryApprovedRosterPeople(db) {
     INNER JOIN roster_person_aliases aliases ON aliases.person_id = people.person_id
     WHERE people.review_state = 'approved' AND people.status = 'active' AND aliases.review_state = 'approved'
     ORDER BY people.preferred_display_name, aliases.source_type, aliases.display_name
-  `).all();
+    ${limit ? "LIMIT ?" : ""}
+  `).bind(...(limit ? [limit] : [])).all();
   const people = new Map();
   for (const row of rows.results || []) {
     const personId = String(row.person_id || "");
@@ -3148,10 +3151,10 @@ export async function queryDoctorNameWorkspace(db, options = {}) {
   const search = String(options.search || "").trim().toLowerCase();
   const offset = Math.max(0, Number(options.cursor || 0));
   const [people, sourceRows, candidateRows, lastAudit] = await Promise.all([
-    queryApprovedRosterPeople(db),
+    queryApprovedRosterPeople(db, { limit: 50 }),
     db.prepare(`SELECT source_type, doctor_key, display_name, first_seen_date, last_seen_date, event_count
-      FROM roster_source_identities WHERE active = 1 AND person_id = '' ORDER BY display_name, source_type, doctor_key`).all(),
-    queryIdentityCandidates(db, { status: "pending", limit: 100 }),
+      FROM roster_source_identities WHERE active = 1 AND person_id = '' ORDER BY display_name, source_type, doctor_key LIMIT 50`).all(),
+    queryIdentityCandidates(db, { status: "pending", limit: 25 }),
     db.prepare("SELECT completed_at, updated_at FROM roster_identity_audit_runs ORDER BY updated_at DESC LIMIT 1").first(),
   ]);
   const matchesSearch = (value) => !search || String(value || "").toLowerCase().includes(search);
@@ -3907,7 +3910,14 @@ export async function startIdentityAudit(db, input = {}) {
   if (!db?.prepare) throw new Error("D1 database is not configured.");
   await ensureCalendarSchema(db);
   const now = new Date().toISOString();
-  const scopeJson = JSON.stringify(sanitizeIdentityAuditScope(input.scope));
+  const scope = sanitizeIdentityAuditScope(input.scope);
+  // A whole-roster scan is not acceptable on the Free plan. Every interactive
+  // check must be deliberately bounded to one hospital, one roster name, or
+  // one known doctor.
+  if (String(input.triggerType || "manual") === "manual" && !scope.personId && !scope.alias && scope.sourceTypes.length !== 1) {
+    throw new Error("Choose one hospital or doctor before checking for possible duplicates.");
+  }
+  const scopeJson = JSON.stringify(scope);
   const triggerType = String(input.triggerType || "manual");
   const resumable = await db.prepare(`SELECT audit_run_id FROM roster_identity_audit_runs
     WHERE trigger_type = ? AND status = 'paused' AND scope_json = ? ORDER BY updated_at LIMIT 1`)
@@ -3970,9 +3980,9 @@ export async function runIdentityAuditBatch(db, auditRunId, options = {}) {
   const run = await db.prepare("SELECT * FROM roster_identity_audit_runs WHERE audit_run_id = ?").bind(String(auditRunId)).first();
   if (!run) throw new Error("Identity audit run was not found.");
   const startedAt = Date.now();
-  const maxRows = Math.max(1, Math.min(250, Number(options.maxRows || 250)));
-  const maxCandidates = Math.max(1, Math.min(1000, Number(options.maxCandidates || 500)));
-  const maxMs = Math.max(100, Math.min(15000, Number(options.maxMs || 15000)));
+  const maxRows = Math.max(1, Math.min(25, Number(options.maxRows || 25)));
+  const maxCandidates = Math.max(1, Math.min(50, Number(options.maxCandidates || 50)));
+  const maxMs = Math.max(100, Math.min(3000, Number(options.maxMs || 3000)));
   const storedScope = sanitizeIdentityAuditScope(jsonValue(run.scope_json, {}));
   const scope = { ...storedScope, updatedAfter: String(run.cursor_value || storedScope.updatedAfter || "") };
   const scopePredicates = ["s.active = 1"];
@@ -4006,10 +4016,16 @@ export async function runIdentityAuditBatch(db, auditRunId, options = {}) {
     lastProcessedAlias = alias;
     const feature = rosterIdentityFeatures(alias);
     if (!feature.surnameKey && !feature.surnamePrefix) continue;
+    // Keep each branch indexable. The earlier OR predicate could make SQLite
+    // scan the feature table for every name in an audit batch.
     const candidates = await db.prepare(`SELECT s.source_type, s.doctor_key, s.display_name, s.person_id, s.updated_at FROM roster_identity_features f INNER JOIN roster_source_identities s
       ON s.source_type = f.source_type AND s.doctor_key = f.doctor_key
-      WHERE (f.surname_key = ? AND f.given_key = ?) OR (f.surname_prefix = ? AND f.given_initial = ?)
-      LIMIT 40`).bind(feature.surnameKey, feature.givenKey, feature.surnamePrefix, feature.givenInitial).all();
+      WHERE f.surname_key = ? AND f.given_key = ?
+      UNION
+      SELECT s.source_type, s.doctor_key, s.display_name, s.person_id, s.updated_at FROM roster_identity_features f INNER JOIN roster_source_identities s
+      ON s.source_type = f.source_type AND s.doctor_key = f.doctor_key
+      WHERE f.surname_prefix = ? AND f.given_initial = ?
+      LIMIT 20`).bind(feature.surnameKey, feature.givenKey, feature.surnamePrefix, feature.givenInitial).all();
     for (const other of candidates.results || []) {
       if (Date.now() - startedAt >= maxMs || comparisons >= maxCandidates) { hitBudget = true; break; }
       if (identityAliasKey(alias) >= identityAliasKey(other)) continue;
@@ -4038,10 +4054,14 @@ export async function runIdentityAuditBatch(db, auditRunId, options = {}) {
 
 export async function runScheduledIdentityAudit(db, options = {}) {
   if (!db?.prepare) throw new Error("D1 database is not configured.");
-  await ensureCalendarSchema(db);
   const now = String(options.now || new Date().toISOString());
   const owner = String(options.owner || identityOperationId("identity-audit-lease"));
   const allowNew = options.allowNew === true;
+  // Scheduled work is disabled until its cost is observed under a paid or
+  // explicitly budgeted environment. Crucially, do not resume a paused manual
+  // check from a cron invocation.
+  if (!allowNew || options.enabled !== true) return { status: "skipped", reason: "scheduled identity audit is disabled" };
+  await ensureCalendarSchema(db);
   const leaseUntil = new Date(Date.parse(now) + 20 * 60 * 1000).toISOString();
   const lease = await db.prepare(`INSERT INTO roster_identity_audit_state (state_key, lease_owner, lease_expires_at, updated_at)
     VALUES ('weekly', ?, ?, ?)
