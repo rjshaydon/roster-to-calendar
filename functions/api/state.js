@@ -64,8 +64,6 @@ import {
   queryActiveRosterFileRefs,
   queryCalendarRevision,
   queryPersonAliasesForAccount,
-  queryDoctorNameWorkspace,
-  queryDoctorNameHistory,
   queryRosterPersonById,
   queryRosterPersonHistory,
   queryIdentityCandidates,
@@ -80,8 +78,8 @@ import {
   startIdentityAudit,
   runIdentityAuditBatch,
   reviewIdentityCandidate,
-  approveIdentityCandidate,
   confirmRosterPersonAliasForAccount,
+  scoreRosterIdentityCandidate,
   queryDoctorSeniorities,
   queryDoctorEventsForFileDoctorPairs,
   queryDoctorIssuesForFileDoctorPairs,
@@ -749,8 +747,7 @@ export async function onRequestPost(context) {
         return Response.json({ error: `${claim.displayName} is already linked to another account.`, conflict: true }, { status: 409 });
       }
       const existingClaims = sanitizeClaims(account.record.claims);
-      const persistedCandidates = await queryIdentityCandidates(context.env.ROSTER_DB, { status: "pending", limit: 200 });
-      if (!existingClaims.length || !isPersistedSelfServiceAliasCandidate(existingClaims, claim, persistedCandidates)) {
+      if (!existingClaims.length || !isSelfServiceAliasCandidate(existingClaims, claim)) {
         return Response.json({ error: "This spelling is not a safe potential match for your existing roster identity. Ask the Creator to review it." }, { status: 409 });
       }
       try {
@@ -1262,13 +1259,11 @@ export async function onRequestPost(context) {
 
     // Identity review is deliberately creator-only. Password verification above
     // provides recent authentication for every state-changing request here.
-    if (["queryDoctorNameWorkspace", "queryDoctorNameHistory", "queryIdentityCandidates", "startIdentityAudit", "queryIdentityAuditRun", "previewRosterPersonMerge", "adminMergeRosterPeople", "previewIdentityOperationReversal", "adminReverseIdentityOperation", "adminUpdateRosterPersonName", "adminChangeRosterPersonId", "adminMoveRosterPersonAlias", "queryRosterPersonHistory", "reviewIdentityCandidate", "approveIdentityCandidate"].includes(action)) {
+    if (["queryIdentityCandidates", "startIdentityAudit", "queryIdentityAuditRun", "previewRosterPersonMerge", "adminMergeRosterPeople", "previewIdentityOperationReversal", "adminReverseIdentityOperation", "adminUpdateRosterPersonName", "adminChangeRosterPersonId", "adminMoveRosterPersonAlias", "queryRosterPersonHistory", "reviewIdentityCandidate"].includes(action)) {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
       try {
-        if (action === "queryDoctorNameWorkspace") return Response.json({ ok: true, workspace: await queryDoctorNameWorkspace(context.env.ROSTER_DB, body) });
-        if (action === "queryDoctorNameHistory") return Response.json({ ok: true, history: await queryDoctorNameHistory(context.env.ROSTER_DB, body) });
         if (action === "queryIdentityCandidates") return Response.json({ ok: true, candidates: await queryIdentityCandidates(context.env.ROSTER_DB, body) });
         if (action === "queryIdentityAuditRun") return Response.json({ ok: true, run: await queryIdentityAuditRun(context.env.ROSTER_DB, body?.auditRunId) });
         if (action === "queryRosterPersonHistory") return Response.json({ ok: true, history: await queryRosterPersonHistory(context.env.ROSTER_DB, body?.personId) });
@@ -1285,11 +1280,6 @@ export async function onRequestPost(context) {
         }
         if (action === "reviewIdentityCandidate") {
           return Response.json({ ok: true, candidate: await reviewIdentityCandidate(context.env.ROSTER_DB, { ...body, reviewedBy: email }) });
-        }
-        if (action === "approveIdentityCandidate") {
-          const person = await approveIdentityCandidate(context.env.ROSTER_DB, { ...body, approvedBy: email });
-          scheduleSnapshotWarmupForPerson(context, person?.personId, { reason: "approved-identity-candidate" });
-          return Response.json({ ok: true, person, rebuildQueued: true });
         }
         const input = { ...body, approvedBy: email };
         const result = action === "adminMergeRosterPeople"
@@ -6331,16 +6321,12 @@ function claimMatchesAccountIdentity(claim, realName, email = "") {
   return identities.some((identity) => doctorMatchesRealName(doctor, identity));
 }
 
-function isPersistedSelfServiceAliasCandidate(existingClaims, candidate, candidates) {
-  const sameAlias = (left, right) => String(left?.sourceType || "").toLowerCase() === String(right?.sourceType || "").toLowerCase()
-    && String(left?.key || "").toUpperCase() === String(right?.key || "").toUpperCase();
-  const claims = sanitizeClaims(existingClaims);
-  const matching = (Array.isArray(candidates) ? candidates : []).filter((stored) => {
-    const pairs = [[stored.leftAlias, stored.rightAlias], [stored.rightAlias, stored.leftAlias]];
-    return pairs.some(([knownName, proposedName]) => sameAlias(proposedName, candidate)
-      && claims.some((claim) => sameAlias(knownName, claim)));
+function isSelfServiceAliasCandidate(existingClaims, candidate) {
+  return sanitizeClaims(existingClaims).some((claim) => {
+    if (claim.sourceType === candidate.sourceType && claim.key === candidate.key) return true;
+    if (isHarmlessRosterNameVariant(claim.displayName || claim.key, candidate.displayName || candidate.key)) return true;
+    return Boolean(scoreRosterIdentityCandidate(claim, candidate));
   });
-  return matching.length === 1;
 }
 
 function doctorMatchesRealName(doctor, realName) {
