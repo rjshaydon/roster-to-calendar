@@ -3401,6 +3401,56 @@ body[data-skin="console"] .preview-cell.is-weekend {
   width: min(980px, calc(100% - 24px));
 }
 
+.doctor-names-modal .modal-panel {
+  width: min(1280px, calc(100% - 32px));
+}
+
+.doctor-names-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 2px 0 4px;
+}
+
+.doctor-names-search {
+  max-width: 520px;
+}
+
+.doctor-name-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.doctor-name-card {
+  min-height: 0;
+}
+
+.doctor-name-card.is-unclaimed {
+  border-style: dashed;
+}
+
+.doctor-name-aliases {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.doctor-name-aliases li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 0;
+  border-top: 1px solid rgba(20, 34, 42, 0.1);
+}
+
+.doctor-name-aliases span,
+.identity-help {
+  color: var(--muted);
+}
+
 .modal-close {
   position: absolute;
   top: 12px;

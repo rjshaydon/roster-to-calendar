@@ -391,6 +391,9 @@ let adminIdentityPeople = [];
 let adminIdentityCandidates = [];
 let adminIdentityHistory = [];
 let adminIdentityNotice = "";
+let doctorNamesView = "doctors";
+let doctorNamesSearch = "";
+let adminIdentityWorkspace = { doctors: [], possibleDuplicates: [], counts: {}, lastCheckedAt: "", nextCursor: "" };
 let creatorSwitcherAnnouncementBaseline = null;
 let reportedIssueFingerprints = new Set();
 let currentSnapshot = null;
@@ -1481,6 +1484,12 @@ accountsBody.addEventListener("change", (event) => {
 });
 accountsBody.addEventListener("input", (event) => {
   const searchInput = event.target.closest("[data-admin-user-search]");
+  const doctorNamesSearchInput = event.target.closest("[data-doctor-names-search]");
+  if (doctorNamesSearchInput) {
+    doctorNamesSearch = String(doctorNamesSearchInput.value || "");
+    void ensureIdentityReviewData({ force: true });
+    return;
+  }
   if (!searchInput) return;
   adminUserSearchQuery = String(searchInput.value || "");
   if (adminUserSearchQuery && !otherUsersExpanded) {
@@ -1555,6 +1564,17 @@ accountsBody.addEventListener("click", (event) => {
   const identityReverse = event.target.closest("[data-identity-reverse]");
   if (identityReverse) {
     void previewIdentityReversal(identityReverse.dataset.identityReverse || "");
+    return;
+  }
+  const doctorNamesViewButton = event.target.closest("[data-doctor-names-view]");
+  if (doctorNamesViewButton) {
+    doctorNamesView = doctorNamesViewButton.dataset.doctorNamesView || "doctors";
+    renderAccountsModal();
+    return;
+  }
+  const identityConfirm = event.target.closest("[data-identity-confirm-match]");
+  if (identityConfirm) {
+    void confirmIdentityCandidateMatch(identityConfirm.dataset.identityConfirmMatch || "");
     return;
   }
   if (event.target.closest("[data-confirm-self-alias]")) {
@@ -11805,9 +11825,12 @@ function renderAccountsModal() {
   const me = currentAccount();
   const ownerView = isViewingCreatorAccount();
   const doctorProfileView = activeCalendarMode() === "doctor-profile" && activeDoctorProfile;
-  accountsModalTitle.textContent = ownerView ? "Admin" : "Account";
+  accountsModal.classList.toggle("doctor-names-modal", ownerView && currentAdminTab === "identity");
+  accountsModalTitle.textContent = ownerView && currentAdminTab === "identity" ? "Doctor names" : ownerView ? "Admin" : "Account";
   accountsModalSubtitle.textContent = ownerView
-    ? "Review user issues, manage accounts, and update the owner account."
+    ? currentAdminTab === "identity"
+      ? "Review roster spellings and possible duplicate doctors."
+      : "Review user issues, manage accounts, and update the owner account."
     : doctorProfileView
       ? "Review the roster account details used for this calendar."
       : "Manage your account details.";
@@ -11839,7 +11862,7 @@ function renderAccountsModal() {
       <button type="button" class="entrance-tab ${currentAdminTab === "files" ? "is-active" : ""}" data-admin-tab="files">Files</button>
       <button type="button" class="entrance-tab ${currentAdminTab === "owner" ? "is-active" : ""}" data-admin-tab="owner">Account</button>
       <button type="button" class="entrance-tab ${currentAdminTab === "parser" ? "is-active" : ""}" data-admin-tab="parser">Parser${issueCount ? `<span class="notification-badge">${issueCount}</span>` : ""}</button>
-      <button type="button" class="entrance-tab ${currentAdminTab === "identity" ? "is-active" : ""}" data-admin-tab="identity">Identity review</button>
+      <button type="button" class="entrance-tab ${currentAdminTab === "identity" ? "is-active" : ""}" data-admin-tab="identity">Doctor names</button>
       <button type="button" class="entrance-tab ${currentAdminTab === "system" ? "is-active" : ""}" data-admin-tab="system">System</button>
     </div>
   ` : "";
@@ -12034,71 +12057,53 @@ function renderAccountsModal() {
 }
 
 function renderIdentityReviewCard() {
-  const people = Array.isArray(adminIdentityPeople) ? adminIdentityPeople : [];
-  const candidates = Array.isArray(adminIdentityCandidates) ? adminIdentityCandidates : [];
+  const workspace = adminIdentityWorkspace || {};
+  const doctors = Array.isArray(workspace.doctors) ? workspace.doctors : [];
+  const candidates = Array.isArray(workspace.possibleDuplicates) ? workspace.possibleDuplicates : [];
   const history = Array.isArray(adminIdentityHistory) ? adminIdentityHistory : [];
+  const counts = workspace.counts || {};
   return `
-    <div class="issues-list identity-review-workspace">
+    <div class="issues-list identity-review-workspace doctor-names-workspace">
       <article class="review-card">
-        <div class="review-top"><div><strong>Identity review</strong><span>Suggestions never merge people automatically. Source roster names and historical events remain unchanged.</span></div></div>
+        <div class="review-top"><div><strong>Doctor names</strong><span>Each card represents one doctor. Linking names never changes roster sources or historical shifts.</span></div></div>
         <div class="review-body">
           <div class="modal-actions">
             <button type="button" class="button button-secondary" data-start-identity-audit ${adminIdentityLoading ? "disabled" : ""}>Find possible duplicates</button>
             <button type="button" class="button button-secondary" data-refresh-identity-review ${adminIdentityLoading ? "disabled" : ""}>Refresh</button>
           </div>
+          <p class="identity-help">Names already linked together appear on one card. Unlinked spellings remain separate until reviewed.</p>
           ${adminIdentityNotice ? `<p class="status-line">${escapeHtml(adminIdentityNotice)}</p>` : ""}
         </div>
       </article>
-      <article class="review-card">
-        <div class="review-top"><div><strong>Suggestions</strong><span>${candidates.length ? `${candidates.length} current suggestion${candidates.length === 1 ? "" : "s"}` : "No suggestions loaded."}</span></div></div>
-        <div class="issues-list">
-          ${candidates.length ? candidates.map((candidate) => `<article class="issue-card">
-            <strong>${escapeHtml(candidate.leftAlias?.displayName || candidate.leftPersonId)} ↔ ${escapeHtml(candidate.rightAlias?.displayName || candidate.rightPersonId)}</strong>
-            <p>${escapeHtml((candidate.leftAlias?.sourceType || "").toUpperCase())} · ${escapeHtml((candidate.rightAlias?.sourceType || "").toUpperCase())} · score ${escapeHtml(String(Math.round(candidate.score || 0)))} · ${escapeHtml((candidate.reasons || []).join(", "))}</p>
-            ${candidate.warnings?.length ? `<p>Warning: ${escapeHtml(candidate.warnings.join(", "))}</p>` : ""}
-            <div class="account-actions"><button type="button" class="button button-secondary button-small" data-identity-review-later="${escapeHtml(candidate.candidateId)}">Review later</button><button type="button" class="button button-danger button-small" data-identity-reject="${escapeHtml(candidate.candidateId)}">Reject</button></div>
-          </article>`).join("") : `<article class="issue-card"><p>Run a narrow audit or refresh after an audit completes.</p></article>`}
-        </div>
-      </article>
-      <article class="review-card">
-        <div class="review-top"><div><strong>Merge wizard</strong><span>Enter the source and chosen target IDs, inspect the server preview, then explicitly approve.</span></div></div>
-        <form class="review-body" data-identity-merge-form>
-          <label class="field"><span>Source person IDs (comma-separated)</span><input required data-identity-source-ids placeholder="person:source-one, person:source-two"></label>
-          <label class="field"><span>Existing target ID (optional)</span><input data-identity-target-id placeholder="person:kularatne-aeshan"></label>
-          <label class="field"><span>Preferred full name</span><input required data-identity-preferred-name placeholder="Aeshan KULARATNE"></label>
-          <label class="field"><span>New canonical ID (only when creating a target)</span><input data-identity-proposed-id placeholder="person:kularatne-aeshan"></label>
-          <label class="field"><span>Aliases to move (optional, comma-separated SOURCE:ROSTER KEY)</span><input data-identity-aliases placeholder="ddh:AESHAN KULURATNE, vhh:AESHAN KULARATNE"></label>
-          <label class="field"><span>Accounts to move (optional, comma-separated)</span><input data-identity-accounts placeholder="doctor@example.com"></label>
-          <label class="field"><span>Reason (optional)</span><input data-identity-reason placeholder="Confirmed after review"></label>
-          <div class="modal-actions"><button type="submit" class="button button-primary">Preview merge</button></div>
-        </form>
-      </article>
-      <article class="review-card">
-        <div class="review-top"><div><strong>People</strong><span>${people.length} active canonical people loaded.</span></div></div>
-        <div class="issues-list">${people.slice(0, 50).map((person) => `<article class="issue-card"><strong>${escapeHtml(person.preferredDisplayName || person.personId)}</strong><p>${escapeHtml(person.personId)} · ${(person.aliases || []).map((alias) => escapeHtml(`${alias.sourceType.toUpperCase()}: ${alias.displayName}`)).join("; ")}</p></article>`).join("") || `<article class="issue-card"><p>No people loaded.</p></article>`}</div>
-      </article>
-      <article class="review-card">
-        <div class="review-top"><div><strong>History</strong><span>Committed changes are retained, including reversals.</span></div></div>
-        <div class="issues-list">${history.slice(0, 25).map((operation) => `<article class="issue-card"><strong>${escapeHtml(operation.operationType)} · ${escapeHtml(operation.targetPersonId)}</strong><p>${escapeHtml(operation.administratorEmail)} · ${escapeHtml(operation.createdAt)}${operation.reason ? ` · ${escapeHtml(operation.reason)}` : ""}</p>${operation.status === "committed" ? `<button type="button" class="button button-secondary button-small" data-identity-reverse="${escapeHtml(operation.operationId)}">Preview reversal</button>` : ""}</article>`).join("") || `<article class="issue-card"><p>No identity operations yet.</p></article>`}</div>
-      </article>
+      <nav class="doctor-names-tabs" aria-label="Doctor name views">
+        <button type="button" class="button ${doctorNamesView === "doctors" ? "button-primary" : "button-secondary"}" data-doctor-names-view="doctors">Doctors (${Number(counts.doctors || 0)})</button>
+        <button type="button" class="button ${doctorNamesView === "duplicates" ? "button-primary" : "button-secondary"}" data-doctor-names-view="duplicates">Possible duplicates (${Number(counts.possibleDuplicates || 0)})</button>
+        <button type="button" class="button ${doctorNamesView === "history" ? "button-primary" : "button-secondary"}" data-doctor-names-view="history">Change history</button>
+      </nav>
+      ${doctorNamesView === "doctors" ? `
+        <label class="field doctor-names-search"><span>Find a doctor or roster spelling</span><input type="search" value="${escapeHtml(doctorNamesSearch)}" data-doctor-names-search placeholder="e.g. Jay, Jayantha or O'Brien"></label>
+        <div class="doctor-name-card-grid">${doctors.map((record) => `<article class="review-card doctor-name-card ${record.kind === "unclaimed-name" ? "is-unclaimed" : ""}"><div class="review-top"><div><strong>${escapeHtml(record.displayName || "Unnamed roster spelling")}</strong><span>${record.kind === "unclaimed-name" ? "Unlinked roster spelling" : `Doctor record ${escapeHtml(record.personReference)}`}</span></div></div><div class="review-body">${record.aliases?.length ? `<ul class="doctor-name-aliases">${record.aliases.map((alias) => `<li><strong>${escapeHtml(alias.displayName)}</strong><span>${escapeHtml(String(alias.sourceType || "").toUpperCase())}</span></li>`).join("")}</ul>` : `<p>Seen in the roster${record.eventCount ? ` · ${escapeHtml(String(record.eventCount))} events` : ""}.</p>`}</div></article>`).join("") || `<article class="issue-card"><p>${adminIdentityLoading ? "Loading doctor names…" : "No doctor names match this search."}</p></article>`}</div>
+      ` : doctorNamesView === "duplicates" ? `
+        <div class="doctor-name-card-grid">${candidates.map((candidate) => `<article class="review-card doctor-name-card"><div class="review-top"><div><strong>${escapeHtml(candidate.left?.displayName)} and ${escapeHtml(candidate.right?.displayName)}</strong><span>Possible duplicate</span></div></div><div class="review-body"><p><strong>${escapeHtml(candidate.left?.displayName)}</strong> · ${escapeHtml(String(candidate.left?.source || "").toUpperCase())}<br><strong>${escapeHtml(candidate.right?.displayName)}</strong> · ${escapeHtml(String(candidate.right?.source || "").toUpperCase())}</p><p>${escapeHtml(candidate.why || "Please compare these roster names carefully.")}</p><div class="account-actions"><button type="button" class="button button-primary button-small" data-identity-confirm-match="${escapeHtml(candidate.candidateId)}">Same doctor</button><button type="button" class="button button-secondary button-small" data-identity-review-later="${escapeHtml(candidate.candidateId)}">Not sure</button><button type="button" class="button button-danger button-small" data-identity-reject="${escapeHtml(candidate.candidateId)}">Different doctors</button></div></div></article>`).join("") || `<article class="issue-card"><p>${adminIdentityLoading ? "Loading possible duplicates…" : "No possible duplicates need review."}</p></article>`}</div>
+      ` : `<div class="issues-list">${history.map((operation) => `<article class="issue-card"><strong>${escapeHtml(operation.operationType.replaceAll("-", " "))} · ${escapeHtml(operation.personReference || "Doctor record")}</strong><p>${escapeHtml(operation.performedBy)} · ${escapeHtml(formatTimestamp(operation.occurredAt))}${operation.reason ? ` · ${escapeHtml(operation.reason)}` : ""}</p><button type="button" class="button button-secondary button-small" data-identity-reverse="${escapeHtml(operation.operationId)}">Review reversal</button></article>`).join("") || `<article class="issue-card"><p>No doctor-name changes have been recorded yet.</p></article>`}</div>`}
     </div>
   `;
 }
 
 async function ensureIdentityReviewData({ force = false } = {}) {
   if (!isViewingCreatorAccount() || adminIdentityLoading) return;
-  if (!force && adminIdentityPeople.length && adminIdentityCandidates.length) return;
+  if (!force && adminIdentityWorkspace.doctors?.length) return;
   adminIdentityLoading = true;
   if (!adminIdentityNotice) adminIdentityNotice = "Loading identity review…";
   if (!accountsModal.classList.contains("hidden") && currentAdminTab === "identity") renderAccountsModal();
   try {
-    const [peopleResult, candidateResult, historyResult] = await Promise.all([
-      calendarStoreRequest("listRosterPersonAliases"),
-      calendarStoreRequest("queryIdentityCandidates", { limit: 100 }),
-      calendarStoreRequest("queryRosterPersonHistory"),
+    const [workspaceResult, historyResult] = await Promise.all([
+      calendarStoreRequest("queryDoctorNameWorkspace", { limit: 60, search: doctorNamesSearch }),
+      calendarStoreRequest("queryDoctorNameHistory", { limit: 60 }),
     ]);
-    adminIdentityPeople = Array.isArray(peopleResult?.people) ? peopleResult.people : [];
-    adminIdentityCandidates = Array.isArray(candidateResult?.candidates) ? candidateResult.candidates : [];
+    adminIdentityWorkspace = workspaceResult?.workspace || adminIdentityWorkspace;
+    adminIdentityPeople = Array.isArray(adminIdentityWorkspace.doctors) ? adminIdentityWorkspace.doctors : [];
+    adminIdentityCandidates = Array.isArray(adminIdentityWorkspace.possibleDuplicates) ? adminIdentityWorkspace.possibleDuplicates : [];
     adminIdentityHistory = Array.isArray(historyResult?.history) ? historyResult.history : [];
     adminIdentityNotice = "";
   } catch (error) {
@@ -12132,6 +12137,29 @@ async function reviewIdentitySuggestion(candidateId, status) {
     await ensureIdentityReviewData({ force: true });
   } catch (error) {
     adminIdentityNotice = error?.message || "Could not update the identity suggestion.";
+    renderAccountsModal();
+  }
+}
+
+async function confirmIdentityCandidateMatch(candidateId) {
+  const candidate = (adminIdentityWorkspace?.possibleDuplicates || []).find((entry) => entry.candidateId === candidateId);
+  if (!candidate?.left?.displayName || !candidate?.right?.displayName) {
+    adminIdentityNotice = "This suggestion is no longer available. Refresh and try again.";
+    renderAccountsModal();
+    return;
+  }
+  const confirmed = await showAppDialog({
+    title: "Link these roster names?",
+    message: `${candidate.left.displayName} and ${candidate.right.displayName} will appear together as one doctor. Roster source files and historical shifts will stay unchanged.`,
+    confirmLabel: "Link names",
+  });
+  if (!confirmed) return;
+  try {
+    await calendarStoreRequest("approveIdentityCandidate", { candidateId });
+    adminIdentityNotice = `${candidate.left.displayName} and ${candidate.right.displayName} are now linked as one doctor.`;
+    await ensureIdentityReviewData({ force: true });
+  } catch (error) {
+    adminIdentityNotice = error?.message || "Could not link these roster names.";
     renderAccountsModal();
   }
 }

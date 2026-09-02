@@ -3338,6 +3338,7 @@ class MemoryD1 {
     this.accountClaims = new Map();
     this.rosterPeople = new Map();
     this.rosterPersonAliases = new Map();
+    this.rosterSourceIdentities = new Map();
     this.accountPeople = new Map();
     this.accountStates = new Map();
     this.accountHospitalLocations = new Map();
@@ -3375,6 +3376,7 @@ class MemoryD1 {
       "accountClaims",
       "rosterPeople",
       "rosterPersonAliases",
+      "rosterSourceIdentities",
       "accountPeople",
       "accountStates",
       "accountHospitalLocations",
@@ -3562,6 +3564,20 @@ class MemoryD1Statement {
           updated_at: args[index + 3],
         });
       }
+      return { success: true };
+    }
+    if (sql.startsWith("INSERT INTO roster_source_identities")) {
+      const [sourceType, doctorKey, displayName, firstSeenDate, lastSeenDate, eventCount, watermark] = args;
+      const key = `${sourceType}|${doctorKey}`;
+      const existing = this.db.rosterSourceIdentities.get(key);
+      const alias = this.db.rosterPersonAliases.get(key);
+      this.db.rosterSourceIdentities.set(key, {
+        source_type: sourceType, doctor_key: doctorKey, display_name: displayName,
+        first_seen_date: firstSeenDate || existing?.first_seen_date || "",
+        last_seen_date: lastSeenDate || existing?.last_seen_date || "",
+        event_count: Number(eventCount || 0), source_watermark: watermark,
+        person_id: alias?.person_id || existing?.person_id || "", active: 1, updated_at: args[9],
+      });
       return { success: true };
     }
     if (sql.startsWith("INSERT INTO roster_file_doctors")) {

@@ -309,6 +309,23 @@ async function ensureCalendarSchemaUncached(db) {
     )
   `).run();
   await db.prepare(`
+    CREATE TABLE IF NOT EXISTS roster_source_identities (
+      source_type TEXT NOT NULL, doctor_key TEXT NOT NULL, display_name TEXT NOT NULL DEFAULT '',
+      first_seen_date TEXT NOT NULL DEFAULT '', last_seen_date TEXT NOT NULL DEFAULT '', event_count INTEGER NOT NULL DEFAULT 0,
+      source_watermark TEXT NOT NULL DEFAULT '', person_id TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1,
+      feature_version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL DEFAULT '', PRIMARY KEY (source_type, doctor_key)
+    )
+  `).run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_source_identities_person ON roster_source_identities (person_id, active)").run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_source_identities_updated ON roster_source_identities (updated_at, source_type, doctor_key)").run();
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS roster_person_references (
+      person_reference TEXT PRIMARY KEY, person_id TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'current', operation_id TEXT NOT NULL DEFAULT '',
+      created_by TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT ''
+    )
+  `).run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_person_references_person ON roster_person_references (person_id, state)").run();
+  await db.prepare(`
     CREATE TABLE IF NOT EXISTS account_people (
       email TEXT PRIMARY KEY, person_id TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT ''
     )
@@ -604,7 +621,9 @@ async function calendarSchemaIsCurrent(db) {
         EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'contact_allocation_resolutions') AS has_contact_resolutions,
         EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'contact_allocation_resolution_history') AS has_contact_resolution_history,
         EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'roster_identity_operations') AS has_identity_operations,
-        EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'roster_identity_candidates') AS has_identity_candidates
+        EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'roster_identity_candidates') AS has_identity_candidates,
+        EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'roster_source_identities') AS has_source_identities,
+        EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'roster_person_references') AS has_person_references
     `).first();
     return Number(row?.has_account_invites) === 1
       && Number(row?.has_staff_overrides) === 1
@@ -613,7 +632,9 @@ async function calendarSchemaIsCurrent(db) {
       && Number(row?.has_contact_resolutions) === 1
       && Number(row?.has_contact_resolution_history) === 1
       && Number(row?.has_identity_operations) === 1
-      && Number(row?.has_identity_candidates) === 1;
+      && Number(row?.has_identity_candidates) === 1
+      && Number(row?.has_source_identities) === 1
+      && Number(row?.has_person_references) === 1;
   } catch {
     // New databases and the local test double fall back to the full setup.
     return false;
@@ -748,6 +769,17 @@ export async function upsertDerivedRosterFile(db, file, storedImport) {
       ).run();
     }
   }
+  const sourceIdentityRows = derivedByDoctor.flatMap(({ doctor, events }) =>
+    (events || []).map((event) => [
+      "",
+      file.id,
+      sourceType,
+      doctor.key,
+      doctor.displayName,
+      datePart(event.start),
+    ])
+  );
+  await refreshRosterSourceIdentities(db, sourceType, doctors, sourceIdentityRows, parsedAt);
   const eventsByDoctorForPresence = Object.fromEntries(
     derivedByDoctor.map(({ doctor, events }) => [doctor.key, events])
   );
@@ -845,6 +877,33 @@ function collectDerivedEventAndIssueRows(file, sourceType, safeDoctors, eventsBy
   return { eventRows, issueRows };
 }
 
+async function refreshRosterSourceIdentities(db, sourceType, doctors, eventRows = [], watermark = new Date().toISOString()) {
+  if (!doctors?.length) return;
+  const byKey = new Map(doctors.map((doctor) => [doctor.key, { first: "", last: "", count: 0 }]));
+  for (const row of eventRows || []) {
+    const entry = byKey.get(String(row?.[3] || ""));
+    if (!entry) continue;
+    const date = String(row?.[5] || "").slice(0, 10);
+    entry.count += 1;
+    if (date && (!entry.first || date < entry.first)) entry.first = date;
+    if (date && (!entry.last || date > entry.last)) entry.last = date;
+  }
+  const statements = doctors.map((doctor) => {
+    const coverage = byKey.get(doctor.key) || { first: "", last: "", count: 0 };
+    return db.prepare(`INSERT INTO roster_source_identities (
+      source_type, doctor_key, display_name, first_seen_date, last_seen_date, event_count, source_watermark, person_id, active, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT person_id FROM roster_person_aliases WHERE source_type = ? AND doctor_key = ?), ''), 1, ?)
+    ON CONFLICT(source_type, doctor_key) DO UPDATE SET display_name = excluded.display_name,
+      first_seen_date = CASE WHEN excluded.first_seen_date = '' THEN roster_source_identities.first_seen_date WHEN roster_source_identities.first_seen_date = '' THEN excluded.first_seen_date ELSE MIN(roster_source_identities.first_seen_date, excluded.first_seen_date) END,
+      last_seen_date = CASE WHEN excluded.last_seen_date = '' THEN roster_source_identities.last_seen_date WHEN roster_source_identities.last_seen_date = '' THEN excluded.last_seen_date ELSE MAX(roster_source_identities.last_seen_date, excluded.last_seen_date) END,
+      event_count = excluded.event_count, source_watermark = excluded.source_watermark,
+      person_id = COALESCE((SELECT person_id FROM roster_person_aliases WHERE source_type = excluded.source_type AND doctor_key = excluded.doctor_key), roster_source_identities.person_id),
+      active = 1, updated_at = excluded.updated_at`)
+      .bind(sourceType, doctor.key, doctor.displayName, coverage.first, coverage.last, coverage.count, watermark, sourceType, doctor.key, watermark);
+  });
+  await runTransactionalBatch(db, statements);
+}
+
 export async function startDerivedRosterFileSave(db, file, doctors, options = {}) {
   if (!db?.prepare || !file?.id) return { ok: false, reason: "missing-input" };
   await ensureCalendarSchema(db);
@@ -903,6 +962,7 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
   ];
   await deleteDailyPresenceForFile(db, file.id);
   await runTransactionalBatch(db, statements);
+  await refreshRosterSourceIdentities(db, sourceType, safeDoctors, eventRows, parsedAt);
   await recordFacilitySmsMembershipsForRosterFile(db, file.id);
   if (options.deferDailyPresence !== true) {
     await populateDailyPresenceForFile(db, file.id, eventsByDoctor, {
@@ -3079,6 +3139,102 @@ export async function queryApprovedRosterPeople(db) {
   return [...people.values()];
 }
 
+/** A creator-facing, paged projection. It deliberately returns display-safe
+ * doctor records instead of the operational alias and account tables. */
+export async function queryDoctorNameWorkspace(db, options = {}) {
+  if (!db?.prepare) return { doctors: [], possibleDuplicates: [], counts: {} };
+  await ensureCalendarSchema(db);
+  const limit = Math.max(1, Math.min(100, Number(options.limit || 30)));
+  const search = String(options.search || "").trim().toLowerCase();
+  const offset = Math.max(0, Number(options.cursor || 0));
+  const [people, sourceRows, candidateRows, lastAudit] = await Promise.all([
+    queryApprovedRosterPeople(db),
+    db.prepare(`SELECT source_type, doctor_key, display_name, first_seen_date, last_seen_date, event_count
+      FROM roster_source_identities WHERE active = 1 AND person_id = '' ORDER BY display_name, source_type, doctor_key`).all(),
+    queryIdentityCandidates(db, { status: "pending", limit: 100 }),
+    db.prepare("SELECT completed_at, updated_at FROM roster_identity_audit_runs ORDER BY updated_at DESC LIMIT 1").first(),
+  ]);
+  const matchesSearch = (value) => !search || String(value || "").toLowerCase().includes(search);
+  const matchedPeople = people.filter((person) => matchesSearch(person.preferredDisplayName)
+    || person.aliases.some((alias) => matchesSearch(alias.displayName)));
+  const unclaimed = (sourceRows.results || []).filter((row) => matchesSearch(row.display_name));
+  const records = [
+    ...matchedPeople.map((person) => doctorNameCard(person)),
+    ...unclaimed.map((row) => ({
+      kind: "unclaimed-name", displayName: String(row.display_name || ""),
+      aliases: [], firstSeenDate: String(row.first_seen_date || ""), lastSeenDate: String(row.last_seen_date || ""),
+      eventCount: Number(row.event_count || 0), source: { sourceType: String(row.source_type), key: String(row.doctor_key) },
+    })),
+  ].sort((left, right) => String(left.displayName).localeCompare(String(right.displayName)));
+  const pending = candidateRows.filter((candidate) => candidate.status === "pending");
+  return {
+    doctors: records.slice(offset, offset + limit),
+    nextCursor: offset + limit < records.length ? String(offset + limit) : "",
+    possibleDuplicates: pending.map(doctorNameCandidateCard),
+    counts: { doctors: matchedPeople.length, unclaimedNames: unclaimed.length, possibleDuplicates: pending.length },
+    lastCheckedAt: String(lastAudit?.completed_at || lastAudit?.updated_at || ""),
+  };
+}
+
+export async function queryDoctorNameHistory(db, options = {}) {
+  if (!db?.prepare) return [];
+  await ensureCalendarSchema(db);
+  const limit = Math.max(1, Math.min(100, Number(options.limit || 30)));
+  const rows = await db.prepare(`SELECT operation_id, operation_type, reason, created_at, administrator_email, target_person_id
+    FROM roster_identity_operations ORDER BY created_at DESC LIMIT ?`).bind(limit).all();
+  return (rows.results || []).map((row) => ({
+    operationId: String(row.operation_id || ""), operationType: String(row.operation_type || ""),
+    reason: String(row.reason || ""), occurredAt: String(row.created_at || ""),
+    performedBy: String(row.administrator_email || ""), personReference: doctorReferenceCode(row.target_person_id),
+  }));
+}
+
+function doctorNameCard(person) {
+  const aliases = (person.aliases || []).map((alias) => ({
+    displayName: String(alias.displayName || ""), sourceType: String(alias.sourceType || ""),
+    firstSeenDate: String(alias.updatedAt || "").slice(0, 10), lastSeenDate: String(alias.updatedAt || "").slice(0, 10),
+  }));
+  return {
+    kind: "doctor", personReference: doctorReferenceCode(person.personId), displayName: String(person.preferredDisplayName || ""), aliases,
+    firstSeenDate: aliases.map((alias) => alias.firstSeenDate).filter(Boolean).sort()[0] || "",
+    lastSeenDate: aliases.map((alias) => alias.lastSeenDate).filter(Boolean).sort().at(-1) || "",
+  };
+}
+
+function doctorNameCandidateCard(candidate) {
+  const left = candidate.leftAlias || {};
+  const right = candidate.rightAlias || {};
+  return {
+    candidateId: candidate.candidateId,
+    left: { displayName: String(left.displayName || left.display_name || ""), source: String(left.sourceType || left.source_type || "") },
+    right: { displayName: String(right.displayName || right.display_name || ""), source: String(right.sourceType || right.source_type || "") },
+    why: plainIdentityReason(candidate.reasons, candidate.warnings),
+    score: Number(candidate.score || 0), status: candidate.status,
+  };
+}
+
+function plainIdentityReason(reasons, warnings) {
+  const reasonText = new Set((Array.isArray(reasons) ? reasons : []).map((reason) => ({
+    "exact-normalized-name": "The names are the same once formatting is ignored.",
+    "same-surname": "They share the same surname.",
+    "similar-surname": "Their surnames are very similar.",
+    "same-given-name": "They share the same given name.",
+    "same-initial": "They share the same given-name initial.",
+  }[reason] || "Their names are similar.")));
+  const warningText = (Array.isArray(warnings) ? warnings : []).includes("same-hospital") ? " They appear in the same roster source, so please check carefully." : "";
+  return `${[...reasonText].join(" ") || "Their names are similar."}${warningText}`;
+}
+
+function doctorReferenceCode(personId) {
+  const value = String(personId || "");
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `DOC-${(hash >>> 0).toString(36).toUpperCase().padStart(6, "0")}`;
+}
+
 export async function queryRosterPersonById(db, personId) {
   if (!db?.prepare || !personId) return null;
   await ensureCalendarSchema(db);
@@ -3174,6 +3330,8 @@ export async function approveRosterPersonAlias(db, input = {}) {
       automatic ? "automatic" : "admin-approved", automatic ? "" : approvedBy, now,
       JSON.stringify({ canonicalSourceType: canonical.sourceType, canonicalDoctorKey: canonical.key }),
     ).run();
+    await db.prepare("UPDATE roster_source_identities SET person_id = ?, updated_at = ? WHERE source_type = ? AND doctor_key = ?")
+      .bind(personId, now, entry.sourceType, entry.key).run();
   }
   return await queryRosterPersonById(db, personId);
 }
@@ -3412,6 +3570,8 @@ export async function confirmRosterPersonAliasForAccount(db, input = {}) {
       db.prepare(`INSERT INTO roster_person_alias_audit (audit_id, person_id, source_type, doctor_key, display_name, action, provenance, approved_by, created_at, details_json)
         VALUES (?, ?, ?, ?, ?, 'self-link', 'self-confirmed', ?, ?, ?)`)
         .bind(identityOperationId("self-alias"), personId, alias.sourceType, alias.key, alias.displayName, email, now, JSON.stringify({ selfConfirmed: true })),
+      db.prepare("UPDATE roster_source_identities SET person_id = ?, updated_at = ? WHERE source_type = ? AND doctor_key = ?")
+        .bind(personId, now, alias.sourceType, alias.key),
     ]);
   }
   return await queryRosterPersonById(db, personId);
@@ -3539,12 +3699,20 @@ function identityChangeStatements(db, change, operationId, now, options = {}) {
       .bind(after.person_id, after.preferred_display_name || "", after.provenance || "admin-approved", after.review_state || "approved", after.status || "active", after.merged_into_person_id || "", Number(after.version || 1), after.created_at || now, after.updated_at || now, after.approved_by || "")];
   }
   if (change.type === "alias") {
-    if (!after) return [db.prepare("DELETE FROM roster_person_aliases WHERE source_type = ? AND doctor_key = ?").bind(...change.key.split(":"))];
+    if (!after) {
+      const [sourceType, doctorKey] = change.key.split(":");
+      return [
+        db.prepare("DELETE FROM roster_person_aliases WHERE source_type = ? AND doctor_key = ?").bind(sourceType, doctorKey),
+        db.prepare("UPDATE roster_source_identities SET person_id = '', updated_at = ? WHERE source_type = ? AND doctor_key = ?").bind(now, sourceType, doctorKey),
+      ];
+    }
     return [db.prepare(`INSERT INTO roster_person_aliases (source_type, doctor_key, display_name, person_id, provenance, confidence, review_state, created_at, updated_at, approved_by)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(source_type, doctor_key) DO UPDATE SET display_name = excluded.display_name, person_id = excluded.person_id, provenance = excluded.provenance,
         confidence = excluded.confidence, review_state = excluded.review_state, updated_at = excluded.updated_at, approved_by = excluded.approved_by`)
-      .bind(after.source_type, after.doctor_key, after.display_name || "", after.person_id, after.provenance || "admin-approved", after.confidence || "confirmed", after.review_state || "approved", after.created_at || now, after.updated_at || now, after.approved_by || "")];
+      .bind(after.source_type, after.doctor_key, after.display_name || "", after.person_id, after.provenance || "admin-approved", after.confidence || "confirmed", after.review_state || "approved", after.created_at || now, after.updated_at || now, after.approved_by || ""),
+    db.prepare("UPDATE roster_source_identities SET person_id = ?, updated_at = ? WHERE source_type = ? AND doctor_key = ?")
+      .bind(after.person_id, now, after.source_type, after.doctor_key)];
   }
   if (change.type === "account") {
     if (!after) return [db.prepare("DELETE FROM account_people WHERE email = ?").bind(change.key)];
@@ -3780,6 +3948,20 @@ export async function reviewIdentityCandidate(db, input = {}) {
   return row ? identityCandidateRow(row) : null;
 }
 
+export async function approveIdentityCandidate(db, input = {}) {
+  if (!db?.prepare || !input.candidateId) throw new Error("A possible duplicate is required.");
+  await ensureCalendarSchema(db);
+  const candidate = await db.prepare("SELECT * FROM roster_identity_candidates WHERE candidate_id = ?")
+    .bind(String(input.candidateId)).first();
+  if (!candidate || String(candidate.status) !== "pending") throw new Error("This possible duplicate is no longer available for review.");
+  const canonical = sanitizeRosterPersonAlias(jsonValue(candidate.left_alias_json, {}));
+  const alias = sanitizeRosterPersonAlias(jsonValue(candidate.right_alias_json, {}));
+  if (!canonical || !alias) throw new Error("This possible duplicate no longer has usable roster names.");
+  const person = await approveRosterPersonAlias(db, { canonical, alias, approvedBy: input.approvedBy });
+  await reviewIdentityCandidate(db, { candidateId: input.candidateId, status: "approved", reviewedBy: input.approvedBy });
+  return person;
+}
+
 /** Runs one bounded page only.  It creates review suggestions and feature rows;
  * it never mutates roster data, identities, snapshots, feeds, or R2. */
 export async function runIdentityAuditBatch(db, auditRunId, options = {}) {
@@ -3793,14 +3975,14 @@ export async function runIdentityAuditBatch(db, auditRunId, options = {}) {
   const maxMs = Math.max(100, Math.min(15000, Number(options.maxMs || 15000)));
   const storedScope = sanitizeIdentityAuditScope(jsonValue(run.scope_json, {}));
   const scope = { ...storedScope, updatedAfter: String(run.cursor_value || storedScope.updatedAfter || "") };
-  const scopePredicates = ["p.status = 'active'"];
+  const scopePredicates = ["s.active = 1"];
   const scopeParams = [];
-  if (scope.personId) { scopePredicates.push("a.person_id = ?"); scopeParams.push(scope.personId); }
-  if (scope.alias) { scopePredicates.push("a.source_type = ? AND a.doctor_key = ?"); scopeParams.push(scope.alias.sourceType, scope.alias.key); }
-  if (scope.sourceTypes.length) { scopePredicates.push(`a.source_type IN (${scope.sourceTypes.map(() => "?").join(", ")})`); scopeParams.push(...scope.sourceTypes); }
-  if (scope.updatedAfter) { scopePredicates.push("a.updated_at > ?"); scopeParams.push(scope.updatedAfter); }
-  const allAliases = await db.prepare(`SELECT a.*, p.status FROM roster_person_aliases a
-    INNER JOIN roster_people p ON p.person_id = a.person_id WHERE ${scopePredicates.join(" AND ")} ORDER BY a.updated_at, a.source_type, a.doctor_key LIMIT ?`)
+  if (scope.personId) { scopePredicates.push("s.person_id = ?"); scopeParams.push(scope.personId); }
+  if (scope.alias) { scopePredicates.push("s.source_type = ? AND s.doctor_key = ?"); scopeParams.push(scope.alias.sourceType, scope.alias.key); }
+  if (scope.sourceTypes.length) { scopePredicates.push(`s.source_type IN (${scope.sourceTypes.map(() => "?").join(", ")})`); scopeParams.push(...scope.sourceTypes); }
+  if (scope.updatedAfter) { scopePredicates.push("s.updated_at > ?"); scopeParams.push(scope.updatedAfter); }
+  const allAliases = await db.prepare(`SELECT s.source_type, s.doctor_key, s.display_name, s.person_id, s.updated_at FROM roster_source_identities s
+    WHERE ${scopePredicates.join(" AND ")} ORDER BY s.updated_at, s.source_type, s.doctor_key LIMIT ?`)
     .bind(...scopeParams, maxRows).all();
   const aliases = allAliases.results || [];
   const now = new Date().toISOString();
@@ -3824,8 +4006,8 @@ export async function runIdentityAuditBatch(db, auditRunId, options = {}) {
     lastProcessedAlias = alias;
     const feature = rosterIdentityFeatures(alias);
     if (!feature.surnameKey && !feature.surnamePrefix) continue;
-    const candidates = await db.prepare(`SELECT a.* FROM roster_identity_features f INNER JOIN roster_person_aliases a
-      ON a.source_type = f.source_type AND a.doctor_key = f.doctor_key
+    const candidates = await db.prepare(`SELECT s.source_type, s.doctor_key, s.display_name, s.person_id, s.updated_at FROM roster_identity_features f INNER JOIN roster_source_identities s
+      ON s.source_type = f.source_type AND s.doctor_key = f.doctor_key
       WHERE (f.surname_key = ? AND f.given_key = ?) OR (f.surname_prefix = ? AND f.given_initial = ?)
       LIMIT 40`).bind(feature.surnameKey, feature.givenKey, feature.surnamePrefix, feature.givenInitial).all();
     for (const other of candidates.results || []) {
