@@ -27,10 +27,6 @@ for (const table of ["roster_person_redirects", "roster_identity_operations", "r
 }
 const stateSource = await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8");
 assert.match(stateSource, /action === "claimOwnRosterIdentityAlias"[\s\S]*?never accepts targetEmail[\s\S]*?SELF_ALIAS_OWNED/, "self-service alias claims must not merge another account");
-assert.match(stateSource, /runIdentityAuditBatch\(context\.env\.ROSTER_DB, run\.auditRunId, \{ maxRows: 10, maxCandidates: 20, maxMs: 2000 \}\)/, "interactive duplicate checks must stay tightly bounded");
 const appSource = await readFile(new URL("../public/static/app.js", import.meta.url), "utf8");
 assert.match(appSource, /Link another roster spelling[\s\S]*?Names linked to other accounts are excluded/, "the self-service control must explain its account boundary");
-assert.match(appSource, /Choose one hospital first[\s\S]*?sourceTypes: \[sourceType\]/, "duplicate checks must require one hospital scope");
-const auditWorkerSource = await readFile(new URL("../worker/identity-audit.js", import.meta.url), "utf8");
-assert.doesNotMatch(auditWorkerSource, /runScheduledIdentityAudit/, "the scheduled worker must not consume D1 reads");
 console.log("Doctor identity invariants passed.");

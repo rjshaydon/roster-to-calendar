@@ -12062,15 +12062,13 @@ function renderIdentityReviewCard() {
   const candidates = Array.isArray(workspace.possibleDuplicates) ? workspace.possibleDuplicates : [];
   const history = Array.isArray(adminIdentityHistory) ? adminIdentityHistory : [];
   const counts = workspace.counts || {};
-  const auditSources = recognizedHospitalTypesForActiveAccount();
   return `
     <div class="issues-list identity-review-workspace doctor-names-workspace">
       <article class="review-card">
         <div class="review-top"><div><strong>Doctor names</strong><span>Each card represents one doctor. Linking names never changes roster sources or historical shifts.</span></div></div>
         <div class="review-body">
           <div class="modal-actions">
-            <label class="field identity-audit-source"><span>Hospital to check</span><select data-identity-audit-source><option value="">Choose a hospital…</option>${auditSources.map((source) => `<option value="${escapeHtml(source)}">${escapeHtml(String(source).toUpperCase())}</option>`).join("")}</select></label>
-            <button type="button" class="button button-secondary" data-start-identity-audit ${adminIdentityLoading ? "disabled" : ""}>Check for possible duplicates</button>
+            <button type="button" class="button button-secondary" data-start-identity-audit ${adminIdentityLoading ? "disabled" : ""}>Find possible duplicates</button>
             <button type="button" class="button button-secondary" data-refresh-identity-review ${adminIdentityLoading ? "disabled" : ""}>Refresh</button>
           </div>
           <p class="identity-help">Names already linked together appear on one card. Unlinked spellings remain separate until reviewed.</p>
@@ -12117,17 +12115,11 @@ async function ensureIdentityReviewData({ force = false } = {}) {
 }
 
 async function startManualIdentityAudit() {
-  const sourceType = accountsBody.querySelector("[data-identity-audit-source]")?.value || "";
-  if (!sourceType) {
-    adminIdentityNotice = "Choose one hospital first. Checks are deliberately limited to protect the roster database.";
-    renderAccountsModal();
-    return;
-  }
   adminIdentityLoading = true;
-  adminIdentityNotice = `Checking a small group of ${String(sourceType).toUpperCase()} roster names…`;
+  adminIdentityNotice = "Starting a bounded identity audit…";
   renderAccountsModal();
   try {
-    const result = await calendarStoreRequest("startIdentityAudit", { scope: { sourceTypes: [sourceType] } });
+    const result = await calendarStoreRequest("startIdentityAudit", { scope: {} });
     adminIdentityNotice = result?.run?.auditRunId ? "Audit started. Refresh shortly to see saved suggestions." : "Audit started.";
   } catch (error) {
     adminIdentityNotice = error?.message || "Could not start the identity audit.";
