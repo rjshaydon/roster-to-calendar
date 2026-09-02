@@ -313,16 +313,12 @@ async function ensureCalendarSchemaUncached(db) {
       source_type TEXT NOT NULL, doctor_key TEXT NOT NULL, display_name TEXT NOT NULL DEFAULT '',
       first_seen_date TEXT NOT NULL DEFAULT '', last_seen_date TEXT NOT NULL DEFAULT '', event_count INTEGER NOT NULL DEFAULT 0,
       source_watermark TEXT NOT NULL DEFAULT '', person_id TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1,
-      feature_version INTEGER NOT NULL DEFAULT 1, identity_checked_at TEXT NOT NULL DEFAULT '', identity_checked_run_id TEXT NOT NULL DEFAULT '',
-      updated_at TEXT NOT NULL DEFAULT '', PRIMARY KEY (source_type, doctor_key)
+      feature_version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL DEFAULT '', PRIMARY KEY (source_type, doctor_key)
     )
   `).run();
-  await ensureColumn(db, "roster_source_identities", "identity_checked_at", "TEXT NOT NULL DEFAULT ''");
-  await ensureColumn(db, "roster_source_identities", "identity_checked_run_id", "TEXT NOT NULL DEFAULT ''");
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_source_identities_person ON roster_source_identities (person_id, active)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_source_identities_updated ON roster_source_identities (updated_at, source_type, doctor_key)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_source_identities_audit ON roster_source_identities (source_type, active, updated_at, doctor_key)").run();
-  await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_source_identities_unchecked ON roster_source_identities (source_type, active, identity_checked_at, updated_at, doctor_key)").run();
   await db.prepare(`
     CREATE TABLE IF NOT EXISTS roster_person_references (
       person_reference TEXT PRIMARY KEY, person_id TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'current', operation_id TEXT NOT NULL DEFAULT '',
@@ -630,11 +626,7 @@ async function calendarSchemaIsCurrent(db) {
         EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'roster_source_identities') AS has_source_identities,
         EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'roster_person_references') AS has_person_references
     `).first();
-    if (Number(row?.has_source_identities) !== 1) return false;
-    const sourceIdentityColumns = await db.prepare("PRAGMA table_info(roster_source_identities)").all();
-    const hasCheckedMarker = (sourceIdentityColumns.results || []).some((column) => column.name === "identity_checked_at");
-    return hasCheckedMarker
-      && Number(row?.has_account_invites) === 1
+    return Number(row?.has_account_invites) === 1
       && Number(row?.has_staff_overrides) === 1
       && Number(row?.has_roster_dispatches) === 1
       && Number(row?.has_contact_list_files) === 1
@@ -642,6 +634,7 @@ async function calendarSchemaIsCurrent(db) {
       && Number(row?.has_contact_resolution_history) === 1
       && Number(row?.has_identity_operations) === 1
       && Number(row?.has_identity_candidates) === 1
+      && Number(row?.has_source_identities) === 1
       && Number(row?.has_person_references) === 1;
   } catch {
     // New databases and the local test double fall back to the full setup.
@@ -3992,7 +3985,7 @@ export async function runIdentityAuditBatch(db, auditRunId, options = {}) {
   const maxMs = Math.max(100, Math.min(3000, Number(options.maxMs || 3000)));
   const storedScope = sanitizeIdentityAuditScope(jsonValue(run.scope_json, {}));
   const scope = { ...storedScope, updatedAfter: String(run.cursor_value || storedScope.updatedAfter || "") };
-  const scopePredicates = ["s.active = 1", "s.identity_checked_at = ''"];
+  const scopePredicates = ["s.active = 1"];
   const scopeParams = [];
   if (scope.personId) { scopePredicates.push("s.person_id = ?"); scopeParams.push(scope.personId); }
   if (scope.alias) { scopePredicates.push("s.source_type = ? AND s.doctor_key = ?"); scopeParams.push(scope.alias.sourceType, scope.alias.key); }
@@ -4016,18 +4009,13 @@ export async function runIdentityAuditBatch(db, auditRunId, options = {}) {
   let processedAliases = 0;
   let lastProcessedAlias = null;
   let hitBudget = false;
-  const checkedAliases = [];
   const candidateStatements = [];
   for (const alias of aliases) {
     if (Date.now() - startedAt >= maxMs || comparisons >= maxCandidates) { hitBudget = true; break; }
     processedAliases += 1;
+    lastProcessedAlias = alias;
     const feature = rosterIdentityFeatures(alias);
-    let completedAlias = true;
-    if (!feature.surnameKey && !feature.surnamePrefix) {
-      checkedAliases.push(alias);
-      lastProcessedAlias = alias;
-      continue;
-    }
+    if (!feature.surnameKey && !feature.surnamePrefix) continue;
     // Keep each branch indexable. The earlier OR predicate could make SQLite
     // scan the feature table for every name in an audit batch.
     const candidates = await db.prepare(`SELECT s.source_type, s.doctor_key, s.display_name, s.person_id, s.updated_at FROM roster_identity_features f INNER JOIN roster_source_identities s
@@ -4039,7 +4027,7 @@ export async function runIdentityAuditBatch(db, auditRunId, options = {}) {
       WHERE f.surname_prefix = ? AND f.given_initial = ?
       LIMIT 20`).bind(feature.surnameKey, feature.givenKey, feature.surnamePrefix, feature.givenInitial).all();
     for (const other of candidates.results || []) {
-      if (Date.now() - startedAt >= maxMs || comparisons >= maxCandidates) { hitBudget = true; completedAlias = false; break; }
+      if (Date.now() - startedAt >= maxMs || comparisons >= maxCandidates) { hitBudget = true; break; }
       if (identityAliasKey(alias) >= identityAliasKey(other)) continue;
       comparisons += 1;
       const score = scoreRosterIdentityCandidate(alias, other);
@@ -4055,15 +4043,8 @@ export async function runIdentityAuditBatch(db, auditRunId, options = {}) {
         .bind(candidateId, fingerprint, alias.person_id, other.person_id, JSON.stringify(aliasRow(alias)), JSON.stringify(aliasRow(other)), score.score, JSON.stringify(score.reasons), JSON.stringify(score.warnings), score.evidenceFingerprint, now, now, auditRunId));
       suggestionsChanged += 1;
     }
-    if (!completedAlias) break;
-    checkedAliases.push(alias);
-    lastProcessedAlias = alias;
   }
   if (candidateStatements.length) await runTransactionalBatch(db, candidateStatements);
-  if (checkedAliases.length) await runTransactionalBatch(db, checkedAliases.map((alias) => db.prepare(`UPDATE roster_source_identities
-    SET identity_checked_at = ?, identity_checked_run_id = ?
-    WHERE source_type = ? AND doctor_key = ? AND identity_checked_at = ''`)
-    .bind(now, auditRunId, alias.source_type, alias.doctor_key)));
   const exhausted = !hitBudget && aliases.length < maxRows;
   const nextCursor = lastProcessedAlias?.updated_at || String(run.cursor_value || "");
   await db.prepare(`UPDATE roster_identity_audit_runs SET status = ?, cursor_value = ?, rows_examined = rows_examined + ?, comparisons_made = comparisons_made + ?, suggestions_changed = suggestions_changed + ?, started_at = CASE WHEN started_at = '' THEN ? ELSE started_at END, completed_at = ?, updated_at = ? WHERE audit_run_id = ?`)
