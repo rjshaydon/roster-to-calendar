@@ -25,6 +25,8 @@ const migration = await readFile(new URL("../migrations/0026_doctor_identity_ope
 for (const table of ["roster_person_redirects", "roster_identity_operations", "roster_identity_operation_items", "roster_identity_candidates", "roster_identity_features", "roster_identity_audit_runs"]) {
   assert.match(migration, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`));
 }
+const workspaceMigration = await readFile(new URL("../migrations/0027_doctor_name_workspace.sql", import.meta.url), "utf8");
+assert.match(workspaceMigration, /identity_checked_at/, "source roster names must retain their one-time check marker");
 const stateSource = await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8");
 assert.match(stateSource, /action === "claimOwnRosterIdentityAlias"[\s\S]*?never accepts targetEmail[\s\S]*?SELF_ALIAS_OWNED/, "self-service alias claims must not merge another account");
 assert.match(stateSource, /runIdentityAuditBatch\(context\.env\.ROSTER_DB, run\.auditRunId, \{ maxRows: 10, maxCandidates: 20, maxMs: 2000 \}\)/, "interactive duplicate checks must stay tightly bounded");

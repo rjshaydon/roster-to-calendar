@@ -11,12 +11,15 @@ CREATE TABLE IF NOT EXISTS roster_source_identities (
   person_id TEXT NOT NULL DEFAULT '',
   active INTEGER NOT NULL DEFAULT 1,
   feature_version INTEGER NOT NULL DEFAULT 1,
+  identity_checked_at TEXT NOT NULL DEFAULT '',
+  identity_checked_run_id TEXT NOT NULL DEFAULT '',
   updated_at TEXT NOT NULL DEFAULT '',
   PRIMARY KEY (source_type, doctor_key)
 );
 CREATE INDEX IF NOT EXISTS idx_roster_source_identities_person ON roster_source_identities (person_id, active);
 CREATE INDEX IF NOT EXISTS idx_roster_source_identities_updated ON roster_source_identities (updated_at, source_type, doctor_key);
 CREATE INDEX IF NOT EXISTS idx_roster_source_identities_audit ON roster_source_identities (source_type, active, updated_at, doctor_key);
+CREATE INDEX IF NOT EXISTS idx_roster_source_identities_unchecked ON roster_source_identities (source_type, active, identity_checked_at, updated_at, doctor_key);
 
 INSERT OR IGNORE INTO roster_source_identities (
   source_type, doctor_key, display_name, first_seen_date, last_seen_date,
