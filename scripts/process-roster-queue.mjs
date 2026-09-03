@@ -2,6 +2,8 @@ import { buildAutomatedDerivedRosterPayload } from "../functions/_lib/automation
 import { buildVhhDerivedRosterPayload, VHH_ROSTER_SOURCE_ID } from "../functions/_lib/vhh-roster.js";
 import { extractVhhRosterWorkbook } from "./vhh-roster-workbook.mjs";
 
+import { guardedFetch } from "../functions/_lib/outbound-network.js";
+
 const baseUrl = String(process.env.ROSTER_AUTOMATION_BASE_URL || "https://roster-to-calendar.pages.dev").replace(/\/$/, "");
 const token = String(process.env.ROSTER_AUTOMATION_TOKEN || "");
 const doctorChunkSize = 18;
@@ -48,9 +50,9 @@ if (failures.length) {
 }
 
 async function processRun(run) {
-  const response = await fetch(`${baseUrl}/api/automation/raw?runId=${encodeURIComponent(run.id)}`, {
+  const response = await guardedFetch(process.env, `${baseUrl}/api/automation/raw?runId=${encodeURIComponent(run.id)}`, {
     headers: authorizationHeaders(),
-  });
+  }, { label: "Roster processor download" });
   if (!response.ok) throw new Error(`Roster download returned HTTP ${response.status}.`);
   let payload;
   let processedFileName = run.fileName || "roster.xlsx";
@@ -136,11 +138,11 @@ async function automationRequest(path, options = {}) {
   let lastError = null;
   for (let attempt = 1; attempt <= 6; attempt += 1) {
     try {
-      const response = await fetch(`${baseUrl}${path}`, {
+      const response = await guardedFetch(process.env, `${baseUrl}${path}`, {
         method: options.method || "GET",
         headers,
         body: options.body ? JSON.stringify(options.body) : undefined,
-      });
+      }, { label: "Roster processor callback" });
       const text = await response.text();
       let result = {};
       try {

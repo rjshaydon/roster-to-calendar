@@ -1,4 +1,5 @@
 import * as XLSX from "xlsx";
+import { guardedFetch } from "./outbound-network.js";
 
 const API_BASE = "https://www.findmyshift.com/api/1.4";
 const NEXT_TERM_LOOKAHEAD_DAYS = 28;
@@ -47,19 +48,19 @@ function addDateKeyDays(value, days) {
   return date.toISOString().slice(0, 10);
 }
 
-export async function findmyshiftLastModified(apiKey, teamId) {
-  const payload = await findmyshiftRequest("teams/last-modified", apiKey, { teamId });
+export async function findmyshiftLastModified(apiKey, teamId, options = {}) {
+  const payload = await findmyshiftRequest("teams/last-modified", apiKey, { teamId }, options);
   const value = firstDateLikeValue(payload);
   if (!value) throw new Error("FindMyShift did not return a team modification time.");
   return value;
 }
 
-export async function findmyshiftRosterWorkbook(apiKey, teamId, range) {
+export async function findmyshiftRosterWorkbook(apiKey, teamId, range, options = {}) {
   // FindMyShift allows only one concurrent request per API key.  Keep these
   // dependent lookups serial even though they are otherwise independent.
-  const report = await findmyshiftShiftReport(apiKey, teamId, range);
-  const staff = await findmyshiftStaffList(apiKey, teamId);
-  const facilities = await findmyshiftFacilityList(apiKey, teamId);
+  const report = await findmyshiftShiftReport(apiKey, teamId, range, options);
+  const staff = await findmyshiftStaffList(apiKey, teamId, options);
+  const facilities = await findmyshiftFacilityList(apiKey, teamId, options);
   // FindMyShift's staff endpoint encodes DDH grades in ordered roster groups
   // (for example, "ED HMO's" followed by the doctors), rather than in each
   // person's jobTitle field. Preserve that source classification in both the
@@ -137,7 +138,7 @@ export function assertFindmyshiftDandenongAssignments(rows = []) {
   throw error;
 }
 
-export async function findmyshiftShiftReport(apiKey, teamId, range) {
+export async function findmyshiftShiftReport(apiKey, teamId, range, options = {}) {
   // This is deliberately an unfiltered team report. In particular, do not send
   // `filters` or a facility id: doctors can be rostered across all facilities.
   // Keep it identical to the documented Developer API request which was
@@ -150,15 +151,15 @@ export async function findmyshiftShiftReport(apiKey, teamId, range) {
     // FindMyShift uses this to suppress free-text/availability rows while
     // retaining rostered time-and-stream assignment rows.
     comments: "no",
-  });
+  }, options);
 }
 
-export async function findmyshiftStaffList(apiKey, teamId) {
-  return findmyshiftRequest("staff/list", apiKey, { teamId });
+export async function findmyshiftStaffList(apiKey, teamId, options = {}) {
+  return findmyshiftRequest("staff/list", apiKey, { teamId }, options);
 }
 
-export async function findmyshiftFacilityList(apiKey, teamId) {
-  return findmyshiftRequest("facilities/list", apiKey, { teamId });
+export async function findmyshiftFacilityList(apiKey, teamId, options = {}) {
+  return findmyshiftRequest("facilities/list", apiKey, { teamId }, options);
 }
 
 export function findmyshiftReportDiagnostics(report, range = {}, options = {}) {
@@ -327,16 +328,16 @@ function findmyshiftReportShape(report) {
   })).filter((level) => level.arrays || level.objects || Object.values(level.scalarValues).some(Boolean));
 }
 
-async function findmyshiftRequest(path, apiKey, params) {
+async function findmyshiftRequest(path, apiKey, params, options = {}) {
   const body = new URLSearchParams({ apiKey: String(apiKey), ...Object.fromEntries(Object.entries(params).map(([key, value]) => [key, String(value)])) }).toString();
   let response;
   let text = "";
   for (let attempt = 0; attempt <= FINDMYSHIFT_MAX_RATE_LIMIT_RETRIES; attempt += 1) {
-    response = await fetch(`${API_BASE}/${path}`, {
+    response = await guardedFetch(options.env, `${API_BASE}/${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
       body,
-    });
+    }, { label: "FindMyShift request" });
     text = await response.text();
     if (response.status !== 429 || attempt === FINDMYSHIFT_MAX_RATE_LIMIT_RETRIES) break;
     // FindMyShift permits only one request per key at a time. A manual Files

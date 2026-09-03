@@ -44,6 +44,16 @@ the command. Local data is stored only under `.wrangler/local-safe`. These
 commands use Wrangler's local D1 and R2 implementations and deliberately keep
 roster automation and quota-heavy roster writes disabled.
 
+Verify that local development cannot contact external services or touch D1/R2
+through disabled automation endpoints:
+
+```bash
+npm run test:local-isolation
+```
+
+This test uses network and binding traps. It does not reset or alter the data in
+`.wrangler/local-safe`.
+
 Use `npm run local:reset`, `npm run local:migrate`, and `npm run local:seed`
 when the individual setup steps are needed for diagnosis. Do not use
 `--remote`, `--preview`, or a remote binding for local development. See

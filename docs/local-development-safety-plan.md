@@ -82,11 +82,24 @@ revalidated on the production baseline for the At a glance optimisation:
   all five roster sources, representative events, and name variations;
 - the lifecycle test proves reset, migration, idempotent seeding, correct and
   incorrect password handling, persistence, and restart behaviour; and
-- an actual browser login and Doctor names workspace load succeeded without
-  browser errors against bindings that Wrangler reported as `Mode local`.
+- an actual local Creator login is exercised against bindings that Wrangler
+  reports as `Mode local`.
 
-No Preview or Production resource was used or changed while completing this
-phase. Phases 2–5 remain outstanding.
+Phase 2 was completed locally on 3 September 2026:
+
+- every server-side network integration now passes through one environment-aware
+  outbound guard;
+- `LOCAL_ONLY=true` blocks non-loopback requests before `fetch` is called;
+- GitHub workflow dispatch returns before querying D1 when running locally;
+- FindMyShift, Postmark email, and internal automation request paths fail closed
+  with a clear `local-disabled` response;
+- automation endpoints are tested with throwing D1 and R2 bindings, proving the
+  local-disabled path touches neither service; and
+- `npm run test:local-isolation` uses traps and static configuration checks and
+  does not reset the developer's current local data.
+
+No Preview or Production resource was used or changed while completing either
+phase. Phases 3–5 remain outstanding.
 
 ## Non-negotiable safety rules
 

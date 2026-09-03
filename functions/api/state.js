@@ -3,6 +3,7 @@ import { AUTOMATION_SOURCES } from "../_lib/automation-import.js";
 import { DDH_CONTACT_LIST_SOURCE_ID, MMC_CONTACT_LIST_SOURCE_ID, attachContactAllocations, contactAreaForSource, contactExtractHasExpired, contactOperationalDate, contactsAfterShiftChange, normaliseContactListExtract, shouldCarryPreviousNightContacts, shouldUseCurrentExtractForPreviousNight } from "../../public/static/contact-allocations.js";
 import { requestQueuedRosterProcessing } from "../_lib/automation-dispatch.js";
 import { rosterWritesExplicitlyPaused, rosterWritePausedResponse } from "../_lib/roster-automation-guard.js";
+import { guardedFetch, localFeatureDisabledResponse } from "../_lib/outbound-network.js";
 import { extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentExceptions, findmyshiftLastModified, findmyshiftReportDiagnostics, findmyshiftShiftReport } from "../_lib/findmyshift.js";
 import {
   buildPreviewFromDerivedEvents,
@@ -307,18 +308,20 @@ export async function onRequestPost(context) {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
+      const localDisabled = localFeatureDisabledResponse(context.env, "FindMyShift connection testing");
+      if (localDisabled) return localDisabled;
       const apiKey = String(context.env.FINDMYSHIFT_API_KEY || "").trim();
       const teamId = String(context.env.FINDMYSHIFT_TEAM_ID || "").trim();
       if (!apiKey || !teamId) {
         return Response.json({ error: "FindMyShift API key or team ID is not configured." }, { status: 422 });
       }
       try {
-        const providerModifiedAt = await findmyshiftLastModified(apiKey, teamId);
+        const providerModifiedAt = await findmyshiftLastModified(apiKey, teamId, { env: context.env });
         const range = findmyshiftDiagnosticTermRange(context.env);
         // The report itself has names and the roster rows.  Keep this
         // read-only diagnostic to two serial API calls; staff/facility detail
         // lookups are needed only when a real import has been authorised.
-        const report = await findmyshiftShiftReport(apiKey, teamId, range);
+        const report = await findmyshiftShiftReport(apiKey, teamId, range, { env: context.env });
         const diagnostics = findmyshiftReportDiagnostics(report, range);
         console.log("FindMyShift report read-only diagnostic succeeded", JSON.stringify({
           responseFormat: diagnostics.responseFormat,
@@ -343,6 +346,8 @@ export async function onRequestPost(context) {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
+      const localDisabled = localFeatureDisabledResponse(context.env, "FindMyShift synchronisation");
+      if (localDisabled) return localDisabled;
       if (body?.confirmation !== "sync-findmyshift") {
         return Response.json({ error: "Explicit sync confirmation is required." }, { status: 400 });
       }
@@ -365,10 +370,10 @@ export async function onRequestPost(context) {
       if (processorTarget !== "preview" && processorTarget !== "production") {
         return Response.json({ error: "Controlled FindMyShift sync has an invalid processor target." }, { status: 422 });
       }
-      const response = await fetch(new URL("/api/automation/findmyshift-check", context.request.url), {
+      const response = await guardedFetch(context.env, new URL("/api/automation/findmyshift-check", context.request.url), {
         method: "POST",
         headers: { Authorization: `Bearer ${String(context.env.ROSTER_AUTOMATION_TOKEN).trim()}` },
-      });
+      }, { label: "FindMyShift automation request" });
       const result = await response.json().catch(() => ({}));
       if (!response.ok || !result?.ok) {
         return Response.json({
@@ -389,6 +394,8 @@ export async function onRequestPost(context) {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
+      const localDisabled = localFeatureDisabledResponse(context.env, "Automated roster refresh");
+      if (localDisabled) return localDisabled;
       const sourceId = String(body?.sourceId || "").trim();
       const source = AUTOMATION_SOURCES[sourceId];
       if (!source) return Response.json({ error: "Unknown automated roster source." }, { status: 422 });
@@ -402,14 +409,14 @@ export async function onRequestPost(context) {
         if (body?.range && !historicalRange) {
           return Response.json({ error: "A historical FindMyShift range must be valid and no longer than one term." }, { status: 422 });
         }
-        const response = await fetch(new URL("/api/automation/findmyshift-check", context.request.url), {
+        const response = await guardedFetch(context.env, new URL("/api/automation/findmyshift-check", context.request.url), {
           method: "POST",
           headers: {
             Authorization: `Bearer ${String(context.env.ROSTER_AUTOMATION_TOKEN || "").trim()}`,
             "Content-Type": "application/json",
           },
           body: JSON.stringify({ force: true, ...(historicalRange ? { range: historicalRange } : {}) }),
-        });
+        }, { label: "FindMyShift refresh request" });
         const result = await response.json().catch(() => ({}));
         if (!response.ok || !result?.ok) {
           return Response.json({
@@ -436,6 +443,8 @@ export async function onRequestPost(context) {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
+      const localDisabled = localFeatureDisabledResponse(context.env, "FindMyShift exception download");
+      if (localDisabled) return localDisabled;
       const apiKey = String(context.env.FINDMYSHIFT_API_KEY || "").trim();
       const teamId = String(context.env.FINDMYSHIFT_TEAM_ID || "").trim();
       if (!apiKey || !teamId) {
@@ -443,7 +452,7 @@ export async function onRequestPost(context) {
       }
       try {
         const range = findmyshiftConfiguredRosterRange(context.env);
-        const report = await findmyshiftShiftReport(apiKey, teamId, range);
+        const report = await findmyshiftShiftReport(apiKey, teamId, range, { env: context.env });
         const exceptions = findmyshiftDandenongAssignmentExceptions(extractShiftRows(report));
         return Response.json({
           ok: true,
@@ -517,6 +526,8 @@ export async function onRequestPost(context) {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
+      const localDisabled = localFeatureDisabledResponse(context.env, "Email invitations");
+      if (localDisabled) return localDisabled;
       const targetRealName = String(body?.targetRealName || "").trim();
       const nonClinical = body?.nonClinical === true;
       const directorViewEnabled = body?.directorViewEnabled === true;
@@ -556,7 +567,7 @@ export async function onRequestPost(context) {
       const postmarkToken = String(context.env.POSTMARK_API_TOKEN || "").trim();
       if (!postmarkToken) return Response.json({ error: "Postmark is not configured." }, { status: 422 });
       const inviteUrl = `${new URL(context.request.url).origin}/?invite=${encodeURIComponent(token)}`;
-      const send = await fetch("https://api.postmarkapp.com/email", {
+      const send = await guardedFetch(context.env, "https://api.postmarkapp.com/email", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Postmark-Server-Token": postmarkToken },
         body: JSON.stringify({
@@ -566,7 +577,7 @@ export async function onRequestPost(context) {
           HtmlBody: `<p>Hello ${escapeHtml(targetRealName)},</p><p>You have been invited to Roster Converter.</p><p><a href="${inviteUrl}">Choose your password and activate your account</a></p><p>This one-time link expires in seven days.</p>`,
           MessageStream: "outbound",
         }),
-      });
+      }, { label: "Postmark email delivery" });
       if (!send.ok) {
         const message = await send.text();
         console.error("Postmark invite failed", send.status, message);

@@ -3,6 +3,7 @@ import {
   loadLatestRosterDispatch,
   updateRosterDispatch,
 } from "./d1-calendar.js";
+import { guardedFetch, localOnlyEnabled } from "./outbound-network.js";
 
 const GITHUB_WORKFLOW = "monash-roster-sync.yml";
 const GITHUB_REPOSITORY = "rjshaydon/roster-to-calendar";
@@ -13,6 +14,9 @@ const TRANSIENT_RETRY_MS = 5 * 60 * 1000;
 const AUTH_RETRY_MS = 60 * 60 * 1000;
 
 export async function requestQueuedRosterProcessing(env, { reason = "source-update", now = new Date() } = {}) {
+  if (localOnlyEnabled(env)) {
+    return { ok: false, dispatched: false, reason: "local-disabled", dispatch: null };
+  }
   const requestedAt = validDate(now);
   const claim = await claimRosterDispatch(env?.ROSTER_DB, {
     reason,
@@ -31,7 +35,7 @@ export async function requestQueuedRosterProcessing(env, { reason = "source-upda
     const automationBaseUrl = String(env?.ROSTER_AUTOMATION_BASE_URL || PRODUCTION_AUTOMATION_BASE_URL).replace(/\/$/, "");
     const workflowTarget = String(env?.ROSTER_AUTOMATION_WORKFLOW_TARGET || "production").trim().toLowerCase() === "preview" ? "preview" : "production";
     const workflowRef = String(env?.ROSTER_GITHUB_WORKFLOW_REF || "main").trim() || "main";
-    const response = await fetch(`https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/${GITHUB_WORKFLOW}/dispatches`, {
+    const response = await guardedFetch(env, `https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/${GITHUB_WORKFLOW}/dispatches`, {
       method: "POST",
       headers: {
         Accept: "application/vnd.github+json",
@@ -48,7 +52,7 @@ export async function requestQueuedRosterProcessing(env, { reason = "source-upda
           target: workflowTarget,
         },
       }),
-    });
+    }, { label: "GitHub workflow dispatch" });
     if (response.status === 204) {
       const acceptedAt = new Date().toISOString();
       const updated = await updateRosterDispatch(env.ROSTER_DB, claim.dispatch.id, {

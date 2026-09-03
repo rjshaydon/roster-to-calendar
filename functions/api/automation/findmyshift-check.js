@@ -3,6 +3,7 @@ import { createRosterSyncRun, findQueuedRosterSyncByHash, findRosterSyncByProvid
 import { requestQueuedRosterProcessing } from "../../_lib/automation-dispatch.js";
 import { reconcileRosterFileSupersessionAndRefresh } from "../state.js";
 import { automatedRosterWritesEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
+import { guardedFetch, localFeatureDisabledResponse } from "../../_lib/outbound-network.js";
 
 const SOURCE_ID = "dandenong-findmyshift";
 // This version is both part of the retained workbook name and the source
@@ -13,6 +14,8 @@ const IMPORT_FORMAT = "stream-paired-v7";
 
 export async function onRequestPost(context) {
   if (!hasValidToken(context.request, context.env)) return Response.json({ error: "Unauthorized." }, { status: 401 });
+  const localDisabled = localFeatureDisabledResponse(context.env, "FindMyShift automation");
+  if (localDisabled) return localDisabled;
   if (!automatedRosterWritesEnabled(context.env)) return rosterWritePausedResponse();
   if (!hasCalendarDb(context.env)) return Response.json({ error: "Roster database is unavailable." }, { status: 503 });
   const apiKey = String(context.env.FINDMYSHIFT_API_KEY || "").trim();
@@ -30,7 +33,7 @@ export async function onRequestPost(context) {
   const range = requestedRange || findmyshiftConfiguredRosterRange(context.env);
   let providerVersion = "";
   try {
-    providerVersion = await findmyshiftLastModified(apiKey, teamId);
+    providerVersion = await findmyshiftLastModified(apiKey, teamId, { env: context.env });
     const rangeState = findmyshiftRangeState(current?.cursor, range, providerVersion);
     const fileName = `Dandenong-FindMyShift-${IMPORT_FORMAT}-${range.from}-to-${range.to}.xlsx`;
     const currentFormatRun = await findRosterSyncByProviderVersion(context.env.ROSTER_DB, SOURCE_ID, providerVersion, fileName);
@@ -68,8 +71,8 @@ export async function onRequestPost(context) {
       await saveSource(context, current, { lastCheckedAt: now });
       return Response.json({ ok: true, status: "incomplete", providerModifiedAt: providerVersion });
     }
-    const workbook = await findmyshiftRosterWorkbook(apiKey, teamId, range);
-    const response = await fetch(new URL("/api/automation/ingest", context.request.url), {
+    const workbook = await findmyshiftRosterWorkbook(apiKey, teamId, range, { env: context.env });
+    const response = await guardedFetch(context.env, new URL("/api/automation/ingest", context.request.url), {
       method: "POST",
       headers: { Authorization: `Bearer ${String(context.env.ROSTER_AUTOMATION_TOKEN || "")}`, "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -80,7 +83,7 @@ export async function onRequestPost(context) {
         providerVersion,
         providerModifiedAt: providerVersion,
       }),
-    });
+    }, { label: "Local roster ingestion request" });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(String(result.error || `Roster queue returned HTTP ${response.status}.`));
     await saveSource(context, current, {

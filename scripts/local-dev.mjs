@@ -60,6 +60,7 @@ function safeChildEnvironment() {
   environment.LOCAL_ONLY = "true";
   environment.ROSTER_AUTOMATION_ENABLED = "false";
   environment.ROSTER_AUTOMATION_WRITES_ENABLED = "false";
+  environment.EMAIL_DELIVERY_ENABLED = "false";
   environment.NO_UPDATE_NOTIFIER = "1";
   environment.WRANGLER_LOG_PATH = path.join(LOCAL_STATE_DIRECTORY, "wrangler.log");
   return environment;

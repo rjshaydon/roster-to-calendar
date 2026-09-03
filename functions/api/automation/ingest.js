@@ -1,6 +1,7 @@
 import { automationSourceDefinition, sha256Hex } from "../../_lib/automation-import.js";
 import { requestQueuedRosterProcessing } from "../../_lib/automation-dispatch.js";
 import { automatedRosterWritesEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
+import { localFeatureDisabledResponse } from "../../_lib/outbound-network.js";
 import {
   createRosterSyncRun,
   findQueuedRosterSyncByHash,
@@ -18,6 +19,8 @@ export async function onRequestPost(context) {
   if (!hasValidAutomationToken(context.request, context.env.ROSTER_AUTOMATION_TOKEN)) {
     return Response.json({ error: "Unauthorized." }, { status: 401 });
   }
+  const localDisabled = localFeatureDisabledResponse(context.env, "Automated roster ingestion");
+  if (localDisabled) return localDisabled;
   if (!automatedRosterWritesEnabled(context.env)) return rosterWritePausedResponse();
   if (!hasCalendarDb(context.env)) return Response.json({ error: "Roster database is unavailable." }, { status: 503 });
   try {
