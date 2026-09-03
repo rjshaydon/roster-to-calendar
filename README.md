@@ -27,13 +27,27 @@ Run the parser smoke test:
 npm run test:fixtures
 ```
 
-Run the Pages app locally:
+Create a fresh, synthetic local D1/R2 environment and verify the test login:
 
 ```bash
-npm run dev
+npm run local:setup
 ```
 
-Wrangler will print the local URL, usually `http://127.0.0.1:8788`.
+Then run the Pages app locally:
+
+```bash
+npm run dev:local
+```
+
+Open `http://127.0.0.1:8788` and use the test-only Creator login printed by
+the command. Local data is stored only under `.wrangler/local-safe`. These
+commands use Wrangler's local D1 and R2 implementations and deliberately keep
+roster automation and quota-heavy roster writes disabled.
+
+Use `npm run local:reset`, `npm run local:migrate`, and `npm run local:seed`
+when the individual setup steps are needed for diagnosis. Do not use
+`--remote`, `--preview`, or a remote binding for local development. See
+[`docs/local-development-safety-plan.md`](docs/local-development-safety-plan.md).
 
 ## Cloudflare Deployment
 

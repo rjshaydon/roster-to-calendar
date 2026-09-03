@@ -3,7 +3,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler pages dev public",
+    "dev": "npm run dev:local",
+    "dev:local": "node scripts/local-dev.mjs dev",
+    "local:check": "node scripts/local-dev.mjs check",
+    "local:reset": "node scripts/local-dev.mjs reset",
+    "local:migrate": "node scripts/local-dev.mjs migrate",
+    "local:seed": "node scripts/local-dev.mjs seed",
+    "local:setup": "node scripts/local-dev.mjs setup",
     "deploy": "wrangler pages deploy public",
     "check": "node --check public/static/app.js",
     "test:contact-allocations": "node scripts/test-contact-allocations.mjs",
@@ -14,6 +20,7 @@
     "test:fixtures": "node scripts/test-fixtures.mjs",
     "test:facility-access": "node scripts/test-facility-overview-access.mjs",
     "test:d1-quota": "node scripts/test-d1-quota-guard.mjs",
+    "test:local-lifecycle": "node scripts/test-local-lifecycle.mjs",
     "shadow:active": "node scripts/shadow-active-rosters.mjs"
   },
   "devDependencies": {
