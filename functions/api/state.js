@@ -2,6 +2,7 @@ import { applyEventOverrides, customEventsToEvents, defaultSettings, filterCalen
 import { AUTOMATION_SOURCES } from "../_lib/automation-import.js";
 import { DDH_CONTACT_LIST_SOURCE_ID, MMC_CONTACT_LIST_SOURCE_ID, attachContactAllocations, contactAreaForSource, contactExtractHasExpired, contactOperationalDate, contactsAfterShiftChange, normaliseContactListExtract, shouldCarryPreviousNightContacts, shouldUseCurrentExtractForPreviousNight } from "../../public/static/contact-allocations.js";
 import { requestQueuedRosterProcessing } from "../_lib/automation-dispatch.js";
+import { rosterWritesExplicitlyPaused, rosterWritePausedResponse } from "../_lib/roster-automation-guard.js";
 import { extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentExceptions, findmyshiftLastModified, findmyshiftReportDiagnostics, findmyshiftShiftReport } from "../_lib/findmyshift.js";
 import {
   buildPreviewFromDerivedEvents,
@@ -832,6 +833,7 @@ export async function onRequestPost(context) {
       if (!hasCalendarDb(context.env)) {
         return Response.json({ ok: false, unavailable: true });
       }
+      if (rosterWritesExplicitlyPaused(context.env)) return rosterWritePausedResponse();
       try {
         const syncResult = await syncRosterRepositoryToKeepFileIds(
           context,
@@ -854,6 +856,7 @@ export async function onRequestPost(context) {
       if (!hasCalendarDb(context.env)) {
         return Response.json({ ok: false, unavailable: true });
       }
+      if (rosterWritesExplicitlyPaused(context.env)) return rosterWritePausedResponse();
       const removedIds = sanitizeRepositoryFileIds(body?.removedImportIds);
       if (!removedIds.length) {
         return Response.json({ error: "Roster file ids are required." }, { status: 400 });
@@ -907,6 +910,7 @@ export async function onRequestPost(context) {
       if (!hasCalendarDb(context.env)) {
         return Response.json({ ok: false, unavailable: true });
       }
+      if (rosterWritesExplicitlyPaused(context.env)) return rosterWritePausedResponse();
       const savePhase = String(body?.phase || "complete").toLowerCase();
       const derivedPayloadIssue = validateDerivedCalendarPayload(body?.doctors, body?.eventsByDoctor, { phase: savePhase });
       if (derivedPayloadIssue) {
@@ -978,6 +982,7 @@ export async function onRequestPost(context) {
         return Response.json({ error: "Creator access is required to retain roster files." }, { status: 403 });
       }
       if (!hasCalendarDb(context.env)) return Response.json({ ok: false, unavailable: true });
+      if (rosterWritesExplicitlyPaused(context.env)) return rosterWritePausedResponse();
       const file = body?.file || {};
       const dataUrl = String(body?.dataUrl || "");
       if (!file?.id || !dataUrl) return Response.json({ error: "Roster source file is required." }, { status: 400 });
@@ -1014,6 +1019,7 @@ export async function onRequestPost(context) {
       if (!hasCalendarDb(context.env)) {
         return Response.json({ ok: false, unavailable: true });
       }
+      if (rosterWritesExplicitlyPaused(context.env)) return rosterWritePausedResponse();
       const fileId = String(body?.fileId || "").trim();
       if (!fileId) {
         return Response.json({ error: "Roster file is required." }, { status: 400 });
@@ -1035,6 +1041,7 @@ export async function onRequestPost(context) {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
+      if (rosterWritesExplicitlyPaused(context.env)) return rosterWritePausedResponse();
       if (String(body?.confirmation || "") !== "REBUILD") {
         return Response.json({ error: "Advanced rebuild confirmation is required." }, { status: 400 });
       }
@@ -1494,6 +1501,7 @@ export async function onRequestPost(context) {
       state.imports = state.imports.map(repositoryImportRef);
       const claims = sanitizeClaims(targetRecord.claims);
       const removedImportIds = sanitizeRepositoryFileIds(body?.removedImportIds);
+      if (removedImportIds.length && rosterWritesExplicitlyPaused(context.env)) return rosterWritePausedResponse();
       let removedRosterSourceTypes = [];
       const repositoryAlreadySynced = body?.repositorySynced === true;
       if ((targetRole === "creator" || targetRole === "owner") && saveEmail === email && removedImportIds.length && !repositoryAlreadySynced) {
@@ -1677,6 +1685,7 @@ export async function onRequestPost(context) {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
+      if (rosterWritesExplicitlyPaused(context.env)) return rosterWritePausedResponse();
       const startedAt = Date.now();
       const limit = Math.max(1, Math.min(Number.parseInt(body?.limit ?? 10, 10) || 10, 25));
       const offset = Math.max(0, Number.parseInt(body?.offset ?? 0, 10) || 0);

@@ -68,4 +68,22 @@ const ensureInviteBody = stateSource.match(/async function ensureInviteSchema[\s
 assert.match(ensureInviteBody, /ensureCalendarSchema\(db\)/, "invite setup should use the shared schema check");
 assert.doesNotMatch(ensureInviteBody, /CREATE\s+(?:TABLE|INDEX)/i, "ordinary API requests must not issue invite DDL directly");
 
+for (const action of [
+  "syncRosterRepository",
+  "removeRosterImports",
+  "saveDerivedCalendarFile",
+  "uploadRawRosterFile",
+  "resetDerivedCalendarFile",
+  "replaceActiveRosterFiles",
+  "repairRosterDailyPresence",
+]) {
+  const actionBody = stateSource.match(new RegExp(`if \\(action === "${action}"\\)[\\s\\S]*?(?=\\n    if \\(action === |$)`))?.[0] || "";
+  assert.match(actionBody, /rosterWritesExplicitlyPaused\(context\.env\)/, `${action} must stop while roster writes are paused`);
+}
+assert.match(
+  stateSource,
+  /removedImportIds\.length && rosterWritesExplicitlyPaused\(context\.env\)/,
+  "save must not remove roster files while roster writes are paused",
+);
+
 console.log("D1 quota emergency guards passed.");

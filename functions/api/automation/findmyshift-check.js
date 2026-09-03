@@ -2,7 +2,7 @@ import { findmyshiftConfiguredRosterRange, findmyshiftLastModified, findmyshiftR
 import { createRosterSyncRun, findQueuedRosterSyncByHash, findRosterSyncByProviderVersion, hasCalendarDb, listActiveRetainedRosterFiles, loadRosterSource, upsertRosterSource } from "../../_lib/d1-calendar.js";
 import { requestQueuedRosterProcessing } from "../../_lib/automation-dispatch.js";
 import { reconcileRosterFileSupersessionAndRefresh } from "../state.js";
-import { automatedRosterWritesEnabled, rosterAutomationPausedResponse } from "../../_lib/roster-automation-guard.js";
+import { automatedRosterWritesEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
 
 const SOURCE_ID = "dandenong-findmyshift";
 // This version is both part of the retained workbook name and the source
@@ -13,7 +13,7 @@ const IMPORT_FORMAT = "stream-paired-v7";
 
 export async function onRequestPost(context) {
   if (!hasValidToken(context.request, context.env)) return Response.json({ error: "Unauthorized." }, { status: 401 });
-  if (!automatedRosterWritesEnabled(context.env)) return rosterAutomationPausedResponse();
+  if (!automatedRosterWritesEnabled(context.env)) return rosterWritePausedResponse();
   if (!hasCalendarDb(context.env)) return Response.json({ error: "Roster database is unavailable." }, { status: 503 });
   const apiKey = String(context.env.FINDMYSHIFT_API_KEY || "").trim();
   const teamId = String(context.env.FINDMYSHIFT_TEAM_ID || "").trim();

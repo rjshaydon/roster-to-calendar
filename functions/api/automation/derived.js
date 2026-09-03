@@ -10,13 +10,13 @@ import {
   upsertRosterSource,
 } from "../../_lib/d1-calendar.js";
 import { runAutomatedDerivedRosterSave } from "../state.js";
-import { automatedRosterWritesEnabled, rosterAutomationPausedResponse } from "../../_lib/roster-automation-guard.js";
+import { automatedRosterWritesEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
 
 export async function onRequestPost(context) {
   if (!hasValidAutomationToken(context.request, context.env.ROSTER_AUTOMATION_TOKEN)) {
     return Response.json({ error: "Unauthorized." }, { status: 401 });
   }
-  if (!automatedRosterWritesEnabled(context.env)) return rosterAutomationPausedResponse();
+  if (!automatedRosterWritesEnabled(context.env)) return rosterWritePausedResponse();
   if (!hasCalendarDb(context.env)) return Response.json({ error: "Roster database is unavailable." }, { status: 503 });
   let body = null;
   try {
