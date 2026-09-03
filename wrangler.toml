@@ -5,6 +5,9 @@ pages_build_output_dir = "public"
 [limits]
 cpu_ms = 30_000
 
+[vars]
+ROSTER_AUTOMATION_WRITES_ENABLED = "false"
+
 [[d1_databases]]
 binding = "ROSTER_DB"
 database_name = "roster-converter-calendar"

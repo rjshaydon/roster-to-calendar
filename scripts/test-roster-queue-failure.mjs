@@ -98,7 +98,7 @@ class QueueFailureStatement {
 const failedDb = new QueueFailureDb(run);
 const failedResponse = await handleDerivedRoster({
   request: derivedRequest("failed"),
-  env: { ROSTER_AUTOMATION_TOKEN: token, ROSTER_DB: failedDb },
+  env: { ROSTER_AUTOMATION_TOKEN: token, ROSTER_AUTOMATION_WRITES_ENABLED: "true", ROSTER_DB: failedDb },
 });
 assert.equal(failedResponse.status, 200, "an unrecognised queued source must still accept terminal failure reporting");
 assert.equal((await failedResponse.json()).phase, "failed");
@@ -109,7 +109,7 @@ assert.ok(failedDb.run.completed_at, "a failed run must receive a completion tim
 const processingDb = new QueueFailureDb(run);
 const processingResponse = await handleDerivedRoster({
   request: derivedRequest("start"),
-  env: { ROSTER_AUTOMATION_TOKEN: token, ROSTER_DB: processingDb },
+  env: { ROSTER_AUTOMATION_TOKEN: token, ROSTER_AUTOMATION_WRITES_ENABLED: "true", ROSTER_DB: processingDb },
 });
 assert.equal(processingResponse.status, 400, "an unrecognised source must not be allowed to save derived roster data");
 assert.equal(processingDb.run.status, "queued", "rejecting derived data must not falsely mark the run successful");

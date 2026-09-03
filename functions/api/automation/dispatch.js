@@ -1,10 +1,12 @@
 import { hasCalendarDb } from "../../_lib/d1-calendar.js";
 import { recordRosterDispatchLifecycle, requestQueuedRosterProcessing } from "../../_lib/automation-dispatch.js";
+import { automatedRosterWritesEnabled, rosterAutomationPausedResponse } from "../../_lib/roster-automation-guard.js";
 
 export async function onRequestPost(context) {
   if (!hasValidAutomationToken(context.request, context.env.ROSTER_AUTOMATION_TOKEN, context.env.ROSTER_WATCHDOG_TOKEN)) {
     return Response.json({ error: "Unauthorized." }, { status: 401 });
   }
+  if (!automatedRosterWritesEnabled(context.env)) return rosterAutomationPausedResponse();
   if (!hasCalendarDb(context.env)) return Response.json({ error: "Roster database is unavailable." }, { status: 503 });
   try {
     const body = await context.request.json().catch(() => ({}));

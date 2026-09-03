@@ -5,6 +5,7 @@ compatibility_date = "2026-07-29"
 [vars]
 ROSTER_AUTOMATION_URL = "https://roster-to-calendar.pages.dev/api/automation/dispatch"
 FINDMYSHIFT_CHECK_URL = "https://roster-to-calendar.pages.dev/api/automation/findmyshift-check"
+ROSTER_AUTOMATION_ENABLED = "false"
 
 [triggers]
 crons = ["*/15 * * * *"]
