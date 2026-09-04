@@ -18,6 +18,19 @@ export function hasCalendarDb(env) {
 }
 
 export async function ensureCalendarSchema(db) {
+  // Production schema changes are applied by the numbered D1 migrations.
+  //
+  // Do not inspect or repair the schema from an ordinary request. Pages can
+  // create many isolates, so an isolate-local cache does not prevent this
+  // code from repeatedly scanning sqlite_master and issuing dozens of DDL
+  // statements. That behaviour exhausted both free-tier read and write
+  // quotas while users were simply opening the app.
+  return Boolean(db?.prepare);
+}
+
+// Kept as an explicit bootstrap helper for isolated development/test stores.
+// Production request handlers must use ensureCalendarSchema(), never this.
+export async function initializeCalendarSchema(db) {
   if (!db?.prepare) return false;
   if (ensuredCalendarDbs.has(db)) return true;
   const pending = pendingCalendarSchemaEnsures.get(db);

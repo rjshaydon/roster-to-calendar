@@ -6,6 +6,7 @@ import { onRequestPost as derived } from "../functions/api/automation/derived.js
 import { onRequestPost as findmyshiftCheck } from "../functions/api/automation/findmyshift-check.js";
 import { onRequestPost as dispatch } from "../functions/api/automation/dispatch.js";
 import { onRequestPost as vhhExtract } from "../functions/api/automation/vhh-roster-extract.js";
+import { ensureCalendarSchema } from "../functions/_lib/d1-calendar.js";
 import watchdog from "../worker/roster-queue-watchdog.js";
 
 let databaseTouches = 0;
@@ -55,6 +56,9 @@ for (const [path, handler] of [
 
 assert.equal(databaseTouches, 0, "paused roster automation must perform zero D1 operations");
 assert.equal(objectStoreTouches, 0, "paused roster automation must perform zero R2 operations");
+
+assert.equal(await ensureCalendarSchema(blockedDb), true, "deployed databases are managed by migrations");
+assert.equal(databaseTouches, 0, "ordinary requests must not inspect or modify the D1 schema");
 
 let scheduledWork = 0;
 await watchdog.scheduled({}, env, { waitUntil() { scheduledWork += 1; } });
