@@ -786,6 +786,7 @@ const d1CalendarSource = await readFile(new URL("../functions/_lib/d1-calendar.j
 const stateApiSource = await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8");
 const automationIngestSource = await readFile(new URL("../functions/api/automation/ingest.js", import.meta.url), "utf8");
 const automationDerivedSource = await readFile(new URL("../functions/api/automation/derived.js", import.meta.url), "utf8");
+const processRosterQueueSource = await readFile(new URL("./process-roster-queue.mjs", import.meta.url), "utf8");
 const findmyshiftCheckSource = await readFile(new URL("../functions/api/automation/findmyshift-check.js", import.meta.url), "utf8");
 const automationDispatchSource = await readFile(new URL("../functions/_lib/automation-dispatch.js", import.meta.url), "utf8");
 const automationDispatchEndpointSource = await readFile(new URL("../functions/api/automation/dispatch.js", import.meta.url), "utf8");
@@ -821,7 +822,11 @@ assert.match(appSource, /function openFacilityOverviewByStream[\s\S]*Loading ava
 assert.match(stateSource, /action === "queryFacilityOverviewMetadata"[\s\S]*const catalog = await queryFacilityOverviewCatalog[\s\S]*action === "queryFacilityOverviewByStream"/, "The metadata API should fetch a compact lazy By stream catalogue");
 assert.match(findmyshiftCheckSource, /const fileName = `Dandenong-FindMyShift-\$\{IMPORT_FORMAT\}[\s\S]*currentFormatRun\?\.status === "success"/, "FindMyShift should only call an import unchanged after this parser-format file has succeeded");
 assert.match(automationIngestSource, /findSuccessfulRosterSyncByHash\([^\n]*file\.name\)[\s\S]*findQueuedRosterSyncByHash\([^\n]*file\.name\)/, "automation ingestion should include the retained filename when deduplicating an identical workbook");
-assert.match(automationDerivedSource, /\["parser-rule", "creator-reprocess"\]\.includes\(run\.triggerType\)[\s\S]*activeFileId: preserveActiveFile \? existing\.activeFileId : run\.fileId/, "historical and creator-requested reparses should not replace an automated source's active-file pointer");
+assert.match(automationDerivedSource, /\["parser-rule", "creator-reprocess"\]\.includes\(run\.triggerType\)[\s\S]*activeFileId: preserveActiveFile \? existing\.activeFileId : targetFileId/, "historical and creator-requested reparses should not replace an automated source's active-file pointer");
+assert.match(processRosterQueueSource, /postDerived\(run, payload, "complete", payload\.doctors, payload\.eventsByDoctor, payload\.issuesByDoctor\)/, "automated processing must submit one complete change set for incremental D1 diffing");
+assert.doesNotMatch(processRosterQueueSource, /postDerived\(run, payload, "start"|postDerived\([\s\S]{0,200}"events"/, "automated processing must not build a complete D1 staging copy in chunks");
+assert.match(automationDerivedSource, /currentSource\?\.activeFileId \|\| run\.fileId[\s\S]*id: targetFileId/, "automated corrections must diff against the stable active file identity");
+assert.match(stateApiSource, /phase === "complete" && result\?\.unchanged === true[\s\S]*supersession: null/, "unchanged complete imports must stop before supersession and post-save rebuilding");
 assert.match(findmyshiftCheckSource, /requestBody[\s\S]*force[\s\S]*queueCurrentFindmyshiftReprocess[\s\S]*status: "reprocess-queued"/, "a creator refresh should reprocess the retained FindMyShift file when its provider version is unchanged");
 assert.match(stateSource, /action === "refreshAutomatedRosterSource"[\s\S]*source\.provider === "findmyshift"[\s\S]*force: true[\s\S]*queueAutomatedSourceReprocess/, "the auto-sync refresh action should check FindMyShift remotely and reprocess retained push-only sources");
 const facilityOverviewEventHelpers = appSource.match(/function eventRosterDateKey[\s\S]*?(?=\nfunction filterWhenInsightEvents)/)?.[0] || "";
@@ -2014,8 +2019,8 @@ assert.match(
 );
 assert.match(
   automationDerivedSource,
-  /active: false,[\s\S]*?staged: true,[\s\S]*?replacesFileId:/,
-  "automation writes must remain staged until their finish phase",
+  /active: phase === "complete",[\s\S]*?staged: phase !== "complete",[\s\S]*?replacesFileId:/,
+  "complete automated change sets should update the stable active file while legacy reparses remain staged",
 );
 assert.match(
   stateSource.match(/async function queueActiveParserRuleReparse[\s\S]*?async function queueAutomatedSourceReprocess/)?.[0] || "",
@@ -3915,7 +3920,7 @@ class MemoryD1Statement {
       return { success: true };
     }
     if (sql.startsWith("UPDATE roster_files SET active")) {
-      const file = this.db.files.get(args[1]);
+      const file = this.db.files.get(sql.includes("SET active = 1 WHERE") ? args[0] : args[1]);
       if (file) {
         file.active = sql.includes("active = 1") ? 1 : args[0];
         if (sql.includes("parser_version")) file.parser_version = args[0];

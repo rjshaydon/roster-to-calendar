@@ -857,12 +857,20 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
   const removedDoctorKeys = [...storedDoctors.keys()].filter((key) => !desiredDoctors.has(key));
   const removedEventIds = [...storedEvents.keys()].filter((id) => !desiredEvents.has(id));
   const removedIssueIds = [...storedIssues.keys()].filter((id) => !desiredIssues.has(id));
+  const changedFactCount = changedDoctors.length + removedDoctorKeys.length + changedEventRows.length + removedEventIds.length + changedIssueRows.length + removedIssueIds.length;
+  const maximumIncrementalFacts = Math.max(1, Math.min(Number(options.maximumIncrementalFacts || 250), 500));
+  if (storedFile && changedFactCount > maximumIncrementalFacts) {
+    const error = new Error(`Roster revision changes ${changedFactCount} facts, above the automatic ${maximumIncrementalFacts}-fact safety budget.`);
+    error.code = "ROSTER_INCREMENTAL_BUDGET";
+    error.changedFactCount = changedFactCount;
+    throw error;
+  }
   const fileSignature = JSON.stringify([file.name || "roster.xlsx", sourceType, String(file.sourceId || ""), file.active === false ? 0 : 1,
     Number(file.size || 0), Number(file.lastModified || 0), String(file.addedAt || ""), String(file.uploadedAt || ""), String(file.uploadedBy || ""), String(file.parserVersion || ROSTER_PARSER_VERSION)]);
   const storedFileSignature = storedFile ? JSON.stringify([storedFile.name, storedFile.source_type, storedFile.source_id || "", Number(storedFile.active || 0),
     Number(storedFile.size || 0), Number(storedFile.last_modified || 0), storedFile.added_at || "", storedFile.uploaded_at || "", storedFile.uploaded_by || "", storedFile.parser_version || ""]) : "";
   const statements = [];
-  if (fileSignature !== storedFileSignature) statements.push(derivedRosterFileUpsertStatement(db, file, sourceType, parsedAt));
+  if (fileSignature !== storedFileSignature) statements.push(derivedRosterFileUpsertStatement(db, storedFile ? file : { ...file, active: false }, sourceType, parsedAt));
   for (const id of removedEventIds) statements.push(db.prepare("DELETE FROM roster_daily_presence WHERE event_id = ?").bind(id), db.prepare("DELETE FROM roster_events WHERE id = ?").bind(id));
   for (const row of changedEventRows) statements.push(db.prepare("DELETE FROM roster_daily_presence WHERE event_id = ?").bind(row[0]));
   for (const id of removedIssueIds) statements.push(db.prepare("DELETE FROM roster_issues WHERE id = ?").bind(id));
@@ -872,6 +880,7 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
   statements.push(...bulkInsertEventStatements(db, changedEventRows));
   statements.push(...bulkInsertIssueStatements(db, changedIssueRows));
   await runTransactionalBatch(db, statements);
+  if (!storedFile && file.active !== false) await db.prepare("UPDATE roster_files SET active = 1 WHERE id = ?").bind(file.id).run();
   await recordFacilitySmsMembershipsForRosterFile(db, file.id);
   if (options.deferDailyPresence !== true && changedEventRows.length) {
     const changedIds = new Set(changedEventRows.map((row) => row[0]));
@@ -884,7 +893,7 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
   }
   await refreshFacilityOverviewMaterializationForFile(db, file.id, { contentRevision });
   return { ok: true, unchanged: false, doctors: safeDoctors.length, events: eventRows.length, issues: issueRows.length, contentRevision,
-    changes: { doctors: changedDoctors.length + removedDoctorKeys.length, events: changedEventRows.length + removedEventIds.length, issues: changedIssueRows.length + removedIssueIds.length } };
+    changes: { doctors: changedDoctors.length + removedDoctorKeys.length, events: changedEventRows.length + removedEventIds.length, issues: changedIssueRows.length + removedIssueIds.length, total: changedFactCount } };
 }
 
 export async function setDerivedRosterFileActive(db, fileId, active) {

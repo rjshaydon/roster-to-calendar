@@ -5616,7 +5616,15 @@ async function runCoreDerivedRosterSave(context, job = {}) {
         job.issuesByDoctor || {},
         { deferDailyPresence: false },
       );
-      await propagateDerivedShiftCodeIssues(db, job.doctors || [], job.issuesByDoctor || {});
+      if (result?.unchanged !== true) {
+        await propagateDerivedShiftCodeIssues(db, job.doctors || [], job.issuesByDoctor || {});
+      }
+    }
+    // A semantic no-op must not cascade into supersession, presence,
+    // membership or snapshot work. The automation endpoint may still update
+    // its small sync-run/source bookkeeping records.
+    if (phase === "complete" && result?.unchanged === true) {
+      return { ok: true, result, supersession: null };
     }
     let effectiveFilePayload = filePayload;
     if (phase === "finish" && filePayload.staged === true) {

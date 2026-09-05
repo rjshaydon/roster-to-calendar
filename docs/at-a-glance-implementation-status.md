@@ -39,7 +39,7 @@ binding inventory and compare these estimates with actual Cloudflare metrics.
 
 ## Phase 1: coverage and term staff materialisation
 
-Status: in progress; live reads remain unchanged.
+Status: local Phase 1 gate passed; live reads remain unchanged.
 
 Completed locally:
 
@@ -59,15 +59,39 @@ Completed locally:
 - Local integration tests cover zero-write identical imports, one-event
   sickness correction, overlapping file contributions, SMS continuity and
   the exact 14-day visibility boundary.
+- Automated routine ingestion now submits one complete parsed change set and
+  diffs it against the source's stable active file instead of writing a full
+  inactive copy in chunks and then promoting/deleting whole-file rows.
+- An unchanged automated import stops before supersession, membership,
+  presence and snapshot work. Only the small sync-run/source bookkeeping
+  records are updated by the automation endpoint.
+- Existing-file revisions above the automatic 250-fact budget fail before any
+  roster write. The hard ceiling is 500 facts; larger changes require a later,
+  explicitly controlled ingestion path.
+- A newly discovered roster is populated while inactive and made visible only
+  after its bounded core insert succeeds.
 - Added compact coverage and term-staff repository reads with no fallback to
   `roster_events`. They are not connected to live handlers yet.
 
-Still required for the Phase 1 gate:
+Focused Phase 1 evidence:
 
-- Replace chunked automated D1 staging with a bounded staged change set. The
-  current automation still inserts a complete inactive D1 copy and promotion
-  then deletes/moves whole-file rows; this remains a write-quota release blocker.
-- Extend the focused integration test through that automated chunk/finalise
-  route and prove unchanged and small-correction write counts.
+- `test:facility-materialization`: exact repeat writes zero roster facts; one
+  sickness correction changes one event and writes at most six rows; an
+  over-budget revision writes zero rows; overlap, SMS continuity and 14-day
+  visibility pass. The same test invokes the token-protected automation
+  handler end to end: a repeat and a one-event correction both reuse the
+  stable active file and create no inactive D1 copy.
+- `test:database-costs`: compact Coverage returns one row and compact Staff 120
+  contribution rows on the 109,200-event fixture, with zero `roster_events`
+  access in either query plan.
+- Fixture, queue-failure, D1-quota, local-isolation, VHH automation,
+  facility-access and contact safeguards pass.
+- Fresh local migration and safety check passes using local D1/R2 only.
+
+Still required before any online rollout:
+
 - Confirm the explicit provider-ID schema preflight for each eventual remote
   environment before approving migration execution.
+- Implement later phases that switch live Staff/Coverage/On-shift handlers to
+  the compact read/cache path. Until then, this branch must not be deployed as
+  the production quota fix.

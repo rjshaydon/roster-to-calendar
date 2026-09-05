@@ -6,7 +6,6 @@ import { guardedFetch } from "../functions/_lib/outbound-network.js";
 
 const baseUrl = String(process.env.ROSTER_AUTOMATION_BASE_URL || "https://roster-to-calendar.pages.dev").replace(/\/$/, "");
 const token = String(process.env.ROSTER_AUTOMATION_TOKEN || "");
-const doctorChunkSize = 18;
 
 if (!token) throw new Error("ROSTER_AUTOMATION_TOKEN is required.");
 
@@ -99,22 +98,7 @@ async function processRun(run) {
     ...payload.file,
     lastModified: Number(run.lastModified || payload.file.lastModified || Date.now()),
   };
-  await postDerived(run, payload, "start", payload.doctors, {}, {});
-  console.log("Created the derived roster record.");
-  const doctorKeys = payload.doctors.map((doctor) => doctor.key).filter(Boolean);
-  for (let index = 0; index < doctorKeys.length; index += doctorChunkSize) {
-    const keys = doctorKeys.slice(index, index + doctorChunkSize);
-    await postDerived(
-      run,
-      payload,
-      "events",
-      payload.doctors.filter((doctor) => keys.includes(doctor.key)),
-      Object.fromEntries(keys.map((key) => [key, payload.eventsByDoctor[key] || []])),
-      Object.fromEntries(keys.map((key) => [key, payload.issuesByDoctor[key] || []])),
-    );
-    console.log(`Saved calendar event batch ${Math.floor(index / doctorChunkSize) + 1} of ${Math.ceil(doctorKeys.length / doctorChunkSize)}.`);
-  }
-  const finished = await postDerived(run, payload, "finish", payload.doctors, {}, {});
+  const finished = await postDerived(run, payload, "complete", payload.doctors, payload.eventsByDoctor, payload.issuesByDoctor);
   console.log(`Indexed ${processedFileName}: ${finished.doctorCount} doctors, ${finished.eventCount} shifts.`);
 }
 

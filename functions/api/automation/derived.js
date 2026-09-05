@@ -29,7 +29,7 @@ export async function onRequestPost(context) {
     if (!run || run.sourceId !== sourceId || run.fileId !== String(body?.file?.id || "")) {
       return Response.json({ error: "Queued roster job does not match the derived payload." }, { status: 400 });
     }
-    if (!["start", "events", "finish", "failed"].includes(phase)) {
+    if (!["start", "events", "finish", "complete", "failed"].includes(phase)) {
       return Response.json({ error: "A valid derived-save phase is required." }, { status: 400 });
     }
     if (phase === "failed") {
@@ -66,6 +66,8 @@ export async function onRequestPost(context) {
       return Response.json({ error: "Unknown automation source." }, { status: 400 });
     }
     if (phase === "start") await markRosterSyncRunProcessing(context.env.ROSTER_DB, runId);
+    const currentSource = phase === "complete" ? await loadRosterSource(context.env.ROSTER_DB, sourceId) : null;
+    const targetFileId = phase === "complete" ? String(currentSource?.activeFileId || run.fileId).trim() : run.fileId;
     const saved = await runAutomatedDerivedRosterSave(context, {
       phase,
       // A queued source is invisible to calendars until its final phase. A
@@ -73,23 +75,24 @@ export async function onRequestPost(context) {
       // source it may replace only after its event comparison passes.
       file: {
         ...body.file,
+        id: targetFileId,
         sourceId,
         sourceType: source.sourceType,
-        active: false,
-        staged: true,
+        active: phase === "complete",
+        staged: phase !== "complete",
         replacesFileId: run.sourceFileId && run.sourceFileId !== run.fileId ? run.sourceFileId : "",
       },
       doctors: Array.isArray(body.doctors) ? body.doctors : [],
       eventsByDoctor: body.eventsByDoctor && typeof body.eventsByDoctor === "object" ? body.eventsByDoctor : {},
       issuesByDoctor: body.issuesByDoctor && typeof body.issuesByDoctor === "object" ? body.issuesByDoctor : {},
     });
-    if (phase === "finish") {
+    if (phase === "finish" || phase === "complete") {
       const completedAt = new Date().toISOString();
       const doctorCount = Number(saved?.result?.doctors || 0);
       const eventCount = Number(saved?.result?.events || 0);
       await finishRosterSyncRun(context.env.ROSTER_DB, runId, {
         status: "success",
-        fileId: run.fileId,
+        fileId: targetFileId,
         doctorCount,
         eventCount,
         message: "Roster indexed by background processor.",
@@ -110,11 +113,20 @@ export async function onRequestPost(context) {
         enabled: true,
         lastSuccessAt: completedAt,
         lastError: "",
-        activeFileId: preserveActiveFile ? existing.activeFileId : run.fileId,
+        activeFileId: preserveActiveFile ? existing.activeFileId : targetFileId,
         updatedAt: completedAt,
         createdAt: existing?.createdAt || completedAt,
       });
-      return Response.json({ ok: true, phase, runId, fileId: run.fileId, doctorCount, eventCount });
+      return Response.json({
+        ok: true,
+        phase,
+        runId,
+        fileId: targetFileId,
+        doctorCount,
+        eventCount,
+        unchanged: saved?.result?.unchanged === true,
+        changes: saved?.result?.changes || null,
+      });
     }
     return Response.json({ ok: true, phase, runId, result: saved?.result || null });
   } catch (error) {
