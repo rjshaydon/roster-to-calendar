@@ -36,3 +36,24 @@ Tests passed:
 
 Deferred to the separately approved rollout: verify external deployment and
 binding inventory and compare these estimates with actual Cloudflare metrics.
+
+## Phase 1: coverage and term staff materialisation
+
+Status: in progress; live reads remain unchanged.
+
+Completed locally:
+
+- Added explicit compact storage for per-file coverage, per-file term-staff
+  contributions and the 14-day term visibility boundary.
+- Added explicit provider staff ID columns previously supplied only by runtime
+  schema repair.
+- Verified the migration from a completely fresh disposable local database.
+
+Still required for the Phase 1 gate:
+
+- Populate and diff the compact facts during every ingestion, promotion,
+  deletion, trim and repair path.
+- Make identical imports perform zero fact/event/daily-presence writes.
+- Prove single corrections and removals touch only affected rows while
+  preserving overlapping file contributions and SMS continuity.
+- Add and cost the new compact Staff and coverage repository reads.
