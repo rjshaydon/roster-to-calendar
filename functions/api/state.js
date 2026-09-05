@@ -81,6 +81,7 @@ import {
   rebuildDailyPresenceForFile,
   populateDailyPresenceForFile,
   rebuildDailyPresenceForActiveFiles,
+  refreshFacilityOverviewMaterializationForFile,
   replaceAccountCustomEvents,
   replaceCanonicalDoctors,
   snapshotArtifactKey,
@@ -5613,7 +5614,7 @@ async function runCoreDerivedRosterSave(context, job = {}) {
         job.doctors || [],
         job.eventsByDoctor || {},
         job.issuesByDoctor || {},
-        { deferDailyPresence: true },
+        { deferDailyPresence: false },
       );
       await propagateDerivedShiftCodeIssues(db, job.doctors || [], job.issuesByDoctor || {});
     }
@@ -5650,7 +5651,9 @@ async function runCoreDerivedRosterSave(context, job = {}) {
       }
       const effectiveFileId = String(effectiveFilePayload.id || fileId);
       const postSave = () => {
-        const presence = supersession?.savedTrimmed
+        const presence = phase === "complete"
+          ? Promise.resolve()
+          : supersession?.savedTrimmed
           ? Promise.resolve()
           : phase === "finish" || Number(result?.events || 0) > 1200
             ? rebuildDailyPresenceForFile(db, effectiveFileId)
@@ -5659,6 +5662,7 @@ async function runCoreDerivedRosterSave(context, job = {}) {
               doctors: job.doctors || [],
             });
         return Promise.resolve(presence)
+          .then(() => refreshFacilityOverviewMaterializationForFile(db, effectiveFileId))
           .then(() => reconcileFacilityStaffDesignationsForRosterFile(db, effectiveFileId))
           .then(() => deferCanonicalDoctorRefresh(context, job.reason || "saveDerivedCalendarFile"))
           .then(() => {

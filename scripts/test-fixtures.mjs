@@ -3314,6 +3314,9 @@ class MemoryD1 {
     this.fileDoctors = new Map();
     this.facilityStaffDesignations = new Map();
     this.facilitySmsMemberships = new Map();
+    this.rosterFileCoverage = new Map();
+    this.facilityTermStaff = new Map();
+    this.facilityTermVisibility = new Map();
     this.events = new Map();
     this.dailyPresence = new Map();
     this.issues = new Map();
@@ -3351,6 +3354,9 @@ class MemoryD1 {
       "fileDoctors",
       "facilityStaffDesignations",
       "facilitySmsMemberships",
+      "rosterFileCoverage",
+      "facilityTermStaff",
+      "facilityTermVisibility",
       "events",
       "dailyPresence",
       "issues",
@@ -3401,6 +3407,28 @@ class MemoryD1Statement {
     const args = this.args;
     if (sql.startsWith("CREATE ")) return { success: true };
     if (sql.startsWith("ALTER TABLE")) return { success: true };
+    if (sql.startsWith("INSERT INTO roster_file_coverage")) {
+      this.db.rosterFileCoverage.set(args[0], { file_id: args[0], source_type: args[1], coverage_start: args[2], coverage_end: args[3], content_revision: args[4], staff_digest: args[5], daily_digest: args[6], updated_at: args[7] });
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.startsWith("INSERT INTO facility_term_staff_contributions")) {
+      this.db.facilityTermStaff.set(`${args[0]}|${args[1]}|${args[2]}|${args[3]}`, { source_type: args[0], term_start: args[1], doctor_key: args[2], file_id: args[3], display_name: args[4], seniority: args[5], membership_source: args[6], provider_staff_id: args[7], first_applicable_date: args[8], last_applicable_date: args[9], fact_digest: args[10], updated_at: args[11] });
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.startsWith("INSERT INTO facility_term_visibility")) {
+      const key = `${args[0]}|${args[1]}`;
+      if (!this.db.facilityTermVisibility.has(key)) this.db.facilityTermVisibility.set(key, { source_type: args[0], term_start: args[1], visible_from: args[2] });
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.startsWith("DELETE FROM roster_file_coverage")) { const changed = this.db.rosterFileCoverage.delete(args[0]); return { success: true, meta: { changes: changed ? 1 : 0 } }; }
+    if (sql.startsWith("DELETE FROM facility_term_staff_contributions")) {
+      let changes = 0;
+      for (const [key, row] of [...this.db.facilityTermStaff]) {
+        const matches = sql.includes("source_type = ?") ? row.source_type === args[0] && row.term_start === args[1] && row.doctor_key === args[2] && row.file_id === args[3] : row.file_id === args[0];
+        if (matches) { this.db.facilityTermStaff.delete(key); changes += 1; }
+      }
+      return { success: true, meta: { changes } };
+    }
     if (sql.startsWith("INSERT INTO roster_files")) {
       this.db.files.set(args[0], {
         id: args[0],
@@ -3492,6 +3520,7 @@ class MemoryD1Statement {
     if (sql.startsWith("DELETE FROM roster_file_doctors")) {
       for (const [key, doctor] of [...this.db.fileDoctors.entries()]) {
         if (!key.startsWith(`${args[0]}|`)) continue;
+        if (sql.includes("source_type = ?") && (doctor.source_type !== args[1] || doctor.doctor_key !== args[2])) continue;
         if (sql.includes("NOT EXISTS") && [...this.db.events.values()].some((event) => event.file_id === doctor.file_id && event.doctor_key === doctor.doctor_key)) continue;
         this.db.fileDoctors.delete(key);
       }
@@ -3499,6 +3528,10 @@ class MemoryD1Statement {
     }
     if (sql.startsWith("DELETE FROM roster_events")) {
       for (const [key, value] of [...this.db.events.entries()]) {
+        if (sql.includes("WHERE id = ?")) {
+          if (key === args[0]) this.db.events.delete(key);
+          continue;
+        }
         if (value.file_id !== args[0]) continue;
         if (sql.includes("start_date <= ?") && !(value.start_date <= args[1] && value.end_date >= args[2])) continue;
         this.db.events.delete(key);
@@ -3507,6 +3540,10 @@ class MemoryD1Statement {
     }
     if (sql.startsWith("DELETE FROM roster_issues")) {
       for (const [key, value] of [...this.db.issues.entries()]) {
+        if (sql.includes("WHERE id = ?")) {
+          if (key === args[0]) this.db.issues.delete(key);
+          continue;
+        }
         if (value.file_id !== args[0]) continue;
         if (sql.includes("start_date >= ?") && !(value.start_date >= args[1] && value.start_date <= args[2])) continue;
         this.db.issues.delete(key);
@@ -3894,6 +3931,21 @@ class MemoryD1Statement {
   async all() {
     const sql = this.sql;
     const args = this.args;
+    if (sql.startsWith("SELECT doctor_key, display_name, seniority, membership_source, provider_staff_id FROM roster_file_doctors")) {
+      return { results: [...this.db.fileDoctors.values()].filter((row) => row.file_id === args[0]).sort((a, b) => a.doctor_key.localeCompare(b.doctor_key)) };
+    }
+    if (sql.startsWith("SELECT id, display_name, start_date, end_date, start_ts")) {
+      return { results: [...this.db.events.values()].filter((row) => row.file_id === args[0]).sort((a, b) => a.id.localeCompare(b.id)) };
+    }
+    if (sql.startsWith("SELECT id, display_name, start_date, raw_value")) {
+      return { results: [...this.db.issues.values()].filter((row) => row.file_id === args[0]) };
+    }
+    if (sql.startsWith("SELECT id, doctor_key, display_name, seniority, provider_staff_id")) {
+      return { results: [...this.db.events.values()].filter((row) => row.file_id === args[0]).sort((a, b) => a.id.localeCompare(b.id)) };
+    }
+    if (sql.startsWith("SELECT source_type, term_start, doctor_key, file_id, fact_digest")) {
+      return { results: [...this.db.facilityTermStaff.values()].filter((row) => row.file_id === args[0]) };
+    }
     if (sql.startsWith("PRAGMA table_info(roster_files)")) {
       return {
         results: ["id", "name", "source_type", "source_id", "active", "size", "last_modified", "added_at", "uploaded_at", "uploaded_by", "parsed_at", "parser_version"].map((name) => ({ name })),
@@ -4534,6 +4586,12 @@ class MemoryD1Statement {
   async first() {
     const sql = this.sql;
     const args = this.args;
+    if (sql.startsWith("SELECT content_revision FROM roster_file_coverage")) return this.db.rosterFileCoverage.get(args[0]) || null;
+    if (sql.startsWith("SELECT content_revision, staff_digest, daily_digest")) return this.db.rosterFileCoverage.get(args[0]) || null;
+    if (sql.startsWith("SELECT id, name, source_type, source_id, active, size")) return this.db.files.get(args[0]) || null;
+    if (sql.startsWith("SELECT id, source_type FROM roster_files WHERE id = ?")) {
+      const file = this.db.files.get(args[0]); return file ? { id: file.id, source_type: file.source_type } : null;
+    }
     if (sql.startsWith("SELECT person_id FROM roster_person_aliases")) {
       return this.db.rosterPersonAliases.get(`${args[0]}|${args[1]}`) || null;
     }

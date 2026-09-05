@@ -48,14 +48,26 @@ Completed locally:
 - Added explicit provider staff ID columns previously supplied only by runtime
   schema repair.
 - Verified the migration from a completely fresh disposable local database.
+- Added compact read models that inspect only active coverage rows and the
+  selected ED/term staff contributions, never `roster_events`.
+- The normal complete-import path now hashes canonical parsed content and
+  returns before all writes for an identical import.
+- A changed normal import diffs doctors, events and issues and updates daily
+  presence only for changed/removed events.
+- Activation, promotion, deletion, overlap trimming and daily-presence repair
+  now refresh or remove the affected compact facts.
+- Local integration tests cover zero-write identical imports, one-event
+  sickness correction, overlapping file contributions, SMS continuity and
+  the exact 14-day visibility boundary.
 - Added compact coverage and term-staff repository reads with no fallback to
   `roster_events`. They are not connected to live handlers yet.
 
 Still required for the Phase 1 gate:
 
-- Populate and diff the compact facts during every ingestion, promotion,
-  deletion, trim and repair path.
-- Make identical imports perform zero fact/event/daily-presence writes.
-- Prove single corrections and removals touch only affected rows while
-  preserving overlapping file contributions and SMS continuity.
-- Add and cost the new compact Staff and coverage repository reads.
+- Replace chunked automated D1 staging with a bounded staged change set. The
+  current automation still inserts a complete inactive D1 copy and promotion
+  then deletes/moves whole-file rows; this remains a write-quota release blocker.
+- Extend the focused integration test through that automated chunk/finalise
+  route and prove unchanged and small-correction write counts.
+- Confirm the explicit provider-ID schema preflight for each eventual remote
+  environment before approving migration execution.

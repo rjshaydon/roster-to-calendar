@@ -2,9 +2,6 @@
 -- This migration only creates storage; live reads remain on the old path until
 -- the materialised data and cost gates have been verified locally.
 
-ALTER TABLE roster_file_doctors ADD COLUMN provider_staff_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE roster_events ADD COLUMN provider_staff_id TEXT NOT NULL DEFAULT '';
-
 CREATE TABLE IF NOT EXISTS roster_file_coverage (
   file_id TEXT PRIMARY KEY,
   source_type TEXT NOT NULL,

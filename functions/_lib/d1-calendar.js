@@ -620,6 +620,7 @@ export async function upsertDerivedRosterFile(db, file, storedImport) {
       ON CONFLICT(source_type, doctor_key) DO UPDATE SET
         display_name = excluded.display_name,
         updated_at = excluded.updated_at
+      WHERE roster_doctors.display_name <> excluded.display_name
     `).bind(sourceType, doctor.key, doctor.displayName, parsedAt).run();
     await db.prepare(`
       INSERT INTO roster_file_doctors (file_id, source_type, doctor_key, display_name, seniority, membership_source, provider_staff_id)
@@ -629,6 +630,10 @@ export async function upsertDerivedRosterFile(db, file, storedImport) {
         seniority = excluded.seniority,
         membership_source = excluded.membership_source,
         provider_staff_id = excluded.provider_staff_id
+      WHERE roster_file_doctors.display_name <> excluded.display_name
+        OR roster_file_doctors.seniority <> excluded.seniority
+        OR roster_file_doctors.membership_source <> excluded.membership_source
+        OR roster_file_doctors.provider_staff_id <> excluded.provider_staff_id
     `).bind(file.id, sourceType, doctor.key, doctor.displayName, doctor.seniority || "", doctor.membershipSource || "roster", doctor.providerStaffId || "").run();
     for (const event of events) {
       await db.prepare(`
@@ -823,26 +828,63 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
   const safeDoctors = sanitizeFileDoctors(doctors, sourceType);
   const parsedAt = new Date().toISOString();
   const { eventRows, issueRows } = collectDerivedEventAndIssueRows(file, sourceType, safeDoctors, eventsByDoctor, issuesByDoctor);
-  const statements = [
-    derivedRosterFileUpsertStatement(db, file, sourceType, parsedAt),
-    db.prepare("DELETE FROM roster_file_doctors WHERE file_id = ?").bind(file.id),
-    db.prepare("DELETE FROM roster_events WHERE file_id = ?").bind(file.id),
-    db.prepare("DELETE FROM roster_issues WHERE file_id = ?").bind(file.id),
-    ...bulkUpsertDoctorStatements(db, sourceType, safeDoctors, parsedAt),
-    ...bulkInsertFileDoctorStatements(db, file.id, sourceType, safeDoctors),
-    ...bulkInsertEventStatements(db, eventRows),
-    ...bulkInsertIssueStatements(db, issueRows),
-  ];
-  await deleteDailyPresenceForFile(db, file.id);
+  const contentRevision = await facilityOverviewDigest({
+    sourceType,
+    doctors: safeDoctors.map((doctor) => [doctor.key, doctor.displayName, doctor.seniority || "", doctor.membershipSource || "roster", doctor.providerStaffId || ""]),
+    events: eventRows.map((row) => [row[0], ...row.slice(3)]),
+    issues: issueRows.map((row) => [row[0], ...row.slice(3)]),
+  });
+  const existingRevision = await db.prepare("SELECT content_revision FROM roster_file_coverage WHERE file_id = ?")
+    .bind(String(file.id)).first();
+  if (String(existingRevision?.content_revision || "") === contentRevision) {
+    return { ok: true, unchanged: true, doctors: safeDoctors.length, events: eventRows.length, issues: issueRows.length, contentRevision };
+  }
+  const [storedFile, storedDoctorsResult, storedEventsResult, storedIssuesResult] = await Promise.all([
+    db.prepare("SELECT id, name, source_type, source_id, active, size, last_modified, added_at, uploaded_at, uploaded_by, parser_version FROM roster_files WHERE id = ?").bind(file.id).first(),
+    db.prepare("SELECT doctor_key, display_name, seniority, membership_source, provider_staff_id FROM roster_file_doctors WHERE file_id = ?").bind(file.id).all(),
+    db.prepare("SELECT id, display_name, start_date, end_date, start_ts, end_ts, title, raw_value, seniority, provider_staff_id, location, all_day, time_label, event_json FROM roster_events WHERE file_id = ?").bind(file.id).all(),
+    db.prepare("SELECT id, display_name, start_date, raw_value, seniority, status, message, resolution_type, suggested_title, time_label, issue_json FROM roster_issues WHERE file_id = ?").bind(file.id).all(),
+  ]);
+  const desiredDoctors = new Map(safeDoctors.map((doctor) => [doctor.key, JSON.stringify([doctor.displayName, doctor.seniority || "", doctor.membershipSource || "roster", doctor.providerStaffId || ""])]));
+  const storedDoctors = new Map((storedDoctorsResult.results || []).map((row) => [String(row.doctor_key), JSON.stringify([row.display_name, row.seniority || "", row.membership_source || "roster", row.provider_staff_id || ""])]));
+  const desiredEvents = new Map(eventRows.map((row) => [row[0], JSON.stringify(row.slice(4))]));
+  const storedEvents = new Map((storedEventsResult.results || []).map((row) => [String(row.id), JSON.stringify([row.display_name, row.start_date, row.end_date, row.start_ts, row.end_ts, row.title, row.raw_value, row.seniority, row.provider_staff_id || "", row.location, Number(row.all_day || 0), row.time_label, row.event_json])]));
+  const desiredIssues = new Map(issueRows.map((row) => [row[0], JSON.stringify(row.slice(4))]));
+  const storedIssues = new Map((storedIssuesResult.results || []).map((row) => [String(row.id), JSON.stringify([row.display_name, row.start_date, row.raw_value, row.seniority, row.status, row.message, row.resolution_type, row.suggested_title, row.time_label, row.issue_json])]));
+  const changedDoctors = safeDoctors.filter((doctor) => storedDoctors.get(doctor.key) !== desiredDoctors.get(doctor.key));
+  const changedEventRows = eventRows.filter((row) => storedEvents.get(row[0]) !== desiredEvents.get(row[0]));
+  const changedIssueRows = issueRows.filter((row) => storedIssues.get(row[0]) !== desiredIssues.get(row[0]));
+  const removedDoctorKeys = [...storedDoctors.keys()].filter((key) => !desiredDoctors.has(key));
+  const removedEventIds = [...storedEvents.keys()].filter((id) => !desiredEvents.has(id));
+  const removedIssueIds = [...storedIssues.keys()].filter((id) => !desiredIssues.has(id));
+  const fileSignature = JSON.stringify([file.name || "roster.xlsx", sourceType, String(file.sourceId || ""), file.active === false ? 0 : 1,
+    Number(file.size || 0), Number(file.lastModified || 0), String(file.addedAt || ""), String(file.uploadedAt || ""), String(file.uploadedBy || ""), String(file.parserVersion || ROSTER_PARSER_VERSION)]);
+  const storedFileSignature = storedFile ? JSON.stringify([storedFile.name, storedFile.source_type, storedFile.source_id || "", Number(storedFile.active || 0),
+    Number(storedFile.size || 0), Number(storedFile.last_modified || 0), storedFile.added_at || "", storedFile.uploaded_at || "", storedFile.uploaded_by || "", storedFile.parser_version || ""]) : "";
+  const statements = [];
+  if (fileSignature !== storedFileSignature) statements.push(derivedRosterFileUpsertStatement(db, file, sourceType, parsedAt));
+  for (const id of removedEventIds) statements.push(db.prepare("DELETE FROM roster_daily_presence WHERE event_id = ?").bind(id), db.prepare("DELETE FROM roster_events WHERE id = ?").bind(id));
+  for (const row of changedEventRows) statements.push(db.prepare("DELETE FROM roster_daily_presence WHERE event_id = ?").bind(row[0]));
+  for (const id of removedIssueIds) statements.push(db.prepare("DELETE FROM roster_issues WHERE id = ?").bind(id));
+  for (const key of removedDoctorKeys) statements.push(db.prepare("DELETE FROM roster_file_doctors WHERE file_id = ? AND source_type = ? AND doctor_key = ?").bind(file.id, sourceType, key));
+  statements.push(...bulkUpsertDoctorStatements(db, sourceType, changedDoctors, parsedAt));
+  statements.push(...bulkInsertFileDoctorStatements(db, file.id, sourceType, changedDoctors));
+  statements.push(...bulkInsertEventStatements(db, changedEventRows));
+  statements.push(...bulkInsertIssueStatements(db, changedIssueRows));
   await runTransactionalBatch(db, statements);
   await recordFacilitySmsMembershipsForRosterFile(db, file.id);
-  if (options.deferDailyPresence !== true) {
-    await populateDailyPresenceForFile(db, file.id, eventsByDoctor, {
+  if (options.deferDailyPresence !== true && changedEventRows.length) {
+    const changedIds = new Set(changedEventRows.map((row) => row[0]));
+    const changedEventsByDoctor = Object.fromEntries(Object.entries(eventsByDoctor || {}).map(([doctorKey, events]) => [doctorKey,
+      (events || []).filter((event) => changedIds.has(`${file.id}:${doctorKey}:${event.id}`))]));
+    await populateDailyPresenceForFile(db, file.id, changedEventsByDoctor, {
       sourceType,
       doctors: safeDoctors,
     });
   }
-  return { ok: true, doctors: safeDoctors.length, events: eventRows.length, issues: issueRows.length };
+  await refreshFacilityOverviewMaterializationForFile(db, file.id, { contentRevision });
+  return { ok: true, unchanged: false, doctors: safeDoctors.length, events: eventRows.length, issues: issueRows.length, contentRevision,
+    changes: { doctors: changedDoctors.length + removedDoctorKeys.length, events: changedEventRows.length + removedEventIds.length, issues: changedIssueRows.length + removedIssueIds.length } };
 }
 
 export async function setDerivedRosterFileActive(db, fileId, active) {
@@ -851,9 +893,11 @@ export async function setDerivedRosterFileActive(db, fileId, active) {
   await db.prepare("UPDATE roster_files SET active = ? WHERE id = ?").bind(active ? 1 : 0, fileId).run();
   if (!active) {
     await deleteDailyPresenceForFile(db, fileId);
+    await deleteFacilityOverviewMaterializationForFile(db, fileId);
     return;
   }
   await rebuildDailyPresenceForFile(db, fileId);
+  await refreshFacilityOverviewMaterializationForFile(db, fileId);
 }
 
 export async function activateDerivedRosterFile(db, fileId, parserVersion = ROSTER_PARSER_VERSION) {
@@ -862,6 +906,7 @@ export async function activateDerivedRosterFile(db, fileId, parserVersion = ROST
   await db.prepare("UPDATE roster_files SET active = 1, parser_version = ? WHERE id = ?")
     .bind(String(parserVersion || ROSTER_PARSER_VERSION), String(fileId)).run();
   await rebuildDailyPresenceForFile(db, fileId);
+  await refreshFacilityOverviewMaterializationForFile(db, fileId);
   return { ok: true, fileId: String(fileId) };
 }
 
@@ -1173,6 +1218,8 @@ export async function promoteVerifiedStagedRosterFile(db, stagingFileId, targetF
   await runTransactionalBatch(db, statements);
   await deleteDailyPresenceForFile(db, targetFileId);
   await rebuildDailyPresenceForFile(db, targetFileId);
+  await deleteFacilityOverviewMaterializationForFile(db, stagingFileId);
+  await refreshFacilityOverviewMaterializationForFile(db, targetFileId);
   return { ok: true, fileId: String(targetFileId), comparison };
 }
 
@@ -1184,6 +1231,7 @@ export async function deleteDerivedRosterFile(db, fileId) {
   await db.prepare("DELETE FROM roster_events WHERE file_id = ?").bind(fileId).run();
   await db.prepare("DELETE FROM roster_issues WHERE file_id = ?").bind(fileId).run();
   await db.prepare("DELETE FROM roster_file_doctors WHERE file_id = ?").bind(fileId).run();
+  await deleteFacilityOverviewMaterializationForFile(db, fileId);
   if (sourceType) await deleteOrphanRosterDoctors(db, [sourceType]);
   await deleteDailyPresenceForFile(db, fileId);
   await db.prepare("DELETE FROM roster_files WHERE id = ?").bind(fileId).run();
@@ -1226,6 +1274,7 @@ export async function trimDerivedRosterFileOverlap(db, fileId, startDate, endDat
   }
   await deleteDailyPresenceForFile(db, fileId);
   await rebuildDailyPresenceForFile(db, fileId);
+  await refreshFacilityOverviewMaterializationForFile(db, fileId);
   return {
     removedEvents: Math.max(0, beforeCount - remainingEvents),
     remainingEvents,
@@ -1411,6 +1460,105 @@ const FACILITY_STAFF_SENIORITIES = new Set([
   "Physio",
   "Unknown",
 ]);
+
+async function facilityOverviewDigest(value) {
+  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((part) => part.toString(16).padStart(2, "0")).join("");
+}
+
+function dateDaysBefore(value, days) {
+  const date = new Date(`${datePart(value)}T12:00:00Z`);
+  if (Number.isNaN(date.getTime())) return "";
+  date.setUTCDate(date.getUTCDate() - Number(days || 0));
+  return date.toISOString().slice(0, 10);
+}
+
+export async function deleteFacilityOverviewMaterializationForFile(db, fileId) {
+  if (!db?.prepare || !fileId) return { writes: 0 };
+  const results = await runTransactionalBatch(db, [
+    db.prepare("DELETE FROM facility_term_staff_contributions WHERE file_id = ?").bind(String(fileId)),
+    db.prepare("DELETE FROM roster_file_coverage WHERE file_id = ?").bind(String(fileId)),
+  ]);
+  return { writes: (results || []).reduce((total, result) => total + Number(result?.meta?.changes || result?.changes || 0), 0) };
+}
+
+export async function refreshFacilityOverviewMaterializationForFile(db, fileId, options = {}) {
+  if (!db?.prepare || !fileId) return { writes: 0, missing: true };
+  const [file, doctorsResult, eventsResult, existingCoverage, existingStaffResult] = await Promise.all([
+    db.prepare("SELECT id, source_type FROM roster_files WHERE id = ?").bind(String(fileId)).first(),
+    db.prepare("SELECT doctor_key, display_name, seniority, membership_source, provider_staff_id FROM roster_file_doctors WHERE file_id = ? ORDER BY doctor_key").bind(String(fileId)).all(),
+    db.prepare("SELECT id, doctor_key, display_name, seniority, provider_staff_id, start_date, end_date, event_json FROM roster_events WHERE file_id = ? ORDER BY id").bind(String(fileId)).all(),
+    db.prepare("SELECT content_revision, staff_digest, daily_digest, coverage_start, coverage_end FROM roster_file_coverage WHERE file_id = ?").bind(String(fileId)).first(),
+    db.prepare("SELECT source_type, term_start, doctor_key, file_id, fact_digest FROM facility_term_staff_contributions WHERE file_id = ?").bind(String(fileId)).all(),
+  ]);
+  if (!file) return await deleteFacilityOverviewMaterializationForFile(db, fileId);
+  const sourceType = normalizeSourceType(file.source_type);
+  const doctors = doctorsResult.results || [];
+  const events = eventsResult.results || [];
+  const doctorByKey = new Map(doctors.map((doctor) => [String(doctor.doctor_key || ""), doctor]));
+  const dates = events.flatMap((event) => [datePart(event.start_date), datePart(event.end_date)]).filter(Boolean).sort();
+  const coverageStart = dates[0] || "";
+  const coverageEnd = dates.at(-1) || "";
+  const staffDigest = await facilityOverviewDigest(doctors.map((row) => [row.doctor_key, row.display_name, row.seniority, row.membership_source, row.provider_staff_id]));
+  const dailyDigest = await facilityOverviewDigest(events.map((row) => [row.id, row.start_date, row.end_date, row.event_json]));
+  const contentRevision = String(options.contentRevision || await facilityOverviewDigest({ sourceType, staffDigest, dailyDigest }));
+  const contributions = new Map();
+  for (const event of events) {
+    const doctorKey = String(event.doctor_key || "").trim();
+    const termStart = australianTermStartForDate(event.start_date);
+    if (!doctorKey || !termStart) continue;
+    const key = `${sourceType}|${termStart}|${doctorKey}|${fileId}`;
+    const doctor = doctorByKey.get(doctorKey) || event;
+    const current = contributions.get(key);
+    const first = datePart(event.start_date);
+    const last = datePart(event.end_date || event.start_date);
+    const fact = {
+      sourceType, termStart, doctorKey, fileId: String(fileId),
+      displayName: String(doctor.display_name || event.display_name || doctorKey),
+      seniority: String(doctor.seniority || event.seniority || ""),
+      membershipSource: String(doctor.membership_source || "roster"),
+      providerStaffId: String(doctor.provider_staff_id || event.provider_staff_id || ""),
+      firstApplicableDate: current && current.firstApplicableDate < first ? current.firstApplicableDate : first,
+      lastApplicableDate: current && current.lastApplicableDate > last ? current.lastApplicableDate : last,
+    };
+    contributions.set(key, fact);
+  }
+  for (const fact of contributions.values()) fact.factDigest = await facilityOverviewDigest(fact);
+  const existingStaff = new Map((existingStaffResult.results || []).map((row) => [`${row.source_type}|${row.term_start}|${row.doctor_key}|${row.file_id}`, String(row.fact_digest || "")]));
+  const now = new Date().toISOString();
+  const statements = [];
+  if (!existingCoverage || String(existingCoverage.content_revision || "") !== contentRevision
+    || String(existingCoverage.staff_digest || "") !== staffDigest || String(existingCoverage.daily_digest || "") !== dailyDigest
+    || String(existingCoverage.coverage_start || "") !== coverageStart || String(existingCoverage.coverage_end || "") !== coverageEnd) {
+    statements.push(db.prepare(`INSERT INTO roster_file_coverage (file_id, source_type, coverage_start, coverage_end, content_revision, staff_digest, daily_digest, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(file_id) DO UPDATE SET source_type=excluded.source_type, coverage_start=excluded.coverage_start,
+      coverage_end=excluded.coverage_end, content_revision=excluded.content_revision, staff_digest=excluded.staff_digest, daily_digest=excluded.daily_digest, updated_at=excluded.updated_at`)
+      .bind(String(fileId), sourceType, coverageStart, coverageEnd, contentRevision, staffDigest, dailyDigest, now));
+  }
+  for (const [key, fact] of contributions) {
+    if (existingStaff.get(key) === fact.factDigest) continue;
+    statements.push(db.prepare(`INSERT INTO facility_term_staff_contributions
+      (source_type, term_start, doctor_key, file_id, display_name, seniority, membership_source, provider_staff_id, first_applicable_date, last_applicable_date, fact_digest, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(source_type, term_start, doctor_key, file_id) DO UPDATE SET
+      display_name=excluded.display_name, seniority=excluded.seniority, membership_source=excluded.membership_source,
+      provider_staff_id=excluded.provider_staff_id, first_applicable_date=excluded.first_applicable_date,
+      last_applicable_date=excluded.last_applicable_date, fact_digest=excluded.fact_digest, updated_at=excluded.updated_at`)
+      .bind(fact.sourceType, fact.termStart, fact.doctorKey, fact.fileId, fact.displayName, fact.seniority, fact.membershipSource,
+        fact.providerStaffId, fact.firstApplicableDate, fact.lastApplicableDate, fact.factDigest, now));
+    statements.push(db.prepare(`INSERT INTO facility_term_visibility (source_type, term_start, visible_from, revision, updated_at)
+      VALUES (?, ?, ?, '', ?) ON CONFLICT(source_type, term_start) DO NOTHING`).bind(sourceType, fact.termStart, dateDaysBefore(fact.termStart, 14), now));
+  }
+  for (const key of existingStaff.keys()) {
+    if (contributions.has(key)) continue;
+    const [oldSource, oldTerm, oldDoctor, oldFile] = key.split("|");
+    statements.push(db.prepare("DELETE FROM facility_term_staff_contributions WHERE source_type = ? AND term_start = ? AND doctor_key = ? AND file_id = ?")
+      .bind(oldSource, oldTerm, oldDoctor, oldFile));
+  }
+  if (!statements.length) return { writes: 0, unchanged: true, contentRevision };
+  const results = await runTransactionalBatch(db, statements);
+  return { writes: (results || []).reduce((total, result) => total + Number(result?.meta?.changes || result?.changes || 0), 0), unchanged: false, contentRevision };
+}
 
 async function recordFacilitySmsMembershipsForRosterFile(db, fileId) {
   const now = new Date().toISOString();
@@ -4123,7 +4271,7 @@ export async function queryMaterializedFacilityTermStaff(db, options = {}) {
   const sourceType = normalizeSourceType(options.sourceType || options.facilityKey);
   const termStart = datePart(options.termStart);
   if (!sourceType || !termStart) return [];
-  const rows = await db.prepare(`
+  const [rows, continuingSms] = await Promise.all([db.prepare(`
     SELECT s.doctor_key, MAX(s.display_name) AS display_name,
       MAX(s.seniority) AS seniority, MAX(s.membership_source) AS membership_source,
       MAX(s.provider_staff_id) AS provider_staff_id,
@@ -4135,8 +4283,13 @@ export async function queryMaterializedFacilityTermStaff(db, options = {}) {
     WHERE f.active = 1 AND s.source_type = ? AND s.term_start = ?
     GROUP BY s.doctor_key
     ORDER BY display_name, s.doctor_key
-  `).bind(sourceType, termStart).all();
-  return (rows.results || []).map((row) => ({
+  `).bind(sourceType, termStart).all(), db.prepare(`
+    SELECT doctor_key, display_name, source_type, last_seen_date
+    FROM facility_sms_memberships
+    WHERE source_type = ? AND first_seen_date <= ?
+    ORDER BY display_name, doctor_key
+  `).bind(sourceType, String(options.termEnd || "9999-12-31")).all()]);
+  const members = (rows.results || []).map((row) => ({
     doctorKey: String(row.doctor_key || ""), displayName: String(row.display_name || ""),
     sourceType, seniority: String(row.seniority || ""),
     membershipSource: String(row.membership_source || "roster"),
@@ -4144,6 +4297,15 @@ export async function queryMaterializedFacilityTermStaff(db, options = {}) {
     firstApplicableDate: datePart(row.first_applicable_date), lastApplicableDate: datePart(row.last_applicable_date),
     contributionCount: Number(row.contribution_count || 0),
   }));
+  const current = new Set(members.map((member) => member.doctorKey));
+  for (const row of continuingSms.results || []) {
+    const doctorKey = String(row.doctor_key || "");
+    if (!doctorKey || current.has(doctorKey)) continue;
+    members.push({ doctorKey, displayName: String(row.display_name || doctorKey), sourceType, seniority: "SMS",
+      membershipSource: "sms-continuity", providerStaffId: "", firstApplicableDate: "",
+      lastApplicableDate: datePart(row.last_seen_date), contributionCount: 0 });
+  }
+  return members;
 }
 
 export async function queryFacilityOverviewStaff(db, options = {}) {
@@ -4426,6 +4588,7 @@ export async function rebuildDailyPresenceForActiveFiles(db, options = {}) {
   const batchFileIds = fileIds.slice(0, limit);
   for (const activeFileId of batchFileIds) {
     await rebuildDailyPresenceForFile(db, activeFileId);
+    await refreshFacilityOverviewMaterializationForFile(db, activeFileId);
   }
   const done = fileIds.length <= limit;
   return {
@@ -4816,6 +4979,15 @@ function bulkInsertEventStatements(db, rows) {
         id, file_id, source_type, doctor_key, display_name, start_date, end_date, start_ts, end_ts,
         title, raw_value, seniority, provider_staff_id, location, all_day, time_label, event_json
       ) VALUES ${chunk.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ")}
+      ON CONFLICT(id) DO UPDATE SET file_id=excluded.file_id, source_type=excluded.source_type,
+        doctor_key=excluded.doctor_key, display_name=excluded.display_name, start_date=excluded.start_date,
+        end_date=excluded.end_date, start_ts=excluded.start_ts, end_ts=excluded.end_ts,
+        title=excluded.title, raw_value=excluded.raw_value, seniority=excluded.seniority,
+        provider_staff_id=excluded.provider_staff_id, location=excluded.location,
+        all_day=excluded.all_day, time_label=excluded.time_label, event_json=excluded.event_json
+      WHERE roster_events.file_id <> excluded.file_id OR roster_events.source_type <> excluded.source_type
+        OR roster_events.doctor_key <> excluded.doctor_key OR roster_events.display_name <> excluded.display_name
+        OR roster_events.event_json <> excluded.event_json
     `).bind(...chunk.flat()));
 }
 
@@ -4827,6 +4999,14 @@ function bulkInsertIssueStatements(db, rows) {
         id, file_id, source_type, doctor_key, display_name, start_date, raw_value, seniority,
         status, message, resolution_type, suggested_title, time_label, issue_json
       ) VALUES ${chunk.map(() => "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").join(", ")}
+      ON CONFLICT(id) DO UPDATE SET file_id=excluded.file_id, source_type=excluded.source_type,
+        doctor_key=excluded.doctor_key, display_name=excluded.display_name, start_date=excluded.start_date,
+        raw_value=excluded.raw_value, seniority=excluded.seniority, status=excluded.status,
+        message=excluded.message, resolution_type=excluded.resolution_type,
+        suggested_title=excluded.suggested_title, time_label=excluded.time_label, issue_json=excluded.issue_json
+      WHERE roster_issues.file_id <> excluded.file_id OR roster_issues.source_type <> excluded.source_type
+        OR roster_issues.doctor_key <> excluded.doctor_key OR roster_issues.display_name <> excluded.display_name
+        OR roster_issues.issue_json <> excluded.issue_json
     `).bind(...chunk.flat()));
 }
 
