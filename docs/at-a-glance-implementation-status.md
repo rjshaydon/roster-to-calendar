@@ -208,3 +208,70 @@ Still required before an online test:
   snapshots and add the durable publication/recovery state machine. Until that
   gate passes, this branch is not a production quota fix and must not be
   deployed or have its new flags enabled.
+
+## Phase 4: shared On shift day snapshots
+
+Status: local Phase 4 gate passed behind disabled-by-default build and reader
+flags.
+
+Completed locally:
+
+- Changed ingestion reports the exact roster dates affected by event or staff
+  changes. Unrelated ED/dates are not rebuilt.
+- Added immutable, content-addressed ED/day objects and day pointers within the
+  existing shared ED manifest. All authorised users reuse the same object.
+- The shared day contains the base roster facts. Staff seniority overrides are
+  read from the separately versioned shared Staff object and applied without
+  rebuilding the day object.
+- Added a durable per-ED publication record with a monotonic generation,
+  operation/fencing token, bounded lease, base/candidate revisions and failure
+  state.
+- Publishers write immutable day and candidate-manifest objects before the
+  fixed manifest pointer. The pointer uses the previous R2 ETag when available
+  and is updated only after the D1 fencing token is rechecked.
+- An unchanged date retains its existing object and an unchanged candidate
+  performs zero R2 writes. A publication is capped at 120 affected dates.
+- If object or pointer publication fails, the previous complete manifest stays
+  readable. If the pointer succeeds but completion marking fails, retry
+  recognises the committed operation and completes idempotently.
+- An expired publisher cannot overwrite a newer owner. Roster deletion/reset
+  can republish the bounded set of dates already present in the manifest.
+- The authenticated On shift action reads shared R2 day/Staff objects and then
+  applies the existing working-shift and Clinical Support rules. A miss returns
+  `503 preparing`; it never queries or builds from `roster_events`.
+- Direct day selection enforces the 14-day pre-term visibility boundary using
+  the current Melbourne roster date, not merely the requested future date.
+
+Safety controls:
+
+- `FACILITY_SHARED_DAYS_BUILD_ENABLED` controls day publication.
+- `FACILITY_SHARED_DAYS_ENABLED` controls the shared reader and is effective
+  only when the Phase 2 access and Phase 3 metadata readers are also enabled.
+- Both are false when absent. No deployed configuration has changed.
+
+Focused Phase 4 evidence:
+
+- The real authenticated `/api/state` On shift action returns the shared day
+  while its traced D1 calls contain zero `roster_events` queries.
+- A missing day returns `preparing` and performs no reader-time build or event
+  fallback.
+- Repeat publication reuses the immutable day and writes zero R2 objects.
+- Injected failure before the manifest pointer retains the old day; retry
+  publishes the corrected day.
+- Two simulated Worker instances contend for one ED: the second is refused
+  while the first lease is valid. After forced lease expiry, a new owner
+  publishes and the stale worker is fenced out.
+- Injected failure after the pointer leaves the new complete day readable and
+  is recovered idempotently without another R2 write.
+- The 15-day/14-day future-term boundary is tested against a known object key.
+- Fresh migration `0029_facility_day_publications.sql` and local safety checks
+  pass using local D1/R2 only.
+
+Remaining before any online test:
+
+- Phase 5 must remove repeated D1/contact-object discovery from the 60-second
+  contact refresh loop. On shift roster reads are now shared, but its contact
+  overlay remains on the existing path.
+- Phase 6 must add safe browser persistence/revalidation and convert range
+  views. Production migration/backfill, configuration and deployment remain
+  separately prohibited until the rollout package is reviewed and approved.

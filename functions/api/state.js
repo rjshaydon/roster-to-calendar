@@ -4,7 +4,7 @@ import { DDH_CONTACT_LIST_SOURCE_ID, MMC_CONTACT_LIST_SOURCE_ID, attachContactAl
 import { requestQueuedRosterProcessing } from "../_lib/automation-dispatch.js";
 import { rosterWritesExplicitlyPaused, rosterWritePausedResponse } from "../_lib/roster-automation-guard.js";
 import { guardedFetch, localFeatureDisabledResponse } from "../_lib/outbound-network.js";
-import { loadPublishedFacilityMetadata, loadPublishedFacilityStaff, publishFacilityStaffMetadata } from "../_lib/facility-overview-cache.js";
+import { loadPublishedFacilityDays, loadPublishedFacilityMetadata, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata } from "../_lib/facility-overview-cache.js";
 import { extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentExceptions, findmyshiftLastModified, findmyshiftReportDiagnostics, findmyshiftShiftReport } from "../_lib/findmyshift.js";
 import {
   buildPreviewFromDerivedEvents,
@@ -147,6 +147,8 @@ export async function onRequestPost(context) {
     const facilityAccessMaterialized = String(context.env.FACILITY_ACCESS_MATERIALIZATION_ENABLED || "").toLowerCase() === "true";
     const sharedFacilityMetadataEnabled = facilityAccessMaterialized
       && String(context.env.FACILITY_SHARED_METADATA_ENABLED || "").toLowerCase() === "true";
+    const sharedFacilityDaysEnabled = sharedFacilityMetadataEnabled
+      && String(context.env.FACILITY_SHARED_DAYS_ENABLED || "").toLowerCase() === "true";
     // Invited accounts have no user-selected password until the invite is accepted.
     // Remove any that have passed their activation window on the next API request.
     await cleanupExpiredInvitedAccounts(context.env.ROSTER_DB);
@@ -1052,7 +1054,7 @@ export async function onRequestPost(context) {
         await deleteRetainedRosterSource(context.env.ROSTER_DB, context.env.ROSTER_FILES, fileId);
         await refreshCanonicalDoctors(context.env.ROSTER_DB);
         scheduleSnapshotWarmupForSourceTypes(context, sourceTypes, { reason: "resetDerivedCalendarFile" });
-        scheduleFacilityStaffMetadataPublish(context, sourceTypes);
+        scheduleFacilityDayRepublish(context, sourceTypes);
       } catch (error) {
         return Response.json({ error: error?.message || "Could not reset roster file." }, { status: 503 });
       }
@@ -1895,6 +1897,16 @@ export async function onRequestPost(context) {
       }
       const startedAt = Date.now();
       try {
+        if (sharedFacilityDaysEnabled) {
+          const published = await loadPublishedFacilityDays(context.env.ROSTER_FILES, facilityKeys, date, australianDateKey());
+          if (published.preparing) return facilityOverviewPreparingResponse({ events: [] });
+          const events = published.rows.filter((row) => isFacilityOverviewWorkingEvent(row.event, {
+            facilityKey: row.sourceType,
+            includeClinicalSupport: body?.includeClinicalSupport === true,
+          }));
+          const contactList = await loadLiveContactListForOnShift(context, { date, facilityKeys });
+          return Response.json({ ok: true, date, facilityKey: requestedFacility === "ALL" ? "ALL" : facilityKeys[0], events, contactList, queryMs: Date.now() - startedAt });
+        }
         const [eventGroups, contactList] = await Promise.all([
           Promise.all(facilityKeys.map((facilityKey) => queryFacilityOverviewOnShift(context.env.ROSTER_DB, { date, facilityKey }))),
           loadLiveContactListForOnShift(context, { date, facilityKeys }),
@@ -4260,6 +4272,20 @@ function scheduleFacilityStaffMetadataPublish(context, sourceTypes = []) {
   if (typeof context.waitUntil === "function") context.waitUntil(publish);
 }
 
+function scheduleFacilityDayRepublish(context, sourceTypes = []) {
+  if (String(context?.env?.FACILITY_SHARED_DAYS_BUILD_ENABLED || "").toLowerCase() !== "true") {
+    scheduleFacilityStaffMetadataPublish(context, sourceTypes);
+    return;
+  }
+  const sources = [...new Set(sourceTypes.map((source) => String(source || "").toLowerCase()).filter(Boolean))];
+  if (!sources.length) return;
+  const publish = (async () => {
+    await publishFacilityStaffMetadata(context, sources);
+    for (const source of sources) await publishFacilityDays(context, source, [], { rebuildPublishedDates: true });
+  })().catch((error) => console.warn("Facility day republication failed", { sources, error: error?.message || String(error) }));
+  if (typeof context.waitUntil === "function") context.waitUntil(publish);
+}
+
 function scheduleDoctorProfileSnapshotWarmup(context, profile, ownerEmail = "", options = {}) {
   if (typeof context.waitUntil !== "function" || !profile?.profileId) return;
   context.waitUntil((async () => {
@@ -5662,7 +5688,7 @@ async function syncRosterRepositoryToKeepFileIds(context, keepFileIds = [], opti
     }
     await refreshCanonicalDoctors(db);
     scheduleSnapshotWarmupForSourceTypes(context, sourceTypes, { reason: options.reason || "syncRosterRepository" });
-    scheduleFacilityStaffMetadataPublish(context, sourceTypes);
+    scheduleFacilityDayRepublish(context, sourceTypes);
   }
   const verification = await verifyRosterFilesPurged(db, removedFileIds);
   const allPurged = !removedFileIds.length || verification.every((entry) => entry.purged === true);
@@ -5846,6 +5872,9 @@ async function runCoreDerivedRosterSave(context, job = {}) {
           .then(() => reconcileFacilityStaffDesignationsForRosterFile(db, effectiveFileId))
           .then(() => String(context.env.FACILITY_SHARED_METADATA_BUILD_ENABLED || "").toLowerCase() === "true"
             ? publishFacilityStaffMetadata(context, [String(filePayload.sourceType || "").toLowerCase()].filter(Boolean))
+            : null)
+          .then(() => String(context.env.FACILITY_SHARED_DAYS_BUILD_ENABLED || "").toLowerCase() === "true" && result?.affectedDates?.length
+            ? publishFacilityDays(context, String(filePayload.sourceType || "").toLowerCase(), result.affectedDates)
             : null)
           .then(() => deferCanonicalDoctorRefresh(context, job.reason || "saveDerivedCalendarFile"))
           .then(() => {

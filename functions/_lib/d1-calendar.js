@@ -842,13 +842,14 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
   const [storedFile, storedDoctorsResult, storedEventsResult, storedIssuesResult] = await Promise.all([
     db.prepare("SELECT id, name, source_type, source_id, active, size, last_modified, added_at, uploaded_at, uploaded_by, parser_version FROM roster_files WHERE id = ?").bind(file.id).first(),
     db.prepare("SELECT doctor_key, display_name, seniority, membership_source, provider_staff_id FROM roster_file_doctors WHERE file_id = ?").bind(file.id).all(),
-    db.prepare("SELECT id, display_name, start_date, end_date, start_ts, end_ts, title, raw_value, seniority, provider_staff_id, location, all_day, time_label, event_json FROM roster_events WHERE file_id = ?").bind(file.id).all(),
+    db.prepare("SELECT id, doctor_key, display_name, start_date, end_date, start_ts, end_ts, title, raw_value, seniority, provider_staff_id, location, all_day, time_label, event_json FROM roster_events WHERE file_id = ?").bind(file.id).all(),
     db.prepare("SELECT id, display_name, start_date, raw_value, seniority, status, message, resolution_type, suggested_title, time_label, issue_json FROM roster_issues WHERE file_id = ?").bind(file.id).all(),
   ]);
   const desiredDoctors = new Map(safeDoctors.map((doctor) => [doctor.key, JSON.stringify([doctor.displayName, doctor.seniority || "", doctor.membershipSource || "roster", doctor.providerStaffId || ""])]));
   const storedDoctors = new Map((storedDoctorsResult.results || []).map((row) => [String(row.doctor_key), JSON.stringify([row.display_name, row.seniority || "", row.membership_source || "roster", row.provider_staff_id || ""])]));
   const desiredEvents = new Map(eventRows.map((row) => [row[0], JSON.stringify(row.slice(4))]));
   const storedEvents = new Map((storedEventsResult.results || []).map((row) => [String(row.id), JSON.stringify([row.display_name, row.start_date, row.end_date, row.start_ts, row.end_ts, row.title, row.raw_value, row.seniority, row.provider_staff_id || "", row.location, Number(row.all_day || 0), row.time_label, row.event_json])]));
+  const storedEventDates = new Map((storedEventsResult.results || []).map((row) => [String(row.id), String(row.start_date || "").slice(0, 10)]));
   const desiredIssues = new Map(issueRows.map((row) => [row[0], JSON.stringify(row.slice(4))]));
   const storedIssues = new Map((storedIssuesResult.results || []).map((row) => [String(row.id), JSON.stringify([row.display_name, row.start_date, row.raw_value, row.seniority, row.status, row.message, row.resolution_type, row.suggested_title, row.time_label, row.issue_json])]));
   const changedDoctors = safeDoctors.filter((doctor) => storedDoctors.get(doctor.key) !== desiredDoctors.get(doctor.key));
@@ -857,6 +858,12 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
   const removedDoctorKeys = [...storedDoctors.keys()].filter((key) => !desiredDoctors.has(key));
   const removedEventIds = [...storedEvents.keys()].filter((id) => !desiredEvents.has(id));
   const removedIssueIds = [...storedIssues.keys()].filter((id) => !desiredIssues.has(id));
+  const changedDoctorKeys = new Set([...changedDoctors.map((doctor) => doctor.key), ...removedDoctorKeys]);
+  const affectedDates = [...new Set([
+    ...changedEventRows.flatMap((row) => [String(row[5] || "").slice(0, 10), storedEventDates.get(row[0])]),
+    ...removedEventIds.map((id) => storedEventDates.get(id)),
+    ...storedEventsResult.results.filter((row) => changedDoctorKeys.has(String(row.doctor_key || ""))).map((row) => String(row.start_date || "").slice(0, 10)),
+  ].filter(Boolean))].sort();
   const changedFactCount = changedDoctors.length + removedDoctorKeys.length + changedEventRows.length + removedEventIds.length + changedIssueRows.length + removedIssueIds.length;
   const maximumIncrementalFacts = Math.max(1, Math.min(Number(options.maximumIncrementalFacts || 250), 500));
   if (storedFile && changedFactCount > maximumIncrementalFacts) {
@@ -893,6 +900,7 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
   }
   await refreshFacilityOverviewMaterializationForFile(db, file.id, { contentRevision });
   return { ok: true, unchanged: false, doctors: safeDoctors.length, events: eventRows.length, issues: issueRows.length, contentRevision,
+    affectedDates,
     changes: { doctors: changedDoctors.length + removedDoctorKeys.length, events: changedEventRows.length + removedEventIds.length, issues: changedIssueRows.length + removedIssueIds.length, total: changedFactCount } };
 }
 
@@ -4057,7 +4065,7 @@ export async function queryFacilityOverviewOnShift(db, options = {}) {
       AND roster_events.start_date = ?
     ORDER BY roster_events.start_ts, roster_events.display_name, roster_events.title
   `).bind(facilityKey, date).all();
-  const seniorityOverrides = new Map((await queryFacilityStaffSeniorityOverrides(db, {
+  const seniorityOverrides = options.includeOverrides === false ? new Map() : new Map((await queryFacilityStaffSeniorityOverrides(db, {
     sourceType: facilityKey,
     termStart: australianTermStartForDate(date),
   })).map((override) => [`${override.sourceType}|${override.doctorKey}`, override]));

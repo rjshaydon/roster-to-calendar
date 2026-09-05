@@ -2,6 +2,7 @@ import {
   loadCachedSnapshot,
   queryFacilityStaffDesignations,
   queryFacilityStaffSeniorityOverrides,
+  queryFacilityOverviewOnShift,
   queryMaterializedFacilityMetadata,
   queryMaterializedFacilityTermStaff,
   storeCachedSnapshot,
@@ -17,6 +18,10 @@ export function facilityStaffObjectKey(sourceType, termStart, revision) {
   return `facility-overview/v1/${safeSource(sourceType)}/staff/${String(termStart).slice(0, 10)}/${revision}.json.gz`;
 }
 
+export function facilityDayObjectKey(sourceType, date, revision) {
+  return `facility-overview/v1/${safeSource(sourceType)}/days/${String(date).slice(0, 10)}/${revision}.json.gz`;
+}
+
 export async function publishFacilityStaffMetadata(context, sourceTypes = []) {
   const db = context?.env?.ROSTER_DB;
   const r2 = context?.env?.ROSTER_FILES;
@@ -24,7 +29,8 @@ export async function publishFacilityStaffMetadata(context, sourceTypes = []) {
   const results = [];
   for (const sourceType of [...new Set(sourceTypes.map(safeSource).filter(Boolean))]) {
     const metadata = await queryMaterializedFacilityMetadata(db, { sourceType });
-    const currentManifest = await loadCachedSnapshot(r2, facilityMetadataManifestKey(sourceType));
+    const currentManifestObject = await loadJsonObject(r2, facilityMetadataManifestKey(sourceType));
+    const currentManifest = currentManifestObject.data;
     const terms = [];
     for (const term of metadata.terms || []) {
       const termEnd = addDays(term.termStart, 90);
@@ -47,16 +53,120 @@ export async function publishFacilityStaffMetadata(context, sourceTypes = []) {
       }
       terms.push({ ...term, termEnd, staffKey, staffRevision });
     }
-    const stableManifest = { schemaVersion: SCHEMA_VERSION, sourceType, coverage: metadata.coverage, terms };
+    const stableManifest = { schemaVersion: SCHEMA_VERSION, sourceType, coverage: metadata.coverage, terms, days: currentManifest?.days || {} };
     const revision = await digest(stableManifest);
     if (currentManifest?.revision !== revision) {
-      await storeCachedSnapshot(r2, facilityMetadataManifestKey(sourceType), { ...stableManifest, revision, publishedAt: new Date().toISOString() }, { revision, ownerType: "facility-metadata", ownerId: sourceType, rangeKey: "manifest" });
+      await putJsonGzip(
+        r2,
+        facilityMetadataManifestKey(sourceType),
+        { ...stableManifest, revision, publishedAt: new Date().toISOString() },
+        currentManifestObject.etag ? { onlyIf: { etagMatches: currentManifestObject.etag } } : {},
+      );
       results.push({ sourceType, changed: true, revision });
     } else {
       results.push({ sourceType, changed: false, revision });
     }
   }
   return { ok: true, results };
+}
+
+export async function publishFacilityDays(context, sourceTypeValue, dates = [], options = {}) {
+  const db = context?.env?.ROSTER_DB;
+  const r2 = context?.env?.ROSTER_FILES;
+  const sourceType = safeSource(sourceTypeValue);
+  let affectedDates = [...new Set(dates.map((date) => String(date || "").slice(0, 10)).filter((date) => /^\d{4}-\d{2}-\d{2}$/.test(date)))].sort();
+  if (!db?.prepare || !r2?.put || !r2?.get || !sourceType) return { ok: false, unavailable: true };
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const existing = await db.prepare("SELECT * FROM facility_day_publications WHERE source_type = ?").bind(sourceType).first();
+  const manifestObject = await loadJsonObject(r2, facilityMetadataManifestKey(sourceType));
+  if (!affectedDates.length && options.rebuildPublishedDates === true) affectedDates = Object.keys(manifestObject.data?.days || {}).sort();
+  if (!affectedDates.length) return { ok: true, unchanged: true };
+  if (affectedDates.length > 120) throw new Error(`Day publication exceeds the 120-date safety budget (${affectedDates.length}).`);
+  if (existing?.status !== "complete" && existing?.operation_id && manifestObject.data?.publicationOperationId === existing.operation_id) {
+    await db.prepare("UPDATE facility_day_publications SET status = 'complete', lease_expires_at = '', last_error = '', updated_at = ? WHERE source_type = ? AND operation_id = ?")
+      .bind(nowIso, sourceType, existing.operation_id).run();
+  } else if (existing?.status === "publishing" && String(existing.lease_expires_at || "") > nowIso) {
+    return { ok: true, busy: true, generation: Number(existing.generation || 0) };
+  }
+  const generation = Number(existing?.generation || 0) + 1;
+  const operationId = crypto.randomUUID();
+  const leaseExpiresAt = new Date(now.getTime() + 2 * 60 * 1000).toISOString();
+  const baseRevision = String(manifestObject.data?.revision || "");
+  await db.prepare(`INSERT INTO facility_day_publications
+    (source_type, generation, operation_id, status, base_revision, candidate_revision, lease_expires_at, last_error, updated_at)
+    VALUES (?, ?, ?, 'publishing', ?, '', ?, '', ?)
+    ON CONFLICT(source_type) DO UPDATE SET generation=excluded.generation, operation_id=excluded.operation_id,
+      status='publishing', base_revision=excluded.base_revision, candidate_revision='', lease_expires_at=excluded.lease_expires_at,
+      last_error='', updated_at=excluded.updated_at`)
+    .bind(sourceType, generation, operationId, baseRevision, leaseExpiresAt, nowIso).run();
+  try {
+    const currentManifest = manifestObject.data || { schemaVersion: SCHEMA_VERSION, sourceType, coverage: [], terms: [], days: {} };
+    const days = { ...(currentManifest.days || {}) };
+    for (const date of affectedDates) {
+      const rows = await queryFacilityOverviewOnShift(db, { facilityKey: sourceType, date, includeOverrides: false });
+      if (!rows.length) {
+        delete days[date];
+        continue;
+      }
+      const payload = { schemaVersion: SCHEMA_VERSION, sourceType, date, rows };
+      const revision = await digest(payload);
+      const key = facilityDayObjectKey(sourceType, date, revision);
+      if (days[date]?.revision !== revision) await putJsonGzip(r2, key, payload);
+      days[date] = { key, revision };
+    }
+    const stable = { schemaVersion: currentManifest.schemaVersion || SCHEMA_VERSION, sourceType, coverage: currentManifest.coverage || [], terms: currentManifest.terms || [], days };
+    const candidateRevision = await digest(stable);
+    if (candidateRevision === baseRevision) {
+      await db.prepare("UPDATE facility_day_publications SET status = 'complete', candidate_revision = ?, lease_expires_at = '', last_error = '', updated_at = ? WHERE source_type = ? AND operation_id = ?")
+        .bind(candidateRevision, new Date().toISOString(), sourceType, operationId).run();
+      return { ok: true, unchanged: true, generation, revision: candidateRevision, dates: affectedDates };
+    }
+    const candidate = { ...stable, revision: candidateRevision, generation, publicationOperationId: operationId, publishedAt: nowIso };
+    const candidateKey = `facility-overview/v1/${sourceType}/manifests/${generation}-${candidateRevision}.json.gz`;
+    await putJsonGzip(r2, candidateKey, candidate);
+    await db.prepare("UPDATE facility_day_publications SET candidate_revision = ?, updated_at = ? WHERE source_type = ? AND operation_id = ?")
+      .bind(candidateRevision, nowIso, sourceType, operationId).run();
+    if (typeof options.beforePointer === "function") await options.beforePointer({ operationId, generation });
+    const owner = await db.prepare("SELECT operation_id FROM facility_day_publications WHERE source_type = ? AND status = 'publishing' AND lease_expires_at > ?")
+      .bind(sourceType, new Date().toISOString()).first();
+    if (owner?.operation_id !== operationId) throw new Error("Day publication lease was superseded.");
+    await putJsonGzip(r2, facilityMetadataManifestKey(sourceType), candidate, manifestObject.etag ? { onlyIf: { etagMatches: manifestObject.etag } } : {});
+    if (typeof options.afterPointer === "function") await options.afterPointer({ operationId, generation });
+    await db.prepare("UPDATE facility_day_publications SET status = 'complete', lease_expires_at = '', last_error = '', updated_at = ? WHERE source_type = ? AND operation_id = ?")
+      .bind(new Date().toISOString(), sourceType, operationId).run();
+    return { ok: true, changed: candidateRevision !== baseRevision, generation, revision: candidateRevision, dates: affectedDates };
+  } catch (error) {
+    await db.prepare("UPDATE facility_day_publications SET status = 'error', lease_expires_at = '', last_error = ?, updated_at = ? WHERE source_type = ? AND operation_id = ?")
+      .bind(String(error?.message || error).slice(0, 300), new Date().toISOString(), sourceType, operationId).run().catch(() => null);
+    throw error;
+  }
+}
+
+export async function loadPublishedFacilityDays(r2, sourceTypes, date, currentDate = date) {
+  if (!r2?.get) return { preparing: true, rows: [] };
+  const rows = [];
+  let found = false;
+  for (const sourceType of [...new Set(sourceTypes.map(safeSource).filter(Boolean))]) {
+    const manifest = await loadCachedSnapshot(r2, facilityMetadataManifestKey(sourceType));
+    const pointer = manifest?.days?.[date];
+    if (!pointer?.key) continue;
+    const day = await loadCachedSnapshot(r2, pointer.key);
+    if (!day) continue;
+    const termStart = termStartForDate(date);
+    const term = (manifest.terms || []).find((entry) => entry.termStart === termStart && entry.visibleFrom <= currentDate);
+    if (!term) continue;
+    found = true;
+    const staff = term?.staffKey ? await loadCachedSnapshot(r2, term.staffKey) : null;
+    const overrides = new Map((staff?.seniorityOverrides || []).map((entry) => [`${entry.sourceType}|${entry.doctorKey}`, entry]));
+    rows.push(...(day.rows || []).map((row) => {
+      const override = overrides.get(`${row.sourceType}|${row.doctorKey}`);
+      return override && !override.useRosterSeniority
+        ? { ...row, seniority: override.seniority, seniorityOverride: override, event: { ...row.event, seniority: override.seniority, facilitySeniorityOverride: true } }
+        : row;
+    }));
+  }
+  return { preparing: !found, rows };
 }
 
 export async function loadPublishedFacilityMetadata(r2, sourceTypes, today) {
@@ -124,4 +234,39 @@ async function digest(value) {
   const bytes = new TextEncoder().encode(JSON.stringify(value));
   const result = await crypto.subtle.digest("SHA-256", bytes);
   return [...new Uint8Array(result)].map((part) => part.toString(16).padStart(2, "0")).join("");
+}
+
+async function putJsonGzip(r2, key, value, options = {}) {
+  const json = JSON.stringify(value);
+  const bytes = await new Response(new Blob([json]).stream().pipeThrough(new CompressionStream("gzip"))).arrayBuffer();
+  return r2.put(key, bytes, { ...options, httpMetadata: { contentType: "application/json", contentEncoding: "gzip" } });
+}
+
+async function loadJsonObject(r2, key) {
+  try {
+    const object = await r2.get(key);
+    if (!object) return { data: null, etag: "" };
+    const bytes = await object.arrayBuffer();
+    const header = new Uint8Array(bytes, 0, Math.min(2, bytes.byteLength));
+    const text = header[0] === 0x1f && header[1] === 0x8b
+      ? await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).text()
+      : new TextDecoder().decode(bytes);
+    return { data: JSON.parse(text), etag: String(object.etag || object.httpEtag || "") };
+  } catch {
+    return { data: null, etag: "" };
+  }
+}
+
+function termStartForDate(value) {
+  const date = new Date(`${String(value).slice(0, 10)}T12:00:00Z`);
+  const year = date.getUTCFullYear();
+  const candidates = [];
+  for (const candidateYear of [year - 1, year]) {
+    for (const month of [1, 4, 7, 10]) {
+      const first = new Date(Date.UTC(candidateYear, month, 1, 12));
+      first.setUTCDate(1 + ((8 - first.getUTCDay()) % 7));
+      candidates.push(first.toISOString().slice(0, 10));
+    }
+  }
+  return candidates.filter((candidate) => candidate <= value).sort().at(-1) || "";
 }

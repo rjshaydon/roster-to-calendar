@@ -3955,7 +3955,7 @@ class MemoryD1Statement {
     if (sql.startsWith("SELECT doctor_key, display_name, seniority, membership_source, provider_staff_id FROM roster_file_doctors")) {
       return { results: [...this.db.fileDoctors.values()].filter((row) => row.file_id === args[0]).sort((a, b) => a.doctor_key.localeCompare(b.doctor_key)) };
     }
-    if (sql.startsWith("SELECT id, display_name, start_date, end_date, start_ts")) {
+    if (sql.startsWith("SELECT id, doctor_key, display_name, start_date, end_date, start_ts") || sql.startsWith("SELECT id, display_name, start_date, end_date, start_ts")) {
       return { results: [...this.db.events.values()].filter((row) => row.file_id === args[0]).sort((a, b) => a.id.localeCompare(b.id)) };
     }
     if (sql.startsWith("SELECT id, display_name, start_date, raw_value")) {

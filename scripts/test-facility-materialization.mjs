@@ -10,7 +10,7 @@ import {
 } from "../functions/_lib/d1-calendar.js";
 import { onRequestPost as saveAutomatedDerivedRoster } from "../functions/api/automation/derived.js";
 import { onRequestPost as stateHandler } from "../functions/api/state.js";
-import { loadPublishedFacilityMetadata, loadPublishedFacilityStaff, publishFacilityStaffMetadata } from "../functions/_lib/facility-overview-cache.js";
+import { loadPublishedFacilityDays, loadPublishedFacilityMetadata, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata } from "../functions/_lib/facility-overview-cache.js";
 
 class LocalD1 {
   constructor(sqlite) { this.sqlite = sqlite; this.rowsWritten = 0; this.sql = []; }
@@ -29,17 +29,21 @@ class LocalD1 {
 }
 
 class LocalR2 {
-  constructor() { this.objects = new Map(); this.puts = 0; this.gets = 0; }
+  constructor() { this.objects = new Map(); this.puts = 0; this.gets = 0; this.version = 0; this.failPointerOnce = false; }
   async put(key, value, options = {}) {
+    if (this.failPointerOnce && key.endsWith("/manifest.json")) { this.failPointerOnce = false; throw new Error("Injected manifest failure"); }
+    const current = this.objects.get(key);
+    if (options.onlyIf?.etagMatches && current?.etag !== options.onlyIf.etagMatches) throw new Error("Precondition failed");
     this.puts += 1;
     const bytes = value instanceof Uint8Array ? value : new Uint8Array(value);
-    this.objects.set(key, { bytes, options });
+    this.version += 1;
+    this.objects.set(key, { bytes, options, etag: `local-${this.version}` });
   }
   async get(key) {
     this.gets += 1;
     const item = this.objects.get(key);
     if (!item) return null;
-    return { arrayBuffer: async () => item.bytes.buffer.slice(item.bytes.byteOffset, item.bytes.byteOffset + item.bytes.byteLength) };
+    return { etag: item.etag, arrayBuffer: async () => item.bytes.buffer.slice(item.bytes.byteOffset, item.bytes.byteOffset + item.bytes.byteLength) };
   }
 }
 
@@ -104,6 +108,19 @@ assert.equal(publishedStaff.preparing, false);
 assert.equal(publishedStaff.members.length, 2);
 assert.equal(db.sql.length, 0, "shared Staff/metadata readers must perform zero D1 queries");
 assert.equal((await loadPublishedFacilityStaff(new LocalR2(), ["mmc"], "2026-08-03", "2026-08-03")).preparing, true, "a missing object must return preparing without a fallback");
+const firstDayPublication = await publishFacilityDays({ env: { ROSTER_DB: db, ROSTER_FILES: r2 } }, "mmc", ["2026-08-03"]);
+assert.equal(firstDayPublication.ok, true);
+db.sql = [];
+const publishedDay = await loadPublishedFacilityDays(r2, ["mmc"], "2026-08-03");
+assert.equal(publishedDay.preparing, false);
+assert.equal(publishedDay.rows.length, 2);
+assert.equal((await loadPublishedFacilityDays(r2, ["mmc"], "2026-08-03", "2026-07-19")).preparing, true, "a known future day must remain unavailable 15 days before term start");
+assert.equal((await loadPublishedFacilityDays(r2, ["mmc"], "2026-08-03", "2026-07-20")).preparing, false, "a known future day must become available at the 14-day boundary");
+assert.equal(db.sql.length, 0, "shared day readers must perform zero D1 queries");
+const dayPutCount = r2.puts;
+const repeatedDayPublication = await publishFacilityDays({ env: { ROSTER_DB: db, ROSTER_FILES: r2 } }, "mmc", ["2026-08-03"]);
+assert.equal(repeatedDayPublication.unchanged, true);
+assert.equal(r2.puts, dayPutCount, "unchanged day publication must write no R2 objects");
 
 const password = "local-password";
 const salt = "local-salt";
@@ -118,7 +135,7 @@ async function callSharedAction(body, options = {}) {
   db.sql = [];
   const response = await stateHandler({
     request: new Request("http://127.0.0.1/api/state", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "doctor@example.com", password, ...body }) }),
-    env: { ROSTER_DB: db, ROSTER_FILES: options.r2 || r2, FACILITY_ACCESS_MATERIALIZATION_ENABLED: "true", FACILITY_SHARED_METADATA_ENABLED: "true" },
+    env: { ROSTER_DB: db, ROSTER_FILES: options.r2 || r2, FACILITY_ACCESS_MATERIALIZATION_ENABLED: "true", FACILITY_SHARED_METADATA_ENABLED: "true", FACILITY_SHARED_DAYS_ENABLED: "true" },
     waitUntil() {},
   });
   const payload = await response.json();
@@ -130,6 +147,13 @@ const handlerMetadata = await callSharedAction({ action: "queryFacilityOverviewM
 assert.ok(handlerMetadata.catalogEvents.length > 0);
 const handlerStaff = await callSharedAction({ action: "queryFacilityOverviewStaff", facilityKey: "mmc", termStart: "2026-08-03", termEnd: "2026-11-02" });
 assert.equal(handlerStaff.members.length, 2);
+const handlerDay = await callSharedAction({ action: "queryFacilityOverviewOnShift", facilityKey: "mmc", date: "2026-08-03", includeClinicalSupport: true });
+assert.equal(handlerDay.events.length, 1, "On shift handler must filter the shared day object using existing working-shift rules");
+const missingHandlerDay = await callSharedAction(
+  { action: "queryFacilityOverviewOnShift", facilityKey: "mmc", date: "2026-08-03", includeClinicalSupport: true },
+  { r2: new LocalR2(), status: 503 },
+);
+assert.equal(missingHandlerDay.preparing, true, "an On shift miss must not build or query roster events");
 const forbiddenAllStaff = await callSharedAction(
   { action: "queryFacilityOverviewStaff", facilityKey: "all", termStart: "2026-08-03", termEnd: "2026-11-02" },
   { status: 403 },
@@ -140,6 +164,70 @@ const missingHandlerStaff = await callSharedAction(
   { r2: new LocalR2(), status: 503 },
 );
 assert.equal(missingHandlerStaff.preparing, true, "a handler cache miss must not run the legacy Staff query");
+
+const lateCorrectionEvents = { ...initialEvents, "TERM TRAINEE": [event("trainee-1", "2026-08-03", "Evening shift")] };
+const lateCorrection = await replaceDerivedRosterFile(db, file, doctors, lateCorrectionEvents);
+assert.deepEqual(lateCorrection.affectedDates, ["2026-08-03"]);
+await publishFacilityStaffMetadata({ env: { ROSTER_DB: db, ROSTER_FILES: r2 } }, ["mmc"]);
+r2.failPointerOnce = true;
+await assert.rejects(
+  publishFacilityDays({ env: { ROSTER_DB: db, ROSTER_FILES: r2 } }, "mmc", lateCorrection.affectedDates),
+  /Injected manifest failure/,
+);
+let retainedDay = await loadPublishedFacilityDays(r2, ["mmc"], "2026-08-03");
+assert.ok(retainedDay.rows.some((row) => row.event?.title === "Sick leave"), "failed publication must retain the previous complete day");
+await publishFacilityDays({ env: { ROSTER_DB: db, ROSTER_FILES: r2 } }, "mmc", lateCorrection.affectedDates);
+retainedDay = await loadPublishedFacilityDays(r2, ["mmc"], "2026-08-03");
+assert.ok(retainedDay.rows.some((row) => row.event?.title === "Evening shift"), "retry must publish the corrected day");
+
+const concurrencyCorrection = { ...initialEvents, "TERM TRAINEE": [event("trainee-1", "2026-08-03", "Night shift")] };
+const concurrencyChange = await replaceDerivedRosterFile(db, file, doctors, concurrencyCorrection);
+await publishFacilityStaffMetadata({ env: { ROSTER_DB: db, ROSTER_FILES: r2 } }, ["mmc"]);
+let releasePublisher;
+let publisherReady;
+const ready = new Promise((resolve) => { publisherReady = resolve; });
+const release = new Promise((resolve) => { releasePublisher = resolve; });
+const firstPublisher = publishFacilityDays({ env: { ROSTER_DB: db, ROSTER_FILES: r2 } }, "mmc", concurrencyChange.affectedDates, {
+  beforePointer: async () => { publisherReady(); await release; },
+});
+await ready;
+const competingPublisher = await publishFacilityDays({ env: { ROSTER_DB: db, ROSTER_FILES: r2 } }, "mmc", concurrencyChange.affectedDates);
+assert.equal(competingPublisher.busy, true, "a second Worker instance must not publish while the ED lease is held");
+releasePublisher();
+await firstPublisher;
+
+const expiryCorrection = { ...initialEvents, "TERM TRAINEE": [event("trainee-1", "2026-08-03", "Recovered shift")] };
+const expiryChange = await replaceDerivedRosterFile(db, file, doctors, expiryCorrection);
+await publishFacilityStaffMetadata({ env: { ROSTER_DB: db, ROSTER_FILES: r2 } }, ["mmc"]);
+let releaseExpiredPublisher;
+let expiredPublisherReady;
+const expiredReady = new Promise((resolve) => { expiredPublisherReady = resolve; });
+const expiredRelease = new Promise((resolve) => { releaseExpiredPublisher = resolve; });
+const expiredPublisher = publishFacilityDays({ env: { ROSTER_DB: db, ROSTER_FILES: r2 } }, "mmc", expiryChange.affectedDates, {
+  beforePointer: async () => { expiredPublisherReady(); await expiredRelease; },
+});
+await expiredReady;
+sqlite.prepare("UPDATE facility_day_publications SET lease_expires_at = '2000-01-01T00:00:00Z' WHERE source_type = 'mmc'").run();
+const replacementPublisher = await publishFacilityDays({ env: { ROSTER_DB: db, ROSTER_FILES: r2 } }, "mmc", expiryChange.affectedDates);
+assert.equal(replacementPublisher.ok, true, "an expired publication lease must be recoverable by a new owner");
+releaseExpiredPublisher();
+await assert.rejects(expiredPublisher, /lease was superseded/, "an expired old worker must not overwrite the replacement generation");
+const recoveredDay = await loadPublishedFacilityDays(r2, ["mmc"], "2026-08-03");
+assert.ok(recoveredDay.rows.some((row) => row.event?.title === "Recovered shift"));
+
+const postPointerCorrection = { ...initialEvents, "TERM TRAINEE": [event("trainee-1", "2026-08-03", "Committed shift")] };
+const postPointerChange = await replaceDerivedRosterFile(db, file, doctors, postPointerCorrection);
+await publishFacilityStaffMetadata({ env: { ROSTER_DB: db, ROSTER_FILES: r2 } }, ["mmc"]);
+await assert.rejects(
+  publishFacilityDays({ env: { ROSTER_DB: db, ROSTER_FILES: r2 } }, "mmc", postPointerChange.affectedDates, {
+    afterPointer: async () => { throw new Error("Injected completion failure"); },
+  }),
+  /Injected completion failure/,
+);
+const committedDespiteMarkerFailure = await loadPublishedFacilityDays(r2, ["mmc"], "2026-08-03");
+assert.ok(committedDespiteMarkerFailure.rows.some((row) => row.event?.title === "Committed shift"), "a committed pointer must remain readable if completion marking fails");
+const recoveredCompletion = await publishFacilityDays({ env: { ROSTER_DB: db, ROSTER_FILES: r2 } }, "mmc", postPointerChange.affectedDates);
+assert.equal(recoveredCompletion.unchanged, true, "retry must recognise an already committed pointer without rewriting R2");
 
 const secondFile = { ...file, id: "incremental-b", name: "Overlapping.xlsx" };
 await replaceDerivedRosterFile(db, secondFile, [doctors[1]], { "TERM TRAINEE": [event("trainee-2", "2026-08-04")] });
