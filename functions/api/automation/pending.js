@@ -1,9 +1,14 @@
 import { hasCalendarDb, listQueuedRosterSyncRuns } from "../../_lib/d1-calendar.js";
+import { localFeatureDisabledResponse } from "../../_lib/outbound-network.js";
+import { automatedRosterWritesEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
 
 export async function onRequestGet(context) {
   if (!hasValidAutomationToken(context.request, context.env.ROSTER_AUTOMATION_TOKEN)) {
     return Response.json({ error: "Unauthorized." }, { status: 401 });
   }
+  const localDisabled = localFeatureDisabledResponse(context.env, "Roster automation queue polling");
+  if (localDisabled) return localDisabled;
+  if (!automatedRosterWritesEnabled(context.env)) return rosterWritePausedResponse();
   if (!hasCalendarDb(context.env)) return Response.json({ error: "Roster database is unavailable." }, { status: 503 });
   const url = new URL(context.request.url);
   const limit = Number(url.searchParams.get("limit") || 4);

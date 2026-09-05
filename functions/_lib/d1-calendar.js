@@ -2383,7 +2383,6 @@ export async function loadRosterSyncRun(db, runId) {
 export async function listQueuedRosterSyncRuns(db, limit = 4) {
   if (!db?.prepare) return [];
   await ensureCalendarSchema(db);
-  await supersedeObsoleteQueuedRosterSyncRuns(db);
   const safeLimit = Math.min(Math.max(Number(limit || 4), 1), 20);
   const rows = await db.prepare(`
     SELECT

@@ -12,6 +12,7 @@ import { onRequestPost as dispatchAutomation } from "../functions/api/automation
 import { onRequestPost as checkFindmyshift } from "../functions/api/automation/findmyshift-check.js";
 import { onRequestPost as ingestAutomation } from "../functions/api/automation/ingest.js";
 import { onRequestPost as ingestVhhAutomation } from "../functions/api/automation/vhh-roster-extract.js";
+import { onRequestGet as pollPendingAutomation } from "../functions/api/automation/pending.js";
 
 const originalFetch = globalThis.fetch;
 const attemptedUrls = [];
@@ -92,6 +93,14 @@ try {
     assert.equal(payload.status, "local-disabled", `${label} must explain that the local block is deliberate`);
     assert.match(payload.error, /No external service was contacted/i);
   }
+  const pendingResponse = await pollPendingAutomation({
+    request: new Request("http://127.0.0.1:9876/api/automation/pending", {
+      headers: { Authorization: "Bearer synthetic-automation-token" },
+    }),
+    env: localEnv,
+  });
+  assert.equal(pendingResponse.status, 503, "queue polling must fail closed locally");
+  assert.equal((await pendingResponse.json()).status, "local-disabled");
   assert.deepEqual(attemptedUrls, [], "disabled automation endpoints must not reach fetch");
 
   const localDevSource = await readFile(new URL("./local-dev.mjs", import.meta.url), "utf8");

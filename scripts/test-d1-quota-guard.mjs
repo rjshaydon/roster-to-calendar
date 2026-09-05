@@ -6,6 +6,7 @@ import { onRequestPost as derived } from "../functions/api/automation/derived.js
 import { onRequestPost as findmyshiftCheck } from "../functions/api/automation/findmyshift-check.js";
 import { onRequestPost as dispatch } from "../functions/api/automation/dispatch.js";
 import { onRequestPost as vhhExtract } from "../functions/api/automation/vhh-roster-extract.js";
+import { onRequestGet as pending } from "../functions/api/automation/pending.js";
 import { ensureCalendarSchema } from "../functions/_lib/d1-calendar.js";
 import watchdog from "../worker/roster-queue-watchdog.js";
 
@@ -53,6 +54,15 @@ for (const [path, handler] of [
   assert.equal(response.status, 503, `${path} should fail closed while automation is paused`);
   assert.equal(payload.status, "paused", `${path} should identify the quota pause`);
 }
+
+const pendingResponse = await pending({
+  request: new Request("https://example.test/api/automation/pending", {
+    headers: { Authorization: "Bearer test-token" },
+  }),
+  env,
+});
+assert.equal(pendingResponse.status, 503, "queue polling should fail closed while automation is paused");
+assert.equal((await pendingResponse.json()).status, "paused");
 
 assert.equal(databaseTouches, 0, "paused roster automation must perform zero D1 operations");
 assert.equal(objectStoreTouches, 0, "paused roster automation must perform zero R2 operations");
