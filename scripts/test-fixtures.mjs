@@ -3322,6 +3322,7 @@ class MemoryD1 {
     this.rosterFileCoverage = new Map();
     this.facilityTermStaff = new Map();
     this.facilityTermVisibility = new Map();
+    this.facilityStreamCatalog = new Map();
     this.events = new Map();
     this.dailyPresence = new Map();
     this.issues = new Map();
@@ -3425,12 +3426,27 @@ class MemoryD1Statement {
       if (!this.db.facilityTermVisibility.has(key)) this.db.facilityTermVisibility.set(key, { source_type: args[0], term_start: args[1], visible_from: args[2] });
       return { success: true, meta: { changes: 1 } };
     }
+    if (sql.startsWith("INSERT INTO facility_stream_catalog_contributions")) {
+      const key = `${args[0]}|${args[1]}|${args[2]}|${args[3]}`;
+      this.db.facilityStreamCatalog.set(key, { source_type: args[0], term_start: args[1], file_id: args[2], catalog_key: args[3], fact_digest: args[14] });
+      return { success: true, meta: { changes: 1 } };
+    }
     if (sql.startsWith("DELETE FROM roster_file_coverage")) { const changed = this.db.rosterFileCoverage.delete(args[0]); return { success: true, meta: { changes: changed ? 1 : 0 } }; }
     if (sql.startsWith("DELETE FROM facility_term_staff_contributions")) {
       let changes = 0;
       for (const [key, row] of [...this.db.facilityTermStaff]) {
         const matches = sql.includes("source_type = ?") ? row.source_type === args[0] && row.term_start === args[1] && row.doctor_key === args[2] && row.file_id === args[3] : row.file_id === args[0];
         if (matches) { this.db.facilityTermStaff.delete(key); changes += 1; }
+      }
+      return { success: true, meta: { changes } };
+    }
+    if (sql.startsWith("DELETE FROM facility_stream_catalog_contributions")) {
+      let changes = 0;
+      for (const [key, row] of [...this.db.facilityStreamCatalog]) {
+        const matches = sql.includes("source_type = ?")
+          ? row.source_type === args[0] && row.term_start === args[1] && row.file_id === args[2] && row.catalog_key === args[3]
+          : row.file_id === args[0];
+        if (matches) { this.db.facilityStreamCatalog.delete(key); changes += 1; }
       }
       return { success: true, meta: { changes } };
     }
@@ -3950,6 +3966,9 @@ class MemoryD1Statement {
     }
     if (sql.startsWith("SELECT source_type, term_start, doctor_key, file_id, fact_digest")) {
       return { results: [...this.db.facilityTermStaff.values()].filter((row) => row.file_id === args[0]) };
+    }
+    if (sql.startsWith("SELECT source_type, term_start, file_id, catalog_key, fact_digest")) {
+      return { results: [...this.db.facilityStreamCatalog.values()].filter((row) => row.file_id === args[0]) };
     }
     if (sql.startsWith("PRAGMA table_info(roster_files)")) {
       return {

@@ -146,3 +146,65 @@ Still required before enabling the flag online:
   fallback.
 - Phase 3 must route shared Staff and metadata reads through this access layer
   and their compact objects before any online test.
+
+## Phase 3: shared Staff and metadata reads
+
+Status: local Phase 3 gate passed behind disabled-by-default build and reader
+flags.
+
+Completed locally:
+
+- Added per-file, per-term stream-catalogue contributions during ingestion.
+  Catalogue updates are diffed alongside coverage and staff facts and never
+  require a reader-time `GROUP BY roster_events` query.
+- Added one shared manifest per ED and immutable, content-addressed Staff
+  objects per ED/term in the local R2 substitute.
+- Staff objects include compact membership, SMS continuity, coverage,
+  designation and seniority-override data. Metadata manifests include compact
+  coverage, visibility boundaries and stream signatures.
+- Publication compares stable content revisions. An unchanged publication
+  retains existing object keys and performs zero R2 writes.
+- Staff and metadata handlers use the Phase 2 access decision before reading
+  shared objects. Site-scoped users cannot request another ED or All EDs, and
+  Creator-entered views retain the entered account's restrictions.
+- Missing manifests or Staff objects return `503 preparing` with
+  `Retry-After`; readers never build objects or fall back to legacy Staff or
+  catalogue SQL.
+- The 14-day pre-term boundary is enforced when Staff/catalogue objects are
+  selected. The object may be prepared earlier but is not returned early.
+- Roster ingestion, removal/reset and staff overlay changes schedule a shared
+  Staff/metadata refresh only when the separate build flag is enabled.
+
+Safety controls:
+
+- `FACILITY_SHARED_METADATA_BUILD_ENABLED` controls publication.
+- `FACILITY_SHARED_METADATA_ENABLED` controls reads and is effective only
+  while `FACILITY_ACCESS_MATERIALIZATION_ENABLED` is also enabled.
+- Both new settings are false when absent. Repository production and preview
+  configuration remains unchanged.
+
+Focused Phase 3 evidence:
+
+- The materialisation integration test invokes the actual authenticated
+  `/api/state` Metadata and Staff action chain with both flags enabled.
+- Repeated shared reads perform zero D1 `roster_events` queries; after ordinary
+  authentication and the one-row access decision, payload retrieval is R2
+  only and is shared across accounts.
+- A first publication creates immutable Staff data and its manifest. Repeating
+  publication without a fact change performs zero R2 writes.
+- A missing R2 object returns `preparing` from the handler and performs no
+  legacy Staff query.
+- Stream catalogue, Staff membership, overlap preservation, SMS continuity,
+  access restrictions and the exact 14-day visibility boundary pass locally.
+- Fresh migration and local safety checks pass using local D1/R2 only.
+
+Still required before an online test:
+
+- Migration `0028_facility_stream_catalog_materialisation.sql` and the Phase 1
+  compact facts require a separately approved, measured, bounded backfill.
+  Identical existing imports intentionally do not rewrite facts merely to fill
+  a newly added projection.
+- Phase 4 must replace the high-value On shift reader with shared ED/day
+  snapshots and add the durable publication/recovery state machine. Until that
+  gate passes, this branch is not a production quota fix and must not be
+  deployed or have its new flags enabled.

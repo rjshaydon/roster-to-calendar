@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -8,11 +9,14 @@ import {
   replaceDerivedRosterFile,
 } from "../functions/_lib/d1-calendar.js";
 import { onRequestPost as saveAutomatedDerivedRoster } from "../functions/api/automation/derived.js";
+import { onRequestPost as stateHandler } from "../functions/api/state.js";
+import { loadPublishedFacilityMetadata, loadPublishedFacilityStaff, publishFacilityStaffMetadata } from "../functions/_lib/facility-overview-cache.js";
 
 class LocalD1 {
-  constructor(sqlite) { this.sqlite = sqlite; this.rowsWritten = 0; }
+  constructor(sqlite) { this.sqlite = sqlite; this.rowsWritten = 0; this.sql = []; }
   prepare(sql) {
     const owner = this;
+    owner.sql.push(sql.replace(/\s+/g, " ").trim());
     return {
       args: [],
       bind(...args) { this.args = args; return this; },
@@ -22,6 +26,21 @@ class LocalD1 {
     };
   }
   async batch(statements) { const results = []; for (const statement of statements) results.push(await statement.run()); return results; }
+}
+
+class LocalR2 {
+  constructor() { this.objects = new Map(); this.puts = 0; this.gets = 0; }
+  async put(key, value, options = {}) {
+    this.puts += 1;
+    const bytes = value instanceof Uint8Array ? value : new Uint8Array(value);
+    this.objects.set(key, { bytes, options });
+  }
+  async get(key) {
+    this.gets += 1;
+    const item = this.objects.get(key);
+    if (!item) return null;
+    return { arrayBuffer: async () => item.bytes.buffer.slice(item.bytes.byteOffset, item.bytes.byteOffset + item.bytes.byteLength) };
+  }
 }
 
 const sqlite = new DatabaseSync(":memory:");
@@ -66,6 +85,61 @@ await assert.rejects(
   (error) => error?.code === "ROSTER_INCREMENTAL_BUDGET" && error.changedFactCount === 2,
 );
 assert.equal(db.rowsWritten, 0, "an over-budget automatic revision must stop before writes");
+
+const r2 = new LocalR2();
+db.sql = [];
+const publication = await publishFacilityStaffMetadata({ env: { ROSTER_DB: db, ROSTER_FILES: r2 } }, ["mmc"]);
+assert.equal(publication.ok, true);
+assert.ok(r2.puts >= 2, "first publication should write immutable staff and a manifest");
+assert.equal(db.sql.some((sql) => /\broster_events\b/i.test(sql)), false, "Staff/metadata publication must use compact facts only");
+const firstPutCount = r2.puts;
+await publishFacilityStaffMetadata({ env: { ROSTER_DB: db, ROSTER_FILES: r2 } }, ["mmc"]);
+assert.equal(r2.puts, firstPutCount, "unchanged Staff/metadata publication must write no R2 objects");
+db.sql = [];
+const publishedMetadata = await loadPublishedFacilityMetadata(r2, ["mmc"], "2026-08-03");
+const publishedStaff = await loadPublishedFacilityStaff(r2, ["mmc"], "2026-08-03", "2026-08-03");
+assert.equal(publishedMetadata.preparing, false);
+assert.ok(publishedMetadata.catalogEvents.length > 0, "published metadata must retain the stream catalogue");
+assert.equal(publishedStaff.preparing, false);
+assert.equal(publishedStaff.members.length, 2);
+assert.equal(db.sql.length, 0, "shared Staff/metadata readers must perform zero D1 queries");
+assert.equal((await loadPublishedFacilityStaff(new LocalR2(), ["mmc"], "2026-08-03", "2026-08-03")).preparing, true, "a missing object must return preparing without a fallback");
+
+const password = "local-password";
+const salt = "local-salt";
+const passwordHash = createHash("sha256").update(`${salt}:${password}`).digest("hex");
+sqlite.prepare(`INSERT INTO account_profiles
+  (email, real_name, role, facility_overview_enabled, password_salt, password_hash, created_at, updated_at)
+  VALUES (?, 'Term Trainee', 'user', 1, ?, ?, ?, ?)`)
+  .run("doctor@example.com", salt, passwordHash, new Date().toISOString(), new Date().toISOString());
+sqlite.prepare(`INSERT INTO account_claims (email, source_type, doctor_key, display_name, matched_at, updated_at)
+  VALUES ('doctor@example.com', 'mmc', 'TERM TRAINEE', 'Term Trainee', '', '')`).run();
+async function callSharedAction(body, options = {}) {
+  db.sql = [];
+  const response = await stateHandler({
+    request: new Request("http://127.0.0.1/api/state", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "doctor@example.com", password, ...body }) }),
+    env: { ROSTER_DB: db, ROSTER_FILES: options.r2 || r2, FACILITY_ACCESS_MATERIALIZATION_ENABLED: "true", FACILITY_SHARED_METADATA_ENABLED: "true" },
+    waitUntil() {},
+  });
+  const payload = await response.json();
+  assert.equal(response.status, options.status || 200, JSON.stringify(payload));
+  assert.equal(db.sql.some((sql) => /\broster_events\b/i.test(sql)), false, `${body.action} must not query roster_events`);
+  return payload;
+}
+const handlerMetadata = await callSharedAction({ action: "queryFacilityOverviewMetadata", sourceTypes: ["mmc"] });
+assert.ok(handlerMetadata.catalogEvents.length > 0);
+const handlerStaff = await callSharedAction({ action: "queryFacilityOverviewStaff", facilityKey: "mmc", termStart: "2026-08-03", termEnd: "2026-11-02" });
+assert.equal(handlerStaff.members.length, 2);
+const forbiddenAllStaff = await callSharedAction(
+  { action: "queryFacilityOverviewStaff", facilityKey: "all", termStart: "2026-08-03", termEnd: "2026-11-02" },
+  { status: 403 },
+);
+assert.match(forbiddenAllStaff.error, /not available/i, "a site-scoped account must not read All EDs Staff data");
+const missingHandlerStaff = await callSharedAction(
+  { action: "queryFacilityOverviewStaff", facilityKey: "mmc", termStart: "2026-08-03", termEnd: "2026-11-02" },
+  { r2: new LocalR2(), status: 503 },
+);
+assert.equal(missingHandlerStaff.preparing, true, "a handler cache miss must not run the legacy Staff query");
 
 const secondFile = { ...file, id: "incremental-b", name: "Overlapping.xlsx" };
 await replaceDerivedRosterFile(db, secondFile, [doctors[1]], { "TERM TRAINEE": [event("trainee-2", "2026-08-04")] });

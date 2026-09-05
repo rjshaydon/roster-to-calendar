@@ -4,6 +4,7 @@ import { DDH_CONTACT_LIST_SOURCE_ID, MMC_CONTACT_LIST_SOURCE_ID, attachContactAl
 import { requestQueuedRosterProcessing } from "../_lib/automation-dispatch.js";
 import { rosterWritesExplicitlyPaused, rosterWritePausedResponse } from "../_lib/roster-automation-guard.js";
 import { guardedFetch, localFeatureDisabledResponse } from "../_lib/outbound-network.js";
+import { loadPublishedFacilityMetadata, loadPublishedFacilityStaff, publishFacilityStaffMetadata } from "../_lib/facility-overview-cache.js";
 import { extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentExceptions, findmyshiftLastModified, findmyshiftReportDiagnostics, findmyshiftShiftReport } from "../_lib/findmyshift.js";
 import {
   buildPreviewFromDerivedEvents,
@@ -144,6 +145,8 @@ export async function onRequestPost(context) {
       return Response.json({ error: "D1 database is not configured." }, { status: 503 });
     }
     const facilityAccessMaterialized = String(context.env.FACILITY_ACCESS_MATERIALIZATION_ENABLED || "").toLowerCase() === "true";
+    const sharedFacilityMetadataEnabled = facilityAccessMaterialized
+      && String(context.env.FACILITY_SHARED_METADATA_ENABLED || "").toLowerCase() === "true";
     // Invited accounts have no user-selected password until the invite is accepted.
     // Remove any that have passed their activation window on the next API request.
     await cleanupExpiredInvitedAccounts(context.env.ROSTER_DB);
@@ -1049,6 +1052,7 @@ export async function onRequestPost(context) {
         await deleteRetainedRosterSource(context.env.ROSTER_DB, context.env.ROSTER_FILES, fileId);
         await refreshCanonicalDoctors(context.env.ROSTER_DB);
         scheduleSnapshotWarmupForSourceTypes(context, sourceTypes, { reason: "resetDerivedCalendarFile" });
+        scheduleFacilityStaffMetadataPublish(context, sourceTypes);
       } catch (error) {
         return Response.json({ error: error?.message || "Could not reset roster file." }, { status: 503 });
       }
@@ -1733,6 +1737,7 @@ export async function onRequestPost(context) {
           createdBy: account.record?.email || email,
         });
         scheduleSnapshotWarmupForSourceTypes(context, [designation?.sourceType].filter(Boolean), { reason: "facilityStaffDesignation" });
+        scheduleFacilityStaffMetadataPublish(context, [designation?.sourceType]);
         return Response.json({ ok: true, designation });
       } catch (error) {
         return Response.json({ error: error?.message || "Could not save the staff designation." }, { status: 400 });
@@ -1746,6 +1751,7 @@ export async function onRequestPost(context) {
       const designation = await clearFacilityStaffDesignation(context.env.ROSTER_DB, body?.designationId, { reason: "creator-undo" });
       if (!designation) return Response.json({ error: "Staff designation was not found." }, { status: 404 });
       scheduleSnapshotWarmupForSourceTypes(context, [designation.sourceType].filter(Boolean), { reason: "clearFacilityStaffDesignation" });
+      scheduleFacilityStaffMetadataPublish(context, [designation.sourceType]);
       return Response.json({ ok: true, designation });
     }
 
@@ -1766,6 +1772,7 @@ export async function onRequestPost(context) {
           createdBy: account.record?.email || email,
         });
         scheduleSnapshotWarmupForSourceTypes(context, [override?.sourceType].filter(Boolean), { reason: "facilityStaffSeniorityOverride" });
+        scheduleFacilityStaffMetadataPublish(context, [override?.sourceType]);
         return Response.json({ ok: true, override });
       } catch (error) {
         return Response.json({ error: error?.message || "Could not save the staff designation." }, { status: 400 });
@@ -1790,6 +1797,7 @@ export async function onRequestPost(context) {
           createdBy: account.record?.email || email,
         });
         scheduleSnapshotWarmupForSourceTypes(context, [...new Set(overrides.map((override) => override?.sourceType).filter(Boolean))], { reason: "facilityStaffSeniorityOverrides" });
+        scheduleFacilityStaffMetadataPublish(context, overrides.map((override) => override?.sourceType));
         return Response.json({ ok: true, overrides });
       } catch (error) {
         return Response.json({ error: error?.message || "Could not save the staff designations." }, { status: 400 });
@@ -1807,6 +1815,11 @@ export async function onRequestPost(context) {
       const term = facilityOverviewTermRange(today);
       const catalogSources = linkedSourceTypes.length ? linkedSourceTypes : ["mmc", "ddh", "casey", "mch", "vhh"];
       try {
+        if (sharedFacilityMetadataEnabled) {
+          const published = await loadPublishedFacilityMetadata(context.env.ROSTER_FILES, catalogSources, today);
+          if (published.preparing) return facilityOverviewPreparingResponse({ facilities: [], catalogEvents: [] });
+          return Response.json({ ok: true, today, termStart: term.startDate, termEnd: term.endDate, facilities: published.facilities, catalogEvents: published.catalogEvents });
+        }
         const catalog = await queryFacilityOverviewCatalog(context.env.ROSTER_DB, { startDate: term.startDate, endDate: term.endDate, sourceTypes: catalogSources });
         return Response.json({
           ok: true,
@@ -1984,6 +1997,12 @@ export async function onRequestPost(context) {
         return Response.json({ error: "A valid term is required." }, { status: 400 });
       }
       try {
+        if (sharedFacilityMetadataEnabled) {
+          const sourceTypes = facilityKey ? [facilityKey] : ["mmc", "ddh", "casey", "mch", "vhh"];
+          const published = await loadPublishedFacilityStaff(context.env.ROSTER_FILES, sourceTypes, termStart, australianDateKey());
+          if (published.preparing) return facilityOverviewPreparingResponse({ members: [], events: [], coverage: [], designations: [], seniorityOverrides: [] });
+          return Response.json({ ok: true, termStart, termEnd, facilityKey: facilityKey || "all", ...published });
+        }
         const result = await queryFacilityOverviewStaff(context.env.ROSTER_DB, { termStart, termEnd, facilityKey });
         return Response.json({ ok: true, termStart, termEnd, facilityKey: facilityKey || "all", ...result });
       } catch (error) {
@@ -3087,6 +3106,13 @@ function facilityOverviewAccessDeniedResponse(access = null) {
     });
   }
   return Response.json({ error: "At a glance is not available for this site." }, { status: 403 });
+}
+
+function facilityOverviewPreparingResponse(payload = {}) {
+  return Response.json({ ok: false, unavailable: true, preparing: true, ...payload }, {
+    status: 503,
+    headers: { "Retry-After": "60" },
+  });
 }
 
 function constrainFacilityOverviewSourceTypes(access, requested = []) {
@@ -4222,6 +4248,16 @@ function scheduleSnapshotWarmupForAccount(context, email, options = {}) {
       error: error?.message || String(error),
     });
   }));
+}
+
+function scheduleFacilityStaffMetadataPublish(context, sourceTypes = []) {
+  if (String(context?.env?.FACILITY_SHARED_METADATA_BUILD_ENABLED || "").toLowerCase() !== "true") return;
+  const sources = [...new Set(sourceTypes.map((source) => String(source || "").toLowerCase()).filter(Boolean))];
+  if (!sources.length) return;
+  const publish = publishFacilityStaffMetadata(context, sources).catch((error) => {
+    console.warn("Facility Staff/metadata publication failed", { sources, error: error?.message || String(error) });
+  });
+  if (typeof context.waitUntil === "function") context.waitUntil(publish);
 }
 
 function scheduleDoctorProfileSnapshotWarmup(context, profile, ownerEmail = "", options = {}) {
@@ -5626,6 +5662,7 @@ async function syncRosterRepositoryToKeepFileIds(context, keepFileIds = [], opti
     }
     await refreshCanonicalDoctors(db);
     scheduleSnapshotWarmupForSourceTypes(context, sourceTypes, { reason: options.reason || "syncRosterRepository" });
+    scheduleFacilityStaffMetadataPublish(context, sourceTypes);
   }
   const verification = await verifyRosterFilesPurged(db, removedFileIds);
   const allPurged = !removedFileIds.length || verification.every((entry) => entry.purged === true);
@@ -5807,6 +5844,9 @@ async function runCoreDerivedRosterSave(context, job = {}) {
         return Promise.resolve(presence)
           .then(() => refreshFacilityOverviewMaterializationForFile(db, effectiveFileId))
           .then(() => reconcileFacilityStaffDesignationsForRosterFile(db, effectiveFileId))
+          .then(() => String(context.env.FACILITY_SHARED_METADATA_BUILD_ENABLED || "").toLowerCase() === "true"
+            ? publishFacilityStaffMetadata(context, [String(filePayload.sourceType || "").toLowerCase()].filter(Boolean))
+            : null)
           .then(() => deferCanonicalDoctorRefresh(context, job.reason || "saveDerivedCalendarFile"))
           .then(() => {
             scheduleSnapshotWarmupForSourceTypes(context, [String(filePayload.sourceType || "").toLowerCase()].filter(Boolean), {

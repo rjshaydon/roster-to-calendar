@@ -1486,6 +1486,7 @@ function dateDaysBefore(value, days) {
 export async function deleteFacilityOverviewMaterializationForFile(db, fileId) {
   if (!db?.prepare || !fileId) return { writes: 0 };
   const results = await runTransactionalBatch(db, [
+    db.prepare("DELETE FROM facility_stream_catalog_contributions WHERE file_id = ?").bind(String(fileId)),
     db.prepare("DELETE FROM facility_term_staff_contributions WHERE file_id = ?").bind(String(fileId)),
     db.prepare("DELETE FROM roster_file_coverage WHERE file_id = ?").bind(String(fileId)),
   ]);
@@ -1494,12 +1495,13 @@ export async function deleteFacilityOverviewMaterializationForFile(db, fileId) {
 
 export async function refreshFacilityOverviewMaterializationForFile(db, fileId, options = {}) {
   if (!db?.prepare || !fileId) return { writes: 0, missing: true };
-  const [file, doctorsResult, eventsResult, existingCoverage, existingStaffResult] = await Promise.all([
+  const [file, doctorsResult, eventsResult, existingCoverage, existingStaffResult, existingCatalogResult] = await Promise.all([
     db.prepare("SELECT id, source_type FROM roster_files WHERE id = ?").bind(String(fileId)).first(),
     db.prepare("SELECT doctor_key, display_name, seniority, membership_source, provider_staff_id FROM roster_file_doctors WHERE file_id = ? ORDER BY doctor_key").bind(String(fileId)).all(),
     db.prepare("SELECT id, doctor_key, display_name, seniority, provider_staff_id, start_date, end_date, event_json FROM roster_events WHERE file_id = ? ORDER BY id").bind(String(fileId)).all(),
     db.prepare("SELECT content_revision, staff_digest, daily_digest, coverage_start, coverage_end FROM roster_file_coverage WHERE file_id = ?").bind(String(fileId)).first(),
     db.prepare("SELECT source_type, term_start, doctor_key, file_id, fact_digest FROM facility_term_staff_contributions WHERE file_id = ?").bind(String(fileId)).all(),
+    db.prepare("SELECT source_type, term_start, file_id, catalog_key, fact_digest FROM facility_stream_catalog_contributions WHERE file_id = ?").bind(String(fileId)).all(),
   ]);
   if (!file) return await deleteFacilityOverviewMaterializationForFile(db, fileId);
   const sourceType = normalizeSourceType(file.source_type);
@@ -1534,7 +1536,40 @@ export async function refreshFacilityOverviewMaterializationForFile(db, fileId, 
     contributions.set(key, fact);
   }
   for (const fact of contributions.values()) fact.factDigest = await facilityOverviewDigest(fact);
+  const catalog = new Map();
+  for (const row of events) {
+    const event = parseEvent(row.event_json) || {};
+    const termStart = australianTermStartForDate(row.start_date);
+    if (!termStart) continue;
+    const fact = {
+      sourceType,
+      termStart,
+      fileId: String(fileId),
+      seniority: String(row.seniority || event.seniority || ""),
+      title: String(event.title || ""),
+      rawValue: String(event.rawValue || ""),
+      location: String(event.location || ""),
+      allDay: event.allDay === true ? 1 : 0,
+      timeLabel: String(event.timeLabel || ""),
+      startTime: event.allDay === true ? "" : String(event.start || "").slice(11, 19),
+      endTime: event.allDay === true ? "" : String(event.end || "").slice(11, 19),
+      firstDate: datePart(row.start_date),
+      lastDate: datePart(row.start_date),
+    };
+    const signature = [fact.seniority, fact.title, fact.rawValue, fact.location, fact.allDay, fact.timeLabel, fact.startTime, fact.endTime];
+    const catalogKey = await facilityOverviewDigest(signature);
+    const key = `${sourceType}|${termStart}|${fileId}|${catalogKey}`;
+    const current = catalog.get(key);
+    if (current) {
+      current.firstDate = current.firstDate < fact.firstDate ? current.firstDate : fact.firstDate;
+      current.lastDate = current.lastDate > fact.lastDate ? current.lastDate : fact.lastDate;
+    } else {
+      catalog.set(key, { ...fact, catalogKey });
+    }
+  }
+  for (const fact of catalog.values()) fact.factDigest = await facilityOverviewDigest(fact);
   const existingStaff = new Map((existingStaffResult.results || []).map((row) => [`${row.source_type}|${row.term_start}|${row.doctor_key}|${row.file_id}`, String(row.fact_digest || "")]));
+  const existingCatalog = new Map((existingCatalogResult.results || []).map((row) => [`${row.source_type}|${row.term_start}|${row.file_id}|${row.catalog_key}`, String(row.fact_digest || "")]));
   const now = new Date().toISOString();
   const statements = [];
   if (!existingCoverage || String(existingCoverage.content_revision || "") !== contentRevision
@@ -1563,6 +1598,23 @@ export async function refreshFacilityOverviewMaterializationForFile(db, fileId, 
     const [oldSource, oldTerm, oldDoctor, oldFile] = key.split("|");
     statements.push(db.prepare("DELETE FROM facility_term_staff_contributions WHERE source_type = ? AND term_start = ? AND doctor_key = ? AND file_id = ?")
       .bind(oldSource, oldTerm, oldDoctor, oldFile));
+  }
+  for (const [key, fact] of catalog) {
+    if (existingCatalog.get(key) === fact.factDigest) continue;
+    statements.push(db.prepare(`INSERT INTO facility_stream_catalog_contributions
+      (source_type, term_start, file_id, catalog_key, seniority, title, raw_value, location, all_day, time_label, start_time, end_time, first_date, last_date, fact_digest, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(source_type, term_start, file_id, catalog_key) DO UPDATE SET
+      seniority=excluded.seniority, title=excluded.title, raw_value=excluded.raw_value, location=excluded.location,
+      all_day=excluded.all_day, time_label=excluded.time_label, start_time=excluded.start_time, end_time=excluded.end_time,
+      first_date=excluded.first_date, last_date=excluded.last_date, fact_digest=excluded.fact_digest, updated_at=excluded.updated_at`)
+      .bind(fact.sourceType, fact.termStart, fact.fileId, fact.catalogKey, fact.seniority, fact.title, fact.rawValue,
+        fact.location, fact.allDay, fact.timeLabel, fact.startTime, fact.endTime, fact.firstDate, fact.lastDate, fact.factDigest, now));
+  }
+  for (const key of existingCatalog.keys()) {
+    if (catalog.has(key)) continue;
+    const [oldSource, oldTerm, oldFile, oldCatalogKey] = key.split("|");
+    statements.push(db.prepare("DELETE FROM facility_stream_catalog_contributions WHERE source_type = ? AND term_start = ? AND file_id = ? AND catalog_key = ?")
+      .bind(oldSource, oldTerm, oldFile, oldCatalogKey));
   }
   if (!statements.length) return { writes: 0, unchanged: true, contentRevision };
   const results = await runTransactionalBatch(db, statements);
@@ -4315,6 +4367,47 @@ export async function queryMaterializedFacilityTermStaff(db, options = {}) {
       lastApplicableDate: datePart(row.last_seen_date), contributionCount: 0 });
   }
   return members;
+}
+
+export async function queryMaterializedFacilityMetadata(db, options = {}) {
+  if (!db?.prepare) return { coverage: [], terms: [] };
+  const sourceType = normalizeSourceType(options.sourceType || options.facilityKey);
+  if (!sourceType) return { coverage: [], terms: [] };
+  const [coverage, visibility, catalogRows] = await Promise.all([
+    queryMaterializedFacilityCoverage(db, { sourceType }),
+    db.prepare(`SELECT term_start, visible_from, revision FROM facility_term_visibility
+      WHERE source_type = ? ORDER BY term_start`).bind(sourceType).all(),
+    db.prepare(`
+      SELECT c.term_start, c.catalog_key, c.seniority, c.title, c.raw_value, c.location,
+        c.all_day, c.time_label, c.start_time, c.end_time,
+        MIN(c.first_date) AS first_date, MAX(c.last_date) AS last_date
+      FROM facility_stream_catalog_contributions c
+      INNER JOIN roster_files f ON f.id = c.file_id
+      WHERE f.active = 1 AND c.source_type = ?
+      GROUP BY c.term_start, c.catalog_key, c.seniority, c.title, c.raw_value, c.location,
+        c.all_day, c.time_label, c.start_time, c.end_time
+      ORDER BY c.term_start, c.title, c.seniority, c.catalog_key
+    `).bind(sourceType).all(),
+  ]);
+  const catalogByTerm = new Map();
+  for (const row of catalogRows.results || []) {
+    const termStart = datePart(row.term_start);
+    if (!catalogByTerm.has(termStart)) catalogByTerm.set(termStart, []);
+    catalogByTerm.get(termStart).push({
+      catalogKey: String(row.catalog_key || ""), seniority: String(row.seniority || ""),
+      title: String(row.title || ""), rawValue: String(row.raw_value || ""), location: String(row.location || ""),
+      allDay: Number(row.all_day || 0) === 1, timeLabel: String(row.time_label || ""),
+      startTime: String(row.start_time || ""), endTime: String(row.end_time || ""),
+      firstDate: datePart(row.first_date), lastDate: datePart(row.last_date),
+    });
+  }
+  return {
+    coverage,
+    terms: (visibility.results || []).map((row) => ({
+      termStart: datePart(row.term_start), visibleFrom: datePart(row.visible_from), revision: String(row.revision || ""),
+      catalog: catalogByTerm.get(datePart(row.term_start)) || [],
+    })),
+  };
 }
 
 export async function queryFacilityOverviewStaff(db, options = {}) {
