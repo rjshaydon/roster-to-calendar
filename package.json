@@ -18,7 +18,7 @@
     "test:queue-failure": "node scripts/test-roster-queue-failure.mjs",
     "test:contact-workbook": "node scripts/test-contact-list-workbook.mjs",
     "test:fixtures": "node scripts/test-fixtures.mjs",
-    "test:facility-access": "node scripts/test-facility-overview-access.mjs",
+    "test:facility-access": "node --no-warnings scripts/test-facility-overview-access.mjs",
     "test:d1-quota": "node scripts/test-d1-quota-guard.mjs",
     "test:local-lifecycle": "node scripts/test-local-lifecycle.mjs",
     "test:local-isolation": "node scripts/test-local-isolation.mjs",

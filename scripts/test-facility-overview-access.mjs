@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
 import { resolveFacilityOverviewAccess } from "../functions/api/state.js";
 
 const claim = (sourceType, key = "TEST DOCTOR") => ({ sourceType, key, displayName: "Test Doctor" });
@@ -14,6 +15,21 @@ const shift = (sourceType, start, seniority = "HMO", key = "TEST DOCTOR") => ({
   seniority,
 });
 const account = (claims) => ({ email: "doctor@example.com", role: "user", facilityOverviewEnabled: true, claims });
+
+class TracedD1 {
+  constructor(sqlite) { this.sqlite = sqlite; this.sql = []; this.rowsWritten = 0; }
+  prepare(sql) {
+    const owner = this;
+    owner.sql.push(sql.replace(/\s+/g, " ").trim());
+    return {
+      args: [],
+      bind(...args) { this.args = args; return this; },
+      async first() { return owner.sqlite.prepare(sql).get(...this.args) || null; },
+      async all() { return { success: true, results: owner.sqlite.prepare(sql).all(...this.args) }; },
+      async run() { const result = owner.sqlite.prepare(sql).run(...this.args); owner.rowsWritten += Number(result.changes || 0); return { success: true, meta: { changes: Number(result.changes || 0) } }; },
+    };
+  }
+}
 
 const movedSite = await resolveFacilityOverviewAccess(null, account([claim("ddh"), claim("mmc")]), {
   today: "2026-08-25",
@@ -45,6 +61,57 @@ const ambiguous = await resolveFacilityOverviewAccess(null, account([claim("ddh"
 });
 assert.equal(ambiguous.mode, "denied", "ambiguous non-SMS site evidence must fail closed");
 
+const sqlite = new DatabaseSync(":memory:");
+for (const name of (await readdir(new URL("../migrations", import.meta.url))).filter((name) => name.endsWith(".sql")).sort()) {
+  sqlite.exec(await readFile(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
+}
+const db = new TracedD1(sqlite);
+sqlite.prepare("INSERT INTO roster_files (id, name, source_type, active) VALUES ('access-file', 'Access.xlsx', 'mmc', 1)").run();
+sqlite.prepare(`INSERT INTO facility_term_staff_contributions
+  (source_type, term_start, doctor_key, file_id, display_name, seniority, first_applicable_date, last_applicable_date)
+  VALUES ('mmc', '2026-08-03', 'TEST DOCTOR', 'access-file', 'Test Doctor', 'HMO', '2026-08-03', '2026-11-02')`).run();
+sqlite.prepare("INSERT INTO roster_daily_presence (date, source_type, doctor_key, display_name, event_id) VALUES ('2026-08-25', 'mmc', 'TEST DOCTOR', 'Test Doctor', 'access-event')").run();
+const materializedOptions = { today: "2026-08-25", now: new Date("2026-08-25T01:01:00Z"), materializedOnly: true };
+const materializedFirst = await resolveFacilityOverviewAccess(db, account([claim("mmc")]), materializedOptions);
+assert.equal(materializedFirst.mode, "site");
+assert.equal(materializedFirst.facilityKey, "MMC");
+assert.equal(materializedFirst.workingToday, true);
+assert.equal(materializedFirst.cache, "refreshed");
+assert.ok(new Date(materializedFirst.expiresAt).getTime() - materializedOptions.now.getTime() <= 15 * 60 * 1000, "access decisions must expire within 15 minutes");
+assert.equal(db.sql.some((sql) => /\broster_events\b/i.test(sql)), false, "materialized access must never inspect roster_events");
+db.sql = [];
+db.rowsWritten = 0;
+const materializedRepeat = await resolveFacilityOverviewAccess(db, account([claim("mmc")]), materializedOptions);
+assert.equal(materializedRepeat.cache, "hit", "repeat access should reuse the compact decision");
+assert.equal(db.rowsWritten, 0, "repeat access should write nothing");
+assert.equal(db.sql.length, 1, "repeat access should require one compact indexed read");
+assert.match(db.sql[0], /facility_access_sessions/);
+const accessPlan = sqlite.prepare(`EXPLAIN QUERY PLAN
+  SELECT access_json FROM facility_access_sessions
+  WHERE subject_email = ? AND access_date = ? AND subject_revision = ? AND expires_at > ?`).all(
+    "doctor@example.com", "2026-08-25", "revision", "2026-08-25T01:01:00Z",
+  ).map((row) => String(row.detail || ""));
+assert.ok(accessPlan.some((detail) => /INDEX.*subject_email/i.test(detail)), `access cache lookup must use its subject key: ${accessPlan.join("; ")}`);
+const changedClaims = await resolveFacilityOverviewAccess(db, account([claim("ddh", "OTHER DOCTOR")]), materializedOptions);
+assert.equal(changedClaims.preparing, true, "a claim revision without compact evidence must fail closed");
+db.sql = [];
+const repeatedMissing = await resolveFacilityOverviewAccess(db, account([claim("ddh", "OTHER DOCTOR")]), materializedOptions);
+assert.equal(repeatedMissing.preparing, true);
+assert.equal(repeatedMissing.cache, "hit", "missing compact evidence must use the bounded negative cache");
+assert.equal(db.sql.length, 1, "a repeated missing decision must not probe every compact source table");
+const nextDate = await resolveFacilityOverviewAccess(db, account([claim("mmc")]), { ...materializedOptions, today: "2026-08-26", now: new Date("2026-08-26T01:01:00Z") });
+assert.equal(nextDate.cache, "refreshed", "a Melbourne roster-date change must not reuse yesterday's access decision");
+assert.equal(nextDate.workingToday, false);
+sqlite.prepare(`INSERT INTO facility_sms_memberships
+  (source_type, doctor_key, display_name, first_seen_date, last_seen_date, created_at, updated_at)
+  VALUES ('ddh', 'PERMANENT SMS', 'Permanent SMS', '2026-01-01', '2026-05-01', '2026-01-01T00:00:00Z', '2026-05-01T00:00:00Z')`).run();
+const permanentSms = await resolveFacilityOverviewAccess(db, account([claim("ddh", "PERMANENT SMS")]), materializedOptions);
+assert.equal(permanentSms.mode, "all", "continuing SMS membership must survive a term with no roster contribution");
+db.sql = [];
+const revoked = await resolveFacilityOverviewAccess(db, { ...account([claim("mmc")]), facilityOverviewEnabled: false }, materializedOptions);
+assert.equal(revoked.mode, "denied", "revoked At a glance permission must override a cached decision immediately");
+assert.equal(db.sql.length, 0, "explicit revocation must fail before access-cache reads");
+
 const stateSource = await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8");
 const d1Source = await readFile(new URL("../functions/_lib/d1-calendar.js", import.meta.url), "utf8");
 for (const action of ["Metadata", "ByStream", "OnShift", "Staff", "WorkingTogether"]) {
@@ -62,6 +129,8 @@ assert.match(d1Source.match(/async function calendarSchemaIsCurrent[\s\S]*?async
 const appSource = await readFile(new URL("../public/static/app.js", import.meta.url), "utf8");
 assert.match(stateSource, /facilityOverviewAccess: prepared\.facilityOverviewAccess/, "fast login must carry access context in its existing response");
 assert.match(stateSource, /facilityOverviewSubject[\s\S]*targetEmail[\s\S]*facilityOverviewEnabled/, "Creator-entered accounts must be authorised using the entered user's At a glance entitlement");
+assert.match(stateSource, /facilityOverviewSubject[\s\S]*materializedOnly: facilityAccessMaterialized/, "every At a glance handler must use the guarded compact access path when enabled");
+assert.match(stateSource, /access\?\.preparing === true[\s\S]*status: 503[\s\S]*Retry-After/, "missing compact access evidence must return a bounded preparing response");
 assert.match(stateSource.match(/if \(action === "adminLoadUser"\)[\s\S]*?if \(action === "loadAccountContext"\)/)?.[0] || "", /responseMode === "fast"[\s\S]*prepareFastLoginEnvelope[\s\S]*loadFastAccountSnapshotPayload/, "Creator account switching must not build a full account snapshot in its fast response");
 assert.match(stateSource.match(/if \(action === "queryDoctorProfileFacilityOverviewAccess"\)[\s\S]*?if \(action === "saveDoctorProfile"\)/)?.[0] || "", /resolveDoctorAccount[\s\S]*facilityOverviewAccountEmail[\s\S]*facilityOverviewAccess/, "doctor profiles must resolve their linked user's At a glance scope separately from calendar loading");
 assert.match(appSource, /launchClinicalOnShiftWorkspace[\s\S]*workingToday[\s\S]*facilityOverviewState\.tab = "on-shift"/, "a working clinician must land on On shift without calendar hydration");

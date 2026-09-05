@@ -95,3 +95,54 @@ Still required before any online rollout:
 - Implement later phases that switch live Staff/Coverage/On-shift handlers to
   the compact read/cache path. Until then, this branch must not be deployed as
   the production quota fix.
+
+## Phase 2: access/session materialisation
+
+Status: local Phase 2 gate passed behind a disabled-by-default reader flag.
+
+Completed locally:
+
+- Added one short-lived compact access decision per account. It records the
+  authorised site scope, SMS/all-site status, preferred site, working-today
+  state, roster date and term.
+- The decision is keyed by a digest of the account role, explicit feature
+  entitlement, non-clinical status and source-specific claims. Account or
+  claim changes therefore cannot reuse an older decision.
+- Decisions expire at the next fixed 15-minute boundary and are also rejected
+  whenever the Australia/Melbourne roster date changes. Explicit feature
+  revocation is checked before reading the access cache and is immediate.
+- Cache misses derive access only from exact compact term-staff, continuing-SMS
+  and daily-presence lookups. They never inspect `roster_events`.
+- Missing compact evidence fails closed with `503 preparing` and `Retry-After`;
+  that negative result is itself cached so multiple visible pages cannot keep
+  probing the compact tables.
+- Creator/owner and eligible non-clinical accounts retain all-site access.
+  Creator-entered views continue to key access from the entered account, not
+  the Creator.
+- `FACILITY_ACCESS_MATERIALIZATION_ENABLED` guards the new handler path and is
+  false when absent. No production or preview configuration has been changed.
+
+Focused Phase 2 evidence:
+
+- `test:facility-access` verifies term-specific trainee access, working-today
+  preference, ambiguous access denial, permanent SMS continuity, immediate
+  revocation, claim invalidation, roster-date invalidation, 15-minute expiry,
+  positive and negative cache reuse, and entered-account handler wiring.
+- A repeated decision performs one indexed primary-key read, zero writes and
+  zero `roster_events` queries. A cold decision performs at most three exact
+  compact lookups per claimed source identity plus one cache read and one
+  idempotent single-row publication.
+- With 50 visible pages refreshing every 60 seconds, the access layer's steady
+  state is at most 50 single-row cache reads per minute. Fixed expiry values
+  and a conditional upsert prevent duplicate refreshes from changing the row
+  after the first equivalent publisher succeeds.
+
+Still required before enabling the flag online:
+
+- Apply and verify migration `0027_facility_access_materialisation.sql` in a
+  separately approved rollout with all live readers and automations disabled.
+- Populate/verify Phase 1 compact facts before enabling this reader; otherwise
+  affected users correctly receive `preparing` rather than an event-table
+  fallback.
+- Phase 3 must route shared Staff and metadata reads through this access layer
+  and their compact objects before any online test.

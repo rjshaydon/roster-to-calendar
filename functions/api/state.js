@@ -143,6 +143,7 @@ export async function onRequestPost(context) {
     if (!hasCalendarDb(context.env)) {
       return Response.json({ error: "D1 database is not configured." }, { status: 503 });
     }
+    const facilityAccessMaterialized = String(context.env.FACILITY_ACCESS_MATERIALIZATION_ENABLED || "").toLowerCase() === "true";
     // Invited accounts have no user-selected password until the invite is accepted.
     // Remove any that have passed their activation window on the next API request.
     await cleanupExpiredInvitedAccounts(context.env.ROSTER_DB);
@@ -187,9 +188,10 @@ export async function onRequestPost(context) {
       const authMs = Date.now() - authStartedAt;
       const prepareStartedAt = Date.now();
       const prepared = responseMode === "fast"
-        ? await prepareFastLoginEnvelope(loginRecord, { db: context.env.ROSTER_DB })
+        ? await prepareFastLoginEnvelope(loginRecord, { db: context.env.ROSTER_DB, facilityAccessMaterialized })
         : await prepareAccountResponse(null, loginRecord, {
             db: context.env.ROSTER_DB,
+            facilityAccessMaterialized,
             includeAvailableDoctors: (loginRecord.role || roleForEmail(loginRecord.email)) === "creator"
               || (loginRecord.role || roleForEmail(loginRecord.email)) === "owner"
               || !sanitizeClaims(loginRecord.claims).length,
@@ -300,7 +302,9 @@ export async function onRequestPost(context) {
     const facilityOverviewAccess = () => {
       if (!facilityOverviewAccessPromise) {
         facilityOverviewAccessPromise = facilityOverviewSubject
-          ? resolveFacilityOverviewAccess(context.env.ROSTER_DB, { ...facilityOverviewSubject.record, role: facilityOverviewSubject.role })
+          ? resolveFacilityOverviewAccess(context.env.ROSTER_DB, { ...facilityOverviewSubject.record, role: facilityOverviewSubject.role }, {
+              materializedOnly: facilityAccessMaterialized,
+            })
           : Promise.resolve({ mode: "denied", isSms: false, workingToday: false, facilityKey: "", today: australianDateKey() });
       }
       return facilityOverviewAccessPromise;
@@ -599,6 +603,7 @@ export async function onRequestPost(context) {
       const resolvedClaims = sanitizeClaims(resolved.claims);
       const prepared = await prepareAccountResponse(null, resolved, {
         db: context.env.ROSTER_DB,
+        facilityAccessMaterialized,
         includeAvailableDoctors: resolved.role !== "creator" && resolved.role !== "owner" && !resolvedClaims.length,
       });
       return Response.json({
@@ -641,9 +646,10 @@ export async function onRequestPost(context) {
       // response (and a snapshot) here can traverse a large roster twice and
       // exceed a Worker request's CPU budget before the calendar is shown.
       const prepared = responseMode === "fast"
-        ? await prepareFastLoginEnvelope(target, { db: context.env.ROSTER_DB })
+        ? await prepareFastLoginEnvelope(target, { db: context.env.ROSTER_DB, facilityAccessMaterialized })
         : await prepareAccountResponse(null, target, {
             db: context.env.ROSTER_DB,
+            facilityAccessMaterialized,
             includeAvailableDoctors: !targetClaims.length,
           });
       const snapshotPayload = responseMode === "fast"
@@ -700,6 +706,7 @@ export async function onRequestPost(context) {
       const targetClaims = sanitizeClaims(targetRecord.claims);
       const prepared = await prepareAccountResponse(null, targetRecord, {
         db: context.env.ROSTER_DB,
+        facilityAccessMaterialized,
         includeAvailableDoctors: (targetRecord.role || roleForEmail(targetRecord.email)) === "creator"
           || (targetRecord.role || roleForEmail(targetRecord.email)) === "owner"
           || !targetClaims.length,
@@ -758,7 +765,7 @@ export async function onRequestPost(context) {
       };
       await upsertAccountMirror(context.env.ROSTER_DB, updated);
       scheduleSnapshotWarmupForAccount(context, claimEmail, { reason: "claimRosterName" });
-      const prepared = await prepareAccountResponse(null, updated, { db: context.env.ROSTER_DB });
+      const prepared = await prepareAccountResponse(null, updated, { db: context.env.ROSTER_DB, facilityAccessMaterialized });
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -1094,7 +1101,7 @@ export async function onRequestPost(context) {
       };
       await upsertAccountMirror(context.env.ROSTER_DB, updated);
       scheduleSnapshotWarmupForAccount(context, saveEmail, { reason: "updateAccount" });
-      const prepared = await prepareAccountResponse(null, updated, { db: context.env.ROSTER_DB, includeAvailableDoctors: false });
+      const prepared = await prepareAccountResponse(null, updated, { db: context.env.ROSTER_DB, facilityAccessMaterialized, includeAvailableDoctors: false });
       return Response.json({
         ok: true,
         realName: prepared.realName,
@@ -1637,7 +1644,7 @@ export async function onRequestPost(context) {
         profileAccount && facilityOverviewEnabledForRecord({ ...profileAccount, role: profileRole }),
       );
       const facilityOverviewAccess = facilityOverviewEnabled
-        ? await resolveFacilityOverviewAccess(context.env.ROSTER_DB, { ...profileAccount, role: profileRole })
+        ? await resolveFacilityOverviewAccess(context.env.ROSTER_DB, { ...profileAccount, role: profileRole }, { materializedOnly: facilityAccessMaterialized })
         : { mode: "denied", isSms: false, workingToday: false, facilityKey: "", today: australianDateKey() };
       return Response.json({
         ok: true,
@@ -1794,7 +1801,7 @@ export async function onRequestPost(context) {
         return Response.json({ ok: false, unavailable: true, preferredFacility: null, facilities: [], catalogEvents: [] }, { status: 403 });
       }
       const access = await facilityOverviewAccess();
-      if (access.mode === "denied") return facilityOverviewAccessDeniedResponse();
+      if (access.mode === "denied") return facilityOverviewAccessDeniedResponse(access);
       const linkedSourceTypes = constrainFacilityOverviewSourceTypes(access, body?.sourceTypes || []);
       const today = australianDateKey();
       const term = facilityOverviewTermRange(today);
@@ -1842,7 +1849,7 @@ export async function onRequestPost(context) {
       }
       const access = await facilityOverviewAccess();
       if (access.mode === "denied" || (access.mode === "site" && uniqueSelections.some((selection) => selection.facilityKey !== access.facilityKey.toLowerCase()))) {
-        return facilityOverviewAccessDeniedResponse();
+        return facilityOverviewAccessDeniedResponse(access);
       }
       if (!/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) || !Number.isFinite(rangeDays) || rangeDays < 0 || rangeDays > 370 || rawSelections.length > 8 || !uniqueSelections.length || uniqueSelections.some((selection) => !FACILITY_OVERVIEW_STREAM_SENIORITIES.has(selection.seniority))) {
         return Response.json({ error: "Choose between 1 and 6 different streams and a valid date range of up to one year." }, { status: 400 });
@@ -1867,7 +1874,7 @@ export async function onRequestPost(context) {
       const requestedFacility = String(body?.facilityKey || "").trim().toUpperCase();
       const access = await facilityOverviewAccess();
       if (access.mode === "denied" || (access.mode === "site" && requestedFacility !== access.facilityKey)) {
-        return facilityOverviewAccessDeniedResponse();
+        return facilityOverviewAccessDeniedResponse(access);
       }
       const facilityKeys = requestedFacility === "ALL" ? ["mmc", "ddh", "casey", "mch", "vhh"] : sanitizeSourceTypes([requestedFacility]);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !facilityKeys.length) {
@@ -1903,7 +1910,7 @@ export async function onRequestPost(context) {
       const requestedFacility = String(body?.facilityKey || "").trim().toUpperCase();
       const access = await facilityOverviewAccess();
       if (access.mode === "denied" || (access.mode === "site" && requestedFacility !== access.facilityKey)) {
-        return facilityOverviewAccessDeniedResponse();
+        return facilityOverviewAccessDeniedResponse(access);
       }
       const facilityKeys = sanitizeSourceTypes([requestedFacility]);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || facilityKeys.length !== 1) {
@@ -1921,7 +1928,7 @@ export async function onRequestPost(context) {
       const doctorKey = normalizeRosterName(body?.doctorKey || "");
       const expectedRevision = Math.max(0, Number(body?.expectedRevision || 0));
       const access = await facilityOverviewAccess();
-      if (access.mode === "denied" || (access.mode === "site" && requestedFacility !== access.facilityKey)) return facilityOverviewAccessDeniedResponse();
+      if (access.mode === "denied" || (access.mode === "site" && requestedFacility !== access.facilityKey)) return facilityOverviewAccessDeniedResponse(access);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !sanitizeSourceTypes([requestedFacility]).length || !contactKey) {
         return Response.json({ error: "A current contact allocation is required." }, { status: 400 });
       }
@@ -1971,7 +1978,7 @@ export async function onRequestPost(context) {
       const facilityKey = body?.facilityKey === "all" ? "" : sanitizeSourceTypes([body?.facilityKey])[0] || "";
       const access = await facilityOverviewAccess();
       if (access.mode === "denied" || (access.mode === "site" && facilityKey !== access.facilityKey.toLowerCase())) {
-        return facilityOverviewAccessDeniedResponse();
+        return facilityOverviewAccessDeniedResponse(access);
       }
       if (!/^\d{4}-\d{2}-\d{2}$/.test(termStart) || !/^\d{4}-\d{2}-\d{2}$/.test(termEnd) || termEnd < termStart) {
         return Response.json({ error: "A valid term is required." }, { status: 400 });
@@ -1995,10 +2002,10 @@ export async function onRequestPost(context) {
         .map((key) => normalizeRosterName(key))
         .filter(Boolean))].slice(0, 40);
       const access = await facilityOverviewAccess();
-      if (access.mode === "denied") return facilityOverviewAccessDeniedResponse();
+      if (access.mode === "denied") return facilityOverviewAccessDeniedResponse(access);
       const requestedSourceTypes = sanitizeSourceTypes(body?.sourceTypes || []);
       if (access.mode === "site" && requestedSourceTypes.some((sourceType) => sourceType !== access.facilityKey.toLowerCase())) {
-        return facilityOverviewAccessDeniedResponse();
+        return facilityOverviewAccessDeniedResponse(access);
       }
       const sourceTypes = constrainFacilityOverviewSourceTypes(access, requestedSourceTypes);
       const start = new Date(`${startDate}T00:00:00Z`);
@@ -3072,7 +3079,13 @@ function facilityOverviewEnabledForRecord(record) {
   return record?.facilityOverviewEnabled === true || record?.directorViewEnabled === true;
 }
 
-function facilityOverviewAccessDeniedResponse() {
+function facilityOverviewAccessDeniedResponse(access = null) {
+  if (access?.preparing === true) {
+    return Response.json({ error: "At a glance access is being prepared.", unavailable: true, preparing: true }, {
+      status: 503,
+      headers: { "Retry-After": "60" },
+    });
+  }
   return Response.json({ error: "At a glance is not available for this site." }, { status: 403 });
 }
 
@@ -3107,6 +3120,13 @@ export async function resolveFacilityOverviewAccess(db, record, options = {}) {
   const claims = sanitizeClaims(record?.claims);
   if (!claims.length) return { mode: "denied", isSms: false, workingToday: false, facilityKey: "", today, lookupMs: Date.now() - startedAt };
   const term = facilityOverviewTermRange(today);
+  if (options.materializedOnly === true && !Array.isArray(options.events)) {
+    return resolveMaterializedFacilityOverviewAccess(db, record, claims, term, {
+      ...options,
+      today,
+      startedAt,
+    });
+  }
   const claimPairs = new Set(claims.map((claim) => `${claim.sourceType}|${normalizeRosterName(claim.key)}`));
   const accessEvents = Array.isArray(options.events)
     ? options.events
@@ -3153,6 +3173,119 @@ export async function resolveFacilityOverviewAccess(db, record, options = {}) {
     termEnd: term.endDate,
     lookupMs: Date.now() - startedAt,
   };
+}
+
+async function resolveMaterializedFacilityOverviewAccess(db, record, claims, term, options = {}) {
+  const today = options.today;
+  const startedAt = options.startedAt || Date.now();
+  const email = normalizeEmail(record?.email);
+  if (!db?.prepare || !email) return facilityAccessPreparing(today, startedAt);
+  const claimPairs = [...new Map(claims.map((claim) => {
+    const sourceType = sanitizeSourceTypes([claim.sourceType])[0] || "";
+    const doctorKey = normalizeRosterName(claim.key);
+    return [`${sourceType}|${doctorKey}`, { sourceType, doctorKey }];
+  })).values()].filter((claim) => claim.sourceType && claim.doctorKey);
+  if (!claimPairs.length) return facilityAccessPreparing(today, startedAt);
+  const subjectRevision = await sha256(JSON.stringify({
+    email,
+    enabled: facilityOverviewEnabledForRecord(record),
+    nonClinical: record?.nonClinical === true,
+    role: record?.role || roleForEmail(email),
+    claims: claimPairs.map((claim) => `${claim.sourceType}|${claim.doctorKey}`).sort(),
+  }));
+  const now = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
+  const nowIso = now.toISOString();
+  const cached = await db.prepare(`
+    SELECT access_json FROM facility_access_sessions
+    WHERE subject_email = ? AND access_date = ? AND subject_revision = ? AND expires_at > ?
+  `).bind(email, today, subjectRevision, nowIso).first();
+  if (cached?.access_json) {
+    try {
+      const access = JSON.parse(cached.access_json);
+      return { ...access, cache: "hit", lookupMs: Date.now() - startedAt };
+    } catch {}
+  }
+
+  const contributions = [];
+  const smsMemberships = [];
+  const todayPresence = [];
+  for (const claim of claimPairs) {
+    const [staffRows, smsRow, presenceRow] = await Promise.all([
+      db.prepare(`
+        SELECT c.source_type, c.doctor_key, c.seniority
+        FROM facility_term_staff_contributions c
+        INNER JOIN roster_files f ON f.id = c.file_id
+        WHERE f.active = 1 AND c.source_type = ? AND c.term_start = ? AND c.doctor_key = ?
+        LIMIT 4
+      `).bind(claim.sourceType, term.startDate, claim.doctorKey).all(),
+      db.prepare(`
+        SELECT source_type, doctor_key FROM facility_sms_memberships
+        WHERE source_type = ? AND doctor_key = ? LIMIT 1
+      `).bind(claim.sourceType, claim.doctorKey).first(),
+      db.prepare(`
+        SELECT source_type, doctor_key FROM roster_daily_presence
+        WHERE doctor_key = ? AND date = ? AND source_type = ? LIMIT 1
+      `).bind(claim.doctorKey, today, claim.sourceType).first(),
+    ]);
+    contributions.push(...(staffRows.results || []));
+    if (smsRow) smsMemberships.push(smsRow);
+    if (presenceRow) todayPresence.push(presenceRow);
+  }
+  const quarterHourMs = 15 * 60 * 1000;
+  const expiresAt = new Date(Math.floor(now.getTime() / quarterHourMs) * quarterHourMs + quarterHourMs).toISOString();
+  if (!contributions.length && !smsMemberships.length) {
+    const preparing = facilityAccessPreparing(today, startedAt);
+    await storeFacilityAccessSession(db, {
+      email, today, subjectRevision, access: preparing, expiresAt, updatedAt: nowIso,
+    });
+    return { ...preparing, cache: "refreshed", expiresAt };
+  }
+  const contributionSites = [...new Set(contributions.map((row) => String(row.source_type || "").toLowerCase()).filter(Boolean))];
+  const todaySites = [...new Set(todayPresence.map((row) => String(row.source_type || "").toLowerCase()).filter(Boolean))];
+  const isSms = smsMemberships.length > 0 || contributions.some((row) => String(row.seniority || "").toUpperCase() === "SMS");
+  const preferredSites = todaySites.length === 1 ? todaySites : contributionSites.length === 1 ? contributionSites : [];
+  const preferredFacilityKey = preferredSites.length === 1 ? preferredSites[0].toUpperCase() : "";
+  const facilityKey = !isSms && preferredSites.length === 1 ? preferredFacilityKey : "";
+  const access = {
+    mode: isSms ? "all" : facilityKey ? "site" : "denied",
+    isSms,
+    workingToday: todayPresence.length > 0,
+    facilityKey,
+    preferredFacilityKey,
+    today,
+    termStart: term.startDate,
+    termEnd: term.endDate,
+  };
+  await storeFacilityAccessSession(db, {
+    email, today, subjectRevision, access, expiresAt, updatedAt: nowIso,
+  });
+  return { ...access, cache: "refreshed", expiresAt, lookupMs: Date.now() - startedAt };
+}
+
+async function storeFacilityAccessSession(db, { email, today, subjectRevision, access, expiresAt, updatedAt }) {
+  const storedAccess = { ...access };
+  delete storedAccess.lookupMs;
+  delete storedAccess.cache;
+  delete storedAccess.expiresAt;
+  const accessJson = JSON.stringify(storedAccess);
+  await db.prepare(`
+    INSERT INTO facility_access_sessions (subject_email, access_date, subject_revision, access_json, expires_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(subject_email) DO UPDATE SET
+      access_date = excluded.access_date,
+      subject_revision = excluded.subject_revision,
+      access_json = excluded.access_json,
+      expires_at = excluded.expires_at,
+      updated_at = excluded.updated_at
+    WHERE facility_access_sessions.access_date <> excluded.access_date
+       OR facility_access_sessions.subject_revision <> excluded.subject_revision
+       OR facility_access_sessions.access_json <> excluded.access_json
+       OR facility_access_sessions.expires_at <> excluded.expires_at
+  `).bind(email, today, subjectRevision, accessJson, expiresAt, updatedAt).run();
+}
+
+function facilityAccessPreparing(today, startedAt) {
+  return { mode: "denied", isSms: false, workingToday: false, facilityKey: "", preferredFacilityKey: "", today, preparing: true, lookupMs: Date.now() - startedAt };
 }
 
 function directorViewEnabledForRecord(record) {
@@ -3240,7 +3373,7 @@ async function prepareLightweightAccountResponse(rawRecord, options = {}) {
     };
   }
   const defaultDoctorKey = canonicalDefaultDoctorKeyForAccount({ role, claims, state });
-  const facilityOverviewAccess = await resolveFacilityOverviewAccess(options.db, { ...record, role });
+  const facilityOverviewAccess = await resolveFacilityOverviewAccess(options.db, { ...record, role }, { materializedOnly: options.facilityAccessMaterialized === true });
   return {
     role,
     realName: record.realName || "",
@@ -3268,7 +3401,7 @@ async function prepareFastLoginEnvelope(rawRecord, options = {}) {
     imports: [],
   });
   const defaultDoctorKey = canonicalDefaultDoctorKeyForAccount({ role, claims, state });
-  const facilityOverviewAccess = await resolveFacilityOverviewAccess(options.db, { ...record, role });
+  const facilityOverviewAccess = await resolveFacilityOverviewAccess(options.db, { ...record, role }, { materializedOnly: options.facilityAccessMaterialized === true });
   const lightweight = {
     role,
     realName: record.realName || "",
@@ -3420,7 +3553,7 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
   const snapshotAvailable = false;
   const snapshotStale = false;
   const issueConfig = await buildIssueConfig(store, record.email, options.db);
-  const facilityOverviewAccess = await resolveFacilityOverviewAccess(options.db, { ...record, role });
+  const facilityOverviewAccess = await resolveFacilityOverviewAccess(options.db, { ...record, role }, { materializedOnly: options.facilityAccessMaterialized === true });
 
   return {
     role,
@@ -4065,6 +4198,7 @@ function scheduleSnapshotWarmupForAccount(context, email, options = {}) {
     if (!record) return;
     const prepared = await prepareAccountResponse(null, record, {
       db: context.env.ROSTER_DB,
+      facilityAccessMaterialized: String(context.env.FACILITY_ACCESS_MATERIALIZATION_ENABLED || "").toLowerCase() === "true",
       includeAvailableDoctors: false,
     });
     const requestedRange = defaultSnapshotRange();
@@ -4162,6 +4296,7 @@ function scheduleSnapshotWarmupForSourceTypes(context, sourceTypes = [], options
       if (!record) continue;
       const prepared = await prepareAccountResponse(null, record, {
         db: context.env.ROSTER_DB,
+        facilityAccessMaterialized: String(context.env.FACILITY_ACCESS_MATERIALIZATION_ENABLED || "").toLowerCase() === "true",
         includeAvailableDoctors: false,
       });
       if (!accountWarmupAffectedBySourceTypes(prepared, changedSourceTypes)) continue;
