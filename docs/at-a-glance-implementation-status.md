@@ -48,6 +48,8 @@ Completed locally:
 - Added explicit provider staff ID columns previously supplied only by runtime
   schema repair.
 - Verified the migration from a completely fresh disposable local database.
+- Added compact coverage and term-staff repository reads with no fallback to
+  `roster_events`. They are not connected to live handlers yet.
 
 Still required for the Phase 1 gate:
 

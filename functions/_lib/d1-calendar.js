@@ -4094,6 +4094,58 @@ export async function queryFacilityOverviewRange(db, options = {}) {
   };
 }
 
+// Phase 1 read models. These are deliberately separate from the live
+// Facility Overview handlers until ingestion coverage and cost gates pass.
+// Neither query is permitted to fall back to roster_events on a cache miss.
+export async function queryMaterializedFacilityCoverage(db, options = {}) {
+  if (!db?.prepare) return [];
+  const sourceTypes = sanitizeSourceTypes(options.sourceTypes || [options.sourceType || options.facilityKey]);
+  if (!sourceTypes.length) return [];
+  const rows = await db.prepare(`
+    SELECT c.file_id, c.source_type, c.coverage_start, c.coverage_end,
+      c.content_revision, c.staff_digest, c.daily_digest, c.updated_at
+    FROM roster_file_coverage AS c
+    INNER JOIN roster_files AS f ON f.id = c.file_id
+    WHERE f.active = 1
+      AND c.source_type IN (${sourceTypes.map(() => "?").join(", ")})
+    ORDER BY c.source_type, c.coverage_start, c.file_id
+  `).bind(...sourceTypes).all();
+  return (rows.results || []).map((row) => ({
+    fileId: String(row.file_id || ""), sourceType: normalizeSourceType(row.source_type),
+    startDate: datePart(row.coverage_start), endDate: datePart(row.coverage_end),
+    contentRevision: String(row.content_revision || ""), staffDigest: String(row.staff_digest || ""),
+    dailyDigest: String(row.daily_digest || ""), updatedAt: String(row.updated_at || ""),
+  }));
+}
+
+export async function queryMaterializedFacilityTermStaff(db, options = {}) {
+  if (!db?.prepare) return [];
+  const sourceType = normalizeSourceType(options.sourceType || options.facilityKey);
+  const termStart = datePart(options.termStart);
+  if (!sourceType || !termStart) return [];
+  const rows = await db.prepare(`
+    SELECT s.doctor_key, MAX(s.display_name) AS display_name,
+      MAX(s.seniority) AS seniority, MAX(s.membership_source) AS membership_source,
+      MAX(s.provider_staff_id) AS provider_staff_id,
+      MIN(s.first_applicable_date) AS first_applicable_date,
+      MAX(s.last_applicable_date) AS last_applicable_date,
+      COUNT(*) AS contribution_count
+    FROM facility_term_staff_contributions AS s
+    INNER JOIN roster_files AS f ON f.id = s.file_id
+    WHERE f.active = 1 AND s.source_type = ? AND s.term_start = ?
+    GROUP BY s.doctor_key
+    ORDER BY display_name, s.doctor_key
+  `).bind(sourceType, termStart).all();
+  return (rows.results || []).map((row) => ({
+    doctorKey: String(row.doctor_key || ""), displayName: String(row.display_name || ""),
+    sourceType, seniority: String(row.seniority || ""),
+    membershipSource: String(row.membership_source || "roster"),
+    providerStaffId: String(row.provider_staff_id || ""),
+    firstApplicableDate: datePart(row.first_applicable_date), lastApplicableDate: datePart(row.last_applicable_date),
+    contributionCount: Number(row.contribution_count || 0),
+  }));
+}
+
 export async function queryFacilityOverviewStaff(db, options = {}) {
   if (!db?.prepare) return { members: [], events: [], coverage: [], designations: [] };
   await ensureCalendarSchema(db);
