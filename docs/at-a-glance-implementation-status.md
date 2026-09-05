@@ -9,7 +9,7 @@
 
 ## Phase 0: local safety harness and baseline
 
-Status: in progress.
+Status: gate passed locally.
 
 Completed locally:
 
@@ -19,6 +19,9 @@ Completed locally:
 - Verified reset, all migrations, idempotent synthetic seeding, Creator/user login, incorrect-password rejection and restart persistence using local Wrangler D1/R2 only.
 - Closed the paused `/api/automation/pending` gap before any D1 access and made queue listing read-only.
 - Revalidated the existing D1 emergency guards and facility-access regression tests.
+- Built a focused deterministic fixture with 5 files, 600 doctors and 109,200 events.
+- Recorded baseline query plans and separate future acceptance gates in `at-a-glance-phase-0-baseline.md`.
+- Completed the 50-visible-page capacity worksheet using a 12-hour day and 60-second refresh interval.
 
 Tests passed:
 
@@ -28,10 +31,8 @@ Tests passed:
 - `npm run test:d1-quota`
 - `npm run test:facility-access`
 - `npm run check`
+- `npm run test:database-costs`
+- Existing roster, Excel/FindMyShift, contact and queue correctness suites
 
-Still required for the Phase 0 gate:
-
-- Build the large deterministic synthetic fixture.
-- Capture query plans and reproducible read/write estimates for Staff, coverage, On shift, access and contacts.
-- Add broad-query regression gates and a whole-account capacity worksheet.
-- Record the external deployment/binding inventory at rollout time without enabling or mutating it.
+Deferred to the separately approved rollout: verify external deployment and
+binding inventory and compare these estimates with actual Cloudflare metrics.

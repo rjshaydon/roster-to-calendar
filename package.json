@@ -22,6 +22,7 @@
     "test:d1-quota": "node scripts/test-d1-quota-guard.mjs",
     "test:local-lifecycle": "node scripts/test-local-lifecycle.mjs",
     "test:local-isolation": "node scripts/test-local-isolation.mjs",
+    "test:database-costs": "node --no-warnings scripts/test-database-costs.mjs",
     "shadow:active": "node scripts/shadow-active-rosters.mjs"
   },
   "devDependencies": {
