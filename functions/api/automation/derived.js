@@ -10,7 +10,7 @@ import {
   upsertRosterSource,
 } from "../../_lib/d1-calendar.js";
 import { runAutomatedDerivedRosterSave } from "../state.js";
-import { automatedRosterWritesEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
+import { automatedRosterSourceEnabled, automatedRosterWritesEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
 
 export async function onRequestPost(context) {
   if (!hasValidAutomationToken(context.request, context.env.ROSTER_AUTOMATION_TOKEN)) {
@@ -24,6 +24,7 @@ export async function onRequestPost(context) {
     const runId = String(body?.runId || "").trim();
     const sourceId = String(body?.sourceId || body?.file?.sourceId || "").trim();
     const phase = String(body?.phase || "").toLowerCase();
+    if (phase !== "failed" && !automatedRosterSourceEnabled(context.env, sourceId)) return rosterWritePausedResponse();
     const source = automationSourceDefinition(sourceId);
     const run = await loadRosterSyncRun(context.env.ROSTER_DB, runId);
     if (!run || run.sourceId !== sourceId || run.fileId !== String(body?.file?.id || "")) {

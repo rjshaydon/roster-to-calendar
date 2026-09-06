@@ -7,6 +7,7 @@ import {
   normaliseContactListExtract,
 } from "../../../public/static/contact-allocations.js";
 import { publishFacilityContactExtract } from "../../_lib/facility-contact-cache.js";
+import { facilityBuildSources } from "../../_lib/facility-rollout.js";
 
 const MAX_BODY_BYTES = 512 * 1024;
 
@@ -59,7 +60,7 @@ export async function onRequestPost(context) {
     `).bind(sourceId).all();
     const matchingHash = existing.results.find((entry) => String(entry.content_hash || "") === contentHash);
     if (matchingHash?.id) {
-      if (String(context.env.FACILITY_SHARED_CONTACTS_BUILD_ENABLED || "").toLowerCase() === "true") {
+      if (contactPublicationEnabled(context.env, sourceId)) {
         await publishFacilityContactExtract(context.env.ROSTER_FILES, extract, {
           providerModifiedAt: extract.providerModifiedAt,
           receivedAt: String(matchingHash.received_at || ""),
@@ -96,7 +97,7 @@ export async function onRequestPost(context) {
       extract.providerModifiedAt, now,
     ).run();
 
-    if (String(context.env.FACILITY_SHARED_CONTACTS_BUILD_ENABLED || "").toLowerCase() === "true") {
+    if (contactPublicationEnabled(context.env, sourceId)) {
       await publishFacilityContactExtract(context.env.ROSTER_FILES, extract, {
         providerModifiedAt: extract.providerModifiedAt,
         receivedAt: now,
@@ -117,6 +118,12 @@ export async function onRequestPost(context) {
     console.error("Contact-list extract ingestion failed", error);
     return Response.json({ error: "Contact-list extract could not be stored." }, { status: 422 });
   }
+}
+
+function contactPublicationEnabled(env, sourceId) {
+  if (String(env.FACILITY_SHARED_CONTACTS_BUILD_ENABLED || "").toLowerCase() !== "true") return false;
+  const sources = sourceId === DDH_CONTACT_LIST_SOURCE_ID ? ["ddh"] : sourceId === "mmc-shift-allocations" ? ["mmc", "mch"] : [];
+  return facilityBuildSources(env, sources).length > 0;
 }
 
 export function automationSourceDate(value) {

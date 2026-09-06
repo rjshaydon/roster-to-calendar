@@ -4940,6 +4940,10 @@ async function postStateRaw(store, payload, db = null, options = {}) {
       ROSTER_DB: rosterDb,
       ROSTER_FILES: store?.r2 || new MemoryR2(),
       ROSTER_CACHE: store?.cacheR2 || store?.r2 || new MemoryR2(),
+      // This fixture intentionally exercises Creator-only maintenance actions.
+      // Production remains fail-closed unless this separate control is enabled.
+      ROSTER_AUTOMATION_WRITES_ENABLED: "true",
+      ROSTER_ADVANCED_MAINTENANCE_ENABLED: "true",
     },
   };
   if (options.captureWaitUntil === true) {

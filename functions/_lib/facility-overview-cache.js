@@ -1,5 +1,7 @@
 import {
   loadCachedSnapshot,
+  australianTermEndForStart,
+  australianTermStartForDate,
   queryFacilityStaffDesignations,
   queryFacilityStaffSeniorityOverrides,
   queryFacilityOverviewOnShift,
@@ -26,6 +28,42 @@ export function facilityMonthObjectKey(sourceType, month, revision) {
   return `facility-overview/v1/${safeSource(sourceType)}/months/${String(month).slice(0, 7)}/${revision}.json.gz`;
 }
 
+export async function initializeFacilityMaterialization(context, sourceTypeValue, options = {}) {
+  const sourceType = safeSource(sourceTypeValue);
+  const maximumDates = Math.max(1, Math.min(Number(options.maximumDates || 120), 120));
+  if (!sourceType || !context?.env?.ROSTER_DB?.prepare || !context?.env?.ROSTER_FILES?.put) return { ok: false, unavailable: true };
+  const requestedTerm = String(options.termStart || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(requestedTerm) || australianTermStartForDate(requestedTerm) !== requestedTerm) {
+    return { ok: false, reason: "valid-term-start-required", sourceType };
+  }
+  const metadata = await queryMaterializedFacilityMetadata(context.env.ROSTER_DB, { sourceType });
+  const dates = new Set();
+  for (const interval of metadata.coverage || []) {
+    let cursor = String(interval.startDate || "").slice(0, 10);
+    let end = String(interval.endDate || "").slice(0, 10);
+    cursor = cursor < requestedTerm ? requestedTerm : cursor;
+    const termEnd = australianTermEndForStart(requestedTerm);
+    end = end > termEnd ? termEnd : end;
+    while (cursor && end && cursor <= end && dates.size <= maximumDates) {
+      dates.add(cursor);
+      cursor = addDays(cursor, 1);
+    }
+  }
+  const plannedDates = [...dates].sort();
+  if (!plannedDates.length) return { ok: false, reason: "no-covered-dates", sourceType, termStart: requestedTerm };
+  if (plannedDates.length > maximumDates) return { ok: false, overBudget: true, sourceType, termStart: requestedTerm, plannedDates: plannedDates.length, maximumDates };
+  const estimate = {
+    indexedDayQueries: plannedDates.length,
+    maximumPublicationStateWrites: 4,
+    maximumR2Puts: plannedDates.length + new Set(plannedDates.map((date) => date.slice(0, 7))).size + 3,
+    broadRosterScans: 0,
+  };
+  if (options.dryRun !== false) return { ok: true, dryRun: true, sourceType, termStart: requestedTerm, plannedDates, estimate };
+  await publishFacilityStaffMetadata(context, [sourceType]);
+  const publication = await publishFacilityDays(context, sourceType, plannedDates);
+  return { ok: true, dryRun: false, sourceType, termStart: requestedTerm, plannedDates: plannedDates.length, estimate, publication };
+}
+
 export async function publishFacilityStaffMetadata(context, sourceTypes = []) {
   const db = context?.env?.ROSTER_DB;
   const r2 = context?.env?.ROSTER_FILES;
@@ -37,7 +75,7 @@ export async function publishFacilityStaffMetadata(context, sourceTypes = []) {
     const currentManifest = currentManifestObject.data;
     const terms = [];
     for (const term of metadata.terms || []) {
-      const termEnd = addDays(term.termStart, 90);
+      const termEnd = australianTermEndForStart(term.termStart);
       const members = (await queryMaterializedFacilityTermStaff(db, { sourceType, termStart: term.termStart, termEnd }))
         .map((member) => ({
           ...member,

@@ -4,6 +4,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import {
   deleteDerivedRosterFile,
+  australianTermEndForStart,
   queryMaterializedFacilityCoverage,
   queryMaterializedFacilityTermStaff,
   replaceDerivedRosterFile,
@@ -48,6 +49,8 @@ class LocalR2 {
 }
 
 const sqlite = new DatabaseSync(":memory:");
+assert.equal(australianTermEndForStart("2026-02-02"), "2026-05-03");
+assert.equal(australianTermEndForStart("2026-08-03"), "2026-11-01");
 for (const name of (await readdir(new URL("../migrations", import.meta.url))).filter((name) => name.endsWith(".sql")).sort()) {
   sqlite.exec(await readFile(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
 }
@@ -143,7 +146,7 @@ async function callSharedAction(body, options = {}) {
   db.sql = [];
   const response = await stateHandler({
     request: new Request("http://127.0.0.1/api/state", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "doctor@example.com", password, ...body }) }),
-    env: { ROSTER_DB: db, ROSTER_FILES: options.r2 || r2, FACILITY_ACCESS_MATERIALIZATION_ENABLED: "true", FACILITY_SHARED_METADATA_ENABLED: "true", FACILITY_SHARED_DAYS_ENABLED: "true" },
+    env: { ROSTER_DB: db, ROSTER_FILES: options.r2 || r2, FACILITY_ACCESS_MATERIALIZATION_ENABLED: "true", FACILITY_SHARED_METADATA_ENABLED: "true", FACILITY_SHARED_DAYS_ENABLED: "true", FACILITY_SHARED_READER_SOURCE_ALLOWLIST: "mmc", FACILITY_SHARED_READER_COHORT: "all" },
     waitUntil() {},
   });
   const payload = await response.json();
@@ -283,7 +286,7 @@ async function runCompleteRoute(runId, incomingFileId, events) {
         issuesByDoctor: {},
       }),
     }),
-    env: { ROSTER_DB: routeDb, ROSTER_AUTOMATION_TOKEN: token, ROSTER_AUTOMATION_WRITES_ENABLED: "true" },
+    env: { ROSTER_DB: routeDb, ROSTER_AUTOMATION_TOKEN: token, ROSTER_AUTOMATION_WRITES_ENABLED: "true", ROSTER_AUTOMATION_SOURCE_ALLOWLIST: "monash-adults" },
     waitUntil() {},
   });
   const payload = await response.json();

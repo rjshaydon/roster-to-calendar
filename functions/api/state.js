@@ -2,10 +2,11 @@ import { applyEventOverrides, customEventsToEvents, defaultSettings, filterCalen
 import { AUTOMATION_SOURCES } from "../_lib/automation-import.js";
 import { DDH_CONTACT_LIST_SOURCE_ID, MMC_CONTACT_LIST_SOURCE_ID, attachContactAllocations, contactAreaForSource, contactExtractHasExpired, contactOperationalDate, contactsAfterShiftChange, normaliseContactListExtract, shouldCarryPreviousNightContacts, shouldUseCurrentExtractForPreviousNight } from "../../public/static/contact-allocations.js";
 import { requestQueuedRosterProcessing } from "../_lib/automation-dispatch.js";
-import { rosterWritesExplicitlyPaused, rosterWritePausedResponse } from "../_lib/roster-automation-guard.js";
+import { advancedRosterMaintenanceEnabled, rosterWritesExplicitlyPaused, rosterWritePausedResponse } from "../_lib/roster-automation-guard.js";
 import { guardedFetch, localFeatureDisabledResponse } from "../_lib/outbound-network.js";
 import { loadPublishedFacilityDays, loadPublishedFacilityMetadata, loadPublishedFacilityRange, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata } from "../_lib/facility-overview-cache.js";
 import { loadPublishedFacilityContacts, publishFacilityContactResolutions } from "../_lib/facility-contact-cache.js";
+import { facilityBuildSources, facilitySharedReaderAllowed } from "../_lib/facility-rollout.js";
 import { extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentExceptions, findmyshiftLastModified, findmyshiftReportDiagnostics, findmyshiftShiftReport } from "../_lib/findmyshift.js";
 import {
   buildPreviewFromDerivedEvents,
@@ -78,6 +79,7 @@ import {
   replaceDerivedRosterFile,
   startDerivedRosterFileSave,
   appendDerivedRosterFileEvents,
+  australianTermEndForStart,
   activateDerivedRosterFile,
   promoteVerifiedStagedRosterFile,
   rebuildDailyPresenceForFile,
@@ -317,6 +319,12 @@ export async function onRequestPost(context) {
       }
       return facilityOverviewAccessPromise;
     };
+    const sharedReaderEnabledFor = (sources) => facilitySharedReaderAllowed(context.env, {
+      actorRole: account.role,
+      actorEmail: account.record?.email || email,
+      subjectEmail: facilityOverviewSubject?.record?.email || "",
+      sources,
+    });
     if (action === "testFindmyshiftConnection") {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
@@ -861,6 +869,7 @@ export async function onRequestPost(context) {
         return Response.json({ ok: false, unavailable: true });
       }
       if (rosterWritesExplicitlyPaused(context.env)) return rosterWritePausedResponse();
+      if (!advancedRosterMaintenanceEnabled(context.env)) return rosterWritePausedResponse();
       try {
         const syncResult = await syncRosterRepositoryToKeepFileIds(
           context,
@@ -1047,6 +1056,7 @@ export async function onRequestPost(context) {
         return Response.json({ ok: false, unavailable: true });
       }
       if (rosterWritesExplicitlyPaused(context.env)) return rosterWritePausedResponse();
+      if (!advancedRosterMaintenanceEnabled(context.env)) return rosterWritePausedResponse();
       const fileId = String(body?.fileId || "").trim();
       if (!fileId) {
         return Response.json({ error: "Roster file is required." }, { status: 400 });
@@ -1070,6 +1080,7 @@ export async function onRequestPost(context) {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
       if (rosterWritesExplicitlyPaused(context.env)) return rosterWritePausedResponse();
+      if (!advancedRosterMaintenanceEnabled(context.env)) return rosterWritePausedResponse();
       if (String(body?.confirmation || "") !== "REBUILD") {
         return Response.json({ error: "Advanced rebuild confirmation is required." }, { status: 400 });
       }
@@ -1714,6 +1725,7 @@ export async function onRequestPost(context) {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
       if (rosterWritesExplicitlyPaused(context.env)) return rosterWritePausedResponse();
+      if (!advancedRosterMaintenanceEnabled(context.env)) return rosterWritePausedResponse();
       const startedAt = Date.now();
       const limit = Math.max(1, Math.min(Number.parseInt(body?.limit ?? 10, 10) || 10, 25));
       const offset = Math.max(0, Number.parseInt(body?.offset ?? 0, 10) || 0);
@@ -1820,7 +1832,7 @@ export async function onRequestPost(context) {
       const term = facilityOverviewTermRange(today);
       const catalogSources = linkedSourceTypes.length ? linkedSourceTypes : ["mmc", "ddh", "casey", "mch", "vhh"];
       try {
-        if (sharedFacilityMetadataEnabled) {
+        if (sharedFacilityMetadataEnabled && sharedReaderEnabledFor(catalogSources)) {
           const published = await loadPublishedFacilityMetadata(context.env.ROSTER_FILES, catalogSources, today);
           if (published.preparing) return facilityOverviewPreparingResponse({ facilities: [], catalogEvents: [] });
           if (body?.cachedRevision && String(body.cachedRevision) === String(published.revision || "")) return Response.json({ ok: true, unchanged: true, revision: published.revision, accessExpiresAt: access.expiresAt || "" });
@@ -1876,7 +1888,7 @@ export async function onRequestPost(context) {
       const startedAt = Date.now();
       try {
         const sourceTypes = [...new Set(uniqueSelections.map((selection) => selection.facilityKey))];
-        if (sharedFacilityDaysEnabled) {
+        if (sharedFacilityDaysEnabled && sharedReaderEnabledFor(sourceTypes)) {
           const result = await loadPublishedFacilityRange(context.env.ROSTER_FILES, sourceTypes, startDate, endDate, australianDateKey(), { cachedRevision: body?.cachedRevision });
           if (result.preparing) return facilityOverviewPreparingResponse({ events: [], coverage: [] });
           if (result.unchanged) return Response.json({ ok: true, unchanged: true, revision: result.revision, startDate, endDate, selections: uniqueSelections, accessExpiresAt: access.expiresAt || "" });
@@ -1908,7 +1920,7 @@ export async function onRequestPost(context) {
       }
       const startedAt = Date.now();
       try {
-        if (sharedFacilityDaysEnabled) {
+        if (sharedFacilityDaysEnabled && sharedReaderEnabledFor(facilityKeys)) {
           const published = await loadPublishedFacilityDays(context.env.ROSTER_FILES, facilityKeys, date, australianDateKey());
           if (published.preparing) return facilityOverviewPreparingResponse({ events: [] });
           const events = published.rows.filter((row) => isFacilityOverviewWorkingEvent(row.event, {
@@ -1955,7 +1967,7 @@ export async function onRequestPost(context) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || facilityKeys.length !== 1) {
         return Response.json({ error: "A single ED and valid date are required." }, { status: 400 });
       }
-      const contactList = sharedFacilityContactsEnabled
+      const contactList = sharedFacilityContactsEnabled && sharedReaderEnabledFor(facilityKeys)
         ? await loadPublishedFacilityContacts(context.env.ROSTER_FILES, { date, facilityKeys })
         : await loadLiveContactListForOnShift(context, { date, facilityKeys });
       if (body?.contactRevision && String(body.contactRevision) === String(contactList.revision || "")) {
@@ -1976,7 +1988,7 @@ export async function onRequestPost(context) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !sanitizeSourceTypes([requestedFacility]).length || !contactKey) {
         return Response.json({ error: "A current contact allocation is required." }, { status: 400 });
       }
-      const contactList = sharedFacilityContactsEnabled
+      const contactList = sharedFacilityContactsEnabled && sharedReaderEnabledFor([requestedFacility])
         ? await loadPublishedFacilityContacts(context.env.ROSTER_FILES, { date, facilityKeys: [requestedFacility] })
         : await loadLiveContactListForOnShift(context, { date, facilityKeys: [requestedFacility] });
       const contact = (contactList.contacts || []).find((item) => String(item.contactKey || "") === contactKey);
@@ -2008,7 +2020,7 @@ export async function onRequestPost(context) {
           sourceType: requestedFacility.toLowerCase(), doctorKey, displayName: target?.displayName || "",
           expectedRevision, actorEmail: account.record?.email || email,
         });
-        if (String(context.env.FACILITY_SHARED_CONTACTS_BUILD_ENABLED || "").toLowerCase() === "true") {
+        if (String(context.env.FACILITY_SHARED_CONTACTS_BUILD_ENABLED || "").toLowerCase() === "true" && facilityBuildSources(context.env, [requestedFacility]).length) {
           const resolutions = await queryContactAllocationResolutions(context.env.ROSTER_DB, {
             sourceId: contactList.sourceId, sourceDate: contactList.sourceDate, includeInactive: true,
           });
@@ -2037,8 +2049,8 @@ export async function onRequestPost(context) {
         return Response.json({ error: "A valid term is required." }, { status: 400 });
       }
       try {
-        if (sharedFacilityMetadataEnabled) {
-          const sourceTypes = facilityKey ? [facilityKey] : ["mmc", "ddh", "casey", "mch", "vhh"];
+        const sourceTypes = facilityKey ? [facilityKey] : ["mmc", "ddh", "casey", "mch", "vhh"];
+        if (sharedFacilityMetadataEnabled && sharedReaderEnabledFor(sourceTypes)) {
           const published = await loadPublishedFacilityStaff(context.env.ROSTER_FILES, sourceTypes, termStart, australianDateKey());
           if (published.preparing) return facilityOverviewPreparingResponse({ members: [], events: [], coverage: [], designations: [], seniorityOverrides: [] });
           if (body?.cachedRevision && String(body.cachedRevision) === String(published.revision || "")) return Response.json({ ok: true, unchanged: true, revision: published.revision, accessExpiresAt: access.expiresAt || "" });
@@ -2076,8 +2088,8 @@ export async function onRequestPost(context) {
       }
       const startedAt = Date.now();
       try {
-        if (sharedFacilityDaysEnabled) {
-          const rangeSources = sourceTypes.length ? sourceTypes : ["mmc", "ddh", "casey", "mch", "vhh"];
+        const rangeSources = sourceTypes.length ? sourceTypes : ["mmc", "ddh", "casey", "mch", "vhh"];
+        if (sharedFacilityDaysEnabled && sharedReaderEnabledFor(rangeSources)) {
           const result = await loadPublishedFacilityRange(context.env.ROSTER_FILES, rangeSources, startDate, endDate, australianDateKey(), { cachedRevision: body?.cachedRevision });
           if (result.preparing) return facilityOverviewPreparingResponse({ events: [] });
           if (result.unchanged) return Response.json({ ok: true, unchanged: true, revision: result.revision, startDate, endDate, sourceTypes, accessExpiresAt: access.expiresAt || "" });
@@ -3395,11 +3407,11 @@ function facilityOverviewTermRange(today) {
   for (const candidateYear of [year - 1, year, year + 1]) {
     for (const monthIndex of [1, 4, 7, 10]) {
       const startDate = firstMondayDateKey(candidateYear, monthIndex);
-      candidates.push({ startDate, endDate: isoDateKey(addUtcDays(startDate, 90)) });
+      candidates.push({ startDate, endDate: australianTermEndForStart(startDate) });
     }
   }
   return candidates.find((term) => term.startDate <= today && term.endDate >= today)
-    || { startDate: firstMondayDateKey(year, 1), endDate: isoDateKey(addUtcDays(firstMondayDateKey(year, 1), 90)) };
+    || { startDate: firstMondayDateKey(year, 1), endDate: australianTermEndForStart(firstMondayDateKey(year, 1)) };
 }
 
 async function prepareLightweightAccountResponse(rawRecord, options = {}) {
@@ -4303,7 +4315,7 @@ function scheduleSnapshotWarmupForAccount(context, email, options = {}) {
 
 function scheduleFacilityStaffMetadataPublish(context, sourceTypes = []) {
   if (String(context?.env?.FACILITY_SHARED_METADATA_BUILD_ENABLED || "").toLowerCase() !== "true") return;
-  const sources = [...new Set(sourceTypes.map((source) => String(source || "").toLowerCase()).filter(Boolean))];
+  const sources = facilityBuildSources(context.env, sourceTypes);
   if (!sources.length) return;
   const publish = publishFacilityStaffMetadata(context, sources).catch((error) => {
     console.warn("Facility Staff/metadata publication failed", { sources, error: error?.message || String(error) });
@@ -4316,7 +4328,7 @@ function scheduleFacilityDayRepublish(context, sourceTypes = []) {
     scheduleFacilityStaffMetadataPublish(context, sourceTypes);
     return;
   }
-  const sources = [...new Set(sourceTypes.map((source) => String(source || "").toLowerCase()).filter(Boolean))];
+  const sources = facilityBuildSources(context.env, sourceTypes);
   if (!sources.length) return;
   const publish = (async () => {
     await publishFacilityStaffMetadata(context, sources);
@@ -5910,9 +5922,9 @@ async function runCoreDerivedRosterSave(context, job = {}) {
           .then(() => refreshFacilityOverviewMaterializationForFile(db, effectiveFileId))
           .then(() => reconcileFacilityStaffDesignationsForRosterFile(db, effectiveFileId))
           .then(() => String(context.env.FACILITY_SHARED_METADATA_BUILD_ENABLED || "").toLowerCase() === "true"
-            ? publishFacilityStaffMetadata(context, [String(filePayload.sourceType || "").toLowerCase()].filter(Boolean))
+            ? publishFacilityStaffMetadata(context, facilityBuildSources(context.env, [filePayload.sourceType]))
             : null)
-          .then(() => String(context.env.FACILITY_SHARED_DAYS_BUILD_ENABLED || "").toLowerCase() === "true" && result?.affectedDates?.length
+          .then(() => String(context.env.FACILITY_SHARED_DAYS_BUILD_ENABLED || "").toLowerCase() === "true" && result?.affectedDates?.length && facilityBuildSources(context.env, [filePayload.sourceType]).length
             ? publishFacilityDays(context, String(filePayload.sourceType || "").toLowerCase(), result.affectedDates)
             : null)
           .then(() => deferCanonicalDoctorRefresh(context, job.reason || "saveDerivedCalendarFile"))

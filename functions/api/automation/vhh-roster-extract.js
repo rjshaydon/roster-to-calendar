@@ -11,7 +11,7 @@ import {
   upsertRosterSource,
 } from "../../_lib/d1-calendar.js";
 import { normaliseVhhRosterExtract, VHH_ROSTER_SOURCE_ID } from "../../_lib/vhh-roster.js";
-import { automatedRosterWritesEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
+import { automatedRosterSourceEnabled, automatedRosterWritesEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
 import { localFeatureDisabledResponse } from "../../_lib/outbound-network.js";
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -23,6 +23,7 @@ export async function onRequestPost(context) {
   const localDisabled = localFeatureDisabledResponse(context.env, "VHH roster automation");
   if (localDisabled) return localDisabled;
   if (!automatedRosterWritesEnabled(context.env)) return rosterWritePausedResponse();
+  if (!automatedRosterSourceEnabled(context.env, VHH_ROSTER_SOURCE_ID)) return rosterWritePausedResponse();
   if (!hasCalendarDb(context.env) || !context.env.ROSTER_FILES?.put) return Response.json({ error: "Roster storage is unavailable." }, { status: 503 });
   try {
     const contentLength = Number(context.request.headers.get("content-length") || "0");

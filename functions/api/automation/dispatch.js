@@ -1,6 +1,6 @@
 import { hasCalendarDb } from "../../_lib/d1-calendar.js";
 import { recordRosterDispatchLifecycle, requestQueuedRosterProcessing } from "../../_lib/automation-dispatch.js";
-import { automatedRosterWritesEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
+import { automatedRosterQueueEnabled, automatedRosterWritesEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
 import { localFeatureDisabledResponse } from "../../_lib/outbound-network.js";
 
 export async function onRequestPost(context) {
@@ -10,6 +10,7 @@ export async function onRequestPost(context) {
   const localDisabled = localFeatureDisabledResponse(context.env, "Roster automation dispatch");
   if (localDisabled) return localDisabled;
   if (!automatedRosterWritesEnabled(context.env)) return rosterWritePausedResponse();
+  if (!automatedRosterQueueEnabled(context.env)) return rosterWritePausedResponse();
   if (!hasCalendarDb(context.env)) return Response.json({ error: "Roster database is unavailable." }, { status: 503 });
   try {
     const body = await context.request.json().catch(() => ({}));

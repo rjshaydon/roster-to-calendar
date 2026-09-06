@@ -387,3 +387,45 @@ Remaining:
 - Existing online data is intentionally not backfilled by this branch. No
   production reads, writes, migration, deployment, automation or flag change
   has occurred.
+
+## Phase 7A: controlled-rollout safeguards and worksheet
+
+Status: local Phase 7A gate passed. No remote action is authorised or has been
+performed.
+
+Completed locally:
+
+- Added an immediate shared-path emergency pause, separate build/read ED
+  allowlists and a Creator-only reader cohort. Creator impersonation is
+  excluded from that cohort.
+- Added independent fail-closed allowlists for automated roster sources, queue
+  activity and advanced maintenance. Missing settings cannot silently enable
+  these paths.
+- Guarded automated ingestion, extraction, dispatch/pending, contact
+  publication and Creator maintenance before their relevant D1 work.
+- Added a token-protected initial materialisation endpoint that dry-runs by
+  default, reports exact planned dates and cost ceilings, permits one ED at a
+  time and hard-caps a run at 120 dates.
+- Replaced the approximate 90-day term end with the next actual medical-term
+  boundary.
+- Added `at-a-glance-phase-7-rollout-package.md` with the exact inert settings,
+  migration order, one-ED/Creator canary, capacity assumptions, stop thresholds
+  and configuration-first rollback.
+
+Focused Phase 7A evidence:
+
+- `test:facility-rollout` verifies emergency pause, ED allowlists, Creator
+  cohort, impersonation exclusion, automation gates and zero D1 access when
+  materialisation is disabled.
+- `test:facility-materialization` verifies bounded incremental behaviour and
+  exact term ends.
+- Fixture, VHH automation, D1 quota, facility access, snapshot isolation,
+  shared contact and contact-allocation/sync checks pass.
+- `npm run check` passes.
+
+Next step:
+
+- Review and commit 7A locally. Push only when explicitly approved. Phase 7B
+  should start with an inert deployment and recorded production baseline; it
+  must follow the worksheet checkpoints rather than enabling all features at
+  once.

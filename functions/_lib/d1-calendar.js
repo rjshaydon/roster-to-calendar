@@ -4953,11 +4953,23 @@ export function australianTermStartForDate(value) {
     const start = new Date(Date.UTC(candidateYear, month, 1, 12, 0, 0));
     const day = start.getUTCDay();
     start.setUTCDate(start.getUTCDate() + (day === 0 ? 1 : day === 1 ? 0 : 8 - day));
-    const end = new Date(start);
-    end.setUTCDate(end.getUTCDate() + 91);
+    const end = new Date(`${australianTermEndForStart(start.toISOString().slice(0, 10))}T12:00:00Z`);
+    end.setUTCDate(end.getUTCDate() + 1);
     if (date >= start && date < end) return start.toISOString().slice(0, 10);
   }
   return "";
+}
+
+export function australianTermEndForStart(termStart) {
+  const start = new Date(`${datePart(termStart)}T12:00:00Z`);
+  if (Number.isNaN(start.getTime())) return "";
+  const month = start.getUTCMonth();
+  const nextMonth = month === 10 ? 1 : month + 3;
+  const nextYear = month === 10 ? start.getUTCFullYear() + 1 : start.getUTCFullYear();
+  const next = new Date(Date.UTC(nextYear, nextMonth, 1, 12));
+  next.setUTCDate(next.getUTCDate() + (next.getUTCDay() === 0 ? 1 : next.getUTCDay() === 1 ? 0 : 8 - next.getUTCDay()));
+  next.setUTCDate(next.getUTCDate() - 1);
+  return next.toISOString().slice(0, 10);
 }
 
 function parseEvent(value) {

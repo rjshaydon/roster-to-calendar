@@ -1,6 +1,6 @@
 import { automationSourceDefinition, sha256Hex } from "../../_lib/automation-import.js";
 import { requestQueuedRosterProcessing } from "../../_lib/automation-dispatch.js";
-import { automatedRosterWritesEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
+import { automatedRosterSourceEnabled, automatedRosterWritesEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
 import { localFeatureDisabledResponse } from "../../_lib/outbound-network.js";
 import {
   createRosterSyncRun,
@@ -26,6 +26,7 @@ export async function onRequestPost(context) {
   try {
     const upload = await readAutomationUpload(context.request);
     const sourceId = upload.sourceId;
+    if (!automatedRosterSourceEnabled(context.env, sourceId)) return rosterWritePausedResponse();
     const source = automationSourceDefinition(sourceId);
     const file = upload.file;
     const providerVersion = upload.providerVersion;
