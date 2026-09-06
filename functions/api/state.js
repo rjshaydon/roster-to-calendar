@@ -4,7 +4,7 @@ import { DDH_CONTACT_LIST_SOURCE_ID, MMC_CONTACT_LIST_SOURCE_ID, attachContactAl
 import { requestQueuedRosterProcessing } from "../_lib/automation-dispatch.js";
 import { rosterWritesExplicitlyPaused, rosterWritePausedResponse } from "../_lib/roster-automation-guard.js";
 import { guardedFetch, localFeatureDisabledResponse } from "../_lib/outbound-network.js";
-import { loadPublishedFacilityDays, loadPublishedFacilityMetadata, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata } from "../_lib/facility-overview-cache.js";
+import { loadPublishedFacilityDays, loadPublishedFacilityMetadata, loadPublishedFacilityRange, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata } from "../_lib/facility-overview-cache.js";
 import { loadPublishedFacilityContacts, publishFacilityContactResolutions } from "../_lib/facility-contact-cache.js";
 import { extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentExceptions, findmyshiftLastModified, findmyshiftReportDiagnostics, findmyshiftShiftReport } from "../_lib/findmyshift.js";
 import {
@@ -1823,7 +1823,8 @@ export async function onRequestPost(context) {
         if (sharedFacilityMetadataEnabled) {
           const published = await loadPublishedFacilityMetadata(context.env.ROSTER_FILES, catalogSources, today);
           if (published.preparing) return facilityOverviewPreparingResponse({ facilities: [], catalogEvents: [] });
-          return Response.json({ ok: true, today, termStart: term.startDate, termEnd: term.endDate, facilities: published.facilities, catalogEvents: published.catalogEvents });
+          if (body?.cachedRevision && String(body.cachedRevision) === String(published.revision || "")) return Response.json({ ok: true, unchanged: true, revision: published.revision, accessExpiresAt: access.expiresAt || "" });
+          return Response.json({ ok: true, today, termStart: term.startDate, termEnd: term.endDate, facilities: published.facilities, catalogEvents: published.catalogEvents, revision: published.revision, accessExpiresAt: access.expiresAt || "" });
         }
         const catalog = await queryFacilityOverviewCatalog(context.env.ROSTER_DB, { startDate: term.startDate, endDate: term.endDate, sourceTypes: catalogSources });
         return Response.json({
@@ -1875,6 +1876,13 @@ export async function onRequestPost(context) {
       const startedAt = Date.now();
       try {
         const sourceTypes = [...new Set(uniqueSelections.map((selection) => selection.facilityKey))];
+        if (sharedFacilityDaysEnabled) {
+          const result = await loadPublishedFacilityRange(context.env.ROSTER_FILES, sourceTypes, startDate, endDate, australianDateKey(), { cachedRevision: body?.cachedRevision });
+          if (result.preparing) return facilityOverviewPreparingResponse({ events: [], coverage: [] });
+          if (result.unchanged) return Response.json({ ok: true, unchanged: true, revision: result.revision, startDate, endDate, selections: uniqueSelections, accessExpiresAt: access.expiresAt || "" });
+          const events = result.events.filter((row) => isFacilityOverviewWorkingEvent(row.event, { facilityKey: row.sourceType, includeClinicalSupport: true }));
+          return Response.json({ ok: true, startDate, endDate, selections: uniqueSelections, events, coverage: result.coverage, revision: result.revision, accessExpiresAt: access.expiresAt || "", queryMs: Date.now() - startedAt });
+        }
         const result = await queryFacilityOverviewRange(context.env.ROSTER_DB, { startDate, endDate, sourceTypes });
         const events = (result.events || []).filter((row) => isFacilityOverviewWorkingEvent(row.event, { facilityKey: row.sourceType, includeClinicalSupport: true }));
         return Response.json({ ok: true, startDate, endDate, selections: uniqueSelections, events, coverage: result.coverage || [], queryMs: Date.now() - startedAt });
@@ -1910,7 +1918,8 @@ export async function onRequestPost(context) {
           const contactList = sharedFacilityContactsEnabled
             ? await loadPublishedFacilityContacts(context.env.ROSTER_FILES, { date, facilityKeys })
             : await loadLiveContactListForOnShift(context, { date, facilityKeys });
-          return Response.json({ ok: true, date, facilityKey: requestedFacility === "ALL" ? "ALL" : facilityKeys[0], events, contactList, queryMs: Date.now() - startedAt });
+          const rosterUnchanged = Boolean(body?.cachedRevision && String(body.cachedRevision) === String(published.revision || ""));
+          return Response.json({ ok: true, date, facilityKey: requestedFacility === "ALL" ? "ALL" : facilityKeys[0], events: rosterUnchanged ? undefined : events, rosterUnchanged, revision: published.revision, accessExpiresAt: access.expiresAt || "", contactList, queryMs: Date.now() - startedAt });
         }
         const [eventGroups, contactList] = await Promise.all([
           Promise.all(facilityKeys.map((facilityKey) => queryFacilityOverviewOnShift(context.env.ROSTER_DB, { date, facilityKey }))),
@@ -2032,7 +2041,8 @@ export async function onRequestPost(context) {
           const sourceTypes = facilityKey ? [facilityKey] : ["mmc", "ddh", "casey", "mch", "vhh"];
           const published = await loadPublishedFacilityStaff(context.env.ROSTER_FILES, sourceTypes, termStart, australianDateKey());
           if (published.preparing) return facilityOverviewPreparingResponse({ members: [], events: [], coverage: [], designations: [], seniorityOverrides: [] });
-          return Response.json({ ok: true, termStart, termEnd, facilityKey: facilityKey || "all", ...published });
+          if (body?.cachedRevision && String(body.cachedRevision) === String(published.revision || "")) return Response.json({ ok: true, unchanged: true, revision: published.revision, accessExpiresAt: access.expiresAt || "" });
+          return Response.json({ ok: true, termStart, termEnd, facilityKey: facilityKey || "all", accessExpiresAt: access.expiresAt || "", ...published });
         }
         const result = await queryFacilityOverviewStaff(context.env.ROSTER_DB, { termStart, termEnd, facilityKey });
         return Response.json({ ok: true, termStart, termEnd, facilityKey: facilityKey || "all", ...result });
@@ -2066,6 +2076,15 @@ export async function onRequestPost(context) {
       }
       const startedAt = Date.now();
       try {
+        if (sharedFacilityDaysEnabled) {
+          const rangeSources = sourceTypes.length ? sourceTypes : ["mmc", "ddh", "casey", "mch", "vhh"];
+          const result = await loadPublishedFacilityRange(context.env.ROSTER_FILES, rangeSources, startDate, endDate, australianDateKey(), { cachedRevision: body?.cachedRevision });
+          if (result.preparing) return facilityOverviewPreparingResponse({ events: [] });
+          if (result.unchanged) return Response.json({ ok: true, unchanged: true, revision: result.revision, startDate, endDate, sourceTypes, accessExpiresAt: access.expiresAt || "" });
+          const wanted = new Set(doctorKeys);
+          const events = result.events.filter((row) => wanted.has(normalizeRosterName(row.doctorKey)) && isFacilityOverviewWorkingEvent(row.event));
+          return Response.json({ ok: true, startDate, endDate, sourceTypes, events, revision: result.revision, accessExpiresAt: access.expiresAt || "", queryMs: Date.now() - startedAt });
+        }
         const events = (await queryCoworkerEventsFromEvents(context.env.ROSTER_DB, { startDate, endDate, sourceTypes, doctorKeys }))
           .filter((row) => isFacilityOverviewWorkingEvent(row.event));
         return Response.json({ ok: true, startDate, endDate, sourceTypes, events, queryMs: Date.now() - startedAt });
@@ -3168,11 +3187,12 @@ export async function resolveFacilityOverviewAccess(db, record, options = {}) {
   const startedAt = Date.now();
   const role = record?.role || roleForEmail(normalizeEmail(record?.email));
   const today = String(options.today || australianDateKey()).slice(0, 10);
+  const accessExpiresAt = new Date(Math.floor(Date.now() / (15 * 60 * 1000)) * (15 * 60 * 1000) + (15 * 60 * 1000)).toISOString();
   if (!facilityOverviewEnabledForRecord({ ...record, role })) {
     return { mode: "denied", isSms: false, workingToday: false, facilityKey: "", today, lookupMs: Date.now() - startedAt };
   }
   if (role === "creator" || role === "owner" || record?.nonClinical === true) {
-    return { mode: "all", isSms: true, workingToday: false, facilityKey: "", today, lookupMs: Date.now() - startedAt };
+    return { mode: "all", isSms: true, workingToday: false, facilityKey: "", today, expiresAt: accessExpiresAt, lookupMs: Date.now() - startedAt };
   }
   const claims = sanitizeClaims(record?.claims);
   if (!claims.length) return { mode: "denied", isSms: false, workingToday: false, facilityKey: "", today, lookupMs: Date.now() - startedAt };
@@ -3253,13 +3273,13 @@ async function resolveMaterializedFacilityOverviewAccess(db, record, claims, ter
   const now = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
   const nowIso = now.toISOString();
   const cached = await db.prepare(`
-    SELECT access_json FROM facility_access_sessions
+    SELECT access_json, expires_at FROM facility_access_sessions
     WHERE subject_email = ? AND access_date = ? AND subject_revision = ? AND expires_at > ?
   `).bind(email, today, subjectRevision, nowIso).first();
   if (cached?.access_json) {
     try {
       const access = JSON.parse(cached.access_json);
-      return { ...access, cache: "hit", lookupMs: Date.now() - startedAt };
+      return { ...access, cache: "hit", expiresAt: String(cached.expires_at || ""), lookupMs: Date.now() - startedAt };
     } catch {}
   }
 

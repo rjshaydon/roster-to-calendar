@@ -22,6 +22,7 @@ import {
   sourceNames,
 } from "./roster.js";
 import { attachContactAllocations, contactExtractHasExpired, contactOperationalDate, contactStream } from "./contact-allocations.js";
+import { loadFacilitySnapshot, storeFacilitySnapshot } from "./facility-snapshot-cache.js";
 
 const form = document.querySelector("#roster-form");
 const appShell = document.querySelector("#appShell");
@@ -9128,7 +9129,27 @@ function sanitizeFacilityOverviewAccess(value) {
     facilityKey,
     preferredFacilityKey: String(value?.preferredFacilityKey || "").trim().toUpperCase(),
     today: String(value?.today || "").slice(0, 10),
+    expiresAt: String(value?.expiresAt || ""),
   };
+}
+
+function facilityOverviewSnapshotContext() {
+  const ownerKey = normalizeEmail(facilityOverviewTargetEmail() || currentUserEmail);
+  const scopeKey = `${currentFacilityOverviewAccess.mode}:${currentFacilityOverviewAccess.facilityKey || "ALL"}`;
+  return { ownerKey, scopeKey, accessExpiresAt: currentFacilityOverviewAccess.expiresAt || "" };
+}
+
+function loadFacilityOverviewSnapshot(kind, query) {
+  return loadFacilitySnapshot(facilityOverviewSnapshotContext(), kind, query).catch(() => null);
+}
+
+function storeFacilityOverviewSnapshot(kind, query, payload) {
+  return storeFacilitySnapshot(facilityOverviewSnapshotContext(), kind, query, payload).catch(() => false);
+}
+
+function refreshFacilityOverviewSnapshotAccess(data) {
+  const expiresAt = String(data?.accessExpiresAt || "");
+  if (Number.isFinite(Date.parse(expiresAt)) && Date.parse(expiresAt) > Date.now()) currentFacilityOverviewAccess.expiresAt = expiresAt;
 }
 
 function facilityOverviewIsSiteScoped() {
@@ -9304,6 +9325,12 @@ async function loadFacilityOverviewMetadata() {
   if (facilityOverviewState.byStreamMetadataPromise) return facilityOverviewState.byStreamMetadataPromise;
   facilityOverviewState.byStreamMetadataLoading = true;
   facilityOverviewState.byStreamMetadataPromise = (async () => {
+    const cacheQuery = { sourceTypes: normalizedDoctorSourceTypes(selectedDoctor()).sort(), term: formatDateKey(australianTermForDate(new Date()).start) };
+    const cached = await loadFacilityOverviewSnapshot("metadata", cacheQuery);
+    if (cached) {
+      facilityOverviewState.byStreamCoverage = cached.facilities || [];
+      facilityOverviewState.byStreamCatalog = facilityOverviewBuildStreamCatalog(cached.catalogEvents || []);
+    }
     const controller = beginFacilityOverviewDataRequest();
     try {
     const response = await fetch("/api/state", {
@@ -9315,17 +9342,24 @@ async function loadFacilityOverviewMetadata() {
         password: authUserPassword || currentUserPassword,
         targetEmail: facilityOverviewTargetEmail(),
         sourceTypes: normalizedDoctorSourceTypes(selectedDoctor()),
+        cachedRevision: cached?.revision || "",
       }),
     });
     const data = await readJsonResponse(response, "Could not load available streams.");
+    refreshFacilityOverviewSnapshotAccess(data);
+    if (data.unchanged === true && cached) {
+      facilityOverviewState.byStreamMetadataKey = metadataKey;
+      return cached;
+    }
     facilityOverviewState.byStreamCoverage = data?.facilities || [];
     facilityOverviewState.byStreamCatalog = facilityOverviewBuildStreamCatalog(data?.catalogEvents || []);
     facilityOverviewState.byStreamMetadataKey = metadataKey;
+    void storeFacilityOverviewSnapshot("metadata", cacheQuery, data);
     return data;
     } catch (error) {
       if (facilityOverviewRequestWasCancelled(error)) return null;
       console.warn("Could not load At a glance stream metadata", error);
-      return null;
+      return cached;
     } finally {
       finishFacilityOverviewDataRequest(controller);
       facilityOverviewState.byStreamMetadataLoading = false;
@@ -10052,6 +10086,14 @@ async function loadFacilityOverviewByStream() {
   facilityOverviewState.byStreamRequestId = requestId;
   facilityOverviewState.byStreamLoading = true;
   facilityOverviewState.byStreamContent = `<article class="issue-card"><p>Loading stream coverage…</p></article>`;
+  const cacheQuery = { startDate, endDate, selections: rows.map(({ facilityKey, streamKey, seniority }) => ({ facilityKey, streamKey, seniority })) };
+  const cached = await loadFacilityOverviewSnapshot("by-stream", cacheQuery);
+  if (cached) {
+    facilityOverviewState.byStreamData = cached;
+    facilityOverviewState.byStreamCoverage = cached.coverage || [];
+    facilityOverviewMergeStreamCatalog(facilityOverviewBuildStreamCatalog(cached.events || []));
+    facilityOverviewState.byStreamContent = `<p class="facility-overview-by-stream-summary">Showing the last saved roster while checking for updates.</p>${facilityOverviewByStreamContentFromData(cached)}`;
+  }
   renderFacilityOverview();
   const controller = beginFacilityOverviewDataRequest();
   try {
@@ -10061,19 +10103,25 @@ async function loadFacilityOverviewByStream() {
       body: JSON.stringify({
         action: "queryFacilityOverviewByStream", email: authUserEmail || currentUserEmail, password: authUserPassword || currentUserPassword,
         targetEmail: facilityOverviewTargetEmail(),
-        startDate, endDate, selections: rows,
+        startDate, endDate, selections: rows, cachedRevision: cached?.revision || "",
       }),
     });
     const data = await readJsonResponse(response, "Could not load stream coverage.");
+    refreshFacilityOverviewSnapshotAccess(data);
     if (facilityOverviewState.byStreamRequestId !== requestId || facilityOverviewState.tab !== "by-stream") return;
+    if (data.unchanged === true && cached) {
+      facilityOverviewState.byStreamContent = facilityOverviewByStreamContentFromData(cached);
+      return;
+    }
     facilityOverviewState.byStreamData = data;
     facilityOverviewState.byStreamCoverage = data.coverage || [];
     facilityOverviewMergeStreamCatalog(facilityOverviewBuildStreamCatalog(data.events || []));
     facilityOverviewState.byStreamContent = facilityOverviewByStreamContentFromData(data);
+    void storeFacilityOverviewSnapshot("by-stream", cacheQuery, data);
   } catch (error) {
     if (facilityOverviewRequestWasCancelled(error)) return;
     if (facilityOverviewState.byStreamRequestId !== requestId) return;
-    facilityOverviewState.byStreamContent = `<article class="issue-card"><p>${escapeHtml(error.message || "Stream coverage is unavailable right now.")}</p></article>`;
+    if (!cached) facilityOverviewState.byStreamContent = `<article class="issue-card"><p>${escapeHtml(error.message || "Stream coverage is unavailable right now.")}</p></article>`;
   } finally {
     finishFacilityOverviewDataRequest(controller);
     if (facilityOverviewState.byStreamRequestId === requestId) {
@@ -10244,6 +10292,9 @@ async function loadFacilityOverviewTogether() {
   facilityOverviewState.requestId = requestId;
   facilityOverviewState.togetherHasSearched = true;
   facilityOverviewState.togetherContent = `<article class="issue-card"><p>${selectedDoctors.length === 1 ? "Finding rostered shifts…" : "Finding shared roster days…"}</p></article>`;
+  const cacheQuery = { startDate, endDate, doctorKeys: [...new Set(selectedDoctors.flatMap(facilityOverviewTogetherDoctorKeys))].sort(), sourceTypes: facilityOverviewState.togetherFacilityKey === "ALL" ? [] : [facilityOverviewState.togetherFacilityKey] };
+  const cached = await loadFacilityOverviewSnapshot("working-together", cacheQuery);
+  if (cached) facilityOverviewState.togetherContent = `<p class="facility-overview-by-stream-summary">Showing the last saved roster while checking for updates.</p>${renderFacilityOverviewTogetherResults(cached.events || [], selectedDoctors, { startDate, endDate })}`;
   renderFacilityOverview();
   const controller = beginFacilityOverviewDataRequest();
   try {
@@ -10258,17 +10309,24 @@ async function loadFacilityOverviewTogether() {
         targetEmail: facilityOverviewTargetEmail(),
         startDate,
         endDate,
-        doctorKeys: [...new Set(selectedDoctors.flatMap(facilityOverviewTogetherDoctorKeys))],
+        doctorKeys: cacheQuery.doctorKeys,
         sourceTypes: facilityOverviewState.togetherFacilityKey === "ALL" ? [] : [facilityOverviewState.togetherFacilityKey],
+        cachedRevision: cached?.revision || "",
       }),
     });
     const data = await readJsonResponse(response, "Could not search shared roster days.");
+    refreshFacilityOverviewSnapshotAccess(data);
     if (facilityOverviewState.requestId !== requestId || facilityOverviewState.tab !== "together") return;
+    if (data.unchanged === true && cached) {
+      facilityOverviewState.togetherContent = renderFacilityOverviewTogetherResults(cached.events || [], selectedDoctors, { startDate, endDate });
+      return;
+    }
     facilityOverviewState.togetherContent = renderFacilityOverviewTogetherResults(data.events || [], selectedDoctors, { startDate, endDate });
+    void storeFacilityOverviewSnapshot("working-together", cacheQuery, data);
   } catch (error) {
     if (facilityOverviewRequestWasCancelled(error)) return;
     if (facilityOverviewState.requestId !== requestId) return;
-    facilityOverviewState.togetherContent = `<article class="issue-card"><p>${escapeHtml(error.message || "Shared roster days are unavailable right now.")}</p></article>`;
+    if (!cached) facilityOverviewState.togetherContent = `<article class="issue-card"><p>${escapeHtml(error.message || "Shared roster days are unavailable right now.")}</p></article>`;
   } finally {
     finishFacilityOverviewDataRequest(controller);
   }
@@ -10436,6 +10494,12 @@ async function loadFacilityOverviewOnShift() {
   facilityOverviewState.onShiftData = null;
   facilityOverviewState.contactList = null;
   facilityOverviewState.content = `<article class="issue-card"><p>Loading rostered staff…</p></article>`;
+  const cacheQuery = { facilityKey: facilityOverviewState.facilityKey, date: facilityOverviewState.date, includeClinicalSupport: facilityOverviewState.includeClinicalSupport === true };
+  const cached = await loadFacilityOverviewSnapshot("on-shift", cacheQuery);
+  if (cached) {
+    facilityOverviewState.onShiftData = cached.events || [];
+    facilityOverviewState.content = `<p class="facility-overview-by-stream-summary">Showing the last saved roster while checking for updates.</p>${renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData)}`;
+  }
   renderFacilityOverview();
   const controller = beginFacilityOverviewDataRequest();
   try {
@@ -10451,17 +10515,20 @@ async function loadFacilityOverviewOnShift() {
         facilityKey: facilityOverviewState.facilityKey,
         date: facilityOverviewState.date,
         includeClinicalSupport: facilityOverviewState.includeClinicalSupport === true,
+        cachedRevision: cached?.revision || "",
       }),
     });
     const data = await readJsonResponse(response, "Could not load the ED overview.");
+    refreshFacilityOverviewSnapshotAccess(data);
     if (facilityOverviewState.requestId !== requestId || facilityOverviewState.tab !== "on-shift") return;
-    facilityOverviewState.onShiftData = data.events || [];
+    facilityOverviewState.onShiftData = data.rosterUnchanged === true && cached ? cached.events || [] : data.events || [];
     facilityOverviewState.contactList = data.contactList || null;
     facilityOverviewState.content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData);
+    void storeFacilityOverviewSnapshot("on-shift", cacheQuery, { events: facilityOverviewState.onShiftData, revision: data.revision || cached?.revision || "" });
   } catch (error) {
     if (facilityOverviewRequestWasCancelled(error)) return;
     if (facilityOverviewState.requestId !== requestId) return;
-    facilityOverviewState.content = `<article class="issue-card"><p>${escapeHtml(error.message || "The ED overview is unavailable right now.")}</p></article>`;
+    if (!cached) facilityOverviewState.content = `<article class="issue-card"><p>${escapeHtml(error.message || "The ED overview is unavailable right now.")}</p></article>`;
   } finally {
     finishFacilityOverviewDataRequest(controller);
   }
@@ -10973,6 +11040,13 @@ async function loadFacilityOverviewStaff() {
   const requestId = facilityOverviewState.requestId + 1;
   facilityOverviewState.requestId = requestId;
   facilityOverviewState.staffContent = `<article class="issue-card"><p>Loading ED staff…</p></article>`;
+  const cacheQuery = { facilityKey: facilityOverviewState.facilityKey === "ALL" ? "all" : facilityOverviewState.facilityKey, termStart: facilityOverviewState.staffTermStart, termEnd: formatDateKey(addDays(term.end, -1)) };
+  const cached = await loadFacilityOverviewSnapshot("staff", cacheQuery);
+  if (cached) {
+    facilityOverviewState.staffTerms = facilityOverviewTermsFromCoverage(cached.coverage || []);
+    facilityOverviewState.staffData = cached;
+    facilityOverviewState.staffContent = `<p class="facility-overview-by-stream-summary">Showing the last saved staff list while checking for updates.</p>${renderFacilityOverviewStaffResults(cached, term)}`;
+  }
   renderFacilityOverview();
   const controller = beginFacilityOverviewDataRequest();
   try {
@@ -10983,18 +11057,25 @@ async function loadFacilityOverviewStaff() {
         action: "queryFacilityOverviewStaff", email: authUserEmail || currentUserEmail, password: authUserPassword || currentUserPassword,
         targetEmail: facilityOverviewTargetEmail(),
         facilityKey: facilityOverviewState.facilityKey === "ALL" ? "all" : facilityOverviewState.facilityKey,
-        termStart: facilityOverviewState.staffTermStart, termEnd: formatDateKey(addDays(term.end, -1)),
+        termStart: cacheQuery.termStart, termEnd: cacheQuery.termEnd,
+        cachedRevision: cached?.revision || "",
       }),
     });
     const data = await readJsonResponse(response, "Could not load ED staff.");
+    refreshFacilityOverviewSnapshotAccess(data);
     if (facilityOverviewState.requestId !== requestId || facilityOverviewState.tab !== "staff") return;
+    if (data.unchanged === true && cached) {
+      facilityOverviewState.staffContent = renderFacilityOverviewStaffResults(cached, term);
+      return;
+    }
     facilityOverviewState.staffTerms = facilityOverviewTermsFromCoverage(data.coverage || []);
     facilityOverviewState.staffData = data;
     facilityOverviewState.staffContent = renderFacilityOverviewStaffResults(data, term);
+    void storeFacilityOverviewSnapshot("staff", cacheQuery, data);
   } catch (error) {
     if (facilityOverviewRequestWasCancelled(error)) return;
     if (facilityOverviewState.requestId !== requestId) return;
-    facilityOverviewState.staffContent = `<article class="issue-card"><p>${escapeHtml(error.message || "The ED staff list is unavailable right now.")}</p></article>`;
+    if (!cached) facilityOverviewState.staffContent = `<article class="issue-card"><p>${escapeHtml(error.message || "The ED staff list is unavailable right now.")}</p></article>`;
   } finally {
     finishFacilityOverviewDataRequest(controller);
   }

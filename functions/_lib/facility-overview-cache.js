@@ -22,6 +22,10 @@ export function facilityDayObjectKey(sourceType, date, revision) {
   return `facility-overview/v1/${safeSource(sourceType)}/days/${String(date).slice(0, 10)}/${revision}.json.gz`;
 }
 
+export function facilityMonthObjectKey(sourceType, month, revision) {
+  return `facility-overview/v1/${safeSource(sourceType)}/months/${String(month).slice(0, 7)}/${revision}.json.gz`;
+}
+
 export async function publishFacilityStaffMetadata(context, sourceTypes = []) {
   const db = context?.env?.ROSTER_DB;
   const r2 = context?.env?.ROSTER_FILES;
@@ -53,7 +57,7 @@ export async function publishFacilityStaffMetadata(context, sourceTypes = []) {
       }
       terms.push({ ...term, termEnd, staffKey, staffRevision });
     }
-    const stableManifest = { schemaVersion: SCHEMA_VERSION, sourceType, coverage: metadata.coverage, terms, days: currentManifest?.days || {} };
+    const stableManifest = { schemaVersion: SCHEMA_VERSION, sourceType, coverage: metadata.coverage, terms, days: currentManifest?.days || {}, months: currentManifest?.months || {} };
     const revision = await digest(stableManifest);
     if (currentManifest?.revision !== revision) {
       await putJsonGzip(
@@ -101,11 +105,12 @@ export async function publishFacilityDays(context, sourceTypeValue, dates = [], 
       last_error='', updated_at=excluded.updated_at`)
     .bind(sourceType, generation, operationId, baseRevision, leaseExpiresAt, nowIso).run();
   try {
-    const currentManifest = manifestObject.data || { schemaVersion: SCHEMA_VERSION, sourceType, coverage: [], terms: [], days: {} };
+    const currentManifest = manifestObject.data || { schemaVersion: SCHEMA_VERSION, sourceType, coverage: [], terms: [], days: {}, months: {} };
     const days = { ...(currentManifest.days || {}) };
     for (const date of affectedDates) {
       const rows = await queryFacilityOverviewOnShift(db, { facilityKey: sourceType, date, includeOverrides: false });
-      if (!rows.length) {
+      const covered = (currentManifest.coverage || []).some((entry) => entry.startDate <= date && entry.endDate >= date);
+      if (!rows.length && !covered) {
         delete days[date];
         continue;
       }
@@ -115,7 +120,25 @@ export async function publishFacilityDays(context, sourceTypeValue, dates = [], 
       if (days[date]?.revision !== revision) await putJsonGzip(r2, key, payload);
       days[date] = { key, revision };
     }
-    const stable = { schemaVersion: currentManifest.schemaVersion || SCHEMA_VERSION, sourceType, coverage: currentManifest.coverage || [], terms: currentManifest.terms || [], days };
+    const months = { ...(currentManifest.months || {}) };
+    for (const month of [...new Set(affectedDates.map((date) => date.slice(0, 7)))]) {
+      const monthRows = [];
+      const monthDates = Object.entries(days).filter(([date]) => date.startsWith(`${month}-`)).sort(([a], [b]) => a.localeCompare(b));
+      for (const [date, pointer] of monthDates) {
+        const day = await loadCachedSnapshot(r2, pointer.key);
+        if (day?.rows) monthRows.push(...day.rows);
+      }
+      if (!monthDates.length) {
+        delete months[month];
+        continue;
+      }
+      const payload = { schemaVersion: SCHEMA_VERSION, sourceType, month, dates: monthDates.map(([date]) => date), rows: monthRows };
+      const revision = await digest(payload);
+      const key = facilityMonthObjectKey(sourceType, month, revision);
+      if (months[month]?.revision !== revision) await putJsonGzip(r2, key, payload);
+      months[month] = { key, revision };
+    }
+    const stable = { schemaVersion: currentManifest.schemaVersion || SCHEMA_VERSION, sourceType, coverage: currentManifest.coverage || [], terms: currentManifest.terms || [], days, months };
     const candidateRevision = await digest(stable);
     if (candidateRevision === baseRevision) {
       await db.prepare("UPDATE facility_day_publications SET status = 'complete', candidate_revision = ?, lease_expires_at = '', last_error = '', updated_at = ? WHERE source_type = ? AND operation_id = ?")
@@ -143,9 +166,57 @@ export async function publishFacilityDays(context, sourceTypeValue, dates = [], 
   }
 }
 
+export async function loadPublishedFacilityRange(r2, sourceTypes, startDate, endDate, currentDate, options = {}) {
+  if (!r2?.get) return { preparing: true, events: [], coverage: [], revision: "" };
+  const start = new Date(`${startDate}T12:00:00Z`);
+  const end = new Date(`${endDate}T12:00:00Z`);
+  const rangeDays = Math.round((end.getTime() - start.getTime()) / 86400000);
+  if (!Number.isFinite(rangeDays) || rangeDays < 0 || rangeDays > 370) return { preparing: true, events: [], coverage: [], revision: "" };
+  const months = monthsInRange(startDate, endDate);
+  const selected = [];
+  for (const sourceType of [...new Set(sourceTypes.map(safeSource).filter(Boolean))]) {
+    const manifest = await loadCachedSnapshot(r2, facilityMetadataManifestKey(sourceType));
+    if (!manifest) continue;
+    const visibleTerms = (manifest.terms || []).filter((term) => term.visibleFrom <= currentDate && term.termEnd >= startDate && term.termStart <= endDate);
+    if (!visibleTerms.length) continue;
+    const monthPointers = months.map((month) => [month, manifest.months?.[month]]).filter(([, pointer]) => pointer?.key);
+    if (monthPointers.length) selected.push({ sourceType, manifest, visibleTerms, monthPointers });
+  }
+  if (!selected.length) return { preparing: true, events: [], coverage: [], revision: "" };
+  const revision = await digest(selected.flatMap(({ visibleTerms, monthPointers }) => [
+    ...visibleTerms.map((term) => term.staffRevision || ""),
+    ...monthPointers.map(([, pointer]) => pointer.revision || ""),
+  ]).sort());
+  if (options.cachedRevision && String(options.cachedRevision) === revision) return { preparing: false, unchanged: true, events: [], coverage: [], revision };
+  const events = [];
+  const coverage = [];
+  for (const { manifest, visibleTerms, monthPointers } of selected) {
+    const overrides = new Map();
+    for (const term of visibleTerms) {
+      const staff = term.staffKey ? await loadCachedSnapshot(r2, term.staffKey) : null;
+      for (const entry of staff?.seniorityOverrides || []) overrides.set(`${entry.sourceType}|${entry.doctorKey}`, entry);
+    }
+    for (const [, pointer] of monthPointers) {
+      const snapshot = await loadCachedSnapshot(r2, pointer.key);
+      if (!snapshot) continue;
+      for (const row of snapshot.rows || []) {
+        const date = String(row.event?.start || "").slice(0, 10);
+        if (date < startDate || date > endDate || !visibleTerms.some((term) => term.termStart <= date && term.termEnd >= date)) continue;
+        const override = overrides.get(`${row.sourceType}|${row.doctorKey}`);
+        events.push(override && !override.useRosterSeniority
+          ? { ...row, seniority: override.seniority, seniorityOverride: override, event: { ...row.event, seniority: override.seniority, facilitySeniorityOverride: true } }
+          : row);
+      }
+    }
+    coverage.push(...(manifest.coverage || []));
+  }
+  return { preparing: false, events, coverage, revision };
+}
+
 export async function loadPublishedFacilityDays(r2, sourceTypes, date, currentDate = date) {
   if (!r2?.get) return { preparing: true, rows: [] };
   const rows = [];
+  const revisions = [];
   let found = false;
   for (const sourceType of [...new Set(sourceTypes.map(safeSource).filter(Boolean))]) {
     const manifest = await loadCachedSnapshot(r2, facilityMetadataManifestKey(sourceType));
@@ -157,6 +228,7 @@ export async function loadPublishedFacilityDays(r2, sourceTypes, date, currentDa
     const term = (manifest.terms || []).find((entry) => entry.termStart === termStart && entry.visibleFrom <= currentDate);
     if (!term) continue;
     found = true;
+    revisions.push(pointer.revision || "", term.staffRevision || "");
     const staff = term?.staffKey ? await loadCachedSnapshot(r2, term.staffKey) : null;
     const overrides = new Map((staff?.seniorityOverrides || []).map((entry) => [`${entry.sourceType}|${entry.doctorKey}`, entry]));
     rows.push(...(day.rows || []).map((row) => {
@@ -166,7 +238,7 @@ export async function loadPublishedFacilityDays(r2, sourceTypes, date, currentDa
         : row;
     }));
   }
-  return { preparing: !found, rows };
+  return { preparing: !found, rows, revision: await digest(revisions.sort()) };
 }
 
 export async function loadPublishedFacilityMetadata(r2, sourceTypes, today) {
@@ -195,23 +267,28 @@ export async function loadPublishedFacilityMetadata(r2, sourceTypes, today) {
       }
     }
   }
-  return { preparing: false, facilities, catalogEvents };
+  return { preparing: false, facilities, catalogEvents, revision: await digest({ facilities, catalogEvents }) };
 }
 
 export async function loadPublishedFacilityStaff(r2, sourceTypes, termStart, today) {
   if (!r2?.get) return { preparing: true };
   const payloads = [];
+  const revisions = [];
   for (const sourceType of [...new Set(sourceTypes.map(safeSource).filter(Boolean))]) {
     const manifest = await loadCachedSnapshot(r2, facilityMetadataManifestKey(sourceType));
     if (!manifest) continue;
     const term = (manifest.terms || []).find((entry) => entry.termStart === termStart);
     if (!term || term.visibleFrom > today || !term.staffKey) continue;
     const staff = await loadCachedSnapshot(r2, term.staffKey);
-    if (staff) payloads.push(staff);
+    if (staff) {
+      payloads.push(staff);
+      revisions.push(term.staffRevision || "");
+    }
   }
   if (!payloads.length) return { preparing: true };
   return {
     preparing: false,
+    revision: await digest(revisions.sort()),
     members: payloads.flatMap((item) => item.members || []),
     events: payloads.flatMap((item) => item.events || []),
     coverage: payloads.flatMap((item) => item.coverage || []),
@@ -269,4 +346,15 @@ function termStartForDate(value) {
     }
   }
   return candidates.filter((candidate) => candidate <= value).sort().at(-1) || "";
+}
+
+function monthsInRange(startDate, endDate) {
+  const cursor = new Date(`${startDate.slice(0, 7)}-01T12:00:00Z`);
+  const endMonth = endDate.slice(0, 7);
+  const result = [];
+  while (cursor.toISOString().slice(0, 7) <= endMonth && result.length < 13) {
+    result.push(cursor.toISOString().slice(0, 7));
+    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+  }
+  return result;
 }

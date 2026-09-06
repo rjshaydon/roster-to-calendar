@@ -15,6 +15,7 @@
     "test:contact-allocations": "node scripts/test-contact-allocations.mjs",
     "test:contact-sync": "node scripts/test-contact-sync.mjs",
     "test:facility-contacts": "node scripts/test-facility-contact-cache.mjs",
+    "test:facility-snapshots": "node scripts/test-facility-snapshot-cache.mjs",
     "test:vhh-automation": "node scripts/test-vhh-automation.mjs",
     "test:queue-failure": "node scripts/test-roster-queue-failure.mjs",
     "test:contact-workbook": "node scripts/test-contact-list-workbook.mjs",

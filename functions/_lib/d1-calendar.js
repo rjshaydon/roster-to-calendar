@@ -859,11 +859,15 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
   const removedEventIds = [...storedEvents.keys()].filter((id) => !desiredEvents.has(id));
   const removedIssueIds = [...storedIssues.keys()].filter((id) => !desiredIssues.has(id));
   const changedDoctorKeys = new Set([...changedDoctors.map((doctor) => doctor.key), ...removedDoctorKeys]);
-  const affectedDates = [...new Set([
+  let affectedDates = [...new Set([
     ...changedEventRows.flatMap((row) => [String(row[5] || "").slice(0, 10), storedEventDates.get(row[0])]),
     ...removedEventIds.map((id) => storedEventDates.get(id)),
     ...storedEventsResult.results.filter((row) => changedDoctorKeys.has(String(row.doctor_key || ""))).map((row) => String(row.start_date || "").slice(0, 10)),
   ].filter(Boolean))].sort();
+  if (!storedFile && affectedDates.length) {
+    const completeInitialRange = isoDatesBetween(affectedDates[0], affectedDates.at(-1), 120);
+    if (completeInitialRange) affectedDates = completeInitialRange;
+  }
   const changedFactCount = changedDoctors.length + removedDoctorKeys.length + changedEventRows.length + removedEventIds.length + changedIssueRows.length + removedIssueIds.length;
   const maximumIncrementalFacts = Math.max(1, Math.min(Number(options.maximumIncrementalFacts || 250), 500));
   if (storedFile && changedFactCount > maximumIncrementalFacts) {
@@ -902,6 +906,18 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
   return { ok: true, unchanged: false, doctors: safeDoctors.length, events: eventRows.length, issues: issueRows.length, contentRevision,
     affectedDates,
     changes: { doctors: changedDoctors.length + removedDoctorKeys.length, events: changedEventRows.length + removedEventIds.length, issues: changedIssueRows.length + removedIssueIds.length, total: changedFactCount } };
+}
+
+function isoDatesBetween(startDate, endDate, maximum) {
+  const cursor = new Date(`${startDate}T12:00:00Z`);
+  const end = new Date(`${endDate}T12:00:00Z`);
+  if (!Number.isFinite(cursor.getTime()) || !Number.isFinite(end.getTime()) || cursor > end) return null;
+  const dates = [];
+  while (cursor <= end && dates.length <= maximum) {
+    dates.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return dates.length <= maximum ? dates : null;
 }
 
 export async function setDerivedRosterFileActive(db, fileId, active) {

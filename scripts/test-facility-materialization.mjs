@@ -10,7 +10,7 @@ import {
 } from "../functions/_lib/d1-calendar.js";
 import { onRequestPost as saveAutomatedDerivedRoster } from "../functions/api/automation/derived.js";
 import { onRequestPost as stateHandler } from "../functions/api/state.js";
-import { loadPublishedFacilityDays, loadPublishedFacilityMetadata, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata } from "../functions/_lib/facility-overview-cache.js";
+import { loadPublishedFacilityDays, loadPublishedFacilityMetadata, loadPublishedFacilityRange, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata } from "../functions/_lib/facility-overview-cache.js";
 
 class LocalD1 {
   constructor(sqlite) { this.sqlite = sqlite; this.rowsWritten = 0; this.sql = []; }
@@ -117,6 +117,14 @@ assert.equal(publishedDay.rows.length, 2);
 assert.equal((await loadPublishedFacilityDays(r2, ["mmc"], "2026-08-03", "2026-07-19")).preparing, true, "a known future day must remain unavailable 15 days before term start");
 assert.equal((await loadPublishedFacilityDays(r2, ["mmc"], "2026-08-03", "2026-07-20")).preparing, false, "a known future day must become available at the 14-day boundary");
 assert.equal(db.sql.length, 0, "shared day readers must perform zero D1 queries");
+const publishedRange = await loadPublishedFacilityRange(r2, ["mmc"], "2026-08-01", "2026-08-31", "2026-08-03");
+assert.equal(publishedRange.preparing, false);
+assert.equal(publishedRange.events.length, 2, "the monthly range snapshot must contain the same published day rows");
+assert.equal(db.sql.length, 0, "shared range readers must perform zero D1 queries");
+const rangeReadsBeforeRevalidation = r2.gets;
+const unchangedPublishedRange = await loadPublishedFacilityRange(r2, ["mmc"], "2026-08-01", "2026-08-31", "2026-08-03", { cachedRevision: publishedRange.revision });
+assert.equal(unchangedPublishedRange.unchanged, true);
+assert.equal(r2.gets - rangeReadsBeforeRevalidation, 1, "unchanged range revalidation must read only the ED manifest");
 const dayPutCount = r2.puts;
 const repeatedDayPublication = await publishFacilityDays({ env: { ROSTER_DB: db, ROSTER_FILES: r2 } }, "mmc", ["2026-08-03"]);
 assert.equal(repeatedDayPublication.unchanged, true);
@@ -149,6 +157,17 @@ const handlerStaff = await callSharedAction({ action: "queryFacilityOverviewStaf
 assert.equal(handlerStaff.members.length, 2);
 const handlerDay = await callSharedAction({ action: "queryFacilityOverviewOnShift", facilityKey: "mmc", date: "2026-08-03", includeClinicalSupport: true });
 assert.equal(handlerDay.events.length, 1, "On shift handler must filter the shared day object using existing working-shift rules");
+const unchangedHandlerDay = await callSharedAction({ action: "queryFacilityOverviewOnShift", facilityKey: "mmc", date: "2026-08-03", includeClinicalSupport: true, cachedRevision: handlerDay.revision });
+assert.equal(unchangedHandlerDay.rosterUnchanged, true, "an unchanged On shift revision must not retransmit roster events");
+assert.equal(unchangedHandlerDay.events, undefined);
+const handlerRange = await callSharedAction({ action: "queryFacilityOverviewByStream", startDate: "2026-08-01", endDate: "2026-08-31", selections: [{ id: "day", facilityKey: "mmc", streamKey: "day", seniority: "ALL" }] });
+assert.equal(handlerRange.events.length, 1, "By stream must use the shared monthly object and existing working-shift filtering");
+assert.equal(db.sql.some((sql) => /roster_events|roster_daily_presence/i.test(sql)), false, "By stream shared reads must not query roster history");
+assert.equal((await callSharedAction({ action: "queryFacilityOverviewByStream", startDate: "2026-08-01", endDate: "2026-08-31", selections: [{ id: "day", facilityKey: "mmc", streamKey: "day", seniority: "ALL" }], cachedRevision: handlerRange.revision })).unchanged, true);
+const handlerTogether = await callSharedAction({ action: "queryFacilityOverviewWorkingTogether", startDate: "2026-08-01", endDate: "2026-08-31", sourceTypes: ["mmc"], doctorKeys: ["PERMANENT SMS"] });
+assert.equal(handlerTogether.events.length, 1, "Working together must filter the shared monthly object by doctor");
+assert.equal(db.sql.some((sql) => /roster_events|roster_daily_presence/i.test(sql)), false, "Working together shared reads must not query roster history");
+assert.equal((await callSharedAction({ action: "queryFacilityOverviewWorkingTogether", startDate: "2026-08-01", endDate: "2026-08-31", sourceTypes: ["mmc"], doctorKeys: ["PERMANENT SMS"], cachedRevision: handlerTogether.revision })).unchanged, true);
 const missingHandlerDay = await callSharedAction(
   { action: "queryFacilityOverviewOnShift", facilityKey: "mmc", date: "2026-08-03", includeClinicalSupport: true },
   { r2: new LocalR2(), status: 503 },

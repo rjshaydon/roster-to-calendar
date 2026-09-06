@@ -336,3 +336,54 @@ Remaining before any online test:
 - Phase 6 browser persistence and range-view work, followed by a reviewed
   deployment/backfill package, remains outstanding. No production flag should
   be enabled yet.
+
+## Phase 6: browser persistence and range views
+
+Status: local Phase 6 gate passed. Phase 7 controlled rollout remains
+separately prohibited pending review and approval.
+
+Completed locally:
+
+- Day publication also derives one immutable content-addressed month object
+  for each affected ED/month. Updating one date rebuilds only its month; it
+  does not scan D1 or rebuild unrelated months.
+- By stream and Working together use the shared monthly objects when the Phase
+  4 reader is enabled. Their request paths perform no `roster_events` or
+  `roster_daily_presence` queries and retain the existing one-year UI limit.
+- A one-year request is bounded to at most 13 monthly objects per requested ED,
+  plus the small ED manifests and applicable Staff objects. Empty covered days
+  remain represented without requiring event rows.
+- Range and On shift responses carry content revisions. The browser sends its
+  saved revision and unchanged responses omit the roster payload.
+- Added schema-versioned IndexedDB storage for roster-only Metadata, Staff, On
+  shift, By stream and Working together snapshots. Contact details are never
+  persisted there.
+- Cache keys include the exact viewed account, authorised access scope, action
+  and canonical query. A record cannot be reused for another account, ED scope
+  or query.
+- Persisted data is rendered only while a current server-issued access expiry
+  remains valid. Access records retain the established maximum 15-minute
+  window. An expired or absent grant fails closed.
+- A valid saved roster can remain visible with a clear last-saved warning when
+  revalidation fails. Successful revalidation replaces the warning and stored
+  revision.
+
+Focused Phase 6 evidence:
+
+- Actual authenticated By stream and Working together handlers read shared
+  month snapshots with zero roster-history D1 queries.
+- Repeated matching revisions return `unchanged` without retransmitting roster
+  events; On shift can still refresh its non-persisted contact overlay.
+- Browser-cache tests reject another account, another ED scope and expired
+  authorisation, and fail closed when IndexedDB is unavailable.
+- Existing incremental ingestion, publication fencing/recovery, contact,
+  access, fixture, quota and local-isolation checks remain green.
+
+Remaining:
+
+- Phase 7 is operational rollout, not another automatic coding phase. Before
+  any push or online test, prepare and review exact migrations, flags, bounded
+  initial publication steps, expected D1/R2 costs and rollback checks.
+- Existing online data is intentionally not backfilled by this branch. No
+  production reads, writes, migration, deployment, automation or flag change
+  has occurred.
