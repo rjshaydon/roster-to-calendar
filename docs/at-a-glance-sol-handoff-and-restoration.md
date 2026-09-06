@@ -2,11 +2,15 @@
 
 ## Scope and reading order
 
-Prepared 5 September 2026 from local `aa9eed8`, emergency commits `cff238d` and `8d0cf60`, and accessible incident messages in **Review doctor identity UX plan** (`01a05fe0-8683-7732-b01d-667b5060fc1e`). The four newest turns returned no contents. Cloudflare, GitHub and Power Automate live settings have **not** been inspected in this review. “Confirmed” below means confirmed in repository code/history; the conversation's reported deployed state is historical evidence, not current verification.
+Prepared 5 September 2026 from local `aa9eed8`, emergency commits `cff238d` and `8d0cf60`, and accessible incident messages in **Review doctor identity UX plan** (`01a05fe0-8683-7732-b01d-667b5060fc1e`). Updated 6 September with the verified Phase 7 checkpoint and legacy-read incident. GitHub `main`, the rollout branch and Pages Production identify `0fab128`; migration `0024` is applied and `0025` through `0030` remain pending.
 
 Read [the implementation plan](./at-a-glance-d1-optimization-plan.md) first, then this document. The plan owns architecture, product rules and acceptance gates; this document owns implementation handoff and restoration tracking. Read source code rather than assuming old setup documents or another task's completion report describe the current checkout.
 
-The current request authorises planning only. Subsequent implementation should complete the local code and tests through plan Phases 0–6 and produce a concrete rollout package. Production changes remain subject to the plan's separate rollout approval. Nothing in this checklist calls for turning automation on now.
+The current request authorises planning only. Before any further migration or
+restoration, implement the separately approved
+[immediate D1 safety plan](./at-a-glance-immediate-d1-safety-plan.md). Production
+changes remain subject to separate rollout approval. Nothing in this checklist
+calls for turning automation on now.
 
 ## Instructions for Sol
 
@@ -19,6 +23,10 @@ The current request authorises planning only. Subsequent implementation should c
 7. Add end-to-end tests for the actual handler call chain, not just the new repository helper. Keep tests of paused behaviour and permanent schema safety. Extend the existing regression scripts with local large-fixture cost estimates, clock boundaries, failure injection and concurrency cases.
 8. At each phase, record changed files, tests run, measured/estimated costs, unresolved limitations and whether its gate passed. Add a concise implementation-status document rather than presenting partial work as complete. No feature toggle is a substitute for wiring every entry point correctly.
 9. Before rollout, deliver exact commit/deployment targets, migration/backfill cost and batches, source allowlist, queue reconciliation steps, before/after configuration, monitoring thresholds and a tested pause/rollback procedure. Fill in the restoration ledger below. A successful Pages deployment does not update the independent watchdog.
+10. Treat `FACILITY_LEGACY_READS_PAUSED=true` as permanent Production state.
+    No canary, unavailable-object, error or rollback path may invoke historical
+    At a glance SQL. An unavailable view is safer than exhausting the shared D1
+    quota.
 
 ## Product requirements already resolved
 
@@ -26,8 +34,16 @@ The current request authorises planning only. Subsequent implementation should c
 - DDH uses FindMyShift; MMC, MCH and VHH use Excel. Casey automatic SharePoint access is pending and is not a restoration prerequisite.
 - Pre-term drafts may change repeatedly. Make a whole term visible in At a glance from 14 Melbourne calendar days before its actual start. Prepare data beforehand if available; the clock boundary changes visibility without a rebuild or another import. Current and next terms coexist.
 - Later changes are normally swaps, sickness or emergency leave; do not reject legitimate larger corrections or lock “finalised” data.
-- Contact polling interval and likely simultaneous viewer-hours are still unanswered. The plan uses a provisional 60-second interval for capacity design, not an agreed clinical freshness promise. Do not restore ten-second polling by default.
-- Preserve current continuing-SMS rules. Offline access beyond valid authorisation and the proposed revocation/staleness bounds remain product decisions before those behaviours are enabled.
+- Refresh contact allocations every 60 seconds while an On shift page is
+  visible, immediately on reopening or manual refresh, and never poll a hidden
+  tab. Design for 50 simultaneously visible pages with hard request budgets.
+- SMS are continuing staff until a Creator removes them, including across LSL,
+  sabbatical or another temporary absence. Non-SMS membership is specific to
+  the hospital and medical term in whose roster they appear.
+- Do not permit offline access after authorisation expires. Permission
+  revocation may take no more than 15 minutes; remove expired contacts
+  immediately. A last valid roster snapshot may remain visible after refresh
+  failure only with a clear last-updated warning.
 
 ## Confirmed temporary shutdowns to restore selectively
 
@@ -36,6 +52,7 @@ The current request authorises planning only. Subsequent implementation should c
 | R1 | `wrangler.toml`: `ROSTER_AUTOMATION_WRITES_ENABLED = "false"`; added by `cff238d`, extended by `8d0cf60` | Automated ingress, derived saving, dispatch, DDH checks, VHH extraction; also manual roster actions listed below | After incremental-write and publication gates pass, set the effective **production Pages** value explicitly to `"true"` in the approved release. Retain the guard code. Before this, implement/test a source allowlist and separate maintenance permissions so the global switch cannot expose unconverted routes. Verify deployed version and effective setting, then one accepted changed import and one unchanged repeat. |
 | R2 | `wrangler.roster-watchdog.toml`: `ROSTER_AUTOMATION_ENABLED = "false"`; `worker/roster-queue-watchdog.js` returns before scheduling either request | Both queue recovery dispatch and DDH FindMyShift polling | Restore last, on the **separately deployed Worker**, after Pages/queue/provider gates pass. Set explicitly to `"true"`; verify its own version and `/health` reports `configured: true`, `paused: false`. Observe one scheduled cycle, both downstream results and bounded usage; health alone is insufficient. |
 | R3 | `rosterWritesExplicitlyPaused` checks in `functions/api/state.js`, introduced by `8d0cf60` | Creator/manual import, removal, reset and repair actions | Convert and test each route before it is exposed. Routine upload can resume with R1 plus route permissions; heavy rebuild/repair stays separately controlled and requires a scoped job budget. Do not remove pause checks to regain UI functionality. |
+| R4 | `FACILITY_LEGACY_READS_PAUSED`; deployed as `false` in `0fab128` | When true, all At a glance routes without an eligible shared publication fail closed before historical Staff, coverage, range, On shift or contact SQL | Set explicitly to `true` in Production and Preview through the immediate plan. Keep it true permanently. Add a code-level fail-closed default before shared rollout and prove missing/malformed configuration cannot restore fallback. |
 
 **Flag detail:** automatic writes require an explicit truthy setting, but the current manual pause helper blocks only the literal `"false"`. Deleting the variable can therefore leave automation paused while unblocking manual writes. Use explicit values and test missing/false/true behaviour; do not restore by removing the variable.
 
@@ -79,23 +96,43 @@ External flow status may require the user's tenant access at rollout time. Recor
 - Keep local network isolation, missing-configuration fail-closed behaviour, explicit migration policy, queue deduplication, pause controls and bounded retries. Local execution must never be “restored” to production connectivity.
 - Do not revive background identity auditing or deploy unfinished identity work as part of roster restoration. The conversation reports the audit was not running in production; no current production switch to restore was found. This is a separate workstream.
 - Do not restore the ten-second browser poller, full-year event scans, runtime broad Staff/coverage fallbacks or whole-roster rewrites.
+- Never restore Production legacy At a glance reads. Keep
+  `FACILITY_LEGACY_READS_PAUSED=true` through migration, canary, general rollout
+  and rollback. Shared data that is missing or disallowed returns `preparing`
+  or unavailable.
 - Casey automatic integration is new work, not an automation disabled by the incident. Manual Casey support should follow the tested manual-import path.
 
 ## Ordered restoration runbook — only after implementation and rollout approval
 
-1. **Capture state and budgets.** Record deployed Pages/Worker versions, effective flags and source settings, other account usage, external flow states and current UTC-day headroom. Keep incoming roster flows and the watchdog paused while preparing the release. Do not change a live external flow without the rollout's authorisation.
-2. **Deploy the tested code/schema with switches off.** Confirm the schema/no-DDL guard and zero-work automation pauses still hold. Verify new source/maintenance gates. Deploy compatible queue-runner code too, and record the exact ref used by dispatch; old in-flight GitHub jobs must not submit incompatible payloads to the new receiver.
-3. **Reconcile the backlog in declared batches.** Inspect retained input, queued/processing/failed runs, dispatch leases and external retries. Keep the newest valid source revision for each replacement scope, including separate current/next terms and non-overlapping files. Do not replay every missed revision or blindly empty the queue. Mark obsolete work with provenance; handle partial jobs via the new recovery protocol. Obtain a fresh extract where paused HTTP ingress never retained one. Bound cleanup writes as well as import writes.
-4. **Enable one source and run a controlled sample.** With the watchdog and external automatic triggers still off, enable R1 behind the tested source allowlist. If accepted ingress automatically dispatches GitHub, that is part of this controlled sample: do not also start duplicate runs. Process one current source version within budget, check roster/staff/contacts/access parity, and resend unchanged content to prove no event/presence rewrites or cache rebuild. Confirm edits do not break normal calendar feeds and account snapshots.
-5. **Restore ordinary manual actions.** Enable converted upload/save/removal routes after their individual tests. Keep advanced replace/reset/repair behind independent controls, existing confirmations and scoped job budgets. Do not run a maintenance job just to mark its button “restored”.
-6. **Restore external source flows one at a time.** Only if actually paused, resume the matching MMC/MCH/VHH flows after their canary and correct destination are verified. Include retry-queue handling. Bring DDH checks through a controlled unchanged/changed cycle. Monitor each source before expanding the allowlist; source order should favour the smallest representative import.
-7. **Verify or restore contacts separately.** Preserve working contact flows. For any actually paused flow, resume with current extracts, safe correction matching and expiry behaviour; do not replay expired contact history. Verify roster visibility timing never causes future contact assignments to be displayed as current.
-8. **Enable the independent watchdog last.** Set R2 to true in its own approved deployment, preserve the existing fifteen-minute cron, verify `/health`, then inspect a scheduled queue check and DDH check. An empty queue and unchanged DDH roster should not create imports or workflow storms.
-9. **Observe and close the ledger.** Apply the plan's seven-UTC-day observation gate including realistic changed/unchanged imports and contact cycles. Record actual read/write/request/object usage and publication lag. Mark restoration complete only for entries with evidence; explicitly list anything deliberately left paused and why.
+1. **Complete the immediate legacy-read stop.** Deploy and verify
+   `FACILITY_LEGACY_READS_PAUSED=true` without opening At a glance or touching
+   D1. Keep all shared switches and automation off. This is a prerequisite, not
+   part of the later canary.
+2. **Capture fresh state and budgets after 00:00 UTC.** Record deployed
+   Pages/Worker versions, effective flags and source settings, other account
+   usage, external flow states and authoritative current UTC-day headroom. Do
+   not use a rolling 24-hour figure as the quota-day counter. Keep incoming
+   roster flows and the watchdog paused while preparing the release.
+3. **Deploy the tested code/schema with switches off.** Confirm the schema/no-DDL guard and zero-work automation pauses still hold. Verify new source/maintenance gates. Apply pending migrations serially from `0025`; do not reapply `0024`. Deploy compatible queue-runner code too, and record the exact ref used by dispatch; old in-flight GitHub jobs must not submit incompatible payloads to the new receiver.
+4. **Reconcile the backlog in declared batches.** Inspect retained input, queued/processing/failed runs, dispatch leases and external retries. Keep the newest valid source revision for each replacement scope, including separate current/next terms and non-overlapping files. Do not replay every missed revision or blindly empty the queue. Mark obsolete work with provenance; handle partial jobs via the new recovery protocol. Obtain a fresh extract where paused HTTP ingress never retained one. Bound cleanup writes as well as import writes.
+5. **Enable one source and run a controlled sample.** With the watchdog and external automatic triggers still off, enable R1 behind the tested source allowlist. If accepted ingress automatically dispatches GitHub, that is part of this controlled sample: do not also start duplicate runs. Process one current source version within budget, check roster/staff/contacts/access parity, and resend unchanged content to prove no event/presence rewrites or cache rebuild. Confirm edits do not break normal calendar feeds and account snapshots.
+6. **Restore ordinary manual actions.** Enable converted upload/save/removal routes after their individual tests. Keep advanced replace/reset/repair behind independent controls, existing confirmations and scoped job budgets. Do not run a maintenance job just to mark its button “restored”.
+7. **Restore external source flows one at a time.** Only if actually paused, resume the matching MMC/MCH/VHH flows after their canary and correct destination are verified. Include retry-queue handling. Bring DDH checks through a controlled unchanged/changed cycle. Monitor each source before expanding the allowlist; source order should favour the smallest representative import.
+8. **Verify or restore contacts separately.** Preserve working contact flows. For any actually paused flow, resume with current extracts, safe correction matching and expiry behaviour; do not replay expired contact history. Verify roster visibility timing never causes future contact assignments to be displayed as current.
+9. **Enable the independent watchdog last.** Set R2 to true in its own approved deployment, preserve the existing fifteen-minute cron, verify `/health`, then inspect a scheduled queue check and DDH check. An empty queue and unchanged DDH roster should not create imports or workflow storms.
+10. **Observe and close the ledger.** Apply the plan's seven-UTC-day observation gate including realistic changed/unchanged imports and contact cycles. Record actual read/write/request/object usage and publication lag. Mark restoration complete only for entries with evidence; explicitly list anything deliberately left paused and why.
 
 ### If usage rises or a publication fails
 
-Pause R2 and the affected ingress/source controls; set R1 false as the broad emergency stop if necessary. Check running GitHub work and connector retries rather than assuming disabling future schedules stops in-flight requests. Workers already executing may finish a bounded batch: implementation must check pause state at safe checkpoints and preserve resumable state. Keep valid published snapshots and authentication available, subject to existing access freshness rules. Do not roll back to the expensive old reader or delete data to regain quota. Account for the time/usage needed to apply the stop itself.
+Confirm R4 remains true, pause R2 and the affected ingress/source controls, and
+set R1 false as the broad write stop if necessary. Check running GitHub work
+and connector retries rather than assuming disabling future schedules stops
+in-flight requests. Workers already executing may finish a bounded batch:
+implementation must check pause state at safe checkpoints and preserve
+resumable state. Keep valid published snapshots and authentication available,
+subject to existing access freshness rules. Do not roll back to the expensive
+old reader or delete data to regain quota. Account for the time/usage needed to
+apply the stop itself.
 
 ## Required handoff evidence and restoration ledger
 
@@ -111,6 +148,7 @@ Fill this in as rollout work actually happens; never pre-tick it from configurat
 | R2 independent watchdog | Pending | Pending | Pending | Paused in repository |
 | R3 routine manual actions | Pending | Pending | Pending | Globally paused in repository |
 | R3 advanced maintenance | Pending | Pending | Pending | Keep controlled; no automatic replay |
+| R4 legacy At a glance reads | Verified unsafe as `false` in `0fab128` | Immediate plan pending | 5.12m-read incident recorded | Must become and remain `true` before `0025` |
 | V1/V2 queue runner, pending/raw, backlog | Pending | Pending | Pending | Audit/fix before resume |
 | V3 MMC/MCH/VHH external flows, each recorded separately | Unknown | Pending if needed | Pending | Verify tenant state |
 | V4 DDH provider checks | Pending | Pending | Pending | Both gates required |

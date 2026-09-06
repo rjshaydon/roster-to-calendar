@@ -4,9 +4,20 @@
 
 This document is an implementation plan only. Writing it does not authorise a production deployment, a production D1 migration, a production backfill, or re-enabling roster automation.
 
-The production baseline for this plan is `main` at `aa9eed8` (`Stop runtime D1 schema migrations`). Runtime schema inspection and repair must remain absent from every request path. All schema changes described here must use explicit numbered migrations.
+The protected historical production base is `aa9eed8` (`Stop runtime D1 schema
+migrations`). As of 6 September 2026, GitHub `main`, the rollout branch and the
+active Pages Production deployment identify `0fab128`. Migration `0024` is
+applied; `0025` through `0030` remain pending. Runtime schema inspection and
+repair must remain absent from every request path. All schema changes described
+here must use explicit numbered migrations.
 
 Development and performance testing must use local D1, local R2 substitutes, and production-sized synthetic or safely exported fixtures. No test, benchmark, query-plan check, cache warm-up, or backfill may point at production Cloudflare resources.
+
+Before resuming Phase 7, complete the
+[immediate D1 safety plan](./at-a-glance-immediate-d1-safety-plan.md). Production
+legacy At a glance reads must be paused permanently. Until a hospital's shared
+objects are published and its shared reader is explicitly enabled, that view
+must return `preparing` or unavailable.
 
 ## Implementation handoff and restoration
 
@@ -67,6 +78,21 @@ The original plan records these production D1 insights (measurement window and q
 
 The browser also polls contact details every ten seconds while On shift is visible. Each poll currently repeats account authentication and can recalculate roster-derived access. This is not safe at multi-user scale even though each individual query is smaller than the Staff query.
 
+### Production confirmation — 6 September 2026
+
+The controlled rollout initially deployed the new system inert while
+`FACILITY_LEGACY_READS_PAUSED=false` still allowed compatibility fallback. A
+small Creator test across MMC, MCH, DDH and VHH raised Wrangler's rolling
+24-hour total from 143,110 to 5,260,178 rows read. Cloudflare's one-hour query
+insights attributed 3,440,682 reads to 11 legacy ED Staff membership queries,
+averaging 312,789 rows examined per execution. This is direct production
+evidence that the legacy compatibility route cannot be used even for a small
+canary.
+
+The immediate correction is fail-closed availability: disable legacy reads
+before further migration work. The migration ledger update for `0024` did not
+cause the spike.
+
 ### Current cache limitations
 
 - On shift has no persistent shared ED/date cache.
@@ -85,6 +111,9 @@ The browser also polls contact details every ten seconds while On shift is visib
 6. **Prefer R2 for shared read models.** D1 remains the relational source of truth; R2 and the browser serve repeated roster reads without spending D1 rows.
 7. **Use one schema for all EDs.** Do not create a database table per ED, department or user.
 8. **Measure rows, not just response time.** Every relevant test must record or simulate rows read and examine the query plan.
+9. **Fail closed in Production.** A missing switch, object, permission or
+   publication returns `preparing` or unavailable. Production never falls back
+   to historical At a glance SQL, including during canary or rollback.
 
 ## Target data model
 
@@ -421,6 +450,12 @@ Before rollout, fill in a capacity worksheet for ordinary days, peak imports, do
 
 Define a small shared operational control that can stop optional builds and expensive paths before D1 use. Existing environment pauses remain available as an emergency control; a browser flag or isolate-local circuit breaker is insufficient. At 50% actual usage or a forecast approaching the daily limit, investigate and pause optional work; at 70%, stop optional database reads/builds and retain shared published reads subject to valid authorisation. Monitor outside the hot D1 path, rate-limit ingress and cap repair retries. Metrics are delayed, so these thresholds supplement pre-budgeted batches and endpoint limits; they cannot guarantee protection from one unbounded query. Never fall back to broad SQL on quota/cache errors.
 
+`FACILITY_LEGACY_READS_PAUSED=true` is a permanent Production invariant, not a
+late-rollout switch. Add a code-level fail-closed default before enabling any
+shared reader so a missing or malformed variable cannot restore the legacy
+route. Retain a legacy implementation only for explicitly isolated local
+correctness comparison until it can be removed.
+
 `EXPLAIN QUERY PLAN`, mock call counts and returned-row counts are useful but do not prove Cloudflare billable row usage. Record local measurements as estimates, then validate actual `meta.rows_read`/`rows_written` during the separately approved, tightly bounded rollout. A SQL `LIMIT` alone does not bound rows scanned. Logging must not write one D1 telemetry row per request.
 
 ## Implementation phases and gates
@@ -494,15 +529,31 @@ Gate: reload, offline/stale handling, account switching and revision changes can
 
 Production rollout requires separate approval after all local gates pass.
 
-1. Review a costed migration/backfill and deployment plan against remaining UTC-day read/write budgets. Apply explicit migrations only; never runtime schema setup.
-2. Keep new read paths disabled initially.
-3. Populate materialisations from retained roster sources or the normal next ingestion, avoiding a broad production D1 backfill.
-4. Validate one ED and one term against existing results.
-5. Enable the new read path for the Creator only.
-6. Inspect D1/R2 metrics and correctness.
-7. Expand one ED at a time.
-8. Old expensive SQL must already be unreachable from every enabled shared endpoint. On failure, roll back to the previous published generation or disable the affected view; never restore the old Staff/coverage query as a fallback. Remove dead code after parity is proven.
-9. Restore automation only using the linked handoff runbook after bounded ingestion tests, source-specific gates, backlog reconciliation and approval. Restore the independent watchdog last; retain permanent quota fixes and separate maintenance controls.
+1. Complete the immediate D1 safety plan: deploy
+   `FACILITY_LEGACY_READS_PAUSED=true`, verify the effective setting without an
+   At a glance request and keep it true permanently.
+2. At the start of a fresh UTC quota day, review a costed migration/backfill and
+   deployment plan against current-day read/write budgets. A rolling 24-hour
+   figure is not the current-day quota counter. Apply explicit migrations only;
+   never runtime schema setup.
+3. Keep all shared builders/readers and automation disabled initially. Apply
+   the remaining migrations individually, starting with `0025`; `0024` is
+   already applied and must not be repeated.
+4. Populate materialisations from retained roster sources or the normal next ingestion, avoiding a broad production D1 backfill.
+5. Validate one ED and one term without exposing a reader that lacks published
+   objects.
+6. Enable the new read path for the Creator and that ED only. Every other At a
+   glance route remains unavailable, never legacy.
+7. Inspect D1/R2 metrics, query fingerprints and correctness. Any
+   `roster_events` or `roster_file_doctors` access from an At a glance request
+   fails the gate immediately.
+8. Expand one ED at a time only after its shared objects exist.
+9. Old expensive SQL must be unreachable from every Production endpoint,
+   including blocked, missing-object and error paths. On failure, roll back to
+   the previous published generation or disable the affected view; never
+   restore the old Staff/coverage query as a fallback. Remove dead code after
+   parity is proven.
+10. Restore automation only using the linked handoff runbook after bounded ingestion tests, source-specific gates, backlog reconciliation and approval. Restore the independent watchdog last; retain permanent quota fixes and separate maintenance controls.
 
 Any production backfill must declare its maximum expected rows read and written before execution, stop between bounded batches, and remain below the agreed capacity budget. Create small new tables first where feasible; a “migration only” index over a large table may itself consume substantial quota.
 

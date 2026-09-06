@@ -8,7 +8,9 @@ requires separate approval and must be performed serially.
 - Branch: `codex/at-a-glance-d1-optimization`
 - Protected production base: `aa9eed8`
 - Reviewed code commit: `20c4824`
-- Release candidate: to be recorded after this worksheet amendment is reviewed
+- Deployed release candidate: `0fab128`
+- GitHub `main` and the rollout branch identify `0fab128`.
+- Active Pages Production deployment: `42af062c-cbe8-4eb1-8912-d0ad7abef9df`.
 - Doctor identity work remains outside this rollout.
 - The 2026-09-06 Phase 7B preflight accessed production metadata and D1 only
   through read-only commands. It made no production changes and did not
@@ -18,11 +20,41 @@ Before deployment, record the exact release and production commits, migration
 ledger, effective settings, D1 daily usage and UTC reset time. Stop if any state
 differs from the reviewed record.
 
-Pushing the rollout branch caused the connected Pages project to create a
-Preview deployment automatically. The observed Preview identifies `20c4824`;
-Production remains `aa9eed8`. Do not exercise Preview endpoints during the
-production preflight, and do not treat the existence of Preview as authority to
-merge or deploy Production.
+The original branch push caused an automatic Preview deployment at `20c4824`.
+Gate 4 later fast-forwarded GitHub `main` and deployed Production at `0fab128`.
+Do not exercise Preview endpoints during a production preflight, and do not
+treat the existence of Preview as authority to merge or deploy Production.
+
+## Mandatory incident correction — 6 September 2026
+
+Read [the immediate D1 safety plan](./at-a-glance-immediate-d1-safety-plan.md)
+before any further rollout action. It supersedes every statement in this
+worksheet that permits temporary Production fallback to historical At a glance
+SQL.
+
+After migration `0024`, the Creator opened four hospitals' At a glance, On
+shift and ED Staff views. Wrangler's rolling 24-hour total rose from 143,110 to
+5,260,178 rows read. One-hour D1 insights attributed 3,440,682 reads to 11
+executions of the legacy ED Staff membership query, averaging 312,789 examined
+rows per execution. This proves that even a small compatibility canary is not
+safe.
+
+The cause was the deployed combination of an inactive shared rollout and
+`FACILITY_LEGACY_READS_PAUSED=false`. The shared emergency pause protected the
+new builders/readers; it did not stop the legacy fallback. Therefore:
+
+- deploy `FACILITY_LEGACY_READS_PAUSED=true` before `0025` or any further D1
+  work;
+- keep legacy reads paused for the remainder of the rollout and permanently
+  thereafter;
+- never test an ED until its shared objects exist and its exact shared route is
+  enabled; and
+- return `preparing` or unavailable when a shared object or permission is
+  missing. Never use historical SQL as a compatibility or rollback route.
+
+Migration `0024_contact_allocation_resolutions.sql` is applied and recorded as
+ledger row 24. Migrations `0025` through `0030` remain pending. Do not repeat
+`0024`.
 
 ## Verified Phase 7B preflight baseline
 
@@ -52,7 +84,9 @@ Read-only observations recorded on 2026-09-06:
 - Contact ingestion was still active under Production code and accounted for
   approximately 293 `contact_list_files` inserts and 303 retention deletes in
   the observed window. The inert release will pause this workload.
-- The migration ledger reports `0024` through `0030` as unapplied.
+- At this initial preflight checkpoint, the migration ledger reported `0024`
+  through `0030` as unapplied. The current state is recorded in the mandatory
+  incident correction above: `0024` applied, `0025` through `0030` pending.
 - The tables described by `0024` and `0025` already exist, consistent with the
   former runtime-schema path. The subsequent Gate 1 inspection confirmed that
   their columns, constraints and named indexes match the migration files.
@@ -85,7 +119,7 @@ the mutating step remains blocked.
 | --- | --- | --- |
 | Activate cohort routing | `FACILITY_SHARED_ROLLOUT_ACTIVE` | `false` |
 | Stop shared canary/builds | `FACILITY_SHARED_EMERGENCY_PAUSED` | `true` |
-| Stop historical reads | `FACILITY_LEGACY_READS_PAUSED` | `false` initially |
+| Stop historical reads | `FACILITY_LEGACY_READS_PAUSED` | `true` permanently |
 | ED build allowlist | `FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST` | empty |
 | ED reader allowlist | `FACILITY_SHARED_READER_SOURCE_ALLOWLIST` | empty |
 | Reader cohort | `FACILITY_SHARED_READER_COHORT` | empty |
@@ -105,8 +139,9 @@ the mutating step remains blocked.
 | External watchdog | `ROSTER_AUTOMATION_ENABLED` | `false` |
 
 Keep all access, metadata, day and contact shared build/reader settings false.
-Missing allowlists fail closed. Contact ingestion is not enabled by the roster
-automation switch.
+Missing allowlists fail closed. Keep legacy reads paused even during the
+Creator canary. Contact ingestion is not enabled by the roster automation
+switch.
 
 The table above is the required deployed state, not an assumption about the
 current Pages environment. Before merging, capture the effective Production
@@ -124,9 +159,10 @@ one contact source only through the separate guarded restoration gate below.
 
 ## Migrations
 
-The observed ledger lists `0024`, `0025`, `0026`, `0027`, `0028`, `0029` and
-`0030` as unapplied. Do not skip `0024`, and do not describe `0024` or `0025` as
-ordinary empty-table creation: their tables already exist outside the ledger.
+Migration `0024` was applied in isolation on 2026-09-06 and is recorded in the
+Production ledger. The pending ledger now lists `0025`, `0026`, `0027`, `0028`,
+`0029` and `0030`. Do not reapply `0024`, and do not describe `0025` as ordinary
+empty-table creation: its tables already exist outside the ledger.
 
 Before applying anything:
 
@@ -142,13 +178,15 @@ Before applying anything:
    the refreshed counts before approval.
 
 Gate 1 completed on 2026-09-06 with an exact schema match and every expected
-index already present. Therefore the expected application-table and index work
-for `0024` and `0025` is zero; each application should only need its D1
-migration-ledger update and Cloudflare's normal migration bookkeeping. Recheck
-the schema and ledger immediately before applying either migration.
+index already present. `0024` then completed with no change in reported
+database size or rolling usage at displayed precision. The expected
+application-table and index work for `0025` remains zero; it should only need
+its D1 migration-ledger update and Cloudflare's normal migration bookkeeping.
+Recheck the schema and ledger immediately before applying it.
 
-Only after that review may migrations be applied individually in this order:
-`0024`, `0025`, `0026`, `0027`, `0028`, `0029`, then `0030`. Re-read the ledger,
+Only after the immediate safety plan passes and the new UTC quota day is proven
+healthy may the remaining migrations be applied individually in this order:
+`0025`, `0026`, `0027`, `0028`, `0029`, then `0030`. Re-read the ledger,
 database size and authoritative UTC-day quota after each migration. Never batch
 migrations, and never retry an uncertain result without first checking whether
 it committed.
@@ -226,19 +264,18 @@ Each numbered mutation is a separate approval gate. Finish and record one gate
 before requesting the next.
 
 1. Reconcile the `0024`/`0025` schema and indexes using read-only inspection.
-   Review any required corrective migration locally before continuing.
+   Completed on 2026-09-06 with an exact match.
 2. Refresh the Git/Pages release identity, authoritative UTC-day D1 usage,
-   migration ledger and effective Production settings. Stop unless at least
-   50% of both row-read and row-write daily quotas remain.
+   migration ledger and effective Production settings. Completed before the
+   initial deployment with more than 50% headroom.
 3. Declare and locally verify every inert configuration value above for both
-   Production and Preview before the Production deployment. Because Pages
-   manages these text variables through `wrangler.toml`, their effective
-   Production values change with the reviewed deployment in gate 4, not through
-   a separate dashboard edit. This intentionally pauses contact ingestion.
-4. Deploy the exact reviewed release commit to Production. Do not bootstrap,
-   publish or open the At a glance canary. Verify the deployment commit and
-   effective settings immediately afterward.
-5. Apply `0024` through `0030` individually under the migration rules above,
+   Production and Preview. The initial configuration incorrectly permitted
+   legacy reads; the immediate D1 safety plan must correct that value to true.
+4. Deploy the exact reviewed release commit to Production. Initial deployment
+   `0fab128` completed, but its legacy-read value is unsafe. Complete the
+   separately approved configuration-only safety deployment before continuing.
+5. Migration `0024` completed in isolation. After the new UTC quota day begins,
+   apply `0025` through `0030` individually under the migration rules above,
    with all new activity paused and a quota/ledger check after every migration.
 6. Run a bounded smoke check proving ordinary login remains functional and all
    shared builders/readers remain inactive. Do not browse At a glance through
@@ -258,18 +295,20 @@ before requesting the next.
    unexplained growth.
 13. Bootstrap, publish and validate further EDs serially. Never allow an ED to
    read before its objects exist.
-14. Before cohort `all`, set `FACILITY_LEGACY_READS_PAUSED=true` and prove
-    shared, missing and disallowed routes cannot reach historical SQL.
+14. Before cohort `all`, re-prove that the already permanent
+    `FACILITY_LEGACY_READS_PAUSED=true` setting and the code-level fail-closed
+    default prevent shared, missing and disallowed routes from reaching
+    historical SQL. Do not change the setting during or after this proof.
 15. Restore one contact source with its exact source allowlist. Observe one
     changed extract and repeated unchanged refreshes; unchanged refreshes must
     write zero D1 rows and zero R2 objects. Pause again on any unexplained
     insertion or retention loop before adding another source.
 16. Restore roster sources separately. Restore queue/watchdog last.
 
-During the short Creator canary, accounts outside the cohort may retain the
-explicit legacy compatibility route. A canary request never falls back:
-missing or disallowed data returns `preparing` or unavailable. Remove legacy
-compatibility before broad rollout.
+During the short Creator canary, accounts outside the cohort receive
+`preparing` or unavailable. They must not retain a legacy compatibility route.
+A canary request also never falls back: missing or disallowed data returns
+`preparing` or unavailable.
 
 ## Capacity and acceptance
 
@@ -281,6 +320,8 @@ Local evidence uses the 109,200-event fixture and is not a Cloudflare bill.
 Production acceptance requires:
 
 - no `roster_events`/`roster_daily_presence` scan on shared or blocked reads;
+- no Production route to legacy At a glance SQL, including during canary,
+  missing-object, error and rollback states;
 - unchanged ingestion rewrites no roster or cache facts;
 - paused contact ingestion touches neither D1 nor R2;
 - bootstrap/publication remain within their reviewed ceilings;
@@ -294,8 +335,8 @@ on an unexplained spike.
 
 Rollback must not restore expensive SQL:
 
-1. Set `FACILITY_SHARED_EMERGENCY_PAUSED=true`.
-2. Set `FACILITY_LEGACY_READS_PAUSED=true` before disabling faulty shared
+1. Confirm `FACILITY_LEGACY_READS_PAUSED=true`; it must already be permanent.
+2. Set `FACILITY_SHARED_EMERGENCY_PAUSED=true` before disabling faulty shared
    readers. At a glance may temporarily be unavailable.
 3. Disable shared readers/builders and empty their allowlists/cohort.
 4. Disable roster/contact writes, queue, maintenance and watchdog.

@@ -4,8 +4,30 @@
 
 - Branch: `codex/at-a-glance-d1-optimization`
 - Protected production base: `aa9eed8`
-- Production deployment, remote D1/R2, external automations and provider services were not accessed or changed.
+- Current GitHub `main`, rollout branch and active Pages Production release:
+  `0fab128` (`42af062c-cbe8-4eb1-8912-d0ad7abef9df`).
+- Production D1 is `roster-converter-calendar`, UUID
+  `237d0d52-3a7c-4e02-8648-9f4dedbc1cb0`.
+- Migration `0024` is applied. Migrations `0025` through `0030` remain pending.
 - The separate `codex/durable-doctor-identity-aliases` branch remains untouched.
+
+## Production safety correction — 6 September 2026
+
+Status: immediate configuration plan written; implementation pending separate
+approval.
+
+The initial Phase 7 deployment kept all new shared builders/readers inert but
+left `FACILITY_LEGACY_READS_PAUSED=false`. A small Creator test across MMC, MCH,
+DDH and VHH therefore used the historical At a glance path. Wrangler's rolling
+24-hour rows-read total rose from 143,110 to 5,260,178. One-hour Cloudflare
+insights attributed 3,440,682 reads to 11 legacy ED Staff membership queries,
+averaging 312,789 examined rows per execution.
+
+The required immediate correction is documented in
+`at-a-glance-immediate-d1-safety-plan.md`: deploy the configuration-only legacy
+read pause without touching D1, then wait for a fresh UTC quota day. Production
+legacy reads must remain disabled permanently. A missing shared publication
+must return `preparing` or unavailable rather than historical SQL.
 
 ## Phase 0: local safety harness and baseline
 

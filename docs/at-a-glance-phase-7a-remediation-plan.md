@@ -1,5 +1,13 @@
 # Phase 7A remediation plan
 
+> **Superseded rollout assumption — 6 September 2026:** Production evidence
+> proved that even a short legacy compatibility canary is unsafe. Wherever this
+> completed remediation plan permits temporary legacy fallback, the
+> [immediate D1 safety plan](./at-a-glance-immediate-d1-safety-plan.md) and
+> [Phase 7 rollout package](./at-a-glance-phase-7-rollout-package.md) now take
+> precedence. Production legacy At a glance reads must remain paused throughout
+> migration, canary, general rollout and rollback.
+
 ## Purpose and current state
 
 This plan fixes the safety gaps found in the review of commit `26ae9da` before
@@ -37,8 +45,8 @@ a simple allowed/denied value:
 
 - `shared`: this actor, viewed account and every requested ED are inside the
   active cohort and source allowlist;
-- `legacy`: shared rollout is not active for this request and an explicit
-  temporary legacy-compatibility setting permits the old route; or
+- `legacy`: an explicitly isolated local comparison permits the old route;
+  this mode is never valid in Production or Preview; or
 - `blocked`: the request is part of an active shared rollout but cannot safely
   use the shared object, or legacy reads have been paused.
 
@@ -52,8 +60,8 @@ Do not recalculate slightly different eligibility rules inside each action.
 - A Creator's own view may enter the Creator cohort. A Creator-entered view of
   another account must use that subject's permitted route and must never gain
   Creator-canary treatment.
-- Accounts outside the canary retain their existing access calculation only
-  while the explicit legacy-compatibility control is enabled.
+- Accounts outside the canary receive `preparing` or unavailable; they never
+  retain a Production legacy compatibility route.
 - Enabling materialised access for a Creator must therefore have no effect on
   login, account preparation or At a glance access for other users.
 - A `shared` request with missing access facts returns `preparing`; it never
@@ -83,8 +91,9 @@ The emergency procedure must be capable of returning At a glance as
 temporarily unavailable. It must not require restoring the known expensive
 queries merely to produce a response.
 
-Temporary legacy compatibility is allowed only during the short canary and
-must have a named removal checkpoint. It is not the final rollback mechanism.
+Legacy compatibility is prohibited throughout the Production canary and every
+rollback. If retained temporarily for local parity tests, it requires an
+explicit isolated-local setting that cannot be enabled by Production defaults.
 
 ## Workstream 2: bounded compact-fact bootstrap
 
@@ -293,7 +302,7 @@ Phase 7B remains blocked until all of the following are recorded:
   only one ED/term;
 - contact ingestion is zero-work when paused;
 - the capacity worksheet includes bootstrap, publication, authentication,
-  legacy compatibility, contacts and rollback headroom;
+  blocked/unavailable routes, contacts and rollback headroom;
 - the rollout worksheet no longer recommends a step that globally changes
   access during a Creator-only canary; and
 - an independent focused review finds no high-severity rollout issue.
