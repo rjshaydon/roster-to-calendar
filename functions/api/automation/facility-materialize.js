@@ -1,10 +1,10 @@
 import { initializeFacilityMaterialization } from "../../_lib/facility-overview-cache.js";
 import { facilityBuildSources } from "../../_lib/facility-rollout.js";
-import { advancedRosterMaintenanceEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
+import { facilityMaterializationMaintenanceEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
 
 export async function onRequestPost(context) {
   if (!validToken(context.request, context.env.ROSTER_AUTOMATION_TOKEN)) return Response.json({ error: "Unauthorized." }, { status: 401 });
-  if (!advancedRosterMaintenanceEnabled(context.env)) return rosterWritePausedResponse();
+  if (!facilityMaterializationMaintenanceEnabled(context.env)) return rosterWritePausedResponse();
   const body = await context.request.json().catch(() => ({}));
   const sourceType = facilityBuildSources(context.env, [body?.sourceType])[0] || "";
   if (!sourceType) return rosterWritePausedResponse();

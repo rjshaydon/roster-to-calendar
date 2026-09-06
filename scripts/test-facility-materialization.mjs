@@ -7,9 +7,11 @@ import {
   australianTermEndForStart,
   queryMaterializedFacilityCoverage,
   queryMaterializedFacilityTermStaff,
+  refreshFacilityOverviewMaterializationForFile,
   replaceDerivedRosterFile,
   startDerivedRosterFileSave,
   appendDerivedRosterFileEvents,
+  FACILITY_BOOTSTRAP_EVENT_SQL,
 } from "../functions/_lib/d1-calendar.js";
 import { onRequestPost as saveAutomatedDerivedRoster } from "../functions/api/automation/derived.js";
 import { onRequestPost as bootstrapFacility } from "../functions/api/automation/facility-bootstrap.js";
@@ -60,6 +62,19 @@ for (const name of (await readdir(new URL("../migrations", import.meta.url))).fi
   sqlite.exec(await readFile(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
 }
 const db = new LocalD1(sqlite);
+const bootstrapEventPlan = sqlite.prepare(`EXPLAIN QUERY PLAN ${FACILITY_BOOTSTRAP_EVENT_SQL}`).all("fixture-mmc", 25001).map((row) => String(row.detail));
+assert.ok(bootstrapEventPlan.some((line) => /SEARCH roster_events USING INDEX idx_roster_events_file \(file_id=\?\)/.test(line)), "bootstrap must use the exact file index");
+assert.equal(bootstrapEventPlan.some((line) => /SCAN roster_events|TEMP B-TREE/i.test(line)), false, "bootstrap must not scan or sort roster history before applying its limit");
+const bootstrapStaffPlan = sqlite.prepare("EXPLAIN QUERY PLAN SELECT source_type, term_start, doctor_key, file_id, fact_digest FROM facility_term_staff_contributions WHERE file_id = ? LIMIT ?").all("fixture-mmc", 751).map((row) => String(row.detail));
+const bootstrapCatalogPlan = sqlite.prepare("EXPLAIN QUERY PLAN SELECT source_type, term_start, file_id, catalog_key, fact_digest FROM facility_stream_catalog_contributions WHERE file_id = ? LIMIT ?").all("fixture-mmc", 751).map((row) => String(row.detail));
+assert.ok(bootstrapStaffPlan.some((line) => /idx_facility_term_staff_file/.test(line)), "bootstrap Staff lookup must use its leading file index");
+assert.ok(bootstrapCatalogPlan.some((line) => /idx_facility_stream_catalog_file/.test(line)), "bootstrap catalogue lookup must use its leading file index");
+const publicationStaffPlan = sqlite.prepare("EXPLAIN QUERY PLAN SELECT * FROM facility_term_staff_contributions WHERE source_type = ? AND term_start = ? LIMIT ?").all("mmc", "2026-08-03", 24001).map((row) => String(row.detail));
+const publicationCatalogPlan = sqlite.prepare("EXPLAIN QUERY PLAN SELECT * FROM facility_stream_catalog_contributions WHERE source_type = ? AND term_start = ? LIMIT ?").all("mmc", "2026-08-03", 24001).map((row) => String(row.detail));
+const publicationFilesPlan = sqlite.prepare("EXPLAIN QUERY PLAN SELECT f.id FROM roster_files AS f INDEXED BY idx_roster_files_source_active WHERE f.source_type = ? AND f.active = 1 LIMIT ?").all("mmc", 33).map((row) => String(row.detail));
+assert.ok(publicationStaffPlan.some((line) => /idx_facility_term_staff_lookup/.test(line)), "publication Staff inputs must use the exact ED/term index");
+assert.ok(publicationCatalogPlan.some((line) => /idx_facility_stream_catalog_lookup/.test(line)), "publication catalogue inputs must use the exact ED/term index");
+assert.ok(publicationFilesPlan.some((line) => /idx_roster_files_source_active/.test(line)), "publication coverage must begin with the capped active-file index");
 const file = { id: "incremental-a", name: "Synthetic.xlsx", sourceType: "mmc", sourceId: "test", active: true, parserVersion: "test-v1" };
 const doctors = [
   { key: "PERMANENT SMS", displayName: "Permanent SMS", seniority: "SMS", membershipSource: "roster" },
@@ -92,7 +107,7 @@ assert.equal(contactR2.puts, contactPuts, "an unchanged allowed contact extract 
 async function callBootstrap(body) {
   const response = await bootstrapFacility({
     request: new Request("http://local/api/automation/facility-bootstrap", { method: "POST", headers: { authorization: "Bearer bootstrap-token", "content-type": "application/json" }, body: JSON.stringify(body) }),
-    env: { ROSTER_DB: db, ROSTER_AUTOMATION_TOKEN: "bootstrap-token", ROSTER_AUTOMATION_WRITES_ENABLED: "true", ROSTER_ADVANCED_MAINTENANCE_ENABLED: "true", FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST: "mmc" },
+    env: { ROSTER_DB: db, ROSTER_AUTOMATION_TOKEN: "bootstrap-token", ROSTER_ADVANCED_MAINTENANCE_ENABLED: "true", FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST: "mmc" },
   });
   return { response, payload: await response.json() };
 }
@@ -107,10 +122,25 @@ assert.equal(bootstrapPlan.payload.dryRun, true);
 const staleBootstrap = await callBootstrap({ sourceType: "mmc", fileId: legacyFile.id, maximumEventRows: 10, maximumWrites: 100, execute: true, planRevision: "stale" });
 assert.equal(staleBootstrap.response.status, 409);
 db.rowsWritten = 0;
+const writeLimitedBootstrap = await callBootstrap({ sourceType: "mmc", fileId: legacyFile.id, maximumEventRows: 10, maximumWrites: 1, execute: true, planRevision: bootstrapPlan.payload.planRevision });
+assert.equal(writeLimitedBootstrap.response.status, 409);
+assert.equal(writeLimitedBootstrap.payload.result.reason, "compact-write-limit");
+assert.equal(db.rowsWritten, 0, "a compact-write overage must stop before writes");
+db.rowsWritten = 0;
 const bootstrapExecution = await callBootstrap({ sourceType: "mmc", fileId: legacyFile.id, maximumEventRows: 10, maximumWrites: 100, execute: true, planRevision: bootstrapPlan.payload.planRevision });
 assert.equal(bootstrapExecution.response.status, 200);
 assert.equal(bootstrapExecution.payload.result.overBudget, undefined);
 assert.ok(db.rowsWritten <= 100);
+for (const [label, limits, reason] of [
+  ["doctor", { maximumDoctorRows: 1 }, "doctor-read-limit"],
+  ["existing Staff", { maximumExistingStaffRows: 1 }, "existing-staff-read-limit"],
+  ["existing catalogue", { maximumExistingCatalogRows: 1 }, "existing-catalog-read-limit"],
+]) {
+  db.rowsWritten = 0;
+  const bounded = await refreshFacilityOverviewMaterializationForFile(db, legacyFile.id, { sourceType: "mmc", maximumEventRows: 10, maximumWrites: 100, ...limits });
+  assert.equal(bounded.reason, reason, `${label} sentinel must reject the file`);
+  assert.equal(db.rowsWritten, 0, `${label} sentinel must stop before writes`);
+}
 db.rowsWritten = 0;
 const repeatedBootstrap = await callBootstrap({ sourceType: "mmc", fileId: legacyFile.id, maximumEventRows: 10, maximumWrites: 100, execute: true, planRevision: bootstrapExecution.payload.planRevision });
 assert.equal(repeatedBootstrap.payload.unchanged, true);
@@ -158,7 +188,7 @@ assert.equal(db.rowsWritten, 0, "an over-budget automatic revision must stop bef
 sqlite.prepare("INSERT INTO facility_term_visibility (source_type, term_start, visible_from, revision, updated_at) VALUES ('mmc', '2026-02-02', '2026-01-19', '', '')").run();
 const plannedR2 = new LocalR2();
 db.sql = [];
-const materializeEnv = { ROSTER_DB: db, ROSTER_FILES: plannedR2, ROSTER_AUTOMATION_TOKEN: "bootstrap-token", ROSTER_AUTOMATION_WRITES_ENABLED: "true", ROSTER_ADVANCED_MAINTENANCE_ENABLED: "true", FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST: "mmc" };
+const materializeEnv = { ROSTER_DB: db, ROSTER_FILES: plannedR2, ROSTER_AUTOMATION_TOKEN: "bootstrap-token", ROSTER_ADVANCED_MAINTENANCE_ENABLED: "true", FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST: "mmc" };
 const materializationPlanResponse = await materializeFacility({ request: new Request("http://local/api/automation/facility-materialize", { method: "POST", headers: { authorization: "Bearer bootstrap-token", "content-type": "application/json" }, body: JSON.stringify({ sourceType: "mmc", termStart: "2026-08-03" }) }), env: materializeEnv });
 const materializationPlan = await materializationPlanResponse.json();
 assert.equal(materializationPlan.dryRun, true);
@@ -174,7 +204,91 @@ assert.equal(materializationExecution.ok, true);
 assert.ok(plannedR2.puts - plannedPutsBefore <= materializationPlan.estimate.maximumR2Puts);
 assert.ok(plannedR2.gets - plannedGetsBefore <= materializationPlan.estimate.maximumR2Gets);
 assert.ok(db.sql.length <= materializationPlan.estimate.maximumD1ReadStatements + materializationPlan.estimate.maximumPublicationStateStatements);
-assert.equal(db.sql.filter((sql) => /FROM facility_term_staff_contributions/.test(sql)).length, 1, "one-term publication must not query Staff for historical terms");
+const plannedStaffQueries = db.sql.filter((sql) => /FROM facility_term_staff_contributions/.test(sql));
+assert.ok(plannedStaffQueries.length >= 1 && plannedStaffQueries.every((sql) => /(?:s\.)?term_start = \?/.test(sql)), "every planned Staff query must be constrained to the requested term");
+const plannedCatalogQueries = db.sql.filter((sql) => /FROM facility_stream_catalog_contributions/.test(sql));
+assert.ok(plannedCatalogQueries.length >= 1 && plannedCatalogQueries.every((sql) => /(?:c\.)?term_start = \?/.test(sql)), "every planned catalogue query must be constrained to the requested term");
+
+async function assertPublicationPlanInvalidated(label, mutate, restore) {
+  const dryRun = await initializeFacilityMaterialization({ env: { ROSTER_DB: db, ROSTER_FILES: plannedR2 } }, "mmc", { termStart: "2026-08-03" });
+  await mutate();
+  db.rowsWritten = 0;
+  const putsBefore = plannedR2.puts;
+  const result = await initializeFacilityMaterialization({ env: { ROSTER_DB: db, ROSTER_FILES: plannedR2 } }, "mmc", {
+    termStart: "2026-08-03", dryRun: false, planRevision: dryRun.planRevision,
+  });
+  assert.equal(result.stalePlan, true, `${label} must invalidate the approved publication plan`);
+  assert.equal(db.rowsWritten, 0, `${label} must be rejected before D1 writes`);
+  assert.equal(plannedR2.puts, putsBefore, `${label} must be rejected before R2 writes`);
+  await restore();
+}
+
+const baselineCoverage = sqlite.prepare("SELECT content_revision, daily_digest FROM roster_file_coverage WHERE file_id=?").get(file.id);
+const baselineEventJson = sqlite.prepare("SELECT event_json FROM roster_events WHERE file_id=? AND doctor_key='TERM TRAINEE'").get(file.id).event_json;
+await assertPublicationPlanInvalidated("daily roster content", async () => {
+  sqlite.prepare("UPDATE roster_events SET event_json=? WHERE file_id=? AND doctor_key='TERM TRAINEE'").run(JSON.stringify({ ...JSON.parse(baselineEventJson), rawValue: "Changed without changing the catalogue signature" }), file.id);
+  sqlite.prepare("UPDATE roster_file_coverage SET daily_digest='changed-daily' WHERE file_id=?").run(file.id);
+}, async () => {
+  sqlite.prepare("UPDATE roster_events SET event_json=? WHERE file_id=? AND doctor_key='TERM TRAINEE'").run(baselineEventJson, file.id);
+  sqlite.prepare("UPDATE roster_file_coverage SET daily_digest=? WHERE file_id=?").run(baselineCoverage.daily_digest, file.id);
+});
+await assertPublicationPlanInvalidated("Staff grade", async () => {
+  sqlite.prepare("UPDATE facility_term_staff_contributions SET seniority='HMO' WHERE file_id=? AND doctor_key='TERM TRAINEE'").run(file.id);
+}, async () => {
+  sqlite.prepare("UPDATE facility_term_staff_contributions SET seniority='Registrar' WHERE file_id=? AND doctor_key='TERM TRAINEE'").run(file.id);
+});
+await assertPublicationPlanInvalidated("SMS continuity", async () => {
+  sqlite.prepare(`INSERT INTO facility_sms_memberships
+    (source_type, doctor_key, display_name, first_seen_date, last_seen_date)
+    VALUES ('mmc', 'SMS ON LEAVE', 'SMS On Leave', '2026-01-01', '2026-05-01')`).run();
+}, async () => {
+  sqlite.prepare("DELETE FROM facility_sms_memberships WHERE source_type='mmc' AND doctor_key='SMS ON LEAVE'").run();
+});
+await assertPublicationPlanInvalidated("Staff designation", async () => {
+  sqlite.prepare(`INSERT INTO facility_staff_designations
+    (id, source_type, doctor_key, display_name, seniority, designation, term_start, term_end, active)
+    VALUES ('test-designation', 'mmc', 'PERMANENT SMS', 'Permanent SMS', 'SMS', 'sabbatical_leave', '2026-08-03', '2026-11-01', 1)`).run();
+}, async () => {
+  sqlite.prepare("DELETE FROM facility_staff_designations WHERE id='test-designation'").run();
+});
+await assertPublicationPlanInvalidated("seniority override", async () => {
+  sqlite.prepare(`INSERT INTO facility_staff_seniority_overrides
+    (id, source_type, doctor_key, display_name, seniority, term_start, active)
+    VALUES ('test-override', 'mmc', 'TERM TRAINEE', 'Term Trainee', 'HMO', '2026-08-03', 1)`).run();
+}, async () => {
+  sqlite.prepare("DELETE FROM facility_staff_seniority_overrides WHERE id='test-override'").run();
+});
+await assertPublicationPlanInvalidated("term visibility", async () => {
+  sqlite.prepare("UPDATE facility_term_visibility SET visible_from='2026-07-21' WHERE source_type='mmc' AND term_start='2026-08-03'").run();
+}, async () => {
+  sqlite.prepare("UPDATE facility_term_visibility SET visible_from='2026-07-20' WHERE source_type='mmc' AND term_start='2026-08-03'").run();
+});
+await assertPublicationPlanInvalidated("compact coverage", async () => {
+  sqlite.prepare("UPDATE roster_file_coverage SET content_revision='changed-content' WHERE file_id=?").run(file.id);
+}, async () => {
+  sqlite.prepare("UPDATE roster_file_coverage SET content_revision=? WHERE file_id=?").run(baselineCoverage.content_revision, file.id);
+});
+const manifestKey = "facility-overview/v1/mmc/manifest.json";
+const originalManifestObject = plannedR2.objects.get(manifestKey);
+await assertPublicationPlanInvalidated("manifest ETag", async () => {
+  plannedR2.objects.set(manifestKey, { ...originalManifestObject, etag: "changed-etag" });
+}, async () => {
+  plannedR2.objects.set(manifestKey, originalManifestObject);
+});
+
+sqlite.prepare(`INSERT INTO facility_staff_designations
+  (id, source_type, doctor_key, display_name, seniority, designation, term_start, term_end, active)
+  VALUES ('concurrent-designation', 'mmc', 'PERMANENT SMS', 'Permanent SMS', 'SMS', 'sabbatical_leave', '2026-08-03', '2026-11-01', 1)`).run();
+const concurrentPlan = await initializeFacilityMaterialization({ env: { ROSTER_DB: db, ROSTER_FILES: plannedR2 } }, "mmc", { termStart: "2026-08-03" });
+const fixedManifestBeforeConcurrentBuild = plannedR2.objects.get(manifestKey);
+const concurrentResult = await initializeFacilityMaterialization({ env: { ROSTER_DB: db, ROSTER_FILES: plannedR2 } }, "mmc", {
+  termStart: "2026-08-03", dryRun: false, planRevision: concurrentPlan.planRevision,
+  beforeFinalValidation: async () => sqlite.prepare("UPDATE roster_file_coverage SET daily_digest='changed-during-build' WHERE file_id=?").run(file.id),
+});
+assert.equal(concurrentResult.stalePlan, true, "an input change during publication must abort the fixed pointer update");
+assert.equal(plannedR2.objects.get(manifestKey).etag, fixedManifestBeforeConcurrentBuild.etag, "a stale concurrent build must preserve the fixed manifest");
+sqlite.prepare("UPDATE roster_file_coverage SET daily_digest=? WHERE file_id=?").run(baselineCoverage.daily_digest, file.id);
+sqlite.prepare("DELETE FROM facility_staff_designations WHERE id='concurrent-designation'").run();
 
 const r2 = new LocalR2();
 db.sql = [];

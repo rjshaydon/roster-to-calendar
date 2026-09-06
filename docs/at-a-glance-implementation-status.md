@@ -390,9 +390,10 @@ Remaining:
 
 ## Phase 7A: controlled-rollout safeguards and worksheet
 
-Status: review remediation implemented and focused local verification passed.
-Phase 7B may now be considered, but no online rollout step is authorised by
-this result. No remote action has been performed.
+Status: the second-review remediation is implemented locally and its focused
+verification passes. A follow-up read-only review is still required before
+push consideration. Phase 7B and all online rollout steps remain blocked. No
+remote action has been performed.
 
 Completed locally:
 
@@ -447,9 +448,26 @@ Remediation completed locally:
   checks pass after remediation. The wider snapshot, contact, fixture,
   automation, database-cost and local-isolation regression set also passed in
   this local phase.
+- Added migration `0030` with exact per-file bootstrap and term-maintenance
+  indexes. The bootstrap event query no longer orders in D1; its bounded result
+  is sorted deterministically in memory, and every supporting collection has
+  a fail-before-write sentinel limit.
+- Replaced the partial publication revision with a canonical one-ED/one-term
+  input revision covering compact roster digests, Staff, continuing SMS,
+  designations, seniority overrides, visibility and the manifest ETag.
+- Staff, day and month objects remain unpublished candidates until a second
+  input validation immediately before the fixed manifest pointer. A concurrent
+  change leaves that pointer untouched.
+- Publication SQL is term-scoped, each day has a 512-row sentinel, and dry runs
+  now distinguish statement counts, maximum returned rows and locally
+  estimated rows examined.
+- General roster automation is no longer required for bootstrap or initial
+  publication; only the token, ED build allowlist and advanced-maintenance
+  switch are needed.
 
 Next step:
 
-- Review the local remediation commit before deciding whether to push it.
+- Perform a follow-up read-only review of the local remediation commit before
+  deciding whether to push it.
   Deployment, remote migrations, bootstrap and reader activation remain
   separate Phase 7B decisions with the worksheet's measured stop points.

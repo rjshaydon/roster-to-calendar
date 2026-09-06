@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { facilityBuildSources, facilityReadRoute, facilityRolloutPaused, facilitySharedReaderAllowed } from "../functions/_lib/facility-rollout.js";
-import { automatedRosterQueueEnabled, automatedRosterSourceEnabled, advancedRosterMaintenanceEnabled } from "../functions/_lib/roster-automation-guard.js";
+import { automatedRosterQueueEnabled, automatedRosterSourceEnabled, advancedRosterMaintenanceEnabled, facilityMaterializationMaintenanceEnabled } from "../functions/_lib/roster-automation-guard.js";
 import { onRequestPost as materialize } from "../functions/api/automation/facility-materialize.js";
 
 const env = {
@@ -27,6 +27,7 @@ assert.equal(automatedRosterSourceEnabled(env, "monash-adults"), true);
 assert.equal(automatedRosterSourceEnabled(env, "monash-paeds"), false);
 assert.equal(automatedRosterQueueEnabled(env), true);
 assert.equal(advancedRosterMaintenanceEnabled(env), true);
+assert.equal(facilityMaterializationMaintenanceEnabled({ ROSTER_ADVANCED_MAINTENANCE_ENABLED: "true" }), true, "facility bootstrap may be enabled without general roster writes");
 assert.equal(automatedRosterSourceEnabled({ ROSTER_AUTOMATION_WRITES_ENABLED: "true" }, "monash-adults"), false, "missing source allowlist must fail closed");
 
 let databaseCalls = 0;

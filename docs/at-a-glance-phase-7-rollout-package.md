@@ -40,8 +40,11 @@ automation switch.
 ## Migrations
 
 Inspect the production ledger and quota headroom first. Apply only missing
-migrations, one at a time: `0025`, `0026`, `0027`, `0028`, then `0029`.
-They create empty structures and do not backfill data. Record usage after each
+migrations, one at a time: `0025`, `0026`, `0027`, `0028`, `0029`, then
+`0030`.
+Migrations `0025`–`0029` create empty structures and do not backfill data.
+Migration `0030` adds bounded-maintenance indexes; four should cover empty new
+tables and one covers the small retained-file table. Record usage after each
 and never retry an uncertain result without rechecking the ledger.
 
 ## Serial existing-data bootstrap
@@ -53,8 +56,9 @@ Inspection omits `execute`, reads only file metadata and its compact marker,
 and returns a `planRevision`. Execution requires identical inputs,
 `"execute": true` and that revision.
 
-The executor performs one indexed `file_id` event read capped at 25,001 rows
-and permits at most 750 proposed compact mutation statements in one D1 batch
+The executor performs one indexed `file_id` event read capped at 25,001 rows,
+without a database sort, and applies separate sentinel limits to doctors and
+existing per-file facts. It permits at most 750 proposed compact mutation statements in one D1 batch
 (conservatively estimated as at most 2,250 rows written including indexes). An extra event row, an
 excess write count or a stale plan performs zero compact writes. There is no
 all-files mode, pagination, background retry or automatic continuation.
@@ -70,12 +74,15 @@ Every request names one ED and one actual medical-term start and is capped at
 120 dates.
 
 Dry run returns exact dates, months, a `planRevision` and distinct ceilings for
-D1 read statements, publication-state writes, R2 reads and R2 writes. Rows
-examined remain labelled as local estimates, not Cloudflare measurements.
+D1 read statements, estimated rows examined, returned rows,
+publication-state writes, R2 reads and R2 writes. Rows examined remain labelled
+as local estimates, not Cloudflare measurements.
 
-Execution requires identical inputs plus the returned revision. Changed facts
-or a changed manifest make it stale and stop writes. Staff publication touches
-only the requested term and preserves other terms. Its R2 ceiling includes the
+Execution requires identical inputs plus the returned revision. Changed Staff,
+SMS, designation, override, visibility, compact roster or manifest inputs make
+it stale before writes. Inputs are checked again before the fixed manifest
+pointer changes. Staff publication touches only the requested term and
+preserves other terms. Its R2 ceiling includes the
 Staff object, Staff/metadata pointer, day/month objects, candidate manifest and
 fixed manifest.
 
@@ -86,9 +93,9 @@ a plan without comfortable quota headroom.
 
 1. Deploy inertly. Do not bootstrap or publish.
 2. Apply reviewed empty migrations individually with new activity paused.
-3. Allow one ED for building. Temporarily enable roster writes and advanced
-   maintenance, inspect one retained file, then separately approve its
-   bootstrap. Disable maintenance immediately afterward.
+3. Allow one ED for building. Enable only advanced maintenance, inspect one
+   retained file, then separately approve its bootstrap. Keep general roster
+   writes disabled and disable maintenance immediately afterward.
 4. Repeat only for files needed by the same ED/term, checking usage each time.
 5. Dry-run one ED/term publication. Separately approve and execute only that
    plan, then disable maintenance and inspect usage.

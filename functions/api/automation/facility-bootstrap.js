@@ -1,25 +1,30 @@
-import { inspectFacilityOverviewBootstrap, refreshFacilityOverviewMaterializationForFile } from "../../_lib/d1-calendar.js";
+import { FACILITY_BOOTSTRAP_LIMITS, inspectFacilityOverviewBootstrap, refreshFacilityOverviewMaterializationForFile } from "../../_lib/d1-calendar.js";
 import { facilityBuildSources } from "../../_lib/facility-rollout.js";
-import { advancedRosterMaintenanceEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
-
-const MAX_EVENT_ROWS = 25000;
-const MAX_COMPACT_WRITES = 750;
+import { facilityMaterializationMaintenanceEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
 
 export async function onRequestPost(context) {
   if (!validToken(context.request, context.env.ROSTER_AUTOMATION_TOKEN)) return Response.json({ error: "Unauthorized." }, { status: 401 });
-  if (!advancedRosterMaintenanceEnabled(context.env)) return rosterWritePausedResponse();
+  if (!facilityMaterializationMaintenanceEnabled(context.env)) return rosterWritePausedResponse();
   const body = await context.request.json().catch(() => ({}));
   const sourceType = facilityBuildSources(context.env, [body?.sourceType])[0] || "";
   const fileId = String(body?.fileId || "").trim();
   if (!sourceType || !fileId) return rosterWritePausedResponse();
-  const maximumEventRows = Math.max(1, Math.min(Number(body?.maximumEventRows || MAX_EVENT_ROWS), MAX_EVENT_ROWS));
-  const maximumWrites = Math.max(1, Math.min(Number(body?.maximumWrites || MAX_COMPACT_WRITES), MAX_COMPACT_WRITES));
+  const maximumEventRows = Math.max(1, Math.min(Number(body?.maximumEventRows || FACILITY_BOOTSTRAP_LIMITS.eventRows), FACILITY_BOOTSTRAP_LIMITS.eventRows));
+  const maximumWrites = Math.max(1, Math.min(Number(body?.maximumWrites || FACILITY_BOOTSTRAP_LIMITS.mutationStatements), FACILITY_BOOTSTRAP_LIMITS.mutationStatements));
   const inspection = await inspectFacilityOverviewBootstrap(context.env.ROSTER_DB, { fileId, sourceType });
   if (!inspection.ok) return Response.json(inspection, { status: 400 });
   const estimate = {
-    maximumEventRowsExamined: maximumEventRows + 1,
+    d1ReadStatements: 8,
+    maximumRowsReturned: {
+      file: 1, doctors: FACILITY_BOOTSTRAP_LIMITS.doctorRows + 1, events: maximumEventRows + 1,
+      coverage: 1, existingStaff: FACILITY_BOOTSTRAP_LIMITS.existingStaffRows + 1,
+      existingCatalog: FACILITY_BOOTSTRAP_LIMITS.existingCatalogRows + 1,
+    },
+    maximumEstimatedD1RowsExamined: 4 + (FACILITY_BOOTSTRAP_LIMITS.doctorRows + 1) + (maximumEventRows + 1)
+      + (FACILITY_BOOTSTRAP_LIMITS.existingStaffRows + 1) + (FACILITY_BOOTSTRAP_LIMITS.existingCatalogRows + 1),
     maximumCompactMutationStatements: maximumWrites,
     maximumEstimatedD1RowsWrittenIncludingIndexes: maximumWrites * 3,
+    maximumR2Operations: 0,
     broadSourceScans: 0,
     automaticContinuation: false,
   };
@@ -28,7 +33,11 @@ export async function onRequestPost(context) {
   if (!body?.planRevision || String(body.planRevision) !== inspection.planRevision) {
     return Response.json({ ok: false, stalePlan: true, reason: "bootstrap-plan-changed" }, { status: 409 });
   }
-  const result = await refreshFacilityOverviewMaterializationForFile(context.env.ROSTER_DB, fileId, { maximumEventRows, maximumWrites });
+  const result = await refreshFacilityOverviewMaterializationForFile(context.env.ROSTER_DB, fileId, {
+    sourceType, maximumEventRows, maximumDoctorRows: FACILITY_BOOTSTRAP_LIMITS.doctorRows,
+    maximumExistingStaffRows: FACILITY_BOOTSTRAP_LIMITS.existingStaffRows,
+    maximumExistingCatalogRows: FACILITY_BOOTSTRAP_LIMITS.existingCatalogRows, maximumWrites,
+  });
   return Response.json({ ...inspection, dryRun: false, estimate, result }, { status: result?.overBudget ? 409 : 200 });
 }
 

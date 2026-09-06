@@ -699,6 +699,16 @@ export async function upsertDerivedRosterFile(db, file, storedImport) {
 
 const D1_MAX_BIND_PARAMS = 100;
 const D1_MAX_BATCH_STATEMENTS = 800;
+export const FACILITY_BOOTSTRAP_LIMITS = Object.freeze({
+  eventRows: 25000,
+  doctorRows: 512,
+  existingStaffRows: 750,
+  existingCatalogRows: 750,
+  mutationStatements: 750,
+});
+
+export const FACILITY_BOOTSTRAP_EVENT_SQL = `SELECT id, doctor_key, display_name, seniority, provider_staff_id, start_date, end_date, event_json
+  FROM roster_events WHERE file_id = ? LIMIT ?`;
 const D1_PRESENCE_BATCH_STATEMENTS = 80;
 
 function derivedRosterFileUpsertStatement(db, file, sourceType, parsedAt) {
@@ -1536,25 +1546,52 @@ export async function inspectFacilityOverviewBootstrap(db, options = {}) {
 
 export async function refreshFacilityOverviewMaterializationForFile(db, fileId, options = {}) {
   if (!db?.prepare || !fileId) return { writes: 0, missing: true };
-  const maximumEventRows = options.maximumEventRows == null ? null : Math.max(1, Math.min(Number(options.maximumEventRows) || 1, 25000));
+  const maximumEventRows = options.maximumEventRows == null ? null : Math.max(1, Math.min(Number(options.maximumEventRows) || 1, FACILITY_BOOTSTRAP_LIMITS.eventRows));
+  const maximumDoctorRows = options.maximumDoctorRows == null ? null : Math.max(1, Math.min(Number(options.maximumDoctorRows) || 1, FACILITY_BOOTSTRAP_LIMITS.doctorRows));
+  const maximumExistingStaffRows = options.maximumExistingStaffRows == null ? null : Math.max(1, Math.min(Number(options.maximumExistingStaffRows) || 1, FACILITY_BOOTSTRAP_LIMITS.existingStaffRows));
+  const maximumExistingCatalogRows = options.maximumExistingCatalogRows == null ? null : Math.max(1, Math.min(Number(options.maximumExistingCatalogRows) || 1, FACILITY_BOOTSTRAP_LIMITS.existingCatalogRows));
   const eventStatement = maximumEventRows == null
     ? db.prepare("SELECT id, doctor_key, display_name, seniority, provider_staff_id, start_date, end_date, event_json FROM roster_events WHERE file_id = ? ORDER BY id").bind(String(fileId))
-    : db.prepare("SELECT id, doctor_key, display_name, seniority, provider_staff_id, start_date, end_date, event_json FROM roster_events WHERE file_id = ? ORDER BY id LIMIT ?").bind(String(fileId), maximumEventRows + 1);
+    : db.prepare(FACILITY_BOOTSTRAP_EVENT_SQL).bind(String(fileId), maximumEventRows + 1);
+  const doctorStatement = maximumDoctorRows == null
+    ? db.prepare("SELECT doctor_key, display_name, seniority, membership_source, provider_staff_id FROM roster_file_doctors WHERE file_id = ? ORDER BY doctor_key").bind(String(fileId))
+    : db.prepare("SELECT doctor_key, display_name, seniority, membership_source, provider_staff_id FROM roster_file_doctors WHERE file_id = ? LIMIT ?").bind(String(fileId), maximumDoctorRows + 1);
+  const existingStaffStatement = maximumExistingStaffRows == null
+    ? db.prepare("SELECT source_type, term_start, doctor_key, file_id, fact_digest FROM facility_term_staff_contributions WHERE file_id = ?").bind(String(fileId))
+    : db.prepare("SELECT source_type, term_start, doctor_key, file_id, fact_digest FROM facility_term_staff_contributions WHERE file_id = ? LIMIT ?").bind(String(fileId), maximumExistingStaffRows + 1);
+  const existingCatalogStatement = maximumExistingCatalogRows == null
+    ? db.prepare("SELECT source_type, term_start, file_id, catalog_key, fact_digest FROM facility_stream_catalog_contributions WHERE file_id = ?").bind(String(fileId))
+    : db.prepare("SELECT source_type, term_start, file_id, catalog_key, fact_digest FROM facility_stream_catalog_contributions WHERE file_id = ? LIMIT ?").bind(String(fileId), maximumExistingCatalogRows + 1);
+  const fileStatement = options.sourceType
+    ? db.prepare("SELECT id, source_type, active FROM roster_files WHERE id = ?").bind(String(fileId))
+    : db.prepare("SELECT id, source_type FROM roster_files WHERE id = ?").bind(String(fileId));
   const [file, doctorsResult, eventsResult, existingCoverage, existingStaffResult, existingCatalogResult] = await Promise.all([
-    db.prepare("SELECT id, source_type FROM roster_files WHERE id = ?").bind(String(fileId)).first(),
-    db.prepare("SELECT doctor_key, display_name, seniority, membership_source, provider_staff_id FROM roster_file_doctors WHERE file_id = ? ORDER BY doctor_key").bind(String(fileId)).all(),
+    fileStatement.first(),
+    doctorStatement.all(),
     eventStatement.all(),
     db.prepare("SELECT content_revision, staff_digest, daily_digest, coverage_start, coverage_end FROM roster_file_coverage WHERE file_id = ?").bind(String(fileId)).first(),
-    db.prepare("SELECT source_type, term_start, doctor_key, file_id, fact_digest FROM facility_term_staff_contributions WHERE file_id = ?").bind(String(fileId)).all(),
-    db.prepare("SELECT source_type, term_start, file_id, catalog_key, fact_digest FROM facility_stream_catalog_contributions WHERE file_id = ?").bind(String(fileId)).all(),
+    existingStaffStatement.all(),
+    existingCatalogStatement.all(),
   ]);
   if (!file) return await deleteFacilityOverviewMaterializationForFile(db, fileId);
+  if (options.sourceType && (Number(file.active || 0) !== 1 || normalizeSourceType(file.source_type) !== normalizeSourceType(options.sourceType))) {
+    return { ok: false, reason: "active-file-not-found", writes: 0 };
+  }
   if (maximumEventRows != null && (eventsResult.results || []).length > maximumEventRows) {
     return { ok: false, overBudget: true, reason: "event-read-limit", eventRowsExamined: maximumEventRows + 1, maximumEventRows, writes: 0 };
   }
+  if (maximumDoctorRows != null && (doctorsResult.results || []).length > maximumDoctorRows) {
+    return { ok: false, overBudget: true, reason: "doctor-read-limit", rowsExamined: maximumDoctorRows + 1, maximumDoctorRows, writes: 0 };
+  }
+  if (maximumExistingStaffRows != null && (existingStaffResult.results || []).length > maximumExistingStaffRows) {
+    return { ok: false, overBudget: true, reason: "existing-staff-read-limit", rowsExamined: maximumExistingStaffRows + 1, maximumExistingStaffRows, writes: 0 };
+  }
+  if (maximumExistingCatalogRows != null && (existingCatalogResult.results || []).length > maximumExistingCatalogRows) {
+    return { ok: false, overBudget: true, reason: "existing-catalog-read-limit", rowsExamined: maximumExistingCatalogRows + 1, maximumExistingCatalogRows, writes: 0 };
+  }
   const sourceType = normalizeSourceType(file.source_type);
-  const doctors = doctorsResult.results || [];
-  const events = eventsResult.results || [];
+  const doctors = [...(doctorsResult.results || [])].sort((a, b) => String(a.doctor_key || "").localeCompare(String(b.doctor_key || "")));
+  const events = [...(eventsResult.results || [])].sort((a, b) => String(a.id || "").localeCompare(String(b.id || "")));
   const doctorByKey = new Map(doctors.map((doctor) => [String(doctor.doctor_key || ""), doctor]));
   const dates = events.flatMap((event) => [datePart(event.start_date), datePart(event.end_date)]).filter(Boolean).sort();
   const coverageStart = dates[0] || "";
@@ -1664,7 +1701,7 @@ export async function refreshFacilityOverviewMaterializationForFile(db, fileId, 
     statements.push(db.prepare("DELETE FROM facility_stream_catalog_contributions WHERE source_type = ? AND term_start = ? AND file_id = ? AND catalog_key = ?")
       .bind(oldSource, oldTerm, oldFile, oldCatalogKey));
   }
-  const maximumWrites = options.maximumWrites == null ? null : Math.max(1, Math.min(Number(options.maximumWrites) || 1, D1_MAX_BATCH_STATEMENTS));
+  const maximumWrites = options.maximumWrites == null ? null : Math.max(1, Math.min(Number(options.maximumWrites) || 1, FACILITY_BOOTSTRAP_LIMITS.mutationStatements));
   if (maximumWrites != null && statements.length > maximumWrites) {
     return { ok: false, overBudget: true, reason: "compact-write-limit", eventRowsExamined: events.length, proposedWrites: statements.length, maximumWrites, writes: 0 };
   }
@@ -1808,14 +1845,17 @@ export async function queryFacilityStaffSeniorityOverrides(db, options = {}) {
   if (!termStart) return [];
   const sourceSql = sourceType ? "AND source_type = ?" : "";
   const bindings = sourceType ? [termStart, sourceType] : [termStart];
+  const maximumRows = options.maximumRows == null ? null : Math.max(1, Math.min(Number(options.maximumRows) || 1, 512));
   const rows = await db.prepare(`
     SELECT *
     FROM facility_staff_seniority_overrides
     WHERE active = 1 AND term_start <= ? ${sourceSql}
-    ORDER BY source_type, doctor_key, term_start DESC
-  `).bind(...bindings).all();
+    ${maximumRows == null ? "ORDER BY source_type, doctor_key, term_start DESC" : "LIMIT ?"}
+  `).bind(...(maximumRows == null ? bindings : [...bindings, maximumRows + 1])).all();
+  rejectFacilityReadOverflow(rows.results, maximumRows, "seniority-override-read-limit");
   const latest = new Map();
-  for (const row of rows.results || []) {
+  for (const row of [...(rows.results || [])].sort((a, b) => String(a.source_type || "").localeCompare(String(b.source_type || ""))
+    || String(a.doctor_key || "").localeCompare(String(b.doctor_key || "")) || String(b.term_start || "").localeCompare(String(a.term_start || "")))) {
     const override = facilityStaffSeniorityOverrideFromRow(row);
     const key = `${override?.sourceType || ""}|${override?.doctorKey || ""}`;
     if (override && !latest.has(key)) latest.set(key, override);
@@ -1947,7 +1987,8 @@ export async function queryFacilityStaffDesignations(db, options = {}) {
   const termEnd = datePart(options.termEnd);
   if (!termStart || !termEnd) return [];
   const sourceSql = sourceType ? "AND source_type = ?" : "";
-  const bindings = sourceType ? [termStart, termStart, sourceType] : [termStart, termStart];
+  const bindings = sourceType ? [sourceType, termStart, termStart] : [termStart, termStart];
+  const maximumRows = options.maximumRows == null ? null : Math.max(1, Math.min(Number(options.maximumRows) || 1, 512));
   const rows = await db.prepare(`
     SELECT *
     FROM facility_staff_designations
@@ -1956,9 +1997,12 @@ export async function queryFacilityStaffDesignations(db, options = {}) {
         designation = 'previous_staff' AND term_start <= ?
         OR designation <> 'previous_staff' AND term_start = ?
       )
-    ORDER BY source_type, designation, display_name, term_start
-  `).bind(...bindings).all();
-  return (rows.results || []).map(facilityStaffDesignationFromRow).filter(Boolean);
+    ${maximumRows == null ? "ORDER BY source_type, designation, display_name, term_start" : "LIMIT ?"}
+  `).bind(...(maximumRows == null ? bindings : [...bindings, maximumRows + 1])).all();
+  rejectFacilityReadOverflow(rows.results, maximumRows, "staff-designation-read-limit");
+  return (rows.results || []).map(facilityStaffDesignationFromRow).filter(Boolean)
+    .sort((a, b) => a.sourceType.localeCompare(b.sourceType) || a.designation.localeCompare(b.designation)
+      || a.displayName.localeCompare(b.displayName) || a.termStart.localeCompare(b.termStart));
 }
 
 export async function reconcileFacilityStaffDesignationsForRosterFile(db, fileId) {
@@ -4080,6 +4124,7 @@ export async function queryFacilityOverviewOnShift(db, options = {}) {
   const date = String(options.date || "").slice(0, 10);
   const facilityKey = normalizeSourceType(options.facilityKey || options.sourceType || "");
   if (!date || !facilityKey) return [];
+  const maximumRows = options.maximumRows == null ? null : Math.max(1, Math.min(Number(options.maximumRows) || 1, 512));
   const rows = await db.prepare(`
     SELECT
       roster_events.doctor_key,
@@ -4107,8 +4152,14 @@ export async function queryFacilityOverviewOnShift(db, options = {}) {
       -- shift happens to cross into it.  This excludes the preceding day's
       -- PM shifts that finish at midnight.
       AND roster_events.start_date = ?
-    ORDER BY roster_events.start_ts, roster_events.display_name, roster_events.title
-  `).bind(facilityKey, date).all();
+    ${maximumRows == null ? "ORDER BY roster_events.start_ts, roster_events.display_name, roster_events.title" : "LIMIT ?"}
+  `).bind(...(maximumRows == null ? [facilityKey, date] : [facilityKey, date, maximumRows + 1])).all();
+  if (maximumRows != null && (rows.results || []).length > maximumRows) {
+    const error = new Error(`Facility day exceeds the ${maximumRows}-row publication limit.`);
+    error.code = "FACILITY_DAY_READ_BUDGET";
+    error.maximumRows = maximumRows;
+    throw error;
+  }
   const seniorityOverrides = options.includeOverrides === false ? new Map() : new Map((await queryFacilityStaffSeniorityOverrides(db, {
     sourceType: facilityKey,
     termStart: australianTermStartForDate(date),
@@ -4127,6 +4178,8 @@ export async function queryFacilityOverviewOnShift(db, options = {}) {
       return { ...row, seniority: override.seniority, seniorityOverride: override, event: { ...row.event, seniority: override.seniority, facilitySeniorityOverride: true } };
     })
     .filter((row) => row.doctorKey && row.displayName && row.event);
+  events.sort((a, b) => String(a.event?.start || "").localeCompare(String(b.event?.start || ""))
+    || a.displayName.localeCompare(b.displayName) || String(a.event?.title || "").localeCompare(String(b.event?.title || "")));
   return events;
 }
 
@@ -4362,7 +4415,18 @@ export async function queryMaterializedFacilityCoverage(db, options = {}) {
   if (!db?.prepare) return [];
   const sourceTypes = sanitizeSourceTypes(options.sourceTypes || [options.sourceType || options.facilityKey]);
   if (!sourceTypes.length) return [];
-  const rows = await db.prepare(`
+  const startDate = datePart(options.startDate);
+  const endDate = datePart(options.endDate);
+  const maximumRows = options.maximumRows == null ? null : Math.max(1, Math.min(Number(options.maximumRows) || 1, 32));
+  const boundedActiveFiles = maximumRows != null && sourceTypes.length === 1;
+  const rows = boundedActiveFiles ? await db.prepare(`
+    SELECT f.id AS active_file_id, c.file_id, c.source_type, c.coverage_start, c.coverage_end,
+      c.content_revision, c.staff_digest, c.daily_digest, c.updated_at
+    FROM roster_files AS f INDEXED BY idx_roster_files_source_active
+    LEFT JOIN roster_file_coverage AS c ON c.file_id = f.id
+    WHERE f.source_type = ? AND f.active = 1
+    LIMIT ?
+  `).bind(sourceTypes[0], maximumRows + 1).all() : await db.prepare(`
     SELECT c.file_id, c.source_type, c.coverage_start, c.coverage_end,
       c.content_revision, c.staff_digest, c.daily_digest, c.updated_at
     FROM roster_file_coverage AS c
@@ -4371,12 +4435,20 @@ export async function queryMaterializedFacilityCoverage(db, options = {}) {
       AND c.source_type IN (${sourceTypes.map(() => "?").join(", ")})
     ORDER BY c.source_type, c.coverage_start, c.file_id
   `).bind(...sourceTypes).all();
+  rejectFacilityReadOverflow(rows.results, maximumRows, "active-file-read-limit");
+  if (boundedActiveFiles && (rows.results || []).some((row) => !row.file_id)) {
+    const error = new Error("An active roster file has not been prepared for facility publication.");
+    error.code = "FACILITY_MATERIALIZATION_READ_BUDGET";
+    error.reason = "active-file-not-prepared";
+    throw error;
+  }
   return (rows.results || []).map((row) => ({
     fileId: String(row.file_id || ""), sourceType: normalizeSourceType(row.source_type),
     startDate: datePart(row.coverage_start), endDate: datePart(row.coverage_end),
     contentRevision: String(row.content_revision || ""), staffDigest: String(row.staff_digest || ""),
     dailyDigest: String(row.daily_digest || ""), updatedAt: String(row.updated_at || ""),
-  }));
+  })).filter((row) => !startDate || !endDate || (row.startDate <= endDate && row.endDate >= startDate))
+    .sort((a, b) => a.sourceType.localeCompare(b.sourceType) || a.startDate.localeCompare(b.startDate) || a.fileId.localeCompare(b.fileId));
 }
 
 export async function queryMaterializedFacilityTermStaff(db, options = {}) {
@@ -4384,7 +4456,10 @@ export async function queryMaterializedFacilityTermStaff(db, options = {}) {
   const sourceType = normalizeSourceType(options.sourceType || options.facilityKey);
   const termStart = datePart(options.termStart);
   if (!sourceType || !termStart) return [];
-  const [rows, continuingSms] = await Promise.all([db.prepare(`
+  const maximumRows = options.maximumRows == null ? null : Math.max(1, Math.min(Number(options.maximumRows) || 1, 512));
+  const maximumInputRows = maximumRows == null ? null : Math.max(maximumRows, Math.min(Number(options.maximumInputRows || 24000), 24000));
+  const activeFileIds = new Set((options.activeFileIds || []).map(String));
+  const [rawRows, continuingSms] = await Promise.all([db.prepare(maximumInputRows == null ? `
     SELECT s.doctor_key, MAX(s.display_name) AS display_name,
       MAX(s.seniority) AS seniority, MAX(s.membership_source) AS membership_source,
       MAX(s.provider_staff_id) AS provider_staff_id,
@@ -4396,13 +4471,43 @@ export async function queryMaterializedFacilityTermStaff(db, options = {}) {
     WHERE f.active = 1 AND s.source_type = ? AND s.term_start = ?
     GROUP BY s.doctor_key
     ORDER BY display_name, s.doctor_key
-  `).bind(sourceType, termStart).all(), db.prepare(`
+  ` : `
+    SELECT source_type, term_start, doctor_key, file_id, display_name, seniority,
+      membership_source, provider_staff_id, first_applicable_date, last_applicable_date
+    FROM facility_term_staff_contributions
+    WHERE source_type = ? AND term_start = ?
+    LIMIT ?
+  `).bind(...(maximumInputRows == null ? [sourceType, termStart] : [sourceType, termStart, maximumInputRows + 1])).all(), db.prepare(`
     SELECT doctor_key, display_name, source_type, last_seen_date
     FROM facility_sms_memberships
     WHERE source_type = ? AND first_seen_date <= ?
-    ORDER BY display_name, doctor_key
-  `).bind(sourceType, String(options.termEnd || "9999-12-31")).all()]);
-  const members = (rows.results || []).map((row) => ({
+    ${maximumRows == null ? "ORDER BY display_name, doctor_key" : "LIMIT ?"}
+  `).bind(...(maximumRows == null ? [sourceType, String(options.termEnd || "9999-12-31")] : [sourceType, String(options.termEnd || "9999-12-31"), maximumRows + 1])).all()]);
+  rejectFacilityReadOverflow(rawRows.results, maximumInputRows, "term-staff-input-read-limit");
+  rejectFacilityReadOverflow(continuingSms.results, maximumRows, "sms-continuity-read-limit");
+  let rows = rawRows.results || [];
+  if (maximumInputRows != null) {
+    const aggregated = new Map();
+    for (const row of rows) {
+      if (activeFileIds.size && !activeFileIds.has(String(row.file_id || ""))) continue;
+      const key = String(row.doctor_key || "");
+      const current = aggregated.get(key);
+      if (!current) {
+        aggregated.set(key, { ...row, contribution_count: 1 });
+        continue;
+      }
+      current.display_name = maxText(current.display_name, row.display_name);
+      current.seniority = maxText(current.seniority, row.seniority);
+      current.membership_source = maxText(current.membership_source, row.membership_source);
+      current.provider_staff_id = maxText(current.provider_staff_id, row.provider_staff_id);
+      current.first_applicable_date = String(current.first_applicable_date || "") < String(row.first_applicable_date || "") ? current.first_applicable_date : row.first_applicable_date;
+      current.last_applicable_date = String(current.last_applicable_date || "") > String(row.last_applicable_date || "") ? current.last_applicable_date : row.last_applicable_date;
+      current.contribution_count += 1;
+    }
+    rows = [...aggregated.values()];
+  }
+  rejectFacilityReadOverflow(rows, maximumRows, "term-staff-read-limit");
+  const members = rows.map((row) => ({
     doctorKey: String(row.doctor_key || ""), displayName: String(row.display_name || ""),
     sourceType, seniority: String(row.seniority || ""),
     membershipSource: String(row.membership_source || "roster"),
@@ -4418,31 +4523,60 @@ export async function queryMaterializedFacilityTermStaff(db, options = {}) {
       membershipSource: "sms-continuity", providerStaffId: "", firstApplicableDate: "",
       lastApplicableDate: datePart(row.last_seen_date), contributionCount: 0 });
   }
-  return members;
+  return members.sort((a, b) => a.displayName.localeCompare(b.displayName) || a.doctorKey.localeCompare(b.doctorKey));
 }
 
 export async function queryMaterializedFacilityMetadata(db, options = {}) {
   if (!db?.prepare) return { coverage: [], terms: [] };
   const sourceType = normalizeSourceType(options.sourceType || options.facilityKey);
   if (!sourceType) return { coverage: [], terms: [] };
-  const [coverage, visibility, catalogRows] = await Promise.all([
-    queryMaterializedFacilityCoverage(db, { sourceType }),
+  const requestedTerm = datePart(options.termStart);
+  const termEnd = requestedTerm ? australianTermEndForStart(requestedTerm) : "";
+  const maximumRows = options.maximumRows == null ? null : Math.max(1, Math.min(Number(options.maximumRows) || 1, 750));
+  const coverage = await queryMaterializedFacilityCoverage(db, { sourceType, startDate: requestedTerm, endDate: termEnd, maximumRows: requestedTerm ? 32 : null });
+  const activeFileIds = new Set(coverage.map((entry) => entry.fileId));
+  const maximumInputRows = maximumRows == null ? null : Math.max(maximumRows, Math.min(Number(options.maximumInputRows || 24000), 24000));
+  const [visibility, rawCatalogRows] = await Promise.all([
     db.prepare(`SELECT term_start, visible_from, revision FROM facility_term_visibility
-      WHERE source_type = ? ORDER BY term_start`).bind(sourceType).all(),
-    db.prepare(`
+      WHERE source_type = ? ${requestedTerm ? "AND term_start = ?" : ""} ORDER BY term_start`).bind(...(requestedTerm ? [sourceType, requestedTerm] : [sourceType])).all(),
+    db.prepare(maximumInputRows == null ? `
       SELECT c.term_start, c.catalog_key, c.seniority, c.title, c.raw_value, c.location,
         c.all_day, c.time_label, c.start_time, c.end_time,
         MIN(c.first_date) AS first_date, MAX(c.last_date) AS last_date
       FROM facility_stream_catalog_contributions c
       INNER JOIN roster_files f ON f.id = c.file_id
-      WHERE f.active = 1 AND c.source_type = ?
+      WHERE f.active = 1 AND c.source_type = ? ${requestedTerm ? "AND c.term_start = ?" : ""}
       GROUP BY c.term_start, c.catalog_key, c.seniority, c.title, c.raw_value, c.location,
         c.all_day, c.time_label, c.start_time, c.end_time
       ORDER BY c.term_start, c.title, c.seniority, c.catalog_key
-    `).bind(sourceType).all(),
+    ` : `
+      SELECT term_start, file_id, catalog_key, seniority, title, raw_value, location,
+        all_day, time_label, start_time, end_time, first_date, last_date
+      FROM facility_stream_catalog_contributions
+      WHERE source_type = ? AND term_start = ?
+      LIMIT ?
+    `).bind(...(maximumInputRows == null ? (requestedTerm ? [sourceType, requestedTerm] : [sourceType]) : [sourceType, requestedTerm, maximumInputRows + 1])).all(),
   ]);
+  rejectFacilityReadOverflow(rawCatalogRows.results, maximumInputRows, "term-catalog-input-read-limit");
+  let catalogRows = rawCatalogRows.results || [];
+  if (maximumInputRows != null) {
+    const aggregated = new Map();
+    for (const row of catalogRows) {
+      if (activeFileIds.size && !activeFileIds.has(String(row.file_id || ""))) continue;
+      const key = [row.term_start, row.catalog_key, row.seniority, row.title, row.raw_value, row.location,
+        row.all_day, row.time_label, row.start_time, row.end_time].map((value) => String(value ?? "")).join("\u0000");
+      const current = aggregated.get(key);
+      if (!current) aggregated.set(key, { ...row });
+      else {
+        current.first_date = String(current.first_date || "") < String(row.first_date || "") ? current.first_date : row.first_date;
+        current.last_date = String(current.last_date || "") > String(row.last_date || "") ? current.last_date : row.last_date;
+      }
+    }
+    catalogRows = [...aggregated.values()];
+  }
+  rejectFacilityReadOverflow(catalogRows, maximumRows, "term-catalog-read-limit");
   const catalogByTerm = new Map();
-  for (const row of catalogRows.results || []) {
+  for (const row of catalogRows) {
     const termStart = datePart(row.term_start);
     if (!catalogByTerm.has(termStart)) catalogByTerm.set(termStart, []);
     catalogByTerm.get(termStart).push({
@@ -4454,12 +4588,25 @@ export async function queryMaterializedFacilityMetadata(db, options = {}) {
     });
   }
   return {
-    coverage,
+    coverage: requestedTerm ? coverage.filter((entry) => entry.startDate <= termEnd && entry.endDate >= requestedTerm) : coverage,
     terms: (visibility.results || []).map((row) => ({
       termStart: datePart(row.term_start), visibleFrom: datePart(row.visible_from), revision: String(row.revision || ""),
       catalog: catalogByTerm.get(datePart(row.term_start)) || [],
     })),
   };
+}
+
+function maxText(left, right) {
+  return String(left || "") >= String(right || "") ? left : right;
+}
+
+function rejectFacilityReadOverflow(rows, maximumRows, reason) {
+  if (maximumRows == null || (rows || []).length <= maximumRows) return;
+  const error = new Error(`Facility materialisation exceeds the ${maximumRows}-row ${reason} safety limit.`);
+  error.code = "FACILITY_MATERIALIZATION_READ_BUDGET";
+  error.reason = reason;
+  error.maximumRows = maximumRows;
+  throw error;
 }
 
 export async function queryFacilityOverviewStaff(db, options = {}) {

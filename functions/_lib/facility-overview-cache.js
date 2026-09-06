@@ -1,5 +1,6 @@
 import {
   loadCachedSnapshot,
+  ROSTER_PARSER_VERSION,
   australianTermEndForStart,
   australianTermStartForDate,
   queryFacilityStaffDesignations,
@@ -11,6 +12,15 @@ import {
 } from "./d1-calendar.js";
 
 const SCHEMA_VERSION = 1;
+export const FACILITY_PUBLICATION_LIMITS = Object.freeze({
+  dates: 120,
+  activeFiles: 32,
+  staffRows: 512,
+  catalogRows: 750,
+  designationRows: 512,
+  overrideRows: 512,
+  dayRows: 512,
+});
 
 export function facilityMetadataManifestKey(sourceType) {
   return `facility-overview/v1/${safeSource(sourceType)}/manifest.json`;
@@ -30,16 +40,79 @@ export function facilityMonthObjectKey(sourceType, month, revision) {
 
 export async function initializeFacilityMaterialization(context, sourceTypeValue, options = {}) {
   const sourceType = safeSource(sourceTypeValue);
-  const maximumDates = Math.max(1, Math.min(Number(options.maximumDates || 120), 120));
+  const maximumDates = Math.max(1, Math.min(Number(options.maximumDates || FACILITY_PUBLICATION_LIMITS.dates), FACILITY_PUBLICATION_LIMITS.dates));
   if (!sourceType || !context?.env?.ROSTER_DB?.prepare || !context?.env?.ROSTER_FILES?.put) return { ok: false, unavailable: true };
   const requestedTerm = String(options.termStart || "").slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(requestedTerm) || australianTermStartForDate(requestedTerm) !== requestedTerm) {
     return { ok: false, reason: "valid-term-start-required", sourceType };
   }
-  const metadata = await queryMaterializedFacilityMetadata(context.env.ROSTER_DB, { sourceType });
+  let plan;
+  try {
+    plan = await buildFacilityPublicationPlan(context, sourceType, requestedTerm, maximumDates);
+  } catch (error) {
+    if (error?.code === "FACILITY_MATERIALIZATION_READ_BUDGET") {
+      return { ok: false, overBudget: true, reason: error.reason || "publication-read-limit", sourceType, termStart: requestedTerm };
+    }
+    throw error;
+  }
+  if (!plan.ok) return plan;
+  const publicPlan = publicationPlanResponse(plan);
+  if (options.dryRun !== false) return { ...publicPlan, dryRun: true };
+  if (!options.planRevision || String(options.planRevision) !== plan.planRevision) {
+    return { ok: false, stalePlan: true, reason: "publication-plan-changed", sourceType, termStart: requestedTerm };
+  }
+  const staffPublication = await publishFacilityStaffMetadata(context, [sourceType], {
+    termStart: requestedTerm, preparedPlan: plan, deferManifest: true,
+  });
+  const preparedManifest = staffPublication.results?.[0]?.manifest;
+  if (!preparedManifest) return { ok: false, reason: "staff-publication-failed", sourceType, termStart: requestedTerm };
+  try {
+    const publication = await publishFacilityDays(context, sourceType, plan.plannedDates, {
+      manifestObject: plan.manifestObject,
+      preparedManifest,
+      maximumRowsPerDay: FACILITY_PUBLICATION_LIMITS.dayRows,
+      beforePointer: async () => {
+        if (typeof options.beforeFinalValidation === "function") await options.beforeFinalValidation();
+        const current = await buildFacilityPublicationPlan(context, sourceType, requestedTerm, maximumDates);
+        if (!current.ok || current.inputRevision !== plan.inputRevision) {
+          const error = new Error("Facility publication inputs changed during execution.");
+          error.code = "FACILITY_PUBLICATION_STALE";
+          throw error;
+        }
+      },
+    });
+    return { ...publicPlan, dryRun: false, publication };
+  } catch (error) {
+    if (error?.code === "FACILITY_PUBLICATION_STALE") {
+      return { ok: false, stalePlan: true, reason: "publication-input-changed", sourceType, termStart: requestedTerm };
+    }
+    if (error?.code === "FACILITY_DAY_READ_BUDGET") {
+      return { ok: false, overBudget: true, reason: "day-read-limit", sourceType, termStart: requestedTerm };
+    }
+    if (error?.code === "FACILITY_MATERIALIZATION_READ_BUDGET") {
+      return { ok: false, overBudget: true, reason: error.reason || "publication-read-limit", sourceType, termStart: requestedTerm };
+    }
+    throw error;
+  }
+}
+
+async function buildFacilityPublicationPlan(context, sourceType, requestedTerm, maximumDates) {
+  const db = context.env.ROSTER_DB;
+  const termEnd = australianTermEndForStart(requestedTerm);
+  const metadata = await queryMaterializedFacilityMetadata(db, {
+    sourceType, termStart: requestedTerm, maximumRows: FACILITY_PUBLICATION_LIMITS.catalogRows,
+  });
   const requestedTermEntry = (metadata.terms || []).find((term) => term.termStart === requestedTerm);
   if (!requestedTermEntry) return { ok: false, reason: "term-not-prepared", sourceType, termStart: requestedTerm };
-  const currentManifestObject = await loadJsonObject(context.env.ROSTER_FILES, facilityMetadataManifestKey(sourceType));
+  const [members, designations, seniorityOverrides, manifestObject] = await Promise.all([
+    queryMaterializedFacilityTermStaff(db, { sourceType, termStart: requestedTerm, termEnd,
+      activeFileIds: metadata.coverage.map((entry) => entry.fileId),
+      maximumRows: FACILITY_PUBLICATION_LIMITS.staffRows,
+      maximumInputRows: FACILITY_PUBLICATION_LIMITS.activeFiles * 750 }),
+    queryFacilityStaffDesignations(db, { sourceType, termStart: requestedTerm, termEnd, maximumRows: FACILITY_PUBLICATION_LIMITS.designationRows }),
+    queryFacilityStaffSeniorityOverrides(db, { sourceType, termStart: requestedTerm, maximumRows: FACILITY_PUBLICATION_LIMITS.overrideRows }),
+    loadJsonObject(context.env.ROSTER_FILES, facilityMetadataManifestKey(sourceType)),
+  ]);
   const dates = new Set();
   for (const interval of metadata.coverage || []) {
     let cursor = String(interval.startDate || "").slice(0, 10);
@@ -55,26 +128,49 @@ export async function initializeFacilityMaterialization(context, sourceTypeValue
   const plannedDates = [...dates].sort();
   if (!plannedDates.length) return { ok: false, reason: "no-covered-dates", sourceType, termStart: requestedTerm };
   if (plannedDates.length > maximumDates) return { ok: false, overBudget: true, sourceType, termStart: requestedTerm, plannedDates: plannedDates.length, maximumDates };
-  const planRevision = await digest({
-    sourceType, termStart: requestedTerm, coverage: metadata.coverage,
-    term: requestedTermEntry, baseRevision: String(currentManifestObject.data?.revision || ""), plannedDates,
+  const input = contentOnly({
+    schemaVersion: SCHEMA_VERSION, parserVersion: ROSTER_PARSER_VERSION, sourceType, termStart: requestedTerm, termEnd,
+    coverage: metadata.coverage, term: requestedTermEntry, members, designations, seniorityOverrides, plannedDates,
   });
+  const inputRevision = await digest(input);
+  const baseRevision = String(manifestObject.data?.revision || "");
+  const baseEtag = String(manifestObject.etag || "");
+  const planRevision = await digest({ inputRevision, baseRevision, baseEtag, plannedDates });
+  const affectedMonths = new Set(plannedDates.map((date) => date.slice(0, 7))).size;
+  const maximumCompactRowsPerTerm = (FACILITY_PUBLICATION_LIMITS.activeFiles * 750) + 1;
+  const planningRows = 1 + (FACILITY_PUBLICATION_LIMITS.activeFiles + 1)
+    + maximumCompactRowsPerTerm + maximumCompactRowsPerTerm + (FACILITY_PUBLICATION_LIMITS.staffRows + 1)
+    + (FACILITY_PUBLICATION_LIMITS.designationRows + 1) + (FACILITY_PUBLICATION_LIMITS.overrideRows + 1);
   const estimate = {
     indexedDayQueries: plannedDates.length,
-    maximumD1ReadStatements: plannedDates.length + 11,
+    d1ReadStatements: { planning: 7, executionPlanning: 7, publicationState: 2, indexedDays: plannedDates.length },
+    maximumD1ReadStatements: plannedDates.length + 16,
+    maximumRowsReturned: {
+      activeFiles: FACILITY_PUBLICATION_LIMITS.activeFiles + 1,
+      catalogInputs: maximumCompactRowsPerTerm,
+      catalogFacts: FACILITY_PUBLICATION_LIMITS.catalogRows + 1,
+      termStaffInputs: maximumCompactRowsPerTerm,
+      termStaffMembers: FACILITY_PUBLICATION_LIMITS.staffRows + 1,
+      smsContinuity: FACILITY_PUBLICATION_LIMITS.staffRows + 1,
+      designations: FACILITY_PUBLICATION_LIMITS.designationRows + 1,
+      seniorityOverrides: FACILITY_PUBLICATION_LIMITS.overrideRows + 1,
+      eachDay: FACILITY_PUBLICATION_LIMITS.dayRows + 1,
+    },
+    maximumEstimatedD1RowsExamined: (planningRows * 2) + 2 + (plannedDates.length * (FACILITY_PUBLICATION_LIMITS.dayRows + 1)),
     maximumPublicationStateStatements: 4,
     maximumEstimatedD1RowsWrittenIncludingIndexes: 8,
-    maximumR2Gets: 3 + (new Set(plannedDates.map((date) => date.slice(0, 7))).size * 31),
-    maximumR2Puts: plannedDates.length + new Set(plannedDates.map((date) => date.slice(0, 7))).size + 4,
+    maximumR2Gets: 2 + (affectedMonths * 31),
+    maximumR2Puts: plannedDates.length + affectedMonths + 3,
     broadRosterScans: 0,
   };
-  if (options.dryRun !== false) return { ok: true, dryRun: true, sourceType, termStart: requestedTerm, plannedDates, planRevision, estimate };
-  if (!options.planRevision || String(options.planRevision) !== planRevision) {
-    return { ok: false, stalePlan: true, reason: "publication-plan-changed", sourceType, termStart: requestedTerm };
-  }
-  await publishFacilityStaffMetadata(context, [sourceType], { termStart: requestedTerm });
-  const publication = await publishFacilityDays(context, sourceType, plannedDates);
-  return { ok: true, dryRun: false, sourceType, termStart: requestedTerm, plannedDates: plannedDates.length, planRevision, estimate, publication };
+  return { ok: true, sourceType, termStart: requestedTerm, termEnd, plannedDates, planRevision, inputRevision, estimate,
+    metadata, members, designations, seniorityOverrides, manifestObject };
+}
+
+function publicationPlanResponse(plan) {
+  return { ok: true, sourceType: plan.sourceType, termStart: plan.termStart, termEnd: plan.termEnd,
+    plannedDates: plan.plannedDates, affectedMonths: [...new Set(plan.plannedDates.map((date) => date.slice(0, 7)))],
+    planRevision: plan.planRevision, inputRevision: plan.inputRevision, estimate: plan.estimate };
 }
 
 export async function publishFacilityStaffMetadata(context, sourceTypes = [], options = {}) {
@@ -83,23 +179,26 @@ export async function publishFacilityStaffMetadata(context, sourceTypes = [], op
   if (!db?.prepare || !r2?.put || !r2?.get) return { ok: false, unavailable: true };
   const results = [];
   for (const sourceType of [...new Set(sourceTypes.map(safeSource).filter(Boolean))]) {
-    const metadata = await queryMaterializedFacilityMetadata(db, { sourceType });
-    const currentManifestObject = await loadJsonObject(r2, facilityMetadataManifestKey(sourceType));
+    const preparedPlan = options.preparedPlan?.sourceType === sourceType ? options.preparedPlan : null;
+    const metadata = preparedPlan?.metadata || await queryMaterializedFacilityMetadata(db, { sourceType, termStart: options.termStart || "" });
+    const currentManifestObject = preparedPlan?.manifestObject || await loadJsonObject(r2, facilityMetadataManifestKey(sourceType));
     const currentManifest = currentManifestObject.data;
     const requestedTerm = String(options.termStart || "").slice(0, 10);
     const updatedTerms = [];
     for (const term of (metadata.terms || []).filter((entry) => !requestedTerm || entry.termStart === requestedTerm)) {
       const termEnd = australianTermEndForStart(term.termStart);
-      const members = (await queryMaterializedFacilityTermStaff(db, { sourceType, termStart: term.termStart, termEnd }))
+      const members = (preparedPlan?.termStart === term.termStart ? preparedPlan.members : await queryMaterializedFacilityTermStaff(db, { sourceType, termStart: term.termStart, termEnd }))
         .map((member) => ({
           ...member,
           coverageStart: member.firstApplicableDate || "",
           coverageEnd: member.membershipSource === "sms-continuity" ? "" : member.lastApplicableDate || "",
         }));
-      const [designations, seniorityOverrides] = await Promise.all([
+      const [designations, seniorityOverrides] = preparedPlan?.termStart === term.termStart
+        ? [preparedPlan.designations, preparedPlan.seniorityOverrides]
+        : await Promise.all([
         queryFacilityStaffDesignations(db, { sourceType, termStart: term.termStart, termEnd }),
         queryFacilityStaffSeniorityOverrides(db, { sourceType, termStart: term.termStart }),
-      ]);
+        ]);
       const staff = { schemaVersion: SCHEMA_VERSION, sourceType, termStart: term.termStart, termEnd, members, events: [], coverage: metadata.coverage, designations, seniorityOverrides };
       const staffRevision = await digest(staff);
       const staffKey = facilityStaffObjectKey(sourceType, term.termStart, staffRevision);
@@ -114,6 +213,10 @@ export async function publishFacilityStaffMetadata(context, sourceTypes = [], op
       : updatedTerms;
     const stableManifest = { schemaVersion: SCHEMA_VERSION, sourceType, coverage: metadata.coverage, terms, days: currentManifest?.days || {}, months: currentManifest?.months || {} };
     const revision = await digest(stableManifest);
+    if (options.deferManifest === true) {
+      results.push({ sourceType, changed: currentManifest?.revision !== revision, revision, manifest: stableManifest });
+      continue;
+    }
     if (currentManifest?.revision !== revision) {
       await putJsonGzip(
         r2,
@@ -138,7 +241,7 @@ export async function publishFacilityDays(context, sourceTypeValue, dates = [], 
   const now = new Date();
   const nowIso = now.toISOString();
   const existing = await db.prepare("SELECT * FROM facility_day_publications WHERE source_type = ?").bind(sourceType).first();
-  const manifestObject = await loadJsonObject(r2, facilityMetadataManifestKey(sourceType));
+  const manifestObject = options.manifestObject || await loadJsonObject(r2, facilityMetadataManifestKey(sourceType));
   if (!affectedDates.length && options.rebuildPublishedDates === true) affectedDates = Object.keys(manifestObject.data?.days || {}).sort();
   if (!affectedDates.length) return { ok: true, unchanged: true };
   if (affectedDates.length > 120) throw new Error(`Day publication exceeds the 120-date safety budget (${affectedDates.length}).`);
@@ -160,10 +263,12 @@ export async function publishFacilityDays(context, sourceTypeValue, dates = [], 
       last_error='', updated_at=excluded.updated_at`)
     .bind(sourceType, generation, operationId, baseRevision, leaseExpiresAt, nowIso).run();
   try {
-    const currentManifest = manifestObject.data || { schemaVersion: SCHEMA_VERSION, sourceType, coverage: [], terms: [], days: {}, months: {} };
+    const currentManifest = options.preparedManifest || manifestObject.data || { schemaVersion: SCHEMA_VERSION, sourceType, coverage: [], terms: [], days: {}, months: {} };
     const days = { ...(currentManifest.days || {}) };
     for (const date of affectedDates) {
-      const rows = await queryFacilityOverviewOnShift(db, { facilityKey: sourceType, date, includeOverrides: false });
+      const rows = await queryFacilityOverviewOnShift(db, {
+        facilityKey: sourceType, date, includeOverrides: false, maximumRows: options.maximumRowsPerDay,
+      });
       const covered = (currentManifest.coverage || []).some((entry) => entry.startDate <= date && entry.endDate >= date);
       if (!rows.length && !covered) {
         delete days[date];
@@ -366,6 +471,17 @@ async function digest(value) {
   const bytes = new TextEncoder().encode(JSON.stringify(value));
   const result = await crypto.subtle.digest("SHA-256", bytes);
   return [...new Uint8Array(result)].map((part) => part.toString(16).padStart(2, "0")).join("");
+}
+
+function contentOnly(value) {
+  if (Array.isArray(value)) return value.map(contentOnly);
+  if (!value || typeof value !== "object") return value;
+  const result = {};
+  for (const key of Object.keys(value).sort()) {
+    if (["createdAt", "updatedAt", "publishedAt", "lookupMs"].includes(key)) continue;
+    result[key] = contentOnly(value[key]);
+  }
+  return result;
 }
 
 async function putJsonGzip(r2, key, value, options = {}) {

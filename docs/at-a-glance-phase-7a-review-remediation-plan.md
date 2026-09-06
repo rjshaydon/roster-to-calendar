@@ -88,10 +88,15 @@ fixtures before adopting them. A fixture exceeding a proposed ceiling should
 cause the ceiling to be reviewed explicitly; the endpoint must not silently
 raise it or paginate.
 
-Add migration `0030` containing only the missing bootstrap lookup indexes:
+Add migration `0030` containing the missing bounded-maintenance lookup indexes:
 
-- `facility_term_staff_contributions(file_id, term_start, doctor_key)`; and
-- `facility_stream_catalog_contributions(file_id, term_start, catalog_key)`.
+- `facility_term_staff_contributions(file_id, term_start, doctor_key)`;
+- `facility_stream_catalog_contributions(file_id, term_start, catalog_key)`;
+- `facility_staff_designations(source_type, active, term_start, doctor_key)`;
+  and
+- `facility_staff_seniority_overrides(source_type, active, term_start,
+  doctor_key)`; and
+- `roster_files(source_type, active, id)`.
 
 The existing roster-event and roster-doctor indexes should be reused. Do not
 duplicate them. Update the local schema helper only to maintain fresh-schema
@@ -280,7 +285,9 @@ implementation unexpectedly requires the general roster-write switch, treat
 that as a defect rather than enabling it.
 
 Add migration `0030` to the serial migration list and record its expected cost
-as two empty-table index creations before any data bootstrap. It remains a
+as five index creations before any data bootstrap. The four compact and
+maintenance indexes should still be empty at this point; the roster-file index
+is bounded by the small retained-file table. It remains a
 separately approved remote step.
 
 ## Implementation order

@@ -54,6 +54,7 @@ const cases = {
   contacts: [`SELECT id FROM contact_list_files WHERE source_id=? ORDER BY received_at DESC LIMIT 8`, ["monash"]],
   compactCoverage: [`SELECT c.file_id,c.coverage_start,c.coverage_end FROM roster_file_coverage c JOIN roster_files f ON f.id=c.file_id WHERE f.active=1 AND c.source_type=?`, ["mmc"]],
   compactStaff: [`SELECT s.doctor_key,MAX(s.display_name) FROM facility_term_staff_contributions s JOIN roster_files f ON f.id=s.file_id WHERE f.active=1 AND s.source_type=? AND s.term_start=? GROUP BY s.doctor_key`, ["mmc", "2026-05-04"]],
+  bootstrapEvents: [`SELECT id, doctor_key, display_name, seniority, start_date, end_date, event_json FROM roster_events WHERE file_id=? LIMIT ?`, ["fixture-mmc", 25001]],
 };
 
 function plan(sql, bindings) {
@@ -76,6 +77,7 @@ report.estimates = {
   contacts: "at most eight returned, but the existing endpoint repeats authentication/access and R2 discovery on every poll",
   compactCoverage: "one compact row per contributing active file; zero roster-event rows",
   compactStaff: "one compact contribution per doctor/file for the selected ED/term; zero roster-event rows",
+  bootstrapEvents: "at most 25,001 rows from one exact file-index walk, with no database sort",
 };
 
 assert.equal(totalEvents, 109200);
@@ -85,5 +87,7 @@ assert.ok(report.contacts.plan.some((line) => /SEARCH contact_list_files USING I
 assert.ok(report.coverage.plan.some((line) => /SEARCH e USING/.test(line)), "baseline coverage plan should be recorded as a broad source-history index walk");
 assert.ok(report.compactCoverage.plan.every((line) => !/roster_events/.test(line)), "compact coverage must not access roster events");
 assert.ok(report.compactStaff.plan.every((line) => !/roster_events/.test(line)), "compact staff must not access roster events");
+assert.ok(report.bootstrapEvents.plan.some((line) => /SEARCH roster_events USING INDEX idx_events_file \(file_id=\?\)/.test(line)), "bootstrap must use the exact file index");
+assert.equal(report.bootstrapEvents.plan.some((line) => /SCAN roster_events|TEMP B-TREE/i.test(line)), false, "bootstrap must not scan or sort roster history before its sentinel limit");
 
 console.log(JSON.stringify(report, null, 2));

@@ -22,6 +22,10 @@ export function advancedRosterMaintenanceEnabled(env = {}) {
   return automatedRosterWritesEnabled(env) && ENABLED_VALUES.has(String(env.ROSTER_ADVANCED_MAINTENANCE_ENABLED || "").trim().toLowerCase());
 }
 
+export function facilityMaterializationMaintenanceEnabled(env = {}) {
+  return ENABLED_VALUES.has(String(env.ROSTER_ADVANCED_MAINTENANCE_ENABLED || "").trim().toLowerCase());
+}
+
 export function rosterWritePausedResponse() {
   return Response.json({
     ok: false,
