@@ -37,6 +37,9 @@ export async function initializeFacilityMaterialization(context, sourceTypeValue
     return { ok: false, reason: "valid-term-start-required", sourceType };
   }
   const metadata = await queryMaterializedFacilityMetadata(context.env.ROSTER_DB, { sourceType });
+  const requestedTermEntry = (metadata.terms || []).find((term) => term.termStart === requestedTerm);
+  if (!requestedTermEntry) return { ok: false, reason: "term-not-prepared", sourceType, termStart: requestedTerm };
+  const currentManifestObject = await loadJsonObject(context.env.ROSTER_FILES, facilityMetadataManifestKey(sourceType));
   const dates = new Set();
   for (const interval of metadata.coverage || []) {
     let cursor = String(interval.startDate || "").slice(0, 10);
@@ -52,19 +55,29 @@ export async function initializeFacilityMaterialization(context, sourceTypeValue
   const plannedDates = [...dates].sort();
   if (!plannedDates.length) return { ok: false, reason: "no-covered-dates", sourceType, termStart: requestedTerm };
   if (plannedDates.length > maximumDates) return { ok: false, overBudget: true, sourceType, termStart: requestedTerm, plannedDates: plannedDates.length, maximumDates };
+  const planRevision = await digest({
+    sourceType, termStart: requestedTerm, coverage: metadata.coverage,
+    term: requestedTermEntry, baseRevision: String(currentManifestObject.data?.revision || ""), plannedDates,
+  });
   const estimate = {
     indexedDayQueries: plannedDates.length,
-    maximumPublicationStateWrites: 4,
-    maximumR2Puts: plannedDates.length + new Set(plannedDates.map((date) => date.slice(0, 7))).size + 3,
+    maximumD1ReadStatements: plannedDates.length + 11,
+    maximumPublicationStateStatements: 4,
+    maximumEstimatedD1RowsWrittenIncludingIndexes: 8,
+    maximumR2Gets: 3 + (new Set(plannedDates.map((date) => date.slice(0, 7))).size * 31),
+    maximumR2Puts: plannedDates.length + new Set(plannedDates.map((date) => date.slice(0, 7))).size + 4,
     broadRosterScans: 0,
   };
-  if (options.dryRun !== false) return { ok: true, dryRun: true, sourceType, termStart: requestedTerm, plannedDates, estimate };
-  await publishFacilityStaffMetadata(context, [sourceType]);
+  if (options.dryRun !== false) return { ok: true, dryRun: true, sourceType, termStart: requestedTerm, plannedDates, planRevision, estimate };
+  if (!options.planRevision || String(options.planRevision) !== planRevision) {
+    return { ok: false, stalePlan: true, reason: "publication-plan-changed", sourceType, termStart: requestedTerm };
+  }
+  await publishFacilityStaffMetadata(context, [sourceType], { termStart: requestedTerm });
   const publication = await publishFacilityDays(context, sourceType, plannedDates);
-  return { ok: true, dryRun: false, sourceType, termStart: requestedTerm, plannedDates: plannedDates.length, estimate, publication };
+  return { ok: true, dryRun: false, sourceType, termStart: requestedTerm, plannedDates: plannedDates.length, planRevision, estimate, publication };
 }
 
-export async function publishFacilityStaffMetadata(context, sourceTypes = []) {
+export async function publishFacilityStaffMetadata(context, sourceTypes = [], options = {}) {
   const db = context?.env?.ROSTER_DB;
   const r2 = context?.env?.ROSTER_FILES;
   if (!db?.prepare || !r2?.put || !r2?.get) return { ok: false, unavailable: true };
@@ -73,8 +86,9 @@ export async function publishFacilityStaffMetadata(context, sourceTypes = []) {
     const metadata = await queryMaterializedFacilityMetadata(db, { sourceType });
     const currentManifestObject = await loadJsonObject(r2, facilityMetadataManifestKey(sourceType));
     const currentManifest = currentManifestObject.data;
-    const terms = [];
-    for (const term of metadata.terms || []) {
+    const requestedTerm = String(options.termStart || "").slice(0, 10);
+    const updatedTerms = [];
+    for (const term of (metadata.terms || []).filter((entry) => !requestedTerm || entry.termStart === requestedTerm)) {
       const termEnd = australianTermEndForStart(term.termStart);
       const members = (await queryMaterializedFacilityTermStaff(db, { sourceType, termStart: term.termStart, termEnd }))
         .map((member) => ({
@@ -93,8 +107,11 @@ export async function publishFacilityStaffMetadata(context, sourceTypes = []) {
       if (currentTerm?.staffRevision !== staffRevision) {
         await storeCachedSnapshot(r2, staffKey, staff, { revision: staffRevision, ownerType: "facility-staff", ownerId: sourceType, rangeKey: term.termStart });
       }
-      terms.push({ ...term, termEnd, staffKey, staffRevision });
+      updatedTerms.push({ ...term, termEnd, staffKey, staffRevision });
     }
+    const terms = requestedTerm
+      ? [...(currentManifest?.terms || []).filter((entry) => entry.termStart !== requestedTerm), ...updatedTerms].sort((a, b) => a.termStart.localeCompare(b.termStart))
+      : updatedTerms;
     const stableManifest = { schemaVersion: SCHEMA_VERSION, sourceType, coverage: metadata.coverage, terms, days: currentManifest?.days || {}, months: currentManifest?.months || {} };
     const revision = await digest(stableManifest);
     if (currentManifest?.revision !== revision) {

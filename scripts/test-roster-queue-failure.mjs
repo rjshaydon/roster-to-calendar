@@ -109,7 +109,7 @@ assert.ok(failedDb.run.completed_at, "a failed run must receive a completion tim
 const processingDb = new QueueFailureDb(run);
 const processingResponse = await handleDerivedRoster({
   request: derivedRequest("start"),
-  env: { ROSTER_AUTOMATION_TOKEN: token, ROSTER_AUTOMATION_WRITES_ENABLED: "true", ROSTER_DB: processingDb },
+  env: { ROSTER_AUTOMATION_TOKEN: token, ROSTER_AUTOMATION_WRITES_ENABLED: "true", ROSTER_AUTOMATION_SOURCE_ALLOWLIST: "future-source", ROSTER_DB: processingDb },
 });
 assert.equal(processingResponse.status, 400, "an unrecognised source must not be allowed to save derived roster data");
 assert.equal(processingDb.run.status, "queued", "rejecting derived data must not falsely mark the run successful");

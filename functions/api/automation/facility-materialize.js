@@ -12,8 +12,9 @@ export async function onRequestPost(context) {
     termStart: body?.termStart,
     maximumDates: body?.maximumDates,
     dryRun: body?.execute !== true,
+    planRevision: body?.planRevision,
   });
-  return Response.json(result, { status: result.ok ? 200 : result.overBudget ? 409 : 400 });
+  return Response.json(result, { status: result.ok ? 200 : result.overBudget || result.stalePlan ? 409 : 400 });
 }
 
 function validToken(request, configured) {

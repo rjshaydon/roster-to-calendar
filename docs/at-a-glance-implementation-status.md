@@ -390,9 +390,9 @@ Remaining:
 
 ## Phase 7A: controlled-rollout safeguards and worksheet
 
-Status: implementation committed locally, but the post-commit safety review
-found rollout blockers. Phase 7B remains blocked. No remote action is
-authorised or has been performed.
+Status: review remediation implemented and focused local verification passed.
+Phase 7B may now be considered, but no online rollout step is authorised by
+this result. No remote action has been performed.
 
 Completed locally:
 
@@ -424,10 +424,32 @@ Focused Phase 7A evidence:
   shared contact and contact-allocation/sync checks pass.
 - `npm run check` passes.
 
+Remediation completed locally:
+
+- Added one cohort-aware `shared` / `legacy` / `blocked` routing decision,
+  scoped materialised access to the actor and viewed account, and made shared
+  cache misses fail closed without a roster-history fallback.
+- Added a separate legacy-read stop so an emergency response may make At a
+  glance temporarily unavailable without restoring expensive D1 queries.
+- Added independent, fail-closed contact-ingestion controls before D1 or R2,
+  bounded retention discovery/deletion, and zero writes for unchanged input.
+- Added a one-file compact-fact bootstrap with an indexed `file_id` read capped
+  at 25,000 events plus one sentinel row. Proposed mutations are capped at 750,
+  below the 800-statement atomic D1 batch boundary; stale, repeated and
+  over-budget attempts write nothing.
+- Restricted initial publication to one explicit medical term, added a stable
+  plan revision, and tested actual mocked D1/R2 operation counts against the
+  reported ceilings while preserving other manifest terms.
+- Corrected the rollout worksheet so Creator canary access is not enabled
+  globally and operational rollback never requires re-enabling legacy broad
+  reads.
+- Focused materialisation, rollout, access, quota, queue-failure and syntax
+  checks pass after remediation. The wider snapshot, contact, fixture,
+  automation, database-cost and local-isolation regression set also passed in
+  this local phase.
+
 Next step:
 
-- Implement and review `at-a-glance-phase-7a-remediation-plan.md`. It addresses
-  cohort-scoped access, no-fallback routing, bounded existing-data bootstrap,
-  truthful one-term publication costs and independent contact-ingestion
-  containment. Do not use the current rollout worksheet operationally until
-  those fixes and their focused local gates pass.
+- Review the local remediation commit before deciding whether to push it.
+  Deployment, remote migrations, bootstrap and reader activation remain
+  separate Phase 7B decisions with the worksheet's measured stop points.

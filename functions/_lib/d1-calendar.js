@@ -1517,17 +1517,41 @@ export async function deleteFacilityOverviewMaterializationForFile(db, fileId) {
   return { writes: (results || []).reduce((total, result) => total + Number(result?.meta?.changes || result?.changes || 0), 0) };
 }
 
+export async function inspectFacilityOverviewBootstrap(db, options = {}) {
+  if (!db?.prepare || !options.fileId) return { ok: false, reason: "missing-input" };
+  const file = await db.prepare(`SELECT id, name, source_type, source_id, active, size, last_modified, parsed_at, parser_version
+    FROM roster_files WHERE id = ?`).bind(String(options.fileId)).first();
+  const sourceType = normalizeSourceType(options.sourceType);
+  if (!file || Number(file.active || 0) !== 1 || !sourceType || normalizeSourceType(file.source_type) !== sourceType) {
+    return { ok: false, reason: "active-file-not-found" };
+  }
+  const compact = await db.prepare("SELECT content_revision, updated_at FROM roster_file_coverage WHERE file_id = ?").bind(String(file.id)).first();
+  const planRevision = await facilityOverviewDigest({
+    fileId: String(file.id), sourceType, name: String(file.name || ""), sourceId: String(file.source_id || ""),
+    size: Number(file.size || 0), lastModified: Number(file.last_modified || 0), parsedAt: String(file.parsed_at || ""),
+    parserVersion: String(file.parser_version || ""), compactRevision: String(compact?.content_revision || ""),
+  });
+  return { ok: true, fileId: String(file.id), sourceType, active: true, compactReady: Boolean(compact?.content_revision), planRevision };
+}
+
 export async function refreshFacilityOverviewMaterializationForFile(db, fileId, options = {}) {
   if (!db?.prepare || !fileId) return { writes: 0, missing: true };
+  const maximumEventRows = options.maximumEventRows == null ? null : Math.max(1, Math.min(Number(options.maximumEventRows) || 1, 25000));
+  const eventStatement = maximumEventRows == null
+    ? db.prepare("SELECT id, doctor_key, display_name, seniority, provider_staff_id, start_date, end_date, event_json FROM roster_events WHERE file_id = ? ORDER BY id").bind(String(fileId))
+    : db.prepare("SELECT id, doctor_key, display_name, seniority, provider_staff_id, start_date, end_date, event_json FROM roster_events WHERE file_id = ? ORDER BY id LIMIT ?").bind(String(fileId), maximumEventRows + 1);
   const [file, doctorsResult, eventsResult, existingCoverage, existingStaffResult, existingCatalogResult] = await Promise.all([
     db.prepare("SELECT id, source_type FROM roster_files WHERE id = ?").bind(String(fileId)).first(),
     db.prepare("SELECT doctor_key, display_name, seniority, membership_source, provider_staff_id FROM roster_file_doctors WHERE file_id = ? ORDER BY doctor_key").bind(String(fileId)).all(),
-    db.prepare("SELECT id, doctor_key, display_name, seniority, provider_staff_id, start_date, end_date, event_json FROM roster_events WHERE file_id = ? ORDER BY id").bind(String(fileId)).all(),
+    eventStatement.all(),
     db.prepare("SELECT content_revision, staff_digest, daily_digest, coverage_start, coverage_end FROM roster_file_coverage WHERE file_id = ?").bind(String(fileId)).first(),
     db.prepare("SELECT source_type, term_start, doctor_key, file_id, fact_digest FROM facility_term_staff_contributions WHERE file_id = ?").bind(String(fileId)).all(),
     db.prepare("SELECT source_type, term_start, file_id, catalog_key, fact_digest FROM facility_stream_catalog_contributions WHERE file_id = ?").bind(String(fileId)).all(),
   ]);
   if (!file) return await deleteFacilityOverviewMaterializationForFile(db, fileId);
+  if (maximumEventRows != null && (eventsResult.results || []).length > maximumEventRows) {
+    return { ok: false, overBudget: true, reason: "event-read-limit", eventRowsExamined: maximumEventRows + 1, maximumEventRows, writes: 0 };
+  }
   const sourceType = normalizeSourceType(file.source_type);
   const doctors = doctorsResult.results || [];
   const events = eventsResult.results || [];
@@ -1639,6 +1663,10 @@ export async function refreshFacilityOverviewMaterializationForFile(db, fileId, 
     const [oldSource, oldTerm, oldFile, oldCatalogKey] = key.split("|");
     statements.push(db.prepare("DELETE FROM facility_stream_catalog_contributions WHERE source_type = ? AND term_start = ? AND file_id = ? AND catalog_key = ?")
       .bind(oldSource, oldTerm, oldFile, oldCatalogKey));
+  }
+  const maximumWrites = options.maximumWrites == null ? null : Math.max(1, Math.min(Number(options.maximumWrites) || 1, D1_MAX_BATCH_STATEMENTS));
+  if (maximumWrites != null && statements.length > maximumWrites) {
+    return { ok: false, overBudget: true, reason: "compact-write-limit", eventRowsExamined: events.length, proposedWrites: statements.length, maximumWrites, writes: 0 };
   }
   if (!statements.length) return { writes: 0, unchanged: true, contentRevision };
   const results = await runTransactionalBatch(db, statements);

@@ -8,10 +8,15 @@ import {
   queryMaterializedFacilityCoverage,
   queryMaterializedFacilityTermStaff,
   replaceDerivedRosterFile,
+  startDerivedRosterFileSave,
+  appendDerivedRosterFileEvents,
 } from "../functions/_lib/d1-calendar.js";
 import { onRequestPost as saveAutomatedDerivedRoster } from "../functions/api/automation/derived.js";
+import { onRequestPost as bootstrapFacility } from "../functions/api/automation/facility-bootstrap.js";
+import { onRequestPost as materializeFacility } from "../functions/api/automation/facility-materialize.js";
+import { onRequestPost as ingestContacts } from "../functions/api/automation/contact-list-extract.js";
 import { onRequestPost as stateHandler } from "../functions/api/state.js";
-import { loadPublishedFacilityDays, loadPublishedFacilityMetadata, loadPublishedFacilityRange, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata } from "../functions/_lib/facility-overview-cache.js";
+import { initializeFacilityMaterialization, loadPublishedFacilityDays, loadPublishedFacilityMetadata, loadPublishedFacilityRange, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata } from "../functions/_lib/facility-overview-cache.js";
 
 class LocalD1 {
   constructor(sqlite) { this.sqlite = sqlite; this.rowsWritten = 0; this.sql = []; }
@@ -66,6 +71,63 @@ const initialEvents = {
   "TERM TRAINEE": [event("trainee-1", "2026-08-03")],
 };
 
+const contactR2 = new LocalR2();
+const contactPayload = { sourceId: "mmc-shift-allocations", sourceDate: "2026-09-06", providerModifiedAt: "2026-09-06T01:00:00Z", contacts: [{ area: "Adult Emergency", shift: "AM", role: "Consultant", name: "Alex Example", phone: "555-0100", isPopulated: true }] };
+async function callContactExtract() {
+  return ingestContacts({
+    request: new Request("http://local/api/automation/contact-list-extract", { method: "POST", headers: { authorization: "Bearer contact-token", "content-type": "application/json" }, body: JSON.stringify(contactPayload) }),
+    env: { ROSTER_DB: db, ROSTER_FILES: contactR2, ROSTER_AUTOMATION_TOKEN: "contact-token", CONTACT_AUTOMATION_WRITES_ENABLED: "true", CONTACT_AUTOMATION_SOURCE_ALLOWLIST: "mmc-shift-allocations" },
+  });
+}
+const firstContact = await callContactExtract();
+assert.equal(firstContact.status, 200);
+assert.equal((await firstContact.json()).status, "stored");
+db.rowsWritten = 0;
+const contactPuts = contactR2.puts;
+const repeatedContact = await callContactExtract();
+assert.equal((await repeatedContact.json()).status, "unchanged");
+assert.equal(db.rowsWritten, 0, "an unchanged allowed contact extract must write no D1 rows");
+assert.equal(contactR2.puts, contactPuts, "an unchanged allowed contact extract must write no R2 objects");
+
+async function callBootstrap(body) {
+  const response = await bootstrapFacility({
+    request: new Request("http://local/api/automation/facility-bootstrap", { method: "POST", headers: { authorization: "Bearer bootstrap-token", "content-type": "application/json" }, body: JSON.stringify(body) }),
+    env: { ROSTER_DB: db, ROSTER_AUTOMATION_TOKEN: "bootstrap-token", ROSTER_AUTOMATION_WRITES_ENABLED: "true", ROSTER_ADVANCED_MAINTENANCE_ENABLED: "true", FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST: "mmc" },
+  });
+  return { response, payload: await response.json() };
+}
+
+const legacyFile = { ...file, id: "bootstrap-file", name: "Legacy.xlsx" };
+await startDerivedRosterFileSave(db, legacyFile, doctors);
+await appendDerivedRosterFileEvents(db, legacyFile, doctors, initialEvents);
+assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM roster_file_coverage WHERE file_id = 'bootstrap-file'").get().count, 0);
+const bootstrapPlan = await callBootstrap({ sourceType: "mmc", fileId: legacyFile.id, maximumEventRows: 10, maximumWrites: 100 });
+assert.equal(bootstrapPlan.response.status, 200);
+assert.equal(bootstrapPlan.payload.dryRun, true);
+const staleBootstrap = await callBootstrap({ sourceType: "mmc", fileId: legacyFile.id, maximumEventRows: 10, maximumWrites: 100, execute: true, planRevision: "stale" });
+assert.equal(staleBootstrap.response.status, 409);
+db.rowsWritten = 0;
+const bootstrapExecution = await callBootstrap({ sourceType: "mmc", fileId: legacyFile.id, maximumEventRows: 10, maximumWrites: 100, execute: true, planRevision: bootstrapPlan.payload.planRevision });
+assert.equal(bootstrapExecution.response.status, 200);
+assert.equal(bootstrapExecution.payload.result.overBudget, undefined);
+assert.ok(db.rowsWritten <= 100);
+db.rowsWritten = 0;
+const repeatedBootstrap = await callBootstrap({ sourceType: "mmc", fileId: legacyFile.id, maximumEventRows: 10, maximumWrites: 100, execute: true, planRevision: bootstrapExecution.payload.planRevision });
+assert.equal(repeatedBootstrap.payload.unchanged, true);
+assert.equal(db.rowsWritten, 0, "a repeated compact bootstrap must write nothing");
+
+const oversizedFile = { ...file, id: "bootstrap-oversized", name: "Oversized.xlsx" };
+await startDerivedRosterFileSave(db, oversizedFile, doctors);
+await appendDerivedRosterFileEvents(db, oversizedFile, doctors, initialEvents);
+const oversizedPlan = await callBootstrap({ sourceType: "mmc", fileId: oversizedFile.id, maximumEventRows: 1, maximumWrites: 100 });
+db.rowsWritten = 0;
+const oversizedExecution = await callBootstrap({ sourceType: "mmc", fileId: oversizedFile.id, maximumEventRows: 1, maximumWrites: 100, execute: true, planRevision: oversizedPlan.payload.planRevision });
+assert.equal(oversizedExecution.response.status, 409);
+assert.equal(oversizedExecution.payload.result.reason, "event-read-limit");
+assert.equal(db.rowsWritten, 0, "an over-budget bootstrap must stop before compact writes");
+await deleteDerivedRosterFile(db, legacyFile.id);
+await deleteDerivedRosterFile(db, oversizedFile.id);
+
 const first = await replaceDerivedRosterFile(db, file, doctors, initialEvents);
 assert.equal(first.unchanged, false);
 assert.equal((await queryMaterializedFacilityCoverage(db, { sourceType: "mmc" }))[0].startDate, "2026-08-03");
@@ -92,6 +154,27 @@ await assert.rejects(
   (error) => error?.code === "ROSTER_INCREMENTAL_BUDGET" && error.changedFactCount === 2,
 );
 assert.equal(db.rowsWritten, 0, "an over-budget automatic revision must stop before writes");
+
+sqlite.prepare("INSERT INTO facility_term_visibility (source_type, term_start, visible_from, revision, updated_at) VALUES ('mmc', '2026-02-02', '2026-01-19', '', '')").run();
+const plannedR2 = new LocalR2();
+db.sql = [];
+const materializeEnv = { ROSTER_DB: db, ROSTER_FILES: plannedR2, ROSTER_AUTOMATION_TOKEN: "bootstrap-token", ROSTER_AUTOMATION_WRITES_ENABLED: "true", ROSTER_ADVANCED_MAINTENANCE_ENABLED: "true", FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST: "mmc" };
+const materializationPlanResponse = await materializeFacility({ request: new Request("http://local/api/automation/facility-materialize", { method: "POST", headers: { authorization: "Bearer bootstrap-token", "content-type": "application/json" }, body: JSON.stringify({ sourceType: "mmc", termStart: "2026-08-03" }) }), env: materializeEnv });
+const materializationPlan = await materializationPlanResponse.json();
+assert.equal(materializationPlan.dryRun, true);
+assert.ok(materializationPlan.planRevision);
+const stalePlan = await initializeFacilityMaterialization({ env: { ROSTER_DB: db, ROSTER_FILES: plannedR2 } }, "mmc", { termStart: "2026-08-03", dryRun: false, planRevision: "stale" });
+assert.equal(stalePlan.stalePlan, true);
+assert.equal(plannedR2.puts, 0, "a stale publication plan must write nothing");
+db.sql = [];
+const plannedPutsBefore = plannedR2.puts;
+const plannedGetsBefore = plannedR2.gets;
+const materializationExecution = await initializeFacilityMaterialization({ env: { ROSTER_DB: db, ROSTER_FILES: plannedR2 } }, "mmc", { termStart: "2026-08-03", dryRun: false, planRevision: materializationPlan.planRevision });
+assert.equal(materializationExecution.ok, true);
+assert.ok(plannedR2.puts - plannedPutsBefore <= materializationPlan.estimate.maximumR2Puts);
+assert.ok(plannedR2.gets - plannedGetsBefore <= materializationPlan.estimate.maximumR2Gets);
+assert.ok(db.sql.length <= materializationPlan.estimate.maximumD1ReadStatements + materializationPlan.estimate.maximumPublicationStateStatements);
+assert.equal(db.sql.filter((sql) => /FROM facility_term_staff_contributions/.test(sql)).length, 1, "one-term publication must not query Staff for historical terms");
 
 const r2 = new LocalR2();
 db.sql = [];
@@ -146,7 +229,7 @@ async function callSharedAction(body, options = {}) {
   db.sql = [];
   const response = await stateHandler({
     request: new Request("http://127.0.0.1/api/state", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "doctor@example.com", password, ...body }) }),
-    env: { ROSTER_DB: db, ROSTER_FILES: options.r2 || r2, FACILITY_ACCESS_MATERIALIZATION_ENABLED: "true", FACILITY_SHARED_METADATA_ENABLED: "true", FACILITY_SHARED_DAYS_ENABLED: "true", FACILITY_SHARED_READER_SOURCE_ALLOWLIST: "mmc", FACILITY_SHARED_READER_COHORT: "all" },
+    env: { ROSTER_DB: db, ROSTER_FILES: options.r2 || r2, FACILITY_SHARED_ROLLOUT_ACTIVE: "true", FACILITY_ACCESS_MATERIALIZATION_ENABLED: "true", FACILITY_SHARED_METADATA_ENABLED: "true", FACILITY_SHARED_DAYS_ENABLED: "true", FACILITY_SHARED_READER_SOURCE_ALLOWLIST: "mmc", FACILITY_SHARED_READER_COHORT: "all" },
     waitUntil() {},
   });
   const payload = await response.json();
@@ -176,6 +259,11 @@ const missingHandlerDay = await callSharedAction(
   { r2: new LocalR2(), status: 503 },
 );
 assert.equal(missingHandlerDay.preparing, true, "an On shift miss must not build or query roster events");
+const blockedDisallowedDay = await callSharedAction(
+  { action: "queryFacilityOverviewOnShift", facilityKey: "ddh", date: "2026-08-03", includeClinicalSupport: true },
+  { status: 403 },
+);
+assert.match(blockedDisallowedDay.error, /not available/i, "a disallowed canary ED must be blocked without a legacy query");
 const forbiddenAllStaff = await callSharedAction(
   { action: "queryFacilityOverviewStaff", facilityKey: "all", termStart: "2026-08-03", termEnd: "2026-11-02" },
   { status: 403 },

@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { facilityBuildSources, facilityRolloutPaused, facilitySharedReaderAllowed } from "../functions/_lib/facility-rollout.js";
+import { facilityBuildSources, facilityReadRoute, facilityRolloutPaused, facilitySharedReaderAllowed } from "../functions/_lib/facility-rollout.js";
 import { automatedRosterQueueEnabled, automatedRosterSourceEnabled, advancedRosterMaintenanceEnabled } from "../functions/_lib/roster-automation-guard.js";
 import { onRequestPost as materialize } from "../functions/api/automation/facility-materialize.js";
 
 const env = {
+  FACILITY_SHARED_ROLLOUT_ACTIVE: "true",
   FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST: "mmc",
   FACILITY_SHARED_READER_SOURCE_ALLOWLIST: "mmc",
   FACILITY_SHARED_READER_COHORT: "creator",
@@ -17,6 +18,9 @@ assert.equal(facilitySharedReaderAllowed(env, { actorRole: "creator", actorEmail
 assert.equal(facilitySharedReaderAllowed(env, { actorRole: "creator", actorEmail: "creator@example.com", subjectEmail: "other@example.com", sources: ["mmc"] }), false, "Creator impersonation must not enter the Creator-only cohort");
 assert.equal(facilitySharedReaderAllowed(env, { actorRole: "user", actorEmail: "user@example.com", subjectEmail: "user@example.com", sources: ["mmc"] }), false);
 assert.equal(facilitySharedReaderAllowed(env, { actorRole: "creator", actorEmail: "creator@example.com", subjectEmail: "creator@example.com", sources: ["ddh"] }), false);
+assert.equal(facilityReadRoute(env, { actorRole: "creator", actorEmail: "creator@example.com", subjectEmail: "creator@example.com", sources: ["ddh"] }), "blocked");
+assert.equal(facilityReadRoute(env, { actorRole: "user", actorEmail: "user@example.com", subjectEmail: "user@example.com", sources: ["mmc"] }), "legacy");
+assert.equal(facilityReadRoute({ ...env, FACILITY_LEGACY_READS_PAUSED: "true" }, { actorRole: "user", actorEmail: "user@example.com", subjectEmail: "user@example.com", sources: ["mmc"] }), "blocked");
 assert.equal(facilityRolloutPaused({ ...env, FACILITY_SHARED_EMERGENCY_PAUSED: "true" }), true);
 assert.deepEqual(facilityBuildSources({ ...env, FACILITY_SHARED_EMERGENCY_PAUSED: "true" }, ["mmc"]), []);
 assert.equal(automatedRosterSourceEnabled(env, "monash-adults"), true);

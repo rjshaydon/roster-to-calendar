@@ -1,184 +1,150 @@
 # At a glance Phase 7 rollout package
 
-This is an operational worksheet, not permission to deploy. Phase 7 must be
-performed gradually, with an explicit approval before each remote step.
+This is an operational worksheet, not permission to deploy. Each remote step
+requires separate approval and must be performed serially.
 
-## Release identity and protected state
+## Release identity
 
-- Release branch: `codex/at-a-glance-d1-optimization`
+- Branch: `codex/at-a-glance-d1-optimization`
 - Protected production base: `aa9eed8`
-- Release candidate: the Phase 7A commit containing this worksheet
-- Doctor identity branch: `codex/durable-doctor-identity-aliases` (untouched)
-- Current repository automation defaults: roster writes `false`; watchdog
-  automation `false`
-- Production D1, R2, Pages, secrets, metrics and migration history have not
-  been accessed while preparing this package.
+- Release candidate: the reviewed remediation commit containing this worksheet
+- Doctor identity work remains outside this rollout.
+- Production services have not been accessed while preparing this package.
 
-Before any deployment, record the exact release commit, current production
-commit, current migration ledger, D1 daily read/write usage and UTC reset time.
-Stop if the deployed commit or migration ledger differs from the recorded
-state.
+Before deployment, record the exact release and production commits, migration
+ledger, effective settings, D1 daily usage and UTC reset time. Stop if any state
+differs from the reviewed record.
 
-## 7A safety controls
-
-The release candidate adds independent, fail-closed controls:
+## Inert configuration
 
 | Purpose | Setting | Inert value |
 | --- | --- | --- |
-| Immediate shared-path stop | `FACILITY_SHARED_EMERGENCY_PAUSED` | `true` |
-| EDs allowed to publish | `FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST` | empty |
-| EDs allowed to use shared readers | `FACILITY_SHARED_READER_SOURCE_ALLOWLIST` | empty |
-| Users allowed to use shared readers | `FACILITY_SHARED_READER_COHORT` | empty |
-| Automated roster writes | `ROSTER_AUTOMATION_WRITES_ENABLED` | `false` |
-| Automated source IDs allowed | `ROSTER_AUTOMATION_SOURCE_ALLOWLIST` | empty |
-| Queue dispatch/polling | `ROSTER_AUTOMATION_QUEUE_ENABLED` | `false` |
-| Manual advanced maintenance | `ROSTER_ADVANCED_MAINTENANCE_ENABLED` | `false` |
+| Activate cohort routing | `FACILITY_SHARED_ROLLOUT_ACTIVE` | `false` |
+| Stop shared canary/builds | `FACILITY_SHARED_EMERGENCY_PAUSED` | `true` |
+| Stop historical reads | `FACILITY_LEGACY_READS_PAUSED` | `false` initially |
+| ED build allowlist | `FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST` | empty |
+| ED reader allowlist | `FACILITY_SHARED_READER_SOURCE_ALLOWLIST` | empty |
+| Reader cohort | `FACILITY_SHARED_READER_COHORT` | empty |
+| Roster writes | `ROSTER_AUTOMATION_WRITES_ENABLED` | `false` |
+| Roster source allowlist | `ROSTER_AUTOMATION_SOURCE_ALLOWLIST` | empty |
+| Queue | `ROSTER_AUTOMATION_QUEUE_ENABLED` | `false` |
+| Advanced maintenance | `ROSTER_ADVANCED_MAINTENANCE_ENABLED` | `false` |
+| Contact ingestion | `CONTACT_AUTOMATION_WRITES_ENABLED` | `false` |
+| Contact source allowlist | `CONTACT_AUTOMATION_SOURCE_ALLOWLIST` | empty |
 | External watchdog | `ROSTER_AUTOMATION_ENABLED` | `false` |
 
-All existing phase controls must also remain false at inert deployment:
+Keep all access, metadata, day and contact shared build/reader settings false.
+Missing allowlists fail closed. Contact ingestion is not enabled by the roster
+automation switch.
 
-- `FACILITY_ACCESS_MATERIALIZATION_ENABLED`
-- `FACILITY_SHARED_METADATA_BUILD_ENABLED`
-- `FACILITY_SHARED_METADATA_ENABLED`
-- `FACILITY_SHARED_DAYS_BUILD_ENABLED`
-- `FACILITY_SHARED_DAYS_ENABLED`
-- `FACILITY_SHARED_CONTACTS_BUILD_ENABLED`
-- `FACILITY_SHARED_CONTACTS_ENABLED`
+## Migrations
 
-Missing allowlists and cohorts deny access. The Creator cohort applies only to
-the Creator's own view; entering another person's profile does not join that
-person to the canary. An ED must be present in the applicable allowlist even
-when a global phase setting is accidentally enabled.
+Inspect the production ledger and quota headroom first. Apply only missing
+migrations, one at a time: `0025`, `0026`, `0027`, `0028`, then `0029`.
+They create empty structures and do not backfill data. Record usage after each
+and never retry an uncertain result without rechecking the ledger.
 
-## Migration worksheet
+## Serial existing-data bootstrap
 
-Apply no migration until the production ledger and quota headroom have been
-reviewed. Apply only missing migrations, one at a time, in this order:
+Use token-protected `POST /api/automation/facility-bootstrap`. Every request
+names exactly one ED and one active roster file.
 
-1. `0025_runtime_schema_parity.sql` — explicit tables historically created by
-   runtime repair. Confirm existing table/index compatibility first.
-2. `0026_facility_overview_materialisation.sql` — compact coverage, term-staff
-   contribution and visibility tables.
-3. `0027_facility_access_materialisation.sql` — one short-lived access row per
-   subject.
-4. `0028_facility_stream_catalog_materialisation.sql` — compact stream facts.
-5. `0029_facility_day_publications.sql` — one publication/fencing row per ED.
+Inspection omits `execute`, reads only file metadata and its compact marker,
+and returns a `planRevision`. Execution requires identical inputs,
+`"execute": true` and that revision.
 
-These migrations create empty structures and indexes; none contains a
-backfill. After each migration, record success and current D1 read/write usage.
-Do not retry an unclear result until the migration ledger has been inspected.
+The executor performs one indexed `file_id` event read capped at 25,001 rows
+and permits at most 750 proposed compact mutation statements in one D1 batch
+(conservatively estimated as at most 2,250 rows written including indexes). An extra event row, an
+excess write count or a stale plan performs zero compact writes. There is no
+all-files mode, pagination, background retry or automatic continuation.
 
-## Initial publication budget
+Process one file, disable advanced maintenance, inspect actual usage and check
+the resulting facts before considering another file. Other active-file
+contributions must remain intact.
 
-Initial publication uses the token-protected
-`POST /api/automation/facility-materialize` endpoint. It requires all of:
+## One-term publication
 
-- roster writes enabled;
-- advanced maintenance enabled;
-- the requested ED in `FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST`;
-- the emergency pause disabled.
+Use `POST /api/automation/facility-materialize` only after compact facts exist.
+Every request names one ED and one actual medical-term start and is capped at
+120 dates.
 
-The endpoint is a dry run unless the JSON body contains `"execute": true`.
-Use one ED and one term only. Start with `mmc`, unless the release review names
-a different ED. Example dry-run body:
+Dry run returns exact dates, months, a `planRevision` and distinct ceilings for
+D1 read statements, publication-state writes, R2 reads and R2 writes. Rows
+examined remain labelled as local estimates, not Cloudflare measurements.
 
-```json
-{
-  "sourceType": "mmc",
-  "termStart": "2026-08-03",
-  "maximumDates": 120
-}
-```
+Execution requires identical inputs plus the returned revision. Changed facts
+or a changed manifest make it stale and stop writes. Staff publication touches
+only the requested term and preserves other terms. Its R2 ceiling includes the
+Staff object, Staff/metadata pointer, day/month objects, candidate manifest and
+fixed manifest.
 
-The response lists every planned date and these upper bounds:
+Reject unexpected dates, more than 120 dates, any broad source/history scan or
+a plan without comfortable quota headroom.
 
-- one indexed day query per planned date;
-- at most four publication-state writes;
-- at most `planned dates + affected months + 3` R2 writes;
-- zero broad `roster_events` scans.
+## Canary sequence
 
-Reject the run if it exceeds 120 dates, includes an unexpected date, reports a
-broad roster scan, or its predicted cost is not comfortably inside the day's
-remaining quota. Execution requires a second, separately approved request with
-the identical inputs plus `"execute": true`. Never initialise multiple EDs in
-parallel.
+1. Deploy inertly. Do not bootstrap or publish.
+2. Apply reviewed empty migrations individually with new activity paused.
+3. Allow one ED for building. Temporarily enable roster writes and advanced
+   maintenance, inspect one retained file, then separately approve its
+   bootstrap. Disable maintenance immediately afterward.
+4. Repeat only for files needed by the same ED/term, checking usage each time.
+5. Dry-run one ED/term publication. Separately approve and execute only that
+   plan, then disable maintenance and inspect usage.
+6. Allow that ED for readers, select cohort `creator`, activate shared rollout
+   and enable access/metadata/day/contact readers in dependency order. Test
+   only the Creator's own view.
+7. Confirm no other account's login or access calculation changed. Creator
+   impersonation must not enter the canary.
+8. Observe actual D1/R2 metrics through an agreed quiet interval. Stop on any
+   unexplained growth.
+9. Bootstrap, publish and validate further EDs serially. Never allow an ED to
+   read before its objects exist.
+10. Before cohort `all`, set `FACILITY_LEGACY_READS_PAUSED=true` and prove
+    shared, missing and disallowed routes cannot reach historical SQL.
+11. Restore roster and contact sources separately. Restore queue/watchdog last.
 
-Medical term ends are derived from the next actual first-Monday term boundary,
-not a fixed 90-day approximation. The 14-day pre-term visibility rule remains
-unchanged.
-
-## Gradual canary sequence
-
-Each numbered step is a separate checkpoint. Do not combine them into one
-deployment action.
-
-1. Deploy code with the emergency pause true, empty allowlists/cohort, all
-   phase controls false, roster automation false and watchdog false. Confirm
-   ordinary existing behaviour only; do not publish data.
-2. With adequate quota headroom, apply the reviewed empty-schema migrations,
-   one at a time. Keep every new reader and writer disabled.
-3. Permit only the chosen ED in `FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST`.
-   Temporarily enable roster writes and advanced maintenance solely for the
-   approved dry run. Review its exact dates and upper-bound estimate.
-4. If separately approved, execute that one bounded initial publication.
-   Disable advanced maintenance immediately afterward and inspect D1/R2 usage.
-5. Set reader ED allowlist to the same single ED and cohort to `creator`.
-   Enable access, metadata, day and contact readers in dependency order, only
-   after their corresponding objects exist. Test the Creator's own view; do
-   not test impersonation as the canary path deliberately excludes it.
-6. Observe real Cloudflare request and row metrics through an agreed quiet
-   period. Compare examined rows, returned rows and writes with the local
-   estimates. Any unexplained growth stops the rollout.
-7. Add EDs one at a time. Publish and verify each ED before adding it to the
-   reader allowlist. Expand `FACILITY_SHARED_READER_COHORT` from `creator` to
-   `all` only after every intended ED has passed its own checkpoint.
-8. Restore automation separately, source by source. A source must be present in
-   `ROSTER_AUTOMATION_SOURCE_ALLOWLIST`; queue and watchdog controls remain
-   independent. Do not restore them merely because readers are healthy.
+During the short Creator canary, accounts outside the cohort may retain the
+explicit legacy compatibility route. A canary request never falls back:
+missing or disallowed data returns `preparing` or unavailable. Remove legacy
+compatibility before broad rollout.
 
 ## Capacity and acceptance
 
-The planning envelope is 50 simultaneously visible On shift pages, viewed for
-12 hours, refreshing every 60 seconds: 36,000 refresh requests per day. (The
-earlier 8-hour example would be 24,000.) Unchanged contact refreshes have a
-local acceptance target of zero D1 contact reads/writes and three bounded R2
-reads. Authentication and a single indexed access-session read are accounted
-separately; their actual production row cost must be measured during canary.
+The planning envelope is 50 visible On shift pages for 12 hours at a 60-second
+interval: 36,000 requests/day. Unchanged contact refresh must perform zero D1
+contact reads/writes and only its documented bounded R2 reads.
 
-Local scale estimates use the deterministic 109,200-event fixture. They are
-not Cloudflare billing measurements. Production acceptance requires:
+Local evidence uses the 109,200-event fixture and is not a Cloudflare bill.
+Production acceptance requires:
 
-- no reader-time `roster_events` or `roster_daily_presence` scan;
-- unchanged contact refresh: zero D1 contact reads and zero writes;
-- unchanged ingestion: zero event, membership, presence and cache rewrites;
-- all queries bounded by ED/date, subject key or another indexed compact key;
-- actual usage consistent with the dry-run estimate and canary request count;
-- at least 50% of the daily D1 quota remaining after the approved test window.
+- no `roster_events`/`roster_daily_presence` scan on shared or blocked reads;
+- unchanged ingestion rewrites no roster or cache facts;
+- paused contact ingestion touches neither D1 nor R2;
+- bootstrap/publication remain within their reviewed ceilings;
+- actual usage matches request volume and estimates; and
+- at least 50% of each daily quota remains after the test window.
 
-Pause and investigate at 50% daily usage. Stop all optional writes and shared
-rollout activity no later than 70%, or immediately on any unexplained spike.
-These are operational ceilings, not targets.
+Investigate and pause optional work at 50% usage. Stop it by 70%, or immediately
+on an unexplained spike.
 
 ## Rollback
 
-Rollback is configuration-first and does not delete data:
+Rollback must not restore expensive SQL:
 
 1. Set `FACILITY_SHARED_EMERGENCY_PAUSED=true`.
-2. Set all shared reader/build controls false and empty all source allowlists
-   and the reader cohort.
-3. Set roster writes, queue, advanced maintenance and watchdog controls false.
-4. Confirm the old application path is serving ordinary requests and inspect
-   usage before considering a code rollback.
-5. Retain immutable R2 snapshots and compact D1 rows for diagnosis. Do not run
-   cleanup, backfill, repair or repeat publication during an incident.
+2. Set `FACILITY_LEGACY_READS_PAUSED=true` before disabling faulty shared
+   readers. At a glance may temporarily be unavailable.
+3. Disable shared readers/builders and empty their allowlists/cohort.
+4. Disable roster/contact writes, queue, maintenance and watchdog.
+5. Confirm other app functions remain available and inspect usage.
+6. Retain compact rows and immutable objects for diagnosis. Do not repair,
+   replay, clean up or republish during the incident.
 
-The shared reader deliberately returns to the pre-rollout path when disabled.
-If that legacy path itself causes unsafe use, keep the affected feature paused
-rather than repeatedly retrying it.
+## Evidence ledger
 
-## Evidence required before wider release
-
-Record for every checkpoint: UTC time, commit, settings changed, ED/cohort,
-dry-run output, requests made, D1 rows read/written before and after, R2
-operations, response correctness and rollback result. Production numbers must
-come from Cloudflare metrics; local estimates must remain labelled as such.
+For every checkpoint record UTC time, commit, settings, ED/file/term, plan
+output, requests, D1 rows read/written before and after, R2 operations,
+correctness and rollback result. Cloudflare numbers and local estimates must
+remain clearly distinguished.

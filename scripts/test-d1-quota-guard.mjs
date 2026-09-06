@@ -7,6 +7,7 @@ import { onRequestPost as findmyshiftCheck } from "../functions/api/automation/f
 import { onRequestPost as dispatch } from "../functions/api/automation/dispatch.js";
 import { onRequestPost as vhhExtract } from "../functions/api/automation/vhh-roster-extract.js";
 import { onRequestGet as pending } from "../functions/api/automation/pending.js";
+import { onRequestPost as contactExtract } from "../functions/api/automation/contact-list-extract.js";
 import { ensureCalendarSchema } from "../functions/_lib/d1-calendar.js";
 import watchdog from "../worker/roster-queue-watchdog.js";
 
@@ -63,6 +64,13 @@ const pendingResponse = await pending({
 });
 assert.equal(pendingResponse.status, 503, "queue polling should fail closed while automation is paused");
 assert.equal((await pendingResponse.json()).status, "paused");
+
+const contactResponse = await contactExtract({
+  request: request("/api/automation/contact-list-extract", { sourceId: "mmc-shift-allocations", sourceDate: "2026-09-06", providerModifiedAt: "2026-09-06T00:00:00Z", contacts: [] }),
+  env,
+});
+assert.equal(contactResponse.status, 503, "contact ingestion should fail closed independently of roster automation");
+assert.equal((await contactResponse.json()).status, "paused");
 
 assert.equal(databaseTouches, 0, "paused roster automation must perform zero D1 operations");
 assert.equal(objectStoreTouches, 0, "paused roster automation must perform zero R2 operations");

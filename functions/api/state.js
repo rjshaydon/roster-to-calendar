@@ -6,7 +6,7 @@ import { advancedRosterMaintenanceEnabled, rosterWritesExplicitlyPaused, rosterW
 import { guardedFetch, localFeatureDisabledResponse } from "../_lib/outbound-network.js";
 import { loadPublishedFacilityDays, loadPublishedFacilityMetadata, loadPublishedFacilityRange, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata } from "../_lib/facility-overview-cache.js";
 import { loadPublishedFacilityContacts, publishFacilityContactResolutions } from "../_lib/facility-contact-cache.js";
-import { facilityBuildSources, facilitySharedReaderAllowed } from "../_lib/facility-rollout.js";
+import { facilityBuildSources, facilityLegacyReadsPaused, facilityReadRoute, facilityRolloutCohortEligible } from "../_lib/facility-rollout.js";
 import { extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentExceptions, findmyshiftLastModified, findmyshiftReportDiagnostics, findmyshiftShiftReport } from "../_lib/findmyshift.js";
 import {
   buildPreviewFromDerivedEvents,
@@ -147,13 +147,13 @@ export async function onRequestPost(context) {
     if (!hasCalendarDb(context.env)) {
       return Response.json({ error: "D1 database is not configured." }, { status: 503 });
     }
-    const facilityAccessMaterialized = String(context.env.FACILITY_ACCESS_MATERIALIZATION_ENABLED || "").toLowerCase() === "true";
-    const sharedFacilityMetadataEnabled = facilityAccessMaterialized
-      && String(context.env.FACILITY_SHARED_METADATA_ENABLED || "").toLowerCase() === "true";
+    const facilityAccessMaterializationEnabled = String(context.env.FACILITY_ACCESS_MATERIALIZATION_ENABLED || "").toLowerCase() === "true";
+    const sharedFacilityMetadataEnabled = String(context.env.FACILITY_SHARED_METADATA_ENABLED || "").toLowerCase() === "true";
     const sharedFacilityDaysEnabled = sharedFacilityMetadataEnabled
       && String(context.env.FACILITY_SHARED_DAYS_ENABLED || "").toLowerCase() === "true";
-    const sharedFacilityContactsEnabled = facilityAccessMaterialized
-      && String(context.env.FACILITY_SHARED_CONTACTS_ENABLED || "").toLowerCase() === "true";
+    const sharedFacilityContactsEnabled = String(context.env.FACILITY_SHARED_CONTACTS_ENABLED || "").toLowerCase() === "true";
+    const materializedAccessFor = (actorRecord, subjectRecord = actorRecord) => facilityLegacyReadsPaused(context.env)
+      || (facilityAccessMaterializationEnabled && facilityAccessMaterializedForRecords(context.env, actorRecord, subjectRecord));
     // Invited accounts have no user-selected password until the invite is accepted.
     // Remove any that have passed their activation window on the next API request.
     await cleanupExpiredInvitedAccounts(context.env.ROSTER_DB);
@@ -198,10 +198,10 @@ export async function onRequestPost(context) {
       const authMs = Date.now() - authStartedAt;
       const prepareStartedAt = Date.now();
       const prepared = responseMode === "fast"
-        ? await prepareFastLoginEnvelope(loginRecord, { db: context.env.ROSTER_DB, facilityAccessMaterialized })
+        ? await prepareFastLoginEnvelope(loginRecord, { db: context.env.ROSTER_DB, facilityAccessMaterialized: materializedAccessFor(loginRecord) })
         : await prepareAccountResponse(null, loginRecord, {
             db: context.env.ROSTER_DB,
-            facilityAccessMaterialized,
+            facilityAccessMaterialized: materializedAccessFor(loginRecord),
             includeAvailableDoctors: (loginRecord.role || roleForEmail(loginRecord.email)) === "creator"
               || (loginRecord.role || roleForEmail(loginRecord.email)) === "owner"
               || !sanitizeClaims(loginRecord.claims).length,
@@ -313,18 +313,19 @@ export async function onRequestPost(context) {
       if (!facilityOverviewAccessPromise) {
         facilityOverviewAccessPromise = facilityOverviewSubject
           ? resolveFacilityOverviewAccess(context.env.ROSTER_DB, { ...facilityOverviewSubject.record, role: facilityOverviewSubject.role }, {
-              materializedOnly: facilityAccessMaterialized,
+              materializedOnly: materializedAccessFor(account.record, facilityOverviewSubject.record),
             })
           : Promise.resolve({ mode: "denied", isSms: false, workingToday: false, facilityKey: "", today: australianDateKey() });
       }
       return facilityOverviewAccessPromise;
     };
-    const sharedReaderEnabledFor = (sources) => facilitySharedReaderAllowed(context.env, {
+    const sharedReadRouteFor = (sources) => facilityReadRoute(context.env, {
       actorRole: account.role,
       actorEmail: account.record?.email || email,
       subjectEmail: facilityOverviewSubject?.record?.email || "",
       sources,
     });
+    const sharedRouteUnavailable = () => facilityOverviewPreparingResponse({ error: "This At a glance view is not available during the controlled rollout." });
     if (action === "testFindmyshiftConnection") {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
@@ -619,7 +620,7 @@ export async function onRequestPost(context) {
       const resolvedClaims = sanitizeClaims(resolved.claims);
       const prepared = await prepareAccountResponse(null, resolved, {
         db: context.env.ROSTER_DB,
-        facilityAccessMaterialized,
+        facilityAccessMaterialized: materializedAccessFor(account.record, resolved),
         includeAvailableDoctors: resolved.role !== "creator" && resolved.role !== "owner" && !resolvedClaims.length,
       });
       return Response.json({
@@ -662,10 +663,10 @@ export async function onRequestPost(context) {
       // response (and a snapshot) here can traverse a large roster twice and
       // exceed a Worker request's CPU budget before the calendar is shown.
       const prepared = responseMode === "fast"
-        ? await prepareFastLoginEnvelope(target, { db: context.env.ROSTER_DB, facilityAccessMaterialized })
+        ? await prepareFastLoginEnvelope(target, { db: context.env.ROSTER_DB, facilityAccessMaterialized: materializedAccessFor(account.record, target) })
         : await prepareAccountResponse(null, target, {
             db: context.env.ROSTER_DB,
-            facilityAccessMaterialized,
+            facilityAccessMaterialized: materializedAccessFor(account.record, target),
             includeAvailableDoctors: !targetClaims.length,
           });
       const snapshotPayload = responseMode === "fast"
@@ -722,7 +723,7 @@ export async function onRequestPost(context) {
       const targetClaims = sanitizeClaims(targetRecord.claims);
       const prepared = await prepareAccountResponse(null, targetRecord, {
         db: context.env.ROSTER_DB,
-        facilityAccessMaterialized,
+        facilityAccessMaterialized: materializedAccessFor(account.record, targetRecord),
         includeAvailableDoctors: (targetRecord.role || roleForEmail(targetRecord.email)) === "creator"
           || (targetRecord.role || roleForEmail(targetRecord.email)) === "owner"
           || !targetClaims.length,
@@ -781,7 +782,7 @@ export async function onRequestPost(context) {
       };
       await upsertAccountMirror(context.env.ROSTER_DB, updated);
       scheduleSnapshotWarmupForAccount(context, claimEmail, { reason: "claimRosterName" });
-      const prepared = await prepareAccountResponse(null, updated, { db: context.env.ROSTER_DB, facilityAccessMaterialized });
+      const prepared = await prepareAccountResponse(null, updated, { db: context.env.ROSTER_DB, facilityAccessMaterialized: materializedAccessFor(account.record, updated) });
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -1121,7 +1122,7 @@ export async function onRequestPost(context) {
       };
       await upsertAccountMirror(context.env.ROSTER_DB, updated);
       scheduleSnapshotWarmupForAccount(context, saveEmail, { reason: "updateAccount" });
-      const prepared = await prepareAccountResponse(null, updated, { db: context.env.ROSTER_DB, facilityAccessMaterialized, includeAvailableDoctors: false });
+      const prepared = await prepareAccountResponse(null, updated, { db: context.env.ROSTER_DB, facilityAccessMaterialized: materializedAccessFor(account.record, updated), includeAvailableDoctors: false });
       return Response.json({
         ok: true,
         realName: prepared.realName,
@@ -1664,7 +1665,7 @@ export async function onRequestPost(context) {
         profileAccount && facilityOverviewEnabledForRecord({ ...profileAccount, role: profileRole }),
       );
       const facilityOverviewAccess = facilityOverviewEnabled
-        ? await resolveFacilityOverviewAccess(context.env.ROSTER_DB, { ...profileAccount, role: profileRole }, { materializedOnly: facilityAccessMaterialized })
+        ? await resolveFacilityOverviewAccess(context.env.ROSTER_DB, { ...profileAccount, role: profileRole }, { materializedOnly: materializedAccessFor(account.record, profileAccount) })
         : { mode: "denied", isSms: false, workingToday: false, facilityKey: "", today: australianDateKey() };
       return Response.json({
         ok: true,
@@ -1832,7 +1833,10 @@ export async function onRequestPost(context) {
       const term = facilityOverviewTermRange(today);
       const catalogSources = linkedSourceTypes.length ? linkedSourceTypes : ["mmc", "ddh", "casey", "mch", "vhh"];
       try {
-        if (sharedFacilityMetadataEnabled && sharedReaderEnabledFor(catalogSources)) {
+        const readRoute = sharedReadRouteFor(catalogSources);
+        if (readRoute === "blocked") return sharedRouteUnavailable();
+        if (readRoute === "shared") {
+          if (!sharedFacilityMetadataEnabled) return sharedRouteUnavailable();
           const published = await loadPublishedFacilityMetadata(context.env.ROSTER_FILES, catalogSources, today);
           if (published.preparing) return facilityOverviewPreparingResponse({ facilities: [], catalogEvents: [] });
           if (body?.cachedRevision && String(body.cachedRevision) === String(published.revision || "")) return Response.json({ ok: true, unchanged: true, revision: published.revision, accessExpiresAt: access.expiresAt || "" });
@@ -1888,7 +1892,10 @@ export async function onRequestPost(context) {
       const startedAt = Date.now();
       try {
         const sourceTypes = [...new Set(uniqueSelections.map((selection) => selection.facilityKey))];
-        if (sharedFacilityDaysEnabled && sharedReaderEnabledFor(sourceTypes)) {
+        const readRoute = sharedReadRouteFor(sourceTypes);
+        if (readRoute === "blocked") return sharedRouteUnavailable();
+        if (readRoute === "shared") {
+          if (!sharedFacilityDaysEnabled) return sharedRouteUnavailable();
           const result = await loadPublishedFacilityRange(context.env.ROSTER_FILES, sourceTypes, startDate, endDate, australianDateKey(), { cachedRevision: body?.cachedRevision });
           if (result.preparing) return facilityOverviewPreparingResponse({ events: [], coverage: [] });
           if (result.unchanged) return Response.json({ ok: true, unchanged: true, revision: result.revision, startDate, endDate, selections: uniqueSelections, accessExpiresAt: access.expiresAt || "" });
@@ -1920,7 +1927,10 @@ export async function onRequestPost(context) {
       }
       const startedAt = Date.now();
       try {
-        if (sharedFacilityDaysEnabled && sharedReaderEnabledFor(facilityKeys)) {
+        const readRoute = sharedReadRouteFor(facilityKeys);
+        if (readRoute === "blocked") return sharedRouteUnavailable();
+        if (readRoute === "shared") {
+          if (!sharedFacilityDaysEnabled) return sharedRouteUnavailable();
           const published = await loadPublishedFacilityDays(context.env.ROSTER_FILES, facilityKeys, date, australianDateKey());
           if (published.preparing) return facilityOverviewPreparingResponse({ events: [] });
           const events = published.rows.filter((row) => isFacilityOverviewWorkingEvent(row.event, {
@@ -1929,7 +1939,7 @@ export async function onRequestPost(context) {
           }));
           const contactList = sharedFacilityContactsEnabled
             ? await loadPublishedFacilityContacts(context.env.ROSTER_FILES, { date, facilityKeys })
-            : await loadLiveContactListForOnShift(context, { date, facilityKeys });
+            : { status: "unavailable", contacts: [], revision: "" };
           const rosterUnchanged = Boolean(body?.cachedRevision && String(body.cachedRevision) === String(published.revision || ""));
           return Response.json({ ok: true, date, facilityKey: requestedFacility === "ALL" ? "ALL" : facilityKeys[0], events: rosterUnchanged ? undefined : events, rosterUnchanged, revision: published.revision, accessExpiresAt: access.expiresAt || "", contactList, queryMs: Date.now() - startedAt });
         }
@@ -1967,8 +1977,10 @@ export async function onRequestPost(context) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || facilityKeys.length !== 1) {
         return Response.json({ error: "A single ED and valid date are required." }, { status: 400 });
       }
-      const contactList = sharedFacilityContactsEnabled && sharedReaderEnabledFor(facilityKeys)
-        ? await loadPublishedFacilityContacts(context.env.ROSTER_FILES, { date, facilityKeys })
+      const readRoute = sharedReadRouteFor(facilityKeys);
+      if (readRoute === "blocked") return sharedRouteUnavailable();
+      const contactList = readRoute === "shared"
+        ? (sharedFacilityContactsEnabled ? await loadPublishedFacilityContacts(context.env.ROSTER_FILES, { date, facilityKeys }) : { status: "unavailable", contacts: [], revision: "" })
         : await loadLiveContactListForOnShift(context, { date, facilityKeys });
       if (body?.contactRevision && String(body.contactRevision) === String(contactList.revision || "")) {
         return Response.json({ ok: true, date, facilityKey: facilityKeys[0], unchanged: true, contactRevision: contactList.revision });
@@ -1988,14 +2000,18 @@ export async function onRequestPost(context) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !sanitizeSourceTypes([requestedFacility]).length || !contactKey) {
         return Response.json({ error: "A current contact allocation is required." }, { status: 400 });
       }
-      const contactList = sharedFacilityContactsEnabled && sharedReaderEnabledFor([requestedFacility])
-        ? await loadPublishedFacilityContacts(context.env.ROSTER_FILES, { date, facilityKeys: [requestedFacility] })
+      const readRoute = sharedReadRouteFor([requestedFacility]);
+      if (readRoute === "blocked") return sharedRouteUnavailable();
+      const contactList = readRoute === "shared"
+        ? (sharedFacilityContactsEnabled ? await loadPublishedFacilityContacts(context.env.ROSTER_FILES, { date, facilityKeys: [requestedFacility] }) : { status: "unavailable", contacts: [], revision: "" })
         : await loadLiveContactListForOnShift(context, { date, facilityKeys: [requestedFacility] });
       const contact = (contactList.contacts || []).find((item) => String(item.contactKey || "") === contactKey);
       if (contactList.status !== "available" || !contact) return Response.json({ error: "This contact allocation is no longer current." }, { status: 409 });
       let target = null;
       if (doctorKey) {
-        const roster = await queryFacilityOverviewOnShift(context.env.ROSTER_DB, { date, facilityKey: requestedFacility });
+        const roster = readRoute === "shared"
+          ? (await loadPublishedFacilityDays(context.env.ROSTER_FILES, [requestedFacility], date, australianDateKey())).rows
+          : await queryFacilityOverviewOnShift(context.env.ROSTER_DB, { date, facilityKey: requestedFacility });
         target = roster.find((row) => normalizeRosterName(row.doctorKey) === doctorKey && facilityOverviewEventPeriod(row.event) === String(contact.shift));
         if (!target) return Response.json({ error: "Choose a clinician rostered in the same ED and shift period." }, { status: 400 });
         const automatic = attachContactAllocations(roster.map((row) => ({
@@ -2050,7 +2066,10 @@ export async function onRequestPost(context) {
       }
       try {
         const sourceTypes = facilityKey ? [facilityKey] : ["mmc", "ddh", "casey", "mch", "vhh"];
-        if (sharedFacilityMetadataEnabled && sharedReaderEnabledFor(sourceTypes)) {
+        const readRoute = sharedReadRouteFor(sourceTypes);
+        if (readRoute === "blocked") return sharedRouteUnavailable();
+        if (readRoute === "shared") {
+          if (!sharedFacilityMetadataEnabled) return sharedRouteUnavailable();
           const published = await loadPublishedFacilityStaff(context.env.ROSTER_FILES, sourceTypes, termStart, australianDateKey());
           if (published.preparing) return facilityOverviewPreparingResponse({ members: [], events: [], coverage: [], designations: [], seniorityOverrides: [] });
           if (body?.cachedRevision && String(body.cachedRevision) === String(published.revision || "")) return Response.json({ ok: true, unchanged: true, revision: published.revision, accessExpiresAt: access.expiresAt || "" });
@@ -2089,7 +2108,10 @@ export async function onRequestPost(context) {
       const startedAt = Date.now();
       try {
         const rangeSources = sourceTypes.length ? sourceTypes : ["mmc", "ddh", "casey", "mch", "vhh"];
-        if (sharedFacilityDaysEnabled && sharedReaderEnabledFor(rangeSources)) {
+        const readRoute = sharedReadRouteFor(rangeSources);
+        if (readRoute === "blocked") return sharedRouteUnavailable();
+        if (readRoute === "shared") {
+          if (!sharedFacilityDaysEnabled) return sharedRouteUnavailable();
           const result = await loadPublishedFacilityRange(context.env.ROSTER_FILES, rangeSources, startDate, endDate, australianDateKey(), { cachedRevision: body?.cachedRevision });
           if (result.preparing) return facilityOverviewPreparingResponse({ events: [] });
           if (result.unchanged) return Response.json({ ok: true, unchanged: true, revision: result.revision, startDate, endDate, sourceTypes, accessExpiresAt: access.expiresAt || "" });
@@ -3180,6 +3202,14 @@ function facilityOverviewPreparingResponse(payload = {}) {
 function constrainFacilityOverviewSourceTypes(access, requested = []) {
   if (access?.mode === "site") return [String(access.facilityKey || "").toLowerCase()].filter(Boolean);
   return sanitizeSourceTypes(requested);
+}
+
+function facilityAccessMaterializedForRecords(env, actorRecord, subjectRecord = actorRecord) {
+  return facilityLegacyReadsPaused(env) || facilityRolloutCohortEligible(env, {
+    actorRole: actorRecord?.role || roleForEmail(actorRecord?.email),
+    actorEmail: actorRecord?.email || "",
+    subjectEmail: subjectRecord?.email || "",
+  });
 }
 
 function facilityOverviewEventSource(event) {
@@ -4287,7 +4317,9 @@ function scheduleSnapshotWarmupForAccount(context, email, options = {}) {
     if (!record) return;
     const prepared = await prepareAccountResponse(null, record, {
       db: context.env.ROSTER_DB,
-      facilityAccessMaterialized: String(context.env.FACILITY_ACCESS_MATERIALIZATION_ENABLED || "").toLowerCase() === "true",
+      facilityAccessMaterialized: facilityLegacyReadsPaused(context.env)
+        || (String(context.env.FACILITY_ACCESS_MATERIALIZATION_ENABLED || "").toLowerCase() === "true"
+          && facilityAccessMaterializedForRecords(context.env, record, record)),
       includeAvailableDoctors: false,
     });
     const requestedRange = defaultSnapshotRange();
@@ -4409,7 +4441,9 @@ function scheduleSnapshotWarmupForSourceTypes(context, sourceTypes = [], options
       if (!record) continue;
       const prepared = await prepareAccountResponse(null, record, {
         db: context.env.ROSTER_DB,
-        facilityAccessMaterialized: String(context.env.FACILITY_ACCESS_MATERIALIZATION_ENABLED || "").toLowerCase() === "true",
+        facilityAccessMaterialized: facilityLegacyReadsPaused(context.env)
+          || (String(context.env.FACILITY_ACCESS_MATERIALIZATION_ENABLED || "").toLowerCase() === "true"
+            && facilityAccessMaterializedForRecords(context.env, record, record)),
         includeAvailableDoctors: false,
       });
       if (!accountWarmupAffectedBySourceTypes(prepared, changedSourceTypes)) continue;

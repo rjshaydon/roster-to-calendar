@@ -8,6 +8,7 @@ import {
 } from "../../../public/static/contact-allocations.js";
 import { publishFacilityContactExtract } from "../../_lib/facility-contact-cache.js";
 import { facilityBuildSources } from "../../_lib/facility-rollout.js";
+import { contactAutomationPausedResponse, contactAutomationSourceEnabled } from "../../_lib/contact-automation-guard.js";
 
 const MAX_BODY_BYTES = 512 * 1024;
 
@@ -21,10 +22,6 @@ export async function onRequestPost(context) {
   )) {
     return Response.json({ error: "Unauthorized." }, { status: 401 });
   }
-  if (!hasCalendarDb(context.env) || !context.env.ROSTER_FILES?.put) {
-    return Response.json({ error: "Contact-list storage is unavailable." }, { status: 503 });
-  }
-
   try {
     const contentLength = Number(context.request.headers.get("content-length") || "0");
     if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) {
@@ -43,6 +40,10 @@ export async function onRequestPost(context) {
     if (!extract) return Response.json({ error: "Invalid doctor contact extract." }, { status: 400 });
     const sourceId = extract.sourceId;
     const fileName = extract.fileName;
+    if (!contactAutomationSourceEnabled(context.env, sourceId)) return contactAutomationPausedResponse();
+    if (!hasCalendarDb(context.env) || !context.env.ROSTER_FILES?.put) {
+      return Response.json({ error: "Contact-list storage is unavailable." }, { status: 503 });
+    }
 
     const bytes = new TextEncoder().encode(JSON.stringify(extract));
     if (bytes.byteLength > MAX_BODY_BYTES) {
@@ -57,6 +58,7 @@ export async function onRequestPost(context) {
       SELECT id, object_key, content_hash, received_at FROM contact_list_files
       WHERE source_id = ?
       ORDER BY received_at DESC
+      LIMIT 9
     `).bind(sourceId).all();
     const matchingHash = existing.results.find((entry) => String(entry.content_hash || "") === contentHash);
     if (matchingHash?.id) {
@@ -66,9 +68,6 @@ export async function onRequestPost(context) {
           receivedAt: String(matchingHash.received_at || ""),
         });
       }
-      await pruneStoredContactExtracts(context, existing.results, {
-        keepId: String(matchingHash.id), replaceDate: extract.sourceDate,
-      });
       return Response.json({
         ok: true,
         status: "unchanged",
@@ -104,7 +103,7 @@ export async function onRequestPost(context) {
       });
     }
 
-    await pruneStoredContactExtracts(context, existing.results, { replaceDate: extract.sourceDate });
+    await pruneStoredContactExtracts(context, existing.results, { replaceDate: extract.sourceDate, maximumDeletes: 4 });
     return Response.json({
       ok: true,
       status: "stored",
@@ -139,8 +138,10 @@ export function automationSourceDate(value) {
   return month ? `${match[3]}-${month}-${match[1].padStart(2, "0")}` : "";
 }
 
-async function pruneStoredContactExtracts(context, entries, { keepId = "", replaceDate = "" } = {}) {
+async function pruneStoredContactExtracts(context, entries, { keepId = "", replaceDate = "", maximumDeletes = 4 } = {}) {
+  let deleted = 0;
   for (const entry of entries || []) {
+    if (deleted >= Math.max(0, Math.min(Number(maximumDeletes || 0), 4))) break;
     if (keepId && String(entry.id) === keepId) continue;
     let remove = true;
     try {
@@ -154,6 +155,7 @@ async function pruneStoredContactExtracts(context, entries, { keepId = "", repla
     if (!remove) continue;
     if (entry.object_key) await context.env.ROSTER_FILES.delete(String(entry.object_key));
     await context.env.ROSTER_DB.prepare("DELETE FROM contact_list_files WHERE id = ?").bind(String(entry.id)).run();
+    deleted += 1;
   }
 }
 
