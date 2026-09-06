@@ -5,6 +5,7 @@ import { requestQueuedRosterProcessing } from "../_lib/automation-dispatch.js";
 import { rosterWritesExplicitlyPaused, rosterWritePausedResponse } from "../_lib/roster-automation-guard.js";
 import { guardedFetch, localFeatureDisabledResponse } from "../_lib/outbound-network.js";
 import { loadPublishedFacilityDays, loadPublishedFacilityMetadata, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata } from "../_lib/facility-overview-cache.js";
+import { loadPublishedFacilityContacts, publishFacilityContactResolutions } from "../_lib/facility-contact-cache.js";
 import { extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentExceptions, findmyshiftLastModified, findmyshiftReportDiagnostics, findmyshiftShiftReport } from "../_lib/findmyshift.js";
 import {
   buildPreviewFromDerivedEvents,
@@ -149,6 +150,8 @@ export async function onRequestPost(context) {
       && String(context.env.FACILITY_SHARED_METADATA_ENABLED || "").toLowerCase() === "true";
     const sharedFacilityDaysEnabled = sharedFacilityMetadataEnabled
       && String(context.env.FACILITY_SHARED_DAYS_ENABLED || "").toLowerCase() === "true";
+    const sharedFacilityContactsEnabled = facilityAccessMaterialized
+      && String(context.env.FACILITY_SHARED_CONTACTS_ENABLED || "").toLowerCase() === "true";
     // Invited accounts have no user-selected password until the invite is accepted.
     // Remove any that have passed their activation window on the next API request.
     await cleanupExpiredInvitedAccounts(context.env.ROSTER_DB);
@@ -1904,7 +1907,9 @@ export async function onRequestPost(context) {
             facilityKey: row.sourceType,
             includeClinicalSupport: body?.includeClinicalSupport === true,
           }));
-          const contactList = await loadLiveContactListForOnShift(context, { date, facilityKeys });
+          const contactList = sharedFacilityContactsEnabled
+            ? await loadPublishedFacilityContacts(context.env.ROSTER_FILES, { date, facilityKeys })
+            : await loadLiveContactListForOnShift(context, { date, facilityKeys });
           return Response.json({ ok: true, date, facilityKey: requestedFacility === "ALL" ? "ALL" : facilityKeys[0], events, contactList, queryMs: Date.now() - startedAt });
         }
         const [eventGroups, contactList] = await Promise.all([
@@ -1941,7 +1946,12 @@ export async function onRequestPost(context) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || facilityKeys.length !== 1) {
         return Response.json({ error: "A single ED and valid date are required." }, { status: 400 });
       }
-      const contactList = await loadLiveContactListForOnShift(context, { date, facilityKeys });
+      const contactList = sharedFacilityContactsEnabled
+        ? await loadPublishedFacilityContacts(context.env.ROSTER_FILES, { date, facilityKeys })
+        : await loadLiveContactListForOnShift(context, { date, facilityKeys });
+      if (body?.contactRevision && String(body.contactRevision) === String(contactList.revision || "")) {
+        return Response.json({ ok: true, date, facilityKey: facilityKeys[0], unchanged: true, contactRevision: contactList.revision });
+      }
       return Response.json({ ok: true, date, facilityKey: facilityKeys[0], contactList });
     }
 
@@ -1957,7 +1967,9 @@ export async function onRequestPost(context) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !sanitizeSourceTypes([requestedFacility]).length || !contactKey) {
         return Response.json({ error: "A current contact allocation is required." }, { status: 400 });
       }
-      const contactList = await loadLiveContactListForOnShift(context, { date, facilityKeys: [requestedFacility] });
+      const contactList = sharedFacilityContactsEnabled
+        ? await loadPublishedFacilityContacts(context.env.ROSTER_FILES, { date, facilityKeys: [requestedFacility] })
+        : await loadLiveContactListForOnShift(context, { date, facilityKeys: [requestedFacility] });
       const contact = (contactList.contacts || []).find((item) => String(item.contactKey || "") === contactKey);
       if (contactList.status !== "available" || !contact) return Response.json({ error: "This contact allocation is no longer current." }, { status: 409 });
       let target = null;
@@ -1987,6 +1999,13 @@ export async function onRequestPost(context) {
           sourceType: requestedFacility.toLowerCase(), doctorKey, displayName: target?.displayName || "",
           expectedRevision, actorEmail: account.record?.email || email,
         });
+        if (String(context.env.FACILITY_SHARED_CONTACTS_BUILD_ENABLED || "").toLowerCase() === "true") {
+          const resolutions = await queryContactAllocationResolutions(context.env.ROSTER_DB, {
+            sourceId: contactList.sourceId, sourceDate: contactList.sourceDate, includeInactive: true,
+          });
+          await publishFacilityContactResolutions(context.env.ROSTER_FILES, contactList.sourceId, contactList.sourceDate, resolutions)
+            .catch((error) => console.warn("Contact correction cache publication failed", { sourceId: contactList.sourceId, sourceDate: contactList.sourceDate, error: error?.message || String(error) }));
+        }
         return Response.json({ ok: true, resolution });
       } catch (error) {
         if (error?.code === "contact-allocation-conflict") return Response.json({ error: error.message, conflict: true, resolutions: error.resolutions || [] }, { status: 409 });

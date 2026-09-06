@@ -21,7 +21,7 @@ import {
   setParserExtensions,
   sourceNames,
 } from "./roster.js";
-import { attachContactAllocations, contactOperationalDate, contactStream } from "./contact-allocations.js";
+import { attachContactAllocations, contactExtractHasExpired, contactOperationalDate, contactStream } from "./contact-allocations.js";
 
 const form = document.querySelector("#roster-form");
 const appShell = document.querySelector("#appShell");
@@ -257,7 +257,7 @@ const PREVIEW_DISPLAY_FIELDS = ["showTimes", "showRawValues", "showNormalizedTit
 const STATUS_MESSAGE_LIMIT = 5;
 const STATUS_MESSAGE_LIFETIME_MS = 5000;
 const STATUS_MESSAGE_FADE_MS = 240;
-const FACILITY_OVERVIEW_CONTACT_REFRESH_MS = 10_000;
+const FACILITY_OVERVIEW_CONTACT_REFRESH_MS = 60_000;
 const STATUS_SUPERSEDED_MESSAGES = new Map([
   ["Calendar loaded.", ["Loading calendar...", "Refreshing calendar..."]],
   ["Calendar refreshed.", ["Refreshing calendar..."]],
@@ -10519,13 +10519,20 @@ async function refreshFacilityOverviewContactList() {
         targetEmail: facilityOverviewTargetEmail(),
         facilityKey,
         date,
+        contactRevision: facilityOverviewState.contactList?.revision || "",
       }),
     });
+    if (response.status === 401 || response.status === 403) {
+      facilityOverviewState.contactList = { status: "unavailable", reason: "authorization-expired", contacts: [], resolutions: [] };
+      facilityOverviewState.content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData || []);
+      renderFacilityOverviewOnShiftPreservingViewport();
+    }
     const data = await readJsonResponse(response, "Could not refresh live contact allocations.");
     if (facilityOverviewState.requestId !== requestId
       || facilityOverviewState.tab !== "on-shift"
       || facilityOverviewState.date !== date
       || facilityOverviewState.facilityKey !== facilityKey) return;
+    if (data.unchanged === true) return;
     const nextContactList = data.contactList || { status: "unavailable", reason: "no-extract" };
     if (JSON.stringify(nextContactList) !== JSON.stringify(facilityOverviewState.contactList)) {
       collapseFacilityOverviewContactReview();
@@ -10535,6 +10542,11 @@ async function refreshFacilityOverviewContactList() {
     }
   } catch (error) {
     console.warn("Live contact allocation refresh failed", error);
+    if (contactExtractHasExpired(facilityOverviewState.contactList?.sourceDate)) {
+      facilityOverviewState.contactList = { status: "unavailable", reason: "expired", contacts: [], resolutions: [] };
+      facilityOverviewState.content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData || []);
+      renderFacilityOverviewOnShiftPreservingViewport();
+    }
   } finally {
     facilityOverviewContactRefreshInFlight = false;
     scheduleFacilityOverviewContactRefresh();

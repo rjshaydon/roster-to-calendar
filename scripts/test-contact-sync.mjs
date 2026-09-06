@@ -71,8 +71,12 @@ assert.doesNotMatch(
   /code === "VHH"/,
   "VHH must not expose contact details in On shift until its mapping is explicitly approved",
 );
-assert.match(appSource, /FACILITY_OVERVIEW_CONTACT_REFRESH_MS = 10_000[\s\S]*refreshFacilityOverviewContactList[\s\S]*queryFacilityOverviewContactList/,
-  "an open On shift view should poll the small JSON contact feed");
+assert.match(appSource, /FACILITY_OVERVIEW_CONTACT_REFRESH_MS = 60_000[\s\S]*refreshFacilityOverviewContactList[\s\S]*queryFacilityOverviewContactList/,
+  "an open On shift view should poll the small JSON contact feed every 60 seconds");
+assert.match(appSource, /document\.hidden\)[\s\S]*stopFacilityOverviewContactRefresh[\s\S]*scheduleFacilityOverviewContactRefresh\(0\)/,
+  "hidden pages must stop polling and visible pages must refresh immediately");
+assert.match(stateSource, /FACILITY_SHARED_CONTACTS_ENABLED[\s\S]*loadPublishedFacilityContacts/,
+  "the shared contact reader must remain behind its disabled-by-default flag");
 assert.match(appSource, /legacy-workbook[\s\S]*full Excel workbook instead of the doctors-only JSON extract/,
   "legacy MMC uploads should be visible rather than silently hidden");
 

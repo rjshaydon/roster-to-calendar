@@ -275,3 +275,64 @@ Remaining before any online test:
 - Phase 6 must add safe browser persistence/revalidation and convert range
   views. Production migration/backfill, configuration and deployment remain
   separately prohibited until the rollout package is reviewed and approved.
+
+## Phase 5: shared contact overlay
+
+Status: local Phase 5 contact-overlay gate passed behind disabled-by-default
+build and reader flags.
+
+Completed locally:
+
+- Contact ingestion publishes an immutable object keyed by source, operational
+  date and content revision, plus a small conditionally updated source
+  manifest. An identical extract performs no R2 writes.
+- The On shift contact reader discovers the current or permitted night
+  carryover extract entirely from predictable R2 keys. It performs no
+  `contact_list_files` or contact-resolution D1 query.
+- Manual allocation corrections remain separate from the base contact object.
+  Their existing optimistic revision, same-shift and duplicate-allocation D1
+  mutation checks are unchanged; a successful mutation republishes only the
+  small resolution overlay.
+- Browser refreshes send the revision already rendered. An unchanged response
+  contains no contact payload and does not rerender the page.
+- Polling now follows the agreed 60-second interval, stops while the document
+  is hidden, runs immediately after it becomes visible, and stops when On
+  shift is closed.
+- Permission is still checked by the existing authenticated At a glance
+  request and the Phase 2 access record, whose validity is capped at 15
+  minutes. Contact objects are never exposed through an unauthorised public
+  URL.
+
+Safety controls:
+
+- `FACILITY_SHARED_CONTACTS_BUILD_ENABLED` controls contact and correction
+  publication.
+- `FACILITY_SHARED_CONTACTS_ENABLED` controls shared contact reads and is
+  effective only with Phase 2 access materialisation.
+- Both are false when absent. Existing contact ingestion and reading remain
+  unchanged until a separately approved rollout enables them.
+
+Focused Phase 5 evidence:
+
+- Sixty simulated unchanged one-minute refreshes use zero D1 reads, zero
+  writes and three bounded R2 reads per refresh (manifest, date object and
+  correction overlay).
+- A repeated identical contact publication performs zero R2 writes.
+- A correction changes only its independent overlay revision.
+- MMC/MCH/DDH mappings, shift-change filtering, night carryover and the
+  explicit exclusion of VHH contacts retain their existing tests.
+- D1 quota guards, local network isolation, shared roster materialisation and
+  facility-access tests remain green.
+
+Remaining before any online test:
+
+- The normal `/api/state` envelope still performs its existing small account
+  authentication and materialised access checks. The contact refresh itself
+  performs zero D1 contact discovery; removing all envelope reads would require
+  a separately designed short-lived signed endpoint and is not being smuggled
+  into this phase.
+- Existing production contact extracts and corrections require a bounded
+  publication step or a fresh normal ingestion before enabling the reader.
+- Phase 6 browser persistence and range-view work, followed by a reviewed
+  deployment/backfill package, remains outstanding. No production flag should
+  be enabled yet.

@@ -6,6 +6,7 @@ import {
   contactOperationalDate,
   normaliseContactListExtract,
 } from "../../../public/static/contact-allocations.js";
+import { publishFacilityContactExtract } from "../../_lib/facility-contact-cache.js";
 
 const MAX_BODY_BYTES = 512 * 1024;
 
@@ -52,12 +53,18 @@ export async function onRequestPost(context) {
     const providerVersion = String(payload?.providerVersion || "").trim();
     const contentHash = await sha256Hex(bytes);
     const existing = await db.prepare(`
-      SELECT id, object_key, content_hash FROM contact_list_files
+      SELECT id, object_key, content_hash, received_at FROM contact_list_files
       WHERE source_id = ?
       ORDER BY received_at DESC
     `).bind(sourceId).all();
     const matchingHash = existing.results.find((entry) => String(entry.content_hash || "") === contentHash);
     if (matchingHash?.id) {
+      if (String(context.env.FACILITY_SHARED_CONTACTS_BUILD_ENABLED || "").toLowerCase() === "true") {
+        await publishFacilityContactExtract(context.env.ROSTER_FILES, extract, {
+          providerModifiedAt: extract.providerModifiedAt,
+          receivedAt: String(matchingHash.received_at || ""),
+        });
+      }
       await pruneStoredContactExtracts(context, existing.results, {
         keepId: String(matchingHash.id), replaceDate: extract.sourceDate,
       });
@@ -88,6 +95,13 @@ export async function onRequestPost(context) {
       "application/json; charset=utf-8", contentHash, providerVersion,
       extract.providerModifiedAt, now,
     ).run();
+
+    if (String(context.env.FACILITY_SHARED_CONTACTS_BUILD_ENABLED || "").toLowerCase() === "true") {
+      await publishFacilityContactExtract(context.env.ROSTER_FILES, extract, {
+        providerModifiedAt: extract.providerModifiedAt,
+        receivedAt: now,
+      });
+    }
 
     await pruneStoredContactExtracts(context, existing.results, { replaceDate: extract.sourceDate });
     return Response.json({
