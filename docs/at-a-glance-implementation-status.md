@@ -390,8 +390,9 @@ Remaining:
 
 ## Phase 7A: controlled-rollout safeguards and worksheet
 
-Status: local Phase 7A gate passed. No remote action is authorised or has been
-performed.
+Status: implementation committed locally, but the post-commit safety review
+found rollout blockers. Phase 7B remains blocked. No remote action is
+authorised or has been performed.
 
 Completed locally:
 
@@ -425,7 +426,8 @@ Focused Phase 7A evidence:
 
 Next step:
 
-- Review and commit 7A locally. Push only when explicitly approved. Phase 7B
-  should start with an inert deployment and recorded production baseline; it
-  must follow the worksheet checkpoints rather than enabling all features at
-  once.
+- Implement and review `at-a-glance-phase-7a-remediation-plan.md`. It addresses
+  cohort-scoped access, no-fallback routing, bounded existing-data bootstrap,
+  truthful one-term publication costs and independent contact-ingestion
+  containment. Do not use the current rollout worksheet operationally until
+  those fixes and their focused local gates pass.
