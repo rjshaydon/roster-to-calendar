@@ -1,17 +1,39 @@
 import { FACILITY_BOOTSTRAP_LIMITS, inspectFacilityOverviewBootstrap, refreshFacilityOverviewMaterializationForFile, upsertRosterFileStatusSummary } from "../../_lib/d1-calendar.js";
-import { facilityBuildSources } from "../../_lib/facility-rollout.js";
-import { facilityMaterializationMaintenanceEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
+import { facilityRolloutPaused } from "../../_lib/facility-rollout.js";
+import {
+  facilityBootstrapExecutionEnabled,
+  facilityBootstrapFileAllowed,
+  facilityBootstrapInspectionEnabled,
+  facilityMaterializationMaintenanceEnabled,
+  rosterWritePausedResponse,
+} from "../../_lib/roster-automation-guard.js";
+
+const SOURCE_TYPES = new Set(["mmc", "mch", "ddh", "vhh", "casey"]);
+const BOOTSTRAP_PLAN_MAX_AGE_MS = 10 * 60 * 1000;
 
 export async function onRequestPost(context) {
   if (!validToken(context.request, context.env.ROSTER_AUTOMATION_TOKEN)) return Response.json({ error: "Unauthorized." }, { status: 401 });
-  if (!facilityMaterializationMaintenanceEnabled(context.env)) return rosterWritePausedResponse();
   const body = await context.request.json().catch(() => ({}));
-  const sourceType = facilityBuildSources(context.env, [body?.sourceType])[0] || "";
+  const sourceType = String(body?.sourceType || "").trim().toLowerCase();
   const fileId = String(body?.fileId || "").trim();
-  if (!sourceType || !fileId) return rosterWritePausedResponse();
-  const maximumEventRows = Math.max(1, Math.min(Number(body?.maximumEventRows || FACILITY_BOOTSTRAP_LIMITS.eventRows), FACILITY_BOOTSTRAP_LIMITS.eventRows));
-  const maximumWrites = Math.max(1, Math.min(Number(body?.maximumWrites || FACILITY_BOOTSTRAP_LIMITS.mutationStatements), FACILITY_BOOTSTRAP_LIMITS.mutationStatements));
-  const inspection = await inspectFacilityOverviewBootstrap(context.env.ROSTER_DB, { fileId, sourceType });
+  const sourceAllowed = configuredSet(context.env.FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST).has(sourceType);
+  const fileAllowed = facilityBootstrapFileAllowed(context.env, fileId);
+  const execute = body?.execute === true;
+  const inspectionAllowed = facilityBootstrapInspectionEnabled(context.env) && sourceAllowed && fileAllowed;
+  const executionAllowed = facilityBootstrapExecutionEnabled(context.env)
+    && facilityMaterializationMaintenanceEnabled(context.env)
+    && !facilityRolloutPaused(context.env)
+    && sourceAllowed
+    && fileAllowed;
+  if (!SOURCE_TYPES.has(sourceType) || !fileId || (execute ? !executionAllowed : !inspectionAllowed)) {
+    return rosterWritePausedResponse();
+  }
+  const planGeneratedAt = execute ? validPlanGeneratedAt(body?.planGeneratedAt) : new Date().toISOString();
+  if (!planGeneratedAt) return Response.json({ ok: false, stalePlan: true, reason: "bootstrap-plan-expired" }, { status: 409 });
+  const maximumEventRows = boundedLimit(body?.maximumEventRows, FACILITY_BOOTSTRAP_LIMITS.eventRows);
+  const maximumWrites = boundedLimit(body?.maximumWrites, FACILITY_BOOTSTRAP_LIMITS.mutationStatements);
+  if (!maximumEventRows || !maximumWrites) return rosterWritePausedResponse();
+  const inspection = await inspectFacilityOverviewBootstrap(context.env.ROSTER_DB, { fileId, sourceType, planGeneratedAt });
   if (!inspection.ok) return Response.json(inspection, { status: 400 });
   const estimate = {
     d1ReadStatements: 10,
@@ -30,8 +52,12 @@ export async function onRequestPost(context) {
     broadSourceScans: 0,
     automaticContinuation: false,
   };
-  if (body?.execute !== true) return Response.json({ ...inspection, dryRun: true, estimate });
-  if (inspection.compactReady && inspection.statusReady) return Response.json({ ...inspection, dryRun: false, unchanged: true, writes: 0, estimate });
+  const evidence = {
+    deploymentCommit: String(context.env.CF_PAGES_COMMIT_SHA || "unknown"),
+    capability: { mode: execute ? "execution" : "inspection", sourceType, fileId },
+  };
+  if (!execute) return Response.json({ ...inspection, ...evidence, dryRun: true, estimate });
+  if (inspection.compactReady && inspection.statusReady) return Response.json({ ...inspection, ...evidence, dryRun: false, unchanged: true, writes: 0, estimate });
   if (!body?.planRevision || String(body.planRevision) !== inspection.planRevision) {
     return Response.json({ ok: false, stalePlan: true, reason: "bootstrap-plan-changed" }, { status: 409 });
   }
@@ -57,7 +83,25 @@ export async function onRequestPost(context) {
       rawSourceAvailable: inspection.rawSourceAvailable,
     });
   }
-  return Response.json({ ...inspection, dryRun: false, estimate, result }, { status: result?.overBudget ? 409 : 200 });
+  return Response.json({ ...inspection, ...evidence, dryRun: false, estimate, result }, { status: result?.overBudget ? 409 : 200 });
+}
+
+function boundedLimit(value, fallback) {
+  if (value == null || value === "") return fallback;
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number >= 1 && number <= fallback ? number : null;
+}
+
+function configuredSet(value) {
+  return new Set(String(value || "").split(",").map((item) => item.trim().toLowerCase()).filter(Boolean));
+}
+
+function validPlanGeneratedAt(value) {
+  const normalized = String(value || "").trim();
+  const timestamp = Date.parse(normalized);
+  const now = Date.now();
+  if (!normalized || !Number.isFinite(timestamp) || timestamp > now + 30_000 || now - timestamp > BOOTSTRAP_PLAN_MAX_AGE_MS) return "";
+  return new Date(timestamp).toISOString();
 }
 
 function validToken(request, configured) {

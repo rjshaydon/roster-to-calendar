@@ -164,10 +164,20 @@ assert.equal((await repeatedContact.json()).status, "unchanged");
 assert.equal(db.rowsWritten, 0, "an unchanged allowed contact extract must write no D1 rows");
 assert.equal(contactR2.puts, contactPuts, "an unchanged allowed contact extract must write no R2 objects");
 
-async function callBootstrap(body) {
+async function callBootstrap(body, envOverrides = {}) {
   const response = await bootstrapFacility({
     request: new Request("http://local/api/automation/facility-bootstrap", { method: "POST", headers: { authorization: "Bearer bootstrap-token", "content-type": "application/json" }, body: JSON.stringify(body) }),
-    env: { ROSTER_DB: db, ROSTER_AUTOMATION_TOKEN: "bootstrap-token", ROSTER_ADVANCED_MAINTENANCE_ENABLED: "true", FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST: "mmc" },
+    env: {
+      ROSTER_DB: db,
+      ROSTER_AUTOMATION_TOKEN: "bootstrap-token",
+      FACILITY_BOOTSTRAP_INSPECTION_ENABLED: "true",
+      FACILITY_BOOTSTRAP_EXECUTION_ENABLED: "true",
+      FACILITY_BOOTSTRAP_FILE_ALLOWLIST: String(body?.fileId || ""),
+      ROSTER_ADVANCED_MAINTENANCE_ENABLED: "true",
+      FACILITY_SHARED_EMERGENCY_PAUSED: "false",
+      FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST: "mmc",
+      ...envOverrides,
+    },
   });
   return { response, payload: await response.json() };
 }
@@ -180,15 +190,15 @@ assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM roster_file_coverage 
 const bootstrapPlan = await callBootstrap({ sourceType: "mmc", fileId: legacyFile.id, maximumEventRows: 10, maximumWrites: 100 });
 assert.equal(bootstrapPlan.response.status, 200);
 assert.equal(bootstrapPlan.payload.dryRun, true);
-const staleBootstrap = await callBootstrap({ sourceType: "mmc", fileId: legacyFile.id, maximumEventRows: 10, maximumWrites: 100, execute: true, planRevision: "stale" });
+const staleBootstrap = await callBootstrap({ sourceType: "mmc", fileId: legacyFile.id, maximumEventRows: 10, maximumWrites: 100, execute: true, planRevision: "stale", planGeneratedAt: bootstrapPlan.payload.planGeneratedAt });
 assert.equal(staleBootstrap.response.status, 409);
 db.rowsWritten = 0;
-const writeLimitedBootstrap = await callBootstrap({ sourceType: "mmc", fileId: legacyFile.id, maximumEventRows: 10, maximumWrites: 1, execute: true, planRevision: bootstrapPlan.payload.planRevision });
+const writeLimitedBootstrap = await callBootstrap({ sourceType: "mmc", fileId: legacyFile.id, maximumEventRows: 10, maximumWrites: 1, execute: true, planRevision: bootstrapPlan.payload.planRevision, planGeneratedAt: bootstrapPlan.payload.planGeneratedAt });
 assert.equal(writeLimitedBootstrap.response.status, 409);
 assert.equal(writeLimitedBootstrap.payload.result.reason, "compact-write-limit");
 assert.equal(db.rowsWritten, 0, "a compact-write overage must stop before writes");
 db.rowsWritten = 0;
-const bootstrapExecution = await callBootstrap({ sourceType: "mmc", fileId: legacyFile.id, maximumEventRows: 10, maximumWrites: 100, execute: true, planRevision: bootstrapPlan.payload.planRevision });
+const bootstrapExecution = await callBootstrap({ sourceType: "mmc", fileId: legacyFile.id, maximumEventRows: 10, maximumWrites: 100, execute: true, planRevision: bootstrapPlan.payload.planRevision, planGeneratedAt: bootstrapPlan.payload.planGeneratedAt });
 assert.equal(bootstrapExecution.response.status, 200);
 assert.equal(bootstrapExecution.payload.result.overBudget, undefined);
 assert.ok(db.rowsWritten <= 100);
@@ -203,7 +213,7 @@ for (const [label, limits, reason] of [
   assert.equal(db.rowsWritten, 0, `${label} sentinel must stop before writes`);
 }
 db.rowsWritten = 0;
-const repeatedBootstrap = await callBootstrap({ sourceType: "mmc", fileId: legacyFile.id, maximumEventRows: 10, maximumWrites: 100, execute: true, planRevision: bootstrapExecution.payload.planRevision });
+const repeatedBootstrap = await callBootstrap({ sourceType: "mmc", fileId: legacyFile.id, maximumEventRows: 10, maximumWrites: 100, execute: true, planRevision: bootstrapExecution.payload.planRevision, planGeneratedAt: bootstrapExecution.payload.planGeneratedAt });
 assert.equal(repeatedBootstrap.payload.unchanged, true);
 assert.equal(db.rowsWritten, 0, "a repeated compact bootstrap must write nothing");
 
@@ -213,7 +223,7 @@ await appendDerivedRosterFileEvents(db, oversizedFile, doctors, initialEvents);
 sqlite.prepare("UPDATE roster_files SET active = 1 WHERE id = ?").run(oversizedFile.id);
 const oversizedPlan = await callBootstrap({ sourceType: "mmc", fileId: oversizedFile.id, maximumEventRows: 1, maximumWrites: 100 });
 db.rowsWritten = 0;
-const oversizedExecution = await callBootstrap({ sourceType: "mmc", fileId: oversizedFile.id, maximumEventRows: 1, maximumWrites: 100, execute: true, planRevision: oversizedPlan.payload.planRevision });
+const oversizedExecution = await callBootstrap({ sourceType: "mmc", fileId: oversizedFile.id, maximumEventRows: 1, maximumWrites: 100, execute: true, planRevision: oversizedPlan.payload.planRevision, planGeneratedAt: oversizedPlan.payload.planGeneratedAt });
 assert.equal(oversizedExecution.response.status, 409);
 assert.equal(oversizedExecution.payload.result.reason, "event-read-limit");
 assert.equal(db.rowsWritten, 0, "an over-budget bootstrap must stop before compact writes");

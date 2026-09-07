@@ -60,6 +60,9 @@ function safeChildEnvironment() {
   environment.LOCAL_ONLY = "true";
   environment.ROSTER_AUTOMATION_ENABLED = "false";
   environment.ROSTER_AUTOMATION_WRITES_ENABLED = "false";
+  environment.FACILITY_BOOTSTRAP_INSPECTION_ENABLED = "false";
+  environment.FACILITY_BOOTSTRAP_EXECUTION_ENABLED = "false";
+  environment.FACILITY_BOOTSTRAP_FILE_ALLOWLIST = "";
   environment.ROSTER_STATUS_SUMMARY_ENABLED = "false";
   environment.EMAIL_DELIVERY_ENABLED = "false";
   environment.NO_UPDATE_NOTIFIER = "1";

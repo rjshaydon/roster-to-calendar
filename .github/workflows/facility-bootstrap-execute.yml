@@ -1,4 +1,4 @@
-name: Inspect facility bootstrap canary
+name: Execute one facility bootstrap canary
 
 on:
   workflow_dispatch:
@@ -14,7 +14,15 @@ on:
           - vhh
           - casey
       file_id:
-        description: "Exact active roster file identifier"
+        description: "Exact allowlisted active roster file identifier"
+        required: true
+        type: string
+      plan_revision:
+        description: "Revision returned by the approved inspection"
+        required: true
+        type: string
+      plan_generated_at:
+        description: "UTC timestamp returned by the approved inspection"
         required: true
         type: string
 
@@ -22,17 +30,24 @@ permissions:
   contents: read
 
 jobs:
-  inspect:
+  execute:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
       ROSTER_AUTOMATION_TOKEN: ${{ secrets.ROSTER_AUTOMATION_TOKEN }}
       SOURCE_TYPE: ${{ inputs.source_type }}
       FILE_ID: ${{ inputs.file_id }}
+      PLAN_REVISION: ${{ inputs.plan_revision }}
+      PLAN_GENERATED_AT: ${{ inputs.plan_generated_at }}
     steps:
-      - name: Inspect one file without writing
+      - name: Execute one explicitly approved file
         run: |
-          request_body="$(jq -n --arg sourceType "${SOURCE_TYPE}" --arg fileId "${FILE_ID}" '{sourceType: $sourceType, fileId: $fileId}')"
+          request_body="$(jq -n \
+            --arg sourceType "${SOURCE_TYPE}" \
+            --arg fileId "${FILE_ID}" \
+            --arg planRevision "${PLAN_REVISION}" \
+            --arg planGeneratedAt "${PLAN_GENERATED_AT}" \
+            '{sourceType: $sourceType, fileId: $fileId, planRevision: $planRevision, planGeneratedAt: $planGeneratedAt, execute: true}')"
           http_status="$(curl --silent --show-error \
             --request POST \
             --header "Authorization: Bearer ${ROSTER_AUTOMATION_TOKEN}" \
@@ -44,6 +59,6 @@ jobs:
           if jq empty response.json >/dev/null 2>&1; then
             jq . response.json
           else
-            jq -n --arg status "${http_status}" '{ok: false, httpStatus: $status, error: "Non-JSON response from bootstrap inspection."}'
+            jq -n --arg status "${http_status}" '{ok: false, httpStatus: $status, error: "Non-JSON response from bootstrap execution."}'
           fi
           test "${http_status}" = "200"

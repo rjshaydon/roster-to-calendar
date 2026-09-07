@@ -1,0 +1,19 @@
+{
+  "accountId": "653047f50279c40888ef9715aa7c4c5f",
+  "complete": false,
+  "reason": "Cloudflare rejected the 2026-09-07 control-plane D1 list request. Do not mark complete until a read-only account inventory succeeds.",
+  "databases": [
+    {
+      "id": "237d0d52-3a7c-4e02-8648-9f4dedbc1cb0",
+      "name": "roster-converter-calendar",
+      "environment": "production",
+      "knownCallers": ["Pages Production: roster-to-calendar"]
+    },
+    {
+      "id": "541d7779-a43a-4603-a4ab-c95e9b4b015d",
+      "name": "roster-converter-calendar-preview",
+      "environment": "preview",
+      "knownCallers": ["Pages Preview: roster-to-calendar"]
+    }
+  ]
+}

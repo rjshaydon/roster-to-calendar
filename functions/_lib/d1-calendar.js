@@ -1872,11 +1872,12 @@ export async function inspectFacilityOverviewBootstrap(db, options = {}) {
     db.prepare("SELECT derived_state, content_revision FROM roster_file_status_summaries WHERE file_id = ?").bind(String(file.id)).first(),
     db.prepare("SELECT file_id FROM raw_roster_files WHERE file_id = ?").bind(String(file.id)).first(),
   ]);
+  const planGeneratedAt = String(options.planGeneratedAt || "");
   const planRevision = await facilityOverviewDigest({
     fileId: String(file.id), sourceType, name: String(file.name || ""), sourceId: String(file.source_id || ""),
     size: Number(file.size || 0), lastModified: Number(file.last_modified || 0), parsedAt: String(file.parsed_at || ""),
     parserVersion: String(file.parser_version || ""), compactRevision: String(compact?.content_revision || ""),
-    rawSourceAvailable: Boolean(rawSource?.file_id),
+    rawSourceAvailable: Boolean(rawSource?.file_id), planGeneratedAt,
   });
   return {
     ok: true,
@@ -1891,6 +1892,7 @@ export async function inspectFacilityOverviewBootstrap(db, options = {}) {
     statusReady: statusSummary?.derived_state === "ready" && String(statusSummary?.content_revision || "") === String(compact?.content_revision || ""),
     contentRevision: String(compact?.content_revision || ""),
     rawSourceAvailable: Boolean(rawSource?.file_id),
+    planGeneratedAt,
     planRevision,
   };
 }

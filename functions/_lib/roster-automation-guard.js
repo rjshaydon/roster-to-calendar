@@ -30,6 +30,26 @@ export function facilityMaterializationMaintenanceEnabled(env = {}) {
   return ENABLED_VALUES.has(String(env.ROSTER_ADVANCED_MAINTENANCE_ENABLED || "").trim().toLowerCase());
 }
 
+export function facilityBootstrapInspectionEnabled(env = {}) {
+  return ENABLED_VALUES.has(String(env.FACILITY_BOOTSTRAP_INSPECTION_ENABLED || "").trim().toLowerCase());
+}
+
+export function facilityBootstrapExecutionEnabled(env = {}) {
+  return ENABLED_VALUES.has(String(env.FACILITY_BOOTSTRAP_EXECUTION_ENABLED || "").trim().toLowerCase());
+}
+
+export function facilityBootstrapFileAllowed(env = {}, fileId = "") {
+  const normalized = String(fileId || "").trim();
+  if (!normalized) return false;
+  const entries = String(env.FACILITY_BOOTSTRAP_FILE_ALLOWLIST || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (entries.length !== 1) return false;
+  const allowed = new Set(entries);
+  return allowed.has(normalized);
+}
+
 export function rosterWritePausedResponse() {
   return Response.json({
     ok: false,

@@ -8,6 +8,7 @@ import { onRequestPost as dispatch } from "../functions/api/automation/dispatch.
 import { onRequestPost as vhhExtract } from "../functions/api/automation/vhh-roster-extract.js";
 import { onRequestGet as pending } from "../functions/api/automation/pending.js";
 import { onRequestPost as contactExtract } from "../functions/api/automation/contact-list-extract.js";
+import { onRequestPost as facilityBootstrap } from "../functions/api/automation/facility-bootstrap.js";
 import { ensureCalendarSchema } from "../functions/_lib/d1-calendar.js";
 import watchdog from "../worker/roster-queue-watchdog.js";
 
@@ -74,6 +75,44 @@ assert.equal((await contactResponse.json()).status, "paused");
 
 assert.equal(databaseTouches, 0, "paused roster automation must perform zero D1 operations");
 assert.equal(objectStoreTouches, 0, "paused roster automation must perform zero R2 operations");
+
+for (const [label, body, bootstrapEnv, expectedStatus = 503] of [
+  ["disabled inspection", { sourceType: "mmc", fileId: "exact-file" }, {}],
+  ["wrong inspection file", { sourceType: "mmc", fileId: "wrong-file" }, {
+    FACILITY_BOOTSTRAP_INSPECTION_ENABLED: "true",
+    FACILITY_BOOTSTRAP_FILE_ALLOWLIST: "exact-file",
+    FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST: "mmc",
+  }],
+  ["multiple-file allowlist", { sourceType: "mmc", fileId: "exact-file" }, {
+    FACILITY_BOOTSTRAP_INSPECTION_ENABLED: "true",
+    FACILITY_BOOTSTRAP_FILE_ALLOWLIST: "exact-file,other-file",
+    FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST: "mmc",
+  }],
+  ["malformed limit", { sourceType: "mmc", fileId: "exact-file", maximumEventRows: "not-a-number" }, {
+    FACILITY_BOOTSTRAP_INSPECTION_ENABLED: "true",
+    FACILITY_BOOTSTRAP_FILE_ALLOWLIST: "exact-file",
+    FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST: "mmc",
+  }],
+  ["inspection cannot execute", { sourceType: "mmc", fileId: "exact-file", execute: true }, {
+    FACILITY_BOOTSTRAP_INSPECTION_ENABLED: "true",
+    FACILITY_BOOTSTRAP_FILE_ALLOWLIST: "exact-file",
+    FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST: "mmc",
+  }],
+  ["expired execution plan", { sourceType: "mmc", fileId: "exact-file", execute: true, planRevision: "any", planGeneratedAt: "2026-01-01T00:00:00.000Z" }, {
+    FACILITY_BOOTSTRAP_EXECUTION_ENABLED: "true",
+    FACILITY_BOOTSTRAP_FILE_ALLOWLIST: "exact-file",
+    FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST: "mmc",
+    ROSTER_ADVANCED_MAINTENANCE_ENABLED: "true",
+    FACILITY_SHARED_EMERGENCY_PAUSED: "false",
+  }, 409],
+]) {
+  const response = await facilityBootstrap({
+    request: request("/api/automation/facility-bootstrap", body),
+    env: { ...env, ...bootstrapEnv },
+  });
+  assert.equal(response.status, expectedStatus, `${label} must fail before D1`);
+}
+assert.equal(databaseTouches, 0, "disabled and mismatched bootstrap capabilities must perform zero D1 operations");
 
 assert.equal(await ensureCalendarSchema(blockedDb), true, "deployed databases are managed by migrations");
 assert.equal(databaseTouches, 0, "ordinary requests must not inspect or modify the D1 schema");

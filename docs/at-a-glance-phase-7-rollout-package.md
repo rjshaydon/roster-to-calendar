@@ -1,5 +1,12 @@
 # At a glance Phase 7 rollout package
 
+> **Rollout suspended 7 September 2026.** Read and complete
+> [`d1-account-quota-safe-rollout-plan.md`](./d1-account-quota-safe-rollout-plan.md)
+> before any further Production or Preview D1 request. The account-wide plan
+> supersedes the quota evidence, 50% headroom thresholds, bootstrap controls
+> and canary order below. Per-database Metrics are diagnostic only and cannot
+> authorise work.
+
 This is an operational worksheet, not permission to deploy. Each remote step
 requires separate approval and must be performed serially.
 
@@ -18,10 +25,21 @@ requires separate approval and must be performed serially.
 
 ### Current checkpoint — 7 September 2026
 
-- GitHub `main`, the rollout branch and active Pages Production deployment now
-  identify `95bc9ad` (`d692bdc9-95a7-4d82-a6d1-47fb9a13851a`).
-- Migrations `0024` and `0025` are applied; `0026` through `0030` remain
-  pending.
+- Current fail-closed Production commit is `a293251`; explicit configuration
+  deployment is `5ac63a19`. All optional readers, builders, automation and
+  maintenance are paused.
+- Migrations `0026` through `0031` have been applied individually and no
+  migration remains pending.
+- A protected bootstrap inspection was rejected at 04:55 UTC because the
+  account had exhausted its daily row-read allowance. No bootstrap executed.
+- Do not resume at the old canary sequence. Resume only at Phase A of the
+  account-wide quota safety plan linked above.
+
+- At the earlier pre-suspension checkpoint, GitHub `main`, the rollout branch
+  and active Pages Production deployment identified `95bc9ad`
+  (`d692bdc9-95a7-4d82-a6d1-47fb9a13851a`).
+- At that earlier checkpoint, migrations `0024` and `0025` were applied and
+  `0026` through `0030` remained pending.
 - Legacy At a glance reads are paused. The Creator `calendarStoreStatus` route
   is also guarded before D1 while roster writes are paused.
 - Before roster writes are restored, implement the separate

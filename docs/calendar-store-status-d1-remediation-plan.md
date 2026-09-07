@@ -1,10 +1,16 @@
 # `calendarStoreStatus` D1 remediation plan
 
+> **Production rollout suspended 7 September 2026.** The implementation remains
+> default-off. Complete
+> [`d1-account-quota-safe-rollout-plan.md`](./d1-account-quota-safe-rollout-plan.md)
+> before another status-summary inspection, bootstrap or activation. That plan
+> supersedes the Production gates and quota thresholds later in this document.
+
 ## Implementation status — 7 September 2026
 
-Implemented locally on `codex/at-a-glance-d1-optimization`; not deployed and
-not applied to any remote database. The dedicated reader remains disabled in
-Production and Preview configuration.
+Implemented and deployed default-off. Migration `0031` is applied in Production
+after `0026` through `0030`, but its summary table was empty when last verified.
+The dedicated reader remains disabled in Production and Preview configuration.
 
 The implementation adds migration `0031`, incremental summary maintenance,
 the bounded compact reader, one-file bootstrap integration, a separate
