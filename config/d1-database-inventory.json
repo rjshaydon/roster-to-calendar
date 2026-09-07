@@ -1,19 +1,26 @@
 {
   "accountId": "653047f50279c40888ef9715aa7c4c5f",
-  "complete": false,
-  "reason": "Cloudflare rejected the 2026-09-07 control-plane D1 list request. Do not mark complete until a read-only account inventory succeeds.",
+  "complete": true,
+  "verifiedAt": "2026-09-07T08:55:00Z",
+  "evidence": "Read-only Wrangler control-plane database, Pages project/deployment and Worker version listings; no D1 SQL was executed.",
   "databases": [
     {
       "id": "237d0d52-3a7c-4e02-8648-9f4dedbc1cb0",
       "name": "roster-converter-calendar",
       "environment": "production",
-      "knownCallers": ["Pages Production: roster-to-calendar"]
+      "knownCallers": ["Pages Production and retained Production deployments: roster-to-calendar"]
     },
     {
       "id": "541d7779-a43a-4603-a4ab-c95e9b4b015d",
       "name": "roster-converter-calendar-preview",
       "environment": "preview",
-      "knownCallers": ["Pages Preview: roster-to-calendar"]
+      "knownCallers": ["Retained Pages Preview deployments: roster-to-calendar"]
+    },
+    {
+      "id": "46829fee-f518-4d23-a992-d050f53c4c41",
+      "name": "acem-exam-tutor-db",
+      "environment": "production",
+      "knownCallers": ["Worker: acem-exam-tutor (env.DB)"]
     }
   ]
 }

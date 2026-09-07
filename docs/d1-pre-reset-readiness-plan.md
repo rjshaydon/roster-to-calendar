@@ -183,3 +183,21 @@ Pre-reset preparation is complete when:
 - tomorrow's commands, timestamps, file ID, rollback and worksheet are ready;
 - no secret is present in Git or generated output; and
 - no Production/Preview D1 operation or Cloudflare runtime mutation occurred.
+
+## Implementation checkpoint — 7 September 2026
+
+- Final settled incident Analytics is stored under `/private/tmp` with `0600`
+  permissions; daily and five-minute totals reconcile exactly.
+- The account inventory is complete: two roster databases plus the separately
+  bound `acem-exam-tutor-db`. The account has one Pages project and the retained
+  roster deployment classes are recorded.
+- Local browser tracing reproduced 11 requests per Creator login. The safety
+  revision reduces this to six and removes automatic console writes.
+- Missing and malformed legacy/emergency flags now default closed. By stream no
+  longer repeats failed metadata immediately.
+- The budget checker now rejects pre-settlement UTC rollover and distinguishes
+  valid early evidence from permission to proceed.
+- The exact reset-day commands are in
+  [`d1-reset-day-runbook.md`](./d1-reset-day-runbook.md).
+- Broad On shift rollout remains blocked because 36,000 unchanged contact
+  refreshes must first move off repeated D1 authentication.

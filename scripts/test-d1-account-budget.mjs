@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 
-import { D1_BILLING_UNAVAILABLE_REASON, d1AnalyticsQuery, evaluateD1Budget, summarizeAnalyticsPayload, utcDayInterval } from "./d1-quota-budget-lib.mjs";
+import { D1_BILLING_UNAVAILABLE_REASON, d1AnalyticsQuery, evaluateD1Budget, settledUtcDayInterval, summarizeAnalyticsPayload, utcDayInterval } from "./d1-quota-budget-lib.mjs";
 
 const productionId = "production-db";
 const previewId = "preview-db";
@@ -23,6 +23,20 @@ assert.deepEqual(utcDayInterval(now), {
   end: "2026-09-08T00:00:00.000Z",
   date: "2026-09-07",
 });
+assert.deepEqual(settledUtcDayInterval(new Date("2026-09-08T00:10:00.000Z")), {
+  start: "2026-09-08T00:00:00.000Z",
+  observedUntil: "2026-09-07T23:55:00.000Z",
+  end: "2026-09-09T00:00:00.000Z",
+  date: "2026-09-08",
+  settled: false,
+});
+assert.deepEqual(settledUtcDayInterval(new Date("2026-09-08T00:20:00.000Z")), {
+  start: "2026-09-08T00:00:00.000Z",
+  observedUntil: "2026-09-08T00:05:00.000Z",
+  end: "2026-09-09T00:00:00.000Z",
+  date: "2026-09-08",
+  settled: true,
+});
 assert.match(d1AnalyticsQuery(), /d1AnalyticsAdaptiveGroups/);
 assert.match(d1AnalyticsQuery(), /d1QueriesAdaptiveGroups/);
 assert.match(d1AnalyticsQuery(), /datetimeFiveMinutes/);
@@ -35,6 +49,17 @@ assert.equal(go.decision, "GO");
 const graphOnlyGo = evaluateD1Budget({ analytics, inventory: completeInventory, billing: { unavailableReason: D1_BILLING_UNAVAILABLE_REASON }, previousReport, now, optionalEstimate: { rowsRead: 27_021, rowsWritten: 2_252 } });
 assert.equal(graphOnlyGo.decision, "GO");
 assert.equal(graphOnlyGo.billingMode, "free-plan-analytics-only");
+const earlyPassiveSample = evaluateD1Budget({
+  analytics,
+  inventory: completeInventory,
+  billing: { unavailableReason: D1_BILLING_UNAVAILABLE_REASON },
+  previousReport: null,
+  now: new Date("2026-09-07T00:20:00.000Z"),
+});
+assert.equal(earlyPassiveSample.decision, "STOP");
+assert.equal(earlyPassiveSample.sampleValid, true, "a reconciled early sample is valid evidence even though rollout remains blocked");
+assert.ok(earlyPassiveSample.reasons.includes("two-hour-passive-baseline-required"));
+assert.ok(earlyPassiveSample.reasons.includes("second-sample-required"));
 
 for (const [label, overrides, expectedReason] of [
   ["missing billing", { billing: {} }, "billing-usage-or-documented-unavailability-required"],

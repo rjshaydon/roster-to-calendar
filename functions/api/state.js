@@ -138,6 +138,9 @@ export async function onRequestPost(context) {
     const password = String(body?.password || "");
     const action = String(body?.action || "login");
     const mode = String(body?.mode || "login");
+    if (String(context.env.LOCAL_ONLY || "").toLowerCase() === "true") {
+      console.info(JSON.stringify({ event: "local-api-action", action }));
+    }
     const responseMode = String(body?.responseMode || "full").trim().toLowerCase() === "fast" ? "fast" : "full";
     const realName = String(body?.realName || "").trim();
     const targetEmail = normalizeEmail(body?.targetEmail);

@@ -1,7 +1,7 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { chmod, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-import { D1_BUDGET_LIMITS, d1AnalyticsQuery, evaluateD1Budget, summarizeAnalyticsPayload, utcDayInterval } from "./d1-quota-budget-lib.mjs";
+import { d1AnalyticsQuery, evaluateD1Budget, settledUtcDayInterval, summarizeAnalyticsPayload } from "./d1-quota-budget-lib.mjs";
 
 const options = parseArguments(process.argv.slice(2));
 const generatedAt = new Date().toISOString();
@@ -16,17 +16,27 @@ if (!accountId) analytics.reasons.push("cloudflare-account-id-required");
 if (!token) analytics.reasons.push("account-analytics-read-token-required");
 if (accountId && token) {
   try {
-    const interval = utcDayInterval(new Date(Date.parse(generatedAt) - D1_BUDGET_LIMITS.analyticsSettlementMs));
-    const response = await fetch("https://api.cloudflare.com/client/v4/graphql", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        query: d1AnalyticsQuery(),
-        variables: { accountTag: accountId, start: interval.start, end: interval.observedUntil },
-      }),
-    });
-    if (!response.ok) throw new Error(`analytics-http-${response.status}`);
-    analytics = { ...summarizeAnalyticsPayload(await response.json(), inventory), interval };
+    const interval = settledUtcDayInterval(generatedAt);
+    if (!interval.settled) {
+      analytics = { ...analytics, reasons: ["analytics-settlement-window-before-utc-day"], interval };
+    } else {
+      const response = await fetch("https://api.cloudflare.com/client/v4/graphql", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query: d1AnalyticsQuery(),
+          variables: { accountTag: accountId, start: interval.start, end: interval.observedUntil },
+        }),
+      });
+      if (!response.ok) throw new Error(`analytics-http-${response.status}`);
+      const payload = await response.json();
+      if (options.rawOutput) {
+        const rawPath = resolve(options.rawOutput);
+        await writeFile(rawPath, `${JSON.stringify(payload, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+        await chmod(rawPath, 0o600);
+      }
+      analytics = { ...summarizeAnalyticsPayload(payload, inventory), interval };
+    }
   } catch (error) {
     analytics = { complete: false, reasons: [`analytics-request-failed:${String(error?.message || "unknown")}`], databases: [], totals: {}, queryFingerprints: [] };
   }
@@ -49,7 +59,11 @@ const report = {
   ...assessment,
 };
 const serialized = `${JSON.stringify(report, null, 2)}\n`;
-if (options.output) await writeFile(resolve(options.output), serialized, { encoding: "utf8", mode: 0o600 });
+if (options.output) {
+  const outputPath = resolve(options.output);
+  await writeFile(outputPath, serialized, { encoding: "utf8", mode: 0o600 });
+  await chmod(outputPath, 0o600);
+}
 process.stdout.write(serialized);
 if (report.decision !== "GO") process.exitCode = 2;
 
@@ -60,7 +74,7 @@ function parseArguments(args) {
     if (!key.startsWith("--") || index + 1 >= args.length) throw new Error(`Invalid argument: ${key}`);
     const value = args[++index];
     const name = key.slice(2).replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase());
-    if (!["inventory", "previous", "output", "billingReads", "billingWrites", "billingObservedAt", "billingUnavailableReason", "estimatedReads", "estimatedWrites"].includes(name)) throw new Error(`Unknown argument: ${key}`);
+    if (!["inventory", "previous", "output", "rawOutput", "billingReads", "billingWrites", "billingObservedAt", "billingUnavailableReason", "estimatedReads", "estimatedWrites"].includes(name)) throw new Error(`Unknown argument: ${key}`);
     parsed[name] = value;
   }
   return parsed;

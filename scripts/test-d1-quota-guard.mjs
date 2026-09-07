@@ -125,6 +125,7 @@ const health = await watchdog.fetch(new Request("https://watchdog.test/health"),
 assert.equal((await health.json()).paused, true, "watchdog health should expose its paused state");
 
 const stateSource = await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8");
+const appSource = await readFile(new URL("../public/static/app.js", import.meta.url), "utf8");
 const ensureInviteBody = stateSource.match(/async function ensureInviteSchema[\s\S]*?\n}/)?.[0] || "";
 assert.match(ensureInviteBody, /ensureCalendarSchema\(db\)/, "invite setup should use the shared schema check");
 assert.doesNotMatch(ensureInviteBody, /CREATE\s+(?:TABLE|INDEX)/i, "ordinary API requests must not issue invite DDL directly");
@@ -157,5 +158,12 @@ assert.match(
   /removedImportIds\.length && rosterWritesExplicitlyPaused\(context\.env\)/,
   "save must not remove roster files while roster writes are paused",
 );
+const statusBody = appSource.match(/function setStatus\([\s\S]*?(?=\nfunction removeSupersededStatusMessages)/)?.[0] || "";
+assert.doesNotMatch(statusBody, /persistConsoleMessage|appendConsoleMessage/, "ordinary UI status messages must not create D1 console-history writes");
+const postLoginRefreshBody = appSource.match(/function queuePostLoginSnapshotRefresh[\s\S]*?(?=\nfunction markLoginPhase)/)?.[0] || "";
+assert.match(postLoginRefreshBody, /for \(const delayMs of \[1500\]\)/, "post-login snapshot refresh must have one bounded retry");
+assert.match(postLoginRefreshBody, /if \(document\.hidden\) return/, "hidden tabs must not retry a post-login snapshot refresh");
+const byStreamOpenBody = appSource.match(/async function openFacilityOverviewByStream[\s\S]*?(?=\nfunction closeFacilityOverview)/)?.[0] || "";
+assert.equal((byStreamOpenBody.match(/loadFacilityOverviewMetadata\(\)/g) || []).length, 1, "opening By stream must not immediately repeat a failed metadata request");
 
 console.log("D1 quota emergency guards passed.");

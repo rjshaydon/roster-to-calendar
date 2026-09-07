@@ -1,7 +1,8 @@
 const ENABLED = new Set(["1", "true", "yes", "on"]);
+const DISABLED = new Set(["0", "false", "no", "off"]);
 
 export function facilityRolloutPaused(env = {}) {
-  return ENABLED.has(String(env.FACILITY_SHARED_EMERGENCY_PAUSED || "").trim().toLowerCase());
+  return !DISABLED.has(String(env.FACILITY_SHARED_EMERGENCY_PAUSED || "").trim().toLowerCase());
 }
 
 export function facilitySharedRolloutActive(env = {}) {
@@ -9,7 +10,7 @@ export function facilitySharedRolloutActive(env = {}) {
 }
 
 export function facilityLegacyReadsPaused(env = {}) {
-  return ENABLED.has(String(env.FACILITY_LEGACY_READS_PAUSED || "").trim().toLowerCase());
+  return !DISABLED.has(String(env.FACILITY_LEGACY_READS_PAUSED || "").trim().toLowerCase());
 }
 
 export function facilityBuildSources(env = {}, sources = []) {

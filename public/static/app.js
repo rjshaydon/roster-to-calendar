@@ -9701,9 +9701,7 @@ async function openFacilityOverviewByStream() {
   const navigationId = facilityOverviewState.byStreamRequestId;
   facilityOverviewState.byStreamContent = `<article class="issue-card"><p>Loading available streams…</p></article>`;
   renderFacilityOverview();
-  let metadata = await loadFacilityOverviewMetadata();
-  if (facilityOverviewState.tab !== "by-stream" || facilityOverviewState.byStreamRequestId !== navigationId) return;
-  if (!metadata) metadata = await loadFacilityOverviewMetadata();
+  const metadata = await loadFacilityOverviewMetadata();
   if (facilityOverviewState.tab !== "by-stream" || facilityOverviewState.byStreamRequestId !== navigationId) return;
   if (!metadata) {
     facilityOverviewState.byStreamContent = `<article class="issue-card"><p>Available streams could not be loaded right now.</p></article>`;
@@ -16802,8 +16800,12 @@ function queuePostLoginHydration(options = {}, loginStartedAt = 0) {
 function queuePostLoginSnapshotRefresh(options = {}) {
   const expectedKey = activeCalendarTransitionKey();
   void (async () => {
-    for (const delayMs of [750, 1500, 3000, 6000]) {
+    // One bounded revalidation is enough for the normal asynchronous snapshot
+    // hand-off. Repeated background retries multiply authenticated D1 work
+    // across open tabs; a later manual reload remains available.
+    for (const delayMs of [1500]) {
       await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+      if (document.hidden) return;
       if (!calendarTransitionStillCurrent(options.transition) || activeCalendarTransitionKey() !== expectedKey) return;
       const loaded = await loadCloudCalendarEvents({
         adminTargetEmail: options.adminTargetEmail || "",
@@ -20284,7 +20286,6 @@ function setStatus(message, isError = false) {
   if (isError && message) {
     void reportAccountError(text);
   }
-  void persistConsoleMessage(text, isError);
   if (adminConsoleOpen && currentAdminTab === "system" && !adminConsoleLoading) {
     appendLiveAdminConsoleMessage(text, isError);
     refreshAdminConsoleMarkupIfVisible();

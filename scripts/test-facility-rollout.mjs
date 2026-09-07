@@ -5,6 +5,8 @@ import { onRequestPost as materialize } from "../functions/api/automation/facili
 
 const env = {
   FACILITY_SHARED_ROLLOUT_ACTIVE: "true",
+  FACILITY_SHARED_EMERGENCY_PAUSED: "false",
+  FACILITY_LEGACY_READS_PAUSED: "false",
   FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST: "mmc",
   FACILITY_SHARED_READER_SOURCE_ALLOWLIST: "mmc",
   FACILITY_SHARED_READER_COHORT: "creator",
@@ -23,6 +25,11 @@ assert.equal(facilityReadRoute(env, { actorRole: "user", actorEmail: "user@examp
 assert.equal(facilityReadRoute({ ...env, FACILITY_LEGACY_READS_PAUSED: "true" }, { actorRole: "user", actorEmail: "user@example.com", subjectEmail: "user@example.com", sources: ["mmc"] }), "blocked");
 assert.equal(facilityRolloutPaused({ ...env, FACILITY_SHARED_EMERGENCY_PAUSED: "true" }), true);
 assert.deepEqual(facilityBuildSources({ ...env, FACILITY_SHARED_EMERGENCY_PAUSED: "true" }, ["mmc"]), []);
+assert.equal(facilityReadRoute({}, { actorRole: "creator", actorEmail: "creator@example.com", subjectEmail: "creator@example.com", sources: ["mmc"] }), "blocked", "missing rollout settings must not restore legacy reads");
+assert.equal(facilityReadRoute({ FACILITY_LEGACY_READS_PAUSED: "malformed" }, { actorRole: "creator", actorEmail: "creator@example.com", subjectEmail: "creator@example.com", sources: ["mmc"] }), "blocked", "malformed legacy-read setting must fail closed");
+assert.equal(facilityRolloutPaused({}), true, "missing emergency-pause setting must remain paused");
+assert.equal(facilityRolloutPaused({ FACILITY_SHARED_EMERGENCY_PAUSED: "malformed" }), true, "malformed emergency-pause setting must remain paused");
+assert.deepEqual(facilityBuildSources({ FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST: "mmc" }, ["mmc"]), [], "missing emergency-pause setting must block builders");
 assert.equal(automatedRosterSourceEnabled(env, "monash-adults"), true);
 assert.equal(automatedRosterSourceEnabled(env, "monash-paeds"), false);
 assert.equal(automatedRosterQueueEnabled(env), true);

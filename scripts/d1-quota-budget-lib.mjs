@@ -28,6 +28,17 @@ export function utcDayInterval(nowValue = new Date()) {
   return { start: start.toISOString(), observedUntil: now.toISOString(), end: end.toISOString(), date: start.toISOString().slice(0, 10) };
 }
 
+export function settledUtcDayInterval(nowValue = new Date()) {
+  const now = new Date(nowValue);
+  const interval = utcDayInterval(now);
+  const observedUntil = new Date(now.getTime() - D1_BUDGET_LIMITS.analyticsSettlementMs);
+  return {
+    ...interval,
+    observedUntil: observedUntil.toISOString(),
+    settled: observedUntil.getTime() >= Date.parse(interval.start),
+  };
+}
+
 export function d1AnalyticsQuery() {
   return `query D1AccountQuota($accountTag: string!, $start: Time!, $end: Time!) {
     viewer {
@@ -177,6 +188,10 @@ export function evaluateD1Budget({ analytics, inventory, billing, previousReport
   const effectiveWrites = Math.max(analyticsWrites, billingWrites ?? 0);
   if (billingAvailable && materiallyDifferent(analyticsReads, billingReads)) reasons.push("billing-read-reconciliation-failed");
   if (billingAvailable && materiallyDifferent(analyticsWrites, billingWrites)) reasons.push("billing-write-reconciliation-failed");
+  // A sample can be internally trustworthy before it is old enough or cheap
+  // enough to authorize work. Preserve that distinction so an early passive
+  // sample can be used later to calculate burn rate while still returning STOP.
+  const evidenceReasons = [...reasons];
   if (effectiveReads >= D1_BUDGET_LIMITS.optionalReadStartMaximum) reasons.push("read-start-threshold-exceeded");
   if (effectiveWrites >= D1_BUDGET_LIMITS.optionalWriteStartMaximum) reasons.push("write-start-threshold-exceeded");
   if (effectiveReads >= D1_BUDGET_LIMITS.optionalReadStop) reasons.push("read-stop-threshold-exceeded");
@@ -214,10 +229,9 @@ export function evaluateD1Budget({ analytics, inventory, billing, previousReport
   if (effectiveReads + estimatedReads * 2 > D1_BUDGET_LIMITS.optionalReadStop) reasons.push("optional-read-estimate-exceeds-budget");
   if (effectiveWrites + estimatedWrites * 2 > D1_BUDGET_LIMITS.optionalWriteStop) reasons.push("optional-write-estimate-exceeds-budget");
 
-  const nonSamplingReasons = reasons.filter((reason) => !["second-sample-required", "sample-gap-too-short"].includes(reason));
   return {
     decision: reasons.length ? "STOP" : "GO",
-    sampleValid: nonSamplingReasons.length === 0,
+    sampleValid: evidenceReasons.length === 0,
     reasons: [...new Set(reasons)],
     interval,
     effectiveUsage: { rowsRead: effectiveReads, rowsWritten: effectiveWrites },

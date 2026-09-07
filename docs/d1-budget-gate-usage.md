@@ -4,6 +4,11 @@ This command reads Cloudflare Analytics only. It does not connect to an
 application D1 database. Keep all rollout and maintenance controls closed while
 collecting samples.
 
+The command refuses to query an interval before the 15-minute settlement window
+has entered the current UTC quota day. A run before 00:15 UTC returns `STOP`
+with `analytics-settlement-window-before-utc-day`; it cannot mistake the
+previous day for a completed passive baseline.
+
 ## Prerequisites
 
 1. Complete `config/d1-database-inventory.json` from the Cloudflare control
@@ -28,6 +33,7 @@ npm run d1:budget -- \
   --billing-observed-at 2026-09-07T02:00:00Z \
   --estimated-reads 27021 \
   --estimated-writes 2252 \
+  --raw-output /private/tmp/d1-budget-raw-1.json \
   --output /private/tmp/d1-budget-sample-1.json
 ```
 
@@ -66,3 +72,6 @@ query attribution, or conflicting available Billing data authorises no D1
 work. The command itself never deploys, changes configuration, runs a migration
 or calls an application endpoint. Analytics are queried only through a settled
 cut-off 15 minutes behind the report generation time.
+
+`--raw-output` is optional and stores the GraphQL response with file mode
+`0600`. It contains neither the API token nor an authorization header.

@@ -5037,6 +5037,10 @@ async function postStateRaw(store, payload, db = null, options = {}) {
       ROSTER_AUTOMATION_WRITES_ENABLED: "true",
       ROSTER_STATUS_SUMMARY_ENABLED: "true",
       ROSTER_ADVANCED_MAINTENANCE_ENABLED: "true",
+      // Legacy behaviour remains available only when tests opt out of both
+      // default-closed controls explicitly.
+      FACILITY_SHARED_EMERGENCY_PAUSED: "false",
+      FACILITY_LEGACY_READS_PAUSED: "false",
     },
   };
   if (options.captureWaitUntil === true) {

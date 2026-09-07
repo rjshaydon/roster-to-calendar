@@ -1,7 +1,8 @@
 # D1 database and caller inventory
 
-Status: **incomplete — rollout blocked**. Updated 7 September 2026 without an
-application D1 query.
+Status: **control-plane inventory complete**. Updated 7 September 2026 without
+an application D1 query. Runtime rollout remains blocked by the incident's
+unattributed usage and the reset-day passive-baseline gate.
 
 ## Known databases
 
@@ -9,19 +10,27 @@ application D1 query.
 | --- | --- | --- | --- |
 | `roster-converter-calendar` | `237d0d52-3a7c-4e02-8648-9f4dedbc1cb0` | Production | `roster-to-calendar` Pages Production `ROSTER_DB` |
 | `roster-converter-calendar-preview` | `541d7779-a43a-4603-a4ab-c95e9b4b015d` | Preview | `roster-to-calendar` Pages Preview `ROSTER_DB` |
+| `acem-exam-tutor-db` | `46829fee-f518-4d23-a992-d050f53c4c41` | Production | `acem-exam-tutor` Worker `env.DB` |
 
-This list is deliberately marked incomplete. Wrangler's current OAuth session
-was rejected by the D1 list control-plane API on 7 September. No database may
-be assumed absent until a read-only account inventory succeeds and its result
-is reconciled with account-wide Analytics and Billing.
+The read-only `wrangler d1 list --json` control-plane request succeeded at
+08:50 UTC and returned exactly these three account databases. The third
+database had been absent from the original inventory. `wrangler versions view`
+confirmed the active `acem-exam-tutor` Worker version binds it as `env.DB`.
+The account has one Pages project, `roster-to-calendar`.
 
 ## Known callers
 
 - Pages Production and Preview API functions bind `ROSTER_DB` through
-  `wrangler.toml`.
+  `wrangler.toml`. The control plane listed retained deployment URLs from
+  `main`, `codex/at-a-glance-d1-optimization` and
+  `codex/durable-doctor-identity-aliases`; a request to any retained URL is a
+  possible caller even when it is not the active Production deployment.
+- The `acem-exam-tutor` Worker binds the account's third database. Its D1 usage
+  must be included in every account-budget decision even though it is unrelated
+  to the roster app.
 - Browsers call the state, account-context, subscription and facility overview
   APIs. Their database access is executed by Pages, not directly by browsers.
-- The GitHub Actions workflows `process-monash-rosters.yml`,
+- The GitHub Actions workflows `monash-roster-sync.yml`,
   `facility-bootstrap-canary.yml` and `facility-bootstrap-execute.yml` can call
   token-protected Production endpoints when manually or automatically run.
 - `worker/roster-queue-watchdog.js` can call roster automation endpoints, but
@@ -30,8 +39,9 @@ is reconciled with account-wide Analytics and Billing.
   credentials. Direct operator use of `wrangler d1 ... --remote` remains a
   separate manual capability and is forbidden during this rollout unless a
   specific step is approved.
-- Retained Pages branch deployments may bind the Preview database. They must be
-  enumerated through the control plane before the inventory becomes complete.
+- Retained Pages branch deployments bind the Preview database, while retained
+  Production deployment URLs bind Production. They are covered as caller
+  classes and must be re-enumerated if the Pages project changes.
 
 ## 7 September correlation evidence
 
@@ -52,7 +62,8 @@ is reconciled with account-wide Analytics and Billing.
 
 ## Completion gate
 
-Set `config/d1-database-inventory.json` to `complete: true` only after all D1
-databases, Pages deployments, Workers, schedules, queues and retained previews
-are accounted for. Until then `npm run d1:budget` must return `STOP` even when
-all supplied usage numbers are low.
+The database/caller discovery gate is complete as of the timestamp above. The
+budget command still returns STOP for an unknown database ID, so any later
+account addition invalidates the inventory automatically. Inventory completion
+does not override incomplete Analytics attribution, thresholds or passive-day
+requirements.

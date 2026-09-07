@@ -315,11 +315,11 @@ a D1 query to prove rollback.
   execution was requested.
 - `a293251` / deployment `5ac63a19`: full pauses restored and effective
   Production variables read back without D1.
-- Account-wide GraphQL later reported 9,064,320 Production rows read and 1,550
+- Account-wide GraphQL later reported 9,064,824 Production rows read and 1,550
   rows written from 00:00 through approximately 06:30 UTC; Preview contributed
   no reported usage. Of the reads, 8,870,469 were assigned to 04:00–04:59 UTC,
   concentrated between 04:35 and 04:49. Query fingerprints explained only
-  837,929 daily reads, leaving 8,226,391 unattributed. This discrepancy is a
+  838,427 daily reads, leaving 8,226,397 unattributed. This discrepancy is a
   hard rollout blocker.
 - The Free account's Billable Usage dashboard exposed only R2 products. The
   implemented checker therefore supports a named Free-plan Analytics-only mode
@@ -354,13 +354,21 @@ The focused quota, materialisation, rollout, local-isolation, synthetic-cost
 and representative fixture suites pass. A credential-free budget invocation
 returns `STOP` as designed.
 
+Completed during pre-reset preparation, without D1:
+
+- a control-plane inventory of all three account databases, including the
+  unrelated `acem-exam-tutor-db`, its Worker binding, the roster Pages project
+  and retained deployment caller classes;
+- creation and use of the narrowly scoped Account Analytics Read token;
+- a final settled incident report and sanitized raw response outside Git; and
+- local request tracing and fixes for default-open missing flags, automatic UI
+  status writes, excessive login revalidation and duplicate metadata retries.
+
 Not yet complete and not authorised:
 
-- a control-plane-complete D1 database/deployment/caller inventory;
-- creation/use of the narrowly scoped Account Analytics Read token;
 - live reset-day account-wide Analytics reconciliation, plus Billing only if
   Cloudflare exposes D1 there;
-- attribution of the 7 September incident;
+- exact SQL/path attribution of the 7 September incident's fingerprint gap;
 - the reset-day passive baseline; and
 - any deployment, configuration change, D1 inspection, bootstrap, publication
   or reader activation.
