@@ -1,0 +1,42 @@
+name: Inspect facility bootstrap canary
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_type:
+        description: "One explicitly allowed hospital"
+        required: true
+        type: choice
+        options:
+          - mmc
+          - mch
+          - ddh
+          - vhh
+          - casey
+      file_id:
+        description: "Exact active roster file identifier"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      ROSTER_AUTOMATION_TOKEN: ${{ secrets.ROSTER_AUTOMATION_TOKEN }}
+      SOURCE_TYPE: ${{ inputs.source_type }}
+      FILE_ID: ${{ inputs.file_id }}
+    steps:
+      - name: Inspect one file without writing
+        run: |
+          request_body="$(jq -n --arg sourceType "${SOURCE_TYPE}" --arg fileId "${FILE_ID}" '{sourceType: $sourceType, fileId: $fileId}')"
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer ${ROSTER_AUTOMATION_TOKEN}" \
+            --header "Content-Type: application/json" \
+            --data "${request_body}" \
+            "https://roster-to-calendar.pages.dev/api/automation/facility-bootstrap" \
+            | jq .
