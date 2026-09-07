@@ -105,10 +105,14 @@ for (const action of [
 }
 const calendarStoreStatusAction = stateSource.match(/if \(action === "calendarStoreStatus"\)[\s\S]*?(?=\n    if \(action === |$)/)?.[0] || "";
 assert.ok(
-  calendarStoreStatusAction.indexOf("rosterWritesExplicitlyPaused(context.env)")
+  calendarStoreStatusAction.indexOf("rosterStatusSummaryEnabled(context.env)")
     < calendarStoreStatusAction.indexOf("calendarStoreStatus(null, context.env.ROSTER_DB"),
-  "paused calendar status must stop before repository-wide D1 counts",
+  "disabled compact calendar status must stop before roster repository reads",
 );
+const calendarStoreStatusBody = stateSource.match(/async function calendarStoreStatus[\s\S]*?function rosterSourceStatuses/)?.[0] || "";
+assert.match(calendarStoreStatusBody, /queryRosterFileStatusSummaries/);
+assert.doesNotMatch(calendarStoreStatusBody, /queryRosterFiles|queryRawRosterFiles|countDerivedEventsByFile|countDerivedDoctorsByFile|roster_events|roster_file_doctors/,
+  "normal calendar status must not contain a historical roster scan");
 assert.match(
   stateSource,
   /removedImportIds\.length && rosterWritesExplicitlyPaused\(context\.env\)/,

@@ -8,6 +8,10 @@ export function rosterWritesExplicitlyPaused(env = {}) {
   return String(env.ROSTER_AUTOMATION_WRITES_ENABLED || "").trim().toLowerCase() === "false";
 }
 
+export function rosterStatusSummaryEnabled(env = {}) {
+  return String(env.ROSTER_STATUS_SUMMARY_ENABLED || "").trim().toLowerCase() === "true";
+}
+
 export function automatedRosterSourceEnabled(env = {}, sourceId = "") {
   if (!automatedRosterWritesEnabled(env)) return false;
   const allowed = new Set(String(env.ROSTER_AUTOMATION_SOURCE_ALLOWLIST || "").split(",").map((value) => value.trim()).filter(Boolean));

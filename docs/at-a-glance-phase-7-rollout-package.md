@@ -16,6 +16,26 @@ requires separate approval and must be performed serially.
   through read-only commands. It made no production changes and did not
   deploy, migrate, bootstrap, publish or change configuration.
 
+### Current checkpoint — 7 September 2026
+
+- GitHub `main`, the rollout branch and active Pages Production deployment now
+  identify `95bc9ad` (`d692bdc9-95a7-4d82-a6d1-47fb9a13851a`).
+- Migrations `0024` and `0025` are applied; `0026` through `0030` remain
+  pending.
+- Legacy At a glance reads are paused. The Creator `calendarStoreStatus` route
+  is also guarded before D1 while roster writes are paused.
+- Before roster writes are restored, implement the separate
+  [calendar store status remediation plan](./calendar-store-status-d1-remediation-plan.md).
+  Its proposed `0031` migration follows, and does not modify, the existing
+  `0026`–`0030` sequence.
+- The locally reviewed `0031_roster_file_status_summaries.sql` SHA-256 is
+  `9beb3aa67bf7445a0950d2390818de750c4acf1f69a8f2eb31bb62e810866311`.
+  Recompute it from the committed release before any remote migration.
+
+This checkpoint supersedes older release and ledger statements below where
+they describe the then-current state. Their measurements remain historical
+rollout evidence.
+
 Before deployment, record the exact release and production commits, migration
 ledger, effective settings, D1 daily usage and UTC reset time. Stop if any state
 differs from the reviewed record.
@@ -131,6 +151,7 @@ the mutating step remains blocked.
 | Shared day reads | `FACILITY_SHARED_DAYS_ENABLED` | `false` |
 | Shared contact reads | `FACILITY_SHARED_CONTACTS_ENABLED` | `false` |
 | Roster writes | `ROSTER_AUTOMATION_WRITES_ENABLED` | `false` |
+| Compact roster status | `ROSTER_STATUS_SUMMARY_ENABLED` | `false` |
 | Roster source allowlist | `ROSTER_AUTOMATION_SOURCE_ALLOWLIST` | empty |
 | Queue | `ROSTER_AUTOMATION_QUEUE_ENABLED` | `false` |
 | Advanced maintenance | `ROSTER_ADVANCED_MAINTENANCE_ENABLED` | `false` |

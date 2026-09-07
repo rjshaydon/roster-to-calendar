@@ -468,6 +468,9 @@ async function ensureCalendarSchemaUncached(db) {
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_sync_runs_source_started ON roster_sync_runs (source_id, started_at DESC)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_sync_runs_source_hash ON roster_sync_runs (source_id, content_hash, status)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_dispatches_status_retry ON roster_dispatches (status, retry_after DESC)").run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_sources_label_id ON roster_sources (label, id)").run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_sync_runs_source_started_id ON roster_sync_runs (source_id, started_at DESC, id DESC)").run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_dispatches_requested_id ON roster_dispatches (requested_at DESC, id DESC)").run();
   await db.prepare(`
     CREATE TABLE IF NOT EXISTS contact_list_files (
       id TEXT PRIMARY KEY,
@@ -694,6 +697,15 @@ export async function upsertDerivedRosterFile(db, file, storedImport) {
     doctors,
   });
   await recordFacilitySmsMembershipsForRosterFile(db, file.id);
+  await upsertRosterFileStatusSummary(db, {
+    ...file,
+    sourceType,
+    derivedState: "ready",
+    expectedDoctorCount: doctors.length,
+    indexedDoctorCount: doctors.length,
+    eventCount: totalEvents,
+    rawSourceAvailable: true,
+  });
   return { ok: true, doctors: doctors.length, events: totalEvents };
 }
 
@@ -800,7 +812,16 @@ export async function startDerivedRosterFileSave(db, file, doctors, options = {}
   const safeDoctors = sanitizeFileDoctors(doctors, sourceType);
   const parsedAt = new Date().toISOString();
   const statements = [
-    derivedRosterFileUpsertStatement(db, file, sourceType, parsedAt),
+    derivedRosterFileUpsertStatement(db, { ...file, active: false }, sourceType, parsedAt),
+    upsertRosterFileStatusSummaryStatement(db, {
+      ...file,
+      sourceType,
+      derivedState: "building",
+      active: false,
+      expectedDoctorCount: safeDoctors.length,
+      indexedDoctorCount: safeDoctors.length,
+      eventCount: 0,
+    }),
     db.prepare("DELETE FROM roster_file_doctors WHERE file_id = ?").bind(file.id),
     db.prepare("DELETE FROM roster_events WHERE file_id = ?").bind(file.id),
     db.prepare("DELETE FROM roster_issues WHERE file_id = ?").bind(file.id),
@@ -814,7 +835,7 @@ export async function startDerivedRosterFileSave(db, file, doctors, options = {}
   return { ok: true, doctors: safeDoctors.length, events: 0, issues: 0 };
 }
 
-export async function appendDerivedRosterFileEvents(db, file, doctors, eventsByDoctor = {}, issuesByDoctor = {}) {
+export async function appendDerivedRosterFileEvents(db, file, doctors, eventsByDoctor = {}, issuesByDoctor = {}, options = {}) {
   if (!db?.prepare || !file?.id) return { ok: false, reason: "missing-input" };
   await ensureCalendarSchema(db);
   const sourceType = normalizeSourceType(file.sourceType);
@@ -825,6 +846,16 @@ export async function appendDerivedRosterFileEvents(db, file, doctors, eventsByD
     ...bulkInsertEventStatements(db, eventRows),
     ...bulkInsertIssueStatements(db, issueRows),
   ];
+  if (eventRows.length) {
+    const indexedEventCount = Math.max(eventRows.length, Number(options.indexedEventCount || eventRows.length));
+    statements.push(db.prepare(`
+      UPDATE roster_file_status_summaries
+      SET event_count = ?,
+          status_revision = ?,
+          updated_at = ?
+      WHERE file_id = ? AND derived_state = 'building' AND event_count < ?
+    `).bind(indexedEventCount, newRosterFileStatusRevision(), new Date().toISOString(), String(file.id), indexedEventCount));
+  }
   if (statements.length) await runTransactionalBatch(db, statements);
   await recordFacilitySmsMembershipsForRosterFile(db, file.id);
   return { ok: true, doctors: safeDoctors.length, events: eventRows.length, issues: issueRows.length };
@@ -891,6 +922,11 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
   const storedFileSignature = storedFile ? JSON.stringify([storedFile.name, storedFile.source_type, storedFile.source_id || "", Number(storedFile.active || 0),
     Number(storedFile.size || 0), Number(storedFile.last_modified || 0), storedFile.added_at || "", storedFile.uploaded_at || "", storedFile.uploaded_by || "", storedFile.parser_version || ""]) : "";
   const statements = [];
+  statements.push(upsertRosterFileStatusSummaryStatement(db, {
+    ...file, sourceType, derivedState: "building", active: false,
+    expectedDoctorCount: safeDoctors.length, indexedDoctorCount: safeDoctors.length,
+    eventCount: eventRows.length, contentRevision,
+  }));
   if (fileSignature !== storedFileSignature) statements.push(derivedRosterFileUpsertStatement(db, storedFile ? file : { ...file, active: false }, sourceType, parsedAt));
   for (const id of removedEventIds) statements.push(db.prepare("DELETE FROM roster_daily_presence WHERE event_id = ?").bind(id), db.prepare("DELETE FROM roster_events WHERE id = ?").bind(id));
   for (const row of changedEventRows) statements.push(db.prepare("DELETE FROM roster_daily_presence WHERE event_id = ?").bind(row[0]));
@@ -901,7 +937,6 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
   statements.push(...bulkInsertEventStatements(db, changedEventRows));
   statements.push(...bulkInsertIssueStatements(db, changedIssueRows));
   await runTransactionalBatch(db, statements);
-  if (!storedFile && file.active !== false) await db.prepare("UPDATE roster_files SET active = 1 WHERE id = ?").bind(file.id).run();
   await recordFacilitySmsMembershipsForRosterFile(db, file.id);
   if (options.deferDailyPresence !== true && changedEventRows.length) {
     const changedIds = new Set(changedEventRows.map((row) => row[0]));
@@ -913,6 +948,14 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
     });
   }
   await refreshFacilityOverviewMaterializationForFile(db, file.id, { contentRevision });
+  await runTransactionalBatch(db, [
+    db.prepare("UPDATE roster_files SET active = ? WHERE id = ?").bind(file.active === false ? 0 : 1, file.id),
+    upsertRosterFileStatusSummaryStatement(db, {
+      ...file, sourceType, derivedState: "ready", active: file.active !== false,
+      expectedDoctorCount: safeDoctors.length, indexedDoctorCount: safeDoctors.length,
+      eventCount: eventRows.length, contentRevision,
+    }),
+  ]);
   return { ok: true, unchanged: false, doctors: safeDoctors.length, events: eventRows.length, issues: issueRows.length, contentRevision,
     affectedDates,
     changes: { doctors: changedDoctors.length + removedDoctorKeys.length, events: changedEventRows.length + removedEventIds.length, issues: changedIssueRows.length + removedIssueIds.length, total: changedFactCount } };
@@ -933,7 +976,15 @@ function isoDatesBetween(startDate, endDate, maximum) {
 export async function setDerivedRosterFileActive(db, fileId, active) {
   if (!db?.prepare || !fileId) return;
   await ensureCalendarSchema(db);
-  await db.prepare("UPDATE roster_files SET active = ? WHERE id = ?").bind(active ? 1 : 0, fileId).run();
+  await runTransactionalBatch(db, [
+    db.prepare("UPDATE roster_files SET active = ? WHERE id = ?").bind(active ? 1 : 0, fileId),
+    db.prepare(`
+      UPDATE roster_file_status_summaries
+      SET active = 0, derived_state = CASE WHEN ? = 1 THEN 'building' ELSE derived_state END,
+          status_revision = ?, updated_at = ?
+      WHERE file_id = ?
+    `).bind(active ? 1 : 0, newRosterFileStatusRevision(), new Date().toISOString(), String(fileId)),
+  ]);
   if (!active) {
     await deleteDailyPresenceForFile(db, fileId);
     await deleteFacilityOverviewMaterializationForFile(db, fileId);
@@ -941,15 +992,29 @@ export async function setDerivedRosterFileActive(db, fileId, active) {
   }
   await rebuildDailyPresenceForFile(db, fileId);
   await refreshFacilityOverviewMaterializationForFile(db, fileId);
+  await db.prepare(`UPDATE roster_file_status_summaries
+    SET active = 1, derived_state = 'ready', status_revision = ?, updated_at = ?
+    WHERE file_id = ?`).bind(newRosterFileStatusRevision(), new Date().toISOString(), String(fileId)).run();
 }
 
 export async function activateDerivedRosterFile(db, fileId, parserVersion = ROSTER_PARSER_VERSION) {
   if (!db?.prepare || !fileId) return { ok: false, reason: "missing-input" };
   await ensureCalendarSchema(db);
-  await db.prepare("UPDATE roster_files SET active = 1, parser_version = ? WHERE id = ?")
-    .bind(String(parserVersion || ROSTER_PARSER_VERSION), String(fileId)).run();
+  await runTransactionalBatch(db, [
+    db.prepare("UPDATE roster_files SET active = 1, parser_version = ? WHERE id = ?")
+      .bind(String(parserVersion || ROSTER_PARSER_VERSION), String(fileId)),
+    db.prepare(`
+    UPDATE roster_file_status_summaries
+    SET active = 0, derived_state = 'building', status_revision = ?, updated_at = ?
+    WHERE file_id = ? AND derived_state = 'building'
+    `).bind(newRosterFileStatusRevision(), new Date().toISOString(), String(fileId)),
+  ]);
   await rebuildDailyPresenceForFile(db, fileId);
   await refreshFacilityOverviewMaterializationForFile(db, fileId);
+  await db.prepare(`UPDATE roster_file_status_summaries
+    SET active = 1, derived_state = 'ready', status_revision = ?, updated_at = ?
+    WHERE file_id = ? AND derived_state = 'building'`)
+    .bind(newRosterFileStatusRevision(), new Date().toISOString(), String(fileId)).run();
   return { ok: true, fileId: String(fileId) };
 }
 
@@ -1257,12 +1322,44 @@ export async function promoteVerifiedStagedRosterFile(db, stagingFileId, targetF
       WHERE id = ?
     `).bind(staged.name, staged.source_type, staged.source_id, staged.size, staged.last_modified, staged.added_at, staged.uploaded_at, staged.uploaded_by, now, parserVersion, String(targetFileId)),
     db.prepare("DELETE FROM roster_files WHERE id = ?").bind(String(stagingFileId)),
+    db.prepare(`
+      INSERT INTO roster_file_status_summaries (
+        file_id, source_type, source_id, name, active, derived_state,
+        expected_doctor_count, indexed_doctor_count, event_count,
+        raw_source_available, size, last_modified, uploaded_at,
+        content_revision, status_revision, updated_at
+      )
+      SELECT ?, source_type, source_id, name, 0, 'building',
+        expected_doctor_count, indexed_doctor_count, event_count,
+        raw_source_available, size, last_modified, uploaded_at,
+        content_revision, ?, ?
+      FROM roster_file_status_summaries WHERE file_id = ?
+      ON CONFLICT(file_id) DO UPDATE SET
+        source_type = excluded.source_type, source_id = excluded.source_id,
+        name = excluded.name, active = 0, derived_state = 'building',
+        expected_doctor_count = excluded.expected_doctor_count,
+        indexed_doctor_count = excluded.indexed_doctor_count,
+        event_count = excluded.event_count,
+        raw_source_available = MAX(roster_file_status_summaries.raw_source_available, excluded.raw_source_available),
+        size = excluded.size, last_modified = excluded.last_modified,
+        uploaded_at = excluded.uploaded_at, content_revision = excluded.content_revision,
+        status_revision = excluded.status_revision, updated_at = excluded.updated_at
+    `).bind(String(targetFileId), newRosterFileStatusRevision(), now, String(stagingFileId)),
+    db.prepare("DELETE FROM roster_file_status_summaries WHERE file_id = ?").bind(String(stagingFileId)),
   ];
   await runTransactionalBatch(db, statements);
   await deleteDailyPresenceForFile(db, targetFileId);
   await rebuildDailyPresenceForFile(db, targetFileId);
   await deleteFacilityOverviewMaterializationForFile(db, stagingFileId);
-  await refreshFacilityOverviewMaterializationForFile(db, targetFileId);
+  const materialization = await refreshFacilityOverviewMaterializationForFile(db, targetFileId);
+  if (!materialization?.contentRevision || materialization?.overBudget) {
+    return { ok: false, reason: materialization?.reason || "materialization-failed", comparison };
+  }
+  await db.prepare(`
+    UPDATE roster_file_status_summaries
+    SET content_revision = ?, derived_state = 'ready', active = 1, status_revision = ?, updated_at = ?
+    WHERE file_id = ?
+  `).bind(String(materialization.contentRevision), newRosterFileStatusRevision(), new Date().toISOString(), String(targetFileId)).run();
   return { ok: true, fileId: String(targetFileId), comparison };
 }
 
@@ -1271,6 +1368,9 @@ export async function deleteDerivedRosterFile(db, fileId) {
   await ensureCalendarSchema(db);
   const file = await db.prepare("SELECT source_type FROM roster_files WHERE id = ?").bind(fileId).first();
   const sourceType = normalizeSourceType(file?.source_type || "");
+  await db.prepare(`UPDATE roster_file_status_summaries
+    SET active = 0, derived_state = 'building', status_revision = ?, updated_at = ?
+    WHERE file_id = ?`).bind(newRosterFileStatusRevision(), new Date().toISOString(), String(fileId)).run();
   await db.prepare("DELETE FROM roster_events WHERE file_id = ?").bind(fileId).run();
   await db.prepare("DELETE FROM roster_issues WHERE file_id = ?").bind(fileId).run();
   await db.prepare("DELETE FROM roster_file_doctors WHERE file_id = ?").bind(fileId).run();
@@ -1278,13 +1378,30 @@ export async function deleteDerivedRosterFile(db, fileId) {
   if (sourceType) await deleteOrphanRosterDoctors(db, [sourceType]);
   await deleteDailyPresenceForFile(db, fileId);
   await db.prepare("DELETE FROM roster_files WHERE id = ?").bind(fileId).run();
+  await db.prepare(`
+    UPDATE roster_file_status_summaries
+    SET active = 0,
+        derived_state = CASE WHEN raw_source_available = 1 THEN 'retained' ELSE 'removed' END,
+        expected_doctor_count = 0,
+        indexed_doctor_count = 0,
+        event_count = 0,
+        content_revision = '',
+        status_revision = ?,
+        updated_at = ?
+    WHERE file_id = ?
+  `).bind(newRosterFileStatusRevision(), new Date().toISOString(), String(fileId)).run();
 }
 
 export async function trimDerivedRosterFileOverlap(db, fileId, startDate, endDate) {
   if (!db?.prepare || !fileId || !startDate || !endDate) return { removedEvents: 0, remainingEvents: 0, deleted: false };
   await ensureCalendarSchema(db);
-  const before = await db.prepare("SELECT COUNT(*) AS count FROM roster_events WHERE file_id = ?").bind(fileId).first();
-  await runTransactionalBatch(db, [
+  const summary = await loadRosterFileStatusSummary(db, fileId);
+  if (!summary || summary.derivedState !== "ready") return { removedEvents: 0, remainingEvents: 0, deleted: false, reason: "status-summary-not-ready" };
+  const beforeCount = Number(summary.eventCount || 0);
+  await db.prepare(`UPDATE roster_file_status_summaries
+    SET active = 0, derived_state = 'building', status_revision = ?, updated_at = ?
+    WHERE file_id = ?`).bind(newRosterFileStatusRevision(), new Date().toISOString(), String(fileId)).run();
+  const trimResults = await runTransactionalBatch(db, [
     db.prepare(`
       DELETE FROM roster_events
       WHERE file_id = ?
@@ -1308,9 +1425,9 @@ export async function trimDerivedRosterFileOverlap(db, fileId, startDate, endDat
         )
     `).bind(fileId),
   ]);
-  const after = await db.prepare("SELECT COUNT(*) AS count FROM roster_events WHERE file_id = ?").bind(fileId).first();
-  const beforeCount = Number(before?.count || 0);
-  const remainingEvents = Number(after?.count || 0);
+  const removedEvents = Number(trimResults?.[0]?.meta?.changes || trimResults?.[0]?.changes || 0);
+  const remainingEvents = Math.max(0, beforeCount - removedEvents);
+  const removedDoctors = Number(trimResults?.[2]?.meta?.changes || trimResults?.[2]?.changes || 0);
   if (!remainingEvents) {
     await deleteDerivedRosterFile(db, fileId);
     return { removedEvents: beforeCount, remainingEvents: 0, deleted: true };
@@ -1318,8 +1435,16 @@ export async function trimDerivedRosterFileOverlap(db, fileId, startDate, endDat
   await deleteDailyPresenceForFile(db, fileId);
   await rebuildDailyPresenceForFile(db, fileId);
   await refreshFacilityOverviewMaterializationForFile(db, fileId);
+  await db.prepare(`
+    UPDATE roster_file_status_summaries
+    SET event_count = ?,
+        expected_doctor_count = MAX(0, expected_doctor_count - ?),
+        indexed_doctor_count = MAX(0, indexed_doctor_count - ?),
+        active = 1, derived_state = 'ready', status_revision = ?, updated_at = ?
+    WHERE file_id = ?
+  `).bind(remainingEvents, removedDoctors, removedDoctors, newRosterFileStatusRevision(), new Date().toISOString(), String(fileId)).run();
   return {
-    removedEvents: Math.max(0, beforeCount - remainingEvents),
+    removedEvents,
     remainingEvents,
     deleted: false,
   };
@@ -1367,6 +1492,135 @@ export async function verifyRosterFilesPurged(db, fileIds = []) {
   return results;
 }
 
+function rosterFileStatusSummaryFromRow(row) {
+  if (!row?.file_id) return null;
+  return {
+    id: String(row.file_id),
+    name: String(row.name || "roster.xlsx"),
+    sourceType: String(row.source_type || "").trim().toLowerCase(),
+    sourceId: String(row.source_id || ""),
+    active: Number(row.active || 0) === 1,
+    derivedState: String(row.derived_state || "retained"),
+    expectedDoctors: Number(row.expected_doctor_count || 0),
+    indexedDoctors: Number(row.indexed_doctor_count || 0),
+    eventCount: Number(row.event_count || 0),
+    rawSourceAvailable: Number(row.raw_source_available || 0) === 1,
+    size: Number(row.size || 0),
+    lastModified: Number(row.last_modified || 0),
+    uploadedAt: String(row.uploaded_at || ""),
+    contentRevision: String(row.content_revision || ""),
+    statusRevision: String(row.status_revision || ""),
+    updatedAt: String(row.updated_at || ""),
+    startDate: String(row.coverage_start || ""),
+    coverageEndDate: String(row.coverage_end || ""),
+    endDate: String(row.coverage_end || ""),
+  };
+}
+
+function newRosterFileStatusRevision() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`.slice(0, 36);
+}
+
+export function upsertRosterFileStatusSummaryStatement(db, summary = {}) {
+  const fileId = String(summary.fileId || summary.id || "").trim();
+  if (!db?.prepare || !fileId) return null;
+  const now = String(summary.updatedAt || new Date().toISOString());
+  const rawAvailability = summary.rawSourceAvailable === true ? 1 : summary.rawSourceAvailable === false ? 0 : -1;
+  const statusRevision = String(summary.statusRevision || newRosterFileStatusRevision());
+  return db.prepare(`
+    INSERT INTO roster_file_status_summaries (
+      file_id, source_type, source_id, name, active, derived_state,
+      expected_doctor_count, indexed_doctor_count, event_count,
+      raw_source_available, size, last_modified, uploaded_at,
+      content_revision, status_revision, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? < 0 THEN EXISTS(SELECT 1 FROM raw_roster_files WHERE file_id = ?) ELSE ? END, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(file_id) DO UPDATE SET
+      source_type = CASE WHEN excluded.source_type = '' THEN roster_file_status_summaries.source_type ELSE excluded.source_type END,
+      source_id = CASE WHEN excluded.source_id = '' THEN roster_file_status_summaries.source_id ELSE excluded.source_id END,
+      name = CASE WHEN excluded.name = '' THEN roster_file_status_summaries.name ELSE excluded.name END,
+      active = excluded.active,
+      derived_state = excluded.derived_state,
+      expected_doctor_count = excluded.expected_doctor_count,
+      indexed_doctor_count = excluded.indexed_doctor_count,
+      event_count = excluded.event_count,
+      raw_source_available = CASE WHEN ? < 0 THEN roster_file_status_summaries.raw_source_available ELSE ? END,
+      size = CASE WHEN excluded.size = 0 THEN roster_file_status_summaries.size ELSE excluded.size END,
+      last_modified = CASE WHEN excluded.last_modified = 0 THEN roster_file_status_summaries.last_modified ELSE excluded.last_modified END,
+      uploaded_at = CASE WHEN excluded.uploaded_at = '' THEN roster_file_status_summaries.uploaded_at ELSE excluded.uploaded_at END,
+      content_revision = CASE WHEN excluded.content_revision = '' THEN roster_file_status_summaries.content_revision ELSE excluded.content_revision END,
+      status_revision = excluded.status_revision,
+      updated_at = excluded.updated_at
+  `).bind(
+    fileId,
+    normalizeSourceType(summary.sourceType || "") || "",
+    String(summary.sourceId || ""),
+    String(summary.name || ""),
+    summary.active === false ? 0 : 1,
+    String(summary.derivedState || "retained"),
+    Math.max(0, Number(summary.expectedDoctorCount ?? summary.expectedDoctors ?? 0)),
+    Math.max(0, Number(summary.indexedDoctorCount ?? summary.indexedDoctors ?? 0)),
+    Math.max(0, Number(summary.eventCount || 0)),
+    rawAvailability, fileId, rawAvailability,
+    Math.max(0, Number(summary.size || 0)),
+    Math.max(0, Number(summary.lastModified || 0)),
+    String(summary.uploadedAt || summary.addedAt || ""),
+    String(summary.contentRevision || ""),
+    statusRevision,
+    now,
+    rawAvailability, rawAvailability,
+  );
+}
+
+export async function upsertRosterFileStatusSummary(db, summary = {}) {
+  const normalized = { ...summary, statusRevision: summary.statusRevision || newRosterFileStatusRevision() };
+  const statement = upsertRosterFileStatusSummaryStatement(db, normalized);
+  if (!statement) return { ok: false, reason: "missing-input" };
+  await statement.run();
+  return { ok: true, statusRevision: String(normalized.statusRevision) };
+}
+
+export async function queryRosterFileStatusSummaries(db, options = {}) {
+  if (!db?.prepare) return [];
+  const limit = Math.max(1, Math.min(Number(options.limit || 100), 100));
+  const expectedIds = [...new Set((options.expectedFileIds || [])
+    .map((id) => String(id || "").trim()).filter(Boolean))].slice(0, 100);
+  const select = `
+    SELECT s.*, c.coverage_start, c.coverage_end
+    FROM roster_file_status_summaries s
+    LEFT JOIN roster_file_coverage c ON c.file_id = s.file_id`;
+  let expectedRows = { results: [] };
+  if (expectedIds.length) {
+    expectedRows = await db.prepare(`${select}
+      WHERE s.file_id IN (${expectedIds.map(() => "?").join(", ")})
+      LIMIT ?`).bind(...expectedIds, limit).all();
+  }
+  const remaining = Math.max(0, limit - (expectedRows.results || []).length);
+  const activeRows = remaining > 0
+    ? await db.prepare(`${select}
+      WHERE s.active = 1
+      ORDER BY s.source_type, s.updated_at, s.file_id
+      LIMIT ?`).bind(remaining).all()
+    : { results: [] };
+  const byId = new Map();
+  for (const row of [...(expectedRows.results || []), ...(activeRows.results || [])]) {
+    const summary = rosterFileStatusSummaryFromRow(row);
+    if (summary && !byId.has(summary.id) && byId.size < limit) byId.set(summary.id, summary);
+  }
+  return [...byId.values()];
+}
+
+export async function loadRosterFileStatusSummary(db, fileId) {
+  if (!db?.prepare || !fileId) return null;
+  const row = await db.prepare(`
+    SELECT s.*, c.coverage_start, c.coverage_end
+    FROM roster_file_status_summaries s
+    LEFT JOIN roster_file_coverage c ON c.file_id = s.file_id
+    WHERE s.file_id = ?
+  `).bind(String(fileId)).first();
+  return rosterFileStatusSummaryFromRow(row);
+}
+
 export async function upsertRawRosterFile(db, file, raw = {}) {
   if (!db?.prepare || !file?.id || (!raw?.dataUrl && !raw?.objectKey)) return { ok: false, reason: "missing-input" };
   await ensureCalendarSchema(db);
@@ -1382,6 +1636,14 @@ export async function upsertRawRosterFile(db, file, raw = {}) {
       type = excluded.type,
       data_url = excluded.data_url,
       uploaded_at = excluded.uploaded_at
+    WHERE raw_roster_files.name <> excluded.name
+      OR raw_roster_files.source_type <> excluded.source_type
+      OR raw_roster_files.size <> excluded.size
+      OR raw_roster_files.last_modified <> excluded.last_modified
+      OR raw_roster_files.object_key <> excluded.object_key
+      OR raw_roster_files.type <> excluded.type
+      OR raw_roster_files.data_url <> excluded.data_url
+      OR raw_roster_files.uploaded_at <> excluded.uploaded_at
   `).bind(
     file.id,
     String(file.name || fileNameFromRawRosterFileId(file.id) || "roster.xlsx"),
@@ -1392,6 +1654,66 @@ export async function upsertRawRosterFile(db, file, raw = {}) {
     String(raw.type || ""),
     String(raw.dataUrl || ""),
     String(raw.uploadedAt || new Date().toISOString()),
+  ).run();
+  const retainedSummary = {
+    fileId: file.id,
+    name: file.name || fileNameFromRawRosterFileId(file.id) || "roster.xlsx",
+    sourceType: file.sourceType || raw.sourceType || inferSourceTypeFromRosterFileName(file.name || file.id),
+    derivedState: "retained",
+    active: false,
+    rawSourceAvailable: true,
+    size: file.size,
+    lastModified: file.lastModified || file.last_modified,
+    uploadedAt: raw.uploadedAt,
+  };
+  const retainedAt = new Date().toISOString();
+  await db.prepare(`
+    INSERT INTO roster_file_status_summaries (
+      file_id, source_type, source_id, name, active, derived_state,
+      expected_doctor_count, indexed_doctor_count, event_count,
+      raw_source_available, size, last_modified, uploaded_at,
+      content_revision, status_revision, updated_at
+    ) VALUES (?, ?, '', ?, 0, 'retained', 0, 0, 0, 1, ?, ?, ?, '', ?, ?)
+    ON CONFLICT(file_id) DO UPDATE SET
+      source_type = excluded.source_type,
+      name = excluded.name,
+      raw_source_available = 1,
+      size = excluded.size,
+      last_modified = excluded.last_modified,
+      uploaded_at = excluded.uploaded_at,
+      status_revision = CASE
+        WHEN roster_file_status_summaries.raw_source_available = 1
+          AND roster_file_status_summaries.name = excluded.name
+          AND roster_file_status_summaries.size = excluded.size
+          AND roster_file_status_summaries.last_modified = excluded.last_modified
+          AND roster_file_status_summaries.uploaded_at = excluded.uploaded_at
+        THEN roster_file_status_summaries.status_revision
+        ELSE excluded.status_revision
+      END,
+      updated_at = CASE
+        WHEN roster_file_status_summaries.raw_source_available = 1
+          AND roster_file_status_summaries.name = excluded.name
+          AND roster_file_status_summaries.size = excluded.size
+          AND roster_file_status_summaries.last_modified = excluded.last_modified
+          AND roster_file_status_summaries.uploaded_at = excluded.uploaded_at
+        THEN roster_file_status_summaries.updated_at
+        ELSE excluded.updated_at
+      END
+    WHERE roster_file_status_summaries.raw_source_available <> 1
+      OR roster_file_status_summaries.source_type <> excluded.source_type
+      OR roster_file_status_summaries.name <> excluded.name
+      OR roster_file_status_summaries.size <> excluded.size
+      OR roster_file_status_summaries.last_modified <> excluded.last_modified
+      OR roster_file_status_summaries.uploaded_at <> excluded.uploaded_at
+  `).bind(
+    String(file.id),
+    normalizeSourceType(retainedSummary.sourceType || "") || "",
+    retainedSummary.name,
+    Math.max(0, Number(retainedSummary.size || 0)),
+    Math.max(0, Number(retainedSummary.lastModified || 0)),
+    String(retainedSummary.uploadedAt || ""),
+    newRosterFileStatusRevision(),
+    retainedAt,
   ).run();
   return { ok: true };
 }
@@ -1460,6 +1782,16 @@ export async function deleteRawRosterFile(db, fileId) {
   if (!db?.prepare || !fileId) return;
   await ensureCalendarSchema(db);
   await db.prepare("DELETE FROM raw_roster_files WHERE file_id = ?").bind(fileId).run();
+  await db.prepare(`
+    UPDATE roster_file_status_summaries
+    SET raw_source_available = 0,
+        active = CASE WHEN derived_state = 'retained' THEN 0 ELSE active END,
+        derived_state = CASE WHEN derived_state = 'retained' THEN 'removed' ELSE derived_state END,
+        status_revision = ?,
+        updated_at = ?
+    WHERE file_id = ?
+      AND raw_source_available <> 0
+  `).bind(newRosterFileStatusRevision(), new Date().toISOString(), String(fileId)).run();
 }
 
 export async function deleteRetainedRosterSource(db, r2, fileId) {
@@ -1535,13 +1867,32 @@ export async function inspectFacilityOverviewBootstrap(db, options = {}) {
   if (!file || Number(file.active || 0) !== 1 || !sourceType || normalizeSourceType(file.source_type) !== sourceType) {
     return { ok: false, reason: "active-file-not-found" };
   }
-  const compact = await db.prepare("SELECT content_revision, updated_at FROM roster_file_coverage WHERE file_id = ?").bind(String(file.id)).first();
+  const [compact, statusSummary, rawSource] = await Promise.all([
+    db.prepare("SELECT content_revision, updated_at FROM roster_file_coverage WHERE file_id = ?").bind(String(file.id)).first(),
+    db.prepare("SELECT derived_state, content_revision FROM roster_file_status_summaries WHERE file_id = ?").bind(String(file.id)).first(),
+    db.prepare("SELECT file_id FROM raw_roster_files WHERE file_id = ?").bind(String(file.id)).first(),
+  ]);
   const planRevision = await facilityOverviewDigest({
     fileId: String(file.id), sourceType, name: String(file.name || ""), sourceId: String(file.source_id || ""),
     size: Number(file.size || 0), lastModified: Number(file.last_modified || 0), parsedAt: String(file.parsed_at || ""),
     parserVersion: String(file.parser_version || ""), compactRevision: String(compact?.content_revision || ""),
+    rawSourceAvailable: Boolean(rawSource?.file_id),
   });
-  return { ok: true, fileId: String(file.id), sourceType, active: true, compactReady: Boolean(compact?.content_revision), planRevision };
+  return {
+    ok: true,
+    fileId: String(file.id),
+    sourceType,
+    sourceId: String(file.source_id || ""),
+    name: String(file.name || "roster.xlsx"),
+    active: true,
+    size: Number(file.size || 0),
+    lastModified: Number(file.last_modified || 0),
+    compactReady: Boolean(compact?.content_revision),
+    statusReady: statusSummary?.derived_state === "ready" && String(statusSummary?.content_revision || "") === String(compact?.content_revision || ""),
+    contentRevision: String(compact?.content_revision || ""),
+    rawSourceAvailable: Boolean(rawSource?.file_id),
+    planRevision,
+  };
 }
 
 export async function refreshFacilityOverviewMaterializationForFile(db, fileId, options = {}) {
@@ -1705,9 +2056,15 @@ export async function refreshFacilityOverviewMaterializationForFile(db, fileId, 
   if (maximumWrites != null && statements.length > maximumWrites) {
     return { ok: false, overBudget: true, reason: "compact-write-limit", eventRowsExamined: events.length, proposedWrites: statements.length, maximumWrites, writes: 0 };
   }
-  if (!statements.length) return { writes: 0, unchanged: true, contentRevision };
+  if (!statements.length) return { writes: 0, unchanged: true, contentRevision, doctorCount: doctors.length, eventCount: events.length };
   const results = await runTransactionalBatch(db, statements);
-  return { writes: (results || []).reduce((total, result) => total + Number(result?.meta?.changes || result?.changes || 0), 0), unchanged: false, contentRevision };
+  return {
+    writes: (results || []).reduce((total, result) => total + Number(result?.meta?.changes || result?.changes || 0), 0),
+    unchanged: false,
+    contentRevision,
+    doctorCount: doctors.length,
+    eventCount: events.length,
+  };
 }
 
 async function recordFacilitySmsMembershipsForRosterFile(db, fileId) {
@@ -2589,11 +2946,27 @@ export async function loadRosterSource(db, sourceId) {
   return rosterSourceFromRow(row);
 }
 
-export async function listRosterSources(db) {
+export async function listRosterSources(db, options = {}) {
   if (!db?.prepare) return [];
   await ensureCalendarSchema(db);
-  const rows = await db.prepare("SELECT * FROM roster_sources ORDER BY label, id").all();
+  const limit = Math.min(Math.max(Number(options.limit || 16), 1), 16);
+  const rows = await db.prepare("SELECT * FROM roster_sources ORDER BY label, id LIMIT ?").bind(limit).all();
   return (rows.results || []).map(rosterSourceFromRow).filter(Boolean);
+}
+
+export async function listLatestRosterSyncRuns(db, sourceIds = []) {
+  if (!db?.prepare) return [];
+  await ensureCalendarSchema(db);
+  const ids = [...new Set((sourceIds || []).map((id) => String(id || "").trim()).filter(Boolean))].slice(0, 16);
+  if (!ids.length) return [];
+  const statements = ids.map((id) => db.prepare(`
+    SELECT * FROM roster_sync_runs
+    WHERE source_id = ?
+    ORDER BY started_at DESC, id DESC
+    LIMIT 1
+  `).bind(id));
+  const results = await Promise.all(statements.map((statement) => statement.all()));
+  return results.flatMap((result) => result?.results || []).map(rosterSyncRunFromRow).filter(Boolean);
 }
 
 export async function listRosterSyncRuns(db, options = {}) {

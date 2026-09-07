@@ -2,7 +2,7 @@ import { applyEventOverrides, customEventsToEvents, defaultSettings, filterCalen
 import { AUTOMATION_SOURCES } from "../_lib/automation-import.js";
 import { DDH_CONTACT_LIST_SOURCE_ID, MMC_CONTACT_LIST_SOURCE_ID, attachContactAllocations, contactAreaForSource, contactExtractHasExpired, contactOperationalDate, contactsAfterShiftChange, normaliseContactListExtract, shouldCarryPreviousNightContacts, shouldUseCurrentExtractForPreviousNight } from "../../public/static/contact-allocations.js";
 import { requestQueuedRosterProcessing } from "../_lib/automation-dispatch.js";
-import { advancedRosterMaintenanceEnabled, rosterWritesExplicitlyPaused, rosterWritePausedResponse } from "../_lib/roster-automation-guard.js";
+import { advancedRosterMaintenanceEnabled, rosterStatusSummaryEnabled, rosterWritesExplicitlyPaused, rosterWritePausedResponse } from "../_lib/roster-automation-guard.js";
 import { guardedFetch, localFeatureDisabledResponse } from "../_lib/outbound-network.js";
 import { loadPublishedFacilityDays, loadPublishedFacilityMetadata, loadPublishedFacilityRange, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata } from "../_lib/facility-overview-cache.js";
 import { loadPublishedFacilityContacts, publishFacilityContactResolutions } from "../_lib/facility-contact-cache.js";
@@ -12,9 +12,6 @@ import {
   buildPreviewFromDerivedEvents,
   accountMirrorStatus,
   appendConsoleMessage,
-  countDerivedDoctorsByFile,
-  countDerivedEventsByFile,
-  countDerivedEventsByFileDoctorPairs,
   deleteAccountMirror,
   deleteDerivedRosterFile,
   deleteDoctorProfileMirror,
@@ -30,6 +27,7 @@ import {
   listAccountMirrors,
   listConsoleMessages,
   listRosterSources,
+  listLatestRosterSyncRuns,
   listRosterSyncRuns,
   listActiveRetainedRosterFiles,
   createRosterSyncRun,
@@ -41,6 +39,7 @@ import {
   loadSnapshotRegistryEntry,
   listSnapshotRegistryWarmupCandidates,
   loadRawRosterFile,
+  loadRosterFileStatusSummary,
   queryCoworkerEventsFromEvents,
   queryFacilityOverviewOnShift,
   queryFacilityOverviewAccessEvents,
@@ -71,6 +70,7 @@ import {
   queryRosterFileDoctors,
   queryRosterFileDoctorsForKeys,
   queryRosterFileRefsForDoctors,
+  queryRosterFileStatusSummaries,
   queryRawRosterFiles,
   queryRosterFiles,
   queryRosterFileRanges,
@@ -844,15 +844,14 @@ export async function onRequestPost(context) {
       if (!hasCalendarDb(context.env)) {
         return Response.json({ ok: false, unavailable: true, total: 0, populated: 0, remaining: 0 });
       }
-      // This diagnostic counts rows across the retained roster repository. It
-      // is unnecessary while every roster mutation is paused and can exhaust
-      // the shared D1 read allowance when the Creator UI retries it.
-      if (rosterWritesExplicitlyPaused(context.env)) {
+      // Missing configuration fails closed before any roster repository read.
+      // The legacy status implementation is never a fallback.
+      if (!rosterStatusSummaryEnabled(context.env)) {
         return Response.json({
           ok: true,
           unavailable: true,
-          paused: true,
-          reason: "roster-writes-paused",
+          paused: rosterWritesExplicitlyPaused(context.env),
+          reason: "roster-status-summary-disabled",
           total: 0,
           populated: 0,
           partial: 0,
@@ -866,18 +865,27 @@ export async function onRequestPost(context) {
         doctorKey: body?.selectedDoctorKey || body?.doctorKey || OWNER_DOCTOR_KEY,
         expectedFileIds: sanitizeRepositoryFileIds(body?.expectedFileIds),
         lightweight: body?.lightweight === true,
+        statusRevision: String(body?.statusRevision || ""),
       });
       const response = { ok: true, ...status };
       if (body?.lightweight !== true) {
         response.accounts = await accountMirrorStatus(context.env.ROSTER_DB).catch(() => ({ unavailable: true, profiles: 0, claims: 0, states: 0 }));
       }
-      if (body?.includeAvailableDoctors === true) {
-        response.availableDoctors = await repositoryDoctorCandidates(null, null, context.env.ROSTER_DB, {
+      return Response.json(response);
+    }
+
+    if (action === "listRosterDoctors") {
+      if (account.role !== "creator" && account.role !== "owner") {
+        return Response.json({ error: "Creator access is required." }, { status: 403 });
+      }
+      if (!hasCalendarDb(context.env)) return Response.json({ ok: true, unavailable: true, availableDoctors: [] });
+      return Response.json({
+        ok: true,
+        availableDoctors: await repositoryDoctorCandidates(null, null, context.env.ROSTER_DB, {
           hideZeroEventStandalone: true,
           preferCanonical: true,
-        });
-      }
-      return Response.json(response);
+        }),
+      });
     }
 
     if (action === "syncRosterRepository") {
@@ -985,6 +993,8 @@ export async function onRequestPost(context) {
         email,
         reason: "saveDerivedCalendarFile",
         phase: savePhase,
+        indexedEventCount: Number(body?.indexedEventCount || 0),
+        expectedEventCount: Number(body?.eventCount || 0),
       };
       try {
         const saveResult = await runCoreDerivedRosterSave(context, saveJob);
@@ -2579,98 +2589,21 @@ async function autoClaimMatchedCanonicalDoctors(record, db = null) {
 }
 
 async function calendarStoreStatus(store, db, options = {}) {
-  const storedFiles = await queryRosterFiles(db, { includeInactive: true }).catch(() => []);
-  const storedFileRanges = await queryRosterFileRanges(db, { includeInactive: true }).catch(() => []);
-  const rangesById = new Map(storedFileRanges.map((file) => [file.id, file]));
-  const allD1Files = storedFiles.map((file) => {
-    const range = rangesById.get(file.id);
-    return range ? {
-      ...file,
-      startDate: range.startDate,
-      coverageEndDate: range.coverageEndDate,
-      endDate: range.endDate,
-    } : file;
-  });
-  const rawFiles = await queryRawRosterFiles(db).catch(() => []);
-  const rosterSources = await listRosterSources(db).catch(() => []);
-  const syncRuns = await listRosterSyncRuns(db, { limit: 100 }).catch(() => []);
+  const expectedFileIds = sanitizeRepositoryFileIds(options.expectedFileIds).slice(0, 100);
+  const summaries = await queryRosterFileStatusSummaries(db, { expectedFileIds, limit: 100 });
+  const rosterSources = await listRosterSources(db, { limit: 16 }).catch(() => []);
+  const syncRuns = await listLatestRosterSyncRuns(db, rosterSources.map((source) => source.id)).catch(() => []);
   const latestDispatch = await loadLatestRosterDispatch(db).catch(() => null);
-  const derivedFileIds = new Set(allD1Files.map((file) => file.id));
-  const retainedOnlyFiles = rawFiles
-    .filter((file) => file.id && !derivedFileIds.has(file.id) && !String(file.id).startsWith("automation:"))
-    .map((file) => ({
-      id: file.id,
-      name: file.name,
-      sourceType: file.sourceType,
-      active: true,
-      size: file.size,
-      lastModified: file.lastModified,
-      addedAt: file.uploadedAt,
-      uploadedAt: file.uploadedAt,
-      uploadedBy: "",
-      doctors: [],
-      expectedDoctors: 0,
-      indexedDoctors: 0,
-      eventCount: 0,
-      derivedFromD1: false,
-      retainedSourceOnly: true,
-    }));
-  const allFiles = [...allD1Files, ...retainedOnlyFiles];
-  const d1Files = allD1Files.filter((file) => file.active !== false);
-  const activeFiles = [...d1Files, ...retainedOnlyFiles];
-  const counts = await countDerivedEventsByFile(db, activeFiles.map((file) => file.id));
-  const doctorCounts = await countDerivedDoctorsByFile(db, activeFiles.map((file) => file.id));
-  const lightweight = options.lightweight === true;
   const selectedDoctorKey = normalizeRosterName(options.doctorKey || "");
-  let selectedDoctorRows = [];
-  const selectedCountsByFile = new Map();
-  const selectedDoctorByFile = new Map();
-  if (!lightweight && selectedDoctorKey) {
-    selectedDoctorRows = await resolveSelectedRosterFileDoctorRows(db, selectedDoctorKey);
-    const selectedPairs = selectedDoctorRows.map((row) => ({ fileId: row.fileId, doctorKey: row.doctorKey }));
-    const selectedCounts = await countDerivedEventsByFileDoctorPairs(db, selectedPairs);
-    const selectedShifts = await Promise.all(selectedDoctorRows.map(async (row) => ({
-      row,
-      shifts: (await queryDoctorEventsForFileDoctorPairs(db, [{ fileId: row.fileId, doctorKey: row.doctorKey }]))
-        .map(rosterFileShiftSummary),
-    })));
-    for (const { row, shifts } of selectedShifts) {
-      const count = Number(selectedCounts.get(`${row.fileId}:${row.doctorKey}`) || 0);
-      selectedCountsByFile.set(row.fileId, (selectedCountsByFile.get(row.fileId) || 0) + count);
-      selectedDoctorByFile.set(row.fileId, {
-        doctorKey: row.doctorKey,
-        displayName: row.displayName,
-        sourceType: row.sourceType,
-        eventCount: count,
-        shifts,
-      });
-    }
-  }
-  const rawAvailability = new Map(rawFiles.map((file) => [file.id, true]));
-  const files = activeFiles.map((file) => ({
-    id: file.id,
-    name: file.name,
-    sourceType: file.sourceType,
-    sourceId: String(file.sourceId || ""),
-    active: file.active !== false,
-    lastModified: Number(file.lastModified || 0),
-    addedAt: String(file.addedAt || file.uploadedAt || ""),
-    uploadedAt: String(file.uploadedAt || file.addedAt || ""),
-    startDate: String(file.startDate || ""),
-    coverageEndDate: String(file.coverageEndDate || ""),
-    endDate: String(file.endDate || ""),
-    expectedDoctors: Number(file.expectedDoctors || 0) || sanitizeRepositoryDoctors(file.doctors).length,
-    indexedDoctors: Number(file.indexedDoctors || 0) || doctorCounts.get(file.id) || 0,
-    eventCount: Number(file.eventCount || 0) || counts.get(file.id) || 0,
-    selectedDoctorEventCount: lightweight ? null : (selectedCountsByFile.get(file.id) || 0),
-    selectedDoctor: lightweight ? null : (selectedDoctorByFile.get(file.id) || null),
-    rawSourceAvailable: rawAvailability.get(file.id) === true,
-    retainedSourceOnly: file.retainedSourceOnly === true,
-  })).map((file) => ({
+  const files = summaries.map((file) => ({
     ...file,
-    status: file.retainedSourceOnly
+    addedAt: file.uploadedAt,
+    selectedDoctorEventCount: null,
+    selectedDoctor: null,
+    retainedSourceOnly: file.derivedState === "retained",
+    status: file.derivedState === "retained"
       ? "retained"
-      : file.eventCount <= 0
+      : file.derivedState !== "ready" || file.eventCount <= 0
       ? "missing"
       : file.expectedDoctors > 0 && file.indexedDoctors < file.expectedDoctors
         ? "partial"
@@ -2678,7 +2611,8 @@ async function calendarStoreStatus(store, db, options = {}) {
   }));
   const populated = files.filter((file) => file.status === "populated").length;
   const partial = files.filter((file) => file.status === "partial").length;
-  const expectedFiles = summarizeExpectedRosterFiles(allFiles, options.expectedFileIds);
+  const expectedFiles = summarizeExpectedRosterFiles(files, expectedFileIds);
+  const statusRevision = await sha256(files.map((file) => `${file.id}:${file.statusRevision}`).sort().join("|") || "empty-roster-status");
   return {
     total: files.length,
     populated,
@@ -2686,25 +2620,14 @@ async function calendarStoreStatus(store, db, options = {}) {
     remaining: Math.max(0, files.length - populated),
     eventCount: files.reduce((total, file) => total + file.eventCount, 0),
     selectedDoctorKey,
-    selectedDoctorEventCount: lightweight ? null : files.reduce((total, file) => total + Number(file.selectedDoctorEventCount || 0), 0),
-    selectedDoctorFiles: selectedDoctorRows.map(rosterFileDoctorDiagnostic),
-    rosterSourceStatuses: rosterSourceStatuses(allD1Files, rosterSources, syncRuns, latestDispatch),
+    selectedDoctorEventCount: null,
+    selectedDoctorFiles: [],
+    statusRevision,
+    unchanged: Boolean(options.statusRevision && options.statusRevision === statusRevision),
+    rosterSourceStatuses: rosterSourceStatuses(files, rosterSources, syncRuns, latestDispatch),
     expectedFiles,
     nextFile: files.find((file) => file.status !== "populated") || null,
     files,
-  };
-}
-
-function rosterFileShiftSummary(event = {}) {
-  return {
-    id: String(event.id || ""),
-    title: String(event.title || "Shift"),
-    start: String(event.start || ""),
-    end: String(event.end || event.start || ""),
-    allDay: event.allDay === true,
-    timeLabel: String(event.timeLabel || ""),
-    location: String(event.location || ""),
-    seniority: String(event.seniority || ""),
   };
 }
 
@@ -4731,17 +4654,6 @@ async function loadSqlDoctorCandidates(db) {
   return [];
 }
 
-async function resolveSelectedRosterFileDoctorRows(db, doctorKey) {
-  const doctorRows = await queryRosterFileDoctors(db).catch(() => []);
-  if (!doctorRows.length) return [];
-  const selectedOption = await resolveCanonicalDoctorOptionForKey(db, doctorRows, doctorKey);
-  return await resolveRosterFileDoctorRows(db, {
-    doctorKey,
-    doctorRows,
-    doctorOptions: selectedOption ? [selectedOption] : [],
-  });
-}
-
 async function resolveRosterFileDoctorRows(db, options = {}) {
   const doctorRows = options.doctorRows || await queryRosterFileDoctors(db).catch(() => []);
   if (!doctorRows.length) return [];
@@ -5895,17 +5807,20 @@ async function runCoreDerivedRosterSave(context, job = {}) {
         job.doctors || [],
         job.eventsByDoctor || {},
         job.issuesByDoctor || {},
+        { indexedEventCount: job.indexedEventCount },
       );
     } else if (phase === "finish") {
-      const eventCounts = await countDerivedEventsByFile(db, [fileId]);
-      const doctorCounts = await countDerivedDoctorsByFile(db, [fileId]);
+      const summary = await loadRosterFileStatusSummary(db, fileId);
       result = {
         ok: true,
-        doctors: Number(doctorCounts.get(fileId) || 0),
-        events: Number(eventCounts.get(fileId) || 0),
+        doctors: Number(summary?.indexedDoctors || 0),
+        events: Number(summary?.eventCount || 0),
       };
       if (!result.events) {
         throw new Error("Roster save finished with 0 events in D1.");
+      }
+      if (Number(job.expectedEventCount || 0) > 0 && result.events !== Number(job.expectedEventCount)) {
+        throw new Error(`Roster save finished with ${result.events}/${Number(job.expectedEventCount)} events in D1.`);
       }
       await propagateDerivedShiftCodeIssues(db, job.doctors || [], job.issuesByDoctor || {});
     } else {
@@ -5928,9 +5843,9 @@ async function runCoreDerivedRosterSave(context, job = {}) {
       return { ok: true, result, supersession: null };
     }
     let effectiveFilePayload = filePayload;
-    if (phase === "finish" && filePayload.staged === true) {
+    if (phase === "finish") {
       const replacesFileId = String(filePayload.replacesFileId || "").trim();
-      if (replacesFileId) {
+      if (filePayload.staged === true && replacesFileId) {
         const promotion = await promoteVerifiedStagedRosterFile(db, fileId, replacesFileId, {
           approvedRemovedEventIdentities: approvedHistoricalReparseRemovals(replacesFileId),
         });
@@ -5960,18 +5875,18 @@ async function runCoreDerivedRosterSave(context, job = {}) {
       }
       const effectiveFileId = String(effectiveFilePayload.id || fileId);
       const postSave = () => {
-        const presence = phase === "complete"
+        const presence = phase === "complete" || phase === "finish"
           ? Promise.resolve()
           : supersession?.savedTrimmed
           ? Promise.resolve()
-          : phase === "finish" || Number(result?.events || 0) > 1200
+          : Number(result?.events || 0) > 1200
             ? rebuildDailyPresenceForFile(db, effectiveFileId)
             : populateDailyPresenceForFile(db, effectiveFileId, job.eventsByDoctor || {}, {
               sourceType: String(filePayload.sourceType || "").toLowerCase(),
               doctors: job.doctors || [],
             });
         return Promise.resolve(presence)
-          .then(() => refreshFacilityOverviewMaterializationForFile(db, effectiveFileId))
+          .then(() => null)
           .then(() => reconcileFacilityStaffDesignationsForRosterFile(db, effectiveFileId))
           .then(() => String(context.env.FACILITY_SHARED_METADATA_BUILD_ENABLED || "").toLowerCase() === "true"
             ? publishFacilityStaffMetadata(context, facilityBuildSources(context.env, [filePayload.sourceType]))

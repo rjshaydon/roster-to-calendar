@@ -7,7 +7,7 @@ import { onRequestPost as handleStatePost } from "../functions/api/state.js";
 import { onRequestGet as handleFeedGet } from "../functions/api/feed.js";
 import { assertFindmyshiftDandenongAssignments, extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentDiagnostics, findmyshiftDandenongAssignmentExceptions, findmyshiftRowsWorkbook, findmyshiftStaffAssignmentById, findmyshiftStaffSeniorityById } from "../functions/_lib/findmyshift.js";
 import { buildAutomatedDerivedRosterPayload } from "../functions/_lib/automation-import.js";
-import { australianTermStartForDate, buildPreviewFromDerivedEvents, findRosterSyncByProviderVersion, isApprovedReparseOmission, queryCalendarRevision, sameRosterOccurrence, storeCachedSnapshot } from "../functions/_lib/d1-calendar.js";
+import { australianTermStartForDate, buildPreviewFromDerivedEvents, findRosterSyncByProviderVersion, isApprovedReparseOmission, queryCalendarRevision, sameRosterOccurrence, storeCachedSnapshot, upsertRawRosterFile } from "../functions/_lib/d1-calendar.js";
 import { recordRosterDispatchLifecycle, requestQueuedRosterProcessing } from "../functions/_lib/automation-dispatch.js";
 import { applyRosterEventSeniorities, attachFindmyshiftStaffIds, buildRosterView, clinicalSupportRosterMode, customEventsToEvents, doctorOptions, filterCalendarRosterEvents, filterCrossFacilityVhhRosterEvents, findmyshiftProviderStaffOptions, findmyshiftRosteredStaffOptions, isCrossFacilityVhhRosterEvent, mergeMembershipDoctors, parseUploadForm, parserRuleDefaults, previewSummary, setParserExtensions } from "../public/static/roster.js";
 import { customEventsToEvents as serverCustomEventsToEvents } from "../functions/_lib/roster.js";
@@ -1678,14 +1678,14 @@ assert.match(
   "roster import overlay should hide after the configured maximum duration",
 );
 assert.match(
-  appSource.match(/async function refreshCalendarStoreStatus[\s\S]*?async function toggleAdminConsole/)?.[0] || "",
-  /includeAvailableDoctors === true && Array\.isArray\(data\.availableDoctors\)/,
-  "roster status refreshes should apply doctor-directory updates even when the list shrinks",
+  appSource.match(/async function refreshAvailableDoctorsAfterRosterChange[\s\S]*?function normalizeSavedExportRange/)?.[0] || "",
+  /calendarStoreRequestWithRetry\("listRosterDoctors"[\s\S]*Array\.isArray\(data\?\.availableDoctors\)/,
+  "post-change doctor-directory refresh should use its separate explicit action",
 );
 assert.match(
   appSource.match(/async function refreshAvailableDoctorsAfterRosterChange[\s\S]*?function normalizeSavedExportRange/)?.[0] || "",
-  /mergeAvailableDoctors = options\.mergeAvailableDoctors === true[\s\S]*10000, 20000[\s\S]*mergeAvailableDoctors[\s\S]*syncCreatorDoctorPickerWithRemainingRosters\(\{ localOnly \}\)[\s\S]*renderDoctorState/,
-  "roster changes should poll repository doctors and optionally replace the local picker list on delete",
+  /mergeAvailableDoctors = options\.mergeAvailableDoctors === true[\s\S]*listRosterDoctors[\s\S]*mergeAvailableDoctors[\s\S]*syncCreatorDoctorPickerWithRemainingRosters\(\{ localOnly \}\)[\s\S]*renderDoctorState/,
+  "roster changes should refresh repository doctors once and optionally replace the local picker list on delete",
 );
 assert.match(
   appSource.match(/async function completeRosterRemovalAfterSync[\s\S]*?function scheduleRosterRemovalRetry/)?.[0] || "",
@@ -1742,10 +1742,10 @@ assert.match(
   /ensureSelectedFilesLoaded\(\)/,
   "creator doctor picker sync should hydrate retained roster files before parsing",
 );
-assert.match(
+assert.doesNotMatch(
   appSource.match(/async function refreshCalendarStoreStatus[\s\S]*?async function toggleAdminConsole/)?.[0] || "",
-  /mergeAvailableDoctors === true[\s\S]*mergeAvailableRosterDoctors\(availableRosterDoctors, incomingDoctors\)/,
-  "roster status refreshes should merge repository doctors instead of replacing the local picker list",
+  /availableDoctors|listRosterDoctors/,
+  "roster status refreshes should not perform doctor-directory discovery",
 );
 assert.match(
   appSource.match(/accountsBody\.addEventListener\("click"[\s\S]*?if \(adminTab\)[\s\S]*?return;/)?.[0] || "",
@@ -1972,10 +1972,15 @@ assert.match(
   /context\.waitUntil\(postSave\(\)/,
   "derived roster saves should defer only post-save indexing to waitUntil",
 );
+assert.doesNotMatch(
+  stateSource.match(/if \(action === "calendarStoreStatus"\)[\s\S]*?if \(action === "listRosterDoctors"\)/)?.[0] || "",
+  /repositoryDoctorCandidates|roster_file_doctors|roster_events/,
+  "calendar status must not include doctor discovery or roster-history reads",
+);
 assert.match(
-  stateSource.match(/if \(action === "calendarStoreStatus"\)[\s\S]*?if \(action === "appendConsoleMessage"\)/)?.[0] || "",
-  /includeAvailableDoctors === true[\s\S]*repositoryDoctorCandidates/,
-  "calendar status should optionally return available doctors for switcher refresh",
+  stateSource.match(/if \(action === "listRosterDoctors"\)[\s\S]*?(?=\n    if \(action === |$)/)?.[0] || "",
+  /Creator access is required[\s\S]*repositoryDoctorCandidates/,
+  "doctor discovery should be a separate explicit Creator action",
 );
 assert.match(
   appSource.match(/function isRosterFileStatusHealthy[\s\S]*?function reconcileRosterSyncStates/)?.[0] || "",
@@ -2044,8 +2049,8 @@ assert.match(
 );
 assert.match(
   stateSource.match(/async function calendarStoreStatus[\s\S]*?function summarizeExpectedRosterFiles/)?.[0] || "",
-  /queryRawRosterFiles[\s\S]*retainedOnlyFiles[\s\S]*retainedSourceOnly/,
-  "calendar status should include retained R2 source pointers without derived rows",
+  /queryRosterFileStatusSummaries[\s\S]*retainedSourceOnly: file\.derivedState === "retained"/,
+  "calendar status should use compact summaries for retained-only and derived files",
 );
 assert.match(
   appSource.match(/async function loginWithEmail[\s\S]*?async function restoreCloudState/)?.[0] || "",
@@ -2210,7 +2215,7 @@ assert.match(
 );
 assert.match(
   stateSource.match(/async function calendarStoreStatus[\s\S]*?function summarizeExpectedRosterFiles/)?.[0] || "",
-  /sourceId: String\(file\.sourceId[\s\S]*startDate: String\(file\.startDate/,
+  /queryRosterFileStatusSummaries[\s\S]*rosterSourceStatuses\(files/,
   "calendar store status should expose roster source and coverage metadata for Admin grouping",
 );
 assert.doesNotMatch(
@@ -2230,8 +2235,18 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function refreshCalendarStoreStatus[\s\S]*?async function toggleAdminConsole/)?.[0] || "",
-  /calendarStoreRequestWithRetry\("calendarStoreStatus"/,
-  "roster status checks should retry transient SQL store failures",
+  /calendarStoreStatusRequest[\s\S]*performCalendarStoreStatusRefresh[\s\S]*Math\.min\(2, options\.attempts \|\| 2\)/,
+  "roster status checks should coalesce callers and allow at most one retry",
+);
+assert.match(
+  appSource.match(/function scheduleRosterSyncRefresh[\s\S]*?function isRosterFileStatusHealthy/)?.[0] || "",
+  /document\.hidden[\s\S]*hasActiveRosterSyncJobs[\s\S]*Math\.min\(20000/,
+  "roster status polling should stop in hidden tabs, require an active job and back off",
+);
+assert.doesNotMatch(
+  appSource.match(/async function waitForRosterFilePersistence[\s\S]*?async function buildCloudState/)?.[0] || "",
+  /calendarStoreRequest(?:WithRetry)?\("calendarStoreStatus"/,
+  "persistence confirmation must not create a second status request loop",
 );
 assert.match(
   appSource.match(/data-refresh-calendar-store[\s\S]*?data-replace-active-rosters/)?.[0] || "",
@@ -2270,8 +2285,8 @@ assert.match(
 );
 assert.match(
   await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"),
-  /const lightweight = options\.lightweight === true[\s\S]*if \(!lightweight && selectedDoctorKey\)/,
-  "lightweight calendar status should skip selected-doctor event counts",
+  /selectedDoctorEventCount: null,[\s\S]*selectedDoctorFiles: \[\]/,
+  "normal calendar status must never load selected-doctor event diagnostics",
 );
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
@@ -3320,6 +3335,7 @@ class MemoryD1 {
     this.facilityStaffDesignations = new Map();
     this.facilitySmsMemberships = new Map();
     this.rosterFileCoverage = new Map();
+    this.rosterFileStatusSummaries = new Map();
     this.facilityTermStaff = new Map();
     this.facilityTermVisibility = new Map();
     this.facilityStreamCatalog = new Map();
@@ -3361,6 +3377,7 @@ class MemoryD1 {
       "facilityStaffDesignations",
       "facilitySmsMemberships",
       "rosterFileCoverage",
+      "rosterFileStatusSummaries",
       "facilityTermStaff",
       "facilityTermVisibility",
       "events",
@@ -3415,6 +3432,32 @@ class MemoryD1Statement {
     if (sql.startsWith("ALTER TABLE")) return { success: true };
     if (sql.startsWith("INSERT INTO roster_file_coverage")) {
       this.db.rosterFileCoverage.set(args[0], { file_id: args[0], source_type: args[1], coverage_start: args[2], coverage_end: args[3], content_revision: args[4], staff_digest: args[5], daily_digest: args[6], updated_at: args[7] });
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.startsWith("INSERT INTO roster_file_status_summaries")) {
+      if (sql.includes("VALUES (?, ?, '', ?, 0, 'retained'")) {
+        const existing = this.db.rosterFileStatusSummaries.get(args[0]);
+        this.db.rosterFileStatusSummaries.set(args[0], {
+          ...(existing || {}), file_id: args[0], source_type: args[1], name: args[2],
+          active: existing?.active ?? 0, derived_state: existing?.derived_state || "retained",
+          expected_doctor_count: existing?.expected_doctor_count || 0,
+          indexed_doctor_count: existing?.indexed_doctor_count || 0,
+          event_count: existing?.event_count || 0, raw_source_available: 1,
+          size: args[3], last_modified: args[4], uploaded_at: args[5],
+          content_revision: existing?.content_revision || "", status_revision: args[6], updated_at: args[7],
+        });
+      } else {
+        const rawAvailability = Number(args[9]) < 0
+          ? Number(this.db.rawFiles.has(args[10]) || this.db.rosterFileStatusSummaries.get(args[0])?.raw_source_available || 0)
+          : Number(args[11]);
+        this.db.rosterFileStatusSummaries.set(args[0], {
+          file_id: args[0], source_type: args[1], source_id: args[2], name: args[3], active: args[4],
+          derived_state: args[5], expected_doctor_count: args[6], indexed_doctor_count: args[7],
+          event_count: args[8], raw_source_available: rawAvailability, size: args[12],
+          last_modified: args[13], uploaded_at: args[14], content_revision: args[15],
+          status_revision: args[16], updated_at: args[17],
+        });
+      }
       return { success: true, meta: { changes: 1 } };
     }
     if (sql.startsWith("INSERT INTO facility_term_staff_contributions")) {
@@ -3538,6 +3581,29 @@ class MemoryD1Statement {
       });
       return { success: true };
     }
+    if (sql.startsWith("UPDATE roster_file_status_summaries")) {
+      const fileId = String(args.at(-1));
+      const row = this.db.rosterFileStatusSummaries.get(fileId);
+      if (!row) return { success: true, meta: { changes: 0 } };
+      if (sql.includes("event_count = event_count + ?")) row.event_count += Number(args[0] || 0);
+      if (sql.includes("SET active = ?")) row.active = Number(args[0] || 0);
+      if (sql.includes("SET active = 1, derived_state = 'ready'")) { row.active = 1; row.derived_state = "ready"; }
+      if (sql.includes("raw_source_available = 0")) row.raw_source_available = 0;
+      if (sql.includes("active = CASE WHEN derived_state = 'retained'")) {
+        if (row.derived_state === "retained") { row.active = 0; row.derived_state = "removed"; }
+      }
+      if (sql.includes("event_count = ?")) row.event_count = Number(args[0] || 0);
+      if (sql.includes("derived_state = CASE WHEN raw_source_available")) {
+        row.active = row.raw_source_available ? 1 : 0;
+        row.derived_state = row.raw_source_available ? "retained" : "removed";
+        row.expected_doctor_count = 0; row.indexed_doctor_count = 0; row.event_count = 0;
+      }
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (sql.startsWith("DELETE FROM roster_file_status_summaries")) {
+      const changed = this.db.rosterFileStatusSummaries.delete(args[0]);
+      return { success: true, meta: { changes: changed ? 1 : 0 } };
+    }
     if (sql.startsWith("DELETE FROM roster_file_doctors")) {
       for (const [key, doctor] of [...this.db.fileDoctors.entries()]) {
         if (!key.startsWith(`${args[0]}|`)) continue;
@@ -3548,16 +3614,18 @@ class MemoryD1Statement {
       return { success: true };
     }
     if (sql.startsWith("DELETE FROM roster_events")) {
+      let changes = 0;
       for (const [key, value] of [...this.db.events.entries()]) {
         if (sql.includes("WHERE id = ?")) {
-          if (key === args[0]) this.db.events.delete(key);
+          if (key === args[0]) { this.db.events.delete(key); changes += 1; }
           continue;
         }
         if (value.file_id !== args[0]) continue;
         if (sql.includes("start_date <= ?") && !(value.start_date <= args[1] && value.end_date >= args[2])) continue;
         this.db.events.delete(key);
+        changes += 1;
       }
-      return { success: true };
+      return { success: true, meta: { changes } };
     }
     if (sql.startsWith("DELETE FROM roster_issues")) {
       for (const [key, value] of [...this.db.issues.entries()]) {
@@ -4037,7 +4105,7 @@ class MemoryD1Statement {
       };
     }
     if (sql.startsWith("SELECT * FROM roster_sources ORDER BY")) {
-      return { results: [...this.db.rosterSources.values()].sort((left, right) => String(left.label).localeCompare(String(right.label)) || String(left.id).localeCompare(String(right.id))) };
+      return { results: [...this.db.rosterSources.values()].sort((left, right) => String(left.label).localeCompare(String(right.label)) || String(left.id).localeCompare(String(right.id))).slice(0, Number(args[0] || 16)) };
     }
     if (sql.includes("FROM facility_staff_designations")) {
       return { results: [] };
@@ -4051,6 +4119,12 @@ class MemoryD1Statement {
     }
     if (sql.startsWith("SELECT * FROM roster_sync_runs") && !sql.includes("WHERE source_id")) {
       return { results: [...this.db.rosterSyncRuns.values()].sort((left, right) => String(right.started_at).localeCompare(String(left.started_at)) || String(right.id).localeCompare(String(left.id))).slice(0, Number(args[0] || 50)) };
+    }
+    if (sql.startsWith("SELECT * FROM roster_sync_runs") && sql.includes("WHERE source_id = ?")) {
+      return { results: [...this.db.rosterSyncRuns.values()]
+        .filter((row) => row.source_id === args[0])
+        .sort((left, right) => String(right.started_at).localeCompare(String(left.started_at)) || String(right.id).localeCompare(String(left.id)))
+        .slice(0, 1) };
     }
     if (sql.startsWith("SELECT * FROM roster_dispatches ORDER BY")) {
       return { results: [...this.db.rosterDispatches.values()].sort((left, right) => String(right.requested_at).localeCompare(String(left.requested_at))).slice(0, 1) };
@@ -4430,6 +4504,16 @@ class MemoryD1Statement {
         results: [...this.db.rawFiles.values()].sort((left, right) => String(left.uploaded_at || "").localeCompare(String(right.uploaded_at || "")) || String(left.file_id || "").localeCompare(String(right.file_id || ""))),
       };
     }
+    if (sql.includes("FROM roster_file_status_summaries s") && sql.includes("LEFT JOIN roster_file_coverage")) {
+      const limit = Number(args.at(-1) || 100);
+      const expectedIds = new Set(args.slice(0, -1));
+      return {
+        results: [...this.db.rosterFileStatusSummaries.values()]
+          .filter((row) => sql.includes("WHERE s.active = 1") ? row.active === 1 : expectedIds.has(row.file_id))
+          .slice(0, limit)
+          .map((row) => ({ ...row, ...(this.db.rosterFileCoverage.get(row.file_id) || {}) })),
+      };
+    }
     if (sql.includes("MIN(roster_events.start_date)") && sql.includes("FROM roster_files")) {
       const includeInactive = !sql.includes("WHERE roster_files.active = 1");
       return {
@@ -4611,6 +4695,10 @@ class MemoryD1Statement {
     const sql = this.sql;
     const args = this.args;
     if (sql.startsWith("SELECT content_revision FROM roster_file_coverage")) return this.db.rosterFileCoverage.get(args[0]) || null;
+    if (sql.includes("FROM roster_file_status_summaries s") && sql.includes("WHERE s.file_id = ?")) {
+      const row = this.db.rosterFileStatusSummaries.get(args[0]);
+      return row ? { ...row, ...(this.db.rosterFileCoverage.get(args[0]) || {}) } : null;
+    }
     if (sql.startsWith("SELECT content_revision, staff_digest, daily_digest")) return this.db.rosterFileCoverage.get(args[0]) || null;
     if (sql.startsWith("SELECT id, name, source_type, source_id, active, size")) return this.db.files.get(args[0]) || null;
     if (sql.startsWith("SELECT id, source_type FROM roster_files WHERE id = ?")) {
@@ -4621,6 +4709,10 @@ class MemoryD1Statement {
     }
     if (sql.startsWith("SELECT * FROM roster_sources WHERE id = ?")) {
       return this.db.rosterSources.get(args[0]) || null;
+    }
+    if (sql.startsWith("SELECT file_id FROM raw_roster_files WHERE file_id = ?")) {
+      const row = this.db.rawFiles.get(args[0]);
+      return row ? { file_id: row.file_id } : null;
     }
     if (sql.startsWith("SELECT id FROM roster_sync_runs WHERE status IN")) {
       return [...this.db.rosterSyncRuns.values()].find((row) => ["queued", "processing"].includes(row.status)) || null;
@@ -4943,6 +5035,7 @@ async function postStateRaw(store, payload, db = null, options = {}) {
       // This fixture intentionally exercises Creator-only maintenance actions.
       // Production remains fail-closed unless this separate control is enabled.
       ROSTER_AUTOMATION_WRITES_ENABLED: "true",
+      ROSTER_STATUS_SUMMARY_ENABLED: "true",
       ROSTER_ADVANCED_MAINTENANCE_ENABLED: "true",
     },
   };
@@ -5147,11 +5240,15 @@ const caseyStatus = await postState(d1CaseyStore, {
   action: "calendarStoreStatus",
   email: "rhaydon@gmail.com",
   password: creatorPassword,
-  includeAvailableDoctors: true,
+}, d1CaseyDb);
+const caseyDoctorsStatus = await postState(d1CaseyStore, {
+  action: "listRosterDoctors",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
 }, d1CaseyDb);
 assert.equal(caseyStatus.files.find((file) => file.id === "d1-casey")?.status, "populated");
 assert.ok(
-  (caseyStatus.availableDoctors || []).some((doctor) => doctor.displayName === "Andrew DYALL" && doctor.sourceType === "casey"),
+  (caseyDoctorsStatus.availableDoctors || []).some((doctor) => doctor.displayName === "Andrew DYALL" && doctor.sourceType === "casey"),
   "Casey roster save should expose Casey-only doctors for switcher refresh",
 );
 const retainedRaw = await postState(d1StateStore, {
@@ -5184,25 +5281,35 @@ const migratedRaw = await postState(legacyRawStore, {
 assert.match(migratedRaw.dataUrl, /^data:/, "legacy raw files should remain fetchable during lazy migration");
 assert.equal(legacyRawDb.rawFiles.get("legacy-raw")?.object_key, "rosters/legacy-raw", "legacy raw files should be promoted to R2 when fetched");
 assert.equal(legacyRawDb.rawFiles.get("legacy-raw")?.data_url, "", "lazy migration should clear the inline D1 payload after promotion");
-legacyRawDb.rawFiles.set("retained-only:1:1", {
-  file_id: "retained-only:1:1",
+await upsertRawRosterFile(legacyRawDb, {
+  id: "retained-only:1:1",
   name: "Dandenong retained only.xlsx",
-  source_type: "ddh",
+  sourceType: "ddh",
   size: 1,
-  last_modified: 1,
+  lastModified: 1,
+}, {
   object_key: "rosters/retained-only:1:1",
   type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   data_url: "",
-  uploaded_at: "2026-01-01T00:01:00.000Z",
+  objectKey: "rosters/retained-only:1:1",
+  dataUrl: "",
+  uploadedAt: "2026-01-01T00:01:00.000Z",
 });
 const retainedOnlyStatus = await postState(legacyRawStore, {
   action: "calendarStoreStatus",
   email: "rhaydon@gmail.com",
   password: creatorPassword,
+  expectedFileIds: ["retained-only:1:1"],
 }, legacyRawDb);
 const retainedOnlyFile = retainedOnlyStatus.files.find((file) => file.id === "retained-only:1:1");
 assert.equal(retainedOnlyFile?.retainedSourceOnly, true, "calendar status should list retained R2 source files without derived rows");
 assert.equal(retainedOnlyFile?.status, "retained");
+const retainedWithoutExpectation = await postState(legacyRawStore, {
+  action: "calendarStoreStatus",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+}, legacyRawDb);
+assert.equal(retainedWithoutExpectation.files.some((file) => file.id === "retained-only:1:1"), false, "retained history must not become active status merely because its raw source exists");
 const reparsedD1Status = await postState(d1StateStore, {
   action: "calendarStoreStatus",
   email: "rhaydon@gmail.com",
@@ -5720,6 +5827,7 @@ for (const [key, event] of [...d1Store.events.entries()]) if (event.file_id === 
 for (const [key, issue] of [...d1Store.issues.entries()]) if (issue.file_id === "ddh-rover-diagnostics") d1Store.issues.delete(key);
 for (const [key, doctor] of [...d1Store.fileDoctors.entries()]) if (doctor.file_id === "ddh-rover-diagnostics") d1Store.fileDoctors.delete(key);
 d1Store.files.delete("ddh-rover-diagnostics");
+d1Store.rosterFileStatusSummaries.delete("ddh-rover-diagnostics");
 await seedUser(d1StateStore, "admin-enter-match@example.com", "admin-enter-password", d1Doctor.displayName, d1Store);
 for (const key of [...d1Store.accountClaims.keys()]) {
   if (key.startsWith("admin-enter-match@example.com|")) d1Store.accountClaims.delete(key);
@@ -6533,7 +6641,7 @@ const fourRosterStatus = await postState(fourRosterStore, {
 }, fourRosterDb);
 assert.equal(fourRosterStatus.total, 4, "all four active roster files should be reported");
 assert.equal(fourRosterStatus.files.filter((file) => file.eventCount > 0).length, 4, "each roster file should have D1 event rows");
-assert.equal(fourRosterStatus.files.filter((file) => file.selectedDoctorEventCount > 0).length, 4, "each roster file should have selected creator event rows");
+assert.equal(fourRosterStatus.files.every((file) => file.selectedDoctorEventCount === null), true, "normal status must omit selected-doctor event diagnostics");
 const fourRosterCalendar = await postState(fourRosterStore, {
   action: "loadCalendarEvents",
   email: "rhaydon@gmail.com",
@@ -6741,9 +6849,8 @@ const detailedSharedStatus = await postState(sharedUploadStore, {
   lightweight: false,
 }, sharedUploadDb);
 const sharedDdhStatus = detailedSharedStatus.files.find((file) => file.id === "shared-ddh");
-assert.equal(sharedDdhStatus?.selectedDoctorEventCount, 1, "full roster status should count the selected doctor's events per file");
-assert.equal(sharedDdhStatus?.selectedDoctor?.displayName, "Shared User", "full roster status should report the matched roster identity");
-assert.equal(sharedDdhStatus?.selectedDoctor?.shifts?.[0]?.title, "Shared DDH Shift", "full roster status should return the selected doctor's shifts");
+assert.equal(sharedDdhStatus?.selectedDoctorEventCount, null, "roster status must not count selected-doctor events");
+assert.equal(sharedDdhStatus?.selectedDoctor, null, "roster status must keep detailed doctor diagnostics separate");
 assert.equal(detailedSharedStatus.rosterSourceStatuses?.find((source) => source.id === "monash-adults")?.state, "not-configured", "source status should distinguish an unconnected automation source");
 for (const [fileId, name] of [
   ["automation:monash-paeds:failed", "Paeds - Term 1 2026.xlsx"],

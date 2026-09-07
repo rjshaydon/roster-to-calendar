@@ -5,11 +5,11 @@
 This document is an implementation plan only. Writing it does not authorise a production deployment, a production D1 migration, a production backfill, or re-enabling roster automation.
 
 The protected historical production base is `aa9eed8` (`Stop runtime D1 schema
-migrations`). As of 6 September 2026, GitHub `main`, the rollout branch and the
-active Pages Production deployment identify `0fab128`. Migration `0024` is
-applied; `0025` through `0030` remain pending. Runtime schema inspection and
-repair must remain absent from every request path. All schema changes described
-here must use explicit numbered migrations.
+migrations`). As of 7 September 2026, GitHub `main`, the rollout branch and the
+active Pages Production deployment identify `95bc9ad`. Migrations `0024` and
+`0025` are applied; `0026` through `0030` remain pending. Runtime schema
+inspection and repair must remain absent from every request path. All schema
+changes described here must use explicit numbered migrations.
 
 Development and performance testing must use local D1, local R2 substitutes, and production-sized synthetic or safely exported fixtures. No test, benchmark, query-plan check, cache warm-up, or backfill may point at production Cloudflare resources.
 
@@ -18,6 +18,12 @@ Before resuming Phase 7, complete the
 legacy At a glance reads must be paused permanently. Until a hospital's shared
 objects are published and its shared reader is explicitly enabled, that view
 must return `preparing` or unavailable.
+
+The Creator roster-status path has a separate proven broad-read query and is
+currently blocked before D1 while roster writes are paused. Implement and pass
+the [calendar store status remediation plan](./calendar-store-status-d1-remediation-plan.md)
+before restoring roster automation; enabling writes must never reactivate that
+legacy status query.
 
 ## Implementation handoff and restoration
 

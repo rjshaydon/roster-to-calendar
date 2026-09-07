@@ -7,10 +7,12 @@ import {
   australianTermEndForStart,
   queryMaterializedFacilityCoverage,
   queryMaterializedFacilityTermStaff,
+  queryRosterFileStatusSummaries,
   refreshFacilityOverviewMaterializationForFile,
   replaceDerivedRosterFile,
   startDerivedRosterFileSave,
   appendDerivedRosterFileEvents,
+  activateDerivedRosterFile,
   FACILITY_BOOTSTRAP_EVENT_SQL,
 } from "../functions/_lib/d1-calendar.js";
 import { onRequestPost as saveAutomatedDerivedRoster } from "../functions/api/automation/derived.js";
@@ -21,19 +23,39 @@ import { onRequestPost as stateHandler } from "../functions/api/state.js";
 import { initializeFacilityMaterialization, loadPublishedFacilityDays, loadPublishedFacilityMetadata, loadPublishedFacilityRange, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata } from "../functions/_lib/facility-overview-cache.js";
 
 class LocalD1 {
-  constructor(sqlite) { this.sqlite = sqlite; this.rowsWritten = 0; this.sql = []; }
+  constructor(sqlite) { this.sqlite = sqlite; this.rowsWritten = 0; this.sql = []; this.failRunIncludes = ""; }
   prepare(sql) {
     const owner = this;
     owner.sql.push(sql.replace(/\s+/g, " ").trim());
     return {
       args: [],
       bind(...args) { this.args = args; return this; },
-      async run() { const result = owner.sqlite.prepare(sql).run(...this.args); owner.rowsWritten += Number(result.changes || 0); return { success: true, meta: { changes: Number(result.changes || 0) } }; },
+      async run() {
+        if (owner.failRunIncludes && sql.includes(owner.failRunIncludes)) {
+          owner.failRunIncludes = "";
+          throw new Error("Injected D1 statement failure");
+        }
+        const result = owner.sqlite.prepare(sql).run(...this.args);
+        owner.rowsWritten += Number(result.changes || 0);
+        return { success: true, meta: { changes: Number(result.changes || 0) } };
+      },
       async all() { return { success: true, results: owner.sqlite.prepare(sql).all(...this.args) }; },
       async first() { return owner.sqlite.prepare(sql).get(...this.args) || null; },
     };
   }
-  async batch(statements) { const results = []; for (const statement of statements) results.push(await statement.run()); return results; }
+  async batch(statements) {
+    const results = [];
+    const ownsTransaction = !this.sqlite.isTransaction;
+    if (ownsTransaction) this.sqlite.exec("BEGIN");
+    try {
+      for (const statement of statements) results.push(await statement.run());
+      if (ownsTransaction) this.sqlite.exec("COMMIT");
+      return results;
+    } catch (error) {
+      if (ownsTransaction) this.sqlite.exec("ROLLBACK");
+      throw error;
+    }
+  }
 }
 
 class LocalR2 {
@@ -72,9 +94,11 @@ assert.ok(bootstrapCatalogPlan.some((line) => /idx_facility_stream_catalog_file/
 const publicationStaffPlan = sqlite.prepare("EXPLAIN QUERY PLAN SELECT * FROM facility_term_staff_contributions WHERE source_type = ? AND term_start = ? LIMIT ?").all("mmc", "2026-08-03", 24001).map((row) => String(row.detail));
 const publicationCatalogPlan = sqlite.prepare("EXPLAIN QUERY PLAN SELECT * FROM facility_stream_catalog_contributions WHERE source_type = ? AND term_start = ? LIMIT ?").all("mmc", "2026-08-03", 24001).map((row) => String(row.detail));
 const publicationFilesPlan = sqlite.prepare("EXPLAIN QUERY PLAN SELECT f.id FROM roster_files AS f INDEXED BY idx_roster_files_source_active WHERE f.source_type = ? AND f.active = 1 LIMIT ?").all("mmc", 33).map((row) => String(row.detail));
+const statusPlan = sqlite.prepare("EXPLAIN QUERY PLAN SELECT file_id FROM roster_file_status_summaries WHERE active = 1 ORDER BY source_type, updated_at, file_id LIMIT ?").all(100).map((row) => String(row.detail));
 assert.ok(publicationStaffPlan.some((line) => /idx_facility_term_staff_lookup/.test(line)), "publication Staff inputs must use the exact ED/term index");
 assert.ok(publicationCatalogPlan.some((line) => /idx_facility_stream_catalog_lookup/.test(line)), "publication catalogue inputs must use the exact ED/term index");
 assert.ok(publicationFilesPlan.some((line) => /idx_roster_files_source_active/.test(line)), "publication coverage must begin with the capped active-file index");
+assert.ok(statusPlan.some((line) => /idx_roster_file_status_active_source_updated/.test(line)), "roster status must use the compact active-summary index");
 const file = { id: "incremental-a", name: "Synthetic.xlsx", sourceType: "mmc", sourceId: "test", active: true, parserVersion: "test-v1" };
 const doctors = [
   { key: "PERMANENT SMS", displayName: "Permanent SMS", seniority: "SMS", membershipSource: "roster" },
@@ -85,6 +109,42 @@ const initialEvents = {
   "PERMANENT SMS": [event("sms-1", "2026-08-03")],
   "TERM TRAINEE": [event("trainee-1", "2026-08-03")],
 };
+
+const chunkCrashFile = { ...file, id: "chunk-crash", active: false };
+await startDerivedRosterFileSave(db, chunkCrashFile, doctors);
+db.failRunIncludes = "UPDATE roster_file_status_summaries";
+await assert.rejects(appendDerivedRosterFileEvents(db, chunkCrashFile, doctors, initialEvents), /Injected D1 statement failure/);
+assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM roster_events WHERE file_id = ?").get(chunkCrashFile.id).count, 0, "a failed chunk must roll back its event inserts");
+assert.equal(sqlite.prepare("SELECT derived_state FROM roster_file_status_summaries WHERE file_id = ?").get(chunkCrashFile.id).derived_state, "building", "a failed chunk must not publish ready status");
+await deleteDerivedRosterFile(db, chunkCrashFile.id);
+
+const chunkedFile = { ...file, id: "chunked-ready" };
+await startDerivedRosterFileSave(db, chunkedFile, doctors);
+await appendDerivedRosterFileEvents(db, chunkedFile, doctors, initialEvents, {}, { indexedEventCount: 2 });
+const firstChunkRevision = sqlite.prepare("SELECT status_revision FROM roster_file_status_summaries WHERE file_id = ?").get(chunkedFile.id).status_revision;
+await appendDerivedRosterFileEvents(db, chunkedFile, doctors, initialEvents, {}, { indexedEventCount: 2 });
+const repeatedChunk = sqlite.prepare("SELECT event_count, status_revision FROM roster_file_status_summaries WHERE file_id = ?").get(chunkedFile.id);
+assert.equal(repeatedChunk.event_count, 2, "a retried chunk must not double-count events");
+assert.equal(repeatedChunk.status_revision, firstChunkRevision, "a retried chunk must not change the status revision");
+await activateDerivedRosterFile(db, chunkedFile.id);
+const chunkedReady = sqlite.prepare("SELECT active, derived_state FROM roster_file_status_summaries WHERE file_id = ?").get(chunkedFile.id);
+assert.equal(chunkedReady.active, 1, "a complete chunked save must activate its summary");
+assert.equal(chunkedReady.derived_state, "ready", "a complete chunked save must publish ready only after activation");
+await deleteDerivedRosterFile(db, chunkedFile.id);
+
+const publicationCrashFile = { ...file, id: "publication-crash" };
+await startDerivedRosterFileSave(db, publicationCrashFile, doctors);
+await appendDerivedRosterFileEvents(db, publicationCrashFile, doctors, initialEvents, {}, { indexedEventCount: 2 });
+db.failRunIncludes = "SET active = 1, derived_state = 'ready'";
+await assert.rejects(activateDerivedRosterFile(db, publicationCrashFile.id), /Injected D1 statement failure/);
+assert.equal(sqlite.prepare("SELECT derived_state FROM roster_file_status_summaries WHERE file_id = ?").get(publicationCrashFile.id).derived_state, "building", "a failed final publication must not expose ready status");
+await deleteDerivedRosterFile(db, publicationCrashFile.id);
+
+const materializationCrashFile = { ...file, id: "materialization-crash" };
+db.failRunIncludes = "INSERT INTO roster_file_coverage";
+await assert.rejects(replaceDerivedRosterFile(db, materializationCrashFile, doctors, initialEvents), /Injected D1 statement failure/);
+assert.equal(sqlite.prepare("SELECT derived_state FROM roster_file_status_summaries WHERE file_id = ?").get(materializationCrashFile.id).derived_state, "building", "a failed materialisation must not leave a ready summary");
+await deleteDerivedRosterFile(db, materializationCrashFile.id);
 
 const contactR2 = new LocalR2();
 const contactPayload = { sourceId: "mmc-shift-allocations", sourceDate: "2026-09-06", providerModifiedAt: "2026-09-06T01:00:00Z", contacts: [{ area: "Adult Emergency", shift: "AM", role: "Consultant", name: "Alex Example", phone: "555-0100", isPopulated: true }] };
@@ -115,6 +175,7 @@ async function callBootstrap(body) {
 const legacyFile = { ...file, id: "bootstrap-file", name: "Legacy.xlsx" };
 await startDerivedRosterFileSave(db, legacyFile, doctors);
 await appendDerivedRosterFileEvents(db, legacyFile, doctors, initialEvents);
+sqlite.prepare("UPDATE roster_files SET active = 1 WHERE id = ?").run(legacyFile.id);
 assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM roster_file_coverage WHERE file_id = 'bootstrap-file'").get().count, 0);
 const bootstrapPlan = await callBootstrap({ sourceType: "mmc", fileId: legacyFile.id, maximumEventRows: 10, maximumWrites: 100 });
 assert.equal(bootstrapPlan.response.status, 200);
@@ -149,6 +210,7 @@ assert.equal(db.rowsWritten, 0, "a repeated compact bootstrap must write nothing
 const oversizedFile = { ...file, id: "bootstrap-oversized", name: "Oversized.xlsx" };
 await startDerivedRosterFileSave(db, oversizedFile, doctors);
 await appendDerivedRosterFileEvents(db, oversizedFile, doctors, initialEvents);
+sqlite.prepare("UPDATE roster_files SET active = 1 WHERE id = ?").run(oversizedFile.id);
 const oversizedPlan = await callBootstrap({ sourceType: "mmc", fileId: oversizedFile.id, maximumEventRows: 1, maximumWrites: 100 });
 db.rowsWritten = 0;
 const oversizedExecution = await callBootstrap({ sourceType: "mmc", fileId: oversizedFile.id, maximumEventRows: 1, maximumWrites: 100, execute: true, planRevision: oversizedPlan.payload.planRevision });
@@ -173,7 +235,12 @@ db.rowsWritten = 0;
 const correctedEvents = { ...initialEvents, "TERM TRAINEE": [event("trainee-1", "2026-08-03", "Sick leave")] };
 const corrected = await replaceDerivedRosterFile(db, file, doctors, correctedEvents);
 assert.equal(corrected.changes.events, 1, "one correction must change one event fact");
-assert.ok(db.rowsWritten <= 6, `one correction wrote ${db.rowsWritten} rows`);
+assert.ok(db.rowsWritten <= 9, `one crash-safe correction wrote ${db.rowsWritten} rows`);
+const correctedStatus = (await queryRosterFileStatusSummaries(db, { expectedFileIds: [file.id] }))[0];
+assert.equal(correctedStatus.eventCount, 2);
+assert.equal(correctedStatus.indexedDoctors, 2);
+assert.equal(correctedStatus.derivedState, "ready");
+assert.ok(correctedStatus.statusRevision.length <= 36, "status revisions must remain fixed-size");
 
 db.rowsWritten = 0;
 await assert.rejects(

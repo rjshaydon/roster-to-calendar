@@ -5,16 +5,17 @@
 - Branch: `codex/at-a-glance-d1-optimization`
 - Protected production base: `aa9eed8`
 - Current GitHub `main`, rollout branch and active Pages Production release:
-  `0fab128` (`42af062c-cbe8-4eb1-8912-d0ad7abef9df`).
+  `95bc9ad` (`d692bdc9-95a7-4d82-a6d1-47fb9a13851a`).
 - Production D1 is `roster-converter-calendar`, UUID
   `237d0d52-3a7c-4e02-8648-9f4dedbc1cb0`.
-- Migration `0024` is applied. Migrations `0025` through `0030` remain pending.
+- Migrations `0024` and `0025` are applied. Migrations `0026` through `0030`
+  remain pending.
 - The separate `codex/durable-doctor-identity-aliases` branch remains untouched.
 
 ## Production safety correction — 6 September 2026
 
-Status: immediate configuration plan written; implementation pending separate
-approval.
+Status: implemented. Legacy At a glance reads are paused in Production and
+remain permanently fail-closed.
 
 The initial Phase 7 deployment kept all new shared builders/readers inert but
 left `FACILITY_LEGACY_READS_PAUSED=false`. A small Creator test across MMC, MCH,
@@ -28,6 +29,30 @@ The required immediate correction is documented in
 read pause without touching D1, then wait for a fresh UTC quota day. Production
 legacy reads must remain disabled permanently. A missing shared publication
 must return `preparing` or unavailable rather than historical SQL.
+
+## Creator roster-status correction — 7 September 2026
+
+Status: immediate pre-D1 guard deployed; durable replacement and its
+pre-commit remediation pass locally and have not been deployed or migrated
+remotely.
+
+A one-hour Insights window around an ordinary Creator app load showed ten
+executions of the status route's grouped `roster_events` count. Those calls
+examined 364,620 rows, averaging 36,462 rows per execution. The same operation
+also loaded retained raw-file history. Commit `95bc9ad` now returns unavailable
+before those repository reads while roster writes are paused, and no further
+broad status count was observed in the following checkpoint.
+
+The durable replacement is specified and tracked in
+[`calendar-store-status-d1-remediation-plan.md`](./calendar-store-status-d1-remediation-plan.md).
+It adds a compact per-file summary after the existing migration sequence,
+maintains it incrementally without verification counts, bounds and coalesces
+status reads, separates doctor discovery and keeps a dedicated fail-closed
+switch. A later review's pre-commit blockers have been remediated and verified
+locally. The work and evidence are tracked in
+[`calendar-store-status-precommit-remediation-plan.md`](./calendar-store-status-precommit-remediation-plan.md).
+The completed change must still be rolled out separately before roster
+automation is restored.
 
 ## Phase 0: local safety harness and baseline
 

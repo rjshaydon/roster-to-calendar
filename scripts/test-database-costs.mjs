@@ -17,6 +17,14 @@ db.exec(`
   CREATE INDEX idx_compact_coverage ON roster_file_coverage(source_type, coverage_start, coverage_end, file_id);
   CREATE TABLE facility_term_staff_contributions (source_type TEXT, term_start TEXT, doctor_key TEXT, file_id TEXT, display_name TEXT, PRIMARY KEY(source_type,term_start,doctor_key,file_id));
   CREATE INDEX idx_compact_staff ON facility_term_staff_contributions(source_type,term_start,doctor_key);
+  CREATE TABLE roster_file_status_summaries (file_id TEXT PRIMARY KEY, source_type TEXT, active INTEGER, updated_at TEXT, event_count INTEGER);
+  CREATE INDEX idx_compact_roster_status ON roster_file_status_summaries(active,source_type,updated_at,file_id);
+  CREATE TABLE roster_sources (id TEXT PRIMARY KEY, label TEXT);
+  CREATE INDEX idx_roster_sources_label_id ON roster_sources(label,id);
+  CREATE TABLE roster_sync_runs (id TEXT PRIMARY KEY, source_id TEXT, started_at TEXT);
+  CREATE INDEX idx_roster_sync_runs_source_started_id ON roster_sync_runs(source_id,started_at DESC,id DESC);
+  CREATE TABLE roster_dispatches (id TEXT PRIMARY KEY, requested_at TEXT);
+  CREATE INDEX idx_roster_dispatches_requested_id ON roster_dispatches(requested_at DESC,id DESC);
 `);
 
 const sources = ["mmc", "ddh", "casey", "mch", "vhh"];
@@ -26,12 +34,14 @@ db.exec("BEGIN");
 const addFile = db.prepare("INSERT INTO roster_files VALUES (?, ?, 1)");
 const addCoverage = db.prepare("INSERT INTO roster_file_coverage VALUES (?, ?, '2026-01-01', '2026-07-01')");
 const addCompactStaff = db.prepare("INSERT INTO facility_term_staff_contributions VALUES (?, '2026-05-04', ?, ?, ?)");
+const addRosterStatus = db.prepare("INSERT INTO roster_file_status_summaries VALUES (?, ?, 1, '2026-09-07T00:00:00Z', ?)");
 const addDoctor = db.prepare("INSERT INTO roster_file_doctors VALUES (?, ?, ?, ?, ?, 'roster')");
 const addEvent = db.prepare("INSERT INTO roster_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Day', '{}')");
 for (const source of sources) {
   const file = `fixture-${source}`;
   addFile.run(file, source);
   addCoverage.run(file, source);
+  addRosterStatus.run(file, source, doctorsPerSource * days);
   for (let doctor = 0; doctor < doctorsPerSource; doctor += 1) {
     const key = `${source.toUpperCase()} DOCTOR ${String(doctor).padStart(3, "0")}`;
     addDoctor.run(file, source, key, key, doctor < 25 ? "SMS" : "Registrar");
@@ -44,6 +54,17 @@ for (const source of sources) {
 }
 const addContact = db.prepare("INSERT INTO contact_list_files VALUES (?, ?, ?)");
 for (let index = 0; index < 40; index += 1) addContact.run(`contact-${index}`, "monash", `2026-06-${String(30 - (index % 30)).padStart(2, "0")}`);
+const addSource = db.prepare("INSERT INTO roster_sources VALUES (?, ?)");
+for (let index = 0; index < 16; index += 1) addSource.run(`source-${index}`, `Source ${String(index).padStart(2, "0")}`);
+const addRun = db.prepare("INSERT INTO roster_sync_runs VALUES (?, ?, ?)");
+const addDispatch = db.prepare("INSERT INTO roster_dispatches VALUES (?, ?)");
+for (let index = 0; index < 10000; index += 1) {
+  const stamp = `2026-09-${String(1 + (index % 7)).padStart(2, "0")}T${String(index % 24).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}:00Z`;
+  addRun.run(`run-${String(index).padStart(5, "0")}`, `source-${index % 16}`, stamp);
+  addDispatch.run(`dispatch-${String(index).padStart(5, "0")}`, stamp);
+}
+const addInactiveRosterStatus = db.prepare("INSERT INTO roster_file_status_summaries VALUES (?, ?, 0, '2026-01-01T00:00:00Z', 0)");
+for (let index = 0; index < 150; index += 1) addInactiveRosterStatus.run(`historical-${index}`, "mmc");
 db.exec("COMMIT");
 
 const cases = {
@@ -55,6 +76,11 @@ const cases = {
   compactCoverage: [`SELECT c.file_id,c.coverage_start,c.coverage_end FROM roster_file_coverage c JOIN roster_files f ON f.id=c.file_id WHERE f.active=1 AND c.source_type=?`, ["mmc"]],
   compactStaff: [`SELECT s.doctor_key,MAX(s.display_name) FROM facility_term_staff_contributions s JOIN roster_files f ON f.id=s.file_id WHERE f.active=1 AND s.source_type=? AND s.term_start=? GROUP BY s.doctor_key`, ["mmc", "2026-05-04"]],
   bootstrapEvents: [`SELECT id, doctor_key, display_name, seniority, start_date, end_date, event_json FROM roster_events WHERE file_id=? LIMIT ?`, ["fixture-mmc", 25001]],
+  compactRosterStatus: [`SELECT file_id, source_type, event_count FROM roster_file_status_summaries WHERE active=1 ORDER BY source_type,updated_at,file_id LIMIT 100`, []],
+  expectedRosterStatus: [`SELECT file_id, source_type, event_count FROM roster_file_status_summaries WHERE file_id IN (?, ?) LIMIT 100`, ["fixture-mmc", "historical-149"]],
+  boundedSources: [`SELECT * FROM roster_sources ORDER BY label,id LIMIT 16`, []],
+  latestSourceRun: [`SELECT * FROM roster_sync_runs WHERE source_id=? ORDER BY started_at DESC,id DESC LIMIT 1`, ["source-3"]],
+  latestDispatch: [`SELECT * FROM roster_dispatches ORDER BY requested_at DESC,id DESC LIMIT 1`, []],
 };
 
 function plan(sql, bindings) {
@@ -68,7 +94,7 @@ for (const [label, [sql, bindings]] of Object.entries(cases)) {
 }
 
 const totalEvents = sources.length * doctorsPerSource * days;
-report.fixture = { files: sources.length, doctors: sources.length * doctorsPerSource, events: totalEvents };
+report.fixture = { files: sources.length, doctors: sources.length * doctorsPerSource, events: totalEvents, syncRuns: 10000, dispatches: 10000, inactiveRetainedSummaries: 150 };
 report.estimates = {
   staff: "candidate membership rows plus repeated event-index probes; grows with files/membership and covered history",
   coverage: `${doctorsPerSource * days} ED event rows examined to return one aggregate row`,
@@ -78,6 +104,11 @@ report.estimates = {
   compactCoverage: "one compact row per contributing active file; zero roster-event rows",
   compactStaff: "one compact contribution per doctor/file for the selected ED/term; zero roster-event rows",
   bootstrapEvents: "at most 25,001 rows from one exact file-index walk, with no database sort",
+  compactRosterStatus: "at most 100 compact rows; zero roster-event rows and independent of roster history",
+  expectedRosterStatus: "at most 100 primary-key probes for explicitly expected files",
+  boundedSources: "at most 16 rows from an ordered source index walk",
+  latestSourceRun: "one row from an exact source/latest-run index probe",
+  latestDispatch: "one row from the requested-at dispatch index",
 };
 
 assert.equal(totalEvents, 109200);
@@ -89,5 +120,13 @@ assert.ok(report.compactCoverage.plan.every((line) => !/roster_events/.test(line
 assert.ok(report.compactStaff.plan.every((line) => !/roster_events/.test(line)), "compact staff must not access roster events");
 assert.ok(report.bootstrapEvents.plan.some((line) => /SEARCH roster_events USING INDEX idx_events_file \(file_id=\?\)/.test(line)), "bootstrap must use the exact file index");
 assert.equal(report.bootstrapEvents.plan.some((line) => /SCAN roster_events|TEMP B-TREE/i.test(line)), false, "bootstrap must not scan or sort roster history before its sentinel limit");
+assert.ok(report.compactRosterStatus.plan.some((line) => /idx_compact_roster_status/.test(line)), "roster status must use its compact active index");
+assert.equal(report.compactRosterStatus.plan.some((line) => /TEMP B-TREE|roster_events/i.test(line)), false, "roster status must not sort or inspect roster history");
+assert.ok(report.expectedRosterStatus.plan.some((line) => /sqlite_autoindex_roster_file_status_summaries_1/.test(line)), "expected roster status must use primary-key probes");
+assert.ok(report.boundedSources.plan.some((line) => /idx_roster_sources_label_id/.test(line)), "source status must use its bounded ordering index");
+assert.ok(report.latestSourceRun.plan.some((line) => /idx_roster_sync_runs_source_started_id/.test(line)), "latest source run must use the exact source/history index");
+assert.equal(report.latestSourceRun.plan.some((line) => /TEMP B-TREE|SCAN roster_sync_runs/i.test(line)), false, "latest source run must not scan or sort run history");
+assert.ok(report.latestDispatch.plan.some((line) => /idx_roster_dispatches_requested_id/.test(line)), "latest dispatch must use its history index");
+assert.equal(report.latestDispatch.plan.some((line) => /TEMP B-TREE/i.test(line)), false, "latest dispatch must use its ordered index without a temporary sort");
 
 console.log(JSON.stringify(report, null, 2));

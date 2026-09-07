@@ -377,12 +377,14 @@ let otherUsersExpandedBySearch = false;
 const ROSTER_HOSPITAL_SORT_RANK = { mmc: 0, ddh: 1, casey: 2, mch: 3, vhh: 4 };
 let calendarStoreStatus = null;
 let calendarStoreStatusError = "";
+let calendarStoreStatusRequest = null;
 let rosterSyncStates = new Map();
 const activeManualReparseIds = new Set();
 const activeAutomatedSourceRefreshIds = new Set();
 const pendingRemovedImportIds = new Set();
 let rosterRemovalRetryRunId = 0;
 let rosterSyncRefreshTimer = 0;
+let rosterSyncRefreshDelay = 5000;
 let lastRosterPersistence = null;
 let adminConsoleOpen = false;
 let adminConsoleLoading = false;
@@ -15833,7 +15835,7 @@ function restoreCreatorImportFilesIfNeeded() {
 async function syncCreatorFileListFromStore(options = {}) {
   if (!isViewingCreatorAccount() || !cloudAvailable) return;
   if (!selectedFiles.length) restoreCreatorImportFilesIfNeeded();
-  await refreshCalendarStoreStatus({ silent: true, includeAvailableDoctors: options.includeAvailableDoctors === true }).catch(() => null);
+  await refreshCalendarStoreStatus({ silent: true }).catch(() => null);
   if ((calendarStoreStatus?.files || []).length) {
     mergeSelectedFilesWithRosterStoreStatus(calendarStoreStatus, {
       force: true,
@@ -16185,7 +16187,7 @@ async function pollCalendarAfterRosterChange() {
             }
             renderDoctorState();
             setStatus("Calendar loaded.");
-            void syncCreatorFileListFromStore({ includeAvailableDoctors: true }).catch(() => null);
+            void syncCreatorFileListFromStore().catch(() => null);
             return;
           }
         } catch {
@@ -16247,18 +16249,18 @@ async function refreshAvailableDoctorsAfterRosterChange(options = {}) {
   } catch {
     // Keep the last repository-backed doctor list.
   }
-  for (const delay of [0, 3000, 10000, 20000]) {
-    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
-    await refreshCalendarStoreStatus({
-      silent: true,
-      includeAvailableDoctors: true,
-      mergeAvailableDoctors,
-    }).catch(() => null);
-    try {
-      await syncCreatorDoctorPickerWithRemainingRosters({ localOnly });
-    } catch {
-      // Keep the last merged doctor list.
-    }
+  await refreshCalendarStoreStatus({ silent: true }).catch(() => null);
+  const data = await calendarStoreRequestWithRetry("listRosterDoctors", {}, { attempts: 2 }).catch(() => null);
+  if (Array.isArray(data?.availableDoctors)) {
+    const incomingDoctors = sanitizeAvailableRosterDoctors(data.availableDoctors);
+    availableRosterDoctors = mergeAvailableDoctors
+      ? mergeAvailableRosterDoctors(availableRosterDoctors, incomingDoctors)
+      : incomingDoctors;
+  }
+  try {
+    await syncCreatorDoctorPickerWithRemainingRosters({ localOnly });
+  } catch {
+    // Keep the last merged doctor list.
   }
   renderDoctorState();
   syncAccountsButton();
@@ -17794,6 +17796,8 @@ async function refreshAutomatedRosterSource(sourceId, historicalRange = null) {
 
 async function waitForAutomatedRosterSourceRefresh(sourceId, label, previousSuccessAt = "", expectedRunIds = []) {
   let sawPendingState = false;
+  let refreshDelay = 5000;
+  let previousRevision = String(calendarStoreStatus?.statusRevision || "");
   const trackedRunIds = new Set((Array.isArray(expectedRunIds) ? expectedRunIds : []).map((id) => String(id || "")).filter(Boolean));
   for (;;) {
     const source = (calendarStoreStatus?.rosterSourceStatuses || []).find((item) => item?.id === sourceId);
@@ -17809,11 +17813,6 @@ async function waitForAutomatedRosterSourceRefresh(sourceId, label, previousSucc
       return;
     }
     if (trackedRunIds.size && trackedRuns.length < trackedRunIds.size) sawPendingState = true;
-    if (trackedRunIds.size) {
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-      await refreshCalendarStoreStatus({ silent: true });
-      continue;
-    }
     if (source?.state === "received" && (sawPendingState || String(source.lastSuccessAt || "") !== previousSuccessAt)) {
       await loadCloudCalendarEvents();
       if (currentSnapshot) renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot?.session || {});
@@ -17821,8 +17820,11 @@ async function waitForAutomatedRosterSourceRefresh(sourceId, label, previousSucc
       return;
     }
     if (source?.state === "failed") throw new Error(source.lastError || `${label} update failed.`);
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+    await new Promise((resolve) => setTimeout(resolve, refreshDelay));
     await refreshCalendarStoreStatus({ silent: true });
+    const revision = String(calendarStoreStatus?.statusRevision || "");
+    refreshDelay = previousRevision && revision === previousRevision ? Math.min(20000, Math.max(10000, refreshDelay * 2)) : 5000;
+    previousRevision = revision;
   }
 }
 
@@ -17984,25 +17986,30 @@ function sanitizeGlobalUnresolvedShiftCodes(items) {
 
 async function refreshCalendarStoreStatus(options = {}) {
   if (!isCreatorAuthenticated() || !cloudAvailable) return;
+  if (document.hidden && options.silent !== false) return;
+  if (calendarStoreStatusRequest) return calendarStoreStatusRequest;
+  calendarStoreStatusRequest = performCalendarStoreStatusRefresh(options)
+    .finally(() => { calendarStoreStatusRequest = null; });
+  return calendarStoreStatusRequest;
+}
+
+async function performCalendarStoreStatusRefresh(options = {}) {
+  const expectedFileIds = [...new Set([
+    ...selectedFiles.map((entry) => entry.id),
+    ...(Array.isArray(options.expectedFileIds) ? options.expectedFileIds : []),
+  ].filter(Boolean))].slice(0, 100);
   const statusPayload = {
     selectedDoctorKey: rosterStatusDoctorKey(),
-    expectedFileIds: selectedFiles.map((entry) => entry.id),
-    ...(options.includeAvailableDoctors ? { includeAvailableDoctors: true } : {}),
+    expectedFileIds,
+    ...(calendarStoreStatus?.statusRevision ? { statusRevision: calendarStoreStatus.statusRevision } : {}),
     ...(options.lightweight !== false ? { lightweight: true } : {}),
   };
   const requestStatus = options.useRetry === false
     ? () => calendarStoreRequest("calendarStoreStatus", statusPayload)
-    : () => calendarStoreRequestWithRetry("calendarStoreStatus", statusPayload, { attempts: options.attempts || 4 });
+    : () => calendarStoreRequestWithRetry("calendarStoreStatus", statusPayload, { attempts: Math.min(2, options.attempts || 2) });
   try {
     const data = await requestStatus();
     calendarStoreStatus = { ...data, checkedAt: new Date().toISOString() };
-    if (options.includeAvailableDoctors === true && Array.isArray(data.availableDoctors)) {
-      const incomingDoctors = sanitizeAvailableRosterDoctors(data.availableDoctors);
-      const shouldMergeDoctors = options.mergeAvailableDoctors === true;
-      availableRosterDoctors = shouldMergeDoctors
-        ? mergeAvailableRosterDoctors(availableRosterDoctors, incomingDoctors)
-        : incomingDoctors;
-    }
     if (isCreatorAuthenticated() && Array.isArray(data.files) && data.files.length) {
       restoreCreatorImportFilesIfNeeded();
       mergeSelectedFilesWithRosterStoreStatus(calendarStoreStatus, { force: true });
@@ -18018,13 +18025,16 @@ async function refreshCalendarStoreStatus(options = {}) {
       }
       renderDoctorState();
     }
+    renderFileSurfaces();
+    return data;
   } catch (error) {
     if (!options.silent) {
       calendarStoreStatusError = error.message || "Could not check roster database status.";
       setStatus(calendarStoreStatusError, true);
     }
+    renderFileSurfaces();
+    return null;
   }
-  renderFileSurfaces();
 }
 
 async function toggleAdminConsole() {
@@ -18220,27 +18230,14 @@ async function calendarStoreRequestWithRetry(action, extra = {}, options = {}) {
 
 async function waitForRosterFilePersistence(entry, expectedFileIds = [], options = {}) {
   const timeoutMs = Number(options.timeoutMs || 180000);
-  const pollMs = Number(options.pollMs || 2500);
+  const observationMs = Number(options.observationMs || 500);
   const started = Date.now();
-  let pollCount = 0;
+  scheduleRosterSyncRefresh();
   while (Date.now() - started < timeoutMs) {
-    pollCount += 1;
-    let latestStatus = null;
-    try {
-      latestStatus = await calendarStoreRequestWithRetry("calendarStoreStatus", {
-        selectedDoctorKey: selectedDoctor()?.key || OWNER_DOCTOR_KEY,
-        expectedFileIds,
-      }, { attempts: 4 });
-    } catch (error) {
-      await new Promise((resolve) => setTimeout(resolve, pollMs));
-      continue;
-    }
-    calendarStoreStatus = { ...latestStatus, checkedAt: new Date().toISOString() };
-    reconcileRosterSyncStates(calendarStoreStatus);
-    renderFileSurfaces();
-    const statusFile = (latestStatus.files || []).find((file) => file.id === entry.id);
+    const latestStatus = calendarStoreStatus;
+    const statusFile = (latestStatus?.files || []).find((file) => file.id === entry.id);
     if (isRosterFileStatusHealthy(statusFile)) return latestStatus;
-    await new Promise((resolve) => setTimeout(resolve, pollMs));
+    await new Promise((resolve) => setTimeout(resolve, observationMs));
   }
   throw new Error(`${entry.name || "Roster file"} was not confirmed in D1 before the save timed out.`);
 }
@@ -18288,12 +18285,14 @@ async function saveDerivedCalendarFilePayload(payload, entry, expectedFileIds) {
     skipStatus: true,
   }), { attempts: 4 });
   const doctorKeys = (payload.doctors || []).map((doctor) => doctor.key).filter(Boolean);
+  let indexedEventCount = 0;
   for (let index = 0; index < doctorKeys.length; index += LARGE_ROSTER_DOCTOR_CHUNK) {
     const keys = doctorKeys.slice(index, index + LARGE_ROSTER_DOCTOR_CHUNK);
     const chunkDoctors = (payload.doctors || []).filter((doctor) => keys.includes(doctor.key));
     const eventsByDoctor = Object.fromEntries(keys.map((key) => [key, payload.eventsByDoctor?.[key] || []]));
     const issuesByDoctor = Object.fromEntries(keys.map((key) => [key, payload.issuesByDoctor?.[key] || []]));
     const chunkEvents = keys.reduce((total, key) => total + (payload.eventsByDoctor?.[key]?.length || 0), 0);
+    indexedEventCount += chunkEvents;
     setRosterSyncState(entry, "saving", `Saving ${Math.min(index + keys.length, doctorKeys.length)}/${doctorKeys.length} doctors…`);
     await calendarStoreRequestWithRetry("saveDerivedCalendarFile", slimDerivedCalendarRequest(payload, {
       phase: "events",
@@ -18301,6 +18300,7 @@ async function saveDerivedCalendarFilePayload(payload, entry, expectedFileIds) {
       eventsByDoctor,
       issuesByDoctor,
       expectedFileIds,
+      indexedEventCount,
       skipStatus: true,
     }), { attempts: 4 });
   }
@@ -18362,13 +18362,10 @@ async function saveSelectedRosterFilesToD1(imports = selectedFiles, options = {}
   }
   if (isCreatorAuthenticated()) {
     try {
-      latestStatus = await calendarStoreRequest("calendarStoreStatus", {
-        selectedDoctorKey: selectedDoctor()?.key || OWNER_DOCTOR_KEY,
-        expectedFileIds,
-        includeAvailableDoctors: true,
-      });
-      if (Array.isArray(latestStatus.availableDoctors)) {
-        applyAuthoritativeAvailableDoctors(latestStatus.availableDoctors);
+      latestStatus = await refreshCalendarStoreStatus({ silent: true, expectedFileIds }) || latestStatus;
+      const doctorsResponse = await calendarStoreRequest("listRosterDoctors");
+      if (Array.isArray(doctorsResponse.availableDoctors)) {
+        applyAuthoritativeAvailableDoctors(doctorsResponse.availableDoctors);
       }
       calendarStoreStatusError = "";
     } catch (error) {
@@ -18446,15 +18443,39 @@ function setRosterSyncState(entry, status, message = "", mode = "sync") {
 }
 
 function finishRosterSync() {
-  if (![...rosterSyncStates.values()].some((state) => ["pending", "parsing", "saving"].includes(state.status))) {
-    clearInterval(rosterSyncRefreshTimer);
+  if (!hasActiveRosterSyncJobs()) {
+    clearTimeout(rosterSyncRefreshTimer);
     rosterSyncRefreshTimer = 0;
+    rosterSyncRefreshDelay = 5000;
   }
 }
 
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    clearTimeout(rosterSyncRefreshTimer);
+    rosterSyncRefreshTimer = 0;
+    return;
+  }
+  if (!hasActiveRosterSyncJobs()) return;
+  rosterSyncRefreshDelay = 5000;
+  void refreshCalendarStoreStatus({ silent: true }).finally(scheduleRosterSyncRefresh);
+});
+
+function hasActiveRosterSyncJobs() {
+  return [...rosterSyncStates.values()].some((state) => ["pending", "uploading-source", "parsing", "saving"].includes(state.status));
+}
+
 function scheduleRosterSyncRefresh() {
-  if (rosterSyncRefreshTimer) return;
-  rosterSyncRefreshTimer = setInterval(() => void refreshCalendarStoreStatus({ silent: true }), 5000);
+  if (rosterSyncRefreshTimer || document.hidden || !hasActiveRosterSyncJobs()) return;
+  const previousRevision = String(calendarStoreStatus?.statusRevision || "");
+  rosterSyncRefreshTimer = setTimeout(async () => {
+    rosterSyncRefreshTimer = 0;
+    if (document.hidden || !hasActiveRosterSyncJobs()) return;
+    await refreshCalendarStoreStatus({ silent: true });
+    const unchanged = previousRevision && previousRevision === String(calendarStoreStatus?.statusRevision || "");
+    rosterSyncRefreshDelay = unchanged ? Math.min(20000, Math.max(10000, rosterSyncRefreshDelay * 2)) : 5000;
+    scheduleRosterSyncRefresh();
+  }, rosterSyncRefreshDelay);
 }
 
 function isRosterFileStatusHealthy(file) {
