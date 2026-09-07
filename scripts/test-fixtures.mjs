@@ -952,7 +952,7 @@ assert.match(appSource, /FACILITY_OVERVIEW_COMPACT_SCROLL_THRESHOLD = 28[\s\S]*?
 assert.doesNotMatch(appSource, /facilityOverviewCompactReleaseTimer/, "At a glance should not use a delayed scroll-position release that can rebound after compaction");
 assert.doesNotMatch(appSource, /pointerScroller|setFacilityOverviewScrollDirection\(scroller, movement\)/, "layout-driven scroll movement should never be mistaken for explicit upward input");
 assert.match(appSource, /function facilityOverviewLabel\(\)[\s\S]*?\? "Director overview"[\s\S]*?: "At a glance"/, "Director accounts should call the shared overview Director overview while other accounts retain At a glance");
-assert.match(appSource, /facilityOverviewButton\.textContent = open \? "My calendar" : label/, "The sidebar overview control should become My calendar while the overview is open");
+assert.match(appSource, /facilityOverviewButton\.textContent = open \? "My calendar" : currentFacilityOverviewMaintenance \? `\$\{label\} · temporarily unavailable` : label/, "The sidebar overview control should become My calendar while open and disclose maintenance while closed");
 assert.match(appSource, /addEventListener\("input"[\s\S]*?refreshFacilityOverviewStaffContent\(\);[\s\S]*?renderFacilityOverviewStaffBody\(\);/, "ED staff search should refresh results without replacing its focused input");
 assert.match(
   appSource.match(/function renderFacilityOverviewOnShiftResults[\s\S]*?async function loadFacilityOverviewStaff/)?.[0] || "",
@@ -5039,6 +5039,7 @@ async function postStateRaw(store, payload, db = null, options = {}) {
       ROSTER_ADVANCED_MAINTENANCE_ENABLED: "true",
       // Legacy behaviour remains available only when tests opt out of both
       // default-closed controls explicitly.
+      FACILITY_OVERVIEW_MAINTENANCE_MODE: "false",
       FACILITY_SHARED_EMERGENCY_PAUSED: "false",
       FACILITY_LEGACY_READS_PAUSED: "false",
     },

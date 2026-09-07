@@ -13,8 +13,9 @@ record its evidence, approval, deployment and post-deployment observation here.
 No entry may be removed after restoration; change its state to **Restored** so
 the history remains auditable.
 
-Current verified Production code: `2af89c0` on 7 September 2026. The planned
-zero-D1 At a glance maintenance gate is documented but not yet implemented.
+Current verified Production code before this change: `2af89c0` on 7 September
+2026. The zero-D1 At a glance maintenance gate is implemented in the change
+that updates this register and is pending deployment verification.
 Effective Production configuration was read back after that deployment with
 all facility readers/builders, roster and contact automation, roster status,
 bootstrap and advanced-maintenance controls closed.
@@ -36,8 +37,8 @@ the reset-day runbook.
   outcome is provided by a safer mechanism.
 - **Still live** — listed to prevent accidental removal or confusion with a
   paused feature.
-- **Planned pause** — documented before implementation, in accordance with this
-  register's change-control rule.
+- **Pending deployment** — implemented and tested locally but not yet verified
+  as the active Production deployment.
 
 ## Configuration control index
 
@@ -47,7 +48,7 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 
 | Control | Current safe value | Registered under |
 | --- | --- | --- |
-| `FACILITY_OVERVIEW_MAINTENANCE_MODE` | Planned `true`, otherwise missing must fail closed | FR-01–FR-04 |
+| `FACILITY_OVERVIEW_MAINTENANCE_MODE` | `true`; missing or malformed also fails closed | FR-01–FR-04 |
 | `FACILITY_SHARED_ROLLOUT_ACTIVE` | `false` | FR-01 |
 | `FACILITY_SHARED_EMERGENCY_PAUSED` | `true` | FR-01 |
 | `FACILITY_LEGACY_READS_PAUSED` | `true` permanently | FR-01, FR-17 |
@@ -104,9 +105,9 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 
 ### FR-02 — At a glance cached display during maintenance
 
-- **State:** Planned pause, not yet implemented.
+- **State:** Pending deployment. Implemented fail-closed locally.
 - **Includes:** browser-local saved On shift, Staff, metadata and range views.
-- **User effect after the planned gate:** No cached roster or telephone data is
+- **User effect:** No cached roster or telephone data is
   shown while global maintenance is active. Cached records remain stored and
   are not deleted.
 - **Reason:** Browser snapshots are device-specific, may be stale and may
@@ -120,9 +121,8 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 
 ### FR-03 — Automatic On shift launch and contact refresh
 
-- **State:** On shift data is paused; 60-second contact polling remains coded
-  but is useful only when the view is available. The zero-D1 maintenance plan
-  will explicitly suppress both automatic launch and polling.
+- **State:** Pending deployment. Automatic launch and 60-second contact polling
+  are explicitly suppressed while maintenance is active.
 - **User effect:** Clinical users no longer receive the intended automatic live
   On shift workspace while At a glance is paused.
 - **Restoration outcome:** Reinstate automatic launch for eligible clinical
@@ -321,6 +321,33 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
   should use a user-initiated retry or bounded backoff, never a duplicate fetch
   in the same opening sequence.
 
+## Permanent safety mechanisms
+
+These controls are not temporary feature pauses and must remain in place when
+features are restored:
+
+- The account-wide GraphQL quota checker and its fail-closed GO/NO-GO rules.
+  Dashboard billing summaries are not a substitute for D1 row metrics.
+- A complete inventory of every D1 database, Worker, Pages function, scheduled
+  job and other caller sharing the account allowance.
+- Local development isolation: local databases and storage by default, with no
+  inherited Production credentials or bindings.
+- Numbered, reviewed migrations and no runtime schema inspection or DDL.
+- Query-plan, estimated rows-examined, exact rows-returned and capacity tests;
+  correctness fixtures remain separate from scale tests.
+- Independent default-off capability flags and exact allowlists for readers,
+  builders, imports, roster automation, contact automation and maintenance.
+- Control-plane configuration readback after deployment, without exercising an
+  application or D1 data route.
+- A passive fresh-day baseline and settled account-wide measurements before
+  and after each deliberately authorised canary.
+- A tested non-D1 rollback/stop path that remains usable after quota exhaustion.
+- Per-tab request budgets, request coalescing, one in-flight request per view,
+  visibility-aware polling and no automatic retry storms.
+
+Restoration evidence must demonstrate these protections, not remove or bypass
+them for convenience.
+
 ## Unsafe mechanism replaced permanently
 
 ### FR-16 — Runtime schema inspection and creation
@@ -412,7 +439,7 @@ mechanisms are intentionally excluded from restoration.
 | `9927321` | Added accurate maintenance messaging in Admin → Files (FR-05). |
 | `6bda8b7` | Separated and closed roster, contact, bootstrap, queue and maintenance capabilities (FR-01, FR-04, FR-07, FR-08, FR-11, FR-12). |
 | `2af89c0` | Reduced automatic status writes, calendar retries and duplicate By stream requests (FR-13–FR-15). |
-| Not yet implemented | Zero-D1 At a glance maintenance UI and pre-authentication gate (FR-01–FR-04). |
+| Implementation commit containing this register update | Added the zero-D1 At a glance maintenance UI and pre-authentication gate (FR-01–FR-04). |
 
 ## Restoration record template
 

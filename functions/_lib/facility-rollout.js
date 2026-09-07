@@ -1,6 +1,10 @@
 const ENABLED = new Set(["1", "true", "yes", "on"]);
 const DISABLED = new Set(["0", "false", "no", "off"]);
 
+export function facilityOverviewMaintenanceMode(env = {}) {
+  return !DISABLED.has(String(env.FACILITY_OVERVIEW_MAINTENANCE_MODE || "").trim().toLowerCase());
+}
+
 export function facilityRolloutPaused(env = {}) {
   return !DISABLED.has(String(env.FACILITY_SHARED_EMERGENCY_PAUSED || "").trim().toLowerCase());
 }

@@ -108,6 +108,7 @@ try {
   assert.match(localDevSource, /"d1", "migrations", "apply", "ROSTER_DB", "--local"/);
   assert.match(localDevSource, /"d1", "execute", "ROSTER_DB", "--local"/);
   assert.match(localDevSource, /"--binding", "LOCAL_ONLY=true"/);
+  assert.match(localDevSource, /"--binding", "FACILITY_OVERVIEW_MAINTENANCE_MODE=false"/);
   assert.match(localDevSource, /"--binding", "EMAIL_DELIVERY_ENABLED=false"/);
   assert.doesNotMatch(localDevSource, /localDevArguments[\s\S]{0,800}"--remote"/);
 

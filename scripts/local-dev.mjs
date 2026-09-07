@@ -60,6 +60,7 @@ function safeChildEnvironment() {
   environment.LOCAL_ONLY = "true";
   environment.ROSTER_AUTOMATION_ENABLED = "false";
   environment.ROSTER_AUTOMATION_WRITES_ENABLED = "false";
+  environment.FACILITY_OVERVIEW_MAINTENANCE_MODE = "false";
   environment.FACILITY_BOOTSTRAP_INSPECTION_ENABLED = "false";
   environment.FACILITY_BOOTSTRAP_EXECUTION_ENABLED = "false";
   environment.FACILITY_BOOTSTRAP_FILE_ALLOWLIST = "";
@@ -367,6 +368,7 @@ function localDevArguments(port) {
     "--port", String(port),
     "--persist-to", LOCAL_STATE_DIRECTORY,
     "--binding", "LOCAL_ONLY=true",
+    "--binding", "FACILITY_OVERVIEW_MAINTENANCE_MODE=false",
     "--binding", "ROSTER_AUTOMATION_ENABLED=false",
     "--binding", "ROSTER_AUTOMATION_WRITES_ENABLED=false",
     "--binding", "ROSTER_STATUS_SUMMARY_ENABLED=false",

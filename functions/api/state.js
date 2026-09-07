@@ -6,7 +6,7 @@ import { advancedRosterMaintenanceEnabled, rosterStatusSummaryEnabled, rosterWri
 import { guardedFetch, localFeatureDisabledResponse } from "../_lib/outbound-network.js";
 import { loadPublishedFacilityDays, loadPublishedFacilityMetadata, loadPublishedFacilityRange, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata } from "../_lib/facility-overview-cache.js";
 import { loadPublishedFacilityContacts, publishFacilityContactResolutions } from "../_lib/facility-contact-cache.js";
-import { facilityBuildSources, facilityLegacyReadsPaused, facilityReadRoute, facilityRolloutCohortEligible } from "../_lib/facility-rollout.js";
+import { facilityBuildSources, facilityLegacyReadsPaused, facilityOverviewMaintenanceMode, facilityReadRoute, facilityRolloutCohortEligible } from "../_lib/facility-rollout.js";
 import { extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentExceptions, findmyshiftLastModified, findmyshiftReportDiagnostics, findmyshiftShiftReport } from "../_lib/findmyshift.js";
 import {
   buildPreviewFromDerivedEvents,
@@ -110,6 +110,33 @@ const SNAPSHOT_BUILDING_RETRY_MS = 15 * 60 * 1000;
 const DOCTOR_PROFILE_SNAPSHOT_BUILDING_RETRY_MS = 2 * 60 * 1000;
 const SNAPSHOT_GLOBAL_WARMUP_LIMIT = 25;
 const FACILITY_OVERVIEW_STREAM_SENIORITIES = new Set(["SMS", "CMO", "Senior Registrar", "Transitional/Intermediate Registrar", "Junior Registrar", "HMO", "Intern", "NP", "Physio", "Unknown", "ALL"]);
+const FACILITY_OVERVIEW_MAINTENANCE_ACTIONS = new Set([
+  "queryFacilityOverviewMetadata",
+  "queryFacilityOverviewByStream",
+  "queryFacilityOverviewOnShift",
+  "queryFacilityOverviewContactList",
+  "queryFacilityOverviewStaff",
+  "queryFacilityOverviewWorkingTogether",
+  "setContactAllocationResolution",
+  "setFacilityStaffDesignation",
+  "clearFacilityStaffDesignation",
+  "setFacilityStaffSeniorityOverride",
+  "setFacilityStaffSeniorityOverrides",
+]);
+const FACILITY_OVERVIEW_MAINTENANCE_MESSAGE = "At a glance is temporarily unavailable while we complete a reliability upgrade. Your roster and settings have not been removed.";
+
+function facilityOverviewMaintenanceResponse() {
+  return Response.json({
+    ok: false,
+    unavailable: true,
+    maintenance: true,
+    retryable: false,
+    error: FACILITY_OVERVIEW_MAINTENANCE_MESSAGE,
+  }, {
+    status: 503,
+    headers: { "Cache-Control": "no-store" },
+  });
+}
 
 function serverTimingHeader(timing = {}) {
   return [
@@ -140,6 +167,13 @@ export async function onRequestPost(context) {
     const mode = String(body?.mode || "login");
     if (String(context.env.LOCAL_ONLY || "").toLowerCase() === "true") {
       console.info(JSON.stringify({ event: "local-api-action", action }));
+    }
+    // This gate intentionally precedes email/password validation, D1 binding
+    // checks, expired-invite cleanup and authentication. Old clients and
+    // direct requests therefore cannot spend a D1 or R2 operation while the
+    // user-facing workspace is in maintenance.
+    if (FACILITY_OVERVIEW_MAINTENANCE_ACTIONS.has(action) && facilityOverviewMaintenanceMode(context.env)) {
+      return facilityOverviewMaintenanceResponse();
     }
     const responseMode = String(body?.responseMode || "full").trim().toLowerCase() === "fast" ? "fast" : "full";
     const realName = String(body?.realName || "").trim();
@@ -264,6 +298,7 @@ export async function onRequestPost(context) {
         defaultDoctorKey: prepared.defaultDoctorKey || "",
         insightsEnabled: prepared.insightsEnabled,
         facilityOverviewEnabled: prepared.facilityOverviewEnabled,
+        facilityOverviewMaintenance: facilityOverviewMaintenanceMode(context.env),
         facilityOverviewAccess: prepared.facilityOverviewAccess,
         nonClinical: prepared.nonClinical,
         directorViewEnabled: prepared.directorViewEnabled,
@@ -639,6 +674,7 @@ export async function onRequestPost(context) {
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
         facilityOverviewEnabled: prepared.facilityOverviewEnabled,
+        facilityOverviewMaintenance: facilityOverviewMaintenanceMode(context.env),
         facilityOverviewAccess: prepared.facilityOverviewAccess,
         nonClinical: prepared.nonClinical,
         directorViewEnabled: prepared.directorViewEnabled,
@@ -698,6 +734,7 @@ export async function onRequestPost(context) {
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
         facilityOverviewEnabled: prepared.facilityOverviewEnabled,
+        facilityOverviewMaintenance: facilityOverviewMaintenanceMode(context.env),
         facilityOverviewAccess: prepared.facilityOverviewAccess,
         nonClinical: prepared.nonClinical,
         directorViewEnabled: prepared.directorViewEnabled,
@@ -739,6 +776,7 @@ export async function onRequestPost(context) {
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
         facilityOverviewEnabled: prepared.facilityOverviewEnabled,
+        facilityOverviewMaintenance: facilityOverviewMaintenanceMode(context.env),
         facilityOverviewAccess: prepared.facilityOverviewAccess,
         nonClinical: prepared.nonClinical,
         directorViewEnabled: prepared.directorViewEnabled,
@@ -799,6 +837,7 @@ export async function onRequestPost(context) {
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
         facilityOverviewEnabled: prepared.facilityOverviewEnabled,
+        facilityOverviewMaintenance: facilityOverviewMaintenanceMode(context.env),
         facilityOverviewAccess: prepared.facilityOverviewAccess,
         nonClinical: prepared.nonClinical,
         directorViewEnabled: prepared.directorViewEnabled,
@@ -1702,6 +1741,7 @@ export async function onRequestPost(context) {
         ok: true,
         facilityOverviewAccountEmail: normalizeEmail(profileAccount?.email),
         facilityOverviewEnabled,
+        facilityOverviewMaintenance: facilityOverviewMaintenanceMode(context.env),
         facilityOverviewAccess,
       });
     }

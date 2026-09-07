@@ -6,6 +6,7 @@ pages_build_output_dir = "public"
 cpu_ms = 30_000
 
 [vars]
+FACILITY_OVERVIEW_MAINTENANCE_MODE = "true"
 FACILITY_SHARED_ROLLOUT_ACTIVE = "false"
 FACILITY_SHARED_EMERGENCY_PAUSED = "true"
 FACILITY_LEGACY_READS_PAUSED = "true"
@@ -47,6 +48,7 @@ bucket_name = "roster-converter-cache"
 preview_bucket_name = "roster-converter-cache-preview"
 
 [env.preview.vars]
+FACILITY_OVERVIEW_MAINTENANCE_MODE = "true"
 FACILITY_SHARED_ROLLOUT_ACTIVE = "false"
 FACILITY_SHARED_EMERGENCY_PAUSED = "true"
 FACILITY_LEGACY_READS_PAUSED = "true"

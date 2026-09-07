@@ -259,6 +259,7 @@ const STATUS_MESSAGE_LIMIT = 5;
 const STATUS_MESSAGE_LIFETIME_MS = 5000;
 const STATUS_MESSAGE_FADE_MS = 240;
 const FACILITY_OVERVIEW_CONTACT_REFRESH_MS = 60_000;
+const FACILITY_OVERVIEW_MAINTENANCE_MESSAGE = "At a glance is temporarily unavailable while we complete a reliability upgrade. Your roster and settings have not been removed.";
 const STATUS_SUPERSEDED_MESSAGES = new Map([
   ["Calendar loaded.", ["Loading calendar...", "Refreshing calendar..."]],
   ["Calendar refreshed.", ["Refreshing calendar..."]],
@@ -325,6 +326,7 @@ let calendarImportPollRunId = 0;
 let currentSubscription = null;
 let currentInsightsEnabled = currentUserRole === "creator";
 let currentFacilityOverviewEnabled = currentUserRole === "creator";
+let currentFacilityOverviewMaintenance = true;
 let currentFacilityOverviewAccess = { mode: currentUserRole === "creator" ? "all" : "denied", isSms: currentUserRole === "creator", workingToday: false, facilityKey: "", today: "" };
 let currentNonClinical = false;
 let currentDirectorViewEnabled = currentUserRole === "creator";
@@ -9184,6 +9186,36 @@ function syncFacilityOverviewAccess() {
   syncFacilityOverviewNavigationState();
 }
 
+function renderFacilityOverviewMaintenance() {
+  cancelFacilityOverviewDataRequest();
+  stopFacilityOverviewContactRefresh();
+  collapseFacilityOverviewContactReview();
+  facilityOverviewState.requestId += 1;
+  facilityOverviewState.byStreamRequestId += 1;
+  facilityOverviewState.onShiftData = null;
+  facilityOverviewState.staffData = null;
+  facilityOverviewState.contactList = null;
+  form?.classList.add("is-facility-overview-active");
+  previewSection?.classList.add("hidden");
+  facilityOverviewSection?.classList.remove("hidden");
+  const heading = facilityOverviewSection?.querySelector(".facility-overview-head h2");
+  const description = facilityOverviewSection?.querySelector(".facility-overview-head .section-head p");
+  const tabs = facilityOverviewSection?.querySelector(".facility-overview-tabs");
+  if (heading) heading.textContent = facilityOverviewLabel();
+  if (description) description.textContent = "This feature will return after the reliability upgrade is complete.";
+  if (facilityOverviewHeader) facilityOverviewHeader.innerHTML = renderFacilityOverviewHeader();
+  tabs?.classList.add("hidden");
+  if (facilityOverviewCsToggle) facilityOverviewCsToggle.classList.add("hidden");
+  if (facilityOverviewControls) facilityOverviewControls.innerHTML = "";
+  if (facilityOverviewBody) {
+    const calendarGuidance = currentNonClinical && currentDirectorViewEnabled ? "" : " Please use My calendar for now.";
+    facilityOverviewBody.classList.remove("is-working-together");
+    facilityOverviewBody.innerHTML = `<div class="facility-overview-results"><article class="issue-card" role="status"><p>${escapeHtml(`${FACILITY_OVERVIEW_MAINTENANCE_MESSAGE}${calendarGuidance}`)}</p></article></div>`;
+  }
+  syncFacilityOverviewAccess();
+  syncFacilityOverviewNavigationState();
+}
+
 function facilityOverviewMelbourneClock(now = new Date()) {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Australia/Melbourne", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
@@ -9277,15 +9309,15 @@ function syncFacilityOverviewNavigationState() {
   if (facilityOverviewSection) facilityOverviewSection.setAttribute("aria-label", `${label} ED overview`);
   if (tabList) tabList.setAttribute("aria-label", `${label} views`);
   if (facilityOverviewButton) {
-    facilityOverviewButton.textContent = open ? "My calendar" : label;
-    facilityOverviewButton.setAttribute("aria-label", open ? "Return to my calendar" : `Open ${label}`);
+    facilityOverviewButton.textContent = open ? "My calendar" : currentFacilityOverviewMaintenance ? `${label} · temporarily unavailable` : label;
+    facilityOverviewButton.setAttribute("aria-label", open ? "Return to my calendar" : currentFacilityOverviewMaintenance ? `${label} is temporarily unavailable` : `Open ${label}`);
   }
   if (mobileFacilityOverviewButton) {
-    mobileFacilityOverviewButton.setAttribute("aria-label", open ? "Return to my calendar" : `${label} ED overview`);
+    mobileFacilityOverviewButton.setAttribute("aria-label", open ? "Return to my calendar" : currentFacilityOverviewMaintenance ? `${label} is temporarily unavailable` : `${label} ED overview`);
     const shortLabel = mobileFacilityOverviewButton.querySelector("[aria-hidden='true']");
     const accessibleLabel = mobileFacilityOverviewButton.querySelector(".sr-only");
     if (shortLabel) shortLabel.textContent = open ? "Cal" : "ED";
-    if (accessibleLabel) accessibleLabel.textContent = open ? "My calendar" : label;
+    if (accessibleLabel) accessibleLabel.textContent = open ? "My calendar" : currentFacilityOverviewMaintenance ? `${label} is temporarily unavailable` : label;
   }
 }
 
@@ -9328,7 +9360,7 @@ function facilityOverviewFacilityOptions() {
 }
 
 async function loadFacilityOverviewMetadata() {
-  if (!canUseFacilityOverview()) return null;
+  if (!canUseFacilityOverview() || currentFacilityOverviewMaintenance) return null;
   const metadataKey = [currentSnapshot?.calendarRevision || currentCalendarRevision || "", formatDateKey(australianTermForDate(new Date()).start), normalizedDoctorSourceTypes(selectedDoctor()).sort().join(",")].join("|");
   if (facilityOverviewState.byStreamMetadataKey === metadataKey) return { ok: true };
   if (facilityOverviewState.byStreamMetadataPromise) return facilityOverviewState.byStreamMetadataPromise;
@@ -9631,6 +9663,7 @@ function applyFacilityOverviewSiteScope() {
 }
 
 function resetFacilityOverviewAccessForEnteredUser() {
+  currentFacilityOverviewMaintenance = true;
   currentFacilityOverviewEnabled = false;
   currentFacilityOverviewAccess = {
     mode: "denied",
@@ -9653,6 +9686,10 @@ function facilityOverviewTargetEmail() {
 
 async function openFacilityOverview(options = {}) {
   if (!canUseFacilityOverview()) return;
+  if (currentFacilityOverviewMaintenance) {
+    renderFacilityOverviewMaintenance();
+    return;
+  }
   refreshFacilityOverviewPreferredFacility();
   if (facilityOverviewSessionNeedsInitialization) resetFacilityOverviewSessionState();
   if (options.preserveFacility !== true && options.preserveStaffTerm !== true) {
@@ -9697,7 +9734,7 @@ async function openFacilityOverview(options = {}) {
 }
 
 async function openFacilityOverviewByStream() {
-  if (!canUseFacilityOverview() || facilityOverviewState.tab !== "by-stream") return;
+  if (!canUseFacilityOverview() || currentFacilityOverviewMaintenance || facilityOverviewState.tab !== "by-stream") return;
   const navigationId = facilityOverviewState.byStreamRequestId;
   facilityOverviewState.byStreamContent = `<article class="issue-card"><p>Loading available streams…</p></article>`;
   renderFacilityOverview();
@@ -9752,8 +9789,18 @@ function facilityOverviewRequestWasCancelled(error) {
 }
 
 function renderFacilityOverview() {
+  if (currentFacilityOverviewMaintenance) {
+    renderFacilityOverviewMaintenance();
+    return;
+  }
   applyFacilityOverviewSiteScope();
   if (!facilityOverviewBody || !facilityOverviewControls) return;
+  const heading = facilityOverviewSection?.querySelector(".facility-overview-head h2");
+  const description = facilityOverviewSection?.querySelector(".facility-overview-head .section-head p");
+  const tabs = facilityOverviewSection?.querySelector(".facility-overview-tabs");
+  if (heading) heading.textContent = facilityOverviewLabel();
+  if (description) description.textContent = "See rostered staff across EDs.";
+  tabs?.classList.remove("hidden");
   if (!facilityOverviewSessionNeedsInitialization) rememberFacilityOverviewTabForCurrentAccount();
   if (facilityOverviewHeader) facilityOverviewHeader.innerHTML = renderFacilityOverviewHeader();
   syncFacilityOverviewTabOrder();
@@ -10079,7 +10126,7 @@ function facilityOverviewByStreamContentFromData(data) {
 }
 
 async function loadFacilityOverviewByStream() {
-  if (!canUseFacilityOverview() || facilityOverviewState.tab !== "by-stream") return;
+  if (!canUseFacilityOverview() || currentFacilityOverviewMaintenance || facilityOverviewState.tab !== "by-stream") return;
   initializeFacilityOverviewByStreamState();
   const startDate = facilityOverviewState.byStreamFrom;
   const endDate = facilityOverviewState.byStreamTo;
@@ -10277,7 +10324,7 @@ function facilityOverviewTogetherDoctorKeys(doctor) {
 }
 
 async function loadFacilityOverviewTogether() {
-  if (!canUseFacilityOverview() || facilityOverviewState.tab !== "together") return;
+  if (!canUseFacilityOverview() || currentFacilityOverviewMaintenance || facilityOverviewState.tab !== "together") return;
   const options = facilityOverviewTogetherStaffOptions();
   const selectedDoctors = facilityOverviewState.togetherStaffKeys
     .map((identity) => options.find((doctor) => doctor.identity === identity))
@@ -10492,7 +10539,7 @@ function facilityOverviewFormatOverlap(start, end) {
 }
 
 async function loadFacilityOverviewOnShift() {
-  if (!canUseFacilityOverview() || facilityOverviewState.tab !== "on-shift") return;
+  if (!canUseFacilityOverview() || currentFacilityOverviewMaintenance || facilityOverviewState.tab !== "on-shift") return;
   stopFacilityOverviewContactRefresh();
   collapseFacilityOverviewContactReview();
   const requestId = facilityOverviewState.requestId + 1;
@@ -10545,6 +10592,7 @@ async function loadFacilityOverviewOnShift() {
 
 function facilityOverviewContactRefreshIsActive() {
   return canUseFacilityOverview()
+    && !currentFacilityOverviewMaintenance
     && isFacilityOverviewOpen()
     && facilityOverviewState.tab === "on-shift"
     && Array.isArray(facilityOverviewState.onShiftData)
@@ -10985,7 +11033,7 @@ function renderFacilityOverviewContactResolutionMenu(contact, assignments) {
 async function saveFacilityOverviewContactResolution(doctorKey) {
   const contactKey = String(facilityOverviewState.contactResolutionMenu || "");
   const contact = (facilityOverviewState.contactList?.contacts || []).find((item) => item.contactKey === contactKey);
-  if (!contact || facilityOverviewState.contactResolutionSaving) return;
+  if (currentFacilityOverviewMaintenance || !contact || facilityOverviewState.contactResolutionSaving) return;
   const existing = (facilityOverviewState.contactList?.resolutions || []).find((resolution) => resolution.contactKey === contactKey);
   facilityOverviewState.contactResolutionSaving = true;
   facilityOverviewState.content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData || []);
@@ -11041,7 +11089,7 @@ function refreshFacilityOverviewStaffActionContent() {
 }
 
 async function loadFacilityOverviewStaff() {
-  if (!canUseFacilityOverview() || facilityOverviewState.tab !== "staff") return;
+  if (!canUseFacilityOverview() || currentFacilityOverviewMaintenance || facilityOverviewState.tab !== "staff") return;
   const term = australianTermForDate(parseDateOnly(facilityOverviewState.staffTermStart || formatDateKey(new Date())));
   facilityOverviewState.staffTermStart = formatDateKey(term.start);
   const requestId = facilityOverviewState.requestId + 1;
@@ -11566,7 +11614,7 @@ function closeFacilityOverviewStaffBulkSeniorityMenu() {
 }
 
 async function setFacilityOverviewStaffDesignation({ designation = "", sourceType = "", doctorKey = "", displayName = "", seniority = "" } = {}) {
-  if (!isViewingCreatorAccount() || !designation || !sourceType || !doctorKey) return;
+  if (currentFacilityOverviewMaintenance || !isViewingCreatorAccount() || !designation || !sourceType || !doctorKey) return;
   const term = australianTermForDate(parseDateOnly(facilityOverviewState.staffTermStart || formatDateKey(new Date())));
   closeFacilityOverviewStaffDesignationMenu();
   try {
@@ -11588,7 +11636,7 @@ async function setFacilityOverviewStaffDesignation({ designation = "", sourceTyp
 }
 
 async function clearFacilityOverviewStaffDesignation(designationId) {
-  if (!isViewingCreatorAccount() || !designationId) return;
+  if (currentFacilityOverviewMaintenance || !isViewingCreatorAccount() || !designationId) return;
   closeFacilityOverviewStaffActionMenu();
   closeFacilityOverviewStaffDesignationMenu();
   try {
@@ -11609,7 +11657,7 @@ async function clearFacilityOverviewStaffDesignation(designationId) {
 }
 
 async function setFacilityOverviewStaffSeniorityOverride({ sourceType = "", doctorKey = "", displayName = "", seniority = "", useRosterSeniority = false, termStart = "" } = {}) {
-  if (!isViewingCreatorAccount() || !sourceType || !doctorKey) return;
+  if (currentFacilityOverviewMaintenance || !isViewingCreatorAccount() || !sourceType || !doctorKey) return;
   const effectiveTermStart = termStart || formatDateKey(australianTermForDate(parseDateOnly(facilityOverviewState.tab === "on-shift" ? facilityOverviewState.date : facilityOverviewState.staffTermStart)).start);
   closeFacilityOverviewStaffActionMenu();
   closeFacilityOverviewStaffSeniorityMenu();
@@ -11635,7 +11683,7 @@ async function setFacilityOverviewStaffSeniorityOverrides({ seniority = "", useR
   const sectionKey = facilityOverviewState.staffMultiSelectSection;
   const selectedStaff = [...facilityOverviewState.staffMultiSelectMembers.values()];
   const sourceType = String(sectionKey || "").split(":")[0];
-  if (!isViewingCreatorAccount() || !sectionKey || !sourceType || !selectedStaff.length || facilityOverviewState.staffMultiSelectSaving) return;
+  if (currentFacilityOverviewMaintenance || !isViewingCreatorAccount() || !sectionKey || !sourceType || !selectedStaff.length || facilityOverviewState.staffMultiSelectSaving) return;
   const termStart = formatDateKey(australianTermForDate(parseDateOnly(facilityOverviewState.staffTermStart || formatDateKey(new Date()))).start);
   facilityOverviewState.staffMultiSelectSaving = true;
   facilityOverviewState.staffBulkSeniorityMenu = null;
@@ -11666,7 +11714,7 @@ async function setFacilityOverviewStaffSeniorityOverrides({ seniority = "", useR
 }
 
 async function openFacilityOverviewStaffSection({ sourceType = "", seniority = "", date = "" } = {}) {
-  if (!canUseFacilityOverview()) return;
+  if (!canUseFacilityOverview() || currentFacilityOverviewMaintenance) return;
   const source = String(sourceType || "").trim().toUpperCase();
   const grade = String(seniority || "").trim();
   const dateKey = String(date || facilityOverviewState.date || "").slice(0, 10);
@@ -14868,6 +14916,7 @@ async function loadDoctorProfileFacilityOverviewAccess(profile) {
     if (activeCalendarMode() !== "doctor-profile" || activeDoctorProfile?.id !== profile.id) return;
     activeDoctorProfile = { ...activeDoctorProfile, facilityOverviewAccountEmail: normalizeEmail(data.facilityOverviewAccountEmail) };
     currentFacilityOverviewEnabled = data.facilityOverviewEnabled === true;
+    currentFacilityOverviewMaintenance = data.facilityOverviewMaintenance !== false;
     currentFacilityOverviewAccess = sanitizeFacilityOverviewAccess(data.facilityOverviewAccess);
     applyFacilityOverviewSiteScope();
     syncFacilityOverviewAccess();
@@ -16350,6 +16399,7 @@ function closeLoginModal() {
 
 async function logoutCurrentUser() {
   beginFacilityOverviewAccountSession();
+  currentFacilityOverviewMaintenance = true;
   try {
     await flushCloudStateSave();
   } catch {
@@ -16434,7 +16484,7 @@ function isNonClinicalDirectorWorkspace() {
 
 function launchNonClinicalDirectorWorkspace(options = {}, loginStartedAt = 0) {
   if (!isNonClinicalDirectorWorkspace() || !calendarTransitionStillCurrent(options.transition)) return false;
-  setStatus("Loading Director overview...");
+  setStatus(currentFacilityOverviewMaintenance ? "At a glance is temporarily unavailable." : "Loading Director overview...");
   // Open the Director UI synchronously, then let its selected data view fetch
   // in the background. Non-clinical Directors do not have a personal calendar,
   // so waiting for calendar hydration here only leaves them at a blank screen.
@@ -16451,7 +16501,7 @@ function launchNonClinicalDirectorWorkspace(options = {}, loginStartedAt = 0) {
 }
 
 function launchClinicalOnShiftWorkspace(options = {}, loginStartedAt = 0) {
-  if (currentNonClinical || !canUseFacilityOverview() || !currentFacilityOverviewAccess.workingToday || !calendarTransitionStillCurrent(options.transition)) return false;
+  if (currentFacilityOverviewMaintenance || currentNonClinical || !canUseFacilityOverview() || !currentFacilityOverviewAccess.workingToday || !calendarTransitionStillCurrent(options.transition)) return false;
   if (facilityOverviewSessionNeedsInitialization) resetFacilityOverviewSessionState();
   facilityOverviewState.tab = "on-shift";
   facilityOverviewState.followOperationalDate = true;
@@ -16475,6 +16525,7 @@ async function loginWithEmail(email, password, options = {}) {
   const loginStartedAt = performance.now();
   try {
     beginFacilityOverviewAccountSession();
+    currentFacilityOverviewMaintenance = true;
     await flushCloudStateSave().catch(() => {});
     cancelScheduledCloudStateSave();
     clearActiveViewedAccountState();
@@ -16643,6 +16694,7 @@ async function restoreCloudState(options = {}) {
     currentSubscription = null;
     currentInsightsEnabled = false;
     currentFacilityOverviewEnabled = false;
+    currentFacilityOverviewMaintenance = true;
     currentNonClinical = false;
     currentDirectorViewEnabled = false;
     closeFacilityOverview();
@@ -17116,6 +17168,7 @@ function saveLocalAccountIdentity(realName = "") {
 
 function applyCloudStateIdentity(data) {
   cloudAvailable = data.cloudAvailable === true;
+  currentFacilityOverviewMaintenance = data.facilityOverviewMaintenance !== false;
   currentCalendarRevision = String(data.snapshotRevision || data.calendarRevision || currentCalendarRevision || "");
   currentUserRole = data.role || currentUserRole;
   // The fast login envelope already includes these two display permissions.
@@ -17154,6 +17207,7 @@ function applyAvailableRosterDoctorsFromData(data) {
 
 function applyCloudStateContext(data) {
   const previousInsightsEnabled = currentInsightsEnabled;
+  currentFacilityOverviewMaintenance = data.facilityOverviewMaintenance !== false;
   currentInsightsEnabled = currentUserRole === "creator" || data.insightsEnabled === true;
   currentFacilityOverviewEnabled = currentUserRole === "creator" || data.facilityOverviewEnabled === true;
   currentNonClinical = data.nonClinical === true;

@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { facilityBuildSources, facilityReadRoute, facilityRolloutPaused, facilitySharedReaderAllowed } from "../functions/_lib/facility-rollout.js";
+import { facilityBuildSources, facilityOverviewMaintenanceMode, facilityReadRoute, facilityRolloutPaused, facilitySharedReaderAllowed } from "../functions/_lib/facility-rollout.js";
 import { automatedRosterQueueEnabled, automatedRosterSourceEnabled, advancedRosterMaintenanceEnabled, facilityMaterializationMaintenanceEnabled } from "../functions/_lib/roster-automation-guard.js";
 import { onRequestPost as materialize } from "../functions/api/automation/facility-materialize.js";
 
 const env = {
+  FACILITY_OVERVIEW_MAINTENANCE_MODE: "false",
   FACILITY_SHARED_ROLLOUT_ACTIVE: "true",
   FACILITY_SHARED_EMERGENCY_PAUSED: "false",
   FACILITY_LEGACY_READS_PAUSED: "false",
@@ -15,6 +16,9 @@ const env = {
   ROSTER_AUTOMATION_QUEUE_ENABLED: "true",
   ROSTER_ADVANCED_MAINTENANCE_ENABLED: "true",
 };
+assert.equal(facilityOverviewMaintenanceMode({}), true, "missing maintenance configuration must fail closed");
+assert.equal(facilityOverviewMaintenanceMode({ FACILITY_OVERVIEW_MAINTENANCE_MODE: "malformed" }), true, "malformed maintenance configuration must fail closed");
+assert.equal(facilityOverviewMaintenanceMode(env), false, "only an explicit false value opens the maintenance gate");
 assert.deepEqual(facilityBuildSources(env, ["MMC", "DDH"]), ["mmc"]);
 assert.equal(facilitySharedReaderAllowed(env, { actorRole: "creator", actorEmail: "creator@example.com", subjectEmail: "creator@example.com", sources: ["mmc"] }), true);
 assert.equal(facilitySharedReaderAllowed(env, { actorRole: "creator", actorEmail: "creator@example.com", subjectEmail: "other@example.com", sources: ["mmc"] }), false, "Creator impersonation must not enter the Creator-only cohort");

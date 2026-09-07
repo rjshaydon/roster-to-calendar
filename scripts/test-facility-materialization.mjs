@@ -420,7 +420,7 @@ async function callSharedAction(body, options = {}) {
   db.sql = [];
   const response = await stateHandler({
     request: new Request("http://127.0.0.1/api/state", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "doctor@example.com", password, ...body }) }),
-    env: { ROSTER_DB: db, ROSTER_FILES: options.r2 || r2, FACILITY_SHARED_ROLLOUT_ACTIVE: "true", FACILITY_SHARED_EMERGENCY_PAUSED: "false", FACILITY_LEGACY_READS_PAUSED: "true", FACILITY_ACCESS_MATERIALIZATION_ENABLED: "true", FACILITY_SHARED_METADATA_ENABLED: "true", FACILITY_SHARED_DAYS_ENABLED: "true", FACILITY_SHARED_READER_SOURCE_ALLOWLIST: "mmc", FACILITY_SHARED_READER_COHORT: "all" },
+    env: { ROSTER_DB: db, ROSTER_FILES: options.r2 || r2, FACILITY_OVERVIEW_MAINTENANCE_MODE: "false", FACILITY_SHARED_ROLLOUT_ACTIVE: "true", FACILITY_SHARED_EMERGENCY_PAUSED: "false", FACILITY_LEGACY_READS_PAUSED: "true", FACILITY_ACCESS_MATERIALIZATION_ENABLED: "true", FACILITY_SHARED_METADATA_ENABLED: "true", FACILITY_SHARED_DAYS_ENABLED: "true", FACILITY_SHARED_READER_SOURCE_ALLOWLIST: "mmc", FACILITY_SHARED_READER_COHORT: "all" },
     waitUntil() {},
   });
   const payload = await response.json();
