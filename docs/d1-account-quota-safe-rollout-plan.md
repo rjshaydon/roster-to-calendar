@@ -224,15 +224,17 @@ never authorise `execute:true`.
 After a future 00:00 UTC reset:
 
 1. Do not perform a test D1 query merely to see whether the reset happened.
-2. Produce account-wide GraphQL measurements near 00:10, 00:20, 01:00 and
-   02:00 UTC while all optional functionality remains paused. Reconcile with
-   Billing only if Cloudflare begins exposing D1 there.
+2. Produce account-wide GraphQL measurements near 00:20, 00:35, 01:00 and
+   02:20 UTC while all optional functionality remains paused. These times allow
+   for the checker's 15-minute Analytics settlement window; the final sample
+   observes more than two hours of the new UTC day. Reconcile with Billing only
+   if Cloudflare begins exposing D1 there.
 3. Attribute ordinary login, calendar, contact and colleague-query fingerprints.
    Any legacy Staff/status query, whole-file event count, unindexed scan or
    unexpected Preview activity is a blocker.
 4. Calculate rows per request and the observed hourly burn rate. Distinguish
    actual rows from estimates and rows returned.
-5. If the Phase B gate does not pass at 02:00 UTC, make no rollout request that
+5. If the Phase B gate does not pass at 02:20 UTC, make no rollout request that
    day. Diagnose from analytics only.
 
 Phase D gate: two hours of attributable, low, stable account-wide usage and all
@@ -326,6 +328,12 @@ a D1 query to prove rollback.
 
 The next authorised activity is Phase A analytics and caller inventory only.
 No further D1 request is permitted until Phases A–D pass.
+
+Work that can be completed safely before the next reset is sequenced in
+[`d1-pre-reset-readiness-plan.md`](./d1-pre-reset-readiness-plan.md). It also
+corrects the reset-day sampling schedule for the checker's 15-minute Analytics
+settlement window: the first meaningful new-day sample is at or after 00:20 UTC,
+and the two-hour baseline decision is at 02:20 UTC.
 
 ## Implementation checkpoint — 7 September 2026
 
