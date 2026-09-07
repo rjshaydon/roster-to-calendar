@@ -3283,6 +3283,7 @@ function renderFilesMarkup({ canRemove = false, heading = "", description = "", 
 
 function renderAdminFilesMarkup({ canRemove = false, canAdd = false } = {}) {
   const profileView = activeCalendarMode() === "doctor-profile";
+  const statusUnavailable = calendarStoreStatus?.unavailable === true;
   const hasUsableStatus = Boolean(calendarStoreStatus && calendarStoreStatus.unavailable !== true && !calendarStoreStatusError);
   const statusFiles = new Map((calendarStoreStatus?.files || []).map((file) => [file.id, file]));
   const populatedSelectedFileIds = new Set(calendarStoreStatus?.expectedFiles?.populatedFileIds || []);
@@ -3311,7 +3312,9 @@ function renderAdminFilesMarkup({ canRemove = false, canAdd = false } = {}) {
       <section class="admin-file-section" aria-labelledby="admin-auto-sync-heading">
         <h3 id="admin-auto-sync-heading">Auto-sync</h3>
         <div class="admin-file-list admin-auto-sync-list">
-          ${sourceStatuses.map((source) => renderAdminAutoSyncRow(source, displayFiles, terms)).join("") || `<article class="issue-card"><p>No automated roster sources are configured.</p></article>`}
+          ${statusUnavailable
+            ? `<article class="issue-card"><p>Automated roster source status is temporarily unavailable while maintenance is in progress. Existing sources have not been removed.</p></article>`
+            : sourceStatuses.map((source) => renderAdminAutoSyncRow(source, displayFiles, terms)).join("") || `<article class="issue-card"><p>No automated roster sources are configured.</p></article>`}
         </div>
       </section>
       <section class="admin-file-section" aria-labelledby="admin-manual-imports-heading">
@@ -3319,7 +3322,9 @@ function renderAdminFilesMarkup({ canRemove = false, canAdd = false } = {}) {
         <div class="admin-file-list">
           ${currentAndNextManualFiles.length
             ? currentAndNextManualFiles.map(({ file, slot }) => renderAdminManualFileRow(file, slot, { canRemove, hasUsableStatus, statusFiles, populatedSelectedFileIds })).join("")
-            : `<article class="issue-card"><p>No manual roster files for the current or next term.</p></article>`}
+            : statusUnavailable
+              ? `<article class="issue-card"><p>Manual roster file status is temporarily unavailable while maintenance is in progress. Existing files have not been removed.</p></article>`
+              : `<article class="issue-card"><p>No manual roster files for the current or next term.</p></article>`}
         </div>
       </section>
       <section class="admin-file-section" aria-labelledby="admin-previous-imports-heading">
@@ -3327,7 +3332,9 @@ function renderAdminFilesMarkup({ canRemove = false, canAdd = false } = {}) {
         <div class="admin-file-list">
           ${previousManualFiles.length
             ? previousManualFiles.map(({ file, slot }) => renderAdminManualFileRow(file, slot, { canRemove, hasUsableStatus, statusFiles, populatedSelectedFileIds })).join("")
-            : `<article class="issue-card"><p>No earlier manual roster files.</p></article>`}
+            : statusUnavailable
+              ? `<article class="issue-card"><p>Earlier roster file status is temporarily unavailable while maintenance is in progress.</p></article>`
+              : `<article class="issue-card"><p>No earlier manual roster files.</p></article>`}
         </div>
       </section>
     </article>
