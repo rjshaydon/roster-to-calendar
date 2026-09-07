@@ -13,10 +13,10 @@ record its evidence, approval, deployment and post-deployment observation here.
 No entry may be removed after restoration; change its state to **Restored** so
 the history remains auditable.
 
-Current verified Production code before this change: `2af89c0` on 7 September
-2026. The zero-D1 At a glance maintenance gate is implemented in the change
-that updates this register and is pending deployment verification.
-Effective Production configuration was read back after that deployment with
+Current verified Production safety code: `a146029` on 7 September 2026,
+deployment `edf2e27b-a118-4a95-aab7-928bd1f3b1e4`. The zero-D1 At a glance
+maintenance gate is active. Effective Production configuration was read back
+after that deployment with
 all facility readers/builders, roster and contact automation, roster status,
 bootstrap and advanced-maintenance controls closed.
 
@@ -37,8 +37,7 @@ the reset-day runbook.
   outcome is provided by a safer mechanism.
 - **Still live** — listed to prevent accidental removal or confusion with a
   paused feature.
-- **Pending deployment** — implemented and tested locally but not yet verified
-  as the active Production deployment.
+- **Paused** — the feature exists but its Production path is blocked.
 
 ## Configuration control index
 
@@ -105,7 +104,7 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 
 ### FR-02 — At a glance cached display during maintenance
 
-- **State:** Pending deployment. Implemented fail-closed locally.
+- **State:** Paused in Production by the fail-closed maintenance gate.
 - **Includes:** browser-local saved On shift, Staff, metadata and range views.
 - **User effect:** No cached roster or telephone data is
   shown while global maintenance is active. Cached records remain stored and
@@ -121,8 +120,8 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 
 ### FR-03 — Automatic On shift launch and contact refresh
 
-- **State:** Pending deployment. Automatic launch and 60-second contact polling
-  are explicitly suppressed while maintenance is active.
+- **State:** Paused in Production. Automatic launch and 60-second contact
+  polling are explicitly suppressed while maintenance is active.
 - **User effect:** Clinical users no longer receive the intended automatic live
   On shift workspace while At a glance is paused.
 - **Restoration outcome:** Reinstate automatic launch for eligible clinical
@@ -439,7 +438,7 @@ mechanisms are intentionally excluded from restoration.
 | `9927321` | Added accurate maintenance messaging in Admin → Files (FR-05). |
 | `6bda8b7` | Separated and closed roster, contact, bootstrap, queue and maintenance capabilities (FR-01, FR-04, FR-07, FR-08, FR-11, FR-12). |
 | `2af89c0` | Reduced automatic status writes, calendar retries and duplicate By stream requests (FR-13–FR-15). |
-| Implementation commit containing this register update | Added the zero-D1 At a glance maintenance UI and pre-authentication gate (FR-01–FR-04). |
+| `a146029` | Added the zero-D1 At a glance maintenance UI and pre-authentication gate (FR-01–FR-04). |
 
 ## Restoration record template
 
