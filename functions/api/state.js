@@ -844,6 +844,24 @@ export async function onRequestPost(context) {
       if (!hasCalendarDb(context.env)) {
         return Response.json({ ok: false, unavailable: true, total: 0, populated: 0, remaining: 0 });
       }
+      // This diagnostic counts rows across the retained roster repository. It
+      // is unnecessary while every roster mutation is paused and can exhaust
+      // the shared D1 read allowance when the Creator UI retries it.
+      if (rosterWritesExplicitlyPaused(context.env)) {
+        return Response.json({
+          ok: true,
+          unavailable: true,
+          paused: true,
+          reason: "roster-writes-paused",
+          total: 0,
+          populated: 0,
+          partial: 0,
+          remaining: 0,
+          eventCount: 0,
+          files: [],
+          rosterSourceStatuses: [],
+        });
+      }
       const status = await calendarStoreStatus(null, context.env.ROSTER_DB, {
         doctorKey: body?.selectedDoctorKey || body?.doctorKey || OWNER_DOCTOR_KEY,
         expectedFileIds: sanitizeRepositoryFileIds(body?.expectedFileIds),

@@ -91,6 +91,7 @@ assert.match(ensureInviteBody, /ensureCalendarSchema\(db\)/, "invite setup shoul
 assert.doesNotMatch(ensureInviteBody, /CREATE\s+(?:TABLE|INDEX)/i, "ordinary API requests must not issue invite DDL directly");
 
 for (const action of [
+  "calendarStoreStatus",
   "syncRosterRepository",
   "removeRosterImports",
   "saveDerivedCalendarFile",
@@ -102,6 +103,12 @@ for (const action of [
   const actionBody = stateSource.match(new RegExp(`if \\(action === "${action}"\\)[\\s\\S]*?(?=\\n    if \\(action === |$)`))?.[0] || "";
   assert.match(actionBody, /rosterWritesExplicitlyPaused\(context\.env\)/, `${action} must stop while roster writes are paused`);
 }
+const calendarStoreStatusAction = stateSource.match(/if \(action === "calendarStoreStatus"\)[\s\S]*?(?=\n    if \(action === |$)/)?.[0] || "";
+assert.ok(
+  calendarStoreStatusAction.indexOf("rosterWritesExplicitlyPaused(context.env)")
+    < calendarStoreStatusAction.indexOf("calendarStoreStatus(null, context.env.ROSTER_DB"),
+  "paused calendar status must stop before repository-wide D1 counts",
+);
 assert.match(
   stateSource,
   /removedImportIds\.length && rosterWritesExplicitlyPaused\(context\.env\)/,
