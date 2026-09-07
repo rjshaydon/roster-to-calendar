@@ -186,6 +186,12 @@ Pre-reset preparation is complete when:
 
 ## Implementation checkpoint — 7 September 2026
 
+- Production now runs safety commit `2af89c0`. The earlier instruction to keep
+  Production at `a293251` was superseded by the reviewed safety deployment.
+- Before reset-day observation, implement the additional fail-closed plan in
+  [`at-a-glance-zero-d1-maintenance-plan.md`](./at-a-glance-zero-d1-maintenance-plan.md)
+  so stale and current clients stop before At a glance authentication or access
+  reads.
 - Final settled incident Analytics is stored under `/private/tmp` with `0600`
   permissions; daily and five-minute totals reconcile exactly.
 - The account inventory is complete: two roster databases plus the separately

@@ -1,5 +1,15 @@
 # Account-wide D1 quota safety and controlled rollout plan
 
+The temporary user-facing and pre-authentication containment layer is specified
+in [`at-a-glance-zero-d1-maintenance-plan.md`](./at-a-glance-zero-d1-maintenance-plan.md).
+It must remain active throughout passive baseline observation and until a
+separately approved shared-reader canary is ready.
+
+All paused, reduced, parked and permanently replaced capabilities are tracked
+in [`feature-restoration-register.md`](./feature-restoration-register.md). Any
+future safety change and every later restoration must update that register in
+the same commit.
+
 ## Status and authority boundary
 
 Prepared 7 September 2026 after a protected single-file bootstrap inspection

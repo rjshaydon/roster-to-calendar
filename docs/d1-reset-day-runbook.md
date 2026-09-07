@@ -4,7 +4,9 @@
 
 This runbook observes Cloudflare Analytics only. It must not call an application
 endpoint, run D1 SQL, deploy, migrate or change a variable. Reset is at 00:00 UTC
-(10:00 AEST). Keep Production at `a293251` and all optional capabilities closed.
+(10:00 AEST). Production currently runs `2af89c0`; if the separately reviewed
+zero-D1 maintenance gate is deployed before reset, record and verify its exact
+replacement commit. In either case, keep all optional capabilities closed.
 
 Run commands from the repository root. Load the existing read-only token from
 Keychain without printing it:
