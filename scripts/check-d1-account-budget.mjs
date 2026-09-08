@@ -1,5 +1,6 @@
 import { chmod, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { execFileSync } from "node:child_process";
 
 import { d1AnalyticsQuery, evaluateD1Budget, settledUtcDayInterval, summarizeAnalyticsPayload } from "./d1-quota-budget-lib.mjs";
 
@@ -9,7 +10,8 @@ const inventoryPath = resolve(options.inventory || "config/d1-database-inventory
 const inventory = JSON.parse(await readFile(inventoryPath, "utf8"));
 const previousReport = options.previous ? JSON.parse(await readFile(resolve(options.previous), "utf8")) : null;
 const accountId = String(process.env.CLOUDFLARE_ACCOUNT_ID || inventory.accountId || "").trim();
-const token = String(process.env.CLOUDFLARE_ACCOUNT_ANALYTICS_TOKEN || "").trim();
+const analyticsCredential = loadAnalyticsCredential();
+const token = analyticsCredential.token;
 
 let analytics = { complete: false, reasons: [], databases: [], totals: {}, queryFingerprints: [] };
 if (!accountId) analytics.reasons.push("cloudflare-account-id-required");
@@ -54,6 +56,7 @@ const report = {
   schemaVersion: 1,
   generatedAt,
   inventory: { path: inventoryPath, complete: inventory.complete === true, databaseCount: (inventory.databases || []).length },
+  credential: { source: analyticsCredential.source },
   analytics,
   billing: { rowsRead: numericOrNull(options.billingReads), rowsWritten: numericOrNull(options.billingWrites), observedAt: options.billingObservedAt || null, unavailableReason: options.billingUnavailableReason || null },
   ...assessment,
@@ -83,4 +86,21 @@ function parseArguments(args) {
 function numericOrNull(value) {
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 ? number : null;
+}
+
+function loadAnalyticsCredential() {
+  const environmentToken = String(process.env.CLOUDFLARE_ACCOUNT_ANALYTICS_TOKEN || "").trim();
+  if (environmentToken) return { token: environmentToken, source: "environment" };
+  if (process.platform !== "darwin") return { token: "", source: null };
+
+  try {
+    const keychainToken = execFileSync(
+      "/usr/bin/security",
+      ["find-generic-password", "-s", "roster-d1-account-analytics", "-w"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    ).trim();
+    return keychainToken ? { token: keychainToken, source: "macos-keychain" } : { token: "", source: null };
+  } catch {
+    return { token: "", source: null };
+  }
 }

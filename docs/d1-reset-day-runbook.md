@@ -8,12 +8,16 @@ endpoint, run D1 SQL, deploy, migrate or change a variable. Reset is at 00:00 UT
 record the exact active documentation-only descendant, if any, before sampling.
 Keep all optional capabilities closed.
 
-Run commands from the repository root. Load the existing read-only token from
-Keychain without printing it:
+Run commands from the repository root. The checker first uses
+`CLOUDFLARE_ACCOUNT_ANALYTICS_TOKEN` when already present and otherwise loads
+the existing read-only token from the macOS Keychain service
+`roster-d1-account-analytics` without printing it. Codex must run the command
+with host access because its default sandbox cannot read the user's Keychain.
+The operator does not need to repeat token setup or export it manually.
 
-```sh
-export CLOUDFLARE_ACCOUNT_ANALYTICS_TOKEN="$(security find-generic-password -s roster-d1-account-analytics -w)"
-```
+The report's `credential.source` field must be `environment` or
+`macos-keychain`; a null value is a checker-access failure, not evidence of zero
+D1 use.
 
 Every report is expected to say STOP until at least 02:20 UTC. Stop immediately
 if a file is missing, `sampleValid` is false, an unknown database appears, daily

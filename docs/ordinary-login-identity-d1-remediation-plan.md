@@ -162,6 +162,22 @@ Any unexplained spike, historical query fingerprint, unexpected write or
 unreconciled Analytics sample is `STOP`. Do not investigate it by issuing more
 D1 queries.
 
+## Post-containment observation — 8 September 2026
+
+The contained Production deployment was active before the deliberately
+isolated 15:15–20:30 AEST observation window. Settled account Analytics for
+that interval reported 27,628 rows read, 20 rows written, 575 read queries and
+8 write queries. The largest five-minute bucket was 1,658 rows read. This is
+approximately 5,164 rows read per hour, or 124,000 per 24 hours if that exact
+ordinary-use rate continued.
+
+The two historical spikes visible earlier in the same UTC quota day occurred
+before containment: 1,320,227 rows at 11:25–11:30 AEST and 950,145 rows at
+13:55–14:00 AEST. Because those incidents make the full-day sample fail the
+normal start and stop thresholds, this observation is evidence that immediate
+containment is working; it is not a `GO` for optional features, migrations or
+bootstrap. The fresh-day passive gate remains required.
+
 ## Restoration relationship
 
 This remediation is a prerequisite for, not a replacement for, the features in

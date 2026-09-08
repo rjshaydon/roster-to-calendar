@@ -16,8 +16,11 @@ previous day for a completed passive baseline.
    identified.
 2. Create an API token containing only **Account Analytics: Read**. Do not give
    it D1, Pages or Workers edit permission and do not save it in this repository
-   or paste it into shell history. Expose it to the command as
-   `CLOUDFLARE_ACCOUNT_ANALYTICS_TOKEN` using the operator's secret manager.
+   or paste it into shell history. The checker uses
+   `CLOUDFLARE_ACCOUNT_ANALYTICS_TOKEN` when present, then falls back on macOS
+   to the existing Keychain service `roster-d1-account-analytics`. Codex must
+   execute the checker with host access; a sandboxed Keychain failure is a
+   tooling failure and must not be handed back to the operator as missing setup.
 3. If **Billing > Billable Usage** lists D1, record its rows read, rows written
    and the UTC time at which you observed them. On the present Workers Free
    account the dashboard exposes only R2, despite Cloudflare's D1 documentation.

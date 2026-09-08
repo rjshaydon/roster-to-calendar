@@ -510,6 +510,7 @@ mechanisms are intentionally excluded from restoration.
 | Plan, 8 Sep 2026 | Recorded required ordinary-login/identity/save/warm-up containment and retained-deployment audit (FR-21–FR-25); no runtime change. |
 | Local implementation, 8 Sep 2026 | Added default-off identity discovery and account snapshot-build controls; removed login history fallback and automatic repairs; made ordinary saves incremental with no snapshot warm-up. Not yet deployed. |
 | `18ba7a1` / `a4305bca-5538-4583-88f8-655bcb687556` | Deployed ordinary-login containment with all safety controls read back closed; removed the 16 retained pre-containment Production deployments by exact ID (FR-21–FR-25). |
+| Observation, 8 Sep 2026 | Settled 15:15–20:30 AEST Production usage after containment was 27,628 reads and 20 writes, with a maximum five-minute bucket of 1,658 reads. Full-day status remains STOP until a clean UTC quota day completes the passive gate. |
 
 ## Restoration record template
 
