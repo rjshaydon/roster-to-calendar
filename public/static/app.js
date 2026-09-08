@@ -318,6 +318,7 @@ let cloudStateSaveQueue = Promise.resolve();
 let serverUsers = [];
 let currentRosterClaims = [];
 let currentSuggestedClaims = [];
+let currentIdentityDiscoveryUnavailable = false;
 let latestNameMatches = [];
 let availableRosterDoctors = [];
 let calendarSnapshotMemoryCache = new Map();
@@ -17215,6 +17216,7 @@ function applyCloudStateContext(data) {
   if (data.facilityOverviewAccess) currentFacilityOverviewAccess = sanitizeFacilityOverviewAccess(data.facilityOverviewAccess);
   applyFacilityOverviewSiteScope();
   currentSuggestedClaims = sanitizeRosterClaims(data.suggestedClaims || data.nameMatches || []);
+  currentIdentityDiscoveryUnavailable = data.identityDiscoveryUnavailable === true;
   latestNameMatches = currentSuggestedClaims;
   applyAvailableRosterDoctorsFromData(data);
   currentSubscription = sanitizeSubscription(data.subscription);
@@ -20120,6 +20122,8 @@ async function bootstrapImports(options = {}) {
       syncActionState();
       setStatus(currentNonClinical
         ? "This non-clinical account is ready. No roster name or clinical shifts are linked."
+        : currentIdentityDiscoveryUnavailable && !currentRosterClaims.length
+          ? "Your account is ready. Linking a roster name is temporarily unavailable while we complete a reliability upgrade."
         : availableRosterDoctors.length && !currentRosterClaims.length
           ? "Choose your roster name, or upload a roster if your name is not listed."
           : "Add a roster file to begin.");

@@ -1,6 +1,6 @@
 # D1 database and caller inventory
 
-Status: **control-plane inventory complete**. Updated 7 September 2026 without
+Status: **control-plane inventory complete; retained-deployment containment pending**. Updated 8 September 2026 without
 an application D1 query. Runtime rollout remains blocked by the incident's
 unattributed usage and the reset-day passive-baseline gate.
 
@@ -59,6 +59,23 @@ The account has one Pages project, `roster-to-calendar`.
 - Pages Functions Analytics recorded 395 Production requests during the three
   damaging five-minute buckets, compared with 4–10 requests in preceding
   buckets. Historical Analytics does not include their request paths.
+
+## 8 September retained-deployment audit
+
+A control-plane-only `wrangler pages deployment list` found 16 retained
+Production deployments and seven retained Preview deployments. Every retained
+Production deployment has its own public hash URL and belongs to a commit that
+predates the ordinary-login identity containment. The oldest listed Production
+deployment is `1a8ee1fb-ac75-4078-83fe-ea155674be8e` (`cff238d`); the active
+deployment is `def76e30-d612-4de0-8d99-37e7baf52a25` (`af951d0`).
+
+This confirms that switching the active Production alias does not make older
+Production functions unreachable. It does not prove that an old URL was called
+during either incident. After the contained release is deployed and verified
+through the control plane, retained unsafe Production deployments should be
+deleted by exact deployment ID, preserving the new deployment and Git history.
+Preview deployments bind the Preview database and are not candidates for the
+Production database burst, but should be pruned separately to reduce ambiguity.
 
 ## Completion gate
 

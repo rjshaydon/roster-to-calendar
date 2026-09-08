@@ -1537,35 +1537,60 @@ assert.match(
   /syncRosterRepositoryToKeepFileIds/,
   "dedicated roster removal should sync repository to remaining files without a full account save",
 );
-assert.match(
+assert.doesNotMatch(
   stateSource.match(/async function repositoryDoctorCandidates[\s\S]*?async function refreshCanonicalDoctors/)?.[0] || "",
-  /queryRosterFileDoctors\(db\)[\s\S]*buildCanonicalDoctorOptionsFromRows[\s\S]*queryCanonicalDoctors/,
-  "doctor directory responses should prefer live roster file doctors over stale canonical cache rows",
+  /queryRosterFileDoctors|buildCanonicalDoctorOptionsFromRows|queryDoctorEvents/,
+  "runtime doctor directory responses must never fall back to roster history",
 );
 assert.match(
   stateSource.match(/if \(action === "listUsers"\)[\s\S]*?if \(action === "calendarStoreStatus"\)/)?.[0] || "",
-  /repositoryDoctorCandidates[\s\S]*preferCanonical: true/,
-  "routine creator doctor-directory loading should use the refreshed canonical cache instead of rebuilding every identity",
+  /identityDiscoveryEnabled[\s\S]*availableDoctors: discoveryEnabled \? await repositoryDoctorCandidates/,
+  "routine creator doctor-directory loading should fail closed unless compact identity discovery is explicitly enabled",
 );
 assert.match(
   stateSource.match(/if \(action === "loadAccountContext"\)[\s\S]*?if \(action === "claimRosterName"\)/)?.[0] || "",
-  /includeAvailableDoctors:[\s\S]*=== "creator"[\s\S]*=== "owner"/,
-  "deferred creator account context should hydrate the complete doctor switcher",
+  /identityDiscoveryEnabled: discoveryEnabled[\s\S]*includeAvailableDoctors:/,
+  "deferred account context should pass the fail-closed identity discovery decision explicitly",
 );
 assert.match(
   stateSource.match(/if \(action === "resolveAccountClaims"\)[\s\S]*?if \(action === "adminLoadUser"\)/)?.[0] || "",
-  /resolvedClaims[\s\S]*includeAvailableDoctors:[\s\S]*&& !resolvedClaims\.length/,
-  "claim resolution should only load full doctor candidates while an account still has no claims",
+  /identityDiscoveryEnabled[\s\S]*identityDiscoveryUnavailable: !discoveryEnabled/,
+  "claim resolution should report when identity discovery is deliberately unavailable",
 );
 assert.doesNotMatch(
   stateSource.match(/if \(action === "listUsers"\)[\s\S]*?if \(action === "calendarStoreStatus"\)/)?.[0] || "",
   /cleanupResolvedAdminIssues/,
   "creator user-list loading should not synchronously clean every account",
 );
-assert.match(
+assert.doesNotMatch(
   stateSource.match(/if \(action === "listUsers"\)[\s\S]*?if \(action === "calendarStoreStatus"\)/)?.[0] || "",
-  /globalParserExtensions[\s\S]*repairAccountClaimsIfNeeded[\s\S]*userSummaryFromRecord\(record\.email, record, \{ db: context\.env\.ROSTER_DB, globalParserExtensions \}\)/,
-  "creator user-list loading should reuse one parser-rule load for stale issue filtering",
+  /repairAccountClaimsIfNeeded|queryDoctorSeniorities\(/,
+  "creator user-list loading must not repair every account or derive seniority from roster events",
+);
+assert.match(
+  stateSource.match(/if \(action === "login"\)[\s\S]*?const account = await verifyD1Account/)?.[0] || "",
+  /const discoveryEnabled = identityDiscoveryEnabled\(context\.env\)[\s\S]*allowInlineBuild: accountSnapshotBuildEnabled\(context\.env\)/,
+  "login must independently gate identity discovery and inline snapshot construction",
+);
+assert.doesNotMatch(
+  stateSource.match(/if \(action === "login"\)[\s\S]*?const account = await verifyD1Account/)?.[0] || "",
+  /autoClaimMatchedRosterNames/,
+  "login must never use historical roster-name discovery",
+);
+assert.match(
+  stateSource.match(/function scheduleSnapshotWarmupForAccount[\s\S]*?function scheduleFacilityStaffMetadataPublish/)?.[0] || "",
+  /accountSnapshotBuildEnabled\(context\?\.env\)[\s\S]*return;/,
+  "account snapshot warm-up must fail closed before scheduling work",
+);
+assert.doesNotMatch(
+  stateSource.match(/if \(action === "save"\)[\s\S]*?if \(action === "loadDoctorProfile"\)/)?.[0] || "",
+  /scheduleSnapshotWarmupForAccount|queryAccountCalendarRevision/,
+  "ordinary UI-state saves must not calculate a shared revision or schedule snapshot work",
+);
+assert.match(
+  d1CalendarSource.match(/export async function upsertAccountMirror[\s\S]*?export async function ensureAccountPersonAliases/)?.[0] || "",
+  /options\.syncIdentity === true/,
+  "generic account persistence must seed durable identities only when explicitly requested",
 );
 assert.match(
   stateSource.match(/async function userSummaryFromRecord[\s\S]*?function insightsEnabledForRecord/)?.[0] || "",
@@ -3363,6 +3388,7 @@ class MemoryD1 {
     this.consoleMessages = [];
     this.nextConsoleMessageId = 1;
     this.failNextEventInsert = false;
+    this.executedSql = [];
   }
 
   prepare(sql) {
@@ -3428,6 +3454,7 @@ class MemoryD1Statement {
   async run() {
     const sql = this.sql;
     const args = this.args;
+    this.db.executedSql.push(sql);
     if (sql.startsWith("CREATE ")) return { success: true };
     if (sql.startsWith("ALTER TABLE")) return { success: true };
     if (sql.startsWith("INSERT INTO roster_file_coverage")) {
@@ -5042,6 +5069,9 @@ async function postStateRaw(store, payload, db = null, options = {}) {
       FACILITY_OVERVIEW_MAINTENANCE_MODE: "false",
       FACILITY_SHARED_EMERGENCY_PAUSED: "false",
       FACILITY_LEGACY_READS_PAUSED: "false",
+      IDENTITY_DISCOVERY_ENABLED: "true",
+      ACCOUNT_SNAPSHOT_BUILD_ENABLED: "true",
+      ...(options.env || {}),
     },
   };
   if (options.captureWaitUntil === true) {
@@ -6566,9 +6596,11 @@ const typoDoctors = await postState(typoAliasStore, {
   email: "rhaydon@gmail.com",
   password: creatorPassword,
 }, typoAliasDb);
-const aeshanOption = typoDoctors.availableDoctors.find((doctor) => doctor.displayName === "Aeshan KULARATNE");
-assert.ok(aeshanOption, "event-backed typo variants should keep the event-backed display name");
-assert.deepEqual(aeshanOption.aliases.map((alias) => alias.key).sort(), ["AESHAN KULARATNE", "AESHAN KULURATNE"]);
+assert.deepEqual(
+  typoDoctors.availableDoctors,
+  [],
+  "a missing compact canonical directory must remain unavailable rather than trigger a runtime history fallback",
+);
 assert.equal(typoDoctors.availableDoctors.some((doctor) => doctor.key === "ZERO PERSON"), false, "zero-event standalone identities should be hidden from the picker");
 const typoProfile = await postState(typoAliasStore, {
   action: "loadDoctorProfile",
@@ -7238,6 +7270,17 @@ seedD1Repository(michaelStateStore.d1, [
     doctors: [{ key: "DR MICHAEL COMAN", displayName: "Dr Michael Coman", sourceType: "mch" }],
   }),
 ]);
+michaelStateStore.d1.canonicalDoctors.set("MICHAEL COMAN", {
+  canonical_key: "MICHAEL COMAN",
+  display_name: "Michael COMAN",
+  source_type: "mmc",
+  source_types_json: JSON.stringify(["mmc", "mch"]),
+  aliases_json: JSON.stringify([
+    { sourceType: "mmc", key: "MICHAEL COMAN", displayName: "Michael COMAN" },
+    { sourceType: "mch", key: "DR MICHAEL COMAN", displayName: "Dr Michael Coman" },
+  ]),
+  has_events: 1,
+});
 await seedUser(michaelStateStore, "michael@example.com", "michael-password", "Michael COMAN");
 await postState(michaelStateStore, {
   action: "claimRosterName",
@@ -7410,6 +7453,21 @@ seedD1Repository(identityStore.d1, [
     doctors: [{ key: "DR ANDREA LIM", displayName: "Dr Andrea LIM", sourceType: "mch" }],
   }),
 ]);
+for (const doctor of [
+  { key: "AARON BADWAL", displayName: "Aaron BADWAL", sourceTypes: ["ddh"], aliases: [{ sourceType: "ddh", key: "AARON BADWAL", displayName: "Aaron BADWAL" }] },
+  { key: "ANDREA LIM", displayName: "Andrea LIM", sourceTypes: ["ddh", "mch"], aliases: [{ sourceType: "ddh", key: "ANDREA LIM", displayName: "Andrea LIM" }, { sourceType: "mch", key: "DR ANDREA LIM", displayName: "Dr Andrea LIM" }] },
+  { key: "ABI THANIKASALAM", displayName: "Abi THANIKASALAM", sourceTypes: ["ddh"], aliases: [{ sourceType: "ddh", key: "ABI THANIKASALAM", displayName: "Abi THANIKASALAM" }] },
+  { key: "JOSEPH VU", displayName: "Joseph VU", sourceTypes: ["ddh"], aliases: [{ sourceType: "ddh", key: "JOSEPH VU", displayName: "Joseph VU" }] },
+]) {
+  identityStore.d1.canonicalDoctors.set(doctor.key, {
+    canonical_key: doctor.key,
+    display_name: doctor.displayName,
+    source_type: doctor.sourceTypes[0],
+    source_types_json: JSON.stringify(doctor.sourceTypes),
+    aliases_json: JSON.stringify(doctor.aliases),
+    has_events: 1,
+  });
+}
 const abiAutoClaim = await postState(identityStore, {
   action: "login",
   email: "abi@example.com",
@@ -7582,7 +7640,7 @@ const manyDoctorsEnrichment = await postState(manyDoctorsStore, {
   email: "new-doctor@example.com",
   password: "new-password",
 });
-assert.equal(manyDoctorsEnrichment.availableDoctors.length, 90);
+assert.equal(manyDoctorsEnrichment.availableDoctors.length, 0, "a large historical roster must not be discovered at request time when its compact directory is absent");
 assert.ok(manyDoctorsStore.accountListCalls <= 2, "available doctor claimed status should avoid repeated account scans");
 
 const profileImports = await postStateRaw(stateStore, {
@@ -8362,5 +8420,62 @@ const deletionUserImports = await postStateRaw(deletionStore, {
   password: "user-password",
 });
 assert.equal(deletionUserImports.response.status, 410);
+
+const containmentStore = new MemoryStore();
+const containmentDb = new MemoryD1();
+await postState(containmentStore, {
+  action: "login",
+  email: "contained@example.com",
+  password: "contained-password",
+  mode: "create",
+  realName: "Contained Doctor",
+}, containmentDb);
+containmentDb.executedSql.length = 0;
+const containedLogin = await postStateRaw(containmentStore, {
+  action: "login",
+  email: "contained@example.com",
+  password: "contained-password",
+  responseMode: "full",
+}, containmentDb, {
+  captureWaitUntil: true,
+  env: { IDENTITY_DISCOVERY_ENABLED: "false", ACCOUNT_SNAPSHOT_BUILD_ENABLED: "false" },
+});
+assert.equal(containedLogin.response.ok, true, "ordinary login must remain available while identity discovery is paused");
+assert.equal(containedLogin.body.identityDiscoveryUnavailable, true);
+assert.equal(containedLogin.waitUntilPromises.length, 0, "contained login must not schedule hidden snapshot work");
+assert.equal(
+  containmentDb.executedSql.filter((sql) => /^(INSERT|UPDATE|DELETE|CREATE|ALTER)\b/.test(sql)).length,
+  0,
+  "an unchanged contained login must perform zero D1 mutations",
+);
+assert.equal(
+  containmentDb.executedSql.some((sql) => /roster_events|roster_file_doctors/i.test(sql)),
+  false,
+  "contained login must not execute roster-history statements",
+);
+const containedFirstSave = await postStateRaw(containmentStore, {
+  action: "save",
+  email: "contained@example.com",
+  password: "contained-password",
+  state: containedLogin.body.state,
+}, containmentDb, { env: { IDENTITY_DISCOVERY_ENABLED: "false", ACCOUNT_SNAPSHOT_BUILD_ENABLED: "false" } });
+assert.equal(containedFirstSave.response.ok, true);
+containmentDb.executedSql.length = 0;
+const containedNoopSave = await postStateRaw(containmentStore, {
+  action: "save",
+  email: "contained@example.com",
+  password: "contained-password",
+  state: containedLogin.body.state,
+}, containmentDb, {
+  captureWaitUntil: true,
+  env: { IDENTITY_DISCOVERY_ENABLED: "false", ACCOUNT_SNAPSHOT_BUILD_ENABLED: "false" },
+});
+assert.equal(containedNoopSave.response.ok, true);
+assert.equal(containedNoopSave.waitUntilPromises.length, 0, "an unchanged save must not schedule snapshot work");
+assert.equal(
+  containmentDb.executedSql.filter((sql) => /^(INSERT|UPDATE|DELETE|CREATE|ALTER)\b/.test(sql)).length,
+  0,
+  "a repeated identical UI-state save must perform zero D1 mutations",
+);
 
 console.log("Fixture smoke test passed.");

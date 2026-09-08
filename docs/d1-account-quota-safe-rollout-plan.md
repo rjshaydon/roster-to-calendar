@@ -231,6 +231,13 @@ never authorise `execute:true`.
 
 ## Phase D — reset-day passive baseline
 
+Phase D is now blocked on the ordinary-login and identity containment in
+[`ordinary-login-identity-d1-remediation-plan.md`](./ordinary-login-identity-d1-remediation-plan.md).
+The 8 September passive period produced an unexplained large burst despite the
+At a glance maintenance gate, proving that optional-feature containment alone
+is insufficient. Do not proceed to Phase E or migration `0026` onward until
+that remediation is deployed and a later fresh-day baseline passes.
+
 After a future 00:00 UTC reset:
 
 1. Do not perform a test D1 query merely to see whether the reset happened.
@@ -314,6 +321,19 @@ a D1 query to prove rollback.
 
 ## Current evidence ledger
 
+- 8 September 2026, through approximately 12:35 AEST: account-wide Analytics
+  reported 1,336,466 rows read and 247 rows written. Approximately 1,320,227
+  reads and 213 writes occurred in one five-minute interval despite low Pages
+  request volume and closed At a glance/automation/bootstrap controls. Query
+  fingerprints did not reconcile with the aggregate; approximately 1.31
+  million reads remain unattributed. The result is `STOP`, not evidence that a
+  particular SQL statement has been proven responsible.
+- Source review identified historical doctor-discovery fallbacks, broad
+  account-save side effects and post-response snapshot warm-ups reachable from
+  ordinary account paths. These require containment before another passive
+  baseline. A `sqlite_master` fingerprint also requires a control-plane audit
+  of retained Production deployments.
+
 - `3ee4bff`: bounded status code deployed.
 - Migrations `0026` through `0031`: applied individually; no migration remains
   pending. New compact tables were empty immediately afterward.
@@ -385,3 +405,28 @@ Not yet complete and not authorised:
 
 Therefore the rollout remains blocked at Phase A. None of the locally complete
 work is evidence that Production can safely be exercised yet.
+
+## Ordinary-path containment checkpoint — 8 September 2026
+
+Implemented on the local safety branch without contacting D1 or Cloudflare:
+
+- identity discovery now requires an explicit true setting and reads only the
+  compact canonical directory; roster-file and event-history fallbacks were
+  removed from login/account/user-directory discovery;
+- missing compact identity data returns a deliberate unavailable state while
+  authentication and existing claims remain available;
+- login/account preparation no longer repairs claims, imports, selected doctor,
+  subscription tokens, custom events or hospital locations as a side effect;
+- invitation expiry cleanup no longer runs on every ordinary request;
+- generic account persistence seeds durable person/alias rows only when an
+  explicit identity mutation requests it;
+- identical UI-state saves write zero rows, do not calculate the broad calendar
+  revision and do not schedule snapshot work; and
+- login/admin snapshot construction and background rebuild are controlled by a
+  separate default-off setting.
+
+Focused local tests prove an unclaimed full login remains successful with zero
+mutation statements, no roster-history statement and no scheduled work, and a
+repeated identical save produces zero mutations and no scheduled work. This is
+local evidence only. Production remains at the previously recorded deployment
+until a separately approved deploy and control-plane readback.

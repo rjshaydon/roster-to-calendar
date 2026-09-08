@@ -124,6 +124,19 @@ const FACILITY_OVERVIEW_MAINTENANCE_ACTIONS = new Set([
   "setFacilityStaffSeniorityOverrides",
 ]);
 const FACILITY_OVERVIEW_MAINTENANCE_MESSAGE = "At a glance is temporarily unavailable while we complete a reliability upgrade. Your roster and settings have not been removed.";
+const IDENTITY_DISCOVERY_MAINTENANCE_MESSAGE = "Doctor identity linking is temporarily unavailable while we complete a reliability upgrade. Your account and existing roster links have not been removed.";
+
+function identityDiscoveryEnabled(env = {}) {
+  return String(env.IDENTITY_DISCOVERY_ENABLED || "").trim().toLowerCase() === "true";
+}
+
+function accountSnapshotBuildEnabled(env = {}) {
+  return String(env.ACCOUNT_SNAPSHOT_BUILD_ENABLED || "").trim().toLowerCase() === "true";
+}
+
+function identityDiscoveryPausedResponse() {
+  return Response.json({ ok: false, unavailable: true, reason: "identity-discovery-disabled", error: IDENTITY_DISCOVERY_MAINTENANCE_MESSAGE }, { status: 503 });
+}
 
 function facilityOverviewMaintenanceResponse() {
   return Response.json({
@@ -191,9 +204,8 @@ export async function onRequestPost(context) {
     const sharedFacilityContactsEnabled = String(context.env.FACILITY_SHARED_CONTACTS_ENABLED || "").toLowerCase() === "true";
     const materializedAccessFor = (actorRecord, subjectRecord = actorRecord) => facilityLegacyReadsPaused(context.env)
       || (facilityAccessMaterializationEnabled && facilityAccessMaterializedForRecords(context.env, actorRecord, subjectRecord));
-    // Invited accounts have no user-selected password until the invite is accepted.
-    // Remove any that have passed their activation window on the next API request.
-    await cleanupExpiredInvitedAccounts(context.env.ROSTER_DB);
+    // Invitation cleanup is intentionally restricted to the explicit Creator
+    // invitation workflow; ordinary requests must not perform maintenance.
     if (action === "acceptInvite") {
       const inviteToken = String(body?.inviteToken || "").trim();
       const invitePassword = String(body?.newPassword || "");
@@ -224,27 +236,26 @@ export async function onRequestPost(context) {
     if (action === "login") {
       const authStartedAt = Date.now();
       const account = await loadOrCreateD1Account(context.env.ROSTER_DB, email, password, { mode, realName });
-      let loginRecord = account.created && account.record.nonClinical !== true
+      const discoveryEnabled = identityDiscoveryEnabled(context.env);
+      let loginRecord = discoveryEnabled && account.created && account.record.nonClinical !== true
         ? await autoClaimMatchedCanonicalDoctors(account.record, context.env.ROSTER_DB)
         : account.record;
-      if (loginRecord.nonClinical !== true && (loginRecord.role || roleForEmail(loginRecord.email)) !== "creator" && (loginRecord.role || roleForEmail(loginRecord.email)) !== "owner" && !sanitizeClaims(loginRecord.claims).length) {
-        loginRecord = await autoClaimMatchedRosterNames(null, loginRecord, context.env.ROSTER_DB);
-      }
-      loginRecord = await repairAccountClaimsIfNeeded(context.env.ROSTER_DB, loginRecord, { reason: "login" });
-      if (loginRecord !== account.record) await upsertAccountMirror(context.env.ROSTER_DB, loginRecord);
+      if (discoveryEnabled) loginRecord = await repairAccountClaimsIfNeeded(context.env.ROSTER_DB, loginRecord, { reason: "login" });
+      if (loginRecord !== account.record) await upsertAccountMirror(context.env.ROSTER_DB, loginRecord, { syncIdentity: true });
       const authMs = Date.now() - authStartedAt;
       const prepareStartedAt = Date.now();
       const prepared = responseMode === "fast"
         ? await prepareFastLoginEnvelope(loginRecord, { db: context.env.ROSTER_DB, facilityAccessMaterialized: materializedAccessFor(loginRecord) })
         : await prepareAccountResponse(null, loginRecord, {
             db: context.env.ROSTER_DB,
+            identityDiscoveryEnabled: discoveryEnabled,
             facilityAccessMaterialized: materializedAccessFor(loginRecord),
             includeAvailableDoctors: (loginRecord.role || roleForEmail(loginRecord.email)) === "creator"
               || (loginRecord.role || roleForEmail(loginRecord.email)) === "owner"
               || !sanitizeClaims(loginRecord.claims).length,
           });
       const prepareMs = Date.now() - prepareStartedAt;
-      const snapshotPayload = responseMode === "fast"
+      const snapshotPayload = responseMode === "fast" || !accountSnapshotBuildEnabled(context.env)
         ? await loadFastAccountSnapshotPayload(context, {
             targetRecord: loginRecord,
             prepared,
@@ -255,7 +266,8 @@ export async function onRequestPost(context) {
             targetRecord: loginRecord,
             prepared,
             cachedRevision: body?.cachedRevision,
-            allowInlineBuild: true,
+            allowInlineBuild: accountSnapshotBuildEnabled(context.env),
+            skipRebuild: !accountSnapshotBuildEnabled(context.env),
             reason: "login",
           });
       const loginTiming = {
@@ -302,6 +314,7 @@ export async function onRequestPost(context) {
         facilityOverviewAccess: prepared.facilityOverviewAccess,
         nonClinical: prepared.nonClinical,
         directorViewEnabled: prepared.directorViewEnabled,
+        identityDiscoveryUnavailable: !discoveryEnabled,
         snapshotOwnerType: snapshotPayload.snapshot?.ownerType || snapshotOwnerTypeForRecord(loginRecord, prepared.role),
         snapshotOwnerId: snapshotPayload.snapshot?.ownerId || normalizeEmail(loginRecord.email),
       };
@@ -552,14 +565,17 @@ export async function onRequestPost(context) {
         nonClinical,
         directorViewEnabled,
       });
-      let createdRecord = nonClinical
+      const discoveryEnabled = identityDiscoveryEnabled(context.env);
+      let createdRecord = nonClinical || !discoveryEnabled
         ? created.record
         : await autoClaimMatchedCanonicalDoctors(created.record, context.env.ROSTER_DB);
       if (directorViewEnabled) createdRecord = { ...createdRecord, facilityOverviewEnabled: true };
-      await upsertAccountMirror(context.env.ROSTER_DB, createdRecord);
+      await upsertAccountMirror(context.env.ROSTER_DB, createdRecord, { syncIdentity: discoveryEnabled });
       const createdClaims = sanitizeClaims(createdRecord.claims);
       const createdRole = createdRecord.role || roleForEmail(targetEmail);
-      const createdSeniorities = await queryDoctorSeniorities(context.env.ROSTER_DB, createdClaims.map((claim) => claim.key)).catch(() => []);
+      const createdSeniorities = discoveryEnabled
+        ? await queryDoctorSeniorities(context.env.ROSTER_DB, createdClaims.map((claim) => claim.key)).catch(() => [])
+        : [];
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -588,6 +604,7 @@ export async function onRequestPost(context) {
       }
       const localDisabled = localFeatureDisabledResponse(context.env, "Email invitations");
       if (localDisabled) return localDisabled;
+      await cleanupExpiredInvitedAccounts(context.env.ROSTER_DB);
       const targetRealName = String(body?.targetRealName || "").trim();
       const nonClinical = body?.nonClinical === true;
       const directorViewEnabled = body?.directorViewEnabled === true;
@@ -652,12 +669,14 @@ export async function onRequestPost(context) {
         ? await loadAccountMirror(context.env.ROSTER_DB, targetEmail)
         : account.record;
       if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
-      const resolved = targetRecord.nonClinical === true
+      const discoveryEnabled = identityDiscoveryEnabled(context.env);
+      const resolved = targetRecord.nonClinical === true || !discoveryEnabled
         ? targetRecord
         : await autoClaimMatchedRosterNames(null, targetRecord, context.env.ROSTER_DB);
       const resolvedClaims = sanitizeClaims(resolved.claims);
       const prepared = await prepareAccountResponse(null, resolved, {
         db: context.env.ROSTER_DB,
+        identityDiscoveryEnabled: discoveryEnabled,
         facilityAccessMaterialized: materializedAccessFor(account.record, resolved),
         includeAvailableDoctors: resolved.role !== "creator" && resolved.role !== "owner" && !resolvedClaims.length,
       });
@@ -683,6 +702,7 @@ export async function onRequestPost(context) {
         snapshotOwnerType: snapshotOwnerTypeForRecord(targetRecord, prepared.role),
         snapshotOwnerId: normalizeEmail(targetRecord.email),
         issueConfig: prepared.issueConfig,
+        identityDiscoveryUnavailable: !discoveryEnabled,
       });
     }
 
@@ -692,11 +712,12 @@ export async function onRequestPost(context) {
       }
       let target = await loadAccountMirror(context.env.ROSTER_DB, targetEmail);
       if (!target) return Response.json({ error: "Account not found." }, { status: 404 });
-      if (target.nonClinical !== true && !sanitizeClaims(target.claims).length) {
+      const discoveryEnabled = identityDiscoveryEnabled(context.env);
+      if (discoveryEnabled && target.nonClinical !== true && !sanitizeClaims(target.claims).length) {
         target = await autoClaimMatchedRosterNames(null, target, context.env.ROSTER_DB);
-        await upsertAccountMirror(context.env.ROSTER_DB, target).catch(() => null);
+        await upsertAccountMirror(context.env.ROSTER_DB, target, { syncIdentity: true }).catch(() => null);
       }
-      target = await repairAccountClaimsIfNeeded(context.env.ROSTER_DB, target, { reason: "adminLoadUser" });
+      if (discoveryEnabled) target = await repairAccountClaimsIfNeeded(context.env.ROSTER_DB, target, { reason: "adminLoadUser" });
       const targetClaims = sanitizeClaims(target.claims);
       // The switcher uses the fast envelope first.  Building the full account
       // response (and a snapshot) here can traverse a large roster twice and
@@ -705,10 +726,11 @@ export async function onRequestPost(context) {
         ? await prepareFastLoginEnvelope(target, { db: context.env.ROSTER_DB, facilityAccessMaterialized: materializedAccessFor(account.record, target) })
         : await prepareAccountResponse(null, target, {
             db: context.env.ROSTER_DB,
+            identityDiscoveryEnabled: discoveryEnabled,
             facilityAccessMaterialized: materializedAccessFor(account.record, target),
             includeAvailableDoctors: !targetClaims.length,
           });
-      const snapshotPayload = responseMode === "fast"
+      const snapshotPayload = responseMode === "fast" || !accountSnapshotBuildEnabled(context.env)
         ? await loadFastAccountSnapshotPayload(context, {
             targetRecord: target,
             prepared,
@@ -718,7 +740,8 @@ export async function onRequestPost(context) {
             targetRecord: target,
             prepared,
             cachedRevision: body?.cachedRevision || "",
-            allowInlineBuild: body?.allowInlineBuild !== false,
+            allowInlineBuild: accountSnapshotBuildEnabled(context.env) && body?.allowInlineBuild !== false,
+            skipRebuild: !accountSnapshotBuildEnabled(context.env),
             reason: "adminLoadUser",
           });
       return Response.json({
@@ -752,6 +775,7 @@ export async function onRequestPost(context) {
         snapshotOwnerType: snapshotPayload.snapshot?.ownerType || snapshotOwnerTypeForRecord(target, prepared.role),
         snapshotOwnerId: snapshotPayload.snapshot?.ownerId || normalizeEmail(target.email),
         issueConfig: prepared.issueConfig,
+        identityDiscoveryUnavailable: !discoveryEnabled,
       });
     }
 
@@ -761,8 +785,10 @@ export async function onRequestPost(context) {
         : account.record;
       if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
       const targetClaims = sanitizeClaims(targetRecord.claims);
+      const discoveryEnabled = identityDiscoveryEnabled(context.env);
       const prepared = await prepareAccountResponse(null, targetRecord, {
         db: context.env.ROSTER_DB,
+        identityDiscoveryEnabled: discoveryEnabled,
         facilityAccessMaterialized: materializedAccessFor(account.record, targetRecord),
         includeAvailableDoctors: (targetRecord.role || roleForEmail(targetRecord.email)) === "creator"
           || (targetRecord.role || roleForEmail(targetRecord.email)) === "owner"
@@ -784,10 +810,12 @@ export async function onRequestPost(context) {
         suggestedClaims: prepared.nameMatches,
         availableDoctors: prepared.availableDoctors,
         issueConfig: prepared.issueConfig,
+        identityDiscoveryUnavailable: !discoveryEnabled,
       });
     }
 
     if (action === "claimRosterName") {
+      if (!identityDiscoveryEnabled(context.env)) return identityDiscoveryPausedResponse();
       const claimEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
       const targetRecord = claimEmail === email ? account.record : await loadAccountMirror(context.env.ROSTER_DB, claimEmail);
       if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
@@ -821,7 +849,7 @@ export async function onRequestPost(context) {
         state,
         updatedAt: new Date().toISOString(),
       };
-      await upsertAccountMirror(context.env.ROSTER_DB, updated);
+      await upsertAccountMirror(context.env.ROSTER_DB, updated, { syncIdentity: true });
       scheduleSnapshotWarmupForAccount(context, claimEmail, { reason: "claimRosterName" });
       const prepared = await prepareAccountResponse(null, updated, { db: context.env.ROSTER_DB, facilityAccessMaterialized: materializedAccessFor(account.record, updated) });
       return Response.json({
@@ -851,17 +879,16 @@ export async function onRequestPost(context) {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
       const globalParserExtensions = await loadD1ParserExtensionRules(context.env.ROSTER_DB);
-      const repairedUsers = [];
-      for (const record of await listAccountMirrors(context.env.ROSTER_DB).catch(() => [])) {
-        repairedUsers.push(await repairAccountClaimsIfNeeded(context.env.ROSTER_DB, record, { reason: "listUsers" }));
-      }
+      const discoveryEnabled = identityDiscoveryEnabled(context.env);
+      const repairedUsers = await listAccountMirrors(context.env.ROSTER_DB).catch(() => []);
       return Response.json({
         ok: true,
-        users: await Promise.all(repairedUsers.map((record) => userSummaryFromRecord(record.email, record, { db: context.env.ROSTER_DB, globalParserExtensions }))),
-        availableDoctors: await repositoryDoctorCandidates(null, null, context.env.ROSTER_DB, {
+        users: await Promise.all(repairedUsers.map((record) => userSummaryFromRecord(record.email, record, { db: context.env.ROSTER_DB, globalParserExtensions, includeSeniorities: discoveryEnabled }))),
+        availableDoctors: discoveryEnabled ? await repositoryDoctorCandidates(null, null, context.env.ROSTER_DB, {
           hideZeroEventStandalone: true,
           preferCanonical: true,
-        }),
+        }) : [],
+        identityDiscoveryUnavailable: !discoveryEnabled,
         issueConfig: await buildIssueConfig(null, email, context.env.ROSTER_DB),
       });
     }
@@ -1190,9 +1217,15 @@ export async function onRequestPost(context) {
         ...passwordRecord,
         updatedAt: new Date().toISOString(),
       };
-      await upsertAccountMirror(context.env.ROSTER_DB, updated);
-      scheduleSnapshotWarmupForAccount(context, saveEmail, { reason: "updateAccount" });
-      const prepared = await prepareAccountResponse(null, updated, { db: context.env.ROSTER_DB, facilityAccessMaterialized: materializedAccessFor(account.record, updated), includeAvailableDoctors: false });
+      const profileChanged = nextRealName !== String(targetRecord.realName || "") || Boolean(nextPassword);
+      if (profileChanged) await upsertAccountMirror(context.env.ROSTER_DB, updated, {
+        syncClaims: false,
+        syncIdentity: false,
+        syncState: false,
+        syncLocations: false,
+        syncSubscription: false,
+      });
+      const prepared = await prepareAccountResponse(null, updated, { db: context.env.ROSTER_DB, identityDiscoveryEnabled: false, facilityAccessMaterialized: materializedAccessFor(account.record, updated), includeAvailableDoctors: false });
       return Response.json({
         ok: true,
         realName: prepared.realName,
@@ -1210,6 +1243,7 @@ export async function onRequestPost(context) {
       if (!targetEmail) {
         return Response.json({ error: "Target account is required." }, { status: 400 });
       }
+      if (!identityDiscoveryEnabled(context.env)) return identityDiscoveryPausedResponse();
       const targetRecord = await loadAccountMirror(context.env.ROSTER_DB, targetEmail);
       if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
       const canonicalDoctors = await loadSqlDoctorCandidates(context.env.ROSTER_DB);
@@ -1229,7 +1263,7 @@ export async function onRequestPost(context) {
         state,
         updatedAt: new Date().toISOString(),
       };
-      await upsertAccountMirror(context.env.ROSTER_DB, updated);
+      await upsertAccountMirror(context.env.ROSTER_DB, updated, { syncIdentity: true });
       scheduleSnapshotWarmupForAccount(context, targetEmail, { reason: "setAccountRosterClaims" });
       return Response.json({
         ok: true,
@@ -1638,7 +1672,11 @@ export async function onRequestPost(context) {
           return !removedIds.includes(repoId);
         });
       }
-      await replaceAccountCustomEvents(context.env.ROSTER_DB, saveEmail, sanitizeSnapshotCustomEvents(state.session?.customEvents, saveEmail));
+      const nextCustomEvents = sanitizeSnapshotCustomEvents(state.session?.customEvents, saveEmail);
+      const existingCustomEvents = await queryAccountCustomEvents(context.env.ROSTER_DB, saveEmail).catch(() => []);
+      if (stableJsonStringify(nextCustomEvents) !== stableJsonStringify(sanitizeSnapshotCustomEvents(existingCustomEvents, saveEmail))) {
+        await replaceAccountCustomEvents(context.env.ROSTER_DB, saveEmail, nextCustomEvents);
+      }
       const durableState = {
         ...state,
         session: stripRelationalCustomEventsFromSession(state.session),
@@ -1652,15 +1690,22 @@ export async function onRequestPost(context) {
         state: durableState,
         updatedAt: new Date().toISOString(),
       };
-      await upsertAccountMirror(context.env.ROSTER_DB, updatedRecord);
-      const calendarRevision = await queryAccountCalendarRevision(context.env.ROSTER_DB, updatedRecord, {
-        role: targetRole,
-        claims,
-      }).catch(() => "");
+      const existingSession = stripRelationalCustomEventsFromSession(sanitizeState(targetRecord.state).session);
+      if (stableJsonStringify(existingSession) !== stableJsonStringify(durableState.session)) {
+        await upsertAccountMirror(context.env.ROSTER_DB, updatedRecord, {
+          syncProfile: false,
+          syncClaims: false,
+          syncIdentity: false,
+          syncState: true,
+          syncLocations: true,
+        });
+      }
+      // Keep the client's existing revision. Computing a whole-account
+      // revision on every UI-state save is unrelated to the mutation and can
+      // touch several shared tables.
+      const calendarRevision = "";
       if (removedImportIds.length) {
         scheduleSnapshotWarmupForSourceTypes(context, removedRosterSourceTypes, { reason: "save-removeImports" });
-      } else {
-        scheduleSnapshotWarmupForAccount(context, saveEmail, { reason: "save" });
       }
       return Response.json({ ok: true, role: targetRole, claims, calendarRevision });
     }
@@ -2608,7 +2653,7 @@ async function autoClaimMatchedRosterNames(store, record, db = null) {
     state,
     updatedAt: new Date().toISOString(),
   };
-  await upsertAccountMirror(db, updated).catch(() => null);
+  await upsertAccountMirror(db, updated, { syncIdentity: true }).catch(() => null);
   return updated;
 }
 
@@ -3071,7 +3116,7 @@ async function userSummaryFromRecord(email, record, options = {}) {
     state: sanitizeState(record?.state),
   });
   const adminIssues = filterResolvedAdminIssuesForSummary(record, options.globalParserExtensions);
-  const seniorities = options.db
+  const seniorities = options.db && options.includeSeniorities !== false
     ? await queryDoctorSeniorities(options.db, claims.map((claim) => claim.key)).catch(() => [])
     : [];
   return {
@@ -3119,7 +3164,7 @@ async function repairAccountClaimsIfNeeded(db, record, options = {}) {
   await upsertAccountMirror(db, {
     ...normalizedRecord,
     updatedAt: new Date().toISOString(),
-  }).catch(() => null);
+  }, { syncIdentity: true }).catch(() => null);
   logClaimedAccountSnapshotSelection(record, claims, nextDoctorKey, existingDoctorKey, options.reason || "repairAccountClaims");
   return normalizedRecord;
 }
@@ -3540,7 +3585,7 @@ async function prepareFastLoginEnvelope(rawRecord, options = {}) {
 }
 
 async function applySqlHospitalLocationSettings(db, email, state) {
-  const locations = await loadAccountHospitalLocations(db, email, state?.session).catch(() => null);
+  const locations = await loadAccountHospitalLocations(db, email, state?.session, { seedMissing: false }).catch(() => null);
   if (!locations) return state;
   return {
     ...state,
@@ -3553,7 +3598,7 @@ async function applySqlHospitalLocationSettings(db, email, state) {
 
 export async function prepareAccountResponse(store, rawRecord, options = {}) {
   let record = await ensureAccountSubscriptionToken(store, rawRecord);
-  if (record?.subscriptionToken && record.subscriptionToken !== rawRecord?.subscriptionToken) {
+  if (options.allowAutomaticRepair === true && record?.subscriptionToken && record.subscriptionToken !== rawRecord?.subscriptionToken) {
     await upsertAccountMirror(options.db, record, { preserveExistingState: true }).catch(() => null);
   }
   const role = record.role || roleForEmail(record.email);
@@ -3583,18 +3628,20 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
         ]),
       },
     };
-  } else if (state.session?.customEvents?.length) {
+  } else if (options.allowAutomaticRepair === true && state.session?.customEvents?.length) {
     await replaceAccountCustomEvents(options.db, record.email, sanitizeSnapshotCustomEvents(state.session.customEvents, record.email)).catch(() => null);
   }
   let linkedProfiles = [];
 
   if (role !== "creator" && role !== "owner") {
     const originalClaims = claims;
-    const matchedClaims = await filterAvailableAutoClaims(
-      matchDoctorClaims(await loadSqlDoctorCandidates(options.db), record.realName || "", record.email),
-      record.email,
-      options.db,
-    );
+    const matchedClaims = options.identityDiscoveryEnabled === true
+      ? await filterAvailableAutoClaims(
+          matchDoctorClaims(await loadSqlDoctorCandidates(options.db), record.realName || "", record.email),
+          record.email,
+          options.db,
+        )
+      : [];
     nameMatches = matchedClaims.filter((claim) => !claims.some((existing) => sameClaim(existing, claim)));
     claims = mergeClaims(claims, matchedClaims);
     linkedProfiles = await linkedDoctorProfilesForClaims(store, claims, options.db);
@@ -3608,7 +3655,7 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
     const previousState = sanitizeState(record.state);
     const importRefsChanged = importsChanged(previousState.imports, accountImportRefs);
     const claimsChanged = JSON.stringify(claims) !== JSON.stringify(originalClaims);
-    if (claimsChanged || importRefsChanged) {
+    if (options.allowAutomaticRepair === true && (claimsChanged || importRefsChanged)) {
       const updatedRecord = {
         ...record,
         claims,
@@ -3635,7 +3682,7 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
   state = applyDefaultSelectedDoctorToState(state, role, claims, defaultDoctorKey);
   if (role !== "creator" && role !== "owner") {
     const persistedDoctorKey = normalizeRosterName(record?.state?.session?.doctorKey || "");
-    if (defaultDoctorKey && persistedDoctorKey !== defaultDoctorKey) {
+    if (options.allowAutomaticRepair === true && defaultDoctorKey && persistedDoctorKey !== defaultDoctorKey) {
       await upsertAccountMirror(options.db, {
         ...record,
         claims,
@@ -3664,7 +3711,7 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
     state,
     claims,
     nameMatches,
-    availableDoctors: options.includeAvailableDoctors === false ? [] : await repositoryDoctorCandidates(store, null, options.db, {
+    availableDoctors: options.includeAvailableDoctors === false || options.identityDiscoveryEnabled !== true ? [] : await repositoryDoctorCandidates(store, null, options.db, {
       preferCanonical: options.preferCanonicalDoctors !== false,
     }),
     subscription: {
@@ -4295,6 +4342,7 @@ async function buildAndStoreAccountSnapshot(context, job = {}) {
 }
 
 function scheduleSnapshotWarmupForAccount(context, email, options = {}) {
+  if (!accountSnapshotBuildEnabled(context?.env)) return;
   if (typeof context.waitUntil !== "function" || !email) return;
   context.waitUntil((async () => {
     const record = await loadAccountMirror(context.env.ROSTER_DB, email).catch(() => null);
@@ -4681,20 +4729,12 @@ function doctorKeysForOption(doctor) {
 
 async function creatorDoctorOptionsForD1(db, index) {
   const canonicalDoctors = await queryCanonicalDoctors(db).catch(() => []);
-  if (canonicalDoctors.length) return canonicalDoctors;
-  const doctorRows = await queryRosterFileDoctors(db).catch(() => []);
-  if (doctorRows.length) return await buildCanonicalDoctorOptionsFromRows(db, doctorRows, { includeZeroEventStandalone: true });
-  return [];
+  return canonicalDoctors;
 }
 
 async function loadSqlDoctorCandidates(db) {
   const canonicalDoctors = await queryCanonicalDoctors(db).catch(() => []);
-  if (canonicalDoctors.length) return canonicalDoctors;
-  const rosterDoctors = await queryRosterDoctors(db).catch(() => []);
-  if (rosterDoctors.length) return rosterDoctors;
-  const doctorRows = await queryRosterFileDoctors(db).catch(() => []);
-  if (doctorRows.length) return await buildCanonicalDoctorOptionsFromRows(db, doctorRows, { includeZeroEventStandalone: true });
-  return [];
+  return canonicalDoctors;
 }
 
 async function resolveRosterFileDoctorRows(db, options = {}) {
@@ -5700,14 +5740,6 @@ async function repositoryDoctorCandidates(store, index, db = null, options = {})
   const canonicalOptions = {
     includeZeroEventStandalone: options.hideZeroEventStandalone !== true,
   };
-  if (options.preferCanonical === true) {
-    const canonicalDoctors = await queryCanonicalDoctors(db, canonicalOptions).catch(() => []);
-    if (canonicalDoctors.length) return attachClaimedAccountMetadata(canonicalDoctors, accountIndex);
-  }
-  const doctorRows = await queryRosterFileDoctors(db).catch(() => []);
-  if (doctorRows.length) {
-    return attachClaimedAccountMetadata(await buildCanonicalDoctorOptionsFromRows(db, doctorRows, canonicalOptions), accountIndex);
-  }
   const canonicalDoctors = await queryCanonicalDoctors(db, canonicalOptions).catch(() => []);
   if (canonicalDoctors.length) return attachClaimedAccountMetadata(canonicalDoctors, accountIndex);
   return [];

@@ -3493,7 +3493,7 @@ export async function upsertAccountMirror(db, record, options = {}) {
   const email = normalizeEmail(record.email);
   const role = String(record.role || (email ? "user" : "") || "user");
   const updatedAt = new Date().toISOString();
-  await db.prepare(`
+  if (options.syncProfile !== false) await db.prepare(`
     INSERT INTO account_profiles (
       email, real_name, role, insights_enabled, facility_overview_enabled, non_clinical, director_view_enabled, subscription_token, password_salt, password_hash,
       admin_issues_json, local_parser_extensions_json, created_at, updated_at
@@ -3528,9 +3528,9 @@ export async function upsertAccountMirror(db, record, options = {}) {
     String(record.createdAt || updatedAt),
     updatedAt,
   ).run();
-  await db.prepare("DELETE FROM account_claims WHERE email = ?").bind(email).run();
-  await db.prepare("DELETE FROM subscription_tokens WHERE email = ?").bind(email).run();
-  if (record.subscriptionToken) {
+  if (options.syncClaims !== false) await db.prepare("DELETE FROM account_claims WHERE email = ?").bind(email).run();
+  if (options.syncProfile !== false && options.syncSubscription !== false) await db.prepare("DELETE FROM subscription_tokens WHERE email = ?").bind(email).run();
+  if (options.syncProfile !== false && options.syncSubscription !== false && record.subscriptionToken) {
     await db.prepare(`
       INSERT INTO subscription_tokens (token, email, created_at, updated_at)
       VALUES (?, ?, ?, ?)
@@ -3542,8 +3542,8 @@ export async function upsertAccountMirror(db, record, options = {}) {
   const claims = sanitizeAccountClaims(record.claims);
   // A claimed account is a reviewed identity boundary. Seed only its explicit
   // source/key claims; ambiguous names are never inferred here.
-  await ensureAccountPersonAliases(db, email, record.realName, claims);
-  for (const chunk of chunkRowsForBindLimit(claims.map((claim) => [
+  if (options.syncIdentity === true) await ensureAccountPersonAliases(db, email, record.realName, claims);
+  for (const chunk of options.syncClaims === false ? [] : chunkRowsForBindLimit(claims.map((claim) => [
     email,
     claim.sourceType,
     claim.key,
@@ -3565,7 +3565,7 @@ export async function upsertAccountMirror(db, record, options = {}) {
   const existingState = preserveExistingState
     ? await db.prepare("SELECT session_json FROM account_states WHERE email = ?").bind(email).first()
     : null;
-  if (!existingState?.session_json) {
+  if (options.syncState !== false && !existingState?.session_json) {
     const session = record?.state?.session && typeof record.state.session === "object" ? record.state.session : {};
     await db.prepare(`
       INSERT INTO account_states (email, session_json, updated_at)
@@ -3575,7 +3575,7 @@ export async function upsertAccountMirror(db, record, options = {}) {
         updated_at = excluded.updated_at
     `).bind(email, JSON.stringify(session), updatedAt).run();
   }
-  await upsertAccountHospitalLocations(db, email, hospitalLocationsFromSession(record?.state?.session), { preserveExisting: preserveExistingState });
+  if (options.syncLocations !== false) await upsertAccountHospitalLocations(db, email, hospitalLocationsFromSession(record?.state?.session), { preserveExisting: preserveExistingState });
   return true;
 }
 
@@ -3993,7 +3993,7 @@ export async function loadAccountStateMirror(db, email) {
   }
 }
 
-export async function loadAccountHospitalLocations(db, email, fallbackSession = null) {
+export async function loadAccountHospitalLocations(db, email, fallbackSession = null, options = {}) {
   if (!db?.prepare || !email) return hospitalLocationsFromSession(fallbackSession);
   await ensureCalendarSchema(db);
   const normalizedEmail = normalizeEmail(email);
@@ -4011,7 +4011,9 @@ export async function loadAccountHospitalLocations(db, email, fallbackSession = 
   }
   if (!rows.length) {
     const locations = hospitalLocationsFromSession(fallbackSession);
-    await upsertAccountHospitalLocations(db, normalizedEmail, locations, { preserveExisting: true }).catch(() => null);
+    if (options.seedMissing === true) {
+      await upsertAccountHospitalLocations(db, normalizedEmail, locations, { preserveExisting: true }).catch(() => null);
+    }
     return locations;
   }
   return normalizeHospitalLocationMap(Object.fromEntries(rows.map((row) => [String(row.source_type || "").toLowerCase(), row.location])));
@@ -4022,15 +4024,17 @@ export async function upsertAccountHospitalLocations(db, email, locations = {}, 
   await ensureCalendarSchema(db);
   const normalizedEmail = normalizeEmail(email);
   const next = normalizeHospitalLocationMap(locations);
+  const rows = await db.prepare("SELECT source_type, location FROM account_hospital_locations WHERE email = ?").bind(normalizedEmail).all().catch(() => ({ results: [] }));
+  const existing = Object.fromEntries((rows.results || []).map((row) => [String(row.source_type || "").toLowerCase(), String(row.location || "")]));
   if (options.preserveExisting === true) {
-    const rows = await db.prepare("SELECT source_type, location FROM account_hospital_locations WHERE email = ?").bind(normalizedEmail).all().catch(() => ({ results: [] }));
-    const existing = Object.fromEntries((rows.results || []).map((row) => [String(row.source_type || "").toLowerCase(), String(row.location || "")]));
     for (const sourceType of SOURCE_TYPES) {
       if (existing[sourceType]) next[sourceType] = existing[sourceType];
     }
   }
   const updatedAt = new Date().toISOString();
   for (const sourceType of SOURCE_TYPES) {
+    const hasExisting = Object.prototype.hasOwnProperty.call(existing, sourceType);
+    if ((!hasExisting && !next[sourceType]) || (hasExisting && existing[sourceType] === next[sourceType])) continue;
     await db.prepare(`
       INSERT INTO account_hospital_locations (email, source_type, location, updated_at)
       VALUES (?, ?, ?, ?)

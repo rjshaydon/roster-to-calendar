@@ -37,7 +37,9 @@ the reset-day runbook.
   outcome is provided by a safer mechanism.
 - **Still live** — listed to prevent accidental removal or confusion with a
   paused feature.
-- **Paused** — the feature exists but its Production path is blocked.
+- **Containment required** — an unsafe path has been identified and must be
+  locally remediated before further rollout; this does not claim it caused a
+  specific unattributed incident.
 
 ## Configuration control index
 
@@ -71,6 +73,8 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 | `FACILITY_BOOTSTRAP_FILE_ALLOWLIST` | empty | FR-12 |
 | `CONTACT_AUTOMATION_WRITES_ENABLED` | `false` | FR-08 |
 | `CONTACT_AUTOMATION_SOURCE_ALLOWLIST` | empty | FR-08 |
+| `IDENTITY_DISCOVERY_ENABLED` | `false`; missing or malformed also fails closed | FR-21, FR-24 |
+| `ACCOUNT_SNAPSHOT_BUILD_ENABLED` | `false`; missing or malformed also fails closed | FR-23 |
 | Watchdog `ROSTER_AUTOMATION_ENABLED` | `false` | FR-10 |
 
 ## User-facing restoration register
@@ -401,26 +405,91 @@ pause, and future maintenance work must not accidentally disable them.
   doctor-profile entitlement lookup.
 - **Note:** Entitlements remain stored even while the data workspace is paused,
   so restoration does not require recreating user settings.
+- **Safety decision:** Do not disable individual entitlements during global
+  maintenance. The pre-authentication maintenance gate already blocks every At
+  a glance data/edit action regardless of entitlement. Editing user settings
+  would add D1 writes, destroy desired configuration and provide no additional
+  protection.
+
+### FR-21 — Automatic doctor discovery during login/account loading
+
+- **State:** Containment implemented locally; Production deployment pending.
+- **Risk:** Unclaimed or incompletely claimed ordinary accounts can fall back
+  from compact identity data to roster-file doctors and historical event
+  comparisons. This is a plausible high-cost path but is not proven as the
+  source of the unattributed 8 September burst.
+- **Containment:** Preserve login and existing claims, but fail closed with a
+  friendly identity-linking-unavailable state when compact records are absent.
+  No login/account-context request may scan roster history.
+- **Restoration:** Restore automatic suggestions from bounded indexed candidate
+  blocks maintained only when a roster identity changes.
+- **Plan:** `ordinary-login-identity-d1-remediation-plan.md`.
+
+### FR-22 — Automatic account repair and identity seeding
+
+- **State:** Reduced locally; Production deployment pending.
+- **Risk:** A general account save can rewrite profiles, claims, aliases and
+  locations, while durable identity rows may be seeded as a side effect.
+- **Containment:** Split mutations by responsibility; semantic no-ops write
+  zero rows; identity changes occur only during explicit identity actions or
+  incremental ingestion.
+- **Restoration:** Retain useful repair as an explicit, bounded, idempotent
+  maintenance operation—not an ordinary login/save side effect.
+
+### FR-23 — Snapshot warm-up after ordinary account saves
+
+- **State:** Paused locally behind a default-off control; Production deployment
+  pending.
+- **Risk:** Ordinary saves can schedule post-response snapshot preparation and
+  hidden D1 work even when roster facts did not change.
+- **Containment:** No snapshot warm-up follows UI-state/profile saves. Builders
+  require a changed dependency revision, independent default-off control, exact
+  scope and a hard per-run budget.
+- **Restoration:** Revision-driven, coalesced rebuilds only; unchanged inputs
+  perform zero D1/R2 work.
+
+### FR-24 — Creator user directory identity/seniority enrichment
+
+- **State:** Paused locally while identity discovery is disabled; Production
+  deployment pending.
+- **Note:** `listUsers` is an explicit Creator action and is not a credible
+  explanation for an incident when the Creator did not open the app. It still
+  must not derive identity or seniority from event history.
+- **Restoration:** Serve bounded compact account/term summaries, or show the
+  enrichment as temporarily unavailable.
+
+### FR-25 — Retained deployments with Production D1 bindings
+
+- **State:** Inventory complete; deletion of unsafe retained Production
+  deployments pending a verified contained replacement.
+- **Evidence:** Analytics exposed a `sqlite_master` fingerprint not emitted by
+  current code. This suggests an older callable deployment may remain, but does
+  not prove it caused the burst.
+- **Containment:** Inventory every callable deployment and binding through the
+  control plane. Prepare reversible blocking of unsafe deployment URLs with
+  explicit approval; preserve Git history and rollback information.
 
 ## Restoration order
 
 The order restores product value without reopening several D1 consumers at
 once:
 
-1. Deploy the documented zero-D1 maintenance gate and observe a passive fresh
-   quota day.
-2. Restore the bounded Admin → Files summary read only.
-3. Apply separately approved compact-fact migrations and bootstrap one exact
+1. Keep the documented zero-D1 At a glance maintenance gate active and preserve
+   all individual entitlements.
+2. Deploy the ordinary-login, identity-save and snapshot-warm-up containment in
+   FR-21–FR-25, then observe a passive fresh quota day.
+3. Restore the bounded Admin → Files summary read only.
+4. Apply separately approved compact-fact migrations and bootstrap one exact
    file/ED/term.
-4. Restore At a glance shared reads to the Creator for one ED, with contacts
+5. Restore At a glance shared reads to the Creator for one ED, with contacts
    still unavailable.
-5. Restore shared On shift contacts and their zero-D1 visible-page refresh.
-6. Expand At a glance by ED and cohort only after settled evidence at each
+6. Restore shared On shift contacts and their zero-D1 visible-page refresh.
+7. Expand At a glance by ED and cohort only after settled evidence at each
    step.
-7. Restore manual incremental roster imports for one source.
-8. Restore automatic roster and contact ingestion source by source.
-9. Restore the watchdog only after all called endpoints are already safe.
-10. Reintegrate the durable Doctor Names work on a fresh branch from the stable
+8. Restore manual incremental roster imports for one source.
+9. Restore automatic roster and contact ingestion source by source.
+10. Restore the watchdog only after all called endpoints are already safe.
+11. Reintegrate the durable Doctor Names work on a fresh branch from the stable
     Production baseline.
 
 FR-13 through FR-17 are not prerequisites to undo. Their original unsafe
@@ -439,6 +508,8 @@ mechanisms are intentionally excluded from restoration.
 | `6bda8b7` | Separated and closed roster, contact, bootstrap, queue and maintenance capabilities (FR-01, FR-04, FR-07, FR-08, FR-11, FR-12). |
 | `2af89c0` | Reduced automatic status writes, calendar retries and duplicate By stream requests (FR-13–FR-15). |
 | `a146029` | Added the zero-D1 At a glance maintenance UI and pre-authentication gate (FR-01–FR-04). |
+| Plan, 8 Sep 2026 | Recorded required ordinary-login/identity/save/warm-up containment and retained-deployment audit (FR-21–FR-25); no runtime change. |
+| Local implementation, 8 Sep 2026 | Added default-off identity discovery and account snapshot-build controls; removed login history fallback and automatic repairs; made ordinary saves incremental with no snapshot warm-up. Not yet deployed. |
 
 ## Restoration record template
 
