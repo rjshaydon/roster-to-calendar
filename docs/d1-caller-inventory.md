@@ -1,6 +1,6 @@
 # D1 database and caller inventory
 
-Status: **control-plane inventory complete; retained-deployment containment pending**. Updated 8 September 2026 without
+Status: **control-plane inventory complete; retained Production deployments contained**. Updated 8 September 2026 without
 an application D1 query. Runtime rollout remains blocked by the incident's
 unattributed usage and the reset-day passive-baseline gate.
 
@@ -69,13 +69,15 @@ predates the ordinary-login identity containment. The oldest listed Production
 deployment is `1a8ee1fb-ac75-4078-83fe-ea155674be8e` (`cff238d`); the active
 deployment is `def76e30-d612-4de0-8d99-37e7baf52a25` (`af951d0`).
 
-This confirms that switching the active Production alias does not make older
-Production functions unreachable. It does not prove that an old URL was called
-during either incident. After the contained release is deployed and verified
-through the control plane, retained unsafe Production deployments should be
-deleted by exact deployment ID, preserving the new deployment and Git history.
-Preview deployments bind the Preview database and are not candidates for the
-Production database burst, but should be pruned separately to reduce ambiguity.
+This confirmed that switching the active Production alias did not make older
+Production functions unreachable. It did not prove that an old URL was called
+during either incident. After contained commit `18ba7a1` was deployed and its
+effective settings were read back, all 16 listed pre-containment Production
+deployments were deleted by exact ID. Two deployments of `18ba7a1` remain: the
+Git-triggered deployment and the explicit configuration deployment. Git history
+retains every deleted version. Preview deployments bind the Preview database
+and are not candidates for the Production database burst; they remain for
+separate housekeeping and cannot consume Production database rows.
 
 ## Completion gate
 

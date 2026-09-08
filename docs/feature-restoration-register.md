@@ -13,10 +13,10 @@ record its evidence, approval, deployment and post-deployment observation here.
 No entry may be removed after restoration; change its state to **Restored** so
 the history remains auditable.
 
-Current verified Production safety code: `a146029` on 7 September 2026,
-deployment `edf2e27b-a118-4a95-aab7-928bd1f3b1e4`. The zero-D1 At a glance
-maintenance gate is active. Effective Production configuration was read back
-after that deployment with
+Current verified Production safety code: `18ba7a1` on 8 September 2026,
+deployment `a4305bca-5538-4583-88f8-655bcb687556`. The zero-D1 At a glance
+maintenance gate and ordinary-login containment are active. Effective
+Production configuration was read back after that deployment with
 all facility readers/builders, roster and contact automation, roster status,
 bootstrap and advanced-maintenance controls closed.
 
@@ -413,7 +413,7 @@ pause, and future maintenance work must not accidentally disable them.
 
 ### FR-21 — Automatic doctor discovery during login/account loading
 
-- **State:** Containment implemented locally; Production deployment pending.
+- **State:** Paused in Production behind a default-off control.
 - **Risk:** Unclaimed or incompletely claimed ordinary accounts can fall back
   from compact identity data to roster-file doctors and historical event
   comparisons. This is a plausible high-cost path but is not proven as the
@@ -427,7 +427,7 @@ pause, and future maintenance work must not accidentally disable them.
 
 ### FR-22 — Automatic account repair and identity seeding
 
-- **State:** Reduced locally; Production deployment pending.
+- **State:** Reduced in Production.
 - **Risk:** A general account save can rewrite profiles, claims, aliases and
   locations, while durable identity rows may be seeded as a side effect.
 - **Containment:** Split mutations by responsibility; semantic no-ops write
@@ -438,8 +438,7 @@ pause, and future maintenance work must not accidentally disable them.
 
 ### FR-23 — Snapshot warm-up after ordinary account saves
 
-- **State:** Paused locally behind a default-off control; Production deployment
-  pending.
+- **State:** Paused in Production behind a default-off control.
 - **Risk:** Ordinary saves can schedule post-response snapshot preparation and
   hidden D1 work even when roster facts did not change.
 - **Containment:** No snapshot warm-up follows UI-state/profile saves. Builders
@@ -450,8 +449,7 @@ pause, and future maintenance work must not accidentally disable them.
 
 ### FR-24 — Creator user directory identity/seniority enrichment
 
-- **State:** Paused locally while identity discovery is disabled; Production
-  deployment pending.
+- **State:** Paused in Production while identity discovery is disabled.
 - **Note:** `listUsers` is an explicit Creator action and is not a credible
   explanation for an incident when the Creator did not open the app. It still
   must not derive identity or seniority from event history.
@@ -460,8 +458,9 @@ pause, and future maintenance work must not accidentally disable them.
 
 ### FR-25 — Retained deployments with Production D1 bindings
 
-- **State:** Inventory complete; deletion of unsafe retained Production
-  deployments pending a verified contained replacement.
+- **State:** Contained. All 16 listed pre-containment Production deployments
+  were deleted by exact ID after the contained replacement and configuration
+  were verified. Two reproducible `18ba7a1` Production deployments remain.
 - **Evidence:** Analytics exposed a `sqlite_master` fingerprint not emitted by
   current code. This suggests an older callable deployment may remain, but does
   not prove it caused the burst.
@@ -510,6 +509,7 @@ mechanisms are intentionally excluded from restoration.
 | `a146029` | Added the zero-D1 At a glance maintenance UI and pre-authentication gate (FR-01–FR-04). |
 | Plan, 8 Sep 2026 | Recorded required ordinary-login/identity/save/warm-up containment and retained-deployment audit (FR-21–FR-25); no runtime change. |
 | Local implementation, 8 Sep 2026 | Added default-off identity discovery and account snapshot-build controls; removed login history fallback and automatic repairs; made ordinary saves incremental with no snapshot warm-up. Not yet deployed. |
+| `18ba7a1` / `a4305bca-5538-4583-88f8-655bcb687556` | Deployed ordinary-login containment with all safety controls read back closed; removed the 16 retained pre-containment Production deployments by exact ID (FR-21–FR-25). |
 
 ## Restoration record template
 

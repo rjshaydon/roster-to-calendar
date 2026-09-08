@@ -428,5 +428,8 @@ Implemented on the local safety branch without contacting D1 or Cloudflare:
 Focused local tests prove an unclaimed full login remains successful with zero
 mutation statements, no roster-history statement and no scheduled work, and a
 repeated identical save produces zero mutations and no scheduled work. This is
-local evidence only. Production remains at the previously recorded deployment
-until a separately approved deploy and control-plane readback.
+now deployed as `18ba7a1`; effective Production configuration was downloaded
+and showed both new controls false and all prior safety controls closed. The 16
+listed pre-containment Production deployments were then deleted by exact ID,
+leaving two reproducible deployments of the contained commit. No application
+D1 route was called during deployment, verification or cleanup.
