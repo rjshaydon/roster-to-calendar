@@ -245,5 +245,22 @@ Focused evidence:
   remaining account and snapshot-registry lookups use exact primary-key
   indexes and do not grow with unrelated roster or account history.
 
-This is local evidence only. The release and production canaries in Stage 5
-remain outstanding.
+## Production containment release — 9 September 2026
+
+- Commit `a712068` was pushed to `main` and deployed to Production without
+  opening the application or issuing a D1 request.
+- Production deployments `65d4ac5f-9d97-4464-94e8-8210aa37145a` and
+  `b7d8d8e5-c53f-4aab-8951-3e10c3091bb5` both report source commit `a712068`.
+  The duplicate is the expected combination of Git-triggered and explicit
+  Wrangler deployment; both contain the same reviewed source.
+- A control-plane configuration download confirmed the Production D1 binding
+  remains `237d0d52-3a7c-4e02-8648-9f4dedbc1cb0`, both new Creator controls are
+  false, and all previously established maintenance and automation controls
+  remain closed.
+- The account-wide Analytics guard was run without querying D1. It correctly
+  returned STOP because the current UTC day already contains the two earlier
+  1.6-million-read incidents and therefore cannot provide a clean baseline.
+
+The next work is Stage 5's fresh-day passive observation followed, only if it
+passes, by one controlled Creator login. At a glance, Admin surfaces,
+colleague tools, migrations `0026` onward and restoration work remain closed.
