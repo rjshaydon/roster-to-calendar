@@ -238,6 +238,13 @@ At a glance maintenance gate, proving that optional-feature containment alone
 is insufficient. Do not proceed to Phase E or migration `0026` onward until
 that remediation is deployed and a later fresh-day baseline passes.
 
+The 9 September controlled Creator login also failed its gate with a
+1,623,542-read five-minute spike even though the At a glance maintenance UI
+correctly refused entry. Phase D is therefore additionally blocked on
+[`creator-login-bootstrap-d1-remediation-plan.md`](./creator-login-bootstrap-d1-remediation-plan.md).
+Do not use Creator login as a passive-baseline action; its separately measured
+canary follows a passing passive period.
+
 After a future 00:00 UTC reset:
 
 1. Do not perform a test D1 query merely to see whether the reset happened.

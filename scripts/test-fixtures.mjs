@@ -1315,7 +1315,7 @@ assert.match(
 assert.match(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
     .match(/if \(action === "login"\)[\s\S]*?const account = await verifyD1Account/)?.[0] || "",
-  /responseMode === "fast"[\s\S]*prepareFastLoginEnvelope\(loginRecord,[\s\S]*loadFastAccountSnapshotPayload[\s\S]*snapshotStatus[\s\S]*snapshotSource[\s\S]*snapshotRevision[\s\S]*viewedAccountPayload/,
+  /loginResponseMode === "fast"[\s\S]*prepareFastLoginEnvelope\(loginRecord,[\s\S]*loadFastAccountSnapshotPayload[\s\S]*snapshotStatus[\s\S]*snapshotSource[\s\S]*snapshotRevision[\s\S]*viewedAccountPayload/,
   "fast login should build a minimal account payload and use the lightweight snapshot path",
 );
 assert.match(
@@ -5071,6 +5071,8 @@ async function postStateRaw(store, payload, db = null, options = {}) {
       FACILITY_LEGACY_READS_PAUSED: "false",
       IDENTITY_DISCOVERY_ENABLED: "true",
       ACCOUNT_SNAPSHOT_BUILD_ENABLED: "true",
+      CREATOR_STARTUP_HYDRATION_ENABLED: "true",
+      CREATOR_DIRECTORY_ENABLED: "true",
       ...(options.env || {}),
     },
   };
@@ -5578,6 +5580,47 @@ const d1FastBrowserRevisionLogin = await postState(d1StateStore, {
 }, d1Store);
 assert.equal(d1FastBrowserRevisionLogin.snapshotCurrent, true, "fast login should accept a current browser revision");
 assert.equal(d1FastBrowserRevisionLogin.snapshot, null, "fast login should not resend an unchanged browser snapshot");
+d1Store.executedSql = [];
+const containedCreatorLogin = await postStateRaw(d1StateStore, {
+  action: "login",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  responseMode: "full",
+}, d1Store, {
+  captureWaitUntil: true,
+  env: {
+    CREATOR_STARTUP_HYDRATION_ENABLED: "false",
+    CREATOR_DIRECTORY_ENABLED: "false",
+    ROSTER_STATUS_SUMMARY_ENABLED: "false",
+    IDENTITY_DISCOVERY_ENABLED: "false",
+    ACCOUNT_SNAPSHOT_BUILD_ENABLED: "false",
+  },
+});
+assert.equal(containedCreatorLogin.response.ok, true);
+assert.equal(containedCreatorLogin.body.responseMode, "fast", "contained Creator login must ignore a stale client's full-response request");
+assert.equal(containedCreatorLogin.body.creatorStartupHydrationEnabled, false);
+assert.equal(containedCreatorLogin.waitUntilPromises.length, 0, "contained Creator login must schedule no background work");
+assert.equal(
+  d1Store.executedSql.some((sql) => /roster_events|roster_file_doctors|FROM roster_files\b|FROM account_profiles\s*(?:$|ORDER BY)/i.test(sql)),
+  false,
+  "contained Creator login must not scan roster history, file doctors, files or the account directory",
+);
+assert.ok(d1Store.executedSql.length <= 8, `contained Creator login must remain a small exact-key trace; observed ${d1Store.executedSql.length} statements`);
+d1Store.executedSql = [];
+const containedCreatorContextResult = await postStateRaw(d1StateStore, {
+  action: "loadAccountContext",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+}, d1Store, {
+  env: {
+    CREATOR_STARTUP_HYDRATION_ENABLED: "false",
+    IDENTITY_DISCOVERY_ENABLED: "false",
+  },
+});
+assert.equal(containedCreatorContextResult.response.ok, true);
+assert.equal(containedCreatorContextResult.body.creatorStartupHydrationEnabled, false);
+assert.equal(d1Store.executedSql.some((sql) => /roster_events|roster_file_doctors|FROM roster_files\b/i.test(sql)), false,
+  "a stale contained Creator context request must remain roster-independent");
 const d1CurrentRevisionCheck = await postState(d1StateStore, {
   action: "loadCalendarEvents",
   email: "d1-user@example.com",

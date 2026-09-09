@@ -468,6 +468,25 @@ pause, and future maintenance work must not accidentally disable them.
   control plane. Prepare reversible blocking of unsafe deployment URLs with
   explicit approval; preserve Git history and rollback information.
 
+### FR-26 — Automatic Creator login/bootstrap fan-out
+
+- **State:** Contained locally; not yet committed, deployed or verified in
+  Production.
+- **Observed behaviour:** On 9 September, one controlled Creator login plus one
+  attempt to enter maintenance-disabled At a glance and a return to Calendar
+  coincided with 1,623,542 reads in one five-minute bucket. The subsequent idle
+  tab added only 109 settled reads and no writes.
+- **Risk:** Creator hydration still queues user-directory, roster-status,
+  doctor-switcher, calendar/bootstrap and snapshot work that is not required
+  to authenticate or display a cached calendar. Cached-calendar rendering also
+  scheduled a colleague-insight warm-up without an explicit user action.
+- **Containment:** Minimal Creator login; no automatic Creator/Admin data fan-
+  out; independently gated, on-demand surfaces; zero D1 for disabled At a
+  glance navigation and post-login idle time.
+- **Restoration:** Restore each on-demand surface only after its own bounded
+  local cost test and production canary.
+- **Plan:** `creator-login-bootstrap-d1-remediation-plan.md`.
+
 ## Restoration order
 
 The order restores product value without reopening several D1 consumers at
@@ -512,6 +531,7 @@ mechanisms are intentionally excluded from restoration.
 | `18ba7a1` / `a4305bca-5538-4583-88f8-655bcb687556` | Deployed ordinary-login containment with all safety controls read back closed; removed the 16 retained pre-containment Production deployments by exact ID (FR-21–FR-25). |
 | Observation, 8 Sep 2026 | Settled 15:15–20:30 AEST Production usage after containment was 27,628 reads and 20 writes, with a maximum five-minute bucket of 1,658 reads. Full-day status remains STOP until a clean UTC quota day completes the passive gate. |
 | Incident and cleanup, 9 Sep 2026 | The fresh-day gate found a 1,693,486-read burst at 10:25 AEST and a pre-containment schema fingerprint. Wrangler's 25-result listing had hidden hundreds of callable Production hashes. Removed 673 additional pre-containment Production deployments in bounded batches; an independent Production-only listing confirmed exactly four contained deployments remain. Optional features remain closed pending post-cleanup settled evidence. |
+| Controlled Creator test, 9 Sep 2026 | Creator login plus one blocked At a glance navigation coincided with 1,623,542 reads in one five-minute bucket. The idle tab did not repeat the burst. Added FR-26 and blocked further Creator testing pending minimal-login remediation. |
 
 ## Restoration record template
 

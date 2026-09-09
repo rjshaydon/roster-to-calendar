@@ -33,13 +33,14 @@ const visibleTabs = 50;
 const viewingHours = 12;
 const refreshMinutes = 1;
 const contactRequests = visibleTabs * viewingHours * 60 / refreshMinutes;
-const maximumObservedCreatorLoginRequests = 6;
+const maximumContainedCreatorLoginRequests = 1;
 const report = {
   observedLocalCreatorLogin: {
     before: 11,
-    after: maximumObservedCreatorLoginRequests,
+    after: maximumContainedCreatorLoginRequests,
     removedAutomaticConsoleWrites: 2,
-    removedBackgroundCalendarRetries: 3,
+    removedBackgroundCalendarRetries: 4,
+    removedAutomaticAdminRequests: 3,
   },
   fiftyVisibleTabs: {
     viewingHours,
@@ -48,8 +49,9 @@ const report = {
     requiredD1RowsForUnchangedContactRefresh: 0,
   },
   gates: {
-    loginRequestsPerTab: maximumObservedCreatorLoginRequests,
-    postLoginBackgroundRetries: 1,
+    containedCreatorLoginRequestsPerTab: maximumContainedCreatorLoginRequests,
+    containedCreatorPostLoginBackgroundRequests: 0,
+    ordinaryPostLoginBackgroundRetries: 1,
     byStreamMetadataRequestsPerOpen: 1,
     hiddenContactRefreshes: 0,
   },

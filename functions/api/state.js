@@ -7,6 +7,7 @@ import { guardedFetch, localFeatureDisabledResponse } from "../_lib/outbound-net
 import { loadPublishedFacilityDays, loadPublishedFacilityMetadata, loadPublishedFacilityRange, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata } from "../_lib/facility-overview-cache.js";
 import { loadPublishedFacilityContacts, publishFacilityContactResolutions } from "../_lib/facility-contact-cache.js";
 import { facilityBuildSources, facilityLegacyReadsPaused, facilityOverviewMaintenanceMode, facilityReadRoute, facilityRolloutCohortEligible } from "../_lib/facility-rollout.js";
+import { creatorDirectoryEnabled, creatorStartupHydrationEnabled } from "../_lib/creator-startup-guard.js";
 import { extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentExceptions, findmyshiftLastModified, findmyshiftReportDiagnostics, findmyshiftShiftReport } from "../_lib/findmyshift.js";
 import {
   buildPreviewFromDerivedEvents,
@@ -125,6 +126,7 @@ const FACILITY_OVERVIEW_MAINTENANCE_ACTIONS = new Set([
 ]);
 const FACILITY_OVERVIEW_MAINTENANCE_MESSAGE = "At a glance is temporarily unavailable while we complete a reliability upgrade. Your roster and settings have not been removed.";
 const IDENTITY_DISCOVERY_MAINTENANCE_MESSAGE = "Doctor identity linking is temporarily unavailable while we complete a reliability upgrade. Your account and existing roster links have not been removed.";
+const CREATOR_DIRECTORY_MAINTENANCE_MESSAGE = "The user directory is temporarily unavailable while we complete a reliability upgrade. Existing accounts and permissions have not been removed.";
 
 function identityDiscoveryEnabled(env = {}) {
   return String(env.IDENTITY_DISCOVERY_ENABLED || "").trim().toLowerCase() === "true";
@@ -136,6 +138,34 @@ function accountSnapshotBuildEnabled(env = {}) {
 
 function identityDiscoveryPausedResponse() {
   return Response.json({ ok: false, unavailable: true, reason: "identity-discovery-disabled", error: IDENTITY_DISCOVERY_MAINTENANCE_MESSAGE }, { status: 503 });
+}
+
+function creatorDirectoryPausedResponse() {
+  return Response.json({
+    ok: true,
+    unavailable: true,
+    reason: "creator-directory-disabled",
+    message: CREATOR_DIRECTORY_MAINTENANCE_MESSAGE,
+    users: [],
+    availableDoctors: [],
+    identityDiscoveryUnavailable: true,
+  }, { headers: { "Cache-Control": "no-store" } });
+}
+
+function rosterStatusPausedResponse(env = {}) {
+  return Response.json({
+    ok: true,
+    unavailable: true,
+    paused: rosterWritesExplicitlyPaused(env),
+    reason: "roster-status-summary-disabled",
+    total: 0,
+    populated: 0,
+    partial: 0,
+    remaining: 0,
+    eventCount: 0,
+    files: [],
+    rosterSourceStatuses: [],
+  }, { headers: { "Cache-Control": "no-store" } });
 }
 
 function facilityOverviewMaintenanceResponse() {
@@ -187,6 +217,18 @@ export async function onRequestPost(context) {
     // user-facing workspace is in maintenance.
     if (FACILITY_OVERVIEW_MAINTENANCE_ACTIONS.has(action) && facilityOverviewMaintenanceMode(context.env)) {
       return facilityOverviewMaintenanceResponse();
+    }
+    // These paused Creator surfaces are also gated before authentication.
+    // A stale client cannot turn an automatic startup request into even an
+    // account lookup, let alone a roster-wide query.
+    if (action === "listUsers" && !creatorDirectoryEnabled(context.env)) {
+      return creatorDirectoryPausedResponse();
+    }
+    if (action === "calendarStoreStatus" && (rosterWritesExplicitlyPaused(context.env) || !rosterStatusSummaryEnabled(context.env))) {
+      return rosterStatusPausedResponse(context.env);
+    }
+    if (action === "listRosterDoctors" && !identityDiscoveryEnabled(context.env)) {
+      return identityDiscoveryPausedResponse();
     }
     const responseMode = String(body?.responseMode || "full").trim().toLowerCase() === "fast" ? "fast" : "full";
     const realName = String(body?.realName || "").trim();
@@ -242,9 +284,14 @@ export async function onRequestPost(context) {
         : account.record;
       if (discoveryEnabled) loginRecord = await repairAccountClaimsIfNeeded(context.env.ROSTER_DB, loginRecord, { reason: "login" });
       if (loginRecord !== account.record) await upsertAccountMirror(context.env.ROSTER_DB, loginRecord, { syncIdentity: true });
+      const loginRole = loginRecord.role || roleForEmail(loginRecord.email);
+      const loginResponseMode = (loginRole === "creator" || loginRole === "owner")
+        && !creatorStartupHydrationEnabled(context.env)
+        ? "fast"
+        : responseMode;
       const authMs = Date.now() - authStartedAt;
       const prepareStartedAt = Date.now();
-      const prepared = responseMode === "fast"
+      const prepared = loginResponseMode === "fast"
         ? await prepareFastLoginEnvelope(loginRecord, { db: context.env.ROSTER_DB, facilityAccessMaterialized: materializedAccessFor(loginRecord) })
         : await prepareAccountResponse(null, loginRecord, {
             db: context.env.ROSTER_DB,
@@ -255,7 +302,7 @@ export async function onRequestPost(context) {
               || !sanitizeClaims(loginRecord.claims).length,
           });
       const prepareMs = Date.now() - prepareStartedAt;
-      const snapshotPayload = responseMode === "fast" || !accountSnapshotBuildEnabled(context.env)
+      const snapshotPayload = loginResponseMode === "fast" || !accountSnapshotBuildEnabled(context.env)
         ? await loadFastAccountSnapshotPayload(context, {
             targetRecord: loginRecord,
             prepared,
@@ -283,15 +330,15 @@ export async function onRequestPost(context) {
         snapshotBytes: Number(snapshotPayload.snapshotBytes || 0),
         skippedRevision: snapshotPayload.revisionSkipped === true,
         validationDeferred: snapshotPayload.validationDeferred === true,
-        skippedInlineBuild: responseMode === "fast",
+        skippedInlineBuild: loginResponseMode === "fast",
         snapshotSource: snapshotPayload.snapshotSource || "",
-        responseMode,
+        responseMode: loginResponseMode,
       };
       const responsePayload = {
         ok: true,
         cloudAvailable: true,
         created: account.created,
-        responseMode,
+        responseMode: loginResponseMode,
         role: prepared.role,
         realName: prepared.realName,
         state: prepared.state,
@@ -315,13 +362,14 @@ export async function onRequestPost(context) {
         nonClinical: prepared.nonClinical,
         directorViewEnabled: prepared.directorViewEnabled,
         identityDiscoveryUnavailable: !discoveryEnabled,
+        creatorStartupHydrationEnabled: creatorStartupHydrationEnabled(context.env),
         snapshotOwnerType: snapshotPayload.snapshot?.ownerType || snapshotOwnerTypeForRecord(loginRecord, prepared.role),
         snapshotOwnerId: snapshotPayload.snapshot?.ownerId || normalizeEmail(loginRecord.email),
       };
       if ((prepared.role === "creator" || prepared.role === "owner") && Array.isArray(prepared.availableDoctors) && prepared.availableDoctors.length) {
         responsePayload.availableDoctors = prepared.availableDoctors;
       }
-      if (responseMode !== "fast") {
+      if (loginResponseMode !== "fast") {
         responsePayload.nameMatches = prepared.nameMatches;
         responsePayload.suggestedClaims = prepared.nameMatches;
         responsePayload.availableDoctors = prepared.availableDoctors;
@@ -786,14 +834,22 @@ export async function onRequestPost(context) {
       if (!targetRecord) return Response.json({ error: "Account not found." }, { status: 404 });
       const targetClaims = sanitizeClaims(targetRecord.claims);
       const discoveryEnabled = identityDiscoveryEnabled(context.env);
-      const prepared = await prepareAccountResponse(null, targetRecord, {
-        db: context.env.ROSTER_DB,
-        identityDiscoveryEnabled: discoveryEnabled,
-        facilityAccessMaterialized: materializedAccessFor(account.record, targetRecord),
-        includeAvailableDoctors: (targetRecord.role || roleForEmail(targetRecord.email)) === "creator"
-          || (targetRecord.role || roleForEmail(targetRecord.email)) === "owner"
-          || !targetClaims.length,
-      });
+      const targetRole = targetRecord.role || roleForEmail(targetRecord.email);
+      const creatorStartupContained = (targetRole === "creator" || targetRole === "owner")
+        && !creatorStartupHydrationEnabled(context.env);
+      const prepared = creatorStartupContained
+        ? await prepareFastLoginEnvelope(targetRecord, {
+            db: context.env.ROSTER_DB,
+            facilityAccessMaterialized: materializedAccessFor(account.record, targetRecord),
+          })
+        : await prepareAccountResponse(null, targetRecord, {
+            db: context.env.ROSTER_DB,
+            identityDiscoveryEnabled: discoveryEnabled,
+            facilityAccessMaterialized: materializedAccessFor(account.record, targetRecord),
+            includeAvailableDoctors: targetRole === "creator"
+              || targetRole === "owner"
+              || !targetClaims.length,
+          });
       return Response.json({
         ok: true,
         responseMode: "context",
@@ -811,6 +867,7 @@ export async function onRequestPost(context) {
         availableDoctors: prepared.availableDoctors,
         issueConfig: prepared.issueConfig,
         identityDiscoveryUnavailable: !discoveryEnabled,
+        creatorStartupHydrationEnabled: creatorStartupHydrationEnabled(context.env),
       });
     }
 
@@ -915,20 +972,8 @@ export async function onRequestPost(context) {
       }
       // Missing configuration fails closed before any roster repository read.
       // The legacy status implementation is never a fallback.
-      if (!rosterStatusSummaryEnabled(context.env)) {
-        return Response.json({
-          ok: true,
-          unavailable: true,
-          paused: rosterWritesExplicitlyPaused(context.env),
-          reason: "roster-status-summary-disabled",
-          total: 0,
-          populated: 0,
-          partial: 0,
-          remaining: 0,
-          eventCount: 0,
-          files: [],
-          rosterSourceStatuses: [],
-        });
+      if (rosterWritesExplicitlyPaused(context.env) || !rosterStatusSummaryEnabled(context.env)) {
+        return rosterStatusPausedResponse(context.env);
       }
       const status = await calendarStoreStatus(null, context.env.ROSTER_DB, {
         doctorKey: body?.selectedDoctorKey || body?.doctorKey || OWNER_DOCTOR_KEY,

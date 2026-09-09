@@ -316,9 +316,11 @@ let backgroundCloudSaveTimer = 0;
 let pendingCloudSaveSnapshot = null;
 let cloudStateSaveQueue = Promise.resolve();
 let serverUsers = [];
+let serverUsersUnavailable = false;
 let currentRosterClaims = [];
 let currentSuggestedClaims = [];
 let currentIdentityDiscoveryUnavailable = false;
+let currentCreatorStartupHydrationEnabled = false;
 let latestNameMatches = [];
 let availableRosterDoctors = [];
 let calendarSnapshotMemoryCache = new Map();
@@ -11913,7 +11915,7 @@ function renderAccountsModal() {
     .map(normalizeServerUser)
     .filter((user) => user.email !== me.email);
   const localOtherUsers = accountState.users.filter((user) => user.email !== me.email);
-  const otherUsers = serverOtherUsers.length ? serverOtherUsers : localOtherUsers;
+  const otherUsers = serverUsersUnavailable ? [] : serverOtherUsers.length ? serverOtherUsers : localOtherUsers;
   const availableUserSeniorities = [...new Set(otherUsers.flatMap((user) => normalizeServerUser(user).seniorities || []))].sort();
   if (adminUserSeniorityFilter && !availableUserSeniorities.includes(adminUserSeniorityFilter)) adminUserSeniorityFilter = "";
   const seniorityFilteredUsers = adminUserSeniorityFilter
@@ -12034,7 +12036,7 @@ function renderAccountsModal() {
         <summary class="review-top admin-users-header">
           <div class="admin-users-summary">
             <strong>Current users</strong>
-            <span>${filteredOtherUsers.length ? `${filteredOtherUsers.length} account${filteredOtherUsers.length === 1 ? "" : "s"}` : otherUsers.length ? "No matching users." : "No other users have logged in yet."}</span>
+            <span>${serverUsersUnavailable ? "Temporarily unavailable" : filteredOtherUsers.length ? `${filteredOtherUsers.length} account${filteredOtherUsers.length === 1 ? "" : "s"}` : otherUsers.length ? "No matching users." : "No other users have logged in yet."}</span>
           </div>
           <label class="field admin-user-filter admin-user-search-filter">
             <span>Search users</span>
@@ -12050,7 +12052,7 @@ function renderAccountsModal() {
           <span class="collapsible-chevron" aria-hidden="true">⌄</span>
         </summary>
         <div class="issues-list">
-          ${filteredOtherUsers.length ? filteredOtherUsers.map((user) => `
+          ${serverUsersUnavailable ? `<article class="issue-card"><p>The user directory is temporarily unavailable while we complete a reliability upgrade. Existing accounts and permissions have not been removed.</p></article>` : filteredOtherUsers.length ? filteredOtherUsers.map((user) => `
             <article class="issue-card account-user-card">
               <div class="account-user-summary">
                 <strong class="account-user-name">${escapeHtml(user.realName || "Name not set")}</strong>
@@ -16426,6 +16428,8 @@ async function logoutCurrentUser() {
   currentSnapshotOwnerId = "";
   currentUserRole = "user";
   cloudAvailable = false;
+  currentCreatorStartupHydrationEnabled = false;
+  serverUsersUnavailable = false;
   setActiveCalendarContext("claimed-account", { email: "" });
   currentRosterClaims = [];
   latestNameMatches = [];
@@ -16483,6 +16487,39 @@ function isNonClinicalDirectorWorkspace() {
   return currentNonClinical && currentDirectorViewEnabled && canUseFacilityOverview();
 }
 
+function creatorStartupContainmentActive() {
+  return isViewingCreatorAccount() && currentCreatorStartupHydrationEnabled !== true;
+}
+
+function finishContainedCreatorStartup(options = {}, loginStartedAt = 0) {
+  cancelDeferredAccountContextLoad();
+  cancelDeferredBootstrapImports();
+  const restoredCachedCalendar = !currentSnapshot?.preview && options.cachedSnapshot?.preview && calendarSnapshotMatchesActiveContext(options.cachedSnapshot)
+    ? applyCachedCalendarSnapshot(options.cachedSnapshot, {
+      transition: options.transition,
+      loginStartedAt,
+      expectedRevision: currentCalendarRevision,
+      suppressInsightWarmup: true,
+    })
+    : false;
+  const hasSavedCalendar = Boolean(currentSnapshot?.preview && calendarSnapshotMatchesActiveContext(currentSnapshot));
+  if (hasSavedCalendar && !restoredCachedCalendar) {
+    renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot?.session || {}, { suppressInsightWarmup: true });
+    markLoginPhase("cachedCalendarRendered", loginStartedAt);
+    markLoginPhase("firstCalendarPaint", loginStartedAt);
+    markLoginPaintCommitted(loginStartedAt);
+  } else {
+    renderFilesList();
+    renderDoctorState();
+    syncActionState();
+  }
+  markLoginPhase("workspaceRendered", loginStartedAt);
+  setStatus(hasSavedCalendar
+    ? "Calendar loaded from the last saved snapshot. Automatic Creator refresh is temporarily paused."
+    : "Automatic Creator calendar loading is temporarily paused while we complete a reliability upgrade.");
+  queueStoredCalendarSnapshotMaintenance();
+}
+
 function launchNonClinicalDirectorWorkspace(options = {}, loginStartedAt = 0) {
   if (!isNonClinicalDirectorWorkspace() || !calendarTransitionStillCurrent(options.transition)) return false;
   setStatus(currentFacilityOverviewMaintenance ? "At a glance is temporarily unavailable." : "Loading Director overview...");
@@ -16527,7 +16564,6 @@ async function loginWithEmail(email, password, options = {}) {
   try {
     beginFacilityOverviewAccountSession();
     currentFacilityOverviewMaintenance = true;
-    await flushCloudStateSave().catch(() => {});
     cancelScheduledCloudStateSave();
     clearActiveViewedAccountState();
     ensureLocalAccountLogin(email, password, options);
@@ -16583,6 +16619,10 @@ async function loginWithEmail(email, password, options = {}) {
     closeLoginModal();
     setEntranceStatus("");
     markLoginPhase("shellRendered", loginStartedAt);
+    if (creatorStartupContainmentActive()) {
+      finishContainedCreatorStartup({ transition, cachedSnapshot: cachedBeforeAuthentication }, loginStartedAt);
+      return;
+    }
     if (isNonClinicalDirectorWorkspace()) {
       if ((loginData?.responseMode || "full") === "fast") {
         queueDeferredAccountContextLoad({
@@ -16692,6 +16732,7 @@ async function restoreCloudState(options = {}) {
       throw new Error(message);
     }
     cloudAvailable = false;
+    currentCreatorStartupHydrationEnabled = false;
     currentSubscription = null;
     currentInsightsEnabled = false;
     currentFacilityOverviewEnabled = false;
@@ -16725,6 +16766,10 @@ async function hydrateAuthenticatedWorkspace(options = {}, loginStartedAt = 0) {
   if (!calendarTransitionStillCurrent(options.transition)) return;
   try {
     const adminTargetEmail = normalizeEmail(options.adminTargetEmail);
+    if (!adminTargetEmail && creatorStartupContainmentActive()) {
+      finishContainedCreatorStartup(options, loginStartedAt);
+      return;
+    }
     if (adminTargetEmail && adminTargetEmail !== OWNER_EMAIL && !currentRosterClaims.length) {
       accountClaimResolutionTransition = options.transition;
       try {
@@ -17170,6 +17215,7 @@ function saveLocalAccountIdentity(realName = "") {
 function applyCloudStateIdentity(data) {
   cloudAvailable = data.cloudAvailable === true;
   currentFacilityOverviewMaintenance = data.facilityOverviewMaintenance !== false;
+  currentCreatorStartupHydrationEnabled = data.creatorStartupHydrationEnabled === true;
   currentCalendarRevision = String(data.snapshotRevision || data.calendarRevision || currentCalendarRevision || "");
   currentUserRole = data.role || currentUserRole;
   // The fast login envelope already includes these two display permissions.
@@ -17209,6 +17255,7 @@ function applyAvailableRosterDoctorsFromData(data) {
 function applyCloudStateContext(data) {
   const previousInsightsEnabled = currentInsightsEnabled;
   currentFacilityOverviewMaintenance = data.facilityOverviewMaintenance !== false;
+  currentCreatorStartupHydrationEnabled = data.creatorStartupHydrationEnabled === true;
   currentInsightsEnabled = currentUserRole === "creator" || data.insightsEnabled === true;
   currentFacilityOverviewEnabled = currentUserRole === "creator" || data.facilityOverviewEnabled === true;
   currentNonClinical = data.nonClinical === true;
@@ -17943,6 +17990,13 @@ async function loadServerUsers() {
       }),
     });
     const data = await readJsonResponse(response, "Could not load users.");
+    if (data.unavailable === true) {
+      serverUsersUnavailable = true;
+      syncAccountsButton();
+      if (isViewingCreatorAccount() && accountsModal && !accountsModal.classList.contains("hidden")) renderAccountsModal();
+      return;
+    }
+    serverUsersUnavailable = false;
     serverUsers = data.users || [];
     if (Array.isArray(data.availableDoctors)) {
       applyAuthoritativeAvailableDoctors(data.availableDoctors);
@@ -19168,7 +19222,7 @@ function applyCachedCalendarSnapshot(cached, options = {}) {
   currentSnapshotBuiltAt = cached.cachedAt || cached.preview?.lastParsed || "";
   currentCalendarRevision = expectedRevision || cached.calendarRevision || currentCalendarRevision;
   applyLoadedCalendarFileRefs(cached);
-  renderWorkspaceFromSnapshot(cached, cached.session || {});
+  renderWorkspaceFromSnapshot(cached, cached.session || {}, options);
   markLoginPhase("cachedCalendarRendered", options.loginStartedAt);
   markAccountSwitchPhase("cachedCalendarRendered", options.accountSwitchStartedAt);
   setStatus("Calendar loaded from cache.");
@@ -20172,7 +20226,7 @@ function renderWorkspaceFromSnapshot(snapshot, session = {}, options = {}) {
   indexReviewItems(latestPreview.review || []);
   rebuildClientPreview();
   refreshFacilityOverviewPreferredFacility();
-  scheduleInsightWarmup();
+  if (options.suppressInsightWarmup !== true) scheduleInsightWarmup();
   saveCurrentWorkspace();
   if (preservedScroll) {
     requestAnimationFrame(() => {
@@ -20243,6 +20297,7 @@ async function bootstrapApp() {
     const renderedCachedSnapshot = await renderCachedCalendarSnapshotForContextAsync(cacheContext, {
       loginStartedAt,
       transition,
+      suppressInsightWarmup: currentUserEmail === OWNER_EMAIL,
     });
     if (renderedCachedSnapshot) {
       renderLoginState();
@@ -20267,6 +20322,10 @@ async function bootstrapApp() {
     });
     if (!currentUserEmail || !calendarTransitionStillCurrent(transition)) return;
     renderLoginState();
+    if (creatorStartupContainmentActive()) {
+      finishContainedCreatorStartup({ transition }, loginStartedAt);
+      return;
+    }
     if (isNonClinicalDirectorWorkspace()) {
       if ((loginData?.responseMode || "full") === "fast") {
         queueDeferredAccountContextLoad({

@@ -25,6 +25,10 @@ db.exec(`
   CREATE INDEX idx_roster_sync_runs_source_started_id ON roster_sync_runs(source_id,started_at DESC,id DESC);
   CREATE TABLE roster_dispatches (id TEXT PRIMARY KEY, requested_at TEXT);
   CREATE INDEX idx_roster_dispatches_requested_id ON roster_dispatches(requested_at DESC,id DESC);
+  CREATE TABLE account_profiles (email TEXT PRIMARY KEY, real_name TEXT, role TEXT);
+  CREATE TABLE account_claims (email TEXT, source_type TEXT, doctor_key TEXT, display_name TEXT, PRIMARY KEY(email, source_type, doctor_key));
+  CREATE TABLE account_states (email TEXT PRIMARY KEY, session_json TEXT);
+  CREATE TABLE snapshot_registry (owner_type TEXT, owner_id TEXT, doctor_key TEXT, range_key TEXT, status TEXT, built_revision TEXT, PRIMARY KEY(owner_type, owner_id, doctor_key, range_key));
 `);
 
 const sources = ["mmc", "ddh", "casey", "mch", "vhh"];
@@ -65,6 +69,17 @@ for (let index = 0; index < 10000; index += 1) {
 }
 const addInactiveRosterStatus = db.prepare("INSERT INTO roster_file_status_summaries VALUES (?, ?, 0, '2026-01-01T00:00:00Z', 0)");
 for (let index = 0; index < 150; index += 1) addInactiveRosterStatus.run(`historical-${index}`, "mmc");
+const addAccount = db.prepare("INSERT INTO account_profiles VALUES (?, ?, ?)");
+const addClaim = db.prepare("INSERT INTO account_claims VALUES (?, ?, ?, ?)");
+const addAccountState = db.prepare("INSERT INTO account_states VALUES (?, '{}')");
+for (let index = 0; index < 10000; index += 1) {
+  const email = index === 0 ? "rhaydon@gmail.com" : `synthetic-${String(index).padStart(5, "0")}@example.test`;
+  addAccount.run(email, `Synthetic User ${index}`, index === 0 ? "creator" : "user");
+  addAccountState.run(email);
+  addClaim.run(email, "mmc", `MMC DOCTOR ${String(index % doctorsPerSource).padStart(3, "0")}`, `MMC Doctor ${index % doctorsPerSource}`);
+  addClaim.run(email, "ddh", `DDH DOCTOR ${String(index % doctorsPerSource).padStart(3, "0")}`, `DDH Doctor ${index % doctorsPerSource}`);
+}
+db.prepare("INSERT INTO snapshot_registry VALUES (?, ?, ?, ?, 'ready', 'revision-1')").run("creator-account", "rhaydon@gmail.com", "RICHARD HAYDON", "2026-01-01:2026-12-31");
 db.exec("COMMIT");
 
 const cases = {
@@ -81,6 +96,8 @@ const cases = {
   boundedSources: [`SELECT * FROM roster_sources ORDER BY label,id LIMIT 16`, []],
   latestSourceRun: [`SELECT * FROM roster_sync_runs WHERE source_id=? ORDER BY started_at DESC,id DESC LIMIT 1`, ["source-3"]],
   latestDispatch: [`SELECT * FROM roster_dispatches ORDER BY requested_at DESC,id DESC LIMIT 1`, []],
+  creatorAccount: [`SELECT p.email, p.real_name, p.role, c.source_type, c.doctor_key, c.display_name, s.session_json FROM account_profiles p LEFT JOIN account_claims c ON c.email = p.email LEFT JOIN account_states s ON s.email = p.email WHERE p.email = ? ORDER BY c.source_type, c.display_name`, ["rhaydon@gmail.com"]],
+  creatorSnapshotRegistry: [`SELECT status, built_revision FROM snapshot_registry WHERE owner_type = ? AND owner_id = ? AND doctor_key = ? AND range_key = ?`, ["creator-account", "rhaydon@gmail.com", "RICHARD HAYDON", "2026-01-01:2026-12-31"]],
 };
 
 function plan(sql, bindings) {
@@ -94,7 +111,7 @@ for (const [label, [sql, bindings]] of Object.entries(cases)) {
 }
 
 const totalEvents = sources.length * doctorsPerSource * days;
-report.fixture = { files: sources.length, doctors: sources.length * doctorsPerSource, events: totalEvents, syncRuns: 10000, dispatches: 10000, inactiveRetainedSummaries: 150 };
+report.fixture = { files: sources.length, doctors: sources.length * doctorsPerSource, events: totalEvents, accounts: 10000, accountClaims: 20000, syncRuns: 10000, dispatches: 10000, inactiveRetainedSummaries: 150 };
 report.estimates = {
   staff: "candidate membership rows plus repeated event-index probes; grows with files/membership and covered history",
   coverage: `${doctorsPerSource * days} ED event rows examined to return one aggregate row`,
@@ -109,6 +126,8 @@ report.estimates = {
   boundedSources: "at most 16 rows from an ordered source index walk",
   latestSourceRun: "one row from an exact source/latest-run index probe",
   latestDispatch: "one row from the requested-at dispatch index",
+  creatorAccount: "one exact account primary-key probe plus only that account's claim and state rows; independent of the other 9,999 accounts and 109,200 roster events",
+  creatorSnapshotRegistry: "one exact composite-primary-key probe; independent of roster and account history",
 };
 
 assert.equal(totalEvents, 109200);
@@ -128,5 +147,10 @@ assert.ok(report.latestSourceRun.plan.some((line) => /idx_roster_sync_runs_sourc
 assert.equal(report.latestSourceRun.plan.some((line) => /TEMP B-TREE|SCAN roster_sync_runs/i.test(line)), false, "latest source run must not scan or sort run history");
 assert.ok(report.latestDispatch.plan.some((line) => /idx_roster_dispatches_requested_id/.test(line)), "latest dispatch must use its history index");
 assert.equal(report.latestDispatch.plan.some((line) => /TEMP B-TREE/i.test(line)), false, "latest dispatch must use its ordered index without a temporary sort");
+assert.ok(report.creatorAccount.plan.some((line) => /SEARCH p USING INDEX sqlite_autoindex_account_profiles_1 \(email=\?\)/i.test(line)), "Creator authentication must use the account email primary key");
+assert.ok(report.creatorAccount.plan.some((line) => /SEARCH c USING INDEX sqlite_autoindex_account_claims_1 \(email=\?\)/i.test(line)), "Creator claims must use the email-leading primary key");
+assert.equal(report.creatorAccount.plan.some((line) => /roster_events|roster_file_doctors|SCAN account_profiles|SCAN account_claims/i.test(line)), false, "minimal Creator account loading must not scan account or roster history");
+assert.ok(report.creatorSnapshotRegistry.plan.some((line) => /snapshot_registry.*(?:PRIMARY KEY|sqlite_autoindex_snapshot_registry_1)/i.test(line)), "Creator snapshot metadata must use its composite primary key");
+assert.equal(report.creatorSnapshotRegistry.plan.some((line) => /SCAN|roster_events|roster_file_doctors/i.test(line)), false, "Creator snapshot metadata must be one exact lookup");
 
 console.log(JSON.stringify(report, null, 2));

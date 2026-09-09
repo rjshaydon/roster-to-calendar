@@ -207,3 +207,10 @@ This remediation is a prerequisite for, not a replacement for, the features in
 the feature restoration register. At a glance, automatic imports, contact
 refresh, Admin Files and Doctor Names are restored only through their compact,
 incremental implementations and their individual canaries.
+
+The controlled 9 September Creator test exposed a further startup-specific
+request fan-out after the ordinary-login containment was deployed. Its evidence,
+local acceptance gates and isolated release sequence are defined in
+[`creator-login-bootstrap-d1-remediation-plan.md`](./creator-login-bootstrap-d1-remediation-plan.md).
+That plan must pass before another Creator production login or before this
+rollout proceeds to migration `0026` onward.

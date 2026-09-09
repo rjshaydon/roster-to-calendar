@@ -67,6 +67,8 @@ function safeChildEnvironment() {
   environment.ROSTER_STATUS_SUMMARY_ENABLED = "false";
   environment.IDENTITY_DISCOVERY_ENABLED = "false";
   environment.ACCOUNT_SNAPSHOT_BUILD_ENABLED = "false";
+  environment.CREATOR_STARTUP_HYDRATION_ENABLED = "false";
+  environment.CREATOR_DIRECTORY_ENABLED = "false";
   environment.EMAIL_DELIVERY_ENABLED = "false";
   environment.NO_UPDATE_NOTIFIER = "1";
   environment.WRANGLER_LOG_PATH = path.join(LOCAL_STATE_DIRECTORY, "wrangler.log");
@@ -376,6 +378,8 @@ function localDevArguments(port) {
     "--binding", "ROSTER_STATUS_SUMMARY_ENABLED=false",
     "--binding", "IDENTITY_DISCOVERY_ENABLED=false",
     "--binding", "ACCOUNT_SNAPSHOT_BUILD_ENABLED=false",
+    "--binding", "CREATOR_STARTUP_HYDRATION_ENABLED=false",
+    "--binding", "CREATOR_DIRECTORY_ENABLED=false",
     "--binding", "EMAIL_DELIVERY_ENABLED=false",
   ];
 }
