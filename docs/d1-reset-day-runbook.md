@@ -8,6 +8,13 @@ endpoint, run D1 SQL, deploy, migrate or change a variable. Reset is at 00:00 UT
 record the exact active documentation-only descendant, if any, before sampling.
 Keep all optional capabilities closed.
 
+Before treating a Pages deployment inventory as complete, list Production and
+Preview separately. Wrangler returns only the newest page and does not expose a
+pagination flag. A full Production cleanup must therefore repeat the
+Production-only listing after each verified batch until the result contains
+only approved contained deployments and is no longer replenished by older
+entries. Never infer completeness from one mixed or 25-row response.
+
 Run commands from the repository root. The checker first uses
 `CLOUDFLARE_ACCOUNT_ANALYTICS_TOKEN` when already present and otherwise loads
 the existing read-only token from the macOS Keychain service

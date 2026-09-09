@@ -511,6 +511,7 @@ mechanisms are intentionally excluded from restoration.
 | Local implementation, 8 Sep 2026 | Added default-off identity discovery and account snapshot-build controls; removed login history fallback and automatic repairs; made ordinary saves incremental with no snapshot warm-up. Not yet deployed. |
 | `18ba7a1` / `a4305bca-5538-4583-88f8-655bcb687556` | Deployed ordinary-login containment with all safety controls read back closed; removed the 16 retained pre-containment Production deployments by exact ID (FR-21–FR-25). |
 | Observation, 8 Sep 2026 | Settled 15:15–20:30 AEST Production usage after containment was 27,628 reads and 20 writes, with a maximum five-minute bucket of 1,658 reads. Full-day status remains STOP until a clean UTC quota day completes the passive gate. |
+| Incident and cleanup, 9 Sep 2026 | The fresh-day gate found a 1,693,486-read burst at 10:25 AEST and a pre-containment schema fingerprint. Wrangler's 25-result listing had hidden hundreds of callable Production hashes. Removed 673 additional pre-containment Production deployments in bounded batches; an independent Production-only listing confirmed exactly four contained deployments remain. Optional features remain closed pending post-cleanup settled evidence. |
 
 ## Restoration record template
 

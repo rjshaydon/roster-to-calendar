@@ -178,6 +178,29 @@ normal start and stop thresholds, this observation is evidence that immediate
 containment is working; it is not a `GO` for optional features, migrations or
 bootstrap. The fresh-day passive gate remains required.
 
+## Failed fresh-day gate and complete deployment cleanup — 9 September 2026
+
+The first settled sample of the new UTC quota day reported 1,698,609 rows read
+and 20 rows written by 10:54 AEST. Of those reads, 1,693,486 occurred in the
+single 10:25–10:30 AEST bucket from only 37 read queries. The query-fingerprint
+feed attributed only 6,881 rows and included the pre-containment
+`sqlite_master` schema probe, leaving 1,691,728 rows unattributed.
+
+The earlier retained-deployment cleanup had incorrectly treated Wrangler's
+newest 25 results as a complete inventory. Production-only listings revealed
+hundreds of older, callable Production hash URLs. A controlled cleanup retained
+only deployments built from contained sources `18ba7a1`, `d367539` and
+`b20991e`, deleting 673 pre-containment Production deployments in bounded
+batches. An independent Production-only listing then returned exactly four
+contained deployments.
+
+A second settled sample through 13:18 AEST reported 1,713,581 reads and 40
+writes. The increase after the first sample was 14,972 reads and 20 writes,
+approximately 6,232 reads per hour, with no second large burst. This remains a
+`STOP` day because the 10:25 incident already exceeded the safety thresholds.
+At least one post-cleanup settled sample is still required before drawing a
+containment conclusion, and optional work remains closed.
+
 ## Restoration relationship
 
 This remediation is a prerequisite for, not a replacement for, the features in
