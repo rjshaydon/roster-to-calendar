@@ -259,7 +259,8 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 
 ### FR-10 — Roster queue watchdog
 
-- **State:** Paused.
+- **State:** Removed from Cloudflare on 10 September 2026. Source and
+  configuration remain in Git.
 - **Control:** `ROSTER_AUTOMATION_ENABLED=false` in
   `wrangler.roster-watchdog.toml`.
 - **Effect:** The scheduled Worker returns before dispatch or FindMyShift calls.
@@ -267,6 +268,9 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
   their allowlists are already proven safe. A health check must expose the
   state, overlapping ticks must coalesce and one tick must have a hard request
   budget.
+- **Containment evidence:** Wrangler deletion succeeded and a subsequent
+  deployments lookup returned Cloudflare `10007` (Worker does not exist). Its
+  15-minute cron was removed with the Worker. No D1 endpoint was called.
 
 ### FR-11 — Advanced maintenance and repair
 
@@ -494,6 +498,20 @@ pause, and future maintenance work must not accidentally disable them.
   local cost test and production canary.
 - **Plan:** `creator-login-bootstrap-d1-remediation-plan.md`.
 
+### FR-27 — Persistent API invocation attribution
+
+- **State:** Implemented for the next controlled Production deployment.
+- **Effect:** Every API invocation records route, state action, deployment,
+  status, containment result and request-local D1 statement/row metadata in
+  Cloudflare Workers Logs. Sensitive bodies, credentials, identities, roster
+  data and contact details are excluded.
+- **Safety:** Paused automation requests stop in middleware before D1/R2,
+  authentication, body parsing or outbound work. Requests also have a hard D1
+  statement ceiling; this supplements indexed query-plan limits.
+- **Restoration:** Keep privacy-safe invocation attribution and statement
+  ceilings permanently. Sampling may be reduced only after the incident is
+  attributed and sustained safe operation is demonstrated.
+
 ## Restoration order
 
 The order restores product value without reopening several D1 consumers at
@@ -542,6 +560,7 @@ mechanisms are intentionally excluded from restoration.
 | Creator-login containment release, 9 Sep 2026 | Deployed `a712068` to Production (`65d4ac5f-9d97-4464-94e8-8210aa37145a` and same-source Git deployment `b7d8d8e5-c53f-4aab-8951-3e10c3091bb5`). Control-plane read-back confirmed both Creator controls and all prior safety controls closed. No application or D1 request was made. |
 | Creator-login canary, 10 Sep 2026 | Fresh-day passive usage passed after almost four settled hours. The immediate 14:08 Creator-login bucket used 64 reads and one write, but later settlement exposed 992,117 reads in the 14:30 bucket with almost no fingerprint attribution. This preceded the disabled At a glance test, whose 14:40 bucket used only 33 reads and six writes. The Creator/bootstrap gate is failed, not passed. |
 | Deployment cleanup, 10 Sep 2026 | Removed seven superseded Production deployments and all 254 Preview deployments through the Pages control plane. Final listings showed one Production deployment (`bae86cea…`, source `8ef0215`) and zero Preview deployments. No application or D1 endpoint was called. |
+| Active-caller containment, 10 Sep 2026 | Deleted the deployed `roster-queue-watchdog` and its cron; added pre-handler automation containment, persistent privacy-safe invocation records and request-local D1 accounting/ceilings (FR-10, FR-27). Local paused-contact smoke test used zero D1 statements; invalid login used one row read. Power Automate source-side pause remains an operator action. |
 
 ## Restoration record template
 

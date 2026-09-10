@@ -5,6 +5,13 @@ pages_build_output_dir = "public"
 [limits]
 cpu_ms = 30_000
 
+[observability]
+enabled = true
+
+[observability.logs]
+invocation_logs = true
+head_sampling_rate = 1
+
 [vars]
 FACILITY_OVERVIEW_MAINTENANCE_MODE = "true"
 FACILITY_SHARED_ROLLOUT_ACTIVE = "false"

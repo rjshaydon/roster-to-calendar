@@ -27,6 +27,7 @@
     "test:d1-account-budget": "node scripts/test-d1-account-budget.mjs",
     "test:client-request-budget": "node scripts/test-client-request-budget.mjs",
     "test:creator-login-containment": "node scripts/test-creator-login-containment.mjs",
+    "test:request-attribution": "node scripts/test-request-attribution.mjs",
     "d1:budget": "node scripts/check-d1-account-budget.mjs",
     "test:local-lifecycle": "node scripts/test-local-lifecycle.mjs",
     "test:local-isolation": "node scripts/test-local-isolation.mjs",

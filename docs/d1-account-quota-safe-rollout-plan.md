@@ -366,6 +366,11 @@ a D1 query to prove rollback.
 The next authorised activity is Phase A analytics and caller inventory only.
 No further D1 request is permitted until Phases A–D pass.
 
+The active-caller removal, zero-D1 endpoint gating and route-level attribution
+work required after the 10 September unexplained burst is specified in
+[`d1-active-caller-attribution-and-containment-plan.md`](./d1-active-caller-attribution-and-containment-plan.md).
+Complete its Stages 1–5 before another reset-day canary.
+
 On 10 September 2026, Pages deployment inventory and containment were
 completed without calling an application or D1 endpoint. Seven superseded
 Production deployments and all 254 Preview deployments were deleted. The
