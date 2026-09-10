@@ -265,7 +265,7 @@ The next work is Stage 5's fresh-day passive observation followed, only if it
 passes, by one controlled Creator login. At a glance, Admin surfaces,
 colleague tools, migrations `0026` onward and restoration work remain closed.
 
-## Production canary result — 10 September 2026
+## Production canary result — 10 September 2026 (failed after later settlement)
 
 - The fresh UTC day produced four settled passive samples. The formal gate
   returned GO after almost four hours: 23,718 reads, 30 writes, no expensive
@@ -276,11 +276,18 @@ colleague tools, migrations `0026` onward and restoration work remain closed.
 - The single write was consistent with the exact-account state path. The login
   produced no roster-directory, status, Staff, At a glance or colleague-query
   fingerprint and no broad event-history scan.
-- The settled post-login account report remained GO, with 25,743 reads and 36
-  writes for the day and a projected daily total below 100,000 reads at the
-  then-observed burn rate.
+- The first settled post-login account report remained GO, with 25,743 reads
+  and 36 writes for the day. That conclusion was provisional and was later
+  invalidated.
+- A later sample exposed 992,117 reads, eight writes and 97 read queries in the
+  14:30 AEST five-minute bucket. Cloudflare attributed almost none of those
+  reads to query fingerprints. This occurred after the 14:08 Creator login and
+  before the approximately 14:43 disabled At a glance test.
+- The disabled At a glance interaction itself coincided with only 33 reads and
+  six writes in the 14:40 bucket; it is not the source of the 14:30 burst.
 
-The Creator-login canary therefore passes. This does not restore any paused
-feature. The disabled At a glance navigation remains a separate zero-D1 gate,
-and migration `0026` onward remains blocked until that gate and the main
-rollout sequence explicitly advance.
+The Creator-login/bootstrap canary therefore fails because a delayed or
+independent caller cannot yet be excluded. All optional features, further
+Creator testing and migration `0026` onward remain blocked. The next
+remediation must identify or eliminate every callable deployment and delayed
+Creator/account-state path without repeating a Production application request.
