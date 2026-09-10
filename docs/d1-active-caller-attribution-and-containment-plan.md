@@ -165,3 +165,16 @@ logging and the one-current-deployment policy remain permanent safeguards.
   no supplied email, password, token, source ID, telephone number or body.
 - Source-side Power Automate inspection/pause remains outstanding because its
   configuration is outside this repository and Cloudflare account.
+- Production deployment `382049f6-edcb-4ef2-b12e-5d5081adcd01` (source
+  `66402b2`) completed successfully after Analytics Engine was enabled.
+  Effective settings and the `REQUEST_ANALYTICS` binding were read back through
+  the control plane. The predecessor was deleted; final Pages inventory was
+  one Production and zero Preview.
+- A payload-free Production request to the paused contact endpoint returned 503.
+  Its live structured record reported zero D1 statements, zero rows read and
+  zero rows written, proving the deployed pre-handler barrier for that class.
+- At approximately 19:20 AEST, the operator confirmed all eleven shared Power
+  Automate roster/contact flows were turned off: the four VHH roster flows,
+  Monash roster sync, VHH Preview contacts, DDH contacts, both MMC contact
+  syncs, and the MMC and Paediatrics bootstrap flows. They remain preserved for
+  controlled source-by-source restoration.

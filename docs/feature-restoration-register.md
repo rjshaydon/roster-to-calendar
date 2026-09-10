@@ -13,8 +13,8 @@ record its evidence, approval, deployment and post-deployment observation here.
 No entry may be removed after restoration; change its state to **Restored** so
 the history remains auditable.
 
-Current verified Production safety code: `8ef0215` on 10 September 2026,
-deployment `bae86cea-390f-44e4-9d9e-d34a95c7854c`. The zero-D1 At a glance
+Current verified Production safety code: `66402b2` on 10 September 2026,
+deployment `382049f6-edcb-4ef2-b12e-5d5081adcd01`. The zero-D1 At a glance
 maintenance gate and ordinary-login containment are active. Effective
 Production configuration was read back after that deployment with
 all facility readers/builders, roster and contact automation, roster status,
@@ -562,6 +562,8 @@ mechanisms are intentionally excluded from restoration.
 | Creator-login canary, 10 Sep 2026 | Fresh-day passive usage passed after almost four settled hours. The immediate 14:08 Creator-login bucket used 64 reads and one write, but later settlement exposed 992,117 reads in the 14:30 bucket with almost no fingerprint attribution. This preceded the disabled At a glance test, whose 14:40 bucket used only 33 reads and six writes. The Creator/bootstrap gate is failed, not passed. |
 | Deployment cleanup, 10 Sep 2026 | Removed seven superseded Production deployments and all 254 Preview deployments through the Pages control plane. Final listings showed one Production deployment (`bae86cea…`, source `8ef0215`) and zero Preview deployments. No application or D1 endpoint was called. |
 | Active-caller containment, 10 Sep 2026 | Deleted the deployed `roster-queue-watchdog` and its cron; added pre-handler automation containment, persistent privacy-safe invocation records and request-local D1 accounting/ceilings (FR-10, FR-27). Local paused-contact smoke test used zero D1 statements; invalid login used one row read. Power Automate source-side pause remains an operator action. |
+| `66402b2` / `382049f6-edcb-4ef2-b12e-5d5081adcd01`, 10 Sep 2026 | Explicitly deployed active-caller containment after Analytics Engine was enabled. Effective configuration read-back showed maintenance/emergency/legacy, roster/contact automation and Creator startup controls closed and `REQUEST_ANALYTICS` bound to `roster_api_invocations`. A single payload-free paused contact probe returned 503 and logged zero D1 statements/rows. The predecessor was deleted; final inventory was one Production and zero Preview. |
+| External-caller pause, 10 Sep 2026 approximately 19:20 AEST | Operator confirmed all eleven shared Power Automate roster/contact/bootstrap flows were turned off. Flow definitions were preserved. Restore individually under FR-07/FR-08 only after attribution and source-specific gates pass. |
 
 ## Restoration record template
 
