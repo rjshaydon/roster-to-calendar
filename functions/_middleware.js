@@ -52,7 +52,7 @@ export async function onRequest(context) {
     }
     throw error;
   } finally {
-    console.log(JSON.stringify({
+    const record = {
       event: "api-invocation",
       deployment: String(context.env.CF_PAGES_COMMIT_SHA || "unknown").slice(0, 40),
       requestId: String(requestId).slice(0, 80),
@@ -68,7 +68,23 @@ export async function onRequest(context) {
       d1RowsWritten: d1.rowsWritten,
       d1MetadataComplete: d1.metadataComplete,
       d1Limit: limit,
-    }));
+    };
+    console.log(JSON.stringify(record));
+    writeAnalytics(context.env.REQUEST_ANALYTICS, record);
+  }
+}
+
+function writeAnalytics(dataset, record) {
+  if (!dataset?.writeDataPoint) return;
+  try {
+    dataset.writeDataPoint({
+      indexes: [record.deployment],
+      blobs: [record.route, record.action, String(record.status), record.contained, record.callerClass,
+        record.requestId, String(record.d1MetadataComplete)],
+      doubles: [record.durationMs, record.d1Statements, record.d1RowsRead, record.d1RowsWritten, record.d1Limit],
+    });
+  } catch (error) {
+    console.warn(JSON.stringify({ event: "api-attribution-write-failed", error: String(error?.message || error).slice(0, 160) }));
   }
 }
 

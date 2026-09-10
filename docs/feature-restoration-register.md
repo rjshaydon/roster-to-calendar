@@ -502,9 +502,10 @@ pause, and future maintenance work must not accidentally disable them.
 
 - **State:** Implemented for the next controlled Production deployment.
 - **Effect:** Every API invocation records route, state action, deployment,
-  status, containment result and request-local D1 statement/row metadata in
-  Cloudflare Workers Logs. Sensitive bodies, credentials, identities, roster
-  data and contact details are excluded.
+  status, containment result and request-local D1 statement/row metadata in a
+  dedicated Workers Analytics Engine dataset and the real-time Functions log.
+  Sensitive bodies, credentials, identities, roster data and contact details
+  are excluded.
 - **Safety:** Paused automation requests stop in middleware before D1/R2,
   authentication, body parsing or outbound work. Requests also have a hard D1
   statement ceiling; this supplements indexed query-plan limits.

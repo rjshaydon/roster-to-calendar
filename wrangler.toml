@@ -5,12 +5,9 @@ pages_build_output_dir = "public"
 [limits]
 cpu_ms = 30_000
 
-[observability]
-enabled = true
-
-[observability.logs]
-invocation_logs = true
-head_sampling_rate = 1
+[[analytics_engine_datasets]]
+binding = "REQUEST_ANALYTICS"
+dataset = "roster_api_invocations"
 
 [vars]
 FACILITY_OVERVIEW_MAINTENANCE_MODE = "true"
@@ -103,3 +100,7 @@ bucket_name = "roster-converter-source-files-preview"
 [[env.preview.r2_buckets]]
 binding = "ROSTER_CACHE"
 bucket_name = "roster-converter-cache-preview"
+
+[[env.preview.analytics_engine_datasets]]
+binding = "REQUEST_ANALYTICS"
+dataset = "roster_api_invocations_preview"

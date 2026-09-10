@@ -76,8 +76,10 @@ still pass locally.
 
 ## Stage 4 — add non-D1 route attribution
 
-1. Enable Cloudflare Workers Logs/invocation logs for Pages at 100% sampling
-   during the investigation. Logging must not use D1 or R2.
+1. Bind a dedicated Workers Analytics Engine dataset to Pages and write one
+   data point per API invocation during the investigation. Pages real-time
+   Functions logs remain available for live checks, but are not persistent.
+   Attribution must not use D1 or R2.
 2. Emit one structured completion record per API invocation containing only:
    deployment revision, request ID, route, HTTP method, `/api/state` action,
    response status, duration, containment result, and caller class where it can
@@ -107,8 +109,9 @@ account-budget checker remains independent of application databases.
    build to apply variables.
 3. Read back effective non-secret Production configuration without invoking an
    application route.
-4. Confirm Workers Logs are receiving invocation records through the control
-   plane/dashboard. Do not use a D1-backed endpoint as a logging probe.
+4. Confirm the Analytics Engine binding is present through the control plane.
+   Confirm records during the later approved canary; do not use a D1-backed
+   endpoint merely as a logging probe.
 5. Delete every superseded Production deployment and any automatically created
    Preview deployment. Final inventory must again be one Production and zero
    Preview.
@@ -150,8 +153,9 @@ logging and the one-current-deployment policy remain permanent safeguards.
   verification returned `10007`, confirming that the Worker no longer exists.
 - A Pages middleware now blocks closed automation classes before touching D1,
   R2, authentication, request bodies or outbound services.
-- Workers Logs configuration, privacy-safe structured completion records and
-  request-local D1 statement/row metering are implemented.
+- A dedicated Analytics Engine binding, privacy-safe structured completion
+  records and request-local D1 statement/row metering are implemented. This
+  uses no D1/R2 rows or objects. Pages real-time logs retain the same records.
 - Login has a 32-statement ceiling; common account/calendar actions have
   explicit ceilings and all other API actions have a 64-statement ceiling.
 - Focused quota, Creator containment, facility maintenance/rollout, client
