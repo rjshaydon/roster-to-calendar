@@ -42,6 +42,16 @@ assert.match(d1AnalyticsQuery(), /d1QueriesAdaptiveGroups/);
 assert.match(d1AnalyticsQuery(), /datetimeFiveMinutes/);
 assert.doesNotMatch(d1AnalyticsQuery(), /databaseId:\s*\$/);
 
+const independentlySampledFingerprints = summarizeAnalyticsPayload(
+  analyticsPayload(
+    [usage(productionId, 16_295, 20, 396, 8)],
+    [query(productionId, "SELECT bounded", 394, 14_012, 36, 20)],
+  ),
+  { complete: true, databases: [{ id: productionId }] },
+);
+assert.equal(independentlySampledFingerprints.complete, true, "a sub-5,000-row read-only adaptive sampling gap must not invalidate an otherwise exact account timeline");
+assert.equal(independentlySampledFingerprints.unattributed.rowsRead, 2_283);
+
 const previousReport = { generatedAt: "2026-09-07T02:40:00.000Z", sampleValid: true, interval: { date: "2026-09-07" }, effectiveUsage: { rowsRead: 100_000, rowsWritten: 2_000 } };
 const currentBilling = { rowsRead: 110_000, rowsWritten: 2_100, observedAt: "2026-09-07T02:59:00.000Z" };
 const go = evaluateD1Budget({ analytics, inventory: completeInventory, billing: currentBilling, previousReport, now, optionalEstimate: { rowsRead: 27_021, rowsWritten: 2_252 } });

@@ -144,7 +144,11 @@ export function summarizeAnalyticsPayload(payload, inventory) {
   if (strictlyDifferent(totals.rowsRead, timelineTotals.rowsRead) || strictlyDifferent(totals.rowsWritten, timelineTotals.rowsWritten)) {
     reasons.push("analytics-time-buckets-do-not-reconcile");
   }
-  if (strictlyDifferent(totals.rowsRead, fingerprintTotals.rowsRead) || strictlyDifferent(totals.rowsWritten, fingerprintTotals.rowsWritten)) {
+  // Cloudflare's usage and query-fingerprint adaptive groups are sampled
+  // independently. Keep timeline reconciliation strict, but tolerate a small
+  // absolute read-only sampling gap between those two datasets. Writes retain
+  // the strict threshold because even a small unattributed mutation matters.
+  if (materiallyDifferent(totals.rowsRead, fingerprintTotals.rowsRead) || strictlyDifferent(totals.rowsWritten, fingerprintTotals.rowsWritten)) {
     reasons.push("query-attribution-incomplete");
   }
   return {

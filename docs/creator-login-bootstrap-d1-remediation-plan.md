@@ -264,3 +264,23 @@ Focused evidence:
 The next work is Stage 5's fresh-day passive observation followed, only if it
 passes, by one controlled Creator login. At a glance, Admin surfaces,
 colleague tools, migrations `0026` onward and restoration work remain closed.
+
+## Production canary result — 10 September 2026
+
+- The fresh UTC day produced four settled passive samples. The formal gate
+  returned GO after almost four hours: 23,718 reads, 30 writes, no expensive
+  fingerprint and a projected daily total of approximately 165,000 reads.
+- One isolated Creator login completed at approximately 14:08 AEST. The
+  corresponding 14:05 five-minute bucket used 64 rows read, one row written,
+  seven read queries and one write query.
+- The single write was consistent with the exact-account state path. The login
+  produced no roster-directory, status, Staff, At a glance or colleague-query
+  fingerprint and no broad event-history scan.
+- The settled post-login account report remained GO, with 25,743 reads and 36
+  writes for the day and a projected daily total below 100,000 reads at the
+  then-observed burn rate.
+
+The Creator-login canary therefore passes. This does not restore any paused
+feature. The disabled At a glance navigation remains a separate zero-D1 gate,
+and migration `0026` onward remains blocked until that gate and the main
+rollout sequence explicitly advance.

@@ -471,8 +471,8 @@ pause, and future maintenance work must not accidentally disable them.
 ### FR-26 — Automatic Creator login/bootstrap fan-out
 
 - **State:** Containment deployed to Production as `a712068`; effective flags
-  verified closed without opening the application. Fresh-day passive and
-  controlled Creator-login canaries remain outstanding.
+  verified closed. Fresh-day passive and isolated Creator-login canaries passed
+  on 10 September. Disabled At a glance navigation remains a separate gate.
 - **Observed behaviour:** On 9 September, one controlled Creator login plus one
   attempt to enter maintenance-disabled At a glance and a return to Calendar
   coincided with 1,623,542 reads in one five-minute bucket. The subsequent idle
@@ -534,6 +534,7 @@ mechanisms are intentionally excluded from restoration.
 | Incident and cleanup, 9 Sep 2026 | The fresh-day gate found a 1,693,486-read burst at 10:25 AEST and a pre-containment schema fingerprint. Wrangler's 25-result listing had hidden hundreds of callable Production hashes. Removed 673 additional pre-containment Production deployments in bounded batches; an independent Production-only listing confirmed exactly four contained deployments remain. Optional features remain closed pending post-cleanup settled evidence. |
 | Controlled Creator test, 9 Sep 2026 | Creator login plus one blocked At a glance navigation coincided with 1,623,542 reads in one five-minute bucket. The idle tab did not repeat the burst. Added FR-26 and blocked further Creator testing pending minimal-login remediation. |
 | Creator-login containment release, 9 Sep 2026 | Deployed `a712068` to Production (`65d4ac5f-9d97-4464-94e8-8210aa37145a` and same-source Git deployment `b7d8d8e5-c53f-4aab-8951-3e10c3091bb5`). Control-plane read-back confirmed both Creator controls and all prior safety controls closed. No application or D1 request was made. |
+| Creator-login canary, 10 Sep 2026 | Fresh-day passive usage passed after almost four settled hours. One isolated Creator login at approximately 14:08 AEST used 64 reads and one write in its five-minute bucket, with no broad roster, Staff, status, At a glance or colleague-query fingerprint. The post-login account-wide gate remained GO. |
 
 ## Restoration record template
 
