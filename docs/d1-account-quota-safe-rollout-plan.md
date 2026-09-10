@@ -366,6 +366,16 @@ a D1 query to prove rollback.
 The next authorised activity is Phase A analytics and caller inventory only.
 No further D1 request is permitted until Phases A–D pass.
 
+On 10 September 2026, Pages deployment inventory and containment were
+completed without calling an application or D1 endpoint. Seven superseded
+Production deployments and all 254 Preview deployments were deleted. The
+post-cleanup inventory contains exactly one Production deployment
+(`bae86cea-390f-44e4-9d9e-d34a95c7854c`, source `8ef0215`) and no Preview
+deployments. This eliminates retained Pages artifacts as concurrent callers;
+it does not retrospectively attribute the unexplained Production row-read
+bursts. Future releases must delete the predecessor after verification and
+must not accumulate Preview deployments.
+
 Work that can be completed safely before the next reset is sequenced in
 [`d1-pre-reset-readiness-plan.md`](./d1-pre-reset-readiness-plan.md). It also
 corrects the reset-day sampling schedule for the checker's 15-minute Analytics

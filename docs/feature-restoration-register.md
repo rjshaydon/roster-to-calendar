@@ -13,8 +13,8 @@ record its evidence, approval, deployment and post-deployment observation here.
 No entry may be removed after restoration; change its state to **Restored** so
 the history remains auditable.
 
-Current verified Production safety code: `18ba7a1` on 8 September 2026,
-deployment `a4305bca-5538-4583-88f8-655bcb687556`. The zero-D1 At a glance
+Current verified Production safety code: `8ef0215` on 10 September 2026,
+deployment `bae86cea-390f-44e4-9d9e-d34a95c7854c`. The zero-D1 At a glance
 maintenance gate and ordinary-login containment are active. Effective
 Production configuration was read back after that deployment with
 all facility readers/builders, roster and contact automation, roster status,
@@ -458,15 +458,20 @@ pause, and future maintenance work must not accidentally disable them.
 
 ### FR-25 — Retained deployments with Production D1 bindings
 
-- **State:** Contained. All 16 listed pre-containment Production deployments
-  were deleted by exact ID after the contained replacement and configuration
-  were verified. Two reproducible `18ba7a1` Production deployments remain.
+- **State:** Contained at the Pages deployment layer. On 10 September, the
+  complete control-plane inventory showed 262 callable deployments: eight
+  Production and 254 Preview. Seven superseded Production deployments and all
+  254 Preview deployments were deleted. Independent environment-specific
+  listings then showed exactly one Production deployment (`bae86cea…`, source
+  `8ef0215`) and no Preview deployments.
 - **Evidence:** Analytics exposed a `sqlite_master` fingerprint not emitted by
-  current code. This suggests an older callable deployment may remain, but does
-  not prove it caused the burst.
-- **Containment:** Inventory every callable deployment and binding through the
-  control plane. Prepare reversible blocking of unsafe deployment URLs with
-  explicit approval; preserve Git history and rollback information.
+  current code. Preview D1 reported zero rows during the investigated incidents,
+  so retained Preview deployments were not proved to be their cause; deletion
+  nevertheless removes their callable URLs and code as a future risk.
+- **Containment:** Keep only the current Production deployment. After any future
+  release is verified, delete its predecessor and any generated Preview
+  deployment. Git history remains the source for rollback; rollback requires a
+  deliberate fresh deployment with current fail-closed configuration.
 
 ### FR-26 — Automatic Creator login/bootstrap fan-out
 
@@ -536,6 +541,7 @@ mechanisms are intentionally excluded from restoration.
 | Controlled Creator test, 9 Sep 2026 | Creator login plus one blocked At a glance navigation coincided with 1,623,542 reads in one five-minute bucket. The idle tab did not repeat the burst. Added FR-26 and blocked further Creator testing pending minimal-login remediation. |
 | Creator-login containment release, 9 Sep 2026 | Deployed `a712068` to Production (`65d4ac5f-9d97-4464-94e8-8210aa37145a` and same-source Git deployment `b7d8d8e5-c53f-4aab-8951-3e10c3091bb5`). Control-plane read-back confirmed both Creator controls and all prior safety controls closed. No application or D1 request was made. |
 | Creator-login canary, 10 Sep 2026 | Fresh-day passive usage passed after almost four settled hours. The immediate 14:08 Creator-login bucket used 64 reads and one write, but later settlement exposed 992,117 reads in the 14:30 bucket with almost no fingerprint attribution. This preceded the disabled At a glance test, whose 14:40 bucket used only 33 reads and six writes. The Creator/bootstrap gate is failed, not passed. |
+| Deployment cleanup, 10 Sep 2026 | Removed seven superseded Production deployments and all 254 Preview deployments through the Pages control plane. Final listings showed one Production deployment (`bae86cea…`, source `8ef0215`) and zero Preview deployments. No application or D1 endpoint was called. |
 
 ## Restoration record template
 
