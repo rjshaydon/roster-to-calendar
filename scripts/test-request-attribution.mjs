@@ -113,6 +113,31 @@ try {
   assert.equal(oversizedBootstrap.status, 503, "an oversized bootstrap batch must be rejected");
   assert.equal(bootstrapBatchCalls, 1, "an oversized bootstrap batch must be rejected before any mutation executes");
 
+  const materializationRequest = (count, execute = true) => {
+    const context = {
+      request: new Request("https://example.test/api/automation/facility-materialize", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ execute }),
+      }),
+      env: { ROSTER_DB: bootstrapDb, ROSTER_ADVANCED_MAINTENANCE_ENABLED: "true" },
+    };
+    context.next = async () => {
+      for (let index = 0; index < count; index += 1) await context.env.ROSTER_DB.prepare("SELECT 1").all();
+      return Response.json({ ok: true });
+    };
+    return context;
+  };
+  const boundedMaterialization = await onRequest(materializationRequest(111));
+  assert.equal(boundedMaterialization.status, 200, "the reviewed 107-read/4-state publication must fit its dedicated ceiling");
+  assert.match(logs.at(-1), /"d1Limit":112/);
+  const oversizedMaterialization = await onRequest(materializationRequest(113));
+  assert.equal(oversizedMaterialization.status, 503, "publication beyond its reviewed statement ceiling must stop");
+  const boundedMaterializationPlan = await onRequest(materializationRequest(16, false));
+  assert.equal(boundedMaterializationPlan.status, 200, "the publication dry run must fit its smaller planning ceiling");
+  assert.match(logs.at(-1), /"d1Limit":16/);
+  const oversizedMaterializationPlan = await onRequest(materializationRequest(17, false));
+  assert.equal(oversizedMaterializationPlan.status, 503, "an oversized publication plan must stop at its planning ceiling");
+
   await onRequest({
     request: new Request("https://example.test/api/state", {
       method: "POST", headers: { "content-type": "application/json" },

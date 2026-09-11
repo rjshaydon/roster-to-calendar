@@ -21,6 +21,8 @@ const STATE_ACTIONS = new Set([
 const DEFAULT_D1_STATEMENT_LIMIT = 64;
 const FACILITY_BOOTSTRAP_INSPECTION_D1_STATEMENT_LIMIT = 16;
 const FACILITY_BOOTSTRAP_EXECUTION_D1_STATEMENT_LIMIT = 768;
+const FACILITY_MATERIALIZATION_INSPECTION_D1_STATEMENT_LIMIT = 16;
+const FACILITY_MATERIALIZATION_EXECUTION_D1_STATEMENT_LIMIT = 112;
 const ACTION_D1_STATEMENT_LIMITS = Object.freeze({
   login: 32,
   loadAccountContext: 48,
@@ -77,14 +79,21 @@ export async function onRequest(context) {
 }
 
 async function requestD1StatementLimit(request, pathname, action) {
-  if (pathname === "/api/automation/facility-bootstrap" && request.method === "POST") {
+  if (["/api/automation/facility-bootstrap", "/api/automation/facility-materialize"].includes(pathname) && request.method === "POST") {
     try {
       const body = await request.clone().json();
+      if (pathname === "/api/automation/facility-materialize") {
+        return body?.execute === true
+          ? FACILITY_MATERIALIZATION_EXECUTION_D1_STATEMENT_LIMIT
+          : FACILITY_MATERIALIZATION_INSPECTION_D1_STATEMENT_LIMIT;
+      }
       return body?.execute === true
         ? FACILITY_BOOTSTRAP_EXECUTION_D1_STATEMENT_LIMIT
         : FACILITY_BOOTSTRAP_INSPECTION_D1_STATEMENT_LIMIT;
     } catch {
-      return FACILITY_BOOTSTRAP_INSPECTION_D1_STATEMENT_LIMIT;
+      return pathname === "/api/automation/facility-materialize"
+        ? FACILITY_MATERIALIZATION_INSPECTION_D1_STATEMENT_LIMIT
+        : FACILITY_BOOTSTRAP_INSPECTION_D1_STATEMENT_LIMIT;
     }
   }
   return ACTION_D1_STATEMENT_LIMITS[action] || DEFAULT_D1_STATEMENT_LIMIT;
