@@ -19,6 +19,8 @@ const STATE_ACTIONS = new Set([
   "updateAccount", "uploadRawRosterFile",
 ]);
 const DEFAULT_D1_STATEMENT_LIMIT = 64;
+const FACILITY_BOOTSTRAP_INSPECTION_D1_STATEMENT_LIMIT = 16;
+const FACILITY_BOOTSTRAP_EXECUTION_D1_STATEMENT_LIMIT = 768;
 const ACTION_D1_STATEMENT_LIMITS = Object.freeze({
   login: 32,
   loadAccountContext: 48,
@@ -32,7 +34,7 @@ export async function onRequest(context) {
   const url = new URL(context.request.url);
   const requestId = context.request.headers.get("cf-ray") || crypto.randomUUID();
   const action = await safeStateAction(context.request, url.pathname);
-  const limit = ACTION_D1_STATEMENT_LIMITS[action] || DEFAULT_D1_STATEMENT_LIMIT;
+  const limit = await requestD1StatementLimit(context.request, url.pathname, action);
   let contained = automationContainmentReason(url.pathname, context.env);
   const d1 = contained ? emptyD1Meter() : createD1Meter(context.env.ROSTER_DB, limit);
   let response;
@@ -72,6 +74,20 @@ export async function onRequest(context) {
     console.log(JSON.stringify(record));
     writeAnalytics(context.env.REQUEST_ANALYTICS, record);
   }
+}
+
+async function requestD1StatementLimit(request, pathname, action) {
+  if (pathname === "/api/automation/facility-bootstrap" && request.method === "POST") {
+    try {
+      const body = await request.clone().json();
+      return body?.execute === true
+        ? FACILITY_BOOTSTRAP_EXECUTION_D1_STATEMENT_LIMIT
+        : FACILITY_BOOTSTRAP_INSPECTION_D1_STATEMENT_LIMIT;
+    } catch {
+      return FACILITY_BOOTSTRAP_INSPECTION_D1_STATEMENT_LIMIT;
+    }
+  }
+  return ACTION_D1_STATEMENT_LIMITS[action] || DEFAULT_D1_STATEMENT_LIMIT;
 }
 
 function writeAnalytics(dataset, record) {

@@ -76,6 +76,43 @@ try {
   const overBudget = await onRequest(budgetContext);
   assert.equal(overBudget.status, 503, "the 33rd login statement must be rejected before execution");
 
+  let bootstrapBatchCalls = 0;
+  const bootstrapDb = {
+    prepare() {
+      return {
+        bind() { return this; },
+        async all() { return { results: [], meta: { rows_read: 0, rows_written: 0 } }; },
+      };
+    },
+    async batch(statements) {
+      bootstrapBatchCalls += 1;
+      return statements.map(() => ({ meta: { rows_read: 0, rows_written: 1 } }));
+    },
+  };
+  const bootstrapRequest = (count) => {
+    const context = {
+      request: new Request("https://example.test/api/automation/facility-bootstrap", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ execute: true }),
+      }),
+      env: { ROSTER_DB: bootstrapDb, FACILITY_BOOTSTRAP_EXECUTION_ENABLED: "true" },
+    };
+    context.next = async () => {
+      for (let index = 0; index < 10; index += 1) await context.env.ROSTER_DB.prepare("SELECT 1").all();
+      const statements = Array.from({ length: count }, () => context.env.ROSTER_DB.prepare("INSERT INTO compact_fact VALUES (1)"));
+      await context.env.ROSTER_DB.batch(statements);
+      return Response.json({ ok: true });
+    };
+    return context;
+  };
+  const boundedBootstrap = await onRequest(bootstrapRequest(750));
+  assert.equal(boundedBootstrap.status, 200, "the reviewed 10-read/750-mutation bootstrap must fit its dedicated ceiling");
+  assert.match(logs.at(-1), /"d1Limit":768/);
+  assert.equal(bootstrapBatchCalls, 1);
+  const oversizedBootstrap = await onRequest(bootstrapRequest(759));
+  assert.equal(oversizedBootstrap.status, 503, "an oversized bootstrap batch must be rejected");
+  assert.equal(bootstrapBatchCalls, 1, "an oversized bootstrap batch must be rejected before any mutation executes");
+
   await onRequest({
     request: new Request("https://example.test/api/state", {
       method: "POST", headers: { "content-type": "application/json" },
