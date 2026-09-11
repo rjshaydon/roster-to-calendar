@@ -266,6 +266,13 @@ Phase B thresholds pass.
 
 ## Phase E — one-file MMC canary
 
+> **11 September amendment:** The three active MMC files were bootstrapped
+> successfully, but the original 91-day single-request publication design did
+> not complete within the Pages runtime. Do not retry it. Publication must now
+> follow [`facility-publication-chunking-remediation-plan.md`](./facility-publication-chunking-remediation-plan.md),
+> whose small explicit batches and atomic finalisation supersede the publication
+> portions of this phase. Reader and Power Automate gates remain closed.
+
 The selected first file remains:
 
 ```text
