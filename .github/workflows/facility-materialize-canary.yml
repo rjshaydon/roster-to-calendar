@@ -1,0 +1,72 @@
+name: Publish one facility canary
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_type:
+        description: "One explicitly allowed hospital"
+        required: true
+        type: choice
+        options:
+          - mmc
+          - mch
+          - ddh
+          - vhh
+          - casey
+      term_start:
+        description: "Exact Australian term start (YYYY-MM-DD)"
+        required: true
+        type: string
+      execute:
+        description: "Publish the approved plan"
+        required: true
+        default: false
+        type: boolean
+      plan_revision:
+        description: "Required only for execution; copy from the dry run"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      ROSTER_AUTOMATION_TOKEN: ${{ secrets.ROSTER_AUTOMATION_TOKEN }}
+      SOURCE_TYPE: ${{ inputs.source_type }}
+      TERM_START: ${{ inputs.term_start }}
+      EXECUTE: ${{ inputs.execute }}
+      PLAN_REVISION: ${{ inputs.plan_revision }}
+    steps:
+      - name: Validate execution approval
+        if: ${{ inputs.execute && inputs.plan_revision == '' }}
+        run: |
+          echo "Execution requires the exact revision returned by the dry run."
+          exit 1
+
+      - name: Plan or publish one facility term
+        run: |
+          request_body="$(jq -n \
+            --arg sourceType "${SOURCE_TYPE}" \
+            --arg termStart "${TERM_START}" \
+            --arg planRevision "${PLAN_REVISION}" \
+            --argjson execute "${EXECUTE}" \
+            '{sourceType: $sourceType, termStart: $termStart, maximumDates: 120, execute: $execute}
+              + (if $execute then {planRevision: $planRevision} else {} end)')"
+          http_status="$(curl --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer ${ROSTER_AUTOMATION_TOKEN}" \
+            --header "Content-Type: application/json" \
+            --data "${request_body}" \
+            --output response.json \
+            --write-out '%{http_code}' \
+            "https://roster-to-calendar.pages.dev/api/automation/facility-materialize")"
+          if jq empty response.json >/dev/null 2>&1; then
+            jq . response.json
+          else
+            jq -n --arg status "${http_status}" '{ok: false, httpStatus: $status, error: "Non-JSON response from facility publication."}'
+          fi
+          test "${http_status}" = "200"
