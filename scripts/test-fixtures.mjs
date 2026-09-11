@@ -5607,6 +5607,25 @@ assert.equal(
 );
 assert.ok(d1Store.executedSql.length <= 8, `contained Creator login must remain a small exact-key trace; observed ${d1Store.executedSql.length} statements`);
 d1Store.executedSql = [];
+const readOnlyRosterStatus = await postStateRaw(d1StateStore, {
+  action: "calendarStoreStatus",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  lightweight: true,
+}, d1Store, {
+  env: {
+    ROSTER_AUTOMATION_WRITES_ENABLED: "false",
+    ROSTER_STATUS_SUMMARY_ENABLED: "true",
+  },
+});
+assert.equal(readOnlyRosterStatus.response.ok, true, "compact Admin Files status must remain available while roster writes are paused");
+assert.equal(readOnlyRosterStatus.body.unavailable, undefined);
+assert.equal(
+  d1Store.executedSql.some((sql) => /roster_events|roster_file_doctors|roster_daily_presence|raw_roster_files/i.test(sql)),
+  false,
+  "compact Admin Files status must not read historical roster tables",
+);
+d1Store.executedSql = [];
 const containedCreatorContextResult = await postStateRaw(d1StateStore, {
   action: "loadAccountContext",
   email: "rhaydon@gmail.com",

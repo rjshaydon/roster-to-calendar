@@ -224,7 +224,7 @@ export async function onRequestPost(context) {
     if (action === "listUsers" && !creatorDirectoryEnabled(context.env)) {
       return creatorDirectoryPausedResponse();
     }
-    if (action === "calendarStoreStatus" && (rosterWritesExplicitlyPaused(context.env) || !rosterStatusSummaryEnabled(context.env))) {
+    if (action === "calendarStoreStatus" && !rosterStatusSummaryEnabled(context.env)) {
       return rosterStatusPausedResponse(context.env);
     }
     if (action === "listRosterDoctors" && !identityDiscoveryEnabled(context.env)) {
@@ -972,7 +972,7 @@ export async function onRequestPost(context) {
       }
       // Missing configuration fails closed before any roster repository read.
       // The legacy status implementation is never a fallback.
-      if (rosterWritesExplicitlyPaused(context.env) || !rosterStatusSummaryEnabled(context.env)) {
+      if (!rosterStatusSummaryEnabled(context.env)) {
         return rosterStatusPausedResponse(context.env);
       }
       const status = await calendarStoreStatus(null, context.env.ROSTER_DB, {

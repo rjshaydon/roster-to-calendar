@@ -131,7 +131,6 @@ assert.match(ensureInviteBody, /ensureCalendarSchema\(db\)/, "invite setup shoul
 assert.doesNotMatch(ensureInviteBody, /CREATE\s+(?:TABLE|INDEX)/i, "ordinary API requests must not issue invite DDL directly");
 
 for (const action of [
-  "calendarStoreStatus",
   "syncRosterRepository",
   "removeRosterImports",
   "saveDerivedCalendarFile",
@@ -148,6 +147,11 @@ assert.ok(
   calendarStoreStatusAction.indexOf("rosterStatusSummaryEnabled(context.env)")
     < calendarStoreStatusAction.indexOf("calendarStoreStatus(null, context.env.ROSTER_DB"),
   "disabled compact calendar status must stop before roster repository reads",
+);
+assert.doesNotMatch(
+  calendarStoreStatusAction,
+  /rosterWritesExplicitlyPaused\(context\.env\)/,
+  "the compact read-only status must remain available while roster writes are paused",
 );
 const calendarStoreStatusBody = stateSource.match(/async function calendarStoreStatus[\s\S]*?function rosterSourceStatuses/)?.[0] || "";
 assert.match(calendarStoreStatusBody, /queryRosterFileStatusSummaries/);
