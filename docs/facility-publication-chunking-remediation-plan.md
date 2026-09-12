@@ -191,3 +191,11 @@ unexpected query fingerprint, batch outside its plan, ordinary request above
 10,000 examined rows, missing telemetry, pointer ambiguity, unexplained write,
 or evidence of automatic continuation. Do not raise a ceiling or retry until
 the failed request has settled and its state is understood.
+
+## Implementation status — 13 September 2026
+
+Implemented locally without a schema migration. The production endpoint now
+accepts only `plan`, `build-batch`, `build-month` and `finalize`; the former
+whole-term execution input is no longer a callable path. The manual GitHub
+workflow exposes exactly those four modes. Local scale and failure-recovery
+tests pass, while committed Production and Preview flags remain closed.

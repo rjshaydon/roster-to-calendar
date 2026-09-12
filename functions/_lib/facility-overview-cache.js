@@ -12,6 +12,7 @@ import {
 } from "./d1-calendar.js";
 
 const SCHEMA_VERSION = 1;
+const FACILITY_PUBLICATION_BATCH_SIZE = 7;
 export const FACILITY_PUBLICATION_LIMITS = Object.freeze({
   dates: 120,
   activeFiles: 32,
@@ -36,6 +37,190 @@ export function facilityDayObjectKey(sourceType, date, revision) {
 
 export function facilityMonthObjectKey(sourceType, month, revision) {
   return `facility-overview/v1/${safeSource(sourceType)}/months/${String(month).slice(0, 7)}/${revision}.json.gz`;
+}
+
+function facilityOperationKey(sourceType, operationRevision) {
+  return `facility-overview/v1/${safeSource(sourceType)}/operations/${operationRevision}/plan.json.gz`;
+}
+
+function facilityBatchResultKey(sourceType, operationRevision, batchIndex) {
+  return `facility-overview/v1/${safeSource(sourceType)}/operations/${operationRevision}/batches/${batchIndex}.json.gz`;
+}
+
+function facilityMonthResultKey(sourceType, operationRevision, month) {
+  return `facility-overview/v1/${safeSource(sourceType)}/operations/${operationRevision}/months/${month}.json.gz`;
+}
+
+export async function runFacilityPublicationStep(context, sourceTypeValue, options = {}) {
+  const sourceType = safeSource(sourceTypeValue);
+  const mode = String(options.mode || "plan").trim().toLowerCase();
+  if (!sourceType || !context?.env?.ROSTER_DB?.prepare || !context?.env?.ROSTER_FILES?.put) return { ok: false, unavailable: true };
+  if (!["plan", "build-batch", "build-month", "finalize"].includes(mode)) return { ok: false, reason: "valid-publication-mode-required" };
+  const requestedTerm = String(options.termStart || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(requestedTerm) || australianTermStartForDate(requestedTerm) !== requestedTerm) {
+    return { ok: false, reason: "valid-term-start-required", sourceType };
+  }
+  const requestedRevision = String(options.operationRevision || "");
+  if (mode === "finalize" && requestedRevision) {
+    const published = await loadJsonObject(context.env.ROSTER_FILES, facilityMetadataManifestKey(sourceType));
+    if (published.data?.publicationOperationId === requestedRevision) {
+      await context.env.ROSTER_DB.prepare("UPDATE facility_day_publications SET status = 'complete', candidate_revision = ?, lease_expires_at = '', last_error = '', updated_at = ? WHERE source_type = ? AND operation_id = ?")
+        .bind(String(published.data.revision || ""), new Date().toISOString(), sourceType, requestedRevision).run();
+      return { ok: true, mode: "finalize", unchanged: true, repaired: true, operationRevision: requestedRevision, revision: published.data.revision };
+    }
+  }
+  const plan = await buildFacilityPublicationPlan(context, sourceType, requestedTerm, FACILITY_PUBLICATION_LIMITS.dates);
+  if (!plan.ok) return plan;
+  const publicPlan = chunkedPublicationPlanResponse(plan);
+  if (mode === "plan") return publicPlan;
+  const operationRevision = requestedRevision;
+  if (!operationRevision || operationRevision !== plan.planRevision) return { ok: false, stalePlan: true, reason: "publication-plan-changed", sourceType, termStart: requestedTerm };
+  if (mode === "build-batch") return buildFacilityPublicationBatch(context, plan, publicPlan, Number(options.batchIndex));
+  if (mode === "build-month") return buildFacilityPublicationMonth(context, plan, publicPlan, String(options.month || ""));
+  return finalizeFacilityPublication(context, plan, publicPlan);
+}
+
+function chunkedPublicationPlanResponse(plan) {
+  const batches = facilityPublicationBatches(plan.plannedDates);
+  const months = [...new Set(plan.plannedDates.map((date) => date.slice(0, 7)))];
+  return {
+    ...publicationPlanResponse(plan),
+    operationRevision: plan.planRevision,
+    batchSize: FACILITY_PUBLICATION_BATCH_SIZE,
+    batchCount: batches.length,
+    batches,
+    months,
+    estimate: {
+      planning: { maximumD1Statements: 7, maximumR2Gets: 1, maximumWrites: 0 },
+      eachBatch: { maximumDates: FACILITY_PUBLICATION_BATCH_SIZE, maximumD1Statements: 16, maximumRowsExamined: plan.estimate.maximumEstimatedD1RowsExamined, maximumR2Gets: 3, maximumR2Puts: FACILITY_PUBLICATION_BATCH_SIZE + 2 },
+      eachMonth: { maximumD1Statements: 7, maximumR2Gets: batches.length + 34, maximumR2Puts: 2 },
+      finalize: { maximumD1Statements: 11, maximumR2Gets: batches.length + months.length + 3, maximumR2Puts: 2, maximumD1RowsWrittenIncludingIndexes: 4 },
+      broadRosterScans: 0,
+    },
+  };
+}
+
+export function facilityPublicationBatches(dates = []) {
+  const batches = [];
+  for (let index = 0; index < dates.length; index += FACILITY_PUBLICATION_BATCH_SIZE) batches.push(dates.slice(index, index + FACILITY_PUBLICATION_BATCH_SIZE));
+  return batches;
+}
+
+async function buildFacilityPublicationBatch(context, plan, publicPlan, batchIndex) {
+  const { ROSTER_DB: db, ROSTER_FILES: r2 } = context.env;
+  if (!Number.isInteger(batchIndex) || batchIndex < 0 || batchIndex >= publicPlan.batches.length) return { ok: false, reason: "valid-batch-index-required" };
+  const resultKey = facilityBatchResultKey(plan.sourceType, plan.planRevision, batchIndex);
+  const existingResult = await loadJsonObject(r2, resultKey);
+  if (existingResult.data) return { ok: true, mode: "build-batch", unchanged: true, operationRevision: plan.planRevision, batchIndex, dates: publicPlan.batches[batchIndex] };
+  let operation = await db.prepare("SELECT operation_id, status FROM facility_day_publications WHERE source_type = ?").bind(plan.sourceType).first();
+  if (batchIndex === 0) {
+    const staffPublication = await publishFacilityStaffMetadata(context, [plan.sourceType], { termStart: plan.termStart, preparedPlan: plan, deferManifest: true });
+    const preparedManifest = staffPublication.results?.[0]?.manifest;
+    if (!preparedManifest) return { ok: false, reason: "staff-publication-failed" };
+    await putJsonGzip(r2, facilityOperationKey(plan.sourceType, plan.planRevision), {
+      schemaVersion: SCHEMA_VERSION, sourceType: plan.sourceType, termStart: plan.termStart,
+      operationRevision: plan.planRevision, inputRevision: plan.inputRevision,
+      baseRevision: String(plan.manifestObject.data?.revision || ""), baseEtag: String(plan.manifestObject.etag || ""),
+      batches: publicPlan.batches, months: publicPlan.months, preparedManifest,
+    });
+    const now = new Date().toISOString();
+    await db.prepare(`INSERT INTO facility_day_publications
+      (source_type, generation, operation_id, status, base_revision, candidate_revision, lease_expires_at, last_error, updated_at)
+      VALUES (?, 1, ?, 'building', ?, '', '', '', ?)
+      ON CONFLICT(source_type) DO UPDATE SET generation=facility_day_publications.generation + 1,
+        operation_id=excluded.operation_id, status='building', base_revision=excluded.base_revision,
+        candidate_revision='', lease_expires_at='', last_error='', updated_at=excluded.updated_at`)
+      .bind(plan.sourceType, plan.planRevision, String(plan.manifestObject.data?.revision || ""), now).run();
+    operation = { operation_id: plan.planRevision, status: "building" };
+  } else {
+    if (operation?.operation_id !== plan.planRevision || operation?.status !== "building") return { ok: false, reason: "publication-operation-not-building" };
+    const previous = await loadJsonObject(r2, facilityBatchResultKey(plan.sourceType, plan.planRevision, batchIndex - 1));
+    if (!previous.data) return { ok: false, reason: "previous-batch-required" };
+  }
+  const pointers = {};
+  for (const date of publicPlan.batches[batchIndex]) {
+    const rows = await queryFacilityOverviewOnShift(db, { facilityKey: plan.sourceType, date, includeOverrides: false, maximumRows: FACILITY_PUBLICATION_LIMITS.dayRows });
+    const covered = (plan.metadata.coverage || []).some((entry) => entry.startDate <= date && entry.endDate >= date);
+    if (!rows.length && !covered) continue;
+    const payload = { schemaVersion: SCHEMA_VERSION, sourceType: plan.sourceType, date, rows };
+    const revision = await digest(payload);
+    const key = facilityDayObjectKey(plan.sourceType, date, revision);
+    await putJsonGzip(r2, key, payload);
+    pointers[date] = { key, revision };
+  }
+  const result = { schemaVersion: SCHEMA_VERSION, operationRevision: plan.planRevision, batchIndex, dates: publicPlan.batches[batchIndex], pointers };
+  await putJsonGzip(r2, resultKey, { ...result, revision: await digest(result) });
+  return { ok: true, mode: "build-batch", operationRevision: plan.planRevision, batchIndex, dates: result.dates, pointerCount: Object.keys(pointers).length };
+}
+
+async function loadCompletedBatchResults(r2, plan, publicPlan) {
+  const results = [];
+  for (let index = 0; index < publicPlan.batches.length; index += 1) {
+    const value = await loadJsonObject(r2, facilityBatchResultKey(plan.sourceType, plan.planRevision, index));
+    if (!value.data) return { ok: false, reason: "all-batches-required", missingBatchIndex: index };
+    results.push(value.data);
+  }
+  return { ok: true, results };
+}
+
+async function buildFacilityPublicationMonth(context, plan, publicPlan, month) {
+  const r2 = context.env.ROSTER_FILES;
+  if (!publicPlan.months.includes(month)) return { ok: false, reason: "valid-planned-month-required" };
+  const resultKey = facilityMonthResultKey(plan.sourceType, plan.planRevision, month);
+  const existing = await loadJsonObject(r2, resultKey);
+  if (existing.data) return { ok: true, mode: "build-month", unchanged: true, operationRevision: plan.planRevision, month };
+  const completed = await loadCompletedBatchResults(r2, plan, publicPlan);
+  if (!completed.ok) return completed;
+  const pointers = Object.assign({}, ...completed.results.map((item) => item.pointers || {}));
+  const monthDates = Object.entries(pointers).filter(([date]) => date.startsWith(`${month}-`)).sort(([a], [b]) => a.localeCompare(b));
+  const rows = [];
+  for (const [, pointer] of monthDates) {
+    const day = await loadCachedSnapshot(r2, pointer.key);
+    if (day?.rows) rows.push(...day.rows);
+  }
+  const payload = { schemaVersion: SCHEMA_VERSION, sourceType: plan.sourceType, month, dates: monthDates.map(([date]) => date), rows };
+  const revision = await digest(payload);
+  const key = facilityMonthObjectKey(plan.sourceType, month, revision);
+  await putJsonGzip(r2, key, payload);
+  await putJsonGzip(r2, resultKey, { schemaVersion: SCHEMA_VERSION, operationRevision: plan.planRevision, month, pointer: { key, revision } });
+  return { ok: true, mode: "build-month", operationRevision: plan.planRevision, month, dateCount: monthDates.length, revision };
+}
+
+async function finalizeFacilityPublication(context, plan, publicPlan) {
+  const { ROSTER_DB: db, ROSTER_FILES: r2 } = context.env;
+  const currentPublic = await loadJsonObject(r2, facilityMetadataManifestKey(plan.sourceType));
+  if (currentPublic.data?.publicationOperationId === plan.planRevision) {
+    await db.prepare("UPDATE facility_day_publications SET status = 'complete', candidate_revision = ?, lease_expires_at = '', last_error = '', updated_at = ? WHERE source_type = ? AND operation_id = ?")
+      .bind(String(currentPublic.data.revision || ""), new Date().toISOString(), plan.sourceType, plan.planRevision).run();
+    return { ok: true, mode: "finalize", unchanged: true, repaired: true, operationRevision: plan.planRevision, revision: currentPublic.data.revision };
+  }
+  const operation = await db.prepare("SELECT operation_id, status FROM facility_day_publications WHERE source_type = ?").bind(plan.sourceType).first();
+  if (operation?.operation_id !== plan.planRevision || operation?.status !== "building") return { ok: false, reason: "publication-operation-not-building" };
+  const stagedPlan = await loadJsonObject(r2, facilityOperationKey(plan.sourceType, plan.planRevision));
+  if (!stagedPlan.data || stagedPlan.data.inputRevision !== plan.inputRevision) return { ok: false, stalePlan: true, reason: "publication-input-changed" };
+  const completed = await loadCompletedBatchResults(r2, plan, publicPlan);
+  if (!completed.ok) return completed;
+  const days = { ...(stagedPlan.data.preparedManifest?.days || {}), ...Object.assign({}, ...completed.results.map((item) => item.pointers || {})) };
+  const months = { ...(stagedPlan.data.preparedManifest?.months || {}) };
+  for (const month of publicPlan.months) {
+    const result = await loadJsonObject(r2, facilityMonthResultKey(plan.sourceType, plan.planRevision, month));
+    if (!result.data?.pointer) return { ok: false, reason: "all-months-required", missingMonth: month };
+    months[month] = result.data.pointer;
+  }
+  const stable = { ...stagedPlan.data.preparedManifest, days, months };
+  const revision = await digest(stable);
+  const candidate = { ...stable, revision, publicationOperationId: plan.planRevision, publishedAt: new Date().toISOString() };
+  await putJsonGzip(r2, `facility-overview/v1/${plan.sourceType}/manifests/${plan.planRevision}-${revision}.json.gz`, candidate);
+  await db.prepare("UPDATE facility_day_publications SET candidate_revision = ?, updated_at = ? WHERE source_type = ? AND operation_id = ? AND status = 'building'")
+    .bind(revision, new Date().toISOString(), plan.sourceType, plan.planRevision).run();
+  const owner = await db.prepare("SELECT operation_id FROM facility_day_publications WHERE source_type = ? AND status = 'building'").bind(plan.sourceType).first();
+  if (owner?.operation_id !== plan.planRevision) return { ok: false, stalePlan: true, reason: "publication-operation-superseded" };
+  await putJsonGzip(r2, facilityMetadataManifestKey(plan.sourceType), candidate, {
+    onlyIf: stagedPlan.data.baseEtag ? { etagMatches: stagedPlan.data.baseEtag } : { etagDoesNotMatch: "*" },
+  });
+  await db.prepare("UPDATE facility_day_publications SET status = 'complete', candidate_revision = ?, lease_expires_at = '', last_error = '', updated_at = ? WHERE source_type = ? AND operation_id = ?")
+    .bind(revision, new Date().toISOString(), plan.sourceType, plan.planRevision).run();
+  return { ok: true, mode: "finalize", operationRevision: plan.planRevision, revision };
 }
 
 export async function initializeFacilityMaterialization(context, sourceTypeValue, options = {}) {

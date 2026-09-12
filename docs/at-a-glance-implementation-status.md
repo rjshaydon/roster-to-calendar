@@ -518,3 +518,26 @@ Next step:
   deciding whether to push it.
   Deployment, remote migrations, bootstrap and reader activation remain
   separate Phase 7B decisions with the worksheet's measured stop points.
+
+## Resumable publication remediation — 13 September 2026
+
+The single-request 91-day publisher is no longer callable through the
+maintenance endpoint. It has been replaced locally with four explicit modes:
+plan, a maximum seven-day batch, one-month assembly and finalisation. Operation,
+batch and month artifacts are isolated below revision-specific R2 staging keys;
+only finalisation can replace the public manifest.
+
+The implementation uses the existing one-row-per-hospital D1 publication fence
+and therefore requires no new migration. It rejects stale revisions,
+out-of-order batches and incomplete finalisation; repeats of completed batches
+and months perform no writes. The public pointer uses the expected ETag, or an
+only-if-absent condition for the first publication, and D1 ownership is checked
+immediately before the pointer update. A pointer-success/status-failure retry
+repairs only the status row.
+
+The actual synthetic 91-day workflow completes locally as 13 batches and four
+months while remaining invisible to readers until finalisation. Focused
+materialisation, request-attribution, rollout, quota, database-cost, snapshot,
+access and syntax checks pass. Committed Production configuration remains fully
+closed; no Production publication or reader activation is authorised by this
+implementation.

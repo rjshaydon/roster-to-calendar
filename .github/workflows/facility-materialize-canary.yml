@@ -1,4 +1,4 @@
-name: Publish one facility canary
+name: Publish one facility canary step
 
 on:
   workflow_dispatch:
@@ -7,23 +7,26 @@ on:
         description: "One explicitly allowed hospital"
         required: true
         type: choice
-        options:
-          - mmc
-          - mch
-          - ddh
-          - vhh
-          - casey
+        options: [mmc, mch, ddh, vhh, casey]
       term_start:
         description: "Exact Australian term start (YYYY-MM-DD)"
         required: true
         type: string
-      execute:
-        description: "Publish the approved plan"
+      mode:
+        description: "One explicit publication step"
         required: true
-        default: false
-        type: boolean
-      plan_revision:
-        description: "Required only for execution; copy from the dry run"
+        type: choice
+        options: [plan, build-batch, build-month, finalize]
+      operation_revision:
+        description: "Required after planning"
+        required: false
+        type: string
+      batch_index:
+        description: "Required for build-batch"
+        required: false
+        type: string
+      month:
+        description: "Required for build-month (YYYY-MM)"
         required: false
         type: string
 
@@ -38,24 +41,39 @@ jobs:
       ROSTER_AUTOMATION_TOKEN: ${{ secrets.ROSTER_AUTOMATION_TOKEN }}
       SOURCE_TYPE: ${{ inputs.source_type }}
       TERM_START: ${{ inputs.term_start }}
-      EXECUTE: ${{ inputs.execute }}
-      PLAN_REVISION: ${{ inputs.plan_revision }}
+      MODE: ${{ inputs.mode }}
+      OPERATION_REVISION: ${{ inputs.operation_revision }}
+      BATCH_INDEX: ${{ inputs.batch_index }}
+      MONTH: ${{ inputs.month }}
     steps:
-      - name: Validate execution approval
-        if: ${{ inputs.execute && inputs.plan_revision == '' }}
+      - name: Validate exact step inputs
         run: |
-          echo "Execution requires the exact revision returned by the dry run."
-          exit 1
+          if [ "${MODE}" != "plan" ] && [ -z "${OPERATION_REVISION}" ]; then
+            echo "This step requires the exact operation revision returned by plan."
+            exit 1
+          fi
+          if [ "${MODE}" = "build-batch" ] && ! [[ "${BATCH_INDEX}" =~ ^[0-9]+$ ]]; then
+            echo "build-batch requires a non-negative integer batch index."
+            exit 1
+          fi
+          if [ "${MODE}" = "build-month" ] && ! [[ "${MONTH}" =~ ^[0-9]{4}-[0-9]{2}$ ]]; then
+            echo "build-month requires YYYY-MM."
+            exit 1
+          fi
 
-      - name: Plan or publish one facility term
+      - name: Run one bounded publication step
         run: |
           request_body="$(jq -n \
             --arg sourceType "${SOURCE_TYPE}" \
             --arg termStart "${TERM_START}" \
-            --arg planRevision "${PLAN_REVISION}" \
-            --argjson execute "${EXECUTE}" \
-            '{sourceType: $sourceType, termStart: $termStart, maximumDates: 120, execute: $execute}
-              + (if $execute then {planRevision: $planRevision} else {} end)')"
+            --arg mode "${MODE}" \
+            --arg operationRevision "${OPERATION_REVISION}" \
+            --arg batchIndex "${BATCH_INDEX}" \
+            --arg month "${MONTH}" \
+            '{sourceType: $sourceType, termStart: $termStart, mode: $mode}
+              + (if $operationRevision != "" then {operationRevision: $operationRevision} else {} end)
+              + (if $batchIndex != "" then {batchIndex: ($batchIndex | tonumber)} else {} end)
+              + (if $month != "" then {month: $month} else {} end)')"
           http_status="$(curl --silent --show-error \
             --request POST \
             --header "Authorization: Bearer ${ROSTER_AUTOMATION_TOKEN}" \
@@ -67,6 +85,6 @@ jobs:
           if jq empty response.json >/dev/null 2>&1; then
             jq . response.json
           else
-            jq -n --arg status "${http_status}" '{ok: false, httpStatus: $status, error: "Non-JSON response from facility publication."}'
+            jq -n --arg status "${http_status}" '{ok: false, httpStatus: $status, error: "Non-JSON response from facility publication step."}'
           fi
           test "${http_status}" = "200"

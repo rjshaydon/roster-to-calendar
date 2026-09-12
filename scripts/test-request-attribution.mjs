@@ -113,11 +113,11 @@ try {
   assert.equal(oversizedBootstrap.status, 503, "an oversized bootstrap batch must be rejected");
   assert.equal(bootstrapBatchCalls, 1, "an oversized bootstrap batch must be rejected before any mutation executes");
 
-  const materializationRequest = (count, execute = true) => {
+  const materializationRequest = (count, mode = "plan") => {
     const context = {
       request: new Request("https://example.test/api/automation/facility-materialize", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ execute }),
+        body: JSON.stringify({ mode }),
       }),
       env: { ROSTER_DB: bootstrapDb, ROSTER_ADVANCED_MAINTENANCE_ENABLED: "true" },
     };
@@ -127,15 +127,21 @@ try {
     };
     return context;
   };
-  const boundedMaterialization = await onRequest(materializationRequest(111));
-  assert.equal(boundedMaterialization.status, 200, "the reviewed 107-read/4-state publication must fit its dedicated ceiling");
-  assert.match(logs.at(-1), /"d1Limit":112/);
-  const oversizedMaterialization = await onRequest(materializationRequest(113));
-  assert.equal(oversizedMaterialization.status, 503, "publication beyond its reviewed statement ceiling must stop");
-  const boundedMaterializationPlan = await onRequest(materializationRequest(16, false));
+  const boundedMaterializationBatch = await onRequest(materializationRequest(20, "build-batch"));
+  assert.equal(boundedMaterializationBatch.status, 200, "a seven-day publication batch must fit its dedicated ceiling");
+  assert.match(logs.at(-1), /"d1Limit":20/);
+  const oversizedMaterializationBatch = await onRequest(materializationRequest(21, "build-batch"));
+  assert.equal(oversizedMaterializationBatch.status, 503, "a batch beyond its reviewed statement ceiling must stop");
+  const boundedMaterializationMonth = await onRequest(materializationRequest(12, "build-month"));
+  assert.equal(boundedMaterializationMonth.status, 200, "one month assembly must fit its dedicated ceiling");
+  assert.match(logs.at(-1), /"d1Limit":12/);
+  const boundedMaterializationFinalize = await onRequest(materializationRequest(16, "finalize"));
+  assert.equal(boundedMaterializationFinalize.status, 200, "finalisation must fit its dedicated ceiling");
+  assert.match(logs.at(-1), /"d1Limit":16/);
+  const boundedMaterializationPlan = await onRequest(materializationRequest(16));
   assert.equal(boundedMaterializationPlan.status, 200, "the publication dry run must fit its smaller planning ceiling");
   assert.match(logs.at(-1), /"d1Limit":16/);
-  const oversizedMaterializationPlan = await onRequest(materializationRequest(17, false));
+  const oversizedMaterializationPlan = await onRequest(materializationRequest(17));
   assert.equal(oversizedMaterializationPlan.status, 503, "an oversized publication plan must stop at its planning ceiling");
 
   await onRequest({

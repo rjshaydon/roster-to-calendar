@@ -1,4 +1,4 @@
-import { initializeFacilityMaterialization } from "../../_lib/facility-overview-cache.js";
+import { runFacilityPublicationStep } from "../../_lib/facility-overview-cache.js";
 import { facilityBuildSources } from "../../_lib/facility-rollout.js";
 import { facilityMaterializationMaintenanceEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
 
@@ -8,11 +8,12 @@ export async function onRequestPost(context) {
   const body = await context.request.json().catch(() => ({}));
   const sourceType = facilityBuildSources(context.env, [body?.sourceType])[0] || "";
   if (!sourceType) return rosterWritePausedResponse();
-  const result = await initializeFacilityMaterialization(context, sourceType, {
+  const result = await runFacilityPublicationStep(context, sourceType, {
+    mode: body?.mode || "plan",
     termStart: body?.termStart,
-    maximumDates: body?.maximumDates,
-    dryRun: body?.execute !== true,
-    planRevision: body?.planRevision,
+    operationRevision: body?.operationRevision,
+    batchIndex: body?.batchIndex,
+    month: body?.month,
   });
   return Response.json(result, { status: result.ok ? 200 : result.overBudget || result.stalePlan ? 409 : 400 });
 }

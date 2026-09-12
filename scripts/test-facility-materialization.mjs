@@ -20,7 +20,7 @@ import { onRequestPost as bootstrapFacility } from "../functions/api/automation/
 import { onRequestPost as materializeFacility } from "../functions/api/automation/facility-materialize.js";
 import { onRequestPost as ingestContacts } from "../functions/api/automation/contact-list-extract.js";
 import { onRequestPost as stateHandler } from "../functions/api/state.js";
-import { initializeFacilityMaterialization, loadPublishedFacilityDays, loadPublishedFacilityMetadata, loadPublishedFacilityRange, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata } from "../functions/_lib/facility-overview-cache.js";
+import { facilityPublicationBatches, initializeFacilityMaterialization, loadPublishedFacilityDays, loadPublishedFacilityMetadata, loadPublishedFacilityRange, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata, runFacilityPublicationStep } from "../functions/_lib/facility-overview-cache.js";
 
 class LocalD1 {
   constructor(sqlite) { this.sqlite = sqlite; this.rowsWritten = 0; this.sql = []; this.failRunIncludes = ""; }
@@ -64,6 +64,7 @@ class LocalR2 {
     if (this.failPointerOnce && key.endsWith("/manifest.json")) { this.failPointerOnce = false; throw new Error("Injected manifest failure"); }
     const current = this.objects.get(key);
     if (options.onlyIf?.etagMatches && current?.etag !== options.onlyIf.etagMatches) throw new Error("Precondition failed");
+    if (options.onlyIf?.etagDoesNotMatch === "*" && current) throw new Error("Precondition failed");
     this.puts += 1;
     const bytes = value instanceof Uint8Array ? value : new Uint8Array(value);
     this.version += 1;
@@ -268,19 +269,20 @@ db.sql = [];
 const materializeEnv = { ROSTER_DB: db, ROSTER_FILES: plannedR2, ROSTER_AUTOMATION_TOKEN: "bootstrap-token", ROSTER_ADVANCED_MAINTENANCE_ENABLED: "true", FACILITY_SHARED_EMERGENCY_PAUSED: "false", FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST: "mmc" };
 const materializationPlanResponse = await materializeFacility({ request: new Request("http://local/api/automation/facility-materialize", { method: "POST", headers: { authorization: "Bearer bootstrap-token", "content-type": "application/json" }, body: JSON.stringify({ sourceType: "mmc", termStart: "2026-08-03" }) }), env: materializeEnv });
 const materializationPlan = await materializationPlanResponse.json();
-assert.equal(materializationPlan.dryRun, true);
-assert.ok(materializationPlan.planRevision);
+assert.ok(materializationPlan.operationRevision);
+assert.equal(materializationPlan.batchSize, 7);
+const legacyPlan = await initializeFacilityMaterialization({ env: { ROSTER_DB: db, ROSTER_FILES: plannedR2 } }, "mmc", { termStart: "2026-08-03" });
 const stalePlan = await initializeFacilityMaterialization({ env: { ROSTER_DB: db, ROSTER_FILES: plannedR2 } }, "mmc", { termStart: "2026-08-03", dryRun: false, planRevision: "stale" });
 assert.equal(stalePlan.stalePlan, true);
 assert.equal(plannedR2.puts, 0, "a stale publication plan must write nothing");
 db.sql = [];
 const plannedPutsBefore = plannedR2.puts;
 const plannedGetsBefore = plannedR2.gets;
-const materializationExecution = await initializeFacilityMaterialization({ env: { ROSTER_DB: db, ROSTER_FILES: plannedR2 } }, "mmc", { termStart: "2026-08-03", dryRun: false, planRevision: materializationPlan.planRevision });
+const materializationExecution = await initializeFacilityMaterialization({ env: { ROSTER_DB: db, ROSTER_FILES: plannedR2 } }, "mmc", { termStart: "2026-08-03", dryRun: false, planRevision: legacyPlan.planRevision });
 assert.equal(materializationExecution.ok, true);
-assert.ok(plannedR2.puts - plannedPutsBefore <= materializationPlan.estimate.maximumR2Puts);
-assert.ok(plannedR2.gets - plannedGetsBefore <= materializationPlan.estimate.maximumR2Gets);
-assert.ok(db.sql.length <= materializationPlan.estimate.maximumD1ReadStatements + materializationPlan.estimate.maximumPublicationStateStatements);
+assert.ok(plannedR2.puts - plannedPutsBefore <= legacyPlan.estimate.maximumR2Puts);
+assert.ok(plannedR2.gets - plannedGetsBefore <= legacyPlan.estimate.maximumR2Gets);
+assert.ok(db.sql.length <= legacyPlan.estimate.maximumD1ReadStatements + legacyPlan.estimate.maximumPublicationStateStatements);
 const plannedStaffQueries = db.sql.filter((sql) => /FROM facility_term_staff_contributions/.test(sql));
 assert.ok(plannedStaffQueries.length >= 1 && plannedStaffQueries.every((sql) => /(?:s\.)?term_start = \?/.test(sql)), "every planned Staff query must be constrained to the requested term");
 const plannedCatalogQueries = db.sql.filter((sql) => /FROM facility_stream_catalog_contributions/.test(sql));
@@ -366,6 +368,67 @@ assert.equal(concurrentResult.stalePlan, true, "an input change during publicati
 assert.equal(plannedR2.objects.get(manifestKey).etag, fixedManifestBeforeConcurrentBuild.etag, "a stale concurrent build must preserve the fixed manifest");
 sqlite.prepare("UPDATE roster_file_coverage SET daily_digest=? WHERE file_id=?").run(baselineCoverage.daily_digest, file.id);
 sqlite.prepare("DELETE FROM facility_staff_designations WHERE id='concurrent-designation'").run();
+
+const ninetyOneDates = Array.from({ length: 91 }, (_, index) => {
+  const date = new Date("2026-08-03T12:00:00Z");
+  date.setUTCDate(date.getUTCDate() + index);
+  return date.toISOString().slice(0, 10);
+});
+const deterministicBatches = facilityPublicationBatches(ninetyOneDates);
+assert.equal(deterministicBatches.length, 13, "a 91-day term must produce 13 explicit batches");
+assert.ok(deterministicBatches.every((batch) => batch.length <= 7), "no publication batch may exceed seven dates");
+assert.deepEqual(deterministicBatches.flat(), ninetyOneDates, "batching must preserve the complete ordered date plan");
+
+const chunkedR2 = new LocalR2();
+const chunkContext = { env: { ROSTER_DB: db, ROSTER_FILES: chunkedR2 } };
+const originalChunkCoverageEnd = sqlite.prepare("SELECT coverage_end FROM roster_file_coverage WHERE file_id=?").get(file.id).coverage_end;
+sqlite.prepare("UPDATE roster_file_coverage SET coverage_end='2026-11-01' WHERE file_id=?").run(file.id);
+const chunkPlan = await runFacilityPublicationStep(chunkContext, "mmc", { mode: "plan", termStart: "2026-08-03" });
+assert.equal(chunkPlan.ok, true);
+assert.equal(chunkPlan.batchSize, 7);
+assert.equal(chunkPlan.batchCount, 13, "the real 91-day operation plan must require 13 explicit requests");
+assert.equal(chunkPlan.batches.flat().length, chunkPlan.plannedDates.length);
+const staleChunkPuts = chunkedR2.puts;
+const staleChunk = await runFacilityPublicationStep(chunkContext, "mmc", { mode: "build-batch", termStart: "2026-08-03", operationRevision: "stale", batchIndex: 0 });
+assert.equal(staleChunk.stalePlan, true);
+assert.equal(chunkedR2.puts, staleChunkPuts, "a stale chunk plan must write no R2 objects");
+db.sql = [];
+const firstChunk = await runFacilityPublicationStep(chunkContext, "mmc", { mode: "build-batch", termStart: "2026-08-03", operationRevision: chunkPlan.operationRevision, batchIndex: 0 });
+assert.equal(firstChunk.ok, true);
+const chunkDayQueries = db.sql.filter((sql) => /roster_events\.source_type = \?[\s\S]*roster_events\.start_date = \?/.test(sql));
+assert.ok(chunkDayQueries.length <= 7 && chunkDayQueries.length === chunkPlan.batches[0].length, "one batch must issue only its exact hospital/date queries");
+const firstChunkPuts = chunkedR2.puts;
+db.rowsWritten = 0;
+const repeatedChunkPublication = await runFacilityPublicationStep(chunkContext, "mmc", { mode: "build-batch", termStart: "2026-08-03", operationRevision: chunkPlan.operationRevision, batchIndex: 0 });
+assert.equal(repeatedChunkPublication.unchanged, true);
+assert.equal(chunkedR2.puts, firstChunkPuts, "repeating a completed batch must write no R2 objects");
+assert.equal(db.rowsWritten, 0, "repeating a completed batch must write no D1 rows");
+assert.equal((await loadPublishedFacilityDays(chunkedR2, ["mmc"], "2026-08-03")).preparing, true, "staged batches must remain invisible to readers");
+const outOfOrder = await runFacilityPublicationStep(chunkContext, "mmc", { mode: "build-batch", termStart: "2026-08-03", operationRevision: chunkPlan.operationRevision, batchIndex: 2 });
+assert.equal(outOfOrder.reason, "previous-batch-required", "an out-of-order batch must be rejected");
+for (let batchIndex = 1; batchIndex < chunkPlan.batchCount; batchIndex += 1) {
+  db.sql = [];
+  const batch = await runFacilityPublicationStep(chunkContext, "mmc", { mode: "build-batch", termStart: "2026-08-03", operationRevision: chunkPlan.operationRevision, batchIndex });
+  assert.equal(batch.ok, true);
+  assert.ok(db.sql.filter((sql) => /roster_events\.source_type = \?[\s\S]*roster_events\.start_date = \?/.test(sql)).length <= 7, "each request must query at most seven exact dates");
+}
+for (const month of chunkPlan.months) {
+  const monthResult = await runFacilityPublicationStep(chunkContext, "mmc", { mode: "build-month", termStart: "2026-08-03", operationRevision: chunkPlan.operationRevision, month });
+  assert.equal(monthResult.ok, true);
+  const monthPuts = chunkedR2.puts;
+  const repeatedMonth = await runFacilityPublicationStep(chunkContext, "mmc", { mode: "build-month", termStart: "2026-08-03", operationRevision: chunkPlan.operationRevision, month });
+  assert.equal(repeatedMonth.unchanged, true);
+  assert.equal(chunkedR2.puts, monthPuts, "repeating a completed month must write no R2 objects");
+}
+db.failRunIncludes = "SET status = 'complete'";
+await assert.rejects(runFacilityPublicationStep(chunkContext, "mmc", { mode: "finalize", termStart: "2026-08-03", operationRevision: chunkPlan.operationRevision }), /Injected D1 statement failure/);
+assert.equal((await loadPublishedFacilityDays(chunkedR2, ["mmc"], "2026-08-03")).preparing, false, "only finalisation may expose staged days");
+db.failRunIncludes = "";
+db.rowsWritten = 0;
+const repairedFinalize = await runFacilityPublicationStep(chunkContext, "mmc", { mode: "finalize", termStart: "2026-08-03", operationRevision: chunkPlan.operationRevision });
+assert.equal(repairedFinalize.repaired, true, "a repeated finalisation must repair status without rebuilding");
+assert.ok(db.rowsWritten <= 1, "finalisation repair must update at most one logical row");
+sqlite.prepare("UPDATE roster_file_coverage SET coverage_end=? WHERE file_id=?").run(originalChunkCoverageEnd, file.id);
 
 const r2 = new LocalR2();
 db.sql = [];
