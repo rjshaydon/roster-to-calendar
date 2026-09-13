@@ -66,7 +66,12 @@ try {
     ROSTER_FILES: inaccessibleBinding,
   };
 
-  const directDispatch = await requestQueuedRosterProcessing(localEnv, { reason: "isolation-test" });
+  const directDispatch = await requestQueuedRosterProcessing({
+    ...localEnv,
+    ROSTER_AUTOMATION_WRITES_ENABLED: "true",
+    ROSTER_AUTOMATION_QUEUE_ENABLED: "true",
+    ROSTER_AUTOMATION_SOURCE_ALLOWLIST: "monash-adults",
+  }, { sourceId: "monash-adults", reason: "isolation-test" });
   assert.deepEqual(directDispatch, { ok: false, dispatched: false, reason: "local-disabled", dispatch: null });
 
   const disabledResponse = localFeatureDisabledResponse(localEnv, "Email invitations");

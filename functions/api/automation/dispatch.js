@@ -1,6 +1,6 @@
 import { hasCalendarDb } from "../../_lib/d1-calendar.js";
 import { recordRosterDispatchLifecycle, requestQueuedRosterProcessing } from "../../_lib/automation-dispatch.js";
-import { automatedRosterQueueEnabled, automatedRosterWritesEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
+import { automatedRosterQueueEnabled, automatedRosterSourceEnabled, automatedRosterWritesEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
 import { localFeatureDisabledResponse } from "../../_lib/outbound-network.js";
 
 export async function onRequestPost(context) {
@@ -15,12 +15,14 @@ export async function onRequestPost(context) {
   try {
     const body = await context.request.json().catch(() => ({}));
     const action = String(body?.action || "kick").trim().toLowerCase();
+    const sourceId = String(body?.sourceId || "").trim();
+    if (!automatedRosterSourceEnabled(context.env, sourceId)) return rosterWritePausedResponse();
     if (action === "kick") {
-      const result = await requestQueuedRosterProcessing(context.env, { reason: String(body?.reason || "watchdog").slice(0, 80) });
+      const result = await requestQueuedRosterProcessing(context.env, { sourceId, reason: String(body?.reason || "manual-kick").slice(0, 80) });
       return Response.json(result, { status: result.ok ? 200 : 202 });
     }
     if (action === "lifecycle") {
-      const result = await recordRosterDispatchLifecycle(context.env, body);
+      const result = await recordRosterDispatchLifecycle(context.env, { ...body, sourceId });
       return Response.json(result, { status: result.ok ? 200 : 400 });
     }
     return Response.json({ error: "Unsupported dispatch action." }, { status: 400 });

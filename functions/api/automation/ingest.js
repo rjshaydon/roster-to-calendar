@@ -44,20 +44,13 @@ export async function onRequestPost(context) {
     // successfully while a transient background save failed; treating it as
     // unchanged would otherwise leave that retained roster stranded forever.
     if (matchingVersion && matchingVersion.status !== "failed") {
-      await upsertRosterSource(context.env.ROSTER_DB, updatedSourceRecord(sourceRecord, source, {
-        id: sourceId,
-        providerVersion,
-        providerModifiedAt: sourceRecord?.providerModifiedAt || providerModifiedAt,
-        lastCheckedAt: now,
-        updatedAt: now,
-      }));
       const status = matchingVersion.status === "success"
         ? "unchanged"
         : matchingVersion.status === "failed"
           ? "unchanged-failed"
           : matchingVersion.status;
       const dispatch = ["queued", "processing"].includes(status)
-        ? await requestQueuedRosterProcessing(context.env, { reason: "duplicate-queue-check" })
+        ? await requestQueuedRosterProcessing(context.env, { sourceId, reason: "duplicate-queue-check" })
         : null;
       return Response.json({
         ok: true,
@@ -71,9 +64,6 @@ export async function onRequestPost(context) {
 
     const bytes = new Uint8Array(await file.arrayBuffer());
     const contentHash = await sha256Hex(bytes);
-    await upsertRosterSource(context.env.ROSTER_DB, updatedSourceRecord(sourceRecord, source, {
-      id: sourceId, providerVersion, providerModifiedAt, lastCheckedAt: now, lastError: "", updatedAt: now,
-    }));
     // The parser/import format is part of the retained filename. Identical
     // workbook bytes must be processed again when that filename changes for a
     // parser revision; otherwise a corrected parser can never replace old
@@ -84,9 +74,13 @@ export async function onRequestPost(context) {
     }
     const queued = await findQueuedRosterSyncByHash(context.env.ROSTER_DB, sourceId, contentHash, file.name);
     if (queued) {
-      const dispatch = await requestQueuedRosterProcessing(context.env, { reason: "duplicate-content-check" });
+      const dispatch = await requestQueuedRosterProcessing(context.env, { sourceId, reason: "duplicate-content-check" });
       return Response.json({ ok: true, status: queued.status, sourceId, fileId: queued.fileId, runId: queued.id, processorDispatch: publicDispatchStatus(dispatch) }, { status: 202 });
     }
+
+    await upsertRosterSource(context.env.ROSTER_DB, updatedSourceRecord(sourceRecord, source, {
+      id: sourceId, providerVersion, providerModifiedAt, lastCheckedAt: now, lastError: "", updatedAt: now,
+    }));
 
     const runId = `sync:${sourceId}:${crypto.randomUUID()}`;
     const fileId = `automation:${sourceId}:${contentHash.slice(0, 24)}`;
@@ -114,7 +108,7 @@ export async function onRequestPost(context) {
       message: "Queued for background processing.",
       startedAt: now,
     });
-    const dispatch = await requestQueuedRosterProcessing(context.env, { reason: "source-update" });
+    const dispatch = await requestQueuedRosterProcessing(context.env, { sourceId, reason: "source-update" });
     return Response.json({ ok: true, status: "queued", sourceId, fileId, runId, processorDispatch: publicDispatchStatus(dispatch) }, { status: 202 });
   } catch (error) {
     console.error("Automated roster queueing failed", error);

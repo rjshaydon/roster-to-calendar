@@ -467,6 +467,9 @@ async function ensureCalendarSchemaUncached(db) {
   `).run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_sync_runs_source_started ON roster_sync_runs (source_id, started_at DESC)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_sync_runs_source_hash ON roster_sync_runs (source_id, content_hash, status)").run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_sync_runs_source_version_status_started ON roster_sync_runs (source_id, provider_version, status, started_at DESC)").run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_sync_runs_source_status_started ON roster_sync_runs (source_id, status, started_at, id)").run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_account_claims_source_doctor_email ON account_claims (source_type, doctor_key, email)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_dispatches_status_retry ON roster_dispatches (status, retry_after DESC)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_sources_label_id ON roster_sources (label, id)").run();
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_roster_sync_runs_source_started_id ON roster_sync_runs (source_id, started_at DESC, id DESC)").run();
@@ -3060,10 +3063,11 @@ export async function loadRosterSyncRun(db, runId) {
   return rosterSyncRunFromRow(row);
 }
 
-export async function listQueuedRosterSyncRuns(db, limit = 4) {
-  if (!db?.prepare) return [];
+export async function listQueuedRosterSyncRuns(db, sourceId, limit = 1) {
+  const normalizedSourceId = String(sourceId || "").trim();
+  if (!db?.prepare || !normalizedSourceId) return [];
   await ensureCalendarSchema(db);
-  const safeLimit = Math.min(Math.max(Number(limit || 4), 1), 20);
+  const safeLimit = Math.min(Math.max(Number(limit || 1), 1), 4);
   const rows = await db.prepare(`
     SELECT
       roster_sync_runs.*,
@@ -3077,7 +3081,8 @@ export async function listQueuedRosterSyncRuns(db, limit = 4) {
     FROM roster_sync_runs
     INNER JOIN raw_roster_files ON raw_roster_files.file_id = COALESCE(NULLIF(roster_sync_runs.source_file_id, ''), roster_sync_runs.file_id)
     LEFT JOIN roster_sources ON roster_sources.id = roster_sync_runs.source_id
-    WHERE roster_sync_runs.status IN ('queued', 'processing')
+    WHERE roster_sync_runs.source_id = ?
+      AND roster_sync_runs.status IN ('queued', 'processing')
       AND (
         roster_sync_runs.provider_version = ''
         OR NOT EXISTS (
@@ -3108,7 +3113,7 @@ export async function listQueuedRosterSyncRuns(db, limit = 4) {
       )
     ORDER BY roster_sync_runs.started_at ASC
     LIMIT ?
-  `).bind(safeLimit).all();
+  `).bind(normalizedSourceId, safeLimit).all();
   return (rows.results || []).map((row) => ({
     ...rosterSyncRunFromRow(row),
     fileName: String(row.file_name || "roster.xlsx"),
@@ -3149,10 +3154,12 @@ export async function supersedeObsoleteQueuedRosterSyncRuns(db) {
   return { ok: true, changes: Number(result?.meta?.changes || result?.changes || 0) };
 }
 
-export async function claimRosterDispatch(db, { reason = "", retryAfter = "", now = new Date().toISOString() } = {}) {
-  if (!db?.prepare) return { claimed: false, reason: "missing-db" };
+export async function claimRosterDispatch(db, { sourceId = "", reason = "", retryAfter = "", now = new Date().toISOString() } = {}) {
+  const normalizedSourceId = String(sourceId || "").trim();
+  if (!db?.prepare || !normalizedSourceId) return { claimed: false, reason: "missing-input" };
   await ensureCalendarSchema(db);
-  const pending = await db.prepare("SELECT id FROM roster_sync_runs WHERE status IN ('queued', 'processing') LIMIT 1").first();
+  const pending = await db.prepare("SELECT id FROM roster_sync_runs WHERE source_id = ? AND status IN ('queued', 'processing') LIMIT 1")
+    .bind(normalizedSourceId).first();
   if (!pending?.id) return { claimed: false, reason: "queue-empty" };
   const active = await db.prepare(`
     SELECT * FROM roster_dispatches
@@ -3162,7 +3169,7 @@ export async function claimRosterDispatch(db, { reason = "", retryAfter = "", no
     LIMIT 1
   `).bind(String(now)).first();
   if (active?.id) return { claimed: false, reason: "already-dispatched", dispatch: rosterDispatchFromRow(active) };
-  const id = `dispatch:${crypto.randomUUID()}`;
+  const id = `dispatch:${normalizedSourceId}:${crypto.randomUUID()}`;
   await db.prepare(`
     INSERT INTO roster_dispatches (
       id, status, reason, requested_at, retry_after, attempt_count
@@ -3779,6 +3786,41 @@ export async function queryClaimedAccounts(db) {
         matchedAt: String(row.matched_at || ""),
       });
     }
+  }
+  return [...accounts.values()];
+}
+
+export async function queryClaimedAccountsForRosterDoctors(db, doctors = [], options = {}) {
+  if (!db?.prepare) return [];
+  const maximumDoctors = Math.max(1, Math.min(Number(options.maximumDoctors || 40), 40));
+  const pairs = [...new Map((doctors || []).map((doctor) => {
+    const sourceType = normalizeSourceType(doctor?.sourceType || doctor?.source_type || "");
+    const doctorKey = String(doctor?.key || doctor?.doctorKey || doctor?.doctor_key || "").trim();
+    return sourceType && doctorKey ? [`${sourceType}|${doctorKey}`, [sourceType, doctorKey]] : null;
+  }).filter(Boolean)).values()].slice(0, maximumDoctors);
+  if (!pairs.length) return [];
+  await ensureCalendarSchema(db);
+  const predicates = pairs.map(() => "(account_claims.source_type = ? AND account_claims.doctor_key = ?)").join(" OR ");
+  const rows = await db.prepare(`
+    SELECT account_profiles.email AS email, account_profiles.real_name AS real_name,
+      account_profiles.role AS role, account_claims.source_type AS source_type,
+      account_claims.doctor_key AS doctor_key, account_claims.display_name AS display_name,
+      account_claims.matched_at AS matched_at
+    FROM account_claims INDEXED BY idx_account_claims_source_doctor_email
+    INNER JOIN account_profiles ON account_profiles.email = account_claims.email
+    WHERE ${predicates}
+    ORDER BY account_profiles.email, account_claims.source_type, account_claims.display_name
+    LIMIT ?
+  `).bind(...pairs.flat(), maximumDoctors + 1).all();
+  const accounts = new Map();
+  for (const row of (rows.results || []).slice(0, maximumDoctors)) {
+    const email = normalizeEmail(row.email);
+    if (!email || row.role === "creator" || row.role === "owner") continue;
+    if (!accounts.has(email)) accounts.set(email, { email, realName: String(row.real_name || "").trim(), claims: [] });
+    accounts.get(email).claims.push({
+      key: String(row.doctor_key || "").trim(), displayName: String(row.display_name || row.doctor_key || "").trim(),
+      sourceType: String(row.source_type || "").trim().toLowerCase(), matchedAt: String(row.matched_at || ""),
+    });
   }
   return [...accounts.values()];
 }

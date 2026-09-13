@@ -169,7 +169,8 @@ the mutating step remains blocked.
 | Shared day reads | `FACILITY_SHARED_DAYS_ENABLED` | `false` |
 | Shared contact reads | `FACILITY_SHARED_CONTACTS_ENABLED` | `false` |
 | Roster writes | `ROSTER_AUTOMATION_WRITES_ENABLED` | `false` |
-| Compact roster status | `ROSTER_STATUS_SUMMARY_ENABLED` | `false` |
+| Manual roster writes | `MANUAL_ROSTER_WRITES_ENABLED` | `false` |
+| Compact roster status | `ROSTER_STATUS_SUMMARY_ENABLED` | `true` in Production; this bounded reader is independent of the facility canary |
 | Roster source allowlist | `ROSTER_AUTOMATION_SOURCE_ALLOWLIST` | empty |
 | Queue | `ROSTER_AUTOMATION_QUEUE_ENABLED` | `false` |
 | Advanced maintenance | `ROSTER_ADVANCED_MAINTENANCE_ENABLED` | `false` |

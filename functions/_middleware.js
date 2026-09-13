@@ -21,6 +21,7 @@ const STATE_ACTIONS = new Set([
 const DEFAULT_D1_STATEMENT_LIMIT = 64;
 const FACILITY_BOOTSTRAP_INSPECTION_D1_STATEMENT_LIMIT = 16;
 const FACILITY_BOOTSTRAP_EXECUTION_D1_STATEMENT_LIMIT = 768;
+const ROSTER_DERIVED_COMPLETE_D1_STATEMENT_LIMIT = 768;
 const FACILITY_MATERIALIZATION_D1_STATEMENT_LIMITS = Object.freeze({
   plan: 16,
   "build-batch": 20,
@@ -83,6 +84,16 @@ export async function onRequest(context) {
 }
 
 async function requestD1StatementLimit(request, pathname, action) {
+  if (pathname === "/api/automation/derived" && request.method === "POST") {
+    try {
+      const body = await request.clone().json();
+      return String(body?.phase || "").toLowerCase() === "complete"
+        ? ROSTER_DERIVED_COMPLETE_D1_STATEMENT_LIMIT
+        : DEFAULT_D1_STATEMENT_LIMIT;
+    } catch {
+      return DEFAULT_D1_STATEMENT_LIMIT;
+    }
+  }
   if (["/api/automation/facility-bootstrap", "/api/automation/facility-materialize"].includes(pathname) && request.method === "POST") {
     try {
       const body = await request.clone().json();

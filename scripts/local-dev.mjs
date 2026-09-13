@@ -60,6 +60,7 @@ function safeChildEnvironment() {
   environment.LOCAL_ONLY = "true";
   environment.ROSTER_AUTOMATION_ENABLED = "false";
   environment.ROSTER_AUTOMATION_WRITES_ENABLED = "false";
+  environment.MANUAL_ROSTER_WRITES_ENABLED = "false";
   environment.FACILITY_OVERVIEW_MAINTENANCE_MODE = "false";
   environment.FACILITY_BOOTSTRAP_INSPECTION_ENABLED = "false";
   environment.FACILITY_BOOTSTRAP_EXECUTION_ENABLED = "false";
@@ -375,6 +376,7 @@ function localDevArguments(port) {
     "--binding", "FACILITY_OVERVIEW_MAINTENANCE_MODE=false",
     "--binding", "ROSTER_AUTOMATION_ENABLED=false",
     "--binding", "ROSTER_AUTOMATION_WRITES_ENABLED=false",
+    "--binding", "MANUAL_ROSTER_WRITES_ENABLED=false",
     "--binding", "ROSTER_STATUS_SUMMARY_ENABLED=false",
     "--binding", "IDENTITY_DISCOVERY_ENABLED=false",
     "--binding", "ACCOUNT_SNAPSHOT_BUILD_ENABLED=false",

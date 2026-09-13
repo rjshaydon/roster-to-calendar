@@ -1,14 +1,20 @@
 import { hasCalendarDb } from "../../_lib/d1-calendar.js";
+import { automationSourceDefinition } from "../../_lib/automation-import.js";
+import { automatedRosterQueueEnabled, automatedRosterSourceEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
 
 export async function onRequestGet(context) {
   if (!hasValidAutomationToken(context.request, context.env.ROSTER_AUTOMATION_TOKEN)) {
     return Response.json({ error: "Unauthorized." }, { status: 401 });
   }
+  const sourceId = String(new URL(context.request.url).searchParams.get("sourceId") || "").trim();
+  if (!automatedRosterQueueEnabled(context.env) || !automatedRosterSourceEnabled(context.env, sourceId)) return rosterWritePausedResponse();
+  const source = automationSourceDefinition(sourceId);
+  if (!source) return rosterWritePausedResponse();
   if (!hasCalendarDb(context.env)) return Response.json({ error: "Roster database is unavailable." }, { status: 503 });
 
   const rows = await context.env.ROSTER_DB
-    .prepare("SELECT rule_json FROM parser_rules WHERE scope = 'global' ORDER BY source_type, seniority, code")
-    .all()
+    .prepare("SELECT rule_json FROM parser_rules WHERE scope = 'global' AND source_type = ? ORDER BY seniority, code")
+    .bind(source.sourceType).all()
     .catch(() => ({ results: [] }));
   const parserExtensions = { mmc: [], ddh: [], casey: [], mch: [] };
   for (const row of rows.results || []) {

@@ -4,8 +4,12 @@ export function automatedRosterWritesEnabled(env = {}) {
   return ENABLED_VALUES.has(String(env.ROSTER_AUTOMATION_WRITES_ENABLED || "").trim().toLowerCase());
 }
 
+export function manualRosterWritesEnabled(env = {}) {
+  return ENABLED_VALUES.has(String(env.MANUAL_ROSTER_WRITES_ENABLED || "").trim().toLowerCase());
+}
+
 export function rosterWritesExplicitlyPaused(env = {}) {
-  return String(env.ROSTER_AUTOMATION_WRITES_ENABLED || "").trim().toLowerCase() === "false";
+  return !manualRosterWritesEnabled(env);
 }
 
 export function rosterStatusSummaryEnabled(env = {}) {
@@ -23,7 +27,7 @@ export function automatedRosterQueueEnabled(env = {}) {
 }
 
 export function advancedRosterMaintenanceEnabled(env = {}) {
-  return automatedRosterWritesEnabled(env) && ENABLED_VALUES.has(String(env.ROSTER_ADVANCED_MAINTENANCE_ENABLED || "").trim().toLowerCase());
+  return manualRosterWritesEnabled(env) && ENABLED_VALUES.has(String(env.ROSTER_ADVANCED_MAINTENANCE_ENABLED || "").trim().toLowerCase());
 }
 
 export function facilityMaterializationMaintenanceEnabled(env = {}) {

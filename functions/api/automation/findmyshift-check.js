@@ -1,7 +1,6 @@
 import { findmyshiftConfiguredRosterRange, findmyshiftLastModified, findmyshiftRosterWorkbook } from "../../_lib/findmyshift.js";
 import { createRosterSyncRun, findQueuedRosterSyncByHash, findRosterSyncByProviderVersion, hasCalendarDb, listActiveRetainedRosterFiles, loadRosterSource, upsertRosterSource } from "../../_lib/d1-calendar.js";
 import { requestQueuedRosterProcessing } from "../../_lib/automation-dispatch.js";
-import { reconcileRosterFileSupersessionAndRefresh } from "../state.js";
 import { automatedRosterSourceEnabled, automatedRosterWritesEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
 import { guardedFetch, localFeatureDisabledResponse } from "../../_lib/outbound-network.js";
 
@@ -61,8 +60,6 @@ export async function onRequestPost(context) {
         await saveSource(context, current, { lastCheckedAt: now, lastError: "" });
         return Response.json({ ok: true, status: "reprocess-queued", providerModifiedAt: providerVersion, queue });
       }
-      await reconcileCurrentFindmyshiftRoster(context, current);
-      await saveSource(context, current, { lastCheckedAt: now, lastError: "" });
       return Response.json({ ok: true, status: "unchanged", providerModifiedAt: providerVersion });
     }
     // If this exact provider version has already been proved incomplete, do
@@ -181,7 +178,7 @@ async function queueCurrentFindmyshiftReprocess(env, providerVersion, now) {
     runIds.push(runId);
   }
   const dispatch = runIds.length
-    ? await requestQueuedRosterProcessing(env, { reason: "creator-findmyshift-reprocess" })
+    ? await requestQueuedRosterProcessing(env, { sourceId: SOURCE_ID, reason: "creator-findmyshift-reprocess" })
     : null;
   return {
     runIds,
@@ -219,15 +216,6 @@ function withFindmyshiftRangeState(cursor, range, providerVersion, status) {
   };
 }
 
-async function reconcileCurrentFindmyshiftRoster(context, current) {
-  const activeFileId = String(current?.activeFileId || "").trim();
-  if (!activeFileId) return;
-  await reconcileRosterFileSupersessionAndRefresh(context, {
-    id: activeFileId,
-    sourceType: "ddh",
-    sourceId: SOURCE_ID,
-  }, { reason: "findmyshift-unchanged-reconciliation" });
-}
 
 async function saveSource(context, existing, update) {
   const now = new Date().toISOString();

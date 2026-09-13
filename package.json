@@ -24,6 +24,8 @@
     "test:fixtures": "node scripts/test-fixtures.mjs",
     "test:facility-access": "node --no-warnings scripts/test-facility-overview-access.mjs",
     "test:d1-quota": "node scripts/test-d1-quota-guard.mjs",
+    "test:source-isolation": "node scripts/test-roster-source-isolation.mjs",
+    "test:roster-idempotency": "node --no-warnings scripts/test-roster-ingress-idempotency.mjs",
     "test:d1-account-budget": "node scripts/test-d1-account-budget.mjs",
     "test:client-request-budget": "node scripts/test-client-request-budget.mjs",
     "test:creator-login-containment": "node scripts/test-creator-login-containment.mjs",

@@ -177,12 +177,16 @@ Do not expand parsing regression tests unless the refactor changes parsing.
 7. Verify the public manifest through R2/control-plane evidence before issuing
    at most one tiny application read.
 8. Only then enable the Creator-only MMC reader with contacts off.
-9. Observe the Creator canary before considering any Power Automate flow.
+9. Observe the Creator canary before expanding At a glance readers, publishing
+   contacts or enabling any Power Automate flow that builds At a glance data.
 
-Power Automate restoration remains later and source-specific: roster sources
-first only after unchanged-ingestion evidence; contacts separately; queue and
-watchdog last. The user will be told explicitly when an individual flow may be
-enabled.
+Core roster Power Automate restoration is independent and now precedes this
+facility canary under
+[`core-calendar-sync-restoration-plan.md`](./core-calendar-sync-restoration-plan.md).
+It may update personal calendars while every facility builder and reader stays
+closed. Contact flows remain later and separate; the historical global watchdog
+is not a prerequisite. The user will be told explicitly when an individual
+flow may be enabled.
 
 ## Stop conditions
 

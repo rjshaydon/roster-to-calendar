@@ -1,15 +1,19 @@
 import { hasCalendarDb, loadRawRosterFile, loadRosterSyncRun } from "../../_lib/d1-calendar.js";
+import { automatedRosterQueueEnabled, automatedRosterSourceEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
 
 export async function onRequestGet(context) {
   if (!hasValidAutomationToken(context.request, context.env.ROSTER_AUTOMATION_TOKEN)) {
     return Response.json({ error: "Unauthorized." }, { status: 401 });
   }
+  const url = new URL(context.request.url);
+  const sourceId = String(url.searchParams.get("sourceId") || "").trim();
+  if (!automatedRosterQueueEnabled(context.env) || !automatedRosterSourceEnabled(context.env, sourceId)) return rosterWritePausedResponse();
   if (!hasCalendarDb(context.env) || !context.env.ROSTER_FILES?.get) {
     return Response.json({ error: "Roster storage is unavailable." }, { status: 503 });
   }
-  const runId = String(new URL(context.request.url).searchParams.get("runId") || "").trim();
+  const runId = String(url.searchParams.get("runId") || "").trim();
   const run = await loadRosterSyncRun(context.env.ROSTER_DB, runId);
-  if (!run?.fileId) return Response.json({ error: "Queued roster was not found." }, { status: 404 });
+  if (!run?.fileId || run.sourceId !== sourceId) return Response.json({ error: "Queued roster was not found." }, { status: 404 });
   // A retained-file reparse writes to a staging id, while the source workbook
   // remains under its original id in R2/D1.
   const raw = await loadRawRosterFile(context.env.ROSTER_DB, run.sourceFileId || run.fileId);

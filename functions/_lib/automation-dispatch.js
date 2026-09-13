@@ -1,9 +1,9 @@
 import {
   claimRosterDispatch,
-  loadLatestRosterDispatch,
   updateRosterDispatch,
 } from "./d1-calendar.js";
 import { guardedFetch, localOnlyEnabled } from "./outbound-network.js";
+import { automatedRosterQueueEnabled, automatedRosterSourceEnabled } from "./roster-automation-guard.js";
 
 const GITHUB_WORKFLOW = "monash-roster-sync.yml";
 const GITHUB_REPOSITORY = "rjshaydon/roster-to-calendar";
@@ -13,17 +13,22 @@ const ACCEPTED_LEASE_MS = 20 * 60 * 1000;
 const TRANSIENT_RETRY_MS = 5 * 60 * 1000;
 const AUTH_RETRY_MS = 60 * 60 * 1000;
 
-export async function requestQueuedRosterProcessing(env, { reason = "source-update", now = new Date() } = {}) {
+export async function requestQueuedRosterProcessing(env, { sourceId = "", reason = "source-update", now = new Date() } = {}) {
+  const normalizedSourceId = String(sourceId || "").trim();
+  if (!automatedRosterQueueEnabled(env) || !automatedRosterSourceEnabled(env, normalizedSourceId)) {
+    return { ok: false, dispatched: false, reason: "source-disabled", dispatch: null };
+  }
   if (localOnlyEnabled(env)) {
     return { ok: false, dispatched: false, reason: "local-disabled", dispatch: null };
   }
   const requestedAt = validDate(now);
   const claim = await claimRosterDispatch(env?.ROSTER_DB, {
+    sourceId: normalizedSourceId,
     reason,
     now: requestedAt.toISOString(),
     retryAfter: addMilliseconds(requestedAt, REQUEST_LEASE_MS).toISOString(),
   });
-  if (!claim.claimed) return { ok: true, dispatched: false, reason: claim.reason, dispatch: claim.dispatch || await loadLatestRosterDispatch(env?.ROSTER_DB) };
+  if (!claim.claimed) return { ok: true, dispatched: false, reason: claim.reason, dispatch: claim.dispatch || null };
 
   const token = String(env?.GITHUB_ACTIONS_TOKEN || "").trim();
   if (!token) {
@@ -48,6 +53,7 @@ export async function requestQueuedRosterProcessing(env, { reason = "source-upda
         ref: workflowRef,
         inputs: {
           dispatch_id: claim.dispatch.id,
+          source_id: normalizedSourceId,
           automation_base_url: automationBaseUrl,
           target: workflowTarget,
         },
@@ -75,8 +81,12 @@ export async function requestQueuedRosterProcessing(env, { reason = "source-upda
 
 export async function recordRosterDispatchLifecycle(env, body = {}) {
   const dispatchId = String(body?.dispatchId || "").trim();
+  const sourceId = String(body?.sourceId || "").trim();
   const event = String(body?.event || "").trim().toLowerCase();
-  if (!dispatchId || !["started", "completed", "failed"].includes(event)) {
+  if (!automatedRosterQueueEnabled(env) || !automatedRosterSourceEnabled(env, sourceId)) {
+    return { ok: false, reason: "source-disabled" };
+  }
+  if (!dispatchId || !dispatchId.startsWith(`dispatch:${sourceId}:`) || !["started", "completed", "failed"].includes(event)) {
     return { ok: false, reason: "invalid-lifecycle-event" };
   }
   const now = new Date();

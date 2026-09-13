@@ -1089,8 +1089,8 @@ assert.match(findmyshiftCheckSource, /IMPORT_FORMAT = "stream-paired-v7"[\s\S]*t
 assert.match(findmyshiftCheckSource, /findmyshift-no-shifts[\s\S]*waiting-for-publication/, "an unpublished upcoming FindMyShift term should wait for a provider update instead of surfacing as an import failure");
 assert.match(
   findmyshiftCheckSource,
-  /current\.lastSuccessAt[\s\S]*reconcileCurrentFindmyshiftRoster[\s\S]*reconcileRosterFileSupersession/,
-  "an unchanged FindMyShift check should still reconcile previously imported duplicate roster rows",
+  /current\.lastSuccessAt[\s\S]*return Response\.json\(\{ ok: true, status: "unchanged"/,
+  "an unchanged FindMyShift check should return without roster reconciliation writes",
 );
 assert.doesNotMatch(
   stateSource.match(/if \(action === "testFindmyshiftConnection"\)[\s\S]*?if \(action === "adminCreateUser"\)/)?.[0] || "",
@@ -1111,6 +1111,8 @@ assert.ok(
   automationIngestSource.indexOf("findRosterSyncByProviderVersion") < automationIngestSource.indexOf("file.arrayBuffer()"),
   "automation ingress should reject an unchanged provider version before hashing or storing file bytes",
 );
+assert.match(stateSource, /function scheduleSnapshotWarmupForSourceTypes[\s\S]*accountSnapshotBuildEnabled\(context\?\.env\)/, "roster saves must not fan out snapshot warm-up while snapshot building is disabled");
+assert.match(stateSource, /function deferCanonicalDoctorRefresh[\s\S]*identityDiscoveryEnabled\(context\?\.env\)/, "roster saves must not rebuild canonical identities while identity discovery is disabled");
 assert.match(
   automationWorkflowSource,
   /workflow_dispatch:[\s\S]*dispatch_id[\s\S]*Record processor start[\s\S]*Record processor completion/,
@@ -4598,6 +4600,16 @@ class MemoryD1Statement {
           .sort((left, right) => left.display_name.localeCompare(right.display_name) || left.source_type.localeCompare(right.source_type)),
       };
     }
+    if (sql.includes("FROM account_claims INDEXED BY idx_account_claims_source_doctor_email")) {
+      const allowed = new Set();
+      for (let index = 0; index + 1 < args.length - 1; index += 2) allowed.add(`${args[index]}|${args[index + 1]}`);
+      return {
+        results: [...this.db.accountClaims.values()].filter((claim) => allowed.has(`${claim.source_type}|${claim.doctor_key}`)).map((claim) => {
+          const profile = this.db.accountProfiles.get(claim.email) || {};
+          return { email: claim.email, real_name: profile.real_name || "", role: profile.role || "user", source_type: claim.source_type, doctor_key: claim.doctor_key, display_name: claim.display_name, matched_at: claim.matched_at };
+        }),
+      };
+    }
     if (sql.includes("FROM account_profiles") && sql.includes("LEFT JOIN account_claims")) {
       const results = [];
       const tokenFilter = sql.includes("WHERE account_profiles.subscription_token = ?");
@@ -4741,8 +4753,8 @@ class MemoryD1Statement {
       const row = this.db.rawFiles.get(args[0]);
       return row ? { file_id: row.file_id } : null;
     }
-    if (sql.startsWith("SELECT id FROM roster_sync_runs WHERE status IN")) {
-      return [...this.db.rosterSyncRuns.values()].find((row) => ["queued", "processing"].includes(row.status)) || null;
+    if (sql.startsWith("SELECT id FROM roster_sync_runs WHERE source_id = ? AND status IN")) {
+      return [...this.db.rosterSyncRuns.values()].find((row) => row.source_id === args[0] && ["queued", "processing"].includes(row.status)) || null;
     }
     if (sql.startsWith("SELECT * FROM roster_dispatches WHERE status IN")) {
       return [...this.db.rosterDispatches.values()]
@@ -5062,6 +5074,7 @@ async function postStateRaw(store, payload, db = null, options = {}) {
       // This fixture intentionally exercises Creator-only maintenance actions.
       // Production remains fail-closed unless this separate control is enabled.
       ROSTER_AUTOMATION_WRITES_ENABLED: "true",
+      MANUAL_ROSTER_WRITES_ENABLED: "true",
       ROSTER_STATUS_SUMMARY_ENABLED: "true",
       ROSTER_ADVANCED_MAINTENANCE_ENABLED: "true",
       // Legacy behaviour remains available only when tests opt out of both
@@ -5113,19 +5126,20 @@ globalThis.fetch = async (url, options = {}) => {
   dispatchRequests.push({ url: String(url), options });
   return new Response(null, { status: 204 });
 };
-const dispatched = await requestQueuedRosterProcessing({ ROSTER_DB: dispatchDb, GITHUB_ACTIONS_TOKEN: "fixture-token" }, {
-  reason: "fixture", now: new Date("2026-07-29T04:01:00.000Z"),
+const dispatchEnv = { ROSTER_DB: dispatchDb, GITHUB_ACTIONS_TOKEN: "fixture-token", ROSTER_AUTOMATION_WRITES_ENABLED: "true", ROSTER_AUTOMATION_QUEUE_ENABLED: "true", ROSTER_AUTOMATION_SOURCE_ALLOWLIST: "monash-adults" };
+const dispatched = await requestQueuedRosterProcessing(dispatchEnv, {
+  sourceId: "monash-adults", reason: "fixture", now: new Date("2026-07-29T04:01:00.000Z"),
 });
 assert.equal(dispatched.dispatched, true, "a queued roster should immediately dispatch GitHub processing");
 assert.equal(dispatchRequests.length, 1, "a new queue should make one GitHub dispatch request");
 assert.match(dispatchRequests[0].url, /actions\/workflows\/monash-roster-sync\.yml\/dispatches$/, "dispatch should target the roster workflow");
-const duplicateDispatch = await requestQueuedRosterProcessing({ ROSTER_DB: dispatchDb, GITHUB_ACTIONS_TOKEN: "fixture-token" }, {
-  reason: "fixture-repeat", now: new Date("2026-07-29T04:02:00.000Z"),
+const duplicateDispatch = await requestQueuedRosterProcessing(dispatchEnv, {
+  sourceId: "monash-adults", reason: "fixture-repeat", now: new Date("2026-07-29T04:02:00.000Z"),
 });
 assert.equal(duplicateDispatch.dispatched, false, "an accepted dispatch lease should prevent duplicate GitHub runs");
 assert.equal(dispatchRequests.length, 1, "the duplicate queue check should not call GitHub again");
-const lifecycle = await recordRosterDispatchLifecycle({ ROSTER_DB: dispatchDb }, {
-  dispatchId: dispatched.dispatch.id, event: "started", githubRunId: "12345",
+const lifecycle = await recordRosterDispatchLifecycle(dispatchEnv, {
+  sourceId: "monash-adults", dispatchId: dispatched.dispatch.id, event: "started", githubRunId: "12345",
 });
 assert.equal(lifecycle.dispatch.status, "running", "the workflow start callback should make dispatch state observable");
 globalThis.fetch = originalFetch;
@@ -5141,12 +5155,13 @@ globalThis.fetch = async () => {
   rejectedRequestCount += 1;
   return Response.json({ message: "Resource not accessible by personal access token" }, { status: 403 });
 };
-const rejectedDispatch = await requestQueuedRosterProcessing({ ROSTER_DB: rejectedDispatchDb, GITHUB_ACTIONS_TOKEN: "rejected-token" }, {
-  reason: "fixture-rejected", now: new Date("2026-07-29T04:01:00.000Z"),
+const rejectedDispatchEnv = { ROSTER_DB: rejectedDispatchDb, GITHUB_ACTIONS_TOKEN: "rejected-token", ROSTER_AUTOMATION_WRITES_ENABLED: "true", ROSTER_AUTOMATION_QUEUE_ENABLED: "true", ROSTER_AUTOMATION_SOURCE_ALLOWLIST: "monash-adults" };
+const rejectedDispatch = await requestQueuedRosterProcessing(rejectedDispatchEnv, {
+  sourceId: "monash-adults", reason: "fixture-rejected", now: new Date("2026-07-29T04:01:00.000Z"),
 });
 assert.equal(rejectedDispatch.reason, "github-rejected", "a rejected GitHub token should be visible to the caller");
-const rejectedRetry = await requestQueuedRosterProcessing({ ROSTER_DB: rejectedDispatchDb, GITHUB_ACTIONS_TOKEN: "rejected-token" }, {
-  reason: "fixture-rejected-repeat", now: new Date("2026-07-29T04:02:00.000Z"),
+const rejectedRetry = await requestQueuedRosterProcessing(rejectedDispatchEnv, {
+  sourceId: "monash-adults", reason: "fixture-rejected-repeat", now: new Date("2026-07-29T04:02:00.000Z"),
 });
 assert.equal(rejectedRetry.dispatched, false, "a rejected token should honour its retry lease");
 assert.equal(rejectedRequestCount, 1, "a rejected GitHub token must not be retried for every watchdog tick");

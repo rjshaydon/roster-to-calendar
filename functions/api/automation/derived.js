@@ -9,14 +9,15 @@ import {
   supersedeDuplicateRosterSyncRuns,
   upsertRosterSource,
 } from "../../_lib/d1-calendar.js";
-import { runAutomatedDerivedRosterSave } from "../state.js";
-import { automatedRosterSourceEnabled, automatedRosterWritesEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
+import { runAutomatedDerivedRosterSave, validateDerivedCalendarPayload } from "../state.js";
+import { automatedRosterQueueEnabled, automatedRosterSourceEnabled, automatedRosterWritesEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
 
 export async function onRequestPost(context) {
   if (!hasValidAutomationToken(context.request, context.env.ROSTER_AUTOMATION_TOKEN)) {
     return Response.json({ error: "Unauthorized." }, { status: 401 });
   }
   if (!automatedRosterWritesEnabled(context.env)) return rosterWritePausedResponse();
+  if (!automatedRosterQueueEnabled(context.env)) return rosterWritePausedResponse();
   if (!hasCalendarDb(context.env)) return Response.json({ error: "Roster database is unavailable." }, { status: 503 });
   let body = null;
   try {
@@ -24,14 +25,31 @@ export async function onRequestPost(context) {
     const runId = String(body?.runId || "").trim();
     const sourceId = String(body?.sourceId || body?.file?.sourceId || "").trim();
     const phase = String(body?.phase || "").toLowerCase();
-    if (phase !== "failed" && !automatedRosterSourceEnabled(context.env, sourceId)) return rosterWritePausedResponse();
+    if (!automatedRosterSourceEnabled(context.env, sourceId)) return rosterWritePausedResponse();
     const source = automationSourceDefinition(sourceId);
+    if (!source && phase !== "failed") return Response.json({ error: "Unknown automation source." }, { status: 400 });
+    if (!["start", "events", "finish", "complete", "failed"].includes(phase)) {
+      return Response.json({ error: "A valid derived-save phase is required." }, { status: 400 });
+    }
+    if (phase !== "failed") {
+      const payloadIssue = validateDerivedCalendarPayload(body?.doctors, body?.eventsByDoctor, {
+        phase,
+        issuesByDoctor: body?.issuesByDoctor,
+      });
+      if (payloadIssue) return Response.json({ error: payloadIssue }, { status: 413 });
+    }
     const run = await loadRosterSyncRun(context.env.ROSTER_DB, runId);
     if (!run || run.sourceId !== sourceId || run.fileId !== String(body?.file?.id || "")) {
       return Response.json({ error: "Queued roster job does not match the derived payload." }, { status: 400 });
     }
-    if (!["start", "events", "finish", "complete", "failed"].includes(phase)) {
-      return Response.json({ error: "A valid derived-save phase is required." }, { status: 400 });
+    if ((phase === "complete" || phase === "finish") && run.status === "success") {
+      return Response.json({ ok: true, phase, runId, fileId: run.fileId, doctorCount: run.doctorCount, eventCount: run.eventCount, unchanged: true, duplicate: true });
+    }
+    if (phase === "failed" && run.status === "failed") {
+      return Response.json({ ok: true, phase, runId, fileId: run.fileId, duplicate: true });
+    }
+    if (phase === "start" && run.status === "processing") {
+      return Response.json({ ok: true, phase, runId, fileId: run.fileId, duplicate: true });
     }
     if (phase === "failed") {
       const failedAt = new Date().toISOString();
@@ -63,10 +81,6 @@ export async function onRequestPost(context) {
       }
       return Response.json({ ok: true, phase, runId, fileId: run.fileId });
     }
-    if (!source) {
-      return Response.json({ error: "Unknown automation source." }, { status: 400 });
-    }
-    if (phase === "start") await markRosterSyncRunProcessing(context.env.ROSTER_DB, runId);
     const currentSource = phase === "complete" ? await loadRosterSource(context.env.ROSTER_DB, sourceId) : null;
     const targetFileId = phase === "complete" ? String(currentSource?.activeFileId || run.fileId).trim() : run.fileId;
     const saved = await runAutomatedDerivedRosterSave(context, {
@@ -87,6 +101,7 @@ export async function onRequestPost(context) {
       eventsByDoctor: body.eventsByDoctor && typeof body.eventsByDoctor === "object" ? body.eventsByDoctor : {},
       issuesByDoctor: body.issuesByDoctor && typeof body.issuesByDoctor === "object" ? body.issuesByDoctor : {},
     });
+    if (phase === "start") await markRosterSyncRunProcessing(context.env.ROSTER_DB, runId);
     if (phase === "finish" || phase === "complete") {
       const completedAt = new Date().toISOString();
       const doctorCount = Number(saved?.result?.doctors || 0);

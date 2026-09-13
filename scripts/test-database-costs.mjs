@@ -21,12 +21,17 @@ db.exec(`
   CREATE INDEX idx_compact_roster_status ON roster_file_status_summaries(active,source_type,updated_at,file_id);
   CREATE TABLE roster_sources (id TEXT PRIMARY KEY, label TEXT);
   CREATE INDEX idx_roster_sources_label_id ON roster_sources(label,id);
-  CREATE TABLE roster_sync_runs (id TEXT PRIMARY KEY, source_id TEXT, started_at TEXT);
+  CREATE TABLE roster_sync_runs (id TEXT PRIMARY KEY, source_id TEXT, provider_version TEXT, content_hash TEXT, file_id TEXT, source_file_id TEXT, status TEXT, started_at TEXT, completed_at TEXT);
   CREATE INDEX idx_roster_sync_runs_source_started_id ON roster_sync_runs(source_id,started_at DESC,id DESC);
+  CREATE INDEX idx_roster_sync_runs_source_hash ON roster_sync_runs(source_id,content_hash,status);
+  CREATE INDEX idx_roster_sync_runs_source_version_status_started ON roster_sync_runs(source_id,provider_version,status,started_at DESC);
+  CREATE INDEX idx_roster_sync_runs_source_status_started ON roster_sync_runs(source_id,status,started_at,id);
+  CREATE TABLE raw_roster_files (file_id TEXT PRIMARY KEY, name TEXT);
   CREATE TABLE roster_dispatches (id TEXT PRIMARY KEY, requested_at TEXT);
   CREATE INDEX idx_roster_dispatches_requested_id ON roster_dispatches(requested_at DESC,id DESC);
   CREATE TABLE account_profiles (email TEXT PRIMARY KEY, real_name TEXT, role TEXT);
   CREATE TABLE account_claims (email TEXT, source_type TEXT, doctor_key TEXT, display_name TEXT, PRIMARY KEY(email, source_type, doctor_key));
+  CREATE INDEX idx_account_claims_source_doctor_email ON account_claims(source_type,doctor_key,email);
   CREATE TABLE account_states (email TEXT PRIMARY KEY, session_json TEXT);
   CREATE TABLE snapshot_registry (owner_type TEXT, owner_id TEXT, doctor_key TEXT, range_key TEXT, status TEXT, built_revision TEXT, PRIMARY KEY(owner_type, owner_id, doctor_key, range_key));
 `);
@@ -60,11 +65,14 @@ const addContact = db.prepare("INSERT INTO contact_list_files VALUES (?, ?, ?)")
 for (let index = 0; index < 40; index += 1) addContact.run(`contact-${index}`, "monash", `2026-06-${String(30 - (index % 30)).padStart(2, "0")}`);
 const addSource = db.prepare("INSERT INTO roster_sources VALUES (?, ?)");
 for (let index = 0; index < 16; index += 1) addSource.run(`source-${index}`, `Source ${String(index).padStart(2, "0")}`);
-const addRun = db.prepare("INSERT INTO roster_sync_runs VALUES (?, ?, ?)");
+const addRawFile = db.prepare("INSERT INTO raw_roster_files VALUES (?, ?)");
+for (let index = 0; index < 16; index += 1) addRawFile.run(`raw-${index}`, `Roster-${index}.xlsx`);
+const addRun = db.prepare("INSERT INTO roster_sync_runs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
 const addDispatch = db.prepare("INSERT INTO roster_dispatches VALUES (?, ?)");
 for (let index = 0; index < 10000; index += 1) {
   const stamp = `2026-09-${String(1 + (index % 7)).padStart(2, "0")}T${String(index % 24).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}:00Z`;
-  addRun.run(`run-${String(index).padStart(5, "0")}`, `source-${index % 16}`, stamp);
+  const sourceIndex = index % 16;
+  addRun.run(`run-${String(index).padStart(5, "0")}`, `source-${sourceIndex}`, `version-${index}`, `hash-${index}`, `raw-${sourceIndex}`, `raw-${sourceIndex}`, index % 5 === 0 ? "queued" : "success", stamp, stamp);
   addDispatch.run(`dispatch-${String(index).padStart(5, "0")}`, stamp);
 }
 const addInactiveRosterStatus = db.prepare("INSERT INTO roster_file_status_summaries VALUES (?, ?, 0, '2026-01-01T00:00:00Z', 0)");
@@ -95,8 +103,12 @@ const cases = {
   expectedRosterStatus: [`SELECT file_id, source_type, event_count FROM roster_file_status_summaries WHERE file_id IN (?, ?) LIMIT 100`, ["fixture-mmc", "historical-149"]],
   boundedSources: [`SELECT * FROM roster_sources ORDER BY label,id LIMIT 16`, []],
   latestSourceRun: [`SELECT * FROM roster_sync_runs WHERE source_id=? ORDER BY started_at DESC,id DESC LIMIT 1`, ["source-3"]],
+  exactProviderVersion: [`SELECT roster_sync_runs.id FROM roster_sync_runs INNER JOIN raw_roster_files ON raw_roster_files.file_id=COALESCE(NULLIF(roster_sync_runs.source_file_id,''),roster_sync_runs.file_id) WHERE roster_sync_runs.source_id=? AND roster_sync_runs.provider_version=? AND LOWER(raw_roster_files.name)=LOWER(?) AND roster_sync_runs.status IN ('success','queued','processing','failed') ORDER BY CASE roster_sync_runs.status WHEN 'success' THEN 0 WHEN 'processing' THEN 1 WHEN 'queued' THEN 2 ELSE 3 END, roster_sync_runs.started_at DESC LIMIT 1`, ["source-3", "version-3", "Roster-3.xlsx"]],
+  exactContentHash: [`SELECT id FROM roster_sync_runs WHERE source_id=? AND content_hash=? AND status='success' ORDER BY completed_at DESC LIMIT 1`, ["source-3", "hash-3"]],
+  exactSourceQueue: [`SELECT id FROM roster_sync_runs WHERE source_id=? AND status IN ('queued','processing') LIMIT 1`, ["source-3"]],
   latestDispatch: [`SELECT * FROM roster_dispatches ORDER BY requested_at DESC,id DESC LIMIT 1`, []],
   creatorAccount: [`SELECT p.email, p.real_name, p.role, c.source_type, c.doctor_key, c.display_name, s.session_json FROM account_profiles p LEFT JOIN account_claims c ON c.email = p.email LEFT JOIN account_states s ON s.email = p.email WHERE p.email = ? ORDER BY c.source_type, c.display_name`, ["rhaydon@gmail.com"]],
+  affectedRosterClaim: [`SELECT p.email FROM account_claims c INDEXED BY idx_account_claims_source_doctor_email INNER JOIN account_profiles p ON p.email=c.email WHERE c.source_type=? AND c.doctor_key=? LIMIT 41`, ["mmc", "MMC DOCTOR 001"]],
   creatorSnapshotRegistry: [`SELECT status, built_revision FROM snapshot_registry WHERE owner_type = ? AND owner_id = ? AND doctor_key = ? AND range_key = ?`, ["creator-account", "rhaydon@gmail.com", "RICHARD HAYDON", "2026-01-01:2026-12-31"]],
 };
 
@@ -125,8 +137,12 @@ report.estimates = {
   expectedRosterStatus: "at most 100 primary-key probes for explicitly expected files",
   boundedSources: "at most 16 rows from an ordered source index walk",
   latestSourceRun: "one row from an exact source/latest-run index probe",
+  exactProviderVersion: "one exact source/version index probe plus one raw-file primary-key lookup; independent of other sources and versions",
+  exactContentHash: "one exact source/hash/status index probe; independent of other source history",
+  exactSourceQueue: "one exact source/status queue probe; independent of other sources",
   latestDispatch: "one row from the requested-at dispatch index",
   creatorAccount: "one exact account primary-key probe plus only that account's claim and state rows; independent of the other 9,999 accounts and 109,200 roster events",
+  affectedRosterClaim: "only claims for one exact ED/doctor pair; independent of all other users and roster history",
   creatorSnapshotRegistry: "one exact composite-primary-key probe; independent of roster and account history",
 };
 
@@ -145,11 +161,19 @@ assert.ok(report.expectedRosterStatus.plan.some((line) => /sqlite_autoindex_rost
 assert.ok(report.boundedSources.plan.some((line) => /idx_roster_sources_label_id/.test(line)), "source status must use its bounded ordering index");
 assert.ok(report.latestSourceRun.plan.some((line) => /idx_roster_sync_runs_source_started_id/.test(line)), "latest source run must use the exact source/history index");
 assert.equal(report.latestSourceRun.plan.some((line) => /TEMP B-TREE|SCAN roster_sync_runs/i.test(line)), false, "latest source run must not scan or sort run history");
+assert.ok(report.exactProviderVersion.plan.some((line) => /idx_roster_sync_runs_source_version_status_started/.test(line)), "provider-version idempotency must use the exact source/version index");
+assert.equal(report.exactProviderVersion.plan.some((line) => /SCAN roster_sync_runs/i.test(line)), false, "provider-version idempotency must not scan sync history");
+assert.ok(report.exactContentHash.plan.some((line) => /idx_roster_sync_runs_source_hash/.test(line)), "content idempotency must use the exact source/hash index");
+assert.equal(report.exactContentHash.plan.some((line) => /SCAN roster_sync_runs/i.test(line)), false, "content idempotency must not scan sync history");
+assert.ok(report.exactSourceQueue.plan.some((line) => /idx_roster_sync_runs_source_status_started/.test(line)), "queue polling must use the exact source/status index");
+assert.equal(report.exactSourceQueue.plan.some((line) => /SCAN roster_sync_runs/i.test(line)), false, "queue polling must not scan global sync history");
 assert.ok(report.latestDispatch.plan.some((line) => /idx_roster_dispatches_requested_id/.test(line)), "latest dispatch must use its history index");
 assert.equal(report.latestDispatch.plan.some((line) => /TEMP B-TREE/i.test(line)), false, "latest dispatch must use its ordered index without a temporary sort");
 assert.ok(report.creatorAccount.plan.some((line) => /SEARCH p USING INDEX sqlite_autoindex_account_profiles_1 \(email=\?\)/i.test(line)), "Creator authentication must use the account email primary key");
 assert.ok(report.creatorAccount.plan.some((line) => /SEARCH c USING INDEX sqlite_autoindex_account_claims_1 \(email=\?\)/i.test(line)), "Creator claims must use the email-leading primary key");
 assert.equal(report.creatorAccount.plan.some((line) => /roster_events|roster_file_doctors|SCAN account_profiles|SCAN account_claims/i.test(line)), false, "minimal Creator account loading must not scan account or roster history");
+assert.ok(report.affectedRosterClaim.plan.some((line) => /idx_account_claims_source_doctor_email/.test(line)), "issue propagation must use the exact source/doctor claim index");
+assert.equal(report.affectedRosterClaim.plan.some((line) => /SCAN account_claims|SCAN account_profiles/i.test(line)), false, "issue propagation must not scan all accounts or claims");
 assert.ok(report.creatorSnapshotRegistry.plan.some((line) => /snapshot_registry.*(?:PRIMARY KEY|sqlite_autoindex_snapshot_registry_1)/i.test(line)), "Creator snapshot metadata must use its composite primary key");
 assert.equal(report.creatorSnapshotRegistry.plan.some((line) => /SCAN|roster_events|roster_file_doctors/i.test(line)), false, "Creator snapshot metadata must be one exact lookup");
 

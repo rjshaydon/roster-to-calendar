@@ -242,8 +242,12 @@ const unchanged = await replaceDerivedRosterFile(db, file, doctors, initialEvent
 assert.equal(unchanged.unchanged, true);
 assert.equal(db.rowsWritten, 0, "identical import must perform zero writes");
 
-db.rowsWritten = 0;
 const correctedEvents = { ...initialEvents, "TERM TRAINEE": [event("trainee-1", "2026-08-03", "Sick leave")] };
+db.failRunIncludes = "INSERT INTO roster_events";
+await assert.rejects(replaceDerivedRosterFile(db, file, doctors, correctedEvents), /Injected D1 statement failure/);
+assert.equal(JSON.parse(sqlite.prepare("SELECT event_json FROM roster_events WHERE id = ?").get(`${file.id}:TERM TRAINEE:trainee-1`).event_json).title, "Day", "a failed correction batch must preserve the previous active event");
+
+db.rowsWritten = 0;
 const corrected = await replaceDerivedRosterFile(db, file, doctors, correctedEvents);
 assert.equal(corrected.changes.events, 1, "one correction must change one event fact");
 assert.ok(db.rowsWritten <= 9, `one crash-safe correction wrote ${db.rowsWritten} rows`);
@@ -611,9 +615,12 @@ const token = "local-automation-test";
 routeSqlite.prepare(`INSERT INTO roster_sources (id, provider, source_type, label, enabled) VALUES (?, ?, ?, ?, 1)`)
   .run("monash-adults", "sharepoint", "mmc", "Monash Adults");
 
-async function runCompleteRoute(runId, incomingFileId, events) {
-  routeSqlite.prepare(`INSERT INTO roster_sync_runs (id, source_id, trigger_type, file_id, source_file_id, status, started_at) VALUES (?, ?, ?, ?, ?, 'queued', ?)`)
-    .run(runId, "monash-adults", "automatic", incomingFileId, incomingFileId, new Date().toISOString());
+async function runCompleteRoute(runId, incomingFileId, events, options = {}) {
+  if (options.seedRun !== false) {
+    routeSqlite.prepare(`INSERT INTO roster_sync_runs (id, source_id, trigger_type, file_id, source_file_id, status, started_at) VALUES (?, ?, ?, ?, ?, 'queued', ?)`)
+      .run(runId, "monash-adults", "automatic", incomingFileId, incomingFileId, new Date().toISOString());
+  }
+  const deferred = [];
   const response = await saveAutomatedDerivedRoster({
     request: new Request("http://127.0.0.1/api/automation/derived", {
       method: "POST",
@@ -628,16 +635,24 @@ async function runCompleteRoute(runId, incomingFileId, events) {
         issuesByDoctor: {},
       }),
     }),
-    env: { ROSTER_DB: routeDb, ROSTER_AUTOMATION_TOKEN: token, ROSTER_AUTOMATION_WRITES_ENABLED: "true", ROSTER_AUTOMATION_SOURCE_ALLOWLIST: "monash-adults" },
-    waitUntil() {},
+    env: { ROSTER_DB: routeDb, ROSTER_AUTOMATION_TOKEN: token, ROSTER_AUTOMATION_WRITES_ENABLED: "true", ROSTER_AUTOMATION_QUEUE_ENABLED: "true", ROSTER_AUTOMATION_SOURCE_ALLOWLIST: "monash-adults" },
+    waitUntil(promise) { deferred.push(promise); },
   });
+  await Promise.all(deferred);
   const payload = await response.json();
   assert.equal(response.status, 200, JSON.stringify(payload));
   return payload;
 }
 
+routeDb.sql = [];
 const routeFirst = await runCompleteRoute("route-run-1", "route-file-1", initialEvents);
 assert.equal(routeFirst.fileId, "route-file-1");
+const disabledFanoutStatements = routeDb.sql.filter((sql) => /canonical_doctors|snapshot_registry|FROM account_profiles/i.test(sql));
+assert.deepEqual(disabledFanoutStatements, [], `disabled identity and snapshot features must not run after ingestion: ${JSON.stringify(disabledFanoutStatements)}`);
+routeDb.rowsWritten = 0;
+const duplicateRouteFirst = await runCompleteRoute("route-run-1", "route-file-1", initialEvents, { seedRun: false });
+assert.equal(duplicateRouteFirst.duplicate, true, "a duplicate completion callback must be recognised before roster work");
+assert.equal(routeDb.rowsWritten, 0, "a duplicate completion callback must write zero D1 rows");
 const routeEventCount = routeSqlite.prepare("SELECT COUNT(*) AS count FROM roster_events WHERE file_id = 'route-file-1'").get().count;
 const routeRepeat = await runCompleteRoute("route-run-2", "route-file-2", initialEvents);
 assert.equal(routeRepeat.fileId, "route-file-1", "repeat automation must target the stable active file");

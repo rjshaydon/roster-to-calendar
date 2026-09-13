@@ -6,12 +6,15 @@ import { guardedFetch } from "../functions/_lib/outbound-network.js";
 
 const baseUrl = String(process.env.ROSTER_AUTOMATION_BASE_URL || "https://roster-to-calendar.pages.dev").replace(/\/$/, "");
 const token = String(process.env.ROSTER_AUTOMATION_TOKEN || "");
+const sourceId = String(process.env.ROSTER_AUTOMATION_SOURCE_ID || "").trim();
 
 if (!token) throw new Error("ROSTER_AUTOMATION_TOKEN is required.");
+if (!sourceId) throw new Error("ROSTER_AUTOMATION_SOURCE_ID is required.");
 
-const pending = await automationRequest("/api/automation/pending?limit=4");
+const pending = await automationRequest(`/api/automation/pending?limit=1&sourceId=${encodeURIComponent(sourceId)}`);
 const runs = Array.isArray(pending.runs) ? pending.runs : [];
-const parserConfig = await automationRequest("/api/automation/parser-config");
+if (runs.some((run) => run.sourceId !== sourceId)) throw new Error("Roster queue returned work for a different source.");
+const parserConfig = await automationRequest(`/api/automation/parser-config?sourceId=${encodeURIComponent(sourceId)}`);
 const parserExtensions = parserConfig?.parserExtensions && typeof parserConfig.parserExtensions === "object"
   ? parserConfig.parserExtensions
   : {};
@@ -49,7 +52,7 @@ if (failures.length) {
 }
 
 async function processRun(run) {
-  const response = await guardedFetch(process.env, `${baseUrl}/api/automation/raw?runId=${encodeURIComponent(run.id)}`, {
+  const response = await guardedFetch(process.env, `${baseUrl}/api/automation/raw?runId=${encodeURIComponent(run.id)}&sourceId=${encodeURIComponent(sourceId)}`, {
     headers: authorizationHeaders(),
   }, { label: "Roster processor download" });
   if (!response.ok) throw new Error(`Roster download returned HTTP ${response.status}.`);

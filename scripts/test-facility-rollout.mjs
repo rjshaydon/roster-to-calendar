@@ -12,6 +12,7 @@ const env = {
   FACILITY_SHARED_READER_SOURCE_ALLOWLIST: "mmc",
   FACILITY_SHARED_READER_COHORT: "creator",
   ROSTER_AUTOMATION_WRITES_ENABLED: "true",
+  MANUAL_ROSTER_WRITES_ENABLED: "true",
   ROSTER_AUTOMATION_SOURCE_ALLOWLIST: "monash-adults",
   ROSTER_AUTOMATION_QUEUE_ENABLED: "true",
   ROSTER_ADVANCED_MAINTENANCE_ENABLED: "true",
@@ -38,6 +39,7 @@ assert.equal(automatedRosterSourceEnabled(env, "monash-adults"), true);
 assert.equal(automatedRosterSourceEnabled(env, "monash-paeds"), false);
 assert.equal(automatedRosterQueueEnabled(env), true);
 assert.equal(advancedRosterMaintenanceEnabled(env), true);
+assert.equal(advancedRosterMaintenanceEnabled({ ...env, MANUAL_ROSTER_WRITES_ENABLED: "false" }), false, "automatic ingestion must not enable manual maintenance");
 assert.equal(facilityMaterializationMaintenanceEnabled({ ROSTER_ADVANCED_MAINTENANCE_ENABLED: "true" }), true, "facility bootstrap may be enabled without general roster writes");
 assert.equal(automatedRosterSourceEnabled({ ROSTER_AUTOMATION_WRITES_ENABLED: "true" }, "monash-adults"), false, "missing source allowlist must fail closed");
 

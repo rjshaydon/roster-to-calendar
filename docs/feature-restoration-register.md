@@ -13,12 +13,12 @@ record its evidence, approval, deployment and post-deployment observation here.
 No entry may be removed after restoration; change its state to **Restored** so
 the history remains auditable.
 
-Current verified Production safety code: `66402b2` on 10 September 2026,
-deployment `382049f6-edcb-4ef2-b12e-5d5081adcd01`. The zero-D1 At a glance
-maintenance gate and ordinary-login containment are active. Effective
-Production configuration was read back after that deployment with
-all facility readers/builders, roster and contact automation, roster status,
-bootstrap and advanced-maintenance controls closed.
+Current tracked Production code: `93feb08` on 13 September 2026. The exact
+active deployment identity must still be read back at every operational gate.
+The zero-D1 At a glance maintenance gate and ordinary-login containment are
+active. Facility readers/builders, roster and contact automation, bootstrap and
+advanced-maintenance controls remain closed. The bounded compact Admin → Files
+status reader is the only restored optional summary reader.
 
 The safety commits did not intentionally delete Production roster files,
 roster events, account data, facility snapshots or contact data. Because D1 is
@@ -64,7 +64,8 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 | `FACILITY_SHARED_DAYS_ENABLED` | `false` | FR-01 |
 | `FACILITY_SHARED_CONTACTS_ENABLED` | `false` | FR-04 |
 | `ROSTER_AUTOMATION_WRITES_ENABLED` | `false` | FR-06, FR-07 |
-| `ROSTER_STATUS_SUMMARY_ENABLED` | `false` | FR-05 |
+| `MANUAL_ROSTER_WRITES_ENABLED` | `false` | FR-06, FR-11 |
+| `ROSTER_STATUS_SUMMARY_ENABLED` | `true` in Production; `false` in Preview | FR-05 |
 | `ROSTER_AUTOMATION_SOURCE_ALLOWLIST` | empty | FR-07 |
 | `ROSTER_AUTOMATION_QUEUE_ENABLED` | `false` | FR-07 |
 | `ROSTER_ADVANCED_MAINTENANCE_ENABLED` | `false` | FR-06, FR-11, FR-12 |
@@ -158,21 +159,20 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 
 ### FR-05 — Admin → Files status
 
-- **State:** Paused.
+- **State:** Restored through the bounded compact summary reader.
 - **Includes:** Auto-sync source status, manual files for the current/next term,
   and earlier manual-file status.
-- **User effect:** The interface explains that status is temporarily
-  unavailable and that existing sources/files have not been removed.
-- **Control:** `ROSTER_STATUS_SUMMARY_ENABLED=false`.
+- **User effect:** Creator users can see Auto-sync and retained manual-file
+  status without invoking the former historical counting path.
+- **Control:** `ROSTER_STATUS_SUMMARY_ENABLED=true`.
 - **Data/code preservation:** The former historical counting path is not used.
-  A bounded summary implementation exists in code; its deployment dependencies
-  and migration state must be verified after reset.
-- **Restoration outcome:** Restore the same useful status information from
+  The bounded summary implementation and required schema are deployed.
+- **Restoration outcome:** Completed. Keep the useful status information on
   compact per-file/source summaries maintained during ingestion.
 - **Required evidence:** Indexed reads scale with the number of retained files,
   not event history; requests coalesce; unchanged responses write zero rows;
-  hidden tabs do not retry; account-wide budget GO and a read-only Creator
-  canary pass.
+  hidden tabs do not retry; the bounded Creator canary and settled observation
+  remain recorded in the incident ledger.
 
 ### FR-06 — Manual roster import and file management
 
@@ -181,7 +181,7 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
   import, reconcile retained files, reset/reparse a derived file and replace
   the active file set. Reading an already retained raw file is not intentionally
   disabled.
-- **Control:** `ROSTER_AUTOMATION_WRITES_ENABLED=false`; destructive/rebuild
+- **Control:** `MANUAL_ROSTER_WRITES_ENABLED=false`; destructive/rebuild
   actions additionally require `ROSTER_ADVANCED_MAINTENANCE_ENABLED=true`.
 - **Affected actions:** `uploadRawRosterFile`, `saveDerivedCalendarFile`,
   `removeRosterImports`, roster-removing account saves,
@@ -515,24 +515,30 @@ pause, and future maintenance work must not accidentally disable them.
 
 ## Restoration order
 
-The order restores product value without reopening several D1 consumers at
-once:
+The order restores the core personal-calendar service before At a glance and
+does not reopen several D1 consumers at once. The detailed source-by-source
+sequence and acceptance gates are authoritative in
+[`core-calendar-sync-restoration-plan.md`](./core-calendar-sync-restoration-plan.md):
 
 1. Keep the documented zero-D1 At a glance maintenance gate active and preserve
    all individual entitlements.
-2. Deploy the ordinary-login, identity-save and snapshot-warm-up containment in
-   FR-21–FR-25, then observe a passive fresh quota day.
-3. Restore the bounded Admin → Files summary read only.
-4. Apply separately approved compact-fact migrations and bootstrap one exact
-   file/ED/term.
-5. Restore At a glance shared reads to the Creator for one ED, with contacts
-   still unavailable.
-6. Restore shared On shift contacts and their zero-D1 visible-page refresh.
-7. Expand At a glance by ED and cohort only after settled evidence at each
-   step.
-8. Restore manual incremental roster imports for one source.
-9. Restore automatic roster and contact ingestion source by source.
-10. Restore the watchdog only after all called endpoints are already safe.
+2. Preserve the deployed ordinary-login, identity-save, snapshot-warm-up and
+   bounded Admin → Files protections.
+3. Separate automatic ingress/queue authority from manual roster mutation and
+   prove exact source-scoped processing locally.
+4. Restore automatic roster synchronisation source by source: MMC, MCH, VHH and
+   then DDH, with changed and unchanged canaries and settled evidence at every
+   new implementation class.
+5. Restore ordinary manual roster import separately; retain destructive and
+   advanced repair gates until individually proven.
+6. After roster syncing is stable, resume the resumable At a glance publication
+   sequence for one exact MMC term.
+7. Restore At a glance shared reads to the Creator for one ED, with contacts
+   still unavailable, then expand by ED and cohort only after settled evidence.
+8. Restore shared On shift contacts and their zero-D1 visible-page refresh.
+9. Restore automatic contact ingestion source by source.
+10. Restore a watchdog only if it remains useful after every called endpoint is
+    already safe; do not restore the historical global poller.
 11. Reintegrate the durable Doctor Names work on a fresh branch from the stable
     Production baseline.
 
@@ -565,6 +571,10 @@ mechanisms are intentionally excluded from restoration.
 | `66402b2` / `382049f6-edcb-4ef2-b12e-5d5081adcd01`, 10 Sep 2026 | Explicitly deployed active-caller containment after Analytics Engine was enabled. Effective configuration read-back showed maintenance/emergency/legacy, roster/contact automation and Creator startup controls closed and `REQUEST_ANALYTICS` bound to `roster_api_invocations`. A single payload-free paused contact probe returned 503 and logged zero D1 statements/rows. The predecessor was deleted; final inventory was one Production and zero Preview. |
 | External-caller pause, 10 Sep 2026 approximately 19:20 AEST | Operator confirmed all eleven shared Power Automate roster/contact/bootstrap flows were turned off. Flow definitions were preserved. Restore individually under FR-07/FR-08 only after attribution and source-specific gates pass. |
 | Chunked publication implementation, 13 Sep 2026 | Replaced the callable 91-day publication endpoint with explicit `plan`, seven-day `build-batch`, one-month `build-month` and atomic `finalize` modes. Staging remains invisible, retries are idempotent, finalisation is fenced by D1 ownership and R2 preconditions, and each mode has its own D1 statement ceiling. Production flags and Power Automate remain closed pending the serial canary in `facility-publication-chunking-remediation-plan.md`. |
+| Calendar-sync-first plan, 13 Sep 2026 | Made source-isolated roster synchronisation the next restoration priority and moved At a glance publication/readers after stable calendar syncing. No runtime control changed. See `core-calendar-sync-restoration-plan.md`. |
+| Pre-sync deployment cleanup, 13 Sep 2026 | Removed 25 superseded, contained Production deployments through the Pages control plane. The 25-result listing initially concealed one further predecessor, which was removed after re-listing. Final inventory: one Production deployment (`1890d569-33f3-414c-8587-9101c27dc921`, source `93feb08`) and zero Preview deployments. No D1 query was used. |
+| Calendar-sync Gates 1–2, 13 Sep 2026 | Two settled account-wide samples reconciled at 75,025 reads and zero writes with no expensive fingerprint. Implemented local-only manual/automatic authority separation and exact-source, one-job queue processing. Focused and full fixture suites pass; Production flags and all Power Automate flows remain closed. |
+| Calendar-sync Gate 3, 13 Sep 2026 | Proved local zero-write unchanged ingress for Monash, VHH and FindMyShift; bounded changed ingress, payloads and duplicate callbacks; indexed source/version, source/status and affected-claim probes; and stopped disabled identity/snapshot fan-out after ingestion. Representative parsing, correction, rollback, overlap, membership and term tests pass. Migration `0032` remains local only. Production and all Power Automate flows remain closed. |
 
 ## Restoration record template
 

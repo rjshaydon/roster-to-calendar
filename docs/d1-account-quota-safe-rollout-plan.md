@@ -10,6 +10,16 @@ in [`feature-restoration-register.md`](./feature-restoration-register.md). Any
 future safety change and every later restoration must update that register in
 the same commit.
 
+**13 September priority amendment:** Core roster ingestion and personal-calendar
+synchronisation now precede At a glance restoration. The source-isolated
+implementation and rollout sequence is defined in
+[`core-calendar-sync-restoration-plan.md`](./core-calendar-sync-restoration-plan.md).
+That plan supersedes this document's older ordering wherever it made facility
+bootstrap, publication or a Creator At a glance canary a prerequisite for
+Power Automate roster ingestion. The account-wide admission thresholds,
+attribution requirements, stop rules and non-D1 rollback requirements in this
+document remain authoritative.
+
 ## Status and authority boundary
 
 Prepared 7 September 2026 after a protected single-file bootstrap inspection
@@ -30,8 +40,9 @@ The application must remain in the verified fail-closed state:
 - `FACILITY_LEGACY_READS_PAUSED=true` permanently;
 - every shared builder and reader disabled;
 - all facility build and reader allowlists empty;
-- roster-status summaries disabled;
-- roster, contact, queue and advanced-maintenance writes disabled; and
+- only the bounded compact roster-status summary enabled;
+- roster, contact, queue and advanced-maintenance writes disabled;
+- manual roster mutations independently disabled; and
 - the independent watchdog disabled.
 
 At a glance and Creator roster-status diagnostics may remain unavailable.
@@ -231,19 +242,27 @@ never authorise `execute:true`.
 
 ## Phase D — reset-day passive baseline
 
-Phase D is now blocked on the ordinary-login and identity containment in
+This section records the failed 8–9 September gate and explains why the later
+containment work was required. It is not an instruction to repeat those failed
+canaries. For new Production work, the Phase B admission thresholds and a fresh
+settled passive baseline still apply; roster-sync rollout then follows
+`core-calendar-sync-restoration-plan.md`, while facility rollout follows the
+chunked publication plan.
+
+Phase D was blocked on the ordinary-login and identity containment in
 [`ordinary-login-identity-d1-remediation-plan.md`](./ordinary-login-identity-d1-remediation-plan.md).
 The 8 September passive period produced an unexplained large burst despite the
 At a glance maintenance gate, proving that optional-feature containment alone
-is insufficient. Do not proceed to Phase E or migration `0026` onward until
-that remediation is deployed and a later fresh-day baseline passes.
+was insufficient. The required remediation was subsequently deployed; its
+result and later observations are recorded in the evidence ledger.
 
 The 9 September controlled Creator login also failed its gate with a
 1,623,542-read five-minute spike even though the At a glance maintenance UI
-correctly refused entry. Phase D is therefore additionally blocked on
+correctly refused entry. It therefore also required
 [`creator-login-bootstrap-d1-remediation-plan.md`](./creator-login-bootstrap-d1-remediation-plan.md).
-Do not use Creator login as a passive-baseline action; its separately measured
-canary follows a passing passive period.
+That containment was subsequently deployed. Creator login is still not a
+passive-baseline action; any separately measured canary follows a passing
+passive period.
 
 After a future 00:00 UTC reset:
 
@@ -271,7 +290,9 @@ Phase B thresholds pass.
 > not complete within the Pages runtime. Do not retry it. Publication must now
 > follow [`facility-publication-chunking-remediation-plan.md`](./facility-publication-chunking-remediation-plan.md),
 > whose small explicit batches and atomic finalisation supersede the publication
-> portions of this phase. Reader and Power Automate gates remain closed.
+> portions of this phase. Facility reader, builder and contact-automation gates
+> remain closed. Core roster synchronisation is governed independently by the
+> calendar-sync-first plan and may already be restored.
 
 The selected first file remains:
 
@@ -370,8 +391,12 @@ a D1 query to prove rollback.
   but does not weaken reconciliation: daily, five-minute and query-fingerprint
   totals must agree before a sample can be valid.
 
-The next authorised activity is Phase A analytics and caller inventory only.
-No further D1 request is permitted until Phases A–D pass.
+The earlier statement that the next activity was Phase A analytics inventory
+described the 7 September checkpoint and is no longer the current work order.
+The inventory, containment, Analytics-only checker, caller removal and later
+passive observations are recorded below. Further Production D1 work still
+requires a fresh passing budget gate; closed local implementation and a closed
+deployment may proceed under the calendar-sync-first plan.
 
 The active-caller removal, zero-D1 endpoint gating and route-level attribution
 work required after the 10 September unexplained burst is specified in

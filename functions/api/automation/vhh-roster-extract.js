@@ -33,6 +33,11 @@ export async function onRequestPost(context) {
     const source = automationSourceDefinition(VHH_ROSTER_SOURCE_ID);
     if (!source) return Response.json({ error: "VHH automation source is not configured." }, { status: 500 });
     const bytes = new TextEncoder().encode(JSON.stringify(extract));
+    const contentBytes = new TextEncoder().encode(JSON.stringify({
+      ...extract,
+      providerVersion: "",
+      providerModifiedAt: "",
+    }));
     if (bytes.byteLength > MAX_BODY_BYTES) return Response.json({ error: "VHH roster JSON is too large." }, { status: 413 });
 
     const now = new Date().toISOString();
@@ -42,23 +47,22 @@ export async function onRequestPost(context) {
       ? await findRosterSyncByProviderVersion(db, VHH_ROSTER_SOURCE_ID, extract.providerVersion, extract.fileName)
       : null;
     if (matchingVersion && matchingVersion.status !== "failed") {
-      await upsertRosterSource(db, updatedSourceRecord(sourceRecord, source, {
-        id: VHH_ROSTER_SOURCE_ID, providerVersion: extract.providerVersion,
-        providerModifiedAt: sourceRecord?.providerModifiedAt || extract.providerModifiedAt,
-        lastCheckedAt: now, updatedAt: now,
-      }));
       return Response.json({ ok: true, status: matchingVersion.status === "success" ? "unchanged" : matchingVersion.status, sourceId: VHH_ROSTER_SOURCE_ID, fileId: matchingVersion.fileId, runId: matchingVersion.id });
     }
 
-    const contentHash = await sha256Hex(bytes);
-    await upsertRosterSource(db, updatedSourceRecord(sourceRecord, source, {
-      id: VHH_ROSTER_SOURCE_ID, providerVersion: extract.providerVersion, providerModifiedAt: extract.providerModifiedAt,
-      lastCheckedAt: now, lastError: "", updatedAt: now,
-    }));
+    // SharePoint metadata can change without the roster assignments changing.
+    // Keep provider metadata as the fast fence, but hash only roster content so
+    // a metadata-only revision does not create another retained object/run.
+    const contentHash = await sha256Hex(contentBytes);
     const prior = await findSuccessfulRosterSyncByHash(db, VHH_ROSTER_SOURCE_ID, contentHash, extract.fileName);
     if (prior) return Response.json({ ok: true, status: "unchanged", sourceId: VHH_ROSTER_SOURCE_ID, fileId: prior.fileId, runId: prior.id });
     const queued = await findQueuedRosterSyncByHash(db, VHH_ROSTER_SOURCE_ID, contentHash, extract.fileName);
     if (queued) return Response.json({ ok: true, status: queued.status, sourceId: VHH_ROSTER_SOURCE_ID, fileId: queued.fileId, runId: queued.id }, { status: 202 });
+
+    await upsertRosterSource(db, updatedSourceRecord(sourceRecord, source, {
+      id: VHH_ROSTER_SOURCE_ID, providerVersion: extract.providerVersion, providerModifiedAt: extract.providerModifiedAt,
+      lastCheckedAt: now, lastError: "", updatedAt: now,
+    }));
 
     const runId = `sync:${VHH_ROSTER_SOURCE_ID}:${crypto.randomUUID()}`;
     const fileId = `automation:${VHH_ROSTER_SOURCE_ID}:${contentHash.slice(0, 24)}`;
@@ -68,7 +72,7 @@ export async function onRequestPost(context) {
       objectKey, type: "application/json; charset=utf-8", uploadedAt: now,
     });
     await createRosterSyncRun(db, { id: runId, sourceId: VHH_ROSTER_SOURCE_ID, triggerType: "sharepoint-json", providerVersion: extract.providerVersion, contentHash, fileId, status: "queued", message: "Queued for VHH JSON processing.", startedAt: now });
-    const dispatch = await requestQueuedRosterProcessing(context.env, { reason: "vhh-source-update" });
+    const dispatch = await requestQueuedRosterProcessing(context.env, { sourceId: VHH_ROSTER_SOURCE_ID, reason: "vhh-source-update" });
     return Response.json({ ok: true, status: "queued", sourceId: VHH_ROSTER_SOURCE_ID, fileId, runId, processorDispatch: dispatch?.dispatched === true }, { status: 202 });
   } catch (error) {
     console.error("VHH roster JSON queueing failed", error);

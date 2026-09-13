@@ -1,6 +1,6 @@
 import { hasCalendarDb, listQueuedRosterSyncRuns } from "../../_lib/d1-calendar.js";
 import { localFeatureDisabledResponse } from "../../_lib/outbound-network.js";
-import { automatedRosterQueueEnabled, automatedRosterWritesEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
+import { automatedRosterQueueEnabled, automatedRosterSourceEnabled, automatedRosterWritesEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
 
 export async function onRequestGet(context) {
   if (!hasValidAutomationToken(context.request, context.env.ROSTER_AUTOMATION_TOKEN)) {
@@ -12,8 +12,10 @@ export async function onRequestGet(context) {
   if (!automatedRosterQueueEnabled(context.env)) return rosterWritePausedResponse();
   if (!hasCalendarDb(context.env)) return Response.json({ error: "Roster database is unavailable." }, { status: 503 });
   const url = new URL(context.request.url);
-  const limit = Number(url.searchParams.get("limit") || 4);
-  const runs = await listQueuedRosterSyncRuns(context.env.ROSTER_DB, limit);
+  const sourceId = String(url.searchParams.get("sourceId") || "").trim();
+  if (!automatedRosterSourceEnabled(context.env, sourceId)) return rosterWritePausedResponse();
+  const limit = Number(url.searchParams.get("limit") || 1);
+  const runs = await listQueuedRosterSyncRuns(context.env.ROSTER_DB, sourceId, limit);
   return Response.json({
     ok: true,
     runs: runs.map(({ objectKey: _objectKey, ...run }) => run),

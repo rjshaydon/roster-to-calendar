@@ -56,6 +56,7 @@ import {
   reconcileFacilityStaffDesignationsForRosterFile,
   queryOverlapDoctorsFromEvents,
   queryClaimedAccounts,
+  queryClaimedAccountsForRosterDoctors,
   queryDoctorProfileMirrors,
   queryDoctorEvents,
   dedupeEventsByIdentity,
@@ -1089,7 +1090,7 @@ export async function onRequestPost(context) {
       }
       if (rosterWritesExplicitlyPaused(context.env)) return rosterWritePausedResponse();
       const savePhase = String(body?.phase || "complete").toLowerCase();
-      const derivedPayloadIssue = validateDerivedCalendarPayload(body?.doctors, body?.eventsByDoctor, { phase: savePhase });
+      const derivedPayloadIssue = validateDerivedCalendarPayload(body?.doctors, body?.eventsByDoctor, { phase: savePhase, issuesByDoctor: body?.issuesByDoctor });
       if (derivedPayloadIssue) {
         return Response.json({ error: derivedPayloadIssue }, { status: 422 });
       }
@@ -2539,16 +2540,25 @@ function sanitizeFindmyshiftHistoricalRange(value) {
   return durationDays > 0 && durationDays <= 100 ? { from, to } : null;
 }
 
-function validateDerivedCalendarPayload(doctors, eventsByDoctor, options = {}) {
+export function validateDerivedCalendarPayload(doctors, eventsByDoctor, options = {}) {
   const phase = String(options.phase || "complete").toLowerCase();
   const safeDoctors = Array.isArray(doctors) ? doctors.filter((doctor) => doctor?.key) : [];
+  const maximumDoctors = Math.max(1, Math.min(Number(options.maximumDoctors || 512), 512));
+  const maximumEvents = Math.max(1, Math.min(Number(options.maximumEvents || 25000), 25000));
+  const maximumIssues = Math.max(1, Math.min(Number(options.maximumIssues || 5000), 5000));
   if (phase === "finish") return "";
   if (!safeDoctors.length) {
     return "Roster indexing produced no doctors. The uploaded file was not saved to D1.";
   }
+  if (safeDoctors.length > maximumDoctors) {
+    return `Roster indexing produced ${safeDoctors.length} doctors, above the ${maximumDoctors}-doctor safety limit.`;
+  }
   const eventCount = safeDoctors.reduce((count, doctor) => (
     count + (Array.isArray(eventsByDoctor?.[doctor.key]) ? eventsByDoctor[doctor.key].length : 0)
   ), 0);
+  const issueCount = Object.values(options.issuesByDoctor || {}).reduce((count, issues) => count + (Array.isArray(issues) ? issues.length : 0), 0);
+  if (eventCount > maximumEvents) return `Roster indexing produced ${eventCount} events, above the ${maximumEvents}-event safety limit.`;
+  if (issueCount > maximumIssues) return `Roster indexing produced ${issueCount} issues, above the ${maximumIssues}-issue safety limit.`;
   if (phase === "start") return "";
   if (!eventCount) {
     return phase === "events"
@@ -4497,6 +4507,7 @@ function doctorProfileWarmupAffectedBySourceTypes(profile, changedSourceTypes = 
 }
 
 function scheduleSnapshotWarmupForSourceTypes(context, sourceTypes = [], options = {}) {
+  if (!accountSnapshotBuildEnabled(context?.env)) return;
   if (typeof context.waitUntil !== "function") return;
   const changedSourceTypes = [...snapshotWarmupSourceTypeSet(sourceTypes)];
   context.waitUntil((async () => {
@@ -4974,9 +4985,15 @@ function issueMatchesParserRule(issue, rule) {
 }
 
 async function propagateDerivedShiftCodeIssues(db, doctors = [], issuesByDoctor = {}) {
-  const claimedAccounts = await queryClaimedAccounts(db).catch(() => []);
+  const affectedDoctors = (Array.isArray(doctors) ? doctors : []).filter((doctor) => {
+    const rawKey = String(doctor?.key || "").trim();
+    const key = normalizeRosterName(rawKey);
+    return (Array.isArray(issuesByDoctor?.[rawKey]) && issuesByDoctor[rawKey].length)
+      || (Array.isArray(issuesByDoctor?.[key]) && issuesByDoctor[key].length);
+  }).slice(0, 40);
+  if (!affectedDoctors.length) return;
+  const claimedAccounts = await queryClaimedAccountsForRosterDoctors(db, affectedDoctors, { maximumDoctors: 40 }).catch(() => []);
   if (!claimedAccounts.length) return;
-  const accountRecords = new Map((await listAccountMirrors(db).catch(() => [])).map((record) => [normalizeEmail(record.email), record]));
   const globalParserExtensions = await loadD1ParserExtensionRules(db);
   const updatesByEmail = new Map();
   const now = new Date().toISOString();
@@ -4993,7 +5010,7 @@ async function propagateDerivedShiftCodeIssues(db, doctors = [], issuesByDoctor 
     const resolvedAccount = resolveDoctorAccountFromIndex(claimedAccounts, doctor);
     const targetEmail = normalizeEmail(resolvedAccount?.email);
     if (!targetEmail) continue;
-    const targetRecord = updatesByEmail.get(targetEmail) || accountRecords.get(targetEmail);
+    const targetRecord = updatesByEmail.get(targetEmail) || await loadAccountMirror(db, targetEmail).catch(() => null);
     if (!targetRecord) continue;
     const ruleSets = mergeParserExtensionSets(
       sanitizeParserExtensionRules(globalParserExtensions),
@@ -5879,6 +5896,7 @@ async function purgeRosterImports(context, fileIds, reason = "removeRosterImport
 }
 
 function deferCanonicalDoctorRefresh(context, reason = "roster-change") {
+  if (!identityDiscoveryEnabled(context?.env)) return Promise.resolve([]);
   const run = () => refreshCanonicalDoctors(context.env.ROSTER_DB).catch((error) => {
     console.warn("Deferred canonical doctor refresh failed", {
       reason,
@@ -6950,7 +6968,7 @@ async function queueActiveParserRuleReparse(env, sourceTypes = []) {
     queued.push(runId);
   }
   const dispatch = queued.length
-    ? await requestQueuedRosterProcessing(env, { reason: "parser-rule-change" })
+    ? await requestQueuedRosterProcessing(env, { sourceId: sourceIdForReparseFile(files[0]), reason: "parser-rule-change" })
     : null;
   return { queued: queued.length, runIds: queued, processorDispatch: publicDispatchStatus(dispatch) };
 }
@@ -6989,7 +7007,7 @@ async function queueAutomatedSourceReprocess(env, sourceId) {
     runIds.push(runId);
   }
   const dispatch = runIds.length
-    ? await requestQueuedRosterProcessing(env, { reason: "creator-auto-sync-reprocess" })
+    ? await requestQueuedRosterProcessing(env, { sourceId, reason: "creator-auto-sync-reprocess" })
     : null;
   return { queued: runIds.length, runIds, processorDispatch: publicDispatchStatus(dispatch) };
 }
