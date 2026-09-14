@@ -363,8 +363,11 @@ combining steps:
    SharePoint version/ETag and modification time, and the matching file bytes.
 6. Record the HTTP response, dispatch identifier and GitHub run. Only one queue
    record may be claimed and processed.
-7. Immediately redeploy the three controls closed: writes false, queue false,
-   allowlist empty. Read them back without D1 before observing the result.
+7. If dispatch is rejected, duplicated or anomalous, immediately redeploy the
+   three controls closed. Otherwise permit only that single exact-source GitHub
+   processor run to finish, then immediately redeploy writes false, queue false
+   and the allowlist empty. Read the closed values back without D1 before
+   observing or testing the result.
 8. After Analytics settlement, reconcile account totals, request attribution,
    D1 query fingerprints, D1 writes and R2 operations. The personal-feed
    baseline is allowed; any new unexplained route, write or burst is not.
@@ -421,6 +424,26 @@ Focused local preflight completed with no Production access on 14 September:
   provider version;
 - `npm run test:d1-quota` passed; and
 - `npm run test:queue-failure` passed.
+
+The following local-only canary tools are prepared:
+
+- `npm run canary:monash-adults-config` generates a temporary Wrangler config
+  only after verifying that every prerequisite Production control is closed.
+  Its only runtime changes are automatic roster writes true, queue true and the
+  exact `monash-adults` allowlist; Preview and every unrelated control stay
+  closed.
+- `npm run canary:monash-adults -- ...` defaults to preparation only. Execution
+  has a fixed Production endpoint and source/filename, and requires the exact
+  reviewed SHA-256, an explicit execution switch, the confirmation phrase and
+  the automation token. It cannot accept an arbitrary destination or source.
+- `npm run test:monash-adults-canary` proves preparation is offline and that a
+  missing confirmation or mismatched hash stops before any request.
+
+The version `322.0` workbook parsed locally as MMC with 152 doctors and 4,174
+events spanning 3 August through 1 November 2026. It has 256 existing unresolved
+parser items across 94 doctors. Compared with the earlier same-day download it
+has three additional events, four fewer unresolved items and the same doctor
+count. No roster content or names were printed or persisted by the preparation.
 
 These tests prepare the canary but do not admit it. On return, first unlock the
 Mac and locate the completed download. Then take the two fresh settled account

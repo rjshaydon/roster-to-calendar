@@ -35,7 +35,10 @@
     "test:local-isolation": "node scripts/test-local-isolation.mjs",
     "test:database-costs": "node --no-warnings scripts/test-database-costs.mjs",
     "test:facility-materialization": "node --no-warnings scripts/test-facility-materialization.mjs",
-    "shadow:active": "node scripts/shadow-active-rosters.mjs"
+    "shadow:active": "node scripts/shadow-active-rosters.mjs",
+    "canary:monash-adults": "node scripts/submit-monash-adults-canary.mjs",
+    "canary:monash-adults-config": "node scripts/prepare-monash-adults-canary-config.mjs",
+    "test:monash-adults-canary": "node scripts/test-monash-adults-canary.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.84.1",
