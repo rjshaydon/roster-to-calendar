@@ -42,7 +42,7 @@ export async function onRequest(context) {
   const requestId = context.request.headers.get("cf-ray") || crypto.randomUUID();
   const action = await safeStateAction(context.request, url.pathname);
   const limit = await requestD1StatementLimit(context.request, url.pathname, action);
-  let contained = automationContainmentReason(url.pathname, context.env);
+  let contained = requestContainmentReason(url.pathname, action, context.env);
   const d1 = contained ? emptyD1Meter() : createD1Meter(context.env.ROSTER_DB, limit);
   let response;
 
@@ -142,7 +142,10 @@ async function safeStateAction(request, pathname) {
   }
 }
 
-function automationContainmentReason(pathname, env = {}) {
+function requestContainmentReason(pathname, action, env = {}) {
+  if (pathname === "/api/state" && ["queryRosterInsights", "queryRosterOverlapDoctors"].includes(action)) {
+    return enabled(env.ROSTER_INSIGHT_READS_ENABLED) ? "" : "roster-insights-paused";
+  }
   if (!pathname.startsWith("/api/automation/")) return "";
   if (["/api/automation/contact-list", "/api/automation/contact-list-binary", "/api/automation/contact-list-extract"].includes(pathname)) {
     return enabled(env.CONTACT_AUTOMATION_WRITES_ENABLED) ? "" : "contact-automation-paused";

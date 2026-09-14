@@ -771,6 +771,11 @@ const mchWorkbook = XLSX.readFile(fileURLToPath(new URL("../fixtures/Paeds_Term_
 const caseyBytes = await readFile(fileURLToPath(new URL("../fixtures/Casey_Term_2_2026_DRAFT.xlsm", import.meta.url)));
 const mchBytes = await readFile(fileURLToPath(new URL("../fixtures/Paeds_Term_2_2026.xlsx", import.meta.url)));
 const appSource = await readFile(new URL("../public/static/app.js", import.meta.url), "utf8");
+assert.match(
+  appSource,
+  /const AUTOMATIC_ROSTER_INSIGHT_WARMUP_ENABLED = false;[\s\S]*function scheduleInsightWarmup\(\)[\s\S]*if \(!AUTOMATIC_ROSTER_INSIGHT_WARMUP_ENABLED\) return;/,
+  "ordinary calendar rendering must not schedule roster-wide insight discovery",
+);
 assert.doesNotMatch(appSource, /Multiple grades recorded/, "ED staff should show one effective grade rather than exposing conflicting source grades");
 assert.match(appSource, /eventSeniorityRoleCode\(event\)[\s\S]*facilityOverviewDetectedSeniority/, "Who should infer a staff grade from an explicit roster title when the provider omits seniority");
 const rosterSource = await readFile(new URL("../public/static/roster.js", import.meta.url), "utf8");

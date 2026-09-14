@@ -44,8 +44,9 @@ observed operational step.
 
 ## Current baseline
 
-- `main` at `93feb08` contains the resumable facility publisher, but all
-  facility publication and reader controls remain closed.
+- `main` at `cea2a5a` contains source-isolated, bounded roster ingestion and the
+  resumable facility publisher, but all ingestion, facility publication and
+  reader controls remain closed.
 - Automatic roster ingestion is paused by
   `ROSTER_AUTOMATION_WRITES_ENABLED=false`, an empty
   `ROSTER_AUTOMATION_SOURCE_ALLOWLIST` and
@@ -62,6 +63,11 @@ observed operational step.
   for ingestion.
 - Persistent request attribution and per-request D1 statement ceilings remain
   mandatory.
+- Approximately 45 users subscribe to personal calendar feeds. Their periodic
+  calendar-client refreshes are expected to produce continuous small,
+  read-only traffic even when nobody has the web app open. That traffic belongs
+  in the ordinary-service baseline; it is not evidence of a background writer
+  unless its route, query shape or rate departs from the settled feed baseline.
 
 ## Problems that must be corrected before enabling a source
 
@@ -222,6 +228,16 @@ strongest local incremental evidence. Before the canary, determine whether
 enable the multi-source flow; use a one-shot source-specific submission or
 isolate the flow first.
 
+The 13 September read-only inspection established that `Sync Monash roster
+files` is not independently switchable by source. It watches the entire
+`/Shared Documents/Medical Roster` folder and derives `monash-adults` only when
+the filename begins with `Adult`; every other triggered filename is labelled
+`monash-paeds`. The recurring flow must therefore remain disabled for the MMC
+canary. Gate 5 will use a one-shot submission of the exact current Adult roster,
+with `sourceId=monash-adults`, or a separately isolated copy whose trigger can
+match only that file. No catch-all `else=monash-paeds` logic is permitted in an
+enabled recurring flow.
+
 1. Take two reconciled account-wide Analytics measurements at least ten minutes
    apart and apply the quota plan's admission thresholds.
 2. Open only automatic ingress, queue processing and the exact
@@ -324,6 +340,113 @@ Keep all flows off until Gate 5 explicitly calls for one:
 4. Preview, contact-allocation/contact-list and bootstrap flows remain off until
    their later restoration gates.
 
+## Prepared Gate 5 operating packet
+
+The following sequence is prepared in advance and must be followed without
+combining steps:
+
+1. Keep `Sync Monash roster files` disabled. Confirm all other Power Automate
+   flows remain disabled.
+2. Obtain two fresh, settled, reconciled account-wide samples at least ten
+   minutes apart. The expected background delta includes ordinary personal
+   calendar-feed refreshes from roughly 45 subscribers and must remain
+   read-only and within the ordinary-service projection.
+3. Deploy only these temporary Production values:
+   `ROSTER_AUTOMATION_WRITES_ENABLED=true`,
+   `ROSTER_AUTOMATION_QUEUE_ENABLED=true`, and
+   `ROSTER_AUTOMATION_SOURCE_ALLOWLIST=monash-adults`. Leave manual roster,
+   facility, contact, identity, bootstrap and watchdog controls closed.
+4. Read the effective values back without D1. A missing, additional or
+   differently cased source is a stop.
+5. Submit the exact current Adult roster once through a one-shot action. The
+   request must contain `sourceId=monash-adults`, the real filename, stable
+   SharePoint version/ETag and modification time, and the matching file bytes.
+6. Record the HTTP response, dispatch identifier and GitHub run. Only one queue
+   record may be claimed and processed.
+7. Immediately redeploy the three controls closed: writes false, queue false,
+   allowlist empty. Read them back without D1 before observing the result.
+8. After Analytics settlement, reconcile account totals, request attribution,
+   D1 query fingerprints, D1 writes and R2 operations. The personal-feed
+   baseline is allowed; any new unexplained route, write or burst is not.
+9. Only after reconciliation, test one affected personal calendar and its feed.
+   Do not enter At a glance.
+10. Repeat the same open-once-close sequence with the identical Adult provider
+    version. It must return `unchanged`, perform zero D1/R2 writes and dispatch
+    no processor.
+
+The rollback is configuration-only and never queries D1: set roster writes and
+queue false and empty the source allowlist. Do not enable the recurring Monash
+flow until Adults and Paediatrics have separate exact trigger conditions or
+separate flows, and each source has passed its own canary.
+
+### Gate 5 canary material prepared on 14 September 2026
+
+The exact read-only SharePoint source selected for the first canary is:
+
+- library folder: `/Shared Documents/Medical Roster`;
+- filename: `AdultTerm3.2026.xlsx`;
+- source ID: `monash-adults`;
+- SharePoint version: `322.0`;
+- SharePoint displayed modification: 14 September 2026 at 15:37 AEST;
+- downloaded byte size: `565098` (displayed as 565 KB); and
+- downloaded SHA-256:
+  `91176f5a1fb5e3d77976b675feae4a4015d827d71a8de75d2ebfe8ec96dc9044`;
+- modified by: Melissa Basic.
+
+Safari confirmed that this exact workbook downloaded successfully to the local
+iCloud Downloads folder as `AdultTerm3.2026-2.xlsx`; the `-2` is only Safari's
+collision suffix and the submitted `fileName` must remain
+`AdultTerm3.2026.xlsx`. The XLSX ZIP integrity check passed. An earlier 12:44
+download is stale and must not be submitted. Do not use the displayed
+modification time as the provider version. Immediately before the canary,
+confirm SharePoint still shows version `322.0` and 15:37 AEST. If the current
+version or modification time has changed, discard this prepared input and
+obtain and fingerprint a fresh read-only copy.
+
+`Sync Monash roster files` was turned off again before this preparation. It and
+all other Power Automate flows must remain off. The current combined flow is
+not the canary mechanism because it can also accept Paediatrics. Prepare a
+manual, one-shot HTTP action for the exact file only, but do not save it as a
+recurring trigger and do not submit it until steps 1–4 of the operating packet
+have passed. Its fixed request fields are `sourceId=monash-adults`,
+`fileName=AdultTerm3.2026.xlsx` and the XLSX content type; its ETag,
+modification time and bytes must all come from the same current SharePoint
+version.
+
+Focused local preflight completed with no Production access on 14 September:
+
+- `npm run test:source-isolation` passed;
+- `npm run test:roster-idempotency` passed, including zero D1/R2 writes for an
+  unchanged Monash provider version and for identical content under a new
+  provider version;
+- `npm run test:d1-quota` passed; and
+- `npm run test:queue-failure` passed.
+
+These tests prepare the canary but do not admit it. On return, first unlock the
+Mac and locate the completed download. Then take the two fresh settled account
+samples. Only if those samples pass may the temporary three-control opening and
+single submission occur. Close the controls immediately after the response;
+do not browse Admin, At a glance or another roster source during the interval.
+
+#### Admission stop discovered after preparation
+
+The 17:14 AEST account check returned `STOP`. Settled account Analytics recorded
+1,000,186 rows read and six rows written in the 15:55 AEST bucket while all
+Power Automate flows and roster controls were closed. Analytics Engine attributed
+the burst at 15:57 AEST to an ordinary interactive session, principally the
+automatically scheduled `queryRosterOverlapDoctors` insight warm-up and the
+concurrent `loadCalendarEvents`/`loadAccountContext` path. The overlap request
+reported 998,070 rows read. This is not roster ingestion and proves Gate 5 is
+not currently admissible.
+
+Do not open the canary controls or submit the prepared workbook until the
+automatic insight warm-up is fail-closed or moved to the indexed compact daily
+presence path, and the calendar/account-context burst has been separately
+explained and bounded. A statement-count ceiling is insufficient because a
+single permitted legacy event join can examine almost one million rows. After
+remediation, deploy closed, collect a new settled passive interval and repeat
+the two-sample admission gate from the beginning.
+
 ## Completion criteria
 
 Calendar synchronisation is restored when every intended Production roster
@@ -365,8 +488,9 @@ it is not silently re-enabled as a side effect of ingestion.
   capped at 40, rather than listing every account.
 - Migration `0032_roster_sync_source_indexes.sql` adds compact indexes for
   exact source/provider, source/queue and affected-claim probes. It performs no
-  roster-event backfill. It has been exercised only in isolated local stores;
-  no remote migration has run.
+  roster-event backfill. It is applied to Production: the remote operation ran
+  three statements and reported 2,400 rows read and 1,175 index rows written;
+  an exact schema query confirmed all three indexes.
 - The synthetic cost fixture contains 10,000 sync runs, 10,000 dispatches,
   10,000 accounts, 20,000 claims and 109,200 roster events. Query plans use the
   exact source/version, source/hash, source/status and source/doctor indexes;
@@ -379,6 +503,24 @@ it is not silently re-enabled as a side effect of ingestion.
   `test:source-isolation`, `test:queue-failure`, `test:vhh-automation`,
   `test:facility-materialization`, `test:database-costs`, `test:fixtures`,
   `test:d1-quota` and `test:request-attribution`.
-- Production and Power Automate remain unchanged and closed. Gate 4 is next;
-  it requires a commit, push, closed deployment and migration/configuration
-  read-back before any roster source can be opened.
+- Gate 4 deployment work is live at `cea2a5a`. Production has one deployment
+  and zero Preview deployments; effective automatic/manual roster controls are
+  closed; credential-free and wrong-source probes returned the pre-D1 paused
+  response; all focused local suites pass; and all Power Automate flows remain
+  disabled.
+- Approximately 45 subscribed personal calendar feeds account for expected
+  low-level read traffic while the app is otherwise idle. They must be measured
+  as the ordinary-service baseline during every canary.
+- The post-migration daily Analytics aggregate is intentionally not used to
+  admit Gate 5: Cloudflare does not fingerprint the DDL and the same interval
+  contains 882 additional unattributed reads. Although the scale is small and
+  consistent with ordinary feed traffic, the counter will be allowed to reset
+  before the two fresh Gate 5 admission samples.
+- Read-only inspection confirmed `Sync Monash roster files` is a combined
+  Adults/Paediatrics folder trigger with catch-all Paediatrics routing. It must
+  remain off for the MMC-only canary; use the prepared one-shot exact-source
+  path instead.
+- The GitHub processor workflow is available, accepts an exact required source
+  input, has no schedule, and had no run after 3 September 2026 when checked on
+  13 September. Its five most recent runs were completed successful dispatches;
+  no processor run was active during this preparation.

@@ -29,6 +29,20 @@ try {
   }
   assert.equal(nextCalls, 0);
 
+  for (const action of ["queryRosterInsights", "queryRosterOverlapDoctors"]) {
+    const blocked = await onRequest({
+      request: new Request("https://example.test/api/state", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action, email: "private@example.test", password: "secret-password" }),
+      }),
+      env: { ROSTER_DB: forbidden, ROSTER_INSIGHT_READS_ENABLED: "false", CF_PAGES_COMMIT_SHA: "test-commit" },
+      next: async () => { nextCalls += 1; return Response.json({ ok: true }); },
+    });
+    assert.equal(blocked.status, 503, `${action} must stop before D1 while roster insights are paused`);
+    assert.equal((await blocked.json()).reason, "roster-insights-paused");
+  }
+  assert.equal(nextCalls, 0, "paused roster insights must perform zero downstream work");
+
   const db = {
     prepare() {
       return {

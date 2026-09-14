@@ -76,6 +76,7 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 | `CONTACT_AUTOMATION_SOURCE_ALLOWLIST` | empty | FR-08 |
 | `IDENTITY_DISCOVERY_ENABLED` | `false`; missing or malformed also fails closed | FR-21, FR-24 |
 | `ACCOUNT_SNAPSHOT_BUILD_ENABLED` | `false`; missing or malformed also fails closed | FR-23 |
+| `ROSTER_INSIGHT_READS_ENABLED` | `false`; missing or malformed also fails closed | FR-19 |
 | Watchdog `ROSTER_AUTOMATION_ENABLED` | `false` | FR-10 |
 
 ## User-facing restoration register
@@ -392,15 +393,19 @@ pause, and future maintenance work must not accidentally disable them.
 
 ### FR-19 — Colleague insight tools on calendar events
 
-- **State:** Still live; not covered by the At a glance rollout flags.
+- **State:** Paused behind the default-off `ROSTER_INSIGHT_READS_ENABLED`
+  control. Automatic background warm-up is also disabled in the client.
 - **Includes:** “Who else is working with me?” and “When am I working with…?”.
-- **Current implementation:** Authenticated, date- and source-bounded D1 event
-  queries (`queryRosterInsights` and `queryRosterOverlapDoctors`).
-- **Required follow-up:** Measure their settled production frequency and local
-  query plans before increasing use. If they consume material rows, move them
-  to the same shared compact day/range artifacts. Do not disable them merely
-  because they were not exercised during the incident investigation; any
-  future pause must be added here first.
+- **Incident evidence:** At 15:57 AEST on 14 September, an ordinary calendar
+  render automatically invoked `queryRosterOverlapDoctors`; request telemetry
+  reported 998,070 rows read by its legacy overlapping-event join.
+- **Containment:** Both insight actions stop in middleware before D1 unless the
+  explicit control is true. Calendar rendering never schedules a remote insight
+  warm-up. Explicit use receives the existing unavailable presentation.
+- **Restoration:** Replace the legacy event joins with indexed compact daily
+  presence/shared artifacts, prove bounded plans and returned/examined rows,
+  then restore explicit user actions first. Automatic warm-up is not restored
+  unless it has a separately demonstrated zero-D1 cache hit.
 
 ### FR-20 — At a glance entitlement configuration
 
@@ -575,6 +580,7 @@ mechanisms are intentionally excluded from restoration.
 | Pre-sync deployment cleanup, 13 Sep 2026 | Removed 25 superseded, contained Production deployments through the Pages control plane. The 25-result listing initially concealed one further predecessor, which was removed after re-listing. Final inventory: one Production deployment (`1890d569-33f3-414c-8587-9101c27dc921`, source `93feb08`) and zero Preview deployments. No D1 query was used. |
 | Calendar-sync Gates 1–2, 13 Sep 2026 | Two settled account-wide samples reconciled at 75,025 reads and zero writes with no expensive fingerprint. Implemented local-only manual/automatic authority separation and exact-source, one-job queue processing. Focused and full fixture suites pass; Production flags and all Power Automate flows remain closed. |
 | Calendar-sync Gate 3, 13 Sep 2026 | Proved local zero-write unchanged ingress for Monash, VHH and FindMyShift; bounded changed ingress, payloads and duplicate callbacks; indexed source/version, source/status and affected-claim probes; and stopped disabled identity/snapshot fan-out after ingestion. Representative parsing, correction, rollback, overlap, membership and term tests pass. Migration `0032` remains local only. Production and all Power Automate flows remain closed. |
+| Colleague-insight containment, 14 Sep 2026 | Settled account telemetry attributed the 15:55 bucket's million-row burst to automatic `queryRosterOverlapDoctors` during an ordinary session. Added a default-off pre-D1 server gate for both insight actions and disabled client background warm-up. Roster automation remains closed; restoration is tracked under FR-19. |
 
 ## Restoration record template
 

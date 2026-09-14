@@ -24,6 +24,8 @@ import {
 import { attachContactAllocations, contactExtractHasExpired, contactOperationalDate, contactStream } from "./contact-allocations.js";
 import { loadFacilitySnapshot, storeFacilitySnapshot } from "./facility-snapshot-cache.js";
 
+const AUTOMATIC_ROSTER_INSIGHT_WARMUP_ENABLED = false;
+
 const form = document.querySelector("#roster-form");
 const appShell = document.querySelector("#appShell");
 const entrancePage = document.querySelector("#entrancePage");
@@ -6241,6 +6243,9 @@ function buildInsightCachePayload() {
 
 function scheduleInsightWarmup() {
   clearInsightWarmup();
+  // Remote roster-wide discovery is deliberately demand-only. It must never
+  // run as background work during login or ordinary calendar rendering.
+  if (!AUTOMATIC_ROSTER_INSIGHT_WARMUP_ENABLED) return;
   if (!canUseRosterInsights() || !latestPreview || !selectedDoctor()) return;
   const warmKey = [
     insightWarmBaseKey(),
