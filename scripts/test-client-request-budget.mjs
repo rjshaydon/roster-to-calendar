@@ -18,6 +18,9 @@ assert.match(postLoginRefresh, /allowInlineBuild: options\.allowInlineBuild === 
 assert.match(postLoginRefresh, /suppressInsightWarmup: true/, "automatic refresh must not fan out colleague queries");
 assert.match(postLoginRefresh, /suppressCloudSave: true/, "rendering a server snapshot must not schedule a redundant full cloud save");
 
+const customEventReconciliation = section(/function reconcileMaterializedPreviewCustomEvents[\s\S]*?(?=\nfunction sanitizeActiveCalendarCustomEvents)/);
+assert.doesNotMatch(customEventReconciliation, /saveCurrentSessionState|scheduleCloudStateSave/, "rehydrating saved custom events must remain local and never schedule a cloud save");
+
 const containedCreatorStartup = section(/function finishContainedCreatorStartup[\s\S]*?(?=\nfunction launchNonClinicalDirectorWorkspace)/);
 assert.match(containedCreatorStartup, /queuePostLoginSnapshotRefresh\([\s\S]*allowInlineBuild: true/, "Creator login must automatically request one bounded stale-snapshot rebuild");
 

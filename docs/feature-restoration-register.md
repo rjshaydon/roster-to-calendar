@@ -530,8 +530,9 @@ pause, and future maintenance work must not accidentally disable them.
   date-bounded, doctor-specific revision check runs only while the page is
   visible. A matching browser revision avoids the R2 payload and rebuild. If
   stale, the Creator path may rebuild only that visible calendar. Applying the
-  returned server snapshot suppresses colleague-insight warm-up and the former
-  redundant full cloud save. It does not open Admin, At a glance, roster
+  returned server snapshot suppresses colleague-insight warm-up. Rehydrating
+  already-saved custom events is always local-only and cannot schedule the
+  former redundant full cloud save. It does not open Admin, At a glance, roster
   automation or a recurring poll.
 - **Permanent constraint:** Keep automatic Creator fan-out and global snapshot
   warm-up disabled until separately restored under FR-23/FR-26. This explicit

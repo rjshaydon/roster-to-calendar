@@ -19380,20 +19380,16 @@ function ensureEditableCustomEvent(event) {
   return customEventsForActiveCalendar().find((entry) => entry.id === event.id) || null;
 }
 
-function reconcileMaterializedPreviewCustomEvents(options = {}) {
+function reconcileMaterializedPreviewCustomEvents() {
   if (latestPreview?.customEventsMaterialized !== true) return;
   const restored = (latestPreview.events || [])
     .filter(isCustomPreviewEvent)
     .map((event) => previewEventToCustomEvent(event));
   if (!restored.length) return;
-  const before = customEventsForActiveCalendar().length;
   replaceActiveCalendarCustomEvents([
     ...customEventsForActiveCalendar(),
     ...restored,
   ]);
-  if (customEventsForActiveCalendar().length !== before && options.suppressCloudSave !== true) {
-    saveCurrentSessionState();
-  }
 }
 
 function sanitizeActiveCalendarCustomEvents(items) {
@@ -20229,7 +20225,10 @@ function renderWorkspaceFromSnapshot(snapshot, session = {}, options = {}) {
   clearDoctorAnalysisCache();
   restoredSessionState = session && typeof session === "object" ? session : {};
   applySessionState(restoredSessionState, { inheritedSettings: rosterDefaultSettings() });
-  reconcileMaterializedPreviewCustomEvents({ suppressCloudSave: options.suppressCloudSave === true });
+  // Materialized custom events already came from authoritative saved state.
+  // Rehydrating them is local reconciliation, not a user edit, and must never
+  // schedule a redundant full cloud save.
+  reconcileMaterializedPreviewCustomEvents();
   hydrateInsightCacheFromSnapshot(currentSnapshot);
   pendingPreviewSnapToToday = options.preserveScroll !== true;
   renderSettings();
