@@ -36,6 +36,7 @@
     "test:database-costs": "node --no-warnings scripts/test-database-costs.mjs",
     "test:facility-materialization": "node --no-warnings scripts/test-facility-materialization.mjs",
     "shadow:active": "node scripts/shadow-active-rosters.mjs",
+    "inspect:roster": "node --no-warnings scripts/inspect-roster-workbook.mjs",
     "canary:monash-adults": "node scripts/submit-monash-adults-canary.mjs",
     "canary:monash-adults-config": "node scripts/prepare-monash-adults-canary-config.mjs",
     "test:monash-adults-canary": "node scripts/test-monash-adults-canary.mjs"
