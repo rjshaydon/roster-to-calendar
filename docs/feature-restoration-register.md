@@ -518,6 +518,23 @@ pause, and future maintenance work must not accidentally disable them.
   ceilings permanently. Sampling may be reduced only after the incident is
   attributed and sustained safe operation is demonstrated.
 
+### FR-28 — Explicit personal-calendar refresh
+
+- **State:** Restored as an explicit user action while automatic Creator
+  startup hydration remains contained.
+- **Problem addressed:** A successful roster replacement changes the active D1
+  events immediately, but an existing browser/R2 calendar snapshot can remain
+  on its previous revision when automatic snapshot warm-up is disabled.
+- **Behaviour:** **Refresh calendar** performs one authenticated, date-bounded,
+  doctor-specific revalidation. If the saved snapshot is stale it rebuilds only
+  that visible calendar, coalesces repeated clicks and suppresses colleague-
+  insight warm-up. It does not open Admin, At a glance, roster automation or a
+  recurring poll.
+- **Permanent constraint:** Keep automatic Creator fan-out and global snapshot
+  warm-up disabled until separately restored under FR-23/FR-26. This explicit
+  action must retain the API request ceiling and the indexed doctor/date event
+  query.
+
 ## Restoration order
 
 The order restores the core personal-calendar service before At a glance and

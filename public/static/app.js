@@ -103,6 +103,7 @@ const inviteAccountForm = document.querySelector("#inviteAccountForm");
 const invitePassword = document.querySelector("#invitePassword");
 const currentDayPreview = document.querySelector("#currentDayPreview");
 const exportButton = document.querySelector("#exportButton");
+const refreshCalendarButton = document.querySelector("#refreshCalendarButton");
 const facilityOverviewButton = document.querySelector("#facilityOverviewButton");
 const facilityOverviewSection = document.querySelector("#facilityOverviewSection");
 const facilityOverviewHeader = document.querySelector("#facilityOverviewHeader");
@@ -566,6 +567,7 @@ function toggleFacilityOverview() {
   }
 }
 facilityOverviewButton?.addEventListener("click", toggleFacilityOverview);
+refreshCalendarButton?.addEventListener("click", refreshVisibleCalendarFromServer);
 mobileFacilityOverviewButton?.addEventListener("click", toggleFacilityOverview);
 facilityOverviewBackButton?.addEventListener("click", closeFacilityOverview);
 document.addEventListener("pointerdown", (event) => {
@@ -17345,6 +17347,34 @@ async function applyCloudStateData(data, options = {}) {
   if (!calendarTransitionStillCurrent(options.transition)) return false;
   await applyCloudStateSnapshot(data, options);
   return calendarTransitionStillCurrent(options.transition);
+}
+
+async function refreshVisibleCalendarFromServer() {
+  if (!cloudAvailable || !currentUserEmail || refreshCalendarButton?.disabled) return;
+  const transition = beginCalendarTransition();
+  if (refreshCalendarButton) refreshCalendarButton.disabled = true;
+  setStatus("Refreshing calendar...");
+  try {
+    const loaded = await loadCloudCalendarEvents({
+      cachedRevision: "",
+      allowInlineBuild: true,
+      skipRebuild: false,
+      preserveExistingSnapshot: true,
+      transition,
+    });
+    if (!loaded || !currentSnapshot?.preview || currentSnapshotStale) {
+      throw new Error("The updated calendar is still being prepared. Please try again shortly.");
+    }
+    renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot?.session || {}, {
+      preserveScroll: true,
+      suppressInsightWarmup: true,
+    });
+    setStatus("Calendar refreshed.");
+  } catch (error) {
+    setStatus(normalizeAuthMessage(error?.message || "Could not refresh the calendar."), true);
+  } finally {
+    if (refreshCalendarButton) refreshCalendarButton.disabled = false;
+  }
 }
 
 async function loadCloudCalendarEvents(options = {}) {

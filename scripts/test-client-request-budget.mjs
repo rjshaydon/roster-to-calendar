@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const appSource = await readFile(new URL("../public/static/app.js", import.meta.url), "utf8");
+const indexSource = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
 
 const statusBody = section(/function setStatus\([\s\S]*?(?=\nfunction removeSupersededStatusMessages)/);
 assert.doesNotMatch(statusBody, /persistConsoleMessage|appendConsoleMessage/, "ordinary UI messages must not produce database-backed console writes");
@@ -10,6 +11,12 @@ const postLoginRefresh = section(/function queuePostLoginSnapshotRefresh[\s\S]*?
 assert.equal((postLoginRefresh.match(/loadCloudCalendarEvents\(/g) || []).length, 1, "one retry loop must contain one calendar request site");
 assert.match(postLoginRefresh, /for \(const delayMs of \[1500\]\)/, "login must schedule at most one background calendar retry");
 assert.match(postLoginRefresh, /if \(document\.hidden\) return/, "hidden tabs must not perform the retry");
+
+const manualCalendarRefresh = section(/async function refreshVisibleCalendarFromServer[\s\S]*?(?=\nasync function loadCloudCalendarEvents)/);
+assert.match(indexSource, /id="refreshCalendarButton"[^>]*>Refresh calendar<\/button>/, "the bounded refresh must be available as an explicit user action");
+assert.match(manualCalendarRefresh, /refreshCalendarButton\?\.disabled/, "manual calendar refresh must coalesce repeated clicks");
+assert.match(manualCalendarRefresh, /cachedRevision: ""[\s\S]*allowInlineBuild: true[\s\S]*skipRebuild: false/, "manual refresh must explicitly rebuild a stale doctor-scoped snapshot");
+assert.match(manualCalendarRefresh, /suppressInsightWarmup: true/, "manual calendar refresh must not fan out colleague queries");
 
 const calendarLoad = section(/async function loadCloudCalendarEvents[\s\S]*?(?=\nfunction cloudCalendarEventRange)/);
 assert.equal((calendarLoad.match(/await fetch\("\/api\/state"/g) || []).length, 2, "foreground calendar load may issue only the request and one resource-limit retry");
