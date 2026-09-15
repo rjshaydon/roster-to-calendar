@@ -931,10 +931,16 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
     eventCount: eventRows.length, contentRevision,
   }));
   if (fileSignature !== storedFileSignature) statements.push(derivedRosterFileUpsertStatement(db, storedFile ? file : { ...file, active: false }, sourceType, parsedAt));
-  for (const id of removedEventIds) statements.push(db.prepare("DELETE FROM roster_daily_presence WHERE event_id = ?").bind(id), db.prepare("DELETE FROM roster_events WHERE id = ?").bind(id));
-  for (const row of changedEventRows) statements.push(db.prepare("DELETE FROM roster_daily_presence WHERE event_id = ?").bind(row[0]));
-  for (const id of removedIssueIds) statements.push(db.prepare("DELETE FROM roster_issues WHERE id = ?").bind(id));
-  for (const key of removedDoctorKeys) statements.push(db.prepare("DELETE FROM roster_file_doctors WHERE file_id = ? AND source_type = ? AND doctor_key = ?").bind(file.id, sourceType, key));
+  statements.push(...bulkDeleteByIdsStatements(db, "roster_daily_presence", "event_id", [
+    ...removedEventIds,
+    ...changedEventRows.map((row) => row[0]),
+  ]));
+  statements.push(...bulkDeleteByIdsStatements(db, "roster_events", "id", removedEventIds));
+  statements.push(...bulkDeleteByIdsStatements(db, "roster_issues", "id", removedIssueIds));
+  for (const keys of chunkRows(removedDoctorKeys, D1_MAX_BIND_PARAMS - 2)) {
+    statements.push(db.prepare(`DELETE FROM roster_file_doctors WHERE file_id = ? AND source_type = ? AND doctor_key IN (${keys.map(() => "?").join(", ")})`)
+      .bind(file.id, sourceType, ...keys));
+  }
   statements.push(...bulkUpsertDoctorStatements(db, sourceType, changedDoctors, parsedAt));
   statements.push(...bulkInsertFileDoctorStatements(db, file.id, sourceType, changedDoctors));
   statements.push(...bulkInsertEventStatements(db, changedEventRows));
@@ -5753,6 +5759,13 @@ async function runStatementBatches(db, statements, batchSize = D1_MAX_BATCH_STAT
     else for (const statement of chunk) results.push(await statement.run());
   }
   return results;
+}
+
+function bulkDeleteByIdsStatements(db, table, column, values) {
+  const uniqueValues = [...new Set((values || []).map((value) => String(value || "")).filter(Boolean))];
+  return chunkRows(uniqueValues, D1_MAX_BIND_PARAMS).map((chunk) => db.prepare(
+    `DELETE FROM ${table} WHERE ${column} IN (${chunk.map(() => "?").join(", ")})`,
+  ).bind(...chunk));
 }
 
 async function runTransactionalBatch(db, statements) {

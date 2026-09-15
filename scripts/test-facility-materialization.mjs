@@ -267,6 +267,27 @@ await assert.rejects(
 );
 assert.equal(db.rowsWritten, 0, "an over-budget automatic revision must stop before writes");
 
+const bulkFile = { ...file, id: "incremental-bulk", name: "Bulk.xlsx" };
+const bulkInitial = {
+  "PERMANENT SMS": Array.from({ length: 300 }, (_value, index) => event(
+    `bulk-${index}`,
+    `2026-08-${String(3 + (index % 20)).padStart(2, "0")}`,
+    "Day",
+  )),
+};
+await replaceDerivedRosterFile(db, bulkFile, [doctors[0]], bulkInitial);
+db.sql = [];
+const bulkCorrected = {
+  "PERMANENT SMS": bulkInitial["PERMANENT SMS"].map((item) => ({ ...item, title: "Corrected", rawValue: "Corrected" })),
+};
+const bulkResult = await replaceDerivedRosterFile(db, bulkFile, [doctors[0]], bulkCorrected, {}, { maximumIncrementalFacts: 400 });
+assert.equal(bulkResult.changes.events, 300);
+assert.ok(db.sql.filter((sql) => sql.startsWith("DELETE FROM roster_daily_presence WHERE event_id IN")).length <= 3,
+  "large incremental corrections must batch daily-presence deletes by the D1 bind limit");
+assert.equal(db.sql.some((sql) => sql === "DELETE FROM roster_daily_presence WHERE event_id = ?"), false,
+  "large incremental corrections must not emit one daily-presence delete per event");
+await deleteDerivedRosterFile(db, bulkFile.id);
+
 sqlite.prepare("INSERT INTO facility_term_visibility (source_type, term_start, visible_from, revision, updated_at) VALUES ('mmc', '2026-02-02', '2026-01-19', '', '')").run();
 const plannedR2 = new LocalR2();
 db.sql = [];
