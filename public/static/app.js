@@ -3967,7 +3967,6 @@ function rebuildClientPreview() {
   renderIssues(view.issues || []);
   void reportPreviewIssues(view.issues || []);
   void reportPreviewConflicts(view.conflicts || []);
-  saveCurrentSessionState();
 }
 
 function buildClientPreviewData(baseData) {
@@ -19324,7 +19323,6 @@ function loadCurrentSessionState() {
 function saveCurrentSessionState() {
   try {
     saveCurrentWorkspace();
-    scheduleCloudStateSave();
     recordHistorySnapshot();
   } catch {
     // Ignore persistence failures for session-only state.

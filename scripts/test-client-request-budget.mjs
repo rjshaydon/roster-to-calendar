@@ -7,6 +7,12 @@ const indexSource = await readFile(new URL("../public/index.html", import.meta.u
 const statusBody = section(/function setStatus\([\s\S]*?(?=\nfunction removeSupersededStatusMessages)/);
 assert.doesNotMatch(statusBody, /persistConsoleMessage|appendConsoleMessage/, "ordinary UI messages must not produce database-backed console writes");
 
+const sessionSave = section(/function saveCurrentSessionState[\s\S]*?(?=\nfunction applySessionState)/);
+assert.doesNotMatch(sessionSave, /scheduleCloudStateSave|saveCloudState|fetch\(/, "session and display changes must remain browser-local while full-state writes are contained");
+
+const previewRenderer = section(/function rebuildClientPreview[\s\S]*?(?=\nfunction buildClientPreviewData)/);
+assert.doesNotMatch(previewRenderer, /saveCurrentSessionState|scheduleCloudStateSave|saveCloudState|fetch\(/, "rendering a calendar must never schedule a database write");
+
 const postLoginRefresh = section(/function queuePostLoginSnapshotRefresh[\s\S]*?(?=\nfunction markLoginPhase)/);
 assert.equal((postLoginRefresh.match(/loadCloudCalendarEvents\(/g) || []).length, 1, "one retry loop must contain one calendar request site");
 assert.match(postLoginRefresh, /for \(const delayMs of \[1500\]\)/, "login must schedule at most one background calendar retry");

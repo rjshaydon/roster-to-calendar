@@ -539,6 +539,25 @@ pause, and future maintenance work must not accidentally disable them.
   action must retain the API request ceiling and the indexed doctor/date event
   query.
 
+### FR-29 — Browser-local session settings during D1 recovery
+
+- **State:** Cloud persistence of ordinary calendar display/session changes is
+  temporarily paused. Settings, filters, overrides and undo history continue
+  to persist in the current browser workspace.
+- **Reason:** Request attribution at 18:03 and 19:06 AEST on 15 September 2026
+  proved that simply rendering a cached or refreshed calendar scheduled full
+  `save` requests. One request per render wrote 12 rows; the following request
+  attempted a batch larger than the permanent 64-statement ceiling and was
+  blocked with zero writes. Both accompanying `loadCalendarEvents` requests
+  succeeded with only 10–16 statements and 3–11 rows read.
+- **Containment:** `rebuildClientPreview()` is render-only and
+  `saveCurrentSessionState()` writes only to browser storage. Neither may call
+  the cloud save queue. Explicit roster/account operations retain their own
+  deliberate persistence paths.
+- **Restoration:** Restore cross-device session-setting persistence only through
+  a dedicated, bounded session-only API action. It must update a single account
+  state record and must never resubmit roster imports or rebuild snapshots.
+
 ## Restoration order
 
 The order restores the core personal-calendar service before At a glance and
