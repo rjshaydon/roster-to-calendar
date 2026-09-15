@@ -17,6 +17,9 @@ assert.equal(prepared.submittedFileName, "AdultTerm3.2026.xlsx");
 assert.equal(prepared.endpoint, "https://roster-to-calendar.pages.dev/api/automation/ingest");
 assert.equal(prepared.sha256, hash);
 
+const automationImportSource = readFileSync(fileURLToPath(new URL("../functions/_lib/automation-import.js", import.meta.url)), "utf8");
+assert.match(automationImportSource, /contentHash: String\(contentHash \|\| ""\)\.toLowerCase\(\)/, "the reviewed workbook hash must survive parsing and reach the derived-save guard");
+
 const missingConfirmation = spawnSync(process.execPath, [...baseArgs, "--execute", "--expected-sha256", hash], {
   encoding: "utf8",
   env: { ...process.env, ROSTER_AUTOMATION_TOKEN: "synthetic-never-sent" },

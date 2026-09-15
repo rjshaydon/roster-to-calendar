@@ -120,6 +120,7 @@ export async function buildAutomatedDerivedRosterPayload({ file, sourceId, conte
       uploadedAt: addedAt,
       uploadedBy: `automation:${sourceId}`,
       providerVersion: String(providerVersion || ""),
+      contentHash: String(contentHash || "").toLowerCase(),
     },
     doctors: applyRosterEventSeniorities(uniqueDoctors, eventsByDoctor),
     eventsByDoctor,

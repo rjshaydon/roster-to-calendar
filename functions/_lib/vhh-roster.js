@@ -102,6 +102,7 @@ export function buildVhhDerivedRosterPayload({ extract, contentHash, fileId = ""
       uploadedAt: addedAt,
       uploadedBy: `automation:${VHH_ROSTER_SOURCE_ID}`,
       providerVersion: String(providerVersion || roster.providerVersion || ""),
+      contentHash: String(contentHash || "").toLowerCase(),
     },
     doctors,
     eventsByDoctor,
