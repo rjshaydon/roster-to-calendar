@@ -2,7 +2,7 @@ import { applyEventOverrides, customEventsToEvents, defaultSettings, filterCalen
 import { AUTOMATION_SOURCES } from "../_lib/automation-import.js";
 import { DDH_CONTACT_LIST_SOURCE_ID, MMC_CONTACT_LIST_SOURCE_ID, attachContactAllocations, contactAreaForSource, contactExtractHasExpired, contactOperationalDate, contactsAfterShiftChange, normaliseContactListExtract, shouldCarryPreviousNightContacts, shouldUseCurrentExtractForPreviousNight } from "../../public/static/contact-allocations.js";
 import { requestQueuedRosterProcessing } from "../_lib/automation-dispatch.js";
-import { advancedRosterMaintenanceEnabled, rosterStatusSummaryEnabled, rosterWritesExplicitlyPaused, rosterWritePausedResponse } from "../_lib/roster-automation-guard.js";
+import { advancedRosterMaintenanceEnabled, reviewedRosterFactLimit, rosterStatusSummaryEnabled, rosterWritesExplicitlyPaused, rosterWritePausedResponse } from "../_lib/roster-automation-guard.js";
 import { guardedFetch, localFeatureDisabledResponse } from "../_lib/outbound-network.js";
 import { loadPublishedFacilityDays, loadPublishedFacilityMetadata, loadPublishedFacilityRange, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata } from "../_lib/facility-overview-cache.js";
 import { loadPublishedFacilityContacts, publishFacilityContactResolutions } from "../_lib/facility-contact-cache.js";
@@ -5968,7 +5968,10 @@ async function runCoreDerivedRosterSave(context, job = {}) {
         job.doctors || [],
         job.eventsByDoctor || {},
         job.issuesByDoctor || {},
-        { deferDailyPresence: false },
+        {
+          deferDailyPresence: false,
+          maximumIncrementalFacts: job.maximumIncrementalFacts,
+        },
       );
       if (result?.unchanged !== true) {
         await propagateDerivedShiftCodeIssues(db, job.doctors || [], job.issuesByDoctor || {});
@@ -6095,6 +6098,12 @@ function stagedPromotionBlockerDetail(comparison) {
 export async function runAutomatedDerivedRosterSave(context, job = {}) {
   const sourceId = String(job?.file?.sourceId || "").trim();
   if (!sourceId) throw new Error("An automation source id is required.");
+  const contentHash = String(job?.file?.contentHash || "").trim().toLowerCase();
+  const configuredReviewedLimit = Number(context?.env?.ROSTER_AUTOMATION_REVIEWED_FACT_LIMIT || 0);
+  const reviewedLimit = reviewedRosterFactLimit(context?.env, sourceId, contentHash);
+  if (configuredReviewedLimit > 0 && !reviewedLimit) {
+    throw new Error("Reviewed roster fact budget does not match this workbook content.");
+  }
   const requestedPhase = String(job.phase || "complete").toLowerCase();
   const phase = ["start", "events", "finish", "complete"].includes(requestedPhase) ? requestedPhase : "complete";
   return runCoreDerivedRosterSave(context, {
@@ -6102,6 +6111,7 @@ export async function runAutomatedDerivedRosterSave(context, job = {}) {
     phase,
     email: `automation:${sourceId}`,
     reason: `automation:${sourceId}`,
+    maximumIncrementalFacts: reviewedLimit || undefined,
   });
 }
 

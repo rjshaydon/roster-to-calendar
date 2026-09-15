@@ -26,6 +26,15 @@ export function automatedRosterQueueEnabled(env = {}) {
   return automatedRosterWritesEnabled(env) && ENABLED_VALUES.has(String(env.ROSTER_AUTOMATION_QUEUE_ENABLED || "").trim().toLowerCase());
 }
 
+export function reviewedRosterFactLimit(env = {}, sourceId = "", contentHash = "") {
+  if (!automatedRosterSourceEnabled(env, sourceId) || !automatedRosterQueueEnabled(env)) return 0;
+  const limit = Math.max(0, Math.min(Math.floor(Number(env.ROSTER_AUTOMATION_REVIEWED_FACT_LIMIT || 0)), 5000));
+  const reviewedHash = String(env.ROSTER_AUTOMATION_REVIEWED_CONTENT_SHA256 || "").trim().toLowerCase();
+  const suppliedHash = String(contentHash || "").trim().toLowerCase();
+  if (!limit || !/^[a-f0-9]{64}$/.test(reviewedHash) || suppliedHash !== reviewedHash) return 0;
+  return limit;
+}
+
 export function advancedRosterMaintenanceEnabled(env = {}) {
   return manualRosterWritesEnabled(env) && ENABLED_VALUES.has(String(env.ROSTER_ADVANCED_MAINTENANCE_ENABLED || "").trim().toLowerCase());
 }

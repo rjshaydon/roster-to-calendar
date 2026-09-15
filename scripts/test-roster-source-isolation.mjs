@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 
 import { requestQueuedRosterProcessing } from "../functions/_lib/automation-dispatch.js";
 import { claimRosterDispatch, listQueuedRosterSyncRuns } from "../functions/_lib/d1-calendar.js";
-import { advancedRosterMaintenanceEnabled, rosterWritesExplicitlyPaused } from "../functions/_lib/roster-automation-guard.js";
+import { advancedRosterMaintenanceEnabled, reviewedRosterFactLimit, rosterWritesExplicitlyPaused } from "../functions/_lib/roster-automation-guard.js";
 import { onRequestPost as derived } from "../functions/api/automation/derived.js";
 import { onRequestPost as dispatch } from "../functions/api/automation/dispatch.js";
 import { onRequestPost as findmyshift } from "../functions/api/automation/findmyshift-check.js";
@@ -91,6 +91,19 @@ assert.equal(rosterWritesExplicitlyPaused({ ROSTER_AUTOMATION_WRITES_ENABLED: "t
 assert.equal(rosterWritesExplicitlyPaused({ MANUAL_ROSTER_WRITES_ENABLED: "true" }), false, "manual roster writes require their own explicit authority");
 assert.equal(advancedRosterMaintenanceEnabled({ ROSTER_AUTOMATION_WRITES_ENABLED: "true", ROSTER_ADVANCED_MAINTENANCE_ENABLED: "true" }), false, "automatic authority must not open advanced maintenance");
 assert.equal(advancedRosterMaintenanceEnabled({ MANUAL_ROSTER_WRITES_ENABLED: "true", ROSTER_ADVANCED_MAINTENANCE_ENABLED: "true" }), true);
+
+const reviewedHash = "a".repeat(64);
+const reviewedEnv = {
+  ROSTER_AUTOMATION_WRITES_ENABLED: "true",
+  ROSTER_AUTOMATION_QUEUE_ENABLED: "true",
+  ROSTER_AUTOMATION_SOURCE_ALLOWLIST: "monash-adults",
+  ROSTER_AUTOMATION_REVIEWED_FACT_LIMIT: "1250",
+  ROSTER_AUTOMATION_REVIEWED_CONTENT_SHA256: reviewedHash,
+};
+assert.equal(reviewedRosterFactLimit(reviewedEnv, "monash-adults", reviewedHash), 1250, "the reviewed limit requires the exact allowed source and content hash");
+assert.equal(reviewedRosterFactLimit(reviewedEnv, "monash-adults", "b".repeat(64)), 0, "another workbook must not inherit the reviewed limit");
+assert.equal(reviewedRosterFactLimit(reviewedEnv, "monash-paeds", reviewedHash), 0, "another source must not inherit the reviewed limit");
+assert.equal(reviewedRosterFactLimit({ ...reviewedEnv, ROSTER_AUTOMATION_QUEUE_ENABLED: "false" }, "monash-adults", reviewedHash), 0, "the reviewed limit must close with the queue");
 
 const scopedStatements = [];
 const scopedDb = {

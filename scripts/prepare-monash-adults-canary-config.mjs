@@ -14,6 +14,8 @@ const requiredClosedSettings = new Map([
   ["ROSTER_AUTOMATION_WRITES_ENABLED", "false"],
   ["ROSTER_AUTOMATION_QUEUE_ENABLED", "false"],
   ["ROSTER_AUTOMATION_SOURCE_ALLOWLIST", ""],
+  ["ROSTER_AUTOMATION_REVIEWED_FACT_LIMIT", "0"],
+  ["ROSTER_AUTOMATION_REVIEWED_CONTENT_SHA256", ""],
   ["MANUAL_ROSTER_WRITES_ENABLED", "false"],
   ["ROSTER_ADVANCED_MAINTENANCE_ENABLED", "false"],
   ["CONTACT_AUTOMATION_WRITES_ENABLED", "false"],
@@ -32,13 +34,17 @@ let canary = production
   .replace(/^pages_build_output_dir = "public"$/m, `pages_build_output_dir = ${JSON.stringify(resolve("public"))}`)
   .replace(/^ROSTER_AUTOMATION_WRITES_ENABLED = "false"$/m, 'ROSTER_AUTOMATION_WRITES_ENABLED = "true"')
   .replace(/^ROSTER_AUTOMATION_QUEUE_ENABLED = "false"$/m, 'ROSTER_AUTOMATION_QUEUE_ENABLED = "true"')
-  .replace(/^ROSTER_AUTOMATION_SOURCE_ALLOWLIST = ""$/m, 'ROSTER_AUTOMATION_SOURCE_ALLOWLIST = "monash-adults"');
+  .replace(/^ROSTER_AUTOMATION_SOURCE_ALLOWLIST = ""$/m, 'ROSTER_AUTOMATION_SOURCE_ALLOWLIST = "monash-adults"')
+  .replace(/^ROSTER_AUTOMATION_REVIEWED_FACT_LIMIT = "0"$/m, 'ROSTER_AUTOMATION_REVIEWED_FACT_LIMIT = "1250"')
+  .replace(/^ROSTER_AUTOMATION_REVIEWED_CONTENT_SHA256 = ""$/m, 'ROSTER_AUTOMATION_REVIEWED_CONTENT_SHA256 = "91176f5a1fb5e3d77976b675feae4a4015d827d71a8de75d2ebfe8ec96dc9044"');
 canary += preview;
 
 for (const expected of [
   'ROSTER_AUTOMATION_WRITES_ENABLED = "true"',
   'ROSTER_AUTOMATION_QUEUE_ENABLED = "true"',
   'ROSTER_AUTOMATION_SOURCE_ALLOWLIST = "monash-adults"',
+  'ROSTER_AUTOMATION_REVIEWED_FACT_LIMIT = "1250"',
+  'ROSTER_AUTOMATION_REVIEWED_CONTENT_SHA256 = "91176f5a1fb5e3d77976b675feae4a4015d827d71a8de75d2ebfe8ec96dc9044"',
 ]) {
   if (!canary.slice(0, canary.indexOf(previewMarker)).includes(expected)) throw new Error(`Canary setting was not generated: ${expected}`);
 }
@@ -57,6 +63,8 @@ process.stdout.write(`${JSON.stringify({
     ROSTER_AUTOMATION_WRITES_ENABLED: "true",
     ROSTER_AUTOMATION_QUEUE_ENABLED: "true",
     ROSTER_AUTOMATION_SOURCE_ALLOWLIST: "monash-adults",
+    ROSTER_AUTOMATION_REVIEWED_FACT_LIMIT: "1250",
+    ROSTER_AUTOMATION_REVIEWED_CONTENT_SHA256: "91176f5a1fb5e3d77976b675feae4a4015d827d71a8de75d2ebfe8ec96dc9044",
   },
   unchangedSafetyControlsVerified: requiredClosedSettings.size - 3,
   previewRemainsClosed: true,

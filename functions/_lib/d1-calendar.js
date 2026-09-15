@@ -913,7 +913,7 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
     if (completeInitialRange) affectedDates = completeInitialRange;
   }
   const changedFactCount = changedDoctors.length + removedDoctorKeys.length + changedEventRows.length + removedEventIds.length + changedIssueRows.length + removedIssueIds.length;
-  const maximumIncrementalFacts = Math.max(1, Math.min(Number(options.maximumIncrementalFacts || 250), 500));
+  const maximumIncrementalFacts = Math.max(1, Math.min(Number(options.maximumIncrementalFacts || 250), 5000));
   if (storedFile && changedFactCount > maximumIncrementalFacts) {
     const error = new Error(`Roster revision changes ${changedFactCount} facts, above the automatic ${maximumIncrementalFacts}-fact safety budget.`);
     error.code = "ROSTER_INCREMENTAL_BUDGET";
