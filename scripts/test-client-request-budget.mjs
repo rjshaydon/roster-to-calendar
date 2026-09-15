@@ -12,11 +12,14 @@ assert.equal((postLoginRefresh.match(/loadCloudCalendarEvents\(/g) || []).length
 assert.match(postLoginRefresh, /for \(const delayMs of \[1500\]\)/, "login must schedule at most one background calendar retry");
 assert.match(postLoginRefresh, /if \(document\.hidden\) return/, "hidden tabs must not perform the retry");
 
-const manualCalendarRefresh = section(/async function refreshVisibleCalendarFromServer[\s\S]*?(?=\nasync function loadCloudCalendarEvents)/);
-assert.match(indexSource, /id="refreshCalendarButton"[^>]*>Refresh calendar<\/button>/, "the bounded refresh must be available as an explicit user action");
-assert.match(manualCalendarRefresh, /refreshCalendarButton\?\.disabled/, "manual calendar refresh must coalesce repeated clicks");
-assert.match(manualCalendarRefresh, /cachedRevision: ""[\s\S]*allowInlineBuild: true[\s\S]*skipRebuild: false/, "manual refresh must explicitly rebuild a stale doctor-scoped snapshot");
-assert.match(manualCalendarRefresh, /suppressInsightWarmup: true/, "manual calendar refresh must not fan out colleague queries");
+assert.doesNotMatch(indexSource, /id="refreshCalendarButton"/, "calendar syncing must not require a temporary manual refresh control");
+assert.match(postLoginRefresh, /cachedRevision: currentSnapshot\?\.calendarRevision \|\| currentCalendarRevision/, "automatic refresh must cheaply validate the browser revision");
+assert.match(postLoginRefresh, /allowInlineBuild: options\.allowInlineBuild === true/, "inline rebuilding must require an explicit bounded caller opt-in");
+assert.match(postLoginRefresh, /suppressInsightWarmup: true/, "automatic refresh must not fan out colleague queries");
+assert.match(postLoginRefresh, /suppressCloudSave: true/, "rendering a server snapshot must not schedule a redundant full cloud save");
+
+const containedCreatorStartup = section(/function finishContainedCreatorStartup[\s\S]*?(?=\nfunction launchNonClinicalDirectorWorkspace)/);
+assert.match(containedCreatorStartup, /queuePostLoginSnapshotRefresh\([\s\S]*allowInlineBuild: true/, "Creator login must automatically request one bounded stale-snapshot rebuild");
 
 const calendarLoad = section(/async function loadCloudCalendarEvents[\s\S]*?(?=\nfunction cloudCalendarEventRange)/);
 assert.equal((calendarLoad.match(/await fetch\("\/api\/state"/g) || []).length, 2, "foreground calendar load may issue only the request and one resource-limit retry");

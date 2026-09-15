@@ -103,7 +103,6 @@ const inviteAccountForm = document.querySelector("#inviteAccountForm");
 const invitePassword = document.querySelector("#invitePassword");
 const currentDayPreview = document.querySelector("#currentDayPreview");
 const exportButton = document.querySelector("#exportButton");
-const refreshCalendarButton = document.querySelector("#refreshCalendarButton");
 const facilityOverviewButton = document.querySelector("#facilityOverviewButton");
 const facilityOverviewSection = document.querySelector("#facilityOverviewSection");
 const facilityOverviewHeader = document.querySelector("#facilityOverviewHeader");
@@ -567,7 +566,6 @@ function toggleFacilityOverview() {
   }
 }
 facilityOverviewButton?.addEventListener("click", toggleFacilityOverview);
-refreshCalendarButton?.addEventListener("click", refreshVisibleCalendarFromServer);
 mobileFacilityOverviewButton?.addEventListener("click", toggleFacilityOverview);
 facilityOverviewBackButton?.addEventListener("click", closeFacilityOverview);
 document.addEventListener("pointerdown", (event) => {
@@ -16521,9 +16519,12 @@ function finishContainedCreatorStartup(options = {}, loginStartedAt = 0) {
     syncActionState();
   }
   markLoginPhase("workspaceRendered", loginStartedAt);
-  setStatus(hasSavedCalendar
-    ? "Calendar loaded from the last saved snapshot. Automatic Creator refresh is temporarily paused."
-    : "Automatic Creator calendar loading is temporarily paused while we complete a reliability upgrade.");
+  setStatus(hasSavedCalendar ? "Checking calendar for updates..." : "Loading calendar...");
+  queuePostLoginSnapshotRefresh({
+    loginStartedAt,
+    transition: options.transition,
+    allowInlineBuild: true,
+  });
   queueStoredCalendarSnapshotMaintenance();
 }
 
@@ -16914,15 +16915,19 @@ function queuePostLoginSnapshotRefresh(options = {}) {
       if (!calendarTransitionStillCurrent(options.transition) || activeCalendarTransitionKey() !== expectedKey) return;
       const loaded = await loadCloudCalendarEvents({
         adminTargetEmail: options.adminTargetEmail || "",
-        cachedRevision: "",
-        allowInlineBuild: false,
-        skipRebuild: true,
+        cachedRevision: currentSnapshot?.calendarRevision || currentCalendarRevision || "",
+        allowInlineBuild: options.allowInlineBuild === true,
+        skipRebuild: options.allowInlineBuild !== true,
         preserveExistingSnapshot: true,
         transition: options.transition,
       }).catch(() => false);
       if (!calendarTransitionStillCurrent(options.transition) || activeCalendarTransitionKey() !== expectedKey) return;
       if (loaded && currentSnapshot?.preview && !currentSnapshotStale) {
-        renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot?.session || {}, { preserveScroll: true });
+        renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot?.session || {}, {
+          preserveScroll: true,
+          suppressInsightWarmup: true,
+          suppressCloudSave: true,
+        });
         markLoginPhase("backgroundCalendarUpdated", options.loginStartedAt);
         setStatus("Calendar refreshed.");
         return;
@@ -17347,34 +17352,6 @@ async function applyCloudStateData(data, options = {}) {
   if (!calendarTransitionStillCurrent(options.transition)) return false;
   await applyCloudStateSnapshot(data, options);
   return calendarTransitionStillCurrent(options.transition);
-}
-
-async function refreshVisibleCalendarFromServer() {
-  if (!cloudAvailable || !currentUserEmail || refreshCalendarButton?.disabled) return;
-  const transition = beginCalendarTransition();
-  if (refreshCalendarButton) refreshCalendarButton.disabled = true;
-  setStatus("Refreshing calendar...");
-  try {
-    const loaded = await loadCloudCalendarEvents({
-      cachedRevision: "",
-      allowInlineBuild: true,
-      skipRebuild: false,
-      preserveExistingSnapshot: true,
-      transition,
-    });
-    if (!loaded || !currentSnapshot?.preview || currentSnapshotStale) {
-      throw new Error("The updated calendar is still being prepared. Please try again shortly.");
-    }
-    renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot?.session || {}, {
-      preserveScroll: true,
-      suppressInsightWarmup: true,
-    });
-    setStatus("Calendar refreshed.");
-  } catch (error) {
-    setStatus(normalizeAuthMessage(error?.message || "Could not refresh the calendar."), true);
-  } finally {
-    if (refreshCalendarButton) refreshCalendarButton.disabled = false;
-  }
 }
 
 async function loadCloudCalendarEvents(options = {}) {
@@ -19403,7 +19380,7 @@ function ensureEditableCustomEvent(event) {
   return customEventsForActiveCalendar().find((entry) => entry.id === event.id) || null;
 }
 
-function reconcileMaterializedPreviewCustomEvents() {
+function reconcileMaterializedPreviewCustomEvents(options = {}) {
   if (latestPreview?.customEventsMaterialized !== true) return;
   const restored = (latestPreview.events || [])
     .filter(isCustomPreviewEvent)
@@ -19414,7 +19391,7 @@ function reconcileMaterializedPreviewCustomEvents() {
     ...customEventsForActiveCalendar(),
     ...restored,
   ]);
-  if (customEventsForActiveCalendar().length !== before) {
+  if (customEventsForActiveCalendar().length !== before && options.suppressCloudSave !== true) {
     saveCurrentSessionState();
   }
 }
@@ -20252,7 +20229,7 @@ function renderWorkspaceFromSnapshot(snapshot, session = {}, options = {}) {
   clearDoctorAnalysisCache();
   restoredSessionState = session && typeof session === "object" ? session : {};
   applySessionState(restoredSessionState, { inheritedSettings: rosterDefaultSettings() });
-  reconcileMaterializedPreviewCustomEvents();
+  reconcileMaterializedPreviewCustomEvents({ suppressCloudSave: options.suppressCloudSave === true });
   hydrateInsightCacheFromSnapshot(currentSnapshot);
   pendingPreviewSnapToToday = options.preserveScroll !== true;
   renderSettings();

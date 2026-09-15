@@ -518,18 +518,21 @@ pause, and future maintenance work must not accidentally disable them.
   ceilings permanently. Sampling may be reduced only after the incident is
   attributed and sustained safe operation is demonstrated.
 
-### FR-28 — Explicit personal-calendar refresh
+### FR-28 — Automatic bounded personal-calendar refresh
 
-- **State:** Restored as an explicit user action while automatic Creator
-  startup hydration remains contained.
+- **State:** Restored as one automatic revision check after login while broad
+  Creator startup hydration remains contained. The temporary manual refresh
+  button was removed after its production canary served its purpose.
 - **Problem addressed:** A successful roster replacement changes the active D1
   events immediately, but an existing browser/R2 calendar snapshot can remain
   on its previous revision when automatic snapshot warm-up is disabled.
-- **Behaviour:** **Refresh calendar** performs one authenticated, date-bounded,
-  doctor-specific revalidation. If the saved snapshot is stale it rebuilds only
-  that visible calendar, coalesces repeated clicks and suppresses colleague-
-  insight warm-up. It does not open Admin, At a glance, roster automation or a
-  recurring poll.
+- **Behaviour:** After the cached calendar paints, one authenticated,
+  date-bounded, doctor-specific revision check runs only while the page is
+  visible. A matching browser revision avoids the R2 payload and rebuild. If
+  stale, the Creator path may rebuild only that visible calendar. Applying the
+  returned server snapshot suppresses colleague-insight warm-up and the former
+  redundant full cloud save. It does not open Admin, At a glance, roster
+  automation or a recurring poll.
 - **Permanent constraint:** Keep automatic Creator fan-out and global snapshot
   warm-up disabled until separately restored under FR-23/FR-26. This explicit
   action must retain the API request ceiling and the indexed doctor/date event

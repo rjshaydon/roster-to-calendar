@@ -53,6 +53,8 @@ assert.match(containedFinish, /cancelDeferredAccountContextLoad\(\)[\s\S]*cancel
   "contained startup must invalidate queued account and bootstrap work");
 assert.match(containedFinish, /renderWorkspaceFromSnapshot\([\s\S]*suppressInsightWarmup: true/,
   "rendering a saved Creator calendar must not schedule the automatic colleague-query warmup");
+assert.match(containedFinish, /queuePostLoginSnapshotRefresh\([\s\S]*allowInlineBuild: true/,
+  "contained Creator startup may schedule exactly one bounded personal-calendar revalidation");
 
 for (const [name, body] of [
   ["explicit login", section(/async function loginWithEmail[\s\S]*?(?=\nasync function restoreCloudState)/)],
@@ -103,8 +105,8 @@ assert.equal(visibleIdleTabs * visibleIdleMinutes * d1OperationsPerContainedIdle
 console.log(JSON.stringify({
   pausedActions: pausedResults,
   creatorStartup: {
-    explicitLoginAutomaticFollowUpActions: 0,
-    persistedLoginAutomaticFollowUpActions: 0,
+    explicitLoginAutomaticFollowUpActions: 1,
+    persistedLoginAutomaticFollowUpActions: 1,
     disabledAtAGlanceD1Operations: 0,
     visibleIdleTabs,
     visibleIdleMinutes,
