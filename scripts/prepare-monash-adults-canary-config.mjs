@@ -1,7 +1,12 @@
 import { chmod, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-const outputPath = resolve(process.argv[2] || "/private/tmp/wrangler.monash-adults-canary.toml");
+const args = process.argv.slice(2);
+const outputPath = resolve(args[0] || "/private/tmp/wrangler.monash-adults-canary.toml");
+const reviewedContentSha256 = String(args[1] || "").trim().toLowerCase();
+if (!/^[a-f0-9]{64}$/.test(reviewedContentSha256)) {
+  throw new Error("A reviewed 64-character SHA-256 is required as the second argument.");
+}
 const sourcePath = resolve("wrangler.toml");
 const source = await readFile(sourcePath, "utf8");
 const previewMarker = "[env.preview.vars]";
@@ -36,7 +41,7 @@ let canary = production
   .replace(/^ROSTER_AUTOMATION_QUEUE_ENABLED = "false"$/m, 'ROSTER_AUTOMATION_QUEUE_ENABLED = "true"')
   .replace(/^ROSTER_AUTOMATION_SOURCE_ALLOWLIST = ""$/m, 'ROSTER_AUTOMATION_SOURCE_ALLOWLIST = "monash-adults"')
   .replace(/^ROSTER_AUTOMATION_REVIEWED_FACT_LIMIT = "0"$/m, 'ROSTER_AUTOMATION_REVIEWED_FACT_LIMIT = "1250"')
-  .replace(/^ROSTER_AUTOMATION_REVIEWED_CONTENT_SHA256 = ""$/m, 'ROSTER_AUTOMATION_REVIEWED_CONTENT_SHA256 = "91176f5a1fb5e3d77976b675feae4a4015d827d71a8de75d2ebfe8ec96dc9044"');
+  .replace(/^ROSTER_AUTOMATION_REVIEWED_CONTENT_SHA256 = ""$/m, `ROSTER_AUTOMATION_REVIEWED_CONTENT_SHA256 = "${reviewedContentSha256}"`);
 canary += preview;
 
 for (const expected of [
@@ -44,7 +49,7 @@ for (const expected of [
   'ROSTER_AUTOMATION_QUEUE_ENABLED = "true"',
   'ROSTER_AUTOMATION_SOURCE_ALLOWLIST = "monash-adults"',
   'ROSTER_AUTOMATION_REVIEWED_FACT_LIMIT = "1250"',
-  'ROSTER_AUTOMATION_REVIEWED_CONTENT_SHA256 = "91176f5a1fb5e3d77976b675feae4a4015d827d71a8de75d2ebfe8ec96dc9044"',
+  `ROSTER_AUTOMATION_REVIEWED_CONTENT_SHA256 = "${reviewedContentSha256}"`,
 ]) {
   if (!canary.slice(0, canary.indexOf(previewMarker)).includes(expected)) throw new Error(`Canary setting was not generated: ${expected}`);
 }
@@ -64,7 +69,7 @@ process.stdout.write(`${JSON.stringify({
     ROSTER_AUTOMATION_QUEUE_ENABLED: "true",
     ROSTER_AUTOMATION_SOURCE_ALLOWLIST: "monash-adults",
     ROSTER_AUTOMATION_REVIEWED_FACT_LIMIT: "1250",
-    ROSTER_AUTOMATION_REVIEWED_CONTENT_SHA256: "91176f5a1fb5e3d77976b675feae4a4015d827d71a8de75d2ebfe8ec96dc9044",
+    ROSTER_AUTOMATION_REVIEWED_CONTENT_SHA256: reviewedContentSha256,
   },
   unchangedSafetyControlsVerified: requiredClosedSettings.size - 3,
   previewRemainsClosed: true,
