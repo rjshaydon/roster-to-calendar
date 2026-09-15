@@ -31,7 +31,11 @@ export function reviewedRosterFactLimit(env = {}, sourceId = "", contentHash = "
   const limit = Math.max(0, Math.min(Math.floor(Number(env.ROSTER_AUTOMATION_REVIEWED_FACT_LIMIT || 0)), 5000));
   const reviewedHash = String(env.ROSTER_AUTOMATION_REVIEWED_CONTENT_SHA256 || "").trim().toLowerCase();
   const suppliedHash = String(contentHash || "").trim().toLowerCase();
-  if (!limit || !/^[a-f0-9]{64}$/.test(reviewedHash) || suppliedHash !== reviewedHash) return 0;
+  if (!limit) return 0;
+  // A hash pins a one-shot canary to one reviewed workbook. Routine ingestion
+  // deliberately leaves it blank and relies on the exact source allowlist plus
+  // this hard incremental-fact ceiling for future provider versions.
+  if (reviewedHash && (!/^[a-f0-9]{64}$/.test(reviewedHash) || suppliedHash !== reviewedHash)) return 0;
   return limit;
 }
 

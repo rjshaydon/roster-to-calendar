@@ -104,6 +104,9 @@ assert.equal(reviewedRosterFactLimit(reviewedEnv, "monash-adults", reviewedHash)
 assert.equal(reviewedRosterFactLimit(reviewedEnv, "monash-adults", "b".repeat(64)), 0, "another workbook must not inherit the reviewed limit");
 assert.equal(reviewedRosterFactLimit(reviewedEnv, "monash-paeds", reviewedHash), 0, "another source must not inherit the reviewed limit");
 assert.equal(reviewedRosterFactLimit({ ...reviewedEnv, ROSTER_AUTOMATION_QUEUE_ENABLED: "false" }, "monash-adults", reviewedHash), 0, "the reviewed limit must close with the queue");
+const routineEnv = { ...reviewedEnv, ROSTER_AUTOMATION_REVIEWED_CONTENT_SHA256: "" };
+assert.equal(reviewedRosterFactLimit(routineEnv, "monash-adults", "b".repeat(64)), 1250, "routine future versions retain the exact-source hard fact ceiling without a pinned canary hash");
+assert.equal(reviewedRosterFactLimit(routineEnv, "monash-paeds", "b".repeat(64)), 0, "routine limits remain source-isolated");
 
 const scopedStatements = [];
 const scopedDb = {
