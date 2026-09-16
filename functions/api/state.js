@@ -5641,16 +5641,15 @@ async function buildDerivedDoctorProfileSnapshot(store, db, profile, ownerEmail 
   const doctorKeys = doctorDiagnostics.length
     ? [...new Set(doctorDiagnostics.map((row) => normalizeRosterName(row.doctorKey)).filter(Boolean))]
     : doctorKeysForOption(profile);
-  const doctorPairs = doctorDiagnostics.map((row) => ({ fileId: row.fileId, doctorKey: row.doctorKey }));
   const hospitalLocations = await loadAccountHospitalLocations(db, ownerEmail, session).catch(() => null);
-  const rosterIssues = doctorPairs.length
-    ? await queryDoctorIssuesForFileDoctorPairs(db, doctorPairs, requestedRange)
-    : await queryDoctorIssues(db, doctorKeys, requestedRange);
+  // This is an identity view, not a file-diagnostics report. Expanding a
+  // doctor's roster history into a large file/doctor OR predicate can exceed
+  // D1's native SQL statement budget. These indexed queries join only active
+  // roster files, so their shape stays constant as historical files grow.
+  const rosterIssues = await queryDoctorIssues(db, doctorKeys, requestedRange);
   const resolvedRosterEvents = applyEventOverrides(
     applyAccountHospitalLocations(
-      doctorPairs.length
-        ? await queryDoctorEventsForFileDoctorPairs(db, doctorPairs, requestedRange)
-        : await queryDoctorEvents(db, doctorKeys, requestedRange),
+      await queryDoctorEvents(db, doctorKeys, requestedRange),
       hospitalLocations || {},
       { includeLocations: settings.includeLocations !== false },
     ),

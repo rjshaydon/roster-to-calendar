@@ -918,7 +918,7 @@ assert.deepEqual(
 assert.match(d1CalendarSource, /export async function queryFacilityOverviewRange[\s\S]*roster_events\.source_type IN[\s\S]*roster_events\.start_date >= \?/, "By stream should query the requested EDs and date range in one database operation");
 assert.match(d1CalendarSource, /export async function queryFacilityOverviewCatalog[\s\S]*GROUP BY roster_events\.source_type[\s\S]*first_date[\s\S]*last_date/, "By stream metadata should collapse repeated roster events into a compact stream catalogue");
 assert.doesNotMatch(d1CalendarSource.match(/export async function queryFacilityOverviewRange[\s\S]*?export async function queryFacilityOverviewStaff/)?.[0] || "", /event_json|parseEvent\(/, "By stream should build lightweight events from indexed columns rather than parse full stored event JSON");
-assert.match(stateSource, /buildDerivedDoctorProfileSnapshot\(null, db, job\.profile, job\.ownerEmail \|\| "", \{[\s\S]*requestedRange[\s\S]*queryDoctorIssuesForFileDoctorPairs\(db, doctorPairs, requestedRange\)[\s\S]*queryDoctorEventsForFileDoctorPairs\(db, doctorPairs, requestedRange\)/, "Doctor profile snapshots should query only their bounded cache range");
+assert.match(stateSource, /buildDerivedDoctorProfileSnapshot\(null, db, job\.profile, job\.ownerEmail \|\| "", \{[\s\S]*requestedRange[\s\S]*queryDoctorIssues\(db, doctorKeys, requestedRange\)[\s\S]*queryDoctorEvents\(db, doctorKeys, requestedRange\)/, "Doctor profile snapshots should query the bounded cache range through indexed doctor keys");
 assert.match(stateSource, /DOCTOR_PROFILE_SNAPSHOT_BUILDING_RETRY_MS = 2 \* 60 \* 1000[\s\S]*buildingRetryMs: DOCTOR_PROFILE_SNAPSHOT_BUILDING_RETRY_MS/, "Interrupted doctor profile snapshot builds should recover without blocking the switcher for fifteen minutes");
 assert.match(appSource, /function doctorProfileLoadIsTransient[\s\S]*502\|503\|CPU\|memory[\s\S]*attempt < retryDelays\.length[\s\S]*if \(!doctorProfileLoadIsTransient\(error\)\) throw error/, "Doctor profile switching should tolerate transient Worker overload while a bounded snapshot is being prepared");
 assert.match(styleSource, /\.facility-overview-by-stream \{[\s\S]*grid-template-columns:[\s\S]*\.facility-overview-by-stream-selectors \{[\s\S]*position: sticky[\s\S]*@media \(max-width: 900px\)[\s\S]*\.facility-overview-by-stream \{[\s\S]*grid-template-columns: 1fr/, "By stream should use a desktop selector rail and stack it on narrow screens");
@@ -1523,6 +1523,11 @@ assert.match(
   /async function queryDoctorProfileCalendarRevision[\s\S]*queryCalendarRevision/,
   "doctor profile cache validation should use a lightweight calendar revision",
 );
+const doctorProfileBuilder = stateSource.match(/async function buildDerivedDoctorProfileSnapshot[\s\S]*?async function filterSnapshotPreviewIssuesForOwner/)?.[0] || "";
+assert.match(doctorProfileBuilder, /queryDoctorIssues\(db, doctorKeys, requestedRange\)[\s\S]*queryDoctorEvents\(db, doctorKeys, requestedRange\)/,
+  "doctor-profile builds should use bounded indexed doctor-key queries");
+assert.doesNotMatch(doctorProfileBuilder, /queryDoctor(?:Issues|Events)ForFileDoctorPairs/,
+  "doctor-profile builds must not expand roster history into file/doctor OR predicates");
 assert.doesNotMatch(
   (await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8"))
     .match(/if \(action === "save"\)[\s\S]*?if \(action === "loadDoctorProfile"\)/)?.[0] || "",
