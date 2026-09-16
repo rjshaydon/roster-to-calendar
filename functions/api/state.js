@@ -1772,10 +1772,6 @@ export async function onRequestPost(context) {
         state: sanitizeState(null),
       });
       const requestedAliases = sanitizeDoctorAccountResolutionInput({ aliases: body?.aliases }).aliases;
-      const calendarRevision = await queryDoctorProfileCalendarRevision(context.env.ROSTER_DB, {
-        ...profile,
-        aliases: requestedAliases,
-      }, email).catch(() => "");
       // Do not treat a matching browser-wide revision as sufficient here.
       // A doctor-profile snapshot has its own cache record and can predate a
       // retained-file reparse even when the browser has a current revision
@@ -1800,7 +1796,7 @@ export async function onRequestPost(context) {
         snapshotSource: snapshotInfo.snapshotSource,
         snapshotRevision: snapshotInfo.snapshotRevision,
         stale: snapshotInfo.stale,
-        calendarRevision,
+        calendarRevision: snapshotInfo.calendarRevision || "",
         issueConfig: await buildIssueConfig(null, ""),
       });
     }
@@ -5552,7 +5548,7 @@ async function loadDoctorProfileSnapshotPayload(context, profile, ownerEmail = "
   });
   const descriptor = buildDoctorProfileSnapshotCacheDescriptor(profile, requestedRange);
   const calendarRevision = await queryDoctorProfileCalendarRevision(db, profile, ownerEmail).catch(() => "");
-  return await loadSnapshotPayloadFromRegistry(context, {
+  const payload = await loadSnapshotPayloadFromRegistry(context, {
     descriptor,
     calendarRevision,
     buildingRetryMs: DOCTOR_PROFILE_SNAPSHOT_BUILDING_RETRY_MS,
@@ -5569,6 +5565,7 @@ async function loadDoctorProfileSnapshotPayload(context, profile, ownerEmail = "
       reason: options.reason || "inline-build",
     }),
   });
+  return { ...payload, calendarRevision };
 }
 
 async function buildAndStoreDoctorProfileSnapshot(context, job = {}) {

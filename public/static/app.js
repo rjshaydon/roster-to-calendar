@@ -14503,10 +14503,9 @@ async function validateDoctorProfileCalendarInBackground(doctor, previousState, 
     result = await loadUnclaimedDoctorCalendar(doctor, previousState, {
       profile: options.profile,
       cachedRevision: "",
-      // Do not build a profile snapshot inside the interactive Worker request.
-      // Large profiles can exceed Cloudflare's CPU budget; the registry warm-up
-      // and the bounded poll below complete it without failing the switch.
-      allowInlineBuild: false,
+      // This is one explicitly requested doctor. Its indexed build remains
+      // inside the request guard and avoids hidden waitUntil work on a miss.
+      allowInlineBuild: true,
       transition: options.transition,
     });
   } catch (error) {
@@ -14540,7 +14539,7 @@ function doctorProfileLoadIsTransient(error) {
 }
 
 async function waitForDoctorProfileCalendarBuild(doctor, previousState, options = {}) {
-  const retryDelays = [250, 500, 1000, 1500, 2500, 4000, 5000];
+  const retryDelays = [1000];
   let attempt = 0;
   while (calendarTransitionStillCurrent(options.transition) && attempt < retryDelays.length) {
     const delayMs = retryDelays[Math.min(attempt, retryDelays.length - 1)];
@@ -14575,7 +14574,9 @@ async function enterUserAccount(email) {
     return;
   }
   cancelScheduledCloudStateSave();
-  const outgoingSave = capturePendingCloudStateSave() || outgoingSnapshotSavePayload(previousState);
+  // Viewing another doctor is not an edit. Preserve only a save that was
+  // already pending instead of writing the calendar being left.
+  const outgoingSave = capturePendingCloudStateSave();
   if (outgoingSave) queueBackgroundCloudStateSave(outgoingSave, { delayMs: 1500 });
 
   closeAccountsModal();
@@ -14639,7 +14640,9 @@ async function enterDoctorProfileView(doctor) {
   const creatorEmail = authUserEmail || currentUserEmail;
   const creatorPassword = authUserPassword || currentUserPassword;
   cancelScheduledCloudStateSave();
-  const outgoingSave = capturePendingCloudStateSave() || outgoingSnapshotSavePayload(previousState);
+  // Viewing another doctor is not an edit. Preserve only a save that was
+  // already pending instead of writing the calendar being left.
+  const outgoingSave = capturePendingCloudStateSave();
   if (outgoingSave) queueBackgroundCloudStateSave(outgoingSave, { delayMs: 1500 });
   const profile = doctorProfileForDoctor(doctor);
   const targetContext = profile ? calendarSnapshotContext({
@@ -14884,6 +14887,7 @@ async function fetchDoctorProfileState(profile, options = {}) {
     aliases: profile.aliases,
     cachedRevision: options.cachedRevision || "",
     allowInlineBuild: options.allowInlineBuild !== false,
+    skipRebuild: options.allowInlineBuild === false,
   };
   let response = await fetch("/api/state", {
     method: "POST",

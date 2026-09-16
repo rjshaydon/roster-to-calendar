@@ -1178,8 +1178,13 @@ assert.match(
 assert.match(appSource, /let cloudStateSaveQueue = Promise\.resolve\(\);/, "cloud saves should be serialized");
 assert.match(
   appSource.match(/async function enterUserAccount[\s\S]*?async function enterDoctorProfileView/)?.[0] || "",
-  /cancelScheduledCloudStateSave\(\)[\s\S]*outgoingSnapshotSavePayload\(previousState\)[\s\S]*queueBackgroundCloudStateSave\(outgoingSave, \{ delayMs: 1500 \}\)/,
-  "switching from the creator account should queue the outgoing profile save without blocking entry",
+  /cancelScheduledCloudStateSave\(\)[\s\S]*capturePendingCloudStateSave\(\)[\s\S]*queueBackgroundCloudStateSave\(outgoingSave, \{ delayMs: 1500 \}\)/,
+  "switching from the creator account should preserve an already-pending edit without inventing a navigation save",
+);
+assert.doesNotMatch(
+  appSource.match(/async function enterUserAccount[\s\S]*?async function enterDoctorProfileView/)?.[0] || "",
+  /outgoingSnapshotSavePayload/,
+  "claimed-account navigation must remain read-only when there is no pending edit",
 );
 assert.match(
   appSource.match(/async function enterUserAccount[\s\S]*?async function enterDoctorProfileView/)?.[0] || "",
@@ -1384,8 +1389,8 @@ assert.match(
 );
 assert.match(
   appSource.match(/async function validateDoctorProfileCalendarInBackground[\s\S]*?async function enterUserAccount/)?.[0] || "",
-  /browser profile cache can be complete enough to render immediately[\s\S]*cachedRevision: ""[\s\S]*allowInlineBuild: false[\s\S]*waitForDoctorProfileCalendarBuild/,
-  "explicit Creator profile switching should obtain the profile's authoritative server snapshot without login-path polling",
+  /browser profile cache can be complete enough to render immediately[\s\S]*cachedRevision: ""[\s\S]*allowInlineBuild: true[\s\S]*waitForDoctorProfileCalendarBuild/,
+  "explicit Creator profile switching should obtain the profile's authoritative server snapshot with one guarded indexed build",
 );
 assert.match(
   appSource.match(/async function waitForDoctorProfileCalendarBuild[\s\S]*?async function enterUserAccount/)?.[0] || "",
@@ -1426,6 +1431,21 @@ assert.match(
   appSource.match(/async function validateClaimedAccountCalendarInBackground[\s\S]*?async function validateDoctorProfileCalendarInBackground/)?.[0] || "",
   /preserveRenderedSnapshot && visibleSnapshotIsCurrent\(\{ requireNotStale: true \}\)/,
   "claimed account background validation should skip network work when the browser cache is current",
+);
+assert.match(
+  appSource.match(/async function validateDoctorProfileCalendarInBackground[\s\S]*?function doctorProfileLoadIsTransient/)?.[0] || "",
+  /allowInlineBuild: true/,
+  "an explicit doctor-profile switch should perform one guarded indexed build instead of hidden background work",
+);
+assert.doesNotMatch(
+  appSource.match(/async function enterDoctorProfileView[\s\S]*?function doctorProfileForDoctor/)?.[0] || "",
+  /outgoingSnapshotSavePayload/,
+  "viewing a doctor profile must not save the calendar being left",
+);
+assert.match(
+  appSource.match(/async function waitForDoctorProfileCalendarBuild[\s\S]*?async function enterUserAccount/)?.[0] || "",
+  /const retryDelays = \[1000\]/,
+  "a failed doctor-profile switch may make at most one bounded follow-up read",
 );
 assert.match(
   appSource.match(/async function loginWithEmail[\s\S]*?async function restoreCloudState/)?.[0] || "",
@@ -5674,6 +5694,7 @@ const d1CurrentRevisionCheck = await postState(d1StateStore, {
 }, d1Store);
 assert.equal(d1CurrentRevisionCheck.snapshotCurrent, true, "cachedRevision should let the server confirm the visible calendar is current");
 assert.equal(d1CurrentRevisionCheck.snapshot, null, "current-revision checks should not resend or replace the snapshot");
+d1Store.executedSql = [];
 const d1FastSwitchCalendar = await postState(d1StateStore, {
   action: "loadCalendarEvents",
   email: "rhaydon@gmail.com",
@@ -5685,6 +5706,7 @@ const d1FastSwitchCalendar = await postState(d1StateStore, {
 }, d1Store);
 assert.equal(d1FastSwitchCalendar.snapshotSource, "server-cache", "Creator account switching should read the ready registry artifact without a live revision traversal");
 assert.equal(d1FastSwitchCalendar.snapshot?.preview?.derivedFromD1, true, "the bounded switch path should return the claimed account calendar");
+assert.ok(d1Store.executedSql.length <= 8, `Creator account switching should remain a small exact-key trace; observed ${d1Store.executedSql.length} statements`);
 const d1UserRegistryKey = [...d1Store.snapshotRegistry.keys()].find((key) => key.startsWith(`user-account|d1-user@example.com|${d1Doctor.key}|`));
 assert.ok(d1UserRegistryKey, "claimed D1 account should have a snapshot registry entry");
 let d1UserRegistry = d1Store.snapshotRegistry.get(d1UserRegistryKey);
@@ -6420,6 +6442,7 @@ const d1ClaimResolution = await postState(d1StateStore, {
 }, d1Store);
 assert.equal(d1ClaimResolution.mode, "claimed-account");
 assert.equal(d1ClaimResolution.email, "d1-user@example.com");
+d1Store.executedSql = [];
 const d1DoctorProfile = await postState(d1StateStore, {
   action: "loadDoctorProfile",
   email: "rhaydon@gmail.com",
@@ -6433,6 +6456,7 @@ assert.equal(d1DoctorProfile.snapshot?.preview?.derivedFromD1, true);
 assert.equal(d1DoctorProfile.snapshotStale, false);
 assert.ok(d1DoctorProfile.snapshot.preview.events.length > 0);
 assert.ok(d1DoctorProfile.snapshot.fileRefs.some((ref) => ref.id === d1RepositoryFile), "D1 doctor profile should derive file refs without KV repository index");
+assert.ok(d1Store.executedSql.length <= 20, `an uncached doctor-profile build must remain inside the guarded statement budget; observed ${d1Store.executedSql.length} statements`);
 const d1DoctorProfileFacilityOverviewAccess = await postState(d1StateStore, {
   action: "queryDoctorProfileFacilityOverviewAccess",
   email: "rhaydon@gmail.com",
