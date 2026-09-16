@@ -1438,6 +1438,11 @@ assert.match(
   "a failed switch resolution should restore the picker label to the active calendar",
 );
 assert.match(
+  appSource.match(/async function loadCloudCalendarEvents[\s\S]*?function cloudCalendarEventRange/)?.[0] || "",
+  /responseMode: options\.allowInlineBuild === false \? "fast" : "full"[\s\S]*response\.status === 503 && await calendarLoadResponseIsRetryable\(response\)/,
+  "non-building calendar switches should use the fast registry path and must not retry a D1-budget rejection",
+);
+assert.match(
   stateSource.match(/async function loadFastAccountSnapshotPayload[\s\S]*?function scheduleAccountSnapshotRebuild/)?.[0] || "",
   /scheduleFastAccountSnapshotValidation[\s\S]*revisionSkipped: true[\s\S]*function scheduleFastAccountSnapshotValidation[\s\S]*return false/,
   "fast login snapshots should defer revision validation without attaching snapshot rebuilding to authentication",
@@ -2186,7 +2191,7 @@ assert.match(
 );
 assert.match(
   appSource.match(/function queuePostLoginSnapshotRefresh[\s\S]*?function markLoginPhase/)?.[0] || "",
-  /allowInlineBuild: false[\s\S]*currentSnapshotStale[\s\S]*preserveScroll: true[\s\S]*backgroundCalendarUpdated/,
+  /allowInlineBuild: options\.allowInlineBuild === true[\s\S]*currentSnapshotStale[\s\S]*preserveScroll: true[\s\S]*backgroundCalendarUpdated/,
   "stale-while-revalidate should replace a rebuilt calendar after paint without moving the visible calendar",
 );
 assert.match(
@@ -5669,6 +5674,17 @@ const d1CurrentRevisionCheck = await postState(d1StateStore, {
 }, d1Store);
 assert.equal(d1CurrentRevisionCheck.snapshotCurrent, true, "cachedRevision should let the server confirm the visible calendar is current");
 assert.equal(d1CurrentRevisionCheck.snapshot, null, "current-revision checks should not resend or replace the snapshot");
+const d1FastSwitchCalendar = await postState(d1StateStore, {
+  action: "loadCalendarEvents",
+  email: "rhaydon@gmail.com",
+  password: creatorPassword,
+  targetEmail: "d1-user@example.com",
+  doctorKey: d1Doctor.key,
+  allowInlineBuild: false,
+  responseMode: "fast",
+}, d1Store);
+assert.equal(d1FastSwitchCalendar.snapshotSource, "server-cache", "Creator account switching should read the ready registry artifact without a live revision traversal");
+assert.equal(d1FastSwitchCalendar.snapshot?.preview?.derivedFromD1, true, "the bounded switch path should return the claimed account calendar");
 const d1UserRegistryKey = [...d1Store.snapshotRegistry.keys()].find((key) => key.startsWith(`user-account|d1-user@example.com|${d1Doctor.key}|`));
 assert.ok(d1UserRegistryKey, "claimed D1 account should have a snapshot registry entry");
 let d1UserRegistry = d1Store.snapshotRegistry.get(d1UserRegistryKey);

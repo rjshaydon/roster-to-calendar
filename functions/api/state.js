@@ -2389,18 +2389,31 @@ export async function onRequestPost(context) {
         startDate: body?.startDate,
         endDate: body?.endDate,
       });
-      const payload = await loadAccountSnapshotPayload(context, {
-        targetRecord,
-        prepared,
-        startDate: requestedRange.startDate,
-        endDate: requestedRange.endDate,
-        doctorKey: normalizeRosterName(body?.doctorKey || ""),
-        cachedRevision: body?.cachedRevision || "",
-        allowInlineBuild: body?.allowInlineBuild !== false,
-        skipRebuild: body?.skipRebuild === true,
-        diagnosticsRequested: body?.diagnostics === true,
-        reason: "loadCalendarEvents",
-      });
+      // A Creator account switch is a quota-sensitive read. When the browser
+      // forbids an inline build, use only the exact registry row and its R2
+      // artifact; calculating a live revision first can exhaust the request's
+      // D1 statement guard before the saved snapshot is returned.
+      const payload = body?.responseMode === "fast" && body?.allowInlineBuild === false
+        ? await loadFastAccountSnapshotPayload(context, {
+            targetRecord,
+            prepared,
+            startDate: requestedRange.startDate,
+            endDate: requestedRange.endDate,
+            doctorKey: normalizeRosterName(body?.doctorKey || ""),
+            cachedRevision: body?.cachedRevision || "",
+          })
+        : await loadAccountSnapshotPayload(context, {
+            targetRecord,
+            prepared,
+            startDate: requestedRange.startDate,
+            endDate: requestedRange.endDate,
+            doctorKey: normalizeRosterName(body?.doctorKey || ""),
+            cachedRevision: body?.cachedRevision || "",
+            allowInlineBuild: body?.allowInlineBuild !== false,
+            skipRebuild: body?.skipRebuild === true,
+            diagnosticsRequested: body?.diagnostics === true,
+            reason: "loadCalendarEvents",
+          });
       return Response.json(payload);
     }
 

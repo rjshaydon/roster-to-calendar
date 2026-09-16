@@ -17381,6 +17381,7 @@ async function loadCloudCalendarEvents(options = {}) {
     cachedRevision: options.cachedRevision || "",
     allowInlineBuild: options.allowInlineBuild !== false,
     skipRebuild: options.skipRebuild === true,
+    responseMode: options.allowInlineBuild === false ? "fast" : "full",
   };
   let response = await fetch("/api/state", {
     method: "POST",
@@ -17390,7 +17391,7 @@ async function loadCloudCalendarEvents(options = {}) {
   // A Worker resource-limit response is normally transient. Retry only that
   // failure and forbid an inline rebuild so the recovery request remains a
   // cheap registry/R2 read and cannot repeat the expensive work.
-  if (response.status === 503) {
+  if (response.status === 503 && await calendarLoadResponseIsRetryable(response)) {
     response = await fetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -17441,6 +17442,15 @@ async function loadCloudCalendarEvents(options = {}) {
     });
   }
   return true;
+}
+
+async function calendarLoadResponseIsRetryable(response) {
+  try {
+    const payload = await response.clone().json();
+    return payload?.error !== "This request was stopped by the database safety limit.";
+  } catch {
+    return true;
+  }
 }
 
 function cloudCalendarEventRange() {
