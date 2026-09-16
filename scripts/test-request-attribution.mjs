@@ -83,12 +83,12 @@ try {
     }),
     env: { ROSTER_DB: budgetDb },
     next: async () => {
-      for (let index = 0; index < 33; index += 1) await budgetContext.env.ROSTER_DB.prepare("SELECT 1").all();
+      for (let index = 0; index < 65; index += 1) await budgetContext.env.ROSTER_DB.prepare("SELECT 1").all();
       return Response.json({ ok: true });
     },
   };
   const overBudget = await onRequest(budgetContext);
-  assert.equal(overBudget.status, 503, "the 33rd login statement must be rejected before execution");
+  assert.equal(overBudget.status, 503, "the 65th login statement must be rejected before execution");
 
   let bootstrapBatchCalls = 0;
   const bootstrapDb = {

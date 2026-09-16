@@ -29,7 +29,10 @@ const FACILITY_MATERIALIZATION_D1_STATEMENT_LIMITS = Object.freeze({
   finalize: 16,
 });
 const ACTION_D1_STATEMENT_LIMITS = Object.freeze({
-  login: 32,
+  // Login is already constrained to the fast account-envelope path. Keep the
+  // normal request ceiling here: the former 32-statement override could lock
+  // users out while providing no additional row-read protection.
+  login: 64,
   loadAccountContext: 48,
   loadCalendarEvents: 48,
   save: 64,
