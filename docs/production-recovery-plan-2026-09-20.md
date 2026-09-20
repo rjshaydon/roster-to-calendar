@@ -178,9 +178,11 @@ Never restore the legacy live At a glance history scans.
 
 ## Immediate next action
 
-Gates 0–5 are complete. The next action is Gate 6: inspect and restore DDH as
-one isolated implementation class before touching VHH. Do not enable contact
-or allocation flows as part of roster restoration.
+Gates 0–5 are complete. DDH reached its isolated provider check but the
+FindMyShift service returned HTTP 503 twice, so DDH is paused without changing
+its retained roster. Continue Gate 6 with one VHH canary through the disabled
+instant Production flow. Do not enable the automatic VHH flow, contacts or
+allocations during the canary.
 
 ## Completed evidence — 20 September 2026
 
@@ -298,3 +300,29 @@ or allocation flows as part of roster restoration.
   rejection and an unexpected response. The next deployment preserves only
   the safe code, HTTP status, content type and response size; it does not expose
   credentials, provider response bodies, roster content or clinician details.
+- The diagnostic retry at 18:02 AEST returned `http-error, HTTP 503`.
+  Attribution recorded four statements, one row read and two compact status
+  writes for the provider check. No ingestion or GitHub processor was started
+  and the retained DDH roster remained active. This is an upstream provider
+  availability failure, not a D1 quota or statement-budget failure. Remove DDH
+  from the active canary allowlist and retry it on a later provider window.
+
+### Gate 6 VHH preflight
+
+- Local VHH extraction, source-isolation and roster-ingress idempotency suites
+  pass. An unchanged VHH provider revision or identical content writes zero D1
+  rows and zero R2 objects.
+- `Sync VHH Active Medical Roster to Production` is the disabled instant
+  canary. It reads exactly
+  `/Shared Documents/Medical/Rosters/Active Medical Roster.xlsx`, uses the
+  SharePoint ETag as `providerVersion`, and submits the raw workbook with exact
+  source ID `vhh-active-medical-roster` to the bounded ingress endpoint.
+- `VHH Active Medical Roster to Production` is the disabled automated flow.
+  Its trigger currently watches the entire `/Shared Documents/Medical/Rosters`
+  folder and its retained run history contains multiple long-running failures.
+  It is not authorised for routine enablement until its trigger is narrowed to
+  the exact workbook and its retry behaviour is reviewed.
+- For the controlled VHH canary, retain MMC and MCH, replace DDH with exact VHH
+  in the server allowlist, keep both VHH flows off, then run the instant flow
+  exactly once. Reconcile ingestion and processor attribution before any
+  calendar test or unchanged replay.
