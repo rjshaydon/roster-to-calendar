@@ -1,4 +1,5 @@
 const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
+const RAW_D1_BINDING = Symbol("raw-d1-binding");
 const STATE_ACTIONS = new Set([
   "acceptInvite", "adminCreateUser", "adminLoadUser", "adminSendInvite", "appendConsoleMessage",
   "calendarStoreStatus", "claimRosterName", "clearFacilityStaffDesignation", "clearUserError",
@@ -47,13 +48,15 @@ export async function onRequest(context) {
   const action = await safeStateAction(context.request, url.pathname);
   const limit = await requestD1StatementLimit(context.request, url.pathname, action);
   let contained = requestContainmentReason(url.pathname, action, sharedEnv);
-  const d1 = contained ? emptyD1Meter() : createD1Meter(sharedEnv.ROSTER_DB, limit);
+  const originalD1Binding = contained ? sharedEnv.ROSTER_DB : unwrapD1Binding(sharedEnv.ROSTER_DB);
+  const d1 = contained ? emptyD1Meter() : createD1Meter(originalD1Binding, limit);
   let response;
 
-  // Cloudflare may reuse the bindings object between requests in one isolate.
-  // Never replace a property on that shared object: doing so nests request
-  // meters and lets an older request's statement count reject a later login.
-  if (d1.binding) context.env = { ...sharedEnv, ROSTER_DB: d1.binding };
+  // Pages handlers read bindings from the supplied env object, so install the
+  // request meter only while the downstream handler runs. Always restore the
+  // raw binding, and unwrap defensively in case an interrupted older isolate
+  // left a metered proxy behind.
+  if (d1.binding) sharedEnv.ROSTER_DB = d1.binding;
 
   try {
     response = contained
@@ -72,6 +75,7 @@ export async function onRequest(context) {
     }
     throw error;
   } finally {
+    if (d1.binding && sharedEnv.ROSTER_DB === d1.binding) sharedEnv.ROSTER_DB = originalD1Binding;
     const record = {
       event: "api-invocation",
       deployment: String(context.env.CF_PAGES_COMMIT_SHA || "unknown").slice(0, 40),
@@ -145,6 +149,18 @@ function requestOperationPhase(context) {
 
 function emptyD1Meter() {
   return { binding: null, statementCount: 0, rowsRead: 0, rowsWritten: 0, metadataComplete: true };
+}
+
+function unwrapD1Binding(database) {
+  let binding = database;
+  const seen = new Set();
+  while (binding && !seen.has(binding)) {
+    seen.add(binding);
+    const raw = binding[RAW_D1_BINDING];
+    if (!raw || raw === binding) break;
+    binding = raw;
+  }
+  return binding;
 }
 
 async function safeStateAction(request, pathname) {
@@ -239,6 +255,7 @@ function createD1Meter(database, limit) {
   if (!database?.prepare) return { ...state, binding: database, get statementCount() { return state.statementCount; }, get rowsRead() { return state.rowsRead; }, get rowsWritten() { return state.rowsWritten; }, get metadataComplete() { return state.metadataComplete; } };
   const binding = new Proxy(database, {
     get(target, property) {
+      if (property === RAW_D1_BINDING) return unwrapD1Binding(target);
       if (property === "prepare") return (sql) => {
         const statement = target.prepare(sql);
         return wrapStatement(statement);

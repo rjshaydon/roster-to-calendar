@@ -228,9 +228,14 @@ switching until that interval has settled and reconciled.
   object. A reused isolate could therefore wrap an already-metered binding;
   feed requests accumulated against an older inner meter and a later login was
   rejected on its first statement.
-- The meter now creates a request-local environment containing the wrapped D1
-  binding and never mutates the shared bindings object. A regression test runs
-  two 40-statement requests against the same supplied environment: both retain
-  independent 64-statement budgets and the original binding remains unchanged.
+- A first correction using a cloned environment restored login but Pages did
+  not pass that replacement environment to the downstream handler, so its
+  attribution recorded zero metered statements. That version is not the final
+  safety implementation.
+- The final correction unwraps any stale meter, installs a fresh meter only for
+  the duration of the downstream request, and restores the raw binding in the
+  middleware `finally` block. A regression test runs two 40-statement requests
+  against the same supplied environment: both retain independent 64-statement
+  budgets and the original binding is restored after each request.
 - Gate 3 must restart after the corrected deployment. The failed login is not
   evidence against the bounded doctor-profile query, which was never reached.
