@@ -218,3 +218,19 @@ switching until that interval has settled and reconciled.
 - Focused quota, attribution, client retry, Creator login containment, source
   isolation, database-cost and full representative fixture suites pass. No
   statement ceiling was raised.
+
+### Gate 3 first attempt and remediation
+
+- The first login-only canary on `99d150d3` failed at 15:36 AEST. Attribution
+  recorded `login`, status 503, `d1-statement-budget`, one statement, zero rows
+  and zero writes. This ruled out expensive authentication and account quota.
+- The request meter had replaced `ROSTER_DB` on the supplied environment
+  object. A reused isolate could therefore wrap an already-metered binding;
+  feed requests accumulated against an older inner meter and a later login was
+  rejected on its first statement.
+- The meter now creates a request-local environment containing the wrapped D1
+  binding and never mutates the shared bindings object. A regression test runs
+  two 40-statement requests against the same supplied environment: both retain
+  independent 64-statement budgets and the original binding remains unchanged.
+- Gate 3 must restart after the corrected deployment. The failed login is not
+  evidence against the bounded doctor-profile query, which was never reached.

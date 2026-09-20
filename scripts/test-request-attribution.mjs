@@ -125,6 +125,29 @@ try {
   assert.match(logs.at(-1), /"operationPhase":"active-events"/);
   assert.match(logs.at(-1), /"contained":"d1-statement-budget"/);
 
+  const sharedDb = {
+    prepare() {
+      return { async all() { return { results: [], meta: { rows_read: 1, rows_written: 0 } }; } };
+    },
+  };
+  const sharedEnv = { ROSTER_DB: sharedDb, CF_PAGES_COMMIT_SHA: "shared-env-test" };
+  for (let requestIndex = 0; requestIndex < 2; requestIndex += 1) {
+    const isolatedContext = {
+      request: new Request("https://example.test/api/state", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "login" }),
+      }),
+      env: sharedEnv,
+    };
+    isolatedContext.next = async () => {
+      for (let index = 0; index < 40; index += 1) await isolatedContext.env.ROSTER_DB.prepare("SELECT 1").all();
+      return Response.json({ ok: true });
+    };
+    const isolatedResponse = await onRequest(isolatedContext);
+    assert.equal(isolatedResponse.status, 200, "each request must receive a fresh independent statement budget");
+  }
+  assert.equal(sharedEnv.ROSTER_DB, sharedDb, "request metering must never replace the shared D1 binding");
+
   let bootstrapBatchCalls = 0;
   const bootstrapDb = {
     prepare() {

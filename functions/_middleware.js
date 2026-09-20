@@ -41,15 +41,19 @@ const ACTION_D1_STATEMENT_LIMITS = Object.freeze({
 
 export async function onRequest(context) {
   const startedAt = Date.now();
+  const sharedEnv = context.env || {};
   const url = new URL(context.request.url);
   const requestId = context.request.headers.get("cf-ray") || crypto.randomUUID();
   const action = await safeStateAction(context.request, url.pathname);
   const limit = await requestD1StatementLimit(context.request, url.pathname, action);
-  let contained = requestContainmentReason(url.pathname, action, context.env);
-  const d1 = contained ? emptyD1Meter() : createD1Meter(context.env.ROSTER_DB, limit);
+  let contained = requestContainmentReason(url.pathname, action, sharedEnv);
+  const d1 = contained ? emptyD1Meter() : createD1Meter(sharedEnv.ROSTER_DB, limit);
   let response;
 
-  if (d1.binding) context.env.ROSTER_DB = d1.binding;
+  // Cloudflare may reuse the bindings object between requests in one isolate.
+  // Never replace a property on that shared object: doing so nests request
+  // meters and lets an older request's statement count reject a later login.
+  if (d1.binding) context.env = { ...sharedEnv, ROSTER_DB: d1.binding };
 
   try {
     response = contained
