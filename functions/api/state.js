@@ -498,9 +498,11 @@ export async function onRequestPost(context) {
       }, { label: "FindMyShift automation request" });
       const result = await response.json().catch(() => ({}));
       if (!response.ok || !result?.ok) {
+        const diagnostic = publicFindmyshiftDiagnostic(result?.diagnostic);
         return Response.json({
-          error: String(result?.error || "Controlled FindMyShift sync could not be queued."),
+          error: findmyshiftFailureMessage(result?.error || "Controlled FindMyShift sync could not be queued.", diagnostic),
           status: String(result?.status || "failed"),
+          diagnostic,
         }, { status: 422 });
       }
       return Response.json({
@@ -541,9 +543,11 @@ export async function onRequestPost(context) {
         }, { label: "FindMyShift refresh request" });
         const result = await response.json().catch(() => ({}));
         if (!response.ok || !result?.ok) {
+          const diagnostic = publicFindmyshiftDiagnostic(result?.diagnostic);
           return Response.json({
-            error: String(result?.error || "FindMyShift could not be refreshed."),
+            error: findmyshiftFailureMessage(result?.error || "FindMyShift could not be refreshed.", diagnostic),
             status: String(result?.status || "failed"),
+            diagnostic,
           }, { status: 422 });
         }
         return Response.json({
@@ -7142,6 +7146,22 @@ function safeFindmyshiftFailureDiagnostic(error) {
     contentType: String(source.contentType || "").slice(0, 80),
     responseBytes: Number(source.responseBytes || 0),
   };
+}
+
+function publicFindmyshiftDiagnostic(value) {
+  const source = value && typeof value === "object" ? value : {};
+  return {
+    code: String(source.code || "request-failed").slice(0, 40),
+    status: Math.max(0, Math.min(Number(source.status || 0), 599)),
+    contentType: String(source.contentType || "").slice(0, 80),
+    responseBytes: Math.max(0, Number(source.responseBytes || 0)),
+  };
+}
+
+function findmyshiftFailureMessage(message, diagnostic) {
+  const base = String(message || "FindMyShift roster check failed.").replace(/[.\s]+$/, "");
+  const detail = [diagnostic?.code, diagnostic?.status ? `HTTP ${diagnostic.status}` : ""].filter(Boolean).join(", ");
+  return detail ? `${base} (${detail}).` : `${base}.`;
 }
 
 async function parserRuleRevision(db) {

@@ -283,3 +283,18 @@ or allocation flows as part of roster restoration.
   unchanged path does not rewrite roster facts or derived data.
 - At 16:15 AEST the known MMC roster change was correct in both the application
   calendar and the subscribed Apple Calendar feed. This completes Gate 5.
+
+### Gate 6 DDH opening check
+
+- Production commit `6b695d4c` added only `dandenong-findmyshift` to the
+  automated roster source allowlist. The separate watchdog Worker was not
+  deployed, so this did not create background polling.
+- The first Creator-controlled refresh at 17:55 AEST failed before ingestion.
+  Attribution recorded 5 statements across the outer refresh and provider
+  check, 4 rows read and 2 compact source-status writes. No GitHub processor
+  was dispatched and the active DDH roster was not replaced.
+- The provider-check handler previously discarded its safe failure diagnostic,
+  leaving no historical distinction between rate limiting, an HTTP/provider
+  rejection and an unexpected response. The next deployment preserves only
+  the safe code, HTTP status, content type and response size; it does not expose
+  credentials, provider response bodies, roster content or clinician details.

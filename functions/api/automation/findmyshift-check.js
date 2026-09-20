@@ -114,18 +114,33 @@ export async function onRequestPost(context) {
     const lastError = isTransientFindmyshiftRateLimitError(errorMessage) && current?.lastSuccessAt ? "" : errorMessage;
     await saveSource(context, current, { lastCheckedAt: now, lastError });
     const incomplete = error?.code === "findmyshift-incomplete-ddh-assignment" || isIncompleteDandenongAssignmentError(error?.message);
+    const diagnostic = safeFindmyshiftDiagnostic(error);
     const exceptions = Array.isArray(error?.findmyshiftAssignmentExceptions)
       ? error.findmyshiftAssignmentExceptions.slice(0, 20)
       : [];
+    console.error("FindMyShift roster check failed", JSON.stringify(diagnostic));
     return Response.json({
       ok: false,
       status: incomplete ? "incomplete" : "failed",
       error: incomplete
         ? incompleteFindmyshiftAssignmentMessage(exceptions)
         : "FindMyShift roster check failed.",
+      diagnostic,
       ...(incomplete ? { exceptionCount: exceptions.length, exceptions } : {}),
-    }, { status: 502 });
+    }, { status: diagnostic.status === 429 ? 429 : 502 });
   }
+}
+
+function safeFindmyshiftDiagnostic(error) {
+  const value = error?.findmyshiftDiagnostic && typeof error.findmyshiftDiagnostic === "object"
+    ? error.findmyshiftDiagnostic
+    : {};
+  return {
+    code: String(value.code || error?.code || "request-failed").slice(0, 80),
+    status: Math.max(0, Math.min(Number(value.status || 0), 599)),
+    contentType: String(value.contentType || "").slice(0, 80),
+    responseBytes: Math.max(0, Number(value.responseBytes || 0)),
+  };
 }
 
 function incompleteFindmyshiftAssignmentMessage(exceptions = []) {
