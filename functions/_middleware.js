@@ -59,7 +59,11 @@ export async function onRequest(context) {
   } catch (error) {
     if (error?.code === "d1-statement-budget-exceeded") {
       contained = "d1-statement-budget";
-      response = Response.json({ error: "This request was stopped by the database safety limit." }, { status: 503 });
+      response = Response.json({
+        error: "This request was stopped by the database safety limit.",
+        errorType: "request-statement-limit",
+        phase: requestOperationPhase(context),
+      }, { status: 503 });
       return response;
     }
     throw error;
@@ -80,6 +84,7 @@ export async function onRequest(context) {
       d1RowsWritten: d1.rowsWritten,
       d1MetadataComplete: d1.metadataComplete,
       d1Limit: limit,
+      operationPhase: requestOperationPhase(context),
     };
     console.log(JSON.stringify(record));
     writeAnalytics(context.env.REQUEST_ANALYTICS, record);
@@ -122,12 +127,16 @@ function writeAnalytics(dataset, record) {
     dataset.writeDataPoint({
       indexes: [record.deployment],
       blobs: [record.route, record.action, String(record.status), record.contained, record.callerClass,
-        record.requestId, String(record.d1MetadataComplete)],
+        record.requestId, String(record.d1MetadataComplete), record.operationPhase],
       doubles: [record.durationMs, record.d1Statements, record.d1RowsRead, record.d1RowsWritten, record.d1Limit],
     });
   } catch (error) {
     console.warn(JSON.stringify({ event: "api-attribution-write-failed", error: String(error?.message || error).slice(0, 160) }));
   }
+}
+
+function requestOperationPhase(context) {
+  return String(context?.data?.d1OperationPhase || "").trim().slice(0, 48);
 }
 
 function emptyD1Meter() {

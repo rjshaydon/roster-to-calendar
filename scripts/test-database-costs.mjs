@@ -4,12 +4,16 @@ import { DatabaseSync } from "node:sqlite";
 const db = new DatabaseSync(":memory:");
 db.exec(`
   CREATE TABLE roster_files (id TEXT PRIMARY KEY, source_type TEXT NOT NULL, active INTEGER NOT NULL);
+  CREATE INDEX idx_roster_files_source_active ON roster_files(source_type, active, id);
   CREATE TABLE roster_file_doctors (file_id TEXT, source_type TEXT, doctor_key TEXT, display_name TEXT, seniority TEXT, membership_source TEXT, PRIMARY KEY(file_id, source_type, doctor_key));
   CREATE TABLE roster_events (id TEXT PRIMARY KEY, file_id TEXT, source_type TEXT, doctor_key TEXT, display_name TEXT, seniority TEXT, start_date TEXT, end_date TEXT, start_ts TEXT, title TEXT, event_json TEXT);
   CREATE INDEX idx_events_date_source ON roster_events(start_date, source_type);
   CREATE INDEX idx_events_source_range ON roster_events(source_type, start_date, end_date);
   CREATE INDEX idx_events_doctor_range ON roster_events(doctor_key, start_date, end_date);
   CREATE INDEX idx_events_file ON roster_events(file_id);
+  CREATE INDEX idx_events_file_doctor ON roster_events(file_id, doctor_key);
+  CREATE TABLE roster_issues (id TEXT PRIMARY KEY, file_id TEXT, source_type TEXT, doctor_key TEXT, start_date TEXT, raw_value TEXT, issue_json TEXT);
+  CREATE INDEX idx_issues_file ON roster_issues(file_id);
   CREATE INDEX idx_file_doctors_source_file ON roster_file_doctors(source_type, file_id);
   CREATE TABLE contact_list_files (id TEXT PRIMARY KEY, source_id TEXT, received_at TEXT);
   CREATE INDEX idx_contacts_source_received ON contact_list_files(source_id, received_at DESC);
@@ -77,6 +81,14 @@ for (let index = 0; index < 10000; index += 1) {
 }
 const addInactiveRosterStatus = db.prepare("INSERT INTO roster_file_status_summaries VALUES (?, ?, 0, '2026-01-01T00:00:00Z', 0)");
 for (let index = 0; index < 150; index += 1) addInactiveRosterStatus.run(`historical-${index}`, "mmc");
+const addHistoricalFile = db.prepare("INSERT INTO roster_files VALUES (?, 'mch', 0)");
+for (let index = 0; index < 150; index += 1) {
+  const fileId = `historical-mch-${index}`;
+  addHistoricalFile.run(fileId);
+  addEvent.run(`historical-toby-${index}`, fileId, "mch", "TOBY VANHEST", "Toby VANHEST", "Registrar", "2026-06-01", "2026-06-01", "2026-06-01T08:00:00");
+}
+addFile.run("fixture-mch-toby", "mch");
+addEvent.run("active-toby", "fixture-mch-toby", "mch", "TOBY VANHEST", "Toby VANHEST", "Registrar", "2026-06-01", "2026-06-01", "2026-06-01T08:00:00");
 const addAccount = db.prepare("INSERT INTO account_profiles VALUES (?, ?, ?)");
 const addClaim = db.prepare("INSERT INTO account_claims VALUES (?, ?, ?, ?)");
 const addAccountState = db.prepare("INSERT INTO account_states VALUES (?, '{}')");
@@ -110,6 +122,7 @@ const cases = {
   creatorAccount: [`SELECT p.email, p.real_name, p.role, c.source_type, c.doctor_key, c.display_name, s.session_json FROM account_profiles p LEFT JOIN account_claims c ON c.email = p.email LEFT JOIN account_states s ON s.email = p.email WHERE p.email = ? ORDER BY c.source_type, c.display_name`, ["rhaydon@gmail.com"]],
   affectedRosterClaim: [`SELECT p.email FROM account_claims c INDEXED BY idx_account_claims_source_doctor_email INNER JOIN account_profiles p ON p.email=c.email WHERE c.source_type=? AND c.doctor_key=? LIMIT 41`, ["mmc", "MMC DOCTOR 001"]],
   creatorSnapshotRegistry: [`SELECT status, built_revision FROM snapshot_registry WHERE owner_type = ? AND owner_id = ? AND doctor_key = ? AND range_key = ?`, ["creator-account", "rhaydon@gmail.com", "RICHARD HAYDON", "2026-01-01:2026-12-31"]],
+  doctorProfileEvents: [`SELECT roster_events.event_json FROM roster_files INDEXED BY idx_roster_files_source_active CROSS JOIN roster_events INDEXED BY idx_events_file_doctor WHERE roster_files.source_type IN (?) AND roster_files.active=1 AND roster_events.file_id=roster_files.id AND roster_events.doctor_key IN (?) AND roster_events.start_date<=? AND roster_events.end_date>=? ORDER BY roster_events.start_ts,roster_events.source_type,roster_events.title`, ["mch", "TOBY VANHEST", "2026-12-31", "2026-01-01"]],
 };
 
 function plan(sql, bindings) {
@@ -144,6 +157,7 @@ report.estimates = {
   creatorAccount: "one exact account primary-key probe plus only that account's claim and state rows; independent of the other 9,999 accounts and 109,200 roster events",
   affectedRosterClaim: "only claims for one exact ED/doctor pair; independent of all other users and roster history",
   creatorSnapshotRegistry: "one exact composite-primary-key probe; independent of roster and account history",
+  doctorProfileEvents: "active source/file index followed by exact file/doctor probes; independent of 150 inactive Toby histories",
 };
 
 assert.equal(totalEvents, 109200);
@@ -176,5 +190,9 @@ assert.ok(report.affectedRosterClaim.plan.some((line) => /idx_account_claims_sou
 assert.equal(report.affectedRosterClaim.plan.some((line) => /SCAN account_claims|SCAN account_profiles/i.test(line)), false, "issue propagation must not scan all accounts or claims");
 assert.ok(report.creatorSnapshotRegistry.plan.some((line) => /snapshot_registry.*(?:PRIMARY KEY|sqlite_autoindex_snapshot_registry_1)/i.test(line)), "Creator snapshot metadata must use its composite primary key");
 assert.equal(report.creatorSnapshotRegistry.plan.some((line) => /SCAN|roster_events|roster_file_doctors/i.test(line)), false, "Creator snapshot metadata must be one exact lookup");
+assert.equal(report.doctorProfileEvents.returned, 1, "doctor-profile event loading must exclude every inactive historical Toby file");
+assert.ok(report.doctorProfileEvents.plan.some((line) => /idx_roster_files_source_active/.test(line)), "doctor-profile loading must enumerate only active files for the requested source");
+assert.ok(report.doctorProfileEvents.plan.some((line) => /idx_events_file_doctor/.test(line)), "doctor-profile loading must probe events by exact active file and doctor key");
+assert.equal(report.doctorProfileEvents.plan.some((line) => /idx_events_doctor_range/.test(line)), false, "doctor-profile loading must not walk matching doctor history before filtering inactive files");
 
 console.log(JSON.stringify(report, null, 2));

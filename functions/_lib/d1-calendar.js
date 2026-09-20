@@ -2489,7 +2489,19 @@ export async function queryDoctorEvents(db, doctorKeys, options = {}) {
   const placeholders = keys.map(() => "?").join(", ");
   const start = String(options.startDate || "0000-01-01");
   const end = String(options.endDate || "9999-12-31");
-  const rows = await db.prepare(`
+  const sourceTypes = [...new Set((options.sourceTypes || []).map(normalizeSourceType).filter(Boolean))];
+  const rows = sourceTypes.length ? await db.prepare(`
+    SELECT roster_events.event_json
+    FROM roster_files INDEXED BY idx_roster_files_source_active
+    CROSS JOIN roster_events INDEXED BY idx_roster_events_file_doctor
+    WHERE roster_files.source_type IN (${sourceTypes.map(() => "?").join(", ")})
+      AND roster_files.active = 1
+      AND roster_events.file_id = roster_files.id
+      AND roster_events.doctor_key IN (${placeholders})
+      AND roster_events.start_date <= ?
+      AND roster_events.end_date >= ?
+    ORDER BY roster_events.start_ts, roster_events.source_type, roster_events.title
+  `).bind(...sourceTypes, ...keys, end, start).all() : await db.prepare(`
     SELECT event_json
     FROM roster_events
     INNER JOIN roster_files ON roster_files.id = roster_events.file_id
@@ -2611,7 +2623,19 @@ export async function queryDoctorIssues(db, doctorKeys, options = {}) {
   const placeholders = keys.map(() => "?").join(", ");
   const start = String(options.startDate || "0000-01-01");
   const end = String(options.endDate || "9999-12-31");
-  const rows = await db.prepare(`
+  const sourceTypes = [...new Set((options.sourceTypes || []).map(normalizeSourceType).filter(Boolean))];
+  const rows = sourceTypes.length ? await db.prepare(`
+    SELECT roster_issues.issue_json
+    FROM roster_files INDEXED BY idx_roster_files_source_active
+    CROSS JOIN roster_issues INDEXED BY idx_roster_issues_file
+    WHERE roster_files.source_type IN (${sourceTypes.map(() => "?").join(", ")})
+      AND roster_files.active = 1
+      AND roster_issues.file_id = roster_files.id
+      AND roster_issues.doctor_key IN (${placeholders})
+      AND roster_issues.start_date <= ?
+      AND roster_issues.start_date >= ?
+    ORDER BY roster_issues.start_date, roster_issues.source_type, roster_issues.raw_value
+  `).bind(...sourceTypes, ...keys, end, start).all() : await db.prepare(`
     SELECT issue_json
     FROM roster_issues
     INNER JOIN roster_files ON roster_files.id = roster_issues.file_id

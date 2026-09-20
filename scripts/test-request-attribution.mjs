@@ -1,5 +1,16 @@
 import assert from "node:assert/strict";
 import { onRequest } from "../functions/_middleware.js";
+import { classifyD1Failure } from "../functions/api/state.js";
+
+assert.deepEqual(
+  classifyD1Failure("D1_ERROR: Your account has exceeded D1's free tier daily row read limit."),
+  { errorType: "account-daily-quota", message: "The database daily allowance is temporarily unavailable." },
+);
+assert.deepEqual(
+  classifyD1Failure("D1_ERROR: too many SQL variables at offset 12"),
+  { errorType: "native-d1-error", message: "The database could not complete this request." },
+);
+assert.equal(classifyD1Failure("Incorrect password."), null);
 
 const originalLog = console.log;
 const logs = [];
@@ -89,6 +100,30 @@ try {
   };
   const overBudget = await onRequest(budgetContext);
   assert.equal(overBudget.status, 503, "the 65th login statement must be rejected before execution");
+  assert.deepEqual(await overBudget.json(), {
+    error: "This request was stopped by the database safety limit.",
+    errorType: "request-statement-limit",
+    phase: "",
+  });
+
+  const phasedBudgetContext = {
+    request: new Request("https://example.test/api/state", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "loadDoctorProfile" }),
+    }),
+    data: {},
+    env: { ROSTER_DB: budgetDb },
+  };
+  phasedBudgetContext.next = async () => {
+    phasedBudgetContext.data.d1OperationPhase = "active-events";
+    for (let index = 0; index < 65; index += 1) await phasedBudgetContext.env.ROSTER_DB.prepare("SELECT 1").all();
+    return Response.json({ ok: true });
+  };
+  const phasedBudget = await onRequest(phasedBudgetContext);
+  assert.equal(phasedBudget.status, 503);
+  assert.equal((await phasedBudget.json()).phase, "active-events", "a stopped request must identify its last safe operation phase");
+  assert.match(logs.at(-1), /"operationPhase":"active-events"/);
+  assert.match(logs.at(-1), /"contained":"d1-statement-budget"/);
 
   let bootstrapBatchCalls = 0;
   const bootstrapDb = {

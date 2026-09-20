@@ -14894,7 +14894,7 @@ async function fetchDoctorProfileState(profile, options = {}) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(requestBody),
   });
-  if (response.status === 503 && requestBody.allowInlineBuild) {
+  if (response.status === 503 && requestBody.allowInlineBuild && await calendarLoadResponseIsRetryable(response)) {
     response = await fetch("/api/state", {
       method: "POST",
       headers: { "content-type": "application/json" },

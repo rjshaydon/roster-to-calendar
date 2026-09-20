@@ -1764,6 +1764,7 @@ export async function onRequestPost(context) {
       if (!profileId) {
         return Response.json({ error: "Doctor profile is required." }, { status: 400 });
       }
+      setRequestOperationPhase(context, "profile-registry");
       const profile = await loadDoctorProfileState(null, context.env.ROSTER_DB, profileId) || sanitizeDoctorProfile({
         profileId,
         doctorKey: body?.doctorKey,
@@ -1784,6 +1785,7 @@ export async function onRequestPost(context) {
         allowInlineBuild: body?.allowInlineBuild !== false,
         skipRebuild: body?.skipRebuild === true,
       });
+      setRequestOperationPhase(context, "complete");
       return Response.json({
         ok: true,
         cloudAvailable: true,
@@ -2419,10 +2421,35 @@ export async function onRequestPost(context) {
 
     return Response.json({ error: "Unsupported account action." }, { status: 400 });
   } catch (error) {
+    if (error?.code === "d1-statement-budget-exceeded") throw error;
     const message = error.message || "Account request failed.";
+    const d1Failure = classifyD1Failure(message);
+    if (d1Failure) {
+      return Response.json({
+        error: d1Failure.message,
+        errorType: d1Failure.errorType,
+        phase: String(context?.data?.d1OperationPhase || ""),
+      }, { status: 503 });
+    }
     const status = message === "Incorrect password." || message.startsWith("Account not found") ? 401 : 400;
     return Response.json({ error: message }, { status });
   }
+}
+
+function setRequestOperationPhase(context, phase) {
+  if (!context.data || typeof context.data !== "object") context.data = {};
+  context.data.d1OperationPhase = String(phase || "").trim().slice(0, 48);
+}
+
+export function classifyD1Failure(message) {
+  const value = String(message || "");
+  if (/exceeded D1(?:'s)? free tier daily row (?:read|write) limit/i.test(value)) {
+    return { errorType: "account-daily-quota", message: "The database daily allowance is temporarily unavailable." };
+  }
+  if (/\bD1_(?:ERROR|EXEC_ERROR|TYPE_ERROR)\b|\bD1 error\b/i.test(value)) {
+    return { errorType: "native-d1-error", message: "The database could not complete this request." };
+  }
+  return null;
 }
 
 async function loadLiveContactListForOnShift(context, { date, facilityKeys = [] } = {}) {
@@ -5547,7 +5574,9 @@ async function loadDoctorProfileSnapshotPayload(context, profile, ownerEmail = "
     endDate: options.endDate,
   });
   const descriptor = buildDoctorProfileSnapshotCacheDescriptor(profile, requestedRange);
-  const calendarRevision = await queryDoctorProfileCalendarRevision(db, profile, ownerEmail).catch(() => "");
+  setRequestOperationPhase(context, "revision");
+  const calendarRevision = await queryDoctorProfileCalendarRevision(db, profile, ownerEmail);
+  setRequestOperationPhase(context, "snapshot-registry");
   const payload = await loadSnapshotPayloadFromRegistry(context, {
     descriptor,
     calendarRevision,
@@ -5563,6 +5592,7 @@ async function loadDoctorProfileSnapshotPayload(context, profile, ownerEmail = "
       descriptor,
       revision: calendarRevision,
       reason: options.reason || "inline-build",
+      onPhase: (phase) => setRequestOperationPhase(context, phase),
     }),
   });
   return { ...payload, calendarRevision };
@@ -5573,8 +5603,11 @@ async function buildAndStoreDoctorProfileSnapshot(context, job = {}) {
   const cacheBucket = context.env?.ROSTER_CACHE;
   const requestedRange = job.requestedRange || defaultSnapshotRange();
   const descriptor = job.descriptor || buildDoctorProfileSnapshotCacheDescriptor(job.profile, requestedRange);
-  const revision = String(job.revision || await queryDoctorProfileCalendarRevision(db, job.profile, job.ownerEmail || "").catch(() => ""));
+  const onPhase = typeof job.onPhase === "function" ? job.onPhase : () => {};
+  onPhase("revision");
+  const revision = String(job.revision || await queryDoctorProfileCalendarRevision(db, job.profile, job.ownerEmail || ""));
   const startedAt = Date.now();
+  onPhase("snapshot-write-start");
   await upsertSnapshotRegistryEntry(db, {
     ...descriptor,
     requestedRevision: revision,
@@ -5585,14 +5618,16 @@ async function buildAndStoreDoctorProfileSnapshot(context, job = {}) {
     sizeBytes: 0,
     buildMs: 0,
     lastError: "",
-  }).catch(() => null);
+  });
   try {
     const snapshot = await buildDerivedDoctorProfileSnapshot(null, db, job.profile, job.ownerEmail || "", {
       requestedRange,
+      onPhase,
     });
     const buildMs = Date.now() - startedAt;
     const sizeBytes = snapshot ? JSON.stringify(snapshot).length : 0;
     if (snapshot && cacheBucket?.put) {
+      onPhase("snapshot-artifact-write");
       await storeCachedSnapshot(cacheBucket, descriptor.artifactKey, snapshot, {
         revision,
         ownerType: descriptor.ownerType,
@@ -5601,6 +5636,7 @@ async function buildAndStoreDoctorProfileSnapshot(context, job = {}) {
         rangeKey: descriptor.rangeKey,
       }).catch(() => null);
     }
+    onPhase("snapshot-write-finalize");
     await upsertSnapshotRegistryEntry(db, {
       ...descriptor,
       requestedRevision: revision,
@@ -5611,9 +5647,11 @@ async function buildAndStoreDoctorProfileSnapshot(context, job = {}) {
       sizeBytes,
       buildMs,
       lastError: "",
-    }).catch(() => null);
+    });
     return { snapshot, buildMs, sizeBytes, diagnostics: {} };
   } catch (error) {
+    if (error?.code === "d1-statement-budget-exceeded") throw error;
+    onPhase("snapshot-write-error");
     await upsertSnapshotRegistryEntry(db, {
       ...descriptor,
       requestedRevision: revision,
@@ -5637,6 +5675,8 @@ async function buildDerivedDoctorProfileSnapshot(store, db, profile, ownerEmail 
     ...defaultSettings(),
     ...(session.settings || {}),
   };
+  const onPhase = typeof options.onPhase === "function" ? options.onPhase : () => {};
+  onPhase("identity-lookup");
   const doctorDiagnostics = await doctorProfileDiagnostics(db, profile);
   const doctorKeys = doctorDiagnostics.length
     ? [...new Set(doctorDiagnostics.map((row) => normalizeRosterName(row.doctorKey)).filter(Boolean))]
@@ -5646,10 +5686,12 @@ async function buildDerivedDoctorProfileSnapshot(store, db, profile, ownerEmail 
   // doctor's roster history into a large file/doctor OR predicate can exceed
   // D1's native SQL statement budget. These indexed queries join only active
   // roster files, so their shape stays constant as historical files grow.
-  const rosterIssues = await queryDoctorIssues(db, doctorKeys, requestedRange);
+  onPhase("issues");
+  const rosterIssues = await queryDoctorIssues(db, doctorKeys, { ...requestedRange, sourceTypes: sanitizeSourceTypes(profile.sourceTypes) });
+  onPhase("active-events");
   const resolvedRosterEvents = applyEventOverrides(
     applyAccountHospitalLocations(
-      await queryDoctorEvents(db, doctorKeys, requestedRange),
+      await queryDoctorEvents(db, doctorKeys, { ...requestedRange, sourceTypes: sanitizeSourceTypes(profile.sourceTypes) }),
       hospitalLocations || {},
       { includeLocations: settings.includeLocations !== false },
     ),

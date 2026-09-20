@@ -918,7 +918,7 @@ assert.deepEqual(
 assert.match(d1CalendarSource, /export async function queryFacilityOverviewRange[\s\S]*roster_events\.source_type IN[\s\S]*roster_events\.start_date >= \?/, "By stream should query the requested EDs and date range in one database operation");
 assert.match(d1CalendarSource, /export async function queryFacilityOverviewCatalog[\s\S]*GROUP BY roster_events\.source_type[\s\S]*first_date[\s\S]*last_date/, "By stream metadata should collapse repeated roster events into a compact stream catalogue");
 assert.doesNotMatch(d1CalendarSource.match(/export async function queryFacilityOverviewRange[\s\S]*?export async function queryFacilityOverviewStaff/)?.[0] || "", /event_json|parseEvent\(/, "By stream should build lightweight events from indexed columns rather than parse full stored event JSON");
-assert.match(stateSource, /buildDerivedDoctorProfileSnapshot\(null, db, job\.profile, job\.ownerEmail \|\| "", \{[\s\S]*requestedRange[\s\S]*queryDoctorIssues\(db, doctorKeys, requestedRange\)[\s\S]*queryDoctorEvents\(db, doctorKeys, requestedRange\)/, "Doctor profile snapshots should query the bounded cache range through indexed doctor keys");
+assert.match(stateSource, /buildDerivedDoctorProfileSnapshot\(null, db, job\.profile, job\.ownerEmail \|\| "", \{[\s\S]*requestedRange[\s\S]*queryDoctorIssues\(db, doctorKeys, \{ \.\.\.requestedRange, sourceTypes:[\s\S]*queryDoctorEvents\(db, doctorKeys, \{ \.\.\.requestedRange, sourceTypes:/, "Doctor profile snapshots should query the bounded cache range and active source set through indexed doctor keys");
 assert.match(stateSource, /DOCTOR_PROFILE_SNAPSHOT_BUILDING_RETRY_MS = 2 \* 60 \* 1000[\s\S]*buildingRetryMs: DOCTOR_PROFILE_SNAPSHOT_BUILDING_RETRY_MS/, "Interrupted doctor profile snapshot builds should recover without blocking the switcher for fifteen minutes");
 assert.match(appSource, /function doctorProfileLoadIsTransient[\s\S]*502\|503\|CPU\|memory[\s\S]*attempt < retryDelays\.length[\s\S]*if \(!doctorProfileLoadIsTransient\(error\)\) throw error/, "Doctor profile switching should tolerate transient Worker overload while a bounded snapshot is being prepared");
 assert.match(styleSource, /\.facility-overview-by-stream \{[\s\S]*grid-template-columns:[\s\S]*\.facility-overview-by-stream-selectors \{[\s\S]*position: sticky[\s\S]*@media \(max-width: 900px\)[\s\S]*\.facility-overview-by-stream \{[\s\S]*grid-template-columns: 1fr/, "By stream should use a desktop selector rail and stack it on narrow screens");
@@ -1524,8 +1524,8 @@ assert.match(
   "doctor profile cache validation should use a lightweight calendar revision",
 );
 const doctorProfileBuilder = stateSource.match(/async function buildDerivedDoctorProfileSnapshot[\s\S]*?async function filterSnapshotPreviewIssuesForOwner/)?.[0] || "";
-assert.match(doctorProfileBuilder, /queryDoctorIssues\(db, doctorKeys, requestedRange\)[\s\S]*queryDoctorEvents\(db, doctorKeys, requestedRange\)/,
-  "doctor-profile builds should use bounded indexed doctor-key queries");
+assert.match(doctorProfileBuilder, /queryDoctorIssues\(db, doctorKeys, \{ \.\.\.requestedRange, sourceTypes:[\s\S]*queryDoctorEvents\(db, doctorKeys, \{ \.\.\.requestedRange, sourceTypes:/,
+  "doctor-profile builds should use bounded indexed doctor-key and active-source queries");
 assert.doesNotMatch(doctorProfileBuilder, /queryDoctor(?:Issues|Events)ForFileDoctorPairs/,
   "doctor-profile builds must not expand roster history into file/doctor OR predicates");
 assert.doesNotMatch(
@@ -3692,6 +3692,10 @@ class MemoryD1Statement {
       return { success: true, meta: { changes } };
     }
     if (sql.startsWith("DELETE FROM roster_issues")) {
+      if (sql.includes("WHERE id IN")) {
+        for (const id of args) this.db.issues.delete(String(id));
+        return { success: true };
+      }
       for (const [key, value] of [...this.db.issues.entries()]) {
         if (sql.includes("WHERE id = ?")) {
           if (key === args[0]) this.db.issues.delete(key);
@@ -4454,26 +4458,36 @@ class MemoryD1Statement {
           })),
       };
     }
-    if (sql.includes("FROM roster_events") && sql.includes("doctor_key IN")) {
+    if ((sql.includes("FROM roster_events") || sql.includes("JOIN roster_events")) && sql.includes("doctor_key IN")) {
       const end = args[args.length - 2];
       const start = args[args.length - 1];
-      const keys = new Set(args.slice(0, -2));
+      const sourceCount = sql.includes("roster_files.source_type IN")
+        ? (sql.match(/roster_files\.source_type IN \(([^)]*)\)/)?.[1].split("?").length || 1) - 1
+        : 0;
+      const sourceTypes = new Set(args.slice(0, sourceCount));
+      const keys = new Set(args.slice(sourceCount, -2));
       return {
         results: [...this.db.events.values()]
           .filter((event) => this.db.files.get(event.file_id)?.active === 1)
+          .filter((event) => !sourceTypes.size || sourceTypes.has(this.db.files.get(event.file_id)?.source_type))
           .filter((event) => keys.has(event.doctor_key))
           .filter((event) => event.start_date <= end && event.end_date >= start)
           .sort((left, right) => left.start_ts.localeCompare(right.start_ts))
           .map((event) => ({ event_json: event.event_json })),
       };
     }
-    if (sql.includes("FROM roster_issues") && sql.includes("doctor_key IN")) {
+    if ((sql.includes("FROM roster_issues") || sql.includes("JOIN roster_issues")) && sql.includes("doctor_key IN")) {
       const end = args[args.length - 2];
       const start = args[args.length - 1];
-      const keys = new Set(args.slice(0, -2));
+      const sourceCount = sql.includes("roster_files.source_type IN")
+        ? (sql.match(/roster_files\.source_type IN \(([^)]*)\)/)?.[1].split("?").length || 1) - 1
+        : 0;
+      const sourceTypes = new Set(args.slice(0, sourceCount));
+      const keys = new Set(args.slice(sourceCount, -2));
       return {
         results: [...this.db.issues.values()]
           .filter((issue) => this.db.files.get(issue.file_id)?.active === 1)
+          .filter((issue) => !sourceTypes.size || sourceTypes.has(this.db.files.get(issue.file_id)?.source_type))
           .filter((issue) => keys.has(issue.doctor_key))
           .filter((issue) => issue.start_date <= end && issue.start_date >= start)
           .sort((left, right) => left.start_date.localeCompare(right.start_date))
@@ -6474,6 +6488,7 @@ const d1DoctorProfileFacilityOverviewAccess = await postState(d1StateStore, {
 assert.equal(d1DoctorProfileFacilityOverviewAccess.facilityOverviewAccountEmail, "d1-user@example.com", "a doctor profile should resolve its linked account for At a glance simulation");
 assert.equal(d1DoctorProfileFacilityOverviewAccess.facilityOverviewEnabled, true, "a linked doctor profile should expose its account's At a glance grant");
 assert.equal(d1DoctorProfileFacilityOverviewAccess.facilityOverviewAccess.mode, d1GrantedUserLogin.facilityOverviewAccess.mode, "a doctor profile should use its linked account's At a glance scope");
+d1Store.executedSql = [];
 const d1DoctorProfileServerCache = await postState(d1StateStore, {
   action: "loadDoctorProfile",
   email: "rhaydon@gmail.com",
@@ -6486,6 +6501,11 @@ const d1DoctorProfileServerCache = await postState(d1StateStore, {
 }, d1Store);
 assert.equal(d1DoctorProfileServerCache.snapshotSource, "server-cache", "doctor-profile loads should reuse ready server cache generically");
 assert.equal(d1DoctorProfileServerCache.snapshotStale, false);
+assert.equal(
+  d1Store.executedSql.some((sql) => /^(?:INSERT|UPDATE|DELETE)\b/i.test(sql)),
+  false,
+  "a current doctor-profile snapshot must be a read-only switch",
+);
 const d1DoctorProfileCurrent = await postState(d1StateStore, {
   action: "loadDoctorProfile",
   email: "rhaydon@gmail.com",

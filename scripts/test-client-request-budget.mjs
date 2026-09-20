@@ -34,6 +34,11 @@ const calendarLoad = section(/async function loadCloudCalendarEvents[\s\S]*?(?=\
 assert.equal((calendarLoad.match(/await fetch\("\/api\/state"/g) || []).length, 2, "foreground calendar load may issue only the request and one resource-limit retry");
 assert.match(calendarLoad, /if \(response\.status === 503 && await calendarLoadResponseIsRetryable\(response\)\)/, "calendar retry must be limited to an explicit retryable resource failure");
 assert.match(appSource, /payload\?\.error !== "This request was stopped by the database safety limit\."/, "a D1 statement-budget rejection must never be retried");
+assert.match(
+  appSource.match(/async function fetchDoctorProfileState[\s\S]*?(?=\nasync function loadDoctorProfileFacilityOverviewAccess)/)?.[0] || "",
+  /calendarLoadResponseIsRetryable\(response\)/,
+  "doctor-profile loading must not retry a request stopped by the D1 statement guard",
+);
 assert.match(calendarLoad, /allowInlineBuild: false/, "calendar retry must not repeat inline build work");
 
 const statusRefresh = section(/async function refreshCalendarStoreStatus[\s\S]*?(?=\nasync function toggleAdminConsole)/);
