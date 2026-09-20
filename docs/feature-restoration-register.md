@@ -202,12 +202,14 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 
 ### FR-07 — Automatic roster synchronisation
 
-- **State:** Paused.
+- **State:** Partially restored. MMC, MCH and VHH are enabled; DDH remains
+  paused after an isolated upstream HTTP 503 response.
 - **Includes:** FindMyShift change checking, generic automated upload, VHH
   extraction, derived processing, queue dispatch and pending work processing.
-- **Controls:** `ROSTER_AUTOMATION_WRITES_ENABLED=false`, empty
-  `ROSTER_AUTOMATION_SOURCE_ALLOWLIST`, and
-  `ROSTER_AUTOMATION_QUEUE_ENABLED=false`.
+- **Controls:** Production roster automation writes and bounded queue processing
+  are enabled only for the exact allowlist `monash-adults,monash-paeds,
+  vhh-active-medical-roster`. DDH, contacts, Preview and unrelated automation
+  remain excluded.
 - **Data/code preservation:** Configured sources have not intentionally been
   removed. The UI's unavailable status is not evidence that they disappeared.
 - **Restoration outcome:** Restore automation one source at a time after manual
@@ -624,6 +626,7 @@ mechanisms are intentionally excluded from restoration.
 | Calendar-sync Gates 1–2, 13 Sep 2026 | Two settled account-wide samples reconciled at 75,025 reads and zero writes with no expensive fingerprint. Implemented local-only manual/automatic authority separation and exact-source, one-job queue processing. Focused and full fixture suites pass; Production flags and all Power Automate flows remain closed. |
 | Calendar-sync Gate 3, 13 Sep 2026 | Proved local zero-write unchanged ingress for Monash, VHH and FindMyShift; bounded changed ingress, payloads and duplicate callbacks; indexed source/version, source/status and affected-claim probes; and stopped disabled identity/snapshot fan-out after ingestion. Representative parsing, correction, rollback, overlap, membership and term tests pass. Migration `0032` remains local only. Production and all Power Automate flows remain closed. |
 | Gate 6 DDH containment and VHH preflight, 20 Sep 2026 | The isolated DDH provider check returned HTTP 503 with four statements, one row read and two compact status writes; no ingestion or processor ran and the retained roster stayed active. DDH is paused for a later provider window. VHH extraction, isolation and unchanged-input tests pass. The exact-workbook instant flow `Sync VHH Active Medical Roster to Production` is selected for one controlled canary; the folder-wide automated VHH flow remains off pending exact-trigger and retry review. |
+| VHH routine restoration, 20 Sep 2026 | The controlled VHH canary parsed 46 doctors and 971 events successfully. Its derived phase used 41,057 D1 row reads and 2,128 writes within the request-local ceiling; Claire CHARTERIS's calendar loaded without error. An identical replay then used two statements, zero row reads and zero writes and dispatched no processor run. The automated flow `VHH Active Medical Roster to Production` now has concurrency one, an exact `Active Medical Roster.xlsx` trigger and no HTTP retries; Flow checker reported zero errors/warnings before it was enabled. The instant canary flow remains Off. Production permits only MMC, MCH and VHH roster sources; DDH remains excluded and paused. |
 | `c8ac83e` / `00042ece-aa3a-4784-bffe-008e90381d7c`, 14 Sep 2026 | Settled account telemetry attributed the 15:55 bucket's million-row burst to automatic `queryRosterOverlapDoctors` during an ordinary session. Deployed a default-off pre-D1 server gate for both insight actions and disabled client background warm-up. A credential-free Production probe returned 503 `roster-insights-paused`; one current Production and zero Preview deployments remain. The first settled 07:22–08:15 UTC interval recorded 4,209 rows read by 23 calendar-feed requests, zero writes, and exactly one contained insight request (the deliberate probe) with zero D1 statements/rows. The controlled 18:31 AEST ordinary login used three reads; its incremental save used 12 reads and one write. By the fully settled 19:44 AEST cutoff, account usage had increased by only 3,584 reads and one write over the preceding 90 minutes, with no expensive query or second insight request. Roster automation remains closed; restoration is tracked under FR-19. |
 
 ## Restoration record template

@@ -30,7 +30,9 @@ Priorities remain:
 - Monash Adults and Monash Paediatrics were successfully ingested on 15
   September and their isolated routine flows were enabled at that checkpoint.
   Their present flow state must be read back before relying on it.
-- VHH and DDH routine syncing are not yet restored.
+- VHH routine syncing was restored on 20 September after a bounded canary and
+  unchanged replay. DDH remains paused because its isolated provider check
+  returned HTTP 503.
 - At a glance, contact automation, Doctor Names/identity discovery, manual
   roster mutation and unrelated maintenance remain paused unless the feature
   register explicitly records otherwise.
@@ -326,3 +328,19 @@ allocations during the canary.
   in the server allowlist, keep both VHH flows off, then run the instant flow
   exactly once. Reconcile ingestion and processor attribution before any
   calendar test or unchanged replay.
+
+### Gate 6 VHH completion
+
+- Production deployment `413534f9-cd56-4de7-b75e-bedeb8d2a9b5` permits only
+  `monash-adults`, `monash-paeds` and `vhh-active-medical-roster`; DDH remains
+  excluded.
+- The one-shot VHH canary completed successfully: 46 doctors and 971 events
+  were parsed, and the derived phase used 41,057 D1 row reads and 2,128 writes
+  within the request-local ceiling. Claire CHARTERIS's VHH calendar then loaded
+  without an error.
+- Replaying the identical workbook used two statements, zero D1 row reads and
+  zero writes, and dispatched no processor run.
+- The automated flow now has concurrency one, an exact filename trigger for
+  `Active Medical Roster.xlsx`, and no HTTP retries. Flow checker reported zero
+  errors and zero warnings before it was saved and enabled. The instant canary
+  flow remains off.
