@@ -152,8 +152,8 @@ idempotent; their flows remain independently pausable.
 
 Restore one implementation class at a time:
 
-1. VHH Office Script/SharePoint extraction;
-2. DDH FindMyShift ingestion.
+1. DDH FindMyShift ingestion;
+2. VHH Office Script/SharePoint extraction.
 
 For each source: inspect configuration, run the local representative fixture,
 open only that exact source, observe one changed and one unchanged run, verify
@@ -178,8 +178,8 @@ Never restore the legacy live At a glance history scans.
 
 ## Immediate next action
 
-Gates 0–5 are complete. The next action is Gate 6: inspect and restore VHH as
-one isolated implementation class before touching DDH. Do not enable contact
+Gates 0–5 are complete. The next action is Gate 6: inspect and restore DDH as
+one isolated implementation class before touching VHH. Do not enable contact
 or allocation flows as part of roster restoration.
 
 ## Completed evidence — 20 September 2026
