@@ -178,9 +178,9 @@ Never restore the legacy live At a glance history scans.
 
 ## Immediate next action
 
-Gate 0, Gate 1 and Gate 2 are complete locally. The next action is Gate 3: a
-closed deployment followed by a login-only observation. Do not test doctor
-switching until that interval has settled and reconciled.
+Gates 0–5 are complete. The next action is Gate 6: inspect and restore VHH as
+one isolated implementation class before touching DDH. Do not enable contact
+or allocation flows as part of roster restoration.
 
 ## Completed evidence — 20 September 2026
 
@@ -239,3 +239,47 @@ switching until that interval has settled and reconciled.
   budgets and the original binding is restored after each request.
 - Gate 3 must restart after the corrected deployment. The failed login is not
   evidence against the bounded doctor-profile query, which was never reached.
+
+### Gate 3 restart and Gate 4 canary
+
+- Production commit `390700ff` restored the raw D1 binding after every request
+  and retained request-level attribution through the downstream handler.
+- The 15:47 AEST login-only canary succeeded. Login used 2 statements, read 3
+  rows and wrote none; calendar loading used 15 statements, read 11 rows and
+  wrote none. The independently attributed requests confirm that the meter no
+  longer accumulates work between requests.
+- The first Toby VANHEST canary succeeded. Account resolution used 2
+  statements and read 162 rows. The uncached doctor-profile request used 25
+  statements, read 6,518 rows and wrote 5 rows while creating its compact
+  snapshot state. No guard or quota error occurred.
+- The repeat Toby canary used the cached path: 14 statements, 1,501 rows read
+  and zero writes. Account resolution and the separate access check each used
+  2 statements and read 162 rows. The calendar and picker changed together and
+  no error was shown.
+- This is a 77% reduction in profile rows read after the one-time snapshot
+  build and proves that repeat switching does not rewrite the snapshot. The
+  remaining 1,501-row cached read is bounded but remains a later optimisation
+  target; it is not a reason to delay restoring roster syncing.
+
+### Gate 5 controlled Monash verification
+
+- Both `Sync Monash roster files` and `Sync Monash Paediatrics roster files`
+  remained enabled. Other roster/contact/bootstrap flows remained disabled.
+- Paediatrics processed `Paeds - Term 3 2026.xlsx` successfully on 20 September:
+  80 doctors and 2,375 events.
+- SharePoint showed `AdultTerm3.2026.xlsx` modified on 19 September, but the
+  Adults processor had not run since 17 September. Power Automate history
+  showed that both modification-triggered runs fetched the workbook and then
+  failed at the HTTP submission with status 422.
+- Attribution for those failed submissions showed one D1 statement, zero rows
+  read and zero writes on the older deployment. This matches the defective
+  shared request meter fixed by `390700ff`; it was not a workbook/parser error.
+- A single resubmission on the corrected deployment queued and processed
+  `AdultTerm3.2026.xlsx` successfully: 152 doctors and 4,173 events. Ingest used
+  13 statements, read 3 rows and wrote 20; the derived update used 40
+  statements, read 54,706 rows and wrote 133. No guard or quota error occurred.
+- Replaying that exact provider revision returned unchanged with 2 statements,
+  zero rows read, zero writes and no GitHub processor dispatch. This proves the
+  unchanged path does not rewrite roster facts or derived data.
+- At 16:15 AEST the known MMC roster change was correct in both the application
+  calendar and the subscribed Apple Calendar feed. This completes Gate 5.
