@@ -7298,6 +7298,13 @@ function doctorPickerOptions() {
   return buildCreatorDoctorOptions(dedupeDoctorOptions([...preferredDoctor, ...repositoryOptions, ...fallbackOptions]));
 }
 
+function preserveVisibleCreatorDoctorDirectory() {
+  if (!canUseCreatorDoctorSwitcher()) return;
+  const visibleDoctors = availableDoctorsFromRosterDoctorOptions(doctorPickerOptions());
+  if (!visibleDoctors.length) return;
+  availableRosterDoctors = mergeAvailableRosterDoctors(visibleDoctors, availableRosterDoctors);
+}
+
 function dedupeDoctorOptions(options) {
   const dedupedByIdentity = new Map();
   for (const doctor of options || []) {
@@ -14564,6 +14571,7 @@ async function enterUserAccount(email) {
   const targetEmail = normalizeEmail(email);
   if (!targetEmail || (!isOwnerAccount() && !isCreatorAuthenticated())) return;
   const previousState = captureCalendarViewState();
+  preserveVisibleCreatorDoctorDirectory();
   beginFacilityOverviewAccountSession();
   resetFacilityOverviewAccessForEnteredUser();
   const accountSwitchStartedAt = performance.now();
@@ -14635,6 +14643,7 @@ async function enterDoctorProfileView(doctor) {
   if (!isOwnerAccount() && !isCreatorAuthenticated()) return;
   rememberCreatorCalendarSourceRefs();
   const previousState = captureCalendarViewState();
+  preserveVisibleCreatorDoctorDirectory();
   beginFacilityOverviewAccountSession();
   resetFacilityOverviewAccessForEnteredUser();
   const creatorEmail = authUserEmail || currentUserEmail;

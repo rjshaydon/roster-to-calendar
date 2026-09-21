@@ -1384,6 +1384,16 @@ assert.match(
   /if \(!selectedFiles\.length\) \{[\s\S]*if \(isViewingCreatorAccount\(\)\) availableRosterDoctors = \[\]/,
   "entering a claimed account or doctor profile must preserve the Creator's repository-backed switcher directory",
 );
+assert.match(
+  appSource.match(/function doctorPickerOptions[\s\S]*?function dedupeDoctorOptions/)?.[0] || "",
+  /function preserveVisibleCreatorDoctorDirectory[\s\S]*availableDoctorsFromRosterDoctorOptions\(doctorPickerOptions\(\)\)[\s\S]*mergeAvailableRosterDoctors/,
+  "the visible Creator snapshot directory must be captured locally before a switched calendar replaces it",
+);
+assert.match(
+  appSource.match(/async function enterUserAccount[\s\S]*?async function enterDoctorProfileView/)?.[0] || "",
+  /captureCalendarViewState\(\);\s*preserveVisibleCreatorDoctorDirectory\(\);/,
+  "claimed-account entry must preserve the visible Creator switcher before changing context",
+);
 assert.doesNotMatch(
   appSource.match(/function canUseCreatorDoctorSwitcher[\s\S]*?function canReturnToCreator/)?.[0] || "",
   /adminViewingEmail/,
