@@ -16202,7 +16202,11 @@ async function syncCreatorDoctorPickerWithRemainingRosters(options = {}) {
   if (!canUseCreatorDoctorSwitcher()) return;
   const localOnly = options.localOnly === true;
   if (!selectedFiles.length) {
-    availableRosterDoctors = [];
+    // A claimed account or doctor profile does not own the Creator's roster
+    // files. Keep the repository-backed directory while browsing it so the
+    // switcher remains available from every Creator-entered calendar. Only an
+    // actually empty Creator workspace may authoritatively clear the list.
+    if (isViewingCreatorAccount()) availableRosterDoctors = [];
     return;
   }
   await ensureSelectedFilesLoaded().catch(() => null);

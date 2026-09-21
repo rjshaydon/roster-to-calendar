@@ -1379,6 +1379,11 @@ assert.match(
   /canUseDoctorPicker\(\)[\s\S]*activeCalendarMode\(\) === "doctor-profile"[\s\S]*activeCalendarMode\(\) === "claimed-account" && isImpersonating/,
   "the global doctor switcher should remain available while the authenticated Creator views claimed or unclaimed calendars",
 );
+assert.match(
+  appSource.match(/async function syncCreatorDoctorPickerWithRemainingRosters[\s\S]*?async function pollCalendarAfterRosterChange/)?.[0] || "",
+  /if \(!selectedFiles\.length\) \{[\s\S]*if \(isViewingCreatorAccount\(\)\) availableRosterDoctors = \[\]/,
+  "entering a claimed account or doctor profile must preserve the Creator's repository-backed switcher directory",
+);
 assert.doesNotMatch(
   appSource.match(/function canUseCreatorDoctorSwitcher[\s\S]*?function canReturnToCreator/)?.[0] || "",
   /adminViewingEmail/,
