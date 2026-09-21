@@ -28,6 +28,7 @@ import {
   listAccountMirrors,
   listConsoleMessages,
   listRosterSources,
+  loadRosterSource,
   listLatestRosterSyncRuns,
   listRosterSyncRuns,
   listActiveRetainedRosterFiles,
@@ -7039,8 +7040,19 @@ async function queueActiveParserRuleReparse(env, sourceTypes = []) {
 }
 
 async function queueAutomatedSourceReprocess(env, sourceId) {
-  const files = (await listActiveRetainedRosterFiles(env.ROSTER_DB).catch(() => []))
+  const [storedSource, retainedFiles] = await Promise.all([
+    loadRosterSource(env.ROSTER_DB, sourceId).catch(() => null),
+    listActiveRetainedRosterFiles(env.ROSTER_DB).catch(() => []),
+  ]);
+  const sourceFiles = retainedFiles
     .filter((file) => String(file.sourceId || "").trim() === sourceId);
+  const activeFileId = String(storedSource?.activeFileId || "").trim();
+  // A source may have older retained roster files that are still active for
+  // term visibility.  Refreshing the source means reprocessing its canonical
+  // current file, not queueing every retained historical contribution.
+  const files = activeFileId
+    ? sourceFiles.filter((file) => file.id === activeFileId)
+    : sourceFiles.slice(-1);
   if (!files.length) return { queued: 0, runIds: [], processorDispatch: null };
 
   const revision = await parserRuleRevision(env.ROSTER_DB);

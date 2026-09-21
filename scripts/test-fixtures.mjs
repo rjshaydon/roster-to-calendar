@@ -2185,6 +2185,11 @@ assert.match(
   "parser-rule reparses must retain an immutable source file and use a staging destination",
 );
 assert.match(
+  stateSource.match(/async function queueAutomatedSourceReprocess[\s\S]*?function sourceIdForReparseFile/)?.[0] || "",
+  /loadRosterSource[\s\S]*?activeFileId[\s\S]*?sourceFiles\.filter\(\(file\) => file\.id === activeFileId\)/,
+  "a creator source refresh must queue only the source's canonical active file",
+);
+assert.match(
   safeStagedActivationMigrationSource,
   /parser_version = 'legacy-unverified'/,
   "pre-shared-parser roster rows must be marked legacy rather than current",
@@ -4281,7 +4286,9 @@ class MemoryD1Statement {
     if (sql.startsWith("SELECT * FROM roster_sync_runs") && sql.includes("WHERE source_id = ?")) {
       return { results: [...this.db.rosterSyncRuns.values()]
         .filter((row) => row.source_id === args[0])
-        .sort((left, right) => String(right.started_at).localeCompare(String(left.started_at)) || String(right.id).localeCompare(String(left.id)))
+        .sort((left, right) => String(right.started_at).localeCompare(String(left.started_at))
+          || String(right.completed_at).localeCompare(String(left.completed_at))
+          || String(right.id).localeCompare(String(left.id)))
         .slice(0, 1) };
     }
     if (sql.startsWith("SELECT * FROM roster_dispatches ORDER BY")) {
@@ -7152,6 +7159,16 @@ sharedUploadDb.rosterSyncRuns.set("queued-adults", {
   content_hash: "queued-hash", file_id: "automation:monash-adults:queued", status: "queued", message: "Queued",
   doctor_count: 0, event_count: 0, started_at: "2026-07-29T03:00:00.000Z", completed_at: "",
 });
+sharedUploadDb.rosterSyncRuns.set("queued-paeds-sibling", {
+  id: "queued-paeds-sibling", source_id: "monash-paeds", trigger_type: "creator-reprocess", provider_version: "same-time",
+  content_hash: "queued-sibling-hash", file_id: "automation:monash-paeds:failed", status: "queued", message: "Queued",
+  doctor_count: 0, event_count: 0, started_at: "2026-07-29T04:00:00.000Z", completed_at: "",
+});
+sharedUploadDb.rosterSyncRuns.set("successful-paeds-sibling", {
+  id: "successful-paeds-sibling", source_id: "monash-paeds", trigger_type: "creator-reprocess", provider_version: "same-time",
+  content_hash: "successful-sibling-hash", file_id: "automation:monash-paeds:failed", status: "success", message: "Indexed",
+  doctor_count: 75, event_count: 2371, started_at: "2026-07-29T04:00:00.000Z", completed_at: "2026-07-29T04:00:30.000Z",
+});
 sharedUploadDb.rosterSources.set("monash-adults", {
   id: "monash-adults", provider: "sharepoint", source_type: "mmc", label: "Monash Adults", enabled: 1,
   config_json: "{}", cursor_json: "{}", provider_version: "19.0", provider_modified_at: "2026-07-29T02:59:00.000Z",
@@ -7181,6 +7198,11 @@ assert.equal(
   automatedPendingStatus.rosterSourceStatuses.find((source) => source.id === "monash-adults")?.state,
   "queued",
   "an update waiting for GitHub should be reported as queued even when an older version imported successfully",
+);
+assert.notEqual(
+  automatedPendingStatus.rosterSourceStatuses.find((source) => source.id === "monash-paeds")?.state,
+  "queued",
+  "a completed run must outrank an abandoned queued sibling with the same start timestamp",
 );
 for (const [fileId, name, lastModified, title] of [
   ["supersede-old", "MMC_Term2_2026_old.xlsx", 10, "Old MMC Shift"],

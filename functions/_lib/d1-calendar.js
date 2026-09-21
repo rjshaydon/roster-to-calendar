@@ -2997,9 +2997,16 @@ export async function listLatestRosterSyncRuns(db, sourceIds = []) {
   const statements = ids.map((id) => db.prepare(`
     SELECT * FROM roster_sync_runs
     WHERE source_id = ?
-    ORDER BY started_at DESC, id DESC
+      AND started_at = (
+        SELECT MAX(started_at) FROM roster_sync_runs WHERE source_id = ?
+      )
+    -- Old refreshes could create sibling runs with the exact same timestamp.
+    -- Prefer the sibling that actually completed instead of displaying its
+    -- abandoned queued peer forever. The indexed MAX keeps this sort limited
+    -- to that single timestamp rather than scanning the source's history.
+    ORDER BY completed_at DESC, id DESC
     LIMIT 1
-  `).bind(id));
+  `).bind(id, id));
   const results = await Promise.all(statements.map((statement) => statement.all()));
   return results.flatMap((result) => result?.results || []).map(rosterSyncRunFromRow).filter(Boolean);
 }
