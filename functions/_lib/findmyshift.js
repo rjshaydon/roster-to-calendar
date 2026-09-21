@@ -545,8 +545,15 @@ function applyFindmyshiftPayrollTransfers(rows) {
     const timed = dayRows.find((row) => row?.start && row?.end);
     const explicit = dayRows.find((row) => !row?.start && !row?.end && !payrollForDate(row?.label));
     if (timed && payrollForDate(timed.label)) {
-      const fallback = explicit?.label || fallbackByWorkedDay.get(`${findmyshiftStaffKey(timed)}|${timed.date}`);
-      output.push(fallback ? { ...timed, label: fallback, pairingIssue: "" } : timed);
+      // `For D/M` marks the day actually worked. FindMyShift may omit the
+      // later pay-day `Extra ... / worked D/M` marker from the report, so the
+      // actual timed row must remain importable on its own. Prefer an explicit
+      // Extra label when present; otherwise derive only AM versus PM from the
+      // recorded start time. This convention applies to every DDH clinician.
+      const fallback = explicit?.label
+        || fallbackByWorkedDay.get(`${findmyshiftStaffKey(timed)}|${timed.date}`)
+        || extraFindmyshiftLabelForTime(timed.start);
+      output.push({ ...timed, label: fallback, pairingIssue: "" });
       for (const row of dayRows) if (row !== timed && row !== explicit && !payrollForDate(row?.label)) output.push(row);
       continue;
     }
@@ -589,6 +596,12 @@ function payrollFallbackLabel(value) {
   const label = String(value || "").trim();
   if (!label || payrollForDate(label) || payrollWorkedDate(label)) return "";
   return /^extra\b/i.test(label) ? label : "";
+}
+
+function extraFindmyshiftLabelForTime(start) {
+  const match = String(start || "").match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return "Extra shift";
+  return Number(match[1]) >= 12 ? "Extra PM" : "Extra AM";
 }
 
 function payrollReferenceDate(payrollDate, match) {
@@ -640,7 +653,6 @@ function applyKnownDandenongFindmyshiftAssignment(row) {
   const name = normalizeFindmyshiftStaffName(row?.name);
   const key = `${name}|${String(row?.date || "").slice(0, 10)}`;
   const approvedLabels = {
-    "DENNIS CHUNG|2026-09-16": "Extra PM",
     "LISETH JALABE|2026-08-04": "Paired AM",
     "LISETH JALABE|2026-08-05": "Paired AM",
     "LISETH JALABE|2026-08-06": "Paired AM",

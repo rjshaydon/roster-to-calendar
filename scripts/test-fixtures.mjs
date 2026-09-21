@@ -457,7 +457,6 @@ assert.doesNotThrow(
   "Shankar Thapaliya's verified paired AM allocation should resolve without guessing a DDH stream",
 );
 const approvedDdhExceptionRows = extractShiftRows([
-  { staffId: "dennis", date: "2026-09-16", firstName: "Dennis", lastName: "Chung", payrollId: null, occurrences: 1, shift: "14:30-00:00" },
   { staffId: "liseth", facilityId: null, date: "2026-08-04", firstName: "Liseth", lastName: "Jalabe", payrollId: null, occurrences: 1, shift: "08:00-17:30" },
   { staffId: "stella", facilityId: null, date: "2026-08-07", firstName: "Stella", lastName: "Tran", payrollId: null, occurrences: 1, shift: "08:00-17:30" },
   { staffId: "di", facilityId: null, date: "2026-08-13", firstName: "Di", lastName: "Flood", payrollId: null, occurrences: 1, shift: "14:30-00:00" },
@@ -465,7 +464,6 @@ const approvedDdhExceptionRows = extractShiftRows([
 assert.deepEqual(
   approvedDdhExceptionRows.map((row) => ({ name: row.name, date: row.date, label: row.label, start: row.start, end: row.end, facility: row.facility })),
   [
-    { name: "Dennis Chung", date: "2026-09-16", label: "Extra PM", start: "14:30", end: "00:00", facility: "" },
     { name: "Liseth Jalabe", date: "2026-08-04", label: "Paired AM", start: "08:00", end: "17:30", facility: "" },
     { name: "Stella Tran", date: "2026-08-07", label: "Paired AM", start: "08:00", end: "17:30", facility: "" },
     { name: "Di Flood", date: "2026-08-13", label: "S/L", start: "14:30", end: "00:00", facility: "" },
@@ -498,6 +496,24 @@ assert.deepEqual(
 assert.doesNotThrow(
   () => assertFindmyshiftDandenongAssignments(ddhPayrollTransferRows),
   "a payroll fallback should resolve a time-only worked shift without inventing a stream",
+);
+const ddhPayrollMarkerOnlyRows = extractShiftRows([
+  { staffId: "doctor-a", date: "2026-09-15", firstName: "Doctor", lastName: "A", shift: "08:00-17:30" },
+  { staffId: "doctor-a", date: "2026-09-15", firstName: "Doctor", lastName: "A", shift: "For 22/9" },
+  { staffId: "doctor-b", date: "2026-09-16", firstName: "Doctor", lastName: "B", shift: "14:30-00:00" },
+  { staffId: "doctor-b", date: "2026-09-16", firstName: "Doctor", lastName: "B", shift: "For 28/9" },
+]);
+assert.deepEqual(
+  ddhPayrollMarkerOnlyRows.map((row) => ({ name: row.name, label: row.label, start: row.start, end: row.end })),
+  [
+    { name: "Doctor A", label: "Extra AM", start: "08:00", end: "17:30" },
+    { name: "Doctor B", label: "Extra PM", start: "14:30", end: "00:00" },
+  ],
+  "a DDH For marker should create a general Extra AM/PM shift even when the later pay-day marker is absent",
+);
+assert.doesNotThrow(
+  () => assertFindmyshiftDandenongAssignments(ddhPayrollMarkerOnlyRows),
+  "general DDH payroll markers should satisfy the stream-completeness gate for every clinician",
 );
 const ddhReviewedExceptionRows = extractShiftRows([
   { staffId: "melanie", date: "2026-08-10", firstName: "Melanie", lastName: "McCann", shift: "10:00-17:00" },
