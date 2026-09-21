@@ -180,11 +180,15 @@ Never restore the legacy live At a glance history scans.
 
 ## Immediate next action
 
-Gates 0–5 are complete. DDH reached its isolated provider check but the
-FindMyShift service returned HTTP 503 twice, so DDH is paused without changing
-its retained roster. Continue Gate 6 with one VHH canary through the disabled
-instant Production flow. Do not enable the automatic VHH flow, contacts or
-allocations during the canary.
+Gates 0–6 are complete for routine roster synchronisation. MMC, MCH, VHH and
+DDH are enabled behind exact source isolation and the permanent incremental
+fact ceiling. The 22 September DDH import completed successfully with 149
+doctors and 3,651 events; representative Dennis CHUNG and Steve GUASTALEGNAME
+calendar checks passed. The next operational priority is Gate 7: preserve fast
+core calendar loading, then begin the one-MMC-term cached At a glance rollout
+defined in the 22 September readiness packet in
+`core-calendar-sync-restoration-plan.md`. Do not restore contacts or any legacy
+At a glance reader during the first canary.
 
 ## Completed evidence — 20 September 2026
 
@@ -344,3 +348,22 @@ allocations during the canary.
   `Active Medical Roster.xlsx`, and no HTTP retries. Flow checker reported zero
   errors and zero warnings before it was saved and enabled. The instant canary
   flow remains off.
+
+### Gate 6 completion update — 22 September 2026
+
+- Guarded MMC, MCH and VHH routine flows are active and source-isolated.
+- DDH FindMyShift ingestion completed successfully at 01:41 AEST: 149 doctors
+  and 3,651 events, with no duplicate or abandoned queue sibling.
+- MCH's apparent permanently queued state was traced to one manual refresh
+  queueing two retained files at the same timestamp while the one-item worker
+  processed only one. `90bec097` now queues only the canonical active file and
+  prefers a completed sibling when displaying legacy tied rows.
+- The Creator doctor directory is retained locally while browsing claimed and
+  unclaimed calendars (`79c5c7ec`), adding no D1 request.
+- Dennis CHUNG's payroll-transfer shifts and Steve GUASTALEGNAME's 1 November
+  Rover shift were confirmed in Production.
+- Cached repeat switching was fast, but one cold claimed-account switch took
+  approximately 30 seconds and one Creator login approximately 10 seconds.
+  These are not accepted as resolved merely because later cached attempts were
+  faster. The protected performance gate in the core restoration plan governs
+  the follow-up.

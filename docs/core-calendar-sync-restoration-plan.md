@@ -306,6 +306,85 @@ Only after roster syncing is stable, return to
 Contact ingestion and 60-second On shift contact refresh remain separate later
 gates. The permanent legacy At a glance read path is never restored.
 
+### Protected calendar performance gate — added 22 September 2026
+
+Roster restoration is not complete merely because a calendar eventually
+opens. The following three user journeys are protected core-service paths:
+
+1. an ordinary user logging in to their own calendar;
+2. the Creator logging in to the Creator calendar; and
+3. the Creator switching to either a claimed account or an unclaimed doctor
+   profile.
+
+All three paths must render cache-first and then perform at most one bounded
+background validation. A cache miss must build only the requested person's
+calendar from indexed active-file/doctor probes. It must not hydrate all roster
+history, inspect every account, bootstrap roster files in the browser, poll
+repeatedly, or raise the D1 statement ceiling. A request stopped by the
+statement guard is not automatically retried as another expensive request.
+
+Acceptance targets:
+
+- a valid browser/server cache paints the requested calendar within two
+  seconds under ordinary network conditions;
+- a cold cache paints a bounded single-doctor result within five seconds, or
+  presents the last valid snapshot immediately with a clear refreshing state;
+- switching never waits for unrelated Admin, directory, Files or At a glance
+  hydration;
+- one bounded validation may replace the visible snapshot when its revision
+  changes; unchanged validation performs no D1 or R2 writes;
+- the Creator's full claimed/unclaimed doctor switcher remains available from
+  every Creator-entered calendar without another directory query; and
+- `window.__rosterLoginTimings`, request attribution and local statement/row
+  measurements distinguish first paint from background completion for all
+  three paths.
+
+The cache-hit, cold-cache and stale-cache cases require focused local coverage.
+Production verification is one controlled instance of each path followed by a
+settled usage check. This performance work must not reopen identity discovery,
+Creator directory hydration, snapshot fan-out or legacy At a glance reads.
+
+### Gate 8 readiness packet — prepared 22 September 2026
+
+The next At a glance work starts from the following confirmed state:
+
+- MMC, MCH, VHH and DDH routine roster ingestion are source-isolated and open;
+- DDH's 22 September import completed with 149 doctors and 3,651 events;
+- the MCH duplicate reprocess/status defect is repaired in `90bec097`;
+- DDH payroll-transfer, Orientation, teaching-exclusion and Rover/Float parser
+  cases are represented correctly in the resulting calendars;
+- Creator switching retains its full local directory across claimed and
+  unclaimed calendars in `79c5c7ec`;
+- At a glance maintenance, emergency pause, builders, readers, contacts,
+  bootstrap execution and legacy reads all remain closed; and
+- `FACILITY_LEGACY_READS_PAUSED=true` remains permanent.
+
+Tomorrow's sequence is deliberately serial:
+
+1. Record the active commit/configuration and a settled passive account-wide
+   usage sample. Do not open At a glance during this baseline.
+2. Run only the focused local facility materialisation, rollout, access,
+   request-attribution, database-cost and quota suites. Reconfirm that a shared
+   cache miss fails closed and never invokes historical roster SQL.
+3. Identify one exact active MMC roster file and one current MMC medical term.
+   Perform the documented read-only/dry-run bootstrap inspection first. Do not
+   enable a broad file or source scan.
+4. If its returned/examined-row and proposed-mutation ceilings pass, bootstrap
+   compact facts for that one file only. Repeated bootstrap must be a no-op.
+5. Run the resumable publication protocol for that one MMC term: plan, serial
+   seven-day batches, serial month assembly, then fenced atomic finalisation.
+   A partial operation remains invisible to readers.
+6. Enable only the Creator cohort and MMC shared metadata/day readers, with
+   contacts, automatic launch, other EDs and every legacy fallback still off.
+7. Test one MMC date in On shift and Staff, close the browser, and wait for
+   settled attribution before expanding anything.
+8. Only after this canary passes, widen one hospital or one reader cohort at a
+   time. Contacts and 60-second refresh are later independent gates.
+
+No overnight action is required. No production migration, bootstrap,
+publication, reader enablement or At a glance browser test is authorised by
+this readiness packet alone.
+
 ## Production stop and rollback rules
 
 Immediately close automated ingress, queue and the exact source allowlist by a

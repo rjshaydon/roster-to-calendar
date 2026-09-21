@@ -392,6 +392,17 @@ pause, and future maintenance work must not accidentally disable them.
   available.
 - **Note:** These paths remain the protected core service. Optional rollout
   work stops before their daily operating headroom is threatened.
+- **Performance requirement (22 September):** ordinary login, Creator login
+  and Creator switching to claimed/unclaimed calendars must render cache-first
+  and use one bounded indexed background validation. Target first paint is two
+  seconds with a valid cache and five seconds for a cold single-doctor build.
+  A cold claimed-account switch observed at approximately 30 seconds and a
+  Creator login at approximately 10 seconds remain performance defects even
+  though subsequent cached attempts were faster.
+- **Switcher requirement:** the Creator's complete claimed/unclaimed doctor
+  directory remains available from every Creator-entered calendar. It is
+  carried locally across switches and must not require a directory-wide D1
+  query.
 
 ### FR-19 — Colleague insight tools on calendar events
 
@@ -632,6 +643,7 @@ mechanisms are intentionally excluded from restoration.
 | VHH debounced routine restoration, 21 Sep 2026 | Added a five-minute stability delay to `VHH Active Medical Roster to Production`, reread the current SharePoint file metadata, and stopped stale trigger versions successfully before HTTP submission. Concurrency remains one and the trigger remains restricted to `Active Medical Roster.xlsx`. Flow checker reported zero errors/warnings. Reopened `vhh-active-medical-roster` in `26d217b6`; the controlled current-workbook canary parsed 47 doctors and 966 events successfully, and its identical replay dispatched no processor job. The instant canary is Off and the guarded routine flow is On. Rollback is **Turn off** the routine VHH flow and remove its source from the allowlist. |
 | Monash Paediatrics guarded routine restoration, 21 Sep 2026 | Restricted `Sync Monash Paediatrics roster files` to the exact current workbook `Paeds - Term 3 2026.xlsx`, set concurrency to one, added a five-minute stability delay, reread current SharePoint metadata, and stopped stale trigger versions successfully before HTTP submission. Flow checker reported zero errors/warnings. Reopened only `monash-paeds` in Production commit `9bfcdff0` / deployment `74e4b516-91f6-419d-ba08-a0513beb2ce6`, retaining the 1,250 incremental-fact ceiling and all unrelated pauses. The exact-workbook instant canary succeeded in one second; because the workbook content was unchanged from the retained successful import, ingress idempotency dispatched no GitHub processor job. The instant canary is Off and the guarded routine flow is On. Rollback is **Turn off** the routine Paediatrics flow and remove `monash-paeds` from the allowlist. |
 | `c8ac83e` / `00042ece-aa3a-4784-bffe-008e90381d7c`, 14 Sep 2026 | Settled account telemetry attributed the 15:55 bucket's million-row burst to automatic `queryRosterOverlapDoctors` during an ordinary session. Deployed a default-off pre-D1 server gate for both insight actions and disabled client background warm-up. A credential-free Production probe returned 503 `roster-insights-paused`; one current Production and zero Preview deployments remain. The first settled 07:22–08:15 UTC interval recorded 4,209 rows read by 23 calendar-feed requests, zero writes, and exactly one contained insight request (the deliberate probe) with zero D1 statements/rows. The controlled 18:31 AEST ordinary login used three reads; its incremental save used 12 reads and one write. By the fully settled 19:44 AEST cutoff, account usage had increased by only 3,584 reads and one write over the preceding 90 minutes, with no expensive query or second insight request. Roster automation remains closed; restoration is tracked under FR-19. |
+| DDH and switcher restoration, 22 Sep 2026 | DDH completed a guarded import of 149 doctors and 3,651 events. Dennis CHUNG payroll-transfer shifts and Steve GUASTALEGNAME's Rover shift were verified. `90bec097` repaired duplicate retained-file reprocessing and false queued status; `79c5c7ec` carries the visible Creator doctor directory across claimed/unclaimed views without another D1 request. Cold Creator/claimed-account performance remains an explicit FR-18 acceptance item. |
 
 ## Restoration record template
 
