@@ -52,6 +52,20 @@ export async function onRequestPost(context) {
       const dispatch = ["queued", "processing"].includes(status)
         ? await requestQueuedRosterProcessing(context.env, { sourceId, reason: "duplicate-queue-check" })
         : null;
+      // A later rejected candidate can leave a source-level error even though
+      // this exact retained version is already proven successful. Clear that
+      // stale status once when the provider validates the good version again.
+      // Normal unchanged imports, which have no error to heal, remain zero-write.
+      if (status === "unchanged" && String(sourceRecord?.lastError || "").trim()) {
+        await upsertRosterSource(context.env.ROSTER_DB, updatedSourceRecord(sourceRecord, source, {
+          id: sourceId,
+          providerVersion,
+          providerModifiedAt,
+          lastCheckedAt: now,
+          lastError: "",
+          updatedAt: now,
+        }));
+      }
       return Response.json({
         ok: true,
         status,

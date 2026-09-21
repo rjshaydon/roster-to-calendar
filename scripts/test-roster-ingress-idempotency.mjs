@@ -99,6 +99,17 @@ assert.equal((await jsonPayload(await callWorkbook("etag-1"))).status, "unchange
 assert.equal(db.rowsWritten, 0, "an identical workbook provider version must write zero D1 rows");
 assert.equal(r2.puts, putsBefore, "an identical workbook provider version must write zero R2 objects");
 
+sqlite.prepare("UPDATE roster_sources SET last_error='Historical candidate failed' WHERE id='monash-adults'").run();
+db.resetMetrics();
+putsBefore = r2.puts;
+assert.equal((await jsonPayload(await callWorkbook("etag-1"))).status, "unchanged");
+assert.equal(db.rowsWritten, 1, "a successful unchanged validation should clear one stale source error");
+assert.equal(sqlite.prepare("SELECT last_error FROM roster_sources WHERE id='monash-adults'").get().last_error, "");
+assert.equal(r2.puts, putsBefore, "healing stale source status must not rewrite the retained roster object");
+db.resetMetrics();
+assert.equal((await jsonPayload(await callWorkbook("etag-1"))).status, "unchanged");
+assert.equal(db.rowsWritten, 0, "subsequent unchanged validations must return to zero D1 writes");
+
 db.resetMetrics();
 putsBefore = r2.puts;
 assert.equal((await jsonPayload(await callWorkbook("etag-2"))).status, "unchanged");

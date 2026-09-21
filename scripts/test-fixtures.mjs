@@ -515,6 +515,22 @@ assert.doesNotThrow(
   () => assertFindmyshiftDandenongAssignments(ddhPayrollMarkerOnlyRows),
   "general DDH payroll markers should satisfy the stream-completeness gate for every clinician",
 );
+const ddhTimeOnlyFallbackRows = extractShiftRows([
+  { staffId: "doctor-c", date: "2026-09-17", firstName: "Doctor", lastName: "C", shift: "08:00-17:30" },
+  { staffId: "doctor-d", date: "2026-09-18", firstName: "Doctor", lastName: "D", shift: "14:30-00:00" },
+]);
+assert.deepEqual(
+  ddhTimeOnlyFallbackRows.map((row) => ({ name: row.name, label: row.label, start: row.start, end: row.end })),
+  [
+    { name: "Doctor C", label: "Extra AM", start: "08:00", end: "17:30" },
+    { name: "Doctor D", label: "Extra PM", start: "14:30", end: "00:00" },
+  ],
+  "ordinary DDH time-only API rows should remain importable for every clinician instead of rejecting the roster",
+);
+assert.doesNotThrow(
+  () => assertFindmyshiftDandenongAssignments(ddhTimeOnlyFallbackRows),
+  "ordinary DDH time-only fallbacks should pass the automated import gate",
+);
 const ddhReviewedExceptionRows = extractShiftRows([
   { staffId: "melanie", date: "2026-08-10", firstName: "Melanie", lastName: "McCann", shift: "10:00-17:00" },
   { staffId: "melanie", date: "2026-10-04", firstName: "Melanie", lastName: "McCann", shift: "08:00-18:00" },

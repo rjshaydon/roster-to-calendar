@@ -508,9 +508,23 @@ function pairFindmyshiftTimeAndStreamRows(rows) {
     }
     paired.push(...pairFindmyshiftStaffDayRows(group));
   }
-  return applyKnownDandenongFindmyshiftDispositions(
-    applyFindmyshiftPayrollTransfers(paired.map(applyKnownDandenongFindmyshiftAssignment)),
+  return applyUnassignedDandenongTimedShiftFallbacks(
+    applyKnownDandenongFindmyshiftDispositions(
+      applyFindmyshiftPayrollTransfers(paired.map(applyKnownDandenongFindmyshiftAssignment)),
+    ),
   );
+}
+
+// The established DDH importer keeps a real timed shift even when the
+// provider omits its descriptive stream, then surfaces the less-specific
+// result for review. Preserve that behaviour for the ordinary
+// time-without-named-stream layout instead of rejecting the whole roster.
+// Do not relax malformed ordering or multiple-time-row layouts.
+function applyUnassignedDandenongTimedShiftFallbacks(rows) {
+  return rows.map((row) => isAmbiguousFindmyshiftTimedRow(row)
+      && String(row?.pairingIssue || "time-without-named-stream") === "time-without-named-stream"
+    ? { ...row, pairingIssue: "", label: extraFindmyshiftLabelForTime(row.start) }
+    : row);
 }
 
 // DDH sometimes moves payment for a worked shift into a later fortnight. The
