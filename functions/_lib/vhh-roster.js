@@ -14,8 +14,6 @@ const SHIFT_DEFINITIONS = new Map([
   ["AM REG", shift("AM Reg", "Junior Registrar", "08:00", "17:30")],
   ["SSU HMO (8-4)", shift("SSU HMO", "HMO", "08:00", "16:00")],
   ["AM JMS", shift("AM JMS", "Junior Registrar", "08:00", "17:30")],
-  ["SWING", shift("Swing SMS 1000", "SMS", "10:00", "19:30")],
-  ["SWING 1230PM", shift("Swing SMS 1230", "SMS", "12:30", "22:00")],
   ["PM SMS", shift("PM SMS", "SMS", "14:30", "00:00")],
   ["PM REG", shift("PM Reg", "Junior Registrar", "14:30", "00:00")],
   ["PM JMS", shift("PM JMS", "Junior Registrar", "14:30", "00:00")],
@@ -262,7 +260,14 @@ function shift(title, seniority, startTime, endTime, hasLocation = true) {
 }
 
 function shiftDefinition(label) {
-  return SHIFT_DEFINITIONS.get(normaliseShiftLabel(label)) || null;
+  const normalised = normaliseShiftLabel(label);
+  const swing = normalised.match(/^SWING(?:\s+(\d{1,2}(?::?\d{2})?\s*(?:AM|PM)?))?$/);
+  if (swing) {
+    const startTime = swing[1] ? vhhSwingStartTime(swing[1]) : "10:00";
+    if (!startTime) return null;
+    return shift("Swing", "SMS", startTime, addClockMinutes(startTime, 9.5 * 60));
+  }
+  return SHIFT_DEFINITIONS.get(normalised) || null;
 }
 
 function isIgnoredShift(label) {
@@ -293,6 +298,24 @@ function clock(value) {
   if (hour === 24 && minute === 0) return "00:00";
   if (hour > 23 || minute > 59) return "";
   return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function vhhSwingStartTime(value) {
+  const match = String(value || "").trim().match(/^(\d{1,2})(?::?(\d{2}))?\s*(AM|PM)?$/i);
+  if (!match) return "";
+  let hour = Number(match[1]);
+  const minute = Number(match[2] || 0);
+  const period = String(match[3] || "").toUpperCase();
+  if (minute > 59 || hour > (period ? 12 : 23) || hour < (period ? 1 : 0)) return "";
+  if (period === "AM") hour %= 12;
+  if (period === "PM") hour = (hour % 12) + 12;
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function addClockMinutes(value, minutesToAdd) {
+  const [hour, minute] = value.split(":").map(Number);
+  const total = (hour * 60 + minute + minutesToAdd) % (24 * 60);
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
 }
 
 function addDays(date, days) {
