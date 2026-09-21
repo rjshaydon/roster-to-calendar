@@ -457,6 +457,7 @@ assert.doesNotThrow(
   "Shankar Thapaliya's verified paired AM allocation should resolve without guessing a DDH stream",
 );
 const approvedDdhExceptionRows = extractShiftRows([
+  { staffId: "dennis", date: "2026-09-16", firstName: "Dennis", lastName: "Chung", payrollId: null, occurrences: 1, shift: "14:30-00:00" },
   { staffId: "liseth", facilityId: null, date: "2026-08-04", firstName: "Liseth", lastName: "Jalabe", payrollId: null, occurrences: 1, shift: "08:00-17:30" },
   { staffId: "stella", facilityId: null, date: "2026-08-07", firstName: "Stella", lastName: "Tran", payrollId: null, occurrences: 1, shift: "08:00-17:30" },
   { staffId: "di", facilityId: null, date: "2026-08-13", firstName: "Di", lastName: "Flood", payrollId: null, occurrences: 1, shift: "14:30-00:00" },
@@ -464,6 +465,7 @@ const approvedDdhExceptionRows = extractShiftRows([
 assert.deepEqual(
   approvedDdhExceptionRows.map((row) => ({ name: row.name, date: row.date, label: row.label, start: row.start, end: row.end, facility: row.facility })),
   [
+    { name: "Dennis Chung", date: "2026-09-16", label: "Extra PM", start: "14:30", end: "00:00", facility: "" },
     { name: "Liseth Jalabe", date: "2026-08-04", label: "Paired AM", start: "08:00", end: "17:30", facility: "" },
     { name: "Stella Tran", date: "2026-08-07", label: "Paired AM", start: "08:00", end: "17:30", facility: "" },
     { name: "Di Flood", date: "2026-08-13", label: "S/L", start: "14:30", end: "00:00", facility: "" },

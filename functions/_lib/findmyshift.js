@@ -640,6 +640,7 @@ function applyKnownDandenongFindmyshiftAssignment(row) {
   const name = normalizeFindmyshiftStaffName(row?.name);
   const key = `${name}|${String(row?.date || "").slice(0, 10)}`;
   const approvedLabels = {
+    "DENNIS CHUNG|2026-09-16": "Extra PM",
     "LISETH JALABE|2026-08-04": "Paired AM",
     "LISETH JALABE|2026-08-05": "Paired AM",
     "LISETH JALABE|2026-08-06": "Paired AM",
