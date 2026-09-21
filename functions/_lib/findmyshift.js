@@ -508,7 +508,118 @@ function pairFindmyshiftTimeAndStreamRows(rows) {
     }
     paired.push(...pairFindmyshiftStaffDayRows(group));
   }
-  return paired.map(applyKnownDandenongFindmyshiftAssignment);
+  return applyKnownDandenongFindmyshiftDispositions(
+    applyFindmyshiftPayrollTransfers(paired.map(applyKnownDandenongFindmyshiftAssignment)),
+  );
+}
+
+// DDH sometimes moves payment for a worked shift into a later fortnight. The
+// actual day carries `For D/M`; the pay-only day carries `Extra ...` plus
+// `worked D/M`. Keep the event on the day it was worked, use the ordinary
+// stream shown on that day when present, and otherwise use the `Extra ...`
+// label as a conservative fallback. Never publish the later payroll marker as
+// another clinical shift.
+function applyFindmyshiftPayrollTransfers(rows) {
+  const source = Array.isArray(rows) ? rows : [];
+  const fallbackByWorkedDay = new Map();
+  const payrollIndexes = new Set();
+  const groups = groupFindmyshiftRowsByStaffDay(source);
+
+  for (const indexes of groups.values()) {
+    const worked = indexes.map((index) => ({ index, match: payrollWorkedDate(source[index]?.label) })).find((entry) => entry.match);
+    if (!worked) continue;
+    const companion = indexes.map((index) => ({ index, label: payrollFallbackLabel(source[index]?.label) }))
+      .find((entry) => entry.index !== worked.index && entry.label);
+    const combinedLabel = payrollFallbackLabel(String(source[worked.index]?.label || "").replace(/\bworked\s+\d{1,2}\/\d{1,2}.*$/i, ""));
+    const fallback = companion?.label || combinedLabel || "Extra shift";
+    const actualDate = payrollReferenceDate(source[worked.index]?.date, worked.match);
+    if (actualDate) fallbackByWorkedDay.set(`${findmyshiftStaffKey(source[worked.index])}|${actualDate}`, fallback);
+    for (const index of indexes) {
+      if (index === worked.index || index === companion?.index) payrollIndexes.add(index);
+    }
+  }
+
+  const output = [];
+  for (const indexes of groups.values()) {
+    const dayRows = indexes.filter((index) => !payrollIndexes.has(index)).map((index) => source[index]);
+    const timed = dayRows.find((row) => row?.start && row?.end);
+    const explicit = dayRows.find((row) => !row?.start && !row?.end && !payrollForDate(row?.label));
+    if (timed && payrollForDate(timed.label)) {
+      const fallback = explicit?.label || fallbackByWorkedDay.get(`${findmyshiftStaffKey(timed)}|${timed.date}`);
+      output.push(fallback ? { ...timed, label: fallback, pairingIssue: "" } : timed);
+      for (const row of dayRows) if (row !== timed && row !== explicit && !payrollForDate(row?.label)) output.push(row);
+      continue;
+    }
+    for (const row of dayRows) {
+      if (payrollForDate(row?.label)) continue;
+      if (isAmbiguousFindmyshiftTimedRow(row)) {
+        const fallback = fallbackByWorkedDay.get(`${findmyshiftStaffKey(row)}|${row.date}`);
+        output.push(fallback ? { ...row, label: fallback, pairingIssue: "" } : row);
+      } else {
+        output.push(row);
+      }
+    }
+  }
+  return output;
+}
+
+function groupFindmyshiftRowsByStaffDay(rows) {
+  const groups = new Map();
+  rows.forEach((row, index) => {
+    const key = `${findmyshiftStaffKey(row)}|${String(row?.date || "")}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(index);
+  });
+  return groups;
+}
+
+function findmyshiftStaffKey(row) {
+  return String(row?.sourceStaffId || normalizeFindmyshiftStaffName(row?.name));
+}
+
+function payrollForDate(value) {
+  return String(value || "").trim().match(/^for\s+(\d{1,2})\/(\d{1,2})(?:\/\d{2,4})?$/i);
+}
+
+function payrollWorkedDate(value) {
+  return String(value || "").trim().match(/\bworked\s+(\d{1,2})\/(\d{1,2})(?:\/\d{2,4})?\b/i);
+}
+
+function payrollFallbackLabel(value) {
+  const label = String(value || "").trim();
+  if (!label || payrollForDate(label) || payrollWorkedDate(label)) return "";
+  return /^extra\b/i.test(label) ? label : "";
+}
+
+function payrollReferenceDate(payrollDate, match) {
+  const year = String(payrollDate || "").slice(0, 4);
+  const day = String(match?.[1] || "").padStart(2, "0");
+  const month = String(match?.[2] || "").padStart(2, "0");
+  const value = `${year}-${month}-${day}`;
+  return validDateKey(value);
+}
+
+function applyKnownDandenongFindmyshiftDispositions(rows) {
+  const dispositions = {
+    "MELANIE MCCANN|2026-08-10": null,
+    "MELANIE MCCANN|2026-10-04": null,
+    "BRENDAN TIAN|2026-10-19": "Orientation",
+    "HANNAH HUSODO|2026-10-19": "Orientation",
+    "LI XIE|2026-10-19": "Orientation",
+    "MANVEEN KAUR|2026-10-19": "Orientation",
+    "NANDITHA HAREESH|2026-10-19": "Orientation",
+    "SOPHIE CARNE|2026-10-19": "Orientation",
+    "SOPHIE CHAN|2026-10-19": "Orientation",
+    "YASEER SYED|2026-10-19": "Orientation",
+    "STEVE GUASTALEGNAME|2026-11-01": "Rover/Float",
+  };
+  return rows.flatMap((row) => {
+    if (!isAmbiguousFindmyshiftTimedRow(row)) return [row];
+    const key = `${normalizeFindmyshiftStaffName(row?.name)}|${String(row?.date || "").slice(0, 10)}`;
+    if (!Object.hasOwn(dispositions, key)) return [row];
+    const label = dispositions[key];
+    return label ? [{ ...row, label, pairingIssue: "" }] : [];
+  });
 }
 
 // Kim Whelan is the Dandenong office worker. FindMyShift records his office

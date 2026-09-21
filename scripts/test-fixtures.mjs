@@ -474,6 +474,60 @@ assert.doesNotThrow(
   () => assertFindmyshiftDandenongAssignments(approvedDdhExceptionRows),
   "approved date-scoped DDH exceptions should satisfy the stream-completeness gate",
 );
+const ddhPayrollTransferRows = extractShiftRows([
+  { staffId: "dennis", date: "2026-09-15", firstName: "Dennis", lastName: "Chung", shift: "14:30-00:00" },
+  { staffId: "dennis", date: "2026-09-15", firstName: "Dennis", lastName: "Chung", shift: "Orange PM2" },
+  { staffId: "dennis", date: "2026-09-15", firstName: "Dennis", lastName: "Chung", shift: "For 22/9" },
+  { staffId: "dennis", date: "2026-09-16", firstName: "Dennis", lastName: "Chung", shift: "14:30-00:00" },
+  { staffId: "dennis", date: "2026-09-16", firstName: "Dennis", lastName: "Chung", shift: "For 28/9" },
+  { staffId: "dennis", date: "2026-09-22", firstName: "Dennis", lastName: "Chung", shift: "Extra PM" },
+  { staffId: "dennis", date: "2026-09-22", firstName: "Dennis", lastName: "Chung", shift: "worked 15/9" },
+  { staffId: "dennis", date: "2026-09-28", firstName: "Dennis", lastName: "Chung", shift: "Extra PM" },
+  { staffId: "dennis", date: "2026-09-28", firstName: "Dennis", lastName: "Chung", shift: "worked 16/9" },
+]);
+assert.deepEqual(
+  ddhPayrollTransferRows.map((row) => ({ date: row.date, label: row.label, start: row.start, end: row.end })),
+  [
+    { date: "2026-09-15", label: "Orange PM2", start: "14:30", end: "00:00" },
+    { date: "2026-09-16", label: "Extra PM", start: "14:30", end: "00:00" },
+  ],
+  "DDH payroll transfers should retain actual worked shifts and suppress later pay-only markers",
+);
+assert.doesNotThrow(
+  () => assertFindmyshiftDandenongAssignments(ddhPayrollTransferRows),
+  "a payroll fallback should resolve a time-only worked shift without inventing a stream",
+);
+const ddhReviewedExceptionRows = extractShiftRows([
+  { staffId: "melanie", date: "2026-08-10", firstName: "Melanie", lastName: "McCann", shift: "10:00-17:00" },
+  { staffId: "melanie", date: "2026-10-04", firstName: "Melanie", lastName: "McCann", shift: "08:00-18:00" },
+  ...["Brendan Tian", "Hannah Husodo", "Li Xie", "Manveen Kaur", "Nanditha Hareesh", "Sophie Carne", "Sophie Chan", "Yaseer Syed"].map((name, index) => ({
+    staffId: `orientation-${index}`,
+    date: "2026-10-19",
+    firstName: name.split(" ")[0],
+    lastName: name.split(" ").slice(1).join(" "),
+    shift: "08:00-17:30",
+  })),
+  { staffId: "steve", date: "2026-11-01", firstName: "Steve", lastName: "Guastalegname", shift: "08:00-18:00" },
+]);
+assert.deepEqual(
+  ddhReviewedExceptionRows.map((row) => [row.name, row.date, row.label]),
+  [
+    ["Brendan Tian", "2026-10-19", "Orientation"],
+    ["Hannah Husodo", "2026-10-19", "Orientation"],
+    ["Li Xie", "2026-10-19", "Orientation"],
+    ["Manveen Kaur", "2026-10-19", "Orientation"],
+    ["Nanditha Hareesh", "2026-10-19", "Orientation"],
+    ["Sophie Carne", "2026-10-19", "Orientation"],
+    ["Sophie Chan", "2026-10-19", "Orientation"],
+    ["Yaseer Syed", "2026-10-19", "Orientation"],
+    ["Steve Guastalegname", "2026-11-01", "Rover/Float"],
+  ],
+  "reviewed DDH exceptions should ignore external teaching and retain confirmed orientation and rover shifts",
+);
+assert.doesNotThrow(
+  () => assertFindmyshiftDandenongAssignments(ddhReviewedExceptionRows),
+  "reviewed DDH exceptions should satisfy the stream-completeness gate",
+);
 assert.deepEqual(
   findmyshiftRows.map((row) => ({ date: row.date, label: row.label, start: row.start, end: row.end, facility: row.facility, seniority: row.seniority, comment: row.comment })),
   [
@@ -1092,7 +1146,7 @@ assert.match(findmyshiftCheckSource, /isTransientFindmyshiftRateLimitError[\s\S]
 assert.match(findmyshiftCheckSource, /safeFindmyshiftDiagnostic[\s\S]*diagnostic\.status === 429 \? 429 : 502/, "FindMyShift failures should return a safe provider diagnostic and preserve rate-limit status");
 assert.match(stateSource, /publicFindmyshiftDiagnostic[\s\S]*findmyshiftFailureMessage/, "controlled FindMyShift refresh failures should surface only safe provider diagnostics");
 assert.match(findmyshiftModuleSource, /NEXT_TERM_LOOKAHEAD_DAYS = 28[\s\S]*findmyshiftPublicationWindow/, "FindMyShift should use a four-week early-publication window for the next term");
-assert.match(findmyshiftCheckSource, /IMPORT_FORMAT = "stream-paired-v7"[\s\S]*term-window change deliberately[\s\S]*rangeState\.requested[\s\S]*importFormat: IMPORT_FORMAT/, "a new FindMyShift parser revision or term window should bypass an unchanged provider version and persist its requested range");
+assert.match(findmyshiftCheckSource, /IMPORT_FORMAT = "stream-paired-v8"[\s\S]*term-window change deliberately[\s\S]*rangeState\.requested[\s\S]*importFormat: IMPORT_FORMAT/, "a new FindMyShift parser revision or term window should bypass an unchanged provider version and persist its requested range");
 assert.match(findmyshiftCheckSource, /findmyshift-no-shifts[\s\S]*waiting-for-publication/, "an unpublished upcoming FindMyShift term should wait for a provider update instead of surfacing as an import failure");
 assert.match(
   findmyshiftCheckSource,
@@ -1129,7 +1183,7 @@ assert.doesNotMatch(automationWorkflowSource, /schedule:/, "GitHub cron must not
 assert.match(automationIngestSource, /requestQueuedRosterProcessing/, "a newly retained roster should request the processor immediately");
 assert.match(
   findmyshiftCheckSource,
-  /IMPORT_FORMAT = "stream-paired-v7"[\s\S]*Dandenong-FindMyShift-\$\{IMPORT_FORMAT\}[\s\S]*saved\?\.importFormat[\s\S]*importFormat: IMPORT_FORMAT/,
+  /IMPORT_FORMAT = "stream-paired-v8"[\s\S]*Dandenong-FindMyShift-\$\{IMPORT_FORMAT\}[\s\S]*saved\?\.importFormat[\s\S]*importFormat: IMPORT_FORMAT/,
   "a corrected FindMyShift parser should retain a fresh generated source and bypass an older parser revision",
 );
 assert.match(automationDispatchSource, /GITHUB_ACTIONS_TOKEN[\s\S]*actions\/workflows[\s\S]*\/dispatches/, "dispatches should use a server-side GitHub Actions token");

@@ -166,10 +166,10 @@ assert.equal(r2.puts, putsBefore, "a repeated queued VHH version must write zero
 
 const ddhVersion = "2026-09-01T00:00:00.000Z";
 const ddhRange = { from: "2026-08-03", to: "2026-11-01" };
-const ddhFileName = `Dandenong-FindMyShift-stream-paired-v7-${ddhRange.from}-to-${ddhRange.to}.xlsx`;
+const ddhFileName = `Dandenong-FindMyShift-stream-paired-v8-${ddhRange.from}-to-${ddhRange.to}.xlsx`;
 const ddhFileId = seedSuccessfulRun({ sourceId: "dandenong-findmyshift", sourceType: "ddh", fileName: ddhFileName, providerVersion: ddhVersion, contentHash: "ddh-hash", suffix: "ddh" });
 sqlite.prepare(`UPDATE roster_sources SET provider_version=?, active_file_id=?, cursor_json=? WHERE id='dandenong-findmyshift'`)
-  .run(ddhVersion, ddhFileId, JSON.stringify({ findmyshiftRange: { ...ddhRange, providerVersion: ddhVersion, importFormat: "stream-paired-v7", status: "queued" } }));
+  .run(ddhVersion, ddhFileId, JSON.stringify({ findmyshiftRange: { ...ddhRange, providerVersion: ddhVersion, importFormat: "stream-paired-v8", status: "queued" } }));
 const originalFetch = globalThis.fetch;
 let providerRequests = 0;
 globalThis.fetch = async () => { providerRequests += 1; return Response.json({ modified: ddhVersion }); };
