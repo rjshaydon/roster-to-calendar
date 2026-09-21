@@ -385,6 +385,22 @@ No overnight action is required. No production migration, bootstrap,
 publication, reader enablement or At a glance browser test is authorised by
 this readiness packet alone.
 
+Offline preflight completed 22 September 2026:
+
+- `test:facility-materialization`, `test:facility-rollout`,
+  `test:facility-access`, `test:request-attribution`, `test:database-costs` and
+  `test:d1-quota` all passed;
+- the synthetic database contained 109,200 roster events, 600 doctors, 10,000
+  accounts, 20,000 claims, 10,000 sync runs and 10,000 dispatches;
+- compact coverage and Staff plans used their compact indexes and read no
+  roster-event history;
+- exact doctor-profile loading used active-file and file/doctor indexes; and
+- legacy readers, builders and emergency-sensitive paths remain closed in
+  committed Production configuration.
+
+Therefore tomorrow starts at step 1 (passive account-wide baseline), not by
+repeating local implementation or broad regression testing.
+
 ## Production stop and rollback rules
 
 Immediately close automated ingress, queue and the exact source allowlist by a
