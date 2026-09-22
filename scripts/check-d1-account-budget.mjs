@@ -9,6 +9,8 @@ const generatedAt = new Date().toISOString();
 const inventoryPath = resolve(options.inventory || "config/d1-database-inventory.json");
 const inventory = JSON.parse(await readFile(inventoryPath, "utf8"));
 const previousReport = options.previous ? JSON.parse(await readFile(resolve(options.previous), "utf8")) : null;
+const requestAttribution = options.requestAttribution ? JSON.parse(await readFile(resolve(options.requestAttribution), "utf8")) : null;
+const reviewedFingerprintDocument = options.reviewedFingerprints ? JSON.parse(await readFile(resolve(options.reviewedFingerprints), "utf8")) : null;
 const accountId = String(process.env.CLOUDFLARE_ACCOUNT_ID || inventory.accountId || "").trim();
 const analyticsCredential = loadAnalyticsCredential();
 const token = analyticsCredential.token;
@@ -51,6 +53,14 @@ const assessment = evaluateD1Budget({
   previousReport,
   now: generatedAt,
   optionalEstimate: { rowsRead: options.estimatedReads, rowsWritten: options.estimatedWrites },
+  canary: options.mode === "canary" ? {
+    readCeiling: options.canaryReadCeiling,
+    requestId: options.requestId,
+    requestAttribution,
+    reviewedFingerprints: Array.isArray(reviewedFingerprintDocument)
+      ? reviewedFingerprintDocument
+      : reviewedFingerprintDocument?.queries || [],
+  } : null,
 });
 const report = {
   schemaVersion: 1,
@@ -77,9 +87,10 @@ function parseArguments(args) {
     if (!key.startsWith("--") || index + 1 >= args.length) throw new Error(`Invalid argument: ${key}`);
     const value = args[++index];
     const name = key.slice(2).replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase());
-    if (!["inventory", "previous", "output", "rawOutput", "billingReads", "billingWrites", "billingObservedAt", "billingUnavailableReason", "estimatedReads", "estimatedWrites"].includes(name)) throw new Error(`Unknown argument: ${key}`);
+    if (!["inventory", "previous", "output", "rawOutput", "billingReads", "billingWrites", "billingObservedAt", "billingUnavailableReason", "estimatedReads", "estimatedWrites", "mode", "canaryReadCeiling", "requestId", "requestAttribution", "reviewedFingerprints"].includes(name)) throw new Error(`Unknown argument: ${key}`);
     parsed[name] = value;
   }
+  if (parsed.mode && !["baseline", "canary"].includes(parsed.mode)) throw new Error(`Invalid mode: ${parsed.mode}`);
   return parsed;
 }
 

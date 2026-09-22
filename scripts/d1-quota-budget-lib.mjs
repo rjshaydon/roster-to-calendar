@@ -16,6 +16,9 @@ export const D1_BUDGET_LIMITS = Object.freeze({
   analyticsSettlementMs: 15 * 60 * 1000,
   maximumAnalyticsReconciliationFraction: 0.01,
   maximumAnalyticsReconciliationFloor: 100,
+  maximumAtAGlanceBucketReads: 100_000,
+  canaryBucketHeadroomReads: 10_000,
+  passiveBucketMultiplier: 4,
 });
 
 export const D1_BILLING_UNAVAILABLE_REASON = "free-plan-dashboard-omits-d1";
@@ -135,6 +138,16 @@ export function summarizeAnalyticsPayload(payload, inventory) {
     if (bucket.databaseId && !inventoryIds.has(bucket.databaseId)) reasons.push(`unknown-timeline-database:${bucket.databaseId}`);
   }
   const timelineTotals = timeline.reduce((total, bucket) => addUsage(total, bucket), emptyUsage("timeline"));
+  const timelineByTimestamp = new Map();
+  for (const bucket of timeline) {
+    const current = timelineByTimestamp.get(bucket.observedAt) || { observedAt: bucket.observedAt, rowsRead: 0, rowsWritten: 0, readQueries: 0, writeQueries: 0 };
+    timelineByTimestamp.set(bucket.observedAt, addUsage(current, bucket));
+  }
+  const fiveMinuteBuckets = [...timelineByTimestamp.values()].sort((left, right) => left.observedAt.localeCompare(right.observedAt));
+  const maximumFiveMinute = fiveMinuteBuckets.reduce((maximum, bucket) => ({
+    rowsRead: Math.max(maximum.rowsRead, bucket.rowsRead),
+    rowsWritten: Math.max(maximum.rowsWritten, bucket.rowsWritten),
+  }), { rowsRead: 0, rowsWritten: 0 });
   const fingerprintTotals = queryFingerprints.reduce((total, fingerprint) => {
     total.rowsRead += fingerprint.totalRowsRead;
     total.rowsWritten += fingerprint.totalRowsWritten;
@@ -144,13 +157,10 @@ export function summarizeAnalyticsPayload(payload, inventory) {
   if (strictlyDifferent(totals.rowsRead, timelineTotals.rowsRead) || strictlyDifferent(totals.rowsWritten, timelineTotals.rowsWritten)) {
     reasons.push("analytics-time-buckets-do-not-reconcile");
   }
-  // Cloudflare's usage and query-fingerprint adaptive groups are sampled
-  // independently. Keep timeline reconciliation strict, but tolerate a small
-  // absolute read-only sampling gap between those two datasets. Writes retain
-  // the strict threshold because even a small unattributed mutation matters.
-  if (materiallyDifferent(totals.rowsRead, fingerprintTotals.rowsRead) || strictlyDifferent(totals.rowsWritten, fingerprintTotals.rowsWritten)) {
-    reasons.push("query-attribution-incomplete");
-  }
+  // Cloudflare samples usage and query-fingerprint adaptive groups
+  // independently. The daily/timeline aggregate is the quota ledger. Preserve
+  // the fingerprint difference for diagnostics, but never treat it as missing
+  // quota usage by itself.
   return {
     complete: reasons.length === 0,
     reasons: [...new Set(reasons)],
@@ -158,16 +168,19 @@ export function summarizeAnalyticsPayload(payload, inventory) {
     totals,
     timeline,
     timelineTotals,
+    fiveMinuteBuckets,
+    maximumFiveMinute,
     fingerprintTotals,
-    unattributed: {
+    fingerprintSamplingDifference: {
       rowsRead: totals.rowsRead - fingerprintTotals.rowsRead,
       rowsWritten: totals.rowsWritten - fingerprintTotals.rowsWritten,
+      queries: totals.readQueries + totals.writeQueries - fingerprintTotals.queries,
     },
     queryFingerprints,
   };
 }
 
-export function evaluateD1Budget({ analytics, inventory, billing, previousReport, now = new Date(), optionalEstimate = {} } = {}) {
+export function evaluateD1Budget({ analytics, inventory, billing, previousReport, now = new Date(), optionalEstimate = {}, canary = null } = {}) {
   const interval = analytics?.interval || utcDayInterval(now);
   const reasons = [...(analytics?.reasons || [])];
   if (!inventory?.complete) reasons.push("database-inventory-incomplete");
@@ -233,6 +246,12 @@ export function evaluateD1Budget({ analytics, inventory, billing, previousReport
   if (effectiveReads + estimatedReads * 2 > D1_BUDGET_LIMITS.optionalReadStop) reasons.push("optional-read-estimate-exceeds-budget");
   if (effectiveWrites + estimatedWrites * 2 > D1_BUDGET_LIMITS.optionalWriteStop) reasons.push("optional-write-estimate-exceeds-budget");
 
+  const passiveMaximumReads = finiteNonNegative(previousReport?.analytics?.maximumFiveMinute?.rowsRead)
+    ?? finiteNonNegative(analytics?.maximumFiveMinute?.rowsRead)
+    ?? 0;
+  const canaryAssessment = evaluateCanaryEvidence({ canary, analytics, previousReport, passiveMaximumReads });
+  reasons.push(...canaryAssessment.reasons);
+
   return {
     decision: reasons.length ? "STOP" : "GO",
     sampleValid: evidenceReasons.length === 0,
@@ -243,12 +262,70 @@ export function evaluateD1Budget({ analytics, inventory, billing, previousReport
     burnRateRowsPerHour,
     projectedReads,
     expensiveFingerprints: expensiveFingerprints.slice(0, 20),
+    passiveEnvelope: {
+      maximumFiveMinuteRowsRead: passiveMaximumReads,
+      multiplier: D1_BUDGET_LIMITS.passiveBucketMultiplier,
+    },
+    canary: canaryAssessment.report,
     optionalEstimate: { rowsRead: estimatedReads, rowsWritten: estimatedWrites, contingencyMultiplier: 2 },
   };
 }
 
+function evaluateCanaryEvidence({ canary, analytics, previousReport, passiveMaximumReads }) {
+  if (!canary) return { reasons: [], report: null };
+  const reasons = [];
+  const readCeiling = finiteNonNegative(canary.readCeiling);
+  const requestId = String(canary.requestId || "").trim();
+  const attribution = canary.requestAttribution && typeof canary.requestAttribution === "object" ? canary.requestAttribution : null;
+  if (readCeiling === null) reasons.push("canary-read-ceiling-required");
+  if (!requestId) reasons.push("canary-request-id-required");
+  if (!attribution) reasons.push("canary-request-attribution-required");
+  else {
+    if (String(attribution.requestId || "") !== requestId) reasons.push("canary-request-attribution-mismatch");
+    if (attribution.d1MetadataComplete === false || attribution.metadataComplete === false) reasons.push("canary-request-metadata-incomplete");
+    const attributedReads = finiteNonNegative(attribution.d1RowsRead);
+    const attributedWrites = finiteNonNegative(attribution.d1RowsWritten);
+    const statements = finiteNonNegative(attribution.d1Statements);
+    const statementLimit = finiteNonNegative(attribution.d1Limit);
+    if (attributedReads === null || attributedWrites === null || statements === null) reasons.push("canary-request-counters-invalid");
+    if (readCeiling !== null && attributedReads !== null && attributedReads > readCeiling) reasons.push("canary-request-read-ceiling-exceeded");
+    if (statementLimit !== null && statements !== null && statements > statementLimit) reasons.push("canary-request-statement-ceiling-exceeded");
+  }
+
+  const allowedQueries = new Set((canary.reviewedFingerprints || []).map((query) => String(query)));
+  const previousQueries = new Set((previousReport?.analytics?.queryFingerprints || []).map((fingerprint) => fingerprint.query));
+  const newQueries = (analytics?.queryFingerprints || []).filter((fingerprint) => fingerprint.query && !previousQueries.has(fingerprint.query));
+  const unreviewedQueries = newQueries.filter((fingerprint) => !allowedQueries.has(fingerprint.query));
+  if (unreviewedQueries.length) reasons.push("canary-unreviewed-query-fingerprint");
+
+  const envelope = Math.max(
+    passiveMaximumReads * D1_BUDGET_LIMITS.passiveBucketMultiplier,
+    (readCeiling ?? 0) + D1_BUDGET_LIMITS.canaryBucketHeadroomReads,
+  );
+  const previousObservedUntil = Date.parse(previousReport?.interval?.observedUntil || "");
+  const canaryBuckets = Number.isFinite(previousObservedUntil)
+    ? (analytics?.fiveMinuteBuckets || []).filter((bucket) => Date.parse(bucket.observedAt) > previousObservedUntil)
+    : (analytics?.fiveMinuteBuckets || []);
+  const maximumBucketReads = canaryBuckets.reduce((maximum, bucket) => Math.max(maximum, finiteNonNegative(bucket.rowsRead) ?? 0), 0);
+  if (maximumBucketReads > envelope) reasons.push("canary-five-minute-envelope-exceeded");
+  if (maximumBucketReads > D1_BUDGET_LIMITS.maximumAtAGlanceBucketReads) reasons.push("at-a-glance-five-minute-hard-stop");
+
+  return {
+    reasons,
+    report: {
+      requestId: requestId || null,
+      readCeiling,
+      envelopeRowsRead: envelope,
+      maximumFiveMinuteRowsRead: maximumBucketReads,
+      requestAttributionPresent: Boolean(attribution),
+      newQueryFingerprints: newQueries.map((fingerprint) => fingerprint.query),
+      unreviewedQueryFingerprints: unreviewedQueries.map((fingerprint) => fingerprint.query),
+    },
+  };
+}
+
 function stoppedAnalytics(reason) {
-  return { complete: false, reasons: [reason], databases: [], totals: emptyUsage("account"), timeline: [], timelineTotals: emptyUsage("timeline"), fingerprintTotals: { rowsRead: 0, rowsWritten: 0, queries: 0 }, unattributed: { rowsRead: 0, rowsWritten: 0 }, queryFingerprints: [] };
+  return { complete: false, reasons: [reason], databases: [], totals: emptyUsage("account"), timeline: [], timelineTotals: emptyUsage("timeline"), fiveMinuteBuckets: [], maximumFiveMinute: { rowsRead: 0, rowsWritten: 0 }, fingerprintTotals: { rowsRead: 0, rowsWritten: 0, queries: 0 }, fingerprintSamplingDifference: { rowsRead: 0, rowsWritten: 0, queries: 0 }, queryFingerprints: [] };
 }
 
 function emptyUsage(databaseId) {

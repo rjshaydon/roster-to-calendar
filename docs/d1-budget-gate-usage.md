@@ -14,9 +14,11 @@ previous day for a completed passive baseline.
 1. Complete `config/d1-database-inventory.json` from the Cloudflare control
    plane and set `complete` to `true` only after every database and caller is
    identified.
-2. Create an API token containing only **Account Analytics: Read**. Do not give
-   it D1, Pages or Workers edit permission and do not save it in this repository
-   or paste it into shell history. The checker uses
+2. Prefer an API token containing only **Account Analytics: Read**. If the
+   current Cloudflare interface offers only permission templates, its **Read
+   only** template is acceptable when the broader read scope is recorded. The
+   token must contain no edit permission and must not be saved in this
+   repository or pasted into shell history. The checker uses
    `CLOUDFLARE_ACCOUNT_ANALYTICS_TOKEN` when present, then falls back on macOS
    to the existing Keychain service `roster-d1-account-analytics`. Codex must
    execute the checker with host access; a sandboxed Keychain failure is a
@@ -52,9 +54,20 @@ values above and use exactly:
   --billing-unavailable-reason free-plan-dashboard-omits-d1
 ```
 
-That mode relies on account-wide GraphQL only and therefore applies additional
-checks: daily totals must reconcile with settled five-minute buckets and with
-the sum of query fingerprints. Missing attribution always returns `STOP`.
+That mode relies on account-wide GraphQL only. Daily totals must reconcile with
+settled five-minute buckets; those authoritative totals drive quota, burn-rate
+and projection decisions. Query fingerprints are independently sampled and
+therefore are not required to sum to the quota total. They remain mandatory for
+query-shape review: a truncated response, unknown database, unreviewed canary
+query or fingerprint averaging more than 10,000 examined rows returns `STOP`.
+
+Controlled Production work additionally requires route/request attribution.
+The canary's operation ID and request-local statement/row counters must match
+the reviewed action and ceiling. Its five-minute bucket must remain below the
+greater of four times the passive-baseline maximum or the declared canary read
+ceiling plus 10,000 rows; any bucket above 100,000 reads is a hard `STOP` for
+the current At a glance rollout. Baseline mode has no controlled operation and
+therefore does not require an operation ID; post-action canary mode does.
 
 ## Second sample
 
@@ -71,10 +84,53 @@ npm run d1:budget -- \
 
 Only an explicit `GO` authorises consideration of the separately approved next
 gate. `STOP`, missing output, an API error, an unknown database, incomplete
-query attribution, or conflicting available Billing data authorises no D1
-work. The command itself never deploys, changes configuration, runs a migration
-or calls an application endpoint. Analytics are queried only through a settled
-cut-off 15 minutes behind the report generation time.
+daily/timeline reconciliation, an unknown or unsafe query fingerprint, missing
+controlled-request attribution, an unexplained bucket spike, or conflicting
+available Billing data authorises no D1 work. A difference between summed
+fingerprint rows and the authoritative usage total is reported as sampling
+diagnostics and is not, by itself, `STOP`. The command itself never deploys,
+changes configuration, runs a migration or calls an application endpoint.
+Analytics are queried only through a settled cut-off 15 minutes behind the
+report generation time.
+
+## Post-action canary sample
+
+Baseline sampling uses the default mode above. After one separately authorised
+controlled action, export that request's `roster_api_invocations` record to a
+mode-`0600` JSON file with this shape:
+
+```json
+{
+  "requestId": "the-captured-cf-ray-or-request-id",
+  "d1Statements": 18,
+  "d1RowsRead": 27000,
+  "d1RowsWritten": 200,
+  "d1Limit": 768,
+  "d1MetadataComplete": true
+}
+```
+
+Store the exact reviewed SQL strings that may first appear during the canary in
+a second JSON file as either an array or `{ "queries": [...] }`. Then run:
+
+```sh
+npm run d1:budget -- \
+  --mode canary \
+  --previous /private/tmp/d1-budget-pre-canary.json \
+  --billing-unavailable-reason free-plan-dashboard-omits-d1 \
+  --estimated-reads 27021 \
+  --estimated-writes 2252 \
+  --canary-read-ceiling 27021 \
+  --request-id the-captured-cf-ray-or-request-id \
+  --request-attribution /private/tmp/d1-canary-request.json \
+  --reviewed-fingerprints /private/tmp/d1-canary-queries.json \
+  --output /private/tmp/d1-budget-post-canary.json
+```
+
+Canary mode fails closed when the request evidence is absent or mismatched, its
+counters exceed their ceilings, a newly appearing query is not in the reviewed
+manifest, or the settled canary bucket exceeds its derived envelope. Files may
+contain sensitive operational metadata and must not be committed.
 
 `--raw-output` is optional and stores the GraphQL response with file mode
 `0600`. It contains neither the API token nor an authorization header.

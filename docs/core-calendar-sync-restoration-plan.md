@@ -381,6 +381,51 @@ Tomorrow's sequence is deliberately serial:
 8. Only after this canary passes, widen one hospital or one reader cohort at a
    time. Contacts and 60-second refresh are later independent gates.
 
+### Revised Gate 8 admission evidence — 22 September 2026
+
+Cloudflare's daily and five-minute `d1AnalyticsAdaptiveGroups` totals are the
+authoritative quota ledger. They must reconcile and remain below the documented
+daily, projected and optional-work thresholds. `d1QueriesAdaptiveGroups` is an
+independently sampled query-risk feed: require known databases, reviewed query
+shapes, no truncation and no query averaging more than 10,000 examined rows,
+but do not require its summed rows to equal the quota ledger.
+
+For each controlled Gate 8 action, require its request ID and
+request-local D1 counters in `roster_api_invocations`. Compare the settled
+five-minute account bucket with the passive baseline and declared request
+ceiling. The permitted bucket is the greater of four times the largest passive
+bucket or the action's ceiling plus 10,000 rows; a bucket over 100,000 reads is
+a hard stop. Unknown callers, untagged controlled requests, daily/timeline
+disagreement and unexplained excess remain fail-closed conditions.
+
+The 22 September baseline reached 35,373 reads and 184 writes by 14:29 AEST,
+projecting approximately 149,000 daily reads. Daily and five-minute totals
+reconciled and no fingerprint was expensive. Fingerprint sums differed by
+8,561 reads and 19 writes and query counts differed in the opposite direction,
+demonstrating independent adaptive sampling. This evidence is not itself a
+Gate 8 `GO`: update and locally test the checker, then take a fresh two-sample
+baseline under the revised rules before exact-file inspection.
+
+Fastest safe sequence from here:
+
+1. implement the three-ledger checker and focused fail-closed tests locally;
+   this is limited to the quota checker/library, its tests and usage document,
+   and makes no runtime or Production change;
+2. take two fresh settled passive samples at least ten minutes apart;
+3. on explicit `GO`, perform only the exact active-MMC-file/current-term
+   read-only inspection;
+4. settle and attribute that inspection before authorising bootstrap;
+5. execute the already documented serial bootstrap/publication/Creator-reader
+   canary without reopening legacy reads or contacts.
+
+Implementation checkpoint: the revised checker and focused fail-closed tests
+were completed locally on 22 September. `test:d1-account-budget`,
+`test:d1-quota` and `test:request-attribution` pass. The first fresh revised
+baseline, generated at 14:59 AEST and settled through 14:44 AEST, is valid at
+37,987 reads and 184 writes with a maximum five-minute bucket of 4,603 reads
+and no expensive fingerprint. It returns `STOP` only because the required
+second sample has not yet been taken.
+
 No overnight action is required. No production migration, bootstrap,
 publication, reader enablement or At a glance browser test is authorised by
 this readiness packet alone.
@@ -414,7 +459,9 @@ non-D1 configuration deployment if any of the following occurs:
 - a query plan or invocation exceeding its declared ceiling;
 - an unchanged input writing D1/R2 or dispatching work;
 - an unexplained write, duplicate event or active-file ambiguity;
-- incomplete Analytics attribution or totals that do not reconcile; or
+- daily/timeline totals that do not reconcile, missing controlled-request
+  attribution, an unknown query/caller or a bucket outside its passive/canary
+  envelope; or
 - evidence that personal login/calendar availability is deteriorating.
 
 Do not raise a ceiling, enable another source or retry until the failed interval

@@ -115,8 +115,10 @@ the daily allowance.
 Admission uses all-database usage from 00:00 UTC to the present, reconciled
 against Billing > Billable Usage when Cloudflare exposes D1 there. On the
 current Workers Free account that page exposes only R2. In that documented
-case, admission uses settled account-wide GraphQL totals and requires their
-daily, five-minute and query-fingerprint aggregates to reconcile. Per-database
+case, admission uses settled account-wide GraphQL totals. The daily aggregate
+must reconcile with the sum of its five-minute buckets. Query fingerprints are
+an independently sampled diagnostic feed: they identify unsafe query shapes
+and new SQL, but their sum is not treated as an exact quota ledger. Per-database
 charts are diagnostic only.
 
 ### 3. Capability isolation
@@ -140,9 +142,11 @@ Complete this phase without querying application databases.
 2. Inventory every possible caller: Pages Production and Preview deployments,
    Workers and cron triggers, GitHub Actions, watchdogs, queues, browser polling,
    local Wrangler commands using `--remote`, and retained branch previews.
-3. Create a narrowly scoped Cloudflare API token with only **Account Analytics:
-   Read**. It must have no D1 Edit, Pages Edit or Worker Edit permission. Store
-   it outside the repository and, if automation needs it, as a dedicated secret.
+3. Prefer a narrowly scoped Cloudflare API token with only **Account Analytics:
+   Read**. If Cloudflare's current Account API Tokens interface exposes only
+   permission templates, use its **Read only** template and record that broader
+   read scope; it must contain no edit permission. Store it outside the
+   repository and, if automation needs it, as a dedicated secret.
 4. Add a read-only budget command that queries `d1AnalyticsAdaptiveGroups`
    from 00:00 UTC to the current time without a `databaseId` filter, groups by
    database ID, and sums `rowsRead`, `rowsWritten`, `readQueries` and
@@ -154,9 +158,10 @@ Complete this phase without querying application databases.
    exposed. Record both, their timestamps and any stated reporting delay. When
    this Free account exposes no D1 product, record that exact limitation and
    require the GraphQL daily aggregate to reconcile with settled five-minute
-   buckets and summed query fingerprints. Do not proceed while totals
-   materially disagree, attribution is incomplete or any database/caller is
-   unidentified.
+   buckets. Record the independently sampled fingerprint difference, but do not
+   require its sum to equal the authoritative usage aggregate. Do not proceed
+   while daily and five-minute totals materially disagree or any database or
+   possible caller is unidentified.
 7. After analytics have settled, reconstruct 7 September from 00:00 UTC through
    the 04:55 UTC quota failure. Attribute the missing usage by database and query
    fingerprint. If account totals still cannot explain enforcement, open a
@@ -176,13 +181,17 @@ Implement and test locally before any further Production canary.
    - account total rows read and written;
    - per-database totals;
    - top query fingerprints;
-   - unknown/unattributed usage;
-   - observation age, aggregation/attribution differences and any available
-     Billing reconciliation difference; and
+   - daily-versus-five-minute reconciliation;
+   - the fingerprint sampling difference, labelled as diagnostic rather than
+     unknown quota usage;
+   - observation age, route-attribution coverage and any available Billing
+     reconciliation difference; and
    - explicit `GO` or `STOP` with reasons.
 2. Treat missing credentials, API errors, pagination truncation, stale data,
-   an unrecognized database, an unattributed spike, disagreement between
-   GraphQL aggregates or disagreement with available Billing as `STOP`.
+   an unrecognized database, an unexplained five-minute spike, disagreement
+   between the authoritative daily and timeline aggregates, or disagreement
+   with available Billing as `STOP`. A fingerprint sampling difference alone
+   is not a stop reason.
 3. Take two account-wide measurements at least ten minutes apart. Use the higher
    total and calculate the intervening burn rate. Never subtract usage.
 4. Reserve four million daily reads and 80,000 daily writes for ordinary app
@@ -199,6 +208,31 @@ Implement and test locally before any further Production canary.
      is available.
 6. Stop optional work for the day at 750,000 reads or 15,000 writes, or on any
    unexplained increase, even if Cloudflare has not enforced its limit.
+
+The checker enforces three distinct evidence layers:
+
+1. **Quota ledger:** `d1AnalyticsAdaptiveGroups` daily totals and settled
+   five-minute buckets must reconcile within the existing strict 1%/100-row
+   tolerance. These totals alone drive daily usage, burn rate and projections.
+2. **Query-risk ledger:** `d1QueriesAdaptiveGroups` must be complete, below its
+   result limit, limited to inventoried databases, contain no unreviewed query
+   shape for the controlled action and show no query averaging more than 10,000
+   rows examined per invocation. Its summed rows are reported but are not
+   compared as an exact ledger with layer 1.
+3. **Caller ledger:** the controlled request must carry a request ID
+   into `roster_api_invocations` and reconcile with its request-local statement,
+   row-read and row-write ceiling. Continuous calendar-feed and routine roster
+   traffic is bounded by the two-sample passive envelope. A new caller, an
+   untagged controlled request or an account-wide bucket beyond that envelope
+   is `STOP`.
+
+For a canary, the permitted five-minute bucket is the greater of four times the
+largest passive-baseline bucket or the declared canary read ceiling plus 10,000
+rows. Any larger bucket is `STOP` unless every excess row is associated with a
+separately reviewed concurrent operation. A bucket above 100,000 reads is
+always `STOP` for the current At a glance rollout. This catches the historical
+million-row incidents without pretending that sampled fingerprint sums are
+exact.
 
 These conservative thresholds are intentional. This service has no paid-plan
 escape route and login depends on D1 availability.
@@ -387,9 +421,10 @@ a D1 query to prove rollback.
   838,427 daily reads, leaving 8,226,397 unattributed. This discrepancy is a
   hard rollout blocker.
 - The Free account's Billable Usage dashboard exposed only R2 products. The
-  implemented checker therefore supports a named Free-plan Analytics-only mode
-  but does not weaken reconciliation: daily, five-minute and query-fingerprint
-  totals must agree before a sample can be valid.
+  implemented checker therefore supports a named Free-plan Analytics-only mode.
+  The original implementation incorrectly required independently sampled
+  query-fingerprint totals to equal the daily/timeline quota ledger; the
+  22 September revision below supersedes that requirement.
 
 The earlier statement that the next activity was Phase A analytics inventory
 described the 7 September checkpoint and is no longer the current work order.
@@ -426,8 +461,9 @@ Implemented locally, without querying D1 or changing Cloudflare state:
 - a read-only GraphQL account-budget command and offline fail-closed tests;
 - account, per-database and query-fingerprint aggregation;
 - available-Billing reconciliation or explicitly documented Free-plan mode,
-  observation settling, daily/five-minute/fingerprint reconciliation,
-  two-sample/burn-rate checks, conservative thresholds and contingency;
+  observation settling, daily/five-minute reconciliation, independently
+  sampled fingerprint risk checks, two-sample/burn-rate checks, conservative
+  thresholds and contingency;
 - an explicitly incomplete database/caller inventory that prevents `GO`;
 - separate inspection and execution controls, an exact one-file allowlist,
   ten-minute plan expiry and separate manual workflows;
@@ -437,6 +473,48 @@ Implemented locally, without querying D1 or changing Cloudflare state:
 The focused quota, materialisation, rollout, local-isolation, synthetic-cost
 and representative fixture suites pass. A credential-free budget invocation
 returns `STOP` as designed.
+
+## Admission-checker correction — 22 September 2026
+
+Three settled observations proved that Cloudflare's
+`d1QueriesAdaptiveGroups` and `d1AnalyticsAdaptiveGroups` cannot be reconciled
+as exact ledgers. At 14:29 AEST the authoritative daily and five-minute totals
+both reported 35,373 reads and 184 writes, while fingerprint groups reported
+26,812 reads and 165 writes. Fingerprint query counts also exceeded aggregate
+query counts, confirming independent adaptive sampling rather than missing D1
+usage. No fingerprint averaged more than 10,000 rows per invocation; the daily
+read projection was approximately 149,000.
+
+Therefore the old `query-attribution-incomplete` rule is superseded by the
+three-layer model in Phase B. Implementation must change the checker and its
+focused tests before using these observations for admission. After that local
+work passes, take a fresh two-sample live baseline with all At a glance controls
+closed. An explicit `GO` under the revised model authorises only the next
+read-only, exact-file inspection gate—not bootstrap, publication or readers.
+
+Implementation is deliberately narrow:
+
+1. Preserve exact daily/timeline reconciliation and all existing credential,
+   inventory, settlement, pagination, Billing, two-sample, burn-rate, quota and
+   per-query safeguards.
+2. Replace `unattributed`/`query-attribution-incomplete` with a reported
+   `fingerprintSamplingDifference` that does not by itself invalidate a sample.
+3. Add the largest settled five-minute read/write buckets and the derived
+   passive envelope to the machine-readable report.
+4. Support a canary mode that receives the action's declared read ceiling and
+   reviewed fingerprint manifest. A baseline does not require a controlled
+   request ID; a post-action canary report does require that request's
+   exported `roster_api_invocations` evidence before it can return `GO`.
+5. Add focused fixtures for exact reconciliation, independent fingerprint
+   over/under-sampling, unknown databases, truncation, expensive/new canary
+   queries, missing request attribution, a million-row five-minute spike and a
+   bounded 27,021-read bootstrap canary.
+6. Re-run only `test:d1-quota` and the existing request-attribution suite. Do
+   not expand into unrelated parsing or UI regression tests.
+
+No runtime application file, Production flag or D1 data changes during this
+implementation. Existing raw Analytics samples may be used as offline fixtures
+but cannot replace the fresh live two-sample admission gate.
 
 Completed during pre-reset preparation, without D1:
 
