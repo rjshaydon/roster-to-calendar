@@ -37,6 +37,11 @@ export function facilityRolloutCohortEligible(env = {}, { actorRole = "", actorE
     && String(actorEmail || "").trim().toLowerCase() === String(subjectEmail || actorEmail || "").trim().toLowerCase();
 }
 
+export function facilityOverviewMaintenanceForViewer(env = {}, viewer = {}) {
+  return facilityOverviewMaintenanceMode(env)
+    || !facilityRolloutCohortEligible(env, viewer);
+}
+
 export function facilityReadRoute(env = {}, { actorRole = "", actorEmail = "", subjectEmail = "", sources = [] } = {}) {
   if (!facilitySharedRolloutActive(env)) return facilityLegacyReadsPaused(env) ? "blocked" : "legacy";
   if (facilityRolloutPaused(env)) return "blocked";

@@ -13,12 +13,12 @@ record its evidence, approval, deployment and post-deployment observation here.
 No entry may be removed after restoration; change its state to **Restored** so
 the history remains auditable.
 
-Current tracked Production code: `93feb08` on 13 September 2026. The exact
-active deployment identity must still be read back at every operational gate.
-The zero-D1 At a glance maintenance gate and ordinary-login containment are
-active. Facility readers/builders, roster and contact automation, bootstrap and
-advanced-maintenance controls remain closed. The bounded compact Admin → Files
-status reader is the only restored optional summary reader.
+Current tracked Production code before the Creator/MMC reader canary:
+`f81d7611` on 22 September 2026. The exact active deployment identity must
+still be read back at every operational gate. Ordinary-login containment and
+all permanent quota protections remain active. The Creator-self cohort may
+read only the completed MMC shared cache; facility builders, contacts, other
+facility readers, bootstrap and advanced-maintenance controls remain closed.
 
 The safety commits did not intentionally delete Production roster files,
 roster events, account data, facility snapshots or contact data. Because D1 is
@@ -49,19 +49,19 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 
 | Control | Current safe value | Registered under |
 | --- | --- | --- |
-| `FACILITY_OVERVIEW_MAINTENANCE_MODE` | `true`; missing or malformed also fails closed | FR-01–FR-04 |
-| `FACILITY_SHARED_ROLLOUT_ACTIVE` | `false` | FR-01 |
-| `FACILITY_SHARED_EMERGENCY_PAUSED` | `true` | FR-01 |
+| `FACILITY_OVERVIEW_MAINTENANCE_MODE` | `false` in Production for the Creator/MMC canary; `true` in Preview; missing or malformed fails closed | FR-01–FR-04 |
+| `FACILITY_SHARED_ROLLOUT_ACTIVE` | `true` in Production; `false` in Preview | FR-01 |
+| `FACILITY_SHARED_EMERGENCY_PAUSED` | `false` in Production; `true` in Preview | FR-01 |
 | `FACILITY_LEGACY_READS_PAUSED` | `true` permanently | FR-01, FR-17 |
 | `FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST` | empty | FR-01, FR-12 |
-| `FACILITY_SHARED_READER_SOURCE_ALLOWLIST` | empty | FR-01 |
-| `FACILITY_SHARED_READER_COHORT` | empty | FR-01 |
+| `FACILITY_SHARED_READER_SOURCE_ALLOWLIST` | `mmc` in Production; empty in Preview | FR-01 |
+| `FACILITY_SHARED_READER_COHORT` | `creator` in Production; empty in Preview | FR-01 |
 | `FACILITY_ACCESS_MATERIALIZATION_ENABLED` | `false` | FR-01 |
 | `FACILITY_SHARED_METADATA_BUILD_ENABLED` | `false` | FR-01 |
 | `FACILITY_SHARED_DAYS_BUILD_ENABLED` | `false` | FR-01 |
 | `FACILITY_SHARED_CONTACTS_BUILD_ENABLED` | `false` | FR-04 |
-| `FACILITY_SHARED_METADATA_ENABLED` | `false` | FR-01 |
-| `FACILITY_SHARED_DAYS_ENABLED` | `false` | FR-01 |
+| `FACILITY_SHARED_METADATA_ENABLED` | `true` in Production; `false` in Preview | FR-01 |
+| `FACILITY_SHARED_DAYS_ENABLED` | `true` in Production; `false` in Preview | FR-01 |
 | `FACILITY_SHARED_CONTACTS_ENABLED` | `false` | FR-04 |
 | `ROSTER_AUTOMATION_WRITES_ENABLED` | `false` | FR-06, FR-07 |
 | `MANUAL_ROSTER_WRITES_ENABLED` | `false` | FR-06, FR-11 |
@@ -83,18 +83,21 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 
 ### FR-01 — At a glance workspace
 
-- **State:** Paused.
+- **State:** Creator/MMC cached-reader canary. All other cohorts and facilities
+  remain paused.
 - **Includes:** On shift, ED Staff, By stream, Working together, multi-ED
   Director overview, facility/date selection and At a glance navigation on
   desktop and mobile. It also includes the compact staff-membership,
   file/hospital-coverage, additional-coverage and daily-presence facts needed
   to build those views without repeatedly deriving them from event history.
-- **User effect:** Requests currently receive a controlled unavailable response
-  instead of roster data.
-- **Controls:** `FACILITY_SHARED_ROLLOUT_ACTIVE=false`,
-  `FACILITY_SHARED_EMERGENCY_PAUSED=true`,
-  `FACILITY_LEGACY_READS_PAUSED=true`, empty reader/build allowlists and all
-  shared reader flags false.
+- **User effect:** The Creator account can open MMC cached metadata, On shift,
+  Staff and related base day views. Other users and facilities still receive
+  the controlled unavailable response.
+- **Controls:** Production uses `FACILITY_SHARED_ROLLOUT_ACTIVE=true`,
+  `FACILITY_SHARED_EMERGENCY_PAUSED=false`, reader source `mmc`, cohort
+  `creator`, and shared metadata/day readers only. Contacts and every builder
+  remain false, all build allowlists remain empty, and
+  `FACILITY_LEGACY_READS_PAUSED=true` permanently.
 - **Data/code preservation:** The interface and shared-object implementation
   remain in `main`. Legacy broad SQL is retained only as inaccessible code
   during migration; it is not the restoration path.
@@ -653,6 +656,7 @@ mechanisms are intentionally excluded from restoration.
 | MMC Term 3 publication batch 0, 22 Sep 2026 | Workflow `35700457227`, request `a3efa3c64aaf6e9e`, successfully staged seven day objects for 3–9 August under operation revision `8923f979716e4603001a75a2259197e65fd12f6e299574e8d15b8298a98f947e` (`pointerCount: 7`). The candidate remains invisible because no month assembly or finalisation has occurred and all shared readers remain disabled. The temporary maintenance/source window was closed immediately. Require settled exact request attribution and account-wide `GO` before batch 1. |
 | MMC batch 0 settled cost, 22 Sep 2026 | Request `a3efa3c64aaf6e9e` completed with 16 statements, 1,062 rows read, one row written, complete metadata and a 20-statement hard limit. This is far below both its 53,167-row conservative ceiling and the 100,000-read hard stop. With daily usage still far below the five-million allowance, batches 1–12 may run serially in one MMC-only maintenance window with automatic stop-on-failure; shared readers remain disabled until all batches, months and fenced finalisation succeed. |
 | MMC Term 3 consolidated publication, 22 Sep 2026 | After batch 0 measured only 1,062 reads and one written row, batches 1–12 ran serially with independent 20-statement limits and automatic stop-on-failure; every batch succeeded. August, September, October and November month objects then assembled serially, and fenced finalisation workflow `35713481875` succeeded for operation revision `8923f979716e4603001a75a2259197e65fd12f6e299574e8d15b8298a98f947e`. The complete MMC Term 3 shared cache now exists. The MMC maintenance/source window was closed immediately after finalisation and shared readers remain disabled pending one combined settled account-usage check. |
+| MMC consolidated publication settlement and Creator-reader authorisation, 22 Sep 2026 | All 18 publication requests reconciled to 235 D1 statements, 15,487 rows read and three rows written, with complete request metadata; the largest request read 1,079 rows. The account-wide checker returned `GO` at 143,958 daily reads and 253 writes, with no expensive fingerprint and a maximum five-minute bucket of 60,905 reads, below the 100,000 hard stop. This authorises only Creator-self reads of MMC shared metadata/day objects. Contacts, builders, automatic launch, other facilities, ordinary users and legacy SQL remain disabled. |
 
 ## Restoration record template
 

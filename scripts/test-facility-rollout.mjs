@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { facilityBuildSources, facilityOverviewMaintenanceMode, facilityReadRoute, facilityRolloutPaused, facilitySharedReaderAllowed } from "../functions/_lib/facility-rollout.js";
+import { facilityBuildSources, facilityOverviewMaintenanceForViewer, facilityOverviewMaintenanceMode, facilityReadRoute, facilityRolloutPaused, facilitySharedReaderAllowed } from "../functions/_lib/facility-rollout.js";
 import { automatedRosterQueueEnabled, automatedRosterSourceEnabled, advancedRosterMaintenanceEnabled, facilityMaterializationMaintenanceEnabled } from "../functions/_lib/roster-automation-guard.js";
 import { onRequestPost as materialize } from "../functions/api/automation/facility-materialize.js";
 
@@ -20,6 +20,9 @@ const env = {
 assert.equal(facilityOverviewMaintenanceMode({}), true, "missing maintenance configuration must fail closed");
 assert.equal(facilityOverviewMaintenanceMode({ FACILITY_OVERVIEW_MAINTENANCE_MODE: "malformed" }), true, "malformed maintenance configuration must fail closed");
 assert.equal(facilityOverviewMaintenanceMode(env), false, "only an explicit false value opens the maintenance gate");
+assert.equal(facilityOverviewMaintenanceForViewer(env, { actorRole: "creator", actorEmail: "creator@example.com", subjectEmail: "creator@example.com" }), false, "the Creator self-view may enter the canary");
+assert.equal(facilityOverviewMaintenanceForViewer(env, { actorRole: "user", actorEmail: "user@example.com", subjectEmail: "user@example.com" }), true, "ordinary users must retain the maintenance UI during the Creator canary");
+assert.equal(facilityOverviewMaintenanceForViewer(env, { actorRole: "creator", actorEmail: "creator@example.com", subjectEmail: "other@example.com" }), true, "Creator impersonation must retain the maintenance UI");
 assert.deepEqual(facilityBuildSources(env, ["MMC", "DDH"]), ["mmc"]);
 assert.equal(facilitySharedReaderAllowed(env, { actorRole: "creator", actorEmail: "creator@example.com", subjectEmail: "creator@example.com", sources: ["mmc"] }), true);
 assert.equal(facilitySharedReaderAllowed(env, { actorRole: "creator", actorEmail: "creator@example.com", subjectEmail: "other@example.com", sources: ["mmc"] }), false, "Creator impersonation must not enter the Creator-only cohort");

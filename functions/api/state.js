@@ -6,7 +6,7 @@ import { advancedRosterMaintenanceEnabled, reviewedRosterFactLimit, rosterStatus
 import { guardedFetch, localFeatureDisabledResponse } from "../_lib/outbound-network.js";
 import { loadPublishedFacilityDays, loadPublishedFacilityMetadata, loadPublishedFacilityRange, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata } from "../_lib/facility-overview-cache.js";
 import { loadPublishedFacilityContacts, publishFacilityContactResolutions } from "../_lib/facility-contact-cache.js";
-import { facilityBuildSources, facilityLegacyReadsPaused, facilityOverviewMaintenanceMode, facilityReadRoute, facilityRolloutCohortEligible } from "../_lib/facility-rollout.js";
+import { facilityBuildSources, facilityLegacyReadsPaused, facilityOverviewMaintenanceForViewer, facilityOverviewMaintenanceMode, facilityReadRoute, facilityRolloutCohortEligible } from "../_lib/facility-rollout.js";
 import { creatorDirectoryEnabled, creatorStartupHydrationEnabled } from "../_lib/creator-startup-guard.js";
 import { extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentExceptions, findmyshiftLastModified, findmyshiftReportDiagnostics, findmyshiftShiftReport } from "../_lib/findmyshift.js";
 import {
@@ -359,7 +359,7 @@ export async function onRequestPost(context) {
         defaultDoctorKey: prepared.defaultDoctorKey || "",
         insightsEnabled: prepared.insightsEnabled,
         facilityOverviewEnabled: prepared.facilityOverviewEnabled,
-        facilityOverviewMaintenance: facilityOverviewMaintenanceMode(context.env),
+        facilityOverviewMaintenance: facilityOverviewMaintenanceForRecords(context.env, loginRecord),
         facilityOverviewAccess: prepared.facilityOverviewAccess,
         nonClinical: prepared.nonClinical,
         directorViewEnabled: prepared.directorViewEnabled,
@@ -747,7 +747,7 @@ export async function onRequestPost(context) {
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
         facilityOverviewEnabled: prepared.facilityOverviewEnabled,
-        facilityOverviewMaintenance: facilityOverviewMaintenanceMode(context.env),
+        facilityOverviewMaintenance: facilityOverviewMaintenanceForRecords(context.env, account.record, targetRecord),
         facilityOverviewAccess: prepared.facilityOverviewAccess,
         nonClinical: prepared.nonClinical,
         directorViewEnabled: prepared.directorViewEnabled,
@@ -811,7 +811,7 @@ export async function onRequestPost(context) {
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
         facilityOverviewEnabled: prepared.facilityOverviewEnabled,
-        facilityOverviewMaintenance: facilityOverviewMaintenanceMode(context.env),
+        facilityOverviewMaintenance: facilityOverviewMaintenanceForRecords(context.env, account.record, target),
         facilityOverviewAccess: prepared.facilityOverviewAccess,
         nonClinical: prepared.nonClinical,
         directorViewEnabled: prepared.directorViewEnabled,
@@ -864,7 +864,7 @@ export async function onRequestPost(context) {
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
         facilityOverviewEnabled: prepared.facilityOverviewEnabled,
-        facilityOverviewMaintenance: facilityOverviewMaintenanceMode(context.env),
+        facilityOverviewMaintenance: facilityOverviewMaintenanceForRecords(context.env, account.record, targetRecord),
         facilityOverviewAccess: prepared.facilityOverviewAccess,
         nonClinical: prepared.nonClinical,
         directorViewEnabled: prepared.directorViewEnabled,
@@ -928,7 +928,7 @@ export async function onRequestPost(context) {
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
         facilityOverviewEnabled: prepared.facilityOverviewEnabled,
-        facilityOverviewMaintenance: facilityOverviewMaintenanceMode(context.env),
+        facilityOverviewMaintenance: facilityOverviewMaintenanceForRecords(context.env, account.record, updated),
         facilityOverviewAccess: prepared.facilityOverviewAccess,
         nonClinical: prepared.nonClinical,
         directorViewEnabled: prepared.directorViewEnabled,
@@ -1835,7 +1835,7 @@ export async function onRequestPost(context) {
         ok: true,
         facilityOverviewAccountEmail: normalizeEmail(profileAccount?.email),
         facilityOverviewEnabled,
-        facilityOverviewMaintenance: facilityOverviewMaintenanceMode(context.env),
+        facilityOverviewMaintenance: facilityOverviewMaintenanceForRecords(context.env, account.record, profileAccount),
         facilityOverviewAccess,
       });
     }
@@ -3331,6 +3331,14 @@ function constrainFacilityOverviewSourceTypes(access, requested = []) {
 
 function facilityAccessMaterializedForRecords(env, actorRecord, subjectRecord = actorRecord) {
   return facilityLegacyReadsPaused(env) || facilityRolloutCohortEligible(env, {
+    actorRole: actorRecord?.role || roleForEmail(actorRecord?.email),
+    actorEmail: actorRecord?.email || "",
+    subjectEmail: subjectRecord?.email || "",
+  });
+}
+
+function facilityOverviewMaintenanceForRecords(env, actorRecord, subjectRecord = actorRecord) {
+  return facilityOverviewMaintenanceForViewer(env, {
     actorRole: actorRecord?.role || roleForEmail(actorRecord?.email),
     actorEmail: actorRecord?.email || "",
     subjectEmail: subjectRecord?.email || "",

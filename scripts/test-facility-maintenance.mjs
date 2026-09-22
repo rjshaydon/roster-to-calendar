@@ -86,7 +86,8 @@ const appSource = await readFile(new URL("../public/static/app.js", import.meta.
 const wranglerSource = await readFile(new URL("../wrangler.toml", import.meta.url), "utf8");
 const localDevSource = await readFile(new URL("./local-dev.mjs", import.meta.url), "utf8");
 const functionBody = (pattern) => appSource.match(pattern)?.[0] || "";
-assert.equal((wranglerSource.match(/FACILITY_OVERVIEW_MAINTENANCE_MODE = "true"/g) || []).length, 2, "Production and Preview config must declare maintenance mode");
+assert.equal((wranglerSource.match(/FACILITY_OVERVIEW_MAINTENANCE_MODE = "false"/g) || []).length, 1, "Production must explicitly open the Creator MMC canary");
+assert.equal((wranglerSource.match(/FACILITY_OVERVIEW_MAINTENANCE_MODE = "true"/g) || []).length, 1, "Preview must remain in maintenance mode");
 assert.match(localDevSource, /FACILITY_OVERVIEW_MAINTENANCE_MODE=false/, "isolated local development must explicitly open the feature");
 assert.match(appSource, /let currentFacilityOverviewMaintenance = true;/, "the browser must start fail-closed");
 assert.match(appSource, /currentFacilityOverviewMaintenance = data\.facilityOverviewMaintenance !== false;/, "missing server capability must remain paused");
