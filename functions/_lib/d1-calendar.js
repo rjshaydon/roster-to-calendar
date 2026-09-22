@@ -1870,17 +1870,21 @@ export async function deleteFacilityOverviewMaterializationForFile(db, fileId) {
 
 export async function inspectFacilityOverviewBootstrap(db, options = {}) {
   if (!db?.prepare || !options.fileId) return { ok: false, reason: "missing-input" };
-  const file = await db.prepare(`SELECT id, name, source_type, source_id, active, size, last_modified, parsed_at, parser_version
-    FROM roster_files WHERE id = ?`).bind(String(options.fileId)).first();
+  const fileResult = await db.prepare(`SELECT id, name, source_type, source_id, active, size, last_modified, parsed_at, parser_version
+    FROM roster_files WHERE id = ?`).bind(String(options.fileId)).all();
+  const file = fileResult?.results?.[0] || null;
   const sourceType = normalizeSourceType(options.sourceType);
   if (!file || Number(file.active || 0) !== 1 || !sourceType || normalizeSourceType(file.source_type) !== sourceType) {
     return { ok: false, reason: "active-file-not-found" };
   }
-  const [compact, statusSummary, rawSource] = await Promise.all([
-    db.prepare("SELECT content_revision, updated_at FROM roster_file_coverage WHERE file_id = ?").bind(String(file.id)).first(),
-    db.prepare("SELECT derived_state, content_revision FROM roster_file_status_summaries WHERE file_id = ?").bind(String(file.id)).first(),
-    db.prepare("SELECT file_id FROM raw_roster_files WHERE file_id = ?").bind(String(file.id)).first(),
+  const [compactResult, statusSummaryResult, rawSourceResult] = await Promise.all([
+    db.prepare("SELECT content_revision, updated_at FROM roster_file_coverage WHERE file_id = ?").bind(String(file.id)).all(),
+    db.prepare("SELECT derived_state, content_revision FROM roster_file_status_summaries WHERE file_id = ?").bind(String(file.id)).all(),
+    db.prepare("SELECT file_id FROM raw_roster_files WHERE file_id = ?").bind(String(file.id)).all(),
   ]);
+  const compact = compactResult?.results?.[0] || null;
+  const statusSummary = statusSummaryResult?.results?.[0] || null;
+  const rawSource = rawSourceResult?.results?.[0] || null;
   const planGeneratedAt = String(options.planGeneratedAt || "");
   const planRevision = await facilityOverviewDigest({
     fileId: String(file.id), sourceType, name: String(file.name || ""), sourceId: String(file.source_id || ""),
