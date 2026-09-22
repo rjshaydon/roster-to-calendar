@@ -332,6 +332,7 @@ let currentSubscription = null;
 let currentInsightsEnabled = currentUserRole === "creator";
 let currentFacilityOverviewEnabled = currentUserRole === "creator";
 let currentFacilityOverviewMaintenance = true;
+let currentFacilityOverviewAutomaticLaunchEnabled = false;
 let currentFacilityOverviewAccess = { mode: currentUserRole === "creator" ? "all" : "denied", isSms: currentUserRole === "creator", workingToday: false, facilityKey: "", today: "" };
 let currentNonClinical = false;
 let currentDirectorViewEnabled = currentUserRole === "creator";
@@ -14937,6 +14938,7 @@ async function loadDoctorProfileFacilityOverviewAccess(profile) {
     activeDoctorProfile = { ...activeDoctorProfile, facilityOverviewAccountEmail: normalizeEmail(data.facilityOverviewAccountEmail) };
     currentFacilityOverviewEnabled = data.facilityOverviewEnabled === true;
     currentFacilityOverviewMaintenance = data.facilityOverviewMaintenance !== false;
+    currentFacilityOverviewAutomaticLaunchEnabled = data.facilityOverviewAutomaticLaunchEnabled === true;
     currentFacilityOverviewAccess = sanitizeFacilityOverviewAccess(data.facilityOverviewAccess);
     applyFacilityOverviewSiteScope();
     syncFacilityOverviewAccess();
@@ -16424,6 +16426,7 @@ function closeLoginModal() {
 async function logoutCurrentUser() {
   beginFacilityOverviewAccountSession();
   currentFacilityOverviewMaintenance = true;
+  currentFacilityOverviewAutomaticLaunchEnabled = false;
   try {
     await flushCloudStateSave();
   } catch {
@@ -16563,7 +16566,7 @@ function launchNonClinicalDirectorWorkspace(options = {}, loginStartedAt = 0) {
 }
 
 function launchClinicalOnShiftWorkspace(options = {}, loginStartedAt = 0) {
-  if (currentFacilityOverviewMaintenance || currentNonClinical || !canUseFacilityOverview() || !currentFacilityOverviewAccess.workingToday || !calendarTransitionStillCurrent(options.transition)) return false;
+  if (!currentFacilityOverviewAutomaticLaunchEnabled || currentFacilityOverviewMaintenance || currentNonClinical || !canUseFacilityOverview() || !currentFacilityOverviewAccess.workingToday || !calendarTransitionStillCurrent(options.transition)) return false;
   if (facilityOverviewSessionNeedsInitialization) resetFacilityOverviewSessionState();
   facilityOverviewState.tab = "on-shift";
   facilityOverviewState.followOperationalDate = true;
@@ -16588,6 +16591,7 @@ async function loginWithEmail(email, password, options = {}) {
   try {
     beginFacilityOverviewAccountSession();
     currentFacilityOverviewMaintenance = true;
+    currentFacilityOverviewAutomaticLaunchEnabled = false;
     cancelScheduledCloudStateSave();
     clearActiveViewedAccountState();
     ensureLocalAccountLogin(email, password, options);
@@ -16761,6 +16765,7 @@ async function restoreCloudState(options = {}) {
     currentInsightsEnabled = false;
     currentFacilityOverviewEnabled = false;
     currentFacilityOverviewMaintenance = true;
+    currentFacilityOverviewAutomaticLaunchEnabled = false;
     currentNonClinical = false;
     currentDirectorViewEnabled = false;
     closeFacilityOverview();
@@ -17243,6 +17248,7 @@ function saveLocalAccountIdentity(realName = "") {
 function applyCloudStateIdentity(data) {
   cloudAvailable = data.cloudAvailable === true;
   currentFacilityOverviewMaintenance = data.facilityOverviewMaintenance !== false;
+  currentFacilityOverviewAutomaticLaunchEnabled = data.facilityOverviewAutomaticLaunchEnabled === true;
   currentCreatorStartupHydrationEnabled = data.creatorStartupHydrationEnabled === true;
   currentCalendarRevision = String(data.snapshotRevision || data.calendarRevision || currentCalendarRevision || "");
   currentUserRole = data.role || currentUserRole;
@@ -17283,6 +17289,7 @@ function applyAvailableRosterDoctorsFromData(data) {
 function applyCloudStateContext(data) {
   const previousInsightsEnabled = currentInsightsEnabled;
   currentFacilityOverviewMaintenance = data.facilityOverviewMaintenance !== false;
+  currentFacilityOverviewAutomaticLaunchEnabled = data.facilityOverviewAutomaticLaunchEnabled === true;
   currentCreatorStartupHydrationEnabled = data.creatorStartupHydrationEnabled === true;
   currentInsightsEnabled = currentUserRole === "creator" || data.insightsEnabled === true;
   currentFacilityOverviewEnabled = currentUserRole === "creator" || data.facilityOverviewEnabled === true;

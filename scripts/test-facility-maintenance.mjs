@@ -88,6 +88,7 @@ const localDevSource = await readFile(new URL("./local-dev.mjs", import.meta.url
 const functionBody = (pattern) => appSource.match(pattern)?.[0] || "";
 assert.equal((wranglerSource.match(/FACILITY_OVERVIEW_MAINTENANCE_MODE = "false"/g) || []).length, 1, "Production must explicitly open the Creator MMC canary");
 assert.equal((wranglerSource.match(/FACILITY_OVERVIEW_MAINTENANCE_MODE = "true"/g) || []).length, 1, "Preview must remain in maintenance mode");
+assert.equal((wranglerSource.match(/FACILITY_OVERVIEW_AUTOMATIC_LAUNCH_ENABLED = "false"/g) || []).length, 2, "automatic On shift launch must remain disabled in Production and Preview");
 assert.match(localDevSource, /FACILITY_OVERVIEW_MAINTENANCE_MODE=false/, "isolated local development must explicitly open the feature");
 assert.match(appSource, /let currentFacilityOverviewMaintenance = true;/, "the browser must start fail-closed");
 assert.match(appSource, /currentFacilityOverviewMaintenance = data\.facilityOverviewMaintenance !== false;/, "missing server capability must remain paused");
@@ -101,6 +102,7 @@ const contactPredicate = functionBody(/function facilityOverviewContactRefreshIs
 assert.match(contactPredicate, /!currentFacilityOverviewMaintenance/, "maintenance must prevent contact timer scheduling");
 const clinicalLaunch = functionBody(/function launchClinicalOnShiftWorkspace[\s\S]*?(?=\nasync function loginWithEmail)/);
 assert.match(clinicalLaunch, /currentFacilityOverviewMaintenance/, "maintenance must suppress automatic clinical On shift launch");
+assert.match(clinicalLaunch, /!currentFacilityOverviewAutomaticLaunchEnabled/, "automatic On shift launch must require an independent explicit control");
 for (const name of ["saveFacilityOverviewContactResolution", "setFacilityOverviewStaffDesignation", "clearFacilityOverviewStaffDesignation", "setFacilityOverviewStaffSeniorityOverride", "setFacilityOverviewStaffSeniorityOverrides"]) {
   const body = functionBody(new RegExp(`async function ${name}[\\s\\S]*?(?=\\n(?:async )?function )`));
   assert.match(body, /currentFacilityOverviewMaintenance/, `${name} must not send maintenance-time mutations`);

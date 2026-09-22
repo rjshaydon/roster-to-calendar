@@ -13,6 +13,10 @@ export function facilitySharedRolloutActive(env = {}) {
   return ENABLED.has(String(env.FACILITY_SHARED_ROLLOUT_ACTIVE || "").trim().toLowerCase());
 }
 
+export function facilityOverviewAutomaticLaunchEnabled(env = {}) {
+  return ENABLED.has(String(env.FACILITY_OVERVIEW_AUTOMATIC_LAUNCH_ENABLED || "").trim().toLowerCase());
+}
+
 export function facilityLegacyReadsPaused(env = {}) {
   return !DISABLED.has(String(env.FACILITY_LEGACY_READS_PAUSED || "").trim().toLowerCase());
 }
