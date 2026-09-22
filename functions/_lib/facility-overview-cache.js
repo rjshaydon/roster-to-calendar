@@ -83,6 +83,8 @@ export async function runFacilityPublicationStep(context, sourceTypeValue, optio
 function chunkedPublicationPlanResponse(plan) {
   const batches = facilityPublicationBatches(plan.plannedDates);
   const months = [...new Set(plan.plannedDates.map((date) => date.slice(0, 7)))];
+  const planningRows = Number(plan.estimate.maximumPlanningRowsExamined || 0);
+  const maximumBatchRows = planningRows + 1 + (FACILITY_PUBLICATION_BATCH_SIZE * (FACILITY_PUBLICATION_LIMITS.dayRows + 1));
   return {
     ...publicationPlanResponse(plan),
     operationRevision: plan.planRevision,
@@ -91,10 +93,10 @@ function chunkedPublicationPlanResponse(plan) {
     batches,
     months,
     estimate: {
-      planning: { maximumD1Statements: 7, maximumR2Gets: 1, maximumWrites: 0 },
-      eachBatch: { maximumDates: FACILITY_PUBLICATION_BATCH_SIZE, maximumD1Statements: 16, maximumRowsExamined: plan.estimate.maximumEstimatedD1RowsExamined, maximumR2Gets: 3, maximumR2Puts: FACILITY_PUBLICATION_BATCH_SIZE + 2 },
-      eachMonth: { maximumD1Statements: 7, maximumR2Gets: batches.length + 34, maximumR2Puts: 2 },
-      finalize: { maximumD1Statements: 11, maximumR2Gets: batches.length + months.length + 3, maximumR2Puts: 2, maximumD1RowsWrittenIncludingIndexes: 4 },
+      planning: { maximumD1Statements: 7, maximumRowsExamined: planningRows, maximumR2Gets: 1, maximumWrites: 0 },
+      eachBatch: { maximumDates: FACILITY_PUBLICATION_BATCH_SIZE, maximumD1Statements: 16, maximumRowsExamined: maximumBatchRows, maximumR2Gets: 3, maximumR2Puts: FACILITY_PUBLICATION_BATCH_SIZE + 2 },
+      eachMonth: { maximumD1Statements: 7, maximumRowsExamined: planningRows, maximumR2Gets: batches.length + 34, maximumR2Puts: 2 },
+      finalize: { maximumD1Statements: 11, maximumRowsExamined: planningRows + 4, maximumR2Gets: batches.length + months.length + 3, maximumR2Puts: 2, maximumD1RowsWrittenIncludingIndexes: 4 },
       broadRosterScans: 0,
     },
   };
@@ -112,7 +114,8 @@ async function buildFacilityPublicationBatch(context, plan, publicPlan, batchInd
   const resultKey = facilityBatchResultKey(plan.sourceType, plan.planRevision, batchIndex);
   const existingResult = await loadJsonObject(r2, resultKey);
   if (existingResult.data) return { ok: true, mode: "build-batch", unchanged: true, operationRevision: plan.planRevision, batchIndex, dates: publicPlan.batches[batchIndex] };
-  let operation = await db.prepare("SELECT operation_id, status FROM facility_day_publications WHERE source_type = ?").bind(plan.sourceType).first();
+  const operationResult = await db.prepare("SELECT operation_id, status FROM facility_day_publications WHERE source_type = ?").bind(plan.sourceType).all();
+  let operation = operationResult?.results?.[0] || null;
   if (batchIndex === 0) {
     const staffPublication = await publishFacilityStaffMetadata(context, [plan.sourceType], { termStart: plan.termStart, preparedPlan: plan, deferManifest: true });
     const preparedManifest = staffPublication.results?.[0]?.manifest;
@@ -194,7 +197,8 @@ async function finalizeFacilityPublication(context, plan, publicPlan) {
       .bind(String(currentPublic.data.revision || ""), new Date().toISOString(), plan.sourceType, plan.planRevision).run();
     return { ok: true, mode: "finalize", unchanged: true, repaired: true, operationRevision: plan.planRevision, revision: currentPublic.data.revision };
   }
-  const operation = await db.prepare("SELECT operation_id, status FROM facility_day_publications WHERE source_type = ?").bind(plan.sourceType).first();
+  const operationResult = await db.prepare("SELECT operation_id, status FROM facility_day_publications WHERE source_type = ?").bind(plan.sourceType).all();
+  const operation = operationResult?.results?.[0] || null;
   if (operation?.operation_id !== plan.planRevision || operation?.status !== "building") return { ok: false, reason: "publication-operation-not-building" };
   const stagedPlan = await loadJsonObject(r2, facilityOperationKey(plan.sourceType, plan.planRevision));
   if (!stagedPlan.data || stagedPlan.data.inputRevision !== plan.inputRevision) return { ok: false, stalePlan: true, reason: "publication-input-changed" };
@@ -213,7 +217,8 @@ async function finalizeFacilityPublication(context, plan, publicPlan) {
   await putJsonGzip(r2, `facility-overview/v1/${plan.sourceType}/manifests/${plan.planRevision}-${revision}.json.gz`, candidate);
   await db.prepare("UPDATE facility_day_publications SET candidate_revision = ?, updated_at = ? WHERE source_type = ? AND operation_id = ? AND status = 'building'")
     .bind(revision, new Date().toISOString(), plan.sourceType, plan.planRevision).run();
-  const owner = await db.prepare("SELECT operation_id FROM facility_day_publications WHERE source_type = ? AND status = 'building'").bind(plan.sourceType).first();
+  const ownerResult = await db.prepare("SELECT operation_id FROM facility_day_publications WHERE source_type = ? AND status = 'building'").bind(plan.sourceType).all();
+  const owner = ownerResult?.results?.[0] || null;
   if (owner?.operation_id !== plan.planRevision) return { ok: false, stalePlan: true, reason: "publication-operation-superseded" };
   await putJsonGzip(r2, facilityMetadataManifestKey(plan.sourceType), candidate, {
     onlyIf: stagedPlan.data.baseEtag ? { etagMatches: stagedPlan.data.baseEtag } : { etagDoesNotMatch: "*" },
@@ -341,6 +346,7 @@ async function buildFacilityPublicationPlan(context, sourceType, requestedTerm, 
       seniorityOverrides: FACILITY_PUBLICATION_LIMITS.overrideRows + 1,
       eachDay: FACILITY_PUBLICATION_LIMITS.dayRows + 1,
     },
+    maximumPlanningRowsExamined: planningRows,
     maximumEstimatedD1RowsExamined: (planningRows * 2) + 2 + (plannedDates.length * (FACILITY_PUBLICATION_LIMITS.dayRows + 1)),
     maximumPublicationStateStatements: 4,
     maximumEstimatedD1RowsWrittenIncludingIndexes: 8,

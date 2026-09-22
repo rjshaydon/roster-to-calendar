@@ -413,6 +413,11 @@ assert.equal(chunkPlan.ok, true);
 assert.equal(chunkPlan.batchSize, 7);
 assert.equal(chunkPlan.batchCount, 13, "the real 91-day operation plan must require 13 explicit requests");
 assert.equal(chunkPlan.batches.flat().length, chunkPlan.plannedDates.length);
+assert.equal(chunkPlan.estimate.eachBatch.maximumRowsExamined,
+  chunkPlan.estimate.planning.maximumRowsExamined + 1 + (7 * 513),
+  "a batch estimate must include one compact plan, one state row and only its seven indexed dates");
+assert.ok(chunkPlan.estimate.eachBatch.maximumRowsExamined < 100000,
+  "one bounded batch must remain below the At a glance five-minute hard stop");
 const staleChunkPuts = chunkedR2.puts;
 const staleChunk = await runFacilityPublicationStep(chunkContext, "mmc", { mode: "build-batch", termStart: "2026-08-03", operationRevision: "stale", batchIndex: 0 });
 assert.equal(staleChunk.stalePlan, true);
