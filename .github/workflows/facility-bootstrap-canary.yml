@@ -38,9 +38,13 @@ jobs:
             --header "Authorization: Bearer ${ROSTER_AUTOMATION_TOKEN}" \
             --header "Content-Type: application/json" \
             --data "${request_body}" \
+            --dump-header response-headers.txt \
             --output response.json \
             --write-out '%{http_code}' \
             "https://roster-to-calendar.pages.dev/api/automation/facility-bootstrap")"
+          request_id="$(awk 'BEGIN { IGNORECASE=1 } /^cf-ray:/ { gsub(/\r/, "", $2); print $2; exit }' response-headers.txt)"
+          test -n "${request_id}"
+          jq -n --arg requestId "${request_id}" --arg httpStatus "${http_status}" '{requestId: $requestId, httpStatus: $httpStatus}'
           if jq empty response.json >/dev/null 2>&1; then
             jq . response.json
           else
