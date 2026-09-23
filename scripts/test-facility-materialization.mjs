@@ -241,6 +241,17 @@ await assert.rejects(
   "bounded publication coverage must identify active files whose compact facts are missing",
 );
 sqlite.prepare("DELETE FROM roster_files WHERE id = ?").run("unprepared-active");
+sqlite.prepare("INSERT INTO roster_files (id, name, source_type, active) VALUES (?, ?, ?, 1)").run(
+  "historical-unprepared",
+  "Dandenong_Emergency_Doctors'_Roster_04-05-2026_to_02-08-2026.xlsx",
+  "mmc",
+);
+assert.equal(
+  (await queryMaterializedFacilityCoverage(db, { sourceType: "mmc", startDate: "2026-08-03", endDate: "2026-11-01", maximumRows: 32 }))[0].startDate,
+  "2026-08-03",
+  "a parseable non-overlapping historical file must not block current-term publication",
+);
+sqlite.prepare("DELETE FROM roster_files WHERE id = ?").run("historical-unprepared");
 assert.equal((await queryMaterializedFacilityTermStaff(db, { sourceType: "mmc", termStart: "2026-08-03" })).length, 2);
 assert.equal(sqlite.prepare("SELECT visible_from FROM facility_term_visibility WHERE source_type='mmc' AND term_start='2026-08-03'").get().visible_from, "2026-07-20");
 

@@ -4882,7 +4882,7 @@ export async function queryMaterializedFacilityCoverage(db, options = {}) {
   const maximumRows = options.maximumRows == null ? null : Math.max(1, Math.min(Number(options.maximumRows) || 1, 32));
   const boundedActiveFiles = maximumRows != null && sourceTypes.length === 1;
   const rows = boundedActiveFiles ? await db.prepare(`
-    SELECT f.id AS active_file_id, c.file_id, c.source_type, c.coverage_start, c.coverage_end,
+    SELECT f.id AS active_file_id, f.name AS active_file_name, c.file_id, c.source_type, c.coverage_start, c.coverage_end,
       c.content_revision, c.staff_digest, c.daily_digest, c.updated_at
     FROM roster_files AS f INDEXED BY idx_roster_files_source_active
     LEFT JOIN roster_file_coverage AS c ON c.file_id = f.id
@@ -4899,7 +4899,12 @@ export async function queryMaterializedFacilityCoverage(db, options = {}) {
   `).bind(...sourceTypes).all();
   rejectFacilityReadOverflow(rows.results, maximumRows, "active-file-read-limit");
   const unpreparedFileIds = boundedActiveFiles
-    ? (rows.results || []).filter((row) => !row.file_id).map((row) => String(row.active_file_id || "")).filter(Boolean)
+    ? (rows.results || []).filter((row) => {
+      if (row.file_id) return false;
+      const inferred = rosterFilenameCoverage(row.active_file_name);
+      return !startDate || !endDate || !inferred
+        || !(inferred.endDate < startDate || inferred.startDate > endDate);
+    }).map((row) => String(row.active_file_id || "")).filter(Boolean)
     : [];
   if (unpreparedFileIds.length) {
     const error = new Error("An active roster file has not been prepared for facility publication.");
@@ -4915,6 +4920,20 @@ export async function queryMaterializedFacilityCoverage(db, options = {}) {
     dailyDigest: String(row.daily_digest || ""), updatedAt: String(row.updated_at || ""),
   })).filter((row) => !startDate || !endDate || (row.startDate <= endDate && row.endDate >= startDate))
     .sort((a, b) => a.sourceType.localeCompare(b.sourceType) || a.startDate.localeCompare(b.startDate) || a.fileId.localeCompare(b.fileId));
+}
+
+function rosterFilenameCoverage(value) {
+  const match = String(value || "").match(/(\d{2})-(\d{2})-(\d{4})_to_(\d{2})-(\d{2})-(\d{4})/i);
+  if (!match) return null;
+  const startDate = validatedDateParts(match[3], match[2], match[1]);
+  const endDate = validatedDateParts(match[6], match[5], match[4]);
+  return startDate && endDate && startDate <= endDate ? { startDate, endDate } : null;
+}
+
+function validatedDateParts(year, month, day) {
+  const value = `${year}-${month}-${day}`;
+  const date = new Date(`${value}T12:00:00Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value ? value : "";
 }
 
 export async function queryMaterializedFacilityTermStaff(db, options = {}) {
