@@ -69,7 +69,20 @@ export async function runFacilityPublicationStep(context, sourceTypeValue, optio
       return { ok: true, mode: "finalize", unchanged: true, repaired: true, operationRevision: requestedRevision, revision: published.data.revision };
     }
   }
-  const plan = await buildFacilityPublicationPlan(context, sourceType, requestedTerm, FACILITY_PUBLICATION_LIMITS.dates);
+  let plan;
+  try {
+    plan = await buildFacilityPublicationPlan(context, sourceType, requestedTerm, FACILITY_PUBLICATION_LIMITS.dates);
+  } catch (error) {
+    if (error?.code !== "FACILITY_MATERIALIZATION_READ_BUDGET") throw error;
+    return {
+      ok: false,
+      overBudget: true,
+      reason: String(error.reason || "facility-materialization-read-budget"),
+      sourceType,
+      termStart: requestedTerm,
+      fileIds: Array.isArray(error.fileIds) ? error.fileIds.slice(0, FACILITY_PUBLICATION_LIMITS.activeFiles) : [],
+    };
+  }
   if (!plan.ok) return plan;
   const publicPlan = chunkedPublicationPlanResponse(plan);
   if (mode === "plan") return publicPlan;

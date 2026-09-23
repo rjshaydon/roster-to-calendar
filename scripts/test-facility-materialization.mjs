@@ -234,6 +234,13 @@ await deleteDerivedRosterFile(db, oversizedFile.id);
 const first = await replaceDerivedRosterFile(db, file, doctors, initialEvents);
 assert.equal(first.unchanged, false);
 assert.equal((await queryMaterializedFacilityCoverage(db, { sourceType: "mmc" }))[0].startDate, "2026-08-03");
+sqlite.prepare("INSERT INTO roster_files (id, name, source_type, active) VALUES (?, ?, ?, 1)").run("unprepared-active", "Unprepared.xlsx", "mmc");
+await assert.rejects(
+  queryMaterializedFacilityCoverage(db, { sourceType: "mmc", maximumRows: 32 }),
+  (error) => error?.reason === "active-file-not-prepared" && error?.fileIds?.includes("unprepared-active"),
+  "bounded publication coverage must identify active files whose compact facts are missing",
+);
+sqlite.prepare("DELETE FROM roster_files WHERE id = ?").run("unprepared-active");
 assert.equal((await queryMaterializedFacilityTermStaff(db, { sourceType: "mmc", termStart: "2026-08-03" })).length, 2);
 assert.equal(sqlite.prepare("SELECT visible_from FROM facility_term_visibility WHERE source_type='mmc' AND term_start='2026-08-03'").get().visible_from, "2026-07-20");
 

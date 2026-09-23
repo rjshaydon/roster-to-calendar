@@ -4898,10 +4898,14 @@ export async function queryMaterializedFacilityCoverage(db, options = {}) {
     ORDER BY c.source_type, c.coverage_start, c.file_id
   `).bind(...sourceTypes).all();
   rejectFacilityReadOverflow(rows.results, maximumRows, "active-file-read-limit");
-  if (boundedActiveFiles && (rows.results || []).some((row) => !row.file_id)) {
+  const unpreparedFileIds = boundedActiveFiles
+    ? (rows.results || []).filter((row) => !row.file_id).map((row) => String(row.active_file_id || "")).filter(Boolean)
+    : [];
+  if (unpreparedFileIds.length) {
     const error = new Error("An active roster file has not been prepared for facility publication.");
     error.code = "FACILITY_MATERIALIZATION_READ_BUDGET";
     error.reason = "active-file-not-prepared";
+    error.fileIds = unpreparedFileIds;
     throw error;
   }
   return (rows.results || []).map((row) => ({
