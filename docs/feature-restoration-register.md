@@ -54,7 +54,7 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 | `FACILITY_SHARED_ROLLOUT_ACTIVE` | `true` in Production; `false` in Preview | FR-01 |
 | `FACILITY_SHARED_EMERGENCY_PAUSED` | `false` in Production; `true` in Preview | FR-01 |
 | `FACILITY_LEGACY_READS_PAUSED` | `true` permanently | FR-01, FR-17 |
-| `FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST` | temporary diagnostic window: `ddh` in Production; empty in Preview | FR-01, FR-12 |
+| `FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST` | empty | FR-01, FR-12 |
 | `FACILITY_SHARED_READER_SOURCE_ALLOWLIST` | `mmc` in Production; empty in Preview | FR-01 |
 | `FACILITY_SHARED_READER_COHORT` | `all` in Production for MMC only; empty in Preview | FR-01 |
 | `FACILITY_ACCESS_MATERIALIZATION_ENABLED` | `false` | FR-01 |
@@ -69,7 +69,7 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 | `ROSTER_STATUS_SUMMARY_ENABLED` | `true` in Production; `false` in Preview | FR-05 |
 | `ROSTER_AUTOMATION_SOURCE_ALLOWLIST` | empty | FR-07 |
 | `ROSTER_AUTOMATION_QUEUE_ENABLED` | `false` | FR-07 |
-| `ROSTER_ADVANCED_MAINTENANCE_ENABLED` | temporary `true` in Production only for the bounded DDH preflight; `false` in Preview | FR-06, FR-11, FR-12 |
+| `ROSTER_ADVANCED_MAINTENANCE_ENABLED` | `false` | FR-06, FR-11, FR-12 |
 | `FACILITY_BOOTSTRAP_INSPECTION_ENABLED` | `false` | FR-12 |
 | `FACILITY_BOOTSTRAP_EXECUTION_ENABLED` | `false` | FR-12 |
 | `FACILITY_BOOTSTRAP_FILE_ALLOWLIST` | empty | FR-12 |
@@ -664,6 +664,7 @@ mechanisms are intentionally excluded from restoration.
 | DDH/MCH publication window opened, 23 Sep 2026 | A fresh-day second baseline returned `GO` at 141,181 reads and 302 writes, projected 141,763 reads, no expensive fingerprints and only eight additional reads across the sampling interval. Opened advanced maintenance solely for the manually dispatched chunked publisher with exact source allowlist `ddh,mch`. Readers remain MMC-only; contacts, automatic launch and legacy SQL remain disabled. The sequence must stop on the first failed plan, request ceiling or attribution gate and close immediately after finalisation. |
 | DDH publication planning stopped, 23 Sep 2026 | The first and only DDH request (workflow `35838159050`, request `a3f83a267c44163e`) returned HTTP 500 with a non-JSON response while planning term start `2026-08-03`. No batch or MCH request was dispatched. The DDH/MCH publication window was closed immediately pending request attribution and diagnosis; MMC readers remain unchanged. |
 | DDH opaque-plan diagnostic remediation, 23 Sep 2026 | Request attribution proved the failed plan used one D1 statement, read five rows, wrote zero and reported complete metadata. The bounded active-file preflight had thrown when an active DDH file lacked compact coverage, but the error escaped as HTML HTTP 500. The planner now returns a structured fail-closed `active-file-not-prepared` response with at most the already-read 32 file identifiers, allowing exact-file remediation without a broad discovery query. Production publication controls remain closed. |
+| DDH exact unprepared-file result, 23 Sep 2026 | The structured retry stopped after the same bounded active-file query and identified two historical files ending 3 May and 2 August 2026. Neither overlaps the requested term beginning 3 August. No batch or MCH request ran, and the DDH diagnostic window was closed. The generic preflight must ignore a missing compact record only when a parseable filename range proves it lies wholly outside the requested interval; unknown or overlapping files remain fail-closed. |
 
 ## Restoration record template
 
