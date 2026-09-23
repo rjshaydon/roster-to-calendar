@@ -55,7 +55,7 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 | `FACILITY_SHARED_EMERGENCY_PAUSED` | `false` in Production; `true` in Preview | FR-01 |
 | `FACILITY_LEGACY_READS_PAUSED` | `true` permanently | FR-01, FR-17 |
 | `FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST` | empty in Production and Preview; bounded publication windows are closed between facilities | FR-01, FR-12 |
-| `FACILITY_SHARED_READER_SOURCE_ALLOWLIST` | `mmc` in Production; empty in Preview | FR-01 |
+| `FACILITY_SHARED_READER_SOURCE_ALLOWLIST` | `mmc,ddh` in Production; empty in Preview | FR-01 |
 | `FACILITY_SHARED_READER_COHORT` | `all` in Production for MMC only; empty in Preview | FR-01 |
 | `FACILITY_ACCESS_MATERIALIZATION_ENABLED` | `false` | FR-01 |
 | `FACILITY_SHARED_METADATA_BUILD_ENABLED` | `false` | FR-01 |
@@ -669,6 +669,7 @@ mechanisms are intentionally excluded from restoration.
 | DDH Term 3 consolidated publication, 23 Sep 2026 | The corrected plan read 405 rows in seven statements with no writes and complete telemetry. All 13 bounded daily batches, the August-November month assemblies and fenced finalisation then passed serially for operation revision `8fe2e6d2bd99f18063735d3c6d9a2e13a92c641d9e6ddcc5dd95e640f8007bc8`. The DDH maintenance/source window was closed immediately after finalisation. Shared readers remain MMC-only pending complete request attribution and an account-wide safety check; MCH publication has not started. |
 | DDH settlement and MCH publication authorisation, 23 Sep 2026 | All 19 exact DDH plan/build/finalise requests reconciled with complete metadata: 242 statements, 15,181 rows read and four rows written; the largest request read 1,014 rows. The account-wide checker returned `GO` with 143,879 settled reads, 302 writes, no stop reason and a conservative doubled allowance for 75,000 MCH reads. Opened advanced maintenance solely for serial MCH publication. Readers remain MMC-only; contacts, automatic launch and legacy SQL remain disabled. |
 | MCH publication planning stopped, 23 Sep 2026 | The single bounded MCH plan workflow `35840979695` failed before any MCH build batch was dispatched. The MCH maintenance/source window was closed immediately. DDH's completed objects are retained but its readers remain disabled; MMC remains the only readable shared source pending failure attribution and remediation. |
+| DDH shared-reader restoration, 23 Sep 2026 | After complete DDH publication attribution and an account-wide `GO`, Production shared readers were expanded from `mmc` to `mmc,ddh`. This exposes only the already-published R2-backed metadata/day objects; all publication/bootstrap switches are closed, automatic launch and contacts remain disabled, MCH/VHH readers remain excluded, and legacy SQL remains permanently paused. The next user gate is one DDH On shift and ED Staff canary. |
 
 ## Restoration record template
 
