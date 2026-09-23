@@ -54,7 +54,7 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 | `FACILITY_SHARED_ROLLOUT_ACTIVE` | `true` in Production; `false` in Preview | FR-01 |
 | `FACILITY_SHARED_EMERGENCY_PAUSED` | `false` in Production; `true` in Preview | FR-01 |
 | `FACILITY_LEGACY_READS_PAUSED` | `true` permanently | FR-01, FR-17 |
-| `FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST` | empty | FR-01, FR-12 |
+| `FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST` | temporary bounded publication window: `ddh,mch` in Production; empty in Preview | FR-01, FR-12 |
 | `FACILITY_SHARED_READER_SOURCE_ALLOWLIST` | `mmc` in Production; empty in Preview | FR-01 |
 | `FACILITY_SHARED_READER_COHORT` | `all` in Production for MMC only; empty in Preview | FR-01 |
 | `FACILITY_ACCESS_MATERIALIZATION_ENABLED` | `false` | FR-01 |
@@ -69,7 +69,7 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 | `ROSTER_STATUS_SUMMARY_ENABLED` | `true` in Production; `false` in Preview | FR-05 |
 | `ROSTER_AUTOMATION_SOURCE_ALLOWLIST` | empty | FR-07 |
 | `ROSTER_AUTOMATION_QUEUE_ENABLED` | `false` | FR-07 |
-| `ROSTER_ADVANCED_MAINTENANCE_ENABLED` | `false` | FR-06, FR-11, FR-12 |
+| `ROSTER_ADVANCED_MAINTENANCE_ENABLED` | temporary `true` in Production only for serial DDH/MCH publication; `false` in Preview | FR-06, FR-11, FR-12 |
 | `FACILITY_BOOTSTRAP_INSPECTION_ENABLED` | `false` | FR-12 |
 | `FACILITY_BOOTSTRAP_EXECUTION_ENABLED` | `false` | FR-12 |
 | `FACILITY_BOOTSTRAP_FILE_ALLOWLIST` | empty | FR-12 |
@@ -661,6 +661,7 @@ mechanisms are intentionally excluded from restoration.
 | MMC Term 3 consolidated publication, 22 Sep 2026 | After batch 0 measured only 1,062 reads and one written row, batches 1–12 ran serially with independent 20-statement limits and automatic stop-on-failure; every batch succeeded. August, September, October and November month objects then assembled serially, and fenced finalisation workflow `35713481875` succeeded for operation revision `8923f979716e4603001a75a2259197e65fd12f6e299574e8d15b8298a98f947e`. The complete MMC Term 3 shared cache now exists. The MMC maintenance/source window was closed immediately after finalisation and shared readers remain disabled pending one combined settled account-usage check. |
 | MMC consolidated publication settlement and Creator-reader authorisation, 22 Sep 2026 | All 18 publication requests reconciled to 235 D1 statements, 15,487 rows read and three rows written, with complete request metadata; the largest request read 1,079 rows. The account-wide checker returned `GO` at 143,958 daily reads and 253 writes, with no expensive fingerprint and a maximum five-minute bucket of 60,905 reads, below the 100,000 hard stop. This authorises only Creator-self reads of MMC shared metadata/day objects. Contacts, builders, automatic launch, other facilities, ordinary users and legacy SQL remain disabled. |
 | Creator MMC cached-reader canary, 22 Sep 2026 at 20:54 AEST | Creator login followed by MMC On shift and ED Staff completed without user-visible error. Each shared reader used one D1 statement and read three rows with zero writes. The settled account-wide checker returned `GO` at 152,071 reads and 257 writes, with the maximum five-minute bucket unchanged at 60,905. This authorises widening only MMC cached readers to entitled users; automatic launch, contacts, builders, other facilities and legacy SQL remain disabled. |
+| DDH/MCH publication window opened, 23 Sep 2026 | A fresh-day second baseline returned `GO` at 141,181 reads and 302 writes, projected 141,763 reads, no expensive fingerprints and only eight additional reads across the sampling interval. Opened advanced maintenance solely for the manually dispatched chunked publisher with exact source allowlist `ddh,mch`. Readers remain MMC-only; contacts, automatic launch and legacy SQL remain disabled. The sequence must stop on the first failed plan, request ceiling or attribution gate and close immediately after finalisation. |
 
 ## Restoration record template
 
