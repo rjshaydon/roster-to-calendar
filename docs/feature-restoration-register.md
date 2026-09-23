@@ -54,7 +54,7 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 | `FACILITY_SHARED_ROLLOUT_ACTIVE` | `true` in Production; `false` in Preview | FR-01 |
 | `FACILITY_SHARED_EMERGENCY_PAUSED` | `false` in Production; `true` in Preview | FR-01 |
 | `FACILITY_LEGACY_READS_PAUSED` | `true` permanently | FR-01, FR-17 |
-| `FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST` | empty in Production and Preview; bounded publication windows are closed between facilities | FR-01, FR-12 |
+| `FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST` | temporary bounded publication window: `mch` in Production; empty in Preview | FR-01, FR-12 |
 | `FACILITY_SHARED_READER_SOURCE_ALLOWLIST` | `mmc` in Production; empty in Preview | FR-01 |
 | `FACILITY_SHARED_READER_COHORT` | `all` in Production for MMC only; empty in Preview | FR-01 |
 | `FACILITY_ACCESS_MATERIALIZATION_ENABLED` | `false` | FR-01 |
@@ -69,7 +69,7 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 | `ROSTER_STATUS_SUMMARY_ENABLED` | `true` in Production; `false` in Preview | FR-05 |
 | `ROSTER_AUTOMATION_SOURCE_ALLOWLIST` | empty | FR-07 |
 | `ROSTER_AUTOMATION_QUEUE_ENABLED` | `false` | FR-07 |
-| `ROSTER_ADVANCED_MAINTENANCE_ENABLED` | `false` in Production and Preview; enabled only for one explicitly bounded publication window | FR-06, FR-11, FR-12 |
+| `ROSTER_ADVANCED_MAINTENANCE_ENABLED` | temporary `true` in Production only for serial MCH publication; `false` in Preview | FR-06, FR-11, FR-12 |
 | `FACILITY_BOOTSTRAP_INSPECTION_ENABLED` | `false` | FR-12 |
 | `FACILITY_BOOTSTRAP_EXECUTION_ENABLED` | `false` | FR-12 |
 | `FACILITY_BOOTSTRAP_FILE_ALLOWLIST` | empty | FR-12 |
@@ -667,6 +667,7 @@ mechanisms are intentionally excluded from restoration.
 | DDH exact unprepared-file result, 23 Sep 2026 | The structured retry stopped after the same bounded active-file query and identified two historical files ending 3 May and 2 August 2026. Neither overlaps the requested term beginning 3 August. No batch or MCH request ran, and the DDH diagnostic window was closed. The generic preflight must ignore a missing compact record only when a parseable filename range proves it lies wholly outside the requested interval; unknown or overlapping files remain fail-closed. |
 | DDH non-overlapping legacy-file remediation, 23 Sep 2026 | The bounded coverage preflight now reads each active file's name in the same capped indexed query. An unprepared file is excluded only when its validated `DD-MM-YYYY_to_DD-MM-YYYY` range lies wholly outside the requested publication interval. Unknown, invalid or overlapping ranges still return `active-file-not-prepared`. Focused tests cover both fail-closed unknown files and the exact DDH historical filename pattern; Production publication controls remain closed pending deployment and a fresh bounded plan. |
 | DDH Term 3 consolidated publication, 23 Sep 2026 | The corrected plan read 405 rows in seven statements with no writes and complete telemetry. All 13 bounded daily batches, the August-November month assemblies and fenced finalisation then passed serially for operation revision `8fe2e6d2bd99f18063735d3c6d9a2e13a92c641d9e6ddcc5dd95e640f8007bc8`. The DDH maintenance/source window was closed immediately after finalisation. Shared readers remain MMC-only pending complete request attribution and an account-wide safety check; MCH publication has not started. |
+| DDH settlement and MCH publication authorisation, 23 Sep 2026 | All 19 exact DDH plan/build/finalise requests reconciled with complete metadata: 242 statements, 15,181 rows read and four rows written; the largest request read 1,014 rows. The account-wide checker returned `GO` with 143,879 settled reads, 302 writes, no stop reason and a conservative doubled allowance for 75,000 MCH reads. Opened advanced maintenance solely for serial MCH publication. Readers remain MMC-only; contacts, automatic launch and legacy SQL remain disabled. |
 
 ## Restoration record template
 
