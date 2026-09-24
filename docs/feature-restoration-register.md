@@ -69,9 +69,9 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 | `ROSTER_STATUS_SUMMARY_ENABLED` | `true` in Production; `false` in Preview | FR-05 |
 | `ROSTER_AUTOMATION_SOURCE_ALLOWLIST` | empty | FR-07 |
 | `ROSTER_AUTOMATION_QUEUE_ENABLED` | `false` | FR-07 |
-| `ROSTER_ADVANCED_MAINTENANCE_ENABLED` | `false` in Production and Preview; enabled only for one explicitly bounded operation | FR-06, FR-11, FR-12 |
+| `ROSTER_ADVANCED_MAINTENANCE_ENABLED` | temporary `true` in Production for one exact VHH bootstrap execution; `false` in Preview | FR-06, FR-11, FR-12 |
 | `FACILITY_BOOTSTRAP_INSPECTION_ENABLED` | temporary `true` in Production for one exact VHH file; `false` in Preview | FR-12 |
-| `FACILITY_BOOTSTRAP_EXECUTION_ENABLED` | `false` in Production and Preview | FR-12 |
+| `FACILITY_BOOTSTRAP_EXECUTION_ENABLED` | temporary `true` in Production for the exact inspected VHH file; `false` in Preview | FR-12 |
 | `FACILITY_BOOTSTRAP_FILE_ALLOWLIST` | exact Production file `automation:vhh-active-medical-roster:83338adde7ea4dad00df508c`; empty in Preview | FR-12 |
 | `CONTACT_AUTOMATION_WRITES_ENABLED` | `false` | FR-08 |
 | `CONTACT_AUTOMATION_SOURCE_ALLOWLIST` | empty | FR-08 |
@@ -690,6 +690,7 @@ mechanisms are intentionally excluded from restoration.
 | VHH publication admitted, 24 Sep 2026 | After the successful MCH canary, the account-wide checker returned `GO` at 181,711 settled reads and 1,640 writes; the maximum five-minute read bucket remained 49,836 and admission included a doubled 75,000-read VHH allowance. Opened advanced maintenance solely for the serial VHH publisher. VHH readers, contacts, automatic launch and legacy SQL remain disabled until publication attribution passes. |
 | VHH publication planning stopped, 24 Sep 2026 | The single bounded VHH plan workflow `35977943578` failed before any build batch was dispatched. The VHH maintenance/source window was closed immediately pending exact failure attribution and remediation. Existing MMC/DDH/MCH readers remain unchanged. |
 | VHH exact-file preparation identified, 24 Sep 2026 | The structured VHH stop identified one and only one unprepared active contribution: `automation:vhh-active-medical-roster:83338adde7ea4dad00df508c`. No batch ran. Opened read-only bootstrap inspection solely for that exact file; execution and advanced maintenance remain disabled. |
+| VHH exact-file inspection, 24 Sep 2026 | Read-only workflow `35978150131` identified `Active Medical Roster.xlsx`; compact/status metadata were absent and raw source was available. The declared execution ceiling is 27,021 rows examined and 750 compact mutation statements. Execution was opened only for this exact file and inspection revision `d98a79e3f9d2b76268787326fedf36460c7fedf4bf7285dbd89606cf1370d7cb`. |
 
 ## Restoration record template
 
