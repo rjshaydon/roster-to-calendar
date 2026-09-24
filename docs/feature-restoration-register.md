@@ -54,7 +54,7 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 | `FACILITY_SHARED_ROLLOUT_ACTIVE` | `true` in Production; `false` in Preview | FR-01 |
 | `FACILITY_SHARED_EMERGENCY_PAUSED` | `false` in Production; `true` in Preview | FR-01 |
 | `FACILITY_LEGACY_READS_PAUSED` | `true` permanently | FR-01, FR-17 |
-| `FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST` | temporary bounded publication window: `vhh` in Production; empty in Preview | FR-01, FR-12 |
+| `FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST` | empty in Production and Preview; bounded publication windows are closed between facilities | FR-01, FR-12 |
 | `FACILITY_SHARED_READER_SOURCE_ALLOWLIST` | `mmc,ddh,mch` in Production; empty in Preview | FR-01 |
 | `FACILITY_SHARED_READER_COHORT` | `all` in Production for MMC only; empty in Preview | FR-01 |
 | `FACILITY_ACCESS_MATERIALIZATION_ENABLED` | `false` | FR-01 |
@@ -69,7 +69,7 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 | `ROSTER_STATUS_SUMMARY_ENABLED` | `true` in Production; `false` in Preview | FR-05 |
 | `ROSTER_AUTOMATION_SOURCE_ALLOWLIST` | empty | FR-07 |
 | `ROSTER_AUTOMATION_QUEUE_ENABLED` | `false` | FR-07 |
-| `ROSTER_ADVANCED_MAINTENANCE_ENABLED` | temporary `true` in Production only for serial VHH publication; `false` in Preview | FR-06, FR-11, FR-12 |
+| `ROSTER_ADVANCED_MAINTENANCE_ENABLED` | `false` in Production and Preview; enabled only for one explicitly bounded operation | FR-06, FR-11, FR-12 |
 | `FACILITY_BOOTSTRAP_INSPECTION_ENABLED` | `false` in Production and Preview | FR-12 |
 | `FACILITY_BOOTSTRAP_EXECUTION_ENABLED` | `false` in Production and Preview | FR-12 |
 | `FACILITY_BOOTSTRAP_FILE_ALLOWLIST` | empty in Production and Preview | FR-12 |
@@ -688,6 +688,7 @@ mechanisms are intentionally excluded from restoration.
 | MCH all-site discovery correction, 24 Sep 2026 | The first Creator canary showed only MMC/DDH because metadata discovery inherited the currently selected doctor's source links rather than the shared-reader allowlist. All-site viewers now request metadata for every explicitly enabled cached-reader source (`mmc,ddh,mch`); site-scoped viewers remain fixed to their authorised ED. The source list is read from environment configuration and adds zero D1 statements. Focused rollout, materialisation and attribution tests pass. |
 | MCH selector refresh correction, 24 Sep 2026 | The second Creator canary still omitted MCH because On shift and Staff rendered their selector before loading the published metadata manifest; only By stream had triggered that load. Opening any At a glance tab now awaits the R2-backed metadata refresh before deriving the facility options. This adds no D1 query and retains server-side access scoping. The broader access acceptance rule is now explicit: SMS/CMO all-site, other grades current-term membership sites only, including genuine locum sites without granting unrelated sites. |
 | VHH publication admitted, 24 Sep 2026 | After the successful MCH canary, the account-wide checker returned `GO` at 181,711 settled reads and 1,640 writes; the maximum five-minute read bucket remained 49,836 and admission included a doubled 75,000-read VHH allowance. Opened advanced maintenance solely for the serial VHH publisher. VHH readers, contacts, automatic launch and legacy SQL remain disabled until publication attribution passes. |
+| VHH publication planning stopped, 24 Sep 2026 | The single bounded VHH plan workflow `35977943578` failed before any build batch was dispatched. The VHH maintenance/source window was closed immediately pending exact failure attribution and remediation. Existing MMC/DDH/MCH readers remain unchanged. |
 
 ## Restoration record template
 
