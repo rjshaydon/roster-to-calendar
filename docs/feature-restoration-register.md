@@ -55,7 +55,7 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 | `FACILITY_SHARED_EMERGENCY_PAUSED` | `false` in Production; `true` in Preview | FR-01 |
 | `FACILITY_LEGACY_READS_PAUSED` | `true` permanently | FR-01, FR-17 |
 | `FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST` | empty in Production and Preview | FR-01, FR-12 |
-| `FACILITY_SHARED_READER_SOURCE_ALLOWLIST` | `mmc,ddh,mch` in Production; empty in Preview | FR-01 |
+| `FACILITY_SHARED_READER_SOURCE_ALLOWLIST` | `mmc,ddh,mch,vhh` in Production; empty in Preview | FR-01 |
 | `FACILITY_SHARED_READER_COHORT` | `all` in Production for MMC only; empty in Preview | FR-01 |
 | `FACILITY_ACCESS_MATERIALIZATION_ENABLED` | `false` | FR-01 |
 | `FACILITY_SHARED_METADATA_BUILD_ENABLED` | `false` | FR-01 |
@@ -693,6 +693,7 @@ mechanisms are intentionally excluded from restoration.
 | VHH exact-file inspection, 24 Sep 2026 | Read-only workflow `35978150131` identified `Active Medical Roster.xlsx`; compact/status metadata were absent and raw source was available. The declared execution ceiling is 27,021 rows examined and 750 compact mutation statements. Execution was opened only for this exact file and inspection revision `d98a79e3f9d2b76268787326fedf36460c7fedf4bf7285dbd89606cf1370d7cb`. |
 | VHH exact-file preparation and publication transition, 24 Sep 2026 | Revision-fenced workflow `35978360349` completed successfully for the sole active VHH contribution. All bootstrap inspection/execution permissions and the exact-file allowlist were closed. Advanced maintenance remains open only for the separately bounded VHH chunked publisher; VHH readers remain disabled. |
 | VHH Term 3 consolidated publication, 24 Sep 2026 | The bounded plan request `a4009810bd594868` used seven statements, read 447 rows, wrote nothing and reported complete telemetry. All nine exact seven-day batches, the August-November month assemblies and fenced finalisation workflow `35979810578` passed serially for operation revision `336e40fd677ab97e40945fe879c0f3aa887a138b5354868eb769119ac115f7e4`. The VHH maintenance/source window was closed immediately after finalisation. Shared readers remain MMC/DDH/MCH-only pending complete request attribution and an account-wide safety check. |
+| VHH shared-reader restoration, 24 Sep 2026 | All 15 exact VHH plan/build/finalise requests reconciled with complete metadata: 182 statements, 8,546 rows read and four rows written; the largest request read 665 rows. The post-work account checker returned `GO` at 187,763 settled reads and 2,768 writes, with the maximum five-minute read bucket unchanged at 49,836 and projected daily reads below 427,000. Production cached readers were expanded to `mmc,ddh,mch,vhh`. All publication/bootstrap switches are closed; contacts, automatic launch and legacy SQL remain disabled. |
 
 ## Restoration record template
 
