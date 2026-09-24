@@ -6,7 +6,7 @@ import { advancedRosterMaintenanceEnabled, reviewedRosterFactLimit, rosterStatus
 import { guardedFetch, localFeatureDisabledResponse } from "../_lib/outbound-network.js";
 import { loadPublishedFacilityDays, loadPublishedFacilityMetadata, loadPublishedFacilityRange, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata } from "../_lib/facility-overview-cache.js";
 import { loadPublishedFacilityContacts, publishFacilityContactResolutions } from "../_lib/facility-contact-cache.js";
-import { facilityBuildSources, facilityLegacyReadsPaused, facilityOverviewAutomaticLaunchEnabled, facilityOverviewMaintenanceForViewer, facilityOverviewMaintenanceMode, facilityReadRoute, facilityRolloutCohortEligible } from "../_lib/facility-rollout.js";
+import { facilityBuildSources, facilityLegacyReadsPaused, facilityOverviewAutomaticLaunchEnabled, facilityOverviewMaintenanceForViewer, facilityOverviewMaintenanceMode, facilityReaderSources, facilityReadRoute, facilityRolloutCohortEligible } from "../_lib/facility-rollout.js";
 import { creatorDirectoryEnabled, creatorStartupHydrationEnabled } from "../_lib/creator-startup-guard.js";
 import { extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentExceptions, findmyshiftLastModified, findmyshiftReportDiagnostics, findmyshiftShiftReport } from "../_lib/findmyshift.js";
 import {
@@ -2002,7 +2002,14 @@ export async function onRequestPost(context) {
       const linkedSourceTypes = constrainFacilityOverviewSourceTypes(access, body?.sourceTypes || []);
       const today = australianDateKey();
       const term = facilityOverviewTermRange(today);
-      const catalogSources = linkedSourceTypes.length ? linkedSourceTypes : ["mmc", "ddh", "casey", "mch", "vhh"];
+      // An all-site viewer must discover every source explicitly opened by the
+      // shared-reader rollout, even when their currently selected doctor is
+      // linked to only a subset of hospitals. This is an environment lookup;
+      // it adds no D1 work and cannot expose unpublished or disabled sources.
+      const enabledReaderSources = access.mode === "all" ? facilityReaderSources(context.env) : [];
+      const catalogSources = enabledReaderSources.length
+        ? enabledReaderSources
+        : linkedSourceTypes.length ? linkedSourceTypes : ["mmc", "ddh", "casey", "mch", "vhh"];
       try {
         const readRoute = sharedReadRouteFor(catalogSources);
         if (readRoute === "blocked") return sharedRouteUnavailable();

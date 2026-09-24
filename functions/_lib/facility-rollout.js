@@ -27,6 +27,11 @@ export function facilityBuildSources(env = {}, sources = []) {
   return normalizeSources(sources).filter((source) => allowed.has(source));
 }
 
+export function facilityReaderSources(env = {}) {
+  if (!facilitySharedRolloutActive(env) || facilityRolloutPaused(env)) return [];
+  return normalizeSources(String(env.FACILITY_SHARED_READER_SOURCE_ALLOWLIST || "").split(","));
+}
+
 export function facilitySharedReaderAllowed(env = {}, { actorRole = "", actorEmail = "", subjectEmail = "", sources = [] } = {}) {
   return facilityReadRoute(env, { actorRole, actorEmail, subjectEmail, sources }) === "shared";
 }
@@ -52,7 +57,7 @@ export function facilityReadRoute(env = {}, { actorRole = "", actorEmail = "", s
   if (!facilityRolloutCohortEligible(env, { actorRole, actorEmail, subjectEmail })) {
     return facilityLegacyReadsPaused(env) ? "blocked" : "legacy";
   }
-  const allowed = configuredSet(env.FACILITY_SHARED_READER_SOURCE_ALLOWLIST);
+  const allowed = new Set(facilityReaderSources(env));
   const requested = normalizeSources(sources);
   return requested.length && requested.every((source) => allowed.has(source)) ? "shared" : "blocked";
 }
