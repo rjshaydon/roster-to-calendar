@@ -69,9 +69,9 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 | `ROSTER_STATUS_SUMMARY_ENABLED` | `true` in Production; `false` in Preview | FR-05 |
 | `ROSTER_AUTOMATION_SOURCE_ALLOWLIST` | empty | FR-07 |
 | `ROSTER_AUTOMATION_QUEUE_ENABLED` | `false` | FR-07 |
-| `ROSTER_ADVANCED_MAINTENANCE_ENABLED` | `false` in Production and Preview | FR-06, FR-11, FR-12 |
+| `ROSTER_ADVANCED_MAINTENANCE_ENABLED` | temporary `true` in Production for one exact MCH Term 1 bootstrap execution; `false` in Preview | FR-06, FR-11, FR-12 |
 | `FACILITY_BOOTSTRAP_INSPECTION_ENABLED` | temporary `true` in Production for one exact MCH file; `false` in Preview | FR-12 |
-| `FACILITY_BOOTSTRAP_EXECUTION_ENABLED` | `false` in Production and Preview | FR-12 |
+| `FACILITY_BOOTSTRAP_EXECUTION_ENABLED` | temporary `true` in Production for exact inspected MCH Term 1 file; `false` in Preview | FR-12 |
 | `FACILITY_BOOTSTRAP_FILE_ALLOWLIST` | exact Production file `Paeds - Term 1 2026.xlsx:500042:1778296700465`; empty in Preview | FR-12 |
 | `CONTACT_AUTOMATION_WRITES_ENABLED` | `false` | FR-08 |
 | `CONTACT_AUTOMATION_SOURCE_ALLOWLIST` | empty | FR-08 |
@@ -673,6 +673,7 @@ mechanisms are intentionally excluded from restoration.
 | MCH exact-file preparation admitted, 24 Sep 2026 | The mandatory second account sample returned `GO` at 161,849 settled reads and 348 writes; the maximum five-minute bucket was 49,836 reads and the admission included a doubled 75,000-read MCH allowance. Opened read-only bootstrap inspection solely for exact file `automation:monash-paeds:528f865e19dd862921bc3cd3`. Execution, advanced maintenance, MCH readers, contacts, automatic launch and legacy SQL remain disabled. |
 | MCH Term 2 exact-file inspection, 24 Sep 2026 | Read-only workflow `35972999831` identified the exact automation contribution as `Paeds - Term 2 2026.xlsx`; compact/status metadata were absent and raw source was available. The declared execution ceiling is 27,021 rows examined and 750 compact mutation statements. Execution was opened only for this exact file and inspection revision `5e3d15a407366bf4331c4c2ea5c50447cc82cf64c0929a1e0b781032c14e5e16`; unrelated files and sources remain rejected before D1. |
 | MCH Term 2 exact-file preparation, 24 Sep 2026 | Revision-fenced workflow `35973595504` completed successfully for the sole inspected Term 2 automation file. Its execution and advanced-maintenance permissions were closed immediately. Read-only inspection then moved to the sole remaining unprepared MCH contribution, exact historical file `Paeds - Term 1 2026.xlsx:500042:1778296700465`; MCH readers remain disabled. |
+| MCH Term 1 exact-file inspection, 24 Sep 2026 | Read-only workflow `35974127068` succeeded for `Paeds - Term 1 2026.xlsx`; compact/status metadata were absent and raw source was available. The declared execution ceiling is 27,021 rows examined and 750 compact mutation statements. Execution was opened only for this exact file and inspection revision `7ec87677b83c08f632e9c0d9b0c0adda6c5f0ff4b112ea40e6635b8e180dd213`. |
 
 ## Restoration record template
 
