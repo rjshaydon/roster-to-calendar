@@ -50,8 +50,10 @@ const appSource = await readFile(new URL("../public/static/app.js", import.meta.
 
 assert.doesNotMatch(contactExtractSource, /WHERE source_id = \? AND provider_version = \?/,
   "a repeated provider version must not hide changed JSON contacts");
-assert.match(contactExtractSource, /const contentHash = await sha256Hex\(bytes\)[\s\S]*matchingHash/,
-  "MMC JSON ingestion should deduplicate only identical extracts");
+assert.match(contactExtractSource, /WHERE source_id = \? AND content_hash = \?[\s\S]*LIMIT 1[\s\S]*\.all\(\)/,
+  "contact ingestion should deduplicate identical extracts with one indexed lookup");
+assert.match(contactExtractSource, /if \(matchingHash\?\.id\)[\s\S]*status: "unchanged"[\s\S]*SELECT id, object_key, received_at[\s\S]*LIMIT 9/,
+  "the nine-row retention query should run only for a genuinely new extract");
 assert.match(contactExtractSource, /automationSourceDate[\s\S]*st\|nd\|rd\|th/,
   "the JSON boundary should normalize the date label emitted by the existing MMC Office Script");
 assert.match(contactExtractSource, /pruneStoredContactExtracts[\s\S]*contactExtractHasExpired/,

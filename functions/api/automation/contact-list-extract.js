@@ -54,13 +54,13 @@ export async function onRequestPost(context) {
     await ensureCalendarSchema(db);
     const providerVersion = String(payload?.providerVersion || "").trim();
     const contentHash = await sha256Hex(bytes);
-    const existing = await db.prepare(`
-      SELECT id, object_key, content_hash, received_at FROM contact_list_files
-      WHERE source_id = ?
+    const matchingRows = await db.prepare(`
+      SELECT id, received_at FROM contact_list_files
+      WHERE source_id = ? AND content_hash = ?
       ORDER BY received_at DESC
-      LIMIT 9
-    `).bind(sourceId).all();
-    const matchingHash = existing.results.find((entry) => String(entry.content_hash || "") === contentHash);
+      LIMIT 1
+    `).bind(sourceId, contentHash).all();
+    const matchingHash = matchingRows.results?.[0];
     if (matchingHash?.id) {
       if (contactPublicationEnabled(context.env, sourceId)) {
         await publishFacilityContactExtract(context.env.ROSTER_FILES, extract, {
@@ -77,6 +77,13 @@ export async function onRequestPost(context) {
         fileId: String(matchingHash.id),
       });
     }
+
+    const existing = await db.prepare(`
+      SELECT id, object_key, received_at FROM contact_list_files
+      WHERE source_id = ?
+      ORDER BY received_at DESC
+      LIMIT 9
+    `).bind(sourceId).all();
 
     const now = new Date().toISOString();
     const fileId = `contact:${sourceId}:${contentHash.slice(0, 24)}`;
