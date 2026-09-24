@@ -345,7 +345,7 @@ let facilityOverviewCompactState = {
   touchY: 0,
 };
 let facilityOverviewState = {
-  tab: "on-shift", date: contactOperationalDate(), followOperationalDate: true, facilityKey: "", includeClinicalSupport: false, requestId: 0, requestController: null, onShiftData: null, contactList: null, contactReviewOpen: false, contactResolutionMenu: null, contactResolutionSaving: false,
+  tab: "on-shift", date: contactOperationalDate(), followOperationalDate: true, facilityKey: "", includeClinicalSupport: false, requestId: 0, requestController: null, onShiftData: null, contactList: null, contactAccessToken: "", contactReviewOpen: false, contactResolutionMenu: null, contactResolutionSaving: false,
   staffTermStart: formatDateKey(australianTermForDate(new Date()).start), staffTerms: [], staffContent: "", staffData: null, staffQuery: "", staffExpanded: new Set(), staffFocusSection: "", staffActionMenu: null, staffDesignationMenu: null, staffSeniorityMenu: null, staffMultiSelectSection: "", staffMultiSelectMembers: new Map(), staffBulkSeniorityMenu: null, staffMultiSelectSaving: false,
   preferredFacilityKey: "", preferredFacilityReason: "", preferredFacilityEvidenceDate: "", byStreamFrom: formatDateKey(new Date()), byStreamTo: formatDateKey(new Date()), byStreamRows: [], byStreamCatalog: [], byStreamCoverage: [], byStreamContent: "", byStreamData: null, byStreamLoading: false, byStreamMetadataLoading: false, byStreamMetadataKey: "", byStreamMetadataPromise: null, byStreamRequestId: 0, byStreamHideEmptyDates: true, byStreamRowId: 0,
   togetherStaffKeys: ["", ""], togetherRangeMode: "term",
@@ -9210,6 +9210,7 @@ function renderFacilityOverviewMaintenance() {
   facilityOverviewState.onShiftData = null;
   facilityOverviewState.staffData = null;
   facilityOverviewState.contactList = null;
+  facilityOverviewState.contactAccessToken = "";
   form?.classList.add("is-facility-overview-active");
   previewSection?.classList.add("hidden");
   facilityOverviewSection?.classList.remove("hidden");
@@ -9775,6 +9776,7 @@ function closeFacilityOverview() {
   cancelFacilityOverviewDataRequest();
   collapseFacilityOverviewContactReview();
   stopFacilityOverviewContactRefresh();
+  facilityOverviewState.contactAccessToken = "";
   facilityOverviewNavigationLocked = false;
   facilityOverviewState.requestId += 1;
   facilityOverviewState.byStreamRequestId += 1;
@@ -10568,6 +10570,7 @@ async function loadFacilityOverviewOnShift() {
   facilityOverviewState.staffData = null;
   facilityOverviewState.onShiftData = null;
   facilityOverviewState.contactList = null;
+  facilityOverviewState.contactAccessToken = "";
   facilityOverviewState.content = `<article class="issue-card"><p>Loading rostered staff…</p></article>`;
   const cacheQuery = { facilityKey: facilityOverviewState.facilityKey, date: facilityOverviewState.date, includeClinicalSupport: facilityOverviewState.includeClinicalSupport === true };
   const cached = await loadFacilityOverviewSnapshot("on-shift", cacheQuery);
@@ -10598,6 +10601,7 @@ async function loadFacilityOverviewOnShift() {
     if (facilityOverviewState.requestId !== requestId || facilityOverviewState.tab !== "on-shift") return;
     facilityOverviewState.onShiftData = data.rosterUnchanged === true && cached ? cached.events || [] : data.events || [];
     facilityOverviewState.contactList = data.contactList || null;
+    facilityOverviewState.contactAccessToken = String(data.contactAccessToken || "");
     facilityOverviewState.content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData);
     void storeFacilityOverviewSnapshot("on-shift", cacheQuery, { events: facilityOverviewState.onShiftData, revision: data.revision || cached?.revision || "" });
   } catch (error) {
@@ -10617,6 +10621,7 @@ function facilityOverviewContactRefreshIsActive() {
     && isFacilityOverviewOpen()
     && facilityOverviewState.tab === "on-shift"
     && Array.isArray(facilityOverviewState.onShiftData)
+    && Boolean(facilityOverviewState.contactAccessToken)
     && ["MMC", "MCH", "DDH"].includes(String(facilityOverviewState.facilityKey || "").toUpperCase())
     && !facilityOverviewState.contactResolutionSaving
     && !document.hidden;
@@ -10657,18 +10662,18 @@ async function refreshFacilityOverviewContactList() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         action: "queryFacilityOverviewContactList",
-        email: authUserEmail || currentUserEmail,
-        password: authUserPassword || currentUserPassword,
-        targetEmail: facilityOverviewTargetEmail(),
+        contactAccessToken: facilityOverviewState.contactAccessToken,
         facilityKey,
         date,
         contactRevision: facilityOverviewState.contactList?.revision || "",
       }),
     });
     if (response.status === 401 || response.status === 403) {
+      facilityOverviewState.contactAccessToken = "";
       facilityOverviewState.contactList = { status: "unavailable", reason: "authorization-expired", contacts: [], resolutions: [] };
       facilityOverviewState.content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData || []);
       renderFacilityOverviewOnShiftPreservingViewport();
+      return;
     }
     const data = await readJsonResponse(response, "Could not refresh live contact allocations.");
     if (facilityOverviewState.requestId !== requestId

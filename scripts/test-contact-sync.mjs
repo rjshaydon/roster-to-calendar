@@ -62,6 +62,12 @@ assert.doesNotMatch(contactExtractSource, /VHH_AUTOMATION_TOKEN|VHH_CONTACT_LIST
   "VHH roster credentials and contact payloads must remain outside contact ingestion until VHH contacts are approved");
 assert.match(stateSource, /action === "queryFacilityOverviewContactList"[\s\S]*loadLiveContactListForOnShift/,
   "the UI should have a lightweight contact-only refresh action");
+assert.ok(
+  stateSource.indexOf('action === "queryFacilityOverviewContactList" && body?.contactAccessToken') < stateSource.indexOf("await verifyD1Account"),
+  "short-lived contact refresh tokens must be handled before D1 account authentication",
+);
+assert.match(stateSource, /refreshPublishedFacilityContactsWithToken[\s\S]*verifyFacilityContactAccessToken[\s\S]*loadPublishedFacilityContacts/,
+  "token refreshes should validate their facility scope and load only the published contact object");
 assert.match(stateSource, /content_type[\s\S]*reason: "legacy-workbook"/,
   "stored full workbooks must produce an explicit legacy-feed status");
 assert.match(stateSource, /LIMIT 8[\s\S]*extract\.sourceDate === date/,
@@ -75,6 +81,13 @@ assert.doesNotMatch(
 );
 assert.match(appSource, /FACILITY_OVERVIEW_CONTACT_REFRESH_MS = 60_000[\s\S]*refreshFacilityOverviewContactList[\s\S]*queryFacilityOverviewContactList/,
   "an open On shift view should poll the small JSON contact feed every 60 seconds");
+const contactRefreshSource = appSource.match(/async function refreshFacilityOverviewContactList\(\)[\s\S]*?\n}\n/)?.[0] || "";
+assert.match(contactRefreshSource, /contactAccessToken: facilityOverviewState\.contactAccessToken/,
+  "contact-only refreshes should use their in-memory facility token");
+assert.doesNotMatch(contactRefreshSource, /password:|targetEmail:|email:/,
+  "contact-only refreshes must not send credentials or trigger account authentication");
+assert.match(appSource, /facilityOverviewContactRefreshIsActive[\s\S]*Boolean\(facilityOverviewState\.contactAccessToken\)/,
+  "polling must stop when no valid contact token is available");
 assert.match(appSource, /document\.hidden\)[\s\S]*stopFacilityOverviewContactRefresh[\s\S]*scheduleFacilityOverviewContactRefresh\(0\)/,
   "hidden pages must stop polling and visible pages must refresh immediately");
 assert.match(stateSource, /FACILITY_SHARED_CONTACTS_ENABLED[\s\S]*loadPublishedFacilityContacts/,

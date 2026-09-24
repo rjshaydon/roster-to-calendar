@@ -6,6 +6,7 @@ import { advancedRosterMaintenanceEnabled, reviewedRosterFactLimit, rosterStatus
 import { guardedFetch, localFeatureDisabledResponse } from "../_lib/outbound-network.js";
 import { loadPublishedFacilityDays, loadPublishedFacilityMetadata, loadPublishedFacilityRange, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata } from "../_lib/facility-overview-cache.js";
 import { loadPublishedFacilityContacts, publishFacilityContactResolutions } from "../_lib/facility-contact-cache.js";
+import { issueFacilityContactAccessToken, verifyFacilityContactAccessToken } from "../_lib/facility-contact-access.js";
 import { facilityBuildSources, facilityLegacyReadsPaused, facilityOverviewAutomaticLaunchEnabled, facilityOverviewMaintenanceForViewer, facilityOverviewMaintenanceMode, facilityReaderSources, facilityReadRoute, facilityRolloutCohortEligible } from "../_lib/facility-rollout.js";
 import { creatorDirectoryEnabled, creatorStartupHydrationEnabled } from "../_lib/creator-startup-guard.js";
 import { extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentExceptions, findmyshiftLastModified, findmyshiftReportDiagnostics, findmyshiftShiftReport } from "../_lib/findmyshift.js";
@@ -231,6 +232,12 @@ export async function onRequestPost(context) {
     }
     if (action === "listRosterDoctors" && !identityDiscoveryEnabled(context.env)) {
       return identityDiscoveryPausedResponse();
+    }
+    // Contact refreshes use the short-lived facility-scoped token issued by
+    // the authenticated On shift request. Keep this before account validation
+    // so an unchanged visible page performs no D1 work.
+    if (action === "queryFacilityOverviewContactList" && body?.contactAccessToken) {
+      return refreshPublishedFacilityContactsWithToken(context, body);
     }
     const responseMode = String(body?.responseMode || "full").trim().toLowerCase() === "fast" ? "fast" : "full";
     const realName = String(body?.realName || "").trim();
@@ -2118,8 +2125,14 @@ export async function onRequestPost(context) {
           const contactList = sharedFacilityContactsEnabled
             ? await loadPublishedFacilityContacts(context.env.ROSTER_FILES, { date, facilityKeys })
             : { status: "unavailable", contacts: [], revision: "" };
+          const contactAccessToken = sharedFacilityContactsEnabled && facilityKeys.length === 1
+            ? await issueFacilityContactAccessToken(context.env.FACILITY_CONTACT_ACCESS_SECRET, {
+                facilityKey: facilityKeys[0],
+                expiresAt: access.expiresAt,
+              })
+            : "";
           const rosterUnchanged = Boolean(body?.cachedRevision && String(body.cachedRevision) === String(published.revision || ""));
-          return Response.json({ ok: true, date, facilityKey: requestedFacility === "ALL" ? "ALL" : facilityKeys[0], events: rosterUnchanged ? undefined : events, rosterUnchanged, revision: published.revision, accessExpiresAt: access.expiresAt || "", contactList, queryMs: Date.now() - startedAt });
+          return Response.json({ ok: true, date, facilityKey: requestedFacility === "ALL" ? "ALL" : facilityKeys[0], events: rosterUnchanged ? undefined : events, rosterUnchanged, revision: published.revision, accessExpiresAt: access.expiresAt || "", contactAccessToken, contactList, queryMs: Date.now() - startedAt });
         }
         const [eventGroups, contactList] = await Promise.all([
           Promise.all(facilityKeys.map((facilityKey) => queryFacilityOverviewOnShift(context.env.ROSTER_DB, { date, facilityKey }))),
@@ -2468,6 +2481,36 @@ export function classifyD1Failure(message) {
     return { errorType: "native-d1-error", message: "The database could not complete this request." };
   }
   return null;
+}
+
+async function refreshPublishedFacilityContactsWithToken(context, body) {
+  if (String(context.env.FACILITY_SHARED_CONTACTS_ENABLED || "").toLowerCase() !== "true") {
+    return Response.json({ error: "Live contact allocations are temporarily unavailable." }, { status: 503 });
+  }
+  const claims = await verifyFacilityContactAccessToken(
+    context.env.FACILITY_CONTACT_ACCESS_SECRET,
+    body?.contactAccessToken,
+  );
+  const date = String(body?.date || "").slice(0, 10);
+  const facilityKeys = sanitizeSourceTypes([body?.facilityKey]);
+  if (!claims || facilityKeys.length !== 1 || claims.facilityKey !== facilityKeys[0].toUpperCase()) {
+    return Response.json({ error: "Contact access has expired." }, { status: 403 });
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return Response.json({ error: "A single ED and valid date are required." }, { status: 400 });
+  }
+  if (!facilityReaderSources(context.env).has(facilityKeys[0])) {
+    return Response.json({ error: "At a glance is not available for this site." }, { status: 403 });
+  }
+  const contactList = await loadPublishedFacilityContacts(context.env.ROSTER_FILES, { date, facilityKeys });
+  if (body?.contactRevision && String(body.contactRevision) === String(contactList.revision || "")) {
+    return Response.json({ ok: true, date, facilityKey: facilityKeys[0], unchanged: true, contactRevision: contactList.revision }, {
+      headers: { "Cache-Control": "no-store" },
+    });
+  }
+  return Response.json({ ok: true, date, facilityKey: facilityKeys[0], contactList }, {
+    headers: { "Cache-Control": "no-store" },
+  });
 }
 
 async function loadLiveContactListForOnShift(context, { date, facilityKeys = [] } = {}) {

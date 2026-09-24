@@ -15,6 +15,7 @@
     "test:contact-allocations": "node scripts/test-contact-allocations.mjs",
     "test:contact-sync": "node scripts/test-contact-sync.mjs",
     "test:facility-contacts": "node scripts/test-facility-contact-cache.mjs",
+    "test:facility-contact-access": "node scripts/test-facility-contact-access.mjs",
     "test:facility-snapshots": "node scripts/test-facility-snapshot-cache.mjs",
     "test:facility-rollout": "node scripts/test-facility-rollout.mjs",
     "test:facility-maintenance": "node scripts/test-facility-maintenance.mjs",
