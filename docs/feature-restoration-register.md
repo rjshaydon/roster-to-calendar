@@ -69,9 +69,9 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 | `ROSTER_STATUS_SUMMARY_ENABLED` | `true` in Production; `false` in Preview | FR-05 |
 | `ROSTER_AUTOMATION_SOURCE_ALLOWLIST` | empty | FR-07 |
 | `ROSTER_AUTOMATION_QUEUE_ENABLED` | `false` | FR-07 |
-| `ROSTER_ADVANCED_MAINTENANCE_ENABLED` | `false` in Production and Preview; enabled only for one explicitly bounded publication window | FR-06, FR-11, FR-12 |
+| `ROSTER_ADVANCED_MAINTENANCE_ENABLED` | temporary `true` in Production for one exact MCH bootstrap execution; `false` in Preview | FR-06, FR-11, FR-12 |
 | `FACILITY_BOOTSTRAP_INSPECTION_ENABLED` | temporary `true` in Production for one exact MCH file; `false` in Preview | FR-12 |
-| `FACILITY_BOOTSTRAP_EXECUTION_ENABLED` | `false` | FR-12 |
+| `FACILITY_BOOTSTRAP_EXECUTION_ENABLED` | temporary `true` in Production for exact inspected MCH file; `false` in Preview | FR-12 |
 | `FACILITY_BOOTSTRAP_FILE_ALLOWLIST` | exact Production file `automation:monash-paeds:528f865e19dd862921bc3cd3`; empty in Preview | FR-12 |
 | `CONTACT_AUTOMATION_WRITES_ENABLED` | `false` | FR-08 |
 | `CONTACT_AUTOMATION_SOURCE_ALLOWLIST` | empty | FR-08 |
@@ -671,6 +671,7 @@ mechanisms are intentionally excluded from restoration.
 | MCH publication planning stopped, 23 Sep 2026 | The single bounded MCH plan workflow `35840979695` failed before any MCH build batch was dispatched. The MCH maintenance/source window was closed immediately. DDH's completed objects are retained but its readers remain disabled; MMC remains the only readable shared source pending failure attribution and remediation. |
 | DDH shared-reader restoration, 23 Sep 2026 | After complete DDH publication attribution and an account-wide `GO`, Production shared readers were expanded from `mmc` to `mmc,ddh`. This exposes only the already-published R2-backed metadata/day objects; all publication/bootstrap switches are closed, automatic launch and contacts remain disabled, MCH/VHH readers remain excluded, and legacy SQL remains permanently paused. The next user gate is one DDH On shift and ED Staff canary. |
 | MCH exact-file preparation admitted, 24 Sep 2026 | The mandatory second account sample returned `GO` at 161,849 settled reads and 348 writes; the maximum five-minute bucket was 49,836 reads and the admission included a doubled 75,000-read MCH allowance. Opened read-only bootstrap inspection solely for exact file `automation:monash-paeds:528f865e19dd862921bc3cd3`. Execution, advanced maintenance, MCH readers, contacts, automatic launch and legacy SQL remain disabled. |
+| MCH Term 2 exact-file inspection, 24 Sep 2026 | Read-only workflow `35972999831` identified the exact automation contribution as `Paeds - Term 2 2026.xlsx`; compact/status metadata were absent and raw source was available. The declared execution ceiling is 27,021 rows examined and 750 compact mutation statements. Execution was opened only for this exact file and inspection revision `5e3d15a407366bf4331c4c2ea5c50447cc82cf64c0929a1e0b781032c14e5e16`; unrelated files and sources remain rejected before D1. |
 
 ## Restoration record template
 
