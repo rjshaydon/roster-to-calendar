@@ -55,7 +55,7 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 | `FACILITY_SHARED_EMERGENCY_PAUSED` | `false` in Production; `true` in Preview | FR-01 |
 | `FACILITY_LEGACY_READS_PAUSED` | `true` permanently | FR-01, FR-17 |
 | `FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST` | empty in Production and Preview; bounded publication windows are closed between facilities | FR-01, FR-12 |
-| `FACILITY_SHARED_READER_SOURCE_ALLOWLIST` | `mmc,ddh` in Production; empty in Preview | FR-01 |
+| `FACILITY_SHARED_READER_SOURCE_ALLOWLIST` | `mmc,ddh,mch` in Production; empty in Preview | FR-01 |
 | `FACILITY_SHARED_READER_COHORT` | `all` in Production for MMC only; empty in Preview | FR-01 |
 | `FACILITY_ACCESS_MATERIALIZATION_ENABLED` | `false` | FR-01 |
 | `FACILITY_SHARED_METADATA_BUILD_ENABLED` | `false` | FR-01 |
@@ -676,6 +676,7 @@ mechanisms are intentionally excluded from restoration.
 | MCH Term 1 exact-file inspection, 24 Sep 2026 | Read-only workflow `35974127068` succeeded for `Paeds - Term 1 2026.xlsx`; compact/status metadata were absent and raw source was available. The declared execution ceiling is 27,021 rows examined and 750 compact mutation statements. Execution was opened only for this exact file and inspection revision `7ec87677b83c08f632e9c0d9b0c0adda6c5f0ff4b112ea40e6635b8e180dd213`. |
 | MCH Term 1 preparation and publication transition, 24 Sep 2026 | Revision-fenced workflow `35974296927` completed successfully. Both exact MCH historical contributions now have compact coverage. All bootstrap inspection/execution permissions and the exact-file allowlist were closed. Advanced maintenance remains open only for the separately bounded MCH chunked publisher; MCH readers remain disabled. |
 | MCH Term 3 consolidated publication, 24 Sep 2026 | The corrected plan read 194 rows in seven statements with no writes and complete telemetry. All 13 bounded daily batches, the August-November month assemblies and fenced finalisation workflow `35975378411` passed serially for operation revision `0f4f7c40f6ed7d8a94e38e1c563562245f43c36ff0887ddd9174fcf5bbc2d6c1`. The MCH maintenance/source window was closed immediately after finalisation. Shared readers remain MMC/DDH-only pending complete request attribution and an account-wide safety check. |
+| MCH shared-reader restoration, 24 Sep 2026 | All 19 exact MCH publication requests reconciled with complete metadata: 242 statements, 8,545 rows read and four rows written; the largest request read 590 rows. The post-work account checker returned `GO` at 166,307 settled reads and 1,008 writes, with the maximum five-minute read bucket unchanged at 49,836. Production cached readers were expanded to `mmc,ddh,mch`. All publication/bootstrap switches are closed; VHH readers, contacts, automatic launch and legacy SQL remain disabled. |
 
 ## Restoration record template
 
