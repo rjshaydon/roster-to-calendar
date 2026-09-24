@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { facilityBuildSources, facilityOverviewAutomaticLaunchEnabled, facilityOverviewMaintenanceForViewer, facilityOverviewMaintenanceMode, facilityReaderSources, facilityReadRoute, facilityRolloutPaused, facilitySharedReaderAllowed } from "../functions/_lib/facility-rollout.js";
+import { facilityBuildSources, facilityContactReaderSources, facilityOverviewAutomaticLaunchEnabled, facilityOverviewMaintenanceForViewer, facilityOverviewMaintenanceMode, facilityReaderSources, facilityReadRoute, facilityRolloutPaused, facilitySharedReaderAllowed } from "../functions/_lib/facility-rollout.js";
 import { automatedRosterQueueEnabled, automatedRosterSourceEnabled, advancedRosterMaintenanceEnabled, facilityMaterializationMaintenanceEnabled } from "../functions/_lib/roster-automation-guard.js";
 import { onRequestPost as materialize } from "../functions/api/automation/facility-materialize.js";
 
@@ -30,6 +30,8 @@ assert.equal(facilitySharedReaderAllowed({ ...env, FACILITY_SHARED_READER_COHORT
 assert.equal(facilitySharedReaderAllowed({ ...env, FACILITY_SHARED_READER_COHORT: "all" }, { actorRole: "user", actorEmail: "user@example.com", subjectEmail: "user@example.com", sources: ["mch"] }), false, "non-MMC shared readers remain blocked");
 assert.deepEqual(facilityBuildSources(env, ["MMC", "DDH"]), ["mmc"]);
 assert.deepEqual(facilityReaderSources({ ...env, FACILITY_SHARED_READER_SOURCE_ALLOWLIST: "mmc,ddh,mch" }), ["mmc", "ddh", "mch"], "all-site metadata discovery must use every explicitly enabled cached reader source");
+assert.deepEqual(facilityContactReaderSources({ ...env, FACILITY_SHARED_CONTACTS_ENABLED: "true", FACILITY_SHARED_READER_SOURCE_ALLOWLIST: "mmc,ddh,mch", FACILITY_SHARED_CONTACTS_SOURCE_ALLOWLIST: "ddh,vhh" }), ["ddh"], "contact readers must be independently allowlisted and remain inside the shared-reader set");
+assert.deepEqual(facilityContactReaderSources({ ...env, FACILITY_SHARED_CONTACTS_ENABLED: "false", FACILITY_SHARED_CONTACTS_SOURCE_ALLOWLIST: "ddh" }), [], "the global contact-reader switch must fail closed");
 assert.deepEqual(facilityReaderSources({ ...env, FACILITY_SHARED_EMERGENCY_PAUSED: "true", FACILITY_SHARED_READER_SOURCE_ALLOWLIST: "mmc,ddh,mch" }), [], "the emergency pause must hide all reader sources");
 assert.equal(facilitySharedReaderAllowed(env, { actorRole: "creator", actorEmail: "creator@example.com", subjectEmail: "creator@example.com", sources: ["mmc"] }), true);
 assert.equal(facilitySharedReaderAllowed(env, { actorRole: "creator", actorEmail: "creator@example.com", subjectEmail: "other@example.com", sources: ["mmc"] }), false, "Creator impersonation must not enter the Creator-only cohort");

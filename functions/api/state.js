@@ -7,7 +7,7 @@ import { guardedFetch, localFeatureDisabledResponse } from "../_lib/outbound-net
 import { loadPublishedFacilityDays, loadPublishedFacilityMetadata, loadPublishedFacilityRange, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata } from "../_lib/facility-overview-cache.js";
 import { loadPublishedFacilityContacts, publishFacilityContactResolutions } from "../_lib/facility-contact-cache.js";
 import { issueFacilityContactAccessToken, verifyFacilityContactAccessToken } from "../_lib/facility-contact-access.js";
-import { facilityBuildSources, facilityLegacyReadsPaused, facilityOverviewAutomaticLaunchEnabled, facilityOverviewMaintenanceForViewer, facilityOverviewMaintenanceMode, facilityReaderSources, facilityReadRoute, facilityRolloutCohortEligible } from "../_lib/facility-rollout.js";
+import { facilityBuildSources, facilityContactReaderSources, facilityLegacyReadsPaused, facilityOverviewAutomaticLaunchEnabled, facilityOverviewMaintenanceForViewer, facilityOverviewMaintenanceMode, facilityReaderSources, facilityReadRoute, facilityRolloutCohortEligible } from "../_lib/facility-rollout.js";
 import { creatorDirectoryEnabled, creatorStartupHydrationEnabled } from "../_lib/creator-startup-guard.js";
 import { extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentExceptions, findmyshiftLastModified, findmyshiftReportDiagnostics, findmyshiftShiftReport } from "../_lib/findmyshift.js";
 import {
@@ -2122,10 +2122,13 @@ export async function onRequestPost(context) {
             facilityKey: row.sourceType,
             includeClinicalSupport: body?.includeClinicalSupport === true,
           }));
-          const contactList = sharedFacilityContactsEnabled
+          const contactReadable = sharedFacilityContactsEnabled
+            && facilityKeys.length === 1
+            && facilityContactReaderSources(context.env).includes(facilityKeys[0]);
+          const contactList = contactReadable
             ? await loadPublishedFacilityContacts(context.env.ROSTER_FILES, { date, facilityKeys })
             : { status: "unavailable", contacts: [], revision: "" };
-          const contactAccessToken = sharedFacilityContactsEnabled && facilityKeys.length === 1
+          const contactAccessToken = contactReadable
             ? await issueFacilityContactAccessToken(context.env.FACILITY_CONTACT_ACCESS_SECRET, {
                 facilityKey: facilityKeys[0],
                 expiresAt: access.expiresAt,
@@ -2499,7 +2502,7 @@ async function refreshPublishedFacilityContactsWithToken(context, body) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     return Response.json({ error: "A single ED and valid date are required." }, { status: 400 });
   }
-  if (!facilityReaderSources(context.env).has(facilityKeys[0])) {
+  if (!facilityContactReaderSources(context.env).includes(facilityKeys[0])) {
     return Response.json({ error: "At a glance is not available for this site." }, { status: 403 });
   }
   const contactList = await loadPublishedFacilityContacts(context.env.ROSTER_FILES, { date, facilityKeys });

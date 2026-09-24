@@ -32,6 +32,13 @@ export function facilityReaderSources(env = {}) {
   return normalizeSources(String(env.FACILITY_SHARED_READER_SOURCE_ALLOWLIST || "").split(","));
 }
 
+export function facilityContactReaderSources(env = {}) {
+  if (String(env.FACILITY_SHARED_CONTACTS_ENABLED || "").trim().toLowerCase() !== "true") return [];
+  const sharedSources = new Set(facilityReaderSources(env));
+  return normalizeSources(String(env.FACILITY_SHARED_CONTACTS_SOURCE_ALLOWLIST || "").split(","))
+    .filter((source) => sharedSources.has(source));
+}
+
 export function facilitySharedReaderAllowed(env = {}, { actorRole = "", actorEmail = "", subjectEmail = "", sources = [] } = {}) {
   return facilityReadRoute(env, { actorRole, actorEmail, subjectEmail, sources }) === "shared";
 }
