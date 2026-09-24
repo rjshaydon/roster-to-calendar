@@ -54,13 +54,13 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 | `FACILITY_SHARED_ROLLOUT_ACTIVE` | `true` in Production; `false` in Preview | FR-01 |
 | `FACILITY_SHARED_EMERGENCY_PAUSED` | `false` in Production; `true` in Preview | FR-01 |
 | `FACILITY_LEGACY_READS_PAUSED` | `true` permanently | FR-01, FR-17 |
-| `FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST` | empty in Production and Preview | FR-01, FR-12 |
+| `FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST` | temporary DDH contact canary: `ddh` in Production; empty in Preview | FR-01, FR-04, FR-12 |
 | `FACILITY_SHARED_READER_SOURCE_ALLOWLIST` | `mmc,ddh,mch,vhh` in Production; empty in Preview | FR-01 |
 | `FACILITY_SHARED_READER_COHORT` | `all` in Production for MMC only; empty in Preview | FR-01 |
 | `FACILITY_ACCESS_MATERIALIZATION_ENABLED` | `false` | FR-01 |
 | `FACILITY_SHARED_METADATA_BUILD_ENABLED` | `false` | FR-01 |
 | `FACILITY_SHARED_DAYS_BUILD_ENABLED` | `false` | FR-01 |
-| `FACILITY_SHARED_CONTACTS_BUILD_ENABLED` | `false` | FR-04 |
+| `FACILITY_SHARED_CONTACTS_BUILD_ENABLED` | temporary `true` for DDH contact publication in Production; `false` in Preview | FR-04 |
 | `FACILITY_SHARED_METADATA_ENABLED` | `true` in Production; `false` in Preview | FR-01 |
 | `FACILITY_SHARED_DAYS_ENABLED` | `true` in Production; `false` in Preview | FR-01 |
 | `FACILITY_SHARED_CONTACTS_ENABLED` | `false` | FR-04 |
@@ -73,8 +73,8 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 | `FACILITY_BOOTSTRAP_INSPECTION_ENABLED` | `false` in Production and Preview | FR-12 |
 | `FACILITY_BOOTSTRAP_EXECUTION_ENABLED` | `false` in Production and Preview | FR-12 |
 | `FACILITY_BOOTSTRAP_FILE_ALLOWLIST` | empty in Production and Preview | FR-12 |
-| `CONTACT_AUTOMATION_WRITES_ENABLED` | `false` | FR-08 |
-| `CONTACT_AUTOMATION_SOURCE_ALLOWLIST` | empty | FR-08 |
+| `CONTACT_AUTOMATION_WRITES_ENABLED` | temporary `true` for the DDH contact canary in Production; `false` in Preview | FR-08 |
+| `CONTACT_AUTOMATION_SOURCE_ALLOWLIST` | `ddh-daily-contact-sheet` in Production; empty in Preview | FR-08 |
 | `IDENTITY_DISCOVERY_ENABLED` | `false`; missing or malformed also fails closed | FR-21, FR-24 |
 | `ACCOUNT_SNAPSHOT_BUILD_ENABLED` | `false`; missing or malformed also fails closed | FR-23 |
 | `ROSTER_INSIGHT_READS_ENABLED` | `false`; missing or malformed also fails closed | FR-19 |
