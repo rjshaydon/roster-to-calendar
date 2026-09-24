@@ -91,11 +91,11 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
   desktop and mobile. It also includes the compact staff-membership,
   file/hospital-coverage, additional-coverage and daily-presence facts needed
   to build those views without repeatedly deriving them from event history.
-- **User effect:** Entitled users can manually open MMC cached metadata, On
-  shift, Staff and related base day views. Other facilities still receive the
-  controlled unavailable response.
+- **User effect:** Entitled users can manually open MMC, DDH and MCH cached
+  metadata, On shift, Staff and related base day views. Other facilities still
+  receive the controlled unavailable response.
 - **Controls:** Production uses `FACILITY_SHARED_ROLLOUT_ACTIVE=true`,
-  `FACILITY_SHARED_EMERGENCY_PAUSED=false`, reader source `mmc`, cohort
+  `FACILITY_SHARED_EMERGENCY_PAUSED=false`, reader sources `mmc,ddh,mch`, cohort
   `all`, and shared metadata/day readers only. Contacts and every builder
   remain false, all build allowlists remain empty, and
   `FACILITY_LEGACY_READS_PAUSED=true` permanently.
@@ -111,6 +111,14 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
   Analytics; then gradual ED and user expansion.
 - **Permanent constraint:** `FACILITY_LEGACY_READS_PAUSED` remains true. The
   feature returns; the unsafe implementation does not.
+- **Access-policy acceptance rule:** Creator/owner accounts and clinicians
+  whose current-term grade is SMS or CMO may see every enabled facility.
+  Registrars of every level, HMOs, interns, nurse practitioners, physiotherapists
+  and other non-SMS/CMO grades may see only facilities for which compact
+  current-term membership exists. A genuine locum contribution grants that
+  additional facility for the term; it does not grant all-site access. This
+  multi-site restricted mode must be implemented and tested before broad
+  entitlement rollout; it must not be approximated by granting `all` access.
 
 ### FR-02 — At a glance cached display during maintenance
 
@@ -678,6 +686,7 @@ mechanisms are intentionally excluded from restoration.
 | MCH Term 3 consolidated publication, 24 Sep 2026 | The corrected plan read 194 rows in seven statements with no writes and complete telemetry. All 13 bounded daily batches, the August-November month assemblies and fenced finalisation workflow `35975378411` passed serially for operation revision `0f4f7c40f6ed7d8a94e38e1c563562245f43c36ff0887ddd9174fcf5bbc2d6c1`. The MCH maintenance/source window was closed immediately after finalisation. Shared readers remain MMC/DDH-only pending complete request attribution and an account-wide safety check. |
 | MCH shared-reader restoration, 24 Sep 2026 | All 19 exact MCH publication requests reconciled with complete metadata: 242 statements, 8,545 rows read and four rows written; the largest request read 590 rows. The post-work account checker returned `GO` at 166,307 settled reads and 1,008 writes, with the maximum five-minute read bucket unchanged at 49,836. Production cached readers were expanded to `mmc,ddh,mch`. All publication/bootstrap switches are closed; VHH readers, contacts, automatic launch and legacy SQL remain disabled. |
 | MCH all-site discovery correction, 24 Sep 2026 | The first Creator canary showed only MMC/DDH because metadata discovery inherited the currently selected doctor's source links rather than the shared-reader allowlist. All-site viewers now request metadata for every explicitly enabled cached-reader source (`mmc,ddh,mch`); site-scoped viewers remain fixed to their authorised ED. The source list is read from environment configuration and adds zero D1 statements. Focused rollout, materialisation and attribution tests pass. |
+| MCH selector refresh correction, 24 Sep 2026 | The second Creator canary still omitted MCH because On shift and Staff rendered their selector before loading the published metadata manifest; only By stream had triggered that load. Opening any At a glance tab now awaits the R2-backed metadata refresh before deriving the facility options. This adds no D1 query and retains server-side access scoping. The broader access acceptance rule is now explicit: SMS/CMO all-site, other grades current-term membership sites only, including genuine locum sites without granting unrelated sites. |
 
 ## Restoration record template
 

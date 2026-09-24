@@ -9729,6 +9729,12 @@ async function openFacilityOverview(options = {}) {
       facilityOverviewState.byStreamContent = "";
     }
   }
+  // The On shift and Staff tabs also need the published metadata manifest to
+  // discover newly enabled EDs. Previously only By stream loaded it, leaving
+  // the selector limited to hospitals already present in the selected
+  // doctor's local calendar. Shared metadata is R2-backed and performs no D1
+  // query; access scoping is still enforced by the server response.
+  await loadFacilityOverviewMetadata();
   const facilities = facilityOverviewFacilityOptions();
   if (!facilityOverviewState.facilityKey || (facilityOverviewState.facilityKey !== "ALL" && !facilities.includes(facilityOverviewState.facilityKey))) {
     facilityOverviewState.facilityKey = facilities[0] || "MMC";
