@@ -13,12 +13,13 @@ record its evidence, approval, deployment and post-deployment observation here.
 No entry may be removed after restoration; change its state to **Restored** so
 the history remains auditable.
 
-Current tracked Production code before the Creator/MMC reader canary:
-`f81d7611` on 22 September 2026. The exact active deployment identity must
-still be read back at every operational gate. Ordinary-login containment and
-all permanent quota protections remain active. The Creator-self cohort may
-read only the completed MMC shared cache; facility builders, contacts, other
-facility readers, bootstrap and advanced-maintenance controls remain closed.
+Current tracked Production code is `319c0905` on 25 September 2026. The exact
+active deployment identity must still be read back at every operational gate.
+Ordinary-login containment and all permanent quota protections remain active.
+Cached At a glance readers are open for MMC, DDH, MCH and VHH; contact readers
+are open for DDH, MMC and MCH. Contact automation writes are globally closed,
+both known contact flows are Off, and bootstrap and advanced-maintenance
+controls remain closed.
 
 The safety commits did not intentionally delete Production roster files,
 roster events, account data, facility snapshots or contact data. Because D1 is
@@ -49,21 +50,22 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 
 | Control | Current safe value | Registered under |
 | --- | --- | --- |
-| `FACILITY_OVERVIEW_MAINTENANCE_MODE` | `false` in Production for the Creator/MMC canary; `true` in Preview; missing or malformed fails closed | FR-01–FR-04 |
+| `FACILITY_OVERVIEW_MAINTENANCE_MODE` | `false` in Production; `true` in Preview; missing or malformed fails closed | FR-01–FR-04 |
 | `FACILITY_OVERVIEW_AUTOMATIC_LAUNCH_ENABLED` | `false` in Production and Preview; missing or malformed fails closed | FR-03 |
 | `FACILITY_SHARED_ROLLOUT_ACTIVE` | `true` in Production; `false` in Preview | FR-01 |
 | `FACILITY_SHARED_EMERGENCY_PAUSED` | `false` in Production; `true` in Preview | FR-01 |
 | `FACILITY_LEGACY_READS_PAUSED` | `true` permanently | FR-01, FR-17 |
-| `FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST` | temporary DDH contact canary: `ddh` in Production; empty in Preview | FR-01, FR-04, FR-12 |
+| `FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST` | `ddh` in Production for retained DDH contact publication configuration; empty in Preview | FR-01, FR-04, FR-12 |
 | `FACILITY_SHARED_READER_SOURCE_ALLOWLIST` | `mmc,ddh,mch,vhh` in Production; empty in Preview | FR-01 |
-| `FACILITY_SHARED_READER_COHORT` | `all` in Production for MMC only; empty in Preview | FR-01 |
+| `FACILITY_SHARED_READER_COHORT` | `all` in Production; empty in Preview | FR-01 |
 | `FACILITY_ACCESS_MATERIALIZATION_ENABLED` | `false` | FR-01 |
 | `FACILITY_SHARED_METADATA_BUILD_ENABLED` | `false` | FR-01 |
 | `FACILITY_SHARED_DAYS_BUILD_ENABLED` | `false` | FR-01 |
-| `FACILITY_SHARED_CONTACTS_BUILD_ENABLED` | temporary `true` for DDH contact publication in Production; `false` in Preview | FR-04 |
+| `FACILITY_SHARED_CONTACTS_BUILD_ENABLED` | `true` in Production, but no contact request can reach it while contact automation is globally closed; `false` in Preview | FR-04 |
 | `FACILITY_SHARED_METADATA_ENABLED` | `true` in Production; `false` in Preview | FR-01 |
 | `FACILITY_SHARED_DAYS_ENABLED` | `true` in Production; `false` in Preview | FR-01 |
-| `FACILITY_SHARED_CONTACTS_ENABLED` | `false` | FR-04 |
+| `FACILITY_SHARED_CONTACTS_ENABLED` | `true` in Production; `false` in Preview | FR-04 |
+| `FACILITY_SHARED_CONTACTS_SOURCE_ALLOWLIST` | `ddh,mmc,mch` in Production; empty in Preview | FR-04 |
 | `ROSTER_AUTOMATION_WRITES_ENABLED` | `false` | FR-06, FR-07 |
 | `MANUAL_ROSTER_WRITES_ENABLED` | `false` | FR-06, FR-11 |
 | `ROSTER_STATUS_SUMMARY_ENABLED` | `true` in Production; `false` in Preview | FR-05 |
@@ -73,8 +75,8 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 | `FACILITY_BOOTSTRAP_INSPECTION_ENABLED` | `false` in Production and Preview | FR-12 |
 | `FACILITY_BOOTSTRAP_EXECUTION_ENABLED` | `false` in Production and Preview | FR-12 |
 | `FACILITY_BOOTSTRAP_FILE_ALLOWLIST` | empty in Production and Preview | FR-12 |
-| `CONTACT_AUTOMATION_WRITES_ENABLED` | temporary `true` for the DDH contact canary in Production; `false` in Preview | FR-08 |
-| `CONTACT_AUTOMATION_SOURCE_ALLOWLIST` | `ddh-daily-contact-sheet` in Production; empty in Preview | FR-08 |
+| `CONTACT_AUTOMATION_WRITES_ENABLED` | `false` in Production and Preview | FR-08 |
+| `CONTACT_AUTOMATION_SOURCE_ALLOWLIST` | empty in Production and Preview | FR-08 |
 | `IDENTITY_DISCOVERY_ENABLED` | `false`; missing or malformed also fails closed | FR-21, FR-24 |
 | `ACCOUNT_SNAPSHOT_BUILD_ENABLED` | `false`; missing or malformed also fails closed | FR-23 |
 | `ROSTER_INSIGHT_READS_ENABLED` | `false`; missing or malformed also fails closed | FR-19 |
@@ -154,13 +156,14 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 
 ### FR-04 — Live contact allocations and Creator corrections
 
-- **State:** Paused as part of At a glance. Shared contact reads and publication
-  are also disabled.
+- **State:** Contact readers restored for DDH, MMC and MCH. Publication is
+  paused while source automation is made resistant to autosave bursts.
 - **Includes:** MMC/DDH contact overlays, automatic roster/contact matching,
   unresolved-number review and temporary Creator corrections.
-- **Controls:** `FACILITY_SHARED_CONTACTS_ENABLED=false`,
-  `FACILITY_SHARED_CONTACTS_BUILD_ENABLED=false`, plus the facility emergency
-  pause and empty allowlists.
+- **Controls:** Production contact readers are enabled only for
+  `ddh,mmc,mch`. `CONTACT_AUTOMATION_WRITES_ENABLED=false` and the empty
+  automation allowlist stop all publication requests before D1. Both DDH and
+  MMC Power Automate contact flows are Off. VHH contacts remain excluded.
 - **Data/code preservation:** Contact matching, overnight carry, expiry and
   optimistic correction logic remain in the repository. Pausing does not
   intentionally remove saved extracts or corrections.
@@ -236,7 +239,9 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 
 ### FR-08 — Automated contact-list ingestion
 
-- **State:** Paused independently of roster automation.
+- **State:** Paused independently of roster automation after the DDH workbook
+  trigger produced repeated runs during editing/autosave. Both DDH and MMC
+  contact flows are Off.
 - **Includes:** receiving new contact extracts and publishing updated contact
   overlays.
 - **Controls:** `CONTACT_AUTOMATION_WRITES_ENABLED=false` and empty
@@ -245,6 +250,11 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
   revision, maximum payload, bounded retention and unchanged-input no-op tests
   pass. Restore separately from roster automation so either can be stopped
   without affecting the other.
+- **Additional gate:** Each source flow must debounce/coalesce SharePoint
+  autosave events so only the newest settled file revision reaches its Office
+  Script and HTTP step. The server must deduplicate on the clinical allocation,
+  excluding provider timestamps and versions, so metadata-only replays write
+  zero D1 rows and zero R2 objects.
 
 ### FR-09 — Durable Doctor Names and identity aliases
 
@@ -698,6 +708,9 @@ mechanisms are intentionally excluded from restoration.
 | DDH contact-publication canary, 24 Sep 2026 at 19:47 AEST | A controlled edit of `Daily Contact Sheet.xlsx` proved the SharePoint trigger and Excel extraction. The first two attempts stopped before the application because the flow still addressed a deleted Cloudflare preview deployment and received `404 Deployment Not Found`; they consumed no application D1 work. Updated only the `Sync DDH clinician contacts` HTTP destination to the stable Production endpoint and resubmitted the extracted payload. SharePoint, Excel and HTTP then all succeeded in approximately eight seconds. The live contact reader stayed disabled throughout. The temporary DDH contact-write/build allowlists were closed immediately after success and the flow was turned off pending settled request attribution and an account-wide quota check. Do not reopen routine publication or the DDH reader until both gates pass. |
 | DDH contact-reader admission, 24 Sep 2026 at 20:14 AEST | Exact request `a400e0d7087777de` used four D1 statements, five rows read and five rows written with complete metadata. The settled account checker returned `GO` at 200,105 reads and 2,777 writes, projected below 268,000 reads, with no expensive fingerprint and a maximum five-minute bucket of 49,836 reads. Added an independent contact-reader source allowlist and opened it for DDH only; MMC, MCH and VHH contacts remain unavailable. Contact polling uses the short-lived DDH-scoped token and R2 only after the initial authenticated On shift request. Contact builders and automation writes remain closed and the Power Automate flow remains Off during the reader canary. |
 | DDH contact-reader canary and routine restoration, 24 Sep 2026 at 20:33 AEST | The Creator loaded DDH On shift, saw the contact allocations and left the page visible through the 60-second refresh without an application error. Exact telemetry showed each authenticated On shift request used one statement and three rows read with no writes; refresh request `a401211f0cc208a3` used zero D1 statements, zero rows read and zero rows written with complete metadata. Restored routine publication only for `ddh-daily-contact-sheet`, with the DDH-only contact builder and source allowlist. The stable Power Automate flow may remain On. MMC, MCH and VHH contact readers/builders remain excluded. Rollback is **Turn off** `Sync DDH clinician contacts`, close contact automation/build flags, and leave the already-published R2 object intact. |
+| Contact automation containment, 25 Sep 2026 | Privacy-safe request telemetry showed every accepted contact publication used four D1 statements, five rows read and five rows written, but the DDH Power Automate run history matched repeated requests approximately 40–60 seconds apart while its workbook was being edited/autosaved. The controlled MMC test had only one run. Turned both `Sync DDH clinician contacts` and `Sync MMC clinician contacts` Off, set `CONTACT_AUTOMATION_WRITES_ENABLED=false`, and emptied the source allowlist. Queued or unexpected calls now stop before D1. Existing published R2 contact objects were retained. |
+| MMC/MCH contact-reader restoration, 25 Sep 2026 at 14:33 AEST | Opened only the R2-backed MMC/MCH contact readers while publication remained closed. The Creator exercised both sites and left a page visible beyond the 60-second refresh without error. Exact On shift requests `a4074cf8c9386c9e` and `a4074d2b29e46c9e` each used one D1 statement, three rows read and no writes; contact refresh `a4074ea58b806c9e` used zero statements, zero reads and zero writes. The settled account checker returned `GO` at 16,514 reads and 125 writes, projected about 94,281 daily reads, with no expensive fingerprint and a maximum five-minute bucket of 1,350 reads. VHH contacts remain excluded. |
+| Semantic contact deduplication prepared, 25 Sep 2026 | Local ingestion and R2 publication now derive identity from source, operational date and sorted clinical contact fields, excluding provider timestamps and versions. Focused tests prove metadata-only replays write zero D1 rows and zero R2 objects; 36,000 simulated visible-page refreshes use zero D1 reads/writes. This code is not authority to re-enable either flow: each flow still requires source-side settled-revision coalescing, deployment, a single controlled canary and settled attribution. |
 
 ## Restoration record template
 

@@ -6,7 +6,7 @@ import {
   contactOperationalDate,
   normaliseContactListExtract,
 } from "../../../public/static/contact-allocations.js";
-import { publishFacilityContactExtract } from "../../_lib/facility-contact-cache.js";
+import { contactAllocationValue, publishFacilityContactExtract } from "../../_lib/facility-contact-cache.js";
 import { facilityBuildSources } from "../../_lib/facility-rollout.js";
 import { contactAutomationPausedResponse, contactAutomationSourceEnabled } from "../../_lib/contact-automation-guard.js";
 
@@ -53,7 +53,11 @@ export async function onRequestPost(context) {
     const db = context.env.ROSTER_DB;
     await ensureCalendarSchema(db);
     const providerVersion = String(payload?.providerVersion || "").trim();
-    const contentHash = await sha256Hex(bytes);
+    // SharePoint/Excel may update provider metadata when a read-only Office
+    // Script runs or while a workbook is being autosaved. Deduplicate on the
+    // clinical allocation itself so metadata-only changes cannot create a new
+    // D1 row, R2 source object or published contact revision.
+    const contentHash = await sha256Hex(contactAllocationBytes(extract));
     const matchingRows = await db.prepare(`
       SELECT id, received_at FROM contact_list_files
       WHERE source_id = ? AND content_hash = ?
@@ -124,6 +128,10 @@ export async function onRequestPost(context) {
     console.error("Contact-list extract ingestion failed", error);
     return Response.json({ error: "Contact-list extract could not be stored." }, { status: 422 });
   }
+}
+
+function contactAllocationBytes(extract) {
+  return new TextEncoder().encode(JSON.stringify(contactAllocationValue(extract)));
 }
 
 function contactPublicationEnabled(env, sourceId) {

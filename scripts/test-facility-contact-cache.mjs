@@ -38,6 +38,13 @@ const firstWrites = r2.puts;
 const repeated = await publishFacilityContactExtract(r2, extract);
 assert.equal(repeated.unchanged, true);
 assert.equal(r2.puts, firstWrites, "an unchanged contact extract must write no R2 objects");
+const metadataOnly = await publishFacilityContactExtract(r2, {
+  ...extract,
+  providerModifiedAt: new Date(Date.now() + 60_000).toISOString(),
+  providerVersion: "metadata-only-change",
+});
+assert.equal(metadataOnly.unchanged, true);
+assert.equal(r2.puts, firstWrites, "changed provider metadata must write no R2 objects");
 
 const loaded = await loadPublishedFacilityContacts(r2, { date: sourceDate, facilityKeys: ["MMC"] });
 assert.equal(loaded.status, "available");

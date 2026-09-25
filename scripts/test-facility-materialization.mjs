@@ -21,6 +21,7 @@ import { onRequestPost as materializeFacility } from "../functions/api/automatio
 import { onRequestPost as ingestContacts } from "../functions/api/automation/contact-list-extract.js";
 import { onRequestPost as stateHandler } from "../functions/api/state.js";
 import { facilityPublicationBatches, initializeFacilityMaterialization, loadPublishedFacilityDays, loadPublishedFacilityMetadata, loadPublishedFacilityRange, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata, runFacilityPublicationStep } from "../functions/_lib/facility-overview-cache.js";
+import { contactOperationalDate } from "../public/static/contact-allocations.js";
 
 class LocalD1 {
   constructor(sqlite) { this.sqlite = sqlite; this.rowsWritten = 0; this.sql = []; this.failRunIncludes = ""; }
@@ -148,11 +149,20 @@ assert.equal(sqlite.prepare("SELECT derived_state FROM roster_file_status_summar
 await deleteDerivedRosterFile(db, materializationCrashFile.id);
 
 const contactR2 = new LocalR2();
-const contactPayload = { sourceId: "mmc-shift-allocations", sourceDate: "2026-09-06", providerModifiedAt: "2026-09-06T01:00:00Z", contacts: [{ area: "Adult Emergency", shift: "AM", role: "Consultant", name: "Alex Example", phone: "555-0100", isPopulated: true }] };
-async function callContactExtract() {
+const contactPayload = { sourceId: "mmc-shift-allocations", sourceDate: contactOperationalDate(), providerModifiedAt: "2026-09-06T01:00:00Z", contacts: [{ area: "Adult Emergency", shift: "AM", role: "Consultant", name: "Alex Example", phone: "555-0100", isPopulated: true }] };
+async function callContactExtract(overrides = {}) {
   return ingestContacts({
-    request: new Request("http://local/api/automation/contact-list-extract", { method: "POST", headers: { authorization: "Bearer contact-token", "content-type": "application/json" }, body: JSON.stringify(contactPayload) }),
-    env: { ROSTER_DB: db, ROSTER_FILES: contactR2, ROSTER_AUTOMATION_TOKEN: "contact-token", CONTACT_AUTOMATION_WRITES_ENABLED: "true", CONTACT_AUTOMATION_SOURCE_ALLOWLIST: "mmc-shift-allocations" },
+    request: new Request("http://local/api/automation/contact-list-extract", { method: "POST", headers: { authorization: "Bearer contact-token", "content-type": "application/json" }, body: JSON.stringify({ ...contactPayload, ...overrides }) }),
+    env: {
+      ROSTER_DB: db,
+      ROSTER_FILES: contactR2,
+      ROSTER_AUTOMATION_TOKEN: "contact-token",
+      CONTACT_AUTOMATION_WRITES_ENABLED: "true",
+      CONTACT_AUTOMATION_SOURCE_ALLOWLIST: "mmc-shift-allocations",
+      FACILITY_SHARED_CONTACTS_BUILD_ENABLED: "true",
+      FACILITY_SHARED_EMERGENCY_PAUSED: "false",
+      FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST: "mmc,mch",
+    },
   });
 }
 const firstContact = await callContactExtract();
@@ -160,10 +170,13 @@ assert.equal(firstContact.status, 200);
 assert.equal((await firstContact.json()).status, "stored");
 db.rowsWritten = 0;
 const contactPuts = contactR2.puts;
-const repeatedContact = await callContactExtract();
+const repeatedContact = await callContactExtract({
+  providerModifiedAt: "2026-09-06T02:00:00Z",
+  providerVersion: "metadata-only-change",
+});
 assert.equal((await repeatedContact.json()).status, "unchanged");
-assert.equal(db.rowsWritten, 0, "an unchanged allowed contact extract must write no D1 rows");
-assert.equal(contactR2.puts, contactPuts, "an unchanged allowed contact extract must write no R2 objects");
+assert.equal(db.rowsWritten, 0, "an allocation with changed provider metadata must write no D1 rows");
+assert.equal(contactR2.puts, contactPuts, "an allocation with changed provider metadata must write no R2 objects");
 
 async function callBootstrap(body, envOverrides = {}) {
   const response = await bootstrapFacility({

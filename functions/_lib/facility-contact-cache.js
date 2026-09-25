@@ -29,7 +29,11 @@ export async function publishFacilityContactExtract(r2, extractValue, metadata =
   const sourceId = extract.sourceId;
   const sourceDate = extract.sourceDate;
   const payload = { schemaVersion: SCHEMA_VERSION, sourceId, sourceDate, extract };
-  const revision = await digest(payload);
+  // Provider timestamps and versions describe the workbook, not the clinical
+  // allocation. SharePoint autosave may change them without changing a single
+  // contact. Keep the published revision stable for the same allocation so a
+  // metadata-only automation run performs no R2 writes.
+  const revision = await digest(contactAllocationValue(extract));
   const objectKey = facilityContactObjectKey(sourceId, sourceDate, revision);
   const manifestKey = facilityContactManifestKey(sourceId);
   const currentObject = await readJsonObject(r2, manifestKey);
@@ -46,6 +50,24 @@ export async function publishFacilityContactExtract(r2, extractValue, metadata =
   const manifest = { schemaVersion: SCHEMA_VERSION, sourceId, dates: liveDates, revision: await digest({ sourceId, dates: liveDates }), publishedAt: new Date().toISOString() };
   await putJson(r2, manifestKey, manifest, { onlyIf: currentObject.etag ? { etagMatches: currentObject.etag } : { etagDoesNotMatch: "*" } });
   return { ok: true, changed: true, revision };
+}
+
+export function contactAllocationValue(extractValue) {
+  const extract = normaliseContactListExtract(extractValue);
+  if (!extract) return null;
+  const contacts = extract.contacts.map((contact) => ({
+    area: String(contact.area || ""),
+    shift: String(contact.shift || ""),
+    role: String(contact.role || ""),
+    name: String(contact.name || ""),
+    phone: String(contact.phone || ""),
+    isPopulated: contact.isPopulated === true,
+  })).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+  return {
+    sourceId: String(extract.sourceId || ""),
+    sourceDate: String(extract.sourceDate || ""),
+    contacts,
+  };
 }
 
 export async function publishFacilityContactResolutions(r2, sourceId, sourceDate, resolutions = []) {
@@ -112,14 +134,17 @@ async function readJsonObject(r2, key) {
   try {
     const object = await r2.get(key);
     if (!object) return { data: null, etag: "" };
-    return { data: JSON.parse(await object.text()), etag: String(object.etag || object.httpEtag || "") };
+    const text = typeof object.text === "function"
+      ? await object.text()
+      : new TextDecoder().decode(await object.arrayBuffer());
+    return { data: JSON.parse(text), etag: String(object.etag || object.httpEtag || "") };
   } catch {
     return { data: null, etag: "" };
   }
 }
 
 function putJson(r2, key, value, options = {}) {
-  return r2.put(key, JSON.stringify(value), { ...options, httpMetadata: { contentType: "application/json; charset=utf-8" } });
+  return r2.put(key, new TextEncoder().encode(JSON.stringify(value)), { ...options, httpMetadata: { contentType: "application/json; charset=utf-8" } });
 }
 
 async function digest(value) {
