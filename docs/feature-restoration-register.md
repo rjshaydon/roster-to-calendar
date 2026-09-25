@@ -240,8 +240,9 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 ### FR-08 — Automated contact-list ingestion
 
 - **State:** Paused independently of roster automation after the DDH workbook
-  trigger produced repeated runs during editing/autosave. Both DDH and MMC
-  contact flows are Off.
+  trigger produced repeated runs during editing/autosave. The recursive Office
+  Script path has now been removed from both saved flows, but both DDH and MMC
+  contact flows remain Off pending serial canaries.
 - **Includes:** receiving new contact extracts and publishing updated contact
   overlays.
 - **Controls:** `CONTACT_AUTOMATION_WRITES_ENABLED=false` and empty
@@ -251,10 +252,11 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
   pass. Restore separately from roster automation so either can be stopped
   without affecting the other.
 - **Additional gate:** Each source flow must debounce/coalesce SharePoint
-  autosave events so only the newest settled file revision reaches its Office
-  Script and HTTP step. The server must deduplicate on the clinical allocation,
-  excluding provider timestamps and versions, so metadata-only replays write
-  zero D1 rows and zero R2 objects.
+  autosave events so only the newest settled file revision reaches SharePoint
+  `Get file content` and the binary HTTP step. No automatic flow may run an
+  Excel action against its own trigger workbook. The server deduplicates on the
+  clinical allocation, excluding provider timestamps and versions, so
+  metadata-only replays write zero D1 rows and zero R2 objects.
 
 ### FR-09 — Durable Doctor Names and identity aliases
 
@@ -713,6 +715,7 @@ mechanisms are intentionally excluded from restoration.
 | Semantic contact deduplication prepared, 25 Sep 2026 | Local ingestion and R2 publication now derive identity from source, operational date and sorted clinical contact fields, excluding provider timestamps and versions. Focused tests prove metadata-only replays write zero D1 rows and zero R2 objects; 36,000 simulated visible-page refreshes use zero D1 reads/writes. This code is not authority to re-enable either flow: each flow still requires source-side settled-revision coalescing, deployment, a single controlled canary and settled attribution. |
 | Contact source coalescing prepared, 25 Sep 2026 | While both flows remained Off, added a two-minute settling delay and latest-SharePoint-revision comparison to `Sync DDH clinician contacts` and `Sync MMC clinician contacts`. A stale run now terminates successfully before Excel extraction or HTTP publication; only the run whose trigger revision still matches current file metadata may continue. Power Automate Flow checker reported zero errors and zero warnings for both saved flows, and the shared-flow inventory confirmed both remained Disabled. Server contact writes and their source allowlist also remain closed. This preparation does not authorise routine publication: next admit one exact source for one controlled changed canary, verify an unchanged/metadata-only replay produces zero D1/R2 writes, reconcile settled request and account telemetry, then either restore that source or roll it back. |
 | Contact source coalescing canary rejected, 25 Sep 2026 at approximately 21:30 AEST | The DDH edit-and-undo canary proved that the two-minute guard correctly stopped stale trigger revisions before Excel and HTTP. It also exposed a separate architectural loop: the one accepted Excel Online `Run script` action caused a later SharePoint workbook modification, which generated another accepted run and continued at roughly one-minute intervals. Turned `Sync DDH clinician contacts` Off immediately; `Sync MMC clinician contacts` remained Off. Do not restore either automatic flow with an Excel action operating on its own trigger workbook. The replacement is specified in `contact-workbook-safe-automation-plan.md`: settle the exact SharePoint revision, retrieve bytes with SharePoint `Get file content`, parse only the bounded approved range in memory, discard the workbook and semantically deduplicate before any write. Existing published contact overlays and readers remain intact. |
+| Non-recursive contact flows prepared, 26 Sep 2026 | Production deployment `b4f433d1-df1f-43c6-bb96-018da6ba9910` from commit `80db372` provides `/api/automation/contact-workbook-extract`, but `CONTACT_AUTOMATION_WRITES_ENABLED=false` and the empty source allowlist reject it before D1. Reconfigured Power Automate flows `Sync DDH clinician contacts` (`67ee065a-c230-4d1d-9a20-d9425f9cacdf`) and `Sync MMC clinician contacts` (`64d9fad7-3462-4b6a-bb6e-95ce1951f4fb`) to retain the two-minute/latest-revision guard, retrieve the exact workbook with SharePoint `Get file content`, and POST the binary body to the stable endpoint with fixed source/file metadata. DDH is restricted to `Daily Contact Sheet.xlsx` / `ddh-daily-contact-sheet`; MMC is restricted to `SHIFT ALLOCATIONS.xlsx` / `mmc-shift-allocations`. HTTP retry policy is `None`; both Office Script actions were removed; both Flow checkers report zero errors and zero warnings; both flows are confirmed Off. The endpoint enforces a 5 MB per-source ceiling and bounded parser ranges. Rollback before or during canary is **Turn off** the affected flow and remove its source from the contact automation allowlist; retained published R2 contact objects are not deleted. Next gate is DDH-only serial canary—do not enable MMC concurrently. |
 
 ## Restoration record template
 

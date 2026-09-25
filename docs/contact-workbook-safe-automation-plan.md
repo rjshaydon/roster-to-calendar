@@ -122,6 +122,12 @@ changed.
 
 ## Phase B — prepare Power Automate while still Off
 
+**Completed 26 September 2026.** Both saved flows now use the sequence
+SharePoint trigger → two-minute delay → current metadata comparison →
+SharePoint `Get file content` → binary HTTP POST. The Excel Online Office Script
+actions were removed, HTTP retries are `None`, both Flow checkers report zero
+errors and zero warnings, and both flows remain Off.
+
 Apply the same pattern to each saved flow:
 
 1. Keep the exact SharePoint site, library, folder and filename restriction.
@@ -229,4 +235,3 @@ Low-effort implementation should continue autonomously except at these points:
 2. Stop for the user's MMC/MCH visual verification in Phase E.
 3. Stop immediately on any failed safety gate, describe the evidence, and do not
    try an alternative architecture without revising this plan first.
-
