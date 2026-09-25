@@ -36,98 +36,102 @@ export async function onRequestPost(context) {
       const operationalDate = contactOperationalDate(new Date(String(payload?.providerModifiedAt || "")));
       if (operationalDate) payload = { ...payload, sourceDate: operationalDate };
     }
-    const extract = normaliseContactListExtract(payload);
-    if (!extract) return Response.json({ error: "Invalid doctor contact extract." }, { status: 400 });
-    const sourceId = extract.sourceId;
-    const fileName = extract.fileName;
-    if (!contactAutomationSourceEnabled(context.env, sourceId)) return contactAutomationPausedResponse();
-    if (!hasCalendarDb(context.env) || !context.env.ROSTER_FILES?.put) {
-      return Response.json({ error: "Contact-list storage is unavailable." }, { status: 503 });
-    }
-
-    const bytes = new TextEncoder().encode(JSON.stringify(extract));
-    if (bytes.byteLength > MAX_BODY_BYTES) {
-      return Response.json({ error: "Contact-list extract is too large." }, { status: 413 });
-    }
-
-    const db = context.env.ROSTER_DB;
-    await ensureCalendarSchema(db);
-    const providerVersion = String(payload?.providerVersion || "").trim();
-    // SharePoint/Excel may update provider metadata when a read-only Office
-    // Script runs or while a workbook is being autosaved. Deduplicate on the
-    // clinical allocation itself so metadata-only changes cannot create a new
-    // D1 row, R2 source object or published contact revision.
-    const contentHash = await sha256Hex(contactAllocationBytes(extract));
-    const matchingRows = await db.prepare(`
-      SELECT id, received_at FROM contact_list_files
-      WHERE source_id = ? AND content_hash = ?
-      ORDER BY received_at DESC
-      LIMIT 1
-    `).bind(sourceId, contentHash).all();
-    const matchingHash = matchingRows.results?.[0];
-    if (matchingHash?.id) {
-      if (contactPublicationEnabled(context.env, sourceId)) {
-        await publishFacilityContactExtract(context.env.ROSTER_FILES, extract, {
-          providerModifiedAt: extract.providerModifiedAt,
-          receivedAt: String(matchingHash.received_at || ""),
-        });
-      }
-      return Response.json({
-        ok: true,
-        status: "unchanged",
-        sourceId,
-        sourceDate: extract.sourceDate,
-        contactCount: extract.contacts.filter((contact) => contact.isPopulated).length,
-        fileId: String(matchingHash.id),
-      });
-    }
-
-    const existing = await db.prepare(`
-      SELECT id, object_key, received_at FROM contact_list_files
-      WHERE source_id = ?
-      ORDER BY received_at DESC
-      LIMIT 9
-    `).bind(sourceId).all();
-
-    const now = new Date().toISOString();
-    const fileId = `contact:${sourceId}:${contentHash.slice(0, 24)}`;
-    const objectKey = `contact-lists/${sourceId}/${contentHash}.json`;
-    await context.env.ROSTER_FILES.put(objectKey, bytes, {
-      httpMetadata: { contentType: "application/json; charset=utf-8" },
-    });
-    await db.prepare(`
-      INSERT INTO contact_list_files (
-        id, source_id, name, size, last_modified, object_key, content_type,
-        content_hash, provider_version, provider_modified_at, received_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(
-      fileId, sourceId, fileName, bytes.byteLength,
-      Date.parse(extract.providerModifiedAt) || Date.now(), objectKey,
-      "application/json; charset=utf-8", contentHash, providerVersion,
-      extract.providerModifiedAt, now,
-    ).run();
-
-    if (contactPublicationEnabled(context.env, sourceId)) {
-      await publishFacilityContactExtract(context.env.ROSTER_FILES, extract, {
-        providerModifiedAt: extract.providerModifiedAt,
-        receivedAt: now,
-      });
-    }
-
-    await pruneStoredContactExtracts(context, existing.results, { replaceDate: extract.sourceDate, maximumDeletes: 4 });
-    return Response.json({
-      ok: true,
-      status: "stored",
-      sourceId,
-      sourceDate: extract.sourceDate,
-      contactCount: extract.contacts.filter((contact) => contact.isPopulated).length,
-      fileId,
-      receivedAt: now,
-    });
+    return ingestContactExtract(context, payload);
   } catch (error) {
     console.error("Contact-list extract ingestion failed", error);
     return Response.json({ error: "Contact-list extract could not be stored." }, { status: 422 });
   }
+}
+
+export async function ingestContactExtract(context, payload) {
+  const extract = normaliseContactListExtract(payload);
+  if (!extract) return Response.json({ error: "Invalid doctor contact extract." }, { status: 400 });
+  const sourceId = extract.sourceId;
+  const fileName = extract.fileName;
+  if (!contactAutomationSourceEnabled(context.env, sourceId)) return contactAutomationPausedResponse();
+  if (!hasCalendarDb(context.env) || !context.env.ROSTER_FILES?.put) {
+    return Response.json({ error: "Contact-list storage is unavailable." }, { status: 503 });
+  }
+
+  const bytes = new TextEncoder().encode(JSON.stringify(extract));
+  if (bytes.byteLength > MAX_BODY_BYTES) {
+    return Response.json({ error: "Contact-list extract is too large." }, { status: 413 });
+  }
+
+  const db = context.env.ROSTER_DB;
+  await ensureCalendarSchema(db);
+  const providerVersion = String(payload?.providerVersion || "").trim();
+  // SharePoint/Excel may update provider metadata when a read-only Office
+  // Script runs or while a workbook is being autosaved. Deduplicate on the
+  // clinical allocation itself so metadata-only changes cannot create a new
+  // D1 row, R2 source object or published contact revision.
+  const contentHash = await sha256Hex(contactAllocationBytes(extract));
+  const matchingRows = await db.prepare(`
+    SELECT id, received_at FROM contact_list_files
+    WHERE source_id = ? AND content_hash = ?
+    ORDER BY received_at DESC
+    LIMIT 1
+  `).bind(sourceId, contentHash).all();
+  const matchingHash = matchingRows.results?.[0];
+  if (matchingHash?.id) {
+    if (contactPublicationEnabled(context.env, sourceId)) {
+      await publishFacilityContactExtract(context.env.ROSTER_FILES, extract, {
+        providerModifiedAt: extract.providerModifiedAt,
+        receivedAt: String(matchingHash.received_at || ""),
+      });
+    }
+    return Response.json({
+      ok: true,
+      status: "unchanged",
+      sourceId,
+      sourceDate: extract.sourceDate,
+      contactCount: extract.contacts.filter((contact) => contact.isPopulated).length,
+      fileId: String(matchingHash.id),
+    });
+  }
+
+  const existing = await db.prepare(`
+    SELECT id, object_key, received_at FROM contact_list_files
+    WHERE source_id = ?
+    ORDER BY received_at DESC
+    LIMIT 9
+  `).bind(sourceId).all();
+
+  const now = new Date().toISOString();
+  const fileId = `contact:${sourceId}:${contentHash.slice(0, 24)}`;
+  const objectKey = `contact-lists/${sourceId}/${contentHash}.json`;
+  await context.env.ROSTER_FILES.put(objectKey, bytes, {
+    httpMetadata: { contentType: "application/json; charset=utf-8" },
+  });
+  await db.prepare(`
+    INSERT INTO contact_list_files (
+      id, source_id, name, size, last_modified, object_key, content_type,
+      content_hash, provider_version, provider_modified_at, received_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    fileId, sourceId, fileName, bytes.byteLength,
+    Date.parse(extract.providerModifiedAt) || Date.now(), objectKey,
+    "application/json; charset=utf-8", contentHash, providerVersion,
+    extract.providerModifiedAt, now,
+  ).run();
+
+  if (contactPublicationEnabled(context.env, sourceId)) {
+    await publishFacilityContactExtract(context.env.ROSTER_FILES, extract, {
+      providerModifiedAt: extract.providerModifiedAt,
+      receivedAt: now,
+    });
+  }
+
+  await pruneStoredContactExtracts(context, existing.results, { replaceDate: extract.sourceDate, maximumDeletes: 4 });
+  return Response.json({
+    ok: true,
+    status: "stored",
+    sourceId,
+    sourceDate: extract.sourceDate,
+    contactCount: extract.contacts.filter((contact) => contact.isPopulated).length,
+    fileId,
+    receivedAt: now,
+  });
 }
 
 function contactAllocationBytes(extract) {

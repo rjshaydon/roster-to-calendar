@@ -179,7 +179,7 @@ function requestContainmentReason(pathname, action, env = {}) {
     return enabled(env.ROSTER_INSIGHT_READS_ENABLED) ? "" : "roster-insights-paused";
   }
   if (!pathname.startsWith("/api/automation/")) return "";
-  if (["/api/automation/contact-list", "/api/automation/contact-list-binary", "/api/automation/contact-list-extract"].includes(pathname)) {
+  if (["/api/automation/contact-list", "/api/automation/contact-list-binary", "/api/automation/contact-list-extract", "/api/automation/contact-workbook-extract"].includes(pathname)) {
     return enabled(env.CONTACT_AUTOMATION_WRITES_ENABLED) ? "" : "contact-automation-paused";
   }
   if (pathname === "/api/automation/facility-bootstrap") {

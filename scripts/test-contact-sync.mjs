@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { onRequestPost as rejectBinaryContactUpload } from "../functions/api/automation/contact-list-binary.js";
 import { onRequestPost as rejectLegacyContactUpload } from "../functions/api/automation/contact-list.js";
 import { automationSourceDate, onRequestPost as acceptContactExtract } from "../functions/api/automation/contact-list-extract.js";
+import { onRequestPost as acceptContactWorkbook } from "../functions/api/automation/contact-workbook-extract.js";
 
 assert.equal(automationSourceDate("Tuesday 25th AUGUST 2026"), "2026-08-25");
 assert.equal(automationSourceDate("2026-08-25"), "2026-08-25");
@@ -28,6 +29,21 @@ const authorized = await rejectBinaryContactUpload({
 });
 assert.equal(authorized.status, 410, "authenticated full-workbook MMC uploads must be disabled");
 assert.equal((await authorized.json()).endpoint, "/api/automation/contact-list-extract");
+
+const vhhWorkbookCredential = await acceptContactWorkbook({
+  request: new Request("https://example.test/api/automation/contact-workbook-extract", {
+    method: "POST",
+    headers: {
+      authorization: "Bearer vhh-only-token",
+      "content-type": "application/octet-stream",
+      "x-contact-source-id": "mmc-shift-allocations",
+      "x-contact-file-name": "SHIFT ALLOCATIONS.xlsx",
+    },
+    body: "not-a-workbook",
+  }),
+  env: { ROSTER_AUTOMATION_TOKEN: "roster-token", DDH_CONTACT_AUTOMATION_TOKEN: "ddh-token", VHH_AUTOMATION_TOKEN: "vhh-only-token" },
+});
+assert.equal(vhhWorkbookCredential.status, 401, "the VHH roster credential must not authorize contact workbook submission");
 
 const unauthorized = await rejectBinaryContactUpload({
   request: new Request("https://example.test/api/automation/contact-list-binary", { method: "POST", body: "x" }),

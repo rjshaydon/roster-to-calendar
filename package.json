@@ -14,6 +14,7 @@
     "check": "node --check public/static/app.js",
     "test:contact-allocations": "node scripts/test-contact-allocations.mjs",
     "test:contact-sync": "node scripts/test-contact-sync.mjs",
+    "test:contact-workbook-ingress": "node --no-warnings scripts/test-contact-workbook-ingress.mjs",
     "test:facility-contacts": "node scripts/test-facility-contact-cache.mjs",
     "test:facility-contact-access": "node scripts/test-facility-contact-access.mjs",
     "test:facility-snapshots": "node scripts/test-facility-snapshot-cache.mjs",
