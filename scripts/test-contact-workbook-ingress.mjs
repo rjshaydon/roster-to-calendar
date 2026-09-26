@@ -64,7 +64,7 @@ assert.equal((await call(workbookBytes, {}, { ...baseHeaders, "content-type": "i
 assert.equal((await call(new Uint8Array([1]), {
   CONTACT_AUTOMATION_WRITES_ENABLED: "true",
   CONTACT_AUTOMATION_SOURCE_ALLOWLIST: "mmc-shift-allocations",
-}, { ...baseHeaders, "content-length": String(5 * 1024 * 1024 + 1) })).status, 413,
+}, { ...baseHeaders, "content-length": String(Math.ceil((5 * 1024 * 1024) * 4 / 3) + 4097) })).status, 413,
   "an oversized declared body must be rejected before D1");
 assert.equal((await call(new TextEncoder().encode("must not be parsed"), {
   ROSTER_DB: forbiddenDb,
@@ -127,6 +127,28 @@ const textReplay = await call(new TextEncoder().encode(toBase64(workbookBytes)),
 });
 assert.equal(textReplay.status, 200, "Power Automate's base64 text representation must be accepted");
 assert.equal((await textReplay.json()).status, "unchanged");
+assert.equal(db.rowsWritten, writesAfterStored);
+assert.equal(r2.puts, putsAfterStored);
+
+const xlsxHeaderEncodedReplay = await call(new TextEncoder().encode(toBase64(workbookBytes)), enabledEnv, {
+  ...baseHeaders,
+  "x-provider-modified-at": "2026-08-25T01:20:00Z",
+  "x-provider-version": "etag-5",
+});
+assert.equal(xlsxHeaderEncodedReplay.status, 200,
+  "Power Automate base64 content must be accepted when the HTTP action retains the XLSX content type");
+assert.equal((await xlsxHeaderEncodedReplay.json()).status, "unchanged");
+assert.equal(db.rowsWritten, writesAfterStored);
+assert.equal(r2.puts, putsAfterStored);
+
+const xlsxHeaderEnvelopeReplay = await call(powerAutomateEnvelope, enabledEnv, {
+  ...baseHeaders,
+  "x-provider-modified-at": "2026-08-25T01:25:00Z",
+  "x-provider-version": "etag-6",
+});
+assert.equal(xlsxHeaderEnvelopeReplay.status, 200,
+  "Power Automate connector envelopes must be accepted when the HTTP action retains the XLSX content type");
+assert.equal((await xlsxHeaderEnvelopeReplay.json()).status, "unchanged");
 assert.equal(db.rowsWritten, writesAfterStored);
 assert.equal(r2.puts, putsAfterStored);
 

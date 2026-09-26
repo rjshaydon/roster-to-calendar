@@ -67,21 +67,21 @@ export async function onRequestPost(context) {
 }
 
 async function readWorkbookBody(request, contentType, maximumBytes) {
-  if (XLSX_CONTENT_TYPES.has(contentType)) {
-    const bytes = await readBodyWithLimit(request, maximumBytes);
-    if (!hasZipSignature(bytes)) throw invalidWorkbook();
-    return bytes;
-  }
-
   // Power Automate serializes connector file content as either the standard
   // { "$content-type", "$content" } JSON envelope or, in some tenants, the
-  // base64 value alone. Decode only those two bounded forms; arbitrary JSON or
-  // text never reaches the workbook parser.
+  // base64 value alone. It can retain the explicitly configured XLSX HTTP
+  // content type even when the body is one of those encoded representations,
+  // so inspect the bounded body rather than trusting the MIME type alone.
+  // Arbitrary JSON or text never reaches the workbook parser.
   const encodedLimit = Math.ceil(maximumBytes * 4 / 3) + 4096;
   const encodedBytes = await readBodyWithLimit(request, encodedLimit);
+  if (hasZipSignature(encodedBytes)) {
+    if (encodedBytes.byteLength > maximumBytes) throw tooLarge();
+    return encodedBytes;
+  }
   const text = new TextDecoder().decode(encodedBytes).trim();
   let base64 = text;
-  if (contentType === "application/json") {
+  if (contentType === "application/json" || text.startsWith("{") || text.startsWith('"')) {
     let envelope;
     try {
       envelope = JSON.parse(text);
