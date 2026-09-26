@@ -921,6 +921,8 @@ assert.match(processRosterQueueSource, /postDerived\(run, payload, "complete", p
 assert.doesNotMatch(processRosterQueueSource, /postDerived\(run, payload, "start"|postDerived\([\s\S]{0,200}"events"/, "automated processing must not build a complete D1 staging copy in chunks");
 assert.match(automationDerivedSource, /currentSource\?\.activeFileId \|\| run\.fileId[\s\S]*id: targetFileId/, "automated corrections must diff against the stable active file identity");
 assert.match(stateApiSource, /phase === "complete" && result\?\.unchanged === true[\s\S]*supersession: null/, "unchanged complete imports must stop before supersession and post-save rebuilding");
+assert.match(d1CalendarSource, /export async function queryRosterFileRanges[\s\S]*FROM roster_file_status_summaries s[\s\S]*JOIN roster_file_coverage c/, "roster supersession ranges must come from compact incrementally maintained facts");
+assert.doesNotMatch(d1CalendarSource, /export async function queryRosterFileRanges[\s\S]{0,1200}MIN\(roster_events\.start_date\)/, "roster supersession must not aggregate the historical event table");
 assert.match(findmyshiftCheckSource, /requestBody[\s\S]*force[\s\S]*queueCurrentFindmyshiftReprocess[\s\S]*status: "reprocess-queued"/, "a creator refresh should reprocess the retained FindMyShift file when its provider version is unchanged");
 assert.match(stateSource, /action === "refreshAutomatedRosterSource"[\s\S]*source\.provider === "findmyshift"[\s\S]*force: true[\s\S]*queueAutomatedSourceReprocess/, "the auto-sync refresh action should check FindMyShift remotely and reprocess retained push-only sources");
 const facilityOverviewEventHelpers = appSource.match(/function eventRosterDateKey[\s\S]*?(?=\nfunction filterWhenInsightEvents)/)?.[0] || "";
@@ -4695,14 +4697,31 @@ class MemoryD1Statement {
         results: [...this.db.rawFiles.values()].sort((left, right) => String(left.uploaded_at || "").localeCompare(String(right.uploaded_at || "")) || String(left.file_id || "").localeCompare(String(right.file_id || ""))),
       };
     }
-    if (sql.includes("FROM roster_file_status_summaries s") && sql.includes("LEFT JOIN roster_file_coverage")) {
+    if (sql.includes("FROM roster_file_status_summaries s") && sql.includes("JOIN roster_file_coverage")) {
       const limit = Number(args.at(-1) || 100);
       const expectedIds = new Set(args.slice(0, -1));
       return {
         results: [...this.db.rosterFileStatusSummaries.values()]
           .filter((row) => sql.includes("WHERE s.active = 1") ? row.active === 1 : expectedIds.has(row.file_id))
           .slice(0, limit)
-          .map((row) => ({ ...row, ...(this.db.rosterFileCoverage.get(row.file_id) || {}) })),
+          .map((row) => {
+            const coverage = this.db.rosterFileCoverage.get(row.file_id) || {};
+            if (!sql.includes("INNER JOIN roster_file_coverage")) return { ...row, ...coverage };
+            return {
+              id: row.file_id,
+              name: row.name,
+              source_type: row.source_type,
+              source_id: row.source_id,
+              active: row.active,
+              last_modified: row.last_modified,
+              added_at: row.uploaded_at,
+              uploaded_at: row.uploaded_at,
+              start_date: coverage.coverage_start,
+              coverage_end_date: coverage.coverage_end,
+              end_date: coverage.coverage_end,
+              event_count: row.event_count,
+            };
+          }),
       };
     }
     if (sql.includes("MIN(roster_events.start_date)") && sql.includes("FROM roster_files")) {

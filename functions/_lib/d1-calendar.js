@@ -2900,23 +2900,22 @@ export async function queryRosterFileRanges(db, options = {}) {
   const includeInactive = options.includeInactive === true;
   const rows = await db.prepare(`
     SELECT
-      roster_files.id AS id,
-      roster_files.name AS name,
-      roster_files.source_type AS source_type,
-      roster_files.source_id AS source_id,
-      roster_files.active AS active,
-      roster_files.last_modified AS last_modified,
-      roster_files.added_at AS added_at,
-      roster_files.uploaded_at AS uploaded_at,
-      MIN(roster_events.start_date) AS start_date,
-      MAX(roster_events.start_date) AS coverage_end_date,
-      MAX(roster_events.end_date) AS end_date,
-      COUNT(roster_events.id) AS event_count
-    FROM roster_files
-    LEFT JOIN roster_events ON roster_events.file_id = roster_files.id
-    ${includeInactive ? "" : "WHERE roster_files.active = 1"}
-    GROUP BY roster_files.id
-    ORDER BY roster_files.source_type, start_date, roster_files.name
+      s.file_id AS id,
+      s.name AS name,
+      s.source_type AS source_type,
+      s.source_id AS source_id,
+      s.active AS active,
+      s.last_modified AS last_modified,
+      s.uploaded_at AS added_at,
+      s.uploaded_at AS uploaded_at,
+      c.coverage_start AS start_date,
+      c.coverage_end AS coverage_end_date,
+      c.coverage_end AS end_date,
+      s.event_count AS event_count
+    FROM roster_file_status_summaries s
+    INNER JOIN roster_file_coverage c ON c.file_id = s.file_id
+    ${includeInactive ? "" : "WHERE s.active = 1"}
+    ORDER BY s.source_type, c.coverage_start, s.name
   `).all();
   return (rows.results || []).map((row) => ({
     id: String(row.id || "").trim(),
