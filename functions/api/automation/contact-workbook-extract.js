@@ -9,6 +9,10 @@ const XLSX_CONTENT_TYPES = new Set([
   "application/octet-stream",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 ]);
+const POWER_AUTOMATE_CONTENT_TYPES = new Set([
+  "application/json",
+  "text/plain",
+]);
 const SOURCE_RULES = new Map([
   ["ddh-daily-contact-sheet", {
     fileName: "Daily Contact Sheet.xlsx",
@@ -37,11 +41,13 @@ export async function onRequestPost(context) {
   const fileName = header(context.request, "x-contact-file-name");
   if (fileName !== rule.fileName) return Response.json({ error: "Unexpected contact workbook filename." }, { status: 400 });
   const contentType = String(context.request.headers.get("content-type") || "").split(";", 1)[0].trim().toLowerCase();
-  if (!XLSX_CONTENT_TYPES.has(contentType)) return Response.json({ error: "Expected an Excel workbook." }, { status: 415 });
+  if (!XLSX_CONTENT_TYPES.has(contentType) && !POWER_AUTOMATE_CONTENT_TYPES.has(contentType)) {
+    return Response.json({ error: "Expected an Excel workbook." }, { status: 415 });
+  }
   if (!contactAutomationSourceEnabled(context.env, sourceId)) return contactAutomationPausedResponse();
 
   try {
-    const workbookBytes = await readBodyWithLimit(context.request, rule.maximumBytes);
+    const workbookBytes = await readWorkbookBody(context.request, contentType, rule.maximumBytes);
     const providerModifiedAt = header(context.request, "x-provider-modified-at");
     const providerVersion = header(context.request, "x-provider-version");
     const extract = await rule.extract(workbookBytes, { providerModifiedAt });
@@ -58,6 +64,42 @@ export async function onRequestPost(context) {
     console.error("Contact workbook extraction failed", error);
     return Response.json({ error: "Contact workbook could not be read." }, { status: 422 });
   }
+}
+
+async function readWorkbookBody(request, contentType, maximumBytes) {
+  if (XLSX_CONTENT_TYPES.has(contentType)) {
+    const bytes = await readBodyWithLimit(request, maximumBytes);
+    if (!hasZipSignature(bytes)) throw invalidWorkbook();
+    return bytes;
+  }
+
+  // Power Automate serializes connector file content as either the standard
+  // { "$content-type", "$content" } JSON envelope or, in some tenants, the
+  // base64 value alone. Decode only those two bounded forms; arbitrary JSON or
+  // text never reaches the workbook parser.
+  const encodedLimit = Math.ceil(maximumBytes * 4 / 3) + 4096;
+  const encodedBytes = await readBodyWithLimit(request, encodedLimit);
+  const text = new TextDecoder().decode(encodedBytes).trim();
+  let base64 = text;
+  if (contentType === "application/json") {
+    let envelope;
+    try {
+      envelope = JSON.parse(text);
+    } catch {
+      throw invalidWorkbook();
+    }
+    if (typeof envelope === "string") base64 = envelope;
+    else {
+      const envelopeType = String(envelope?.["$content-type"] || "").split(";", 1)[0].trim().toLowerCase();
+      if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)
+        || typeof envelope.$content !== "string"
+        || (envelopeType && !XLSX_CONTENT_TYPES.has(envelopeType))) throw invalidWorkbook();
+      base64 = envelope.$content;
+    }
+  }
+  const bytes = decodeBase64Workbook(base64, maximumBytes);
+  if (!hasZipSignature(bytes)) throw invalidWorkbook();
+  return bytes;
 }
 
 async function readBodyWithLimit(request, maximumBytes) {
@@ -94,6 +136,38 @@ function tooLarge() {
   const error = new Error("Contact workbook is too large.");
   error.code = "contact-workbook-too-large";
   return error;
+}
+
+function invalidWorkbook() {
+  const error = new Error("Expected an Excel workbook.");
+  error.code = "contact-workbook-invalid";
+  return error;
+}
+
+function decodeBase64Workbook(value, maximumBytes) {
+  const compact = String(value || "").replace(/\s+/g, "");
+  if (!compact || compact.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(compact)) throw invalidWorkbook();
+  const padding = compact.endsWith("==") ? 2 : compact.endsWith("=") ? 1 : 0;
+  const decodedLength = (compact.length / 4) * 3 - padding;
+  if (decodedLength > maximumBytes) throw tooLarge();
+  let binary;
+  try {
+    binary = atob(compact);
+  } catch {
+    throw invalidWorkbook();
+  }
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+function hasZipSignature(bytes) {
+  return bytes?.byteLength >= 4
+    && bytes[0] === 0x50
+    && bytes[1] === 0x4b
+    && ((bytes[2] === 0x03 && bytes[3] === 0x04)
+      || (bytes[2] === 0x05 && bytes[3] === 0x06)
+      || (bytes[2] === 0x07 && bytes[3] === 0x08));
 }
 
 function header(request, name) {

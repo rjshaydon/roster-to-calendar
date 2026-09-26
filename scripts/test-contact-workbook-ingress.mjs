@@ -59,7 +59,7 @@ assert.equal((await call(workbookBytes, {}, { ...baseHeaders, "x-contact-source-
   "unknown sources must be rejected before D1");
 assert.equal((await call(workbookBytes, {}, { ...baseHeaders, "x-contact-file-name": "Other.xlsx" })).status, 400,
   "an unexpected filename must be rejected before D1");
-assert.equal((await call(workbookBytes, {}, { ...baseHeaders, "content-type": "application/json" })).status, 415,
+assert.equal((await call(workbookBytes, {}, { ...baseHeaders, "content-type": "image/png" })).status, 415,
   "non-workbook content must be rejected before D1");
 assert.equal((await call(new Uint8Array([1]), {
   CONTACT_AUTOMATION_WRITES_ENABLED: "true",
@@ -104,8 +104,39 @@ assert.equal(db.rowsWritten, writesAfterStored, "metadata-only workbook replay m
 assert.equal(r2.puts, putsAfterStored, "metadata-only workbook replay must write zero R2 objects");
 assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM contact_list_files").get().count, 1);
 
+const powerAutomateEnvelope = new TextEncoder().encode(JSON.stringify({
+  "$content-type": "application/octet-stream",
+  "$content": toBase64(workbookBytes),
+}));
+const envelopeReplay = await call(powerAutomateEnvelope, enabledEnv, {
+  ...baseHeaders,
+  "content-type": "application/json",
+  "x-provider-modified-at": "2026-08-25T01:10:00Z",
+  "x-provider-version": "etag-3",
+});
+assert.equal(envelopeReplay.status, 200, "Power Automate's connector envelope must be accepted");
+assert.equal((await envelopeReplay.json()).status, "unchanged");
+assert.equal(db.rowsWritten, writesAfterStored, "an encoded unchanged replay must write zero D1 rows");
+assert.equal(r2.puts, putsAfterStored, "an encoded unchanged replay must write zero R2 objects");
+
+const textReplay = await call(new TextEncoder().encode(toBase64(workbookBytes)), enabledEnv, {
+  ...baseHeaders,
+  "content-type": "text/plain; charset=utf-8",
+  "x-provider-modified-at": "2026-08-25T01:15:00Z",
+  "x-provider-version": "etag-4",
+});
+assert.equal(textReplay.status, 200, "Power Automate's base64 text representation must be accepted");
+assert.equal((await textReplay.json()).status, "unchanged");
+assert.equal(db.rowsWritten, writesAfterStored);
+assert.equal(r2.puts, putsAfterStored);
+
 const originalConsoleError = console.error;
 console.error = () => {};
+const invalidEnvelope = await call(new TextEncoder().encode(JSON.stringify({ value: "not-a-workbook" })), enabledEnv, {
+  ...baseHeaders,
+  "content-type": "application/json",
+});
+assert.equal(invalidEnvelope.status, 422, "an invalid connector envelope must fail without storing data");
 const malformed = await call(new TextEncoder().encode("not an xlsx"), enabledEnv, baseHeaders);
 console.error = originalConsoleError;
 assert.equal(malformed.status, 422, "a malformed workbook must fail without storing data");
@@ -137,4 +168,10 @@ function mmcWorkbookBytes() {
   rows[30][2] = "25145";
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(rows), "SHIFT ALLOCATIONS");
   return XLSX.write(workbook, { type: "array", bookType: "xlsx" });
+}
+
+function toBase64(bytes) {
+  let binary = "";
+  for (const byte of new Uint8Array(bytes)) binary += String.fromCharCode(byte);
+  return btoa(binary);
 }
