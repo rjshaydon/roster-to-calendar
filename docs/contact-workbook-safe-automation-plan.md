@@ -1,5 +1,10 @@
 # Contact workbook safe-automation plan
 
+> Rollout ordering superseded by [Full service restoration](./full-service-restoration-plan.md).
+> Retain bounded parsing, non-recursive retrieval and semantic deduplication.
+> The old serial canaries and user edit checkpoints are historical; use Batch
+> 1A's diagnostic trace and end-to-end acceptance criteria.
+
 ## Objective
 
 Restore automatic DDH and MMC/MCH live contact publication without allowing an

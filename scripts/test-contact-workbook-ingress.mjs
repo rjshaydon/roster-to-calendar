@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import XLSX from "xlsx";
 
 import { onRequestPost as ingestContactWorkbook } from "../functions/api/automation/contact-workbook-extract.js";
+import { loadPublishedFacilityContacts } from "../functions/_lib/facility-contact-cache.js";
 
 class LocalD1 {
   constructor(sqlite) { this.sqlite = sqlite; this.rowsWritten = 0; }
@@ -180,6 +181,56 @@ console.error = originalConsoleError;
 assert.equal(malformed.status, 422, "a malformed workbook must fail without storing data");
 assert.equal(db.rowsWritten, writesAfterStored);
 assert.equal(r2.puts, putsAfterStored);
+
+// Exercise the deployed configuration through ingestion AND the On shift
+// reader. A successful stored/unchanged response alone does not prove that
+// the independent publication allowlist permits a visible contact overlay.
+const config = await readFile(new URL("../wrangler.toml", import.meta.url), "utf8");
+const productionVars = Object.fromEntries([...config.split("[vars]")[1].split("[[")[0]
+  .matchAll(/^([A-Z_]+)\s*=\s*"([^"]*)"/gm)].map((match) => [match[1], match[2]]));
+assert.equal(productionVars.FACILITY_SHARED_METADATA_BUILD_ENABLED, "false");
+assert.equal(productionVars.FACILITY_SHARED_DAYS_BUILD_ENABLED, "false");
+const RealDate = globalThis.Date;
+globalThis.Date = class extends RealDate {
+  constructor(...args) { super(...(args.length ? args : ["2026-08-25T02:00:00Z"])); }
+  static now() { return new RealDate("2026-08-25T02:00:00Z").valueOf(); }
+};
+try {
+  const publicationEnv = { ...enabledEnv, ...productionVars };
+  // The source was stored while publication was closed. Replaying it must
+  // repair the missing derived overlay without rewriting the D1 source row.
+  const repaired = await call(workbookBytes, publicationEnv, baseHeaders);
+  assert.equal((await repaired.json()).status, "unchanged");
+  assert.equal(db.rowsWritten, writesAfterStored);
+  for (const facility of ["MMC", "MCH"]) {
+    const visible = await loadPublishedFacilityContacts(r2, { date: "2026-08-25", facilityKeys: [facility] });
+    assert.equal(visible.status, "available", `${facility} publication must be enabled as well as ingestion`);
+    assert.equal(visible.contacts.length, 1);
+    assert.ok(visible.contacts[0].phone, `${facility} must expose the extracted phone`);
+  }
+  const publishedPuts = r2.puts;
+  await call(workbookBytes, publicationEnv, { ...baseHeaders, "x-provider-version": "metadata-only" });
+  assert.equal(db.rowsWritten, writesAfterStored);
+  assert.equal(r2.puts, publishedPuts, "an unchanged published extract must write neither source nor overlay");
+
+  const ddhWorkbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(ddhWorkbook, XLSX.utils.aoa_to_sheet([
+    ["Orange Dr IC", "Alex Example", "AE", "49970"],
+  ]), "ED Clinicians");
+  const ddhBody = XLSX.write(ddhWorkbook, { type: "array", bookType: "xlsx" });
+  const ddhHeaders = { ...baseHeaders, "x-contact-source-id": "ddh-daily-contact-sheet", "x-contact-file-name": "Daily Contact Sheet.xlsx" };
+  assert.equal((await call(ddhBody, publicationEnv, ddhHeaders)).status, 200);
+  const ddhVisible = await loadPublishedFacilityContacts(r2, { date: "2026-08-25", facilityKeys: ["DDH"] });
+  assert.equal(ddhVisible.status, "available");
+  assert.equal(ddhVisible.contacts[0].phone, "49970");
+  const finalWrites = db.rowsWritten;
+  const finalPuts = r2.puts;
+  await call(ddhBody, publicationEnv, ddhHeaders);
+  assert.equal(db.rowsWritten, finalWrites);
+  assert.equal(r2.puts, finalPuts);
+} finally {
+  globalThis.Date = RealDate;
+}
 
 console.log("Contact workbook ingress safeguards passed.");
 

@@ -13,19 +13,32 @@ record its evidence, approval, deployment and post-deployment observation here.
 No entry may be removed after restoration; change its state to **Restored** so
 the history remains auditable.
 
-Current tracked Production code is `319c0905` on 25 September 2026. The exact
+Current tracked Production code is `3161b23` on 27 September 2026. The exact
 active deployment identity must still be read back at every operational gate.
 Ordinary-login containment and all permanent quota protections remain active.
 Cached At a glance readers are open for MMC, DDH, MCH and VHH; contact readers
-are open for DDH, MMC and MCH. Contact automation writes are globally closed,
-both known contact flows are Off, and bootstrap and advanced-maintenance
-controls remain closed.
+are open for DDH, MMC and MCH. Roster automation is configured for all four
+roster sources and contact ingress is configured for the exact DDH and MMC
+sources. The external flows' current On/Off state must be read back rather than
+inferred from Git. A 27 September user test found no DDH contacts, so the
+earlier contact-restoration entry is not accepted as an end-to-end pass.
+Bootstrap and advanced-maintenance controls remain closed.
+
+The authoritative restoration ordering is now
+[`full-service-restoration-plan.md`](./full-service-restoration-plan.md). It
+supersedes the older serial ordering while retaining this register's permanent
+safety constraints and incident evidence.
+
+The Astra revision separates independently releasable contacts (1A), roster
+automation/new-term readiness including DDH scheduling (1B), and At a glance
+freshness (1C). Historical one-source rollout requirements below do not override
+that ordering. The first contact diagnosis/local correction round is complete;
+the full-service plan's checkpoint records the tested, undeployed change.
 
 The safety commits did not intentionally delete Production roster files,
-roster events, account data, facility snapshots or contact data. Because D1 is
-currently quota-exhausted, this statement describes the behaviour of the
-changes and recorded operations; database contents will be verified only under
-the reset-day runbook.
+roster events, account data, facility snapshots or contact data. This statement
+describes the behaviour of the changes and recorded operations; current data
+contents are verified only through bounded read paths.
 
 ## Status meanings
 
@@ -61,22 +74,22 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 | `FACILITY_ACCESS_MATERIALIZATION_ENABLED` | `false` | FR-01 |
 | `FACILITY_SHARED_METADATA_BUILD_ENABLED` | `false` | FR-01 |
 | `FACILITY_SHARED_DAYS_BUILD_ENABLED` | `false` | FR-01 |
-| `FACILITY_SHARED_CONTACTS_BUILD_ENABLED` | `true` in Production, but no contact request can reach it while contact automation is globally closed; `false` in Preview | FR-04 |
+| `FACILITY_SHARED_CONTACTS_BUILD_ENABLED` | `true` in Production for the exact admitted contact sources; `false` in Preview | FR-04 |
 | `FACILITY_SHARED_METADATA_ENABLED` | `true` in Production; `false` in Preview | FR-01 |
 | `FACILITY_SHARED_DAYS_ENABLED` | `true` in Production; `false` in Preview | FR-01 |
 | `FACILITY_SHARED_CONTACTS_ENABLED` | `true` in Production; `false` in Preview | FR-04 |
 | `FACILITY_SHARED_CONTACTS_SOURCE_ALLOWLIST` | `ddh,mmc,mch` in Production; empty in Preview | FR-04 |
-| `ROSTER_AUTOMATION_WRITES_ENABLED` | `false` | FR-06, FR-07 |
+| `ROSTER_AUTOMATION_WRITES_ENABLED` | `true` in Production; `false` in Preview | FR-06, FR-07 |
 | `MANUAL_ROSTER_WRITES_ENABLED` | `false` | FR-06, FR-11 |
 | `ROSTER_STATUS_SUMMARY_ENABLED` | `true` in Production; `false` in Preview | FR-05 |
-| `ROSTER_AUTOMATION_SOURCE_ALLOWLIST` | empty | FR-07 |
-| `ROSTER_AUTOMATION_QUEUE_ENABLED` | `false` | FR-07 |
+| `ROSTER_AUTOMATION_SOURCE_ALLOWLIST` | `monash-adults,monash-paeds,dandenong-findmyshift,vhh-active-medical-roster` in Production; empty in Preview | FR-07 |
+| `ROSTER_AUTOMATION_QUEUE_ENABLED` | `true` in Production; `false` in Preview | FR-07 |
 | `ROSTER_ADVANCED_MAINTENANCE_ENABLED` | `false` in Production and Preview | FR-06, FR-11, FR-12 |
 | `FACILITY_BOOTSTRAP_INSPECTION_ENABLED` | `false` in Production and Preview | FR-12 |
 | `FACILITY_BOOTSTRAP_EXECUTION_ENABLED` | `false` in Production and Preview | FR-12 |
 | `FACILITY_BOOTSTRAP_FILE_ALLOWLIST` | empty in Production and Preview | FR-12 |
-| `CONTACT_AUTOMATION_WRITES_ENABLED` | `false` in Production and Preview | FR-08 |
-| `CONTACT_AUTOMATION_SOURCE_ALLOWLIST` | empty in Production and Preview | FR-08 |
+| `CONTACT_AUTOMATION_WRITES_ENABLED` | `true` in Production; `false` in Preview | FR-08 |
+| `CONTACT_AUTOMATION_SOURCE_ALLOWLIST` | `ddh-daily-contact-sheet,mmc-shift-allocations` in Production; empty in Preview | FR-08 |
 | `IDENTITY_DISCOVERY_ENABLED` | `false`; missing or malformed also fails closed | FR-21, FR-24 |
 | `ACCOUNT_SNAPSHOT_BUILD_ENABLED` | `false`; missing or malformed also fails closed | FR-23 |
 | `ROSTER_INSIGHT_READS_ENABLED` | `false`; missing or malformed also fails closed | FR-19 |
@@ -86,21 +99,20 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 
 ### FR-01 — At a glance workspace
 
-- **State:** MMC cached readers restored for entitled users. Other facilities
-  remain paused.
+- **State:** Cached readers restored for MMC, DDH, MCH and VHH. Automatic
+  publication after a changed roster is not yet restored.
 - **Includes:** On shift, ED Staff, By stream, Working together, multi-ED
   Director overview, facility/date selection and At a glance navigation on
   desktop and mobile. It also includes the compact staff-membership,
   file/hospital-coverage, additional-coverage and daily-presence facts needed
   to build those views without repeatedly deriving them from event history.
-- **User effect:** Entitled users can manually open MMC, DDH and MCH cached
-  metadata, On shift, Staff and related base day views. Other facilities still
-  receive the controlled unavailable response.
+- **User effect:** Entitled users can manually open MMC, DDH, MCH and VHH
+  cached metadata, On shift, Staff and related base day views.
 - **Controls:** Production uses `FACILITY_SHARED_ROLLOUT_ACTIVE=true`,
-  `FACILITY_SHARED_EMERGENCY_PAUSED=false`, reader sources `mmc,ddh,mch`, cohort
-  `all`, and shared metadata/day readers only. Contacts and every builder
-  remain false, all build allowlists remain empty, and
-  `FACILITY_LEGACY_READS_PAUSED=true` permanently.
+  `FACILITY_SHARED_EMERGENCY_PAUSED=false`, reader sources
+  `mmc,ddh,mch,vhh`, cohort `all`, and shared metadata/day readers. Contact
+  readers are separately scoped to `ddh,mmc,mch`. Metadata/day builders remain
+  closed, and `FACILITY_LEGACY_READS_PAUSED=true` permanently.
 - **Data/code preservation:** The interface and shared-object implementation
   remain in `main`. Legacy broad SQL is retained only as inaccessible code
   during migration; it is not the restoration path.
@@ -124,7 +136,8 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 
 ### FR-02 — At a glance cached display during maintenance
 
-- **State:** Paused in Production by the fail-closed maintenance gate.
+- **State:** The global Production maintenance gate is inactive. Cached display
+  remains subject to current authorisation and expiry rules.
 - **Includes:** browser-local saved On shift, Staff, metadata and range views.
 - **User effect:** No cached roster or telephone data is
   shown while global maintenance is active. Cached records remain stored and
@@ -140,8 +153,9 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 
 ### FR-03 — Automatic On shift launch and contact refresh
 
-- **State:** Paused in Production. Automatic launch and 60-second contact
-  polling are explicitly suppressed while maintenance is active.
+- **State:** Automatic launch is paused in Production. The visible-page contact
+  refresh path is present, but it cannot display data when no current overlay
+  was successfully published.
 - **Control:** `FACILITY_OVERVIEW_AUTOMATIC_LAUNCH_ENABLED=false` independently
   suppresses automatic launch while manual MMC readers are restored.
 - **User effect:** Clinical users no longer receive the intended automatic live
@@ -156,14 +170,16 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 
 ### FR-04 — Live contact allocations and Creator corrections
 
-- **State:** Contact readers restored for DDH, MMC and MCH. Publication is
-  paused while source automation is made resistant to autosave bursts.
+- **State:** Contact readers are enabled for DDH, MMC and MCH. Contact ingress
+  accepts the exact DDH and MMC sources, but the 27 September DDH user test
+  showed no contact details. Publication is therefore not considered restored
+  until its current-date overlay is visible end to end.
 - **Includes:** MMC/DDH contact overlays, automatic roster/contact matching,
   unresolved-number review and temporary Creator corrections.
 - **Controls:** Production contact readers are enabled only for
-  `ddh,mmc,mch`. `CONTACT_AUTOMATION_WRITES_ENABLED=false` and the empty
-  automation allowlist stop all publication requests before D1. Both DDH and
-  MMC Power Automate contact flows are Off. VHH contacts remain excluded.
+  `ddh,mmc,mch`. Contact ingress and the contact builder are open only for the
+  exact DDH and MMC source IDs. The Power Automate flows' current On/Off state
+  is external and must be read back. VHH contacts remain excluded.
 - **Data/code preservation:** Contact matching, overnight carry, expiry and
   optimistic correction logic remain in the repository. Pausing does not
   intentionally remove saved extracts or corrections.
@@ -219,19 +235,20 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 
 ### FR-07 — Automatic roster synchronisation
 
-- **State:** Partially restored. MMC, MCH and VHH are enabled; DDH remains
-  paused after an isolated upstream HTTP 503 response.
+- **State:** Server ingress and queue processing are enabled for MMC, MCH, DDH
+  and VHH. The external recurring triggers and next genuine changed-source
+  update still require a single reconciled end-to-end verification.
 - **Includes:** FindMyShift change checking, generic automated upload, VHH
   extraction, derived processing, queue dispatch and pending work processing.
 - **Controls:** Production roster automation writes and bounded queue processing
   are enabled only for the exact allowlist `monash-adults,monash-paeds,
-  vhh-active-medical-roster`. DDH, contacts, Preview and unrelated automation
-  remain excluded.
+  dandenong-findmyshift,vhh-active-medical-roster`. Preview and unrelated
+  automation remain excluded.
 - **Data/code preservation:** Configured sources have not intentionally been
   removed. The UI's unavailable status is not evidence that they disappeared.
-- **Restoration outcome:** Restore automation one source at a time after manual
-  incremental ingestion is proven. Provider file identity/version must be the
-  idempotency key; polling an unchanged source must not rewrite D1.
+- **Restoration outcome:** Verify the four independently stoppable sources as
+  one functional batch. Provider file identity/version must be the idempotency
+  key; polling an unchanged source must not rewrite D1.
 - **Required evidence:** source-specific no-change, correction, replacement and
   failure/retry tests; bounded dispatch; no duplicate queue entries; exact
   allowlist containing only the canary source; account-wide before/after
@@ -239,18 +256,19 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 
 ### FR-08 — Automated contact-list ingestion
 
-- **State:** Paused independently of roster automation after the DDH workbook
-  trigger produced repeated runs during editing/autosave. The recursive Office
-  Script path has now been removed from both saved flows, but both DDH and MMC
-  contact flows remain Off pending serial canaries.
+- **State:** The non-recursive workbook endpoint is deployed and exact DDH/MMC
+  ingress is open. DDH was last recorded On and MMC Off, but external state
+  must be read back. The user-visible DDH failure invalidates the previous
+  success gate; both supported sources require end-to-end evidence.
 - **Includes:** receiving new contact extracts and publishing updated contact
   overlays.
-- **Controls:** `CONTACT_AUTOMATION_WRITES_ENABLED=false` and empty
-  `CONTACT_AUTOMATION_SOURCE_ALLOWLIST`.
-- **Restoration outcome:** Enable one named source only after its provider
-  revision, maximum payload, bounded retention and unchanged-input no-op tests
-  pass. Restore separately from roster automation so either can be stopped
-  without affecting the other.
+- **Controls:** `CONTACT_AUTOMATION_WRITES_ENABLED=true` in Production with the
+  exact allowlist `ddh-daily-contact-sheet,mmc-shift-allocations`; Preview is
+  closed. These controls provide authority, not proof that an external flow
+  submitted a valid current overlay.
+- **Restoration outcome:** Verify DDH and MMC/MCH as one functional batch while
+  retaining source-specific stop controls. Provider revision, maximum payload,
+  bounded retention and unchanged-input no-op requirements still apply.
 - **Additional gate:** Each source flow must debounce/coalesce SharePoint
   autosave events so only the newest settled file revision reaches SharePoint
   `Get file content` and the binary HTTP step. No automatic flow may run an
@@ -506,7 +524,9 @@ pause, and future maintenance work must not accidentally disable them.
 
 ### FR-25 — Retained deployments with Production D1 bindings
 
-- **State:** Contained at the Pages deployment layer. On 10 September, the
+- **State:** The original accumulation was contained on 10 September, but
+  deployments have accumulated again during recovery and require another
+  control-plane inventory and cleanup. On 10 September, the
   complete control-plane inventory showed 262 callable deployments: eight
   Production and 254 Preview. Seven superseded Production deployments and all
   254 Preview deployments were deleted. Independent environment-specific
@@ -516,10 +536,12 @@ pause, and future maintenance work must not accidentally disable them.
   current code. Preview D1 reported zero rows during the investigated incidents,
   so retained Preview deployments were not proved to be their cause; deletion
   nevertheless removes their callable URLs and code as a future risk.
-- **Containment:** Keep only the current Production deployment. After any future
-  release is verified, delete its predecessor and any generated Preview
-  deployment. Git history remains the source for rollback; rollback requires a
-  deliberate fresh deployment with current fail-closed configuration.
+- **Containment:** During an active release, keep the current Production
+  deployment and at most one verified predecessor for immediate rollback.
+  After acceptance, delete the predecessor and any generated Preview
+  deployment. Git history remains the long-term rollback source; any older
+  version must be deliberately redeployed with current fail-closed
+  configuration.
 
 ### FR-26 — Automatic Creator login/bootstrap fan-out
 
@@ -599,10 +621,10 @@ pause, and future maintenance work must not accidentally disable them.
 
 ## Restoration order
 
-The order restores the core personal-calendar service before At a glance and
-does not reopen several D1 consumers at once. The detailed source-by-source
-sequence and acceptance gates are authoritative in
-[`core-calendar-sync-restoration-plan.md`](./core-calendar-sync-restoration-plan.md):
+The authoritative order is now the batch-based
+[`full-service-restoration-plan.md`](./full-service-restoration-plan.md). The
+older source-by-source sequence below is retained only as incident history and
+is no longer the active rollout order:
 
 1. Keep the documented zero-D1 At a glance maintenance gate active and preserve
    all individual entitlements.

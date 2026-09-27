@@ -1,5 +1,10 @@
 # Core calendar synchronisation restoration plan
 
+> Rollout ordering superseded by [Full service restoration](./full-service-restoration-plan.md).
+> Retain technical requirements and historical evidence; do not restart the old
+> serial gates. New-term readiness and DDH scheduling are now Batch 1B and do
+> not depend on a roster writer's next edit.
+
 Prepared 13 September 2026 to restore current roster changes to users' personal
 calendars before resuming At a glance.
 

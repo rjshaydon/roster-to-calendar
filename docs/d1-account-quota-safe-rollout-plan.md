@@ -1,5 +1,10 @@
 # Account-wide D1 quota safety and controlled rollout plan
 
+> Rollout ordering superseded by [Full service restoration](./full-service-restoration-plan.md).
+> Account-wide reserves, admission/stop thresholds and query-cost requirements
+> remain in force. Reuse valid settled baseline evidence; the older serial
+> sequence does not require restarting observation for every feature.
+
 The temporary user-facing and pre-authentication containment layer is specified
 in [`at-a-glance-zero-d1-maintenance-plan.md`](./at-a-glance-zero-d1-maintenance-plan.md).
 It must remain active throughout passive baseline observation and until a
