@@ -59,8 +59,8 @@ assert.equal((await call(workbookBytes, {}, { ...baseHeaders, "x-contact-source-
   "unknown sources must be rejected before D1");
 assert.equal((await call(workbookBytes, {}, { ...baseHeaders, "x-contact-file-name": "Other.xlsx" })).status, 400,
   "an unexpected filename must be rejected before D1");
-assert.equal((await call(workbookBytes, {}, { ...baseHeaders, "content-type": "image/png" })).status, 415,
-  "non-workbook content must be rejected before D1");
+assert.equal((await call(workbookBytes, {}, { ...baseHeaders, "content-type": "image/png" })).status, 503,
+  "a rewritten MIME type must pass transport validation and reach the disabled-source guard");
 assert.equal((await call(new Uint8Array([1]), {
   CONTACT_AUTOMATION_WRITES_ENABLED: "true",
   CONTACT_AUTOMATION_SOURCE_ALLOWLIST: "mmc-shift-allocations",
@@ -92,6 +92,18 @@ assert.equal(sqlite.prepare("SELECT COUNT(*) AS count FROM contact_list_files").
 assert.equal(r2.puts, 1, "a new extract should store one small JSON source object");
 const writesAfterStored = db.rowsWritten;
 const putsAfterStored = r2.puts;
+
+const rewrittenMimeReplay = await call(workbookBytes, enabledEnv, {
+  ...baseHeaders,
+  "content-type": "image/png",
+  "x-provider-modified-at": "2026-08-25T01:02:00Z",
+  "x-provider-version": "etag-rewritten-mime",
+});
+assert.equal(rewrittenMimeReplay.status, 200,
+  "a valid workbook must not be rejected because Power Automate rewrote its MIME type");
+assert.equal((await rewrittenMimeReplay.json()).status, "unchanged");
+assert.equal(db.rowsWritten, writesAfterStored);
+assert.equal(r2.puts, putsAfterStored);
 
 const unchanged = await call(workbookBytes, enabledEnv, {
   ...baseHeaders,
@@ -154,6 +166,10 @@ assert.equal(r2.puts, putsAfterStored);
 
 const originalConsoleError = console.error;
 console.error = () => {};
+assert.equal((await call(new TextEncoder().encode("not an image or workbook"), enabledEnv, {
+  ...baseHeaders,
+  "content-type": "image/png",
+})).status, 422, "arbitrary content with an unexpected MIME type must fail before D1 writes");
 const invalidEnvelope = await call(new TextEncoder().encode(JSON.stringify({ value: "not-a-workbook" })), enabledEnv, {
   ...baseHeaders,
   "content-type": "application/json",

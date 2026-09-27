@@ -76,7 +76,9 @@ Every implementation step must preserve all of the following:
     presence, or base At a glance artifacts.
 11. Existing request-local D1 statement ceilings and privacy-safe attribution
     remain active.
-12. Power Automate HTTP retries remain disabled and flow concurrency is one.
+12. Power Automate HTTP retries remain disabled. Trigger concurrency control is
+    Off because enabling it delayed SharePoint change detection; the two-minute
+    latest-revision guard and semantic idempotency provide coalescing instead.
 
 ## Phase A — local endpoint and parser work
 
@@ -87,7 +89,9 @@ Every implementation step must preserve all of the following:
 3. Carry source ID, filename, provider modification time and provider
    version/ETag in fixed request headers. Do not embed a second workbook copy in
    JSON or Base64.
-4. Validate the source, exact filename, content type and size before parsing.
+4. Validate the source, exact filename and size before parsing. Treat the HTTP
+   content type as advisory because Power Automate rewrites it; require the
+   bounded body itself to decode to a valid ZIP/XLSX before any D1 access.
 5. Pass the bytes to the existing bounded functions in
    `functions/_lib/contact-list-workbook.js`.
 6. Feed the resulting normalized doctors/clinicians-only extract into the same
@@ -137,7 +141,7 @@ Apply the same pattern to each saved flow:
 5. Add SharePoint `Get file content` using the exact file identifier.
 6. POST the binary body to the new stable Production endpoint with the fixed
    source and metadata headers.
-7. Set concurrency to one and HTTP retry policy to none.
+7. Leave trigger concurrency control Off and set HTTP retry policy to none.
 8. Confirm Flow checker reports zero errors and zero warnings.
 9. Save both flows and confirm both remain Off.
 

@@ -9,10 +9,6 @@ const XLSX_CONTENT_TYPES = new Set([
   "application/octet-stream",
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 ]);
-const POWER_AUTOMATE_CONTENT_TYPES = new Set([
-  "application/json",
-  "text/plain",
-]);
 const SOURCE_RULES = new Map([
   ["ddh-daily-contact-sheet", {
     fileName: "Daily Contact Sheet.xlsx",
@@ -41,9 +37,6 @@ export async function onRequestPost(context) {
   const fileName = header(context.request, "x-contact-file-name");
   if (fileName !== rule.fileName) return Response.json({ error: "Unexpected contact workbook filename." }, { status: 400 });
   const contentType = String(context.request.headers.get("content-type") || "").split(";", 1)[0].trim().toLowerCase();
-  if (!XLSX_CONTENT_TYPES.has(contentType) && !POWER_AUTOMATE_CONTENT_TYPES.has(contentType)) {
-    return Response.json({ error: "Expected an Excel workbook." }, { status: 415 });
-  }
   if (!contactAutomationSourceEnabled(context.env, sourceId)) return contactAutomationPausedResponse();
 
   try {
@@ -70,9 +63,11 @@ async function readWorkbookBody(request, contentType, maximumBytes) {
   // Power Automate serializes connector file content as either the standard
   // { "$content-type", "$content" } JSON envelope or, in some tenants, the
   // base64 value alone. It can retain the explicitly configured XLSX HTTP
-  // content type even when the body is one of those encoded representations,
-  // so inspect the bounded body rather than trusting the MIME type alone.
-  // Arbitrary JSON or text never reaches the workbook parser.
+  // content type even when the body is one of those encoded representations.
+  // In practice it may also replace the configured MIME type entirely, so MIME
+  // is transport metadata rather than a security boundary. Inspect the bounded
+  // body itself; arbitrary content still fails strict base64/JSON and ZIP
+  // signature checks before parsing or D1 access.
   const encodedLimit = Math.ceil(maximumBytes * 4 / 3) + 4096;
   const encodedBytes = await readBodyWithLimit(request, encodedLimit);
   if (hasZipSignature(encodedBytes)) {
