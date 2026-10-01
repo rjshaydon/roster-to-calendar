@@ -1,4 +1,4 @@
-import inventory from "../../../config/d1-database-inventory.json" with { type: "json" };
+import inventory from "../../_lib/d1-account-inventory.js";
 import { d1AnalyticsQuery, settledUtcDayInterval, summarizeAnalyticsPayload } from "../../../scripts/d1-quota-budget-lib.mjs";
 import { accountMaintenanceHeadroom, outstandingMaintenance } from "../../_lib/account-maintenance-policy.js";
 import { stopAccountMaintenance } from "../../_lib/roster-maintenance-budget.js";

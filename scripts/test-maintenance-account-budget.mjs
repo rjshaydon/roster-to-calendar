@@ -6,6 +6,8 @@ import { beginMaintenanceAccounting, reserveRosterMaintenanceBudget, finishMaint
 import { createD1Meter, onRequest as middleware } from "../functions/_middleware.js";
 import { onRequestPost as admit } from "../functions/api/automation/account-budget.js";
 
+const { default: inventory } = await import("../functions/_lib/d1-account-inventory.js");
+assert.deepEqual(inventory, JSON.parse(await readFile("config/d1-database-inventory.json", "utf8")), "runtime inventory must match the verified account inventory");
 const cutoff = "2026-10-01T04:45:00.000Z";
 assert.deepEqual(outstandingMaintenance([
   { metadata_complete: 1, finished_at: "2026-10-01T04:00:00.000Z", actual_reads: 100, actual_writes: 10 },
