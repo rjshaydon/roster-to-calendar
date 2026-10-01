@@ -19,6 +19,10 @@ objects.set('month',{rows:[...rows,row('LEAVE','mmc','2026-10-02','2026-10-02','
 const result=await loadCachedRosterInsights(r2,options,'2026-10-01',event=>!event.title.includes('leave'));
 assert.equal(result.ok,true);assert.deepEqual(result.doctors.map(r=>r.doctorKey),['PEER']);assert.equal(result.source,'published-roster');
 assert.ok(reads<=4,'bounded manifest/staff/month object lookups');
+objects.get('facility-overview/v1/mmc/manifest.json').days = { '2026-10-01': { key: 'day', revision: 'day-v1' } };
+objects.set('day', { rows: [row('NIGHT','mmc','2026-09-30','2026-10-01'), rows[0]] });
+const overnight = await loadCachedRosterInsights(r2,{...options,endDate:'2026-10-01',overlapDoctorKeys:['NIGHT'],excludeDoctorKeys:['NIGHT']},'2026-10-01',()=>true);
+assert.deepEqual(overnight.doctors.map(r=>r.doctorKey), ['MINE'], 'daily attendance includes a shift starting before the requested range without reading historical months');
 objects.clear();
 const missing=await loadCachedRosterInsights(r2,options,'2026-10-01',()=>true);
 assert.equal(missing.unavailable,true,'missing publication cannot fall back to D1');

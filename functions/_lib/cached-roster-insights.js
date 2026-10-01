@@ -1,4 +1,4 @@
-import { loadPublishedFacilityRange } from './facility-overview-cache.js';
+import { loadPublishedFacilityRange, loadPublishedFacilityDays } from './facility-overview-cache.js';
 import { normalizeRosterName } from './roster.js';
 
 const SOURCES = ['mmc','mch','ddh','vhh'];
@@ -44,10 +44,25 @@ export async function loadCachedRosterInsights(r2, options, today, isWorking) {
   const issue = validateCachedInsightOptions(options);
   if (issue) return { ok: false, invalid: true, error: issue, coworkers: [], doctors: [] };
   const sources = options.sourceTypes?.length ? options.sourceTypes : SOURCES;
-  // Include the bounded maximum attendance span for a shift starting before
-  // the requested range; trim by attendance below. No event-history SQL.
-  const lookback = new Date(dateMs(options.startDate)-120*DAY).toISOString().slice(0,10);
-  const published = await loadPublishedFacilityRange(r2, sources, lookback, options.endDate, today);
+  // Keep one manifest version per source within the request. Daily facts
+  // already contain attendance from shifts starting on an earlier date.
+  const objects = new Map();
+  const cachedR2 = { async get(objectKey) {
+    if (!objects.has(objectKey)) objects.set(objectKey, Promise.resolve(r2?.get?.(objectKey)).then(async object => {
+      if (!object) return null;
+      const bytes = await object.arrayBuffer();
+      return { async arrayBuffer() { return bytes; } };
+    }));
+    return objects.get(objectKey);
+  } };
+  const firstDay = await loadPublishedFacilityDays(cachedR2, sources, options.startDate, today);
+  const published = options.startDate === options.endDate && !firstDay.preparing
+    ? { preparing: false, events: firstDay.rows, revision: firstDay.revision }
+    : await loadPublishedFacilityRange(cachedR2, sources, options.startDate, options.endDate, today);
+  if (!published.preparing && !firstDay.preparing) {
+    published.events = [...new Map([...published.events, ...firstDay.rows].map(row =>
+      [`${row.sourceType}|${key(row.doctorKey)}|${row.event?.id || `${row.event?.start}|${row.event?.end}|${row.event?.title}`}`, row])).values()];
+  }
   if (published.preparing) return { ok: false, unavailable: true, coworkers: [], doctors: [] };
   if (published.events.length > 50000) return { ok: false, unavailable: true, coworkers: [], doctors: [] };
   const rows = selectCachedInsightRows(published.events.filter(row => isWorking(row.event, row.sourceType) && String(row.event?.start || "").slice(0,10) <= options.endDate && String(row.event?.end || row.event?.start || "").slice(0,10) >= options.startDate), options);

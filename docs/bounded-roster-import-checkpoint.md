@@ -198,3 +198,38 @@ Otherwise a legitimate one-off import was incorrectly forecast as repeating all
 day. Unknown/legacy costs remain conservative. Local forecast tests pass.
 Canonical deployment and visible colleague-tool verification still required for
 this additional batch; do not infer completion from the commit alone.
+
+## Successful all-site readback and published-object verification
+
+Maintenance run 36819943554 completed successfully at 15:39 AEST. Latest source
+records are successful: MMC 153 doctors / 4,168 events; MCH 80 / 2,372; DDH
+149 / 3,650; VHH 47 / 958. The run also processed the queued MCH correction
+(2,376 parsed events); later latest-file counts can differ, so do not conflate
+those figures. Current-term publication jobs are complete for all four sites;
+all errors empty. VHH's next term is published and remains hidden until
+19 October. MCH/DDH November spillover and VHH February requests remain pending
+term membership; they are not evidence of an imported next-term workbook.
+DDH's February, May and August compact coverage/status rows are all ready.
+
+Downloaded the four exact R2 manifests. MMC/MCH/DDH each have all 91 current-term
+day pointers and four monthly pointers; VHH has current/next term pointers.
+The actual cached colleague reader returned today's published working rows for
+all four sites: MMC 46, MCH 27, DDH 43, VHH 15, using 12 R2 object reads and zero
+D1 operations. No clinician details were printed or committed. The reader now
+uses daily attendance for one-day queries and the range plus first-day facts for
+longer queries, preserving overnight overlap without a historical lookback.
+Request-scoped object caching pins one manifest version per site. Tests cover
+attendance starting before the selected date.
+
+Canonical colleague deployment ca62f18b / 7d45e7c1-5ed0-4755-aeca-5f3d3d89bcc7
+was successful. The daily-reader optimisation is verified locally against actual
+published objects and requires its final deployment. Safari loaded the logged-in
+calendar, but the Mac then locked before the live colleague click. User unlock
+question is pending; visual UI confirmation remains outstanding.
+
+Settled account sample (15-minute delayed) returned GO: 160,452 reads / 2,645
+writes through 15:31 AEST. Import/publication grant at final maintenance readback:
+225,968 reads / 10,534 writes allocated, with no stop reason; these are not provider
+billing totals. Existing contact flow flags remain unchanged. Full restoration
+still includes VHH contact support, large overlapping replacements, bounded manual
+mutations, Creator directory/discovery and dedicated settings persistence.
