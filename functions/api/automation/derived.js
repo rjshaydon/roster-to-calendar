@@ -1,3 +1,5 @@
+import { rosterTermOwnership } from "../../_lib/roster-term-ownership.js";
+import { reserveRosterMaintenanceBudget, maintenanceBudgetDeferredError } from "../../_lib/roster-maintenance-budget.js";
 import { automationSourceDefinition } from "../../_lib/automation-import.js";
 import { handleBoundedRosterRequest } from "../../_lib/roster-import-protocol.js";
 import {
@@ -30,7 +32,7 @@ export async function onRequestPost(context) {
     if (!automatedRosterSourceEnabled(context.env, sourceId)) return rosterWritePausedResponse();
     const source = automationSourceDefinition(sourceId);
     if (!source && phase !== "failed") return Response.json({ error: "Unknown automation source." }, { status: 400 });
-    if (phase.startsWith("bounded-")) return handleBoundedRosterRequest(context, { ...body, sourceId }, source, resolveCompleteTarget);
+    if (phase.startsWith("bounded-")) return handleBoundedRosterRequest(context, { ...body, sourceId }, source, (...args) => resolveCompleteTarget(...args, context.env));
     if (!["start", "events", "finish", "complete", "failed"].includes(phase)) {
       return Response.json({ error: "A valid derived-save phase is required." }, { status: 400 });
     }
@@ -89,7 +91,7 @@ export async function onRequestPost(context) {
     }
     const currentSource = phase === "complete" ? await loadRosterSource(context.env.ROSTER_DB, sourceId) : null;
     const target = phase === "complete"
-      ? await resolveCompleteTarget(context.env.ROSTER_DB, source, sourceId, run, body.eventsByDoctor, currentSource)
+      ? await resolveCompleteTarget(context.env.ROSTER_DB, source, sourceId, run, body.eventsByDoctor, currentSource, context.env)
       : { fileId: run.fileId, preserveActiveFile: false };
     const targetFileId = target.fileId;
     const saved = await runAutomatedDerivedRosterSave(context, {
@@ -192,7 +194,7 @@ export async function onRequestPost(context) {
 
 // Source pointers identify the latest delivery, not the only retained term.
 // Probe compact rows for this ED, never the growing event history.
-async function resolveCompleteTarget(db, source, sourceId, run, eventsByDoctor, currentSource) {
+async function resolveCompleteTarget(db, source, sourceId, run, eventsByDoctor, currentSource, env = {}) {
   const dates = Object.values(eventsByDoctor || {}).flat().map((event) => String(event?.start || "").slice(0, 10)).filter(Boolean).sort();
   const firstTerm = australianTermStartForDate(dates[0]);
   const lastTerm = australianTermStartForDate(dates.at(-1));
@@ -204,13 +206,16 @@ async function resolveCompleteTarget(db, source, sourceId, run, eventsByDoctor, 
     WHERE f.source_type = ? AND f.active = 1 LIMIT 33`).bind(source.sourceType).all();
   if (rows.results.length > 32) throw new Error("Roster target lookup exceeds the 32-active-file safety budget.");
   const candidates = rows.results.filter((row) => row.source_id === sourceId);
+  if (String(env.ROSTER_AUTOMATION_BOUNDED_IMPORT_ENABLED || "") === "true" && !await reserveRosterMaintenanceBudget(db, 0, candidates.length * 752 + 64)) throw maintenanceBudgetDeferredError();
   const matches = [];
   for (const row of candidates) {
-    const startTerm = australianTermStartForDate(row.coverage_start);
-    const endTerm = australianTermStartForDate(row.coverage_end);
+    const ownership = await rosterTermOwnership(db, row.id);
+    const startTerm = ownership.firstTerm;
+    const endTerm = ownership.lastTerm;
     if (row.derived_state !== "ready" || !startTerm || !endTerm) throw new Error("Existing automated roster coverage is not ready for a safe replacement.");
-    if (startTerm === firstTerm && endTerm === lastTerm) matches.push(row);
-    else if (startTerm <= lastTerm && endTerm >= firstTerm) throw new Error("Incoming roster overlaps a different retained term range; replacement requires staged review.");
+    const overlaps = ownership.firstDate <= dates.at(-1) && ownership.lastDate >= dates[0];
+    if (overlaps && startTerm === firstTerm && endTerm === lastTerm) matches.push(row);
+    else if (overlaps) throw new Error("Incoming roster overlaps a different retained term range; replacement requires staged review.");
   }
   if (matches.length > 1) throw new Error("Multiple automated rosters match the incoming term; replacement requires review.");
   const current = candidates.find((row) => row.id === currentSource?.activeFileId);

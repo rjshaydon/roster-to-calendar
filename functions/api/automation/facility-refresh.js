@@ -4,7 +4,7 @@ import { automaticFacilityPublicationEnabled, facilityRefreshStatements, facilit
 import { reserveRosterMaintenanceBudget } from "../../_lib/roster-maintenance-budget.js";
 import { automatedRosterSourceEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
 
-import { australianTermStartForDate, australianTermEndForStart } from "../../_lib/d1-calendar.js";
+import { australianTermStartForDate, australianTermEndForStart, refreshFacilityOverviewMaterializationForFile, upsertRosterFileStatusSummaryStatement } from "../../_lib/d1-calendar.js";
 
 const SOURCES = Object.freeze({ "monash-adults": "mmc", "monash-paeds": "mch", "dandenong-findmyshift": "ddh", "vhh-active-medical-roster": "vhh" });
 const READ_RESERVATION = 125000;
@@ -20,6 +20,39 @@ export async function onRequestPost(context) {
   const source = SOURCES[body.sourceId];
   if (!source || !automatedRosterSourceEnabled(context.env, body.sourceId) || !automaticFacilityPublicationEnabled(context.env, source)) return rosterWritePausedResponse();
   const db = context.env.ROSTER_DB;
+  if (body.mode === "prepare-coverage") {
+    const files = await db.prepare(`SELECT f.*, c.coverage_start, c.coverage_end, s.derived_state
+      FROM roster_files f INDEXED BY idx_roster_files_source_active
+      LEFT JOIN roster_file_coverage c ON c.file_id = f.id LEFT JOIN roster_file_status_summaries s ON s.file_id = f.id
+      WHERE f.source_type = ? AND f.active = 1 LIMIT 33`).bind(source).all();
+    if (files.results.length > 32) return Response.json({ ok: false, reason: "active-file-limit" }, { status: 409 });
+    const missing = files.results.find((file) => file.source_id === body.sourceId && (!file.coverage_start || !file.coverage_end || file.derived_state !== "ready"));
+    if (!missing) return Response.json({ ok: true, idle: true });
+    const day = new Date().toISOString().slice(0, 10);
+    if (!await reserveRosterMaintenanceBudget(db, 4564, 100000)) return Response.json({ ok: true, deferred: true });
+    // Every first() in this exact-file primitive is a PK/scalar query. Opt in
+    // to metadata-bearing all() so measured unused reservations can be refunded.
+    const meter = createD1Meter(db, 760, { firstViaAll: true });
+    const result = await refreshFacilityOverviewMaterializationForFile(meter.binding, missing.id, {
+      sourceType: source, maximumEventRows: 25000, maximumDoctorRows: 512,
+      maximumExistingStaffRows: 750, maximumExistingCatalogRows: 750, maximumWrites: 750,
+    });
+    if (result.overBudget || result.ok === false) return Response.json(result, { status: 409 });
+    if (!result.eventCount) return Response.json({ ok: false, reason: "retained-file-has-no-shifts" }, { status: 409 });
+    await upsertRosterFileStatusSummaryStatement(meter.binding, {
+      id: missing.id, sourceType: source, sourceId: missing.source_id, name: missing.name,
+      active: true, derivedState: "ready", expectedDoctorCount: result.doctorCount,
+      indexedDoctorCount: result.doctorCount, eventCount: result.eventCount,
+      contentRevision: result.contentRevision, size: missing.size, lastModified: missing.last_modified,
+    }).run();
+    if (meter.rowsRead > 100000 || meter.rowsWritten > 4500) {
+      await db.prepare("UPDATE roster_import_daily_budget SET reserved_reads=500000, reserved_writes=10000 WHERE utc_day=?").bind(day).run();
+      throw new Error("Coverage preparation exceeded its reservation; maintenance stopped.");
+    }
+    if (meter.metadataComplete) await db.prepare("UPDATE roster_import_daily_budget SET reserved_reads=MAX(0,reserved_reads-?), reserved_writes=MAX(0,reserved_writes-?) WHERE utc_day=?")
+      .bind(100000-meter.rowsRead, 4500-meter.rowsWritten, day).run();
+    return Response.json({ ok: true, prepared: true, sourceType: source, eventCount: result.eventCount });
+  }
   if (body.seedCurrent === true) {
     if (!await reserveRosterMaintenanceBudget(db, 64, 2048)) return Response.json({ ok: true, deferred: true });
     const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Australia/Melbourne", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
@@ -52,7 +85,8 @@ export async function onRequestPost(context) {
       await db.prepare("UPDATE roster_import_daily_budget SET reserved_reads = 500000, reserved_writes = 10000 WHERE utc_day = ?").bind(day).run();
       throw new Error("Publication exceeded its reserved cost; maintenance stopped for this UTC day.");
     }
-    if (result.ok) {
+    if (result.reason === "term-not-prepared") result = { ...result, ok: true, deferred: true, waitingForTerm: true };
+    if (result.ok && !result.deferred) {
       await db.prepare(`UPDATE facility_refresh_jobs SET plan_json = ?, next_batch = ?, next_month = ?, status = ?, last_error = '', updated_at = ?
         WHERE source_type = ? AND term_start = ? AND request_revision = ? AND next_batch = ? AND next_month = ?`)
         .bind(mode === "plan" ? JSON.stringify(result) : job.plan_json,
@@ -74,5 +108,5 @@ export async function onRequestPost(context) {
         .bind(READ_RESERVATION - meter.rowsRead, day).run();
     }
   }
-  return Response.json({ ...result, completed: result.ok && mode === "finalize" }, { status: result.ok ? 200 : 409 });
+  return Response.json({ ...result, completed: result.ok && !result.deferred && mode === "finalize" }, { status: result.ok ? 200 : 409 });
 }

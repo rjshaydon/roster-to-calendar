@@ -24,6 +24,7 @@ export async function planRosterImportBatches(payload, options = {}) {
   let indexedEventCount = 0;
   let startDate = "";
   let endDate = "";
+  let rosterEndDate = "";
   let batch = emptyBatch();
   const finishBatch = () => {
     if (!batch.facts) return;
@@ -45,6 +46,7 @@ export async function planRosterImportBatches(payload, options = {}) {
           const to = String(item.end || item.start).slice(0, 10);
           if (!startDate || from < startDate) startDate = from;
           if (!endDate || to > endDate) endDate = to;
+          if (!rosterEndDate || from > rosterEndDate) rosterEndDate = from;
         }
         // Include presence expansion and two doctor/membership rows; staging
         // bookkeeping/receipts get a fixed reserve, separate from fact rows.
@@ -67,11 +69,12 @@ export async function planRosterImportBatches(payload, options = {}) {
   finishBatch();
   if (batches.some((entry) => new TextEncoder().encode(JSON.stringify(entry)).length > ROSTER_BATCH_BYTE_LIMIT)) throw new Error("Encoded roster batch exceeds its payload safety budget.");
   if (!eventCount || eventCount > 25000 || issueCount > 5000) throw new Error("Roster exceeds the reviewed total event/issue bounds.");
-  const stable = { schemaVersion: 1, sourceId, fileId: payload.file.id, contentHash: payload.file.contentHash || "", doctors, batches, eventCount, issueCount, startDate, endDate, maximumFacts: limit };
+  const stable = { schemaVersion: 1, sourceId, fileId: payload.file.id, contentHash: payload.file.contentHash || "", doctors, batches, eventCount, issueCount, startDate, endDate, rosterEndDate, maximumFacts: limit };
   const manifest = { ...stable, batches: await Promise.all(batches.map(async (batch) => ({
     index: batch.index, hash: await rosterImportDigest(batch), eventCount: batch.eventCount,
     issueCount: batch.issueCount, indexedEventCount: batch.indexedEventCount, presenceRows: batch.presenceRows,
   }))) };
+  validateRosterImportManifest(manifest);
   return { ...stable, manifest, revision: await rosterImportDigest(manifest) };
 }
 
@@ -93,7 +96,8 @@ export function validateRosterImportManifest(manifest) {
     if (batch.indexedEventCount !== events) throw new Error("Invalid batch completion cursor.");
   }
   if (events !== manifest.eventCount || issues !== manifest.issueCount || !events || events > 25000 || issues > 5000) throw new Error("Invalid manifest total counts.");
-  presenceRowCount({ start: manifest.startDate, end: manifest.endDate });
+  presenceRowCount({ start: manifest.startDate, end: manifest.endDate }, 180);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(manifest.rosterEndDate) || manifest.rosterEndDate < manifest.startDate || manifest.rosterEndDate > manifest.endDate) throw new Error("Invalid shift-start ownership range.");
 }
 
 export function validateRosterImportBatch(batch, manifest) {
@@ -108,7 +112,7 @@ export function validateRosterImportBatch(batch, manifest) {
     for (const [key, rows] of Object.entries(map || {})) {
       if (!keys.has(key) || !Array.isArray(rows) || new Set(rows.map((entry) => entry.id)).size !== rows.length || rows.some((entry) => !entry.id)) throw new Error("Invalid batch occurrence list.");
       for (const row of rows) {
-        if (kind === "event") { events++; presence += presenceRowCount(row); } else issues++;
+        if (kind === "event") { if (String(row.start).slice(0, 10) < manifest.startDate || String(row.start).slice(0, 10) > manifest.rosterEndDate) throw new Error("Batch shift start is outside its pinned ownership range."); events++; presence += presenceRowCount(row); } else issues++;
       }
     }
   }
@@ -119,14 +123,14 @@ function emptyBatch() {
   return { doctors: [], eventsByDoctor: {}, issuesByDoctor: {}, facts: 0, bytes: 0, presenceRows: 0, eventCount: 0, issueCount: 0 };
 }
 
-function presenceRowCount(event) {
+function presenceRowCount(event, maximum = 120) {
   const from = String(event.start || "").slice(0, 10);
   const to = String(event.end || event.start || "").slice(0, 10);
   const valid = (value) => /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
   if (!valid(from) || !valid(to)) throw new Error("Invalid roster event date.");
   // Match the existing daily-presence index's inclusive end-date semantics.
   const rows = (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86400000 + 1;
-  if (rows < 1 || rows > 120) throw new Error("Roster event span exceeds the 120-day safety budget.");
+  if (rows < 1 || rows > maximum) throw new Error(`Roster event span exceeds the ${maximum}-day safety budget.`);
   return rows;
 }
 

@@ -1,3 +1,4 @@
+import { rosterTermOwnership } from "./roster-term-ownership.js";
 import { boundedRosterEventStatements, boundedRosterPresenceStatements, startDerivedRosterFileSave, refreshFacilityOverviewMaterializationForFile, australianTermStartForDate, australianTermEndForStart, facilitySmsMembershipStatement } from "./d1-calendar.js";
 import { rosterImportDigest, validateRosterImportManifest, validateRosterImportBatch, ROSTER_BATCH_FACT_LIMIT, ROSTER_BATCH_BYTE_LIMIT, ROSTER_IMPORT_WRITE_COST as COST } from "./roster-import-batches.js";
 import { reserveRosterMaintenanceBudget } from "./roster-maintenance-budget.js";
@@ -107,22 +108,29 @@ export async function activateBoundedRosterTerm(db, runId, revision, options = {
   const coverage = await db.prepare("SELECT * FROM roster_file_coverage WHERE file_id = ?").bind(job.file_id).first();
   const file = await db.prepare("SELECT source_type, active FROM roster_files WHERE id = ?").bind(job.file_id).first();
   if (!coverage || !file || Number(file.active) === 1) throw new Error("Prepared inactive roster is unavailable.");
-  const termStart = australianTermStartForDate(coverage.coverage_start);
-  const termEnd = australianTermStartForDate(coverage.coverage_end);
+  const manifest = JSON.parse(job.manifest_json);
+  if (!await reserveRosterMaintenanceBudget(db, manifest.doctors.length * COST.sms + COST.control, 100000)) return { deferred: true };
+  const ownership = await rosterTermOwnership(db, job.file_id);
+  const termStart = ownership.firstTerm;
+  const termEnd = ownership.lastTerm;
   const existing = await db.prepare(`SELECT f.id, c.coverage_start, c.coverage_end FROM roster_files f INDEXED BY idx_roster_files_source_active
     LEFT JOIN roster_file_coverage c ON c.file_id = f.id WHERE f.source_type = ? AND f.active = 1 LIMIT 33`).bind(file.source_type).all();
-  if (existing.results.length > 32 || existing.results.some((row) => !row.coverage_start || !row.coverage_end || (australianTermStartForDate(row.coverage_start) <= termEnd && australianTermStartForDate(row.coverage_end) >= termStart))) throw new Error("Bounded activation requires a disjoint new term with prepared existing coverage.");
+  if (existing.results.length > 32) throw new Error("Bounded activation requires at most 32 active files.");
+  for (const row of existing.results) {
+    if (!row.coverage_start || !row.coverage_end) throw new Error("Bounded activation requires prepared existing coverage.");
+    const old = await rosterTermOwnership(db, row.id);
+    if (old.firstDate <= ownership.lastDate && old.lastDate >= ownership.firstDate) throw new Error("Bounded activation requires a disjoint new term.");
+  }
   const now = new Date().toISOString();
-  const manifest = JSON.parse(job.manifest_json);
-  if (!await reserveRosterMaintenanceBudget(db, manifest.doctors.length * COST.sms + COST.control, 60000)) return { deferred: true };
   // Only small control rows change here. Events and presence are already
   // prepared; active readers switch to the complete file atomically.
   const activation = await db.batch([
     db.prepare(`UPDATE roster_files SET active = 1 WHERE id = ? AND active = 0 AND NOT EXISTS (
       SELECT 1 FROM roster_files f INDEXED BY idx_roster_files_source_active
       LEFT JOIN roster_file_coverage c ON c.file_id = f.id
-      WHERE f.source_type = ? AND f.active = 1 AND (c.file_id IS NULL OR (c.coverage_start <= ? AND c.coverage_end >= ?)))`)
-      .bind(job.file_id, file.source_type, australianTermEndForStart(termEnd), termStart),
+      WHERE f.source_type = ? AND f.active = 1 AND (c.file_id IS NULL OR NOT EXISTS (SELECT 1 FROM facility_stream_catalog_contributions own WHERE own.file_id = f.id)
+        OR EXISTS (SELECT 1 FROM facility_stream_catalog_contributions own WHERE own.file_id = f.id GROUP BY own.file_id HAVING MIN(own.first_date) <= ? AND MAX(own.last_date) >= ?)))`)
+      .bind(job.file_id, file.source_type, ownership.lastDate, ownership.firstDate),
     db.prepare("UPDATE roster_file_status_summaries SET active = 1, derived_state = 'ready', content_revision = ?, status_revision = ?, updated_at = ? WHERE file_id = ? AND EXISTS (SELECT 1 FROM roster_files f WHERE f.id = file_id AND f.active = 1)")
       .bind(revision, crypto.randomUUID(), now, job.file_id),
     db.prepare("UPDATE roster_import_jobs SET activated = 1 WHERE run_id = ? AND plan_revision = ? AND EXISTS (SELECT 1 FROM roster_files f WHERE f.id = file_id AND f.active = 1)").bind(runId, revision),

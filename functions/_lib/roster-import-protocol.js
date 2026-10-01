@@ -18,7 +18,7 @@ export async function handleBoundedRosterRequest(context, body, source, resolveT
         const manifest = body.manifest;
         if (!manifest || manifest.contentHash !== run.contentHash || manifest.maximumFacts !== 1250) throw new Error("Bounded plan does not match the queued content or reviewed fact budget.");
         const current = await loadRosterSource(db, run.sourceId);
-        const target = await resolveTarget(db, source, run.sourceId, run, { range: [{ start: manifest.startDate }, { start: manifest.endDate }] }, current);
+        const target = await resolveTarget(db, source, run.sourceId, run, { range: [{ start: manifest.startDate }, { start: manifest.rosterEndDate }] }, current);
         if (target.fileId !== run.fileId) return Response.json({ ok: true, mode: "complete" });
         result = await beginBoundedRosterImport(db, run.id, file, { manifest, revision: body.revision });
         // An activated job still needs the completion callback if its earlier
@@ -46,6 +46,7 @@ export async function handleBoundedRosterRequest(context, body, source, resolveT
     }
     return Response.json({ ok: true, mode: "bounded", ...result });
   } catch (error) {
+    if (error?.code === "ROSTER_MAINTENANCE_DEFERRED") return Response.json({ ok: true, deferred: true });
     // Retain the inactive file and receipts for retry. Do not enter the legacy
     // failed callback's destructive cleanup path after an interrupted batch.
     console.error("Bounded roster import stopped", { runId: body.runId, message: error.message });

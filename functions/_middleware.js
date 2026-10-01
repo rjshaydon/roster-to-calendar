@@ -111,6 +111,9 @@ async function requestD1StatementLimit(request, pathname, action) {
       return DEFAULT_D1_STATEMENT_LIMIT;
     }
   }
+  if (pathname === "/api/automation/facility-refresh" && request.method === "POST") {
+    try { if ((await request.clone().json())?.mode === "prepare-coverage") return 768; } catch {}
+  }
   if (["/api/automation/facility-bootstrap", "/api/automation/facility-materialize"].includes(pathname) && request.method === "POST") {
     try {
       const body = await request.clone().json();
@@ -212,7 +215,7 @@ function callerClass(request, pathname) {
   return "interactive-or-unknown";
 }
 
-export function createD1Meter(database, limit) {
+export function createD1Meter(database, limit, options = {}) {
   const state = { statementCount: 0, rowsRead: 0, rowsWritten: 0, metadataComplete: true };
   const originals = new WeakMap();
   const before = (count = 1) => {
@@ -244,6 +247,11 @@ export function createD1Meter(database, limit) {
         };
         if (property === "first") return async (...args) => {
           before();
+          if (options.firstViaAll) {
+            const result = record(await target.all());
+            const row = result.results?.[0] || null;
+            return args[0] ? row?.[args[0]] ?? null : row;
+          }
           state.metadataComplete = false;
           return target.first(...args);
         };

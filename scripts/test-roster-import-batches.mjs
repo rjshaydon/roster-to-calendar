@@ -30,3 +30,16 @@ await assert.rejects(planRosterImportBatches({ ...small, eventsByDoctor: { [doct
 await assert.rejects(planRosterImportBatches({ ...small, eventsByDoctor: { UNKNOWN: [] } }), /unknown doctor/);
 await assert.rejects(planRosterImportBatches(small, { maximumFacts: 20 }), /exceeds the batch safety budget/);
 console.log("Bounded import planning passed 18,000-shift terms for all four sources, deterministic retries, correction fencing, and leave expansion budgets.");
+
+const vhhSpanning = structuredClone(small);
+vhhSpanning.file.sourceId = "vhh-active-medical-roster";
+const key = vhhSpanning.doctors[0].key;
+vhhSpanning.eventsByDoctor = { [key]: [
+  { id: "start", start: "2026-09-21T08:00:00", end: "2026-09-21T18:00:00" },
+  { id: "end", start: "2027-01-31T22:00:00", end: "2027-02-01T08:00:00" },
+] };
+const vhhSpanningPlan = await planRosterImportBatches(vhhSpanning);
+assert.equal(vhhSpanningPlan.manifest.rosterEndDate, "2027-01-31");
+assert.equal(vhhSpanningPlan.manifest.endDate, "2027-02-01");
+vhhSpanning.eventsByDoctor[key][1] = { id: "too-far", start: "2027-04-01T08:00:00", end: "2027-04-01T18:00:00" };
+await assert.rejects(planRosterImportBatches(vhhSpanning), /180-day/);

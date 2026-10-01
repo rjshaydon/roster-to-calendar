@@ -897,6 +897,12 @@ for (const [sourceId, sourceType] of [["monash-adults", "mmc"], ["monash-paeds",
 
 console.log("Facility materialisation and automated-handler checks passed unchanged, correction, overlap, SMS continuity, and 14-day visibility checks.");
 
+// An overnight shift may attend the first day of the next term without
+// owning that term. Both target selection and activation must preserve it.
+const previousNightFile = { ...file, id: "http-previous-night", sourceId: "monash-adults" };
+await replaceDerivedRosterFile(routeDb, previousNightFile, doctors, { "TERM TRAINEE": [{ ...event("previous-night", "2028-02-06", "Night"), start: "2028-02-06T22:00:00", end: "2028-02-07T08:00:00" }] });
+assert.equal(routeSqlite.prepare("SELECT coverage_end FROM roster_file_coverage WHERE file_id=?").get(previousNightFile.id).coverage_end, "2028-02-07");
+
 // Exercise the production HTTP protocol through middleware, interruption,
 // completion bookkeeping failure, and durable cursor replay.
 const httpFile = { ...file, id: "http-bounded-file", contentHash: "http-content", sourceId: "monash-adults", active: false };
@@ -972,6 +978,14 @@ try {
   const seedDeferred = await httpStep({ sourceId: "monash-adults", seedCurrent: true }, httpEnv, refreshFacility, "facility-refresh");
   assert.equal(seedDeferred.data.deferred, true);
   routeSqlite.prepare("UPDATE roster_import_daily_budget SET reserved_writes=0, reserved_reads=0").run();
+  routeSqlite.prepare("DELETE FROM roster_file_coverage WHERE file_id=?").run(previousNightFile.id);
+  routeSqlite.prepare("DELETE FROM roster_file_status_summaries WHERE file_id=?").run(previousNightFile.id);
+  const prepared = await httpStep({ sourceId: "monash-adults", mode: "prepare-coverage" }, httpEnv, refreshFacility, "facility-refresh");
+  assert.equal(prepared.status, 200, JSON.stringify(prepared.data));
+  assert.equal(prepared.data.prepared, true);
+  assert.equal(routeSqlite.prepare("SELECT derived_state FROM roster_file_status_summaries WHERE file_id=?").get(previousNightFile.id).derived_state, "ready");
+  const preparedReplay = await httpStep({ sourceId: "monash-adults", mode: "prepare-coverage" }, httpEnv, refreshFacility, "facility-refresh");
+  assert.equal(preparedReplay.data.idle, true);
   const seeded = await httpStep({ sourceId: "monash-adults", seedCurrent: true }, httpEnv, refreshFacility, "facility-refresh");
   assert.equal(seeded.status, 200);
   assert.equal(seeded.data.seeded, true);

@@ -18,6 +18,13 @@ for (const sourceId of [...sources.slice(offset), ...sources.slice(0, offset)]) 
   try {
     const pending = await request(`/api/automation/pending?limit=1&sourceId=${encodeURIComponent(sourceId)}`);
     if (pending.paused || !pending.boundedImportEnabled || pending.maintenanceDeferred) continue;
+    let preparationDeferred = false;
+    for (let step = 0; step < 32; step += 1) {
+      const prepared = await request("/api/automation/facility-refresh", { sourceId, mode: "prepare-coverage" });
+      if (prepared.deferred) { preparationDeferred = true; break; }
+      if (prepared.idle) break;
+    }
+    if (preparationDeferred) continue;
     if (process.env.ROSTER_SEED_CURRENT_VIEWS === "true") await request("/api/automation/facility-refresh", { sourceId, seedCurrent: true });
     if (sourceId === "dandenong-findmyshift") await request("/api/automation/findmyshift-check", {});
     const parsed = spawnSync(process.execPath, ["scripts/process-roster-queue.mjs"], { stdio: "inherit", env: { ...process.env, ROSTER_AUTOMATION_SOURCE_ID: sourceId, ROSTER_AUTOMATION_RESUME_ONLY: "true" }, timeout: 480000 });

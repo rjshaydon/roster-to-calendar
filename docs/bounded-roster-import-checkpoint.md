@@ -8,7 +8,7 @@ User authorised a combined restoration batch and safe automatic continuation.
 
 - Deterministic manifests and hash-pinned, ordered chunks for MMC, MCH, DDH and
   VHH; 1,250 weighted facts per chunk, 512 KiB payload, 512 doctors, 25,000
-  events, 5,000 issues, and 120-day maximum roster span.
+  events, 5,000 issues, and 180-day maximum workbook span (120 days per event).
 - Inactive staging, transaction receipts, durable event/presence cursors,
   initialization lease, count validation and fenced activation of disjoint terms.
   Current terms remain intact; incomplete terms remain hidden.
@@ -57,8 +57,23 @@ VHH Active Medical Roster to Production, Sync MMC clinician contacts and Sync DD
 clinician contacts are enabled. Legacy MMC allocations/bootstrap and VHH Preview
 flows are disabled.
 
-Release/readback and first maintenance outcome are recorded in the final report
-and subsequent checkpoint. Do not infer real next-term completion from local tests.
+First Production deployment: 49834951-d550-423a-88f2-09cafed3acbb, commit
+874c2f63, canonical deploy stage successful. Bounded live compact checks found
+three retained files each for MMC/MCH/DDH and two for VHH. Two older DDH files
+lacked coverage/status preparation; VHH's active workbook spans September–January.
+
+Follow-up from real readback: ownership now uses compact stream-catalogue shift
+START-date bounds, so overnight attendance cannot claim the next term and disjoint
+VHH windows can coexist. No history scan or date guessing. The first maintenance
+pass prepares missing exact-source compact records one file at a time (25,000
+events, 512 doctors, 750 mutations maximum), reserves indexed costs before work,
+and refunds measured unused costs only with complete billing metadata. It does
+not rewrite shifts. Coverage preparation is a separate explicit bounded mode;
+legacy bootstrap remains closed. Workbook span allows 180 days; chunks/day limits
+are unchanged. Future-date publication waits safely for prepared term membership.
+
+Final follow-up deployment/readback and maintenance outcome are recorded in the
+final report and subsequent checkpoint. Do not infer real next-term completion from local tests.
 
 Rollback: disable ROSTER_AUTOMATION_BOUNDED_IMPORT_ENABLED,
 FACILITY_AUTOMATIC_PUBLICATION_ENABLED and automatic launch, and cancel scheduled
