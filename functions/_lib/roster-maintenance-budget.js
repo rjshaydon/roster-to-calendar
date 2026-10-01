@@ -8,15 +8,25 @@ export function beginMaintenanceAccounting(db, requestId, enabled) {
 export async function finishMaintenanceAccounting(db, meter, bookkeepingDb = db) {
   const request = requests.get(db);
   if (!request?.reserved) return;
-  const reserved = await bookkeepingDb.prepare("SELECT reserved_reads,reserved_writes FROM roster_maintenance_receipts WHERE request_id=?").bind(request.id).first();
-  if (meter.rowsRead + 24 > Number(reserved?.reserved_reads || 0) || meter.rowsWritten + 24 > Number(reserved?.reserved_writes || 0)) {
+  const reserved = await bookkeepingDb.prepare("SELECT utc_day,reserved_reads,reserved_writes,finished_at FROM roster_maintenance_receipts WHERE request_id=?").bind(request.id).first();
+  if (!reserved || reserved.finished_at) return;
+  // Route totals already include reservation-table mutations. Allow another
+  // 24 units for this bounded settlement, including its indexes and refund.
+  const actualReads = Math.ceil(meter.rowsRead) + 24;
+  const actualWrites = Math.ceil(meter.rowsWritten) + 24;
+  if (actualReads > Number(reserved.reserved_reads) || actualWrites > Number(reserved.reserved_writes)) {
     await stopAccountMaintenance(bookkeepingDb, "cost-overrun:request");
   }
-  // Work without complete billing metadata keeps its whole reservation.
-  // Complete metadata includes all route work, not just the publication core.
-  await bookkeepingDb.prepare(`UPDATE roster_maintenance_receipts SET finished_at=?, metadata_complete=?, actual_reads=?, actual_writes=? WHERE request_id=?`)
-    .bind(new Date().toISOString(), meter.metadataComplete ? 1 : 0,
-      Math.ceil(meter.rowsRead) + 24, Math.ceil(meter.rowsWritten) + 24, request.id).run();
+  const refundReads = meter.metadataComplete ? Math.max(0, Number(reserved.reserved_reads) - actualReads) : 0;
+  const refundWrites = meter.metadataComplete ? Math.max(0, Number(reserved.reserved_writes) - actualWrites) : 0;
+  // Settlement and unused-grant release commit together. Repeated settlement
+  // cannot refund twice; unknown/lost responses retain the whole reservation.
+  await bookkeepingDb.batch([
+    bookkeepingDb.prepare(`UPDATE roster_maintenance_receipts SET finished_at=?, metadata_complete=?, actual_reads=?, actual_writes=? WHERE request_id=? AND finished_at=''`)
+      .bind(new Date().toISOString(), meter.metadataComplete ? 1 : 0, actualReads, actualWrites, request.id),
+    bookkeepingDb.prepare(`UPDATE roster_account_budget SET allocated_reads=MAX(0,allocated_reads-?),allocated_writes=MAX(0,allocated_writes-?) WHERE utc_day=? AND changes()=1`)
+      .bind(refundReads, refundWrites, reserved.utc_day),
+  ]);
 }
 
 export async function stopAccountMaintenance(db, reason) {
@@ -43,8 +53,8 @@ export async function reserveRosterMaintenanceBudget(db, writes = 0, reads = 0) 
   const day = new Date().toISOString().slice(0, 10);
   const request = requests.get(db);
   if (request) {
-    const estimatedWrites = Math.ceil(writes) + 24;
-    const estimatedReads = Math.ceil(reads) + 24;
+    const estimatedWrites = Math.ceil(writes) + 48;
+    const estimatedReads = Math.ceil(reads) + 48;
     const results = await db.batch([
       db.prepare(`UPDATE roster_account_budget SET allocated_writes=allocated_writes+?, allocated_reads=allocated_reads+?
         WHERE utc_day=? AND valid_until>? AND stop_reason=''

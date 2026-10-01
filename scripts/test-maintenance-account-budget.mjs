@@ -38,9 +38,12 @@ assert.equal(await reserveRosterMaintenanceBudget(first, 15000, 100), true, "leg
 const second = database(); beginMaintenanceAccounting(second, "second", true);
 assert.equal(await reserveRosterMaintenanceBudget(second, 5000, 100), false, "concurrent jobs share the same SQL ceiling");
 assert.equal(sqlite.prepare("SELECT COUNT(*) n FROM roster_maintenance_receipts").get().n, 1);
-assert.equal(sqlite.prepare("SELECT reserved_writes FROM roster_import_daily_budget").get().reserved_writes, 15024);
+assert.equal(sqlite.prepare("SELECT reserved_writes FROM roster_import_daily_budget").get().reserved_writes, 15048);
 await finishMaintenanceAccounting(first, { metadataComplete: true, rowsRead: 100, rowsWritten: 500 });
 assert.equal(sqlite.prepare("SELECT actual_writes FROM roster_maintenance_receipts").get().actual_writes, 524);
+assert.equal(sqlite.prepare("SELECT allocated_writes FROM roster_account_budget").get().allocated_writes, 524, "unused measured reservations release the grant immediately");
+await finishMaintenanceAccounting(first, { metadataComplete: true, rowsRead: 100, rowsWritten: 500 });
+assert.equal(sqlite.prepare("SELECT allocated_writes FROM roster_account_budget").get().allocated_writes, 524, "settlement replay cannot refund twice");
 sqlite.prepare("UPDATE roster_account_budget SET valid_until=''").run();
 assert.equal(await reserveRosterMaintenanceBudget(second, 1, 1), false, "expired analytics cannot admit work");
 sqlite.prepare("UPDATE roster_account_budget SET valid_until=?,maximum_writes=50000").run(new Date(Date.now()+600000).toISOString());
