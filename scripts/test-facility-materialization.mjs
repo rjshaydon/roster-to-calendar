@@ -692,12 +692,12 @@ async function runCompleteRoute(runId, incomingFileId, events, options = {}) {
         issuesByDoctor: {},
       }),
     }),
-    env: { ROSTER_DB: routeDb, ROSTER_AUTOMATION_TOKEN: token, ROSTER_AUTOMATION_WRITES_ENABLED: "true", ROSTER_AUTOMATION_QUEUE_ENABLED: "true", ROSTER_AUTOMATION_SOURCE_ALLOWLIST: "monash-adults" },
+    env: { ROSTER_DB: routeDb, ROSTER_AUTOMATION_TOKEN: token, ROSTER_AUTOMATION_WRITES_ENABLED: "true", ROSTER_AUTOMATION_QUEUE_ENABLED: "true", ROSTER_AUTOMATION_SOURCE_ALLOWLIST: "monash-adults", ROSTER_AUTOMATION_REVIEWED_FACT_LIMIT: "1250" },
     waitUntil(promise) { deferred.push(promise); },
   });
   await Promise.all(deferred);
   const payload = await response.json();
-  assert.equal(response.status, 200, JSON.stringify(payload));
+  assert.equal(response.status, options.expectedStatus || 200, JSON.stringify(payload));
   return payload;
 }
 
@@ -720,5 +720,68 @@ const routeCorrection = await runCompleteRoute("route-run-3", "route-file-3", co
 assert.equal(routeCorrection.fileId, "route-file-1");
 assert.equal(routeCorrection.changes.events, 1, "automated correction must update only its changed event fact");
 assert.equal(routeSqlite.prepare("SELECT COUNT(*) AS count FROM roster_files WHERE id = 'route-file-3'").get().count, 0, "correction must not create an inactive copy");
+
+const currentTermBefore = routeSqlite.prepare("SELECT id, event_json FROM roster_events WHERE file_id = 'route-file-1' ORDER BY id").all();
+const nextTermEvents = {
+  "TERM TRAINEE": [event("next-trainee", "2026-11-02", "Day")],
+  "PERMANENT SMS": [event("next-sms", "2026-11-03", "Day")],
+};
+const nextTerm = await runCompleteRoute("route-next-term", "route-next-file", nextTermEvents);
+assert.equal(nextTerm.fileId, "route-next-file", "a new term needs its own file, not the current source pointer");
+assert.deepEqual(routeSqlite.prepare("SELECT id, event_json FROM roster_events WHERE file_id = 'route-file-1' ORDER BY id").all(), currentTermBefore, "new-term ingestion must preserve all current-term events");
+assert.equal(routeSqlite.prepare("SELECT active FROM roster_files WHERE id = 'route-file-1'").get().active, 1);
+assert.equal(routeSqlite.prepare("SELECT visible_from FROM facility_term_visibility WHERE source_type='mmc' AND term_start='2026-11-02'").get().visible_from, "2026-10-19");
+
+const nextRepeat = await runCompleteRoute("route-next-repeat", "route-next-repeat-file", nextTermEvents);
+assert.equal(nextRepeat.unchanged, true);
+routeDb.rowsWritten = 0;
+const nextCallbackReplay = await runCompleteRoute("route-next-repeat", "route-next-repeat-file", nextTermEvents, { seedRun: false });
+assert.equal(nextCallbackReplay.duplicate, true, "a completion retry must recognise the original input after the target id changes");
+assert.equal(routeDb.rowsWritten, 0);
+const olderCorrection = await runCompleteRoute("route-older-correction", "route-older-input", initialEvents);
+assert.equal(olderCorrection.fileId, "route-file-1", "a correction for the retained current term must not target the upcoming term");
+assert.equal(routeSqlite.prepare("SELECT active_file_id FROM roster_sources WHERE id='monash-adults'").get().active_file_id, "route-next-file", "an older-term correction must preserve the latest-term source pointer");
+assert.equal(routeSqlite.prepare("SELECT COUNT(*) AS count FROM roster_events WHERE file_id='route-next-file'").get().count, 2);
+
+// A complete new-term payload must not bypass the reviewed fact ceiling just
+// because it has no stored predecessor. Use a realistic many-shift delivery.
+const largeNewTerm = { "TERM TRAINEE": Array.from({ length: 1251 }, (_, index) => event(`large-${index}`, "2027-02-01", "Day")) };
+const retainedBeforeFailure = routeSqlite.prepare("SELECT id, event_json FROM roster_events ORDER BY id").all();
+const oversizedRoute = await runCompleteRoute("route-large-new-term", "route-large-file", largeNewTerm, { expectedStatus: 422 });
+assert.match(oversizedRoute.error, /1250-fact safety budget/);
+assert.deepEqual(routeSqlite.prepare("SELECT id, event_json FROM roster_events ORDER BY id").all(), retainedBeforeFailure);
+assert.equal(routeSqlite.prepare("SELECT COUNT(*) AS count FROM roster_files WHERE id='route-large-file'").get().count, 0);
+
+const overlappingTerms = { "TERM TRAINEE": [...initialEvents["TERM TRAINEE"], ...nextTermEvents["TERM TRAINEE"]] };
+const rejectedOverlap = await runCompleteRoute("route-overlapping-terms", "route-overlapping-input", overlappingTerms, { expectedStatus: 422 });
+assert.match(rejectedOverlap.error, /overlaps a different retained term range/);
+assert.deepEqual(routeSqlite.prepare("SELECT id, event_json FROM roster_events ORDER BY id").all(), retainedBeforeFailure);
+const targetLookup = routeDb.sql.find((sql) => sql.includes("FROM roster_files f INDEXED BY idx_roster_files_source_active"));
+const targetQueryPlan = routeSqlite.prepare(`EXPLAIN QUERY PLAN ${targetLookup}`).all("mmc").map((row) => row.detail);
+assert.ok(targetQueryPlan.some((line) => /SEARCH f USING INDEX idx_roster_files_source_active/.test(line)));
+assert.equal(targetQueryPlan.some((line) => /SCAN|TEMP B-TREE/.test(line)), false, "target selection must use compact indexed rows without scanning event history");
+
+const lateFailure = await saveAutomatedDerivedRoster({
+  request: new Request("http://local/api/automation/derived", {
+    method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+    body: JSON.stringify({ runId: "route-next-term", sourceId: "monash-adults", phase: "failed", file: { id: "route-next-file" } }),
+  }),
+  env: { ROSTER_DB: routeDb, ROSTER_AUTOMATION_TOKEN: token, ROSTER_AUTOMATION_WRITES_ENABLED: "true", ROSTER_AUTOMATION_QUEUE_ENABLED: "true", ROSTER_AUTOMATION_SOURCE_ALLOWLIST: "monash-adults" },
+});
+assert.equal(lateFailure.status, 409);
+assert.deepEqual(routeSqlite.prepare("SELECT id, event_json FROM roster_events ORDER BY id").all(), retainedBeforeFailure, "late failure reporting must not delete completed live data");
+
+// Simulate successful activation followed by a failed bookkeeping write.
+// Cleanup must retain the live roster so retry can repair the small records.
+routeDb.failRunIncludes = "UPDATE roster_sync_runs";
+const activatedEvents = {
+  "TERM TRAINEE": [event("activated", "2027-02-01", "Day")],
+  "PERMANENT SMS": [event("activated-sms", "2027-02-02", "Day")],
+};
+await runCompleteRoute("route-bookkeeping-failure", "route-activated-file", activatedEvents, { expectedStatus: 422 });
+assert.equal(routeSqlite.prepare("SELECT active FROM roster_files WHERE id='route-activated-file'").get().active, 1);
+assert.equal(routeSqlite.prepare("SELECT COUNT(*) AS count FROM roster_events WHERE file_id='route-activated-file'").get().count, 2);
+const repairedBookkeeping = await runCompleteRoute("route-bookkeeping-failure", "route-activated-file", activatedEvents, { seedRun: false });
+assert.equal(repairedBookkeeping.unchanged, true);
 
 console.log("Facility materialisation and automated-handler checks passed unchanged, correction, overlap, SMS continuity, and 14-day visibility checks.");

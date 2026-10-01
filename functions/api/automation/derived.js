@@ -1,5 +1,6 @@
 import { automationSourceDefinition } from "../../_lib/automation-import.js";
 import {
+  australianTermStartForDate,
   deleteDerivedRosterFile,
   finishRosterSyncRun,
   hasCalendarDb,
@@ -39,7 +40,9 @@ export async function onRequestPost(context) {
       if (payloadIssue) return Response.json({ error: payloadIssue }, { status: 413 });
     }
     const run = await loadRosterSyncRun(context.env.ROSTER_DB, runId);
-    if (!run || run.sourceId !== sourceId || run.fileId !== String(body?.file?.id || "")) {
+    const incomingFileId = String(body?.file?.id || "");
+    const matchesCompletedInput = run?.status === "success" && run.sourceFileId === incomingFileId;
+    if (!run || run.sourceId !== sourceId || (run.fileId !== incomingFileId && !matchesCompletedInput)) {
       return Response.json({ error: "Queued roster job does not match the derived payload." }, { status: 400 });
     }
     if ((phase === "complete" || phase === "finish") && run.status === "success") {
@@ -52,11 +55,12 @@ export async function onRequestPost(context) {
       return Response.json({ ok: true, phase, runId, fileId: run.fileId, duplicate: true });
     }
     if (phase === "failed") {
+      if (run.status === "success") return Response.json({ error: "A completed roster cannot be removed by a failure callback." }, { status: 409 });
       const failedAt = new Date().toISOString();
       // An interrupted chunked import may have saved only some events.  Those
       // rows must never become an active calendar source; retain the original
       // workbook in R2 for retry, but remove the incomplete derived copy.
-      await deleteDerivedRosterFile(context.env.ROSTER_DB, run.fileId);
+      await deleteIncompleteRoster(context.env.ROSTER_DB, run.fileId);
       await finishRosterSyncRun(context.env.ROSTER_DB, runId, {
         status: "failed",
         fileId: run.fileId,
@@ -82,7 +86,10 @@ export async function onRequestPost(context) {
       return Response.json({ ok: true, phase, runId, fileId: run.fileId });
     }
     const currentSource = phase === "complete" ? await loadRosterSource(context.env.ROSTER_DB, sourceId) : null;
-    const targetFileId = phase === "complete" ? String(currentSource?.activeFileId || run.fileId).trim() : run.fileId;
+    const target = phase === "complete"
+      ? await resolveCompleteTarget(context.env.ROSTER_DB, source, sourceId, run, body.eventsByDoctor, currentSource)
+      : { fileId: run.fileId, preserveActiveFile: false };
+    const targetFileId = target.fileId;
     const saved = await runAutomatedDerivedRosterSave(context, {
       phase,
       // A queued source is invisible to calendars until its final phase. A
@@ -119,9 +126,9 @@ export async function onRequestPost(context) {
       // A reparse can process several historical retained files. It must not
       // move an automated source's current-file pointer to the last one that
       // happens to finish.
-      const preserveActiveFile = ["parser-rule", "creator-reprocess"].includes(run.triggerType)
+      const preserveActiveFile = target.preserveActiveFile || (["parser-rule", "creator-reprocess"].includes(run.triggerType)
         && existing?.activeFileId
-        && existing.activeFileId !== run.fileId;
+        && existing.activeFileId !== run.fileId);
       await upsertRosterSource(context.env.ROSTER_DB, {
         ...(existing || {}),
         ...source,
@@ -151,7 +158,7 @@ export async function onRequestPost(context) {
     const failedAt = new Date().toISOString();
     const diagnostic = String(error?.message || "Background roster processing failed.").slice(0, 300);
     if (runId) {
-      await deleteDerivedRosterFile(context.env.ROSTER_DB, String(body?.file?.id || "")).catch(() => null);
+      await deleteIncompleteRoster(context.env.ROSTER_DB, String(body?.file?.id || "")).catch(() => null);
       await finishRosterSyncRun(context.env.ROSTER_DB, runId, {
         status: "failed",
         fileId: String(body?.file?.id || ""),
@@ -178,6 +185,41 @@ export async function onRequestPost(context) {
     console.error("Derived roster processing failed", { code, message: diagnostic });
     return Response.json({ error: diagnostic, code }, { status: 422 });
   }
+}
+
+// Source pointers identify the latest delivery, not the only retained term.
+// Probe compact rows for this ED, never the growing event history.
+async function resolveCompleteTarget(db, source, sourceId, run, eventsByDoctor, currentSource) {
+  const dates = Object.values(eventsByDoctor || {}).flat().map((event) => String(event?.start || "").slice(0, 10)).filter(Boolean).sort();
+  const firstTerm = australianTermStartForDate(dates[0]);
+  const lastTerm = australianTermStartForDate(dates.at(-1));
+  if (!firstTerm || !lastTerm) throw new Error("Cannot establish the incoming roster term safely.");
+  const rows = await db.prepare(`SELECT f.id, f.source_id, s.derived_state, c.coverage_start, c.coverage_end
+    FROM roster_files f INDEXED BY idx_roster_files_source_active
+    LEFT JOIN roster_file_status_summaries s ON s.file_id = f.id
+    LEFT JOIN roster_file_coverage c ON c.file_id = f.id
+    WHERE f.source_type = ? AND f.active = 1 LIMIT 33`).bind(source.sourceType).all();
+  if (rows.results.length > 32) throw new Error("Roster target lookup exceeds the 32-active-file safety budget.");
+  const candidates = rows.results.filter((row) => row.source_id === sourceId);
+  const matches = [];
+  for (const row of candidates) {
+    const startTerm = australianTermStartForDate(row.coverage_start);
+    const endTerm = australianTermStartForDate(row.coverage_end);
+    if (row.derived_state !== "ready" || !startTerm || !endTerm) throw new Error("Existing automated roster coverage is not ready for a safe replacement.");
+    if (startTerm === firstTerm && endTerm === lastTerm) matches.push(row);
+    else if (startTerm <= lastTerm && endTerm >= firstTerm) throw new Error("Incoming roster overlaps a different retained term range; replacement requires staged review.");
+  }
+  if (matches.length > 1) throw new Error("Multiple automated rosters match the incoming term; replacement requires review.");
+  const current = candidates.find((row) => row.id === currentSource?.activeFileId);
+  return {
+    fileId: matches[0]?.id || run.fileId,
+    preserveActiveFile: Boolean(current && australianTermStartForDate(current.coverage_start) > firstTerm),
+  };
+}
+
+async function deleteIncompleteRoster(db, fileId) {
+  const file = await db.prepare("SELECT active FROM roster_files WHERE id = ?").bind(String(fileId)).first();
+  if (file && Number(file.active) !== 1) await deleteDerivedRosterFile(db, fileId);
 }
 
 function safeDerivedFailureCode(error) {

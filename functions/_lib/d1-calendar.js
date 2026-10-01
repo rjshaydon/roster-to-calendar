@@ -914,7 +914,9 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
   }
   const changedFactCount = changedDoctors.length + removedDoctorKeys.length + changedEventRows.length + removedEventIds.length + changedIssueRows.length + removedIssueIds.length;
   const maximumIncrementalFacts = Math.max(1, Math.min(Number(options.maximumIncrementalFacts || 250), 5000));
-  if (storedFile && changedFactCount > maximumIncrementalFacts) {
+  // Explicit automation budgets also cover first imports. Selecting a new
+  // term's independent file must not bypass the reviewed write ceiling.
+  if ((storedFile || Number(options.maximumIncrementalFacts) > 0) && changedFactCount > maximumIncrementalFacts) {
     const error = new Error(`Roster revision changes ${changedFactCount} facts, above the automatic ${maximumIncrementalFacts}-fact safety budget.`);
     error.code = "ROSTER_INCREMENTAL_BUDGET";
     error.changedFactCount = changedFactCount;
