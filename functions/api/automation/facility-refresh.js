@@ -41,14 +41,25 @@ export async function onRequestPost(context) {
       return Response.json({ ok: true, idle: true });
     }
     const day = new Date().toISOString().slice(0, 10);
-    if (!await reserveRosterMaintenanceBudget(db, 4564, 100000)) return Response.json({ ok: true, deferred: true });
+    if (!await reserveRosterMaintenanceBudget(db, 64, 100000)) return Response.json({ ok: true, deferred: true });
     // Every first() in this exact-file primitive is a PK/scalar query. Opt in
     // to metadata-bearing all() so measured unused reservations can be refunded.
     const meter = createD1Meter(db, 760, { firstViaAll: true });
+    let reservedMutationWrites = 0;
     const result = await refreshFacilityOverviewMaterializationForFile(meter.binding, missing.id, {
       sourceType: source, maximumEventRows: 25000, maximumDoctorRows: 512,
       maximumExistingStaffRows: 750, maximumExistingCatalogRows: 750, maximumWrites: 750,
+      reserveMutationWrites: async (count) => {
+        const cost = count * 6 + 4;
+        if (!await reserveRosterMaintenanceBudget(db, cost, 0)) return false;
+        reservedMutationWrites = cost;
+        return true;
+      },
     });
+    if (result.deferred) {
+      if (meter.metadataComplete && meter.rowsRead <= 100000) await db.prepare("UPDATE roster_import_daily_budget SET reserved_reads=MAX(0,reserved_reads-?) WHERE utc_day=?").bind(100000-meter.rowsRead, day).run();
+      return Response.json(result);
+    }
     if (result.overBudget || result.ok === false) return Response.json(result, { status: 409 });
     if (!result.eventCount) return Response.json({ ok: false, reason: "retained-file-has-no-shifts" }, { status: 409 });
     await upsertRosterFileStatusSummaryStatement(meter.binding, {
@@ -57,12 +68,12 @@ export async function onRequestPost(context) {
       indexedDoctorCount: result.doctorCount, eventCount: result.eventCount,
       contentRevision: result.contentRevision, size: missing.size, lastModified: missing.last_modified,
     }).run();
-    if (meter.rowsRead > 100000 || meter.rowsWritten > 4500) {
+    if (meter.rowsRead > 100000 || meter.rowsWritten > reservedMutationWrites + 64) {
       await db.prepare("UPDATE roster_import_daily_budget SET reserved_reads=500000, reserved_writes=10000 WHERE utc_day=?").bind(day).run();
       throw new Error("Coverage preparation exceeded its reservation; maintenance stopped.");
     }
     if (meter.metadataComplete) await db.prepare("UPDATE roster_import_daily_budget SET reserved_reads=MAX(0,reserved_reads-?), reserved_writes=MAX(0,reserved_writes-?) WHERE utc_day=?")
-      .bind(100000-meter.rowsRead, 4500-meter.rowsWritten, day).run();
+      .bind(100000-meter.rowsRead, Math.max(0,reservedMutationWrites-meter.rowsWritten), day).run();
     return Response.json({ ok: true, prepared: true, sourceType: source, eventCount: result.eventCount });
   }
   if (body.seedCurrent === true) {
@@ -116,8 +127,8 @@ export async function onRequestPost(context) {
     // Refund unused reads only when every result supplied D1 billing metadata.
     // The reservation remains intact after errors or incomplete instrumentation.
     if (result?.ok && meter.metadataComplete && meter.rowsRead <= READ_RESERVATION && meter.rowsWritten <= WRITE_RESERVATION) {
-      await db.prepare("UPDATE roster_import_daily_budget SET reserved_reads = MAX(0, reserved_reads - ?) WHERE utc_day = ?")
-        .bind(READ_RESERVATION - meter.rowsRead, day).run();
+      await db.prepare("UPDATE roster_import_daily_budget SET reserved_reads = MAX(0, reserved_reads - ?), reserved_writes=MAX(0,reserved_writes-?) WHERE utc_day = ?")
+        .bind(READ_RESERVATION - meter.rowsRead, Math.max(0,WRITE_RESERVATION-16-meter.rowsWritten), day).run();
     }
   }
   return Response.json({ ...result, completed: result.ok && !result.deferred && mode === "finalize" }, { status: result.ok ? 200 : 409 });

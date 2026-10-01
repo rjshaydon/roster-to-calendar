@@ -94,3 +94,20 @@ Preparation and publication refunds require complete billing metadata. First-pas
 admission with these bounds is GO (31,460 reads / 73 writes before the pass).
 Initial current-view seed intent is persisted for all four sources before costly
 work, so deferral does not lose the request. Later scheduled passes finish it.
+
+
+First live pass 36813726504 completed successfully. VHH's current view published;
+MMC reached batch 5 before the 5,000-write pass reservation cap. MCH/DDH initial
+seed intents remain durable. Reserved costs were 94,826 reads / 4,948 writes;
+settled account analytics were still only 43,331 reads / 140 writes.
+
+Reservation refinement from this result: compact correction mutations are planned
+against proposed file facts and bounded existing contributions BEFORE active facts
+change, including orphaned/stale compact rows. Coverage preparation reserves the
+actual planned compact statement count, with all indexes included, before executing
+it. Publication refunds unused writes only with complete billing metadata and keeps
+16 control-write units plus ledger overhead. Hard pass/daily ceilings are unchanged.
+Local tests verify dry planning is read-only, refused reservation writes nothing,
+stale-row repair is counted and replay/publication failures preserve active data.
+Second-pass admission is GO including unsettled first-pass reservations in the
+twofold estimate (297,413 reads / 6,474 writes proposed including carryover).

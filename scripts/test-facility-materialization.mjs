@@ -1005,3 +1005,23 @@ assert.equal(await reserveRosterMaintenanceBudget(sessionDb, 0, 250001), false);
 assert.equal(await reserveRosterMaintenanceBudget(sessionDb, 4990, 100), true);
 assert.equal(await reserveRosterMaintenanceBudget(sessionDb, 10, 0), false);
 console.log("Per-pass SQL reservations enforce the admitted 5,000-write / 250,000-read ceiling.");
+
+// Plan compact repair before touching active events; include stale contribution
+// rows and stop before writes when the exact mutation reservation is refused.
+const planningFile = { ...file, id: "compact-planning-fixture" };
+await replaceDerivedRosterFile(db, planningFile, doctors, initialEvents);
+const staffCols = sqlite.prepare("PRAGMA table_info(facility_term_staff_contributions)").all().map((row) => row.name);
+const staffValues = staffCols.map((name) => name === "doctor_key" ? "'ORPHAN'" : name);
+sqlite.prepare(`INSERT INTO facility_term_staff_contributions (${staffCols.join(",")}) SELECT ${staffValues.join(",")} FROM facility_term_staff_contributions WHERE file_id=? LIMIT 1`).run(planningFile.id);
+db.rowsWritten = 0;
+const compactDry = await refreshFacilityOverviewMaterializationForFile(db, planningFile.id, { dryRun: true, maximumWrites: 750 });
+assert.equal(compactDry.ok, true);
+assert.ok(compactDry.proposedWrites > 0);
+assert.equal(db.rowsWritten, 0);
+const compactRefused = await refreshFacilityOverviewMaterializationForFile(db, planningFile.id, { maximumWrites: 750, reserveMutationWrites: async () => false });
+assert.equal(compactRefused.deferred, true);
+assert.equal(db.rowsWritten, 0);
+await refreshFacilityOverviewMaterializationForFile(db, planningFile.id, { maximumWrites: 750 });
+assert.equal(db.rowsWritten, compactDry.proposedWrites);
+assert.equal(sqlite.prepare("SELECT COUNT(*) AS n FROM facility_term_staff_contributions WHERE file_id=? AND doctor_key='ORPHAN'").get(planningFile.id).n, 0);
+console.log("Exact compact planning accounts for stale rows and defers before any mutation.");

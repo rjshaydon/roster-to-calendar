@@ -962,13 +962,20 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
       if (row) presenceRows += span(row.start_date, row.end_date);
     }
     for (const row of changedEventRows) presenceRows += span(row[5], row[6]);
-    // One event affects at most its old/new staff and stream contributions;
-    // changed doctor metadata affects both terms of a <=120-day roster.
+    // Plan the exact compact mutations against the proposed file contents
+    // before changing any active facts. This also accounts for stale rows.
+    const compactPlan = storedFile ? await refreshFacilityOverviewMaterializationForFile(db, file.id, {
+      desiredEvents: eventRows.map((row) => ({ id: row[0], doctor_key: row[3], display_name: row[4], start_date: row[5], end_date: row[6], seniority: row[11], event_json: row[16] })),
+      desiredDoctors: safeDoctors.map((doctor) => ({ doctor_key: doctor.key, display_name: doctor.displayName, seniority: doctor.seniority || "", membership_source: doctor.membershipSource || "roster", provider_staff_id: doctor.providerStaffId || "" })),
+      maximumEventRows: 25000, maximumDoctorRows: 512, maximumExistingStaffRows: 750,
+      maximumExistingCatalogRows: 750, maximumWrites: 750, dryRun: true, contentRevision,
+    }) : null;
+    if (compactPlan?.overBudget || compactPlan?.ok === false) throw new Error(`Compact correction plan blocked: ${compactPlan.reason}`);
     const changedEvents = changedEventRows.length + removedEventIds.length;
     const changedPeople = changedDoctors.length + removedDoctorKeys.length;
     const indexedWrites = changedEvents * 8 + presenceRows * 5 + changedPeople * 10
       + (changedIssueRows.length + removedIssueIds.length + issueRows.length) * 6
-      + (changedEvents * 6 + changedPeople * 6 + 8) * 6 + safeDoctors.length * 4 + 128;
+      + (compactPlan ? Number(compactPlan.proposedWrites || 0) : changedEvents * 6 + changedPeople * 6 + 8) * 6 + safeDoctors.length * 4 + 128;
     if (!await options.reserveMaintenanceBudget(indexedWrites, 16000)) throw options.deferredBudgetError();
   }
   const fileSignature = JSON.stringify([file.name || "roster.xlsx", sourceType, String(file.sourceId || ""), file.active === false ? 0 : 1,
@@ -1985,8 +1992,8 @@ export async function refreshFacilityOverviewMaterializationForFile(db, fileId, 
     : db.prepare("SELECT id, source_type FROM roster_files WHERE id = ?").bind(String(fileId));
   const [file, doctorsResult, eventsResult, existingCoverage, existingStaffResult, existingCatalogResult] = await Promise.all([
     fileStatement.first(),
-    doctorStatement.all(),
-    eventStatement.all(),
+    Array.isArray(options.desiredDoctors) ? Promise.resolve({ results: options.desiredDoctors }) : doctorStatement.all(),
+    Array.isArray(options.desiredEvents) ? Promise.resolve({ results: options.desiredEvents }) : eventStatement.all(),
     db.prepare("SELECT content_revision, staff_digest, daily_digest, coverage_start, coverage_end FROM roster_file_coverage WHERE file_id = ?").bind(String(fileId)).first(),
     existingStaffStatement.all(),
     existingCatalogStatement.all(),
@@ -2123,7 +2130,9 @@ export async function refreshFacilityOverviewMaterializationForFile(db, fileId, 
   if (maximumWrites != null && statements.length > maximumWrites) {
     return { ok: false, overBudget: true, reason: "compact-write-limit", eventRowsExamined: events.length, proposedWrites: statements.length, maximumWrites, writes: 0 };
   }
+  if (options.dryRun) return { ok: true, dryRun: true, proposedWrites: statements.length, writes: 0, contentRevision, doctorCount: doctors.length, eventCount: events.length };
   if (!statements.length) return { writes: 0, unchanged: true, contentRevision, doctorCount: doctors.length, eventCount: events.length };
+  if (options.reserveMutationWrites && !await options.reserveMutationWrites(statements.length)) return { ok: true, deferred: true, writes: 0, proposedWrites: statements.length };
   const results = await runTransactionalBatch(db, statements);
   return {
     writes: (results || []).reduce((total, result) => total + Number(result?.meta?.changes || result?.changes || 0), 0),
