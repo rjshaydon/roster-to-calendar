@@ -5070,7 +5070,7 @@ export async function queryMaterializedFacilityTermStaff(db, options = {}) {
   if (maximumInputRows != null) {
     const aggregated = new Map();
     for (const row of rows) {
-      if (activeFileIds.size && !activeFileIds.has(String(row.file_id || ""))) continue;
+      if (Array.isArray(options.activeFileIds) && !activeFileIds.has(String(row.file_id || ""))) continue;
       const key = String(row.doctor_key || "");
       const current = aggregated.get(key);
       if (!current) {
@@ -5143,7 +5143,7 @@ export async function queryMaterializedFacilityMetadata(db, options = {}) {
   if (maximumInputRows != null) {
     const aggregated = new Map();
     for (const row of catalogRows) {
-      if (activeFileIds.size && !activeFileIds.has(String(row.file_id || ""))) continue;
+      if (!activeFileIds.has(String(row.file_id || ""))) continue;
       const key = [row.term_start, row.catalog_key, row.seniority, row.title, row.raw_value, row.location,
         row.all_day, row.time_label, row.start_time, row.end_time].map((value) => String(value ?? "")).join("\u0000");
       const current = aggregated.get(key);

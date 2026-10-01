@@ -11,7 +11,8 @@ import { handleManualRosterImport, deactivateManualRosterFiles } from '../functi
 import { beginMaintenanceAccounting } from '../functions/_lib/roster-maintenance-budget.js';
 import { executeBoundedRosterImport } from './roster-import-driver.mjs';
 import { loadPublishedDoctorCalendar } from '../functions/_lib/published-doctor-calendar.js';
-import { storeCachedSnapshot } from '../functions/_lib/d1-calendar.js';
+import { runFacilityPublicationStep } from '../functions/_lib/facility-overview-cache.js';
+import { queryMaterializedFacilityMetadata, queryMaterializedFacilityTermStaff, storeCachedSnapshot } from '../functions/_lib/d1-calendar.js';
 class LocalD1 {
   constructor(sqlite) { this.sqlite = sqlite; this.rowsWritten = 0; this.sql = []; this.failRunIncludes = ""; }
   prepare(sql) {
@@ -183,3 +184,25 @@ const retry=await api({action:'saveDerivedCalendarFile',file:replacement.file,ph
 assert.equal(retry.status,200,JSON.stringify(retry));
 assert.equal(retry.data.completed,true);
 console.log('Authenticated APIs: feature gates, target/profile ownership, Creator-only imports and bounded settings saves passed.');
+
+sqlite.prepare("UPDATE account_profiles SET role='user' WHERE email=?").run(email);
+sqlite.prepare('INSERT INTO account_claims(email,source_type,doctor_key,display_name,matched_at,updated_at) VALUES(?,?,?,?,?,?)').run(email,'mmc','FIXTURE','Fixture','','');
+const calendarStart=db.sql.length;
+const freshCalendar=await api({action:'loadCalendarEvents',responseMode:'fast',allowInlineBuild:false,startDate:'2026-01-01',endDate:'2026-12-31'});
+assert.equal(freshCalendar.status,200,JSON.stringify(freshCalendar));
+assert.equal(freshCalendar.data.snapshotSource,'published-roster');
+assert.equal(freshCalendar.data.snapshot.ownerType,'user-account');
+assert.equal(db.sql.slice(calendarStart).some(sql=>/roster_events|roster_daily_presence|roster_file_doctors/.test(sql)),false);
+assert.ok(freshCalendar.data.snapshot.fileRefs.every(file=>file.id===future.file.id),'account references only include active retained files');
+console.log('Account calendar HTTP path reads published shifts and active file refs without roster history.');
+
+const removedMetadata=await queryMaterializedFacilityMetadata(db,{sourceType:'mmc',termStart:'2026-08-03',maximumRows:750});
+assert.deepEqual(removedMetadata.terms.find(term=>term.termStart==='2026-08-03').catalog,[],'no active current roster means no retained inactive streams');
+assert.deepEqual(await queryMaterializedFacilityTermStaff(db,{sourceType:'mmc',termStart:'2026-08-03',maximumRows:512,activeFileIds:[]}),[],'removed registrars do not remain in current-term staff');
+const publicationContext={env:{ROSTER_DB:db,ROSTER_FILES:r2}};
+const publicationPlan=await runFacilityPublicationStep(publicationContext,'mmc',{mode:'plan',termStart:'2026-08-03',dates:['2026-08-03','2026-11-01']});
+assert.equal(publicationPlan.ok,true,JSON.stringify(publicationPlan));
+for(let batchIndex=0;batchIndex<publicationPlan.batchCount;batchIndex++) assert.equal((await runFacilityPublicationStep(publicationContext,'mmc',{mode:'build-batch',termStart:'2026-08-03',dates:['2026-08-03','2026-11-01'],operationRevision:publicationPlan.operationRevision,batchIndex})).ok,true);
+for(const month of publicationPlan.months) assert.equal((await runFacilityPublicationStep(publicationContext,'mmc',{mode:'build-month',termStart:'2026-08-03',dates:['2026-08-03','2026-11-01'],operationRevision:publicationPlan.operationRevision,month})).ok,true);
+assert.equal((await runFacilityPublicationStep(publicationContext,'mmc',{mode:'finalize',termStart:'2026-08-03',dates:['2026-08-03','2026-11-01'],operationRevision:publicationPlan.operationRevision})).ok,true);
+console.log('Removal publication: empty current roster clears compact staff and streams and completes staged R2 publication.');
