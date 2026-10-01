@@ -28,6 +28,7 @@
     "test:d1-quota": "node scripts/test-d1-quota-guard.mjs",
     "test:source-isolation": "node scripts/test-roster-source-isolation.mjs",
     "test:roster-idempotency": "node --no-warnings scripts/test-roster-ingress-idempotency.mjs",
+    "test:cached-roster-insights": "node --no-warnings scripts/test-cached-roster-insights.mjs",
     "test:maintenance-account-budget": "node --no-warnings scripts/test-maintenance-account-budget.mjs",
     "test:d1-account-budget": "node scripts/test-d1-account-budget.mjs",
     "test:client-request-budget": "node scripts/test-client-request-budget.mjs",

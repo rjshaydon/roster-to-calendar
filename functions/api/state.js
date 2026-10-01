@@ -1,3 +1,4 @@
+import { loadCachedRosterInsights } from "../_lib/cached-roster-insights.js";
 import { applyEventOverrides, customEventsToEvents, defaultSettings, filterCalendarRosterEvents, inspectImportRecord, isClinicalSupportRosterEvent, isIgnoredRosterIssueValue, normalizeRosterName, previewSummary } from "../_lib/roster.js";
 import { AUTOMATION_SOURCES } from "../_lib/automation-import.js";
 import { reserveRosterMaintenanceBudget, maintenanceBudgetDeferredError } from "../_lib/roster-maintenance-budget.js";
@@ -2327,87 +2328,29 @@ export async function onRequestPost(context) {
       }
     }
 
-    if (action === "queryRosterInsights") {
-      if (!hasCalendarDb(context.env)) {
-        return Response.json({ ok: false, unavailable: true, coworkers: [] });
-      }
-      if (!insightsEnabledForRecord({ ...account.record, role: account.role })) {
-        return Response.json({ ok: false, unavailable: true, coworkers: [] }, { status: 403 });
-      }
+    if (["queryRosterInsights", "queryRosterOverlapDoctors"].includes(action)) {
+      const doctorsOnly = action === "queryRosterOverlapDoctors";
+      const empty = doctorsOnly ? { doctors: [] } : { coworkers: [] };
+      if (!insightsEnabledForRecord({ ...account.record, role: account.role })) return Response.json({ ok: false, unavailable: true, ...empty }, { status: 403 });
+      if (!sharedFacilityDaysEnabled) return Response.json({ ok: false, unavailable: true, ...empty }, { status: 503 });
       const startDate = String(body?.startDate || body?.date || "").slice(0, 10);
       const endDate = String(body?.endDate || body?.date || startDate).slice(0, 10);
       const sourceTypes = sanitizeSourceTypes(body?.sourceTypes || []);
-      const excludeDoctorKeys = (Array.isArray(body?.excludeDoctorKeys) ? body.excludeDoctorKeys : [])
-        .map((key) => normalizeRosterName(key))
-        .filter(Boolean);
-      const doctorKeys = (Array.isArray(body?.doctorKeys) ? body.doctorKeys : [])
-        .map((key) => normalizeRosterName(key))
-        .filter(Boolean);
-      const overlapDoctorKeys = (Array.isArray(body?.overlapDoctorKeys) ? body.overlapDoctorKeys : [])
-        .map((key) => normalizeRosterName(key))
-        .filter(Boolean);
+      const queryOptions = { startDate, endDate, sourceTypes };
+      for (const field of ["doctorKeys", "excludeDoctorKeys", "overlapDoctorKeys"]) queryOptions[field] = (Array.isArray(body?.[field]) ? body[field] : []).map(normalizeRosterName).filter(Boolean);
+      const readSources = sourceTypes.length ? sourceTypes : ["mmc", "ddh", "mch", "vhh"];
+      if (sharedReadRouteFor(readSources) !== "shared") return Response.json({ ok: false, unavailable: true, ...empty }, { status: 503 });
+      if (doctorsOnly && !queryOptions.overlapDoctorKeys.length) return Response.json({ ok: true, doctors: [], source: "published-roster" });
       const startedAt = Date.now();
       try {
-        const queryOptions = {
-          startDate,
-          endDate,
-          sourceTypes,
-          excludeDoctorKeys,
-          doctorKeys,
-          overlapDoctorKeys,
-        };
-        const coworkers = await queryCoworkerEventsFromEvents(context.env.ROSTER_DB, queryOptions);
-        return Response.json({ ok: true, coworkers, queryMs: Date.now() - startedAt, source: "roster-events" });
+        const result = await loadCachedRosterInsights(context.env.ROSTER_FILES, queryOptions, australianDateKey(),
+          (event, sourceType) => isFacilityOverviewWorkingEvent(event, { facilityKey: sourceType, includeClinicalSupport: true }));
+        const { coworkers, doctors, ...status } = result;
+        return Response.json({ ...status, ...(doctorsOnly ? { doctors } : { coworkers }), queryMs: Date.now()-startedAt },
+          { status: result.invalid ? 400 : result.ok ? 200 : 503 });
       } catch (error) {
-        console.error("queryRosterInsights failed", {
-          startDate,
-          endDate,
-          sourceTypes,
-          doctorKeyCount: doctorKeys.length,
-          overlapDoctorKeyCount: overlapDoctorKeys.length,
-          excludeDoctorKeyCount: excludeDoctorKeys.length,
-          queryMs: Date.now() - startedAt,
-          error: error?.message || String(error),
-        });
-        return Response.json({ ok: false, unavailable: true, coworkers: [] }, { status: 503 });
-      }
-    }
-
-    if (action === "queryRosterOverlapDoctors") {
-      if (!insightsEnabledForRecord({ ...account.record, role: account.role })) {
-        return Response.json({ ok: false, unavailable: true, doctors: [] }, { status: 403 });
-      }
-      const startDate = String(body?.startDate || body?.date || "").slice(0, 10);
-      const endDate = String(body?.endDate || body?.date || startDate).slice(0, 10);
-      const sourceTypes = sanitizeSourceTypes(body?.sourceTypes || []);
-      const excludeDoctorKeys = (Array.isArray(body?.excludeDoctorKeys) ? body.excludeDoctorKeys : [])
-        .map((key) => normalizeRosterName(key))
-        .filter(Boolean);
-      const overlapDoctorKeys = (Array.isArray(body?.overlapDoctorKeys) ? body.overlapDoctorKeys : [])
-        .map((key) => normalizeRosterName(key))
-        .filter(Boolean);
-      const startedAt = Date.now();
-      try {
-        const queryOptions = {
-          startDate,
-          endDate,
-          sourceTypes,
-          excludeDoctorKeys,
-          overlapDoctorKeys,
-        };
-        const doctors = await queryOverlapDoctorsFromEvents(context.env.ROSTER_DB, queryOptions);
-        return Response.json({ ok: true, doctors, queryMs: Date.now() - startedAt, source: "roster-events" });
-      } catch (error) {
-        console.error("queryRosterOverlapDoctors failed", {
-          startDate,
-          endDate,
-          sourceTypes,
-          overlapDoctorKeyCount: overlapDoctorKeys.length,
-          excludeDoctorKeyCount: excludeDoctorKeys.length,
-          queryMs: Date.now() - startedAt,
-          error: error?.message || String(error),
-        });
-        return Response.json({ ok: false, unavailable: true, doctors: [] }, { status: 503 });
+        console.error("Cached roster insight unavailable", { action, error: error.message });
+        return Response.json({ ok: false, unavailable: true, ...empty }, { status: 503 });
       }
     }
 

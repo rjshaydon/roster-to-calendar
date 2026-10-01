@@ -15,7 +15,7 @@ assert.deepEqual(outstandingMaintenance([
   { metadata_complete: 0, reserved_reads: 300, reserved_writes: 30 },
 ], cutoff), { reads: 500, writes: 50 }, "settled work must not be counted twice; unknown work stays reserved");
 const analytics = { complete: true, interval: { start: "2026-10-01T00:00:00.000Z", end: "2026-10-02T00:00:00.000Z", observedUntil: cutoff }, totals: { rowsRead: 1000000, rowsWritten: 20000 }, fiveMinuteBuckets: [] };
-assert.equal(accountMaintenanceHeadroom(analytics, { reads: 500000, writes: 5000 }, "2026-10-01T05:00:00Z").writes, 55000);
+assert.equal(accountMaintenanceHeadroom(analytics, { reads: 500000, writes: 5000 }, "2026-10-01T05:00:00Z", { reads: 900000, writes: 19000 }).writes > 10000, true, "measured one-off import costs must not be forecast as recurring traffic");
 assert.equal(accountMaintenanceHeadroom({ ...analytics, totals: { rowsRead: 4000000, rowsWritten: 80000 } }, { reads: 1, writes: 1 }, "2026-10-01T05:00:00Z").reads, 0);
 assert.throws(() => accountMaintenanceHeadroom(analytics, { reads: 0, writes: 0 }, "2026-10-01T06:00:00Z"), /stale/);
 assert.equal(accountMaintenanceHeadroom({ ...analytics, fiveMinuteBuckets: [{ observedAt: "2026-10-01T04:40:00Z", rowsRead: 1000000, rowsWritten: 10000 }] }, { reads: 0, writes: 0 }, "2026-10-01T05:00:00Z").reads, 0, "projected traffic requires additional headroom");

@@ -1,0 +1,25 @@
+import assert from 'node:assert/strict';
+import { loadCachedRosterInsights, selectCachedInsightRows, validateCachedInsightOptions } from '../functions/_lib/cached-roster-insights.js';
+const row=(doctorKey,sourceType,start,end=start,title='Day')=>({doctorKey,displayName:doctorKey,sourceType,event:{id:`${doctorKey}-${start}`,start:`${start}T08:00:00`,end:`${end}T17:00:00`,title}});
+const rows=[row('MINE','mmc','2026-10-01','2026-10-02'),row('PEER','mmc','2026-10-02'),row('OTHER SITE','mch','2026-10-02'),row('OTHER DATE','mmc','2026-10-03')];
+const options={startDate:'2026-10-01',endDate:'2026-10-03',overlapDoctorKeys:['mine'],excludeDoctorKeys:['MINE'],doctorKeys:[],sourceTypes:['mmc']};
+assert.deepEqual(selectCachedInsightRows(rows,options).map(r=>r.doctorKey),['PEER'], 'overnight attendance intersects same hospital/date only');
+assert.deepEqual(selectCachedInsightRows(rows,{...options,doctorKeys:['OTHER DATE']}).map(r=>r.doctorKey),[]);
+assert.ok(validateCachedInsightOptions({...options,endDate:'2027-10-01'}));
+assert.ok(validateCachedInsightOptions({...options,startDate:'2026-02-30'}));
+assert.ok(validateCachedInsightOptions({...options,startDate:'2026-13-01'}));
+assert.ok(validateCachedInsightOptions({...options,doctorKeys:Array(65).fill('x')}));
+assert.ok(validateCachedInsightOptions({...options,sourceTypes:['casey']}));
+
+const objects=new Map(); let reads=0;
+const r2={async get(key){reads++;const value=objects.get(key);return value?{async arrayBuffer(){return new TextEncoder().encode(JSON.stringify(value)).buffer;}}:null;}};
+objects.set('facility-overview/v1/mmc/manifest.json',{sourceType:'mmc',terms:[{termStart:'2026-08-03',termEnd:'2026-11-01',visibleFrom:'2026-07-20',staffRevision:'staff-v1',staffKey:'staff'}],months:{'2026-10':{key:'month',revision:'month-v1'}}});
+objects.set('staff',{seniorityOverrides:[]});
+objects.set('month',{rows:[...rows,row('LEAVE','mmc','2026-10-02','2026-10-02','Annual leave')]});
+const result=await loadCachedRosterInsights(r2,options,'2026-10-01',event=>!event.title.includes('leave'));
+assert.equal(result.ok,true);assert.deepEqual(result.doctors.map(r=>r.doctorKey),['PEER']);assert.equal(result.source,'published-roster');
+assert.ok(reads<=4,'bounded manifest/staff/month object lookups');
+objects.clear();
+const missing=await loadCachedRosterInsights(r2,options,'2026-10-01',()=>true);
+assert.equal(missing.unavailable,true,'missing publication cannot fall back to D1');
+console.log('Cached colleague tools passed date/identity bounds, overnight overlap, source isolation, leave filtering and missing-publication checks.');

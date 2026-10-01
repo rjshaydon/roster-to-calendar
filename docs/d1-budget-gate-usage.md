@@ -18,7 +18,9 @@ Request receipts distinguish settled measured work (already in analytics),
 unsettled measured work and unfinished/incompletely instrumented reservations.
 Only the latter two are added to measured account usage. Legacy reservations
 cannot be reconciled and remain conservatively held through their UTC day.
-Account-wide last-hour usage is projected through the remainder of the day;
+Observed ordinary account traffic is projected through the remainder of the day;
+only settled measured maintenance is excluded from that traffic forecast, so a
+one-off bulk import is not treated as continuously repeating.
 this can reduce capacity below the nominal 80% thresholds. The 20% reserve
 allows for ordinary traffic and telemetry lag. This is an admission safeguard,
 not a guarantee against an independent account caller consuming the quota.

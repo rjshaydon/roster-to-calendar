@@ -585,6 +585,18 @@ const handlerTogether = await callSharedAction({ action: "queryFacilityOverviewW
 assert.equal(handlerTogether.events.length, 1, "Working together must filter the shared monthly object by doctor");
 assert.equal(db.sql.some((sql) => /roster_events|roster_daily_presence/i.test(sql)), false, "Working together shared reads must not query roster history");
 assert.equal((await callSharedAction({ action: "queryFacilityOverviewWorkingTogether", startDate: "2026-08-01", endDate: "2026-08-31", sourceTypes: ["mmc"], doctorKeys: ["PERMANENT SMS"], cachedRevision: handlerTogether.revision })).unchanged, true);
+sqlite.prepare("UPDATE account_profiles SET insights_enabled=1 WHERE email='doctor@example.com'").run();
+const cachedWho = await callSharedAction({ action: "queryRosterInsights", startDate: "2026-08-01", endDate: "2026-08-31", sourceTypes: ["mmc"] });
+assert.equal(cachedWho.source, "published-roster");
+assert.ok(Array.isArray(cachedWho.coworkers));
+assert.equal(db.sql.some(sql => /roster_events|roster_daily_presence/i.test(sql)), false, "colleague tools must never query roster history");
+const cachedWhen = await callSharedAction({ action: "queryRosterOverlapDoctors", startDate: "2026-08-01", endDate: "2026-08-31", sourceTypes: ["mmc"], overlapDoctorKeys: ["PERMANENT SMS"] });
+assert.equal(cachedWhen.source, "published-roster");
+assert.ok(Array.isArray(cachedWhen.doctors));
+await callSharedAction({ action: "queryRosterInsights", startDate: "2026-08-01", endDate: "2027-08-31", sourceTypes: ["mmc"] }, { status: 400 });
+await callSharedAction({ action: "queryRosterInsights", startDate: "2026-08-01", endDate: "2026-08-31", sourceTypes: ["mmc"] }, { r2: new LocalR2(), status: 503 });
+sqlite.prepare("UPDATE account_profiles SET insights_enabled=0 WHERE email='doctor@example.com'").run();
+await callSharedAction({ action: "queryRosterInsights", startDate: "2026-08-01", endDate: "2026-08-31", sourceTypes: ["mmc"] }, { status: 403 });
 const missingHandlerDay = await callSharedAction(
   { action: "queryFacilityOverviewOnShift", facilityKey: "mmc", date: "2026-08-03", includeClinicalSupport: true },
   { r2: new LocalR2(), status: 503 },

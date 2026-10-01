@@ -162,3 +162,39 @@ pending. Do not push/deploy this batch with the Production budget flag enabled
 until `ROSTER_ACCOUNT_ANALYTICS_TOKEN` is installed; afterwards verify canonical
 deployment, live budget admission, queued MCH/DDH publication and all-site state.
 The previously deployed small caps remain active meanwhile.
+
+## Approved budget deployment and cached colleague batch — 1 October
+
+User explicitly approved the protected analytics secret. Installed in Production
+and verified present in the canonical deployment. Hosted Pages Wrangler 3 rejected
+JSON import attributes; changed the inventory to a plain JS module with a drift
+test. Production deployment afaf4a2e-913a-4068-bcf4-a19fc4890634 / 50e40491
+includes this compatibility fix and atomic measured-unused-grant refunds.
+
+First admitted pass exposed a bookkeeping envelope mismatch: one read-only
+reservation request measured 29 write units including settlement against 24
+reserved. Corrected reservation overhead to 48 while retaining 24 conservative
+settlement units; no provider quota approached. Cleared only that investigated
+pause with a SQL fence excluding larger unexplained overruns. Receipt replay
+cannot refund twice, incomplete metadata retains the full reservation, and raw
+bounded settlement works even after a route exhausts its statement allowance.
+Run 36819943554 resumes all four sources under the new guard. Initial live account
+admission: 112,002 reads / 1,539 writes. Subsequent progress had 340,417 reads /
+10,198 writes allocated (not provider totals), with no stop reason; MMC/MCH/VHH
+current views complete and DDH publication advancing.
+
+Additional batch: replace queryRosterInsights/queryRosterOverlapDoctors event
+history joins with published R2 range reads and in-memory same-site/date overlap.
+Preserve entitlement, cohort/source controls, term visibility, leave/unknown
+filtering and clinical-support options. Requests allow 180-day ranges and at most
+64 identities per filter. Missing publication has no D1 fallback. Five-minute
+client cache expiry and new cache keys prevent indefinite/legacy stale results;
+background insight warm-up remains disabled. Local helper, full SQLite/R2 HTTP,
+entitlement/missing-data, client-request and Creator-containment tests pass.
+
+Traffic projection now excludes only confirmed settled measured maintenance
+from ordinary daily traffic; no estimated settlement units are subtracted.
+Otherwise a legitimate one-off import was incorrectly forecast as repeating all
+day. Unknown/legacy costs remain conservative. Local forecast tests pass.
+Canonical deployment and visible colleague-tool verification still required for
+this additional batch; do not infer completion from the commit alone.

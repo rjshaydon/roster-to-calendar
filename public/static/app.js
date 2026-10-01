@@ -4991,8 +4991,8 @@ function selectedInsightDoctorKeys() {
 async function fetchRosterInsightRows({ startDate, endDate = startDate, sourceTypes = [], excludeDoctorKeys = [], doctorKeys = [], overlapDoctorKeys = [], allowFallback = true } = {}) {
   if (!cloudAvailable || !startDate) return { ok: false, unavailable: true, rows: [] };
   const cacheKey = `${rosterInsightCacheKey({ startDate, endDate, sourceTypes, excludeDoctorKeys, doctorKeys, overlapDoctorKeys })}|fallback:${allowFallback ? "1" : "0"}`;
-  if (visibleInsightWarmCache.has(cacheKey)) {
-    return { ok: true, rows: visibleInsightWarmCache.get(cacheKey), elapsedMs: 0, cached: true };
+  if (visibleInsightWarmCache.has(cacheKey) && Date.now()-visibleInsightWarmCache.get(cacheKey).savedAt < 5*60*1000) {
+    return { ok: true, rows: visibleInsightWarmCache.get(cacheKey).value, elapsedMs: 0, cached: true };
   }
   const startedAt = performance.now();
   try {
@@ -5021,7 +5021,7 @@ async function fetchRosterInsightRows({ startDate, endDate = startDate, sourceTy
       return { ok: false, unavailable: true, rows: [], elapsedMs };
     }
     if (elapsedMs > 1000) console.warn("Roster insight SQL lookup was slow", { elapsedMs, queryMs: data.queryMs, startDate, endDate, sourceTypes, doctorKeys, overlapDoctorKeys });
-    visibleInsightWarmCache.set(cacheKey, data.coworkers);
+    visibleInsightWarmCache.set(cacheKey, { value: data.coworkers, savedAt: Date.now() });
     return { ok: true, rows: data.coworkers, elapsedMs, queryMs: data.queryMs };
   } catch (error) {
     const elapsedMs = Math.round(performance.now() - startedAt);
@@ -5033,12 +5033,12 @@ async function fetchRosterInsightRows({ startDate, endDate = startDate, sourceTy
 async function fetchRosterOverlapDoctors({ startDate, endDate = startDate, sourceTypes = [], excludeDoctorKeys = [], overlapDoctorKeys = [], allowFallback = true } = {}) {
   if (!cloudAvailable || !startDate || !overlapDoctorKeys.length) return { ok: false, unavailable: true, doctors: [] };
   const cacheKey = `${rosterOverlapDoctorCacheKey({ startDate, endDate, sourceTypes, excludeDoctorKeys, overlapDoctorKeys })}|fallback:${allowFallback ? "1" : "0"}`;
-  if (visibleInsightWarmCache.has(cacheKey)) {
-    return { ok: true, doctors: visibleInsightWarmCache.get(cacheKey), elapsedMs: 0, cached: true };
+  if (visibleInsightWarmCache.has(cacheKey) && Date.now()-visibleInsightWarmCache.get(cacheKey).savedAt < 5*60*1000) {
+    return { ok: true, doctors: visibleInsightWarmCache.get(cacheKey).value, elapsedMs: 0, cached: true };
   }
   const persistentDoctors = readPersistentRosterOverlapDoctors(cacheKey);
   if (persistentDoctors) {
-    visibleInsightWarmCache.set(cacheKey, persistentDoctors);
+    visibleInsightWarmCache.set(cacheKey, { value: persistentDoctors, savedAt: Date.now() });
     return { ok: true, doctors: persistentDoctors, elapsedMs: 0, cached: true, persistentCached: true };
   }
   const startedAt = performance.now();
@@ -5064,7 +5064,7 @@ async function fetchRosterOverlapDoctors({ startDate, endDate = startDate, sourc
     const elapsedMs = Math.round(performance.now() - startedAt);
     if (!data.ok || data.unavailable || !Array.isArray(data.doctors)) return { ok: false, unavailable: true, doctors: [], elapsedMs };
     if (elapsedMs > 1000) console.warn("Roster overlap doctor SQL lookup was slow", { elapsedMs, queryMs: data.queryMs, startDate, endDate, sourceTypes, overlapDoctorKeys });
-    visibleInsightWarmCache.set(cacheKey, data.doctors);
+    visibleInsightWarmCache.set(cacheKey, { value: data.doctors, savedAt: Date.now() });
     writePersistentRosterOverlapDoctors(cacheKey, data.doctors);
     return { ok: true, doctors: data.doctors, elapsedMs, queryMs: data.queryMs };
   } catch (error) {
@@ -5126,7 +5126,7 @@ function stableInsightList(values = []) {
 
 function rosterInsightCacheKey({ startDate, endDate = startDate, sourceTypes = [], excludeDoctorKeys = [], doctorKeys = [], overlapDoctorKeys = [] } = {}) {
   return [
-    "rows",
+    "published-rows-v1",
     insightWarmBaseKey(),
     startDate || "",
     endDate || startDate || "",
@@ -5139,7 +5139,7 @@ function rosterInsightCacheKey({ startDate, endDate = startDate, sourceTypes = [
 
 function rosterOverlapDoctorCacheKey({ startDate, endDate = startDate, sourceTypes = [], excludeDoctorKeys = [], overlapDoctorKeys = [] } = {}) {
   return [
-    "overlapDoctors",
+    "published-overlap-v1",
     insightWarmBaseKey(),
     startDate || "",
     endDate || startDate || "",
@@ -5173,7 +5173,7 @@ function savePersistentRosterOverlapDoctorCache(store) {
 function readPersistentRosterOverlapDoctors(cacheKey) {
   if (!cacheKey || !currentCalendarRevision) return null;
   const entry = loadPersistentRosterOverlapDoctorCache()[cacheKey];
-  if (!entry || entry.revision !== currentCalendarRevision || !Array.isArray(entry.doctors)) return null;
+  if (!entry || entry.revision !== currentCalendarRevision || !Array.isArray(entry.doctors) || Date.now()-Number(entry.savedAt || 0) >= 5*60*1000) return null;
   return entry.doctors;
 }
 

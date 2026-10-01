@@ -17,17 +17,19 @@ export function outstandingMaintenance(receipts, cutoff) {
   }, { reads: 0, writes: 0 });
 }
 
-export function accountMaintenanceHeadroom(analytics, outstanding, now = new Date()) {
+export function accountMaintenanceHeadroom(analytics, outstanding, now = new Date(), settledMaintenance = { reads: 0, writes: 0 }) {
   const nowMs = new Date(now).getTime();
   const cutoff = Date.parse(analytics.interval.observedUntil);
-  const recent = (analytics.fiveMinuteBuckets || []).filter(row => Date.parse(row.observedAt) >= cutoff - 60 * 60 * 1000);
-  const elapsed = Math.min(60 * 60 * 1000, cutoff - Date.parse(analytics.interval.start));
+  const elapsed = cutoff - Date.parse(analytics.interval.start);
   const remaining = Date.parse(analytics.interval.end) - cutoff;
-  const totals = recent.reduce((sum, row) => ({ reads: sum.reads + row.rowsRead, writes: sum.writes + row.rowsWritten }), { reads: 0, writes: 0 });
-  // Account-wide burn includes other apps and interactive requests. Reserving
-  // its projection is conservative even when the last hour contained imports.
-  const forecastReads = Math.ceil(totals.reads * remaining / Math.max(elapsed, 1));
-  const forecastWrites = Math.ceil(totals.writes * remaining / Math.max(elapsed, 1));
+  // Project ordinary account traffic, excluding only confirmed measured
+  // maintenance that has already settled. A one-off import must not be
+  // projected as though it repeats continuously through the rest of the day.
+  // Unknown/legacy work stays in the forecast and in its reservation.
+  const ordinaryReads = Math.max(0, analytics.totals.rowsRead - settledMaintenance.reads);
+  const ordinaryWrites = Math.max(0, analytics.totals.rowsWritten - settledMaintenance.writes);
+  const forecastReads = Math.ceil(ordinaryReads * remaining / Math.max(elapsed, 1));
+  const forecastWrites = Math.ceil(ordinaryWrites * remaining / Math.max(elapsed, 1));
   if (!analytics.complete || !Number.isFinite(cutoff) || cutoff > nowMs || nowMs - cutoff > 25 * 60 * 1000 || elapsed <= 0) throw new Error("Account analytics are unavailable or stale.");
   const reads = Math.max(0, Math.floor(ACCOUNT_MAINTENANCE_POLICY.reads - analytics.totals.rowsRead - outstanding.reads - forecastReads));
   const writes = Math.max(0, Math.floor(ACCOUNT_MAINTENANCE_POLICY.writes - analytics.totals.rowsWritten - outstanding.writes - forecastWrites));

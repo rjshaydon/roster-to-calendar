@@ -26,7 +26,16 @@ export async function onRequestPost(context) {
     const receipts = (await db.prepare("SELECT reserved_reads,reserved_writes,actual_reads,actual_writes,finished_at,metadata_complete FROM roster_maintenance_receipts WHERE utc_day=? LIMIT 10001").bind(day).all()).results || [];
     if (receipts.length > 10000) throw new Error("Maintenance receipt inspection bound reached.");
     const outstanding = outstandingMaintenance(receipts, interval.observedUntil);
-    const budget = accountMaintenanceHeadroom(analytics, outstanding);
+    const settledMaintenance = receipts.reduce((sum, row) => {
+      if (Number(row.metadata_complete) === 1 && row.finished_at && row.finished_at <= interval.observedUntil) {
+        // Stored actual costs include 24 estimated settlement units; subtract
+        // only the measured route portion, never the estimate, from traffic.
+        sum.reads += Math.max(0, Number(row.actual_reads)-24);
+        sum.writes += Math.max(0, Number(row.actual_writes)-24);
+      }
+      return sum;
+    }, { reads: 0, writes: 0 });
+    const budget = accountMaintenanceHeadroom(analytics, outstanding, new Date(), settledMaintenance);
     // A concurrent reservation may occur after the SELECT above. Do not grant
     // headroom against a newer allocation baseline: fence it using this value.
     const previous = await db.prepare("SELECT allocated_reads,allocated_writes,stop_reason FROM roster_account_budget WHERE utc_day=?").bind(day).first();
