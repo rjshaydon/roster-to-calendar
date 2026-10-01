@@ -14,6 +14,12 @@ const sourceId = String(process.env.ROSTER_AUTOMATION_SOURCE_ID || "").trim();
 if (!token) throw new Error("ROSTER_AUTOMATION_TOKEN is required.");
 if (!sourceId) throw new Error("ROSTER_AUTOMATION_SOURCE_ID is required.");
 
+const admission = await automationRequest("/api/automation/account-budget", { method: "POST", body: {} });
+if (admission.deferred || admission.paused) {
+  console.log("Account budget deferred; queued work retained.");
+  process.exit(0);
+}
+let lastAccountAdmission = Date.now();
 const pending = await automationRequest(`/api/automation/pending?limit=1&sourceId=${encodeURIComponent(sourceId)}`);
 const runs = Array.isArray(pending.runs) ? pending.runs : [];
 if (runs.some((run) => run.sourceId !== sourceId)) throw new Error("Roster queue returned work for a different source.");
@@ -23,6 +29,7 @@ if (!runs.length || pending.maintenanceDeferred || (process.env.ROSTER_AUTOMATIO
   process.exit(0);
 }
 const parserConfig = await automationRequest(`/api/automation/parser-config?sourceId=${encodeURIComponent(sourceId)}`);
+if (parserConfig.deferred || parserConfig.paused) process.exit(0);
 const parserExtensions = parserConfig?.parserExtensions && typeof parserConfig.parserExtensions === "object" ? parserConfig.parserExtensions : {};
 const failures = [];
 
@@ -157,6 +164,11 @@ async function postDerived(run, payload, phase, doctors, eventsByDoctor, issuesB
 }
 
 async function automationRequest(path, options = {}) {
+  if (path !== "/api/automation/account-budget" && Date.now() - lastAccountAdmission > 5 * 60 * 1000) {
+    const admission = await automationRequest("/api/automation/account-budget", { method: "POST", body: {} });
+    lastAccountAdmission = Date.now();
+    if (admission.deferred || admission.paused) return { ok: true, deferred: true, maintenanceDeferred: true };
+  }
   const headers = { ...authorizationHeaders(), ...(options.body ? { "Content-Type": "application/json" } : {}) };
   let lastError = null;
   for (let attempt = 1; attempt <= 6; attempt += 1) {

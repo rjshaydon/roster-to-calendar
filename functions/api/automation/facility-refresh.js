@@ -1,7 +1,7 @@
 import { createD1Meter } from "../../_middleware.js";
 import { runFacilityPublicationStep } from "../../_lib/facility-overview-cache.js";
 import { automaticFacilityPublicationEnabled, facilityRefreshStatements, facilityTermDates } from "../../_lib/facility-refresh-queue.js";
-import { reserveRosterMaintenanceBudget, configureRosterMaintenanceBudget } from "../../_lib/roster-maintenance-budget.js";
+import { reserveRosterMaintenanceBudget, configureRosterMaintenanceBudget, stopAccountMaintenance } from "../../_lib/roster-maintenance-budget.js";
 import { automatedRosterSourceEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
 
 import { australianTermStartForDate, australianTermEndForStart, refreshFacilityOverviewMaterializationForFile, upsertRosterFileStatusSummaryStatement } from "../../_lib/d1-calendar.js";
@@ -105,7 +105,8 @@ export async function onRequestPost(context) {
       operationRevision: plan?.operationRevision, batchIndex: job.next_batch, month: plan?.months[job.next_month],
     });
     if (meter.metadataComplete && (meter.rowsRead > READ_RESERVATION || meter.rowsWritten > WRITE_RESERVATION)) {
-      await db.prepare("UPDATE roster_import_daily_budget SET reserved_reads = 500000, reserved_writes = 10000 WHERE utc_day = ?").bind(day).run();
+      if (context.env.ROSTER_ACCOUNT_BUDGET_ENABLED === "true") await stopAccountMaintenance(db, "cost-overrun:publication");
+      else await db.prepare("UPDATE roster_import_daily_budget SET reserved_reads = 500000, reserved_writes = 10000 WHERE utc_day = ?").bind(day).run();
       throw new Error("Publication exceeded its reserved cost; maintenance stopped for this UTC day.");
     }
     if (result.reason === "term-not-prepared") result = { ...result, ok: true, deferred: true, waitingForTerm: true };

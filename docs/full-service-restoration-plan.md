@@ -1,5 +1,53 @@
 # Full service restoration plan
 
+## Quota and batching adjustment — 1 October 2026
+
+This adjustment supersedes the temporary restoration ceilings and serial
+micro-canary ordering below. It does not claim the quota implementation has
+already changed. Current deployment evidence is in
+`bounded-roster-import-checkpoint.md`.
+
+Cloudflare Free-plan account quotas are 5,000,000 rows read and 100,000 rows
+written per UTC day. The importer ledger's 500,000-read / 10,000-write ceilings
+are temporary application limits, not provider quotas. Reserved costs are not
+measured billing totals. Index maintenance must be included in write estimates.
+
+Target admission policy: stop admitting additional restoration work before
+projected account usage exceeds 4,000,000 reads or 80,000 writes per UTC day.
+These are maximum safety thresholds, not spending targets; reduce available
+maintenance capacity further if normal-traffic projections require more
+headroom. Account usage includes all databases/callers. Count settled analytics,
+unsettled measured work and outstanding reservations without double-counting.
+Allow for analytics delay and concurrent activity. Missing or inconsistent
+telemetry stops additional costly maintenance, while cached readers continue.
+Retain bounded per-operation limits, atomic reservations, durable continuation,
+idempotency, indexed access and stale-publication protection. Replace the old
+daily and per-pass caps and the fixed pending cutoff together; do not simply
+remove the write guard or increase one constant.
+
+Execution order, using combined functional batches:
+
+1. Implement and test the reconciled account-aware budget policy. Check live
+   account usage, deploy once, then finish queued MCH/DDH publication and DDH
+   compact preparation. Verify all-site current views and next-term readiness;
+   distinguish provider deliveries not yet received from failed imports.
+2. Restore VHH contact extraction/publication using bounded source-specific
+   extraction, together with remaining routine roster correction/overlap support.
+   Preserve active terms and test interruption, replay and large replacements.
+3. Restore colleague tools, Creator switching/directory and doctor discovery
+   as a batch using compact indexed lookups/cached projections. No roster-history
+   scans, identity fan-out or global warm-up.
+4. Restore bounded manual roster mutations and cross-device settings, then run
+   one combined user-visible regression check and account-usage review.
+
+Keep a successful batch enabled. If a batch fails, disable or revert its new
+feature switches while preserving valid data; isolate the failing portion using
+request-cost evidence and local tests. Avoid repeated deployments or waits for
+each small change. A batch is complete only when its visible behaviour and
+measured costs are verified. Full restoration remains the objective.
+
+Quota reference: https://developers.cloudflare.com/d1/platform/pricing/
+
 Status: DDH, MMC and MCH current contact publication and automatic flow
 execution confirmed on 1 October. User confirms contacts visible in all three
 sites. MMC uses the recovered Microsoft-side Office Script / small-JSON path;

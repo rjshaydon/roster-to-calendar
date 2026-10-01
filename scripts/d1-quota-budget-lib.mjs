@@ -3,10 +3,10 @@ export const D1_BUDGET_LIMITS = Object.freeze({
   dailyWrites: 100_000,
   ordinaryReadReserve: 4_000_000,
   ordinaryWriteReserve: 80_000,
-  optionalReadStartMaximum: 500_000,
-  optionalWriteStartMaximum: 10_000,
-  optionalReadStop: 750_000,
-  optionalWriteStop: 15_000,
+  optionalReadStartMaximum: 4_000_000,
+  optionalWriteStartMaximum: 80_000,
+  optionalReadStop: 4_000_000,
+  optionalWriteStop: 80_000,
   maximumOrdinaryRowsPerQuery: 10_000,
   minimumPassiveMs: 2 * 60 * 60 * 1000,
   minimumSampleGapMs: 10 * 60 * 1000,
@@ -220,6 +220,8 @@ export function evaluateD1Budget({ analytics, inventory, billing, previousReport
 
   let burnRateRowsPerHour = null;
   let projectedReads = null;
+  let projectedWrites = null;
+  let burnRateWritesPerHour = null;
   const previousGeneratedAt = Date.parse(previousReport?.generatedAt || "");
   if (!Number.isFinite(previousGeneratedAt)) {
     reasons.push("second-sample-required");
@@ -237,14 +239,17 @@ export function evaluateD1Budget({ analytics, inventory, billing, previousReport
     } else if (gap > 0) {
       burnRateRowsPerHour = (effectiveReads - previousReads) * (60 * 60 * 1000 / gap);
       projectedReads = effectiveReads + burnRateRowsPerHour * ((Date.parse(interval.end) - nowMs) / (60 * 60 * 1000));
+      burnRateWritesPerHour = (effectiveWrites - previousWrites) * (60 * 60 * 1000 / gap);
+      projectedWrites = effectiveWrites + burnRateWritesPerHour * ((Date.parse(interval.end) - nowMs) / (60 * 60 * 1000));
+      if (projectedWrites > D1_BUDGET_LIMITS.ordinaryWriteReserve) reasons.push("projected-ordinary-write-reserve-exceeded");
       if (projectedReads > D1_BUDGET_LIMITS.ordinaryReadReserve) reasons.push("projected-ordinary-read-reserve-exceeded");
     }
   }
 
   const estimatedReads = finiteNonNegative(optionalEstimate.rowsRead) ?? 0;
   const estimatedWrites = finiteNonNegative(optionalEstimate.rowsWritten) ?? 0;
-  if (effectiveReads + estimatedReads * 2 > D1_BUDGET_LIMITS.optionalReadStop) reasons.push("optional-read-estimate-exceeds-budget");
-  if (effectiveWrites + estimatedWrites * 2 > D1_BUDGET_LIMITS.optionalWriteStop) reasons.push("optional-write-estimate-exceeds-budget");
+  if (Math.max(effectiveReads, projectedReads ?? 0) + estimatedReads * 2 > D1_BUDGET_LIMITS.optionalReadStop) reasons.push("optional-read-estimate-exceeds-budget");
+  if (Math.max(effectiveWrites, projectedWrites ?? 0) + estimatedWrites * 2 > D1_BUDGET_LIMITS.optionalWriteStop) reasons.push("optional-write-estimate-exceeds-budget");
 
   const passiveMaximumReads = finiteNonNegative(previousReport?.analytics?.maximumFiveMinute?.rowsRead)
     ?? finiteNonNegative(analytics?.maximumFiveMinute?.rowsRead)
@@ -261,6 +266,8 @@ export function evaluateD1Budget({ analytics, inventory, billing, previousReport
     billingMode: billingAvailable ? "billing-reconciled" : billingExplicitlyUnavailable ? "free-plan-analytics-only" : "unverified",
     burnRateRowsPerHour,
     projectedReads,
+    projectedWrites,
+    burnRateWritesPerHour,
     expensiveFingerprints: expensiveFingerprints.slice(0, 20),
     passiveEnvelope: {
       maximumFiveMinuteRowsRead: passiveMaximumReads,

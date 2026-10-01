@@ -1,5 +1,39 @@
 # D1 account-budget gate usage
 
+## Account-aware restoration policy — 1 October 2026
+
+New restoration admission uses 4,000,000 reads / 80,000 writes as account-wide
+stop thresholds, below Cloudflare Free-plan limits of 5,000,000 / 100,000.
+The old optional 500,000/10,000 start and 750,000/15,000 stop thresholds are
+superseded. Per-operation row and statement bounds remain in force.
+
+The authenticated `/api/automation/account-budget` route obtains account-wide
+Cloudflare analytics with the protected `ROSTER_ACCOUNT_ANALYTICS_TOKEN` secret.
+It rejects unknown databases, truncated/mismatched aggregates and unavailable
+or stale analytics. Admission expires after ten minutes (or UTC midnight);
+queue and maintenance drivers refresh it after five minutes. SQL reservations
+atomically consume one shared grant across all sites and callers.
+
+Request receipts distinguish settled measured work (already in analytics),
+unsettled measured work and unfinished/incompletely instrumented reservations.
+Only the latter two are added to measured account usage. Legacy reservations
+cannot be reconciled and remain conservatively held through their UTC day.
+Account-wide last-hour usage is projected through the remainder of the day;
+this can reduce capacity below the nominal 80% thresholds. The 20% reserve
+allows for ordinary traffic and telemetry lag. This is an admission safeguard,
+not a guarantee against an independent account caller consuming the quota.
+
+A measured request/publication overrun closes maintenance for the UTC day and
+requires investigation. Analytics outages also close admission, but can recover
+on a later valid refresh. Cached app readers remain available. The original
+CLI checker below remains useful for pre-release account inspection and retains
+its evidence/reconciliation checks; its optional estimates include 2x contingency
+and are checked against both read and write projections.
+
+Rollback: set `ROSTER_ACCOUNT_BUDGET_ENABLED=false` and use the previous small
+legacy allowances. Retain progress and receipt tables. Do not disable all budget
+checks to get a queue moving.
+
 This command reads Cloudflare Analytics only. It does not connect to an
 application D1 database. Keep all rollout and maintenance controls closed while
 collecting samples.

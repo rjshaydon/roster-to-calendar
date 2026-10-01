@@ -8,7 +8,13 @@ const sources = ["monash-adults", "monash-paeds", "dandenong-findmyshift", "vhh-
 const offset = Math.floor(Date.now() / 86400000) % sources.length;
 const failures = [];
 let maintenanceBudget = null;
+let lastAdmission = 0;
 async function request(path, body) {
+  if (path !== "/api/automation/account-budget" && Date.now() - lastAdmission > 5 * 60 * 1000) {
+    const admission = await request("/api/automation/account-budget", {});
+    lastAdmission = Date.now();
+    if (admission.deferred || admission.paused) { console.log("Account budget deferred; durable progress retained."); return { paused: true, deferred: true }; }
+  }
   const response = await guardedFetch(process.env, `${base}${path}`, { method: body ? "POST" : "GET", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, ...(body ? { body: JSON.stringify({ ...body, maintenanceBudget }) } : {}) }, { label: "Bounded roster maintenance" });
   if (response.status === 503) return { paused: true };
   const result = await response.json();
@@ -30,7 +36,7 @@ for (const sourceId of [...sources.slice(offset), ...sources.slice(0, offset)]) 
     let preparationDeferred = false;
     for (let step = 0; step < 32; step += 1) {
       const prepared = await request("/api/automation/facility-refresh", { sourceId, mode: "prepare-coverage" });
-      if (prepared.deferred) { preparationDeferred = true; break; }
+      if (prepared.deferred || prepared.paused) { preparationDeferred = true; break; }
       if (prepared.idle) break;
     }
     if (preparationDeferred) continue;

@@ -17,7 +17,11 @@ export async function onRequestGet(context) {
   const limit = Number(url.searchParams.get("limit") || 1);
   const boundedImportEnabled = String(context.env.ROSTER_AUTOMATION_BOUNDED_IMPORT_ENABLED || "") === "true";
   const allowance = boundedImportEnabled ? await context.env.ROSTER_DB.prepare("SELECT reserved_writes, reserved_reads FROM roster_import_daily_budget WHERE utc_day = ?").bind(new Date().toISOString().slice(0, 10)).first() : null;
-  const maintenanceDeferred = Number(allowance?.reserved_writes || 0) >= 9500 || Number(allowance?.reserved_reads || 0) >= 490000;
+  let maintenanceDeferred = Number(allowance?.reserved_writes || 0) >= 9500 || Number(allowance?.reserved_reads || 0) >= 490000;
+  if (context.env.ROSTER_ACCOUNT_BUDGET_ENABLED === "true") {
+    const gate = await context.env.ROSTER_DB.prepare("SELECT allocated_reads,allocated_writes,maximum_reads,maximum_writes,valid_until,stop_reason FROM roster_account_budget WHERE utc_day=?").bind(new Date().toISOString().slice(0,10)).first();
+    maintenanceDeferred = !gate || !!gate.stop_reason || gate.valid_until <= new Date().toISOString() || gate.allocated_reads >= gate.maximum_reads || gate.allocated_writes >= gate.maximum_writes;
+  }
   const runs = await listQueuedRosterSyncRuns(context.env.ROSTER_DB, sourceId, limit);
   return Response.json({
     ok: true,

@@ -111,3 +111,54 @@ Local tests verify dry planning is read-only, refused reservation writes nothing
 stale-row repair is counted and replay/publication failures preserve active data.
 Second-pass admission is GO including unsettled first-pass reservations in the
 twofold estimate (297,413 reads / 6,474 writes proposed including carryover).
+
+
+## Verified wrap-up after two live passes
+
+Production is active at deployment d105d480-91cb-4df7-9d79-7f47a5e0f7a3,
+commit 8cf7019237b9f5b47ab09afa4aeffbdacfabafcc. Both maintenance runs
+36813726504 and 36815329456 completed successfully.
+
+Compact queue readback: MMC current term complete (13 day batches / four
+months); VHH current and next term complete. VHH's February spillover is waiting
+for prepared term membership. MCH and DDH current-term seed intents remain
+queued. Shared ledger holds 149,850 reads / 9,525 indexed writes reserved for
+1 October; no further database work was undertaken at wrap-up. These are
+conservative reservations, not account billing totals. Automatic six-hour
+continuation preserves progress and resumes when its allowance admits work.
+DDH's two old missing compact records remain to be prepared before new-term
+activation; current contact automation is unchanged.
+
+Usage checkpoint: 93% weekly and 57% five-hour allowance remained; credit
+balance unchanged from the reset checkpoint. No additional credit spend.
+
+Do not describe all four sites as fully refreshed: MMC/VHH publication is
+verified, MCH/DDH publication is pending. Provider-triggered future deliveries
+and large overlapping replacements still require their own completion evidence.
+
+## Account-aware budget batch prepared — 1 October, awaiting secret approval
+
+Implemented replacement admission at 4,000,000 account reads / 80,000 account
+writes, accounting for settled analytics, unresolved legacy reservations,
+unsettled measured request receipts and projected account traffic. Grants expire
+in ten minutes; workflow drivers refresh after five minutes. Atomic SQL fences
+concurrent allocation and stale snapshots. Request cost overruns stop the UTC
+budget; analytics failures close admission until a valid refresh. Lost D1
+responses retain full reservations rather than being measured as zero.
+
+Local account policy/SQL race/HTTP middleware tests, full-term materialization,
+request attribution, source isolation, queue failure, quota guards, indexed
+cost fixtures and the Pages build passed. Live pre-release admission is GO:
+109,444 settled reads / 1,524 writes; CLI projections 1,974,590 reads /
+40,569 writes before the proposed bounded pass. Report is in
+`/private/tmp/account-budget-release.json` and is time-specific evidence.
+
+Production migration 0035 was created and recorded successfully; the initial
+bookkeeping import used five reads and ten writes. No roster history or live
+roster data was changed. Code is NOT yet deployed. Automatic approval review
+rejected uploading the existing analytics credential as a persistent Production
+Pages secret, requiring explicit user authorization. An approval question is
+pending. Do not push/deploy this batch with the Production budget flag enabled
+until `ROSTER_ACCOUNT_ANALYTICS_TOKEN` is installed; afterwards verify canonical
+deployment, live budget admission, queued MCH/DDH publication and all-site state.
+The previously deployed small caps remain active meanwhile.

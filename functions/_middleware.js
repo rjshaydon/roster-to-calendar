@@ -1,3 +1,4 @@
+import { beginMaintenanceAccounting, finishMaintenanceAccounting } from "./_lib/roster-maintenance-budget.js";
 const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
 const RAW_D1_BINDING = Symbol("raw-d1-binding");
 const STATE_ACTIONS = new Set([
@@ -49,14 +50,17 @@ export async function onRequest(context) {
   const limit = await requestD1StatementLimit(context.request, url.pathname, action);
   let contained = requestContainmentReason(url.pathname, action, sharedEnv);
   const originalD1Binding = contained ? sharedEnv.ROSTER_DB : unwrapD1Binding(sharedEnv.ROSTER_DB);
-  const d1 = contained ? emptyD1Meter() : createD1Meter(originalD1Binding, limit);
+  const d1 = contained ? emptyD1Meter() : createD1Meter(originalD1Binding, limit, { firstViaAll: sharedEnv.ROSTER_ACCOUNT_BUDGET_ENABLED === "true" && ["/api/automation/derived", "/api/automation/facility-refresh"].includes(url.pathname) });
   let response;
 
   // Pages handlers read bindings from the supplied env object, so install the
   // request meter only while the downstream handler runs. Always restore the
   // raw binding, and unwrap defensively in case an interrupted older isolate
   // left a metered proxy behind.
-  if (d1.binding) sharedEnv.ROSTER_DB = d1.binding;
+  if (d1.binding) {
+    sharedEnv.ROSTER_DB = d1.binding;
+    beginMaintenanceAccounting(d1.binding, `${requestId}:${crypto.randomUUID()}`, sharedEnv.ROSTER_ACCOUNT_BUDGET_ENABLED === "true");
+  }
 
   try {
     response = contained
@@ -75,6 +79,8 @@ export async function onRequest(context) {
     }
     throw error;
   } finally {
+    try { await finishMaintenanceAccounting(d1.binding, d1, originalD1Binding); }
+    catch { console.error("Maintenance receipt settlement failed; reservation remains held."); }
     if (d1.binding && sharedEnv.ROSTER_DB === d1.binding) sharedEnv.ROSTER_DB = originalD1Binding;
     const record = {
       event: "api-invocation",
@@ -236,6 +242,10 @@ export function createD1Meter(database, limit, options = {}) {
     state.rowsWritten += Number(meta.rows_written);
     return result;
   };
+  const recordAsync = async (operation) => {
+    try { return record(await operation()); }
+    catch (error) { state.metadataComplete = false; throw error; }
+  };
   const wrapStatement = (statement) => {
     if (!statement || typeof statement !== "object") return statement;
     const wrapped = new Proxy(statement, {
@@ -243,12 +253,12 @@ export function createD1Meter(database, limit, options = {}) {
         if (property === "bind") return (...values) => wrapStatement(target.bind(...values));
         if (["all", "run", "raw"].includes(property)) return async (...args) => {
           before();
-          return record(await target[property](...args));
+          return recordAsync(() => target[property](...args));
         };
         if (property === "first") return async (...args) => {
           before();
           if (options.firstViaAll) {
-            const result = record(await target.all());
+            const result = await recordAsync(() => target.all());
             const row = result.results?.[0] || null;
             return args[0] ? row?.[args[0]] ?? null : row;
           }
@@ -272,13 +282,15 @@ export function createD1Meter(database, limit, options = {}) {
       if (property === "batch") return async (statements) => {
         const items = Array.from(statements || []);
         before(items.length);
-        const results = await target.batch(items.map((item) => originals.get(item) || item));
-        results.forEach(record);
-        return results;
+        try {
+          const results = await target.batch(items.map((item) => originals.get(item) || item));
+          results.forEach(record);
+          return results;
+        } catch (error) { state.metadataComplete = false; throw error; }
       };
       if (property === "exec") return async (...args) => {
         before();
-        return record(await target.exec(...args));
+        return recordAsync(() => target.exec(...args));
       };
       return Reflect.get(target, property, target);
     },
