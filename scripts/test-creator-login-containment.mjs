@@ -92,8 +92,8 @@ assert.match(contextHandler, /creatorStartupContained[\s\S]*prepareFastLoginEnve
 
 assert.equal((wranglerSource.match(/CREATOR_STARTUP_HYDRATION_ENABLED = "false"/g) || []).length, 2,
   "Production and Preview must explicitly disable Creator startup hydration");
-assert.equal((wranglerSource.match(/CREATOR_DIRECTORY_ENABLED = "false"/g) || []).length, 2,
-  "Production and Preview must explicitly disable the Creator directory");
+assert.equal((wranglerSource.match(/CREATOR_DIRECTORY_ENABLED = "false"/g) || []).length, 1,
+  "Preview must keep the Creator directory disabled");
 assert.match(localDevSource, /CREATOR_STARTUP_HYDRATION_ENABLED=false/);
 assert.match(localDevSource, /CREATOR_DIRECTORY_ENABLED=false/);
 

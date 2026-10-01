@@ -586,7 +586,7 @@ export async function loadPublishedFacilityRange(r2, sourceTypes, startDate, end
     }
     coverage.push(...(manifest.coverage || []));
   }
-  return { preparing: false, events, coverage, revision };
+  return { preparing: false, events, coverage, revision, sourceTypes: selected.map(item => item.sourceType) };
 }
 
 export async function loadPublishedFacilityDays(r2, sourceTypes, date, currentDate = date) {
@@ -644,6 +644,37 @@ export async function loadPublishedFacilityMetadata(r2, sourceTypes, today) {
     }
   }
   return { preparing: false, facilities, catalogEvents, revision: await digest({ facilities, catalogEvents }) };
+}
+
+// A bounded Creator picker built solely from visible published term membership.
+export async function loadPublishedRosterDoctors(r2, today) {
+  if (!r2?.get) return { preparing: true, doctors: [] };
+  const people = new Map();
+  let published = 0;
+  const missingSources = [];
+  for (const sourceType of ["mmc", "mch", "ddh", "vhh"]) {
+    const manifest = await loadCachedSnapshot(r2, facilityMetadataManifestKey(sourceType));
+    const terms = (manifest?.terms || []).filter(term => term.visibleFrom <= today && term.termEnd >= today);
+    if (terms.length > 2) throw new Error("Published doctor directory exceeds the term limit.");
+    let found = false;
+    for (const term of terms) {
+      const staff = term.staffKey ? await loadCachedSnapshot(r2, term.staffKey) : null;
+      if (!staff) continue;
+      const members = staff.members || [];
+      if (members.length > FACILITY_PUBLICATION_LIMITS.staffRows) throw new Error("Published doctor directory exceeds the staff limit.");
+      found = true;
+      for (const member of members) {
+        const key = String(member.doctorKey || "").trim();
+        if (!key) continue;
+        const marker = `${sourceType}|${key}`;
+        people.set(marker, { key, displayName: String(member.displayName || key), sourceType,
+          sourceTypes: [sourceType], aliases: [{ key, displayName: String(member.displayName || key), sourceType }] });
+      }
+    }
+    if (found) published += 1;
+    else missingSources.push(sourceType);
+  }
+  return { preparing: published === 0, doctors: [...people.values()].sort((a, b) => a.displayName.localeCompare(b.displayName) || a.sourceType.localeCompare(b.sourceType)), missingSources };
 }
 
 export async function loadPublishedFacilityStaff(r2, sourceTypes, termStart, today) {

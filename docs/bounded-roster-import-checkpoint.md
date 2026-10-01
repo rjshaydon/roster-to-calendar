@@ -233,3 +233,19 @@ writes through 15:31 AEST. Import/publication grant at final maintenance readbac
 billing totals. Existing contact flow flags remain unchanged. Full restoration
 still includes VHH contact support, large overlapping replacements, bounded manual
 mutations, Creator directory/discovery and dedicated settings persistence.
+
+Final canonical deployment verified: b7380c4e-7506-46b5-9a0c-e16879e0ea1f,
+commit 5481698fd185da7f4f9d7b20513c08df67d968aa, deploy stage success,
+account-budget flag true and approved analytics secret present. The daily/range
+colleague-reader optimisation is now deployed. Latest Codex usage check: 24%
+five-hour and 88% weekly allowance remaining; credit balance unchanged.
+Mac unlock remains required for visual click verification and the next Microsoft
+source-inspection work. Existing contact flows remain enabled and unchanged.
+
+### 1 October — bounded Creator tools batch
+
+Restored explicit Production Creator directory and doctor picker; Preview and automatic startup hydration remain closed. Directory pages use indexed email cursors (100 profiles, at most 1,000 claims); credentials and full sessions are excluded. The browser consumes at most ten pages. Visible staff from at most two terms per site supplies the picker through R2, with no history fallback. Switching account resolution uses exact site/doctor indexed lookups and fails on ambiguous ownership. Unclaimed doctor calendars now read published monthly artifacts, preserving saved overrides/custom events and locations without D1 roster discovery, snapshot writes or background builds. Missing source publications fail closed.
+
+Build, Creator containment/client budgets, source isolation, cached insights and full materialization HTTP/SQLite/R2 tests pass. New tests cover directory pagination/index selection, credential exclusion, authorization, published doctor calendars and indexed account resolution. Both colleague tools were visually verified in live Safari: DDH shift colleagues and future overlapping shifts.
+
+Settled account analytics at 05:58 UTC: 220,772 reads / 10,739 writes. The historical CLI checker still applies the superseded conservative write thresholds and reports STOP; this is not the deployed account-wide policy. Live grant has no stop reason (225,968 reserved reads / 10,534 writes against 3,223,512 / 47,614). This batch adds read-only Creator views, not an import run. Dedicated settings API, manual overlapping replacement, automatic identity discovery and VHH contacts remain separate work. Profile calendars expose currently published visible roster terms; historical terms absent from publication are not rebuilt on demand.

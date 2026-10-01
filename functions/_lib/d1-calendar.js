@@ -3918,6 +3918,9 @@ export async function queryClaimedAccountsForRosterDoctors(db, doctors = [], opt
     ORDER BY account_profiles.email, account_claims.source_type, account_claims.display_name
     LIMIT ?
   `).bind(...pairs.flat(), maximumDoctors + 1).all();
+  if (options.strict === true && (rows.results || []).length > maximumDoctors) {
+    throw new Error("Doctor account resolution exceeds the claim limit.");
+  }
   const accounts = new Map();
   for (const row of (rows.results || []).slice(0, maximumDoctors)) {
     const email = normalizeEmail(row.email);
@@ -4028,6 +4031,29 @@ export async function loadAccountMirror(db, email) {
     ORDER BY account_claims.source_type, account_claims.display_name
   `).bind(normalizeEmail(email)).all();
   return accountMirrorFromRows(rows.results || []);
+}
+
+// Explicit Creator directory pages; never load credentials or full saved sessions.
+export async function listAccountDirectoryPage(db, after = "") {
+  const cursor = String(after || "").trim().toLowerCase();
+  if (cursor.length > 254) throw new Error("Invalid account directory cursor.");
+  const profiles = await db.prepare(`SELECT email, real_name, role, insights_enabled,
+    facility_overview_enabled, non_clinical, director_view_enabled,
+    admin_issues_json, local_parser_extensions_json, created_at, updated_at
+    FROM account_profiles WHERE email > ? ORDER BY email LIMIT 101`).bind(cursor).all();
+  const page = (profiles.results || []).slice(0, 100);
+  if (!page.length) return { records: [], nextCursor: "" };
+  const emails = page.map(row => row.email);
+  const claims = await db.prepare(`SELECT email, source_type, doctor_key, display_name, matched_at
+    FROM account_claims WHERE email IN (${emails.map(() => "?").join(",")})
+    ORDER BY email, source_type, doctor_key LIMIT 1001`).bind(...emails).all();
+  if ((claims.results || []).length > 1000) throw new Error("Account directory page exceeds the claim limit.");
+  const grouped = new Map(emails.map(email => [email, []]));
+  for (const row of claims.results || []) grouped.get(row.email)?.push(row);
+  return {
+    records: page.map(row => accountMirrorFromRows((grouped.get(row.email)?.length ? grouped.get(row.email) : [{}]).map(claim => ({ ...row, ...claim })))),
+    nextCursor: (profiles.results || []).length > 100 ? emails.at(-1) : "",
+  };
 }
 
 export async function listAccountMirrors(db) {

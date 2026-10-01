@@ -18036,24 +18036,30 @@ async function loadServerUsers() {
   const requestPassword = adminViewingEmail ? authUserPassword : currentUserPassword;
   if (!requestEmail || !requestPassword || normalizeEmail(requestEmail) !== OWNER_EMAIL || !cloudAvailable) return;
   try {
-    const response = await fetch("/api/state", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        action: "listUsers",
-        email: requestEmail,
-        password: requestPassword,
-      }),
-    });
-    const data = await readJsonResponse(response, "Could not load users.");
-    if (data.unavailable === true) {
-      serverUsersUnavailable = true;
-      syncAccountsButton();
-      if (isViewingCreatorAccount() && accountsModal && !accountsModal.classList.contains("hidden")) renderAccountsModal();
-      return;
+    const users = [];
+    let cursor = "";
+    let data;
+    for (let page = 0; page < 10; page += 1) {
+      const response = await fetch("/api/state", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "listUsers", email: requestEmail, password: requestPassword, cursor }),
+      });
+      const incoming = await readJsonResponse(response, "Could not load users.");
+      if (incoming.unavailable === true) {
+        serverUsersUnavailable = true;
+        syncAccountsButton();
+        if (isViewingCreatorAccount() && accountsModal && !accountsModal.classList.contains("hidden")) renderAccountsModal();
+        return;
+      }
+      data ||= incoming;
+      users.push(...(incoming.users || []));
+      cursor = incoming.nextCursor || "";
+      if (!cursor) break;
     }
+    if (cursor) throw new Error("Account directory exceeds the supported page limit.");
     serverUsersUnavailable = false;
-    serverUsers = data.users || [];
+    serverUsers = users;
     if (Array.isArray(data.availableDoctors)) {
       applyAuthoritativeAvailableDoctors(data.availableDoctors);
     }

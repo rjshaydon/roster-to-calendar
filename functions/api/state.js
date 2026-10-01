@@ -1,3 +1,4 @@
+import { loadPublishedDoctorCalendar } from "../_lib/published-doctor-calendar.js";
 import { loadCachedRosterInsights } from "../_lib/cached-roster-insights.js";
 import { applyEventOverrides, customEventsToEvents, defaultSettings, filterCalendarRosterEvents, inspectImportRecord, isClinicalSupportRosterEvent, isIgnoredRosterIssueValue, normalizeRosterName, previewSummary } from "../_lib/roster.js";
 import { AUTOMATION_SOURCES } from "../_lib/automation-import.js";
@@ -7,7 +8,7 @@ import { DDH_CONTACT_LIST_SOURCE_ID, MMC_CONTACT_LIST_SOURCE_ID, attachContactAl
 import { requestQueuedRosterProcessing } from "../_lib/automation-dispatch.js";
 import { advancedRosterMaintenanceEnabled, reviewedRosterFactLimit, rosterStatusSummaryEnabled, rosterWritesExplicitlyPaused, rosterWritePausedResponse } from "../_lib/roster-automation-guard.js";
 import { guardedFetch, localFeatureDisabledResponse } from "../_lib/outbound-network.js";
-import { loadPublishedFacilityDays, loadPublishedFacilityMetadata, loadPublishedFacilityRange, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata } from "../_lib/facility-overview-cache.js";
+import { loadPublishedRosterDoctors, loadPublishedFacilityDays, loadPublishedFacilityMetadata, loadPublishedFacilityRange, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata } from "../_lib/facility-overview-cache.js";
 import { loadPublishedFacilityContacts, publishFacilityContactResolutions } from "../_lib/facility-contact-cache.js";
 import { issueFacilityContactAccessToken, verifyFacilityContactAccessToken } from "../_lib/facility-contact-access.js";
 import { facilityBuildSources, facilityContactReaderSources, facilityLegacyReadsPaused, facilityOverviewAutomaticLaunchEnabled, facilityOverviewMaintenanceForViewer, facilityOverviewMaintenanceMode, facilityReaderSources, facilityReadRoute, facilityRolloutCohortEligible } from "../_lib/facility-rollout.js";
@@ -30,6 +31,7 @@ import {
   loadCachedSnapshot,
   mergeHospitalLocationsIntoSettings,
   listAccountMirrors,
+  listAccountDirectoryPage,
   listConsoleMessages,
   listRosterSources,
   loadRosterSource,
@@ -233,7 +235,7 @@ export async function onRequestPost(context) {
     if (action === "calendarStoreStatus" && !rosterStatusSummaryEnabled(context.env)) {
       return rosterStatusPausedResponse(context.env);
     }
-    if (action === "listRosterDoctors" && !identityDiscoveryEnabled(context.env)) {
+    if (action === "listRosterDoctors" && !creatorDirectoryEnabled(context.env)) {
       return identityDiscoveryPausedResponse();
     }
     // Contact refreshes use the short-lived facility-scoped token issued by
@@ -957,17 +959,14 @@ export async function onRequestPost(context) {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
       const globalParserExtensions = await loadD1ParserExtensionRules(context.env.ROSTER_DB);
-      const discoveryEnabled = identityDiscoveryEnabled(context.env);
-      const repairedUsers = await listAccountMirrors(context.env.ROSTER_DB).catch(() => []);
+      const page = await listAccountDirectoryPage(context.env.ROSTER_DB, body?.cursor);
+      const published = body?.cursor ? null : await loadPublishedRosterDoctors(context.env.ROSTER_FILES, australianDateKey());
       return Response.json({
         ok: true,
-        users: await Promise.all(repairedUsers.map((record) => userSummaryFromRecord(record.email, record, { db: context.env.ROSTER_DB, globalParserExtensions, includeSeniorities: discoveryEnabled }))),
-        availableDoctors: discoveryEnabled ? await repositoryDoctorCandidates(null, null, context.env.ROSTER_DB, {
-          hideZeroEventStandalone: true,
-          preferCanonical: true,
-        }) : [],
-        identityDiscoveryUnavailable: !discoveryEnabled,
-        issueConfig: await buildIssueConfig(null, email, context.env.ROSTER_DB),
+        users: await Promise.all(page.records.map(record => userSummaryFromRecord(record.email, record, { globalParserExtensions, includeSeniorities: false }))),
+        nextCursor: page.nextCursor,
+        ...(published ? { availableDoctors: published.doctors, doctorDirectoryUnavailable: published.preparing, missingSources: published.missingSources } : {}),
+        identityDiscoveryUnavailable: !identityDiscoveryEnabled(context.env),
       });
     }
 
@@ -1013,14 +1012,8 @@ export async function onRequestPost(context) {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
-      if (!hasCalendarDb(context.env)) return Response.json({ ok: true, unavailable: true, availableDoctors: [] });
-      return Response.json({
-        ok: true,
-        availableDoctors: await repositoryDoctorCandidates(null, null, context.env.ROSTER_DB, {
-          hideZeroEventStandalone: true,
-          preferCanonical: true,
-        }),
-      });
+      const published = await loadPublishedRosterDoctors(context.env.ROSTER_FILES, australianDateKey());
+      return Response.json({ ok: true, unavailable: published.preparing, availableDoctors: published.doctors, missingSources: published.missingSources });
     }
 
     if (action === "syncRosterRepository") {
@@ -5590,6 +5583,11 @@ async function loadDoctorProfileSnapshotPayload(context, profile, ownerEmail = "
     startDate: options.startDate,
     endDate: options.endDate,
   });
+  if (creatorDirectoryEnabled(context.env)) {
+    setRequestOperationPhase(context, "published-profile");
+    const locations = await loadAccountHospitalLocations(db, ownerEmail, profile.state?.session);
+    return loadPublishedDoctorCalendar(context.env.ROSTER_FILES, profile, { range: requestedRange, today: australianDateKey(), locations, schemaVersion: SNAPSHOT_SCHEMA_VERSION });
+  }
   const descriptor = buildDoctorProfileSnapshotCacheDescriptor(profile, requestedRange);
   setRequestOperationPhase(context, "revision");
   const calendarRevision = await queryDoctorProfileCalendarRevision(db, profile, ownerEmail);
@@ -6433,7 +6431,13 @@ function doctorResolutionMarkers(input) {
 }
 
 async function resolveDoctorAccount(store, rawDoctor, db = null) {
-  return resolveDoctorAccountFromIndex(await loadClaimedAccountIndex(store, db), rawDoctor);
+  const requested = sanitizeDoctorAccountResolutionInput(rawDoctor);
+  if (requested.aliases.length > 16 || requested.key.length > 200) throw new Error("Doctor account resolution exceeds the identity limit.");
+  const pairs = requested.aliases.length ? requested.aliases : requested.sourceTypes.map(sourceType => ({ sourceType, key: requested.key }));
+  if (pairs.length > 40) throw new Error("Doctor account resolution exceeds the identity limit.");
+  const accounts = await queryClaimedAccountsForRosterDoctors(db, pairs, { maximumDoctors: 40, strict: true });
+  if (accounts.length > 1) throw new Error("This roster identity is linked to multiple accounts. Review the linked names before switching.");
+  return resolveDoctorAccountFromIndex(accounts, rawDoctor);
 }
 
 async function loadClaimedAccountIndex(store, db = null) {

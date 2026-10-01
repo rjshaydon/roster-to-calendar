@@ -22,13 +22,14 @@ import {
   FACILITY_BOOTSTRAP_EVENT_SQL,
   queryCoworkerEvents,
   queryOverlapDoctors,
+  listAccountDirectoryPage,
 } from "../functions/_lib/d1-calendar.js";
 import { onRequestPost as saveAutomatedDerivedRoster } from "../functions/api/automation/derived.js";
 import { onRequestPost as bootstrapFacility } from "../functions/api/automation/facility-bootstrap.js";
 import { onRequestPost as materializeFacility } from "../functions/api/automation/facility-materialize.js";
 import { onRequestPost as ingestContacts } from "../functions/api/automation/contact-list-extract.js";
 import { onRequestPost as stateHandler } from "../functions/api/state.js";
-import { facilityPublicationBatches, initializeFacilityMaterialization, loadPublishedFacilityDays, loadPublishedFacilityMetadata, loadPublishedFacilityRange, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata, runFacilityPublicationStep } from "../functions/_lib/facility-overview-cache.js";
+import { loadPublishedRosterDoctors, facilityPublicationBatches, initializeFacilityMaterialization, loadPublishedFacilityDays, loadPublishedFacilityMetadata, loadPublishedFacilityRange, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata, runFacilityPublicationStep } from "../functions/_lib/facility-overview-cache.js";
 import { contactOperationalDate } from "../public/static/contact-allocations.js";
 import { planRosterImportBatches } from "../functions/_lib/roster-import-batches.js";
 import { beginBoundedRosterImport, stageBoundedRosterBatch, prepareBoundedRosterPresence, prepareBoundedRosterMetadata, activateBoundedRosterTerm } from "../functions/_lib/roster-import-staging.js";
@@ -560,7 +561,7 @@ async function callSharedAction(body, options = {}) {
   db.sql = [];
   const response = await stateHandler({
     request: new Request("http://127.0.0.1/api/state", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: "doctor@example.com", password, ...body }) }),
-    env: { ROSTER_DB: db, ROSTER_FILES: options.r2 || r2, FACILITY_OVERVIEW_MAINTENANCE_MODE: "false", FACILITY_SHARED_ROLLOUT_ACTIVE: "true", FACILITY_SHARED_EMERGENCY_PAUSED: "false", FACILITY_LEGACY_READS_PAUSED: "true", FACILITY_ACCESS_MATERIALIZATION_ENABLED: "true", FACILITY_SHARED_METADATA_ENABLED: "true", FACILITY_SHARED_DAYS_ENABLED: "true", FACILITY_SHARED_READER_SOURCE_ALLOWLIST: "mmc", FACILITY_SHARED_READER_COHORT: "all" },
+    env: { CREATOR_DIRECTORY_ENABLED: options.creatorDirectory ? "true" : "false", ROSTER_DB: db, ROSTER_FILES: options.r2 || r2, FACILITY_OVERVIEW_MAINTENANCE_MODE: "false", FACILITY_SHARED_ROLLOUT_ACTIVE: "true", FACILITY_SHARED_EMERGENCY_PAUSED: "false", FACILITY_LEGACY_READS_PAUSED: "true", FACILITY_ACCESS_MATERIALIZATION_ENABLED: "true", FACILITY_SHARED_METADATA_ENABLED: "true", FACILITY_SHARED_DAYS_ENABLED: "true", FACILITY_SHARED_READER_SOURCE_ALLOWLIST: "mmc", FACILITY_SHARED_READER_COHORT: "all" },
     waitUntil() {},
   });
   const payload = await response.json();
@@ -568,6 +569,43 @@ async function callSharedAction(body, options = {}) {
   assert.equal(db.sql.some((sql) => /\broster_events\b/i.test(sql)), false, `${body.action} must not query roster_events`);
   return payload;
 }
+// Restored Creator surfaces use indexed account pages and visible R2 membership.
+const doctorDirectory = await loadPublishedRosterDoctors(r2, "2026-08-04");
+assert.equal(doctorDirectory.preparing, false);
+assert.ok(doctorDirectory.doctors.some(person => person.key === "TERM TRAINEE" && person.sourceType === "mmc"));
+assert.deepEqual((await loadPublishedRosterDoctors(new LocalR2(), "2026-08-04")).doctors, []);
+for (let index = 0; index < 105; index += 1) {
+  const email = `page-${String(index).padStart(3, "0")}@example.com`;
+  sqlite.prepare("INSERT INTO account_profiles (email, real_name) VALUES (?, ?)").run(email, `Page ${index}`);
+}
+const page1 = await listAccountDirectoryPage(db);
+assert.equal(page1.records.length, 100);
+assert.ok(page1.nextCursor);
+const page2 = await listAccountDirectoryPage(db, page1.nextCursor);
+assert.equal(page2.nextCursor, "");
+assert.equal(new Set([...page1.records, ...page2.records].map(record => record.email)).size, 106);
+assert.ok(page1.records.find(record => record.email === "doctor@example.com").claims.length);
+assert.ok(page1.records.every(record => !record.passwordHash && !record.subscriptionToken));
+const plan = sqlite.prepare("EXPLAIN QUERY PLAN SELECT email FROM account_profiles WHERE email > ? ORDER BY email LIMIT 101").all("");
+assert.ok(plan.some(row => /SEARCH.*INDEX.*email>/.test(row.detail)), "directory must use an indexed cursor range");
+sqlite.prepare("UPDATE account_profiles SET role = 'creator' WHERE email = 'doctor@example.com'").run();
+const creatorDoctors = await callSharedAction({ action: "listRosterDoctors" }, { creatorDirectory: true });
+assert.equal(creatorDoctors.unavailable, false);
+assert.ok(creatorDoctors.availableDoctors.length);
+const creatorUsers = await callSharedAction({ action: "listUsers" }, { creatorDirectory: true });
+assert.equal(creatorUsers.users.length, 100);
+assert.ok(creatorUsers.nextCursor);
+assert.equal(db.sql.some(sql => /\broster_(daily_presence|term_members|doctor_directory)\b/.test(sql)), false);
+const profileCalendar = await callSharedAction({ action: "loadDoctorProfile", profileId: "fixture-trainee", doctorKey: "TERM TRAINEE", displayName: "Term Trainee", sourceTypes: ["mmc"], aliases: [{ sourceType: "mmc", key: "TERM TRAINEE", displayName: "Term Trainee" }] }, { creatorDirectory: true });
+assert.equal(profileCalendar.snapshotSource, "published-roster");
+assert.equal(profileCalendar.snapshotAvailable, true);
+assert.ok(profileCalendar.snapshot.preview.events.length);
+assert.equal(db.sql.some(sql => /\broster_(daily_presence|term_members|doctor_directory|file_doctors)\b/.test(sql)), false, "profile switching must not discover roster history");
+const resolvedDoctor = await callSharedAction({ action: "resolveDoctorAccount", doctor: { key: "TERM TRAINEE", sourceTypes: ["mmc"] } }, { creatorDirectory: true });
+assert.equal(resolvedDoctor.mode, "doctor-profile", "Creator accounts must not be treated as claimed clinician accounts");
+assert.ok(db.sql.some(sql => /idx_account_claims_source_doctor_email/.test(sql)), "account resolution must use site and doctor index");
+sqlite.prepare("UPDATE account_profiles SET role = 'user' WHERE email = 'doctor@example.com'").run();
+await callSharedAction({ action: "listRosterDoctors" }, { creatorDirectory: true, status: 403 });
 const handlerMetadata = await callSharedAction({ action: "queryFacilityOverviewMetadata", sourceTypes: ["mmc"] });
 assert.ok(handlerMetadata.catalogEvents.length > 0);
 const handlerStaff = await callSharedAction({ action: "queryFacilityOverviewStaff", facilityKey: "mmc", termStart: "2026-08-03", termEnd: "2026-11-02" });
