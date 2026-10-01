@@ -1,3 +1,7 @@
+import { handleManualRosterImport, deactivateManualRosterFiles } from "../_lib/manual-roster-management.js";
+import { refreshAccountMaintenanceBudget } from "./automation/account-budget.js";
+import { onRequestPost as processFacilityRefresh } from "./automation/facility-refresh.js";
+import { saveSessionSettings } from "../_lib/session-settings.js";
 import { loadPublishedDoctorCalendar } from "../_lib/published-doctor-calendar.js";
 import { loadCachedRosterInsights } from "../_lib/cached-roster-insights.js";
 import { applyEventOverrides, customEventsToEvents, defaultSettings, filterCalendarRosterEvents, inspectImportRecord, isClinicalSupportRosterEvent, isIgnoredRosterIssueValue, normalizeRosterName, previewSummary } from "../_lib/roster.js";
@@ -1040,12 +1044,25 @@ export async function onRequestPost(context) {
       }
     }
 
+    if (action === "refreshManualRosterBudget" || action === "refreshManualRosterViews") {
+      if (account.role !== "creator" && account.role !== "owner") return Response.json({ error: "Creator access is required." }, { status: 403 });
+      if (context.env.BOUNDED_MANUAL_ROSTER_ENABLED !== "true") return rosterWritePausedResponse();
+      if (action === "refreshManualRosterBudget") return refreshAccountMaintenanceBudget(context);
+      const sources = { mmc: "monash-adults", mch: "monash-paeds", ddh: "dandenong-findmyshift", vhh: "vhh-active-medical-roster" };
+      if (!sources[body.sourceType]) return Response.json({ error: "A supported site is required." }, { status: 400 });
+      return processFacilityRefresh({ ...context, request: new Request(context.request.url, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${context.env.ROSTER_AUTOMATION_TOKEN}` }, body: JSON.stringify({ sourceId: sources[body.sourceType] }) }) });
+    }
+
     if (action === "removeRosterImports") {
       if (account.role !== "creator" && account.role !== "owner") {
         return Response.json({ error: "Creator access is required." }, { status: 403 });
       }
       if (!hasCalendarDb(context.env)) {
         return Response.json({ ok: false, unavailable: true });
+      }
+      if (context.env.BOUNDED_MANUAL_ROSTER_ENABLED === "true") {
+        try { return Response.json(await deactivateManualRosterFiles(context, body.removedImportIds)); }
+        catch (error) { return Response.json({ error: error.message }, { status: 409 }); }
       }
       if (rosterWritesExplicitlyPaused(context.env)) return rosterWritePausedResponse();
       const removedIds = sanitizeRepositoryFileIds(body?.removedImportIds);
@@ -1100,6 +1117,10 @@ export async function onRequestPost(context) {
       }
       if (!hasCalendarDb(context.env)) {
         return Response.json({ ok: false, unavailable: true });
+      }
+      if (context.env.BOUNDED_MANUAL_ROSTER_ENABLED === "true") {
+        try { return Response.json(await handleManualRosterImport(context, body, email)); }
+        catch (error) { return Response.json({ error: error.message, resumable: true }, { status: 422 }); }
       }
       if (rosterWritesExplicitlyPaused(context.env)) return rosterWritePausedResponse();
       const savePhase = String(body?.phase || "complete").toLowerCase();
@@ -1175,10 +1196,16 @@ export async function onRequestPost(context) {
         return Response.json({ error: "Creator access is required to retain roster files." }, { status: 403 });
       }
       if (!hasCalendarDb(context.env)) return Response.json({ ok: false, unavailable: true });
-      if (rosterWritesExplicitlyPaused(context.env)) return rosterWritePausedResponse();
+      if (rosterWritesExplicitlyPaused(context.env) && context.env.BOUNDED_MANUAL_ROSTER_ENABLED !== "true") return rosterWritePausedResponse();
       const file = body?.file || {};
       const dataUrl = String(body?.dataUrl || "");
       if (!file?.id || !dataUrl) return Response.json({ error: "Roster source file is required." }, { status: 400 });
+      if (context.env.BOUNDED_MANUAL_ROSTER_ENABLED === "true") {
+        if (!/^manual:[a-f0-9-]{36}$/.test(file.id) || dataUrl.length > 20 * 1024 * 1024 || !context.env.ROSTER_FILES?.put) return Response.json({ error: "A bounded source file and object storage are required." }, { status: 422 });
+        const existingSource = await context.env.ROSTER_DB.prepare("SELECT active FROM roster_files WHERE id=?").bind(file.id).first();
+        if (existingSource?.active) return Response.json({ error: "Create a new import to replace an active source file." }, { status: 409 });
+        if (!await reserveRosterMaintenanceBudget(context.env.ROSTER_DB, 64, 256)) return Response.json({ error: "Roster maintenance is deferred; existing calendars remain available." }, { status: 503 });
+      }
       const objectKey = rawRosterObjectKey(file.id);
       if (context.env.ROSTER_FILES?.put) {
         await context.env.ROSTER_FILES.put(objectKey, dataUrlToBytes(dataUrl), {
@@ -1690,6 +1717,23 @@ export async function onRequestPost(context) {
       await deleteCachedSnapshotsForOwner(context.env.ROSTER_CACHE, "claimed-account", deleteEmail).catch(() => null);
       await clearDeletedAccountClaimMetadata(context.env.ROSTER_DB, deleteEmail, record);
       return Response.json({ ok: true, deletedEmail: deleteEmail });
+    }
+
+    if (action === "saveSessionSettings") {
+      if (context.env.SESSION_SETTINGS_SAVE_ENABLED !== "true") return Response.json({ error: "Settings saving is temporarily unavailable." }, { status: 503 });
+      const saveEmail = targetEmail && (account.role === "creator" || account.role === "owner") ? targetEmail : email;
+      if (targetEmail && targetEmail !== email && account.role !== "creator" && account.role !== "owner") return Response.json({ error: "Creator access is required." }, { status: 403 });
+      let profile = null;
+      if (body?.profile) {
+        if (account.role !== "creator" && account.role !== "owner") return Response.json({ error: "Creator access is required." }, { status: 403 });
+        profile = sanitizeDoctorProfile({ profileId: body.profile.id, doctorKey: body.profile.doctorKey, displayName: body.profile.displayName, sourceTypes: body.profile.sourceTypes, state: { session: {} } });
+        if (!profile?.profileId || !profile.doctorKey || !profile.sourceTypes.length) return Response.json({ error: "A doctor profile is required." }, { status: 400 });
+      } else if (saveEmail !== email && !await loadAccountMirror(context.env.ROSTER_DB, saveEmail)) return Response.json({ error: "Account not found." }, { status: 404 });
+      try {
+        return Response.json(await saveSessionSettings(context.env.ROSTER_DB, { email: saveEmail, profile, changes: body.changes, sanitizeCustomEvents: sanitizeSnapshotCustomEvents }));
+      } catch (error) {
+        return Response.json({ error: error.message, conflict: error.code === "SESSION_SETTINGS_CONFLICT" }, { status: error.code === "SESSION_SETTINGS_CONFLICT" ? 409 : 422 });
+      }
     }
 
     if (action === "save") {
@@ -4239,6 +4283,32 @@ async function loadAccountSnapshotPayload(context, params = {}) {
 }
 
 async function loadFastAccountSnapshotPayload(context, params = {}) {
+  if (String(context.env.BOUNDED_MANUAL_ROSTER_ENABLED || "").toLowerCase() !== "true") return loadLegacyFastAccountSnapshotPayload(context, params);
+  const cached = await loadLegacyFastAccountSnapshotPayload(context, { ...params, cachedRevision: "" });
+  const session = params.prepared?.state?.session || params.targetRecord?.state?.session || {};
+  const claims = sanitizeClaims(params.prepared?.claims || params.targetRecord?.claims);
+  const doctorKey = normalizeRosterName(params.doctorKey || params.prepared?.defaultDoctorKey || session.doctorKey || "");
+  const option = (cached.snapshot?.doctorOptions || []).find(item => normalizeRosterName(item.key) === doctorKey);
+  const aliases = claims.length ? claims.map(claim => ({ sourceType: claim.sourceType, key: claim.key })) : option?.aliases || [];
+  const sourceTypes = [...new Set(aliases.map(alias => alias.sourceType))];
+  if (!sourceTypes.length) return cached;
+  const email = params.targetRecord.email;
+  const locations = await loadAccountHospitalLocations(context.env.ROSTER_DB, email, session);
+  const published = await loadPublishedDoctorCalendar(context.env.ROSTER_FILES, {
+    doctorKey, displayName: option?.displayName || params.targetRecord.realName || doctorKey,
+    aliases, sourceTypes, state: { session },
+  }, { range: boundedCalendarEventRange(params), today: australianDateKey(), locations,
+    schemaVersion: SNAPSHOT_SCHEMA_VERSION, previousSnapshot: cached.snapshot, ownerType: snapshotOwnerTypeForRecord(params.targetRecord, params.prepared.role), ownerId: email });
+  // An incomplete publication retains the last working cache until the shared
+  // pointer is committed; it never triggers a D1 history rebuild.
+  if (!published.snapshotAvailable) return cached;
+  const refs = await context.env.ROSTER_DB.prepare(`SELECT id,name,source_type,size,last_modified,added_at FROM roster_files INDEXED BY idx_roster_files_source_active WHERE active=1 AND source_type IN (${sourceTypes.map(() => '?').join(',')}) LIMIT 129`).bind(...sourceTypes).all();
+  if (refs.results.length > 128) throw new Error("Active roster references exceed the calendar limit.");
+  published.snapshot.fileRefs = refs.results.map(file => ({ id:file.id, name:file.name, sourceType:file.source_type, size:file.size, lastModified:file.last_modified, addedAt:file.added_at }));
+  return { ok: true, ...published, snapshotCurrent: false, snapshotBuildMs: 0, revisionSkipped: true, validationDeferred: false };
+}
+
+async function loadLegacyFastAccountSnapshotPayload(context, params = {}) {
   const db = context.env?.ROSTER_DB;
   const cacheBucket = context.env?.ROSTER_CACHE;
   const targetRecord = params.targetRecord;

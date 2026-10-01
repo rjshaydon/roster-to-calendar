@@ -556,7 +556,7 @@ export async function loadPublishedFacilityRange(r2, sourceTypes, startDate, end
     const visibleTerms = (manifest.terms || []).filter((term) => term.visibleFrom <= currentDate && term.termEnd >= startDate && term.termStart <= endDate);
     if (!visibleTerms.length) continue;
     const monthPointers = months.map((month) => [month, manifest.months?.[month]]).filter(([, pointer]) => pointer?.key);
-    if (monthPointers.length) selected.push({ sourceType, manifest, visibleTerms, monthPointers });
+    selected.push({ sourceType, manifest, visibleTerms, monthPointers });
   }
   if (!selected.length) return { preparing: true, events: [], coverage: [], revision: "" };
   const revision = await digest(selected.flatMap(({ visibleTerms, monthPointers }) => [
@@ -574,7 +574,7 @@ export async function loadPublishedFacilityRange(r2, sourceTypes, startDate, end
     }
     for (const [, pointer] of monthPointers) {
       const snapshot = await loadCachedSnapshot(r2, pointer.key);
-      if (!snapshot) continue;
+      if (!snapshot) return { preparing: true, events: [], coverage: [], revision: "" };
       for (const row of snapshot.rows || []) {
         const date = String(row.event?.start || "").slice(0, 10);
         if (date < startDate || date > endDate || !visibleTerms.some((term) => term.termStart <= date && term.termEnd >= date)) continue;
@@ -586,7 +586,7 @@ export async function loadPublishedFacilityRange(r2, sourceTypes, startDate, end
     }
     coverage.push(...(manifest.coverage || []));
   }
-  return { preparing: false, events, coverage, revision, sourceTypes: selected.map(item => item.sourceType) };
+  return { preparing: false, events, coverage, revision, sourceTypes: selected.map(item => item.sourceType), visibleTerms: selected.flatMap(item => item.visibleTerms.map(term => ({ sourceType: item.sourceType, termStart: term.termStart, termEnd: term.termEnd }))) };
 }
 
 export async function loadPublishedFacilityDays(r2, sourceTypes, date, currentDate = date) {

@@ -7,6 +7,10 @@ export async function onRequestPost(context) {
   const token = String(context.env.ROSTER_AUTOMATION_TOKEN || "");
   const provided = String(context.request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
   if (!token || token.length !== provided.length || [...token].reduce((n,c,i) => n | (c.charCodeAt(0) ^ provided.charCodeAt(i)), 0)) return Response.json({ error: "Unauthorized." }, { status: 401 });
+  return refreshAccountMaintenanceBudget(context);
+}
+
+export async function refreshAccountMaintenanceBudget(context) {
   if (context.env.ROSTER_ACCOUNT_BUDGET_ENABLED !== "true") return Response.json({ ok: true, legacy: true });
   const db = context.env.ROSTER_DB;
   const day = new Date().toISOString().slice(0, 10);

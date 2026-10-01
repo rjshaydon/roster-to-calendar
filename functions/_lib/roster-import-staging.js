@@ -5,18 +5,23 @@ import { reserveRosterMaintenanceBudget } from "./roster-maintenance-budget.js";
 import { facilityRefreshStatements, facilityTermDates } from "./facility-refresh-queue.js";
 
 // Internal execution primitives used only by the source- and budget-gated protocol.
-export async function beginBoundedRosterImport(db, runId, file, plan) {
+export async function beginBoundedRosterImport(db, runId, file, plan, options = {}) {
   validateRosterImportManifest(plan.manifest);
   if (!runId || plan.manifest.fileId !== file.id || plan.manifest.sourceId !== file.sourceId || await rosterImportDigest(plan.manifest) !== plan.revision) throw new Error("Staged import plan does not match its queued file.");
   if (plan.manifest.doctors.length > 512 || plan.manifest.eventCount > 25000 || plan.manifest.issueCount > 5000) throw new Error("Staged import plan exceeds total safety bounds.");
   const existing = await db.prepare("SELECT * FROM roster_import_jobs WHERE run_id = ?").bind(runId).first();
   if (existing && (existing.plan_revision !== plan.revision || existing.file_id !== file.id || existing.source_id !== file.sourceId)) throw new Error("Staged import plan changed; a new run is required.");
-  if (existing?.initialized === 1) return { duplicate: true, nextBatch: existing.next_batch, preparedBatch: existing.prepared_batch, completed: Boolean(existing.activated) };
+  if (existing?.initialized === 1) return { duplicate: true, nextBatch: existing.next_batch, preparedBatch: existing.prepared_batch, completed: Boolean(existing.activated), retiredFileIds: JSON.parse(existing.retired_file_ids_json || "[]") };
   const existingFile = await db.prepare("SELECT active FROM roster_files WHERE id = ?").bind(file.id).first();
   if (Number(existingFile?.active) === 1) throw new Error("Cannot stage over an active roster.");
   if (!await reserveImportWrites(db, plan.manifest.doctors.length * (COST.doctor + COST.fileDoctor) + COST.control)) return { deferred: true };
   await db.prepare("INSERT OR IGNORE INTO roster_import_jobs (run_id, file_id, source_id, plan_revision, manifest_json) VALUES (?, ?, ?, ?, ?)")
     .bind(runId, file.id, file.sourceId, plan.revision, JSON.stringify(plan.manifest)).run();
+  if (options.allowReplacement) {
+    const active = await db.prepare("SELECT id, parsed_at FROM roster_files INDEXED BY idx_roster_files_source_active WHERE source_type=? AND active=1 ORDER BY id LIMIT 33").bind(file.sourceType).all();
+    if (active.results.length > 32) throw new Error("Roster replacement exceeds the active-file limit.");
+    await db.prepare("UPDATE roster_import_jobs SET promotion_fence_json=? WHERE run_id=? AND initialized=0 AND promotion_fence_json=''").bind(JSON.stringify(active.results), runId).run();
+  }
   const claimedAt = new Date().toISOString();
   const claim = await db.prepare("UPDATE roster_import_jobs SET initialize_started_at = ? WHERE run_id = ? AND initialized = 0 AND (initialize_started_at = '' OR initialize_started_at < ?)")
     .bind(claimedAt, runId, new Date(Date.now() - 600000).toISOString()).run();
@@ -99,12 +104,12 @@ export async function prepareBoundedRosterMetadata(db, runId, revision) {
   return result;
 }
 
-// New, disjoint terms only. Large replacements continue through the existing
-// guarded correction path until a separately reviewed promotion is available.
+// Pinned jobs use atomic replacement promotion. Legacy jobs retain the disjoint-term gate.
 export async function activateBoundedRosterTerm(db, runId, revision, options = {}) {
   const job = await db.prepare("SELECT * FROM roster_import_jobs WHERE run_id = ?").bind(runId).first();
   if (!job || job.plan_revision !== revision || !job.compact_ready) throw new Error("Staged roster is not ready for activation.");
-  if (job.activated) return { duplicate: true, fileId: job.file_id };
+  if (job.activated) return { duplicate: true, completed: true, fileId: job.file_id, retiredFileIds: JSON.parse(job.retired_file_ids_json || "[]") };
+  if (job.promotion_fence_json) return activatePreparedRosterReplacement(db, job, revision, options);
   const coverage = await db.prepare("SELECT * FROM roster_file_coverage WHERE file_id = ?").bind(job.file_id).first();
   const file = await db.prepare("SELECT source_type, active FROM roster_files WHERE id = ?").bind(job.file_id).first();
   if (!coverage || !file || Number(file.active) === 1) throw new Error("Prepared inactive roster is unavailable.");
@@ -141,10 +146,54 @@ export async function activateBoundedRosterTerm(db, runId, revision, options = {
   return { fileId: job.file_id, events: job.event_count };
 }
 
-// Shared across all four import sources, not a fresh allowance per workflow.
-// Conservative reservations survive failures; unused reservations are not
-// refunded. This adds at most 10,000 import writes/day and leaves the other
-// 5,000 writes below the restoration stop threshold for normal app activity.
+// All sources share the admitted account budget; each request reserves its worst-case cost.
 async function reserveImportWrites(db, writes) {
   return reserveRosterMaintenanceBudget(db, writes, writes + 128);
+}
+
+async function activatePreparedRosterReplacement(db, job, revision, options) {
+  const manifest = JSON.parse(job.manifest_json);
+  const file = await db.prepare("SELECT source_type,active FROM roster_files WHERE id=?").bind(job.file_id).first();
+  const coverage = await db.prepare("SELECT coverage_start,coverage_end FROM roster_file_coverage WHERE file_id=?").bind(job.file_id).first();
+  if (!file || file.active || !coverage) throw new Error("Prepared inactive replacement is unavailable.");
+  if (!await reserveRosterMaintenanceBudget(db, manifest.doctors.length * COST.sms + 1024, 150000)) return { deferred: true };
+  const fence = JSON.parse(job.promotion_fence_json);
+  const active = (await db.prepare("SELECT id,parsed_at FROM roster_files INDEXED BY idx_roster_files_source_active WHERE source_type=? AND active=1 ORDER BY id LIMIT 33").bind(file.source_type).all()).results;
+  if (JSON.stringify(active) !== JSON.stringify(fence)) throw new Error("Active rosters changed during import; replacement was not activated. Start a fresh import after reviewing the current roster.");
+  const incoming = await rosterTermOwnership(db, job.file_id);
+  const retire = [];
+  let start = coverage.coverage_start, end = coverage.coverage_end;
+  for (const old of active) {
+    const own = await rosterTermOwnership(db, old.id);
+    if (own.firstDate > incoming.lastDate || own.lastDate < incoming.firstDate) continue;
+    if (own.firstTerm !== incoming.firstTerm || own.lastTerm !== incoming.lastTerm || own.firstDate < incoming.firstDate || own.lastDate > incoming.lastDate) throw new Error("Replacement would remove dates outside the incoming roster. Import the full retained term range.");
+    const oldCoverage = await db.prepare("SELECT coverage_start,coverage_end FROM roster_file_coverage WHERE file_id=?").bind(old.id).first();
+    start = start < oldCoverage.coverage_start ? start : oldCoverage.coverage_start;
+    end = end > oldCoverage.coverage_end ? end : oldCoverage.coverage_end;
+    retire.push(old.id);
+  }
+  const dates = facilityTermDates(start, end), token = crypto.randomUUID(), now = new Date().toISOString();
+  const guard = { runId: job.run_id, token };
+  const gate = "EXISTS(SELECT 1 FROM roster_import_jobs WHERE run_id=? AND activation_token=?)";
+  const statements = [
+    db.prepare(`UPDATE roster_import_jobs SET activation_token=? WHERE run_id=? AND plan_revision=? AND activated=0 AND compact_ready=1
+      AND EXISTS(SELECT 1 FROM roster_files WHERE id=? AND active=0)
+      AND (SELECT COUNT(*) FROM roster_files INDEXED BY idx_roster_files_source_active WHERE source_type=? AND active=1)=json_array_length(promotion_fence_json)
+      AND NOT EXISTS(SELECT 1 FROM roster_files f INDEXED BY idx_roster_files_source_active WHERE f.source_type=? AND f.active=1
+        AND NOT EXISTS(SELECT 1 FROM json_each(promotion_fence_json) pin WHERE json_extract(pin.value,'$.id')=f.id AND json_extract(pin.value,'$.parsed_at')=f.parsed_at))`)
+      .bind(token,job.run_id,revision,job.file_id,file.source_type,file.source_type),
+    db.prepare(`UPDATE roster_files SET active=1 WHERE id=? AND active=0 AND ${gate}`).bind(job.file_id,job.run_id,token),
+    ...retire.flatMap(id => [
+      db.prepare(`UPDATE roster_files SET active=0 WHERE id=? AND active=1 AND ${gate}`).bind(id,job.run_id,token),
+      db.prepare(`UPDATE roster_file_status_summaries SET active=0,status_revision=?,updated_at=? WHERE file_id=? AND ${gate}`).bind(crypto.randomUUID(),now,id,job.run_id,token),
+      db.prepare(`UPDATE roster_sources SET active_file_id=? WHERE active_file_id=? AND ${gate}`).bind(job.file_id,id,job.run_id,token),
+    ]),
+    db.prepare(`UPDATE roster_file_status_summaries SET active=1,derived_state='ready',content_revision=?,status_revision=?,updated_at=? WHERE file_id=? AND ${gate}`).bind(revision,crypto.randomUUID(),now,job.file_id,job.run_id,token),
+    db.prepare(`UPDATE roster_import_jobs SET activated=1,retired_file_ids_json=? WHERE run_id=? AND activation_token=?`).bind(JSON.stringify(retire),job.run_id,token),
+    facilitySmsMembershipStatement(db,job.file_id,true),
+    ...(options.publishFacility ? facilityRefreshStatements(db,file.source_type,dates,`${job.file_id}:${revision}`,guard) : []),
+  ];
+  const results = await db.batch(statements);
+  if (Number(results[0]?.meta?.changes || 0) !== 1) throw new Error("Concurrent roster change prevented replacement activation.");
+  return { fileId:job.file_id, retiredFileIds:retire, activated:true };
 }

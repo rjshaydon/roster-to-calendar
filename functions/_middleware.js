@@ -14,7 +14,7 @@ const STATE_ACTIONS = new Set([
   "refreshAutomatedRosterSource", "removeRosterClaim", "removeRosterImports", "repairRosterDailyPresence",
   "replaceActiveRosterFiles", "reportRosterIdentityIssue", "reportUserError", "resetDerivedCalendarFile",
   "resolveAccountClaims", "resolveDoctorAccount", "save", "saveDerivedCalendarFile", "saveDoctorProfile",
-  "saveLocalParserExtensionRule", "saveParserExtensionRule", "setAccountRosterClaims",
+  "saveSessionSettings", "refreshManualRosterBudget", "refreshManualRosterViews", "saveLocalParserExtensionRule", "saveParserExtensionRule", "setAccountRosterClaims",
   "setContactAllocationResolution", "setFacilityStaffDesignation", "setFacilityStaffSeniorityOverride",
   "setFacilityStaffSeniorityOverrides", "setUserDirectorViewEnabled", "setUserFacilityOverviewEnabled",
   "setUserInsightsEnabled", "syncFindmyshift", "syncRosterRepository", "testFindmyshiftConnection",
@@ -50,7 +50,7 @@ export async function onRequest(context) {
   const limit = await requestD1StatementLimit(context.request, url.pathname, action);
   let contained = requestContainmentReason(url.pathname, action, sharedEnv);
   const originalD1Binding = contained ? sharedEnv.ROSTER_DB : unwrapD1Binding(sharedEnv.ROSTER_DB);
-  const d1 = contained ? emptyD1Meter() : createD1Meter(originalD1Binding, limit, { firstViaAll: sharedEnv.ROSTER_ACCOUNT_BUDGET_ENABLED === "true" && ["/api/automation/derived", "/api/automation/facility-refresh"].includes(url.pathname) });
+  const d1 = contained ? emptyD1Meter() : createD1Meter(originalD1Binding, limit, { firstViaAll: sharedEnv.ROSTER_ACCOUNT_BUDGET_ENABLED === "true" && (["/api/automation/derived", "/api/automation/facility-refresh"].includes(url.pathname) || url.pathname === "/api/state" && ["saveDerivedCalendarFile", "removeRosterImports", "uploadRawRosterFile", "refreshManualRosterViews"].includes(action)) });
   let response;
 
   // Pages handlers read bindings from the supplied env object, so install the
@@ -106,12 +106,12 @@ export async function onRequest(context) {
 }
 
 async function requestD1StatementLimit(request, pathname, action) {
-  if (pathname === "/api/automation/derived" && request.method === "POST") {
+  if ((pathname === "/api/automation/derived" || pathname === "/api/state" && action === "saveDerivedCalendarFile") && request.method === "POST") {
     try {
       const body = await request.clone().json();
       const phase = String(body?.phase || "").toLowerCase();
       if (phase === "complete" || phase === "bounded-metadata") return ROSTER_DERIVED_COMPLETE_D1_STATEMENT_LIMIT;
-      if (["bounded-begin", "bounded-events"].includes(phase)) return 256;
+      if (["bounded-begin", "bounded-events", "bounded-activate"].includes(phase)) return 256;
       return DEFAULT_D1_STATEMENT_LIMIT;
     } catch {
       return DEFAULT_D1_STATEMENT_LIMIT;

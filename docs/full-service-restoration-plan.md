@@ -1,3 +1,17 @@
+## Restoration batch — 2 October 2026
+
+Step 1: settled account-wide analytics through 01:07 AEST recorded 304,036 reads and 14,094 writes for the UTC quota day; 80,427 reads and 3,350 writes since the previous release. Telemetry reconciled across all three databases. Normal-use traffic and scheduled work stayed comfortably below admission thresholds.
+
+Step 2 implemented and locally verified: dedicated field-level session settings saves with optimistic conflict detection; bounded manual imports and automatic large corrections; inactive staging, pinned active-set promotion, preserved future terms and recoverable removal. Current personal calendars use published R2 shifts with cached historical shifts retained outside visible published terms. Publication deferral preserves committed imports and continues through scheduled maintenance. Full-range replacements are required: a partial overlapping upload is rejected rather than discarding retained dates.
+
+Advanced whole-database rebuilding remains disabled. VHH contacts, bounded automatic identity discovery and real MMC/MCH/DDH next-term delivery verification remain next. Production release evidence is recorded in `bounded-roster-import-checkpoint.md` after deployment.
+
+## Verified restoration checkpoint — 1 October 2026, 16:15 AEST
+
+Current Production includes bounded automatic roster imports and continuation, all-site current-term publication, VHH next-term publication subject to visibility, automatic On shift, MMC/MCH/DDH contacts, explicit cached colleague tools, and the bounded Creator directory/picker with published doctor-profile calendars. Creator startup fan-out and automatic identity discovery remain disabled. Commit `98f32019` is deployed; Safari verified the directory and doctor switching, plus both colleague tools.
+
+Remaining service work: VHH contact automation; manual roster mutations and larger overlapping replacements; bounded automatic identity discovery/claim suggestions; dedicated cross-device settings persistence. End-to-end real MMC/MCH/DDH next-term delivery remains to be demonstrated. Doctor-profile views show visible published terms and do not rebuild unpublished historical calendars. See `bounded-roster-import-checkpoint.md` for deployment and test evidence. Historical ordered steps below are superseded by this checkpoint and the account-aware batching policy.
+
 # Full service restoration plan
 
 ## Quota and batching adjustment — 1 October 2026

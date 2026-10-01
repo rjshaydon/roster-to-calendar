@@ -17,10 +17,13 @@ export async function handleBoundedRosterRequest(context, body, source, resolveT
       case "bounded-begin": {
         const manifest = body.manifest;
         if (!manifest || manifest.contentHash !== run.contentHash || manifest.maximumFacts !== 1250) throw new Error("Bounded plan does not match the queued content or reviewed fact budget.");
-        const current = await loadRosterSource(db, run.sourceId);
-        const target = await resolveTarget(db, source, run.sourceId, run, { range: [{ start: manifest.startDate }, { start: manifest.rosterEndDate }] }, current);
-        if (target.fileId !== run.fileId) return Response.json({ ok: true, mode: "complete" });
-        result = await beginBoundedRosterImport(db, run.id, file, { manifest, revision: body.revision });
+        const replacements = context.env.ROSTER_BOUNDED_REPLACEMENT_ENABLED === "true";
+        if (!replacements) {
+          const current = await loadRosterSource(db, run.sourceId);
+          const target = await resolveTarget(db, source, run.sourceId, run, { range: [{ start: manifest.startDate }, { start: manifest.rosterEndDate }] }, current);
+          if (target.fileId !== run.fileId) return Response.json({ ok: true, mode: "complete" });
+        }
+        result = await beginBoundedRosterImport(db, run.id, file, { manifest, revision: body.revision }, { allowReplacement: replacements });
         // An activated job still needs the completion callback if its earlier
         // bookkeeping failed. Only run.status=success means fully completed.
         result = { ...result, activated: Boolean(result.completed), completed: false };

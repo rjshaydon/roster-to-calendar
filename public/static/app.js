@@ -1,3 +1,5 @@
+import { planRosterImportBatches } from "./roster-import-batches.js";
+import { makeSessionPatch } from "./session-settings-patch.js";
 import {
   applyEventOverrides,
   buildRosterView,
@@ -25,6 +27,11 @@ import { attachContactAllocations, contactExtractHasExpired, contactOperationalD
 import { loadFacilitySnapshot, storeFacilitySnapshot } from "./facility-snapshot-cache.js";
 
 const AUTOMATIC_ROSTER_INSIGHT_WARMUP_ENABLED = false;
+const persistedSessionBases = new Map();
+function sessionSaveContext(payload = null) {
+  return payload?.doctorProfile?.id ? `profile:${payload.doctorProfile.id}` : payload ? `account:${payload.targetEmail || payload.accountEmail}` : activeDoctorProfile?.id ? `profile:${activeDoctorProfile.id}` : `account:${viewedAccountEmail()}`;
+}
+function rememberSessionBaseline(session) { persistedSessionBases.set(sessionSaveContext(), JSON.parse(JSON.stringify(session || {}))); }
 
 const form = document.querySelector("#roster-form");
 const appShell = document.querySelector("#appShell");
@@ -2517,8 +2524,9 @@ async function mergeFiles(files) {
   let persistenceFailed = false;
   lastRosterPersistence = null;
   for (const file of files) {
-    const id = fileFingerprint(file);
-    selectedFiles = selectedFiles.filter((entry) => entry.id !== id);
+    const fingerprint = fileFingerprint(file);
+    const id = `manual:${crypto.randomUUID()}`;
+    selectedFiles = selectedFiles.filter((entry) => fileFingerprint(entry.file || entry) !== fingerprint);
     const entry = {
       id,
       file,
@@ -14948,7 +14956,8 @@ async function loadDoctorProfileFacilityOverviewAccess(profile) {
     if (activeCalendarMode() !== "doctor-profile" || activeDoctorProfile?.id !== profile.id) return;
     activeDoctorProfile = { ...activeDoctorProfile, facilityOverviewAccountEmail: normalizeEmail(data.facilityOverviewAccountEmail) };
     currentFacilityOverviewEnabled = data.facilityOverviewEnabled === true;
-    currentFacilityOverviewMaintenance = data.facilityOverviewMaintenance !== false;
+    if (data.state?.session) rememberSessionBaseline(data.state.session);
+  currentFacilityOverviewMaintenance = data.facilityOverviewMaintenance !== false;
     currentFacilityOverviewAutomaticLaunchEnabled = data.facilityOverviewAutomaticLaunchEnabled === true;
     currentFacilityOverviewAccess = sanitizeFacilityOverviewAccess(data.facilityOverviewAccess);
     applyFacilityOverviewSiteScope();
@@ -17258,6 +17267,7 @@ function saveLocalAccountIdentity(realName = "") {
 
 function applyCloudStateIdentity(data) {
   cloudAvailable = data.cloudAvailable === true;
+  if (data.state?.session) rememberSessionBaseline(data.state.session);
   currentFacilityOverviewMaintenance = data.facilityOverviewMaintenance !== false;
   currentFacilityOverviewAutomaticLaunchEnabled = data.facilityOverviewAutomaticLaunchEnabled === true;
   currentCreatorStartupHydrationEnabled = data.creatorStartupHydrationEnabled === true;
@@ -17299,6 +17309,7 @@ function applyAvailableRosterDoctorsFromData(data) {
 
 function applyCloudStateContext(data) {
   const previousInsightsEnabled = currentInsightsEnabled;
+  if (data.state?.session) rememberSessionBaseline(data.state.session);
   currentFacilityOverviewMaintenance = data.facilityOverviewMaintenance !== false;
   currentFacilityOverviewAutomaticLaunchEnabled = data.facilityOverviewAutomaticLaunchEnabled === true;
   currentCreatorStartupHydrationEnabled = data.creatorStartupHydrationEnabled === true;
@@ -17530,7 +17541,7 @@ function reportCloudSaveFailure(error, payload = null, options = {}) {
   }
   const payloadStillMatchesView = payload ? savePayloadMatchesActiveCalendar(payload) : true;
   if (!payloadStillMatchesView) return;
-  if (!error?.isRosterPersistenceError) cloudAvailable = false;
+  if (!error?.isRosterPersistenceError && !error?.isSettingsConflict) cloudAvailable = false;
   renderLoginState();
   setStatus(error.message || "Cloud save failed.", true);
 }
@@ -17733,63 +17744,21 @@ async function saveCloudStateNow(snapshot = null) {
   const snapshotPayload = isDeleteSave ? null : await buildWorkspaceSnapshotPayload(payload.session);
   const shouldApplySavedSnapshot = savePayloadMatchesActiveCalendar(payload) && !isDeleteSave
     && (!payload.doctorProfile || snapshotMatchesDoctorProfile(snapshotPayload, payload.doctorProfile));
-  if (payload.doctorProfile) {
-    const response = await fetch("/api/state", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        action: "saveDoctorProfile",
-        email: payload.requestEmail,
-        password: payload.requestPassword,
-        profileId: payload.doctorProfile.id,
-        doctorKey: payload.doctorProfile.doctorKey,
-        displayName: payload.doctorProfile.displayName,
-        sourceTypes: payload.doctorProfile.sourceTypes,
-        state: { version: 1, imports: [], session: payload.session },
-        snapshot: snapshotPayload,
-      }),
-    });
-    const data = await readJsonResponse(response, "Doctor profile save failed.");
-    const savedCalendarRevision = String(data.calendarRevision || "");
-    if (shouldApplySavedSnapshot && savedCalendarRevision) currentCalendarRevision = savedCalendarRevision;
-    if (snapshotPayload && shouldApplySavedSnapshot) {
-      currentSnapshot = sanitizeWorkspaceSnapshot(snapshotPayload);
-      if (currentSnapshot) currentSnapshot.calendarRevision = currentCalendarRevision;
-      currentSnapshotStale = false;
-      currentSnapshotBuiltAt = new Date().toISOString();
-      rememberCreatorCalendarSourceRefs();
-      saveCalendarSnapshotCache(currentSnapshot);
-    }
-    renderLoginState();
-    return;
-  }
-  const state = (payload.removedImportIds || []).length
-    ? await buildCloudStateWithoutRosterSync(payload.imports, payload.session)
-    : await buildCloudState(payload.imports, payload.session);
-  const saveBody = {
-    action: "save",
-    email: payload.requestEmail,
-    password: payload.requestPassword,
-    targetEmail: payload.targetEmail,
-    state,
-    snapshot: snapshotPayload,
-    removedImportIds: payload.removedImportIds || [],
-    ...(payload.repositorySynced === true ? { repositorySynced: true } : {}),
-  };
-  let response = await fetch("/api/state", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(saveBody),
+  if (isDeleteSave) throw new Error("Remove roster files through the roster management controls before saving settings.");
+  const key = sessionSaveContext(payload);
+  const baseline = persistedSessionBases.get(key) || restoredSessionState || {};
+  const changes = makeSessionPatch(baseline, payload.session);
+  if (!changes.length) return;
+  const response = await fetch("/api/state", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ action: "saveSessionSettings", email: payload.requestEmail, password: payload.requestPassword, targetEmail: payload.targetEmail, profile: payload.doctorProfile, changes }),
   });
-  if (response.status === 503 && isDeleteSave) {
-    await new Promise((resolve) => setTimeout(resolve, 800));
-    response = await fetch("/api/state", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(saveBody),
-    });
+  if (response.status === 409) {
+    const error = new Error(parseError(await response.text(), "Settings changed on another device. Reload before saving."));
+    error.isSettingsConflict = true; throw error;
   }
-  const data = await readJsonResponse(response, "Cloud save failed.");
+  const data = await readJsonResponse(response, "Settings could not be saved.");
+  persistedSessionBases.set(key, JSON.parse(JSON.stringify(payload.session)));
   const savedCalendarRevision = String(data.calendarRevision || "");
   if (shouldApplySavedSnapshot && savedCalendarRevision) currentCalendarRevision = savedCalendarRevision;
   if (shouldApplySavedSnapshot && data.claims && payload.accountEmail === currentUserEmail) currentRosterClaims = sanitizeRosterClaims(data.claims);
@@ -17904,9 +17873,11 @@ async function reparseRosterFile(id) {
     setStatus(`Reparsing ${entry.name}...`);
     const retained = await ensureRosterEntrySource(entry);
     if (!retained?.file) throw new Error(`${entry.name} has no retained source file. Re-upload it once to enable reparsing.`);
-    await saveSelectedRosterFilesToD1([retained], { force: true });
+    const replacement = { ...retained, id: `manual:${crypto.randomUUID()}`, repoId: "", needsD1Resync: true };
+    selectedFiles = [...selectedFiles, replacement];
+    await saveSelectedRosterFilesToD1([replacement], { force: true });
     await refreshCalendarStoreStatus({ silent: true });
-    const reparsed = (calendarStoreStatus?.files || []).find((file) => file.id === entry.id);
+    const reparsed = (calendarStoreStatus?.files || []).find((file) => file.id === replacement.id);
     if (!reparsed || Number(reparsed.eventCount || 0) <= 0) {
       setRosterSyncState(entry, "failed", "Reparse produced 0 events.");
       renderFileSurfaces();
@@ -18451,47 +18422,51 @@ function slimDerivedCalendarRequest(payload = {}, extra = {}) {
   return { ...rest, ...extra };
 }
 
+let manualRosterBudgetCheckedAt = 0;
+async function refreshManualRosterBudget() {
+  const result = await calendarStoreRequest("refreshManualRosterBudget");
+  manualRosterBudgetCheckedAt = Date.now();
+  if (result.deferred) throw new Error("Roster importing is deferred by the account usage safeguard. Your progress is saved; retry later.");
+}
+
+async function finishManualRosterPublication(sourceType) {
+  for (let step = 0; step < 48; step += 1) {
+    if (Date.now() - manualRosterBudgetCheckedAt > 300000) await refreshManualRosterBudget();
+    const result = await calendarStoreRequest("refreshManualRosterViews", { sourceType });
+    if (result.deferred) return { publicationPending: true };
+    if (result.idle) return;
+  }
+  return { publicationPending: true };
+}
+
 async function saveDerivedCalendarFilePayload(payload, entry, expectedFileIds) {
-  if (!rosterSaveUsesChunkedUpload(payload)) {
-    return calendarStoreRequestWithRetry("saveDerivedCalendarFile", slimDerivedCalendarRequest(payload, {
-      expectedFileIds,
-      skipStatus: true,
-    }), { attempts: 4 });
+  if (!entry.id.startsWith("manual:")) throw new Error("Upload this file again to create a safe replacement; its active copy will remain available.");
+  const sourceId = { mmc: "manual-mmc", mch: "manual-mch", ddh: "manual-ddh", vhh: "manual-vhh" }[payload.file.sourceType];
+  payload.file.sourceId = sourceId;
+  const plan = await planRosterImportBatches(payload);
+  await refreshManualRosterBudget();
+  const send = async (phase, extra = {}) => {
+    if (Date.now() - manualRosterBudgetCheckedAt > 300000) await refreshManualRosterBudget();
+    const result = await calendarStoreRequest("saveDerivedCalendarFile", { file: payload.file, phase, revision: plan.revision, ...extra });
+    if (result.deferred) throw new Error("Import paused by the account usage safeguard; the previous roster remains active. Retry to resume.");
+    return result;
+  };
+  const progress = await send("bounded-begin", { manifest: plan.manifest });
+  if (progress.completed) {
+    if (progress.retiredFileIds?.length) selectedFiles = selectedFiles.filter(item => !progress.retiredFileIds.includes(item.id));
+    const publication = await finishManualRosterPublication(payload.file.sourceType);
+    return { ...progress, ...publication };
   }
-  await calendarStoreRequestWithRetry("saveDerivedCalendarFile", slimDerivedCalendarRequest(payload, {
-    phase: "start",
-    eventsByDoctor: {},
-    issuesByDoctor: {},
-    expectedFileIds,
-    skipStatus: true,
-  }), { attempts: 4 });
-  const doctorKeys = (payload.doctors || []).map((doctor) => doctor.key).filter(Boolean);
-  let indexedEventCount = 0;
-  for (let index = 0; index < doctorKeys.length; index += LARGE_ROSTER_DOCTOR_CHUNK) {
-    const keys = doctorKeys.slice(index, index + LARGE_ROSTER_DOCTOR_CHUNK);
-    const chunkDoctors = (payload.doctors || []).filter((doctor) => keys.includes(doctor.key));
-    const eventsByDoctor = Object.fromEntries(keys.map((key) => [key, payload.eventsByDoctor?.[key] || []]));
-    const issuesByDoctor = Object.fromEntries(keys.map((key) => [key, payload.issuesByDoctor?.[key] || []]));
-    const chunkEvents = keys.reduce((total, key) => total + (payload.eventsByDoctor?.[key]?.length || 0), 0);
-    indexedEventCount += chunkEvents;
-    setRosterSyncState(entry, "saving", `Saving ${Math.min(index + keys.length, doctorKeys.length)}/${doctorKeys.length} doctors…`);
-    await calendarStoreRequestWithRetry("saveDerivedCalendarFile", slimDerivedCalendarRequest(payload, {
-      phase: "events",
-      doctors: chunkDoctors,
-      eventsByDoctor,
-      issuesByDoctor,
-      expectedFileIds,
-      indexedEventCount,
-      skipStatus: true,
-    }), { attempts: 4 });
+  for (const batch of plan.batches.slice(progress.nextBatch || 0)) {
+    setRosterSyncState(entry, "saving", `Saving roster part ${batch.index + 1}/${plan.batches.length}…`);
+    await send("bounded-events", { batch });
   }
-  return calendarStoreRequestWithRetry("saveDerivedCalendarFile", slimDerivedCalendarRequest(payload, {
-    phase: "finish",
-    eventsByDoctor: {},
-    issuesByDoctor: {},
-    expectedFileIds,
-    skipStatus: true,
-  }), { attempts: 4 });
+  for (const batch of plan.batches.slice(progress.preparedBatch || 0)) await send("bounded-presence", { batch });
+  await send("bounded-metadata");
+  const result = await send("bounded-activate");
+  if (result.retiredFileIds?.length) selectedFiles = selectedFiles.filter(item => !result.retiredFileIds.includes(item.id));
+  const publication = await finishManualRosterPublication(payload.file.sourceType);
+  return { ...result, ...publication };
 }
 
 async function saveSelectedRosterFilesToD1(imports = selectedFiles, options = {}) {
@@ -18499,7 +18474,7 @@ async function saveSelectedRosterFilesToD1(imports = selectedFiles, options = {}
   const entries = (imports || []).filter((entry) => entry?.file);
   if (!entries.length) return emptyRosterPersistenceSummary();
   const allExpectedFileIds = [...new Set(selectedFiles.map((entry) => entry.id).filter(Boolean))];
-  const expectedFileIds = allExpectedFileIds.length ? allExpectedFileIds : entries.map((entry) => entry.id);
+  let expectedFileIds = allExpectedFileIds.length ? allExpectedFileIds : entries.map((entry) => entry.id);
   const failedIds = new Set([...rosterSyncStates.entries()].filter(([, state]) => state.status === "failed").map(([id]) => id));
   const entriesToSave = options.force === true
     ? entries
@@ -18507,6 +18482,7 @@ async function saveSelectedRosterFilesToD1(imports = selectedFiles, options = {}
   const saveResults = [];
   let latestStatus = calendarStoreStatus;
   if (!entriesToSave.length) return summarizeRosterPersistence(entries, latestStatus, saveResults);
+  await refreshManualRosterBudget();
   beginRosterSync(entriesToSave, options.force === true ? "rebuild" : "sync");
   for (const entry of entriesToSave) {
     let failStep = "init";
@@ -18525,6 +18501,7 @@ async function saveSelectedRosterFilesToD1(imports = selectedFiles, options = {}
       failStep = "d1-save";
       setRosterSyncState(entry, "saving");
       let saveResponse = await saveDerivedCalendarFilePayload(payload, entry, expectedFileIds);
+      expectedFileIds = selectedFiles.map(item => item.id);
       if (saveResponse.indexing === "scheduled" || saveResponse.indexing === "in-progress" || !isRosterFileStatusHealthy(saveResponse?.fileStatus)) {
         setRosterSyncState(entry, "saving", "Saving to roster database…");
         latestStatus = await waitForRosterFilePersistence(entry, expectedFileIds);
@@ -18556,7 +18533,7 @@ async function saveSelectedRosterFilesToD1(imports = selectedFiles, options = {}
   }
   if (latestStatus) calendarStoreStatus = { ...latestStatus, checkedAt: new Date().toISOString() };
   reconcileRosterSyncStates(calendarStoreStatus);
-  const summary = summarizeRosterPersistence(entries, calendarStoreStatus, saveResults);
+  const summary = summarizeRosterPersistence(entries.filter(entry => selectedFiles.some(selected => selected.id === entry.id)), calendarStoreStatus, saveResults);
   lastRosterPersistence = summary;
   renderFileSurfaces();
   if (!summary.complete) {
@@ -19941,14 +19918,12 @@ function syncResponsePurgedRemovedId(syncResult, removedId) {
 }
 
 async function syncRosterRepositoryToSelection(removedId = null, options = {}) {
-  const keepFileIds = keepFileIdsAfterRemoval();
-  const syncResult = await calendarStoreRequestWithRetry("syncRosterRepository", {
-    keepFileIds,
-    selectedDoctorKey: selectedDoctor()?.key || OWNER_DOCTOR_KEY,
-  }, { attempts: options.attempts || 4 });
-  if (removedId && !syncResponsePurgedRemovedId(syncResult, removedId)) {
-    throw new Error("Roster repository sync did not confirm removal.");
-  }
+  if (!removedId) throw new Error("Choose an individual roster file to remove.");
+  await refreshManualRosterBudget();
+  const syncResult = await calendarStoreRequest("removeRosterImports", { removedImportIds: [removedId] });
+  if (syncResult.deferred) throw new Error("Roster removal is deferred by the account usage safeguard; retry later.");
+  if (!syncResult.verification?.some(file => file.fileId === removedId && file.deactivated)) throw new Error("Roster removal was not confirmed.");
+  for (const sourceType of syncResult.sourceTypes || []) await finishManualRosterPublication(sourceType);
   if (syncResult?.files || syncResult?.keptFileIds) {
     calendarStoreStatus = { ...syncResult, checkedAt: new Date().toISOString() };
     calendarStoreStatusError = "";
@@ -19983,56 +19958,16 @@ function restoreRemovedImportAfterFailedRemoval(id, removedEntry) {
 
 async function completeRosterRemovalAfterSync(id, removedEntry, removedName) {
   invalidateCalendarSnapshotCachesForChangedRosterFiles([removedEntry]);
-
-  if (!selectedFiles.length) {
-    if (isViewingCreatorAccount() && cloudAvailable) {
-      applyAuthoritativeAvailableDoctors([]);
-      await refreshAvailableDoctorsAfterRosterChange({ localOnly: true, mergeAvailableDoctors: false });
-      await waitForCreatorSwitcherRemovalSettled(removedEntry);
-      const announced = await tryAnnounceCreatorSwitcherRosterUpdate();
-      if (!announced && creatorSwitcherAnnouncementBaseline !== null) {
-        setStatus("Roster removed from storage but switcher did not refresh yet; retrying…", true);
-        throw new Error("Switcher did not refresh after roster removal.");
-      }
-    }
-    resetDerivedState({ preserveSession: true });
-    queueAccountImportsSave();
-    if (!canUseCreatorDoctorSwitcher() || creatorSwitcherAnnouncementBaseline === null) {
-      setStatus("Add a roster file to begin.");
-    }
-    return;
-  }
-
-  await refreshAvailableDoctorsAfterRosterChange({ localOnly: true, mergeAvailableDoctors: false });
-
-  const loaded = await loadCloudCalendarEvents({
-    preserveExistingSnapshot: false,
-    cachedRevision: "",
-    allowInlineBuild: true,
-  });
-  if (loaded && currentSnapshot) {
-    currentSnapshot = filterSnapshotDoctorsAfterRemoval(currentSnapshot, removedEntry);
-    renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot?.session || {});
-  } else if (!loaded) {
-    throw new Error("Could not reload calendar after roster removal.");
-  }
-
-  try {
-    await syncCreatorDoctorPickerWithRemainingRosters({ localOnly: true });
-    renderDoctorState();
-  } catch {
-    // Keep the last merged doctor list.
-  }
-
-  await waitForCreatorSwitcherRemovalSettled(removedEntry);
-
-  const announced = await tryAnnounceCreatorSwitcherRosterUpdate();
-  if (!announced && isViewingCreatorAccount() && cloudAvailable && creatorSwitcherAnnouncementBaseline !== null) {
-    setStatus("Roster removed from storage but switcher did not refresh yet; retrying…", true);
-    throw new Error("Switcher did not refresh after roster removal.");
-  }
-
+  const doctors = await calendarStoreRequest("listRosterDoctors");
+  if (Array.isArray(doctors.availableDoctors)) applyAuthoritativeAvailableDoctors(doctors.availableDoctors);
+  await refreshCalendarStoreStatus({ silent: true, expectedFileIds: selectedFiles.map(entry => entry.id) });
+  if (selectedFiles.length) {
+    await loadCloudCalendarEvents({ preserveExistingSnapshot: false, cachedRevision: "", allowInlineBuild: false });
+  } else resetDerivedState({ preserveSession: true });
+  renderDoctorState();
+  renderFileSurfaces();
   queueAccountImportsSave();
+  setStatus(`${removedName || "Roster"} removed from the active roster set.`);
 }
 
 function scheduleRosterRemovalRetry(id, removedEntry, removedName) {
@@ -20278,6 +20213,7 @@ function renderWorkspaceFromSnapshot(snapshot, session = {}, options = {}) {
   // Rehydrating them is local reconciliation, not a user edit, and must never
   // schedule a redundant full cloud save.
   reconcileMaterializedPreviewCustomEvents();
+  rememberSessionBaseline(session);
   hydrateInsightCacheFromSnapshot(currentSnapshot);
   pendingPreviewSnapToToday = options.preserveScroll !== true;
   renderSettings();

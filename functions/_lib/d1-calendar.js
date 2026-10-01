@@ -3834,7 +3834,7 @@ export async function replaceAccountCustomEvents(db, ownerEmail, events = []) {
   return true;
 }
 
-export async function queryAccountCustomEvents(db, ownerEmail) {
+export async function queryAccountCustomEvents(db, ownerEmail, options = {}) {
   if (!db?.prepare || !ownerEmail) return [];
   await ensureCalendarSchema(db);
   const rows = await db.prepare(`
@@ -3842,6 +3842,7 @@ export async function queryAccountCustomEvents(db, ownerEmail) {
     FROM custom_events
     WHERE owner_email = ?
     ORDER BY start_date, start_time, title, id
+    ${options.limit ? "LIMIT " + Math.max(1, Math.min(Math.floor(options.limit), 201)) : ""}
   `).bind(normalizeEmail(ownerEmail)).all();
   return (rows.results || []).map((row) => ({
     id: String(row.id || ""),
