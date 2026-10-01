@@ -1,5 +1,7 @@
 import { applyEventOverrides, customEventsToEvents, defaultSettings, filterCalendarRosterEvents, inspectImportRecord, isClinicalSupportRosterEvent, isIgnoredRosterIssueValue, normalizeRosterName, previewSummary } from "../_lib/roster.js";
 import { AUTOMATION_SOURCES } from "../_lib/automation-import.js";
+import { reserveRosterMaintenanceBudget, maintenanceBudgetDeferredError } from "../_lib/roster-maintenance-budget.js";
+import { automaticFacilityPublicationEnabled, facilityRefreshStatements } from "../_lib/facility-refresh-queue.js";
 import { DDH_CONTACT_LIST_SOURCE_ID, MMC_CONTACT_LIST_SOURCE_ID, attachContactAllocations, contactAreaForSource, contactExtractHasExpired, contactOperationalDate, contactsAfterShiftChange, normaliseContactListExtract, shouldCarryPreviousNightContacts, shouldUseCurrentExtractForPreviousNight } from "../../public/static/contact-allocations.js";
 import { requestQueuedRosterProcessing } from "../_lib/automation-dispatch.js";
 import { advancedRosterMaintenanceEnabled, reviewedRosterFactLimit, rosterStatusSummaryEnabled, rosterWritesExplicitlyPaused, rosterWritePausedResponse } from "../_lib/roster-automation-guard.js";
@@ -6094,6 +6096,10 @@ async function runCoreDerivedRosterSave(context, job = {}) {
         {
           deferDailyPresence: false,
           maximumIncrementalFacts: job.maximumIncrementalFacts,
+          reserveMaintenanceBudget: job.reserveMaintenanceBudget,
+          deferredBudgetError: maintenanceBudgetDeferredError,
+          facilityRefreshStatements: automaticFacilityPublicationEnabled(context.env, filePayload.sourceType)
+            ? (dates, revision) => facilityRefreshStatements(db, filePayload.sourceType, dates, `${fileId}:${revision}`) : undefined,
         },
       );
       if (result?.unchanged !== true) {
@@ -6235,6 +6241,8 @@ export async function runAutomatedDerivedRosterSave(context, job = {}) {
     email: `automation:${sourceId}`,
     reason: `automation:${sourceId}`,
     maximumIncrementalFacts: reviewedLimit || undefined,
+    reserveMaintenanceBudget: String(context.env.ROSTER_AUTOMATION_BOUNDED_IMPORT_ENABLED || "") === "true"
+      ? (writes, reads) => reserveRosterMaintenanceBudget(context.env.ROSTER_DB, writes, reads) : undefined,
   });
 }
 

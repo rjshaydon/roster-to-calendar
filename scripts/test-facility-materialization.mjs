@@ -1,3 +1,8 @@
+import { onRequest as middleware } from "../functions/_middleware.js";
+import { onRequestPost as refreshFacility } from "../functions/api/automation/facility-refresh.js";
+import { facilityRefreshStatements } from "../functions/_lib/facility-refresh-queue.js";
+import { executeBoundedRosterImport } from "./roster-import-driver.mjs";
+import { ROSTER_IMPORT_WRITE_COST } from "../functions/_lib/roster-import-batches.js";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
@@ -14,6 +19,8 @@ import {
   appendDerivedRosterFileEvents,
   activateDerivedRosterFile,
   FACILITY_BOOTSTRAP_EVENT_SQL,
+  queryCoworkerEvents,
+  queryOverlapDoctors,
 } from "../functions/_lib/d1-calendar.js";
 import { onRequestPost as saveAutomatedDerivedRoster } from "../functions/api/automation/derived.js";
 import { onRequestPost as bootstrapFacility } from "../functions/api/automation/facility-bootstrap.js";
@@ -22,6 +29,8 @@ import { onRequestPost as ingestContacts } from "../functions/api/automation/con
 import { onRequestPost as stateHandler } from "../functions/api/state.js";
 import { facilityPublicationBatches, initializeFacilityMaterialization, loadPublishedFacilityDays, loadPublishedFacilityMetadata, loadPublishedFacilityRange, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata, runFacilityPublicationStep } from "../functions/_lib/facility-overview-cache.js";
 import { contactOperationalDate } from "../public/static/contact-allocations.js";
+import { planRosterImportBatches } from "../functions/_lib/roster-import-batches.js";
+import { beginBoundedRosterImport, stageBoundedRosterBatch, prepareBoundedRosterPresence, prepareBoundedRosterMetadata, activateBoundedRosterTerm } from "../functions/_lib/roster-import-staging.js";
 
 class LocalD1 {
   constructor(sqlite) { this.sqlite = sqlite; this.rowsWritten = 0; this.sql = []; this.failRunIncludes = ""; }
@@ -38,9 +47,11 @@ class LocalD1 {
         }
         const result = owner.sqlite.prepare(sql).run(...this.args);
         owner.rowsWritten += Number(result.changes || 0);
-        return { success: true, meta: { changes: Number(result.changes || 0) } };
+        return { success: true, meta: { changes: Number(result.changes || 0), rows_read: Number(result.changes || 0) + 1, rows_written: Number(result.changes || 0) } };
       },
-      async all() { return { success: true, results: owner.sqlite.prepare(sql).all(...this.args) }; },
+      // Metadata is simulated here to test reservation/refund logic, not to
+      // claim SQLite result counts measure Cloudflare index billing.
+      async all() { const results = owner.sqlite.prepare(sql).all(...this.args); return { success: true, results, meta: { rows_read: results.length + 1, rows_written: 0 } }; },
       async first() { return owner.sqlite.prepare(sql).get(...this.args) || null; },
     };
   }
@@ -86,6 +97,10 @@ for (const name of (await readdir(new URL("../migrations", import.meta.url))).fi
   sqlite.exec(await readFile(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
 }
 const db = new LocalD1(sqlite);
+for (const [table, kind] of [["roster_events", "event"], ["roster_issues", "issue"], ["roster_daily_presence", "presence"], ["roster_doctors", "doctor"], ["roster_file_doctors", "fileDoctor"], ["facility_sms_memberships", "sms"], ["facility_term_staff_contributions", "compact"], ["facility_stream_catalog_contributions", "compact"]]) {
+  assert.ok(ROSTER_IMPORT_WRITE_COST[kind] >= 1 + sqlite.prepare(`PRAGMA index_list(${table})`).all().length, `${table}: reservation must include every index`);
+}
+
 const bootstrapEventPlan = sqlite.prepare(`EXPLAIN QUERY PLAN ${FACILITY_BOOTSTRAP_EVENT_SQL}`).all("fixture-mmc", 25001).map((row) => String(row.detail));
 assert.ok(bootstrapEventPlan.some((line) => /SEARCH roster_events USING INDEX idx_roster_events_file \(file_id=\?\)/.test(line)), "bootstrap must use the exact file index");
 assert.equal(bootstrapEventPlan.some((line) => /SCAN roster_events|TEMP B-TREE/i.test(line)), false, "bootstrap must not scan or sort roster history before applying its limit");
@@ -784,4 +799,185 @@ assert.equal(routeSqlite.prepare("SELECT COUNT(*) AS count FROM roster_events WH
 const repairedBookkeeping = await runCompleteRoute("route-bookkeeping-failure", "route-activated-file", activatedEvents, { seedRun: false });
 assert.equal(repairedBookkeeping.unchanged, true);
 
+async function withNextImportBudget(operation) {
+  let result = await operation();
+  if (result.deferred) {
+    routeSqlite.prepare("UPDATE roster_import_daily_budget SET reserved_writes=0, reserved_reads=0 WHERE utc_day=?").run(new Date().toISOString().slice(0, 10));
+    result = await operation();
+  }
+  assert.notEqual(result.deferred, true);
+  return result;
+}
+
+const stagedFile = { ...file, id: "bounded-staged-term", sourceId: "monash-adults", active: false };
+const stagedEvents = { "TERM TRAINEE": Array.from({ length: 1800 }, (_, index) => event(`bounded-${index}`, "2027-05-03", "Day")) };
+const batchPlan = await planRosterImportBatches({ file: stagedFile, doctors, eventsByDoctor: stagedEvents, issuesByDoctor: {} });
+await beginBoundedRosterImport(routeDb, "bounded-run", stagedFile, batchPlan);
+assert.equal(routeSqlite.prepare("SELECT active FROM roster_files WHERE id=?").get(stagedFile.id).active, 0);
+await assert.rejects(stageBoundedRosterBatch(routeDb, "bounded-run", stagedFile, batchPlan.revision, batchPlan.batches[1]), /processed in order/);
+const changedBatch = structuredClone(batchPlan.batches[0]);
+changedBatch.eventsByDoctor["TERM TRAINEE"][0].title = "Changed during retry";
+await assert.rejects(stageBoundedRosterBatch(routeDb, "bounded-run", stagedFile, batchPlan.revision, changedBatch), /differs from the pinned plan/);
+routeDb.failRunIncludes = "INSERT INTO roster_import_batch_receipts";
+await assert.rejects(stageBoundedRosterBatch(routeDb, "bounded-run", stagedFile, batchPlan.revision, batchPlan.batches[0]), /Injected D1 statement failure/);
+assert.equal(routeSqlite.prepare("SELECT COUNT(*) AS count FROM roster_events WHERE file_id=?").get(stagedFile.id).count, 0, "receipt failure must roll back all event writes in its batch");
+assert.equal(routeSqlite.prepare("SELECT next_batch FROM roster_import_jobs WHERE run_id='bounded-run'").get().next_batch, 0);
+await withNextImportBudget(() => stageBoundedRosterBatch(routeDb, "bounded-run", stagedFile, batchPlan.revision, batchPlan.batches[0]));
+routeDb.rowsWritten = 0;
+assert.equal((await stageBoundedRosterBatch(routeDb, "bounded-run", stagedFile, batchPlan.revision, batchPlan.batches[0])).duplicate, true);
+assert.equal(routeDb.rowsWritten, 0, "receipt replay must write nothing");
+assert.equal((await beginBoundedRosterImport(routeDb, "bounded-run", stagedFile, batchPlan)).nextBatch, 1, "resume must not clear previously persisted events");
+for (const batch of batchPlan.batches.slice(1)) await withNextImportBudget(() => stageBoundedRosterBatch(routeDb, "bounded-run", stagedFile, batchPlan.revision, batch));
+assert.equal(routeSqlite.prepare("SELECT COUNT(*) AS count FROM roster_events WHERE file_id=?").get(stagedFile.id).count, 1800);
+assert.equal(routeSqlite.prepare("SELECT event_count FROM roster_import_jobs WHERE run_id='bounded-run'").get().event_count, 1800);
+assert.equal(routeSqlite.prepare("SELECT active FROM roster_files WHERE id=?").get(stagedFile.id).active, 0, "even a fully staged import stays hidden until activation is implemented and verified");
+assert.equal(routeSqlite.prepare("SELECT COUNT(*) AS count FROM roster_daily_presence WHERE event_id >= ? AND event_id < ?").get(`${stagedFile.id}:`, `${stagedFile.id};`).count, 0, "staging must not leak upcoming clinicians through the presence index");
+await assert.rejects(activateBoundedRosterTerm(routeDb, "bounded-run", batchPlan.revision), /not ready for activation/);
+await assert.rejects(prepareBoundedRosterMetadata(routeDb, "bounded-run", batchPlan.revision), /Incomplete staged import/);
+for (const batch of batchPlan.batches) await withNextImportBudget(() => prepareBoundedRosterPresence(routeDb, "bounded-run", stagedFile, batchPlan.revision, batch));
+routeDb.rowsWritten = 0;
+assert.equal((await prepareBoundedRosterPresence(routeDb, "bounded-run", stagedFile, batchPlan.revision, batchPlan.batches[0])).duplicate, true);
+assert.equal(routeDb.rowsWritten, 0);
+const futureOptions = { sourceTypes: ["mmc"], startDate: "2027-05-03", endDate: "2027-05-03" };
+assert.deepEqual(await queryCoworkerEvents(routeDb, futureOptions), [], "prepared presence must not expose the inactive roster");
+assert.deepEqual(await queryCoworkerEvents(routeDb, { ...futureOptions, overlapDoctorKeys: ["TERM TRAINEE"] }), []);
+assert.deepEqual(await queryOverlapDoctors(routeDb, { ...futureOptions, overlapDoctorKeys: ["TERM TRAINEE"] }), []);
+await withNextImportBudget(() => prepareBoundedRosterMetadata(routeDb, "bounded-run", batchPlan.revision));
+assert.equal((await queryMaterializedFacilityCoverage(routeDb, { sourceType: "mmc" })).some((row) => row.fileId === stagedFile.id), false);
+routeSqlite.prepare("UPDATE roster_import_daily_budget SET reserved_writes=0, reserved_reads=0").run();
+routeDb.failRunIncludes = "UPDATE roster_import_jobs SET activated";
+await assert.rejects(activateBoundedRosterTerm(routeDb, "bounded-run", batchPlan.revision), /Injected D1 statement failure/);
+assert.equal(routeSqlite.prepare("SELECT active FROM roster_files WHERE id=?").get(stagedFile.id).active, 0, "activation control rows must roll back together");
+const activatedTerm = await activateBoundedRosterTerm(routeDb, "bounded-run", batchPlan.revision);
+assert.equal(activatedTerm.events, 1800);
+assert.equal((await queryCoworkerEvents(routeDb, futureOptions)).length, 1800, "only the final activation exposes the complete roster");
+routeDb.rowsWritten = 0;
+assert.equal((await activateBoundedRosterTerm(routeDb, "bounded-run", batchPlan.revision)).duplicate, true);
+assert.equal(routeDb.rowsWritten, 0);
+assert.equal((await beginBoundedRosterImport(routeDb, "bounded-run", stagedFile, batchPlan)).completed, true);
+
+// Full-term execution for each ingestion class, with exhausted daily budget
+// and later resumption simulated locally. No production data is submitted.
+for (const [sourceId, sourceType] of [["monash-adults", "mmc"], ["monash-paeds", "mch"], ["dandenong-findmyshift", "ddh"], ["vhh-active-medical-roster", "vhh"]]) {
+  const fullFile = { ...file, id: `full-${sourceType}`, sourceId, sourceType, name: `Full ${sourceType}.xlsx` };
+  const fullDoctors = Array.from({ length: 200 }, (_, index) => ({ key: `FULL ${index}`, displayName: `Full ${index}`, seniority: "HMO" }));
+  const fullEvents = Object.fromEntries(fullDoctors.map((doctor) => [doctor.key, Array.from({ length: 90 }, (_, day) => {
+    const date = new Date(Date.UTC(2027, 7, 2 + day)).toISOString().slice(0, 10);
+    return { ...event(`day-${day}`, date, "Day"), source: sourceType };
+  })]));
+  const fullPlan = await planRosterImportBatches({ file: fullFile, doctors: fullDoctors, eventsByDoctor: fullEvents, issuesByDoctor: {} });
+  const runId = `full-run-${sourceType}`;
+  const quotaDay = new Date().toISOString().slice(0, 10);
+  routeSqlite.prepare("UPDATE roster_import_daily_budget SET reserved_writes=10000 WHERE utc_day=?").run(quotaDay);
+  const deferredStart = await beginBoundedRosterImport(routeDb, runId, fullFile, fullPlan);
+  assert.equal(deferredStart.deferred, true);
+  assert.equal(routeSqlite.prepare("SELECT COUNT(*) AS count FROM roster_files WHERE id=?").get(fullFile.id).count, 0);
+  let exhaustedDays = 0;
+  const resume = async (operation) => {
+    let result = await operation();
+    if (result.deferred) {
+      assert.equal(routeSqlite.prepare("SELECT reserved_writes FROM roster_import_daily_budget WHERE utc_day=?").get(quotaDay).reserved_writes <= 10000, true);
+      exhaustedDays++;
+      routeSqlite.prepare("UPDATE roster_import_daily_budget SET reserved_writes=0, reserved_reads=0 WHERE utc_day=?").run(quotaDay);
+      result = await operation();
+    }
+    assert.notEqual(result.deferred, true);
+    return result;
+  };
+  await resume(() => beginBoundedRosterImport(routeDb, runId, fullFile, fullPlan));
+  for (const batch of fullPlan.batches) await resume(() => stageBoundedRosterBatch(routeDb, runId, fullFile, fullPlan.revision, batch));
+  for (const batch of fullPlan.batches) await resume(() => prepareBoundedRosterPresence(routeDb, runId, fullFile, fullPlan.revision, batch));
+  assert.equal(routeSqlite.prepare("SELECT active FROM roster_files WHERE id=?").get(fullFile.id).active, 0);
+  await resume(() => prepareBoundedRosterMetadata(routeDb, runId, fullPlan.revision));
+  await resume(() => activateBoundedRosterTerm(routeDb, runId, fullPlan.revision));
+  assert.ok(exhaustedDays >= 3, "large imports must carry progress across budget windows, not raise the daily ceiling");
+  assert.equal(routeSqlite.prepare("SELECT COUNT(*) AS count FROM roster_events WHERE file_id=?").get(fullFile.id).count, 18000);
+  assert.equal(routeSqlite.prepare("SELECT active FROM roster_files WHERE id=?").get(fullFile.id).active, 1);
+}
+
 console.log("Facility materialisation and automated-handler checks passed unchanged, correction, overlap, SMS continuity, and 14-day visibility checks.");
+
+// Exercise the production HTTP protocol through middleware, interruption,
+// completion bookkeeping failure, and durable cursor replay.
+const httpFile = { ...file, id: "http-bounded-file", contentHash: "http-content", sourceId: "monash-adults", active: false };
+const httpPlan = await planRosterImportBatches({ file: httpFile, doctors, eventsByDoctor: { "TERM TRAINEE": Array.from({ length: 700 }, (_, i) => event(`http-${i}`, "2028-02-07")) }, issuesByDoctor: {}, contentHash: "http-content" });
+routeSqlite.prepare("INSERT INTO roster_sync_runs (id, source_id, trigger_type, file_id, source_file_id, content_hash, status, started_at) VALUES (?, ?, 'automatic', ?, ?, ?, 'queued', ?)").run("http-bounded-run", "monash-adults", httpFile.id, httpFile.id, "http-content", new Date().toISOString());
+const httpEnv = { ROSTER_DB: routeDb, ROSTER_FILES: new LocalR2(), ROSTER_AUTOMATION_TOKEN: token, ROSTER_AUTOMATION_WRITES_ENABLED: "true", ROSTER_AUTOMATION_QUEUE_ENABLED: "true", ROSTER_AUTOMATION_SOURCE_ALLOWLIST: "monash-adults", ROSTER_AUTOMATION_REVIEWED_FACT_LIMIT: "1250", ROSTER_AUTOMATION_BOUNDED_IMPORT_ENABLED: "true", FACILITY_AUTOMATIC_PUBLICATION_ENABLED: "true", FACILITY_SHARED_ROLLOUT_ACTIVE: "true", FACILITY_SHARED_EMERGENCY_PAUSED: "false", FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST: "mmc" };
+async function httpStep(body, env = httpEnv, handler = saveAutomatedDerivedRoster, path = "derived") {
+  const pending = [];
+  const context = { request: new Request(`http://local/api/automation/${path}`, { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body) }), env: { ...env }, waitUntil(p) { pending.push(p); } };
+  context.next = () => handler(context);
+  const response = await middleware(context);
+  await Promise.all(pending);
+  return { status: response.status, data: await response.json() };
+}
+const protocolCallback = async (step) => {
+  const response = await httpStep({ ...step, runId: "http-bounded-run", sourceId: "monash-adults", file: httpFile });
+  if (response.status !== 200) throw new Error(response.data.error || JSON.stringify(response.data));
+  return response.data;
+};
+const originalConsoleLog = console.log;
+console.log = () => {};
+try {
+  const beforeDisabled = routeDb.sql.length;
+  const disabled = await httpStep({ phase: "bounded-begin", sourceId: "monash-adults", file: httpFile }, { ...httpEnv, ROSTER_AUTOMATION_BOUNDED_IMPORT_ENABLED: "false" });
+  assert.equal(disabled.status, 503);
+  assert.equal(routeDb.sql.slice(beforeDisabled).some((sql) => /roster_import_|facility_refresh_jobs/.test(sql)), false);
+  let interrupted = false;
+  await assert.rejects(executeBoundedRosterImport(httpPlan, async (step) => {
+    const result = await protocolCallback(step);
+    if (step.phase === "bounded-events" && !interrupted) { interrupted = true; throw new Error("Simulated lost HTTP response"); }
+    return result;
+  }), /lost HTTP response/);
+  routeSqlite.prepare("UPDATE roster_import_daily_budget SET reserved_writes=0, reserved_reads=0").run();
+  routeDb.failRunIncludes = "UPDATE roster_sync_runs";
+  await assert.rejects(executeBoundedRosterImport(httpPlan, async (step) => {
+    routeSqlite.prepare("UPDATE roster_import_daily_budget SET reserved_writes=0, reserved_reads=0").run();
+    return protocolCallback(step);
+  }), /Injected D1 statement failure/);
+  assert.equal(routeSqlite.prepare("SELECT active FROM roster_files WHERE id=?").get(httpFile.id).active, 1);
+  const completed = await executeBoundedRosterImport(httpPlan, protocolCallback);
+  assert.equal(completed.completed, true);
+  assert.equal(routeSqlite.prepare("SELECT status FROM roster_sync_runs WHERE id=?").get("http-bounded-run").status, "success");
+  assert.equal((await executeBoundedRosterImport(httpPlan, protocolCallback)).completed, true);
+  assert.equal(routeSqlite.prepare("SELECT COUNT(*) AS n FROM roster_events WHERE file_id=?").get(httpFile.id).n, 700);
+
+  // Publish a complete fixture, then rebuild one date. Other dates in that
+  // month must survive and completed jobs must not requeue old term dates.
+  await routeDb.batch(facilityRefreshStatements(routeDb, "mmc", ["2026-08-03", "2026-08-04"], "refresh-fixture-1"));
+  async function drainRefresh() {
+    for (let i = 0; i < 24; i += 1) {
+      const result = await httpStep({ sourceId: "monash-adults" }, httpEnv, refreshFacility, "facility-refresh");
+      assert.equal(result.status, 200, JSON.stringify(result.data));
+      if (result.data.completed) return;
+      assert.equal(result.data.deferred, undefined);
+    }
+    assert.fail("Refresh did not complete within bounded steps");
+  }
+  routeSqlite.prepare("UPDATE roster_import_daily_budget SET reserved_writes=0, reserved_reads=0").run();
+  await drainRefresh();
+  const beforePartial = await loadPublishedFacilityDays(httpEnv.ROSTER_FILES, ["mmc"], "2026-08-04");
+  await routeDb.batch(facilityRefreshStatements(routeDb, "mmc", ["2026-08-03"], "refresh-fixture-2"));
+  assert.deepEqual(JSON.parse(routeSqlite.prepare("SELECT dates_json FROM facility_refresh_jobs WHERE source_type='mmc' AND term_start='2026-08-03'").get().dates_json), ["2026-08-03"]);
+  httpEnv.ROSTER_FILES.failPointerOnce = true;
+  await assert.rejects(drainRefresh(), /Injected manifest failure/);
+  assert.deepEqual(await loadPublishedFacilityDays(httpEnv.ROSTER_FILES, ["mmc"], "2026-08-04"), beforePartial);
+  await drainRefresh();
+  assert.deepEqual(await loadPublishedFacilityDays(httpEnv.ROSTER_FILES, ["mmc"], "2026-08-04"), beforePartial);
+  const allowance = routeSqlite.prepare("SELECT reserved_reads FROM roster_import_daily_budget").get();
+  assert.ok(allowance.reserved_reads < 500000, "complete metadata refunds unused read reservations");
+  routeSqlite.prepare("UPDATE roster_import_daily_budget SET reserved_reads=500000").run();
+  const paused = await httpStep({ sourceId: "monash-adults" }, httpEnv, refreshFacility, "facility-refresh");
+  assert.equal(paused.data.deferred, true);
+  const seedDeferred = await httpStep({ sourceId: "monash-adults", seedCurrent: true }, httpEnv, refreshFacility, "facility-refresh");
+  assert.equal(seedDeferred.data.deferred, true);
+  routeSqlite.prepare("UPDATE roster_import_daily_budget SET reserved_writes=0, reserved_reads=0").run();
+  const seeded = await httpStep({ sourceId: "monash-adults", seedCurrent: true }, httpEnv, refreshFacility, "facility-refresh");
+  assert.equal(seeded.status, 200);
+  assert.equal(seeded.data.seeded, true);
+  assert.ok(seeded.data.dateCount <= 120);
+  const invalidSourceReads = routeDb.sql.length;
+  assert.equal((await httpStep({ sourceId: "unknown", seedCurrent: true }, httpEnv, refreshFacility, "facility-refresh")).status, 503);
+  assert.equal(routeDb.sql.length, invalidSourceReads);
+} finally { console.log = originalConsoleLog; }
+console.log("Bounded HTTP continuation, indexed reservation envelopes and incremental automatic publication checks passed.");

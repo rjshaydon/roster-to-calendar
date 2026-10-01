@@ -71,7 +71,7 @@ export async function runFacilityPublicationStep(context, sourceTypeValue, optio
   }
   let plan;
   try {
-    plan = await buildFacilityPublicationPlan(context, sourceType, requestedTerm, FACILITY_PUBLICATION_LIMITS.dates);
+    plan = await buildFacilityPublicationPlan(context, sourceType, requestedTerm, FACILITY_PUBLICATION_LIMITS.dates, options.dates);
   } catch (error) {
     if (error?.code !== "FACILITY_MATERIALIZATION_READ_BUDGET") throw error;
     return {
@@ -187,7 +187,11 @@ async function buildFacilityPublicationMonth(context, plan, publicPlan, month) {
   if (existing.data) return { ok: true, mode: "build-month", unchanged: true, operationRevision: plan.planRevision, month };
   const completed = await loadCompletedBatchResults(r2, plan, publicPlan);
   if (!completed.ok) return completed;
-  const pointers = Object.assign({}, ...completed.results.map((item) => item.pointers || {}));
+  const stagedPlan = await loadJsonObject(r2, facilityOperationKey(plan.sourceType, plan.planRevision));
+  if (!stagedPlan.data) return { ok: false, reason: "publication-plan-required" };
+  const pointers = { ...(stagedPlan.data.preparedManifest?.days || {}) };
+  for (const date of plan.plannedDates) delete pointers[date];
+  Object.assign(pointers, ...completed.results.map((item) => item.pointers || {}));
   const monthDates = Object.entries(pointers).filter(([date]) => date.startsWith(`${month}-`)).sort(([a], [b]) => a.localeCompare(b));
   const rows = [];
   for (const [, pointer] of monthDates) {
@@ -217,7 +221,9 @@ async function finalizeFacilityPublication(context, plan, publicPlan) {
   if (!stagedPlan.data || stagedPlan.data.inputRevision !== plan.inputRevision) return { ok: false, stalePlan: true, reason: "publication-input-changed" };
   const completed = await loadCompletedBatchResults(r2, plan, publicPlan);
   if (!completed.ok) return completed;
-  const days = { ...(stagedPlan.data.preparedManifest?.days || {}), ...Object.assign({}, ...completed.results.map((item) => item.pointers || {})) };
+  const days = { ...(stagedPlan.data.preparedManifest?.days || {}) };
+  for (const date of plan.plannedDates) delete days[date];
+  Object.assign(days, ...completed.results.map((item) => item.pointers || {}));
   const months = { ...(stagedPlan.data.preparedManifest?.months || {}) };
   for (const month of publicPlan.months) {
     const result = await loadJsonObject(r2, facilityMonthResultKey(plan.sourceType, plan.planRevision, month));
@@ -299,7 +305,7 @@ export async function initializeFacilityMaterialization(context, sourceTypeValue
   }
 }
 
-async function buildFacilityPublicationPlan(context, sourceType, requestedTerm, maximumDates) {
+async function buildFacilityPublicationPlan(context, sourceType, requestedTerm, maximumDates, requestedDates = null) {
   const db = context.env.ROSTER_DB;
   const termEnd = australianTermEndForStart(requestedTerm);
   const metadata = await queryMaterializedFacilityMetadata(db, {
@@ -328,7 +334,13 @@ async function buildFacilityPublicationPlan(context, sourceType, requestedTerm, 
       cursor = addDays(cursor, 1);
     }
   }
-  const plannedDates = [...dates].sort();
+  let plannedDates = [...dates].sort();
+  if (requestedDates !== null) {
+    if (!Array.isArray(requestedDates) || requestedDates.length > maximumDates || requestedDates.some((date) => !/^\d{4}-\d{2}-\d{2}$/.test(date) || australianTermStartForDate(date) !== requestedTerm)) {
+      return { ok: false, reason: "invalid-affected-dates", sourceType, termStart: requestedTerm };
+    }
+    plannedDates = [...new Set(requestedDates)].sort();
+  }
   if (!plannedDates.length) return { ok: false, reason: "no-covered-dates", sourceType, termStart: requestedTerm };
   if (plannedDates.length > maximumDates) return { ok: false, overBudget: true, sourceType, termStart: requestedTerm, plannedDates: plannedDates.length, maximumDates };
   const input = contentOnly({

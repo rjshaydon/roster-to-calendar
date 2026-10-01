@@ -103,9 +103,10 @@ async function requestD1StatementLimit(request, pathname, action) {
   if (pathname === "/api/automation/derived" && request.method === "POST") {
     try {
       const body = await request.clone().json();
-      return String(body?.phase || "").toLowerCase() === "complete"
-        ? ROSTER_DERIVED_COMPLETE_D1_STATEMENT_LIMIT
-        : DEFAULT_D1_STATEMENT_LIMIT;
+      const phase = String(body?.phase || "").toLowerCase();
+      if (phase === "complete" || phase === "bounded-metadata") return ROSTER_DERIVED_COMPLETE_D1_STATEMENT_LIMIT;
+      if (["bounded-begin", "bounded-events"].includes(phase)) return 256;
+      return DEFAULT_D1_STATEMENT_LIMIT;
     } catch {
       return DEFAULT_D1_STATEMENT_LIMIT;
     }
@@ -211,7 +212,7 @@ function callerClass(request, pathname) {
   return "interactive-or-unknown";
 }
 
-function createD1Meter(database, limit) {
+export function createD1Meter(database, limit) {
   const state = { statementCount: 0, rowsRead: 0, rowsWritten: 0, metadataComplete: true };
   const originals = new WeakMap();
   const before = (count = 1) => {

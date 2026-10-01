@@ -1,0 +1,142 @@
+import { boundedRosterEventStatements, boundedRosterPresenceStatements, startDerivedRosterFileSave, refreshFacilityOverviewMaterializationForFile, australianTermStartForDate, australianTermEndForStart, facilitySmsMembershipStatement } from "./d1-calendar.js";
+import { rosterImportDigest, validateRosterImportManifest, validateRosterImportBatch, ROSTER_BATCH_FACT_LIMIT, ROSTER_BATCH_BYTE_LIMIT, ROSTER_IMPORT_WRITE_COST as COST } from "./roster-import-batches.js";
+import { reserveRosterMaintenanceBudget } from "./roster-maintenance-budget.js";
+import { facilityRefreshStatements, facilityTermDates } from "./facility-refresh-queue.js";
+
+// Internal execution primitives used only by the source- and budget-gated protocol.
+export async function beginBoundedRosterImport(db, runId, file, plan) {
+  validateRosterImportManifest(plan.manifest);
+  if (!runId || plan.manifest.fileId !== file.id || plan.manifest.sourceId !== file.sourceId || await rosterImportDigest(plan.manifest) !== plan.revision) throw new Error("Staged import plan does not match its queued file.");
+  if (plan.manifest.doctors.length > 512 || plan.manifest.eventCount > 25000 || plan.manifest.issueCount > 5000) throw new Error("Staged import plan exceeds total safety bounds.");
+  const existing = await db.prepare("SELECT * FROM roster_import_jobs WHERE run_id = ?").bind(runId).first();
+  if (existing && (existing.plan_revision !== plan.revision || existing.file_id !== file.id || existing.source_id !== file.sourceId)) throw new Error("Staged import plan changed; a new run is required.");
+  if (existing?.initialized === 1) return { duplicate: true, nextBatch: existing.next_batch, preparedBatch: existing.prepared_batch, completed: Boolean(existing.activated) };
+  const existingFile = await db.prepare("SELECT active FROM roster_files WHERE id = ?").bind(file.id).first();
+  if (Number(existingFile?.active) === 1) throw new Error("Cannot stage over an active roster.");
+  if (!await reserveImportWrites(db, plan.manifest.doctors.length * (COST.doctor + COST.fileDoctor) + COST.control)) return { deferred: true };
+  await db.prepare("INSERT OR IGNORE INTO roster_import_jobs (run_id, file_id, source_id, plan_revision, manifest_json) VALUES (?, ?, ?, ?, ?)")
+    .bind(runId, file.id, file.sourceId, plan.revision, JSON.stringify(plan.manifest)).run();
+  const claimedAt = new Date().toISOString();
+  const claim = await db.prepare("UPDATE roster_import_jobs SET initialize_started_at = ? WHERE run_id = ? AND initialized = 0 AND (initialize_started_at = '' OR initialize_started_at < ?)")
+    .bind(claimedAt, runId, new Date(Date.now() - 600000).toISOString()).run();
+  if (Number(claim.meta?.changes || 0) !== 1) return { deferred: true, reason: "initialization-in-progress" };
+  try {
+    await startDerivedRosterFileSave(db, { ...file, active: false }, plan.manifest.doctors);
+    await db.prepare("UPDATE roster_import_jobs SET initialized = 1, initialize_started_at = '' WHERE run_id = ? AND plan_revision = ? AND initialize_started_at = ?").bind(runId, plan.revision, claimedAt).run();
+  } catch (error) {
+    await db.prepare("UPDATE roster_import_jobs SET initialize_started_at = '' WHERE run_id = ? AND initialized = 0 AND initialize_started_at = ?").bind(runId, claimedAt).run();
+    throw error;
+  }
+  return { nextBatch: 0 };
+}
+
+export async function stageBoundedRosterBatch(db, runId, file, revision, batch) {
+  const job = await db.prepare("SELECT * FROM roster_import_jobs WHERE run_id = ?").bind(runId).first();
+  if (!job?.initialized || job.plan_revision !== revision || job.file_id !== file.id || job.source_id !== file.sourceId) throw new Error("Staged batch does not match its initialized job.");
+  const manifest = JSON.parse(job.manifest_json);
+  validateRosterImportBatch(batch, manifest);
+  const expected = manifest.batches[batch.index];
+  const hash = await rosterImportDigest(batch);
+  if (!expected || expected.hash !== hash) throw new Error("Staged batch differs from the pinned plan.");
+  if (batch.facts + 16 > ROSTER_BATCH_FACT_LIMIT || new TextEncoder().encode(JSON.stringify(batch)).length > ROSTER_BATCH_BYTE_LIMIT) throw new Error("Staged batch exceeds its safety budget.");
+  const receipt = await db.prepare("SELECT * FROM roster_import_batch_receipts WHERE run_id = ? AND batch_index = ?").bind(runId, batch.index).first();
+  if (receipt) {
+    if (receipt.payload_hash !== hash || receipt.plan_revision !== revision) throw new Error("Conflicting staged batch receipt.");
+    return { duplicate: true, nextBatch: job.next_batch };
+  }
+  if (batch.index !== job.next_batch) throw new Error("Staged batches must be processed in order.");
+  const storedFile = await db.prepare("SELECT active FROM roster_files WHERE id = ?").bind(file.id).first();
+  if (!storedFile || Number(storedFile.active) === 1) throw new Error("Staged file must remain inactive.");
+  const rows = boundedRosterEventStatements(db, file, batch.doctors, batch.eventsByDoctor, batch.issuesByDoctor);
+  if (rows.eventCount !== expected.eventCount || rows.issueCount !== expected.issueCount) throw new Error("Staged facts failed normalization; import remains inactive.");
+  if (rows.statements.length + 12 > 256) throw new Error("Staged transaction exceeds the D1 statement budget.");
+  if (!await reserveImportWrites(db, rows.eventCount * COST.event + rows.issueCount * COST.issue + COST.control)) return { deferred: true };
+  // One db.batch, rather than the legacy helper's multiple transactions:
+  // a receipt can never survive without all of its corresponding facts.
+  await db.batch([...rows.statements,
+    db.prepare("INSERT INTO roster_import_batch_receipts (run_id, batch_index, plan_revision, payload_hash) VALUES (?, ?, ?, ?)").bind(runId, batch.index, revision, hash),
+    db.prepare("UPDATE roster_import_jobs SET next_batch = next_batch + 1, event_count = event_count + ?, issue_count = issue_count + ? WHERE run_id = ? AND next_batch = ?")
+      .bind(rows.eventCount, rows.issueCount, runId, batch.index),
+    db.prepare("UPDATE roster_file_status_summaries SET event_count = ? WHERE file_id = ? AND active = 0 AND derived_state = 'building'")
+      .bind(expected.indexedEventCount, file.id),
+  ]);
+  return { nextBatch: batch.index + 1, eventCount: expected.indexedEventCount };
+}
+
+export async function prepareBoundedRosterPresence(db, runId, file, revision, batch) {
+  const job = await db.prepare("SELECT * FROM roster_import_jobs WHERE run_id = ?").bind(runId).first();
+  if (!job || job.plan_revision !== revision || job.file_id !== file.id || job.source_id !== file.sourceId) throw new Error("Presence preparation does not match the staged job.");
+  const manifest = JSON.parse(job.manifest_json);
+  validateRosterImportBatch(batch, manifest);
+  if (job.next_batch !== manifest.batches.length) throw new Error("All facts must be staged before presence preparation.");
+  if (manifest.batches[batch.index]?.hash !== await rosterImportDigest(batch)) throw new Error("Presence batch differs from the pinned plan.");
+  if (batch.index < job.prepared_batch) return { duplicate: true, nextBatch: job.prepared_batch };
+  if (batch.index !== job.prepared_batch) throw new Error("Presence batches must be processed in order.");
+  const stored = await db.prepare("SELECT active FROM roster_files WHERE id = ?").bind(file.id).first();
+  if (!stored || Number(stored.active) === 1) throw new Error("Presence preparation requires an inactive file.");
+  const presence = boundedRosterPresenceStatements(db, file, batch.doctors, batch.eventsByDoctor);
+  if (presence.count !== batch.presenceRows || presence.count + 16 > ROSTER_BATCH_FACT_LIMIT) throw new Error("Presence expansion exceeds its pinned batch budget.");
+  if (!await reserveImportWrites(db, presence.count * COST.presence + COST.control)) return { deferred: true };
+  await db.batch([...presence.statements, db.prepare("UPDATE roster_import_jobs SET prepared_batch = prepared_batch + 1 WHERE run_id = ? AND prepared_batch = ?").bind(runId, batch.index)]);
+  return { nextBatch: batch.index + 1 };
+}
+
+export async function prepareBoundedRosterMetadata(db, runId, revision) {
+  const job = await db.prepare("SELECT * FROM roster_import_jobs WHERE run_id = ?").bind(runId).first();
+  if (!job || job.plan_revision !== revision) throw new Error("Metadata preparation does not match its job.");
+  const manifest = JSON.parse(job.manifest_json);
+  if (job.next_batch !== manifest.batches.length || job.prepared_batch !== manifest.batches.length || job.event_count !== manifest.eventCount || job.issue_count !== manifest.issueCount) throw new Error("Incomplete staged import cannot be prepared or activated.");
+  if (job.compact_ready) return { duplicate: true };
+  if (!await reserveRosterMaintenanceBudget(db, 750 * COST.compact + COST.control, 70000)) return { deferred: true };
+  const result = await refreshFacilityOverviewMaterializationForFile(db, job.file_id, {
+    maximumEventRows: 25000, maximumDoctorRows: 512, maximumExistingStaffRows: 750,
+    maximumExistingCatalogRows: 750, maximumWrites: 750, contentRevision: revision,
+  });
+  if (result.overBudget || result.ok === false) throw new Error(`Compact metadata preparation blocked: ${result.reason}`);
+  if (result.eventCount !== manifest.eventCount || result.doctorCount !== manifest.doctors.length) throw new Error("Persisted roster counts do not match the complete staged manifest.");
+  await db.prepare("UPDATE roster_import_jobs SET compact_ready = 1 WHERE run_id = ? AND plan_revision = ?").bind(runId, revision).run();
+  return result;
+}
+
+// New, disjoint terms only. Large replacements continue through the existing
+// guarded correction path until a separately reviewed promotion is available.
+export async function activateBoundedRosterTerm(db, runId, revision, options = {}) {
+  const job = await db.prepare("SELECT * FROM roster_import_jobs WHERE run_id = ?").bind(runId).first();
+  if (!job || job.plan_revision !== revision || !job.compact_ready) throw new Error("Staged roster is not ready for activation.");
+  if (job.activated) return { duplicate: true, fileId: job.file_id };
+  const coverage = await db.prepare("SELECT * FROM roster_file_coverage WHERE file_id = ?").bind(job.file_id).first();
+  const file = await db.prepare("SELECT source_type, active FROM roster_files WHERE id = ?").bind(job.file_id).first();
+  if (!coverage || !file || Number(file.active) === 1) throw new Error("Prepared inactive roster is unavailable.");
+  const termStart = australianTermStartForDate(coverage.coverage_start);
+  const termEnd = australianTermStartForDate(coverage.coverage_end);
+  const existing = await db.prepare(`SELECT f.id, c.coverage_start, c.coverage_end FROM roster_files f INDEXED BY idx_roster_files_source_active
+    LEFT JOIN roster_file_coverage c ON c.file_id = f.id WHERE f.source_type = ? AND f.active = 1 LIMIT 33`).bind(file.source_type).all();
+  if (existing.results.length > 32 || existing.results.some((row) => !row.coverage_start || !row.coverage_end || (australianTermStartForDate(row.coverage_start) <= termEnd && australianTermStartForDate(row.coverage_end) >= termStart))) throw new Error("Bounded activation requires a disjoint new term with prepared existing coverage.");
+  const now = new Date().toISOString();
+  const manifest = JSON.parse(job.manifest_json);
+  if (!await reserveRosterMaintenanceBudget(db, manifest.doctors.length * COST.sms + COST.control, 60000)) return { deferred: true };
+  // Only small control rows change here. Events and presence are already
+  // prepared; active readers switch to the complete file atomically.
+  const activation = await db.batch([
+    db.prepare(`UPDATE roster_files SET active = 1 WHERE id = ? AND active = 0 AND NOT EXISTS (
+      SELECT 1 FROM roster_files f INDEXED BY idx_roster_files_source_active
+      LEFT JOIN roster_file_coverage c ON c.file_id = f.id
+      WHERE f.source_type = ? AND f.active = 1 AND (c.file_id IS NULL OR (c.coverage_start <= ? AND c.coverage_end >= ?)))`)
+      .bind(job.file_id, file.source_type, australianTermEndForStart(termEnd), termStart),
+    db.prepare("UPDATE roster_file_status_summaries SET active = 1, derived_state = 'ready', content_revision = ?, status_revision = ?, updated_at = ? WHERE file_id = ? AND EXISTS (SELECT 1 FROM roster_files f WHERE f.id = file_id AND f.active = 1)")
+      .bind(revision, crypto.randomUUID(), now, job.file_id),
+    db.prepare("UPDATE roster_import_jobs SET activated = 1 WHERE run_id = ? AND plan_revision = ? AND EXISTS (SELECT 1 FROM roster_files f WHERE f.id = file_id AND f.active = 1)").bind(runId, revision),
+    facilitySmsMembershipStatement(db, job.file_id, true),
+    ...(options.publishFacility ? facilityRefreshStatements(db, file.source_type, facilityTermDates(coverage.coverage_start, coverage.coverage_end), `${job.file_id}:${revision}`) : []),
+  ]);
+  if (Number(activation[0]?.meta?.changes || 0) !== 1) throw new Error("New-term activation was superseded by a conflicting roster.");
+  return { fileId: job.file_id, events: job.event_count };
+}
+
+// Shared across all four import sources, not a fresh allowance per workflow.
+// Conservative reservations survive failures; unused reservations are not
+// refunded. This adds at most 10,000 import writes/day and leaves the other
+// 5,000 writes below the restoration stop threshold for normal app activity.
+async function reserveImportWrites(db, writes) {
+  return reserveRosterMaintenanceBudget(db, writes, writes + 128);
+}

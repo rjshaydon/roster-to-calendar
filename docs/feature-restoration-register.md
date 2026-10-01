@@ -64,7 +64,7 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 | Control | Current safe value | Registered under |
 | --- | --- | --- |
 | `FACILITY_OVERVIEW_MAINTENANCE_MODE` | `false` in Production; `true` in Preview; missing or malformed fails closed | FR-01–FR-04 |
-| `FACILITY_OVERVIEW_AUTOMATIC_LAUNCH_ENABLED` | `false` in Production and Preview; missing or malformed fails closed | FR-03 |
+| `FACILITY_OVERVIEW_AUTOMATIC_LAUNCH_ENABLED` | `true` in Production; `false` in Preview; missing or malformed fails closed | FR-03 |
 | `FACILITY_SHARED_ROLLOUT_ACTIVE` | `true` in Production; `false` in Preview | FR-01 |
 | `FACILITY_SHARED_EMERGENCY_PAUSED` | `false` in Production; `true` in Preview | FR-01 |
 | `FACILITY_LEGACY_READS_PAUSED` | `true` permanently | FR-01, FR-17 |
@@ -170,10 +170,10 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 
 ### FR-04 — Live contact allocations and Creator corrections
 
-- **State:** Contact readers are enabled for DDH, MMC and MCH. Contact ingress
-  accepts the exact DDH and MMC sources, but the 27 September DDH user test
-  showed no contact details. Publication is therefore not considered restored
-  until its current-date overlay is visible end to end.
+- **State (1 October):** Current contact publication and display confirmed for
+  DDH, MMC and MCH. Both source flows are On; today's R2 extracts are present,
+  hospital readers return available, and the user confirms contacts visible in
+  all three sites. MMC/MCH published at 11:16 AEST; DDH at 09:15 AEST.
 - **Includes:** MMC/DDH contact overlays, automatic roster/contact matching,
   unresolved-number review and temporary Creator corrections.
 - **Controls:** Production contact readers are enabled only for
@@ -256,10 +256,13 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 
 ### FR-08 — Automated contact-list ingestion
 
-- **State:** The non-recursive workbook endpoint is deployed and exact DDH/MMC
-  ingress is open. DDH was last recorded On and MMC Off, but external state
-  must be read back. The user-visible DDH failure invalidates the previous
-  success gate; both supported sources require end-to-end evidence.
+- **State (1 October):** Automatic publication confirmed for DDH and MMC/MCH.
+  Both source flows are On. MMC's latest automatic run executed the recovered
+  Office Script/small-JSON path and HTTP successfully; DDH's publication run
+  executed its existing workbook retrieval and HTTP successfully. Today's
+  published extracts and user-visible contacts confirmed. See the confirmation
+  checkpoint in `full-service-restoration-plan.md` for run IDs and limits of
+  verification. No continuing MMC minute-by-minute loop was visible at 11:47.
 - **Includes:** receiving new contact extracts and publishing updated contact
   overlays.
 - **Controls:** `CONTACT_AUTOMATION_WRITES_ENABLED=true` in Production with the
@@ -270,9 +273,11 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
   retaining source-specific stop controls. Provider revision, maximum payload,
   bounded retention and unchanged-input no-op requirements still apply.
 - **Additional gate:** Each source flow must debounce/coalesce SharePoint
-  autosave events so only the newest settled file revision reaches SharePoint
-  `Get file content` and the binary HTTP step. No automatic flow may run an
-  Excel action against its own trigger workbook. The server deduplicates on the
+  autosave events so only the newest settled file revision reaches extraction
+  and HTTP. DDH retains its proven read-only workbook transport; MMC reuses the
+  Microsoft-side small-JSON path as directed in the superseding 28–30 September
+  section of `full-service-restoration-plan.md`. Verify MMC self-trigger
+  behaviour before claiming automatic restoration. The server deduplicates on the
   clinical allocation, excluding provider timestamps and versions, so
   metadata-only replays write zero D1 rows and zero R2 objects.
 
@@ -757,3 +762,18 @@ Post-change settled usage:
 Rollback/stop verified:
 Known limitations:
 ```
+
+
+### 1 October combined bounded roster / overview restoration batch
+
+User authorised batching features and testing the batch, pausing for material D1
+risk. FR-07 now has a durable, bounded next-term execution path for all four
+sources; FR-01 freshness uses seven-date publication steps and atomic R2 promotion;
+FR-03 cached automatic launch is enabled. Six-hour source-scoped continuation and
+DDH checks share the existing global processor lock; no global watchdog returns.
+Production enablement is gated by account-wide admission and exact-source flags.
+Preview and the legacy broad builders remain closed. This records implementation
+and release configuration, not proof that an unpublished future roster arrived.
+
+See [bounded-roster-import-checkpoint.md](./bounded-roster-import-checkpoint.md)
+for limits, checks, migrations, external flow readback and rollback controls.

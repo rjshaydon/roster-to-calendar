@@ -1,4 +1,5 @@
 import { automationSourceDefinition } from "../../_lib/automation-import.js";
+import { handleBoundedRosterRequest } from "../../_lib/roster-import-protocol.js";
 import {
   australianTermStartForDate,
   deleteDerivedRosterFile,
@@ -29,6 +30,7 @@ export async function onRequestPost(context) {
     if (!automatedRosterSourceEnabled(context.env, sourceId)) return rosterWritePausedResponse();
     const source = automationSourceDefinition(sourceId);
     if (!source && phase !== "failed") return Response.json({ error: "Unknown automation source." }, { status: 400 });
+    if (phase.startsWith("bounded-")) return handleBoundedRosterRequest(context, { ...body, sourceId }, source, resolveCompleteTarget);
     if (!["start", "events", "finish", "complete", "failed"].includes(phase)) {
       return Response.json({ error: "A valid derived-save phase is required." }, { status: 400 });
     }
@@ -153,6 +155,7 @@ export async function onRequestPost(context) {
     }
     return Response.json({ ok: true, phase, runId, result: saved?.result || null });
   } catch (error) {
+    if (error?.code === "ROSTER_MAINTENANCE_DEFERRED") return Response.json({ ok: true, deferred: true, message: error.message });
     const runId = String(body?.runId || "").trim();
     const sourceId = String(body?.sourceId || body?.file?.sourceId || "").trim();
     const failedAt = new Date().toISOString();

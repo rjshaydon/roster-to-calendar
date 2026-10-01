@@ -1,6 +1,8 @@
 import { buildAutomatedDerivedRosterPayload } from "../functions/_lib/automation-import.js";
 import { buildVhhDerivedRosterPayload, VHH_ROSTER_SOURCE_ID } from "../functions/_lib/vhh-roster.js";
 import { extractVhhRosterWorkbook } from "./vhh-roster-workbook.mjs";
+import { planRosterImportBatches } from "../functions/_lib/roster-import-batches.js";
+import { executeBoundedRosterImport } from "./roster-import-driver.mjs";
 
 import { guardedFetch } from "../functions/_lib/outbound-network.js";
 
@@ -14,11 +16,13 @@ if (!sourceId) throw new Error("ROSTER_AUTOMATION_SOURCE_ID is required.");
 const pending = await automationRequest(`/api/automation/pending?limit=1&sourceId=${encodeURIComponent(sourceId)}`);
 const runs = Array.isArray(pending.runs) ? pending.runs : [];
 if (runs.some((run) => run.sourceId !== sourceId)) throw new Error("Roster queue returned work for a different source.");
-const parserConfig = await automationRequest(`/api/automation/parser-config?sourceId=${encodeURIComponent(sourceId)}`);
-const parserExtensions = parserConfig?.parserExtensions && typeof parserConfig.parserExtensions === "object"
-  ? parserConfig.parserExtensions
-  : {};
 console.log(`Found ${runs.length} queued roster file(s).`);
+if (!runs.length || pending.maintenanceDeferred || (process.env.ROSTER_AUTOMATION_RESUME_ONLY === "true" && pending.boundedImportEnabled !== true)) {
+  console.log("No admitted import work; progress retained.");
+  process.exit(0);
+}
+const parserConfig = await automationRequest(`/api/automation/parser-config?sourceId=${encodeURIComponent(sourceId)}`);
+const parserExtensions = parserConfig?.parserExtensions && typeof parserConfig.parserExtensions === "object" ? parserConfig.parserExtensions : {};
 const failures = [];
 
 for (const run of runs) {
@@ -28,6 +32,10 @@ for (const run of runs) {
     const message = `Failed to process ${run.fileName || run.id}: ${error?.message || error}`;
     console.error(message);
     failures.push(message);
+    if (run.boundedImportStarted) {
+      console.error("Inactive staged data and receipts retained for the next bounded retry.");
+      continue;
+    }
     try {
       await automationRequest("/api/automation/derived", {
         method: "POST",
@@ -44,6 +52,13 @@ for (const run of runs) {
       console.error(reportingMessage);
       failures.push(reportingMessage);
     }
+  }
+}
+
+if (pending.boundedImportEnabled === true) {
+  for (let step = 0; step < 24; step += 1) {
+    const refresh = await automationRequest("/api/automation/facility-refresh", { method: "POST", body: { sourceId } });
+    if (refresh.idle || refresh.deferred || refresh.completed) break;
   }
 }
 
@@ -101,7 +116,27 @@ async function processRun(run) {
     ...payload.file,
     lastModified: Number(run.lastModified || payload.file.lastModified || Date.now()),
   };
-  const finished = await postDerived(run, payload, "complete", payload.doctors, payload.eventsByDoctor, payload.issuesByDoctor);
+  let finished;
+  if (pending.boundedImportEnabled === true) {
+    const plan = await planRosterImportBatches(payload);
+    run.boundedImportStarted = true;
+    finished = await executeBoundedRosterImport(plan, (step) => automationRequest("/api/automation/derived", {
+      method: "POST", body: { ...step, runId: run.id, sourceId: run.sourceId, file: payload.file },
+    }));
+    if (finished.deferred) {
+      console.log("Import write allowance exhausted; queued progress retained for automatic continuation.");
+      return;
+    }
+    if (finished.mode === "complete") {
+      run.boundedImportStarted = false;
+      finished = null;
+    }
+  }
+  finished ||= await postDerived(run, payload, "complete", payload.doctors, payload.eventsByDoctor, payload.issuesByDoctor);
+  if (finished.deferred) {
+    console.log("Roster correction deferred by the shared maintenance budget; existing calendars retained.");
+    return;
+  }
   console.log(`Indexed ${processedFileName}: ${finished.doctorCount} doctors, ${finished.eventCount} shifts.`);
 }
 

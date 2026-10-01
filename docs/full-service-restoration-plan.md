@@ -1,8 +1,136 @@
 # Full service restoration plan
 
-Status: first scoped contact diagnosis and local correction authorised and
-completed on 27 September. Deployment and the remaining restoration batches
-have not been performed in this round.
+Status: DDH, MMC and MCH current contact publication and automatic flow
+execution confirmed on 1 October. User confirms contacts visible in all three
+sites. MMC uses the recovered Microsoft-side Office Script / small-JSON path;
+DDH retains its working workbook extraction path. Other restoration batches
+remain open.
+
+### MMC/MCH contact restoration — confirmed 1 October
+
+**1 October confirmation checkpoint (11:47–11:50 AEST):**
+- User logged into the app and confirmed visible contacts for MMC, MCH and DDH.
+- Both `Sync MMC clinician contacts` and `Sync DDH clinician contacts` read
+  back **On**. No flow edits, submissions, deployments or workbook edits made
+  during this confirmation.
+- MMC automatic run `08584107890701849482674731631CU22`, started 11:23,
+  succeeded: settling delay, metadata, condition, Office Script (26.3 seconds)
+  and HTTP (0.3 seconds) all executed. This is not a skipped-extraction replay.
+  Latest ten runs include settled accepted runs at 11:13 and 11:23 and shorter
+  superseded runs; no ongoing minute-by-minute execution after 11:23 was shown
+  at 11:47. This observation does not prove every future edit cannot retrigger.
+- Specific MMC/MCH R2 manifest has operational date **2026-10-01**, received
+  11:16:13 and published 11:16:14 AEST, provider modified 11:13:17. Extract
+  contains both Adult and Paediatric sections. Existing contact reader run
+  locally against these exact published objects returns `available` for MMC
+  and MCH, with 17 and 9 populated AM contacts respectively. Contact details
+  were not printed or added to Git.
+- DDH run `08584107968727202331917818539CU06`, started 09:13, executed
+  file retrieval and HTTP successfully. R2 date **2026-10-01**, received
+  09:15:33 and published 09:15:35 AEST. Same reader verification returns
+  `available`, 14 populated AM contacts. DDH remains unchanged.
+- Fresh account analytics sample: 12,033 reads / 27 writes. The checker returns
+  STOP only for the new UTC day's two-hour passive baseline and missing second
+  sample; this is not a quota exhaustion or admission for another rollout.
+  Prior temporary reports were no longer present. Do not start a new rollout
+  on the basis of this single sample.
+- Functional automatic contacts are now confirmed for all three hospitals.
+  Exact per-request D1 telemetry, a controlled unchanged replay and a new
+  60-second visible-page observation were not repeated during this narrow
+  confirmation. Existing semantic no-op and zero-D1 refresh safeguards remain.
+  Bootstrap MMC remains the incompatible disabled historical flow; do not run
+  it or restore whole-workbook transfer.
+
+**1 October trigger diagnostic checkpoint (00:20–00:32 AEST):**
+- User performed the requested edit. SharePoint library confirms the exact
+  `Contact lists/shift allocation/SHIFT ALLOCATIONS.xlsx` was modified by the
+  user at 00:20 AEST. Do not ask for another edit merely because no run appears.
+- MMC flow remains On. Trigger readback: correct SharePoint site/Documents
+  library, exact filename condition, Split on enabled, concurrency Off, polling
+  definition one minute. No failed trigger checks; last recorded no-data check
+  at 30 September 23:52. No fresh run appeared during this diagnostic window.
+- Armed manual live-trigger test; it remained waiting. Restarted only the MMC
+  flow Off/On at approximately 00:28 AEST, preserving its definition and guards.
+  Readback confirmed On. This is a trigger recovery attempt, not success proof.
+- Budget checker at 00:30:20 returned GO: 84,490 reads / 229 writes.
+  Report `/private/tmp/mmc-oct1-budget.json`. Specific R2 manifest read still
+  shows only 25 September; no current extract has been proven published.
+- Inspected retained `Bootstrap MMC shift allocations`
+  (`09e5c1c1-4697-4b62-a536-c2531a8fcba0`). Its current chain reads the entire
+  workbook and sends base64 to deployment `4a12dbe2`'s `contact-list-binary`
+  endpoint. It is not the recovered JSON implementation. Left Off and unchanged;
+  do not run it as a shortcut or upload the full workbook.
+- Mac locked at approximately 00:32 AEST; UI access blocked, unlock requested.
+  Next: after unlock, refresh MMC runs and skipped/failed trigger checks after
+  the restart; distinguish actual polling delay from an unhealthy trigger before
+  further edits. Verify current publication and recursion only after a fresh
+  accepted run. DDH and other flows remain unchanged.
+
+**30 September enablement checkpoint (23:49–23:58 AEST):**
+- Reused the existing valid budget sample; fresh account checker returned
+  **GO** at 23:49:44 AEST, 78,035 reads / 215 writes, no stop reasons.
+  Report: `/private/tmp/mmc-restoration-budget.json`.
+- Read back the saved MMC flow: Office Script extraction followed by JSON POST
+  to `/api/automation/contact-list-extract`, with script sourceDate/contacts
+  and provider metadata. No whole-workbook transfer or replacement flow.
+  Flow checker: zero errors and zero warnings. No definition changes made.
+- Enabled `Sync MMC clinician contacts` at approximately 23:51 AEST;
+  Power Automate readback confirms **On**. DDH and other flows unchanged.
+- Focused contact-sync and contact-allocation checks pass. Specific R2 manifest
+  read still contains only 25 September. Run history has no fresh run yet;
+  yesterday's stale successful replay remains the latest entry.
+- Requested one harmless workbook edit/undo and close from the user to generate
+  a fresh revision. Awaiting that action; current-date publication, both hospital
+  sections, unchanged replay and absence of self-trigger recursion remain
+  **unverified**. Do not label this checkpoint end-to-end restoration.
+- Next: inspect the fresh run, verify Run script AND HTTP actually succeeded,
+  read the specific R2 manifest/object without printing contacts, observe for
+  follow-on runs, and perform the combined MMC/MCH visible check. If recursion
+  occurs, turn this flow Off immediately; retain the proven JSON extraction path.
+
+**30 September read-only checkpoint (23:31–23:35 AEST):**
+- Account analytics: 76,015 reads / 215 writes, no flagged expensive
+  fingerprints. Single sample `/private/tmp/contacts-sep30-budget.json`;
+  admission is STOP solely because a second sample is required. No enablement
+  or production data query performed in this check.
+- MMC flow confirmed **Off**. Latest replay at 29 September 15:57 reports
+  success but its condition cancelled and both Run script and HTTP were
+  **Skipped** (run `08584109454089369892445051106CU03`). Do not treat that
+  replay or the user's visible contacts as proof of new JSON publication.
+- MMC/MCH R2 manifest still contains only 25 September, published that day.
+  DDH manifest contains 30 September, published 30 September 23:14 AEST;
+  leave working DDH unchanged.
+- Next narrow operation: fresh budget admission, enable the existing MMC
+  flow and use a fresh real workbook modification (not replay of a stale
+  trigger); verify Run script AND HTTP ran, both Adult/Paediatric records
+  reached the current-date manifest, and no self-trigger loop. Then perform
+  one combined MMC/MCH visual check. No replacement helper or workbook
+  download is warranted by these findings.
+- VHH is not a switch-only restoration: the current Production contact source
+  normalizer supports MMC/MCH and DDH only. Its retained Preview flow must not
+  be enabled as though it were a validated Production contact path.
+
+- Edited existing `Sync MMC clinician contacts`
+  (`64d9fad7-3462-4b6a-bb6e-95ce1951f4fb`), not a duplicate flow.
+- Reused the script and workbook identifiers from its successful 25 September
+  13:48 run. Removed the superseded whole-workbook `Get file content` action.
+- HTTP now posts source ID, script date, doctor contacts and provider metadata
+  to the stable Production `/api/automation/contact-list-extract` endpoint.
+  Existing authentication and protected HTTP inputs/outputs retained; retries,
+  HTTP chunking and asynchronous polling disabled.
+- Existing two-minute settling delay and stale-trigger check retained.
+  Flow saved successfully while Off. DDH and other flows unchanged.
+- Local `test:contact-sync` and `test:contact-allocations` passed.
+- Admission samples at 15:06 and 15:12 AEST were low (111,512/505 and
+  112,038/510 reads/writes), but the second sample was too early for the
+  ten-minute admission interval. No test was admitted on that basis.
+- Next: admitted single replay, verify current-date MMC/MCH R2 publication,
+  then verify automatic trigger behaviour before leaving the flow enabled.
+  A successful save alone is not restoration evidence.
+- 15:16:55 AEST admission returned GO: 112,159 reads / 510 writes, no
+  flagged expensive fingerprints. The Mac then locked before the replay
+  confirmation could be submitted. Flow remains saved and Off; test and
+  automatic restoration are not yet verified. Unlock is required to continue.
 
 ## Authority and objective
 
@@ -215,6 +343,172 @@ deltas. Do not let unrelated housekeeping delay a proven correction.
 
 ## Batch 1A — restore current contacts
 
+### MMC/MCH implementation plan — 28 September revision (not authorised for execution)
+
+**Superseding evidence and direction, 28 September evening:** Recover the
+successful existing Microsoft-side JSON extraction, not the external-processing
+proposal below. User rejects full-workbook transfer/processing elsewhere.
+Do not execute the external design checkpoint or require that consent.
+
+Exact historical evidence recovered from Power Automate:
+
+- Flow `Sync MMC clinician contacts`, ID
+  `64d9fad7-3462-4b6a-bb6e-95ce1951f4fb`, run
+  `08584112987802616168552190919CU17`, 25 September 13:48 AEST (Test succeeded).
+- Actual historical chain: SharePoint file-created/modified trigger →
+  Run script from SharePoint library → HTTP. Script succeeded in 36.3 seconds;
+  HTTP succeeded in 1.3 seconds, starting 13:49:01 AEST. This directly confirms
+  Microsoft-side extraction before app ingestion, not a whole-workbook upload.
+- Script action workbook is `Shared Documents/Contact lists/shift allocation/SHIFT ALLOCATIONS.xlsx`.
+  Script source `me`, drive `b!yrpB7FRy2UGRxEjgaA5VRuUSetwWz9BOkoVIeGisKCBOCWqvE4jbRIG-pt-05Z_d`,
+  script ID `013Y6OLOVIBMFTJSDL2ZHK5JXH56GAQ62Z`. Result date is the raw label
+  `FRIDAY 25TH SEPTEMBER 2026`, so do not substitute the repository script
+  without comparing the saved script/result contract. HTTP inputs/outputs are
+  protected and remain protected.
+- User-supplied retained JSON has 92 Adult/Paediatric entries for 25 September,
+  with normalised date/contact keys. HTTP timing matches the 13:49 R2 receipt.
+  Normalisation happens in app code, so the saved object is not assumed to be
+  byte-identical to the submitted script result. No private contacts copied here.
+- Register records replacement of the script actions on 26 September after a
+  DDH self-trigger loop; it does not establish an MMC loop. Current definitions
+  of the other two MMC flows are not evidence of this run's implementation.
+
+Next bounded work: recover this exact saved script/HTTP contract, retain the
+deployed small-JSON ingress and semantic no-op guards, and prepare restoration
+of this flow instead of a new parser/job. Compare workbook identity and size
+with the historical trigger before claiming the documented connector limit
+precludes the demonstrated method. Its published limit remains a support risk,
+not evidence that this successful run did not happen. Verify one controlled
+extraction and unchanged repeat under existing quota admission, and observe
+whether MMC actually self-triggers. Automatic recursion must be bounded before
+leaving it unattended; if observed, resolve only that trigger behaviour rather
+than replace the extraction/data path. Do not change working DDH or VHH.
+
+This section supersedes the MMC whole-workbook implementation in
+`contact-workbook-safe-automation-plan.md`, not DDH's working implementation.
+Do not change flows, deploy, or execute this revision until the user resumes.
+
+**Established constraints:** MMC workbook is 33,919,328 bytes and grows with
+unrelated lost-property content. Our Worker ingress rejects above 5 MiB.
+Microsoft documents a 25 MB maximum Excel Online (Business) workbook:
+https://learn.microsoft.com/en-us/connectors/excelonlinebusiness/ . Therefore
+restoring Run script against this workbook is not a supported long-term fix.
+Do not trial it in Production or silently raise either limit. Small JSON output
+does not remove the connector's input-workbook limit. Prior successful runs do
+not prove support at its current size.
+
+#### Medium design checkpoint — external extraction recommended, consent pending
+
+Repository inspection confirms the existing GitHub-hosted Node 22 roster job
+downloads source bytes from an authenticated Cloudflare route and processes them
+outside the Worker. `extractMmcDoctorContactsFromWorkbook` already implements
+the required extraction independently of Office Scripts. Reuse that function
+and the existing JSON publisher; do not send contacts through roster ingestion.
+The old `contact-list-binary` endpoint is deliberately 410 and must stay closed.
+
+Recommend a source-specific contact job following that existing processing
+pattern, rather than requiring roster writers to maintain another workbook.
+This is NOT merely re-enabling an old flow. It needs a bounded transport/job
+adapter and resource proof. The recommended data route is:
+
+SharePoint read-only file retrieval → authenticated streaming staging into
+private R2 → existing GitHub runner platform with a contact-specific job →
+existing bounded MMC parser → small JSON through existing contact ingress →
+existing R2 overlays. Never log/store the complete workbook in GitHub artifacts,
+repository, Actions caches or D1. Do not hand a public/signed workbook URL to
+arbitrary clients. Only the exact source and revision may be fetched by the job.
+
+**Approval required before implementation or live transfer:** the complete
+workbook, including unrelated lost-property records, would temporarily be held
+in the account's private Cloudflare R2 and processed on a GitHub-hosted runner.
+Existing roster authorisation is not treated as approval for those additional
+contents. Confirm the user is authorised to permit this. If not, stop here;
+contacts must be separated inside the approved Microsoft environment with the
+workbook owner's assistance. No new paid service or tenant permission may be
+introduced without explicit approval.
+
+After consent, perform these bounded design/proof steps before Low handoff:
+
+- Confirm available free GitHub Actions capacity and R2 capacity; do not enable
+  paid overage. Contact jobs must not block the existing roster concurrency group.
+- Specify a finite upload cap (initial proposal 64 MiB, not automatic growth),
+  streaming raw transport rather than JSON/base64 buffering, exact source/file
+  checks, short job timeout, no blind retries, and explicit stale-revision rejection.
+- Staging remains private; delete on completion/failure, with a verified expiry
+  backstop no longer than 24 hours. No claim of expiry merely from an object
+  timestamp; confirm a real lifecycle mechanism or stop. Recovery cannot require
+  retaining unrelated workbook contents indefinitely.
+- Coalesce trigger revisions and prevent duplicate dispatch before expensive
+  extraction using reviewed atomic state; do not invent another D1 polling queue.
+  Write down the chosen lock/state mechanism and failure recovery before coding.
+- Parser currently reads the ZIP directory and all shared strings into memory;
+  reading only A1:I42 does NOT bound decompression. Extend that existing parser
+  with explicit entry/bounds validation, decompressed-byte ceilings and measured
+  peak memory. Reuse it; no parallel parser. Validate semantic parity with existing
+  fixtures and synthetic large irrelevant content; keep actual private data out.
+- Contact submission remains compact and idempotent. Trace measured R2, Actions
+  and D1 costs separately, including duplicate/failed/stale requests. Stage and
+  run a single exact source only; DDH and VHH unchanged.
+
+Medium remains appropriate for the atomic state, security and resource proof.
+Low can handle prescribed fixture additions, documentation and mechanical
+configuration once these gates are settled. Do not label this integration fully
+Low-ready or guarantee a usage allowance. Next action is the data-transfer
+approval question, not live execution or additional broad investigation.
+
+1. **Resolve one architecture decision, on Medium.** Preferred only if the
+   workbook owner can maintain it: a contacts-only operational workbook with
+   the existing layout/date and bounded size, retaining lost-property records
+   separately. This requires explicit owner agreement and must not create a
+   manually maintained duplicate or silently change roster-writer workflows.
+   Otherwise design a bounded external extractor using the existing roster
+   processing infrastructure, not a new parser/service by default. Confirm
+   permissions, existing free capacity, credential handling, and approval for
+   transferring the full workbook (including unrelated contents) before choosing
+   storage/processing outside its current location. Do not assume GitHub/R2
+   authorisation for these additional data just because roster jobs use them.
+   Present that concrete choice once; no series of speculative flow trials.
+2. **Reuse contracts and parsing.** Preserve `mmc-shift-allocations`, existing
+   MMC/MCH range/role/date semantics, existing JSON ingress and R2 publication.
+   Reuse `mmc-contact-allocations-office-script.ts` for the supported small-file
+   path; reuse the existing workbook parser for an approved external processor.
+   No new D1 tables, full-roster queries, migrations or duplicate contact helpers.
+3. **Prevent recursion before enabling.** External byte retrieval must never
+   open/edit the source through Excel. For an Office Script small-file path,
+   use a separately agreed bounded schedule rather than a modification trigger
+   on the script-opened workbook; do not rely on debounce or Modified By alone.
+   Select cadence and its request budget explicitly, and preserve concurrent
+   human edits. Do not create the schedule during planning. Existing blanket
+   schedule/script prohibitions may be replaced only by this reviewed design.
+4. **Bound costs and ordering.** Exact source filter; coalesce autosaves;
+   reject stale revisions before publication; finite execution time/input size,
+   bounded decompression/memory for external extraction; no blind retries.
+   JSON <=512 KiB; no private content in logs, Git or artifacts. Source-specific
+   rollback. Unchanged clinical data writes zero D1/R2; duplicate triggers must
+   not repeatedly launch expensive extraction. Record measured read/write cost,
+   including indexes, separately from SQL statement counts.
+5. **Focused local proof.** Reuse contact fixtures to cover Adult/Paeds AM/PM/
+   Night, nursing exclusions, blank names, date rollover, unchanged replay,
+   corrected allocation and stale/out-of-order input. For external extraction,
+   synthetic large irrelevant content must not change output and must stay
+   within measured resource bounds. Do not copy lost-property data into tests.
+6. **One release and one user check.** Fresh existing account admission;
+   snapshot/export the affected flow definition privately; disable only the
+   failing MMC whole-workbook sender before activating its replacement. Keep
+   DDH working and original legacy/Preview flows Off. One current-source run,
+   verify JSON/date/count, request costs, published MMC/MCH objects and readers,
+   then one combined visual test. Verify next automatic update and unchanged
+   replay without repeated user edit cycles. One settled usage reconciliation.
+7. **Stop/rollback.** Unexpected source modification, recursive runs, wrong
+   date/source, resource overrun or existing quota gate failure closes only the
+   new MMC sender; retain valid cached contacts. Do not reopen legacy ingestion.
+
+Effort handoff: Medium for step 1 and any unresolved concurrency/resource design.
+Low is appropriate for prescribed configuration, narrow code edits and focused
+test execution only after those decisions and acceptance bounds are written.
+Pause and request Medium if new architecture questions appear; do not improvise
+on Low. No claim that an effort level guarantees completion within allowance.
+
 1. Trace DDH's latest relevant run from trigger to visible current-period
    contacts using the diagnostic sequence above. Absence of contacts invalidates
    the end-to-end completion claim; it does not by itself identify the failed
@@ -329,6 +623,14 @@ does not query the directory again.
 
 ## Batch 4 — operational completion
 
+Contact-flow cleanup (explicit user request, 28 September): after the app is
+fully functional, inventory existing flows and their callers; retain verified
+working flows, identify duplicates/obsolete replacements, export recoverable
+definitions and obtain deletion approval before removing unwanted flows.
+Include `Sync MMC shift allocations`, `Bootstrap MMC shift allocations`,
+`Sync MMC clinician contacts`, `Sync DDH clinician contacts` and
+`VHH Shift Phone Allocations to Preview`. Do not delete during diagnosis.
+
 1. Confirm the source schedules established in Batch 1B remain healthy.
 2. Keep bootstrap and advanced repair normally Off; document the exact
    time-limited runbook rather than enabling them permanently.
@@ -356,6 +658,90 @@ stable Production baseline. It must not be mixed into the restoration batches.
 
 ### 28 September morning release admission
 
+Original-flow review after renewed Safari access (read-only; no saves):
+
+- `Sync MMC shift allocations` (`114b1e0b-071e-4f44-9bba-5d56fa9d5d25`)
+  is Off, modified 10 September. Current chain is SharePoint modified trigger
+  → Get file content → HTTP. Its JSON contains the complete workbook as
+  `contentBase64`, not a contact extract. Destination:
+  `https://4a12dbe2.roster-to-calendar.pages.dev/api/automation/contact-list`.
+  Do not re-enable unchanged. Earlier flow versions were not established.
+- `VHH Shift Phone Allocations to Preview`
+  (`e8b16ab2-978a-44b1-b331-070f17504b14`) is Off. Chain is SharePoint modified
+  trigger → Run script from SharePoint library → HTTP. Workbook:
+  `/CONTACTS/Shift phone allocations.xlsx`; script:
+  `/Documents/Office Scripts/VHH Extract Shift Phone Allocations.osts`.
+  HTTP sends `outputs('Run_script_from_SharePoint_library')?['body/result']` to
+  `https://vhh.roster-to-calendar.pages.dev/api/automation/contact-list-extract`.
+  This is the existing small-JSON extraction pattern. Script internals,
+  historical success and Production compatibility remain unverified.
+- Correction: VHH has an external extraction script; absence of a repository
+  parser does not establish absence of a flow solution. Reuse the existing MMC
+  bounded script and JSON endpoint. Resolve Excel-trigger recursion before
+  enabling the automatic path; do not create another parser or blindly enlarge
+  the workbook upload ceiling. Both reviewed flows remain Off and unchanged.
+
+- User identifies original small-JSON flows as the intended reusable solution.
+  Shared-flow listing confirms `Sync MMC shift allocations` and
+  `VHH Shift Phone Allocations to Preview` still exist and are disabled.
+  Their internal actions/history are NOT yet inspected: Power Automate SSO
+  repeatedly requires sign-in when opening details.
+- Existing `scripts/mmc-contact-allocations-office-script.ts` reads only
+  `SHIFT ALLOCATIONS!A1:I42` and returns Adult/Paediatric doctor JSON. Existing
+  `/api/automation/contact-list-extract` still ingests that format and uses
+  semantic deduplication/publication. Reuse these rather than add another parser.
+- Register's 26 September entry says the Office Script actions were removed
+  from the newer clinician-contact flows, not the old flows deleted. The older
+  workbook plan cites DDH self-retriggering as the reason; that is not proof
+  that the original MMC flow had the same behaviour. Review original MMC
+  trigger, script, payload, destination and run frequency, then choose a bounded
+  non-recursive JSON path. Do not blindly raise the workbook size ceiling or
+  re-enable an unreviewed old flow. Revise the older blanket Office Script
+  prohibition if the reviewed reuse strategy supplies equivalent safety.
+
+- 12:22 user edited/reverted both contact workbooks. MMC first runs were
+  superseded during the settling delay. Latest run
+  `08584110445941620923997290915CU25` retrieved the workbook, then HTTP failed
+  at 12:26:55 AEST with 413 `Contact workbook is too large.` SharePoint metadata
+  reports **33,919,328 bytes**, versus the endpoint's 5 MiB cap. This is a
+  confirmed additional blocker, not a D1 quota failure. Do not raise the cap
+  blindly: the full workbook plus decoding/unzip memory needs an alternative
+  bounded extraction path or measured resource proof. HTTP inputs stay protected.
+  The MMC manifest still has only 25 September. DDH's current manifest remains
+  the already-verified 28 September publication from 08:42; an unchanged
+  edit/revert need not update its publication timestamp.
+
+- 12:18 AEST second sample GO: 57,840 reads, 302 writes, no expensive
+  fingerprints, settled through 12:03. Enabled `Sync MMC clinician contacts`
+  (`64d9fad7-3462-4b6a-bb6e-95ce1951f4fb`); UI status shows On. This is the
+  shared MMC/MCH source. R2 manifest still contains only 25 September, so a
+  fresh workbook-triggered publication is required before today's visual test.
+  Do not report end-to-end contact restoration merely from enabling the flow.
+
+- Later checkpoint: Git push succeeded. Canonical Production deployment
+  `3aa83a00-b4bb-4c2f-a28c-16533bffd4fc` serves `6737969b`, deployed successfully
+  at 11:50 AEST; control-plane readback confirms `ddh,mmc,mch` publication.
+  MMC flow has not yet been enabled.
+- GitHub MCH queue run `36353791313` at 08:01 parsed 80 doctors and 2,377
+  events, coinciding with the write burst. This supports roster-ingestion
+  attribution but does not prove why every row changed or reconcile all writes.
+- Post-reset sample at 11:49 AEST: 43,079 reads, 214 writes. STOP now only for
+  two-hour baseline and missing second sample. Reuse
+  `/private/tmp/contact-sep28-baseline.json` for a second sample at/after noon
+  AEST (10-minute minimum separation); do not restart the baseline.
+
+- 09:06 AEST user confirmed DDH contact display matches the source sheet.
+- Fresh 09:07 sample (settled through 08:52) is STOP: 226,369 reads and
+  26,238 writes. The 08:00–08:05 AEST bucket contains 25,823 writes. Sampled
+  fingerprints attribute 13,845 writes to `roster_daily_presence` inserts;
+  contact-list inserts account for 84 across the UTC day. Fingerprint totals
+  undercount account writes by 11,928, so the full burst/source is not yet
+  attributed. No expensive-read fingerprint was flagged. Do not blame the
+  user's DDH visual check or claim full attribution from this evidence.
+- MMC flow must remain Off until admission passes. The publication fix remains
+  committed locally; GitHub connectivity blocked the first push and the retry
+  is being checked. No manual alternate deployment should duplicate it.
+
 - Account analytics at 08:14 AEST, settled through 07:59 AEST: 162,444 reads,
   225 writes for the UTC quota day; projected reads approximately 181,000;
   no expensive fingerprints. Checker GO against the previous valid sample,
@@ -369,6 +755,12 @@ stable Production baseline. It must not be mixed into the restoration batches.
   check, against contact names actually present in today's source sheets;
   verify AM/PM as applicable. A missing date's source is not a reader failure.
 - Do not advance to the next restoration batch before reporting this result.
+- Release committed locally as `6737969b`. Push failed because github.com:443
+  was unreachable; an independent short IPv4 check also timed out. Production
+  has NOT changed. MMC flow remains Off (Flow checker: zero errors, only the
+  Off warning). Resume by pushing this existing commit, not making another
+  implementation or deploying a duplicate manually. Verify deployment before
+  enabling MMC or requesting its end-to-end test.
 
 - Active Production readback: `baec779b-db7a-43a3-b5bc-53a1ca8cd17e`, commit
   `3161b23283f003b42216c6370022a7d67d127a26`. Git automatic Production deployment
@@ -404,3 +796,41 @@ stable Production baseline. It must not be mixed into the restoration batches.
   controlled current MMC extract publication and routine Flow restoration,
   followed by a combined DDH/MMC/MCH visual check. Reuse passing evidence;
   do not repeat transport experiments or restart the full inventory.
+
+### 1 October — roster overwrite safety release
+
+- Released commit `098bc2a2` through the existing Git-triggered Production
+  deployment `20a047ff-55a1-46b6-8dce-f85cb3e2f700`; Cloudflare lists it Active
+  on main. The canonical derived endpoint returns the expected unauthenticated
+  401 without any sync or D1 work. No synthetic Production roster was submitted.
+- Complete ingestion selects the matching retained term using compact indexed
+  coverage (32 active-file ceiling), gives disjoint new terms independent files,
+  and preserves the latest-term pointer on older-term corrections. Unprepared,
+  ambiguous or partially overlapping term ranges fail safely.
+- Explicit 1,250-fact guard also covers initial imports. Large full-term
+  ingestion remains blocked pending bounded staging/chunking; Batch 1B is open.
+- Duplicate completion handles remapped file ids; failed callbacks cannot delete
+  completed runs. Cleanup preserves active files following a bookkeeping failure.
+- Local endpoint/materialisation regressions cover term retention, 14-day
+  visibility, corrections, duplicate zero-write callbacks, oversized imports,
+  overlap rejection, indexed lookup and interrupted-bookkeeping retry. Existing
+  ingress-idempotency, source-isolation and queue-failure checks also pass.
+- D1 release admission at 02:13 UTC: GO, 19,414 rows read / 36 written account-wide.
+  Contact flows, contact code and deployed flags remain unchanged.
+- Final Codex usage check: 3% weekly and 84% five-hour remaining; one free reset
+  available and credit balance unchanged at 182.18727.
+
+
+### 1 October — combined batches 1B / 1C and automatic launch
+
+User asked to enact large safe batches and avoid micro-change approval cycles.
+Bounded next-term importing, durable continuation, DDH LastModified checks,
+affected-date overview publication and cached automatic launch are implemented
+and validated together. Existing contacts remain unchanged. The daily maintenance
+allowance includes indexed writes and read reservations; publication refunds reads
+only when complete billing metadata supports it. Empty progress migrations are
+applied. External automatic roster flows for MMC/MCH/VHH are enabled.
+
+The [current checkpoint](./bounded-roster-import-checkpoint.md) contains release
+limits, test evidence, remaining work and rollback. Next-term completion must be
+read back after actual provider publication; this batch does not claim otherwise.

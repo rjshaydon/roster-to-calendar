@@ -15,9 +15,14 @@ export async function onRequestGet(context) {
   const sourceId = String(url.searchParams.get("sourceId") || "").trim();
   if (!automatedRosterSourceEnabled(context.env, sourceId)) return rosterWritePausedResponse();
   const limit = Number(url.searchParams.get("limit") || 1);
+  const boundedImportEnabled = String(context.env.ROSTER_AUTOMATION_BOUNDED_IMPORT_ENABLED || "") === "true";
+  const allowance = boundedImportEnabled ? await context.env.ROSTER_DB.prepare("SELECT reserved_writes, reserved_reads FROM roster_import_daily_budget WHERE utc_day = ?").bind(new Date().toISOString().slice(0, 10)).first() : null;
+  const maintenanceDeferred = Number(allowance?.reserved_writes || 0) >= 9500 || Number(allowance?.reserved_reads || 0) >= 490000;
   const runs = await listQueuedRosterSyncRuns(context.env.ROSTER_DB, sourceId, limit);
   return Response.json({
     ok: true,
+    boundedImportEnabled,
+    maintenanceDeferred,
     runs: runs.map(({ objectKey: _objectKey, ...run }) => run),
   });
 }

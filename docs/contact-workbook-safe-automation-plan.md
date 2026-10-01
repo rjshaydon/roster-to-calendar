@@ -1,5 +1,11 @@
 # Contact workbook safe-automation plan
 
+> MMC implementation superseded on 28 September by the MMC/MCH decision and
+> implementation section in `full-service-restoration-plan.md`. Its 33.9 MB
+> workbook exceeds both this endpoint's 5 MiB cap and Microsoft's documented
+> 25 MB Excel connector limit. Do not follow the whole-workbook MMC rollout or
+> restore its Office Script blindly. DDH's working path remains unchanged.
+
 > Rollout ordering superseded by [Full service restoration](./full-service-restoration-plan.md).
 > Retain bounded parsing, non-recursive retrieval and semantic deduplication.
 > The old serial canaries and user edit checkpoints are historical; use Batch

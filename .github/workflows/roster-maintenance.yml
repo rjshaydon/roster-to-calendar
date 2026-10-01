@@ -1,0 +1,31 @@
+name: Continue bounded roster maintenance
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      seed_current_views:
+        description: "Queue one bounded refresh of retained current-term views"
+        type: boolean
+        default: false
+concurrency:
+  group: monash-roster-sync
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  maintain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      ROSTER_AUTOMATION_BASE_URL: https://roster-to-calendar.pages.dev
+      ROSTER_SEED_CURRENT_VIEWS: ${{ inputs.seed_current_views == true && 'true' || 'false' }}
+      ROSTER_AUTOMATION_TOKEN: ${{ secrets.ROSTER_AUTOMATION_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node scripts/process-roster-maintenance.mjs

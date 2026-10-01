@@ -838,6 +838,28 @@ export async function startDerivedRosterFileSave(db, file, doctors, options = {}
   return { ok: true, doctors: safeDoctors.length, events: 0, issues: 0 };
 }
 
+// Used by the bounded importer to commit event facts and their receipt in one
+// D1 transaction. It intentionally does not index presence or grant membership.
+export function boundedRosterEventStatements(db, file, doctors, eventsByDoctor, issuesByDoctor) {
+  const sourceType = normalizeSourceType(file.sourceType);
+  const safeDoctors = sanitizeFileDoctors(doctors, sourceType);
+  const { eventRows, issueRows } = collectDerivedEventAndIssueRows(file, sourceType, safeDoctors, eventsByDoctor, issuesByDoctor);
+  return { eventCount: eventRows.length, issueCount: issueRows.length,
+    statements: [...bulkInsertEventStatements(db, eventRows), ...bulkInsertIssueStatements(db, issueRows)] };
+}
+
+export function boundedRosterPresenceStatements(db, file, doctors, eventsByDoctor) {
+  const rows = [];
+  for (const doctor of sanitizeFileDoctors(doctors, normalizeSourceType(file.sourceType))) {
+    for (const event of eventsByDoctor[doctor.key] || []) {
+      for (const row of expandEventToDailyPresenceRows(event, { sourceType: file.sourceType, doctorKey: doctor.key, displayName: doctor.displayName })) {
+        rows.push([row.date, row.sourceType, row.doctorKey, row.displayName, `${file.id}:${row.doctorKey}:${row.eventId}`]);
+      }
+    }
+  }
+  return { count: rows.length, statements: dailyPresenceInsertStatements(db, rows) };
+}
+
 export async function appendDerivedRosterFileEvents(db, file, doctors, eventsByDoctor = {}, issuesByDoctor = {}, options = {}) {
   if (!db?.prepare || !file?.id) return { ok: false, reason: "missing-input" };
   await ensureCalendarSchema(db);
@@ -880,15 +902,22 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
   });
   const existingRevision = await db.prepare("SELECT content_revision FROM roster_file_coverage WHERE file_id = ?")
     .bind(String(file.id)).first();
-  if (String(existingRevision?.content_revision || "") === contentRevision) {
+  const priorStatus = String(existingRevision?.content_revision || "") === contentRevision ? await loadRosterFileStatusSummary(db, file.id) : null;
+  if (String(existingRevision?.content_revision || "") === contentRevision && priorStatus?.active && priorStatus?.derivedState === "ready") {
     return { ok: true, unchanged: true, doctors: safeDoctors.length, events: eventRows.length, issues: issueRows.length, contentRevision };
+  }
+  if (options.reserveMaintenanceBudget) {
+    const summary = await loadRosterFileStatusSummary(db, file.id);
+    if (Number(summary?.eventCount || 0) > 25000) throw new Error("Retained automated roster exceeds the exact-file read ceiling.");
+    if (!await options.reserveMaintenanceBudget(0, Number(summary?.eventCount || 0) * 4 + 16000)) throw options.deferredBudgetError();
   }
   const [storedFile, storedDoctorsResult, storedEventsResult, storedIssuesResult] = await Promise.all([
     db.prepare("SELECT id, name, source_type, source_id, active, size, last_modified, added_at, uploaded_at, uploaded_by, parser_version FROM roster_files WHERE id = ?").bind(file.id).first(),
-    db.prepare("SELECT doctor_key, display_name, seniority, membership_source, provider_staff_id FROM roster_file_doctors WHERE file_id = ?").bind(file.id).all(),
-    db.prepare("SELECT id, doctor_key, display_name, start_date, end_date, start_ts, end_ts, title, raw_value, seniority, provider_staff_id, location, all_day, time_label, event_json FROM roster_events WHERE file_id = ?").bind(file.id).all(),
-    db.prepare("SELECT id, display_name, start_date, raw_value, seniority, status, message, resolution_type, suggested_title, time_label, issue_json FROM roster_issues WHERE file_id = ?").bind(file.id).all(),
+    db.prepare("SELECT doctor_key, display_name, seniority, membership_source, provider_staff_id FROM roster_file_doctors WHERE file_id = ? LIMIT ?").bind(file.id, options.reserveMaintenanceBudget ? 513 : -1).all(),
+    db.prepare("SELECT id, doctor_key, display_name, start_date, end_date, start_ts, end_ts, title, raw_value, seniority, provider_staff_id, location, all_day, time_label, event_json FROM roster_events WHERE file_id = ? LIMIT ?").bind(file.id, options.reserveMaintenanceBudget ? 25001 : -1).all(),
+    db.prepare("SELECT id, display_name, start_date, raw_value, seniority, status, message, resolution_type, suggested_title, time_label, issue_json FROM roster_issues WHERE file_id = ? LIMIT ?").bind(file.id, options.reserveMaintenanceBudget ? 5001 : -1).all(),
   ]);
+  if (options.reserveMaintenanceBudget && (storedDoctorsResult.results.length > 512 || storedEventsResult.results.length > 25000 || storedIssuesResult.results.length > 5000)) throw new Error("Retained roster exceeds its bounded correction read ceiling.");
   const desiredDoctors = new Map(safeDoctors.map((doctor) => [doctor.key, JSON.stringify([doctor.displayName, doctor.seniority || "", doctor.membershipSource || "roster", doctor.providerStaffId || ""])]));
   const storedDoctors = new Map((storedDoctorsResult.results || []).map((row) => [String(row.doctor_key), JSON.stringify([row.display_name, row.seniority || "", row.membership_source || "roster", row.provider_staff_id || ""])]));
   const desiredEvents = new Map(eventRows.map((row) => [row[0], JSON.stringify(row.slice(4))]));
@@ -903,16 +932,18 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
   const removedEventIds = [...storedEvents.keys()].filter((id) => !desiredEvents.has(id));
   const removedIssueIds = [...storedIssues.keys()].filter((id) => !desiredIssues.has(id));
   const changedDoctorKeys = new Set([...changedDoctors.map((doctor) => doctor.key), ...removedDoctorKeys]);
+  const affectedEventIds = new Set([...changedEventRows.map((row) => row[0]), ...removedEventIds]);
   let affectedDates = [...new Set([
-    ...changedEventRows.flatMap((row) => [String(row[5] || "").slice(0, 10), storedEventDates.get(row[0])]),
-    ...removedEventIds.map((id) => storedEventDates.get(id)),
-    ...storedEventsResult.results.filter((row) => changedDoctorKeys.has(String(row.doctor_key || ""))).map((row) => String(row.start_date || "").slice(0, 10)),
+    ...changedEventRows.flatMap((row) => isoDatesBetween(String(row[5] || "").slice(0, 10), String(row[6] || row[5] || "").slice(0, 10), 120)),
+    ...storedEventsResult.results.filter((row) => affectedEventIds.has(String(row.id)) || changedDoctorKeys.has(String(row.doctor_key || "")))
+      .flatMap((row) => isoDatesBetween(String(row.start_date || "").slice(0, 10), String(row.end_date || row.start_date || "").slice(0, 10), 120)),
   ].filter(Boolean))].sort();
   if (!storedFile && affectedDates.length) {
     const completeInitialRange = isoDatesBetween(affectedDates[0], affectedDates.at(-1), 120);
     if (completeInitialRange) affectedDates = completeInitialRange;
   }
   const changedFactCount = changedDoctors.length + removedDoctorKeys.length + changedEventRows.length + removedEventIds.length + changedIssueRows.length + removedIssueIds.length;
+  if (options.facilityRefreshStatements && !affectedDates.length && priorStatus?.derivedState === "building") affectedDates = [...new Set(eventRows.flatMap((row) => [String(row[5]).slice(0, 10), String(row[6]).slice(0, 10)]))].sort();
   const maximumIncrementalFacts = Math.max(1, Math.min(Number(options.maximumIncrementalFacts || 250), 5000));
   // Explicit automation budgets also cover first imports. Selecting a new
   // term's independent file must not bypass the reviewed write ceiling.
@@ -921,6 +952,24 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
     error.code = "ROSTER_INCREMENTAL_BUDGET";
     error.changedFactCount = changedFactCount;
     throw error;
+  }
+  if (options.reserveMaintenanceBudget) {
+    const span = (start, end) => Math.max(1, Math.ceil((Date.parse(String(end).slice(0, 10)) - Date.parse(String(start).slice(0, 10))) / 86400000) + 1);
+    const oldRows = new Map(storedEventsResult.results.map((row) => [row.id, row]));
+    let presenceRows = 0;
+    for (const id of [...removedEventIds, ...changedEventRows.map((row) => row[0])]) {
+      const row = oldRows.get(id);
+      if (row) presenceRows += span(row.start_date, row.end_date);
+    }
+    for (const row of changedEventRows) presenceRows += span(row[5], row[6]);
+    // One event affects at most its old/new staff and stream contributions;
+    // changed doctor metadata affects both terms of a <=120-day roster.
+    const changedEvents = changedEventRows.length + removedEventIds.length;
+    const changedPeople = changedDoctors.length + removedDoctorKeys.length;
+    const indexedWrites = changedEvents * 8 + presenceRows * 5 + changedPeople * 10
+      + (changedIssueRows.length + removedIssueIds.length + issueRows.length) * 6
+      + (changedEvents * 6 + changedPeople * 6 + 8) * 6 + safeDoctors.length * 4 + 128;
+    if (!await options.reserveMaintenanceBudget(indexedWrites, 16000)) throw options.deferredBudgetError();
   }
   const fileSignature = JSON.stringify([file.name || "roster.xlsx", sourceType, String(file.sourceId || ""), file.active === false ? 0 : 1,
     Number(file.size || 0), Number(file.lastModified || 0), String(file.addedAt || ""), String(file.uploadedAt || ""), String(file.uploadedBy || ""), String(file.parserVersion || ROSTER_PARSER_VERSION)]);
@@ -960,6 +1009,7 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
   }
   await refreshFacilityOverviewMaterializationForFile(db, file.id, { contentRevision });
   await runTransactionalBatch(db, [
+    ...(options.facilityRefreshStatements ? options.facilityRefreshStatements(affectedDates, contentRevision) : []),
     db.prepare("UPDATE roster_files SET active = ? WHERE id = ?").bind(file.active === false ? 0 : 1, file.id),
     upsertRosterFileStatusSummaryStatement(db, {
       ...file, sourceType, derivedState: "ready", active: file.active !== false,
@@ -2084,9 +2134,9 @@ export async function refreshFacilityOverviewMaterializationForFile(db, fileId, 
   };
 }
 
-async function recordFacilitySmsMembershipsForRosterFile(db, fileId) {
+export function facilitySmsMembershipStatement(db, fileId, requireActive = false) {
   const now = new Date().toISOString();
-  await db.prepare(`
+  return db.prepare(`
     WITH file_coverage AS (
       SELECT MIN(start_date) AS start_date, MAX(start_date) AS end_date
       FROM roster_events WHERE file_id = ?
@@ -2099,6 +2149,7 @@ async function recordFacilitySmsMembershipsForRosterFile(db, fileId) {
     FROM roster_file_doctors
     CROSS JOIN file_coverage
     WHERE roster_file_doctors.file_id = ?
+      AND (? = 0 OR EXISTS (SELECT 1 FROM roster_files f WHERE f.id = roster_file_doctors.file_id AND f.active = 1))
       AND UPPER(roster_file_doctors.seniority) = 'SMS'
       AND file_coverage.start_date IS NOT NULL
     ON CONFLICT(source_type, doctor_key) DO UPDATE SET
@@ -2109,7 +2160,11 @@ async function recordFacilitySmsMembershipsForRosterFile(db, fileId) {
     WHERE facility_sms_memberships.display_name <> excluded.display_name
       OR facility_sms_memberships.first_seen_date > excluded.first_seen_date
       OR facility_sms_memberships.last_seen_date < excluded.last_seen_date
-  `).bind(fileId, now, now, fileId).run();
+  `).bind(fileId, now, now, fileId, requireActive ? 1 : 0);
+}
+
+async function recordFacilitySmsMembershipsForRosterFile(db, fileId) {
+  return facilitySmsMembershipStatement(db, fileId).run();
 }
 
 export async function setFacilityStaffSeniorityOverride(db, input = {}) {
@@ -4374,6 +4429,9 @@ export async function queryCoworkerEvents(db, options = {}) {
         ON p.date = mine.date
        AND p.source_type = mine.source_type
       INNER JOIN roster_events AS ev ON ev.id = p.event_id
+      INNER JOIN roster_files AS present_file ON present_file.id = ev.file_id AND present_file.active = 1
+      INNER JOIN roster_events AS mine_event ON mine_event.id = mine.event_id
+      INNER JOIN roster_files AS mine_file ON mine_file.id = mine_event.file_id AND mine_file.active = 1
       WHERE mine.doctor_key IN (${overlapKeys.map(() => "?").join(", ")})
         AND mine.date >= ?
         AND mine.date <= ?
@@ -4394,6 +4452,7 @@ export async function queryCoworkerEvents(db, options = {}) {
       p.source_type
     FROM roster_daily_presence AS p
     INNER JOIN roster_events AS ev ON ev.id = p.event_id
+    INNER JOIN roster_files AS present_file ON present_file.id = ev.file_id AND present_file.active = 1
     WHERE p.date >= ?
       AND p.date <= ?
       ${sourceSql}
@@ -5202,6 +5261,10 @@ export async function queryOverlapDoctors(db, options = {}) {
     INNER JOIN roster_daily_presence AS p
       ON p.date = mine.date
      AND p.source_type = mine.source_type
+    INNER JOIN roster_events AS present_event ON present_event.id = p.event_id
+    INNER JOIN roster_files AS present_file ON present_file.id = present_event.file_id AND present_file.active = 1
+    INNER JOIN roster_events AS mine_event ON mine_event.id = mine.event_id
+    INNER JOIN roster_files AS mine_file ON mine_file.id = mine_event.file_id AND mine_file.active = 1
     WHERE mine.doctor_key IN (${overlapKeys.map(() => "?").join(", ")})
       AND mine.date >= ?
       AND mine.date <= ?
