@@ -1,3 +1,4 @@
+import { configureRosterMaintenanceBudget, reserveRosterMaintenanceBudget } from "../functions/_lib/roster-maintenance-budget.js";
 import { onRequest as middleware } from "../functions/_middleware.js";
 import { onRequestPost as refreshFacility } from "../functions/api/automation/facility-refresh.js";
 import { facilityRefreshStatements } from "../functions/_lib/facility-refresh-queue.js";
@@ -995,3 +996,12 @@ try {
   assert.equal(routeDb.sql.length, invalidSourceReads);
 } finally { console.log = originalConsoleLog; }
 console.log("Bounded HTTP continuation, indexed reservation envelopes and incremental automatic publication checks passed.");
+
+const sessionDb = new LocalD1(routeSqlite);
+routeSqlite.prepare("UPDATE roster_import_daily_budget SET reserved_reads=0,reserved_writes=0").run();
+configureRosterMaintenanceBudget(sessionDb, { utcDay: new Date().toISOString().slice(0,10), baseReads: 0, baseWrites: 0 });
+assert.equal(await reserveRosterMaintenanceBudget(sessionDb, 5001, 0), false);
+assert.equal(await reserveRosterMaintenanceBudget(sessionDb, 0, 250001), false);
+assert.equal(await reserveRosterMaintenanceBudget(sessionDb, 4990, 100), true);
+assert.equal(await reserveRosterMaintenanceBudget(sessionDb, 10, 0), false);
+console.log("Per-pass SQL reservations enforce the admitted 5,000-write / 250,000-read ceiling.");

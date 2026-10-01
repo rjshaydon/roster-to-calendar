@@ -1,5 +1,5 @@
 import { rosterTermOwnership } from "../../_lib/roster-term-ownership.js";
-import { reserveRosterMaintenanceBudget, maintenanceBudgetDeferredError } from "../../_lib/roster-maintenance-budget.js";
+import { reserveRosterMaintenanceBudget, maintenanceBudgetDeferredError, configureRosterMaintenanceBudget } from "../../_lib/roster-maintenance-budget.js";
 import { automationSourceDefinition } from "../../_lib/automation-import.js";
 import { handleBoundedRosterRequest } from "../../_lib/roster-import-protocol.js";
 import {
@@ -32,6 +32,7 @@ export async function onRequestPost(context) {
     if (!automatedRosterSourceEnabled(context.env, sourceId)) return rosterWritePausedResponse();
     const source = automationSourceDefinition(sourceId);
     if (!source && phase !== "failed") return Response.json({ error: "Unknown automation source." }, { status: 400 });
+    configureRosterMaintenanceBudget(context.env.ROSTER_DB, body.maintenanceBudget);
     if (phase.startsWith("bounded-")) return handleBoundedRosterRequest(context, { ...body, sourceId }, source, (...args) => resolveCompleteTarget(...args, context.env));
     if (!["start", "events", "finish", "complete", "failed"].includes(phase)) {
       return Response.json({ error: "A valid derived-save phase is required." }, { status: 400 });

@@ -23,6 +23,7 @@ export async function onRequestGet(context) {
     ok: true,
     boundedImportEnabled,
     maintenanceDeferred,
+    maintenanceBudget: boundedImportEnabled ? { utcDay: new Date().toISOString().slice(0, 10), baseWrites: Number(allowance?.reserved_writes || 0), baseReads: Number(allowance?.reserved_reads || 0) } : null,
     runs: runs.map(({ objectKey: _objectKey, ...run }) => run),
   });
 }

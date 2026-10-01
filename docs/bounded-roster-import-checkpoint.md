@@ -84,3 +84,13 @@ Remaining service work: compact colleague tools, bounded manual roster mutations
 Creator switching/directory enrichment, doctor discovery, cross-device settings,
 and VHH contact support. All-site next-term completion still depends on provider
 publication and may span UTC budget windows.
+
+
+Admission refinement: the checker's twofold optional-cost reserve rejects proposing
+the entire daily allowance as one pass. Every scheduled/manual maintenance pass
+now carries a stable ledger baseline and SQL-enforced additional cap of 5,000
+indexed writes / 250,000 reads. Daily global caps remain 10,000 / 500,000.
+Preparation and publication refunds require complete billing metadata. First-pass
+admission with these bounds is GO (31,460 reads / 73 writes before the pass).
+Initial current-view seed intent is persisted for all four sources before costly
+work, so deferral does not lose the request. Later scheduled passes finish it.

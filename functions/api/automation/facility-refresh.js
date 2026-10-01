@@ -1,7 +1,7 @@
 import { createD1Meter } from "../../_middleware.js";
 import { runFacilityPublicationStep } from "../../_lib/facility-overview-cache.js";
 import { automaticFacilityPublicationEnabled, facilityRefreshStatements, facilityTermDates } from "../../_lib/facility-refresh-queue.js";
-import { reserveRosterMaintenanceBudget } from "../../_lib/roster-maintenance-budget.js";
+import { reserveRosterMaintenanceBudget, configureRosterMaintenanceBudget } from "../../_lib/roster-maintenance-budget.js";
 import { automatedRosterSourceEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
 
 import { australianTermStartForDate, australianTermEndForStart, refreshFacilityOverviewMaterializationForFile, upsertRosterFileStatusSummaryStatement } from "../../_lib/d1-calendar.js";
@@ -20,14 +20,26 @@ export async function onRequestPost(context) {
   const source = SOURCES[body.sourceId];
   if (!source || !automatedRosterSourceEnabled(context.env, body.sourceId) || !automaticFacilityPublicationEnabled(context.env, source)) return rosterWritePausedResponse();
   const db = context.env.ROSTER_DB;
-  if (body.mode === "prepare-coverage") {
+  configureRosterMaintenanceBudget(db, body.maintenanceBudget);
+  if (["prepare-coverage", "queue-seed"].includes(body.mode)) {
+    if (body.seedCurrent === true) {
+      if (!await reserveRosterMaintenanceBudget(db, 8, 32)) return Response.json({ ok: true, deferred: true });
+      const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Australia/Melbourne", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+      await db.prepare("INSERT OR IGNORE INTO facility_refresh_jobs (source_type,term_start,dates_json,content_signature,request_revision,status,updated_at) VALUES (?,?,'[]','seed-required',?,'seed-pending',?)")
+        .bind(source, australianTermStartForDate(today), crypto.randomUUID(), new Date().toISOString()).run();
+    }
+    if (body.mode === "queue-seed") return Response.json({ ok: true, seedQueued: true });
     const files = await db.prepare(`SELECT f.*, c.coverage_start, c.coverage_end, s.derived_state
       FROM roster_files f INDEXED BY idx_roster_files_source_active
       LEFT JOIN roster_file_coverage c ON c.file_id = f.id LEFT JOIN roster_file_status_summaries s ON s.file_id = f.id
       WHERE f.source_type = ? AND f.active = 1 LIMIT 33`).bind(source).all();
     if (files.results.length > 32) return Response.json({ ok: false, reason: "active-file-limit" }, { status: 409 });
     const missing = files.results.find((file) => file.source_id === body.sourceId && (!file.coverage_start || !file.coverage_end || file.derived_state !== "ready"));
-    if (!missing) return Response.json({ ok: true, idle: true });
+    if (!missing) {
+      const seed = await db.prepare("SELECT term_start FROM facility_refresh_jobs WHERE source_type=? AND status='seed-pending' LIMIT 1").bind(source).first();
+      if (seed) return onRequestPost({ ...context, request: new Request(context.request.url, { method: "POST", headers: context.request.headers, body: JSON.stringify({ ...body, mode: "seed", seedCurrent: true }) }) });
+      return Response.json({ ok: true, idle: true });
+    }
     const day = new Date().toISOString().slice(0, 10);
     if (!await reserveRosterMaintenanceBudget(db, 4564, 100000)) return Response.json({ ok: true, deferred: true });
     // Every first() in this exact-file primitive is a PK/scalar query. Opt in

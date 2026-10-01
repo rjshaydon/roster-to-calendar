@@ -8,6 +8,7 @@ import { guardedFetch } from "../functions/_lib/outbound-network.js";
 
 const baseUrl = String(process.env.ROSTER_AUTOMATION_BASE_URL || "https://roster-to-calendar.pages.dev").replace(/\/$/, "");
 const token = String(process.env.ROSTER_AUTOMATION_TOKEN || "");
+const maintenanceBudget = process.env.ROSTER_MAINTENANCE_SESSION ? JSON.parse(process.env.ROSTER_MAINTENANCE_SESSION) : null;
 const sourceId = String(process.env.ROSTER_AUTOMATION_SOURCE_ID || "").trim();
 
 if (!token) throw new Error("ROSTER_AUTOMATION_TOKEN is required.");
@@ -57,7 +58,7 @@ for (const run of runs) {
 
 if (pending.boundedImportEnabled === true) {
   for (let step = 0; step < 24; step += 1) {
-    const refresh = await automationRequest("/api/automation/facility-refresh", { method: "POST", body: { sourceId } });
+    const refresh = await automationRequest("/api/automation/facility-refresh", { method: "POST", body: { sourceId, maintenanceBudget } });
     if (refresh.idle || refresh.deferred || refresh.completed) break;
   }
 }
@@ -121,7 +122,7 @@ async function processRun(run) {
     const plan = await planRosterImportBatches(payload);
     run.boundedImportStarted = true;
     finished = await executeBoundedRosterImport(plan, (step) => automationRequest("/api/automation/derived", {
-      method: "POST", body: { ...step, runId: run.id, sourceId: run.sourceId, file: payload.file },
+      method: "POST", body: { ...step, maintenanceBudget, runId: run.id, sourceId: run.sourceId, file: payload.file },
     }));
     if (finished.deferred) {
       console.log("Import write allowance exhausted; queued progress retained for automatic continuation.");
@@ -163,7 +164,7 @@ async function automationRequest(path, options = {}) {
       const response = await guardedFetch(process.env, `${baseUrl}${path}`, {
         method: options.method || "GET",
         headers,
-        body: options.body ? JSON.stringify(options.body) : undefined,
+        body: options.body ? JSON.stringify({ ...options.body, maintenanceBudget }) : undefined,
       }, { label: "Roster processor callback" });
       const text = await response.text();
       let result = {};
