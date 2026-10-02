@@ -14,7 +14,9 @@ for the other three sites.
 
 Remaining verification: authenticated
 identity UI, calendar/subscription freshness and consolidated user acceptance;
-check settled account-wide usage and remove superseded deployments. Real
+check settled account-wide usage. Approved deployment cleanup is complete:
+103 deleted, zero failures; independently verified current plus rollback and zero Preview.
+Live directory and seniority filtering passed. Real
 MMC/MCH/DDH future terms remain dependent on provider publication. VHH completed
 a real automatic import at 04:13 UTC. VHH contacts and five-minute contact
 schedules were restored earlier today. Ordinary manual mutations, session

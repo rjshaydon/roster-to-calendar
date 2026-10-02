@@ -624,3 +624,36 @@ allowance 40% remaining, credits 182.1872700000 unchanged. Remaining work needs
 Mac unlock, effort setting change to Low, user functional acceptance and explicit
 approval for the prepared 103-deployment cleanup. Final records are committed
 locally without creating another documentation-only Production deployment.
+
+
+## Approved deployment cleanup and live acceptance — 2 October, Low effort
+
+Deleted all 103 approved superseded deployments through the Pages control plane,
+with zero failures. Independent full inventory confirms exactly two Production
+deployments and zero Preview: canonical `bd4924c6-05e6-4299-bc40-929ec8535954`
+(commit `6513315a`) and verified rollback `fe6de1d2-c0b6-4a8b-85de-65664bac46db`
+(commit `239d215a`). Cleanup did not call application/D1 endpoints.
+
+Unlocked Safari acceptance loaded the 45-account Creator directory. Selecting
+SMS filtered it to 14 accounts, confirming published seniority lookup in the
+live UI. Owner account locations remained present; the account screen displayed
+no explicit linked roster names, while the selected doctor profile retained its
+45-event calendar. This does not verify an intended ordinary-account linking
+mutation; that remains an acceptance item. No claims, permissions, credentials
+or preferences were changed. Safari was returned to the personal calendar.
+
+At 06:09 UTC analytics showed 163,498 reads and 18,870 writes, settled through
+05:54 UTC. The checker stopped solely because the prior sample was less than
+ten minutes earlier; no expensive fingerprints were detected. This sample does
+not yet cover the 05:55 recovery. Final properly spaced sample follows below.
+
+Documentation is retained locally to avoid creating another deployment solely
+for operational records. Provider future-term delivery, subscribed-client refresh
+and remaining genuine user journeys remain external/live acceptance work.
+
+Final sample at 06:12:22 UTC: GO, no reasons, settled through 05:57:22 UTC
+(includes the MMC recovery). Account usage 191,377 reads / 18,967 writes;
+recent-rate projections 3,138,581 reads / 29,200 writes remain below admission
+thresholds. The extrapolation includes maintenance, not solely ordinary UI
+traffic. Latest UI checks remain within the analytics lag. Five-hour allowance
+30% remaining; credits unchanged at 182.1872700000. Stop here to conserve usage.

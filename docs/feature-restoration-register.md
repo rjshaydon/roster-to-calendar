@@ -33,10 +33,14 @@ cross-device session settings are deployed. This release adds read-only automati
 name suggestions and explicit atomic account linking using published term data.
 No ordinary login repairs accounts or acquires claims automatically.
 
-Outstanding acceptance: authenticated live identity UI (Mac currently locked),
+Outstanding acceptance: remaining authenticated identity journeys,
 real future-term delivery for MMC/MCH/DDH when
 providers publish it, a consolidated user journey including calendar subscriptions,
-settled post-recovery usage and retained-deployment cleanup. MMC/MCH retries
+settled post-recovery usage. Deployment cleanup is complete: 103 approved
+superseded deployments deleted without failures; independent inventory confirms
+current Production plus one verified rollback, with zero Preview. Live Safari
+checks loaded the 45-account directory and narrowed SMS seniority to 14 accounts;
+the personal calendar remained at 45 events. MMC/MCH retries
 and all-site maintenance succeeded; MMC stale-provider recovery completed at
 05:55 UTC, with version 398 and its exact timestamp verified. VHH completed a real
 SharePoint-triggered import at 04:13 UTC. Advanced global repair/bootstrap,
@@ -547,9 +551,10 @@ pause, and future maintenance work must not accidentally disable them.
 
 ### FR-25 — Retained deployments with Production D1 bindings
 
-- **State:** The original accumulation was contained on 10 September, but
-  deployments have accumulated again during recovery and require another
-  control-plane inventory and cleanup. On 10 September, the
+- **State:** Restored containment on 2 October: all 103 approved superseded
+  deployments deleted with no failures. Independent inventory confirms two
+  Production deployments (current `bd4924c6…`, verified rollback `fe6de1d2…`)
+  and zero Preview. Production is unchanged. On 10 September, the
   complete control-plane inventory showed 262 callable deployments: eight
   Production and 254 Preview. Seven superseded Production deployments and all
   254 Preview deployments were deleted. Independent environment-specific
