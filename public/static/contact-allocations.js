@@ -188,7 +188,7 @@ export function partitionDdhNightReview(matches, assignments, { date, previousNi
     return { unresolved, previousNight: [] };
   }
   const contacts = unresolved.filter(night);
-  const previous = attachContactAllocations(contactRosterAssignments(previousNightRoster.rows || []), contacts, [], { now });
+  const previous = attachContactAllocations(contactRosterAssignments(ddhWorkingNightRows(previousNightRoster.rows || [], window.previousNightDate)), contacts, [], { now });
   const oldMatches = new Map(previous.assignments.filter((assignment) => assignment.contactAllocation)
     .map((assignment) => [assignment.contactAllocation.contactKey, assignment.person.displayName]));
   const previousNight = contacts.filter((contact) => oldMatches.has(contact.contactKey)
@@ -196,6 +196,20 @@ export function partitionDdhNightReview(matches, assignments, { date, previousNi
     .map((contact) => ({ ...contact, reviewReason: `Likely leftover from night starting ${window.previousNightDate} · ${oldMatches.get(contact.contactKey)}` }));
   const keys = new Set(previousNight.map((contact) => contact.contactKey));
   return { unresolved: unresolved.filter((contact) => !keys.has(contact.contactKey)), previousNight };
+}
+
+export function ddhWorkingNightRows(rows, date) {
+  return rows.filter((row) => {
+    const event = row.event;
+    const text = `${event?.title || ""} ${event?.rawValue || ""}`.toLowerCase();
+    return String(row.sourceType).toLowerCase() === "ddh" && event?.allDay !== true
+      && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(event?.start || "")
+      && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(event?.end || "")
+      && Date.parse(event.end) > Date.parse(event.start)
+      && String(event.start).slice(0, 10) === date && contactRosterPeriod(event) === "Night"
+      && ![event.status, event.kind].some((value) => String(value || "").toLowerCase() === "unknown")
+      && !/\b(?:leave|conference|cme|annual|sick|personal|study|exam|sabbatical|parental|long service|hith|vhh|phnw|public holiday|clinical support)\b/.test(text);
+  });
 }
 
 // Scores rank evidence; they are not calibrated probabilities. Context can add

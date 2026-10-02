@@ -10,7 +10,7 @@ import {
   queryMaterializedFacilityTermStaff,
   storeCachedSnapshot,
 } from "./d1-calendar.js";
-import { ddhNightReviewWindow, contactRosterAssignments } from "../../public/static/contact-allocations.js";
+import { ddhNightReviewWindow, ddhWorkingNightRows } from "../../public/static/contact-allocations.js";
 
 const SCHEMA_VERSION = 1;
 const FACILITY_PUBLICATION_BATCH_SIZE = 7;
@@ -628,9 +628,7 @@ export async function loadPublishedPreviousDdhNight(r2, date, now = new Date()) 
   if (!pointer?.key) return result;
   const day = await loadCachedSnapshot(r2, pointer.key);
   if (!Array.isArray(day?.rows) || day.rows.length > FACILITY_PUBLICATION_LIMITS.dayRows || day.date !== window.previousNightDate) return result;
-  result.rows = day.rows.filter((row) => String(row.sourceType).toLowerCase() === "ddh"
-    && String(row.event?.start || "").slice(0, 10) === window.previousNightDate
-    && contactRosterAssignments([row])[0].period === "Night");
+  result.rows = ddhWorkingNightRows(day.rows, window.previousNightDate);
   result.available = true;
   return result;
 }

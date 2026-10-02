@@ -27,6 +27,10 @@ const ambiguousCurrent = contactRosterAssignments([row('Tony SMITH'), row('Tony 
 const ambiguousMatches = attachContactAllocations(ambiguousCurrent, [contacts[0]], [], { now });
 assert.equal(partitionDdhNightReview(ambiguousMatches, ambiguousCurrent, { date, now, previousNightRoster: context }).previousNight.length, 0, 'plausible current names cannot be hidden as leftovers');
 assert.equal(partitionDdhNightReview(matches, assignments, { date, now, previousNightRoster: { ...context, rows: [row('Tony OLD', previousDate), row('Tony OTHER', previousDate)] } }).previousNight.length, 0, 'prior match must also be unique');
+for (const override of [{ rawValue: 'Night sick leave' }, { status: 'unknown' }, { allDay: true }, { title: 'DDH: HITH Night' }, { end: '2026-10-01T09:00:00+10:00' }]) {
+ const invalid = row('Tony OLD', previousDate); invalid.event = { ...invalid.event, ...override };
+ assert.equal(partitionDdhNightReview(matches, assignments, { date, now, previousNightRoster: { ...context, rows: [invalid] } }).previousNight.length, 0, 'non-working and invalid prior events cannot hide a contact');
+}
 for (const local of [`${date}T23:00:00`, '2026-10-03T00:01:00', '2026-10-03T07:29:00']) {
  assert.equal(ddhNightReviewWindow(date, at(local)).nightDate, date);
  assert.equal(partitionDdhNightReview(matches, assignments, { date, now: at(local), previousNightRoster: context }).previousNight.length, 1);
