@@ -23,9 +23,10 @@ Tentative allocations have an editable asterisk, original sheet name, explanatio
 | Inferred given name plus surname initial | 94 | Yes |
 | Existing recognized shortened given name | 92 | Yes |
 | Qualified prefix, internal component, or accepted single edit | 90 | Yes |
+| Anchored two-edit given name (at least seven characters) | 90 | Yes |
 | Accepted two-edit longer name | 88 | Yes |
 
-Explicit parenthesized or quoted alternatives mark the result tentative even when the matching variant is exact. Prefixes need at least four characters and at least half the roster token. Spelling comparisons require both tokens to have at least five characters; one edit also requires similarity of at least 0.8. Two edits require both tokens to have at least ten characters and similarity of at least 0.85. Tokens longer than 48 characters are not fuzzily compared.
+Explicit parenthesized or quoted alternatives mark the result tentative even when the matching variant is exact. Prefixes need at least four characters and at least half the roster token. Spelling comparisons require both tokens to have at least five characters; one edit also requires similarity of at least 0.8. Two edits generally require both tokens to have at least ten characters and similarity of at least 0.85. For given names only, two edits can qualify when both tokens have at least seven characters, the first four characters and final character agree, and similarity is at least 0.75. This narrower anchored rule does not apply to surnames. Tokens longer than 48 characters are not fuzzily compared.
 
 Stream agreement adds 3 and grade agreement adds 2, capped at 100. Automatic allocation requires name score at least 88, total score at least 90, and a lead of at least 12 over the next plausible eligible identity. The provisional 15-point lead was replaced with 12 so an exact longer name can be separated from a two-edit alternative; short or equally plausible alternatives remain unresolved. This choice passes synthetic boundary tests but is not calibrated on real confirmed allocations. Scores are ordinal confidence scores, not probabilities.
 
@@ -46,7 +47,7 @@ R2 publication merges per-contact revisions and uses conditional writes to preve
 
 ### Validation and limits
 
-`scripts/test-contact-name-matching.mjs` covers 19 positive name scenarios, contradictory surnames, short-name gates, ambiguity, shuffled inputs, duplicate events/handsets, competing guesses, browser/server evidence parity, active VHH expiry, correction controls, real local SQLite persistence, actual save-action execution, concurrent publication, injected failures, and query budgets. UI rendering uses the actual application functions; a local browser preview verified the asterisk explanation and confirm/reject/reset interactions.
+`scripts/test-contact-name-matching.mjs` covers 21 positive name scenarios, contradictory surnames, short-name gates, ambiguity, shuffled inputs, duplicate events/handsets, competing guesses, browser/server evidence parity, active VHH expiry, correction controls, real local SQLite persistence, actual save-action execution, concurrent publication, injected failures, and query budgets. UI rendering uses the actual application functions; a local browser preview verified the asterisk explanation and confirm/reject/reset interactions.
 
 Passing regression checks: syntax, existing contact allocations, contact sync, shared contact cache, contact access, facility access, restoration mutations, database costs, and client request budgets. The full fixture suite's pre-existing automation failure at line 922 remains outside this change.
 
@@ -81,6 +82,24 @@ The Tara K / "Call Switch - 92" review detail remains visible. Its eventual
 on-call/non-rostered contact display is recorded as a **planned new feature** in
 [FR-30](./feature-restoration-register.md#fr-30--on-call-and-non-rostered-contact-sheet-details),
 with implementation deferred as requested.
+
+### MCH live follow-up
+
+Literal worksheet headers (`ROLE` / `NAME` / `PHONE`, including blank Night phone)
+are excluded during normalization and direct matching. Exclusion requires the
+complete header pattern; it does not suppress a clinician based on name alone.
+Rosie is recognized as a short name for Rosemary, Rose, Rosalind, or Rosalyn,
+subject to existing ambiguity gates. Youshna → Youstina uses the anchored two-edit
+given-name rule described above. Competing variants, insufficient anchors,
+shorter names, and contradictory surnames retain review behaviour.
+
+Read-only comparison against the published MCH roster/contact snapshot preserved
+all six existing matches and added Rosie → Rosemary SASSE and Youshna → Youstina
+NAN, both tentative. All three imported header rows disappear; Ungell remains
+unmatched. Syntax, matching/correction/cost tests, existing contact fixtures,
+contact sync, facility access, workbook extraction, and workbook ingress pass.
+No extra automatic D1 access, network calls, polling, or persisted fuzzy matches
+are introduced.
 
 ## Goal and boundaries
 

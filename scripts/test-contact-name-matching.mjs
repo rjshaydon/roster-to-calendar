@@ -39,6 +39,8 @@ const positiveCases = [
   ['Ollie', 'Oliver DEANS', 'alias'],
   ['Meg', 'Megha PHILIP', 'alias'],
   ['Ben', 'Benjamin BRENNAN DOYLE', 'alias'],
+  ['Rosie', 'Rosemary SASSE', 'alias'],
+  ['Youshna', 'Youstina NAN', 'spelling'],
 ];
 for (const [contactName, rosterName, method] of positiveCases) {
   const result = match([staff(rosterName)], [sheet(contactName)]);
@@ -61,6 +63,17 @@ assert.equal(match([staff('Craig'), staff('Craig JIRAYUT')], [sheet('Craig Jiray
 assert.equal(match([staff('Ollie JONES'), staff('Oliver DEANS')], [sheet('Ollie')]).matchedCount, 0, 'nickname expansion must not override an equally plausible given name');
 assert.equal(match([staff('Megha PHILIP'), staff('Megan JONES')], [sheet('Meg')]).matchedCount, 0, 'Meg must remain ambiguous when another plausible expansion is rostered');
 assert.equal(match([staff('Benjamin DOYLE'), staff('Benedict JONES')], [sheet('Ben')]).matchedCount, 0);
+assert.equal(match([staff('Rosemary SASSE'), staff('Rose JONES')], [sheet('Rosie')]).matchedCount, 0);
+assert.equal(match([staff('Youstina NAN'), staff('Youshena JONES')], [sheet('Youshna')]).matchedCount, 0, 'two plausible anchored spellings remain ambiguous');
+for (const [contact, name] of [['Youshna JONES', 'Youstina NAN'], ['Youstne', 'Youstina NAN'], ['Yostna', 'Youstina NAN'], ['Youstina Youshna', 'Youstina YOUSTINA']]) {
+  assert.equal(match([staff(name)], [sheet(contact)]).matchedCount, 0, 'shorter/poorly anchored spellings and conflicting surnames must not use the wider given-name rule');
+}
+const headerRows = ['AM', 'PM', 'Night'].map(period => sheet('NAME', 'MCH', period === 'Night' ? '' : 'PHONE', 'ROLE', period));
+assert.equal(match([], headerRows).unmatched.length, 0, 'worksheet headers are not contact allocations');
+const normalizedHeaders = normaliseContactListExtract({ sourceId: 'mmc-shift-allocations', sourceDate: '2026-10-02', contacts: headerRows });
+assert.equal(normalizedHeaders.contacts.length, 0);
+assert.equal(match([], [sheet('NAME', 'MCH', '25150', 'Paeds Dr', 'PM')]).unmatched.length, 1, 'header exclusion must require the complete header pattern');
+assert.equal(match([staff('Youstina NAN', 'MCH', 'Paeds', 'HMO', 'PM')], [sheet('Ungell', 'MCH', '25176', 'Paeds Dr', 'PM')]).matchedCount, 0);
 const arnavRows = [sheet('Arnav - 25192', 'MMC', '25192', 'SEPSIS DR - MUST CARRY 25141', 'PM'), sheet('Arnav', 'MMC', '25192', 'Dr', 'PM')];
 const arnavStaff = [staff('Arnav MEHTA', 'MMC', 'Sepsis', 'HMO', 'PM')];
 const arnavResult = match(arnavStaff, arnavRows);

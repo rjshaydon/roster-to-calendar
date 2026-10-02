@@ -29,6 +29,7 @@ const NAME_ALIASES = new Map([
   ["ollie", new Set(["oliver"])],
   ["meg", new Set(["megha", "megan", "meghan", "margaret"])],
   ["ben", new Set(["benjamin", "benedict", "bennett"])],
+  ["rosie", new Set(["rosemary", "rose", "rosalind", "rosalyn"])],
 ]);
 
 export function normaliseContactListExtract(payload) {
@@ -55,7 +56,7 @@ export function normaliseContactListExtract(payload) {
       // A fixed phone left in an empty row must not be treated as an allocation.
       isPopulated: Boolean(entry?.isPopulated) && /\p{L}/u.test(name),
     };
-  }).filter((entry) => !isTemporarilyExcludedContactRole(sourceId, entry));
+  }).filter((entry) => !isTemporarilyExcludedContactRole(sourceId, entry) && !isContactWorksheetHeader(entry));
   if (contacts.some((entry) => !validAreas.has(entry.area)
     || !(sourceId === VHH_CONTACT_LIST_SOURCE_ID ? entry.shift === "Current" : VALID_SHIFTS.has(entry.shift))
     || (sourceId === VHH_CONTACT_LIST_SOURCE_ID && (!/^(CIC|(?:Swing|PM) Consultant(?: \d{4})?|ED Doctor|Sepsis Doctor|SSU Dr)$/i.test(entry.role) || !/^120(?:0[8]|1[03456789]|20)$/.test(entry.phone)))
@@ -255,7 +256,8 @@ export function contactAllocationCandidates(assignments = [], contact, { now = n
 }
 
 export function attachContactAllocations(assignments = [], contacts = [], resolutions = [], { now = new Date() } = {}) {
-  const available = coalesceRepeatedContactRows((contacts || []).filter((contact) => (contact?.isPopulated && /\p{L}/u.test(contact.name || "")) || isRoleOnlyServiceContact(contact))
+  const available = coalesceRepeatedContactRows((contacts || []).filter((contact) => !isContactWorksheetHeader(contact)
+    && ((contact?.isPopulated && /\p{L}/u.test(contact.name || "")) || isRoleOnlyServiceContact(contact)))
     .map((contact, index) => ({ ...contact, contactKey: String(contact.contactKey || contactResolutionKey("legacy", "", contact, index)) })), resolutions);
   // Never retain an allocation from a previous matching pass.
   const enriched = assignments.map(({ contactAllocation, ...assignment }) => ({ ...assignment }));
@@ -356,6 +358,11 @@ export function attachContactAllocations(assignments = [], contacts = [], resolu
           : eligible.length > 1 ? "Ambiguous name" : ranked.some(hasTarget) ? "Clinician already has a contact allocation" : "No safe name match"),
           candidates: ranked.slice(0, 3).map(({ doctorKey, sourceType, displayName, score, reasons }) => ({ doctorKey, sourceType, displayName, score, reasons })) };
       }), serviceContacts };
+}
+
+function isContactWorksheetHeader(contact) {
+  return simplify(contact?.role) === "role" && simplify(contact?.name) === "name"
+    && ["", "phone"].includes(simplify(contact?.phone));
 }
 
 function contactMatchName(contact) {
@@ -580,7 +587,7 @@ function tokenMatch(contact, roster) {
     if (namesMatch(contact[0], roster[0]) === "alias") return evidence("alias", 92, true, "Recognized shortened given name");
     if (contact[0].length >= 4 && roster[0].startsWith(contact[0]) && contact[0].length / roster[0].length >= 0.5) return evidence("first-name-prefix", 90, true, "Shortened given name agrees");
     if (roster.slice(1).includes(contact[0])) return evidence("internal-given-name", 90, true, "Name component agrees with roster");
-    const similarity = spellingMatch(contact[0], roster[0]);
+    const similarity = spellingMatch(contact[0], roster[0], { givenName: true });
     return similarity ? evidence("spelling", similarity, true, "Small spelling difference in given name") : null;
   }
   // Match an initial/given name against roster components, then account for ALL
@@ -590,7 +597,7 @@ function tokenMatch(contact, roster) {
     const first = contact[0], target = roster[firstIndex];
     const firstMethod = first === target ? "exact" : namesMatch(first, target) === "alias" ? "alias"
       : first.length === 1 && target.startsWith(first) ? "initial"
-        : first.length >= 4 && target.startsWith(first) && first.length / target.length >= 0.5 ? "prefix" : spellingMatch(first, target) ? "spelling" : "";
+        : first.length >= 4 && target.startsWith(first) && first.length / target.length >= 0.5 ? "prefix" : spellingMatch(first, target, { givenName: true }) ? "spelling" : "";
     if (!firstMethod) continue;
     const unused = roster.map((token, index) => ({ token, index })).filter((entry) => entry.index !== firstIndex);
     let initial = false, changed = false, valid = true;
@@ -620,9 +627,11 @@ function namesMatch(left, right) {
 
 // Bounded optimal-string-alignment distance handles common adjacent letter
 // transpositions. At most two edits are considered, on short name components.
-function spellingMatch(left, right) {
+function spellingMatch(left, right, { givenName = false } = {}) {
   if (left.length < 5 || right.length < 5 || left.length > 48 || right.length > 48) return 0;
-  const limit = Math.min(left.length, right.length) >= 10 ? 2 : 1;
+  const anchoredGivenName = givenName && Math.min(left.length, right.length) >= 7
+    && left.slice(0, 4) === right.slice(0, 4) && left.slice(-1) === right.slice(-1);
+  const limit = Math.min(left.length, right.length) >= 10 || anchoredGivenName ? 2 : 1;
   if (Math.abs(left.length - right.length) > limit) return 0;
   let previousPrevious = null;
   let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
@@ -636,7 +645,8 @@ function spellingMatch(left, right) {
   }
   const distance = previous[right.length];
   const similarity = 1 - distance / Math.max(left.length, right.length);
-  if (!distance || distance > limit || similarity < (limit === 2 ? 0.85 : 0.8)) return 0;
+  if (distance === 2 && anchoredGivenName && similarity >= 0.75) return 90;
+  if (!distance || distance > limit || similarity < (distance === 2 ? 0.85 : 0.8)) return 0;
   return distance === 1 ? 90 : 88;
 }
 
