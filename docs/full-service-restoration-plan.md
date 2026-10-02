@@ -1,18 +1,22 @@
-## Next batch — 2 October bounded identity restoration
+## Current batch — 2 October bounded identity and delivery restoration
 
-Prepared implementation and local/live-publication evidence are recorded in
-`bounded-roster-import-checkpoint.md`. This batch restores bounded automatic
-name suggestions, explicit confirmed linking and Creator directory grades using
-visible R2 term staff data. No history discovery, login repair or global snapshot
-builder is re-enabled. Release verification is pending.
+Production `239d215a`, deployment `fe6de1d2-c0b6-4a8b-85de-65664bac46db`,
+restores bounded automatic name suggestions, explicit confirmed linking and
+Creator directory grades using visible R2 term staff data. It also fixes the
+JSON transport hash mismatch blocking real MMC/MCH imports and restores the
+bounded diff path for small same-term automatic corrections. Global repair,
+history discovery, Creator startup fan-out and snapshot builders remain closed.
 
-After release: verify authenticated directory/account behaviour and settled D1
-usage; reconcile real changed/current/next-term deliveries for all four sources;
-complete consolidated functional acceptance, inventory retained deployments and
-close the restoration register. An unpublished provider term remains a delivery
-verification dependency. Advanced global maintenance stays closed; any necessary
-repair must use exact scope and budget admission. The separate parked Doctor
-Names/merge project is not part of this functional-parity batch.
+Remaining verification: finish the queued MMC/MCH deliveries, authenticated
+identity UI, calendar/subscription freshness and consolidated user acceptance;
+check settled account-wide usage and remove superseded deployments. Real
+MMC/MCH/DDH future terms remain dependent on provider publication. VHH completed
+a real automatic import at 04:13 UTC. VHH contacts and five-minute contact
+schedules were restored earlier today. Ordinary manual mutations, session
+settings, colleague tools and Creator switching are already deployed.
+Implementation and evidence: `bounded-roster-import-checkpoint.md`. The separate
+parked Doctor Names/merge project is not part of baseline functional restoration.
+Historical checkpoints below describe their date, not current feature state.
 
 ## Restoration batch — 2 October 2026
 

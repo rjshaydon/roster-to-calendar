@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { onRequest as middleware } from '../functions/_middleware.js';
 import { onRequestPost as stateHandler } from '../functions/api/state.js';
+import { onRequestGet as feedHandler } from '../functions/api/feed.js';
 import { DatabaseSync } from 'node:sqlite';
 import { readFile, readdir } from 'node:fs/promises';
 import { makeSessionPatch, applySessionPatch } from '../public/static/session-settings-patch.js';
@@ -109,9 +110,9 @@ const context={env:{ROSTER_DB:db,FACILITY_AUTOMATIC_SOURCES:'mmc,mch,ddh,vhh',FA
 let request=0;
 const call=async(file,body)=>{beginMaintenanceAccounting(db,'fixture-'+(++request),true);return handleManualRosterImport(context,{file,...body},email)};
 const doctor={key:'FIXTURE',displayName:'Fixture',seniority:'Registrar'};
-async function plan(from,to,count=1600) {
+async function plan(from,to,count=1600,title='Day') {
   const file={id:'manual:'+crypto.randomUUID(),name:'Fixture.xlsx',sourceType:'mmc',sourceId:'manual-mmc',parserVersion:'fixture'};
-  const events=Array.from({length:count},(_,i)=>({id:file.id+':'+i,source:'MMC',title:'Day',rawValue:'Day',seniority:'Registrar',start:`${i===count-1?to:from}T08:00:00`,end:`${i===count-1?to:from}T16:00:00`}));
+  const events=Array.from({length:count},(_,i)=>({id:file.id+':'+i,source:'MMC',title,rawValue:title,seniority:'Registrar',start:`${i===count-1?to:from}T08:00:00`,end:`${i===count-1?to:from}T16:00:00`}));
   return {file,plan:await planRosterImportBatches({file,doctors:[doctor],eventsByDoctor:{FIXTURE:events},issuesByDoctor:{}})};
 }
 const old=await plan('2026-08-03','2026-11-01');
@@ -206,3 +207,33 @@ for(let batchIndex=0;batchIndex<publicationPlan.batchCount;batchIndex++) assert.
 for(const month of publicationPlan.months) assert.equal((await runFacilityPublicationStep(publicationContext,'mmc',{mode:'build-month',termStart:'2026-08-03',dates:['2026-08-03','2026-11-01'],operationRevision:publicationPlan.operationRevision,month})).ok,true);
 assert.equal((await runFacilityPublicationStep(publicationContext,'mmc',{mode:'finalize',termStart:'2026-08-03',dates:['2026-08-03','2026-11-01'],operationRevision:publicationPlan.operationRevision})).ok,true);
 console.log('Removal publication: empty current roster clears compact staff and streams and completes staged R2 publication.');
+
+// A subscribed client must observe the active replacement without waiting for
+// account snapshot hydration, and must never receive retained inactive shifts.
+const subscriptionToken = 'local-restoration-subscription';
+sqlite.prepare('INSERT INTO subscription_tokens(token,email) VALUES(?,?)').run(subscriptionToken,email);
+const feed = () => feedHandler({ env: { ROSTER_DB: db }, request: new Request('https://fixture.test/api/feed?token='+subscriptionToken) });
+let beforeFeedWrites=db.rowsWritten;
+const firstFeed=await feed();
+assert.equal(firstFeed.status,200);
+const firstIcs=await firstFeed.text();
+assert.equal((firstIcs.match(/BEGIN:VEVENT/g)||[]).length,2,'only the active future file reaches subscriptions');
+assert.ok(firstIcs.includes('20261102T080000'));
+assert.ok(!firstIcs.includes('20260803T080000'));
+assert.equal(db.rowsWritten,beforeFeedWrites,'subscription reads must write nothing');
+const correctedFuture=await plan('2026-11-02','2027-01-31',3,'Corrected future shift');
+await executeBoundedRosterImport(correctedFuture.plan,body=>call(correctedFuture.file,body));
+beforeFeedWrites=db.rowsWritten;
+const correctedFeed=await feed();
+assert.equal(correctedFeed.status,200);
+const correctedIcs=await correctedFeed.text();
+assert.equal((correctedIcs.match(/BEGIN:VEVENT/g)||[]).length,3);
+assert.ok(correctedIcs.includes('SUMMARY:Corrected future shift'));
+assert.ok(!correctedIcs.includes('SUMMARY:Day\r\n'),'the prior active revision disappears immediately');
+assert.equal(db.rowsWritten,beforeFeedWrites);
+for(const sql of db.sql.filter(sql=>sql.startsWith('SELECT event_json FROM roster_events '))) {
+  const parameters=Array.from({length:(sql.match(/\?/g)||[]).length},(_,i)=>['FIXTURE','9999-12-31','0000-01-01'][i]);
+  const details=sqlite.prepare('EXPLAIN QUERY PLAN '+sql).all(...parameters).map(row=>row.detail).join('\n');
+  assert.ok(!/SCAN roster_events/.test(details),details);
+}
+console.log('Subscriptions: active replacements refresh immediately, retired shifts stay excluded, indexed queries and zero-write reads passed.');

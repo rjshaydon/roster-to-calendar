@@ -13,27 +13,34 @@ record its evidence, approval, deployment and post-deployment observation here.
 No entry may be removed after restoration; change its state to **Restored** so
 the history remains auditable.
 
-Current tracked Production code is `3161b23` on 27 September 2026. The exact
-active deployment identity must still be read back at every operational gate.
-Ordinary-login containment and all permanent quota protections remain active.
-Cached At a glance readers are open for MMC, DDH, MCH and VHH; contact readers
-are open for DDH, MMC and MCH. Roster automation is configured for all four
-roster sources and contact ingress is configured for the exact DDH and MMC
-sources. The external flows' current On/Off state must be read back rather than
-inferred from Git. A 27 September user test found no DDH contacts, so the
-earlier contact-restoration entry is not accepted as an end-to-end pass.
-Bootstrap and advanced-maintenance controls remain closed.
+## Current release — 2 October 2026
 
-The authoritative restoration ordering is now
-[`full-service-restoration-plan.md`](./full-service-restoration-plan.md). It
-supersedes the older serial ordering while retaining this register's permanent
-safety constraints and incident evidence.
+Production commit `239d215a` is canonical in deployment
+`fe6de1d2-c0b6-4a8b-85de-65664bac46db` (verified 05:19 UTC). Account-wide
+analytics admission and its credential remain enabled; Preview remains closed.
+The [bounded restoration checkpoint](./bounded-roster-import-checkpoint.md)
+contains implementation, regression and operational evidence. The
+[full-service plan](./full-service-restoration-plan.md) governs batch ordering;
+older serial gates and incident observations below are historical evidence.
 
-The Astra revision separates independently releasable contacts (1A), roster
-automation/new-term readiness including DDH scheduling (1B), and At a glance
-freshness (1C). Historical one-source rollout requirements below do not override
-that ordering. The first contact diagnosis/local correction round is complete;
-the full-service plan's checkpoint records the tested, undeployed change.
+Cached At a glance, automatic launch and contacts are configured for all four
+sites. MMC/MCH/DDH contacts were user-confirmed; VHH extraction/publication was
+restored on 2 October, with current-holder semantics recorded in the checkpoint.
+All contact flows are scheduled at five-minute intervals. Roster ingestion,
+bounded large imports/replacements, ordinary manual imports/removal, cached
+colleague tools, Creator switching/directory, doctor-profile calendars and
+cross-device session settings are deployed. This release adds read-only automatic
+name suggestions and explicit atomic account linking using published term data.
+No ordinary login repairs accounts or acquires claims automatically.
+
+Outstanding acceptance: authenticated live identity UI (Mac currently locked),
+MMC/MCH queued delivery retries, real future-term delivery for MMC/MCH/DDH when
+providers publish it, a consolidated user journey including calendar subscriptions,
+settled post-release usage and retained-deployment cleanup. VHH completed a real
+SharePoint-triggered import at 04:13 UTC. Advanced global repair/bootstrap,
+Creator startup fan-out and automatic global snapshot builders remain closed;
+these mechanisms are not required for ordinary restored functionality. Durable
+Doctor Names/merge work is a separate parked product project.
 
 The safety commits did not intentionally delete Production roster files,
 roster events, account data, facility snapshots or contact data. This statement
@@ -68,7 +75,7 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 | `FACILITY_SHARED_ROLLOUT_ACTIVE` | `true` in Production; `false` in Preview | FR-01 |
 | `FACILITY_SHARED_EMERGENCY_PAUSED` | `false` in Production; `true` in Preview | FR-01 |
 | `FACILITY_LEGACY_READS_PAUSED` | `true` permanently | FR-01, FR-17 |
-| `FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST` | `ddh` in Production for retained DDH contact publication configuration; empty in Preview | FR-01, FR-04, FR-12 |
+| `FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST` | `ddh,mmc,mch,vhh` in Production; empty in Preview | FR-01, FR-04, FR-12 |
 | `FACILITY_SHARED_READER_SOURCE_ALLOWLIST` | `mmc,ddh,mch,vhh` in Production; empty in Preview | FR-01 |
 | `FACILITY_SHARED_READER_COHORT` | `all` in Production; empty in Preview | FR-01 |
 | `FACILITY_ACCESS_MATERIALIZATION_ENABLED` | `false` | FR-01 |
@@ -78,7 +85,7 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 | `FACILITY_SHARED_METADATA_ENABLED` | `true` in Production; `false` in Preview | FR-01 |
 | `FACILITY_SHARED_DAYS_ENABLED` | `true` in Production; `false` in Preview | FR-01 |
 | `FACILITY_SHARED_CONTACTS_ENABLED` | `true` in Production; `false` in Preview | FR-04 |
-| `FACILITY_SHARED_CONTACTS_SOURCE_ALLOWLIST` | `ddh,mmc,mch` in Production; empty in Preview | FR-04 |
+| `FACILITY_SHARED_CONTACTS_SOURCE_ALLOWLIST` | `ddh,mmc,mch,vhh` in Production; empty in Preview | FR-04 |
 | `ROSTER_AUTOMATION_WRITES_ENABLED` | `true` in Production; `false` in Preview | FR-06, FR-07 |
 | `MANUAL_ROSTER_WRITES_ENABLED` | `false` | FR-06, FR-11 |
 | `ROSTER_STATUS_SUMMARY_ENABLED` | `true` in Production; `false` in Preview | FR-05 |
@@ -89,18 +96,25 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 | `FACILITY_BOOTSTRAP_EXECUTION_ENABLED` | `false` in Production and Preview | FR-12 |
 | `FACILITY_BOOTSTRAP_FILE_ALLOWLIST` | empty in Production and Preview | FR-12 |
 | `CONTACT_AUTOMATION_WRITES_ENABLED` | `true` in Production; `false` in Preview | FR-08 |
-| `CONTACT_AUTOMATION_SOURCE_ALLOWLIST` | `ddh-daily-contact-sheet,mmc-shift-allocations` in Production; empty in Preview | FR-08 |
-| `IDENTITY_DISCOVERY_ENABLED` | `false`; missing or malformed also fails closed | FR-21, FR-24 |
+| `CONTACT_AUTOMATION_SOURCE_ALLOWLIST` | `ddh-daily-contact-sheet,mmc-shift-allocations,vhh-shift-phone-allocations` in Production; empty in Preview | FR-08 |
+| `IDENTITY_DISCOVERY_ENABLED` | `true` in Production; `false` in Preview; missing or malformed fails closed | FR-21, FR-24 |
 | `ACCOUNT_SNAPSHOT_BUILD_ENABLED` | `false`; missing or malformed also fails closed | FR-23 |
-| `ROSTER_INSIGHT_READS_ENABLED` | `false`; missing or malformed also fails closed | FR-19 |
+| `ROSTER_INSIGHT_READS_ENABLED` | `true` in Production for explicit cached tools; `false` in Preview | FR-19 |
+| `ROSTER_AUTOMATION_BOUNDED_IMPORT_ENABLED` | `true` in Production; `false` in Preview | FR-07 |
+| `ROSTER_ACCOUNT_BUDGET_ENABLED` | `true` in Production; `false` in Preview | FR-06, FR-07 |
+| `FACILITY_AUTOMATIC_PUBLICATION_ENABLED` | `true` in Production; `false` in Preview | FR-01, FR-07 |
+| `BOUNDED_MANUAL_ROSTER_ENABLED` | `true` in Production; `false` in Preview | FR-06 |
+| `ROSTER_BOUNDED_REPLACEMENT_ENABLED` | `true` in Production; `false` in Preview | FR-06, FR-07 |
+| `CREATOR_DIRECTORY_ENABLED` | `true` in Production; `false` in Preview | FR-18, FR-24 |
+| `CREATOR_STARTUP_HYDRATION_ENABLED` | `false` | FR-26 |
+| `SESSION_SETTINGS_SAVE_ENABLED` | `true` in Production; `false` in Preview | FR-29 |
 | Watchdog `ROSTER_AUTOMATION_ENABLED` | `false` | FR-10 |
 
 ## User-facing restoration register
 
 ### FR-01 — At a glance workspace
 
-- **State:** Cached readers restored for MMC, DDH, MCH and VHH. Automatic
-  publication after a changed roster is not yet restored.
+- **State:** Restored through cached all-site readers and bounded affected-date publication after imports. Broad builders remain closed.
 - **Includes:** On shift, ED Staff, By stream, Working together, multi-ED
   Director overview, facility/date selection and At a glance navigation on
   desktop and mobile. It also includes the compact staff-membership,
@@ -153,11 +167,9 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 
 ### FR-03 — Automatic On shift launch and contact refresh
 
-- **State:** Automatic launch is paused in Production. The visible-page contact
-  refresh path is present, but it cannot display data when no current overlay
-  was successfully published.
-- **Control:** `FACILITY_OVERVIEW_AUTOMATIC_LAUNCH_ENABLED=false` independently
-  suppresses automatic launch while manual MMC readers are restored.
+- **State:** Restored: eligible-user automatic launch and visible-page contact refresh. Contact source extraction runs no more often than every five minutes.
+- **Control:** `FACILITY_OVERVIEW_AUTOMATIC_LAUNCH_ENABLED=true` in Production;
+  Preview remains false.
 - **User effect:** Clinical users no longer receive the intended automatic live
   On shift workspace while At a glance is paused.
 - **Restoration outcome:** Reinstate automatic launch for eligible clinical
@@ -176,10 +188,11 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
   all three sites. MMC/MCH published at 11:16 AEST; DDH at 09:15 AEST.
 - **Includes:** MMC/DDH contact overlays, automatic roster/contact matching,
   unresolved-number review and temporary Creator corrections.
-- **Controls:** Production contact readers are enabled only for
-  `ddh,mmc,mch`. Contact ingress and the contact builder are open only for the
-  exact DDH and MMC source IDs. The Power Automate flows' current On/Off state
-  is external and must be read back. VHH contacts remain excluded.
+- **Current controls (2 October):** All four contact readers are enabled.
+  Exact DDH, MMC/MCH and VHH ingress sources are enabled; all three external
+  flows are scheduled at five-minute intervals. VHH current-holder matching
+  excludes inactive, ambiguous and stale-sheet names. See the checkpoint for
+  live scheduled-run and user-visible evidence.
 - **Data/code preservation:** Contact matching, overnight carry, expiry and
   optimistic correction logic remain in the repository. Pausing does not
   intentionally remove saved extracts or corrections.
@@ -210,13 +223,15 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 
 ### FR-06 — Manual roster import and file management
 
-- **State:** Paused.
+- **State:** Restored for ordinary Creator upload, bounded import/replacement and recoverable removal under account-wide admission. Full-range replacement preserves unrelated/future terms; partial overlapping replacements are rejected. Advanced global repair remains paused.
 - **Includes:** upload/retain a source file, save its parsed calendar, remove an
   import, reconcile retained files, reset/reparse a derived file and replace
   the active file set. Reading an already retained raw file is not intentionally
   disabled.
-- **Control:** `MANUAL_ROSTER_WRITES_ENABLED=false`; destructive/rebuild
-  actions additionally require `ROSTER_ADVANCED_MAINTENANCE_ENABLED=true`.
+- **Controls:** `BOUNDED_MANUAL_ROSTER_ENABLED=true` and
+  `ROSTER_BOUNDED_REPLACEMENT_ENABLED=true` restore ordinary operations.
+  `MANUAL_ROSTER_WRITES_ENABLED=false` keeps legacy mutations closed;
+  advanced global repair remains disabled.
 - **Affected actions:** `uploadRawRosterFile`, `saveDerivedCalendarFile`,
   `removeRosterImports`, roster-removing account saves,
   `syncRosterRepository`, `resetDerivedCalendarFile` and
@@ -266,7 +281,8 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 - **Includes:** receiving new contact extracts and publishing updated contact
   overlays.
 - **Controls:** `CONTACT_AUTOMATION_WRITES_ENABLED=true` in Production with the
-  exact allowlist `ddh-daily-contact-sheet,mmc-shift-allocations`; Preview is
+  exact allowlist `ddh-daily-contact-sheet,mmc-shift-allocations,
+  vhh-shift-phone-allocations`; Preview is
   closed. These controls provide authority, not proof that an external flow
   submitted a valid current overlay.
 - **Restoration outcome:** Verify DDH and MMC/MCH as one functional batch while
@@ -455,15 +471,15 @@ pause, and future maintenance work must not accidentally disable them.
 
 ### FR-19 — Colleague insight tools on calendar events
 
-- **State:** Paused behind the default-off `ROSTER_INSIGHT_READS_ENABLED`
-  control. Automatic background warm-up is also disabled in the client.
+- **State:** Restored for explicit cached colleague tools; legacy event joins and automatic background warm-up remain disabled.
 - **Includes:** “Who else is working with me?” and “When am I working with…?”.
 - **Incident evidence:** At 15:57 AEST on 14 September, an ordinary calendar
   render automatically invoked `queryRosterOverlapDoctors`; request telemetry
   reported 998,070 rows read by its legacy overlapping-event join.
 - **Containment:** Both insight actions stop in middleware before D1 unless the
   explicit control is true. Calendar rendering never schedules a remote insight
-  warm-up. Explicit use receives the existing unavailable presentation.
+  warm-up. Explicit restored actions use bounded published artifacts and fail
+  closed if a required artifact is unavailable.
 - **Restoration:** Replace the legacy event joins with indexed compact daily
   presence/shared artifacts, prove bounded plans and returned/examined rows,
   then restore explicit user actions first. Automatic warm-up is not restored
@@ -484,7 +500,7 @@ pause, and future maintenance work must not accidentally disable them.
 
 ### FR-21 — Automatic doctor discovery during login/account loading
 
-- **State:** Paused in Production behind a default-off control.
+- **State:** Restored in Production as bounded read-only suggestions from visible R2 term publications. Exact indexed ownership checks exclude claims owned by others. Missing publications fail closed without losing existing claims; no history fallback. Confirmed linking is an explicit atomic action. Deployment 239d215a and bounded-identity tests recorded in the checkpoint; live authenticated UI verification pending.
 - **Risk:** Unclaimed or incompletely claimed ordinary accounts can fall back
   from compact identity data to roster-file doctors and historical event
   comparisons. This is a plausible high-cost path but is not proven as the
@@ -498,7 +514,7 @@ pause, and future maintenance work must not accidentally disable them.
 
 ### FR-22 — Automatic account repair and identity seeding
 
-- **State:** Reduced in Production.
+- **State:** Unsafe automatic repair/seeding replaced by explicit incremental claim mutations. Ownership and prior claims are asserted atomically; replay writes zero and conflicts return 409. Settings, custom events and unrelated profile fields are preserved. Global repair remains unavailable.
 - **Risk:** A general account save can rewrite profiles, claims, aliases and
   locations, while durable identity rows may be seeded as a side effect.
 - **Containment:** Split mutations by responsibility; semantic no-ops write
@@ -509,7 +525,7 @@ pause, and future maintenance work must not accidentally disable them.
 
 ### FR-23 — Snapshot warm-up after ordinary account saves
 
-- **State:** Paused in Production behind a default-off control.
+- **State:** Broad automatic snapshot warm-up replaced by bounded revision-driven personal-calendar refresh and published R2 shifts. Ordinary settings/profile saves schedule no snapshot work; the global builder remains disabled.
 - **Risk:** Ordinary saves can schedule post-response snapshot preparation and
   hidden D1 work even when roster facts did not change.
 - **Containment:** No snapshot warm-up follows UI-state/profile saves. Builders
@@ -520,7 +536,7 @@ pause, and future maintenance work must not accidentally disable them.
 
 ### FR-24 — Creator user directory identity/seniority enrichment
 
-- **State:** Paused in Production while identity discovery is disabled.
+- **State:** Restored using bounded published term grades, with existing 100-account/1,000-claim directory paging and no per-account historical grade query. Current-term grades take precedence over already-visible next-term grades. Live authenticated acceptance pending.
 - **Note:** `listUsers` is an explicit Creator action and is not a credible
   explanation for an incident when the Creator did not open the app. It still
   must not derive identity or seniority from event history.
@@ -607,9 +623,7 @@ pause, and future maintenance work must not accidentally disable them.
 
 ### FR-29 — Browser-local session settings during D1 recovery
 
-- **State:** Cloud persistence of ordinary calendar display/session changes is
-  temporarily paused. Settings, filters, overrides and undo history continue
-  to persist in the current browser workspace.
+- **State:** Restored through the dedicated single-record session settings API, field-level changes and optimistic conflict detection. Calendar rendering remains local-only and does not invoke broad account saves.
 - **Reason:** Request attribution at 18:03 and 19:06 AEST on 15 September 2026
   proved that simply rendering a cached or refreshed calendar scheduled full
   `save` requests. One request per render wrote 12 rows; the following request

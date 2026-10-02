@@ -499,3 +499,54 @@ full staging/activation, same-term small diffs and safe large-diff fallback.
 Production deployment and exact queued-source retries remain pending.
 Control-plane inventory is complete: 103 Production deployments, zero Preview;
 cleanup will retain the accepted current release and at most one verified rollback.
+
+
+### Combined identity/import release and delivery verification — 2 October
+
+Production `239d215a1a0b8fba70d7071e8f87aaa610b15e6a` is canonical in
+`fe6de1d2-c0b6-4a8b-85de-65664bac46db`, deploy success at 05:19 UTC.
+Readback verifies identity discovery true, session settings/manual bounded
+imports/replacements true, account budget true with the analytics secret present,
+legacy manual writes false and global snapshot builder false. Both restoration
+commits were pushed together through the existing Git deployment pipeline.
+
+Controlled retries succeeded on the deployed code:
+- MMC workflow `36968437530`: 153 doctors / 4,167 shifts imported at 05:20 UTC;
+  current-term R2 manifest published at 05:21:27. Same-term correction retained
+  active file `automation:monash-adults:47c0951dd2582465d59b19a9`.
+- MCH workflow `36968682143`: 82 doctors / 2,367 shifts imported at 05:23 UTC;
+  current-term R2 manifest published at 05:25:32. Active file retained as
+  `automation:monash-paeds:16c4bd4d0ac403ef6f371e2e`.
+- VHH real SharePoint workflow `36963520835` succeeded before this release;
+  current and next-term objects remain published, next visible from 19 October.
+- All four exact source rows remain enabled and have empty last_error. DDH's
+  last successful import is 1 October 13:10 UTC; one non-seeding all-site
+  maintenance verification `36969058680` is running to check continuation and
+  its routine LastModified detection.
+
+Post-delivery directory check used eight exact R2 objects, zero D1: no missing
+sources/preparing state; published MMC 152 graded, MCH 81 graded, DDH 169 with
+162 graded, VHH 50 graded. Published term staff counts need not equal all parsed
+workbook names. MMC/MCH/DDH currently publish 3 August–1 November; no real next
+term has yet been verified for those sources. This is a provider-delivery
+acceptance dependency, not a reason to run synthetic Production imports.
+
+Added SQLite-backed subscription acceptance to restoration-mutations: an active
+future-term correction appears immediately in the ICS feed without snapshot
+warm-up; prior/inactive files are excluded; subscription reads write zero and
+query plans use indexes. Local test passes. Real subscribed-client refresh still
+needs user acceptance; client caching is separate from server feed freshness.
+
+Account-wide checker at 05:23 UTC returned GO, settled totals 48,055 reads /
+16,631 writes. Analytics lags recent imports. The exact live reservation row
+read at that time has no stop reason, allocated reads 181,164 and writes 18,665
+against maxima 3,837,273 and 79,653. Readback of four source rows and this row
+cost nine D1 reads, zero writes. No quota thresholds or per-chunk limits raised.
+
+Retained deployment inventory: 103 prior Production, zero Preview; new release
+makes 104. Prepared cleanup deletes 102, preserves this release and verified
+rollback `2140de5d-9811-4a46-8e17-dc63d4d5b97e`. Automatic approval review rejected
+execution because the exact mass-deletion scope needs explicit user approval;
+no deployments deleted. Approval requested. Safari authenticated verification
+remains blocked by the locked Mac. Medium implementation is complete; user has
+been advised that remaining verification/cleanup is suitable for Low.
