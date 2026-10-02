@@ -1,6 +1,6 @@
 # Universal contact name matching implementation plan
 
-Status: implementation completed locally following approval to proceed; not committed, pushed, or deployed.
+Status: implementation complete and committed; production publishing authorized after local validation. Deployment verification is reported in the accompanying chat.
 Prepared: 2 October 2026.
 
 ## Implementation checkpoint
@@ -49,7 +49,7 @@ R2 publication merges per-contact revisions and uses conditional writes to preve
 
 Passing regression checks: syntax, existing contact allocations, contact sync, shared contact cache, contact access, facility access, restoration mutations, database costs, and client request budgets. The full fixture suite's pre-existing automation failure at line 922 remains outside this change.
 
-No representative held-out, clinician-confirmed contact dataset was available. The fixtures establish mechanics and safety boundaries; they do not establish real-world accuracy or the reduction in review volume. Unknown unrelated social names still require review unless explicitly supplied on the sheet or added to the identity-scoped alias configuration. Production deployment remains a separate step.
+No representative held-out, clinician-confirmed contact dataset was available. The fixtures establish mechanics and safety boundaries; they do not establish real-world accuracy or the reduction in review volume. Unknown unrelated social names still require review unless explicitly supplied on the sheet or added to the identity-scoped alias configuration. The user subsequently authorized production publishing for live validation.
 
 ## Goal and boundaries
 
