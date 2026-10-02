@@ -73,10 +73,30 @@ export function contactAllocationValue(extractValue) {
 
 export async function publishFacilityContactResolutions(r2, sourceId, sourceDate, resolutions = []) {
   if (!r2?.put || !sourceId || !sourceDate) return { ok: false, unavailable: true };
-  const stable = { schemaVersion: SCHEMA_VERSION, sourceId, sourceDate, resolutions };
-  const revision = await digest(stable);
-  await putJson(r2, facilityContactResolutionKey(sourceId, sourceDate), { ...stable, revision, publishedAt: new Date().toISOString() });
-  return { ok: true, revision };
+  const key = facilityContactResolutionKey(sourceId, sourceDate);
+  // Publication can finish out of order after concurrent human saves. Merge
+  // monotonic per-contact revisions and use R2's conditional write; an older
+  // snapshot must never resurrect a rejected allocation. No additional D1 read.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const current = await readJsonObject(r2, key);
+    const merged = new Map((current.data?.resolutions || []).map((resolution) => [resolution.contactKey, resolution]));
+    for (const resolution of resolutions) {
+      if (Number(resolution.revision || 0) >= Number(merged.get(resolution.contactKey)?.revision || 0)) merged.set(resolution.contactKey, resolution);
+    }
+    const stable = { schemaVersion: SCHEMA_VERSION, sourceId, sourceDate,
+      resolutions: [...merged.values()].sort((left, right) => String(left.contactKey).localeCompare(String(right.contactKey))) };
+    const revision = await digest(stable);
+    if (revision === current.data?.revision) return { ok: true, revision, unchanged: true };
+    try {
+      const result = await putJson(r2, key, { ...stable, revision, publishedAt: new Date().toISOString() }, {
+        onlyIf: current.etag ? { etagMatches: current.etag } : { etagDoesNotMatch: "*" },
+      });
+      if (result !== null) return { ok: true, revision };
+    } catch (error) {
+      if (!/precondition|condition|412/i.test(error?.message || "")) throw error;
+    }
+  }
+  throw new Error("Contact corrections changed during publication. Please retry the save.");
 }
 
 export async function loadPublishedFacilityContacts(r2, { date, facilityKeys = [], now = new Date() } = {}) {

@@ -121,8 +121,8 @@ for (const action of ["Metadata", "ByStream", "OnShift", "Staff", "WorkingTogeth
 }
 const contactResolutionBlock = stateSource.match(/action === "setContactAllocationResolution"[\s\S]*?(?=\n    if \(action ===|$)/)?.[0] || "";
 assert.match(contactResolutionBlock, /facilityOverviewAccess\(\)[\s\S]*requestedFacility !== access\.facilityKey/, "temporary contact corrections must retain non-SMS site enforcement");
-assert.match(contactResolutionBlock, /queryFacilityOverviewOnShift[\s\S]*facilityOverviewEventPeriod/, "a contact correction must target a rostered clinician in the same period");
-assert.match(contactResolutionBlock, /attachContactAllocations[\s\S]*safe automatic match/, "safe automatic allocations must remain non-editable");
+assert.match(contactResolutionBlock, /queryFacilityOverviewOnShift[\s\S]*validateContactResolutionSelection\(contactRosterAssignments/, "contact corrections must use shared roster and current-shift eligibility");
+assert.match(contactResolutionBlock, /if \(validation.error\) return Response.json/, "shared validation must prevent corrections from displacing safe automatic allocations");
 assert.match(stateSource, /queryContactAllocationResolutions[\s\S]*loadLiveContactListForOnShift/, "On shift should return temporary resolutions in its existing request");
 assert.match(d1Source.match(/async function calendarSchemaIsCurrent[\s\S]*?async function ensureColumn/)?.[0] || "", /contact_allocation_resolutions[\s\S]*contact_allocation_resolution_history[\s\S]*has_contact_resolutions[\s\S]*has_contact_resolution_history/, "the schema fast path must not skip temporary contact-resolution tables");
 
@@ -144,7 +144,7 @@ assert.match(appSource, /is-manual[\s\S]*<sup aria-hidden="true">\*<\/sup>/, "a 
 assert.doesNotMatch(appSource.match(/function renderFacilityOverviewContactAllocation[\s\S]*?function renderFacilityOverviewContactListStatus/)?.[0] || "", />Manual</, "manual phone allocations should not display a Manual text label");
 assert.match(appSource, /selectedContact && !selectedIsUnresolved[\s\S]*renderFacilityOverviewContactResolutionMenu/, "clicking a resolved manual number must still render its reassignment selector");
 assert.doesNotMatch(appSource, /Reset assignment/, "the cancellation row should not use a separate Reset assignment label");
-assert.match(appSource, /const resetOption = existing[\s\S]*data-facility-overview-contact-resolution-clear[\s\S]*<strong><s>\$\{escapeHtml\(existing\.displayName[\s\S]*return `<div class="facility-overview-contact-resolution-menu"[\s\S]*\$\{resetOption\}\$\{candidates/, "the struck-through current person should be the first standard option in the selector");
+assert.match(appSource, /const resetOption = existing[\s\S]*data-facility-overview-contact-resolution-clear[\s\S]*<strong><s>\$\{escapeHtml\(existing\.displayName[\s\S]*return `<div class="facility-overview-contact-resolution-menu"[\s\S]*\$\{resetOption\}\$\{ranked/, "the struck-through current person should be the first standard option in the selector");
 assert.match(appSource, /contactReviewOpen: false[\s\S]*addEventListener\("toggle"[\s\S]*contactReviewOpen = review\.open === true/, "the review disclosure should preserve its state only while On shift remains active");
 assert.match(appSource.match(/function closeFacilityOverview[\s\S]*?function renderFacilityOverview/)?.[0] || "", /collapseFacilityOverviewContactReview\(\)/, "returning to the calendar should collapse contact allocations needing review");
 assert.match(appSource.match(/async function loadFacilityOverviewOnShift[\s\S]*?function renderFacilityOverviewOnShiftResults/)?.[0] || "", /collapseFacilityOverviewContactReview\(\)/, "entering or reloading On shift should begin with contact review collapsed");

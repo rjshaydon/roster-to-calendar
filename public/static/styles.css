@@ -1509,7 +1509,8 @@ input[type="color"] {
 }
 
 .facility-overview-contact-review-row > span > button,
-.facility-overview-contact-number.is-manual {
+.facility-overview-contact-number.is-manual,
+.facility-overview-contact-number.is-tentative {
   appearance: none;
   border: 0;
   padding: 0;
@@ -1522,7 +1523,8 @@ input[type="color"] {
   cursor: pointer;
 }
 
-.facility-overview-contact-number.is-manual sup {
+.facility-overview-contact-number.is-manual sup,
+.facility-overview-contact-number.is-tentative sup {
   margin-left: 1px;
   color: var(--muted);
   font-size: 0.72em;
@@ -5267,4 +5269,9 @@ body[data-skin="console"] .panel {
   to {
     transform: translate3d(-36px, -18px, 0) scale(1.08);
   }
+}
+
+.facility-overview-contact-match-explanation {
+  grid-column: 1 / -1;
+  margin: 0;
 }

@@ -23,7 +23,7 @@ import {
   setParserExtensions,
   sourceNames,
 } from "./roster.js";
-import { attachContactAllocations, contactExtractHasExpired, contactOperationalDate, contactStream } from "./contact-allocations.js";
+import { attachContactAllocations, contactAllocationCandidates, mergeContactResolutionRefresh, contactExtractHasExpired, contactOperationalDate, contactStream } from "./contact-allocations.js";
 import { loadFacilitySnapshot, storeFacilitySnapshot } from "./facility-snapshot-cache.js";
 
 const AUTOMATIC_ROSTER_INSIGHT_WARMUP_ENABLED = false;
@@ -764,6 +764,15 @@ facilityOverviewSection?.addEventListener("click", (event) => {
   const contactResolutionTarget = event.target.closest("[data-facility-overview-contact-resolution-target]");
   if (contactResolutionTarget) {
     void saveFacilityOverviewContactResolution(String(contactResolutionTarget.dataset.facilityOverviewContactResolutionTarget || ""));
+    return;
+  }
+  if (event.target.closest("[data-facility-overview-contact-resolution-retry]")) {
+    const pending = (facilityOverviewState.contactList?.resolutions || []).find((resolution) => resolution.contactKey === facilityOverviewState.contactResolutionMenu && resolution.pendingPublication);
+    if (pending) void saveFacilityOverviewContactResolution(pending.doctorKey || "", pending.decision);
+    return;
+  }
+  if (event.target.closest("[data-facility-overview-contact-resolution-reject]")) {
+    void saveFacilityOverviewContactResolution("", "rejected");
     return;
   }
   if (event.target.closest("[data-facility-overview-contact-resolution-clear]")) {
@@ -10608,7 +10617,7 @@ async function loadFacilityOverviewOnShift() {
     refreshFacilityOverviewSnapshotAccess(data);
     if (facilityOverviewState.requestId !== requestId || facilityOverviewState.tab !== "on-shift") return;
     facilityOverviewState.onShiftData = data.rosterUnchanged === true && cached ? cached.events || [] : data.events || [];
-    facilityOverviewState.contactList = data.contactList || null;
+    facilityOverviewState.contactList = mergeContactResolutionRefresh(facilityOverviewState.contactList, data.contactList || null);
     facilityOverviewState.contactAccessToken = String(data.contactAccessToken || "");
     facilityOverviewState.content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData);
     void storeFacilityOverviewSnapshot("on-shift", cacheQuery, { events: facilityOverviewState.onShiftData, revision: data.revision || cached?.revision || "" });
@@ -10695,7 +10704,7 @@ async function refreshFacilityOverviewContactList() {
       || facilityOverviewState.date !== date
       || facilityOverviewState.facilityKey !== facilityKey) return;
     if (data.unchanged === true) return;
-    const nextContactList = data.contactList || { status: "unavailable", reason: "no-extract" };
+    const nextContactList = mergeContactResolutionRefresh(facilityOverviewState.contactList, data.contactList || { status: "unavailable", reason: "no-extract" });
     if (JSON.stringify(nextContactList) !== JSON.stringify(facilityOverviewState.contactList)) {
       collapseFacilityOverviewContactReview();
       facilityOverviewState.contactList = nextContactList;
@@ -11031,8 +11040,9 @@ function renderFacilityOverviewContactAllocation(allocation) {
   const phone = String(allocation?.phone || "").trim();
   if (!phone) return "";
   const serviceLabel = allocation?.streamKey === "sepsis" ? `<small class="facility-overview-contact-service-label">Sepsis</small>` : "";
-  if (allocation?.matchMethod === "manual") {
-    return `${serviceLabel}<button type="button" class="facility-overview-contact-number is-manual" data-facility-overview-contact-resolution="${escapeHtml(allocation.contactKey || "")}" aria-label="Edit temporary allocation of ${escapeHtml(phone)}"><span>${escapeHtml(phone)}</span><sup aria-hidden="true">*</sup></button>`;
+  if (allocation?.matchMethod === "manual" || allocation?.uncertain) {
+    const explanation = allocation.uncertain ? "Automatic tentative match — check allocation" : "Manually confirmed allocation";
+    return `${serviceLabel}<button type="button" class="facility-overview-contact-number ${allocation.uncertain ? "is-tentative" : "is-manual"}" data-facility-overview-contact-resolution="${escapeHtml(allocation.contactKey || "")}" title="${escapeHtml(explanation)}" aria-label="${escapeHtml(explanation)}: ${escapeHtml(phone)}. View or edit allocation"><span>${escapeHtml(phone)}</span><sup aria-hidden="true">*</sup></button>`;
   }
   return `${serviceLabel}<span class="facility-overview-contact-number" title="Allocated telephone number">${escapeHtml(phone)}</span>`;
 }
@@ -11070,24 +11080,42 @@ function collapseFacilityOverviewContactReview() {
 }
 
 function renderFacilityOverviewContactReviewRow(contact, assignments, open) {
-  if (contact?.shift === "Current") return `<div class="facility-overview-contact-review-row"><span>${escapeHtml(contact.role)} · ${escapeHtml(contact.name)} · ${escapeHtml(contact.reviewReason || "No safe current roster match")}</span></div>`;
   const key = String(contact?.contactKey || "");
   const label = `${contact.shift} · ${contact.role}`;
-  return `<div class="facility-overview-contact-review-row"><span>${escapeHtml(label)} · <button type="button" data-facility-overview-contact-resolution="${escapeHtml(key)}">${escapeHtml(contact.name)}</button>${contact.phone ? ` · <button type="button" data-facility-overview-contact-resolution="${escapeHtml(key)}">${escapeHtml(contact.phone)}</button>` : ""}${contact.reviewReason ? ` · ${escapeHtml(contact.reviewReason)}` : ""}</span>${open ? renderFacilityOverviewContactResolutionMenu(contact, assignments) : ""}</div>`;
+  const suggestions = (contact.candidates || []).slice(0, 3).map((candidate) => `${candidate.displayName} (${candidate.score}/100)`).join(" · ");
+  return `<div class="facility-overview-contact-review-row"><span>${escapeHtml(label)} · <button type="button" data-facility-overview-contact-resolution="${escapeHtml(key)}">${escapeHtml(contact.name)}</button>${contact.phone ? ` · <button type="button" data-facility-overview-contact-resolution="${escapeHtml(key)}">${escapeHtml(contact.phone)}</button>` : ""}${contact.reviewReason ? ` · ${escapeHtml(contact.reviewReason)}` : ""}</span>${suggestions ? `<small>Candidate confidence scores: ${escapeHtml(suggestions)}</small>` : ""}${open ? renderFacilityOverviewContactResolutionMenu(contact, assignments) : ""}</div>`;
 }
 
 function renderFacilityOverviewContactResolutionMenu(contact, assignments) {
-  const existing = (facilityOverviewState.contactList?.resolutions || []).find((resolution) => resolution.contactKey === contact.contactKey && resolution.active !== false) || null;
-  const candidates = (assignments || []).filter((assignment) => String(assignment.period) === String(contact.shift)
-    && !assignment.contactAllocation && String(assignment.source || assignment.person?.sourceType || "").toUpperCase() === String(facilityOverviewState.facilityKey || "").toUpperCase())
-    .sort((left, right) => String(left.team || "").localeCompare(String(right.team || "")) || String(left.person?.displayName || "").localeCompare(String(right.person?.displayName || "")));
-  const resetOption = existing
-    ? `<button type="button" data-facility-overview-contact-resolution-clear ${facilityOverviewState.contactResolutionSaving ? "disabled" : ""}><strong><s>${escapeHtml(existing.displayName || "Current assignment")}</s></strong><small><s>${escapeHtml(contact.phone || "No number")}</s></small></button>`
-    : "";
-  return `<div class="facility-overview-contact-resolution-menu" role="group" aria-label="Assign ${escapeHtml(contact.phone || contact.name)}">${resetOption}${candidates.length ? candidates.map((assignment) => `<button type="button" data-facility-overview-contact-resolution-target="${escapeHtml(assignment.person?.doctorKey || "")}" ${facilityOverviewState.contactResolutionSaving ? "disabled" : ""}><strong>${escapeHtml(assignment.person?.displayName || "")}</strong><small>${escapeHtml([assignment.person?.seniority, assignment.team, assignment.specialTime].filter(Boolean).join(" · ") || "Rostered")}</small></button>`).join("") : existing ? "" : `<p>No unmatched rostered clinicians are available in this period.</p>`}<button type="button" class="button button-secondary" data-facility-overview-contact-resolution-cancel>Cancel</button></div>`;
+  if (contact.reviewReason === "Conflicting entries in the contact sheet") {
+    return `<div class="facility-overview-contact-resolution-menu" role="group" aria-label="Contact sheet conflict"><p>Correct the conflicting names or phone numbers in the contact sheet before assigning this entry.</p><button type="button" class="button button-secondary" data-facility-overview-contact-resolution-cancel>Cancel</button></div>`;
+  }
+  const resolutions = facilityOverviewState.contactList?.resolutions || [];
+  const existing = resolutions.find((resolution) => resolution.contactKey === contact.contactKey) || null;
+  const current = assignments.find((assignment) => assignment.contactAllocation?.contactKey === contact.contactKey);
+  const allocation = current?.contactAllocation;
+  const ranked = contactAllocationCandidates(assignments, contact).filter((candidate) => candidate.assignments.every((assignment) => !assignment.contactAllocation
+    || assignment.contactAllocation.contactKey === contact.contactKey || assignment.contactAllocation.uncertain));
+  const disabled = facilityOverviewState.contactResolutionSaving ? "disabled" : "";
+  const explanation = allocation?.uncertain
+    ? `<p class="facility-overview-contact-match-explanation">Automatic tentative match · confidence score ${Number(allocation.confidenceScore)}/100<br>Sheet name: ${escapeHtml(contact.name)}<br>${escapeHtml((allocation.matchReasons || []).join(" · "))}</p>`
+    : allocation?.matchMethod === "manual"
+      ? `<p class="facility-overview-contact-match-explanation">Manually confirmed allocation for ${escapeHtml(current.person?.displayName || "this clinician")}.<br>Sheet name: ${escapeHtml(contact.name)}</p>`
+      : existing?.decision === "rejected" ? `<p class="facility-overview-contact-match-explanation">Automatic suggestions are disabled for this sheet entry. You can assign a clinician below or allow automatic matching again.</p>` : "";
+  const resetOption = existing && (existing.active !== false || existing.decision === "rejected")
+    ? `<button type="button" data-facility-overview-contact-resolution-clear ${disabled}>${existing.decision === "rejected" ? "Allow automatic matching again" : `<strong><s>${escapeHtml(existing.displayName || current?.person?.displayName || "Current assignment")}</s></strong><small>Clear manual assignment</small>`}</button>` : "";
+  const retryOption = existing?.pendingPublication
+    ? `<p class="facility-overview-contact-match-explanation">This decision is saved, but other users may not see it until the shared update succeeds.</p><button type="button" data-facility-overview-contact-resolution-retry ${disabled}>Retry shared update</button>` : "";
+  const rejectOption = allocation && (allocation.uncertain || allocation.matchMethod === "manual")
+    ? `<button type="button" data-facility-overview-contact-resolution-reject ${disabled}>Return to review</button>` : "";
+  return `<div class="facility-overview-contact-resolution-menu" role="group" aria-label="Assign ${escapeHtml(contact.phone || contact.name)}">${explanation}${retryOption}${resetOption}${ranked.length ? ranked.map((candidate) => {
+    const assignment = candidate.assignments[0];
+    const isCurrent = candidate.doctorKey === current?.person?.doctorKey;
+    return `<button type="button" data-facility-overview-contact-resolution-target="${escapeHtml(candidate.doctorKey)}" ${disabled}><strong>${isCurrent ? "Confirm " : ""}${escapeHtml(candidate.displayName)}</strong><small>${escapeHtml([assignment.person?.seniority, assignment.team, facilityOverviewOnShiftTimeLabel(assignment)].filter(Boolean).join(" · ") || "Rostered")}${candidate.score ? ` · confidence score ${candidate.score}/100` : ""}</small></button>`;
+  }).join("") : `<p>No eligible clinicians are available for this allocation.</p>`}${rejectOption}<button type="button" class="button button-secondary" data-facility-overview-contact-resolution-cancel>Cancel</button></div>`;
 }
 
-async function saveFacilityOverviewContactResolution(doctorKey) {
+async function saveFacilityOverviewContactResolution(doctorKey, decision = doctorKey ? "assigned" : "cleared") {
   const contactKey = String(facilityOverviewState.contactResolutionMenu || "");
   const contact = (facilityOverviewState.contactList?.contacts || []).find((item) => item.contactKey === contactKey);
   if (currentFacilityOverviewMaintenance || !contact || facilityOverviewState.contactResolutionSaving) return;
@@ -11100,12 +11128,18 @@ async function saveFacilityOverviewContactResolution(doctorKey) {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ action: "setContactAllocationResolution", email: authUserEmail || currentUserEmail, password: authUserPassword || currentUserPassword,
         targetEmail: facilityOverviewTargetEmail(),
-        facilityKey: facilityOverviewState.facilityKey, date: facilityOverviewState.date, contactKey, doctorKey, expectedRevision: Number(existing?.revision || 0) }),
+        facilityKey: facilityOverviewState.facilityKey, date: facilityOverviewState.date, contactKey, doctorKey, decision, expectedRevision: Number(existing?.revision || 0) }),
     });
-    const data = await readJsonResponse(response, "Could not save the temporary contact allocation.");
-    const resolutions = (facilityOverviewState.contactList?.resolutions || []).filter((resolution) => resolution.contactKey !== contactKey);
-    if (data.resolution) resolutions.push(data.resolution);
-    facilityOverviewState.contactList = { ...facilityOverviewState.contactList, resolutions };
+    const data = await response.json();
+    if (data.resolution) {
+      const resolutions = (facilityOverviewState.contactList?.resolutions || []).filter((resolution) => resolution.contactKey !== contactKey);
+      resolutions.push({ ...data.resolution, ...(data.publicationPending ? { pendingPublication: true } : {}) });
+      facilityOverviewState.contactList = { ...facilityOverviewState.contactList, resolutions };
+    }
+    if (!response.ok) {
+      if (data.publicationPending) facilityOverviewState.contactReviewOpen = true;
+      throw new Error(data.error || "Could not save the temporary contact allocation.");
+    }
     facilityOverviewState.contactResolutionMenu = null;
   } catch (error) {
     if (/changed while you were reviewing/i.test(error.message || "")) {

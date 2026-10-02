@@ -4785,6 +4785,7 @@ export async function queryContactAllocationResolutions(db, options = {}) {
   return (rows.results || []).map((row) => ({
     id: String(row.id || ""), contactKey: String(row.contact_key || ""), sourceType: String(row.source_type || ""),
     doctorKey: String(row.doctor_key || ""), displayName: String(row.display_name || ""), active: Number(row.active || 0) === 1,
+    decision: Number(row.active) === -1 ? "rejected" : Number(row.active) === 1 ? "assigned" : "cleared",
     revision: Number(row.revision || 0), updatedAt: String(row.updated_at || ""),
   }));
 }
@@ -4812,11 +4813,15 @@ export async function saveContactAllocationResolution(db, options = {}) {
   const now = String(options.updatedAt || new Date().toISOString());
   const actor = String(options.actorEmail || "").trim().toLowerCase();
   const doctorKey = String(options.doctorKey || "").trim();
-  const active = doctorKey ? 1 : 0;
+  // The existing INTEGER has no boolean constraint: -1 is an explicit rejected
+  // suggestion, distinct from a cleared assignment (0). No migration or extra
+  // query is needed, and existing active-only lookups still select exactly 1.
+  const active = options.decision === "rejected" ? -1 : doctorKey ? 1 : 0;
+  if (active === -1 && doctorKey) throw new Error("A rejected suggestion cannot assign a clinician.");
   const id = String(existing?.id || `contact-resolution:${sourceId}:${sourceDate}:${contactKey}`);
   const revision = currentRevision + 1;
   const displayName = String(options.displayName || "").trim();
-  const write = await db.prepare(`
+  const mutation = db.prepare(`
       INSERT INTO contact_allocation_resolutions (
         id, source_id, source_date, contact_key, source_type, doctor_key, display_name,
         active, revision, created_by, created_at, updated_by, updated_at, cleared_by, cleared_at
@@ -4827,19 +4832,23 @@ export async function saveContactAllocationResolution(db, options = {}) {
         updated_at = excluded.updated_at, cleared_by = excluded.cleared_by, cleared_at = excluded.cleared_at
       WHERE contact_allocation_resolutions.revision = ?
     `).bind(id, sourceId, sourceDate, contactKey, String(options.sourceType || "").trim(), doctorKey, displayName,
-      active, revision, actor, now, actor, now, active ? "" : actor, active ? "" : now, expectedRevision).run();
-  if (existing && Number(write?.meta?.changes || 0) !== 1) {
+      active, revision, actor, now, actor, now, active === 1 ? "" : actor, active === 1 ? "" : now, expectedRevision);
+  const history = db.prepare(`
+      INSERT INTO contact_allocation_resolution_history (id, resolution_id, revision, action, doctor_key, display_name, actor_email, created_at)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE changes() = 1
+    `).bind(`contact-resolution-history:${id}:${revision}`, id, revision, active === -1 ? "rejected" : active === 1 ? (existing ? "reassigned" : "assigned") : "cleared", doctorKey, displayName, actor, now);
+  // Same two writes, atomically: an audit failure cannot leave a half-saved
+  // decision, and a lost revision race inserts no history.
+  const [write] = await db.batch([mutation, history]);
+  if (Number(write?.meta?.changes || 0) !== 1) {
     const conflict = await queryContactAllocationResolutions(db, { sourceId, sourceDate });
     const error = new Error("This allocation was changed while you were reviewing it.");
     error.code = "contact-allocation-conflict";
     error.resolutions = conflict;
     throw error;
   }
-  await db.prepare(`
-      INSERT INTO contact_allocation_resolution_history (id, resolution_id, revision, action, doctor_key, display_name, actor_email, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(`contact-resolution-history:${id}:${revision}`, id, revision, active ? (existing ? "reassigned" : "assigned") : "cleared", doctorKey, displayName, actor, now).run();
-  return { id, contactKey, sourceType: String(options.sourceType || ""), doctorKey, displayName, active: active === 1, revision, updatedAt: now };
+  return { id, contactKey, sourceType: String(options.sourceType || ""), doctorKey, displayName, active: active === 1,
+    decision: active === -1 ? "rejected" : active === 1 ? "assigned" : "cleared", revision, updatedAt: now };
 }
 
 // This intentionally returns the roster events rather than a second server-side

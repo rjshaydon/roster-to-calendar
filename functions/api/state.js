@@ -9,7 +9,7 @@ import { applyEventOverrides, customEventsToEvents, defaultSettings, filterCalen
 import { AUTOMATION_SOURCES } from "../_lib/automation-import.js";
 import { reserveRosterMaintenanceBudget, maintenanceBudgetDeferredError } from "../_lib/roster-maintenance-budget.js";
 import { automaticFacilityPublicationEnabled, facilityRefreshStatements } from "../_lib/facility-refresh-queue.js";
-import { DDH_CONTACT_LIST_SOURCE_ID, MMC_CONTACT_LIST_SOURCE_ID, attachContactAllocations, contactAreaForSource, contactExtractHasExpired, contactOperationalDate, contactsAfterShiftChange, normaliseContactListExtract, shouldCarryPreviousNightContacts, shouldUseCurrentExtractForPreviousNight } from "../../public/static/contact-allocations.js";
+import { DDH_CONTACT_LIST_SOURCE_ID, MMC_CONTACT_LIST_SOURCE_ID, contactRosterAssignments, validateContactResolutionSelection, contactAreaForSource, contactExtractHasExpired, contactOperationalDate, contactsAfterShiftChange, normaliseContactListExtract, shouldCarryPreviousNightContacts, shouldUseCurrentExtractForPreviousNight } from "../../public/static/contact-allocations.js";
 import { requestQueuedRosterProcessing } from "../_lib/automation-dispatch.js";
 import { advancedRosterMaintenanceEnabled, reviewedRosterFactLimit, rosterStatusSummaryEnabled, rosterWritesExplicitlyPaused, rosterWritePausedResponse } from "../_lib/roster-automation-guard.js";
 import { guardedFetch, localFeatureDisabledResponse } from "../_lib/outbound-network.js";
@@ -2201,45 +2201,45 @@ export async function onRequestPost(context) {
         : await loadLiveContactListForOnShift(context, { date, facilityKeys: [requestedFacility] });
       const contact = (contactList.contacts || []).find((item) => String(item.contactKey || "") === contactKey);
       if (contactList.status !== "available" || !contact) return Response.json({ error: "This contact allocation is no longer current." }, { status: 409 });
+      const decision = String(body?.decision || (doctorKey ? "assigned" : "cleared"));
+      if (!["assigned", "cleared", "rejected"].includes(decision) || (decision === "assigned" ? !doctorKey : Boolean(doctorKey))) {
+        return Response.json({ error: "Choose a valid contact allocation decision." }, { status: 400 });
+      }
       let target = null;
-      if (doctorKey) {
+      if (decision !== "cleared") {
         const roster = readRoute === "shared"
           ? (await loadPublishedFacilityDays(context.env.ROSTER_FILES, [requestedFacility], date, australianDateKey())).rows
           : await queryFacilityOverviewOnShift(context.env.ROSTER_DB, { date, facilityKey: requestedFacility });
-        target = roster.find((row) => normalizeRosterName(row.doctorKey) === doctorKey && facilityOverviewEventPeriod(row.event) === String(contact.shift));
-        if (!target) return Response.json({ error: "Choose a clinician rostered in the same ED and shift period." }, { status: 400 });
-        const automatic = attachContactAllocations(roster.map((row) => ({
-          source: String(row.sourceType || requestedFacility).toUpperCase(), period: facilityOverviewEventPeriod(row.event),
-          team: String(row.event?.title || ""), suggestedTitle: String(row.event?.title || ""), event: row.event,
-          person: { doctorKey: row.doctorKey, displayName: row.displayName, sourceType: row.sourceType, seniority: row.seniority },
-        })), contactList.contacts || []);
-        if (automatic.assignments.some((assignment) => assignment.contactAllocation?.contactKey === contactKey)) {
-          return Response.json({ error: "This number already has a safe automatic match." }, { status: 409 });
-        }
-        if (automatic.assignments.some((assignment) => normalizeRosterName(assignment.person?.doctorKey) === doctorKey && assignment.contactAllocation)) {
-          return Response.json({ error: "That clinician already has a contact allocation." }, { status: 409 });
-        }
-        const active = await queryContactAllocationResolutions(context.env.ROSTER_DB, { sourceId: contactList.sourceId, sourceDate: contactList.sourceDate });
-        if (active.some((resolution) => resolution.doctorKey === doctorKey && resolution.contactKey !== contactKey)) {
-          return Response.json({ error: "That clinician already has a temporary contact allocation." }, { status: 409 });
-        }
+        // Same single resolution lookup as the existing assignment save. Include
+        // rejected/cleared decisions so stale published overlays cannot win.
+        const active = await queryContactAllocationResolutions(context.env.ROSTER_DB, {
+          sourceId: contactList.sourceId, sourceDate: contactList.sourceDate, includeInactive: true,
+        });
+        const validation = validateContactResolutionSelection(contactRosterAssignments(roster, requestedFacility), contactList.contacts || [], active, {
+          contact, doctorKey, decision, now: new Date(),
+        });
+        if (validation.error) return Response.json({ error: validation.error }, { status: validation.status });
+        target = validation.target;
       }
+      let savedResolution = null;
       try {
         const resolution = await saveContactAllocationResolution(context.env.ROSTER_DB, {
           sourceId: contactList.sourceId, sourceDate: contactList.sourceDate, contactKey,
-          sourceType: requestedFacility.toLowerCase(), doctorKey, displayName: target?.displayName || "",
+          sourceType: requestedFacility.toLowerCase(), doctorKey, displayName: target?.person?.displayName || "", decision,
           expectedRevision, actorEmail: account.record?.email || email,
         });
+        savedResolution = resolution;
         if (String(context.env.FACILITY_SHARED_CONTACTS_BUILD_ENABLED || "").toLowerCase() === "true" && facilityBuildSources(context.env, [requestedFacility]).length) {
           const resolutions = await queryContactAllocationResolutions(context.env.ROSTER_DB, {
             sourceId: contactList.sourceId, sourceDate: contactList.sourceDate, includeInactive: true,
           });
-          await publishFacilityContactResolutions(context.env.ROSTER_FILES, contactList.sourceId, contactList.sourceDate, resolutions)
-            .catch((error) => console.warn("Contact correction cache publication failed", { sourceId: contactList.sourceId, sourceDate: contactList.sourceDate, error: error?.message || String(error) }));
+          const publication = await publishFacilityContactResolutions(context.env.ROSTER_FILES, contactList.sourceId, contactList.sourceDate, resolutions);
+          if (!publication.ok) throw new Error("Shared contact publication is unavailable.");
         }
         return Response.json({ ok: true, resolution });
       } catch (error) {
         if (error?.code === "contact-allocation-conflict") return Response.json({ error: error.message, conflict: true, resolutions: error.resolutions || [] }, { status: 409 });
+        if (savedResolution) return Response.json({ error: "The decision was saved, but the shared update could not be published. Please retry to share it.", resolution: savedResolution, publicationPending: true }, { status: 503 });
         return Response.json({ error: error?.message || "Could not save the temporary contact allocation." }, { status: 400 });
       }
     }

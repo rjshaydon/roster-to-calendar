@@ -163,148 +163,191 @@ export function contactsAfterShiftChange(contacts = [], { date = "", now = new D
   return (contacts || []).filter((contact) => periods.has(String(contact?.shift || "")));
 }
 
-export function attachContactAllocations(assignments = [], contacts = [], resolutions = [], { now = new Date() } = {}) {
-  const available = (contacts || [])
-    .filter((contact) => (contact?.isPopulated && contact.name) || isRoleOnlyServiceContact(contact))
-    .map((contact, index) => ({ ...contact, contactKey: String(contact.contactKey || contactResolutionKey("legacy", "", contact, index)) }));
-  const used = new Set();
-  const enriched = assignments.map((assignment) => ({ ...assignment }));
-  const orderedContacts = [...available].sort((left, right) => Number(isRoleOnlyServiceContact(right)) - Number(isRoleOnlyServiceContact(left))
-    || contactSpecificity(right) - contactSpecificity(left)
-    || String(left.name).localeCompare(String(right.name)));
-  const unmatchedReasons = new Map();
+// Scores rank evidence; they are not calibrated probabilities. Context can add
+// at most five points and cannot make a name below the evidence floor eligible.
+export const CONTACT_MATCH_POLICY = Object.freeze({ minimumNameScore: 88, minimumScore: 90, minimumLead: 12 });
 
-  for (const contact of orderedContacts) {
-    if (contact.shift === "Current" && available.some((other) => other.contactKey !== contact.contactKey
-      && other.area === contact.area && (simplify(other.name) === simplify(contact.name) || other.phone === contact.phone))) {
-      unmatchedReasons.set(contact.contactKey, "Conflicting entries in the contact sheet");
-      continue;
-    }
-    const contextCandidates = enriched
-      .map((assignment, index) => ({ assignment, index }))
-      .filter(({ assignment, index }) => (contact.shift === "Current" || !used.has(index)) && assignmentMatchesContactContext(assignment, contact, now));
-    if (!contextCandidates.length) {
-      unmatchedReasons.set(contact.contactKey, contact.shift === "Current" ? "No currently rostered clinician matches this entry" : "No roster candidate in this period");
-      continue;
-    }
-    const roleOnlyServiceKey = !contact.name && isRoleOnlyServiceContact(contact) ? contactStreamKey(contact.role) : "";
-    if (roleOnlyServiceKey) {
-      const serviceCandidates = contextCandidates.filter(({ assignment }) => assignmentStreamKey(assignment) === roleOnlyServiceKey);
-      if (serviceCandidates.length !== 1) {
-        unmatchedReasons.set(contact.contactKey, serviceCandidates.length ? "Ambiguous service allocation" : "No rostered service allocation");
-        continue;
-      }
-      const candidate = serviceCandidates[0];
-      used.add(candidate.index);
-      const stream = contactStream(contact.role);
-      enriched[candidate.index] = {
-        ...candidate.assignment,
-        contactAllocation: {
-          role: contact.role,
-          phone: contact.phone,
-          sourceName: "",
-          contactKey: contact.contactKey,
-          matchMethod: "service-role",
-          streamKey: stream.key,
-          streamLabel: stream.label,
-          rosterStreamKey: assignmentStreamKey(candidate.assignment),
-        },
-      };
-      continue;
-    }
-    const named = contextCandidates
-      .map(({ assignment, index }) => {
-        const nameMatch = personMatch(contact.name, assignment?.person?.displayName || assignment?.doctorName || "");
-        return nameMatch && (contact.shift !== "Current" || nameMatch.score >= (nameTokens(contact.name).length === 1 ? 65 : 90)) ? {
-          assignment,
-          index,
-          ...nameMatch,
-          streamAligned: Boolean(contactStreamKey(contact.role)) && contactStreamKey(contact.role) === assignmentStreamKey(assignment),
-        } : null;
-      })
-      .filter(Boolean)
-      .sort((left, right) => right.score - left.score || Number(right.streamAligned) - Number(left.streamAligned));
-    if (!named.length) {
-      unmatchedReasons.set(contact.contactKey, "No safe name match");
-      continue;
-    }
-    const candidate = named[0];
-    // One-word entries are deliberately conservative.  A clerk's "Pat",
-    // "Qing" or "Tara" can only be resolved after other specific entries
-    // have consumed every other plausible roster candidate.
-    if ((nameTokens(contact.name).length === 1 && named.length > 1)
-      || (named.length > 1 && named[1].score === candidate.score && named[1].streamAligned === candidate.streamAligned)) {
-      unmatchedReasons.set(contact.contactKey, "Ambiguous name");
-      continue;
-    }
-    if (contact.shift === "Current" && (used.has(candidate.index) || available.some((other) => other.contactKey !== contact.contactKey && other.area === contact.area
-      && personMatch(other.name, candidate.assignment?.person?.displayName || candidate.assignment?.doctorName || "")))) {
-      unmatchedReasons.set(contact.contactKey, "Conflicting entries for this clinician");
-      continue;
-    }
-    const index = candidate.index;
-    used.add(index);
-    const stream = contactStream(contact.role);
-    const rosterStreamKey = assignmentStreamKey(candidate.assignment);
-    enriched[index] = {
-      ...candidate.assignment,
-      contactAllocation: {
-        role: contact.role,
-        phone: contact.phone,
-        sourceName: contact.name,
-        contactKey: contact.contactKey,
-        matchMethod: candidate.method,
-        streamKey: stream.key,
-        streamLabel: stream.label,
-        rosterStreamKey,
-      },
-    };
+// Approved social names belong to a specific roster identity, not to everybody
+// sharing a given name. Add entries only after a clinician's identity is confirmed.
+export const APPROVED_CONTACT_NAME_ALIASES = Object.freeze([]);
+
+// Keep an acknowledged local decision while its shared publication is pending.
+// A refresh may acknowledge it or replace it with a newer revision, but cannot
+// roll it back. Never carry it to a different sheet/date or contact key.
+export function mergeContactResolutionRefresh(previous, next) {
+  if (!next || previous?.sourceId !== next.sourceId || previous?.sourceDate !== next.sourceDate) return next;
+  const resolutions = new Map((next.resolutions || []).map((resolution) => [resolution.contactKey, resolution]));
+  const keys = new Set((next.contacts || []).map((contact) => contact.contactKey));
+  for (const resolution of previous.resolutions || []) {
+    if (resolution.pendingPublication && keys.has(resolution.contactKey)
+      && Number(resolutions.get(resolution.contactKey)?.revision || 0) < Number(resolution.revision || 0)) resolutions.set(resolution.contactKey, resolution);
   }
-
-  // A temporary resolution is deliberately applied only after the conservative
-  // automatic matcher. It can connect a review row to one rostered person but
-  // must never displace a safe automatic allocation or alter roster streams.
-  const unresolvedKeys = new Set(available.filter((contact) => !matchedContactsForAssignments(enriched).has(contact.contactKey)).map((contact) => contact.contactKey));
-  const manualTargets = new Set();
-  for (const resolution of resolutions || []) {
-    if (available.find((item) => item.contactKey === String(resolution?.contactKey))?.shift === "Current") continue;
-    if (resolution?.active === false || !unresolvedKeys.has(String(resolution?.contactKey || ""))) continue;
-    const contact = available.find((item) => item.contactKey === String(resolution.contactKey));
-    const targetIndex = enriched.findIndex((assignment) => assignmentMatchesContactContext(assignment, contact, now)
-      && String(assignment?.person?.doctorKey || "") === String(resolution?.doctorKey || "")
-      && !assignment.contactAllocation);
-    if (!contact || targetIndex < 0 || manualTargets.has(targetIndex)) continue;
-    manualTargets.add(targetIndex);
-    enriched[targetIndex] = {
-      ...enriched[targetIndex],
-      contactAllocation: {
-        role: contact.role, phone: contact.phone, sourceName: contact.name,
-        contactKey: contact.contactKey, matchMethod: "manual", streamKey: contactStream(contact.role).key,
-        streamLabel: contactStream(contact.role).label, rosterStreamKey: assignmentStreamKey(enriched[targetIndex]),
-        resolutionId: String(resolution.id || ""), resolutionRevision: Number(resolution.revision || 0),
-      },
-    };
-  }
-
-  const matchedContacts = matchedContactsForAssignments(enriched);
-  const serviceContacts = available.filter((contact) => !matchedContacts.has(contact.contactKey)
-    && isStandaloneServiceContact(contact));
-  const standaloneServiceKeys = new Set(serviceContacts.map((contact) => contact.contactKey));
-  return {
-    assignments: enriched,
-    matchedCount: enriched.filter((assignment) => assignment.contactAllocation).length,
-    unmatched: available.filter((contact) => !matchedContacts.has(contact.contactKey)
-      && !standaloneServiceKeys.has(contact.contactKey)
-      && (!isRoleOnlyServiceContact(contact) || unmatchedReasons.get(contact.contactKey) === "Ambiguous service allocation")).map((contact) => ({
-      ...contact,
-      reviewReason: unmatchedReasons.get(contact.contactKey) || "Not matched",
-    })),
-    serviceContacts,
-  };
+  return { ...next, resolutions: [...resolutions.values()] };
 }
 
-function matchedContactsForAssignments(assignments) {
-  return new Set((assignments || []).map((assignment) => assignment.contactAllocation?.contactKey).filter(Boolean));
+export function contactRosterAssignments(rows = [], fallbackSource = "") {
+  return rows.map((row) => ({
+    source: String(row.sourceType || fallbackSource).toUpperCase(),
+    period: contactRosterPeriod(row.event), event: row.event,
+    person: { doctorKey: row.doctorKey, displayName: row.displayName, sourceType: row.sourceType || fallbackSource, seniority: row.seniority },
+  }));
+}
+
+// Used by the save handler as well as local tests. Correction eligibility is
+// identical to matching eligibility, including VHH's active timed events.
+export function validateContactResolutionSelection(assignments, contacts, resolutions, { contact, doctorKey = "", decision = "assigned", now = new Date() }) {
+  if (!["assigned", "cleared", "rejected"].includes(decision) || (decision === "assigned" ? !doctorKey : Boolean(doctorKey))) {
+    return { error: "Choose a valid contact allocation decision.", status: 400 };
+  }
+  if (decision === "cleared") return { target: null };
+  const automatic = attachContactAllocations(assignments, contacts, resolutions, { now });
+  if (automatic.assignments.some((assignment) => assignment.contactAllocation?.contactKey === contact.contactKey
+    && !assignment.contactAllocation.uncertain && assignment.contactAllocation.matchMethod !== "manual")) {
+    return { error: "This number already has a safe automatic match.", status: 409 };
+  }
+  if (decision === "rejected") return { target: null };
+  if (automatic.unmatched.some((entry) => entry.contactKey === contact.contactKey && entry.reviewReason === "Conflicting entries in the contact sheet")) {
+    return { error: "This contact sheet contains conflicting names or phone numbers. Correct the sheet before assigning this entry.", status: 409 };
+  }
+  const target = assignments.find((assignment) => assignment.person?.doctorKey === doctorKey && assignmentMatchesContactContext(assignment, contact, now));
+  if (!target) return { error: "Choose a clinician rostered in the same ED and shift period, with an active shift for current allocations.", status: 400 };
+  if (automatic.assignments.some((assignment) => assignment.person?.doctorKey === doctorKey
+    && assignmentMatchesContactContext(assignment, contact, now) && assignment.contactAllocation
+    && assignment.contactAllocation.contactKey !== contact.contactKey && !assignment.contactAllocation.uncertain)) {
+    return { error: "That clinician already has a confirmed contact allocation.", status: 409 };
+  }
+  if (resolutions.some((resolution) => resolution.active !== false && resolution.doctorKey === doctorKey && resolution.contactKey !== contact.contactKey
+    && contacts.some((other) => other.contactKey === resolution.contactKey && assignmentMatchesContactContext(target, other, now)))) {
+    return { error: "That clinician already has a temporary contact allocation.", status: 409 };
+  }
+  return { target };
+}
+
+export function contactAllocationCandidates(assignments = [], contact, { now = new Date() } = {}) {
+  const groups = new Map();
+  assignments.forEach((assignment, index) => {
+    if (!assignmentMatchesContactContext(assignment, contact, now)) return;
+    const source = String(assignment.source || assignment.person?.sourceType || "").trim().toUpperCase();
+    const doctorKey = String(assignment.person?.doctorKey || assignment.doctorKey || assignment.person?.displayName || assignment.doctorName || "");
+    if (!doctorKey) return;
+    const identity = `${source}|${doctorKey}|${contact.shift}`;
+    const group = groups.get(identity) || { identity, sourceType: source.toLowerCase(), doctorKey, displayName: assignment.person?.displayName || assignment.doctorName || doctorKey, assignments: [], indexes: [] };
+    group.assignments.push(assignment); group.indexes.push(index); groups.set(identity, group);
+  });
+  return [...groups.values()].map((group) => {
+    const evidence = personMatch(contact.name, group.displayName, group);
+    const streamAligned = Boolean(contactStreamKey(contact.role)) && group.assignments.some((assignment) => contactStreamKey(contact.role) === assignmentStreamKey(assignment));
+    const gradeAligned = group.assignments.some((assignment) => contactGradeAligned(contact.role, assignment.event?.seniority || assignment.person?.seniority));
+    return { ...group, method: evidence?.method || "", nameScore: evidence?.score || 0,
+      score: evidence ? Math.min(100, evidence.score + (streamAligned ? 3 : 0) + (gradeAligned ? 2 : 0)) : 0,
+      uncertain: evidence?.uncertain === true, streamAligned,
+      reasons: evidence ? [evidence.reason, ...(streamAligned ? ["Roster stream agrees"] : []), ...(gradeAligned ? ["Roster grade agrees"] : [])] : [],
+    };
+  }).sort((left, right) => right.score - left.score || left.identity.localeCompare(right.identity));
+}
+
+export function attachContactAllocations(assignments = [], contacts = [], resolutions = [], { now = new Date() } = {}) {
+  const available = (contacts || []).filter((contact) => (contact?.isPopulated && contact.name) || isRoleOnlyServiceContact(contact))
+    .map((contact, index) => ({ ...contact, contactKey: String(contact.contactKey || contactResolutionKey("legacy", "", contact, index)) }));
+  // Never retain an allocation from a previous matching pass.
+  const enriched = assignments.map(({ contactAllocation, ...assignment }) => ({ ...assignment }));
+  const candidates = new Map(available.map((contact) => [contact.contactKey, contactAllocationCandidates(enriched, contact, { now })]));
+  const matched = new Set();
+  const usedIndexes = new Set();
+  const reasons = new Map();
+  const rejected = new Set(resolutions.filter((resolution) => resolution.decision === "rejected").map((resolution) => String(resolution.contactKey)));
+  const hasTarget = (candidate) => candidate.indexes.some((index) => usedIndexes.has(index));
+  const allocate = (contact, candidate, evidence = {}) => {
+    const stream = contactStream(contact.role);
+    const allocation = { role: contact.role, phone: contact.phone, sourceName: contact.name,
+      contactKey: contact.contactKey, matchMethod: candidate.method, confidenceScore: candidate.score,
+      uncertain: candidate.uncertain === true, matchReasons: candidate.reasons || [],
+      streamKey: stream.key, streamLabel: stream.label, rosterStreamKey: assignmentStreamKey(candidate.assignments[0]), ...evidence };
+    for (const index of candidate.indexes) { usedIndexes.add(index); enriched[index].contactAllocation = allocation; }
+    matched.add(contact.contactKey);
+  };
+  const sameContext = (left, right) => left.area === right.area && left.shift === right.shift;
+  // A phone cannot simultaneously belong to different people in one context.
+  // Exact duplicate names with different phones are also conflicting sheet rows.
+  for (const contact of available) {
+    if (available.some((other) => other.contactKey !== contact.contactKey && sameContext(contact, other)
+      && ((contact.phone && contact.phone.replace(/\D/g, "") === other.phone?.replace(/\D/g, ""))
+        || (contact.name && simplify(contact.name) === simplify(other.name))))) reasons.set(contact.contactKey, "Conflicting entries in the contact sheet");
+  }
+
+  // Explicit daily decisions are authoritative, but still require an eligible
+  // roster target. Duplicate confirmations never choose an arbitrary winner.
+  const manual = resolutions.filter((resolution) => resolution.active !== false && resolution.decision !== "rejected" && resolution.doctorKey)
+    .map((resolution) => {
+      const contact = available.find((item) => item.contactKey === String(resolution.contactKey));
+      const candidate = contact && candidates.get(contact.contactKey).find((item) => item.doctorKey === String(resolution.doctorKey)
+        && (!resolution.sourceType || item.sourceType === String(resolution.sourceType).toLowerCase()));
+      return { resolution, contact, candidate };
+    }).filter((item) => item.candidate);
+  for (const item of manual) {
+    if (reasons.has(item.contact.contactKey)) continue;
+    if (manual.some((other) => other !== item && (other.contact.contactKey === item.contact.contactKey || other.candidate.indexes.some((index) => item.candidate.indexes.includes(index))))) {
+      reasons.set(item.contact.contactKey, "Conflicting confirmed allocations"); continue;
+    }
+    allocate(item.contact, item.candidate, { matchMethod: "manual", uncertain: false, confidenceScore: undefined,
+      matchReasons: ["Manually confirmed for this contact sheet"], resolutionId: String(item.resolution.id || ""), resolutionRevision: Number(item.resolution.revision || 0) });
+  }
+  for (const contact of available) if (rejected.has(contact.contactKey) && !matched.has(contact.contactKey) && !reasons.has(contact.contactKey)) reasons.set(contact.contactKey, "Automatic suggestion rejected for this contact sheet");
+
+  // Dedicated service phones keep their existing priority over ordinary rows.
+  const serviceProposals = available.filter((contact) => !contact.name && isRoleOnlyServiceContact(contact) && !reasons.has(contact.contactKey))
+    .map((contact) => {
+      const eligible = candidates.get(contact.contactKey).filter((candidate) => !hasTarget(candidate) && candidate.assignments.some((assignment) => assignmentStreamKey(assignment) === contactStreamKey(contact.role)));
+      if (eligible.length !== 1) reasons.set(contact.contactKey, eligible.length ? "Ambiguous service allocation" : "No rostered service allocation");
+      return { contact, candidate: eligible.length === 1 ? eligible[0] : null };
+    }).filter((item) => item.candidate);
+  for (const proposal of serviceProposals) {
+    if (serviceProposals.some((other) => other !== proposal && other.candidate.indexes.some((index) => proposal.candidate.indexes.includes(index)))) {
+      reasons.set(proposal.contact.contactKey, "Ambiguous service allocation"); continue;
+    }
+    allocate(proposal.contact, proposal.candidate, { matchMethod: "service-role", uncertain: false, confidenceScore: undefined });
+  }
+
+  // Specific names and then unique given names may reserve identities; guesses never
+  // consume candidates to make another tentative decision look unambiguous.
+  for (const stage of ["specific", "given", "tentative"]) {
+    const proposals = [];
+    for (const contact of available) {
+      if (!contact.name || matched.has(contact.contactKey) || reasons.has(contact.contactKey)) continue;
+      const all = candidates.get(contact.contactKey);
+      const eligible = all.filter((candidate) => !hasTarget(candidate) && candidate.nameScore >= CONTACT_MATCH_POLICY.minimumNameScore);
+      const candidate = eligible[0];
+      if (!candidate || candidate.score < CONTACT_MATCH_POLICY.minimumScore) continue;
+      const candidateStage = candidate.uncertain ? "tentative" : candidate.method === "first-name" ? "given" : "specific";
+      if (candidateStage !== stage) continue;
+      if (eligible[1] && candidate.score - eligible[1].score < CONTACT_MATCH_POLICY.minimumLead) continue;
+      // VHH's mutable sheet is particularly prone to retaining old names. A
+      // second plausible row claiming this holder remains a conflict.
+      if (contact.shift === "Current" && available.some((other) => other.contactKey !== contact.contactKey && sameContext(contact, other)
+        && candidates.get(other.contactKey).some((item) => item.identity === candidate.identity && item.nameScore >= CONTACT_MATCH_POLICY.minimumNameScore))) {
+        reasons.set(contact.contactKey, "Conflicting entries for this clinician"); continue;
+      }
+      proposals.push({ contact, candidate });
+    }
+    // Assess competition before applying any proposal from this batch.
+    const accepted = proposals.filter((proposal) => !proposals.some((other) => other !== proposal
+      && other.candidate.indexes.some((index) => proposal.candidate.indexes.includes(index))));
+    for (const proposal of proposals) if (!accepted.includes(proposal)) reasons.set(proposal.contact.contactKey, "Competing allocations for this clinician");
+    for (const proposal of accepted) allocate(proposal.contact, proposal.candidate);
+  }
+
+  const serviceContacts = available.filter((contact) => !matched.has(contact.contactKey) && isStandaloneServiceContact(contact));
+  const standaloneKeys = new Set(serviceContacts.map((contact) => contact.contactKey));
+  return { assignments: enriched, matchedCount: matched.size,
+    unmatched: available.filter((contact) => !matched.has(contact.contactKey) && !standaloneKeys.has(contact.contactKey)
+      && (!isRoleOnlyServiceContact(contact) || reasons.get(contact.contactKey) === "Ambiguous service allocation")).map((contact) => {
+        const ranked = candidates.get(contact.contactKey).filter((candidate) => candidate.score > 0);
+        const eligible = ranked.filter((candidate) => !hasTarget(candidate) && candidate.nameScore >= CONTACT_MATCH_POLICY.minimumNameScore);
+        return { ...contact, reviewReason: reasons.get(contact.contactKey) || (!candidates.get(contact.contactKey).length
+          ? (contact.shift === "Current" ? "No currently rostered clinician matches this entry" : "No roster candidate in this period")
+          : eligible.length > 1 ? "Ambiguous name" : ranked.some(hasTarget) ? "Clinician already has a contact allocation" : "No safe name match"),
+          candidates: ranked.slice(0, 3).map(({ doctorKey, sourceType, displayName, score, reasons }) => ({ doctorKey, sourceType, displayName, score, reasons })) };
+      }), serviceContacts };
 }
 
 function contactKeyBase(sourceId, sourceDate, contact) {
@@ -337,10 +380,11 @@ function isStandaloneServiceContact(contact) {
   return false;
 }
 
-function assignmentMatchesContactContext(assignment, contact, now) {
+export function assignmentMatchesContactContext(assignment, contact, now = new Date()) {
+  if (!contact) return false;
   const source = String(assignment?.source || assignment?.person?.sourceType || "").trim().toUpperCase();
   if (contact.area !== contactAreaForSource(source)) return false;
-  if (contact.shift !== "Current") return String(assignment?.period || "") === contact.shift;
+  if (contact.shift !== "Current") return contactRosterPeriod(assignment?.event, assignment?.period) === contact.shift;
   // VHH has one mutable list, not AM/PM/Night blocks. A sheet name can
   // attach only to an explicitly timed roster event that is active now.
   if (source !== "VHH" || assignment?.event?.allDay === true) return false;
@@ -361,14 +405,6 @@ function melbourneEventMinute(value) {
     return local.date ? `${local.date}T${String(local.hour).padStart(2, "0")}:${String(local.minute).padStart(2, "0")}` : "";
   }
   return /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?$/.test(text) ? text.slice(0, 16) : "";
-}
-
-function contactSpecificity(contact) {
-  const tokens = nameTokens(contact?.name);
-  // A surname initial (for example "Tara K") must be resolved before the
-  // generic first name that follows it (for example "Tara").
-  const hasSurnameInitial = tokens.length > 1 && tokens[tokens.length - 1].length === 1;
-  return tokens.length * 10 + (hasSurnameInitial ? 5 : 0) + (contactStreamKey(contact?.role) ? 1 : 0);
 }
 
 export function contactStream(role) {
@@ -397,7 +433,9 @@ function contactStreamKey(role) {
 }
 
 function assignmentStreamKey(assignment) {
-  const text = simplify(`${assignment?.team || ""} ${assignment?.suggestedTitle || ""} ${assignment?.rawValue || ""} ${assignment?.event?.title || ""} ${assignment?.event?.rawValue || ""}`);
+  const text = simplify(assignment?.event?.title || assignment?.event?.rawValue
+    ? `${assignment.event.title || ""} ${assignment.event.rawValue || ""}`
+    : `${assignment?.team || ""} ${assignment?.suggestedTitle || ""} ${assignment?.rawValue || ""}`);
   if (/\bclinical support on site\b|\bclinical support onsite\b|\bcs onsite\b|\bonsite cs\b/.test(text)
     && !/\bnot onsite\b/.test(text)) return "clinical-support-onsite";
   if (/\bed care co\b/.test(text)) return "care-co";
@@ -418,22 +456,112 @@ function assignmentStreamKey(assignment) {
   return "";
 }
 
-function personMatch(contactName, rosterName) {
-  const contact = nameTokens(contactName);
-  const roster = nameTokens(rosterName);
-  if (!contact.length || !roster.length) return null;
-  if (contact.join(" ") === roster.join(" ")) return { method: "exact", score: 100 };
+function contactRosterPeriod(event, fallback = "") {
+  const text = `${event?.title || ""} ${event?.rawValue || ""}`.toLowerCase();
+  if (/\bnight\b/.test(text)) return "Night";
+  if (/\bpm\b/.test(text)) return "PM";
+  if (/\bam\b/.test(text)) return "AM";
+  const start = melbourneEventMinute(event?.start);
+  if (!start) return String(fallback || "AM");
+  const minutes = Number(start.slice(11, 13)) * 60 + Number(start.slice(14, 16));
+  return minutes >= 20 * 60 || minutes < 6 * 60 ? "Night" : minutes >= 12 * 60 + 1 ? "PM" : "AM";
+}
 
-  const firstNamesMatch = namesMatch(contact[0], roster[0]);
-  const surnameInitial = contact.length > 1 ? contact[contact.length - 1] : "";
-  if (firstNamesMatch && surnameInitial.length === 1 && roster.some((token) => token.startsWith(surnameInitial))) {
-    return { method: firstNamesMatch === "alias" ? "alias-surname-initial" : "surname-initial", score: 90 };
+function contactGradeAligned(role, seniority) {
+  const text = simplify(role);
+  const grade = simplify(seniority);
+  const code = /^(?:sr|senior registrar)$/.test(grade) ? "sr" : /^(?:tr|ir)|transitional|intermediate/.test(grade) ? "tr"
+    : /^(?:jr|junior registrar)$/.test(grade) ? "jr" : /hmo/.test(grade) ? "hmo" : /^(?:sms|consultant|senior medical staff)$/.test(grade) ? "sms" : "";
+  return Boolean(code && new RegExp(`\\b${code === "tr" ? "(?:tr|ir)" : code}\\b`).test(text));
+}
+
+function nameForms(value) {
+  const raw = String(value || "").slice(0, 160);
+  const alternatives = [];
+  const main = raw.replace(/\(([^()]*)\)|["“]([^"“”]+)["”]/gu, (whole, parenthesized, quoted, offset) => {
+    const name = String(parenthesized || quoted || "").trim();
+    if (name && /^[\p{L}\p{M}\s'’.-]+$/u.test(name) && !/\b(?:dr|doctor|hmo|sms|sr|tr|jr|ir|am|pm|night|swing|locum|late|early|leave|onsite|offsite|on|off)\b/i.test(name)) alternatives.push({ name, tail: raw.slice(offset + whole.length).replace(/\([^()]*\)|["“][^"“”]+["”]/gu, " ") });
+    return " ";
+  });
+  const forms = [{ tokens: nameTokens(main), alternate: false }];
+  for (const alternative of alternatives) {
+    const tokens = nameTokens(alternative.name);
+    let tail = nameTokens(alternative.tail);
+    // Keep a supplied surname when substituting an explicit alternate given
+    // name. A bare nickname must not bypass contradictory remaining text.
+    if (!tail.length && forms[0].tokens.length > 1 && tokens.length === 1) {
+      tail = forms[0].tokens.slice(1);
+      if (tail.length > 1 && tail[0] === tokens[tokens.length - 1]) tail.shift();
+    }
+    forms.push({ tokens: [...tokens, ...tail], alternate: true });
   }
-  if (contact[0] === roster[0]) return { method: "first-name", score: 70 };
-  if (firstNamesMatch === "alias") return { method: "alias", score: 65 };
-  if (contact[0].length >= 4 && roster[0].startsWith(contact[0])) return { method: "first-name-prefix", score: 60 };
-  if (contact.length === 1 && roster.slice(1).includes(contact[0])) return { method: "internal-given-name", score: 55 };
-  return null;
+  return forms.filter((form) => form.tokens.length);
+}
+
+function nameTokens(value) {
+  const tokens = simplify(String(value || "").replace(/([\p{L}])[’'](?=[\p{L}])/gu, "$1")).split(" ").filter(Boolean);
+  while (["dr", "doctor", "prof", "mr", "ms", "mrs"].includes(tokens[0])) tokens.shift();
+  return tokens;
+}
+
+function personMatch(contactName, rosterName, identity) {
+  const rosterForms = nameForms(rosterName);
+  const forms = nameForms(contactName);
+  const approved = APPROVED_CONTACT_NAME_ALIASES.filter((alias) => alias.sourceType === identity?.sourceType && alias.doctorKey === identity?.doctorKey);
+  const results = [];
+  const hasAlternates = forms.some((form) => form.alternate) || rosterForms.some((form) => form.alternate);
+  for (const form of forms) {
+    for (const roster of rosterForms) {
+      const evidence = tokenMatch(form.tokens, roster.tokens);
+      if (evidence) results.push(hasAlternates ? { ...evidence, method: "explicit-alternate-name", uncertain: true, reason: "Explicit alternate name agrees with roster" } : evidence);
+    }
+    if (approved.some((alias) => (alias.names || []).some((name) => nameTokens(name).join(" ") === form.tokens.join(" ")))) {
+      results.push({ method: "approved-identity-alias", score: 98, uncertain: true, reason: "Approved alternate name for this clinician" });
+    }
+  }
+  return results.sort((left, right) => right.score - left.score || Number(left.uncertain) - Number(right.uncertain))[0] || null;
+}
+
+function tokenMatch(contact, roster) {
+  if (!contact.length || !roster.length) return null;
+  const evidence = (method, score, uncertain, reason) => ({ method, score, uncertain, reason });
+  if (contact.join(" ") === roster.join(" ")) return evidence("exact", 100, false, "Full name agrees");
+  if (contact.length === roster.length && [...contact].sort().join(" ") === [...roster].sort().join(" ")) return evidence("reordered-name", 99, false, "Full name components agree in a different order");
+  if (contact.length === 1) {
+    if (contact[0] === roster[0]) return evidence("first-name", 94, false, "Given name agrees");
+    if (namesMatch(contact[0], roster[0]) === "alias") return evidence("alias", 92, true, "Recognized shortened given name");
+    if (contact[0].length >= 4 && roster[0].startsWith(contact[0]) && contact[0].length / roster[0].length >= 0.5) return evidence("first-name-prefix", 90, true, "Shortened given name agrees");
+    if (roster.slice(1).includes(contact[0])) return evidence("internal-given-name", 90, true, "Name component agrees with roster");
+    const similarity = spellingMatch(contact[0], roster[0]);
+    return similarity ? evidence("spelling", similarity, true, "Small spelling difference in given name") : null;
+  }
+  // Match an initial/given name against roster components, then account for ALL
+  // remaining supplied tokens. Never discard a contradictory supplied surname.
+  let best = null;
+  for (let firstIndex = 0; firstIndex < Math.max(1, roster.length - 1); firstIndex += 1) {
+    const first = contact[0], target = roster[firstIndex];
+    const firstMethod = first === target ? "exact" : namesMatch(first, target) === "alias" ? "alias"
+      : first.length === 1 && target.startsWith(first) ? "initial"
+        : first.length >= 4 && target.startsWith(first) && first.length / target.length >= 0.5 ? "prefix" : spellingMatch(first, target) ? "spelling" : "";
+    if (!firstMethod) continue;
+    const unused = roster.map((token, index) => ({ token, index })).filter((entry) => entry.index !== firstIndex);
+    let initial = false, changed = false, valid = true;
+    for (const token of contact.slice(1)) {
+      const index = unused.findIndex((entry) => token === entry.token || (token.length === 1 && entry.index === roster.length - 1 && entry.token.startsWith(token)));
+      const fuzzyIndex = index < 0 ? unused.findIndex((entry) => spellingMatch(token, entry.token)) : -1;
+      const chosen = index >= 0 ? index : fuzzyIndex;
+      if (chosen < 0) { valid = false; break; }
+      initial ||= token.length === 1; changed ||= fuzzyIndex >= 0;
+      unused.splice(chosen, 1);
+    }
+    if (!valid) continue;
+    const uncertain = firstMethod !== "exact" || changed || firstIndex > 0;
+    const method = initial ? (firstMethod === "alias" ? "alias-surname-initial" : "surname-initial") : uncertain ? "spelling-or-alternate-full-name" : "name-components";
+    const score = initial ? (uncertain ? 94 : 98) : uncertain ? 96 : 99;
+    const result = evidence(method, score, uncertain, initial ? "Given name and surname initial agree" : uncertain ? "Name components agree with a small spelling or alternate-name difference" : "Supplied name components agree");
+    if (!best || result.score > best.score) best = result;
+  }
+  return best;
 }
 
 function namesMatch(left, right) {
@@ -442,12 +570,30 @@ function namesMatch(left, right) {
   return "";
 }
 
-function nameTokens(value) {
-  return simplify(value).split(" ").filter(Boolean);
+// Bounded optimal-string-alignment distance handles common adjacent letter
+// transpositions. At most two edits are considered, on short name components.
+function spellingMatch(left, right) {
+  if (left.length < 5 || right.length < 5 || left.length > 48 || right.length > 48) return 0;
+  const limit = Math.min(left.length, right.length) >= 10 ? 2 : 1;
+  if (Math.abs(left.length - right.length) > limit) return 0;
+  let previousPrevious = null;
+  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= left.length; i += 1) {
+    const row = [i];
+    for (let j = 1; j <= right.length; j += 1) {
+      row[j] = Math.min(previous[j] + 1, row[j - 1] + 1, previous[j - 1] + (left[i - 1] === right[j - 1] ? 0 : 1));
+      if (previousPrevious && i > 1 && j > 1 && left[i - 1] === right[j - 2] && left[i - 2] === right[j - 1]) row[j] = Math.min(row[j], previousPrevious[j - 2] + 1);
+    }
+    previousPrevious = previous; previous = row;
+  }
+  const distance = previous[right.length];
+  const similarity = 1 - distance / Math.max(left.length, right.length);
+  if (!distance || distance > limit || similarity < (limit === 2 ? 0.85 : 0.8)) return 0;
+  return distance === 1 ? 90 : 88;
 }
 
 function simplify(value) {
-  return String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return String(value || "").normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
 function addDays(date, days) {
