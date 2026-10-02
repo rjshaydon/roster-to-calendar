@@ -306,3 +306,9 @@ assert.equal(attachContactAllocations(morningVhh, duplicateVhh.contacts, [], mor
 assert.equal(attachContactAllocations([vhhAssignment("Alex Example", "AM", "2026-10-01T22:00:00Z", "2026-10-02T05:00:00Z")], vhh.contacts, [], morningTime).matchedCount, 1,
   "explicit UTC roster timestamps are interpreted in Melbourne");
 console.log("VHH current-holder safety fixtures passed.");
+const wrongSurnameVhh = normaliseContactListExtract({ sourceId: vhh.sourceId, sourceDate: vhh.sourceDate,
+  doctors: [{ role: "ED Doctor", phone: "12017", name: "Alex Other" }] });
+assert.equal(attachContactAllocations(morningVhh, wrongSurnameVhh.contacts, [], morningTime).matchedCount, 0,
+  "a contradictory surname cannot be discarded to force a VHH first-name match");
+assert.equal(attachContactAllocations([vhhAssignment("Alex Example", "AM", "2026-10-01T08:00:00", "2026-10-03T15:00:00")], vhh.contacts, [], morningTime).matchedCount, 0,
+  "an implausibly long timed event cannot establish a current handset holder");

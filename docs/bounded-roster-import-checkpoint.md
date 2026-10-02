@@ -306,3 +306,71 @@ UTC timestamps, stale/future sheet dates, duplicate phones, unknown hours,
 SQLite-backed VHH HTTP publication and zero-write replay, existing contact
 access/ingress safeguards, facility materialization, client request budgets and
 Worker compilation passed. Live flow/deployment verification pending.
+
+### Live checkpoint at 11:25 AEST
+
+Commit `5722ecdc` pushed through the normal Git-triggered deployment. The public
+Production app.js SHA-256 matches the local release, including VHH polling and
+expiry checks. Canonical deployment/control-plane variables still need readback:
+Wrangler's existing OAuth login expired and renewal reached the normal 26-scope
+consent screen, then the Mac locked before authorization could finish.
+
+Settled account telemetry through 11:06 AEST covers the user's session ending
+11:00: UTC quota-day totals 8,912 reads / 695 writes; maximum five-minute bucket
+3,224 reads / 666 writes; largest sampled average query 468 reads. No read quota
+pressure appeared. These are account totals, not attribution solely to the user.
+
+The existing VHH script's minimal date addition is saved. The Power Automate
+flow remains Off, with an unsaved draft removing the SharePoint modification
+trigger and the Add a trigger search set to Recurrence. Excel and HTTP actions
+are retained. The rename attempt did not apply: the displayed flow title is
+still VHH Shift Phone Allocations to Preview. No fresh live submission or visual
+VHH contact check has run yet. Unlock Safari, complete recurrence settings
+(five minutes, one concurrent run), production JSON URL and disabled retries;
+confirm canonical flags; save/enable and verify fresh-source then unchanged runs.
+Additional contradictory-surname and implausibly-long-shift fixtures pass locally
+and await the final verification/checkpoint commit with the completed flow work.
+
+### VHH automatic restoration completed, 2 October 11:44 AEST
+
+Canonical Production deployment `67597134-138d-442c-91a2-55d5d1627bce`
+confirmed successful for commit `5722ecdc30b60bb48dff4947643f9a33d6d67c6b`.
+Both contact allowlists include VHH. Existing Wrangler authorization refreshed.
+
+Existing flow `e8b16ab2-978a-44b1-b331-070f17504b14` renamed **Sync VHH
+clinician contacts**, saved as Scheduled and verified On. Recurrence interval
+5 minutes, concurrency enabled at 1, HTTP retry policy None. Workbook and
+Office Script references preserved; only C1:E80 is extracted. HTTP sends the
+script result directly to the Production contact-list-extract endpoint.
+The old Preview credential produced two initial 401 failures; replaced only
+that flow header with the existing working MMC Production contact credential.
+No new credentials or broader endpoint authentication were introduced.
+
+Fresh run at 11:36 succeeded and published today's three named worksheet
+entries. Unattended recurrence run at 11:41 succeeded with HTTP 200,
+`status: unchanged`, sourceDate `2026-10-02`, contactCount 3 and the same fileId.
+The R2 contact manifest remained byte-for-byte identical after that run,
+including receivedAt/publishedAt. The tested unchanged ingestion path performs
+one indexed deduplication lookup and zero D1/R2 writes.
+
+Bounded live verification read five R2 objects and no D1 data. Today's published
+roster contained 15 timed rows; only Asare Amoafo (08:00–17:30) matched an active
+handset allocation at 11:39. Daryl and Nidhal remained unmatched. Production
+At a glance / VHH visibly confirmed updated 11:36, one matched, Asare 12018,
+and two entries needing review, without handset assignment to inactive names.
+All three names are synchronized; eligibility to display a handset is narrower
+than presence on the mutable contact sheet.
+
+Settled telemetry through 11:17 AEST: quota-day 9,901 reads / 700 writes,
+maximum five-minute 3,224 reads / 666 writes; largest sampled average query
+468 reads. This confirms the user's morning session remained well below the
+5,000,000-row read quota, but telemetry lags and does not yet cover the 11:36
+first VHH publication. Live unchanged response and stable R2 revision verified
+its replay behavior independently. Extra surname and >24-hour safety fixtures
+passed. Five-hour usage last checked at 34% used (66% remaining), credits
+182.1872700000 unchanged.
+
+Final settled check through 11:29 AEST: 10,592 reads / 700 writes today,
+unchanged maximum five-minute and largest-query figures. Final five-hour
+allowance 53% remaining; credit balance still unchanged. UI flow restoration
+and live verification are complete; no further source edits are required.
