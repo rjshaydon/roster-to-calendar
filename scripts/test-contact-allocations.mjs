@@ -27,7 +27,7 @@ assert.equal(normaliseContactListExtract({
   sourceDate: "2026-08-24",
   cic: { phone: "90000", name: "CIC Doctor" },
   doctors: [{ role: "AM SMS", phone: "90001", name: "Doctor" }],
-}), null, "VHH contacts must remain disabled until their On Shift mapping is approved");
+}), null, "legacy VHH discovery JSON without validated source fields must be rejected");
 
 assert.ok(extract, "valid contact list should normalise");
 assert.equal(extract.contacts[0].isPopulated, false, "a phone without a named doctor must not be live");
@@ -264,3 +264,45 @@ function allocationFor(matches, displayName) {
   assert.ok(allocation, `${displayName} should have a contact allocation`);
   return allocation;
 }
+
+// VHH's single mutable list must never be expanded into three shift blocks.
+const vhh = normaliseContactListExtract({ sourceId: "vhh-shift-phone-allocations", sourceDate: "2026-10-02",
+  cic: { phone: "12010", name: "" }, doctors: [
+    { role: "Swing Consultant 1000", phone: "12019", name: "Day Doctor" },
+    { role: "SSU Dr", phone: "12018", name: "Alex" },
+    { role: "ED Doctor", phone: "12017", name: "Evening Doctor" },
+    { role: "ED Doctor", phone: "12020", name: "" },
+  ] });
+assert.ok(vhh);
+assert.equal(vhh.contacts.length, 5);
+assert.equal(vhh.contacts.filter(c => c.isPopulated).length, 3);
+assert.equal(vhh.contacts[0].shift, "Current");
+function vhhAssignment(name, period, start, end, allDay = false) {
+  return { ...assignment("VHH", period, "VHH", name, "HMO"), event: { start, end, allDay } };
+}
+const vhhRoster = [
+  vhhAssignment("Day Doctor", "AM", "2026-10-01T10:00:00", "2026-10-01T19:30:00"),
+  vhhAssignment("Evening Doctor", "PM", "2026-10-01T14:30:00", "2026-10-02T00:00:00"),
+  vhhAssignment("Alex Example", "Night", "2026-10-01T23:00:00", "2026-10-02T08:30:00"),
+];
+const overnightVhh = attachContactAllocations(vhhRoster, vhh.contacts, [], { now: new Date("2026-10-01T16:00:00Z") });
+assert.equal(overnightVhh.matchedCount, 1, "only the active Oct 1 Night doctor can receive an Oct 2 sheet allocation");
+assert.equal(overnightVhh.assignments[2].contactAllocation.phone, "12018");
+assert.equal(attachContactAllocations(vhhRoster, vhh.contacts, [], { now: new Date("2026-10-01T22:30:00Z") }).matchedCount, 0,
+  "numbers disappear at the exact rostered finish, without a new sheet update");
+assert.equal(attachContactAllocations(vhhRoster, vhh.contacts, [], { now: new Date("2026-10-02T16:00:00Z") }).matchedCount, 0,
+  "a previous-day sheet cannot allocate a current handset");
+const morningVhh = [vhhAssignment("Alex Example", "AM", "2026-10-02T08:00:00", "2026-10-02T15:00:00")];
+const morningTime = { now: new Date("2026-10-02T01:00:00Z") };
+assert.equal(attachContactAllocations(morningVhh, vhh.contacts, [], morningTime).matchedCount, 1);
+assert.equal(attachContactAllocations([...morningVhh, vhhAssignment("Alex Other", "AM", "2026-10-02T08:00:00", "2026-10-02T15:00:00")], vhh.contacts, [], morningTime).matchedCount, 0,
+  "a first name shared by two active VHH clinicians is not enough");
+assert.equal(attachContactAllocations([vhhAssignment("Alex Example", "AM", "2026-10-02", "2026-10-03", true)], vhh.contacts, [], morningTime).matchedCount, 0,
+  "unknown shift hours cannot establish who is currently holding a handset");
+const duplicateVhh = normaliseContactListExtract({ sourceId: vhh.sourceId, sourceDate: vhh.sourceDate,
+  doctors: [{ role: "ED Doctor", phone: "12017", name: "Alex" }, { role: "SSU Dr", phone: "12018", name: "Alex" }] });
+assert.equal(attachContactAllocations(morningVhh, duplicateVhh.contacts, [], morningTime).matchedCount, 0,
+  "conflicting phone rows cannot select the first number arbitrarily");
+assert.equal(attachContactAllocations([vhhAssignment("Alex Example", "AM", "2026-10-01T22:00:00Z", "2026-10-02T05:00:00Z")], vhh.contacts, [], morningTime).matchedCount, 1,
+  "explicit UTC roster timestamps are interpreted in Melbourne");
+console.log("VHH current-holder safety fixtures passed.");

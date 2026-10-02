@@ -1,6 +1,7 @@
 import {
   DDH_CONTACT_LIST_SOURCE_ID,
   MMC_CONTACT_LIST_SOURCE_ID,
+  VHH_CONTACT_LIST_SOURCE_ID,
   contactAreaForSource,
   contactExtractHasExpired,
   contactsAfterShiftChange,
@@ -78,7 +79,7 @@ export async function publishFacilityContactResolutions(r2, sourceId, sourceDate
   return { ok: true, revision };
 }
 
-export async function loadPublishedFacilityContacts(r2, { date, facilityKeys = [] } = {}) {
+export async function loadPublishedFacilityContacts(r2, { date, facilityKeys = [], now = new Date() } = {}) {
   if (!r2?.get) return { status: "unavailable", reason: "storage-unavailable" };
   const sourceIds = new Set(facilityKeys.map(contactSourceForFacility).filter(Boolean));
   if (sourceIds.size !== 1) return { status: "unavailable", reason: "multiple-sources" };
@@ -86,16 +87,22 @@ export async function loadPublishedFacilityContacts(r2, { date, facilityKeys = [
   const manifest = (await readJsonObject(r2, facilityContactManifestKey(sourceId))).data;
   if (!manifest) return { status: "unavailable", reason: "no-extract" };
   const entries = Object.entries(manifest.dates || {})
-    .filter(([sourceDate]) => !contactExtractHasExpired(sourceDate))
+    .filter(([sourceDate]) => !contactExtractHasExpired(sourceDate, now))
     .sort(([a], [b]) => b.localeCompare(a));
   let selected = entries.find(([sourceDate]) => sourceDate === date);
   let carryMode = "";
+  if (sourceId === VHH_CONTACT_LIST_SOURCE_ID) {
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Australia/Melbourne", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+    const yesterday = new Date(`${today}T12:00:00Z`); yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+    selected = date === today || date === yesterday.toISOString().slice(0, 10) ? entries.find(([sourceDate]) => sourceDate === today) : null;
+    if (!selected) return { status: "not-current", sourceId, contacts: [], resolutions: [], revision: "" };
+  }
   if (!selected) {
-    selected = entries.find(([sourceDate]) => shouldUseCurrentExtractForPreviousNight(sourceDate, date));
+    selected = entries.find(([sourceDate]) => shouldUseCurrentExtractForPreviousNight(sourceDate, date, now));
     carryMode = selected ? "current-for-previous" : "";
   }
   if (!selected) {
-    selected = entries.find(([sourceDate]) => shouldCarryPreviousNightContacts(sourceDate, date));
+    selected = entries.find(([sourceDate]) => shouldCarryPreviousNightContacts(sourceDate, date, now));
     carryMode = selected ? "previous-night" : "";
   }
   if (!selected) {
@@ -118,13 +125,14 @@ export async function loadPublishedFacilityContacts(r2, { date, facilityKeys = [
     sourceDate: operationalExtract.sourceDate,
     providerModifiedAt: extract.providerModifiedAt || pointer.providerModifiedAt || "",
     receivedAt: pointer.receivedAt || "",
-    contacts: carryMode ? contacts : contactsAfterShiftChange(contacts, { date }),
+    contacts: sourceId === VHH_CONTACT_LIST_SOURCE_ID || carryMode ? contacts : contactsAfterShiftChange(contacts, { date, now }),
     resolutions: resolutionPayload?.resolutions || [],
   };
 }
 
 function contactSourceForFacility(value) {
   const code = String(value || "").trim().toUpperCase();
+  if (code === "VHH") return VHH_CONTACT_LIST_SOURCE_ID;
   if (code === "DDH") return DDH_CONTACT_LIST_SOURCE_ID;
   if (code === "MMC" || code === "MCH") return MMC_CONTACT_LIST_SOURCE_ID;
   return "";

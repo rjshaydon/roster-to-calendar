@@ -74,8 +74,8 @@ assert.match(contactExtractSource, /automationSourceDate[\s\S]*st\|nd\|rd\|th/,
   "the JSON boundary should normalize the date label emitted by the existing MMC Office Script");
 assert.match(contactExtractSource, /pruneStoredContactExtracts[\s\S]*contactExtractHasExpired/,
   "the previous operational day's JSON should be retained until its testing-window expiry");
-assert.doesNotMatch(contactExtractSource, /VHH_AUTOMATION_TOKEN|VHH_CONTACT_LIST_SOURCE_ID/,
-  "VHH roster credentials and contact payloads must remain outside contact ingestion until VHH contacts are approved");
+assert.doesNotMatch(contactExtractSource, /VHH_AUTOMATION_TOKEN/,
+  "VHH roster credentials must remain outside the general contact endpoint");
 assert.match(stateSource, /action === "queryFacilityOverviewContactList"[\s\S]*loadLiveContactListForOnShift/,
   "the UI should have a lightweight contact-only refresh action");
 assert.ok(

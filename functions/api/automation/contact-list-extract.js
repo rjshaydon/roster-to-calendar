@@ -2,6 +2,7 @@ import { ensureCalendarSchema, hasCalendarDb } from "../../_lib/d1-calendar.js";
 import { sha256Hex } from "../../_lib/automation-import.js";
 import {
   DDH_CONTACT_LIST_SOURCE_ID,
+  VHH_CONTACT_LIST_SOURCE_ID,
   contactExtractHasExpired,
   contactOperationalDate,
   normaliseContactListExtract,
@@ -28,7 +29,7 @@ export async function onRequestPost(context) {
       return Response.json({ error: "Contact-list extract is too large." }, { status: 413 });
     }
     let payload = await context.request.json();
-    if (String(payload?.sourceId || "") === "mmc-shift-allocations") {
+    if (["mmc-shift-allocations", VHH_CONTACT_LIST_SOURCE_ID].includes(String(payload?.sourceId || ""))) {
       const sourceDate = automationSourceDate(payload?.sourceDate);
       if (sourceDate) payload = { ...payload, sourceDate };
     }
@@ -140,7 +141,7 @@ function contactAllocationBytes(extract) {
 
 function contactPublicationEnabled(env, sourceId) {
   if (String(env.FACILITY_SHARED_CONTACTS_BUILD_ENABLED || "").toLowerCase() !== "true") return false;
-  const sources = sourceId === DDH_CONTACT_LIST_SOURCE_ID ? ["ddh"] : sourceId === "mmc-shift-allocations" ? ["mmc", "mch"] : [];
+  const sources = sourceId === DDH_CONTACT_LIST_SOURCE_ID ? ["ddh"] : sourceId === "mmc-shift-allocations" ? ["mmc", "mch"] : sourceId === VHH_CONTACT_LIST_SOURCE_ID ? ["vhh"] : [];
   return facilityBuildSources(env, sources).length > 0;
 }
 

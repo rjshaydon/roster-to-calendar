@@ -175,13 +175,25 @@ async function callContactExtract(overrides = {}) {
       ROSTER_FILES: contactR2,
       ROSTER_AUTOMATION_TOKEN: "contact-token",
       CONTACT_AUTOMATION_WRITES_ENABLED: "true",
-      CONTACT_AUTOMATION_SOURCE_ALLOWLIST: "mmc-shift-allocations",
+      CONTACT_AUTOMATION_SOURCE_ALLOWLIST: "mmc-shift-allocations,vhh-shift-phone-allocations",
       FACILITY_SHARED_CONTACTS_BUILD_ENABLED: "true",
       FACILITY_SHARED_EMERGENCY_PAUSED: "false",
-      FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST: "mmc,mch",
+      FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST: "mmc,mch,vhh",
     },
   });
 }
+const vhhHttpPayload = { sourceId: "vhh-shift-phone-allocations", sourceDate: new Intl.DateTimeFormat("en-CA", { timeZone: "Australia/Melbourne", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()),
+  doctors: [{ role: "ED Doctor", phone: "12017", name: "Alex Example" }], contacts: undefined };
+assert.equal((await callContactExtract({ ...vhhHttpPayload, sourceDate: "" })).status, 400, "undated VHH discovery data is rejected before storage");
+const vhhHttpResult = await callContactExtract(vhhHttpPayload);
+assert.equal(vhhHttpResult.status, 200);
+assert.equal((await vhhHttpResult.json()).status, "stored");
+assert.ok(contactR2.objects.has("facility-overview/v1/contacts/vhh-shift-phone-allocations/manifest.json"), "VHH HTTP ingress publishes its own bounded R2 overlay");
+db.rowsWritten = 0;
+const vhhHttpWrites = contactR2.puts;
+assert.equal((await (await callContactExtract(vhhHttpPayload)).json()).status, "unchanged");
+assert.equal(db.rowsWritten, 0);
+assert.equal(contactR2.puts, vhhHttpWrites, "an unchanged VHH submission writes no D1 rows or R2 objects");
 const firstContact = await callContactExtract();
 assert.equal(firstContact.status, 200);
 assert.equal((await firstContact.json()).status, "stored");

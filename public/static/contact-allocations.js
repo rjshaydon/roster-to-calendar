@@ -1,13 +1,16 @@
 export const MMC_CONTACT_LIST_SOURCE_ID = "mmc-shift-allocations";
 export const DDH_CONTACT_LIST_SOURCE_ID = "ddh-daily-contact-sheet";
+export const VHH_CONTACT_LIST_SOURCE_ID = "vhh-shift-phone-allocations";
 
 const SOURCE_AREAS = new Map([
   [MMC_CONTACT_LIST_SOURCE_ID, new Set(["Adult Emergency", "Paediatric Emergency"])],
   [DDH_CONTACT_LIST_SOURCE_ID, new Set(["Dandenong Emergency"])],
+  [VHH_CONTACT_LIST_SOURCE_ID, new Set(["Victorian Heart Hospital Emergency"])],
 ]);
 const SOURCE_FILE_NAMES = new Map([
   [MMC_CONTACT_LIST_SOURCE_ID, "SHIFT ALLOCATIONS doctors.json"],
   [DDH_CONTACT_LIST_SOURCE_ID, "Daily Contact Sheet clinicians.json"],
+  [VHH_CONTACT_LIST_SOURCE_ID, "Zebra Allocations clinicians.json"],
 ]);
 const VALID_SHIFTS = new Set(["AM", "PM", "Night"]);
 const NAME_ALIASES = new Map([
@@ -27,13 +30,20 @@ const NAME_ALIASES = new Map([
 
 export function normaliseContactListExtract(payload) {
   const sourceId = String(payload?.sourceId || "").trim();
+  if (sourceId === VHH_CONTACT_LIST_SOURCE_ID && Array.isArray(payload?.doctors)) {
+    if (payload.doctors.length > 12) return null;
+    payload = { ...payload, contacts: [
+      ...(payload.cic ? [{ ...payload.cic, role: "CIC" }] : []), ...payload.doctors,
+    ].map((entry) => ({ ...entry, area: "Victorian Heart Hospital Emergency", shift: "Current", isPopulated: Boolean(String(entry?.name || "").trim()) })) };
+  }
   const validAreas = SOURCE_AREAS.get(sourceId);
   if (!validAreas || !Array.isArray(payload?.contacts)) return null;
   const sourceDate = String(payload?.sourceDate || "").trim();
-  if (!isIsoDate(sourceDate) || payload.contacts.length > 240) return null;
+  if (!isIsoDate(sourceDate) || payload.contacts.length > (sourceId === VHH_CONTACT_LIST_SOURCE_ID ? 13 : 240)) return null;
   const contacts = payload.contacts.map((entry) => {
     const name = String(entry?.name || "").trim();
     return {
+      ...(sourceId === VHH_CONTACT_LIST_SOURCE_ID ? { sourceDate } : {}),
       area: String(entry?.area || "").trim(),
       shift: String(entry?.shift || "").trim(),
       role: String(entry?.role || "").trim(),
@@ -44,7 +54,8 @@ export function normaliseContactListExtract(payload) {
     };
   }).filter((entry) => !isTemporarilyExcludedContactRole(sourceId, entry));
   if (contacts.some((entry) => !validAreas.has(entry.area)
-    || !VALID_SHIFTS.has(entry.shift)
+    || !(sourceId === VHH_CONTACT_LIST_SOURCE_ID ? entry.shift === "Current" : VALID_SHIFTS.has(entry.shift))
+    || (sourceId === VHH_CONTACT_LIST_SOURCE_ID && (!/^(CIC|(?:Swing|PM) Consultant(?: \d{4})?|ED Doctor|Sepsis Doctor|SSU Dr)$/i.test(entry.role) || !/^120(?:0[8]|1[03456789]|20)$/.test(entry.phone)))
     || !entry.role
     || /\bnic\b|nurs|(^|\W)(rn|en)(\W|$)/i.test(entry.role))) return null;
   const occurrences = new Map();
@@ -122,6 +133,7 @@ export function contactAreaForSource(source) {
   if (code === "MMC") return "Adult Emergency";
   if (code === "MCH") return "Paediatric Emergency";
   if (code === "DDH") return "Dandenong Emergency";
+  if (code === "VHH") return "Victorian Heart Hospital Emergency";
   return "";
 }
 
@@ -151,7 +163,7 @@ export function contactsAfterShiftChange(contacts = [], { date = "", now = new D
   return (contacts || []).filter((contact) => periods.has(String(contact?.shift || "")));
 }
 
-export function attachContactAllocations(assignments = [], contacts = [], resolutions = []) {
+export function attachContactAllocations(assignments = [], contacts = [], resolutions = [], { now = new Date() } = {}) {
   const available = (contacts || [])
     .filter((contact) => (contact?.isPopulated && contact.name) || isRoleOnlyServiceContact(contact))
     .map((contact, index) => ({ ...contact, contactKey: String(contact.contactKey || contactResolutionKey("legacy", "", contact, index)) }));
@@ -163,11 +175,16 @@ export function attachContactAllocations(assignments = [], contacts = [], resolu
   const unmatchedReasons = new Map();
 
   for (const contact of orderedContacts) {
+    if (contact.shift === "Current" && available.some((other) => other.contactKey !== contact.contactKey
+      && other.area === contact.area && (simplify(other.name) === simplify(contact.name) || other.phone === contact.phone))) {
+      unmatchedReasons.set(contact.contactKey, "Conflicting entries in the contact sheet");
+      continue;
+    }
     const contextCandidates = enriched
       .map((assignment, index) => ({ assignment, index }))
-      .filter(({ assignment, index }) => !used.has(index) && assignmentMatchesContactContext(assignment, contact));
+      .filter(({ assignment, index }) => (contact.shift === "Current" || !used.has(index)) && assignmentMatchesContactContext(assignment, contact, now));
     if (!contextCandidates.length) {
-      unmatchedReasons.set(contact.contactKey, "No roster candidate in this period");
+      unmatchedReasons.set(contact.contactKey, contact.shift === "Current" ? "No currently rostered clinician matches this entry" : "No roster candidate in this period");
       continue;
     }
     const roleOnlyServiceKey = !contact.name && isRoleOnlyServiceContact(contact) ? contactStreamKey(contact.role) : "";
@@ -198,7 +215,7 @@ export function attachContactAllocations(assignments = [], contacts = [], resolu
     const named = contextCandidates
       .map(({ assignment, index }) => {
         const nameMatch = personMatch(contact.name, assignment?.person?.displayName || assignment?.doctorName || "");
-        return nameMatch ? {
+        return nameMatch && (contact.shift !== "Current" || nameMatch.score >= (nameTokens(contact.name).length === 1 ? 65 : 90)) ? {
           assignment,
           index,
           ...nameMatch,
@@ -218,6 +235,11 @@ export function attachContactAllocations(assignments = [], contacts = [], resolu
     if ((nameTokens(contact.name).length === 1 && named.length > 1)
       || (named.length > 1 && named[1].score === candidate.score && named[1].streamAligned === candidate.streamAligned)) {
       unmatchedReasons.set(contact.contactKey, "Ambiguous name");
+      continue;
+    }
+    if (contact.shift === "Current" && (used.has(candidate.index) || available.some((other) => other.contactKey !== contact.contactKey && other.area === contact.area
+      && personMatch(other.name, candidate.assignment?.person?.displayName || candidate.assignment?.doctorName || "")))) {
+      unmatchedReasons.set(contact.contactKey, "Conflicting entries for this clinician");
       continue;
     }
     const index = candidate.index;
@@ -245,9 +267,10 @@ export function attachContactAllocations(assignments = [], contacts = [], resolu
   const unresolvedKeys = new Set(available.filter((contact) => !matchedContactsForAssignments(enriched).has(contact.contactKey)).map((contact) => contact.contactKey));
   const manualTargets = new Set();
   for (const resolution of resolutions || []) {
+    if (available.find((item) => item.contactKey === String(resolution?.contactKey))?.shift === "Current") continue;
     if (resolution?.active === false || !unresolvedKeys.has(String(resolution?.contactKey || ""))) continue;
     const contact = available.find((item) => item.contactKey === String(resolution.contactKey));
-    const targetIndex = enriched.findIndex((assignment) => assignmentMatchesContactContext(assignment, contact)
+    const targetIndex = enriched.findIndex((assignment) => assignmentMatchesContactContext(assignment, contact, now)
       && String(assignment?.person?.doctorKey || "") === String(resolution?.doctorKey || "")
       && !assignment.contactAllocation);
     if (!contact || targetIndex < 0 || manualTargets.has(targetIndex)) continue;
@@ -314,9 +337,30 @@ function isStandaloneServiceContact(contact) {
   return false;
 }
 
-function assignmentMatchesContactContext(assignment, contact) {
+function assignmentMatchesContactContext(assignment, contact, now) {
   const source = String(assignment?.source || assignment?.person?.sourceType || "").trim().toUpperCase();
-  return contact.area === contactAreaForSource(source) && String(assignment?.period || "") === contact.shift;
+  if (contact.area !== contactAreaForSource(source)) return false;
+  if (contact.shift !== "Current") return String(assignment?.period || "") === contact.shift;
+  // VHH has one mutable list, not AM/PM/Night blocks. A sheet name can
+  // attach only to an explicitly timed roster event that is active now.
+  if (source !== "VHH" || assignment?.event?.allDay === true) return false;
+  const current = melbourneDateTime(now);
+  if (!current.date || contact.sourceDate !== current.date) return false;
+  const start = melbourneEventMinute(assignment?.event?.start);
+  const end = melbourneEventMinute(assignment?.event?.end);
+  const instant = `${current.date}T${String(current.hour).padStart(2, "0")}:${String(current.minute).padStart(2, "0")}`;
+  return Boolean(start && end && start < end && start <= instant && instant < end
+    && Date.parse(`${end}:00Z`) - Date.parse(`${start}:00Z`) <= 24 * 60 * 60 * 1000);
+}
+
+function melbourneEventMinute(value) {
+  const text = String(value || "");
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(text)) return "";
+  if (/(?:Z|[+-]\d{2}:?\d{2})$/.test(text)) {
+    const local = melbourneDateTime(new Date(text));
+    return local.date ? `${local.date}T${String(local.hour).padStart(2, "0")}:${String(local.minute).padStart(2, "0")}` : "";
+  }
+  return /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d(?:\.\d+)?)?$/.test(text) ? text.slice(0, 16) : "";
 }
 
 function contactSpecificity(contact) {

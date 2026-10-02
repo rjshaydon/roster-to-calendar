@@ -10630,7 +10630,7 @@ function facilityOverviewContactRefreshIsActive() {
     && facilityOverviewState.tab === "on-shift"
     && Array.isArray(facilityOverviewState.onShiftData)
     && Boolean(facilityOverviewState.contactAccessToken)
-    && ["MMC", "MCH", "DDH"].includes(String(facilityOverviewState.facilityKey || "").toUpperCase())
+    && ["MMC", "MCH", "DDH", "VHH"].includes(String(facilityOverviewState.facilityKey || "").toUpperCase())
     && !facilityOverviewState.contactResolutionSaving
     && !document.hidden;
 }
@@ -10659,6 +10659,12 @@ async function refreshFacilityOverviewContactList() {
     facilityOverviewState.date = operationalDate;
     await loadFacilityOverviewOnShift();
     return;
+  }
+  // VHH allocations expire at each person's rostered finish even when the
+  // workbook and contact revision remain unchanged or the refresh fails.
+  if (String(facilityOverviewState.facilityKey).toUpperCase() === "VHH") {
+    facilityOverviewState.content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData || []);
+    renderFacilityOverviewOnShiftPreservingViewport();
   }
   facilityOverviewContactRefreshInFlight = true;
   const requestId = facilityOverviewState.requestId;
@@ -11039,7 +11045,7 @@ function renderFacilityOverviewContactListStatus(matches, assignments = []) {
   const resolvedEditor = selectedContact && !selectedIsUnresolved
     ? `<div class="facility-overview-contact-resolution-editor">${renderFacilityOverviewContactResolutionMenu(selectedContact, assignments)}</div>`
     : "";
-  return `<div class="facility-overview-contact-status"><span>Live contact allocations for ${escapeHtml(contactList.sourceDate)}${freshness} · ${matches.matchedCount} matched</span>${review}${resolvedEditor}</div>`;
+  return `<div class="facility-overview-contact-status"><span>Live contact allocations for ${escapeHtml(contactList.sourceDate)}${freshness} · ${matches.matchedCount} matched</span>${contactList.sourceId === "vhh-shift-phone-allocations" ? "<p>Numbers are shown only for uniquely matched clinicians whose rostered shift is active. The contact sheet may contain older names.</p>" : ""}${review}${resolvedEditor}</div>`;
 }
 
 function collapseFacilityOverviewContactReview() {
@@ -11048,6 +11054,7 @@ function collapseFacilityOverviewContactReview() {
 }
 
 function renderFacilityOverviewContactReviewRow(contact, assignments, open) {
+  if (contact?.shift === "Current") return `<div class="facility-overview-contact-review-row"><span>${escapeHtml(contact.role)} · ${escapeHtml(contact.name)} · ${escapeHtml(contact.reviewReason || "No safe current roster match")}</span></div>`;
   const key = String(contact?.contactKey || "");
   const label = `${contact.shift} · ${contact.role}`;
   return `<div class="facility-overview-contact-review-row"><span>${escapeHtml(label)} · <button type="button" data-facility-overview-contact-resolution="${escapeHtml(key)}">${escapeHtml(contact.name)}</button>${contact.phone ? ` · <button type="button" data-facility-overview-contact-resolution="${escapeHtml(key)}">${escapeHtml(contact.phone)}</button>` : ""}${contact.reviewReason ? ` · ${escapeHtml(contact.reviewReason)}` : ""}</span>${open ? renderFacilityOverviewContactResolutionMenu(contact, assignments) : ""}</div>`;

@@ -66,3 +66,23 @@ assert.equal(r2.gets - readsBeforeRefreshes, visiblePageRefreshes * 3,
   "50 visible pages refreshing every minute for 12 hours should remain three bounded R2 reads per refresh");
 assert.equal(r2.puts, firstWrites + 1, "36,000 unchanged refreshes must not write storage");
 console.log("Shared contact publication passed: 36,000 unchanged refreshes used zero D1 reads and zero writes.");
+
+const vhhR2 = new LocalR2();
+const vhhExtract = { sourceId: "vhh-shift-phone-allocations", sourceDate,
+  doctors: [{ role: "SSU Dr", phone: "12018", name: "Alex" }] };
+await publishFacilityContactExtract(vhhR2, vhhExtract);
+const vhhCivilNoon = new Date(`${sourceDate}T01:00:00Z`);
+const vhhLoaded = await loadPublishedFacilityContacts(vhhR2, { date: sourceDate, facilityKeys: ["VHH"], now: vhhCivilNoon });
+assert.equal(vhhLoaded.status, "available");
+assert.equal(vhhLoaded.contacts[0].shift, "Current");
+const previousDay = new Date(`${sourceDate}T12:00:00Z`); previousDay.setUTCDate(previousDay.getUTCDate() - 1);
+const previousDate = previousDay.toISOString().slice(0, 10);
+const vhhNight = await loadPublishedFacilityContacts(vhhR2, { date: previousDate, facilityKeys: ["VHH"], now: new Date(`${previousDate}T16:00:00Z`) });
+assert.equal(vhhNight.contacts.length, 1, "current civil-date sheet is available to the prior day's continuing Night roster");
+assert.equal(vhhNight.contacts[0].sourceDate, sourceDate, "the contact retains its actual sheet date");
+const vhhFuture = await loadPublishedFacilityContacts(vhhR2, { date: sourceDate, facilityKeys: ["VHH"], now: new Date(`${previousDate}T01:00:00Z`) });
+assert.equal(vhhFuture.contacts.length, 0, "a future-dated contact sheet cannot establish a current holder");
+const vhhPutCount = vhhR2.puts;
+assert.equal((await publishFacilityContactExtract(vhhR2, vhhExtract)).unchanged, true);
+assert.equal(vhhR2.puts, vhhPutCount);
+console.log("VHH R2 reader and repeat-publication fixtures passed.");

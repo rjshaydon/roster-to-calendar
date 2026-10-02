@@ -269,3 +269,40 @@ Canonical Production commit `d6ad1ddf4252bc055868d972decfcc0b529f5ca8`, deployme
 The final empty-active-set publication test exposed an older compact filtering edge case: an empty active-file set previously admitted inactive contributions. Corrected staff filtering for explicitly supplied empty sets and catalog filtering for all bounded calls; empty-roster R2 publication passes. No live roster was removed or replaced for these tests.
 
 Read-only VHH review: existing flow `e8b16ab2-978a-44b1-b331-070f17504b14` remains Off, unchanged. Its 10 September 18:44 run successfully executed the Office Script; HTTP failed `NotFound`. The bounded result has schemaVersion 1, sourceId `vhh-shift-phone-allocations`, a CIC entry, and nine doctor handset rows (role/name/phone). It contains no source date and most rows have no period; consultant roles carry start times. Workbook and script identifiers agree with the retained flow. Before enabling Production, establish whether it represents current handset holders or whole-day allocations, add trustworthy source freshness/version metadata, and validate matching against VHH On shift. User clarification is pending. No VHH contact data has been sent to Production.
+
+## 2 October — VHH current handset restoration
+
+Morning account analytics remains low (8,468 reads / 688 writes through 10:58
+AEST; final 11:00 session minutes awaited telemetry settlement). Application
+changes add VHH to the existing doctors-only JSON ingress and R2 contact reader;
+no roster reconstruction, migrations or new D1 reader queries are introduced.
+
+VHH uses a single changing list, not AM/PM/Night contact blocks. Only named,
+validated clinical rows from Zebra Allocations are eligible. Their civil sheet
+date must be current and their uniquely matched VHH roster event must have
+explicit hours and be active now. Previous-date Night events can match after
+midnight until their actual end; blank, conflicting, ambiguous, off-shift and
+unknown-hour entries remain unassigned. Unmatched VHH entries do not expose a
+manual override that could bypass this check. Open views recompute VHH matches
+at every bounded contact refresh even if the JSON revision is unchanged.
+
+The existing Office Script reads C1:E80. Its original extraction was preserved
+and only sourceDate: cell(2, 3) was added to the return envelope. The application
+normalizes the formatted date. A replacement draft was discarded after editor
+accessibility output caused automatic save review to reject it; the minimal
+one-field edit was verified and saved successfully. No worksheet content was
+edited.
+
+Automatic architecture: replace the disabled VHH workbook-modified trigger
+with a five-minute recurrence, preserving the exact workbook/script and JSON
+HTTP action. This caps extraction/submission at 288 runs per day and avoids
+Excel reopening its own SharePoint change trigger. An unchanged submission uses
+one indexed deduplication lookup and writes zero D1 rows/R2 objects. Reader
+refreshes use only bounded R2 objects. HTTP retries must remain disabled. The
+existing flow remains disabled until Production and a fresh-source canary pass.
+
+Validation: VHH timed and ambiguous-match fixtures, cross-midnight/end boundary,
+UTC timestamps, stale/future sheet dates, duplicate phones, unknown hours,
+SQLite-backed VHH HTTP publication and zero-write replay, existing contact
+access/ingress safeguards, facility materialization, client request budgets and
+Worker compilation passed. Live flow/deployment verification pending.
