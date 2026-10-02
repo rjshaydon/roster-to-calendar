@@ -7,7 +7,7 @@ Prepared: 2 October 2026.
 
 The shared matcher now handles explicit alternate names (including `Thisun (Tea)`), longer-name misspellings and transpositions, shortened names, initials, reordered components, accents, and non-Latin names. Supplied surnames must agree; a contradictory surname cannot be discarded to obtain a first-name match. All sites use the same matcher, with existing site/shift and VHH active-event gates retained.
 
-Tentative allocations have an editable asterisk, original sheet name, explanation, confidence score, and confirm/reassign/return-to-review controls. Review entries show the leading alternatives. Conflicting duplicate names or handsets require contact-sheet correction; the save path rejects a selection that would remain unusable. Identity-scoped social-alias configuration exists but ships empty: unrelated social names cannot be learned from guesses.
+Tentative allocations have an editable asterisk, original sheet name, explanation, confidence score, and confirm/reassign/return-to-review controls. Review entries show the leading alternatives. Conflicting duplicate names or handsets require contact-sheet correction; the save path rejects a selection that would remain unusable. Identity-scoped social-alias configuration includes the owner-confirmed DDH Craig Jirayut → CRAIG PROMPEN mapping; unrelated social names cannot be learned from guesses.
 
 ### Shipped evidence table
 
@@ -19,6 +19,7 @@ Tentative allocations have an editable asterisk, original sheet name, explanatio
 | Approved identity-scoped alias | 98 | Yes |
 | Full-name components with spelling/alternate evidence | 96 | Yes |
 | Exact given name | 94 | No |
+| Exact given name when the roster omits remaining sheet components | 94 | Yes |
 | Inferred given name plus surname initial | 94 | Yes |
 | Existing recognized shortened given name | 92 | Yes |
 | Qualified prefix, internal component, or accepted single edit | 90 | Yes |
@@ -45,11 +46,17 @@ R2 publication merges per-contact revisions and uses conditional writes to preve
 
 ### Validation and limits
 
-`scripts/test-contact-name-matching.mjs` covers 14 positive name scenarios, contradictory surnames, short-name gates, ambiguity, shuffled inputs, duplicate events/handsets, competing guesses, browser/server evidence parity, active VHH expiry, correction controls, real local SQLite persistence, actual save-action execution, concurrent publication, injected failures, and query budgets. UI rendering uses the actual application functions; a local browser preview verified the asterisk explanation and confirm/reject/reset interactions.
+`scripts/test-contact-name-matching.mjs` covers 17 positive name scenarios, contradictory surnames, short-name gates, ambiguity, shuffled inputs, duplicate events/handsets, competing guesses, browser/server evidence parity, active VHH expiry, correction controls, real local SQLite persistence, actual save-action execution, concurrent publication, injected failures, and query budgets. UI rendering uses the actual application functions; a local browser preview verified the asterisk explanation and confirm/reject/reset interactions.
 
 Passing regression checks: syntax, existing contact allocations, contact sync, shared contact cache, contact access, facility access, restoration mutations, database costs, and client request budgets. The full fixture suite's pre-existing automation failure at line 922 remains outside this change.
 
 No representative held-out, clinician-confirmed contact dataset was available. The fixtures establish mechanics and safety boundaries; they do not establish real-world accuracy or the reduction in review volume. Unknown unrelated social names still require review unless explicitly supplied on the sheet or added to the identity-scoped alias configuration. The user subsequently authorized production publishing for live validation.
+
+### DDH live follow-up
+
+Owner feedback identified Craig Jirayut and Ollie as missed PM matches. Read-only inspection of existing published R2 snapshots (no D1 access) found the stored identities CRAIG PROMPEN and OLIVER DEANS. The former now has a DDH identity-scoped approved alias based on the owner's confirmation; the latter uses the recognized Ollie → Oliver nickname. Both are tentative and pass against the actual published roster/contact snapshot despite stream disagreement. An exact given-name-only roster can also match a fuller sheet name tentatively; supplied contradictory roster surnames remain protected.
+
+The DDH extract modified at 23:10:32 Melbourne on 2 October still contained Tony, Vanessa, D, Bronte, Trixie, Dennis, and Yash in Night rows. Five had name evidence on the 1 October night roster; none had name evidence on the 2 October night roster. These are stale sheet entries, not a reason to lower matching thresholds or attach yesterday's team to tonight's roster. Existing refresh and handover behaviour is unchanged; a whole-workbook modification time cannot establish that each night row was updated.
 
 ## Goal and boundaries
 

@@ -34,6 +34,9 @@ const positiveCases = [
   ['José Núñez', 'Jose NUNEZ', 'exact'],
   ['Anne-Marie O’Connor', 'Anne Marie OCONNOR', 'exact'],
   ['王 小明', '小明 王', 'reordered-name'],
+  ['Craig Jirayut', 'Craig', 'roster-given-name-only'],
+  ['Craig Jirayut', 'Craig PROMPEN', 'approved-identity-alias'],
+  ['Ollie', 'Oliver DEANS', 'alias'],
 ];
 for (const [contactName, rosterName, method] of positiveCases) {
   const result = match([staff(rosterName)], [sheet(contactName)]);
@@ -51,6 +54,13 @@ for (const [contactName, rosterName] of [['Alex SMITH', 'Alex JONES'], ['Ama', '
 }
 assert.equal(match([staff('Tea GUNASEN'), staff('Tea OTHER')], [sheet('Thisun (Tea)')]).matchedCount, 0);
 assert.equal(match([staff('Pat FINN'), staff('Patrick OTHER')], [sheet('Pat')]).matchedCount, 0);
+assert.equal(match([staff('Craig'), { ...staff('Craig'), person: { ...staff('Craig').person, doctorKey: 'SECOND CRAIG' } }], [sheet('Craig Jirayut')]).matchedCount, 0, 'a fuller sheet name cannot resolve two given-name-only roster identities');
+assert.equal(match([staff('Craig'), staff('Craig JIRAYUT')], [sheet('Craig Jirayut')]).matchedCount, 0, 'do not prefer a full-name candidate without enough separation from an incomplete roster identity');
+assert.equal(match([staff('Ollie JONES'), staff('Oliver DEANS')], [sheet('Ollie')]).matchedCount, 0, 'nickname expansion must not override an equally plausible given name');
+assert.equal(match([staff('Craig PROMPEN', 'MMC')], [sheet('Craig Jirayut', 'MMC')]).matchedCount, 0, 'confirmed social names apply only to their approved site and identity');
+assert.equal(match([staff('Craig JONES')], [sheet('Craig Jirayut')]).matchedCount, 0, 'the approved alias cannot bypass surname contradictions for another Craig');
+assert.equal(match([staff('Craig', 'DDH', 'Silver', 'HMO', 'PM')], [sheet('Craig Jirayut', 'DDH', '0478068178', 'Orange Dr 8', 'PM')]).matchedCount, 1, 'the reported DDH PM stream disagreement must not prevent the given-name-only match');
+assert.equal(match([staff('Oliver DEANS', 'DDH', 'Silver', 'HMO', 'PM')], [sheet('Ollie', 'DDH', '49916', 'Silver Dr 2', 'PM')]).matchedCount, 1);
 assert.equal(match([staff('Jacqueline MOREL'), staff('Jacquline OTHER')], [sheet('Jacquline')]).matchedCount, 0, 'a plausible competitor needs a clear margin');
 assert.equal(match([staff('Katherine SMITHSON'), staff('Katharine JONES')], [sheet('Kathrine')]).matchedCount, 0, 'two plausible spelling candidates must remain for review');
 assert.equal(match([staff('Tea GUNASEN', 'DDH')], [sheet('Thisun (Tea)', 'MMC')]).matchedCount, 0);

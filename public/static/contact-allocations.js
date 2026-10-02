@@ -26,6 +26,7 @@ const NAME_ALIASES = new Map([
   ["steve", new Set(["steve", "stephen"])],
   ["stephen", new Set(["steve", "stephen"])],
   ["yiran", new Set(["ian", "yiran"])],
+  ["ollie", new Set(["oliver"])],
 ]);
 
 export function normaliseContactListExtract(payload) {
@@ -169,7 +170,10 @@ export const CONTACT_MATCH_POLICY = Object.freeze({ minimumNameScore: 88, minimu
 
 // Approved social names belong to a specific roster identity, not to everybody
 // sharing a given name. Add entries only after a clinician's identity is confirmed.
-export const APPROVED_CONTACT_NAME_ALIASES = Object.freeze([]);
+export const APPROVED_CONTACT_NAME_ALIASES = Object.freeze([
+  // Confirmed by the roster owner: DDH's Craig Jirayut is rostered as Craig PROMPEN.
+  { sourceType: "ddh", doctorKey: "CRAIG PROMPEN", names: ["Craig Jirayut"] },
+]);
 
 // Keep an acknowledged local decision while its shared publication is pending.
 // A refresh may acknowledge it or replace it with a newer revision, but cannot
@@ -527,6 +531,12 @@ function tokenMatch(contact, roster) {
   const evidence = (method, score, uncertain, reason) => ({ method, score, uncertain, reason });
   if (contact.join(" ") === roster.join(" ")) return evidence("exact", 100, false, "Full name agrees");
   if (contact.length === roster.length && [...contact].sort().join(" ") === [...roster].sort().join(" ")) return evidence("reordered-name", 99, false, "Full name components agree in a different order");
+  // Some rosters supply only a given name. Additional sheet components cannot
+  // contradict a surname that is absent, but the identity is still inferred.
+  // Only an exact given name qualifies; normal ambiguity/competition gates apply.
+  if (roster.length === 1 && contact.length > 1 && contact[0] === roster[0]) {
+    return evidence("roster-given-name-only", 94, true, "Given name agrees; roster omits the remaining name components");
+  }
   if (contact.length === 1) {
     if (contact[0] === roster[0]) return evidence("first-name", 94, false, "Given name agrees");
     if (namesMatch(contact[0], roster[0]) === "alias") return evidence("alias", 92, true, "Recognized shortened given name");
