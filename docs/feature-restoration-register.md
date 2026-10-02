@@ -67,6 +67,8 @@ contents are verified only through bounded read paths.
 - **Containment required** — an unsafe path has been identified and must be
   locally remediated before further rollout; this does not claim it caused a
   specific unattributed incident.
+- **Planned new feature** — requested future functionality, recorded alongside
+  restoration work but not previously available and not yet implemented.
 
 ## Configuration control index
 
@@ -798,3 +800,24 @@ and release configuration, not proof that an unpublished future roster arrived.
 
 See [bounded-roster-import-checkpoint.md](./bounded-roster-import-checkpoint.md)
 for limits, checks, migrations, external flow readback and rollback controls.
+
+### FR-30 — On-call and non-rostered contact-sheet details
+
+**State: Planned new feature.** Requested during all-site contact matching
+validation on 2 October 2026. This is an addition to the restoration backlog,
+not a claim that the capability existed before the D1 incidents.
+
+Preserve useful entries such as MMC Night ADULT SMS ON CALL / Tara K /
+"Call Switch - 92" and eventually show them as clearly labelled on-call or
+service contact details, including clinicians absent from the on-shift roster.
+Retain switchboard instructions as written; do not treat them as an ordinary
+numeric handset or imply that an on-call clinician is physically on shift.
+The existing review detail remains visible until this feature is revisited.
+
+Acceptance: distinguish on-call contacts from rostered shift allocations;
+preserve period, role, supplied name and call instructions; allow unresolved
+identity without inventing a match; retain expiry and access restrictions;
+exclude blank/placeholder rows. Reuse existing published contact payloads and
+browser matching data with zero extra automatic D1 reads/writes or polling.
+Any additional directory lookup or persistence design needs a separate bounded
+cost review. Implementation is deferred at the user's request.

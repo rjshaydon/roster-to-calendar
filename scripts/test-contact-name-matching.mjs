@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import { DatabaseSync } from 'node:sqlite';
-import { attachContactAllocations, contactAllocationCandidates, contactRosterAssignments, mergeContactResolutionRefresh, assignmentMatchesContactContext, validateContactResolutionSelection } from '../public/static/contact-allocations.js';
+import { attachContactAllocations, contactAllocationCandidates, contactRosterAssignments, mergeContactResolutionRefresh, assignmentMatchesContactContext, validateContactResolutionSelection, normaliseContactListExtract } from '../public/static/contact-allocations.js';
 import { queryContactAllocationResolutions, saveContactAllocationResolution } from '../functions/_lib/d1-calendar.js';
 import { loadPublishedFacilityContacts, publishFacilityContactExtract, publishFacilityContactResolutions } from '../functions/_lib/facility-contact-cache.js';
 
@@ -37,6 +37,8 @@ const positiveCases = [
   ['Craig Jirayut', 'Craig', 'roster-given-name-only'],
   ['Craig Jirayut', 'Craig PROMPEN', 'approved-identity-alias'],
   ['Ollie', 'Oliver DEANS', 'alias'],
+  ['Meg', 'Megha PHILIP', 'alias'],
+  ['Ben', 'Benjamin BRENNAN DOYLE', 'alias'],
 ];
 for (const [contactName, rosterName, method] of positiveCases) {
   const result = match([staff(rosterName)], [sheet(contactName)]);
@@ -57,6 +59,34 @@ assert.equal(match([staff('Pat FINN'), staff('Patrick OTHER')], [sheet('Pat')]).
 assert.equal(match([staff('Craig'), { ...staff('Craig'), person: { ...staff('Craig').person, doctorKey: 'SECOND CRAIG' } }], [sheet('Craig Jirayut')]).matchedCount, 0, 'a fuller sheet name cannot resolve two given-name-only roster identities');
 assert.equal(match([staff('Craig'), staff('Craig JIRAYUT')], [sheet('Craig Jirayut')]).matchedCount, 0, 'do not prefer a full-name candidate without enough separation from an incomplete roster identity');
 assert.equal(match([staff('Ollie JONES'), staff('Oliver DEANS')], [sheet('Ollie')]).matchedCount, 0, 'nickname expansion must not override an equally plausible given name');
+assert.equal(match([staff('Megha PHILIP'), staff('Megan JONES')], [sheet('Meg')]).matchedCount, 0, 'Meg must remain ambiguous when another plausible expansion is rostered');
+assert.equal(match([staff('Benjamin DOYLE'), staff('Benedict JONES')], [sheet('Ben')]).matchedCount, 0);
+const arnavRows = [sheet('Arnav - 25192', 'MMC', '25192', 'SEPSIS DR - MUST CARRY 25141', 'PM'), sheet('Arnav', 'MMC', '25192', 'Dr', 'PM')];
+const arnavStaff = [staff('Arnav MEHTA', 'MMC', 'Sepsis', 'HMO', 'PM')];
+const arnavResult = match(arnavStaff, arnavRows);
+assert.equal(arnavResult.matchedCount, 1, 'identical handset/name repetitions are one allocation, not a conflict');
+assert.equal(arnavResult.unmatched.length, 0);
+assert.equal(arnavResult.assignments[0].contactAllocation.phone, '25192', 'do not replace the actual phone with the role instructions');
+assert.equal(arnavResult.assignments[0].contactAllocation.uncertain, true);
+assert.deepEqual(fingerprintForRows(arnavResult), fingerprintForRows(match(arnavStaff, [...arnavRows].reverse())));
+function fingerprintForRows(result) { return result.assignments.map(a => [a.person.doctorKey, a.contactAllocation?.phone, a.contactAllocation?.contactKey]); }
+const duplicateReject = { contactKey: arnavRows[1].contactKey, active: false, decision: 'rejected', revision: 1 };
+assert.equal(match(arnavStaff, arnavRows, [duplicateReject]).matchedCount, 0, 'rejecting either duplicate must not resurrect through the other row');
+const duplicateConfirmation = { ...duplicateReject, active: true, decision: 'assigned', doctorKey: 'ARNAV MEHTA', sourceType: 'mmc' };
+assert.equal(match(arnavStaff, arnavRows, [duplicateConfirmation]).assignments[0].contactAllocation.matchMethod, 'manual');
+assert.equal(match(arnavStaff, arnavRows, [duplicateConfirmation]).unmatched.length, 0);
+assert.equal(validateContactResolutionSelection(arnavStaff, arnavRows, [], { contact: arnavRows[0], doctorKey: 'ARNAV MEHTA', now }).error, undefined, 'repeated rows remain editable');
+const incompatibleConfirmation = { ...duplicateConfirmation, contactKey: arnavRows[0].contactKey, doctorKey: 'OTHER CLINICIAN' };
+assert.equal(match(arnavStaff, arnavRows, [duplicateConfirmation, incompatibleConfirmation]).matchedCount, 0, 'coalescing cannot conceal conflicting human choices');
+assert.equal(match(arnavStaff, [arnavRows[0], { ...arnavRows[1], name: 'Alex', contactKey: 'different-name' }]).matchedCount, 0, 'different names sharing a phone remain a conflict');
+assert.equal(match(arnavStaff, [arnavRows[1], sheet('Arnav', 'MMC', '25193', 'Dr 2', 'PM')]).matchedCount, 0, 'same names with different handsets remain a conflict');
+assert.equal(match(arnavStaff, [sheet('Arnav - 25193', 'MMC', '25192', 'Dr', 'PM')]).matchedCount, 0, 'strip an embedded phone only when it agrees with the actual handset');
+const blankRows = Array.from({ length: 9 }, (_, index) => ({ ...sheet('*', 'MMC', '*', 'Dr', 'Night'), contactKey: `blank-${index}` }));
+assert.equal(match([], blankRows).unmatched.length, 0, 'punctuation-only placeholder rows are empty allocations');
+const normalizedBlanks = normaliseContactListExtract({ sourceId: 'mmc-shift-allocations', sourceDate: '2026-10-02', contacts: blankRows });
+assert(normalizedBlanks.contacts.every(c => !c.isPopulated));
+assert.equal(match([], normalizedBlanks.contacts).unmatched.length, 0);
+assert.equal(match([], [sheet('Tara K', 'MMC', 'Call Switch - 92', 'ADULT SMS ON CALL', 'Night')]).unmatched.length, 1, 'keep the requested on-call detail visible');
 assert.equal(match([staff('Craig PROMPEN', 'MMC')], [sheet('Craig Jirayut', 'MMC')]).matchedCount, 0, 'confirmed social names apply only to their approved site and identity');
 assert.equal(match([staff('Craig JONES')], [sheet('Craig Jirayut')]).matchedCount, 0, 'the approved alias cannot bypass surname contradictions for another Craig');
 assert.equal(match([staff('Craig', 'DDH', 'Silver', 'HMO', 'PM')], [sheet('Craig Jirayut', 'DDH', '0478068178', 'Orange Dr 8', 'PM')]).matchedCount, 1, 'the reported DDH PM stream disagreement must not prevent the given-name-only match');

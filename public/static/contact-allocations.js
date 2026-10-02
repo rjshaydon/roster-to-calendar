@@ -27,6 +27,8 @@ const NAME_ALIASES = new Map([
   ["stephen", new Set(["steve", "stephen"])],
   ["yiran", new Set(["ian", "yiran"])],
   ["ollie", new Set(["oliver"])],
+  ["meg", new Set(["megha", "megan", "meghan", "margaret"])],
+  ["ben", new Set(["benjamin", "benedict", "bennett"])],
 ]);
 
 export function normaliseContactListExtract(payload) {
@@ -51,7 +53,7 @@ export function normaliseContactListExtract(payload) {
       name,
       phone: String(entry?.phone || "").trim(),
       // A fixed phone left in an empty row must not be treated as an allocation.
-      isPopulated: Boolean(entry?.isPopulated) && Boolean(name),
+      isPopulated: Boolean(entry?.isPopulated) && /\p{L}/u.test(name),
     };
   }).filter((entry) => !isTemporarilyExcludedContactRole(sourceId, entry));
   if (contacts.some((entry) => !validAreas.has(entry.area)
@@ -239,20 +241,22 @@ export function contactAllocationCandidates(assignments = [], contact, { now = n
     group.assignments.push(assignment); group.indexes.push(index); groups.set(identity, group);
   });
   return [...groups.values()].map((group) => {
-    const evidence = personMatch(contact.name, group.displayName, group);
+    const matchingName = contactMatchName(contact);
+    const evidence = personMatch(matchingName, group.displayName, group);
+    const annotated = matchingName !== String(contact.name || "").trim();
     const streamAligned = Boolean(contactStreamKey(contact.role)) && group.assignments.some((assignment) => contactStreamKey(contact.role) === assignmentStreamKey(assignment));
     const gradeAligned = group.assignments.some((assignment) => contactGradeAligned(contact.role, assignment.event?.seniority || assignment.person?.seniority));
     return { ...group, method: evidence?.method || "", nameScore: evidence?.score || 0,
       score: evidence ? Math.min(100, evidence.score + (streamAligned ? 3 : 0) + (gradeAligned ? 2 : 0)) : 0,
-      uncertain: evidence?.uncertain === true, streamAligned,
-      reasons: evidence ? [evidence.reason, ...(streamAligned ? ["Roster stream agrees"] : []), ...(gradeAligned ? ["Roster grade agrees"] : [])] : [],
+      uncertain: evidence?.uncertain === true || Boolean(evidence && (annotated || contact.repeatedSheetRows)), streamAligned,
+      reasons: evidence ? [evidence.reason, ...(annotated ? ["Repeated handset annotation removed from the name"] : []), ...(contact.repeatedSheetRows ? ["Repeated sheet rows agree on this name and handset"] : []), ...(streamAligned ? ["Roster stream agrees"] : []), ...(gradeAligned ? ["Roster grade agrees"] : [])] : [],
     };
   }).sort((left, right) => right.score - left.score || left.identity.localeCompare(right.identity));
 }
 
 export function attachContactAllocations(assignments = [], contacts = [], resolutions = [], { now = new Date() } = {}) {
-  const available = (contacts || []).filter((contact) => (contact?.isPopulated && contact.name) || isRoleOnlyServiceContact(contact))
-    .map((contact, index) => ({ ...contact, contactKey: String(contact.contactKey || contactResolutionKey("legacy", "", contact, index)) }));
+  const available = coalesceRepeatedContactRows((contacts || []).filter((contact) => (contact?.isPopulated && /\p{L}/u.test(contact.name || "")) || isRoleOnlyServiceContact(contact))
+    .map((contact, index) => ({ ...contact, contactKey: String(contact.contactKey || contactResolutionKey("legacy", "", contact, index)) })), resolutions);
   // Never retain an allocation from a previous matching pass.
   const enriched = assignments.map(({ contactAllocation, ...assignment }) => ({ ...assignment }));
   const candidates = new Map(available.map((contact) => [contact.contactKey, contactAllocationCandidates(enriched, contact, { now })]));
@@ -352,6 +356,40 @@ export function attachContactAllocations(assignments = [], contacts = [], resolu
           : eligible.length > 1 ? "Ambiguous name" : ranked.some(hasTarget) ? "Clinician already has a contact allocation" : "No safe name match"),
           candidates: ranked.slice(0, 3).map(({ doctorKey, sourceType, displayName, score, reasons }) => ({ doctorKey, sourceType, displayName, score, reasons })) };
       }), serviceContacts };
+}
+
+function contactMatchName(contact) {
+  const raw = String(contact?.name || "").trim();
+  const annotation = raw.match(/^(.*?)\s*(?:[-–—:,]\s*|\s+)([\d\s()+-]{3,})$/u);
+  const digits = String(contact?.phone || "").replace(/\D/g, "");
+  return annotation && digits.length >= 3 && annotation[2].replace(/\D/g, "") === digits
+    ? annotation[1].trim() : raw;
+}
+
+function coalesceRepeatedContactRows(contacts, resolutions) {
+  const groups = new Map();
+  for (const contact of contacts) {
+    const digits = String(contact.phone || "").replace(/\D/g, "");
+    const name = simplify(contactMatchName(contact));
+    const key = digits.length >= 3 && /\p{L}/u.test(name)
+      ? JSON.stringify([contact.area, contact.shift, digits, name]) : contact.contactKey;
+    const group = groups.get(key) || [];
+    group.push(contact); groups.set(key, group);
+  }
+  return [...groups.values()].flatMap((group) => {
+    if (group.length === 1 || group[0].shift === "Current") return group;
+    const decisions = resolutions.filter((resolution) => group.some((contact) => contact.contactKey === resolution.contactKey)
+      && (resolution.decision === "rejected" || (resolution.active !== false && resolution.doctorKey)));
+    const choices = new Set(decisions.map((resolution) => resolution.decision === "rejected" ? "rejected" : resolution.doctorKey));
+    // Conflicting human choices still require review. Agreeing decisions retain
+    // their original key; rejecting either repetition suppresses the whole group.
+    if (choices.size > 1) return group;
+    const decidedKeys = new Set(decisions.map((resolution) => resolution.contactKey));
+    const ordered = [...group].sort((left, right) => Number(decidedKeys.has(right.contactKey)) - Number(decidedKeys.has(left.contactKey))
+      || Number(/^dr(?:\s*\d+)?$/i.test(left.role)) - Number(/^dr(?:\s*\d+)?$/i.test(right.role))
+      || left.contactKey.localeCompare(right.contactKey));
+    return [{ ...ordered[0], repeatedSheetRows: group.length }];
+  });
 }
 
 function contactKeyBase(sourceId, sourceDate, contact) {

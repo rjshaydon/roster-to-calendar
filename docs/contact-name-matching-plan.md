@@ -46,7 +46,7 @@ R2 publication merges per-contact revisions and uses conditional writes to preve
 
 ### Validation and limits
 
-`scripts/test-contact-name-matching.mjs` covers 17 positive name scenarios, contradictory surnames, short-name gates, ambiguity, shuffled inputs, duplicate events/handsets, competing guesses, browser/server evidence parity, active VHH expiry, correction controls, real local SQLite persistence, actual save-action execution, concurrent publication, injected failures, and query budgets. UI rendering uses the actual application functions; a local browser preview verified the asterisk explanation and confirm/reject/reset interactions.
+`scripts/test-contact-name-matching.mjs` covers 19 positive name scenarios, contradictory surnames, short-name gates, ambiguity, shuffled inputs, duplicate events/handsets, competing guesses, browser/server evidence parity, active VHH expiry, correction controls, real local SQLite persistence, actual save-action execution, concurrent publication, injected failures, and query budgets. UI rendering uses the actual application functions; a local browser preview verified the asterisk explanation and confirm/reject/reset interactions.
 
 Passing regression checks: syntax, existing contact allocations, contact sync, shared contact cache, contact access, facility access, restoration mutations, database costs, and client request budgets. The full fixture suite's pre-existing automation failure at line 922 remains outside this change.
 
@@ -57,6 +57,30 @@ No representative held-out, clinician-confirmed contact dataset was available. T
 Owner feedback identified Craig Jirayut and Ollie as missed PM matches. Read-only inspection of existing published R2 snapshots (no D1 access) found the stored identities CRAIG PROMPEN and OLIVER DEANS. The former now has a DDH identity-scoped approved alias based on the owner's confirmation; the latter uses the recognized Ollie → Oliver nickname. Both are tentative and pass against the actual published roster/contact snapshot despite stream disagreement. An exact given-name-only roster can also match a fuller sheet name tentatively; supplied contradictory roster surnames remain protected.
 
 The DDH extract modified at 23:10:32 Melbourne on 2 October still contained Tony, Vanessa, D, Bronte, Trixie, Dennis, and Yash in Night rows. Five had name evidence on the 1 October night roster; none had name evidence on the 2 October night roster. These are stale sheet entries, not a reason to lower matching thresholds or attach yesterday's team to tonight's roster. Existing refresh and handover behaviour is unchanged; a whole-workbook modification time cannot establish that each night row was updated.
+
+### MMC live follow-up
+
+Read-only R2 validation reproduced redundant PM Arnav entries with handset 25192,
+Meg versus MEGHA PHILIP, Ben versus BENJAMIN BRENNAN DOYLE, and nine punctuation-only
+Night placeholders. An embedded trailing phone annotation is ignored only when
+its digits exactly agree with the row's handset. Same-site/same-period rows with
+the same comparison name and handset are coalesced into one tentative allocation;
+distinct names or handsets remain conflicts. Existing agreeing confirmations or
+rejections retain their original contact key; rejecting either repetition
+suppresses the whole group, and conflicting human decisions remain for review.
+VHH's strict Current-row conflict handling is unchanged.
+
+Recognized Meg expansions include Megha, Megan, Meghan, and Margaret; Ben includes
+Benjamin, Benedict, and Bennett. These still require the normal confidence lead,
+so two plausible expansions remain unresolved. Punctuation-only names are empty
+in both extract normalization and direct matching. Actual published MMC data now
+matches all three reported clinicians and produces zero placeholder review rows.
+All processing remains in memory with no added automatic D1 or network calls.
+
+The Tara K / "Call Switch - 92" review detail remains visible. Its eventual
+on-call/non-rostered contact display is recorded as a **planned new feature** in
+[FR-30](./feature-restoration-register.md#fr-30--on-call-and-non-rostered-contact-sheet-details),
+with implementation deferred as requested.
 
 ## Goal and boundaries
 
