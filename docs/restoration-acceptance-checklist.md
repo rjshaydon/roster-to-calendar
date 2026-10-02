@@ -16,10 +16,10 @@ Use ordinary app actions; do not edit clinical rosters merely to create test dat
 | Manual imports/replacement/removal | Actual SQLite interruption, rollback, no-op, concurrency and future-term-preservation tests pass; feature gates deployed | Use the next genuinely needed manual change; avoid replacing automated clinical terms merely to test |
 | Session settings | Single-record optimistic patch tests and previous unchanged live save pass | Change a harmless display preference and verify on a second device, then restore it |
 | Subscriptions | SQLite ICS tests prove immediate active replacement, inactive exclusion, indexed queries and zero writes | Confirm next real change in a subscribed calendar after its client refresh interval |
-| Automatic current rosters | MMC/MCH changed deliveries and R2 publication succeeded; VHH real automatic import succeeded; DDH prior import succeeded | Complete the single maintenance verification and review the next unattended source change |
+| Automatic current rosters | MMC/MCH changed deliveries and R2 publication succeeded; VHH real automatic import succeeded; DDH prior import succeeded | All-site maintenance and MMC latest-provider recovery succeeded; review the next unattended source change |
 | Upcoming terms | VHH current/next objects verified with 19 October visibility; all-source full-term staging tests pass | Verify real MMC/MCH/DDH upcoming-term deliveries when providers publish them |
 | D1 safety | Account-wide admission, atomic reservations, bounded batches and unchanged-input no-ops deployed; latest checker GO | Settled post-release account sample and ordinary-use observation |
-| Deployment hygiene | Complete inventory and exact cleanup list prepared | Explicit approval required for deleting 102 superseded deployments; preserve current and verified rollback |
+| Deployment hygiene | Complete inventory and exact cleanup list prepared | Explicit approval required for deleting 103 superseded deployments after the follow-up release; preserve current and verified rollback |
 
 The bulk restoration code is deployed. Authenticated live checks need the Mac
 unlocked. Provider publication and subscribed-client refresh are external

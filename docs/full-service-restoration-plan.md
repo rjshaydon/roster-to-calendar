@@ -1,13 +1,18 @@
 ## Current batch — 2 October bounded identity and delivery restoration
 
-Production `239d215a`, deployment `fe6de1d2-c0b6-4a8b-85de-65664bac46db`,
+Production `6513315a`, deployment `bd4924c6-05e6-4299-bc40-929ec8535954`,
 restores bounded automatic name suggestions, explicit confirmed linking and
 Creator directory grades using visible R2 term staff data. It also fixes the
 JSON transport hash mismatch blocking real MMC/MCH imports and restores the
 bounded diff path for small same-term automatic corrections. Global repair,
 history discovery, Creator startup fan-out and snapshot builders remain closed.
 
-Remaining verification: finish the queued MMC/MCH deliveries, authenticated
+MMC/MCH deliveries and all-site continuation completed. A stale-provider ordering
+defect found during verification is fixed; MMC version 398 was recovered at
+05:55 UTC. Read-only provider comparisons confirm the latest checked revisions
+for the other three sites.
+
+Remaining verification: authenticated
 identity UI, calendar/subscription freshness and consolidated user acceptance;
 check settled account-wide usage and remove superseded deployments. Real
 MMC/MCH/DDH future terms remain dependent on provider publication. VHH completed

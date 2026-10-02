@@ -15,8 +15,8 @@ the history remains auditable.
 
 ## Current release — 2 October 2026
 
-Production commit `239d215a` is canonical in deployment
-`fe6de1d2-c0b6-4a8b-85de-65664bac46db` (verified 05:19 UTC). Account-wide
+Production commit `6513315a` is canonical in deployment
+`bd4924c6-05e6-4299-bc40-929ec8535954` (verified 05:52 UTC). Account-wide
 analytics admission and its credential remain enabled; Preview remains closed.
 The [bounded restoration checkpoint](./bounded-roster-import-checkpoint.md)
 contains implementation, regression and operational evidence. The
@@ -34,9 +34,11 @@ name suggestions and explicit atomic account linking using published term data.
 No ordinary login repairs accounts or acquires claims automatically.
 
 Outstanding acceptance: authenticated live identity UI (Mac currently locked),
-MMC/MCH queued delivery retries, real future-term delivery for MMC/MCH/DDH when
+real future-term delivery for MMC/MCH/DDH when
 providers publish it, a consolidated user journey including calendar subscriptions,
-settled post-release usage and retained-deployment cleanup. VHH completed a real
+settled post-recovery usage and retained-deployment cleanup. MMC/MCH retries
+and all-site maintenance succeeded; MMC stale-provider recovery completed at
+05:55 UTC, with version 398 and its exact timestamp verified. VHH completed a real
 SharePoint-triggered import at 04:13 UTC. Advanced global repair/bootstrap,
 Creator startup fan-out and automatic global snapshot builders remain closed;
 these mechanisms are not required for ordinary restored functionality. Durable

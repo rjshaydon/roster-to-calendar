@@ -579,3 +579,48 @@ using guarded exact-row recovery and verify its import/publication and provider
 last_modified. No synthetic Production workbook or broader roster repair. D1
 sample at 05:35 UTC was GO, 74,792 reads / 17,026 writes through 05:20 UTC;
 additional credits remain unchanged, five-hour allowance approximately 49%.
+
+
+### Ordering protection deployed and MMC latest revision recovered
+
+Production `6513315a1591cf5e9ce73be46de4f74afc68c525` is canonical in
+`bd4924c6-05e6-4299-bc40-929ec8535954`, deploy success 05:52 UTC. All restored
+feature controls and account admission remain enabled; global builders and legacy
+mutations remain closed. Fresh guard admission has no stop reason. The standalone
+short-interval checker at 05:51 projected the recent maintenance burst as ordinary
+traffic and returned STOP despite measured totals 161,154 reads / 18,866 writes.
+The deployed admission reconciles those maintenance receipts; at recovery it
+allowed allocations 268,935 reads / 20,776 writes against its admitted maxima.
+No costly recovery bypassed the account guard.
+
+Exact guarded recovery requeued only the real retained version-398 run with its
+hash/timestamp and no newer delivery. Control update cost 743 reads / four
+indexed writes. Workflow `36971041074` succeeded: 153 doctors / 4,167 shifts,
+completed 05:55:02 UTC. Final PK readbacks cost two reads, zero writes: active
+MMC file last_modified is 1790900725000, exactly version 398; run status success.
+All-site latest-two-run and active-file verification cost 34 reads, zero writes;
+MCH, DDH and VHH active timestamps match their latest checked provider revisions.
+Obsolete queued versions are excluded from queue polling and dispatch. No
+historical/whole-term reimport was used for this recovery.
+
+Updated control-plane inventory: 105 Production deployments, zero Preview.
+Concrete revised cleanup list contains 103 deletions and retains this current
+release plus verified rollback `fe6de1d2-c0b6-4a8b-85de-65664bac46db`.
+No deletion occurred. The earlier 102-deletion request was rejected by automatic
+approval review; explicit approval is needed for the updated scope. The Mac
+remains locked. Authenticated identity acceptance and cleanup are pending;
+Medium implementation is complete again and remaining work is suitable for Low.
+Latest five-hour allowance 42% remaining, additional credits unchanged at
+182.1872700000. Untracked user work has not been modified.
+
+
+Final post-burst assessment at 06:01:50 UTC returned GO with no reasons:
+162,287 reads / 18,866 writes through 05:46:50 UTC; projections 276,340 reads /
+18,866 writes. The settled window does not yet include the 05:55 recovery;
+its live reconciled admission and indexed completion proof are recorded above.
+One exact R2 read verifies MMC's recovery publication at 05:55:27 UTC, 91 current
+term dates. No further import/maintenance job was dispatched. Final five-hour
+allowance 40% remaining, credits 182.1872700000 unchanged. Remaining work needs
+Mac unlock, effort setting change to Low, user functional acceptance and explicit
+approval for the prepared 103-deployment cleanup. Final records are committed
+locally without creating another documentation-only Production deployment.
