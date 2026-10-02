@@ -1003,7 +1003,7 @@ export async function replaceDerivedRosterFile(db, file, doctors, eventsByDoctor
   statements.push(...bulkInsertFileDoctorStatements(db, file.id, sourceType, changedDoctors));
   statements.push(...bulkInsertEventStatements(db, changedEventRows));
   statements.push(...bulkInsertIssueStatements(db, changedIssueRows));
-  await runTransactionalBatch(db, statements);
+  await runTransactionalBatch(db, [...(options.deliveryGuard ? [options.deliveryGuard()] : []), ...statements]);
   await recordFacilitySmsMembershipsForRosterFile(db, file.id);
   if (options.deferDailyPresence !== true && changedEventRows.length) {
     const changedIds = new Set(changedEventRows.map((row) => row[0]));
@@ -3211,7 +3211,7 @@ export async function listQueuedRosterSyncRuns(db, sourceId, limit = 1) {
         INNER JOIN raw_roster_files AS newer_file ON newer_file.file_id = COALESCE(NULLIF(newer_run.source_file_id, ''), newer_run.file_id)
         WHERE newer_run.source_id = roster_sync_runs.source_id
           AND LOWER(newer_file.name) = LOWER(raw_roster_files.name)
-          AND newer_run.status IN ('queued', 'processing')
+          AND newer_run.status IN ('queued', 'processing', 'success')
           AND (
             newer_run.started_at > roster_sync_runs.started_at
             OR (newer_run.started_at = roster_sync_runs.started_at AND newer_run.id > roster_sync_runs.id)
@@ -3264,8 +3264,7 @@ export async function claimRosterDispatch(db, { sourceId = "", reason = "", retr
   const normalizedSourceId = String(sourceId || "").trim();
   if (!db?.prepare || !normalizedSourceId) return { claimed: false, reason: "missing-input" };
   await ensureCalendarSchema(db);
-  const pending = await db.prepare("SELECT id FROM roster_sync_runs WHERE source_id = ? AND status IN ('queued', 'processing') LIMIT 1")
-    .bind(normalizedSourceId).first();
+  const pending = (await listQueuedRosterSyncRuns(db, normalizedSourceId, 1))[0];
   if (!pending?.id) return { claimed: false, reason: "queue-empty" };
   const active = await db.prepare(`
     SELECT * FROM roster_dispatches

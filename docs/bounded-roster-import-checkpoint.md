@@ -550,3 +550,32 @@ execution because the exact mass-deletion scope needs explicit user approval;
 no deployments deleted. Approval requested. Safari authenticated verification
 remains blocked by the locked Mac. Medium implementation is complete; user has
 been advised that remaining verification/cleanup is suitable for Low.
+
+
+#### Provider revision ordering defect found during final continuation
+
+All-site maintenance `36969058680` completed successfully and imported DDH's
+changed source (149 doctors / 3,650 shifts). However, exact MMC latest-four-run
+readback found version 398 imported at 05:20, then queued version 397 at 05:28
+and 396 at 05:35. Counts agree but content hashes differ. Queue selection only
+excluded newer queued/processing entries, not newer successful ones; successful
+completion had remapped file_id but retained immutable source_file_id correctly.
+This is a confirmed same-term stale-overwrite path, distinct from term retention.
+
+The follow-up batch excludes newer successful deliveries during polling and
+source dispatch. Every automatic mutation checks at most 65 recent source runs
+and 32 active source files, comparing immutable raw-file provider timestamps for
+the same filename. Late older arrivals are skipped; other named term workbooks
+remain independent. Unprovable old work fails closed without a history scan.
+Exact callbacks mark obsolete work superseded under budget admission. Atomic
+assertions repeat the ordering check before small correction writes and staged
+activation, rolling back if a successor arrived after preflight. Local SQLite
+coverage includes 100,001 historical runs, late arrival, different term names,
+no obsolete dispatch, unchanged active facts, callback skip and transactional
+races. Wire, source-isolation, queue-failure and mutation/subscription tests pass.
+
+Deploy this correction, then requeue only the retained real MMC version 398
+using guarded exact-row recovery and verify its import/publication and provider
+last_modified. No synthetic Production workbook or broader roster repair. D1
+sample at 05:35 UTC was GO, 74,792 reads / 17,026 writes through 05:20 UTC;
+additional credits remain unchanged, five-hour allowance approximately 49%.

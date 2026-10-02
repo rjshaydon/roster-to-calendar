@@ -131,9 +131,9 @@ const queueStatement = scopedStatements.find((statement) => statement.sql.includ
 assert.match(queueStatement.sql, /WHERE roster_sync_runs\.source_id = \?/);
 assert.deepEqual(queueStatement.args, ["monash-adults", 1], "queue SQL must bind the exact source before its limit");
 await claimRosterDispatch(scopedDb, { sourceId: "monash-adults", reason: "test", now: "2026-09-13T00:00:00Z", retryAfter: "2026-09-13T00:02:00Z" });
-const pendingStatement = scopedStatements.find((statement) => statement.sql.startsWith("SELECT id FROM roster_sync_runs"));
-assert.match(pendingStatement.sql, /WHERE source_id = \?/);
-assert.deepEqual(pendingStatement.args, ["monash-adults"], "dispatch claim must bind the exact source");
+const pendingStatement = scopedStatements.filter((statement) => statement.sql.includes("raw_roster_files.name AS file_name")).at(-1);
+assert.match(pendingStatement.sql, /WHERE roster_sync_runs\.source_id = \?/);
+assert.deepEqual(pendingStatement.args, ["monash-adults", 1], "dispatch claim must bind the exact source and bounded limit");
 
 const workflowSource = await readFile(new URL("../.github/workflows/monash-roster-sync.yml", import.meta.url), "utf8");
 const processorSource = await readFile(new URL("./process-roster-queue.mjs", import.meta.url), "utf8");

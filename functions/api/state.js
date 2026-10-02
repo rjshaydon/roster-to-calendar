@@ -5971,6 +5971,7 @@ async function runCoreDerivedRosterSave(context, job = {}) {
         {
           deferDailyPresence: false,
           maximumIncrementalFacts: job.maximumIncrementalFacts,
+          deliveryGuard: job.deliveryGuard,
           reserveMaintenanceBudget: job.reserveMaintenanceBudget,
           deferredBudgetError: maintenanceBudgetDeferredError,
           facilityRefreshStatements: automaticFacilityPublicationEnabled(context.env, filePayload.sourceType)

@@ -1,3 +1,4 @@
+import { rosterDeliveryOrder, skipSupersededRosterDelivery } from '../../_lib/roster-delivery-order.js';
 import { rosterTermOwnership } from "../../_lib/roster-term-ownership.js";
 import { reserveRosterMaintenanceBudget, maintenanceBudgetDeferredError, configureRosterMaintenanceBudget } from "../../_lib/roster-maintenance-budget.js";
 import { automationSourceDefinition } from "../../_lib/automation-import.js";
@@ -56,6 +57,9 @@ export async function onRequestPost(context) {
     if (phase === "failed" && run.status === "failed") {
       return Response.json({ ok: true, phase, runId, fileId: run.fileId, duplicate: true });
     }
+    if (run.status === "superseded") return Response.json({ok:true,completed:true,superseded:true,doctorCount:0,eventCount:0});
+    const delivery = phase === "failed" ? {} : await rosterDeliveryOrder(context.env.ROSTER_DB, run);
+    if (delivery.superseded) return Response.json(await skipSupersededRosterDelivery(context.env.ROSTER_DB,run));
     if (phase === "start" && run.status === "processing") {
       return Response.json({ ok: true, phase, runId, fileId: run.fileId, duplicate: true });
     }
@@ -96,6 +100,7 @@ export async function onRequestPost(context) {
       : { fileId: run.fileId, preserveActiveFile: false };
     const targetFileId = target.fileId;
     const saved = await runAutomatedDerivedRosterSave(context, {
+      deliveryGuard: delivery.guard,
       phase,
       // A queued source is invisible to calendars until its final phase. A
       // retained-file reparse uses a distinct staging id and names the active

@@ -1,3 +1,5 @@
+import { rosterDeliveryOrder } from '../functions/_lib/roster-delivery-order.js';
+import { listQueuedRosterSyncRuns, claimRosterDispatch } from '../functions/_lib/d1-calendar.js';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { readFile, readdir } from 'node:fs/promises';
@@ -59,6 +61,8 @@ async function legacyDigest(value) {
 }
 const sqlite=new DatabaseSync(':memory:');
 for(const name of (await readdir(new URL('../migrations',import.meta.url))).filter(name=>name.endsWith('.sql')).sort())sqlite.exec(await readFile(new URL(`../migrations/${name}`,import.meta.url),'utf8'));
+// Production raw-file metadata predates explicit migrations; model its verified columns.
+for(const [column,definition] of [['name',"TEXT NOT NULL DEFAULT ''"],['source_type',"TEXT NOT NULL DEFAULT ''"],['size','INTEGER NOT NULL DEFAULT 0'],['last_modified','INTEGER NOT NULL DEFAULT 0']])sqlite.exec(`ALTER TABLE raw_roster_files ADD COLUMN ${column} ${definition}`);
 const db=new LocalD1(sqlite);
 const day=new Date().toISOString().slice(0,10);
 sqlite.prepare('INSERT INTO roster_account_budget(utc_day,maximum_reads,maximum_writes,valid_until) VALUES(?,?,?,?)').run(day,50000000,5000000,new Date(Date.now()+3600000).toISOString());
@@ -143,6 +147,43 @@ for(const [sourceId,path] of [['monash-adults','fixtures/AdultTerm1.2026.xlsx'],
   assert.equal(fallback.data.mode,'bounded');
   assert.equal(sqlite.prepare('SELECT active FROM roster_files WHERE id=?').get(file.id).active,1,'forced staging retains working roster');
   assert.equal(sqlite.prepare('SELECT active FROM roster_files WHERE id=?').get(large.incoming.id).active,0);
+  const orderedOld={...file,id:'ordered-old:'+sourceId};
+  const orderedNew={...file,id:'ordered-new:'+sourceId};
+  function deliveryRow(id,raw,modified,started,status='queued') {
+    sqlite.prepare('INSERT INTO raw_roster_files(file_id,name,last_modified) VALUES(?,?,?)').run(raw.id,raw.name,modified);
+    sqlite.prepare('INSERT INTO roster_sync_runs(id,source_id,file_id,source_file_id,content_hash,status,started_at) VALUES(?,?,?,?,?,?,?)').run(id,sourceId,raw.id,raw.id,'fixture',status,started);
+    return {id,sourceId,fileId:raw.id,sourceFileId:raw.id,status,startedAt:started};
+  }
+  const oldDelivery=deliveryRow('ordered-old-run:'+sourceId,orderedOld,100,'2026-10-01T00:00:00Z');
+  const newDelivery=deliveryRow('ordered-new-run:'+sourceId,orderedNew,200,'2026-10-02T00:00:00Z','success');
+  const activeBefore=sqlite.prepare('SELECT id,event_json FROM roster_events WHERE file_id=? ORDER BY id').all(file.id);
+  assert.equal((await rosterDeliveryOrder(db,oldDelivery)).superseded,true);
+  assert.equal((await listQueuedRosterSyncRuns(db,sourceId,1)).length,0,'new successful delivery excludes older queued versions');
+  assert.equal((await claimRosterDispatch(db,{sourceId})).reason,'queue-empty','obsolete backlog cannot trigger repeated GitHub dispatch');
+  const oldPlan=await planRosterImportBatches({...payload,file:orderedOld});
+  const skipped=await api({sourceId,runId:oldDelivery.id,file:orderedOld,phase:'bounded-begin',manifest:oldPlan.manifest,revision:oldPlan.revision});
+  assert.equal(skipped.status,200,JSON.stringify(skipped));
+  assert.equal(skipped.data.superseded,true);
+  assert.equal(sqlite.prepare('SELECT status FROM roster_sync_runs WHERE id=?').get(oldDelivery.id).status,'superseded');
+  assert.deepEqual(sqlite.prepare('SELECT id,event_json FROM roster_events WHERE file_id=? ORDER BY id').all(file.id),activeBefore);
+  const late=deliveryRow('late-old:'+sourceId,{...orderedOld,id:'late-old-raw:'+sourceId},50,'2026-10-03T00:00:00Z');
+  assert.equal((await rosterDeliveryOrder(db,late)).superseded,true,'late arrival cannot bypass provider timestamps');
+  const differentTerm=deliveryRow('different-term:'+sourceId,{...orderedOld,id:'different-term-raw:'+sourceId,name:'Other term.xlsx'},10,'2026-10-03T00:00:01Z');
+  assert.ok((await rosterDeliveryOrder(db,differentTerm)).guard,'a distinct workbook term remains independent');
+  const fence=await rosterDeliveryOrder(db,newDelivery);
+  const concurrentNewest=deliveryRow('concurrent-new:'+sourceId,{...orderedNew,id:'concurrent-new-raw:'+sourceId},300,'2026-10-04T00:00:00Z');
+  await assert.rejects(db.batch([fence.guard(),db.prepare('UPDATE roster_files SET active=0 WHERE id=?').bind(file.id)]),/malformed JSON/);
+  assert.equal(sqlite.prepare('SELECT active FROM roster_files WHERE id=?').get(file.id).active,1,'transaction guard prevents stale writes after preflight');
+  sqlite.prepare(`WITH RECURSIVE n(value) AS (SELECT 1 UNION ALL SELECT value+1 FROM n WHERE value<100001)
+    INSERT INTO roster_sync_runs(id,source_id,status,started_at) SELECT ?||':'||value,?,'failed','1900-01-01T00:00:00Z' FROM n`).run('ordering-history:'+sourceId,sourceId);
+  assert.ok((await rosterDeliveryOrder(db,concurrentNewest)).guard,'large retained run history does not prevent the latest delivery');
+  const unprovable=deliveryRow('unprovable-old:'+sourceId,{...orderedOld,id:'unprovable-raw:'+sourceId,name:'Ancient isolated term.xlsx'},1,'1800-01-01T00:00:00Z');
+  await assert.rejects(rosterDeliveryOrder(db,unprovable),/64-run safety window/,'old work cannot fall back to scanning history');
+  const orderingSql=db.sql.find(sql=>sql.includes('SELECT r.*,f.name,f.last_modified'));
+  const orderingPlan=sqlite.prepare('EXPLAIN QUERY PLAN '+orderingSql).all(sourceId).map(row=>row.detail).join('\n');
+  assert.ok(orderingPlan.includes('idx_roster_sync_runs_source_started_id'));
+  assert.ok(!/SCAN roster_sync_runs|SCAN f/.test(orderingPlan),orderingPlan);
+  console.log('Delivery ordering: successor/late-arrival exclusion, independent terms, dispatch, atomic races and 100,001 historical runs passed.');
   console.log(`${sourceId}: ${payload.eventCount} real workbook events survived JSON transport, guarded empty-plan recovery, staging and activation.`);
 }
 console.log('Wire protocol: optional/sparse/null/date values, hash rejection before writes, plan recovery bounds, stale-transaction rollback and replay passed.');

@@ -1,3 +1,4 @@
+import { rosterDeliveryOrder, skipSupersededRosterDelivery } from './roster-delivery-order.js';
 import { beginBoundedRosterImport, stageBoundedRosterBatch, prepareBoundedRosterPresence, prepareBoundedRosterMetadata, activateBoundedRosterTerm } from "./roster-import-staging.js";
 import { loadRosterSyncRun, loadRosterSource, loadRosterFileStatusSummary, finishRosterSyncRun, upsertRosterSource, supersedeDuplicateRosterSyncRuns } from "./d1-calendar.js";
 import { reviewedRosterFactLimit } from "./roster-automation-guard.js";
@@ -12,6 +13,9 @@ export async function handleBoundedRosterRequest(context, body, source, resolveT
     if (!run || run.sourceId !== body.sourceId || run.fileId !== body.file?.id) return Response.json({ error: "Bounded import does not match its queued source/file." }, { status: 400 });
     if (reviewedRosterFactLimit(context.env, run.sourceId, run.contentHash) !== 1250) throw new Error("Bounded import requires the reviewed source/content fact budget.");
     if (run.status === "success") return Response.json({ ok: true, completed: true, fileId: run.fileId, doctorCount: run.doctorCount, eventCount: run.eventCount });
+    if (run.status === "superseded") return Response.json({ok:true,completed:true,superseded:true,doctorCount:0,eventCount:0});
+    const delivery = await rosterDeliveryOrder(db, run);
+    if (delivery.superseded) return Response.json(await skipSupersededRosterDelivery(db,run));
     const file = { ...body.file, sourceId: run.sourceId, sourceType: source.sourceType, active: false };
     let result;
     switch (body.phase) {
@@ -37,7 +41,7 @@ export async function handleBoundedRosterRequest(context, body, source, resolveT
       case "bounded-presence": result = await prepareBoundedRosterPresence(db, run.id, file, body.revision, body.batch); break;
       case "bounded-metadata": result = await prepareBoundedRosterMetadata(db, run.id, body.revision); break;
       case "bounded-activate": {
-        result = await activateBoundedRosterTerm(db, run.id, body.revision, { publishFacility: automaticFacilityPublicationEnabled(context.env, source.sourceType) });
+        result = await activateBoundedRosterTerm(db, run.id, body.revision, { publishFacility: automaticFacilityPublicationEnabled(context.env, source.sourceType), deliveryGuard: delivery.guard });
         if (result.deferred) break;
         const summary = await loadRosterFileStatusSummary(db, run.fileId);
         const current = await loadRosterSource(db, run.sourceId);
