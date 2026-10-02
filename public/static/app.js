@@ -10863,17 +10863,12 @@ function renderFacilityOverviewMmcNightPeriod(assignments, options = {}) {
   const ssu = (assignments || []).filter((assignment) => isTeam(assignment, ["ssu", "night ssu"]));
   const assignedToDedicatedTeam = new Set([...hub, ...ssu]);
   const remaining = (assignments || []).filter((assignment) => !assignedToDedicatedTeam.has(assignment));
-  const seniorRegistrars = remaining.filter((assignment) => normalizeWhoRole(assignment.role) === "SR");
-  const mainTeam = remaining.filter((assignment) => !seniorRegistrars.includes(assignment));
-  const cardOptions = { ...options, showSpecialTimes: false };
-  return [
-    ["Night SR", seniorRegistrars],
+  return `${[
     ["Hub", hub],
     ["SSU", ssu],
-    ["Main team", mainTeam],
   ].filter(([, items]) => items.length)
-    .map(([label, items]) => renderFacilityOverviewStreamCard(label, items, cardOptions))
-    .join("");
+    .map(([label, items]) => renderFacilityOverviewStreamCard(label, items, options))
+    .join("")}${renderFacilityOverviewGenericOnShiftPeriod(remaining, options)}`;
 }
 
 function facilityOverviewAssignmentText(assignment) {
@@ -10913,15 +10908,21 @@ function renderFacilityOverviewGenericOnShiftPeriod(assignments, options = {}) {
     const team = facilityOverviewEffectiveTeam(assignment);
     const isStreamed = facilityOverviewIsMeaningfulStream(team, assignment.source || assignment.person?.sourceType);
     const target = isStreamed ? streamed : unstreamed;
-    const key = isStreamed ? team : String(assignment.person?.seniority || assignment.role || "Unknown");
+    const seniority = String(assignment.person?.seniority || assignment.role || "Unknown");
+    const role = normalizeWhoRole(seniority);
+    const isMmc = String(assignment.source || assignment.person?.sourceType || "").toUpperCase() === "MMC";
+    const key = isStreamed ? team : isMmc && ["SR", "IR", "JR"].includes(role) ? "Registrars" : isMmc && role === "HMO" ? "HMO" : seniority;
     if (!target.has(key)) target.set(key, []);
     target.get(key).push(assignment);
   }
   const streamCards = [...streamed.entries()]
-    .sort(([left, itemsLeft], [right, itemsRight]) => whoTeamRank(left, itemsLeft[0]?.source || "") - whoTeamRank(right, itemsRight[0]?.source || "") || left.localeCompare(right))
+    .sort(([left, itemsLeft], [right, itemsRight]) => {
+      const rank = (team, items) => String(items[0]?.source || items[0]?.person?.sourceType || "").toUpperCase() === "VHH" && team.toUpperCase() === "VHH" ? -1 : whoTeamRank(team, items[0]?.source || "");
+      return rank(left, itemsLeft) - rank(right, itemsRight) || left.localeCompare(right);
+    })
     .map(([stream, items]) => renderFacilityOverviewStreamCard(stream, items, options));
   const seniorityCards = [...unstreamed.entries()]
-    .sort(([left], [right]) => compareFacilityOverviewSeniorities(left, right))
+    .sort(([left], [right]) => compareFacilityOverviewSeniorities(left === "Registrars" ? "SR" : left, right === "Registrars" ? "SR" : right))
     .map(([seniority, items]) => renderFacilityOverviewUnstreamedCard(seniority, items, options));
   return [...streamCards, ...seniorityCards].join("");
 }
@@ -10933,7 +10934,7 @@ function facilityOverviewEffectiveTeam(assignment) {
 function facilityOverviewIsMeaningfulStream(team, source = "") {
   const value = String(team || "").trim().toLowerCase();
   const sourceCode = String(source || "").trim().toUpperCase();
-  if (sourceCode === "MMC" && ["am", "pm", "am shift", "pm shift", "night", "night shift", "shift"].includes(value)) return false;
+  if (sourceCode === "MMC" && (["am", "pm", "am shift", "pm shift", "night", "night shift", "night main team", "shift"].includes(value) || /^swing(?:\s+(?:shift|am|pm))*$/.test(value))) return false;
   return Boolean(value && ![
     "other", "float", "rover", "shift", "clinical support", "cs", "cso", "sms", "cmo", "senior registrar",
     "transitional/intermediate registrar", "junior registrar", "hmo", "intern", "unknown",
@@ -10941,8 +10942,9 @@ function facilityOverviewIsMeaningfulStream(team, source = "") {
 }
 
 function renderFacilityOverviewStreamCard(stream, assignments, options = {}) {
+  const hideTitle = stream.toUpperCase() === "VHH" && String(assignments[0]?.source || assignments[0]?.person?.sourceType || "").toUpperCase() === "VHH";
   return `<article class="issue-card facility-overview-staff-card facility-overview-stream-card${options.cardClass ? ` ${options.cardClass}` : ""}">
-    <strong class="facility-overview-stream-card-title">${escapeHtml(stream)}</strong>
+    ${hideTitle ? "" : `<strong class="facility-overview-stream-card-title">${escapeHtml(stream)}</strong>`}
     ${renderFacilityOverviewOnShiftNames(assignments, options)}
   </article>`;
 }
@@ -10973,9 +10975,19 @@ function renderFacilityOverviewGroupedServiceCard(title, groups, options = {}) {
 
 function renderFacilityOverviewUnstreamedCard(seniority, assignments, options = {}) {
   return `<article class="issue-card facility-overview-staff-card facility-overview-unstreamed-card">
-    <strong>${renderFacilityOverviewSeniorityLink(seniority, { sourceType: assignments[0]?.person?.sourceType, date: facilityOverviewState.date }) || escapeHtml(seniority)}</strong>
+    <strong>${seniority === "Registrars" ? "Registrars" : renderFacilityOverviewSeniorityLink(seniority, { sourceType: assignments[0]?.person?.sourceType, date: facilityOverviewState.date }) || escapeHtml(seniority)}</strong>
     ${renderFacilityOverviewOnShiftNames(assignments, options)}
   </article>`;
+}
+
+function facilityOverviewOnShiftTimeLabel(assignment) {
+  const source = String(assignment.source || assignment.person?.sourceType || "").toUpperCase();
+  const start = extractTimePortion(assignment.event?.start || "");
+  const end = extractTimePortion(assignment.event?.end || "");
+  if (source === "VHH" && ["08:00-17:30", "14:30-00:00", "23:00-08:30"].includes(`${start}-${end}`)) return "";
+  if (source === "MMC" && /\bswing\b/i.test(facilityOverviewAssignmentText(assignment)) && start && end) return `${start}-${end}`;
+  if (source === "MMC" && assignment.period === "Night") return "";
+  return assignment.specialTime || "";
 }
 
 function renderFacilityOverviewOnShiftNames(assignments, options = {}) {
@@ -10984,7 +10996,8 @@ function renderFacilityOverviewOnShiftNames(assignments, options = {}) {
     const person = assignment.person;
     if (!person) continue;
     const existing = byPerson.get(person.doctorKey) || { person, specialTimes: new Set(), clinicalSupportMode: "" };
-    if (assignment.specialTime) existing.specialTimes.add(assignment.specialTime);
+    const timeLabel = facilityOverviewOnShiftTimeLabel(assignment);
+    if (timeLabel) existing.specialTimes.add(timeLabel);
     const clinicalSupportMode = clinicalSupportRosterMode(assignment);
     if (clinicalSupportModeRank(clinicalSupportMode) < clinicalSupportModeRank(existing.clinicalSupportMode)) existing.clinicalSupportMode = clinicalSupportMode;
     byPerson.set(person.doctorKey, existing);
@@ -10992,6 +11005,7 @@ function renderFacilityOverviewOnShiftNames(assignments, options = {}) {
   return `<div class="facility-overview-on-shift-names">${[...byPerson.values()].sort((left, right) => clinicalSupportModeRank(left.clinicalSupportMode) - clinicalSupportModeRank(right.clinicalSupportMode) || compareFacilityOverviewPeople(left.person, right.person)).map(({ person, specialTimes, clinicalSupportMode }) => {
     const sourceAssignment = (assignments || []).find((assignment) => assignment.person?.doctorKey === person.doctorKey);
     const allocation = options.hideContactAllocation ? null : sourceAssignment?.contactAllocation;
+    const contactDetails = allocation ? renderFacilityOverviewContactAllocation(allocation) : "";
     const specialTime = options.showSpecialTimes !== false && specialTimes.size
       ? `<small>${escapeHtml([...specialTimes].join(" · "))}</small>`
       : "";
@@ -11000,7 +11014,7 @@ function renderFacilityOverviewOnShiftNames(assignments, options = {}) {
       : options.clinicalSupport && clinicalSupportMode === "office"
         ? `<small class="facility-overview-onsite-label">(Office)</small>`
         : "";
-    return `<div class="facility-overview-on-shift-person"><div class="facility-overview-on-shift-identity">${renderFacilityOverviewStaffName(person, { ...options, seniority: person.seniority })}${clinicalSupportLabel}${options.hideSeniority ? "" : renderFacilityOverviewOnShiftSeniority(person, options)}</div>${specialTime || allocation ? `<div class="facility-overview-on-shift-details">${specialTime}${allocation ? renderFacilityOverviewContactAllocation(allocation) : ""}</div>` : ""}</div>`;
+    return `<div class="facility-overview-on-shift-person"><div class="facility-overview-on-shift-identity">${renderFacilityOverviewStaffName(person, { ...options, seniority: person.seniority })}${clinicalSupportLabel}${options.hideSeniority ? "" : renderFacilityOverviewOnShiftSeniority(person, options)}</div>${specialTime || contactDetails ? `<div class="facility-overview-on-shift-details">${specialTime}${contactDetails}</div>` : ""}</div>`;
   }).join("")}</div>`;
 }
 
@@ -11013,7 +11027,7 @@ function clinicalSupportModeRank(mode) {
 
 function renderFacilityOverviewContactAllocation(allocation) {
   const phone = String(allocation?.phone || "").trim();
-  if (!phone) return `<span class="facility-overview-contact-number is-empty">No phone recorded</span>`;
+  if (!phone) return "";
   const serviceLabel = allocation?.streamKey === "sepsis" ? `<small class="facility-overview-contact-service-label">Sepsis</small>` : "";
   if (allocation?.matchMethod === "manual") {
     return `${serviceLabel}<button type="button" class="facility-overview-contact-number is-manual" data-facility-overview-contact-resolution="${escapeHtml(allocation.contactKey || "")}" aria-label="Edit temporary allocation of ${escapeHtml(phone)}"><span>${escapeHtml(phone)}</span><sup aria-hidden="true">*</sup></button>`;

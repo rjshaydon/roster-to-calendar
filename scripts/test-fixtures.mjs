@@ -2516,7 +2516,7 @@ assert.match(appSource, /night main team", "night hub", "night ssu"/, "Night Hub
 assert.match(appSource, /Night Hub/, "Hub night shift-code rules should preview as Night Hub");
 assert.match(stateSource, /facilityKey,[\s\S]*isFacilityOverviewWorkingEvent[\s\S]*facilityKey[\s\S]*DDH[\s\S]*hith\|vhh/, "DDH HITH and VHH roster notes should be excluded from the On shift response only");
 assert.match(appSource, /function renderFacilityOverviewDdhNightPeriod[\s\S]*Night SR[\s\S]*Main team[\s\S]*SSU team/, "DDH nights should render senior registrar, main-team, and SSU blocks in order");
-assert.match(appSource, /function renderFacilityOverviewMmcNightPeriod[\s\S]*showSpecialTimes: false[\s\S]*Night SR[\s\S]*Hub[\s\S]*SSU[\s\S]*Main team/, "MMC nights should render ordered SR, Hub, SSU, and main-team blocks without times");
+assert.match(appSource, /function renderFacilityOverviewMmcNightPeriod[\s\S]*\["Hub", hub\][\s\S]*\["SSU", ssu\][\s\S]*renderFacilityOverviewGenericOnShiftPeriod\(remaining, options\)/, "MMC nights should retain Hub and SSU streams and group remaining staff by seniority");
 assert.match(appSource, /refreshActiveWhoInsightSurfaces/, "saving shift-code rules should refresh active Who insight panels");
 assert.match(appSource, /function synthesizeIncompleteShiftCodeIssues/, "derived code-only shift titles should synthesize unresolved shift-code issues");
 assert.match(appSource, /parserRuleIgnore/, "shift-code editor should expose persistent ignore mode");
