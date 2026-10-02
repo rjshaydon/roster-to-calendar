@@ -821,3 +821,28 @@ exclude blank/placeholder rows. Reuse existing published contact payloads and
 browser matching data with zero extra automatic D1 reads/writes or polling.
 Any additional directory lookup or persistence design needs a separate bounded
 cost review. Implementation is deferred at the user's request.
+
+### FR-31 — DDH likely previous-night contact leftovers
+
+**State: Still live (refined for the user-requested review behaviour).** The user
+approved hiding likely stale Night entries from ordinary users and retaining
+them in a collapsed sublist inside the Creator On shift unresolved list.
+Previously all unsupported Night names were mixed into the main review list.
+
+Implementation compares the active 23:00-start night against the preceding
+night's published DDH roster. Midnight retains the start date; the outgoing
+team remains valid through 09:00. Only unique previous-night matches lacking
+a plausible tonight match are reclassified. Ambiguous or unknown entries stay
+in review, and missing history fails open to normal review rather than hiding
+unverified names. Creator can expand and correct the retained details; ordinary
+users do not see the reclassified list or its editors.
+
+Cost: two bounded R2 reads once per DDH view/night; zero additional automatic
+D1 activity, writes, endpoints, or polling. Current flags and access controls
+are unchanged. Existing token refresh carries the comparison on the 23:00
+transition and visible-contact revisions ensure handovers update unchanged
+workbooks. Local boundaries/access/renderer/cost checks and published-sample
+verification are recorded in the contact-matching plan. Deployment verification
+is reported with this release in the accompanying chat. Undoing this presentation
+change returns likely leftovers to the main unresolved list; it must not enable
+legacy SQL or remove published roster/contact data.

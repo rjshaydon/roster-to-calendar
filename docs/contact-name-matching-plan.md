@@ -101,6 +101,43 @@ contact sync, facility access, workbook extraction, and workbook ingress pass.
 No extra automatic D1 access, network calls, polling, or persisted fuzzy matches
 are introduced.
 
+### DDH previous-night review
+
+The user approved hiding uniquely identified previous-night leftovers from other
+users while retaining a collapsed sublist inside the Creator's unresolved list.
+DDH's night belongs to its 23:00 start date, continues through midnight, and
+finishes at 09:00 the next morning. Daytime Night entries are hidden; the
+07:30–09:00 outgoing-team window is preserved and not reinterpreted as tonight.
+
+For the active night-start date, the server loads the preceding date's published
+DDH night rows with two bounded R2 reads. Data is reused for the view/night;
+the existing token refresh fetches it once if the view crosses 23:00, including
+when the contact workbook revision is otherwise unchanged. No directory scan,
+D1 read/write, new endpoint, or extra polling is added. Missing/invalid prior
+snapshots retain normal unresolved entries, with no automatic retry loop.
+
+Only an unresolved Night name with a unique safe previous-night match and no
+plausible current-night match is classified as a likely leftover. Current
+ambiguity, previous-night ambiguity, unsupported names, and consecutive-night
+staff remain in normal handling. This is labelled as likely, not confirmed
+staleness. Creator's nested list retains details and correction controls;
+ordinary users' counts and editors exclude these entries. Comparison history
+is kept in memory, cleared on a new view/date, and refreshed when the view
+is reopened rather than polled independently.
+
+Contact revisions now include visible contact keys so the 23:00 and 09:00
+handover boundaries reach an already-open interface without a workbook edit.
+`test:ddh-night-review` exercises actual token refresh and review render functions,
+midnight/DST/finish boundaries, access scope, uniqueness, unavailable history,
+Creator-only disclosure, and 100 unchanged refreshes (300 existing R2 reads,
+zero writes and zero D1). The actual published 2 October DDH sample places
+Tony, Vanessa, Bronte, Dennis, and Yash in the likely-leftover sublist; D and
+Trixie remain unresolved.
+
+Focused regression checks pass. `test:facility-materialization` has an independent
+pre-existing `no such column: name` failure at line 778; it reproduces identically
+in an isolated checkout of the unchanged deployed HEAD, and is not modified here.
+
 ## Goal and boundaries
 
 Reduce contact allocations needing review when clerks use misspellings, shortened names, or explicit alternate names. Automatically allocate a phone only when name evidence is sufficiently strong, the leading candidate is clearly separated, and there is no competing allocation. Show tentative matches with an asterisk and allow correction.

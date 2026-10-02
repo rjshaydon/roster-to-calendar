@@ -23,7 +23,7 @@ import {
   setParserExtensions,
   sourceNames,
 } from "./roster.js";
-import { attachContactAllocations, contactAllocationCandidates, mergeContactResolutionRefresh, contactExtractHasExpired, contactOperationalDate, contactStream } from "./contact-allocations.js";
+import { attachContactAllocations, contactAllocationCandidates, partitionDdhNightReview, ddhNightReviewWindow, mergeContactResolutionRefresh, contactExtractHasExpired, contactOperationalDate, contactStream } from "./contact-allocations.js";
 import { loadFacilitySnapshot, storeFacilitySnapshot } from "./facility-snapshot-cache.js";
 
 const AUTOMATIC_ROSTER_INSIGHT_WARMUP_ENABLED = false;
@@ -352,7 +352,7 @@ let facilityOverviewCompactState = {
   touchY: 0,
 };
 let facilityOverviewState = {
-  tab: "on-shift", date: contactOperationalDate(), followOperationalDate: true, facilityKey: "", includeClinicalSupport: false, requestId: 0, requestController: null, onShiftData: null, contactList: null, contactAccessToken: "", contactReviewOpen: false, contactResolutionMenu: null, contactResolutionSaving: false,
+  tab: "on-shift", date: contactOperationalDate(), followOperationalDate: true, facilityKey: "", includeClinicalSupport: false, requestId: 0, requestController: null, onShiftData: null, contactList: null, previousNightRoster: null, contactAccessToken: "", contactReviewOpen: false, contactPreviousNightReviewOpen: false, contactResolutionMenu: null, contactResolutionSaving: false,
   staffTermStart: formatDateKey(australianTermForDate(new Date()).start), staffTerms: [], staffContent: "", staffData: null, staffQuery: "", staffExpanded: new Set(), staffFocusSection: "", staffActionMenu: null, staffDesignationMenu: null, staffSeniorityMenu: null, staffMultiSelectSection: "", staffMultiSelectMembers: new Map(), staffBulkSeniorityMenu: null, staffMultiSelectSaving: false,
   preferredFacilityKey: "", preferredFacilityReason: "", preferredFacilityEvidenceDate: "", byStreamFrom: formatDateKey(new Date()), byStreamTo: formatDateKey(new Date()), byStreamRows: [], byStreamCatalog: [], byStreamCoverage: [], byStreamContent: "", byStreamData: null, byStreamLoading: false, byStreamMetadataLoading: false, byStreamMetadataKey: "", byStreamMetadataPromise: null, byStreamRequestId: 0, byStreamHideEmptyDates: true, byStreamRowId: 0,
   togetherStaffKeys: ["", ""], togetherRangeMode: "term",
@@ -744,7 +744,8 @@ facilityOverviewSection?.addEventListener("scroll", (event) => {
 }, { capture: true, passive: true });
 facilityOverviewSection?.addEventListener("toggle", (event) => {
   const review = event.target.closest?.("[data-facility-overview-contact-review]");
-  if (review) facilityOverviewState.contactReviewOpen = review.open === true;
+  if (event.target.matches?.("[data-facility-overview-previous-night-review]")) facilityOverviewState.contactPreviousNightReviewOpen = event.target.open === true;
+  else if (review) facilityOverviewState.contactReviewOpen = review.open === true;
 }, { capture: true });
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) stopFacilityOverviewContactRefresh();
@@ -9227,6 +9228,7 @@ function renderFacilityOverviewMaintenance() {
   facilityOverviewState.onShiftData = null;
   facilityOverviewState.staffData = null;
   facilityOverviewState.contactList = null;
+  facilityOverviewState.previousNightRoster = null;
   facilityOverviewState.contactAccessToken = "";
   form?.classList.add("is-facility-overview-active");
   previewSection?.classList.add("hidden");
@@ -10587,6 +10589,7 @@ async function loadFacilityOverviewOnShift() {
   facilityOverviewState.staffData = null;
   facilityOverviewState.onShiftData = null;
   facilityOverviewState.contactList = null;
+  facilityOverviewState.previousNightRoster = null;
   facilityOverviewState.contactAccessToken = "";
   facilityOverviewState.content = `<article class="issue-card"><p>Loading rostered staff…</p></article>`;
   const cacheQuery = { facilityKey: facilityOverviewState.facilityKey, date: facilityOverviewState.date, includeClinicalSupport: facilityOverviewState.includeClinicalSupport === true };
@@ -10618,6 +10621,7 @@ async function loadFacilityOverviewOnShift() {
     if (facilityOverviewState.requestId !== requestId || facilityOverviewState.tab !== "on-shift") return;
     facilityOverviewState.onShiftData = data.rosterUnchanged === true && cached ? cached.events || [] : data.events || [];
     facilityOverviewState.contactList = mergeContactResolutionRefresh(facilityOverviewState.contactList, data.contactList || null);
+    facilityOverviewState.previousNightRoster = data.previousNightRoster || null;
     facilityOverviewState.contactAccessToken = String(data.contactAccessToken || "");
     facilityOverviewState.content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData);
     void storeFacilityOverviewSnapshot("on-shift", cacheQuery, { events: facilityOverviewState.onShiftData, revision: data.revision || cached?.revision || "" });
@@ -10671,7 +10675,7 @@ async function refreshFacilityOverviewContactList() {
   }
   // VHH allocations expire at each person's rostered finish even when the
   // workbook and contact revision remain unchanged or the refresh fails.
-  if (String(facilityOverviewState.facilityKey).toUpperCase() === "VHH") {
+  if (["VHH", "DDH"].includes(String(facilityOverviewState.facilityKey).toUpperCase())) {
     facilityOverviewState.content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData || []);
     renderFacilityOverviewOnShiftPreservingViewport();
   }
@@ -10689,6 +10693,7 @@ async function refreshFacilityOverviewContactList() {
         facilityKey,
         date,
         contactRevision: facilityOverviewState.contactList?.revision || "",
+        previousNightRosterDate: facilityOverviewState.previousNightRoster?.nightDate || "",
       }),
     });
     if (response.status === 401 || response.status === 403) {
@@ -10703,6 +10708,11 @@ async function refreshFacilityOverviewContactList() {
       || facilityOverviewState.tab !== "on-shift"
       || facilityOverviewState.date !== date
       || facilityOverviewState.facilityKey !== facilityKey) return;
+    if (data.previousNightRoster !== undefined) {
+      facilityOverviewState.previousNightRoster = data.previousNightRoster;
+      facilityOverviewState.content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData || []);
+      renderFacilityOverviewOnShiftPreservingViewport();
+    }
     if (data.unchanged === true) return;
     const nextContactList = mergeContactResolutionRefresh(facilityOverviewState.contactList, data.contactList || { status: "unavailable", reason: "no-extract" });
     if (JSON.stringify(nextContactList) !== JSON.stringify(facilityOverviewState.contactList)) {
@@ -10760,7 +10770,9 @@ function renderFacilityOverviewOnShiftResults(rows) {
     return base ? { ...base, person, event } : null;
   })).filter(Boolean);
   if (!assignments.length) return `<article class="issue-card"><p>No recognised working shifts were found for this ED and date.</p></article>`;
-  const contactMatches = attachContactAllocations(assignments, facilityOverviewState.contactList?.contacts || [], facilityOverviewState.contactList?.resolutions || []);
+  const hideDdhNight = ddhNightReviewWindow(facilityOverviewState.date).hideNight;
+  const visibleContacts = (facilityOverviewState.contactList?.contacts || []).filter((contact) => !(hideDdhNight && contact.area === "Dandenong Emergency" && contact.shift === "Night"));
+  const contactMatches = attachContactAllocations(assignments, visibleContacts, facilityOverviewState.contactList?.resolutions || []);
   const periods = new Map();
   for (const assignment of contactMatches.assignments) {
     if (!periods.has(assignment.period)) periods.set(assignment.period, []);
@@ -11061,14 +11073,18 @@ function renderFacilityOverviewContactListStatus(matches, assignments = []) {
   if (contactList.status !== "available") return `<p class="facility-overview-contact-status">Live contact allocation is not available for this date.</p>`;
   const received = contactList.providerModifiedAt || contactList.receivedAt || "";
   const freshness = received ? ` · updated ${formatFacilityOverviewContactTime(received)}` : "";
-  const unresolved = matches.unmatched || [];
+  const partition = partitionDdhNightReview(matches, assignments, { date: facilityOverviewState.date, previousNightRoster: facilityOverviewState.previousNightRoster });
+  const unresolved = partition.unresolved;
+  const oldNight = isViewingCreatorAccount() ? partition.previousNight : [];
   const menuKey = facilityOverviewState.contactResolutionMenu;
   const selectedContact = menuKey ? (contactList.contacts || []).find((contact) => contact.contactKey === menuKey) : null;
-  const selectedIsUnresolved = unresolved.some((contact) => contact.contactKey === menuKey);
-  const review = unresolved.length
-    ? `<details class="facility-overview-contact-review" data-facility-overview-contact-review ${facilityOverviewState.contactReviewOpen ? "open" : ""}><summary>${unresolved.length} allocation${unresolved.length === 1 ? "" : "s"} need review</summary>${unresolved.map((contact) => renderFacilityOverviewContactReviewRow(contact, assignments, menuKey === contact.contactKey)).join("")}</details>`
+  const selectedIsUnresolved = [...unresolved, ...partition.previousNight].some((contact) => contact.contactKey === menuKey);
+  const oldNightList = oldNight.length ? `<details class="facility-overview-previous-night-review" data-facility-overview-previous-night-review ${facilityOverviewState.contactPreviousNightReviewOpen ? "open" : ""}><summary>${oldNight.length} likely leftover${oldNight.length === 1 ? "" : "s"} from the previous night</summary>${oldNight.map((contact) => renderFacilityOverviewContactReviewRow(contact, assignments, menuKey === contact.contactKey)).join("")}</details>` : "";
+  const review = unresolved.length || oldNight.length
+    ? `<details class="facility-overview-contact-review" data-facility-overview-contact-review ${facilityOverviewState.contactReviewOpen ? "open" : ""}><summary>${unresolved.length} allocation${unresolved.length === 1 ? "" : "s"} need review${oldNight.length ? ` · ${oldNight.length} likely previous-night leftovers` : ""}</summary>${unresolved.map((contact) => renderFacilityOverviewContactReviewRow(contact, assignments, menuKey === contact.contactKey)).join("")}${oldNightList}</details>`
     : "";
-  const resolvedEditor = selectedContact && !selectedIsUnresolved
+  const selectedHiddenNight = selectedContact?.area === "Dandenong Emergency" && selectedContact?.shift === "Night" && ddhNightReviewWindow(facilityOverviewState.date).hideNight;
+  const resolvedEditor = selectedContact && !selectedHiddenNight && !selectedIsUnresolved
     ? `<div class="facility-overview-contact-resolution-editor">${renderFacilityOverviewContactResolutionMenu(selectedContact, assignments)}</div>`
     : "";
   return `<div class="facility-overview-contact-status"><span>Live contact allocations for ${escapeHtml(contactList.sourceDate)}${freshness} · ${matches.matchedCount} matched</span>${contactList.sourceId === "vhh-shift-phone-allocations" ? "<p>Numbers are shown only for uniquely matched clinicians whose rostered shift is active. The contact sheet may contain older names.</p>" : ""}${review}${resolvedEditor}</div>`;
@@ -11076,6 +11092,7 @@ function renderFacilityOverviewContactListStatus(matches, assignments = []) {
 
 function collapseFacilityOverviewContactReview() {
   facilityOverviewState.contactReviewOpen = false;
+  facilityOverviewState.contactPreviousNightReviewOpen = false;
   facilityOverviewState.contactResolutionMenu = null;
 }
 

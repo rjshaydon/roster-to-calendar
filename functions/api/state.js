@@ -13,7 +13,7 @@ import { DDH_CONTACT_LIST_SOURCE_ID, MMC_CONTACT_LIST_SOURCE_ID, contactRosterAs
 import { requestQueuedRosterProcessing } from "../_lib/automation-dispatch.js";
 import { advancedRosterMaintenanceEnabled, reviewedRosterFactLimit, rosterStatusSummaryEnabled, rosterWritesExplicitlyPaused, rosterWritePausedResponse } from "../_lib/roster-automation-guard.js";
 import { guardedFetch, localFeatureDisabledResponse } from "../_lib/outbound-network.js";
-import { loadPublishedRosterDoctors, loadPublishedFacilityDays, loadPublishedFacilityMetadata, loadPublishedFacilityRange, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata } from "../_lib/facility-overview-cache.js";
+import { loadPublishedRosterDoctors, loadPublishedFacilityDays, loadPublishedPreviousDdhNight, loadPublishedFacilityMetadata, loadPublishedFacilityRange, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata } from "../_lib/facility-overview-cache.js";
 import { loadPublishedFacilityContacts, publishFacilityContactResolutions } from "../_lib/facility-contact-cache.js";
 import { issueFacilityContactAccessToken, verifyFacilityContactAccessToken } from "../_lib/facility-contact-access.js";
 import { facilityBuildSources, facilityContactReaderSources, facilityLegacyReadsPaused, facilityOverviewAutomaticLaunchEnabled, facilityOverviewMaintenanceForViewer, facilityOverviewMaintenanceMode, facilityReaderSources, facilityReadRoute, facilityRolloutCohortEligible } from "../_lib/facility-rollout.js";
@@ -2135,7 +2135,9 @@ export async function onRequestPost(context) {
               })
             : "";
           const rosterUnchanged = Boolean(body?.cachedRevision && String(body.cachedRevision) === String(published.revision || ""));
-          return Response.json({ ok: true, date, facilityKey: requestedFacility === "ALL" ? "ALL" : facilityKeys[0], events: rosterUnchanged ? undefined : events, rosterUnchanged, revision: published.revision, accessExpiresAt: access.expiresAt || "", contactAccessToken, contactList, queryMs: Date.now() - startedAt });
+          const previousNightRoster = contactReadable && facilityKeys[0] === "ddh"
+            ? await loadPublishedPreviousDdhNight(context.env.ROSTER_FILES, date) : null;
+          return Response.json({ ok: true, date, facilityKey: requestedFacility === "ALL" ? "ALL" : facilityKeys[0], events: rosterUnchanged ? undefined : events, rosterUnchanged, revision: published.revision, accessExpiresAt: access.expiresAt || "", contactAccessToken, contactList, previousNightRoster, queryMs: Date.now() - startedAt });
         }
         const [eventGroups, contactList] = await Promise.all([
           Promise.all(facilityKeys.map((facilityKey) => queryFacilityOverviewOnShift(context.env.ROSTER_DB, { date, facilityKey }))),
@@ -2449,12 +2451,14 @@ async function refreshPublishedFacilityContactsWithToken(context, body) {
     return Response.json({ error: "At a glance is not available for this site." }, { status: 403 });
   }
   const contactList = await loadPublishedFacilityContacts(context.env.ROSTER_FILES, { date, facilityKeys });
+  const previousNightRoster = facilityKeys[0] === "ddh" && String(body?.previousNightRosterDate || "") !== date
+    ? await loadPublishedPreviousDdhNight(context.env.ROSTER_FILES, date) : undefined;
   if (body?.contactRevision && String(body.contactRevision) === String(contactList.revision || "")) {
-    return Response.json({ ok: true, date, facilityKey: facilityKeys[0], unchanged: true, contactRevision: contactList.revision }, {
+    return Response.json({ ok: true, date, facilityKey: facilityKeys[0], unchanged: true, contactRevision: contactList.revision, previousNightRoster }, {
       headers: { "Cache-Control": "no-store" },
     });
   }
-  return Response.json({ ok: true, date, facilityKey: facilityKeys[0], contactList }, {
+  return Response.json({ ok: true, date, facilityKey: facilityKeys[0], contactList, previousNightRoster }, {
     headers: { "Cache-Control": "no-store" },
   });
 }

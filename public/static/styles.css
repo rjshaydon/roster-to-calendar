@@ -1508,6 +1508,12 @@ input[type="color"] {
   margin-top: 4px;
 }
 
+.facility-overview-previous-night-review {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+
 .facility-overview-contact-review-row > span > button,
 .facility-overview-contact-number.is-manual,
 .facility-overview-contact-number.is-tentative {

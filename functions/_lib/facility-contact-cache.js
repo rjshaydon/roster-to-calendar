@@ -138,14 +138,17 @@ export async function loadPublishedFacilityContacts(r2, { date, facilityKeys = [
   const allowedAreas = new Set(facilityKeys.map(contactAreaForSource).filter(Boolean));
   const contacts = operationalExtract.contacts.filter((contact) => allowedAreas.has(contact.area));
   const resolutionPayload = (await readJsonObject(r2, facilityContactResolutionKey(sourceId, operationalExtract.sourceDate))).data;
+  const visibleContacts = sourceId === VHH_CONTACT_LIST_SOURCE_ID || carryMode ? contacts : contactsAfterShiftChange(contacts, { date, now });
   return {
     status: "available",
-    revision: `${pointer.revision || ""}:${resolutionPayload?.revision || ""}`,
+    // Handover changes visibility even if the workbook hasn't changed. A token
+    // refresh must deliver the newly visible Night block after 23:00.
+    revision: `${pointer.revision || ""}:${resolutionPayload?.revision || ""}:${await digest(visibleContacts.map((contact) => contact.contactKey))}`,
     sourceId,
     sourceDate: operationalExtract.sourceDate,
     providerModifiedAt: extract.providerModifiedAt || pointer.providerModifiedAt || "",
     receivedAt: pointer.receivedAt || "",
-    contacts: sourceId === VHH_CONTACT_LIST_SOURCE_ID || carryMode ? contacts : contactsAfterShiftChange(contacts, { date, now }),
+    contacts: visibleContacts,
     resolutions: resolutionPayload?.resolutions || [],
   };
 }

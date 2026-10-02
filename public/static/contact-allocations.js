@@ -167,6 +167,37 @@ export function contactsAfterShiftChange(contacts = [], { date = "", now = new D
   return (contacts || []).filter((contact) => periods.has(String(contact?.shift || "")));
 }
 
+// A night belongs to its 23:00 start date, including the following morning.
+// The 07:30 operational-date rollover does not end the outgoing team at 09:00.
+export function ddhNightReviewWindow(date, now = new Date()) {
+  const local = melbourneDateTime(now);
+  const minutes = local.hour * 60 + local.minute;
+  const nightDate = minutes >= 23 * 60 ? local.date : minutes < 9 * 60 ? addDays(local.date, -1) : "";
+  const outgoingMorning = minutes >= 7 * 60 + 30 && minutes < 9 * 60 && date === local.date;
+  const active = Boolean(nightDate && (date === nightDate || outgoingMorning));
+  return { hideNight: date === local.date && !active, nightDate: active ? nightDate : "", previousNightDate: active ? addDays(nightDate, -1) : "" };
+}
+
+export function partitionDdhNightReview(matches, assignments, { date, previousNightRoster, now = new Date() } = {}) {
+  const window = ddhNightReviewWindow(date, now);
+  const night = (contact) => contact.area === "Dandenong Emergency" && contact.shift === "Night";
+  const unresolved = (matches.unmatched || []).filter((contact) => !(window.hideNight && night(contact)));
+  // Never reinterpret the 07:30–09:00 carryover as tonight's incoming shift.
+  if (!window.nightDate || window.nightDate !== date || !previousNightRoster?.available
+    || previousNightRoster.nightDate !== window.nightDate || previousNightRoster.previousNightDate !== window.previousNightDate) {
+    return { unresolved, previousNight: [] };
+  }
+  const contacts = unresolved.filter(night);
+  const previous = attachContactAllocations(contactRosterAssignments(previousNightRoster.rows || []), contacts, [], { now });
+  const oldMatches = new Map(previous.assignments.filter((assignment) => assignment.contactAllocation)
+    .map((assignment) => [assignment.contactAllocation.contactKey, assignment.person.displayName]));
+  const previousNight = contacts.filter((contact) => oldMatches.has(contact.contactKey)
+    && !contactAllocationCandidates(assignments, contact, { now }).some((candidate) => candidate.nameScore >= CONTACT_MATCH_POLICY.minimumNameScore && candidate.score >= CONTACT_MATCH_POLICY.minimumScore))
+    .map((contact) => ({ ...contact, reviewReason: `Likely leftover from night starting ${window.previousNightDate} · ${oldMatches.get(contact.contactKey)}` }));
+  const keys = new Set(previousNight.map((contact) => contact.contactKey));
+  return { unresolved: unresolved.filter((contact) => !keys.has(contact.contactKey)), previousNight };
+}
+
 // Scores rank evidence; they are not calibrated probabilities. Context can add
 // at most five points and cannot make a name below the evidence floor eligible.
 export const CONTACT_MATCH_POLICY = Object.freeze({ minimumNameScore: 88, minimumScore: 90, minimumLead: 12 });
