@@ -9,8 +9,28 @@ export async function beginBoundedRosterImport(db, runId, file, plan, options = 
   validateRosterImportManifest(plan.manifest);
   if (!runId || plan.manifest.fileId !== file.id || plan.manifest.sourceId !== file.sourceId || await rosterImportDigest(plan.manifest) !== plan.revision) throw new Error("Staged import plan does not match its queued file.");
   if (plan.manifest.doctors.length > 512 || plan.manifest.eventCount > 25000 || plan.manifest.issueCount > 5000) throw new Error("Staged import plan exceeds total safety bounds.");
-  const existing = await db.prepare("SELECT * FROM roster_import_jobs WHERE run_id = ?").bind(runId).first();
-  if (existing && (existing.plan_revision !== plan.revision || existing.file_id !== file.id || existing.source_id !== file.sourceId)) throw new Error("Staged import plan changed; a new run is required.");
+  let existing = await db.prepare("SELECT * FROM roster_import_jobs WHERE run_id = ?").bind(runId).first();
+  if (existing && (existing.plan_revision !== plan.revision || existing.file_id !== file.id || existing.source_id !== file.sourceId)) {
+    if (!options.allowEmptyPlanRecovery || existing.file_id !== file.id || existing.source_id !== file.sourceId
+      || !existing.initialized || existing.next_batch || existing.prepared_batch || existing.event_count || existing.issue_count || existing.compact_ready || existing.activated
+      || await rosterImportDigest(manifestWithoutBatchHashes(JSON.parse(existing.manifest_json))) !== await rosterImportDigest(manifestWithoutBatchHashes(plan.manifest))) {
+      throw new Error("Staged import plan changed; a new run is required.");
+    }
+    // Older planners hashed undefined fields that JSON omitted. Only an empty
+    // inactive job with identical source/content, doctors, ranges and batch
+    // counts may acquire corrected hashes. Preserve its original promotion fence.
+    if (!await reserveImportWrites(db, COST.control)) return { deferred: true };
+    const recovered = await db.prepare(`UPDATE roster_import_jobs SET plan_revision=?,manifest_json=?
+      WHERE run_id=? AND plan_revision=? AND initialized=1 AND next_batch=0 AND prepared_batch=0
+        AND event_count=0 AND issue_count=0 AND compact_ready=0 AND activated=0
+        AND EXISTS(SELECT 1 FROM roster_files WHERE id=? AND active=0)
+        AND NOT EXISTS(SELECT 1 FROM roster_import_batch_receipts WHERE run_id=?)
+        AND NOT EXISTS(SELECT 1 FROM roster_events WHERE file_id=? LIMIT 1)
+        AND NOT EXISTS(SELECT 1 FROM roster_issues WHERE file_id=? LIMIT 1)`)
+      .bind(plan.revision,JSON.stringify(plan.manifest),runId,existing.plan_revision,file.id,runId,file.id,file.id).run();
+    if (Number(recovered.meta?.changes || 0) !== 1) throw new Error("Staged import changed during empty-plan recovery; no hashes were replaced.");
+    existing = { ...existing, plan_revision: plan.revision, manifest_json: JSON.stringify(plan.manifest) };
+  }
   if (existing?.initialized === 1) return { duplicate: true, nextBatch: existing.next_batch, preparedBatch: existing.prepared_batch, completed: Boolean(existing.activated), retiredFileIds: JSON.parse(existing.retired_file_ids_json || "[]") };
   const existingFile = await db.prepare("SELECT active FROM roster_files WHERE id = ?").bind(file.id).first();
   if (Number(existingFile?.active) === 1) throw new Error("Cannot stage over an active roster.");
@@ -59,7 +79,7 @@ export async function stageBoundedRosterBatch(db, runId, file, revision, batch) 
   if (!await reserveImportWrites(db, rows.eventCount * COST.event + rows.issueCount * COST.issue + COST.control)) return { deferred: true };
   // One db.batch, rather than the legacy helper's multiple transactions:
   // a receipt can never survive without all of its corresponding facts.
-  await db.batch([...rows.statements,
+  await db.batch([stagingTransactionGuard(db, runId, revision, file.id, batch.index), ...rows.statements,
     db.prepare("INSERT INTO roster_import_batch_receipts (run_id, batch_index, plan_revision, payload_hash) VALUES (?, ?, ?, ?)").bind(runId, batch.index, revision, hash),
     db.prepare("UPDATE roster_import_jobs SET next_batch = next_batch + 1, event_count = event_count + ?, issue_count = issue_count + ? WHERE run_id = ? AND next_batch = ?")
       .bind(rows.eventCount, rows.issueCount, runId, batch.index),
@@ -83,7 +103,7 @@ export async function prepareBoundedRosterPresence(db, runId, file, revision, ba
   const presence = boundedRosterPresenceStatements(db, file, batch.doctors, batch.eventsByDoctor);
   if (presence.count !== batch.presenceRows || presence.count + 16 > ROSTER_BATCH_FACT_LIMIT) throw new Error("Presence expansion exceeds its pinned batch budget.");
   if (!await reserveImportWrites(db, presence.count * COST.presence + COST.control)) return { deferred: true };
-  await db.batch([...presence.statements, db.prepare("UPDATE roster_import_jobs SET prepared_batch = prepared_batch + 1 WHERE run_id = ? AND prepared_batch = ?").bind(runId, batch.index)]);
+  await db.batch([stagingTransactionGuard(db, runId, revision, file.id, manifest.batches.length, batch.index), ...presence.statements, db.prepare("UPDATE roster_import_jobs SET prepared_batch = prepared_batch + 1 WHERE run_id = ? AND prepared_batch = ?").bind(runId, batch.index)]);
   return { nextBatch: batch.index + 1 };
 }
 
@@ -196,4 +216,18 @@ async function activatePreparedRosterReplacement(db, job, revision, options) {
   const results = await db.batch(statements);
   if (Number(results[0]?.meta?.changes || 0) !== 1) throw new Error("Concurrent roster change prevented replacement activation.");
   return { fileId:job.file_id, retiredFileIds:retire, activated:true };
+}
+
+
+function manifestWithoutBatchHashes(manifest) {
+  return { ...manifest, batches: manifest.batches.map(({ hash, ...counts }) => counts) };
+}
+
+function stagingTransactionGuard(db, runId, revision, fileId, nextBatch, preparedBatch = null) {
+  return db.prepare(`SELECT CASE WHEN EXISTS(SELECT 1 FROM roster_import_jobs
+    WHERE run_id=? AND plan_revision=? AND file_id=? AND initialized=1 AND activated=0
+      AND next_batch=? ${preparedBatch === null ? '' : 'AND prepared_batch=?'})
+    AND EXISTS(SELECT 1 FROM roster_files WHERE id=? AND active=0)
+    THEN 1 ELSE json('staging-conflict') END AS staging_guard`)
+    .bind(runId, revision, fileId, nextBatch, ...(preparedBatch === null ? [] : [preparedBatch]), fileId);
 }

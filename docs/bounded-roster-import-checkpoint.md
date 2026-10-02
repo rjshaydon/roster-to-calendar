@@ -465,3 +465,37 @@ reads 12,938 and writes 15,867. Import statements are present in the write burst
 The exact current-day admission record read cost one D1 row, zero writes; its
 prior grant had expired, so additional maintenance needs a fresh valid grant.
 Release/deployment and authenticated live UI verification remain pending.
+
+
+#### Delivery failure discovered and corrected in the same release batch
+
+Exact indexed readback (16 D1 rows read, zero writes) found recent MMC/MCH runs
+still queued, while VHH completed a real SharePoint-triggered bounded import at
+04:13 UTC (47 doctors, 958 events). GitHub logs for the latest MMC/MCH jobs and
+the six-hour continuation identify `Staged batch differs from the pinned plan`.
+Both checked-in real Monash workbook fixtures reproduce this: parsed events have
+`sources: undefined`, which the old canonical digest included and JSON transport
+omitted. The manifest itself survived transport; every first fact batch failed.
+
+Canonical hashing now follows JSON omission/null semantics. Only an initialized,
+empty, inactive automatic job with identical source/content, doctors, ranges and
+batch counts may replace its old batch hashes. CAS assertions require no facts,
+receipts, preparation or activation and preserve the original promotion fence.
+Transactions also assert their pinned revision/cursor before staging facts or
+presence, so a concurrent replan cannot write stale batches. Manual requests
+cannot perform this recovery. No migration or historical reprocessing.
+
+Same-term automatic corrections now first use the existing 1,250-fact bounded
+diff path instead of copying the entire term. If the actual diff exceeds that
+ceiling, the server retains the queued job and returns the precise budget code;
+the processor then uses full inactive staging under account admission. New terms
+and partially staged jobs continue through bounded staging. This avoids spending
+the daily write allowance on complete term copies for small changes.
+
+`test-roster-wire-protocol` verifies real MMC (4,295 events) and MCH (2,363 events)
+through JSON serialization, rejection before writes, safe legacy empty-job
+recovery, refusal of changed identities/partial jobs, transaction races, replay,
+full staging/activation, same-term small diffs and safe large-diff fallback.
+Production deployment and exact queued-source retries remain pending.
+Control-plane inventory is complete: 103 Production deployments, zero Preview;
+cleanup will retain the accepted current release and at most one verified rollback.

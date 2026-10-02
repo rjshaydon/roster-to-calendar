@@ -135,7 +135,16 @@ function presenceRowCount(event, maximum = 120) {
 }
 
 function canonical(value) {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (value && typeof value === "object") return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`;
+  // Hash the JSON wire representation: object undefined values disappear,
+  // while undefined/sparse array entries become null. This must agree across
+  // the browser/Node planner and the Worker's parsed request body.
+  if (Array.isArray(value)) return `[${Array.from(value, item => canonical(item) ?? "null").join(",")}]`;
+  if (value && typeof value === "object") {
+    if (typeof value.toJSON === "function") return canonical(value.toJSON());
+    return `{${Object.keys(value).sort().map(key => {
+      const encoded = canonical(value[key]);
+      return encoded === undefined ? undefined : `${JSON.stringify(key)}:${encoded}`;
+    }).filter(encoded => encoded !== undefined).join(",")}}`;
+  }
   return JSON.stringify(value);
 }

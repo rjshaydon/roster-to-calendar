@@ -128,16 +128,23 @@ async function processRun(run) {
   if (pending.boundedImportEnabled === true) {
     const plan = await planRosterImportBatches(payload);
     run.boundedImportStarted = true;
-    finished = await executeBoundedRosterImport(plan, (step) => automationRequest("/api/automation/derived", {
-      method: "POST", body: { ...step, maintenanceBudget, runId: run.id, sourceId: run.sourceId, file: payload.file },
-    }));
+    const importStep = forceStaging => step => automationRequest("/api/automation/derived", {
+      method: "POST", body: { ...step, forceStaging, maintenanceBudget, runId: run.id, sourceId: run.sourceId, file: payload.file },
+    });
+    finished = await executeBoundedRosterImport(plan, importStep(false));
+    if (finished.mode === "complete") {
+      run.boundedImportStarted = false;
+      try {
+        finished = await postDerived(run, payload, "complete", payload.doctors, payload.eventsByDoctor, payload.issuesByDoctor);
+      } catch (error) {
+        if (error.code !== "ROSTER_INCREMENTAL_BUDGET" || !error.boundedReplacementRequired) throw error;
+        run.boundedImportStarted = true;
+        finished = await executeBoundedRosterImport(plan, importStep(true));
+      }
+    }
     if (finished.deferred) {
       console.log("Import write allowance exhausted; queued progress retained for automatic continuation.");
       return;
-    }
-    if (finished.mode === "complete") {
-      run.boundedImportStarted = false;
-      finished = null;
     }
   }
   finished ||= await postDerived(run, payload, "complete", payload.doctors, payload.eventsByDoctor, payload.issuesByDoctor);
@@ -196,6 +203,8 @@ async function automationRequest(path, options = {}) {
       if (response.ok) return result;
       const diagnostic = String(result.code || result.phase || "").trim();
       lastError = new Error(`${result.error || `HTTP ${response.status}`}${diagnostic ? ` (${diagnostic})` : ""}`);
+      lastError.code = String(result.code || '');
+      lastError.boundedReplacementRequired = result.boundedReplacementRequired === true;
       if (![408, 429, 500, 502, 503, 504].includes(response.status)) break;
     } catch (error) {
       lastError = error;

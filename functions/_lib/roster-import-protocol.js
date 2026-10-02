@@ -2,6 +2,7 @@ import { beginBoundedRosterImport, stageBoundedRosterBatch, prepareBoundedRoster
 import { loadRosterSyncRun, loadRosterSource, loadRosterFileStatusSummary, finishRosterSyncRun, upsertRosterSource, supersedeDuplicateRosterSyncRuns } from "./d1-calendar.js";
 import { reviewedRosterFactLimit } from "./roster-automation-guard.js";
 import { automaticFacilityPublicationEnabled } from "./facility-refresh-queue.js";
+import { rosterImportDigest, validateRosterImportManifest } from "./roster-import-batches.js";
 
 export async function handleBoundedRosterRequest(context, body, source, resolveTarget) {
   if (String(context.env.ROSTER_AUTOMATION_BOUNDED_IMPORT_ENABLED || "") !== "true") return Response.json({ error: "Bounded roster importing is not enabled." }, { status: 503 });
@@ -17,13 +18,16 @@ export async function handleBoundedRosterRequest(context, body, source, resolveT
       case "bounded-begin": {
         const manifest = body.manifest;
         if (!manifest || manifest.contentHash !== run.contentHash || manifest.maximumFacts !== 1250) throw new Error("Bounded plan does not match the queued content or reviewed fact budget.");
+        validateRosterImportManifest(manifest);
+        if (manifest.fileId !== file.id || manifest.sourceId !== file.sourceId || await rosterImportDigest(manifest) !== body.revision) throw new Error("Bounded plan does not match its queued file or revision.");
         const replacements = context.env.ROSTER_BOUNDED_REPLACEMENT_ENABLED === "true";
-        if (!replacements) {
+        const staged = await db.prepare("SELECT next_batch,prepared_batch FROM roster_import_jobs WHERE run_id=?").bind(run.id).first();
+        if ((!replacements || body.forceStaging !== true) && !Number(staged?.next_batch || 0) && !Number(staged?.prepared_batch || 0)) {
           const current = await loadRosterSource(db, run.sourceId);
           const target = await resolveTarget(db, source, run.sourceId, run, { range: [{ start: manifest.startDate }, { start: manifest.rosterEndDate }] }, current);
-          if (target.fileId !== run.fileId) return Response.json({ ok: true, mode: "complete" });
+          if (target.fileId !== run.fileId) return Response.json({ ok: true, mode: "complete", boundedReplacementAvailable: replacements });
         }
-        result = await beginBoundedRosterImport(db, run.id, file, { manifest, revision: body.revision }, { allowReplacement: replacements });
+        result = await beginBoundedRosterImport(db, run.id, file, { manifest, revision: body.revision }, { allowReplacement: replacements, allowEmptyPlanRecovery: true });
         // An activated job still needs the completion callback if its earlier
         // bookkeeping failed. Only run.status=success means fully completed.
         result = { ...result, activated: Boolean(result.completed), completed: false };

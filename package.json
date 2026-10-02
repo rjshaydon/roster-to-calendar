@@ -12,6 +12,7 @@
     "local:setup": "node scripts/local-dev.mjs setup",
     "deploy": "wrangler pages deploy public",
     "check": "node --check public/static/app.js",
+    "test:roster-wire-protocol": "node --no-warnings scripts/test-roster-wire-protocol.mjs",
     "test:bounded-identity": "node --no-warnings scripts/test-bounded-identity.mjs",
     "test:restoration-mutations": "node --no-warnings scripts/test-restoration-mutations.mjs",
     "test:contact-allocations": "node scripts/test-contact-allocations.mjs",

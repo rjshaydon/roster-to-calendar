@@ -159,6 +159,12 @@ export async function onRequestPost(context) {
     return Response.json({ ok: true, phase, runId, result: saved?.result || null });
   } catch (error) {
     if (error?.code === "ROSTER_MAINTENANCE_DEFERRED") return Response.json({ ok: true, deferred: true, message: error.message });
+    if (error?.code === "ROSTER_INCREMENTAL_BUDGET" && context.env.ROSTER_BOUNDED_REPLACEMENT_ENABLED === "true") {
+      // The read-only diff exceeded its fact ceiling. Retain the queued run and
+      // inactive staging for the bounded replacement protocol; never mark it
+      // failed or delete its state before that protocol can take over.
+      return Response.json({ error: error.message, code: error.code, boundedReplacementRequired: true }, { status: 422 });
+    }
     const runId = String(body?.runId || "").trim();
     const sourceId = String(body?.sourceId || body?.file?.sourceId || "").trim();
     const failedAt = new Date().toISOString();
