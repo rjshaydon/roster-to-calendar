@@ -374,3 +374,50 @@ Final settled check through 11:29 AEST: 10,592 reads / 700 writes today,
 unchanged maximum five-minute and largest-query figures. Final five-hour
 allowance 53% remaining; credit balance still unchanged. UI flow restoration
 and live verification are complete; no further source edits are required.
+
+### All-site five-minute contact schedules, 2 October 12:14 AEST
+
+User requested contact source syncing no more frequently than every five
+minutes. Existing MMC/MCH shared contact flow `64d9fad7-3462-4b6a-bb6e-95ce1951f4fb`
+and DDH flow `67ee065a-c230-4d1d-9a20-d9425f9cacdf` were converted from
+SharePoint change triggers to Recurrence interval 5 / frequency Minute.
+Existing source destinations and credentials preserved; obsolete event-version
+conditions and trigger-version headers removed. No additional contact flows
+were created. Both flows remain On and Scheduled. VHH retains its verified
+five-minute schedule. Cached app contact refresh remains an R2-only read;
+this change governs source extraction/submission.
+
+MMC keeps the exact Office Script/workbook reference. Removed old delay and
+trigger-only file metadata dependency. The live Office Script differs from the
+repository copy: it returns sourceDate and contacts, but omits sourceId. A
+controlled run initially returned HTTP 400 Invalid doctor contact extract;
+the request envelope now uses:
+`setProperty(outputs('Run_script_from_SharePoint_library')?['body/result'], 'sourceId', 'mmc-shift-allocations')`.
+An unattended scheduled run at 12:13 succeeded after this correction. No broad
+workbook download was introduced for MMC/MCH.
+
+DDH retains its proven small-workbook base64 transport and bounded clinician
+parser. Get file metadata is bound to its verified existing identifier
+`Shared%2bDocuments%252fGeneral%252fDaily%2bContact%2bSheet.xlsx`;
+Get file content still uses the metadata Id; providerModifiedAt remains the
+metadata LastModified, preserving contact operational-date semantics. The old
+two-minute debounce delay and edit-version gate were removed. Automatic runs
+at 12:00, 12:05 and 12:10 all succeeded.
+
+Trigger concurrency initially produced Power Automate throttling/skipped-run
+warnings. Automatic approval review rejected restarting MMC while that warning
+remained. The configuration was corrected before retry: concurrency control
+Off, MMC script timeout PT2M and HTTP timeout PT1M; DDH metadata/content/HTTP
+each timeout PT1M. Retries None for every processing action. Total configured
+processing timeout stays below the five-minute interval; the current warning
+cleared, MMC activation was approved, and its scheduled delivery succeeded.
+No unresolved approval blocker remains.
+
+Contact sync safeguard fixtures passed. Latest settled account telemetry
+through 11:46 AEST: 11,753 reads / 705 writes today, maximum five-minute bucket
+3,224 reads / 666 writes. These lagged totals cover the VHH first publication
+and replay; they do not yet cover the new MMC/DDH schedules. All contact paths
+retain semantic deduplication and unchanged submissions perform zero D1/R2
+writes. Usage last checked at 90% used / 10% remaining; credits unchanged at
+182.1872700000. Stop additional restoration batches after final verification
+and checkpoint to conserve the remaining allowance.
