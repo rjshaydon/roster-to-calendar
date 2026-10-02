@@ -175,6 +175,14 @@ the planned maintenance flag. An empty allowlist means no source is enabled.
 
 ### FR-03 — Automatic On shift launch and contact refresh
 
+2 October cosmetic follow-up: removed the obsolete temporary-unavailability
+suffix from desktop/mobile At a glance navigation and accessible labels at the
+user's request. Restored access and automatic launch retain their current
+configuration; genuine maintenance handling inside the overview remains.
+Syntax, actual navigation rendering for open/closed states, and facility access
+checks pass. The older maintenance fixture still assumes Production automatic
+launch is disabled; that pre-existing assertion is unchanged by this label edit.
+
 - **State:** Restored: eligible-user automatic launch and visible-page contact refresh. Contact source extraction runs no more often than every five minutes.
 - **Control:** `FACILITY_OVERVIEW_AUTOMATIC_LAUNCH_ENABLED=true` in Production;
   Preview remains false.

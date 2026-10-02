@@ -9344,15 +9344,15 @@ function syncFacilityOverviewNavigationState() {
   if (facilityOverviewSection) facilityOverviewSection.setAttribute("aria-label", `${label} ED overview`);
   if (tabList) tabList.setAttribute("aria-label", `${label} views`);
   if (facilityOverviewButton) {
-    facilityOverviewButton.textContent = open ? "My calendar" : currentFacilityOverviewMaintenance ? `${label} · temporarily unavailable` : label;
-    facilityOverviewButton.setAttribute("aria-label", open ? "Return to my calendar" : currentFacilityOverviewMaintenance ? `${label} is temporarily unavailable` : `Open ${label}`);
+    facilityOverviewButton.textContent = open ? "My calendar" : label;
+    facilityOverviewButton.setAttribute("aria-label", open ? "Return to my calendar" : `Open ${label}`);
   }
   if (mobileFacilityOverviewButton) {
-    mobileFacilityOverviewButton.setAttribute("aria-label", open ? "Return to my calendar" : currentFacilityOverviewMaintenance ? `${label} is temporarily unavailable` : `${label} ED overview`);
+    mobileFacilityOverviewButton.setAttribute("aria-label", open ? "Return to my calendar" : `${label} ED overview`);
     const shortLabel = mobileFacilityOverviewButton.querySelector("[aria-hidden='true']");
     const accessibleLabel = mobileFacilityOverviewButton.querySelector(".sr-only");
     if (shortLabel) shortLabel.textContent = open ? "Cal" : "ED";
-    if (accessibleLabel) accessibleLabel.textContent = open ? "My calendar" : currentFacilityOverviewMaintenance ? `${label} is temporarily unavailable` : label;
+    if (accessibleLabel) accessibleLabel.textContent = open ? "My calendar" : label;
   }
 }
 
