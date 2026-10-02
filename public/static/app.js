@@ -10974,9 +10974,10 @@ function renderFacilityOverviewGroupedServiceCard(title, groups, options = {}) {
 }
 
 function renderFacilityOverviewUnstreamedCard(seniority, assignments, options = {}) {
+  const swingLast = seniority === "Registrars" || ["HMO", "SR", "IR", "JR"].includes(normalizeWhoRole(seniority));
   return `<article class="issue-card facility-overview-staff-card facility-overview-unstreamed-card">
     <strong>${seniority === "Registrars" ? "Registrars" : renderFacilityOverviewSeniorityLink(seniority, { sourceType: assignments[0]?.person?.sourceType, date: facilityOverviewState.date }) || escapeHtml(seniority)}</strong>
-    ${renderFacilityOverviewOnShiftNames(assignments, options)}
+    ${renderFacilityOverviewOnShiftNames(assignments, { ...options, swingLast })}
   </article>`;
 }
 
@@ -10995,14 +10996,15 @@ function renderFacilityOverviewOnShiftNames(assignments, options = {}) {
   for (const assignment of assignments || []) {
     const person = assignment.person;
     if (!person) continue;
-    const existing = byPerson.get(person.doctorKey) || { person, specialTimes: new Set(), clinicalSupportMode: "" };
+    const existing = byPerson.get(person.doctorKey) || { person, specialTimes: new Set(), clinicalSupportMode: "", isSwing: false };
+    if (/\bswing\b/i.test(facilityOverviewAssignmentText(assignment))) existing.isSwing = true;
     const timeLabel = facilityOverviewOnShiftTimeLabel(assignment);
     if (timeLabel) existing.specialTimes.add(timeLabel);
     const clinicalSupportMode = clinicalSupportRosterMode(assignment);
     if (clinicalSupportModeRank(clinicalSupportMode) < clinicalSupportModeRank(existing.clinicalSupportMode)) existing.clinicalSupportMode = clinicalSupportMode;
     byPerson.set(person.doctorKey, existing);
   }
-  return `<div class="facility-overview-on-shift-names">${[...byPerson.values()].sort((left, right) => clinicalSupportModeRank(left.clinicalSupportMode) - clinicalSupportModeRank(right.clinicalSupportMode) || compareFacilityOverviewPeople(left.person, right.person)).map(({ person, specialTimes, clinicalSupportMode }) => {
+  return `<div class="facility-overview-on-shift-names">${[...byPerson.values()].sort((left, right) => (options.swingLast ? Number(left.isSwing) - Number(right.isSwing) : 0) || clinicalSupportModeRank(left.clinicalSupportMode) - clinicalSupportModeRank(right.clinicalSupportMode) || compareFacilityOverviewPeople(left.person, right.person)).map(({ person, specialTimes, clinicalSupportMode }) => {
     const sourceAssignment = (assignments || []).find((assignment) => assignment.person?.doctorKey === person.doctorKey);
     const allocation = options.hideContactAllocation ? null : sourceAssignment?.contactAllocation;
     const contactDetails = allocation ? renderFacilityOverviewContactAllocation(allocation) : "";
