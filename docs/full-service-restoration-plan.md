@@ -1,3 +1,19 @@
+## Next batch — 2 October bounded identity restoration
+
+Prepared implementation and local/live-publication evidence are recorded in
+`bounded-roster-import-checkpoint.md`. This batch restores bounded automatic
+name suggestions, explicit confirmed linking and Creator directory grades using
+visible R2 term staff data. No history discovery, login repair or global snapshot
+builder is re-enabled. Release verification is pending.
+
+After release: verify authenticated directory/account behaviour and settled D1
+usage; reconcile real changed/current/next-term deliveries for all four sources;
+complete consolidated functional acceptance, inventory retained deployments and
+close the restoration register. An unpublished provider term remains a delivery
+verification dependency. Advanced global maintenance stays closed; any necessary
+repair must use exact scope and budget admission. The separate parked Doctor
+Names/merge project is not part of this functional-parity batch.
+
 ## Restoration batch — 2 October 2026
 
 Step 1: settled account-wide analytics through 01:07 AEST recorded 304,036 reads and 14,094 writes for the UTC quota day; 80,427 reads and 3,350 writes since the previous release. Telemetry reconciled across all three databases. Normal-use traffic and scheduled work stayed comfortably below admission thresholds.

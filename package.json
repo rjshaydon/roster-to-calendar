@@ -12,6 +12,8 @@
     "local:setup": "node scripts/local-dev.mjs setup",
     "deploy": "wrangler pages deploy public",
     "check": "node --check public/static/app.js",
+    "test:bounded-identity": "node --no-warnings scripts/test-bounded-identity.mjs",
+    "test:restoration-mutations": "node --no-warnings scripts/test-restoration-mutations.mjs",
     "test:contact-allocations": "node scripts/test-contact-allocations.mjs",
     "test:contact-sync": "node scripts/test-contact-sync.mjs",
     "test:contact-workbook-ingress": "node --no-warnings scripts/test-contact-workbook-ingress.mjs",

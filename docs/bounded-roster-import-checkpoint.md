@@ -421,3 +421,47 @@ retain semantic deduplication and unchanged submissions perform zero D1/R2
 writes. Usage last checked at 90% used / 10% remaining; credits unchanged at
 182.1872700000. Stop additional restoration batches after final verification
 and checkpoint to conserve the remaining allowance.
+
+
+### 2 October — bounded identity and directory enrichment batch
+
+Prepared together: automatic name suggestions, explicit account linking/removal,
+Creator claim correction and visible-term directory grades. Discovery reads the
+same bounded R2 term staff publications as the Creator picker. There is no
+canonical-directory/history fallback, automatic account repair, identity seeding,
+login claim acquisition or global canonical rebuild when discovery is enabled.
+Users confirm suggestions through the existing Confirm action. Exact site/key
+ownership and the prior account claim set are asserted inside the atomic D1
+mutation batch. Concurrent ownership attempts fail with HTTP 409; replay writes
+nothing. Claim changes preserve settings, custom events, locations and unrelated
+profile fields and schedule no snapshot work.
+
+Account preparation also replaces full profile listing and historical file
+membership discovery with indexed bounded lookups: 16 claims, 32 matching
+profiles, and at most 32 active files per claimed source. Existing historical
+claims survive absent publications; missing/oversized identity publications
+produce an unavailable state without breaking existing links. Grades come from
+current-term published membership/overrides, preferring the current term over an
+already-visible next term. Directory pages retain their 100-account/1,000-claim
+limits and add no per-account D1 enrichment query. No migration or backfill.
+Production enables IDENTITY_DISCOVERY_ENABLED; Preview remains disabled. Global
+account snapshot building and Creator startup hydration remain disabled.
+
+Local evidence: test-bounded-identity exercises 100,001 historical events and
+100,001 historical file memberships, plus 1,000 unrelated profiles/accounts;
+read-only discovery, ambiguous suggestions, missing data, current/future grades,
+indexed query plans, authenticated gates, duplicate ownership, transactional
+races, failed replacement rollback, replay and removal pass. Existing restoration
+mutations, Creator startup, client request budgets, account budget, colleague
+insights, facility materialization, source isolation and rollout suites pass.
+Worker compilation passes. The legacy monolithic test-fixtures suite stops at
+its pre-existing outdated automated-correction source assertion (line 922) in
+unchanged derived-import code; this suite is not reported as passing.
+
+Live pre-release R2 verification: eight object reads, zero D1, no missing sites;
+MMC 152 doctors/152 graded, MCH 79/79, DDH 169/162 and VHH 50/50. Settled account
+analytics through 04:26 UTC: 43,553 reads / 16,601 writes; maximum five-minute
+reads 12,938 and writes 15,867. Import statements are present in the write burst.
+The exact current-day admission record read cost one D1 row, zero writes; its
+prior grant had expired, so additional maintenance needs a fresh valid grant.
+Release/deployment and authenticated live UI verification remain pending.

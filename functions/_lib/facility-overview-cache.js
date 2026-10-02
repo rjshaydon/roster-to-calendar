@@ -646,7 +646,7 @@ export async function loadPublishedFacilityMetadata(r2, sourceTypes, today) {
   return { preparing: false, facilities, catalogEvents, revision: await digest({ facilities, catalogEvents }) };
 }
 
-// A bounded Creator picker built solely from visible published term membership.
+// A bounded identity directory built solely from visible published term membership.
 export async function loadPublishedRosterDoctors(r2, today) {
   if (!r2?.get) return { preparing: true, doctors: [] };
   const people = new Map();
@@ -654,7 +654,8 @@ export async function loadPublishedRosterDoctors(r2, today) {
   const missingSources = [];
   for (const sourceType of ["mmc", "mch", "ddh", "vhh"]) {
     const manifest = await loadCachedSnapshot(r2, facilityMetadataManifestKey(sourceType));
-    const terms = (manifest?.terms || []).filter(term => term.visibleFrom <= today && term.termEnd >= today);
+    if ((manifest?.terms || []).length > 64) throw new Error("Published doctor directory exceeds the manifest limit.");
+    const terms = (manifest?.terms || []).filter(term => term.visibleFrom <= today && term.termEnd >= today).sort((a, b) => a.termStart.localeCompare(b.termStart));
     if (terms.length > 2) throw new Error("Published doctor directory exceeds the term limit.");
     let found = false;
     for (const term of terms) {
@@ -663,11 +664,19 @@ export async function loadPublishedRosterDoctors(r2, today) {
       const members = staff.members || [];
       if (members.length > FACILITY_PUBLICATION_LIMITS.staffRows) throw new Error("Published doctor directory exceeds the staff limit.");
       found = true;
+      if ((staff.seniorityOverrides || []).length > FACILITY_PUBLICATION_LIMITS.overrideRows) throw new Error("Published doctor directory exceeds the grade override limit.");
+      const overrides = new Map((staff.seniorityOverrides || []).map(row => [row.doctorKey, row.seniority]));
       for (const member of members) {
         const key = String(member.doctorKey || "").trim();
         if (!key) continue;
         const marker = `${sourceType}|${key}`;
+        const existing = people.get(marker);
+        // Prefer the current term's grade over an already-visible future term.
+        if (existing && existing.termStart <= today && existing.termEnd >= today) continue;
+        const seniority = String(overrides.get(key) || member.seniority || '').trim();
         people.set(marker, { key, displayName: String(member.displayName || key), sourceType,
+          termStart: term.termStart, termEnd: term.termEnd,
+          seniorities: seniority ? [seniority] : [],
           sourceTypes: [sourceType], aliases: [{ key, displayName: String(member.displayName || key), sourceType }] });
       }
     }

@@ -3474,6 +3474,30 @@ export async function queryRosterFileRefsForDoctors(db, doctorKeys = []) {
   })).filter((file) => file.id && SOURCE_TYPES.includes(file.sourceType));
 }
 
+// Account linking must not discover file membership by walking retained history.
+export async function queryBoundedClaimFileRefs(db, claims = []) {
+  if (!db?.prepare || !claims.length) return [];
+  if (claims.length > 16) throw new Error("Account roster links exceed the claim limit.");
+  const files = [];
+  for (const sourceType of [...new Set(claims.map(claim => claim.sourceType))]) {
+    const active = await db.prepare(`SELECT id FROM roster_files INDEXED BY idx_roster_files_source_active
+      WHERE source_type=? AND active=1 LIMIT 33`).bind(sourceType).all();
+    if ((active.results || []).length > 32) throw new Error("Account roster sources exceed the active-file limit.");
+    const ids = (active.results || []).map(row => row.id);
+    if (!ids.length) continue;
+    const keys = [...new Set(claims.filter(claim => claim.sourceType === sourceType).map(claim => claim.key))];
+    const result = await db.prepare(`SELECT id,name,source_type,size,last_modified,added_at,uploaded_at,uploaded_by
+      FROM roster_files WHERE id IN (${ids.map(() => '?').join(',')}) AND active=1
+      AND EXISTS(SELECT 1 FROM roster_file_doctors WHERE file_id=roster_files.id AND source_type=?
+        AND doctor_key IN (${keys.map(() => '?').join(',')}))`)
+      .bind(...ids, sourceType, ...keys).all();
+    files.push(...(result.results || []).map(row => ({ id: row.id, repoId: row.id, name: row.name,
+      sourceType: row.source_type, active: true, size: row.size, lastModified: row.last_modified,
+      addedAt: row.added_at, uploadedAt: row.uploaded_at, uploadedBy: row.uploaded_by })));
+  }
+  return files;
+}
+
 export async function queryActiveRosterFileRefs(db) {
   if (!db?.prepare) return [];
   await ensureCalendarSchema(db);
@@ -4388,10 +4412,16 @@ export async function loadDoctorProfileMirror(db, profileId) {
   return doctorProfileFromRow(row);
 }
 
-export async function queryDoctorProfileMirrors(db) {
+export async function queryDoctorProfileMirrors(db, doctorKeys = null) {
   if (!db?.prepare) return [];
   await ensureCalendarSchema(db);
-  const rows = await db.prepare("SELECT * FROM doctor_profiles ORDER BY display_name, profile_id").all();
+  const keys = doctorKeys === null ? null : [...new Set(doctorKeys.filter(Boolean))];
+  if (keys?.length > 16) throw new Error("Account profile lookup exceeds the identity limit.");
+  if (keys && !keys.length) return [];
+  const rows = keys ? await db.prepare(`SELECT * FROM doctor_profiles INDEXED BY idx_doctor_profiles_doctor
+    WHERE doctor_key IN (${keys.map(() => '?').join(',')}) LIMIT 33`).bind(...keys).all()
+    : await db.prepare("SELECT * FROM doctor_profiles ORDER BY display_name, profile_id").all();
+  if (keys && (rows.results || []).length > 32) throw new Error("Account profiles exceed the identity limit.");
   return (rows.results || []).map(doctorProfileFromRow).filter(Boolean);
 }
 
