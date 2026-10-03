@@ -1,6 +1,6 @@
 const DB_NAME = "roster-facility-overview";
 const STORE_NAME = "snapshots";
-export const FACILITY_SNAPSHOT_SCHEMA_VERSION = 1;
+export const FACILITY_SNAPSHOT_SCHEMA_VERSION = 2;
 
 export function facilitySnapshotKey({ ownerKey, scopeKey, kind, query }) {
   return [FACILITY_SNAPSHOT_SCHEMA_VERSION, ownerKey, scopeKey, kind, stableJson(query)].join("|");

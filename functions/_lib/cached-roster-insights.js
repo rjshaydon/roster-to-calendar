@@ -1,3 +1,4 @@
+import { filterFacilityRowsBySegments } from "../../public/static/facility-access-policy.js";
 import { loadPublishedFacilityRange, loadPublishedFacilityDays } from './facility-overview-cache.js';
 import { normalizeRosterName } from './roster.js';
 
@@ -57,7 +58,7 @@ export async function loadCachedRosterInsights(r2, options, today, isWorking) {
   } };
   const firstDay = await loadPublishedFacilityDays(cachedR2, sources, options.startDate, today);
   const published = options.startDate === options.endDate && !firstDay.preparing
-    ? { preparing: false, events: firstDay.rows, revision: firstDay.revision }
+    ? { preparing: false, events: firstDay.rows, revision: firstDay.revision, missing: firstDay.missing }
     : await loadPublishedFacilityRange(cachedR2, sources, options.startDate, options.endDate, today);
   if (!published.preparing && !firstDay.preparing) {
     published.events = [...new Map([...published.events, ...firstDay.rows].map(row =>
@@ -65,8 +66,9 @@ export async function loadCachedRosterInsights(r2, options, today, isWorking) {
   }
   if (published.preparing) return { ok: false, unavailable: true, coworkers: [], doctors: [] };
   if (published.events.length > 50000) return { ok: false, unavailable: true, coworkers: [], doctors: [] };
-  const rows = selectCachedInsightRows(published.events.filter(row => isWorking(row.event, row.sourceType) && String(row.event?.start || "").slice(0,10) <= options.endDate && String(row.event?.end || row.event?.start || "").slice(0,10) >= options.startDate), options);
+  const permittedEvents = options.authorisedSegments ? filterFacilityRowsBySegments(published.events, options.authorisedSegments) : published.events;
+  const rows = selectCachedInsightRows(permittedEvents.filter(row => isWorking(row.event, row.sourceType) && String(row.event?.start || "").slice(0,10) <= options.endDate && String(row.event?.end || row.event?.start || "").slice(0,10) >= options.startDate), options);
   const doctors = [...new Map(rows.map(row => [`${row.sourceType}|${key(row.doctorKey)}`, { doctorKey: row.doctorKey, displayName: row.displayName, sourceType: row.sourceType }])).values()]
     .sort((a,b) => String(a.displayName).localeCompare(String(b.displayName)) || a.sourceType.localeCompare(b.sourceType));
-  return { ok: true, coworkers: rows, doctors, revision: published.revision, source: 'published-roster' };
+  return { ok: true, coworkers: rows, doctors, revision: published.revision, missing: [...(published.missing || []), ...(firstDay.missing || [])], source: 'published-roster' };
 }

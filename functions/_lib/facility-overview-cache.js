@@ -551,31 +551,49 @@ export async function loadPublishedFacilityRange(r2, sourceTypes, startDate, end
   if (!Number.isFinite(rangeDays) || rangeDays < 0 || rangeDays > 370) return { preparing: true, events: [], coverage: [], revision: "" };
   const months = monthsInRange(startDate, endDate);
   const selected = [];
+  const missing = [];
   for (const sourceType of [...new Set(sourceTypes.map(safeSource).filter(Boolean))]) {
     const manifest = await loadCachedSnapshot(r2, facilityMetadataManifestKey(sourceType));
-    if (!manifest) continue;
+    if (!manifest) { missing.push({ sourceType, startDate, endDate, reason: "manifest-unavailable" }); continue; }
     const visibleTerms = (manifest.terms || []).filter((term) => term.visibleFrom <= currentDate && term.termEnd >= startDate && term.termStart <= endDate);
-    if (!visibleTerms.length) continue;
-    const monthPointers = months.map((month) => [month, manifest.months?.[month]]).filter(([, pointer]) => pointer?.key);
+    if (!visibleTerms.length) { missing.push({ sourceType, startDate, endDate, reason: "history-unavailable" }); continue; }
+    const emptyRoster = Array.isArray(manifest.coverage) && !manifest.coverage.length;
+    let gap = null;
+    for (let date = startDate; date <= endDate;) {
+      const visible = visibleTerms.some(term => term.termStart <= date && term.termEnd >= date);
+      const covered = emptyRoster || !Array.isArray(manifest.coverage) || manifest.coverage.some(item => item.startDate <= date && item.endDate > date);
+      const reason = !visible ? "history-unavailable" : !covered ? "coverage-unavailable" : "";
+      if (reason && gap?.reason === reason) gap.endDate = date;
+      else { if (gap) missing.push(gap); gap = reason ? { sourceType, startDate: date, endDate: date, reason } : null; }
+      const next = new Date(`${date}T12:00:00Z`); next.setUTCDate(next.getUTCDate() + 1); date = next.toISOString().slice(0, 10);
+    }
+    if (gap) missing.push(gap);
+    const visibleMonths = emptyRoster ? [] : months.filter(month => visibleTerms.some(term => term.termStart.slice(0, 7) <= month && term.termEnd.slice(0, 7) >= month));
+    const monthPointers = visibleMonths.map((month) => [month, manifest.months?.[month]]).filter(([month, pointer]) => {
+      if (pointer?.key) return true;
+      missing.push({ sourceType, month, startDate, endDate, reason: "month-unavailable" });
+      return false;
+    });
     selected.push({ sourceType, manifest, visibleTerms, monthPointers });
   }
-  if (!selected.length) return { preparing: true, events: [], coverage: [], revision: "" };
-  const revision = await digest(selected.flatMap(({ visibleTerms, monthPointers }) => [
-    ...visibleTerms.map((term) => term.staffRevision || ""),
-    ...monthPointers.map(([, pointer]) => pointer.revision || ""),
-  ]).sort());
-  if (options.cachedRevision && String(options.cachedRevision) === revision) return { preparing: false, unchanged: true, events: [], coverage: [], revision };
+  if (!selected.length) return { preparing: true, events: [], coverage: [], revision: "", missing };
   const events = [];
   const coverage = [];
-  for (const { manifest, visibleTerms, monthPointers } of selected) {
+  let availableMonths = 0;
+  for (const { sourceType, manifest, visibleTerms, monthPointers } of selected) {
+    // A published manifest with no active coverage authoritatively removes
+    // current shifts; personal calendars must not retain a stale old roster.
+    if (Array.isArray(manifest.coverage) && !manifest.coverage.length) { availableMonths += 1; continue; }
     const overrides = new Map();
     for (const term of visibleTerms) {
       const staff = term.staffKey ? await loadCachedSnapshot(r2, term.staffKey) : null;
+      if (!staff) missing.push({ sourceType, termStart: term.termStart, startDate, endDate, reason: "staff-unavailable" });
       for (const entry of staff?.seniorityOverrides || []) overrides.set(`${entry.sourceType}|${entry.doctorKey}`, entry);
     }
-    for (const [, pointer] of monthPointers) {
+    for (const [month, pointer] of monthPointers) {
       const snapshot = await loadCachedSnapshot(r2, pointer.key);
-      if (!snapshot) return { preparing: true, events: [], coverage: [], revision: "" };
+      if (!Array.isArray(snapshot?.rows)) { missing.push({ sourceType, month, startDate, endDate, reason: "month-unavailable" }); continue; }
+      availableMonths += 1;
       for (const row of snapshot.rows || []) {
         const date = String(row.event?.start || "").slice(0, 10);
         if (date < startDate || date > endDate || !visibleTerms.some((term) => term.termStart <= date && term.termEnd >= date)) continue;
@@ -587,7 +605,10 @@ export async function loadPublishedFacilityRange(r2, sourceTypes, startDate, end
     }
     coverage.push(...(manifest.coverage || []));
   }
-  return { preparing: false, events, coverage, revision, sourceTypes: selected.map(item => item.sourceType), visibleTerms: selected.flatMap(item => item.visibleTerms.map(term => ({ sourceType: item.sourceType, termStart: term.termStart, termEnd: term.termEnd }))) };
+  const revision = await digest([selected.map(({ sourceType, visibleTerms, monthPointers }) => [sourceType,
+    visibleTerms.map(term => term.staffRevision || ""), monthPointers.map(([month, pointer]) => [month, pointer.revision || ""])]), missing]);
+  if (!missing.length && options.cachedRevision === revision) return { preparing: false, unchanged: true, events: [], coverage: [], revision, missing };
+  return { preparing: !availableMonths, partial: missing.length > 0, missing, events, coverage, revision, sourceTypes: selected.map(item => item.sourceType), visibleTerms: selected.flatMap(item => item.visibleTerms.map(term => ({ sourceType: item.sourceType, termStart: term.termStart, termEnd: term.termEnd }))) };
 }
 
 export async function loadPublishedFacilityDays(r2, sourceTypes, date, currentDate = date) {
@@ -595,18 +616,20 @@ export async function loadPublishedFacilityDays(r2, sourceTypes, date, currentDa
   const rows = [];
   const revisions = [];
   let found = false;
+  const missing = [];
   for (const sourceType of [...new Set(sourceTypes.map(safeSource).filter(Boolean))]) {
     const manifest = await loadCachedSnapshot(r2, facilityMetadataManifestKey(sourceType));
     const pointer = manifest?.days?.[date];
-    if (!pointer?.key) continue;
+    if (!pointer?.key) { missing.push({ sourceType, startDate: date, endDate: date, reason: "day-unavailable" }); continue; }
     const day = await loadCachedSnapshot(r2, pointer.key);
-    if (!day) continue;
+    if (!Array.isArray(day?.rows)) { missing.push({ sourceType, startDate: date, endDate: date, reason: "day-unavailable" }); continue; }
     const termStart = termStartForDate(date);
     const term = (manifest.terms || []).find((entry) => entry.termStart === termStart && entry.visibleFrom <= currentDate);
-    if (!term) continue;
+    if (!term) { missing.push({ sourceType, startDate: date, endDate: date, reason: "history-unavailable" }); continue; }
     found = true;
     revisions.push(pointer.revision || "", term.staffRevision || "");
     const staff = term?.staffKey ? await loadCachedSnapshot(r2, term.staffKey) : null;
+    if (!staff) missing.push({ sourceType, termStart, reason: "staff-unavailable" });
     const overrides = new Map((staff?.seniorityOverrides || []).map((entry) => [`${entry.sourceType}|${entry.doctorKey}`, entry]));
     rows.push(...(day.rows || []).map((row) => {
       const override = overrides.get(`${row.sourceType}|${row.doctorKey}`);
@@ -615,7 +638,7 @@ export async function loadPublishedFacilityDays(r2, sourceTypes, date, currentDa
         : row;
     }));
   }
-  return { preparing: !found, rows, revision: await digest(revisions.sort()) };
+  return { preparing: !found, rows, missing, partial: missing.length > 0, revision: await digest([revisions.sort(), missing]) };
 }
 
 export async function loadPublishedPreviousDdhNight(r2, date, now = new Date()) {
@@ -635,8 +658,13 @@ export async function loadPublishedPreviousDdhNight(r2, date, now = new Date()) 
 
 export async function loadPublishedFacilityMetadata(r2, sourceTypes, today) {
   if (!r2?.get) return { preparing: true, facilities: [], catalogEvents: [] };
+  const missing = [];
   const manifests = (await Promise.all([...new Set(sourceTypes.map(safeSource).filter(Boolean))]
-    .map((sourceType) => loadCachedSnapshot(r2, facilityMetadataManifestKey(sourceType))))).filter(Boolean);
+    .map(async sourceType => {
+      const manifest = await loadCachedSnapshot(r2, facilityMetadataManifestKey(sourceType));
+      if (!manifest) missing.push({ sourceType, reason: "manifest-unavailable" });
+      return manifest;
+    }))).filter(Boolean);
   if (!manifests.length) return { preparing: true, facilities: [], catalogEvents: [] };
   const facilities = manifests.flatMap((manifest) => manifest.coverage || []);
   const catalogEvents = [];
@@ -659,7 +687,7 @@ export async function loadPublishedFacilityMetadata(r2, sourceTypes, today) {
       }
     }
   }
-  return { preparing: false, facilities, catalogEvents, revision: await digest({ facilities, catalogEvents }) };
+  return { preparing: false, facilities, catalogEvents, missing, revision: await digest({ facilities, catalogEvents, missing }) };
 }
 
 // A bounded identity directory built solely from visible published term membership.
@@ -706,21 +734,23 @@ export async function loadPublishedFacilityStaff(r2, sourceTypes, termStart, tod
   if (!r2?.get) return { preparing: true };
   const payloads = [];
   const revisions = [];
+  const missing = [];
   for (const sourceType of [...new Set(sourceTypes.map(safeSource).filter(Boolean))]) {
     const manifest = await loadCachedSnapshot(r2, facilityMetadataManifestKey(sourceType));
-    if (!manifest) continue;
+    if (!manifest) { missing.push({ sourceType, termStart, reason: "manifest-unavailable" }); continue; }
     const term = (manifest.terms || []).find((entry) => entry.termStart === termStart);
-    if (!term || term.visibleFrom > today || !term.staffKey) continue;
+    if (!term || term.visibleFrom > today || !term.staffKey) { missing.push({ sourceType, termStart, reason: "staff-unavailable" }); continue; }
     const staff = await loadCachedSnapshot(r2, term.staffKey);
     if (staff) {
       payloads.push(staff);
       revisions.push(term.staffRevision || "");
-    }
+    } else missing.push({ sourceType, termStart, reason: "staff-unavailable" });
   }
-  if (!payloads.length) return { preparing: true };
+  if (!payloads.length) return { preparing: true, missing };
   return {
     preparing: false,
-    revision: await digest(revisions.sort()),
+    partial: missing.length > 0, missing,
+    revision: await digest([revisions.sort(), missing]),
     members: payloads.flatMap((item) => item.members || []),
     events: payloads.flatMap((item) => item.events || []),
     coverage: payloads.flatMap((item) => item.coverage || []),

@@ -69,6 +69,21 @@ export function facilityReadRoute(env = {}, { actorRole = "", actorEmail = "", s
   return requested.length && requested.every((source) => allowed.has(source)) ? "shared" : "blocked";
 }
 
+// Call only after authorising every requested hospital. Combined views may
+// retain enabled hospitals without weakening explicit single-site requests.
+export function facilityReaderSelection(env, viewer, sources, allowPartial = false) {
+  const requested = normalizeSources(sources);
+  const route = facilityReadRoute(env, { ...viewer, sources: requested });
+  if (route !== "blocked") return { route, sources: requested, missing: [] };
+  const enabled = new Set(facilityReaderSources(env));
+  const available = requested.filter(source => enabled.has(source));
+  const missing = requested.filter(source => !enabled.has(source)).map(sourceType => ({ sourceType, reason: "reader-unavailable" }));
+  if (allowPartial && facilityReadRoute(env, { ...viewer, sources: available }) === "shared") {
+    return { route: "shared", sources: available, missing };
+  }
+  return { route: "blocked", sources: [], missing };
+}
+
 function configuredSet(value) {
   return new Set(normalizeSources(String(value || "").split(",")));
 }

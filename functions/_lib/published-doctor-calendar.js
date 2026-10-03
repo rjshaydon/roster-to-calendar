@@ -11,7 +11,8 @@ export async function loadPublishedDoctorCalendar(r2, profile, { range, today, l
     throw new Error('Published doctor calendar requires bounded site identities.');
   }
   const published = await loadPublishedFacilityRange(r2, sources, range.startDate, range.endDate, today);
-  if (published.preparing || sources.some(source => !published.sourceTypes?.includes(source)) || published.events.length > 50000) {
+  if (published.preparing || sources.some(source => !published.sourceTypes?.includes(source)) || published.events.length > 50000
+    || (published.missing || []).some(item => ["manifest-unavailable", "month-unavailable", "staff-unavailable"].includes(item.reason))) {
     return { snapshot: null, snapshotAvailable: false, snapshotStale: false, stale: false, snapshotStatus: 'missing', snapshotSource: 'published-roster', calendarRevision: '' };
   }
   const markers = new Set(aliases.map(alias => `${alias.sourceType}|${alias.key}`));

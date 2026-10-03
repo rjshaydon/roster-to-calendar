@@ -553,8 +553,9 @@ assert.equal(publishedRange.events.length, 2, "the monthly range snapshot must c
 assert.equal(db.sql.length, 0, "shared range readers must perform zero D1 queries");
 const rangeReadsBeforeRevalidation = r2.gets;
 const unchangedPublishedRange = await loadPublishedFacilityRange(r2, ["mmc"], "2026-08-01", "2026-08-31", "2026-08-03", { cachedRevision: publishedRange.revision });
-assert.equal(unchangedPublishedRange.unchanged, true);
-assert.equal(r2.gets - rangeReadsBeforeRevalidation, 1, "unchanged range revalidation must read only the ED manifest");
+assert.equal(unchangedPublishedRange.unchanged, undefined, "a partly covered range must not be reported as a complete unchanged answer");
+assert.ok(unchangedPublishedRange.missing.length, "dates outside the visible term must report missing coverage");
+assert.ok(r2.gets - rangeReadsBeforeRevalidation <= 4, "coverage revalidation remains bounded to the manifest and its publication objects");
 const dayPutCount = r2.puts;
 const repeatedDayPublication = await publishFacilityDays({ env: { ROSTER_DB: db, ROSTER_FILES: r2 } }, "mmc", ["2026-08-03"]);
 assert.equal(repeatedDayPublication.unchanged, true);
@@ -608,10 +609,11 @@ const creatorUsers = await callSharedAction({ action: "listUsers" }, { creatorDi
 assert.equal(creatorUsers.users.length, 100);
 assert.ok(creatorUsers.nextCursor);
 assert.equal(db.sql.some(sql => /\broster_(daily_presence|term_members|doctor_directory)\b/.test(sql)), false);
+// The fixture publishes only one month, despite retaining other visible terms.
+// Profiles must not replace a personal calendar from that incomplete history.
 const profileCalendar = await callSharedAction({ action: "loadDoctorProfile", profileId: "fixture-trainee", doctorKey: "TERM TRAINEE", displayName: "Term Trainee", sourceTypes: ["mmc"], aliases: [{ sourceType: "mmc", key: "TERM TRAINEE", displayName: "Term Trainee" }] }, { creatorDirectory: true });
 assert.equal(profileCalendar.snapshotSource, "published-roster");
-assert.equal(profileCalendar.snapshotAvailable, true);
-assert.ok(profileCalendar.snapshot.preview.events.length);
+assert.equal(profileCalendar.snapshotAvailable, false);
 assert.equal(db.sql.some(sql => /\broster_(daily_presence|term_members|doctor_directory|file_doctors)\b/.test(sql)), false, "profile switching must not discover roster history");
 const resolvedDoctor = await callSharedAction({ action: "resolveDoctorAccount", doctor: { key: "TERM TRAINEE", sourceTypes: ["mmc"] } }, { creatorDirectory: true });
 assert.equal(resolvedDoctor.mode, "doctor-profile", "Creator accounts must not be treated as claimed clinician accounts");
@@ -620,21 +622,21 @@ sqlite.prepare("UPDATE account_profiles SET role = 'user' WHERE email = 'doctor@
 await callSharedAction({ action: "listRosterDoctors" }, { creatorDirectory: true, status: 403 });
 const handlerMetadata = await callSharedAction({ action: "queryFacilityOverviewMetadata", sourceTypes: ["mmc"] });
 assert.ok(handlerMetadata.catalogEvents.length > 0);
-const handlerStaff = await callSharedAction({ action: "queryFacilityOverviewStaff", facilityKey: "mmc", termStart: "2026-08-03", termEnd: "2026-11-02" });
+const handlerStaff = await callSharedAction({ action: "queryFacilityOverviewStaff", facilityKey: "mmc", termStart: "2026-08-03", termEnd: "2026-11-01" });
 assert.equal(handlerStaff.members.length, 2);
 const handlerDay = await callSharedAction({ action: "queryFacilityOverviewOnShift", facilityKey: "mmc", date: "2026-08-03", includeClinicalSupport: true });
 assert.equal(handlerDay.events.length, 1, "On shift handler must filter the shared day object using existing working-shift rules");
 const unchangedHandlerDay = await callSharedAction({ action: "queryFacilityOverviewOnShift", facilityKey: "mmc", date: "2026-08-03", includeClinicalSupport: true, cachedRevision: handlerDay.revision });
 assert.equal(unchangedHandlerDay.rosterUnchanged, true, "an unchanged On shift revision must not retransmit roster events");
 assert.equal(unchangedHandlerDay.events, undefined);
-const handlerRange = await callSharedAction({ action: "queryFacilityOverviewByStream", startDate: "2026-08-01", endDate: "2026-08-31", selections: [{ id: "day", facilityKey: "mmc", streamKey: "day", seniority: "ALL" }] });
+const handlerRange = await callSharedAction({ action: "queryFacilityOverviewByStream", startDate: "2026-08-03", endDate: "2026-08-31", selections: [{ id: "day", facilityKey: "mmc", streamKey: "day", seniority: "ALL" }] });
 assert.equal(handlerRange.events.length, 1, "By stream must use the shared monthly object and existing working-shift filtering");
 assert.equal(db.sql.some((sql) => /roster_events|roster_daily_presence/i.test(sql)), false, "By stream shared reads must not query roster history");
-assert.equal((await callSharedAction({ action: "queryFacilityOverviewByStream", startDate: "2026-08-01", endDate: "2026-08-31", selections: [{ id: "day", facilityKey: "mmc", streamKey: "day", seniority: "ALL" }], cachedRevision: handlerRange.revision })).unchanged, true);
+assert.equal((await callSharedAction({ action: "queryFacilityOverviewByStream", startDate: "2026-08-03", endDate: "2026-08-31", selections: [{ id: "day", facilityKey: "mmc", streamKey: "day", seniority: "ALL" }], cachedRevision: handlerRange.revision })).unchanged, undefined, "incomplete coverage must be revalidated");
 const handlerTogether = await callSharedAction({ action: "queryFacilityOverviewWorkingTogether", startDate: "2026-08-01", endDate: "2026-08-31", sourceTypes: ["mmc"], doctorKeys: ["PERMANENT SMS"] });
 assert.equal(handlerTogether.events.length, 1, "Working together must filter the shared monthly object by doctor");
 assert.equal(db.sql.some((sql) => /roster_events|roster_daily_presence/i.test(sql)), false, "Working together shared reads must not query roster history");
-assert.equal((await callSharedAction({ action: "queryFacilityOverviewWorkingTogether", startDate: "2026-08-01", endDate: "2026-08-31", sourceTypes: ["mmc"], doctorKeys: ["PERMANENT SMS"], cachedRevision: handlerTogether.revision })).unchanged, true);
+assert.equal((await callSharedAction({ action: "queryFacilityOverviewWorkingTogether", startDate: "2026-08-01", endDate: "2026-08-31", sourceTypes: ["mmc"], doctorKeys: ["PERMANENT SMS"], cachedRevision: handlerTogether.revision })).unchanged, undefined, "incomplete coverage must be revalidated");
 sqlite.prepare("UPDATE account_profiles SET insights_enabled=1 WHERE email='doctor@example.com'").run();
 const cachedWho = await callSharedAction({ action: "queryRosterInsights", startDate: "2026-08-01", endDate: "2026-08-31", sourceTypes: ["mmc"] });
 assert.equal(cachedWho.source, "published-roster");
@@ -657,13 +659,12 @@ const blockedDisallowedDay = await callSharedAction(
   { status: 403 },
 );
 assert.match(blockedDisallowedDay.error, /not available/i, "a disallowed canary ED must be blocked without a legacy query");
-const forbiddenAllStaff = await callSharedAction(
-  { action: "queryFacilityOverviewStaff", facilityKey: "all", termStart: "2026-08-03", termEnd: "2026-11-02" },
-  { status: 403 },
+const scopedAllStaff = await callSharedAction(
+  { action: "queryFacilityOverviewStaff", facilityKey: "all", termStart: "2026-08-03", termEnd: "2026-11-01" },
 );
-assert.match(forbiddenAllStaff.error, /not available/i, "a site-scoped account must not read All EDs Staff data");
+assert.equal(scopedAllStaff.members.length, handlerStaff.members.length, "All my hospitals must stay within the authorised hospital set");
 const missingHandlerStaff = await callSharedAction(
-  { action: "queryFacilityOverviewStaff", facilityKey: "mmc", termStart: "2026-08-03", termEnd: "2026-11-02" },
+  { action: "queryFacilityOverviewStaff", facilityKey: "mmc", termStart: "2026-08-03", termEnd: "2026-11-01" },
   { r2: new LocalR2(), status: 503 },
 );
 assert.equal(missingHandlerStaff.preparing, true, "a handler cache miss must not run the legacy Staff query");
