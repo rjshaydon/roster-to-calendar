@@ -1,3 +1,4 @@
+import { FACILITY_ACCESS_VERSION, facilityAccessKeys, restrictedFacilityScope, validFacilityDateRange } from "./facility-access-policy.js";
 import { planRosterImportBatches } from "./roster-import-batches.js";
 import { makeSessionPatch } from "./session-settings-patch.js";
 import {
@@ -833,7 +834,7 @@ facilityOverviewSection?.addEventListener("click", (event) => {
     } else if (facilityOverviewState.tab === "by-stream") {
       void openFacilityOverviewByStream();
     } else {
-      if (facilityOverviewState.tab === "together") initializeFacilityOverviewTogetherState();
+      if (facilityOverviewState.tab === "together") void loadFacilityOverviewTogether();
       renderFacilityOverview();
     }
     return;
@@ -854,6 +855,12 @@ facilityOverviewSection?.addEventListener("click", (event) => {
       reconcileFacilityOverviewByStreamDuplicates();
       void loadFacilityOverviewByStream();
     }
+    return;
+  }
+  if (event.target.closest("[data-facility-overview-together-who]")) {
+    facilityOverviewState.togetherStaffKeys = [""];
+    facilityOverviewState.togetherUserClearedAll = true;
+    void loadFacilityOverviewTogether();
     return;
   }
   if (event.target.closest("[data-facility-overview-together-add]")) {
@@ -9157,29 +9164,26 @@ function canUseFacilityOverview() {
   // A Creator entering somebody else's account/profile should see precisely
   // that person's entitlement, not the Creator's unrestricted entitlement.
   if (activeCalendarMode() === "doctor-profile") {
-    return currentFacilityOverviewEnabled === true && currentFacilityOverviewAccess.mode !== "denied";
+    return currentFacilityOverviewEnabled === true && (currentFacilityOverviewAccess.mode !== "denied" || currentFacilityOverviewAccess.canSearchHistory === true);
   }
   if (currentUserRole === "creator" && !adminViewingEmail) return true;
-  return currentFacilityOverviewEnabled === true && currentFacilityOverviewAccess.mode !== "denied";
+  return currentFacilityOverviewEnabled === true && (currentFacilityOverviewAccess.mode !== "denied" || currentFacilityOverviewAccess.canSearchHistory === true);
 }
 
 function sanitizeFacilityOverviewAccess(value) {
-  const mode = value?.mode === "all" ? "all" : value?.mode === "site" ? "site" : "denied";
-  const facilityKey = mode === "site" ? String(value?.facilityKey || "").trim().toUpperCase() : "";
-  return {
-    mode: mode === "site" && !facilityKey ? "denied" : mode,
-    isSms: value?.isSms === true,
+  const scope = value?.mode === "all" ? { mode: "all", facilityKey: "", facilityKeys: [] }
+    : ["site", "sites"].includes(value?.mode) ? restrictedFacilityScope(facilityAccessKeys(value)) : { mode: "denied", facilityKey: "", facilityKeys: [] };
+  return { ...scope, version: value?.version || FACILITY_ACCESS_VERSION,
+    isSms: value?.isSms === true, canSearchHistory: value?.canSearchHistory === true,
     workingToday: value?.workingToday === true,
-    facilityKey,
+    termStart: String(value?.termStart || ""), termEnd: String(value?.termEnd || ""),
     preferredFacilityKey: String(value?.preferredFacilityKey || "").trim().toUpperCase(),
-    today: String(value?.today || "").slice(0, 10),
-    expiresAt: String(value?.expiresAt || ""),
-  };
+    today: String(value?.today || "").slice(0, 10), expiresAt: String(value?.expiresAt || "") };
 }
 
 function facilityOverviewSnapshotContext() {
   const ownerKey = normalizeEmail(facilityOverviewTargetEmail() || currentUserEmail);
-  const scopeKey = `${currentFacilityOverviewAccess.mode}:${currentFacilityOverviewAccess.facilityKey || "ALL"}`;
+  const scopeKey = `${FACILITY_ACCESS_VERSION}:${currentFacilityOverviewAccess.mode}:${facilityAccessKeys(currentFacilityOverviewAccess).join(",")}:${currentFacilityOverviewAccess.today}`;
   return { ownerKey, scopeKey, accessExpiresAt: currentFacilityOverviewAccess.expiresAt || "" };
 }
 
@@ -9192,6 +9196,7 @@ function storeFacilityOverviewSnapshot(kind, query, payload) {
 }
 
 function refreshFacilityOverviewSnapshotAccess(data) {
+  if (data?.facilityOverviewAccess) currentFacilityOverviewAccess = sanitizeFacilityOverviewAccess(data.facilityOverviewAccess);
   const expiresAt = String(data?.accessExpiresAt || "");
   if (Number.isFinite(Date.parse(expiresAt)) && Date.parse(expiresAt) > Date.now()) currentFacilityOverviewAccess.expiresAt = expiresAt;
 }
@@ -9205,7 +9210,7 @@ function renderFacilityOverviewFacilityControl(selected, facilities, options = {
     return `<label class="field"><span>ED</span><output class="facility-overview-fixed-facility">${escapeHtml(displaySourceCode(currentFacilityOverviewAccess.facilityKey))}</output></label>`;
   }
   const allValue = options.allValue || "ALL";
-  return `<label class="field"><span>ED</span><select data-facility-overview-facility><option value="${allValue}" ${selected === allValue ? "selected" : ""}>All EDs</option>${facilities.map((facility) => `<option value="${escapeHtml(facility)}" ${facility === selected ? "selected" : ""}>${escapeHtml(displaySourceCode(facility))}</option>`).join("")}</select></label>`;
+  return `<label class="field"><span>ED</span><select data-facility-overview-facility><option value="${allValue}" ${selected === allValue ? "selected" : ""}>${currentFacilityOverviewAccess.mode === "all" ? "All EDs" : "All my hospitals"}</option>${facilities.map((facility) => `<option value="${escapeHtml(facility)}" ${facility === selected ? "selected" : ""}>${escapeHtml(displaySourceCode(facility))}</option>`).join("")}</select></label>`;
 }
 
 function syncFacilityOverviewAccess() {
@@ -9370,7 +9375,7 @@ function resetFacilityOverviewScroll() {
 }
 
 function facilityOverviewFacilityOptions() {
-  if (facilityOverviewIsSiteScoped()) return [currentFacilityOverviewAccess.facilityKey];
+  if (currentFacilityOverviewAccess.mode !== "all") return facilityAccessKeys(currentFacilityOverviewAccess);
   const values = new Set();
   for (const source of ["mmc", "ddh", "casey", "mch", "vhh"]) {
     if (Array.isArray(latestPreview?.sources?.[source]) && latestPreview.sources[source].length) values.add(source);
@@ -9434,6 +9439,12 @@ async function loadFacilityOverviewMetadata() {
     return data;
     } catch (error) {
       if (facilityOverviewRequestWasCancelled(error)) return null;
+      if (error.status === 403 || error.status === 401) {
+        if (error.facilityOverviewAccess) refreshFacilityOverviewSnapshotAccess({ facilityOverviewAccess: error.facilityOverviewAccess });
+        facilityOverviewState.byStreamCoverage = [];
+        facilityOverviewState.byStreamCatalog = [];
+        return null;
+      }
       console.warn("Could not load At a glance stream metadata", error);
       return cached;
     } finally {
@@ -9634,6 +9645,7 @@ function beginFacilityOverviewAccountSession() {
 }
 
 function resetFacilityOverviewSessionState() {
+  facilityOverviewState.togetherContext = null;
   cancelFacilityOverviewDataRequest();
   const today = formatDateKey(new Date());
   const currentTerm = australianTermForDate(new Date());
@@ -9688,16 +9700,21 @@ function resetFacilityOverviewSessionState() {
 }
 
 function applyFacilityOverviewSiteScope() {
-  if (!facilityOverviewIsSiteScoped()) return;
-  const facilityKey = currentFacilityOverviewAccess.facilityKey;
-  facilityOverviewState.facilityKey = facilityKey;
-  facilityOverviewState.preferredFacilityKey = facilityKey;
-  facilityOverviewState.togetherFacilityKey = facilityKey;
-  facilityOverviewState.byStreamRows = (facilityOverviewState.byStreamRows || []).map((row) => ({ ...row, facilityKey }));
-  facilityOverviewState.byStreamCatalog = (facilityOverviewState.byStreamCatalog || []).filter((entry) => entry.facilityKey === facilityKey);
+  if (currentFacilityOverviewAccess.mode === "all") return;
+  const facilities = facilityAccessKeys(currentFacilityOverviewAccess);
+  if (facilityOverviewState.tab !== "together" && currentFacilityOverviewAccess.mode === "denied") facilityOverviewState.tab = "together";
+  if (facilities.length === 1) {
+    facilityOverviewState.facilityKey = facilities[0];
+    facilityOverviewState.preferredFacilityKey = facilities[0];
+  } else if (facilityOverviewState.facilityKey !== "ALL" && !facilities.includes(facilityOverviewState.facilityKey)) {
+    facilityOverviewState.facilityKey = facilities.includes(currentFacilityOverviewAccess.preferredFacilityKey) ? currentFacilityOverviewAccess.preferredFacilityKey : facilities[0] || "";
+  }
+  facilityOverviewState.byStreamRows = (facilityOverviewState.byStreamRows || []).map(row => ({ ...row, facilityKey: facilities.includes(row.facilityKey) ? row.facilityKey : facilities[0] || "" }));
+  facilityOverviewState.byStreamCatalog = (facilityOverviewState.byStreamCatalog || []).filter(entry => facilities.includes(entry.facilityKey));
 }
 
 function resetFacilityOverviewAccessForEnteredUser() {
+  facilityOverviewState.togetherContext = null;
   currentFacilityOverviewMaintenance = true;
   currentFacilityOverviewEnabled = false;
   currentFacilityOverviewAccess = {
@@ -9754,7 +9771,8 @@ async function openFacilityOverview(options = {}) {
   // the selector limited to hospitals already present in the selected
   // doctor's local calendar. Shared metadata is R2-backed and performs no D1
   // query; access scoping is still enforced by the server response.
-  await loadFacilityOverviewMetadata();
+  if (currentFacilityOverviewAccess.mode === "denied") facilityOverviewState.tab = "together";
+  else await loadFacilityOverviewMetadata();
   const facilities = facilityOverviewFacilityOptions();
   if (!facilityOverviewState.facilityKey || (facilityOverviewState.facilityKey !== "ALL" && !facilities.includes(facilityOverviewState.facilityKey))) {
     facilityOverviewState.facilityKey = facilities[0] || "MMC";
@@ -9770,7 +9788,7 @@ async function openFacilityOverview(options = {}) {
   renderFacilityOverview();
   if (facilityOverviewState.tab === "staff") await loadFacilityOverviewStaff();
   else if (facilityOverviewState.tab === "by-stream") await openFacilityOverviewByStream();
-  else if (facilityOverviewState.tab === "together") initializeFacilityOverviewTogetherState();
+  else if (facilityOverviewState.tab === "together") void loadFacilityOverviewTogether();
   else await loadFacilityOverviewOnShift();
 }
 
@@ -9854,6 +9872,7 @@ function renderFacilityOverview() {
   facilityOverviewBody.classList.toggle("is-working-together", activeTab === "together");
   facilityOverviewSection?.querySelectorAll("[data-facility-overview-tab]").forEach((button) => {
     const selected = button.dataset.facilityOverviewTab === activeTab;
+    button.disabled = currentFacilityOverviewAccess.mode === "denied" && button.dataset.facilityOverviewTab !== "together";
     button.classList.toggle("is-active", selected);
     button.setAttribute("aria-selected", String(selected));
   });
@@ -9863,7 +9882,9 @@ function renderFacilityOverview() {
       ? facilityOverviewState.facilityKey : "ALL";
     facilityOverviewState.facilityKey = selected || "ALL";
     const selectedTerm = australianTermForDate(parseDateOnly(facilityOverviewState.staffTermStart || formatDateKey(new Date())));
-    const terms = facilityOverviewState.staffTerms.length ? facilityOverviewState.staffTerms : [{ value: formatDateKey(selectedTerm.start), label: formatAustralianTermLabel(selectedTerm) }];
+    const terms = currentFacilityOverviewAccess.mode !== "all"
+      ? [{ value: currentFacilityOverviewAccess.termStart || formatDateKey(australianTermForDate(new Date()).start), label: formatAustralianTermLabel(australianTermForDate(new Date())) }]
+      : facilityOverviewState.staffTerms.length ? facilityOverviewState.staffTerms : [{ value: formatDateKey(selectedTerm.start), label: formatAustralianTermLabel(selectedTerm) }];
     facilityOverviewControls.innerHTML = `
       ${renderFacilityOverviewFacilityControl(facilityOverviewState.facilityKey, facilities)}
       <label class="field facility-overview-staff-search"><span>Find staff</span><input type="search" value="${escapeHtml(facilityOverviewState.staffQuery)}" placeholder="Name" data-facility-overview-staff-search></label>
@@ -9883,8 +9904,8 @@ function renderFacilityOverview() {
   if (activeTab === "by-stream") {
     initializeFacilityOverviewByStreamState();
     facilityOverviewControls.innerHTML = `
-      <label class="field"><span>From</span><input type="date" value="${escapeHtml(facilityOverviewState.byStreamFrom)}" data-facility-overview-by-stream-date="from"></label>
-      <label class="field"><span>To</span><input type="date" value="${escapeHtml(facilityOverviewState.byStreamTo)}" data-facility-overview-by-stream-date="to"></label>
+      <label class="field"><span>From</span><input type="date" value="${escapeHtml(facilityOverviewState.byStreamFrom)}" ${facilityOverviewOrdinaryDateAttributes()} data-facility-overview-by-stream-date="from"></label>
+      <label class="field"><span>To</span><input type="date" value="${escapeHtml(facilityOverviewState.byStreamTo)}" ${facilityOverviewOrdinaryDateAttributes()} data-facility-overview-by-stream-date="to"></label>
       <button type="button" class="button button-secondary facility-overview-by-stream-today" data-facility-overview-today>Today</button>
       ${renderFacilityOverviewDateNavigation("range")}
     `;
@@ -9899,7 +9920,7 @@ function renderFacilityOverview() {
   const content = facilityOverviewState.content || `<article class="issue-card"><p>Choose an ED and date to load rostered staff.</p></article>`;
   facilityOverviewControls.innerHTML = `
     ${renderFacilityOverviewFacilityControl(selected, facilities)}
-    <label class="field"><span>Date</span><input type="date" value="${escapeHtml(facilityOverviewState.date)}" data-facility-overview-date></label>
+    <label class="field"><span>Date</span><input type="date" value="${escapeHtml(facilityOverviewState.date)}" ${facilityOverviewOrdinaryDateAttributes()} data-facility-overview-date></label>
     ${renderFacilityOverviewDateNavigation("day")}
   `;
   facilityOverviewBody.innerHTML = `<div class="facility-overview-results">${content}</div>`;
@@ -9950,7 +9971,9 @@ function renderFacilityOverviewHeader() {
   const togetherView = facilityOverviewState.tab === "together";
   const byStreamView = facilityOverviewState.tab === "by-stream";
   const selectedTerm = australianTermForDate(parseDateOnly(facilityOverviewState.staffTermStart || formatDateKey(new Date())));
-  const terms = facilityOverviewState.staffTerms.length ? facilityOverviewState.staffTerms : [{ value: formatDateKey(selectedTerm.start), label: formatAustralianTermLabel(selectedTerm) }];
+  const terms = currentFacilityOverviewAccess.mode !== "all"
+      ? [{ value: currentFacilityOverviewAccess.termStart || formatDateKey(australianTermForDate(new Date()).start), label: formatAustralianTermLabel(australianTermForDate(new Date())) }]
+      : facilityOverviewState.staffTerms.length ? facilityOverviewState.staffTerms : [{ value: formatDateKey(selectedTerm.start), label: formatAustralianTermLabel(selectedTerm) }];
   const previousTerm = selectedTerm.termNumber === 1
     ? buildAustralianTerm(selectedTerm.year - 1, 4, startMonthIndexForTerm(4))
     : buildAustralianTerm(selectedTerm.year, selectedTerm.termNumber - 1, startMonthIndexForTerm(selectedTerm.termNumber - 1));
@@ -9975,8 +9998,8 @@ function renderFacilityOverviewHeader() {
             </label>
             ${hasNext ? `<button type="button" class="button button-secondary" data-facility-overview-staff-term-step="1" aria-label="Next term">›</button>` : ""}
           ` : togetherView ? `<span class="facility-overview-header-note">Compare staff rosters</span>` : byStreamView ? `
-            <label class="preview-range-input-control"><span class="preview-range-label">From</span><input type="date" class="preview-range-button preview-range-date-input" value="${escapeHtml(facilityOverviewState.byStreamFrom)}" data-facility-overview-by-stream-date="from"></label>
-            <label class="preview-range-input-control"><span class="preview-range-label">To</span><input type="date" class="preview-range-button preview-range-date-input" value="${escapeHtml(facilityOverviewState.byStreamTo)}" data-facility-overview-by-stream-date="to"></label>
+            <label class="preview-range-input-control"><span class="preview-range-label">From</span><input type="date" class="preview-range-button preview-range-date-input" value="${escapeHtml(facilityOverviewState.byStreamFrom)}" ${facilityOverviewOrdinaryDateAttributes()} data-facility-overview-by-stream-date="from"></label>
+            <label class="preview-range-input-control"><span class="preview-range-label">To</span><input type="date" class="preview-range-button preview-range-date-input" value="${escapeHtml(facilityOverviewState.byStreamTo)}" ${facilityOverviewOrdinaryDateAttributes()} data-facility-overview-by-stream-date="to"></label>
             <button type="button" class="button button-secondary preview-today-button" data-facility-overview-today>Today</button>
             ${renderFacilityOverviewDateNavigation("range", { header: true })}
           ` : `
@@ -10003,9 +10026,15 @@ function renderFacilityOverviewDateNavigation(kind, { header = false } = {}) {
   const previous = range ? "Previous date range" : "Previous day";
   const next = range ? "Next date range" : "Next day";
   const className = header ? "facility-overview-header-date-navigation" : "facility-overview-date-actions";
+  const term = australianTermForDate(new Date());
+  const restricted = currentFacilityOverviewAccess.mode !== "all";
+  const lower = range ? facilityOverviewState.byStreamFrom : facilityOverviewState.date;
+  const upper = range ? facilityOverviewState.byStreamTo : facilityOverviewState.date;
+  const previousDisabled = restricted && lower <= formatDateKey(term.start);
+  const nextDisabled = restricted && upper >= formatDateKey(addDays(term.end, -1));
   return `<div class="${className}" aria-label="${range ? "Move date range" : "Move date"}">
-    <button type="button" class="button button-secondary" data-facility-overview-date-step="-1" aria-label="${previous}"><span class="facility-overview-date-navigation-label">Previous</span><span class="facility-overview-date-navigation-chevron" aria-hidden="true">‹</span></button>
-    <button type="button" class="button button-secondary" data-facility-overview-date-step="1" aria-label="${next}"><span class="facility-overview-date-navigation-label">Next</span><span class="facility-overview-date-navigation-chevron" aria-hidden="true">›</span></button>
+    <button type="button" class="button button-secondary" data-facility-overview-date-step="-1" ${previousDisabled ? "disabled" : ""} aria-label="${previous}"><span class="facility-overview-date-navigation-label">Previous</span><span class="facility-overview-date-navigation-chevron" aria-hidden="true">‹</span></button>
+    <button type="button" class="button button-secondary" data-facility-overview-date-step="1" ${nextDisabled ? "disabled" : ""} aria-label="${next}"><span class="facility-overview-date-navigation-label">Next</span><span class="facility-overview-date-navigation-chevron" aria-hidden="true">›</span></button>
   </div>`;
 }
 
@@ -10215,9 +10244,11 @@ async function loadFacilityOverviewByStream() {
     facilityOverviewState.byStreamContent = facilityOverviewByStreamContentFromData(data);
     void storeFacilityOverviewSnapshot("by-stream", cacheQuery, data);
   } catch (error) {
+    if (error.facilityOverviewAccess) refreshFacilityOverviewSnapshotAccess({ facilityOverviewAccess: error.facilityOverviewAccess });
     if (facilityOverviewRequestWasCancelled(error)) return;
     if (facilityOverviewState.byStreamRequestId !== requestId) return;
-    if (!cached) facilityOverviewState.byStreamContent = `<article class="issue-card"><p>${escapeHtml(error.message || "Stream coverage is unavailable right now.")}</p></article>`;
+    if (error.status === 403 || error.status === 401) facilityOverviewState.byStreamData = null;
+    if (!cached || error.status === 403 || error.status === 401) facilityOverviewState.byStreamContent = `<article class="issue-card"><p>${escapeHtml(error.message || "Stream coverage is unavailable right now.")}</p></article>`;
   } finally {
     finishFacilityOverviewDataRequest(controller);
     if (facilityOverviewState.byStreamRequestId === requestId) {
@@ -10227,29 +10258,23 @@ async function loadFacilityOverviewByStream() {
   }
 }
 
+function facilityOverviewTogetherContextKey() {
+  const { startDate, endDate } = facilityOverviewTogetherDateRange();
+  return `${startDate}|${endDate}|${facilityOverviewTargetEmail() || currentUserEmail}`;
+}
+
 function facilityOverviewTogetherStaffOptions() {
-  const activeDoctor = selectedDoctor();
-  const activeClaims = currentRosterClaims.map((claim) => ({
-    key: claim.key,
-    displayName: claim.displayName,
-    sourceType: claim.sourceType,
-  }));
-  const activeViewer = activeDoctor?.key ? [{
-    ...activeDoctor,
-    displayName: activeDoctor.displayName || currentAccount().realName || activeDoctor.key,
-    aliases: Array.isArray(activeDoctor.aliases) && activeDoctor.aliases.length ? activeDoctor.aliases : activeClaims,
-    sourceTypes: normalizedDoctorSourceTypes(activeDoctor).length
-      ? normalizedDoctorSourceTypes(activeDoctor)
-      : [...new Set(activeClaims.map((claim) => claim.sourceType))],
-  }] : [];
-  return dedupeDoctorOptions([...(availableRosterDoctors || []), ...doctorPickerOptions(), ...activeViewer, ...(facilityOverviewState.togetherPinnedDoctors || [])])
-    .filter((doctor) => !facilityOverviewIsSiteScoped() || normalizedDoctorSourceTypes(doctor).includes(currentFacilityOverviewAccess.facilityKey.toLowerCase()))
-    .map((doctor) => ({ ...doctor, identity: doctorIdentityKey(doctor) }))
-    .filter((doctor) => doctor.identity)
-    .sort((left, right) => left.displayName.localeCompare(right.displayName));
+  const context = facilityOverviewState.togetherContext;
+  if (!context || context.key !== facilityOverviewTogetherContextKey()) return [];
+  const selected = facilityOverviewState.togetherFacilityKey;
+  return dedupeDoctorOptions((context.members || []).filter(member => selected === "ALL" || String(member.sourceType).toUpperCase() === selected)
+    .map(member => ({ key: member.doctorKey || member.key, displayName: member.displayName, sourceType: member.sourceType, sourceTypes: [member.sourceType] })))
+    .map(doctor => ({ ...doctor, identity: doctorIdentityKey(doctor) })).filter(doctor => doctor.identity)
+    .sort((a,b) => a.displayName.localeCompare(b.displayName));
 }
 
 function initializeFacilityOverviewTogetherState() {
+  if (facilityOverviewState.togetherContext?.key !== facilityOverviewTogetherContextKey()) return;
   if (!Array.isArray(facilityOverviewState.togetherStaffKeys)) facilityOverviewState.togetherStaffKeys = ["", ""];
   if (!facilityOverviewState.togetherStaffKeys.length) facilityOverviewState.togetherStaffKeys = [""];
   const options = facilityOverviewTogetherStaffOptions();
@@ -10275,13 +10300,14 @@ function facilityOverviewTogetherTermOptions() {
 function renderFacilityOverviewTogetherProposal() {
   const options = facilityOverviewTogetherStaffOptions();
   const selected = new Set(facilityOverviewState.togetherStaffKeys.filter(Boolean));
-  const facilities = facilityOverviewFacilityOptions();
+  const context = facilityOverviewState.togetherContext;
+  const facilities = context?.key === facilityOverviewTogetherContextKey() ? (context.sourceTypes || []).map(source => source.toUpperCase()) : [];
   const rangeMode = facilityOverviewState.togetherRangeMode === "dates" ? "dates" : "term";
   const terms = facilityOverviewTogetherTermOptions();
   return `
     <section class="facility-overview-together" aria-label="Working together search">
       <div class="facility-overview-together-intro">
-        <h3>Select one person to view shifts, or two or more people to find shared shifts. Site can be combined with either option.</h3>
+        <h3>Choose a period to find who was on shift, or select staff to compare their shifts. Historical searches use hospitals you had roster access to during that period.</h3>
       </div>
       <div class="facility-overview-together-builder">
         <fieldset class="facility-overview-together-section">
@@ -10303,6 +10329,7 @@ function renderFacilityOverviewTogetherProposal() {
               </div>
             `).join("")}
           </div>
+          <button type="button" class="button secondary" data-facility-overview-together-who>Who was on shift?</button>
           <button type="button" class="facility-overview-add-staff" data-facility-overview-together-add><span aria-hidden="true">+</span> Add another staff member</button>
         </fieldset>
         <fieldset class="facility-overview-together-section">
@@ -10322,9 +10349,10 @@ function renderFacilityOverviewTogetherProposal() {
         </fieldset>
         <fieldset class="facility-overview-together-section">
           <legend><span>3</span> Site <small>Optional</small></legend>
-          ${facilityOverviewIsSiteScoped()
-            ? `<label class="field"><span>ED site</span><output class="facility-overview-fixed-facility">${escapeHtml(displaySourceCode(currentFacilityOverviewAccess.facilityKey))}</output></label>`
-            : `<label class="field"><span>ED site</span><select data-facility-overview-together-facility><option value="ALL">All EDs</option>${facilities.map((facility) => `<option value="${escapeHtml(facility)}" ${facility === facilityOverviewState.togetherFacilityKey ? "selected" : ""}>${escapeHtml(displaySourceCode(facility))}</option>`).join("")}</select></label>`}
+          <label class="field"><span>ED site</span><select data-facility-overview-together-facility>
+            <option value="ALL" ${facilityOverviewState.togetherFacilityKey === "ALL" ? "selected" : ""}>${currentFacilityOverviewAccess.mode === "all" ? "All EDs" : "All my hospitals for this period"}</option>
+            ${facilities.map(facility => `<option value="${escapeHtml(facility)}" ${facility === facilityOverviewState.togetherFacilityKey ? "selected" : ""}>${escapeHtml(displaySourceCode(facility))}</option>`).join("")}
+          </select></label>
           <p class="facility-overview-filter-hint">This narrows either the selected term or date range.</p>
         </fieldset>
       </div>
@@ -10354,8 +10382,7 @@ function facilityOverviewTogetherDateRange() {
 function refreshFacilityOverviewTogetherAfterFilterChange() {
   facilityOverviewState.togetherHasSearched = false;
   facilityOverviewState.togetherContent = "";
-  if (facilityOverviewState.togetherStaffKeys.some(Boolean)) void loadFacilityOverviewTogether();
-  else renderFacilityOverview();
+  void loadFacilityOverviewTogether();
 }
 
 function facilityOverviewTogetherDoctorKeys(doctor) {
@@ -10367,69 +10394,60 @@ function facilityOverviewTogetherDoctorKeys(doctor) {
 
 async function loadFacilityOverviewTogether() {
   if (!canUseFacilityOverview() || currentFacilityOverviewMaintenance || facilityOverviewState.tab !== "together") return;
-  const options = facilityOverviewTogetherStaffOptions();
-  const selectedDoctors = facilityOverviewState.togetherStaffKeys
-    .map((identity) => options.find((doctor) => doctor.identity === identity))
-    .filter(Boolean);
-  if (!selectedDoctors.length) {
-    facilityOverviewState.togetherHasSearched = false;
-    facilityOverviewState.togetherContent = `<article class="issue-card"><p>Choose at least one staff member to view rostered shifts.</p></article>`;
-    renderFacilityOverview();
-    return;
-  }
   const { startDate, endDate } = facilityOverviewTogetherDateRange();
-  if (!startDate || !endDate || endDate < startDate) {
-    facilityOverviewState.togetherHasSearched = false;
-    facilityOverviewState.togetherContent = `<article class="issue-card"><p>Choose a valid date range with the end date on or after the start date.</p></article>`;
-    renderFacilityOverview();
-    return;
-  }
-  const requestId = facilityOverviewState.requestId + 1;
-  facilityOverviewState.requestId = requestId;
-  facilityOverviewState.togetherHasSearched = true;
-  facilityOverviewState.togetherContent = `<article class="issue-card"><p>${selectedDoctors.length === 1 ? "Finding rostered shifts…" : "Finding shared roster days…"}</p></article>`;
-  const cacheQuery = { startDate, endDate, doctorKeys: [...new Set(selectedDoctors.flatMap(facilityOverviewTogetherDoctorKeys))].sort(), sourceTypes: facilityOverviewState.togetherFacilityKey === "ALL" ? [] : [facilityOverviewState.togetherFacilityKey] };
-  const cached = await loadFacilityOverviewSnapshot("working-together", cacheQuery);
-  if (cached) facilityOverviewState.togetherContent = `<p class="facility-overview-by-stream-summary">Showing the last saved roster while checking for updates.</p>${renderFacilityOverviewTogetherResults(cached.events || [], selectedDoctors, { startDate, endDate })}`;
-  renderFacilityOverview();
+  const requestId = ++facilityOverviewState.requestId;
   const controller = beginFacilityOverviewDataRequest();
+  const contextKey = facilityOverviewTogetherContextKey();
+  facilityOverviewState.togetherHasSearched = true;
+  facilityOverviewState.togetherContent = `<article class="issue-card"><p>Loading authorised roster history…</p></article>`;
+  renderFacilityOverview();
+  const stillCurrent = () => facilityOverviewState.requestId === requestId && facilityOverviewState.tab === "together" && contextKey === facilityOverviewTogetherContextKey();
+  const query = async payload => {
+    const response = await fetch("/api/state", { method: "POST", headers: { "content-type": "application/json" }, signal: controller.signal,
+      body: JSON.stringify({ email: authUserEmail || currentUserEmail, password: authUserPassword || currentUserPassword,
+        targetEmail: facilityOverviewTargetEmail(), startDate, endDate, ...payload }) });
+    return readJsonResponse(response, "Could not load roster history for this period.");
+  };
   try {
-    const response = await fetch("/api/state", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      signal: controller.signal,
-      body: JSON.stringify({
-        action: "queryFacilityOverviewWorkingTogether",
-        email: authUserEmail || currentUserEmail,
-        password: authUserPassword || currentUserPassword,
-        targetEmail: facilityOverviewTargetEmail(),
-        startDate,
-        endDate,
-        doctorKeys: cacheQuery.doctorKeys,
-        sourceTypes: facilityOverviewState.togetherFacilityKey === "ALL" ? [] : [facilityOverviewState.togetherFacilityKey],
-        cachedRevision: cached?.revision || "",
-      }),
-    });
-    const data = await readJsonResponse(response, "Could not search shared roster days.");
+    if (!validFacilityDateRange(startDate, endDate)) throw new Error("Choose a valid date range of up to one year.");
+    const context = await query({ action: "queryFacilityOverviewTogetherContext" });
+    if (!stillCurrent()) return;
+    facilityOverviewState.togetherContext = { ...context, key: contextKey };
+    const facilities = (context.sourceTypes || []).map(source => source.toUpperCase());
+    if (facilityOverviewState.togetherFacilityKey !== "ALL" && !facilities.includes(facilityOverviewState.togetherFacilityKey)) facilityOverviewState.togetherFacilityKey = "ALL";
+    initializeFacilityOverviewTogetherState();
+    const options = facilityOverviewTogetherStaffOptions();
+    const selectedDoctors = facilityOverviewState.togetherStaffKeys.map(identity => options.find(doctor => doctor.identity === identity)).filter(Boolean);
+    const cacheQuery = { startDate, endDate, scopeRevision: context.scopeRevision,
+      doctorKeys: [...new Set(selectedDoctors.flatMap(facilityOverviewTogetherDoctorKeys))].sort(),
+      sourceTypes: facilityOverviewState.togetherFacilityKey === "ALL" ? [] : [facilityOverviewState.togetherFacilityKey] };
+    // Historical cached results require freshly verified period entitlements.
+    refreshFacilityOverviewSnapshotAccess(context);
+    const cached = await loadFacilityOverviewSnapshot("working-together", cacheQuery);
+    if (!stillCurrent()) return;
+    const data = await query({ action: "queryFacilityOverviewWorkingTogether", ...cacheQuery, cachedRevision: cached?.revision || "" });
+    if (!stillCurrent()) return;
     refreshFacilityOverviewSnapshotAccess(data);
-    if (facilityOverviewState.requestId !== requestId || facilityOverviewState.tab !== "together") return;
-    if (data.unchanged === true && cached) {
-      facilityOverviewState.togetherContent = renderFacilityOverviewTogetherResults(cached.events || [], selectedDoctors, { startDate, endDate });
-      return;
-    }
-    facilityOverviewState.togetherContent = renderFacilityOverviewTogetherResults(data.events || [], selectedDoctors, { startDate, endDate });
-    void storeFacilityOverviewSnapshot("working-together", cacheQuery, data);
+    const payload = data.unchanged && cached ? cached : data;
+    const missing = payload.missing?.length ? `<article class="issue-card"><p>Some authorised roster history is not available yet. Results below cover the available periods.</p></article>` : "";
+    facilityOverviewState.togetherContent = missing + renderFacilityOverviewTogetherResults(payload.events || [], selectedDoctors, { startDate, endDate });
+    if (!data.unchanged) void storeFacilityOverviewSnapshot("working-together", cacheQuery, data);
   } catch (error) {
-    if (facilityOverviewRequestWasCancelled(error)) return;
-    if (facilityOverviewState.requestId !== requestId) return;
-    if (!cached) facilityOverviewState.togetherContent = `<article class="issue-card"><p>${escapeHtml(error.message || "Shared roster days are unavailable right now.")}</p></article>`;
+    if (facilityOverviewRequestWasCancelled(error) || !stillCurrent()) return;
+    facilityOverviewState.togetherContext = null;
+    facilityOverviewState.togetherContent = `<article class="issue-card"><p>${escapeHtml(error.message || "Roster history is unavailable for this period.")}</p></article>`;
   } finally {
     finishFacilityOverviewDataRequest(controller);
+    if (stillCurrent()) renderFacilityOverview();
   }
-  renderFacilityOverview();
 }
 
 function renderFacilityOverviewTogetherResults(rows, selectedDoctors, range) {
+  if (!selectedDoctors.length) {
+    const doctors = [...new Map((rows || []).map(row => [`${row.sourceType}|${row.doctorKey}`, { key: row.doctorKey, displayName: row.displayName || row.doctorKey, sourceType: row.sourceType, identity: `${row.sourceType}|${row.doctorKey}` }])).values()];
+    if (!doctors.length) return `<article class="issue-card"><p>No rostered shifts were found in the available authorised history for this period.</p></article>`;
+    return doctors.sort((a,b) => a.displayName.localeCompare(b.displayName)).map(doctor => renderFacilityOverviewTogetherResults(rows.filter(row => row.sourceType === doctor.sourceType && row.doctorKey === doctor.key), [doctor], range)).join("");
+  }
   const ownerByRosterKey = new Map();
   for (const doctor of selectedDoctors) {
     for (const key of facilityOverviewTogetherDoctorKeys(doctor)) ownerByRosterKey.set(key, doctor.identity);
@@ -10626,9 +10644,11 @@ async function loadFacilityOverviewOnShift() {
     facilityOverviewState.content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData);
     void storeFacilityOverviewSnapshot("on-shift", cacheQuery, { events: facilityOverviewState.onShiftData, revision: data.revision || cached?.revision || "" });
   } catch (error) {
+    if (error.facilityOverviewAccess) refreshFacilityOverviewSnapshotAccess({ facilityOverviewAccess: error.facilityOverviewAccess });
     if (facilityOverviewRequestWasCancelled(error)) return;
     if (facilityOverviewState.requestId !== requestId) return;
-    if (!cached) facilityOverviewState.content = `<article class="issue-card"><p>${escapeHtml(error.message || "The ED overview is unavailable right now.")}</p></article>`;
+    if (error.status === 403 || error.status === 401) facilityOverviewState.onShiftData = null;
+    if (!cached || error.status === 403 || error.status === 401) facilityOverviewState.content = `<article class="issue-card"><p>${escapeHtml(error.message || "The ED overview is unavailable right now.")}</p></article>`;
   } finally {
     finishFacilityOverviewDataRequest(controller);
   }
@@ -11196,9 +11216,23 @@ function refreshFacilityOverviewStaffActionContent() {
   }
 }
 
+function facilityOverviewPermittedStaffTerms(coverage) {
+  if (currentFacilityOverviewAccess.mode === "all") return facilityOverviewTermsFromCoverage(coverage);
+  const term = australianTermForDate(parseDateOnly(currentFacilityOverviewAccess.termStart || formatDateKey(new Date())));
+  return [{ value: formatDateKey(term.start), label: formatAustralianTermLabel(term) }];
+}
+
+function facilityOverviewOrdinaryDateAttributes() {
+  if (currentFacilityOverviewAccess.mode === "all") return "";
+  const term = australianTermForDate(new Date());
+  return `min="${formatDateKey(term.start)}" max="${formatDateKey(addDays(term.end, -1))}"`;
+}
+
 async function loadFacilityOverviewStaff() {
   if (!canUseFacilityOverview() || currentFacilityOverviewMaintenance || facilityOverviewState.tab !== "staff") return;
-  const term = australianTermForDate(parseDateOnly(facilityOverviewState.staffTermStart || formatDateKey(new Date())));
+  const term = currentFacilityOverviewAccess.mode === "all"
+    ? australianTermForDate(parseDateOnly(facilityOverviewState.staffTermStart || formatDateKey(new Date())))
+    : australianTermForDate(parseDateOnly(currentFacilityOverviewAccess.termStart || formatDateKey(new Date())));
   facilityOverviewState.staffTermStart = formatDateKey(term.start);
   const requestId = facilityOverviewState.requestId + 1;
   facilityOverviewState.requestId = requestId;
@@ -11206,7 +11240,7 @@ async function loadFacilityOverviewStaff() {
   const cacheQuery = { facilityKey: facilityOverviewState.facilityKey === "ALL" ? "all" : facilityOverviewState.facilityKey, termStart: facilityOverviewState.staffTermStart, termEnd: formatDateKey(addDays(term.end, -1)) };
   const cached = await loadFacilityOverviewSnapshot("staff", cacheQuery);
   if (cached) {
-    facilityOverviewState.staffTerms = facilityOverviewTermsFromCoverage(cached.coverage || []);
+    facilityOverviewState.staffTerms = facilityOverviewPermittedStaffTerms(cached.coverage || []);
     facilityOverviewState.staffData = cached;
     facilityOverviewState.staffContent = `<p class="facility-overview-by-stream-summary">Showing the last saved staff list while checking for updates.</p>${renderFacilityOverviewStaffResults(cached, term)}`;
   }
@@ -11231,14 +11265,16 @@ async function loadFacilityOverviewStaff() {
       facilityOverviewState.staffContent = renderFacilityOverviewStaffResults(cached, term);
       return;
     }
-    facilityOverviewState.staffTerms = facilityOverviewTermsFromCoverage(data.coverage || []);
+    facilityOverviewState.staffTerms = facilityOverviewPermittedStaffTerms(data.coverage || []);
     facilityOverviewState.staffData = data;
     facilityOverviewState.staffContent = renderFacilityOverviewStaffResults(data, term);
     void storeFacilityOverviewSnapshot("staff", cacheQuery, data);
   } catch (error) {
+    if (error.facilityOverviewAccess) refreshFacilityOverviewSnapshotAccess({ facilityOverviewAccess: error.facilityOverviewAccess });
     if (facilityOverviewRequestWasCancelled(error)) return;
     if (facilityOverviewState.requestId !== requestId) return;
-    if (!cached) facilityOverviewState.staffContent = `<article class="issue-card"><p>${escapeHtml(error.message || "The ED staff list is unavailable right now.")}</p></article>`;
+    if (error.status === 403 || error.status === 401) facilityOverviewState.staffData = null;
+    if (!cached || error.status === 403 || error.status === 401) facilityOverviewState.staffContent = `<article class="issue-card"><p>${escapeHtml(error.message || "The ED staff list is unavailable right now.")}</p></article>`;
   } finally {
     finishFacilityOverviewDataRequest(controller);
   }
@@ -20494,7 +20530,10 @@ function removeSupersededStatusMessages(message) {
 async function readJsonResponse(response, fallbackMessage = "Request failed.") {
   const text = await response.text().catch(() => "");
   if (!response.ok) {
-    throw new Error(parseError(text, `${fallbackMessage} Server returned ${response.status}.`));
+    const error = new Error(parseError(text, `${fallbackMessage} Server returned ${response.status}.`));
+    error.status = response.status;
+    try { error.facilityOverviewAccess = JSON.parse(text).facilityOverviewAccess; } catch {}
+    throw error;
   }
   try {
     return JSON.parse(text);

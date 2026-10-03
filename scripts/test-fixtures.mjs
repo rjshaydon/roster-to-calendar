@@ -1081,8 +1081,8 @@ assert.match(
 );
 assert.match(
   appSource.match(/function facilityOverviewTogetherStaffOptions[\s\S]*?function initializeFacilityOverviewTogetherState/)?.[0] || "",
-  /availableRosterDoctors[\s\S]*doctorPickerOptions\(\)[\s\S]*activeViewer[\s\S]*togetherPinnedDoctors/,
-  "Working together options should include roster staff, the active viewer, and pinned roster results",
+  /togetherContext[\s\S]*context\.members[\s\S]*sourceType/,
+  "Working together options should come from authorised period membership",
 );
 assert.match(
   appSource.match(/function facilityOverviewTogetherFallbackOption[\s\S]*?function closeFacilityOverviewStaffActionMenu/)?.[0] || "",

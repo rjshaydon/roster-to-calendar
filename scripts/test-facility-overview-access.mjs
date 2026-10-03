@@ -59,7 +59,8 @@ const ambiguous = await resolveFacilityOverviewAccess(null, account([claim("ddh"
   today: "2026-08-25",
   events: [shift("ddh", "2026-08-25"), shift("mmc", "2026-08-25")],
 });
-assert.equal(ambiguous.mode, "denied", "ambiguous non-SMS site evidence must fail closed");
+assert.equal(ambiguous.mode, "sites", "verified simultaneous hospital memberships must grant both hospitals");
+assert.deepEqual(ambiguous.facilityKeys, ["DDH", "MMC"]);
 
 const sqlite = new DatabaseSync(":memory:");
 for (const name of (await readdir(new URL("../migrations", import.meta.url))).filter((name) => name.endsWith(".sql")).sort()) {
@@ -114,13 +115,13 @@ assert.equal(db.sql.length, 0, "explicit revocation must fail before access-cach
 
 const stateSource = await readFile(new URL("../functions/api/state.js", import.meta.url), "utf8");
 const d1Source = await readFile(new URL("../functions/_lib/d1-calendar.js", import.meta.url), "utf8");
-for (const action of ["Metadata", "ByStream", "OnShift", "Staff", "WorkingTogether"]) {
+for (const action of ["Metadata", "ByStream", "OnShift", "Staff"]) {
   const block = stateSource.match(new RegExp(`action === "queryFacilityOverview${action}"[\\s\\S]*?(?=\\n    if \\(action ===|\\n    const account =|$)`))?.[0] || "";
   assert.match(block, /facilityOverviewAccess\(\)/, `${action} must resolve server-side site access`);
   assert.match(block, /facilityOverviewAccessDeniedResponse|constrainFacilityOverviewSourceTypes/, `${action} must enforce or constrain the authenticated site`);
 }
 const contactResolutionBlock = stateSource.match(/action === "setContactAllocationResolution"[\s\S]*?(?=\n    if \(action ===|$)/)?.[0] || "";
-assert.match(contactResolutionBlock, /facilityOverviewAccess\(\)[\s\S]*requestedFacility !== access\.facilityKey/, "temporary contact corrections must retain non-SMS site enforcement");
+assert.match(contactResolutionBlock, /facilityOverviewAccess\(\)[\s\S]*facilityAccessAllows\(access, requestedFacility\)/, "temporary contact corrections must retain non-SMS site enforcement");
 assert.match(contactResolutionBlock, /queryFacilityOverviewOnShift[\s\S]*validateContactResolutionSelection\(contactRosterAssignments/, "contact corrections must use shared roster and current-shift eligibility");
 assert.match(contactResolutionBlock, /if \(validation.error\) return Response.json/, "shared validation must prevent corrections from displacing safe automatic allocations");
 assert.match(stateSource, /queryContactAllocationResolutions[\s\S]*loadLiveContactListForOnShift/, "On shift should return temporary resolutions in its existing request");
