@@ -58,7 +58,7 @@ export async function loadCachedRosterInsights(r2, options, today, isWorking) {
   } };
   const firstDay = await loadPublishedFacilityDays(cachedR2, sources, options.startDate, today);
   const published = options.startDate === options.endDate && !firstDay.preparing
-    ? { preparing: false, events: firstDay.rows, revision: firstDay.revision }
+    ? { preparing: false, events: firstDay.rows, revision: firstDay.revision, missing: firstDay.missing }
     : await loadPublishedFacilityRange(cachedR2, sources, options.startDate, options.endDate, today);
   if (!published.preparing && !firstDay.preparing) {
     published.events = [...new Map([...published.events, ...firstDay.rows].map(row =>
@@ -70,5 +70,5 @@ export async function loadCachedRosterInsights(r2, options, today, isWorking) {
   const rows = selectCachedInsightRows(permittedEvents.filter(row => isWorking(row.event, row.sourceType) && String(row.event?.start || "").slice(0,10) <= options.endDate && String(row.event?.end || row.event?.start || "").slice(0,10) >= options.startDate), options);
   const doctors = [...new Map(rows.map(row => [`${row.sourceType}|${key(row.doctorKey)}`, { doctorKey: row.doctorKey, displayName: row.displayName, sourceType: row.sourceType }])).values()]
     .sort((a,b) => String(a.displayName).localeCompare(String(b.displayName)) || a.sourceType.localeCompare(b.sourceType));
-  return { ok: true, coworkers: rows, doctors, revision: published.revision, source: 'published-roster' };
+  return { ok: true, coworkers: rows, doctors, revision: published.revision, missing: [...(published.missing || []), ...(firstDay.missing || [])], source: 'published-roster' };
 }

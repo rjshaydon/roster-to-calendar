@@ -5,6 +5,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { runInNewContext } from 'node:vm';
 import { resolveFacilityOverviewAccess, resolveFacilityOverviewRangeAccess, onRequestPost } from '../functions/api/state.js';
 import { facilityAccessAllows, filterFacilityRowsBySegments, validFacilityDateRange } from '../public/static/facility-access-policy.js';
+import { loadPublishedFacilityRange, loadPublishedFacilityStaff } from '../functions/_lib/facility-overview-cache.js';
+import { loadPublishedDoctorCalendar } from '../functions/_lib/published-doctor-calendar.js';
 
 const RealDate = Date;
 globalThis.Date = class extends RealDate { constructor(...args) { super(...(args.length ? args : ['2026-10-03T01:00:00Z'])); } static now() { return RealDate.parse('2026-10-03T01:00:00Z'); } };
@@ -46,7 +48,7 @@ function publish(source, term, end, dates) {
 function account(email, accountClaims, role='user', enabled=1) {
   sqlite.prepare('INSERT INTO account_profiles (email,real_name,role,facility_overview_enabled,insights_enabled,password_salt,password_hash) VALUES (?,?,?,?,1,?,?)')
     .run(email,'Trainee',role,enabled,'salt',createHash('sha256').update('salt:password').digest('hex'));
-  for (const claim of accountClaims) sqlite.prepare('INSERT INTO account_claims (email,source_type,doctor_key,display_name) VALUES (?,?,?,?)').run(email,claim.sourceType,claim.key,claim.displayName);
+  for (const claim of accountClaims) sqlite.prepare('INSERT INTO account_claims (email,source_type,doctor_key,display_name) VALUES (?,?,?,?)').run(email,claim.sourceType,claim.key,claim.displayName || claim.key);
 }
 const env = { ROSTER_DB:db, ROSTER_FILES:r2, FACILITY_OVERVIEW_MAINTENANCE_MODE:'false', FACILITY_SHARED_ROLLOUT_ACTIVE:'true', FACILITY_SHARED_EMERGENCY_PAUSED:'false', FACILITY_LEGACY_READS_PAUSED:'true', FACILITY_SHARED_READER_COHORT:'all', FACILITY_SHARED_READER_SOURCE_ALLOWLIST:'mmc,ddh,mch', FACILITY_SHARED_METADATA_ENABLED:'true', FACILITY_SHARED_DAYS_ENABLED:'true' };
 async function call(body, status=200, maximumQueries=32) {
@@ -166,7 +168,90 @@ assert.equal(dst[0].event.start,'2026-10-04T00:00:00+10:00'); // midnight is bef
 const plan=sqlite.prepare(`EXPLAIN QUERY PLAN SELECT term_start FROM facility_term_staff_contributions WHERE source_type=? AND doctor_key=? AND term_start>=? AND term_start<=?`).all('ddh','TRAINEE','2026-05-04','2026-08-03');
 assert.ok(plan.some(row=>row.detail.includes('idx_facility_staff_identity_terms')));
 // Exercise browser scope normalization and empty restricted scope without DOM.
+// Combined restoration separates operational availability from entitlement.
+membership('mmc','2026-08-03','MIXED','HMO','restore-mmc');
+membership('casey','2026-08-03','MIXED','HMO','restore-casey');
+account('mixed@example.com',[{sourceType:'mmc',key:'MIXED'},{sourceType:'casey',key:'MIXED'}]);
+account('casey-only@example.com',[{sourceType:'casey',key:'MIXED'}]);
+publish('casey','2026-08-03','2026-11-01',['2026-10-02']);
+const staffQuery={action:'queryFacilityOverviewStaff',termStart:'2026-08-03',termEnd:'2026-11-01',facilityKey:'all'};
+const togetherQuery={action:'queryFacilityOverviewWorkingTogether',startDate:'2026-10-02',endDate:'2026-10-02'};
+const mixedStaff=await call({...staffQuery,email:'mixed@example.com'});
+assert.ok(mixedStaff.members.some(member=>member.sourceType==='mmc'));
+assert.equal(mixedStaff.members.some(member=>member.sourceType==='casey'),false);
+assert.ok(mixedStaff.missing.some(item=>item.sourceType==='casey'&&item.reason==='reader-unavailable'));
+const mixedTogether=await call({...togetherQuery,email:'mixed@example.com'});
+assert.ok(mixedTogether.events.some(row=>row.sourceType==='mmc'));
+assert.equal(mixedTogether.events.some(row=>row.sourceType==='casey'),false);
+assert.ok(mixedTogether.missing.some(item=>item.sourceType==='casey'));
+await call({...togetherQuery,email:'mixed@example.com',sourceTypes:['mch']},403);
+await call({...togetherQuery,email:'mixed@example.com',sourceTypes:['casey']},503);
+await call({...staffQuery,email:'casey-only@example.com'},503);
+await call({...staffQuery,email:'mixed@example.com',facilityKey:'casey'},503);
+await call({...staffQuery,email:'mixed@example.com',facilityKey:'not-a-hospital'},400);
+for(const grade of ['SMS','CMO']) {
+  membership('mmc','2026-08-03',`${grade} RESTORE`,grade,'restore-seniors');
+  account(`${grade.toLowerCase()}-restore@example.com`,[{sourceType:'mmc',key:`${grade} RESTORE`}]);
+  const result=await call({...staffQuery,email:`${grade.toLowerCase()}-restore@example.com`});
+  assert.ok(result.members.some(member=>member.sourceType==='ddh'));
+  assert.ok(result.missing.some(item=>item.sourceType==='casey'));
+}
+const period={action:'queryFacilityOverviewTogetherContext',email:'mixed@example.com',startDate:'2026-10-02',endDate:'2026-10-02'};
+const scopeBefore=await call(period);
+env.FACILITY_SHARED_READER_SOURCE_ALLOWLIST += ',casey';
+const restored=await call({...togetherQuery,email:'mixed@example.com',cachedRevision:mixedTogether.revision});
+assert.equal(restored.unchanged,undefined);
+assert.ok(restored.events.some(row=>row.sourceType==='casey'));
+const scopeAfter=await call(period);
+assert.notEqual(scopeBefore.scopeRevision,scopeAfter.scopeRevision,'reader changes invalidate historical snapshot scope');
+env.FACILITY_SHARED_EMERGENCY_PAUSED='true';
+const pausedRead=await call({...togetherQuery,email:'mixed@example.com'},503);
+assert.equal(pausedRead.readerUnavailable,true);
+assert.ok(pausedRead.facilityOverviewAccess);
+env.FACILITY_SHARED_EMERGENCY_PAUSED='false';
+env.FACILITY_SHARED_READER_SOURCE_ALLOWLIST='mmc,ddh,mch';
+
+// Missing publication differs from a completely published empty roster.
+const mmcManifest=objects.get('facility-overview/v1/mmc/manifest.json');
+const pointer=mmcManifest.months['2026-10'];
+const month=objects.get(pointer.key);
+const completeCalendar=await loadPublishedDoctorCalendar(r2,{doctorKey:'TRAINEE',sourceTypes:['mmc'],state:{session:{}}},{range:{startDate:'2026-10-02',endDate:'2026-10-02'},today:'2026-10-03'});
+assert.equal(completeCalendar.snapshotAvailable,true);
+assert.equal(completeCalendar.snapshot.preview.events.length,1);
+objects.delete(pointer.key);
+const incompleteCalendar=await loadPublishedDoctorCalendar(r2,{doctorKey:'TRAINEE',sourceTypes:['mmc'],state:{session:{}}},{range:{startDate:'2026-10-02',endDate:'2026-10-02'},today:'2026-10-03'});
+assert.equal(incompleteCalendar.snapshotAvailable,false,'partial colleague publication must not clear personal calendar shifts');
+let incomplete=await loadPublishedFacilityRange(r2,['mmc','ddh'],'2026-10-02','2026-10-02','2026-10-03');
+assert.equal(incomplete.preparing,false,'available DDH data survives a missing MMC object');
+assert.ok(incomplete.events.some(row=>row.sourceType==='ddh'));
+assert.ok(incomplete.missing.some(item=>item.sourceType==='mmc'&&item.reason==='month-unavailable'));
+delete mmcManifest.months['2026-10'];
+incomplete=await loadPublishedFacilityRange(r2,['mmc'],'2026-10-02','2026-10-02','2026-10-03');
+assert.equal(incomplete.preparing,true,'missing pointer is not complete empty history');
+assert.ok(incomplete.missing.length);
+mmcManifest.months['2026-10']=pointer;
+objects.set(pointer.key,{rows:[]});
+const emptyPublished=await loadPublishedFacilityRange(r2,['mmc'],'2026-10-02','2026-10-02','2026-10-03');
+assert.equal(emptyPublished.preparing,false);
+assert.equal(emptyPublished.missing.length,0);
+assert.equal(emptyPublished.events.length,0);
+objects.set(pointer.key,month);
+mmcManifest.coverage=[{startDate:'2026-10-02',endDate:'2026-10-03'}];
+const partlyCovered=await loadPublishedFacilityRange(r2,['mmc'],'2026-10-01','2026-10-02','2026-10-03');
+assert.ok(partlyCovered.missing.some(item=>item.reason==='coverage-unavailable'&&item.startDate==='2026-10-01'&&item.endDate==='2026-10-01'));
+delete mmcManifest.coverage;
+const missingStaffKey=mmcManifest.terms.find(term=>term.termStart==='2026-08-03').staffKey;
+const retainedStaff=objects.get(missingStaffKey);
+objects.delete(missingStaffKey);
+const partialStaff=await loadPublishedFacilityStaff(r2,['mmc','ddh'],'2026-08-03','2026-10-03');
+assert.equal(partialStaff.preparing,false);
+assert.ok(partialStaff.missing.some(item=>item.sourceType==='mmc'));
+objects.set(missingStaffKey,retainedStaff);
+
 const app=await readFile(new URL('../public/static/app.js',import.meta.url),'utf8');
+const deniedReadHelper=app.slice(app.indexOf('function facilityOverviewCachedReadDenied(error)'),app.indexOf('async function readJsonResponse('));
+assert.equal(runInNewContext(`${deniedReadHelper}; facilityOverviewCachedReadDenied(error)`,{error:{status:503,readerUnavailable:true}}),true,'disabled readers must discard cached roster details');
+assert.equal(runInNewContext(`${deniedReadHelper}; facilityOverviewCachedReadDenied(error)`,{error:{status:503}}),false,'temporary publication failures retain entitled cached data');
 const sanitise=app.slice(app.indexOf('function sanitizeFacilityOverviewAccess(value)'),app.indexOf('function facilityOverviewSnapshotContext()'));
 const { facilityAccessKeys, restrictedFacilityScope, FACILITY_ACCESS_VERSION } = await import('../public/static/facility-access-policy.js');
 const browserScope=runInNewContext(`${sanitise}; sanitizeFacilityOverviewAccess(value)`,{value:{mode:'sites',facilityKeys:['MMC','DDH'],canSearchHistory:true},facilityAccessKeys,restrictedFacilityScope,FACILITY_ACCESS_VERSION});

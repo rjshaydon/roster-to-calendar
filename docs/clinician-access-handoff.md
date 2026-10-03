@@ -56,3 +56,14 @@ a recovery point only after budget admission. Apply only reviewed migration 0038
 the normal migrations command can also apply other pending files. Verify the
 ledger and quota after migration. Historical data publication/backfill remains
 a separate rollout consideration.
+
+
+## Afternoon update — 3 October 2026
+
+The migration-pending and baseline-only status above describes the original
+checkpoint. Migration 0038 was subsequently applied and verified at 1:01 pm
+AEST. Additional restoration code is implemented and tested, with application
+release still pending. Consult `clinician-access-release-preflight-2026-10-03.md`
+and `at-a-glance-restoration-checkpoint-2026-10-03.md` for the current state.
+A DDH historical pilot is queued; manual general maintenance dispatch was
+rejected by automatic approval review because it can process other jobs.

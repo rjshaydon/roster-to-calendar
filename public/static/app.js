@@ -9177,13 +9177,15 @@ function sanitizeFacilityOverviewAccess(value) {
     isSms: value?.isSms === true, canSearchHistory: value?.canSearchHistory === true,
     workingToday: value?.workingToday === true,
     termStart: String(value?.termStart || ""), termEnd: String(value?.termEnd || ""),
+    readerFacilityKeys: Array.isArray(value?.readerFacilityKeys) ? value.readerFacilityKeys.map(key => String(key).toUpperCase()) : null,
+    readerRevision: String(value?.readerRevision || ""),
     preferredFacilityKey: String(value?.preferredFacilityKey || "").trim().toUpperCase(),
     today: String(value?.today || "").slice(0, 10), expiresAt: String(value?.expiresAt || "") };
 }
 
 function facilityOverviewSnapshotContext() {
   const ownerKey = normalizeEmail(facilityOverviewTargetEmail() || currentUserEmail);
-  const scopeKey = `${FACILITY_ACCESS_VERSION}:${currentFacilityOverviewAccess.mode}:${facilityAccessKeys(currentFacilityOverviewAccess).join(",")}:${currentFacilityOverviewAccess.today}`;
+  const scopeKey = `${FACILITY_ACCESS_VERSION}:${currentFacilityOverviewAccess.mode}:${facilityAccessKeys(currentFacilityOverviewAccess).join(",")}:${currentFacilityOverviewAccess.today}:${currentFacilityOverviewAccess.readerRevision || ""}`;
   return { ownerKey, scopeKey, accessExpiresAt: currentFacilityOverviewAccess.expiresAt || "" };
 }
 
@@ -9376,6 +9378,7 @@ function resetFacilityOverviewScroll() {
 
 function facilityOverviewFacilityOptions() {
   if (currentFacilityOverviewAccess.mode !== "all") return facilityAccessKeys(currentFacilityOverviewAccess);
+  if (Array.isArray(currentFacilityOverviewAccess.readerFacilityKeys)) return currentFacilityOverviewAccess.readerFacilityKeys;
   const values = new Set();
   for (const source of ["mmc", "ddh", "casey", "mch", "vhh"]) {
     if (Array.isArray(latestPreview?.sources?.[source]) && latestPreview.sources[source].length) values.add(source);
@@ -9439,7 +9442,7 @@ async function loadFacilityOverviewMetadata() {
     return data;
     } catch (error) {
       if (facilityOverviewRequestWasCancelled(error)) return null;
-      if (error.status === 403 || error.status === 401) {
+      if (facilityOverviewCachedReadDenied(error)) {
         if (error.facilityOverviewAccess) refreshFacilityOverviewSnapshotAccess({ facilityOverviewAccess: error.facilityOverviewAccess });
         facilityOverviewState.byStreamCoverage = [];
         facilityOverviewState.byStreamCatalog = [];
@@ -10235,20 +10238,20 @@ async function loadFacilityOverviewByStream() {
     refreshFacilityOverviewSnapshotAccess(data);
     if (facilityOverviewState.byStreamRequestId !== requestId || facilityOverviewState.tab !== "by-stream") return;
     if (data.unchanged === true && cached) {
-      facilityOverviewState.byStreamContent = facilityOverviewByStreamContentFromData(cached);
+      facilityOverviewState.byStreamContent = renderFacilityOverviewCoverageNotice(cached) + facilityOverviewByStreamContentFromData(cached);
       return;
     }
     facilityOverviewState.byStreamData = data;
     facilityOverviewState.byStreamCoverage = data.coverage || [];
     facilityOverviewMergeStreamCatalog(facilityOverviewBuildStreamCatalog(data.events || []));
-    facilityOverviewState.byStreamContent = facilityOverviewByStreamContentFromData(data);
+    facilityOverviewState.byStreamContent = renderFacilityOverviewCoverageNotice(data) + facilityOverviewByStreamContentFromData(data);
     void storeFacilityOverviewSnapshot("by-stream", cacheQuery, data);
   } catch (error) {
     if (error.facilityOverviewAccess) refreshFacilityOverviewSnapshotAccess({ facilityOverviewAccess: error.facilityOverviewAccess });
     if (facilityOverviewRequestWasCancelled(error)) return;
     if (facilityOverviewState.byStreamRequestId !== requestId) return;
-    if (error.status === 403 || error.status === 401) facilityOverviewState.byStreamData = null;
-    if (!cached || error.status === 403 || error.status === 401) facilityOverviewState.byStreamContent = `<article class="issue-card"><p>${escapeHtml(error.message || "Stream coverage is unavailable right now.")}</p></article>`;
+    if (facilityOverviewCachedReadDenied(error)) facilityOverviewState.byStreamData = null;
+    if (!cached || facilityOverviewCachedReadDenied(error)) facilityOverviewState.byStreamContent = `<article class="issue-card"><p>${escapeHtml(error.message || "Stream coverage is unavailable right now.")}</p></article>`;
   } finally {
     finishFacilityOverviewDataRequest(controller);
     if (facilityOverviewState.byStreamRequestId === requestId) {
@@ -10429,8 +10432,9 @@ async function loadFacilityOverviewTogether() {
     if (!stillCurrent()) return;
     refreshFacilityOverviewSnapshotAccess(data);
     const payload = data.unchanged && cached ? cached : data;
-    const missing = payload.missing?.length ? `<article class="issue-card"><p>Some authorised roster history is not available yet. Results below cover the available periods.</p></article>` : "";
-    facilityOverviewState.togetherContent = missing + renderFacilityOverviewTogetherResults(payload.events || [], selectedDoctors, { startDate, endDate });
+    const missing = [...(context.missing || []), ...(payload.missing || [])];
+    facilityOverviewState.togetherContent = renderFacilityOverviewCoverageNotice({ missing })
+      + (missing.length && !payload.events?.length ? "" : renderFacilityOverviewTogetherResults(payload.events || [], selectedDoctors, { startDate, endDate }));
     if (!data.unchanged) void storeFacilityOverviewSnapshot("working-together", cacheQuery, data);
   } catch (error) {
     if (facilityOverviewRequestWasCancelled(error) || !stillCurrent()) return;
@@ -10641,14 +10645,14 @@ async function loadFacilityOverviewOnShift() {
     facilityOverviewState.contactList = mergeContactResolutionRefresh(facilityOverviewState.contactList, data.contactList || null);
     facilityOverviewState.previousNightRoster = data.previousNightRoster || null;
     facilityOverviewState.contactAccessToken = String(data.contactAccessToken || "");
-    facilityOverviewState.content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData);
-    void storeFacilityOverviewSnapshot("on-shift", cacheQuery, { events: facilityOverviewState.onShiftData, revision: data.revision || cached?.revision || "" });
+    facilityOverviewState.content = renderFacilityOverviewCoverageNotice(data) + renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData);
+    void storeFacilityOverviewSnapshot("on-shift", cacheQuery, { events: facilityOverviewState.onShiftData, missing: data.missing, revision: data.revision || cached?.revision || "" });
   } catch (error) {
     if (error.facilityOverviewAccess) refreshFacilityOverviewSnapshotAccess({ facilityOverviewAccess: error.facilityOverviewAccess });
     if (facilityOverviewRequestWasCancelled(error)) return;
     if (facilityOverviewState.requestId !== requestId) return;
-    if (error.status === 403 || error.status === 401) facilityOverviewState.onShiftData = null;
-    if (!cached || error.status === 403 || error.status === 401) facilityOverviewState.content = `<article class="issue-card"><p>${escapeHtml(error.message || "The ED overview is unavailable right now.")}</p></article>`;
+    if (facilityOverviewCachedReadDenied(error)) facilityOverviewState.onShiftData = null;
+    if (!cached || facilityOverviewCachedReadDenied(error)) facilityOverviewState.content = `<article class="issue-card"><p>${escapeHtml(error.message || "The ED overview is unavailable right now.")}</p></article>`;
   } finally {
     finishFacilityOverviewDataRequest(controller);
   }
@@ -11273,8 +11277,8 @@ async function loadFacilityOverviewStaff() {
     if (error.facilityOverviewAccess) refreshFacilityOverviewSnapshotAccess({ facilityOverviewAccess: error.facilityOverviewAccess });
     if (facilityOverviewRequestWasCancelled(error)) return;
     if (facilityOverviewState.requestId !== requestId) return;
-    if (error.status === 403 || error.status === 401) facilityOverviewState.staffData = null;
-    if (!cached || error.status === 403 || error.status === 401) facilityOverviewState.staffContent = `<article class="issue-card"><p>${escapeHtml(error.message || "The ED staff list is unavailable right now.")}</p></article>`;
+    if (facilityOverviewCachedReadDenied(error)) facilityOverviewState.staffData = null;
+    if (!cached || facilityOverviewCachedReadDenied(error)) facilityOverviewState.staffContent = `<article class="issue-card"><p>${escapeHtml(error.message || "The ED staff list is unavailable right now.")}</p></article>`;
   } finally {
     finishFacilityOverviewDataRequest(controller);
   }
@@ -11426,7 +11430,14 @@ function facilityOverviewTermsFromCoverage(coverage) {
   return [...terms.values()].sort((left, right) => right.value.localeCompare(left.value));
 }
 
+function renderFacilityOverviewCoverageNotice(data) {
+  if (!data?.missing?.length) return "";
+  const hospitals = [...new Set(data.missing.map(item => displaySourceCode(item.sourceType)).filter(Boolean))].join(", ");
+  return `<article class="issue-card"><p>Some authorised roster information is unavailable${hospitals ? ` for ${escapeHtml(hospitals)}` : ""}. Results cover only the available hospitals and dates.</p></article>`;
+}
+
 function renderFacilityOverviewStaffResults(data, term) {
+  const coverageNotice = renderFacilityOverviewCoverageNotice(data);
   const canUseStaffActions = canUseFacilityOverview();
   const designations = new Map((data.designations || []).map((designation) => [`${designation.sourceType}|${designation.doctorKey}`, designation]));
   const seniorityOverrides = new Map((data.seniorityOverrides || []).map((override) => [`${override.sourceType}|${override.doctorKey}`, override]));
@@ -11487,10 +11498,10 @@ function renderFacilityOverviewStaffResults(data, term) {
     if (!panels.has(person.sourceType)) panels.set(person.sourceType, []);
     panels.get(person.sourceType).push(person);
   }
-  if (!panels.size) return `<article class="issue-card"><p>No ED staff are recorded for ${escapeHtml(formatAustralianTermLabel(term))}${query ? " matching that name" : ""}.</p></article>`;
+  if (!panels.size) return coverageNotice || `<article class="issue-card"><p>No ED staff are recorded for ${escapeHtml(formatAustralianTermLabel(term))}${query ? " matching that name" : ""}.</p></article>`;
   const selectedFacilities = (facilityOverviewState.facilityKey === "ALL" ? facilityOverviewFacilityOptions() : [facilityOverviewState.facilityKey])
     .map((facility) => String(facility || "").toLowerCase());
-  return selectedFacilities.filter((source) => panels.has(source)).map((source) => {
+  return coverageNotice + (selectedFacilities.filter((source) => panels.has(source)).map((source) => {
     const people = panels.get(source);
     const partial = people.some((person) => person.coverageStarts.some((date) => date > formatDateKey(term.start)) || person.coverageEnds.some((date) => date < formatDateKey(addDays(term.end, -1))));
     const groups = new Map();
@@ -11524,7 +11535,7 @@ function renderFacilityOverviewStaffResults(data, term) {
         </section>`;
       }).join("")}${previousStaff.length ? renderFacilityOverviewPreviousStaffSection(source, previousStaff, query, canUseStaffActions) : ""}</div>
     </section>`;
-  }).join("") || `<article class="issue-card"><p>No ED staff are recorded for this selection.</p></article>`;
+  }).join("") || `<article class="issue-card"><p>No ED staff are recorded for this selection.</p></article>`);
 }
 
 function renderFacilityOverviewStaffActivity(person, fallback) {
@@ -20527,12 +20538,20 @@ function removeSupersededStatusMessages(message) {
   });
 }
 
+function facilityOverviewCachedReadDenied(error) {
+  return error.status === 403 || error.status === 401 || error.readerUnavailable === true;
+}
+
 async function readJsonResponse(response, fallbackMessage = "Request failed.") {
   const text = await response.text().catch(() => "");
   if (!response.ok) {
     const error = new Error(parseError(text, `${fallbackMessage} Server returned ${response.status}.`));
     error.status = response.status;
-    try { error.facilityOverviewAccess = JSON.parse(text).facilityOverviewAccess; } catch {}
+    try {
+      const payload = JSON.parse(text);
+      error.facilityOverviewAccess = payload.facilityOverviewAccess;
+      error.readerUnavailable = payload.readerUnavailable === true;
+    } catch {}
     throw error;
   }
   try {
