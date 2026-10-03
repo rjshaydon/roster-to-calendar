@@ -194,6 +194,18 @@ try {
   assert.equal(providerRequests, 1, "an unchanged FindMyShift check should make only its version request");
   assert.equal(db.rowsWritten, 0, "an unchanged FindMyShift provider version must write zero D1 rows");
   assert.equal(r2.puts, putsBefore, "an unchanged FindMyShift provider version must write zero R2 objects");
+  // Exact filename/version success proves range completion even after the
+  // cursor has advanced to the upcoming term.
+  sqlite.prepare("UPDATE roster_sources SET cursor_json=? WHERE id='dandenong-findmyshift'").run(JSON.stringify({ findmyshiftRange: { from: '2026-11-02', to: '2027-01-31', providerVersion: ddhVersion, importFormat: 'stream-paired-v8', status: 'waiting' } }));
+  db.resetMetrics();
+  providerRequests = 0;
+  const pollResponse = await checkFindmyshift({
+    request: new Request('http://local/api/automation/findmyshift-check', { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ poll: true }) }),
+    env: { ...baseEnv, ROSTER_AUTOMATION_SOURCE_ALLOWLIST: 'dandenong-findmyshift', FINDMYSHIFT_API_KEY: 'test-key', FINDMYSHIFT_TEAM_ID: 'test-team', FINDMYSHIFT_FROM: ddhRange.from, FINDMYSHIFT_TO: ddhRange.to },
+  });
+  assert.equal((await jsonPayload(pollResponse)).status, 'unchanged');
+  assert.equal(providerRequests, 1, 'poll must fetch metadata once');
+  assert.equal(db.rowsWritten, 0, 'upcoming cursor must not cause current-term reimport');
 } finally {
   globalThis.fetch = originalFetch;
 }

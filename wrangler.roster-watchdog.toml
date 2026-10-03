@@ -3,12 +3,11 @@ main = "worker/roster-queue-watchdog.js"
 compatibility_date = "2026-07-29"
 
 [vars]
-ROSTER_AUTOMATION_URL = "https://roster-to-calendar.pages.dev/api/automation/dispatch"
 FINDMYSHIFT_CHECK_URL = "https://roster-to-calendar.pages.dev/api/automation/findmyshift-check"
-ROSTER_AUTOMATION_ENABLED = "false"
+ROSTER_AUTOMATION_ENABLED = "true"
 
 [triggers]
-crons = ["*/15 * * * *"]
+crons = ["*/5 * * * *"]
 
 [observability]
 enabled = true
