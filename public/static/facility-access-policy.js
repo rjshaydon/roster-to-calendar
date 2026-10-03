@@ -20,30 +20,50 @@ export function validFacilityDateRange(start, end, maximumDays = 370) {
 export function nextFacilityDate(date) {
   return new Date(Date.parse(`${date}T00:00:00Z`) + 86400000).toISOString().slice(0,10);
 }
+let melbourneOffsetFormatter;
 function melbourneMidnight(date) {
   // Melbourne midnight occurs before the 02:00/03:00 DST transition.
   const sample = new Date(Date.parse(`${date}T00:00:00Z`) - 10 * 60 * 60 * 1000);
-  const offset = new Intl.DateTimeFormat("en", { timeZone: "Australia/Melbourne", timeZoneName: "longOffset" }).formatToParts(sample).find(part => part.type === "timeZoneName").value.replace("GMT", "");
+  melbourneOffsetFormatter ||= new Intl.DateTimeFormat("en", { timeZone: "Australia/Melbourne", timeZoneName: "longOffset" });
+  const offset = melbourneOffsetFormatter.formatToParts(sample).find(part => part.type === "timeZoneName").value.replace("GMT", "");
   return `${date}T00:00:00${offset}`;
 }
-// Clip at authorised date boundaries, including overnight shifts. A range
-// spanning two rotations must not return shifts from the intervening periods.
+// Compute timezone boundaries per segment/date rather than per roster row.
+// A term-wide request can contain thousands of rows sharing the same bounds.
 export function filterFacilityRowsBySegments(rows, segments) {
+  const midnights = new Map();
+  const midnight = date => {
+    if (!midnights.has(date)) midnights.set(date, melbourneMidnight(date));
+    return midnights.get(date);
+  };
+  const bySource = new Map();
+  for (const segment of segments || []) {
+    const next = nextFacilityDate(segment.endDate);
+    const lower = midnight(segment.startDate), upper = midnight(next);
+    const bounds = { lower, upper, lowerStamp: Date.parse(lower), upperStamp: Date.parse(upper),
+      allDayLower: segment.startDate, allDayUpper: next,
+      allDayLowerStamp: Date.parse(`${segment.startDate}T00:00:00Z`), allDayUpperStamp: Date.parse(`${next}T00:00:00Z`) };
+    if (!bySource.has(segment.sourceType)) bySource.set(segment.sourceType, []);
+    bySource.get(segment.sourceType).push(bounds);
+  }
   const result = [];
   for (const row of rows || []) {
     if (!row?.event) continue;
     const source = String(row.sourceType || row.event.sourceType || row.event.source || "").toLowerCase();
-    for (const segment of segments || []) {
-      if (source !== segment.sourceType) continue;
-      const event = row.event;
-      const allDay = event.allDay === true;
-      const start = String(event.start || "");
-      const end = String(event.end || event.start || "");
-      const lower = allDay ? segment.startDate : melbourneMidnight(segment.startDate);
-      const upper = allDay ? nextFacilityDate(segment.endDate) : melbourneMidnight(nextFacilityDate(segment.endDate));
-      const stamp = value => allDay ? Date.parse(`${value.slice(0,10)}T00:00:00Z`) : Date.parse(/[Zz]|[+-]\d\d:\d\d$/.test(value) ? value : `${value}${melbourneMidnight(value.slice(0,10)).slice(-6)}`);
-      if (stamp(start) >= stamp(upper) || stamp(end) <= stamp(lower)) continue;
-      result.push({ ...row, event: { ...event, start: stamp(start) < stamp(lower) ? lower : start, end: stamp(end) > stamp(upper) ? upper : end } });
+    const authorised = bySource.get(source);
+    if (!authorised) continue;
+    const event = row.event, allDay = event.allDay === true;
+    const start = String(event.start || ""), end = String(event.end || event.start || "");
+    const stamp = value => allDay ? Date.parse(`${value.slice(0,10)}T00:00:00Z`)
+      : Date.parse(/[Zz]|[+-]\d\d:\d\d$/.test(value) ? value : `${value}${midnight(value.slice(0,10)).slice(-6)}`);
+    const startStamp = stamp(start), endStamp = stamp(end);
+    for (const bounds of authorised) {
+      const lowerStamp = allDay ? bounds.allDayLowerStamp : bounds.lowerStamp;
+      const upperStamp = allDay ? bounds.allDayUpperStamp : bounds.upperStamp;
+      if (startStamp >= upperStamp || endStamp <= lowerStamp) continue;
+      result.push({ ...row, event: { ...event,
+        start: startStamp < lowerStamp ? (allDay ? bounds.allDayLower : bounds.lower) : start,
+        end: endStamp > upperStamp ? (allDay ? bounds.allDayUpper : bounds.upper) : end } });
     }
   }
   return result;

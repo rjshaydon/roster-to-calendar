@@ -164,6 +164,15 @@ const clipped=filterFacilityRowsBySegments([overnight],[{sourceType:'ddh',startD
 assert.equal(clipped[0].event.end,'2026-08-03T00:00:00+10:00');
 const dst=filterFacilityRowsBySegments([{...overnight,event:{...overnight.event,start:'2026-10-03T23:00:00+10:00',end:'2026-10-04T08:00:00+11:00'}}],[{sourceType:'ddh',startDate:'2026-10-04',endDate:'2026-10-04'}]);
 assert.equal(dst[0].event.start,'2026-10-04T00:00:00+10:00'); // midnight is before the DST change
+// Large reads must compute Melbourne boundaries per segment, not per row.
+const clippingSource=(await readFile(new URL('../public/static/facility-access-policy.js',import.meta.url),'utf8')).replaceAll('export ','');
+let formatterCalls=0;
+const countedIntl={DateTimeFormat:function(...args){const formatter=new Intl.DateTimeFormat(...args);return {formatToParts(value){formatterCalls++;return formatter.formatToParts(value);}};}};
+const manyRows=Array.from({length:2000},(_,i)=>({...overnight,doctorKey:`STAFF ${i}`}));
+const manyClipped=runInNewContext(`${clippingSource}; filterFacilityRowsBySegments(rows,segments)`,{rows:manyRows,segments:[{sourceType:'ddh',startDate:'2026-08-02',endDate:'2026-08-02'}],Intl:countedIntl});
+assert.equal(manyClipped.length,2000);
+assert.equal(manyClipped[1999].event.end,'2026-08-03T00:00:00+10:00');
+assert.equal(formatterCalls,2,'timezone work must depend on distinct boundary dates, not staff/event count');
 // Query planner must use the new bounded identity/term index.
 const plan=sqlite.prepare(`EXPLAIN QUERY PLAN SELECT term_start FROM facility_term_staff_contributions WHERE source_type=? AND doctor_key=? AND term_start>=? AND term_start<=?`).all('ddh','TRAINEE','2026-05-04','2026-08-03');
 assert.ok(plan.some(row=>row.detail.includes('idx_facility_staff_identity_terms')));

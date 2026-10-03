@@ -10409,7 +10409,8 @@ async function loadFacilityOverviewTogether() {
     const response = await fetch("/api/state", { method: "POST", headers: { "content-type": "application/json" }, signal: controller.signal,
       body: JSON.stringify({ email: authUserEmail || currentUserEmail, password: authUserPassword || currentUserPassword,
         targetEmail: facilityOverviewTargetEmail(), startDate, endDate, ...payload }) });
-    return readJsonResponse(response, "Could not load roster history for this period.");
+    return readJsonResponse(response, payload.action === "queryFacilityOverviewTogetherContext"
+      ? "Could not load authorised staff for this period." : "Could not load roster history for this period.");
   };
   try {
     if (!validFacilityDateRange(startDate, endDate)) throw new Error("Choose a valid date range of up to one year.");
