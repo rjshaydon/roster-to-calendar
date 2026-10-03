@@ -168,6 +168,7 @@ assert.equal(historyFixture.blocks[0].visible, false, 'recovery must not mutate 
 assert.throws(() => buildVhhDerivedRosterPayload({ extract: historyFixture, contentHash: 'hidden' }), /no rostered staff/);
 assert.throws(() => extractVhhHistoryWindow(historyFixture, { from: '2026-08-24', to: '2026-08-25', fileName: 'history.json' }), /complete requested window/);
 assert.throws(() => extractVhhHistoryWindow(historyFixture, { from: '2026-08-24', to: '2027-01-01', fileName: 'history.json' }), /at most one term/);
+assert.throws(() => extractVhhHistoryWindow(historyFixture, { from: '2026-08-02', to: '2026-08-03', fileName: 'history.json' }), /term boundary/);
 const gradeFixture = structuredClone(designationExtract);
 gradeFixture.blocks = [
  { ...gradeFixture.blocks[0], dates: [{ date: '2026-07-31', sourceColumn: 'B' }], rows: [{ sourceRow: 2, shiftLabel: 'SSU HMO (8-4)', assignments: [{ date: '2026-07-31', namesText: 'Doctor, Moving', sourceCell: 'B2' }] }] },

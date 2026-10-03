@@ -50,7 +50,7 @@ export async function onRequest(context) {
   const limit = await requestD1StatementLimit(context.request, url.pathname, action);
   let contained = requestContainmentReason(url.pathname, action, sharedEnv);
   const originalD1Binding = contained ? sharedEnv.ROSTER_DB : unwrapD1Binding(sharedEnv.ROSTER_DB);
-  const d1 = contained ? emptyD1Meter() : createD1Meter(originalD1Binding, limit, { firstViaAll: sharedEnv.ROSTER_ACCOUNT_BUDGET_ENABLED === "true" && (["/api/automation/derived", "/api/automation/facility-refresh"].includes(url.pathname) || url.pathname === "/api/state" && ["saveDerivedCalendarFile", "removeRosterImports", "uploadRawRosterFile", "refreshManualRosterViews"].includes(action)) });
+  const d1 = contained ? emptyD1Meter() : createD1Meter(originalD1Binding, limit, { firstViaAll: sharedEnv.ROSTER_ACCOUNT_BUDGET_ENABLED === "true" && (["/api/automation/derived", "/api/automation/facility-refresh", "/api/automation/findmyshift-check"].includes(url.pathname) || url.pathname === "/api/state" && ["saveDerivedCalendarFile", "removeRosterImports", "uploadRawRosterFile", "refreshManualRosterViews"].includes(action)) });
   let response;
 
   // Pages handlers read bindings from the supplied env object, so install the
