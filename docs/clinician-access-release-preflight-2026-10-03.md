@@ -1,8 +1,8 @@
 # Clinician access release preflight — 3 October 2026
 
 Current decision: **Migration 0038 applied and verified at 1:01 pm AEST.
-Application release remains pending. The historical DDH pilot is queued;
-a manual maintenance run requires approval because it can process other jobs.**
+Application release remains pending. The historical DDH pilot is now complete
+and verified following the user-approved general maintenance run.**
 
 Initial decision at 11:34 am: STOP until a second sample and sufficient passive
 baseline were available.
@@ -165,3 +165,17 @@ Private evidence (not committed):
 - `/private/tmp/clinician-d1-migration-0038-verify.json`
 - `/private/tmp/clinician-d1-history-pilot-budget.json`
 - `/private/tmp/clinician-ddh-history-pilot-verify.json`
+
+
+## Approved maintenance verification
+
+The user approved manual general maintenance dispatch. Workflow run 37095222824
+completed successfully, and the DDH 4 May–2 August historical job is complete.
+Published-reader verification found 128 staff and 3,597 historical events,
+with current-term publication preserved. Same-day maintenance metering reports
+37,600 reads and 997 writes across 28 completely metered finished receipts.
+The latest settled account-wide sample remains GO (40,351 reads / 1,343 writes),
+but ends before the workflow, so it does not yet include the entire run's cost.
+The full outcome and remaining release work are recorded in
+`at-a-glance-restoration-checkpoint-2026-10-03.md`. Application deployment remains
+pending; the original heartbeat's migration follow-up is finished.

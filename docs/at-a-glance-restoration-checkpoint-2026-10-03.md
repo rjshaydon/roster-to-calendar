@@ -77,3 +77,51 @@ point was captured before application. Prefer reverting application behaviour
 over restoring the entire database, which would also affect intervening writes.
 See `clinician-access-release-preflight-2026-10-03.md` for measured quota and
 migration evidence. No other migration was applied.
+
+
+## Approved maintenance outcome — 3 October, 2:13 pm AEST
+
+The user explicitly approved the general maintenance dispatch after its broader
+scope was explained. Run [37095222824](https://github.com/rjshaydon/roster-to-calendar/actions/runs/37095222824)
+completed successfully on `main`, with current-view seeding disabled. It also
+processed a current DDH FindMyShift roster update (149 doctors, 3,649 events).
+No application deployment or merge was performed.
+
+The historical DDH job is now **complete**, with 13 daily batches and four
+monthly builds. Its manifest was published at 2:09 pm AEST and retains both
+4 May and 3 August term entries. Read-only verification at 2:10 pm AEST checked:
+
+- All 91 historical dates have day pointers, and all 91 previously published
+  current-term dates still have pointers. Two current day revisions changed
+  during the ordinary roster update; exact old revision equality was therefore
+  not required.
+- Seven monthly objects (May through November), both term staff objects, and
+  historical boundary/current sample day objects are readable: 13 R2 objects.
+- The published-reader functions return 128 historical staff entries and 3,597
+  historical events with no missing coverage. Current-term range reads return
+  3,649 events with no missing coverage.
+
+The same-day maintenance ledger contains 28 finished receipts, all with complete
+metadata, reporting 37,600 reads and 997 writes. No reservations are unfinished,
+and the account maintenance stop reason is empty. These are maintenance-meter
+figures, not the entire account's daily usage.
+
+The latest settled account-wide sample returns GO with 40,351 reads and 1,343
+writes, but its interval ends at 1:56 pm AEST, before this workflow started.
+It therefore does not yet measure the run's entire account-wide cost. An initial
+comparison against the seven-minute-old start sample returned STOP solely for
+`sample-gap-too-short`; comparison with the original valid baseline returned GO.
+No quota exhaustion was observed.
+
+The earlier pending/approval-blocked status above is superseded by this outcome.
+Remaining work is publication of other retained historical terms after budget
+admission, application release and account smoke tests, and restoration of Casey
+when its roster input is available. The pilot's roster publication alone does
+not deploy the new historical trainee access rules.
+
+Private evidence:
+
+- `/private/tmp/clinician-ddh-maintenance-run.log`
+- `/private/tmp/clinician-ddh-history-publication/summary.json`
+- `/private/tmp/clinician-ddh-history-completion-budget.json`
+- `/private/tmp/clinician-d1-maintenance-latest.json`
