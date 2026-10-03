@@ -1,7 +1,13 @@
 # VHH historical recovery and roster freshness
 
-Prepared 3 October 2026, Australia/Melbourne. Status: plan only; no application
-code, source workbook, production data, flow or schedule changed.
+Prepared 3 October 2026, Australia/Melbourne. Originally a plan-only document.
+The user subsequently approved implementation. VHH's missing historical input
+has now been restored and its complete Term 2/3 shared views verified; DDH's
+five-minute scheduler is deployed. See
+`vhh-history-and-ddh-polling-checkpoint-2026-10-03.md` for release evidence.
+The broader all-site fifteen-minute delivery work below is not yet accepted as
+complete: SharePoint reconciliation, queue/publication latency and visible-app
+revision refresh still need end-to-end verification and any necessary changes.
 
 ## Outcomes
 
