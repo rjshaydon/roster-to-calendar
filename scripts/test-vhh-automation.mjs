@@ -158,3 +158,22 @@ await assert.rejects(
 );
 
 console.log("VHH automation fixtures passed.");
+
+const { extractVhhHistoryWindow } = await import('./vhh-history-extract.mjs');
+const historyFixture = structuredClone(rosterExtract);
+historyFixture.blocks[0].visible = false;
+const recovered = extractVhhHistoryWindow(historyFixture, { from: '2026-08-24', to: '2026-08-24', fileName: 'VHH-history-2026-08-24.json' });
+assert.equal(buildVhhDerivedRosterPayload({ extract: recovered, contentHash: 'history' }).eventCount, derived.eventCount);
+assert.equal(historyFixture.blocks[0].visible, false, 'recovery must not mutate source visibility');
+assert.throws(() => buildVhhDerivedRosterPayload({ extract: historyFixture, contentHash: 'hidden' }), /no rostered staff/);
+assert.throws(() => extractVhhHistoryWindow(historyFixture, { from: '2026-08-24', to: '2026-08-25', fileName: 'history.json' }), /complete requested window/);
+assert.throws(() => extractVhhHistoryWindow(historyFixture, { from: '2026-08-24', to: '2027-01-01', fileName: 'history.json' }), /at most one term/);
+const gradeFixture = structuredClone(designationExtract);
+gradeFixture.blocks = [
+ { ...gradeFixture.blocks[0], dates: [{ date: '2026-07-31', sourceColumn: 'B' }], rows: [{ sourceRow: 2, shiftLabel: 'SSU HMO (8-4)', assignments: [{ date: '2026-07-31', namesText: 'Doctor, Moving', sourceCell: 'B2' }] }] },
+ { ...gradeFixture.blocks[0], dates: [{ date: '2026-08-03', sourceColumn: 'B' }], rows: [{ sourceRow: 2, shiftLabel: 'AM REG', assignments: [{ date: '2026-08-03', namesText: 'Doctor, Moving', sourceCell: 'B2' }] }] },
+];
+const moving = buildVhhDerivedRosterPayload({ extract: gradeFixture, contentHash: 'grades' }).eventsByDoctor['MOVING DOCTOR'];
+assert.equal(moving[0].seniority, 'HMO');
+assert.equal(moving[1].seniority, 'Junior Registrar');
+console.log('VHH historical scope and term-specific grades passed.');

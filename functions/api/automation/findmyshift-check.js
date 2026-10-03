@@ -1,8 +1,10 @@
-import { findmyshiftConfiguredRosterRange, findmyshiftLastModified, findmyshiftRosterWorkbook } from "../../_lib/findmyshift.js";
+import { findmyshiftConfiguredRosterRange, findmyshiftPollingRosterRanges, findmyshiftLastModified, findmyshiftRosterWorkbook } from "../../_lib/findmyshift.js";
 import { createRosterSyncRun, findQueuedRosterSyncByHash, findRosterSyncByProviderVersion, hasCalendarDb, listActiveRetainedRosterFiles, loadRosterSource, upsertRosterSource } from "../../_lib/d1-calendar.js";
 import { requestQueuedRosterProcessing } from "../../_lib/automation-dispatch.js";
 import { automatedRosterSourceEnabled, automatedRosterWritesEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
 import { guardedFetch, localFeatureDisabledResponse } from "../../_lib/outbound-network.js";
+import { refreshAccountMaintenanceBudget } from "./account-budget.js";
+import { reserveRosterMaintenanceBudget } from "../../_lib/roster-maintenance-budget.js";
 
 const SOURCE_ID = "dandenong-findmyshift";
 // This version is both part of the retained workbook name and the source
@@ -11,7 +13,7 @@ const SOURCE_ID = "dandenong-findmyshift";
 // leaving its earlier derived events active indefinitely.
 const IMPORT_FORMAT = "stream-paired-v8";
 
-export async function onRequestPost(context) {
+export async function onRequestPost(context, internal = {}) {
   if (!hasValidToken(context.request, context.env)) return Response.json({ error: "Unauthorized." }, { status: 401 });
   const localDisabled = localFeatureDisabledResponse(context.env, "FindMyShift automation");
   if (localDisabled) return localDisabled;
@@ -24,6 +26,23 @@ export async function onRequestPost(context) {
 
   const now = new Date().toISOString();
   const requestBody = await context.request.json().catch(() => ({}));
+  if (requestBody?.poll === true) {
+    try {
+      const version = await findmyshiftLastModified(apiKey, teamId, { env: context.env });
+      const checks = [];
+      for (const range of findmyshiftPollingRosterRanges(context.env)) {
+        const response = await onRequestPost({ ...context, request: new Request(context.request.url, {
+          method: 'POST', headers: context.request.headers, body: JSON.stringify({ range }),
+        }) }, { providerVersion: version });
+        const result = await response.json();
+        checks.push({ range, ok: response.ok && result.ok !== false, status: result.status || 'failed' });
+      }
+      const changed = checks.some(check => ['queued', 'processing', 'reprocess-queued'].includes(check.status));
+      return Response.json({ ok: checks.every(check => check.ok), status: changed ? 'queued' : checks.every(check => check.status === 'unchanged') ? 'unchanged' : 'checked', checks });
+    } catch {
+      return Response.json({ ok: false, status: 'failed', error: 'FindMyShift metadata poll failed.' }, { status: 502 });
+    }
+  }
   const force = requestBody?.force === true;
   const current = await loadRosterSource(context.env.ROSTER_DB, SOURCE_ID);
   const requestedRange = findmyshiftRequestedRosterRange(requestBody?.range);
@@ -33,14 +52,13 @@ export async function onRequestPost(context) {
   const range = requestedRange || findmyshiftConfiguredRosterRange(context.env);
   let providerVersion = "";
   try {
-    providerVersion = await findmyshiftLastModified(apiKey, teamId, { env: context.env });
+    providerVersion = internal.providerVersion || await findmyshiftLastModified(apiKey, teamId, { env: context.env });
     const rangeState = findmyshiftRangeState(current?.cursor, range, providerVersion);
     const fileName = `Dandenong-FindMyShift-${IMPORT_FORMAT}-${range.from}-to-${range.to}.xlsx`;
     const currentFormatRun = await findRosterSyncByProviderVersion(context.env.ROSTER_DB, SOURCE_ID, providerVersion, fileName);
     // An unpublished upcoming term is checked once per FindMyShift version,
     // then left alone until the provider changes.
     if (current?.providerVersion === providerVersion && rangeState.waiting) {
-      await saveSource(context, current, { lastCheckedAt: now, lastError: "" });
       return Response.json({ ok: true, status: "waiting-for-publication", providerModifiedAt: providerVersion });
     }
     // A provider version is current only after it has completed the whole
@@ -50,7 +68,6 @@ export async function onRequestPost(context) {
     // bypasses this shortcut so the next term appears four weeks early.
     if (current?.providerVersion
       && current.providerVersion === providerVersion
-      && rangeState.requested
       && current.lastSuccessAt
       && currentFormatRun?.status === "success"
       && (!current.lastError || isTransientFindmyshiftRateLimitError(current.lastError))) {
@@ -66,8 +83,21 @@ export async function onRequestPost(context) {
     // not re-download the full report on every watchdog tick. A future source
     // modification is retried in case the provider starts exposing the stream.
     if (!force && current?.providerVersion === providerVersion && isIncompleteDandenongAssignmentError(current.lastError)) {
-      await saveSource(context, current, { lastCheckedAt: now });
       return Response.json({ ok: true, status: "incomplete", providerModifiedAt: providerVersion });
+    }
+    if (!force && ['queued', 'processing'].includes(currentFormatRun?.status)) {
+      const dispatch = await requestQueuedRosterProcessing(context.env, { sourceId: SOURCE_ID, reason: 'five-minute-retry' });
+      return Response.json({ ok: true, status: currentFormatRun.status, processorDispatch: dispatch.dispatched === true });
+    }
+    // Unchanged polls above are read-only. Only changed input needs an account
+    // grant and a small ingestion reservation before downloading the workbook.
+    if (context.env.ROSTER_ACCOUNT_BUDGET_ENABLED === 'true') {
+      const grant = await context.env.ROSTER_DB.prepare('SELECT valid_until,stop_reason FROM roster_account_budget WHERE utc_day=?').bind(now.slice(0, 10)).first();
+      if (!grant || grant.valid_until <= now || grant.stop_reason) {
+        const admission = await (await refreshAccountMaintenanceBudget(context)).json();
+        if (admission.deferred) return Response.json({ ok: true, status: 'deferred', reason: admission.reason || 'account-budget' });
+      }
+      if (!await reserveRosterMaintenanceBudget(context.env.ROSTER_DB, 128, 1024)) return Response.json({ ok: true, status: 'deferred', reason: 'account-budget' });
     }
     const workbook = await findmyshiftRosterWorkbook(apiKey, teamId, range, { env: context.env });
     const response = await guardedFetch(context.env, new URL("/api/automation/ingest", context.request.url), {
@@ -112,7 +142,7 @@ export async function onRequestPost(context) {
     // metadata poll. The next scheduled check will retry it; do not make the
     // Files card look like the successfully imported roster has failed.
     const lastError = isTransientFindmyshiftRateLimitError(errorMessage) && current?.lastSuccessAt ? "" : errorMessage;
-    await saveSource(context, current, { lastCheckedAt: now, lastError });
+    if (!current || current.lastError !== lastError) await saveSource(context, current, { lastCheckedAt: now, lastError });
     const incomplete = error?.code === "findmyshift-incomplete-ddh-assignment" || isIncompleteDandenongAssignmentError(error?.message);
     const diagnostic = safeFindmyshiftDiagnostic(error);
     const exceptions = Array.isArray(error?.findmyshiftAssignmentExceptions)
@@ -210,7 +240,7 @@ function isTransientFindmyshiftRateLimitError(value) {
 }
 
 function findmyshiftRangeState(cursor, range, providerVersion) {
-  const saved = cursor && typeof cursor === "object" ? cursor.findmyshiftRange : null;
+  const saved = cursor?.findmyshiftRanges?.[`${range.from}:${range.to}`] || cursor?.findmyshiftRange;
   const requested = String(saved?.from || "") === String(range?.from || "")
     && String(saved?.to || "") === String(range?.to || "")
     && String(saved?.providerVersion || "") === String(providerVersion || "")
@@ -219,15 +249,13 @@ function findmyshiftRangeState(cursor, range, providerVersion) {
 }
 
 function withFindmyshiftRangeState(cursor, range, providerVersion, status) {
+  const state = { from: String(range?.from || ''), to: String(range?.to || ''), providerVersion: String(providerVersion || ''), importFormat: IMPORT_FORMAT, status: String(status || '') };
+  const ranges = { ...(cursor?.findmyshiftRanges || {}), [`${state.from}:${state.to}`]: state };
+  const retained = Object.fromEntries(Object.entries(ranges).sort(([a], [b]) => b.localeCompare(a)).slice(0, 4));
   return {
     ...(cursor && typeof cursor === "object" ? cursor : {}),
-    findmyshiftRange: {
-      from: String(range?.from || ""),
-      to: String(range?.to || ""),
-      providerVersion: String(providerVersion || ""),
-      importFormat: IMPORT_FORMAT,
-      status: String(status || ""),
-    },
+    findmyshiftRange: state,
+    findmyshiftRanges: retained,
   };
 }
 

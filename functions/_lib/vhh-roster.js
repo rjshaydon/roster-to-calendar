@@ -1,3 +1,4 @@
+import { australianTermStartForDate } from "./d1-calendar.js";
 export const VHH_ROSTER_SOURCE_ID = "vhh-active-medical-roster";
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -64,7 +65,7 @@ export function buildVhhDerivedRosterPayload({ extract, contentHash, fileId = ""
       for (const assignment of row.assignments) {
         const people = vhhPeopleFromCell(assignment.namesText);
         for (const person of people) {
-          const seniority = termSeniorities.get(person.key) || definition.seniority;
+          const seniority = termSeniorities.get(`${australianTermStartForDate(assignment.date)}:${person.key}`) || definition.seniority;
           if (!doctorsByKey.has(person.key)) {
             doctorsByKey.set(person.key, {
               key: person.key,
@@ -241,8 +242,9 @@ function buildTermSeniorities(blocks) {
       if (!definition) continue;
       for (const assignment of row.assignments) {
         for (const person of vhhPeopleFromCell(assignment.namesText)) {
-          const current = evidence.get(person.key) || "Unknown";
-          if (seniorityRank(definition.seniority) > seniorityRank(current)) evidence.set(person.key, definition.seniority);
+          const key = `${australianTermStartForDate(assignment.date)}:${person.key}`;
+          const current = evidence.get(key) || "Unknown";
+          if (seniorityRank(definition.seniority) > seniorityRank(current)) evidence.set(key, definition.seniority);
         }
       }
     }

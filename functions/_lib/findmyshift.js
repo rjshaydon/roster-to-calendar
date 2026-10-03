@@ -18,7 +18,14 @@ export function findmyshiftConfiguredRosterRange(env = {}, now = new Date()) {
   };
 }
 
-function findmyshiftPublicationWindow(now) {
+export function findmyshiftPollingRosterRanges(env = {}, now = new Date()) {
+  const selected = findmyshiftConfiguredRosterRange(env, now);
+  if (['FINDMYSHIFT_FROM', 'FINDMYSHIFT_TO', 'FINDMYSHIFT_DIAGNOSTIC_FROM', 'FINDMYSHIFT_DIAGNOSTIC_TO'].some(key => validDateKey(env[key]))) return [selected];
+  const current = findmyshiftPublicationWindow(now, false);
+  return current.from === selected.from ? [current] : [current, selected];
+}
+
+function findmyshiftPublicationWindow(now, includeUpcoming = true) {
   const date = now instanceof Date && !Number.isNaN(now.getTime()) ? now : new Date();
   const today = date.toISOString().slice(0, 10);
   const terms = [];
@@ -32,7 +39,7 @@ function findmyshiftPublicationWindow(now) {
   const current = sorted.filter((term) => term.from <= today).at(-1)
     || { from: firstMondayDateKey(date.getUTCFullYear(), 1), to: addDateKeyDays(firstMondayDateKey(date.getUTCFullYear(), 1), 90) };
   const next = sorted.find((term) => term.from > today);
-  return next && today >= addDateKeyDays(next.from, -NEXT_TERM_LOOKAHEAD_DAYS) ? next : current;
+  return includeUpcoming && next && today >= addDateKeyDays(next.from, -NEXT_TERM_LOOKAHEAD_DAYS) ? next : current;
 }
 
 function firstMondayDateKey(year, monthIndex) {
