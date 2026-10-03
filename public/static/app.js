@@ -14595,9 +14595,9 @@ function accountCalendarContextForEmail(email) {
 }
 
 async function validateClaimedAccountCalendarInBackground(context = {}, options = {}) {
-  if (options.preserveRenderedSnapshot && visibleSnapshotIsCurrent({ requireNotStale: true })) {
-    return;
-  }
+  // A current calendar cache says nothing about this account's permissions.
+  // Always refresh the identity/access envelope when switching accounts.
+  const cachedCalendarCurrent = options.preserveRenderedSnapshot && visibleSnapshotIsCurrent({ requireNotStale: true });
   const targetEmail = normalizeEmail(context.ownerEmail || context.ownerId);
   const cachedSnapshot = options.preserveRenderedSnapshot ? currentSnapshot : null;
   const cachedRevision = cachedSnapshot?.calendarRevision || "";
@@ -14625,6 +14625,10 @@ async function validateClaimedAccountCalendarInBackground(context = {}, options 
     renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot?.session || {});
     setStatus(currentSnapshotStale ? "Refreshing calendar..." : "Calendar loaded.");
     renderLoginState();
+  }
+  if (cachedCalendarCurrent) {
+    renderLoginState();
+    return;
   }
   await hydrateAuthenticatedWorkspace({
     adminTargetEmail: targetEmail === OWNER_EMAIL ? "" : targetEmail,
@@ -14677,9 +14681,6 @@ async function validateDoctorProfileCalendarInBackground(doctor, previousState, 
     setStatus("Calendar is up to date.");
   } else {
     throw new Error(`${doctor.displayName} calendar is not ready yet. Try again in a moment.`);
-  }
-  if (calendarTransitionStillCurrent(options.transition) && activeDoctorProfile?.id === options.profile?.id) {
-    void loadDoctorProfileFacilityOverviewAccess(activeDoctorProfile);
   }
 }
 
@@ -14820,6 +14821,7 @@ async function enterDoctorProfileView(doctor) {
   primeInsightsAccessForCurrentView();
   const accountSwitchStartedAt = performance.now();
   const transition = beginCalendarTransition();
+  void loadDoctorProfileFacilityOverviewAccess(profile, { transition });
   localStorage.setItem(CURRENT_EMAIL_KEY, currentUserEmail);
   sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
   setStatus(`Opening ${doctor.displayName}...`);
@@ -15057,7 +15059,7 @@ async function fetchDoctorProfileState(profile, options = {}) {
   return data;
 }
 
-async function loadDoctorProfileFacilityOverviewAccess(profile) {
+async function loadDoctorProfileFacilityOverviewAccess(profile, options = {}) {
   if (!profile?.id || !isCreatorAuthenticated()) return;
   try {
     const response = await fetch("/api/state", {
@@ -15075,11 +15077,10 @@ async function loadDoctorProfileFacilityOverviewAccess(profile) {
       }),
     });
     const data = await readJsonResponse(response, "Could not load this profile's At a glance access.");
-    if (activeCalendarMode() !== "doctor-profile" || activeDoctorProfile?.id !== profile.id) return;
+    if (!calendarTransitionStillCurrent(options.transition) || activeCalendarMode() !== "doctor-profile" || activeDoctorProfile?.id !== profile.id) return;
     activeDoctorProfile = { ...activeDoctorProfile, facilityOverviewAccountEmail: normalizeEmail(data.facilityOverviewAccountEmail) };
     currentFacilityOverviewEnabled = data.facilityOverviewEnabled === true;
-    if (data.state?.session) rememberSessionBaseline(data.state.session);
-  currentFacilityOverviewMaintenance = data.facilityOverviewMaintenance !== false;
+    currentFacilityOverviewMaintenance = data.facilityOverviewMaintenance !== false;
     currentFacilityOverviewAutomaticLaunchEnabled = data.facilityOverviewAutomaticLaunchEnabled === true;
     currentFacilityOverviewAccess = sanitizeFacilityOverviewAccess(data.facilityOverviewAccess);
     applyFacilityOverviewSiteScope();
@@ -15346,6 +15347,7 @@ async function returnToCreatorCalendar(options = {}) {
 async function returnToCreatorAccount(options = {}) {
   const previousState = captureCalendarViewState();
   beginFacilityOverviewAccountSession();
+  resetFacilityOverviewAccessForEnteredUser();
   const accountSwitchStartedAt = performance.now();
   const creatorEmail = authUserEmail || OWNER_EMAIL;
   const creatorPassword = authUserPassword || currentUserPassword;
