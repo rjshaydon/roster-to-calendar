@@ -1,5 +1,11 @@
 # At a glance restoration completion plan
 
+> Completed on 3 October 2026: migration 0038, the four-site application release
+> and all retained historical publications. Casey Terms 3 and 4 are deferred by
+> the user. Earlier pending steps below are historical. See
+> [the final checkpoint](at-a-glance-restoration-checkpoint-2026-10-03.md#final-release-and-verification--1620-aest)
+> for deployment, acceptance, quota evidence and remaining limitations.
+
 Prepared 3 October 2026 from clinician-access commit `3a3a1b8a` on
 `codex/clinician-access-history`. This is the additional restoration plan for
 the work now being coordinated in this conversation. It builds on the access

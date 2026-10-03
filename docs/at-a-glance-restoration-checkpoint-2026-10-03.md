@@ -1,9 +1,11 @@
 # At a glance restoration checkpoint — 3 October 2026
 
-The clinician-access implementation is saved in commit `3a3a1b8a` on
-`codex/clinician-access-history`. This checkpoint adds the coordinated
-Working together and ED Staff restoration work. Production migration 0038
-is applied and verified. Application changes have not been deployed or merged.
+**Restoration completed and deployed on 3 October 2026.** Migration 0038,
+clinician access, Working together, ED Staff and retained historical publications
+are complete for MMC, DDH, MCH and VHH. Casey Terms 3 and 4 are explicitly
+deferred by the user until its authoritative input and syncing are available.
+The earlier pending statements below describe historical checkpoints and are
+superseded by this completion record.
 
 ## Implemented behaviour
 
@@ -125,3 +127,53 @@ Private evidence:
 - `/private/tmp/clinician-ddh-history-publication/summary.json`
 - `/private/tmp/clinician-ddh-history-completion-budget.json`
 - `/private/tmp/clinician-d1-maintenance-latest.json`
+
+## Final release and verification — 16:20 AEST
+
+Production code is merge commit `0246edf26831275314bdbc446bb3458f6ca6abda`,
+successful deployment `a8b89ad4-0f71-41b0-a262-955bd66b75b2`.
+PRs [9](https://github.com/rjshaydon/roster-to-calendar/pull/9),
+[10](https://github.com/rjshaydon/roster-to-calendar/pull/10) and
+[11](https://github.com/rjshaydon/roster-to-calendar/pull/11) are merged.
+The final fixes bound timezone work and preserve coverage separately for each
+term, including older publications without the new manifest field. An older
+empty term cannot clear a current personal calendar; inclusive final dates are
+covered correctly.
+
+Both additional maintenance runs succeeded (37100438538, 37101292192).
+All seven targeted historical jobs are complete. All 155 maintenance receipts
+have complete cost metadata and finished: 121,664 measured reads and 5,247
+writes, with no budget stop. Account-wide analytics at 06:14 UTC reported
+195,601 reads and 3,328 writes and admission GO; analytics lag the synchronous
+receipt ledger. These are different overlapping measurements, not additive
+whole-account totals. Five-hour Codex usage was 35% used at the final release.
+
+74 production publication objects were verified through the actual readers.
+MMC, DDH and MCH cover 2 February–1 November. VHH retained Term 2 covers
+27 July–2 August; current coverage includes 3–23 August and 21 September–
+1 November. Earlier Term 2 dates and 24 August–20 September are reported as
+unavailable. Its retained next term remains hidden until 19 October. Existing
+current/future daily pointers were preserved. No missing Casey data was invented.
+
+Live acceptance used the existing authenticated creator session: Working
+together rendered full current and Term 2 history across enabled sites;
+ED Staff All displayed all four hospitals with a Casey notice; DDH On shift,
+contacts and By stream Fast Track displayed actual current assignments.
+The existing personal calendar remained available. CMO parity, multiple current
+sites/locums, historical trainee scope, direct API denial, impersonation,
+corrections and cache invalidation were verified by behavioural tests using
+isolated accounts; production trainee/CMO credentials were not required or changed.
+
+Clinician access, facility access/rollout/contact access, personal snapshots,
+cached insights and restoration mutation checks pass. The Worker compiles.
+Three pre-existing broader-suite failures were reproduced on the base revision:
+fixture identity assertion, maintenance automatic-launch expectation, and
+materialization import fixture missing column `name`. They remain documented
+limitations, not passing checks. Live bounded publication completed successfully.
+
+Advanced global administration stays disabled and durable doctor-name merging
+remains a separate project. Casey input/sync is the explicitly deferred follow-up.
+Private evidence is in `/private/tmp/clinician-restored-history-verification/summary.json`,
+`/private/tmp/clinician-restoration-final-ledger.json`, and
+`/private/tmp/clinician-restoration-final-budget.json`; no credentials or raw roster
+objects have been committed.
