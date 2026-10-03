@@ -126,7 +126,25 @@ const onShift = await call({action:'queryFacilityOverviewOnShift',date:'2026-10-
 assert.ok(onShift.events.some(row=>row.sourceType==='mmc'));
 assert.ok(onShift.events.some(row=>row.sourceType==='ddh'));
 assert.equal(onShift.events.some(row=>row.sourceType==='mch'),false);
-await call({action:'queryFacilityOverviewStaff',facilityKey:'mmc',termStart:'2026-05-04',termEnd:'2026-08-02'},403);
+await call({action:'queryFacilityOverviewStaff',facilityKey:'mmc',termStart:'2026-05-04',termEnd:'2026-08-02'},503); // no published directory for this term
+// Directory names do not grant access to shifts at another hospital.
+const allNames = await call({action:'queryFacilityOverviewStaff',facilityKey:'all',termStart:'2026-08-03',termEnd:'2026-11-01'});
+assert.ok(allNames.members.some(member=>member.sourceType==='mch'));
+assert.equal(allNames.directoryOnly,true);
+assert.equal(allNames.events.length,0);
+assert.equal(allNames.members.some(member=>'coverageStart' in member || 'coverageEnd' in member),false);
+// Published, released future rotations are authorised by that future membership.
+membership('mch','2026-11-02');
+publish('mch','2026-11-02','2027-01-31',['2026-11-03']);
+objects.get('facility-overview/v1/mch/manifest.json').terms.find(term=>term.termStart==='2026-11-02').visibleFrom='2026-10-01';
+const future = await call({action:'queryFacilityOverviewWorkingTogether',startDate:'2026-11-03',endDate:'2026-11-03',sourceTypes:['mch'],doctorKeys:['TRAINEE']});
+assert.ok(future.events.some(row=>row.sourceType==='mch'));
+await call({action:'queryFacilityOverviewWorkingTogether',startDate:'2026-11-03',endDate:'2026-11-03',sourceTypes:['mmc']},403);
+const termDirectory = await call({action:'queryFacilityOverviewTerms'});
+assert.ok(termDirectory.terms.some(term=>term.termStart==='2026-05-04'&&term.sourceType==='ddh'));
+assert.ok(termDirectory.terms.some(term=>term.termStart==='2026-11-02'&&term.sourceType==='mch'));
+assert.equal(termDirectory.terms.some(term=>term.termStart==='2026-05-04'&&term.sourceType==='mmc'),false);
+assert.equal(termDirectory.terms.some(term=>term.termStart==='2027-02-01'),false);
 const metadata = await call({action:'queryFacilityOverviewMetadata',sourceTypes:['mch']});
 assert.equal(metadata.facilities.some(f=>f.sourceType==='mch'||f.facilityKey==='MCH'),false);
 // Who/When discovery is filtered to historical scope before computing peers.
@@ -195,7 +213,7 @@ assert.equal(mixedTogether.events.some(row=>row.sourceType==='casey'),false);
 assert.ok(mixedTogether.missing.some(item=>item.sourceType==='casey'));
 await call({...togetherQuery,email:'mixed@example.com',sourceTypes:['mch']},403);
 await call({...togetherQuery,email:'mixed@example.com',sourceTypes:['casey']},503);
-await call({...staffQuery,email:'casey-only@example.com'},503);
+assert.ok((await call({...staffQuery,email:'casey-only@example.com'})).members.some(member=>member.sourceType==='mmc'),'enabled directory access does not depend on current hospital reader availability');
 await call({...staffQuery,email:'mixed@example.com',facilityKey:'casey'},503);
 await call({...staffQuery,email:'mixed@example.com',facilityKey:'not-a-hospital'},400);
 for(const grade of ['SMS','CMO']) {
@@ -249,6 +267,17 @@ const month=objects.get(pointer.key);
 const completeCalendar=await loadPublishedDoctorCalendar(r2,{doctorKey:'TRAINEE',sourceTypes:['mmc'],state:{session:{}}},{range:{startDate:'2026-10-02',endDate:'2026-10-02'},today:'2026-10-03'});
 assert.equal(completeCalendar.snapshotAvailable,true);
 assert.equal(completeCalendar.snapshot.preview.events.length,1);
+// Casey is a valid linked identity even before its publication exists.
+const absentCasey = objects.get('facility-overview/v1/casey/manifest.json');
+objects.delete('facility-overview/v1/casey/manifest.json');
+const multiSiteCalendar=await loadPublishedDoctorCalendar(r2,{doctorKey:'TRAINEE',sourceTypes:['mmc','casey'],aliases:[{sourceType:'mmc',key:'TRAINEE'},{sourceType:'casey',key:'TRAINEE'}],state:{session:{}}},{range:{startDate:'2026-10-02',endDate:'2026-10-02'},today:'2026-10-03'});
+assert.equal(multiSiteCalendar.snapshotAvailable,true,'valid Casey identity must not block other published hospitals');
+assert.equal(multiSiteCalendar.snapshot.preview.events.length,1);
+assert.ok(multiSiteCalendar.snapshot.preview.publicationMissing.some(item=>item.sourceType==='casey'));
+const priorCasey=row('casey','TRAINEE','2026-10-02').event;
+const preservedCasey=await loadPublishedDoctorCalendar(r2,{doctorKey:'TRAINEE',sourceTypes:['mmc','casey'],state:{session:{}}},{range:{startDate:'2026-10-02',endDate:'2026-10-02'},today:'2026-10-03',previousSnapshot:{preview:{events:[priorCasey]}}});
+assert.equal(preservedCasey.snapshot.preview.events.length,2,'unavailable Casey publication must not erase a retained shift');
+objects.set('facility-overview/v1/casey/manifest.json',absentCasey);
 objects.delete(pointer.key);
 const incompleteCalendar=await loadPublishedDoctorCalendar(r2,{doctorKey:'TRAINEE',sourceTypes:['mmc'],state:{session:{}}},{range:{startDate:'2026-10-02',endDate:'2026-10-02'},today:'2026-10-03'});
 assert.equal(incompleteCalendar.snapshotAvailable,false,'partial colleague publication must not clear personal calendar shifts');
@@ -297,6 +326,16 @@ const browserGlobals = {facilityOverviewState:browserState,facilityOverviewToget
   availableRosterDoctors:[{key:'PRIVATE PEER',displayName:'Private Peer',sourceType:'mch'}]};
 assert.deepEqual(JSON.parse(JSON.stringify(runInNewContext(`${directoryFunction}; facilityOverviewTogetherStaffOptions().map(doctor=>doctor.key)`,browserGlobals))),['FORMER PEER']);
 assert.equal(runInNewContext(`${directoryFunction}; facilityOverviewTogetherStaffOptions().length`,{...browserGlobals,facilityOverviewTogetherContextKey:()=> 'different-term'}),0,'stale period names must disappear while a new scope loads');
+const initialise = app.slice(app.indexOf('function initializeFacilityOverviewTogetherState()'),app.indexOf('function facilityOverviewTogetherTermOptions()'));
+const selectionGlobals={facilityOverviewState:{togetherContext:{key:'period'},togetherStaffKeys:[''],togetherUserClearedAll:false},facilityOverviewTogetherContextKey:()=> 'period',
+ facilityOverviewTogetherStaffOptions:()=>[{key:'ALPHABETICAL FIRST',identity:'first'},{key:'MY PROFILE',identity:'mine'}],activeDoctorProfile:{doctorKey:'MY PROFILE'},currentDefaultDoctorKey:'MY PROFILE',currentRosterClaims:[],normalizeRosterName:value=>String(value||'').toUpperCase()};
+runInNewContext(`${initialise}; initializeFacilityOverviewTogetherState()`,selectionGlobals);
+assert.equal(selectionGlobals.facilityOverviewState.togetherStaffKeys[0],'mine','only the entered profile is selected automatically');
+selectionGlobals.facilityOverviewState.togetherStaffKeys=[''];selectionGlobals.facilityOverviewState.togetherUserClearedAll=true;
+runInNewContext(`${initialise}; initializeFacilityOverviewTogetherState()`,selectionGlobals);
+assert.equal(selectionGlobals.facilityOverviewState.togetherStaffKeys[0],'','clearing the last selection must stay empty');
+const resultsRenderer=app.slice(app.indexOf('function renderFacilityOverviewTogetherResults('),app.indexOf('function facilityOverviewWorkingIntervals('));
+assert.equal(runInNewContext(`${resultsRenderer}; renderFacilityOverviewTogetherResults([{doctorKey:'FIRST'}],[],{})`,{renderFacilityOverviewTogetherEmptyState:()=> 'Choose a staff member'}),'Choose a staff member','no selection must not render an alphabetical or all-staff roster');
 // All 16 supported linked roster identities stay inside the default 64-statement
 // guard even on a cold current-access cache followed by historical context.
 const aliases = Array.from({length:16},(_,i)=>({sourceType:'mmc',key:`ALIAS ${i}`,displayName:`Alias ${i}`}));

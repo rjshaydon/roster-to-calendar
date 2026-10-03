@@ -670,6 +670,21 @@ export async function loadPublishedPreviousDdhNight(r2, date, now = new Date()) 
   return result;
 }
 
+// Discover committed, released terms without reading events or roster history.
+export async function loadPublishedFacilityTerms(r2, sourceTypes, today) {
+  const terms = [];
+  for (const sourceType of [...new Set(sourceTypes.map(safeSource).filter(Boolean))]) {
+    const manifest = await loadCachedSnapshot(r2, facilityMetadataManifestKey(sourceType));
+    if ((manifest?.terms || []).length > 64) throw new Error("Published term directory exceeds the manifest limit.");
+    for (const term of manifest?.terms || []) {
+      if (term.staffKey && term.staffRevision && term.visibleFrom <= today) {
+        terms.push({ sourceType, termStart: term.termStart, termEnd: term.termEnd });
+      }
+    }
+  }
+  return terms;
+}
+
 export async function loadPublishedFacilityMetadata(r2, sourceTypes, today) {
   if (!r2?.get) return { preparing: true, facilities: [], catalogEvents: [] };
   const missing = [];
