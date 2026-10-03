@@ -423,7 +423,7 @@ export async function publishFacilityStaffMetadata(context, sourceTypes = [], op
       if (currentTerm?.staffRevision !== staffRevision) {
         await storeCachedSnapshot(r2, staffKey, staff, { revision: staffRevision, ownerType: "facility-staff", ownerId: sourceType, rangeKey: term.termStart });
       }
-      updatedTerms.push({ ...term, termEnd, staffKey, staffRevision });
+      updatedTerms.push({ ...term, termEnd, staffKey, staffRevision, coverage: metadata.coverage });
     }
     const terms = requestedTerm
       ? [...(currentManifest?.terms || []).filter((entry) => entry.termStart !== requestedTerm), ...updatedTerms].sort((a, b) => a.termStart.localeCompare(b.termStart))
@@ -557,37 +557,50 @@ export async function loadPublishedFacilityRange(r2, sourceTypes, startDate, end
     if (!manifest) { missing.push({ sourceType, startDate, endDate, reason: "manifest-unavailable" }); continue; }
     const visibleTerms = (manifest.terms || []).filter((term) => term.visibleFrom <= currentDate && term.termEnd >= startDate && term.termStart <= endDate);
     if (!visibleTerms.length) { missing.push({ sourceType, startDate, endDate, reason: "history-unavailable" }); continue; }
-    const emptyRoster = Array.isArray(manifest.coverage) && !manifest.coverage.length;
+    // A bounded publication replaces the source summary with that term's
+    // coverage. Other retained terms keep authoritative coverage in their
+    // staff snapshots; never infer their absence from the source summary.
+    const publications = [];
+    for (const term of visibleTerms) {
+      const staff = term.staffKey ? await loadCachedSnapshot(r2, term.staffKey) : null;
+      const termCoverage = Array.isArray(term.coverage) ? term.coverage
+        : Array.isArray(staff?.coverage) ? staff.coverage : manifest.coverage;
+      const empty = Array.isArray(termCoverage) && !termCoverage.length && (!term.staffKey || Boolean(staff));
+      publications.push({ term, staff, coverage: termCoverage, empty });
+    }
+    const emptyRoster = publications.every(item => item.empty);
     let gap = null;
     for (let date = startDate; date <= endDate;) {
-      const visible = visibleTerms.some(term => term.termStart <= date && term.termEnd >= date);
-      const covered = emptyRoster || !Array.isArray(manifest.coverage) || manifest.coverage.some(item => item.startDate <= date && item.endDate > date);
+      const publication = publications.find(({term}) => term.termStart <= date && term.termEnd >= date);
+      const visible = Boolean(publication);
+      // Coverage dates use the same inclusive end as the publication builder.
+      const covered = publication && (publication.empty || !Array.isArray(publication.coverage)
+        || publication.coverage.some(item => item.startDate <= date && item.endDate >= date));
       const reason = !visible ? "history-unavailable" : !covered ? "coverage-unavailable" : "";
       if (reason && gap?.reason === reason) gap.endDate = date;
       else { if (gap) missing.push(gap); gap = reason ? { sourceType, startDate: date, endDate: date, reason } : null; }
       const next = new Date(`${date}T12:00:00Z`); next.setUTCDate(next.getUTCDate() + 1); date = next.toISOString().slice(0, 10);
     }
     if (gap) missing.push(gap);
-    const visibleMonths = emptyRoster ? [] : months.filter(month => visibleTerms.some(term => term.termStart.slice(0, 7) <= month && term.termEnd.slice(0, 7) >= month));
+    const visibleMonths = emptyRoster ? [] : months.filter(month => publications.some(({term,empty}) => !empty && term.termStart.slice(0, 7) <= month && term.termEnd.slice(0, 7) >= month));
     const monthPointers = visibleMonths.map((month) => [month, manifest.months?.[month]]).filter(([month, pointer]) => {
       if (pointer?.key) return true;
       missing.push({ sourceType, month, startDate, endDate, reason: "month-unavailable" });
       return false;
     });
-    selected.push({ sourceType, manifest, visibleTerms, monthPointers });
+    selected.push({ sourceType, manifest, visibleTerms, publications, emptyRoster, monthPointers });
   }
   if (!selected.length) return { preparing: true, events: [], coverage: [], revision: "", missing };
   const events = [];
   const coverage = [];
   let availableMonths = 0;
-  for (const { sourceType, manifest, visibleTerms, monthPointers } of selected) {
+  for (const { sourceType, manifest, visibleTerms, publications, emptyRoster, monthPointers } of selected) {
     // A published manifest with no active coverage authoritatively removes
     // current shifts; personal calendars must not retain a stale old roster.
-    if (Array.isArray(manifest.coverage) && !manifest.coverage.length) { availableMonths += 1; continue; }
+    if (emptyRoster) { availableMonths += 1; continue; }
     const overrides = new Map();
-    for (const term of visibleTerms) {
-      const staff = term.staffKey ? await loadCachedSnapshot(r2, term.staffKey) : null;
-      if (!staff) missing.push({ sourceType, termStart: term.termStart, startDate, endDate, reason: "staff-unavailable" });
+    for (const {term,staff,empty} of publications) {
+      if (!staff && !empty) missing.push({ sourceType, termStart: term.termStart, startDate, endDate, reason: "staff-unavailable" });
       for (const entry of staff?.seniorityOverrides || []) overrides.set(`${entry.sourceType}|${entry.doctorKey}`, entry);
     }
     for (const [month, pointer] of monthPointers) {
@@ -596,19 +609,20 @@ export async function loadPublishedFacilityRange(r2, sourceTypes, startDate, end
       availableMonths += 1;
       for (const row of snapshot.rows || []) {
         const date = String(row.event?.start || "").slice(0, 10);
-        if (date < startDate || date > endDate || !visibleTerms.some((term) => term.termStart <= date && term.termEnd >= date)) continue;
+        if (date < startDate || date > endDate || !publications.some(({term,empty}) => !empty && term.termStart <= date && term.termEnd >= date)) continue;
         const override = overrides.get(`${row.sourceType}|${row.doctorKey}`);
         events.push(override && !override.useRosterSeniority
           ? { ...row, seniority: override.seniority, seniorityOverride: override, event: { ...row.event, seniority: override.seniority, facilitySeniorityOverride: true } }
           : row);
       }
     }
-    coverage.push(...(manifest.coverage || []));
+    for (const publication of publications) coverage.push(...(publication.coverage || []));
   }
   const revision = await digest([selected.map(({ sourceType, visibleTerms, monthPointers }) => [sourceType,
     visibleTerms.map(term => term.staffRevision || ""), monthPointers.map(([month, pointer]) => [month, pointer.revision || ""])]), missing]);
   if (!missing.length && options.cachedRevision === revision) return { preparing: false, unchanged: true, events: [], coverage: [], revision, missing };
-  return { preparing: !availableMonths, partial: missing.length > 0, missing, events, coverage, revision, sourceTypes: selected.map(item => item.sourceType), visibleTerms: selected.flatMap(item => item.visibleTerms.map(term => ({ sourceType: item.sourceType, termStart: term.termStart, termEnd: term.termEnd }))) };
+  const uniqueCoverage = [...new Map(coverage.map(item => [JSON.stringify(item), item])).values()];
+  return { preparing: !availableMonths, partial: missing.length > 0, missing, events, coverage: uniqueCoverage, revision, sourceTypes: selected.map(item => item.sourceType), visibleTerms: selected.flatMap(item => item.visibleTerms.map(term => ({ sourceType: item.sourceType, termStart: term.termStart, termEnd: term.termEnd }))) };
 }
 
 export async function loadPublishedFacilityDays(r2, sourceTypes, date, currentDate = date) {
@@ -666,7 +680,14 @@ export async function loadPublishedFacilityMetadata(r2, sourceTypes, today) {
       return manifest;
     }))).filter(Boolean);
   if (!manifests.length) return { preparing: true, facilities: [], catalogEvents: [] };
-  const facilities = manifests.flatMap((manifest) => manifest.coverage || []);
+  const facilities = [];
+  for (const manifest of manifests) {
+    const currentTerms = (manifest.terms || []).filter(term => term.visibleFrom <= today && term.termStart <= today && term.termEnd >= today);
+    for (const term of currentTerms) {
+      const staff = !Array.isArray(term.coverage) && term.staffKey ? await loadCachedSnapshot(r2, term.staffKey) : null;
+      facilities.push(...(term.coverage || staff?.coverage || manifest.coverage || []));
+    }
+  }
   const catalogEvents = [];
   for (const manifest of manifests) {
     for (const term of manifest.terms || []) {

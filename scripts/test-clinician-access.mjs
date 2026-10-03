@@ -220,6 +220,28 @@ assert.ok(pausedRead.facilityOverviewAccess);
 env.FACILITY_SHARED_EMERGENCY_PAUSED='false';
 env.FACILITY_SHARED_READER_SOURCE_ALLOWLIST='mmc,ddh,mch';
 
+// Publishing another term must not hide or erase retained current shifts.
+const retainedManifest=objects.get('facility-overview/v1/mmc/manifest.json');
+const retainedTerm=retainedManifest.terms.find(term=>term.termStart==='2026-08-03');
+const retainedStaffKey=retainedTerm.staffKey;
+const retainedStaffPayload=objects.get(retainedStaffKey);
+const retainedSourceCoverage=retainedManifest.coverage;
+objects.set(retainedStaffKey,{...retainedStaffPayload,coverage:[{startDate:'2026-10-02',endDate:'2026-10-02'}]});
+retainedManifest.coverage=[{startDate:'2026-02-02',endDate:'2026-05-03'}];
+let retainedRange=await loadPublishedFacilityRange(r2,['mmc'],'2026-10-02','2026-10-02','2026-10-03');
+assert.equal(retainedRange.missing.length,0,'term coverage survives publication of another term');
+assert.ok(retainedRange.events.length,'inclusive coverage end retains the final date');
+retainedManifest.coverage=[];
+const retainedCalendar=await loadPublishedDoctorCalendar(r2,{doctorKey:'TRAINEE',sourceTypes:['mmc'],state:{session:{}}},{range:{startDate:'2026-10-02',endDate:'2026-10-02'},today:'2026-10-03'});
+assert.equal(retainedCalendar.snapshot.preview.events.length,1,'an empty different term must not erase current calendar shifts');
+objects.set(retainedStaffKey,{...retainedStaffPayload,coverage:[]});
+retainedManifest.coverage=[{startDate:'2026-02-02',endDate:'2026-05-03'}];
+retainedRange=await loadPublishedFacilityRange(r2,['mmc'],'2026-10-02','2026-10-02','2026-10-03');
+assert.equal(retainedRange.preparing,false);
+assert.equal(retainedRange.events.length,0,'an explicitly empty searched term clears only its own shifts');
+objects.set(retainedStaffKey,retainedStaffPayload);
+if(retainedSourceCoverage===undefined)delete retainedManifest.coverage;else retainedManifest.coverage=retainedSourceCoverage;
+
 // Missing publication differs from a completely published empty roster.
 const mmcManifest=objects.get('facility-overview/v1/mmc/manifest.json');
 const pointer=mmcManifest.months['2026-10'];
