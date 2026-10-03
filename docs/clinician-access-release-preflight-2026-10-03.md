@@ -1,5 +1,11 @@
 # Clinician access release preflight — 3 October 2026
 
+> Completed on 3 October 2026: migration 0038, the four-site application release
+> and all retained historical publications. Casey Terms 3 and 4 are deferred by
+> the user. Earlier pending steps below are historical. See
+> [the final checkpoint](at-a-glance-restoration-checkpoint-2026-10-03.md#final-release-and-verification--1620-aest)
+> for deployment, acceptance, quota evidence and remaining limitations.
+
 Current decision: **Migration 0038 applied and verified at 1:01 pm AEST.
 Application release remains pending. The historical DDH pilot is now complete
 and verified following the user-approved general maintenance run.**

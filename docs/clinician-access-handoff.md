@@ -1,5 +1,11 @@
 # Clinician access and Working together handoff
 
+> Completed on 3 October 2026: migration 0038, the four-site application release
+> and all retained historical publications. Casey Terms 3 and 4 are deferred by
+> the user. Earlier pending steps below are historical. See
+> [the final checkpoint](at-a-glance-restoration-checkpoint-2026-10-03.md#final-release-and-verification--1620-aest)
+> for deployment, acceptance, quota evidence and remaining limitations.
+
 Saved on 3 October 2026 on branch `codex/clinician-access-history`.
 
 Continue Working together restoration from this branch's clinician-access commit,
