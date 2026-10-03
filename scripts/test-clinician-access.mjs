@@ -336,6 +336,21 @@ runInNewContext(`${initialise}; initializeFacilityOverviewTogetherState()`,selec
 assert.equal(selectionGlobals.facilityOverviewState.togetherStaffKeys[0],'','clearing the last selection must stay empty');
 const resultsRenderer=app.slice(app.indexOf('function renderFacilityOverviewTogetherResults('),app.indexOf('function facilityOverviewWorkingIntervals('));
 assert.equal(runInNewContext(`${resultsRenderer}; renderFacilityOverviewTogetherResults([{doctorKey:'FIRST'}],[],{})`,{renderFacilityOverviewTogetherEmptyState:()=> 'Choose a staff member'}),'Choose a staff member','no selection must not render an alphabetical or all-staff roster');
+// Directory selection survives rendering, while returning to shifts restores
+// the entered clinician's roster permissions.
+const applySiteScope=app.slice(app.indexOf('function applyFacilityOverviewSiteScope()'),app.indexOf('function resetFacilityOverviewAccessForEnteredUser()'));
+const siteGlobals={currentFacilityOverviewAccess:{mode:'sites',facilityKeys:['MMC']},facilityAccessKeys:()=>['MMC'],facilityOverviewState:{tab:'staff',facilityKey:'ALL',directoryFacilityKeys:['MMC','DDH'],byStreamRows:[],byStreamCatalog:[]}};
+runInNewContext(`${applySiteScope}; applyFacilityOverviewSiteScope()`,siteGlobals);
+assert.equal(siteGlobals.facilityOverviewState.facilityKey,'ALL');
+siteGlobals.facilityOverviewState.facilityKey='DDH';
+runInNewContext(`${applySiteScope}; applyFacilityOverviewSiteScope()`,siteGlobals);
+assert.equal(siteGlobals.facilityOverviewState.facilityKey,'DDH');
+siteGlobals.facilityOverviewState.tab='on-shift';
+runInNewContext(`${applySiteScope}; applyFacilityOverviewSiteScope()`,siteGlobals);
+assert.equal(siteGlobals.facilityOverviewState.facilityKey,'MMC','directory access must not carry into shift access');
+siteGlobals.currentFacilityOverviewAccess.mode='denied';siteGlobals.facilityOverviewState.tab='staff';
+runInNewContext(`${applySiteScope}; applyFacilityOverviewSiteScope()`,siteGlobals);
+assert.equal(siteGlobals.facilityOverviewState.tab,'staff','an enabled account can browse staff even when its current roster is unpublished');
 // All 16 supported linked roster identities stay inside the default 64-statement
 // guard even on a cold current-access cache followed by historical context.
 const aliases = Array.from({length:16},(_,i)=>({sourceType:'mmc',key:`ALIAS ${i}`,displayName:`Alias ${i}`}));

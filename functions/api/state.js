@@ -126,6 +126,7 @@ const DOCTOR_PROFILE_SNAPSHOT_BUILDING_RETRY_MS = 2 * 60 * 1000;
 const SNAPSHOT_GLOBAL_WARMUP_LIMIT = 25;
 const FACILITY_OVERVIEW_STREAM_SENIORITIES = new Set(["SMS", "CMO", "Senior Registrar", "Transitional/Intermediate Registrar", "Junior Registrar", "HMO", "Intern", "NP", "Physio", "Unknown", "ALL"]);
 const FACILITY_OVERVIEW_MAINTENANCE_ACTIONS = new Set([
+  "queryFacilityOverviewTerms",
   "queryFacilityOverviewMetadata",
   "queryFacilityOverviewByStream",
   "queryFacilityOverviewOnShift",

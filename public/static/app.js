@@ -9222,7 +9222,7 @@ function renderFacilityOverviewFacilityControl(selected, facilities, options = {
     return `<label class="field"><span>ED</span><output class="facility-overview-fixed-facility">${escapeHtml(displaySourceCode(currentFacilityOverviewAccess.facilityKey))}</output></label>`;
   }
   const allValue = options.allValue || "ALL";
-  return `<label class="field"><span>ED</span><select data-facility-overview-facility><option value="${allValue}" ${selected === allValue ? "selected" : ""}>${currentFacilityOverviewAccess.mode === "all" ? "All EDs" : "All my hospitals"}</option>${facilities.map((facility) => `<option value="${escapeHtml(facility)}" ${facility === selected ? "selected" : ""}>${escapeHtml(displaySourceCode(facility))}</option>`).join("")}</select></label>`;
+  return `<label class="field"><span>ED</span><select data-facility-overview-facility><option value="${allValue}" ${selected === allValue ? "selected" : ""}>${facilityOverviewState.tab === "staff" || currentFacilityOverviewAccess.mode === "all" ? "All EDs" : "All my hospitals"}</option>${facilities.map((facility) => `<option value="${escapeHtml(facility)}" ${facility === selected ? "selected" : ""}>${escapeHtml(displaySourceCode(facility))}</option>`).join("")}</select></label>`;
 }
 
 function syncFacilityOverviewAccess() {
@@ -9718,8 +9718,11 @@ function resetFacilityOverviewSessionState() {
 function applyFacilityOverviewSiteScope() {
   if (currentFacilityOverviewAccess.mode === "all") return;
   const facilities = facilityAccessKeys(currentFacilityOverviewAccess);
-  if (facilityOverviewState.tab !== "together" && currentFacilityOverviewAccess.mode === "denied") facilityOverviewState.tab = "together";
-  if (facilities.length === 1) {
+  if (!["together", "staff"].includes(facilityOverviewState.tab) && currentFacilityOverviewAccess.mode === "denied") facilityOverviewState.tab = "together";
+  if (facilityOverviewState.tab === "staff") {
+    const directoryFacilities = facilityOverviewState.directoryFacilityKeys || [];
+    if (facilityOverviewState.facilityKey !== "ALL" && !directoryFacilities.includes(facilityOverviewState.facilityKey)) facilityOverviewState.facilityKey = "ALL";
+  } else if (facilities.length === 1) {
     facilityOverviewState.facilityKey = facilities[0];
     facilityOverviewState.preferredFacilityKey = facilities[0];
   } else if (facilityOverviewState.facilityKey !== "ALL" && !facilities.includes(facilityOverviewState.facilityKey)) {
