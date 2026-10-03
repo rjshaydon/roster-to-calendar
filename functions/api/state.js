@@ -222,6 +222,9 @@ export async function onRequestPost(context) {
     const email = normalizeEmail(body?.email);
     const password = String(body?.password || "");
     const action = String(body?.action || "login");
+    if (["queryFacilityOverviewTogetherContext", "queryFacilityOverviewWorkingTogether"].includes(action)) {
+      console.info(JSON.stringify({ event: "facility-together-read", action, stage: "start" }));
+    }
     const mode = String(body?.mode || "login");
     if (String(context.env.LOCAL_ONLY || "").toLowerCase() === "true") {
       console.info(JSON.stringify({ event: "local-api-action", action }));
@@ -2321,6 +2324,7 @@ export async function onRequestPost(context) {
       const readRoute = selection.route;
       if (readRoute === "blocked") return sharedRouteUnavailable();
       const contextOnly = action === "queryFacilityOverviewTogetherContext";
+      console.info(JSON.stringify({ event: "facility-together-read", action, stage: "authorised", segments: segments.length }));
       const doctorKeys = [...new Set((Array.isArray(body?.doctorKeys) ? body.doctorKeys : []).map(normalizeRosterName).filter(Boolean))];
       if (doctorKeys.length > 40) return Response.json({ error: "Choose up to 40 roster identities." }, { status: 400 });
       try {
@@ -2335,6 +2339,7 @@ export async function onRequestPost(context) {
             if (staff.preparing) missing.push({ ...segment, reason: "staff-unavailable" });
             else members.push(...(staff.members || []).map(member => ({ ...member, sourceType: segment.sourceType })));
           }
+          console.info(JSON.stringify({ event: "facility-together-read", action, stage: "directory-ready", members: members.length }));
           return Response.json({ ok: true, sourceTypes, segments, members, missing,
             scopeRevision, facilityOverviewAccess: access, accessExpiresAt: rangeAccess.expiresAt });
         }
@@ -2361,8 +2366,9 @@ export async function onRequestPost(context) {
           if (rows.length > 50000) return facilityOverviewPreparingResponse({ events: [], error: "This search is too large. Choose a shorter period." });
         }
         const wanted = new Set(doctorKeys);
-        const events = filterFacilityRowsBySegments(rows, rangeAccess.segments)
-          .filter(row => (!wanted.size || wanted.has(normalizeRosterName(row.doctorKey))) && isFacilityOverviewWorkingEvent(row.event, { includeClinicalSupport: true }));
+        const wantedRows = wanted.size ? rows.filter(row => wanted.has(normalizeRosterName(row.doctorKey))) : rows;
+        const events = filterFacilityRowsBySegments(wantedRows, rangeAccess.segments)
+          .filter(row => isFacilityOverviewWorkingEvent(row.event, { includeClinicalSupport: true }));
         const uniqueEvents = [...new Map(events.map(row => [`${row.sourceType}|${row.doctorKey}|${row.event.id}|${row.event.start}|${row.event.end}`, row])).values()];
         const revision = await sha256(JSON.stringify([scopeRevision, revisions, missing]));
         if (!missing.length && readRoute === "shared" && body?.cachedRevision === revision) return Response.json({ ok: true, unchanged: true, revision, scopeRevision, facilityOverviewAccess: access, accessExpiresAt: rangeAccess.expiresAt });
@@ -7230,13 +7236,15 @@ function findmyshiftDiagnosticTermRange(env) {
   };
 }
 
+let australianDateFormatter;
 function australianDateKey(now = new Date()) {
-  const parts = new Intl.DateTimeFormat("en-CA", {
+  australianDateFormatter ||= new Intl.DateTimeFormat("en-CA", {
     timeZone: "Australia/Melbourne",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  }).formatToParts(now);
+  });
+  const parts = australianDateFormatter.formatToParts(now);
   const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
   return `${values.year}-${values.month}-${values.day}`;
 }
