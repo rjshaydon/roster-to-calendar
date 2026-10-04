@@ -827,15 +827,18 @@ facilityOverviewSection?.addEventListener("click", (event) => {
     facilityOverviewState.staffSeniorityMenu = null;
     clearFacilityOverviewStaffMultiSelect({ render: false });
     facilityOverviewState.tab = tab.dataset.facilityOverviewTab || "on-shift";
+    applyFacilityOverviewSiteScope();
     if (facilityOverviewState.tab !== "on-shift") stopFacilityOverviewContactRefresh();
     resetFacilityOverviewScroll();
     if (facilityOverviewState.tab === "staff") {
       void loadFacilityOverviewStaff();
     } else if (facilityOverviewState.tab === "by-stream") {
       void openFacilityOverviewByStream();
-    } else {
-      if (facilityOverviewState.tab === "together") void loadFacilityOverviewTogether();
+    } else if (facilityOverviewState.tab === "together") {
+      void loadFacilityOverviewTogether();
       renderFacilityOverview();
+    } else {
+      void loadFacilityOverviewOnShift();
     }
     return;
   }
@@ -9667,7 +9670,7 @@ function resetFacilityOverviewSessionState() {
   const currentTermEnd = formatDateKey(addDays(currentTerm.end, -1));
   const directorPreference = currentNonClinical && currentDirectorViewEnabled ? directorHospitalPreference() : "";
   const defaultTab = directorPreference === "ALL" ? "staff" : "on-shift";
-  facilityOverviewState.tab = savedFacilityOverviewTabForCurrentAccount() || defaultTab;
+  facilityOverviewState.tab = currentNonClinical ? savedFacilityOverviewTabForCurrentAccount() || defaultTab : "on-shift";
   facilityOverviewState.date = contactOperationalDate();
   facilityOverviewState.followOperationalDate = true;
   facilityOverviewState.facilityKey = directorPreference || "";
@@ -9787,6 +9790,7 @@ async function openFacilityOverview(options = {}) {
   }
   refreshFacilityOverviewPreferredFacility();
   if (facilityOverviewSessionNeedsInitialization) resetFacilityOverviewSessionState();
+  if (!currentNonClinical && !options.preserveFacility && !options.preserveStaffTerm) facilityOverviewState.tab = "on-shift";
   await loadFacilityOverviewAvailableTerms();
   if (subjectKey !== activeCalendarTransitionKey() || transitionId !== calendarTransitionRunId) return;
   if (options.preserveFacility !== true && options.preserveStaffTerm !== true) {
