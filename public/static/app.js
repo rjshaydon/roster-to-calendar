@@ -328,6 +328,7 @@ let backgroundCloudSaveTimer = 0;
 let pendingCloudSaveSnapshot = null;
 let cloudStateSaveQueue = Promise.resolve();
 let cloudStateSaveActive = 0;
+const unsavedCalendarContexts = new Set();
 let serverUsers = [];
 let serverUsersUnavailable = false;
 let currentRosterClaims = [];
@@ -17714,7 +17715,8 @@ function calendarRevisionView() {
 
 function calendarRevisionRefreshAllowed() {
   return Boolean(calendarRevisionView() && (currentSnapshot || isFacilityOverviewOpen())
-    && !pendingCloudSaveSnapshot && !cloudStateSaveActive && !hasActiveRosterSyncJobs()
+    && !pendingCloudSaveSnapshot && !cloudSaveTimer && !backgroundCloudSaveTimer && !cloudStateSaveActive
+    && !unsavedCalendarContexts.has(sessionSaveContext()) && !hasActiveRosterSyncJobs()
     && !facilityOverviewState.requestController && !facilityOverviewState.contactResolutionSaving && !facilityOverviewState.staffMultiSelectSaving
     && !facilityOverviewState.contactReviewOpen && !facilityOverviewState.contactPreviousNightReviewOpen
     && !facilityOverviewState.contactResolutionMenu && !facilityOverviewState.staffActionMenu
@@ -18106,11 +18108,20 @@ function creatorCalendarSavePayload() {
 }
 
 async function saveCloudState(snapshot = null) {
+  const payload = snapshot || snapshotCloudSavePayload();
+  const saveContext = sessionSaveContext(payload);
   cloudStateSaveActive += 1;
-  const task = () => saveCloudStateNow(snapshot);
+  const task = () => saveCloudStateNow(payload);
   const queued = cloudStateSaveQueue.then(task, task);
   cloudStateSaveQueue = queued.catch(() => {});
-  try { return await queued; } finally { cloudStateSaveActive -= 1; }
+  try {
+    const result = await queued;
+    unsavedCalendarContexts.delete(saveContext);
+    return result;
+  } catch (error) {
+    unsavedCalendarContexts.add(saveContext);
+    throw error;
+  } finally { cloudStateSaveActive -= 1; }
 }
 
 function savePayloadMatchesActiveCalendar(payload) {

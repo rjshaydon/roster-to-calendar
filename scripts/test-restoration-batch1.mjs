@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
+import { runInNewContext } from 'node:vm';
 import { readFile,readdir } from 'node:fs/promises';
 import { rosterTermAvailableFrom, melbourneDateKey } from '../public/static/roster-term-policy.js';
 import { createCalendarRevisionPoller } from '../public/static/calendar-revision-poller.js';
@@ -73,3 +74,36 @@ assert.equal((await revision({request:new Request('https://example.com/api/roste
 sqlite.exec("INSERT INTO roster_account_budget(utc_day,stop_reason) VALUES(date('now'),'cost-overrun:request')");
 assert.equal((await (await checkMetadata({env:{...env,ROSTER_ACCOUNT_BUDGET_ENABLED:'true'},request:new Request('https://example.com/api/automation/roster-check',{method:'POST',headers:{authorization:'Bearer fixture'},body:JSON.stringify({...metadata,providerVersion:'new'})})},new Date('2026-10-04T01:00:00Z'))).json()).download,false,'budget stop prevents provider download');
 console.log('Batch 1 passed Melbourne eligibility, metadata no-op/version/failure isolation, historical grades, zero-D1 fingerprints, unchanged/hidden/editing/switched-account refresh.');
+
+// Exercise the actual browser apply path against responses arriving after edits
+// and account switches, rather than only testing the scheduling abstraction.
+const app = await readFile(new URL('../public/static/app.js',import.meta.url),'utf8');
+const start = app.indexOf('async function refreshVisibleRosterView(');
+const code = app.slice(start,app.indexOf('async function loadCloudCalendarEvents(',start));
+let responseResolver, rendered = 0, session = { settings: { dateFrom:'2026-05-01',dateTo:'2026-12-01',hospitalFilter:'MMC' },customEvents:[] };
+const globals = {
+ calendarRevisionRefreshAllowed:()=>true,calendarRevisionView:()=>({key:globals.key}),key:'profile-A',
+ activeDoctorProfile:{id:'A',doctorKey:'EXAMPLE',sourceTypes:['mmc']},
+ currentUserEmail:'fixture',currentUserPassword:'fixture',authUserEmail:'fixture',authUserPassword:'fixture',
+ buildActiveSessionState:()=>session,fetch:()=>new Promise(resolve=>{responseResolver=resolve}),
+ readJsonResponse:async response=>response,sanitizeWorkspaceSnapshot:s=>structuredClone(s),
+ applyLoadedCalendarFileRefs:()=>{},renderWorkspaceFromSnapshot:(_snapshot,_session,options)=>{assert.equal(options.preserveScroll,true);rendered++;},
+};
+runInNewContext(code+';this.refresh=refreshVisibleRosterView',globals);
+const payload={snapshot:{session:{settings:{dateFrom:'wrong'},customEvents:[]},preview:{events:[]}},calendarRevision:'fresh'};
+let applying=globals.refresh({key:'profile-A'});
+session.customEvents.push({id:'unsaved'});responseResolver(payload);assert.equal(await applying,false);assert.equal(rendered,0,'in-flight edit prevents applying old server state');
+applying=globals.refresh({key:'profile-A'});globals.key='profile-B';responseResolver(payload);assert.equal(await applying,false);assert.equal(rendered,0,'account switch discards old response');
+globals.key='profile-A';applying=globals.refresh({key:'profile-A'});responseResolver({...payload,snapshotStale:true});assert.equal(await applying,false);
+applying=globals.refresh({key:'profile-A'});responseResolver(payload);assert.equal(await applying,true);assert.equal(rendered,1);assert.equal(globals.currentSnapshot.session.settings.dateFrom,'2026-05-01');
+console.log('Actual browser refresh passed in-flight edit/account guards, stale-response rejection, filter and scroll preservation.');
+
+const saveStart = app.indexOf('async function saveCloudState(snapshot = null)');
+const saveCode = app.slice(saveStart,app.indexOf('function savePayloadMatchesActiveCalendar',saveStart));
+const saves = { cloudStateSaveActive:0,cloudStateSaveQueue:Promise.resolve(),unsavedCalendarContexts:new Set(),
+ sessionSaveContext:payload=>payload.context,snapshotCloudSavePayload:()=>({context:'account-A'}),
+ saveCloudStateNow:async()=>{throw Error('offline');} };
+runInNewContext(saveCode+';this.save=saveCloudState',saves);
+await assert.rejects(saves.save());assert.equal(saves.unsavedCalendarContexts.has('account-A'),true,'failed save retains protection after pending timer clears');assert.equal(saves.cloudStateSaveActive,0);
+saves.saveCloudStateNow=async()=>{};await saves.save();assert.equal(saves.unsavedCalendarContexts.has('account-A'),false,'successful save releases protection');
+console.log('Failed saves remain protected from background refresh until saved successfully.');
