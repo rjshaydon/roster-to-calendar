@@ -42,7 +42,7 @@ const db = { prepare(sql) {
 }};
 sqlite.exec(`INSERT INTO raw_roster_files(file_id,name,object_key) VALUES('raw','AdultTerm3.2026.xlsx','retained'); INSERT INTO roster_sync_runs(id,source_id,provider_version,file_id,source_file_id,status,started_at) VALUES('run','monash-adults','1.0','raw','raw','success','2026-10-01');`);
 const env={ROSTER_DB:db,ROSTER_AUTOMATION_TOKEN:'fixture',ROSTER_METADATA_CHECK_ENABLED:'true',ROSTER_AUTOMATION_WRITES_ENABLED:'true',ROSTER_AUTOMATION_SOURCE_ALLOWLIST:'monash-adults'};
-const call=body=>checkMetadata({env,request:new Request('https://example.com/api/automation/roster-check',{method:'POST',headers:{authorization:'Bearer fixture','content-type':'application/json'},body:JSON.stringify(body)})});
+const call=body=>checkMetadata({env,request:new Request('https://example.com/api/automation/roster-check',{method:'POST',headers:{authorization:'Bearer fixture','content-type':'application/json'},body:JSON.stringify(body)})},new Date('2026-10-04T01:00:00Z'));
 const metadata={sourceId:'monash-adults',fileName:'AdultTerm3.2026.xlsx',providerVersion:'1.0'};
 assert.equal((await (await call(metadata)).json()).download,false);assert.equal(writes,0);
 assert.equal(sqlLog.some(sql=>/roster_events|CREATE |UPDATE |INSERT /i.test(sql)),false,'unchanged metadata must only read indexed compact state');
@@ -70,4 +70,6 @@ const first=await (await revision({request,env:revisionEnv})).json();assert.deep
 const same=await (await revision({request,env:revisionEnv})).json();assert.equal(same.revision,first.revision);
 manifest.revision='published-two';const changed=await (await revision({request,env:revisionEnv})).json();assert.notEqual(changed.revision,first.revision);
 assert.equal((await revision({request:new Request('https://example.com/api/roster-revision?sites=unknown'),env:revisionEnv})).status,400);
+sqlite.exec("INSERT INTO roster_account_budget(utc_day,stop_reason) VALUES(date('now'),'cost-overrun:request')");
+assert.equal((await (await checkMetadata({env:{...env,ROSTER_ACCOUNT_BUDGET_ENABLED:'true'},request:new Request('https://example.com/api/automation/roster-check',{method:'POST',headers:{authorization:'Bearer fixture'},body:JSON.stringify({...metadata,providerVersion:'new'})})},new Date('2026-10-04T01:00:00Z'))).json()).download,false,'budget stop prevents provider download');
 console.log('Batch 1 passed Melbourne eligibility, metadata no-op/version/failure isolation, historical grades, zero-D1 fingerprints, unchanged/hidden/editing/switched-account refresh.');

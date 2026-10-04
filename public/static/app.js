@@ -9462,7 +9462,7 @@ function facilityOverviewFacilityOptions() {
   });
 }
 
-async function loadFacilityOverviewMetadata() {
+async function loadFacilityOverviewMetadata(options = {}) {
   if (!canUseFacilityOverview() || currentFacilityOverviewMaintenance) return null;
   const metadataKey = [currentSnapshot?.calendarRevision || currentCalendarRevision || "", formatDateKey(australianTermForDate(new Date()).start), normalizedDoctorSourceTypes(selectedDoctor()).sort().join(",")].join("|");
   if (facilityOverviewState.byStreamMetadataKey === metadataKey) return { ok: true };
@@ -9509,7 +9509,7 @@ async function loadFacilityOverviewMetadata() {
         return null;
       }
       console.warn("Could not load At a glance stream metadata", error);
-      return cached;
+      return options.requireFresh ? null : cached;
     } finally {
       finishFacilityOverviewDataRequest(controller);
       facilityOverviewState.byStreamMetadataLoading = false;
@@ -17714,6 +17714,11 @@ function calendarRevisionView() {
 function calendarRevisionRefreshAllowed() {
   return Boolean(calendarRevisionView() && (currentSnapshot || isFacilityOverviewOpen())
     && !pendingCloudSaveSnapshot && !cloudStateSaveActive && !hasActiveRosterSyncJobs()
+    && !facilityOverviewState.requestController && !facilityOverviewState.contactResolutionSaving && !facilityOverviewState.staffMultiSelectSaving
+    && !facilityOverviewState.contactReviewOpen && !facilityOverviewState.contactPreviousNightReviewOpen
+    && !facilityOverviewState.contactResolutionMenu && !facilityOverviewState.staffActionMenu
+    && !facilityOverviewState.staffSeniorityMenu && !facilityOverviewState.staffDesignationMenu
+    && !facilityOverviewState.staffBulkSeniorityMenu && !facilityOverviewState.staffMultiSelectSection
     && !document.body.classList.contains('has-active-popup') && !document.body.classList.contains('is-roster-dragging'));
 }
 
@@ -17740,7 +17745,7 @@ async function refreshVisibleRosterView(view) {
   if (!calendarRevisionRefreshAllowed() || calendarRevisionView()?.key !== view.key) return false;
   if (view.overview) {
     facilityOverviewState.byStreamMetadataKey = "";
-    if (!await loadFacilityOverviewMetadata()) return false;
+    if (!await loadFacilityOverviewMetadata({ requireFresh: true })) return false;
     if (calendarRevisionView()?.key !== view.key || !calendarRevisionRefreshAllowed()) return false;
     let applied;
     if (facilityOverviewState.tab === 'staff') applied = await loadFacilityOverviewStaff();
@@ -17775,7 +17780,7 @@ async function refreshVisibleRosterView(view) {
       allowInlineBuild: false, skipRebuild: true, preserveExistingSnapshot: true, preserveViewFilters: true, requireFreshSnapshot: true, isCurrent: stillCurrent });
   }
   if (!loaded || calendarRevisionView()?.key !== view.key) return false;
-  renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || {}, { suppressInsightWarmup: true });
+  renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || {}, { suppressInsightWarmup: true, preserveScroll: true });
   return true;
 }
 
@@ -20611,6 +20616,7 @@ function renderWorkspaceFromSnapshot(snapshot, session = {}, options = {}) {
   refreshFacilityOverviewPreferredFacility();
   if (options.suppressInsightWarmup !== true) scheduleInsightWarmup();
   saveCurrentWorkspace();
+  visibleCalendarRevisionPoller.update();
   if (preservedScroll) {
     requestAnimationFrame(() => {
       if (isMobileLayout()) window.scrollTo({ top: preservedScroll.pageY, behavior: "auto" });

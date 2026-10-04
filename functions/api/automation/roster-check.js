@@ -1,6 +1,7 @@
 import { automationSourceDefinition } from '../../_lib/automation-import.js';
 import { findRosterSyncByProviderVersion, loadRawRosterFile, hasCalendarDb } from '../../_lib/d1-calendar.js';
 import { automatedRosterSourceEnabled } from '../../_lib/roster-automation-guard.js';
+import { refreshAccountMaintenanceBudget } from './account-budget.js';
 import { requestQueuedRosterProcessing } from '../../_lib/automation-dispatch.js';
 import { australianTermStartForDate, australianTermEndForStart } from '../../_lib/d1-calendar.js';
 import { melbourneDateKey, rosterTermAvailableFrom } from '../../../public/static/roster-term-policy.js';
@@ -26,16 +27,17 @@ export function sharepointRosterWindows(now = new Date()) {
   return windows;
 }
 
-export async function onRequestPost(context) {
+export async function onRequestPost(context, checkTime = new Date()) {
   const configured = String(context.env.ROSTER_AUTOMATION_TOKEN || '');
   if (!configured || context.request.headers.get('authorization') !== `Bearer ${configured}`) return new Response('Unauthorized', { status: 401 });
   if (context.env.ROSTER_METADATA_CHECK_ENABLED !== 'true') return new Response('Paused', { status: 503 });
   const body = await context.request.json().catch(() => ({}));
-  if (body.mode === 'windows') return Response.json({ ok: true, windows: sharepointRosterWindows().filter(window => automatedRosterSourceEnabled(context.env, window.sourceId)) });
+  if (body.mode === 'windows') return Response.json({ ok: true, windows: sharepointRosterWindows(checkTime).filter(window => automatedRosterSourceEnabled(context.env, window.sourceId)) });
   const sourceId = String(body.sourceId || '');
   const fileName = String(body.fileName || '');
   const providerVersion = String(body.providerVersion || '');
   if (automationSourceDefinition(sourceId)?.provider !== 'sharepoint' || !automatedRosterSourceEnabled(context.env, sourceId)) return new Response('Source unavailable', { status: 403 });
+  if (!sharepointRosterWindows(checkTime).some(window => window.sourceId === sourceId && window.fileName.toLowerCase() === fileName.toLowerCase())) return Response.json({ ok: true, download: false, status: 'outside-active-windows' });
   if (!hasCalendarDb(context.env) || !fileName || fileName.length > 180 || !providerVersion || providerVersion.length > 200) return new Response('Invalid metadata', { status: 400 });
   const run = await findRosterSyncByProviderVersion(context.env.ROSTER_DB, sourceId, providerVersion, fileName);
   if (run?.status === 'success') return Response.json({ ok: true, download: false, status: 'unchanged' });
@@ -48,5 +50,14 @@ export async function onRequestPost(context) {
     }
   }
   if (run?.status === 'failed') return Response.json({ ok: true, download: false, status: 'repair-required' });
+  if (context.env.ROSTER_ACCOUNT_BUDGET_ENABLED === 'true') {
+    const now = new Date().toISOString();
+    const grant = await context.env.ROSTER_DB.prepare('SELECT valid_until,stop_reason FROM roster_account_budget WHERE utc_day=?').bind(now.slice(0,10)).first();
+    if (grant?.stop_reason?.startsWith('cost-overrun:')) return Response.json({ ok: true, download: false, status: 'deferred', reason: grant.stop_reason });
+    if (!grant || grant.valid_until <= now || grant.stop_reason) {
+      const admission = await (await refreshAccountMaintenanceBudget(context)).json();
+      if (admission.deferred) return Response.json({ ok: true, download: false, status: 'deferred', reason: admission.reason || 'account-budget' });
+    }
+  }
   return Response.json({ ok: true, download: true, status: 'changed-or-new' });
 }

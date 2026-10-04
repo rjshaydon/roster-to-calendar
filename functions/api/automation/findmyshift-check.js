@@ -1,9 +1,10 @@
 import { findmyshiftConfiguredRosterRange, findmyshiftPollingRosterRanges, findmyshiftLastModified, findmyshiftRosterWorkbook } from "../../_lib/findmyshift.js";
-import { createRosterSyncRun, findQueuedRosterSyncByHash, findRosterSyncByProviderVersion, hasCalendarDb, listActiveRetainedRosterFiles, loadRosterSource, upsertRosterSource } from "../../_lib/d1-calendar.js";
+import { createRosterSyncRun, findQueuedRosterSyncByHash, findRosterSyncByProviderVersion, hasCalendarDb, listActiveRetainedRosterFiles, australianTermStartForDate, loadRosterSource, upsertRosterSource } from "../../_lib/d1-calendar.js";
 import { requestQueuedRosterProcessing } from "../../_lib/automation-dispatch.js";
 import { automatedRosterSourceEnabled, automatedRosterWritesEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
 import { guardedFetch, localFeatureDisabledResponse } from "../../_lib/outbound-network.js";
 import { refreshAccountMaintenanceBudget } from "./account-budget.js";
+import { melbourneDateKey } from '../../../public/static/roster-term-policy.js';
 import { reserveRosterMaintenanceBudget } from "../../_lib/roster-maintenance-budget.js";
 
 const SOURCE_ID = "dandenong-findmyshift";
@@ -50,6 +51,9 @@ export async function onRequestPost(context, internal = {}) {
     return Response.json({ ok: false, status: "invalid-range", error: "A historical FindMyShift range must have valid dates no longer than one term." }, { status: 422 });
   }
   const range = requestedRange || findmyshiftConfiguredRosterRange(context.env);
+  if (range.from < australianTermStartForDate(melbourneDateKey())) {
+    return Response.json({ ok: false, status: 'historical-evidence-required', error: 'Historical DDH repairs require retained term-specific input; today’s staff grades cannot establish a past roster grade.' }, { status: 422 });
+  }
   let providerVersion = "";
   try {
     providerVersion = internal.providerVersion || await findmyshiftLastModified(apiKey, teamId, { env: context.env });

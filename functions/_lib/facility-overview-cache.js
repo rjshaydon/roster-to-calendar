@@ -650,7 +650,7 @@ export async function loadPublishedFacilityDays(r2, sourceTypes, date, currentDa
     if (!staff) missing.push({ sourceType, termStart, reason: "staff-unavailable" });
     const overrides = new Map((staff?.seniorityOverrides || []).filter(entry => entry.termStart === termStart).map((entry) => [`${entry.sourceType}|${entry.doctorKey}`, entry]));
     rows.push(...(day.rows || []).map((row) => {
-      const override = overrides.get(`${row.sourceType}|${row.doctorKey}`);
+      const override = termStartForDate(String(row.event?.start || "").slice(0, 10)) === termStart ? overrides.get(`${row.sourceType}|${row.doctorKey}`) : null;
       return override && !override.useRosterSeniority
         ? { ...row, seniority: override.seniority, seniorityOverride: override, event: { ...row.event, seniority: override.seniority, facilitySeniorityOverride: true } }
         : row;
@@ -681,7 +681,7 @@ export async function loadPublishedFacilityTerms(r2, sourceTypes, today) {
     const manifest = await loadCachedSnapshot(r2, facilityMetadataManifestKey(sourceType));
     if ((manifest?.terms || []).length > 64) throw new Error("Published term directory exceeds the manifest limit.");
     for (const term of manifest?.terms || []) {
-      if (term.staffKey && term.staffRevision && term.visibleFrom <= today) {
+      if (term.staffKey && term.staffRevision && rosterTermVisible(term, today)) {
         terms.push({ sourceType, termStart: term.termStart, termEnd: term.termEnd });
       }
     }

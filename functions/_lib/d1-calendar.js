@@ -4669,32 +4669,13 @@ async function applyFacilityStaffSeniorityOverridesToCoworkerEvents(db, rows) {
     if (!gradesByPerson.has(key)) gradesByPerson.set(key, []);
     gradesByPerson.get(key).push({ seniority: String(candidate.seniority || "").trim(), date: String(candidate.start_date || "").slice(0, 10) });
   }
-  // FindMyShift can label an individual assignment Unknown even when the
-  // active roster membership has the person's grade.  Membership is the
-  // source of the current grade, so use it before falling back to a dated
-  // assignment from the same term.
-  const memberships = await db.prepare(`
-    SELECT roster_file_doctors.source_type, roster_file_doctors.doctor_key, roster_file_doctors.seniority
-    FROM roster_file_doctors
-    INNER JOIN roster_files ON roster_files.id = roster_file_doctors.file_id
-    WHERE roster_files.active = 1
-      AND roster_file_doctors.source_type IN (${sourceTypes.map(() => "?").join(", ")})
-      AND roster_file_doctors.doctor_key IN (${doctorKeys.map(() => "?").join(", ")})
-      AND TRIM(roster_file_doctors.seniority) <> ''
-      AND LOWER(TRIM(roster_file_doctors.seniority)) <> 'unknown'
-    ORDER BY roster_file_doctors.source_type, roster_file_doctors.doctor_key
-  `).bind(...sourceTypes, ...doctorKeys).all();
-  const membershipGradesByPerson = new Map((memberships.results || []).map((membership) => [
-    `${normalizeSourceType(membership.source_type)}|${String(membership.doctor_key || "").trim()}`,
-    String(membership.seniority || "").trim(),
-  ]));
+  // Missing grade can only borrow dated evidence from the same site/term.
+  // An undated membership or current directory grade would rewrite history.
   return overriddenRows.map((row) => {
     if (hasKnownCoworkerSeniority(row?.seniority)) return row;
     const date = String(row.event?.start || "").slice(0, 10);
     const termStart = australianTermStartForDate(date);
     const key = `${normalizeSourceType(row.sourceType)}|${String(row.doctorKey || "").trim()}`;
-    const membershipGrade = membershipGradesByPerson.get(key);
-    if (membershipGrade) return { ...row, seniority: membershipGrade, event: { ...row.event, seniority: membershipGrade, facilitySeniorityDerived: true } };
     const effective = (gradesByPerson.get(key) || []).find((candidate) => candidate.date <= date && candidate.date >= termStart);
     if (!effective) return row;
     return { ...row, seniority: effective.seniority, event: { ...row.event, seniority: effective.seniority, facilitySeniorityDerived: true } };
