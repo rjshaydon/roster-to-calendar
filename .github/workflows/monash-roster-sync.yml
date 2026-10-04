@@ -32,7 +32,7 @@ on:
 run-name: "Roster queue ${{ inputs.dispatch_id || github.run_id }}"
 
 concurrency:
-  group: monash-roster-sync
+  group: roster-${{ inputs.target || 'production' }}-${{ inputs.source_id }}
   cancel-in-progress: false
 
 permissions:

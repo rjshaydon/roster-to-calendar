@@ -86,7 +86,7 @@ export async function onRequestPost(context, internal = {}) {
       return Response.json({ ok: true, status: "incomplete", providerModifiedAt: providerVersion });
     }
     if (!force && ['queued', 'processing'].includes(currentFormatRun?.status)) {
-      const dispatch = await requestQueuedRosterProcessing(context.env, { sourceId: SOURCE_ID, reason: 'five-minute-retry' });
+      const dispatch = await requestQueuedRosterProcessing(context.env, { sourceId: SOURCE_ID, reason: 'metadata-retry' });
       return Response.json({ ok: true, status: currentFormatRun.status, processorDispatch: dispatch.dispatched === true });
     }
     // Unchanged polls above are read-only. Only changed input needs an account

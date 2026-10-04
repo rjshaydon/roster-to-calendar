@@ -1,5 +1,10 @@
 # Feature restoration register
 
+The next work follows the [4 October batch plan](./restoration-batch-plan-2026-10-04.md).
+The 2 October release section below predates completed Working together/history,
+VHH gap recovery and the DDH five-minute scheduler; consult the 3 October
+checkpoints for those outcomes. The new freshness target is not yet implemented.
+
 ## Purpose and maintenance rule
 
 This is the authoritative register of application features and operational

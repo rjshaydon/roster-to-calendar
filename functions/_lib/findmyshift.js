@@ -1,15 +1,15 @@
 import * as XLSX from "xlsx";
 import { guardedFetch } from "./outbound-network.js";
+import { melbourneDateKey, rosterTermAvailableFrom } from '../../public/static/roster-term-policy.js';
 
 const API_BASE = "https://www.findmyshift.com/api/1.4";
-const NEXT_TERM_LOOKAHEAD_DAYS = 28;
 const FINDMYSHIFT_MAX_RATE_LIMIT_RETRIES = 2;
 
 export function findmyshiftConfiguredRosterRange(env = {}, now = new Date()) {
   // FindMyShift accepts the complete published roster window, but rejects an
   // open-ended multi-year request (HTTP 470).  The Diagnostic bounds are the
   // administrator-configurable published range; without them use the current
-  // term until the next term is four weeks away. At that point, import the
+  // term until the first day of the month preceding the next term. Import the
   // upcoming term as its own source so it can appear in calendars before the
   // current term ends.
   return {
@@ -27,7 +27,7 @@ export function findmyshiftPollingRosterRanges(env = {}, now = new Date()) {
 
 function findmyshiftPublicationWindow(now, includeUpcoming = true) {
   const date = now instanceof Date && !Number.isNaN(now.getTime()) ? now : new Date();
-  const today = date.toISOString().slice(0, 10);
+  const today = melbourneDateKey(date);
   const terms = [];
   for (const year of [date.getUTCFullYear() - 1, date.getUTCFullYear(), date.getUTCFullYear() + 1]) {
     for (const monthIndex of [1, 4, 7, 10]) {
@@ -39,7 +39,7 @@ function findmyshiftPublicationWindow(now, includeUpcoming = true) {
   const current = sorted.filter((term) => term.from <= today).at(-1)
     || { from: firstMondayDateKey(date.getUTCFullYear(), 1), to: addDateKeyDays(firstMondayDateKey(date.getUTCFullYear(), 1), 90) };
   const next = sorted.find((term) => term.from > today);
-  return includeUpcoming && next && today >= addDateKeyDays(next.from, -NEXT_TERM_LOOKAHEAD_DAYS) ? next : current;
+  return includeUpcoming && next && today >= rosterTermAvailableFrom(next.from) ? next : current;
 }
 
 function firstMondayDateKey(year, monthIndex) {

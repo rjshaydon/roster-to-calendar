@@ -1,5 +1,12 @@
 # VHH historical recovery and roster freshness
 
+The **4 October revision** in
+[remaining restoration batches](./restoration-batch-plan-2026-10-04.md)
+supersedes the fifteen-minute target and detection/visibility settings below.
+The current target is five minutes, metadata comparison precedes retrieval,
+and next-term eligibility starts on the first of the preceding month. Historical
+recovery evidence and source-provenance constraints below remain applicable.
+
 Prepared 3 October 2026, Australia/Melbourne. Originally a plan-only document.
 The user subsequently approved implementation. VHH's missing historical input
 has now been restored and its complete Term 2/3 shared views verified; DDH's

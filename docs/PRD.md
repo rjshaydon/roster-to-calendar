@@ -305,34 +305,13 @@ If rules disagree or confidence is low, the system should continue to flag Admin
 
 DDH currently uses FindMyShift.
 
-Accepted DDH sources:
-
-- individual "my shifts" exports
-- full DDH roster exports if available
-- subscription URL input if available
-- `webcal://` iCalendar subscription URLs
-
-Source-of-truth rule:
-
-- Individual DDH my-shifts exports are acceptable until a full DDH roster covers the same individual and time period.
-- Once a full roster exists for the same period, it becomes the preferred source of truth.
-
-The app should allow DDH users to provide a subscription URL as an alternative to file upload where supported.
-
-FindMyShift subscription URLs:
-
-- are currently provided as `webcal://.../ical.ics?...` links
-- should be normalized internally to fetchable HTTPS where required
-- should be treated as private secrets because the URL token grants roster access
-- must not be displayed back to users in full after saving
-- must not be written into logs, PRDs, fixtures, screenshots, or admin inline lists
-- should be stored encrypted or in a protected secret field where the platform allows it
-- should be refreshable on login and on scheduled background refresh
-- are expected initially to be individual-user feeds rather than full-roster feeds
-- may span multiple terms as the roster is progressively written
-- should refresh whenever the user logs in or enters the app
-- should track last successful refresh time and feed expiry/failure state
-- should prompt the user to update the URL when the feed expires or repeatedly fails
+DDH's authoritative automatic source is the FindMyShift administrative API,
+which retrieves team-wide personnel shifts for the selected roster window.
+Check team LastModified metadata before retrieving changed roster data.
+Full roster spreadsheet exports remain supported for manual recovery.
+Individual exports must not replace a complete authoritative team roster for
+the same person and period. User calendar subscription outputs are separate
+from this source retrieval process.
 
 ## Personal Roster Generation
 
@@ -564,8 +543,7 @@ The v2 rebuild should introduce these entities:
 - Gmail launch restrictions are acceptable.
 - Email verification: not required at launch.
 - Admin version-resolution rules: structured deterministic rules with Admin notes, not machine learning initially.
-- DDH subscription URL format: `webcal://` iCalendar feed.
-- Initial DDH subscription assumption: individual-user feeds, not full-roster feeds.
+- DDH automatic retrieval uses administrative FindMyShift API access for team-wide shifts.
 
 ## Open Questions
 

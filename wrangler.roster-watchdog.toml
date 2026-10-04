@@ -7,7 +7,7 @@ FINDMYSHIFT_CHECK_URL = "https://roster-to-calendar.pages.dev/api/automation/fin
 ROSTER_AUTOMATION_ENABLED = "true"
 
 [triggers]
-crons = ["*/5 * * * *"]
+crons = ["*/2 * * * *"]
 
 [observability]
 enabled = true

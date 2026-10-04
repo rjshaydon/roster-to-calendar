@@ -8,16 +8,21 @@ on:
         description: "Queue one bounded refresh of retained current-term views"
         type: boolean
         default: false
-concurrency:
-  group: monash-roster-sync
-  cancel-in-progress: false
 permissions:
   contents: read
 jobs:
   maintain:
+    strategy:
+      fail-fast: false
+      matrix:
+        source: [monash-adults, monash-paeds, dandenong-findmyshift, vhh-active-medical-roster]
+    concurrency:
+      group: roster-production-${{ matrix.source }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
+      ROSTER_AUTOMATION_SOURCE_ID: ${{ matrix.source }}
       ROSTER_AUTOMATION_BASE_URL: https://roster-to-calendar.pages.dev
       ROSTER_SEED_CURRENT_VIEWS: ${{ inputs.seed_current_views == true && 'true' || 'false' }}
       ROSTER_AUTOMATION_TOKEN: ${{ secrets.ROSTER_AUTOMATION_TOKEN }}

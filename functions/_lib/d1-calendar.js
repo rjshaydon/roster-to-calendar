@@ -5,6 +5,7 @@ import {
   previewSummary,
   serializeEvent,
 } from "./roster.js";
+import { rosterTermAvailableFrom } from '../../public/static/roster-term-policy.js';
 
 const SOURCE_TYPES = ["mmc", "ddh", "casey", "mch", "vhh"];
 // Only a successfully activated parse may carry this version. Older rows are
@@ -2101,7 +2102,7 @@ export async function refreshFacilityOverviewMaterializationForFile(db, fileId, 
       .bind(fact.sourceType, fact.termStart, fact.doctorKey, fact.fileId, fact.displayName, fact.seniority, fact.membershipSource,
         fact.providerStaffId, fact.firstApplicableDate, fact.lastApplicableDate, fact.factDigest, now));
     statements.push(db.prepare(`INSERT INTO facility_term_visibility (source_type, term_start, visible_from, revision, updated_at)
-      VALUES (?, ?, ?, '', ?) ON CONFLICT(source_type, term_start) DO NOTHING`).bind(sourceType, fact.termStart, dateDaysBefore(fact.termStart, 14), now));
+      VALUES (?, ?, ?, '', ?) ON CONFLICT(source_type, term_start) DO NOTHING`).bind(sourceType, fact.termStart, rosterTermAvailableFrom(fact.termStart), now));
   }
   for (const key of existingStaff.keys()) {
     if (contributions.has(key)) continue;
@@ -2287,7 +2288,7 @@ export async function queryFacilityStaffSeniorityOverrides(db, options = {}) {
   const rows = await db.prepare(`
     SELECT *
     FROM facility_staff_seniority_overrides
-    WHERE active = 1 AND term_start <= ? ${sourceSql}
+    WHERE active = 1 AND term_start = ? ${sourceSql}
     ${maximumRows == null ? "ORDER BY source_type, doctor_key, term_start DESC" : "LIMIT ?"}
   `).bind(...(maximumRows == null ? bindings : [...bindings, maximumRows + 1])).all();
   rejectFacilityReadOverflow(rows.results, maximumRows, "seniority-override-read-limit");
@@ -5209,7 +5210,7 @@ export async function queryMaterializedFacilityMetadata(db, options = {}) {
   return {
     coverage: requestedTerm ? coverage.filter((entry) => entry.startDate <= termEnd && entry.endDate >= requestedTerm) : coverage,
     terms: (visibility.results || []).map((row) => ({
-      termStart: datePart(row.term_start), visibleFrom: datePart(row.visible_from), revision: String(row.revision || ""),
+      termStart: datePart(row.term_start), visibleFrom: rosterTermAvailableFrom(datePart(row.term_start)), revision: String(row.revision || ""),
       catalog: catalogByTerm.get(datePart(row.term_start)) || [],
     })),
   };
