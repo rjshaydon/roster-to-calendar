@@ -2,6 +2,7 @@ import { onShiftLaunchWindow } from "./shift-launch-policy.js";
 import { FACILITY_ACCESS_VERSION, facilityAccessKeys, restrictedFacilityScope, validFacilityDateRange } from "./facility-access-policy.js";
 import { planRosterImportBatches } from "./roster-import-batches.js";
 import { makeSessionPatch } from "./session-settings-patch.js";
+import { createCalendarRevisionPoller } from './calendar-revision-poller.js';
 import {
   applyEventOverrides,
   buildRosterView,
@@ -326,6 +327,7 @@ let cloudSaveTimer = 0;
 let backgroundCloudSaveTimer = 0;
 let pendingCloudSaveSnapshot = null;
 let cloudStateSaveQueue = Promise.resolve();
+let cloudStateSaveActive = 0;
 let serverUsers = [];
 let serverUsersUnavailable = false;
 let currentRosterClaims = [];
@@ -453,6 +455,17 @@ let dismissedIssueFingerprints = new Set();
 let ignoredIssueFingerprints = new Set();
 let lastLoginTimings = null;
 let lastAccountSwitchTimings = null;
+const visibleCalendarRevisionPoller = createCalendarRevisionPoller({
+  context: calendarRevisionView,
+  eligible: calendarRevisionRefreshAllowed,
+  read: readSharedRosterRevision,
+  refresh: refreshVisibleRosterView,
+  onError: error => console.warn('Calendar refresh delayed; retaining the current view.', error.message),
+});
+document.addEventListener('visibilitychange', () => {
+  visibleCalendarRevisionPoller.update();
+  if (!document.hidden) void visibleCalendarRevisionPoller.tick();
+});
 
 const settingsInputs = Object.fromEntries(
   SETTINGS_FIELDS.map((id) => [id, document.querySelector(`#${id}`)]),
@@ -9449,7 +9462,7 @@ function facilityOverviewFacilityOptions() {
   });
 }
 
-async function loadFacilityOverviewMetadata() {
+async function loadFacilityOverviewMetadata(options = {}) {
   if (!canUseFacilityOverview() || currentFacilityOverviewMaintenance) return null;
   const metadataKey = [currentSnapshot?.calendarRevision || currentCalendarRevision || "", formatDateKey(australianTermForDate(new Date()).start), normalizedDoctorSourceTypes(selectedDoctor()).sort().join(",")].join("|");
   if (facilityOverviewState.byStreamMetadataKey === metadataKey) return { ok: true };
@@ -9496,7 +9509,7 @@ async function loadFacilityOverviewMetadata() {
         return null;
       }
       console.warn("Could not load At a glance stream metadata", error);
-      return cached;
+      return options.requireFresh ? null : cached;
     } finally {
       finishFacilityOverviewDataRequest(controller);
       facilityOverviewState.byStreamMetadataLoading = false;
@@ -9973,6 +9986,7 @@ function facilityOverviewRequestWasCancelled(error) {
 }
 
 function renderFacilityOverview() {
+  visibleCalendarRevisionPoller.update();
   if (!currentFacilityOverviewAccessReady) {
     renderFacilityOverviewMaintenance({ loading: true });
     return;
@@ -10349,6 +10363,7 @@ async function loadFacilityOverviewByStream() {
     facilityOverviewState.byStreamContent = `<p class="facility-overview-by-stream-summary">Showing the last saved roster while checking for updates.</p>${facilityOverviewByStreamContentFromData(cached)}`;
   }
   renderFacilityOverview();
+  let refreshed = false;
   const controller = beginFacilityOverviewDataRequest();
   try {
     const response = await fetch("/api/state", {
@@ -10365,12 +10380,13 @@ async function loadFacilityOverviewByStream() {
     if (facilityOverviewState.byStreamRequestId !== requestId || facilityOverviewState.tab !== "by-stream") return;
     if (data.unchanged === true && cached) {
       facilityOverviewState.byStreamContent = renderFacilityOverviewCoverageNotice(cached) + facilityOverviewByStreamContentFromData(cached);
-      return;
+      return true;
     }
     facilityOverviewState.byStreamData = data;
     facilityOverviewState.byStreamCoverage = data.coverage || [];
     facilityOverviewMergeStreamCatalog(facilityOverviewBuildStreamCatalog(data.events || []));
     facilityOverviewState.byStreamContent = renderFacilityOverviewCoverageNotice(data) + facilityOverviewByStreamContentFromData(data);
+    refreshed = true;
     void storeFacilityOverviewSnapshot("by-stream", cacheQuery, data);
   } catch (error) {
     if (error.facilityOverviewAccess) refreshFacilityOverviewSnapshotAccess({ facilityOverviewAccess: error.facilityOverviewAccess });
@@ -10385,6 +10401,7 @@ async function loadFacilityOverviewByStream() {
       renderFacilityOverview();
     }
   }
+  return refreshed;
 }
 
 function facilityOverviewTogetherContextKey() {
@@ -10520,6 +10537,7 @@ async function loadFacilityOverviewTogether() {
   if (!canUseFacilityOverview() || currentFacilityOverviewMaintenance || facilityOverviewState.tab !== "together") return;
   const { startDate, endDate } = facilityOverviewTogetherDateRange();
   const requestId = ++facilityOverviewState.requestId;
+  let refreshed = false;
   const controller = beginFacilityOverviewDataRequest();
   const contextKey = facilityOverviewTogetherContextKey();
   facilityOverviewState.togetherHasSearched = true;
@@ -10561,6 +10579,7 @@ async function loadFacilityOverviewTogether() {
     const missing = [...(context.missing || []), ...(payload.missing || [])];
     facilityOverviewState.togetherContent = renderFacilityOverviewCoverageNotice({ missing })
       + (missing.length && !payload.events?.length ? "" : renderFacilityOverviewTogetherResults(payload.events || [], selectedDoctors, { startDate, endDate }));
+    refreshed = true;
     if (!data.unchanged) void storeFacilityOverviewSnapshot("working-together", cacheQuery, data);
   } catch (error) {
     if (facilityOverviewRequestWasCancelled(error) || !stillCurrent()) return;
@@ -10570,6 +10589,7 @@ async function loadFacilityOverviewTogether() {
     finishFacilityOverviewDataRequest(controller);
     if (stillCurrent()) renderFacilityOverview();
   }
+  return refreshed;
 }
 
 function renderFacilityOverviewTogetherResults(rows, selectedDoctors, range) {
@@ -10743,6 +10763,7 @@ async function loadFacilityOverviewOnShift() {
     facilityOverviewState.content = `<p class="facility-overview-by-stream-summary">Showing the last saved roster while checking for updates.</p>${renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData)}`;
   }
   renderFacilityOverview();
+  let refreshed = false;
   const controller = beginFacilityOverviewDataRequest();
   try {
     const response = await fetch("/api/state", {
@@ -10768,6 +10789,7 @@ async function loadFacilityOverviewOnShift() {
     facilityOverviewState.previousNightRoster = data.previousNightRoster || null;
     facilityOverviewState.contactAccessToken = String(data.contactAccessToken || "");
     facilityOverviewState.content = renderFacilityOverviewCoverageNotice(data) + renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData);
+    refreshed = true;
     void storeFacilityOverviewSnapshot("on-shift", cacheQuery, { events: facilityOverviewState.onShiftData, missing: data.missing, revision: data.revision || cached?.revision || "" });
   } catch (error) {
     if (error.facilityOverviewAccess) refreshFacilityOverviewSnapshotAccess({ facilityOverviewAccess: error.facilityOverviewAccess });
@@ -10780,6 +10802,7 @@ async function loadFacilityOverviewOnShift() {
   }
   renderFacilityOverview();
   scheduleFacilityOverviewContactRefresh();
+  return refreshed;
 }
 
 function facilityOverviewContactRefreshIsActive() {
@@ -11367,6 +11390,7 @@ async function loadFacilityOverviewStaff() {
     facilityOverviewState.staffContent = `<p class="facility-overview-by-stream-summary">Showing the last saved staff list while checking for updates.</p>${renderFacilityOverviewStaffResults(cached, term)}`;
   }
   renderFacilityOverview();
+  let refreshed = false;
   const controller = beginFacilityOverviewDataRequest();
   try {
     const response = await fetch("/api/state", {
@@ -11385,11 +11409,12 @@ async function loadFacilityOverviewStaff() {
     if (facilityOverviewState.requestId !== requestId || facilityOverviewState.tab !== "staff") return;
     if (data.unchanged === true && cached) {
       facilityOverviewState.staffContent = renderFacilityOverviewStaffResults(cached, term);
-      return;
+      return true;
     }
     facilityOverviewState.staffTerms = facilityOverviewPermittedStaffTerms(data.coverage || []);
     facilityOverviewState.staffData = data;
     facilityOverviewState.staffContent = renderFacilityOverviewStaffResults(data, term);
+    refreshed = true;
     void storeFacilityOverviewSnapshot("staff", cacheQuery, data);
   } catch (error) {
     if (error.facilityOverviewAccess) refreshFacilityOverviewSnapshotAccess({ facilityOverviewAccess: error.facilityOverviewAccess });
@@ -11402,6 +11427,7 @@ async function loadFacilityOverviewStaff() {
   }
   renderFacilityOverview();
   focusFacilityOverviewStaffSection();
+  return refreshed;
 }
 
 function refreshFacilityOverviewStaffContent() {
@@ -16735,6 +16761,7 @@ async function logoutCurrentUser() {
 }
 
 function renderLoginState() {
+  visibleCalendarRevisionPoller.update();
   const loggedIn = Boolean(currentUserEmail && currentUserPassword);
   // Non-clinical Directors have no personal calendar. Their workspace has its
   // own polished header, so do not leave the technical account-status strip
@@ -17676,6 +17703,88 @@ async function applyCloudStateData(data, options = {}) {
   return calendarTransitionStillCurrent(options.transition);
 }
 
+function calendarRevisionView() {
+  if (document.hidden || !currentUserEmail || !currentUserPassword || !cloudAvailable) return null;
+  const overview = isFacilityOverviewOpen();
+  const available = overview ? facilityOverviewFacilityOptions() : normalizedDoctorSourceTypes(selectedDoctor());
+  const sources = [...new Set(available.map(source => String(source).toLowerCase()))].filter(source => ['mmc', 'mch', 'ddh', 'vhh'].includes(source)).sort();
+  if (!sources.length) return null;
+  return { key: `${activeCalendarTransitionKey()}:${overview ? JSON.stringify([facilityOverviewState.tab, facilityOverviewState.facilityKey, facilityOverviewState.staffTermStart, facilityOverviewState.date, facilityOverviewState.byStreamFrom, facilityOverviewState.byStreamTo, facilityOverviewState.byStreamRows, facilityOverviewState.togetherFrom, facilityOverviewState.togetherTo, facilityOverviewState.togetherTermStart, facilityOverviewState.togetherStaffKeys, facilityOverviewState.togetherFacilityKey]) : 'calendar'}:${sources.join(',')}`, sources, overview };
+}
+
+function calendarRevisionRefreshAllowed() {
+  return Boolean(calendarRevisionView() && (currentSnapshot || isFacilityOverviewOpen())
+    && !pendingCloudSaveSnapshot && !cloudStateSaveActive && !hasActiveRosterSyncJobs()
+    && !facilityOverviewState.requestController && !facilityOverviewState.contactResolutionSaving && !facilityOverviewState.staffMultiSelectSaving
+    && !facilityOverviewState.contactReviewOpen && !facilityOverviewState.contactPreviousNightReviewOpen
+    && !facilityOverviewState.contactResolutionMenu && !facilityOverviewState.staffActionMenu
+    && !facilityOverviewState.staffSeniorityMenu && !facilityOverviewState.staffDesignationMenu
+    && !facilityOverviewState.staffBulkSeniorityMenu && !facilityOverviewState.staffMultiSelectSection
+    && !document.body.classList.contains('has-active-popup') && !document.body.classList.contains('is-roster-dragging'));
+}
+
+async function readSharedRosterRevision(sources) {
+  const key = `roster-public-revision:${sources.join(',')}`;
+  const leaseKey = `${key}:lease`;
+  const now = Date.now();
+  try {
+    const cached = JSON.parse(localStorage.getItem(key) || 'null');
+    if (cached?.revision && now - cached.at < 45000) return cached.revision;
+    if (Number(localStorage.getItem(leaseKey) || 0) > now) return '';
+    localStorage.setItem(leaseKey, String(now + 20000));
+  } catch { /* Storage is optional; the server edge cache still coalesces reads. */ }
+  try {
+    const response = await fetch(`/api/roster-revision?sites=${sources.join(',')}`, { signal: AbortSignal.timeout(15000) });
+    const data = await readJsonResponse(response, 'Roster revision is temporarily unavailable.');
+    if (!/^[a-f0-9]{64}$/.test(data.revision || '')) return '';
+    try { localStorage.setItem(key, JSON.stringify({ at: Date.now(), revision: data.revision })); } catch {}
+    return data.revision;
+  } finally { try { localStorage.removeItem(leaseKey); } catch {} }
+}
+
+async function refreshVisibleRosterView(view) {
+  if (!calendarRevisionRefreshAllowed() || calendarRevisionView()?.key !== view.key) return false;
+  if (view.overview) {
+    facilityOverviewState.byStreamMetadataKey = "";
+    if (!await loadFacilityOverviewMetadata({ requireFresh: true })) return false;
+    if (calendarRevisionView()?.key !== view.key || !calendarRevisionRefreshAllowed()) return false;
+    let applied;
+    if (facilityOverviewState.tab === 'staff') applied = await loadFacilityOverviewStaff();
+    else if (facilityOverviewState.tab === 'together') applied = await loadFacilityOverviewTogether();
+    else if (facilityOverviewState.tab === 'by-stream') applied = await loadFacilityOverviewByStream();
+    else applied = await loadFacilityOverviewOnShift();
+    return applied === true && calendarRevisionView()?.key === view.key;
+  }
+  const sessionBefore = JSON.stringify(buildActiveSessionState());
+  const stillCurrent = () => calendarRevisionView()?.key === view.key && calendarRevisionRefreshAllowed() && JSON.stringify(buildActiveSessionState()) === sessionBefore;
+  let loaded;
+  if (activeDoctorProfile) {
+    const response = await fetch('/api/state', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({
+      action: 'loadDoctorProfile', email: authUserEmail || currentUserEmail, password: authUserPassword || currentUserPassword,
+      profileId: activeDoctorProfile.id, doctorKey: activeDoctorProfile.doctorKey, displayName: activeDoctorProfile.displayName, sourceTypes: activeDoctorProfile.sourceTypes,
+      allowInlineBuild: false,
+    }) });
+    const data = await readJsonResponse(response, 'Doctor calendar refresh delayed.');
+    if (!stillCurrent() || !data.snapshot || data.snapshotStale === true) return false;
+    const viewSettings = buildActiveSessionState().settings;
+    const refreshed = sanitizeWorkspaceSnapshot(data.snapshot);
+    if (!refreshed) return false;
+    refreshed.session.settings = { ...refreshed.session.settings, dateFrom: viewSettings.dateFrom, dateTo: viewSettings.dateTo, hospitalFilter: viewSettings.hospitalFilter };
+    currentSnapshot = refreshed;
+    currentSnapshotStale = false;
+    applyLoadedCalendarFileRefs(currentSnapshot);
+    currentCalendarRevision = String(data.calendarRevision || '');
+    restoredSessionState = currentSnapshot.session;
+    loaded = true;
+  } else {
+    loaded = await loadCloudCalendarEvents({ adminTargetEmail: adminViewingEmail ? viewedAccountEmail() : '',
+      allowInlineBuild: false, skipRebuild: true, preserveExistingSnapshot: true, preserveViewFilters: true, requireFreshSnapshot: true, isCurrent: stillCurrent });
+  }
+  if (!loaded || calendarRevisionView()?.key !== view.key) return false;
+  renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || {}, { suppressInsightWarmup: true, preserveScroll: true });
+  return true;
+}
+
 async function loadCloudCalendarEvents(options = {}) {
   if (!cloudAvailable) return false;
   if (!calendarTransitionStillCurrent(options.transition)) return false;
@@ -17722,6 +17831,8 @@ async function loadCloudCalendarEvents(options = {}) {
     });
   }
   const data = await readJsonResponse(response, "Calendar load failed.");
+  if (options.isCurrent && !options.isCurrent()) return false;
+  if (options.requireFreshSnapshot && (data.snapshotStale === true || (!data.snapshot && data.snapshotCurrent !== true))) return false;
   if (!calendarTransitionStillCurrent(options.transition)) return false;
   if (activeCalendarTransitionKey() !== expectedKey) return false;
   currentCalendarRevision = String(data.snapshotRevision || data.calendarRevision || currentCalendarRevision || "");
@@ -17740,7 +17851,11 @@ async function loadCloudCalendarEvents(options = {}) {
     currentSnapshotBuiltAt = String(data.snapshotBuiltAt || currentSnapshotBuiltAt || "");
     return Boolean(currentSnapshot);
   }
-  currentSnapshot = sanitizeWorkspaceSnapshot(clearCloudLoadedSnapshotFilters(data.snapshot));
+  const viewSettings = options.preserveViewFilters ? buildActiveSessionState().settings : null;
+  const incoming = clearCloudLoadedSnapshotFilters(data.snapshot);
+  if (incoming && viewSettings) incoming.session.settings = { ...incoming.session.settings,
+    dateFrom: viewSettings.dateFrom, dateTo: viewSettings.dateTo, hospitalFilter: viewSettings.hospitalFilter };
+  currentSnapshot = sanitizeWorkspaceSnapshot(incoming);
   if (currentSnapshot && data.snapshotStale !== true) {
     currentSnapshot.calendarRevision = currentCalendarRevision;
     currentSnapshot.cacheKey = currentCalendarSnapshotCacheKey({
@@ -17991,10 +18106,11 @@ function creatorCalendarSavePayload() {
 }
 
 async function saveCloudState(snapshot = null) {
+  cloudStateSaveActive += 1;
   const task = () => saveCloudStateNow(snapshot);
   const queued = cloudStateSaveQueue.then(task, task);
   cloudStateSaveQueue = queued.catch(() => {});
-  return await queued;
+  try { return await queued; } finally { cloudStateSaveActive -= 1; }
 }
 
 function savePayloadMatchesActiveCalendar(payload) {
@@ -20501,6 +20617,7 @@ function renderWorkspaceFromSnapshot(snapshot, session = {}, options = {}) {
   refreshFacilityOverviewPreferredFacility();
   if (options.suppressInsightWarmup !== true) scheduleInsightWarmup();
   saveCurrentWorkspace();
+  visibleCalendarRevisionPoller.update();
   if (preservedScroll) {
     requestAnimationFrame(() => {
       if (isMobileLayout()) window.scrollTo({ top: preservedScroll.pageY, behavior: "auto" });

@@ -74,7 +74,7 @@ function calendarResponse(ics, displayName) {
     status: 200,
     headers: {
       "Content-Type": "text/calendar; charset=utf-8",
-      "Cache-Control": "private, max-age=300",
+      "Cache-Control": "private, max-age=30, must-revalidate",
       "Content-Disposition": `inline; filename="${String(displayName || "roster").replace(/\//g, "-")} subscription.ics"`,
     },
   });

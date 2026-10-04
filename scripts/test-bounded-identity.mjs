@@ -100,7 +100,7 @@ for(const source of ['mmc','mch','ddh','vhh']) {
   await storeCachedSnapshot(r2,`facility-overview/v1/${source}/manifest.json`,{terms:[
     {termStart:'2000-01-01',termEnd:'2099-01-01',visibleFrom:'2000-01-01',staffKey},
     {termStart:'2099-01-02',termEnd:'2099-04-01',visibleFrom:'2000-01-01',staffKey:futureKey}],coverage:[]});
-  await storeCachedSnapshot(r2,staffKey,{members:source==='mmc' ? [{doctorKey:'ALICE TEST',displayName:'Alice Test',seniority:'HMO'},{doctorKey:'ALICE T TEST',displayName:'Alice T Test',seniority:'Intern'}] : [{doctorKey:'SITE DOCTOR',displayName:'Site Doctor',seniority:'SMS'}],seniorityOverrides:source==='mmc'?[{doctorKey:'ALICE TEST',sourceType:'mmc',seniority:'Junior Registrar'}]:[]});
+  await storeCachedSnapshot(r2,staffKey,{members:source==='mmc' ? [{doctorKey:'ALICE TEST',displayName:'Alice Test',seniority:'HMO'},{doctorKey:'ALICE T TEST',displayName:'Alice T Test',seniority:'Intern'}] : [{doctorKey:'SITE DOCTOR',displayName:'Site Doctor',seniority:'SMS'}],seniorityOverrides:source==='mmc'?[{doctorKey:'ALICE TEST',sourceType:'mmc',seniority:'Junior Registrar',termStart:'2000-01-01'}]:[]});
   await storeCachedSnapshot(r2,futureKey,{members:source==='mmc'?[{doctorKey:'ALICE TEST',displayName:'Alice Test',seniority:'Senior Registrar'}]:[]});
 }
 const directory=await publishedIdentityDirectory(r2,today);

@@ -11,6 +11,7 @@ import {
   storeCachedSnapshot,
 } from "./d1-calendar.js";
 import { ddhNightReviewWindow, ddhWorkingNightRows } from "../../public/static/contact-allocations.js";
+import { rosterTermVisible } from '../../public/static/roster-term-policy.js';
 
 const SCHEMA_VERSION = 1;
 const FACILITY_PUBLICATION_BATCH_SIZE = 7;
@@ -555,7 +556,7 @@ export async function loadPublishedFacilityRange(r2, sourceTypes, startDate, end
   for (const sourceType of [...new Set(sourceTypes.map(safeSource).filter(Boolean))]) {
     const manifest = await loadCachedSnapshot(r2, facilityMetadataManifestKey(sourceType));
     if (!manifest) { missing.push({ sourceType, startDate, endDate, reason: "manifest-unavailable" }); continue; }
-    const visibleTerms = (manifest.terms || []).filter((term) => term.visibleFrom <= currentDate && term.termEnd >= startDate && term.termStart <= endDate);
+    const visibleTerms = (manifest.terms || []).filter((term) => rosterTermVisible(term, currentDate) && term.termEnd >= startDate && term.termStart <= endDate);
     if (!visibleTerms.length) { missing.push({ sourceType, startDate, endDate, reason: "history-unavailable" }); continue; }
     // A bounded publication replaces the source summary with that term's
     // coverage. Other retained terms keep authoritative coverage in their
@@ -601,7 +602,9 @@ export async function loadPublishedFacilityRange(r2, sourceTypes, startDate, end
     const overrides = new Map();
     for (const {term,staff,empty} of publications) {
       if (!staff && !empty) missing.push({ sourceType, termStart: term.termStart, startDate, endDate, reason: "staff-unavailable" });
-      for (const entry of staff?.seniorityOverrides || []) overrides.set(`${entry.sourceType}|${entry.doctorKey}`, entry);
+      for (const entry of staff?.seniorityOverrides || []) {
+        if (entry.termStart === term.termStart) overrides.set(`${entry.sourceType}|${entry.doctorKey}|${term.termStart}`, entry);
+      }
     }
     for (const [month, pointer] of monthPointers) {
       const snapshot = await loadCachedSnapshot(r2, pointer.key);
@@ -610,7 +613,8 @@ export async function loadPublishedFacilityRange(r2, sourceTypes, startDate, end
       for (const row of snapshot.rows || []) {
         const date = String(row.event?.start || "").slice(0, 10);
         if (date < startDate || date > endDate || !publications.some(({term,empty}) => !empty && term.termStart <= date && term.termEnd >= date)) continue;
-        const override = overrides.get(`${row.sourceType}|${row.doctorKey}`);
+        const term = publications.find(({term}) => term.termStart <= date && term.termEnd >= date)?.term;
+        const override = overrides.get(`${row.sourceType}|${row.doctorKey}|${term?.termStart}`);
         events.push(override && !override.useRosterSeniority
           ? { ...row, seniority: override.seniority, seniorityOverride: override, event: { ...row.event, seniority: override.seniority, facilitySeniorityOverride: true } }
           : row);
@@ -638,15 +642,15 @@ export async function loadPublishedFacilityDays(r2, sourceTypes, date, currentDa
     const day = await loadCachedSnapshot(r2, pointer.key);
     if (!Array.isArray(day?.rows)) { missing.push({ sourceType, startDate: date, endDate: date, reason: "day-unavailable" }); continue; }
     const termStart = termStartForDate(date);
-    const term = (manifest.terms || []).find((entry) => entry.termStart === termStart && entry.visibleFrom <= currentDate);
+    const term = (manifest.terms || []).find((entry) => entry.termStart === termStart && rosterTermVisible(entry, currentDate));
     if (!term) { missing.push({ sourceType, startDate: date, endDate: date, reason: "history-unavailable" }); continue; }
     found = true;
     revisions.push(pointer.revision || "", term.staffRevision || "");
     const staff = term?.staffKey ? await loadCachedSnapshot(r2, term.staffKey) : null;
     if (!staff) missing.push({ sourceType, termStart, reason: "staff-unavailable" });
-    const overrides = new Map((staff?.seniorityOverrides || []).map((entry) => [`${entry.sourceType}|${entry.doctorKey}`, entry]));
+    const overrides = new Map((staff?.seniorityOverrides || []).filter(entry => entry.termStart === termStart).map((entry) => [`${entry.sourceType}|${entry.doctorKey}`, entry]));
     rows.push(...(day.rows || []).map((row) => {
-      const override = overrides.get(`${row.sourceType}|${row.doctorKey}`);
+      const override = termStartForDate(String(row.event?.start || "").slice(0, 10)) === termStart ? overrides.get(`${row.sourceType}|${row.doctorKey}`) : null;
       return override && !override.useRosterSeniority
         ? { ...row, seniority: override.seniority, seniorityOverride: override, event: { ...row.event, seniority: override.seniority, facilitySeniorityOverride: true } }
         : row;
@@ -677,7 +681,7 @@ export async function loadPublishedFacilityTerms(r2, sourceTypes, today) {
     const manifest = await loadCachedSnapshot(r2, facilityMetadataManifestKey(sourceType));
     if ((manifest?.terms || []).length > 64) throw new Error("Published term directory exceeds the manifest limit.");
     for (const term of manifest?.terms || []) {
-      if (term.staffKey && term.staffRevision && term.visibleFrom <= today) {
+      if (term.staffKey && term.staffRevision && rosterTermVisible(term, today)) {
         terms.push({ sourceType, termStart: term.termStart, termEnd: term.termEnd });
       }
     }
@@ -697,7 +701,7 @@ export async function loadPublishedFacilityMetadata(r2, sourceTypes, today) {
   if (!manifests.length) return { preparing: true, facilities: [], catalogEvents: [] };
   const facilities = [];
   for (const manifest of manifests) {
-    const currentTerms = (manifest.terms || []).filter(term => term.visibleFrom <= today && term.termStart <= today && term.termEnd >= today);
+    const currentTerms = (manifest.terms || []).filter(term => rosterTermVisible(term, today) && term.termStart <= today && term.termEnd >= today);
     for (const term of currentTerms) {
       const staff = !Array.isArray(term.coverage) && term.staffKey ? await loadCachedSnapshot(r2, term.staffKey) : null;
       facilities.push(...(term.coverage || staff?.coverage || manifest.coverage || []));
@@ -706,7 +710,7 @@ export async function loadPublishedFacilityMetadata(r2, sourceTypes, today) {
   const catalogEvents = [];
   for (const manifest of manifests) {
     for (const term of manifest.terms || []) {
-      if (term.visibleFrom > today || term.termEnd < today) continue;
+      if (!rosterTermVisible(term, today) || term.termEnd < today) continue;
       for (const [index, item] of (term.catalog || []).entries()) {
         for (const date of [...new Set([item.firstDate, item.lastDate].filter(Boolean))]) {
           const start = item.startTime ? `${date}T${item.startTime}` : date;
@@ -735,7 +739,7 @@ export async function loadPublishedRosterDoctors(r2, today) {
   for (const sourceType of ["mmc", "mch", "ddh", "vhh"]) {
     const manifest = await loadCachedSnapshot(r2, facilityMetadataManifestKey(sourceType));
     if ((manifest?.terms || []).length > 64) throw new Error("Published doctor directory exceeds the manifest limit.");
-    const terms = (manifest?.terms || []).filter(term => term.visibleFrom <= today && term.termEnd >= today).sort((a, b) => a.termStart.localeCompare(b.termStart));
+    const terms = (manifest?.terms || []).filter(term => rosterTermVisible(term, today) && term.termEnd >= today).sort((a, b) => a.termStart.localeCompare(b.termStart));
     if (terms.length > 2) throw new Error("Published doctor directory exceeds the term limit.");
     let found = false;
     for (const term of terms) {
@@ -745,7 +749,7 @@ export async function loadPublishedRosterDoctors(r2, today) {
       if (members.length > FACILITY_PUBLICATION_LIMITS.staffRows) throw new Error("Published doctor directory exceeds the staff limit.");
       found = true;
       if ((staff.seniorityOverrides || []).length > FACILITY_PUBLICATION_LIMITS.overrideRows) throw new Error("Published doctor directory exceeds the grade override limit.");
-      const overrides = new Map((staff.seniorityOverrides || []).map(row => [row.doctorKey, row.seniority]));
+      const overrides = new Map((staff.seniorityOverrides || []).filter(row => row.termStart === term.termStart && !row.useRosterSeniority).map(row => [row.doctorKey, row.seniority]));
       for (const member of members) {
         const key = String(member.doctorKey || "").trim();
         if (!key) continue;
@@ -775,7 +779,7 @@ export async function loadPublishedFacilityStaff(r2, sourceTypes, termStart, tod
     const manifest = await loadCachedSnapshot(r2, facilityMetadataManifestKey(sourceType));
     if (!manifest) { missing.push({ sourceType, termStart, reason: "manifest-unavailable" }); continue; }
     const term = (manifest.terms || []).find((entry) => entry.termStart === termStart);
-    if (!term || term.visibleFrom > today || !term.staffKey) { missing.push({ sourceType, termStart, reason: "staff-unavailable" }); continue; }
+    if (!term || !rosterTermVisible(term, today) || !term.staffKey) { missing.push({ sourceType, termStart, reason: "staff-unavailable" }); continue; }
     const staff = await loadCachedSnapshot(r2, term.staffKey);
     if (staff) {
       payloads.push(staff);
@@ -791,7 +795,7 @@ export async function loadPublishedFacilityStaff(r2, sourceTypes, termStart, tod
     events: payloads.flatMap((item) => item.events || []),
     coverage: payloads.flatMap((item) => item.coverage || []),
     designations: payloads.flatMap((item) => item.designations || []),
-    seniorityOverrides: payloads.flatMap((item) => item.seniorityOverrides || []),
+    seniorityOverrides: payloads.flatMap((item) => item.seniorityOverrides || []).filter(entry => entry.termStart === termStart),
   };
 }
 

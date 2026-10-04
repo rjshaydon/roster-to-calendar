@@ -1,4 +1,12 @@
-## Current batch — 2 October bounded identity and delivery restoration
+## Active plan — 4 October 2026
+
+[Remaining restoration batches](./restoration-batch-plan-2026-10-04.md) governs
+the next work: **1 → 2 → 6 → 7 → 3 → 4 → 5 → 8**, five-minute end-to-end
+freshness, metadata checks before roster retrieval, and next-term eligibility
+from the first of the preceding month. Earlier checkpoints below are historical;
+the 3 October release also completed VHH history and DDH five-minute polling.
+
+## Historical checkpoint — 2 October bounded identity and delivery restoration
 
 Production `6513315a`, deployment `bd4924c6-05e6-4299-bc40-929ec8535954`,
 restores bounded automatic name suggestions, explicit confirmed linking and

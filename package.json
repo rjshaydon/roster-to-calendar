@@ -11,6 +11,7 @@
     "local:seed": "node scripts/local-dev.mjs seed",
     "local:setup": "node scripts/local-dev.mjs setup",
     "deploy": "wrangler pages deploy public",
+    "test:restoration-batch1": "node --no-warnings scripts/test-restoration-batch1.mjs",
     "check": "node --check public/static/app.js",
     "test:roster-wire-protocol": "node --no-warnings scripts/test-roster-wire-protocol.mjs",
     "test:bounded-identity": "node --no-warnings scripts/test-bounded-identity.mjs",

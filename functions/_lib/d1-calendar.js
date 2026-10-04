@@ -5,6 +5,7 @@ import {
   previewSummary,
   serializeEvent,
 } from "./roster.js";
+import { rosterTermAvailableFrom } from '../../public/static/roster-term-policy.js';
 
 const SOURCE_TYPES = ["mmc", "ddh", "casey", "mch", "vhh"];
 // Only a successfully activated parse may carry this version. Older rows are
@@ -2101,7 +2102,7 @@ export async function refreshFacilityOverviewMaterializationForFile(db, fileId, 
       .bind(fact.sourceType, fact.termStart, fact.doctorKey, fact.fileId, fact.displayName, fact.seniority, fact.membershipSource,
         fact.providerStaffId, fact.firstApplicableDate, fact.lastApplicableDate, fact.factDigest, now));
     statements.push(db.prepare(`INSERT INTO facility_term_visibility (source_type, term_start, visible_from, revision, updated_at)
-      VALUES (?, ?, ?, '', ?) ON CONFLICT(source_type, term_start) DO NOTHING`).bind(sourceType, fact.termStart, dateDaysBefore(fact.termStart, 14), now));
+      VALUES (?, ?, ?, '', ?) ON CONFLICT(source_type, term_start) DO NOTHING`).bind(sourceType, fact.termStart, rosterTermAvailableFrom(fact.termStart), now));
   }
   for (const key of existingStaff.keys()) {
     if (contributions.has(key)) continue;
@@ -2287,7 +2288,7 @@ export async function queryFacilityStaffSeniorityOverrides(db, options = {}) {
   const rows = await db.prepare(`
     SELECT *
     FROM facility_staff_seniority_overrides
-    WHERE active = 1 AND term_start <= ? ${sourceSql}
+    WHERE active = 1 AND term_start = ? ${sourceSql}
     ${maximumRows == null ? "ORDER BY source_type, doctor_key, term_start DESC" : "LIMIT ?"}
   `).bind(...(maximumRows == null ? bindings : [...bindings, maximumRows + 1])).all();
   rejectFacilityReadOverflow(rows.results, maximumRows, "seniority-override-read-limit");
@@ -4668,32 +4669,13 @@ async function applyFacilityStaffSeniorityOverridesToCoworkerEvents(db, rows) {
     if (!gradesByPerson.has(key)) gradesByPerson.set(key, []);
     gradesByPerson.get(key).push({ seniority: String(candidate.seniority || "").trim(), date: String(candidate.start_date || "").slice(0, 10) });
   }
-  // FindMyShift can label an individual assignment Unknown even when the
-  // active roster membership has the person's grade.  Membership is the
-  // source of the current grade, so use it before falling back to a dated
-  // assignment from the same term.
-  const memberships = await db.prepare(`
-    SELECT roster_file_doctors.source_type, roster_file_doctors.doctor_key, roster_file_doctors.seniority
-    FROM roster_file_doctors
-    INNER JOIN roster_files ON roster_files.id = roster_file_doctors.file_id
-    WHERE roster_files.active = 1
-      AND roster_file_doctors.source_type IN (${sourceTypes.map(() => "?").join(", ")})
-      AND roster_file_doctors.doctor_key IN (${doctorKeys.map(() => "?").join(", ")})
-      AND TRIM(roster_file_doctors.seniority) <> ''
-      AND LOWER(TRIM(roster_file_doctors.seniority)) <> 'unknown'
-    ORDER BY roster_file_doctors.source_type, roster_file_doctors.doctor_key
-  `).bind(...sourceTypes, ...doctorKeys).all();
-  const membershipGradesByPerson = new Map((memberships.results || []).map((membership) => [
-    `${normalizeSourceType(membership.source_type)}|${String(membership.doctor_key || "").trim()}`,
-    String(membership.seniority || "").trim(),
-  ]));
+  // Missing grade can only borrow dated evidence from the same site/term.
+  // An undated membership or current directory grade would rewrite history.
   return overriddenRows.map((row) => {
     if (hasKnownCoworkerSeniority(row?.seniority)) return row;
     const date = String(row.event?.start || "").slice(0, 10);
     const termStart = australianTermStartForDate(date);
     const key = `${normalizeSourceType(row.sourceType)}|${String(row.doctorKey || "").trim()}`;
-    const membershipGrade = membershipGradesByPerson.get(key);
-    if (membershipGrade) return { ...row, seniority: membershipGrade, event: { ...row.event, seniority: membershipGrade, facilitySeniorityDerived: true } };
     const effective = (gradesByPerson.get(key) || []).find((candidate) => candidate.date <= date && candidate.date >= termStart);
     if (!effective) return row;
     return { ...row, seniority: effective.seniority, event: { ...row.event, seniority: effective.seniority, facilitySeniorityDerived: true } };
@@ -5209,7 +5191,7 @@ export async function queryMaterializedFacilityMetadata(db, options = {}) {
   return {
     coverage: requestedTerm ? coverage.filter((entry) => entry.startDate <= termEnd && entry.endDate >= requestedTerm) : coverage,
     terms: (visibility.results || []).map((row) => ({
-      termStart: datePart(row.term_start), visibleFrom: datePart(row.visible_from), revision: String(row.revision || ""),
+      termStart: datePart(row.term_start), visibleFrom: rosterTermAvailableFrom(datePart(row.term_start)), revision: String(row.revision || ""),
       catalog: catalogByTerm.get(datePart(row.term_start)) || [],
     })),
   };
