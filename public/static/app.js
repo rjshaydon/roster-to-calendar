@@ -9986,6 +9986,7 @@ function facilityOverviewRequestWasCancelled(error) {
 }
 
 function renderFacilityOverview() {
+  visibleCalendarRevisionPoller.update();
   if (!currentFacilityOverviewAccessReady) {
     renderFacilityOverviewMaintenance({ loading: true });
     return;

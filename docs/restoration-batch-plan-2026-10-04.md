@@ -1,7 +1,7 @@
 # Remaining restoration and development batches — 4 October 2026
 
-Status: plan only; application code, provider flows and production settings have
-not changed in this step. The user's agreed priority is **1 → 2 → 6 → 7 → 3 → 4
+Status: Batch 1 implementation in progress. App-side code and tests are complete;
+production deployment and live SharePoint Flow acceptance are tracked below. The user's agreed priority is **1 → 2 → 6 → 7 → 3 → 4
 → 5 → 8**, retaining the original batch numbers for continuity. This plan
 supersedes earlier fifteen-minute freshness targets and batch ordering.
 
@@ -180,3 +180,33 @@ relationships. Low is suitable for routine cleanup and measured acceptance once
 the design and regression checks pass. Higher effort is not currently required.
 Pause after this plan/document cleanup; the next resumed implementation starts
 with Batch 1 rather than another planning cycle.
+
+
+## Batch 1 implementation checkpoint — 4 October
+
+- Incorporated production `d318bf7b` and preserved the other chat's clinician
+  visibility, startup and navigation changes; their regression checks pass.
+- Added Melbourne preceding-month eligibility in provider windows and shared
+  readers, plus exact-term grade corrections and removal of undated historical
+  membership fallback. Historical DDH repairs must use retained term-specific
+  evidence rather than today's live staff list.
+- Added edge/R2-only opaque change fingerprints, coalesced visible-tab checks,
+  safe calendar/view refresh, shorter feed caching and two-minute DDH polling.
+  Unchanged browser checks contain zero D1 operations. Imports retain account
+  admission and source isolation; processing is serial within each site.
+- Added authenticated SharePoint pre-download checks, including unchanged,
+  pending, invalid-candidate and budget-stop behavior. Added a private exported
+  Flow package preparation tool; the MCH backup/update package is ready outside
+  Git. Existing contact schedules are unchanged.
+- Production admission passed at approximately 94,000 account-wide reads and
+  570 writes. The compact visibility migration cost 12 reads and 12 writes.
+- **Outstanding:** Mac unlocked for MMC/MCH/VHH export/import and live Flow
+  validation; verify the actual Power Automate allowance before enabling
+  two-minute metadata reconciliation, verify the VHH library/path from its
+  export, then measure real changed-roster delivery across all sites. Five-minute
+  all-site delivery has not yet been declared complete.
+- Microsoft documents 6,000 daily requests for seeded/trial licences and 40,000
+  for Power Automate Premium. Reconciliation must fit the verified existing
+  licence alongside contact flows; do not silently add paid capacity.
+  Sources: https://learn.microsoft.com/en-us/power-platform/admin/power-automate-licensing/faqs
+  and https://learn.microsoft.com/en-us/power-platform/admin/api-request-limits-allocations.
