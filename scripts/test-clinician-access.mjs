@@ -351,7 +351,7 @@ assert.equal(runInNewContext(`${resultsRenderer}; renderFacilityOverviewTogether
 // Directory selection survives rendering, while returning to shifts restores
 // the entered clinician's roster permissions.
 const applySiteScope=app.slice(app.indexOf('function applyFacilityOverviewSiteScope()'),app.indexOf('function resetFacilityOverviewAccessForEnteredUser()'));
-const siteGlobals={currentFacilityOverviewAccess:{mode:'sites',facilityKeys:['MMC']},facilityAccessKeys:()=>['MMC'],facilityOverviewState:{tab:'staff',facilityKey:'ALL',directoryFacilityKeys:['MMC','DDH'],byStreamRows:[],byStreamCatalog:[]}};
+const siteGlobals={currentFacilityOverviewAccess:{mode:'sites',facilityKeys:['MMC']},facilityAccessKeys:()=>['MMC'],facilityOverviewRosterAccessKeys:()=>['MMC'],currentFacilityOverviewShiftWindow:()=>null,facilityOverviewState:{tab:'staff',facilityKey:'ALL',directoryFacilityKeys:['MMC','DDH'],byStreamRows:[],byStreamCatalog:[]}};
 runInNewContext(`${applySiteScope}; applyFacilityOverviewSiteScope()`,siteGlobals);
 assert.equal(siteGlobals.facilityOverviewState.facilityKey,'ALL');
 siteGlobals.facilityOverviewState.facilityKey='DDH';
@@ -370,5 +370,23 @@ for (const claim of aliases) membership('mmc','2026-08-03',claim.key,'HMO',`alia
 account('aliases@example.com',aliases);
 await call({action:'queryFacilityOverviewTogetherContext',email:'aliases@example.com',startDate:'2026-10-02',endDate:'2026-10-02'},200,64);
 assert.ok(queries.length < 64);
+// At the term boundary, the post-midnight hour still belongs to the shift
+// just completed at the previous hospital, without opening unrelated dates.
+const AccessTestDate=globalThis.Date;
+globalThis.Date=class extends RealDate {constructor(...args){super(...(args.length?args:['2026-11-01T13:30:00Z']));}static now(){return RealDate.parse('2026-11-01T13:30:00Z');}};
+account('night-window@example.com',[{sourceType:'ddh',key:'NIGHT WINDOW'},{sourceType:'mch',key:'NIGHT WINDOW'}]);
+membership('mch','2026-11-02','NIGHT WINDOW');
+publish('ddh','2026-08-03','2026-11-01',['2026-11-01']);
+const nightMonth=objects.get('ddh-2026-11-month');
+nightMonth.rows.push({...row('ddh','NIGHT WINDOW','2026-11-01'),event:{...row('ddh','NIGHT WINDOW','2026-11-01').event,start:'2026-11-01T15:00:00+11:00',end:'2026-11-02T00:00:00+11:00'}});
+const nightWindow=await call({action:'queryFacilityOverviewLaunchWindow',email:'night-window@example.com'});
+assert.equal(nightWindow.shiftWindow.rosterDate,'2026-11-01');
+const boundaryRoster=await call({action:'queryFacilityOverviewOnShift',email:'night-window@example.com',date:'2026-11-01',facilityKey:'DDH'});
+assert.ok(boundaryRoster.events.some(row=>row.sourceType==='ddh'));
+await call({action:'queryFacilityOverviewOnShift',email:'night-window@example.com',date:'2026-11-01',facilityKey:'MMC'},403);
+await call({action:'queryFacilityOverviewOnShift',email:'night-window@example.com',date:'2026-10-31',facilityKey:'DDH'},403);
+globalThis.Date=class extends RealDate {constructor(...args){super(...(args.length?args:['2026-11-01T14:01:00Z']));}static now(){return RealDate.parse('2026-11-01T14:01:00Z');}};
+await call({action:'queryFacilityOverviewOnShift',email:'night-window@example.com',date:'2026-11-01',facilityKey:'DDH'},403,'32');
+globalThis.Date=AccessTestDate;
 globalThis.Date=RealDate;
 console.log('Clinician access passed CMO parity, locums, historical rotations, direct API denial, impersonation, corrections, cache invalidation, related Insights, missing history and bounded indexed reads.');

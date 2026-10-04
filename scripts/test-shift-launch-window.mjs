@@ -64,3 +64,18 @@ startup.calendarTransitionRunId=2;reply({shiftWindow:{facilityKey:'DDH'}});
 await startup.clinicalOnShiftWindowPromise;
 assert.equal(launches,0,'another account transition cancels delayed automatic launch');
 console.log('Startup fallback passed request deduplication and manual/account navigation cancellation.');
+const windowHelpers=section('function currentFacilityOverviewShiftWindow()','function facilityOverviewIsSiteScoped()');
+const scopeHelper=section('function applyFacilityOverviewSiteScope()','function resetFacilityOverviewAccessForEnteredUser()');
+let boundaryNow=RealDateForTest('2026-11-02T00:30:00+11:00');
+function RealDateForTest(value){return Date.parse(value);}
+const boundary={Date:{now:()=>boundaryNow},currentFacilityOverviewAccess:{mode:'sites',facilityKeys:['MCH']},
+ facilityAccessKeys:a=>a.facilityKeys||[],facilityOverviewState:{tab:'on-shift',date:'2026-11-01',facilityKey:'DDH',
+ startupShiftWindow:{facilityKey:'DDH',rosterDate:'2026-11-01',start:Date.parse('2026-11-01T15:00:00+11:00'),end:Date.parse('2026-11-02T00:00:00+11:00')},
+ byStreamRows:[{facilityKey:'DDH'}],byStreamCatalog:[]}};
+runInNewContext(`${windowHelpers};${scopeHelper};this.apply=applyFacilityOverviewSiteScope`,boundary);
+boundary.apply();
+assert.equal(boundary.facilityOverviewState.facilityKey,'DDH','the previous shift hospital survives the next-term site scope during the grace hour');
+assert.equal(boundary.facilityOverviewState.byStreamRows[0].facilityKey,'MCH','the timed exception does not widen stream access');
+boundaryNow=Date.parse('2026-11-02T01:01:00+11:00');boundary.apply();
+assert.equal(boundary.facilityOverviewState.facilityKey,'MCH','the previous hospital allowance ends with the grace hour');
+console.log('Term-boundary browser scope passed the expiring On shift exception without widening other views.');

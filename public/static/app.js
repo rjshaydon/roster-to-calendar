@@ -9218,8 +9218,20 @@ function refreshFacilityOverviewSnapshotAccess(data) {
   if (Number.isFinite(Date.parse(expiresAt)) && Date.parse(expiresAt) > Date.now()) currentFacilityOverviewAccess.expiresAt = expiresAt;
 }
 
+function currentFacilityOverviewShiftWindow() {
+  const window = facilityOverviewState.startupShiftWindow;
+  const now = Date.now();
+  return facilityOverviewState.tab === "on-shift" && window?.rosterDate === facilityOverviewState.date
+    && now >= window.start - 60 * 60 * 1000 && now <= window.end + 60 * 60 * 1000 ? window : null;
+}
+
+function facilityOverviewRosterAccessKeys() {
+  const window = currentFacilityOverviewShiftWindow();
+  return [...new Set([...facilityAccessKeys(currentFacilityOverviewAccess), ...(window ? [window.facilityKey] : [])])];
+}
+
 function facilityOverviewIsSiteScoped() {
-  if (facilityOverviewState.tab === "staff") return false;
+  if (facilityOverviewState.tab === "staff" || currentFacilityOverviewShiftWindow()) return false;
   return currentFacilityOverviewAccess.mode === "site" && Boolean(currentFacilityOverviewAccess.facilityKey);
 }
 
@@ -9394,7 +9406,7 @@ function resetFacilityOverviewScroll() {
 
 function facilityOverviewFacilityOptions() {
   if (facilityOverviewState.tab === "staff" && facilityOverviewState.directoryFacilityKeys?.length) return facilityOverviewState.directoryFacilityKeys;
-  if (currentFacilityOverviewAccess.mode !== "all") return facilityAccessKeys(currentFacilityOverviewAccess);
+  if (currentFacilityOverviewAccess.mode !== "all") return facilityOverviewRosterAccessKeys();
   if (Array.isArray(currentFacilityOverviewAccess.readerFacilityKeys)) return currentFacilityOverviewAccess.readerFacilityKeys;
   const values = new Set();
   for (const source of ["mmc", "ddh", "casey", "mch", "vhh"]) {
@@ -9668,6 +9680,7 @@ function beginFacilityOverviewAccountSession() {
 
 function resetFacilityOverviewSessionState() {
   facilityOverviewState.togetherContext = null;
+  facilityOverviewState.startupShiftWindow = null;
   cancelFacilityOverviewDataRequest();
   const today = formatDateKey(new Date());
   const currentTerm = australianTermForDate(new Date());
@@ -9725,8 +9738,8 @@ function resetFacilityOverviewSessionState() {
 
 function applyFacilityOverviewSiteScope() {
   if (currentFacilityOverviewAccess.mode === "all") return;
-  const facilities = facilityAccessKeys(currentFacilityOverviewAccess);
-  if (!["together", "staff"].includes(facilityOverviewState.tab) && currentFacilityOverviewAccess.mode === "denied") facilityOverviewState.tab = "together";
+  const facilities = facilityOverviewRosterAccessKeys();
+  if (!["together", "staff"].includes(facilityOverviewState.tab) && currentFacilityOverviewAccess.mode === "denied" && !currentFacilityOverviewShiftWindow()) facilityOverviewState.tab = "together";
   if (facilityOverviewState.tab === "staff") {
     const directoryFacilities = facilityOverviewState.directoryFacilityKeys || [];
     if (facilityOverviewState.facilityKey !== "ALL" && !directoryFacilities.includes(facilityOverviewState.facilityKey)) facilityOverviewState.facilityKey = "ALL";
@@ -9736,8 +9749,9 @@ function applyFacilityOverviewSiteScope() {
   } else if (facilityOverviewState.facilityKey !== "ALL" && !facilities.includes(facilityOverviewState.facilityKey)) {
     facilityOverviewState.facilityKey = facilities.includes(currentFacilityOverviewAccess.preferredFacilityKey) ? currentFacilityOverviewAccess.preferredFacilityKey : facilities[0] || "";
   }
-  facilityOverviewState.byStreamRows = (facilityOverviewState.byStreamRows || []).map(row => ({ ...row, facilityKey: facilities.includes(row.facilityKey) ? row.facilityKey : facilities[0] || "" }));
-  facilityOverviewState.byStreamCatalog = (facilityOverviewState.byStreamCatalog || []).filter(entry => facilities.includes(entry.facilityKey));
+  const streamFacilities = facilityAccessKeys(currentFacilityOverviewAccess);
+  facilityOverviewState.byStreamRows = (facilityOverviewState.byStreamRows || []).map(row => ({ ...row, facilityKey: streamFacilities.includes(row.facilityKey) ? row.facilityKey : streamFacilities[0] || "" }));
+  facilityOverviewState.byStreamCatalog = (facilityOverviewState.byStreamCatalog || []).filter(entry => streamFacilities.includes(entry.facilityKey));
 }
 
 function resetFacilityOverviewAccessForEnteredUser() {
@@ -9833,7 +9847,7 @@ async function performFacilityOverviewOpening(options = {}, openingRunId) {
       facilityOverviewState.byStreamContent = "";
     }
   }
-  if (currentFacilityOverviewAccess.mode === "denied") facilityOverviewState.tab = "together";
+  if (currentFacilityOverviewAccess.mode === "denied" && !currentFacilityOverviewShiftWindow()) facilityOverviewState.tab = "together";
   applyFacilityOverviewSiteScope();
   const openingTab = facilityOverviewState.tab;
   facilityOverviewState.content = `<article class="issue-card" role="status"><p>Loading rostered staff…</p></article>`;
@@ -16807,10 +16821,14 @@ function launchClinicalOnShiftWorkspace(options = {}, loginStartedAt = 0) {
     requestClinicalStartupShiftWindow(options, loginStartedAt);
     return false;
   }
-  if (currentFacilityOverviewAccess.mode !== "all" && !facilityAccessKeys(currentFacilityOverviewAccess).includes(shift.facilityKey)) return false;
+  if (!options.shiftWindow && currentFacilityOverviewAccess.mode !== "all" && !facilityAccessKeys(currentFacilityOverviewAccess).includes(shift.facilityKey)) {
+    requestClinicalStartupShiftWindow(options, loginStartedAt);
+    return false;
+  }
   if (facilityOverviewSessionNeedsInitialization) resetFacilityOverviewSessionState();
   clinicalOnShiftStartupPending = false;
   facilityOverviewState.tab = "on-shift";
+  facilityOverviewState.startupShiftWindow = shift;
   // Keep the shift's roster date after midnight, including the hour after it ends.
   facilityOverviewState.followOperationalDate = false;
   facilityOverviewState.date = shift.rosterDate;
