@@ -1,3 +1,4 @@
+import { onShiftLaunchWindow } from "./shift-launch-policy.js";
 import { FACILITY_ACCESS_VERSION, facilityAccessKeys, restrictedFacilityScope, validFacilityDateRange } from "./facility-access-policy.js";
 import { planRosterImportBatches } from "./roster-import-batches.js";
 import { makeSessionPatch } from "./session-settings-patch.js";
@@ -342,6 +343,8 @@ let currentSubscription = null;
 let currentInsightsEnabled = currentUserRole === "creator";
 let currentFacilityOverviewEnabled = currentUserRole === "creator";
 let currentFacilityOverviewMaintenance = true;
+let currentFacilityOverviewAccessReady = false;
+const facilityOverviewAccessWaiters = new Set();
 let currentFacilityOverviewAutomaticLaunchEnabled = false;
 let currentFacilityOverviewAccess = { mode: currentUserRole === "creator" ? "all" : "denied", isSms: currentUserRole === "creator", workingToday: false, facilityKey: "", today: "" };
 let currentNonClinical = false;
@@ -370,6 +373,11 @@ let whoStaffMenuContext = null;
 const FACILITY_OVERVIEW_COMPACT_SCROLL_THRESHOLD = 28;
 const FACILITY_OVERVIEW_SCROLL_TOLERANCE = 0;
 let facilityOverviewNavigationLocked = false;
+let facilityOverviewOpeningPromise = null;
+let facilityOverviewOpeningRunId = 0;
+let facilityOverviewIgnoreToggleUntil = 0;
+let clinicalOnShiftStartupPending = true;
+let clinicalOnShiftWindowPromise = null;
 let facilityOverviewSessionNeedsInitialization = true;
 let facilityOverviewContactRefreshTimer = 0;
 let facilityOverviewContactRefreshInFlight = false;
@@ -579,13 +587,10 @@ filesModal?.addEventListener("click", (event) => {
 });
 exportButton.addEventListener("click", openExportModal);
 function toggleFacilityOverview() {
-  if (facilityOverviewNavigationLocked) return;
+  if (facilityOverviewOpeningPromise || facilityOverviewNavigationLocked || Date.now() < facilityOverviewIgnoreToggleUntil) return;
+  clinicalOnShiftStartupPending = false;
   if (isFacilityOverviewOpen()) closeFacilityOverview();
-  else {
-    facilityOverviewNavigationLocked = true;
-    void openFacilityOverview();
-    window.setTimeout(() => { facilityOverviewNavigationLocked = false; }, 350);
-  }
+  else void openFacilityOverview().catch(error => setStatus(error?.message || "Could not open At a glance.", true));
 }
 facilityOverviewButton?.addEventListener("click", toggleFacilityOverview);
 mobileFacilityOverviewButton?.addEventListener("click", toggleFacilityOverview);
@@ -840,15 +845,18 @@ facilityOverviewSection?.addEventListener("click", (event) => {
     facilityOverviewState.staffSeniorityMenu = null;
     clearFacilityOverviewStaffMultiSelect({ render: false });
     facilityOverviewState.tab = tab.dataset.facilityOverviewTab || "on-shift";
+    applyFacilityOverviewSiteScope();
     if (facilityOverviewState.tab !== "on-shift") stopFacilityOverviewContactRefresh();
     resetFacilityOverviewScroll();
     if (facilityOverviewState.tab === "staff") {
       void loadFacilityOverviewStaff();
     } else if (facilityOverviewState.tab === "by-stream") {
       void openFacilityOverviewByStream();
-    } else {
-      if (facilityOverviewState.tab === "together") void loadFacilityOverviewTogether();
+    } else if (facilityOverviewState.tab === "together") {
+      void loadFacilityOverviewTogether();
       renderFacilityOverview();
+    } else {
+      void loadFacilityOverviewOnShift();
     }
     return;
   }
@@ -1171,6 +1179,13 @@ facilityOverviewSection?.addEventListener("keydown", (event) => {
   renderFacilityOverview();
 });
 facilityOverviewSection?.addEventListener("change", (event) => {
+  const doctorPicker = event.target.closest("[data-facility-overview-doctor]");
+  if (doctorPicker && canUseCreatorDoctorSwitcher()) {
+    if (doctorPicker.value === MOBILE_RETURN_TO_CREATOR_VALUE) void returnToCreatorCalendar();
+    else void switchDoctorSelection(doctorPicker.value, { resetRange: true });
+    return;
+  }
+
   const multiSelectToggle = event.target.closest("[data-facility-overview-staff-multi-select]");
   if (multiSelectToggle) {
     const sectionKey = multiSelectToggle.dataset.facilityOverviewStaffMultiSelect || "";
@@ -1191,7 +1206,7 @@ facilityOverviewSection?.addEventListener("change", (event) => {
       return;
     }
     facilityOverviewState.togetherStaffKeys[index] = value;
-    if (value) facilityOverviewState.togetherUserClearedAll = false;
+    facilityOverviewState.togetherUserClearedAll = !facilityOverviewState.togetherStaffKeys.some(Boolean);
     facilityOverviewState.togetherContent = "";
     facilityOverviewState.togetherHasSearched = false;
     const selectedCount = facilityOverviewState.togetherStaffKeys.filter(Boolean).length;
@@ -4497,6 +4512,7 @@ function renderPreviewGrid(doctor, data) {
   if (!days.length) {
     preview.innerHTML = `
       ${renderPreviewHeader(doctor, data)}
+      ${renderFacilityOverviewCoverageNotice({ missing: data.publicationMissing || [] })}
       <div class="preview-empty">No events match the current settings.</div>
     `;
     preview.classList.remove("hidden");
@@ -4509,6 +4525,7 @@ function renderPreviewGrid(doctor, data) {
 
   preview.innerHTML = `
     ${renderPreviewHeader(doctor, data)}
+      ${renderFacilityOverviewCoverageNotice({ missing: data.publicationMissing || [] })}
     ${termSections}
   `;
   preview.classList.remove("hidden");
@@ -9216,7 +9233,20 @@ function refreshFacilityOverviewSnapshotAccess(data) {
   if (Number.isFinite(Date.parse(expiresAt)) && Date.parse(expiresAt) > Date.now()) currentFacilityOverviewAccess.expiresAt = expiresAt;
 }
 
+function currentFacilityOverviewShiftWindow() {
+  const window = facilityOverviewState.startupShiftWindow;
+  const now = Date.now();
+  return facilityOverviewState.tab === "on-shift" && window?.rosterDate === facilityOverviewState.date
+    && now >= window.start - 60 * 60 * 1000 && now <= window.end + 60 * 60 * 1000 ? window : null;
+}
+
+function facilityOverviewRosterAccessKeys() {
+  const window = currentFacilityOverviewShiftWindow();
+  return [...new Set([...facilityAccessKeys(currentFacilityOverviewAccess), ...(window ? [window.facilityKey] : [])])];
+}
+
 function facilityOverviewIsSiteScoped() {
+  if (facilityOverviewState.tab === "staff" || currentFacilityOverviewShiftWindow()) return false;
   return currentFacilityOverviewAccess.mode === "site" && Boolean(currentFacilityOverviewAccess.facilityKey);
 }
 
@@ -9225,7 +9255,7 @@ function renderFacilityOverviewFacilityControl(selected, facilities, options = {
     return `<label class="field"><span>ED</span><output class="facility-overview-fixed-facility">${escapeHtml(displaySourceCode(currentFacilityOverviewAccess.facilityKey))}</output></label>`;
   }
   const allValue = options.allValue || "ALL";
-  return `<label class="field"><span>ED</span><select data-facility-overview-facility><option value="${allValue}" ${selected === allValue ? "selected" : ""}>${currentFacilityOverviewAccess.mode === "all" ? "All EDs" : "All my hospitals"}</option>${facilities.map((facility) => `<option value="${escapeHtml(facility)}" ${facility === selected ? "selected" : ""}>${escapeHtml(displaySourceCode(facility))}</option>`).join("")}</select></label>`;
+  return `<label class="field"><span>ED</span><select data-facility-overview-facility><option value="${allValue}" ${selected === allValue ? "selected" : ""}>${facilityOverviewState.tab === "staff" || currentFacilityOverviewAccess.mode === "all" ? "All EDs" : "All my hospitals"}</option>${facilities.map((facility) => `<option value="${escapeHtml(facility)}" ${facility === selected ? "selected" : ""}>${escapeHtml(displaySourceCode(facility))}</option>`).join("")}</select></label>`;
 }
 
 function syncFacilityOverviewAccess() {
@@ -9239,7 +9269,23 @@ function syncFacilityOverviewAccess() {
   syncFacilityOverviewNavigationState();
 }
 
-function renderFacilityOverviewMaintenance() {
+function cancelFacilityOverviewAccessWait() {
+  for (const resolve of facilityOverviewAccessWaiters) resolve(false);
+  facilityOverviewAccessWaiters.clear();
+}
+
+function markFacilityOverviewAccessReady() {
+  currentFacilityOverviewAccessReady = true;
+  for (const resolve of facilityOverviewAccessWaiters) resolve(true);
+  facilityOverviewAccessWaiters.clear();
+}
+
+function waitForFacilityOverviewAccess() {
+  if (currentFacilityOverviewAccessReady) return Promise.resolve(true);
+  return new Promise(resolve => facilityOverviewAccessWaiters.add(resolve));
+}
+
+function renderFacilityOverviewMaintenance({ loading = false } = {}) {
   cancelFacilityOverviewDataRequest();
   stopFacilityOverviewContactRefresh();
   collapseFacilityOverviewContactReview();
@@ -9257,7 +9303,7 @@ function renderFacilityOverviewMaintenance() {
   const description = facilityOverviewSection?.querySelector(".facility-overview-head .section-head p");
   const tabs = facilityOverviewSection?.querySelector(".facility-overview-tabs");
   if (heading) heading.textContent = facilityOverviewLabel();
-  if (description) description.textContent = "This feature will return after the reliability upgrade is complete.";
+  if (description) description.textContent = loading ? "Loading At a glance…" : "This feature will return after the reliability upgrade is complete.";
   if (facilityOverviewHeader) facilityOverviewHeader.innerHTML = renderFacilityOverviewHeader();
   tabs?.classList.add("hidden");
   if (facilityOverviewCsToggle) facilityOverviewCsToggle.classList.add("hidden");
@@ -9265,7 +9311,7 @@ function renderFacilityOverviewMaintenance() {
   if (facilityOverviewBody) {
     const calendarGuidance = currentNonClinical && currentDirectorViewEnabled ? "" : " Please use My calendar for now.";
     facilityOverviewBody.classList.remove("is-working-together");
-    facilityOverviewBody.innerHTML = `<div class="facility-overview-results"><article class="issue-card" role="status"><p>${escapeHtml(`${FACILITY_OVERVIEW_MAINTENANCE_MESSAGE}${calendarGuidance}`)}</p></article></div>`;
+    facilityOverviewBody.innerHTML = `<div class="facility-overview-results"><article class="issue-card" role="status"><p>${escapeHtml(loading ? "Loading At a glance…" : `${FACILITY_OVERVIEW_MAINTENANCE_MESSAGE}${calendarGuidance}`)}</p></article></div>`;
   }
   syncFacilityOverviewAccess();
   syncFacilityOverviewNavigationState();
@@ -9390,7 +9436,8 @@ function resetFacilityOverviewScroll() {
 }
 
 function facilityOverviewFacilityOptions() {
-  if (currentFacilityOverviewAccess.mode !== "all") return facilityAccessKeys(currentFacilityOverviewAccess);
+  if (facilityOverviewState.tab === "staff" && facilityOverviewState.directoryFacilityKeys?.length) return facilityOverviewState.directoryFacilityKeys;
+  if (currentFacilityOverviewAccess.mode !== "all") return facilityOverviewRosterAccessKeys();
   if (Array.isArray(currentFacilityOverviewAccess.readerFacilityKeys)) return currentFacilityOverviewAccess.readerFacilityKeys;
   const values = new Set();
   for (const source of ["mmc", "ddh", "casey", "mch", "vhh"]) {
@@ -9656,12 +9703,17 @@ function rememberFacilityOverviewTabForCurrentAccount() {
 }
 
 function beginFacilityOverviewAccountSession() {
+  cancelFacilityOverviewAccessWait();
+  currentFacilityOverviewAccessReady = false;
+  clinicalOnShiftStartupPending = true;
+  clinicalOnShiftWindowPromise = null;
   rememberFacilityOverviewTabForCurrentAccount();
   facilityOverviewSessionNeedsInitialization = true;
 }
 
 function resetFacilityOverviewSessionState() {
   facilityOverviewState.togetherContext = null;
+  facilityOverviewState.startupShiftWindow = null;
   cancelFacilityOverviewDataRequest();
   const today = formatDateKey(new Date());
   const currentTerm = australianTermForDate(new Date());
@@ -9669,7 +9721,7 @@ function resetFacilityOverviewSessionState() {
   const currentTermEnd = formatDateKey(addDays(currentTerm.end, -1));
   const directorPreference = currentNonClinical && currentDirectorViewEnabled ? directorHospitalPreference() : "";
   const defaultTab = directorPreference === "ALL" ? "staff" : "on-shift";
-  facilityOverviewState.tab = savedFacilityOverviewTabForCurrentAccount() || defaultTab;
+  facilityOverviewState.tab = currentNonClinical ? savedFacilityOverviewTabForCurrentAccount() || defaultTab : "on-shift";
   facilityOverviewState.date = contactOperationalDate();
   facilityOverviewState.followOperationalDate = true;
   facilityOverviewState.facilityKey = directorPreference || "";
@@ -9711,25 +9763,33 @@ function resetFacilityOverviewSessionState() {
   facilityOverviewState.togetherContent = "";
   facilityOverviewState.togetherHasSearched = false;
   facilityOverviewState.togetherPinnedDoctors = [];
-  facilityOverviewState.togetherUserClearedAll = true;
+  facilityOverviewState.togetherUserClearedAll = false;
+  facilityOverviewState.togetherTerms = [];
+  facilityOverviewState.directoryFacilityKeys = [];
   facilityOverviewSessionNeedsInitialization = false;
 }
 
 function applyFacilityOverviewSiteScope() {
   if (currentFacilityOverviewAccess.mode === "all") return;
-  const facilities = facilityAccessKeys(currentFacilityOverviewAccess);
-  if (facilityOverviewState.tab !== "together" && currentFacilityOverviewAccess.mode === "denied") facilityOverviewState.tab = "together";
-  if (facilities.length === 1) {
+  const facilities = facilityOverviewRosterAccessKeys();
+  if (!["together", "staff"].includes(facilityOverviewState.tab) && currentFacilityOverviewAccess.mode === "denied" && !currentFacilityOverviewShiftWindow()) facilityOverviewState.tab = "together";
+  if (facilityOverviewState.tab === "staff") {
+    const directoryFacilities = facilityOverviewState.directoryFacilityKeys || [];
+    if (facilityOverviewState.facilityKey !== "ALL" && !directoryFacilities.includes(facilityOverviewState.facilityKey)) facilityOverviewState.facilityKey = "ALL";
+  } else if (facilities.length === 1) {
     facilityOverviewState.facilityKey = facilities[0];
     facilityOverviewState.preferredFacilityKey = facilities[0];
   } else if (facilityOverviewState.facilityKey !== "ALL" && !facilities.includes(facilityOverviewState.facilityKey)) {
     facilityOverviewState.facilityKey = facilities.includes(currentFacilityOverviewAccess.preferredFacilityKey) ? currentFacilityOverviewAccess.preferredFacilityKey : facilities[0] || "";
   }
-  facilityOverviewState.byStreamRows = (facilityOverviewState.byStreamRows || []).map(row => ({ ...row, facilityKey: facilities.includes(row.facilityKey) ? row.facilityKey : facilities[0] || "" }));
-  facilityOverviewState.byStreamCatalog = (facilityOverviewState.byStreamCatalog || []).filter(entry => facilities.includes(entry.facilityKey));
+  const streamFacilities = facilityAccessKeys(currentFacilityOverviewAccess);
+  facilityOverviewState.byStreamRows = (facilityOverviewState.byStreamRows || []).map(row => ({ ...row, facilityKey: streamFacilities.includes(row.facilityKey) ? row.facilityKey : streamFacilities[0] || "" }));
+  facilityOverviewState.byStreamCatalog = (facilityOverviewState.byStreamCatalog || []).filter(entry => streamFacilities.includes(entry.facilityKey));
 }
 
 function resetFacilityOverviewAccessForEnteredUser() {
+  cancelFacilityOverviewAccessWait();
+  currentFacilityOverviewAccessReady = false;
   facilityOverviewState.togetherContext = null;
   currentFacilityOverviewMaintenance = true;
   currentFacilityOverviewEnabled = false;
@@ -9752,14 +9812,60 @@ function facilityOverviewTargetEmail() {
   return normalizeEmail(adminViewingEmail);
 }
 
-async function openFacilityOverview(options = {}) {
+async function loadFacilityOverviewAvailableTerms() {
+  const transition = { runId: calendarTransitionRunId, expectedKey: activeCalendarTransitionKey() };
+  const subject = facilityOverviewTargetEmail() || currentUserEmail;
+  try {
+    const response = await fetch("/api/state", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "queryFacilityOverviewTerms", email: authUserEmail || currentUserEmail,
+        password: authUserPassword || currentUserPassword, targetEmail: facilityOverviewTargetEmail() }) });
+    const data = await readJsonResponse(response, "Could not load available roster terms.");
+    if (!calendarTransitionStillCurrent(transition) || subject !== (facilityOverviewTargetEmail() || currentUserEmail)) return;
+    const options = terms => [...new Map((terms || []).map(term => [term.termStart,
+      { value: term.termStart, label: formatAustralianTermLabel(australianTermForDate(parseDateOnly(term.termStart))) }])).values()].sort((a,b) => b.value.localeCompare(a.value));
+    facilityOverviewState.togetherTerms = options(data.terms);
+    facilityOverviewState.staffTerms = options(data.directoryTerms);
+    facilityOverviewState.directoryFacilityKeys = data.directoryFacilityKeys || [];
+    for (const [key, terms] of [["togetherTermStart", facilityOverviewState.togetherTerms], ["staffTermStart", facilityOverviewState.staffTerms]]) {
+      if (!terms.some(term => term.value === facilityOverviewState[key])) facilityOverviewState[key] = terms[0]?.value || "";
+    }
+  } catch (error) {
+    if (calendarTransitionStillCurrent(transition)) console.warn("Could not load published roster terms", error);
+  }
+}
+
+function openFacilityOverview(options = {}) {
+  if (facilityOverviewOpeningPromise) return facilityOverviewOpeningPromise;
+  const runId = ++facilityOverviewOpeningRunId;
+  facilityOverviewNavigationLocked = true;
+  const opening = performFacilityOverviewOpening(options, runId).finally(() => {
+    if (facilityOverviewOpeningPromise === opening) {
+      facilityOverviewOpeningPromise = null;
+      facilityOverviewNavigationLocked = false;
+      facilityOverviewIgnoreToggleUntil = Date.now() + 350;
+    }
+  });
+  facilityOverviewOpeningPromise = opening;
+  return opening;
+}
+
+async function performFacilityOverviewOpening(options = {}, openingRunId) {
   if (!canUseFacilityOverview()) return;
+  const subjectKey = activeCalendarTransitionKey();
+  const transitionId = calendarTransitionRunId;
+  if (!currentFacilityOverviewAccessReady) {
+    renderFacilityOverviewMaintenance({ loading: true });
+    const ready = await waitForFacilityOverviewAccess();
+    if (!ready || openingRunId !== facilityOverviewOpeningRunId || subjectKey !== activeCalendarTransitionKey()
+        || transitionId !== calendarTransitionRunId || !isFacilityOverviewOpen() || !canUseFacilityOverview()) return;
+  }
   if (currentFacilityOverviewMaintenance) {
     renderFacilityOverviewMaintenance();
     return;
   }
   refreshFacilityOverviewPreferredFacility();
   if (facilityOverviewSessionNeedsInitialization) resetFacilityOverviewSessionState();
+  if (!currentNonClinical && !options.preserveFacility && !options.preserveStaffTerm) facilityOverviewState.tab = "on-shift";
   if (options.preserveFacility !== true && options.preserveStaffTerm !== true) {
     const directorPreference = currentNonClinical && currentDirectorViewEnabled ? directorHospitalPreference() : "";
     const preferred = String(facilityOverviewState.preferredFacilityKey || "").toUpperCase();
@@ -9782,13 +9888,23 @@ async function openFacilityOverview(options = {}) {
       facilityOverviewState.byStreamContent = "";
     }
   }
-  // The On shift and Staff tabs also need the published metadata manifest to
-  // discover newly enabled EDs. Previously only By stream loaded it, leaving
-  // the selector limited to hospitals already present in the selected
-  // doctor's local calendar. Shared metadata is R2-backed and performs no D1
-  // query; access scoping is still enforced by the server response.
-  if (currentFacilityOverviewAccess.mode === "denied") facilityOverviewState.tab = "together";
-  else await loadFacilityOverviewMetadata();
+  if (currentFacilityOverviewAccess.mode === "denied" && !currentFacilityOverviewShiftWindow()) facilityOverviewState.tab = "together";
+  applyFacilityOverviewSiteScope();
+  const openingTab = facilityOverviewState.tab;
+  facilityOverviewState.content = `<article class="issue-card" role="status"><p>Loading rostered staff…</p></article>`;
+  facilityOverviewState.onShiftData = null;
+  form?.classList.add("is-facility-overview-active");
+  previewSection?.classList.add("hidden");
+  facilityOverviewSection?.classList.remove("hidden");
+  resetFacilityOverviewScroll();
+  syncFacilityOverviewNavigationState();
+  renderFacilityOverview();
+  await Promise.all([
+    loadFacilityOverviewAvailableTerms(),
+    currentFacilityOverviewAccess.mode === "denied" ? Promise.resolve() : loadFacilityOverviewMetadata(),
+  ]);
+  if (openingRunId !== facilityOverviewOpeningRunId || subjectKey !== activeCalendarTransitionKey()
+      || transitionId !== calendarTransitionRunId || !isFacilityOverviewOpen() || facilityOverviewState.tab !== openingTab) return;
   const facilities = facilityOverviewFacilityOptions();
   if (!facilityOverviewState.facilityKey || (facilityOverviewState.facilityKey !== "ALL" && !facilities.includes(facilityOverviewState.facilityKey))) {
     facilityOverviewState.facilityKey = facilities[0] || "MMC";
@@ -9799,7 +9915,8 @@ async function openFacilityOverview(options = {}) {
   resetFacilityOverviewScroll();
   syncFacilityOverviewNavigationState();
   if (facilityOverviewState.tab === "staff" && !options.preserveStaffTerm) {
-    facilityOverviewState.staffTermStart = formatDateKey(australianTermForDate(new Date()).start);
+    const current = formatDateKey(australianTermForDate(new Date()).start);
+    facilityOverviewState.staffTermStart = facilityOverviewState.staffTerms.some(term => term.value === current) ? current : facilityOverviewState.staffTerms[0]?.value || "";
   }
   renderFacilityOverview();
   if (facilityOverviewState.tab === "staff") await loadFacilityOverviewStaff();
@@ -9826,6 +9943,10 @@ async function openFacilityOverviewByStream() {
 }
 
 function closeFacilityOverview() {
+  cancelFacilityOverviewAccessWait();
+  clinicalOnShiftStartupPending = false;
+  facilityOverviewOpeningRunId += 1;
+  facilityOverviewOpeningPromise = null;
   cancelFacilityOverviewDataRequest();
   collapseFacilityOverviewContactReview();
   stopFacilityOverviewContactRefresh();
@@ -9865,6 +9986,10 @@ function facilityOverviewRequestWasCancelled(error) {
 }
 
 function renderFacilityOverview() {
+  if (!currentFacilityOverviewAccessReady) {
+    renderFacilityOverviewMaintenance({ loading: true });
+    return;
+  }
   if (currentFacilityOverviewMaintenance) {
     renderFacilityOverviewMaintenance();
     return;
@@ -9987,9 +10112,7 @@ function renderFacilityOverviewHeader() {
   const togetherView = facilityOverviewState.tab === "together";
   const byStreamView = facilityOverviewState.tab === "by-stream";
   const selectedTerm = australianTermForDate(parseDateOnly(facilityOverviewState.staffTermStart || formatDateKey(new Date())));
-  const terms = currentFacilityOverviewAccess.mode !== "all"
-      ? [{ value: currentFacilityOverviewAccess.termStart || formatDateKey(australianTermForDate(new Date()).start), label: formatAustralianTermLabel(australianTermForDate(new Date())) }]
-      : facilityOverviewState.staffTerms.length ? facilityOverviewState.staffTerms : [{ value: formatDateKey(selectedTerm.start), label: formatAustralianTermLabel(selectedTerm) }];
+  const terms = facilityOverviewState.staffTerms || [];
   const previousTerm = selectedTerm.termNumber === 1
     ? buildAustralianTerm(selectedTerm.year - 1, 4, startMonthIndexForTerm(4))
     : buildAustralianTerm(selectedTerm.year, selectedTerm.termNumber - 1, startMonthIndexForTerm(selectedTerm.termNumber - 1));
@@ -10000,7 +10123,10 @@ function renderFacilityOverviewHeader() {
     <div class="preview-head facility-overview-preview-head">
       <div class="preview-doctor-control">
         <span>Doctor</span>
-        <strong>${escapeHtml(displayName)}</strong>
+        ${canUseCreatorDoctorSwitcher() ? `<select data-facility-overview-doctor aria-label="Doctor">
+          <option value="${MOBILE_RETURN_TO_CREATOR_VALUE}">Back to creator</option>
+          ${doctorPickerOptions().map(option => `<option value="${escapeHtml(option.key)}" ${normalizeRosterName(option.key) === normalizeRosterName(doctor?.key) ? "selected" : ""}>${escapeHtml(option.displayName)}</option>`).join("")}
+        </select>` : `<strong>${escapeHtml(displayName)}</strong>`}
       </div>
       <div class="preview-toolbar">
         <div class="preview-range-controls facility-overview-range-controls" aria-label="${byStreamView ? "By stream date range" : "Calendar range; unavailable in At a glance"}">
@@ -10300,20 +10426,15 @@ function initializeFacilityOverviewTogetherState() {
   const identities = new Set(options.map((doctor) => doctor.identity));
   facilityOverviewState.togetherStaffKeys = facilityOverviewState.togetherStaffKeys.map((key) => identities.has(key) ? key : "");
   if (!facilityOverviewState.togetherStaffKeys[0] && !facilityOverviewState.togetherUserClearedAll) {
-    const currentIdentity = doctorIdentityKey(selectedDoctor());
-    if (identities.has(currentIdentity)) facilityOverviewState.togetherStaffKeys[0] = currentIdentity;
+    const viewerKeys = new Set([activeDoctorProfile?.doctorKey, currentDefaultDoctorKey,
+      ...(currentRosterClaims || []).map(claim => claim.key)].map(normalizeRosterName).filter(Boolean));
+    const viewer = options.find(doctor => viewerKeys.has(normalizeRosterName(doctor.key)));
+    if (viewer) facilityOverviewState.togetherStaffKeys[0] = viewer.identity;
   }
 }
 
 function facilityOverviewTogetherTermOptions() {
-  const current = australianTermForDate(new Date());
-  const terms = new Map();
-  const add = (term) => terms.set(formatDateKey(term.start), { value: formatDateKey(term.start), label: formatAustralianTermLabel(term) });
-  for (let year = current.year - 1; year <= current.year + 1; year += 1) {
-    for (let termNumber = 1; termNumber <= 4; termNumber += 1) add(buildAustralianTerm(year, termNumber, startMonthIndexForTerm(termNumber)));
-  }
-  for (const term of facilityOverviewState.staffTerms || []) terms.set(term.value, term);
-  return [...terms.values()].sort((left, right) => right.value.localeCompare(left.value));
+  return facilityOverviewState.togetherTerms || [];
 }
 
 function renderFacilityOverviewTogetherProposal() {
@@ -10358,7 +10479,7 @@ function renderFacilityOverviewTogetherProposal() {
             <label><input type="radio" name="facility-overview-together-range" value="dates" data-facility-overview-together-range-mode ${rangeMode === "dates" ? "checked" : ""}><span>Date range</span></label>
           </div>
           ${rangeMode === "term" ? `
-            <label class="field"><span>Term</span><select data-facility-overview-together-term>${terms.map((term) => `<option value="${escapeHtml(term.value)}" ${term.value === facilityOverviewState.togetherTermStart ? "selected" : ""}>${escapeHtml(term.label)}</option>`).join("")}</select></label>
+            <label class="field"><span>Term</span><select data-facility-overview-together-term>${terms.length ? "" : `<option value="">No published terms available</option>`}${terms.map((term) => `<option value="${escapeHtml(term.value)}" ${term.value === facilityOverviewState.togetherTermStart ? "selected" : ""}>${escapeHtml(term.label)}</option>`).join("")}</select></label>
           ` : `
             <div class="facility-overview-together-dates">
               <label class="field"><span>From</span><input type="date" value="${escapeHtml(facilityOverviewState.togetherFrom)}" data-facility-overview-together-date="from"></label>
@@ -10439,6 +10560,10 @@ async function loadFacilityOverviewTogether() {
     initializeFacilityOverviewTogetherState();
     const options = facilityOverviewTogetherStaffOptions();
     const selectedDoctors = facilityOverviewState.togetherStaffKeys.map(identity => options.find(doctor => doctor.identity === identity)).filter(Boolean);
+    if (!selectedDoctors.length) {
+      facilityOverviewState.togetherContent = renderFacilityOverviewCoverageNotice(context) + renderFacilityOverviewTogetherEmptyState();
+      return;
+    }
     const cacheQuery = { startDate, endDate, scopeRevision: context.scopeRevision,
       doctorKeys: [...new Set(selectedDoctors.flatMap(facilityOverviewTogetherDoctorKeys))].sort(),
       sourceTypes: facilityOverviewState.togetherFacilityKey === "ALL" ? [] : [facilityOverviewState.togetherFacilityKey] };
@@ -10467,11 +10592,7 @@ async function loadFacilityOverviewTogether() {
 }
 
 function renderFacilityOverviewTogetherResults(rows, selectedDoctors, range) {
-  if (!selectedDoctors.length) {
-    const doctors = [...new Map((rows || []).map(row => [`${row.sourceType}|${row.doctorKey}`, { key: row.doctorKey, displayName: row.displayName || row.doctorKey, sourceType: row.sourceType, identity: `${row.sourceType}|${row.doctorKey}` }])).values()];
-    if (!doctors.length) return `<article class="issue-card"><p>No rostered shifts were found in the available authorised history for this period.</p></article>`;
-    return doctors.sort((a,b) => a.displayName.localeCompare(b.displayName)).map(doctor => renderFacilityOverviewTogetherResults(rows.filter(row => row.sourceType === doctor.sourceType && row.doctorKey === doctor.key), [doctor], range)).join("");
-  }
+  if (!selectedDoctors.length) return renderFacilityOverviewTogetherEmptyState();
   const ownerByRosterKey = new Map();
   for (const doctor of selectedDoctors) {
     for (const key of facilityOverviewTogetherDoctorKeys(doctor)) ownerByRosterKey.set(key, doctor.identity);
@@ -11244,9 +11365,7 @@ function refreshFacilityOverviewStaffActionContent() {
 }
 
 function facilityOverviewPermittedStaffTerms(coverage) {
-  if (currentFacilityOverviewAccess.mode === "all") return facilityOverviewTermsFromCoverage(coverage);
-  const term = australianTermForDate(parseDateOnly(currentFacilityOverviewAccess.termStart || formatDateKey(new Date())));
-  return [{ value: formatDateKey(term.start), label: formatAustralianTermLabel(term) }];
+  return facilityOverviewState.staffTerms || [];
 }
 
 function facilityOverviewOrdinaryDateAttributes() {
@@ -11257,9 +11376,7 @@ function facilityOverviewOrdinaryDateAttributes() {
 
 async function loadFacilityOverviewStaff() {
   if (!canUseFacilityOverview() || currentFacilityOverviewMaintenance || facilityOverviewState.tab !== "staff") return;
-  const term = currentFacilityOverviewAccess.mode === "all"
-    ? australianTermForDate(parseDateOnly(facilityOverviewState.staffTermStart || formatDateKey(new Date())))
-    : australianTermForDate(parseDateOnly(currentFacilityOverviewAccess.termStart || formatDateKey(new Date())));
+  const term = australianTermForDate(parseDateOnly(facilityOverviewState.staffTermStart || formatDateKey(new Date())));
   facilityOverviewState.staffTermStart = formatDateKey(term.start);
   const requestId = facilityOverviewState.requestId + 1;
   facilityOverviewState.requestId = requestId;
@@ -11463,7 +11580,7 @@ function renderFacilityOverviewCoverageNotice(data) {
 }
 
 function renderFacilityOverviewStaffResults(data, term) {
-  const coverageNotice = renderFacilityOverviewCoverageNotice(data);
+  const coverageNotice = renderFacilityOverviewCoverageNotice(data) + (data.directoryOnly ? `<p class="facility-overview-filter-hint">Staff names are available across hospitals. Shift details remain limited to your authorised hospitals for the selected period.</p>` : "");
   const canUseStaffActions = canUseFacilityOverview();
   const designations = new Map((data.designations || []).map((designation) => [`${designation.sourceType}|${designation.doctorKey}`, designation]));
   const seniorityOverrides = new Map((data.seniorityOverrides || []).map((override) => [`${override.sourceType}|${override.doctorKey}`, override]));
@@ -14620,9 +14737,9 @@ function accountCalendarContextForEmail(email) {
 }
 
 async function validateClaimedAccountCalendarInBackground(context = {}, options = {}) {
-  if (options.preserveRenderedSnapshot && visibleSnapshotIsCurrent({ requireNotStale: true })) {
-    return;
-  }
+  // A current calendar cache says nothing about this account's permissions.
+  // Always refresh the identity/access envelope when switching accounts.
+  const cachedCalendarCurrent = options.preserveRenderedSnapshot && visibleSnapshotIsCurrent({ requireNotStale: true });
   const targetEmail = normalizeEmail(context.ownerEmail || context.ownerId);
   const cachedSnapshot = options.preserveRenderedSnapshot ? currentSnapshot : null;
   const cachedRevision = cachedSnapshot?.calendarRevision || "";
@@ -14650,6 +14767,10 @@ async function validateClaimedAccountCalendarInBackground(context = {}, options 
     renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot?.session || {});
     setStatus(currentSnapshotStale ? "Refreshing calendar..." : "Calendar loaded.");
     renderLoginState();
+  }
+  if (cachedCalendarCurrent) {
+    renderLoginState();
+    return;
   }
   await hydrateAuthenticatedWorkspace({
     adminTargetEmail: targetEmail === OWNER_EMAIL ? "" : targetEmail,
@@ -14702,9 +14823,6 @@ async function validateDoctorProfileCalendarInBackground(doctor, previousState, 
     setStatus("Calendar is up to date.");
   } else {
     throw new Error(`${doctor.displayName} calendar is not ready yet. Try again in a moment.`);
-  }
-  if (calendarTransitionStillCurrent(options.transition) && activeDoctorProfile?.id === options.profile?.id) {
-    void loadDoctorProfileFacilityOverviewAccess(activeDoctorProfile);
   }
 }
 
@@ -14845,6 +14963,7 @@ async function enterDoctorProfileView(doctor) {
   primeInsightsAccessForCurrentView();
   const accountSwitchStartedAt = performance.now();
   const transition = beginCalendarTransition();
+  void loadDoctorProfileFacilityOverviewAccess(profile, { transition });
   localStorage.setItem(CURRENT_EMAIL_KEY, currentUserEmail);
   sessionStorage.setItem(CURRENT_PASSWORD_KEY, currentUserPassword);
   setStatus(`Opening ${doctor.displayName}...`);
@@ -15082,7 +15201,7 @@ async function fetchDoctorProfileState(profile, options = {}) {
   return data;
 }
 
-async function loadDoctorProfileFacilityOverviewAccess(profile) {
+async function loadDoctorProfileFacilityOverviewAccess(profile, options = {}) {
   if (!profile?.id || !isCreatorAuthenticated()) return;
   try {
     const response = await fetch("/api/state", {
@@ -15100,15 +15219,15 @@ async function loadDoctorProfileFacilityOverviewAccess(profile) {
       }),
     });
     const data = await readJsonResponse(response, "Could not load this profile's At a glance access.");
-    if (activeCalendarMode() !== "doctor-profile" || activeDoctorProfile?.id !== profile.id) return;
+    if (!calendarTransitionStillCurrent(options.transition) || activeCalendarMode() !== "doctor-profile" || activeDoctorProfile?.id !== profile.id) return;
     activeDoctorProfile = { ...activeDoctorProfile, facilityOverviewAccountEmail: normalizeEmail(data.facilityOverviewAccountEmail) };
     currentFacilityOverviewEnabled = data.facilityOverviewEnabled === true;
-    if (data.state?.session) rememberSessionBaseline(data.state.session);
-  currentFacilityOverviewMaintenance = data.facilityOverviewMaintenance !== false;
+    currentFacilityOverviewMaintenance = data.facilityOverviewMaintenance !== false;
     currentFacilityOverviewAutomaticLaunchEnabled = data.facilityOverviewAutomaticLaunchEnabled === true;
     currentFacilityOverviewAccess = sanitizeFacilityOverviewAccess(data.facilityOverviewAccess);
     applyFacilityOverviewSiteScope();
     syncFacilityOverviewAccess();
+    markFacilityOverviewAccessReady();
   } catch (error) {
     // Keep the feature safely unavailable if its independent access check is
     // temporarily unavailable; do not fail the calendar/profile switch.
@@ -15371,6 +15490,7 @@ async function returnToCreatorCalendar(options = {}) {
 async function returnToCreatorAccount(options = {}) {
   const previousState = captureCalendarViewState();
   beginFacilityOverviewAccountSession();
+  resetFacilityOverviewAccessForEnteredUser();
   const accountSwitchStartedAt = performance.now();
   const creatorEmail = authUserEmail || OWNER_EMAIL;
   const creatorPassword = authUserPassword || currentUserPassword;
@@ -16705,6 +16825,7 @@ function finishContainedCreatorStartup(options = {}, loginStartedAt = 0) {
     renderDoctorState();
     syncActionState();
   }
+  launchClinicalOnShiftWorkspace(options, loginStartedAt);
   markLoginPhase("workspaceRendered", loginStartedAt);
   setStatus(hasSavedCalendar ? "Checking calendar for updates..." : "Loading calendar...");
   queuePostLoginSnapshotRefresh({
@@ -16733,16 +16854,46 @@ function launchNonClinicalDirectorWorkspace(options = {}, loginStartedAt = 0) {
   return true;
 }
 
+function requestClinicalStartupShiftWindow(options = {}, loginStartedAt = 0) {
+  if (clinicalOnShiftWindowPromise) return;
+  const subjectKey = activeCalendarTransitionKey();
+  const transitionId = calendarTransitionRunId;
+  clinicalOnShiftWindowPromise = (async () => {
+    try {
+      const response = await fetch("/api/state", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "queryFacilityOverviewLaunchWindow", email: authUserEmail || currentUserEmail,
+          password: authUserPassword || currentUserPassword, targetEmail: facilityOverviewTargetEmail() }) });
+      const data = await readJsonResponse(response, "Could not check the shift opening window.");
+      if (!clinicalOnShiftStartupPending || subjectKey !== activeCalendarTransitionKey() || transitionId !== calendarTransitionRunId) return;
+      if (data.shiftWindow) launchClinicalOnShiftWorkspace({ ...options, shiftWindow: data.shiftWindow }, loginStartedAt);
+    } catch {
+      // A startup check cannot block access to the personal calendar.
+    }
+  })();
+}
+
 function launchClinicalOnShiftWorkspace(options = {}, loginStartedAt = 0) {
-  if (!currentFacilityOverviewAutomaticLaunchEnabled || currentFacilityOverviewMaintenance || currentNonClinical || !canUseFacilityOverview() || !currentFacilityOverviewAccess.workingToday || !calendarTransitionStillCurrent(options.transition)) return false;
-  if (facilityOverviewSessionNeedsInitialization) resetFacilityOverviewSessionState();
-  facilityOverviewState.tab = "on-shift";
-  facilityOverviewState.followOperationalDate = true;
-  facilityOverviewState.date = contactOperationalDate();
-  if (!facilityOverviewIsSiteScoped() && currentFacilityOverviewAccess.preferredFacilityKey) {
-    facilityOverviewState.facilityKey = currentFacilityOverviewAccess.preferredFacilityKey;
-    facilityOverviewState.preferredFacilityKey = currentFacilityOverviewAccess.preferredFacilityKey;
+  if (!clinicalOnShiftStartupPending || !currentFacilityOverviewAutomaticLaunchEnabled || currentFacilityOverviewMaintenance
+      || currentNonClinical || !canUseFacilityOverview() || !calendarTransitionStillCurrent(options.transition)) return false;
+  const snapshotReady = currentSnapshot?.preview && !currentSnapshotStale && calendarSnapshotMatchesActiveContext(currentSnapshot);
+  const shift = options.shiftWindow || (snapshotReady ? onShiftLaunchWindow(currentSnapshot.preview.events || [], options.now || new Date()) : null);
+  if (!shift) {
+    requestClinicalStartupShiftWindow(options, loginStartedAt);
+    return false;
   }
+  if (!options.shiftWindow && currentFacilityOverviewAccess.mode !== "all" && !facilityAccessKeys(currentFacilityOverviewAccess).includes(shift.facilityKey)) {
+    requestClinicalStartupShiftWindow(options, loginStartedAt);
+    return false;
+  }
+  if (facilityOverviewSessionNeedsInitialization) resetFacilityOverviewSessionState();
+  clinicalOnShiftStartupPending = false;
+  facilityOverviewState.tab = "on-shift";
+  facilityOverviewState.startupShiftWindow = shift;
+  // Keep the shift's roster date after midnight, including the hour after it ends.
+  facilityOverviewState.followOperationalDate = false;
+  facilityOverviewState.date = shift.rosterDate;
+  facilityOverviewState.facilityKey = shift.facilityKey;
+  facilityOverviewState.preferredFacilityKey = shift.facilityKey;
   applyFacilityOverviewSiteScope();
   void openFacilityOverview({ preserveDate: true, preserveFacility: true }).then(() => {
     if (calendarTransitionStillCurrent(options.transition)) markLoginPhase("onShiftOverviewLoaded", loginStartedAt);
@@ -17062,6 +17213,7 @@ async function hydrateAuthenticatedWorkspace(options = {}, loginStartedAt = 0) {
         transition: options.transition,
       });
     }
+    launchClinicalOnShiftWorkspace(options, loginStartedAt);
     // A non-clinical Director has no personal calendar to land on. Clinical
     // users, including Directors who still work shifts, retain their calendar
     // until they explicitly choose the Director overview.
@@ -17117,6 +17269,7 @@ function queuePostLoginSnapshotRefresh(options = {}) {
           suppressInsightWarmup: true,
           suppressCloudSave: true,
         });
+        launchClinicalOnShiftWorkspace(options, options.loginStartedAt);
         markLoginPhase("backgroundCalendarUpdated", options.loginStartedAt);
         setStatus("Calendar refreshed.");
         return;
@@ -17446,6 +17599,7 @@ function applyCloudStateIdentity(data) {
   applyFacilityOverviewSiteScope();
   syncFacilityOverviewAccess();
   if (data.realName) saveLocalAccountIdentity(data.realName);
+  markFacilityOverviewAccessReady();
 }
 
 function applyAvailableRosterDoctorsFromData(data) {
@@ -17475,6 +17629,7 @@ function applyCloudStateContext(data) {
   applyIssueConfig(data.issueConfig);
   if (previousInsightsEnabled !== currentInsightsEnabled && latestPreview) rebuildClientPreview();
   syncFacilityOverviewAccess();
+  markFacilityOverviewAccessReady();
 }
 
 async function applyCloudStateSnapshot(data, options = {}) {
@@ -20568,8 +20723,9 @@ async function bootstrapApp() {
       queueStoredCalendarSnapshotMaintenance();
       return;
     }
+    const openedOnShift = launchClinicalOnShiftWorkspace({ transition }, loginStartedAt);
     const inlineSnapshotReady = loginSnapshotReadyForRender();
-    if (!renderedCachedSnapshot && inlineSnapshotReady) {
+    if (!openedOnShift && !renderedCachedSnapshot && inlineSnapshotReady) {
       renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot?.session || {});
       markLoginPhase("cachedCalendarRendered", loginStartedAt);
       markLoginPhase("firstCalendarPaint", loginStartedAt);

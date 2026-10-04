@@ -1,3 +1,4 @@
+import { onShiftLaunchWindow } from "../../public/static/shift-launch-policy.js";
 import { FACILITY_ACCESS_VERSION, isAllSiteSeniority, facilityAccessKeys, facilityAccessAllows, restrictedFacilityScope, validFacilityDateRange, nextFacilityDate, filterFacilityRowsBySegments } from "../../public/static/facility-access-policy.js";
 import { publishedIdentityDirectory, publishedClaimSeniorities, availableIdentitySuggestions, saveBoundedAccountClaims, MAX_ACCOUNT_CLAIMS } from '../_lib/bounded-identity.js';
 import { handleManualRosterImport, deactivateManualRosterFiles } from "../_lib/manual-roster-management.js";
@@ -14,7 +15,7 @@ import { DDH_CONTACT_LIST_SOURCE_ID, MMC_CONTACT_LIST_SOURCE_ID, contactRosterAs
 import { requestQueuedRosterProcessing } from "../_lib/automation-dispatch.js";
 import { advancedRosterMaintenanceEnabled, reviewedRosterFactLimit, rosterStatusSummaryEnabled, rosterWritesExplicitlyPaused, rosterWritePausedResponse } from "../_lib/roster-automation-guard.js";
 import { guardedFetch, localFeatureDisabledResponse } from "../_lib/outbound-network.js";
-import { loadPublishedRosterDoctors, loadPublishedFacilityDays, loadPublishedPreviousDdhNight, loadPublishedFacilityMetadata, loadPublishedFacilityRange, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata } from "../_lib/facility-overview-cache.js";
+import { loadPublishedRosterDoctors, loadPublishedFacilityDays, loadPublishedPreviousDdhNight, loadPublishedFacilityMetadata, loadPublishedFacilityTerms, loadPublishedFacilityRange, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata } from "../_lib/facility-overview-cache.js";
 import { loadPublishedFacilityContacts, publishFacilityContactResolutions } from "../_lib/facility-contact-cache.js";
 import { issueFacilityContactAccessToken, verifyFacilityContactAccessToken } from "../_lib/facility-contact-access.js";
 import { facilityBuildSources, facilityContactReaderSources, facilityLegacyReadsPaused, facilityOverviewAutomaticLaunchEnabled, facilityOverviewMaintenanceForViewer, facilityOverviewMaintenanceMode, facilityReaderSources, facilityReaderSelection, facilityReadRoute, facilityRolloutCohortEligible } from "../_lib/facility-rollout.js";
@@ -126,6 +127,8 @@ const DOCTOR_PROFILE_SNAPSHOT_BUILDING_RETRY_MS = 2 * 60 * 1000;
 const SNAPSHOT_GLOBAL_WARMUP_LIMIT = 25;
 const FACILITY_OVERVIEW_STREAM_SENIORITIES = new Set(["SMS", "CMO", "Senior Registrar", "Transitional/Intermediate Registrar", "Junior Registrar", "HMO", "Intern", "NP", "Physio", "Unknown", "ALL"]);
 const FACILITY_OVERVIEW_MAINTENANCE_ACTIONS = new Set([
+  "queryFacilityOverviewLaunchWindow",
+  "queryFacilityOverviewTerms",
   "queryFacilityOverviewMetadata",
   "queryFacilityOverviewByStream",
   "queryFacilityOverviewOnShift",
@@ -2016,6 +2019,54 @@ export async function onRequestPost(context) {
       }
     }
 
+    const ownPublishedShiftWindow = async () => {
+      const claims = sanitizeClaims(facilityOverviewSubject.record.claims);
+      if (!claims.length || claims.length > MAX_ACCOUNT_CLAIMS) return null;
+      const selection = readerSelectionFor([...new Set(claims.map(claim => claim.sourceType))], true);
+      if (selection.route !== "shared") return null;
+      const today = australianDateKey();
+      const published = await loadPublishedFacilityRange(context.env.ROSTER_FILES, selection.sources,
+        isoDateKey(addUtcDays(today, -1)), isoDateKey(addUtcDays(today, 1)), today);
+      const identities = new Set(claims.map(claim => `${claim.sourceType}|${normalizeRosterName(claim.key)}`));
+      const events = (published.events || []).filter(row => identities.has(`${row.sourceType}|${row.doctorKey}`)).map(row => row.event);
+      return onShiftLaunchWindow(events);
+    };
+    const shiftWindowForRequestedRoster = async (date, facilityKey) => {
+      if (facilityKey === "ALL" || ![australianDateKey(), isoDateKey(addUtcDays(australianDateKey(), -1)), isoDateKey(addUtcDays(australianDateKey(), 1))].includes(date)) return null;
+      const window = await ownPublishedShiftWindow();
+      return window?.facilityKey === facilityKey && window.rosterDate === date ? window : null;
+    };
+
+    if (action === "queryFacilityOverviewLaunchWindow") {
+      if (!facilityOverviewEnabled()) return facilityOverviewAccessDeniedResponse();
+      return Response.json({ ok: true, shiftWindow: await ownPublishedShiftWindow() });
+    }
+
+    if (action === "queryFacilityOverviewTerms") {
+      if (!facilityOverviewEnabled()) return facilityOverviewAccessDeniedResponse();
+      const access = await facilityOverviewAccess();
+      const selection = readerSelectionFor(["mmc", "ddh", "casey", "mch", "vhh"], true);
+      if (selection.route !== "shared" || !sharedFacilityMetadataEnabled) return sharedRouteUnavailable();
+      const directoryTerms = await loadPublishedFacilityTerms(context.env.ROSTER_FILES, selection.sources, australianDateKey());
+      let terms = directoryTerms;
+      if (access.mode !== "all") {
+        const claims = sanitizeClaims(facilityOverviewSubject.record.claims);
+        if (!claims.length || claims.length > MAX_ACCOUNT_CLAIMS) terms = [];
+        else {
+          const pairs = claims.map(() => "(c.source_type = ? AND c.doctor_key = ?)").join(" OR ");
+          const rows = await context.env.ROSTER_DB.prepare(`
+            SELECT c.source_type, c.term_start FROM facility_term_staff_contributions c
+            INNER JOIN roster_files f ON f.id = c.file_id AND f.active = 1
+            WHERE (${pairs}) ORDER BY c.source_type,c.doctor_key,c.term_start LIMIT 1025
+          `).bind(...claims.flatMap(claim => [claim.sourceType, normalizeRosterName(claim.key)])).all();
+          if ((rows.results || []).length > 1024) return facilityOverviewAccessDeniedResponse();
+          const memberships = new Set((rows.results || []).map(row => `${row.source_type}|${row.term_start}`));
+          terms = directoryTerms.filter(term => memberships.has(`${term.sourceType}|${term.termStart}`));
+        }
+      }
+      return Response.json({ ok: true, terms, directoryTerms, directoryFacilityKeys: selection.sources.map(source => source.toUpperCase()), facilityOverviewAccess: access });
+    }
+
     if (action === "queryFacilityOverviewMetadata") {
       if (!facilityOverviewEnabled()) {
         return Response.json({ ok: false, unavailable: true, preferredFacility: null, facilities: [], catalogEvents: [] }, { status: 403 });
@@ -2117,11 +2168,12 @@ export async function onRequestPost(context) {
       }
       const date = String(body?.date || "").slice(0, 10);
       const requestedFacility = String(body?.facilityKey || "").trim().toUpperCase();
-      const access = await facilityOverviewAccess();
-      if (!facilityOverviewOrdinaryRangeAllowed(access, date, date)) return facilityOverviewAccessDeniedResponse(access);
-      if (access.mode === "denied" || (requestedFacility === "ALL" ? !facilityAccessKeys(access).length && access.mode !== "all" : !facilityAccessAllows(access, requestedFacility))) {
-        return facilityOverviewAccessDeniedResponse(access);
-      }
+      let access = await facilityOverviewAccess();
+      const ordinarilyAllowed = facilityOverviewOrdinaryRangeAllowed(access, date, date)
+        && access.mode !== "denied" && (requestedFacility === "ALL" ? facilityAccessKeys(access).length || access.mode === "all" : facilityAccessAllows(access, requestedFacility));
+      const shiftWindow = ordinarilyAllowed ? null : await shiftWindowForRequestedRoster(date, requestedFacility);
+      if (!ordinarilyAllowed && !shiftWindow) return facilityOverviewAccessDeniedResponse(access);
+      if (shiftWindow) access = { ...access, expiresAt: new Date(Math.min(Date.now() + 15 * 60 * 1000, shiftWindow.end + 60 * 60 * 1000)).toISOString() };
       const facilityKeys = requestedFacility === "ALL" ? constrainFacilityOverviewSourceTypes(access, ["mmc", "ddh", "casey", "mch", "vhh"]) : sanitizeSourceTypes([requestedFacility]);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !facilityKeys.length) {
         return Response.json({ error: "A valid ED and date are required." }, { status: 400 });
@@ -2185,9 +2237,8 @@ export async function onRequestPost(context) {
       const date = String(body?.date || "").slice(0, 10);
       const requestedFacility = String(body?.facilityKey || "").trim().toUpperCase();
       const access = await facilityOverviewAccess();
-      if (access.mode === "denied" || (requestedFacility === "ALL" ? !facilityAccessKeys(access).length && access.mode !== "all" : !facilityAccessAllows(access, requestedFacility))) {
-        return facilityOverviewAccessDeniedResponse(access);
-      }
+      const ordinarilyAllowed = access.mode !== "denied" && (requestedFacility === "ALL" ? facilityAccessKeys(access).length || access.mode === "all" : facilityAccessAllows(access, requestedFacility));
+      if (!ordinarilyAllowed && !await shiftWindowForRequestedRoster(date, requestedFacility)) return facilityOverviewAccessDeniedResponse(access);
       const facilityKeys = sanitizeSourceTypes([requestedFacility]);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || facilityKeys.length !== 1) {
         return Response.json({ error: "A single ED and valid date are required." }, { status: 400 });
@@ -2276,21 +2327,18 @@ export async function onRequestPost(context) {
       }
       const facilityKey = body?.facilityKey === "all" ? "" : sanitizeSourceTypes([body?.facilityKey])[0] || "";
       const access = await facilityOverviewAccess();
-      if (!facilityOverviewOrdinaryRangeAllowed(access, termStart, termEnd)) return facilityOverviewAccessDeniedResponse(access);
-      if (access.mode === "denied" || (facilityKey ? !facilityAccessAllows(access, facilityKey) : access.mode !== "all" && !facilityAccessKeys(access).length)) {
-        return facilityOverviewAccessDeniedResponse(access);
-      }
       if (!/^\d{4}-\d{2}-\d{2}$/.test(termStart) || !/^\d{4}-\d{2}-\d{2}$/.test(termEnd) || termEnd < termStart) {
         return Response.json({ error: "A valid term is required." }, { status: 400 });
       }
       try {
-        const sourceTypes = facilityKey ? [facilityKey] : constrainFacilityOverviewSourceTypes(access, ["mmc", "ddh", "casey", "mch", "vhh"]);
+        const sourceTypes = facilityKey ? [facilityKey] : ["mmc", "ddh", "casey", "mch", "vhh"];
         const selection = readerSelectionFor(sourceTypes, !facilityKey);
         const readRoute = selection.route;
         if (readRoute === "blocked") return sharedRouteUnavailable();
         if (readRoute === "shared") {
           if (!sharedFacilityMetadataEnabled) return sharedRouteUnavailable();
-          const published = await loadPublishedFacilityStaff(context.env.ROSTER_FILES, selection.sources, termStart, australianDateKey());
+          let published = await loadPublishedFacilityStaff(context.env.ROSTER_FILES, selection.sources, termStart, australianDateKey());
+          published = facilityStaffDirectoryForAccess(published, access);
           const missing = [...selection.missing, ...(published.missing || [])];
           const revision = await publishedReadRevision(published, selection, access);
           if (published.preparing) return facilityOverviewPreparingResponse({ members: [], events: [], coverage: [], designations: [], seniorityOverrides: [], missing });
@@ -2298,7 +2346,7 @@ export async function onRequestPost(context) {
           return Response.json({ ok: true, termStart, termEnd, facilityKey: facilityKey || "all", ...published, missing, partial: missing.length > 0, revision, facilityOverviewAccess: access, accessExpiresAt: access.expiresAt || "" });
         }
         const results = await Promise.all(sourceTypes.map(source => queryFacilityOverviewStaff(context.env.ROSTER_DB, { termStart, termEnd, facilityKey: source })));
-        const result = { members: results.flatMap(item => item.members || []), events: results.flatMap(item => item.events || []), coverage: results.flatMap(item => item.coverage || []), designations: results.flatMap(item => item.designations || []), seniorityOverrides: results.flatMap(item => item.seniorityOverrides || []) };
+        const result = facilityStaffDirectoryForAccess({ members: results.flatMap(item => item.members || []), events: results.flatMap(item => item.events || []), coverage: results.flatMap(item => item.coverage || []), designations: results.flatMap(item => item.designations || []), seniorityOverrides: results.flatMap(item => item.seniorityOverrides || []) }, access);
         return Response.json({ ok: true, termStart, termEnd, facilityKey: facilityKey || "all", ...result });
       } catch (error) {
         console.error("queryFacilityOverviewStaff failed", { termStart, termEnd, facilityKey, error: error?.message || String(error) });
@@ -3556,7 +3604,7 @@ export async function resolveFacilityOverviewRangeAccess(db, record, currentAcce
       WHERE (${pairs}) AND c.term_start >= ? AND c.term_start <= ?
       ORDER BY c.source_type, c.doctor_key, c.term_start LIMIT 1025
     `).bind(...claims.flatMap(claim => [claim.sourceType, normalizeRosterName(claim.key)]), terms[0].startDate,
-      [terms.at(-1).startDate, facilityOverviewTermRange(today).startDate].sort()[0]).all();
+      terms.at(-1).startDate).all();
     if ((rows.results || []).length > 1024) return { mode: "denied", preparing: true, segments: [], sourceTypes: [] };
     const counts = new Map();
     for (const row of rows.results || []) {
@@ -3580,6 +3628,12 @@ export async function resolveFacilityOverviewRangeAccess(db, record, currentAcce
   return { mode: "range", segments, sourceTypes: [...new Set(segments.map(segment => segment.sourceType))].sort(),
     revision: await sha256(JSON.stringify({ version: FACILITY_ACCESS_VERSION, subject: record.email, claims: record.claims, segments, evidence })),
     expiresAt: currentAccess.expiresAt || new Date(Date.now() + 15 * 60 * 1000).toISOString() };
+}
+
+function facilityStaffDirectoryForAccess(published, access) {
+  if (access.mode === "all") return published;
+  return { ...published, directoryOnly: true, events: [],
+    members: (published.members || []).map(member => ({ sourceType: member.sourceType, doctorKey: member.doctorKey, displayName: member.displayName, seniority: member.seniority })) };
 }
 
 function facilityOverviewOrdinaryRangeAllowed(access, startDate, endDate) {

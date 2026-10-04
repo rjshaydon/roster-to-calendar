@@ -109,6 +109,18 @@ assert.equal((await resolveFacilityOverviewRangeAccess(db,record,access,{...rang
 assert.equal((await resolveFacilityOverviewRangeAccess(db,record,access,{...range,startDate:'2026-02-30'})).invalid,true);
 assert.equal(validFacilityDateRange('2026-02-30','2026-03-01'),false);
 
+// Startup derives only the signed-in account's shifts from a bounded range,
+// independently of a previously viewed calendar term.
+const startupMonthKey='mmc-2026-10-month';
+const startupMonth=objects.get(startupMonthKey);
+objects.set(startupMonthKey,{rows:[...startupMonth.rows,{...row('mmc','TRAINEE','2026-10-02'),event:{...row('mmc','TRAINEE','2026-10-02').event,start:'2026-10-02T23:00:00+10:00',end:'2026-10-03T10:30:00+10:00'}}]});
+const startup=await call({action:'queryFacilityOverviewLaunchWindow',doctorKey:'UNRELATED PEER',startDate:'2000-01-01',endDate:'2099-01-01'});
+assert.equal(startup.shiftWindow.facilityKey,'MMC');
+assert.equal(startup.shiftWindow.rosterDate,'2026-10-02','startup retains the preceding night roster date');
+await call({action:'queryFacilityOverviewLaunchWindow',email:'disabled@example.com'},403);
+assert.equal((await call({action:'queryFacilityOverviewLaunchWindow',email:'creator@example.com'})).shiftWindow,null,'a Creator without linked identities must not inherit other staff shifts');
+objects.set(startupMonthKey,startupMonth);
+
 const context = await call({action:'queryFacilityOverviewTogetherContext',startDate:'2026-06-03',endDate:'2026-06-03'});
 assert.deepEqual(context.sourceTypes,['ddh']);
 assert.ok(context.members.some(member=>member.doctorKey==='DDH PEER'));
@@ -126,7 +138,25 @@ const onShift = await call({action:'queryFacilityOverviewOnShift',date:'2026-10-
 assert.ok(onShift.events.some(row=>row.sourceType==='mmc'));
 assert.ok(onShift.events.some(row=>row.sourceType==='ddh'));
 assert.equal(onShift.events.some(row=>row.sourceType==='mch'),false);
-await call({action:'queryFacilityOverviewStaff',facilityKey:'mmc',termStart:'2026-05-04',termEnd:'2026-08-02'},403);
+await call({action:'queryFacilityOverviewStaff',facilityKey:'mmc',termStart:'2026-05-04',termEnd:'2026-08-02'},503); // no published directory for this term
+// Directory names do not grant access to shifts at another hospital.
+const allNames = await call({action:'queryFacilityOverviewStaff',facilityKey:'all',termStart:'2026-08-03',termEnd:'2026-11-01'});
+assert.ok(allNames.members.some(member=>member.sourceType==='mch'));
+assert.equal(allNames.directoryOnly,true);
+assert.equal(allNames.events.length,0);
+assert.equal(allNames.members.some(member=>'coverageStart' in member || 'coverageEnd' in member),false);
+// Published, released future rotations are authorised by that future membership.
+membership('mch','2026-11-02');
+publish('mch','2026-11-02','2027-01-31',['2026-11-03']);
+objects.get('facility-overview/v1/mch/manifest.json').terms.find(term=>term.termStart==='2026-11-02').visibleFrom='2026-10-01';
+const future = await call({action:'queryFacilityOverviewWorkingTogether',startDate:'2026-11-03',endDate:'2026-11-03',sourceTypes:['mch'],doctorKeys:['TRAINEE']});
+assert.ok(future.events.some(row=>row.sourceType==='mch'));
+await call({action:'queryFacilityOverviewWorkingTogether',startDate:'2026-11-03',endDate:'2026-11-03',sourceTypes:['mmc']},403);
+const termDirectory = await call({action:'queryFacilityOverviewTerms'});
+assert.ok(termDirectory.terms.some(term=>term.termStart==='2026-05-04'&&term.sourceType==='ddh'));
+assert.ok(termDirectory.terms.some(term=>term.termStart==='2026-11-02'&&term.sourceType==='mch'));
+assert.equal(termDirectory.terms.some(term=>term.termStart==='2026-05-04'&&term.sourceType==='mmc'),false);
+assert.equal(termDirectory.terms.some(term=>term.termStart==='2027-02-01'),false);
 const metadata = await call({action:'queryFacilityOverviewMetadata',sourceTypes:['mch']});
 assert.equal(metadata.facilities.some(f=>f.sourceType==='mch'||f.facilityKey==='MCH'),false);
 // Who/When discovery is filtered to historical scope before computing peers.
@@ -195,7 +225,7 @@ assert.equal(mixedTogether.events.some(row=>row.sourceType==='casey'),false);
 assert.ok(mixedTogether.missing.some(item=>item.sourceType==='casey'));
 await call({...togetherQuery,email:'mixed@example.com',sourceTypes:['mch']},403);
 await call({...togetherQuery,email:'mixed@example.com',sourceTypes:['casey']},503);
-await call({...staffQuery,email:'casey-only@example.com'},503);
+assert.ok((await call({...staffQuery,email:'casey-only@example.com'})).members.some(member=>member.sourceType==='mmc'),'enabled directory access does not depend on current hospital reader availability');
 await call({...staffQuery,email:'mixed@example.com',facilityKey:'casey'},503);
 await call({...staffQuery,email:'mixed@example.com',facilityKey:'not-a-hospital'},400);
 for(const grade of ['SMS','CMO']) {
@@ -249,6 +279,17 @@ const month=objects.get(pointer.key);
 const completeCalendar=await loadPublishedDoctorCalendar(r2,{doctorKey:'TRAINEE',sourceTypes:['mmc'],state:{session:{}}},{range:{startDate:'2026-10-02',endDate:'2026-10-02'},today:'2026-10-03'});
 assert.equal(completeCalendar.snapshotAvailable,true);
 assert.equal(completeCalendar.snapshot.preview.events.length,1);
+// Casey is a valid linked identity even before its publication exists.
+const absentCasey = objects.get('facility-overview/v1/casey/manifest.json');
+objects.delete('facility-overview/v1/casey/manifest.json');
+const multiSiteCalendar=await loadPublishedDoctorCalendar(r2,{doctorKey:'TRAINEE',sourceTypes:['mmc','casey'],aliases:[{sourceType:'mmc',key:'TRAINEE'},{sourceType:'casey',key:'TRAINEE'}],state:{session:{}}},{range:{startDate:'2026-10-02',endDate:'2026-10-02'},today:'2026-10-03'});
+assert.equal(multiSiteCalendar.snapshotAvailable,true,'valid Casey identity must not block other published hospitals');
+assert.equal(multiSiteCalendar.snapshot.preview.events.length,1);
+assert.ok(multiSiteCalendar.snapshot.preview.publicationMissing.some(item=>item.sourceType==='casey'));
+const priorCasey=row('casey','TRAINEE','2026-10-02').event;
+const preservedCasey=await loadPublishedDoctorCalendar(r2,{doctorKey:'TRAINEE',sourceTypes:['mmc','casey'],state:{session:{}}},{range:{startDate:'2026-10-02',endDate:'2026-10-02'},today:'2026-10-03',previousSnapshot:{preview:{events:[priorCasey]}}});
+assert.equal(preservedCasey.snapshot.preview.events.length,2,'unavailable Casey publication must not erase a retained shift');
+objects.set('facility-overview/v1/casey/manifest.json',absentCasey);
 objects.delete(pointer.key);
 const incompleteCalendar=await loadPublishedDoctorCalendar(r2,{doctorKey:'TRAINEE',sourceTypes:['mmc'],state:{session:{}}},{range:{startDate:'2026-10-02',endDate:'2026-10-02'},today:'2026-10-03'});
 assert.equal(incompleteCalendar.snapshotAvailable,false,'partial colleague publication must not clear personal calendar shifts');
@@ -297,6 +338,31 @@ const browserGlobals = {facilityOverviewState:browserState,facilityOverviewToget
   availableRosterDoctors:[{key:'PRIVATE PEER',displayName:'Private Peer',sourceType:'mch'}]};
 assert.deepEqual(JSON.parse(JSON.stringify(runInNewContext(`${directoryFunction}; facilityOverviewTogetherStaffOptions().map(doctor=>doctor.key)`,browserGlobals))),['FORMER PEER']);
 assert.equal(runInNewContext(`${directoryFunction}; facilityOverviewTogetherStaffOptions().length`,{...browserGlobals,facilityOverviewTogetherContextKey:()=> 'different-term'}),0,'stale period names must disappear while a new scope loads');
+const initialise = app.slice(app.indexOf('function initializeFacilityOverviewTogetherState()'),app.indexOf('function facilityOverviewTogetherTermOptions()'));
+const selectionGlobals={facilityOverviewState:{togetherContext:{key:'period'},togetherStaffKeys:[''],togetherUserClearedAll:false},facilityOverviewTogetherContextKey:()=> 'period',
+ facilityOverviewTogetherStaffOptions:()=>[{key:'ALPHABETICAL FIRST',identity:'first'},{key:'MY PROFILE',identity:'mine'}],activeDoctorProfile:{doctorKey:'MY PROFILE'},currentDefaultDoctorKey:'MY PROFILE',currentRosterClaims:[],normalizeRosterName:value=>String(value||'').toUpperCase()};
+runInNewContext(`${initialise}; initializeFacilityOverviewTogetherState()`,selectionGlobals);
+assert.equal(selectionGlobals.facilityOverviewState.togetherStaffKeys[0],'mine','only the entered profile is selected automatically');
+selectionGlobals.facilityOverviewState.togetherStaffKeys=[''];selectionGlobals.facilityOverviewState.togetherUserClearedAll=true;
+runInNewContext(`${initialise}; initializeFacilityOverviewTogetherState()`,selectionGlobals);
+assert.equal(selectionGlobals.facilityOverviewState.togetherStaffKeys[0],'','clearing the last selection must stay empty');
+const resultsRenderer=app.slice(app.indexOf('function renderFacilityOverviewTogetherResults('),app.indexOf('function facilityOverviewWorkingIntervals('));
+assert.equal(runInNewContext(`${resultsRenderer}; renderFacilityOverviewTogetherResults([{doctorKey:'FIRST'}],[],{})`,{renderFacilityOverviewTogetherEmptyState:()=> 'Choose a staff member'}),'Choose a staff member','no selection must not render an alphabetical or all-staff roster');
+// Directory selection survives rendering, while returning to shifts restores
+// the entered clinician's roster permissions.
+const applySiteScope=app.slice(app.indexOf('function applyFacilityOverviewSiteScope()'),app.indexOf('function resetFacilityOverviewAccessForEnteredUser()'));
+const siteGlobals={currentFacilityOverviewAccess:{mode:'sites',facilityKeys:['MMC']},facilityAccessKeys:()=>['MMC'],facilityOverviewRosterAccessKeys:()=>['MMC'],currentFacilityOverviewShiftWindow:()=>null,facilityOverviewState:{tab:'staff',facilityKey:'ALL',directoryFacilityKeys:['MMC','DDH'],byStreamRows:[],byStreamCatalog:[]}};
+runInNewContext(`${applySiteScope}; applyFacilityOverviewSiteScope()`,siteGlobals);
+assert.equal(siteGlobals.facilityOverviewState.facilityKey,'ALL');
+siteGlobals.facilityOverviewState.facilityKey='DDH';
+runInNewContext(`${applySiteScope}; applyFacilityOverviewSiteScope()`,siteGlobals);
+assert.equal(siteGlobals.facilityOverviewState.facilityKey,'DDH');
+siteGlobals.facilityOverviewState.tab='on-shift';
+runInNewContext(`${applySiteScope}; applyFacilityOverviewSiteScope()`,siteGlobals);
+assert.equal(siteGlobals.facilityOverviewState.facilityKey,'MMC','directory access must not carry into shift access');
+siteGlobals.currentFacilityOverviewAccess.mode='denied';siteGlobals.facilityOverviewState.tab='staff';
+runInNewContext(`${applySiteScope}; applyFacilityOverviewSiteScope()`,siteGlobals);
+assert.equal(siteGlobals.facilityOverviewState.tab,'staff','an enabled account can browse staff even when its current roster is unpublished');
 // All 16 supported linked roster identities stay inside the default 64-statement
 // guard even on a cold current-access cache followed by historical context.
 const aliases = Array.from({length:16},(_,i)=>({sourceType:'mmc',key:`ALIAS ${i}`,displayName:`Alias ${i}`}));
@@ -304,5 +370,23 @@ for (const claim of aliases) membership('mmc','2026-08-03',claim.key,'HMO',`alia
 account('aliases@example.com',aliases);
 await call({action:'queryFacilityOverviewTogetherContext',email:'aliases@example.com',startDate:'2026-10-02',endDate:'2026-10-02'},200,64);
 assert.ok(queries.length < 64);
+// At the term boundary, the post-midnight hour still belongs to the shift
+// just completed at the previous hospital, without opening unrelated dates.
+const AccessTestDate=globalThis.Date;
+globalThis.Date=class extends RealDate {constructor(...args){super(...(args.length?args:['2026-11-01T13:30:00Z']));}static now(){return RealDate.parse('2026-11-01T13:30:00Z');}};
+account('night-window@example.com',[{sourceType:'ddh',key:'NIGHT WINDOW'},{sourceType:'mch',key:'NIGHT WINDOW'}]);
+membership('mch','2026-11-02','NIGHT WINDOW');
+publish('ddh','2026-08-03','2026-11-01',['2026-11-01']);
+const nightMonth=objects.get('ddh-2026-11-month');
+nightMonth.rows.push({...row('ddh','NIGHT WINDOW','2026-11-01'),event:{...row('ddh','NIGHT WINDOW','2026-11-01').event,start:'2026-11-01T15:00:00+11:00',end:'2026-11-02T00:00:00+11:00'}});
+const nightWindow=await call({action:'queryFacilityOverviewLaunchWindow',email:'night-window@example.com'});
+assert.equal(nightWindow.shiftWindow.rosterDate,'2026-11-01');
+const boundaryRoster=await call({action:'queryFacilityOverviewOnShift',email:'night-window@example.com',date:'2026-11-01',facilityKey:'DDH'});
+assert.ok(boundaryRoster.events.some(row=>row.sourceType==='ddh'));
+await call({action:'queryFacilityOverviewOnShift',email:'night-window@example.com',date:'2026-11-01',facilityKey:'MMC'},403);
+await call({action:'queryFacilityOverviewOnShift',email:'night-window@example.com',date:'2026-10-31',facilityKey:'DDH'},403);
+globalThis.Date=class extends RealDate {constructor(...args){super(...(args.length?args:['2026-11-01T14:01:00Z']));}static now(){return RealDate.parse('2026-11-01T14:01:00Z');}};
+await call({action:'queryFacilityOverviewOnShift',email:'night-window@example.com',date:'2026-11-01',facilityKey:'DDH'},403,'32');
+globalThis.Date=AccessTestDate;
 globalThis.Date=RealDate;
 console.log('Clinician access passed CMO parity, locums, historical rotations, direct API denial, impersonation, corrections, cache invalidation, related Insights, missing history and bounded indexed reads.');

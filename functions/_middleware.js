@@ -10,6 +10,7 @@ const STATE_ACTIONS = new Set([
   "loadDoctorProfileImports", "loadImportRefs", "loadImports", "loadInsightImports", "login",
   "queryDoctorProfileFacilityOverviewAccess", "queryFacilityOverviewByStream", "queryFacilityOverviewContactList",
   "queryFacilityOverviewMetadata", "queryFacilityOverviewOnShift", "queryFacilityOverviewStaff",
+  "queryFacilityOverviewTerms", "queryFacilityOverviewTogetherContext", "queryFacilityOverviewLaunchWindow",
   "queryFacilityOverviewWorkingTogether", "queryRosterInsights", "queryRosterOverlapDoctors",
   "refreshAutomatedRosterSource", "removeRosterClaim", "removeRosterImports", "repairRosterDailyPresence",
   "replaceActiveRosterFiles", "reportRosterIdentityIssue", "reportUserError", "resetDerivedCalendarFile",
