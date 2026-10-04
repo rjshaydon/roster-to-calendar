@@ -341,6 +341,8 @@ let currentSubscription = null;
 let currentInsightsEnabled = currentUserRole === "creator";
 let currentFacilityOverviewEnabled = currentUserRole === "creator";
 let currentFacilityOverviewMaintenance = true;
+let currentFacilityOverviewAccessReady = false;
+const facilityOverviewAccessWaiters = new Set();
 let currentFacilityOverviewAutomaticLaunchEnabled = false;
 let currentFacilityOverviewAccess = { mode: currentUserRole === "creator" ? "all" : "denied", isSms: currentUserRole === "creator", workingToday: false, facilityKey: "", today: "" };
 let currentNonClinical = false;
@@ -9254,7 +9256,23 @@ function syncFacilityOverviewAccess() {
   syncFacilityOverviewNavigationState();
 }
 
-function renderFacilityOverviewMaintenance() {
+function cancelFacilityOverviewAccessWait() {
+  for (const resolve of facilityOverviewAccessWaiters) resolve(false);
+  facilityOverviewAccessWaiters.clear();
+}
+
+function markFacilityOverviewAccessReady() {
+  currentFacilityOverviewAccessReady = true;
+  for (const resolve of facilityOverviewAccessWaiters) resolve(true);
+  facilityOverviewAccessWaiters.clear();
+}
+
+function waitForFacilityOverviewAccess() {
+  if (currentFacilityOverviewAccessReady) return Promise.resolve(true);
+  return new Promise(resolve => facilityOverviewAccessWaiters.add(resolve));
+}
+
+function renderFacilityOverviewMaintenance({ loading = false } = {}) {
   cancelFacilityOverviewDataRequest();
   stopFacilityOverviewContactRefresh();
   collapseFacilityOverviewContactReview();
@@ -9272,7 +9290,7 @@ function renderFacilityOverviewMaintenance() {
   const description = facilityOverviewSection?.querySelector(".facility-overview-head .section-head p");
   const tabs = facilityOverviewSection?.querySelector(".facility-overview-tabs");
   if (heading) heading.textContent = facilityOverviewLabel();
-  if (description) description.textContent = "This feature will return after the reliability upgrade is complete.";
+  if (description) description.textContent = loading ? "Loading At a glance…" : "This feature will return after the reliability upgrade is complete.";
   if (facilityOverviewHeader) facilityOverviewHeader.innerHTML = renderFacilityOverviewHeader();
   tabs?.classList.add("hidden");
   if (facilityOverviewCsToggle) facilityOverviewCsToggle.classList.add("hidden");
@@ -9280,7 +9298,7 @@ function renderFacilityOverviewMaintenance() {
   if (facilityOverviewBody) {
     const calendarGuidance = currentNonClinical && currentDirectorViewEnabled ? "" : " Please use My calendar for now.";
     facilityOverviewBody.classList.remove("is-working-together");
-    facilityOverviewBody.innerHTML = `<div class="facility-overview-results"><article class="issue-card" role="status"><p>${escapeHtml(`${FACILITY_OVERVIEW_MAINTENANCE_MESSAGE}${calendarGuidance}`)}</p></article></div>`;
+    facilityOverviewBody.innerHTML = `<div class="facility-overview-results"><article class="issue-card" role="status"><p>${escapeHtml(loading ? "Loading At a glance…" : `${FACILITY_OVERVIEW_MAINTENANCE_MESSAGE}${calendarGuidance}`)}</p></article></div>`;
   }
   syncFacilityOverviewAccess();
   syncFacilityOverviewNavigationState();
@@ -9672,6 +9690,8 @@ function rememberFacilityOverviewTabForCurrentAccount() {
 }
 
 function beginFacilityOverviewAccountSession() {
+  cancelFacilityOverviewAccessWait();
+  currentFacilityOverviewAccessReady = false;
   clinicalOnShiftStartupPending = true;
   clinicalOnShiftWindowPromise = null;
   rememberFacilityOverviewTabForCurrentAccount();
@@ -9755,6 +9775,8 @@ function applyFacilityOverviewSiteScope() {
 }
 
 function resetFacilityOverviewAccessForEnteredUser() {
+  cancelFacilityOverviewAccessWait();
+  currentFacilityOverviewAccessReady = false;
   facilityOverviewState.togetherContext = null;
   currentFacilityOverviewMaintenance = true;
   currentFacilityOverviewEnabled = false;
@@ -9818,6 +9840,12 @@ async function performFacilityOverviewOpening(options = {}, openingRunId) {
   if (!canUseFacilityOverview()) return;
   const subjectKey = activeCalendarTransitionKey();
   const transitionId = calendarTransitionRunId;
+  if (!currentFacilityOverviewAccessReady) {
+    renderFacilityOverviewMaintenance({ loading: true });
+    const ready = await waitForFacilityOverviewAccess();
+    if (!ready || openingRunId !== facilityOverviewOpeningRunId || subjectKey !== activeCalendarTransitionKey()
+        || transitionId !== calendarTransitionRunId || !isFacilityOverviewOpen() || !canUseFacilityOverview()) return;
+  }
   if (currentFacilityOverviewMaintenance) {
     renderFacilityOverviewMaintenance();
     return;
@@ -9902,6 +9930,7 @@ async function openFacilityOverviewByStream() {
 }
 
 function closeFacilityOverview() {
+  cancelFacilityOverviewAccessWait();
   clinicalOnShiftStartupPending = false;
   facilityOverviewOpeningRunId += 1;
   facilityOverviewOpeningPromise = null;
@@ -9944,6 +9973,10 @@ function facilityOverviewRequestWasCancelled(error) {
 }
 
 function renderFacilityOverview() {
+  if (!currentFacilityOverviewAccessReady) {
+    renderFacilityOverviewMaintenance({ loading: true });
+    return;
+  }
   if (currentFacilityOverviewMaintenance) {
     renderFacilityOverviewMaintenance();
     return;
@@ -15169,6 +15202,7 @@ async function loadDoctorProfileFacilityOverviewAccess(profile, options = {}) {
     currentFacilityOverviewAccess = sanitizeFacilityOverviewAccess(data.facilityOverviewAccess);
     applyFacilityOverviewSiteScope();
     syncFacilityOverviewAccess();
+    markFacilityOverviewAccessReady();
   } catch (error) {
     // Keep the feature safely unavailable if its independent access check is
     // temporarily unavailable; do not fail the calendar/profile switch.
@@ -17539,6 +17573,7 @@ function applyCloudStateIdentity(data) {
   applyFacilityOverviewSiteScope();
   syncFacilityOverviewAccess();
   if (data.realName) saveLocalAccountIdentity(data.realName);
+  markFacilityOverviewAccessReady();
 }
 
 function applyAvailableRosterDoctorsFromData(data) {
@@ -17568,6 +17603,7 @@ function applyCloudStateContext(data) {
   applyIssueConfig(data.issueConfig);
   if (previousInsightsEnabled !== currentInsightsEnabled && latestPreview) rebuildClientPreview();
   syncFacilityOverviewAccess();
+  markFacilityOverviewAccessReady();
 }
 
 async function applyCloudStateSnapshot(data, options = {}) {

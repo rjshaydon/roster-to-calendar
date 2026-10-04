@@ -31,7 +31,7 @@ const profileGlobals = {
   fetch:async()=>new Promise(resolve=> { resolveResponse=resolve; }),
   readJsonResponse:async response=>response, calendarTransitionStillCurrent:t=>t===profileGlobals.transition,
   transition:2,currentFacilityOverviewEnabled:false,sanitizeFacilityOverviewAccess:v=>v,
-  applyFacilityOverviewSiteScope:()=>{},syncFacilityOverviewAccess:()=>{},console,
+  applyFacilityOverviewSiteScope:()=>{},markFacilityOverviewAccessReady:()=>{},syncFacilityOverviewAccess:()=>{},console,
 };
 runInNewContext(`${access}; this.loadAccess = loadDoctorProfileFacilityOverviewAccess`,profileGlobals);
 const stale = profileGlobals.loadAccess(profile,{transition:1});

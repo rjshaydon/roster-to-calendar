@@ -7,7 +7,7 @@ const opening=section('function openFacilityOverview(options = {})','async funct
 let loaded=0;
 const noop=()=>{};
 const globals={facilityOverviewOpeningPromise:null,facilityOverviewOpeningRunId:0,facilityOverviewNavigationLocked:false,facilityOverviewIgnoreToggleUntil:0,isFacilityOverviewOpen:()=>true,currentFacilityOverviewShiftWindow:()=>null,applyFacilityOverviewSiteScope:noop,canUseFacilityOverview:()=>true,activeCalendarTransitionKey:()=> 'subject',calendarTransitionRunId:1,
- currentFacilityOverviewMaintenance:false,currentNonClinical:false,facilityOverviewSessionNeedsInitialization:true,resetFacilityOverviewSessionState:()=>{globals.facilityOverviewState.tab='together';globals.facilityOverviewSessionNeedsInitialization=false;},
+ currentFacilityOverviewAccessReady:true,currentFacilityOverviewMaintenance:false,currentNonClinical:false,facilityOverviewSessionNeedsInitialization:true,resetFacilityOverviewSessionState:()=>{globals.facilityOverviewState.tab='together';globals.facilityOverviewSessionNeedsInitialization=false;},
  facilityOverviewState:{tab:'together',preferredFacilityKey:'DDH',facilityKey:'MMC'},
  refreshFacilityOverviewPreferredFacility:noop,loadFacilityOverviewAvailableTerms:async()=>{},
  currentDirectorViewEnabled:false,contactOperationalDate:()=> '2026-10-04',formatDateKey:()=> '2026-10-04',
@@ -73,3 +73,46 @@ delayed.facilityOverviewOpeningRunId++;visible=false;
 finishMetadata();await cancelled;
 assert.equal(dataLoads,0,'an explicit return to calendar must not be reversed by delayed metadata');
 console.log('Slow opening passed immediate feedback, duplicate-tap protection and cancelled-opening guards.');
+
+// Cold startup paints the cached calendar before the authenticated capability
+// envelope arrives. Opening must wait for that existing request, without polls.
+const accessHelpers=section('function cancelFacilityOverviewAccessWait()', 'function renderFacilityOverviewMaintenance(');
+let coldLoads=0;
+const messages=[];
+let coldVisible=false;
+const cold={...globals,facilityOverviewNavigationLocked:false,facilityOverviewIgnoreToggleUntil:0,currentFacilityOverviewAccessReady:false,currentFacilityOverviewMaintenance:true,
+ facilityOverviewAccessWaiters:new Set(),facilityOverviewOpeningPromise:null,facilityOverviewOpeningRunId:0,
+ facilityOverviewSessionNeedsInitialization:false,facilityOverviewState:{tab:'on-shift',preferredFacilityKey:'DDH',facilityKey:'DDH'},
+ facilityOverviewSection:{classList:{remove:()=>{coldVisible=true;}}},isFacilityOverviewOpen:()=>coldVisible,
+ renderFacilityOverviewMaintenance:({loading=false}={})=>{coldVisible=true;messages.push(loading?'loading':'maintenance');},
+ loadFacilityOverviewOnShift:async()=>{coldLoads++;},
+ clinicalOnShiftStartupPending:true,closeFacilityOverview:()=>{throw Error('startup second tap must not close');},setStatus:noop};
+runInNewContext(`${accessHelpers}; ${opening}; ${toggle}; this.open=openFacilityOverview;this.toggle=toggleFacilityOverview;this.ready=markFacilityOverviewAccessReady;this.cancelWait=cancelFacilityOverviewAccessWait`,cold);
+cold.toggle();
+const coldOpening=cold.facilityOverviewOpeningPromise;
+assert.deepEqual(messages,['loading']);
+assert.equal(coldLoads,0,'no roster request before authenticated access is ready');
+cold.toggle();assert.equal(cold.facilityOverviewOpeningPromise,coldOpening);
+cold.currentFacilityOverviewMaintenance=false;cold.ready();await coldOpening;
+assert.equal(coldLoads,1,'startup capability arrival automatically loads the selected roster');
+assert.deepEqual(messages,['loading'],'a temporary default never displays maintenance');
+// A real maintenance response still blocks all roster queries.
+cold.currentFacilityOverviewAccessReady=false;cold.currentFacilityOverviewMaintenance=true;
+const maintenanceOpening=cold.open();cold.ready();await maintenanceOpening;
+assert.equal(messages.at(-1),'maintenance');assert.equal(coldLoads,1);
+// Explicit close and account transitions cancel the waiter. Late responses
+// cannot reopen a closed view or render the previous account's roster.
+for(const cancel of ['close','switch']) {
+ cold.currentFacilityOverviewAccessReady=false;const pending=cold.open();
+ cold.facilityOverviewOpeningRunId++;cold.cancelWait();coldVisible=false;
+ cold.currentFacilityOverviewMaintenance=false;cold.ready();await pending;
+ assert.equal(coldVisible,false);assert.equal(coldLoads,1,cancel+' must cancel the pending opening');
+ assert.equal(cold.facilityOverviewAccessWaiters.size,0);
+}
+const maintenanceRenderer=section('function renderFacilityOverviewMaintenance(', 'function facilityOverviewMelbourneClock');
+assert.match(maintenanceRenderer,/loading \? "Loading At a glance…"/);
+for(const fn of ['applyCloudStateIdentity','applyCloudStateContext','loadDoctorProfileFacilityOverviewAccess']) {
+ const body=section((fn.startsWith('load')?'async ':'')+'function '+fn+'(', '\n'+(fn==='loadDoctorProfileFacilityOverviewAccess'?'async ':'')+'function ');
+ assert.match(body,/syncFacilityOverviewAccess\(\);[\s\S]*markFacilityOverviewAccessReady\(\)/,fn+' must wake the opener after applying permissions');
+}
+console.log('Cold startup passed loading feedback, automatic refresh, deduplication, confirmed maintenance and close/account cancellation with zero additional startup requests.');
