@@ -1,7 +1,7 @@
 # Remaining restoration and development batches — 4 October 2026
 
 Status: Batch 1 implementation in progress. App-side code and tests are complete;
-production deployment and live SharePoint Flow acceptance are tracked below. The user's agreed priority is **1 → 2 → 6 → 7 → 3 → 4
+app-side changes are deployed; live SharePoint Flow acceptance remains pending. The user's agreed priority is **1 → 2 → 6 → 7 → 3 → 4
 → 5 → 8**, retaining the original batch numbers for continuity. This plan
 supersedes earlier fifteen-minute freshness targets and batch ordering.
 
@@ -210,3 +210,21 @@ with Batch 1 rather than another planning cycle.
   licence alongside contact flows; do not silently add paid capacity.
   Sources: https://learn.microsoft.com/en-us/power-platform/admin/power-automate-licensing/faqs
   and https://learn.microsoft.com/en-us/power-platform/admin/api-request-limits-allocations.
+
+
+Production acceptance: PR #22 merged as `f4883633`, deployed in
+`0c505357-22f7-42cf-b5f8-4e27d21e7bdb`. All four public fingerprints and the
+unchanged MMC/MCH/VHH preflight passed. Watchdog version
+`c2447802-0253-4b89-9418-7ab4519bdd06` reports two-minute polling, configured and
+unpaused. DDH current term remained unchanged; the newly eligible next term
+imported 78 doctors/1,654 events, with shared publication complete at 08:47:50 UTC,
+4 minutes 36 seconds after submission. This measures submission-to-publication,
+not worst-case provider-change-to-visible-browser delivery. The latter and other
+sites still need acceptance after their Flow changes.
+
+The ten-minute post-deployment account-wide comparison passed GO at 96,010 rows
+read/570 written (analytics excludes its latest settlement window); current
+maintenance admission also passed. No extraordinary credit spending was used.
+A final failed-save regression extends edit protection beyond the pending save
+interval until a successful save. Actual browser apply tests cover in-flight
+edits, account switches, stale payloads, date filters and scroll.
