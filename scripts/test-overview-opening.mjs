@@ -7,7 +7,7 @@ const opening=section('async function openFacilityOverview(options = {})','async
 let loaded=0;
 const noop=()=>{};
 const globals={canUseFacilityOverview:()=>true,activeCalendarTransitionKey:()=> 'subject',calendarTransitionRunId:1,
- currentFacilityOverviewMaintenance:false,currentNonClinical:false,facilityOverviewSessionNeedsInitialization:true,resetFacilityOverviewSessionState:()=>{globals.facilityOverviewState.tab='together';},
+ currentFacilityOverviewMaintenance:false,currentNonClinical:false,facilityOverviewSessionNeedsInitialization:true,resetFacilityOverviewSessionState:()=>{globals.facilityOverviewState.tab='together';globals.facilityOverviewSessionNeedsInitialization=false;},
  facilityOverviewState:{tab:'together',preferredFacilityKey:'DDH',facilityKey:'MMC'},
  refreshFacilityOverviewPreferredFacility:noop,loadFacilityOverviewAvailableTerms:async()=>{},
  currentDirectorViewEnabled:false,contactOperationalDate:()=> '2026-10-04',formatDateKey:()=> '2026-10-04',
