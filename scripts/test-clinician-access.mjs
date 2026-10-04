@@ -109,6 +109,18 @@ assert.equal((await resolveFacilityOverviewRangeAccess(db,record,access,{...rang
 assert.equal((await resolveFacilityOverviewRangeAccess(db,record,access,{...range,startDate:'2026-02-30'})).invalid,true);
 assert.equal(validFacilityDateRange('2026-02-30','2026-03-01'),false);
 
+// Startup derives only the signed-in account's shifts from a bounded range,
+// independently of a previously viewed calendar term.
+const startupMonthKey='mmc-2026-10-month';
+const startupMonth=objects.get(startupMonthKey);
+objects.set(startupMonthKey,{rows:[...startupMonth.rows,{...row('mmc','TRAINEE','2026-10-02'),event:{...row('mmc','TRAINEE','2026-10-02').event,start:'2026-10-02T23:00:00+10:00',end:'2026-10-03T10:30:00+10:00'}}]});
+const startup=await call({action:'queryFacilityOverviewLaunchWindow',doctorKey:'UNRELATED PEER',startDate:'2000-01-01',endDate:'2099-01-01'});
+assert.equal(startup.shiftWindow.facilityKey,'MMC');
+assert.equal(startup.shiftWindow.rosterDate,'2026-10-02','startup retains the preceding night roster date');
+await call({action:'queryFacilityOverviewLaunchWindow',email:'disabled@example.com'},403);
+assert.equal((await call({action:'queryFacilityOverviewLaunchWindow',email:'creator@example.com'})).shiftWindow,null,'a Creator without linked identities must not inherit other staff shifts');
+objects.set(startupMonthKey,startupMonth);
+
 const context = await call({action:'queryFacilityOverviewTogetherContext',startDate:'2026-06-03',endDate:'2026-06-03'});
 assert.deepEqual(context.sourceTypes,['ddh']);
 assert.ok(context.members.some(member=>member.doctorKey==='DDH PEER'));

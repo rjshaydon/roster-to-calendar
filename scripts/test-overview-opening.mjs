@@ -3,10 +3,10 @@ import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
 const app = await readFile(new URL('../public/static/app.js', import.meta.url), 'utf8');
 const section=(start,end)=>app.slice(app.indexOf(start),app.indexOf(end,app.indexOf(start)));
-const opening=section('async function openFacilityOverview(options = {})','async function openFacilityOverviewByStream()');
+const opening=section('function openFacilityOverview(options = {})','async function openFacilityOverviewByStream()');
 let loaded=0;
 const noop=()=>{};
-const globals={canUseFacilityOverview:()=>true,activeCalendarTransitionKey:()=> 'subject',calendarTransitionRunId:1,
+const globals={facilityOverviewOpeningPromise:null,facilityOverviewOpeningRunId:0,facilityOverviewNavigationLocked:false,facilityOverviewIgnoreToggleUntil:0,isFacilityOverviewOpen:()=>true,applyFacilityOverviewSiteScope:noop,canUseFacilityOverview:()=>true,activeCalendarTransitionKey:()=> 'subject',calendarTransitionRunId:1,
  currentFacilityOverviewMaintenance:false,currentNonClinical:false,facilityOverviewSessionNeedsInitialization:true,resetFacilityOverviewSessionState:()=>{globals.facilityOverviewState.tab='together';globals.facilityOverviewSessionNeedsInitialization=false;},
  facilityOverviewState:{tab:'together',preferredFacilityKey:'DDH',facilityKey:'MMC'},
  refreshFacilityOverviewPreferredFacility:noop,loadFacilityOverviewAvailableTerms:async()=>{},
@@ -46,3 +46,30 @@ assert.equal(preferred([
  {source:'mmc',title:'MMC: Shift',start:'2026-08-03T08:00:00',end:'2026-08-03T17:00:00'},
  {source:'ddh',title:'DDH: Shift',start:'2026-08-11T08:00:00',end:'2026-08-11T17:00:00'},
 ],{today:'2026-08-10',now:new Date('2026-08-10T00:00:00Z'),linkedSourceTypes:['mmc','ddh']}).facilityKey,'DDH','this week wins over another linked hospital or last week');
+// A slow server must not leave the calendar visible or let a repeated tap
+// cancel opening. Closing explicitly invalidates the delayed continuation.
+let finishMetadata;
+let visible=false, dataLoads=0;
+const delayed={...globals,facilityOverviewOpeningPromise:null,facilityOverviewOpeningRunId:0,facilityOverviewIgnoreToggleUntil:0,facilityOverviewNavigationLocked:false,
+ facilityOverviewSessionNeedsInitialization:false,facilityOverviewState:{tab:'on-shift',preferredFacilityKey:'DDH',facilityKey:'DDH'},
+ facilityOverviewSection:{classList:{remove:()=>{visible=true;}}},isFacilityOverviewOpen:()=>visible,
+ loadFacilityOverviewMetadata:()=>new Promise(resolve=>{finishMetadata=resolve;}),loadFacilityOverviewOnShift:async()=>{dataLoads++;},
+ clinicalOnShiftStartupPending:true,closeFacilityOverview:()=>{throw Error('second tap must not close a pending opening');},setStatus:noop};
+const toggle=section('function toggleFacilityOverview()','facilityOverviewButton?.addEventListener');
+runInNewContext(`${opening}; ${toggle}; this.open = openFacilityOverview;this.toggle=toggleFacilityOverview`,delayed);
+delayed.toggle();
+assert.equal(visible,true,'the overview loading shell is shown before metadata returns');
+const pending=delayed.facilityOverviewOpeningPromise;
+delayed.toggle();
+assert.equal(delayed.facilityOverviewOpeningPromise,pending,'repeated taps reuse the opening request');
+finishMetadata();await pending;
+assert.equal(dataLoads,1);
+// Immediately repeated taps after a fast response are ignored too.
+delayed.toggle();
+assert.equal(visible,true);
+delayed.facilityOverviewIgnoreToggleUntil=0;visible=false;dataLoads=0;
+const cancelled=delayed.open();
+delayed.facilityOverviewOpeningRunId++;visible=false;
+finishMetadata();await cancelled;
+assert.equal(dataLoads,0,'an explicit return to calendar must not be reversed by delayed metadata');
+console.log('Slow opening passed immediate feedback, duplicate-tap protection and cancelled-opening guards.');
