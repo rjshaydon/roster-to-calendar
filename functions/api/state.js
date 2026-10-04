@@ -1,3 +1,4 @@
+import { onShiftLaunchWindow } from "../../public/static/shift-launch-policy.js";
 import { FACILITY_ACCESS_VERSION, isAllSiteSeniority, facilityAccessKeys, facilityAccessAllows, restrictedFacilityScope, validFacilityDateRange, nextFacilityDate, filterFacilityRowsBySegments } from "../../public/static/facility-access-policy.js";
 import { publishedIdentityDirectory, publishedClaimSeniorities, availableIdentitySuggestions, saveBoundedAccountClaims, MAX_ACCOUNT_CLAIMS } from '../_lib/bounded-identity.js';
 import { handleManualRosterImport, deactivateManualRosterFiles } from "../_lib/manual-roster-management.js";
@@ -126,6 +127,7 @@ const DOCTOR_PROFILE_SNAPSHOT_BUILDING_RETRY_MS = 2 * 60 * 1000;
 const SNAPSHOT_GLOBAL_WARMUP_LIMIT = 25;
 const FACILITY_OVERVIEW_STREAM_SENIORITIES = new Set(["SMS", "CMO", "Senior Registrar", "Transitional/Intermediate Registrar", "Junior Registrar", "HMO", "Intern", "NP", "Physio", "Unknown", "ALL"]);
 const FACILITY_OVERVIEW_MAINTENANCE_ACTIONS = new Set([
+  "queryFacilityOverviewLaunchWindow",
   "queryFacilityOverviewTerms",
   "queryFacilityOverviewMetadata",
   "queryFacilityOverviewByStream",
@@ -2015,6 +2017,20 @@ export async function onRequestPost(context) {
       } catch (error) {
         return Response.json({ error: error?.message || "Could not save the staff designations." }, { status: 400 });
       }
+    }
+
+    if (action === "queryFacilityOverviewLaunchWindow") {
+      if (!facilityOverviewEnabled()) return facilityOverviewAccessDeniedResponse();
+      const claims = sanitizeClaims(facilityOverviewSubject.record.claims);
+      if (!claims.length || claims.length > MAX_ACCOUNT_CLAIMS) return Response.json({ ok: true, shiftWindow: null });
+      const selection = readerSelectionFor([...new Set(claims.map(claim => claim.sourceType))], true);
+      if (selection.route !== "shared") return sharedRouteUnavailable();
+      const today = australianDateKey();
+      const published = await loadPublishedFacilityRange(context.env.ROSTER_FILES, selection.sources,
+        isoDateKey(addUtcDays(today, -1)), isoDateKey(addUtcDays(today, 1)), today);
+      const identities = new Set(claims.map(claim => `${claim.sourceType}|${normalizeRosterName(claim.key)}`));
+      const events = (published.events || []).filter(row => identities.has(`${row.sourceType}|${row.doctorKey}`)).map(row => row.event);
+      return Response.json({ ok: true, shiftWindow: onShiftLaunchWindow(events) });
     }
 
     if (action === "queryFacilityOverviewTerms") {

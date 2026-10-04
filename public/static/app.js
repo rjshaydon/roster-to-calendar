@@ -1,3 +1,4 @@
+import { onShiftLaunchWindow } from "./shift-launch-policy.js";
 import { FACILITY_ACCESS_VERSION, facilityAccessKeys, restrictedFacilityScope, validFacilityDateRange } from "./facility-access-policy.js";
 import { planRosterImportBatches } from "./roster-import-batches.js";
 import { makeSessionPatch } from "./session-settings-patch.js";
@@ -368,6 +369,11 @@ let whoStaffMenuContext = null;
 const FACILITY_OVERVIEW_COMPACT_SCROLL_THRESHOLD = 28;
 const FACILITY_OVERVIEW_SCROLL_TOLERANCE = 0;
 let facilityOverviewNavigationLocked = false;
+let facilityOverviewOpeningPromise = null;
+let facilityOverviewOpeningRunId = 0;
+let facilityOverviewIgnoreToggleUntil = 0;
+let clinicalOnShiftStartupPending = true;
+let clinicalOnShiftWindowPromise = null;
 let facilityOverviewSessionNeedsInitialization = true;
 let facilityOverviewContactRefreshTimer = 0;
 let facilityOverviewContactRefreshInFlight = false;
@@ -566,13 +572,10 @@ filesModal?.addEventListener("click", (event) => {
 });
 exportButton.addEventListener("click", openExportModal);
 function toggleFacilityOverview() {
-  if (facilityOverviewNavigationLocked) return;
+  if (facilityOverviewOpeningPromise || facilityOverviewNavigationLocked || Date.now() < facilityOverviewIgnoreToggleUntil) return;
+  clinicalOnShiftStartupPending = false;
   if (isFacilityOverviewOpen()) closeFacilityOverview();
-  else {
-    facilityOverviewNavigationLocked = true;
-    void openFacilityOverview();
-    window.setTimeout(() => { facilityOverviewNavigationLocked = false; }, 350);
-  }
+  else void openFacilityOverview().catch(error => setStatus(error?.message || "Could not open At a glance.", true));
 }
 facilityOverviewButton?.addEventListener("click", toggleFacilityOverview);
 mobileFacilityOverviewButton?.addEventListener("click", toggleFacilityOverview);
@@ -9657,6 +9660,8 @@ function rememberFacilityOverviewTabForCurrentAccount() {
 }
 
 function beginFacilityOverviewAccountSession() {
+  clinicalOnShiftStartupPending = true;
+  clinicalOnShiftWindowPromise = null;
   rememberFacilityOverviewTabForCurrentAccount();
   facilityOverviewSessionNeedsInitialization = true;
 }
@@ -9780,7 +9785,22 @@ async function loadFacilityOverviewAvailableTerms() {
   }
 }
 
-async function openFacilityOverview(options = {}) {
+function openFacilityOverview(options = {}) {
+  if (facilityOverviewOpeningPromise) return facilityOverviewOpeningPromise;
+  const runId = ++facilityOverviewOpeningRunId;
+  facilityOverviewNavigationLocked = true;
+  const opening = performFacilityOverviewOpening(options, runId).finally(() => {
+    if (facilityOverviewOpeningPromise === opening) {
+      facilityOverviewOpeningPromise = null;
+      facilityOverviewNavigationLocked = false;
+      facilityOverviewIgnoreToggleUntil = Date.now() + 350;
+    }
+  });
+  facilityOverviewOpeningPromise = opening;
+  return opening;
+}
+
+async function performFacilityOverviewOpening(options = {}, openingRunId) {
   if (!canUseFacilityOverview()) return;
   const subjectKey = activeCalendarTransitionKey();
   const transitionId = calendarTransitionRunId;
@@ -9791,8 +9811,6 @@ async function openFacilityOverview(options = {}) {
   refreshFacilityOverviewPreferredFacility();
   if (facilityOverviewSessionNeedsInitialization) resetFacilityOverviewSessionState();
   if (!currentNonClinical && !options.preserveFacility && !options.preserveStaffTerm) facilityOverviewState.tab = "on-shift";
-  await loadFacilityOverviewAvailableTerms();
-  if (subjectKey !== activeCalendarTransitionKey() || transitionId !== calendarTransitionRunId) return;
   if (options.preserveFacility !== true && options.preserveStaffTerm !== true) {
     const directorPreference = currentNonClinical && currentDirectorViewEnabled ? directorHospitalPreference() : "";
     const preferred = String(facilityOverviewState.preferredFacilityKey || "").toUpperCase();
@@ -9815,13 +9833,23 @@ async function openFacilityOverview(options = {}) {
       facilityOverviewState.byStreamContent = "";
     }
   }
-  // The On shift and Staff tabs also need the published metadata manifest to
-  // discover newly enabled EDs. Previously only By stream loaded it, leaving
-  // the selector limited to hospitals already present in the selected
-  // doctor's local calendar. Shared metadata is R2-backed and performs no D1
-  // query; access scoping is still enforced by the server response.
   if (currentFacilityOverviewAccess.mode === "denied") facilityOverviewState.tab = "together";
-  else await loadFacilityOverviewMetadata();
+  applyFacilityOverviewSiteScope();
+  const openingTab = facilityOverviewState.tab;
+  facilityOverviewState.content = `<article class="issue-card" role="status"><p>Loading rostered staff…</p></article>`;
+  facilityOverviewState.onShiftData = null;
+  form?.classList.add("is-facility-overview-active");
+  previewSection?.classList.add("hidden");
+  facilityOverviewSection?.classList.remove("hidden");
+  resetFacilityOverviewScroll();
+  syncFacilityOverviewNavigationState();
+  renderFacilityOverview();
+  await Promise.all([
+    loadFacilityOverviewAvailableTerms(),
+    currentFacilityOverviewAccess.mode === "denied" ? Promise.resolve() : loadFacilityOverviewMetadata(),
+  ]);
+  if (openingRunId !== facilityOverviewOpeningRunId || subjectKey !== activeCalendarTransitionKey()
+      || transitionId !== calendarTransitionRunId || !isFacilityOverviewOpen() || facilityOverviewState.tab !== openingTab) return;
   const facilities = facilityOverviewFacilityOptions();
   if (!facilityOverviewState.facilityKey || (facilityOverviewState.facilityKey !== "ALL" && !facilities.includes(facilityOverviewState.facilityKey))) {
     facilityOverviewState.facilityKey = facilities[0] || "MMC";
@@ -9860,6 +9888,9 @@ async function openFacilityOverviewByStream() {
 }
 
 function closeFacilityOverview() {
+  clinicalOnShiftStartupPending = false;
+  facilityOverviewOpeningRunId += 1;
+  facilityOverviewOpeningPromise = null;
   cancelFacilityOverviewDataRequest();
   collapseFacilityOverviewContactReview();
   stopFacilityOverviewContactRefresh();
@@ -16720,6 +16751,7 @@ function finishContainedCreatorStartup(options = {}, loginStartedAt = 0) {
     renderDoctorState();
     syncActionState();
   }
+  launchClinicalOnShiftWorkspace(options, loginStartedAt);
   markLoginPhase("workspaceRendered", loginStartedAt);
   setStatus(hasSavedCalendar ? "Checking calendar for updates..." : "Loading calendar...");
   queuePostLoginSnapshotRefresh({
@@ -16748,16 +16780,42 @@ function launchNonClinicalDirectorWorkspace(options = {}, loginStartedAt = 0) {
   return true;
 }
 
+function requestClinicalStartupShiftWindow(options = {}, loginStartedAt = 0) {
+  if (clinicalOnShiftWindowPromise) return;
+  const subjectKey = activeCalendarTransitionKey();
+  const transitionId = calendarTransitionRunId;
+  clinicalOnShiftWindowPromise = (async () => {
+    try {
+      const response = await fetch("/api/state", { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "queryFacilityOverviewLaunchWindow", email: authUserEmail || currentUserEmail,
+          password: authUserPassword || currentUserPassword, targetEmail: facilityOverviewTargetEmail() }) });
+      const data = await readJsonResponse(response, "Could not check the shift opening window.");
+      if (!clinicalOnShiftStartupPending || subjectKey !== activeCalendarTransitionKey() || transitionId !== calendarTransitionRunId) return;
+      if (data.shiftWindow) launchClinicalOnShiftWorkspace({ ...options, shiftWindow: data.shiftWindow }, loginStartedAt);
+    } catch {
+      // A startup check cannot block access to the personal calendar.
+    }
+  })();
+}
+
 function launchClinicalOnShiftWorkspace(options = {}, loginStartedAt = 0) {
-  if (!currentFacilityOverviewAutomaticLaunchEnabled || currentFacilityOverviewMaintenance || currentNonClinical || !canUseFacilityOverview() || !currentFacilityOverviewAccess.workingToday || !calendarTransitionStillCurrent(options.transition)) return false;
-  if (facilityOverviewSessionNeedsInitialization) resetFacilityOverviewSessionState();
-  facilityOverviewState.tab = "on-shift";
-  facilityOverviewState.followOperationalDate = true;
-  facilityOverviewState.date = contactOperationalDate();
-  if (!facilityOverviewIsSiteScoped() && currentFacilityOverviewAccess.preferredFacilityKey) {
-    facilityOverviewState.facilityKey = currentFacilityOverviewAccess.preferredFacilityKey;
-    facilityOverviewState.preferredFacilityKey = currentFacilityOverviewAccess.preferredFacilityKey;
+  if (!clinicalOnShiftStartupPending || !currentFacilityOverviewAutomaticLaunchEnabled || currentFacilityOverviewMaintenance
+      || currentNonClinical || !canUseFacilityOverview() || !calendarTransitionStillCurrent(options.transition)) return false;
+  const snapshotReady = currentSnapshot?.preview && !currentSnapshotStale && calendarSnapshotMatchesActiveContext(currentSnapshot);
+  const shift = options.shiftWindow || (snapshotReady ? onShiftLaunchWindow(currentSnapshot.preview.events || [], options.now || new Date()) : null);
+  if (!shift) {
+    requestClinicalStartupShiftWindow(options, loginStartedAt);
+    return false;
   }
+  if (currentFacilityOverviewAccess.mode !== "all" && !facilityAccessKeys(currentFacilityOverviewAccess).includes(shift.facilityKey)) return false;
+  if (facilityOverviewSessionNeedsInitialization) resetFacilityOverviewSessionState();
+  clinicalOnShiftStartupPending = false;
+  facilityOverviewState.tab = "on-shift";
+  // Keep the shift's roster date after midnight, including the hour after it ends.
+  facilityOverviewState.followOperationalDate = false;
+  facilityOverviewState.date = shift.rosterDate;
+  facilityOverviewState.facilityKey = shift.facilityKey;
+  facilityOverviewState.preferredFacilityKey = shift.facilityKey;
   applyFacilityOverviewSiteScope();
   void openFacilityOverview({ preserveDate: true, preserveFacility: true }).then(() => {
     if (calendarTransitionStillCurrent(options.transition)) markLoginPhase("onShiftOverviewLoaded", loginStartedAt);
@@ -17077,6 +17135,7 @@ async function hydrateAuthenticatedWorkspace(options = {}, loginStartedAt = 0) {
         transition: options.transition,
       });
     }
+    launchClinicalOnShiftWorkspace(options, loginStartedAt);
     // A non-clinical Director has no personal calendar to land on. Clinical
     // users, including Directors who still work shifts, retain their calendar
     // until they explicitly choose the Director overview.
@@ -17132,6 +17191,7 @@ function queuePostLoginSnapshotRefresh(options = {}) {
           suppressInsightWarmup: true,
           suppressCloudSave: true,
         });
+        launchClinicalOnShiftWorkspace(options, options.loginStartedAt);
         markLoginPhase("backgroundCalendarUpdated", options.loginStartedAt);
         setStatus("Calendar refreshed.");
         return;
@@ -20499,8 +20559,9 @@ async function bootstrapApp() {
       queueStoredCalendarSnapshotMaintenance();
       return;
     }
+    const openedOnShift = launchClinicalOnShiftWorkspace({ transition }, loginStartedAt);
     const inlineSnapshotReady = loginSnapshotReadyForRender();
-    if (!renderedCachedSnapshot && inlineSnapshotReady) {
+    if (!openedOnShift && !renderedCachedSnapshot && inlineSnapshotReady) {
       renderWorkspaceFromSnapshot(currentSnapshot, restoredSessionState || currentSnapshot?.session || {});
       markLoginPhase("cachedCalendarRendered", loginStartedAt);
       markLoginPhase("firstCalendarPaint", loginStartedAt);
