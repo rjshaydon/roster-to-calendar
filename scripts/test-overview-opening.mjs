@@ -6,7 +6,7 @@ const section=(start,end)=>app.slice(app.indexOf(start),app.indexOf(end,app.inde
 const opening=section('function openFacilityOverview(options = {})','async function openFacilityOverviewByStream()');
 let loaded=0;
 const noop=()=>{};
-const globals={facilityOverviewOpeningPromise:null,facilityOverviewOpeningRunId:0,facilityOverviewNavigationLocked:false,facilityOverviewIgnoreToggleUntil:0,isFacilityOverviewOpen:()=>true,applyFacilityOverviewSiteScope:noop,canUseFacilityOverview:()=>true,activeCalendarTransitionKey:()=> 'subject',calendarTransitionRunId:1,
+const globals={facilityOverviewOpeningPromise:null,facilityOverviewOpeningRunId:0,facilityOverviewNavigationLocked:false,facilityOverviewIgnoreToggleUntil:0,isFacilityOverviewOpen:()=>true,currentFacilityOverviewShiftWindow:()=>null,applyFacilityOverviewSiteScope:noop,canUseFacilityOverview:()=>true,activeCalendarTransitionKey:()=> 'subject',calendarTransitionRunId:1,
  currentFacilityOverviewMaintenance:false,currentNonClinical:false,facilityOverviewSessionNeedsInitialization:true,resetFacilityOverviewSessionState:()=>{globals.facilityOverviewState.tab='together';globals.facilityOverviewSessionNeedsInitialization=false;},
  facilityOverviewState:{tab:'together',preferredFacilityKey:'DDH',facilityKey:'MMC'},
  refreshFacilityOverviewPreferredFacility:noop,loadFacilityOverviewAvailableTerms:async()=>{},

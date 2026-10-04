@@ -2019,18 +2019,27 @@ export async function onRequestPost(context) {
       }
     }
 
-    if (action === "queryFacilityOverviewLaunchWindow") {
-      if (!facilityOverviewEnabled()) return facilityOverviewAccessDeniedResponse();
+    const ownPublishedShiftWindow = async () => {
       const claims = sanitizeClaims(facilityOverviewSubject.record.claims);
-      if (!claims.length || claims.length > MAX_ACCOUNT_CLAIMS) return Response.json({ ok: true, shiftWindow: null });
+      if (!claims.length || claims.length > MAX_ACCOUNT_CLAIMS) return null;
       const selection = readerSelectionFor([...new Set(claims.map(claim => claim.sourceType))], true);
-      if (selection.route !== "shared") return sharedRouteUnavailable();
+      if (selection.route !== "shared") return null;
       const today = australianDateKey();
       const published = await loadPublishedFacilityRange(context.env.ROSTER_FILES, selection.sources,
         isoDateKey(addUtcDays(today, -1)), isoDateKey(addUtcDays(today, 1)), today);
       const identities = new Set(claims.map(claim => `${claim.sourceType}|${normalizeRosterName(claim.key)}`));
       const events = (published.events || []).filter(row => identities.has(`${row.sourceType}|${row.doctorKey}`)).map(row => row.event);
-      return Response.json({ ok: true, shiftWindow: onShiftLaunchWindow(events) });
+      return onShiftLaunchWindow(events);
+    };
+    const shiftWindowForRequestedRoster = async (date, facilityKey) => {
+      if (facilityKey === "ALL" || ![australianDateKey(), isoDateKey(addUtcDays(australianDateKey(), -1)), isoDateKey(addUtcDays(australianDateKey(), 1))].includes(date)) return null;
+      const window = await ownPublishedShiftWindow();
+      return window?.facilityKey === facilityKey && window.rosterDate === date ? window : null;
+    };
+
+    if (action === "queryFacilityOverviewLaunchWindow") {
+      if (!facilityOverviewEnabled()) return facilityOverviewAccessDeniedResponse();
+      return Response.json({ ok: true, shiftWindow: await ownPublishedShiftWindow() });
     }
 
     if (action === "queryFacilityOverviewTerms") {
@@ -2159,11 +2168,12 @@ export async function onRequestPost(context) {
       }
       const date = String(body?.date || "").slice(0, 10);
       const requestedFacility = String(body?.facilityKey || "").trim().toUpperCase();
-      const access = await facilityOverviewAccess();
-      if (!facilityOverviewOrdinaryRangeAllowed(access, date, date)) return facilityOverviewAccessDeniedResponse(access);
-      if (access.mode === "denied" || (requestedFacility === "ALL" ? !facilityAccessKeys(access).length && access.mode !== "all" : !facilityAccessAllows(access, requestedFacility))) {
-        return facilityOverviewAccessDeniedResponse(access);
-      }
+      let access = await facilityOverviewAccess();
+      const ordinarilyAllowed = facilityOverviewOrdinaryRangeAllowed(access, date, date)
+        && access.mode !== "denied" && (requestedFacility === "ALL" ? facilityAccessKeys(access).length || access.mode === "all" : facilityAccessAllows(access, requestedFacility));
+      const shiftWindow = ordinarilyAllowed ? null : await shiftWindowForRequestedRoster(date, requestedFacility);
+      if (!ordinarilyAllowed && !shiftWindow) return facilityOverviewAccessDeniedResponse(access);
+      if (shiftWindow) access = { ...access, expiresAt: new Date(Math.min(Date.now() + 15 * 60 * 1000, shiftWindow.end + 60 * 60 * 1000)).toISOString() };
       const facilityKeys = requestedFacility === "ALL" ? constrainFacilityOverviewSourceTypes(access, ["mmc", "ddh", "casey", "mch", "vhh"]) : sanitizeSourceTypes([requestedFacility]);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !facilityKeys.length) {
         return Response.json({ error: "A valid ED and date are required." }, { status: 400 });
@@ -2227,9 +2237,8 @@ export async function onRequestPost(context) {
       const date = String(body?.date || "").slice(0, 10);
       const requestedFacility = String(body?.facilityKey || "").trim().toUpperCase();
       const access = await facilityOverviewAccess();
-      if (access.mode === "denied" || (requestedFacility === "ALL" ? !facilityAccessKeys(access).length && access.mode !== "all" : !facilityAccessAllows(access, requestedFacility))) {
-        return facilityOverviewAccessDeniedResponse(access);
-      }
+      const ordinarilyAllowed = access.mode !== "denied" && (requestedFacility === "ALL" ? facilityAccessKeys(access).length || access.mode === "all" : facilityAccessAllows(access, requestedFacility));
+      if (!ordinarilyAllowed && !await shiftWindowForRequestedRoster(date, requestedFacility)) return facilityOverviewAccessDeniedResponse(access);
       const facilityKeys = sanitizeSourceTypes([requestedFacility]);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || facilityKeys.length !== 1) {
         return Response.json({ error: "A single ED and valid date are required." }, { status: 400 });
