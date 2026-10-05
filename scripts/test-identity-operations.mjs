@@ -88,11 +88,15 @@ await rejectIdentityCandidate(db,{pairKey:candidate.pair_key,fingerprint:candida
 audit=await auditIdentityBatch(db,doctors);
 while(audit.status!=='complete') audit=await auditIdentityBatch(db,doctors,{runId:audit.runId});
 assert.equal(sqlite.prepare('SELECT status FROM roster_identity_candidates WHERE pair_key=?').get(candidate.pair_key).status,'rejected','unchanged rejected evidence remains suppressed');
+const pendingPlan=sqlite.prepare("EXPLAIN QUERY PLAN SELECT * FROM roster_identity_features INDEXED BY idx_identity_feature_pending WHERE audited_fingerprint<>fingerprint ORDER BY source_type,doctor_key LIMIT 26").all();
+assert.ok(pendingPlan.some(row=>row.detail.includes('idx_identity_feature_pending')));
+assert.equal(audit.examined,0,'an unchanged weekly audit examines zero identities');
 const repeatedAuditQueries=sql.slice(-200);
 assert.ok(repeatedAuditQueries.filter(q=>q.includes('WHERE f.given_block')).length<doctors.length,'unchanged features skip candidate comparisons');
 const featurePlan=sqlite.prepare("EXPLAIN QUERY PLAN SELECT * FROM roster_identity_features WHERE given_block=? LIMIT 25").all('AESHAN:KUL');
 assert.ok(featurePlan.some(row=>row.detail.includes('idx_identity_feature_given')));
-assert.equal(identityAuditWindow(new Date('2026-10-03T16:00:00Z')).eligible,true,'Melbourne Sunday DST change stays inside the audit window');
+assert.equal(identityAuditWindow(new Date('2026-10-03T16:30:00Z')).eligible,true,'Melbourne Sunday DST change stays inside the audit window');
+assert.equal(identityAuditWindow(new Date('2026-04-04T17:30:00Z')).eligible,true,'Melbourne winter Sunday remains 03:30 after DST ends');
 assert.equal(identityAuditWindow(new Date('2026-10-03T18:00:00Z')).eligible,false,'no work outside the Melbourne window');
 assert.equal(identityAuditWindow(new Date('2026-10-05T16:00:00Z')).eligible,false,'no weekday discovery');
 

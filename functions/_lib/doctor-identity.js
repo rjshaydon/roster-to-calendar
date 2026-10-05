@@ -277,6 +277,14 @@ export async function publishIdentityOperation(db,r2,operationId) {
     for(const entry of entries) statements.push(db.prepare("UPDATE snapshot_registry SET status='stale',requested_revision=?,updated_at=? WHERE owner_type=? AND owner_id=? AND doctor_key=? AND range_key=?").bind('identity:'+operationId,new Date().toISOString(),owner.type,owner.id,entry.doctor_key,entry.range_key));
   }
   if(statements.length) await db.batch(statements);
+  // Exact changed aliases enter the indexed weekly suggestion queue. A name
+  // or alias change never causes the audit to rescan unchanged identities.
+  if(impacted.aliases.length) {
+   const changed=await rows(db,`SELECT source_type,doctor_key,display_name,person_id FROM roster_person_aliases WHERE ${impacted.aliases.map(()=>'(source_type=? AND doctor_key=?)').join(' OR ')} LIMIT 33`,impacted.aliases.flatMap(a=>[a.sourceType,a.key]));
+   const features=[];
+   for(const alias of changed) { const fingerprint=await token([alias.source_type,alias.doctor_key,alias.display_name,alias.person_id]);features.push(db.prepare('UPDATE roster_identity_features SET fingerprint=? WHERE source_type=? AND doctor_key=? AND fingerprint<>?').bind(fingerprint,alias.source_type,alias.doctor_key,fingerprint)); }
+   if(features.length) await db.batch(features);
+  }
   // Random wake-up marker is safe out of order: calendar assembly always reads
   // current identity state. No account identifiers leave the public endpoint.
   await r2.put('identity/revision.json',JSON.stringify({revision:crypto.randomUUID()}),{httpMetadata:{contentType:'application/json'}});

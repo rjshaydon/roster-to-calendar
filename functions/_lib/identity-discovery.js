@@ -21,7 +21,8 @@ export async function auditIdentityBatch(db,doctors,{runId,actor='identity-audit
  const acquired=await db.prepare('UPDATE roster_identity_audit_runs SET lease_token=?,lease_until=?,week_key=CASE WHEN ?<>\'\' THEN ? ELSE week_key END WHERE run_id=? AND lease_until<?').bind(lease,new Date(Date.now()+120000).toISOString(),weekKey,weekKey,run.run_id,now).run();
  if(!(acquired.meta?.changes||acquired.changes)) return {runId:run.run_id,status:'busy'};
  const identities=flattenDoctorIdentities(doctors).filter(a=>(!scope.length || scope.includes(a.sourceType)) && ['mmc','mch','ddh','vhh','casey'].includes(a.sourceType) && a.key.length<=200 && a.displayName.length<=200).sort((a,b)=>a.marker<b.marker?-1:a.marker>b.marker?1:0);
- const selected=identities.filter(a=>a.marker>run.cursor).slice(0,25);
+ const pending=register?[]:await all(db,`SELECT source_type,doctor_key,display_name FROM roster_identity_features INDEXED BY idx_identity_feature_pending WHERE audited_fingerprint<>fingerprint ${scope.length?'AND source_type IN ('+scope.map(()=>'?').join(',')+')':''} ORDER BY source_type,doctor_key LIMIT 26`,scope);
+ const selected=register?identities.filter(a=>a.marker>run.cursor).slice(0,25):pending.slice(0,25).map(a=>({sourceType:a.source_type,key:a.doctor_key,displayName:a.display_name,marker:a.source_type+':'+a.doctor_key}));
  let candidateCount=0, skippedLargeBlocks=0; const processed=[];
  for(const alias of selected) {
   if(Date.now()-startedAt>=10000) break;
@@ -77,13 +78,19 @@ export async function auditIdentityBatch(db,doctors,{runId,actor='identity-audit
   }
   await db.prepare('UPDATE roster_identity_features SET audited_fingerprint=? WHERE source_type=? AND doctor_key=?').bind(featureHash,alias.sourceType,alias.key).run();
  }
- const cursor=processed.at(-1)?.marker || run.cursor, complete=!identities.some(a=>a.marker>cursor);
+ const cursor=processed.at(-1)?.marker || run.cursor, complete=register?!identities.some(a=>a.marker>cursor):pending.length<=processed.length;
  await db.prepare("UPDATE roster_identity_audit_runs SET cursor=?,status=?,examined=examined+?,candidates=candidates+?,updated_at=?,lease_token='',lease_until='' WHERE run_id=? AND cursor=? AND lease_token=?").bind(cursor,complete?'complete':'running',processed.length,candidateCount,now,run.run_id,run.cursor,lease).run();
  return {runId:run.run_id,status:complete?'complete':'running',cursor,examined:run.examined+processed.length,candidates:run.candidates+candidateCount,skippedLargeBlocks,durationMs:Date.now()-startedAt};
 }
 export async function queryIdentityCandidates(db,{after=''}={}) {
- const list=await all(db,"SELECT * FROM roster_identity_candidates WHERE status='pending' AND pair_key>? ORDER BY pair_key LIMIT 26",[String(after)]);
- return {candidates:list.slice(0,25).map(r=>({...r,left:JSON.parse(r.left_json),right:JSON.parse(r.right_json),evidence:JSON.parse(r.evidence_json)})),next:list.length>25?list[24].pair_key:''};
+ // Page before checking current links, so a queue of obsolete suggestions
+ // cannot turn a Creator page request into a scan of every old candidate.
+ const list=await all(db,`WITH page AS (SELECT * FROM roster_identity_candidates WHERE status='pending' AND pair_key>? ORDER BY pair_key LIMIT 26)
+ SELECT page.*,l.person_id AS current_left,r.person_id AS current_right FROM page
+ LEFT JOIN roster_person_aliases l ON l.source_type=json_extract(page.left_json,'$.sourceType') AND l.doctor_key=json_extract(page.left_json,'$.key')
+ LEFT JOIN roster_person_aliases r ON r.source_type=json_extract(page.right_json,'$.sourceType') AND r.doctor_key=json_extract(page.right_json,'$.key') ORDER BY page.pair_key`,[String(after)]);
+ const candidates=list.slice(0,25).map(r=>({...r,left:JSON.parse(r.left_json),right:JSON.parse(r.right_json),evidence:JSON.parse(r.evidence_json)})).filter(r=>r.current_left===r.left.personId && r.current_right===r.right.personId && r.current_left!==r.current_right);
+ return {candidates,next:list.length>25?list[24].pair_key:''};
 }
 export async function rejectIdentityCandidate(db,{pairKey,fingerprint,actor}) {
  const result=await db.prepare("UPDATE roster_identity_candidates SET status='rejected',reviewer=?,updated_at=? WHERE pair_key=? AND fingerprint=? AND status='pending'").bind(actor,new Date().toISOString(),pairKey,fingerprint).run();

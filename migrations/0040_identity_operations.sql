@@ -59,3 +59,5 @@ CREATE TABLE roster_identity_registrations (
 );
 
 CREATE INDEX idx_identity_audit_scope ON roster_identity_audit_runs(mode,scope_json,status,created_at);
+
+CREATE INDEX idx_identity_feature_pending ON roster_identity_features(source_type,doctor_key) WHERE audited_fingerprint<>fingerprint;
