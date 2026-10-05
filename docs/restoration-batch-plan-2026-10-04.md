@@ -228,3 +228,37 @@ maintenance admission also passed. No extraordinary credit spending was used.
 A final failed-save regression extends edit protection beyond the pending save
 interval until a successful save. Actual browser apply tests cover in-flight
 edits, account switches, stale payloads, date filters and scroll.
+
+## Batch 1 checkpoint — 5 October
+
+- Exported and retained recoverable MMC/MCH/VHH definitions privately. MMC had
+  downloaded immediately; MCH and VHH had five-minute delays. Live MCH history
+  showed saves taking 5–24 minutes because queued saves waited behind the delay.
+- Successfully imported updates to the existing MMC and MCH Flows. They reject
+  superseded trigger versions, check the successful import watermark before
+  downloading, and use a 30-second stability interval only for changed files.
+  ETags are rechecked after settling and after downloading. Existing connections,
+  ingestion credentials and serial processing are preserved. Contact Flows stay
+  at five minutes. VHH's real library ID was verified from its export.
+- Added bounded library reconciliation: two SharePoint metadata requests, one
+  authenticated batched preflight, and a loop containing only changed eligible
+  files. Missing next-term files wait independently; incomplete inventories and
+  provider outages defer only their own library. Unchanged metadata performs no
+  content retrieval, parse, import, dispatch or D1 write. Tests cover same version
+  across different term files, wrong folders, missing files and source outages.
+- Prepared its private Flow package with a future start time; it cannot run
+  automatically until the schedule is deliberately enabled. Two-minute idle
+  reconciliation is approximately 3,600 Power Automate actions/day, in addition
+  to contacts and changed imports. The UI showed Free and Per App Baseline Access
+  with premium capability, but did not establish the owner's actual request
+  allowance. Confirm allowance before enabling this schedule.
+- D1 comparison passed GO: 128,759 rows read / 663 written; projected daily
+  usage about 197,000 reads / 1,706 writes. No database migration is required.
+- **Live work pending:** the Mac locked during VHH import mapping, before the
+  update was applied. Unlock, finish VHH, verify all three enabled Flow versions
+  and unchanged runs, import/validate reconciliation and enable a schedule that
+  fits the existing allowance, then measure provider-to-visible-app delivery.
+  Batch 1 is not declared complete until those acceptance checks pass.
+- Batch 2 recommendation remains Medium for transactional identity merges,
+  reversal and subscription/account mapping; Low is suitable for cleanup and
+  routine acceptance after implementation passes.

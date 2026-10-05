@@ -23,7 +23,7 @@ export function sharepointRosterWindows(now = new Date()) {
       .map(item => ({ ...item, path: `/Shared Documents/Medical Roster/${item.fileName}` }));
   });
   windows.push({ sourceId: 'vhh-active-medical-roster', dataset: 'https://monashhealth.sharepoint.com/sites/VHHED-VHH-EMG-DEP',
-    libraryId: 'Documents', path: '/Shared Documents/Medical/Rosters/Active Medical Roster.xlsx', fileName: 'Active Medical Roster.xlsx', termStart: current });
+    libraryId: 'dd1e780c-6901-4004-a615-73e8299158f4', path: '/Shared Documents/Medical/Rosters/Active Medical Roster.xlsx', fileName: 'Active Medical Roster.xlsx', termStart: current });
   return windows;
 }
 
@@ -32,7 +32,34 @@ export async function onRequestPost(context, checkTime = new Date()) {
   if (!configured || context.request.headers.get('authorization') !== `Bearer ${configured}`) return new Response('Unauthorized', { status: 401 });
   if (context.env.ROSTER_METADATA_CHECK_ENABLED !== 'true') return new Response('Paused', { status: 503 });
   const body = await context.request.json().catch(() => ({}));
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return new Response('Invalid metadata', { status: 400 });
   if (body.mode === 'windows') return Response.json({ ok: true, windows: sharepointRosterWindows(checkTime).filter(window => automatedRosterSourceEnabled(context.env, window.sourceId)) });
+  if (body.mode === 'reconcile') {
+    const windows = sharepointRosterWindows(checkTime).filter(window => automatedRosterSourceEnabled(context.env, window.sourceId));
+    const groups = body.libraries;
+    if (!Array.isArray(groups) || groups.length !== 2 || groups.some(group => !group || !['monash','vhh'].includes(group.site) || !Array.isArray(group.files) || group.files.length > 1000) || new Set(groups.map(group => group.site)).size !== 2) return new Response('Invalid or incomplete metadata batch', { status: 400 });
+    const downloads = [], checks = [];
+    for (const window of windows) {
+      const group = groups.find(group => group.site === (window.sourceId === 'vhh-active-medical-roster' ? 'vhh' : 'monash'));
+      if (group.unavailable || group.nextLink) { checks.push({sourceId:window.sourceId,fileName:window.fileName,status:group.unavailable?'provider-unavailable':'incomplete-inventory'}); continue; }
+      const matches = group.files.filter(file => file?.FileRef === window.path || file?.FileRef === new URL(window.dataset).pathname + window.path);
+      if (!matches.length) { checks.push({sourceId:window.sourceId,fileName:window.fileName,status:'waiting-for-file'}); continue; }
+      if (matches.length !== 1) return new Response('Ambiguous metadata', { status: 400 });
+      const file = matches[0];
+      const providerVersion = String(window.sourceId === 'vhh-active-medical-roster' ? file.File?.ETag || '' : file.OData__UIVersionString || '');
+      if (typeof file.File?.ETag !== 'string' || !file.File.ETag || typeof file.Modified !== 'string' || !providerVersion || providerVersion.length > 200 || !Number.isFinite(Date.parse(file.Modified))) return new Response('Invalid provider metadata', { status: 400 });
+      const response = await checkRosterMetadata(context,{sourceId:window.sourceId,fileName:window.fileName,providerVersion},checkTime);
+      if (!response.ok) return response;
+      const result = await response.json();
+      checks.push({sourceId:window.sourceId,fileName:window.fileName,status:result.status});
+      if (result.download) downloads.push({...window,providerVersion,providerModifiedAt:file.Modified,etag:String(file.File?.ETag || '')});
+    }
+    return Response.json({ok:true,downloads,checks});
+  }
+  return checkRosterMetadata(context,body,checkTime);
+}
+
+async function checkRosterMetadata(context,body,checkTime) {
   const sourceId = String(body.sourceId || '');
   const fileName = String(body.fileName || '');
   const providerVersion = String(body.providerVersion || '');
