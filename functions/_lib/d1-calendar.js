@@ -3271,9 +3271,10 @@ export async function claimRosterDispatch(db, { sourceId = "", reason = "", retr
     SELECT * FROM roster_dispatches
     WHERE status IN ('requested', 'accepted', 'running', 'failed')
       AND retry_after > ?
+      AND id >= ? AND id < ?
     ORDER BY requested_at DESC
     LIMIT 1
-  `).bind(String(now)).first();
+  `).bind(String(now), `dispatch:${normalizedSourceId}:`, `dispatch:${normalizedSourceId};`).first();
   if (active?.id) return { claimed: false, reason: "already-dispatched", dispatch: rosterDispatchFromRow(active) };
   const id = `dispatch:${normalizedSourceId}:${crypto.randomUUID()}`;
   await db.prepare(`
