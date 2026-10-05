@@ -5324,3 +5324,7 @@ body[data-skin="console"] .panel {
  .identity-details { border-left:0; border-top:1px solid var(--border, #d7dce3); padding:16px 0 0; }
 }
 @media(max-width:640px) { .identity-name-parts { grid-template-columns:minmax(0,1fr); } }
+
+.identity-workspace.identity-workspace-focus { grid-template-columns:minmax(0,1fr); }
+.identity-workspace-focus .identity-details { border:0; padding:0; }
+.identity-details > .identity-toolbar { justify-content:space-between; }
