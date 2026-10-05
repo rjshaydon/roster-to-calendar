@@ -49,4 +49,4 @@ After explicit approval: apply only migration 0040 with the existing schema/ledg
 
 Rollback: disable the three identity flags in Pages and the two watchdog flags, restore the preceding application release, and retain additive schema/history. Reverse any subsequently approved real identity operation through its exact preview before retiring that feature.
 
-The implementation is ready for staged activation; real clinicians and their phone subscriptions have not been merged as a test. Richer historical evidence, upload/date-range audit filters and identity-dispute workflows remain follow-up work, with disputes/account lifecycle scheduled in Batch 6.
+The implementation is ready for staged activation; real clinicians and their phone subscriptions have not been merged as a test. Richer historical evidence, upload/date-range audit filters, approved-alias expansion for Creator-selected subscription feeds (ordinary-user feeds are covered), and identity-dispute workflows remain follow-up work, with disputes/account lifecycle scheduled in Batch 6.
