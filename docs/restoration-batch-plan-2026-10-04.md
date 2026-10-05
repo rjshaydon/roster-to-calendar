@@ -307,3 +307,33 @@ establish equivalence; the successful version receipt prevents repeated retrieva
 D1 comparison returned GO again after the import burst settled: 313,762 reads /
 2,936 writes, projected daily reads approximately 589,457. Admission controls,
 account budgets, source isolation and bounded publication remain enabled.
+
+### Five-minute roster cutover completed — 5 October evening
+
+Production code is merged at `488734a9` (PR 26), Pages deployment
+`bb030e61-56b1-458a-83c5-4c24a5bc9dd5`. The DDH watchdog reports healthy,
+enabled and `intervalMinutes: 5`; its deployed cron is `*/5 * * * *`.
+All existing production admission and publication safeguards remain enabled.
+
+The reconciliation Flow's recurrence is now five minutes with the future start
+removed. Automatic runs at 19:01, 19:06, 19:11, 19:16, 19:21, 19:26, 19:31 and
+19:36 succeeded. The 19:36 run (`08584104174729700971009164296CU12`) completed
+both SharePoint metadata queries and version checking; its changed-file loop
+skipped retrieval. Earlier fresh reconciliation runs verified actual changed
+MMC/VHH import and publication. No synthetic clinical edits were made.
+
+The overlapping save-trigger Flows are verified **Off**, retained for rollback:
+- MMC `1dd007f9-868d-4fce-a0fd-ed03d413a4ac`
+- MCH `0d191bae-d7c5-47f1-a1c9-e754cb288790`
+- VHH `2984416c-7c89-4400-a9e5-6ff1e990f191`
+
+Contact Flows were left running on their existing five-minute schedules.
+Their extraction/transmission optimisation remains follow-up work, especially
+DDH's unchanged contact workbook download. The roster cutover does not claim
+that contact traffic has been eliminated.
+
+Settled analytics check `/private/tmp/oct5-batch1-ninth.json` returned GO:
+388,149 reads / 3,507 writes; projected daily usage about 1.17 million reads /
+9,509 writes. The previous sample was held only because its comparison gap was
+too short. Code regression checks passed before deployment. This completes the
+roster traffic cutover under the revised policy; Batch 2 remains separate.
