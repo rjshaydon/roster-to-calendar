@@ -17,5 +17,5 @@ try {
  assert.equal(findmyshiftPollingRosterRanges({}, new Date('2026-10-03T00:00:00Z')).length, 2);
  assert.deepEqual(findmyshiftPollingRosterRanges({}, new Date('2026-10-19T00:00:00Z')).map(r => r.from), ['2026-08-03', '2026-11-02'], 'next-term checking must not stop current-term updates');
  assert.equal(findmyshiftPollingRosterRanges({ FINDMYSHIFT_FROM: '2026-08-03', FINDMYSHIFT_TO: '2026-11-01' }, new Date('2026-10-19T00:00:00Z')).length, 1);
- console.log('Two-minute DDH watchdog and current/next-term checks passed.');
+ console.log('Five-minute DDH watchdog and current/next-term checks passed.');
 } finally { globalThis.fetch = original; }

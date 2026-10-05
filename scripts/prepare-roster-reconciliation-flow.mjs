@@ -3,7 +3,7 @@
 import {readFile,writeFile,readdir,mkdir,chmod} from 'node:fs/promises';
 import {resolve,join,relative} from 'node:path';
 import {zipSync,strToU8} from 'fflate';
-const [input,output,minutes='2']=process.argv.slice(2);
+const [input,output,minutes='5']=process.argv.slice(2);
 if(!input||!output||!['2','3','5','15'].includes(minutes))throw Error('Usage: PRIVATE_MMC_EXPORT PRIVATE_OUTPUT.zip [2|3|5|15 minutes]');
 const root=resolve(input),destination=resolve(output);
 if(destination.startsWith(resolve('.')+'/'))throw Error('Credential-bearing output must remain outside the repository.');

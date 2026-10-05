@@ -22,7 +22,7 @@ export default {
       service: "roster-queue-watchdog",
       configured: Boolean(String(env.ROSTER_WATCHDOG_TOKEN || "").trim()),
       paused: automationPaused(env),
-      intervalMinutes: 2,
+      intervalMinutes: 5,
       sourceId: 'dandenong-findmyshift',
     });
   },

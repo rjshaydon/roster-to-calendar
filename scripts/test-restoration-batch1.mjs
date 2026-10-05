@@ -48,6 +48,12 @@ const metadata={sourceId:'monash-adults',fileName:'AdultTerm3.2026.xlsx',provide
 assert.equal((await (await call(metadata)).json()).download,false);assert.equal(writes,0);
 assert.equal(sqlLog.some(sql=>/roster_events|CREATE |UPDATE |INSERT /i.test(sql)),false,'unchanged metadata must only read indexed compact state');
 assert.equal((await (await call({...metadata,providerVersion:'1.1'})).json()).download,true,'different version at same Modified time must download');
+sqlite.exec("UPDATE roster_sync_runs SET started_at='2026-10-04T00:59:00.000Z' WHERE id='run'");
+assert.equal((await (await call({...metadata,providerVersion:'1.2'})).json()).status,'settling','autosaves within five minutes must wait for a later tick without download');
+assert.equal(writes,0,'cooldown checks must not write status rows');
+sqlite.exec("UPDATE roster_sync_runs SET started_at='2026-10-04T00:55:00.000Z' WHERE id='run'");
+assert.equal((await (await call({...metadata,providerVersion:'1.2'})).json()).download,true,'a changed latest snapshot is admitted at the five-minute boundary');
+sqlite.exec("UPDATE roster_sync_runs SET started_at='2026-10-01' WHERE id='run'");
 sqlite.exec("UPDATE roster_sync_runs SET status='failed' WHERE id='run'");assert.equal((await (await call(metadata)).json()).status,'repair-required');assert.equal(writes,0,'invalid unchanged candidates cannot cause retry storms');
 const before=sqlLog.length;assert.equal((await call({...metadata,sourceId:'casey-manual'})).status,403);assert.equal(sqlLog.length,before);
 
