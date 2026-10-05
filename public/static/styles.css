@@ -5281,3 +5281,23 @@ body[data-skin="console"] .panel {
   grid-column: 1 / -1;
   margin: 0;
 }
+
+/* Identity forms occupy their own row rather than the review toggle column. */
+.review-body.identity-review-body {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+.identity-review-body form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  align-items: end;
+}
+.identity-review-body input:not([type="checkbox"]),
+.identity-review-body select {
+  width: 100%;
+  min-width: 0;
+}
+@media (max-width: 640px) {
+  .identity-review-body form { grid-template-columns: minmax(0, 1fr); }
+}
