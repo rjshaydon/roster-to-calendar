@@ -77,6 +77,15 @@ async function checkRosterMetadata(context,body,checkTime) {
     }
   }
   if (run?.status === 'failed') return Response.json({ ok: true, download: false, status: 'repair-required' });
+  // Poll the latest snapshot rather than replaying autosaves. This exact-file
+  // check is read-only and also protects manual reconciliation between ticks.
+  const recent = await context.env.ROSTER_DB.prepare(`
+    SELECT r.started_at FROM roster_sync_runs r
+    INNER JOIN raw_roster_files f ON f.file_id = COALESCE(NULLIF(r.source_file_id, ''), r.file_id)
+    WHERE r.source_id = ? AND r.started_at > ? AND LOWER(f.name) = LOWER(?)
+    ORDER BY r.started_at DESC LIMIT 1
+  `).bind(sourceId, new Date(checkTime.getTime() - 5 * 60 * 1000).toISOString(), fileName).first();
+  if (recent) return Response.json({ ok: true, download: false, status: 'settling', retryAfter: new Date(Date.parse(recent.started_at) + 5 * 60 * 1000).toISOString() });
   if (context.env.ROSTER_ACCOUNT_BUDGET_ENABLED === 'true') {
     const now = new Date().toISOString();
     const grant = await context.env.ROSTER_DB.prepare('SELECT valid_until,stop_reason FROM roster_account_budget WHERE utc_day=?').bind(now.slice(0,10)).first();

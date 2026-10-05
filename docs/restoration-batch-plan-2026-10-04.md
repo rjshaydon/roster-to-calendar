@@ -281,3 +281,29 @@ Automatic reconciliation remains held at a future 2030 start time pending
 confirmation of the existing Power Automate allowance; no paid capacity has
 been added. All-site five-minute delivery remains an acceptance requirement,
 not a claimed result. Batch 2 waits for Batch 1 acceptance.
+
+## Revised traffic policy — user clarification, 5 October
+
+The user clarified that five minutes is the maximum roster retrieval frequency,
+not a provider-change-to-browser deadline. Supersedes the earlier two-minute
+polling proposal. Use one scheduled five-minute SharePoint metadata reconciliation
+Flow and retire the overlapping save-trigger roster Flows after acceptance.
+Check DDH metadata every five minutes. Current and eligible next-term windows
+remain independent. Only a newly observed provider version needs retrieval;
+autosaves are coalesced into the latest snapshot, not replayed. The preflight
+also defers a newly changed exact file within five minutes of its last ingestion,
+without D1 status writes. A later scheduled tick handles that pending change.
+
+Five-minute reconciliation has five fixed actions/run, or 1,440/day. Existing
+contacts have 3 MMC/MCH actions, 4 DDH actions and 3 VHH actions/run, or 2,880/day.
+Fixed total: 4,320/day before changed downloads, retries and other Power Platform
+use. No shared Process capacity is assigned or purchased. Historical roster
+Flow usage on 4 October was MMC 238 / MCH 208 / VHH 64 actions; those older layouts
+are not a forecast ceiling. Contact extract-before-transmit optimisation, including
+DDH's unnecessary unchanged workbook retrieval, remains a separate follow-up.
+Identical content under a genuinely new provider version may need one download to
+establish equivalence; the successful version receipt prevents repeated retrieval.
+
+D1 comparison returned GO again after the import burst settled: 313,762 reads /
+2,936 writes, projected daily reads approximately 589,457. Admission controls,
+account budgets, source isolation and bounded publication remain enabled.
