@@ -2,6 +2,7 @@ import { beginMaintenanceAccounting, finishMaintenanceAccounting } from "./_lib/
 const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
 const RAW_D1_BINDING = Symbol("raw-d1-binding");
 const STATE_ACTIONS = new Set([
+  "identity",
   "acceptInvite", "adminCreateUser", "adminLoadUser", "adminSendInvite", "appendConsoleMessage",
   "calendarStoreStatus", "claimRosterName", "clearFacilityStaffDesignation", "clearUserError",
   "consoleMessages", "decideParserRuleSuggestion", "deleteAccount", "deleteParserExtensionRule",
@@ -51,7 +52,7 @@ export async function onRequest(context) {
   const limit = await requestD1StatementLimit(context.request, url.pathname, action);
   let contained = requestContainmentReason(url.pathname, action, sharedEnv);
   const originalD1Binding = contained ? sharedEnv.ROSTER_DB : unwrapD1Binding(sharedEnv.ROSTER_DB);
-  const d1 = contained ? emptyD1Meter() : createD1Meter(originalD1Binding, limit, { firstViaAll: sharedEnv.ROSTER_ACCOUNT_BUDGET_ENABLED === "true" && (["/api/automation/derived", "/api/automation/facility-refresh", "/api/automation/findmyshift-check"].includes(url.pathname) || url.pathname === "/api/state" && ["saveDerivedCalendarFile", "removeRosterImports", "uploadRawRosterFile", "refreshManualRosterViews"].includes(action)) });
+  const d1 = contained ? emptyD1Meter() : createD1Meter(originalD1Binding, limit, { firstViaAll: url.pathname === "/api/automation/identity-maintenance" || url.pathname === "/api/state" && action === "identity" || sharedEnv.ROSTER_ACCOUNT_BUDGET_ENABLED === "true" && (["/api/automation/derived", "/api/automation/facility-refresh", "/api/automation/findmyshift-check"].includes(url.pathname) || url.pathname === "/api/state" && ["saveDerivedCalendarFile", "removeRosterImports", "uploadRawRosterFile", "refreshManualRosterViews"].includes(action)) });
   let response;
 
   // Pages handlers read bindings from the supplied env object, so install the
@@ -107,6 +108,13 @@ export async function onRequest(context) {
 }
 
 async function requestD1StatementLimit(request, pathname, action) {
+  if(pathname==='/api/automation/identity-maintenance' && request.method==='POST') {
+    try { return ['audit','register'].includes((await request.clone().json()).mode)?1024:512; } catch { return 64; }
+  }
+  if(pathname==='/api/state' && action==='identity' && request.method==='POST') {
+    try { const operation=(await request.clone().json()).operation; if(['commit','reverse'].includes(operation)) return 448; if(['audit','initialize'].includes(operation)) return 1024; } catch {}
+    return 64;
+  }
   if ((pathname === "/api/automation/derived" || pathname === "/api/state" && action === "saveDerivedCalendarFile") && request.method === "POST") {
     try {
       const body = await request.clone().json();
@@ -189,6 +197,7 @@ function requestContainmentReason(pathname, action, env = {}) {
   if (pathname === "/api/state" && ["queryRosterInsights", "queryRosterOverlapDoctors"].includes(action)) {
     return enabled(env.ROSTER_INSIGHT_READS_ENABLED) ? "" : "roster-insights-paused";
   }
+  if (pathname === "/api/automation/identity-maintenance") return enabled(env.IDENTITY_REVIEW_ENABLED) ? "" : "identity-maintenance-paused";
   if (!pathname.startsWith("/api/automation/")) return "";
   if (["/api/automation/contact-list", "/api/automation/contact-list-binary", "/api/automation/contact-list-extract", "/api/automation/contact-workbook-extract"].includes(pathname)) {
     return enabled(env.CONTACT_AUTOMATION_WRITES_ENABLED) ? "" : "contact-automation-paused";

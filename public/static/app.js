@@ -1,4 +1,6 @@
 import { onShiftLaunchWindow } from "./shift-launch-policy.js";
+import { identityReviewMarkup, mountIdentityReview } from './identity-review-ui.js';
+let currentIdentityReviewEnabled = false;
 import { FACILITY_ACCESS_VERSION, facilityAccessKeys, restrictedFacilityScope, validFacilityDateRange } from "./facility-access-policy.js";
 import { planRosterImportBatches } from "./roster-import-batches.js";
 import { makeSessionPatch } from "./session-settings-patch.js";
@@ -12227,7 +12229,7 @@ function renderAccountsModal() {
       ].some((value) => String(value || "").toLocaleLowerCase().includes(normalizedUserSearchQuery)))
     : seniorityFilteredUsers;
   const linkedNames = renderLinkedRosterNames(currentRosterClaims, currentSuggestedClaims);
-  if (ownerView && !["parser", "system", "users", "files", "owner"].includes(currentAdminTab)) currentAdminTab = "users";
+  if (ownerView && !["parser", "system", "users", "files", "owner", "identity"].includes(currentAdminTab)) currentAdminTab = "users";
   const issueCount = adminIssueCount();
   const adminTabs = ownerView ? `
     <div class="admin-tabs" role="tablist" aria-label="Admin sections">
@@ -12236,6 +12238,7 @@ function renderAccountsModal() {
       <button type="button" class="entrance-tab ${currentAdminTab === "owner" ? "is-active" : ""}" data-admin-tab="owner">Account</button>
       <button type="button" class="entrance-tab ${currentAdminTab === "parser" ? "is-active" : ""}" data-admin-tab="parser">Parser${issueCount ? `<span class="notification-badge">${issueCount}</span>` : ""}</button>
       <button type="button" class="entrance-tab ${currentAdminTab === "system" ? "is-active" : ""}" data-admin-tab="system">System</button>
+      ${currentIdentityReviewEnabled?`<button type="button" class="entrance-tab ${currentAdminTab === 'identity'?'is-active':''}" data-admin-tab="identity">Identities</button>`:''}
     </div>
   ` : "";
   const ownerCard = `
@@ -12407,7 +12410,9 @@ function renderAccountsModal() {
     canAdd: true,
   }) : "";
   const adminBody = ownerView
-    ? (currentAdminTab === "parser"
+    ? (currentAdminTab === 'identity' && currentIdentityReviewEnabled
+        ? identityReviewMarkup()
+        : currentAdminTab === "parser"
         ? parserCard
         : currentAdminTab === "system"
           ? systemCard
@@ -12418,6 +12423,10 @@ function renderAccountsModal() {
               : ownerCard)
     : ownerCard;
   accountsBody.innerHTML = `${adminTabs}${adminBody}`;
+  if(ownerView && currentAdminTab==='identity' && currentIdentityReviewEnabled) mountIdentityReview(accountsBody.querySelector('[data-identity-review]'),async(operation,input)=>{
+    const response=await fetch('/api/state',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'identity',operation,input,email:authUserEmail||currentUserEmail,password:authUserPassword||currentUserPassword})});
+    const data=await readJsonResponse(response,'Identity review unavailable.'); if(!response.ok || !data.ok) throw new Error(data.error||'Identity operation failed.'); return data;
+  });
   if (ownerView && currentAdminTab === "users") {
     const currentUsersCard = accountsBody.querySelector(".other-users-card");
     const createUserCard = accountsBody.querySelector(".create-user-card");
@@ -17569,6 +17578,7 @@ function saveLocalAccountIdentity(realName = "") {
 }
 
 function applyCloudStateIdentity(data) {
+  if('identityReviewEnabled' in data) currentIdentityReviewEnabled=data.identityReviewEnabled===true;
   cloudAvailable = data.cloudAvailable === true;
   if (data.state?.session) rememberSessionBaseline(data.state.session);
   currentFacilityOverviewMaintenance = data.facilityOverviewMaintenance !== false;

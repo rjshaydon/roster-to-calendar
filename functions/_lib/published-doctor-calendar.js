@@ -1,16 +1,16 @@
 import { loadPublishedFacilityRange } from './facility-overview-cache.js';
 import { applyAccountHospitalLocations, buildPreviewFromDerivedEvents } from './d1-calendar.js';
-import { applyEventOverrides, customEventsToEvents, defaultSettings } from './roster.js';
+import { applyEventOverrides, customEventsToEvents, defaultSettings, normalizeRosterName } from './roster.js';
 
 // Explicit Creator profile views read shared artifacts; they never build D1 snapshots.
 export async function loadPublishedDoctorCalendar(r2, profile, { range, today, locations = {}, schemaVersion = 1, previousSnapshot = null, ownerType = "doctor-profile", ownerId = profile.profileId } = {}) {
   const known = new Set(['mmc', 'mch', 'ddh', 'vhh', 'casey']);
   const sources = [...new Set(profile.sourceTypes || [])];
   const aliases = profile.aliases?.length ? profile.aliases : sources.map(sourceType => ({ sourceType, key: profile.doctorKey }));
-  if (!sources.length || sources.length > 5 || sources.some(source => !known.has(source)) || aliases.length > 16) {
+  if (!sources.length && !profile.identityAliasesEnforced || sources.length > 5 || sources.some(source => !known.has(source)) || aliases.length > 16) {
     throw new Error('Published doctor calendar requires bounded site identities.');
   }
-  const published = await loadPublishedFacilityRange(r2, sources, range.startDate, range.endDate, today);
+  const published = sources.length?await loadPublishedFacilityRange(r2, sources, range.startDate, range.endDate, today):{events:[],revision:'empty-identity',missing:[],visibleTerms:[]};
   if (published.preparing || published.events.length > 50000
     || (published.missing || []).some(item => ["month-unavailable", "staff-unavailable"].includes(item.reason))) {
     return { snapshot: null, snapshotAvailable: false, snapshotStale: false, stale: false, snapshotStatus: 'missing', snapshotSource: 'published-roster', calendarRevision: '' };
@@ -29,6 +29,7 @@ export async function loadPublishedDoctorCalendar(r2, profile, { range, today, l
   const historical = (previousSnapshot?.preview?.events || []).filter(event => {
     const date = String(event.start || '').slice(0, 10);
     const source = String(event.source || '').toLowerCase();
+    if(profile.identityAliasesEnforced && !markers.has(`${source}|${normalizeRosterName(event.doctorKey || event.doctor || '')}`)) return false;
     return known.has(source) && date >= range.startDate && date <= range.endDate
       && !(published.visibleTerms || []).some(term => term.sourceType === source && term.termStart <= date && term.termEnd >= date);
   });
@@ -50,4 +51,14 @@ export async function loadPublishedDoctorCalendar(r2, profile, { range, today, l
       detectedSources: Object.fromEntries(["mmc", "mch", "ddh", "vhh", "casey"].map(source => [source, sources.includes(source) ? [source] : []])), fileRefs: [], subscriptionFeeds: {}, insightCache: null,
     },
   };
+}
+
+// Never serve an earlier person's cached roster after an explicit reassignment,
+// even while a new publication is incomplete. Personal custom events survive.
+export function filterSnapshotByIdentityAliases(snapshot,aliases,displayName='') {
+ if(!snapshot) return snapshot;
+ const markers=new Set(aliases.map(a=>`${a.sourceType}|${normalizeRosterName(a.key)}`));
+ const sources=new Set(['mmc','mch','ddh','vhh','casey']);
+ const events=(snapshot.preview?.events||[]).filter(event=>!sources.has(String(event.source||'').toLowerCase()) || markers.has(`${String(event.source||'').toLowerCase()}|${normalizeRosterName(event.doctorKey||event.doctor||'')}`));
+ return {...snapshot,preview:{...buildPreviewFromDerivedEvents(events,{customEventsMaterialized:true}),publicationMissing:snapshot.preview?.publicationMissing||[]},doctorOptions:aliases.length?[{key:snapshot.session?.doctorKey||'',displayName,sourceTypes:[...new Set(aliases.map(a=>a.sourceType))],aliases}]:[]};
 }

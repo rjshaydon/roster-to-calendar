@@ -1,6 +1,7 @@
 import { applyEventOverrides, customEventsToEvents, defaultSettings, exportIcs } from "../_lib/roster.js";
 import { applyAccountHospitalLocations, dedupeEventsByIdentity, hasCalendarDb, loadAccountHospitalLocations, loadAccountMirrorBySubscriptionToken, queryAccountCustomEvents, queryDoctorEvents } from "../_lib/d1-calendar.js";
 import { normalizeEmail } from "./state.js";
+import { accountIdentityAliases } from '../_lib/doctor-identity.js';
 
 export async function onRequestGet(context) {
   try {
@@ -20,7 +21,7 @@ export async function onRequestGet(context) {
       return new Response("Subscription calendar was not found.", { status: 404 });
     }
 
-    const d1Feed = await buildD1SubscriptionFeed(context.env.ROSTER_DB, record, view);
+    const d1Feed = await buildD1SubscriptionFeed(context.env.ROSTER_DB, record, view, context.env.IDENTITY_REVIEW_ENABLED==='true');
     if (d1Feed?.ics) {
       return calendarResponse(d1Feed.ics, d1Feed.displayName || record.realName || record.email);
     }
@@ -31,15 +32,16 @@ export async function onRequestGet(context) {
   }
 }
 
-async function buildD1SubscriptionFeed(db, record, view) {
+async function buildD1SubscriptionFeed(db, record, view, identitiesEnabled=false) {
   if (!hasCalendarDb({ ROSTER_DB: db })) return null;
   const role = record?.role || "";
-  const claims = sanitizeClaims(record.claims);
+  let claims = sanitizeClaims(record.claims);
+  if(identitiesEnabled && !['creator','owner'].includes(role)) claims=await accountIdentityAliases(db,record.email,claims);
   const session = record?.state?.session && typeof record.state.session === "object" ? record.state.session : {};
   const doctorKeys = [...new Set((role === "creator" || role === "owner")
     ? [String(session.doctorKey || "").trim()].filter(Boolean)
     : claims.map((claim) => claim.key))];
-  if (!doctorKeys.length) return null;
+  if (!doctorKeys.length && !identitiesEnabled) return null;
   const settings = {
     ...defaultSettings(),
     ...(session.settings || {}),
@@ -50,7 +52,9 @@ async function buildD1SubscriptionFeed(db, record, view) {
     : {};
   const hospitalLocations = await loadAccountHospitalLocations(db, record.email, session).catch(() => null);
   const rosterEvents = dedupeEventsByIdentity(applyEventOverrides(
-    applyAccountHospitalLocations(await queryDoctorEvents(db, doctorKeys, queryOptions), hospitalLocations || {}, { includeLocations: settings.includeLocations !== false }),
+    applyAccountHospitalLocations(identitiesEnabled && !['creator','owner'].includes(role)
+      ? (await Promise.all([...new Set(claims.map(claim=>claim.sourceType))].map(async sourceType=>(await queryDoctorEvents(db,claims.filter(claim=>claim.sourceType===sourceType).map(claim=>claim.key),{...queryOptions,sourceTypes:[sourceType]})).filter(event=>String(event.source||'').toLowerCase()===sourceType)))).flat()
+      : await queryDoctorEvents(db, doctorKeys, queryOptions), hospitalLocations || {}, { includeLocations: settings.includeLocations !== false }),
     session.overrides || {},
   ));
   const d1CustomEvents = await queryAccountCustomEvents(db, record.email).catch(() => []);
@@ -61,8 +65,8 @@ async function buildD1SubscriptionFeed(db, record, view) {
   const events = [...rosterEvents, ...customEvents]
     .filter((event) => range.mode !== "range" || eventInRange(event, range))
     .sort(compareEvents);
-  if (!events.length) return null;
-  const displayName = record.realName || claims[0]?.displayName || record.email;
+  if (!events.length && !identitiesEnabled) return null;
+  const displayName = claims.find(claim=>claim.preferredName)?.preferredName || record.realName || claims[0]?.displayName || record.email;
   return {
     ics: exportIcs(events, displayName),
     displayName,
