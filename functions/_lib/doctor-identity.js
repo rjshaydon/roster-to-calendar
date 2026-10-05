@@ -218,7 +218,7 @@ export async function queryIdentityPeople(db,{after='',limit=25,search='',search
  search=String(search).trim(); after=String(after);
  if(search.length>200 || after.length>160) throw error('Search is too long.','IDENTITY_INPUT');
  let people;
- if(!search) people=await rows(db,'SELECT * FROM roster_people WHERE person_id>? ORDER BY person_id LIMIT ?',[after,limit+1]);
+ if(!search && searchType!=='name') people=await rows(db,'SELECT * FROM roster_people WHERE person_id>? ORDER BY person_id LIMIT ?',[after,limit+1]);
  else if(searchType==='person') people=await rows(db,'SELECT p.* FROM roster_people p WHERE p.person_id=? UNION SELECT p.* FROM roster_person_redirects r JOIN roster_people p ON p.person_id=r.person_id WHERE r.old_person_id=? AND r.active=1',[search,search]);
  else if(searchType==='account') people=await rows(db,'SELECT p.* FROM account_people a JOIN roster_people p ON p.person_id=a.person_id WHERE a.email=?',[search.toLowerCase()]);
  else if(searchType==='alias') {
