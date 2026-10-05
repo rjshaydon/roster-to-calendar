@@ -51,6 +51,23 @@ assert.equal((await (await call({...metadata,providerVersion:'1.1'})).json()).do
 sqlite.exec("UPDATE roster_sync_runs SET status='failed' WHERE id='run'");assert.equal((await (await call(metadata)).json()).status,'repair-required');assert.equal(writes,0,'invalid unchanged candidates cannot cause retry storms');
 const before=sqlLog.length;assert.equal((await call({...metadata,sourceId:'casey-manual'})).status,403);assert.equal(sqlLog.length,before);
 
+sqlite.exec("UPDATE roster_sync_runs SET status='success' WHERE id='run'");
+const libraries=[{site:'monash',files:[{FileRef:'/Shared Documents/Medical Roster/AdultTerm3.2026.xlsx',Modified:'2026-10-04T01:00:00Z',OData__UIVersionString:'1.0',File:{ETag:'current-etag'}}]},{site:'vhh',files:[]}];
+const bulk=await (await call({mode:'reconcile',libraries})).json();
+assert.deepEqual(bulk.downloads,[],'unchanged library reconciliation does not download');
+assert.equal(bulk.checks.find(check=>check.fileName==='AdultTerm4.2026.xlsx').status,'waiting-for-file','newly eligible file is checked independently');
+assert.equal(writes,0);
+const newLibraries=structuredClone(libraries);newLibraries[0].files.push({FileRef:'/Shared Documents/Medical Roster/AdultTerm4.2026.xlsx',Modified:'2026-10-04T01:00:00Z',OData__UIVersionString:'1.0',File:{ETag:'next-etag'}});
+const delivery=await (await call({mode:'reconcile',libraries:newLibraries})).json();
+assert.equal(delivery.downloads.length,1);assert.equal(delivery.downloads[0].termStart,'2026-11-02','same provider version in a different eligible file still imports');
+const incomplete=await (await call({mode:'reconcile',libraries:[{...libraries[0],nextLink:'incomplete'},libraries[1]]})).json();
+assert.deepEqual(incomplete.downloads,[]);assert.equal(incomplete.checks[0].status,'incomplete-inventory','truncated provider inventory fails closed for its site');
+const outage=await (await call({mode:'reconcile',libraries:[newLibraries[0],{...libraries[1],unavailable:true}]})).json();
+assert.equal(outage.downloads.length,1,'one unavailable library does not suppress another site’s changed next-term file');
+assert.equal((await call({mode:'reconcile',libraries:[libraries[0],libraries[0]]})).status,400,'duplicate library cannot substitute for a missing site');
+const misplaced=structuredClone(libraries);misplaced[0].files[0].FileRef='/Shared Documents/Elsewhere/AdultTerm3.2026.xlsx';
+assert.deepEqual((await (await call({mode:'reconcile',libraries:misplaced})).json()).downloads,[],'file name alone cannot select a workbook from the wrong folder');
+
 sqlite.exec(`INSERT INTO facility_staff_seniority_overrides(id,source_type,doctor_key,display_name,seniority,term_start,active,created_at,updated_at) VALUES('old','mmc','ALIAS','Example','Junior Registrar','2026-05-04',1,'now','now');`);
 assert.equal((await queryFacilityStaffSeniorityOverrides(db,{sourceType:'mmc',termStart:'2026-05-04'})).length,1);
 assert.equal((await queryFacilityStaffSeniorityOverrides(db,{sourceType:'mmc',termStart:'2026-08-03'})).length,0,'old correction never follows promotion');
