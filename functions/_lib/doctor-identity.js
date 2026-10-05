@@ -1,6 +1,6 @@
 // Explicit, bounded identity operations. Raw roster rows and grades are never
 // mutated here. The global revision is a cheap transactional CAS, not a scan.
-const MAX_PEOPLE = 8, MAX_ALIASES = 32, MAX_ACCOUNTS = 16, MAX_REDIRECTS = 64;
+const MAX_PEOPLE = 9, MAX_ALIASES = 32, MAX_ACCOUNTS = 16, MAX_REDIRECTS = 64;
 const SOURCES = new Set(['mmc','mch','ddh','vhh','casey']);
 const specs = {
  people: { table:'roster_people', keys:['person_id'] },
@@ -30,7 +30,7 @@ export async function resolvePersonId(db,id) {
  return person;
 }
 async function scope(db,ids) {
- ids=[...new Set(ids)].sort(); if(!ids.length || ids.length>MAX_PEOPLE) throw error('Select one to eight people.','IDENTITY_SCOPE');
+ ids=[...new Set(ids)].sort(); if(!ids.length || ids.length>MAX_PEOPLE) throw error('Select a smaller identity scope.','IDENTITY_SCOPE');
  const placeholders=ids.map(()=>'?').join(',');
  const result={
   people:await rows(db,`SELECT * FROM roster_people WHERE person_id IN (${placeholders}) ORDER BY person_id`,ids),
@@ -52,6 +52,7 @@ export async function previewIdentityOperation(db,input) {
  const kind=input.kind;
  if(!['merge','name','id','alias-move','account-link'].includes(kind)) throw error('Unsupported identity operation.','IDENTITY_INPUT');
  const ids=[...new Set(input.personIds||[])];
+ if(!ids.length || ids.length>8) throw error('Select one to eight people.','IDENTITY_SCOPE');
  const before=await scope(db,ids);
  if(before.people.some(p=>p.status!=='active')) throw error('Resolve retired identities before editing.');
  const after=copy(before), now='PREVIEW';
@@ -95,6 +96,7 @@ export async function previewIdentityOperation(db,input) {
   if(account) Object.assign(account,{person_id:target,updated_at:now});
   else after.accounts.push({email,person_id:target,created_at:now,updated_at:now});
  }
+ bounded(after.redirects,MAX_REDIRECTS);
  if(after.aliases.filter(a=>a.person_id===target && a.review_state==='approved').length>16) throw error('This person would exceed the 16-alias calendar limit; review the identity scope first.','IDENTITY_SCOPE');
  for(const person of after.people) {
   const old=before.people.find(p=>p.person_id===person.person_id);

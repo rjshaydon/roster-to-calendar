@@ -125,6 +125,11 @@ unambiguous, permitted matches; ambiguous identity changes require review.
 Prove concurrency, rollback, historical grade preservation, real subscription
 continuity and scale costs. Candidate discovery must not scan every person pair.
 
+5 October: implemented and accepted in an isolated synthetic cloud Preview.
+Production activation awaits the identity plan’s separate approval. See
+[Batch 2 acceptance](restoration-batch2-acceptance-2026-10-05.md) for measured
+costs, rollback and remaining follow-up work.
+
 ## Batch 6 — disputes, messaging and secure account sessions
 
 Build on stable identities: dispute submission, Creator queue, claim transfer,

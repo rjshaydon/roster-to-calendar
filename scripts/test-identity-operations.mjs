@@ -165,6 +165,14 @@ const oldSnapshot={session:{doctorKey:'OLD'},preview:{events:[{id:'old-owner',so
 assert.deepEqual(filterSnapshotByIdentityAliases(oldSnapshot,[]).preview.events.map(e=>e.id),['personal'],'reassignment removes former doctor cache and preserves personal events');
 const emptyCalendar=await loadPublishedDoctorCalendar({}, {doctorKey:'OLD',sourceTypes:[],aliases:[],identityAliasesEnforced:true,state:{session:{}}},{range:{startDate:'2026-10-01',endDate:'2026-10-31'},today:'2026-10-05',previousSnapshot:oldSnapshot});
 assert.equal(emptyCalendar.snapshotAvailable,true);assert.equal(emptyCalendar.snapshot.preview.events.length,0,'an unlinked identity receives an empty roster instead of its earlier cache');
+const eightIds=Array.from({length:8},(_,i)=>'person:eight-'+i);
+for(const id of eightIds){sqlite.prepare('INSERT INTO roster_people(person_id,preferred_display_name) VALUES(?,?)').run(id,'Eight fixture');sqlite.prepare('INSERT INTO roster_person_aliases(source_type,doctor_key,display_name,person_id) VALUES(?,?,?,?)').run('mmc',id,'Eight fixture',id);}
+const eightInput={kind:'merge',personIds:eightIds,targetId:'person:eight-target',preferredName:'Eight fixture',reason:'Maximum people scope',actor:'creator@test'};
+const eightPreview=await previewIdentityOperation(db,eightInput);
+const eightOperation=await commitIdentityOperation(db,{...eightInput,previewToken:eightPreview.previewToken});
+const eightUndo=await previewIdentityReversal(db,eightOperation.operationId);
+await reverseIdentityOperation(db,{operationId:eightOperation.operationId,previewToken:eightUndo.previewToken,reason:'Undo maximum scope',actor:'creator@test'});
+assert.equal((await resolvePersonId(db,eightIds[7])).status,'active','a new canonical ninth row can be reversed for the maximum eight-person selection');
 const maintenanceRequest=(mode)=>new Request('https://example.test/api/automation/identity-maintenance',{method:'POST',headers:{authorization:'Bearer fixture-token','content-type':'application/json'},body:JSON.stringify({mode,operationId:feedOperation.operationId})});
 const maintenanceContext={env:{ROSTER_DB:db,ROSTER_FILES:r2,IDENTITY_REVIEW_ENABLED:'true',ROSTER_AUTOMATION_TOKEN:'fixture-token',ROSTER_AUTOMATION_WRITES_ENABLED:'false'},request:maintenanceRequest('publish'),waitUntil(){}};
 maintenanceContext.next=()=>identityMaintenance(maintenanceContext);
