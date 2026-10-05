@@ -82,13 +82,14 @@ export async function auditIdentityBatch(db,doctors,{runId,actor='identity-audit
  await db.prepare("UPDATE roster_identity_audit_runs SET cursor=?,status=?,examined=examined+?,candidates=candidates+?,updated_at=?,lease_token='',lease_until='' WHERE run_id=? AND cursor=? AND lease_token=?").bind(cursor,complete?'complete':'running',processed.length,candidateCount,now,run.run_id,run.cursor,lease).run();
  return {runId:run.run_id,status:complete?'complete':'running',cursor,examined:run.examined+processed.length,candidates:run.candidates+candidateCount,skippedLargeBlocks,durationMs:Date.now()-startedAt};
 }
-export async function queryIdentityCandidates(db,{after=''}={}) {
+export async function queryIdentityCandidates(db,{after='',status='pending'}={}) {
  // Page before checking current links, so a queue of obsolete suggestions
  // cannot turn a Creator page request into a scan of every old candidate.
- const list=await all(db,`WITH page AS (SELECT * FROM roster_identity_candidates WHERE status='pending' AND pair_key>? ORDER BY pair_key LIMIT 26)
+ if(!['pending','rejected'].includes(status)) throw Error('Unsupported suggestion view.');
+ const list=await all(db,`WITH page AS (SELECT * FROM roster_identity_candidates WHERE status=? AND pair_key>? ORDER BY pair_key LIMIT 26)
  SELECT page.*,l.person_id AS current_left,r.person_id AS current_right FROM page
  LEFT JOIN roster_person_aliases l ON l.source_type=json_extract(page.left_json,'$.sourceType') AND l.doctor_key=json_extract(page.left_json,'$.key')
- LEFT JOIN roster_person_aliases r ON r.source_type=json_extract(page.right_json,'$.sourceType') AND r.doctor_key=json_extract(page.right_json,'$.key') ORDER BY page.pair_key`,[String(after)]);
+ LEFT JOIN roster_person_aliases r ON r.source_type=json_extract(page.right_json,'$.sourceType') AND r.doctor_key=json_extract(page.right_json,'$.key') ORDER BY page.pair_key`,[status,String(after)]);
  const candidates=list.slice(0,25).map(r=>({...r,left:JSON.parse(r.left_json),right:JSON.parse(r.right_json),evidence:JSON.parse(r.evidence_json)})).filter(r=>r.current_left===r.left.personId && r.current_right===r.right.personId && r.current_left!==r.current_right);
  return {candidates,next:list.length>25?list[24].pair_key:''};
 }
@@ -96,4 +97,10 @@ export async function rejectIdentityCandidate(db,{pairKey,fingerprint,actor}) {
  const result=await db.prepare("UPDATE roster_identity_candidates SET status='rejected',reviewer=?,updated_at=? WHERE pair_key=? AND fingerprint=? AND status='pending'").bind(actor,new Date().toISOString(),pairKey,fingerprint).run();
  if(!result.meta?.changes && !result.changes) throw Error('Candidate changed; reload it before rejecting.');
  return {status:'rejected'};
+}
+
+export async function restoreIdentityCandidate(db,{pairKey,fingerprint}) {
+ const result=await db.prepare("UPDATE roster_identity_candidates SET status='pending',reviewer='',updated_at=? WHERE pair_key=? AND fingerprint=? AND status='rejected'").bind(new Date().toISOString(),pairKey,fingerprint).run();
+ if(!result.meta?.changes && !result.changes) throw Error('Suggestion changed; reload it before restoring.');
+ return {status:'pending'};
 }

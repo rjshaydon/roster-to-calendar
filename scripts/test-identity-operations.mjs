@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {readFile,readdir} from 'node:fs/promises';
 import {previewIdentityOperation,commitIdentityOperation,previewIdentityReversal,reverseIdentityOperation,expandApprovedIdentityAliases,resolvePersonId,queryIdentityPeople,queryIdentityPerson,publishIdentityOperation,accountIdentityAliases} from '../functions/_lib/doctor-identity.js';
-import {auditIdentityBatch,queryIdentityCandidates,rejectIdentityCandidate} from '../functions/_lib/identity-discovery.js';
+import {auditIdentityBatch,queryIdentityCandidates,rejectIdentityCandidate,restoreIdentityCandidate} from '../functions/_lib/identity-discovery.js';
 import {loadPublishedDoctorCalendar,filterSnapshotByIdentityAliases} from '../functions/_lib/published-doctor-calendar.js';
 import {onRequestPost as identityMaintenance} from '../functions/api/automation/identity-maintenance.js';
 import {onRequest as middleware} from '../functions/_middleware.js';
@@ -88,6 +88,11 @@ await rejectIdentityCandidate(db,{pairKey:candidate.pair_key,fingerprint:candida
 audit=await auditIdentityBatch(db,doctors);
 while(audit.status!=='complete') audit=await auditIdentityBatch(db,doctors,{runId:audit.runId});
 assert.equal(sqlite.prepare('SELECT status FROM roster_identity_candidates WHERE pair_key=?').get(candidate.pair_key).status,'rejected','unchanged rejected evidence remains suppressed');
+assert.ok((await queryIdentityCandidates(db,{status:'rejected'})).candidates.some(c=>c.pair_key===candidate.pair_key),'dismissed suggestions remain reviewable');
+await assert.rejects(()=>restoreIdentityCandidate(db,{pairKey:candidate.pair_key,fingerprint:'stale'}),/changed/);
+await restoreIdentityCandidate(db,{pairKey:candidate.pair_key,fingerprint:candidate.fingerprint});
+assert.ok((await queryIdentityCandidates(db)).candidates.some(c=>c.pair_key===candidate.pair_key),'undo dismissal restores the pending suggestion without changing identity links');
+await rejectIdentityCandidate(db,{pairKey:candidate.pair_key,fingerprint:candidate.fingerprint,actor:'creator@test'});
 const pendingPlan=sqlite.prepare("EXPLAIN QUERY PLAN SELECT * FROM roster_identity_features INDEXED BY idx_identity_feature_pending WHERE audited_fingerprint<>fingerprint ORDER BY source_type,doctor_key LIMIT 26").all();
 assert.ok(pendingPlan.some(row=>row.detail.includes('idx_identity_feature_pending')));
 assert.equal(audit.examined,0,'an unchanged weekly audit examines zero identities');
@@ -108,6 +113,9 @@ sqlite.exec(`INSERT INTO roster_files(id,name,source_type,active) VALUES('grade-
  ('grade-new','grade-ddh','ddh','AESHAN KULURATNE','Aeshan KULURATNE','2026-10-05','2026-10-05','2026-10-05','2026-10-05','ED','SMS','{"id":"grade-new","source":"DDH","doctor":"Aeshan KULURATNE","title":"ED","start":"2026-10-05T09:00:00","end":"2026-10-05T17:00:00","seniority":"SMS"}');`);
 assert.equal((await queryIdentityPeople(db,{search:'aeshan'})).people.length,3);
 assert.equal((await queryIdentityPeople(db,{search:'AESHAN KULARATNE',searchType:'alias',sourceType:'vhh'})).people.length,1);
+assert.equal((await queryIdentityPeople(db,{search:'AESHAN KULARATNE',searchType:'alias'})).people.length,1,'exact roster-name search can query all five indexed sites without a selector');
+const allSitePlan=sqlite.prepare("EXPLAIN QUERY PLAN SELECT p.* FROM roster_person_aliases a JOIN roster_people p ON p.person_id=a.person_id WHERE a.source_type IN ('mmc','mch','ddh','vhh','casey') AND a.doctor_key=?").all('AESHAN KULARATNE');
+assert.ok(allSitePlan.some(r=>r.detail.includes('source_type=? AND doctor_key=?')),'all-site search uses the alias primary key');
 const namePlan=sqlite.prepare('EXPLAIN QUERY PLAN SELECT * FROM roster_people WHERE preferred_display_name COLLATE NOCASE>=? AND preferred_display_name COLLATE NOCASE<? ORDER BY preferred_display_name COLLATE NOCASE,person_id LIMIT 26').all('Aeshan','Aeshan\uffff');
 assert.ok(namePlan.some(row=>row.detail.includes('idx_identity_person_name')));
 const eventBefore=JSON.stringify(sqlite.prepare('SELECT * FROM roster_events ORDER BY id').all());
@@ -139,11 +147,21 @@ for(const change of [
  const editInput={...change,actor:'creator@test',reason:'Synthetic edit verification'};
  const p=await previewIdentityOperation(db,editInput);
  const changed=await commitIdentityOperation(db,{...editInput,previewToken:p.previewToken,confirmAccountEmails:p.accountEmails});
+ const detail=await queryIdentityPerson(db,editInput.targetId);
+ assert.ok(detail.history.find(h=>h.operation_id===changed.operationId)?.summary.length,'person history explains the actual roster/name/account change');
  const undo=await previewIdentityReversal(db,changed.operationId);
  await reverseIdentityOperation(db,{operationId:changed.operationId,previewToken:undo.previewToken,reason:'Undo fixture edit',actor:'creator@test',confirmAccountEmails:undo.accountEmails});
  assert.equal((await resolvePersonId(db,'person:edit-fixture')).preferred_display_name,'Fixture');
  assert.equal(sqlite.prepare("SELECT person_id FROM roster_person_aliases WHERE source_type='mmc' AND doctor_key='FIXTURE'").get().person_id,'person:edit-fixture');
 }
+sqlite.exec("INSERT INTO roster_people(person_id,preferred_display_name) VALUES('person:existing-destination','Existing destination'); INSERT INTO account_people(email,person_id) VALUES('one@test','person:edit-fixture') ON CONFLICT(email) DO UPDATE SET person_id=excluded.person_id;");
+const separate={kind:'alias-move',personIds:['person:edit-fixture','person:existing-destination'],targetId:'person:existing-destination',alias:{sourceType:'mmc',key:'FIXTURE'},reason:'Separate wrong roster name',actor:'creator@test'};
+const separatePreview=await previewIdentityOperation(db,separate);
+const separated=await commitIdentityOperation(db,{...separate,previewToken:separatePreview.previewToken,confirmAccountEmails:separatePreview.accountEmails});
+assert.equal(sqlite.prepare("SELECT person_id FROM account_people WHERE email='one@test'").get().person_id,'person:edit-fixture','separation does not silently move the source account');
+assert.equal(sqlite.prepare("SELECT person_id FROM roster_person_aliases WHERE source_type='mmc' AND doctor_key='FIXTURE'").get().person_id,'person:existing-destination');
+const separateUndo=await previewIdentityReversal(db,separated.operationId);
+await reverseIdentityOperation(db,{operationId:separated.operationId,previewToken:separateUndo.previewToken,reason:'Undo separation',actor:'creator@test',confirmAccountEmails:separateUndo.accountEmails});
 // A new legacy claim arriving after preview must abort the whole operation.
 const raceInput={kind:'name',personIds:['person:edit-fixture'],targetId:'person:edit-fixture',preferredName:'Raced Fixture',actor:'creator@test',reason:'Race verification'};
 const racePreview=await previewIdentityOperation(db,raceInput);

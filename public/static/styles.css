@@ -5301,3 +5301,26 @@ body[data-skin="console"] .panel {
 @media (max-width: 640px) {
   .identity-review-body form { grid-template-columns: minmax(0, 1fr); }
 }
+
+.identity-toolbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:10px 0; }
+.identity-workspace { display:grid; grid-template-columns:minmax(220px, .8fr) minmax(0, 1.6fr); gap:24px; align-items:start; }
+.identity-details { min-width:0; border-left:1px solid var(--border, #d7dce3); padding-left:24px; }
+.identity-person { display:flex; gap:12px; align-items:center; padding:12px; border:1px solid var(--border, #d7dce3); border-radius:10px; }
+.identity-person-open { background:var(--surface-muted, #edf5ff); border-color:var(--accent, #3478d4); }
+.identity-name { background:none; border:0; color:var(--text, #172b4d); padding:2px 0; font:inherit; font-weight:600; text-align:left; text-decoration:underline; cursor:pointer; }
+.identity-name:focus-visible { outline:2px solid #3478d4; outline-offset:3px; }
+.identity-hint { font-size:.88rem; color:var(--text-muted, #596779); margin:6px 0; overflow-wrap:anywhere; }
+.identity-wide { grid-column:1 / -1; }
+.identity-name-parts { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+.identity-editor { padding:16px; margin:18px 0; border:1px solid var(--border, #d7dce3); border-radius:12px; background:var(--surface, #fff); }
+.identity-editor label:has(input[type=checkbox]) { display:block; margin:12px 0; }
+.identity-roster-name { display:flex; flex-wrap:wrap; align-items:center; gap:8px; justify-content:space-between; padding:10px 0; border-bottom:1px solid var(--border, #d7dce3); }
+.identity-suggestions { padding:16px; background:var(--surface-muted, #edf5ff); border:1px solid #91b7df; border-radius:12px; }
+.identity-suggestion { padding:14px; margin:10px 0; background:var(--surface, #fff); border:1px solid #91b7df; border-radius:10px; }
+.identity-history article { border-top:1px solid var(--border, #d7dce3); padding:12px 0; }
+.identity-details h4 { margin-top:20px; }
+@media(max-width:850px) {
+ .identity-workspace { grid-template-columns:minmax(0,1fr); }
+ .identity-details { border-left:0; border-top:1px solid var(--border, #d7dce3); padding:16px 0 0; }
+}
+@media(max-width:640px) { .identity-name-parts { grid-template-columns:minmax(0,1fr); } }

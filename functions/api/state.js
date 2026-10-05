@@ -1,5 +1,5 @@
 import { onShiftLaunchWindow } from "../../public/static/shift-launch-policy.js";
-import { auditIdentityBatch, queryIdentityCandidates, rejectIdentityCandidate } from '../_lib/identity-discovery.js';
+import { auditIdentityBatch, queryIdentityCandidates, rejectIdentityCandidate, restoreIdentityCandidate } from '../_lib/identity-discovery.js';
 import { previewIdentityOperation, commitIdentityOperation, previewIdentityReversal, reverseIdentityOperation, queryIdentityPeople, queryIdentityPerson, expandApprovedIdentityAliases, accountIdentityAliases } from '../_lib/doctor-identity.js';
 import { FACILITY_ACCESS_VERSION, isAllSiteSeniority, facilityAccessKeys, facilityAccessAllows, restrictedFacilityScope, validFacilityDateRange, nextFacilityDate, filterFacilityRowsBySegments } from "../../public/static/facility-access-policy.js";
 import { publishedIdentityDirectory, publishedClaimSeniorities, availableIdentitySuggestions, saveBoundedAccountClaims, MAX_ACCOUNT_CLAIMS } from '../_lib/bounded-identity.js';
@@ -435,6 +435,7 @@ export async function onRequestPost(context) {
           return Response.json({ok:true,...await auditIdentityBatch(db,directory.doctors,{runId:input.runId,actor:email,register:operation==='initialize',sourceTypes:input.sourceTypes||[]})});
         }
         if(operation==='reject') return Response.json({ok:true,...await rejectIdentityCandidate(db,{...input,actor:email})});
+        if(operation==='restore-suggestion') return Response.json({ok:true,...await restoreIdentityCandidate(db,input)});
         if(operation==='person') return Response.json({ok:true,...await queryIdentityPerson(db,String(input.personId||''))});
         if(operation==='preview') return Response.json({ok:true,preview:await previewIdentityOperation(db,input)});
         if(operation==='preview-reversal') return Response.json({ok:true,preview:await previewIdentityReversal(db,String(input.operationId||''))});

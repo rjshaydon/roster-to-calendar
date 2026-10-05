@@ -222,8 +222,8 @@ export async function queryIdentityPeople(db,{after='',limit=25,search='',search
  else if(searchType==='person') people=await rows(db,'SELECT p.* FROM roster_people p WHERE p.person_id=? UNION SELECT p.* FROM roster_person_redirects r JOIN roster_people p ON p.person_id=r.person_id WHERE r.old_person_id=? AND r.active=1',[search,search]);
  else if(searchType==='account') people=await rows(db,'SELECT p.* FROM account_people a JOIN roster_people p ON p.person_id=a.person_id WHERE a.email=?',[search.toLowerCase()]);
  else if(searchType==='alias') {
-  if(!SOURCES.has(sourceType)) throw error('Select the alias site.','IDENTITY_INPUT');
-  people=await rows(db,'SELECT p.* FROM roster_person_aliases a JOIN roster_people p ON p.person_id=a.person_id WHERE a.source_type=? AND a.doctor_key=?',[sourceType,search]);
+  if(sourceType && !SOURCES.has(sourceType)) throw error('Unknown roster site.','IDENTITY_INPUT');
+  people=sourceType?await rows(db,'SELECT p.* FROM roster_person_aliases a JOIN roster_people p ON p.person_id=a.person_id WHERE a.source_type=? AND a.doctor_key=?',[sourceType,search]):await rows(db,`SELECT DISTINCT p.* FROM roster_person_aliases a JOIN roster_people p ON p.person_id=a.person_id WHERE a.source_type IN ('mmc','mch','ddh','vhh','casey') AND a.doctor_key IN (?,?) ORDER BY p.person_id LIMIT 26`,[search,search.toUpperCase().replace(/\s+/g,' ')]);
  } else if(searchType==='name') {
   const cursor=after?await db.prepare('SELECT preferred_display_name FROM roster_people WHERE person_id=?').bind(after).first():null;
   if(after && !cursor) throw error('Refresh the search before continuing.','IDENTITY_INPUT');
@@ -233,9 +233,16 @@ export async function queryIdentityPeople(db,{after='',limit=25,search='',search
 }
 export async function queryIdentityPerson(db,id) {
  const data=await scope(db,[String(id)]);
- const history=await rows(db,`SELECT o.operation_id,o.kind,o.status,o.actor,o.reason,o.created_at,o.reversed_operation_id,o.reversed_by,j.status AS publication_status,j.last_error AS publication_error FROM roster_identity_operation_people h JOIN roster_identity_operations o ON o.operation_id=h.operation_id LEFT JOIN roster_identity_jobs j ON j.operation_id=o.operation_id WHERE h.person_id=? ORDER BY h.created_at DESC,h.operation_id DESC LIMIT 26`,[String(id)]);
+ const history=await rows(db,`SELECT o.operation_id,o.kind,o.status,o.actor,o.reason,o.created_at,o.reversed_operation_id,o.reversed_by,o.before_json,o.after_json,undo.created_at AS reversed_at,j.status AS publication_status,j.last_error AS publication_error FROM roster_identity_operation_people h JOIN roster_identity_operations o ON o.operation_id=h.operation_id LEFT JOIN roster_identity_jobs j ON j.operation_id=o.operation_id LEFT JOIN roster_identity_operations undo ON undo.operation_id=o.reversed_by WHERE h.person_id=? ORDER BY h.created_at DESC,h.operation_id DESC LIMIT 26`,[String(id)]);
  // No roster history scan. Coverage comes from published artifacts in the API.
- return {...data,history:history.slice(0,25),historyTruncated:history.length>25};
+ return {...data,history:history.slice(0,25).map(({before_json,after_json,...op})=>{
+  const before=JSON.parse(before_json),after=JSON.parse(after_json);
+  const names=new Map([...before.people,...after.people].map(p=>[p.person_id,p.preferred_display_name]));
+  op.summary=after.aliases.filter(a=>before.aliases.some(b=>b.source_type===a.source_type&&b.doctor_key===a.doctor_key&&b.person_id!==a.person_id)).map(a=>`${a.source_type.toUpperCase()} — ${a.display_name||a.doctor_key}: ${names.get(before.aliases.find(b=>b.source_type===a.source_type&&b.doctor_key===a.doctor_key).person_id)} → ${names.get(a.person_id)}`);
+  if(op.kind==='name'||op.kind==='id')op.summary=before.people.map(p=>`${p.preferred_display_name} → ${after.people.find(a=>a.person_id===p.person_id&&a.status==='active')?.preferred_display_name||after.people.find(a=>a.status==='active')?.preferred_display_name}`);
+  if(op.kind==='account-link')op.summary=after.accounts.filter(a=>!before.accounts.some(b=>b.email===a.email&&b.person_id===a.person_id)).map(a=>`${a.email} → ${names.get(a.person_id)}`);
+  return op;
+ }),historyTruncated:history.length>25};
 }
 export async function expandApprovedIdentityAliases(db,aliases) {
  if(!aliases.length || aliases.length>16) return aliases;
