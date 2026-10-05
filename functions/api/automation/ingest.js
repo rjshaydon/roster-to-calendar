@@ -84,6 +84,18 @@ export async function onRequestPost(context) {
     // derived events until the roster provider changes the workbook itself.
     const prior = await findSuccessfulRosterSyncByHash(context.env.ROSTER_DB, sourceId, contentHash, file.name);
     if (prior) {
+      // Record this newly observed version once, preserving the original import
+      // evidence. Subsequent metadata checks can then skip content retrieval.
+      if (providerVersion) {
+        await createRosterSyncRun(context.env.ROSTER_DB, {
+          id: `sync:${sourceId}:${crypto.randomUUID()}`,
+          sourceId, triggerType: "sharepoint", providerVersion, contentHash,
+          fileId: prior.fileId, sourceFileId: prior.sourceFileId || prior.fileId,
+          status: "success", message: "Provider version verified against identical retained content.",
+          doctorCount: prior.doctorCount, eventCount: prior.eventCount,
+          startedAt: now, completedAt: now,
+        });
+      }
       return Response.json({ ok: true, status: "unchanged", sourceId, fileId: prior.fileId, runId: prior.id });
     }
     const queued = await findQueuedRosterSyncByHash(context.env.ROSTER_DB, sourceId, contentHash, file.name);

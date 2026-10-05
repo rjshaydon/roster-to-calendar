@@ -113,8 +113,11 @@ assert.equal(db.rowsWritten, 0, "subsequent unchanged validations must return to
 db.resetMetrics();
 putsBefore = r2.puts;
 assert.equal((await jsonPayload(await callWorkbook("etag-2"))).status, "unchanged");
-assert.equal(db.rowsWritten, 0, "identical workbook content under a new provider version must write zero D1 rows");
+assert.equal(db.rowsWritten, 1, "a new provider version with identical content records one receipt to prevent repeated downloads");
 assert.equal(r2.puts, putsBefore, "identical workbook content under a new provider version must write zero R2 objects");
+db.resetMetrics();
+assert.equal((await jsonPayload(await callWorkbook("etag-2"))).status, "unchanged");
+assert.equal(db.rowsWritten, 0, "the verified version must subsequently remain zero-write");
 
 const changedWorkbookBytes = new TextEncoder().encode("deterministic synthetic workbook with one correction");
 db.resetMetrics();

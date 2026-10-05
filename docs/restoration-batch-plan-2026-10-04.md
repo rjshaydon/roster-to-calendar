@@ -262,3 +262,22 @@ edits, account switches, stale payloads, date filters and scroll.
 - Batch 2 recommendation remains Medium for transactional identity merges,
   reversal and subscription/account mapping; Low is suitable for cleanup and
   routine acceptance after implementation passes.
+
+### Live acceptance checkpoint — 5 October afternoon
+
+All three existing roster Flows (MMC, MCH, VHH) are imported and enabled.
+The new reconciliation Flow is `f46e3e52-ff98-4db9-9067-51a5de909236`.
+Its fresh manual run succeeded in eight seconds: both metadata inventories
+succeeded and only two changed files downloaded. MMC imported 153 doctors and
+4,150 events in about 40 seconds. VHH exposed a remaining global dispatch lock:
+MMC's active lease prevented VHH dispatch. Dispatch leases are now bounded to
+the exact source ID, retaining one active processor per site. A newly observed
+provider version with identical workbook content now records one successful
+receipt, preserving old import evidence and preventing subsequent downloads;
+already verified versions remain zero-write. Regression and account budget
+checks pass.
+
+Automatic reconciliation remains held at a future 2030 start time pending
+confirmation of the existing Power Automate allowance; no paid capacity has
+been added. All-site five-minute delivery remains an acceptance requirement,
+not a claimed result. Batch 2 waits for Batch 1 acceptance.

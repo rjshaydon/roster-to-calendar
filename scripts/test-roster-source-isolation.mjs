@@ -120,7 +120,7 @@ const scopedDb = {
         if (this.sql.startsWith("SELECT * FROM roster_dispatches WHERE status IN")) return null;
         return null;
       },
-      async all() { return { results: [] }; },
+      async all() { return { results: this.sql.includes("raw_roster_files.name AS file_name") ? [{ id: "adult-run", source_id: "monash-adults", status: "queued", file_id: "adult-file", object_key: "adult.xlsx" }] : [] }; },
       async run() { return { success: true, meta: { changes: 1 } }; },
     };
     return statement;
@@ -134,6 +134,9 @@ await claimRosterDispatch(scopedDb, { sourceId: "monash-adults", reason: "test",
 const pendingStatement = scopedStatements.filter((statement) => statement.sql.includes("raw_roster_files.name AS file_name")).at(-1);
 assert.match(pendingStatement.sql, /WHERE roster_sync_runs\.source_id = \?/);
 assert.deepEqual(pendingStatement.args, ["monash-adults", 1], "dispatch claim must bind the exact source and bounded limit");
+const leaseStatement = scopedStatements.find((statement) => statement.sql.startsWith("SELECT * FROM roster_dispatches WHERE status IN"));
+assert.match(leaseStatement.sql, /id >= \? AND id < \?/);
+assert.deepEqual(leaseStatement.args, ["2026-09-13T00:00:00Z", "dispatch:monash-adults:", "dispatch:monash-adults;"], "another site's active dispatch must not block this site's queue");
 
 const workflowSource = await readFile(new URL("../.github/workflows/monash-roster-sync.yml", import.meta.url), "utf8");
 const processorSource = await readFile(new URL("./process-roster-queue.mjs", import.meta.url), "utf8");
