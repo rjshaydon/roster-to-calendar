@@ -440,7 +440,7 @@ export async function onRequestPost(context) {
         if(operation==='preview-reversal') return Response.json({ok:true,preview:await previewIdentityReversal(db,String(input.operationId||''))});
         if(operation==='retry-publication') {
           const response=await requestIdentityPublication(context,String(input.operationId||''));
-          return Response.json({ok:response.ok,...await response.json()});
+          return Response.json({ok:response.ok,...await response.json().catch(()=>({error:'Calendar refresh is unavailable.',status:'deferred'}))},{status:response.status});
         }
         if(!['commit','reverse'].includes(operation)) return Response.json({error:'Unknown identity operation.'},{status:400});
         const recent=await db.prepare('SELECT operation_id FROM roster_identity_operations WHERE actor=? AND created_at>? LIMIT 1').bind(email,new Date(Date.now()-2000).toISOString()).first();
@@ -2564,7 +2564,7 @@ export async function onRequestPost(context) {
 }
 
 async function requestIdentityPublication(context,operationId) {
-  return guardedFetch(context.env,new URL('/api/automation/identity-maintenance',context.request.url),{method:'POST',headers:{Authorization:`Bearer ${String(context.env.ROSTER_AUTOMATION_TOKEN||'')}`,'Content-Type':'application/json'},body:JSON.stringify({mode:'publish',operationId})},{label:'Identity publication maintenance'});
+  return guardedFetch(context.env,new URL('/api/automation/identity-maintenance',context.request.url),{method:'POST',headers:{Authorization:`Bearer ${String(context.env.IDENTITY_MAINTENANCE_TOKEN||context.env.ROSTER_AUTOMATION_TOKEN||'')}`,'Content-Type':'application/json'},body:JSON.stringify({mode:'publish',operationId})},{label:'Identity publication maintenance'});
 }
 
 async function resolveEffectiveFacilityIdentityAccess(env,record,options) {
