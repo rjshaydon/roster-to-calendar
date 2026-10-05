@@ -26,3 +26,7 @@ Browser acceptance verified automatic search; opening a person; separation to an
 Search for **Preview Doctor**. Alpha and Alfa remain separate and have an outstanding suggestion. Alpha deliberately contains **MMC — Preview Doctor Beta**, attached to the wrong person, to demonstrate separation. **Preview Doctor Beta** exists as an available destination. The wrong attachment was restored after acceptance testing so the user can repeat the test. Synthetic login credentials are unchanged.
 
 No production migration, roster download, historical shift rewrite, real identity merge, or scheduled automation activation was performed. The separate pending Batch 2 work (Creator-selected subscription alias expansion, richer audit filters and production activation) remains outside this interface batch.
+
+## Review refinements
+
+Suggestion cards use **Review** and **Not the same person**. Review opens the suggested people’s details without opening a merge form. The unrelated people list is hidden while reviewing; **Close person** restores it. Editing and saving also show the results again. **Merge selected people** is available separately in the search-results selection area and opens its own editor.

@@ -5328,3 +5328,5 @@ body[data-skin="console"] .panel {
 .identity-workspace.identity-workspace-focus { grid-template-columns:minmax(0,1fr); }
 .identity-workspace-focus .identity-details { border:0; padding:0; }
 .identity-details > .identity-toolbar { justify-content:space-between; }
+
+.identity-peer { margin:20px 0; padding:16px; border:1px solid var(--border, #d7dce3); border-radius:10px; }
