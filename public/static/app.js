@@ -1,5 +1,5 @@
 import { onShiftLaunchWindow } from "./shift-launch-policy.js";
-import { identityReviewMarkup, mountIdentityReview } from './identity-review-ui.js?v=20261006-people8';
+import { identityReviewMarkup, mountIdentityReview } from './identity-review-ui.js?v=20261006-people9';
 let currentIdentityReviewEnabled = false;
 import { FACILITY_ACCESS_VERSION, facilityAccessKeys, restrictedFacilityScope, validFacilityDateRange } from "./facility-access-policy.js";
 import { planRosterImportBatches } from "./roster-import-batches.js";
@@ -402,6 +402,7 @@ let adminUserSeniorityFilter = "";
 let adminUserSearchQuery = "";
 let createUserAccountExpanded = false;
 let otherUsersExpanded = false;
+let identityReviewExpanded = false;
 let otherUsersExpandedBySearch = false;
 const ROSTER_HOSPITAL_SORT_RANK = { mmc: 0, ddh: 1, casey: 2, mch: 3, vhh: 4 };
 let calendarStoreStatus = null;
@@ -1555,6 +1556,10 @@ accountsBody.addEventListener("input", (event) => {
 accountsBody.addEventListener("toggle", (event) => {
   const section = event.target;
   if (!(section instanceof HTMLDetailsElement)) return;
+  if (section.matches("[data-identity-section]")) {
+    identityReviewExpanded = section.open;
+    if (section.open) mountAdminIdentityReview();
+  }
   if (section.matches("[data-create-user-account-section]")) createUserAccountExpanded = section.open;
   if (section.matches("[data-other-users-section]")) {
     otherUsersExpanded = section.open;
@@ -3401,6 +3406,7 @@ function renderAdminFilesMarkup({ canRemove = false, canAdd = false } = {}) {
               : `<article class="issue-card"><p>No earlier manual roster files.</p></article>`}
         </div>
       </section>
+      <div class="review-body system-admin-body">${renderAdvancedRosterRecovery()}</div>
     </article>
   `;
 }
@@ -12229,16 +12235,16 @@ function renderAccountsModal() {
       ].some((value) => String(value || "").toLocaleLowerCase().includes(normalizedUserSearchQuery)))
     : seniorityFilteredUsers;
   const linkedNames = renderLinkedRosterNames(currentRosterClaims, currentSuggestedClaims);
-  if (ownerView && !["parser", "system", "users", "files", "owner", "identity"].includes(currentAdminTab)) currentAdminTab = "users";
+  if (currentAdminTab === "files") currentAdminTab = "system";
+  if (currentAdminTab === "identity") { currentAdminTab = "users"; identityReviewExpanded = true; }
+  if (ownerView && !["parser", "system", "users", "owner"].includes(currentAdminTab)) currentAdminTab = "users";
   const issueCount = adminIssueCount();
   const adminTabs = ownerView ? `
     <div class="admin-tabs" role="tablist" aria-label="Admin sections">
       <button type="button" class="entrance-tab ${currentAdminTab === "users" ? "is-active" : ""}" data-admin-tab="users">Users</button>
-      <button type="button" class="entrance-tab ${currentAdminTab === "files" ? "is-active" : ""}" data-admin-tab="files">Files</button>
       <button type="button" class="entrance-tab ${currentAdminTab === "owner" ? "is-active" : ""}" data-admin-tab="owner">Account</button>
       <button type="button" class="entrance-tab ${currentAdminTab === "parser" ? "is-active" : ""}" data-admin-tab="parser">Parser${issueCount ? `<span class="notification-badge">${issueCount}</span>` : ""}</button>
       <button type="button" class="entrance-tab ${currentAdminTab === "system" ? "is-active" : ""}" data-admin-tab="system">System</button>
-      ${currentIdentityReviewEnabled?`<button type="button" class="entrance-tab ${currentAdminTab === 'identity'?'is-active':''}" data-admin-tab="identity">Identities</button>`:''}
     </div>
   ` : "";
   const ownerCard = `
@@ -12324,6 +12330,7 @@ function renderAccountsModal() {
           </div>
         </form>
       </details>
+      ${currentIdentityReviewEnabled ? identityReviewMarkup(identityReviewExpanded) : ""}
       <article class="review-card creator-qr-card" aria-labelledby="creator-qr-title">
         <img class="creator-qr-code" src="/static/rtc-curiousmind-qr.svg" alt="QR code that opens rtc.curiousmind.app">
         <div class="creator-qr-copy">
@@ -12405,28 +12412,13 @@ function renderAccountsModal() {
     ` : "";
   const parserCard = ownerView ? renderParserAdminCard(serverOtherUsers) : "";
   const systemCard = ownerView ? renderSystemAdminCard() : "";
-  const filesCard = ownerView ? renderAdminFilesMarkup({
-    canRemove: canRemoveImports(),
-    canAdd: true,
-  }) : "";
   const adminBody = ownerView
-    ? (currentAdminTab === 'identity' && currentIdentityReviewEnabled
-        ? identityReviewMarkup()
-        : currentAdminTab === "parser"
-        ? parserCard
-        : currentAdminTab === "system"
-          ? systemCard
-          : currentAdminTab === "users"
-            ? usersCard
-            : currentAdminTab === "files"
-              ? filesCard
-              : ownerCard)
+    ? currentAdminTab === "parser" ? parserCard
+      : currentAdminTab === "system" ? systemCard
+      : currentAdminTab === "users" ? usersCard : ownerCard
     : ownerCard;
   accountsBody.innerHTML = `${adminTabs}${adminBody}`;
-  if(ownerView && currentAdminTab==='identity' && currentIdentityReviewEnabled) mountIdentityReview(accountsBody.querySelector('[data-identity-review]'),async(operation,input)=>{
-    const response=await fetch('/api/state',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'identity',operation,input,email:authUserEmail||currentUserEmail,password:authUserPassword||currentUserPassword})});
-    const data=await readJsonResponse(response,'Identity review unavailable.'); if(!response.ok || !data.ok) throw new Error(data.error||'Identity operation failed.'); return data;
-  });
+  if (ownerView && currentAdminTab === "users" && identityReviewExpanded) mountAdminIdentityReview();
   if (ownerView && currentAdminTab === "users") {
     const currentUsersCard = accountsBody.querySelector(".other-users-card");
     const createUserCard = accountsBody.querySelector(".create-user-card");
@@ -12434,13 +12426,34 @@ function renderAccountsModal() {
   }
 }
 
+function mountAdminIdentityReview() {
+  const root = accountsBody.querySelector('[data-identity-review]');
+  if (!currentIdentityReviewEnabled || !root || root.dataset.mounted) return;
+  root.dataset.mounted = 'true';
+  mountIdentityReview(root, async(operation,input)=>{
+    const response=await fetch('/api/state',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:'identity',operation,input,email:authUserEmail||currentUserEmail,password:authUserPassword||currentUserPassword})});
+    const data=await readJsonResponse(response,'Identity review unavailable.'); if(!response.ok || !data.ok) throw new Error(data.error||'Identity operation failed.'); return data;
+  });
+}
+
 function renderSystemAdminCard() {
   return `
     <div class="issues-list">
-      ${renderLoginPerformanceCard()}
       ${renderCalendarStoreCard()}
+      ${renderAdminFilesMarkup({ canRemove: canRemoveImports(), canAdd: true })}
+      ${renderLoginPerformanceCard()}
     </div>
   `;
+}
+
+function renderAdvancedRosterRecovery() {
+  return `<details class="advanced-roster-recovery">
+    <summary>Advanced recovery</summary>
+    <p>Only rebuild when retained source files are known to be correct but the derived roster database is corrupted. Normal roster updates are automatic.</p>
+    ${hasPendingRosterAutomation()
+      ? `<p>Recovery is unavailable while roster updates are queued or processing.</p>`
+      : `<button type="button" class="button button-secondary" data-replace-active-rosters>Rebuild all retained rosters</button>`}
+  </details>`;
 }
 
 function renderLoginPerformanceCard() {
@@ -12634,13 +12647,6 @@ function renderCalendarStoreCard() {
           <button type="button" class="button button-secondary" data-refresh-calendar-store>Check status</button>
           <button type="button" class="button button-secondary" data-view-console>${adminConsoleOpen ? "Hide console" : "View console"}</button>
         </div>
-        <details class="advanced-roster-recovery">
-          <summary>Advanced recovery</summary>
-          <p>Only rebuild when retained source files are known to be correct but the derived roster database is corrupted. Normal roster updates are automatic.</p>
-          ${hasPendingRosterAutomation()
-            ? `<p>Recovery is unavailable while roster updates are queued or processing.</p>`
-            : `<button type="button" class="button button-secondary" data-replace-active-rosters>Rebuild all retained rosters</button>`}
-        </details>
         ${adminConsoleOpen ? renderAdminConsoleMarkup() : ""}
       </div>
     </article>
