@@ -2,8 +2,8 @@
 export default {
   "accountId": "653047f50279c40888ef9715aa7c4c5f",
   "complete": true,
-  "verifiedAt": "2026-09-07T08:55:00Z",
-  "evidence": "Read-only Wrangler control-plane database, Pages project/deployment and Worker version listings; no D1 SQL was executed.",
+  "verifiedAt": "2026-10-05T09:54:36.673273+00:00",
+  "evidence": "Wrangler D1 inventory and creation results on 5 October 2026; isolated Batch 2 Preview added without production data bindings.",
   "databases": [
     {
       "id": "237d0d52-3a7c-4e02-8648-9f4dedbc1cb0",
@@ -27,6 +27,14 @@ export default {
       "environment": "production",
       "knownCallers": [
         "Worker: acem-exam-tutor (env.DB)"
+      ]
+    },
+    {
+      "id": "741ce534-eafe-4aa7-9305-7b7ed5661979",
+      "name": "roster-identity-batch2-preview",
+      "environment": "preview",
+      "knownCallers": [
+        "Isolated Batch 2 synthetic acceptance Preview: identity-batch2-acceptance"
       ]
     }
   ]
