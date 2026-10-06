@@ -1,12 +1,22 @@
+import { facilityAccessKeys, facilityAccessAllows } from '../public/static/facility-access-policy.js';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import { DatabaseSync } from 'node:sqlite';
 import { attachContactAllocations, contactAllocationCandidates, contactRosterAssignments, mergeContactResolutionRefresh, assignmentMatchesContactContext, validateContactResolutionSelection, normaliseContactListExtract } from '../public/static/contact-allocations.js';
 import { queryContactAllocationResolutions, saveContactAllocationResolution } from '../functions/_lib/d1-calendar.js';
-import { loadPublishedFacilityContacts, publishFacilityContactExtract, publishFacilityContactResolutions } from '../functions/_lib/facility-contact-cache.js';
+import { loadPublishedFacilityContacts, publishFacilityContactExtract as publishContactExtract, publishFacilityContactResolutions } from '../functions/_lib/facility-contact-cache.js';
 
 const now = new Date('2026-10-02T01:00:00Z'); // 11:00 Melbourne, before daylight saving.
+// Publication expiry uses the wall clock too; keep historical fixtures live
+// regardless of the date on which this regression suite is run.
+async function publishFacilityContactExtract(...args) {
+  const RealDate = globalThis.Date;
+  globalThis.Date = class extends RealDate { constructor(...values) { super(...(values.length ? values : [now.getTime()])); } };
+  try { return await publishContactExtract(...args); }
+  finally { globalThis.Date = RealDate; }
+}
+
 const area = { MMC: 'Adult Emergency', MCH: 'Paediatric Emergency', DDH: 'Dandenong Emergency', VHH: 'Victorian Heart Hospital Emergency' };
 const staff = (name, source = 'DDH', team = 'Orange', seniority = 'HMO', period = 'AM', start = '08:00', end = '17:30') => ({
   source, period, team, person: { doctorKey: name.toUpperCase(), displayName: name, sourceType: source.toLowerCase(), seniority },
@@ -289,7 +299,7 @@ let clock = now;
 let actionRoster = rawRows;
 class FixedDate extends Date { constructor(...args) { super(...(args.length ? args : [clock.getTime()])); } }
 const actionUi = vm.createContext({
-  Response, Date: FixedDate,
+  Response, Date: FixedDate, facilityAccessKeys, facilityAccessAllows,
   facilityOverviewEnabled: () => true,
   facilityOverviewAccess: async () => ({ mode: 'site', facilityKey: site }),
   facilityOverviewAccessDeniedResponse: () => Response.json({ error: 'Site access denied' }, { status: 403 }),
@@ -409,3 +419,13 @@ const csContact = sheet('', 'DDH', '49908', 'Clinical Support on-site');
 const allDayServer = contactRosterAssignments([{ sourceType: 'ddh', doctorKey: allDayCs.person.doctorKey, displayName: allDayCs.person.displayName, seniority: 'HMO', event: allDayCs.event }]);
 assert.deepEqual(fingerprint(match([allDayCs], [csContact])), fingerprint(match(allDayServer, [csContact])));
 assert.equal(match(allDayServer, [csContact]).matchedCount, 1, 'all-day DDH support service retains the existing default AM period; VHH still requires timed events');
+
+// First-load/unavailable contact responses must never prevent the roster view.
+for (const previous of [null, undefined]) {
+  for (const next of [{}, {status:'unavailable',reason:'no-extract'}, {status:'not-current',contacts:[],resolutions:[]}]) {
+    assert.equal(mergeContactResolutionRefresh(previous,next),next,'missing previous contacts accept the new empty state');
+  }
+}
+assert.equal(mergeContactResolutionRefresh(null,null),null);
+const unidentifiedNext={contacts:[],resolutions:[]};
+assert.equal(mergeContactResolutionRefresh({resolutions:[pending]},unidentifiedNext),unidentifiedNext,'unidentified sheets never inherit prior resolutions');

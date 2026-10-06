@@ -227,7 +227,8 @@ export const APPROVED_CONTACT_NAME_ALIASES = Object.freeze([
 // A refresh may acknowledge it or replace it with a newer revision, but cannot
 // roll it back. Never carry it to a different sheet/date or contact key.
 export function mergeContactResolutionRefresh(previous, next) {
-  if (!next || previous?.sourceId !== next.sourceId || previous?.sourceDate !== next.sourceDate) return next;
+  if (!previous || !next || !next.sourceId || !next.sourceDate
+    || previous.sourceId !== next.sourceId || previous.sourceDate !== next.sourceDate) return next;
   const resolutions = new Map((next.resolutions || []).map((resolution) => [resolution.contactKey, resolution]));
   const keys = new Set((next.contacts || []).map((contact) => contact.contactKey));
   for (const resolution of previous.resolutions || []) {
