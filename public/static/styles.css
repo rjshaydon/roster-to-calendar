@@ -5336,3 +5336,7 @@ body[data-skin="console"] .panel {
 .identity-workspace-edit > [aria-label="People"] { border-top:1px solid var(--border, #d7dce3); padding-top:16px; }
 .identity-history-panel { margin:18px 0; border-top:1px solid var(--border, #d7dce3); padding-top:12px; }
 .identity-history-panel > summary { font-weight:600; cursor:pointer; }
+
+/* The identity surface has one browsing or detail pane at a time. */
+.identity-workspace { grid-template-columns:minmax(0,1fr); }
+.identity-workspace .identity-details { border:0; padding:0; }

@@ -225,9 +225,22 @@ export async function queryIdentityPeople(db,{after='',limit=25,search='',search
   if(sourceType && !SOURCES.has(sourceType)) throw error('Unknown roster site.','IDENTITY_INPUT');
   people=sourceType?await rows(db,'SELECT p.* FROM roster_person_aliases a JOIN roster_people p ON p.person_id=a.person_id WHERE a.source_type=? AND a.doctor_key=?',[sourceType,search]):await rows(db,`SELECT DISTINCT p.* FROM roster_person_aliases a JOIN roster_people p ON p.person_id=a.person_id WHERE a.source_type IN ('mmc','mch','ddh','vhh','casey') AND a.doctor_key IN (?,?) ORDER BY p.person_id LIMIT 26`,[search,search.toUpperCase().replace(/\s+/g,' ')]);
  } else if(searchType==='name') {
-  const cursor=after?await db.prepare('SELECT preferred_display_name FROM roster_people WHERE person_id=?').bind(after).first():null;
+  // Arbitrary substring matching cannot use a prefix range directly. Walk
+  // fixed indexed name windows instead of an unbounded LIKE/history scan.
+  let cursor=after?await db.prepare('SELECT preferred_display_name FROM roster_people WHERE person_id=?').bind(after).first():null;
   if(after && !cursor) throw error('Refresh the search before continuing.','IDENTITY_INPUT');
-  people=await rows(db,`SELECT * FROM roster_people WHERE preferred_display_name COLLATE NOCASE>=? AND preferred_display_name COLLATE NOCASE<? ${cursor?'AND (preferred_display_name COLLATE NOCASE>? OR (preferred_display_name COLLATE NOCASE=? AND person_id>?))':''} ORDER BY preferred_display_name COLLATE NOCASE,person_id LIMIT ?`,[search,search+'\uffff',...(cursor?[cursor.preferred_display_name,cursor.preferred_display_name,after]:[]),limit+1]);
+  const needle=search.normalize('NFKC').toLocaleLowerCase('en-AU');
+  people=[];
+  for(let window=0;window<8;window++) {
+   const page=await rows(db,`SELECT * FROM roster_people INDEXED BY idx_identity_person_name WHERE (preferred_display_name,person_id)>(? COLLATE NOCASE,?) ORDER BY preferred_display_name COLLATE NOCASE,person_id LIMIT ${needle?251:limit+2}`,[cursor?.preferred_display_name||'',after]);
+   for(const person of page.slice(0,250)) {
+    after=person.person_id;cursor=person;
+    if(person.preferred_display_name.normalize('NFKC').toLocaleLowerCase('en-AU').includes(needle)) people.push(person);
+    if(people.length>limit) return {people:people.slice(0,limit),next:people[limit-1].person_id};
+   }
+   if(page.length<=250) return {people,next:''};
+  }
+  return {people,next:after,searchIncomplete:true};
  } else throw error('Unsupported search.','IDENTITY_INPUT');
  return {people:people.slice(0,limit),next:people.length>limit?people[limit-1].person_id:''};
 }

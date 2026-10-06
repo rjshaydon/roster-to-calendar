@@ -112,6 +112,16 @@ sqlite.exec(`INSERT INTO roster_files(id,name,source_type,active) VALUES('grade-
  ('grade-old','grade-vhh','vhh','AESHAN KULARATNE','Aeshan KULARATNE','2022-01-01','2022-01-01','2022-01-01','2022-01-01','ED','Junior Registrar','{"id":"grade-old","source":"VHH","doctor":"Aeshan KULARATNE","title":"ED","start":"2022-01-01T09:00:00","end":"2022-01-01T17:00:00","seniority":"Junior Registrar"}'),
  ('grade-new','grade-ddh','ddh','AESHAN KULURATNE','Aeshan KULURATNE','2026-10-05','2026-10-05','2026-10-05','2026-10-05','ED','SMS','{"id":"grade-new","source":"DDH","doctor":"Aeshan KULURATNE","title":"ED","start":"2026-10-05T09:00:00","end":"2026-10-05T17:00:00","seniority":"SMS"}');`);
 assert.equal((await queryIdentityPeople(db,{search:'aeshan'})).people.length,3);
+sqlite.exec("INSERT INTO roster_people(person_id,preferred_display_name) VALUES('person:haydon-richard','Richard Haydon'),('person:haydon-other','Other Haydon'),('person:literal-percent','Literal % Name');");
+assert.ok((await queryIdentityPeople(db,{search:'hAyDoN'})).people.some(p=>p.person_id==='person:haydon-richard'),'surname substring finds Richard Haydon');
+assert.ok((await queryIdentityPeople(db,{search:'chard Hay'})).people.some(p=>p.person_id==='person:haydon-richard'),'substring can span given name and surname');
+assert.equal((await queryIdentityPeople(db,{search:'%'})).people.length,1,'search characters are literal, not SQL wildcards');
+const page1=await queryIdentityPeople(db,{search:'Haydon',limit:1});
+const page2=await queryIdentityPeople(db,{search:'Haydon',limit:1,after:page1.next});
+assert.notEqual(page1.people[0].person_id,page2.people[0].person_id,'substring pagination does not repeat or skip the second matching person');
+const substringPlan=sqlite.prepare('EXPLAIN QUERY PLAN SELECT * FROM roster_people INDEXED BY idx_identity_person_name WHERE (preferred_display_name,person_id)>(? COLLATE NOCASE,?) ORDER BY preferred_display_name COLLATE NOCASE,person_id LIMIT 251').all('Richard','person:a');
+assert.ok(substringPlan.some(p=>p.detail.includes('SEARCH roster_people USING INDEX idx_identity_person_name')),'substring windows seek into the name index');
+
 assert.equal((await queryIdentityPeople(db,{search:'AESHAN KULARATNE',searchType:'alias',sourceType:'vhh'})).people.length,1);
 assert.equal((await queryIdentityPeople(db,{search:'AESHAN KULARATNE',searchType:'alias'})).people.length,1,'exact roster-name search can query all five indexed sites without a selector');
 const allSitePlan=sqlite.prepare("EXPLAIN QUERY PLAN SELECT p.* FROM roster_person_aliases a JOIN roster_people p ON p.person_id=a.person_id WHERE a.source_type IN ('mmc','mch','ddh','vhh','casey') AND a.doctor_key=?").all('AESHAN KULARATNE');
@@ -199,6 +209,16 @@ const registryQueries=sql.length;
 const unchangedRegistry={async head(){return {etag:'fixture'};},async get(){return {async json(){return {revision:JSON.stringify([melbourneDateKey().slice(0,7),'fixture','fixture','fixture','fixture']),runId:''};}};}};
 const unchanged=await identityMaintenance({env:{...maintenanceContext.env,IDENTITY_REGISTRY_ENABLED:'true',ROSTER_FILES:unchangedRegistry},request:maintenanceRequest('register')});
 assert.equal((await unchanged.json()).status,'unchanged');assert.equal(sql.length,registryQueries,'unchanged published metadata causes zero D1 work');
+const insertSearch=sqlite.prepare('INSERT INTO roster_people(person_id,preferred_display_name) VALUES(?,?)');
+sqlite.exec('BEGIN');for(let i=0;i<2500;i++)insertSearch.run('person:search-fixture-'+i,'Directory Fixture '+String(i).padStart(4,'0'));sqlite.exec('COMMIT');
+const searchStatements=sql.length;
+const incompleteSearch=await queryIdentityPeople(db,{search:'zzzzz-unmatched'});
+assert.equal(incompleteSearch.people.length,0);
+assert.equal(incompleteSearch.searchIncomplete,true,'large substring searches expose a resumable cursor rather than an unlimited scan');
+assert.ok(incompleteSearch.next);
+assert.equal(sql.slice(searchStatements).filter(q=>q.includes('LIMIT 251')).length,8,'a request reads no more than eight fixed directory windows');
+const resumedSearch=await queryIdentityPeople(db,{search:'zzzzz-unmatched',after:incompleteSearch.next});
+assert.equal(resumedSearch.next,'','the remaining bounded directory window completes the search');
 console.log('Identity preview, atomic merge/reversal, account conflicts, reserved IDs and bounded history tests passed.');
 console.log('Bounded registry, formatting-only linking, suggestion-only discovery and durable rejection tests passed.');
 console.log('Creator authorization, disabled gates, unchanged grades, calendar aliases and subscription continuity passed.');

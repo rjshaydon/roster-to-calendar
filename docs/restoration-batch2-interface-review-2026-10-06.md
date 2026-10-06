@@ -32,3 +32,11 @@ No production migration, roster download, historical shift rewrite, real identit
 Suggestion cards use **Review** and **Not the same person**. Review opens the suggested people’s details without opening a merge form. The unrelated people list is hidden while reviewing; **Close person** restores it. Editing and saving also show the results again. **Merge selected people** is available separately in the search-results selection area and opens its own editor.
 
 Editing now uses the full panel width, with search results underneath instead of a narrow left column. Read-only copies of the person details and paired comparison are hidden during edits/review-before-save. History is a collapsed disclosure; failed calendar updates remain flagged outside it. Separating a roster name changes ownership, whereas rejecting a suggestion changes no existing links.
+
+## Single-pane browsing and explicit comparisons
+
+The surface now shows exactly one full-width pane: People when browsing, or the person/comparison/editor when open. No empty Person details placeholder is rendered. This also applies after Suggestions. Closing a person returns to People.
+
+Name contains matches literal characters anywhere in the preferred name, case-insensitively, including surname and substrings spanning name parts. It uses the existing name index to seek through fixed 250-record windows (maximum eight per request); larger directories return a resumable search cursor. Empty browsing reads only a small page. No roster/event-history query or new schema/index is required. Tests cover Richard Haydon via Haydon, cross-name substrings, literal percent signs, pagination, indexed seek plans, and bounded continuation in a 2,500-person fixture.
+
+Comparison panels ask Is this the same person? and offer Same person, Different people and Open this person. Same person opens the existing merge editor/review; it does not immediately mutate data. Different people dismisses the specific suggestion without changing existing links. Each account label names the person owning those account links; comparison does not imply that accounts are already linked to one another.
