@@ -6,6 +6,16 @@ async function digest(value) { return [...new Uint8Array(await crypto.subtle.dig
 // Keep production requests small enough for Pages CPU limits. The durable
 // cursor resumes after each request; at most 24 neighbours/block, no events.
 export const IDENTITY_BATCH_SIZE = 5;
+// On reopening the UI, consult the cached names rather than restarting a
+// completed registration pass. This reads names only, never roster events.
+export async function initializePublishedIdentityBatch(db,doctors,options={}) {
+ const cached=await all(db,'SELECT source_type,doctor_key,display_name FROM roster_identity_features LIMIT 2001');
+ if(cached.length>2000) throw Error('Identity name cache exceeds the initialization inspection limit.');
+ const names=new Map(cached.map(a=>[a.source_type+':'+a.doctor_key,a.display_name]));
+ const identities=flattenDoctorIdentities(doctors);
+ if(identities.every(a=>names.get(a.marker)===a.displayName)) return {status:'complete',examined:0,candidates:0};
+ return auditIdentityBatch(db,doctors,{...options,register:true});
+}
 export async function auditIdentityBatch(db,doctors,{runId,actor='identity-audit',register=false,weekKey='',sourceTypes=[]}={}) {
  const startedAt=Date.now();
  const scope=[...new Set(sourceTypes)].sort();

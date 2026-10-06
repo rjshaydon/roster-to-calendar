@@ -1,5 +1,5 @@
 import { onShiftLaunchWindow } from "../../public/static/shift-launch-policy.js";
-import { auditIdentityBatch, queryIdentityCandidates, rejectIdentityCandidate, restoreIdentityCandidate } from '../_lib/identity-discovery.js';
+import { initializePublishedIdentityBatch, auditIdentityBatch, queryIdentityCandidates, rejectIdentityCandidate, restoreIdentityCandidate } from '../_lib/identity-discovery.js';
 import { previewIdentityOperation, commitIdentityOperation, previewIdentityReversal, reverseIdentityOperation, queryIdentityPeople, queryIdentityPerson, expandApprovedIdentityAliases, accountIdentityAliases, calendarIdentityAliases } from '../_lib/doctor-identity.js';
 import { FACILITY_ACCESS_VERSION, isAllSiteSeniority, facilityAccessKeys, facilityAccessAllows, restrictedFacilityScope, validFacilityDateRange, nextFacilityDate, filterFacilityRowsBySegments } from "../../public/static/facility-access-policy.js";
 import { publishedIdentityDirectory, publishedClaimSeniorities, availableIdentitySuggestions, saveBoundedAccountClaims, MAX_ACCOUNT_CLAIMS } from '../_lib/bounded-identity.js';
@@ -432,7 +432,7 @@ export async function onRequestPost(context) {
             const admission=await (await refreshAccountMaintenanceBudget(context)).json();
             if(admission.deferred || !await reserveRosterMaintenanceBudget(db,4096,8192)) return Response.json({error:'Identity audit deferred by the account usage safeguard.'},{status:503});
           }
-          return Response.json({ok:true,...await auditIdentityBatch(db,directory.doctors,{runId:input.runId,actor:email,register:operation==='initialize',sourceTypes:input.sourceTypes||[]})});
+          return Response.json({ok:true,...await (operation==='initialize'?initializePublishedIdentityBatch:auditIdentityBatch)(db,directory.doctors,{runId:input.runId,actor:email,sourceTypes:input.sourceTypes||[]})});
         }
         if(operation==='reject') return Response.json({ok:true,...await rejectIdentityCandidate(db,{...input,actor:email})});
         if(operation==='restore-suggestion') return Response.json({ok:true,...await restoreIdentityCandidate(db,input)});
