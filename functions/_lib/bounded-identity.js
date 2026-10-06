@@ -12,6 +12,24 @@ export async function publishedIdentityDirectory(r2, today) {
   }
 }
 
+// Admin registration/audits retain historical roster names independently of
+// the current department and signup directory. Never read shift events here.
+export async function publishedIdentityAuditDirectory(db, r2, today) {
+  const current = await publishedIdentityDirectory(r2, today);
+  if (current.preparing || current.missingSources?.length) return current;
+  const historical = (await db.prepare(`SELECT source_type,doctor_key,display_name
+    FROM roster_doctors WHERE source_type IN ('mmc','mch','ddh','vhh','casey')
+    ORDER BY source_type,doctor_key LIMIT 2001`).all()).results || [];
+  if (historical.length > 2000) throw new Error('Historical identity name cache exceeds the inspection limit.');
+  const names = new Map(historical.map(row => [row.source_type+'|'+row.doctor_key,
+    {sourceType:row.source_type,key:row.doctor_key,displayName:row.display_name}]));
+  // Current term grades and spellings take precedence, without assigning
+  // today's grade to historical-only doctors.
+  for (const doctor of current.doctors) names.set(marker(doctor), doctor);
+  if (names.size > 2000) throw new Error('Combined identity name cache exceeds the inspection limit.');
+  return {...current, doctors:[...names.values()]};
+}
+
 export function publishedClaimSeniorities(claims, doctors) {
   const wanted = new Set((claims || []).map(marker));
   return [...new Set((doctors || []).filter(doctor => wanted.has(marker(doctor)))

@@ -2,7 +2,7 @@ import {publishIdentityOperation} from '../../_lib/doctor-identity.js';
 import {refreshAccountMaintenanceBudget} from './account-budget.js';
 import {reserveRosterMaintenanceBudget} from '../../_lib/roster-maintenance-budget.js';
 import {auditIdentityBatch} from '../../_lib/identity-discovery.js';
-import {publishedIdentityDirectory} from '../../_lib/bounded-identity.js';
+import {publishedIdentityAuditDirectory} from '../../_lib/bounded-identity.js';
 import {identityAuditWindow} from '../../../public/static/identity-audit-policy.js';
 import {facilityMetadataManifestKey} from '../../_lib/facility-overview-cache.js';
 import {melbourneDateKey} from '../../../public/static/roster-term-policy.js';
@@ -20,7 +20,7 @@ export async function onRequestPost(context) {
   const r2=context.env.ROSTER_FILES;
   const heads=await Promise.all(['mmc','mch','ddh','vhh'].map(source=>r2.head(facilityMetadataManifestKey(source))));
   if(heads.some(head=>!head)) return Response.json({status:'directory-preparing'});
-  registryRevision=JSON.stringify([melbourneDateKey().slice(0,7),...heads.map(head=>head.etag)]);
+  registryRevision=JSON.stringify(['historical-names-v1',melbourneDateKey().slice(0,7),...heads.map(head=>head.etag)]);
   registryObject=await r2.get('identity/registry-progress.json');
   registryState=registryObject?await registryObject.json():{};
   if(!registryState.runId && registryState.revision===registryRevision) return Response.json({status:'unchanged'});
@@ -41,7 +41,7 @@ export async function onRequestPost(context) {
   if(admission.deferred || !await reserveRosterMaintenanceBudget(db,4096,input.mode==='publish'?4096:8192)) return Response.json({status:'deferred'},{status:503});
  }
  if(['audit','register'].includes(input.mode)) {
-  const directory=await publishedIdentityDirectory(context.env.ROSTER_FILES,melbourneDateKey());
+  const directory=await publishedIdentityAuditDirectory(db,context.env.ROSTER_FILES,melbourneDateKey());
   if(directory.preparing || directory.missingSources?.length) return Response.json({status:'directory-preparing'},{status:503});
   const result=await auditIdentityBatch(db,directory.doctors,{runId:input.mode==='register'?registryState.runId:undefined,register:input.mode==='register',actor:'published-roster-registration',weekKey:input.mode==='audit'?window.weekKey:''});
   if(input.mode==='register' && result.status!=='busy') {

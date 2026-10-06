@@ -3,7 +3,7 @@ import { onShiftLaunchWindow } from "../../public/static/shift-launch-policy.js"
 import { initializePublishedIdentityBatch, auditIdentityBatch, queryIdentityCandidates, rejectIdentityCandidate, restoreIdentityCandidate } from '../_lib/identity-discovery.js';
 import { previewIdentityOperation, commitIdentityOperation, previewIdentityReversal, reverseIdentityOperation, queryIdentityPeople, queryIdentityPerson, expandApprovedIdentityAliases, accountIdentityAliases, calendarIdentityAliases } from '../_lib/doctor-identity.js';
 import { FACILITY_ACCESS_VERSION, isAllSiteSeniority, facilityAccessKeys, facilityAccessAllows, restrictedFacilityScope, validFacilityDateRange, nextFacilityDate, filterFacilityRowsBySegments } from "../../public/static/facility-access-policy.js";
-import { publishedIdentityDirectory, publishedClaimSeniorities, availableIdentitySuggestions, saveBoundedAccountClaims, MAX_ACCOUNT_CLAIMS } from '../_lib/bounded-identity.js';
+import { publishedIdentityDirectory, publishedIdentityAuditDirectory, publishedClaimSeniorities, availableIdentitySuggestions, saveBoundedAccountClaims, MAX_ACCOUNT_CLAIMS } from '../_lib/bounded-identity.js';
 import { handleManualRosterImport, deactivateManualRosterFiles } from "../_lib/manual-roster-management.js";
 import { refreshAccountMaintenanceBudget } from "./automation/account-budget.js";
 import { onRequestPost as processFacilityRefresh } from "./automation/facility-refresh.js";
@@ -427,7 +427,7 @@ export async function onRequestPost(context) {
         if(operation==='list') return Response.json({ok:true,...await queryIdentityPeople(db,input)});
         if(operation==='candidates') return Response.json({ok:true,...await queryIdentityCandidates(db,input)});
         if(['audit','initialize'].includes(operation)) {
-          const directory=await publishedIdentityDirectory(context.env.ROSTER_FILES,australianDateKey());
+          const directory=await publishedIdentityAuditDirectory(db,context.env.ROSTER_FILES,australianDateKey());
           if(directory.preparing || directory.missingSources?.length) return Response.json({error:'Wait for all published site directories before auditing identities.'},{status:503});
           if(context.env.ROSTER_ACCOUNT_BUDGET_ENABLED==='true') {
             const admission=await (await refreshAccountMaintenanceBudget(context)).json();

@@ -5,7 +5,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { onRequestPost as stateHandler } from '../functions/api/state.js';
 import { onRequest as middleware } from '../functions/_middleware.js';
 import { storeCachedSnapshot, loadAccountMirror } from '../functions/_lib/d1-calendar.js';
-import { publishedIdentityDirectory, publishedClaimSeniorities, saveBoundedAccountClaims } from '../functions/_lib/bounded-identity.js';
+import { publishedIdentityDirectory, publishedIdentityAuditDirectory, publishedClaimSeniorities, saveBoundedAccountClaims } from '../functions/_lib/bounded-identity.js';
 class LocalD1 {
   constructor(sqlite) { this.sqlite = sqlite; this.rowsWritten = 0; this.sql = []; this.failRunIncludes = ""; }
   prepare(sql) {
@@ -106,6 +106,11 @@ for(const source of ['mmc','mch','ddh','vhh']) {
 const directory=await publishedIdentityDirectory(r2,today);
 assert.equal(directory.preparing,false); assert.deepEqual(directory.missingSources,[]);
 assert.deepEqual(publishedClaimSeniorities([alice],directory.doctors),['Junior Registrar']);
+sqlite.prepare('INSERT INTO roster_doctors(source_type,doctor_key,display_name,updated_at) VALUES(?,?,?,?)').run('ddh','AESHAN KULURATNE','Aeshan KULURATNE',today);
+const historicalAuditDirectory=await publishedIdentityAuditDirectory(db,r2,today);
+assert(historicalAuditDirectory.doctors.some(d=>d.key==='AESHAN KULURATNE'),'historical-only names reach the audit');
+assert(!directory.doctors.some(d=>d.key==='AESHAN KULURATNE'),'historical registration does not expand current department/signup membership');
+assert.deepEqual(publishedClaimSeniorities([alice],historicalAuditDirectory.doctors),['Junior Registrar'],'current grades are not replaced by historical records');
 const scheduled=[];
 async function api(body,email='alice@example.test',flags={}) {
   const request=new Request('https://fixture.test/api/state',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email,password,...body})});

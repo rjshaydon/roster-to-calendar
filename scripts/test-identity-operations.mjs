@@ -224,7 +224,7 @@ const maintenanceContext={env:{ROSTER_DB:db,ROSTER_FILES:r2,IDENTITY_REVIEW_ENAB
 maintenanceContext.next=()=>identityMaintenance(maintenanceContext);
 assert.equal((await middleware(maintenanceContext)).status,200,'identity publication does not enable roster imports');
 const registryQueries=sql.length;
-const unchangedRegistry={async head(){return {etag:'fixture'};},async get(){return {async json(){return {revision:JSON.stringify([melbourneDateKey().slice(0,7),'fixture','fixture','fixture','fixture']),runId:''};}};}};
+const unchangedRegistry={async head(){return {etag:'fixture'};},async get(){return {async json(){return {revision:JSON.stringify(['historical-names-v1',melbourneDateKey().slice(0,7),'fixture','fixture','fixture','fixture']),runId:''};}};}};
 const unchanged=await identityMaintenance({env:{...maintenanceContext.env,IDENTITY_REGISTRY_ENABLED:'true',ROSTER_FILES:unchangedRegistry},request:maintenanceRequest('register')});
 assert.equal((await unchanged.json()).status,'unchanged');assert.equal(sql.length,registryQueries,'unchanged published metadata causes zero D1 work');
 const insertSearch=sqlite.prepare('INSERT INTO roster_people(person_id,preferred_display_name) VALUES(?,?)');
