@@ -145,6 +145,15 @@ assert.equal(JSON.stringify(sqlite.prepare('SELECT * FROM roster_events ORDER BY
 const feed=await feedHandler({env:{ROSTER_DB:db,IDENTITY_REVIEW_ENABLED:'true'},request:new Request('https://example.test/api/feed?token=keep-token')});
 const ics=await feed.text(); assert.equal(feed.status,200,ics); assert.ok(ics.includes('20220101') && ics.includes('20261005'),'existing subscription delivers both approved aliases: '+ics);
 assert.equal(sqlite.prepare('SELECT seniority FROM roster_events WHERE id=?').get('grade-old').seniority,'Junior Registrar');
+sqlite.prepare("UPDATE account_profiles SET role='creator' WHERE email='one@test'").run();
+sqlite.prepare("INSERT INTO account_states(email,session_json) VALUES(?,?)").run('one@test',JSON.stringify({doctorKey:'AESHAN KULURATNE'}));
+const creatorFeed=await feedHandler({env:{ROSTER_DB:db,IDENTITY_REVIEW_ENABLED:'true'},request:new Request('https://example.test/api/feed?token=keep-token')});
+const creatorIcs=await creatorFeed.text();
+assert.equal(creatorFeed.status,200,creatorIcs);
+assert.ok(creatorIcs.includes('20220101') && creatorIcs.includes('20261005'),'Creator selected subscription expands approved aliases across sites');
+sqlite.prepare("UPDATE account_profiles SET role='' WHERE email='one@test'").run();
+sqlite.prepare("DELETE FROM account_states WHERE email='one@test'").run();
+
 
 // Other supported edits use the same transaction and reversal boundary.
 sqlite.exec("INSERT INTO roster_people(person_id,preferred_display_name) VALUES('person:edit-fixture','Fixture'); INSERT INTO roster_person_aliases(source_type,doctor_key,display_name,person_id) VALUES('mmc','FIXTURE','Fixture','person:edit-fixture');");

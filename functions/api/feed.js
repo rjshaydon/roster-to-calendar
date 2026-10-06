@@ -1,7 +1,7 @@
 import { applyEventOverrides, customEventsToEvents, defaultSettings, exportIcs } from "../_lib/roster.js";
 import { applyAccountHospitalLocations, dedupeEventsByIdentity, hasCalendarDb, loadAccountHospitalLocations, loadAccountMirrorBySubscriptionToken, queryAccountCustomEvents, queryDoctorEvents } from "../_lib/d1-calendar.js";
 import { normalizeEmail } from "./state.js";
-import { accountIdentityAliases } from '../_lib/doctor-identity.js';
+import { accountIdentityAliases, expandApprovedIdentityAliases } from '../_lib/doctor-identity.js';
 
 export async function onRequestGet(context) {
   try {
@@ -41,6 +41,12 @@ async function buildD1SubscriptionFeed(db, record, view, identitiesEnabled=false
   const doctorKeys = [...new Set((role === "creator" || role === "owner")
     ? [String(session.doctorKey || "").trim()].filter(Boolean)
     : claims.map((claim) => claim.key))];
+  if(identitiesEnabled && ['creator','owner'].includes(role)) {
+    // Creator subscriptions follow the selected roster identity, not the owner's
+    // own account link. Preserve the existing cross-site key selection and add
+    // only explicitly approved aliases through indexed identity lookups.
+    claims=await expandApprovedIdentityAliases(db,doctorKeys.flatMap(key=>['mmc','mch','ddh','vhh','casey'].map(sourceType=>({sourceType,key}))));
+  }
   if (!doctorKeys.length && !identitiesEnabled) return null;
   const settings = {
     ...defaultSettings(),
@@ -52,7 +58,7 @@ async function buildD1SubscriptionFeed(db, record, view, identitiesEnabled=false
     : {};
   const hospitalLocations = await loadAccountHospitalLocations(db, record.email, session).catch(() => null);
   const rosterEvents = dedupeEventsByIdentity(applyEventOverrides(
-    applyAccountHospitalLocations(identitiesEnabled && !['creator','owner'].includes(role)
+    applyAccountHospitalLocations(identitiesEnabled
       ? (await Promise.all([...new Set(claims.map(claim=>claim.sourceType))].map(async sourceType=>(await queryDoctorEvents(db,claims.filter(claim=>claim.sourceType===sourceType).map(claim=>claim.key),{...queryOptions,sourceTypes:[sourceType]})).filter(event=>String(event.source||'').toLowerCase()===sourceType)))).flat()
       : await queryDoctorEvents(db, doctorKeys, queryOptions), hospitalLocations || {}, { includeLocations: settings.includeLocations !== false }),
     session.overrides || {},
