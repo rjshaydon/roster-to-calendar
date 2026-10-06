@@ -49,4 +49,48 @@ After explicit approval: apply only migration 0040 with the existing schema/ledg
 
 Rollback: disable the three identity flags in Pages and the two watchdog flags, restore the preceding application release, and retain additive schema/history. Reverse any subsequently approved real identity operation through its exact preview before retiring that feature.
 
-The implementation is ready for staged activation; real clinicians and their phone subscriptions have not been merged as a test. Richer historical evidence, upload/date-range audit filters, approved-alias expansion for Creator-selected subscription feeds (ordinary-user feeds are covered), and identity-dispute workflows remain follow-up work, with disputes/account lifecycle scheduled in Batch 6.
+The implementation is ready for staged activation; real clinicians and their phone subscriptions have not been merged as a test. Richer historical evidence, upload/date-range audit filters, identity-dispute workflows remain follow-up work, with disputes/account lifecycle scheduled in Batch 6.
+
+
+## Production rollout checkpoint — 6 October 2026
+
+The user authorized the grouped production activation. PRs 27–31 are merged;
+production is `0f57c850`. Migration 0040 is applied after verification of the
+0039 baseline, with selective private recovery exports and a Time Travel bookmark.
+Identity review, registration and scheduled audit flags are enabled in Pages;
+registration and weekly audits are enabled in the existing five-minute watchdog.
+The existing credentials are retained. No clinician merge was performed as a test.
+
+Live acceptance found and corrected a Creator selected-calendar regression
+(PR 28). Creator calendars and feeds now expand approved aliases from the selected
+roster identity rather than replacing that selection with the Creator's own
+account links. Existing ordinary and Creator subscription URLs retained their
+133 and 154 events respectively, including identical event UIDs in comparisons
+against the preceding release. The selected calendar displayed 59 events after
+refresh, including the next term.
+
+The account safety gate initially deferred initialization because its runtime
+inventory omitted the isolated preview database. PR 30 restored parity with the
+four-database inventory. Quotas and admission rules were not relaxed.
+
+Initialization then examined 400 published names and registered 368 new aliases;
+the directory contained 399 people. A production CPU/memory limit interrupted
+its next request. PR 31 reduces both registration and audit requests to five
+identities, retaining durable cursor/lease progress. The complete identity
+operations suite passes on the released code, including Creator calendar/feed
+coverage (its missing test import was corrected). The earlier compatibility test
+log had failed at that import and must not be treated as a passing run.
+
+At this checkpoint, final initialization and initial suggestion audit are still
+pending. Safari requires a fresh user sign-in for interface acceptance. The
+03:10 UTC automatic identity call authenticated successfully (200, 14 reads,
+zero writes) but deferred work while MMC/VHH imports were queued; this does not
+yet establish successful automatic registration. The weekly audit is configured
+for the existing Sunday window and its scheduling policy is tested; a future
+production Sunday run has not yet been observed.
+
+Latest settled account-wide check: GO, 126,120 reads and 1,397 writes. These
+figures have an analytics settlement delay. Private rollout diagnostics remain
+outside Git. Finish the saved initialization, review the first candidate list,
+verify a successful automatic registration checkpoint, then repeat subscription
+comparison if aliases changed. Ambiguous matches require human review.

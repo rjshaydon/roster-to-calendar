@@ -1,9 +1,12 @@
 # Remaining restoration and development batches — 4 October 2026
 
-Status: Batch 1 implementation in progress. App-side code and tests are complete;
-app-side changes are deployed; live SharePoint Flow acceptance remains pending. The user's agreed priority is **1 → 2 → 6 → 7 → 3 → 4
-→ 5 → 8**, retaining the original batch numbers for continuity. This plan
-supersedes earlier fifteen-minute freshness targets and batch ordering.
+Status: Batch 1 roster traffic cutover accepted; Batch 2 production rollout is
+merged and enabled, with final initialization/automatic registration acceptance
+pending. See the 6 October checkpoint in
+`restoration-batch2-acceptance-2026-10-05.md` for verified results and limitations.
+The user's agreed priority is **1 → 2 → 6 → 7 → 3 → 4 → 5 → 8**,
+retaining the original batch numbers for continuity. This plan supersedes earlier
+fifteen-minute freshness targets and batch ordering.
 
 Baseline: production `ba5ee7ad` restored VHH history from 4 May, DDH five-minute
 metadata polling and the four-site cached views. Existing account-wide admission,
