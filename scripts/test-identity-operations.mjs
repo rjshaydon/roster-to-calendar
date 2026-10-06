@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {readFile,readdir} from 'node:fs/promises';
-import {previewIdentityOperation,commitIdentityOperation,previewIdentityReversal,reverseIdentityOperation,expandApprovedIdentityAliases,resolvePersonId,queryIdentityPeople,queryIdentityPerson,publishIdentityOperation,accountIdentityAliases} from '../functions/_lib/doctor-identity.js';
+import {previewIdentityOperation,commitIdentityOperation,previewIdentityReversal,reverseIdentityOperation,expandApprovedIdentityAliases,resolvePersonId,queryIdentityPeople,queryIdentityPerson,publishIdentityOperation,accountIdentityAliases,calendarIdentityAliases} from '../functions/_lib/doctor-identity.js';
 import {auditIdentityBatch,queryIdentityCandidates,rejectIdentityCandidate,restoreIdentityCandidate} from '../functions/_lib/identity-discovery.js';
 import {loadPublishedDoctorCalendar,filterSnapshotByIdentityAliases} from '../functions/_lib/published-doctor-calendar.js';
 import {onRequestPost as identityMaintenance} from '../functions/api/automation/identity-maintenance.js';
@@ -71,7 +71,7 @@ const doctors=[
  ...Array.from({length:28},(_,i)=>({sourceType:'mmc',key:`DOCTOR${i} TEST${i}`,displayName:`Doctor${i} Test${i}`})),
 ];
 let audit=await auditIdentityBatch(db,doctors,{register:true,actor:'creator@test'});
-assert.equal(audit.examined,25,'registry preparation is bounded to 25 identities');
+assert.equal(audit.examined,5,'registry preparation checkpoints within the production request limit');
 while(audit.status!=='complete') audit=await auditIdentityBatch(db,doctors,{register:true,actor:'creator@test',runId:audit.runId});
 const toby=sqlite.prepare("SELECT person_id FROM roster_person_aliases WHERE doctor_key LIKE 'TOBY%' ORDER BY doctor_key").all();
 assert.equal(toby[0].person_id,toby[1].person_id,'only harmless formatting is automatically linked');
