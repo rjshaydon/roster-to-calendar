@@ -1,11 +1,13 @@
 import { onShiftLaunchWindow } from "../../public/static/shift-launch-policy.js";
+import { auditIdentityBatch, queryIdentityCandidates, rejectIdentityCandidate, restoreIdentityCandidate } from '../_lib/identity-discovery.js';
+import { previewIdentityOperation, commitIdentityOperation, previewIdentityReversal, reverseIdentityOperation, queryIdentityPeople, queryIdentityPerson, expandApprovedIdentityAliases, accountIdentityAliases } from '../_lib/doctor-identity.js';
 import { FACILITY_ACCESS_VERSION, isAllSiteSeniority, facilityAccessKeys, facilityAccessAllows, restrictedFacilityScope, validFacilityDateRange, nextFacilityDate, filterFacilityRowsBySegments } from "../../public/static/facility-access-policy.js";
 import { publishedIdentityDirectory, publishedClaimSeniorities, availableIdentitySuggestions, saveBoundedAccountClaims, MAX_ACCOUNT_CLAIMS } from '../_lib/bounded-identity.js';
 import { handleManualRosterImport, deactivateManualRosterFiles } from "../_lib/manual-roster-management.js";
 import { refreshAccountMaintenanceBudget } from "./automation/account-budget.js";
 import { onRequestPost as processFacilityRefresh } from "./automation/facility-refresh.js";
 import { saveSessionSettings } from "../_lib/session-settings.js";
-import { loadPublishedDoctorCalendar } from "../_lib/published-doctor-calendar.js";
+import { loadPublishedDoctorCalendar, filterSnapshotByIdentityAliases } from "../_lib/published-doctor-calendar.js";
 import { loadCachedRosterInsights } from "../_lib/cached-roster-insights.js";
 import { applyEventOverrides, customEventsToEvents, defaultSettings, filterCalendarRosterEvents, inspectImportRecord, isClinicalSupportRosterEvent, isIgnoredRosterIssueValue, normalizeRosterName, previewSummary } from "../_lib/roster.js";
 import { AUTOMATION_SOURCES } from "../_lib/automation-import.js";
@@ -315,10 +317,10 @@ export async function onRequestPost(context) {
       const authMs = Date.now() - authStartedAt;
       const prepareStartedAt = Date.now();
       const prepared = loginResponseMode === "fast"
-        ? await prepareFastLoginEnvelope(loginRecord, { db: context.env.ROSTER_DB, facilityAccessMaterialized: materializedAccessFor(loginRecord) })
+        ? await prepareFastLoginEnvelope(loginRecord, { db: context.env.ROSTER_DB, identityReviewEnabled: context.env.IDENTITY_REVIEW_ENABLED==='true', facilityAccessMaterialized: materializedAccessFor(loginRecord) })
         : await prepareAccountResponse(null, loginRecord, {
             db: context.env.ROSTER_DB,
-            identityDiscoveryEnabled: discoveryEnabled,
+            identityDiscoveryEnabled: discoveryEnabled, identityReviewEnabled: context.env.IDENTITY_REVIEW_ENABLED === "true",
             r2: context.env.ROSTER_FILES,
             facilityAccessMaterialized: materializedAccessFor(loginRecord),
             includeAvailableDoctors: (loginRecord.role || roleForEmail(loginRecord.email)) === "creator"
@@ -387,6 +389,7 @@ export async function onRequestPost(context) {
         nonClinical: prepared.nonClinical,
         directorViewEnabled: prepared.directorViewEnabled,
         identityDiscoveryUnavailable: prepared.identityDiscoveryUnavailable ?? !discoveryEnabled,
+        identityReviewEnabled: context.env.IDENTITY_REVIEW_ENABLED === 'true',
         creatorStartupHydrationEnabled: creatorStartupHydrationEnabled(context.env),
         snapshotOwnerType: snapshotPayload.snapshot?.ownerType || snapshotOwnerTypeForRecord(loginRecord, prepared.role),
         snapshotOwnerId: snapshotPayload.snapshot?.ownerId || normalizeEmail(loginRecord.email),
@@ -413,7 +416,45 @@ export async function onRequestPost(context) {
       });
     }
 
+    if(action==='identity' && context.env.IDENTITY_REVIEW_ENABLED!=='true') return Response.json({error:'Identity review is not enabled in this deployment.'},{status:503});
     const account = await verifyD1Account(context.env.ROSTER_DB, email, password);
+    if (action === 'identity') {
+      if (!['creator','owner'].includes(account.role)) return Response.json({error:'Creator access is required.'},{status:403});
+      if (context.env.IDENTITY_REVIEW_ENABLED !== 'true') return Response.json({error:'Identity review is not enabled in this deployment.'},{status:503});
+      const db=context.env.ROSTER_DB, operation=String(body.operation||''), input={...(body.input||{}),actor:email};
+      try {
+        if(operation==='list') return Response.json({ok:true,...await queryIdentityPeople(db,input)});
+        if(operation==='candidates') return Response.json({ok:true,...await queryIdentityCandidates(db,input)});
+        if(['audit','initialize'].includes(operation)) {
+          const directory=await publishedIdentityDirectory(context.env.ROSTER_FILES,australianDateKey());
+          if(directory.preparing || directory.missingSources?.length) return Response.json({error:'Wait for all published site directories before auditing identities.'},{status:503});
+          if(context.env.ROSTER_ACCOUNT_BUDGET_ENABLED==='true') {
+            const admission=await (await refreshAccountMaintenanceBudget(context)).json();
+            if(admission.deferred || !await reserveRosterMaintenanceBudget(db,4096,8192)) return Response.json({error:'Identity audit deferred by the account usage safeguard.'},{status:503});
+          }
+          return Response.json({ok:true,...await auditIdentityBatch(db,directory.doctors,{runId:input.runId,actor:email,register:operation==='initialize',sourceTypes:input.sourceTypes||[]})});
+        }
+        if(operation==='reject') return Response.json({ok:true,...await rejectIdentityCandidate(db,{...input,actor:email})});
+        if(operation==='restore-suggestion') return Response.json({ok:true,...await restoreIdentityCandidate(db,input)});
+        if(operation==='person') return Response.json({ok:true,...await queryIdentityPerson(db,String(input.personId||''))});
+        if(operation==='preview') return Response.json({ok:true,preview:await previewIdentityOperation(db,input)});
+        if(operation==='preview-reversal') return Response.json({ok:true,preview:await previewIdentityReversal(db,String(input.operationId||''))});
+        if(operation==='retry-publication') {
+          const response=await requestIdentityPublication(context,String(input.operationId||''));
+          return Response.json({ok:response.ok,...await response.json().catch(()=>({error:'Calendar refresh is unavailable.',status:'deferred'}))},{status:response.status});
+        }
+        if(!['commit','reverse'].includes(operation)) return Response.json({error:'Unknown identity operation.'},{status:400});
+        const recent=await db.prepare('SELECT operation_id FROM roster_identity_operations WHERE actor=? AND created_at>? LIMIT 1').bind(email,new Date(Date.now()-2000).toISOString()).first();
+        if(recent) return Response.json({error:'Please wait before another identity change.'},{status:429});
+        if(context.env.ROSTER_ACCOUNT_BUDGET_ENABLED==='true') {
+          const admission=await (await refreshAccountMaintenanceBudget(context)).json();
+          if(admission.deferred || !await reserveRosterMaintenanceBudget(db,1024,2048)) return Response.json({error:'Identity change deferred by the account usage safeguard.'},{status:503});
+        }
+        const result=await (operation==='commit'?commitIdentityOperation(db,input):reverseIdentityOperation(db,input));
+        context.waitUntil(requestIdentityPublication(context,result.operationId).then(response=>{if(!response.ok)console.warn('Identity publication deferred',{operationId:result.operationId});}).catch(()=>console.warn('Identity publication deferred',{operationId:result.operationId})));
+        return Response.json({ok:true,...result});
+      } catch(error) { return Response.json({error:error.message,code:error.code||'IDENTITY_ERROR'},{status:error.code==='IDENTITY_INPUT'?400:409}); }
+    }
     // A Creator may enter another account from the switcher.  At a glance
     // requests must then be authorised as that entered account, rather than
     // inheriting the Creator's all-site access.
@@ -436,7 +477,7 @@ export async function onRequestPost(context) {
     const facilityOverviewAccess = () => {
       if (!facilityOverviewAccessPromise) {
         facilityOverviewAccessPromise = facilityOverviewSubject
-          ? resolveFacilityOverviewAccess(context.env.ROSTER_DB, { ...facilityOverviewSubject.record, role: facilityOverviewSubject.role }, {
+          ? resolveEffectiveFacilityIdentityAccess(context.env, { ...facilityOverviewSubject.record, role: facilityOverviewSubject.role }, {
               materializedOnly: materializedAccessFor(account.record, facilityOverviewSubject.record),
             }).then(async access => ({ ...access,
               readerFacilityKeys: facilityReaderSources(context.env).filter(source => facilityAccessAllows(access, source)).map(source => source.toUpperCase()),
@@ -760,7 +801,7 @@ export async function onRequestPost(context) {
       const resolvedClaims = sanitizeClaims(resolved.claims);
       const prepared = await prepareAccountResponse(null, resolved, {
         db: context.env.ROSTER_DB,
-        identityDiscoveryEnabled: discoveryEnabled,
+        identityDiscoveryEnabled: discoveryEnabled, identityReviewEnabled: context.env.IDENTITY_REVIEW_ENABLED === "true",
         r2: context.env.ROSTER_FILES,
         facilityAccessMaterialized: materializedAccessFor(account.record, resolved),
         includeAvailableDoctors: resolved.role !== "creator" && resolved.role !== "owner" && !resolvedClaims.length,
@@ -804,10 +845,10 @@ export async function onRequestPost(context) {
       // response (and a snapshot) here can traverse a large roster twice and
       // exceed a Worker request's CPU budget before the calendar is shown.
       const prepared = responseMode === "fast"
-        ? await prepareFastLoginEnvelope(target, { db: context.env.ROSTER_DB, facilityAccessMaterialized: materializedAccessFor(account.record, target) })
+        ? await prepareFastLoginEnvelope(target, { db: context.env.ROSTER_DB, identityReviewEnabled: context.env.IDENTITY_REVIEW_ENABLED==='true', facilityAccessMaterialized: materializedAccessFor(account.record, target) })
         : await prepareAccountResponse(null, target, {
             db: context.env.ROSTER_DB,
-            identityDiscoveryEnabled: discoveryEnabled,
+            identityDiscoveryEnabled: discoveryEnabled, identityReviewEnabled: context.env.IDENTITY_REVIEW_ENABLED === "true",
             r2: context.env.ROSTER_FILES,
             facilityAccessMaterialized: materializedAccessFor(account.record, target),
             includeAvailableDoctors: !targetClaims.length,
@@ -875,11 +916,12 @@ export async function onRequestPost(context) {
       const prepared = creatorStartupContained
         ? await prepareFastLoginEnvelope(targetRecord, {
             db: context.env.ROSTER_DB,
+            identityReviewEnabled: context.env.IDENTITY_REVIEW_ENABLED === "true",
             facilityAccessMaterialized: materializedAccessFor(account.record, targetRecord),
           })
         : await prepareAccountResponse(null, targetRecord, {
             db: context.env.ROSTER_DB,
-            identityDiscoveryEnabled: discoveryEnabled,
+            identityDiscoveryEnabled: discoveryEnabled, identityReviewEnabled: context.env.IDENTITY_REVIEW_ENABLED === "true",
             r2: context.env.ROSTER_FILES,
             facilityAccessMaterialized: materializedAccessFor(account.record, targetRecord),
             includeAvailableDoctors: targetRole === "creator"
@@ -927,7 +969,7 @@ export async function onRequestPost(context) {
         : mergeAdminIssues(targetRecord.adminIssues, [manualRosterClaimIssue(targetRecord, claim)]);
       const updated = await saveBoundedAccountClaims(context.env.ROSTER_DB, targetRecord, claims, { adminIssues: updatedAdminIssues });
       const prepared = await prepareAccountResponse(null, updated, {
-        db: context.env.ROSTER_DB, r2: context.env.ROSTER_FILES, identityDiscoveryEnabled: true,
+        db: context.env.ROSTER_DB, r2: context.env.ROSTER_FILES, identityDiscoveryEnabled: true, identityReviewEnabled: context.env.IDENTITY_REVIEW_ENABLED === "true",
         facilityAccessMaterialized: materializedAccessFor(account.record, updated),
       });
       return Response.json({
@@ -1308,7 +1350,7 @@ export async function onRequestPost(context) {
       });
       const prepared = await prepareAccountResponse(null, updated, {
         db: context.env.ROSTER_DB, r2: context.env.ROSTER_FILES,
-        identityDiscoveryEnabled: identityDiscoveryEnabled(context.env),
+        identityDiscoveryEnabled: identityDiscoveryEnabled(context.env), identityReviewEnabled: context.env.IDENTITY_REVIEW_ENABLED === "true",
         facilityAccessMaterialized: materializedAccessFor(account.record, updated),
         includeAvailableDoctors: !sanitizeClaims(updated.claims).length,
       });
@@ -2520,6 +2562,15 @@ export async function onRequestPost(context) {
     const status = message === "Incorrect password." || message.startsWith("Account not found") ? 401 : 400;
     return Response.json({ error: message }, { status });
   }
+}
+
+async function requestIdentityPublication(context,operationId) {
+  return guardedFetch(context.env,new URL('/api/automation/identity-maintenance',context.request.url),{method:'POST',headers:{Authorization:`Bearer ${String(context.env.IDENTITY_MAINTENANCE_TOKEN||context.env.ROSTER_AUTOMATION_TOKEN||'')}`,'Content-Type':'application/json'},body:JSON.stringify({mode:'publish',operationId})},{label:'Identity publication maintenance'});
+}
+
+async function resolveEffectiveFacilityIdentityAccess(env,record,options) {
+  const claims=env.IDENTITY_REVIEW_ENABLED==='true'?await accountIdentityAliases(env.ROSTER_DB,record.email,sanitizeClaims(record.claims)):record.claims;
+  return resolveFacilityOverviewAccess(env.ROSTER_DB,{...record,claims},options);
 }
 
 function setRequestOperationPhase(context, phase) {
@@ -3781,7 +3832,8 @@ async function prepareFastLoginEnvelope(rawRecord, options = {}) {
     imports: [],
   });
   const defaultDoctorKey = canonicalDefaultDoctorKeyForAccount({ role, claims, state });
-  const facilityOverviewAccess = await resolveFacilityOverviewAccess(options.db, { ...record, role }, { materializedOnly: options.facilityAccessMaterialized === true });
+  const accessClaims=options.identityReviewEnabled?await accountIdentityAliases(options.db,record.email,claims):claims;
+  const facilityOverviewAccess = await resolveFacilityOverviewAccess(options.db, { ...record, role, claims:accessClaims }, { materializedOnly: options.facilityAccessMaterialized === true });
   const lightweight = {
     role,
     realName: record.realName || "",
@@ -3932,7 +3984,8 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
   const snapshotAvailable = false;
   const snapshotStale = false;
   const issueConfig = await buildIssueConfig(store, record.email, options.db);
-  const facilityOverviewAccess = await resolveFacilityOverviewAccess(options.db, { ...record, role }, { materializedOnly: options.facilityAccessMaterialized === true });
+  const accessClaims=options.identityReviewEnabled?await accountIdentityAliases(options.db,record.email,claims):claims;
+  const facilityOverviewAccess = await resolveFacilityOverviewAccess(options.db, { ...record, role, claims:accessClaims }, { materializedOnly: options.facilityAccessMaterialized === true });
 
   return {
     role,
@@ -4372,20 +4425,22 @@ async function loadFastAccountSnapshotPayload(context, params = {}) {
   const claims = sanitizeClaims(params.prepared?.claims || params.targetRecord?.claims);
   const doctorKey = normalizeRosterName(params.doctorKey || params.prepared?.defaultDoctorKey || session.doctorKey || "");
   const option = (cached.snapshot?.doctorOptions || []).find(item => normalizeRosterName(item.key) === doctorKey);
-  const aliases = claims.length ? claims.map(claim => ({ sourceType: claim.sourceType, key: claim.key })) : option?.aliases || [];
+  let aliases = claims.length ? claims.map(claim => ({ sourceType: claim.sourceType, key: claim.key })) : option?.aliases || [];
+  if(context.env.IDENTITY_REVIEW_ENABLED==='true') aliases=await accountIdentityAliases(context.env.ROSTER_DB,params.targetRecord.email,aliases);
   const sourceTypes = [...new Set(aliases.map(alias => alias.sourceType))];
-  if (!sourceTypes.length) return cached;
+  if (!sourceTypes.length && context.env.IDENTITY_REVIEW_ENABLED!=='true') return cached;
+  if(context.env.IDENTITY_REVIEW_ENABLED==='true' && cached.snapshot) cached.snapshot=filterSnapshotByIdentityAliases(cached.snapshot,aliases,aliases.find(alias=>alias.preferredName)?.preferredName || params.targetRecord.realName);
   const email = params.targetRecord.email;
   const locations = await loadAccountHospitalLocations(context.env.ROSTER_DB, email, session);
   const published = await loadPublishedDoctorCalendar(context.env.ROSTER_FILES, {
-    doctorKey, displayName: option?.displayName || params.targetRecord.realName || doctorKey,
-    aliases, sourceTypes, state: { session },
+    doctorKey, displayName: aliases.find(alias=>alias.preferredName)?.preferredName || option?.displayName || params.targetRecord.realName || doctorKey,
+    aliases, sourceTypes, state: { session }, identityAliasesEnforced:context.env.IDENTITY_REVIEW_ENABLED==='true',
   }, { range: boundedCalendarEventRange(params), today: australianDateKey(), locations,
     schemaVersion: SNAPSHOT_SCHEMA_VERSION, previousSnapshot: cached.snapshot, ownerType: snapshotOwnerTypeForRecord(params.targetRecord, params.prepared.role), ownerId: email });
   // An incomplete publication retains the last working cache until the shared
   // pointer is committed; it never triggers a D1 history rebuild.
   if (!published.snapshotAvailable) return cached;
-  const refs = await context.env.ROSTER_DB.prepare(`SELECT id,name,source_type,size,last_modified,added_at FROM roster_files INDEXED BY idx_roster_files_source_active WHERE active=1 AND source_type IN (${sourceTypes.map(() => '?').join(',')}) LIMIT 129`).bind(...sourceTypes).all();
+  const refs = sourceTypes.length?await context.env.ROSTER_DB.prepare(`SELECT id,name,source_type,size,last_modified,added_at FROM roster_files INDEXED BY idx_roster_files_source_active WHERE active=1 AND source_type IN (${sourceTypes.map(() => '?').join(',')}) LIMIT 129`).bind(...sourceTypes).all():{results:[]};
   if (refs.results.length > 128) throw new Error("Active roster references exceed the calendar limit.");
   published.snapshot.fileRefs = refs.results.map(file => ({ id:file.id, name:file.name, sourceType:file.source_type, size:file.size, lastModified:file.last_modified, addedAt:file.added_at }));
   return { ok: true, ...published, snapshotCurrent: false, snapshotBuildMs: 0, revisionSkipped: true, validationDeferred: false };
@@ -5734,6 +5789,10 @@ async function loadDoctorProfileSnapshotPayload(context, profile, ownerEmail = "
   if (creatorDirectoryEnabled(context.env)) {
     setRequestOperationPhase(context, "published-profile");
     const locations = await loadAccountHospitalLocations(db, ownerEmail, profile.state?.session);
+    if(context.env.IDENTITY_REVIEW_ENABLED==='true') {
+      const aliases=await expandApprovedIdentityAliases(db,profile.aliases?.length?profile.aliases:(profile.sourceTypes||[]).map(sourceType=>({sourceType,key:profile.doctorKey})));
+      profile={...profile,aliases,sourceTypes:[...new Set(aliases.map(a=>a.sourceType))],displayName:aliases.find(a=>a.preferredName)?.preferredName || profile.displayName};
+    }
     return loadPublishedDoctorCalendar(context.env.ROSTER_FILES, profile, { range: requestedRange, today: australianDateKey(), locations, schemaVersion: SNAPSHOT_SCHEMA_VERSION });
   }
   const descriptor = buildDoctorProfileSnapshotCacheDescriptor(profile, requestedRange);

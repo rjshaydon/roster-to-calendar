@@ -1,0 +1,28 @@
+# Local-only synthetic identity review. These IDs cannot target production.
+name = "roster-identity-local"
+compatibility_date = "2026-04-22"
+pages_build_output_dir = "public"
+
+[vars]
+LOCAL_ONLY = "true"
+IDENTITY_REVIEW_ENABLED = "true"
+IDENTITY_SCHEDULED_AUDIT_ENABLED = "false"
+IDENTITY_DISCOVERY_ENABLED = "false"
+CREATOR_STARTUP_HYDRATION_ENABLED = "false"
+CREATOR_DIRECTORY_ENABLED = "false"
+ROSTER_AUTOMATION_WRITES_ENABLED = "false"
+MANUAL_ROSTER_WRITES_ENABLED = "false"
+CONTACT_AUTOMATION_WRITES_ENABLED = "false"
+ROSTER_ACCOUNT_BUDGET_ENABLED = "false"
+ACCOUNT_SNAPSHOT_BUILD_ENABLED = "false"
+FACILITY_OVERVIEW_MAINTENANCE_MODE = "true"
+ROSTER_AUTOMATION_TOKEN = "synthetic-local-token"
+
+[[d1_databases]]
+binding = "ROSTER_DB"
+database_name = "identity-local-only"
+database_id = "00000000-0000-0000-0000-000000000000"
+
+[[r2_buckets]]
+binding = "ROSTER_FILES"
+bucket_name = "identity-local-only"

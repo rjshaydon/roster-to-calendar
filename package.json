@@ -14,6 +14,8 @@
     "test:restoration-batch1": "node --no-warnings scripts/test-restoration-batch1.mjs",
     "check": "node --check public/static/app.js",
     "test:roster-wire-protocol": "node --no-warnings scripts/test-roster-wire-protocol.mjs",
+    "test:identity-editor": "node scripts/test-identity-editor.mjs",
+    "test:identity-operations": "node --no-warnings scripts/test-identity-operations.mjs",
     "test:bounded-identity": "node --no-warnings scripts/test-bounded-identity.mjs",
     "test:restoration-mutations": "node --no-warnings scripts/test-restoration-mutations.mjs",
     "test:contact-name-matching": "node --no-warnings scripts/test-contact-name-matching.mjs",

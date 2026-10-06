@@ -22,7 +22,8 @@ export async function onRequestGet(context) {
     if (!manifest || (manifest.terms || []).length > 64) return new Response('Preparing', { status: 503, headers: { 'Cache-Control': 'no-store' } });
     fingerprints.push([source, manifest.revision || '', (manifest.terms || []).filter(term => rosterTermVisible(term, today)).map(term => [term.termStart, term.staffRevision || ''])]);
   }
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify([today, fingerprints])));
+  const identity=context.env.IDENTITY_REVIEW_ENABLED==='true'?await loadCachedSnapshot(context.env.ROSTER_FILES,'identity/revision.json'):null;
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify([today, fingerprints, ...(context.env.IDENTITY_REVIEW_ENABLED==='true'?[identity?.revision||'']:[])])));
   const revision = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
   const response = Response.json({ ok: true, revision }, { headers: { 'Cache-Control': 'public, max-age=30, must-revalidate' } });
   if (cache) context.waitUntil(cache.put(key, response.clone()));

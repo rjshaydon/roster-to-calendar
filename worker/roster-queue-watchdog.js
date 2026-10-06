@@ -1,4 +1,5 @@
 const defaultFindMyShiftUrl = "https://roster-to-calendar.pages.dev/api/automation/findmyshift-check";
+import {identityAuditWindow} from '../public/static/identity-audit-policy.js';
 
 export default {
   async scheduled(_controller, env, ctx) {
@@ -7,6 +8,8 @@ export default {
       return;
     }
     ctx.waitUntil(checkFindMyShift(env));
+    if(env.IDENTITY_REGISTRY_ENABLED==='true') ctx.waitUntil(checkIdentityAudit(env,'register'));
+    if(env.IDENTITY_SCHEDULED_AUDIT_ENABLED==='true' && identityAuditWindow().eligible) ctx.waitUntil(checkIdentityAudit(env));
   },
 
   async fetch(request, env) {
@@ -27,6 +30,12 @@ export default {
     });
   },
 };
+
+async function checkIdentityAudit(env,mode='audit') {
+  const url=new URL('/api/automation/identity-maintenance',env.FINDMYSHIFT_CHECK_URL||defaultFindMyShiftUrl);
+  const response=await fetch(url,{method:'POST',headers:{authorization:`Bearer ${String(env.ROSTER_WATCHDOG_TOKEN||'')}`,'content-type':'application/json'},body:JSON.stringify({mode})});
+  if(!response.ok) console.warn(JSON.stringify({event:'identity-audit',status:'deferred',http:response.status}));
+}
 
 function automationPaused(env = {}) {
   return !["1", "true", "yes", "on"].includes(String(env.ROSTER_AUTOMATION_ENABLED || "").trim().toLowerCase());
