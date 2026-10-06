@@ -94,3 +94,26 @@ figures have an analytics settlement delay. Private rollout diagnostics remain
 outside Git. Finish the saved initialization, review the first candidate list,
 verify a successful automatic registration checkpoint, then repeat subscription
 comparison if aliases changed. Ambiguous matches require human review.
+
+
+### Resumed live acceptance — 6 October, after user sign-in
+
+Production login/calendar succeeded. The reduced five-identity requests passed
+live acceptance and registration completed after examining 468 published roster
+names. The directory contains 442 people; 417 aliases were registered during
+initialization. The suggestion audit examined 50 names and saved three pending
+suggestions, visibly presented with Same person / Different people / Review.
+No suggestion was accepted or rejected and no manual identity operation was made.
+
+The next account-wide CLI sample returned STOP: 226,217 reads / 21,150 writes,
+with short-interval projected reads about 5.35 million. The settled timeline
+shows a maintenance burst at 02:55–03:05 UTC; 03:10 usage fell to 1,406 reads /
+zero writes. This is not proof of a continuing runaway, but optional manual work
+was stopped at its durable checkpoint pending a safe follow-up sample.
+
+Automatic registration is still unverified: its import-active guard encounters
+three old queued runs (MMC 1 October twice; VHH 4 October), rather than fresh
+imports. Reconcile these records with their actual processing state before
+clearing them or changing the guard. Do not silently ignore them. Initial audit
+completion and this automatic acceptance are the remaining activation checks.
+Proof screenshot: private `/private/tmp/identity-production-suggestions.png`.
