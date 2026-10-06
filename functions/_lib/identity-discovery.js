@@ -3,7 +3,9 @@ import {harmlessIdentityKey} from './doctor-identity.js';
 const all=async(db,sql,args=[]) => (await db.prepare(sql).bind(...args).all()).results||[];
 async function digest(value) { return [...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(value))))].map(b=>b.toString(16).padStart(2,'0')).join(''); }
 // Caller supplies authoritative published directory data, never client names.
-// 25 identities and at most 24 neighbours/block. No all-pairs SQL or events.
+// Keep production requests small enough for Pages CPU limits. The durable
+// cursor resumes after each request; at most 24 neighbours/block, no events.
+export const IDENTITY_BATCH_SIZE = 5;
 export async function auditIdentityBatch(db,doctors,{runId,actor='identity-audit',register=false,weekKey='',sourceTypes=[]}={}) {
  const startedAt=Date.now();
  const scope=[...new Set(sourceTypes)].sort();
@@ -21,8 +23,8 @@ export async function auditIdentityBatch(db,doctors,{runId,actor='identity-audit
  const acquired=await db.prepare('UPDATE roster_identity_audit_runs SET lease_token=?,lease_until=?,week_key=CASE WHEN ?<>\'\' THEN ? ELSE week_key END WHERE run_id=? AND lease_until<?').bind(lease,new Date(Date.now()+120000).toISOString(),weekKey,weekKey,run.run_id,now).run();
  if(!(acquired.meta?.changes||acquired.changes)) return {runId:run.run_id,status:'busy'};
  const identities=flattenDoctorIdentities(doctors).filter(a=>(!scope.length || scope.includes(a.sourceType)) && ['mmc','mch','ddh','vhh','casey'].includes(a.sourceType) && a.key.length<=200 && a.displayName.length<=200).sort((a,b)=>a.marker<b.marker?-1:a.marker>b.marker?1:0);
- const pending=register?[]:await all(db,`SELECT source_type,doctor_key,display_name FROM roster_identity_features INDEXED BY idx_identity_feature_pending WHERE audited_fingerprint<>fingerprint ${scope.length?'AND source_type IN ('+scope.map(()=>'?').join(',')+')':''} ORDER BY source_type,doctor_key LIMIT 26`,scope);
- const selected=register?identities.filter(a=>a.marker>run.cursor).slice(0,25):pending.slice(0,25).map(a=>({sourceType:a.source_type,key:a.doctor_key,displayName:a.display_name,marker:a.source_type+':'+a.doctor_key}));
+ const pending=register?[]:await all(db,`SELECT source_type,doctor_key,display_name FROM roster_identity_features INDEXED BY idx_identity_feature_pending WHERE audited_fingerprint<>fingerprint ${scope.length?'AND source_type IN ('+scope.map(()=>'?').join(',')+')':''} ORDER BY source_type,doctor_key LIMIT ${IDENTITY_BATCH_SIZE+1}`,scope);
+ const selected=register?identities.filter(a=>a.marker>run.cursor).slice(0,IDENTITY_BATCH_SIZE):pending.slice(0,IDENTITY_BATCH_SIZE).map(a=>({sourceType:a.source_type,key:a.doctor_key,displayName:a.display_name,marker:a.source_type+':'+a.doctor_key}));
  let candidateCount=0, skippedLargeBlocks=0; const processed=[];
  for(const alias of selected) {
   if(Date.now()-startedAt>=10000) break;
