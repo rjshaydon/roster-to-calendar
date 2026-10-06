@@ -40,3 +40,10 @@ The surface now shows exactly one full-width pane: People when browsing, or the 
 Name contains matches literal characters anywhere in the preferred name, case-insensitively, including surname and substrings spanning name parts. It uses the existing name index to seek through fixed 250-record windows (maximum eight per request); larger directories return a resumable search cursor. Empty browsing reads only a small page. No roster/event-history query or new schema/index is required. Tests cover Richard Haydon via Haydon, cross-name substrings, literal percent signs, pagination, indexed seek plans, and bounded continuation in a 2,500-person fixture.
 
 Comparison panels ask Is this the same person? and offer Same person, Different people and Open this person. Same person opens the existing merge editor/review; it does not immediately mutate data. Different people dismisses the specific suggestion without changing existing links. Each account label names the person owning those account links; comparison does not imply that accounts are already linked to one another.
+
+
+### Focused suggestion review
+
+Suggestion cards now offer Same person, Different people, Review in that order. Same person loads only the suggested pair into the existing merge review, with no immediate commit. The current discovery service emits pairwise suggestions, so each card currently contains two people; separate cards are not treated as one group.
+
+Opening a person or merge editor hides the search and suggestion area while preserving the explanatory text. Closing the person or cancelling the merge restores the browsing area and existing suggestions. Each comparison names the matched person AND the open person above the matched person's details.
