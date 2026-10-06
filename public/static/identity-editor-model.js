@@ -18,3 +18,9 @@ export function identityIdFromEntry(value) {
  return 'person:'+raw.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
 }
 export const identityHistoryLabel=operation=>({merge:'Merged people',name:'Changed preferred name',id:'Changed person ID','alias-move':'Separated roster name','account-link':'Linked account',reverse:'Undid a change'}[operation.kind]||'Changed person');
+
+export function groupIdentityTerms(terms=[]) {
+ const groups=new Map();
+ for(const term of terms){const key=term.termStart+'|'+term.termEnd;if(!groups.has(key))groups.set(key,{termStart:term.termStart,termEnd:term.termEnd,upcoming:term.upcoming,sites:[]});groups.get(key).sites.push({sourceType:term.sourceType,grades:term.grades||[],rosterNames:term.rosterNames||[]});}
+ return [...groups.values()].sort((a,b)=>b.termStart.localeCompare(a.termStart)||b.termEnd.localeCompare(a.termEnd));
+}
