@@ -3239,6 +3239,7 @@ body[data-skin="console"] .preview-cell.is-weekend {
   color: var(--muted);
 }
 
+.identity-user-card > summary,
 .create-user-card > summary,
 .other-users-card > summary {
   position: relative;
@@ -3247,6 +3248,7 @@ body[data-skin="console"] .preview-cell.is-weekend {
   list-style: none;
 }
 
+.identity-user-card > summary::-webkit-details-marker,
 .create-user-card > summary::-webkit-details-marker,
 .other-users-card > summary::-webkit-details-marker {
   display: none;
@@ -3262,6 +3264,7 @@ body[data-skin="console"] .preview-cell.is-weekend {
   line-height: 1;
 }
 
+.identity-user-card[open] > summary .collapsible-chevron,
 .create-user-card[open] > summary .collapsible-chevron,
 .other-users-card[open] > summary .collapsible-chevron {
   display: none;
@@ -3825,6 +3828,7 @@ body[data-skin="console"] .preview-cell.is-weekend {
   gap: 20px;
 }
 
+.identity-user-card,
 .create-user-card {
   margin-top: 12px;
 }

@@ -1,5 +1,5 @@
 import { onShiftLaunchWindow } from "./shift-launch-policy.js";
-import { identityReviewMarkup, mountIdentityReview } from './identity-review-ui.js?v=20261006-people9';
+import { identityReviewMarkup, mountIdentityReview } from './identity-review-ui.js?v=20261006-people10';
 let currentIdentityReviewEnabled = false;
 import { FACILITY_ACCESS_VERSION, facilityAccessKeys, restrictedFacilityScope, validFacilityDateRange } from "./facility-access-policy.js";
 import { planRosterImportBatches } from "./roster-import-batches.js";
@@ -1556,6 +1556,16 @@ accountsBody.addEventListener("input", (event) => {
 accountsBody.addEventListener("toggle", (event) => {
   const section = event.target;
   if (!(section instanceof HTMLDetailsElement)) return;
+  const userSections = '[data-identity-section], [data-create-user-account-section], [data-other-users-section]';
+  if (section.open && section.matches(userSections)) {
+    for (const other of accountsBody.querySelectorAll(userSections)) {
+      if (other !== section) other.open = false;
+    }
+    identityReviewExpanded = section.matches('[data-identity-section]');
+    createUserAccountExpanded = section.matches('[data-create-user-account-section]');
+    otherUsersExpanded = section.matches('[data-other-users-section]');
+    if (!otherUsersExpanded) otherUsersExpandedBySearch = false;
+  }
   if (section.matches("[data-identity-section]")) {
     identityReviewExpanded = section.open;
     if (section.open) mountAdminIdentityReview();
