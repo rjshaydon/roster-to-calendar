@@ -22,7 +22,10 @@ export async function identityTermHistory(r2,aliases,today,after=0) {
   if((staff.members||[]).length>FACILITY_PUBLICATION_LIMITS.staffRows) throw Error('Roster term history exceeds the staff inspection limit.');
   const keys=new Set(aliases.filter(a=>a.source_type===term.sourceType).map(a=>a.doctor_key));
   const matches=(staff.members||[]).filter(m=>keys.has(m.doctorKey));
-  if(matches.length) terms.push({sourceType:term.sourceType,termStart:term.termStart,termEnd:term.termEnd,rosterNames:[...new Set(matches.map(m=>m.displayName||m.doctorKey))],upcoming:term.termStart>today});
+  if((staff.seniorityOverrides||[]).length>FACILITY_PUBLICATION_LIMITS.overrideRows) throw Error('Roster term history exceeds the grade override limit.');
+  const overrides=new Map((staff.seniorityOverrides||[]).filter(o=>o.termStart===term.termStart&&!o.useRosterSeniority).map(o=>[o.doctorKey,o.seniority]));
+  const grades=[...new Set(matches.map(m=>String(overrides.get(m.doctorKey)||m.seniority||'').trim()||'Not recorded'))];
+  if(matches.length) terms.push({sourceType:term.sourceType,termStart:term.termStart,termEnd:term.termEnd,rosterNames:[...new Set(matches.map(m=>m.displayName||m.doctorKey))],grades,upcoming:term.termStart>today});
  }
  return {terms,missingSites,missingTerms,next:offset+12<plans.length?offset+12:null};
 }
