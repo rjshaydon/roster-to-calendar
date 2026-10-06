@@ -1,3 +1,4 @@
+import {identityTermHistory} from '../_lib/identity-term-history.js';
 import { onShiftLaunchWindow } from "../../public/static/shift-launch-policy.js";
 import { initializePublishedIdentityBatch, auditIdentityBatch, queryIdentityCandidates, rejectIdentityCandidate, restoreIdentityCandidate } from '../_lib/identity-discovery.js';
 import { previewIdentityOperation, commitIdentityOperation, previewIdentityReversal, reverseIdentityOperation, queryIdentityPeople, queryIdentityPerson, expandApprovedIdentityAliases, accountIdentityAliases, calendarIdentityAliases } from '../_lib/doctor-identity.js';
@@ -436,6 +437,7 @@ export async function onRequestPost(context) {
         }
         if(operation==='reject') return Response.json({ok:true,...await rejectIdentityCandidate(db,{...input,actor:email})});
         if(operation==='restore-suggestion') return Response.json({ok:true,...await restoreIdentityCandidate(db,input)});
+        if(operation==='person-terms'){const person=await queryIdentityPerson(db,String(input.personId||''));return Response.json({ok:true,...await identityTermHistory(context.env.ROSTER_FILES,person.aliases,australianDateKey(),input.after||0)});}
         if(operation==='person') return Response.json({ok:true,...await queryIdentityPerson(db,String(input.personId||''))});
         if(operation==='preview') return Response.json({ok:true,preview:await previewIdentityOperation(db,input)});
         if(operation==='preview-reversal') return Response.json({ok:true,preview:await previewIdentityReversal(db,String(input.operationId||''))});
