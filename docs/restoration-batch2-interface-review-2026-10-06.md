@@ -30,3 +30,5 @@ No production migration, roster download, historical shift rewrite, real identit
 ## Review refinements
 
 Suggestion cards use **Review** and **Not the same person**. Review opens the suggested people’s details without opening a merge form. The unrelated people list is hidden while reviewing; **Close person** restores it. Editing and saving also show the results again. **Merge selected people** is available separately in the search-results selection area and opens its own editor.
+
+Editing now uses the full panel width, with search results underneath instead of a narrow left column. Read-only copies of the person details and paired comparison are hidden during edits/review-before-save. History is a collapsed disclosure; failed calendar updates remain flagged outside it. Separating a roster name changes ownership, whereas rejecting a suggestion changes no existing links.

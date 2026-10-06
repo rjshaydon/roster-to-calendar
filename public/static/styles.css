@@ -5330,3 +5330,9 @@ body[data-skin="console"] .panel {
 .identity-details > .identity-toolbar { justify-content:space-between; }
 
 .identity-peer { margin:20px 0; padding:16px; border:1px solid var(--border, #d7dce3); border-radius:10px; }
+
+.identity-workspace.identity-workspace-edit { grid-template-columns:minmax(0,1fr); }
+.identity-workspace-edit .identity-details { border:0; padding:0; }
+.identity-workspace-edit > [aria-label="People"] { border-top:1px solid var(--border, #d7dce3); padding-top:16px; }
+.identity-history-panel { margin:18px 0; border-top:1px solid var(--border, #d7dce3); padding-top:12px; }
+.identity-history-panel > summary { font-weight:600; cursor:pointer; }
