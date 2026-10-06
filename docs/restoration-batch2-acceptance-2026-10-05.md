@@ -117,3 +117,32 @@ imports. Reconcile these records with their actual processing state before
 clearing them or changing the guard. Do not silently ignore them. Initial audit
 completion and this automatic acceptance are the remaining activation checks.
 Proof screenshot: private `/private/tmp/identity-production-suggestions.png`.
+
+
+### Full cached-name audit and search presentation — 6 October
+
+PR 32 and production follow-ups (`081daae9`, `a851bfc5`) remove empty-search
+People lists/requests, preserve selected people, consult the cached name table
+before registration, and continue matching through admitted requests without
+requiring repeated Suggestions clicks. Browser verification confirmed blank
+search hides People, surname search finds Jay/Jayantha, and clearing it hides
+People again. The fixed initialization path creates no new registration run for
+unchanged published names (regression test passed).
+
+A five-name matching request repeatedly hit the Cloudflare CPU/memory limit late
+in the audit. Matching now checkpoints one name per request; registration retains
+five. Live matching requests succeeded at approximately 33–35 ms CPU, 740 reads
+and 13 writes including admission/bookkeeping. The audit is confirmed complete:
+464 checkpoint-counted names, 14 candidates total, 11 pending and three previously
+dismissed. The interrupted request had already marked individual fingerprints
+before its run counter committed, so that counter is not the directory size.
+Jay/Jayantha is now a visible shortened-name suggestion. No identity operations
+were committed during verification. Latest settled CLI sample is GO: 289,410
+reads / 22,963 writes, projection about 2.15 million reads. Later verification
+traffic remains subject to settlement delay and the per-request gate.
+
+Safari was found on an older immutable production deployment URL, `1240d29c…`;
+it was moved to the current canonical `rtc.curiousmind.app`. Existing deployment
+URLs retain their old client code. Automated registration acceptance remains
+blocked by old queued import records as described above; that is separate from
+the now-completed manual cached-name audit.
