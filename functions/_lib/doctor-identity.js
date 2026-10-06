@@ -268,6 +268,15 @@ export async function expandApprovedIdentityAliases(db,aliases) {
  return bounded([...new Map([...aliases,...result.map(r=>({sourceType:r.source_type,key:r.doctor_key,displayName:r.display_name,personId:r.person_id,preferredName:r.preferred_display_name}))].map(a=>[`${a.sourceType}|${a.key}`,a])).values()],16);
 }
 
+// Creator calendar selection is independent of the Creator's account identity.
+export async function calendarIdentityAliases(db,{role,email,doctorKey,aliases=[]}) {
+ if(['creator','owner'].includes(role)) {
+  const selected=aliases.length?aliases:doctorKey?['mmc','mch','ddh','vhh','casey'].map(sourceType=>({sourceType,key:doctorKey})):[];
+  return expandApprovedIdentityAliases(db,selected);
+ }
+ return accountIdentityAliases(db,email,aliases);
+}
+
 export async function accountIdentityAliases(db,email,aliases) {
  const link=await db.prepare("SELECT a.person_id,p.status FROM account_people a JOIN roster_people p ON p.person_id=a.person_id WHERE a.email=?").bind(String(email||'').toLowerCase()).first();
  if(!link) return expandApprovedIdentityAliases(db,aliases);

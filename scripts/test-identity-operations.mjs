@@ -135,6 +135,11 @@ let feedPreview=await previewIdentityOperation(db,feedMerge);
 const feedOperation=await commitIdentityOperation(db,{...feedMerge,previewToken:feedPreview.previewToken,confirmAccountEmails:feedPreview.accountEmails});
 sqlite.prepare('INSERT INTO account_people(email,person_id) VALUES(?,?)').run('one@test',aliasOwners[0]);
 assert.equal((await accountIdentityAliases(db,'one@test',[])).length,2);
+const creatorAliases=await calendarIdentityAliases(db,{role:'creator',email:'one@test',doctorKey:'AESHAN KULURATNE',aliases:[]});
+assert.ok(creatorAliases.some(a=>a.key==='AESHAN KULARATNE'&&a.sourceType==='vhh'),'Creator without claims or cached aliases retains selected calendar and expands approved aliases');
+const unrelatedSelection=await calendarIdentityAliases(db,{role:'creator',email:'one@test',doctorKey:'UNRELATED SELECTED DOCTOR',aliases:[]});
+assert.ok(unrelatedSelection.every(a=>a.key==='UNRELATED SELECTED DOCTOR'),'Creator account linkage cannot substitute the selected doctor');
+
 const puts=[]; const r2={async put(key,value){puts.push({key,value});}};
 assert.equal((await publishIdentityOperation(db,r2,feedOperation.operationId)).status,'complete');
 const completedPuts=puts.length;
