@@ -1,6 +1,6 @@
 import { onShiftLaunchWindow } from "../../public/static/shift-launch-policy.js";
 import { auditIdentityBatch, queryIdentityCandidates, rejectIdentityCandidate, restoreIdentityCandidate } from '../_lib/identity-discovery.js';
-import { previewIdentityOperation, commitIdentityOperation, previewIdentityReversal, reverseIdentityOperation, queryIdentityPeople, queryIdentityPerson, expandApprovedIdentityAliases, accountIdentityAliases } from '../_lib/doctor-identity.js';
+import { previewIdentityOperation, commitIdentityOperation, previewIdentityReversal, reverseIdentityOperation, queryIdentityPeople, queryIdentityPerson, expandApprovedIdentityAliases, accountIdentityAliases, calendarIdentityAliases } from '../_lib/doctor-identity.js';
 import { FACILITY_ACCESS_VERSION, isAllSiteSeniority, facilityAccessKeys, facilityAccessAllows, restrictedFacilityScope, validFacilityDateRange, nextFacilityDate, filterFacilityRowsBySegments } from "../../public/static/facility-access-policy.js";
 import { publishedIdentityDirectory, publishedClaimSeniorities, availableIdentitySuggestions, saveBoundedAccountClaims, MAX_ACCOUNT_CLAIMS } from '../_lib/bounded-identity.js';
 import { handleManualRosterImport, deactivateManualRosterFiles } from "../_lib/manual-roster-management.js";
@@ -4426,7 +4426,7 @@ async function loadFastAccountSnapshotPayload(context, params = {}) {
   const doctorKey = normalizeRosterName(params.doctorKey || params.prepared?.defaultDoctorKey || session.doctorKey || "");
   const option = (cached.snapshot?.doctorOptions || []).find(item => normalizeRosterName(item.key) === doctorKey);
   let aliases = claims.length ? claims.map(claim => ({ sourceType: claim.sourceType, key: claim.key })) : option?.aliases || [];
-  if(context.env.IDENTITY_REVIEW_ENABLED==='true') aliases=await accountIdentityAliases(context.env.ROSTER_DB,params.targetRecord.email,aliases);
+  if(context.env.IDENTITY_REVIEW_ENABLED==='true') aliases=await calendarIdentityAliases(context.env.ROSTER_DB,{role:params.prepared?.role||params.targetRecord.role,email:params.targetRecord.email,doctorKey,aliases});
   const sourceTypes = [...new Set(aliases.map(alias => alias.sourceType))];
   if (!sourceTypes.length && context.env.IDENTITY_REVIEW_ENABLED!=='true') return cached;
   if(context.env.IDENTITY_REVIEW_ENABLED==='true' && cached.snapshot) cached.snapshot=filterSnapshotByIdentityAliases(cached.snapshot,aliases,aliases.find(alias=>alias.preferredName)?.preferredName || params.targetRecord.realName);
