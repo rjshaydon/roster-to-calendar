@@ -17,6 +17,7 @@
     "test:identity-suggestion-cache": "node scripts/test-identity-suggestion-cache.mjs",
     "test:identity-editor": "node scripts/test-identity-editor.mjs",
     "test:identity-operations": "node --no-warnings scripts/test-identity-operations.mjs",
+    "test:admin-user-interactions": "node scripts/test-admin-user-interactions.mjs",
     "test:bounded-identity": "node --no-warnings scripts/test-bounded-identity.mjs",
     "test:restoration-mutations": "node --no-warnings scripts/test-restoration-mutations.mjs",
     "test:contact-name-matching": "node --no-warnings scripts/test-contact-name-matching.mjs",
