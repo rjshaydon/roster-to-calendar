@@ -402,7 +402,7 @@ let currentAdminTab = "users";
 let adminUserSeniorityFilter = "";
 let adminUserSearchQuery = "";
 let adminUserDirectoryRevision = 0;
-const pendingAdminPermissions = new Set();
+const pendingAdminPermissions = new Map();
 let createUserAccountExpanded = false;
 let otherUsersExpanded = false;
 let identityReviewExpanded = false;
@@ -12232,14 +12232,17 @@ function filterAdminUserCards() {
   if (label && !serverUsersUnavailable) label.textContent = count ? `${count} account${count === 1 ? '' : 's'}` : 'No matching users.';
 }
 
-function syncAdminPermissionControls() {
+function syncAdminPermissionControls(targetEmail = '') {
   const fields = { toggleUserInsights: 'insightsEnabled', toggleUserFacilityOverview: 'facilityOverviewEnabled', toggleUserDirectorView: 'directorViewEnabled' };
+  const users = new Map(serverUsers.filter(user => !targetEmail || normalizeEmail(user.email) === targetEmail)
+    .map(user => { const normalized = normalizeServerUser(user); return [normalized.email, normalized]; }));
   for (const input of accountsBody.querySelectorAll('[data-toggle-user-insights], [data-toggle-user-facility-overview], [data-toggle-user-director-view]')) {
     const key = Object.keys(fields).find(key => input.dataset[key] !== undefined);
     const email = normalizeEmail(input.dataset[key]);
-    const user = serverUsers.find(user => normalizeEmail(user.email) === email);
-    if (user) input.checked = normalizeServerUser(user)[fields[key]] === true;
-    input.disabled = pendingAdminPermissions.has(email);
+    if (targetEmail && email !== targetEmail) continue;
+    const user = users.get(email);
+    if (user) input.checked = user[fields[key]] === true;
+    input.disabled = false;
   }
 }
 
@@ -14349,35 +14352,62 @@ function isValidEmailAddress(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || ""));
 }
 
+function applyAdminPermissionChoice(user, choice) {
+  return { ...user, [choice.field]: choice.enabled,
+    ...(choice.field === 'directorViewEnabled' && choice.enabled ? { facilityOverviewEnabled: true } : {}) };
+}
+
 async function saveAdminPermission(email, field, action, enabled) {
   const targetEmail = normalizeEmail(email);
-  if (!targetEmail || !isCreatorAuthenticated() || pendingAdminPermissions.has(targetEmail)) return false;
-  const previous = normalizeServerUser(serverUsers.find(user => normalizeEmail(user.email) === targetEmail) || {});
-  const affectedFields = field === 'directorViewEnabled' && enabled ? [field, 'facilityOverviewEnabled'] : [field];
-  pendingAdminPermissions.add(targetEmail);
-  adminUserDirectoryRevision += 1;
-  serverUsers = serverUsers.map(user => normalizeEmail(user.email) === targetEmail
-    ? { ...user, ...Object.fromEntries(affectedFields.map(key => [key, enabled === true])) } : user);
-  syncAdminPermissionControls();
-  try {
-    const response = await fetch('/api/state', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ action, email: authUserEmail || currentUserEmail,
-        password: authUserPassword || currentUserPassword, targetEmail, [field]: enabled === true }),
-    });
-    const data = await readJsonResponse(response, 'Could not update user feature access.');
-    if (data.user) serverUsers = serverUsers.map(user => normalizeEmail(user.email) === targetEmail ? data.user : user);
-    return true;
-  } catch (error) {
-    serverUsers = serverUsers.map(user => normalizeEmail(user.email) === targetEmail
-      ? { ...user, ...Object.fromEntries(affectedFields.map(key => [key, previous[key]])) } : user);
-    setStatus(error.message || 'Could not update user feature access.', true);
-    return false;
-  } finally {
-    pendingAdminPermissions.delete(targetEmail);
-    adminUserDirectoryRevision += 1;
-    syncAdminPermissionControls();
+  if (!targetEmail || !isCreatorAuthenticated()) return false;
+  let queue = pendingAdminPermissions.get(targetEmail);
+  if (!queue) {
+    queue = { confirmed: normalizeServerUser(serverUsers.find(user => normalizeEmail(user.email) === targetEmail) || {}), choices: [], running: false };
+    pendingAdminPermissions.set(targetEmail, queue);
   }
+  const choice = { field, action, enabled: enabled === true };
+  const result = new Promise(resolve => { choice.resolve = resolve; });
+  // Superseded choices which have not reached the server need no write.
+  // Move the replacement to the end to preserve Director/overview ordering.
+  queue.choices = queue.choices.filter(previous => {
+    if (previous.field !== field || field === 'directorViewEnabled') return true;
+    previous.resolve(false);
+    return false;
+  });
+  queue.choices.push(choice);
+  adminUserDirectoryRevision += 1;
+  serverUsers = serverUsers.map(user => normalizeEmail(user.email) === targetEmail ? applyAdminPermissionChoice(user, choice) : user);
+  syncAdminPermissionControls(targetEmail);
+  if (!queue.running) void drainAdminPermissionQueue(targetEmail, queue);
+  return result;
+}
+
+async function drainAdminPermissionQueue(targetEmail, queue) {
+  queue.running = true;
+  while (queue.choices.length) {
+    const choice = queue.choices.shift();
+    let saved = false;
+    try {
+      const response = await fetch('/api/state', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: choice.action, email: authUserEmail || currentUserEmail,
+          password: authUserPassword || currentUserPassword, targetEmail, [choice.field]: choice.enabled }),
+      });
+      const data = await readJsonResponse(response, 'Could not update user feature access.');
+      queue.confirmed = data.user || applyAdminPermissionChoice(queue.confirmed, choice);
+      saved = true;
+    } catch (error) {
+      setStatus(error.message || 'Could not update user feature access.', true);
+    }
+    // An older response cannot remove a newer tick. Only failed choices without
+    // a newer replacement roll back to the last confirmed server state.
+    const displayed = queue.choices.reduce(applyAdminPermissionChoice, queue.confirmed);
+    serverUsers = serverUsers.map(user => normalizeEmail(user.email) === targetEmail ? displayed : user);
+    adminUserDirectoryRevision += 1;
+    syncAdminPermissionControls(targetEmail);
+    choice.resolve(saved);
+  }
+  pendingAdminPermissions.delete(targetEmail);
 }
 
 async function setUserInsightsEnabled(email, enabled) {
