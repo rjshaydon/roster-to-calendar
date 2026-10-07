@@ -1,3 +1,4 @@
+import {contactSyncHealth} from '../../public/static/contact-sync-status.js';
 import {
   DDH_CONTACT_LIST_SOURCE_ID,
   MMC_CONTACT_LIST_SOURCE_ID,
@@ -24,6 +25,19 @@ export function facilityContactResolutionKey(sourceId, sourceDate) {
   return `facility-overview/v1/contacts/${safePart(sourceId)}/${sourceDate}/resolutions.json`;
 }
 
+export function facilityContactHealthKey(sourceId) {
+  return `facility-overview/v1/contacts/${safePart(sourceId)}/health.json`;
+}
+async function recordContactSyncSuccess(r2, sourceId, sourceDate) {
+  const key=facilityContactHealthKey(sourceId), current=await readJsonObject(r2,key), now=new Date();
+  // Coalesce duplicate deliveries, but record an unchanged successful scheduled
+  // check. This small R2 heartbeat contains no names and performs no D1 work.
+  if (now.getTime()-Date.parse(current.data?.lastSuccessAt||'') < 4*60*1000) return;
+  try { await putJson(r2,key,{lastSuccessAt:now.toISOString(),sourceDate},
+    {onlyIf:current.etag?{etagMatches:current.etag}:{etagDoesNotMatch:'*'}}); }
+  catch(error) { if(!/precondition|condition|412/i.test(String(error.message)))throw error; }
+}
+
 export async function publishFacilityContactExtract(r2, extractValue, metadata = {}) {
   const extract = normaliseContactListExtract(extractValue);
   if (!r2?.get || !r2?.put || !extract) return { ok: false, unavailable: true };
@@ -39,7 +53,7 @@ export async function publishFacilityContactExtract(r2, extractValue, metadata =
   const manifestKey = facilityContactManifestKey(sourceId);
   const currentObject = await readJsonObject(r2, manifestKey);
   const current = currentObject.data || { schemaVersion: SCHEMA_VERSION, sourceId, dates: {} };
-  if (current.dates?.[sourceDate]?.revision === revision) return { ok: true, unchanged: true, revision };
+  if (current.dates?.[sourceDate]?.revision === revision) { await recordContactSyncSuccess(r2,sourceId,sourceDate); return { ok: true, unchanged: true, revision }; }
   await putJson(r2, objectKey, payload);
   const dates = { ...(current.dates || {}), [sourceDate]: {
     key: objectKey,
@@ -50,6 +64,7 @@ export async function publishFacilityContactExtract(r2, extractValue, metadata =
   const liveDates = Object.fromEntries(Object.entries(dates).filter(([date]) => !contactExtractHasExpired(date)));
   const manifest = { schemaVersion: SCHEMA_VERSION, sourceId, dates: liveDates, revision: await digest({ sourceId, dates: liveDates }), publishedAt: new Date().toISOString() };
   await putJson(r2, manifestKey, manifest, { onlyIf: currentObject.etag ? { etagMatches: currentObject.etag } : { etagDoesNotMatch: "*" } });
+  await recordContactSyncSuccess(r2,sourceId,sourceDate);
   return { ok: true, changed: true, revision };
 }
 
@@ -106,6 +121,9 @@ export async function loadPublishedFacilityContacts(r2, { date, facilityKeys = [
   const sourceId = [...sourceIds][0];
   const manifest = (await readJsonObject(r2, facilityContactManifestKey(sourceId))).data;
   if (!manifest) return { status: "unavailable", reason: "no-extract" };
+  const health=(await readJsonObject(r2,facilityContactHealthKey(sourceId))).data;
+  const syncHealth={status:contactSyncHealth(health?.lastSuccessAt,now),lastSuccessAt:health?.lastSuccessAt||''};
+  const lastSourceDate=Object.keys(manifest.dates||{}).sort().at(-1)||health?.sourceDate||'';
   const entries = Object.entries(manifest.dates || {})
     .filter(([sourceDate]) => !contactExtractHasExpired(sourceDate, now))
     .sort(([a], [b]) => b.localeCompare(a));
@@ -115,7 +133,7 @@ export async function loadPublishedFacilityContacts(r2, { date, facilityKeys = [
     const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Australia/Melbourne", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
     const yesterday = new Date(`${today}T12:00:00Z`); yesterday.setUTCDate(yesterday.getUTCDate() - 1);
     selected = date === today || date === yesterday.toISOString().slice(0, 10) ? entries.find(([sourceDate]) => sourceDate === today) : null;
-    if (!selected) return { status: "not-current", sourceId, contacts: [], resolutions: [], revision: "" };
+    if (!selected) return { status: "not-current", sourceId, contacts: [], resolutions: [], syncHealth,lastSourceDate,revision: `not-current:${syncHealth.status}` };
   }
   if (!selected) {
     selected = entries.find(([sourceDate]) => shouldUseCurrentExtractForPreviousNight(sourceDate, date, now));
@@ -127,13 +145,13 @@ export async function loadPublishedFacilityContacts(r2, { date, facilityKeys = [
   }
   if (!selected) {
     const fallback = entries[0];
-    return fallback ? { status: "not-current", revision: fallback[1].revision || "", sourceId, sourceDate: fallback[0], contacts: [], resolutions: [] }
-      : { status: "unavailable", reason: "no-extract" };
+    return fallback ? { status: "not-current", revision: fallback[1].revision || "", sourceId, sourceDate: fallback[0], contacts: [], resolutions: [],syncHealth,lastSourceDate }
+      : { status: "unavailable", reason: "no-extract",syncHealth,lastSourceDate,revision:`unavailable:${syncHealth.status}` };
   }
   const [storedDate, pointer] = selected;
   const payload = (await readJsonObject(r2, pointer.key)).data;
   const extract = normaliseContactListExtract(payload?.extract);
-  if (!extract) return { status: "unavailable", reason: "object-missing" };
+  if (!extract) return { status: "unavailable", reason: "object-missing",syncHealth,lastSourceDate,revision:`missing:${syncHealth.status}` };
   const operationalExtract = carryMode ? normaliseContactListExtract({ ...extract, sourceDate: date, contacts: extract.contacts.filter((contact) => contact.shift === "Night") }) : extract;
   const allowedAreas = new Set(facilityKeys.map(contactAreaForSource).filter(Boolean));
   const contacts = operationalExtract.contacts.filter((contact) => allowedAreas.has(contact.area));
@@ -143,7 +161,8 @@ export async function loadPublishedFacilityContacts(r2, { date, facilityKeys = [
     status: "available",
     // Handover changes visibility even if the workbook hasn't changed. A token
     // refresh must deliver the newly visible Night block after 23:00.
-    revision: `${pointer.revision || ""}:${resolutionPayload?.revision || ""}:${await digest(visibleContacts.map((contact) => contact.contactKey))}`,
+    revision: `${pointer.revision || ""}:${resolutionPayload?.revision || ""}:${await digest(visibleContacts.map((contact) => contact.contactKey))}:${syncHealth.status}`,
+    syncHealth,lastSourceDate,
     sourceId,
     sourceDate: operationalExtract.sourceDate,
     providerModifiedAt: extract.providerModifiedAt || pointer.providerModifiedAt || "",

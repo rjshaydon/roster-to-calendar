@@ -108,7 +108,7 @@ assert.match(appSource, /document\.hidden\)[\s\S]*stopFacilityOverviewContactRef
   "hidden pages must stop polling and visible pages must refresh immediately");
 assert.match(stateSource, /FACILITY_SHARED_CONTACTS_ENABLED[\s\S]*loadPublishedFacilityContacts/,
   "the shared contact reader must remain behind its disabled-by-default flag");
-assert.match(appSource, /legacy-workbook[\s\S]*full Excel workbook instead of the doctors-only JSON extract/,
-  "legacy MMC uploads should be visible rather than silently hidden");
+const {contactSyncWarning}=await import('../public/static/contact-sync-status.js');
+assert.match(contactSyncWarning({status:'unavailable',reason:'legacy-workbook'},{live:true,admin:true}),/full Excel workbook instead of the doctors-only JSON extract/);
 
 console.log("Contact sync safeguards passed.");

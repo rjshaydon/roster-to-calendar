@@ -22,6 +22,7 @@
     "test:contact-name-matching": "node --no-warnings scripts/test-contact-name-matching.mjs",
     "test:ddh-night-review": "node --no-warnings scripts/test-ddh-night-review.mjs",
     "test:contact-allocations": "node scripts/test-contact-allocations.mjs",
+    "test:contact-sync-health": "node scripts/test-contact-sync-health.mjs",
     "test:contact-sync": "node scripts/test-contact-sync.mjs",
     "test:contact-workbook-ingress": "node --no-warnings scripts/test-contact-workbook-ingress.mjs",
     "test:facility-contacts": "node scripts/test-facility-contact-cache.mjs",

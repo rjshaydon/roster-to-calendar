@@ -1,3 +1,4 @@
+import {contactSyncWarning} from './contact-sync-status.js';
 import { onShiftLaunchWindow } from "./shift-launch-policy.js";
 import { identityReviewMarkup, mountIdentityReview } from './identity-review-ui.js?v=20261006-people15';
 let currentIdentityReviewEnabled = false;
@@ -10911,8 +10912,10 @@ async function refreshFacilityOverviewContactList() {
     }
   } catch (error) {
     console.warn("Live contact allocation refresh failed", error);
-    if (contactExtractHasExpired(facilityOverviewState.contactList?.sourceDate)) {
-      facilityOverviewState.contactList = { status: "unavailable", reason: "expired", contacts: [], resolutions: [] };
+    if (facilityOverviewState.requestId === requestId && facilityOverviewState.date === date && facilityOverviewState.facilityKey === facilityKey) {
+      if (contactExtractHasExpired(facilityOverviewState.contactList?.sourceDate)) {
+        facilityOverviewState.contactList = { ...facilityOverviewState.contactList, status: "unavailable", reason: "expired", contacts: [], resolutions: [] };
+      }
       facilityOverviewState.content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData || []);
       renderFacilityOverviewOnShiftPreservingViewport();
     }
@@ -11249,18 +11252,12 @@ function renderFacilityOverviewContactAllocation(allocation) {
 
 function renderFacilityOverviewContactListStatus(matches, assignments = []) {
   const contactList = facilityOverviewState.contactList;
-  if (!contactList?.status) return "";
-  if (contactList.status === "unavailable") {
-    const message = contactList.reason === "legacy-workbook"
-      ? "MMC live contact sync received a full Excel workbook instead of the doctors-only JSON extract."
-      : contactList.reason === "no-extract"
-        ? "No live contact allocation JSON has been received for this ED."
-        : "Live contact allocations are temporarily unavailable.";
-    return `<p class="facility-overview-contact-status is-unavailable" role="status">${escapeHtml(message)}</p>`;
-  }
-  if (contactList.status !== "available") return `<p class="facility-overview-contact-status">Live contact allocation is not available for this date.</p>`;
-  const received = contactList.providerModifiedAt || contactList.receivedAt || "";
-  const freshness = received ? ` · updated ${formatFacilityOverviewContactTime(received)}` : "";
+  const live = ['MMC','MCH','DDH','VHH'].includes(String(facilityOverviewState.facilityKey).toUpperCase())
+    && (facilityOverviewState.date === contactOperationalDate()
+      || (String(facilityOverviewState.facilityKey).toUpperCase()==='VHH' && facilityOverviewState.date===australianDateKey()));
+  const warning=contactSyncWarning(contactList,{live,admin:isViewingCreatorAccount()});
+  const notice=warning?`<p class="facility-overview-contact-status is-unavailable" role="status">${escapeHtml(warning)}</p>`:'';
+  if (contactList?.status !== "available") return notice;
   const partition = partitionDdhNightReview(matches, assignments, { date: facilityOverviewState.date, previousNightRoster: facilityOverviewState.previousNightRoster });
   const unresolved = partition.unresolved;
   const oldNight = isViewingCreatorAccount() ? partition.previousNight : [];
@@ -11275,7 +11272,7 @@ function renderFacilityOverviewContactListStatus(matches, assignments = []) {
   const resolvedEditor = selectedContact && !selectedHiddenNight && !selectedIsUnresolved
     ? `<div class="facility-overview-contact-resolution-editor">${renderFacilityOverviewContactResolutionMenu(selectedContact, assignments)}</div>`
     : "";
-  return `<div class="facility-overview-contact-status"><span>Live contact allocations for ${escapeHtml(contactList.sourceDate)}${freshness} · ${matches.matchedCount} matched</span>${contactList.sourceId === "vhh-shift-phone-allocations" ? "<p>Numbers are shown only for uniquely matched clinicians whose rostered shift is active. The contact sheet may contain older names.</p>" : ""}${review}${resolvedEditor}</div>`;
+  return `${notice}${review||resolvedEditor?`<div class="facility-overview-contact-status">${review}${resolvedEditor}</div>`:""}`;
 }
 
 function collapseFacilityOverviewContactReview() {

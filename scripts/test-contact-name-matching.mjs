@@ -1,4 +1,5 @@
 import { facilityAccessKeys, facilityAccessAllows } from '../public/static/facility-access-policy.js';
+import { contactSyncWarning } from '../public/static/contact-sync-status.js';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
@@ -260,7 +261,7 @@ assert.deepEqual([db.reads, db.writes, r2.puts], budgetBefore);
 // importing the app's startup/network lifecycle into this local unit test.
 const app = await readFile(new URL('../public/static/app.js', import.meta.url), 'utf8');
 const escapeHtml = text => String(text ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const ui = vm.createContext({ escapeHtml, contactAllocationCandidates: (a,c) => contactAllocationCandidates(a,c,{ now }), facilityOverviewState: { contactList: { resolutions: [] }, contactResolutionSaving: false }, facilityOverviewOnShiftTimeLabel: () => '' });
+const ui = vm.createContext({contactSyncWarning, escapeHtml, contactAllocationCandidates: (a,c) => contactAllocationCandidates(a,c,{ now }), facilityOverviewState: { contactList: { resolutions: [] }, contactResolutionSaving: false }, facilityOverviewOnShiftTimeLabel: () => '' });
 for (const name of ['renderFacilityOverviewContactAllocation', 'renderFacilityOverviewContactResolutionMenu', 'renderFacilityOverviewContactReviewRow']) {
   const start = app.indexOf(`function ${name}(`), end = app.indexOf('\nfunction ', start + 1), asyncEnd = app.indexOf('\nasync function ', start + 1);
   vm.runInContext(app.slice(start, Math.min(end < 0 ? Infinity : end, asyncEnd < 0 ? Infinity : asyncEnd)), ui);

@@ -62,8 +62,8 @@ for (let refresh = 0; refresh < visiblePageRefreshes; refresh += 1) {
   const response = await loadPublishedFacilityContacts(r2, { date: sourceDate, facilityKeys: ["MMC"] });
   assert.equal(response.revision, resolved.revision);
 }
-assert.equal(r2.gets - readsBeforeRefreshes, visiblePageRefreshes * 3,
-  "50 visible pages refreshing every minute for 12 hours should remain three bounded R2 reads per refresh");
+assert.equal(r2.gets - readsBeforeRefreshes, visiblePageRefreshes * 4,
+  "50 visible pages refreshing every minute for 12 hours should remain four bounded R2 reads per refresh");
 assert.equal(r2.puts, firstWrites + 1, "36,000 unchanged refreshes must not write storage");
 console.log("Shared contact publication passed: 36,000 unchanged refreshes used zero D1 reads and zero writes.");
 
