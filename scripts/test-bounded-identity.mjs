@@ -122,14 +122,18 @@ async function api(body,email='alice@example.test',flags={}) {
 const writesBefore=db.rowsWritten, sqlStart=db.sql.length;
 const login=await api({action:'login',responseMode:'fast'});
 assert.equal(login.status,200,JSON.stringify(login));
+assert.ok(login.data.suggestedClaims.some(claim=>claim.key===alice.key),'unlinked fast login supplies matches before the shell appears');
+assert.ok(login.data.availableDoctors.length,'unlinked fast login supplies the name dropdown');
 const discovered=await api({action:'loadAccountContext'});
 assert.equal(discovered.status,200,JSON.stringify(discovered));
 assert.deepEqual(discovered.data.claims,[],'discovery must not silently acquire identities');
 assert.ok(discovered.data.suggestedClaims.some(claim=>claim.key===alice.key));
 assert.ok(discovered.data.suggestedClaims.some(claim=>claim.key==='ALICE T TEST'),'ambiguous names require human confirmation');
+const resolvedDiscovery = await api({action:'resolveAccountClaims'});
+assert.ok(resolvedDiscovery.data.suggestedClaims.some(claim=>claim.key===alice.key),'claim resolution must retain discovered matches');
 assert.equal(db.rowsWritten,writesBefore,'ordinary discovery writes nothing');
 assert.equal(scheduled.length,0,'ordinary discovery schedules no work');
-assert.ok(db.sql.length-sqlStart<32,'login and context have a fixed small statement count');
+assert.ok(db.sql.length-sqlStart<48,'login and context have a fixed small statement count');
 assert.equal(db.sql.slice(sqlStart).some(sql=>/roster_events|canonical_doctors|roster_doctors|sqlite_master/.test(sql)),false);
 assert.equal(db.sql.slice(sqlStart).some(sql=>/FROM doctor_profiles ORDER BY/.test(sql)),false,'no full profile scan');
 const nonclinical=await api({action:'loadAccountContext'},'nonclinical@example.test');
@@ -183,3 +187,11 @@ for(const sql of db.sql.filter(sql=>/INDEXED BY idx_account_claims_source_doctor
   assert.equal(plan.some(row=>/SCAN (account_claims|doctor_profiles|roster_file_doctors|roster_files)/.test(row.detail)),false,JSON.stringify(plan));
 }
 console.log('Bounded identity: 100,001 historical events, read-only suggestions, ambiguity, grades, paginated enrichment, gates, ownership races, replay, rollback, stale links and missing publications passed.');
+
+const permissionWrites = db.rowsWritten;
+const permissionSqlStart = db.sql.length;
+const permissions = await api({action:'setUserFacilityOverviewEnabled',targetEmail:'alice@example.test',facilityOverviewEnabled:true},'creator@example.test');
+assert.equal(permissions.status,200,JSON.stringify(permissions));
+assert.equal(permissions.data.user.facilityOverviewEnabled,true);
+assert.equal(db.rowsWritten-permissionWrites,1,'access toggle updates one profile row only');
+assert.equal(db.sql.slice(permissionSqlStart).some(sql=>/DELETE FROM account_claims|INSERT INTO account_states|DELETE FROM subscription_tokens/.test(sql)),false,'access toggle leaves identity links, calendars and tokens untouched');

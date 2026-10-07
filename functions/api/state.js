@@ -328,6 +328,16 @@ export async function onRequestPost(context) {
               || (loginRecord.role || roleForEmail(loginRecord.email)) === "owner"
               || !sanitizeClaims(loginRecord.claims).length,
           });
+      // Unlinked clinicians need name discovery before their first shell paint.
+      // Read only the bounded published staff directory, never roster events.
+      if (loginResponseMode === "fast" && discoveryEnabled && loginRecord.nonClinical !== true
+          && !["creator", "owner"].includes(loginRole) && !sanitizeClaims(loginRecord.claims).length) {
+        const directory = await publishedIdentityDirectory(context.env.ROSTER_FILES, australianDateKey());
+        prepared.availableDoctors = directory.doctors;
+        prepared.nameMatches = await availableIdentitySuggestions(context.env.ROSTER_DB,
+          matchDoctorClaims(directory.doctors, loginRecord.realName || "", loginRecord.email), loginRecord.email);
+        prepared.identityDiscoveryUnavailable = directory.preparing;
+      }
       const prepareMs = Date.now() - prepareStartedAt;
       const snapshotPayload = loginResponseMode === "fast" || !accountSnapshotBuildEnabled(context.env)
         ? await loadFastAccountSnapshotPayload(context, {
@@ -398,7 +408,7 @@ export async function onRequestPost(context) {
       if ((prepared.role === "creator" || prepared.role === "owner") && Array.isArray(prepared.availableDoctors) && prepared.availableDoctors.length) {
         responsePayload.availableDoctors = prepared.availableDoctors;
       }
-      if (loginResponseMode !== "fast") {
+      if (loginResponseMode !== "fast" || (prepared.availableDoctors || []).length && !["creator", "owner"].includes(loginRole)) {
         responsePayload.nameMatches = prepared.nameMatches;
         responsePayload.suggestedClaims = prepared.nameMatches;
         responsePayload.availableDoctors = prepared.availableDoctors;
@@ -815,8 +825,8 @@ export async function onRequestPost(context) {
         realName: prepared.realName,
         state: prepared.state,
         claims: prepared.claims,
-        nameMatches: [],
-        suggestedClaims: [],
+        nameMatches: prepared.nameMatches,
+        suggestedClaims: prepared.nameMatches,
         availableDoctors: prepared.availableDoctors,
         subscription: prepared.subscription,
         insightsEnabled: prepared.insightsEnabled,
@@ -1460,7 +1470,7 @@ export async function onRequestPost(context) {
         insightsEnabled: body?.insightsEnabled === true,
         updatedAt: new Date().toISOString(),
       };
-      await upsertAccountMirror(context.env.ROSTER_DB, updated);
+      await context.env.ROSTER_DB.prepare("UPDATE account_profiles SET insights_enabled = ?, updated_at = ? WHERE email = ?").bind(updated.insightsEnabled ? 1 : 0, updated.updatedAt, targetEmail).run();
       return Response.json({
         ok: true,
         user: await userSummaryFromRecord(targetEmail, updated, { publishedDoctors: (await publishedIdentityDirectory(context.env.ROSTER_FILES, australianDateKey())).doctors }),
@@ -1485,7 +1495,7 @@ export async function onRequestPost(context) {
         facilityOverviewEnabled: body?.facilityOverviewEnabled === true,
         updatedAt: new Date().toISOString(),
       };
-      await upsertAccountMirror(context.env.ROSTER_DB, updated);
+      await context.env.ROSTER_DB.prepare("UPDATE account_profiles SET facility_overview_enabled = ?, updated_at = ? WHERE email = ?").bind(updated.facilityOverviewEnabled ? 1 : 0, updated.updatedAt, targetEmail).run();
       return Response.json({
         ok: true,
         user: await userSummaryFromRecord(targetEmail, updated, { publishedDoctors: (await publishedIdentityDirectory(context.env.ROSTER_FILES, australianDateKey())).doctors }),
@@ -1511,7 +1521,7 @@ export async function onRequestPost(context) {
         facilityOverviewEnabled: body?.directorViewEnabled === true ? true : targetRecord.facilityOverviewEnabled === true,
         updatedAt: new Date().toISOString(),
       };
-      await upsertAccountMirror(context.env.ROSTER_DB, updated);
+      await context.env.ROSTER_DB.prepare("UPDATE account_profiles SET director_view_enabled = ?, facility_overview_enabled = CASE WHEN ? = 1 THEN 1 ELSE facility_overview_enabled END, updated_at = ? WHERE email = ?").bind(updated.directorViewEnabled ? 1 : 0, updated.directorViewEnabled ? 1 : 0, updated.updatedAt, targetEmail).run();
       return Response.json({
         ok: true,
         user: await userSummaryFromRecord(targetEmail, updated, { publishedDoctors: (await publishedIdentityDirectory(context.env.ROSTER_FILES, australianDateKey())).doctors }),

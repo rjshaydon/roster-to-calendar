@@ -1,4 +1,11 @@
-import * as XLSX from "xlsx";
+// Load spreadsheet machinery only when constructing a changed DDH workbook.
+// Eager initialization consumed the free Worker CPU allowance on unrelated
+// cold login and contact requests before their handlers could run.
+let workbookDependency;
+async function workbookLibrary() {
+  workbookDependency ||= import("xlsx").catch(error => { workbookDependency = null; throw error; });
+  return workbookDependency;
+}
 import { guardedFetch } from "./outbound-network.js";
 import { melbourneDateKey, rosterTermAvailableFrom } from '../../public/static/roster-term-policy.js';
 
@@ -963,7 +970,8 @@ function timeFrom(value, keys) {
   return "";
 }
 
-export function findmyshiftRowsWorkbook(rows, staff = [], options = {}) {
+export async function findmyshiftRowsWorkbook(rows, staff = [], options = {}) {
+  const XLSX = await workbookLibrary();
   const byWeek = new Map();
   for (const row of rows) {
     const monday = mondayFor(row.date);

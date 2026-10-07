@@ -271,8 +271,8 @@ assert.deepEqual(
 );
 assert.deepEqual(
   findmyshiftConfiguredRosterRange({}, new Date("2026-10-04T00:00:00Z")),
-  { from: "2026-08-03", to: "2026-11-01" },
-  "FindMyShift should retain the current term until the four-week publication window opens",
+  { from: "2026-11-02", to: "2027-01-31" },
+  "FindMyShift should select the next term from the start of the prior month",
 );
 assert.deepEqual(
   findmyshiftConfiguredRosterRange({}, new Date("2026-10-05T00:00:00Z")),
@@ -355,7 +355,7 @@ assert.doesNotThrow(
   () => assertFindmyshiftDandenongAssignments(clinicalAssistantRows),
   "source-defined Clinical Assistant support shifts should not block the automatic import",
 );
-const registrarHeadingWorkbook = XLSX.read(findmyshiftRowsWorkbook([
+const registrarHeadingWorkbook = XLSX.read(await findmyshiftRowsWorkbook([
   { sourceStaffId: "junior-person", name: "Junior Person", seniority: "Junior Registrar", date: "2026-08-03", label: "Orange AM", start: "08:00", end: "17:30", facility: "Orange AM", comment: "" },
   { sourceStaffId: "senior-person", name: "Senior Person", seniority: "Senior Registrar", date: "2026-08-03", label: "Orange PM", start: "14:30", end: "00:00", facility: "Orange PM", comment: "" },
 ]), { type: "array", cellDates: true });
@@ -367,7 +367,7 @@ assert.deepEqual(
   ["JUNIOR PERSON", "SENIOR PERSON"],
   "singular FindMyShift Junior and Senior Registrar group headings must never become DDH staff",
 );
-const authoritativeWorkbook = XLSX.read(findmyshiftRowsWorkbook([
+const authoritativeWorkbook = XLSX.read(await findmyshiftRowsWorkbook([
   { sourceStaffId: "hmo-person", name: "Hmo Person", seniority: "HMO", date: "2026-08-03", label: "Orange AM", start: "07:30", end: "17:00", facility: "Orange AM", comment: "" },
   { sourceStaffId: "amp-person", name: "Amp Person", seniority: "AMP", date: "2026-08-03", label: "Physiotherapist", start: "09:30", end: "18:00", facility: "", comment: "" },
 ], authoritativeFindmyshiftStaff), { type: "array", cellDates: true });
@@ -578,7 +578,7 @@ assert.equal(
   0,
   "a paired FindMyShift stream must not leave a duplicate generic timed event behind",
 );
-const findmyshiftWorkbook = XLSX.read(findmyshiftRowsWorkbook(findmyshiftRows), { type: "array", cellDates: true });
+const findmyshiftWorkbook = XLSX.read(await findmyshiftRowsWorkbook(findmyshiftRows), { type: "array", cellDates: true });
 const findmyshiftDetails = XLSX.utils.sheet_to_json(findmyshiftWorkbook.Sheets["FindMyShift details"], { header: 1, blankrows: false });
 assert.deepEqual(
   findmyshiftDetails[0],
@@ -601,7 +601,7 @@ XLSX.utils.book_append_sheet(ddhCanonicalManualWorkbook, XLSX.utils.aoa_to_sheet
   ["Canonical DDH Doctor", ...ddhCanonicalLabels, "", ""],
   ["", "08:00-17:00", "08:00-17:00", "08:00-17:00", "08:00-17:00", "08:00-17:00", "", ""],
 ]), "Sheet1");
-const ddhCanonicalAutoWorkbook = XLSX.read(findmyshiftRowsWorkbook(ddhCanonicalLabels.map((label, index) => ({
+const ddhCanonicalAutoWorkbook = XLSX.read(await findmyshiftRowsWorkbook(ddhCanonicalLabels.map((label, index) => ({
   name: "Canonical DDH Doctor",
   seniority: "SMS",
   date: `2026-08-0${index + 3}`,
@@ -652,7 +652,7 @@ assert.deepEqual(
   ddhCanonicalTitles,
   "automated FindMyShift processing should retain the canonical DDH shift-code labels",
 );
-const unknownInternWorkbook = XLSX.read(findmyshiftRowsWorkbook([{
+const unknownInternWorkbook = XLSX.read(await findmyshiftRowsWorkbook([{
   name: "Pranay Pius",
   seniority: "Unknown",
   date: "2026-08-07",
@@ -669,7 +669,7 @@ const unknownInternDoctor = doctorOptions([], unknownInternUpload.sources.ddh).f
 assert.ok(unknownInternDoctor, "FindMyShift fixture should expose the unknown-seniority intern");
 const unknownInternEvent = buildRosterView([], unknownInternUpload.sources.ddh, unknownInternDoctor.key).events[0];
 assert.equal(unknownInternEvent.seniority, "Intern", "FindMyShift labels should supply seniority when staff metadata says Unknown");
-const edHmosWorkbook = XLSX.read(findmyshiftRowsWorkbook([{
+const edHmosWorkbook = XLSX.read(await findmyshiftRowsWorkbook([{
   name: "Gideon Charin",
   seniority: "ED HMO's",
   date: "2026-08-18",
@@ -684,7 +684,7 @@ edHmosFormData.append("rosterFiles", workbookFile(edHmosWorkbook, "Dandenong-Fin
 const edHmosUpload = await parseUploadForm(new Request("http://fixture.test/api/analyze", { method: "POST", body: edHmosFormData }));
 const edHmosEvent = buildRosterView([], edHmosUpload.sources.ddh, "GIDEON CHARIN").events[0];
 assert.equal(edHmosEvent.seniority, "HMO", "FindMyShift ED HMO's and HMO's roster group labels should normalise to HMO");
-const findmyshiftLeaveWorkbook = XLSX.read(findmyshiftRowsWorkbook([
+const findmyshiftLeaveWorkbook = XLSX.read(await findmyshiftRowsWorkbook([
   { sourceStaffId: "leave-doctor", name: "Ananth Sundaralingam", seniority: "SMS", date: "2026-08-10", label: "SL MMC", start: "", end: "", facility: "", comment: "" },
   { sourceStaffId: "leave-doctor", name: "Ananth Sundaralingam", seniority: "SMS", date: "2026-08-11", label: "S/L", start: "14:30", end: "00:00", facility: "", comment: "" },
   { sourceStaffId: "leave-doctor", name: "Ananth Sundaralingam", seniority: "SMS", date: "2026-08-12", label: "Annual leave 19hrs", start: "", end: "", facility: "", comment: "" },
@@ -718,7 +718,7 @@ const findmyshiftCrossTermRows = extractShiftRows([
   { "staffId": "staff-001", "facilityId": "facility-north", "date": "2026-10-05", "firstName": "Alex", "lastName": "Example", "payrollId": null, "occurrences": 1, "shift": "07:00-15:00" },
 ], { staff: findmyshiftFixture.staff, facilities: findmyshiftFixture.facilities });
 const findmyshiftCrossTermFormData = new FormData();
-findmyshiftCrossTermFormData.append("rosterFiles", workbookFile(XLSX.read(findmyshiftRowsWorkbook(findmyshiftCrossTermRows), { type: "array", cellDates: true }), "Dandenong-FindMyShift-full-range.xlsx"));
+findmyshiftCrossTermFormData.append("rosterFiles", workbookFile(XLSX.read(await findmyshiftRowsWorkbook(findmyshiftCrossTermRows), { type: "array", cellDates: true }), "Dandenong-FindMyShift-full-range.xlsx"));
 const findmyshiftCrossTermUpload = await parseUploadForm(new Request("http://fixture.test/api/analyze", { method: "POST", body: findmyshiftCrossTermFormData }));
 assert.equal(findmyshiftCrossTermUpload.sources.ddh.length, 1, "a FindMyShift full available roster may safely cross term boundaries");
 const findmyshiftDoctors = doctorOptions([], [findmyshiftSource]);
@@ -775,7 +775,7 @@ const ddhVariableLineRows = [
   facility: label,
   comment: "",
 }));
-const ddhVariableLineWorkbook = XLSX.read(findmyshiftRowsWorkbook(ddhVariableLineRows, ddhVariableLineStaff), { type: "array", cellDates: true });
+const ddhVariableLineWorkbook = XLSX.read(await findmyshiftRowsWorkbook(ddhVariableLineRows, ddhVariableLineStaff), { type: "array", cellDates: true });
 const ddhVariableLinePayload = await buildAutomatedDerivedRosterPayload({
   file: workbookFile(ddhVariableLineWorkbook, "Dandenong-FindMyShift-variable-lines.xlsx"),
   sourceId: "dandenong-findmyshift",

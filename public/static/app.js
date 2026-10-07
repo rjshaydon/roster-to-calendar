@@ -401,6 +401,8 @@ let pendingExportHospitals = [];
 let currentAdminTab = "users";
 let adminUserSeniorityFilter = "";
 let adminUserSearchQuery = "";
+let adminUserDirectoryRevision = 0;
+const pendingAdminPermissions = new Set();
 let createUserAccountExpanded = false;
 let otherUsersExpanded = false;
 let identityReviewExpanded = false;
@@ -1521,7 +1523,7 @@ accountsBody.addEventListener("change", (event) => {
   const seniorityFilter = event.target.closest("[data-admin-user-seniority-filter]");
   if (seniorityFilter) {
     adminUserSeniorityFilter = String(seniorityFilter.value || "");
-    renderAccountsModal();
+    filterAdminUserCards();
     return;
   }
   const insightsToggle = event.target.closest("[data-toggle-user-insights]");
@@ -1548,11 +1550,9 @@ accountsBody.addEventListener("input", (event) => {
     otherUsersExpanded = false;
     otherUsersExpandedBySearch = false;
   }
-  renderAccountsModal();
-  const replacement = accountsBody.querySelector("[data-admin-user-search]");
-  if (!replacement) return;
-  replacement.focus();
-  replacement.setSelectionRange(adminUserSearchQuery.length, adminUserSearchQuery.length);
+  const section = accountsBody.querySelector("[data-other-users-section]");
+  if (section) section.open = otherUsersExpanded;
+  filterAdminUserCards();
 });
 accountsBody.addEventListener("toggle", (event) => {
   const section = event.target;
@@ -3876,6 +3876,7 @@ function renderClaimSection() {
   claimSection.classList.toggle("hidden", !shouldShow);
   if (!shouldShow) return;
 
+  const suggested = [];
   const unclaimed = [];
   const claimed = [];
   availableRosterDoctors.forEach((doctor, index) => {
@@ -3884,16 +3885,19 @@ function renderClaimSection() {
       claimed: Boolean(doctor.claimedBy),
       label: `${doctor.displayName} (${doctor.sourceType.toUpperCase()})${doctor.claimedBy ? " - already claimed" : ""}`,
     };
-    (item.claimed ? claimed : unclaimed).push(item);
+    const match = currentSuggestedClaims.some(claim => claim.sourceType === doctor.sourceType && claim.key === doctor.key);
+    (item.claimed ? claimed : match ? suggested : unclaimed).push(item);
   });
   unclaimed.sort((left, right) => left.label.localeCompare(right.label));
   claimed.sort((left, right) => left.label.localeCompare(right.label));
   claimDoctorSelect.innerHTML = `
     <option value="">My name is not listed</option>
+    ${suggested.length ? `<optgroup label="Suggested matches">${suggested.map((item) => `<option value="${item.index}">${escapeHtml(item.label)}</option>`).join("")}</optgroup>` : ""}
     ${unclaimed.length ? `<optgroup label="Unclaimed names">${unclaimed.map((item) => `<option value="${item.index}">${escapeHtml(item.label)}</option>`).join("")}</optgroup>` : ""}
     ${claimed.length ? `<optgroup label="Already claimed">${claimed.map((item) => `<option value="${item.index}" class="claimed-option">${escapeHtml(item.label)}</option>`).join("")}</optgroup>` : ""}
   `;
-  claimDoctorButton.disabled = true;
+  if (suggested.length === 1) claimDoctorSelect.value = String(suggested[0].index);
+  claimDoctorButton.disabled = claimDoctorSelect.value === "";
 }
 
 async function claimSelectedRosterName(candidateOverride = null) {
@@ -12212,6 +12216,33 @@ function syncAccountsButton() {
   syncFacilityOverviewAccess();
 }
 
+function filterAdminUserCards() {
+  const query = adminUserSearchQuery.trim().toLocaleLowerCase();
+  const users = new Map(serverUsers.map(user => { const normalized = normalizeServerUser(user); return [normalized.email, normalized]; }));
+  let count = 0;
+  for (const card of accountsBody.querySelectorAll('[data-admin-user-email]')) {
+    const user = users.get(normalizeEmail(card.dataset.adminUserEmail));
+    const matches = user && (!adminUserSeniorityFilter || user.seniorities.includes(adminUserSeniorityFilter))
+      && (!query || [user.realName, user.email, ...sanitizeRosterClaims(user.claims).flatMap(claim => [claim.displayName, claim.sourceType])]
+        .some(value => String(value || '').toLocaleLowerCase().includes(query)));
+    card.classList.toggle('hidden', !matches);
+    if (matches) count += 1;
+  }
+  const label = accountsBody.querySelector('[data-admin-user-count]');
+  if (label && !serverUsersUnavailable) label.textContent = count ? `${count} account${count === 1 ? '' : 's'}` : 'No matching users.';
+}
+
+function syncAdminPermissionControls() {
+  const fields = { toggleUserInsights: 'insightsEnabled', toggleUserFacilityOverview: 'facilityOverviewEnabled', toggleUserDirectorView: 'directorViewEnabled' };
+  for (const input of accountsBody.querySelectorAll('[data-toggle-user-insights], [data-toggle-user-facility-overview], [data-toggle-user-director-view]')) {
+    const key = Object.keys(fields).find(key => input.dataset[key] !== undefined);
+    const email = normalizeEmail(input.dataset[key]);
+    const user = serverUsers.find(user => normalizeEmail(user.email) === email);
+    if (user) input.checked = normalizeServerUser(user)[fields[key]] === true;
+    input.disabled = pendingAdminPermissions.has(email);
+  }
+}
+
 function renderAccountsModal() {
   const me = currentAccount();
   const ownerView = isViewingCreatorAccount();
@@ -12350,7 +12381,7 @@ function renderAccountsModal() {
         <summary class="review-top admin-users-header">
           <div class="admin-users-summary">
             <strong>Current users</strong>
-            <span>${serverUsersUnavailable ? "Temporarily unavailable" : filteredOtherUsers.length ? `${filteredOtherUsers.length} account${filteredOtherUsers.length === 1 ? "" : "s"}` : otherUsers.length ? "No matching users." : "No other users have logged in yet."}</span>
+            <span data-admin-user-count>${serverUsersUnavailable ? "Temporarily unavailable" : filteredOtherUsers.length ? `${filteredOtherUsers.length} account${filteredOtherUsers.length === 1 ? "" : "s"}` : otherUsers.length ? "No matching users." : "No other users have logged in yet."}</span>
           </div>
           <label class="field admin-user-filter admin-user-search-filter">
             <span>Search users</span>
@@ -12366,8 +12397,8 @@ function renderAccountsModal() {
           <span class="collapsible-chevron" aria-hidden="true">⌄</span>
         </summary>
         <div class="issues-list">
-          ${serverUsersUnavailable ? `<article class="issue-card"><p>The user directory is temporarily unavailable while we complete a reliability upgrade. Existing accounts and permissions have not been removed.</p></article>` : filteredOtherUsers.length ? filteredOtherUsers.map((user) => `
-            <article class="issue-card account-user-card">
+          ${serverUsersUnavailable ? `<article class="issue-card"><p>The user directory is temporarily unavailable while we complete a reliability upgrade. Existing accounts and permissions have not been removed.</p></article>` : otherUsers.length ? otherUsers.map((user) => `
+            <article class="issue-card account-user-card" data-admin-user-email="${escapeHtml(user.email)}">
               <div class="account-user-summary">
                 <strong class="account-user-name">${escapeHtml(user.realName || "Name not set")}</strong>
                 <p class="account-user-email">${escapeHtml(user.email)}</p>
@@ -12407,7 +12438,7 @@ function renderAccountsModal() {
                   </form>
                   <select data-admin-claim-select="${escapeHtml(user.email)}">
                     <option value="">Add roster name...</option>
-                    ${availableRosterDoctors.map((doctor, index) => `<option value="${index}">${escapeHtml(`${doctor.displayName} (${doctor.sourceType.toUpperCase()})${doctor.claimedBy && doctor.claimedBy !== user.email ? ` - claimed by ${doctor.claimedBy}` : ""}`)}</option>`).join("")}
+
                   </select>
                   <button type="button" class="button button-secondary" data-admin-add-claim="${escapeHtml(user.email)}">Add roster name</button>
                 </div>
@@ -12425,6 +12456,7 @@ function renderAccountsModal() {
       : currentAdminTab === "users" ? usersCard : ownerCard
     : ownerCard;
   accountsBody.innerHTML = `${adminTabs}${adminBody}`;
+  if (ownerView && currentAdminTab === "users") { filterAdminUserCards(); syncAdminPermissionControls(); }
   if (ownerView && currentAdminTab === "users" && identityReviewExpanded) mountAdminIdentityReview();
   if (ownerView && currentAdminTab === "users") {
     const currentUsersCard = accountsBody.querySelector(".other-users-card");
@@ -14317,124 +14349,53 @@ function isValidEmailAddress(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || ""));
 }
 
-async function setUserInsightsEnabled(email, enabled) {
+async function saveAdminPermission(email, field, action, enabled) {
   const targetEmail = normalizeEmail(email);
-  if (!targetEmail || !isCreatorAuthenticated()) return;
-  const previousUsers = serverUsers.map((user) => ({ ...normalizeServerUser(user) }));
-  serverUsers = serverUsers.map((user) => {
-    const normalized = normalizeServerUser(user);
-    return normalized.email === targetEmail ? { ...normalized, insightsEnabled: enabled === true } : normalized;
-  });
-  renderAccountsModal();
+  if (!targetEmail || !isCreatorAuthenticated() || pendingAdminPermissions.has(targetEmail)) return false;
+  const previous = normalizeServerUser(serverUsers.find(user => normalizeEmail(user.email) === targetEmail) || {});
+  const affectedFields = field === 'directorViewEnabled' && enabled ? [field, 'facilityOverviewEnabled'] : [field];
+  pendingAdminPermissions.add(targetEmail);
+  adminUserDirectoryRevision += 1;
+  serverUsers = serverUsers.map(user => normalizeEmail(user.email) === targetEmail
+    ? { ...user, ...Object.fromEntries(affectedFields.map(key => [key, enabled === true])) } : user);
+  syncAdminPermissionControls();
   try {
-    const response = await fetch("/api/state", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        action: "setUserInsightsEnabled",
-        email: authUserEmail || currentUserEmail,
-        password: authUserPassword || currentUserPassword,
-        targetEmail,
-        insightsEnabled: enabled === true,
-      }),
+    const response = await fetch('/api/state', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action, email: authUserEmail || currentUserEmail,
+        password: authUserPassword || currentUserPassword, targetEmail, [field]: enabled === true }),
     });
-    const data = await readJsonResponse(response, "Could not update user feature access.");
-    if (data.user) {
-      serverUsers = [
-        ...serverUsers.filter((user) => normalizeServerUser(user).email !== targetEmail),
-        data.user,
-      ].sort((left, right) => normalizeServerUser(left).email.localeCompare(normalizeServerUser(right).email));
-      renderAccountsModal();
-    }
-    if (targetEmail === currentUserEmail) {
-      currentInsightsEnabled = enabled === true;
-      rebuildClientPreview();
-    }
-    setStatus(enabled ? "Working-with tools enabled for that user." : "Working-with tools disabled for that user.");
+    const data = await readJsonResponse(response, 'Could not update user feature access.');
+    if (data.user) serverUsers = serverUsers.map(user => normalizeEmail(user.email) === targetEmail ? data.user : user);
+    return true;
   } catch (error) {
-    serverUsers = previousUsers;
-    renderAccountsModal();
-    setStatus(error.message || "Could not update user feature access.", true);
+    serverUsers = serverUsers.map(user => normalizeEmail(user.email) === targetEmail
+      ? { ...user, ...Object.fromEntries(affectedFields.map(key => [key, previous[key]])) } : user);
+    setStatus(error.message || 'Could not update user feature access.', true);
+    return false;
+  } finally {
+    pendingAdminPermissions.delete(targetEmail);
+    adminUserDirectoryRevision += 1;
+    syncAdminPermissionControls();
   }
+}
+
+async function setUserInsightsEnabled(email, enabled) {
+  if (!await saveAdminPermission(email, 'insightsEnabled', 'setUserInsightsEnabled', enabled)) return;
+  if (normalizeEmail(email) === currentUserEmail) { currentInsightsEnabled = enabled === true; rebuildClientPreview(); }
+  setStatus(enabled ? 'Working-with tools enabled for that user.' : 'Working-with tools disabled for that user.');
 }
 
 async function setUserFacilityOverviewEnabled(email, enabled) {
-  const targetEmail = normalizeEmail(email);
-  if (!targetEmail || !isCreatorAuthenticated()) return;
-  const previousUsers = serverUsers.map((user) => ({ ...normalizeServerUser(user) }));
-  serverUsers = serverUsers.map((user) => {
-    const normalized = normalizeServerUser(user);
-    return normalized.email === targetEmail ? { ...normalized, facilityOverviewEnabled: enabled === true } : normalized;
-  });
-  renderAccountsModal();
-  try {
-    const response = await fetch("/api/state", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        action: "setUserFacilityOverviewEnabled",
-        email: authUserEmail || currentUserEmail,
-        password: authUserPassword || currentUserPassword,
-        targetEmail,
-        facilityOverviewEnabled: enabled === true,
-      }),
-    });
-    const data = await readJsonResponse(response, "Could not update user feature access.");
-    if (data.user) {
-      serverUsers = [
-        ...serverUsers.filter((user) => normalizeServerUser(user).email !== targetEmail),
-        data.user,
-      ].sort((left, right) => normalizeServerUser(left).email.localeCompare(normalizeServerUser(right).email));
-      renderAccountsModal();
-    }
-    if (targetEmail === currentUserEmail) {
-      currentFacilityOverviewEnabled = enabled === true;
-      syncFacilityOverviewAccess();
-    }
-    setStatus(enabled ? "At a glance ED overview enabled for that user." : "At a glance ED overview disabled for that user.");
-  } catch (error) {
-    serverUsers = previousUsers;
-    renderAccountsModal();
-    setStatus(error.message || "Could not update user feature access.", true);
-  }
+  if (!await saveAdminPermission(email, 'facilityOverviewEnabled', 'setUserFacilityOverviewEnabled', enabled)) return;
+  if (normalizeEmail(email) === currentUserEmail) { currentFacilityOverviewEnabled = enabled === true; syncFacilityOverviewAccess(); }
+  setStatus(enabled ? 'At a glance ED overview enabled for that user.' : 'At a glance ED overview disabled for that user.');
 }
 
 async function setUserDirectorViewEnabled(email, enabled) {
-  const targetEmail = normalizeEmail(email);
-  if (!targetEmail || !isCreatorAuthenticated()) return;
-  const previousUsers = serverUsers.map((user) => ({ ...normalizeServerUser(user) }));
-  serverUsers = serverUsers.map((user) => {
-    const normalized = normalizeServerUser(user);
-    return normalized.email === targetEmail ? { ...normalized, directorViewEnabled: enabled === true } : normalized;
-  });
-  renderAccountsModal();
-  try {
-    const response = await fetch("/api/state", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        action: "setUserDirectorViewEnabled",
-        email: authUserEmail || currentUserEmail,
-        password: authUserPassword || currentUserPassword,
-        targetEmail,
-        directorViewEnabled: enabled === true,
-      }),
-    });
-    const data = await readJsonResponse(response, "Could not update Director access.");
-    if (data.user) {
-      serverUsers = [
-        ...serverUsers.filter((user) => normalizeServerUser(user).email !== targetEmail),
-        data.user,
-      ].sort((left, right) => normalizeServerUser(left).email.localeCompare(normalizeServerUser(right).email));
-      renderAccountsModal();
-    }
-    if (targetEmail === currentUserEmail) currentDirectorViewEnabled = enabled === true;
-    setStatus(enabled ? "Director access enabled for that user." : "Director access disabled for that user.");
-  } catch (error) {
-    serverUsers = previousUsers;
-    renderAccountsModal();
-    setStatus(error.message || "Could not update Director access.", true);
-  }
+  if (!await saveAdminPermission(email, 'directorViewEnabled', 'setUserDirectorViewEnabled', enabled)) return;
+  if (normalizeEmail(email) === currentUserEmail) currentDirectorViewEnabled = enabled === true;
+  setStatus(enabled ? 'Director access enabled for that user.' : 'Director access disabled for that user.');
 }
 
 async function confirmSuggestedClaim(index) {
@@ -14539,6 +14500,8 @@ function toggleAdminRosterClaimControls(email) {
     .find((item) => normalizeEmail(item.dataset.adminClaimSelect) === targetEmail);
   if (editor) {
     const isHidden = editor.classList.toggle("hidden");
+    if (!isHidden && select) select.innerHTML = '<option value="">Add roster name...</option>' + availableRosterDoctors.map((doctor, index) =>
+      `<option value="${index}">${escapeHtml(`${doctor.displayName} (${doctor.sourceType.toUpperCase()})${doctor.claimedBy && doctor.claimedBy !== targetEmail ? ' - claimed by ' + doctor.claimedBy : ''}`)}</option>`).join('');
     const nameInput = editor.querySelector("[data-admin-user-real-name]");
     if (!isHidden && nameInput) nameInput.focus();
     return;
@@ -17496,6 +17459,7 @@ function queueDeferredAccountContextLoad(options = {}) {
         const data = await loadDeferredAccountContext(options);
         if (runId !== deferredAccountContextRunId || !data || viewedAccountEmail() !== normalizeEmail(options.targetEmail || currentUserEmail) || !calendarTransitionStillCurrent(options.transition)) return;
         applyCloudStateContext(data);
+        renderClaimSection();
         renderLoginState();
       } catch (error) {
         if (runId !== deferredAccountContextRunId || !calendarTransitionStillCurrent(options.transition)) return;
@@ -17720,7 +17684,11 @@ async function applyCloudStateData(data, options = {}) {
   if (!calendarTransitionStillCurrent(options.transition)) return false;
   applyCloudStateIdentity(data);
   if (!calendarTransitionStillCurrent(options.transition)) return false;
-  if (options.deferContext) applyAvailableRosterDoctorsFromData(data);
+  if (options.deferContext) {
+    applyAvailableRosterDoctorsFromData(data);
+    currentSuggestedClaims = sanitizeRosterClaims(data.suggestedClaims || data.nameMatches || []);
+    latestNameMatches = currentSuggestedClaims;
+  }
   else applyCloudStateContext(data);
   if (!calendarTransitionStillCurrent(options.transition)) return false;
   await applyCloudStateSnapshot(data, options);
@@ -18430,6 +18398,7 @@ function cacheCurrentSnapshot(session = buildActiveSessionState()) {
 }
 
 async function loadServerUsers() {
+  const directoryRevision = adminUserDirectoryRevision;
   const requestEmail = adminViewingEmail ? authUserEmail : currentUserEmail;
   const requestPassword = adminViewingEmail ? authUserPassword : currentUserPassword;
   if (!requestEmail || !requestPassword || normalizeEmail(requestEmail) !== OWNER_EMAIL || !cloudAvailable) return;
@@ -18457,6 +18426,7 @@ async function loadServerUsers() {
     }
     if (cursor) throw new Error("Account directory exceeds the supported page limit.");
     serverUsersUnavailable = false;
+    if (directoryRevision !== adminUserDirectoryRevision || pendingAdminPermissions.size) return;
     serverUsers = users;
     if (Array.isArray(data.availableDoctors)) {
       applyAuthoritativeAvailableDoctors(data.availableDoctors);
