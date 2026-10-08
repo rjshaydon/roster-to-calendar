@@ -11,7 +11,7 @@ Production fix: 56f57c2d.
 
 ## Changes
 
-- Unlinked clinical fast login returns bounded published name matches and dropdown data. Resolve-account-claims no longer replaces discovered suggestions with empty arrays. Deferred context refresh explicitly renders the name dropdown. Suggestions appear first and a single suggestion is preselected for user confirmation; identities are never silently claimed.
+- Unlinked clinical fast login returns bounded published name matches and dropdown data. Resolve-account-claims no longer replaces discovered suggestions with empty arrays. Deferred context refresh explicitly renders the name dropdown. Clear full-name matches now link automatically before the calendar is returned. Capitalization, titles and surname-first comma formatting are normalized. Competing spellings, duplicate names at one site, incomplete publications and occupied identities require confirmation. Existing links are preserved; indexed ownership assertions run in the same transaction as the new claims. Repeat logins make no additional link writes.
 - Admin Users search filters existing cards locally. It preserves the search input and its caret. Each user's hidden roster-name options are generated only when Edit is opened.
 - Permission controls remain in place during saves, with per-user pending protection. A failed save reverts only the affected user's fields. Directory responses begun before a permission change cannot overwrite it.
 - Server permission saves update the requested profile fields only, preserving roster claims, subscription tokens and session settings.

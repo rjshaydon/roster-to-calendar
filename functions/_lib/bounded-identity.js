@@ -66,7 +66,7 @@ function normaliseClaims(claims) {
 // D1 batches are atomic. Assertions run inside the same transaction as the
 // incremental mutation, so concurrent claims cannot acquire the same name.
 // json() deliberately aborts and rolls back the batch if an assertion fails.
-export async function saveBoundedAccountClaims(db, record, incoming, { adminIssues = record.adminIssues } = {}) {
+export async function saveBoundedAccountClaims(db, record, incoming, { adminIssues = record.adminIssues, guardAutomaticIdentity = false } = {}) {
   const email = String(record.email || '').trim().toLowerCase();
   const previous = normaliseClaims(record.claims || []);
   const claims = normaliseClaims(incoming);
@@ -98,6 +98,12 @@ export async function saveBoundedAccountClaims(db, record, incoming, { adminIssu
     AND EXISTS(SELECT 1 FROM account_profiles WHERE email=?${issuesChanged ? ' AND admin_issues_json=?' : ''})
     THEN 1 ELSE json('identity-conflict') END AS identity_guard`)
     .bind(email, previous.length, ...(previous.length ? [email, ...previous.flatMap(claim => [claim.sourceType, claim.key, claim.displayName, claim.matchedAt || '']), previous.length] : []), email, ...(issuesChanged ? [storedIssues] : []))];
+  if (guardAutomaticIdentity && claims.length) statements.push(db.prepare(`SELECT CASE WHEN
+    NOT EXISTS(SELECT 1 FROM account_people WHERE email=?) AND
+    NOT EXISTS(SELECT 1 FROM roster_person_aliases r JOIN account_people a ON a.person_id=r.person_id
+      WHERE (${claims.map(() => '(r.source_type=? AND r.doctor_key=?)').join(' OR ')}) AND a.email<>?)
+    THEN 1 ELSE json('identity-conflict') END AS identity_guard`)
+    .bind(email, ...claims.flatMap(claim => [claim.sourceType, claim.key]), email));
   if (claims.length) statements.push(db.prepare(`SELECT CASE WHEN NOT EXISTS(
     SELECT 1 FROM account_claims INDEXED BY idx_account_claims_source_doctor_email
     WHERE (${ownershipPredicates}) AND email<>?) THEN 1 ELSE json('identity-conflict') END AS identity_guard`)

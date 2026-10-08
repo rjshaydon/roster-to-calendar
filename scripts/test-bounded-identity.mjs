@@ -171,6 +171,49 @@ const otherNow=await loadAccountMirror(db,other.email);
 db.failRunIncludes='INSERT INTO account_claims';
 await assert.rejects(saveBoundedAccountClaims(db,otherNow,[{...bob,key:'NEW'}]),/Injected/);
 assert.equal(sqlite.prepare('SELECT doctor_key FROM account_claims WHERE email=?').get(other.email).doctor_key,old.key,'failed replacement retains old links');
+// A clear full name goes directly from login to a published multi-site calendar.
+account('blocked@example.test','Blocked Exact');
+account('reviewed@example.test','Reviewed Exact');
+const year=Number(today.slice(0,4)), month=today.slice(0,7);
+for (const source of ['mmc','mch']) {
+  const staffKey=`automatic/${source}/staff`, months={};
+  for(let i=0;i<13;i++) {
+    const date=new Date(Date.UTC(year,i,1)), key=date.toISOString().slice(0,7), objectKey=`automatic/${source}/${key}`;
+    months[key]={key:objectKey,revision:'fixture'};
+    await storeCachedSnapshot(r2,objectKey,{rows:key===month?[{sourceType:source,doctorKey:'ZORA EXACT',event:{id:'zora-'+source,doctorKey:'ZORA EXACT',source:source.toUpperCase(),title:'Day shift',start:today+'T08:00:00',end:today+'T16:00:00'}}]:[]});
+  }
+  await storeCachedSnapshot(r2,staffKey,{members:[{doctorKey:'ZORA EXACT',displayName:source==='mmc'?'Dr Zora EXACT':'EXACT, Zora',seniority:'HMO'},{doctorKey:'BLOCKED EXACT',displayName:'Blocked Exact',seniority:'HMO'},{doctorKey:'REVIEWED EXACT',displayName:'Reviewed Exact',seniority:'HMO'}]});
+  await storeCachedSnapshot(r2,`facility-overview/v1/${source}/manifest.json`,{terms:[{termStart:`${year}-01-01`,termEnd:`${year+1}-01-31`,visibleFrom:'2000-01-01',staffKey}],coverage:[{startDate:`${year}-01-01`,endDate:`${year+1}-01-31`}],months});
+}
+const automaticStart=db.sql.length;
+const automatic=await api({action:'login',mode:'create',realName:'Exact, Zora',responseMode:'fast'},'zora@example.test',{IDENTITY_REVIEW_ENABLED:'true',BOUNDED_MANUAL_ROSTER_ENABLED:'true'});
+assert.equal(automatic.status,200,JSON.stringify(automatic));
+assert.equal(automatic.data.created,true,'actual signup performs the automatic link');
+assert.equal(automatic.data.claims.length,2,'clear full-name matches at both sites are linked');
+assert.equal(automatic.data.defaultDoctorKey,'ZORA EXACT');
+assert.equal(automatic.data.snapshotAvailable,true,JSON.stringify(automatic));
+assert.deepEqual(new Set(automatic.data.snapshot.preview.events.map(e=>e.id)),new Set(['zora-mmc','zora-mch']),'login delivers the full published calendar without confirmation');
+assert.equal(db.sql.slice(automaticStart).some(sql=>/roster_events|canonical_doctors|roster_doctors/.test(sql)),false,'automatic login never scans roster history');
+const replayWrites=db.rowsWritten;
+assert.equal((await api({action:'login',responseMode:'fast'},'zora@example.test',{IDENTITY_REVIEW_ENABLED:'true',BOUNDED_MANUAL_ROSTER_ENABLED:'true'})).status,200);
+assert.equal(db.rowsWritten,replayWrites,'linked logins do not write again');
+sqlite.prepare("INSERT INTO account_claims(email,source_type,doctor_key,display_name) VALUES('other@example.test','mmc','BLOCKED EXACT','Blocked Exact')").run();
+const occupied=await api({action:'login',responseMode:'fast'},'blocked@example.test',{IDENTITY_REVIEW_ENABLED:'true'});
+assert.equal(occupied.data.claims.length,0,'a partial available match cannot acquire the other site');
+sqlite.prepare("INSERT INTO roster_people(person_id,preferred_display_name) VALUES('reviewed-person','Reviewed Exact')").run();
+sqlite.prepare("INSERT INTO roster_person_aliases(source_type,doctor_key,display_name,person_id) VALUES('mmc','REVIEWED EXACT','Reviewed Exact','reviewed-person')").run();
+sqlite.prepare("INSERT INTO account_people(email,person_id) VALUES('other@example.test','reviewed-person')").run();
+const reviewedOwner=await api({action:'login',responseMode:'fast'},'reviewed@example.test',{IDENTITY_REVIEW_ENABLED:'true'});
+assert.equal(reviewedOwner.status,200,JSON.stringify(reviewedOwner));
+assert.equal(reviewedOwner.data.claims.length,0,'approved ownership cannot be seized');
+// The durable ownership assertion also runs inside the claim transaction.
+const candidate={sourceType:'mch',key:'REVIEW RACE',displayName:'Reviewed Exact'};
+db.beforeBatch=()=>{
+ sqlite.prepare("INSERT INTO roster_person_aliases(source_type,doctor_key,display_name,person_id) VALUES('mch','REVIEW RACE','Reviewed Exact','reviewed-person')").run();
+};
+await assert.rejects(saveBoundedAccountClaims(db,await loadAccountMirror(db,'reviewed@example.test'),[candidate],{guardAutomaticIdentity:true}),e=>e.code==='IDENTITY_CLAIM_CONFLICT');
+assert.equal((await loadAccountMirror(db,'reviewed@example.test')).claims.length,0);
+console.log('Automatic clear-name login, multi-site calendar, replay, uncertainty and durable ownership checks passed.');
 // Existing links survive missing publications, and removal is still available.
 r2.objects.clear();
 const missing=await api({action:'loadAccountContext'});
@@ -214,3 +257,8 @@ assert.equal(found.claims.length,directoryClaimCount,'display does not rewrite o
 const toggleLinked = await api({action:'setUserInsightsEnabled',targetEmail:'alice@example.test',insightsEnabled:true},'creator@example.test',{IDENTITY_REVIEW_ENABLED:'true'});
 assert.equal(toggleLinked.status,200,JSON.stringify(toggleLinked));
 assert.ok(toggleLinked.data.user.rosterLinks.some(link=>link.key==='DIRECTORY APPROVED'),'permission response retains approved labels');
+
+for(const sql of db.sql.filter(sql=>sql.includes('JOIN account_people a ON a.person_id=r.person_id'))) {
+ const plan=sqlite.prepare('EXPLAIN QUERY PLAN '+sql).all(...Array((sql.match(/\?/g)||[]).length).fill('fixture'));
+ assert.equal(plan.some(row=>/SCAN (r|a)\b/.test(row.detail)),false,'automatic ownership lookup must use indexes: '+JSON.stringify(plan));
+}

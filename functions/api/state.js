@@ -309,7 +309,14 @@ export async function onRequestPost(context) {
       const authStartedAt = Date.now();
       const account = await loadOrCreateD1Account(context.env.ROSTER_DB, email, password, { mode, realName });
       const discoveryEnabled = identityDiscoveryEnabled(context.env);
-      const loginRecord = account.record;
+      let loginRecord = account.record;
+      let loginDirectory;
+      if (discoveryEnabled && loginRecord.nonClinical !== true
+          && !["creator", "owner"].includes(loginRecord.role || roleForEmail(loginRecord.email))
+          && !sanitizeClaims(loginRecord.claims).length) {
+        loginDirectory = await publishedIdentityDirectory(context.env.ROSTER_FILES, australianDateKey());
+        loginRecord = await automaticallyLinkClearRosterName(context.env.ROSTER_DB, loginRecord, loginDirectory, context.env.IDENTITY_REVIEW_ENABLED === "true");
+      }
       const loginRole = loginRecord.role || roleForEmail(loginRecord.email);
       const loginResponseMode = (loginRole === "creator" || loginRole === "owner")
         && !creatorStartupHydrationEnabled(context.env)
@@ -322,7 +329,7 @@ export async function onRequestPost(context) {
         : await prepareAccountResponse(null, loginRecord, {
             db: context.env.ROSTER_DB,
             identityDiscoveryEnabled: discoveryEnabled, identityReviewEnabled: context.env.IDENTITY_REVIEW_ENABLED === "true",
-            r2: context.env.ROSTER_FILES,
+            r2: context.env.ROSTER_FILES, publishedDirectory: loginDirectory,
             facilityAccessMaterialized: materializedAccessFor(loginRecord),
             includeAvailableDoctors: (loginRecord.role || roleForEmail(loginRecord.email)) === "creator"
               || (loginRecord.role || roleForEmail(loginRecord.email)) === "owner"
@@ -332,7 +339,7 @@ export async function onRequestPost(context) {
       // Read only the bounded published staff directory, never roster events.
       if (loginResponseMode === "fast" && discoveryEnabled && loginRecord.nonClinical !== true
           && !["creator", "owner"].includes(loginRole) && !sanitizeClaims(loginRecord.claims).length) {
-        const directory = await publishedIdentityDirectory(context.env.ROSTER_FILES, australianDateKey());
+        const directory = loginDirectory || await publishedIdentityDirectory(context.env.ROSTER_FILES, australianDateKey());
         prepared.availableDoctors = directory.doctors;
         prepared.nameMatches = await availableIdentitySuggestions(context.env.ROSTER_DB,
           matchDoctorClaims(directory.doctors, loginRecord.realName || "", loginRecord.email), loginRecord.email);
@@ -3947,9 +3954,11 @@ export async function prepareAccountResponse(store, rawRecord, options = {}) {
   let linkedProfiles = [];
   const published = options.identityDiscoveryEnabled === true && record.nonClinical !== true
     && ((role !== "creator" && role !== "owner") || options.includeAvailableDoctors !== false)
-    ? await publishedIdentityDirectory(options.r2, australianDateKey()) : { preparing: true, doctors: [] };
+    ? options.publishedDirectory || await publishedIdentityDirectory(options.r2, australianDateKey()) : { preparing: true, doctors: [] };
 
   if (role !== "creator" && role !== "owner") {
+    record = await automaticallyLinkClearRosterName(options.db, record, published, options.identityReviewEnabled === true);
+    claims = sanitizeClaims(record.claims);
     const originalClaims = claims;
     const matchedClaims = await availableIdentitySuggestions(options.db,
       matchDoctorClaims(published.doctors, record.realName || "", record.email), record.email);
@@ -6055,6 +6064,28 @@ async function snapshotPreviewIssueRuleSets(db, ownerEmail = "", record = null) 
 function filterStoredRosterIssuesForPreview(issues, ruleSets = {}) {
   return (Array.isArray(issues) ? issues : [])
     .filter((issue) => !isIssueResolvedByRuleSets(issue, ruleSets));
+}
+
+// Automatic linking only accepts one complete normalized spelling. Prefix,
+// initial and middle-name alternatives remain suggestions for the user.
+async function automaticallyLinkClearRosterName(db, record, directory, identityReviewEnabled) {
+  if (record.nonClinical === true || sanitizeClaims(record.claims).length || directory.preparing
+      || directory.missingSources?.length || !rosterIdentityKey(record.realName)) return record;
+  if (identityReviewEnabled && await db.prepare('SELECT person_id FROM account_people WHERE email=?').bind(record.email).first()) return record;
+  const candidates = matchDoctorClaims(directory.doctors, record.realName, record.email);
+  const identity = rosterIdentityKey(record.realName);
+  if (!candidates.length || candidates.length > MAX_ACCOUNT_CLAIMS
+      || candidates.some(claim => rosterIdentityKey(claim.displayName) !== identity)
+      || new Set(candidates.map(claim => claim.sourceType)).size !== candidates.length) return record;
+  const available = await availableIdentitySuggestions(db, candidates, record.email);
+  if (available.length !== candidates.length) return record;
+  try {
+    return await saveBoundedAccountClaims(db, record, candidates, { guardAutomaticIdentity: identityReviewEnabled });
+  } catch (error) {
+    // A concurrent claim/review leaves the person unlinked for confirmation.
+    if (error.code === 'IDENTITY_CLAIM_CONFLICT') return record;
+    throw error;
+  }
 }
 
 function matchDoctorClaims(doctors, realName, email = "") {
