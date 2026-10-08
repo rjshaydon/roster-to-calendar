@@ -5647,7 +5647,7 @@ function buildWhoAssignment(doctor, metadata, event) {
 function whoDisplayTeamLabel({ period, rawTeam, isNightIc }) {
   if (period !== "Night") return rawTeam;
   if (isNightIc || rawTeam === "Night") return "Night main team";
-  if (rawTeam === "Hub") return "Night Hub";
+  if (rawTeam === "Hub" || String(rawTeam).toUpperCase() === "NHJ") return "Night Hub";
   if (rawTeam === "SSU" || rawTeam === "Night SSU") return "Night SSU";
   return rawTeam;
 }
@@ -9922,10 +9922,17 @@ async function performFacilityOverviewOpening(options = {}, openingRunId) {
   resetFacilityOverviewScroll();
   syncFacilityOverviewNavigationState();
   renderFacilityOverview();
-  await Promise.all([
-    loadFacilityOverviewAvailableTerms(),
-    currentFacilityOverviewAccess.mode === "denied" ? Promise.resolve() : loadFacilityOverviewMetadata(),
-  ]);
+  // The daily roster does not depend on term menus or stream catalogues.
+  // Start it immediately, while the independent term menu loads alongside it.
+  if (openingTab === "on-shift") {
+    void loadFacilityOverviewAvailableTerms().then(() => {
+      if (openingRunId === facilityOverviewOpeningRunId && subjectKey === activeCalendarTransitionKey()
+          && isFacilityOverviewOpen() && facilityOverviewState.tab === openingTab) renderFacilityOverview();
+    });
+    await loadFacilityOverviewOnShift();
+    return;
+  }
+  await loadFacilityOverviewAvailableTerms();
   if (openingRunId !== facilityOverviewOpeningRunId || subjectKey !== activeCalendarTransitionKey()
       || transitionId !== calendarTransitionRunId || !isFacilityOverviewOpen() || facilityOverviewState.tab !== openingTab) return;
   const facilities = facilityOverviewFacilityOptions();
@@ -10442,18 +10449,42 @@ function facilityOverviewTogetherStaffOptions() {
     .sort((a,b) => a.displayName.localeCompare(b.displayName));
 }
 
+function facilityOverviewTogetherViewer() {
+  if (currentNonClinical) return null;
+  const claims = currentRosterClaims || [];
+  const target = {
+    doctorKey: claims[0]?.key || normalizeRosterName(currentAccount().realName || "") || currentDefaultDoctorKey || "",
+    displayName: currentAccount().realName || claims[0]?.displayName || "",
+    sourceType: claims[0]?.sourceType || "", aliases: claims,
+    sourceTypes: [...new Set(claims.map(claim => claim.sourceType))],
+  };
+  const keys = new Set([target.doctorKey, ...claims.map(claim => claim.key)].map(normalizeRosterName).filter(Boolean));
+  return facilityOverviewTogetherStaffOptions().find(doctor => doctorIdentityKey(doctor) === rosterIdentityKey(target.displayName))
+    || facilityOverviewTogetherStaffOptions().find(doctor => facilityOverviewTogetherDoctorKeys(doctor).some(key => keys.has(key)))
+    || facilityOverviewTogetherOptionFor(target) || facilityOverviewTogetherFallbackOption(target);
+}
+
 function initializeFacilityOverviewTogetherState() {
-  if (facilityOverviewState.togetherContext?.key !== facilityOverviewTogetherContextKey()) return;
   if (!Array.isArray(facilityOverviewState.togetherStaffKeys)) facilityOverviewState.togetherStaffKeys = ["", ""];
-  if (!facilityOverviewState.togetherStaffKeys.length) facilityOverviewState.togetherStaffKeys = [""];
+  if (!facilityOverviewState.togetherStaffKeys.length) facilityOverviewState.togetherStaffKeys = ["", ""];
+  const viewer = facilityOverviewTogetherViewer();
+  if (!facilityOverviewState.togetherStaffKeys.some(Boolean) && !facilityOverviewState.togetherUserClearedAll && viewer) {
+    facilityOverviewState.togetherPinnedDoctors = [viewer];
+    facilityOverviewState.togetherStaffKeys = [viewer.identity, ""];
+  }
+  if (facilityOverviewState.togetherContext?.key !== facilityOverviewTogetherContextKey()) return;
   const options = facilityOverviewTogetherStaffOptions();
-  const identities = new Set(options.map((doctor) => doctor.identity));
-  facilityOverviewState.togetherStaffKeys = facilityOverviewState.togetherStaffKeys.map((key) => identities.has(key) ? key : "");
-  if (!facilityOverviewState.togetherStaffKeys[0] && !facilityOverviewState.togetherUserClearedAll) {
-    const viewerKeys = new Set([activeDoctorProfile?.doctorKey, currentDefaultDoctorKey,
-      ...(currentRosterClaims || []).map(claim => claim.key)].map(normalizeRosterName).filter(Boolean));
-    const viewer = options.find(doctor => viewerKeys.has(normalizeRosterName(doctor.key)));
-    if (viewer) facilityOverviewState.togetherStaffKeys[0] = viewer.identity;
+  const pinned = facilityOverviewState.togetherPinnedDoctors || [];
+  facilityOverviewState.togetherStaffKeys = facilityOverviewState.togetherStaffKeys.map(identity => {
+    const exact = options.find(doctor => doctor.identity === identity);
+    if (exact) return exact.identity;
+    const old = pinned.find(doctor => doctor.identity === identity);
+    const keys = new Set(facilityOverviewTogetherDoctorKeys(old));
+    return options.find(doctor => facilityOverviewTogetherDoctorKeys(doctor).some(key => keys.has(key)))?.identity || "";
+  });
+  if (!facilityOverviewState.togetherStaffKeys[0] && !facilityOverviewState.togetherUserClearedAll && viewer) {
+    const allowed = options.find(doctor => doctor.identity === viewer.identity);
+    if (allowed) facilityOverviewState.togetherStaffKeys[0] = allowed.identity;
   }
 }
 
@@ -10462,7 +10493,8 @@ function facilityOverviewTogetherTermOptions() {
 }
 
 function renderFacilityOverviewTogetherProposal() {
-  const options = facilityOverviewTogetherStaffOptions();
+  const options = facilityOverviewState.togetherContext?.key === facilityOverviewTogetherContextKey()
+    ? facilityOverviewTogetherStaffOptions() : facilityOverviewState.togetherPinnedDoctors || [];
   const selected = new Set(facilityOverviewState.togetherStaffKeys.filter(Boolean));
   const context = facilityOverviewState.togetherContext;
   const facilities = context?.key === facilityOverviewTogetherContextKey() ? (context.sourceTypes || []).map(source => source.toUpperCase()) : [];
@@ -10493,7 +10525,7 @@ function renderFacilityOverviewTogetherProposal() {
               </div>
             `).join("")}
           </div>
-          <button type="button" class="button secondary" data-facility-overview-together-who>Who was on shift?</button>
+          <button type="button" class="button secondary" data-facility-overview-together-who>Clear staff selection</button>
           <button type="button" class="facility-overview-add-staff" data-facility-overview-together-add><span aria-hidden="true">+</span> Add another staff member</button>
         </fieldset>
         <fieldset class="facility-overview-together-section">
@@ -10582,6 +10614,7 @@ async function loadFacilityOverviewTogether() {
     const facilities = (context.sourceTypes || []).map(source => source.toUpperCase());
     if (facilityOverviewState.togetherFacilityKey !== "ALL" && !facilities.includes(facilityOverviewState.togetherFacilityKey)) facilityOverviewState.togetherFacilityKey = "ALL";
     initializeFacilityOverviewTogetherState();
+    renderFacilityOverview();
     const options = facilityOverviewTogetherStaffOptions();
     const selectedDoctors = facilityOverviewState.togetherStaffKeys.map(identity => options.find(doctor => doctor.identity === identity)).filter(Boolean);
     if (!selectedDoctors.length) {
@@ -10595,6 +10628,11 @@ async function loadFacilityOverviewTogether() {
     refreshFacilityOverviewSnapshotAccess(context);
     const cached = await loadFacilityOverviewSnapshot("working-together", cacheQuery);
     if (!stillCurrent()) return;
+    if (cached) {
+      facilityOverviewState.togetherContent = renderFacilityOverviewCoverageNotice({ missing: [...(context.missing || []), ...(cached.missing || [])] })
+        + renderFacilityOverviewTogetherResults(cached.events || [], selectedDoctors, { startDate, endDate });
+      renderFacilityOverview();
+    }
     const data = await query({ action: "queryFacilityOverviewWorkingTogether", ...cacheQuery, cachedRevision: cached?.revision || "" });
     if (!stillCurrent()) return;
     refreshFacilityOverviewSnapshotAccess(data);
@@ -10780,7 +10818,9 @@ async function loadFacilityOverviewOnShift() {
   facilityOverviewState.contactAccessToken = "";
   facilityOverviewState.content = `<article class="issue-card"><p>Loading rostered staff…</p></article>`;
   const cacheQuery = { facilityKey: facilityOverviewState.facilityKey, date: facilityOverviewState.date, includeClinicalSupport: facilityOverviewState.includeClinicalSupport === true };
+  renderFacilityOverview();
   const cached = await loadFacilityOverviewSnapshot("on-shift", cacheQuery);
+  if (facilityOverviewState.requestId !== requestId || facilityOverviewState.tab !== "on-shift") return;
   if (cached) {
     facilityOverviewState.onShiftData = cached.events || [];
     facilityOverviewState.content = `<p class="facility-overview-by-stream-summary">Showing the last saved roster while checking for updates.</p>${renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData)}`;
@@ -11074,16 +11114,21 @@ function renderFacilityOverviewMmcOnShiftPeriod(assignments, options = {}) {
 
 function renderFacilityOverviewMmcNightPeriod(assignments, options = {}) {
   const isTeam = (assignment, labels) => labels.includes(String(facilityOverviewEffectiveTeam(assignment) || "").trim().toLowerCase());
-  const hub = (assignments || []).filter((assignment) => isTeam(assignment, ["hub", "night hub"]));
-  const ssu = (assignments || []).filter((assignment) => isTeam(assignment, ["ssu", "night ssu"]));
-  const assignedToDedicatedTeam = new Set([...hub, ...ssu]);
-  const remaining = (assignments || []).filter((assignment) => !assignedToDedicatedTeam.has(assignment));
-  return `${[
-    ["Hub", hub],
-    ["SSU", ssu],
-  ].filter(([, items]) => items.length)
-    .map(([label, items]) => renderFacilityOverviewStreamCard(label, items, options))
-    .join("")}${renderFacilityOverviewGenericOnShiftPeriod(remaining, options)}`;
+  const hub = (assignments || []).filter(assignment => isTeam(assignment, ["hub", "night hub", "nhj"])
+    || /\bNHJ\b/i.test(`${assignment.ruleCode || ""} ${assignment.rawValue || ""} ${assignment.event?.rawValue || ""}`));
+  const ssu = (assignments || []).filter(assignment => !hub.includes(assignment) && isTeam(assignment, ["ssu", "night ssu"]));
+  const assigned = new Set([...hub, ...ssu]);
+  const main = (assignments || []).filter(assignment => !assigned.has(assignment));
+  const role = assignment => normalizeWhoRole(assignment.person?.seniority || assignment.role);
+  const registrars = main.filter(assignment => ["SR", "IR", "JR"].includes(role(assignment)));
+  const hmos = main.filter(assignment => role(assignment) === "HMO");
+  const interns = main.filter(assignment => role(assignment) === "I");
+  const grouped = new Set([...registrars, ...hmos, ...interns]);
+  return [
+    ["Registrars", registrars], ["Night Hub", hub], ["SSU team", ssu], ["HMOs", hmos], ["Interns", interns],
+  ].filter(([, items]) => items.length).map(([label, items]) => renderFacilityOverviewStreamCard(label, items,
+    { ...options, inChargeFirst: label === "Registrars" })).join("")
+    + renderFacilityOverviewGenericOnShiftPeriod(main.filter(assignment => !grouped.has(assignment)), options);
 }
 
 function facilityOverviewAssignmentText(assignment) {
@@ -11211,7 +11256,8 @@ function renderFacilityOverviewOnShiftNames(assignments, options = {}) {
   for (const assignment of assignments || []) {
     const person = assignment.person;
     if (!person) continue;
-    const existing = byPerson.get(person.doctorKey) || { person, specialTimes: new Set(), clinicalSupportMode: "", isSwing: false };
+    const existing = byPerson.get(person.doctorKey) || { person, specialTimes: new Set(), clinicalSupportMode: "", isSwing: false, nightIcRank: 1 };
+    existing.nightIcRank = Math.min(existing.nightIcRank, assignment.nightIcRank ?? 1);
     if (/\bswing\b/i.test(facilityOverviewAssignmentText(assignment))) existing.isSwing = true;
     const timeLabel = facilityOverviewOnShiftTimeLabel(assignment);
     if (timeLabel) existing.specialTimes.add(timeLabel);
@@ -11219,7 +11265,7 @@ function renderFacilityOverviewOnShiftNames(assignments, options = {}) {
     if (clinicalSupportModeRank(clinicalSupportMode) < clinicalSupportModeRank(existing.clinicalSupportMode)) existing.clinicalSupportMode = clinicalSupportMode;
     byPerson.set(person.doctorKey, existing);
   }
-  return `<div class="facility-overview-on-shift-names">${[...byPerson.values()].sort((left, right) => (options.swingLast ? Number(left.isSwing) - Number(right.isSwing) : 0) || clinicalSupportModeRank(left.clinicalSupportMode) - clinicalSupportModeRank(right.clinicalSupportMode) || compareFacilityOverviewPeople(left.person, right.person)).map(({ person, specialTimes, clinicalSupportMode }) => {
+  return `<div class="facility-overview-on-shift-names">${[...byPerson.values()].sort((left, right) => (options.inChargeFirst ? left.nightIcRank - right.nightIcRank : 0) || (options.swingLast ? Number(left.isSwing) - Number(right.isSwing) : 0) || clinicalSupportModeRank(left.clinicalSupportMode) - clinicalSupportModeRank(right.clinicalSupportMode) || compareFacilityOverviewPeople(left.person, right.person)).map(({ person, specialTimes, clinicalSupportMode }) => {
     const sourceAssignment = (assignments || []).find((assignment) => assignment.person?.doctorKey === person.doctorKey);
     const allocation = options.hideContactAllocation ? null : sourceAssignment?.contactAllocation;
     const contactDetails = allocation ? renderFacilityOverviewContactAllocation(allocation) : "";
@@ -11877,15 +11923,7 @@ function openFacilityOverviewWorkingTogether(target) {
   if (!canUseFacilityOverview()) return;
   const selectedPerson = facilityOverviewTogetherOptionFor(target) || facilityOverviewTogetherFallbackOption(target);
   if (!selectedPerson) return;
-  const activeDoctor = currentNonClinical ? null : selectedDoctor();
-  const viewer = activeDoctor && (facilityOverviewTogetherOptionFor(activeDoctor)
-    || facilityOverviewTogetherFallbackOption({
-      doctorKey: activeDoctor.key || currentRosterClaims[0]?.key || "",
-      displayName: activeDoctor.displayName || currentAccount().realName || currentRosterClaims[0]?.displayName || "",
-      sourceType: activeDoctor.sourceType || currentRosterClaims[0]?.sourceType || "",
-      sourceTypes: normalizedDoctorSourceTypes(activeDoctor),
-      aliases: Array.isArray(activeDoctor.aliases) && activeDoctor.aliases.length ? activeDoctor.aliases : currentRosterClaims,
-    }));
+  const viewer = facilityOverviewTogetherViewer();
   facilityOverviewState.tab = "together";
   facilityOverviewState.staffActionMenu = null;
   facilityOverviewState.togetherPinnedDoctors = viewer ? [selectedPerson, viewer] : [selectedPerson];

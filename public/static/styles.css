@@ -5344,3 +5344,8 @@ body[data-skin="console"] .panel {
 /* The identity surface has one browsing or detail pane at a time. */
 .identity-workspace { grid-template-columns:minmax(0,1fr); }
 .identity-workspace .identity-details { border:0; padding:0; }
+
+.facility-overview-together-section [data-facility-overview-together-who] {
+  margin-top: 12px;
+  margin-right: 8px;
+}

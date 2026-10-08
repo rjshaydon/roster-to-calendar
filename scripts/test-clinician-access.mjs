@@ -339,10 +339,10 @@ const browserGlobals = {facilityOverviewState:browserState,facilityOverviewToget
 assert.deepEqual(JSON.parse(JSON.stringify(runInNewContext(`${directoryFunction}; facilityOverviewTogetherStaffOptions().map(doctor=>doctor.key)`,browserGlobals))),['FORMER PEER']);
 assert.equal(runInNewContext(`${directoryFunction}; facilityOverviewTogetherStaffOptions().length`,{...browserGlobals,facilityOverviewTogetherContextKey:()=> 'different-term'}),0,'stale period names must disappear while a new scope loads');
 const initialise = app.slice(app.indexOf('function initializeFacilityOverviewTogetherState()'),app.indexOf('function facilityOverviewTogetherTermOptions()'));
-const selectionGlobals={facilityOverviewState:{togetherContext:{key:'period'},togetherStaffKeys:[''],togetherUserClearedAll:false},facilityOverviewTogetherContextKey:()=> 'period',
+const selectionGlobals={facilityOverviewTogetherViewer:()=>({key:'MY PROFILE',identity:'mine'}),facilityOverviewTogetherDoctorKeys:doctor=>doctor?[doctor.key]:[],facilityOverviewState:{togetherContext:{key:'period'},togetherStaffKeys:[''],togetherUserClearedAll:false},facilityOverviewTogetherContextKey:()=> 'period',
  facilityOverviewTogetherStaffOptions:()=>[{key:'ALPHABETICAL FIRST',identity:'first'},{key:'MY PROFILE',identity:'mine'}],activeDoctorProfile:{doctorKey:'MY PROFILE'},currentDefaultDoctorKey:'MY PROFILE',currentRosterClaims:[],normalizeRosterName:value=>String(value||'').toUpperCase()};
 runInNewContext(`${initialise}; initializeFacilityOverviewTogetherState()`,selectionGlobals);
-assert.equal(selectionGlobals.facilityOverviewState.togetherStaffKeys[0],'mine','only the entered profile is selected automatically');
+assert.equal(selectionGlobals.facilityOverviewState.togetherStaffKeys[0],'mine','the viewer is selected automatically');
 selectionGlobals.facilityOverviewState.togetherStaffKeys=[''];selectionGlobals.facilityOverviewState.togetherUserClearedAll=true;
 runInNewContext(`${initialise}; initializeFacilityOverviewTogetherState()`,selectionGlobals);
 assert.equal(selectionGlobals.facilityOverviewState.togetherStaffKeys[0],'','clearing the last selection must stay empty');

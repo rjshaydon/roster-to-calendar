@@ -21,6 +21,7 @@
     "test:bounded-identity": "node --no-warnings scripts/test-bounded-identity.mjs",
     "test:restoration-mutations": "node --no-warnings scripts/test-restoration-mutations.mjs",
     "test:contact-name-matching": "node --no-warnings scripts/test-contact-name-matching.mjs",
+    "test:overview-defaults": "node scripts/test-overview-opening.mjs && node scripts/test-overview-defaults-and-night.mjs",
     "test:ddh-night-review": "node --no-warnings scripts/test-ddh-night-review.mjs",
     "test:contact-allocations": "node scripts/test-contact-allocations.mjs",
     "test:contact-sync-health": "node scripts/test-contact-sync-health.mjs",

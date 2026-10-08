@@ -48,12 +48,12 @@ assert.equal(preferred([
 ],{today:'2026-08-10',now:new Date('2026-08-10T00:00:00Z'),linkedSourceTypes:['mmc','ddh']}).facilityKey,'DDH','this week wins over another linked hospital or last week');
 // A slow server must not leave the calendar visible or let a repeated tap
 // cancel opening. Closing explicitly invalidates the delayed continuation.
-let finishMetadata;
+let finishRoster;
 let visible=false, dataLoads=0;
 const delayed={...globals,facilityOverviewOpeningPromise:null,facilityOverviewOpeningRunId:0,facilityOverviewIgnoreToggleUntil:0,facilityOverviewNavigationLocked:false,
  facilityOverviewSessionNeedsInitialization:false,facilityOverviewState:{tab:'on-shift',preferredFacilityKey:'DDH',facilityKey:'DDH'},
  facilityOverviewSection:{classList:{remove:()=>{visible=true;}}},isFacilityOverviewOpen:()=>visible,
- loadFacilityOverviewMetadata:()=>new Promise(resolve=>{finishMetadata=resolve;}),loadFacilityOverviewOnShift:async()=>{dataLoads++;},
+ loadFacilityOverviewMetadata:()=>{throw Error('On shift must not wait for stream metadata');},loadFacilityOverviewOnShift:()=>{dataLoads++;return new Promise(resolve=>{finishRoster=resolve;});},
  clinicalOnShiftStartupPending:true,closeFacilityOverview:()=>{throw Error('second tap must not close a pending opening');},setStatus:noop};
 const toggle=section('function toggleFacilityOverview()','facilityOverviewButton?.addEventListener');
 runInNewContext(`${opening}; ${toggle}; this.open = openFacilityOverview;this.toggle=toggleFacilityOverview`,delayed);
@@ -62,7 +62,7 @@ assert.equal(visible,true,'the overview loading shell is shown before metadata r
 const pending=delayed.facilityOverviewOpeningPromise;
 delayed.toggle();
 assert.equal(delayed.facilityOverviewOpeningPromise,pending,'repeated taps reuse the opening request');
-finishMetadata();await pending;
+finishRoster();await pending;
 assert.equal(dataLoads,1);
 // Immediately repeated taps after a fast response are ignored too.
 delayed.toggle();
@@ -70,8 +70,8 @@ assert.equal(visible,true);
 delayed.facilityOverviewIgnoreToggleUntil=0;visible=false;dataLoads=0;
 const cancelled=delayed.open();
 delayed.facilityOverviewOpeningRunId++;visible=false;
-finishMetadata();await cancelled;
-assert.equal(dataLoads,0,'an explicit return to calendar must not be reversed by delayed metadata');
+finishRoster();await cancelled;
+assert.equal(visible,false,'an explicit return to calendar must not be reversed by delayed roster completion');
 console.log('Slow opening passed immediate feedback, duplicate-tap protection and cancelled-opening guards.');
 
 // Cold startup paints the cached calendar before the authenticated capability

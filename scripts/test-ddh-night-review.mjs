@@ -55,14 +55,19 @@ const loaded = await loadPublishedPreviousDdhNight(r2, date, now);
 assert.equal(r2.gets, 2); assert.equal(r2.puts, 0); assert.equal(loaded.rows.length, 2);
 assert.equal(await loadPublishedPreviousDdhNight(r2, date, at(`${date}T22:59:00`)), null);
 assert.equal(r2.gets, 2, 'no additional roster reads before the night window');
-await publishFacilityContactExtract(r2, { sourceId: 'ddh-daily-contact-sheet', sourceDate: date, contacts: contacts.map(c => ({ ...c })) });
+// Keep the fixed-date fixture inside the publication retention window.
+const RealDate = Date;
+globalThis.Date = class extends RealDate { constructor(...args) { super(...(args.length ? args : [now.toISOString()])); } static now() { return now.getTime(); } };
+try {
+ await publishFacilityContactExtract(r2, { sourceId: 'ddh-daily-contact-sheet', sourceDate: date, contacts: contacts.map(c => ({ ...c })) });
+} finally { globalThis.Date = RealDate; }
 const beforeHandover = await loadPublishedFacilityContacts(r2, { date, facilityKeys: ['DDH'], now: at(`${date}T22:59:00`) });
 const afterHandover = await loadPublishedFacilityContacts(r2, { date, facilityKeys: ['DDH'], now });
 assert.notEqual(beforeHandover.revision, afterHandover.revision, '23:00 must update contact visibility even if the sheet is unchanged');
 assert.equal(beforeHandover.contacts.length, 0); assert.equal(afterHandover.contacts.length, 3);
 
 // Actual token refresh path: scoped authentication, zero D1, one previous-roster
-// fetch at the night transition, then existing three-R2-read refreshes only.
+// fetch at the night transition, then existing four-R2-read refreshes only.
 const stateSource = await readFile(new URL('../functions/api/state.js', import.meta.url), 'utf8');
 const start = stateSource.indexOf('async function refreshPublishedFacilityContactsWithToken(');
 const end = stateSource.indexOf('\nasync function ', start + 1);
@@ -79,7 +84,7 @@ for (let i=0;i<100;i++) {
  const response = await route.refreshPublishedFacilityContactsWithToken({ env }, { ...body, contactRevision: afterHandover.revision, previousNightRosterDate: date });
  const data = await response.json(); assert.equal(data.unchanged, true); assert.equal(data.previousNightRoster, undefined);
 }
-assert.equal(r2.gets-readBefore, 300); assert.equal(r2.puts, writeBefore);
+assert.equal(r2.gets-readBefore, 400); assert.equal(r2.puts, writeBefore);
 const denied = await route.refreshPublishedFacilityContactsWithToken({ env }, { ...body, facilityKey: 'MMC' });
 assert.equal(denied.status,403);
 
@@ -88,7 +93,7 @@ assert.equal(denied.status,403);
 const app = await readFile(new URL('../public/static/app.js', import.meta.url), 'utf8');
 let creator = true;
 const state = { date, previousNightRoster: context, contactList: { status: 'available', sourceDate: date, contacts }, contactResolutionMenu: 'Tony' };
-const ui = vm.createContext({ facilityOverviewState: state, isViewingCreatorAccount: () => creator, escapeHtml: value => String(value || '').replaceAll('&','&amp;').replaceAll('<','&lt;'), formatFacilityOverviewContactTime: () => '', ddhNightReviewWindow: d => ddhNightReviewWindow(d,now), partitionDdhNightReview: (m,a,options) => partitionDdhNightReview(m,a,{ ...options,now }), renderFacilityOverviewContactReviewRow: c => `<span>${c.name}</span>`, renderFacilityOverviewContactResolutionMenu: () => '<p>Editor</p>' });
+const ui = vm.createContext({ contactSyncWarning:()=>'', facilityOverviewState: state, isViewingCreatorAccount: () => creator, escapeHtml: value => String(value || '').replaceAll('&','&amp;').replaceAll('<','&lt;'), formatFacilityOverviewContactTime: () => '', ddhNightReviewWindow: d => ddhNightReviewWindow(d,now), partitionDdhNightReview: (m,a,options) => partitionDdhNightReview(m,a,{ ...options,now }), renderFacilityOverviewContactReviewRow: c => `<span>${c.name}</span>`, renderFacilityOverviewContactResolutionMenu: () => '<p>Editor</p>' });
 const uiStart = app.indexOf('function renderFacilityOverviewContactListStatus(');
 const uiEnd = app.indexOf('\nfunction ',uiStart+1);
 vm.runInContext(app.slice(uiStart,uiEnd),ui);
