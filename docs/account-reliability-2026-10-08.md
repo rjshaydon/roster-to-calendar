@@ -23,3 +23,11 @@ Passed: bounded identity integration (100,001 historical-event fixture; no event
 The broader fixture suite reached its existing roster-processor source-code assertion at line 922 and failed there. Its workbook/parser scenarios before that assertion passed. The suite's October 4 publication-window expectation was updated to the already implemented prior-month policy, and callers now await the deferred workbook builder.
 
 Authenticated production signup/admin checks and a real iPhone check remain outstanding. The pre-deployment Safari reload signed the user out after its resource failure; no account permissions were changed during live diagnosis. The user has been asked to sign back in. All unrelated restoration work and untracked files were preserved.
+
+## Afternoon signup incident
+
+Arnav Mehta's account and two roster claims committed before a signup 503 at 16:56 AEDT. Cloudflare recorded an exceeded-resource failure in that minute; later live requests confirmed `exceededCpu` at 10 ms on both `/api/state` and `/api/roster-revision`. This is distinct from the earlier eager spreadsheet initialization fix.
+
+New-account and first-link fast login now return the authenticated identity envelope before parsing site-month calendar publications. The existing automatic calendar request then delivers the shifts without asking the user to confirm clear name matches. A transient creation 503 gets at most one login-only recovery attempt; database safety/daily limits are not retried. The public revision route uses R2 HEAD/ETags instead of downloading and decompressing manifests, with zero D1 reads.
+
+Tests cover actual signup, automatic multi-site calendar delivery, replay without link writes, committed-creation recovery and database-limit exclusions. Live signup after this deployment still needs confirmation; these fixes do not establish that every application route fits the 10 ms CPU allowance.

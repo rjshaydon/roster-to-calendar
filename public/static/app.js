@@ -17111,6 +17111,19 @@ async function loginWithEmail(email, password, options = {}) {
   }
 }
 
+async function requestAccountLogin(payload) {
+  const send = body => fetch("/api/state", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const response = await send(payload);
+  // A Worker may stop after account creation committed. Recover by logging
+  // in once, never by repeating creation or bypassing a database allowance.
+  if (payload.action === "login" && payload.mode === "create" && response.status === 503
+      && await calendarLoadResponseIsRetryable(response)) {
+    const recovered = await send({ ...payload, mode: "login", responseMode: "fast", allowInlineBuild: false });
+    if (recovered.ok) return recovered;
+  }
+  return response;
+}
+
 async function restoreCloudState(options = {}) {
   if (!currentUserEmail) return;
   try {
@@ -17122,20 +17135,12 @@ async function restoreCloudState(options = {}) {
         : "claimed-account", { email: adminTargetEmail || currentUserEmail });
     const requestEmail = adminTargetEmail ? authUserEmail : currentUserEmail;
     const requestPassword = adminTargetEmail ? authUserPassword : currentUserPassword;
-    const response = await fetch("/api/state", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        action: adminTargetEmail ? "adminLoadUser" : "login",
-        email: requestEmail,
-        password: requestPassword,
-        targetEmail: adminTargetEmail,
-        mode: options.mode || "login",
-        responseMode: options.responseMode || "full",
-        realName: options.realName || "",
-        cachedRevision: options.cachedRevision || "",
-        allowInlineBuild: options.allowInlineBuild !== false,
-      }),
+    const response = await requestAccountLogin({
+      action: adminTargetEmail ? "adminLoadUser" : "login",
+      email: requestEmail, password: requestPassword, targetEmail: adminTargetEmail,
+      mode: options.mode || "login", responseMode: options.responseMode || "full",
+      realName: options.realName || "", cachedRevision: options.cachedRevision || "",
+      allowInlineBuild: options.allowInlineBuild !== false,
     });
     const data = await readJsonResponse(response, "Login failed.");
     if (!calendarTransitionStillCurrent(options.transition)) return null;
@@ -17976,7 +17981,9 @@ async function loadCloudCalendarEvents(options = {}) {
 async function calendarLoadResponseIsRetryable(response) {
   try {
     const payload = await response.clone().json();
-    return payload?.error !== "This request was stopped by the database safety limit.";
+    return !["request-statement-limit", "account-daily-quota"].includes(payload?.errorType)
+      && payload?.error !== "This request was stopped by the database safety limit."
+      && payload?.error !== "The database daily allowance is temporarily unavailable.";
   } catch {
     return true;
   }

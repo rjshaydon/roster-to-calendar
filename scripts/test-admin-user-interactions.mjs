@@ -88,3 +88,26 @@ vm.runInContext(section('function renderAdminUserClaims(', 'function adminIssueC
 assert.match(labels.renderAdminUserClaims({realName:'Stella Robinson',claims:[],rosterLinks:[{sourceType:'mch',displayName:'Stella Robinson'}]}),/MCH/);
 assert.doesNotMatch(section('function syncMobileChrome()', 'function normalizeAdminFilesSortOrder('),/loadServerUsers/);
 assert.match(source.slice(source.indexOf('function renderLoginState()'),source.indexOf('function renderLoginState()')+600),/!serverUsersLoading && !serverUsersRequest/);
+
+// A failed creation response may follow committed writes. Recover once with
+// login; never re-create, loop, or retry the database daily allowance.
+const recoveryCalls=[];
+let replies=[];
+const recovery=vm.createContext({fetch:async(url,options)=>{recoveryCalls.push(JSON.parse(options.body));return replies.shift();}});
+vm.runInContext(section('async function requestAccountLogin(', 'async function restoreCloudState(')+section('async function calendarLoadResponseIsRetryable(', 'function cloudCalendarEventRange('),recovery);
+const reply=(status,payload={})=>({status,ok:status===200,clone:()=>({json:async()=>payload})});
+replies=[reply(503),reply(200)];
+assert.equal((await recovery.requestAccountLogin({action:'login',mode:'create',email:'fixture@example.test',password:'fixture'})).status,200);
+assert.deepEqual(recoveryCalls.map(c=>c.mode),['create','login']);
+assert.equal(recoveryCalls[1].allowInlineBuild,false);
+for(const errorType of ['request-statement-limit','account-daily-quota']) {
+ recoveryCalls.length=0;replies=[reply(503,{errorType})];
+ assert.equal((await recovery.requestAccountLogin({action:'login',mode:'create'})).status,503);
+ assert.equal(recoveryCalls.length,1,'database safeguard must not be retried');
+}
+recoveryCalls.length=0;replies=[reply(503),reply(401)];
+assert.equal((await recovery.requestAccountLogin({action:'login',mode:'create'})).status,503,'if creation never committed retain the original error');
+assert.equal(recoveryCalls.length,2);
+recoveryCalls.length=0;replies=[reply(503)];
+await recovery.requestAccountLogin({action:'login',mode:'login'});assert.equal(recoveryCalls.length,1);
+console.log('Signup recovery passed one login-only retry, no repeat creation and no database-limit retries.');

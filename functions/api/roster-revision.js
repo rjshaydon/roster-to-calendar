@@ -1,6 +1,4 @@
-import { loadCachedSnapshot } from '../_lib/d1-calendar.js';
-import { facilityMetadataManifestKey } from '../_lib/facility-overview-cache.js';
-import { melbourneDateKey, rosterTermVisible } from '../../public/static/roster-term-policy.js';
+import { melbourneDateKey } from '../../public/static/roster-term-policy.js';
 
 const sources = new Set(['mmc', 'mch', 'ddh', 'vhh']);
 
@@ -16,14 +14,16 @@ export async function onRequestGet(context) {
   const cache = globalThis.caches?.default;
   const cached = await cache?.match(key);
   if (cached) return cached;
-  const fingerprints = [];
-  for (const source of selected) {
-    const manifest = await loadCachedSnapshot(context.env.ROSTER_FILES, facilityMetadataManifestKey(source));
-    if (!manifest || (manifest.terms || []).length > 64) return new Response('Preparing', { status: 503, headers: { 'Cache-Control': 'no-store' } });
-    fingerprints.push([source, manifest.revision || '', (manifest.terms || []).filter(term => rosterTermVisible(term, today)).map(term => [term.termStart, term.staffRevision || ''])]);
-  }
-  const identity=context.env.IDENTITY_REVIEW_ENABLED==='true'?await loadCachedSnapshot(context.env.ROSTER_FILES,'identity/revision.json'):null;
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify([today, fingerprints, ...(context.env.IDENTITY_REVIEW_ENABLED==='true'?[identity?.revision||'']:[])])));
+  // Only storage version tags are needed here. Reading/decompressing whole
+  // manifests made this cheap polling route exceed the free CPU allowance.
+  const fingerprints = await Promise.all(selected.map(async source => {
+    const object = await context.env.ROSTER_FILES.head(`facility-overview/v1/${source}/manifest.json`);
+    return object?.etag ? [source, object.etag] : null;
+  }));
+  if (fingerprints.some(value => !value)) return new Response('Preparing', { status: 503, headers: { 'Cache-Control': 'no-store' } });
+  const identity = context.env.IDENTITY_REVIEW_ENABLED === 'true'
+    ? await context.env.ROSTER_FILES.head('identity/revision.json') : null;
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify([today, fingerprints, ...(context.env.IDENTITY_REVIEW_ENABLED==='true'?[identity?.etag||'']:[])])));
   const revision = [...new Uint8Array(digest)].map(byte => byte.toString(16).padStart(2, '0')).join('');
   const response = Response.json({ ok: true, revision }, { headers: { 'Cache-Control': 'public, max-age=30, must-revalidate' } });
   if (cache) context.waitUntil(cache.put(key, response.clone()));

@@ -346,7 +346,14 @@ export async function onRequestPost(context) {
         prepared.identityDiscoveryUnavailable = directory.preparing;
       }
       const prepareMs = Date.now() - prepareStartedAt;
-      const snapshotPayload = loginResponseMode === "fast" || !accountSnapshotBuildEnabled(context.env)
+      // Creation/first linking and parsing all site-month publications must
+      // not share the free Worker's CPU allowance. The authenticated client
+      // already requests the calendar automatically after this envelope.
+      const firstLinkedLogin = account.created || !sanitizeClaims(account.record.claims).length && sanitizeClaims(loginRecord.claims).length > 0;
+      const snapshotPayload = loginResponseMode === "fast" && firstLinkedLogin
+        ? { snapshot: null, snapshotAvailable: false, snapshotCurrent: false, snapshotStale: false,
+            snapshotBuiltAt: "", snapshotStatus: "missing", snapshotSource: "first-login-deferred", calendarRevision: "" }
+        : loginResponseMode === "fast" || !accountSnapshotBuildEnabled(context.env)
         ? await loadFastAccountSnapshotPayload(context, {
             targetRecord: loginRecord,
             prepared,

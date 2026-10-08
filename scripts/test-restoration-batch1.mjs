@@ -89,9 +89,11 @@ for(const [i,[start,end,grade]] of terms.entries()){
 const history=await loadPublishedFacilityRange(r2,['mmc'],'2026-05-04','2026-11-02','2026-10-01');
 assert.deepEqual(history.events.map(row=>row.seniority),['Junior Registrar','Senior Registrar','SMS'],'alias history keeps each roster term grade, next term visible from preceding month');
 const request=new Request('https://example.com/api/roster-revision?sites=mmc');
-const revisionEnv={ROSTER_VISIBLE_REFRESH_ENABLED:'true',ROSTER_FILES:r2,ROSTER_DB:{prepare(){throw Error('Revision must never query D1')}}};
+let versionChecks=0;
+const revisionR2={async head(key){versionChecks++;const object=objects.get(key);return object?{etag:object.revision||'fixture'}:null;},get(){throw Error('Revision must never download/decompress a manifest');}};
+const revisionEnv={ROSTER_VISIBLE_REFRESH_ENABLED:'true',ROSTER_FILES:revisionR2,ROSTER_DB:{prepare(){throw Error('Revision must never query D1')}}};
 const first=await (await revision({request,env:revisionEnv})).json();assert.deepEqual(Object.keys(first).sort(),['ok','revision']);assert.match(first.revision,/^[a-f0-9]{64}$/);
-const same=await (await revision({request,env:revisionEnv})).json();assert.equal(same.revision,first.revision);
+const same=await (await revision({request,env:revisionEnv})).json();assert.equal(same.revision,first.revision);assert.equal(versionChecks,2,'one version-tag check per site per request');
 manifest.revision='published-two';const changed=await (await revision({request,env:revisionEnv})).json();assert.notEqual(changed.revision,first.revision);
 assert.equal((await revision({request:new Request('https://example.com/api/roster-revision?sites=unknown'),env:revisionEnv})).status,400);
 sqlite.exec("INSERT INTO roster_account_budget(utc_day,stop_reason) VALUES(date('now'),'cost-overrun:request')");

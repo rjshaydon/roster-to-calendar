@@ -186,13 +186,20 @@ for (const source of ['mmc','mch']) {
   await storeCachedSnapshot(r2,`facility-overview/v1/${source}/manifest.json`,{terms:[{termStart:`${year}-01-01`,termEnd:`${year+1}-01-31`,visibleFrom:'2000-01-01',staffKey}],coverage:[{startDate:`${year}-01-01`,endDate:`${year+1}-01-31`}],months});
 }
 const automaticStart=db.sql.length;
+const signupR2Keys=[], originalGet=r2.get.bind(r2);
+r2.get=async key=>{signupR2Keys.push(key);return originalGet(key);};
 const automatic=await api({action:'login',mode:'create',realName:'Exact, Zora',responseMode:'fast'},'zora@example.test',{IDENTITY_REVIEW_ENABLED:'true',BOUNDED_MANUAL_ROSTER_ENABLED:'true'});
 assert.equal(automatic.status,200,JSON.stringify(automatic));
 assert.equal(automatic.data.created,true,'actual signup performs the automatic link');
 assert.equal(automatic.data.claims.length,2,'clear full-name matches at both sites are linked');
 assert.equal(automatic.data.defaultDoctorKey,'ZORA EXACT');
-assert.equal(automatic.data.snapshotAvailable,true,JSON.stringify(automatic));
-assert.deepEqual(new Set(automatic.data.snapshot.preview.events.map(e=>e.id)),new Set(['zora-mmc','zora-mch']),'login delivers the full published calendar without confirmation');
+assert.equal(automatic.data.snapshotAvailable,false,'signup returns the identity envelope without parsing site-months');
+assert.equal(automatic.data.snapshotSource,'first-login-deferred');
+assert.equal(signupR2Keys.some(key=>/automatic\/(mmc|mch)\/\d{4}-\d{2}/.test(key)),false,'signup must not download any roster month');
+const firstCalendar=await api({action:'loadCalendarEvents',responseMode:'fast',allowInlineBuild:false},'zora@example.test',{IDENTITY_REVIEW_ENABLED:'true',BOUNDED_MANUAL_ROSTER_ENABLED:'true'});
+assert.equal(firstCalendar.status,200,JSON.stringify(firstCalendar));
+assert.equal(firstCalendar.data.snapshotAvailable,true,JSON.stringify(firstCalendar));
+assert.deepEqual(new Set(firstCalendar.data.snapshot.preview.events.map(e=>e.id)),new Set(['zora-mmc','zora-mch']),'automatic post-login request delivers the full calendar without confirmation');
 assert.equal(db.sql.slice(automaticStart).some(sql=>/roster_events|canonical_doctors|roster_doctors/.test(sql)),false,'automatic login never scans roster history');
 const replayWrites=db.rowsWritten;
 assert.equal((await api({action:'login',responseMode:'fast'},'zora@example.test',{IDENTITY_REVIEW_ENABLED:'true',BOUNDED_MANUAL_ROSTER_ENABLED:'true'})).status,200);
