@@ -9,14 +9,14 @@ const count={textContent:''};
 const pending=[];
 const context=vm.createContext({
   serverUsers:[{email:'alice@example.test',realName:'Alice Jones',seniorities:['HMO'],claims:[],facilityOverviewEnabled:false},{email:'bob@example.test',realName:'Bob Smith',seniorities:['SMS'],claims:[],facilityOverviewEnabled:false}],
-  adminUserSearchQuery:'JONES',adminUserSeniorityFilter:'',adminUserDirectoryRevision:0,pendingAdminPermissions:new Map(),serverUsersUnavailable:false,
+  adminUserSearchQuery:'JONES',adminUserSeniorityFilter:'',adminUserDirectoryRevision:0,pendingAdminPermissions:new Map(),serverUsersUnavailable:false,serverUsersLoaded:true,serverUsersLoading:false,
   accountsBody:{querySelectorAll(selector){return selector==='[data-admin-user-email]'?cards:inputs;},querySelector(){return count;}},
   normalizeEmail:v=>String(v||'').toLowerCase(),normalizeServerUser:v=>v,sanitizeRosterClaims:v=>v||[],isCreatorAuthenticated:()=>true,
   authUserEmail:'owner@example.test',authUserPassword:'fixture',currentUserEmail:'owner@example.test',currentUserPassword:'fixture',
   setStatus(){},fetch(url,options){return new Promise(resolve=>pending.push({resolve,body:JSON.parse(options.body)}));},
   async readJsonResponse(response){if(response.error)throw new Error(response.error);return response;},
 });
-vm.runInContext(section('function filterAdminUserCards()', 'function renderAccountsModal()')+section('function applyAdminPermissionChoice(', 'async function setUserInsightsEnabled('),context);
+vm.runInContext(section('function filterAdminUserCards()', 'function renderAccountsModal(')+section('function applyAdminPermissionChoice(', 'async function setUserInsightsEnabled('),context);
 context.filterAdminUserCards();
 assert.equal(cards[0].classList.hidden,false,'surname search matches locally');
 assert.equal(cards[1].classList.hidden,true);
@@ -57,3 +57,34 @@ console.log('Admin search and permission interaction regressions passed.');
 
 const provider = await readFile(new URL('../functions/_lib/findmyshift.js', import.meta.url), 'utf8');
 assert.doesNotMatch(provider, /^import.*from ["']xlsx["']/m, 'cold account requests must not initialize the spreadsheet library');
+
+// Opening before authentication readiness must not manufacture an empty list.
+const loads=[];let panels=0;
+const loading=vm.createContext({
+  serverUsersRequest:null,serverUsersLoaded:false,serverUsersLoading:false,serverUsersUnavailable:false,
+  adminUserDirectoryRevision:0,serverUsers:[],pendingAdminPermissions:new Map(),
+  adminViewingEmail:'',currentUserEmail:'owner@example.test',currentUserPassword:'fixture',authUserEmail:'owner@example.test',authUserPassword:'fixture',OWNER_EMAIL:'owner@example.test',cloudAvailable:false,
+  normalizeEmail:v=>String(v||'').toLowerCase(),isCreatorAuthenticated:()=>true,isViewingCreatorAccount:()=>true,
+  accountsModal:{classList:{contains:()=>false}},renderAccountsModal(){panels++;},
+  fetch(){return new Promise(resolve=>loads.push(resolve));},async readJsonResponse(r){if(r.error)throw Error(r.error);return r;},
+  calendarLoadResponseIsRetryable:async()=>false,applyAuthoritativeAvailableDoctors(){},applyIssueConfig(){},syncAccountsButton(){},
+});
+vm.runInContext(section('async function loadServerUsers()', 'function adminParserSurfaceReady'),loading);
+await loading.loadServerUsers();assert.equal(loads.length,0);assert.equal(loading.serverUsersLoaded,false);
+loading.cloudAvailable=true;
+const firstLoad=loading.loadServerUsers(),reopened=loading.loadServerUsers();
+assert.equal(loads.length,1,'reopening shares the pending request');assert.equal(loading.serverUsersLoading,true);
+loads[0]({status:200,users:[{email:'stella@example.test',realName:'Stella Robinson'}]});await Promise.all([firstLoad,reopened]);
+assert.equal(loading.serverUsersLoaded,true);assert.equal(loading.serverUsers[0].realName,'Stella Robinson');assert.equal(loading.serverUsersLoading,false);assert.ok(panels>=2,'completion updates the open panel');
+const failedLoad=loading.loadServerUsers();loads[1]({status:500,error:'network failure'});await failedLoad;
+assert.equal(loading.serverUsersUnavailable,true,'failure is distinct from no accounts');assert.equal(loading.serverUsers.length,1,'failed refresh retains cached users');
+const retriedLoad=loading.loadServerUsers();loads[2]({status:200,users:[{email:'vidya@example.test',realName:'Vidya Achan'}]});await retriedLoad;
+assert.equal(loading.serverUsersUnavailable,false);assert.equal(loading.serverUsers[0].realName,'Vidya Achan');
+console.log('Directory readiness, coalescing, completion and recovery tests passed.');
+
+// Approved durable links are shown even when legacy claims are empty.
+const labels=vm.createContext({sanitizeRosterClaims:v=>v||[],escapeHtml:v=>String(v)});
+vm.runInContext(section('function renderAdminUserClaims(', 'function adminIssueCount('),labels);
+assert.match(labels.renderAdminUserClaims({realName:'Stella Robinson',claims:[],rosterLinks:[{sourceType:'mch',displayName:'Stella Robinson'}]}),/MCH/);
+assert.doesNotMatch(section('function syncMobileChrome()', 'function normalizeAdminFilesSortOrder('),/loadServerUsers/);
+assert.match(source.slice(source.indexOf('function renderLoginState()'),source.indexOf('function renderLoginState()')+600),/!serverUsersLoading && !serverUsersRequest/);

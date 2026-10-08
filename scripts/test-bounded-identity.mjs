@@ -195,3 +195,22 @@ assert.equal(permissions.status,200,JSON.stringify(permissions));
 assert.equal(permissions.data.user.facilityOverviewEnabled,true);
 assert.equal(db.rowsWritten-permissionWrites,1,'access toggle updates one profile row only');
 assert.equal(db.sql.slice(permissionSqlStart).some(sql=>/DELETE FROM account_claims|INSERT INTO account_states|DELETE FROM subscription_tokens/.test(sql)),false,'access toggle leaves identity links, calendars and tokens untouched');
+
+// Approved identity links must be visible without inventing legacy claims.
+const directoryClaimCount = sqlite.prepare("SELECT COUNT(*) AS n FROM account_claims WHERE email='alice@example.test'").get().n;
+sqlite.prepare("INSERT INTO roster_people(person_id,preferred_display_name,created_at,updated_at,status) VALUES('directory-approved','Approved Directory Name',?,?,'active')").run(today,today);
+sqlite.prepare("INSERT INTO roster_person_aliases(source_type,doctor_key,display_name,person_id,created_at,updated_at) VALUES('mch','DIRECTORY APPROVED','Approved Directory Name','directory-approved',?,?)").run(today,today);
+sqlite.prepare("INSERT INTO account_people(email,person_id,created_at,updated_at) VALUES('alice@example.test','directory-approved',?,?) ON CONFLICT(email) DO UPDATE SET person_id=excluded.person_id").run(today,today);
+let cursor='', found;
+for(let page=0;page<10;page++) {
+  const result = await api({action:'listUsers',cursor},'creator@example.test',{IDENTITY_REVIEW_ENABLED:'true'});
+  assert.equal(result.status,200,JSON.stringify(result));
+  found ||= result.data.users.find(user=>user.email==='alice@example.test');
+  cursor=result.data.nextCursor;if(!cursor)break;
+}
+assert.ok(found.rosterLinks.some(link=>link.key==='DIRECTORY APPROVED'),'directory displays approved identity aliases');
+assert.deepEqual(found.sites,['MCH']);
+assert.equal(found.claims.length,directoryClaimCount,'display does not rewrite or relabel editable legacy claims');
+const toggleLinked = await api({action:'setUserInsightsEnabled',targetEmail:'alice@example.test',insightsEnabled:true},'creator@example.test',{IDENTITY_REVIEW_ENABLED:'true'});
+assert.equal(toggleLinked.status,200,JSON.stringify(toggleLinked));
+assert.ok(toggleLinked.data.user.rosterLinks.some(link=>link.key==='DIRECTORY APPROVED'),'permission response retains approved labels');

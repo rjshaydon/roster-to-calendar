@@ -334,6 +334,9 @@ let cloudStateSaveActive = 0;
 const unsavedCalendarContexts = new Set();
 let serverUsers = [];
 let serverUsersUnavailable = false;
+let serverUsersLoaded = false;
+let serverUsersLoading = false;
+let serverUsersRequest = null;
 let currentRosterClaims = [];
 let currentSuggestedClaims = [];
 let currentIdentityDiscoveryUnavailable = false;
@@ -1578,6 +1581,7 @@ accountsBody.addEventListener("toggle", (event) => {
   }
 }, true);
 accountsBody.addEventListener("click", (event) => {
+  if (event.target.closest("[data-retry-server-users]")) { void loadServerUsers(); return; }
   const sendInviteButton = event.target.closest("[data-send-account-invite]");
   if (sendInviteButton) {
     const inviteForm = sendInviteButton.closest("[data-create-account-form]");
@@ -3097,12 +3101,7 @@ async function openAccountsSurface(options = {}) {
     }).catch(() => null);
   }
   if (isCreatorAuthenticated()) {
-    void loadServerUsers().then(() => {
-      if (!accountsModal.classList.contains("hidden")) {
-        renderAccountsModal();
-        queueGlobalUnresolvedShiftCodeLoad();
-      }
-    });
+    void loadServerUsers();
     void refreshCalendarStoreStatus({ silent: true, syncSwitcher: false, lightweight: false });
   }
 }
@@ -12223,13 +12222,13 @@ function filterAdminUserCards() {
   for (const card of accountsBody.querySelectorAll('[data-admin-user-email]')) {
     const user = users.get(normalizeEmail(card.dataset.adminUserEmail));
     const matches = user && (!adminUserSeniorityFilter || user.seniorities.includes(adminUserSeniorityFilter))
-      && (!query || [user.realName, user.email, ...sanitizeRosterClaims(user.claims).flatMap(claim => [claim.displayName, claim.sourceType])]
+      && (!query || [user.realName, user.email, ...sanitizeRosterClaims(user.rosterLinks || user.claims).flatMap(claim => [claim.displayName, claim.sourceType])]
         .some(value => String(value || '').toLocaleLowerCase().includes(query)));
     card.classList.toggle('hidden', !matches);
     if (matches) count += 1;
   }
   const label = accountsBody.querySelector('[data-admin-user-count]');
-  if (label && !serverUsersUnavailable) label.textContent = count ? `${count} account${count === 1 ? '' : 's'}` : 'No matching users.';
+  if (label && serverUsersLoaded && !serverUsersUnavailable && !serverUsersLoading) label.textContent = count ? `${count} account${count === 1 ? '' : 's'}` : 'No matching users.';
 }
 
 function syncAdminPermissionControls(targetEmail = '') {
@@ -12246,7 +12245,7 @@ function syncAdminPermissionControls(targetEmail = '') {
   }
 }
 
-function renderAccountsModal() {
+function renderAccountsModal(options = {}) {
   const me = currentAccount();
   const ownerView = isViewingCreatorAccount();
   const doctorProfileView = activeCalendarMode() === "doctor-profile" && activeDoctorProfile;
@@ -12260,8 +12259,7 @@ function renderAccountsModal() {
   const serverOtherUsers = serverUsers
     .map(normalizeServerUser)
     .filter((user) => user.email !== me.email);
-  const localOtherUsers = accountState.users.filter((user) => user.email !== me.email);
-  const otherUsers = serverUsersUnavailable ? [] : serverOtherUsers.length ? serverOtherUsers : localOtherUsers;
+  const otherUsers = serverUsersLoaded ? serverOtherUsers : [];
   const availableUserSeniorities = [...new Set(otherUsers.flatMap((user) => normalizeServerUser(user).seniorities || []))].sort();
   if (adminUserSeniorityFilter && !availableUserSeniorities.includes(adminUserSeniorityFilter)) adminUserSeniorityFilter = "";
   const seniorityFilteredUsers = adminUserSeniorityFilter
@@ -12272,7 +12270,7 @@ function renderAccountsModal() {
     ? seniorityFilteredUsers.filter((user) => [
         user.realName,
         user.email,
-        ...sanitizeRosterClaims(user.claims || []).flatMap((claim) => [claim.displayName, claim.sourceType]),
+        ...sanitizeRosterClaims(user.rosterLinks || user.claims || []).flatMap((claim) => [claim.displayName, claim.sourceType]),
       ].some((value) => String(value || "").toLocaleLowerCase().includes(normalizedUserSearchQuery)))
     : seniorityFilteredUsers;
   const linkedNames = renderLinkedRosterNames(currentRosterClaims, currentSuggestedClaims);
@@ -12384,7 +12382,7 @@ function renderAccountsModal() {
         <summary class="review-top admin-users-header">
           <div class="admin-users-summary">
             <strong>Current users</strong>
-            <span data-admin-user-count>${serverUsersUnavailable ? "Temporarily unavailable" : filteredOtherUsers.length ? `${filteredOtherUsers.length} account${filteredOtherUsers.length === 1 ? "" : "s"}` : otherUsers.length ? "No matching users." : "No other users have logged in yet."}</span>
+            <span data-admin-user-count>${serverUsersLoading || !serverUsersLoaded && !serverUsersUnavailable ? "Loading users…" : serverUsersUnavailable ? "Unable to load users" : filteredOtherUsers.length ? `${filteredOtherUsers.length} account${filteredOtherUsers.length === 1 ? "" : "s"}` : otherUsers.length ? "No matching users." : "No other users have logged in yet."}</span>
           </div>
           <label class="field admin-user-filter admin-user-search-filter">
             <span>Search users</span>
@@ -12400,7 +12398,7 @@ function renderAccountsModal() {
           <span class="collapsible-chevron" aria-hidden="true">⌄</span>
         </summary>
         <div class="issues-list">
-          ${serverUsersUnavailable ? `<article class="issue-card"><p>The user directory is temporarily unavailable while we complete a reliability upgrade. Existing accounts and permissions have not been removed.</p></article>` : otherUsers.length ? otherUsers.map((user) => `
+          ${!serverUsersLoaded ? `<article class="issue-card"><p>${serverUsersUnavailable ? 'Could not load users. Your accounts and permissions are unchanged.' : 'Loading users…'}</p>${serverUsersUnavailable ? '<button type="button" class="button button-secondary" data-retry-server-users>Try again</button>' : ''}</article>` : otherUsers.length ? otherUsers.map((user) => `
             <article class="issue-card account-user-card" data-admin-user-email="${escapeHtml(user.email)}">
               <div class="account-user-summary">
                 <strong class="account-user-name">${escapeHtml(user.realName || "Name not set")}</strong>
@@ -12458,6 +12456,33 @@ function renderAccountsModal() {
       : currentAdminTab === "system" ? systemCard
       : currentAdminTab === "users" ? usersCard : ownerCard
     : ownerCard;
+  // Background directory completion must not replace the live search input.
+  if (options.usersOnly && ownerView && currentAdminTab === 'users') {
+    const existing = accountsBody.querySelector('[data-other-users-section]');
+    if (existing) {
+      const fragment = document.createElement('div');
+      fragment.innerHTML = usersCard;
+      const updated = fragment.querySelector('[data-other-users-section]');
+      const list = existing.querySelector('.issues-list');
+      const currentCards = new Map([...list.querySelectorAll('[data-admin-user-email]')].map(card => [card.dataset.adminUserEmail, card]));
+      const nextCards = [...updated.querySelectorAll('[data-admin-user-email]')];
+      if (currentCards.size && nextCards.length) {
+        for (const next of nextCards) {
+          const current = currentCards.get(next.dataset.adminUserEmail);
+          if (current) {
+            current.querySelector('.account-user-summary').innerHTML = next.querySelector('.account-user-summary').innerHTML;
+            currentCards.delete(next.dataset.adminUserEmail);
+          } else list.appendChild(next);
+        }
+        for (const removed of currentCards.values()) removed.remove();
+      } else list.innerHTML = updated.querySelector('.issues-list').innerHTML;
+      existing.querySelector('[data-admin-user-count]').textContent = updated.querySelector('[data-admin-user-count]').textContent;
+      existing.querySelector('[data-admin-user-seniority-filter]').innerHTML = updated.querySelector('[data-admin-user-seniority-filter]').innerHTML;
+      filterAdminUserCards();
+      syncAdminPermissionControls();
+      return;
+    }
+  }
   accountsBody.innerHTML = `${adminTabs}${adminBody}`;
   if (ownerView && currentAdminTab === "users") { filterAdminUserCards(); syncAdminPermissionControls(); }
   if (ownerView && currentAdminTab === "users" && identityReviewExpanded) mountAdminIdentityReview();
@@ -13204,7 +13229,7 @@ function renderLinkedRosterNames(claims, suggestedClaims = [], options = {}) {
 function renderAdminUserClaims(user) {
   const correctName = String(user?.realName || "").trim();
   const normalizedCorrectName = correctName.replace(/\s+/g, " ").toLocaleLowerCase();
-  const claims = sanitizeRosterClaims(user?.claims || []);
+  const claims = sanitizeRosterClaims(user?.rosterLinks || user?.claims || []);
   if (!claims.length) return `<p class="status account-user-claims-empty">No roster names linked.</p>`;
   return `
     <div class="account-user-claims">
@@ -14509,7 +14534,7 @@ async function addAdminRosterClaim(email) {
   if (!targetEmail || !isCreatorAuthenticated()) return;
   const select = [...accountsBody.querySelectorAll("[data-admin-claim-select]")]
     .find((item) => normalizeEmail(item.dataset.adminClaimSelect) === targetEmail);
-  const selected = select ? availableRosterDoctors[Number(select.value)] : null;
+  const selected = select && select.value !== "" ? availableRosterDoctors[Number(select.value)] : null;
   if (!selected) {
     setStatus("Choose a roster name to add.", true);
     return;
@@ -16686,6 +16711,7 @@ function normalizeServerUser(value) {
     sites: Array.isArray(value?.sites) ? value.sites : [],
     seniorities: Array.isArray(value?.seniorities) ? value.seniorities.map((item) => String(item || "").trim()).filter(Boolean) : [],
     claims: sanitizeRosterClaims(value?.claims || []),
+    rosterLinks: sanitizeRosterClaims(value?.rosterLinks || value?.claims || []),
     defaultDoctorKey: normalizeRosterName(value?.defaultDoctorKey || ""),
     insightsEnabled: role === "owner" || role === "creator" || value?.insightsEnabled === true,
     facilityOverviewEnabled: role === "owner" || role === "creator" || value?.facilityOverviewEnabled === true,
@@ -16757,6 +16783,8 @@ async function logoutCurrentUser() {
   currentUserRole = "user";
   cloudAvailable = false;
   currentCreatorStartupHydrationEnabled = false;
+  serverUsers = [];
+  serverUsersLoaded = false;
   serverUsersUnavailable = false;
   setActiveCalendarContext("claimed-account", { email: "" });
   currentRosterClaims = [];
@@ -16779,6 +16807,8 @@ async function logoutCurrentUser() {
 function renderLoginState() {
   visibleCalendarRevisionPoller.update();
   const loggedIn = Boolean(currentUserEmail && currentUserPassword);
+  if (loggedIn && cloudAvailable && isViewingCreatorAccount() && !serverUsersLoaded && !serverUsersUnavailable
+      && !serverUsersLoading && !serverUsersRequest && !accountsModal.classList.contains('hidden')) void loadServerUsers();
   // Non-clinical Directors have no personal calendar. Their workspace has its
   // own polished header, so do not leave the technical account-status strip
   // floating over the top of it.
@@ -18428,45 +18458,54 @@ function cacheCurrentSnapshot(session = buildActiveSessionState()) {
 }
 
 async function loadServerUsers() {
-  const directoryRevision = adminUserDirectoryRevision;
+  if (serverUsersRequest) return serverUsersRequest;
   const requestEmail = adminViewingEmail ? authUserEmail : currentUserEmail;
   const requestPassword = adminViewingEmail ? authUserPassword : currentUserPassword;
   if (!requestEmail || !requestPassword || normalizeEmail(requestEmail) !== OWNER_EMAIL || !cloudAvailable) return;
-  try {
-    const users = [];
-    let cursor = "";
-    let data;
-    for (let page = 0; page < 10; page += 1) {
-      const response = await fetch("/api/state", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "listUsers", email: requestEmail, password: requestPassword, cursor }),
-      });
-      const incoming = await readJsonResponse(response, "Could not load users.");
-      if (incoming.unavailable === true) {
-        serverUsersUnavailable = true;
-        syncAccountsButton();
-        if (isViewingCreatorAccount() && accountsModal && !accountsModal.classList.contains("hidden")) renderAccountsModal();
-        return;
+  serverUsersLoading = true;
+  serverUsersUnavailable = false;
+  const refreshPanel = () => {
+    if (isViewingCreatorAccount() && !accountsModal.classList.contains('hidden')) renderAccountsModal({ usersOnly:true });
+  };
+  refreshPanel();
+  serverUsersRequest = (async () => {
+    const directoryRevision = adminUserDirectoryRevision;
+    try {
+      const users = [];
+      let cursor = '';
+      let data;
+      for (let page = 0; page < 10; page += 1) {
+        const body = JSON.stringify({ action:'listUsers', email:requestEmail, password:requestPassword, cursor });
+        let response = await fetch('/api/state', { method:'POST', headers:{'content-type':'application/json'}, body });
+        if (response.status === 503 && await calendarLoadResponseIsRetryable(response)) {
+          response = await fetch('/api/state', { method:'POST', headers:{'content-type':'application/json'}, body });
+        }
+        const incoming = await readJsonResponse(response, 'Could not load users.');
+        if (incoming.unavailable === true) throw new Error('User directory unavailable.');
+        data ||= incoming;
+        users.push(...(incoming.users || []));
+        cursor = incoming.nextCursor || '';
+        if (!cursor) break;
       }
-      data ||= incoming;
-      users.push(...(incoming.users || []));
-      cursor = incoming.nextCursor || "";
-      if (!cursor) break;
+      if (cursor) throw new Error('Account directory exceeds the supported page limit.');
+      if (!isCreatorAuthenticated()) return;
+      // Preserve newer local permissions while accepting the rest of the list.
+      const local = new Map(serverUsers.map(user => [normalizeEmail(user.email), user]));
+      serverUsers = users.map(user => (directoryRevision !== adminUserDirectoryRevision || pendingAdminPermissions.has(normalizeEmail(user.email)))
+        && local.has(normalizeEmail(user.email)) ? local.get(normalizeEmail(user.email)) : user);
+      serverUsersLoaded = true;
+      if (Array.isArray(data?.availableDoctors)) applyAuthoritativeAvailableDoctors(data.availableDoctors);
+      applyIssueConfig(data?.issueConfig);
+      syncAccountsButton();
+    } catch {
+      serverUsersUnavailable = true;
+    } finally {
+      serverUsersLoading = false;
+      serverUsersRequest = null;
+      refreshPanel();
     }
-    if (cursor) throw new Error("Account directory exceeds the supported page limit.");
-    serverUsersUnavailable = false;
-    if (directoryRevision !== adminUserDirectoryRevision || pendingAdminPermissions.size) return;
-    serverUsers = users;
-    if (Array.isArray(data.availableDoctors)) {
-      applyAuthoritativeAvailableDoctors(data.availableDoctors);
-    }
-    applyIssueConfig(data.issueConfig);
-    syncAccountsButton();
-    if (isViewingCreatorAccount() && latestPreview) renderDoctorState();
-  } catch {
-    // Keep the last available local list.
-  }
+  })();
+  return serverUsersRequest;
 }
 
 function adminParserSurfaceReadyForRosterIssueLoad() {

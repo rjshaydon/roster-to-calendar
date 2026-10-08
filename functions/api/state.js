@@ -800,7 +800,7 @@ export async function onRequestPost(context) {
         return Response.json({ error: "Postmark could not send this invitation." }, { status: 502 });
       }
       const user = await loadAccountMirror(context.env.ROSTER_DB, targetEmail);
-      return Response.json({ ok: true, user: await userSummaryFromRecord(targetEmail, user, { publishedDoctors: (await publishedIdentityDirectory(context.env.ROSTER_FILES, australianDateKey())).doctors }) });
+      return Response.json({ ok: true, user: await userSummaryFromRecord(targetEmail, user, { db: context.env.ROSTER_DB, identityReviewEnabled: context.env.IDENTITY_REVIEW_ENABLED === 'true', publishedDoctors: (await publishedIdentityDirectory(context.env.ROSTER_FILES, australianDateKey())).doctors }) });
     }
 
     if (action === "resolveAccountClaims") {
@@ -1014,9 +1014,23 @@ export async function onRequestPost(context) {
       const globalParserExtensions = await loadD1ParserExtensionRules(context.env.ROSTER_DB);
       const page = await listAccountDirectoryPage(context.env.ROSTER_DB, body?.cursor);
       const published = await publishedIdentityDirectory(context.env.ROSTER_FILES, australianDateKey());
+      const identityLinks = new Map();
+      if (context.env.IDENTITY_REVIEW_ENABLED === 'true' && page.records.length) {
+        const emails = page.records.map(record => record.email);
+        const result = await context.env.ROSTER_DB.prepare(`SELECT a.email,r.source_type,r.doctor_key,r.display_name
+          FROM account_people a JOIN roster_people p ON p.person_id=a.person_id AND p.status='active'
+          LEFT JOIN roster_person_aliases r ON r.person_id=a.person_id AND r.review_state='approved'
+          WHERE a.email IN (${emails.map(() => '?').join(',')}) ORDER BY a.email,r.source_type,r.doctor_key LIMIT 1601`)
+          .bind(...emails).all();
+        if ((result.results || []).length > 1600) throw new Error('Account identity directory exceeds the link limit.');
+        for (const row of result.results || []) {
+          if (!identityLinks.has(row.email)) identityLinks.set(row.email, []);
+          if (row.doctor_key) identityLinks.get(row.email).push({ sourceType:row.source_type, key:row.doctor_key, displayName:row.display_name });
+        }
+      }
       return Response.json({
         ok: true,
-        users: await Promise.all(page.records.map(record => userSummaryFromRecord(record.email, record, { globalParserExtensions, publishedDoctors: published.doctors }))),
+        users: await Promise.all(page.records.map(record => userSummaryFromRecord(record.email, record, { globalParserExtensions, publishedDoctors: published.doctors, rosterLinks: identityLinks.get(record.email) }))),
         nextCursor: page.nextCursor,
         ...(!body?.cursor ? { availableDoctors: published.doctors, doctorDirectoryUnavailable: published.preparing, missingSources: published.missingSources } : {}),
         identityDiscoveryUnavailable: !identityDiscoveryEnabled(context.env) || published.preparing,
@@ -1372,7 +1386,7 @@ export async function onRequestPost(context) {
         claims: prepared.claims,
         nameMatches: prepared.nameMatches,
         suggestedClaims: prepared.nameMatches,
-        user: await userSummaryFromRecord(saveEmail, { ...updated, claims: prepared.claims }, { publishedDoctors: (await publishedIdentityDirectory(context.env.ROSTER_FILES, australianDateKey())).doctors }),
+        user: await userSummaryFromRecord(saveEmail, { ...updated, claims: prepared.claims }, { db: context.env.ROSTER_DB, identityReviewEnabled: context.env.IDENTITY_REVIEW_ENABLED === 'true', publishedDoctors: (await publishedIdentityDirectory(context.env.ROSTER_FILES, australianDateKey())).doctors }),
       });
     }
 
@@ -1399,7 +1413,7 @@ export async function onRequestPost(context) {
       const claims = updated.claims;
       return Response.json({
         ok: true,
-        user: await userSummaryFromRecord(targetEmail, updated, { publishedDoctors: (await publishedIdentityDirectory(context.env.ROSTER_FILES, australianDateKey())).doctors }),
+        user: await userSummaryFromRecord(targetEmail, updated, { db: context.env.ROSTER_DB, identityReviewEnabled: context.env.IDENTITY_REVIEW_ENABLED === 'true', publishedDoctors: (await publishedIdentityDirectory(context.env.ROSTER_FILES, australianDateKey())).doctors }),
         claims,
       });
     }
@@ -1414,7 +1428,7 @@ export async function onRequestPost(context) {
       };
       const claims = sanitizeClaims(targetRecord.claims).filter((claim) => !(claim.sourceType === rawClaim.sourceType && claim.key === rawClaim.key));
       const updated = await saveBoundedAccountClaims(context.env.ROSTER_DB, targetRecord, claims);
-      return Response.json({ ok: true, claims, user: await userSummaryFromRecord(claimEmail, updated, { publishedDoctors: (await publishedIdentityDirectory(context.env.ROSTER_FILES, australianDateKey())).doctors }) });
+      return Response.json({ ok: true, claims, user: await userSummaryFromRecord(claimEmail, updated, { db: context.env.ROSTER_DB, identityReviewEnabled: context.env.IDENTITY_REVIEW_ENABLED === 'true', publishedDoctors: (await publishedIdentityDirectory(context.env.ROSTER_FILES, australianDateKey())).doctors }) });
     }
 
     if (action === "reportRosterIdentityIssue") {
@@ -1438,7 +1452,7 @@ export async function onRequestPost(context) {
         updatedAt: new Date().toISOString(),
       };
       await upsertAccountMirror(context.env.ROSTER_DB, updated);
-      return Response.json({ ok: true, user: await userSummaryFromRecord(reportEmail, updated, { publishedDoctors: (await publishedIdentityDirectory(context.env.ROSTER_FILES, australianDateKey())).doctors }) });
+      return Response.json({ ok: true, user: await userSummaryFromRecord(reportEmail, updated, { db: context.env.ROSTER_DB, identityReviewEnabled: context.env.IDENTITY_REVIEW_ENABLED === 'true', publishedDoctors: (await publishedIdentityDirectory(context.env.ROSTER_FILES, australianDateKey())).doctors }) });
     }
 
     if (action === "resolveDoctorAccount") {
@@ -1473,7 +1487,7 @@ export async function onRequestPost(context) {
       await context.env.ROSTER_DB.prepare("UPDATE account_profiles SET insights_enabled = ?, updated_at = ? WHERE email = ?").bind(updated.insightsEnabled ? 1 : 0, updated.updatedAt, targetEmail).run();
       return Response.json({
         ok: true,
-        user: await userSummaryFromRecord(targetEmail, updated, { publishedDoctors: (await publishedIdentityDirectory(context.env.ROSTER_FILES, australianDateKey())).doctors }),
+        user: await userSummaryFromRecord(targetEmail, updated, { db: context.env.ROSTER_DB, identityReviewEnabled: context.env.IDENTITY_REVIEW_ENABLED === 'true', publishedDoctors: (await publishedIdentityDirectory(context.env.ROSTER_FILES, australianDateKey())).doctors }),
       });
     }
 
@@ -1498,7 +1512,7 @@ export async function onRequestPost(context) {
       await context.env.ROSTER_DB.prepare("UPDATE account_profiles SET facility_overview_enabled = ?, updated_at = ? WHERE email = ?").bind(updated.facilityOverviewEnabled ? 1 : 0, updated.updatedAt, targetEmail).run();
       return Response.json({
         ok: true,
-        user: await userSummaryFromRecord(targetEmail, updated, { publishedDoctors: (await publishedIdentityDirectory(context.env.ROSTER_FILES, australianDateKey())).doctors }),
+        user: await userSummaryFromRecord(targetEmail, updated, { db: context.env.ROSTER_DB, identityReviewEnabled: context.env.IDENTITY_REVIEW_ENABLED === 'true', publishedDoctors: (await publishedIdentityDirectory(context.env.ROSTER_FILES, australianDateKey())).doctors }),
       });
     }
 
@@ -1524,7 +1538,7 @@ export async function onRequestPost(context) {
       await context.env.ROSTER_DB.prepare("UPDATE account_profiles SET director_view_enabled = ?, facility_overview_enabled = CASE WHEN ? = 1 THEN 1 ELSE facility_overview_enabled END, updated_at = ? WHERE email = ?").bind(updated.directorViewEnabled ? 1 : 0, updated.directorViewEnabled ? 1 : 0, updated.updatedAt, targetEmail).run();
       return Response.json({
         ok: true,
-        user: await userSummaryFromRecord(targetEmail, updated, { publishedDoctors: (await publishedIdentityDirectory(context.env.ROSTER_FILES, australianDateKey())).doctors }),
+        user: await userSummaryFromRecord(targetEmail, updated, { db: context.env.ROSTER_DB, identityReviewEnabled: context.env.IDENTITY_REVIEW_ENABLED === 'true', publishedDoctors: (await publishedIdentityDirectory(context.env.ROSTER_FILES, australianDateKey())).doctors }),
       });
     }
 
@@ -3338,20 +3352,23 @@ function manualRosterClaimIssue(record, claim) {
 
 async function userSummaryFromRecord(email, record, options = {}) {
   const claims = sanitizeClaims(record?.claims);
+  const rosterLinks = sanitizeClaims(options.rosterLinks ?? (options.identityReviewEnabled === true
+    ? await accountIdentityAliases(options.db, email, claims) : claims));
   const defaultDoctorKey = canonicalDefaultDoctorKeyForAccount({
     role: record?.role || roleForEmail(email),
     claims,
     state: sanitizeState(record?.state),
   });
   const adminIssues = filterResolvedAdminIssuesForSummary(record, options.globalParserExtensions);
-  const seniorities = publishedClaimSeniorities(claims, options.publishedDoctors || []);
+  const seniorities = publishedClaimSeniorities(rosterLinks, options.publishedDoctors || []);
   return {
     email,
     realName: String(record?.realName || "").trim(),
     role: record?.role || roleForEmail(email),
-    sites: [...new Set(claims.map((claim) => claim.sourceType.toUpperCase()))].sort(),
+    sites: [...new Set(rosterLinks.map((claim) => claim.sourceType.toUpperCase()))].sort(),
     seniorities,
     claims,
+    rosterLinks,
     insightsEnabled: insightsEnabledForRecord(record),
     facilityOverviewEnabled: facilityOverviewEnabledForRecord(record),
     nonClinical: record.nonClinical === true,
