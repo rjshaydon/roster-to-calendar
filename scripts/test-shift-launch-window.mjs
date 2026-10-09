@@ -23,9 +23,9 @@ const launch=section('function launchClinicalOnShiftWorkspace(','async function 
 let opened=0;
 const noop=()=>{};
 const g={clinicalOnShiftStartupPending:true,currentFacilityOverviewAutomaticLaunchEnabled:true,currentFacilityOverviewMaintenance:false,currentNonClinical:false,
- requestClinicalStartupShiftWindow:()=>{},canUseFacilityOverview:()=>true,calendarTransitionStillCurrent:()=>true,currentSnapshot:{preview:{events:[shift]}},currentSnapshotStale:false,
+ requestClinicalStartupShiftWindow:()=>{},canUseFacilityOverview:()=>true,canUseFullFacilityOverview:()=>true,activeCalendarMode:()=>"claimed-account",facilityOverviewTargetEmail:()=>"",calendarTransitionStillCurrent:()=>true,currentSnapshot:{preview:{events:[shift]}},currentSnapshotStale:false,
  calendarSnapshotMatchesActiveContext:()=>true,onShiftLaunchWindow,currentFacilityOverviewAccess:{mode:'all'},facilityAccessKeys:a=>a.facilityKeys||[],
- facilityOverviewSessionNeedsInitialization:false,facilityOverviewState:{},applyFacilityOverviewSiteScope:noop,
+ facilityOverviewSessionNeedsInitialization:false,facilityOverviewState:{},applyFacilityOverviewSiteScope:noop,currentOnShiftForAllEnabled:false,
  openFacilityOverview:async options=>{opened++;assert.equal(options.preserveDate,true);assert.equal(options.preserveFacility,true);},markLoginPhase:noop,setStatus:noop,normalizeAuthMessage:v=>v};
 runInNewContext(`${launch};this.launch=launchClinicalOnShiftWorkspace`,g);
 assert.equal(g.launch({now:new Date('2026-10-06T00:30:00+11:00')}),true);
@@ -52,7 +52,7 @@ let reply,requests=0,launches=0;
 const startup={clinicalOnShiftWindowPromise:null,clinicalOnShiftStartupPending:true,activeCalendarTransitionKey:()=> 'account',calendarTransitionRunId:1,
  authUserEmail:'test@example.com',authUserPassword:'test',facilityOverviewTargetEmail:()=>'',
  fetch:()=>{requests++;return new Promise(resolve=>{reply=resolve;});},readJsonResponse:async data=>data,
- launchClinicalOnShiftWorkspace:()=>{launches++;}};
+ applyOnShiftAccessWindow:()=>{},syncFacilityOverviewAccess:()=>{},launchClinicalOnShiftWorkspace:()=>{launches++;}};
 runInNewContext(`${requestHelper};this.request=requestClinicalStartupShiftWindow`,startup);
 startup.request();startup.request();
 assert.equal(requests,1,'the startup fallback adds only one bounded request');
@@ -69,7 +69,7 @@ const scopeHelper=section('function applyFacilityOverviewSiteScope()','function 
 let boundaryNow=RealDateForTest('2026-11-02T00:30:00+11:00');
 function RealDateForTest(value){return Date.parse(value);}
 const boundary={Date:{now:()=>boundaryNow},currentFacilityOverviewAccess:{mode:'sites',facilityKeys:['MCH']},
- facilityAccessKeys:a=>a.facilityKeys||[],facilityOverviewState:{tab:'on-shift',date:'2026-11-01',facilityKey:'DDH',
+ canUseFullFacilityOverview:()=>true,currentOnShiftWindow:()=>null,facilityAccessKeys:a=>a.facilityKeys||[],facilityOverviewState:{tab:'on-shift',date:'2026-11-01',facilityKey:'DDH',
  startupShiftWindow:{facilityKey:'DDH',rosterDate:'2026-11-01',start:Date.parse('2026-11-01T15:00:00+11:00'),end:Date.parse('2026-11-02T00:00:00+11:00')},
  byStreamRows:[{facilityKey:'DDH'}],byStreamCatalog:[]}};
 runInNewContext(`${windowHelpers};${scopeHelper};this.apply=applyFacilityOverviewSiteScope`,boundary);

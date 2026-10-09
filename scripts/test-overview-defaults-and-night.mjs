@@ -11,7 +11,7 @@ const defaults=vm.createContext({currentNonClinical:false,currentDefaultDoctorKe
  facilityOverviewState:state,facilityOverviewTogetherStaffOptions:()=>state.togetherContext?people:[],facilityOverviewTogetherContextKey:()=> 'period',
  facilityOverviewTogetherDoctorKeys:d=>d?[d.key,...(d.aliases||[]).map(a=>a.key)]:[],
  facilityOverviewTogetherOptionFor:t=>state.togetherContext?people.find(p=>p.key===t.doctorKey):null,
- facilityOverviewTogetherFallbackOption:t=>({...t,key:t.doctorKey,identity:t.doctorKey}),canUseFacilityOverview:()=>true,
+ facilityOverviewTogetherFallbackOption:t=>({...t,key:t.doctorKey,identity:t.doctorKey}),canUseFacilityOverview:()=>true,canUseFullFacilityOverview:()=>true,
  resetFacilityOverviewScroll(){},renderFacilityOverview(){},loadFacilityOverviewTogether(){},});
 vm.runInContext(section('function facilityOverviewTogetherViewer()', 'function facilityOverviewTogetherTermOptions()')+section('function openFacilityOverviewWorkingTogether(', 'function closeFacilityOverviewStaffActionMenu()'),defaults);
 defaults.initializeFacilityOverviewTogetherState();

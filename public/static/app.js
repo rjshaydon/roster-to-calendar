@@ -353,6 +353,9 @@ let currentFacilityOverviewMaintenance = true;
 let currentFacilityOverviewAccessReady = false;
 const facilityOverviewAccessWaiters = new Set();
 let currentFacilityOverviewAutomaticLaunchEnabled = false;
+let currentOnShiftForAllEnabled = false;
+let currentOnShiftAccessWindow = null;
+let onShiftAccessExpiryTimer = 0;
 let currentFacilityOverviewAccess = { mode: currentUserRole === "creator" ? "all" : "denied", isSms: currentUserRole === "creator", workingToday: false, facilityKey: "", today: "" };
 let currentNonClinical = false;
 let currentDirectorViewEnabled = currentUserRole === "creator";
@@ -778,7 +781,7 @@ facilityOverviewSection?.addEventListener("toggle", (event) => {
 }, { capture: true });
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) stopFacilityOverviewContactRefresh();
-  else scheduleFacilityOverviewContactRefresh(0);
+  else { syncFacilityOverviewAccess(); scheduleFacilityOverviewContactRefresh(0); }
 });
 window.addEventListener("pagehide", () => collapseFacilityOverviewContactReview());
 window.addEventListener("pagehide", stopFacilityOverviewContactRefresh);
@@ -846,6 +849,7 @@ facilityOverviewSection?.addEventListener("click", (event) => {
   }
   const tab = event.target.closest("[data-facility-overview-tab]");
   if (tab) {
+    if (!canUseFullFacilityOverview() && tab.dataset.facilityOverviewTab !== "on-shift") return;
     cancelFacilityOverviewDataRequest();
     facilityOverviewState.requestId += 1;
     facilityOverviewState.byStreamRequestId += 1;
@@ -9213,7 +9217,7 @@ function canUseRosterInsights() {
   return currentInsightsEnabled === true;
 }
 
-function canUseFacilityOverview() {
+function canUseFullFacilityOverview() {
   // A Creator entering somebody else's account/profile should see precisely
   // that person's entitlement, not the Creator's unrestricted entitlement.
   if (activeCalendarMode() === "doctor-profile") {
@@ -9221,6 +9225,44 @@ function canUseFacilityOverview() {
   }
   if (currentUserRole === "creator" && !adminViewingEmail) return true;
   return currentFacilityOverviewEnabled === true && (currentFacilityOverviewAccess.mode !== "denied" || currentFacilityOverviewAccess.canSearchHistory === true);
+}
+
+function currentOnShiftWindow() {
+  const window = currentOnShiftAccessWindow;
+  const now = Date.now();
+  return currentOnShiftForAllEnabled && !currentNonClinical && !currentFacilityOverviewMaintenance
+    && window && now >= window.start - 60 * 60 * 1000 && now <= window.end + 60 * 60 * 1000 ? window : null;
+}
+
+function canUseFacilityOverview() {
+  return canUseFullFacilityOverview() || Boolean(currentOnShiftWindow());
+}
+
+function clearOnShiftAccess() {
+  if (onShiftAccessExpiryTimer) window.clearTimeout(onShiftAccessExpiryTimer);
+  onShiftAccessExpiryTimer = 0;
+  currentOnShiftAccessWindow = null;
+}
+
+function applyOnShiftAccessWindow(shift) {
+  clearOnShiftAccess();
+  if (!shift || !Number.isFinite(shift.start) || !Number.isFinite(shift.end) || shift.end <= shift.start) return;
+  currentOnShiftAccessWindow = shift;
+  const remaining = shift.end + 60 * 60 * 1000 - Date.now() + 1;
+  if (remaining <= 0) { currentOnShiftAccessWindow = null; return; }
+  onShiftAccessExpiryTimer = window.setTimeout(() => {
+    clearOnShiftAccess();
+    if (!canUseFullFacilityOverview()) {
+      cancelFacilityOverviewDataRequest();
+      stopFacilityOverviewContactRefresh();
+      facilityOverviewState.onShiftData = null;
+      facilityOverviewState.content = "";
+      facilityOverviewState.contactList = null;
+      facilityOverviewState.previousNightRoster = null;
+      facilityOverviewState.contactAccessToken = "";
+      syncFacilityOverviewAccess();
+    }
+  }, Math.min(remaining, 2_147_483_647));
 }
 
 function sanitizeFacilityOverviewAccess(value) {
@@ -9239,7 +9281,9 @@ function sanitizeFacilityOverviewAccess(value) {
 function facilityOverviewSnapshotContext() {
   const ownerKey = normalizeEmail(facilityOverviewTargetEmail() || currentUserEmail);
   const scopeKey = `${FACILITY_ACCESS_VERSION}:${currentFacilityOverviewAccess.mode}:${facilityAccessKeys(currentFacilityOverviewAccess).join(",")}:${currentFacilityOverviewAccess.today}:${currentFacilityOverviewAccess.readerRevision || ""}`;
-  return { ownerKey, scopeKey, accessExpiresAt: currentFacilityOverviewAccess.expiresAt || "" };
+  const shift = !canUseFullFacilityOverview() ? currentOnShiftWindow() : null;
+  return { ownerKey, scopeKey: shift ? `${scopeKey}:on-shift:${shift.facilityKey}:${shift.rosterDate}:${shift.end}` : scopeKey,
+    accessExpiresAt: shift ? new Date(shift.end + 60 * 60 * 1000).toISOString() : currentFacilityOverviewAccess.expiresAt || "" };
 }
 
 function loadFacilityOverviewSnapshot(kind, query) {
@@ -9257,6 +9301,7 @@ function refreshFacilityOverviewSnapshotAccess(data) {
 }
 
 function currentFacilityOverviewShiftWindow() {
+  if (!canUseFullFacilityOverview()) return currentOnShiftWindow();
   const window = facilityOverviewState.startupShiftWindow;
   const now = Date.now();
   return facilityOverviewState.tab === "on-shift" && window?.rosterDate === facilityOverviewState.date
@@ -9417,6 +9462,7 @@ function isFacilityOverviewOpen() {
 }
 
 function facilityOverviewLabel() {
+  if (!canUseFullFacilityOverview()) return "On shift";
   // Creators can use the same tools, but this is a Director-facing label only
   // when the viewed account has explicitly been granted Director access.
   return currentDirectorViewEnabled && currentUserRole !== "creator"
@@ -9486,6 +9532,7 @@ function facilityOverviewFacilityOptions() {
 }
 
 async function loadFacilityOverviewMetadata(options = {}) {
+  if (!canUseFullFacilityOverview()) return;
   if (!canUseFacilityOverview() || currentFacilityOverviewMaintenance) return null;
   const metadataKey = [currentSnapshot?.calendarRevision || currentCalendarRevision || "", formatDateKey(australianTermForDate(new Date()).start), normalizedDoctorSourceTypes(selectedDoctor()).sort().join(",")].join("|");
   if (facilityOverviewState.byStreamMetadataKey === metadataKey) return { ok: true };
@@ -9726,6 +9773,10 @@ function rememberFacilityOverviewTabForCurrentAccount() {
 }
 
 function beginFacilityOverviewAccountSession() {
+  clearOnShiftAccess();
+  currentOnShiftForAllEnabled = false;
+  stopFacilityOverviewContactRefresh();
+  facilityOverviewState.contactAccessToken = "";
   cancelFacilityOverviewAccessWait();
   currentFacilityOverviewAccessReady = false;
   clinicalOnShiftStartupPending = true;
@@ -9793,6 +9844,15 @@ function resetFacilityOverviewSessionState() {
 }
 
 function applyFacilityOverviewSiteScope() {
+  if (!canUseFullFacilityOverview() && currentOnShiftWindow()) {
+    const shift = currentOnShiftWindow();
+    facilityOverviewState.tab = "on-shift";
+    facilityOverviewState.facilityKey = shift.facilityKey;
+    facilityOverviewState.preferredFacilityKey = shift.facilityKey;
+    facilityOverviewState.date = shift.rosterDate;
+    facilityOverviewState.followOperationalDate = false;
+    return;
+  }
   if (currentFacilityOverviewAccess.mode === "all") return;
   const facilities = facilityOverviewRosterAccessKeys();
   if (!["together", "staff"].includes(facilityOverviewState.tab) && currentFacilityOverviewAccess.mode === "denied" && !currentFacilityOverviewShiftWindow()) facilityOverviewState.tab = "together";
@@ -9811,6 +9871,8 @@ function applyFacilityOverviewSiteScope() {
 }
 
 function resetFacilityOverviewAccessForEnteredUser() {
+  clearOnShiftAccess();
+  currentOnShiftForAllEnabled = false;
   cancelFacilityOverviewAccessWait();
   currentFacilityOverviewAccessReady = false;
   facilityOverviewState.togetherContext = null;
@@ -9836,6 +9898,7 @@ function facilityOverviewTargetEmail() {
 }
 
 async function loadFacilityOverviewAvailableTerms() {
+  if (!canUseFullFacilityOverview()) return;
   const transition = { runId: calendarTransitionRunId, expectedKey: activeCalendarTransitionKey() };
   const subject = facilityOverviewTargetEmail() || currentUserEmail;
   try {
@@ -9888,6 +9951,10 @@ async function performFacilityOverviewOpening(options = {}, openingRunId) {
   }
   refreshFacilityOverviewPreferredFacility();
   if (facilityOverviewSessionNeedsInitialization) resetFacilityOverviewSessionState();
+  if (!canUseFullFacilityOverview()) {
+    applyFacilityOverviewSiteScope();
+    options = { ...options, preserveDate: true, preserveFacility: true };
+  }
   if (!currentNonClinical && !options.preserveFacility && !options.preserveStaffTerm) facilityOverviewState.tab = "on-shift";
   if (options.preserveFacility !== true && options.preserveStaffTerm !== true) {
     const directorPreference = currentNonClinical && currentDirectorViewEnabled ? directorHospitalPreference() : "";
@@ -9925,7 +9992,7 @@ async function performFacilityOverviewOpening(options = {}, openingRunId) {
   // The daily roster does not depend on term menus or stream catalogues.
   // Start it immediately, while the independent term menu loads alongside it.
   if (openingTab === "on-shift") {
-    void loadFacilityOverviewAvailableTerms().then(() => {
+    if (canUseFullFacilityOverview()) void loadFacilityOverviewAvailableTerms().then(() => {
       if (openingRunId === facilityOverviewOpeningRunId && subjectKey === activeCalendarTransitionKey()
           && isFacilityOverviewOpen() && facilityOverviewState.tab === openingTab) renderFacilityOverview();
     });
@@ -9956,6 +10023,7 @@ async function performFacilityOverviewOpening(options = {}, openingRunId) {
 }
 
 async function openFacilityOverviewByStream() {
+  if (!canUseFullFacilityOverview()) return;
   if (!canUseFacilityOverview() || currentFacilityOverviewMaintenance || facilityOverviewState.tab !== "by-stream") return;
   const navigationId = facilityOverviewState.byStreamRequestId;
   facilityOverviewState.byStreamContent = `<article class="issue-card"><p>Loading available streams…</p></article>`;
@@ -10016,6 +10084,7 @@ function facilityOverviewRequestWasCancelled(error) {
 }
 
 function renderFacilityOverview() {
+  if (!canUseFacilityOverview()) { syncFacilityOverviewAccess(); return; }
   visibleCalendarRevisionPoller.update();
   if (!currentFacilityOverviewAccessReady) {
     renderFacilityOverviewMaintenance({ loading: true });
@@ -10032,7 +10101,7 @@ function renderFacilityOverview() {
   const tabs = facilityOverviewSection?.querySelector(".facility-overview-tabs");
   if (heading) heading.textContent = facilityOverviewLabel();
   if (description) description.textContent = "See rostered staff across EDs.";
-  tabs?.classList.remove("hidden");
+  tabs?.classList.toggle("hidden", !canUseFullFacilityOverview());
   if (!facilityOverviewSessionNeedsInitialization) rememberFacilityOverviewTabForCurrentAccount();
   if (facilityOverviewHeader) facilityOverviewHeader.innerHTML = renderFacilityOverviewHeader();
   syncFacilityOverviewTabOrder();
@@ -10090,6 +10159,11 @@ function renderFacilityOverview() {
     ? facilityOverviewState.facilityKey : facilities[0] || "MMC";
   facilityOverviewState.facilityKey = selected;
   const content = facilityOverviewState.content || `<article class="issue-card"><p>Choose an ED and date to load rostered staff.</p></article>`;
+  if (!canUseFullFacilityOverview()) {
+    facilityOverviewControls.innerHTML = `<label class="field"><span>ED</span><output>${escapeHtml(displaySourceCode(selected))}</output></label><label class="field"><span>Date</span><output>${escapeHtml(formatDate(facilityOverviewState.date))}</output></label>`;
+    facilityOverviewBody.innerHTML = `<div class="facility-overview-results">${content}</div>`;
+    return;
+  }
   facilityOverviewControls.innerHTML = `
     ${renderFacilityOverviewFacilityControl(selected, facilities)}
     <label class="field"><span>Date</span><input type="date" value="${escapeHtml(facilityOverviewState.date)}" ${facilityOverviewOrdinaryDateAttributes()} data-facility-overview-date></label>
@@ -10135,6 +10209,10 @@ function queueFacilityOverviewMenuPositioning() {
 }
 
 function renderFacilityOverviewHeader() {
+  if (!canUseFullFacilityOverview() && currentOnShiftWindow()) {
+    const shift = currentOnShiftWindow();
+    return `<div class="preview-head facility-overview-preview-head"><strong>On shift · ${escapeHtml(displaySourceCode(shift.facilityKey))} · ${escapeHtml(formatDate(shift.rosterDate))}</strong></div>`;
+  }
   const doctor = selectedDoctor();
   const displayName = doctor?.displayName || currentAccount().realName || "Selected doctor";
   const start = latestPreview?.previewStart || settings.dateFrom || "";
@@ -10589,6 +10667,7 @@ function facilityOverviewTogetherDoctorKeys(doctor) {
 }
 
 async function loadFacilityOverviewTogether() {
+  if (!canUseFullFacilityOverview()) return;
   if (!canUseFacilityOverview() || currentFacilityOverviewMaintenance || facilityOverviewState.tab !== "together") return;
   const { startDate, endDate } = facilityOverviewTogetherDateRange();
   const requestId = ++facilityOverviewState.requestId;
@@ -10806,6 +10885,7 @@ function facilityOverviewFormatOverlap(start, end) {
 }
 
 async function loadFacilityOverviewOnShift() {
+  applyFacilityOverviewSiteScope();
   if (!canUseFacilityOverview() || currentFacilityOverviewMaintenance || facilityOverviewState.tab !== "on-shift") return;
   stopFacilityOverviewContactRefresh();
   collapseFacilityOverviewContactReview();
@@ -10845,8 +10925,9 @@ async function loadFacilityOverviewOnShift() {
       }),
     });
     const data = await readJsonResponse(response, "Could not load the ED overview.");
-    refreshFacilityOverviewSnapshotAccess(data);
     if (facilityOverviewState.requestId !== requestId || facilityOverviewState.tab !== "on-shift") return;
+    if (data.shiftWindow) applyOnShiftAccessWindow(data.shiftWindow);
+    refreshFacilityOverviewSnapshotAccess(data);
     facilityOverviewState.onShiftData = data.rosterUnchanged === true && cached ? cached.events || [] : data.events || [];
     facilityOverviewState.contactList = mergeContactResolutionRefresh(facilityOverviewState.contactList, data.contactList || null);
     facilityOverviewState.previousNightRoster = data.previousNightRoster || null;
@@ -10858,7 +10939,10 @@ async function loadFacilityOverviewOnShift() {
     if (error.facilityOverviewAccess) refreshFacilityOverviewSnapshotAccess({ facilityOverviewAccess: error.facilityOverviewAccess });
     if (facilityOverviewRequestWasCancelled(error)) return;
     if (facilityOverviewState.requestId !== requestId) return;
-    if (facilityOverviewCachedReadDenied(error)) facilityOverviewState.onShiftData = null;
+    if (facilityOverviewCachedReadDenied(error)) {
+      facilityOverviewState.onShiftData = null;
+      if (!canUseFullFacilityOverview()) { clearOnShiftAccess(); syncFacilityOverviewAccess(); return; }
+    }
     if (!cached || facilityOverviewCachedReadDenied(error)) facilityOverviewState.content = `<article class="issue-card"><p>${escapeHtml(error.message || "The ED overview is unavailable right now.")}</p></article>`;
   } finally {
     finishFacilityOverviewDataRequest(controller);
@@ -10977,7 +11061,7 @@ function renderFacilityOverviewOnShiftPreservingViewport() {
 }
 
 function renderFacilityOverviewOnShiftResults(rows) {
-  const canUseStaffActions = canUseFacilityOverview();
+  const canUseStaffActions = canUseFullFacilityOverview();
   const termStart = formatDateKey(australianTermForDate(parseDateOnly(facilityOverviewState.date)).start);
   const people = new Map();
   for (const row of rows) {
@@ -11294,6 +11378,7 @@ function renderFacilityOverviewContactAllocation(allocation) {
   const phoneExplanation = /\bdivert/i.test(allocation?.role || "")
     ? `Allocated telephone number: ${allocation.role}` : "Allocated telephone number";
   const serviceLabel = allocation?.streamKey === "sepsis" ? `<small class="facility-overview-contact-service-label">Sepsis</small>` : "";
+  if (!canUseFullFacilityOverview()) return `${serviceLabel}<span class="facility-overview-contact-number" title="${escapeHtml(phoneExplanation)}">${escapeHtml(phone)}${allocation?.matchMethod === "manual" || allocation?.uncertain ? '<sup aria-hidden="true">*</sup>' : ""}</span>`;
   if (allocation?.matchMethod === "manual" || allocation?.uncertain) {
     const explanation = `${allocation.uncertain ? "Automatic tentative match — check allocation" : "Manually confirmed allocation"}${phoneExplanation === "Allocated telephone number" ? "" : `. ${phoneExplanation}`}`;
     return `${serviceLabel}<button type="button" class="facility-overview-contact-number ${allocation.uncertain ? "is-tentative" : "is-manual"}" data-facility-overview-contact-resolution="${escapeHtml(allocation.contactKey || "")}" title="${escapeHtml(explanation)}" aria-label="${escapeHtml(explanation)}: ${escapeHtml(phone)}. View or edit allocation"><span>${escapeHtml(phone)}</span><sup aria-hidden="true">*</sup></button>`;
@@ -11311,6 +11396,7 @@ function renderFacilityOverviewContactListStatus(matches, assignments = []) {
   if (contactList?.status !== "available") return notice;
   const partition = partitionDdhNightReview(matches, assignments, { date: facilityOverviewState.date, previousNightRoster: facilityOverviewState.previousNightRoster });
   const unresolved = partition.unresolved;
+  if (!canUseFullFacilityOverview()) return `${notice}${unresolved.length ? `<p class="facility-overview-contact-status">${unresolved.length} telephone allocation${unresolved.length === 1 ? "" : "s"} awaiting review.</p>` : ""}`;
   const oldNight = isViewingCreatorAccount() ? partition.previousNight : [];
   const menuKey = facilityOverviewState.contactResolutionMenu;
   const selectedContact = menuKey ? (contactList.contacts || []).find((contact) => contact.contactKey === menuKey) : null;
@@ -11443,6 +11529,7 @@ function facilityOverviewOrdinaryDateAttributes() {
 }
 
 async function loadFacilityOverviewStaff() {
+  if (!canUseFullFacilityOverview()) return;
   if (!canUseFacilityOverview() || currentFacilityOverviewMaintenance || facilityOverviewState.tab !== "staff") return;
   const term = australianTermForDate(parseDateOnly(facilityOverviewState.staffTermStart || formatDateKey(new Date())));
   facilityOverviewState.staffTermStart = formatDateKey(term.start);
@@ -11649,7 +11736,7 @@ function renderFacilityOverviewCoverageNotice(data) {
 
 function renderFacilityOverviewStaffResults(data, term) {
   const coverageNotice = renderFacilityOverviewCoverageNotice(data) + (data.directoryOnly ? `<p class="facility-overview-filter-hint">Staff names are available across hospitals. Shift details remain limited to your authorised hospitals for the selected period.</p>` : "");
-  const canUseStaffActions = canUseFacilityOverview();
+  const canUseStaffActions = canUseFullFacilityOverview();
   const designations = new Map((data.designations || []).map((designation) => [`${designation.sourceType}|${designation.doctorKey}`, designation]));
   const seniorityOverrides = new Map((data.seniorityOverrides || []).map((override) => [`${override.sourceType}|${override.doctorKey}`, override]));
   const byPerson = new Map();
@@ -11859,7 +11946,7 @@ function renderFacilityOverviewStaffDesignationMenu(person, designation, menu) {
 function renderFacilityOverviewSeniorityLink(seniority, options = {}) {
   const grade = String(seniority || "").trim();
   const sourceType = String(options.sourceType || "").trim().toLowerCase();
-  if (!grade || grade === "Unknown" || !sourceType || !canUseFacilityOverview()) return "";
+  if (!grade || grade === "Unknown" || !sourceType || !canUseFullFacilityOverview()) return "";
   return ` <button type="button" class="facility-overview-seniority facility-overview-seniority-link" data-facility-overview-open-staff-section="${escapeHtml(grade)}" data-facility-overview-staff-source="${escapeHtml(sourceType)}" data-facility-overview-staff-date="${escapeHtml(options.date || "")}" aria-label="View ${escapeHtml(grade)} staff at ${escapeHtml(displaySourceCode(sourceType))}">${escapeHtml(grade)}</button>`;
 }
 
@@ -15306,6 +15393,7 @@ async function loadDoctorProfileFacilityOverviewAccess(profile, options = {}) {
     currentFacilityOverviewEnabled = data.facilityOverviewEnabled === true;
     currentFacilityOverviewMaintenance = data.facilityOverviewMaintenance !== false;
     currentFacilityOverviewAutomaticLaunchEnabled = data.facilityOverviewAutomaticLaunchEnabled === true;
+    currentOnShiftForAllEnabled = data.onShiftForAllEnabled === true;
     currentFacilityOverviewAccess = sanitizeFacilityOverviewAccess(data.facilityOverviewAccess);
     applyFacilityOverviewSiteScope();
     syncFacilityOverviewAccess();
@@ -16951,8 +17039,10 @@ function requestClinicalStartupShiftWindow(options = {}, loginStartedAt = 0) {
         body: JSON.stringify({ action: "queryFacilityOverviewLaunchWindow", email: authUserEmail || currentUserEmail,
           password: authUserPassword || currentUserPassword, targetEmail: facilityOverviewTargetEmail() }) });
       const data = await readJsonResponse(response, "Could not check the shift opening window.");
-      if (!clinicalOnShiftStartupPending || subjectKey !== activeCalendarTransitionKey() || transitionId !== calendarTransitionRunId) return;
-      if (data.shiftWindow) launchClinicalOnShiftWorkspace({ ...options, shiftWindow: data.shiftWindow }, loginStartedAt);
+      if (subjectKey !== activeCalendarTransitionKey() || transitionId !== calendarTransitionRunId) return;
+      applyOnShiftAccessWindow(data.shiftWindow);
+      syncFacilityOverviewAccess();
+      if (clinicalOnShiftStartupPending && data.shiftWindow) launchClinicalOnShiftWorkspace({ ...options, shiftWindow: data.shiftWindow }, loginStartedAt);
     } catch {
       // A startup check cannot block access to the personal calendar.
     }
@@ -16961,7 +17051,14 @@ function requestClinicalStartupShiftWindow(options = {}, loginStartedAt = 0) {
 
 function launchClinicalOnShiftWorkspace(options = {}, loginStartedAt = 0) {
   if (!clinicalOnShiftStartupPending || !currentFacilityOverviewAutomaticLaunchEnabled || currentFacilityOverviewMaintenance
-      || currentNonClinical || !canUseFacilityOverview() || !calendarTransitionStillCurrent(options.transition)) return false;
+      || currentNonClinical || (!canUseFacilityOverview() && !currentOnShiftForAllEnabled)
+      || !calendarTransitionStillCurrent(options.transition)) return false;
+  if (activeCalendarMode() === "doctor-profile" && !facilityOverviewTargetEmail()) return false;
+  // A personal snapshot can suggest timing but cannot grant roster-wide access.
+  if (!canUseFullFacilityOverview() && !options.shiftWindow) {
+    requestClinicalStartupShiftWindow(options, loginStartedAt);
+    return false;
+  }
   const snapshotReady = currentSnapshot?.preview && !currentSnapshotStale && calendarSnapshotMatchesActiveContext(currentSnapshot);
   const shift = options.shiftWindow || (snapshotReady ? onShiftLaunchWindow(currentSnapshot.preview.events || [], options.now || new Date()) : null);
   if (!shift) {
@@ -17665,6 +17762,7 @@ function applyCloudStateIdentity(data) {
   if (data.state?.session) rememberSessionBaseline(data.state.session);
   currentFacilityOverviewMaintenance = data.facilityOverviewMaintenance !== false;
   currentFacilityOverviewAutomaticLaunchEnabled = data.facilityOverviewAutomaticLaunchEnabled === true;
+  currentOnShiftForAllEnabled = data.onShiftForAllEnabled === true;
   currentCreatorStartupHydrationEnabled = data.creatorStartupHydrationEnabled === true;
   currentCalendarRevision = String(data.snapshotRevision || data.calendarRevision || currentCalendarRevision || "");
   currentUserRole = data.role || currentUserRole;
@@ -17708,6 +17806,7 @@ function applyCloudStateContext(data) {
   if (data.state?.session) rememberSessionBaseline(data.state.session);
   currentFacilityOverviewMaintenance = data.facilityOverviewMaintenance !== false;
   currentFacilityOverviewAutomaticLaunchEnabled = data.facilityOverviewAutomaticLaunchEnabled === true;
+  currentOnShiftForAllEnabled = data.onShiftForAllEnabled === true;
   currentCreatorStartupHydrationEnabled = data.creatorStartupHydrationEnabled === true;
   currentInsightsEnabled = currentUserRole === "creator" || data.insightsEnabled === true;
   currentFacilityOverviewEnabled = currentUserRole === "creator" || data.facilityOverviewEnabled === true;

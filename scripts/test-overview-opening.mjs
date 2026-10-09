@@ -6,7 +6,7 @@ const section=(start,end)=>app.slice(app.indexOf(start),app.indexOf(end,app.inde
 const opening=section('function openFacilityOverview(options = {})','async function openFacilityOverviewByStream()');
 let loaded=0;
 const noop=()=>{};
-const globals={facilityOverviewOpeningPromise:null,facilityOverviewOpeningRunId:0,facilityOverviewNavigationLocked:false,facilityOverviewIgnoreToggleUntil:0,isFacilityOverviewOpen:()=>true,currentFacilityOverviewShiftWindow:()=>null,applyFacilityOverviewSiteScope:noop,canUseFacilityOverview:()=>true,activeCalendarTransitionKey:()=> 'subject',calendarTransitionRunId:1,
+const globals={facilityOverviewOpeningPromise:null,facilityOverviewOpeningRunId:0,facilityOverviewNavigationLocked:false,facilityOverviewIgnoreToggleUntil:0,isFacilityOverviewOpen:()=>true,currentFacilityOverviewShiftWindow:()=>null,applyFacilityOverviewSiteScope:noop,canUseFacilityOverview:()=>true,canUseFullFacilityOverview:()=>true,activeCalendarTransitionKey:()=> 'subject',calendarTransitionRunId:1,
  currentFacilityOverviewAccessReady:true,currentFacilityOverviewMaintenance:false,currentNonClinical:false,facilityOverviewSessionNeedsInitialization:true,resetFacilityOverviewSessionState:()=>{globals.facilityOverviewState.tab='together';globals.facilityOverviewSessionNeedsInitialization=false;},
  facilityOverviewState:{tab:'together',preferredFacilityKey:'DDH',facilityKey:'MMC'},
  refreshFacilityOverviewPreferredFacility:noop,loadFacilityOverviewAvailableTerms:async()=>{},
@@ -27,7 +27,7 @@ await globals.open({preserveStaffTerm:true});
 assert.equal(globals.facilityOverviewState.tab,'staff','explicit staff links keep their destination');
 const tabHandler=section('  const tab = event.target.closest("[data-facility-overview-tab]");','  if (event.target.closest("[data-facility-overview-by-stream-add]"))');
 const calls=[];
-const tabGlobals={event:{target:{closest:()=>({dataset:{facilityOverviewTab:'on-shift'}})}},
+const tabGlobals={canUseFullFacilityOverview:()=>true,event:{target:{closest:()=>({dataset:{facilityOverviewTab:'on-shift'}})}},
  facilityOverviewState:{tab:'together',requestId:0,byStreamRequestId:0,facilityKey:'DDH',date:'2026-10-04'},
  cancelFacilityOverviewDataRequest:noop,collapseFacilityOverviewContactReview:noop,clearFacilityOverviewStaffMultiSelect:noop,
  applyFacilityOverviewSiteScope:()=>calls.push('scope'),resetFacilityOverviewScroll:noop,

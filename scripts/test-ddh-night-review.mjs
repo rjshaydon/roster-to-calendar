@@ -93,7 +93,7 @@ assert.equal(denied.status,403);
 const app = await readFile(new URL('../public/static/app.js', import.meta.url), 'utf8');
 let creator = true;
 const state = { date, previousNightRoster: context, contactList: { status: 'available', sourceDate: date, contacts }, contactResolutionMenu: 'Tony' };
-const ui = vm.createContext({ contactSyncWarning:()=>'', facilityOverviewState: state, isViewingCreatorAccount: () => creator, escapeHtml: value => String(value || '').replaceAll('&','&amp;').replaceAll('<','&lt;'), formatFacilityOverviewContactTime: () => '', ddhNightReviewWindow: d => ddhNightReviewWindow(d,now), partitionDdhNightReview: (m,a,options) => partitionDdhNightReview(m,a,{ ...options,now }), renderFacilityOverviewContactReviewRow: c => `<span>${c.name}</span>`, renderFacilityOverviewContactResolutionMenu: () => '<p>Editor</p>' });
+const ui = vm.createContext({ canUseFullFacilityOverview:()=>true, contactSyncWarning:()=>'', facilityOverviewState: state, isViewingCreatorAccount: () => creator, escapeHtml: value => String(value || '').replaceAll('&','&amp;').replaceAll('<','&lt;'), formatFacilityOverviewContactTime: () => '', ddhNightReviewWindow: d => ddhNightReviewWindow(d,now), partitionDdhNightReview: (m,a,options) => partitionDdhNightReview(m,a,{ ...options,now }), renderFacilityOverviewContactReviewRow: c => `<span>${c.name}</span>`, renderFacilityOverviewContactResolutionMenu: () => '<p>Editor</p>' });
 const uiStart = app.indexOf('function renderFacilityOverviewContactListStatus(');
 const uiEnd = app.indexOf('\nfunction ',uiStart+1);
 vm.runInContext(app.slice(uiStart,uiEnd),ui);

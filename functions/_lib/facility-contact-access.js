@@ -6,12 +6,15 @@ export async function issueFacilityContactAccessToken(secretValue, options = {})
   const facilityKey = String(options.facilityKey || "").trim().toUpperCase();
   if (secret.length < 32 || !/^[A-Z0-9_-]{2,12}$/.test(facilityKey)) return "";
   const now = Number(options.now || Date.now());
+  const date = String(options.date || "");
+  if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) return "";
   const requestedExpiry = Date.parse(String(options.expiresAt || ""));
   const expiresAt = Math.min(
-    Number.isFinite(requestedExpiry) && requestedExpiry > now ? requestedExpiry : now + MAX_TOKEN_LIFETIME_MS,
+    Number.isFinite(requestedExpiry) ? requestedExpiry : now + MAX_TOKEN_LIFETIME_MS,
     now + MAX_TOKEN_LIFETIME_MS,
   );
-  const payload = encodeBase64Url(JSON.stringify({ v: TOKEN_VERSION, facilityKey, exp: Math.floor(expiresAt / 1000) }));
+  if (expiresAt <= now) return "";
+  const payload = encodeBase64Url(JSON.stringify({ v: TOKEN_VERSION, facilityKey, ...(date ? { date } : {}), exp: Math.floor(expiresAt / 1000) }));
   const signature = await sign(secret, payload);
   return signature ? `${payload}.${signature}` : "";
 }
@@ -27,7 +30,8 @@ export async function verifyFacilityContactAccessToken(secretValue, tokenValue, 
     const nowSeconds = Math.floor(Number(options.now || Date.now()) / 1000);
     const facilityKey = String(claims?.facilityKey || "").trim().toUpperCase();
     if (Number(claims?.v) !== TOKEN_VERSION || !facilityKey || Number(claims?.exp || 0) <= nowSeconds) return null;
-    return { facilityKey, expiresAt: new Date(Number(claims.exp) * 1000).toISOString() };
+    if (claims.date && !/^\d{4}-\d{2}-\d{2}$/.test(claims.date)) return null;
+    return { facilityKey, ...(claims.date ? { date: claims.date } : {}), expiresAt: new Date(Number(claims.exp) * 1000).toISOString() };
   } catch {
     return null;
   }

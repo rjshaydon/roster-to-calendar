@@ -21,7 +21,7 @@ import { guardedFetch, localFeatureDisabledResponse } from "../_lib/outbound-net
 import { loadPublishedRosterDoctors, loadPublishedFacilityDays, loadPublishedPreviousDdhNight, loadPublishedFacilityMetadata, loadPublishedFacilityTerms, loadPublishedFacilityRange, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata } from "../_lib/facility-overview-cache.js";
 import { loadPublishedFacilityContacts, publishFacilityContactResolutions } from "../_lib/facility-contact-cache.js";
 import { issueFacilityContactAccessToken, verifyFacilityContactAccessToken } from "../_lib/facility-contact-access.js";
-import { facilityBuildSources, facilityContactReaderSources, facilityLegacyReadsPaused, facilityOverviewAutomaticLaunchEnabled, facilityOverviewMaintenanceForViewer, facilityOverviewMaintenanceMode, facilityReaderSources, facilityReaderSelection, facilityReadRoute, facilityRolloutCohortEligible } from "../_lib/facility-rollout.js";
+import { facilityBuildSources, facilityContactReaderSources, facilityLegacyReadsPaused, facilityOverviewAutomaticLaunchEnabled, onShiftForAllEnabled, facilityOverviewMaintenanceForViewer, facilityOverviewMaintenanceMode, facilityReaderSources, facilityReaderSelection, facilityReadRoute, facilityRolloutCohortEligible } from "../_lib/facility-rollout.js";
 import { creatorDirectoryEnabled, creatorStartupHydrationEnabled } from "../_lib/creator-startup-guard.js";
 import { extractShiftRows, findmyshiftConfiguredRosterRange, findmyshiftDandenongAssignmentExceptions, findmyshiftLastModified, findmyshiftReportDiagnostics, findmyshiftShiftReport } from "../_lib/findmyshift.js";
 import {
@@ -410,6 +410,7 @@ export async function onRequestPost(context) {
         facilityOverviewEnabled: prepared.facilityOverviewEnabled,
         facilityOverviewMaintenance: facilityOverviewMaintenanceForRecords(context.env, loginRecord),
         facilityOverviewAutomaticLaunchEnabled: facilityOverviewAutomaticLaunchEnabled(context.env),
+        onShiftForAllEnabled: onShiftForAllEnabled(context.env),
         facilityOverviewAccess: prepared.facilityOverviewAccess,
         nonClinical: prepared.nonClinical,
         directorViewEnabled: prepared.directorViewEnabled,
@@ -847,6 +848,7 @@ export async function onRequestPost(context) {
         facilityOverviewEnabled: prepared.facilityOverviewEnabled,
         facilityOverviewMaintenance: facilityOverviewMaintenanceForRecords(context.env, account.record, targetRecord),
         facilityOverviewAutomaticLaunchEnabled: facilityOverviewAutomaticLaunchEnabled(context.env),
+        onShiftForAllEnabled: onShiftForAllEnabled(context.env),
         facilityOverviewAccess: prepared.facilityOverviewAccess,
         nonClinical: prepared.nonClinical,
         directorViewEnabled: prepared.directorViewEnabled,
@@ -908,6 +910,7 @@ export async function onRequestPost(context) {
         facilityOverviewEnabled: prepared.facilityOverviewEnabled,
         facilityOverviewMaintenance: facilityOverviewMaintenanceForRecords(context.env, account.record, target),
         facilityOverviewAutomaticLaunchEnabled: facilityOverviewAutomaticLaunchEnabled(context.env),
+        onShiftForAllEnabled: onShiftForAllEnabled(context.env),
         facilityOverviewAccess: prepared.facilityOverviewAccess,
         nonClinical: prepared.nonClinical,
         directorViewEnabled: prepared.directorViewEnabled,
@@ -965,6 +968,7 @@ export async function onRequestPost(context) {
         facilityOverviewEnabled: prepared.facilityOverviewEnabled,
         facilityOverviewMaintenance: facilityOverviewMaintenanceForRecords(context.env, account.record, targetRecord),
         facilityOverviewAutomaticLaunchEnabled: facilityOverviewAutomaticLaunchEnabled(context.env),
+        onShiftForAllEnabled: onShiftForAllEnabled(context.env),
         facilityOverviewAccess: prepared.facilityOverviewAccess,
         nonClinical: prepared.nonClinical,
         directorViewEnabled: prepared.directorViewEnabled,
@@ -1013,6 +1017,7 @@ export async function onRequestPost(context) {
         facilityOverviewEnabled: prepared.facilityOverviewEnabled,
         facilityOverviewMaintenance: facilityOverviewMaintenanceForRecords(context.env, account.record, updated),
         facilityOverviewAutomaticLaunchEnabled: facilityOverviewAutomaticLaunchEnabled(context.env),
+        onShiftForAllEnabled: onShiftForAllEnabled(context.env),
         facilityOverviewAccess: prepared.facilityOverviewAccess,
         nonClinical: prepared.nonClinical,
         directorViewEnabled: prepared.directorViewEnabled,
@@ -1950,6 +1955,7 @@ export async function onRequestPost(context) {
         facilityOverviewEnabled,
         facilityOverviewMaintenance: facilityOverviewMaintenanceForRecords(context.env, account.record, profileAccount),
         facilityOverviewAutomaticLaunchEnabled: facilityOverviewAutomaticLaunchEnabled(context.env),
+        onShiftForAllEnabled: onShiftForAllEnabled(context.env),
         facilityOverviewAccess,
       });
     }
@@ -2101,17 +2107,30 @@ export async function onRequestPost(context) {
       }
     }
 
-    const ownPublishedShiftWindow = async () => {
-      const claims = sanitizeClaims(facilityOverviewSubject.record.claims);
-      if (!claims.length || claims.length > MAX_ACCOUNT_CLAIMS) return null;
-      const selection = readerSelectionFor([...new Set(claims.map(claim => claim.sourceType))], true);
-      if (selection.route !== "shared") return null;
-      const today = australianDateKey();
-      const published = await loadPublishedFacilityRange(context.env.ROSTER_FILES, selection.sources,
-        isoDateKey(addUtcDays(today, -1)), isoDateKey(addUtcDays(today, 1)), today);
-      const identities = new Set(claims.map(claim => `${claim.sourceType}|${normalizeRosterName(claim.key)}`));
-      const events = (published.events || []).filter(row => identities.has(`${row.sourceType}|${row.doctorKey}`)).map(row => row.event);
-      return onShiftLaunchWindow(events);
+    const onShiftOnlyEligible = () => Boolean(onShiftForAllEnabled(context.env)
+      && facilityOverviewSubject && facilityOverviewSubject.record.nonClinical !== true);
+    let ownPublishedShiftWindowPromise = null;
+    const ownPublishedShiftWindow = () => {
+      if (ownPublishedShiftWindowPromise) return ownPublishedShiftWindowPromise;
+      ownPublishedShiftWindowPromise = (async () => {
+        if (!facilityOverviewSubject || facilityOverviewSubject.record.nonClinical === true || !sharedFacilityDaysEnabled) return null;
+        const record = facilityOverviewSubject.record;
+        const rawClaims = sanitizeClaims(record.claims);
+        const claims = sanitizeClaims(context.env.IDENTITY_REVIEW_ENABLED === "true"
+          ? await accountIdentityAliases(context.env.ROSTER_DB, record.email, rawClaims) : rawClaims);
+        if (!claims.length || claims.length > MAX_ACCOUNT_CLAIMS) return null;
+        const selection = readerSelectionFor([...new Set(claims.map(claim => claim.sourceType))], true);
+        if (selection.route !== "shared") return null;
+        const today = australianDateKey();
+        const published = await loadPublishedFacilityRange(context.env.ROSTER_FILES, selection.sources,
+          isoDateKey(addUtcDays(today, -1)), isoDateKey(addUtcDays(today, 1)), today);
+        if (published.preparing) return null;
+        const identities = new Set(claims.map(claim => `${claim.sourceType}|${normalizeRosterName(claim.key)}`));
+        const events = (published.events || []).filter(row => identities.has(`${row.sourceType}|${row.doctorKey}`))
+          .map(row => ({ ...row.event, sourceType: row.sourceType }));
+        return onShiftLaunchWindow(events);
+      })();
+      return ownPublishedShiftWindowPromise;
     };
     const shiftWindowForRequestedRoster = async (date, facilityKey) => {
       if (facilityKey === "ALL" || ![australianDateKey(), isoDateKey(addUtcDays(australianDateKey(), -1)), isoDateKey(addUtcDays(australianDateKey(), 1))].includes(date)) return null;
@@ -2120,7 +2139,7 @@ export async function onRequestPost(context) {
     };
 
     if (action === "queryFacilityOverviewLaunchWindow") {
-      if (!facilityOverviewEnabled()) return facilityOverviewAccessDeniedResponse();
+      if (!facilityOverviewEnabled() && !onShiftOnlyEligible()) return facilityOverviewAccessDeniedResponse();
       return Response.json({ ok: true, shiftWindow: await ownPublishedShiftWindow() });
     }
 
@@ -2245,13 +2264,17 @@ export async function onRequestPost(context) {
     }
 
     if (action === "queryFacilityOverviewOnShift") {
-      if (!facilityOverviewEnabled()) {
+      const restrictedOnShift = !facilityOverviewEnabled();
+      if (restrictedOnShift && !onShiftOnlyEligible()) {
         return Response.json({ ok: false, unavailable: true, events: [] }, { status: 403 });
       }
       const date = String(body?.date || "").slice(0, 10);
       const requestedFacility = String(body?.facilityKey || "").trim().toUpperCase();
-      let access = await facilityOverviewAccess();
-      const ordinarilyAllowed = facilityOverviewOrdinaryRangeAllowed(access, date, date)
+      // Temporary access never invokes term membership or ordinary overview access.
+      let access = restrictedOnShift
+        ? { mode: "denied", facilityKey: "", today: australianDateKey() }
+        : await facilityOverviewAccess();
+      const ordinarilyAllowed = !restrictedOnShift && facilityOverviewOrdinaryRangeAllowed(access, date, date)
         && access.mode !== "denied" && (requestedFacility === "ALL" ? facilityAccessKeys(access).length || access.mode === "all" : facilityAccessAllows(access, requestedFacility));
       const shiftWindow = ordinarilyAllowed ? null : await shiftWindowForRequestedRoster(date, requestedFacility);
       if (!ordinarilyAllowed && !shiftWindow) return facilityOverviewAccessDeniedResponse(access);
@@ -2264,7 +2287,7 @@ export async function onRequestPost(context) {
       try {
         const selection = readerSelectionFor(facilityKeys, requestedFacility === "ALL");
         const readRoute = selection.route;
-        if (readRoute === "blocked") return sharedRouteUnavailable();
+        if (readRoute === "blocked" || (restrictedOnShift && readRoute !== "shared")) return sharedRouteUnavailable();
         if (readRoute === "shared") {
           if (!sharedFacilityDaysEnabled) return sharedRouteUnavailable();
           const contactReadable = sharedFacilityContactsEnabled
@@ -2286,6 +2309,7 @@ export async function onRequestPost(context) {
           const contactAccessToken = contactReadable
             ? await issueFacilityContactAccessToken(context.env.FACILITY_CONTACT_ACCESS_SECRET, {
                 facilityKey: facilityKeys[0],
+                date: restrictedOnShift ? date : undefined,
                 expiresAt: access.expiresAt,
               })
             : "";
@@ -2294,7 +2318,7 @@ export async function onRequestPost(context) {
           const rosterUnchanged = !missing.length && body?.cachedRevision === revision;
           const previousNightRoster = contactReadable && facilityKeys[0] === "ddh"
             ? await loadPublishedPreviousDdhNight(context.env.ROSTER_FILES, date) : null;
-          return Response.json({ ok: true, date, facilityKey: requestedFacility === "ALL" ? "ALL" : facilityKeys[0], events: rosterUnchanged ? undefined : events, rosterUnchanged, missing, revision, facilityOverviewAccess: access, accessExpiresAt: access.expiresAt || "", contactAccessToken, contactList, previousNightRoster, queryMs: Date.now() - startedAt });
+          return Response.json({ ok: true, date, facilityKey: requestedFacility === "ALL" ? "ALL" : facilityKeys[0], events: rosterUnchanged ? undefined : events, rosterUnchanged, missing, revision, facilityOverviewAccess: access, accessExpiresAt: access.expiresAt || "", contactAccessToken, contactList, previousNightRoster, shiftWindow: restrictedOnShift ? shiftWindow : undefined, queryMs: Date.now() - startedAt });
         }
         const [eventGroups, contactList] = await Promise.all([
           Promise.all(facilityKeys.map((facilityKey) => queryFacilityOverviewOnShift(context.env.ROSTER_DB, { date, facilityKey }))),
@@ -2643,7 +2667,8 @@ async function refreshPublishedFacilityContactsWithToken(context, body) {
   );
   const date = String(body?.date || "").slice(0, 10);
   const facilityKeys = sanitizeSourceTypes([body?.facilityKey]);
-  if (!claims || facilityKeys.length !== 1 || claims.facilityKey !== facilityKeys[0].toUpperCase()) {
+  if (!claims || facilityKeys.length !== 1 || claims.facilityKey !== facilityKeys[0].toUpperCase()
+      || (claims.date && (claims.date !== date || !onShiftForAllEnabled(context.env)))) {
     return Response.json({ error: "Contact access has expired." }, { status: 403 });
   }
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {

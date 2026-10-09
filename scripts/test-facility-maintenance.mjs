@@ -88,12 +88,15 @@ const localDevSource = await readFile(new URL("./local-dev.mjs", import.meta.url
 const functionBody = (pattern) => appSource.match(pattern)?.[0] || "";
 assert.equal((wranglerSource.match(/FACILITY_OVERVIEW_MAINTENANCE_MODE = "false"/g) || []).length, 1, "Production must explicitly open the Creator MMC canary");
 assert.equal((wranglerSource.match(/FACILITY_OVERVIEW_MAINTENANCE_MODE = "true"/g) || []).length, 1, "Preview must remain in maintenance mode");
-assert.equal((wranglerSource.match(/FACILITY_OVERVIEW_AUTOMATIC_LAUNCH_ENABLED = "false"/g) || []).length, 2, "automatic On shift launch must remain disabled in Production and Preview");
+assert.equal((wranglerSource.match(/FACILITY_OVERVIEW_AUTOMATIC_LAUNCH_ENABLED = "false"/g) || []).length, 1, "automatic On shift launch must remain disabled in Preview");
+assert.equal((wranglerSource.match(/FACILITY_OVERVIEW_AUTOMATIC_LAUNCH_ENABLED = "true"/g) || []).length, 1, "Production retains automatic opening");
+assert.equal((wranglerSource.match(/ON_SHIFT_FOR_ALL_ENABLED = "true"/g) || []).length, 1, "Production enables temporary On shift access");
+assert.equal((wranglerSource.match(/ON_SHIFT_FOR_ALL_ENABLED = "false"/g) || []).length, 1, "Preview keeps the new capability off");
 assert.match(localDevSource, /FACILITY_OVERVIEW_MAINTENANCE_MODE=false/, "isolated local development must explicitly open the feature");
 assert.match(appSource, /let currentFacilityOverviewMaintenance = true;/, "the browser must start fail-closed");
 assert.match(appSource, /currentFacilityOverviewMaintenance = data\.facilityOverviewMaintenance !== false;/, "missing server capability must remain paused");
 assert.match(functionBody(/function renderFacilityOverviewMaintenance[\s\S]*?(?=\nfunction facilityOverviewMelbourneClock)/), /stopFacilityOverviewContactRefresh\(\)[\s\S]*contactList = null[\s\S]*FACILITY_OVERVIEW_MAINTENANCE_MESSAGE/);
-assert.match(functionBody(/async function openFacilityOverview\([\s\S]*?(?=\nasync function openFacilityOverviewByStream)/), /currentFacilityOverviewMaintenance[\s\S]*renderFacilityOverviewMaintenance\(\)[\s\S]*return;[\s\S]*refreshFacilityOverviewPreferredFacility/);
+assert.match(functionBody(/async function performFacilityOverviewOpening\([\s\S]*?(?=\nasync function openFacilityOverviewByStream)/), /currentFacilityOverviewMaintenance[\s\S]*renderFacilityOverviewMaintenance\(\)[\s\S]*return;[\s\S]*refreshFacilityOverviewPreferredFacility/);
 for (const name of ["loadFacilityOverviewMetadata", "openFacilityOverviewByStream", "loadFacilityOverviewByStream", "loadFacilityOverviewTogether", "loadFacilityOverviewOnShift", "loadFacilityOverviewStaff"]) {
   const body = functionBody(new RegExp(`(?:async )?function ${name}[\\s\\S]*?(?=\\n(?:async )?function )`));
   assert.match(body, /currentFacilityOverviewMaintenance/, `${name} must stop before cache or network work`);

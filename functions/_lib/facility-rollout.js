@@ -17,6 +17,10 @@ export function facilityOverviewAutomaticLaunchEnabled(env = {}) {
   return ENABLED.has(String(env.FACILITY_OVERVIEW_AUTOMATIC_LAUNCH_ENABLED || "").trim().toLowerCase());
 }
 
+export function onShiftForAllEnabled(env = {}) {
+  return String(env.ON_SHIFT_FOR_ALL_ENABLED || "").toLowerCase() === "true";
+}
+
 export function facilityLegacyReadsPaused(env = {}) {
   return !DISABLED.has(String(env.FACILITY_LEGACY_READS_PAUSED || "").trim().toLowerCase());
 }

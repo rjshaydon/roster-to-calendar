@@ -351,7 +351,7 @@ assert.equal(runInNewContext(`${resultsRenderer}; renderFacilityOverviewTogether
 // Directory selection survives rendering, while returning to shifts restores
 // the entered clinician's roster permissions.
 const applySiteScope=app.slice(app.indexOf('function applyFacilityOverviewSiteScope()'),app.indexOf('function resetFacilityOverviewAccessForEnteredUser()'));
-const siteGlobals={currentFacilityOverviewAccess:{mode:'sites',facilityKeys:['MMC']},facilityAccessKeys:()=>['MMC'],facilityOverviewRosterAccessKeys:()=>['MMC'],currentFacilityOverviewShiftWindow:()=>null,facilityOverviewState:{tab:'staff',facilityKey:'ALL',directoryFacilityKeys:['MMC','DDH'],byStreamRows:[],byStreamCatalog:[]}};
+const siteGlobals={canUseFullFacilityOverview:()=>true,currentOnShiftWindow:()=>null,currentFacilityOverviewAccess:{mode:'sites',facilityKeys:['MMC']},facilityAccessKeys:()=>['MMC'],facilityOverviewRosterAccessKeys:()=>['MMC'],currentFacilityOverviewShiftWindow:()=>null,facilityOverviewState:{tab:'staff',facilityKey:'ALL',directoryFacilityKeys:['MMC','DDH'],byStreamRows:[],byStreamCatalog:[]}};
 runInNewContext(`${applySiteScope}; applyFacilityOverviewSiteScope()`,siteGlobals);
 assert.equal(siteGlobals.facilityOverviewState.facilityKey,'ALL');
 siteGlobals.facilityOverviewState.facilityKey='DDH';
