@@ -40,3 +40,23 @@ Body shape:
 
 The endpoint retains only one contact extract. A successful JSON import deletes the legacy
 workbook object for this source.
+
+## Inserted SSU Intern row — 9 October 2026
+
+The current Flow uses Recurrence → Run script from SharePoint library → HTTP
+(JSON extract). Its existing extraction script was updated in place, retaining
+its identity and the existing five-minute schedule. No whole-workbook upload
+or additional database request is introduced.
+
+The script reads only A1:I64 and discovers the PAEDIATRIC EMERGENCY and subsequent
+ADULTS headings. It includes inserted adult rows (SSU Intern is now row 28),
+keeps shifted Paediatric doctor rows in MCH, and stops before nursing/service
+tables. Missing section boundaries fail explicitly. ROLE/NAME/PHONE and shift
+headings are excluded. Phone cells retain slash-separated numbers and instructions
+as entered; the app treats each number separately for handset conflicts.
+
+At 10:49 the successful Flow extract already contained Maria alone and
+25144/25187, but omitted Mary because the old adult range ended at row 27.
+The older Maria/Mary combined entry was therefore not the newest successful
+extract. UI refresh and publication timing can temporarily retain an older view;
+this observation does not prove a Flow rollback.

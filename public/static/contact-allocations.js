@@ -293,9 +293,12 @@ export function contactAllocationCandidates(assignments = [], contact, { now = n
     const annotated = matchingName !== String(contact.name || "").trim();
     const streamAligned = Boolean(contactStreamKey(contact.role)) && group.assignments.some((assignment) => contactStreamKey(contact.role) === assignmentStreamKey(assignment));
     const gradeAligned = group.assignments.some((assignment) => contactGradeAligned(contact.role, assignment.event?.seniority || assignment.person?.seniority));
+    const contextAligned = group.assignments.some((assignment) => contactStreamKey(contact.role)
+      && contactStreamKey(contact.role) === assignmentStreamKey(assignment)
+      && contactGradeAligned(contact.role, assignment.event?.seniority || assignment.person?.seniority));
     return { ...group, method: evidence?.method || "", nameScore: evidence?.score || 0,
       score: evidence ? Math.min(100, evidence.score + (streamAligned ? 3 : 0) + (gradeAligned ? 2 : 0)) : 0,
-      uncertain: evidence?.uncertain === true || Boolean(evidence && (annotated || contact.repeatedSheetRows)), streamAligned,
+      uncertain: evidence?.uncertain === true || Boolean(evidence && (annotated || contact.repeatedSheetRows)), streamAligned, gradeAligned, contextAligned,
       reasons: evidence ? [evidence.reason, ...(annotated ? ["Repeated handset annotation removed from the name"] : []), ...(contact.repeatedSheetRows ? ["Repeated sheet rows agree on this name and handset"] : []), ...(streamAligned ? ["Roster stream agrees"] : []), ...(gradeAligned ? ["Roster grade agrees"] : [])] : [],
     };
   }).sort((left, right) => right.score - left.score || left.identity.localeCompare(right.identity));
@@ -327,7 +330,7 @@ export function attachContactAllocations(assignments = [], contacts = [], resolu
   // Exact duplicate names with different phones are also conflicting sheet rows.
   for (const contact of available) {
     if (available.some((other) => other.contactKey !== contact.contactKey && sameContext(contact, other)
-      && ((contact.phone && contact.phone.replace(/\D/g, "") === other.phone?.replace(/\D/g, ""))
+      && (contactPhoneNumbers(contact.phone).some((phone) => contactPhoneNumbers(other.phone).includes(phone))
         || (contact.name && simplify(contact.name) === simplify(other.name))))) reasons.set(contact.contactKey, "Conflicting entries in the contact sheet");
   }
 
@@ -374,16 +377,22 @@ export function attachContactAllocations(assignments = [], contacts = [], resolu
       const eligible = all.filter((candidate) => !hasTarget(candidate) && candidate.nameScore >= CONTACT_MATCH_POLICY.minimumNameScore);
       const candidate = eligible[0];
       if (!candidate || candidate.score < CONTACT_MATCH_POLICY.minimumScore) continue;
-      const candidateStage = candidate.uncertain ? "tentative" : candidate.method === "first-name" ? "given" : "specific";
+      const contextualWinner = candidate.contextAligned
+        && candidate.method === "first-name"
+        && eligible.slice(1).every((other) => other.nameScore <= candidate.nameScore
+          && !other.contextAligned);
+      const candidateStage = candidate.uncertain || (contextualWinner && eligible.length > 1) ? "tentative" : candidate.method === "first-name" ? "given" : "specific";
       if (candidateStage !== stage) continue;
-      if (eligible[1] && candidate.score - eligible[1].score < CONTACT_MATCH_POLICY.minimumLead) continue;
+      if (eligible[1] && candidate.score - eligible[1].score < CONTACT_MATCH_POLICY.minimumLead && !contextualWinner) continue;
       // VHH's mutable sheet is particularly prone to retaining old names. A
       // second plausible row claiming this holder remains a conflict.
       if (contact.shift === "Current" && available.some((other) => other.contactKey !== contact.contactKey && sameContext(contact, other)
         && candidates.get(other.contactKey).some((item) => item.identity === candidate.identity && item.nameScore >= CONTACT_MATCH_POLICY.minimumNameScore))) {
         reasons.set(contact.contactKey, "Conflicting entries for this clinician"); continue;
       }
-      proposals.push({ contact, candidate });
+      proposals.push({ contact, candidate: contextualWinner && eligible.length > 1
+        ? { ...candidate, uncertain: true, reasons: [...candidate.reasons, "Unique given-name candidate agreeing on both roster stream and explicit grade"] }
+        : candidate });
     }
     // Assess competition before applying any proposal from this batch.
     const accepted = proposals.filter((proposal) => !proposals.some((other) => other !== proposal
@@ -414,15 +423,21 @@ function isContactWorksheetHeader(contact) {
 function contactMatchName(contact) {
   const raw = String(contact?.name || "").trim();
   const annotation = raw.match(/^(.*?)\s*(?:[-–—:,]\s*|\s+)([\d\s()+-]{3,})$/u);
-  const digits = String(contact?.phone || "").replace(/\D/g, "");
-  return annotation && digits.length >= 3 && annotation[2].replace(/\D/g, "") === digits
+  const numbers = contactPhoneNumbers(contact?.phone);
+  return annotation && numbers.includes(annotation[2].replace(/\D/g, ""))
     ? annotation[1].trim() : raw;
+}
+
+function contactPhoneNumbers(value) {
+  return [...new Set((String(value || "").match(/\(?\d[\d ()-]*\d/g) || [])
+    .map((number) => number.replace(/\D/g, ""))
+    .filter((number) => number.length >= 5 && number.length <= 10))];
 }
 
 function coalesceRepeatedContactRows(contacts, resolutions) {
   const groups = new Map();
   for (const contact of contacts) {
-    const digits = String(contact.phone || "").replace(/\D/g, "");
+    const digits = contactPhoneNumbers(contact.phone).sort().join("/");
     const name = simplify(contactMatchName(contact));
     const key = digits.length >= 3 && /\p{L}/u.test(name)
       ? JSON.stringify([contact.area, contact.shift, digits, name]) : contact.contactKey;
@@ -566,7 +581,7 @@ function contactGradeAligned(role, seniority) {
   const text = simplify(role);
   const grade = simplify(seniority);
   const code = /^(?:sr|senior registrar)$/.test(grade) ? "sr" : /^(?:tr|ir)|transitional|intermediate/.test(grade) ? "tr"
-    : /^(?:jr|junior registrar)$/.test(grade) ? "jr" : /hmo/.test(grade) ? "hmo" : /^(?:sms|consultant|senior medical staff)$/.test(grade) ? "sms" : "";
+    : /^(?:jr|junior registrar)$/.test(grade) ? "jr" : /^(?:intern|int)$/.test(grade) ? "intern" : /hmo/.test(grade) ? "hmo" : /^(?:sms|consultant|senior medical staff)$/.test(grade) ? "sms" : "";
   return Boolean(code && new RegExp(`\\b${code === "tr" ? "(?:tr|ir)" : code}\\b`).test(text));
 }
 

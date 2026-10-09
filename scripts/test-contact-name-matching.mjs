@@ -29,6 +29,24 @@ const sheet = (name, source = 'DDH', phone = '49900', role = 'Orange Dr 1', shif
 const match = (roster, contacts, resolutions = []) => attachContactAllocations(roster, contacts, resolutions, { now });
 const matchedNames = result => result.assignments.filter(a => a.contactAllocation).map(a => a.person.displayName);
 
+// Stream and explicit grade together resolve an otherwise ambiguous given name.
+const daniels = [staff('Daniel PROCEL', 'MMC', 'Resus', 'SMS'), staff('Daniel YU', 'MMC', '', 'HMO')];
+const danielContact = sheet('Daniel', 'MMC', '25140', 'RESUS (SMS/SR) 25140');
+const danielMatch = match(daniels, [danielContact]);
+assert.deepEqual(matchedNames(danielMatch), ['Daniel PROCEL']);
+assert.equal(danielMatch.assignments[0].contactAllocation.uncertain, true);
+assert.equal(match([daniels[0], staff('Daniel OTHER', 'MMC', 'Resus', 'SR')], [danielContact]).matchedCount, 0);
+assert.equal(match([daniels[0], staff('Daniel YU', 'MMC', 'Resus', 'HMO')], [danielContact]).matchedCount, 1);
+assert.equal(match(daniels, [sheet('Daniel', 'MMC', '25140', 'RESUS Dr')]).matchedCount, 0, 'stream alone cannot resolve names');
+assert.equal(match([staff('Daniel PROCEL', 'MMC', '', 'SMS'), daniels[1]], [danielContact]).matchedCount, 0, 'grade alone cannot resolve names');
+assert.equal(match(daniels, [sheet('Daniel YU', 'MMC', '25140', 'RESUS (SMS/SR)')]).assignments[1].contactAllocation.phone, '25140', 'explicit surname remains authoritative');
+const ssuResult = match([staff('Maria GEORGIOU', 'MMC', 'SSU'), staff('Mary AMEEN', 'MMC', 'SSU', 'Intern')], [sheet('Maria', 'MMC', '25144/25187', 'SSU Dr 25144 diverted to 25187'), sheet('Mary', 'MMC', '25732', 'SSU Intern')]);
+assert.equal(ssuResult.matchedCount, 2);
+assert.equal(ssuResult.assignments[0].contactAllocation.phone, '25144/25187');
+assert.equal(ssuResult.assignments[1].contactAllocation.phone, '25732');
+
+assert.equal(match([staff('Maria GEORGIOU', 'MMC', 'SSU'), staff('Mary AMEEN', 'MMC', 'SSU', 'Intern')], [sheet('Maria', 'MMC', '25144/25187', 'SSU Dr'), sheet('Mary', 'MMC', '25187', 'SSU Intern')]).matchedCount, 0, 'shared diversion destination must remain a handset conflict');
+assert.equal(match([staff('Maria GEORGIOU', 'MMC', 'SSU')], [sheet('Maria - 25187', 'MMC', '25144/25187', 'SSU Dr')]).matchedCount, 1, 'embedded annotation can agree with either separate phone');
 // Held-out synthetic cases verify mechanics, not clinical accuracy calibration.
 const positiveCases = [
   ['Thisun (Tea)', 'Tea GUNASEN', 'explicit-alternate-name'],
@@ -284,6 +302,7 @@ ui.facilityOverviewState.contactList.resolutions = [rejected];
 assert.match(ui.renderFacilityOverviewContactResolutionMenu(suggestion, match(roster, [suggestion], [rejected]).assignments), /Allow automatic matching again/);
 assert.match(ui.renderFacilityOverviewContactAllocation(confirmed.assignments[0].contactAllocation), /Manually confirmed/);
 assert.equal(ui.renderFacilityOverviewContactAllocation({ phone: '' }), '');
+assert.match(ui.renderFacilityOverviewContactAllocation(ssuResult.assignments[0].contactAllocation), /title="Allocated telephone number: SSU Dr 25144 diverted to 25187"/);
 assert.match(ui.renderFacilityOverviewContactResolutionMenu(vhhContact, match([vhhStaff], [vhhContact]).assignments), /Confirm Tea GUNASEN/);
 const hostile = ui.renderFacilityOverviewContactAllocation({ phone: '<img>', contactKey: '" onclick="bad', uncertain: true });
 assert.doesNotMatch(hostile, /<img>|contact-resolution="" onclick/);

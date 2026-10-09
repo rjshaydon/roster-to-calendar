@@ -859,3 +859,22 @@ verification are recorded in the contact-matching plan. Deployment verification
 is reported with this release in the accompanying chat. Undoing this presentation
 change returns likely leftovers to the main unresolved list; it must not enable
 legacy SQL or remove published roster/contact data.
+
+### Contact allocation follow-up — 9 October 2026
+
+Improved exact given-name discrimination when one roster assignment uniquely
+agrees with both stream and explicit grade, with a tentative asterisk. Added
+Intern grade evidence, separate diversion-number conflict checks and source
+routing tooltip. Existing automatic matching and refresh D1 budgets are unchanged.
+MMC's external extraction now discovers section headings within A1:I64, including
+the inserted SSU Intern row and shifted Paediatric rows without entering nursing
+or other service tables. Existing Flow/script identity and cadence are retained.
+Focused matching, correction, zero-D1, sync, publication/access and actual Office
+Script fixture checks passed. Live publication verification is recorded below.
+
+Live verification: the existing MMC Flow succeeded at 10:59 and 11:00 AEDT.
+The 11:00 R2 extract contains separate AM Maria / 25144/25187 and SSU Intern
+Mary / 25732 rows. Replaying today's published MMC roster and contact extract
+with the shared matcher assigns Daniel PROCEL 25140 (tentative), Maria GEORGIOU
+25144/25187 and Mary AMEEN 25732; none of those entries remains unresolved.
+No D1 query was used for this replay; both inputs came from existing R2 objects.

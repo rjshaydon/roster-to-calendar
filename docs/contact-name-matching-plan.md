@@ -263,3 +263,20 @@ An alias editor and publication into existing R2 roster data are separate future
 This is a functional change with subtle assignment, correction, and expiry interactions. A detailed plan reduces ambiguity but does not remove the need to reason through code. Sol on Low can be trialled for narrow implementation steps with exact fixtures; it is not a demonstrated reliability guarantee for the complete change.
 
 Use Sol on Medium as the practical default for implementation. Use High to review evidence thresholds, assignment competition, correction/rejection semantics, browser/server parity, and D1 budget evidence. No model configuration is changed by this plan.
+
+## MMC contextual matching follow-up — 9 October 2026
+
+An exact given-name candidate may resolve a close score only when a single
+candidate agrees on both the contact's explicit grade and stream on the same
+roster assignment. Other plausible candidates must not agree on both or have
+stronger name evidence. This decision runs in the tentative batch and carries
+an asterisk; missing context, duplicate SMS/SR Resus candidates, supplied
+contradictory surnames and competing sheet rows retain their safeguards.
+Daniel PROCEL (Resus SMS) therefore receives Daniel's Resus SMS/SR handset,
+while Daniel YU (HMO) does not. Scores remain ranking evidence, not calibrated
+probabilities. Automatic matching still adds zero D1 or network calls.
+
+Slash-separated extensions remain separate when detecting shared handsets and
+removing matching phone annotations. The displayed source phone text is retained;
+diversion instructions are available in the allocation tooltip. No replacement
+number is inferred from a suspected typo in the contact sheet.

@@ -11291,12 +11291,14 @@ function clinicalSupportModeRank(mode) {
 function renderFacilityOverviewContactAllocation(allocation) {
   const phone = String(allocation?.phone || "").trim();
   if (!phone) return "";
+  const phoneExplanation = /\bdivert/i.test(allocation?.role || "")
+    ? `Allocated telephone number: ${allocation.role}` : "Allocated telephone number";
   const serviceLabel = allocation?.streamKey === "sepsis" ? `<small class="facility-overview-contact-service-label">Sepsis</small>` : "";
   if (allocation?.matchMethod === "manual" || allocation?.uncertain) {
-    const explanation = allocation.uncertain ? "Automatic tentative match — check allocation" : "Manually confirmed allocation";
+    const explanation = `${allocation.uncertain ? "Automatic tentative match — check allocation" : "Manually confirmed allocation"}${phoneExplanation === "Allocated telephone number" ? "" : `. ${phoneExplanation}`}`;
     return `${serviceLabel}<button type="button" class="facility-overview-contact-number ${allocation.uncertain ? "is-tentative" : "is-manual"}" data-facility-overview-contact-resolution="${escapeHtml(allocation.contactKey || "")}" title="${escapeHtml(explanation)}" aria-label="${escapeHtml(explanation)}: ${escapeHtml(phone)}. View or edit allocation"><span>${escapeHtml(phone)}</span><sup aria-hidden="true">*</sup></button>`;
   }
-  return `${serviceLabel}<span class="facility-overview-contact-number" title="Allocated telephone number">${escapeHtml(phone)}</span>`;
+  return `${serviceLabel}<span class="facility-overview-contact-number" title="${escapeHtml(phoneExplanation)}">${escapeHtml(phone)}</span>`;
 }
 
 function renderFacilityOverviewContactListStatus(matches, assignments = []) {

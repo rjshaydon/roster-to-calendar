@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import XLSX from "xlsx";
+import { readFile } from "node:fs/promises";
+import { stripTypeScriptTypes } from "node:module";
+import vm from "node:vm";
 
 import { extractDdhClinicianContactsFromWorkbook, extractMmcDoctorContactsFromWorkbook } from "../functions/_lib/contact-list-workbook.js";
 
@@ -156,3 +159,31 @@ assert.deepEqual(extract.contacts.map(({ shift, role, name, phone, isPopulated }
 ]);
 
 console.log("DDH contact workbook extraction fixtures passed.");
+
+// Exercise the actual deployed Office Script against movable section headings.
+const officeCode = stripTypeScriptTypes(await readFile(new URL('../scripts/mmc-contact-allocations-office-script.ts', import.meta.url), 'utf8'));
+const extractOffice = vm.runInNewContext(`${officeCode}; main`);
+for (const extraRows of [0, 1, 4]) {
+  const rows = Array.from({length:64}, () => Array(9).fill(''));
+  rows[1][3] = 'FRIDAY 9TH OCTOBER 2026';
+  rows[2][0] = 'ADULT EMERGENCY';
+  rows[5][0] = 'ADULT NIC'; rows[5][1] = 'Excluded';
+  rows[26][0] = 'SSU Dr 25144 diverted to 25187'; rows[26][1] = 'Maria'; rows[26][2] = '25144/25187';
+  const paeds = 29 + extraRows;
+  if (extraRows) { rows[27][0] = 'SSU Intern'; rows[27][1] = 'Mary'; rows[27][2] = '25732'; }
+  rows[paeds][0] = 'PAEDIATRIC EMERGENCY';
+  rows[paeds+1][0] = 'AM';
+  rows[paeds+2][0] = 'ROLE'; rows[paeds+2][1] = 'NAME'; rows[paeds+2][2] = 'PHONE';
+  rows[paeds+3][0] = 'Paeds Dr'; rows[paeds+3][1] = 'Suma'; rows[paeds+3][2] = '25176';
+  rows[paeds+14][0] = 'ADULTS';
+  rows[paeds+15][0] = 'HUB Security'; rows[paeds+15][1] = 'Excluded'; rows[paeds+15][2] = '25757';
+  const result = extractOffice({getWorksheet(name) { assert.equal(name, 'SHIFT ALLOCATIONS'); return {getRange(range) {assert.equal(range, 'A1:I64'); return {getTexts: () => rows};}}; }});
+  assert.equal(result.sourceDate, 'FRIDAY 9TH OCTOBER 2026');
+  assert.equal(result.contacts.length, extraRows ? 3 : 2);
+  assert.equal(result.contacts.find(c => c.name === 'Maria').phone, '25144/25187');
+  assert.equal(result.contacts.find(c => c.name === 'Suma').area, 'Paediatric Emergency');
+  if (extraRows) assert.equal(result.contacts.find(c => c.name === 'Mary').phone, '25732');
+  rows[paeds][0] = '';
+  assert.throws(() => extractOffice({getWorksheet: () => ({getRange: () => ({getTexts: () => rows})})}), /boundaries/);
+}
+console.log('MMC Office Script passed: inserted SSU Intern, movable Paeds boundary, preserved diversion phones, excluded headers/nursing, bounded 64 rows.');
