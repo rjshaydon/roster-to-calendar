@@ -2433,8 +2433,39 @@ document.addEventListener("pointerdown", (event) => {
     closeSettingsPanel();
   }
 }, true);
+// The fixed desktop header can wrap when the window narrows. Reserve its
+// measured height in both panes so navigation never slides under the name.
+function syncConsoleHeaderHeight() {
+  if (isMobileLayout()) return;
+  const section = form?.classList.contains("is-facility-overview-active") ? facilityOverviewSection : preview;
+  const header = section?.querySelector(".preview-head");
+  if (!header) return;
+  const height = Math.ceil(header.getBoundingClientRect().height);
+  if (height > 0) document.body.style.setProperty("--console-header-height", `${height}px`);
+}
+let consoleHeaderFrame = 0;
+function queueConsoleHeaderHeight() {
+  if (consoleHeaderFrame) return;
+  consoleHeaderFrame = window.requestAnimationFrame(() => {
+    consoleHeaderFrame = 0;
+    syncConsoleHeaderHeight();
+  });
+}
+if (typeof ResizeObserver !== "undefined") {
+  const headerObserver = new ResizeObserver(queueConsoleHeaderHeight);
+  const observedHeaders = new WeakSet();
+  const observeHeaders = () => {
+    for (const header of form.querySelectorAll(".preview-head")) {
+      if (!observedHeaders.has(header)) { observedHeaders.add(header); headerObserver.observe(header); }
+    }
+    queueConsoleHeaderHeight();
+  };
+  new MutationObserver(observeHeaders).observe(form, { childList: true, subtree: true });
+  observeHeaders();
+}
 window.addEventListener("resize", () => {
   syncMobileChrome();
+  queueConsoleHeaderHeight();
 });
 window.visualViewport?.addEventListener("resize", () => {
   syncMobileChrome();
@@ -11730,8 +11761,13 @@ function facilityOverviewTermsFromCoverage(coverage) {
 
 function renderFacilityOverviewCoverageNotice(data) {
   if (!data?.missing?.length) return "";
-  const hospitals = [...new Set(data.missing.map(item => displaySourceCode(item.sourceType)).filter(Boolean))].join(", ");
-  return `<article class="issue-card"><p>Some authorised roster information is unavailable${hospitals ? ` for ${escapeHtml(hospitals)}` : ""}. Results cover only the available hospitals and dates.</p></article>`;
+  const gaps = [...new Set(data.missing.map(item => {
+    const hospital = displaySourceCode(item.sourceType);
+    const from = item.startDate || item.month && `${item.month}-01`;
+    const dates = from ? ` (${formatDate(from)}${item.endDate && item.endDate !== from ? `–${formatDate(item.endDate)}` : ""})` : "";
+    return hospital ? `${hospital}${dates}` : "";
+  }).filter(Boolean))].join(", ");
+  return `<article class="issue-card"><p>Roster data is not yet available${gaps ? ` for ${escapeHtml(gaps)}` : ""}. Available shifts are shown below.</p></article>`;
 }
 
 function renderFacilityOverviewStaffResults(data, term) {
@@ -12509,7 +12545,7 @@ function renderAccountsModal(options = {}) {
         <summary class="review-top admin-users-header">
           <div class="admin-users-summary">
             <strong>Current users</strong>
-            <span data-admin-user-count>${serverUsersLoading || !serverUsersLoaded && !serverUsersUnavailable ? "Loading users…" : serverUsersUnavailable ? "Unable to load users" : filteredOtherUsers.length ? `${filteredOtherUsers.length} account${filteredOtherUsers.length === 1 ? "" : "s"}` : otherUsers.length ? "No matching users." : "No other users have logged in yet."}</span>
+            <span data-admin-user-count>${serverUsersLoading || !serverUsersLoaded && !serverUsersUnavailable ? "Loading users…" : serverUsersUnavailable && !otherUsers.length ? "Unable to load users" : filteredOtherUsers.length ? `${filteredOtherUsers.length} account${filteredOtherUsers.length === 1 ? "" : "s"}` : otherUsers.length ? "No matching users." : "No other users have logged in yet."}</span>
           </div>
           <label class="field admin-user-filter admin-user-search-filter">
             <span>Search users</span>

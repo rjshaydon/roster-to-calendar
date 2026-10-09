@@ -20,3 +20,17 @@ assert.notEqual(
 );
 assert.equal(await loadFacilitySnapshot(context, "on-shift", {}), null, "a runtime without IndexedDB must fail closed");
 console.log("Facility snapshot cache isolation, schema and expiry checks passed.");
+
+// Concurrent daily reads share decoded artifacts only within one request.
+const { memoizeSnapshotReads, loadCachedSnapshot } = await import('../functions/_lib/d1-calendar.js');
+let reads = 0;
+let revision = 1;
+const bucket = { async get() { reads++; const bytes = new TextEncoder().encode(JSON.stringify({ revision })); return { arrayBuffer: async () => bytes.buffer }; } };
+const reader = memoizeSnapshotReads(bucket);
+const concurrent = await Promise.all([loadCachedSnapshot(reader, 'manifest'), loadCachedSnapshot(reader, 'manifest')]);
+assert.equal(reads, 1);
+assert.equal(concurrent[0].revision, 1);
+revision = 2;
+assert.equal((await loadCachedSnapshot(memoizeSnapshotReads(bucket), 'manifest')).revision, 2, 'next request sees the replacement publication');
+assert.equal(reads, 2);
+console.log('Request-local R2 parsing deduplication and fresh publication checks passed.');

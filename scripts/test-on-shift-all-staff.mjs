@@ -67,9 +67,15 @@ async function request(action, body={}, override={}) {
   return {status:response.status,data,statements:sql.length,returnedRows,r2Reads:r2Gets.length};
 }
 try {
+  const login = await request('login', { responseMode: 'fast' }, { BOUNDED_MANUAL_ROSTER_ENABLED: 'true' });
+  assert.equal(login.status, 200);
+  assert.equal(login.r2Reads, 0, 'authentication must not parse roster or snapshot artifacts');
+  assert.equal(login.data.snapshotSource, 'login-deferred');
   const launch=await request('queryFacilityOverviewLaunchWindow');
   assert.equal(launch.status,200); assert.equal(launch.data.shiftWindow.facilityKey,'MMC');
   assert.equal(launch.statements,3,'account authentication and two bounded identity reads only');
+  assert.ok(!r2Gets.some(key => /month/.test(key)), 'eligibility never parses a whole roster month');
+  assert.equal(r2Gets.filter(key => key === facilityMetadataManifestKey('mmc')).length, 1, 'three day reads share one manifest parse');
   const query={date,facilityKey:'MMC'};
   const fullCreator=await request('queryFacilityOverviewOnShift',{...query,email:'creator@example.test'});
   assert.equal(fullCreator.status,200,'existing full entitlement continues with the new flag enabled');

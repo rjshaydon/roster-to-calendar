@@ -6096,7 +6096,27 @@ function snapshotRegistryEntryFromRow(row) {
   };
 }
 
+const snapshotReadCaches = new WeakMap();
+// Request-local memoization: shared manifests and staff artifacts are often
+// used by several daily reads. Never retain a mutable pointer across requests.
+export function memoizeSnapshotReads(bucket) {
+  if (!bucket?.get) return bucket;
+  const reader = new Proxy(bucket, { get(target, key) {
+    const value = Reflect.get(target, key, target);
+    return typeof value === "function" ? value.bind(target) : value;
+  } });
+  snapshotReadCaches.set(reader, new Map());
+  return reader;
+}
+
 export async function loadCachedSnapshot(r2, artifactKey) {
+  const cache = r2 && snapshotReadCaches.get(r2);
+  if (!cache) return readCachedSnapshot(r2, artifactKey);
+  if (!cache.has(artifactKey)) cache.set(artifactKey, readCachedSnapshot(r2, artifactKey));
+  return cache.get(artifactKey);
+}
+
+async function readCachedSnapshot(r2, artifactKey) {
   if (!r2?.get || !artifactKey) return null;
   try {
     const object = await r2.get(artifactKey);

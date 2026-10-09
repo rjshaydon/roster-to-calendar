@@ -10,12 +10,12 @@ export async function loadPublishedDoctorCalendar(r2, profile, { range, today, l
   if (!sources.length && !profile.identityAliasesEnforced || sources.length > 5 || sources.some(source => !known.has(source)) || aliases.length > 16) {
     throw new Error('Published doctor calendar requires bounded site identities.');
   }
-  const published = sources.length?await loadPublishedFacilityRange(r2, sources, range.startDate, range.endDate, today):{events:[],revision:'empty-identity',missing:[],visibleTerms:[]};
+  const markers = new Set(aliases.map(alias => `${alias.sourceType}|${alias.key}`));
+  const published = sources.length?await loadPublishedFacilityRange(r2, sources, range.startDate, range.endDate, today, { identityMarkers: markers }):{events:[],revision:'empty-identity',missing:[],visibleTerms:[]};
   if (published.preparing || published.events.length > 50000
     || (published.missing || []).some(item => ["month-unavailable", "staff-unavailable"].includes(item.reason))) {
     return { snapshot: null, snapshotAvailable: false, snapshotStale: false, stale: false, snapshotStatus: 'missing', snapshotSource: 'published-roster', calendarRevision: '' };
   }
-  const markers = new Set(aliases.map(alias => `${alias.sourceType}|${alias.key}`));
   const seen = new Set();
   const roster = published.events.filter(row => {
     if (!markers.has(`${row.sourceType}|${row.doctorKey}`)) return false;

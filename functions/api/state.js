@@ -52,6 +52,7 @@ import {
   findQueuedRosterSyncByHash,
   loadLatestRosterDispatch,
   loadAccountMirror,
+  memoizeSnapshotReads,
   loadAccountStateMirror,
   loadDoctorProfileMirror,
   loadSnapshotRegistryEntry,
@@ -222,6 +223,7 @@ export async function onRequestGet(context) {
 }
 
 export async function onRequestPost(context) {
+  context.env = { ...context.env, ROSTER_FILES: memoizeSnapshotReads(context.env.ROSTER_FILES) };
   const requestStartedAt = Date.now();
   try {
     const body = await context.request.json().catch(() => null);
@@ -350,9 +352,9 @@ export async function onRequestPost(context) {
       // not share the free Worker's CPU allowance. The authenticated client
       // already requests the calendar automatically after this envelope.
       const firstLinkedLogin = account.created || !sanitizeClaims(account.record.claims).length && sanitizeClaims(loginRecord.claims).length > 0;
-      const snapshotPayload = loginResponseMode === "fast" && firstLinkedLogin
+      const snapshotPayload = loginResponseMode === "fast" && (firstLinkedLogin || context.env.BOUNDED_MANUAL_ROSTER_ENABLED === "true")
         ? { snapshot: null, snapshotAvailable: false, snapshotCurrent: false, snapshotStale: false,
-            snapshotBuiltAt: "", snapshotStatus: "missing", snapshotSource: "first-login-deferred", calendarRevision: "" }
+            snapshotBuiltAt: "", snapshotStatus: "missing", snapshotSource: firstLinkedLogin ? "first-login-deferred" : "login-deferred", calendarRevision: "" }
         : loginResponseMode === "fast" || !accountSnapshotBuildEnabled(context.env)
         ? await loadFastAccountSnapshotPayload(context, {
             targetRecord: loginRecord,
@@ -881,7 +883,9 @@ export async function onRequestPost(context) {
             facilityAccessMaterialized: materializedAccessFor(account.record, target),
             includeAvailableDoctors: !targetClaims.length,
           });
-      const snapshotPayload = responseMode === "fast" || !accountSnapshotBuildEnabled(context.env)
+      const snapshotPayload = responseMode === "fast" && context.env.BOUNDED_MANUAL_ROSTER_ENABLED === "true"
+        ? { snapshot: null, snapshotAvailable: false, snapshotCurrent: false, snapshotStale: false, snapshotSource: "account-switch-deferred" }
+        : responseMode === "fast" || !accountSnapshotBuildEnabled(context.env)
         ? await loadFastAccountSnapshotPayload(context, {
             targetRecord: target,
             prepared,
@@ -2122,11 +2126,11 @@ export async function onRequestPost(context) {
         const selection = readerSelectionFor([...new Set(claims.map(claim => claim.sourceType))], true);
         if (selection.route !== "shared") return null;
         const today = australianDateKey();
-        const published = await loadPublishedFacilityRange(context.env.ROSTER_FILES, selection.sources,
-          isoDateKey(addUtcDays(today, -1)), isoDateKey(addUtcDays(today, 1)), today);
-        if (published.preparing) return null;
+        const days = await Promise.all([-1, 0, 1].map(offset => loadPublishedFacilityDays(
+          context.env.ROSTER_FILES, selection.sources, isoDateKey(addUtcDays(today, offset)), today)));
+        if (days.every(day => day.preparing)) return null;
         const identities = new Set(claims.map(claim => `${claim.sourceType}|${normalizeRosterName(claim.key)}`));
-        const events = (published.events || []).filter(row => identities.has(`${row.sourceType}|${row.doctorKey}`))
+        const events = days.flatMap(day => day.rows || []).filter(row => identities.has(`${row.sourceType}|${row.doctorKey}`))
           .map(row => ({ ...row.event, sourceType: row.sourceType }));
         return onShiftLaunchWindow(events);
       })();
@@ -4439,6 +4443,7 @@ async function filterCachedSnapshotForReturn(snapshot, options = {}) {
 }
 
 async function loadAccountSnapshotPayload(context, params = {}) {
+  if (context.env.BOUNDED_MANUAL_ROSTER_ENABLED === "true") return loadFastAccountSnapshotPayload(context, params);
   const db = context.env?.ROSTER_DB;
   const targetRecord = params.targetRecord;
   const prepared = params.prepared;

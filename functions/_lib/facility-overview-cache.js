@@ -611,6 +611,7 @@ export async function loadPublishedFacilityRange(r2, sourceTypes, startDate, end
       if (!Array.isArray(snapshot?.rows)) { missing.push({ sourceType, month, startDate, endDate, reason: "month-unavailable" }); continue; }
       availableMonths += 1;
       for (const row of snapshot.rows || []) {
+        if (options.identityMarkers && !options.identityMarkers.has(`${row.sourceType}|${row.doctorKey}`)) continue;
         const date = String(row.event?.start || "").slice(0, 10);
         if (date < startDate || date > endDate || !publications.some(({term,empty}) => !empty && term.termStart <= date && term.termEnd >= date)) continue;
         const term = publications.find(({term}) => term.termStart <= date && term.termEnd >= date)?.term;
@@ -736,7 +737,7 @@ export async function loadPublishedRosterDoctors(r2, today) {
   const people = new Map();
   let published = 0;
   const missingSources = [];
-  for (const sourceType of ["mmc", "mch", "ddh", "vhh"]) {
+  await Promise.all(["mmc", "mch", "ddh", "vhh"].map(async sourceType => {
     const manifest = await loadCachedSnapshot(r2, facilityMetadataManifestKey(sourceType));
     if ((manifest?.terms || []).length > 64) throw new Error("Published doctor directory exceeds the manifest limit.");
     const terms = (manifest?.terms || []).filter(term => rosterTermVisible(term, today) && term.termEnd >= today).sort((a, b) => a.termStart.localeCompare(b.termStart));
@@ -766,7 +767,7 @@ export async function loadPublishedRosterDoctors(r2, today) {
     }
     if (found) published += 1;
     else missingSources.push(sourceType);
-  }
+  }));
   return { preparing: published === 0, doctors: [...people.values()].sort((a, b) => a.displayName.localeCompare(b.displayName) || a.sourceType.localeCompare(b.sourceType)), missingSources };
 }
 
