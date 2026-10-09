@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile, readdir } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
+import { runInNewContext } from "node:vm";
 import { resolveFacilityOverviewAccess } from "../functions/api/state.js";
 
 const claim = (sourceType, key = "TEST DOCTOR") => ({ sourceType, key, displayName: "Test Doctor" });
@@ -165,3 +166,54 @@ assert.match(stateSource, /function sanitizeDetectedSources[\s\S]*vhh: Array\.is
 assert.match(appSource.match(/function sanitizeWorkspaceSnapshot[\s\S]*?function sanitizeInsightCache/)?.[0] || "", /vhh: Array\.isArray\(value\.detectedSources\?\.vhh\)/, "browser snapshot caching must preserve VHH as a detected source");
 
 console.log("Facility overview access tests passed.");
+
+// Execute the production action, including its guards and catch, with controlled
+// reader completion. Prove concurrency without timing-sensitive sleeps.
+const onShiftAction = stateSource.slice(stateSource.indexOf('    if (action === "queryFacilityOverviewOnShift")'), stateSource.indexOf('    if (action === "queryFacilityOverviewContactList")'));
+function onShiftHarness(options = {}) {
+  const calls = [];
+  const events = [{sourceType:'mmc', event:{title:'MMC: AM'}}];
+  const published = {rows:events, missing:[], revision:'roster', preparing:options.preparing === true};
+  const env = {ROSTER_FILES:{}, ROSTER_DB:new Proxy({}, {get(){throw Error('Shared On shift must not touch D1');}})};
+  const globals = {Response, Date, Promise, console:{error(){}}, action:'queryFacilityOverviewOnShift',
+    body:{date:'2026-10-09', facilityKey:options.site || 'MMC', cachedRevision:options.unchanged ? 'revision' : ''},
+    context:{env}, sharedFacilityDaysEnabled:true, sharedFacilityContactsEnabled:options.contacts !== false,
+    facilityOverviewEnabled:()=>true, facilityOverviewAccess:async()=>({mode:options.denied ? 'denied' : 'all'}),
+    facilityOverviewOrdinaryRangeAllowed:()=>true, facilityAccessAllows:()=>true, facilityAccessKeys:()=>['mmc'],
+    shiftWindowForRequestedRoster:async()=>null, facilityOverviewAccessDeniedResponse:()=>Response.json({denied:true},{status:403}),
+    sanitizeSourceTypes:sources=>sources.map(s=>s.toLowerCase()), constrainFacilityOverviewSourceTypes:()=>['mmc','ddh'],
+    readerSelectionFor:sources=>({route:'shared', sources, missing:[]}), australianDateKey:()=> '2026-10-09',
+    facilityContactReaderSources:()=>['mmc','ddh'],
+    loadPublishedFacilityDays:async()=>{calls.push('roster'); return options.roster ? options.roster : published;},
+    loadPublishedFacilityContacts:async()=>{calls.push('contacts'); return options.contact ? options.contact : {status:'available', contacts:[]};},
+    isFacilityOverviewWorkingEvent:()=>true, issueFacilityContactAccessToken:async()=>{calls.push('token');return 'token';},
+    publishedReadRevision:async()=> 'revision',
+    loadPublishedPreviousDdhNight:async()=>{calls.push('previous-night');return {rows:[]};},
+    facilityOverviewPreparingResponse:()=>Response.json({preparing:true,events:[]},{status:503}),
+    sharedRouteUnavailable:()=>Response.json({unavailable:true},{status:503})};
+  const run = runInNewContext(`async function run(){${onShiftAction}}; run`, globals);
+  return {run, calls, events};
+}
+let releaseRoster, releaseContacts;
+const rosterGate=new Promise(resolve=>{releaseRoster=resolve;});
+const contactsGate=new Promise(resolve=>{releaseContacts=resolve;});
+const parallel=onShiftHarness({roster:rosterGate, contact:contactsGate});
+const pending=parallel.run();
+for(let i=0;i<8;i++) await Promise.resolve();
+assert.deepEqual(parallel.calls,['roster','contacts'],'contacts must start while the roster is still pending');
+releaseRoster({rows:parallel.events, missing:[], preparing:false});
+releaseContacts({status:'available',contacts:[]});
+assert.equal((await pending).status,200);
+assert.deepEqual(parallel.calls,['roster','contacts','token'],'one read of each component, no retries');
+for(const options of [{}, {contacts:false}, {contact:{status:'unavailable',reason:'storage-unavailable'}}, {unchanged:true}, {site:'DDH'}, {site:'ALL'}, {denied:true}, {preparing:true}]) {
+  const harness=onShiftHarness(options), response=await harness.run(), payload=await response.json();
+  assert.equal(response.status,options.denied ? 403 : options.preparing ? 503 : 200);
+  assert.equal(harness.calls.filter(c=>c==='roster').length,options.denied ? 0 : 1);
+  assert.equal(harness.calls.filter(c=>c==='contacts').length,options.denied || options.contacts===false || options.site==='ALL' ? 0 : 1);
+  assert.equal(harness.calls.filter(c=>c==='previous-night').length,options.site==='DDH' ? 1 : 0);
+  if(options.unchanged) assert.equal(payload.events,undefined);
+  if(options.preparing) assert.deepEqual(payload.events,[]);
+}
+const failure=onShiftHarness({roster:Promise.resolve().then(()=>{throw Error('Storage failure');})});
+assert.equal((await failure.run()).status,503,'existing roster failure response is preserved without retry');
+console.log('Shared On shift concurrency passed: independent reads overlap, no D1, no retries, unchanged access/expiry/failure paths and bounded DDH context.');

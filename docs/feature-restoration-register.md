@@ -878,3 +878,23 @@ Mary / 25732 rows. Replaying today's published MMC roster and contact extract
 with the shared matcher assigns Daniel PROCEL 25140 (tentative), Maria GEORGIOU
 25144/25187 and Mary AMEEN 25732; none of those entries remains unresolved.
 No D1 query was used for this replay; both inputs came from existing R2 objects.
+
+### On shift initial-load performance — 9 October 2026
+
+The shared On shift action starts the independent published roster and contact
+R2 readers together after its existing access and source checks. It issues the
+same readers once each on a normal view, without additional SQL, browser
+requests, retry logic or polling. Two reader chains overlap; their own bounded
+object reads and parsing remain unchanged. A preparing roster still returns the
+existing 503 response; a missing contact extract still permits the roster to
+render. Because reads overlap, a contact read can now finish even when the
+roster is preparing; this is bounded R2 work, not additional D1 work.
+
+Regression executes the actual production action with independently held reader
+promises, proving that contacts start before the roster finishes. It verifies
+no D1 access, one call per reader, no retries, access denial before reads,
+contact-disabled and all-site paths, revision reuse, DDH previous-night context,
+and existing storage-failure/preparing responses. Overview startup, snapshot
+isolation, contact publication/matching, DDH night review and client request
+budget suites pass. This is a reduced sequential wait, not a measured guarantee
+of a particular first-login duration or a guarantee against unrelated outages.

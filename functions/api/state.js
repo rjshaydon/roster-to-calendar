@@ -2267,18 +2267,22 @@ export async function onRequestPost(context) {
         if (readRoute === "blocked") return sharedRouteUnavailable();
         if (readRoute === "shared") {
           if (!sharedFacilityDaysEnabled) return sharedRouteUnavailable();
-          const published = await loadPublishedFacilityDays(context.env.ROSTER_FILES, selection.sources, date, australianDateKey());
+          const contactReadable = sharedFacilityContactsEnabled
+            && facilityKeys.length === 1
+            && facilityContactReaderSources(context.env).includes(facilityKeys[0]);
+          // Two bounded R2 readers; neither needs the other's result. Keep the
+          // authenticated access checks above and avoid any extra SQL or retry.
+          const [published, contactList] = await Promise.all([
+            loadPublishedFacilityDays(context.env.ROSTER_FILES, selection.sources, date, australianDateKey()),
+            contactReadable
+              ? loadPublishedFacilityContacts(context.env.ROSTER_FILES, { date, facilityKeys })
+              : { status: "unavailable", contacts: [], revision: "" },
+          ]);
           if (published.preparing) return facilityOverviewPreparingResponse({ events: [] });
           const events = published.rows.filter((row) => isFacilityOverviewWorkingEvent(row.event, {
             facilityKey: row.sourceType,
             includeClinicalSupport: body?.includeClinicalSupport === true,
           }));
-          const contactReadable = sharedFacilityContactsEnabled
-            && facilityKeys.length === 1
-            && facilityContactReaderSources(context.env).includes(facilityKeys[0]);
-          const contactList = contactReadable
-            ? await loadPublishedFacilityContacts(context.env.ROSTER_FILES, { date, facilityKeys })
-            : { status: "unavailable", contacts: [], revision: "" };
           const contactAccessToken = contactReadable
             ? await issueFacilityContactAccessToken(context.env.FACILITY_CONTACT_ACCESS_SECRET, {
                 facilityKey: facilityKeys[0],
