@@ -3,7 +3,10 @@
 The next work follows the [4 October batch plan](./restoration-batch-plan-2026-10-04.md).
 The 2 October release section below predates completed Working together/history,
 VHH gap recovery and the DDH five-minute scheduler; consult the 3 October
-checkpoints for those outcomes. The new freshness target is not yet implemented.
+checkpoints for those outcomes. Five-minute metadata reconciliation was accepted
+on 5 October under the revised traffic policy. The numbered entries retain dated
+incident history; use the batch plan and later acceptance checkpoints for current
+release status.
 
 ## Purpose and maintenance rule
 

@@ -146,3 +146,45 @@ it was moved to the current canonical `rtc.curiousmind.app`. Existing deployment
 URLs retain their old client code. Automated registration acceptance remains
 blocked by old queued import records as described above; that is separate from
 the now-completed manual cached-name audit.
+
+### Automatic maintenance acceptance — 10 October 2026
+
+Production commit `88139c5` and the Pages/Worker identity flags were verified.
+The five-minute Worker cron is deployed; the weekly audit window is Sunday
+03:30–04:30 Melbourne time. Added actual scheduler/handler regression coverage
+for the window boundaries, paused automation, completed-week suppression and
+active-import exclusion. Existing identity operations, bounded linking, editor
+and suggestion-cache suites passed.
+
+Reconciled exactly three old queued runs after checking their retained source
+files, newer successful imports of the same filename, and inactive staging:
+MMC provider versions 394/395 and VHH provider version 1154. They are now
+`superseded`, with an explanatory message; no roster, account or identity data
+was deleted or merged. The exact SQL and before/after records are private.
+The reconciliation reported 14 rows read and 12 rows written including indexes
+and import bookkeeping. Production queue readback confirms all three changes.
+
+The 09:40 AEDT scheduled tick then advanced registration run
+`e79fcc61-475a-40b3-93a0-1afa7fab6e22` from 100 to 105 examined names. This is
+actual automatic progress, not a manually authenticated replay. The account
+admission remained open with no stop reason. Full catch-up is not yet complete:
+the cached historical-name inspection found 525 names without registered aliases.
+
+Cursor validation also found 209 of those names before the resumed cursor.
+Registration now checks the bounded cached names/aliases before marking a pass
+complete and rewinds before the earliest missing or changed name. This avoids
+publishing an unchanged receipt that permanently skips history added during a
+run. Each registration request still processes at most five names; the completion
+inspection has a 2,001-row guard and reads no shifts. A growing-directory
+regression proves the missing historical name is registered before completion.
+
+The account-wide comparison returned GO at 652,156 reads / 35,017 writes,
+projecting approximately 670,000 reads for that UTC quota day. These are settled
+analytics, not a claim that the later maintenance requests are already included.
+Both existing subscription URLs returned HTTP 200 before and after reconciliation
+with exactly the same event UIDs: 133 ordinary-account and 154 Creator events.
+No human suggestion decisions were changed. Private live logging was stopped.
+
+Remaining acceptance: observe complete catch-up (including the earlier historical
+names) and the real scheduled audit on Sunday 11 October. Today's scheduler and
+handler tests are not a substitute for that future production run.

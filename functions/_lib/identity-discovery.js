@@ -91,7 +91,18 @@ export async function auditIdentityBatch(db,doctors,{runId,actor='identity-audit
   }
   await db.prepare('UPDATE roster_identity_features SET audited_fingerprint=? WHERE source_type=? AND doctor_key=?').bind(featureHash,alias.sourceType,alias.key).run();
  }
- const cursor=processed.at(-1)?.marker || run.cursor, complete=register?!identities.some(a=>a.marker>cursor):pending.length<=processed.length;
+ let cursor=processed.at(-1)?.marker || run.cursor, complete=register?!identities.some(a=>a.marker>cursor):pending.length<=processed.length;
+ if(register && complete) {
+  // The authoritative directory can grow behind a saved cursor (for example
+  // when historical names are restored). Do not publish an unchanged receipt
+  // until every current name has a registered alias and matching cache entry.
+  const cached=await all(db,`SELECT f.source_type,f.doctor_key,f.display_name FROM roster_identity_features f
+    JOIN roster_person_aliases a ON a.source_type=f.source_type AND a.doctor_key=f.doctor_key LIMIT 2001`);
+  if(cached.length>2000) throw Error('Registered identity name cache exceeds the completion inspection limit.');
+  const names=new Map(cached.map(a=>[a.source_type+':'+a.doctor_key,a.display_name]));
+  const missed=identities.findIndex(a=>names.get(a.marker)!==a.displayName);
+  if(missed>=0) {cursor=identities[missed-1]?.marker||'';complete=false;}
+ }
  await db.prepare("UPDATE roster_identity_audit_runs SET cursor=?,status=?,examined=examined+?,candidates=candidates+?,updated_at=?,lease_token='',lease_until='' WHERE run_id=? AND cursor=? AND lease_token=?").bind(cursor,complete?'complete':'running',processed.length,candidateCount,now,run.run_id,run.cursor,lease).run();
  return {runId:run.run_id,status:complete?'complete':'running',cursor,examined:run.examined+processed.length,candidates:run.candidates+candidateCount,skippedLargeBlocks,durationMs:Date.now()-startedAt};
 }

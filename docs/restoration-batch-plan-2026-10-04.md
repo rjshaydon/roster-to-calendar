@@ -1,8 +1,9 @@
 # Remaining restoration and development batches — 4 October 2026
 
 Status: Batch 1 roster traffic cutover accepted; Batch 2 production rollout is
-merged and enabled, with final initialization/automatic registration acceptance
-pending. See the 6 October checkpoint in
+merged and enabled. Automatic registration resumed after exact queue
+reconciliation on 10 October; historical catch-up completion and the first real
+weekly audit remain acceptance checks. See the 10 October checkpoint in
 `restoration-batch2-acceptance-2026-10-05.md` for verified results and limitations.
 The user's agreed priority is **1 → 2 → 6 → 7 → 3 → 4 → 5 → 8**,
 retaining the original batch numbers for continuity. This plan supersedes earlier
