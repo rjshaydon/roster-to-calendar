@@ -5,6 +5,8 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {markRosterDeliveryDeferred,loadRosterDeliveryWarnings,clearRosterDeliveryWarning} from '../functions/_lib/roster-delivery-health.js';
+import {onRequestPost as metadataCheck} from '../functions/api/automation/roster-check.js';
+import {onRequestGet as pendingCheck} from '../functions/api/automation/pending.js';
 import {requestQueuedRosterProcessing,recordRosterDispatchLifecycle} from '../functions/_lib/automation-dispatch.js';
 const sqlite=new DatabaseSync(':memory:');
 for(const name of (await readdir('migrations')).filter(n=>n.endsWith('.sql')).sort()) sqlite.exec(await readFile('migrations/'+name,'utf8'));
@@ -48,7 +50,19 @@ try{
  globalThis.fetch=async()=>{throw Error('Deferred dispatch must coalesce until retry time');};
  assert.equal((await requestQueuedRosterProcessing({...env,ROSTER_ACCOUNT_BUDGET_ENABLED:'false'},{sourceId:'monash-adults'})).dispatched,false);
  sqlite.prepare("UPDATE roster_sync_runs SET status='success' WHERE id='run'").run();
- await recordRosterDispatchLifecycle(env,{sourceId:'monash-adults',dispatchId:started.dispatch.id,event:'completed'});
+ const publishingEnv={...env,FACILITY_AUTOMATIC_PUBLICATION_ENABLED:'true',ROSTER_METADATA_CHECK_ENABLED:'true',ROSTER_AUTOMATION_TOKEN:'fixture'};
+ sqlite.prepare("INSERT INTO facility_refresh_jobs(source_type,term_start,dates_json,content_signature,request_revision,updated_at) VALUES('mmc','2026-08-03','[]','revision','revision',?)").run(queuedAt);
+ await recordRosterDispatchLifecycle(publishingEnv,{sourceId:'monash-adults',dispatchId:started.dispatch.id,event:'completed'});
+ assert.deepEqual(await loadRosterDeliveryWarnings(r2,['mmc']),[{sourceType:'mmc',status:'delayed'}],'unfinished publication retains the warning after import success');
+ sqlite.exec("UPDATE raw_roster_files SET name='AdultTerm3.2026.xlsx';UPDATE roster_sync_runs SET provider_version='1'");
+ const check=await (await metadataCheck({env:publishingEnv,request:new Request('https://test/api/automation/roster-check',{method:'POST',headers:{authorization:'Bearer fixture'},body:JSON.stringify({sourceId:'monash-adults',fileName:'AdultTerm3.2026.xlsx',providerVersion:'1'})})})).json();
+ assert.equal(check.download,false,'unchanged roster publication never requests another workbook download');
+ assert.equal(check.status,'deferred','unfinished publication is visible through unchanged metadata polling');
+ const pending=await (await pendingCheck({env:publishingEnv,request:new Request('https://test/api/automation/pending?sourceId=monash-adults',{headers:{authorization:'Bearer fixture'}})})).json();
+ assert.equal(pending.publicationPending,true);
+ assert.equal(pending.runs.length,0,'publication resumes after the file import is already successful');
+ sqlite.prepare("UPDATE facility_refresh_jobs SET status='complete'").run();
+ await recordRosterDispatchLifecycle(publishingEnv,{sourceId:'monash-adults',dispatchId:started.dispatch.id,event:'completed'});
  assert.deepEqual(await loadRosterDeliveryWarnings(r2,['mmc']),[]);
 }finally{globalThis.fetch=originalFetch;}
 const folder=await mkdtemp(join(tmpdir(),'roster-outcomes-'));
@@ -56,12 +70,15 @@ try{
  // Run the real processor in a child so its intentional successful exit on
  // deferral cannot terminate this test. No network access or workbook fetch.
  const preload=join(folder,'preload.mjs'),output=join(folder,'output');
- await writeFile(preload,`globalThis.fetch=async url=>{const path=new URL(url).pathname;return Response.json(path.endsWith('account-budget')?{deferred:process.env.TEST_DEFER==='true'}:{runs:[]});};`);
- for(const [defer,expected] of [['true','deferred'],['false','completed']]){
+ await writeFile(preload,`let published=false;globalThis.fetch=async url=>{const path=new URL(url).pathname;console.log('TESTCALL '+path);if(path.endsWith('account-budget'))return Response.json({deferred:process.env.TEST_DEFER==='true'});if(path.endsWith('facility-refresh')){published=true;return Response.json(process.env.TEST_PUBLICATION==='deferred'?{deferred:true}:{completed:true});}return Response.json({runs:[],boundedImportEnabled:true,publicationPending:Boolean(process.env.TEST_PUBLICATION)&&(process.env.TEST_PUBLICATION==='deferred'||!published)});};`);
+ for(const [defer,publication,expected] of [['true','','deferred'],['false','','completed'],['false','done','completed'],['false','deferred','deferred']]){
   await writeFile(output,'');
-  const result=spawnSync(process.execPath,['--import',preload,'scripts/process-roster-queue.mjs'],{encoding:'utf8',env:{...process.env,TEST_DEFER:defer,ROSTER_AUTOMATION_TOKEN:'test-only',ROSTER_AUTOMATION_SOURCE_ID:'monash-adults',GITHUB_OUTPUT:output}});
+  const result=spawnSync(process.execPath,['--import',preload,'scripts/process-roster-queue.mjs'],{encoding:'utf8',env:{...process.env,TEST_DEFER:defer,TEST_PUBLICATION:publication,ROSTER_AUTOMATION_TOKEN:'test-only',ROSTER_AUTOMATION_SOURCE_ID:'monash-adults',GITHUB_OUTPUT:output}});
   assert.equal(result.status,0,result.stderr);
   assert.equal((await readFile(output,'utf8')).trim(),'result='+expected,'GitHub receives the actual processor result');
+  assert.equal(result.stdout.includes('/api/automation/raw'),false);
+  assert.equal(result.stdout.includes('/api/automation/parser-config'),false,'publication-only work never reparses an unchanged file');
+  if(publication)assert.equal(result.stdout.split('TESTCALL /api/automation/facility-refresh').length-1,1);
  }
 }finally{await rm(folder,{recursive:true,force:true});}
 console.log('Delayed-only warnings, corrupt diagnostics, blocked dispatch, retained queue and honest GitHub outcomes passed.');

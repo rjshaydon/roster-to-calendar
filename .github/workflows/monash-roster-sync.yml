@@ -53,7 +53,7 @@ jobs:
           count="$(curl --fail --silent --show-error \
             --header "Authorization: Bearer ${ROSTER_AUTOMATION_TOKEN}" \
             "${ROSTER_AUTOMATION_BASE_URL}/api/automation/pending?limit=1&sourceId=${ROSTER_AUTOMATION_SOURCE_ID}" \
-            | jq -r '.runs | length')"
+            | jq -r '(.runs | length) + (if .publicationPending then 1 else 0 end)')"
           echo "count=${count}" >> "$GITHUB_OUTPUT"
           echo "Found ${count} changed roster file(s) waiting."
       - name: Record processor start

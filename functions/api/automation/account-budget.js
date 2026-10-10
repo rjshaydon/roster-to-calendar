@@ -29,11 +29,17 @@ export async function refreshAccountMaintenanceBudget(context) {
     if (!analytics.complete) throw new Error("Account analytics did not reconcile.");
     // Recovery bookkeeping has a small fixed bound; do not spend it when the
     // account itself is already too close to the unchanged maintenance ceiling.
+    const previousDay=new Date(Date.parse(interval.start)-86400000).toISOString().slice(0,10);
     const recovered=analytics.totals.rowsRead<3999000 && analytics.totals.rowsWritten<79000
-      ?await recoverAbandonedMaintenance(db,day,interval.observedUntil):0;
-    const receipts = (await db.prepare("SELECT reserved_reads,reserved_writes,actual_reads,actual_writes,finished_at,metadata_complete,reconciled_at FROM roster_maintenance_receipts WHERE utc_day=? LIMIT 10001").bind(day).all()).results || [];
+      ?await recoverAbandonedMaintenance(db,day,interval.observedUntil)+await recoverAbandonedMaintenance(db,previousDay,interval.observedUntil):0;
+    const receipts = (await db.prepare("SELECT utc_day,reserved_reads,reserved_writes,actual_reads,actual_writes,finished_at,metadata_complete,reconciled_at FROM roster_maintenance_receipts WHERE utc_day=? LIMIT 10001").bind(day).all()).results || [];
     if (receipts.length > 10000) throw new Error("Maintenance receipt inspection bound reached.");
-    const outstanding = outstandingMaintenance(receipts, interval.observedUntil);
+    // A batch admitted immediately before midnight may still be draining.
+    // Carry its bounded unknown cost until today's settled cutoff covers it;
+    // never refund yesterday's receipt into today's allocated grant.
+    const carry=(await db.prepare("SELECT utc_day,reserved_reads,reserved_writes,actual_reads,actual_writes,finished_at,metadata_complete,reconciled_at FROM roster_maintenance_receipts WHERE utc_day=? AND recover_after>? AND reconciled_at='' LIMIT 10001").bind(previousDay,interval.start).all()).results||[];
+    if(carry.length>10000) throw new Error('Previous-day maintenance receipt inspection bound reached.');
+    const outstanding = outstandingMaintenance([...receipts,...carry], interval.observedUntil);
     const settledMaintenance = receipts.reduce((sum, row) => {
       if (!row.reconciled_at && Number(row.metadata_complete) === 1 && row.finished_at && row.finished_at <= interval.observedUntil) {
         // Stored actual costs include 24 estimated settlement units; subtract

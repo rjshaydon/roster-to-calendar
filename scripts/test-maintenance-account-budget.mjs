@@ -157,3 +157,30 @@ await assert.rejects(()=>expired.binding.prepare('SELECT 1').run(),e=>e.code==='
 await assert.rejects(()=>expired.binding.batch([expired.binding.prepare('SELECT 1')]),e=>e.code==='d1-request-deadline-exceeded');
 assert.equal(underlyingCalls,0,'expired requests cannot issue more SQL');
 console.log('Bounded recovery, legacy retention, midnight isolation, replay, late settlement, circuit breaker and protected roster headroom passed.');
+
+// Cross-midnight in-flight batches remain covered in the new day's headroom,
+// while reconciliation can only release the original day's allocated grant.
+const RealDate=Date;
+let instant=RealDate.parse(day+'T00:30:00.000Z');
+const previousDay=new RealDate(instant-86400000).toISOString().slice(0,10);
+try {
+ globalThis.Date=class extends RealDate {constructor(...args){super(...(args.length?args:[instant]));}static now(){return instant;}};
+ globalThis.fetch=async()=>Response.json({data:{viewer:{accounts:[{
+  usage:[{dimensions:{databaseId:inventory.databases[0].id||'237d0d52-3a7c-4e02-8648-9f4dedbc1cb0'},sum:{rowsRead:100,rowsWritten:10,readQueries:1,writeQueries:1}}],
+  timeline:[{dimensions:{databaseId:'237d0d52-3a7c-4e02-8648-9f4dedbc1cb0',datetimeFiveMinutes:new Date(instant-20*60000).toISOString()},sum:{rowsRead:100,rowsWritten:10,readQueries:1,writeQueries:1}}],queries:[]
+ }]}}});
+ const before=await (await admit(context)).json();
+ assert.equal(before.deferred,false,JSON.stringify(before));
+ receipt.run('cross-midnight',previousDay,600,700,day+'T01:00:00.000Z','',0);
+ sqlite.prepare('INSERT INTO roster_account_budget(utc_day,allocated_reads,allocated_writes) VALUES(?,600,700)').run(previousDay);
+ const held=await (await admit(context)).json();
+ assert.equal(held.outstanding.reads-before.outstanding.reads,600);
+ assert.equal(held.outstanding.writes-before.outstanding.writes,700);
+ const todayAllocated=sqlite.prepare('SELECT allocated_writes FROM roster_account_budget WHERE utc_day=?').get(day).allocated_writes;
+ instant=RealDate.parse(day+'T01:25:00.000Z');
+ const recovered=await (await admit(context)).json();
+ assert.equal(recovered.recovered,1,JSON.stringify(recovered));
+ assert.equal(sqlite.prepare('SELECT allocated_writes FROM roster_account_budget WHERE utc_day=?').get(previousDay).allocated_writes,0);
+ assert.equal(sqlite.prepare('SELECT allocated_writes FROM roster_account_budget WHERE utc_day=?').get(day).allocated_writes,todayAllocated,'yesterday cannot refund today');
+}finally{globalThis.Date=RealDate;globalThis.fetch=originalFetch;}
+console.log('Cross-midnight unknown work remains reserved until settled analytics covers its execution bound.');

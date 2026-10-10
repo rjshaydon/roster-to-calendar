@@ -21,3 +21,11 @@ export async function loadRosterDeliveryWarnings(r2,sourceTypes,now=Date.now()) 
  }));
  return warnings.filter(Boolean);
 }
+
+// Compact indexed checkpoint only: unchanged files never need another parse
+// merely because their shared-view publication was interrupted.
+export async function loadPendingRosterPublication(env,sourceId) {
+ const source=sources[sourceId];
+ if(!source || env.FACILITY_AUTOMATIC_PUBLICATION_ENABLED!=='true') return null;
+ return env.ROSTER_DB.prepare("SELECT updated_at FROM facility_refresh_jobs WHERE source_type=? AND status='pending' ORDER BY term_start LIMIT 1").bind(source).first();
+}

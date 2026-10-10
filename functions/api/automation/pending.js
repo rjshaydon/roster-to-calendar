@@ -1,3 +1,4 @@
+import {loadPendingRosterPublication} from "../../_lib/roster-delivery-health.js";
 import { hasCalendarDb, listQueuedRosterSyncRuns } from "../../_lib/d1-calendar.js";
 import { localFeatureDisabledResponse } from "../../_lib/outbound-network.js";
 import { automatedRosterQueueEnabled, automatedRosterSourceEnabled, automatedRosterWritesEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
@@ -26,6 +27,7 @@ export async function onRequestGet(context) {
   return Response.json({
     ok: true,
     boundedImportEnabled,
+    publicationPending: Boolean(await loadPendingRosterPublication(context.env,sourceId)),
     maintenanceDeferred,
     maintenanceBudget: boundedImportEnabled ? { utcDay: new Date().toISOString().slice(0, 10), baseWrites: Number(allowance?.reserved_writes || 0), baseReads: Number(allowance?.reserved_reads || 0) } : null,
     runs: runs.map(({ objectKey: _objectKey, ...run }) => run),

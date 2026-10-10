@@ -295,7 +295,7 @@ assert.equal(
 );
 sqlite.prepare("DELETE FROM roster_files WHERE id = ?").run("historical-unprepared");
 assert.equal((await queryMaterializedFacilityTermStaff(db, { sourceType: "mmc", termStart: "2026-08-03" })).length, 2);
-assert.equal(sqlite.prepare("SELECT visible_from FROM facility_term_visibility WHERE source_type='mmc' AND term_start='2026-08-03'").get().visible_from, "2026-07-20");
+assert.equal(sqlite.prepare("SELECT visible_from FROM facility_term_visibility WHERE source_type='mmc' AND term_start='2026-08-03'").get().visible_from, "2026-07-01");
 
 db.rowsWritten = 0;
 const unchanged = await replaceDerivedRosterFile(db, file, doctors, initialEvents);
@@ -422,10 +422,10 @@ await assertPublicationPlanInvalidated("seniority override", async () => {
 }, async () => {
   sqlite.prepare("DELETE FROM facility_staff_seniority_overrides WHERE id='test-override'").run();
 });
-await assertPublicationPlanInvalidated("term visibility", async () => {
-  sqlite.prepare("UPDATE facility_term_visibility SET visible_from='2026-07-21' WHERE source_type='mmc' AND term_start='2026-08-03'").run();
+await assertPublicationPlanInvalidated("term visibility revision", async () => {
+  sqlite.prepare("UPDATE facility_term_visibility SET revision='changed-visibility' WHERE source_type='mmc' AND term_start='2026-08-03'").run();
 }, async () => {
-  sqlite.prepare("UPDATE facility_term_visibility SET visible_from='2026-07-20' WHERE source_type='mmc' AND term_start='2026-08-03'").run();
+  sqlite.prepare("UPDATE facility_term_visibility SET revision='' WHERE source_type='mmc' AND term_start='2026-08-03'").run();
 });
 await assertPublicationPlanInvalidated("compact coverage", async () => {
   sqlite.prepare("UPDATE roster_file_coverage SET content_revision='changed-content' WHERE file_id=?").run(file.id);
@@ -544,8 +544,8 @@ db.sql = [];
 const publishedDay = await loadPublishedFacilityDays(r2, ["mmc"], "2026-08-03");
 assert.equal(publishedDay.preparing, false);
 assert.equal(publishedDay.rows.length, 2);
-assert.equal((await loadPublishedFacilityDays(r2, ["mmc"], "2026-08-03", "2026-07-19")).preparing, true, "a known future day must remain unavailable 15 days before term start");
-assert.equal((await loadPublishedFacilityDays(r2, ["mmc"], "2026-08-03", "2026-07-20")).preparing, false, "a known future day must become available at the 14-day boundary");
+assert.equal((await loadPublishedFacilityDays(r2, ["mmc"], "2026-08-03", "2026-06-30")).preparing, true, "a known future day remains unavailable before the preceding month");
+assert.equal((await loadPublishedFacilityDays(r2, ["mmc"], "2026-08-03", "2026-07-01")).preparing, false, "a known future day becomes available at the preceding month boundary");
 assert.equal(db.sql.length, 0, "shared day readers must perform zero D1 queries");
 const publishedRange = await loadPublishedFacilityRange(r2, ["mmc"], "2026-08-01", "2026-08-31", "2026-08-03");
 assert.equal(publishedRange.preparing, false);
@@ -746,6 +746,10 @@ const routeSqlite = new DatabaseSync(":memory:");
 for (const name of (await readdir(new URL("../migrations", import.meta.url))).filter((name) => name.endsWith(".sql")).sort()) {
   routeSqlite.exec(await readFile(new URL(`../migrations/${name}`, import.meta.url), "utf8"));
 }
+// These compatibility fields already exist in production and are required
+// by the source-delivery ordering reader (as in the wire-protocol fixture).
+for(const definition of ["name TEXT NOT NULL DEFAULT ''","source_type TEXT NOT NULL DEFAULT ''","size INTEGER NOT NULL DEFAULT 0","last_modified INTEGER NOT NULL DEFAULT 0"])
+  routeSqlite.exec('ALTER TABLE raw_roster_files ADD COLUMN '+definition);
 const routeDb = new LocalD1(routeSqlite);
 const token = "local-automation-test";
 routeSqlite.prepare(`INSERT INTO roster_sources (id, provider, source_type, label, enabled) VALUES (?, ?, ?, ?, 1)`)
@@ -753,6 +757,7 @@ routeSqlite.prepare(`INSERT INTO roster_sources (id, provider, source_type, labe
 
 async function runCompleteRoute(runId, incomingFileId, events, options = {}) {
   if (options.seedRun !== false) {
+    routeSqlite.prepare("INSERT OR IGNORE INTO raw_roster_files(file_id,name,source_type,last_modified) VALUES(?,'Automated.xlsx','mmc',?)").run(incomingFileId,Date.now());
     routeSqlite.prepare(`INSERT INTO roster_sync_runs (id, source_id, trigger_type, file_id, source_file_id, status, started_at) VALUES (?, ?, ?, ?, ?, 'queued', ?)`)
       .run(runId, "monash-adults", "automatic", incomingFileId, incomingFileId, new Date().toISOString());
   }
@@ -809,7 +814,7 @@ const nextTerm = await runCompleteRoute("route-next-term", "route-next-file", ne
 assert.equal(nextTerm.fileId, "route-next-file", "a new term needs its own file, not the current source pointer");
 assert.deepEqual(routeSqlite.prepare("SELECT id, event_json FROM roster_events WHERE file_id = 'route-file-1' ORDER BY id").all(), currentTermBefore, "new-term ingestion must preserve all current-term events");
 assert.equal(routeSqlite.prepare("SELECT active FROM roster_files WHERE id = 'route-file-1'").get().active, 1);
-assert.equal(routeSqlite.prepare("SELECT visible_from FROM facility_term_visibility WHERE source_type='mmc' AND term_start='2026-11-02'").get().visible_from, "2026-10-19");
+assert.equal(routeSqlite.prepare("SELECT visible_from FROM facility_term_visibility WHERE source_type='mmc' AND term_start='2026-11-02'").get().visible_from, "2026-10-01");
 
 const nextRepeat = await runCompleteRoute("route-next-repeat", "route-next-repeat-file", nextTermEvents);
 assert.equal(nextRepeat.unchanged, true);
@@ -959,7 +964,7 @@ for (const [sourceId, sourceType] of [["monash-adults", "mmc"], ["monash-paeds",
   assert.equal(routeSqlite.prepare("SELECT active FROM roster_files WHERE id=?").get(fullFile.id).active, 1);
 }
 
-console.log("Facility materialisation and automated-handler checks passed unchanged, correction, overlap, SMS continuity, and 14-day visibility checks.");
+console.log("Facility materialisation and automated-handler checks passed unchanged, correction, overlap, SMS continuity, and preceding-month visibility checks.");
 
 // An overnight shift may attend the first day of the next term without
 // owning that term. Both target selection and activation must preserve it.
@@ -972,6 +977,7 @@ assert.equal(routeSqlite.prepare("SELECT coverage_end FROM roster_file_coverage 
 const httpFile = { ...file, id: "http-bounded-file", contentHash: "http-content", sourceId: "monash-adults", active: false };
 const httpPlan = await planRosterImportBatches({ file: httpFile, doctors, eventsByDoctor: { "TERM TRAINEE": Array.from({ length: 700 }, (_, i) => event(`http-${i}`, "2028-02-07")) }, issuesByDoctor: {}, contentHash: "http-content" });
 routeSqlite.prepare("INSERT INTO roster_sync_runs (id, source_id, trigger_type, file_id, source_file_id, content_hash, status, started_at) VALUES (?, ?, 'automatic', ?, ?, ?, 'queued', ?)").run("http-bounded-run", "monash-adults", httpFile.id, httpFile.id, "http-content", new Date().toISOString());
+routeSqlite.prepare("INSERT INTO raw_roster_files(file_id,name,source_type,last_modified) VALUES(?,?,'mmc',?)").run(httpFile.id,httpFile.name,httpFile.lastModified||0);
 const httpEnv = { ROSTER_DB: routeDb, ROSTER_FILES: new LocalR2(), ROSTER_AUTOMATION_TOKEN: token, ROSTER_AUTOMATION_WRITES_ENABLED: "true", ROSTER_AUTOMATION_QUEUE_ENABLED: "true", ROSTER_AUTOMATION_SOURCE_ALLOWLIST: "monash-adults", ROSTER_AUTOMATION_REVIEWED_FACT_LIMIT: "1250", ROSTER_AUTOMATION_BOUNDED_IMPORT_ENABLED: "true", FACILITY_AUTOMATIC_PUBLICATION_ENABLED: "true", FACILITY_SHARED_ROLLOUT_ACTIVE: "true", FACILITY_SHARED_EMERGENCY_PAUSED: "false", FACILITY_MATERIALIZATION_SOURCE_ALLOWLIST: "mmc" };
 async function httpStep(body, env = httpEnv, handler = saveAutomatedDerivedRoster, path = "derived") {
   const pending = [];

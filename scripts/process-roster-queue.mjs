@@ -28,12 +28,12 @@ const pending = await automationRequest(`/api/automation/pending?limit=1&sourceI
 const runs = Array.isArray(pending.runs) ? pending.runs : [];
 if (runs.some((run) => run.sourceId !== sourceId)) throw new Error("Roster queue returned work for a different source.");
 console.log(`Found ${runs.length} queued roster file(s).`);
-if (!runs.length || pending.maintenanceDeferred || (process.env.ROSTER_AUTOMATION_RESUME_ONLY === "true" && pending.boundedImportEnabled !== true)) {
+if ((!runs.length && !pending.publicationPending) || pending.maintenanceDeferred || (process.env.ROSTER_AUTOMATION_RESUME_ONLY === "true" && pending.boundedImportEnabled !== true)) {
   console.log("No admitted import work; progress retained.");
-  await processorOutcome(pending.maintenanceDeferred || runs.length?'deferred':'completed');
+  await processorOutcome(pending.maintenanceDeferred || runs.length || pending.publicationPending?'deferred':'completed');
   process.exit(0);
 }
-const parserConfig = await automationRequest(`/api/automation/parser-config?sourceId=${encodeURIComponent(sourceId)}`);
+const parserConfig = runs.length ? await automationRequest(`/api/automation/parser-config?sourceId=${encodeURIComponent(sourceId)}`) : {};
 if (parserConfig.deferred || parserConfig.paused) {await processorOutcome('deferred');process.exit(0);}
 const parserExtensions = parserConfig?.parserExtensions && typeof parserConfig.parserExtensions === "object" ? parserConfig.parserExtensions : {};
 const failures = [];
@@ -79,6 +79,10 @@ if (pending.boundedImportEnabled === true) {
 
 if (failures.length) {
   throw new Error(`${failures.length} roster file${failures.length === 1 ? "" : "s"} failed during background processing.`);
+}
+if(pending.boundedImportEnabled===true) {
+  const remaining=await automationRequest(`/api/automation/pending?limit=1&sourceId=${encodeURIComponent(sourceId)}`);
+  if(remaining.publicationPending || remaining.runs?.length || remaining.deferred || remaining.paused) processorDeferred=true;
 }
 await processorOutcome(processorDeferred?'deferred':'completed');
 

@@ -474,3 +474,17 @@ identity operations, cached registration, queue outcomes, delayed warnings,
 source isolation, import idempotency, On shift access, contact health, login
 containment and request attribution checks pass. Live publication and subsequent
 settled measurements still need to be recorded before declaring completion.
+
+Publication continuation is also checked through the existing five-minute
+metadata path. A successful file import with a pending indexed shared-view job
+now resumes that job without fetching or parsing the unchanged workbook. The
+processor and GitHub queue step accept publication-only work, retain delayed
+warnings until both import and publication finish, and expose deferred results
+when another publication checkpoint remains. Tests exercise this exact path.
+
+The expanded publication tests also pass after updating their old 14-day
+visibility fixtures to the already-restored preceding-month policy and adding
+the retained raw-file metadata required by the existing delivery ordering guard.
+Cross-midnight tests now prove that an in-flight bounded receipt from yesterday
+reduces today's available headroom until a settled cutoff covers it. Recovery
+only refunds that receipt's original UTC-day ledger, never today's allocations.

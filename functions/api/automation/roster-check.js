@@ -1,3 +1,4 @@
+import {loadPendingRosterPublication} from '../../_lib/roster-delivery-health.js';
 import { automationSourceDefinition } from '../../_lib/automation-import.js';
 import { findRosterSyncByProviderVersion, loadRawRosterFile, hasCalendarDb } from '../../_lib/d1-calendar.js';
 import { automatedRosterSourceEnabled } from '../../_lib/roster-automation-guard.js';
@@ -67,7 +68,13 @@ async function checkRosterMetadata(context,body,checkTime) {
   if (!sharepointRosterWindows(checkTime).some(window => window.sourceId === sourceId && window.fileName.toLowerCase() === fileName.toLowerCase())) return Response.json({ ok: true, download: false, status: 'outside-active-windows' });
   if (!hasCalendarDb(context.env) || !fileName || fileName.length > 180 || !providerVersion || providerVersion.length > 200) return new Response('Invalid metadata', { status: 400 });
   const run = await findRosterSyncByProviderVersion(context.env.ROSTER_DB, sourceId, providerVersion, fileName);
-  if (run?.status === 'success') return Response.json({ ok: true, download: false, status: 'unchanged' });
+  if (run?.status === 'success') {
+    if(await loadPendingRosterPublication(context.env,sourceId)) {
+      const dispatch=await requestQueuedRosterProcessing(context.env,{sourceId,reason:'publication-resume'});
+      return Response.json({ok:true,download:false,status:dispatch.deferred?'deferred':'awaiting-publication'});
+    }
+    return Response.json({ ok: true, download: false, status: 'unchanged' });
+  }
   if (run && ['queued', 'processing'].includes(run.status)) {
     const retained = await loadRawRosterFile(context.env.ROSTER_DB, run.sourceFileId || run.fileId);
     if (retained?.objectKey) {

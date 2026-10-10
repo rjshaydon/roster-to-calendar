@@ -6,7 +6,7 @@ import {
 import { guardedFetch, localOnlyEnabled } from "./outbound-network.js";
 import { automatedRosterQueueEnabled, automatedRosterSourceEnabled } from "./roster-automation-guard.js";
 import { refreshAccountMaintenanceBudget } from '../api/automation/account-budget.js';
-import {markRosterDeliveryDeferred,clearRosterDeliveryWarning} from './roster-delivery-health.js';
+import {markRosterDeliveryDeferred,clearRosterDeliveryWarning,loadPendingRosterPublication} from './roster-delivery-health.js';
 
 const GITHUB_WORKFLOW = "monash-roster-sync.yml";
 const GITHUB_REPOSITORY = "rjshaydon/roster-to-calendar";
@@ -121,14 +121,15 @@ export async function recordRosterDispatchLifecycle(env, body = {}) {
     retryAfter: event==='deferred'?addMilliseconds(now,TRANSIENT_RETRY_MS).toISOString():now.toISOString(),
     lastError: event === "failed" ? String(body?.message || "GitHub roster processor failed.").slice(0, 300) : event==='deferred'?'Account maintenance allowance deferred; queued roster retained.':'',
   });
-  if(event==='completed' && result.ok && !(await listQueuedRosterSyncRuns(env.ROSTER_DB,sourceId,1)).length) await clearRosterDeliveryWarning(env.ROSTER_FILES,sourceId);
+  if(event==='completed' && result.ok && !(await listQueuedRosterSyncRuns(env.ROSTER_DB,sourceId,1)).length && !await loadPendingRosterPublication(env,sourceId)) await clearRosterDeliveryWarning(env.ROSTER_FILES,sourceId);
   if(event==='deferred') await budgetDeferred(env,sourceId);
   return result;
 }
 
 async function budgetDeferred(env,sourceId) {
   const pending=(await listQueuedRosterSyncRuns(env.ROSTER_DB,sourceId,1))[0];
-  if(pending) await markRosterDeliveryDeferred(env.ROSTER_FILES,sourceId,pending.startedAt);
+  const publication=pending?null:await loadPendingRosterPublication(env,sourceId);
+  if(pending || publication) await markRosterDeliveryDeferred(env.ROSTER_FILES,sourceId,pending?.startedAt || publication.updated_at);
   return {ok:true,dispatched:false,deferred:true,reason:'account-budget-deferred',dispatch:null};
 }
 

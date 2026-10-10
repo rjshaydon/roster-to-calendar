@@ -1,5 +1,6 @@
 import { findmyshiftConfiguredRosterRange, findmyshiftPollingRosterRanges, findmyshiftLastModified, findmyshiftRosterWorkbook } from "../../_lib/findmyshift.js";
 import { createRosterSyncRun, findQueuedRosterSyncByHash, findRosterSyncByProviderVersion, hasCalendarDb, listActiveRetainedRosterFiles, australianTermStartForDate, loadRosterSource, upsertRosterSource } from "../../_lib/d1-calendar.js";
+import {loadPendingRosterPublication} from "../../_lib/roster-delivery-health.js";
 import { requestQueuedRosterProcessing } from "../../_lib/automation-dispatch.js";
 import { automatedRosterSourceEnabled, automatedRosterWritesEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
 import { guardedFetch, localFeatureDisabledResponse } from "../../_lib/outbound-network.js";
@@ -80,6 +81,10 @@ export async function onRequestPost(context, internal = {}) {
         if (!queue.runIds.length) throw new Error("No retained FindMyShift roster file is available to reprocess.");
         await saveSource(context, current, { lastCheckedAt: now, lastError: "" });
         return Response.json({ ok: true, status: "reprocess-queued", providerModifiedAt: providerVersion, queue });
+      }
+      if(await loadPendingRosterPublication(context.env,SOURCE_ID)) {
+        const dispatch=await requestQueuedRosterProcessing(context.env,{sourceId:SOURCE_ID,reason:'publication-resume'});
+        return Response.json({ok:true,status:dispatch.deferred?'deferred':'awaiting-publication',providerModifiedAt:providerVersion});
       }
       return Response.json({ ok: true, status: "unchanged", providerModifiedAt: providerVersion });
     }
