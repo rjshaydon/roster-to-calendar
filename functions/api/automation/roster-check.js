@@ -72,8 +72,8 @@ async function checkRosterMetadata(context,body,checkTime) {
     const retained = await loadRawRosterFile(context.env.ROSTER_DB, run.sourceFileId || run.fileId);
     if (retained?.objectKey) {
       // Exact retained input can resume without retrieving the provider again.
-      await requestQueuedRosterProcessing(context.env, { sourceId, reason: 'metadata-resume' });
-      return Response.json({ ok: true, download: false, status: 'resuming' });
+      const dispatch=await requestQueuedRosterProcessing(context.env, { sourceId, reason: 'metadata-resume' });
+      return Response.json({ ok: true, download: false, status: dispatch.deferred?'deferred':'resuming' });
     }
   }
   if (run?.status === 'failed') return Response.json({ ok: true, download: false, status: 'repair-required' });

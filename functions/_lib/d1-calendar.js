@@ -3269,7 +3269,7 @@ export async function claimRosterDispatch(db, { sourceId = "", reason = "", retr
   if (!pending?.id) return { claimed: false, reason: "queue-empty" };
   const active = await db.prepare(`
     SELECT * FROM roster_dispatches
-    WHERE status IN ('requested', 'accepted', 'running', 'failed')
+    WHERE status IN ('requested', 'accepted', 'running', 'failed', 'deferred')
       AND retry_after > ?
       AND id >= ? AND id < ?
     ORDER BY requested_at DESC

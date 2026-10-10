@@ -224,7 +224,7 @@ const maintenanceContext={env:{ROSTER_DB:db,ROSTER_FILES:r2,IDENTITY_REVIEW_ENAB
 maintenanceContext.next=()=>identityMaintenance(maintenanceContext);
 assert.equal((await middleware(maintenanceContext)).status,200,'identity publication does not enable roster imports');
 const registryQueries=sql.length;
-const unchangedRegistry={async head(){return {etag:'fixture'};},async get(){return {async json(){return {revision:JSON.stringify(['historical-names-v1',melbourneDateKey().slice(0,7),'fixture','fixture','fixture','fixture']),runId:''};}};}};
+const unchangedRegistry={async head(){return {etag:'fixture'};},async get(){return {async json(){return {revision:JSON.stringify(['cached-names-v2',melbourneDateKey().slice(0,7),'fixture','fixture','fixture','fixture']),runId:''};}};}};
 const unchanged=await identityMaintenance({env:{...maintenanceContext.env,IDENTITY_REGISTRY_ENABLED:'true',ROSTER_FILES:unchangedRegistry},request:maintenanceRequest('register')});
 assert.equal((await unchanged.json()).status,'unchanged');assert.equal(sql.length,registryQueries,'unchanged published metadata causes zero D1 work');
 const OriginalDate=globalThis.Date;
@@ -269,3 +269,17 @@ assert.ok(sql.some(q=>q.includes('LIMIT 2001')&&q.includes('JOIN roster_person_a
 console.log('Identity preview, atomic merge/reversal, account conflicts, reserved IDs and bounded history tests passed.');
 console.log('Bounded registry, formatting-only linking, suggestion-only discovery and durable rejection tests passed.');
 console.log('Creator authorization, disabled gates, unchanged grades, calendar aliases and subscription continuity passed.');
+
+// Automatic registration consumes the historical names table directly, one
+// checkpoint at a time. No staff-directory parsing or event-history reads.
+sqlite.prepare("INSERT INTO roster_doctors(source_type,doctor_key,display_name,updated_at) VALUES('casey','CACHE ALPHA','Cache Alpha','fixture'),('casey','CACHE BETA','Cache Beta','fixture')").run();
+const cachedSql=sql.length;
+let cached=await auditIdentityBatch(db,[],{register:true,cachedDirectory:true,sourceTypes:['casey']});
+assert.equal(cached.examined,1);
+assert.equal(cached.status,'running');
+for(let i=0;cached.status!=='complete'&&i<10;i++)cached=await auditIdentityBatch(db,[],{register:true,cachedDirectory:true,sourceTypes:['casey'],runId:cached.runId});
+assert.equal(cached.status,'complete');
+assert.ok(sqlite.prepare("SELECT person_id FROM roster_person_aliases WHERE source_type='casey' AND doctor_key='CACHE ALPHA'").get());
+assert.ok(sql.slice(cachedSql).some(q=>q.includes('(source_type,doctor_key)>(?,?)')&&q.includes('LIMIT 2')));
+assert.equal(sql.slice(cachedSql).some(q=>/\b(roster_events|roster_daily_presence|roster_file_doctors)\b/.test(q)),false);
+console.log('Indexed automatic identity registration passed with one-name checkpoints and no event scans.');

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFile } from "node:fs/promises";
 import { outstandingMaintenance, accountMaintenanceHeadroom } from "../functions/_lib/account-maintenance-policy.js";
-import { beginMaintenanceAccounting, reserveRosterMaintenanceBudget, finishMaintenanceAccounting } from "../functions/_lib/roster-maintenance-budget.js";
+import { beginMaintenanceAccounting, reserveRosterMaintenanceBudget, finishMaintenanceAccounting, recoverAbandonedMaintenance, optionalMaintenanceAvailable } from "../functions/_lib/roster-maintenance-budget.js";
 import { createD1Meter, onRequest as middleware } from "../functions/_middleware.js";
 import { onRequestPost as admit } from "../functions/api/automation/account-budget.js";
 
@@ -23,6 +23,7 @@ assert.equal(accountMaintenanceHeadroom({ ...analytics, fiveMinuteBuckets: [{ ob
 const sqlite = new DatabaseSync(":memory:");
 sqlite.exec("CREATE TABLE IF NOT EXISTS roster_import_daily_budget (utc_day TEXT PRIMARY KEY,reserved_writes INTEGER NOT NULL DEFAULT 0,reserved_reads INTEGER NOT NULL DEFAULT 0)");
 sqlite.exec(await readFile("migrations/0035_roster_account_budget.sql", "utf8"));
+sqlite.exec(await readFile("migrations/0041_maintenance_recovery.sql", "utf8"));
 function database() {
   const db = { prepare(sql) { return { args: [], bind(...args) { this.args = args; return this; },
     async run() { const r = sqlite.prepare(sql).run(...this.args); return { meta: { changes: Number(r.changes), rows_read: Number(r.changes)+1, rows_written: Number(r.changes) } }; },
@@ -118,3 +119,41 @@ try {
   assert.equal(middlewareEnv.ROSTER_DB.prepare("SELECT 1").constructor, Object);
 } finally { console.log = originalLog; }
 console.log("HTTP accounting and lost-response reservation retention checks passed.");
+
+// Expiry is only eligible after a enforced execution bound AND a validated
+// analytics cutoff. Historical requests have no bound and stay reserved.
+sqlite.exec("DELETE FROM roster_maintenance_receipts; UPDATE roster_account_budget SET allocated_reads=9000,allocated_writes=9000,maximum_reads=1000000,maximum_writes=40000,stop_reason=''");
+const receipt=sqlite.prepare("INSERT INTO roster_maintenance_receipts(request_id,utc_day,reserved_reads,reserved_writes,recover_after,finished_at,metadata_complete) VALUES(?,?,?,?,?,?,?)");
+const recoveryCutoff=new Date(Date.now()-20*60000).toISOString();
+receipt.run('legacy',day,1000,1000,'','',0);
+receipt.run('bounded-abandoned',day,1000,1000,recoveryCutoff,'',0);
+receipt.run('lost-result',day,1000,1000,recoveryCutoff,recoveryCutoff,0);
+receipt.run('still-running',day,1000,1000,new Date(Date.now()+60000).toISOString(),'',0);
+receipt.run('settled',day,1000,1000,recoveryCutoff,recoveryCutoff,1);
+receipt.run('yesterday','2000-01-01',1000,1000,recoveryCutoff,'',0);
+assert.equal(await optionalMaintenanceAvailable(database()),false,'three unknown requests pause optional work');
+assert.equal(await recoverAbandonedMaintenance(database(),day,recoveryCutoff),2);
+assert.equal(await recoverAbandonedMaintenance(database(),day,recoveryCutoff),0,'recovery replay cannot refund twice');
+assert.equal(sqlite.prepare('SELECT allocated_writes FROM roster_account_budget').get().allocated_writes,7000);
+assert.equal(sqlite.prepare("SELECT reconciled_at FROM roster_maintenance_receipts WHERE request_id='legacy'").get().reconciled_at,'');
+assert.equal(sqlite.prepare("SELECT reconciled_at FROM roster_maintenance_receipts WHERE request_id='yesterday'").get().reconciled_at,'','midnight cannot refund the new day using old receipts');
+assert.equal(sqlite.prepare("SELECT metadata_complete FROM roster_maintenance_receipts WHERE request_id='lost-result'").get().metadata_complete,0,'recovery never invents actual usage metadata');
+assert.equal(await optionalMaintenanceAvailable(database()),true);
+const late=database();beginMaintenanceAccounting(late,'bounded-abandoned',true);
+// A late settlement for a recovered request cannot release another grant.
+assert.equal(await reserveRosterMaintenanceBudget(late,1,1),true);
+const beforeLate=sqlite.prepare('SELECT allocated_writes FROM roster_account_budget').get().allocated_writes;
+await finishMaintenanceAccounting(late,{metadataComplete:true,rowsRead:0,rowsWritten:0});
+assert.equal(sqlite.prepare('SELECT allocated_writes FROM roster_account_budget').get().allocated_writes,beforeLate);
+const optional=database();beginMaintenanceAccounting(optional,'optional',true,{purpose:'identity'});
+sqlite.prepare('UPDATE roster_account_budget SET maximum_writes=allocated_writes+20000').run();
+assert.equal(await reserveRosterMaintenanceBudget(optional,512,8192),false,'optional maintenance preserves routine roster headroom');
+const roster=database();beginMaintenanceAccounting(roster,'routine-roster',true,{purpose:'roster',deadlineAt:Date.now()+120000,statementLimit:96});
+assert.equal(await reserveRosterMaintenanceBudget(roster,512,8192),true,'routine roster work can use its protected headroom');
+assert.ok(sqlite.prepare("SELECT recover_after FROM roster_maintenance_receipts WHERE request_id='routine-roster'").get().recover_after);
+let underlyingCalls=0;
+const expired=createD1Meter({prepare(){return {async run(){underlyingCalls++;},async all(){underlyingCalls++;}};},async batch(){underlyingCalls++;}},96,{deadlineAt:Date.now()-1});
+await assert.rejects(()=>expired.binding.prepare('SELECT 1').run(),e=>e.code==='d1-request-deadline-exceeded');
+await assert.rejects(()=>expired.binding.batch([expired.binding.prepare('SELECT 1')]),e=>e.code==='d1-request-deadline-exceeded');
+assert.equal(underlyingCalls,0,'expired requests cannot issue more SQL');
+console.log('Bounded recovery, legacy retention, midnight isolation, replay, late settlement, circuit breaker and protected roster headroom passed.');

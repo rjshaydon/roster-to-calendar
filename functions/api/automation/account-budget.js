@@ -1,7 +1,7 @@
 import inventory from "../../_lib/d1-account-inventory.js";
 import { d1AnalyticsQuery, settledUtcDayInterval, summarizeAnalyticsPayload } from "../../../scripts/d1-quota-budget-lib.mjs";
 import { accountMaintenanceHeadroom, outstandingMaintenance } from "../../_lib/account-maintenance-policy.js";
-import { stopAccountMaintenance } from "../../_lib/roster-maintenance-budget.js";
+import { stopAccountMaintenance, recoverAbandonedMaintenance } from "../../_lib/roster-maintenance-budget.js";
 
 export async function onRequestPost(context) {
   const token = String(context.env.ROSTER_AUTOMATION_TOKEN || "");
@@ -27,11 +27,15 @@ export async function refreshAccountMaintenanceBudget(context) {
     if (!response.ok) throw new Error("Account analytics request failed.");
     const analytics = { ...summarizeAnalyticsPayload(await response.json(), inventory), interval };
     if (!analytics.complete) throw new Error("Account analytics did not reconcile.");
-    const receipts = (await db.prepare("SELECT reserved_reads,reserved_writes,actual_reads,actual_writes,finished_at,metadata_complete FROM roster_maintenance_receipts WHERE utc_day=? LIMIT 10001").bind(day).all()).results || [];
+    // Recovery bookkeeping has a small fixed bound; do not spend it when the
+    // account itself is already too close to the unchanged maintenance ceiling.
+    const recovered=analytics.totals.rowsRead<3999000 && analytics.totals.rowsWritten<79000
+      ?await recoverAbandonedMaintenance(db,day,interval.observedUntil):0;
+    const receipts = (await db.prepare("SELECT reserved_reads,reserved_writes,actual_reads,actual_writes,finished_at,metadata_complete,reconciled_at FROM roster_maintenance_receipts WHERE utc_day=? LIMIT 10001").bind(day).all()).results || [];
     if (receipts.length > 10000) throw new Error("Maintenance receipt inspection bound reached.");
     const outstanding = outstandingMaintenance(receipts, interval.observedUntil);
     const settledMaintenance = receipts.reduce((sum, row) => {
-      if (Number(row.metadata_complete) === 1 && row.finished_at && row.finished_at <= interval.observedUntil) {
+      if (!row.reconciled_at && Number(row.metadata_complete) === 1 && row.finished_at && row.finished_at <= interval.observedUntil) {
         // Stored actual costs include 24 estimated settlement units; subtract
         // only the measured route portion, never the estimate, from traffic.
         sum.reads += Math.max(0, Number(row.actual_reads)-24);
@@ -59,7 +63,7 @@ export async function refreshAccountMaintenanceBudget(context) {
       .bind(day, reads, writes, reads + budget.reads, writes + budget.writes, budget.validUntil, interval.observedUntil,
         analytics.totals.rowsRead, analytics.totals.rowsWritten, day, receiptReads, day, receiptWrites, reads, writes).run();
     return Response.json({ ok: true, deferred: Number(result.meta?.changes || 0) !== 1 || !budget.reads || !budget.writes,
-      account: { reads: analytics.totals.rowsRead, writes: analytics.totals.rowsWritten }, outstanding, budget });
+      account: { reads: analytics.totals.rowsRead, writes: analytics.totals.rowsWritten }, outstanding, budget,recovered });
   } catch (error) {
     await stopAccountMaintenance(db, "analytics-unavailable-or-inconsistent");
     return Response.json({ ok: true, deferred: true, reason: String(error.message || error) });

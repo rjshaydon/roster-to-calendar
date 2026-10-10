@@ -5,6 +5,7 @@ export const ACCOUNT_MAINTENANCE_POLICY = Object.freeze({ reads: 4000000, writes
 // an estimated maintenance cost from Cloudflare's measured account total.
 export function outstandingMaintenance(receipts, cutoff) {
   return receipts.reduce((total, row) => {
+    if (row.reconciled_at && row.reconciled_at <= cutoff) return total;
     const complete = Number(row.metadata_complete) === 1 && row.finished_at;
     if (!complete) {
       total.reads += Number(row.reserved_reads);

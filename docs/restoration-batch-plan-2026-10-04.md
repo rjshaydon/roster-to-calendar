@@ -5,6 +5,9 @@ merged and enabled. Automatic registration resumed after exact queue
 reconciliation on 10 October; historical catch-up completion and the first real
 weekly audit remain acceptance checks. See the 10 October checkpoint in
 `restoration-batch2-acceptance-2026-10-05.md` for verified results and limitations.
+The 11 October MMC incident exposes an operational reliability gap: the pipeline
+is enabled, but reservation exhaustion can stall changed rosters. Complete the
+reservation-recovery batch below before proceeding to Batch 6.
 The user's agreed priority is **1 → 2 → 6 → 7 → 3 → 4 → 5 → 8**,
 retaining the original batch numbers for continuity. This plan supersedes earlier
 fifteen-minute freshness targets and batch ordering.
@@ -346,3 +349,128 @@ Settled analytics check `/private/tmp/oct5-batch1-ninth.json` returned GO:
 9,509 writes. The previous sample was held only because its comparison gap was
 too short. Code regression checks passed before deployment. This completes the
 roster traffic cutover under the revised policy; Batch 2 remains separate.
+
+## Priority reliability batch — reservation recovery, 11 October
+
+Status: implementation and coordinated regression tests complete; production
+rollout and real MMC acceptance are in progress. This is one coordinated delivery batch spanning Batch 2 maintenance and Batch 5 resilience.
+It takes priority over new features. Medium effort is recommended.
+
+### Evidence and scope
+
+MMC version 451 was received at 07:06 AEDT on 11 October but remained queued.
+Repeated GitHub jobs reported success after logging “Account budget deferred;
+queued work retained.” At inspection, actual account usage was approximately
+451,000 reads / 4,600 writes. Twenty-seven unfinished maintenance receipts held
+76,176 reserved writes, exhausting the maintenance write allowance. This is not
+evidence of a five-million-read limit breach.
+
+Diagnose the requests that lost settlement, including their routes, timing,
+CPU/resource failures, durable progress and reservation sizes. Identity work is
+a suspect given the reservation pattern, not a confirmed attribution for every
+unfinished receipt. Keep diagnostics and credentials private. Preserve roster
+inputs, historical grades, identities, human decisions and subscription URLs.
+
+### Implementation and controlled recovery
+
+1. **Trace and contain the faulty maintenance path.** Correlate unfinished
+   receipts with available invocation telemetry and durable jobs/checkpoints.
+   Pause only the implicated optional identity backfill/audit if it continues
+   stranding allowances; retain routine roster checks and cached app readers.
+   Obtain fresh account-wide admission evidence before recovery writes.
+2. **Repair reservation lifecycle and request sizing.** Reserve tested read/write
+   ceilings appropriate to each bounded operation, including indexes and
+   bookkeeping. Reduce/split the failing request's work where measurements show
+   CPU or statement pressure. Make settlement idempotent and durable progress
+   recoverable. Add bounded reconciliation outside the originating request so a
+   killed request cannot depend solely on its own `finally` block for recovery.
+3. **Recover old reservations conservatively.** Define the evidence required to
+   reconcile completed, partially completed and abandoned work. Account for
+   settled measured usage without double counting or refunding work twice.
+   Expiry alone, a successful GitHub job, or an unknown response does not prove
+   that no D1 work occurred. Retain uncertain reservations unless a reviewed
+   conservative accounting bound proves safe headroom. Recovery must not raise
+   limits, bypass admission, erase receipts or fabricate actual usage.
+4. **Protect changed-roster delivery.** Give routine imports/publication priority
+   over historical identity registration and weekly suggestions. Budget optional
+   work separately within the shared account envelope; it must pause/resume at
+   durable checkpoints before consuming roster headroom. Preserve the five-minute
+   metadata cadence and unchanged-version download suppression.
+5. **Expose real outcomes and avoid repeated no-op jobs.** Distinguish completed,
+   deferred, failed and awaiting-publication states through the processor and
+   dispatch lifecycle. Check admission before launching expensive GitHub work;
+   coalesce retries with bounded backoff and resume when admission returns.
+   Report materially delayed roster syncing in the existing exception/status
+   UI, without normal-operation banners or per-render D1 writes.
+6. **Recover and verify the current MMC update.** Revalidate which provider
+   version is now current, then resume the retained latest import through the
+   ordinary bounded path. Do not re-download unchanged files or replay superseded
+   versions. Check Josh Feek's actual 11 October source entry, parsed result,
+   published On shift and personal calendar output. Retain the previous valid
+   publication until the replacement validates and promotes atomically.
+
+### Coordinated tests and live acceptance
+
+- Cover failure before reservation, after reservation, during partial writes,
+  before/after durable progress, during settlement, and after settlement when the
+  response is lost. Simulate resource termination as well as caught exceptions.
+- Prove concurrent reconciliation/settlement cannot double refund; partial or
+  unknown work remains conservatively accounted for; old UTC-day receipts cannot
+  refund today's grant. Test midnight and analytics delay/outage boundaries.
+- Exercise identity backlog alongside a changed roster: optional work defers,
+  the roster proceeds when safely admitted, and exhausted account capacity still
+  stops all maintenance. Verify actual operation costs against reservations.
+- Test deferred workflow outcomes, admission-before-dispatch, retry coalescing,
+  delayed-sync warnings and recovery without repeated interface/database writes.
+- Run the affected maintenance/account-budget, import/queue, identity and cached
+  publication suites as one pass. Repeat only for failures or subsequent changes.
+- Deploy the tested batch and observe a real changed-roster import/publication,
+  automatic identity progress and request settlement. Compare existing ordinary
+  and Creator subscription URLs/event UIDs for unintended changes. Obtain settled
+  account-wide analytics after the operation, not just a pre-operation sample.
+
+Acceptance requires no unexplained abandoned-grant accumulation or retry storm,
+measured requests within their ceilings, and admission below the existing
+4,000,000-read / 80,000-write maintenance thresholds while retaining Cloudflare's
+5,000,000-read / 100,000-write daily limits. No quota increase is part of this work.
+The real weekly identity audit remains a separate observed acceptance check; an
+audit outside its intended window must not be forced merely to complete testing.
+
+### Rollback and completion
+
+Retain the preceding deployment and targeted optional-maintenance controls.
+If measured costs, reconciliation or concurrency violate the safety envelope,
+stop the affected optional work and revert the batch while retaining receipts,
+source files, checkpoints and the last valid publication. Never restore stale
+reservation counters over newer allocations or undo already consumed usage.
+
+Completion means the current roster is correctly published, the demonstrated
+failure mode recovers safely, routine imports retain priority, deferred outcomes
+are honest, and live settled usage passes the unchanged safety gate. Record any
+remaining external/provider or scheduled-audit verification explicitly.
+
+Implementation checkpoint, 11 October: automatic identity work now reads the
+indexed historical names cache in one-name checkpoints, with a 96-statement
+ceiling and smaller reservations. Three unfinished requests pause optional
+maintenance; 100,000 reads and 20,000 writes are protected for routine imports
+inside the existing account grant. The five-minute roster metadata cadence is
+unchanged. Deferred GitHub processors expose a deferred result and do not
+repeatedly launch while the account grant is exhausted. A small R2 status object
+shows an exception after 15 minutes of deferred delivery; ordinary use is quiet.
+
+Migration 0041 adds receipt purpose, execution deadline, recovery cutoff and
+reconciliation markers. New SQL calls stop after two minutes or UTC midnight,
+whichever is earlier. Recovery waits for the full admitted statement bound,
+settlement calls and margin to drain, then for validated account analytics to
+cover that cutoff. This uses the documented [D1 maximum 30-second query duration](https://developers.cloudflare.com/d1/platform/limits/).
+Legacy receipts without an enforced deadline stay reserved through their UTC
+day. Unknown metadata is never rewritten as measured zero usage. Recovery and
+settlement use atomic conditional updates to prevent duplicate refunds.
+
+The pre-release settled analytics check returned GO at 10:13 AEDT: 472,689
+reads and 4,761 writes. Migration 0041 was the sole pending migration and was
+applied after saving the current grant and receipts privately. Recovery,
+identity operations, cached registration, queue outcomes, delayed warnings,
+source isolation, import idempotency, On shift access, contact health, login
+containment and request attribution checks pass. Live publication and subsequent
+settled measurements still need to be recorded before declaring completion.

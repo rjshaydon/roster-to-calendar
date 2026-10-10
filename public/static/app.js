@@ -10934,6 +10934,7 @@ async function loadFacilityOverviewOnShift() {
   if (facilityOverviewState.requestId !== requestId || facilityOverviewState.tab !== "on-shift") return;
   if (cached) {
     facilityOverviewState.onShiftData = cached.events || [];
+    facilityOverviewState.onShiftData.deliveryWarnings=cached.deliveryWarnings||[];
     facilityOverviewState.content = `<p class="facility-overview-by-stream-summary">Showing the last saved roster while checking for updates.</p>${renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData)}`;
   }
   renderFacilityOverview();
@@ -10960,12 +10961,13 @@ async function loadFacilityOverviewOnShift() {
     if (data.shiftWindow) applyOnShiftAccessWindow(data.shiftWindow);
     refreshFacilityOverviewSnapshotAccess(data);
     facilityOverviewState.onShiftData = data.rosterUnchanged === true && cached ? cached.events || [] : data.events || [];
+    facilityOverviewState.onShiftData.deliveryWarnings=data.deliveryWarnings||[];
     facilityOverviewState.contactList = mergeContactResolutionRefresh(facilityOverviewState.contactList, data.contactList || null);
     facilityOverviewState.previousNightRoster = data.previousNightRoster || null;
     facilityOverviewState.contactAccessToken = String(data.contactAccessToken || "");
     facilityOverviewState.content = renderFacilityOverviewCoverageNotice(data) + renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData);
     refreshed = true;
-    void storeFacilityOverviewSnapshot("on-shift", cacheQuery, { events: facilityOverviewState.onShiftData, missing: data.missing, revision: data.revision || cached?.revision || "" });
+    void storeFacilityOverviewSnapshot("on-shift", cacheQuery, { events: facilityOverviewState.onShiftData, deliveryWarnings:data.deliveryWarnings, missing: data.missing, revision: data.revision || cached?.revision || "" });
   } catch (error) {
     if (error.facilityOverviewAccess) refreshFacilityOverviewSnapshotAccess({ facilityOverviewAccess: error.facilityOverviewAccess });
     if (facilityOverviewRequestWasCancelled(error)) return;
@@ -11092,6 +11094,8 @@ function renderFacilityOverviewOnShiftPreservingViewport() {
 }
 
 function renderFacilityOverviewOnShiftResults(rows) {
+  const delayed=(rows?.deliveryWarnings||[]).filter(w=>w.status==='delayed').map(w=>displaySourceCode(w.sourceType));
+  const deliveryNotice=delayed.length?`<p class="facility-overview-contact-status is-unavailable" role="status">${escapeHtml(delayed.join(', '))} roster syncing is delayed. Showing the last published roster.</p>`:'';
   const canUseStaffActions = canUseFullFacilityOverview();
   const termStart = formatDateKey(australianTermForDate(parseDateOnly(facilityOverviewState.date)).start);
   const people = new Map();
@@ -11118,7 +11122,7 @@ function renderFacilityOverviewOnShiftResults(rows) {
     const base = buildWhoAssignment({ key: person.doctorKey, displayName: person.displayName }, {}, event);
     return base ? { ...base, person, event } : null;
   })).filter(Boolean);
-  if (!assignments.length) return `<article class="issue-card"><p>No recognised working shifts were found for this ED and date.</p></article>`;
+  if (!assignments.length) return `${deliveryNotice}<article class="issue-card"><p>No recognised working shifts were found for this ED and date.</p></article>`;
   const hideDdhNight = ddhNightReviewWindow(facilityOverviewState.date).hideNight;
   const visibleContacts = (facilityOverviewState.contactList?.contacts || []).filter((contact) => !(hideDdhNight && contact.area === "Dandenong Emergency" && contact.shift === "Night"));
   const contactMatches = attachContactAllocations(assignments, visibleContacts, facilityOverviewState.contactList?.resolutions || []);
@@ -11127,7 +11131,7 @@ function renderFacilityOverviewOnShiftResults(rows) {
     if (!periods.has(assignment.period)) periods.set(assignment.period, []);
     periods.get(assignment.period).push(assignment);
   }
-  return `${renderFacilityOverviewContactListStatus(contactMatches, contactMatches.assignments)}${["AM", "PM", "Night"].filter((period) => periods.has(period)).map((period) => `
+  return `${deliveryNotice}${renderFacilityOverviewContactListStatus(contactMatches, contactMatches.assignments)}${["AM", "PM", "Night"].filter((period) => periods.has(period)).map((period) => `
     <section class="facility-overview-period"><h3>${period}</h3><div class="facility-overview-staff-grid">${renderFacilityOverviewOnShiftPeriod(periods.get(period), { canUseStaffActions, termStart, period, serviceContacts: (contactMatches.serviceContacts || []).filter((contact) => contact.shift === period) })}</div></section>
   `).join("")}`;
 }

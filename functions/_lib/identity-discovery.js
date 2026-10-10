@@ -16,7 +16,7 @@ export async function initializePublishedIdentityBatch(db,doctors,options={}) {
  if(identities.every(a=>names.get(a.marker)===a.displayName)) return {status:'complete',examined:0,candidates:0};
  return auditIdentityBatch(db,doctors,{...options,register:true});
 }
-export async function auditIdentityBatch(db,doctors,{runId,actor='identity-audit',register=false,weekKey='',sourceTypes=[]}={}) {
+export async function auditIdentityBatch(db,doctors,{runId,actor='identity-audit',register=false,weekKey='',sourceTypes=[],cachedDirectory=false}={}) {
  const startedAt=Date.now();
  const scope=[...new Set(sourceTypes)].sort();
  if(scope.some(s=>!['mmc','mch','ddh','vhh','casey'].includes(s))) throw Error('Unsupported audit site.');
@@ -32,10 +32,17 @@ export async function auditIdentityBatch(db,doctors,{runId,actor='identity-audit
  const lease=crypto.randomUUID();
  const acquired=await db.prepare('UPDATE roster_identity_audit_runs SET lease_token=?,lease_until=?,week_key=CASE WHEN ?<>\'\' THEN ? ELSE week_key END WHERE run_id=? AND lease_until<?').bind(lease,new Date(Date.now()+120000).toISOString(),weekKey,weekKey,run.run_id,now).run();
  if(!(acquired.meta?.changes||acquired.changes)) return {runId:run.run_id,status:'busy'};
- const identities=flattenDoctorIdentities(doctors).filter(a=>(!scope.length || scope.includes(a.sourceType)) && ['mmc','mch','ddh','vhh','casey'].includes(a.sourceType) && a.key.length<=200 && a.displayName.length<=200).sort((a,b)=>a.marker<b.marker?-1:a.marker>b.marker?1:0);
- const batchSize=register?IDENTITY_BATCH_SIZE:1;
+ const batchSize=register?(cachedDirectory?1:IDENTITY_BATCH_SIZE):1;
+ const scopeClause=scope.length?'AND source_type IN ('+scope.map(()=>'?').join(',')+')':'';
+ const page=cachedDirectory&&register?await all(db,`SELECT source_type,doctor_key,display_name FROM roster_doctors
+   WHERE source_type IN ('mmc','mch','ddh','vhh','casey') ${scopeClause}
+   AND length(doctor_key) BETWEEN 1 AND 200 AND length(display_name) BETWEEN 1 AND 200
+   AND (source_type,doctor_key)>(?,?) ORDER BY source_type,doctor_key LIMIT 2`,
+   [...scope,run.cursor.split(':')[0]||'',run.cursor.slice(run.cursor.indexOf(':')+1)||'']):null;
+ const identities=flattenDoctorIdentities(page?page.map(a=>({sourceType:a.source_type,key:a.doctor_key,displayName:a.display_name})):doctors).filter(a=>(!scope.length || scope.includes(a.sourceType)) && ['mmc','mch','ddh','vhh','casey'].includes(a.sourceType) && a.key.length<=200 && a.displayName.length<=200).sort((a,b)=>a.marker<b.marker?-1:a.marker>b.marker?1:0);
+ if(page?.length && !identities.some(a=>a.marker===page[0].source_type+':'+page[0].doctor_key)) throw Error('Cached roster name requires review before automatic identity registration.');
  const pending=register?[]:await all(db,`SELECT source_type,doctor_key,display_name FROM roster_identity_features INDEXED BY idx_identity_feature_pending WHERE audited_fingerprint<>fingerprint ${scope.length?'AND source_type IN ('+scope.map(()=>'?').join(',')+')':''} ORDER BY source_type,doctor_key LIMIT ${batchSize+1}`,scope);
- const selected=register?identities.filter(a=>a.marker>run.cursor).slice(0,IDENTITY_BATCH_SIZE):pending.slice(0,batchSize).map(a=>({sourceType:a.source_type,key:a.doctor_key,displayName:a.display_name,marker:a.source_type+':'+a.doctor_key}));
+ const selected=register?identities.filter(a=>a.marker>run.cursor).slice(0,batchSize):pending.slice(0,batchSize).map(a=>({sourceType:a.source_type,key:a.doctor_key,displayName:a.display_name,marker:a.source_type+':'+a.doctor_key}));
  let candidateCount=0, skippedLargeBlocks=0; const processed=[];
  for(const alias of selected) {
   if(Date.now()-startedAt>=10000) break;
@@ -92,7 +99,19 @@ export async function auditIdentityBatch(db,doctors,{runId,actor='identity-audit
   await db.prepare('UPDATE roster_identity_features SET audited_fingerprint=? WHERE source_type=? AND doctor_key=?').bind(featureHash,alias.sourceType,alias.key).run();
  }
  let cursor=processed.at(-1)?.marker || run.cursor, complete=register?!identities.some(a=>a.marker>cursor):pending.length<=processed.length;
- if(register && complete) {
+ if(register && complete && cachedDirectory) {
+  const size=await db.prepare('SELECT COUNT(*) AS n FROM (SELECT 1 FROM roster_doctors LIMIT 2001)').first();
+  if(Number(size?.n)>2000) throw Error('Cached roster names exceed the completion inspection limit.');
+  const missing=await db.prepare(`SELECT d.source_type,d.doctor_key FROM roster_doctors d
+    LEFT JOIN roster_person_aliases a ON a.source_type=d.source_type AND a.doctor_key=d.doctor_key
+    LEFT JOIN roster_identity_features f ON f.source_type=d.source_type AND f.doctor_key=d.doctor_key
+    WHERE d.source_type IN ('mmc','mch','ddh','vhh','casey')
+    ${scope.length?'AND d.source_type IN ('+scope.map(()=>'?').join(',')+')':''}
+    AND length(d.doctor_key) BETWEEN 1 AND 200 AND length(d.display_name) BETWEEN 1 AND 200
+    AND (a.person_id IS NULL OR f.display_name IS NULL OR f.display_name<>d.display_name)
+    ORDER BY d.source_type,d.doctor_key LIMIT 1`).bind(...scope).first();
+  if(missing) {cursor='';complete=false;}
+ } else if(register && complete) {
   // The authoritative directory can grow behind a saved cursor (for example
   // when historical names are restored). Do not publish an unchanged receipt
   // until every current name has a registered alias and matching cache entry.

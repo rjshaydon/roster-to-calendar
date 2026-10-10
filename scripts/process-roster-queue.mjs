@@ -5,6 +5,9 @@ import { planRosterImportBatches } from "../functions/_lib/roster-import-batches
 import { executeBoundedRosterImport } from "./roster-import-driver.mjs";
 
 import { guardedFetch } from "../functions/_lib/outbound-network.js";
+import {appendFile} from 'node:fs/promises';
+let processorDeferred=false;
+async function processorOutcome(value) {if(process.env.GITHUB_OUTPUT) await appendFile(process.env.GITHUB_OUTPUT,`result=${value}\n`);}
 
 const baseUrl = String(process.env.ROSTER_AUTOMATION_BASE_URL || "https://roster-to-calendar.pages.dev").replace(/\/$/, "");
 const token = String(process.env.ROSTER_AUTOMATION_TOKEN || "");
@@ -17,6 +20,7 @@ if (!sourceId) throw new Error("ROSTER_AUTOMATION_SOURCE_ID is required.");
 const admission = await automationRequest("/api/automation/account-budget", { method: "POST", body: {} });
 if (admission.deferred || admission.paused) {
   console.log("Account budget deferred; queued work retained.");
+  await processorOutcome('deferred');
   process.exit(0);
 }
 let lastAccountAdmission = Date.now();
@@ -26,10 +30,11 @@ if (runs.some((run) => run.sourceId !== sourceId)) throw new Error("Roster queue
 console.log(`Found ${runs.length} queued roster file(s).`);
 if (!runs.length || pending.maintenanceDeferred || (process.env.ROSTER_AUTOMATION_RESUME_ONLY === "true" && pending.boundedImportEnabled !== true)) {
   console.log("No admitted import work; progress retained.");
+  await processorOutcome(pending.maintenanceDeferred || runs.length?'deferred':'completed');
   process.exit(0);
 }
 const parserConfig = await automationRequest(`/api/automation/parser-config?sourceId=${encodeURIComponent(sourceId)}`);
-if (parserConfig.deferred || parserConfig.paused) process.exit(0);
+if (parserConfig.deferred || parserConfig.paused) {await processorOutcome('deferred');process.exit(0);}
 const parserExtensions = parserConfig?.parserExtensions && typeof parserConfig.parserExtensions === "object" ? parserConfig.parserExtensions : {};
 const failures = [];
 
@@ -66,13 +71,16 @@ for (const run of runs) {
 if (pending.boundedImportEnabled === true) {
   for (let step = 0; step < 24; step += 1) {
     const refresh = await automationRequest("/api/automation/facility-refresh", { method: "POST", body: { sourceId, maintenanceBudget } });
+    if(refresh.deferred) processorDeferred=true;
     if (refresh.idle || refresh.deferred || refresh.completed) break;
+    if(step===23) processorDeferred=true;
   }
 }
 
 if (failures.length) {
   throw new Error(`${failures.length} roster file${failures.length === 1 ? "" : "s"} failed during background processing.`);
 }
+await processorOutcome(processorDeferred?'deferred':'completed');
 
 async function processRun(run) {
   const response = await guardedFetch(process.env, `${baseUrl}/api/automation/raw?runId=${encodeURIComponent(run.id)}&sourceId=${encodeURIComponent(sourceId)}`, {
@@ -143,12 +151,14 @@ async function processRun(run) {
       }
     }
     if (finished.deferred) {
+      processorDeferred=true;
       console.log("Import write allowance exhausted; queued progress retained for automatic continuation.");
       return;
     }
   }
   finished ||= await postDerived(run, payload, "complete", payload.doctors, payload.eventsByDoctor, payload.issuesByDoctor);
   if (finished.deferred) {
+    processorDeferred=true;
     console.log("Roster correction deferred by the shared maintenance budget; existing calendars retained.");
     return;
   }

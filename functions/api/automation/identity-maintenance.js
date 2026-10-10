@@ -1,8 +1,7 @@
 import {publishIdentityOperation} from '../../_lib/doctor-identity.js';
 import {refreshAccountMaintenanceBudget} from './account-budget.js';
-import {reserveRosterMaintenanceBudget} from '../../_lib/roster-maintenance-budget.js';
+import {reserveRosterMaintenanceBudget,optionalMaintenanceAvailable} from '../../_lib/roster-maintenance-budget.js';
 import {auditIdentityBatch} from '../../_lib/identity-discovery.js';
-import {publishedIdentityAuditDirectory} from '../../_lib/bounded-identity.js';
 import {identityAuditWindow} from '../../../public/static/identity-audit-policy.js';
 import {facilityMetadataManifestKey} from '../../_lib/facility-overview-cache.js';
 import {melbourneDateKey} from '../../../public/static/roster-term-policy.js';
@@ -20,7 +19,7 @@ export async function onRequestPost(context) {
   const r2=context.env.ROSTER_FILES;
   const heads=await Promise.all(['mmc','mch','ddh','vhh'].map(source=>r2.head(facilityMetadataManifestKey(source))));
   if(heads.some(head=>!head)) return Response.json({status:'directory-preparing'});
-  registryRevision=JSON.stringify(['historical-names-v1',melbourneDateKey().slice(0,7),...heads.map(head=>head.etag)]);
+  registryRevision=JSON.stringify(['cached-names-v2',melbourneDateKey().slice(0,7),...heads.map(head=>head.etag)]);
   registryObject=await r2.get('identity/registry-progress.json');
   registryState=registryObject?await registryObject.json():{};
   if(!registryState.runId && registryState.revision===registryRevision) return Response.json({status:'unchanged'});
@@ -37,13 +36,15 @@ export async function onRequestPost(context) {
   }
  }
  if(context.env.ROSTER_ACCOUNT_BUDGET_ENABLED==='true') {
+  if(!await optionalMaintenanceAvailable(db)) return Response.json({status:'deferred',reason:'unfinished-maintenance'},{status:503});
   const admission=await (await refreshAccountMaintenanceBudget(context)).json();
-  if(admission.deferred || !await reserveRosterMaintenanceBudget(db,4096,input.mode==='publish'?4096:8192)) return Response.json({status:'deferred'},{status:503});
+  if(admission.deferred || !await reserveRosterMaintenanceBudget(db,input.mode==='publish'?4096:512,8192)) return Response.json({status:'deferred'},{status:503});
  }
  if(['audit','register'].includes(input.mode)) {
-  const directory=await publishedIdentityAuditDirectory(db,context.env.ROSTER_FILES,melbourneDateKey());
-  if(directory.preparing || directory.missingSources?.length) return Response.json({status:'directory-preparing'},{status:503});
-  const result=await auditIdentityBatch(db,directory.doctors,{runId:input.mode==='register'?registryState.runId:undefined,register:input.mode==='register',actor:'published-roster-registration',weekKey:input.mode==='audit'?window.weekKey:''});
+  // The indexed names cache retains historical staff. Register one name per
+  // call and audit one pending feature, without decompressing every site's
+  // published staff directory inside a free Pages request.
+  const result=await auditIdentityBatch(db,[],{cachedDirectory:true,runId:input.mode==='register'?registryState.runId:undefined,register:input.mode==='register',actor:'published-roster-registration',weekKey:input.mode==='audit'?window.weekKey:''});
   if(input.mode==='register' && result.status!=='busy') {
    const progress={revision:registryState.runId?registryState.revision:registryRevision,runId:result.status==='complete'?'':result.runId};
    await context.env.ROSTER_FILES.put('identity/registry-progress.json',JSON.stringify(progress),{httpMetadata:{contentType:'application/json'},...(registryObject?.etag?{onlyIf:{etagMatches:registryObject.etag}}:{onlyIf:{etagDoesNotMatch:'*'}})});

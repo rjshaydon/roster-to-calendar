@@ -1,9 +1,12 @@
 import {
   claimRosterDispatch,
   updateRosterDispatch,
+  listQueuedRosterSyncRuns,
 } from "./d1-calendar.js";
 import { guardedFetch, localOnlyEnabled } from "./outbound-network.js";
 import { automatedRosterQueueEnabled, automatedRosterSourceEnabled } from "./roster-automation-guard.js";
+import { refreshAccountMaintenanceBudget } from '../api/automation/account-budget.js';
+import {markRosterDeliveryDeferred,clearRosterDeliveryWarning} from './roster-delivery-health.js';
 
 const GITHUB_WORKFLOW = "monash-roster-sync.yml";
 const GITHUB_REPOSITORY = "rjshaydon/roster-to-calendar";
@@ -22,6 +25,18 @@ export async function requestQueuedRosterProcessing(env, { sourceId = "", reason
     return { ok: false, dispatched: false, reason: "local-disabled", dispatch: null };
   }
   const requestedAt = validDate(now);
+  if(env.ROSTER_ACCOUNT_BUDGET_ENABLED==='true') {
+    let gate=await env.ROSTER_DB.prepare(`SELECT allocated_reads,allocated_writes,maximum_reads,maximum_writes,valid_until,stop_reason
+      FROM roster_account_budget WHERE utc_day=?`).bind(requestedAt.toISOString().slice(0,10)).first();
+    if(!gate || gate.valid_until<=requestedAt.toISOString()) {
+      const refreshed=await (await refreshAccountMaintenanceBudget({env})).json();
+      if(refreshed.deferred) return budgetDeferred(env,normalizedSourceId);
+      gate=await env.ROSTER_DB.prepare('SELECT allocated_reads,allocated_writes,maximum_reads,maximum_writes,valid_until,stop_reason FROM roster_account_budget WHERE utc_day=?')
+        .bind(requestedAt.toISOString().slice(0,10)).first();
+    }
+    if(!gate || gate.stop_reason || gate.valid_until<=requestedAt.toISOString() || gate.allocated_reads>=gate.maximum_reads || gate.allocated_writes>=gate.maximum_writes)
+      return budgetDeferred(env,normalizedSourceId);
+  }
   const claim = await claimRosterDispatch(env?.ROSTER_DB, {
     sourceId: normalizedSourceId,
     reason,
@@ -86,7 +101,7 @@ export async function recordRosterDispatchLifecycle(env, body = {}) {
   if (!automatedRosterQueueEnabled(env) || !automatedRosterSourceEnabled(env, sourceId)) {
     return { ok: false, reason: "source-disabled" };
   }
-  if (!dispatchId || !dispatchId.startsWith(`dispatch:${sourceId}:`) || !["started", "completed", "failed"].includes(event)) {
+  if (!dispatchId || !dispatchId.startsWith(`dispatch:${sourceId}:`) || !["started", "completed", "failed", "deferred"].includes(event)) {
     return { ok: false, reason: "invalid-lifecycle-event" };
   }
   const now = new Date();
@@ -99,13 +114,22 @@ export async function recordRosterDispatchLifecycle(env, body = {}) {
       lastError: "",
     });
   }
-  return updateRosterDispatch(env?.ROSTER_DB, dispatchId, {
-    status: event === "completed" ? "completed" : "failed",
+  const result=await updateRosterDispatch(env?.ROSTER_DB, dispatchId, {
+    status: event === "completed" ? "completed" : event==='deferred'?'deferred':'failed',
     githubRunId: String(body?.githubRunId || "").trim(),
     completedAt: now.toISOString(),
-    retryAfter: now.toISOString(),
-    lastError: event === "failed" ? String(body?.message || "GitHub roster processor failed.").slice(0, 300) : "",
+    retryAfter: event==='deferred'?addMilliseconds(now,TRANSIENT_RETRY_MS).toISOString():now.toISOString(),
+    lastError: event === "failed" ? String(body?.message || "GitHub roster processor failed.").slice(0, 300) : event==='deferred'?'Account maintenance allowance deferred; queued roster retained.':'',
   });
+  if(event==='completed' && result.ok && !(await listQueuedRosterSyncRuns(env.ROSTER_DB,sourceId,1)).length) await clearRosterDeliveryWarning(env.ROSTER_FILES,sourceId);
+  if(event==='deferred') await budgetDeferred(env,sourceId);
+  return result;
+}
+
+async function budgetDeferred(env,sourceId) {
+  const pending=(await listQueuedRosterSyncRuns(env.ROSTER_DB,sourceId,1))[0];
+  if(pending) await markRosterDeliveryDeferred(env.ROSTER_FILES,sourceId,pending.startedAt);
+  return {ok:true,dispatched:false,deferred:true,reason:'account-budget-deferred',dispatch:null};
 }
 
 async function failDispatch(env, dispatch, message, retryMs, now) {

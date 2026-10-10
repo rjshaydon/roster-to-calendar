@@ -52,7 +52,8 @@ export async function onRequest(context) {
   const limit = await requestD1StatementLimit(context.request, url.pathname, action);
   let contained = requestContainmentReason(url.pathname, action, sharedEnv);
   const originalD1Binding = contained ? sharedEnv.ROSTER_DB : unwrapD1Binding(sharedEnv.ROSTER_DB);
-  const d1 = contained ? emptyD1Meter() : createD1Meter(originalD1Binding, limit, { firstViaAll: url.pathname === "/api/automation/identity-maintenance" || url.pathname === "/api/state" && action === "identity" || sharedEnv.ROSTER_ACCOUNT_BUDGET_ENABLED === "true" && (["/api/automation/derived", "/api/automation/facility-refresh", "/api/automation/findmyshift-check"].includes(url.pathname) || url.pathname === "/api/state" && ["saveDerivedCalendarFile", "removeRosterImports", "uploadRawRosterFile", "refreshManualRosterViews"].includes(action)) });
+  const deadlineAt=Math.min(Date.now()+120000,Date.parse(new Date().toISOString().slice(0,10))+86400000);
+  const d1 = contained ? emptyD1Meter() : createD1Meter(originalD1Binding, limit, { deadlineAt, firstViaAll: url.pathname === "/api/automation/identity-maintenance" || url.pathname === "/api/state" && action === "identity" || sharedEnv.ROSTER_ACCOUNT_BUDGET_ENABLED === "true" && (["/api/automation/derived", "/api/automation/facility-refresh", "/api/automation/findmyshift-check"].includes(url.pathname) || url.pathname === "/api/state" && ["saveDerivedCalendarFile", "removeRosterImports", "uploadRawRosterFile", "refreshManualRosterViews"].includes(action)) });
   let response;
 
   // Pages handlers read bindings from the supplied env object, so install the
@@ -61,7 +62,8 @@ export async function onRequest(context) {
   // left a metered proxy behind.
   if (d1.binding) {
     sharedEnv.ROSTER_DB = d1.binding;
-    beginMaintenanceAccounting(d1.binding, `${requestId}:${crypto.randomUUID()}`, sharedEnv.ROSTER_ACCOUNT_BUDGET_ENABLED === "true");
+    beginMaintenanceAccounting(d1.binding, `${requestId}:${crypto.randomUUID()}`, sharedEnv.ROSTER_ACCOUNT_BUDGET_ENABLED === "true",
+      {deadlineAt,statementLimit:limit,purpose:url.pathname==='/api/automation/identity-maintenance'?'identity':'roster'});
   }
 
   try {
@@ -70,7 +72,7 @@ export async function onRequest(context) {
       : await context.next();
     return response;
   } catch (error) {
-    if (error?.code === "d1-statement-budget-exceeded") {
+    if (["d1-statement-budget-exceeded","d1-request-deadline-exceeded"].includes(error?.code)) {
       contained = "d1-statement-budget";
       response = Response.json({
         error: "This request was stopped by the database safety limit.",
@@ -109,7 +111,7 @@ export async function onRequest(context) {
 
 async function requestD1StatementLimit(request, pathname, action) {
   if(pathname==='/api/automation/identity-maintenance' && request.method==='POST') {
-    try { return ['audit','register'].includes((await request.clone().json()).mode)?1024:512; } catch { return 64; }
+    try { return ['audit','register'].includes((await request.clone().json()).mode)?96:512; } catch { return 64; }
   }
   if(pathname==='/api/state' && action==='identity' && request.method==='POST') {
     try { const operation=(await request.clone().json()).operation; if(['commit','reverse'].includes(operation)) return 448; if(['audit','initialize'].includes(operation)) return 1024; } catch {}
@@ -235,6 +237,10 @@ export function createD1Meter(database, limit, options = {}) {
   const state = { statementCount: 0, rowsRead: 0, rowsWritten: 0, metadataComplete: true };
   const originals = new WeakMap();
   const before = (count = 1) => {
+    if(options.deadlineAt && Date.now()>=options.deadlineAt) {
+      const error=new Error('D1 request execution deadline exceeded.');
+      error.code='d1-request-deadline-exceeded';throw error;
+    }
     if (state.statementCount + count > limit) {
       const error = new Error("D1 statement budget exceeded.");
       error.code = "d1-statement-budget-exceeded";

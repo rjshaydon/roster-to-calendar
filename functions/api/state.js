@@ -19,6 +19,7 @@ import { requestQueuedRosterProcessing } from "../_lib/automation-dispatch.js";
 import { advancedRosterMaintenanceEnabled, reviewedRosterFactLimit, rosterStatusSummaryEnabled, rosterWritesExplicitlyPaused, rosterWritePausedResponse } from "../_lib/roster-automation-guard.js";
 import { guardedFetch, localFeatureDisabledResponse } from "../_lib/outbound-network.js";
 import { loadPublishedRosterDoctors, loadPublishedFacilityDays, loadPublishedPreviousDdhNight, loadPublishedFacilityMetadata, loadPublishedFacilityTerms, loadPublishedFacilityRange, loadPublishedFacilityStaff, publishFacilityDays, publishFacilityStaffMetadata } from "../_lib/facility-overview-cache.js";
+import {loadRosterDeliveryWarnings} from '../_lib/roster-delivery-health.js';
 import { loadPublishedFacilityContacts, publishFacilityContactResolutions } from "../_lib/facility-contact-cache.js";
 import { issueFacilityContactAccessToken, verifyFacilityContactAccessToken } from "../_lib/facility-contact-access.js";
 import { facilityBuildSources, facilityContactReaderSources, facilityLegacyReadsPaused, facilityOverviewAutomaticLaunchEnabled, onShiftForAllEnabled, facilityOverviewMaintenanceForViewer, facilityOverviewMaintenanceMode, facilityReaderSources, facilityReaderSelection, facilityReadRoute, facilityRolloutCohortEligible } from "../_lib/facility-rollout.js";
@@ -2297,13 +2298,14 @@ export async function onRequestPost(context) {
           const contactReadable = sharedFacilityContactsEnabled
             && facilityKeys.length === 1
             && facilityContactReaderSources(context.env).includes(facilityKeys[0]);
-          // Two bounded R2 readers; neither needs the other's result. Keep the
+          // Independent bounded R2 readers. Keep the
           // authenticated access checks above and avoid any extra SQL or retry.
-          const [published, contactList] = await Promise.all([
+          const [published, contactList, deliveryWarnings] = await Promise.all([
             loadPublishedFacilityDays(context.env.ROSTER_FILES, selection.sources, date, australianDateKey()),
             contactReadable
               ? loadPublishedFacilityContacts(context.env.ROSTER_FILES, { date, facilityKeys })
               : { status: "unavailable", contacts: [], revision: "" },
+            loadRosterDeliveryWarnings(context.env.ROSTER_FILES,selection.sources),
           ]);
           if (published.preparing) return facilityOverviewPreparingResponse({ events: [] });
           const events = published.rows.filter((row) => isFacilityOverviewWorkingEvent(row.event, {
@@ -2322,7 +2324,7 @@ export async function onRequestPost(context) {
           const rosterUnchanged = !missing.length && body?.cachedRevision === revision;
           const previousNightRoster = contactReadable && facilityKeys[0] === "ddh"
             ? await loadPublishedPreviousDdhNight(context.env.ROSTER_FILES, date) : null;
-          return Response.json({ ok: true, date, facilityKey: requestedFacility === "ALL" ? "ALL" : facilityKeys[0], events: rosterUnchanged ? undefined : events, rosterUnchanged, missing, revision, facilityOverviewAccess: access, accessExpiresAt: access.expiresAt || "", contactAccessToken, contactList, previousNightRoster, shiftWindow: restrictedOnShift ? shiftWindow : undefined, queryMs: Date.now() - startedAt });
+          return Response.json({ ok: true, date, facilityKey: requestedFacility === "ALL" ? "ALL" : facilityKeys[0], events: rosterUnchanged ? undefined : events, rosterUnchanged, missing, deliveryWarnings, revision, facilityOverviewAccess: access, accessExpiresAt: access.expiresAt || "", contactAccessToken, contactList, previousNightRoster, shiftWindow: restrictedOnShift ? shiftWindow : undefined, queryMs: Date.now() - startedAt });
         }
         const [eventGroups, contactList] = await Promise.all([
           Promise.all(facilityKeys.map((facilityKey) => queryFacilityOverviewOnShift(context.env.ROSTER_DB, { date, facilityKey }))),
