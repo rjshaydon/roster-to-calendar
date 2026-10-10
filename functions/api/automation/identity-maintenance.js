@@ -38,7 +38,7 @@ export async function onRequestPost(context) {
  if(context.env.ROSTER_ACCOUNT_BUDGET_ENABLED==='true') {
   if(!await optionalMaintenanceAvailable(db)) return Response.json({status:'deferred',reason:'unfinished-maintenance'},{status:503});
   const admission=await (await refreshAccountMaintenanceBudget(context)).json();
-  if(admission.deferred || !await reserveRosterMaintenanceBudget(db,input.mode==='publish'?4096:512,8192)) return Response.json({status:'deferred'},{status:503});
+  if(admission.deferred || !await reserveRosterMaintenanceBudget(db,input.mode==='publish'?4096:512,32768)) return Response.json({status:'deferred'},{status:503});
  }
  if(['audit','register'].includes(input.mode)) {
   // The indexed names cache retains historical staff. Register one name per

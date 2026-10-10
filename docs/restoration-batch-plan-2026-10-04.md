@@ -488,3 +488,8 @@ the retained raw-file metadata required by the existing delivery ordering guard.
 Cross-midnight tests now prove that an in-flight bounded receipt from yesterday
 reduces today's available headroom until a settled cutoff covers it. Recovery
 only refunds that receipt's original UTC-day ledger, never today's allocations.
+
+Optional maintenance reserves 32,768 reads to cover the fixed receipt-inspection
+ceilings as well as the cached-name completion check; measured unused capacity
+is refunded. Its write estimate remains 512 per registration/audit checkpoint,
+with the existing 4,096 estimate retained for identity publication.
