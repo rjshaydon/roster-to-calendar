@@ -106,18 +106,32 @@ assert.equal(broken.metadataComplete, false);
 // HTTP middleware applies account-aware mode even without a caller session;
 // receipt settlement still works after the route uses its statement allowance.
 sqlite.prepare("UPDATE roster_account_budget SET stop_reason='',valid_until=?,maximum_reads=allocated_reads+1000000,maximum_writes=allocated_writes+50000").run(new Date(Date.now()+600000).toISOString());
-const middlewareEnv = { ROSTER_DB: database(), ROSTER_ACCOUNT_BUDGET_ENABLED: "true", ROSTER_AUTOMATION_WRITES_ENABLED: "true" };
+const middlewareEnv = { ROSTER_DB: database(), ROSTER_ACCOUNT_BUDGET_ENABLED: "true", ROSTER_AUTOMATION_WRITES_ENABLED: "true", IDENTITY_REVIEW_ENABLED: "true" };
 const originalLog = console.log;
 try {
   console.log = () => {};
-  const response = await middleware({ env: middlewareEnv,
-    request: new Request("https://test/api/automation/facility-refresh", { method: "POST", body: "{}" }),
+  let retained;let routeCalls=0;
+  let release,entered;
+  const gate=new Promise(resolve=>{release=resolve;});
+  const started=new Promise(resolve=>{entered=resolve;});
+  const responsePromise = middleware({ env: middlewareEnv,
+    request: new Request("https://test/api/automation/identity-maintenance", { method: "POST", body: JSON.stringify({mode:'register'}) }),
+    waitUntil(work) {retained=work;},
     async next() {
+      routeCalls++;
+      entered();await gate;
       assert.equal(await reserveRosterMaintenanceBudget(middlewareEnv.ROSTER_DB, 100, 100), true);
       await middlewareEnv.ROSTER_DB.prepare("SELECT utc_day FROM roster_account_budget LIMIT 1").first();
       return Response.json({ ok: true });
     }
   });
+  await started;
+  assert.ok(retained instanceof Promise,'unfinished work is retained before a caller can disconnect');
+  release();
+  const response=await responsePromise;
+  assert.ok(retained instanceof Promise,'checkpoint and settlement are retained across caller disconnection');
+  await retained;
+  assert.equal(routeCalls,1,'retaining the promise never starts a second checkpoint');
   assert.equal(response.status, 200);
   const latest = sqlite.prepare("SELECT * FROM roster_maintenance_receipts WHERE request_id NOT IN ('first','second','third','interleaved')").get();
   assert.equal(latest.metadata_complete, 1);

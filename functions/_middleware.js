@@ -66,47 +66,56 @@ export async function onRequest(context) {
       {deadlineAt,statementLimit:limit,purpose:url.pathname==='/api/automation/identity-maintenance'?'identity':'roster'});
   }
 
-  try {
-    response = contained
-      ? pausedResponse(contained)
-      : await context.next();
-    return response;
-  } catch (error) {
-    if (["d1-statement-budget-exceeded","d1-request-deadline-exceeded"].includes(error?.code)) {
-      contained = "d1-statement-budget";
-      response = Response.json({
-        error: "This request was stopped by the database safety limit.",
-        errorType: "request-statement-limit",
-        phase: requestOperationPhase(context),
-      }, { status: 503 });
+  const work = (async () => {
+    try {
+      response = contained
+        ? pausedResponse(contained)
+        : await context.next();
       return response;
+    } catch (error) {
+      if (["d1-statement-budget-exceeded","d1-request-deadline-exceeded"].includes(error?.code)) {
+        contained = "d1-statement-budget";
+        response = Response.json({
+          error: "This request was stopped by the database safety limit.",
+          errorType: "request-statement-limit",
+          phase: requestOperationPhase(context),
+        }, { status: 503 });
+        return response;
+      }
+      throw error;
+    } finally {
+      try { await finishMaintenanceAccounting(d1.binding, d1, originalD1Binding); }
+      catch { console.error("Maintenance receipt settlement failed; reservation remains held."); }
+      if (d1.binding && sharedEnv.ROSTER_DB === d1.binding) sharedEnv.ROSTER_DB = originalD1Binding;
+      const record = {
+        event: "api-invocation",
+        deployment: String(context.env.CF_PAGES_COMMIT_SHA || "unknown").slice(0, 40),
+        requestId: String(requestId).slice(0, 80),
+        method: context.request.method,
+        route: url.pathname,
+        action,
+        status: Number(response?.status || 500),
+        durationMs: Date.now() - startedAt,
+        contained,
+        callerClass: callerClass(context.request, url.pathname),
+        d1Statements: d1.statementCount,
+        d1RowsRead: d1.rowsRead,
+        d1RowsWritten: d1.rowsWritten,
+        d1MetadataComplete: d1.metadataComplete,
+        d1Limit: limit,
+        operationPhase: requestOperationPhase(context),
+      };
+      console.log(JSON.stringify(record));
+      writeAnalytics(context.env.REQUEST_ANALYTICS, record);
     }
-    throw error;
-  } finally {
-    try { await finishMaintenanceAccounting(d1.binding, d1, originalD1Binding); }
-    catch { console.error("Maintenance receipt settlement failed; reservation remains held."); }
-    if (d1.binding && sharedEnv.ROSTER_DB === d1.binding) sharedEnv.ROSTER_DB = originalD1Binding;
-    const record = {
-      event: "api-invocation",
-      deployment: String(context.env.CF_PAGES_COMMIT_SHA || "unknown").slice(0, 40),
-      requestId: String(requestId).slice(0, 80),
-      method: context.request.method,
-      route: url.pathname,
-      action,
-      status: Number(response?.status || 500),
-      durationMs: Date.now() - startedAt,
-      contained,
-      callerClass: callerClass(context.request, url.pathname),
-      d1Statements: d1.statementCount,
-      d1RowsRead: d1.rowsRead,
-      d1RowsWritten: d1.rowsWritten,
-      d1MetadataComplete: d1.metadataComplete,
-      d1Limit: limit,
-      operationPhase: requestOperationPhase(context),
-    };
-    console.log(JSON.stringify(record));
-    writeAnalytics(context.env.REQUEST_ANALYTICS, record);
+  })();
+  // One-name identity checkpoints normally finish within seconds. Retain the
+  // same work promise (including settlement) across caller disconnection;
+  // waitUntil has a platform bound and does not retry or duplicate work.
+  if (!contained && url.pathname === '/api/automation/identity-maintenance' && context.waitUntil) {
+    context.waitUntil(work.then(() => undefined, () => undefined));
   }
+  return await work;
 }
 
 async function requestD1StatementLimit(request, pathname, action) {
