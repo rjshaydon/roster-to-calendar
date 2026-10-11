@@ -352,8 +352,8 @@ roster traffic cutover under the revised policy; Batch 2 remains separate.
 
 ## Priority reliability batch — reservation recovery, 11 October
 
-Status: implementation and coordinated regression tests complete; production
-rollout and real MMC acceptance are in progress. This is one coordinated delivery batch spanning Batch 2 maintenance and Batch 5 resilience.
+Status: implementation, coordinated regression tests, production deployment
+and real MMC acceptance complete. This is one coordinated delivery batch spanning Batch 2 maintenance and Batch 5 resilience.
 It takes priority over new features. Medium effort is recommended.
 
 ### Evidence and scope
@@ -522,3 +522,41 @@ The read reservation covers the bounded priority/receipt/name inspections, and
 200,000 reads are protected for routine work (publication reserves up to 125,000).
 These are reservations inside the unchanged 4,000,000-read / 80,000-write grant;
 measured unused portions are refunded. No account limit has been raised.
+
+
+### Live acceptance — 11 October
+
+Production deployment of `be1425f9` succeeded. MMC version 452 was chosen
+automatically over the superseded queued autosave and published at 11:18 AEDT.
+The production R2 day/month snapshots were exercised through the actual shared
+view and personal-calendar readers: Joshua Feek has an all-day Sick leave event
+on 11 October and is excluded from On shift. The existing ordinary-user and
+Creator subscription feeds returned HTTP 200 with unchanged UID sets (128 and
+154 events respectively). The delayed MMC diagnostic was absent after the
+normal unchanged poll, without a manual warning reset.
+
+The bounded production priority check read 93 rows across all four sources.
+MMC/MCH/VHH had no active imports; a genuinely queued DDH update retained priority
+over optional identity registration and was dispatched by the 11:35 watchdog.
+The weekly audit and completion of gradual historical identity catch-up remain
+scheduled acceptance work; this batch does not claim that historical catch-up
+or all restoration batches are complete. No broad historical rescan or quota
+increase was used.
+
+The 11:40 automatic checkpoint subsequently advanced the existing registration
+run from `mch:ANYSHA WALIA` to `mch:AOIFE O DRISCOLL` (265 to 266 examined).
+Its receipt completed with full metadata: 891 reads / 52 writes. The DDH
+processor completed successfully, the following watchdog reported unchanged,
+and the current UTC-day receipt check found zero unfinished reservations.
+
+At 11:41 AEDT, settled account analytics through 11:26 showed 96,897 reads and
+2,190 writes. This includes the recovered MMC import and remains well below
+the 5,000,000-read / 100,000-write provider quotas. The separate expansion CLI
+returned STOP: the UTC day lacks its required two-hour passive baseline and
+extrapolation of the catch-up burst exceeds its conservative projected envelope.
+This is not a GO approval for more restoration work or proof of a full-day
+steady-state rate. No further optional batch was started. Runtime routine
+admission remained within its unchanged limits, with bounded receipts settled.
+
+The Mac remained locked for the final browser check; published data was verified
+through the actual application readers instead of claiming a visual Safari test.
