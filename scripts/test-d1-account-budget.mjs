@@ -42,6 +42,17 @@ assert.match(d1AnalyticsQuery(), /d1QueriesAdaptiveGroups/);
 assert.match(d1AnalyticsQuery(), /datetimeFiveMinutes/);
 assert.doesNotMatch(d1AnalyticsQuery(), /databaseId:\s*\$/);
 
+assert.doesNotMatch(d1AnalyticsQuery({includeQueryFingerprints:false}),/d1QueriesAdaptiveGroups/);
+const lightweightPayload=structuredClone(payload);delete lightweightPayload.data.viewer.accounts[0].queries;
+const lightweight=summarizeAnalyticsPayload(lightweightPayload,completeInventory,{requireQueryFingerprints:false});
+assert.equal(lightweight.complete,true);
+assert.deepEqual(lightweight.totals,analytics.totals);
+assert.deepEqual(lightweight.timelineTotals,analytics.timelineTotals);
+assert.equal(summarizeAnalyticsPayload(lightweightPayload,completeInventory).complete,false,'diagnostic audits still require fingerprints');
+const inconsistentLightweight=structuredClone(lightweightPayload);
+inconsistentLightweight.data.viewer.accounts[0].timeline[0].sum.rowsRead+=100000;
+assert.equal(summarizeAnalyticsPayload(inconsistentLightweight,completeInventory,{requireQueryFingerprints:false}).complete,false,'lightweight admission still reconciles the quota ledger');
+
 const independentlySampledFingerprints = summarizeAnalyticsPayload(
   analyticsPayload(
     [usage(productionId, 16_295, 20, 396, 8)],

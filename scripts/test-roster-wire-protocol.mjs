@@ -1,3 +1,6 @@
+import { executeRosterPatch } from './roster-patch-plan.mjs';
+import { attachRosterCompactPlan } from './roster-compact-plan.mjs';
+import { refreshFacilityOverviewMaterializationForFile } from '../functions/_lib/d1-calendar.js';
 import { rosterDeliveryOrder } from '../functions/_lib/roster-delivery-order.js';
 import { listQueuedRosterSyncRuns, claimRosterDispatch } from '../functions/_lib/d1-calendar.js';
 import assert from 'node:assert/strict';
@@ -20,6 +23,11 @@ class LocalD1 {
         if (owner.failRunIncludes && sql.includes(owner.failRunIncludes)) {
           owner.failRunIncludes = "";
           throw new Error("Injected D1 statement failure");
+        }
+        const prepared = owner.sqlite.prepare(sql);
+        if (/^\s*SELECT\b/i.test(sql) || /^\s*WITH\b/i.test(sql) && !/\b(INSERT|UPDATE|DELETE)\b/i.test(sql)) {
+          const results = prepared.all(...this.args);
+          return {success:true,results,meta:{changes:0,rows_read:results.length+1,rows_written:0}};
         }
         const result = owner.sqlite.prepare(sql).run(...this.args);
         owner.rowsWritten += Number(result.changes || 0);
@@ -71,7 +79,7 @@ async function call(fn){beginMaintenanceAccounting(db,'wire-fixture-'+(++request
 for(const [sourceId,path] of [['monash-adults','fixtures/AdultTerm1.2026.xlsx'],['monash-paeds','fixtures/Paeds_Term_2_2026.xlsx']]) {
   const fileBytes=await readFile(new URL('../'+path,import.meta.url));
   const payload=await buildAutomatedDerivedRosterPayload({file:new File([fileBytes],path.split('/').at(-1),{lastModified:1}),sourceId,contentHash:'fixture',fileId:'wire:'+sourceId});
-  const plan=await planRosterImportBatches(payload);
+  const plan=await attachRosterCompactPlan(await planRosterImportBatches(payload),payload);
   assert.equal(plan.revision,await rosterImportDigest(wire(plan.manifest)));
   for(const batch of plan.batches)assert.equal(plan.manifest.batches[batch.index].hash,await rosterImportDigest(wire(batch)));
   const run='wire-run:'+sourceId, file=payload.file;
@@ -103,7 +111,23 @@ for(const [sourceId,path] of [['monash-adults','fixtures/AdultTerm1.2026.xlsx'],
   assert.equal((await call(()=>stageBoundedRosterBatch(db,run,file,plan.revision,wire(plan.batches[0])))).duplicate,true);
   assert.equal(db.rowsWritten,staged);
   for(const batch of plan.batches)await call(()=>prepareBoundedRosterPresence(db,run,file,plan.revision,wire(batch)));
+  const metadataStart=db.sql.length;
+  await assert.rejects(call(()=>prepareBoundedRosterMetadata(db,run,plan.revision)),/unfinished batches/);
+  const badCompact=wire(plan.compactBatches[0]);badCompact.entries[0].fact.displayName='Corrupt';
+  const beforeCompact=db.rowsWritten;
+  await assert.rejects(call(()=>prepareBoundedRosterMetadata(db,run,plan.revision,badCompact)),/pinned manifest/);
+  assert.equal(db.rowsWritten,beforeCompact);
+  db.failRunIncludes='INSERT INTO roster_import_compact_receipts';
+  await assert.rejects(call(()=>prepareBoundedRosterMetadata(db,run,plan.revision,wire(plan.compactBatches[0]))),/Injected/);
+  assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM roster_import_compact_receipts WHERE run_id=?').get(run).n,0,'receipt failure rolls back its metadata');
+  for(const batch of plan.compactBatches) await call(()=>prepareBoundedRosterMetadata(db,run,plan.revision,wire(batch)));
+  const compactWrites=db.rowsWritten;
+  assert.equal((await call(()=>prepareBoundedRosterMetadata(db,run,plan.revision,wire(plan.compactBatches[0])))).duplicate,true);
+  assert.equal(db.rowsWritten,compactWrites);
   await call(()=>prepareBoundedRosterMetadata(db,run,plan.revision));
+  assert.equal(db.sql.slice(metadataStart).some(sql=>sql.includes('FROM roster_events')),false,'compact staging must not re-read term events');
+  const legacyComparison=await refreshFacilityOverviewMaterializationForFile(db,file.id,{dryRun:true,contentRevision:plan.revision});
+  assert.equal(legacyComparison.proposedWrites,0,'offloaded metadata must exactly match legacy grades, terms and catalogs');
   await call(()=>activateBoundedRosterTerm(db,run,plan.revision));
   assert.equal(sqlite.prepare('SELECT active FROM roster_files WHERE id=?').get(file.id).active,1);
   assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM roster_events WHERE file_id=?').get(file.id).n,payload.eventCount);
@@ -135,6 +159,29 @@ for(const [sourceId,path] of [['monash-adults','fixtures/AdultTerm1.2026.xlsx'],
   assert.equal(small.result.status,200,JSON.stringify(small.result));
   assert.equal(small.result.data.fileId,file.id,'small corrections preserve the stable active file');
   assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM roster_events WHERE file_id=?').get(file.id).n,payload.eventCount);
+  env.ROSTER_AUTOMATION_PATCH_IMPORT_ENABLED='true';
+  const patchIncoming={...file,id:'incoming:'+sourceId+':patch'},patchRun='correction:'+sourceId+':patch';
+  const patchPayload=wire(payload);patchPayload.file=patchIncoming;
+  Object.values(patchPayload.eventsByDoctor).find(rows=>rows.length)[0].title+=' corrected twice';
+  const patchImport=await attachRosterCompactPlan(await planRosterImportBatches(patchPayload,{maximumBatchBytes:65536,maximumOccurrences:64}),patchPayload);
+  sqlite.prepare('INSERT INTO roster_sync_runs(id,source_id,file_id,source_file_id,content_hash,status) VALUES(?,?,?,?,?,?)').run(patchRun,sourceId,patchIncoming.id,patchIncoming.id,'fixture','queued');
+  const patchCommon={sourceId,runId:patchRun,file:patchIncoming,revision:patchImport.revision};
+  const patchProbe=await api({...patchCommon,phase:'bounded-begin',supportsPatch:true,manifest:patchImport.manifest});
+  assert.equal(patchProbe.data.mode,'patch',JSON.stringify(patchProbe));
+  const patchResult=await executeRosterPatch(patchPayload,patchProbe.data,async body=>{
+    if(body.phase==='bounded-finalize') {
+      const published=sqlite.prepare('SELECT id,event_json FROM roster_events WHERE file_id=? ORDER BY id').all(file.id);
+      db.failRunIncludes='INSERT INTO roster_sources';
+      const failed=await api({...patchCommon,...body});assert.equal(failed.status,422,'lost completion bookkeeping is resumable');
+      assert.equal(sqlite.prepare('SELECT activated FROM roster_patch_jobs WHERE run_id=?').get(patchRun).activated,1);
+      assert.deepEqual(sqlite.prepare('SELECT id,event_json FROM roster_events WHERE file_id=? ORDER BY id').all(file.id),published,'bookkeeping failure cannot change published facts');
+    }
+    const result=await api({...patchCommon,...body});assert.equal(result.status,200,JSON.stringify(result));return result.data;
+  });
+  assert.equal(patchResult.completed,true);
+  assert.equal(sqlite.prepare('SELECT status,file_id FROM roster_sync_runs WHERE id=?').get(patchRun).file_id,file.id);
+  assert.equal((await api({...patchCommon,phase:'bounded-patch-activate'})).data.completed,true,'completion replay accepts the original queued file');
+  env.ROSTER_AUTOMATION_PATCH_IMPORT_ENABLED='false';
   const beforeLarge=sqlite.prepare('SELECT id,event_json FROM roster_events WHERE file_id=? ORDER BY id').all(file.id);
   const large=await correction('large',1300);
   assert.equal(large.result.status,422,JSON.stringify(large.result));

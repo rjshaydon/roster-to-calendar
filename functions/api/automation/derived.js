@@ -1,5 +1,5 @@
 import { rosterDeliveryOrder, skipSupersededRosterDelivery } from '../../_lib/roster-delivery-order.js';
-import { rosterTermOwnership } from "../../_lib/roster-term-ownership.js";
+import { rosterTargetPreflight } from "../../_lib/roster-term-ownership.js";
 import { reserveRosterMaintenanceBudget, maintenanceBudgetDeferredError, configureRosterMaintenanceBudget } from "../../_lib/roster-maintenance-budget.js";
 import { automationSourceDefinition } from "../../_lib/automation-import.js";
 import { handleBoundedRosterRequest } from "../../_lib/roster-import-protocol.js";
@@ -14,7 +14,6 @@ import {
   supersedeDuplicateRosterSyncRuns,
   upsertRosterSource,
 } from "../../_lib/d1-calendar.js";
-import { runAutomatedDerivedRosterSave, validateDerivedCalendarPayload } from "../state.js";
 import { automatedRosterQueueEnabled, automatedRosterSourceEnabled, automatedRosterWritesEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
 
 export async function onRequestPost(context) {
@@ -26,7 +25,7 @@ export async function onRequestPost(context) {
   if (!hasCalendarDb(context.env)) return Response.json({ error: "Roster database is unavailable." }, { status: 503 });
   let body = null;
   try {
-    body = await context.request.json();
+    body = context.data?.derivedInput !== undefined ? context.data.derivedInput : await context.request.json();
     const runId = String(body?.runId || "").trim();
     const sourceId = String(body?.sourceId || body?.file?.sourceId || "").trim();
     const phase = String(body?.phase || "").toLowerCase();
@@ -35,6 +34,9 @@ export async function onRequestPost(context) {
     if (!source && phase !== "failed") return Response.json({ error: "Unknown automation source." }, { status: 400 });
     configureRosterMaintenanceBudget(context.env.ROSTER_DB, body.maintenanceBudget);
     if (phase.startsWith("bounded-")) return handleBoundedRosterRequest(context, { ...body, sourceId }, source, (...args) => resolveCompleteTarget(...args, context.env));
+    // Bounded imports do not need the account/admin state handler or its
+    // identity and UI dependencies. Load that legacy path only when requested.
+    const { runAutomatedDerivedRosterSave, validateDerivedCalendarPayload } = await import("../state.js");
     if (!["start", "events", "finish", "complete", "failed"].includes(phase)) {
       return Response.json({ error: "A valid derived-save phase is required." }, { status: 400 });
     }
@@ -211,17 +213,18 @@ async function resolveCompleteTarget(db, source, sourceId, run, eventsByDoctor, 
   const firstTerm = australianTermStartForDate(dates[0]);
   const lastTerm = australianTermStartForDate(dates.at(-1));
   if (!firstTerm || !lastTerm) throw new Error("Cannot establish the incoming roster term safely.");
-  const rows = await db.prepare(`SELECT f.id, f.source_id, s.derived_state, c.coverage_start, c.coverage_end
-    FROM roster_files f INDEXED BY idx_roster_files_source_active
-    LEFT JOIN roster_file_status_summaries s ON s.file_id = f.id
-    LEFT JOIN roster_file_coverage c ON c.file_id = f.id
-    WHERE f.source_type = ? AND f.active = 1 LIMIT 33`).bind(source.sourceType).all();
-  if (rows.results.length > 32) throw new Error("Roster target lookup exceeds the 32-active-file safety budget.");
-  const candidates = rows.results.filter((row) => row.source_id === sourceId);
-  if (String(env.ROSTER_AUTOMATION_BOUNDED_IMPORT_ENABLED || "") === "true" && !await reserveRosterMaintenanceBudget(db, 0, candidates.length * 752 + 64)) throw maintenanceBudgetDeferredError();
-  const matches = [];
+  if (String(env.ROSTER_AUTOMATION_BOUNDED_IMPORT_ENABLED || "") === "true" && !await reserveRosterMaintenanceBudget(db,0,32*752+128)) throw maintenanceBudgetDeferredError();
+  const preflight=await rosterTargetPreflight(db,{sourceType:source.sourceType,sourceId,runId:run.id,start:dates[0],end:dates.at(-1)});
+  if (preflight.files.length>32) throw new Error("Roster target lookup exceeds the 32-active-file safety budget.");
+  const candidates=preflight.files.filter(row=>row.source_id===sourceId);
   for (const row of candidates) {
-    const ownership = await rosterTermOwnership(db, row.id);
+    if (row.derived_state!=="ready" || !row.coverage_start || !row.coverage_end) throw new Error("Existing automated roster coverage is not ready for a safe replacement.");
+  }
+  const overlapping=candidates.filter(row=>row.coverage_start<=dates.at(-1) && row.coverage_end>=dates[0]);
+  const matches = [];
+  for (const row of overlapping) {
+    const ownership = row.ownership;
+    if(!ownership || ownership.rowCount>750) throw new Error('Roster ownership exceeds its compact contribution ceiling.');
     const startTerm = ownership.firstTerm;
     const endTerm = ownership.lastTerm;
     if (row.derived_state !== "ready" || !startTerm || !endTerm) throw new Error("Existing automated roster coverage is not ready for a safe replacement.");
@@ -230,8 +233,9 @@ async function resolveCompleteTarget(db, source, sourceId, run, eventsByDoctor, 
     else if (overlaps) throw new Error("Incoming roster overlaps a different retained term range; replacement requires staged review.");
   }
   if (matches.length > 1) throw new Error("Multiple automated rosters match the incoming term; replacement requires review.");
-  const current = candidates.find((row) => row.id === currentSource?.activeFileId);
+  const current = candidates.find((row) => row.id === (currentSource?.activeFileId || preflight.active_file_id));
   return {
+    stagedNextBatch:Number(preflight.next_batch || 0),stagedPreparedBatch:Number(preflight.prepared_batch || 0),
     fileId: matches[0]?.id || run.fileId,
     preserveActiveFile: Boolean(current && australianTermStartForDate(current.coverage_start) > firstTerm),
   };

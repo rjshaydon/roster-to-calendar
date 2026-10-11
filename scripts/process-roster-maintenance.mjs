@@ -14,7 +14,7 @@ let maintenanceBudget = null;
 let lastAdmission = 0;
 async function request(path, body) {
   if (path !== "/api/automation/account-budget" && Date.now() - lastAdmission > 5 * 60 * 1000) {
-    const admission = await request("/api/automation/account-budget", {});
+    const admission = await request("/api/automation/account-budget", { reuseCurrentGrant: true });
     lastAdmission = Date.now();
     if (admission.deferred || admission.paused) { console.log("Account budget deferred; durable progress retained."); return { paused: true, deferred: true }; }
   }

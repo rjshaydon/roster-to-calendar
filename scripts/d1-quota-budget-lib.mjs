@@ -42,7 +42,7 @@ export function settledUtcDayInterval(nowValue = new Date()) {
   };
 }
 
-export function d1AnalyticsQuery() {
+export function d1AnalyticsQuery({ includeQueryFingerprints = true } = {}) {
   return `query D1AccountQuota($accountTag: string!, $start: Time!, $end: Time!) {
     viewer {
       accounts(filter: { accountTag: $accountTag }) {
@@ -61,7 +61,7 @@ export function d1AnalyticsQuery() {
           dimensions { datetimeFiveMinutes databaseId }
           sum { readQueries writeQueries rowsRead rowsWritten }
         }
-        queries: d1QueriesAdaptiveGroups(
+        ${includeQueryFingerprints ? `queries: d1QueriesAdaptiveGroups(
           limit: 10000
           filter: { datetime_geq: $start, datetime_leq: $end }
         ) {
@@ -69,13 +69,13 @@ export function d1AnalyticsQuery() {
           dimensions { databaseId query error }
           avg { rowsRead rowsReturned rowsWritten }
           sum { rowsRead rowsReturned rowsWritten }
-        }
+        }` : ''}
       }
     }
   }`;
 }
 
-export function summarizeAnalyticsPayload(payload, inventory) {
+export function summarizeAnalyticsPayload(payload, inventory, { requireQueryFingerprints = true } = {}) {
   const reasons = [];
   if (!payload || typeof payload !== "object") return stoppedAnalytics("analytics-response-missing");
   if (Array.isArray(payload.errors) && payload.errors.length) return stoppedAnalytics("analytics-response-errors");
@@ -83,7 +83,7 @@ export function summarizeAnalyticsPayload(payload, inventory) {
   if (!Array.isArray(accounts) || accounts.length !== 1) return stoppedAnalytics("analytics-account-result-invalid");
   const usageGroups = accounts[0]?.usage;
   const timelineGroups = accounts[0]?.timeline;
-  const queryGroups = accounts[0]?.queries;
+  const queryGroups = requireQueryFingerprints ? accounts[0]?.queries : [];
   if (!Array.isArray(usageGroups) || !Array.isArray(timelineGroups) || !Array.isArray(queryGroups)) return stoppedAnalytics("analytics-groups-missing");
   if (usageGroups.length >= 10_000 || timelineGroups.length >= 10_000 || queryGroups.length >= 10_000) reasons.push("analytics-pagination-or-limit-truncation");
 

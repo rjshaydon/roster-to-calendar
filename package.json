@@ -62,7 +62,8 @@
     "inspect:roster": "node --no-warnings scripts/inspect-roster-workbook.mjs",
     "canary:monash-adults": "node scripts/submit-monash-adults-canary.mjs",
     "canary:monash-adults-config": "node scripts/prepare-monash-adults-canary-config.mjs",
-    "test:monash-adults-canary": "node scripts/test-monash-adults-canary.mjs"
+    "test:monash-adults-canary": "node scripts/test-monash-adults-canary.mjs",
+    "test:roster-patch": "node --no-warnings scripts/test-roster-patch.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.84.1",

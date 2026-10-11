@@ -1,12 +1,21 @@
+import { maintenanceReceiptSummary } from '../../_lib/maintenance-receipt-summary.js';
 import inventory from "../../_lib/d1-account-inventory.js";
 import { d1AnalyticsQuery, settledUtcDayInterval, summarizeAnalyticsPayload } from "../../../scripts/d1-quota-budget-lib.mjs";
-import { accountMaintenanceHeadroom, outstandingMaintenance } from "../../_lib/account-maintenance-policy.js";
-import { stopAccountMaintenance, recoverAbandonedMaintenance } from "../../_lib/roster-maintenance-budget.js";
+import { accountMaintenanceHeadroom } from "../../_lib/account-maintenance-policy.js";
+import { stopAccountMaintenance, recoverAbandonedMaintenance, optionalMaintenanceAvailable, currentAccountMaintenanceGrant } from "../../_lib/roster-maintenance-budget.js";
 
 export async function onRequestPost(context) {
   const token = String(context.env.ROSTER_AUTOMATION_TOKEN || "");
   const provided = String(context.request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
   if (!token || token.length !== provided.length || [...token].reduce((n,c,i) => n | (c.charCodeAt(0) ^ provided.charCodeAt(i)), 0)) return Response.json({ error: "Unauthorized." }, { status: 401 });
+  const input = await context.request.json().catch(() => ({}));
+  // Reuse only the same unexpired, SQL-enforced allocation. This cannot add
+  // headroom or skip the unfinished-work gate, and expires after ten minutes.
+  if (input.reuseCurrentGrant === true && context.env.ROSTER_ACCOUNT_BUDGET_ENABLED === "true"
+    && await optionalMaintenanceAvailable(context.env.ROSTER_DB)
+    && await currentAccountMaintenanceGrant(context.env.ROSTER_DB)) {
+    return Response.json({ ok: true, reused: true, deferred: false });
+  }
   return refreshAccountMaintenanceBudget(context);
 }
 
@@ -21,34 +30,20 @@ export async function refreshAccountMaintenanceBudget(context) {
     if (!interval.settled) throw new Error("Waiting for current UTC-day analytics settlement.");
     const response = await fetch("https://api.cloudflare.com/client/v4/graphql", {
       method: "POST", headers: { Authorization: `Bearer ${analyticsToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ query: d1AnalyticsQuery(), variables: { accountTag: inventory.accountId, start: interval.start, end: interval.observedUntil } }),
+      body: JSON.stringify({ query: d1AnalyticsQuery({ includeQueryFingerprints: false }), variables: { accountTag: inventory.accountId, start: interval.start, end: interval.observedUntil } }),
       signal: AbortSignal.timeout(20000),
     });
     if (!response.ok) throw new Error("Account analytics request failed.");
-    const analytics = { ...summarizeAnalyticsPayload(await response.json(), inventory), interval };
+    const analytics = { ...summarizeAnalyticsPayload(await response.json(), inventory, { requireQueryFingerprints: false }), interval };
     if (!analytics.complete) throw new Error("Account analytics did not reconcile.");
     // Recovery bookkeeping has a small fixed bound; do not spend it when the
     // account itself is already too close to the unchanged maintenance ceiling.
     const previousDay=new Date(Date.parse(interval.start)-86400000).toISOString().slice(0,10);
     const recovered=analytics.totals.rowsRead<3999000 && analytics.totals.rowsWritten<79000
       ?await recoverAbandonedMaintenance(db,day,interval.observedUntil)+await recoverAbandonedMaintenance(db,previousDay,interval.observedUntil):0;
-    const receipts = (await db.prepare("SELECT utc_day,reserved_reads,reserved_writes,actual_reads,actual_writes,finished_at,metadata_complete,reconciled_at FROM roster_maintenance_receipts WHERE utc_day=? LIMIT 10001").bind(day).all()).results || [];
-    if (receipts.length > 10000) throw new Error("Maintenance receipt inspection bound reached.");
-    // A batch admitted immediately before midnight may still be draining.
-    // Carry its bounded unknown cost until today's settled cutoff covers it;
-    // never refund yesterday's receipt into today's allocated grant.
-    const carry=(await db.prepare("SELECT utc_day,reserved_reads,reserved_writes,actual_reads,actual_writes,finished_at,metadata_complete,reconciled_at FROM roster_maintenance_receipts WHERE utc_day=? AND recover_after>? AND reconciled_at='' LIMIT 10001").bind(previousDay,interval.start).all()).results||[];
-    if(carry.length>10000) throw new Error('Previous-day maintenance receipt inspection bound reached.');
-    const outstanding = outstandingMaintenance([...receipts,...carry], interval.observedUntil);
-    const settledMaintenance = receipts.reduce((sum, row) => {
-      if (!row.reconciled_at && Number(row.metadata_complete) === 1 && row.finished_at && row.finished_at <= interval.observedUntil) {
-        // Stored actual costs include 24 estimated settlement units; subtract
-        // only the measured route portion, never the estimate, from traffic.
-        sum.reads += Math.max(0, Number(row.actual_reads)-24);
-        sum.writes += Math.max(0, Number(row.actual_writes)-24);
-      }
-      return sum;
-    }, { reads: 0, writes: 0 });
+    const summary = await maintenanceReceiptSummary(db,day,previousDay,interval.start,interval.observedUntil);
+    const outstanding = summary.outstanding;
+    const settledMaintenance = summary.settled;
     const budget = accountMaintenanceHeadroom(analytics, outstanding, new Date(), settledMaintenance);
     // A concurrent reservation may occur after the SELECT above. Do not grant
     // headroom against a newer allocation baseline: fence it using this value.
@@ -56,8 +51,8 @@ export async function refreshAccountMaintenanceBudget(context) {
     if (previous?.stop_reason && previous.stop_reason.startsWith("cost-overrun:")) return Response.json({ ok: true, deferred: true, reason: previous.stop_reason });
     const reads = Number(previous?.allocated_reads || 0), writes = Number(previous?.allocated_writes || 0);
     // Re-read receipts atomically by comparing their monotonic reserved totals.
-    const receiptReads = receipts.reduce((n,r) => n + Number(r.reserved_reads), 0);
-    const receiptWrites = receipts.reduce((n,r) => n + Number(r.reserved_writes), 0);
+    const receiptReads = summary.receiptReads;
+    const receiptWrites = summary.receiptWrites;
     const result = await db.prepare(`INSERT INTO roster_account_budget
       (utc_day,allocated_reads,allocated_writes,maximum_reads,maximum_writes,valid_until,stop_reason,observed_until,account_reads,account_writes)
       SELECT ?,?,?,?,?,?,'',?,?,? WHERE

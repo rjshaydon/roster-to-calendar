@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFile } from "node:fs/promises";
+import { maintenanceReceiptSummary } from "../functions/_lib/maintenance-receipt-summary.js";
 import { outstandingMaintenance, accountMaintenanceHeadroom } from "../functions/_lib/account-maintenance-policy.js";
 import { beginMaintenanceAccounting, reserveRosterMaintenanceBudget, finishMaintenanceAccounting, recoverAbandonedMaintenance, optionalMaintenanceAvailable, currentAccountMaintenanceGrant } from "../functions/_lib/roster-maintenance-budget.js";
 import { createD1Meter, onRequest as middleware } from "../functions/_middleware.js";
@@ -36,6 +37,36 @@ function database() {
   }; }, async batch(statements) { sqlite.exec("BEGIN"); try { const results=[]; for (const s of statements) results.push(await s.run()); sqlite.exec("COMMIT"); return results; } catch(e) { sqlite.exec("ROLLBACK"); throw e; } } };
   return db;
 }
+// Compare SQL accounting against the former receipt policy across the settled
+// cutoff and midnight. Unknown costs must remain reserved, including carry-over.
+const fixtureDay = "2026-10-01", fixturePrevious = "2026-09-30";
+const fixtureStart = `${fixtureDay}T00:00:00.000Z`;
+const insertReceipt = sqlite.prepare(`INSERT INTO roster_maintenance_receipts
+  (request_id,utc_day,reserved_reads,reserved_writes,actual_reads,actual_writes,finished_at,metadata_complete,reconciled_at,recover_after)
+  VALUES (?,?,?,?,?,?,?,?,?,?)`);
+const fixtures = [
+  ["settled",fixtureDay,200,40,124,34,"2026-10-01T04:00:00.000Z",1,"",""],
+  ["late",fixtureDay,300,60,250,50,"2026-10-01T04:50:00.000Z",1,"",""],
+  ["unknown",fixtureDay,400,80,0,0,"",0,"",""],
+  ["recovered",fixtureDay,500,100,0,0,"",0,"2026-10-01T04:00:00.000Z",""],
+  ["recovered-later",fixtureDay,600,120,0,0,"",0,"2026-10-01T04:50:00.000Z",""],
+  ["carry",fixturePrevious,700,140,0,0,"",0,"","2026-10-01T01:00:00.000Z"],
+  ["expired-carry",fixturePrevious,800,160,0,0,"",0,"","2026-09-30T23:00:00.000Z"],
+  ["old-recovered",fixturePrevious,900,180,0,0,"",0,"2026-10-01T04:50:00.000Z","2026-10-01T01:00:00.000Z"],
+];
+for (const row of fixtures) insertReceipt.run(...row);
+const fixtureSummary = await maintenanceReceiptSummary(database(),fixtureDay,fixturePrevious,fixtureStart,cutoff);
+const inspected = sqlite.prepare("SELECT * FROM roster_maintenance_receipts WHERE utc_day=? OR (utc_day=? AND recover_after>? AND reconciled_at='')").all(fixtureDay,fixturePrevious,fixtureStart);
+assert.deepEqual(fixtureSummary.outstanding,outstandingMaintenance(inspected,cutoff));
+assert.deepEqual(fixtureSummary.settled,{reads:100,writes:10});
+assert.equal(fixtureSummary.receiptReads,2000);
+assert.equal(fixtureSummary.receiptWrites,400);
+sqlite.exec("DELETE FROM roster_maintenance_receipts");
+sqlite.exec("WITH RECURSIVE numbers(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM numbers WHERE n<10001) INSERT INTO roster_maintenance_receipts(request_id,utc_day) SELECT 'ceiling-'||n,'2026-10-01' FROM numbers");
+await assert.rejects(maintenanceReceiptSummary(database(),fixtureDay,fixturePrevious,fixtureStart,cutoff),/inspection bound/);
+sqlite.exec("DELETE FROM roster_maintenance_receipts");
+assert.deepEqual((await maintenanceReceiptSummary(database(),fixtureDay,fixturePrevious,fixtureStart,cutoff)).outstanding,{reads:0,writes:0});
+
 const day = new Date().toISOString().slice(0,10);
 sqlite.prepare("INSERT INTO roster_account_budget(utc_day,maximum_reads,maximum_writes,valid_until) VALUES(?,?,?,?)").run(day, 1000000, 20000, new Date(Date.now()+600000).toISOString());
 assert.equal(await currentAccountMaintenanceGrant(database()),true,'fresh shared grant can be reused without fetching analytics');
@@ -85,6 +116,13 @@ try {
   assert.equal(admission.deferred, false, JSON.stringify(admission));
   assert.ok(admission.budget.writes > 10000);
   assert.ok(sqlite.prepare("SELECT maximum_writes-allocated_writes AS headroom FROM roster_account_budget").get().headroom > 10000);
+  const beforeReuse=sqlite.prepare("SELECT allocated_reads,allocated_writes,maximum_reads,maximum_writes FROM roster_account_budget WHERE utc_day=?").get(day);
+  const actualFetch=globalThis.fetch;
+  globalThis.fetch=async()=>{throw Error('A reused grant must not fetch analytics');};
+  const reused=await (await admit({...context,request:new Request(context.request.url,{method:'POST',headers:{Authorization:'Bearer test-only'},body:JSON.stringify({reuseCurrentGrant:true})})})).json();
+  assert.equal(reused.reused,true);
+  assert.deepEqual(sqlite.prepare("SELECT allocated_reads,allocated_writes,maximum_reads,maximum_writes FROM roster_account_budget WHERE utc_day=?").get(day),beforeReuse,'reuse cannot grant additional headroom');
+  globalThis.fetch=actualFetch;
   // A reservation interleaving the snapshot's two reads must prevent stale
   // headroom being applied. The previous grant remains atomically consumed.
   const raceDb = database(), racer = database();

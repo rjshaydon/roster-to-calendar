@@ -12,6 +12,9 @@ export async function planRosterImportBatches(payload, options = {}) {
   if (!SOURCES.has(sourceId) || !payload.file.id) throw new Error("A known source and queued file id are required.");
   const limit = Math.min(ROSTER_BATCH_FACT_LIMIT, Number(options.maximumFacts || ROSTER_BATCH_FACT_LIMIT));
   if (!Number.isInteger(limit) || limit < 10) throw new Error("Invalid roster batch fact budget.");
+  const maximumBatchBytes = Math.min(ROSTER_BATCH_BYTE_LIMIT, Number(options.maximumBatchBytes || ROSTER_BATCH_BYTE_LIMIT));
+  const maximumOccurrences = options.maximumOccurrences == null ? Infinity : Number(options.maximumOccurrences);
+  if (!Number.isInteger(maximumBatchBytes) || maximumBatchBytes < 8192 || !(maximumOccurrences >= 1)) throw new Error("Invalid roster CPU batch bound.");
   const doctors = [...(payload.doctors || [])].sort((a, b) => String(a.key).localeCompare(String(b.key)));
   const keys = new Set(doctors.map((doctor) => doctor.key));
   if (!doctors.length || doctors.length > 512 || keys.size !== doctors.length || doctors.some((doctor) => !doctor.key)) throw new Error("Invalid or duplicate roster doctors.");
@@ -54,9 +57,9 @@ export async function planRosterImportBatches(payload, options = {}) {
         const bytes = new TextEncoder().encode(canonical(item)).length;
         const doctorBytes = new TextEncoder().encode(canonical(doctor)).length;
         const newDoctor = !batch.doctors.some((entry) => entry.key === doctor.key);
-        if (batch.facts + weight + (newDoctor ? 2 : 0) + 16 > limit || batch.bytes + bytes + (newDoctor ? doctorBytes : 0) + 4096 > ROSTER_BATCH_BYTE_LIMIT) finishBatch();
+        if (batch.facts + weight + (newDoctor ? 2 : 0) + 16 > limit || batch.bytes + bytes + (newDoctor ? doctorBytes : 0) + 4096 > maximumBatchBytes || batch.eventCount + batch.issueCount >= maximumOccurrences) finishBatch();
         const addDoctor = !batch.doctors.some((entry) => entry.key === doctor.key);
-        if (weight + (addDoctor ? 2 : 0) + 16 > limit || bytes + doctorBytes + 4096 > ROSTER_BATCH_BYTE_LIMIT) throw new Error("One roster fact exceeds the batch safety budget.");
+        if (weight + (addDoctor ? 2 : 0) + 16 > limit || bytes + doctorBytes + 4096 > maximumBatchBytes) throw new Error("One roster fact exceeds the batch safety budget.");
         if (addDoctor) { batch.doctors.push(doctor); batch.facts += 2; batch.bytes += doctorBytes; }
         (batch[kind][doctor.key] ||= []).push(item);
         batch.facts += weight;
@@ -96,6 +99,18 @@ export function validateRosterImportManifest(manifest) {
     if (batch.indexedEventCount !== events) throw new Error("Invalid batch completion cursor.");
   }
   if (events !== manifest.eventCount || issues !== manifest.issueCount || !events || events > 25000 || issues > 5000) throw new Error("Invalid manifest total counts.");
+  if (manifest.compact) {
+    const compact = manifest.compact;
+    if (compact.coverageStart !== manifest.startDate || compact.coverageEnd !== manifest.endDate
+      || !/^[a-f0-9]{64}$/.test(compact.staffDigest) || !/^[a-f0-9]{64}$/.test(compact.dailyDigest)
+      || !Array.isArray(compact.batches) || compact.batches.length > 47) throw new Error("Invalid compact manifest.");
+    let count = 0;
+    for (const [index, batch] of compact.batches.entries()) {
+      if (batch.index !== index || !/^[a-f0-9]{64}$/.test(batch.hash) || !Number.isInteger(batch.count) || batch.count < 1 || batch.count > 16) throw new Error("Invalid compact batch descriptor.");
+      count += batch.count;
+    }
+    if (!count || count > 750) throw new Error("Invalid compact fact count.");
+  }
   presenceRowCount({ start: manifest.startDate, end: manifest.endDate }, 180);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(manifest.rosterEndDate) || manifest.rosterEndDate < manifest.startDate || manifest.rosterEndDate > manifest.endDate) throw new Error("Invalid shift-start ownership range.");
 }

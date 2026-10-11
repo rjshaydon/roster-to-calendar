@@ -27,6 +27,7 @@ export async function onRequestGet(context) {
   return Response.json({
     ok: true,
     boundedImportEnabled,
+    patchImportEnabled: context.env.ROSTER_AUTOMATION_PATCH_IMPORT_ENABLED === "true",
     publicationPending: Boolean(await loadPendingRosterPublication(context.env,sourceId)),
     maintenanceDeferred,
     maintenanceBudget: boundedImportEnabled ? { utcDay: new Date().toISOString().slice(0, 10), baseWrites: Number(allowance?.reserved_writes || 0), baseReads: Number(allowance?.reserved_reads || 0) } : null,

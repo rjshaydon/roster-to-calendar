@@ -49,13 +49,19 @@ export async function onRequest(context) {
   const url = new URL(context.request.url);
   const requestId = context.request.headers.get("cf-ray") || crypto.randomUUID();
   const action = await safeStateAction(context.request, url.pathname);
-  let identityMaintenanceInput;
+  let identityMaintenanceInput, derivedInput;
   if (url.pathname === '/api/automation/identity-maintenance' && context.request.method === 'POST') {
     identityMaintenanceInput = await context.request.json().catch(() => null);
     context.data ||= {};
     context.data.identityMaintenanceInput = identityMaintenanceInput;
   }
-  const limit = await requestD1StatementLimit(context.request, url.pathname, action, identityMaintenanceInput);
+  if (url.pathname === '/api/automation/derived' && context.request.method === 'POST') {
+    derivedInput = await context.request.json().catch(() => null);
+    context.data ||= {};
+    context.data.derivedInput = derivedInput;
+    context.data.d1OperationPhase = String(derivedInput?.phase || "").slice(0,48);
+  }
+  const limit = await requestD1StatementLimit(context.request, url.pathname, action, identityMaintenanceInput, derivedInput);
   let contained = requestContainmentReason(url.pathname, action, sharedEnv);
   const originalD1Binding = contained ? sharedEnv.ROSTER_DB : unwrapD1Binding(sharedEnv.ROSTER_DB);
   const deadlineAt=Math.min(Date.now()+120000,Date.parse(new Date().toISOString().slice(0,10))+86400000);
@@ -124,7 +130,7 @@ export async function onRequest(context) {
   return await work;
 }
 
-async function requestD1StatementLimit(request, pathname, action, identityMaintenanceInput) {
+async function requestD1StatementLimit(request, pathname, action, identityMaintenanceInput, derivedInput) {
   if(pathname==='/api/automation/identity-maintenance' && request.method==='POST') {
     if (identityMaintenanceInput === null) return 64;
     try { return ['audit','register'].includes((identityMaintenanceInput ?? await request.clone().json()).mode)?96:512; } catch { return 64; }
@@ -135,10 +141,10 @@ async function requestD1StatementLimit(request, pathname, action, identityMainte
   }
   if ((pathname === "/api/automation/derived" || pathname === "/api/state" && action === "saveDerivedCalendarFile") && request.method === "POST") {
     try {
-      const body = await request.clone().json();
+      const body = derivedInput !== undefined ? derivedInput : await request.clone().json();
       const phase = String(body?.phase || "").toLowerCase();
       if (phase === "complete" || phase === "bounded-metadata") return ROSTER_DERIVED_COMPLETE_D1_STATEMENT_LIMIT;
-      if (["bounded-begin", "bounded-events", "bounded-activate"].includes(phase)) return 256;
+      if (["bounded-begin", "bounded-initialize", "bounded-events", "bounded-activate"].includes(phase)) return 256;
       return DEFAULT_D1_STATEMENT_LIMIT;
     } catch {
       return DEFAULT_D1_STATEMENT_LIMIT;

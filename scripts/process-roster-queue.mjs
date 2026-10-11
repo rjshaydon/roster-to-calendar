@@ -2,6 +2,8 @@ import { buildAutomatedDerivedRosterPayload } from "../functions/_lib/automation
 import { buildVhhDerivedRosterPayload, VHH_ROSTER_SOURCE_ID } from "../functions/_lib/vhh-roster.js";
 import { extractVhhRosterWorkbook } from "./vhh-roster-workbook.mjs";
 import { planRosterImportBatches } from "../functions/_lib/roster-import-batches.js";
+import { executeRosterPatch } from "./roster-patch-plan.mjs";
+import { attachRosterCompactPlan } from "./roster-compact-plan.mjs";
 import { executeBoundedRosterImport } from "./roster-import-driver.mjs";
 
 import { guardedFetch } from "../functions/_lib/outbound-network.js";
@@ -17,7 +19,7 @@ const sourceId = String(process.env.ROSTER_AUTOMATION_SOURCE_ID || "").trim();
 if (!token) throw new Error("ROSTER_AUTOMATION_TOKEN is required.");
 if (!sourceId) throw new Error("ROSTER_AUTOMATION_SOURCE_ID is required.");
 
-const admission = await automationRequest("/api/automation/account-budget", { method: "POST", body: {} });
+const admission = await automationRequest("/api/automation/account-budget", { method: "POST", body: { reuseCurrentGrant: true } });
 if (admission.deferred || admission.paused) {
   console.log("Account budget deferred; queued work retained.");
   await processorOutcome('deferred');
@@ -138,12 +140,19 @@ async function processRun(run) {
   };
   let finished;
   if (pending.boundedImportEnabled === true) {
-    const plan = await planRosterImportBatches(payload);
+    const plan = await attachRosterCompactPlan(await planRosterImportBatches(payload, {maximumBatchBytes:65536,maximumOccurrences:64}), payload);
     run.boundedImportStarted = true;
     const importStep = forceStaging => step => automationRequest("/api/automation/derived", {
-      method: "POST", body: { ...step, forceStaging, maintenanceBudget, runId: run.id, sourceId: run.sourceId, file: payload.file },
+      method: "POST", body: { ...step, supportsPatch: pending.patchImportEnabled === true, forceStaging, maintenanceBudget, runId: run.id, sourceId: run.sourceId, file: payload.file },
     });
     finished = await executeBoundedRosterImport(plan, importStep(false));
+    if (finished.mode === "patch") {
+      try { finished = await executeRosterPatch(payload,finished,importStep(false)); }
+      catch(error) {
+        if (error.code !== "ROSTER_INCREMENTAL_BUDGET" || !error.boundedReplacementRequired) throw error;
+        finished = await executeBoundedRosterImport(plan,importStep(true));
+      }
+    }
     if (finished.mode === "complete") {
       run.boundedImportStarted = false;
       try {
@@ -186,7 +195,7 @@ async function postDerived(run, payload, phase, doctors, eventsByDoctor, issuesB
 
 async function automationRequest(path, options = {}) {
   if (path !== "/api/automation/account-budget" && Date.now() - lastAccountAdmission > 5 * 60 * 1000) {
-    const admission = await automationRequest("/api/automation/account-budget", { method: "POST", body: {} });
+    const admission = await automationRequest("/api/automation/account-budget", { method: "POST", body: { reuseCurrentGrant: true } });
     lastAccountAdmission = Date.now();
     if (admission.deferred || admission.paused) return { ok: true, deferred: true, maintenanceDeferred: true };
   }
@@ -204,10 +213,10 @@ async function automationRequest(path, options = {}) {
       try {
         result = text ? JSON.parse(text) : {};
       } catch {
-        // A Pages/Cloudflare error page is transient infrastructure output,
-        // not a roster parser response. Treat it like a retryable 5xx rather
-        // than failing the retained-file reparse immediately.
+        // An uncertain derived callback is not retried in this pass. Keep
+        // its durable cursor for a later invocation; other reads may retry.
         lastError = new Error(`Automation endpoint returned non-JSON HTTP ${response.status || 502}.`);
+        if (path === "/api/automation/derived") break;
         if (attempt < 6) {
           await new Promise((resolve) => setTimeout(resolve, attempt * 2000));
           continue;
@@ -219,7 +228,7 @@ async function automationRequest(path, options = {}) {
       lastError = new Error(`${result.error || `HTTP ${response.status}`}${diagnostic ? ` (${diagnostic})` : ""}`);
       lastError.code = String(result.code || '');
       lastError.boundedReplacementRequired = result.boundedReplacementRequired === true;
-      if (![408, 429, 500, 502, 503, 504].includes(response.status)) break;
+      if (path === "/api/automation/derived" || ![408, 429, 500, 502, 503, 504].includes(response.status)) break;
     } catch (error) {
       lastError = error;
     }

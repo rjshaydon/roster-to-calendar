@@ -3,14 +3,13 @@
 Status: Batch 1 accepted; Batch 2 deployed and enabled. Historical registration
 and the actual scheduled weekly audit completed on 11 October (996 cached names
 registered; 545 audited; 47 candidate updates). Normal watchdog flags are restored.
-The user requires Cloudflare Free. CPU reductions are tested, but fresh/dense
-checkpoints still sometimes exceed its 10 ms allowance; this is the remaining
-Batch 2 acceptance issue. Split dense processing into durable smaller phases and
-verify cold/warm CPU before proceeding to Batch 6. Include the observed derived
-delivery CPU failures in that reliability batch. Conservative receipt recovery
-has recovered all the original held receipts without manual refunds; two newer
-receipts remain conservatively held to their recovery bounds.
-See the completed catch-up / Free-tier checkpoint in the acceptance record.
+The user requires Cloudflare Free. The 12 October CPU batch moves roster
+comparison and compact metadata preparation to the external runner, adds atomic
+bounded corrections, and reduces routine accounting overhead. CPU acceptance is
+still open: confirm final activation/event staging and natural production delivery,
+then offload dense identity matching without reducing comparison coverage.
+See [the CPU batch record](restoration-cpu-batch-2026-10-12.md) and the acceptance
+record. Unknown maintenance reservations retain their recovery bounds.
 The user's agreed priority is **1 → 2 → 6 → 7 → 3 → 4 → 5 → 8**,
 retaining the original batch numbers for continuity. This plan supersedes earlier
 fifteen-minute freshness targets and batch ordering.

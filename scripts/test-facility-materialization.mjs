@@ -841,9 +841,10 @@ const rejectedOverlap = await runCompleteRoute("route-overlapping-terms", "route
 assert.match(rejectedOverlap.error, /overlaps a different retained term range/);
 assert.deepEqual(routeSqlite.prepare("SELECT id, event_json FROM roster_events ORDER BY id").all(), retainedBeforeFailure);
 const targetLookup = routeDb.sql.find((sql) => sql.includes("FROM roster_files f INDEXED BY idx_roster_files_source_active"));
-const targetQueryPlan = routeSqlite.prepare(`EXPLAIN QUERY PLAN ${targetLookup}`).all("mmc").map((row) => row.detail);
+const targetQueryPlan = routeSqlite.prepare(`EXPLAIN QUERY PLAN ${targetLookup}`).all("mmc","monash-adults","2028-02-07","2028-02-07","plan-run","plan-run","monash-adults").map((row) => row.detail);
 assert.ok(targetQueryPlan.some((line) => /SEARCH f USING INDEX idx_roster_files_source_active/.test(line)));
-assert.equal(targetQueryPlan.some((line) => /SCAN|TEMP B-TREE/.test(line)), false, "target selection must use compact indexed rows without scanning event history");
+assert.equal(targetQueryPlan.some((line) => /SCAN (?:roster_|facility_)|TEMP B-TREE/.test(line)), false, "target selection must not scan physical history tables; bounded CTE scans are allowed");
+assert.ok(targetLookup.includes("LIMIT 33") && targetLookup.includes("LIMIT 751"), "preflight CTE and each catalogue keep their sentinels");
 
 const lateFailure = await saveAutomatedDerivedRoster({
   request: new Request("http://local/api/automation/derived", {

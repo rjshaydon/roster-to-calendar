@@ -1,3 +1,4 @@
+import { stageRosterCompactMetadata } from "./roster-import-compact.js";
 import { rosterTermOwnership } from "./roster-term-ownership.js";
 import { boundedRosterEventStatements, boundedRosterPresenceStatements, startDerivedRosterFileSave, refreshFacilityOverviewMaterializationForFile, australianTermStartForDate, australianTermEndForStart, facilitySmsMembershipStatement } from "./d1-calendar.js";
 import { rosterImportDigest, validateRosterImportManifest, validateRosterImportBatch, ROSTER_BATCH_FACT_LIMIT, ROSTER_BATCH_BYTE_LIMIT, ROSTER_IMPORT_WRITE_COST as COST } from "./roster-import-batches.js";
@@ -6,19 +7,40 @@ import { facilityRefreshStatements, facilityTermDates } from "./facility-refresh
 
 // Internal execution primitives used only by the source- and budget-gated protocol.
 export async function beginBoundedRosterImport(db, runId, file, plan, options = {}) {
-  validateRosterImportManifest(plan.manifest);
-  if (!runId || plan.manifest.fileId !== file.id || plan.manifest.sourceId !== file.sourceId || await rosterImportDigest(plan.manifest) !== plan.revision) throw new Error("Staged import plan does not match its queued file.");
+  if (!options.validatedPlan) validateRosterImportManifest(plan.manifest);
+  if (!runId || plan.manifest.fileId !== file.id || plan.manifest.sourceId !== file.sourceId || !options.validatedPlan && await rosterImportDigest(plan.manifest) !== plan.revision) throw new Error("Staged import plan does not match its queued file.");
   if (plan.manifest.doctors.length > 512 || plan.manifest.eventCount > 25000 || plan.manifest.issueCount > 5000) throw new Error("Staged import plan exceeds total safety bounds.");
   let existing = await db.prepare("SELECT * FROM roster_import_jobs WHERE run_id = ?").bind(runId).first();
+  if (existing && existing.plan_revision !== plan.revision && plan.manifest.compact && !existing.activated) {
+    const previous = JSON.parse(existing.manifest_json);
+    const { compact: _compact, ...sameEventsManifest } = plan.manifest;
+    if (!previous.compact && await rosterImportDigest(previous) === await rosterImportDigest(sameEventsManifest)) {
+      // Add a pinned compact plan to an already staged job only when every
+      // existing event descriptor, identity and count remains exactly unchanged.
+      // Preserve the original source-promotion fence and all staging cursors.
+      if (!await reserveImportWrites(db, plan.manifest.batches.length * 2 + COST.control)) return { deferred: true };
+      await db.batch([
+        db.prepare(`SELECT CASE WHEN EXISTS(SELECT 1 FROM roster_import_jobs WHERE run_id=? AND plan_revision=? AND activated=0)
+          AND EXISTS(SELECT 1 FROM roster_files WHERE id=? AND active=0)
+          AND NOT EXISTS(SELECT 1 FROM roster_import_compact_receipts WHERE run_id=?) THEN 1 ELSE json('compact-plan-conflict') END`)
+          .bind(runId,existing.plan_revision,file.id,runId),
+        db.prepare('UPDATE roster_import_jobs SET plan_revision=?,manifest_json=?,compact_ready=0 WHERE run_id=? AND plan_revision=?')
+          .bind(plan.revision,JSON.stringify(plan.manifest),runId,existing.plan_revision),
+        db.prepare('UPDATE roster_import_batch_receipts SET plan_revision=? WHERE run_id=? AND plan_revision=?')
+          .bind(plan.revision,runId,existing.plan_revision),
+      ]);
+      existing = { ...existing, plan_revision: plan.revision, manifest_json: JSON.stringify(plan.manifest), compact_ready: 0 };
+    }
+  }
   if (existing && (existing.plan_revision !== plan.revision || existing.file_id !== file.id || existing.source_id !== file.sourceId)) {
     if (!options.allowEmptyPlanRecovery || existing.file_id !== file.id || existing.source_id !== file.sourceId
       || !existing.initialized || existing.next_batch || existing.prepared_batch || existing.event_count || existing.issue_count || existing.compact_ready || existing.activated
-      || await rosterImportDigest(manifestWithoutBatchHashes(JSON.parse(existing.manifest_json))) !== await rosterImportDigest(manifestWithoutBatchHashes(plan.manifest))) {
+      || await rosterImportDigest(emptyPlanIdentity(JSON.parse(existing.manifest_json))) !== await rosterImportDigest(emptyPlanIdentity(plan.manifest))) {
       throw new Error("Staged import plan changed; a new run is required.");
     }
     // Older planners hashed undefined fields that JSON omitted. Only an empty
-    // inactive job with identical source/content, doctors, ranges and batch
-    // counts may acquire corrected hashes. Preserve its original promotion fence.
+    // inactive job with identical source/content, doctors, ranges and total
+    // counts may acquire corrected hashes or smaller CPU batches. Preserve its original promotion fence.
     if (!await reserveImportWrites(db, COST.control)) return { deferred: true };
     const recovered = await db.prepare(`UPDATE roster_import_jobs SET plan_revision=?,manifest_json=?
       WHERE run_id=? AND plan_revision=? AND initialized=1 AND next_batch=0 AND prepared_batch=0
@@ -47,7 +69,7 @@ export async function beginBoundedRosterImport(db, runId, file, plan, options = 
     .bind(claimedAt, runId, new Date(Date.now() - 600000).toISOString()).run();
   if (Number(claim.meta?.changes || 0) !== 1) return { deferred: true, reason: "initialization-in-progress" };
   try {
-    await startDerivedRosterFileSave(db, { ...file, active: false }, plan.manifest.doctors);
+    await startDerivedRosterFileSave(db, { ...file, active: false }, plan.manifest.doctors, {jsonDoctors:true});
     await db.prepare("UPDATE roster_import_jobs SET initialized = 1, initialize_started_at = '' WHERE run_id = ? AND plan_revision = ? AND initialize_started_at = ?").bind(runId, plan.revision, claimedAt).run();
   } catch (error) {
     await db.prepare("UPDATE roster_import_jobs SET initialize_started_at = '' WHERE run_id = ? AND initialized = 0 AND initialize_started_at = ?").bind(runId, claimedAt).run();
@@ -107,12 +129,13 @@ export async function prepareBoundedRosterPresence(db, runId, file, revision, ba
   return { nextBatch: batch.index + 1 };
 }
 
-export async function prepareBoundedRosterMetadata(db, runId, revision) {
+export async function prepareBoundedRosterMetadata(db, runId, revision, batch) {
   const job = await db.prepare("SELECT * FROM roster_import_jobs WHERE run_id = ?").bind(runId).first();
   if (!job || job.plan_revision !== revision) throw new Error("Metadata preparation does not match its job.");
   const manifest = JSON.parse(job.manifest_json);
   if (job.next_batch !== manifest.batches.length || job.prepared_batch !== manifest.batches.length || job.event_count !== manifest.eventCount || job.issue_count !== manifest.issueCount) throw new Error("Incomplete staged import cannot be prepared or activated.");
   if (job.compact_ready) return { duplicate: true };
+  if (manifest.compact) return stageRosterCompactMetadata(db,job,manifest,batch);
   if (!await reserveRosterMaintenanceBudget(db, 750 * COST.compact + COST.control, 70000)) return { deferred: true };
   const result = await refreshFacilityOverviewMaterializationForFile(db, job.file_id, {
     maximumEventRows: 25000, maximumDoctorRows: 512, maximumExistingStaffRows: 750,
@@ -221,10 +244,6 @@ async function activatePreparedRosterReplacement(db, job, revision, options) {
 }
 
 
-function manifestWithoutBatchHashes(manifest) {
-  return { ...manifest, batches: manifest.batches.map(({ hash, ...counts }) => counts) };
-}
-
 function stagingTransactionGuard(db, runId, revision, fileId, nextBatch, preparedBatch = null) {
   return db.prepare(`SELECT CASE WHEN EXISTS(SELECT 1 FROM roster_import_jobs
     WHERE run_id=? AND plan_revision=? AND file_id=? AND initialized=1 AND activated=0
@@ -232,4 +251,9 @@ function stagingTransactionGuard(db, runId, revision, fileId, nextBatch, prepare
     AND EXISTS(SELECT 1 FROM roster_files WHERE id=? AND active=0)
     THEN 1 ELSE json('staging-conflict') END AS staging_guard`)
     .bind(runId, revision, fileId, nextBatch, ...(preparedBatch === null ? [] : [preparedBatch]), fileId);
+}
+
+function emptyPlanIdentity(manifest) {
+  const {batches: _batches, compact: _compact, ...identity} = manifest;
+  return identity;
 }
