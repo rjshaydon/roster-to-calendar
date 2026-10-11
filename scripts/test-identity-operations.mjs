@@ -13,6 +13,10 @@ import {onRequestGet as feedHandler} from '../functions/api/feed.js';
 import {createHash} from 'node:crypto';
 const sqlite=new DatabaseSync(':memory:');
 for(const name of (await readdir(new URL('../migrations',import.meta.url))).filter(n=>n.endsWith('.sql')).sort()) sqlite.exec(await readFile(new URL(`../migrations/${name}`,import.meta.url),'utf8'));
+// Retained-file fields already present in production, used by bounded
+// successor checks (the numbered legacy schema predates these fields).
+for(const definition of ["name TEXT NOT NULL DEFAULT ''","source_type TEXT NOT NULL DEFAULT ''","size INTEGER NOT NULL DEFAULT 0","last_modified INTEGER NOT NULL DEFAULT 0"])
+ sqlite.exec('ALTER TABLE raw_roster_files ADD COLUMN '+definition);
 // Existing production index, required by the bounded source calendar reader.
 sqlite.exec('CREATE INDEX IF NOT EXISTS idx_roster_events_file_doctor ON roster_events(file_id,doctor_key)');
 const sql=[];

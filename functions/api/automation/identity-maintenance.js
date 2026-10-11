@@ -1,3 +1,4 @@
+import {loadActiveRosterImport} from '../../_lib/roster-delivery-health.js';
 import {publishIdentityOperation} from '../../_lib/doctor-identity.js';
 import {refreshAccountMaintenanceBudget} from './account-budget.js';
 import {reserveRosterMaintenanceBudget,optionalMaintenanceAvailable} from '../../_lib/roster-maintenance-budget.js';
@@ -32,7 +33,7 @@ export async function onRequestPost(context) {
  }
  if(['audit','register'].includes(input.mode)) {
   for(const source of ['monash-adults','monash-paeds','vhh-active-medical-roster','dandenong-findmyshift']) {
-    if(await db.prepare("SELECT id FROM roster_sync_runs WHERE source_id=? AND status IN ('queued','processing') LIMIT 1").bind(source).first()) return Response.json({status:'import-active'});
+    if(await loadActiveRosterImport(db,source)) return Response.json({status:'import-active'});
   }
  }
  if(context.env.ROSTER_ACCOUNT_BUDGET_ENABLED==='true') {

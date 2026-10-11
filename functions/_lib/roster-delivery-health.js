@@ -29,3 +29,20 @@ export async function loadPendingRosterPublication(env,sourceId) {
  if(!source || env.FACILITY_AUTOMATIC_PUBLICATION_ENABLED!=='true') return null;
  return env.ROSTER_DB.prepare("SELECT updated_at FROM facility_refresh_jobs WHERE source_type=? AND status='pending' ORDER BY term_start LIMIT 1").bind(source).first();
 }
+
+export async function loadActiveRosterImport(db,sourceId) {
+ // Status index limits candidates to pending imports. The successor inspection
+ // is bounded independently of historical run count; obsolete autosaves cannot
+ // permanently hold up optional identity work after the latest file succeeds.
+ return db.prepare(`WITH pending AS (SELECT id,status,started_at,file_id,source_file_id
+   FROM roster_sync_runs INDEXED BY idx_roster_sync_runs_source_status_started
+   WHERE source_id=? AND status IN ('queued','processing') LIMIT 66)
+   SELECT r.id FROM pending r LEFT JOIN raw_roster_files f ON f.file_id=COALESCE(NULLIF(r.source_file_id,''),r.file_id)
+   WHERE (SELECT COUNT(*) FROM pending)>65 OR NOT EXISTS(
+     SELECT 1 FROM (SELECT id,status,started_at,file_id,source_file_id FROM roster_sync_runs
+       INDEXED BY idx_roster_sync_runs_source_started_id WHERE source_id=? ORDER BY started_at DESC,id DESC LIMIT 65) n
+     JOIN raw_roster_files nf ON nf.file_id=COALESCE(NULLIF(n.source_file_id,''),n.file_id)
+     WHERE n.id<>r.id AND n.status IN ('queued','processing','success') AND LOWER(nf.name)=LOWER(f.name)
+       AND (n.started_at>r.started_at OR (n.started_at=r.started_at AND (n.id>r.id OR n.status='success')))
+   ) LIMIT 1`).bind(sourceId,sourceId).first();
+}

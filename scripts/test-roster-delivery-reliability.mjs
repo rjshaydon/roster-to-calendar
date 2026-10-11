@@ -4,7 +4,7 @@ import {readFile,readdir,mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawnSync} from 'node:child_process';
-import {markRosterDeliveryDeferred,loadRosterDeliveryWarnings,clearRosterDeliveryWarning} from '../functions/_lib/roster-delivery-health.js';
+import {markRosterDeliveryDeferred,loadRosterDeliveryWarnings,clearRosterDeliveryWarning,loadActiveRosterImport} from '../functions/_lib/roster-delivery-health.js';
 import {onRequestPost as metadataCheck} from '../functions/api/automation/roster-check.js';
 import {onRequestGet as pendingCheck} from '../functions/api/automation/pending.js';
 import {requestQueuedRosterProcessing,recordRosterDispatchLifecycle} from '../functions/_lib/automation-dispatch.js';
@@ -28,6 +28,7 @@ const now=new Date();
 sqlite.prepare('INSERT INTO roster_account_budget(utc_day,allocated_reads,allocated_writes,maximum_reads,maximum_writes,valid_until) VALUES(?,100,100,100,100,?)').run(now.toISOString().slice(0,10),new Date(Date.now()+600000).toISOString());
 sqlite.prepare("INSERT INTO raw_roster_files(file_id,name,source_type,size,last_modified,object_key) VALUES('file','Roster.xlsx','mmc',100,0,'test-object')").run();
 sqlite.prepare("INSERT INTO roster_sync_runs(id,source_id,file_id,source_file_id,status,started_at) VALUES('run','monash-adults','file','file','queued',?)").run(queuedAt);
+assert.equal((await loadActiveRosterImport(db,'monash-adults')).id,'run');
 const env={ROSTER_DB:db,ROSTER_FILES:r2,ROSTER_AUTOMATION_WRITES_ENABLED:'true',ROSTER_AUTOMATION_QUEUE_ENABLED:'true',ROSTER_AUTOMATION_SOURCE_ALLOWLIST:'monash-adults',ROSTER_ACCOUNT_BUDGET_ENABLED:'true',GITHUB_ACTIONS_TOKEN:'test-only'};
 const originalFetch=globalThis.fetch;
 try{
@@ -50,6 +51,8 @@ try{
  globalThis.fetch=async()=>{throw Error('Deferred dispatch must coalesce until retry time');};
  assert.equal((await requestQueuedRosterProcessing({...env,ROSTER_ACCOUNT_BUDGET_ENABLED:'false'},{sourceId:'monash-adults'})).dispatched,false);
  sqlite.prepare("UPDATE roster_sync_runs SET status='success' WHERE id='run'").run();
+ sqlite.prepare("INSERT INTO roster_sync_runs(id,source_id,file_id,source_file_id,status,started_at) VALUES('obsolete','monash-adults','file','file','queued','2000-01-01T00:00:00.000Z')").run();
+ assert.equal(await loadActiveRosterImport(db,'monash-adults'),null,'an obsolete queued autosave cannot block identities after the latest success');
  const publishingEnv={...env,FACILITY_AUTOMATIC_PUBLICATION_ENABLED:'true',ROSTER_METADATA_CHECK_ENABLED:'true',ROSTER_AUTOMATION_TOKEN:'fixture'};
  sqlite.prepare("INSERT INTO facility_refresh_jobs(source_type,term_start,dates_json,content_signature,request_revision,updated_at) VALUES('mmc','2026-08-03','[]','revision','revision',?)").run(queuedAt);
  await recordRosterDispatchLifecycle(publishingEnv,{sourceId:'monash-adults',dispatchId:started.dispatch.id,event:'completed'});
@@ -65,6 +68,10 @@ try{
  await recordRosterDispatchLifecycle(publishingEnv,{sourceId:'monash-adults',dispatchId:started.dispatch.id,event:'completed'});
  assert.deepEqual(await loadRosterDeliveryWarnings(r2,['mmc']),[]);
 }finally{globalThis.fetch=originalFetch;}
+// The priority inspection itself must stay bounded even if a legacy source
+// has accumulated many obsolete pending rows. Pause optional work at the cap.
+for(let i=0;i<66;i++)sqlite.prepare("INSERT INTO roster_sync_runs(id,source_id,file_id,source_file_id,status,started_at) VALUES(?,'monash-adults','file','file','queued','1999-01-01T00:00:00.000Z')").run('old-'+i);
+assert.ok(await loadActiveRosterImport(db,'monash-adults'),'oversized pending inspection fails closed');
 const folder=await mkdtemp(join(tmpdir(),'roster-outcomes-'));
 try{
  // Run the real processor in a child so its intentional successful exit on

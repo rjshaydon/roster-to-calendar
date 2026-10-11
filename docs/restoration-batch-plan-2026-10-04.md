@@ -493,3 +493,10 @@ Optional maintenance reserves 32,768 reads to cover the fixed receipt-inspection
 ceilings as well as the cached-name completion check; measured unused capacity
 is refunded. Its write estimate remains 512 per registration/audit checkpoint,
 with the existing 4,096 estimate retained for identity publication.
+
+Live recovery found a newer MMC version 452, so the processor correctly chose
+it over queued version 451. The latter exposed another priority issue: an
+obsolete queued autosave could indefinitely block automatic identity work.
+The priority check now compares at most 66 pending candidates with at most 65
+recent source runs, ignores superseded autosaves and pauses optional work if its
+inspection cap is exceeded. Source files and historical receipts remain intact.
