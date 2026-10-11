@@ -25,6 +25,9 @@ const sqlite = new DatabaseSync(":memory:");
 sqlite.exec("CREATE TABLE IF NOT EXISTS roster_import_daily_budget (utc_day TEXT PRIMARY KEY,reserved_writes INTEGER NOT NULL DEFAULT 0,reserved_reads INTEGER NOT NULL DEFAULT 0)");
 sqlite.exec(await readFile("migrations/0035_roster_account_budget.sql", "utf8"));
 sqlite.exec(await readFile("migrations/0041_maintenance_recovery.sql", "utf8"));
+sqlite.exec(await readFile("migrations/0042_unfinished_maintenance_index.sql", "utf8"));
+const receiptPlan=sqlite.prepare("EXPLAIN QUERY PLAN SELECT request_id FROM roster_maintenance_receipts WHERE utc_day=? AND reconciled_at='' AND (finished_at='' OR metadata_complete<>1) LIMIT 3").all(new Date().toISOString().slice(0,10));
+assert.ok(receiptPlan.some(row=>row.detail.includes('idx_maintenance_unfinished')),'unfinished gate uses its partial index rather than completed daily receipts');
 function database() {
   const db = { prepare(sql) { return { args: [], bind(...args) { this.args = args; return this; },
     async run() { const r = sqlite.prepare(sql).run(...this.args); return { meta: { changes: Number(r.changes), rows_read: Number(r.changes)+1, rows_written: Number(r.changes) } }; },

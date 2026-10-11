@@ -332,3 +332,27 @@ some successful requests (Cloudflare permits occasional bursts). Completing a
 small run alone is not evidence of a permanent CPU fix. Continue bounded live
 audit/receipt acceptance and keep this limitation explicit; no paid plan or
 provider-limit change has been made.
+
+Migration 0042 adds an unfinished-receipt partial index. A bounded preflight found
+2,553 bookkeeping receipts; applying the index cost 2,713 reads / 153 writes,
+and ledger registration cost two reads / three writes. Production EXPLAIN confirms
+the optional gate uses `idx_maintenance_unfinished`; tests retain all accounting,
+recovery, stop and ownership rules. No roster/history index rebuild was needed.
+
+Audit continuation 38111543720 stopped safely at the 04:30 watchdog handover after
+45 checkpoints; the real weekly run had reached 47 examined features / four
+candidates. Accounting was complete for the observed requests. A new unfinished
+scheduled request started at 04:25:15Z before the latest tail attached; its cause
+is not proved and its reservation is held to recovery bound 05:21:15Z. The older
+canceled receipt has reconciled; the 03:58 CPU receipt remains held to 04:54:28Z.
+
+Temporary current runtime state: the scheduled audit tick is paused while manual
+continuation owns audit catch-up (`IDENTITY_SCHEDULED_AUDIT_ENABLED=false` on the
+watchdog only). Registration and roster polling remain enabled. Restore both
+committed flags using `npx wrangler deploy --config wrangler.roster-watchdog.toml`
+before ending/pausing this task. The user has been asked whether to permit a
+Workers Paid upgrade if the account is Free; no billing change is authorized
+until they answer. Production config already declares 30,000 ms CPU, but actual
+terminations at ~14 ms remain consistent with a lower billing-tier entitlement;
+the available OAuth token cannot read billing subscriptions. Verify the actual
+tier before any paid action and retain D1 safeguards either way.
