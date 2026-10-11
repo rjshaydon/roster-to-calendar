@@ -1,7 +1,9 @@
 # Identity audit offload — 12 October 2026
 
-Status: comparison/export preparation implemented and tested. The external audit
-protocol, automatic dispatch and production rollout are not enabled. Existing
+Status: comparison/export preparation and internal durable checkpoint primitives
+are implemented and tested. Migration 0044 has NOT been applied to production.
+The authenticated API, runner integration, automatic dispatch and rollout are not
+enabled. Existing
 production registration, audit and cached-suggestion behavior remain in use.
 Cloudflare Free and the current D1 admission/reservation safeguards remain.
 
@@ -46,8 +48,10 @@ measurement. Nothing from the dry run was published to the app or public logs.
 
 ## Finish after the reset
 
-1. **Pin and stage the audit protocol.** Add durable job/descriptor/receipt state
-   through additive migrations. Authenticate internal export and write callbacks.
+1. **Connect the checkpoint protocol.** Internal pin/apply/finish primitives and
+   migration 0044 are prepared (details below). Authenticate internal export and
+   write callbacks, add the lease/dispatch lifecycle, and apply the migration only
+   after the complete protocol is reviewed.
    Preserve source-import priority, optional-maintenance headroom, unknown receipts
    and bounded per-request costs. Pin the snapshot/algorithm/descriptor evidence;
    stage descriptors in bounded steps where necessary. Verify current identity
@@ -73,3 +77,38 @@ measurement. Nothing from the dry run was published to the app or public logs.
    unchanged subscription continuity before accepting Batch 2.
 
 Medium effort remains suitable. No later restoration feature set is added here.
+
+
+## Additional checkpoint preparation before the reset
+
+`functions/_lib/identity-audit-checkpoints.js` pins immutable manifests, applies
+five-proposal or sixteen-feature batches, and records receipts/cursors in the
+same transaction as the facts. It guards the current identity revision, each
+alias's cached fingerprint, active-person links, primary roster-import priority
+and cursor races. Feature completion cannot start before every proposal batch
+commits; audit completion checks both receipt counts, unique feature coverage,
+current fingerprints and the completion cursor. Missing/deleted evidence fails
+closed. Duplicate callbacks perform no writes. These primitives only update
+suggestions, audit flags and checkpoint tables, never roster grades/calendars.
+
+Migration 0044 contains three empty tables for jobs, receipts and unique feature
+checkpoints. It is prepared only: no production schema/data writes were performed
+in this step and no public endpoint invokes the primitives.
+
+`npm run test:identity-audit-checkpoints` passes injected receipt and completion
+failures, complete transaction rollback, lost-response replay, immutable pins,
+evidence/revision/cursor races, deleted evidence, concurrent human rejection,
+source-import priority and quota deferral. SQLite metadata here is simulated and
+does NOT establish Cloudflare billing or CPU costs. Native cold/warm CPU, runtime
+statement budgets and reservation envelopes still need end-to-end verification.
+Large descriptor pinning may need further subdivision after those measurements.
+
+Completion also verifies the actual bounded cache size and the indexed pending
+feature queue: a feature becoming pending without a global revision bump cannot
+be silently missed. A full initial audit must include every cached name. These
+checks are part of the final guarded transaction, not a stale preflight decision.
+
+Checkpoint implementation is now ready for the authenticated API/runner connection
+and native CPU testing after the reset. Migration 0044 remains unapplied and the
+new path remains inactive; this additional preparation performs no production
+reads/writes. Existing live auditing continues on its previous path.

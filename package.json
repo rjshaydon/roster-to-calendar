@@ -64,7 +64,8 @@
     "canary:monash-adults-config": "node scripts/prepare-monash-adults-canary-config.mjs",
     "test:monash-adults-canary": "node scripts/test-monash-adults-canary.mjs",
     "test:roster-patch": "node --no-warnings scripts/test-roster-patch.mjs",
-    "test:identity-audit-plan": "node --no-warnings scripts/test-identity-audit-plan.mjs"
+    "test:identity-audit-plan": "node --no-warnings scripts/test-identity-audit-plan.mjs",
+    "test:identity-audit-checkpoints": "node --no-warnings scripts/test-identity-audit-checkpoints.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.84.1",
