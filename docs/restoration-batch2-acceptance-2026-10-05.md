@@ -258,6 +258,10 @@ and 5,739 measured writes to maintenance (settlement estimates excluded).
 The unchanged runtime policy forecast ordinary traffic at 321,074 additional
 reads / 3,182 writes and retained roughly 2.9 million reads / 65,000 writes of
 headroom after outstanding reservations. No limits or reservations were bypassed.
+Blocked optional work now refreshes analytics/recovery even if the prior grant is
+still valid, then rechecks the unfinished-work circuit before reserving. This
+avoids waiting on an unchanged source check to refresh the account; an injected
+analytics failure remains a 503 with no new reservation.
 
 The canceled job interrupted one in-flight checkpoint: Pages tail explicitly
 reported `canceled`, with no exception or settlement-error log. Its reservation

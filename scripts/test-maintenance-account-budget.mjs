@@ -5,6 +5,7 @@ import { outstandingMaintenance, accountMaintenanceHeadroom } from "../functions
 import { beginMaintenanceAccounting, reserveRosterMaintenanceBudget, finishMaintenanceAccounting, recoverAbandonedMaintenance, optionalMaintenanceAvailable, currentAccountMaintenanceGrant } from "../functions/_lib/roster-maintenance-budget.js";
 import { createD1Meter, onRequest as middleware } from "../functions/_middleware.js";
 import { onRequestPost as admit } from "../functions/api/automation/account-budget.js";
+import { onRequestPost as identityMaintenance } from "../functions/api/automation/identity-maintenance.js";
 
 const { default: inventory } = await import("../functions/_lib/d1-account-inventory.js");
 assert.deepEqual(inventory, JSON.parse(await readFile("config/d1-database-inventory.json", "utf8")), "runtime inventory must match the verified account inventory");
@@ -152,6 +153,17 @@ receipt.run('still-running',day,1000,1000,new Date(Date.now()+60000).toISOString
 receipt.run('settled',day,1000,1000,recoveryCutoff,recoveryCutoff,1);
 receipt.run('yesterday','2000-01-01',1000,1000,recoveryCutoff,'',0);
 assert.equal(await optionalMaintenanceAvailable(database()),false,'three unknown requests pause optional work');
+assert.equal(await currentAccountMaintenanceGrant(database()),true);
+let recoveryRefreshes=0;
+try {
+ globalThis.fetch=async()=>{recoveryRefreshes++;throw Error('injected recovery analytics failure');};
+ const response=await identityMaintenance({env:{...env,IDENTITY_REVIEW_ENABLED:'true'},request:new Request('https://test/api/automation/identity-maintenance',{
+  method:'POST',headers:{Authorization:'Bearer test-only','Content-Type':'application/json'},body:JSON.stringify({mode:'publish',operationId:'11111111-1111-1111-1111-111111111111'})})});
+ assert.equal(response.status,503,'unavailable analytics never bypasses the unfinished-work circuit');
+ assert.equal(recoveryRefreshes,1,'blocked maintenance refreshes recovery data even with a fresh grant');
+ assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM roster_maintenance_receipts').get().n,6,'recovery failure starts no optional reservation');
+} finally {globalThis.fetch=originalFetch;}
+sqlite.prepare("UPDATE roster_account_budget SET stop_reason='',valid_until=?").run(new Date(Date.now()+600000).toISOString());
 assert.equal(await recoverAbandonedMaintenance(database(),day,recoveryCutoff),2);
 assert.equal(await recoverAbandonedMaintenance(database(),day,recoveryCutoff),0,'recovery replay cannot refund twice');
 assert.equal(sqlite.prepare('SELECT allocated_writes FROM roster_account_budget').get().allocated_writes,7000);

@@ -51,13 +51,14 @@ export async function onRequestPost(context) {
     .bind(runId,new Date().toISOString()).first()) return Response.json({status:'busy'});
  }
  if(context.env.ROSTER_ACCOUNT_BUDGET_ENABLED==='true') {
-  if(!await currentAccountMaintenanceGrant(db)) {
+  const available=await optionalMaintenanceAvailable(db);
+  if(!available || !await currentAccountMaintenanceGrant(db)) {
    // Refresh also reconciles safely expired receipts before applying the
    // unfinished-work circuit breaker. No reservation is granted here.
    const admission=await (await refreshAccountMaintenanceBudget(context)).json();
    if(admission.deferred) return Response.json({status:'deferred'},{status:503});
   }
-  if(!await optionalMaintenanceAvailable(db)) return Response.json({status:'deferred',reason:'unfinished-maintenance'},{status:503});
+  if(!available && !await optionalMaintenanceAvailable(db)) return Response.json({status:'deferred',reason:'unfinished-maintenance'},{status:503});
   if(!await reserveRosterMaintenanceBudget(db,input.mode==='publish'?4096:512,131072)) return Response.json({status:'deferred'},{status:503});
  }
  if(['audit','register'].includes(input.mode)) {
