@@ -1,7 +1,7 @@
 import {loadActiveRosterImport} from '../../_lib/roster-delivery-health.js';
 import {publishIdentityOperation} from '../../_lib/doctor-identity.js';
 import {refreshAccountMaintenanceBudget} from './account-budget.js';
-import {reserveRosterMaintenanceBudget,optionalMaintenanceAvailable} from '../../_lib/roster-maintenance-budget.js';
+import {reserveRosterMaintenanceBudget,optionalMaintenanceAvailable,currentAccountMaintenanceGrant} from '../../_lib/roster-maintenance-budget.js';
 import {auditIdentityBatch} from '../../_lib/identity-discovery.js';
 import {identityAuditWindow} from '../../../public/static/identity-audit-policy.js';
 import {facilityMetadataManifestKey} from '../../_lib/facility-overview-cache.js';
@@ -48,9 +48,14 @@ export async function onRequestPost(context) {
   }
  }
  if(context.env.ROSTER_ACCOUNT_BUDGET_ENABLED==='true') {
+  if(!await currentAccountMaintenanceGrant(db)) {
+   // Refresh also reconciles safely expired receipts before applying the
+   // unfinished-work circuit breaker. No reservation is granted here.
+   const admission=await (await refreshAccountMaintenanceBudget(context)).json();
+   if(admission.deferred) return Response.json({status:'deferred'},{status:503});
+  }
   if(!await optionalMaintenanceAvailable(db)) return Response.json({status:'deferred',reason:'unfinished-maintenance'},{status:503});
-  const admission=await (await refreshAccountMaintenanceBudget(context)).json();
-  if(admission.deferred || !await reserveRosterMaintenanceBudget(db,input.mode==='publish'?4096:512,131072)) return Response.json({status:'deferred'},{status:503});
+  if(!await reserveRosterMaintenanceBudget(db,input.mode==='publish'?4096:512,131072)) return Response.json({status:'deferred'},{status:503});
  }
  if(['audit','register'].includes(input.mode)) {
   // The indexed names cache retains historical staff. Register one name per

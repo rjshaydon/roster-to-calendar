@@ -58,6 +58,15 @@ export async function optionalMaintenanceAvailable(db) {
   return unresolved.length<3;
 }
 
+// Reuse only the current day's unexpired analytics grant. Reservation still
+// atomically enforces its ceilings, stop flag and protected roster headroom.
+export async function currentAccountMaintenanceGrant(db, now = new Date()) {
+  const instant = new Date(now).toISOString();
+  return Boolean(await db.prepare(`SELECT utc_day FROM roster_account_budget
+    WHERE utc_day=? AND valid_until>? AND stop_reason='' LIMIT 1`)
+    .bind(instant.slice(0,10),instant).first());
+}
+
 export async function stopAccountMaintenance(db, reason) {
   await db.prepare("UPDATE roster_account_budget SET valid_until='', stop_reason=CASE WHEN stop_reason LIKE 'cost-overrun:%' THEN stop_reason ELSE ? END WHERE utc_day=?")
     .bind(String(reason).slice(0, 200), new Date().toISOString().slice(0, 10)).run();

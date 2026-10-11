@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { readFile } from "node:fs/promises";
 import { outstandingMaintenance, accountMaintenanceHeadroom } from "../functions/_lib/account-maintenance-policy.js";
-import { beginMaintenanceAccounting, reserveRosterMaintenanceBudget, finishMaintenanceAccounting, recoverAbandonedMaintenance, optionalMaintenanceAvailable } from "../functions/_lib/roster-maintenance-budget.js";
+import { beginMaintenanceAccounting, reserveRosterMaintenanceBudget, finishMaintenanceAccounting, recoverAbandonedMaintenance, optionalMaintenanceAvailable, currentAccountMaintenanceGrant } from "../functions/_lib/roster-maintenance-budget.js";
 import { createD1Meter, onRequest as middleware } from "../functions/_middleware.js";
 import { onRequestPost as admit } from "../functions/api/automation/account-budget.js";
 
@@ -34,6 +34,12 @@ function database() {
 }
 const day = new Date().toISOString().slice(0,10);
 sqlite.prepare("INSERT INTO roster_account_budget(utc_day,maximum_reads,maximum_writes,valid_until) VALUES(?,?,?,?)").run(day, 1000000, 20000, new Date(Date.now()+600000).toISOString());
+assert.equal(await currentAccountMaintenanceGrant(database()),true,'fresh shared grant can be reused without fetching analytics');
+assert.equal(await currentAccountMaintenanceGrant(database(),new Date(Date.now()+600000)),false,'expired grant cannot be reused');
+assert.equal(await currentAccountMaintenanceGrant(database(),new Date(Date.now()+86400000)),false,'previous UTC-day grant cannot be reused');
+sqlite.prepare("UPDATE roster_account_budget SET stop_reason='cost-overrun:fixture'").run();
+assert.equal(await currentAccountMaintenanceGrant(database()),false,'stop flag invalidates a fresh grant');
+sqlite.prepare("UPDATE roster_account_budget SET stop_reason=''").run();
 const first = database(); beginMaintenanceAccounting(first, "first", true);
 assert.equal(await reserveRosterMaintenanceBudget(first, 15000, 100), true, "legitimate writes are no longer capped at 10000");
 const second = database(); beginMaintenanceAccounting(second, "second", true);
