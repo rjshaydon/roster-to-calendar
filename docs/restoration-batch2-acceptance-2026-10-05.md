@@ -302,3 +302,33 @@ A name arriving during final verification restarts registration and keeps the
 audit blocked. Tests retain current-metadata completion, zero-D1 unchanged polls,
 source isolation, oversize guards, historical grades and account/feed continuity.
 Production CPU acceptance remains required before further continuation.
+
+### Registration completed; real weekly audit started — 11 October, 15:21 AEDT
+
+Run e79fcc61-475a-40b3-93a0-1afa7fab6e22 completed at 04:19:43Z after
+733 examined names. GitHub continuation 38110549368 completed all 113 checkpoints,
+including separate final coverage/metadata verification, with complete accounting
+on all 115 observed endpoint requests and no new CPU stop. Earlier bounded cache
+checks fell from 445 missing/changed names to 211, 70 and one before the final
+name was processed. The cache retains 996 names; no historical shift scan or
+human suggestion decision was performed.
+
+The temporary watchdog registration override was removed by deploying the
+committed config: version be63fe76-97dd-424a-a7bc-5eb3ff89f121, both identity
+flags true, unchanged five-minute schedule. At 04:20:18Z the actual scheduled
+watchdog started weekly audit ed95bbd8-019e-44fc-a158-ec50d43d3250 for 2026-10-11,
+examining its first feature. Worker tail and the indexed audit row agree.
+544 pending cached features remain; real weekly completion is still outstanding.
+
+Audit candidate generation now compares only pairs containing the current target
+before applying its suggestion cap. In a 24-person neighbour fixture this makes
+23 comparisons rather than 276, preserves matching evidence/order, and prevents
+unrelated pairs from consuming the cap before the target's suggestions. Existing
+human decisions, historical grades, account ownership and feeds remain covered
+by the passing regression tests.
+
+CPU readings remain above the documented ten-millisecond Free-tier allowance on
+some successful requests (Cloudflare permits occasional bursts). Completing a
+small run alone is not evidence of a permanent CPU fix. Continue bounded live
+audit/receipt acceptance and keep this limitation explicit; no paid plan or
+provider-limit change has been made.

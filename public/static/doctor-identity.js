@@ -137,6 +137,7 @@ export function buildDoctorIdentityCandidates(doctors = [], options = {}) {
   const identities = flattenDoctorIdentities(doctors);
   const bucketLimit = Math.max(2, Number(options.bucketLimit || DEFAULT_BUCKET_LIMIT));
   const candidateLimit = Math.max(1, Number(options.candidateLimit || DEFAULT_CANDIDATE_LIMIT));
+  const targetMarker = String(options.targetMarker || "");
   const buckets = new Map();
   identities.forEach((identity, index) => {
     const { exactKey, surname, given, givenInitial } = identity.name;
@@ -159,6 +160,7 @@ export function buildDoctorIdentityCandidates(doctors = [], options = {}) {
       for (let rightIndex = leftIndex + 1; rightIndex < bucket.length; rightIndex += 1) {
         const left = identities[bucket[leftIndex]];
         const right = identities[bucket[rightIndex]];
+        if (targetMarker && left.marker !== targetMarker && right.marker !== targetMarker) continue;
         const pairKey = doctorIdentityPairKey(left, right);
         if (!pairKey || compared.has(pairKey)) continue;
         compared.add(pairKey);

@@ -92,7 +92,7 @@ export async function auditIdentityBatch(db,doctors,{runId,actor='identity-audit
    if(matches.length>24){skippedLargeBlocks++;continue;}
    for(const item of matches) neighbours.set(`${item.source_type}:${item.doctor_key}`,{sourceType:item.source_type,key:item.doctor_key,displayName:item.display_name,personId:item.person_id});
   }
-  const candidates=register?[]:buildDoctorIdentityCandidates([{...alias,personId:existing.person_id},...neighbours.values()],{bucketLimit:50,candidateLimit:20}).candidates.filter(c=>c.left.marker===alias.marker || c.right.marker===alias.marker);
+  const candidates=register?[]:buildDoctorIdentityCandidates([{...alias,personId:existing.person_id},...neighbours.values()],{bucketLimit:50,candidateLimit:20,targetMarker:alias.marker}).candidates;
   for(const candidate of candidates.slice(0,10)) {
    const fingerprint=await digest([candidate.left,candidate.right].sort((a,b)=>a.marker<b.marker?-1:1).map(a=>[a.sourceType,a.key,a.displayName,a.personId]));
    const previous=await db.prepare('SELECT fingerprint,status FROM roster_identity_candidates WHERE pair_key=?').bind(candidate.pairKey).first();

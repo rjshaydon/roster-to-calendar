@@ -11,6 +11,15 @@ import {identityAuditWindow} from '../public/static/identity-audit-policy.js';
 import {onRequestPost as stateHandler} from '../functions/api/state.js';
 import {onRequestGet as feedHandler} from '../functions/api/feed.js';
 import {createHash} from 'node:crypto';
+import {buildDoctorIdentityCandidates} from '../public/static/doctor-identity.js';
+const neighbours=Array.from({length:24},(_,i)=>({sourceType:'mmc',key:'MATCH '+i,displayName:'John'+String.fromCharCode(65+i)+' Smith',personId:'person:match-'+i}));
+const target='mmc:MATCH 23';
+const fullPairs=buildDoctorIdentityCandidates(neighbours,{bucketLimit:50,candidateLimit:500});
+const focused=buildDoctorIdentityCandidates(neighbours,{bucketLimit:50,candidateLimit:500,targetMarker:target});
+assert.equal(focused.comparisonCount,23,'a checkpoint compares only its target with each neighbour');
+assert.equal(fullPairs.comparisonCount,276);
+assert.deepEqual(focused.candidates.map(c=>c.pairKey),fullPairs.candidates.filter(c=>c.left.marker===target||c.right.marker===target).map(c=>c.pairKey),'target filtering preserves the same matching evidence and ordering');
+assert.equal(buildDoctorIdentityCandidates(neighbours,{bucketLimit:50,candidateLimit:1,targetMarker:target}).candidates.length,1,'unrelated pairs cannot consume the target suggestion cap');
 const sqlite=new DatabaseSync(':memory:');
 for(const name of (await readdir(new URL('../migrations',import.meta.url))).filter(n=>n.endsWith('.sql')).sort()) sqlite.exec(await readFile(new URL(`../migrations/${name}`,import.meta.url),'utf8'));
 // Retained-file fields already present in production, used by bounded

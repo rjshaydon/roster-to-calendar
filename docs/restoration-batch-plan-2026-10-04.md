@@ -8,6 +8,9 @@ weekly audit remain acceptance checks. See the 10 October checkpoint in
 The 11 October roster reliability batch is deployed and MMC recovery passed.
 Batch 2 still needs historical catch-up completion, the real weekly audit, and
 confirmation that unfinished maintenance receipts recover without accumulation.
+11 October, 15:21 AEDT: historical registration has completed and the real
+scheduled weekly audit has started. Automatic registration is enabled again.
+Weekly completion, final receipt recovery and CPU reliability acceptance remain.
 See the 11 October continuation checkpoint in the Batch 2 acceptance record
 before proceeding to Batch 6.
 The user's agreed priority is **1 → 2 → 6 → 7 → 3 → 4 → 5 → 8**,
