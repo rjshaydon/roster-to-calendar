@@ -49,7 +49,13 @@ export async function onRequest(context) {
   const url = new URL(context.request.url);
   const requestId = context.request.headers.get("cf-ray") || crypto.randomUUID();
   const action = await safeStateAction(context.request, url.pathname);
-  const limit = await requestD1StatementLimit(context.request, url.pathname, action);
+  let identityMaintenanceInput;
+  if (url.pathname === '/api/automation/identity-maintenance' && context.request.method === 'POST') {
+    identityMaintenanceInput = await context.request.json().catch(() => null);
+    context.data ||= {};
+    context.data.identityMaintenanceInput = identityMaintenanceInput;
+  }
+  const limit = await requestD1StatementLimit(context.request, url.pathname, action, identityMaintenanceInput);
   let contained = requestContainmentReason(url.pathname, action, sharedEnv);
   const originalD1Binding = contained ? sharedEnv.ROSTER_DB : unwrapD1Binding(sharedEnv.ROSTER_DB);
   const deadlineAt=Math.min(Date.now()+120000,Date.parse(new Date().toISOString().slice(0,10))+86400000);
@@ -118,9 +124,10 @@ export async function onRequest(context) {
   return await work;
 }
 
-async function requestD1StatementLimit(request, pathname, action) {
+async function requestD1StatementLimit(request, pathname, action, identityMaintenanceInput) {
   if(pathname==='/api/automation/identity-maintenance' && request.method==='POST') {
-    try { return ['audit','register'].includes((await request.clone().json()).mode)?96:512; } catch { return 64; }
+    if (identityMaintenanceInput === null) return 64;
+    try { return ['audit','register'].includes((identityMaintenanceInput ?? await request.clone().json()).mode)?96:512; } catch { return 64; }
   }
   if(pathname==='/api/state' && action==='identity' && request.method==='POST') {
     try { const operation=(await request.clone().json()).operation; if(['commit','reverse'].includes(operation)) return 448; if(['audit','initialize'].includes(operation)) return 1024; } catch {}

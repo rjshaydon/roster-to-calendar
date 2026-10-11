@@ -51,7 +51,11 @@ export async function auditIdentityBatch(db,doctors,{runId,actor='identity-audit
   if(Date.now()-startedAt>=10000) break;
   processed.push(alias);
   const name=normalizeDoctorIdentityName(alias.displayName), normalized=harmlessIdentityKey(alias.displayName);
-  let existing=await db.prepare('SELECT * FROM roster_person_aliases WHERE source_type=? AND doctor_key=?').bind(alias.sourceType,alias.key).first();
+  const aliasQuery=db.prepare('SELECT * FROM roster_person_aliases WHERE source_type=? AND doctor_key=?').bind(alias.sourceType,alias.key);
+  const auditFeature=register?null:await db.prepare(`SELECT a.person_id,f.fingerprint,f.audited_fingerprint FROM roster_person_aliases a
+   LEFT JOIN roster_identity_features f ON f.source_type=a.source_type AND f.doctor_key=a.doctor_key
+   WHERE a.source_type=? AND a.doctor_key=?`).bind(alias.sourceType,alias.key).first();
+  let existing=register?await aliasQuery.first():auditFeature;
   if(!existing && !register) continue;
   if(!existing) {
    const matches=normalized?await all(db,`SELECT DISTINCT a.person_id FROM roster_identity_features f JOIN roster_person_aliases a ON a.source_type=f.source_type AND a.doctor_key=f.doctor_key JOIN roster_people p ON p.person_id=a.person_id WHERE f.normalized_key=? AND a.review_state='approved' AND p.status='active' LIMIT 2`,[normalized]):[];
@@ -82,13 +86,15 @@ export async function auditIdentityBatch(db,doctors,{runId,actor='identity-audit
    existing={person_id:personId};
   }
   const featureHash=await digest([alias.sourceType,alias.key,alias.displayName,existing.person_id]);
-  const previousFeature=await db.prepare('SELECT fingerprint,audited_fingerprint FROM roster_identity_features WHERE source_type=? AND doctor_key=?').bind(alias.sourceType,alias.key).first();
+  const previousFeature=register?await db.prepare('SELECT fingerprint,audited_fingerprint FROM roster_identity_features WHERE source_type=? AND doctor_key=?').bind(alias.sourceType,alias.key).first():auditFeature;
   if(!register && previousFeature?.audited_fingerprint===featureHash) continue;
   await db.prepare(`INSERT INTO roster_identity_features(source_type,doctor_key,display_name,normalized_key,given_block,surname_block,fingerprint,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(source_type,doctor_key) DO UPDATE SET display_name=excluded.display_name,normalized_key=excluded.normalized_key,given_block=excluded.given_block,surname_block=excluded.surname_block,fingerprint=excluded.fingerprint,updated_at=excluded.updated_at WHERE roster_identity_features.fingerprint<>excluded.fingerprint`).bind(alias.sourceType,alias.key,alias.displayName,normalized,`${name.given}:${name.surname.slice(0,3)}`,`${name.surname}:${name.givenInitial}`,featureHash,now).run();
   if(register) continue;
   const neighbours=new Map();
-  for(const [column,value] of [['given_block',`${name.given}:${name.surname.slice(0,3)}`],['surname_block',`${name.surname}:${name.givenInitial}`]]) {
-   const matches=await all(db,`SELECT f.source_type,f.doctor_key,f.display_name,a.person_id FROM roster_identity_features f JOIN roster_person_aliases a ON a.source_type=f.source_type AND a.doctor_key=f.doctor_key WHERE f.${column}=? ORDER BY f.source_type,f.doctor_key LIMIT 25`,[value]);
+  const blocks=[['given_block',`${name.given}:${name.surname.slice(0,3)}`],['surname_block',`${name.surname}:${name.givenInitial}`]];
+  const blockRows=await all(db,blocks.map(([column],index)=>`SELECT * FROM (SELECT ${index} AS identity_block,f.source_type,f.doctor_key,f.display_name,a.person_id FROM roster_identity_features f JOIN roster_person_aliases a ON a.source_type=f.source_type AND a.doctor_key=f.doctor_key WHERE f.${column}=? ORDER BY f.source_type,f.doctor_key LIMIT 25)`).join(' UNION ALL '),blocks.map(([,value])=>value));
+  for(let index=0;index<blocks.length;index++) {
+   const matches=blockRows.filter(row=>row.identity_block===index);
    if(matches.length>24){skippedLargeBlocks++;continue;}
    for(const item of matches) neighbours.set(`${item.source_type}:${item.doctor_key}`,{sourceType:item.source_type,key:item.doctor_key,displayName:item.display_name,personId:item.person_id});
   }

@@ -8,7 +8,7 @@ import {facilityMetadataManifestKey} from '../../_lib/facility-overview-cache.js
 import {melbourneDateKey} from '../../../public/static/roster-term-policy.js';
 export async function onRequestPost(context) {
  if(context.env.IDENTITY_REVIEW_ENABLED!=='true') return new Response('Unavailable',{status:503});
- const input=await context.request.json().catch(()=>({}));
+ const input=context.data?.identityMaintenanceInput ?? await context.request.json().catch(()=>({}));
  const tokens=[context.env.IDENTITY_MAINTENANCE_TOKEN,context.env.ROSTER_AUTOMATION_TOKEN,...(input.mode==='publish'?[]:[context.env.ROSTER_WATCHDOG_TOKEN])].filter(Boolean).map(String);
  if(!tokens.some(token=>context.request.headers.get('Authorization')===`Bearer ${token}`)) return Response.json({error:'Unauthorized.'},{status:401});
  if(!['publish','audit','register'].includes(input.mode) || input.mode==='publish' && !/^[a-f0-9-]{36}$/.test(String(input.operationId||''))) return new Response('Invalid operation',{status:400});

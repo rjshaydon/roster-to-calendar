@@ -356,3 +356,38 @@ until they answer. Production config already declares 30,000 ms CPU, but actual
 terminations at ~14 ms remain consistent with a lower billing-tier entitlement;
 the available OAuth token cannot read billing subscriptions. Verify the actual
 tier before any paid action and retain D1 safeguards either way.
+
+### 11 October, 04:51Z continuation
+
+The partial receipt index reduced the optional gate to about 40–50 reads per
+normal audit checkpoint. Catch-up run 38112082649 ended at its normal time bound,
+with 126 checkpoints reported and no observed failed requests. The next bounded
+continuation is 38112892819. The real weekly run remains incomplete.
+
+Commit 211e4040 reuses Melbourne date formatters and only calculates the audit
+window for audit mode. Identity operations and bounded identity tests passed;
+production deployment c80e4aad-fd0b-48ca-beb3-9fa091bbca73 succeeded. Initial live
+CPU readings remain around 21–29 ms; this optimization does not establish
+reliable operation within the Free allowance. No billing change has been made.
+
+Settled account usage at cutoff approximately 04:34Z was 840,046 reads and 18,093
+writes. Reconciliation with measured settled maintenance (749,396 / 16,477),
+held reservations and ordinary-use forecasts leaves 2,501,202 reads / 49,417
+writes under the unchanged maintenance policy. The generic CLI forecast reports
+STOP because it projects this one-off restoration traffic as recurring ordinary
+traffic; the production policy distinguishes only confirmed measured maintenance
+and retains uncertain reservations. Sample user/creator subscriptions still return
+HTTP 200, 128/154 events, with the exact baseline UID sets unchanged.
+
+At 05:06:19Z the real weekly audit reached 316 examined / 31 candidates, with
+229 pending features. Continuation 38112892819 stopped normally at its time cap.
+The next continuation is 38113747801. All observed requests on deployment
+211e4040 have settled with complete metadata; recent 50-request median CPU was
+11 ms (maximum 18 ms), so reliability against a hard Free allowance remains an
+open acceptance condition rather than a claimed fix.
+
+At 05:11Z normal account refresh reconciled the confirmed CPU receipt using
+settled cutoff 04:55:47.246Z. Its original recovery bound was 04:54:28.951Z;
+no manual refund or deadline change was needed. The later 04:25 scheduled receipt
+remains held to its later bound. The audit had reached 358 / 34 candidates;
+no new unfinished failures had accumulated.

@@ -11,7 +11,7 @@ import {identityAuditWindow} from '../public/static/identity-audit-policy.js';
 import {onRequestPost as stateHandler} from '../functions/api/state.js';
 import {onRequestGet as feedHandler} from '../functions/api/feed.js';
 import {createHash} from 'node:crypto';
-import {buildDoctorIdentityCandidates} from '../public/static/doctor-identity.js';
+import {buildDoctorIdentityCandidates,normalizeDoctorIdentityName} from '../public/static/doctor-identity.js';
 const neighbours=Array.from({length:24},(_,i)=>({sourceType:'mmc',key:'MATCH '+i,displayName:'John'+String.fromCharCode(65+i)+' Smith',personId:'person:match-'+i}));
 const target='mmc:MATCH 23';
 const fullPairs=buildDoctorIdentityCandidates(neighbours,{bucketLimit:50,candidateLimit:500});
@@ -117,6 +117,21 @@ const repeatedAuditQueries=sql.slice(-200);
 assert.ok(repeatedAuditQueries.filter(q=>q.includes('WHERE f.given_block')).length<doctors.length,'unchanged features skip candidate comparisons');
 const featurePlan=sqlite.prepare("EXPLAIN QUERY PLAN SELECT * FROM roster_identity_features WHERE given_block=? LIMIT 25").all('AESHAN:KUL');
 assert.ok(featurePlan.some(row=>row.detail.includes('idx_identity_feature_given')));
+sqlite.exec('SAVEPOINT union_bounds');
+for(let i=0;i<25;i++) {
+ const display=`Bounded Sibling${i}`,name=normalizeDoctorIdentityName(display),key=`UNION BOUND ${i}`,person=`person:union-${i}`;
+ sqlite.prepare('INSERT INTO roster_people(person_id,preferred_display_name) VALUES(?,?)').run(person,display);
+ sqlite.prepare("INSERT INTO roster_person_aliases(source_type,doctor_key,display_name,person_id) VALUES('casey',?,?,?)").run(key,display,person);
+ sqlite.prepare("INSERT INTO roster_identity_features(source_type,doctor_key,display_name,normalized_key,given_block,surname_block,fingerprint,audited_fingerprint,updated_at) VALUES('casey',?,?,'fixture',?,?,?,'','fixture')").run(key,display,`${name.given}:${name.surname.slice(0,3)}`,`${name.surname}:${name.givenInitial}`,'fixture');
+}
+const boundedBlocks=await auditIdentityBatch(db,[]);
+assert.ok(boundedBlocks.skippedLargeBlocks>=1,'a 25-name neighbour block remains excluded after combining the reads');
+const unionQuery=sql.findLast(q=>q.includes('identity_block')&&q.includes('UNION ALL'));
+assert.equal((unionQuery.match(/LIMIT 25/g)||[]).length,2,'each union arm retains its own bound');
+const unionPlan=sqlite.prepare('EXPLAIN QUERY PLAN '+unionQuery).all('bounded:sib','sibling0:b');
+assert.ok(unionPlan.some(p=>p.detail.includes('given_block=?'))&&unionPlan.some(p=>p.detail.includes('surname_block=?')),'both neighbour arms use indexed name blocks');
+sqlite.exec('ROLLBACK TO union_bounds; RELEASE union_bounds');
+
 assert.equal(identityAuditWindow(new Date('2026-10-03T16:30:00Z')).eligible,true,'Melbourne Sunday DST change stays inside the audit window');
 assert.equal(identityAuditWindow(new Date('2026-04-04T17:30:00Z')).eligible,true,'Melbourne winter Sunday remains 03:30 after DST ends');
 assert.equal(identityAuditWindow(new Date('2026-10-03T18:00:00Z')).eligible,false,'no work outside the Melbourne window');
@@ -234,8 +249,11 @@ await reverseIdentityOperation(db,{operationId:eightOperation.operationId,previe
 assert.equal((await resolvePersonId(db,eightIds[7])).status,'active','a new canonical ninth row can be reversed for the maximum eight-person selection');
 const maintenanceRequest=(mode)=>new Request('https://example.test/api/automation/identity-maintenance',{method:'POST',headers:{authorization:'Bearer fixture-token','content-type':'application/json'},body:JSON.stringify({mode,operationId:feedOperation.operationId})});
 const maintenanceContext={env:{ROSTER_DB:db,ROSTER_FILES:r2,IDENTITY_REVIEW_ENABLED:'true',ROSTER_AUTOMATION_TOKEN:'fixture-token',ROSTER_AUTOMATION_WRITES_ENABLED:'false'},request:maintenanceRequest('publish'),waitUntil(){}};
+let maintenanceBodyReads=0;const readMaintenanceBody=maintenanceContext.request.json.bind(maintenanceContext.request);
+maintenanceContext.request.json=()=>{maintenanceBodyReads++;return readMaintenanceBody();};
 maintenanceContext.next=()=>identityMaintenance(maintenanceContext);
 assert.equal((await middleware(maintenanceContext)).status,200,'identity publication does not enable roster imports');
+assert.equal(maintenanceBodyReads,1,'middleware and the authenticated handler share one parsed maintenance body');
 const registryQueries=sql.length;
 const unchangedRegistry={async head(){return {etag:'fixture'};},async get(){return {async json(){return {revision:JSON.stringify(['cached-names-v2',melbourneDateKey().slice(0,7),'fixture','fixture','fixture','fixture']),runId:''};}};}};
 const unchanged=await identityMaintenance({env:{...maintenanceContext.env,IDENTITY_REGISTRY_ENABLED:'true',ROSTER_FILES:unchangedRegistry},request:maintenanceRequest('register')});
