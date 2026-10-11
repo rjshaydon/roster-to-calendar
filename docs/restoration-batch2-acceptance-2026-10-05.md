@@ -454,3 +454,19 @@ deleted; exact synthetic rows/run and its namespaced R2 progress object were
 removed, the grant expired, and original preview fixtures/accounting preserved.
 Cloudflare Free remains unchanged. CPU acceptance is still open; do not describe
 Batch 2 as fully accepted or all 503 causes as eliminated.
+
+
+Final circuit inspection at about 06:03Z found two newer unreconciled receipts,
+not the original recovered receipts: roster recovery bound 12:15:33Z and identity
+recovery bound 06:46:15Z. They remain fully held; no refund or altered deadline.
+The observed earlier Pages tail confirms /api/automation/derived exceeded CPU
+(618 ms, then 10 ms) around 05:43Z. The newer identity receipt's cause is not
+established by that tail. Do not claim there are no current unfinished receipts.
+The circuit currently has two of its three-entry threshold, and primary roster
+headroom remains protected. The next Free-tier reliability batch must also
+include derived delivery CPU: share one parsed request body instead of reparsing
+in middleware/handler, inspect bounded phase payload/work sizes, and split the
+expensive phase with durable staging as needed. Preserve atomic publication,
+source ordering, identical-input no-ops and full event/identity coverage. Confirm
+both paths on fresh and warm deployments before accepting Batch 2 / proceeding
+to Batch 6. A successful completed audit is not proof these CPU risks are fixed.

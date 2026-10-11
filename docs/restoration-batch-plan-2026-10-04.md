@@ -6,8 +6,10 @@ registered; 545 audited; 47 candidate updates). Normal watchdog flags are restor
 The user requires Cloudflare Free. CPU reductions are tested, but fresh/dense
 checkpoints still sometimes exceed its 10 ms allowance; this is the remaining
 Batch 2 acceptance issue. Split dense processing into durable smaller phases and
-verify cold/warm CPU before proceeding to Batch 6. Conservative receipt recovery
-has recovered all the original held receipts without manual refunds.
+verify cold/warm CPU before proceeding to Batch 6. Include the observed derived
+delivery CPU failures in that reliability batch. Conservative receipt recovery
+has recovered all the original held receipts without manual refunds; two newer
+receipts remain conservatively held to their recovery bounds.
 See the completed catch-up / Free-tier checkpoint in the acceptance record.
 The user's agreed priority is **1 → 2 → 6 → 7 → 3 → 4 → 5 → 8**,
 retaining the original batch numbers for continuity. This plan supersedes earlier
