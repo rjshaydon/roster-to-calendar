@@ -127,6 +127,16 @@ function candidateEvidence(left, right) {
   return null;
 }
 
+// External audit runners can compare every relevant pair without the browser's
+// bucket/output limits. Inputs come from flattenDoctorIdentities; evidence rules
+// remain shared with the existing matcher.
+export function compareDoctorIdentityPair(left, right) {
+  const pairKey = doctorIdentityPairKey(left, right);
+  if (!pairKey || left.personId && left.personId === right.personId) return null;
+  const evidence = candidateEvidence(left, right);
+  return evidence ? { pairKey, left, right, ...evidence } : null;
+}
+
 function addToBucket(buckets, key, index) {
   if (!key) return;
   if (!buckets.has(key)) buckets.set(key, []);
