@@ -5,9 +5,11 @@ merged and enabled. Automatic registration resumed after exact queue
 reconciliation on 10 October; historical catch-up completion and the first real
 weekly audit remain acceptance checks. See the 10 October checkpoint in
 `restoration-batch2-acceptance-2026-10-05.md` for verified results and limitations.
-The 11 October MMC incident exposes an operational reliability gap: the pipeline
-is enabled, but reservation exhaustion can stall changed rosters. Complete the
-reservation-recovery batch below before proceeding to Batch 6.
+The 11 October roster reliability batch is deployed and MMC recovery passed.
+Batch 2 still needs historical catch-up completion, the real weekly audit, and
+confirmation that unfinished maintenance receipts recover without accumulation.
+See the 11 October continuation checkpoint in the Batch 2 acceptance record
+before proceeding to Batch 6.
 The user's agreed priority is **1 → 2 → 6 → 7 → 3 → 4 → 5 → 8**,
 retaining the original batch numbers for continuity. This plan supersedes earlier
 fifteen-minute freshness targets and batch ordering.

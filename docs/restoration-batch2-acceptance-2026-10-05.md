@@ -210,3 +210,32 @@ cap. It stops on admission deferral, active imports, busy leases or uncertain
 responses, with no blind retries or safeguard bypass. Automated tests cover
 delayed starts, weekday resumption, completed-cache no-ops, historical-registration
 priority and continuation limits. Production completion remains to be observed.
+
+### Live bounded continuation result — 11 October, 13:58 AEDT
+
+Production Pages commit da0810d2 succeeded and watchdog version
+15b8cf48-8a05-4739-95d3-0650ae316970 is deployed on the unchanged five-minute
+cron. GitHub run 38106265471 made 54 serial registration calls, then returned
+deferred/busy when the scheduled worker held the lease. This is a successful
+safe stop, not completed catch-up. Together with scheduled progress, the missing
+name count fell from 445 to 389 across the same 996 cached names. The durable
+run had reached 344 examined names at the observed stopping checkpoint.
+
+Completed identity receipt totals for the UTC day were 95,575 reads / 4,027
+writes. Two earlier receipts remain unfinished: their request deadlines were
+02:17:15Z and 02:52:15Z; recovery bounds are 03:11:15Z and 03:46:15Z respectively.
+Their reservations remain conservatively held until settled analytics covers
+those bounds. The account grant has no stop reason and retains routine headroom.
+These are not proved CPU failures: the interruption/settlement cause remains
+unverified, and Batch 2 must not be marked fully accepted on this evidence.
+
+Both existing subscription URLs still returned HTTP 200, with exactly unchanged
+UID sets (128 ordinary-user events / 154 Creator events). No suggestion decisions
+were merged or dismissed during acceptance.
+
+Remaining: finish the 389-name historical catch-up; observe the automatic due
+weekly audit start and complete after registration; verify recovery of the two
+unfinished receipts without repeated accumulation; repeat settled account-wide
+usage/continuity checks. Codex allowance was down to 10%, so no additional manual
+continuation job or feature batch was started. Normal gated scheduled progress
+remains enabled.
