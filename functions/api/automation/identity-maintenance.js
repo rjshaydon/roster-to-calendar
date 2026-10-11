@@ -13,7 +13,6 @@ export async function onRequestPost(context) {
  if(!tokens.some(token=>context.request.headers.get('Authorization')===`Bearer ${token}`)) return Response.json({error:'Unauthorized.'},{status:401});
  if(!['publish','audit','register'].includes(input.mode) || input.mode==='publish' && !/^[a-f0-9-]{36}$/.test(String(input.operationId||''))) return new Response('Invalid operation',{status:400});
  const db=context.env.ROSTER_DB;
- const window=identityAuditWindow();
  let registryState=null,registryObject=null,registryRevision='';
  let auditState=null,auditObject=null,auditWeek='';
  if(input.mode==='register') {
@@ -31,6 +30,7 @@ export async function onRequestPost(context) {
 
  if(input.mode==='audit') {
   if(context.env.IDENTITY_SCHEDULED_AUDIT_ENABLED!=='true') return Response.json({status:'outside-audit-window'});
+  const window=identityAuditWindow();
   auditObject=await context.env.ROSTER_FILES.get('identity/weekly-audit-progress.json');
   auditState=auditObject?await auditObject.json():{};
   if(!auditState.runId && !window.catchupEligible) return Response.json({status:'outside-audit-window'});
