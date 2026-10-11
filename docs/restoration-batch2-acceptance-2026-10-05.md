@@ -470,3 +470,20 @@ expensive phase with durable staging as needed. Preserve atomic publication,
 source ordering, identical-input no-ops and full event/identity coverage. Confirm
 both paths on fresh and warm deployments before accepting Batch 2 / proceeding
 to Batch 6. A successful completed audit is not proof these CPU risks are fixed.
+
+## 12 October CPU reliability batch
+
+See [the batch record](restoration-cpu-batch-2026-10-12.md). Commits 0c766f99 and
+2c5632f5 are pushed and deployed. Roster comparison/compact preparation now run
+externally, with small hash-pinned, atomic/resumable corrections and publication.
+Observed final fixture steps fit 3–10 ms; full MMC initialization is at 10 ms,
+so margin and natural production delivery acceptance remain open. Feed HTTP,
+128/154 event counts and exact UID sets remain unchanged. Synthetic fixtures and
+the temporary Worker are removed; original preview files/accounting remain.
+
+The pre-existing 05:55Z DDH read-overrun stop was traced to inline account-refresh
+reads omitted from its reservation. Its quote is corrected; only that diagnosed
+stop was cleared, its grant expired, and normal re-admission produced a fresh
+grant. One unknown reservation is still held. No manual refund or paid upgrade.
+Dense identity comparison/full candidate coverage and production CPU acceptance
+remain required before accepting Batch 2 or starting Batch 6.

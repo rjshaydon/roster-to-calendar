@@ -101,3 +101,20 @@ receipts or clear other stop reasons. At the last settled account sample there
 were 1,768,605 reads and 46,051 writes; the full diagnostic CLI remained STOP for
 billing/sample/query-diagnostic evidence, not a quota-limit breach. No CLI GO or
 full Batch 2 acceptance is claimed.
+
+Closeout: reservation correction 2c5632f5 deployed successfully (manual Pages
+683228dd; Git-integrated deployments may supersede it with the same code). Only
+the exact diagnosed stop was cleared, conditional on its known completed receipt
+and absence of another overrun; the grant was expired first. Normal admission
+then issued a fresh grant valid to 22:11:18Z, with an empty stop reason. One
+unresolved reservation remains held; none was manually refunded. Both sampled
+feeds still match their exact baseline UID sets. The final settled analytics
+cutoff 21:45:26Z records 1,791,965 reads / 50,882 writes; the subsequent isolated
+cleanup measured 3,378 reads / 3,228 writes. The full diagnostic CLI remains STOP,
+so this record does not claim diagnostic or full CPU acceptance. Maintenance
+verification run 38178709371 uses the deployed commit and no forced view seeding.
+
+At approximately the user's 25%-remaining stopping point, the next work remains
+externalizing dense identity comparison without lost coverage, obtaining actual
+changed-roster production CPU/publication acceptance, and then proceeding to
+Batch 6. Keep Free tier, current quotas, stable feeds and historical grades.
