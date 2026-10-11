@@ -10915,29 +10915,34 @@ function facilityOverviewFormatOverlap(start, end) {
   return `${format(start)} – ${startsAndEndsSameDay ? format(end) : `${formatDate(formatDateKey(end))} ${format(end)}`}`;
 }
 
-async function loadFacilityOverviewOnShift() {
+async function loadFacilityOverviewOnShift({ background = false } = {}) {
   applyFacilityOverviewSiteScope();
   if (!canUseFacilityOverview() || currentFacilityOverviewMaintenance || facilityOverviewState.tab !== "on-shift") return;
   stopFacilityOverviewContactRefresh();
-  collapseFacilityOverviewContactReview();
+  if (!background) collapseFacilityOverviewContactReview();
+  const previousContent = facilityOverviewState.content;
   const requestId = facilityOverviewState.requestId + 1;
   facilityOverviewState.requestId = requestId;
   facilityOverviewState.staffData = null;
-  facilityOverviewState.onShiftData = null;
-  facilityOverviewState.contactList = null;
-  facilityOverviewState.previousNightRoster = null;
-  facilityOverviewState.contactAccessToken = "";
-  facilityOverviewState.content = `<article class="issue-card"><p>Loading rostered staff…</p></article>`;
+  if (!background) {
+    facilityOverviewState.onShiftData = null;
+    facilityOverviewState.contactList = null;
+    facilityOverviewState.previousNightRoster = null;
+    facilityOverviewState.contactAccessToken = "";
+    facilityOverviewState.content = `<article class="issue-card"><p>Loading rostered staff…</p></article>`;
+  }
   const cacheQuery = { facilityKey: facilityOverviewState.facilityKey, date: facilityOverviewState.date, includeClinicalSupport: facilityOverviewState.includeClinicalSupport === true };
-  renderFacilityOverview();
-  const cached = await loadFacilityOverviewSnapshot("on-shift", cacheQuery);
+  if (!background) renderFacilityOverview();
+  const cached = background
+    ? { events: facilityOverviewState.onShiftData || [], revision: facilityOverviewState.onShiftRevision || "" }
+    : await loadFacilityOverviewSnapshot("on-shift", cacheQuery);
   if (facilityOverviewState.requestId !== requestId || facilityOverviewState.tab !== "on-shift") return;
-  if (cached) {
+  if (cached && !background) {
     facilityOverviewState.onShiftData = cached.events || [];
     facilityOverviewState.onShiftData.deliveryWarnings=cached.deliveryWarnings||[];
     facilityOverviewState.content = `<p class="facility-overview-by-stream-summary">Showing the last saved roster while checking for updates.</p>${renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData)}`;
   }
-  renderFacilityOverview();
+  if (!background) renderFacilityOverview();
   let refreshed = false;
   const controller = beginFacilityOverviewDataRequest();
   try {
@@ -10962,6 +10967,7 @@ async function loadFacilityOverviewOnShift() {
     refreshFacilityOverviewSnapshotAccess(data);
     facilityOverviewState.onShiftData = data.rosterUnchanged === true && cached ? cached.events || [] : data.events || [];
     facilityOverviewState.onShiftData.deliveryWarnings=data.deliveryWarnings||[];
+    facilityOverviewState.onShiftRevision = data.revision || cached?.revision || "";
     facilityOverviewState.contactList = mergeContactResolutionRefresh(facilityOverviewState.contactList, data.contactList || null);
     facilityOverviewState.previousNightRoster = data.previousNightRoster || null;
     facilityOverviewState.contactAccessToken = String(data.contactAccessToken || "");
@@ -10974,13 +10980,16 @@ async function loadFacilityOverviewOnShift() {
     if (facilityOverviewState.requestId !== requestId) return;
     if (facilityOverviewCachedReadDenied(error)) {
       facilityOverviewState.onShiftData = null;
+      facilityOverviewState.contactList = null;
+      facilityOverviewState.contactAccessToken = "";
       if (!canUseFullFacilityOverview()) { clearOnShiftAccess(); syncFacilityOverviewAccess(); return; }
     }
     if (!cached || facilityOverviewCachedReadDenied(error)) facilityOverviewState.content = `<article class="issue-card"><p>${escapeHtml(error.message || "The ED overview is unavailable right now.")}</p></article>`;
   } finally {
     finishFacilityOverviewDataRequest(controller);
   }
-  renderFacilityOverview();
+  if (!background) renderFacilityOverview();
+  else if (facilityOverviewState.requestId === requestId && facilityOverviewState.content !== previousContent) renderFacilityOverviewOnShiftPreservingViewport();
   scheduleFacilityOverviewContactRefresh();
   return refreshed;
 }
@@ -11025,8 +11034,11 @@ async function refreshFacilityOverviewContactList() {
   // VHH allocations expire at each person's rostered finish even when the
   // workbook and contact revision remain unchanged or the refresh fails.
   if (["VHH", "DDH"].includes(String(facilityOverviewState.facilityKey).toUpperCase())) {
-    facilityOverviewState.content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData || []);
-    renderFacilityOverviewOnShiftPreservingViewport();
+    const content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData || []);
+    if (content !== facilityOverviewState.content) {
+      facilityOverviewState.content = content;
+      renderFacilityOverviewOnShiftPreservingViewport();
+    }
   }
   facilityOverviewContactRefreshInFlight = true;
   const requestId = facilityOverviewState.requestId;
@@ -11045,11 +11057,15 @@ async function refreshFacilityOverviewContactList() {
         previousNightRosterDate: facilityOverviewState.previousNightRoster?.nightDate || "",
       }),
     });
+    if (facilityOverviewState.requestId !== requestId
+      || facilityOverviewState.tab !== "on-shift"
+      || facilityOverviewState.date !== date
+      || facilityOverviewState.facilityKey !== facilityKey) return;
     if (response.status === 401 || response.status === 403) {
-      facilityOverviewState.contactAccessToken = "";
-      facilityOverviewState.contactList = { status: "unavailable", reason: "authorization-expired", contacts: [], resolutions: [] };
-      facilityOverviewState.content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData || []);
-      renderFacilityOverviewOnShiftPreservingViewport();
+      // Recheck account/site permissions before issuing another short-lived
+      // token. Keep the current view intact while renewing; never extend an
+      // expired token indefinitely without authenticated access checks.
+      await loadFacilityOverviewOnShift({ background: true });
       return;
     }
     const data = await readJsonResponse(response, "Could not refresh live contact allocations.");
@@ -11059,16 +11075,22 @@ async function refreshFacilityOverviewContactList() {
       || facilityOverviewState.facilityKey !== facilityKey) return;
     if (data.previousNightRoster !== undefined) {
       facilityOverviewState.previousNightRoster = data.previousNightRoster;
-      facilityOverviewState.content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData || []);
-      renderFacilityOverviewOnShiftPreservingViewport();
+      const content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData || []);
+      if (content !== facilityOverviewState.content) {
+        facilityOverviewState.content = content;
+        renderFacilityOverviewOnShiftPreservingViewport();
+      }
     }
     if (data.unchanged === true) return;
     const nextContactList = mergeContactResolutionRefresh(facilityOverviewState.contactList, data.contactList || { status: "unavailable", reason: "no-extract" });
     if (JSON.stringify(nextContactList) !== JSON.stringify(facilityOverviewState.contactList)) {
       collapseFacilityOverviewContactReview();
       facilityOverviewState.contactList = nextContactList;
-      facilityOverviewState.content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData || []);
-      renderFacilityOverviewOnShiftPreservingViewport();
+      const content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData || []);
+      if (content !== facilityOverviewState.content) {
+        facilityOverviewState.content = content;
+        renderFacilityOverviewOnShiftPreservingViewport();
+      }
     }
   } catch (error) {
     console.warn("Live contact allocation refresh failed", error);
@@ -11076,8 +11098,11 @@ async function refreshFacilityOverviewContactList() {
       if (contactExtractHasExpired(facilityOverviewState.contactList?.sourceDate)) {
         facilityOverviewState.contactList = { ...facilityOverviewState.contactList, status: "unavailable", reason: "expired", contacts: [], resolutions: [] };
       }
-      facilityOverviewState.content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData || []);
-      renderFacilityOverviewOnShiftPreservingViewport();
+      const content = renderFacilityOverviewOnShiftResults(facilityOverviewState.onShiftData || []);
+      if (content !== facilityOverviewState.content) {
+        facilityOverviewState.content = content;
+        renderFacilityOverviewOnShiftPreservingViewport();
+      }
     }
   } finally {
     facilityOverviewContactRefreshInFlight = false;
@@ -11423,6 +11448,7 @@ function renderFacilityOverviewContactAllocation(allocation) {
 
 function renderFacilityOverviewContactListStatus(matches, assignments = []) {
   const contactList = facilityOverviewState.contactList;
+  if (!contactList) return ""; // Contacts still loading alongside a saved roster.
   const live = ['MMC','MCH','DDH','VHH'].includes(String(facilityOverviewState.facilityKey).toUpperCase())
     && (facilityOverviewState.date === contactOperationalDate()
       || (String(facilityOverviewState.facilityKey).toUpperCase()==='VHH' && facilityOverviewState.date===australianDateKey()));

@@ -560,3 +560,26 @@ admission remained within its unchanged limits, with bounded receipts settled.
 
 The Mac remained locked for the final browser check; published data was verified
 through the actual application readers instead of claiming a visual Safari test.
+
+### Whole-shift On shift contact sessions — 11 October
+
+The browser now responds to an expired contact token by silently rechecking
+account/site access through the existing authenticated On shift reader. Valid
+allocations remain displayed during renewal and transient failures; actual
+authenticated denial removes the protected view and stops polling. Tokens still
+expire after fifteen minutes. The existing minute contact-only checks retain
+their zero-D1 token path; only renewal performs account authorization, at most
+once per normal fifteen-minute token period. No Flow cadence, ingestion, schema
+or account allowance changed.
+
+Unchanged rendered content is preserved without redraw, including DDH/VHH
+expiry calculations and healthy heartbeat metadata. Changed allocations and
+handover/finish visibility still update normally. A saved roster shown while
+contacts load no longer produces a false unavailable warning. Late responses
+from a previous site are ignored before token-expiry handling.
+
+The ten-hour client simulation passed forty automatic renewals, six hundred
+unchanged contact polls without redraw, changed allocations, heartbeat metadata,
+transient renewal failure/retry, stale-site denials and real revocation. Syntax,
+contact safeguards, client request budget, restricted On shift access, contact
+token security and DDH night/DST review regressions also passed.

@@ -30,6 +30,7 @@
     "test:contact-workbook-ingress": "node --no-warnings scripts/test-contact-workbook-ingress.mjs",
     "test:facility-contacts": "node scripts/test-facility-contact-cache.mjs",
     "test:facility-contact-access": "node scripts/test-facility-contact-access.mjs",
+    "test:contact-session": "node scripts/test-contact-session.mjs",
     "test:facility-snapshots": "node scripts/test-facility-snapshot-cache.mjs",
     "test:facility-rollout": "node scripts/test-facility-rollout.mjs",
     "test:facility-maintenance": "node scripts/test-facility-maintenance.mjs",
