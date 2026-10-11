@@ -239,3 +239,42 @@ unfinished receipts without repeated accumulation; repeat settled account-wide
 usage/continuity checks. Codex allowance was down to 10%, so no additional manual
 continuation job or feature batch was started. Normal gated scheduled progress
 remains enabled.
+
+### Resumed acceptance — 11 October, 14:20 AEDT
+
+After the user's usage reset, registration reached 407 examined names in the
+same durable run. The continuation runner now waits thirty seconds on a confirmed
+lease collision, at most three consecutive times, within the existing
+600-checkpoint/fifteen-minute bounds. Other deferrals and uncertain responses
+still stop immediately. Fresh ten-minute shared analytics grants are reused;
+each checkpoint still reserves atomically and preserves routine roster headroom.
+Expired, stopped and previous-UTC-day grants cannot be reused.
+
+The separate CLI report used a comparison gap below its minimum and projected
+one-off catch-up as recurring traffic, returning STOP. Manual continuation was
+paused for reconciliation. At the settled 02:58:04Z cutoff, account totals were
+258,505 reads / 6,188 writes; completed receipts attributed 213,195 measured reads
+and 5,739 measured writes to maintenance (settlement estimates excluded).
+The unchanged runtime policy forecast ordinary traffic at 321,074 additional
+reads / 3,182 writes and retained roughly 2.9 million reads / 65,000 writes of
+headroom after outstanding reservations. No limits or reservations were bypassed.
+
+The canceled job interrupted one in-flight checkpoint: Pages tail explicitly
+reported `canceled`, with no exception or settlement-error log. Its reservation
+remains held, with recovery bound 04:10:10Z. This proves the cause of this new
+receipt, not the two earlier receipts. Deployment cc73e725 retains the exact
+checkpoint/settlement promise with `waitUntil` across client disconnection;
+Cloudflare's thirty-second extension is bounded, so longer interruptions still
+retain reservations for settled-analytics recovery. Tests prove retention is
+registered before completion and does not execute a second checkpoint.
+
+Watchdog version eeaf332d-c58d-4fc4-8400-450fdd2ebe24 drains identity response
+bodies and logs bounded mode/status/progress counts without names or credentials.
+An indexed read-only live-lease preflight returns busy before budget reservation,
+so overlapping watchdog/manual requests do not consume an unfinished-work slot
+just to discover the engine is already running. The engine's atomic lease and
+all admission/source guards remain authoritative; tests verify that the preflight
+does not reserve budget or alter the existing lease.
+Its five-minute schedule and source-priority guards remain unchanged. Registration
+and weekly-audit completion, recovery without accumulation, and final feed/usage
+acceptance are still outstanding.

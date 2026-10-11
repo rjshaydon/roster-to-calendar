@@ -46,6 +46,9 @@ export async function onRequestPost(context) {
   for(const source of ['monash-adults','monash-paeds','vhh-active-medical-roster','dandenong-findmyshift']) {
     if(await loadActiveRosterImport(db,source)) return Response.json({status:'import-active'});
   }
+  const runId=input.mode==='register'?registryState.runId:auditState.runId;
+  if(runId && await db.prepare("SELECT run_id FROM roster_identity_audit_runs WHERE run_id=? AND status='running' AND lease_until>? LIMIT 1")
+    .bind(runId,new Date().toISOString()).first()) return Response.json({status:'busy'});
  }
  if(context.env.ROSTER_ACCOUNT_BUDGET_ENABLED==='true') {
   if(!await currentAccountMaintenanceGrant(db)) {

@@ -261,6 +261,13 @@ try {
  assert.equal(sql.length,beforeRegistration,'audit waits for historical name registration without D1');
  scheduledObjects.clear();
  globalThis.Date=class extends OriginalDate {constructor(...args){super(...(args.length?args:['2026-10-11T02:00:00Z']));}};
+ sqlite.prepare("INSERT INTO roster_identity_audit_runs(run_id,status,mode,scope_json,week_key,lease_until,created_at,updated_at) VALUES('held-audit','running','audit','[]','2026-10-11','2026-10-11T02:01:00Z','','')").run();
+ scheduledObjects.set('identity/weekly-audit-progress.json',{weekKey:'2026-10-11',runId:'held-audit',status:'running'});
+ const beforeBusy=sql.length;
+ assert.equal((await (await identityMaintenance({env:{...scheduledEnv,ROSTER_ACCOUNT_BUDGET_ENABLED:'true'},request:maintenanceRequest('audit')})).json()).status,'busy');
+ assert.ok(!sql.slice(beforeBusy).some(query=>/roster_account_budget|roster_maintenance_receipts|roster_import_daily_budget/.test(query)),'a confirmed live lease returns busy before reserving or refreshing budget');
+ assert.equal(sqlite.prepare("SELECT lease_until FROM roster_identity_audit_runs WHERE run_id='held-audit'").get().lease_until,'2026-10-11T02:01:00Z','preflight never alters the owner lease');
+ sqlite.prepare("DELETE FROM roster_identity_audit_runs WHERE run_id='held-audit'").run();scheduledObjects.clear();
  const late=await (await identityMaintenance({env:scheduledEnv,request:maintenanceRequest('audit')})).json();
  assert.ok(['running','complete'].includes(late.status),'missed Sunday window starts a bounded catch-up');
  const saved=scheduledObjects.get('identity/weekly-audit-progress.json');
