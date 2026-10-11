@@ -103,16 +103,7 @@ export async function auditIdentityBatch(db,doctors,{runId,actor='identity-audit
  }
  let cursor=processed.at(-1)?.marker || run.cursor, complete=register?!identities.some(a=>a.marker>cursor):pending.length<=processed.length;
  if(register && complete && cachedDirectory) {
-  const size=await db.prepare('SELECT COUNT(*) AS n FROM (SELECT 1 FROM roster_doctors LIMIT 2001)').first();
-  if(Number(size?.n)>2000) throw Error('Cached roster names exceed the completion inspection limit.');
-  const missing=await db.prepare(`SELECT d.source_type,d.doctor_key FROM roster_doctors d
-    LEFT JOIN roster_person_aliases a ON a.source_type=d.source_type AND a.doctor_key=d.doctor_key
-    LEFT JOIN roster_identity_features f ON f.source_type=d.source_type AND f.doctor_key=d.doctor_key
-    WHERE d.source_type IN ('mmc','mch','ddh','vhh','casey')
-    ${scope.length?'AND d.source_type IN ('+scope.map(()=>'?').join(',')+')':''}
-    AND length(d.doctor_key) BETWEEN 1 AND 200 AND length(d.display_name) BETWEEN 1 AND 200
-    AND (a.person_id IS NULL OR f.display_name IS NULL OR f.display_name<>d.display_name)
-    ORDER BY d.source_type,d.doctor_key LIMIT 1`).bind(...scope).first();
+  const missing=await cachedIdentityRegistrationMissing(db,scope);
   if(missing) {cursor='';complete=false;}
  } else if(register && complete) {
   // The authoritative directory can grow behind a saved cursor (for example
@@ -127,6 +118,18 @@ export async function auditIdentityBatch(db,doctors,{runId,actor='identity-audit
  }
  await db.prepare("UPDATE roster_identity_audit_runs SET cursor=?,status=?,examined=examined+?,candidates=candidates+?,updated_at=?,lease_token='',lease_until='' WHERE run_id=? AND cursor=? AND lease_token=?").bind(cursor,complete?'complete':'running',processed.length,candidateCount,now,run.run_id,run.cursor,lease).run();
  return {runId:run.run_id,status:complete?'complete':'running',cursor,examined:run.examined+processed.length,candidates:run.candidates+candidateCount,skippedLargeBlocks,durationMs:Date.now()-startedAt};
+}
+export async function cachedIdentityRegistrationMissing(db,scope=[]) {
+ const size=await db.prepare('SELECT COUNT(*) AS n FROM (SELECT 1 FROM roster_doctors LIMIT 2001)').first();
+ if(Number(size?.n)>2000) throw Error('Cached roster names exceed the completion inspection limit.');
+ return db.prepare(`SELECT d.source_type,d.doctor_key FROM roster_doctors d
+   LEFT JOIN roster_person_aliases a ON a.source_type=d.source_type AND a.doctor_key=d.doctor_key
+   LEFT JOIN roster_identity_features f ON f.source_type=d.source_type AND f.doctor_key=d.doctor_key
+   WHERE d.source_type IN ('mmc','mch','ddh','vhh','casey')
+   ${scope.length?'AND d.source_type IN ('+scope.map(()=>'?').join(',')+')':''}
+   AND length(d.doctor_key) BETWEEN 1 AND 200 AND length(d.display_name) BETWEEN 1 AND 200
+   AND (a.person_id IS NULL OR f.display_name IS NULL OR f.display_name<>d.display_name)
+   ORDER BY d.source_type,d.doctor_key LIMIT 1`).bind(...scope).first();
 }
 export async function queryIdentityCandidates(db,{after='',status='pending'}={}) {
  // Page before checking current links, so a queue of obsolete suggestions

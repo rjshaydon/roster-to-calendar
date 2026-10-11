@@ -1,8 +1,8 @@
-import {loadActiveRosterImport} from '../../_lib/roster-delivery-health.js';
+import {loadActiveRosterImports} from '../../_lib/roster-delivery-health.js';
 import {publishIdentityOperation} from '../../_lib/doctor-identity.js';
 import {refreshAccountMaintenanceBudget} from './account-budget.js';
 import {reserveRosterMaintenanceBudget,optionalMaintenanceAvailable,currentAccountMaintenanceGrant} from '../../_lib/roster-maintenance-budget.js';
-import {auditIdentityBatch} from '../../_lib/identity-discovery.js';
+import {auditIdentityBatch,cachedIdentityRegistrationMissing} from '../../_lib/identity-discovery.js';
 import {identityAuditWindow} from '../../../public/static/identity-audit-policy.js';
 import {facilityMetadataManifestKey} from '../../_lib/facility-overview-cache.js';
 import {melbourneDateKey} from '../../../public/static/roster-term-policy.js';
@@ -19,11 +19,13 @@ export async function onRequestPost(context) {
  if(input.mode==='register') {
   if(context.env.IDENTITY_REGISTRY_ENABLED!=='true') return Response.json({status:'registry-paused'});
   const r2=context.env.ROSTER_FILES;
-  const heads=await Promise.all(['mmc','mch','ddh','vhh'].map(source=>r2.head(facilityMetadataManifestKey(source))));
-  if(heads.some(head=>!head)) return Response.json({status:'directory-preparing'});
-  registryRevision=JSON.stringify(['cached-names-v2',melbourneDateKey().slice(0,7),...heads.map(head=>head.etag)]);
   registryObject=await r2.get('identity/registry-progress.json');
   registryState=registryObject?await registryObject.json():{};
+  if(!registryState.runId || registryState.finalizing) {
+   const heads=await Promise.all(['mmc','mch','ddh','vhh'].map(source=>r2.head(facilityMetadataManifestKey(source))));
+   if(heads.some(head=>!head)) return Response.json({status:'directory-preparing'});
+   registryRevision=JSON.stringify(['cached-names-v2',melbourneDateKey().slice(0,7),...heads.map(head=>head.etag)]);
+  } else registryRevision=registryState.revision;
   if(!registryState.runId && registryState.revision===registryRevision) return Response.json({status:'unchanged'});
  }
 
@@ -43,9 +45,7 @@ export async function onRequestPost(context) {
   }
  }
  if(['audit','register'].includes(input.mode)) {
-  for(const source of ['monash-adults','monash-paeds','vhh-active-medical-roster','dandenong-findmyshift']) {
-    if(await loadActiveRosterImport(db,source)) return Response.json({status:'import-active'});
-  }
+  if(await loadActiveRosterImports(db,['monash-adults','monash-paeds','vhh-active-medical-roster','dandenong-findmyshift'])) return Response.json({status:'import-active'});
   const runId=input.mode==='register'?registryState.runId:auditState.runId;
   if(runId && await db.prepare("SELECT run_id FROM roster_identity_audit_runs WHERE run_id=? AND status='running' AND lease_until>? LIMIT 1")
     .bind(runId,new Date().toISOString()).first()) return Response.json({status:'busy'});
@@ -62,21 +62,36 @@ export async function onRequestPost(context) {
   if(!await reserveRosterMaintenanceBudget(db,input.mode==='publish'?4096:512,131072)) return Response.json({status:'deferred'},{status:503});
  }
  if(['audit','register'].includes(input.mode)) {
+  if(input.mode==='register' && registryState.finalizing) {
+   // Capture current metadata before rechecking name coverage. A late source
+   // publication changes that watermark and gets checked on the next tick.
+   const missing=await cachedIdentityRegistrationMissing(db);
+   await saveRegistryProgress(context.env.ROSTER_FILES,registryObject,missing
+    ?{revision:registryRevision,runId:registryState.runId,restart:true}
+    :{revision:registryRevision,runId:''});
+   if(!missing) await context.env.ROSTER_FILES.put('identity/revision.json',JSON.stringify({revision:crypto.randomUUID()}),{httpMetadata:{contentType:'application/json'}});
+   return Response.json({status:missing?'running':'complete',runId:registryState.runId,examined:registryState.examined});
+  }
   // The indexed names cache retains historical staff. Register one name per
   // call and audit one pending feature, without decompressing every site's
   // published staff directory inside a free Pages request.
-  const result=await auditIdentityBatch(db,[],{cachedDirectory:true,runId:input.mode==='register'?registryState.runId:auditState.runId,register:input.mode==='register',actor:'published-roster-registration',weekKey:input.mode==='audit'?auditWeek:''});
+  const result=await auditIdentityBatch(db,[],{cachedDirectory:true,runId:input.mode==='register'?(registryState.restart?'':registryState.runId):auditState.runId,register:input.mode==='register',actor:'published-roster-registration',weekKey:input.mode==='audit'?auditWeek:''});
   if(input.mode==='audit' && result.status!=='busy') await saveAuditProgress(context.env.ROSTER_FILES,auditObject,
    {weekKey:auditWeek,runId:result.status==='complete'?'':result.runId,status:result.status});
   if(input.mode==='register' && result.status!=='busy') {
-   const progress={revision:result.status==='complete'?registryRevision:registryState.runId?registryState.revision:registryRevision,runId:result.status==='complete'?'':result.runId};
-   await context.env.ROSTER_FILES.put('identity/registry-progress.json',JSON.stringify(progress),{httpMetadata:{contentType:'application/json'},...(registryObject?.etag?{onlyIf:{etagMatches:registryObject.etag}}:{onlyIf:{etagDoesNotMatch:'*'}})});
-   if(result.status==='complete') await context.env.ROSTER_FILES.put('identity/revision.json',JSON.stringify({revision:crypto.randomUUID()}),{httpMetadata:{contentType:'application/json'}});
+   const progress={revision:registryState.runId?registryState.revision:registryRevision,runId:result.runId,
+    ...(result.status==='complete'?{finalizing:true,examined:result.examined}:{})};
+   await saveRegistryProgress(context.env.ROSTER_FILES,registryObject,progress);
+   if(result.status==='complete') return Response.json({...result,status:'running'});
   }
   return Response.json(result);
  }
  const result=await publishIdentityOperation(context.env.ROSTER_DB,context.env.ROSTER_FILES,input.operationId);
  return Response.json(result,{status:result.status==='missing'?404:result.status==='failed'?409:200});
+}
+async function saveRegistryProgress(r2,previous,value) {
+ await r2.put('identity/registry-progress.json',JSON.stringify(value),{httpMetadata:{contentType:'application/json'},
+  ...(previous?.etag?{onlyIf:{etagMatches:previous.etag}}:{onlyIf:{etagDoesNotMatch:'*'}})});
 }
 async function saveAuditProgress(r2,previous,value) {
  await r2.put('identity/weekly-audit-progress.json',JSON.stringify(value),{httpMetadata:{contentType:'application/json'},

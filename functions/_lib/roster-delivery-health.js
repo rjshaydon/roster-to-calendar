@@ -31,10 +31,20 @@ export async function loadPendingRosterPublication(env,sourceId) {
 }
 
 export async function loadActiveRosterImport(db,sourceId) {
- // Status index limits candidates to pending imports. The successor inspection
- // is bounded independently of historical run count; obsolete autosaves cannot
- // permanently hold up optional identity work after the latest file succeeds.
- return db.prepare(`WITH pending AS (SELECT id,status,started_at,file_id,source_file_id
+ return db.prepare(activeImportSql).bind(sourceId,sourceId).first();
+}
+
+export async function loadActiveRosterImports(db,sourceIds) {
+ if(!Array.isArray(sourceIds)||sourceIds.length<1||sourceIds.length>4||sourceIds.some(id=>!sources[id])) throw Error('Invalid roster source inspection.');
+ // The same fixed per-source bounds and indexes, with one D1 round trip.
+ return db.prepare(sourceIds.map(()=>`SELECT id FROM (${activeImportSql})`).join(' UNION ALL ')+' LIMIT 1')
+  .bind(...sourceIds.flatMap(id=>[id,id])).first();
+}
+
+// Status index limits candidates to pending imports. The successor inspection
+// is bounded independently of historical run count; obsolete autosaves cannot
+// permanently hold up optional identity work after the latest file succeeds.
+const activeImportSql=`WITH pending AS (SELECT id,status,started_at,file_id,source_file_id
    FROM roster_sync_runs INDEXED BY idx_roster_sync_runs_source_status_started
    WHERE source_id=? AND status IN ('queued','processing') LIMIT 66)
    SELECT r.id FROM pending r LEFT JOIN raw_roster_files f ON f.file_id=COALESCE(NULLIF(r.source_file_id,''),r.file_id)
@@ -44,5 +54,4 @@ export async function loadActiveRosterImport(db,sourceId) {
      JOIN raw_roster_files nf ON nf.file_id=COALESCE(NULLIF(n.source_file_id,''),n.file_id)
      WHERE n.id<>r.id AND n.status IN ('queued','processing','success') AND LOWER(nf.name)=LOWER(f.name)
        AND (n.started_at>r.started_at OR (n.started_at=r.started_at AND (n.id>r.id OR n.status='success')))
-   ) LIMIT 1`).bind(sourceId,sourceId).first();
-}
+   ) LIMIT 1`;

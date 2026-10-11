@@ -282,3 +282,23 @@ does not reserve budget or alter the existing lease.
 Its five-minute schedule and source-priority guards remain unchanged. Registration
 and weekly-audit completion, recovery without accumulation, and final feed/usage
 acceptance are still outstanding.
+
+Temporary runtime checkpoint at 14:43 AEDT: watchdog version
+2c510bf6-0339-4b66-9b54-a1e6ed459dfb overrides only
+`IDENTITY_REGISTRY_ENABLED=false` while the manual register continuation owns
+catch-up. Pages registration, roster polling and the weekly audit remain enabled.
+Restore the committed watchdog configuration with
+`npx wrangler deploy --config wrangler.roster-watchdog.toml` after registration,
+or before pausing/ending this task. GitHub run 38109309088 resumes the saved run
+from 479 examined names. No new unfinished receipt was created by run 38108748673.
+
+At 14:58, run 38109309088 stopped on a real Pages CPU limit after reaching 621
+examined names. The tail recorded `exceededCpu` (14 ms CPU), rather than a lost
+client response. Its reservation remains held to the 04:54:28Z recovery bound.
+The next implementation amortizes four R2 metadata HEADs over the durable run,
+combines the unchanged per-source import guards into one indexed SQL request,
+and separates final metadata/coverage verification from the last name checkpoint.
+A name arriving during final verification restarts registration and keeps the
+audit blocked. Tests retain current-metadata completion, zero-D1 unchanged polls,
+source isolation, oversize guards, historical grades and account/feed continuity.
+Production CPU acceptance remains required before further continuation.
