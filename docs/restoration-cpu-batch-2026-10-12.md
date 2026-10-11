@@ -75,3 +75,29 @@ acceptance must remain explicit in the acceptance record.
    this batch.
 4. Continue the existing restoration order 1 → 2 → 6 → 7 → 3 → 4 → 5 → 8 after
    Batch 2 CPU acceptance. Do not call all historical 503 causes eliminated.
+
+## Production rollout and DDH reservation correction
+
+Code 0c766f99 deployed and pushed. Both sampled feeds retain HTTP 200, 128/154
+VEVENTs and their exact baseline UID sets. The temporary CPU Worker and all
+CPU261012 file/doctor/job rows are removed; two original preview files and the
+accounting ledger remain. Production secrets retain their binding names; API
+values are redacted, so they were not copied or replaced.
+
+The production safety stop predates this batch: a DDH request finished at
+2026-10-11T05:55:38.469Z with 4,004 actual reads versus 1,072 reserved, and 32
+actual writes versus 176 reserved. Its inline account refresh read the receipt
+ledger but the ingestion quote allowed only 1,024 reads. Routine SQL aggregation
+reduces CPU, not those underlying D1 reads. The corrected DDH quote includes a
+65,536-read envelope only when that request refreshed its account grant, covering
+the bounded receipt/recovery/CAS reads; normal unused-reservation settlement
+returns the surplus. An unchanged poll still does not refresh or download.
+
+The two manual queue workflow checks authenticated successfully but found zero
+eligible work; this is not proof of changed-roster delivery because the cost stop
+was active. Clear only the identified old stop after deploying this correction,
+expire its grant and require normal settled account re-admission. Do not refund
+receipts or clear other stop reasons. At the last settled account sample there
+were 1,768,605 reads and 46,051 writes; the full diagnostic CLI remained STOP for
+billing/sample/query-diagnostic evidence, not a quota-limit breach. No CLI GO or
+full Batch 2 acceptance is claimed.

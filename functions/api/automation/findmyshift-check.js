@@ -102,12 +102,16 @@ export async function onRequestPost(context, internal = {}) {
     // Unchanged polls above are read-only. Only changed input needs an account
     // grant and a small ingestion reservation before downloading the workbook.
     if (context.env.ROSTER_ACCOUNT_BUDGET_ENABLED === 'true') {
+      let refreshedAccountBudget=false;
       const grant = await context.env.ROSTER_DB.prepare('SELECT valid_until,stop_reason FROM roster_account_budget WHERE utc_day=?').bind(now.slice(0, 10)).first();
       if (!grant || grant.valid_until <= now || grant.stop_reason) {
         const admission = await (await refreshAccountMaintenanceBudget(context)).json();
         if (admission.deferred) return Response.json({ ok: true, status: 'deferred', reason: admission.reason || 'account-budget' });
+        refreshedAccountBudget=true;
       }
-      if (!await reserveRosterMaintenanceBudget(context.env.ROSTER_DB, 128, 1024)) return Response.json({ ok: true, status: 'deferred', reason: 'account-budget' });
+      // Inline grant refresh also reads bounded receipt/recovery/CAS summaries.
+      // Include that work in this request; unused allowance settles normally.
+      if (!await reserveRosterMaintenanceBudget(context.env.ROSTER_DB, 128, 1024+(refreshedAccountBudget?65536:0))) return Response.json({ ok: true, status: 'deferred', reason: 'account-budget' });
     }
     const workbook = await findmyshiftRosterWorkbook(apiKey, teamId, range, { env: context.env });
     const response = await guardedFetch(context.env, new URL("/api/automation/ingest", context.request.url), {
