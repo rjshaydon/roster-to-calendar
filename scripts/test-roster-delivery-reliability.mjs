@@ -54,6 +54,7 @@ try{
  sqlite.prepare("INSERT INTO roster_sync_runs(id,source_id,file_id,source_file_id,status,started_at) VALUES('obsolete','monash-adults','file','file','queued','2000-01-01T00:00:00.000Z')").run();
  assert.equal(await loadActiveRosterImport(db,'monash-adults'),null,'an obsolete queued autosave cannot block identities after the latest success');
  const publishingEnv={...env,FACILITY_AUTOMATIC_PUBLICATION_ENABLED:'true',ROSTER_METADATA_CHECK_ENABLED:'true',ROSTER_AUTOMATION_TOKEN:'fixture'};
+ sqlite.prepare("INSERT INTO facility_term_visibility(source_type,term_start,visible_from) VALUES('mmc','2026-08-03','2026-07-01')").run();
  sqlite.prepare("INSERT INTO facility_refresh_jobs(source_type,term_start,dates_json,content_signature,request_revision,updated_at) VALUES('mmc','2026-08-03','[]','revision','revision',?)").run(queuedAt);
  await recordRosterDispatchLifecycle(publishingEnv,{sourceId:'monash-adults',dispatchId:started.dispatch.id,event:'completed'});
  assert.deepEqual(await loadRosterDeliveryWarnings(r2,['mmc']),[{sourceType:'mmc',status:'delayed'}],'unfinished publication retains the warning after import success');
@@ -65,6 +66,9 @@ try{
  assert.equal(pending.publicationPending,true);
  assert.equal(pending.runs.length,0,'publication resumes after the file import is already successful');
  sqlite.prepare("UPDATE facility_refresh_jobs SET status='complete'").run();
+ sqlite.prepare("INSERT INTO facility_refresh_jobs(source_type,term_start,dates_json,content_signature,request_revision,updated_at) VALUES('mmc','2026-11-02','[\"2026-11-02\"]','boundary','boundary',?)").run(queuedAt);
+ const boundary=await (await pendingCheck({env:publishingEnv,request:new Request('https://test/api/automation/pending?sourceId=monash-adults',{headers:{authorization:'Bearer fixture'}})})).json();
+ assert.equal(boundary.publicationPending,false,'an overnight boundary without a next-term roster must not create no-op jobs or a delayed-sync warning');
  await recordRosterDispatchLifecycle(publishingEnv,{sourceId:'monash-adults',dispatchId:started.dispatch.id,event:'completed'});
  assert.deepEqual(await loadRosterDeliveryWarnings(r2,['mmc']),[]);
 }finally{globalThis.fetch=originalFetch;}

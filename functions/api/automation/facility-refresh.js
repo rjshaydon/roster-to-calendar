@@ -90,7 +90,7 @@ export async function onRequestPost(context) {
     if (dates.length) await db.batch(facilityRefreshStatements(db, source, dates, JSON.stringify(current.map((row) => [row.id, row.content_revision]))));
     return Response.json({ ok: true, seeded: dates.length > 0, sourceType: source, termStart: term, dateCount: dates.length });
   }
-  const job = await db.prepare("SELECT * FROM facility_refresh_jobs WHERE source_type = ? AND status = 'pending' ORDER BY term_start LIMIT 1").bind(source).first();
+  const job = await db.prepare("SELECT j.* FROM facility_refresh_jobs j WHERE j.source_type = ? AND j.status = 'pending' AND EXISTS(SELECT 1 FROM facility_term_visibility v WHERE v.source_type=j.source_type AND v.term_start=j.term_start) ORDER BY j.term_start LIMIT 1").bind(source).first();
   if (!job) return Response.json({ ok: true, idle: true });
   const day = new Date().toISOString().slice(0, 10);
   if (!await reserveRosterMaintenanceBudget(db, WRITE_RESERVATION, READ_RESERVATION)) return Response.json({ ok: true, deferred: true });

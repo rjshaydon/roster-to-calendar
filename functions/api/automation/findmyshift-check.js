@@ -1,6 +1,6 @@
 import { findmyshiftConfiguredRosterRange, findmyshiftPollingRosterRanges, findmyshiftLastModified, findmyshiftRosterWorkbook } from "../../_lib/findmyshift.js";
 import { createRosterSyncRun, findQueuedRosterSyncByHash, findRosterSyncByProviderVersion, hasCalendarDb, listActiveRetainedRosterFiles, australianTermStartForDate, loadRosterSource, upsertRosterSource } from "../../_lib/d1-calendar.js";
-import {loadPendingRosterPublication} from "../../_lib/roster-delivery-health.js";
+import {loadPendingRosterPublication,loadActiveRosterImport,clearRosterDeliveryWarning} from "../../_lib/roster-delivery-health.js";
 import { requestQueuedRosterProcessing } from "../../_lib/automation-dispatch.js";
 import { automatedRosterSourceEnabled, automatedRosterWritesEnabled, rosterWritePausedResponse } from "../../_lib/roster-automation-guard.js";
 import { guardedFetch, localFeatureDisabledResponse } from "../../_lib/outbound-network.js";
@@ -86,6 +86,7 @@ export async function onRequestPost(context, internal = {}) {
         const dispatch=await requestQueuedRosterProcessing(context.env,{sourceId:SOURCE_ID,reason:'publication-resume'});
         return Response.json({ok:true,status:dispatch.deferred?'deferred':'awaiting-publication',providerModifiedAt:providerVersion});
       }
+      if(context.env.FACILITY_AUTOMATIC_PUBLICATION_ENABLED==='true' && !await loadActiveRosterImport(context.env.ROSTER_DB,SOURCE_ID)) await clearRosterDeliveryWarning(context.env.ROSTER_FILES,SOURCE_ID);
       return Response.json({ ok: true, status: "unchanged", providerModifiedAt: providerVersion });
     }
     // If this exact provider version has already been proved incomplete, do

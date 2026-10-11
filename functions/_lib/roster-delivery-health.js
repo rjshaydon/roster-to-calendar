@@ -9,7 +9,7 @@ export async function markRosterDeliveryDeferred(r2,sourceId,queuedAt) {
  } catch {console.warn('Roster delivery warning could not be published.');}
 }
 export async function clearRosterDeliveryWarning(r2,sourceId) {
- const source=sources[sourceId];try {if(source&&r2?.delete)await r2.delete(key(source));}catch{console.warn('Roster delivery warning could not be cleared.');}
+ const source=sources[sourceId];try {if(source&&r2?.get&&r2?.delete&&await r2.get(key(source)))await r2.delete(key(source));}catch{console.warn('Roster delivery warning could not be cleared.');}
 }
 export async function loadRosterDeliveryWarnings(r2,sourceTypes,now=Date.now()) {
  if(!r2?.get)return [];
@@ -27,7 +27,7 @@ export async function loadRosterDeliveryWarnings(r2,sourceTypes,now=Date.now()) 
 export async function loadPendingRosterPublication(env,sourceId) {
  const source=sources[sourceId];
  if(!source || env.FACILITY_AUTOMATIC_PUBLICATION_ENABLED!=='true') return null;
- return env.ROSTER_DB.prepare("SELECT updated_at FROM facility_refresh_jobs WHERE source_type=? AND status='pending' ORDER BY term_start LIMIT 1").bind(source).first();
+ return env.ROSTER_DB.prepare("SELECT j.updated_at FROM facility_refresh_jobs j WHERE j.source_type=? AND j.status='pending' AND EXISTS(SELECT 1 FROM facility_term_visibility v WHERE v.source_type=j.source_type AND v.term_start=j.term_start) ORDER BY j.term_start LIMIT 1").bind(source).first();
 }
 
 export async function loadActiveRosterImport(db,sourceId) {

@@ -1,4 +1,4 @@
-import {loadPendingRosterPublication} from '../../_lib/roster-delivery-health.js';
+import {loadPendingRosterPublication,loadActiveRosterImport,clearRosterDeliveryWarning} from '../../_lib/roster-delivery-health.js';
 import { automationSourceDefinition } from '../../_lib/automation-import.js';
 import { findRosterSyncByProviderVersion, loadRawRosterFile, hasCalendarDb } from '../../_lib/d1-calendar.js';
 import { automatedRosterSourceEnabled } from '../../_lib/roster-automation-guard.js';
@@ -73,6 +73,7 @@ async function checkRosterMetadata(context,body,checkTime) {
       const dispatch=await requestQueuedRosterProcessing(context.env,{sourceId,reason:'publication-resume'});
       return Response.json({ok:true,download:false,status:dispatch.deferred?'deferred':'awaiting-publication'});
     }
+    if(context.env.FACILITY_AUTOMATIC_PUBLICATION_ENABLED==='true' && !await loadActiveRosterImport(context.env.ROSTER_DB,sourceId)) await clearRosterDeliveryWarning(context.env.ROSTER_FILES,sourceId);
     return Response.json({ ok: true, download: false, status: 'unchanged' });
   }
   if (run && ['queued', 'processing'].includes(run.status)) {

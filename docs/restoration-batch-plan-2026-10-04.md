@@ -500,3 +500,17 @@ obsolete queued autosave could indefinitely block automatic identity work.
 The priority check now compares at most 66 pending candidates with at most 65
 recent source runs, ignores superseded autosaves and pauses optional work if its
 inspection cap is exceeded. Source files and historical receipts remain intact.
+
+MMC version 452 imported automatically at 11:17 AEDT and its current-term
+publication completed at 11:18. Josh's 11 October source value is `S/L AM`,
+parsed as an all-day Sick leave event with his historical registrar grade.
+All new maintenance receipts had settled at the first post-import check.
+
+The live check also identified normal overnight boundary jobs (MMC 2 November,
+DDH 1 February) without a roster for the following term. These are retained but
+are not actionable publication backlog until the roster creates its prepared
+term record. Publication retries now select ready terms; healthy unchanged polls
+clear an existing delayed marker only when no genuine import/publication remains.
+Tests prove an unavailable future boundary neither launches no-op jobs nor
+leaves a false delayed-sync warning. Actual next-term roster publication retains
+its own checkpoint and becomes eligible when that roster is imported.
