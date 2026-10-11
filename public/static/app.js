@@ -10921,6 +10921,7 @@ async function loadFacilityOverviewOnShift({ background = false } = {}) {
   stopFacilityOverviewContactRefresh();
   if (!background) collapseFacilityOverviewContactReview();
   const previousContent = facilityOverviewState.content;
+  const initialScrollTop = facilityOverviewBody?.scrollTop || 0;
   const requestId = facilityOverviewState.requestId + 1;
   facilityOverviewState.requestId = requestId;
   facilityOverviewState.staffData = null;
@@ -10990,8 +10991,35 @@ async function loadFacilityOverviewOnShift({ background = false } = {}) {
   }
   if (!background) renderFacilityOverview();
   else if (facilityOverviewState.requestId === requestId && facilityOverviewState.content !== previousContent) renderFacilityOverviewOnShiftPreservingViewport();
+  if (refreshed && !background) scrollFacilityOverviewToInitialShift(requestId, initialScrollTop);
   scheduleFacilityOverviewContactRefresh();
   return refreshed;
+}
+
+function facilityOverviewInitialShiftPeriod(rows = facilityOverviewState.onShiftData || []) {
+  if (currentNonClinical) return "";
+  const keys = new Set([preferredDoctorKeyForCurrentAccount(), ...currentRosterClaims.map(claim => claim.key)]
+    .map(normalizeRosterName).filter(Boolean));
+  const candidates = rows.filter(row => keys.has(normalizeRosterName(row.doctorKey))
+    && String(row.sourceType).toUpperCase() === String(facilityOverviewState.facilityKey).toUpperCase()
+    && eventRosterDateKey(row.event) === facilityOverviewState.date && isRosterShiftEvent(row.event));
+  const events = candidates.map(row => ({ ...row.event, sourceType: row.sourceType }));
+  const window = onShiftLaunchWindow(events);
+  const row = window ? candidates.find((candidate, index) => onShiftLaunchWindow([events[index]])?.start === window.start) : candidates[0];
+  return row ? buildWhoAssignment({ key: row.doctorKey, displayName: row.displayName }, {}, row.event)?.period || "" : "";
+}
+
+function scrollFacilityOverviewToInitialShift(requestId, initialScrollTop) {
+  const period = facilityOverviewInitialShiftPeriod();
+  if (!period || period === "AM") return;
+  requestAnimationFrame(() => {
+    // Navigation and a user's own scrolling always win over a late load.
+    if (!facilityOverviewBody || !isFacilityOverviewOpen() || facilityOverviewState.tab !== "on-shift"
+      || facilityOverviewState.requestId !== requestId || facilityOverviewBody.scrollTop !== initialScrollTop) return;
+    const section = [...facilityOverviewBody.querySelectorAll("[data-on-shift-period]")]
+      .find(element => element.dataset.onShiftPeriod === period);
+    if (section) facilityOverviewBody.scrollTop += section.getBoundingClientRect().top - facilityOverviewBody.getBoundingClientRect().top;
+  });
 }
 
 function facilityOverviewContactRefreshIsActive() {
@@ -11157,7 +11185,7 @@ function renderFacilityOverviewOnShiftResults(rows) {
     periods.get(assignment.period).push(assignment);
   }
   return `${deliveryNotice}${renderFacilityOverviewContactListStatus(contactMatches, contactMatches.assignments)}${["AM", "PM", "Night"].filter((period) => periods.has(period)).map((period) => `
-    <section class="facility-overview-period"><h3>${period}</h3><div class="facility-overview-staff-grid">${renderFacilityOverviewOnShiftPeriod(periods.get(period), { canUseStaffActions, termStart, period, serviceContacts: (contactMatches.serviceContacts || []).filter((contact) => contact.shift === period) })}</div></section>
+    <section class="facility-overview-period" data-on-shift-period="${period}"><h3>${period}</h3><div class="facility-overview-staff-grid">${renderFacilityOverviewOnShiftPeriod(periods.get(period), { canUseStaffActions, termStart, period, serviceContacts: (contactMatches.serviceContacts || []).filter((contact) => contact.shift === period) })}</div></section>
   `).join("")}`;
 }
 

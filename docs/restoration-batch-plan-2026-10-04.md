@@ -583,3 +583,19 @@ unchanged contact polls without redraw, changed allocations, heartbeat metadata,
 transient renewal failure/retry, stale-site denials and real revocation. Syntax,
 contact safeguards, client request budget, restricted On shift access, contact
 token security and DDH night/DST review regressions also passed.
+
+### Initial shift scroll restored — 11 October
+
+Opening/loading On shift now locates the viewing clinician through their
+preferred roster key and linked roster aliases in the already-loaded site/day
+rows. It uses the same period classifier as the displayed groups, preferring
+an active shift when multiple shifts are present. AM retains the top position;
+PM and Night scroll to their respective section headings. Unlinked/non-clinical
+viewers and dates/sites without that clinician retain their normal position.
+
+The jump runs only after an ordinary roster load, never during contact checks
+or background token renewal. A navigation change, closed view or manual scroll
+while loading cancels the pending jump. This adds no network or D1 requests.
+AM/PM/Night, aliases, overnight roster dates, active-shift selection and
+cancellation regressions passed, alongside whole-shift contact session,
+restricted-access/startup, contact safeguards and client request-budget checks.

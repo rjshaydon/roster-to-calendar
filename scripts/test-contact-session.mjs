@@ -18,6 +18,7 @@ const calls = [];
 const noop = () => {};
 const context = vm.createContext({
  facilityOverviewState:state,currentFacilityOverviewMaintenance:false,document:{hidden:false},
+ facilityOverviewBody:{scrollTop:0},scrollFacilityOverviewToInitialShift:()=>{throw Error('Background renewal must not jump to a shift');},
  facilityOverviewContactRefreshInFlight:false,authUserEmail:'fixture',authUserPassword:'fixture',
  currentUserEmail:'',currentUserPassword:'',console:{warn:noop},
  canUseFacilityOverview:()=>true,canUseFullFacilityOverview:()=>true,isFacilityOverviewOpen:()=>true,
