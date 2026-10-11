@@ -284,6 +284,27 @@ assert.equal(cached.status,'running');
 for(let i=0;cached.status!=='complete'&&i<10;i++)cached=await auditIdentityBatch(db,[],{register:true,cachedDirectory:true,sourceTypes:['casey'],runId:cached.runId});
 assert.equal(cached.status,'complete');
 assert.ok(sqlite.prepare("SELECT person_id FROM roster_person_aliases WHERE source_type='casey' AND doctor_key='CACHE ALPHA'").get());
-assert.ok(sql.slice(cachedSql).some(q=>q.includes('(source_type,doctor_key)>(?,?)')&&q.includes('LIMIT 2')));
+assert.ok(sql.slice(cachedSql).some(q=>q.includes('(d.source_type,d.doctor_key)>(?,?)')&&q.includes('LIMIT 2')));
 assert.equal(sql.slice(cachedSql).some(q=>/\b(roster_events|roster_daily_presence|roster_file_doctors)\b/.test(q)),false);
 console.log('Indexed automatic identity registration passed with one-name checkpoints and no event scans.');
+
+const repeatCached=await auditIdentityBatch(db,[],{register:true,cachedDirectory:true,sourceTypes:['casey']});
+assert.equal(repeatCached.examined,0,'changed roster metadata must not re-register unchanged cached names');
+assert.equal(repeatCached.status,'complete');
+
+// Completing a resumed run with older metadata marks the current verified
+// revision, so the following unchanged poll does not start another walk.
+let allCached=await auditIdentityBatch(db,[],{register:true,cachedDirectory:true});
+for(let i=0;allCached.status!=='complete'&&i<100;i++)allCached=await auditIdentityBatch(db,[],{register:true,cachedDirectory:true,runId:allCached.runId});
+assert.equal(allCached.status,'complete');
+sqlite.prepare("INSERT INTO roster_identity_audit_runs(run_id,status,mode,scope_json,cursor,created_at,updated_at) VALUES('old-revision-resume','running','register','[]','vhh:ZZZ','','')").run();
+const progressObjects=new Map([['identity/registry-progress.json',{revision:'old-metadata',runId:'old-revision-resume'}]]);
+const progressR2={async head(){return {etag:'current-head'};},async get(key){const value=progressObjects.get(key);return value?{etag:'progress',json:async()=>value}:null;},async put(key,value){progressObjects.set(key,JSON.parse(value));}};
+const resumedEnv={ROSTER_DB:db,ROSTER_FILES:progressR2,IDENTITY_REVIEW_ENABLED:'true',IDENTITY_REGISTRY_ENABLED:'true',ROSTER_AUTOMATION_TOKEN:'cached-test'};
+const registerRequest=()=>new Request('https://test/api/automation/identity-maintenance',{method:'POST',headers:{authorization:'Bearer cached-test'},body:JSON.stringify({mode:'register'})});
+assert.equal((await (await identityMaintenance({env:resumedEnv,request:registerRequest()})).json()).status,'complete');
+assert.ok(progressObjects.get('identity/registry-progress.json').revision.includes('cached-names-v2'));
+const beforeUnchanged=sql.length;
+assert.equal((await (await identityMaintenance({env:resumedEnv,request:registerRequest()})).json()).status,'unchanged');
+assert.equal(sql.length,beforeUnchanged,'unchanged metadata after catch-up does zero D1 work');
+console.log('Resumed registration records current metadata and subsequent unchanged checks use zero D1.');

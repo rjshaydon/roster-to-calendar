@@ -452,7 +452,7 @@ remaining external/provider or scheduled-audit verification explicitly.
 Implementation checkpoint, 11 October: automatic identity work now reads the
 indexed historical names cache in one-name checkpoints, with a 96-statement
 ceiling and smaller reservations. Three unfinished requests pause optional
-maintenance; 100,000 reads and 20,000 writes are protected for routine imports
+maintenance; 200,000 reads and 20,000 writes are protected for routine imports
 inside the existing account grant. The five-minute roster metadata cadence is
 unchanged. Deferred GitHub processors expose a deferred result and do not
 repeatedly launch while the account grant is exhausted. A small R2 status object
@@ -489,7 +489,7 @@ Cross-midnight tests now prove that an in-flight bounded receipt from yesterday
 reduces today's available headroom until a settled cutoff covers it. Recovery
 only refunds that receipt's original UTC-day ledger, never today's allocations.
 
-Optional maintenance reserves 32,768 reads to cover the fixed receipt-inspection
+Optional maintenance reserves 131,072 reads to cover the fixed receipt-inspection
 ceilings as well as the cached-name completion check; measured unused capacity
 is refunded. Its write estimate remains 512 per registration/audit checkpoint,
 with the existing 4,096 estimate retained for identity publication.
@@ -514,3 +514,11 @@ clear an existing delayed marker only when no genuine import/publication remains
 Tests prove an unavailable future boundary neither launches no-op jobs nor
 leaves a false delayed-sync warning. Actual next-term roster publication retains
 its own checkpoint and becomes eligible when that roster is imported.
+
+Registration checkpoints now select only missing/changed cached names. A new
+roster revision with the same names does not trigger another full registration
+walk; completing an older run records the currently verified metadata revision.
+The read reservation covers the bounded priority/receipt/name inspections, and
+200,000 reads are protected for routine work (publication reserves up to 125,000).
+These are reservations inside the unchanged 4,000,000-read / 80,000-write grant;
+measured unused portions are refunded. No account limit has been raised.

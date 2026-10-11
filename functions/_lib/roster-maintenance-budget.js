@@ -92,7 +92,7 @@ export async function reserveRosterMaintenanceBudget(db, writes = 0, reads = 0) 
       db.prepare(`UPDATE roster_account_budget SET allocated_writes=allocated_writes+?, allocated_reads=allocated_reads+?
         WHERE utc_day=? AND valid_until>? AND stop_reason=''
         AND allocated_writes+?<=maximum_writes AND allocated_reads+?<=maximum_reads`)
-        .bind(estimatedWrites, estimatedReads, day, new Date().toISOString(), estimatedWrites+(optional?20000:0), estimatedReads+(optional?100000:0)),
+        .bind(estimatedWrites, estimatedReads, day, new Date().toISOString(), estimatedWrites+(optional?20000:0), estimatedReads+(optional?200000:0)),
       db.prepare(`INSERT INTO roster_import_daily_budget (utc_day,reserved_writes,reserved_reads)
         SELECT ?,?,? WHERE changes()=1 ON CONFLICT(utc_day) DO UPDATE SET
         reserved_writes=reserved_writes+excluded.reserved_writes,reserved_reads=reserved_reads+excluded.reserved_reads`)

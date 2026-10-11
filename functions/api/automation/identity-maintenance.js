@@ -39,7 +39,7 @@ export async function onRequestPost(context) {
  if(context.env.ROSTER_ACCOUNT_BUDGET_ENABLED==='true') {
   if(!await optionalMaintenanceAvailable(db)) return Response.json({status:'deferred',reason:'unfinished-maintenance'},{status:503});
   const admission=await (await refreshAccountMaintenanceBudget(context)).json();
-  if(admission.deferred || !await reserveRosterMaintenanceBudget(db,input.mode==='publish'?4096:512,32768)) return Response.json({status:'deferred'},{status:503});
+  if(admission.deferred || !await reserveRosterMaintenanceBudget(db,input.mode==='publish'?4096:512,131072)) return Response.json({status:'deferred'},{status:503});
  }
  if(['audit','register'].includes(input.mode)) {
   // The indexed names cache retains historical staff. Register one name per
@@ -47,7 +47,7 @@ export async function onRequestPost(context) {
   // published staff directory inside a free Pages request.
   const result=await auditIdentityBatch(db,[],{cachedDirectory:true,runId:input.mode==='register'?registryState.runId:undefined,register:input.mode==='register',actor:'published-roster-registration',weekKey:input.mode==='audit'?window.weekKey:''});
   if(input.mode==='register' && result.status!=='busy') {
-   const progress={revision:registryState.runId?registryState.revision:registryRevision,runId:result.status==='complete'?'':result.runId};
+   const progress={revision:result.status==='complete'?registryRevision:registryState.runId?registryState.revision:registryRevision,runId:result.status==='complete'?'':result.runId};
    await context.env.ROSTER_FILES.put('identity/registry-progress.json',JSON.stringify(progress),{httpMetadata:{contentType:'application/json'},...(registryObject?.etag?{onlyIf:{etagMatches:registryObject.etag}}:{onlyIf:{etagDoesNotMatch:'*'}})});
    if(result.status==='complete') await context.env.ROSTER_FILES.put('identity/revision.json',JSON.stringify({revision:crypto.randomUUID()}),{httpMetadata:{contentType:'application/json'}});
   }

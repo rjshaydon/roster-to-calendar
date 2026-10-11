@@ -33,11 +33,14 @@ export async function auditIdentityBatch(db,doctors,{runId,actor='identity-audit
  const acquired=await db.prepare('UPDATE roster_identity_audit_runs SET lease_token=?,lease_until=?,week_key=CASE WHEN ?<>\'\' THEN ? ELSE week_key END WHERE run_id=? AND lease_until<?').bind(lease,new Date(Date.now()+120000).toISOString(),weekKey,weekKey,run.run_id,now).run();
  if(!(acquired.meta?.changes||acquired.changes)) return {runId:run.run_id,status:'busy'};
  const batchSize=register?(cachedDirectory?1:IDENTITY_BATCH_SIZE):1;
- const scopeClause=scope.length?'AND source_type IN ('+scope.map(()=>'?').join(',')+')':'';
- const page=cachedDirectory&&register?await all(db,`SELECT source_type,doctor_key,display_name FROM roster_doctors
-   WHERE source_type IN ('mmc','mch','ddh','vhh','casey') ${scopeClause}
-   AND length(doctor_key) BETWEEN 1 AND 200 AND length(display_name) BETWEEN 1 AND 200
-   AND (source_type,doctor_key)>(?,?) ORDER BY source_type,doctor_key LIMIT 2`,
+ const scopeClause=scope.length?'AND d.source_type IN ('+scope.map(()=>'?').join(',')+')':'';
+ const page=cachedDirectory&&register?await all(db,`SELECT d.source_type,d.doctor_key,d.display_name FROM roster_doctors d
+   LEFT JOIN roster_person_aliases a ON a.source_type=d.source_type AND a.doctor_key=d.doctor_key
+   LEFT JOIN roster_identity_features f ON f.source_type=d.source_type AND f.doctor_key=d.doctor_key
+   WHERE d.source_type IN ('mmc','mch','ddh','vhh','casey') ${scopeClause}
+   AND length(d.doctor_key) BETWEEN 1 AND 200 AND length(d.display_name) BETWEEN 1 AND 200
+   AND (a.person_id IS NULL OR f.display_name IS NULL OR f.display_name<>d.display_name)
+   AND (d.source_type,d.doctor_key)>(?,?) ORDER BY d.source_type,d.doctor_key LIMIT 2`,
    [...scope,run.cursor.split(':')[0]||'',run.cursor.slice(run.cursor.indexOf(':')+1)||'']):null;
  const identities=flattenDoctorIdentities(page?page.map(a=>({sourceType:a.source_type,key:a.doctor_key,displayName:a.display_name})):doctors).filter(a=>(!scope.length || scope.includes(a.sourceType)) && ['mmc','mch','ddh','vhh','casey'].includes(a.sourceType) && a.key.length<=200 && a.displayName.length<=200).sort((a,b)=>a.marker<b.marker?-1:a.marker>b.marker?1:0);
  if(page?.length && !identities.some(a=>a.marker===page[0].source_type+':'+page[0].doctor_key)) throw Error('Cached roster name requires review before automatic identity registration.');

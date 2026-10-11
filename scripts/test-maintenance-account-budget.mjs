@@ -160,6 +160,9 @@ console.log('Bounded recovery, legacy retention, midnight isolation, replay, lat
 
 // Cross-midnight in-flight batches remain covered in the new day's headroom,
 // while reconciliation can only release the original day's allocated grant.
+// Keep today's unrelated fixtures outside this simulated cutoff, regardless
+// of the real time of day at which this test is run.
+sqlite.prepare("UPDATE roster_maintenance_receipts SET recover_after=? WHERE utc_day=? AND reconciled_at='' AND recover_after<>''").run(day+'T23:59:00.000Z',day);
 const RealDate=Date;
 let instant=RealDate.parse(day+'T00:30:00.000Z');
 const previousDay=new RealDate(instant-86400000).toISOString().slice(0,10);
