@@ -88,7 +88,7 @@ export async function auditIdentityBatch(db,doctors,{runId,actor='identity-audit
   const featureHash=await digest([alias.sourceType,alias.key,alias.displayName,existing.person_id]);
   const previousFeature=register?await db.prepare('SELECT fingerprint,audited_fingerprint FROM roster_identity_features WHERE source_type=? AND doctor_key=?').bind(alias.sourceType,alias.key).first():auditFeature;
   if(!register && previousFeature?.audited_fingerprint===featureHash) continue;
-  await db.prepare(`INSERT INTO roster_identity_features(source_type,doctor_key,display_name,normalized_key,given_block,surname_block,fingerprint,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(source_type,doctor_key) DO UPDATE SET display_name=excluded.display_name,normalized_key=excluded.normalized_key,given_block=excluded.given_block,surname_block=excluded.surname_block,fingerprint=excluded.fingerprint,updated_at=excluded.updated_at WHERE roster_identity_features.fingerprint<>excluded.fingerprint`).bind(alias.sourceType,alias.key,alias.displayName,normalized,`${name.given}:${name.surname.slice(0,3)}`,`${name.surname}:${name.givenInitial}`,featureHash,now).run();
+  if(previousFeature?.fingerprint!==featureHash) await db.prepare(`INSERT INTO roster_identity_features(source_type,doctor_key,display_name,normalized_key,given_block,surname_block,fingerprint,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(source_type,doctor_key) DO UPDATE SET display_name=excluded.display_name,normalized_key=excluded.normalized_key,given_block=excluded.given_block,surname_block=excluded.surname_block,fingerprint=excluded.fingerprint,updated_at=excluded.updated_at WHERE roster_identity_features.fingerprint<>excluded.fingerprint`).bind(alias.sourceType,alias.key,alias.displayName,normalized,`${name.given}:${name.surname.slice(0,3)}`,`${name.surname}:${name.givenInitial}`,featureHash,now).run();
   if(register) continue;
   const neighbours=new Map();
   const blocks=[['given_block',`${name.given}:${name.surname.slice(0,3)}`],['surname_block',`${name.surname}:${name.givenInitial}`]];
@@ -99,13 +99,21 @@ export async function auditIdentityBatch(db,doctors,{runId,actor='identity-audit
    for(const item of matches) neighbours.set(`${item.source_type}:${item.doctor_key}`,{sourceType:item.source_type,key:item.doctor_key,displayName:item.display_name,personId:item.person_id});
   }
   const candidates=register?[]:buildDoctorIdentityCandidates([{...alias,personId:existing.person_id},...neighbours.values()],{bucketLimit:50,candidateLimit:20,targetMarker:alias.marker}).candidates;
+  const candidateWrites=[];
   for(const candidate of candidates.slice(0,10)) {
    const fingerprint=await digest([candidate.left,candidate.right].sort((a,b)=>a.marker<b.marker?-1:1).map(a=>[a.sourceType,a.key,a.displayName,a.personId]));
-   const previous=await db.prepare('SELECT fingerprint,status FROM roster_identity_candidates WHERE pair_key=?').bind(candidate.pairKey).first();
-   if(previous?.fingerprint===fingerprint) continue;
-   await db.prepare(`INSERT INTO roster_identity_candidates(pair_key,left_json,right_json,evidence_json,fingerprint,status,updated_at) VALUES(?,?,?,?,?,'pending',?) ON CONFLICT(pair_key) DO UPDATE SET left_json=excluded.left_json,right_json=excluded.right_json,evidence_json=excluded.evidence_json,fingerprint=excluded.fingerprint,status='pending',reviewer='',updated_at=excluded.updated_at`).bind(candidate.pairKey,JSON.stringify(candidate.left),JSON.stringify(candidate.right),JSON.stringify({reason:candidate.reason,confidence:candidate.confidence,changedEvidence:Boolean(previous)}),fingerprint,now).run(); candidateCount++;
+   // Compare evidence inside the upsert: an identical rejected suggestion
+   // remains rejected, including when a human decision races this batch.
+   candidateWrites.push(db.prepare(`INSERT INTO roster_identity_candidates(pair_key,left_json,right_json,evidence_json,fingerprint,status,updated_at)
+    VALUES(?,?,?,json_set(?,'$.changedEvidence',json(CASE WHEN EXISTS(SELECT 1 FROM roster_identity_candidates WHERE pair_key=?) THEN 'true' ELSE 'false' END)),?,'pending',?)
+    ON CONFLICT(pair_key) DO UPDATE SET left_json=excluded.left_json,right_json=excluded.right_json,evidence_json=excluded.evidence_json,fingerprint=excluded.fingerprint,status='pending',reviewer='',updated_at=excluded.updated_at
+    WHERE roster_identity_candidates.fingerprint<>excluded.fingerprint`)
+    .bind(candidate.pairKey,JSON.stringify(candidate.left),JSON.stringify(candidate.right),JSON.stringify({reason:candidate.reason,confidence:candidate.confidence}),candidate.pairKey,fingerprint,now));
   }
-  await db.prepare('UPDATE roster_identity_features SET audited_fingerprint=? WHERE source_type=? AND doctor_key=?').bind(featureHash,alias.sourceType,alias.key).run();
+  // Mark the name audited in the same transaction as its bounded suggestions.
+  candidateWrites.push(db.prepare('UPDATE roster_identity_features SET audited_fingerprint=? WHERE source_type=? AND doctor_key=?').bind(featureHash,alias.sourceType,alias.key));
+  const candidateResults=await db.batch(candidateWrites);
+  for(const result of candidateResults.slice(0,-1)) candidateCount+=Number(result.meta?.changes??result.changes??0);
  }
  let cursor=processed.at(-1)?.marker || run.cursor, complete=register?!identities.some(a=>a.marker>cursor):pending.length<=processed.length;
  if(register && complete && cachedDirectory) {

@@ -29,7 +29,7 @@ for(const definition of ["name TEXT NOT NULL DEFAULT ''","source_type TEXT NOT N
 // Existing production index, required by the bounded source calendar reader.
 sqlite.exec('CREATE INDEX IF NOT EXISTS idx_roster_events_file_doctor ON roster_events(file_id,doctor_key)');
 const sql=[];
-const db={prepare(query){sql.push(query);return {args:[],bind(...args){assert.ok(args.length<=100,'D1 bind parameter ceiling');this.args=args;return this;},async all(){return {results:sqlite.prepare(query).all(...this.args)};},async first(){return sqlite.prepare(query).get(...this.args)||null;},async run(){if(db.fail && query.includes(db.fail)) throw Error('Injected failure'); return sqlite.prepare(query).run(...this.args);}};},async batch(statements){if(db.beforeBatch){const fn=db.beforeBatch;db.beforeBatch=null;fn();} sqlite.exec('BEGIN');try{for(const s of statements) await s.run();sqlite.exec('COMMIT');}catch(e){sqlite.exec('ROLLBACK');throw e;}}};
+const db={prepare(query){sql.push(query);return {query,args:[],bind(...args){assert.ok(args.length<=100,'D1 bind parameter ceiling');this.args=args;return this;},async all(){return {results:sqlite.prepare(query).all(...this.args)};},async first(){return sqlite.prepare(query).get(...this.args)||null;},async run(){if(db.fail && query.includes(db.fail)) throw Error('Injected failure'); return sqlite.prepare(query).run(...this.args);}};},async batch(statements){if(db.beforeBatch){const fn=db.beforeBatch;db.beforeBatch=null;fn();} sqlite.exec('SAVEPOINT test_d1_batch');try{const result=[];for(const s of statements) result.push(await s.run());sqlite.exec('RELEASE test_d1_batch');return result;}catch(e){sqlite.exec('ROLLBACK TO test_d1_batch; RELEASE test_d1_batch');throw e;}}};
 sqlite.exec(`INSERT INTO roster_people(person_id,preferred_display_name) VALUES('person:a','Aeshan KULARATNE'),('person:b','Aeshan KULURATNE');
  INSERT INTO roster_person_aliases(source_type,doctor_key,display_name,person_id) VALUES('vhh','AESHAN KULARATNE','Aeshan KULARATNE','person:a'),('ddh','AESHAN KULURATNE','Aeshan KULURATNE','person:b');
  INSERT INTO account_profiles(email,real_name) VALUES('one@test','One'),('two@test','Two');
@@ -102,9 +102,11 @@ assert.equal(sqlite.prepare('SELECT COUNT(*) n FROM roster_identity_jobs').get()
 const candidate=(await queryIdentityCandidates(db)).candidates.find(c=>c.left.key.startsWith('AESHAN') && c.right.key.startsWith('AESHAN'));
 assert.ok(candidate,'bounded discovery suggests the misspelling for human review');
 await rejectIdentityCandidate(db,{pairKey:candidate.pair_key,fingerprint:candidate.fingerprint,actor:'creator@test'});
+sqlite.prepare("UPDATE roster_identity_features SET audited_fingerprint='' WHERE source_type='vhh' AND doctor_key='AESHAN KULARATNE'").run();
 audit=await auditIdentityBatch(db,doctors);
 while(audit.status!=='complete') audit=await auditIdentityBatch(db,doctors,{runId:audit.runId});
 assert.equal(sqlite.prepare('SELECT status FROM roster_identity_candidates WHERE pair_key=?').get(candidate.pair_key).status,'rejected','unchanged rejected evidence remains suppressed');
+assert.equal(audit.candidates,0,'conditional candidate writes count only changed evidence');
 assert.ok((await queryIdentityCandidates(db,{status:'rejected'})).candidates.some(c=>c.pair_key===candidate.pair_key),'dismissed suggestions remain reviewable');
 await assert.rejects(()=>restoreIdentityCandidate(db,{pairKey:candidate.pair_key,fingerprint:'stale'}),/changed/);
 await restoreIdentityCandidate(db,{pairKey:candidate.pair_key,fingerprint:candidate.fingerprint});
@@ -112,6 +114,7 @@ assert.ok((await queryIdentityCandidates(db)).candidates.some(c=>c.pair_key===ca
 await rejectIdentityCandidate(db,{pairKey:candidate.pair_key,fingerprint:candidate.fingerprint,actor:'creator@test'});
 const pendingPlan=sqlite.prepare("EXPLAIN QUERY PLAN SELECT * FROM roster_identity_features INDEXED BY idx_identity_feature_pending WHERE audited_fingerprint<>fingerprint ORDER BY source_type,doctor_key LIMIT 26").all();
 assert.ok(pendingPlan.some(row=>row.detail.includes('idx_identity_feature_pending')));
+audit=await auditIdentityBatch(db,doctors);
 assert.equal(audit.examined,0,'an unchanged weekly audit examines zero identities');
 const repeatedAuditQueries=sql.slice(-200);
 assert.ok(repeatedAuditQueries.filter(q=>q.includes('WHERE f.given_block')).length<doctors.length,'unchanged features skip candidate comparisons');
@@ -292,7 +295,7 @@ try {
  scheduledObjects.set('identity/weekly-audit-progress.json',{weekKey:'2026-10-11',runId:'held-audit',status:'running'});
  const beforeBusy=sql.length;
  assert.equal((await (await identityMaintenance({env:{...scheduledEnv,ROSTER_ACCOUNT_BUDGET_ENABLED:'true'},request:maintenanceRequest('audit')})).json()).status,'busy');
- assert.ok(!sql.slice(beforeBusy).some(query=>/roster_account_budget|roster_maintenance_receipts|roster_import_daily_budget/.test(query)),'a confirmed live lease returns busy before reserving or refreshing budget');
+ assert.ok(!sql.slice(beforeBusy).some(query=>/(?:INSERT INTO|UPDATE|DELETE FROM)\s+(?:roster_account_budget|roster_maintenance_receipts|roster_import_daily_budget)/i.test(query)),'a confirmed live lease returns busy before reserving or refreshing budget');
  assert.equal(sqlite.prepare("SELECT lease_until FROM roster_identity_audit_runs WHERE run_id='held-audit'").get().lease_until,'2026-10-11T02:01:00Z','preflight never alters the owner lease');
  sqlite.prepare("DELETE FROM roster_identity_audit_runs WHERE run_id='held-audit'").run();scheduledObjects.clear();
  const late=await (await identityMaintenance({env:scheduledEnv,request:maintenanceRequest('audit')})).json();

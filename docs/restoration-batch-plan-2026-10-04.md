@@ -1,18 +1,14 @@
 # Remaining restoration and development batches — 4 October 2026
 
-Status: Batch 1 roster traffic cutover accepted; Batch 2 production rollout is
-merged and enabled. Automatic registration resumed after exact queue
-reconciliation on 10 October; historical catch-up completion and the first real
-weekly audit remain acceptance checks. See the 10 October checkpoint in
-`restoration-batch2-acceptance-2026-10-05.md` for verified results and limitations.
-The 11 October roster reliability batch is deployed and MMC recovery passed.
-Batch 2 still needs historical catch-up completion, the real weekly audit, and
-confirmation that unfinished maintenance receipts recover without accumulation.
-11 October, 15:21 AEDT: historical registration has completed and the real
-scheduled weekly audit has started. Automatic registration is enabled again.
-Weekly completion, final receipt recovery and CPU reliability acceptance remain.
-See the 11 October continuation checkpoint in the Batch 2 acceptance record
-before proceeding to Batch 6.
+Status: Batch 1 accepted; Batch 2 deployed and enabled. Historical registration
+and the actual scheduled weekly audit completed on 11 October (996 cached names
+registered; 545 audited; 47 candidate updates). Normal watchdog flags are restored.
+The user requires Cloudflare Free. CPU reductions are tested, but fresh/dense
+checkpoints still sometimes exceed its 10 ms allowance; this is the remaining
+Batch 2 acceptance issue. Split dense processing into durable smaller phases and
+verify cold/warm CPU before proceeding to Batch 6. Conservative receipt recovery
+remains enabled; an old receipt awaits genuine settled-budget reconciliation.
+See the completed catch-up / Free-tier checkpoint in the acceptance record.
 The user's agreed priority is **1 → 2 → 6 → 7 → 3 → 4 → 5 → 8**,
 retaining the original batch numbers for continuity. This plan supersedes earlier
 fifteen-minute freshness targets and batch ordering.

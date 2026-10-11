@@ -35,10 +35,13 @@ export async function loadActiveRosterImport(db,sourceId) {
 }
 
 export async function loadActiveRosterImports(db,sourceIds) {
+ const query=activeRosterImportsQuery(sourceIds);
+ return db.prepare(query.sql).bind(...query.bindings).first();
+}
+export function activeRosterImportsQuery(sourceIds) {
  if(!Array.isArray(sourceIds)||sourceIds.length<1||sourceIds.length>4||sourceIds.some(id=>!sources[id])) throw Error('Invalid roster source inspection.');
  // The same fixed per-source bounds and indexes, with one D1 round trip.
- return db.prepare(sourceIds.map(()=>`SELECT id FROM (${activeImportSql})`).join(' UNION ALL ')+' LIMIT 1')
-  .bind(...sourceIds.flatMap(id=>[id,id])).first();
+ return {sql:sourceIds.map(()=>`SELECT id FROM (${activeImportSql})`).join(' UNION ALL ')+' LIMIT 1',bindings:sourceIds.flatMap(id=>[id,id])};
 }
 
 // Status index limits candidates to pending imports. The successor inspection

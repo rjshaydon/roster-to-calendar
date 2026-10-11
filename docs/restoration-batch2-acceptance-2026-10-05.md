@@ -391,3 +391,56 @@ settled cutoff 04:55:47.246Z. Its original recovery bound was 04:54:28.951Z;
 no manual refund or deadline change was needed. The later 04:25 scheduled receipt
 remains held to its later bound. The audit had reached 358 / 34 candidates;
 no new unfinished failures had accumulated.
+
+
+### 11 October, completed catch-up and Free-tier decision
+
+Historical registration completed at 04:19:43Z: 733 examined; all 996 cached
+roster names have matching aliases/features, including historical names, with
+zero missing/changed registrations. This does not restore Casey roster views.
+Registration was e79fcc61-475a-40b3-93a0-1afa7fab6e22; the weekly audit was
+ed95bbd8-019e-44fc-a158-ec50d43d3250. The latter completed at 05:31:53Z with
+545 examined, 47 candidate updates and zero pending features. Candidate updates
+are not a count of distinct currently unresolved suggestions.
+
+The watchdog's normal committed configuration was restored at 05:34Z, version
+c9fb9b9f-9592-4733-8677-ea38b3ee44e3: registration, audit and roster polling
+are all enabled. Actual later cron reports audit already-complete and registration
+unchanged. No temporary pause remains. The user explicitly chose Cloudflare
+Free; no paid upgrade is authorized or performed.
+
+The final bounded CPU changes combine independent indexed admission reads,
+skip unchanged feature writes, and atomically batch at most ten candidate upserts
+with the feature's audited marker. Identical fingerprints preserve human rejection
+(including a decision racing the batch). Tests cover reprocessing a rejected
+suggestion, transaction rollback, active imports, busy leases and budget recovery.
+Identity operations, bounded identity, delivery reliability, account-budget and
+watchdog tests pass. The SQLite adapter now returns batch results and uses nested
+savepoints so its rollback fixtures accurately model atomic D1 batches.
+
+A temporary authenticated Worker tested the full production middleware/handler
+against the existing synthetic preview D1/R2 only. A dense 20-name block exposed
+a 39 ms checkpoint before candidate batching. The final combined changes gave
+15/7/8 ms for three checkpoints, all HTTP 200. Startup ICU priming was also tried:
+25/10/11 ms, so that extra change was discarded. These observations improve CPU
+cost but DO NOT demonstrate reliable adherence to Free's 10 ms request allowance.
+Cold-start/dense checkpoints remain the outstanding Batch 2 acceptance condition.
+Next work should split dense suggestion processing into durable smaller phases,
+retaining full comparison coverage, lease protection and cost accounting, then
+verify fresh-deployment and warm CPU. Do not simply reduce comparison coverage or
+assume burst allowance guarantees reliability. Do not proceed to Batch 6 until
+this condition is resolved. The completed weekly audit is cached, so ordinary
+scheduled checks currently avoid repeating the audit work.
+
+Latest settled account-wide analytics at cutoff 05:42:42Z: 895,562 rows read and
+26,251 rows written, across the complete inventory, below Free's 5m/100k limits.
+The generic restoration extrapolation still reports STOP; this is not a claimed
+GO assessment. Production's measured-maintenance reconciliation and conservative
+held receipts remain the admission authority. One old 04:25 receipt remains held
+pending a genuine settled-budget refresh; never refund it manually. The earlier
+confirmed CPU receipt recovered automatically at 05:11Z. No new production
+unfinished failures accumulated during successful catch-up.
+
+Temporary canary Worker and its 20 additive synthetic identities/suggestions/run
+are removed at closeout; its grant is expired and its accounting receipts retained.
+Original preview fixtures, production identities and source rosters are preserved.

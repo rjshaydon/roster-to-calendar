@@ -1,4 +1,4 @@
-import {loadActiveRosterImports} from '../../_lib/roster-delivery-health.js';
+import {identityMaintenancePreflight} from '../../_lib/identity-maintenance-preflight.js';
 import {publishIdentityOperation} from '../../_lib/doctor-identity.js';
 import {refreshAccountMaintenanceBudget} from './account-budget.js';
 import {reserveRosterMaintenanceBudget,optionalMaintenanceAvailable,currentAccountMaintenanceGrant} from '../../_lib/roster-maintenance-budget.js';
@@ -38,21 +38,22 @@ export async function onRequestPost(context) {
   if(!auditState.runId && auditState.weekKey===auditWeek && auditState.status==='complete') return Response.json({status:'already-complete'});
   const registration=await context.env.ROSTER_FILES.get('identity/registry-progress.json');
   if(registration && (await registration.json()).runId) return Response.json({status:'registration-active'});
-  const done=await db.prepare("SELECT run_id FROM roster_identity_audit_runs WHERE week_key=? AND status='complete' AND mode='audit' LIMIT 1").bind(auditWeek).first();
-  if(done) {
+ }
+ let preflight;
+ if(['audit','register'].includes(input.mode)) {
+  const runId=input.mode==='register'?registryState.runId:auditState.runId;
+  preflight=await identityMaintenancePreflight(db,{runId,weekKey:input.mode==='audit'?auditWeek:'',accountAware:context.env.ROSTER_ACCOUNT_BUDGET_ENABLED==='true'});
+  if(preflight.completed_run) {
    await saveAuditProgress(context.env.ROSTER_FILES,auditObject,{weekKey:auditWeek,runId:'',status:'complete'});
    return Response.json({status:'already-complete'});
   }
- }
- if(['audit','register'].includes(input.mode)) {
-  if(await loadActiveRosterImports(db,['monash-adults','monash-paeds','vhh-active-medical-roster','dandenong-findmyshift'])) return Response.json({status:'import-active'});
-  const runId=input.mode==='register'?registryState.runId:auditState.runId;
-  if(runId && await db.prepare("SELECT run_id FROM roster_identity_audit_runs WHERE run_id=? AND status='running' AND lease_until>? LIMIT 1")
-    .bind(runId,new Date().toISOString()).first()) return Response.json({status:'busy'});
+  if(preflight.active_import) return Response.json({status:'import-active'});
+  if(preflight.live_lease) return Response.json({status:'busy'});
  }
  if(context.env.ROSTER_ACCOUNT_BUDGET_ENABLED==='true') {
-  const available=await optionalMaintenanceAvailable(db);
-  if(!available || !await currentAccountMaintenanceGrant(db)) {
+  const available=preflight?Number(preflight.unfinished_count)<3:await optionalMaintenanceAvailable(db);
+  const granted=preflight?Number(preflight.current_grant)===1:available&&await currentAccountMaintenanceGrant(db);
+  if(!available || !granted) {
    // Refresh also reconciles safely expired receipts before applying the
    // unfinished-work circuit breaker. No reservation is granted here.
    const admission=await (await refreshAccountMaintenanceBudget(context)).json();
