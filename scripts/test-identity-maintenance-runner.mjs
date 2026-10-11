@@ -4,11 +4,20 @@ let calls=0;
 const options={mode:'register',report:()=>{}};
 const done=await continueIdentityMaintenance({...options,request:async()=>({status:++calls===3?'complete':'running'})});
 assert.equal(done.status,'complete');assert.equal(calls,3);
-for(const status of ['busy','import-active','registration-active','usage-or-service-deferred','outside-audit-window']) {
+for(const status of ['import-active','registration-active','usage-or-service-deferred','outside-audit-window']) {
  calls=0;
  const stopped=await continueIdentityMaintenance({...options,request:async()=>{calls++;return {status};}});
  assert.equal(stopped.status,'deferred');assert.equal(calls,1,`${status} must not spin or bypass admission`);
 }
+calls=0;let waits=0;
+const collision=await continueIdentityMaintenance({...options,wait:async ms=>{assert.equal(ms,30000);waits++;},request:async()=>({status:++calls===1?'busy':'complete'})});
+assert.equal(collision.status,'complete');assert.equal(calls,2);assert.equal(waits,1);
+calls=0;waits=0;
+const busy=await continueIdentityMaintenance({...options,wait:async()=>{waits++;},request:async()=>{calls++;return {status:'busy'};}});
+assert.equal(busy.reason,'busy');assert.equal(calls,4);assert.equal(waits,3,'persistent lease contention has a fixed retry bound');
+calls=0;
+await continueIdentityMaintenance({...options,maxMs:30000,wait:async()=>{throw Error('Must not exceed time cap');},request:async()=>{calls++;return {status:'busy'};}});
+assert.equal(calls,1);
 calls=0;
 const capped=await continueIdentityMaintenance({...options,maxSteps:2,request:async()=>{calls++;return {status:'running'};}});
 assert.equal(capped.reason,'checkpoint-or-time-limit');assert.equal(calls,2);
