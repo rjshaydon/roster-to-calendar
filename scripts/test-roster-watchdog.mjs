@@ -5,7 +5,11 @@ const calls = [], pending = [];
 const original = globalThis.fetch;
 const OriginalDate = globalThis.Date;
 try {
- globalThis.fetch = async (url, options) => { calls.push({ url, options }); return Response.json({ ok: true, status: 'unchanged' }); };
+ globalThis.fetch = async (url, options) => {
+  const call={url,options,consumed:false};calls.push(call);
+  const response=Response.json({ok:true,status:'unchanged'}),json=response.json.bind(response);
+  response.json=async()=>{call.consumed=true;return json();};return response;
+ };
  await worker.scheduled({}, {}, { waitUntil: promise => pending.push(promise) });
  assert.equal(calls.length, 0, 'disabled worker must do no work');
  const env = { ROSTER_AUTOMATION_ENABLED: 'true', ROSTER_WATCHDOG_TOKEN: 'synthetic-token' };
@@ -32,6 +36,7 @@ try {
   calls.length=0; pending.length=0;
   await worker.scheduled({},identityEnv,{waitUntil:promise=>pending.push(promise)});
   await Promise.all(pending);
+  assert.ok(calls.every(call=>call.consumed),'scheduled tasks drain all response bodies before ending');
   assert.equal(calls.filter(call=>/findmyshift-check$/.test(call.url)).length,1);
   assert.deepEqual(calls.filter(call=>/identity-maintenance$/.test(call.url)).map(call=>JSON.parse(call.options.body).mode),expected,instant);
  }

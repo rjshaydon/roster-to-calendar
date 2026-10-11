@@ -35,7 +35,14 @@ export default {
 async function checkIdentityAudit(env,mode='audit') {
   const url=new URL('/api/automation/identity-maintenance',env.FINDMYSHIFT_CHECK_URL||defaultFindMyShiftUrl);
   const response=await fetch(url,{method:'POST',headers:{authorization:`Bearer ${String(env.ROSTER_WATCHDOG_TOKEN||'')}`,'content-type':'application/json'},body:JSON.stringify({mode})});
-  if(!response.ok) console.warn(JSON.stringify({event:'identity-audit',status:'deferred',http:response.status}));
+  const result=await response.json().catch(()=>({}));
+  // Drain the response before this scheduled task ends; record only bounded
+  // progress fields, never names, credentials or candidate details.
+  const record={event:'identity-audit',mode,status:result.status||'unknown',http:response.status,
+    ...(Number.isInteger(result.examined)?{examined:result.examined}:{}),
+    ...(Number.isInteger(result.candidates)?{candidates:result.candidates}:{})};
+  if(response.ok) console.log(JSON.stringify(record));
+  else console.warn(JSON.stringify(record));
 }
 
 function automationPaused(env = {}) {
