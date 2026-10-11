@@ -1,5 +1,4 @@
 const defaultFindMyShiftUrl = "https://roster-to-calendar.pages.dev/api/automation/findmyshift-check";
-import {identityAuditWindow} from '../public/static/identity-audit-policy.js';
 
 export default {
   async scheduled(_controller, env, ctx) {
@@ -9,7 +8,9 @@ export default {
     }
     ctx.waitUntil(checkFindMyShift(env));
     if(env.IDENTITY_REGISTRY_ENABLED==='true') ctx.waitUntil(checkIdentityAudit(env,'register'));
-    if(env.IDENTITY_SCHEDULED_AUDIT_ENABLED==='true' && identityAuditWindow().eligible) ctx.waitUntil(checkIdentityAudit(env));
+    // The endpoint checks its R2 checkpoint before D1: completed weeks are
+    // cheap no-ops; an interrupted Sunday pass can resume on later days.
+    if(env.IDENTITY_SCHEDULED_AUDIT_ENABLED==='true') ctx.waitUntil(checkIdentityAudit(env));
   },
 
   async fetch(request, env) {

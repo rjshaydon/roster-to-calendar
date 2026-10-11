@@ -15,6 +15,7 @@ export async function onRequestPost(context) {
  const db=context.env.ROSTER_DB;
  const window=identityAuditWindow();
  let registryState=null,registryObject=null,registryRevision='';
+ let auditState=null,auditObject=null,auditWeek='';
  if(input.mode==='register') {
   if(context.env.IDENTITY_REGISTRY_ENABLED!=='true') return Response.json({status:'registry-paused'});
   const r2=context.env.ROSTER_FILES;
@@ -27,9 +28,19 @@ export async function onRequestPost(context) {
  }
 
  if(input.mode==='audit') {
-  if(context.env.IDENTITY_SCHEDULED_AUDIT_ENABLED!=='true' || !window.eligible) return Response.json({status:'outside-audit-window'});
-  const done=await db.prepare("SELECT run_id FROM roster_identity_audit_runs WHERE week_key=? AND status='complete' AND mode='audit' LIMIT 1").bind(window.weekKey).first();
-  if(done) return Response.json({status:'already-complete'});
+  if(context.env.IDENTITY_SCHEDULED_AUDIT_ENABLED!=='true') return Response.json({status:'outside-audit-window'});
+  auditObject=await context.env.ROSTER_FILES.get('identity/weekly-audit-progress.json');
+  auditState=auditObject?await auditObject.json():{};
+  if(!auditState.runId && !window.catchupEligible) return Response.json({status:'outside-audit-window'});
+  auditWeek=auditState.runId?auditState.weekKey:window.weekKey;
+  if(!auditState.runId && auditState.weekKey===auditWeek && auditState.status==='complete') return Response.json({status:'already-complete'});
+  const registration=await context.env.ROSTER_FILES.get('identity/registry-progress.json');
+  if(registration && (await registration.json()).runId) return Response.json({status:'registration-active'});
+  const done=await db.prepare("SELECT run_id FROM roster_identity_audit_runs WHERE week_key=? AND status='complete' AND mode='audit' LIMIT 1").bind(auditWeek).first();
+  if(done) {
+   await saveAuditProgress(context.env.ROSTER_FILES,auditObject,{weekKey:auditWeek,runId:'',status:'complete'});
+   return Response.json({status:'already-complete'});
+  }
  }
  if(['audit','register'].includes(input.mode)) {
   for(const source of ['monash-adults','monash-paeds','vhh-active-medical-roster','dandenong-findmyshift']) {
@@ -45,7 +56,9 @@ export async function onRequestPost(context) {
   // The indexed names cache retains historical staff. Register one name per
   // call and audit one pending feature, without decompressing every site's
   // published staff directory inside a free Pages request.
-  const result=await auditIdentityBatch(db,[],{cachedDirectory:true,runId:input.mode==='register'?registryState.runId:undefined,register:input.mode==='register',actor:'published-roster-registration',weekKey:input.mode==='audit'?window.weekKey:''});
+  const result=await auditIdentityBatch(db,[],{cachedDirectory:true,runId:input.mode==='register'?registryState.runId:auditState.runId,register:input.mode==='register',actor:'published-roster-registration',weekKey:input.mode==='audit'?auditWeek:''});
+  if(input.mode==='audit' && result.status!=='busy') await saveAuditProgress(context.env.ROSTER_FILES,auditObject,
+   {weekKey:auditWeek,runId:result.status==='complete'?'':result.runId,status:result.status});
   if(input.mode==='register' && result.status!=='busy') {
    const progress={revision:result.status==='complete'?registryRevision:registryState.runId?registryState.revision:registryRevision,runId:result.status==='complete'?'':result.runId};
    await context.env.ROSTER_FILES.put('identity/registry-progress.json',JSON.stringify(progress),{httpMetadata:{contentType:'application/json'},...(registryObject?.etag?{onlyIf:{etagMatches:registryObject.etag}}:{onlyIf:{etagDoesNotMatch:'*'}})});
@@ -55,4 +68,8 @@ export async function onRequestPost(context) {
  }
  const result=await publishIdentityOperation(context.env.ROSTER_DB,context.env.ROSTER_FILES,input.operationId);
  return Response.json(result,{status:result.status==='missing'?404:result.status==='failed'?409:200});
+}
+async function saveAuditProgress(r2,previous,value) {
+ await r2.put('identity/weekly-audit-progress.json',JSON.stringify(value),{httpMetadata:{contentType:'application/json'},
+  ...(previous?.etag?{onlyIf:{etagMatches:previous.etag}}:{onlyIf:{etagDoesNotMatch:'*'}})});
 }

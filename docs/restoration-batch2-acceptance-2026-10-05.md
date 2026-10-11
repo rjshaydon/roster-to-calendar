@@ -188,3 +188,25 @@ No human suggestion decisions were changed. Private live logging was stopped.
 Remaining acceptance: observe complete catch-up (including the earlier historical
 names) and the real scheduled audit on Sunday 11 October. Today's scheduler and
 handler tests are not a substitute for that future production run.
+
+### Completion follow-up — 11 October, 13:40 AEDT
+
+Settled account admission returned GO at 170,920 reads / 4,449 writes. The
+automatic registration checkpoint had reached 288 examined names; the bounded
+names-cache inspection (3,116 rows read) found 445 missing/changed aliases across
+996 cached names. This includes 149 historical Casey names; it does not enable
+Casey roster-backed views or read historical shift rows.
+
+No scheduled audit for 11 October exists: the original Sunday 03:30–04:30 window
+passed while maintenance was blocked. A delayed Sunday pass may now start later
+on that Sunday, and an existing weekly run resumes on subsequent days. R2 holds
+its durable run/week checkpoint; completed weeks and idle weekdays do zero D1
+work. Auditing waits for registration to finish and retains import priority,
+account admission, per-request limits and human review of ambiguous matches.
+
+A manually dispatched continuation workflow processes serial one-name requests
+through the same production endpoint, with a 600-checkpoint / fifteen-minute
+cap. It stops on admission deferral, active imports, busy leases or uncertain
+responses, with no blind retries or safeguard bypass. Automated tests cover
+delayed starts, weekday resumption, completed-cache no-ops, historical-registration
+priority and continuation limits. Production completion remains to be observed.

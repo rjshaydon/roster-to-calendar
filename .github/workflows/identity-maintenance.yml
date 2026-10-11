@@ -1,0 +1,28 @@
+name: Continue bounded identity maintenance
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Resume cached-name registration or the due weekly audit"
+        required: true
+        type: choice
+        options: [register, audit]
+permissions:
+  contents: read
+concurrency:
+  group: identity-production-catchup
+  cancel-in-progress: false
+jobs:
+  continue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    env:
+      ROSTER_AUTOMATION_BASE_URL: https://roster-to-calendar.pages.dev
+      ROSTER_AUTOMATION_TOKEN: ${{ secrets.ROSTER_AUTOMATION_TOKEN }}
+      IDENTITY_MAINTENANCE_MODE: ${{ inputs.mode }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/process-identity-maintenance.mjs

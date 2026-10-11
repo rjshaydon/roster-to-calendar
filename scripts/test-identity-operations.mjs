@@ -233,7 +233,9 @@ const unchanged=await identityMaintenance({env:{...maintenanceContext.env,IDENTI
 assert.equal((await unchanged.json()).status,'unchanged');assert.equal(sql.length,registryQueries,'unchanged published metadata causes zero D1 work');
 const OriginalDate=globalThis.Date;
 try {
- const scheduledEnv={...maintenanceContext.env,IDENTITY_SCHEDULED_AUDIT_ENABLED:'true',IDENTITY_REGISTRY_ENABLED:'true'};
+ const scheduledObjects=new Map();
+ const scheduledR2={async get(key){const value=scheduledObjects.get(key);return value?{etag:'checkpoint',json:async()=>value}:null;},async put(key,value){scheduledObjects.set(key,JSON.parse(value));}};
+ const scheduledEnv={...maintenanceContext.env,ROSTER_FILES:scheduledR2,IDENTITY_SCHEDULED_AUDIT_ENABLED:'true',IDENTITY_REGISTRY_ENABLED:'true'};
  globalThis.Date=class extends OriginalDate {constructor(...args){super(...(args.length?args:['2026-10-09T16:30:00Z']));}};
  const beforeOutside=sql.length;
  assert.equal((await (await identityMaintenance({env:scheduledEnv,request:maintenanceRequest('audit')})).json()).status,'outside-audit-window');
@@ -243,12 +245,32 @@ try {
  const beforeComplete=sql.length;
  assert.equal((await (await identityMaintenance({env:scheduledEnv,request:maintenanceRequest('audit')})).json()).status,'already-complete');
  assert.equal(sql.length,beforeComplete+1,'completed weekly work only checks its indexed checkpoint');
+ const afterComplete=sql.length;
+ assert.equal((await (await identityMaintenance({env:scheduledEnv,request:maintenanceRequest('audit')})).json()).status,'already-complete');
+ assert.equal(sql.length,afterComplete,'cached completed weeks do zero D1 work');
+ scheduledObjects.clear();
  sqlite.prepare("DELETE FROM roster_identity_audit_runs WHERE run_id='scheduled-complete'").run();
  sqlite.prepare("INSERT INTO roster_sync_runs(id,source_id,status) VALUES('active-maintenance-fixture','monash-adults','processing')").run();
  assert.equal((await (await identityMaintenance({env:scheduledEnv,request:maintenanceRequest('audit')})).json()).status,'import-active');
  const changedRegistry={...unchangedRegistry,async get(){return {async json(){return {};}};}};
  assert.equal((await (await identityMaintenance({env:{...scheduledEnv,ROSTER_FILES:changedRegistry},request:maintenanceRequest('register')})).json()).status,'import-active');
  sqlite.prepare("DELETE FROM roster_sync_runs WHERE id='active-maintenance-fixture'").run();
+ scheduledObjects.set('identity/registry-progress.json',{runId:'registration-pending'});
+ const beforeRegistration=sql.length;
+ assert.equal((await (await identityMaintenance({env:scheduledEnv,request:maintenanceRequest('audit')})).json()).status,'registration-active');
+ assert.equal(sql.length,beforeRegistration,'audit waits for historical name registration without D1');
+ scheduledObjects.clear();
+ globalThis.Date=class extends OriginalDate {constructor(...args){super(...(args.length?args:['2026-10-11T02:00:00Z']));}};
+ const late=await (await identityMaintenance({env:scheduledEnv,request:maintenanceRequest('audit')})).json();
+ assert.ok(['running','complete'].includes(late.status),'missed Sunday window starts a bounded catch-up');
+ const saved=scheduledObjects.get('identity/weekly-audit-progress.json');
+ assert.equal(saved.weekKey,'2026-10-11');
+ if(saved.runId) {
+  globalThis.Date=class extends OriginalDate {constructor(...args){super(...(args.length?args:['2026-10-12T02:00:00Z']));}};
+  const resumed=await (await identityMaintenance({env:scheduledEnv,request:maintenanceRequest('audit')})).json();
+  assert.equal(resumed.runId,saved.runId,'Monday resumes the saved weekly run rather than starting another');
+  assert.equal(scheduledObjects.get('identity/weekly-audit-progress.json').weekKey,'2026-10-11');
+ }
 } finally {globalThis.Date=OriginalDate;}
 const insertSearch=sqlite.prepare('INSERT INTO roster_people(person_id,preferred_display_name) VALUES(?,?)');
 sqlite.exec('BEGIN');for(let i=0;i<2500;i++)insertSearch.run('person:search-fixture-'+i,'Directory Fixture '+String(i).padStart(4,'0'));sqlite.exec('COMMIT');

@@ -19,14 +19,14 @@ try {
  assert.deepEqual(findmyshiftPollingRosterRanges({}, new Date('2026-10-19T00:00:00Z')).map(r => r.from), ['2026-08-03', '2026-11-02'], 'next-term checking must not stop current-term updates');
  assert.equal(findmyshiftPollingRosterRanges({ FINDMYSHIFT_FROM: '2026-08-03', FINDMYSHIFT_TO: '2026-11-01' }, new Date('2026-10-19T00:00:00Z')).length, 1);
  // Exercise the real scheduler: registration every tick, audit only during
- // the Melbourne Sunday window, with no second call or retry per mode.
+ // its endpoint owns the Sunday/R2 resume guard, with no retry per mode.
  const identityEnv = {...env, IDENTITY_REGISTRY_ENABLED:'true', IDENTITY_SCHEDULED_AUDIT_ENABLED:'true'};
  for (const [instant,expected] of [
-  ['2026-10-10T16:29:00Z',['register']],
+  ['2026-10-10T16:29:00Z',['register','audit']],
   ['2026-10-10T16:30:00Z',['register','audit']],
   ['2026-10-10T17:29:00Z',['register','audit']],
-  ['2026-10-10T17:30:00Z',['register']],
-  ['2026-10-09T16:30:00Z',['register']],
+  ['2026-10-10T17:30:00Z',['register','audit']],
+  ['2026-10-09T16:30:00Z',['register','audit']],
  ]) {
   globalThis.Date = class extends OriginalDate { constructor(...args) { super(...(args.length?args:[instant])); } };
   calls.length=0; pending.length=0;
