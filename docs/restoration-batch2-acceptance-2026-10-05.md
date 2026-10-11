@@ -436,11 +436,21 @@ Latest settled account-wide analytics at cutoff 05:42:42Z: 895,562 rows read and
 26,251 rows written, across the complete inventory, below Free's 5m/100k limits.
 The generic restoration extrapolation still reports STOP; this is not a claimed
 GO assessment. Production's measured-maintenance reconciliation and conservative
-held receipts remain the admission authority. One old 04:25 receipt remains held
-pending a genuine settled-budget refresh; never refund it manually. The earlier
-confirmed CPU receipt recovered automatically at 05:11Z. No new production
-unfinished failures accumulated during successful catch-up.
+held receipts remain the admission authority. Final direct inspection confirms
+the old 04:25 receipt reconciled automatically at 05:28:04Z (recovery bound
+05:21:15Z). The earlier confirmed CPU receipt recovered automatically at 05:11Z.
+No manual refund was performed, and no new production unfinished failures
+accumulated during successful catch-up.
 
 Temporary canary Worker and its 20 additive synthetic identities/suggestions/run
 are removed at closeout; its grant is expired and its accounting receipts retained.
 Original preview fixtures, production identities and source rosters are preserved.
+
+
+Closeout verification: code commit 385c3983 deployed successfully as Pages
+1040b7af-8a1b-43af-aecc-c64952a7a37e. Both sampled subscriptions return HTTP 200,
+128/154 events and exact baseline UID sets. The temporary Worker is confirmed
+deleted; exact synthetic rows/run and its namespaced R2 progress object were
+removed, the grant expired, and original preview fixtures/accounting preserved.
+Cloudflare Free remains unchanged. CPU acceptance is still open; do not describe
+Batch 2 as fully accepted or all 503 causes as eliminated.
