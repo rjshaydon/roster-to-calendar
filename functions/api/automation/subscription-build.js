@@ -11,7 +11,7 @@ export async function onRequestPost(context){
  if(!runner&&!watchdog)return Response.json({error:'Unauthorized.'},{status:401});
  if(!['build','ready'].includes(env.SUBSCRIPTION_ARTIFACT_MODE)||env.IDENTITY_REVIEW_ENABLED!=='true')return Response.json({status:'disabled'});
  const local=localFeatureDisabledResponse(env,'Subscription calendar assembly');if(local)return local;
- if(!['prime','check','start','next','snapshot','events','publish','finish'].includes(input.mode))return Response.json({error:'Invalid operation.'},{status:400});
+ if(!['prime','check','start','next','snapshot','prepare','events','publish','finish'].includes(input.mode))return Response.json({error:'Invalid operation.'},{status:400});
  try{
   if(input.mode==='prime'){
    const deferred=await subscriptionAdmission(env);if(deferred)return Response.json(deferred);
@@ -51,18 +51,31 @@ export async function onRequestPost(context){
   // Optional exports never compete with source imports or bypass the shared
   // reservation gate. Unknown callback costs remain held by middleware.
   const deferred=await subscriptionAdmission(env);if(deferred)return Response.json(deferred);
-  const evidence=await subscriptionEvidence(db,request.token,request.view,identitiesEnabled);
-  if(!evidence){await r2.delete(queueKey);return Response.json({status:'gone'});}
   const exportKey=`subscriptions/exports/${await subscriptionDigest(queueKey)}.json`;
-  if(await r2.head(evidence.key)){await r2.delete(queueKey);await r2.delete(exportKey);return Response.json({status:'unchanged'});}
   if(input.mode==='snapshot'){
-   const prepared=await prepareSubscriptionExport(db,request.token,request.view,identitiesEnabled,evidence);
-   if(!prepared)return Response.json({status:'gone'});
-   await r2.put(exportKey,JSON.stringify({...prepared,until:now+TTL}));
-   return Response.json({status:'running',revision:prepared.revision,record:prepared.record,claims:prepared.claims,aliases:prepared.aliases,inputs:prepared.inputs});
+   const evidence=await subscriptionEvidence(db,request.token,request.view,identitiesEnabled);
+   if(!evidence){await r2.delete(queueKey);return Response.json({status:'gone'});}
+   if(await r2.head(evidence.key)){await r2.delete(queueKey);await r2.delete(exportKey);return Response.json({status:'unchanged'});}
+   // Pin the small evidence record separately from alias preparation, keeping
+   // each complete metered callback within the Free CPU allowance.
+   await r2.put(exportKey,JSON.stringify({evidence,revision:evidence.revision,until:now+TTL,phase:'pending'}));
+   return Response.json({status:'preparing',revision:evidence.revision});
   }
   const exported=await r2.get(exportKey),snapshot=exported?await exported.json():null;
-  if(!snapshot||snapshot.until<=now||snapshot.revision!==input.revision||evidence.revision!==snapshot.revision)return Response.json({status:'stale'},{status:409});
+  if(!snapshot||snapshot.until<=now||snapshot.revision!==input.revision)return Response.json({status:'stale'},{status:409});
+  if(input.mode==='prepare'){
+   if(snapshot.phase==='pending'){
+    // Provisional alias preparation cannot authorize an event export. Every
+    // later page and promotion rechecks current ownership and all input facts.
+    const prepared=await prepareSubscriptionExport(db,request.token,request.view,identitiesEnabled,snapshot.evidence,{deferFinalEvidenceCheck:true});
+    await r2.put(exportKey,JSON.stringify({...prepared,until:snapshot.until,phase:'ready'}));
+    return Response.json({status:'running',revision:prepared.revision,record:prepared.record,claims:prepared.claims,aliases:prepared.aliases,inputs:prepared.inputs});
+   }
+   return Response.json({status:'running',revision:snapshot.revision,record:snapshot.record,claims:snapshot.claims,aliases:snapshot.aliases,inputs:snapshot.inputs});
+  }
+  const evidence=await subscriptionEvidence(db,request.token,request.view,identitiesEnabled);
+  if(!evidence){await r2.delete(queueKey);await r2.delete(exportKey);return Response.json({status:'gone'});}
+  if(snapshot.phase!=='ready'||evidence.revision!==snapshot.revision)return Response.json({status:'stale'},{status:409});
   if(input.mode==='events')return Response.json({status:'running',...await subscriptionEventPage(db,snapshot.aliases,snapshot.start,snapshot.end,input.cursor)});
   if(input.mode==='publish'){
    const ics=String(input.ics||''),bytes=new TextEncoder().encode(ics);

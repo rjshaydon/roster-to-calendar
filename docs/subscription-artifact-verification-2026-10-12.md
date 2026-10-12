@@ -81,3 +81,35 @@ failed because two additional text flags raised the total to 65 variables, above
 the Free limit of 64 (secrets plus text). They are consolidated into one
 `SUBSCRIPTION_ARTIFACT_MODE` with `off`, `build` and `ready` values. This preserves
 the staged rollout while staying on Free; no existing secret/feature is removed.
+
+## Complete callback canary and forecast attribution follow-up
+
+A capped canary routes every calendar query to read-only production D1 and every
+reservation/settlement mutation to the isolated identity database. Its private R2
+prefix is separate from both live calendars and previous tests. No roster/person
+fixtures are inserted. The test grant retains existing ledger allocations and
+allows only 192 writes above the unchanged 20K optional protection; it cannot
+change production allowances. The complete 128-event Node publication succeeds,
+with native complete metadata: snapshot 11 ms (8 statements), event pages 9 ms
+(7 statements each), publication 8 ms (6 statements). All known receipts settle.
+An initial canary namespace error fails before reservation and is corrected.
+
+Removing the repeated preparation evidence read still measured snapshot 11 ms
+(7 statements), so success is NOT CPU acceptance. The protocol now pins the
+small evidence snapshot separately from provisional alias preparation. Every
+subsequent event page and publication still checks current ownership/input
+revision. Regression tests inject an identity edit between pin and preparation
+and reject the following page. Full optimized native verification remains needed.
+Missing-start range exports also retain the original complete-history behavior.
+
+Native CLI metadata explains an additional false recurring forecast component:
+12,000 writes for the isolated 1,000-name seed and 5,200 writes / 9,190 reads for
+its cleanup. Neither SQL file touched `roster_maintenance_receipts`. The immutable
+proof records retain the actual response/query SHA-256 hashes, database ID and
+observation time. They apply only to that database/UTC day, after the same settled
+analytics cutoff; the combined receipt and CLI costs must remain below measured
+per-database totals or admission fails closed. Actual account usage, unknown
+reservations, caps and protected source room are unchanged. No grant or receipt
+is refunded. Tests cover wrong day/database, cutoff ordering, reconciliation and
+unchanged totals/reservations. The feature uses the existing preview-summary gate,
+adds no new Worker variable, and is inert after 12 October UTC.

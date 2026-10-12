@@ -56,7 +56,7 @@ export async function subscriptionEvidence(db,token,view='full',identitiesEnable
  const revision=await subscriptionDigest(serialized),tokenKey=await subscriptionDigest(token);
  return {revision,key:`subscriptions/v1/${tokenKey}/${view}/${revision}.ics`,row};
 }
-export async function prepareSubscriptionExport(db,token,view,identitiesEnabled,evidence=null){
+export async function prepareSubscriptionExport(db,token,view,identitiesEnabled,evidence=null,{deferFinalEvidenceCheck=false}={}){
  evidence ||= await subscriptionEvidence(db,token,view,identitiesEnabled);
  if(!evidence)return null;
  const row=evidence.row;
@@ -75,7 +75,8 @@ export async function prepareSubscriptionExport(db,token,view,identitiesEnabled,
  if(aliases.length>16)throw Error('Calendar identity limit exceeded.');
  const session=record.state?.session||{};
  const range=view==='range'?session.exportRange||{}:{};
- const start=String(range.startDate||'0000-01-01'),end=range.allFuture===false?String(range.endDate||start):'9999-12-31';
+ const startDate=String(range.startDate||'').slice(0,10),endDate=String(range.endDate||'').slice(0,10);
+ const start=startDate||'0000-01-01',end=startDate&&range.allFuture===false?(endDate||startDate):'9999-12-31';
  const locationRows=JSON.parse(row.locations_json);
  const locations=locationRows.length?normalizeHospitalLocationMap(Object.fromEntries(locationRows)):hospitalLocationsFromSession(session);
  const custom=JSON.parse(row.custom_json).map(([id,title,start_date,end_date,all_day,start_time,end_time,location,include])=>
@@ -85,8 +86,12 @@ export async function prepareSubscriptionExport(db,token,view,identitiesEnabled,
   ({id,source_type,doctor_key,designation,term_start,term_end,seniority,updated_at,display_name,active:1}))
   .filter(d=>allowed.has(d.source_type+'|'+d.doctor_key)&&d.term_start<=end&&d.term_end>=start)
   .sort((a,b)=>a.term_start.localeCompare(b.term_start)||a.source_type.localeCompare(b.source_type)||a.display_name.localeCompare(b.display_name));
- const current=await subscriptionEvidence(db,token,view,identitiesEnabled);
- if(current?.revision!==evidence.revision)throw Error('Subscription inputs changed during export.');
+ // Callback snapshots are provisional: every event page and publication must
+ // validate the pinned evidence again. Standalone exports still check here.
+ if(!deferFinalEvidenceCheck){
+  const current=await subscriptionEvidence(db,token,view,identitiesEnabled);
+  if(current?.revision!==evidence.revision)throw Error('Subscription inputs changed during export.');
+ }
  return {revision:evidence.revision,record,claims,aliases,start,end,inputs:{locations,custom,designations:designations.map(designationLeaveEventFromRow).filter(Boolean)}};
 }
 export async function subscriptionEventPage(db,aliases,start,end,cursor=null){

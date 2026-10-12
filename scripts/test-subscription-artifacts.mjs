@@ -10,7 +10,7 @@ const sql=new DatabaseSync(':memory:');
 for(const name of (await readdir(new URL('../migrations',import.meta.url))).filter(n=>n.endsWith('.sql')).sort())sql.exec(await readFile(new URL('../migrations/'+name,import.meta.url),'utf8'));
 for(const definition of ["name TEXT NOT NULL DEFAULT ''","source_type TEXT NOT NULL DEFAULT ''","size INTEGER NOT NULL DEFAULT 0","last_modified INTEGER NOT NULL DEFAULT 0"])sql.exec('ALTER TABLE raw_roster_files ADD COLUMN '+definition);
 sql.exec('CREATE INDEX IF NOT EXISTS idx_roster_events_file_doctor ON roster_events(file_id,doctor_key)');
-const db={prepare(query){let args=[];const st={bind(...a){args=a;return st},async all(){const results=sql.prepare(query).all(...args);return {results,meta:{changes:0,rows_read:results.length,rows_written:0}}},async first(){return (await st.all()).results[0]||null},async run(){const r=sql.prepare(query).run(...args);return {meta:{changes:Number(r.changes),rows_written:Number(r.changes),rows_read:0}}}};return st},async batch(st){sql.exec('BEGIN');try{const r=[];for(const s of st)r.push(await (/^\s*(SELECT|WITH)/i.test(s.query||'')?s.all():s.run()));sql.exec('COMMIT');return r;}catch(e){sql.exec('ROLLBACK');throw e;}}};
+const db={prepare(query){let args=[];const st={bind(...a){args=a;return st},async all(){if(db.beforeAll)db.beforeAll(query);const results=sql.prepare(query).all(...args);return {results,meta:{changes:0,rows_read:results.length,rows_written:0}}},async first(){return (await st.all()).results[0]||null},async run(){const r=sql.prepare(query).run(...args);return {meta:{changes:Number(r.changes),rows_written:Number(r.changes),rows_read:0}}}};return st},async batch(st){sql.exec('BEGIN');try{const r=[];for(const s of st)r.push(await (/^\s*(SELECT|WITH)/i.test(s.query||'')?s.all():s.run()));sql.exec('COMMIT');return r;}catch(e){sql.exec('ROLLBACK');throw e;}}};
 // Native SELECT batches are needed by the existing fallback renderer.
 db.prepare=((original)=>query=>{const st=original(query);st.query=query;return st;})(db.prepare);
 class Bucket{
@@ -96,6 +96,20 @@ for(let i=0;i<201;i++)sql.prepare('INSERT INTO custom_events(owner_email,id,titl
 response=await feed({env,request:new Request('https://test/api/feed?token=token')});assert.equal(response.status,200);
 assert.equal((await response.text()).match(/BEGIN:VEVENT/g).length,130);
 sql.exec("DELETE FROM custom_events WHERE id LIKE 'disabled%'");
+// A concurrent identity edit during provisional preparation cannot authorize
+// an event page or publication against the earlier evidence.
+const provisionalEvidence=await subscriptionEvidence(db,'token');
+await queueSubscriptionArtifact(r2,'token','range',await subscriptionEvidence(db,'token','range'));
+// Force a new range snapshot instead of its previously completed immutable object.
+const oldRange=await subscriptionEvidence(db,'token','range');await r2.delete(oldRange.key);
+const raceBegin=await call({mode:'start'}),raceNext=await call({mode:'next',leaseId:raceBegin.leaseId});
+db.beforeAll=query=>{if(query.includes('FROM account_people a JOIN roster_people p')){db.beforeAll=null;sql.exec("UPDATE roster_people SET preferred_display_name='Concurrent reviewed name' WHERE person_id='person:a'");}};
+const racePin=await call({mode:'snapshot',leaseId:raceBegin.leaseId,queueKey:raceNext.queueKey});
+const raceSnapshot=await call({mode:'prepare',leaseId:raceBegin.leaseId,queueKey:raceNext.queueKey,revision:racePin.revision});
+assert.equal(raceSnapshot.status,'running');
+await assert.rejects(()=>call({mode:'events',leaseId:raceBegin.leaseId,queueKey:raceNext.queueKey,revision:raceSnapshot.revision}),e=>e.status===409&&e.result.status==='stale');
+await call({mode:'finish',leaseId:raceBegin.leaseId});
+await processSubscriptionBuild({call,admit:async()=>true});
 // Every material input invalidates. Unrelated account edits do not.
 for(const change of [
  "UPDATE account_states SET session_json=json_set(session_json,'$.settings.includeLocations',0) WHERE email='a@test'",
@@ -110,7 +124,8 @@ const stable=(await subscriptionEvidence(db,'token')).revision;
 sql.exec("INSERT INTO account_profiles(email,real_name) VALUES('b@test','Other');");assert.equal((await subscriptionEvidence(db,'token')).revision,stable);
 response=await feed({env,request:new Request('https://test/api/feed?token=token')});assert.equal(response.status,200,'stale input uses complete current fallback');
 const begin=await call({mode:'start'}),next=await call({mode:'next',leaseId:begin.leaseId}),base={leaseId:begin.leaseId,queueKey:next.queueKey};
-const snapshot=await call({...base,mode:'snapshot'});
+const pinned=await call({...base,mode:'snapshot'});
+const snapshot=await call({...base,mode:'prepare',revision:pinned.revision});
 sql.exec("UPDATE subscription_tokens SET email='b@test' WHERE token='token'");
 await assert.rejects(()=>call({...base,mode:'events',revision:snapshot.revision}),e=>e.status===409&&e.result.status==='stale');
 response=await feed({env,request:new Request('https://test/api/feed?token=token')});assert.ok(!(await response.text()).includes('Shift 0'),'reassigned token cannot serve prior owner artifact');
@@ -128,3 +143,12 @@ for(const view of ['full','range']){
 assert.equal(sql.prepare("SELECT stop_reason FROM roster_account_budget").get().stop_reason,'');
 assert.equal(sql.prepare("SELECT COUNT(*) n FROM roster_maintenance_receipts WHERE finished_at='' OR metadata_complete<>1").get().n,0,'actual middleware settles every known callback');
 console.log('Build-only priming and shared middleware reservation/settlement integration passed.');
+// A saved range without a start date retains the original full-calendar behavior.
+sql.exec("UPDATE account_states SET session_json=json_set(session_json,'$.exportRange',json('{\"allFuture\":false,\"endDate\":\"2026-10-31\"}')) WHERE email='a@test'");
+const noStartResponse=await feed({env:{...env,SUBSCRIPTION_ARTIFACT_MODE:'off'},request:new Request('https://test/api/feed?token=new-token&view=range')});
+const noStartBaseline=await noStartResponse.text();
+await feed({env,request:new Request('https://test/api/feed?token=new-token&view=range')});
+assert.equal((await processSubscriptionBuild({call,admit:async()=>true})).status,'complete');
+const noStartCached=await feed({env,request:new Request('https://test/api/feed?token=new-token&view=range')});
+assert.equal(withoutStamp(await noStartCached.text()),withoutStamp(noStartBaseline),'missing range start never truncates history');
+console.log('Provisional preparation fences and missing-start range parity passed.');

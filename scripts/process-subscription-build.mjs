@@ -23,7 +23,8 @@ export async function processSubscriptionBuild({call,admit,dispatchId='',prime=f
   if(next.status!=='running')return {status:next.status,built};
   if(!await admit()){await call({mode:'finish',leaseId});return {status:'deferred',built};}
   const base={leaseId,queueKey:next.queueKey};
-  const snapshot=await call({...base,mode:'snapshot'});
+  let snapshot=await call({...base,mode:'snapshot'});
+  if(snapshot.status==='preparing')snapshot=await call({...base,mode:'prepare',revision:snapshot.revision});
   if(['unchanged','gone'].includes(snapshot.status))continue;
   if(snapshot.status==='deferred'){await call({mode:'finish',leaseId});return {status:'deferred',built};}
   if(snapshot.status!=='running')return {status:snapshot.status,built};

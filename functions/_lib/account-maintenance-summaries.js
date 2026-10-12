@@ -1,3 +1,4 @@
+import {verifiedOneOffMaintenanceCosts} from './verified-one-off-maintenance.js';
 import {maintenanceReceiptSummary} from './maintenance-receipt-summary.js';
 import inventory from './d1-account-inventory.js';
 // Receipt costs are lower bounds after removing the conservative settlement
@@ -12,9 +13,10 @@ export async function accountMaintenanceSummaries(context,analytics,primary,day,
  const db=context.data?.d1Meter?.additionalBinding(raw)||raw;
  const summary=await maintenanceReceiptSummary(db,day,previousDay,analytics.interval.start,analytics.interval.observedUntil);
  const measured=analytics.databases.find(d=>d.databaseId===known.id)||{rowsRead:0,rowsWritten:0};
+ const verified=verifiedOneOffMaintenanceCosts(analytics,known.id,day);
  for(const [key,field]of [['reads','rowsRead'],['writes','rowsWritten']]){
-  if(summary.settled[key]>Number(measured[field]))throw Error('Preview maintenance costs have not reconciled with account analytics.');
-  result.settled[key]+=summary.settled[key];result.outstanding[key]+=summary.outstanding[key];
+  if(summary.settled[key]+verified[key]>Number(measured[field]))throw Error('Preview maintenance costs have not reconciled with account analytics.');
+  result.settled[key]+=summary.settled[key]+verified[key];result.outstanding[key]+=summary.outstanding[key];
  }
  return result;
 }
