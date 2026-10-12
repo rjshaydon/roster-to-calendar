@@ -246,3 +246,18 @@ sustained excess can still terminate requests. Source:
 https://developers.cloudflare.com/workers/platform/limits/#cpu-time
 Thus successful HTTP responses above 10 ms remain insufficient for acceptance.
 Final production sampling and full audit/registration completion remain open.
+
+Final CPU batch verification: `e510289b` / Pages `798eb35a`; both sampled
+subscriptions retain 128/154 events and exact baseline UID sets. The final feed
+trace uses six statements per request, 285/372 reads, zero writes, complete D1
+metadata and 5–15 ms CPU. No sampled feed failed after these changes, but spikes
+remain above the target. A 12 ms priority check and 14 ms reused budget check also
+remain acceptance failures. This does not establish that all 503 causes are fixed.
+
+Account analytics were approximately 749K reads / 47K writes; the last production
+grant had 2.18M read headroom and zero optional write headroom. Registration
+correctly deferred for an active source import, and no external production audit
+was complete. Comprehensive diagnostics still require billing evidence/another
+sample; no general clearance was inferred. The isolated read-only comparison
+Worker and its secret are removed. See the subscription CPU completion plan for
+the next coherent batch and its publication/owner-isolation acceptance gates.
