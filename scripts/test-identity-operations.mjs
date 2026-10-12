@@ -409,3 +409,8 @@ assert.deepEqual(inputs.events,oldFeed);assert.deepEqual(inputs.locations,expect
 assert.equal(sqlite.prepare('SELECT total_changes() n').get().n,beforeInputs);
 assert.deepEqual((await loadSubscriptionCalendarInputs(db,[],'one@test',fallback)).events,[],'custom-only accounts do not acquire another clinician roster');
 console.log('Complete feed input batch retains location fallbacks, personal custom events, exact identity calendars and zero writes.');
+
+const sqlBeforeLinked=sql.length,linkedAliases=await accountIdentityAliases(db,'one@test',[]);
+assert.equal(sql.length-sqlBeforeLinked,1,'active account identity and aliases use one indexed statement');
+assert(linkedAliases.every(a=>a.personId&&a.preferredName));
+console.log('Active account aliases retain approved names and preferred identity in one read; merge/reversal tests preserve retired-identity handling.');

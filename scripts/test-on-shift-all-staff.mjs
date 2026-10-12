@@ -108,7 +108,7 @@ try {
     assert.equal((await request('queryFacilityOverviewOnShift',{...query,email})).status,403);
   }
   const alias=await request('queryFacilityOverviewLaunchWindow',{email:'alias@example.test'});
-  assert.equal(alias.status,200); assert.equal(alias.data.shiftWindow.facilityKey,'MMC'); assert.equal(alias.statements,5);
+  assert.equal(alias.status,200); assert.equal(alias.data.shiftWindow.facilityKey,'MMC'); assert.equal(alias.statements,2);
   sqlite.prepare("UPDATE roster_person_aliases SET review_state='pending' WHERE doctor_key='NEW NAME'").run();
   assert.equal((await request('queryFacilityOverviewOnShift',{...query,email:'alias@example.test'})).status,403,'unapproved aliases cannot establish eligibility');
   sqlite.prepare("UPDATE roster_person_aliases SET review_state='approved' WHERE doctor_key='NEW NAME'").run();

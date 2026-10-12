@@ -278,8 +278,13 @@ export async function calendarIdentityAliases(db,{role,email,doctorKey,aliases=[
 }
 
 export async function accountIdentityAliases(db,email,aliases) {
- const link=await db.prepare("SELECT a.person_id,p.status FROM account_people a JOIN roster_people p ON p.person_id=a.person_id WHERE a.email=?").bind(String(email||'').toLowerCase()).first();
- if(!link) return expandApprovedIdentityAliases(db,aliases);
+ const linked=await rows(db,`SELECT p.person_id,p.status,p.preferred_display_name,b.source_type,b.doctor_key,b.display_name
+  FROM account_people a JOIN roster_people p ON p.person_id=a.person_id
+  LEFT JOIN roster_person_aliases b ON b.person_id=p.person_id AND b.review_state='approved' AND p.status='active'
+  WHERE a.email=? ORDER BY b.source_type,b.doctor_key LIMIT 17`,[String(email||'').toLowerCase()]);
+ const link=linked[0];
+ if(!link)return expandApprovedIdentityAliases(db,aliases);
+ if(link.status==='active')return bounded(linked.filter(r=>r.doctor_key),16).map(a=>({sourceType:a.source_type,key:a.doctor_key,displayName:a.display_name,personId:link.person_id,preferredName:link.preferred_display_name}));
  const person=await resolvePersonId(db,link.person_id);
  const list=bounded(await rows(db,"SELECT source_type,doctor_key,display_name FROM roster_person_aliases WHERE person_id=? AND review_state='approved' ORDER BY source_type,doctor_key LIMIT 17",[person.person_id]),16);
  return list.map(a=>({sourceType:a.source_type,key:a.doctor_key,displayName:a.display_name,personId:person.person_id,preferredName:person.preferred_display_name}));

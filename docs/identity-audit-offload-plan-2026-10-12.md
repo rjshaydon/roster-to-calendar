@@ -232,3 +232,17 @@ and per-site identities. Active registration jobs now check source priority befo
 optional metadata/timezone preparation, while completed unchanged checks retain
 their zero-D1 shortcut. These behaviors pass regression tests; native acceptance
 of the final combined batch remains required.
+
+The isolated, authenticated read-only feed Worker returned identical calendars
+but still used 8–17 ms. A smaller Pages bundle alone is therefore not a sufficient
+fix. It is deleted after diagnostics, with no roster or accounting mutations.
+The next change consolidates active account/person/approved-alias resolution into
+one indexed query, retaining the original retired/merged-person path and 16-alias
+bound. This also reduces aliased On shift eligibility from five statements to two;
+authorization/unapproved-alias regression checks pass.
+
+Cloudflare documents a 10 ms Free HTTP limit with some per-isolate flexibility;
+sustained excess can still terminate requests. Source:
+https://developers.cloudflare.com/workers/platform/limits/#cpu-time
+Thus successful HTTP responses above 10 ms remain insufficient for acceptance.
+Final production sampling and full audit/registration completion remain open.
