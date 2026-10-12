@@ -7,7 +7,7 @@ export default {
       return;
     }
     ctx.waitUntil(checkFindMyShift(env));
-    if(env.SUBSCRIPTION_ARTIFACT_BUILD_ENABLED==='true'||env.SUBSCRIPTION_ARTIFACTS_ENABLED==='true')ctx.waitUntil(checkSubscriptionBuild(env));
+    if(['build','ready'].includes(env.SUBSCRIPTION_ARTIFACT_MODE))ctx.waitUntil(checkSubscriptionBuild(env));
     if(env.IDENTITY_REGISTRY_ENABLED==='true') ctx.waitUntil(checkIdentityAudit(env,'register'));
     // The endpoint checks its R2 checkpoint before D1: completed weeks are
     // cheap no-ops; an interrupted Sunday pass can resume on later days.

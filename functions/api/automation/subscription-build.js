@@ -9,7 +9,7 @@ export async function onRequestPost(context){
  const runner=Boolean(env.ROSTER_AUTOMATION_TOKEN)&&auth==='Bearer '+env.ROSTER_AUTOMATION_TOKEN;
  const watchdog=input.mode==='check'&&Boolean(env.ROSTER_WATCHDOG_TOKEN)&&auth==='Bearer '+env.ROSTER_WATCHDOG_TOKEN;
  if(!runner&&!watchdog)return Response.json({error:'Unauthorized.'},{status:401});
- if((env.SUBSCRIPTION_ARTIFACT_BUILD_ENABLED!=='true'&&env.SUBSCRIPTION_ARTIFACTS_ENABLED!=='true')||env.IDENTITY_REVIEW_ENABLED!=='true')return Response.json({status:'disabled'});
+ if(!['build','ready'].includes(env.SUBSCRIPTION_ARTIFACT_MODE)||env.IDENTITY_REVIEW_ENABLED!=='true')return Response.json({status:'disabled'});
  const local=localFeatureDisabledResponse(env,'Subscription calendar assembly');if(local)return local;
  if(!['prime','check','start','next','snapshot','events','publish','finish'].includes(input.mode))return Response.json({error:'Invalid operation.'},{status:400});
  try{

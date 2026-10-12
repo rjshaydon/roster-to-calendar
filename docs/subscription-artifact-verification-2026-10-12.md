@@ -1,7 +1,7 @@
 # Subscription reliability implementation and verification
 
-The external assembly implementation is prepared, with BOTH production flags
-`SUBSCRIPTION_ARTIFACT_BUILD_ENABLED` and `SUBSCRIPTION_ARTIFACTS_ENABLED` false.
+The external assembly implementation is prepared, with the production
+`SUBSCRIPTION_ARTIFACT_MODE` set to `off`.
 Existing subscriptions still use their existing request path. This is not full
 Batch 2 acceptance or a claim that every historical 503 cause is fixed.
 
@@ -21,8 +21,8 @@ Batch 2 acceptance or a claim that every historical 503 cause is fixed.
   settings/custom events/grades are preserved. No source roster is rewritten.
 - Requests for missing/changed calendars coalesce in private R2; unchanged reads
   do not create work. The existing watchdog can dispatch the bounded runner.
-  Separate build/read flags allow priming both existing subscription views before
-  switching request reads. Initially missing/stale objects retain complete current
+  The `build` mode allows priming both existing subscription views before
+  switching request reads to `ready`. Initially missing/stale objects retain complete current
   dynamic responses, never an empty stand-in or a previous identity's calendar.
 - Exports and publication remain behind source priority and shared account
   reservations. Unknown outcomes stay held; explicit stale/yielded checkpoints
@@ -61,7 +61,7 @@ are not acceptance of the complete production publication callbacks.
    measurements alone are insufficient.
 2. Obtain normal optional write admission; enable build-only, prime existing views,
    and verify exact live fields/UIDs before enabling cached GETs. Deploy the
-   watchdog's build flag with the application flag. Avoid a first-request cold
+   watchdog's mode with the application mode. Avoid a first-request cold
    rollout while builders are deferred.
 3. Complete cached-name registration and the external production identity audit,
    then verify actual changed-roster delivery for MMC/MCH/VHH. DDH next-term
@@ -75,3 +75,9 @@ unchanged 20K protection for source imports before optional work. MMC, VHH and
 DDH have real queued imports; the sampled DDH Actions run explicitly deferred
 for account allowance. These are operational gates, not a Codex usage shortage.
 No reservation was manually released and no forecast/cap was overridden.
+
+Deployment note: the first Git deployment compiled successfully but publication
+failed because two additional text flags raised the total to 65 variables, above
+the Free limit of 64 (secrets plus text). They are consolidated into one
+`SUBSCRIPTION_ARTIFACT_MODE` with `off`, `build` and `ready` values. This preserves
+the staged rollout while staying on Free; no existing secret/feature is removed.

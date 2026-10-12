@@ -17,7 +17,7 @@ export async function onRequestGet(context) {
       return new Response("Subscription token is required.", { status: 400 });
     }
 
-    if(context.env.SUBSCRIPTION_ARTIFACTS_ENABLED==='true'&&context.env.IDENTITY_REVIEW_ENABLED==='true'&&context.env.ROSTER_FILES){
+    if(context.env.SUBSCRIPTION_ARTIFACT_MODE==='ready'&&context.env.IDENTITY_REVIEW_ENABLED==='true'&&context.env.ROSTER_FILES){
       try {
       const evidence=await subscriptionEvidence(context.env.ROSTER_DB,token,view,context.env.IDENTITY_REVIEW_ENABLED==='true');
       if(!evidence)return new Response('Subscription calendar was not found.',{status:404});

@@ -67,3 +67,12 @@ is not a general clearance. Automatic maintenance continues to enforce its own
 fail-closed analytics grant, import priority and reservations.
 
 Implementation changes are committed/deployed. The remaining work is not cosmetic.
+
+## Implementation follow-up
+
+The external subscription builder, private artifacts, shared renderer, bounded
+exports and coalesced queue are now implemented but disabled (`mode=off`). Native
+read-only cached feeds retain exact event IDs and use 1–8 ms; full callbacks with
+real admission/settlement still require acceptance. See
+[the implementation verification](subscription-artifact-verification-2026-10-12.md)
+for the current gates, tests and production write-headroom restriction.

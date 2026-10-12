@@ -35,7 +35,7 @@ for(let i=0;i<130;i++){
  const event={id:'e'+i,source:source.toUpperCase(),title:'Shift '+i,start:date+'T08:00:00+11:00',end:date+'T16:00:00+11:00',allDay:false,location:'Original',seniority:'Junior Registrar',rawValue:'AM'};
  sql.prepare('INSERT INTO roster_events(id,file_id,source_type,doctor_key,display_name,start_date,end_date,start_ts,end_ts,title,raw_value,seniority,location,all_day,time_label,event_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(event.id,source==='mmc'?'f':'g',source,source==='mmc'?'DOC A':'ALT A','Doctor A',date,date,event.start,event.end,event.title,'AM',event.seniority,event.location,0,'08–16',JSON.stringify(event));
 }
-const env={ROSTER_DB:db,ROSTER_FILES:r2,SUBSCRIPTION_ARTIFACTS_ENABLED:'true',IDENTITY_REVIEW_ENABLED:'true',ROSTER_AUTOMATION_WRITES_ENABLED:'true',ROSTER_AUTOMATION_TOKEN:'secret',ROSTER_ACCOUNT_BUDGET_ENABLED:'true'};
+const env={ROSTER_DB:db,ROSTER_FILES:r2,SUBSCRIPTION_ARTIFACT_MODE:'ready',IDENTITY_REVIEW_ENABLED:'true',ROSTER_AUTOMATION_WRITES_ENABLED:'true',ROSTER_AUTOMATION_TOKEN:'secret',ROSTER_ACCOUNT_BUDGET_ENABLED:'true'};
 sql.prepare("INSERT INTO roster_account_budget(utc_day,maximum_reads,maximum_writes,valid_until) VALUES(?,4000000,80000,?)").run(new Date().toISOString().slice(0,10),new Date(Date.now()+3600000).toISOString());
 let actions=[];
 async function call(input){
