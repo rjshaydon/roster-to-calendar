@@ -4,7 +4,7 @@ import {hospitalLocationsFromSession,normalizeHospitalLocationMap,customEventFor
 export const SUBSCRIPTION_ARTIFACT_VERSION='subscription-v1';
 const sources=['mmc','mch','ddh','vhh','casey'];
 export async function subscriptionDigest(value){
- const bytes=new TextEncoder().encode(String(value));
+ const bytes=value instanceof Uint8Array?value:new TextEncoder().encode(String(value));
  return [...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(x=>x.toString(16).padStart(2,'0')).join('');
 }
 // One indexed, read-only binding call. Evidence includes ownership, every input
@@ -112,7 +112,7 @@ export async function readSubscriptionArtifact(r2,evidence){
  const object=await r2.get(evidence.key);
  if(!object)return null;
  if(object.customMetadata?.revision!==evidence.revision||object.customMetadata?.version!==SUBSCRIPTION_ARTIFACT_VERSION)throw Error('Subscription artifact metadata is inconsistent.');
- return {body:object.body,displayName:object.customMetadata.displayName||'roster'};
+ return {body:object.body,displayName:object.customMetadata.displayName||'roster',etag:'\"'+evidence.revision+'\"'};
 }
 export async function queueSubscriptionArtifact(r2,token,view,evidence){
  const key=`subscriptions/requests/${await subscriptionDigest(token)}/${view}/${evidence.revision}.json`;

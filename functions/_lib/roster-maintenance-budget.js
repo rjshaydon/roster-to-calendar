@@ -104,14 +104,14 @@ export async function reserveRosterMaintenanceBudget(db, writes = 0, reads = 0) 
     const estimatedWrites = Math.ceil(writes) + 48;
     const estimatedReads = Math.ceil(reads) + 48;
     const optional=request.purpose==='identity';
-    if(optional && !await optionalMaintenanceAvailable(db)) return false;
     const deadline=request.deadlineAt||0;
     const recoverAfter=deadline?new Date(deadline+(Number(request.statementLimit||512)+8)*30000+120000).toISOString():'';
     const results = await db.batch([
       db.prepare(`UPDATE roster_account_budget SET allocated_writes=allocated_writes+?, allocated_reads=allocated_reads+?
         WHERE utc_day=? AND valid_until>? AND stop_reason=''
-        AND allocated_writes+?<=maximum_writes AND allocated_reads+?<=maximum_reads`)
-        .bind(estimatedWrites, estimatedReads, day, new Date().toISOString(), estimatedWrites+(optional?20000:0), estimatedReads+(optional?200000:0)),
+        AND allocated_writes+?<=maximum_writes AND allocated_reads+?<=maximum_reads
+        ${optional?"AND (SELECT COUNT(*) FROM (SELECT request_id FROM roster_maintenance_receipts WHERE utc_day=? AND reconciled_at='' AND (finished_at='' OR metadata_complete<>1) LIMIT 3))<3":''}`)
+        .bind(estimatedWrites, estimatedReads, day, new Date().toISOString(), estimatedWrites+(optional?20000:0), estimatedReads+(optional?200000:0),...(optional?[day]:[])),
       db.prepare(`INSERT INTO roster_import_daily_budget (utc_day,reserved_writes,reserved_reads)
         SELECT ?,?,? WHERE changes()=1 ON CONFLICT(utc_day) DO UPDATE SET
         reserved_writes=reserved_writes+excluded.reserved_writes,reserved_reads=reserved_reads+excluded.reserved_reads`)

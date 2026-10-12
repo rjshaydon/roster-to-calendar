@@ -1,16 +1,19 @@
+import {subscriptionBuildWire} from '../functions/_lib/subscription-wire.js';
 import {assembleSubscriptionCalendar} from '../functions/api/feed.js';
 import {normalizeSubscriptionEvents} from '../functions/_lib/d1-calendar.js';
 import {createHash} from 'node:crypto';
 import {pathToFileURL} from 'node:url';
 export async function processSubscriptionBuild({call,admit,dispatchId='',prime=false,maximumCalendars=20,deadlineMs=12*60000,now=()=>Date.now()}){
  const started=now();
+ const releaseDispatch=async()=>{if(dispatchId)await call({mode:'finish',leaseId:dispatchId});};
  if(prime){
   let cursor=null;
   do{
-   if(now()-started>=deadlineMs)return {status:'yielded',built:0};
-   if(!await admit())return {status:'deferred',built:0};
+   if(now()-started>=deadlineMs){await releaseDispatch();return {status:'yielded',built:0};}
+   if(!await admit()){await releaseDispatch();return {status:'deferred',built:0};}
    const result=await call({mode:'prime',cursor});
-   if(result.status!=='running')return {status:result.status,built:0};
+   if(result.status==='complete')break;
+   if(result.status!=='running'){if(result.status==='deferred')await releaseDispatch();return {status:result.status,built:0};}
    cursor=result.cursor;
   }while(cursor);
  }
@@ -53,7 +56,8 @@ if(import.meta.url===pathToFileURL(process.argv[1]||'').href){
  const base=String(process.env.ROSTER_AUTOMATION_BASE_URL||'').replace(/\/$/,''),token=process.env.ROSTER_AUTOMATION_TOKEN;
  if(!base||!token)throw Error('Subscription runner credentials unavailable.');
  async function post(path,input){
-  const r=await fetch(base+path,{method:'POST',headers:{authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify(input),signal:AbortSignal.timeout(120000)});
+  const wire=subscriptionBuildWire(input);
+  const r=await fetch(base+path,{method:'POST',headers:{authorization:'Bearer '+token,...wire.headers},body:wire.body,signal:AbortSignal.timeout(120000)});
   const value=await r.json().catch(()=>null);
   if(r.status===409&&value?.status)return value;
   if(!r.ok||!value)throw Error('Subscription callback failed; progress and unknown costs retained.');

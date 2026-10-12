@@ -29,12 +29,12 @@ sqlite.exec(await readFile("migrations/0041_maintenance_recovery.sql", "utf8"));
 sqlite.exec(await readFile("migrations/0042_unfinished_maintenance_index.sql", "utf8"));
 const receiptPlan=sqlite.prepare("EXPLAIN QUERY PLAN SELECT request_id FROM roster_maintenance_receipts WHERE utc_day=? AND reconciled_at='' AND (finished_at='' OR metadata_complete<>1) LIMIT 3").all(new Date().toISOString().slice(0,10));
 assert.ok(receiptPlan.some(row=>row.detail.includes('idx_maintenance_unfinished')),'unfinished gate uses its partial index rather than completed daily receipts');
-function database() {
+function database(store=sqlite) {
   const db = { prepare(sql) { return { args: [], bind(...args) { this.args = args; return this; },
-    async run() { const r = sqlite.prepare(sql).run(...this.args); return { meta: { changes: Number(r.changes), rows_read: Number(r.changes)+1, rows_written: Number(r.changes) } }; },
-    async first() { return sqlite.prepare(sql).get(...this.args) || null; },
-    async all() { const results = sqlite.prepare(sql).all(...this.args); return { results, meta: { rows_read: results.length+1, rows_written: 0 } }; }
-  }; }, async batch(statements) { sqlite.exec("BEGIN"); try { const results=[]; for (const s of statements) results.push(await s.run()); sqlite.exec("COMMIT"); return results; } catch(e) { sqlite.exec("ROLLBACK"); throw e; } } };
+    async run() { const r = store.prepare(sql).run(...this.args); return { meta: { changes: Number(r.changes), rows_read: Number(r.changes)+1, rows_written: Number(r.changes) } }; },
+    async first() { return store.prepare(sql).get(...this.args) || null; },
+    async all() { const results = store.prepare(sql).all(...this.args); return { results, meta: { rows_read: results.length+1, rows_written: 0 } }; }
+  }; }, async batch(statements) { store.exec("BEGIN"); try { const results=[]; for (const s of statements) results.push(await s.run()); store.exec("COMMIT"); return results; } catch(e) { store.exec("ROLLBACK"); throw e; } } };
   return db;
 }
 // Compare SQL accounting against the former receipt policy across the settled
@@ -263,3 +263,20 @@ try {
  assert.equal(sqlite.prepare('SELECT allocated_writes FROM roster_account_budget WHERE utc_day=?').get(day).allocated_writes,todayAllocated,'yesterday cannot refund today');
 }finally{globalThis.Date=RealDate;globalThis.fetch=originalFetch;}
 console.log('Cross-midnight unknown work remains reserved until settled analytics covers its execution bound.');
+
+// An uncertain third request arriving just before the reservation transaction
+// must close optional admission atomically, without creating a fourth receipt.
+const raceStore=new DatabaseSync(':memory:');
+raceStore.exec('CREATE TABLE roster_import_daily_budget(utc_day TEXT PRIMARY KEY,reserved_writes INTEGER,reserved_reads INTEGER)');
+for(const migration of ['0035_roster_account_budget.sql','0041_maintenance_recovery.sql','0042_unfinished_maintenance_index.sql'])raceStore.exec(await readFile('migrations/'+migration,'utf8'));
+const raceDay=new Date().toISOString().slice(0,10);
+raceStore.prepare('INSERT INTO roster_account_budget(utc_day,allocated_reads,allocated_writes,maximum_reads,maximum_writes,valid_until)VALUES(?,96,96,4000000,80000,?)').run(raceDay,new Date(Date.now()+600000).toISOString());
+const addUnknown=id=>raceStore.prepare('INSERT INTO roster_maintenance_receipts(request_id,utc_day,reserved_reads,reserved_writes)VALUES(?,?,48,48)').run(id,raceDay);
+addUnknown('first');addUnknown('second');
+const atomicRace=database(raceStore),nativeBatch=atomicRace.batch.bind(atomicRace);
+atomicRace.batch=async statements=>{addUnknown('third');raceStore.prepare('UPDATE roster_account_budget SET allocated_reads=144,allocated_writes=144 WHERE utc_day=?').run(raceDay);return nativeBatch(statements);};
+beginMaintenanceAccounting(atomicRace,'blocked-fourth',true,{purpose:'identity'});
+assert.equal(await reserveRosterMaintenanceBudget(atomicRace,1,1),false);
+assert.equal(raceStore.prepare('SELECT COUNT(*) n FROM roster_maintenance_receipts').get().n,3);
+assert.equal(raceStore.prepare('SELECT allocated_writes FROM roster_account_budget').get().allocated_writes,144);
+console.log('Atomic optional reservation rejects an interleaved third unknown request without adding credit or receipts.');

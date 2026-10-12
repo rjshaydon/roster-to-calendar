@@ -1,4 +1,4 @@
-import {subscriptionEvidence,readSubscriptionArtifact,queueSubscriptionArtifact} from '../_lib/subscription-artifacts.js';
+import {subscriptionEvidence,readSubscriptionArtifact,queueSubscriptionArtifact,SUBSCRIPTION_ARTIFACT_VERSION} from '../_lib/subscription-artifacts.js';
 import { applyEventOverrides, customEventsToEvents, defaultSettings, exportIcs } from "../_lib/roster.js";
 import { applyAccountHospitalLocations, dedupeEventsByIdentity, hasCalendarDb, loadAccountHospitalLocations, loadAccountMirrorBySubscriptionToken, queryAccountCustomEvents, queryDoctorEvents, loadSubscriptionCalendarInputs } from "../_lib/d1-calendar.js";
 import { normalizeEmail } from "../_lib/email.js";
@@ -17,12 +17,17 @@ export async function onRequestGet(context) {
       return new Response("Subscription token is required.", { status: 400 });
     }
 
-    if(context.env.SUBSCRIPTION_ARTIFACT_MODE==='ready'&&context.env.IDENTITY_REVIEW_ENABLED==='true'&&context.env.ROSTER_FILES){
-      try {
+    if(['build','ready'].includes(context.env.SUBSCRIPTION_ARTIFACT_MODE)&&context.env.IDENTITY_REVIEW_ENABLED==='true'&&context.env.ROSTER_FILES){
+      const readiness=context.env.SUBSCRIPTION_ARTIFACT_MODE==='build'?await context.env.ROSTER_FILES.get('subscriptions/readiness.json'):null;
+      const certificate=readiness?await readiness.json():null;
+      if(context.env.SUBSCRIPTION_ARTIFACT_MODE==='ready'||certificate?.accepted&&certificate.version===SUBSCRIPTION_ARTIFACT_VERSION)try {
       const evidence=await subscriptionEvidence(context.env.ROSTER_DB,token,view,context.env.IDENTITY_REVIEW_ENABLED==='true');
       if(!evidence)return new Response('Subscription calendar was not found.',{status:404});
       const artifact=await readSubscriptionArtifact(context.env.ROSTER_FILES,evidence);
-      if(artifact)return calendarResponse(artifact.body,artifact.displayName);
+      if(artifact){
+        if(String(context.request.headers.get('if-none-match')||'').split(',').some(tag=>tag.trim()==='*'||tag.trim().replace(/^W\//,'')===artifact.etag))return new Response(null,{status:304,headers:{ETag:artifact.etag,'Cache-Control':'private, max-age=30, must-revalidate'}});
+        return calendarResponse(artifact.body,artifact.displayName,artifact.etag);
+      }
       // Preserve complete dynamic calendars during initial build or a deferred
       // rebuild. Never serve a previous identity or an empty stand-in calendar.
       const queued=queueSubscriptionArtifact(context.env.ROSTER_FILES,token,view,evidence);
@@ -107,13 +112,17 @@ export function assembleSubscriptionCalendar(record,view,claims,inputs,identitie
   };
 }
 
-function calendarResponse(ics, displayName) {
+function calendarResponse(ics, displayName,etag='') {
+  const filename=String(displayName||'roster').replace(/[\/\\\r\n"]/g,'-')+' subscription.ics';
+  const ascii=filename.replace(/[^\x20-\x7e]/g,'_');
+  const encoded=encodeURIComponent(filename).replace(/[!'()*]/g,char=>'%'+char.charCodeAt(0).toString(16).toUpperCase());
   return new Response(ics, {
     status: 200,
     headers: {
       "Content-Type": "text/calendar; charset=utf-8",
+      ...(etag?{ETag:etag}:{}),
       "Cache-Control": "private, max-age=30, must-revalidate",
-      "Content-Disposition": `inline; filename="${String(displayName || "roster").replace(/[\/\r\n"]/g, "-")} subscription.ics"`,
+      "Content-Disposition": `inline; filename="${ascii}"; filename*=UTF-8''${encoded}`,
     },
   });
 }

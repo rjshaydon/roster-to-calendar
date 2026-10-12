@@ -1,3 +1,4 @@
+import {subscriptionBuildWire,readSubscriptionBuildInput,readBoundedSubscriptionBytes} from '../functions/_lib/subscription-wire.js';
 import {onRequest as middleware} from '../functions/_middleware.js';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
@@ -15,7 +16,7 @@ const db={prepare(query){let args=[];const st={bind(...a){args=a;return st},asyn
 db.prepare=((original)=>query=>{const st=original(query);st.query=query;return st;})(db.prepare);
 class Bucket{
  map=new Map();fail='';
- async put(key,value,options={}){if(this.fail===key)throw Error('Injected publication failure');const old=this.map.get(key),condition=options.onlyIf;if(condition?.etagDoesNotMatch==='*'&&old||condition?.etagMatches&&old?.etag!==condition.etagMatches)return null;const entry={key,etag:crypto.randomUUID(),value:typeof value==='string'?value:new TextDecoder().decode(value),customMetadata:options.customMetadata||{}};this.map.set(key,entry);return entry;}
+ async put(key,value,options={}){if(this.fail===key)throw Error('Injected publication failure');const old=this.map.get(key),condition=options.onlyIf;if(condition?.etagDoesNotMatch==='*'&&old||condition?.etagMatches&&old?.etag!==condition.etagMatches)return null;const bytes=typeof value==='string'?new TextEncoder().encode(value):value instanceof ReadableStream?new Uint8Array(await new Response(value).arrayBuffer()):new Uint8Array(value);if(options.sha256){const expected=[...new Uint8Array(options.sha256)].map(v=>v.toString(16).padStart(2,'0')).join('');if(await subscriptionDigest(bytes)!==expected)throw Error('SHA-256 checksum mismatch');}const entry={key,etag:crypto.randomUUID(),value:new TextDecoder().decode(bytes),customMetadata:options.customMetadata||{}};this.map.set(key,entry);return entry;}
  async get(key){const v=this.map.get(key);return v?{...v,body:v.value,json:async()=>JSON.parse(v.value),text:async()=>v.value}:null;}
  async head(key){return this.get(key);}
  async delete(key){this.map.delete(key);}
@@ -40,7 +41,8 @@ sql.prepare("INSERT INTO roster_account_budget(utc_day,maximum_reads,maximum_wri
 let actions=[];
 async function call(input){
  actions.push(input.mode);
- const context={env:{...env},data:{},request:new Request('https://test/api/automation/subscription-build',{method:'POST',headers:{authorization:'Bearer secret','Content-Type':'application/json'},body:JSON.stringify(input)})};
+ const wire=subscriptionBuildWire(input);
+ const context={env:{...env},data:{},request:new Request('https://test/api/automation/subscription-build',{method:'POST',headers:{authorization:'Bearer secret',...wire.headers},body:wire.body})};
  context.next=()=>build(context);
  const savedLog=console.log;console.log=()=>{};
  let response;try{response=await middleware(context);}finally{console.log=savedLog;}
@@ -57,6 +59,10 @@ let result=await processSubscriptionBuild({call,admit:async()=>true});assert.equ
 response=await feed({env,request:new Request('https://test/api/feed?token=token')});const cached=await response.text();
 const withoutStamp=text=>text.replace(/^DTSTAMP:.*\r\n/gm,'');assert.equal(withoutStamp(cached),withoutStamp(baseline),'complete historical content, UID and ordering parity');
 assert.equal((await r2.list({prefix:'subscriptions/requests/'})).objects.length,0);
+const currentTag=response.headers.get('etag');assert.ok(currentTag);
+const conditional=await feed({env,request:new Request('https://test/api/feed?token=token',{headers:{'If-None-Match':currentTag}})});
+assert.equal(conditional.status,304);assert.equal(await conditional.text(),'');
+
 // Range exports preserve the same full renderer, including personal overrides.
 response=await feed({env,request:new Request('https://test/api/feed?token=token&view=range')});
 const rangeBaseline=await response.text();
@@ -128,7 +134,7 @@ const pinned=await call({...base,mode:'snapshot'});
 const snapshot=await call({...base,mode:'prepare',revision:pinned.revision});
 sql.exec("UPDATE subscription_tokens SET email='b@test' WHERE token='token'");
 await assert.rejects(()=>call({...base,mode:'events',revision:snapshot.revision}),e=>e.status===409&&e.result.status==='stale');
-response=await feed({env,request:new Request('https://test/api/feed?token=token')});assert.ok(!(await response.text()).includes('Shift 0'),'reassigned token cannot serve prior owner artifact');
+response=await feed({env,request:new Request('https://test/api/feed?token=token',{headers:{'If-None-Match':currentTag}})});assert.notEqual(response.status,304);assert.ok(!(await response.text()).includes('Shift 0'),'reassigned token cannot serve prior owner artifact');
 await call({mode:'finish',leaseId:begin.leaseId});
 sql.exec("DELETE FROM subscription_tokens WHERE token='token'; UPDATE account_profiles SET subscription_token='' WHERE email='a@test'");
 assert.equal((await feed({env,request:new Request('https://test/api/feed?token=token')})).status,404,'revocation blocks existing artifacts');
@@ -152,3 +158,80 @@ assert.equal((await processSubscriptionBuild({call,admit:async()=>true})).status
 const noStartCached=await feed({env,request:new Request('https://test/api/feed?token=new-token&view=range')});
 assert.equal(withoutStamp(await noStartCached.text()),withoutStamp(noStartBaseline),'missing range start never truncates history');
 console.log('Provisional preparation fences and missing-start range parity passed.');
+// Creator subscriptions follow the selected doctor rather than the Creator's
+// own linked account. Changing selection invalidates the previous artifact.
+sql.exec("UPDATE account_profiles SET role='creator' WHERE email='a@test'; UPDATE account_states SET session_json=json_set(session_json,'$.doctorKey','DOC A') WHERE email='a@test'");
+const creatorResponse=await feed({env:{...env,SUBSCRIPTION_ARTIFACT_MODE:'off'},request:new Request('https://test/api/feed?token=new-token')});
+const creatorBaseline=await creatorResponse.text();
+await feed({env,request:new Request('https://test/api/feed?token=new-token')});
+assert.equal((await processSubscriptionBuild({call,admit:async()=>true})).status,'complete');
+const creatorCached=await feed({env,request:new Request('https://test/api/feed?token=new-token')});
+assert.equal(withoutStamp(await creatorCached.text()),withoutStamp(creatorBaseline));
+sql.exec("UPDATE account_states SET session_json=json_set(session_json,'$.doctorKey','UNRELATED') WHERE email='a@test'");
+const selectedOther=await feed({env,request:new Request('https://test/api/feed?token=new-token')});
+assert.ok(!(await selectedOther.text()).includes('Shift 0'),'changing Creator selection cannot serve the previous doctor');
+console.log('Creator selection, approved cross-site aliases and artifact isolation passed.');
+const unicodeWire=subscriptionBuildWire({mode:'publish',leaseId:'fixture',ics:'BEGIN:VCALENDAR\r\nSUMMARY:Zoë 医生\r\nEND:VCALENDAR\r\n',displayName:'Zoë 医生',digest:'fixture'});
+const wireRequest=new Request('https://test',{method:'POST',headers:unicodeWire.headers,body:unicodeWire.body});
+const wireInput=await readSubscriptionBuildInput(wireRequest);assert.equal(wireInput.rawCalendar,true);assert.equal(wireInput.displayName,'Zoë 医生');
+assert.equal(new TextDecoder().decode(await readBoundedSubscriptionBytes(wireRequest)),'BEGIN:VCALENDAR\r\nSUMMARY:Zoë 医生\r\nEND:VCALENDAR\r\n');
+assert.equal(await readSubscriptionBuildInput(new Request('https://test',{method:'POST',headers:{'Content-Type':'text/calendar','x-subscription-metadata':'bad!'},body:'invalid'})),null);
+assert.throws(()=>subscriptionBuildWire({mode:'publish',ics:'x'.repeat(2*1024*1024+1)}),/safe byte bound/);
+await assert.rejects(()=>readBoundedSubscriptionBytes(new Request('https://test',{method:'POST',body:'12345'}),4),/safe byte bound/);
+assert.equal((await readSubscriptionBuildInput(new Request('https://test',{method:'POST',body:JSON.stringify({mode:'publish',rawCalendar:true})}))).rawCalendar,false,'JSON cannot forge the raw-body transport');
+console.log('Raw calendar wire passed UTF-8 metadata/content parity, byte bounds and invalid-header handling.');
+// A corrupt raw publication cannot create a current calendar artifact.
+const otherEvidence=await subscriptionEvidence(db,'new-token');
+await queueSubscriptionArtifact(r2,'new-token','full',otherEvidence);
+const badBegin=await call({mode:'start'}),badNext=await call({mode:'next',leaseId:badBegin.leaseId}),badBase={leaseId:badBegin.leaseId,queueKey:badNext.queueKey};
+const badPin=await call({...badBase,mode:'snapshot'});
+const badPrepared=await call({...badBase,mode:'prepare',revision:badPin.revision});
+await assert.rejects(()=>call({...badBase,mode:'publish',revision:badPrepared.revision,ics:'BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n',digest:'0'.repeat(64)}),e=>e.status===400&&/digest mismatch/.test(e.result.error));
+assert.equal(await r2.head(otherEvidence.key),null);
+await call({mode:'finish',leaseId:badBegin.leaseId});
+console.log('Corrupt raw publication preserves the existing artifact and pending request.');
+
+sql.exec("UPDATE roster_people SET preferred_display_name='Toby O’Brien 医生' WHERE person_id='person:a'; UPDATE account_states SET session_json=json_set(session_json,'$.doctorKey','DOC A') WHERE email='a@test'");
+const unicodeFeed=await feed({env:{...env,SUBSCRIPTION_ARTIFACT_MODE:'off'},request:new Request('https://test/api/feed?token=new-token')});
+assert.equal(unicodeFeed.status,200);
+assert.ok(unicodeFeed.headers.get('content-disposition').includes('filename*=UTF-8'));
+assert.ok((await unicodeFeed.text()).includes('Toby O’Brien 医生'));
+console.log('Conditional calendar responses retain ownership fences; Unicode calendar names remain valid in bodies and HTTP filenames.');
+// The watchdog initiates priming even before the first subscription GET, then
+// known admission deferral releases its lease while retaining the checkpoint.
+await r2.delete('subscriptions/prime-progress.json');
+for(const key of [...r2.map.keys()])if(key.startsWith('subscriptions/requests/')||key.startsWith('subscriptions/exports/'))await r2.delete(key);
+await r2.put('subscriptions/build-lease.json',JSON.stringify({id:'idle',until:0}));
+const savedFetch=globalThis.fetch;let dispatched;
+env.GITHUB_ACTIONS_TOKEN='fixture';
+try{
+ globalThis.fetch=async(_url,options)=>{dispatched=JSON.parse(options.body);return new Response(null,{status:204});};
+ assert.equal((await call({mode:'check'})).status,'dispatched');
+ assert.equal(dispatched.inputs.prime,'true');
+ const defer=await processSubscriptionBuild({call,admit:async()=>false,prime:true,dispatchId:dispatched.inputs.dispatch_id});
+ assert.equal(defer.status,'deferred');
+ assert.equal((await (await r2.get('subscriptions/build-lease.json')).json()).until,0);
+ // A completed prime is an R2-only no-op and never reads/requeues all accounts.
+ await r2.put('subscriptions/prime-progress.json',JSON.stringify({version:'subscription-v1',complete:true,cursor:''}));
+ const receiptsBefore=sql.prepare('SELECT COUNT(*) n FROM roster_maintenance_receipts').get().n;
+ assert.equal((await call({mode:'prime'})).status,'complete');
+ assert.equal(sql.prepare('SELECT COUNT(*) n FROM roster_maintenance_receipts').get().n,receiptsBefore);
+}finally{globalThis.fetch=savedFetch;delete env.GITHUB_ACTIONS_TOKEN;}
+console.log('Automatic resumable priming passes startup dispatch, known deferral lease release and completed zero-D1 no-op.');
+
+// Readiness is promoted only after complete priming and an empty work queue.
+await r2.delete('subscriptions/readiness.json');
+await r2.put('subscriptions/build-lease.json',JSON.stringify({id:'readiness-test',until:Date.now()+60000}));
+await r2.put('subscriptions/prime-progress.json',JSON.stringify({version:'subscription-v1',complete:false,cursor:''}));
+await call({mode:'finish',leaseId:'readiness-test'});
+assert.equal(await r2.get('subscriptions/readiness.json'),null);
+await r2.put('subscriptions/build-lease.json',JSON.stringify({id:'readiness-test',until:Date.now()+60000}));
+await r2.put('subscriptions/prime-progress.json',JSON.stringify({version:'subscription-v1',complete:true,cursor:''}));
+await r2.put('subscriptions/requests/pending.json','{}');
+await call({mode:'finish',leaseId:'readiness-test'});
+assert.equal(await r2.get('subscriptions/readiness.json'),null);
+await r2.delete('subscriptions/requests/pending.json');
+await r2.put('subscriptions/build-lease.json',JSON.stringify({id:'readiness-test',until:Date.now()+60000}));
+await call({mode:'finish',leaseId:'readiness-test'});
+assert.equal((await (await r2.get('subscriptions/readiness.json')).json()).accepted,true);
+console.log('Readiness requires complete priming and an empty queue; partial/deferred work cannot activate cached delivery.');

@@ -1,3 +1,4 @@
+import {readSubscriptionBuildInput} from './_lib/subscription-wire.js';
 import { beginMaintenanceAccounting, finishMaintenanceAccounting } from "./_lib/roster-maintenance-budget.js";
 const TRUE_VALUES = new Set(["1", "true", "yes", "on"]);
 const RAW_D1_BINDING = Symbol("raw-d1-binding");
@@ -66,7 +67,7 @@ export async function onRequest(context) {
     context.data.d1OperationPhase = String(context.data.identityAuditInput?.mode || '').slice(0,48);
   }
   if(url.pathname==='/api/automation/subscription-build'&&context.request.method==='POST'){
-    context.data ||= {};context.data.subscriptionBuildInput=await context.request.json().catch(()=>null);
+    context.data ||= {};context.data.subscriptionBuildInput=await readSubscriptionBuildInput(context.request);
     context.data.d1OperationPhase=String(context.data.subscriptionBuildInput?.mode||'').slice(0,48);
   }
   const limit = await requestD1StatementLimit(context.request, url.pathname, action, identityMaintenanceInput, derivedInput);

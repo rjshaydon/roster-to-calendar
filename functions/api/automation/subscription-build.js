@@ -1,42 +1,56 @@
+import {readSubscriptionBuildInput,SUBSCRIPTION_ARTIFACT_BYTES} from '../../_lib/subscription-wire.js';
 import {subscriptionEvidence,prepareSubscriptionExport,subscriptionEventPage,subscriptionDigest,queueSubscriptionArtifact,SUBSCRIPTION_ARTIFACT_VERSION} from '../../_lib/subscription-artifacts.js';
 import {identityMaintenancePreflight} from '../../_lib/identity-maintenance-preflight.js';
 import {reserveRosterMaintenanceBudget} from '../../_lib/roster-maintenance-budget.js';
 import {guardedFetch,localFeatureDisabledResponse} from '../../_lib/outbound-network.js';
-const LEASE='subscriptions/build-lease.json',PREFIX='subscriptions/requests/',TTL=20*60000;
+const READY='subscriptions/readiness.json',PRIME='subscriptions/prime-progress.json',LEASE='subscriptions/build-lease.json',PREFIX='subscriptions/requests/',TTL=20*60000;
 export async function onRequestPost(context){
- const input=context.data?.subscriptionBuildInput??await context.request.json().catch(()=>({}));
+ const input=context.data&&Object.hasOwn(context.data,'subscriptionBuildInput')?context.data.subscriptionBuildInput:await readSubscriptionBuildInput(context.request);
  const auth=context.request.headers.get('authorization'),env=context.env,r2=env.ROSTER_FILES,db=env.ROSTER_DB;
  const runner=Boolean(env.ROSTER_AUTOMATION_TOKEN)&&auth==='Bearer '+env.ROSTER_AUTOMATION_TOKEN;
- const watchdog=input.mode==='check'&&Boolean(env.ROSTER_WATCHDOG_TOKEN)&&auth==='Bearer '+env.ROSTER_WATCHDOG_TOKEN;
+ const watchdog=input?.mode==='check'&&Boolean(env.ROSTER_WATCHDOG_TOKEN)&&auth==='Bearer '+env.ROSTER_WATCHDOG_TOKEN;
  if(!runner&&!watchdog)return Response.json({error:'Unauthorized.'},{status:401});
+ if(!input)return Response.json({error:'Invalid subscription request.'},{status:400});
  if(!['build','ready'].includes(env.SUBSCRIPTION_ARTIFACT_MODE)||env.IDENTITY_REVIEW_ENABLED!=='true')return Response.json({status:'disabled'});
  const local=localFeatureDisabledResponse(env,'Subscription calendar assembly');if(local)return local;
  if(!['prime','check','start','next','snapshot','prepare','events','publish','finish'].includes(input.mode))return Response.json({error:'Invalid operation.'},{status:400});
  try{
   if(input.mode==='prime'){
+   const oldPrime=await r2.get(PRIME),progress=oldPrime?await oldPrime.json():{};
+   if(progress.complete&&progress.version===SUBSCRIPTION_ARTIFACT_VERSION)return Response.json({status:'complete',accounts:0,cursor:null});
    const deferred=await subscriptionAdmission(env);if(deferred)return Response.json(deferred);
-   const cursor=String(input.cursor||'');if(cursor.length>512)return Response.json({error:'Invalid prime cursor.'},{status:400});
+   const cursor=String(progress.version===SUBSCRIPTION_ARTIFACT_VERSION?progress.cursor||'':'');if(cursor.length>512)return Response.json({error:'Invalid prime cursor.'},{status:400});
    const result=await db.prepare(`SELECT token FROM subscription_tokens WHERE token>? UNION SELECT subscription_token AS token FROM account_profiles WHERE subscription_token<>'' AND subscription_token>? ORDER BY token LIMIT 3`).bind(cursor,cursor).all();
    const rows=result.results||[],page=rows.slice(0,2);
    for(const {token} of page)for(const view of ['full','range'])await queueSubscriptionArtifact(r2,token,view,{revision:'0'.repeat(64)});
-   return Response.json({status:'running',accounts:page.length,cursor:rows.length>2?page.at(-1).token:null});
+   const nextCursor=rows.length>2?page.at(-1).token:null;
+   const saved=await r2.put(PRIME,JSON.stringify({version:SUBSCRIPTION_ARTIFACT_VERSION,cursor:nextCursor||'',complete:nextCursor===null}),{onlyIf:oldPrime?{etagMatches:oldPrime.etag}:{etagDoesNotMatch:'*'}});
+   if(!saved)return Response.json({status:'busy'});
+   return Response.json({status:'running',accounts:page.length,cursor:nextCursor});
   }
   const previous=await r2.get(LEASE),lease=previous?await previous.json():{},now=Date.now();
   if(['check','start'].includes(input.mode)){
    if(lease.until>now&&!(input.mode==='start'&&input.dispatchId===lease.id))return Response.json({status:'busy'});
-   if(!(await r2.list({prefix:PREFIX,limit:1})).objects.length)return Response.json({status:'unchanged'});
+   const primeObject=await r2.get(PRIME),primeState=primeObject?await primeObject.json():{},primeNeeded=!(primeState.complete&&primeState.version===SUBSCRIPTION_ARTIFACT_VERSION);
+   const queuedWork=(await r2.list({prefix:PREFIX,limit:1})).objects.length>0;
+   if(!queuedWork&&!(input.mode==='check'&&primeNeeded)){
+    if(input.mode==='start'&&lease.id===input.dispatchId&&previous)await r2.put(LEASE,JSON.stringify({id:lease.id,until:0}),{onlyIf:{etagMatches:previous.etag}});
+    return Response.json({status:'unchanged'});
+   }
    if(input.mode==='check'&&!env.GITHUB_ACTIONS_TOKEN)return Response.json({status:'dispatch-unconfigured'});
    const next={id:input.mode==='start'&&lease.until>now?lease.id:crypto.randomUUID(),until:now+TTL};
    if(!await r2.put(LEASE,JSON.stringify(next),{onlyIf:previous?{etagMatches:previous.etag}:{etagDoesNotMatch:'*'}}))return Response.json({status:'busy'});
    if(input.mode==='start')return Response.json({status:'running',leaseId:next.id});
    const response=await guardedFetch(env,'https://api.github.com/repos/rjshaydon/roster-to-calendar/actions/workflows/subscription-build.yml/dispatches',{
     method:'POST',headers:{Accept:'application/vnd.github+json',Authorization:'Bearer '+env.GITHUB_ACTIONS_TOKEN,'Content-Type':'application/json','X-GitHub-Api-Version':'2022-11-28','User-Agent':'roster-to-calendar'},
-    body:JSON.stringify({ref:env.ROSTER_GITHUB_WORKFLOW_REF||'main',inputs:{dispatch_id:next.id}}),signal:AbortSignal.timeout(15000)
+    body:JSON.stringify({ref:env.ROSTER_GITHUB_WORKFLOW_REF||'main',inputs:{dispatch_id:next.id,prime:primeNeeded?'true':'false'}}),signal:AbortSignal.timeout(15000)
    },{label:'Subscription workflow dispatch'});
    return Response.json({status:response.ok?'dispatched':'dispatch-uncertain'});
   }
   if(!input.leaseId||lease.id!==input.leaseId||lease.until<=now)return Response.json({status:'lease-expired'},{status:409});
   if(input.mode==='finish'){
+   const prime=await r2.get(PRIME),state=prime?await prime.json():{};
+   if(state.complete&&state.version===SUBSCRIPTION_ARTIFACT_VERSION&&!(await r2.list({prefix:PREFIX,limit:1})).objects.length)await r2.put(READY,JSON.stringify({version:SUBSCRIPTION_ARTIFACT_VERSION,accepted:true}));
    await r2.put(LEASE,JSON.stringify({id:lease.id,until:0}),{onlyIf:{etagMatches:previous.etag}});
    return Response.json({status:'complete'});
   }
@@ -78,12 +92,22 @@ export async function onRequestPost(context){
   if(snapshot.phase!=='ready'||evidence.revision!==snapshot.revision)return Response.json({status:'stale'},{status:409});
   if(input.mode==='events')return Response.json({status:'running',...await subscriptionEventPage(db,snapshot.aliases,snapshot.start,snapshot.end,input.cursor)});
   if(input.mode==='publish'){
-   const ics=String(input.ics||''),bytes=new TextEncoder().encode(ics);
-   if(bytes.length>2*1024*1024||!ics.startsWith('BEGIN:VCALENDAR\r\n')||!ics.endsWith('END:VCALENDAR\r\n')||ics.includes('\0'))return Response.json({error:'Invalid calendar artifact.'},{status:400});
-   if(await subscriptionDigest(ics)!==input.digest)return Response.json({error:'Calendar digest mismatch.'},{status:400});
-   // The content-addressed key is the promotion fence. A later ownership/input
-   // change yields a different key on GET, even if this upload finishes late.
-   await r2.put(evidence.key,bytes,{onlyIf:{etagDoesNotMatch:'*'},httpMetadata:{contentType:'text/calendar; charset=utf-8'},customMetadata:{revision:evidence.revision,version:SUBSCRIPTION_ARTIFACT_VERSION,displayName:String(input.displayName||'roster').replace(/[\r\n]/g,'').slice(0,200)}});
+   const options={onlyIf:{etagDoesNotMatch:'*'},httpMetadata:{contentType:'text/calendar; charset=utf-8'},customMetadata:{revision:evidence.revision,version:SUBSCRIPTION_ARTIFACT_VERSION,displayName:String(input.displayName||'roster').replace(/[\r\n]/g,'').slice(0,200)}};
+   if(input.rawCalendar){
+    // HTTP supplies a known-length stream. R2 verifies SHA-256 at storage,
+    // avoiding a large allocation/hash in the Free Worker. The authenticated
+    // Node renderer validates ICS syntax before sending these exact bytes.
+    const length=context.request.headers.get('content-length');
+    if(!length||!/^\d+$/.test(length)||Number(length)!==input.bytes||input.bytes>SUBSCRIPTION_ARTIFACT_BYTES||!context.request.body||typeof input.digest!=='string'||!/^[a-f0-9]{64}$/.test(input.digest))return Response.json({error:'Invalid calendar artifact.'},{status:400});
+    const checksum=Uint8Array.from(input.digest.match(/../g),pair=>parseInt(pair,16)).buffer;
+    try{await r2.put(evidence.key,context.request.body,{...options,sha256:checksum});}
+    catch(error){if(/sha.?256|checksum|digest/i.test(error.message)&&/match|invalid/i.test(error.message))return Response.json({error:'Calendar digest mismatch.'},{status:400});throw error;}
+   }else{
+    const bytes=new TextEncoder().encode(String(input.ics||'')),decoder=new TextDecoder();
+    if(bytes.length>SUBSCRIPTION_ARTIFACT_BYTES||decoder.decode(bytes.subarray(0,17))!=='BEGIN:VCALENDAR\r\n'||decoder.decode(bytes.subarray(-15))!=='END:VCALENDAR\r\n'||bytes.includes(0))return Response.json({error:'Invalid calendar artifact.'},{status:400});
+    if(await subscriptionDigest(bytes)!==input.digest)return Response.json({error:'Calendar digest mismatch.'},{status:400});
+    await r2.put(evidence.key,bytes,options);
+   }
    await r2.delete(queueKey);await r2.delete(exportKey);
    return Response.json({status:'complete'});
   }

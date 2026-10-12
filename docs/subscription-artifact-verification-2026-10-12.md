@@ -113,3 +113,34 @@ reservations, caps and protected source room are unchanged. No grant or receipt
 is refunded. Tests cover wrong day/database, cutoff ordering, reconciliation and
 unchanged totals/reservations. The feature uses the existing preview-summary gate,
 adds no new Worker variable, and is inert after 12 October UTC.
+
+## Final bounded streaming and staged activation
+
+The split complete 128-event callback canary measured snapshot 7 ms, preparation
+5 ms, event pages 5 ms and publication 5 ms, including reservation/settlement.
+A 5,000-event, 1,188,747-byte publication originally exceeded the CPU allowance.
+Publication now streams the known-length HTTP body directly to R2, which verifies
+SHA-256 before storage. The final native large-file sample measured snapshot
+10 ms, preparation 8 ms and publication 7 ms, with complete metadata and no
+unknown receipts. These bounded samples do not guarantee every callback's CPU.
+The isolated allowance is closed without refunding receipts or allocations.
+
+Atomic optional reservation checks the unfinished circuit inside the reservation
+UPDATE, preventing an interleaved third unknown request. Conditional feed responses
+check current ownership/evidence before 304; Unicode display names use valid HTTP
+filename encoding. Integration tests cover corruption, failure/replay and bounds.
+
+Build mode now automatically resumes token priming from a private R2 checkpoint.
+Both views are queued once. Cached delivery becomes eligible only after the current
+version's prime is complete and the request queue is empty. Stale/missing calendars
+retain the complete dynamic fallback and queue a revision-specific rebuild. Normal
+source priority, 20K protected write headroom and all account caps remain enforced.
+
+Production evidence on 12 October UTC confirms completed material imports:
+MMC 163 doctors / 4,217 events at 12:36; VHH 68 / 1,827 at 12:33; DDH 109 / 3,374
+at 12:40. These differ from earlier retained counts. MCH changed delivery remains
+unverified in this acceptance pass. No external production audit job is complete.
+At 14:00 UTC the normal grant had 16,505 writes of headroom, below optional
+protection. Full Batch 2 acceptance therefore remains pending production audit,
+calendar warm-up and live continuity/CPU verification. No clinical change is
+manufactured to force a test and no budget gate is overridden.
