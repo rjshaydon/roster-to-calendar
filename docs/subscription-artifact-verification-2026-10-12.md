@@ -144,3 +144,11 @@ At 14:00 UTC the normal grant had 16,505 writes of headroom, below optional
 protection. Full Batch 2 acceptance therefore remains pending production audit,
 calendar warm-up and live continuity/CPU verification. No clinical change is
 manufactured to force a test and no budget gate is overridden.
+
+Rollout `82e31955` was deployed successfully as Pages deployment
+`d4d32197-16d7-495f-a922-6062cb0db316` with mode `build`. Watchdog version
+`9c930736-0844-4221-b9a4-962192de72d5` retains its five-minute schedule.
+The isolated Worker and private test objects are removed; test allowance closed.
+MCH's latest completed bounded import has 80 doctors / 2,364 events at
+23:32 UTC on 11 October; a subsequent natural changed-file delivery has not yet
+been observed in this pass. Scheduled dispatch tests also cover build mode.
