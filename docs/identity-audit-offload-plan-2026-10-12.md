@@ -188,3 +188,25 @@ or daily-limit change is introduced. Native verification and the completed
 production audit remain required. `test:account-maintenance-summaries` covers these
 bounds, cross-database metering and restoration of forecast headroom solely from
 verified one-off costs.
+
+## Cold-route reliability follow-up
+
+The forecast correction is deployed as `53a1b0a4` / Pages `8b756374`. A fresh
+grant increased read headroom from 1.87M to 2.28M, but optional write headroom
+remained zero. Actual usage/caps and held reservations were unchanged. No
+production audit completion was claimed. Intermittent subscription resource-limit
+503s and a 22 ms cold legacy registration sample remain acceptance failures.
+
+The follow-up removes the feed's import of the full state handler for email
+normalisation, preserving the same normaliser/re-export. Audit, term-date and
+shift-launch formatters are initialised only when used and then reused. Cold
+imports of feed/state/registration/account-budget now construct zero formatters.
+The two sampled sessions are only 1,377 and 1,770 bytes: no large-session workaround
+or data removal is justified by that evidence.
+
+The GitHub registration runner now obtains account admission separately, as the
+external audit already does, with a five-minute cache and fail-closed errors.
+Server reservation/source-priority checks remain. Current tests pass cold import,
+Melbourne/DST boundaries, registration admission expiry/error handling, identity
+merge/reversal/subscription continuity, account summaries and attribution.
+Native fresh/repeated request CPU and feed acceptance are still required.

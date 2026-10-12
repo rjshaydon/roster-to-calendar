@@ -11,8 +11,9 @@ export function rosterTermVisible(term, today) {
   return Boolean(available && available <= today);
 }
 
-const dateFormatter = new Intl.DateTimeFormat('en-AU', { timeZone: 'Australia/Melbourne', year: 'numeric', month: '2-digit', day: '2-digit' });
+let dateFormatter;
 export function melbourneDateKey(now = new Date()) {
+  dateFormatter ||= new Intl.DateTimeFormat('en-AU', { timeZone: 'Australia/Melbourne', year: 'numeric', month: '2-digit', day: '2-digit' });
   const parts = dateFormatter.formatToParts(now);
   const value = type => parts.find(part => part.type === type)?.value;
   return `${value('year')}-${value('month')}-${value('day')}`;

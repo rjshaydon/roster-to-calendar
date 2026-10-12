@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {continueIdentityMaintenance} from './process-identity-maintenance.mjs';
+import {continueIdentityMaintenance,createIdentityAdmission} from './process-identity-maintenance.mjs';
 let calls=0;
 const options={mode:'register',report:()=>{}};
 const done=await continueIdentityMaintenance({...options,request:async()=>({status:++calls===3?'complete':'running'})});
@@ -29,3 +29,11 @@ await assert.rejects(()=>continueIdentityMaintenance({...options,request:async()
 assert.equal(calls,1,'network failures never trigger blind retries');
 await assert.rejects(()=>continueIdentityMaintenance({...options,maxSteps:601}),/Invalid checkpoint/);
 console.log('Identity continuation passed: serial checkpoints, completion, admission/priority stops, time/step caps and no uncertain retries.');
+
+let clock=0,admissions=0,deferred=false;
+const admit=createIdentityAdmission({now:()=>clock,request:async()=>{admissions++;return {ok:true,deferred};}});
+assert(await admit());assert(await admit());assert.equal(admissions,1,'one separate initial admission, including at clock zero');
+clock=300000;deferred=true;assert.equal(await admit(),false);assert.equal(admissions,2,'expired admission cannot bypass a quota deferral');
+deferred=false;assert(await admit());assert.equal(admissions,3);
+const uncertainAdmission=createIdentityAdmission({request:async()=>{throw Error('Uncertain admission');}});await assert.rejects(uncertainAdmission(),/Uncertain admission/);
+console.log('Separate identity admission preserves cache expiry, fail-closed deferral and uncertain-error handling.');

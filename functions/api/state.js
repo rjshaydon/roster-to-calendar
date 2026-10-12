@@ -1,3 +1,5 @@
+import {normalizeEmail} from "../_lib/email.js";
+export {normalizeEmail} from "../_lib/email.js";
 import {identityTermHistory} from '../_lib/identity-term-history.js';
 import { onShiftLaunchWindow } from "../../public/static/shift-launch-policy.js";
 import { initializePublishedIdentityBatch, auditIdentityBatch, queryIdentityCandidates, rejectIdentityCandidate, restoreIdentityCandidate } from '../_lib/identity-discovery.js';
@@ -2861,9 +2863,6 @@ async function loadDoctorProfileState(store, db, profileId) {
   return sanitizeDoctorProfile(await loadDoctorProfileMirror(db, profileId).catch(() => null));
 }
 
-export function normalizeEmail(value) {
-  return String(value || "").trim().toLowerCase();
-}
 
 function roleForEmail(email) {
   return email === CREATOR_EMAIL ? "creator" : "user";

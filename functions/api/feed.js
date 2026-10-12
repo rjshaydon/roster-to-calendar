@@ -1,6 +1,6 @@
 import { applyEventOverrides, customEventsToEvents, defaultSettings, exportIcs } from "../_lib/roster.js";
 import { applyAccountHospitalLocations, dedupeEventsByIdentity, hasCalendarDb, loadAccountHospitalLocations, loadAccountMirrorBySubscriptionToken, queryAccountCustomEvents, queryDoctorEvents } from "../_lib/d1-calendar.js";
-import { normalizeEmail } from "./state.js";
+import { normalizeEmail } from "../_lib/email.js";
 import { accountIdentityAliases, expandApprovedIdentityAliases } from '../_lib/doctor-identity.js';
 
 export async function onRequestGet(context) {

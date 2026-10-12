@@ -12,6 +12,7 @@
     "local:setup": "node scripts/local-dev.mjs setup",
     "deploy": "wrangler pages deploy public",
     "test:restoration-batch1": "node --no-warnings scripts/test-restoration-batch1.mjs",
+    "test:cold-route-startup": "node scripts/test-cold-route-startup.mjs",
     "check": "node --check public/static/app.js",
     "test:roster-wire-protocol": "node --no-warnings scripts/test-roster-wire-protocol.mjs",
     "test:identity-suggestion-cache": "node scripts/test-identity-suggestion-cache.mjs",

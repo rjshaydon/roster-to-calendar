@@ -24,18 +24,30 @@ export async function continueIdentityMaintenance({mode,request,maxSteps=600,max
  return {status:'deferred',reason:'checkpoint-or-time-limit'};
 }
 
+// Refresh admission separately from registration/audit CPU work, never after
+// an uncertain error. The cached grant still expires and SQL reservations apply.
+export function createIdentityAdmission({request,now=Date.now}){
+ let lastAdmission=null;
+ return async()=>{
+  if(lastAdmission!==null&&now()-lastAdmission<5*60*1000)return true;
+  const result=await request();if(!result.ok||result.deferred)return false;
+  lastAdmission=now();return true;
+ };
+}
+
 if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href) {
  const base=String(process.env.ROSTER_AUTOMATION_BASE_URL||'https://roster-to-calendar.pages.dev').replace(/\/$/,'');
  const token=String(process.env.ROSTER_AUTOMATION_TOKEN||'');
  if(!token)throw Error('ROSTER_AUTOMATION_TOKEN required.');
+ const admit=createIdentityAdmission({request:async()=>{
+  const response=await guardedFetch(process.env,`${base}/api/automation/account-budget`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({reuseCurrentGrant:true}),signal:AbortSignal.timeout(120000)},{label:'Identity account admission'});
+  const admission=await response.json();return {ok:response.ok,deferred:admission.deferred};
+ }});
+
  let useLegacy=true;
  if(process.env.IDENTITY_MAINTENANCE_MODE==='audit' && process.env.IDENTITY_EXTERNAL_AUDIT_ENABLED==='true') {
-  let lastAdmission=0;
   const request=async body=>{
-   if(Date.now()-lastAdmission>5*60*1000){
-    const response=await guardedFetch(process.env,`${base}/api/automation/account-budget`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({reuseCurrentGrant:true})},{label:'Identity audit account admission'});
-    const admission=await response.json();if(!response.ok||admission.deferred)return {status:'deferred'};lastAdmission=Date.now();
-   }
+   if(!await admit())return {status:"deferred"};
    const response=await guardedFetch(process.env,`${base}/api/automation/identity-audit`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(120000)},{label:'External identity audit checkpoint'});
    if([429,503].includes(response.status))return {status:'deferred'};
    if(response.status===409){const result=await response.json();if(result.status==='lease-expired')return result;throw Object.assign(Error('Identity evidence changed'),{staleEvidence:result.status==='stale'});}
@@ -49,6 +61,7 @@ if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href) {
  if(useLegacy) {
  const result=await continueIdentityMaintenance({mode:process.env.IDENTITY_MAINTENANCE_MODE,
   request:async mode=>{
+   if(!await admit())return {status:'usage-or-service-deferred'};
    // Each call has its own metered reservation, account admission, import
    // priority guard and one-name lease. Never retry an uncertain response.
    const response=await guardedFetch(process.env,`${base}/api/automation/identity-maintenance`,{
