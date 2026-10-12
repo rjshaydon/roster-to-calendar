@@ -29,7 +29,7 @@ for(const definition of ["name TEXT NOT NULL DEFAULT ''","source_type TEXT NOT N
 // Existing production index, required by the bounded source calendar reader.
 sqlite.exec('CREATE INDEX IF NOT EXISTS idx_roster_events_file_doctor ON roster_events(file_id,doctor_key)');
 const sql=[];
-const db={prepare(query){sql.push(query);return {query,args:[],bind(...args){assert.ok(args.length<=100,'D1 bind parameter ceiling');this.args=args;return this;},async all(){return {results:sqlite.prepare(query).all(...this.args)};},async first(){return sqlite.prepare(query).get(...this.args)||null;},async run(){if(db.fail && query.includes(db.fail)) throw Error('Injected failure'); return sqlite.prepare(query).run(...this.args);}};},async batch(statements){if(db.beforeBatch){const fn=db.beforeBatch;db.beforeBatch=null;fn();} sqlite.exec('SAVEPOINT test_d1_batch');try{const result=[];for(const s of statements) result.push(await s.run());sqlite.exec('RELEASE test_d1_batch');return result;}catch(e){sqlite.exec('ROLLBACK TO test_d1_batch; RELEASE test_d1_batch');throw e;}}};
+const db={prepare(query){sql.push(query);return {query,args:[],bind(...args){assert.ok(args.length<=100,'D1 bind parameter ceiling');this.args=args;return this;},async all(){return {results:sqlite.prepare(query).all(...this.args)};},async first(){return sqlite.prepare(query).get(...this.args)||null;},async run(){if(/^\s*(SELECT|WITH)\b/i.test(query))return this.all();if(db.fail && query.includes(db.fail)) throw Error('Injected failure'); return sqlite.prepare(query).run(...this.args);}};},async batch(statements){if(db.beforeBatch){const fn=db.beforeBatch;db.beforeBatch=null;fn();} sqlite.exec('SAVEPOINT test_d1_batch');try{const result=[];for(const s of statements) result.push(await s.run());sqlite.exec('RELEASE test_d1_batch');return result;}catch(e){sqlite.exec('ROLLBACK TO test_d1_batch; RELEASE test_d1_batch');throw e;}}};
 sqlite.exec(`INSERT INTO roster_people(person_id,preferred_display_name) VALUES('person:a','Aeshan KULARATNE'),('person:b','Aeshan KULURATNE');
  INSERT INTO roster_person_aliases(source_type,doctor_key,display_name,person_id) VALUES('vhh','AESHAN KULARATNE','Aeshan KULARATNE','person:a'),('ddh','AESHAN KULURATNE','Aeshan KULURATNE','person:b');
  INSERT INTO account_profiles(email,real_name) VALUES('one@test','One'),('two@test','Two');
@@ -383,3 +383,18 @@ const beforeUnchanged=sql.length;
 assert.equal((await (await identityMaintenance({env:resumedEnv,request:registerRequest()})).json()).status,'unchanged');
 assert.equal(sql.length,beforeUnchanged,'unchanged metadata after catch-up does zero D1 work');
 console.log('Resumed registration records current metadata and subsequent unchanged checks use zero D1.');
+
+// Consolidated subscription reads must preserve the previous per-site calendar,
+// including historical grades and leave, without admitting same-name other sites.
+const {queryIdentityCalendarEvents,queryDoctorEvents}=await import('../functions/_lib/d1-calendar.js');
+const feedAliases=[{sourceType:'vhh',key:'AESHAN KULARATNE'},{sourceType:'ddh',key:'AESHAN KULURATNE'}];
+const oldFeed=(await Promise.all(feedAliases.map(async a=>(await queryDoctorEvents(db,[a.key],{sourceTypes:[a.sourceType]})).filter(e=>String(e.source||'').toLowerCase()===a.sourceType)))).flat();
+const changedBefore=sqlite.prepare('SELECT total_changes() n').get().n,sqlBefore=sql.length;
+const combined=await queryIdentityCalendarEvents(db,[...feedAliases,feedAliases[0]]);
+assert.deepEqual(combined,oldFeed,'combined indexed reads retain exact event content and per-site leave merging');
+assert.equal(sqlite.prepare('SELECT total_changes() n').get().n,changedBefore,'subscription reads write nothing');
+assert.equal(sql.length-sqlBefore,2,'two statements replace per-hospital event/designation requests');
+const plan=sqlite.prepare('EXPLAIN QUERY PLAN '+sql[sqlBefore]).all(JSON.stringify(feedAliases),'9999-12-31','0000-01-01');
+assert(plan.some(p=>p.detail.includes('idx_roster_files_source_active')));assert(plan.some(p=>p.detail.includes('idx_roster_events_file_doctor')));
+await assert.rejects(queryIdentityCalendarEvents(db,Array.from({length:17},(_,i)=>({sourceType:'vhh',key:'Unique '+i}))),/limit/);
+console.log('Consolidated subscription reads passed content/grade/alias parity, duplicate pairs, bounded identities, exact index plans and zero writes.');

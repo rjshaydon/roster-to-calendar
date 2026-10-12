@@ -1,5 +1,5 @@
 import { applyEventOverrides, customEventsToEvents, defaultSettings, exportIcs } from "../_lib/roster.js";
-import { applyAccountHospitalLocations, dedupeEventsByIdentity, hasCalendarDb, loadAccountHospitalLocations, loadAccountMirrorBySubscriptionToken, queryAccountCustomEvents, queryDoctorEvents } from "../_lib/d1-calendar.js";
+import { applyAccountHospitalLocations, dedupeEventsByIdentity, hasCalendarDb, loadAccountHospitalLocations, loadAccountMirrorBySubscriptionToken, queryAccountCustomEvents, queryDoctorEvents, queryIdentityCalendarEvents } from "../_lib/d1-calendar.js";
 import { normalizeEmail } from "../_lib/email.js";
 import { accountIdentityAliases, expandApprovedIdentityAliases } from '../_lib/doctor-identity.js';
 
@@ -59,7 +59,7 @@ async function buildD1SubscriptionFeed(db, record, view, identitiesEnabled=false
   const hospitalLocations = await loadAccountHospitalLocations(db, record.email, session).catch(() => null);
   const rosterEvents = dedupeEventsByIdentity(applyEventOverrides(
     applyAccountHospitalLocations(identitiesEnabled
-      ? (await Promise.all([...new Set(claims.map(claim=>claim.sourceType))].map(async sourceType=>(await queryDoctorEvents(db,claims.filter(claim=>claim.sourceType===sourceType).map(claim=>claim.key),{...queryOptions,sourceTypes:[sourceType]})).filter(event=>String(event.source||'').toLowerCase()===sourceType)))).flat()
+      ? await queryIdentityCalendarEvents(db,claims,queryOptions)
       : await queryDoctorEvents(db, doctorKeys, queryOptions), hospitalLocations || {}, { includeLocations: settings.includeLocations !== false }),
     session.overrides || {},
   ));

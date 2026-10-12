@@ -2520,25 +2520,7 @@ async function queryFacilityDesignationLeaveEvents(db, doctorKeys = [], options 
       ${sourceSql}
     ORDER BY term_start, source_type, display_name
   `).bind(...keys, endDate, startDate, ...sources).all();
-  return (rows.results || []).map((row) => {
-    const designation = facilityStaffDesignationFromRow(row);
-    if (!designation) return null;
-    return {
-      id: `facility-designation:${designation.id}`,
-      source: displaySourceType(designation.sourceType),
-      title: FACILITY_STAFF_DESIGNATION_LABELS[designation.designation] || "Leave",
-      allDay: true,
-      start: designation.termStart,
-      end: nextDateKey(designation.termEnd),
-      rawValue: "Creator staff designation",
-      seniority: designation.seniority,
-      location: "",
-      timeLabel: "All day",
-      designationId: designation.id,
-      doctorKey: designation.doctorKey,
-      displayName: designation.displayName,
-    };
-  }).filter(Boolean);
+  return (rows.results || []).map(designationLeaveEventFromRow).filter(Boolean);
 }
 
 async function latestFacilityRosterRevision(db, sourceType) {
@@ -2613,6 +2595,56 @@ export async function queryDoctorEvents(db, doctorKeys, options = {}) {
     ...(rows.results || []).map((row) => parseEvent(row.event_json)).filter(Boolean),
     ...designationEvents,
   ]));
+}
+
+// Subscription identities are bounded exact site/name pairs. Keep all active
+// history while avoiding one events + designation round trip per hospital.
+export async function queryIdentityCalendarEvents(db,aliases,options={}){
+ if(!aliases?.length)return [];
+ const pairs=[...new Map(aliases.map(a=>{
+  const sourceType=normalizeSourceType(a.sourceType),key=String(a.key||'').trim();
+  if(!SOURCE_TYPES.includes(sourceType)||!key)throw Error('Invalid calendar identity.');
+  return [sourceType+'|'+key,{sourceType,key}];
+ })).values()];
+ if(pairs.length>16)throw Error('Calendar identity limit exceeded.');
+ const json=JSON.stringify(pairs),start=String(options.startDate||'0000-01-01'),end=String(options.endDate||'9999-12-31');
+ const wanted=`WITH wanted AS (SELECT json_extract(value,'$.sourceType') source_type,json_extract(value,'$.key') doctor_key FROM json_each(?))`;
+ const results=await db.batch([
+  db.prepare(`${wanted} SELECT e.event_json FROM wanted w
+   CROSS JOIN roster_files f INDEXED BY idx_roster_files_source_active
+   CROSS JOIN roster_events e INDEXED BY idx_roster_events_file_doctor
+   WHERE f.source_type=w.source_type AND f.active=1 AND e.file_id=f.id AND e.doctor_key=w.doctor_key
+    AND e.start_date<=? AND e.end_date>=? ORDER BY e.start_ts,e.source_type,e.title`).bind(json,end,start),
+  db.prepare(`${wanted} SELECT d.* FROM wanted w JOIN facility_staff_designations d
+   ON d.source_type=w.source_type AND d.doctor_key=w.doctor_key
+   WHERE d.active=1 AND d.designation<>'previous_staff' AND d.term_start<=? AND d.term_end>=?
+   ORDER BY d.term_start,d.source_type,d.display_name`).bind(json,end,start)
+ ]);
+ const events=[...(results[0].results||[]).map(r=>parseEvent(r.event_json)).filter(Boolean),
+  ...(results[1].results||[]).map(designationLeaveEventFromRow).filter(Boolean)];
+ // Preserve the previous per-site leave merging and cross-site event identities.
+ return [...new Set(pairs.map(p=>p.sourceType))].flatMap(source=>
+  filterCalendarRosterEvents(mergeDuplicateLeaveEvents(events.filter(e=>String(e.source||'').toLowerCase()===source))));
+}
+function designationLeaveEventFromRow(row){
+    const designation = facilityStaffDesignationFromRow(row);
+    if (!designation) return null;
+    return {
+      id: `facility-designation:${designation.id}`,
+      source: displaySourceType(designation.sourceType),
+      title: FACILITY_STAFF_DESIGNATION_LABELS[designation.designation] || "Leave",
+      allDay: true,
+      start: designation.termStart,
+      end: nextDateKey(designation.termEnd),
+      rawValue: "Creator staff designation",
+      seniority: designation.seniority,
+      location: "",
+      timeLabel: "All day",
+      designationId: designation.id,
+      doctorKey: designation.doctorKey,
+      displayName: designation.displayName,
+    };
+
 }
 
 // Login and At-a-glance authorization need only the signed-in clinician's
@@ -3989,10 +4021,6 @@ export async function queryClaimedAccountsForRosterDoctors(db, doctors = [], opt
 export async function loadAccountMirrorBySubscriptionToken(db, token) {
   if (!db?.prepare || !token) return null;
   await ensureCalendarSchema(db);
-  const tokenRow = await db.prepare("SELECT email FROM subscription_tokens WHERE token = ?").bind(String(token || "").trim()).first();
-  if (tokenRow?.email) {
-    return await loadAccountMirror(db, tokenRow.email);
-  }
   const rows = await db.prepare(`
     SELECT
       account_profiles.email AS email,
@@ -4011,9 +4039,11 @@ export async function loadAccountMirrorBySubscriptionToken(db, token) {
     FROM account_profiles
     LEFT JOIN account_claims ON account_claims.email = account_profiles.email
     LEFT JOIN account_states ON account_states.email = account_profiles.email
-    WHERE account_profiles.subscription_token = ?
+    WHERE account_profiles.email=COALESCE(
+      (SELECT email FROM subscription_tokens WHERE token=?),
+      (SELECT email FROM account_profiles WHERE subscription_token=? LIMIT 1))
     ORDER BY account_claims.source_type, account_claims.display_name
-  `).bind(String(token || "").trim()).all();
+  `).bind(String(token || "").trim(),String(token || "").trim()).all();
   const first = rows.results?.[0];
   if (!first?.email) return null;
   const claims = [];

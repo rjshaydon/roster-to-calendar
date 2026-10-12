@@ -210,3 +210,15 @@ Server reservation/source-priority checks remain. Current tests pass cold import
 Melbourne/DST boundaries, registration admission expiry/error handling, identity
 merge/reversal/subscription continuity, account summaries and attribution.
 Native fresh/repeated request CPU and feed acceptance are still required.
+
+First rollout `7d35531e` / Pages `87b3a725`: both sampled feeds returned their
+exact baseline UID sets in the initial and eight repeated checks. Captured CPU
+still ranged 10–30 ms for feeds and 17 ms for registration. Successful HTTP does
+not establish Free-tier CPU reliability; Batch 2 remains open.
+
+The next change consolidates subscription-token/account loading into one indexed
+account lookup and exact site/name event/designation reads into two statements
+in one D1 batch. It preserves active history, all aliases, historical grades,
+per-site leave merging and token ownership. Existing fixtures verify complete
+content parity, index plans, duplicate aliases and zero writes. Feed first-row
+reads now retain billing metadata. Native repeat/cold CPU verification is pending.
