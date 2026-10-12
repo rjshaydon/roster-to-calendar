@@ -69,7 +69,7 @@ export async function onRequest(context) {
   let contained = requestContainmentReason(url.pathname, action, sharedEnv);
   const originalD1Binding = contained ? sharedEnv.ROSTER_DB : unwrapD1Binding(sharedEnv.ROSTER_DB);
   const deadlineAt=Math.min(Date.now()+120000,Date.parse(new Date().toISOString().slice(0,10))+86400000);
-  const d1 = contained ? emptyD1Meter() : createD1Meter(originalD1Binding, limit, { deadlineAt, firstViaAll: url.pathname === "/api/automation/identity-audit" || url.pathname === "/api/automation/identity-maintenance" || url.pathname === "/api/state" && action === "identity" || sharedEnv.ROSTER_ACCOUNT_BUDGET_ENABLED === "true" && (["/api/automation/derived", "/api/automation/facility-refresh", "/api/automation/findmyshift-check"].includes(url.pathname) || url.pathname === "/api/state" && ["saveDerivedCalendarFile", "removeRosterImports", "uploadRawRosterFile", "refreshManualRosterViews"].includes(action)) });
+  const d1 = contained ? emptyD1Meter() : createD1Meter(originalD1Binding, limit, { deadlineAt, firstViaAll: url.pathname === "/api/automation/account-budget" || url.pathname === "/api/automation/identity-audit" || url.pathname === "/api/automation/identity-maintenance" || url.pathname === "/api/state" && action === "identity" || sharedEnv.ROSTER_ACCOUNT_BUDGET_ENABLED === "true" && (["/api/automation/derived", "/api/automation/facility-refresh", "/api/automation/findmyshift-check"].includes(url.pathname) || url.pathname === "/api/state" && ["saveDerivedCalendarFile", "removeRosterImports", "uploadRawRosterFile", "refreshManualRosterViews"].includes(action)) });
   let response;
 
   // Pages handlers read bindings from the supplied env object, so install the
@@ -77,6 +77,7 @@ export async function onRequest(context) {
   // raw binding, and unwrap defensively in case an interrupted older isolate
   // left a metered proxy behind.
   if (d1.binding) {
+    context.data ||= {};context.data.d1Meter=d1;
     sharedEnv.ROSTER_DB = d1.binding;
     beginMaintenanceAccounting(d1.binding, `${requestId}:${crypto.randomUUID()}`, sharedEnv.ROSTER_ACCOUNT_BUDGET_ENABLED === "true",
       {deadlineAt,statementLimit:limit,purpose:['/api/automation/identity-maintenance','/api/automation/identity-audit'].includes(url.pathname)?'identity':'roster'});
@@ -315,7 +316,7 @@ export function createD1Meter(database, limit, options = {}) {
     return wrapped;
   };
   if (!database?.prepare) return { ...state, binding: database, get statementCount() { return state.statementCount; }, get rowsRead() { return state.rowsRead; }, get rowsWritten() { return state.rowsWritten; }, get metadataComplete() { return state.metadataComplete; } };
-  const binding = new Proxy(database, {
+  const wrapDatabase = source => new Proxy(unwrapD1Binding(source), {
     get(target, property) {
       if (property === RAW_D1_BINDING) return unwrapD1Binding(target);
       if (property === "prepare") return (sql) => {
@@ -338,8 +339,10 @@ export function createD1Meter(database, limit, options = {}) {
       return Reflect.get(target, property, target);
     },
   });
+  const binding=wrapDatabase(database);
   return {
     binding,
+    additionalBinding:wrapDatabase,
     get statementCount() { return state.statementCount; },
     get rowsRead() { return state.rowsRead; },
     get rowsWritten() { return state.rowsWritten; },

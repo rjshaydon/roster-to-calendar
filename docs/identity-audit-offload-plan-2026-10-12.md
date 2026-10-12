@@ -170,3 +170,21 @@ Real production delivery evidence: workflow 38178709371 completed the DDH
 Other site jobs were safe no-work runs, so they do not prove a fresh changed
 workbook delivery. Production audit coverage, CPU traces and feeds still need
 post-enablement verification before Batch 2 closeout.
+
+Production activation deployed as `993abcf4` / commit `b40c2859`; watchdog
+`e0583476` uses the external check route. Workflow `38201205790` safely deferred
+before audit publication. Name registration is still active. Production admission
+has zero optional write headroom despite low actual usage: the forecast had only
+production receipt summaries, so one-off preview test costs were projected as
+recurring ordinary account traffic. No limit or forecast was manually bypassed.
+
+The follow-up adds a production binding used ONLY for the preview's fixed,
+read-only receipt summary. The shared request meter covers both database reads.
+Verified settled costs are checked against that database's analytics before they
+leave the ordinary forecast; actual account totals remain untouched, late/unknown
+costs remain held, and inconsistent/missing evidence fails closed. Preview/local
+configurations do not enable this feature. No extra roster/identity mutation path
+or daily-limit change is introduced. Native verification and the completed
+production audit remain required. `test:account-maintenance-summaries` covers these
+bounds, cross-database metering and restoration of forecast headroom solely from
+verified one-off costs.

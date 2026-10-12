@@ -1,3 +1,4 @@
+import {accountMaintenanceSummaries} from '../../_lib/account-maintenance-summaries.js';
 import { maintenanceReceiptSummary } from '../../_lib/maintenance-receipt-summary.js';
 import inventory from "../../_lib/d1-account-inventory.js";
 import { d1AnalyticsQuery, settledUtcDayInterval, summarizeAnalyticsPayload } from "../../../scripts/d1-quota-budget-lib.mjs";
@@ -42,8 +43,9 @@ export async function refreshAccountMaintenanceBudget(context) {
     const recovered=analytics.totals.rowsRead<3999000 && analytics.totals.rowsWritten<79000
       ?await recoverAbandonedMaintenance(db,day,interval.observedUntil)+await recoverAbandonedMaintenance(db,previousDay,interval.observedUntil):0;
     const summary = await maintenanceReceiptSummary(db,day,previousDay,interval.start,interval.observedUntil);
-    const outstanding = summary.outstanding;
-    const settledMaintenance = summary.settled;
+    const accountSummary=await accountMaintenanceSummaries(context,analytics,summary,day,previousDay);
+    const outstanding = accountSummary.outstanding;
+    const settledMaintenance = accountSummary.settled;
     const budget = accountMaintenanceHeadroom(analytics, outstanding, new Date(), settledMaintenance);
     // A concurrent reservation may occur after the SELECT above. Do not grant
     // headroom against a newer allocation baseline: fence it using this value.
