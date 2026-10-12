@@ -7,6 +7,7 @@ export default {
       return;
     }
     ctx.waitUntil(checkFindMyShift(env));
+    if(env.SUBSCRIPTION_ARTIFACT_BUILD_ENABLED==='true'||env.SUBSCRIPTION_ARTIFACTS_ENABLED==='true')ctx.waitUntil(checkSubscriptionBuild(env));
     if(env.IDENTITY_REGISTRY_ENABLED==='true') ctx.waitUntil(checkIdentityAudit(env,'register'));
     // The endpoint checks its R2 checkpoint before D1: completed weeks are
     // cheap no-ops; an interrupted Sunday pass can resume on later days.
@@ -62,4 +63,11 @@ async function checkFindMyShift(env) {
   const result = await response.json().catch(() => ({}));
   console.log(JSON.stringify({ event: "findmyshift-check", ok: response.ok, status: result.status || "" }));
   return { ok: response.ok, ...result };
+}
+
+async function checkSubscriptionBuild(env){
+ const url=new URL('/api/automation/subscription-build',env.FINDMYSHIFT_CHECK_URL||defaultFindMyShiftUrl);
+ const response=await fetch(url,{method:'POST',headers:{authorization:`Bearer ${String(env.ROSTER_WATCHDOG_TOKEN||'')}`,'content-type':'application/json'},body:JSON.stringify({mode:'check'}),signal:AbortSignal.timeout(30000)});
+ const result=await response.json().catch(()=>({}));
+ console.log(JSON.stringify({event:'subscription-build',status:result.status||'unknown',http:response.status}));
 }

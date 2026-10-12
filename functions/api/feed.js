@@ -1,3 +1,4 @@
+import {subscriptionEvidence,readSubscriptionArtifact,queueSubscriptionArtifact} from '../_lib/subscription-artifacts.js';
 import { applyEventOverrides, customEventsToEvents, defaultSettings, exportIcs } from "../_lib/roster.js";
 import { applyAccountHospitalLocations, dedupeEventsByIdentity, hasCalendarDb, loadAccountHospitalLocations, loadAccountMirrorBySubscriptionToken, queryAccountCustomEvents, queryDoctorEvents, loadSubscriptionCalendarInputs } from "../_lib/d1-calendar.js";
 import { normalizeEmail } from "../_lib/email.js";
@@ -16,6 +17,23 @@ export async function onRequestGet(context) {
       return new Response("Subscription token is required.", { status: 400 });
     }
 
+    if(context.env.SUBSCRIPTION_ARTIFACTS_ENABLED==='true'&&context.env.IDENTITY_REVIEW_ENABLED==='true'&&context.env.ROSTER_FILES){
+      try {
+      const evidence=await subscriptionEvidence(context.env.ROSTER_DB,token,view,context.env.IDENTITY_REVIEW_ENABLED==='true');
+      if(!evidence)return new Response('Subscription calendar was not found.',{status:404});
+      const artifact=await readSubscriptionArtifact(context.env.ROSTER_FILES,evidence);
+      if(artifact)return calendarResponse(artifact.body,artifact.displayName);
+      // Preserve complete dynamic calendars during initial build or a deferred
+      // rebuild. Never serve a previous identity or an empty stand-in calendar.
+      const queued=queueSubscriptionArtifact(context.env.ROSTER_FILES,token,view,evidence);
+      if(context.waitUntil)context.waitUntil(queued.catch(()=>undefined));else await queued;
+      }catch(error){
+        if(error.code!=='SUBSCRIPTION_ARTIFACT_UNSUPPORTED')throw error;
+        // Oversized evidence keeps the existing complete dynamic path. A bound
+        // is never permission to drop history or disable a valid subscription.
+      }
+    }
+
     const record = await loadAccountMirrorBySubscriptionToken(context.env.ROSTER_DB, token);
     if (!record) {
       return new Response("Subscription calendar was not found.", { status: 404 });
@@ -32,7 +50,7 @@ export async function onRequestGet(context) {
   }
 }
 
-async function buildD1SubscriptionFeed(db, record, view, identitiesEnabled=false) {
+export async function buildD1SubscriptionFeed(db, record, view, identitiesEnabled=false) {
   if (!hasCalendarDb({ ROSTER_DB: db })) return null;
   const role = record?.role || "";
   let claims = sanitizeClaims(record.claims);
@@ -58,10 +76,22 @@ async function buildD1SubscriptionFeed(db, record, view, identitiesEnabled=false
     : {};
   const inputs=identitiesEnabled?await loadSubscriptionCalendarInputs(db,claims,record.email,session,queryOptions):null;
   const hospitalLocations=inputs?.locations||await loadAccountHospitalLocations(db,record.email,session).catch(()=>null);
+  return assembleSubscriptionCalendar(record,view,claims,{
+    events:inputs?inputs.events:await queryDoctorEvents(db,doctorKeys,queryOptions),
+    locations:hospitalLocations||{},custom:inputs?inputs.custom:await queryAccountCustomEvents(db,record.email).catch(()=>[])
+  },identitiesEnabled);
+}
+
+// The external runner and request fallback share the exact renderer and UID rules.
+export function assembleSubscriptionCalendar(record,view,claims,inputs,identitiesEnabled=true) {
+  const session=record?.state?.session||{};
+  const settings={...defaultSettings(),...(session.settings||{})};
+  const range=view==='range'?normalizeExportRange(session.exportRange):{mode:'full'};
+  const hospitalLocations=inputs.locations;
   const rosterEvents=dedupeEventsByIdentity(applyEventOverrides(
-    applyAccountHospitalLocations(inputs?inputs.events:await queryDoctorEvents(db,doctorKeys,queryOptions),hospitalLocations||{},{includeLocations:settings.includeLocations!==false}),
+    applyAccountHospitalLocations(inputs.events,hospitalLocations||{},{includeLocations:settings.includeLocations!==false}),
     session.overrides||{}));
-  const d1CustomEvents=inputs?inputs.custom:await queryAccountCustomEvents(db,record.email).catch(()=>[]);
+  const d1CustomEvents=inputs.custom;
   const customEvents = customEventsToEvents(latestCustomEventsByIdentity([
     ...sanitizeCustomEvents(session.customEvents, record.email),
     ...sanitizeCustomEvents(d1CustomEvents, record.email),
@@ -83,7 +113,7 @@ function calendarResponse(ics, displayName) {
     headers: {
       "Content-Type": "text/calendar; charset=utf-8",
       "Cache-Control": "private, max-age=30, must-revalidate",
-      "Content-Disposition": `inline; filename="${String(displayName || "roster").replace(/\//g, "-")} subscription.ics"`,
+      "Content-Disposition": `inline; filename="${String(displayName || "roster").replace(/[\/\r\n"]/g, "-")} subscription.ics"`,
     },
   });
 }

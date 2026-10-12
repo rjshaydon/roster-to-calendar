@@ -2638,12 +2638,15 @@ async function readSubscriptionCalendarInputs(db,aliases=[],options={}){
  const events=[...(results[0].results||[]).map(r=>parseEvent(r.event_json)).filter(Boolean),
   ...(results[1].results||[]).map(designationLeaveEventFromRow).filter(Boolean)];
  // Preserve the previous per-site leave merging and cross-site event identities.
- return {events:[...new Set(pairs.map(p=>p.sourceType))].flatMap(source=>
-  filterCalendarRosterEvents(mergeDuplicateLeaveEvents(events.filter(e=>String(e.source||'').toLowerCase()===source)))),
+ return {events:normalizeSubscriptionEvents(events,pairs),
   locations:(results[2]?.results||[]).length?normalizeHospitalLocationMap(Object.fromEntries(results[2].results.map(r=>[String(r.source_type||'').toLowerCase(),r.location]))):hospitalLocationsFromSession(options.fallbackSession),
   custom:(results[3]?.results||[]).map(row=>customEventForAccount(row,options.ownerEmail)).filter(event=>event.id&&event.title&&event.startDate&&event.endDate)};
 }
-function designationLeaveEventFromRow(row){
+export function normalizeSubscriptionEvents(events,pairs) {
+ return [...new Set(pairs.map(p=>p.sourceType))].flatMap(source=>
+  filterCalendarRosterEvents(mergeDuplicateLeaveEvents(events.filter(e=>String(e.source||'').toLowerCase()===source))));
+}
+export function designationLeaveEventFromRow(row){
     const designation = facilityStaffDesignationFromRow(row);
     if (!designation) return null;
     return {
@@ -3947,7 +3950,7 @@ export async function queryAccountCustomEvents(db, ownerEmail, options = {}) {
   return (rows.results||[]).map(row=>customEventForAccount(row,ownerEmail)).filter(event=>event.id&&event.title&&event.startDate&&event.endDate);
 }
 
-function customEventForAccount(row,ownerEmail){return {
+export function customEventForAccount(row,ownerEmail){return {
     id: String(row.id || ""),
     ownerEmail: normalizeEmail(ownerEmail),
     title: String(row.title || ""),
@@ -4356,7 +4359,7 @@ export function applyAccountHospitalLocations(events = [], locations = {}, optio
   });
 }
 
-function normalizeHospitalLocationMap(value = {}) {
+export function normalizeHospitalLocationMap(value = {}) {
   const defaults = defaultSettings();
   return {
     mmc: String(value.mmc || value.defaultLocationMmc || defaults.defaultLocationMmc).trim() || defaults.defaultLocationMmc,

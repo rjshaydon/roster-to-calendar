@@ -1,0 +1,33 @@
+name: Publish changed private subscription calendars
+on:
+  workflow_dispatch:
+    inputs:
+      prime:
+        description: "Prepare existing subscription URLs before enabling reads"
+        required: false
+        default: false
+        type: boolean
+      dispatch_id:
+        description: "Coalesced subscription build lease"
+        required: false
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: subscription-production-build
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 16
+    env:
+      ROSTER_AUTOMATION_BASE_URL: https://roster-to-calendar.pages.dev
+      ROSTER_AUTOMATION_TOKEN: ${{ secrets.ROSTER_AUTOMATION_TOKEN }}
+      SUBSCRIPTION_BUILD_PRIME: ${{ inputs.prime }}
+      SUBSCRIPTION_BUILD_DISPATCH_ID: ${{ inputs.dispatch_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node scripts/process-subscription-build.mjs

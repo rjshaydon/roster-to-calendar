@@ -3,7 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { readFile } from "node:fs/promises";
 import { maintenanceReceiptSummary } from "../functions/_lib/maintenance-receipt-summary.js";
 import { outstandingMaintenance, accountMaintenanceHeadroom } from "../functions/_lib/account-maintenance-policy.js";
-import { beginMaintenanceAccounting, reserveRosterMaintenanceBudget, finishMaintenanceAccounting, recoverAbandonedMaintenance, optionalMaintenanceAvailable, currentAccountMaintenanceGrant } from "../functions/_lib/roster-maintenance-budget.js";
+import { beginMaintenanceAccounting, reserveRosterMaintenanceBudget, finishMaintenanceAccounting, recoverAbandonedMaintenance, optionalMaintenanceAvailable, currentAccountMaintenanceGrant, currentOptionalMaintenanceGrant } from "../functions/_lib/roster-maintenance-budget.js";
 import { createD1Meter, onRequest as middleware } from "../functions/_middleware.js";
 import { onRequestPost as admit } from "../functions/api/automation/account-budget.js";
 import { onRequestPost as identityMaintenance } from "../functions/api/automation/identity-maintenance.js";
@@ -69,6 +69,8 @@ assert.deepEqual((await maintenanceReceiptSummary(database(),fixtureDay,fixtureP
 
 const day = new Date().toISOString().slice(0,10);
 sqlite.prepare("INSERT INTO roster_account_budget(utc_day,maximum_reads,maximum_writes,valid_until) VALUES(?,?,?,?)").run(day, 1000000, 20000, new Date(Date.now()+600000).toISOString());
+assert.equal(await currentOptionalMaintenanceGrant(database()),true,'fresh optional grant can be reused in one compact read');
+assert.equal(await currentOptionalMaintenanceGrant(database(),new Date(Date.now()+86400000)),false,'UTC-day rollover refuses reuse');
 assert.equal(await currentAccountMaintenanceGrant(database()),true,'fresh shared grant can be reused without fetching analytics');
 assert.equal(await currentAccountMaintenanceGrant(database(),new Date(Date.now()+600000)),false,'expired grant cannot be reused');
 assert.equal(await currentAccountMaintenanceGrant(database(),new Date(Date.now()+86400000)),false,'previous UTC-day grant cannot be reused');
@@ -194,6 +196,7 @@ receipt.run('still-running',day,1000,1000,new Date(Date.now()+60000).toISOString
 receipt.run('settled',day,1000,1000,recoveryCutoff,recoveryCutoff,1);
 receipt.run('yesterday','2000-01-01',1000,1000,recoveryCutoff,'',0);
 assert.equal(await optionalMaintenanceAvailable(database()),false,'three unknown requests pause optional work');
+assert.equal(await currentOptionalMaintenanceGrant(database()),false,'combined grant reuse retains unknown-work protection');
 assert.equal(await currentAccountMaintenanceGrant(database()),true);
 let recoveryRefreshes=0;
 try {

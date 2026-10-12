@@ -67,6 +67,16 @@ export async function currentAccountMaintenanceGrant(db, now = new Date()) {
     .bind(instant.slice(0,10),instant).first());
 }
 
+// One compact read for the reuse endpoint. This only reuses an existing grant;
+// the subsequent reservation still enforces headroom and concurrent allocations.
+export async function currentOptionalMaintenanceGrant(db,now=new Date()) {
+ const instant=new Date(now).toISOString(),day=instant.slice(0,10);
+ const row=await db.prepare(`SELECT EXISTS(SELECT 1 FROM roster_account_budget WHERE utc_day=? AND valid_until>? AND stop_reason='' LIMIT 1)
+  AND (SELECT COUNT(*) FROM (SELECT request_id FROM roster_maintenance_receipts WHERE utc_day=?
+   AND reconciled_at='' AND (finished_at='' OR metadata_complete<>1) LIMIT 3))<3 AS reusable`).bind(day,instant,day).first();
+ return Number(row?.reusable)===1;
+}
+
 export async function stopAccountMaintenance(db, reason) {
   await db.prepare("UPDATE roster_account_budget SET valid_until='', stop_reason=CASE WHEN stop_reason LIKE 'cost-overrun:%' THEN stop_reason ELSE ? END WHERE utc_day=?")
     .bind(String(reason).slice(0, 200), new Date().toISOString().slice(0, 10)).run();

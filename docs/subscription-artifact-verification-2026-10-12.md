@@ -1,0 +1,77 @@
+# Subscription reliability implementation and verification
+
+The external assembly implementation is prepared, with BOTH production flags
+`SUBSCRIPTION_ARTIFACT_BUILD_ENABLED` and `SUBSCRIPTION_ARTIFACTS_ENABLED` false.
+Existing subscriptions still use their existing request path. This is not full
+Batch 2 acceptance or a claim that every historical 503 cause is fixed.
+
+## Implemented together
+
+- One indexed evidence query binds token ownership, account settings/overrides,
+  date range, custom events and hospital locations, identity links/approved names,
+  historical designations and active roster generations. Sentinels explicitly
+  refuse oversized cache evidence; those subscriptions retain the complete
+  existing dynamic path, with no historical truncation.
+- GitHub/Node uses the existing renderer, event filtering/leave merging and UID
+  algorithm. Exact authorized event exports use 64-row keyset pages. All pages
+  must finish before publication; there is no partial calendar promotion.
+- Private R2 calendars are content-addressed by token/view/input evidence.
+  Ownership and inputs are checked again on every GET. Late publication after
+  reassignment or an edit cannot make the previous calendar valid. Current
+  settings/custom events/grades are preserved. No source roster is rewritten.
+- Requests for missing/changed calendars coalesce in private R2; unchanged reads
+  do not create work. The existing watchdog can dispatch the bounded runner.
+  Separate build/read flags allow priming both existing subscription views before
+  switching request reads. Initially missing/stale objects retain complete current
+  dynamic responses, never an empty stand-in or a previous identity's calendar.
+- Exports and publication remain behind source priority and shared account
+  reservations. Unknown outcomes stay held; explicit stale/yielded checkpoints
+  release their dispatch lease. Logs contain bounded status/counts, never names,
+  subscription tokens or event bodies. There is no new daily limit or paid plan.
+- Grant reuse combines the existing unknown-receipt and unexpired-day checks in
+  one compact query. Subsequent reservations still enforce ceilings and races.
+
+## Verification performed
+
+The integration test exercises the actual middleware, authenticated endpoint and
+Node runner using isolated SQLite/R2 fixtures: 130 shifts across multiple pages,
+old historical shifts, both URL views, complete ICS/UID/order parity, changed
+settings/locations/custom events/names/roster generations, ownership reassignment,
+revocation, stale exports, source-priority deferral before reservation, publication
+failure/replay, evidence overflow fallback, coalescing and build-only priming.
+Existing identity, cold-route, account-budget, external-audit, attribution,
+watchdog and restoration regressions pass. SQLite costs are simulated, not billing
+or native CPU proof.
+
+An authenticated temporary Worker uses read-only production D1 and a separate
+private R2 prefix. Both real subscriptions retain 128/154 events and their exact
+baseline UID sets. Initial captured cached GETs use 1–2 ms CPU; the final fresh/repeated sample
+uses 1–8 ms CPU (fresh samples 6/8 ms, warm samples 1–2 ms), one statement,
+60/110 reads and zero writes, with complete native metadata. Read-only export
+preparation uses 4–8 ms; event pages use 2 ms. External Node assembly again matches
+both real UID sets. The combined grant reuse check uses 1–5 ms and one row read.
+These export-stage measurements OMIT real reservation/settlement overhead; they
+are not acceptance of the complete production publication callbacks.
+
+## Remaining rollout gates
+
+1. Measure complete callbacks with real reservations/settlement in isolated native
+   acceptance, including fresh requests, publication failure/replay and large
+   calendars. Split further if they exceed the Free allowance. Read-only stage
+   measurements alone are insufficient.
+2. Obtain normal optional write admission; enable build-only, prime existing views,
+   and verify exact live fields/UIDs before enabling cached GETs. Deploy the
+   watchdog's build flag with the application flag. Avoid a first-request cold
+   rollout while builders are deferred.
+3. Complete cached-name registration and the external production identity audit,
+   then verify actual changed-roster delivery for MMC/MCH/VHH. DDH next-term
+   delivery already has evidence. A successful deferred Actions run is not delivery.
+4. Verify real Pages CPU, receipt costs and subscription continuity; record final
+   Batch 2 acceptance. Keep all current D1 safeguards.
+
+At this pass's initial settled cutoff the account had approximately 1.05M reads /
+48.6K writes. The current grant had only 477 writes of raw headroom, below the
+unchanged 20K protection for source imports before optional work. MMC, VHH and
+DDH have real queued imports; the sampled DDH Actions run explicitly deferred
+for account allowance. These are operational gates, not a Codex usage shortage.
+No reservation was manually released and no forecast/cap was overridden.

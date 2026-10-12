@@ -65,11 +65,15 @@ export async function onRequest(context) {
     context.data ||= {};context.data.identityAuditInput = await context.request.json().catch(() => null);
     context.data.d1OperationPhase = String(context.data.identityAuditInput?.mode || '').slice(0,48);
   }
+  if(url.pathname==='/api/automation/subscription-build'&&context.request.method==='POST'){
+    context.data ||= {};context.data.subscriptionBuildInput=await context.request.json().catch(()=>null);
+    context.data.d1OperationPhase=String(context.data.subscriptionBuildInput?.mode||'').slice(0,48);
+  }
   const limit = await requestD1StatementLimit(context.request, url.pathname, action, identityMaintenanceInput, derivedInput);
   let contained = requestContainmentReason(url.pathname, action, sharedEnv);
   const originalD1Binding = contained ? sharedEnv.ROSTER_DB : unwrapD1Binding(sharedEnv.ROSTER_DB);
   const deadlineAt=Math.min(Date.now()+120000,Date.parse(new Date().toISOString().slice(0,10))+86400000);
-  const d1 = contained ? emptyD1Meter() : createD1Meter(originalD1Binding, limit, { deadlineAt, firstViaAll: url.pathname === "/api/feed" || url.pathname === "/api/automation/account-budget" || url.pathname === "/api/automation/identity-audit" || url.pathname === "/api/automation/identity-maintenance" || url.pathname === "/api/state" && action === "identity" || sharedEnv.ROSTER_ACCOUNT_BUDGET_ENABLED === "true" && (["/api/automation/derived", "/api/automation/facility-refresh", "/api/automation/findmyshift-check"].includes(url.pathname) || url.pathname === "/api/state" && ["saveDerivedCalendarFile", "removeRosterImports", "uploadRawRosterFile", "refreshManualRosterViews"].includes(action)) });
+  const d1 = contained ? emptyD1Meter() : createD1Meter(originalD1Binding, limit, { deadlineAt, firstViaAll: url.pathname === "/api/feed" || url.pathname === '/api/automation/subscription-build' || url.pathname === "/api/automation/account-budget" || url.pathname === "/api/automation/identity-audit" || url.pathname === "/api/automation/identity-maintenance" || url.pathname === "/api/state" && action === "identity" || sharedEnv.ROSTER_ACCOUNT_BUDGET_ENABLED === "true" && (["/api/automation/derived", "/api/automation/facility-refresh", "/api/automation/findmyshift-check"].includes(url.pathname) || url.pathname === "/api/state" && ["saveDerivedCalendarFile", "removeRosterImports", "uploadRawRosterFile", "refreshManualRosterViews"].includes(action)) });
   let response;
 
   // Pages handlers read bindings from the supplied env object, so install the
@@ -80,7 +84,7 @@ export async function onRequest(context) {
     context.data ||= {};context.data.d1Meter=d1;
     sharedEnv.ROSTER_DB = d1.binding;
     beginMaintenanceAccounting(d1.binding, `${requestId}:${crypto.randomUUID()}`, sharedEnv.ROSTER_ACCOUNT_BUDGET_ENABLED === "true",
-      {deadlineAt,statementLimit:limit,purpose:['/api/automation/identity-maintenance','/api/automation/identity-audit'].includes(url.pathname)?'identity':'roster'});
+      {deadlineAt,statementLimit:limit,purpose:['/api/automation/identity-maintenance','/api/automation/identity-audit','/api/automation/subscription-build'].includes(url.pathname)?'identity':'roster'});
   }
 
   const work = (async () => {
@@ -129,14 +133,14 @@ export async function onRequest(context) {
   // One-name identity checkpoints normally finish within seconds. Retain the
   // same work promise (including settlement) across caller disconnection;
   // waitUntil has a platform bound and does not retry or duplicate work.
-  if (!contained && ['/api/automation/identity-maintenance','/api/automation/identity-audit'].includes(url.pathname) && context.waitUntil) {
+  if (!contained && ['/api/automation/identity-maintenance','/api/automation/identity-audit','/api/automation/subscription-build'].includes(url.pathname) && context.waitUntil) {
     context.waitUntil(work.then(() => undefined, () => undefined));
   }
   return await work;
 }
 
 async function requestD1StatementLimit(request, pathname, action, identityMaintenanceInput, derivedInput) {
-  if(pathname==='/api/automation/identity-audit') return 96;
+  if(pathname==='/api/automation/identity-audit'||pathname==='/api/automation/subscription-build') return 96;
   if(pathname==='/api/automation/identity-maintenance' && request.method==='POST') {
     if (identityMaintenanceInput === null) return 64;
     try { return ['audit','register'].includes((identityMaintenanceInput ?? await request.clone().json()).mode)?96:512; } catch { return 64; }
