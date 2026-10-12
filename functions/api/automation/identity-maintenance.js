@@ -12,6 +12,10 @@ export async function onRequestPost(context) {
  const tokens=[context.env.IDENTITY_MAINTENANCE_TOKEN,context.env.ROSTER_AUTOMATION_TOKEN,...(input.mode==='publish'?[]:[context.env.ROSTER_WATCHDOG_TOKEN])].filter(Boolean).map(String);
  if(!tokens.some(token=>context.request.headers.get('Authorization')===`Bearer ${token}`)) return Response.json({error:'Unauthorized.'},{status:401});
  if(!['publish','audit','register'].includes(input.mode) || input.mode==='publish' && !/^[a-f0-9-]{36}$/.test(String(input.operationId||''))) return new Response('Invalid operation',{status:400});
+ if(input.mode==='audit'&&context.env.IDENTITY_EXTERNAL_AUDIT_ENABLED==='true'){
+  const {handleExternalIdentityAudit}=await import('./identity-audit.js');
+  return handleExternalIdentityAudit(context,{mode:'check'});
+ }
  const db=context.env.ROSTER_DB;
  let registryState=null,registryObject=null,registryRevision='';
  let auditState=null,auditObject=null,auditWeek='';

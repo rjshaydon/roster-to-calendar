@@ -454,6 +454,11 @@ export async function onRequestPost(context) {
       try {
         if(operation==='list') return Response.json({ok:true,...await queryIdentityPeople(db,input)});
         if(operation==='candidates') return Response.json({ok:true,...await queryIdentityCandidates(db,input)});
+        if(operation==='audit'&&context.env.IDENTITY_EXTERNAL_AUDIT_ENABLED==='true'){
+          const {handleExternalIdentityAudit}=await import('./automation/identity-audit.js');
+          const response=await handleExternalIdentityAudit(context,{mode:'check'});
+          return Response.json({ok:response.ok,...await response.json()},{status:response.status});
+        }
         if(['audit','initialize'].includes(operation)) {
           const directory=await publishedIdentityAuditDirectory(db,context.env.ROSTER_FILES,australianDateKey());
           if(directory.preparing || directory.missingSources?.length) return Response.json({error:'Wait for all published site directories before auditing identities.'},{status:503});

@@ -1,11 +1,10 @@
 # Identity audit offload — 12 October 2026
 
-Status: comparison/export preparation and internal durable checkpoint primitives
-are implemented and tested. Migration 0044 has NOT been applied to production.
-The authenticated API, runner integration, automatic dispatch and rollout are not
-enabled. Existing
-production registration, audit and cached-suggestion behavior remain in use.
-Cloudflare Free and the current D1 admission/reservation safeguards remain.
+Status: authenticated API, GitHub runner, dispatch lifecycle and cached UI updates
+are implemented. The complete protocol passes local integration/regression tests.
+Migration 0044 is applied to the isolated preview only. Production enablement
+remains gated by native full-size runtime/receipt verification and rollout checks.
+Cloudflare Free and all existing D1 safeguards remain.
 
 ## Completed before the usage reset
 
@@ -112,3 +111,40 @@ Checkpoint implementation is now ready for the authenticated API/runner connecti
 and native CPU testing after the reset. Migration 0044 remains unapplied and the
 new path remains inactive; this additional preparation performs no production
 reads/writes. Existing live auditing continues on its previous path.
+
+## Integration and native testing after the reset
+
+The new authenticated `/api/automation/identity-audit` endpoint exports cached
+names, pins the complete plan, applies bounded proposals/feature checkpoints and
+finishes only after exact coverage. GitHub performs every name comparison; it
+publishes no names, proposal bodies or credentials in public logs/artifacts.
+Watchdog and creator checks coalesce through an R2 conditional-write lease.
+Unchanged checks launch no workflow. Registration remains a separate pathway.
+
+Each run currently compares the complete bounded cache, including already audited
+names. This keeps plan hashes stable across partial feature completion/resumption;
+audited flags are excluded from the snapshot hash, while all identity evidence
+remains included and guarded. Changed evidence requires a new plan. Unchanged
+human rejections survive the conditional proposal upsert. Confirmed bounded
+pauses release the lease and preserve progress; unknown outcomes retain receipts
+and the lease. A failed cache wake-up can replay an already-completed database job.
+
+The UI continues to display cached suggestions immediately. While an external
+check runs it refreshes the bounded saved page every 30 seconds only with the
+section open and the document visible. Closing the section stops polling; editors
+and selections remain intact. Deferred checks are described as deferred.
+
+Initial native tests revealed 10–16 ms callbacks. Combining indexed evidence
+guards/completion writes in native SQL and returning just the needed manifest
+descriptor reduced captured callbacks to a maximum of 8 ms in the completed
+124-name / 1,861-proposal dense preview run. No names were skipped. The larger
+1,124-name test and production acceptance are still in progress. Test metadata
+from SQLite is not billing evidence. Test Worker and synthetic fixture cleanup
+are required before closeout.
+
+`test:external-identity-audit` exercises the actual middleware, authenticated API
+and Node runner: auth boundaries, dispatch coalescing/unchanged no-op, CAS races,
+lost successful responses, completed-job wake failure, preserved rejection,
+bounded yield/resumption and stale revisions. Planner/checkpoint, identity
+operation, cached UI, request attribution, watchdog and account-budget regressions
+also pass. Production flags stay false until native acceptance succeeds.

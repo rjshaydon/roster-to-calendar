@@ -7,6 +7,10 @@ on:
         required: true
         type: choice
         options: [register, audit]
+      audit_dispatch_id:
+        description: "External audit lease identifier"
+        required: false
+        type: string
 permissions:
   contents: read
 concurrency:
@@ -19,6 +23,8 @@ jobs:
     env:
       ROSTER_AUTOMATION_BASE_URL: https://roster-to-calendar.pages.dev
       ROSTER_AUTOMATION_TOKEN: ${{ secrets.ROSTER_AUTOMATION_TOKEN }}
+      IDENTITY_EXTERNAL_AUDIT_ENABLED: 'true'
+      IDENTITY_AUDIT_DISPATCH_ID: ${{ inputs.audit_dispatch_id }}
       IDENTITY_MAINTENANCE_MODE: ${{ inputs.mode }}
     steps:
       - uses: actions/checkout@v4

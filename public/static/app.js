@@ -1,6 +1,6 @@
 import {contactSyncWarning} from './contact-sync-status.js';
 import { onShiftLaunchWindow } from "./shift-launch-policy.js";
-import { identityReviewMarkup, mountIdentityReview } from './identity-review-ui.js?v=20261006-people15';
+import { identityReviewMarkup, mountIdentityReview } from './identity-review-ui.js?v=20261012-external-audit';
 let currentIdentityReviewEnabled = false;
 import { FACILITY_ACCESS_VERSION, facilityAccessKeys, restrictedFacilityScope, validFacilityDateRange } from "./facility-access-policy.js";
 import { planRosterImportBatches } from "./roster-import-batches.js";

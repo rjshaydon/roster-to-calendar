@@ -19,6 +19,7 @@ assert.equal(plan.manifest.candidateCount,4950,'all dense-group pairs must survi
 assert.equal(plan.manifest.pendingCount,100);
 assert.ok(plan.batches.every(b=>b.candidates.length<=5 && Buffer.byteLength(JSON.stringify(b))<=24576));
 assert.equal(plan.revision,planIdentityAudit({identityRevision:1,rows:[...dense].reverse()}).revision,'wire plan is deterministic across cache order');
+assert.equal(planIdentityAudit({identityRevision:1,rows:dense},{fullAudit:true}).revision,planIdentityAudit({identityRevision:1,rows:dense.map(r=>({...r,audited_fingerprint:r.fingerprint}))},{fullAudit:true}).revision,'full-audit plan survives its own partially completed feature flags');
 for(const [i,b] of plan.batches.entries())assert.equal(hash(b),plan.manifest.batches[i].hash);
 assert.equal(plan.featureBatches.flatMap(b=>b.features).length,100);
 for(const [i,b] of plan.featureBatches.entries()){assert.ok(b.features.length<=16);assert.equal(hash(b),plan.manifest.featureBatches[i].hash);}

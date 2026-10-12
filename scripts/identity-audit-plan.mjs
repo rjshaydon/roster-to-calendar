@@ -73,7 +73,7 @@ export function planIdentityAudit(snapshot,{maximumCandidates=10000,fullAudit=fa
   const featureBatches=[];
   for(let i=0;i<featuresToFinish.length;i+=IDENTITY_FEATURE_BATCH_SIZE) featureBatches.push({index:featureBatches.length,features:featuresToFinish.slice(i,i+IDENTITY_FEATURE_BATCH_SIZE)});
   const manifest={schemaVersion:1,algorithmVersion:IDENTITY_AUDIT_ALGORITHM_VERSION,fullAudit,identityRevision:snapshot.identityRevision,nameCount:rows.length,
-    snapshotHash:hash(rows.map(r=>[r.source_type,r.doctor_key,r.fingerprint,r.audited_fingerprint])),
+    snapshotHash:hash(rows.map(r=>[r.source_type,r.doctor_key,r.fingerprint])),
     pendingCount:featuresToFinish.length,candidateCount:candidates.length,
     featureBatches:featureBatches.map(b=>({index:b.index,count:b.features.length,hash:hash(b)})),
     batches:batches.map(b=>({index:b.index,count:b.candidates.length,hash:hash(b)}))};

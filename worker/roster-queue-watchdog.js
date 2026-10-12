@@ -33,8 +33,9 @@ export default {
 };
 
 async function checkIdentityAudit(env,mode='audit') {
-  const url=new URL('/api/automation/identity-maintenance',env.FINDMYSHIFT_CHECK_URL||defaultFindMyShiftUrl);
-  const response=await fetch(url,{method:'POST',headers:{authorization:`Bearer ${String(env.ROSTER_WATCHDOG_TOKEN||'')}`,'content-type':'application/json'},body:JSON.stringify({mode})});
+  const external=mode==='audit'&&env.IDENTITY_EXTERNAL_AUDIT_ENABLED==='true';
+  const url=new URL(external?'/api/automation/identity-audit':'/api/automation/identity-maintenance',env.FINDMYSHIFT_CHECK_URL||defaultFindMyShiftUrl);
+  const response=await fetch(url,{method:'POST',headers:{authorization:`Bearer ${String(env.ROSTER_WATCHDOG_TOKEN||'')}`,'content-type':'application/json'},body:JSON.stringify({mode:external?'check':mode})});
   const result=await response.json().catch(()=>({}));
   // Drain the response before this scheduled task ends; record only bounded
   // progress fields, never names, credentials or candidate details.

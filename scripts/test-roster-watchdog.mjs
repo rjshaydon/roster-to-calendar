@@ -41,6 +41,11 @@ try {
   assert.deepEqual(calls.filter(call=>/identity-maintenance$/.test(call.url)).map(call=>JSON.parse(call.options.body).mode),expected,instant);
  }
  calls.length=0;pending.length=0;
+ await worker.scheduled({}, {...identityEnv,IDENTITY_EXTERNAL_AUDIT_ENABLED:'true'}, {waitUntil:promise=>pending.push(promise)});
+ await Promise.all(pending);
+ assert.deepEqual(calls.filter(call=>/identity-audit$/.test(call.url)).map(call=>JSON.parse(call.options.body).mode),['check']);
+ assert.deepEqual(calls.filter(call=>/identity-maintenance$/.test(call.url)).map(call=>JSON.parse(call.options.body).mode),['register']);
+ calls.length=0;pending.length=0;
  await worker.scheduled({}, {...identityEnv,ROSTER_AUTOMATION_ENABLED:'false'}, {waitUntil:promise=>pending.push(promise)});
  await Promise.all(pending);
  assert.equal(calls.length,0,'paused automation also stops identity maintenance');

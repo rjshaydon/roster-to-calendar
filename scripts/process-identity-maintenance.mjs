@@ -1,3 +1,4 @@
+import {continueExternalIdentityAudit} from './process-external-identity-audit.mjs';
 import {pathToFileURL} from 'node:url';
 import {guardedFetch} from '../functions/_lib/outbound-network.js';
 
@@ -27,6 +28,25 @@ if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href) {
  const base=String(process.env.ROSTER_AUTOMATION_BASE_URL||'https://roster-to-calendar.pages.dev').replace(/\/$/,'');
  const token=String(process.env.ROSTER_AUTOMATION_TOKEN||'');
  if(!token)throw Error('ROSTER_AUTOMATION_TOKEN required.');
+ let useLegacy=true;
+ if(process.env.IDENTITY_MAINTENANCE_MODE==='audit' && process.env.IDENTITY_EXTERNAL_AUDIT_ENABLED==='true') {
+  let lastAdmission=0;
+  const request=async body=>{
+   if(Date.now()-lastAdmission>5*60*1000){
+    const response=await guardedFetch(process.env,`${base}/api/automation/account-budget`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({reuseCurrentGrant:true})},{label:'Identity audit account admission'});
+    const admission=await response.json();if(!response.ok||admission.deferred)return {status:'deferred'};lastAdmission=Date.now();
+   }
+   const response=await guardedFetch(process.env,`${base}/api/automation/identity-audit`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(120000)},{label:'External identity audit checkpoint'});
+   if([429,503].includes(response.status))return {status:'deferred'};
+   if(response.status===409){const result=await response.json();if(result.status==='lease-expired')return result;throw Object.assign(Error('Identity evidence changed'),{staleEvidence:result.status==='stale'});}
+   if(!response.ok)throw Error(`External audit callback failed: HTTP ${response.status}`);
+   return await response.json();
+  };
+  const external=await continueExternalIdentityAudit({request,dispatchId:process.env.IDENTITY_AUDIT_DISPATCH_ID||''});
+  useLegacy=external.status==='external-disabled';
+  if(!useLegacy)console.log(JSON.stringify(external));
+ }
+ if(useLegacy) {
  const result=await continueIdentityMaintenance({mode:process.env.IDENTITY_MAINTENANCE_MODE,
   request:async mode=>{
    // Each call has its own metered reservation, account admission, import
@@ -39,4 +59,5 @@ if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href) {
    return await response.json();
   }});
  console.log(JSON.stringify(result));
+ }
 }

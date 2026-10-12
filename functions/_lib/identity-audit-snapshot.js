@@ -15,7 +15,7 @@ export async function readIdentityAuditSnapshotPage(db, input = {}) {
   ]);
   const current = Number(results[0]?.results?.[0]?.revision), rows = results[1]?.results;
   if (!Number.isSafeInteger(current) || !Array.isArray(rows)) throw Error('Identity snapshot unavailable.');
-  if (revision != null && revision !== current) throw Error('Identity snapshot changed; restart its read-only export.');
+  if (revision != null && revision !== current) throw Object.assign(Error('Identity snapshot changed; restart its read-only export.'),{code:'IDENTITY_AUDIT_EVIDENCE'});
   const page = rows.slice(0, IDENTITY_AUDIT_PAGE_SIZE);
   return {identityRevision:current,rows:page,next:rows.length>IDENTITY_AUDIT_PAGE_SIZE
     ? {afterSource:page.at(-1).source_type,afterKey:page.at(-1).doctor_key} : null};
