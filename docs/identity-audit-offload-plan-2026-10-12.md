@@ -2,7 +2,7 @@
 
 Status: authenticated API, GitHub runner, dispatch lifecycle and cached UI updates
 are implemented. The complete protocol passes local integration/regression tests.
-Migration 0044 is applied to the isolated preview only. Production enablement
+Migration 0044 is applied to preview and production (three additive empty tables). Production enablement
 remains gated by native full-size runtime/receipt verification and rollout checks.
 Cloudflare Free and all existing D1 safeguards remain.
 
@@ -147,4 +147,26 @@ and Node runner: auth boundaries, dispatch coalescing/unchanged no-op, CAS races
 lost successful responses, completed-job wake failure, preserved rejection,
 bounded yield/resumption and stale revisions. Planner/checkpoint, identity
 operation, cached UI, request attribution, watchdog and account-budget regressions
-also pass. Production flags stay false until native acceptance succeeds.
+also pass. Production flags stayed false through native acceptance. The activation commit
+now enables the external path for production only; post-rollout verification
+remains required.
+
+Native acceptance: both the 124-name / 1,861-proposal and the 1,124-name /
+1,861-proposal jobs completed with exact candidate/feature receipt cursors.
+The optimized trace captured 565 successful callbacks, maximum 8 ms; fresh
+full-size pin/start were captured. Not every callback was retained in the trace.
+Actual combined preview receipts settled at 98,027 reads and 38,621 writes with
+ZERO overruns or unfinished receipts. Synthetic seeding/cleanup are additional
+small maintenance costs, not included in those callback totals.
+
+Reservations now cover BOTH admission and transactional source-priority probes:
+131,072 reads for write checkpoints and 65,536 for snapshot pages. These are
+per-request held estimates, with unused capacity settled from actual metadata;
+they do not change Cloudflare's daily allowance or discard unknown work.
+
+Real production delivery evidence: workflow 38178709371 completed the DDH
+2 November–31 January roster (109 doctors, 3,356 events). The recorded run
+`f9338120-709a-4ea0-af36-a12f6f9344dd` has success/completion metadata.
+Other site jobs were safe no-work runs, so they do not prove a fresh changed
+workbook delivery. Production audit coverage, CPU traces and feeds still need
+post-enablement verification before Batch 2 closeout.

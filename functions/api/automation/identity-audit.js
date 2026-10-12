@@ -53,7 +53,7 @@ export async function handleExternalIdentityAudit(context,input){
   const common={runId:state.runId,revision:input.revision};let result;
   if(input.mode==='snapshot'){
    if(input.identityRevision!=null&&input.identityRevision!==state.identityRevision)return Response.json({status:'stale'},{status:409});
-   if(!await reserveRosterMaintenanceBudget(db,0,4096))return Response.json({status:'deferred'},{status:503});
+   if(!await reserveRosterMaintenanceBudget(db,0,65536))return Response.json({status:'deferred'},{status:503});
    result=await readIdentityAuditSnapshotPage(db,{...input,identityRevision:state.identityRevision});
   }else if(input.mode==='pin'){
    if(input.manifest?.identityRevision!==state.identityRevision||input.manifest?.fullAudit!==true)throw Object.assign(Error('External audit requires its complete pinned snapshot.'),{code:'IDENTITY_AUDIT_EVIDENCE'});

@@ -49,7 +49,7 @@ export async function pinExternalIdentityAudit(db,{runId,manifest,revision}){
  if(pinnedHash!==revision)throw invalid('Identity manifest hash mismatch.');
  const old=await db.prepare('SELECT plan_revision,next_candidate_batch,next_feature_batch,status FROM external_identity_audit_jobs WHERE run_id=?').bind(runId).first();
  if(old){if(old.plan_revision!==revision)throw invalid('Audit already pinned to different evidence.');return progress(old);}
- if(!await reserveRosterMaintenanceBudget(db,64,65536))return {deferred:true};
+ if(!await reserveRosterMaintenanceBudget(db,64,131072))return {deferred:true};
  const now=new Date().toISOString();
  await db.batch([identityGuard(db,manifest.identityRevision),
   db.prepare("SELECT CASE WHEN (SELECT COUNT(*) FROM (SELECT 1 FROM roster_identity_features LIMIT 2001))=? THEN 1 ELSE json('external-audit-cache-count-conflict') END").bind(manifest.nameCount),
@@ -92,7 +92,7 @@ export async function applyExternalIdentityAuditBatch(db,{runId,revision,kind,ba
     (SELECT json_extract(value,'$.source'),json_extract(value,'$.key') FROM json_each(?)) AND audited_fingerprint<>fingerprint`).bind(json));
  }
 
- if(!await reserveRosterMaintenanceBudget(db,64+items.length*(kind==='candidates'?12:8),65536))return {deferred:true};
+ if(!await reserveRosterMaintenanceBudget(db,64+items.length*(kind==='candidates'?12:8),131072))return {deferred:true};
  await db.batch([identityGuard(db,job.identity_revision),
   db.prepare(`SELECT CASE WHEN EXISTS(SELECT 1 FROM external_identity_audit_jobs WHERE run_id=? AND plan_revision=? AND status='running' AND ${cursor}=? AND (?='candidates' OR next_candidate_batch=?))
     THEN 1 ELSE json('external-audit-cursor-conflict') END`).bind(runId,revision,batch.index,kind,job.candidate_batches),
@@ -104,7 +104,7 @@ export async function applyExternalIdentityAuditBatch(db,{runId,revision,kind,ba
 export async function finishExternalIdentityAudit(db,{runId,revision}){
  const job=await jobFor(db,runId,revision);if(job.status==='complete')return progress(job);
  if(job.next_candidate_batch!==job.candidate_batches||job.next_feature_batch!==job.feature_batches)throw invalid('Identity audit has unfinished checkpoints.');
- if(!await reserveRosterMaintenanceBudget(db,32,65536))return {deferred:true};
+ if(!await reserveRosterMaintenanceBudget(db,32,131072))return {deferred:true};
  await db.batch([identityGuard(db,job.identity_revision),
   db.prepare(`SELECT CASE WHEN (SELECT COUNT(*) FROM external_identity_audit_receipts WHERE run_id=? AND kind='candidates')=?
     AND (SELECT COUNT(*) FROM external_identity_audit_receipts WHERE run_id=? AND kind='features')=?
