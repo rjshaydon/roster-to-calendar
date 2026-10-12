@@ -398,3 +398,14 @@ const plan=sqlite.prepare('EXPLAIN QUERY PLAN '+sql[sqlBefore]).all(JSON.stringi
 assert(plan.some(p=>p.detail.includes('idx_roster_files_source_active')));assert(plan.some(p=>p.detail.includes('idx_roster_events_file_doctor')));
 await assert.rejects(queryIdentityCalendarEvents(db,Array.from({length:17},(_,i)=>({sourceType:'vhh',key:'Unique '+i}))),/limit/);
 console.log('Consolidated subscription reads passed content/grade/alias parity, duplicate pairs, bounded identities, exact index plans and zero writes.');
+
+const {loadSubscriptionCalendarInputs,loadAccountHospitalLocations,queryAccountCustomEvents}=await import('../functions/_lib/d1-calendar.js');
+const fallback={settings:{hospitalLocations:{ddh:'Fixture location'}}};
+const expectedLocations=await loadAccountHospitalLocations(db,'one@test',fallback);
+const expectedCustom=await queryAccountCustomEvents(db,'one@test');
+const beforeInputs=sqlite.prepare('SELECT total_changes() n').get().n;
+const inputs=await loadSubscriptionCalendarInputs(db,feedAliases,'one@test',fallback);
+assert.deepEqual(inputs.events,oldFeed);assert.deepEqual(inputs.locations,expectedLocations);assert.deepEqual(inputs.custom,expectedCustom);
+assert.equal(sqlite.prepare('SELECT total_changes() n').get().n,beforeInputs);
+assert.deepEqual((await loadSubscriptionCalendarInputs(db,[],'one@test',fallback)).events,[],'custom-only accounts do not acquire another clinician roster');
+console.log('Complete feed input batch retains location fallbacks, personal custom events, exact identity calendars and zero writes.');

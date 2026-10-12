@@ -222,3 +222,13 @@ in one D1 batch. It preserves active history, all aliases, historical grades,
 per-site leave merging and token ownership. Existing fixtures verify complete
 content parity, index plans, duplicate aliases and zero writes. Feed first-row
 reads now retain billing metadata. Native repeat/cold CPU verification is pending.
+
+Second rollout `15b4321d` / Pages `d781d1ed`: eight repeated subscriptions retained
+exact baseline event IDs, with complete native D1 metadata and no writes.
+Captured feed CPU improved to 7–17 ms but still exceeds the target in some samples.
+The follow-up bundles independent hospital-location/custom-event reads into the
+same bounded input batch. It preserves session fallbacks, personal custom events
+and per-site identities. Active registration jobs now check source priority before
+optional metadata/timezone preparation, while completed unchanged checks retain
+their zero-D1 shortcut. These behaviors pass regression tests; native acceptance
+of the final combined batch remains required.

@@ -24,6 +24,9 @@ export async function onRequestPost(context) {
   const r2=context.env.ROSTER_FILES;
   registryObject=await r2.get('identity/registry-progress.json');
   registryState=registryObject?await registryObject.json():{};
+  // Active jobs defer before optional timezone/manifest preparation. Preserve
+  // the zero-D1 shortcut for unchanged, completed registry metadata.
+  if(registryState.runId&&(await identityMaintenancePreflight(db)).active_import)return Response.json({status:'import-active'});
   if(!registryState.runId || registryState.finalizing) {
    const heads=await Promise.all(['mmc','mch','ddh','vhh'].map(source=>r2.head(facilityMetadataManifestKey(source))));
    if(heads.some(head=>!head)) return Response.json({status:'directory-preparing'});

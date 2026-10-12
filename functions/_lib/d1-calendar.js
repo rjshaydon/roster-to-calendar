@@ -2601,6 +2601,17 @@ export async function queryDoctorEvents(db, doctorKeys, options = {}) {
 // history while avoiding one events + designation round trip per hospital.
 export async function queryIdentityCalendarEvents(db,aliases,options={}){
  if(!aliases?.length)return [];
+ return (await readSubscriptionCalendarInputs(db,aliases,options)).events;
+}
+export async function loadSubscriptionCalendarInputs(db,aliases,email,session,options={}){
+ try{return await readSubscriptionCalendarInputs(db,aliases,{...options,ownerEmail:normalizeEmail(email),fallbackSession:session});}
+ catch(error){
+  // Optional preference-table failures historically used session defaults.
+  // Keep that fallback; core event failures still propagate on the read.
+  return {events:await queryIdentityCalendarEvents(db,aliases,options),locations:await loadAccountHospitalLocations(db,email,session).catch(()=>hospitalLocationsFromSession(session)),custom:await queryAccountCustomEvents(db,email).catch(()=>[])};
+ }
+}
+async function readSubscriptionCalendarInputs(db,aliases=[],options={}){
  const pairs=[...new Map(aliases.map(a=>{
   const sourceType=normalizeSourceType(a.sourceType),key=String(a.key||'').trim();
   if(!SOURCE_TYPES.includes(sourceType)||!key)throw Error('Invalid calendar identity.');
@@ -2609,7 +2620,7 @@ export async function queryIdentityCalendarEvents(db,aliases,options={}){
  if(pairs.length>16)throw Error('Calendar identity limit exceeded.');
  const json=JSON.stringify(pairs),start=String(options.startDate||'0000-01-01'),end=String(options.endDate||'9999-12-31');
  const wanted=`WITH wanted AS (SELECT json_extract(value,'$.sourceType') source_type,json_extract(value,'$.key') doctor_key FROM json_each(?))`;
- const results=await db.batch([
+ const statements=[
   db.prepare(`${wanted} SELECT e.event_json FROM wanted w
    CROSS JOIN roster_files f INDEXED BY idx_roster_files_source_active
    CROSS JOIN roster_events e INDEXED BY idx_roster_events_file_doctor
@@ -2619,12 +2630,18 @@ export async function queryIdentityCalendarEvents(db,aliases,options={}){
    ON d.source_type=w.source_type AND d.doctor_key=w.doctor_key
    WHERE d.active=1 AND d.designation<>'previous_staff' AND d.term_start<=? AND d.term_end>=?
    ORDER BY d.term_start,d.source_type,d.display_name`).bind(json,end,start)
- ]);
+ ];
+ if(options.ownerEmail)statements.push(
+  db.prepare('SELECT source_type,location FROM account_hospital_locations WHERE email=? ORDER BY source_type').bind(options.ownerEmail),
+  db.prepare('SELECT id,title,start_date,end_date,all_day,start_time,end_time,location,include FROM custom_events WHERE owner_email=? ORDER BY start_date,start_time,title,id').bind(options.ownerEmail));
+ const results=await db.batch(statements);
  const events=[...(results[0].results||[]).map(r=>parseEvent(r.event_json)).filter(Boolean),
   ...(results[1].results||[]).map(designationLeaveEventFromRow).filter(Boolean)];
  // Preserve the previous per-site leave merging and cross-site event identities.
- return [...new Set(pairs.map(p=>p.sourceType))].flatMap(source=>
-  filterCalendarRosterEvents(mergeDuplicateLeaveEvents(events.filter(e=>String(e.source||'').toLowerCase()===source))));
+ return {events:[...new Set(pairs.map(p=>p.sourceType))].flatMap(source=>
+  filterCalendarRosterEvents(mergeDuplicateLeaveEvents(events.filter(e=>String(e.source||'').toLowerCase()===source)))),
+  locations:(results[2]?.results||[]).length?normalizeHospitalLocationMap(Object.fromEntries(results[2].results.map(r=>[String(r.source_type||'').toLowerCase(),r.location]))):hospitalLocationsFromSession(options.fallbackSession),
+  custom:(results[3]?.results||[]).map(row=>customEventForAccount(row,options.ownerEmail)).filter(event=>event.id&&event.title&&event.startDate&&event.endDate)};
 }
 function designationLeaveEventFromRow(row){
     const designation = facilityStaffDesignationFromRow(row);
@@ -3927,7 +3944,10 @@ export async function queryAccountCustomEvents(db, ownerEmail, options = {}) {
     ORDER BY start_date, start_time, title, id
     ${options.limit ? "LIMIT " + Math.max(1, Math.min(Math.floor(options.limit), 201)) : ""}
   `).bind(normalizeEmail(ownerEmail)).all();
-  return (rows.results || []).map((row) => ({
+  return (rows.results||[]).map(row=>customEventForAccount(row,ownerEmail)).filter(event=>event.id&&event.title&&event.startDate&&event.endDate);
+}
+
+function customEventForAccount(row,ownerEmail){return {
     id: String(row.id || ""),
     ownerEmail: normalizeEmail(ownerEmail),
     title: String(row.title || ""),
@@ -3938,8 +3958,8 @@ export async function queryAccountCustomEvents(db, ownerEmail, options = {}) {
     endTime: String(row.end_time || ""),
     location: String(row.location || ""),
     include: Number(row.include ?? 1) !== 0,
-  })).filter((event) => event.id && event.title && event.startDate && event.endDate);
-}
+
+};}
 
 export async function queryClaimedAccounts(db) {
   if (!db?.prepare) return [];

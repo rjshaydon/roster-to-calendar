@@ -1,5 +1,5 @@
 import { applyEventOverrides, customEventsToEvents, defaultSettings, exportIcs } from "../_lib/roster.js";
-import { applyAccountHospitalLocations, dedupeEventsByIdentity, hasCalendarDb, loadAccountHospitalLocations, loadAccountMirrorBySubscriptionToken, queryAccountCustomEvents, queryDoctorEvents, queryIdentityCalendarEvents } from "../_lib/d1-calendar.js";
+import { applyAccountHospitalLocations, dedupeEventsByIdentity, hasCalendarDb, loadAccountHospitalLocations, loadAccountMirrorBySubscriptionToken, queryAccountCustomEvents, queryDoctorEvents, loadSubscriptionCalendarInputs } from "../_lib/d1-calendar.js";
 import { normalizeEmail } from "../_lib/email.js";
 import { accountIdentityAliases, expandApprovedIdentityAliases } from '../_lib/doctor-identity.js';
 
@@ -56,14 +56,12 @@ async function buildD1SubscriptionFeed(db, record, view, identitiesEnabled=false
   const queryOptions = range.mode === "range" && range.startDate
     ? { startDate: range.startDate, endDate: range.allFuture ? "9999-12-31" : range.endDate || range.startDate }
     : {};
-  const hospitalLocations = await loadAccountHospitalLocations(db, record.email, session).catch(() => null);
-  const rosterEvents = dedupeEventsByIdentity(applyEventOverrides(
-    applyAccountHospitalLocations(identitiesEnabled
-      ? await queryIdentityCalendarEvents(db,claims,queryOptions)
-      : await queryDoctorEvents(db, doctorKeys, queryOptions), hospitalLocations || {}, { includeLocations: settings.includeLocations !== false }),
-    session.overrides || {},
-  ));
-  const d1CustomEvents = await queryAccountCustomEvents(db, record.email).catch(() => []);
+  const inputs=identitiesEnabled?await loadSubscriptionCalendarInputs(db,claims,record.email,session,queryOptions):null;
+  const hospitalLocations=inputs?.locations||await loadAccountHospitalLocations(db,record.email,session).catch(()=>null);
+  const rosterEvents=dedupeEventsByIdentity(applyEventOverrides(
+    applyAccountHospitalLocations(inputs?inputs.events:await queryDoctorEvents(db,doctorKeys,queryOptions),hospitalLocations||{},{includeLocations:settings.includeLocations!==false}),
+    session.overrides||{}));
+  const d1CustomEvents=inputs?inputs.custom:await queryAccountCustomEvents(db,record.email).catch(()=>[]);
   const customEvents = customEventsToEvents(latestCustomEventsByIdentity([
     ...sanitizeCustomEvents(session.customEvents, record.email),
     ...sanitizeCustomEvents(d1CustomEvents, record.email),
